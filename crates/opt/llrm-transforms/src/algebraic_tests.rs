@@ -3,19 +3,15 @@
 //! before and after.
 //!
 //! Skipped:
-//! - The guards naming flags, merges, memory operands or a result wider
-//!   than its operands: no instruction here has them.
+//! - The guards naming flags, merges, memory operands or a result wider than its operands: no instruction here has
+//!   them.
 //! - test_shared_shift_distinguishes_a_word_tie_from_a_partial_write,
-//!   test_extracted_halves_recombine_to_the_original_value,
-//!   test_joined_halves_are_consumed_as_halves,
-//!   test_recombination_follows_only_exact_word_copies,
-//!   test_signed_recombination_compares_copy_sources_symmetrically,
-//!   test_constant_word_concatenation,
-//!   test_product_projection_retains_observed_outputs, and the zero
-//!   difference tests: split halves, copies and the neg instruction.
-//! - The NBODY, HARR, MATRIX, NDMAX, HOTLPX, SPILL, ADDRM and NESTED
-//!   fixtures: BC objects and emitted x86. ADDRM's shared scale and NBODY's
-//!   shift pair are `shared_shifts_*` and `shifts_*` here.
+//!   test_extracted_halves_recombine_to_the_original_value, test_joined_halves_are_consumed_as_halves,
+//!   test_recombination_follows_only_exact_word_copies, test_signed_recombination_compares_copy_sources_symmetrically,
+//!   test_constant_word_concatenation, test_product_projection_retains_observed_outputs, and the zero difference tests:
+//!   split halves, copies and the neg instruction.
+//! - The NBODY, HARR, MATRIX, NDMAX, HOTLPX, SPILL, ADDRM and NESTED fixtures: BC objects and emitted x86. ADDRM's
+//!   shared scale and NBODY's shift pair are `shared_shifts_*` and `shifts_*` here.
 
 use llrm_mir::interpret::Val;
 use llrm_mir::module::Module;
@@ -37,19 +33,28 @@ fn simplified(text: &str) -> (Module, Module) {
 }
 
 /// `simplified`, tuned for size or not.
-fn simplified_for(text: &str, size: bool) -> (Module, Module) {
+fn simplified_for(
+    text: &str,
+    size: bool,
+) -> (Module, Module) {
     simplified_in(text, size, LEGAL)
 }
 
 /// `simplified_for` under datalayout `layout`.
-fn simplified_in(text: &str, size: bool, layout: &str) -> (Module, Module) {
+fn simplified_in(
+    text: &str,
+    size: bool,
+    layout: &str,
+) -> (Module, Module) {
     let mut before = parsed(text);
     before.datalayout = Some(layout.to_owned());
     let mut after = before.clone();
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.add(super::Algebraic { size });
-    passes.run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    passes
+        .run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral))
+        .unwrap_or_else(|error| panic!("{error}\n{text}"));
     (before, after)
 }
 
@@ -65,21 +70,33 @@ fn singles(values: &[i128]) -> Vec<Vec<i128>> {
 
 /// `text` simplified, answering as before on `inputs` wherever the
 /// original was not poison; its text.
-fn checked(text: &str, inputs: &[Vec<i128>]) -> String {
+fn checked(
+    text: &str,
+    inputs: &[Vec<i128>],
+) -> String {
     let (before, after) = simplified(text);
     let inputs: Vec<&[i128]> = inputs.iter().map(Vec::as_slice).collect();
     let expected = results(&before, &inputs);
-    let refined = results(&after, &inputs).into_iter().zip(&expected).map(|(got, wanted)| if *wanted == Val::Poison { Val::Poison } else { got });
+    let refined = results(&after, &inputs)
+        .into_iter()
+        .zip(&expected)
+        .map(|(got, wanted)| if *wanted == Val::Poison { Val::Poison } else { got });
     assert_eq!(refined.collect::<Vec<_>>(), expected, "{}", bare(&after));
     bare(&after)
 }
 
 /// `checked` in a 32-bit segment (pointers of 32 bits).
-fn checked_flat(text: &str, inputs: &[Vec<i128>]) -> String {
+fn checked_flat(
+    text: &str,
+    inputs: &[Vec<i128>],
+) -> String {
     let (before, after) = simplified_in(text, false, FLAT);
     let inputs: Vec<&[i128]> = inputs.iter().map(Vec::as_slice).collect();
     let expected = results(&before, &inputs);
-    let refined = results(&after, &inputs).into_iter().zip(&expected).map(|(got, wanted)| if *wanted == Val::Poison { Val::Poison } else { got });
+    let refined = results(&after, &inputs)
+        .into_iter()
+        .zip(&expected)
+        .map(|(got, wanted)| if *wanted == Val::Poison { Val::Poison } else { got });
     assert_eq!(refined.collect::<Vec<_>>(), expected, "{}", bare(&after));
     bare(&after)
 }
@@ -93,7 +110,10 @@ fn unchanged(text: &str) {
     assert_eq!(bare(&after), bare(&before));
 }
 
-fn unary(width: u32, body: &str) -> String {
+fn unary(
+    width: u32,
+    body: &str,
+) -> String {
     format!("define i{width} @f(i{width} %x) {{\nb0:\n{body}}}\n")
 }
 
@@ -101,18 +121,32 @@ fn unary(width: u32, body: &str) -> String {
 fn test_offset_composition_preserves_modular_values() {
     for (op, combined) in [("add", 14), ("sub", -26)] {
         let text = unary(16, &format!("  %m = add i16 %x, -6\n  %r = {op} i16 %m, 20\n  ret i16 %r\n"));
-        assert_eq!(checked(&text, &singles(&edges(16))), unary(16, &format!("  %0 = add i16 %x, {combined}\n  ret i16 %0\n")));
-        unchanged(&unary(16, &format!("  %m = add i16 %x, -6\n  %r = {op} i16 %m, 20\n  %s = add i16 %m, %r\n  ret i16 %s\n")));
+        assert_eq!(
+            checked(&text, &singles(&edges(16))),
+            unary(16, &format!("  %0 = add i16 %x, {combined}\n  ret i16 %0\n"))
+        );
+        unchanged(&unary(
+            16,
+            &format!("  %m = add i16 %x, -6\n  %r = {op} i16 %m, 20\n  %s = add i16 %m, %r\n  ret i16 %s\n"),
+        ));
     }
 }
 
 #[test]
 fn test_associative_bitwise_constants_combine() {
-    for (op, first, last, combined) in [("and", 0xF0F3_u16, 0x3FFF_u16, 0x30F3_u16), ("or", 0xF003, 0x0F30, 0xFF33), ("xor", 0xFFFF, 0x0031, 0xFFCE)] {
+    for (op, first, last, combined) in
+        [("and", 0xF0F3_u16, 0x3FFF_u16, 0x30F3_u16), ("or", 0xF003, 0x0F30, 0xFF33), ("xor", 0xFFFF, 0x0031, 0xFFCE)]
+    {
         let (first, last, combined) = (first as i16, last as i16, combined as i16);
         let text = unary(16, &format!("  %m = {op} i16 %x, {first}\n  %r = {op} i16 {last}, %m\n  ret i16 %r\n"));
-        assert_eq!(checked(&text, &singles(&edges(16))), unary(16, &format!("  %0 = {op} i16 %x, {combined}\n  ret i16 %0\n")));
-        unchanged(&unary(16, &format!("  %m = {op} i16 %x, {first}\n  %r = {op} i16 %m, {last}\n  %s = add i16 %m, %r\n  ret i16 %s\n")));
+        assert_eq!(
+            checked(&text, &singles(&edges(16))),
+            unary(16, &format!("  %0 = {op} i16 %x, {combined}\n  ret i16 %0\n"))
+        );
+        unchanged(&unary(
+            16,
+            &format!("  %m = {op} i16 %x, {first}\n  %r = {op} i16 %m, {last}\n  %s = add i16 %m, %r\n  ret i16 %s\n"),
+        ));
     }
 }
 
@@ -149,11 +183,17 @@ fn test_shifts_reaching_the_width_are_zero() {
 #[test]
 fn test_shared_shifts_reuse_a_smaller_used_scale_in_the_block() {
     let text = unary(16, "  %a = shl i16 %x, 1\n  %b = shl i16 %x, 3\n  %s = add i16 %a, %b\n  ret i16 %s\n");
-    assert_eq!(checked(&text, &singles(&edges(16))), unary(16, "  %a = shl i16 %x, 1\n  %b = shl i16 %a, 2\n  %s = add i16 %a, %b\n  ret i16 %s\n"));
+    assert_eq!(
+        checked(&text, &singles(&edges(16))),
+        unary(16, "  %a = shl i16 %x, 1\n  %b = shl i16 %a, 2\n  %s = add i16 %a, %b\n  ret i16 %s\n")
+    );
     // Nothing reads the smaller one.
     unchanged(&unary(16, "  %a = shl i16 %x, 1\n  %b = shl i16 %x, 3\n  ret i16 %b\n"));
     // It is in another block.
-    unchanged(&unary(16, "  %a = shl i16 %x, 1\n  br label %b1\n\nb1:\n  %b = shl i16 %x, 3\n  %s = add i16 %a, %b\n  ret i16 %s\n"));
+    unchanged(&unary(
+        16,
+        "  %a = shl i16 %x, 1\n  br label %b1\n\nb1:\n  %b = shl i16 %x, 3\n  %s = add i16 %a, %b\n  ret i16 %s\n",
+    ));
 }
 
 #[test]
@@ -162,15 +202,23 @@ fn test_negating_a_single_use_difference_reverses_it() {
     let values = edges(32);
     let pairs: Vec<Vec<i128>> = values.iter().flat_map(|&a| values.iter().map(move |&b| vec![a, b])).collect();
     assert_eq!(checked(text, &pairs), "define i32 @f(i32 %a, i32 %b) {\nb0:\n  %0 = sub i32 %b, %a\n  ret i32 %0\n}\n");
-    unchanged("define i32 @f(i32 %a, i32 %b) {\nb0:\n  %d = sub i32 %a, %b\n  %n = sub i32 0, %d\n  %s = add i32 %d, %n\n  ret i32 %s\n}\n");
+    unchanged(
+        "define i32 @f(i32 %a, i32 %b) {\nb0:\n  %d = sub i32 %a, %b\n  %n = sub i32 0, %d\n  %s = add i32 %d, %n\n  ret i32 %s\n}\n",
+    );
 }
 
 #[test]
 fn test_signed_power_division_preserves_quotient_and_remainder() {
-    for (width, divisor) in [(32_u32, 2_i128), (32, 16), (32, 512), (32, 262144), (16, 2), (16, 16), (16, 16384), (8, 4)] {
+    for (width, divisor) in
+        [(32_u32, 2_i128), (32, 16), (32, 512), (32, 262144), (16, 2), (16, 16), (16, 16384), (8, 4)]
+    {
         let top = 1_i128 << (width - 1);
         let mut dividends = edges(width);
-        dividends.extend([-divisor - 1, -divisor, -divisor + 1, divisor - 1, divisor, divisor + 1].iter().map(|n| (n + top).rem_euclid(2 * top) - top));
+        dividends.extend(
+            [-divisor - 1, -divisor, -divisor + 1, divisor - 1, divisor, divisor + 1]
+                .iter()
+                .map(|n| (n + top).rem_euclid(2 * top) - top),
+        );
         for op in ["sdiv", "srem"] {
             let text = unary(width, &format!("  %r = {op} i{width} %x, {divisor}\n  ret i{width} %r\n"));
             let done = checked(&text, &singles(&dividends));
@@ -239,14 +287,25 @@ fn test_a_division_wider_than_a_legal_integer_stays() {
 #[test]
 fn test_fixed_point_by_a_whole_number_is_integer_arithmetic() {
     let values = edges(32);
-    for (name, factor, op) in [("smul", 768, "mul"), ("smul", -512, "mul"), ("sdiv", 768, "sdiv"), ("sdiv", -1024, "sdiv")] {
-        let text = format!("declare i32 @llvm.{name}.fix.i32(i32, i32, i32)\n\n{}", unary(32, &format!("  %r = call i32 @llvm.{name}.fix.i32(i32 %x, i32 {factor}, i32 8)\n  ret i32 %r\n")));
+    for (name, factor, op) in
+        [("smul", 768, "mul"), ("smul", -512, "mul"), ("sdiv", 768, "sdiv"), ("sdiv", -1024, "sdiv")]
+    {
+        let text = format!(
+            "declare i32 @llvm.{name}.fix.i32(i32, i32, i32)\n\n{}",
+            unary(32, &format!("  %r = call i32 @llvm.{name}.fix.i32(i32 %x, i32 {factor}, i32 8)\n  ret i32 %r\n"))
+        );
         let done = checked(&text, &singles(&values));
         assert!(!done.contains("call i32") && (done.contains(op) || done.contains("ashr")), "{done}");
     }
     // By -1.0 the quotient of the least value wraps; `sdiv` would be undefined.
-    unchanged(&format!("declare i32 @llvm.sdiv.fix.i32(i32, i32, i32)\n\n{}", unary(32, "  %r = call i32 @llvm.sdiv.fix.i32(i32 %x, i32 -256, i32 8)\n  ret i32 %r\n")));
-    unchanged(&format!("declare i32 @llvm.smul.fix.i32(i32, i32, i32)\n\n{}", unary(32, "  %r = call i32 @llvm.smul.fix.i32(i32 %x, i32 384, i32 8)\n  ret i32 %r\n")));
+    unchanged(&format!(
+        "declare i32 @llvm.sdiv.fix.i32(i32, i32, i32)\n\n{}",
+        unary(32, "  %r = call i32 @llvm.sdiv.fix.i32(i32 %x, i32 -256, i32 8)\n  ret i32 %r\n")
+    ));
+    unchanged(&format!(
+        "declare i32 @llvm.smul.fix.i32(i32, i32, i32)\n\n{}",
+        unary(32, "  %r = call i32 @llvm.smul.fix.i32(i32 %x, i32 384, i32 8)\n  ret i32 %r\n")
+    ));
 }
 
 /// The pass needs no constant propagation to drop `x + 0`.
@@ -269,18 +328,27 @@ fn test_integer_identities() {
         ] {
             let text = unary(width, &format!("  %r = {op} i{width} %x, {number}\n  ret i{width} %r\n"));
             let answer = answer.map_or("%x".to_owned(), |one: i32| one.to_string());
-            assert_eq!(checked(&text, &singles(&edges(width))), unary(width, &format!("  ret i{width} {answer}\n")), "{op} {number}");
+            assert_eq!(
+                checked(&text, &singles(&edges(width))),
+                unary(width, &format!("  ret i{width} {answer}\n")),
+                "{op} {number}"
+            );
         }
     }
     // A constant on the left, where the operation commutes.
-    assert_eq!(checked(&unary(16, "  %r = add i16 0, %x\n  ret i16 %r\n"), &singles(&edges(16))), unary(16, "  ret i16 %x\n"));
+    assert_eq!(
+        checked(&unary(16, "  %r = add i16 0, %x\n  ret i16 %r\n"), &singles(&edges(16))),
+        unary(16, "  ret i16 %x\n")
+    );
     unchanged(&unary(16, "  %r = sub i16 0, %x\n  ret i16 %r\n"));
     unchanged(&unary(16, "  %r = shl i16 0, %x\n  %s = add i16 %r, 1\n  ret i16 %s\n"));
 }
 
 #[test]
 fn test_a_symbol_plus_zero_is_the_symbol() {
-    let (_, after) = simplified("@g = global i16 0\n\ndefine i16 @f() {\nb0:\n  %r = add i16 0, ptrtoint (ptr @g to i16)\n  ret i16 %r\n}\n");
+    let (_, after) = simplified(
+        "@g = global i16 0\n\ndefine i16 @f() {\nb0:\n  %r = add i16 0, ptrtoint (ptr @g to i16)\n  ret i16 %r\n}\n",
+    );
     assert!(printed(&after).contains("  ret i16 ptrtoint (ptr @g to i16)\n"), "{}", printed(&after));
 }
 
@@ -290,7 +358,9 @@ fn test_a_symbol_plus_zero_is_the_symbol() {
 /// and `zext(sext x)` stay two. Only `ext(trunc(ext x))` was folded.
 #[test]
 fn test_a_cast_pair_is_one_cast_or_none() {
-    let casts = |text: &str| text.lines().filter(|line| ["trunc ", "zext ", "sext "].iter().any(|op| line.contains(op))).count();
+    let casts = |text: &str| {
+        text.lines().filter(|line| ["trunc ", "zext ", "sext "].iter().any(|op| line.contains(op))).count()
+    };
     for source in [8, 16, 32] {
         for middle in [8, 16, 32] {
             for result in [8, 16, 32] {
@@ -300,10 +370,16 @@ fn test_a_cast_pair_is_one_cast_or_none() {
                         if !fits(first, source, middle) || !fits(second, middle, result) {
                             continue;
                         }
-                        let text = format!("define i{result} @f(i{source} %x) {{\nb0:\n  %m = {first} i{source} %x to i{middle}\n  %r = {second} i{middle} %m to i{result}\n  ret i{result} %r\n}}\n");
+                        let text = format!(
+                            "define i{result} @f(i{source} %x) {{\nb0:\n  %m = {first} i{source} %x to i{middle}\n  %r = {second} i{middle} %m to i{result}\n  ret i{result} %r\n}}\n"
+                        );
                         let after = checked(&text, &singles(&edges(source)));
                         let stays = (first == "trunc" && second != "trunc") || (first, second) == ("sext", "zext");
-                        assert_eq!(casts(&after), if stays { 2 } else { usize::from(source != result) }, "{text}{after}");
+                        assert_eq!(
+                            casts(&after),
+                            if stays { 2 } else { usize::from(source != result) },
+                            "{text}{after}"
+                        );
                     }
                 }
             }
@@ -317,8 +393,13 @@ fn test_a_cast_pair_is_one_cast_or_none() {
 fn test_reextending_an_already_extended_low_byte_reads_the_extension() {
     for op in ["zext", "sext"] {
         for established in [16, 32] {
-            let text = format!("define i16 @f(i8 %x) {{\nb0:\n  %m = {op} i8 %x to i{established}\n  %v = trunc i{established} %m to i8\n  %r = {op} i8 %v to i16\n  ret i16 %r\n}}\n");
-            assert_eq!(checked(&text, &singles(&edges(8))), format!("define i16 @f(i8 %x) {{\nb0:\n  %r = {op} i8 %x to i16\n  ret i16 %r\n}}\n"));
+            let text = format!(
+                "define i16 @f(i8 %x) {{\nb0:\n  %m = {op} i8 %x to i{established}\n  %v = trunc i{established} %m to i8\n  %r = {op} i8 %v to i16\n  ret i16 %r\n}}\n"
+            );
+            assert_eq!(
+                checked(&text, &singles(&edges(8))),
+                format!("define i16 @f(i8 %x) {{\nb0:\n  %r = {op} i8 %x to i16\n  ret i16 %r\n}}\n")
+            );
         }
     }
 }
@@ -328,9 +409,15 @@ fn test_an_offset_scaled_then_offset_distributes() {
     for (scale, factor) in [("mul i16 %i, 5", "mul i16 %x, 5"), ("shl i16 %i, 2", "shl i16 %x, 2")] {
         let text = unary(16, &format!("  %i = add i16 %x, 3\n  %m = {scale}\n  %r = add i16 %m, 7\n  ret i16 %r\n"));
         let moved = if scale.starts_with("mul") { 22 } else { 19 };
-        assert_eq!(checked(&text, &singles(&edges(16))), unary(16, &format!("  %0 = {factor}\n  %1 = add i16 %0, {moved}\n  ret i16 %1\n")));
+        assert_eq!(
+            checked(&text, &singles(&edges(16))),
+            unary(16, &format!("  %0 = {factor}\n  %1 = add i16 %0, {moved}\n  ret i16 %1\n"))
+        );
     }
-    unchanged(&unary(16, "  %i = add i16 %x, 3\n  %m = mul i16 %i, 5\n  %r = add i16 %m, 7\n  %s = add i16 %i, %r\n  ret i16 %s\n"));
+    unchanged(&unary(
+        16,
+        "  %i = add i16 %x, 3\n  %m = mul i16 %i, 5\n  %r = add i16 %m, 7\n  %s = add i16 %i, %r\n  ret i16 %s\n",
+    ));
 }
 
 /// Without `nsw` kept, a sum the original never overflowed does not
@@ -403,7 +490,8 @@ b3:
   ret i16 %s
 }
 ";
-    let inputs: Vec<Vec<i128>> = [0, 1, 7, 50].into_iter().flat_map(|n| edges(16).into_iter().map(move |a| vec![n, a])).collect();
+    let inputs: Vec<Vec<i128>> =
+        [0, 1, 7, 50].into_iter().flat_map(|n| edges(16).into_iter().map(move |a| vec![n, a])).collect();
     let done = checked(text, &inputs);
     assert!(done.contains("  %b = mul i16 %a, 3\n  %inner = add i16 %a, %b\n  %next = add i16 %s, %inner\n"), "{done}");
 }
@@ -493,7 +581,10 @@ no:
   ret i16 2
 }
 ";
-    let printed = checked(text, &edges(16).iter().flat_map(|&a| edges(16).into_iter().map(move |b| vec![a, b])).collect::<Vec<_>>());
+    let printed = checked(
+        text,
+        &edges(16).iter().flat_map(|&a| edges(16).into_iter().map(move |b| vec![a, b])).collect::<Vec<_>>(),
+    );
     assert!(printed.contains("icmp sge i16 %a, %b") && !printed.contains("xor"), "{printed}");
     // A compare read elsewhere keeps its own value.
     let shared = text.replace("ret i16 1", "%w = zext i1 %c to i16\n  ret i16 %w");
@@ -522,7 +613,10 @@ no:
 ";
     let inputs = edges(16).iter().flat_map(|&a| edges(16).into_iter().map(move |b| vec![a, b])).collect::<Vec<_>>();
     let printed = checked(text, &inputs);
-    assert!(printed.contains("icmp sge i16 %a, %b") && !printed.contains("xor") && !printed.contains("sext"), "{printed}");
+    assert!(
+        printed.contains("icmp sge i16 %a, %b") && !printed.contains("xor") && !printed.contains("sext"),
+        "{printed}"
+    );
     let unsigned = text.replace("sext i1 %c to i8", "zext i1 %c to i8").replace("xor i8 %e, -1", "xor i8 %e, 1");
     let printed = checked(&unsigned, &inputs);
     assert!(printed.contains("icmp sge i16 %a, %b") && !printed.contains("zext"), "{printed}");
@@ -537,7 +631,8 @@ fn a_byte_offset_from_a_constant_address_is_that_address() {
     assert!(text.contains("getelementptr i8, ptr null"), "the shape that was refused");
     let after = bare(&simplified(text).1);
     assert!(after.contains("ret ptr inttoptr (i16 -4 to ptr)"), "{after}");
-    let again = "define ptr @f() {\nb0:\n  %p = getelementptr i8, ptr inttoptr (i16 1132 to ptr), i16 2\n  ret ptr %p\n}\n";
+    let again =
+        "define ptr @f() {\nb0:\n  %p = getelementptr i8, ptr inttoptr (i16 1132 to ptr), i16 2\n  ret ptr %p\n}\n";
     assert!(bare(&simplified(again).1).contains("inttoptr (i16 1134 to ptr)"));
 }
 
@@ -586,9 +681,15 @@ b3:
 fn test_a_mask_then_trunc_then_zext_reads_the_low_part_once() {
     let text = "define i32 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 255\n  %t = trunc i16 %m to i8\n  %r = zext i8 %t to i32\n  ret i32 %r\n}\n";
     let (before, _) = simplified(text);
-    assert!(printed(&before).contains("and i16 %x, 255") && printed(&before).contains("trunc i16"), "premise: the mask and the trunc are there");
+    assert!(
+        printed(&before).contains("and i16 %x, 255") && printed(&before).contains("trunc i16"),
+        "premise: the mask and the trunc are there"
+    );
     let after = checked(text, &singles(&edges(16)));
-    assert_eq!(after, "define i32 @f(i16 %x) {\nb0:\n  %0 = trunc i16 %x to i8\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n}\n");
+    assert_eq!(
+        after,
+        "define i32 @f(i16 %x) {\nb0:\n  %0 = trunc i16 %x to i8\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n}\n"
+    );
 }
 
 /// A `sext` of a masked value, whose sign bit the mask cleared, is a
@@ -604,7 +705,9 @@ fn test_a_sign_extension_of_a_masked_value_is_a_zero_extension() {
 #[test]
 fn test_a_mask_that_is_not_a_low_part_or_is_shared_stays() {
     unchanged("define i32 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 511\n  %r = zext i16 %m to i32\n  ret i32 %r\n}\n");
-    unchanged("define i32 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 255\n  %z = zext i16 %m to i32\n  %w = zext i16 %m to i32\n  %r = add i32 %z, %w\n  ret i32 %r\n}\n");
+    unchanged(
+        "define i32 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 255\n  %z = zext i16 %m to i32\n  %w = zext i16 %m to i32\n  %r = add i32 %z, %w\n  ret i32 %r\n}\n",
+    );
 }
 
 /// A mask of a width the layout does not compute natively stays: the byte
@@ -629,7 +732,11 @@ fn test_a_mask_narrows_only_to_a_native_width() {
 /// 832 instructions to m16's 477).
 #[test]
 fn test_a_compare_of_an_extension_is_a_compare_of_its_source() {
-    let wide = |cast: &str, test: &str, constant: i64| format!("define i1 @f(i16 %x) {{\nb0:\n  %w = {cast} i16 %x to i32\n  %r = icmp {test} i32 %w, {constant}\n  ret i1 %r\n}}\n");
+    let wide = |cast: &str, test: &str, constant: i64| {
+        format!(
+            "define i1 @f(i16 %x) {{\nb0:\n  %w = {cast} i16 %x to i32\n  %r = icmp {test} i32 %w, {constant}\n  ret i1 %r\n}}\n"
+        )
+    };
     let inputs = singles(&edges(16));
     // A constant in the source's range: its width, unsigned for a zext.
     assert!(checked(&wide("zext", "slt", 8), &inputs).contains("icmp ult i16 %x, 8"));
@@ -648,12 +755,18 @@ fn test_a_compare_of_an_extension_is_a_compare_of_its_source() {
 /// `i < limit`, both `unsigned short` (sieve): the pair compares narrow.
 #[test]
 fn test_a_compare_of_two_extensions_is_a_compare_of_their_sources() {
-    for (cast, test, narrow) in [("zext", "slt", "ult"), ("zext", "uge", "uge"), ("sext", "slt", "slt"), ("sext", "ult", "ult")] {
-        let text = format!("define i1 @f(i16 %x, i16 %y) {{\nb0:\n  %a = {cast} i16 %x to i32\n  %b = {cast} i16 %y to i32\n  %r = icmp {test} i32 %a, %b\n  ret i1 %r\n}}\n");
+    for (cast, test, narrow) in
+        [("zext", "slt", "ult"), ("zext", "uge", "uge"), ("sext", "slt", "slt"), ("sext", "ult", "ult")]
+    {
+        let text = format!(
+            "define i1 @f(i16 %x, i16 %y) {{\nb0:\n  %a = {cast} i16 %x to i32\n  %b = {cast} i16 %y to i32\n  %r = icmp {test} i32 %a, %b\n  ret i1 %r\n}}\n"
+        );
         let inputs = edges(16).iter().flat_map(|&a| edges(16).into_iter().map(move |b| vec![a, b])).collect::<Vec<_>>();
         assert!(checked(&text, &inputs).contains(&format!("icmp {narrow} i16 %x, %y")), "{cast} {test}");
     }
-    unchanged("define i1 @f(i16 %x, i8 %y) {\nb0:\n  %a = zext i16 %x to i32\n  %b = zext i8 %y to i32\n  %r = icmp ult i32 %a, %b\n  ret i1 %r\n}\n");
+    unchanged(
+        "define i1 @f(i16 %x, i8 %y) {\nb0:\n  %a = zext i16 %x to i32\n  %b = zext i8 %y to i32\n  %r = icmp ult i32 %a, %b\n  ret i1 %r\n}\n",
+    );
 }
 
 /// `(unsigned short)(m + i)` computed in `int`: `trunc (add (zext m), i)`.
@@ -662,13 +775,20 @@ fn test_a_compare_of_two_extensions_is_a_compare_of_their_sources() {
 #[test]
 fn test_a_truncated_sum_with_an_extension_of_its_width_is_narrow() {
     for op in ["add", "sub", "mul", "and", "or", "xor"] {
-        let text = format!("define i16 @f(i16 %m, i32 %i) {{\nb0:\n  %w = zext i16 %m to i32\n  %s = {op} i32 %w, %i\n  %r = trunc i32 %s to i16\n  ret i16 %r\n}}\n");
+        let text = format!(
+            "define i16 @f(i16 %m, i32 %i) {{\nb0:\n  %w = zext i16 %m to i32\n  %s = {op} i32 %w, %i\n  %r = trunc i32 %s to i16\n  ret i16 %r\n}}\n"
+        );
         let inputs = edges(16).iter().flat_map(|&a| [0, 5, -9, 70000].map(move |b| vec![a, b])).collect::<Vec<_>>();
         let after = checked(&text, &inputs);
-        assert!(after.contains(&format!("{op} i16 %m")) && !after.contains("zext") && !after.contains(&format!("{op} i32")), "{op}\n{after}");
+        assert!(
+            after.contains(&format!("{op} i16 %m")) && !after.contains("zext") && !after.contains(&format!("{op} i32")),
+            "{op}\n{after}"
+        );
     }
     // Two uses of the wide sum keep it.
-    unchanged("define i16 @f(i16 %m, i32 %i) {\nb0:\n  %w = zext i16 %m to i32\n  %s = add i32 %w, %i\n  %r = trunc i32 %s to i16\n  %t = trunc i32 %s to i8\n  %u = zext i8 %t to i16\n  %v = add i16 %r, %u\n  ret i16 %v\n}\n");
+    unchanged(
+        "define i16 @f(i16 %m, i32 %i) {\nb0:\n  %w = zext i16 %m to i32\n  %s = add i32 %w, %i\n  %r = trunc i32 %s to i16\n  %t = trunc i32 %s to i8\n  %u = zext i8 %t to i16\n  %v = add i16 %r, %u\n  ret i16 %v\n}\n",
+    );
 }
 
 /// A byte compared where the extension lives on for an address (grep's
@@ -704,7 +824,9 @@ fn test_unsigned_power_division_is_a_shift_and_a_mask() {
 /// mask. The bias was five instructions where one did.
 #[test]
 fn test_a_signed_division_of_a_non_negative_dividend_is_unsigned() {
-    let ranged = |op: &str, divisor: &str| format!("define i32 @f(i32 range(i32 0, 100000) %x) {{\nb0:\n  %r = {op} i32 %x, {divisor}\n  ret i32 %r\n}}\n");
+    let ranged = |op: &str, divisor: &str| {
+        format!("define i32 @f(i32 range(i32 0, 100000) %x) {{\nb0:\n  %r = {op} i32 %x, {divisor}\n  ret i32 %r\n}}\n")
+    };
     let inputs: Vec<Vec<i128>> = [0, 1, 7, 8, 9, 10, 99, 100, 99999].iter().map(|&one| vec![one]).collect();
     for (op, divisor, shown) in [("sdiv", "8", "lshr"), ("srem", "8", "and"), ("sdiv", "1024", "lshr")] {
         let done = checked(&ranged(op, divisor), &inputs);
@@ -742,7 +864,10 @@ fn test_a_signed_division_of_an_unknown_sign_stays_signed() {
 
 /// bench/tile: `tile[(x + 7) & 63]` of `x < 40` on -m32 kept `mov esi,ebx; and esi,7Eh` per element
 /// (7 instructions an iteration against clang's 4): the range of `x` makes the mask a no-op.
-fn masked_loop(bound: i32, mask: i32) -> String {
+fn masked_loop(
+    bound: i32,
+    mask: i32,
+) -> String {
     format!(
         "define i32 @f(i32 %n) {{
 b0:
@@ -783,12 +908,17 @@ fn a_mask_that_clears_a_bit_the_range_reaches_is_kept() {
 /// A scale's low bit is known clear: `(x * 2) & 126` of `x < 64` drops the mask though the range reaches 126.
 #[test]
 fn a_mask_that_only_clears_a_scaled_low_bit_is_removed() {
-    let text = checked(&masked_loop(40, 63).replace("%a = add nsw i32 %i, 7", "%t = add nsw i32 %i, 7\n  %a = mul i32 %t, 2").replace("and i32 %a, 63", "and i32 %a, 126"), &[vec![0]]);
+    let text = checked(
+        &masked_loop(40, 63)
+            .replace("%a = add nsw i32 %i, 7", "%t = add nsw i32 %i, 7\n  %a = mul i32 %t, 2")
+            .replace("and i32 %a, 63", "and i32 %a, 126"),
+        &[vec![0]],
+    );
     assert!(!text.contains("and i32"), "{text}");
 }
 
-/// A counter rebased by the bound a use subtracts it from left `row - (c + row)` behind it (queens: `lea; mov; sub; cmp`
-/// where gcc's loop has `add; je` on the counter itself).
+/// A counter rebased by the bound a use subtracts it from left `row - (c + row)` behind it (queens: `lea; mov; sub;
+/// cmp` where gcc's loop has `add; je` on the counter itself).
 #[test]
 fn test_a_value_less_a_sum_it_is_in_is_the_other_addend_negated() {
     let text = "define i16 @f(i16 %x) {
@@ -808,7 +938,8 @@ b0:
   ret i16 %r
 }
 ";
-    let inputs: Vec<Vec<i128>> = edges(16).into_iter().flat_map(|x| edges(16).into_iter().map(move |y| vec![x, y])).collect();
+    let inputs: Vec<Vec<i128>> =
+        edges(16).into_iter().flat_map(|x| edges(16).into_iter().map(move |y| vec![x, y])).collect();
     let after = checked(swapped, &inputs);
     assert!(after.contains("sub i16 0, %y"), "{after}");
     let nested = "define i16 @f(i16 %x, i16 %y) {
@@ -822,15 +953,18 @@ b0:
     assert!(after.contains("sub i16 0, %y"), "{after}");
 }
 
-/// A non-negative dividend divided by a constant that is not a power of two is the unsigned division: its reciprocal has no sign
-/// to correct, and the loop counter `i * 97 % 211` (x_hash) took an `idiv` where gcc multiplies. Tuned for size it stays, `div` being
-/// a byte over `idiv` where selection declines the reciprocal.
+/// A non-negative dividend divided by a constant that is not a power of two is the unsigned division: its reciprocal
+/// has no sign to correct, and the loop counter `i * 97 % 211` (x_hash) took an `idiv` where gcc multiplies. Tuned for
+/// size it stays, `div` being a byte over `idiv` where selection declines the reciprocal.
 #[test]
 fn test_a_non_negative_dividend_by_a_constant_is_unsigned_unless_tuned_for_size() {
     let text = "define i32 @f(i32 range(i32 0, 100000) %x) {\nb0:\n  %r = srem i32 %x, 211\n  %q = sdiv i32 %x, 10\n  %s = add i32 %r, %q\n  ret i32 %s\n}\n";
     let inputs: Vec<Vec<i128>> = [0, 1, 9, 10, 210, 211, 99999].iter().map(|&one| vec![one]).collect();
     let done = checked_flat(text, &inputs);
-    assert!(done.contains("urem") && done.contains("udiv") && !done.contains("srem") && !done.contains("sdiv"), "{done}");
+    assert!(
+        done.contains("urem") && done.contains("udiv") && !done.contains("srem") && !done.contains("sdiv"),
+        "{done}"
+    );
     let (before, after) = simplified_in(text, true, FLAT);
     assert_eq!(bare(&after), bare(&before));
     // A 16-bit segment's dword divides through prefixes: it stays.
@@ -840,8 +974,9 @@ fn test_a_non_negative_dividend_by_a_constant_is_unsigned_unless_tuned_for_size(
     unchanged("define i32 @f(i32 range(i32 0, 100) %x) {\nb0:\n  %r = sdiv i32 %x, -10\n  ret i32 %r\n}\n");
 }
 
-/// `(i * 97) % 211` over a counter from 0: the counter never goes below its start (its update is `nsw`), and its product by a positive
-/// constant, `nsw`, is never negative: the remainder is unsigned (x_hash took an `idiv` for it, 43 clocks, where gcc multiplies).
+/// `(i * 97) % 211` over a counter from 0: the counter never goes below its start (its update is `nsw`), and its
+/// product by a positive constant, `nsw`, is never negative: the remainder is unsigned (x_hash took an `idiv` for it,
+/// 43 clocks, where gcc multiplies).
 #[test]
 fn test_a_remainder_of_a_counter_s_product_is_unsigned() {
     let text = "define i32 @f(i32 %n) {

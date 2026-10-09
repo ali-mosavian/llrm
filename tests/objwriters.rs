@@ -8,7 +8,11 @@ fn llrm_c() -> PathBuf {
     Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("llrm-c")
 }
 
-fn compile(source: &Path, arguments: &[&str], out: &Path) -> Output {
+fn compile(
+    source: &Path,
+    arguments: &[&str],
+    out: &Path,
+) -> Output {
     Command::new(llrm_c()).args(arguments).arg(source).arg("-o").arg(out).output().unwrap()
 }
 
@@ -47,15 +51,24 @@ fn readelf_and_objdump_accept_every_bench_objects() {
             assert!(made.status.success(), "{} {level}: {}", source.display(), String::from_utf8_lossy(&made.stderr));
             for (tool, arguments) in [("readelf", &["-a", "--wide"][..]), ("objdump", &["-dr"][..])] {
                 let said = Command::new(tool).args(arguments).arg(&object).output().unwrap();
-                let text = format!("{}{}", String::from_utf8_lossy(&said.stdout), String::from_utf8_lossy(&said.stderr));
-                assert!(said.status.success() && !text.contains("Warning") && !text.contains("Error") && !text.contains("not recognized"), "{tool} {} {level}:\n{text}", source.display());
+                let text =
+                    format!("{}{}", String::from_utf8_lossy(&said.stdout), String::from_utf8_lossy(&said.stderr));
+                assert!(
+                    said.status.success()
+                        && !text.contains("Warning")
+                        && !text.contains("Error")
+                        && !text.contains("not recognized"),
+                    "{tool} {} {level}:\n{text}",
+                    source.display()
+                );
             }
         }
     }
 }
 
 fn llvm(tool: &str) -> Option<PathBuf> {
-    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
+    let mut dirs: Vec<PathBuf> =
+        std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
     dirs.push("/usr/lib/llvm-20/bin".into());
     dirs.iter().map(|dir| dir.join(tool)).find(|path| path.exists())
 }
@@ -74,10 +87,19 @@ fn llvm_accepts_every_bench_coff_object() {
             let object = scratch.path().join("x.obj");
             let made = compile(source, &["-m32", level, "-fobject-format=coff"], &object);
             assert!(made.status.success(), "{} {level}: {}", source.display(), String::from_utf8_lossy(&made.stderr));
-            for (tool, arguments) in [(&readobj, &["--file-headers", "--sections", "--symbols", "--relocations"][..]), (&objdump, &["-d", "-r"][..])] {
+            for (tool, arguments) in [
+                (&readobj, &["--file-headers", "--sections", "--symbols", "--relocations"][..]),
+                (&objdump, &["-d", "-r"][..]),
+            ] {
                 let said = Command::new(tool).args(arguments).arg(&object).output().unwrap();
-                let text = format!("{}{}", String::from_utf8_lossy(&said.stdout), String::from_utf8_lossy(&said.stderr));
-                assert!(said.status.success() && !text.contains("warning") && !text.contains("error"), "{} {} {level}:\n{text}", tool.display(), source.display());
+                let text =
+                    format!("{}{}", String::from_utf8_lossy(&said.stdout), String::from_utf8_lossy(&said.stderr));
+                assert!(
+                    said.status.success() && !text.contains("warning") && !text.contains("error"),
+                    "{} {} {level}:\n{text}",
+                    tool.display(),
+                    source.display()
+                );
             }
         }
     }
@@ -99,10 +121,20 @@ fn llvm_reads_the_codeview_of_every_bench_coff_object() {
             assert!(made.status.success(), "{} {level}: {}", source.display(), String::from_utf8_lossy(&made.stderr));
             for (tool, arguments) in [(&readobj, &["--codeview"][..]), (&objdump, &["-d", "-r"][..])] {
                 let said = Command::new(tool).args(arguments).arg(&object).output().unwrap();
-                let text = format!("{}{}", String::from_utf8_lossy(&said.stdout), String::from_utf8_lossy(&said.stderr));
-                assert!(said.status.success() && !text.contains("warning") && !text.contains("error"), "{} {} {level}:\n{text}", tool.display(), source.display());
+                let text =
+                    format!("{}{}", String::from_utf8_lossy(&said.stdout), String::from_utf8_lossy(&said.stderr));
+                assert!(
+                    said.status.success() && !text.contains("warning") && !text.contains("error"),
+                    "{} {} {level}:\n{text}",
+                    tool.display(),
+                    source.display()
+                );
                 if tool == &readobj {
-                    assert!(text.contains("S_GPROC32") && text.contains("FunctionLineTable"), "{} {level}: no function or lines:\n{text}", source.display());
+                    assert!(
+                        text.contains("S_GPROC32") && text.contains("FunctionLineTable"),
+                        "{} {level}: no function or lines:\n{text}",
+                        source.display()
+                    );
                 }
             }
         }
@@ -124,18 +156,54 @@ fn lld_link_makes_a_pdb_of_a_c_program() {
     std::fs::write(dir.join("p.c"), "struct S { int a; char b; };\nint g = 3;\nint __cdecl twice(int a, struct S *p)\n{\n    int y = a + p->a;\n    return y + y + g;\n}\n").unwrap();
     let made = compile(&dir.join("p.c"), &["-m32", "-O0", "-g", "-fobject-format=coff"], &dir.join("p.obj"));
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
-    let linked = Command::new(link).args(["/machine:x86", "/subsystem:console", "/entry:twice", "/nodefaultlib", "/debug", "/pdb:p.pdb", "/out:p.exe", "p.obj"]).current_dir(dir).output().unwrap();
-    assert!(linked.status.success(), "{}{}", String::from_utf8_lossy(&linked.stdout), String::from_utf8_lossy(&linked.stderr));
-    let said = Command::new(pdbutil).args(["dump", "-l", "--symbols", "--types", "--globals"]).arg(dir.join("p.pdb")).output().unwrap();
+    let linked = Command::new(link)
+        .args([
+            "/machine:x86",
+            "/subsystem:console",
+            "/entry:twice",
+            "/nodefaultlib",
+            "/debug",
+            "/pdb:p.pdb",
+            "/out:p.exe",
+            "p.obj",
+        ])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        linked.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&linked.stdout),
+        String::from_utf8_lossy(&linked.stderr)
+    );
+    let said = Command::new(pdbutil)
+        .args(["dump", "-l", "--symbols", "--types", "--globals"])
+        .arg(dir.join("p.pdb"))
+        .output()
+        .unwrap();
     let text = String::from_utf8_lossy(&said.stdout);
-    for wanted in ["S_GPROC32", "`twice`", "S_LOCAL", "`a`", "`p`", "`y`", "flags = param", "LF_STRUCTURE", "`S`", "sizeof 8", "S_GDATA32", "`g`", "line/addr entries"] {
+    for wanted in [
+        "S_GPROC32",
+        "`twice`",
+        "S_LOCAL",
+        "`a`",
+        "`p`",
+        "`y`",
+        "flags = param",
+        "LF_STRUCTURE",
+        "`S`",
+        "sizeof 8",
+        "S_GDATA32",
+        "`g`",
+        "line/addr entries",
+    ] {
         assert!(text.contains(wanted), "no {wanted}:\n{text}");
     }
 }
 
 /// An llrm COFF object and a clang-cl one link into one image, each calling the other with the
-/// cdecl both use (llrm's default is Open Watcom's registers, so the functions say `__cdecl`): lld-link resolves `_start` and `_clang_add`, and every call in the image lands
-/// on the address the link map gives its callee.
+/// cdecl both use (llrm's default is Open Watcom's registers, so the functions say `__cdecl`): lld-link resolves
+/// `_start` and `_clang_add`, and every call in the image lands on the address the link map gives its callee.
 #[test]
 fn an_llrm_coff_object_links_with_a_clang_cl_object() {
     let (Some(clang), Some(link), Some(objdump)) = (llvm("clang-cl"), llvm("lld-link"), llvm("llvm-objdump")) else {
@@ -144,21 +212,62 @@ fn an_llrm_coff_object_links_with_a_clang_cl_object() {
     };
     let scratch = tempfile::tempdir().unwrap();
     let dir = scratch.path();
-    std::fs::write(dir.join("m.c"), "int clang_add(int a, int b) { return a + b; }\nint start(void);\nint entry(void) { return start(); }\n").unwrap();
-    std::fs::write(dir.join("l.c"), "int __cdecl clang_add(int a, int b);\nint __cdecl start(void) { return clang_add(1, 2) + 4; }\n").unwrap();
-    let made = Command::new(clang).args(["--target=i386-pc-windows-msvc", "/c", "/GS-", "/Fo:m.obj", "m.c"]).current_dir(dir).output().unwrap();
+    std::fs::write(
+        dir.join("m.c"),
+        "int clang_add(int a, int b) { return a + b; }\nint start(void);\nint entry(void) { return start(); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("l.c"),
+        "int __cdecl clang_add(int a, int b);\nint __cdecl start(void) { return clang_add(1, 2) + 4; }\n",
+    )
+    .unwrap();
+    let made = Command::new(clang)
+        .args(["--target=i386-pc-windows-msvc", "/c", "/GS-", "/Fo:m.obj", "m.c"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     let made = compile(&dir.join("l.c"), &["-m32", "-O2", "-fobject-format=coff"], &dir.join("l.obj"));
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
-    let linked = Command::new(link).args(["/machine:x86", "/subsystem:console", "/entry:entry", "/nodefaultlib", "/fixed", "/base:0x400000", "/lldmap:m.map", "/out:m.exe", "m.obj", "l.obj"]).current_dir(dir).output().unwrap();
-    assert!(linked.status.success(), "{}{}", String::from_utf8_lossy(&linked.stdout), String::from_utf8_lossy(&linked.stderr));
+    let linked = Command::new(link)
+        .args([
+            "/machine:x86",
+            "/subsystem:console",
+            "/entry:entry",
+            "/nodefaultlib",
+            "/fixed",
+            "/base:0x400000",
+            "/lldmap:m.map",
+            "/out:m.exe",
+            "m.obj",
+            "l.obj",
+        ])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        linked.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&linked.stdout),
+        String::from_utf8_lossy(&linked.stderr)
+    );
     let map = std::fs::read_to_string(dir.join("m.map")).unwrap();
-    let address = |symbol: &str| map.lines().find(|line| line.trim_end().ends_with(&format!(" {symbol}"))).and_then(|line| line.split_whitespace().next()).map(|one| u32::from_str_radix(one, 16).unwrap()).unwrap_or_else(|| panic!("no {symbol} in the map:\n{map}"));
+    let address = |symbol: &str| {
+        map.lines()
+            .find(|line| line.trim_end().ends_with(&format!(" {symbol}")))
+            .and_then(|line| line.split_whitespace().next())
+            .map(|one| u32::from_str_radix(one, 16).unwrap())
+            .unwrap_or_else(|| panic!("no {symbol} in the map:\n{map}"))
+    };
     let listing = Command::new(objdump).args(["-d", "--no-show-raw-insn", "m.exe"]).current_dir(dir).output().unwrap();
     let listing = String::from_utf8_lossy(&listing.stdout);
     for callee in ["_start", "_clang_add"] {
         let wanted = format!("0x{:x}", 0x40_0000 + address(callee));
-        assert!(listing.lines().any(|line| line.contains("call") && line.contains(&wanted)), "no call to {callee} at {wanted}:\n{listing}");
+        assert!(
+            listing.lines().any(|line| line.contains("call") && line.contains(&wanted)),
+            "no call to {callee} at {wanted}:\n{listing}"
+        );
     }
 }
 
@@ -176,8 +285,8 @@ fn without_a_format_the_target_writes_its_default() {
     }
 }
 
-/// COFF's i386 machine number opens the file, and its symbols carry the `coff` decoration of the convention the function has: the
-/// default's, Open Watcom's, is a trailing underscore (what `wcc386 -eoc` writes).
+/// COFF's i386 machine number opens the file, and its symbols carry the `coff` decoration of the convention the
+/// function has: the default's, Open Watcom's, is a trailing underscore (what `wcc386 -eoc` writes).
 #[test]
 fn coff_is_a_coff_object_for_a_target_that_lists_it() {
     let scratch = tempfile::tempdir().unwrap();
@@ -231,13 +340,40 @@ fn a_pdb_holds_the_functions_of_an_llrm_object_and_a_clang_cl_object() {
     let scratch = tempfile::tempdir().unwrap();
     let dir = scratch.path();
     std::fs::write(dir.join("m.c"), "int clang_add(int a, int b) { int s = a + b; return s; }\nint start(void);\nint entry(void) { return start(); }\n").unwrap();
-    std::fs::write(dir.join("l.c"), "int __cdecl clang_add(int a, int b);\nint __cdecl start(void) { int r = clang_add(1, 2); return r + 4; }\n").unwrap();
-    let made = Command::new(clang).args(["--target=i386-pc-windows-msvc", "/c", "/GS-", "/Zi", "/Fo:m.obj", "m.c"]).current_dir(dir).output().unwrap();
+    std::fs::write(
+        dir.join("l.c"),
+        "int __cdecl clang_add(int a, int b);\nint __cdecl start(void) { int r = clang_add(1, 2); return r + 4; }\n",
+    )
+    .unwrap();
+    let made = Command::new(clang)
+        .args(["--target=i386-pc-windows-msvc", "/c", "/GS-", "/Zi", "/Fo:m.obj", "m.c"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     let made = compile(&dir.join("l.c"), &["-m32", "-O0", "-g", "-fobject-format=coff"], &dir.join("l.obj"));
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
-    let linked = Command::new(link).args(["/machine:x86", "/subsystem:console", "/entry:entry", "/nodefaultlib", "/debug", "/pdb:m.pdb", "/out:m.exe", "m.obj", "l.obj"]).current_dir(dir).output().unwrap();
-    assert!(linked.status.success(), "{}{}", String::from_utf8_lossy(&linked.stdout), String::from_utf8_lossy(&linked.stderr));
+    let linked = Command::new(link)
+        .args([
+            "/machine:x86",
+            "/subsystem:console",
+            "/entry:entry",
+            "/nodefaultlib",
+            "/debug",
+            "/pdb:m.pdb",
+            "/out:m.exe",
+            "m.obj",
+            "l.obj",
+        ])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        linked.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&linked.stdout),
+        String::from_utf8_lossy(&linked.stderr)
+    );
     let said = Command::new(pdbutil).args(["dump", "--symbols"]).arg(dir.join("m.pdb")).output().unwrap();
     let text = String::from_utf8_lossy(&said.stdout);
     for wanted in ["l.obj", "m.obj", "S_GPROC32", "`start`", "`clang_add`", "`entry`", "`r`", "`s`"] {
@@ -248,7 +384,10 @@ fn a_pdb_holds_the_functions_of_an_llrm_object_and_a_clang_cl_object() {
 /// Whether some instruction between a backward branch's target and the branch writes the frame
 /// cell at `offset` from ebp, in `listing` (llvm-objdump's): a loop that keeps its variable in a
 /// register and stores it after the loop leaves the debugger's cell stale in every iteration.
-fn stores_in_a_loop(listing: &str, offset: i64) -> bool {
+fn stores_in_a_loop(
+    listing: &str,
+    offset: i64,
+) -> bool {
     let lines: Vec<(u64, &str)> = listing
         .lines()
         .filter_map(|line| {
@@ -258,8 +397,12 @@ fn stores_in_a_loop(listing: &str, offset: i64) -> bool {
         .collect();
     let cell = if offset < 0 { format!("-0x{:x}(%ebp)", -offset) } else { format!("0x{offset:x}(%ebp)") };
     lines.iter().any(|&(at, instruction)| {
-        let Some(target) = instruction.strip_prefix('j').and_then(|jump| u64::from_str_radix(jump.split("0x").nth(1)?.split_whitespace().next()?, 16).ok()) else { return false };
+        let Some(target) = instruction
+            .strip_prefix('j')
+            .and_then(|jump| u64::from_str_radix(jump.split("0x").nth(1)?.split_whitespace().next()?, 16).ok())
+        else {
+            return false;
+        };
         target < at && lines.iter().any(|&(inside, one)| (target..=at).contains(&inside) && one.ends_with(&cell))
     })
 }
-

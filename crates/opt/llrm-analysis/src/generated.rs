@@ -29,11 +29,17 @@ impl Rng {
         self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
     }
 
-    pub fn below(&mut self, n: u64) -> u64 {
+    pub fn below(
+        &mut self,
+        n: u64,
+    ) -> u64 {
         self.next() % n
     }
 
-    pub fn chance(&mut self, percent: u64) -> bool {
+    pub fn chance(
+        &mut self,
+        percent: u64,
+    ) -> bool {
         self.below(100) < percent
     }
 
@@ -93,13 +99,24 @@ struct Builder {
 }
 
 impl Builder {
-    fn made(&mut self, from: &[&Node], text: impl FnOnce(&str) -> String, width: u32, degree: u32, extended: bool) -> Node {
+    fn made(
+        &mut self,
+        from: &[&Node],
+        text: impl FnOnce(&str) -> String,
+        width: u32,
+        degree: u32,
+        extended: bool,
+    ) -> Node {
         let name = format!("e{}", self.next);
         self.next += 1;
         let line = text(&name);
         // An invariant is built before the loop, where LICM leaves it.
         let early = degree == 0 && from.iter().all(|one| one.early);
-        if early { self.pre.push(line) } else { self.body.push(line) }
+        if early {
+            self.pre.push(line)
+        } else {
+            self.body.push(line)
+        }
         self.tracked.push(Tracked { name: name.clone(), width, degree, extended });
         Node { name: format!("%{name}"), early, width, degree, extended }
     }
@@ -113,10 +130,20 @@ impl Builder {
             6 => ("s".to_owned(), 0),
             _ => (format!("{}", self.rng.word() as i16), 0),
         };
-        Node { name: if degree == 1 || name.parse::<i64>().is_err() { format!("%{name}") } else { name }, early: degree == 0, width: 16, degree, extended: false }
+        Node {
+            name: if degree == 1 || name.parse::<i64>().is_err() { format!("%{name}") } else { name },
+            early: degree == 0,
+            width: 16,
+            degree,
+            extended: false,
+        }
     }
 
-    fn expr(&mut self, depth: u32, width: u32) -> Node {
+    fn expr(
+        &mut self,
+        depth: u32,
+        width: u32,
+    ) -> Node {
         if depth == 0 || self.rng.chance(15) {
             let leaf = self.leaf();
             return if width == 16 { leaf } else { self.cast(leaf, width) };
@@ -127,12 +154,24 @@ impl Builder {
                 let kind = ["add", "sub", "mul"][self.rng.below(3) as usize];
                 let degree = if kind == "mul" { first.degree + second.degree } else { first.degree.max(second.degree) };
                 let extended = first.extended || second.extended;
-                self.made(&[&first, &second], |name| format!("%{name} = {kind} i{width} {}, {}", operand(&first), operand(&second)), width, degree, extended)
+                self.made(
+                    &[&first, &second],
+                    |name| format!("%{name} = {kind} i{width} {}, {}", operand(&first), operand(&second)),
+                    width,
+                    degree,
+                    extended,
+                )
             }
             6 | 7 => {
                 let of = self.expr(depth - 1, width);
                 let count = self.rng.below(u64::from(width.min(8)));
-                self.made(&[&of], |name| format!("%{name} = shl i{width} {}, {count}", operand(&of)), width, of.degree, of.extended)
+                self.made(
+                    &[&of],
+                    |name| format!("%{name} = shl i{width} {}, {count}", operand(&of)),
+                    width,
+                    of.degree,
+                    of.extended,
+                )
             }
             _ => {
                 let of = self.expr(depth - 1, if width == 16 { 32 } else { 16 });
@@ -142,14 +181,24 @@ impl Builder {
     }
 
     /// `of` taken to `width`: sext or zext up, trunc down.
-    fn cast(&mut self, of: Node, width: u32) -> Node {
+    fn cast(
+        &mut self,
+        of: Node,
+        width: u32,
+    ) -> Node {
         if of.width == width {
             return of;
         }
         let kind = if width < of.width { "trunc" } else { ["sext", "zext"][self.rng.below(2) as usize] };
         let (from, extended) = (of.width, of.extended || (width > of.width && of.degree > 0));
         let degree = if width > of.width && of.degree > 0 { 9 } else { of.degree };
-        self.made(&[&of], |name| format!("%{name} = {kind} i{from} {} to i{width}", operand(&of)), width, degree, extended)
+        self.made(
+            &[&of],
+            |name| format!("%{name} = {kind} i{from} {} to i{width}", operand(&of)),
+            width,
+            degree,
+            extended,
+        )
     }
 }
 
@@ -194,7 +243,9 @@ pub fn case(seed: u64) -> Case {
             text.push_str(&format!("  %z{at} = zext i16 %{} to i32\n", one.name));
             format!("z{at}")
         };
-        text.push_str(&format!("  %p{at} = icmp eq i16 %which, {at}\n  %r{at} = select i1 %p{at}, i32 %{wide}, i32 {last}\n"));
+        text.push_str(&format!(
+            "  %p{at} = icmp eq i16 %which, {at}\n  %r{at} = select i1 %p{at}, i32 %{wide}, i32 {last}\n"
+        ));
         last = format!("%r{at}");
     }
     text.push_str(&format!("  %inext = add i16 %i, {step}\n  %tnext = add i16 %t, 1\n  %go = icmp ult i16 %tnext, %n\n  br i1 %go, label %b1, label %b2\n\nb2:\n  ret i32 {last}\n}}\n"));
@@ -225,7 +276,10 @@ impl Inputs {
         Self { x: rng.word(), s: rng.word(), a: rng.word(), b: rng.word(), c: rng.word() }
     }
 
-    pub fn named(&self, name: &str) -> Option<u16> {
+    pub fn named(
+        &self,
+        name: &str,
+    ) -> Option<u16> {
         Some(match name {
             "x" => self.x,
             "s" => self.s,
@@ -239,9 +293,22 @@ impl Inputs {
 
 /// `module`'s `@f` on `inputs`, with `which` selecting the value returned
 /// on the loop's trip `trip` (the last of `trip + 1`), in the low `width` bits.
-pub fn observed(module: &Module, inputs: &Inputs, which: usize, trip: u16) -> Option<u128> {
+pub fn observed(
+    module: &Module,
+    inputs: &Inputs,
+    which: usize,
+    trip: u16,
+) -> Option<u128> {
     let int = |n: u16| Val::Int { bits: u128::from(n), width: 16 };
-    let arguments = vec![int(inputs.x), int(inputs.s), int(inputs.a), int(inputs.b), int(inputs.c), int(trip + 1), int(which as u16)];
+    let arguments = vec![
+        int(inputs.x),
+        int(inputs.s),
+        int(inputs.a),
+        int(inputs.b),
+        int(inputs.c),
+        int(trip + 1),
+        int(which as u16),
+    ];
     match run(module, "f", arguments, 100_000) {
         Ok(Val::Int { bits, .. }) => Some(bits),
         other => panic!("{other:?}"),

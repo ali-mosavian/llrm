@@ -102,19 +102,16 @@ pub struct NonTerminalDef {
 pub enum GrammarParseError {
     MissingSection(&'static str),
     DuplicateSection(&'static str),
-    UnexpectedContent {
-        section: &'static str,
-        detail: String,
-    },
-    BodyParse {
-        context: String,
-        detail: String,
-    },
+    UnexpectedContent { section: &'static str, detail: String },
+    BodyParse { context: String, detail: String },
     Io(String),
 }
 
 impl std::fmt::Display for GrammarParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         match self {
             Self::MissingSection(name) => write!(f, "missing required section `{name}:`"),
             Self::DuplicateSection(name) => write!(f, "duplicate section `{name}:`"),
@@ -148,38 +145,24 @@ pub fn parse_grammar(source: &str) -> Result<GrammarFile, GrammarParseError> {
     let stripped = strip_comments(source);
     let sections = split_sections(&stripped)?;
 
-    let tokens = parse_tokens_section(
-        sections
-            .get(SECTION_TOKENS)
-            .ok_or(GrammarParseError::MissingSection(SECTION_TOKENS))?,
-    )?;
+    let tokens =
+        parse_tokens_section(sections.get(SECTION_TOKENS).ok_or(GrammarParseError::MissingSection(SECTION_TOKENS))?)?;
 
     let statements = parse_rule_section(
-        sections
-            .get(SECTION_STATEMENTS)
-            .ok_or(GrammarParseError::MissingSection(SECTION_STATEMENTS))?,
+        sections.get(SECTION_STATEMENTS).ok_or(GrammarParseError::MissingSection(SECTION_STATEMENTS))?,
         SECTION_STATEMENTS,
     )?;
 
     let functions = parse_rule_section(
-        sections
-            .get(SECTION_FUNCTIONS)
-            .ok_or(GrammarParseError::MissingSection(SECTION_FUNCTIONS))?,
+        sections.get(SECTION_FUNCTIONS).ok_or(GrammarParseError::MissingSection(SECTION_FUNCTIONS))?,
         SECTION_FUNCTIONS,
     )?;
 
     let nonterminals = parse_nonterminals_section(
-        sections
-            .get(SECTION_NONTERMINALS)
-            .ok_or(GrammarParseError::MissingSection(SECTION_NONTERMINALS))?,
+        sections.get(SECTION_NONTERMINALS).ok_or(GrammarParseError::MissingSection(SECTION_NONTERMINALS))?,
     )?;
 
-    Ok(GrammarFile {
-        tokens,
-        statements,
-        functions,
-        nonterminals,
-    })
+    Ok(GrammarFile { tokens, statements, functions, nonterminals })
 }
 
 /// Read and parse a `.prs` grammar file from disk.
@@ -196,11 +179,7 @@ pub fn parse_grammar_file(path: impl AsRef<Path>) -> Result<GrammarFile, Grammar
 pub fn parse_token_decls(source: &str) -> Result<Vec<TokenDef>, GrammarParseError> {
     let stripped = strip_comments(source);
     let sections = split_sections_present(&stripped)?;
-    parse_tokens_section(
-        sections
-            .get(SECTION_TOKENS)
-            .ok_or(GrammarParseError::MissingSection(SECTION_TOKENS))?,
-    )
+    parse_tokens_section(sections.get(SECTION_TOKENS).ok_or(GrammarParseError::MissingSection(SECTION_TOKENS))?)
 }
 
 /// Read and parse token declarations from a `.prs` grammar file.
@@ -210,9 +189,7 @@ pub fn parse_token_decls_file(path: impl AsRef<Path>) -> Result<Vec<TokenDef>, G
     parse_token_decls(&source)
 }
 
-fn split_sections(
-    source: &str,
-) -> Result<std::collections::BTreeMap<&'static str, String>, GrammarParseError> {
+fn split_sections(source: &str) -> Result<std::collections::BTreeMap<&'static str, String>, GrammarParseError> {
     let mut sections = std::collections::BTreeMap::new();
     let mut current: Option<&'static str> = None;
     let mut body = String::new();
@@ -249,9 +226,7 @@ fn split_sections(
     Ok(sections)
 }
 
-fn split_sections_present(
-    source: &str,
-) -> Result<std::collections::BTreeMap<&'static str, String>, GrammarParseError> {
+fn split_sections_present(source: &str) -> Result<std::collections::BTreeMap<&'static str, String>, GrammarParseError> {
     let mut sections = std::collections::BTreeMap::new();
     let mut current: Option<&'static str> = None;
     let mut body = String::new();
@@ -324,11 +299,7 @@ fn parse_token_line(line: &str) -> Option<TokenDef> {
     }
 
     let (spelling, attributes) = parse_spelling_and_attributes(&line[open_paren..])?;
-    Some(TokenDef {
-        name: name.to_string(),
-        spelling,
-        attributes,
-    })
+    Some(TokenDef { name: name.to_string(), spelling, attributes })
 }
 
 fn parse_spelling_and_attributes(input: &str) -> Option<(String, Vec<String>)> {
@@ -438,10 +409,7 @@ fn unescape_prs_string(raw: &str) -> String {
                 let mut octal = String::new();
                 octal.push(esc);
                 for _ in 0..2 {
-                    if chars
-                        .peek()
-                        .is_some_and(|next| next.is_ascii_digit() && *next <= '7')
-                    {
+                    if chars.peek().is_some_and(|next| next.is_ascii_digit() && *next <= '7') {
                         octal.push(chars.next().unwrap());
                     }
                 }
@@ -573,10 +541,7 @@ fn nonterminal_name_line(line: &str) -> Option<String> {
     }
 
     let name = &trimmed[..colon];
-    if !name
-        .chars()
-        .all(|ch| is_ident_start(ch) || (ch.is_ascii_alphanumeric() && ch != ':'))
-    {
+    if !name.chars().all(|ch| is_ident_start(ch) || (ch.is_ascii_alphanumeric() && ch != ':')) {
         return None;
     }
     if !name.chars().next().is_some_and(is_ident_start) {
@@ -589,7 +554,10 @@ fn nonterminal_name_line(line: &str) -> Option<String> {
     Some(name.to_string())
 }
 
-fn finalize_nonterminal(name: String, body: &str) -> Result<NonTerminalDef, GrammarParseError> {
+fn finalize_nonterminal(
+    name: String,
+    body: &str,
+) -> Result<NonTerminalDef, GrammarParseError> {
     let trimmed_body = body.trim();
     if trimmed_body.is_empty() {
         return Err(GrammarParseError::UnexpectedContent {
@@ -605,16 +573,13 @@ fn finalize_nonterminal(name: String, body: &str) -> Result<NonTerminalDef, Gram
     let msg_hint = external_msg_hint(&parsed.productions);
     let has_index = parsed.has_index;
 
-    Ok(NonTerminalDef {
-        name,
-        body: parsed,
-        external,
-        msg_hint,
-        has_index,
-    })
+    Ok(NonTerminalDef { name, body: parsed, external, msg_hint, has_index })
 }
 
-fn parse_nonterminal_body(raw: &str, context: &str) -> Result<GrammarBody, GrammarParseError> {
+fn parse_nonterminal_body(
+    raw: &str,
+    context: &str,
+) -> Result<GrammarBody, GrammarParseError> {
     let mut productions = Vec::new();
     let mut has_index = false;
     let mut remainder = raw.trim();
@@ -645,11 +610,7 @@ fn parse_nonterminal_body(raw: &str, context: &str) -> Result<GrammarBody, Gramm
         });
     }
 
-    Ok(GrammarBody {
-        raw: raw.to_string(),
-        productions,
-        has_index,
-    })
+    Ok(GrammarBody { raw: raw.to_string(), productions, has_index })
 }
 
 fn parse_production_block(
@@ -680,13 +641,7 @@ fn parse_production_with_trailing_metadata<'a>(
     if parser.peek_angle_metadata().is_some() {
         let meta = parser.peek_angle_metadata().expect("metadata peeked");
         if meta == "INDEX" {
-            return Ok((
-                GrammarProduction {
-                    expr,
-                    cg_hint: None,
-                },
-                parser.rest(),
-            ));
+            return Ok((GrammarProduction { expr, cg_hint: None }, parser.rest()));
         }
         let meta = parser.consume_angle_metadata(context)?;
         cg_hint = Some(meta);
@@ -697,9 +652,7 @@ fn parse_production_with_trailing_metadata<'a>(
 }
 
 fn is_external_expr(productions: &[GrammarProduction]) -> bool {
-    productions
-        .first()
-        .is_some_and(|production| matches!(production.expr, GrammarExpr::External { msg_hint: _ }))
+    productions.first().is_some_and(|production| matches!(production.expr, GrammarExpr::External { msg_hint: _ }))
 }
 
 fn external_msg_hint(productions: &[GrammarProduction]) -> Option<String> {
@@ -837,11 +790,7 @@ impl<'a> BodyLexer<'a> {
                     self.bump();
                 }
                 let text = self.input[start..self.pos].to_string();
-                let kind = if text.starts_with("tk") {
-                    BodyTokenKind::TokenRef
-                } else {
-                    BodyTokenKind::Ident
-                };
+                let kind = if text.starts_with("tk") { BodyTokenKind::TokenRef } else { BodyTokenKind::Ident };
                 (kind, text)
             }
             _ => return None,
@@ -858,10 +807,7 @@ struct BodyParser<'a> {
 
 impl<'a> BodyParser<'a> {
     fn new(input: &'a str) -> Self {
-        Self {
-            lexer: BodyLexer::new(input),
-            peeked: None,
-        }
+        Self { lexer: BodyLexer::new(input), peeked: None }
     }
 
     fn rest(&self) -> &'a str {
@@ -888,7 +834,11 @@ impl<'a> BodyParser<'a> {
         self.lexer.next_token()
     }
 
-    fn expect_char(&mut self, expected: char, context: &str) -> Result<(), GrammarParseError> {
+    fn expect_char(
+        &mut self,
+        expected: char,
+        context: &str,
+    ) -> Result<(), GrammarParseError> {
         self.skip_whitespace_and_comments();
         match self.bump() {
             Some(token) if token.kind == BodyTokenKind::Semicolon && expected == ';' => Ok(()),
@@ -915,7 +865,10 @@ impl<'a> BodyParser<'a> {
         }
     }
 
-    fn consume_angle_metadata(&mut self, context: &str) -> Result<String, GrammarParseError> {
+    fn consume_angle_metadata(
+        &mut self,
+        context: &str,
+    ) -> Result<String, GrammarParseError> {
         self.skip_whitespace_and_comments();
         if self.lexer.peek_char() != Some('<') {
             return Err(GrammarParseError::BodyParse {
@@ -952,19 +905,22 @@ impl<'a> BodyParser<'a> {
         )
     }
 
-    fn parse_production_expr(&mut self, context: &str) -> Result<GrammarExpr, GrammarParseError> {
+    fn parse_production_expr(
+        &mut self,
+        context: &str,
+    ) -> Result<GrammarExpr, GrammarParseError> {
         let mut alts = vec![self.parse_sequence(context)?];
-        while self
-            .peek()
-            .is_some_and(|token| token.kind == BodyTokenKind::Pipe)
-        {
+        while self.peek().is_some_and(|token| token.kind == BodyTokenKind::Pipe) {
             self.bump();
             alts.push(self.parse_sequence(context)?);
         }
         Ok(fold_alternatives(alts))
     }
 
-    fn parse_sequence(&mut self, context: &str) -> Result<GrammarExpr, GrammarParseError> {
+    fn parse_sequence(
+        &mut self,
+        context: &str,
+    ) -> Result<GrammarExpr, GrammarParseError> {
         if self.at_end_of_expr() {
             return Ok(GrammarExpr::Empty);
         }
@@ -976,11 +932,18 @@ impl<'a> BodyParser<'a> {
         Ok(fold_sequence(items))
     }
 
-    fn parse_term(&mut self, context: &str) -> Result<GrammarExpr, GrammarParseError> {
-        let token = self.bump().ok_or_else(|| GrammarParseError::BodyParse {
-            context: context.to_string(),
-            detail: "unexpected end of input".to_string(),
-        })?;
+    fn parse_term(
+        &mut self,
+        context: &str,
+    ) -> Result<GrammarExpr, GrammarParseError> {
+        let token = self
+            .bump()
+            .ok_or_else(
+                || GrammarParseError::BodyParse {
+                    context: context.to_string(),
+                    detail: "unexpected end of input".to_string(),
+                },
+            )?;
 
         match token.kind {
             BodyTokenKind::LParen => {
@@ -1045,10 +1008,7 @@ impl<'a> BodyParser<'a> {
     ) -> Result<Option<String>, GrammarParseError> {
         self.skip_whitespace_and_comments();
         match self.peek() {
-            Some(BodyToken {
-                kind: BodyTokenKind::Ident,
-                text,
-            }) if text.starts_with("MSG_") => {
+            Some(BodyToken { kind: BodyTokenKind::Ident, text }) if text.starts_with("MSG_") => {
                 let hint = self.bump().expect("peeked ident").text;
                 Ok(Some(hint))
             }
@@ -1056,28 +1016,36 @@ impl<'a> BodyParser<'a> {
         }
     }
 
-    fn parse_emit(&mut self, context: &str) -> Result<EmitDirective, GrammarParseError> {
+    fn parse_emit(
+        &mut self,
+        context: &str,
+    ) -> Result<EmitDirective, GrammarParseError> {
         self.expect_delimiter('(', BodyTokenKind::LParen, context)?;
         let mut args = Vec::new();
 
         loop {
             self.skip_whitespace_and_comments();
-            let token = self.bump().ok_or_else(|| GrammarParseError::BodyParse {
-                context: context.to_string(),
-                detail: "EMIT(...) missing argument".to_string(),
-            })?;
+            let token = self
+                .bump()
+                .ok_or_else(
+                    || GrammarParseError::BodyParse {
+                        context: context.to_string(),
+                        detail: "EMIT(...) missing argument".to_string(),
+                    },
+                )?;
 
             match token.kind {
                 BodyTokenKind::Ident => args.push(EmitArg::Ident(token.text)),
                 BodyTokenKind::Number => {
-                    let value =
-                        token
-                            .text
-                            .parse::<u32>()
-                            .map_err(|_| GrammarParseError::BodyParse {
+                    let value = token
+                        .text
+                        .parse::<u32>()
+                        .map_err(
+                            |_| GrammarParseError::BodyParse {
                                 context: context.to_string(),
                                 detail: format!("invalid EMIT numeric argument `{}`", token.text),
-                            })?;
+                            },
+                        )?;
                     args.push(EmitArg::Number(value));
                 }
                 BodyTokenKind::RParen => {
@@ -1099,16 +1067,10 @@ impl<'a> BodyParser<'a> {
 
             self.skip_whitespace_and_comments();
             match self.peek() {
-                Some(BodyToken {
-                    kind: BodyTokenKind::Comma,
-                    ..
-                }) => {
+                Some(BodyToken { kind: BodyTokenKind::Comma, .. }) => {
                     self.bump();
                 }
-                Some(BodyToken {
-                    kind: BodyTokenKind::RParen,
-                    ..
-                }) => {
+                Some(BodyToken { kind: BodyTokenKind::RParen, .. }) => {
                     self.bump();
                     break;
                 }
@@ -1130,24 +1092,26 @@ impl<'a> BodyParser<'a> {
         Ok(EmitDirective { args })
     }
 
-    fn parse_mark(&mut self, context: &str) -> Result<MarkDirective, GrammarParseError> {
+    fn parse_mark(
+        &mut self,
+        context: &str,
+    ) -> Result<MarkDirective, GrammarParseError> {
         self.expect_delimiter('(', BodyTokenKind::LParen, context)?;
         self.skip_whitespace_and_comments();
-        let token = self.bump().ok_or_else(|| GrammarParseError::BodyParse {
-            context: context.to_string(),
-            detail: "MARK(...) missing slot".to_string(),
-        })?;
+        let token = self
+            .bump()
+            .ok_or_else(
+                || GrammarParseError::BodyParse {
+                    context: context.to_string(),
+                    detail: "MARK(...) missing slot".to_string(),
+                },
+            )?;
 
         let slot = match token.kind {
-            BodyTokenKind::Number => {
-                token
-                    .text
-                    .parse::<u8>()
-                    .map_err(|_| GrammarParseError::BodyParse {
-                        context: context.to_string(),
-                        detail: format!("invalid MARK slot `{}`", token.text),
-                    })?
-            }
+            BodyTokenKind::Number => token.text.parse::<u8>().map_err(|_| GrammarParseError::BodyParse {
+                context: context.to_string(),
+                detail: format!("invalid MARK slot `{}`", token.text),
+            })?,
             _ => {
                 return Err(GrammarParseError::BodyParse {
                     context: context.to_string(),
@@ -1182,7 +1146,10 @@ fn fold_alternatives(items: Vec<GrammarExpr>) -> GrammarExpr {
 #[cfg(test)]
 fn is_alternative_expr(expr: &GrammarExpr) -> bool {
     matches!(expr, GrammarExpr::Alternative(_))
-        || matches!(expr, GrammarExpr::Group(inner) if matches!(inner.as_ref(), GrammarExpr::Alternative(_)))
+        || matches!(
+            expr,
+            GrammarExpr::Group(inner) if matches!(inner.as_ref(), GrammarExpr::Alternative(_))
+        )
 }
 
 #[cfg(test)]
@@ -1346,10 +1313,7 @@ Exp:
         let GrammarExpr::Sequence(items) = &rule.production.expr else {
             panic!("expected statement sequence");
         };
-        assert!(matches!(
-            items[0],
-            GrammarExpr::Mark(MarkDirective { slot: 1 })
-        ));
+        assert!(matches!(items[0], GrammarExpr::Mark(MarkDirective { slot: 1 })));
         assert!(matches!(items[1], GrammarExpr::NonTerminalRef(_)));
 
         let GrammarExpr::Optional(inner) = &items[2] else {
@@ -1422,10 +1386,7 @@ EMITFFFF:
     #[test]
     fn missing_section_is_reported() {
         let err = parse_grammar("TOKENS:\n   tkA (\"A\")\n").unwrap_err();
-        assert!(matches!(
-            err,
-            GrammarParseError::MissingSection("Statements")
-        ));
+        assert!(matches!(err, GrammarParseError::MissingSection("Statements")));
     }
 
     #[test]
@@ -1456,46 +1417,29 @@ Broken:
         assert_eq!(grammar.functions.rules.len(), 84);
         assert!(grammar.statements.text.contains("tkPRINT"));
         assert!(grammar.functions.rules.iter().any(|r| r.anchor == "tkABS"));
-        assert!(
-            grammar.nonterminals.len() > 70,
-            "expected dozens of nonterminals"
-        );
+        assert!(grammar.nonterminals.len() > 70, "expected dozens of nonterminals");
 
         assert_eq!(grammar.tokens[0].name, "tkEtInteger");
         assert_eq!(grammar.tokens[0].spelling, "%");
         assert_eq!(grammar.nonterminals[0].name, "ACTIONidCommon");
         assert!(grammar.nonterminals[0].external);
 
-        let assignment = grammar
-            .nonterminals
-            .iter()
-            .find(|nt| nt.name == "Assignment")
-            .expect("Assignment nonterminal");
+        let assignment =
+            grammar.nonterminals.iter().find(|nt| nt.name == "Assignment").expect("Assignment nonterminal");
         assert!(assignment.external);
         assert_eq!(assignment.msg_hint.as_deref(), Some("MSG_ExpAssignment"));
 
-        let as_clause = grammar
-            .nonterminals
-            .iter()
-            .find(|nt| nt.name == "AsClausePrim")
-            .expect("AsClausePrim nonterminal");
+        let as_clause =
+            grammar.nonterminals.iter().find(|nt| nt.name == "AsClausePrim").expect("AsClausePrim nonterminal");
         assert!(as_clause.has_index);
         assert!(!as_clause.external);
         assert!(is_alternative_expr(&as_clause.body.productions[0].expr));
 
-        let exp = grammar
-            .nonterminals
-            .iter()
-            .find(|nt| nt.name == "Exp")
-            .expect("Exp nonterminal");
+        let exp = grammar.nonterminals.iter().find(|nt| nt.name == "Exp").expect("Exp nonterminal");
         assert!(exp.external);
         assert_eq!(exp.msg_hint.as_deref(), Some("MSG_ExpExp"));
 
-        let indexed = grammar
-            .nonterminals
-            .iter()
-            .filter(|nt| nt.has_index)
-            .count();
+        let indexed = grammar.nonterminals.iter().filter(|nt| nt.has_index).count();
         assert!(indexed >= 3, "expected several indexed nonterminals");
     }
 }

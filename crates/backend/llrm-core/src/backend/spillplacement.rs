@@ -25,7 +25,10 @@ pub struct Bundles {
 pub fn bundles(body: &LirBody) -> Bundles {
     let position: IndexMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
     let mut parent: Vec<usize> = (0..2 * body.blocks.len()).collect();
-    fn find(parent: &mut [usize], mut one: usize) -> usize {
+    fn find(
+        parent: &mut [usize],
+        mut one: usize,
+    ) -> usize {
         while parent[one] != one {
             parent[one] = parent[parent[one]];
             one = parent[one];
@@ -102,11 +105,18 @@ impl Node {
         self.against >= self.toward + self.linked
     }
 
-    fn clear(&mut self, threshold: f64) {
+    fn clear(
+        &mut self,
+        threshold: f64,
+    ) {
         *self = Node { linked: threshold, ..Node::default() };
     }
 
-    fn link(&mut self, to: usize, weight: f64) {
+    fn link(
+        &mut self,
+        to: usize,
+        weight: f64,
+    ) {
         self.linked += weight;
         match self.links.iter_mut().find(|(_, other)| *other == to) {
             Some(found) => found.0 += weight,
@@ -114,7 +124,11 @@ impl Node {
         }
     }
 
-    fn bias(&mut self, frequency: f64, direction: Border) {
+    fn bias(
+        &mut self,
+        frequency: f64,
+        direction: Border,
+    ) {
         match direction {
             Border::PrefReg => self.toward += frequency,
             Border::PrefSpill => self.against += frequency,
@@ -139,7 +153,10 @@ pub struct Placement<'a> {
 impl<'a> Placement<'a> {
     /// A block runs `level(depth)` times per entry to the body. The threshold
     /// is LLVM's dead zone, 2 when the entry frequency is 2^14.
-    pub fn new(body: &LirBody, bundles: &'a Bundles) -> Self {
+    pub fn new(
+        body: &LirBody,
+        bundles: &'a Bundles,
+    ) -> Self {
         let frequency = ranges::depths(body).into_iter().map(|(at, depth)| (at, ranges::level(depth))).collect();
         Self {
             bundles,
@@ -158,7 +175,10 @@ impl<'a> Placement<'a> {
         self.active.clear();
     }
 
-    fn activate(&mut self, bundle: usize) {
+    fn activate(
+        &mut self,
+        bundle: usize,
+    ) {
         self.todo.insert(bundle);
         if !self.active.insert(bundle) {
             return;
@@ -170,7 +190,10 @@ impl<'a> Placement<'a> {
         }
     }
 
-    pub fn add_constraints(&mut self, constraints: &[Constraint]) {
+    pub fn add_constraints(
+        &mut self,
+        constraints: &[Constraint],
+    ) {
         for one in constraints {
             let frequency = self.frequency[&one.block] * one.weight;
             let (entry, exit) = self.bundles.of[&one.block];
@@ -186,7 +209,11 @@ impl<'a> Placement<'a> {
     }
 
     /// Blocks that would rather not hold the value at all, twice as much when strong.
-    pub fn add_pref_spill(&mut self, blocks: &[i64], strong: bool) {
+    pub fn add_pref_spill(
+        &mut self,
+        blocks: &[i64],
+        strong: bool,
+    ) {
         for block in blocks {
             let frequency = self.frequency[block] * if strong { 2.0 } else { 1.0 };
             let (entry, exit) = self.bundles.of[block];
@@ -198,7 +225,10 @@ impl<'a> Placement<'a> {
     }
 
     /// Blocks the value passes through untouched and uncontested.
-    pub fn add_links(&mut self, blocks: &[i64]) {
+    pub fn add_links(
+        &mut self,
+        blocks: &[i64],
+    ) {
         for block in blocks {
             let (entry, exit) = self.bundles.of[block];
             if entry == exit {
@@ -212,7 +242,10 @@ impl<'a> Placement<'a> {
         }
     }
 
-    fn update(&mut self, bundle: usize) -> bool {
+    fn update(
+        &mut self,
+        bundle: usize,
+    ) -> bool {
         let node = &self.nodes[bundle];
         let (mut against, mut toward) = (node.against, node.toward);
         for (weight, other) in &node.links {
@@ -234,8 +267,12 @@ impl<'a> Placement<'a> {
         if before == self.nodes[bundle].prefers_register() {
             return false;
         }
-        let dissenting: Vec<usize> =
-            self.nodes[bundle].links.iter().map(|(_, other)| *other).filter(|other| self.nodes[*other].value != value).collect();
+        let dissenting: Vec<usize> = self.nodes[bundle]
+            .links
+            .iter()
+            .map(|(_, other)| *other)
+            .filter(|other| self.nodes[*other].value != value)
+            .collect();
         self.todo.extend(dissenting);
         true
     }

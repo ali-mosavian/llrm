@@ -1,15 +1,17 @@
-//! One solver for the backend's block-level dataflow: a worklist in layout order (forward) or reverse layout order (backward), the
-//! pass supplying the block's input from the outputs that flow into it and the transfer across the block. A block is worked again
-//! when the output of one it depends on changed, not every block each round until none does: a fact crosses one block a round, so a
-//! loop nest d deep took d rounds of every block (copyprop and spillforward were a third of `lir peephole` on a nest 8 deep).
-//! GCC's `df` and LLVM's dataflow solvers iterate on a worklist the same way.
+//! One solver for the backend's block-level dataflow: a worklist in layout order (forward) or reverse layout order
+//! (backward), the pass supplying the block's input from the outputs that flow into it and the transfer across the
+//! block. A block is worked again when the output of one it depends on changed, not every block each round until none
+//! does: a fact crosses one block a round, so a loop nest d deep took d rounds of every block (copyprop and
+//! spillforward were a third of `lir peephole` on a nest 8 deep). GCC's `df` and LLVM's dataflow solvers iterate on a
+//! worklist the same way.
 //!
-//! `LLRM_CHECK_DATAFLOW=1` solves by rounds as the passes did and asserts the same inputs and outputs: for a transfer that is monotone
-//! the fixed point does not depend on the order the blocks are worked in.
+//! `LLRM_CHECK_DATAFLOW=1` solves by rounds as the passes did and asserts the same inputs and outputs: for a transfer
+//! that is monotone the fixed point does not depend on the order the blocks are worked in.
+
+use std::collections::BTreeSet;
 
 use crate::model::lir::LirBlock;
 use crate::support::hash::IndexMap;
-use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Direction {
@@ -31,9 +33,9 @@ thread_local! {
     pub(crate) static WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// `nodes` solved: `initial(at)` is the output every block starts from, `input(at, outputs)` a block's input from the outputs that
-/// flow into it (the pass's meet, and its boundary at the entry), `transfer(at, input)` the output across it. A block starts with
-/// no input; its input is worked out the first time it is worked.
+/// `nodes` solved: `initial(at)` is the output every block starts from, `input(at, outputs)` a block's input from the
+/// outputs that flow into it (the pass's meet, and its boundary at the entry), `transfer(at, input)` the output across
+/// it. A block starts with no input; its input is worked out the first time it is worked.
 pub fn solve<S: Clone + PartialEq>(
     nodes: &[&LirBlock],
     direction: Direction,
@@ -54,7 +56,8 @@ pub fn solve<S: Clone + PartialEq>(
     }
     let mut output: IndexMap<i64, S> = nodes.iter().map(|block| (block.at, initial(block.at))).collect();
     let mut entered: IndexMap<i64, S> = IndexMap::default();
-    // The order blocks are worked in: the least place first, which is layout order for a forward problem, its reverse for a backward.
+    // The order blocks are worked in: the least place first, which is layout order for a forward problem, its reverse
+    // for a backward.
     let place = |index: usize| match direction {
         Direction::Forward => index,
         Direction::Backward => nodes.len() - 1 - index,
@@ -90,7 +93,10 @@ pub fn solve<S: Clone + PartialEq>(
                 }
             }
         }
-        assert!(rounds == output && seen == entered, "the blocks worked again where an input changed are not what working all of them round after round gives");
+        assert!(
+            rounds == output && seen == entered,
+            "the blocks worked again where an input changed are not what working all of them round after round gives"
+        );
     }
     Solution { input: entered, output }
 }

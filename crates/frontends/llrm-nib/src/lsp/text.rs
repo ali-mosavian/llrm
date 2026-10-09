@@ -6,11 +6,17 @@ use super::protocol::{Position, Range};
 use crate::syntax::Span;
 
 /// Line `number`, counted from 1.
-pub fn line(text: &str, number: usize) -> &str {
+pub fn line(
+    text: &str,
+    number: usize,
+) -> &str {
     text.lines().nth(number.saturating_sub(1)).unwrap_or("")
 }
 
-pub fn range(text: &str, span: Span) -> Range {
+pub fn range(
+    text: &str,
+    span: Span,
+) -> Range {
     Range {
         start: position(text, span.line, span.column),
         end: position(text, span.line, span.end_column.max(span.column)),
@@ -18,24 +24,31 @@ pub fn range(text: &str, span: Span) -> Range {
 }
 
 /// The whole of line `number`.
-pub fn line_range(text: &str, number: usize) -> Range {
+pub fn line_range(
+    text: &str,
+    number: usize,
+) -> Range {
     range(text, Span::new(number, 1, line(text, number).len() + 1))
 }
 
-fn position(text: &str, number: usize, column: usize) -> Position {
+fn position(
+    text: &str,
+    number: usize,
+    column: usize,
+) -> Position {
     let line = line(text, number);
     let mut byte = column.saturating_sub(1).min(line.len());
     while !line.is_char_boundary(byte) {
         byte -= 1;
     }
-    Position {
-        line: number.saturating_sub(1) as u32,
-        character: line[..byte].encode_utf16().count() as u32,
-    }
+    Position { line: number.saturating_sub(1) as u32, character: line[..byte].encode_utf16().count() as u32 }
 }
 
 /// `position` as a line and byte column, both from 1.
-pub fn at(text: &str, position: Position) -> (usize, usize) {
+pub fn at(
+    text: &str,
+    position: Position,
+) -> (usize, usize) {
     let number = position.line as usize + 1;
     let mut units = 0;
     let byte = line(text, number)
@@ -49,18 +62,30 @@ pub fn at(text: &str, position: Position) -> (usize, usize) {
 }
 
 /// Whether the cursor at `line` and `column` is on `span`, or just after it.
-pub fn contains(span: Span, line: usize, column: usize) -> bool {
+pub fn contains(
+    span: Span,
+    line: usize,
+    column: usize,
+) -> bool {
     span.line == line && span.column <= column && column <= span.end_column
 }
 
 /// Whether `span` spells `name`.
-pub fn spells(text: &str, span: Span, name: &str) -> bool {
+pub fn spells(
+    text: &str,
+    span: Span,
+    name: &str,
+) -> bool {
     line(text, span.line).get(span.column.saturating_sub(1)..span.end_column.saturating_sub(1)) == Some(name)
 }
 
 /// `name` where it first stands as a whole word on `span`'s line from
 /// `span` on, as the name after a declaration's keyword; `span` if nowhere.
-pub fn named(text: &str, span: Span, name: &str) -> Span {
+pub fn named(
+    text: &str,
+    span: Span,
+    name: &str,
+) -> Span {
     let line = line(text, span.line);
     let from = span.column.saturating_sub(1).min(line.len());
     let bytes = line.as_bytes();
@@ -72,7 +97,14 @@ pub fn named(text: &str, span: Span, name: &str) -> Span {
         .match_indices(name)
         .map(|(at, _)| from + at)
         .find(|&at| whole(at))
-        .map_or(span, |at| Span { column: at + 1, end_column: at + 1 + name.len(), ..span })
+        .map_or(
+            span,
+            |at| Span {
+                column: at + 1,
+                end_column: at + 1 + name.len(),
+                ..span
+            },
+        )
 }
 
 fn word(byte: u8) -> bool {
@@ -82,7 +114,11 @@ fn word(byte: u8) -> bool {
 /// The dotted path ending in the name at `column` of `line`: `geo.Point`
 /// with the cursor on `Point`. It starts with `.` when the name is a member
 /// of something other than a name.
-pub fn path_at(text: &str, number: usize, column: usize) -> Option<String> {
+pub fn path_at(
+    text: &str,
+    number: usize,
+    column: usize,
+) -> Option<String> {
     let bytes = line(text, number).as_bytes();
     let mut at = column.saturating_sub(1).min(bytes.len());
     if at == bytes.len() || !word(bytes[at]) {
@@ -94,25 +130,38 @@ pub fn path_at(text: &str, number: usize, column: usize) -> Option<String> {
 }
 
 /// The byte offset in `text` of `line` and `column`, both from 1.
-pub fn offset(text: &str, line: usize, column: usize) -> usize {
+pub fn offset(
+    text: &str,
+    line: usize,
+    column: usize,
+) -> usize {
     let start: usize = text.split_inclusive('\n').take(line.saturating_sub(1)).map(str::len).sum();
     start + column - 1
 }
 
 /// The text before `position` on its line.
-pub fn before(text: &str, position: Position) -> &str {
+pub fn before(
+    text: &str,
+    position: Position,
+) -> &str {
     let (number, column) = at(text, position);
     &line(text, number)[..column - 1]
 }
 
 /// Line `number` as a declaration's signature, without the `:` opening its body.
-pub fn signature(text: &str, number: usize) -> &str {
+pub fn signature(
+    text: &str,
+    number: usize,
+) -> &str {
     let line = line(text, number).trim();
     line.strip_suffix(':').unwrap_or(line).trim_end()
 }
 
 /// The `#` comment lines directly above line `number`, attributes aside.
-pub fn comments_above(text: &str, number: usize) -> Vec<&str> {
+pub fn comments_above(
+    text: &str,
+    number: usize,
+) -> Vec<&str> {
     let mut found = Vec::new();
     for above in (1..number).rev() {
         let one = line(text, above).trim();

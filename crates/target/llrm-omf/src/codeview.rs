@@ -15,7 +15,10 @@ fn refused<T>(what: impl std::fmt::Display) -> Result<T, Error> {
     Err(Error::Unencodable(format!("CodeView: {what}")))
 }
 
-fn narrow<T: TryFrom<i64>>(value: i64, what: &str) -> Result<T, Error> {
+fn narrow<T: TryFrom<i64>>(
+    value: i64,
+    what: &str,
+) -> Result<T, Error> {
     T::try_from(value).or_else(|_| refused(format!("{what} {value} does not fit its field")))
 }
 
@@ -56,7 +59,14 @@ fn typed(one: &model::Type) -> Result<Option<Type>, Error> {
         M::Struct { name, bytes, fields, .. } => {
             let fields = fields
                 .iter()
-                .map(|field| Ok(cvwrite::Field { name: field.name.clone(), r#type: field.r#type, offset: narrow(i64::from(field.offset), "a field's offset")?, bits: field.bits }))
+                .map(|field| {
+                    Ok(cvwrite::Field {
+                        name: field.name.clone(),
+                        r#type: field.r#type,
+                        offset: narrow(i64::from(field.offset), "a field's offset")?,
+                        bits: field.bits,
+                    })
+                })
                 .collect::<Result<Vec<_>, Error>>()?;
             Type::Struct { name: name.clone(), bytes: *bytes, fields }
         }
@@ -79,7 +89,10 @@ fn typed(one: &model::Type) -> Result<Option<Type>, Error> {
 /// Which types CodeView can write: those it has a record for, and those that name only such. A variable of
 /// another is left out, and a procedure naming one is written as `void ()`: what the C frontend did for every
 /// format before a 64-bit integer was a type of the model, now said once where the format's limit is.
-fn usable(info: &Info, written: &[Option<Type>]) -> Vec<bool> {
+fn usable(
+    info: &Info,
+    written: &[Option<Type>],
+) -> Vec<bool> {
     let mut usable: Vec<bool> = written.iter().map(Option::is_some).collect();
     loop {
         let mut changed = false;
@@ -95,17 +108,32 @@ fn usable(info: &Info, written: &[Option<Type>]) -> Vec<bool> {
     }
 }
 
-fn data(object: &Object, variable: &model::Variable) -> Result<Option<cvwrite::Data>, Error> {
+fn data(
+    object: &Object,
+    variable: &model::Variable,
+) -> Result<Option<cvwrite::Data>, Error> {
     let Location::Static { symbol, disp } = &variable.location else { return Ok(None) };
-    Ok(Some(cvwrite::Data { name: variable.name.clone(), r#type: variable.r#type, symbol: object.symbols[*symbol].name.clone(), displacement: narrow(*disp, "a variable's offset")? }))
+    Ok(Some(cvwrite::Data {
+        name: variable.name.clone(),
+        r#type: variable.r#type,
+        symbol: object.symbols[*symbol].name.clone(),
+        displacement: narrow(*disp, "a variable's offset")?,
+    }))
 }
 
-fn module(object: &Object, info: &Info) -> Result<cvwrite::Module, Error> {
+fn module(
+    object: &Object,
+    info: &Info,
+) -> Result<cvwrite::Module, Error> {
     // QB 4.5's module record is nameless.
     let name = (info.producer != model::Producer::Qb45).then(|| object.name.clone());
     let made = info.types.iter().map(typed).collect::<Result<Vec<_>, Error>>()?;
     let usable = usable(info, &made);
-    let mut types: Vec<Type> = made.into_iter().zip(&usable).map(|(one, &usable)| one.filter(|_| usable).unwrap_or(Type::Scalar(Scalar::Void))).collect();
+    let mut types: Vec<Type> = made
+        .into_iter()
+        .zip(&usable)
+        .map(|(one, &usable)| one.filter(|_| usable).unwrap_or(Type::Scalar(Scalar::Void)))
+        .collect();
     // A procedure CodeView cannot write is `void ()`, a type of its own at the end of the table.
     let empty = types.len();
     types.push(Type::Procedure { result: None, parameters: Vec::new() });
@@ -115,7 +143,10 @@ fn module(object: &Object, info: &Info) -> Result<cvwrite::Module, Error> {
     }
     if let Some(first) = info.code.first() {
         // None: no code, so no procedure to start at.
-        let start = object.symbols.iter().find(|one| one.definition == Definition::Defined { section: first.section, offset: first.offset });
+        let start = object
+            .symbols
+            .iter()
+            .find(|one| one.definition == Definition::Defined { section: first.section, offset: first.offset });
         written.start = start.map(|one| one.name.clone()).unwrap_or_default();
         written.length = narrow(first.length as i64, "the module's code length")?;
     }
@@ -124,14 +155,23 @@ fn module(object: &Object, info: &Info) -> Result<cvwrite::Module, Error> {
         let mut locals = Vec::new();
         for variable in function.variables.iter().filter(|one| usable[one.r#type]) {
             match &variable.location {
-                Location::Frame { disp } => locals.push(cvwrite::Local { name: variable.name.clone(), r#type: variable.r#type, bp: narrow(*disp, "a frame offset")? }),
+                Location::Frame { disp } => locals.push(cvwrite::Local {
+                    name: variable.name.clone(),
+                    r#type: variable.r#type,
+                    bp: narrow(*disp, "a frame offset")?,
+                }),
                 Location::Static { .. } => statics.extend(data(object, variable)?),
-                Location::Register(register) => return refused(format!("{} is in register {register}, which is not written yet", variable.name)),
+                Location::Register(register) => {
+                    return refused(format!("{} is in register {register}, which is not written yet", variable.name));
+                }
                 // A parameter that arrives in a register and is there until the body starts, or one the optimiser
                 // removed: CodeView 4 as written has no register symbol (S_REGISTER) and no "optimized out", so it is
                 // left out, as it was before the model said it.
-                Location::List(entries) if entries.iter().all(|(_, location)| matches!(location, Location::Register(_))) => {}
-                Location::List(_) => return refused(format!("{} has a location list, which is not written yet", variable.name)),
+                Location::List(entries)
+                    if entries.iter().all(|(_, location)| matches!(location, Location::Register(_))) => {}
+                Location::List(_) => {
+                    return refused(format!("{} has a location list, which is not written yet", variable.name));
+                }
                 // A value in no place, or in pieces: nothing in CodeView 4's records says it, so it is left out.
                 Location::Constant(_) | Location::Pieces(_) | Location::Relative { .. } => {}
             }
@@ -145,26 +185,35 @@ fn module(object: &Object, info: &Info) -> Result<cvwrite::Module, Error> {
         }
         let [range, ..] = function.ranges[..] else { return refused(format!("{} has no code", function.name)) };
         let (start, end) = function.body.unwrap_or((0, range.length));
-        written.procedures.push(cvwrite::Procedure {
-            name: function.name.clone(),
-            symbol: object.symbols[function.symbol].name.clone(),
-            r#type: if usable[function.r#type] { function.r#type } else { empty },
-            length: narrow(range.length as i64, "a procedure's length")?,
-            debug_start: narrow(start as i64, "a body's start")?,
-            debug_end: narrow(end as i64, "a body's end")?,
-            far: function.far,
-            locals,
-            statics,
-        });
+        written
+            .procedures
+            .push(
+                cvwrite::Procedure {
+                    name: function.name.clone(),
+                    symbol: object.symbols[function.symbol].name.clone(),
+                    r#type: if usable[function.r#type] { function.r#type } else { empty },
+                    length: narrow(range.length as i64, "a procedure's length")?,
+                    debug_start: narrow(start as i64, "a body's start")?,
+                    debug_end: narrow(end as i64, "a body's end")?,
+                    far: function.far,
+                    locals,
+                    statics,
+                },
+            );
     }
     Ok(written)
 }
 
 /// `info`'s two debug sections for `object`: $$SYMBOLS, then $$TYPES.
-pub fn sections(object: &Object, info: &Info) -> Result<[Section; 2], Error> {
+pub fn sections(
+    object: &Object,
+    info: &Info,
+) -> Result<[Section; 2], Error> {
     match info.format {
         model::Format::Default | model::Format::CodeView => {}
-        model::Format::Dwarf { .. } => return refused("OMF cannot carry DWARF: use -gcodeview, or -fobject-format=elf"),
+        model::Format::Dwarf { .. } => {
+            return refused("OMF cannot carry DWARF: use -gcodeview, or -fobject-format=elf");
+        }
         model::Format::TurboDebugger => return refused("this writer does not write Turbo Debugger's information yet"),
     }
     // What the frontend says: CodeView 4 as C7 writes it, or the dialect BASIC's compilers write (`cvwrite`).
@@ -176,10 +225,19 @@ pub fn sections(object: &Object, info: &Info) -> Result<[Section; 2], Error> {
     let mut relocs = Vec::new();
     let mut image = encoded.symbols;
     for one in &encoded.relocations {
-        let symbol = object.symbols.iter().position(|symbol| symbol.name == one.symbol).ok_or_else(|| Error::Unencodable(format!("CodeView: {} is no symbol of the object", one.symbol)))?;
+        let symbol = object
+            .symbols
+            .iter()
+            .position(|symbol| symbol.name == one.symbol)
+            .ok_or_else(|| Error::Unencodable(format!("CodeView: {} is no symbol of the object", one.symbol)))?;
         // The image holds zeros where LINK fills in, the displacement is the addend.
         image[one.at..one.at + 2].fill(0);
-        relocs.push(Reloc { at: one.at, kind: if one.far { Fixup::FarPointer } else { Fixup::Abs { width: 2 } }, target: Target::Symbol(symbol), addend: i64::from(one.displacement as i16) });
+        relocs.push(Reloc {
+            at: one.at,
+            kind: if one.far { Fixup::FarPointer } else { Fixup::Abs { width: 2 } },
+            target: Target::Symbol(symbol),
+            addend: i64::from(one.displacement as i16),
+        });
     }
     let section = |name: &str, image: Vec<u8>, relocs: Vec<Reloc>| {
         let spans = if image.is_empty() { Vec::new() } else { vec![[0, image.len()]] };
@@ -189,7 +247,10 @@ pub fn sections(object: &Object, info: &Info) -> Result<[Section; 2], Error> {
 }
 
 /// Each section's (line, offset) pairs. CodeView 4 names one file per module.
-pub fn lines(object: &Object, info: &Info) -> Result<Vec<Vec<(u32, usize)>>, Error> {
+pub fn lines(
+    object: &Object,
+    info: &Info,
+) -> Result<Vec<Vec<(u32, usize)>>, Error> {
     let mut out = vec![Vec::new(); object.sections.len()];
     for one in &info.lines {
         if one.file != 0 {
@@ -213,8 +274,19 @@ mod tests {
     }
 
     /// `_f(x) { y }` in eight bytes of code, `x` and `y` in the frame, on lines 3 and 4.
-    fn object(variables: Vec<Variable>, types: Vec<T>) -> Object {
-        let text = Section { name: "_TEXT".into(), role: Role::Text, near: true, align: 1, image: vec![0x90; 8], spans: vec![[0, 8]], relocs: Vec::new() };
+    fn object(
+        variables: Vec<Variable>,
+        types: Vec<T>,
+    ) -> Object {
+        let text = Section {
+            name: "_TEXT".into(),
+            role: Role::Text,
+            near: true,
+            align: 1,
+            image: vec![0x90; 8],
+            spans: vec![[0, 8]],
+            relocs: Vec::new(),
+        };
         let function = Function {
             name: "f".into(),
             symbol: 0,
@@ -232,20 +304,32 @@ mod tests {
             types,
             functions: vec![function],
             files: vec![model::File { name: "f.c".into(), checksum: None }],
-            lines: vec![Line { section: 0, offset: 0, file: 0, line: 3, column: 0 }, Line { section: 0, offset: 4, file: 0, line: 4, column: 0 }],
+            lines: vec![
+                Line { section: 0, offset: 0, file: 0, line: 3, column: 0 },
+                Line { section: 0, offset: 4, file: 0, line: 4, column: 0 },
+            ],
             ..Info::default()
         };
         Object {
             name: "f.c".into(),
             arch: Arch::I8086,
             sections: vec![text],
-            symbols: vec![Symbol { name: "_f".into(), binding: Binding::Public, definition: Definition::Defined { section: 0, offset: 0 }, group: None }],
+            symbols: vec![Symbol {
+                name: "_f".into(),
+                binding: Binding::Public,
+                definition: Definition::Defined { section: 0, offset: 0 },
+                group: None,
+            }],
             omf_groups: Vec::new(),
             debug: Some(info),
         }
     }
 
-    fn local(name: &str, kind: model::Kind, disp: i64) -> Variable {
+    fn local(
+        name: &str,
+        kind: model::Kind,
+        disp: i64,
+    ) -> Variable {
         Variable { name: name.into(), r#type: 0, kind, location: Location::Frame { disp } }
     }
 
@@ -257,11 +341,19 @@ mod tests {
     /// reads; before the model, only the backend's own structures could write them.
     #[test]
     fn a_function_of_the_model_is_a_procedure_with_its_frame_variables_and_lines() {
-        let made = object(vec![local("x", model::Kind::Parameter, 4), local("y", model::Kind::Local, -2)], vec![int(), procedure()]);
+        let made = object(
+            vec![local("x", model::Kind::Parameter, 4), local("y", model::Kind::Local, -2)],
+            vec![int(), procedure()],
+        );
         let records = omf::parse(&write::write(&made).unwrap()).unwrap();
         let shape = cvinfo::parse(&records).shape();
-        assert_eq!(shape, ["LOCAL f.y: INTEGER", "PARAM f.x: INTEGER", "PROC f flags 0 (INTEGER) -> INTEGER"], "{shape:#?}");
-        let lines: Vec<(u16, u16)> = records.iter().filter(|one| one.r#type == omf::LINNUM).flat_map(|one| omf::lines(one).1).collect();
+        assert_eq!(
+            shape,
+            ["LOCAL f.y: INTEGER", "PARAM f.x: INTEGER", "PROC f flags 0 (INTEGER) -> INTEGER"],
+            "{shape:#?}"
+        );
+        let lines: Vec<(u16, u16)> =
+            records.iter().filter(|one| one.r#type == omf::LINNUM).flat_map(|one| omf::lines(one).1).collect();
         assert_eq!(lines, [(3, 0), (4, 4)]);
     }
 
@@ -269,7 +361,12 @@ mod tests {
     /// writer does not yet: it is refused by name, never written as a frame cell.
     #[test]
     fn a_register_location_is_refused_not_written_as_a_frame_cell() {
-        let in_register = Variable { name: "x".into(), r#type: 0, kind: model::Kind::Parameter, location: Location::Register("ax".into()) };
+        let in_register = Variable {
+            name: "x".into(),
+            r#type: 0,
+            kind: model::Kind::Parameter,
+            location: Location::Register("ax".into()),
+        };
         let why = write::write(&object(vec![in_register], vec![int(), procedure()])).unwrap_err().to_string();
         assert!(why.contains("x is in register ax"), "{why}");
     }
@@ -280,7 +377,10 @@ mod tests {
     fn a_64_bit_integer_is_left_out_with_what_names_it_not_narrowed_and_not_refused() {
         let wide = T::Scalar(S::Int { bytes: 8, signed: true });
         let procedure = T::Procedure { result: Some(1), parameters: vec![0], convention: None };
-        let made = object(vec![local("x", model::Kind::Parameter, 4), local("w", model::Kind::Local, -8)], vec![int(), wide, procedure]);
+        let made = object(
+            vec![local("x", model::Kind::Parameter, 4), local("w", model::Kind::Local, -8)],
+            vec![int(), wide, procedure],
+        );
         let mut made = made;
         made.debug.as_mut().unwrap().functions[0].variables[1].r#type = 1;
         made.debug.as_mut().unwrap().functions[0].r#type = 2;
@@ -294,8 +394,18 @@ mod tests {
     #[test]
     fn a_register_parameter_and_a_removed_one_are_left_out_of_codeview_not_refused() {
         let entry = Range { section: 0, offset: 0, length: 5 };
-        let in_register = Variable { name: "r".into(), r#type: 0, kind: model::Kind::Parameter, location: Location::List(vec![(entry, Location::Register("ax".into()))]) };
-        let removed = Variable { name: "g".into(), r#type: 0, kind: model::Kind::Parameter, location: Location::List(Vec::new()) };
+        let in_register = Variable {
+            name: "r".into(),
+            r#type: 0,
+            kind: model::Kind::Parameter,
+            location: Location::List(vec![(entry, Location::Register("ax".into()))]),
+        };
+        let removed = Variable {
+            name: "g".into(),
+            r#type: 0,
+            kind: model::Kind::Parameter,
+            location: Location::List(Vec::new()),
+        };
         let made = object(vec![local("x", model::Kind::Parameter, 4), in_register, removed], vec![int(), procedure()]);
         let shape = cvinfo::parse(&omf::parse(&write::write(&made).unwrap()).unwrap()).shape();
         assert_eq!(shape, ["PARAM f.x: INTEGER", "PROC f flags 0 (INTEGER) -> INTEGER"], "{shape:#?}");

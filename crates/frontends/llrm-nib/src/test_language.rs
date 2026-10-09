@@ -5,12 +5,8 @@ use llrm_core::hir::execute;
 
 /// What `main` prints.
 pub(crate) fn output(source: &str) -> String {
-    let hir = super::compile(source, "t").unwrap_or_else(|error| {
-        panic!(
-            "{}:{}: {}",
-            error.span.line, error.span.column, error.message
-        )
-    });
+    let hir = super::compile(source, "t")
+        .unwrap_or_else(|error| panic!("{}:{}: {}", error.span.line, error.span.column, error.message));
     let program = codec::decode(&hir).expect("decodes");
     execute::run(&program, "main", &[]).expect("runs").output
 }
@@ -43,13 +39,8 @@ fn main() -> i16:
     return 0
 ";
     assert_eq!(output(source), "200 10 -2\n");
-    assert!(
-        refused(&source.replace("clamp(-3, -2)", "clamp(low=1)")).contains("requires \"value\"")
-    );
-    assert!(
-        refused(&source.replace("clamp(-3, -2)", "clamp(low=1, 2)"))
-            .contains("positional argument cannot follow")
-    );
+    assert!(refused(&source.replace("clamp(-3, -2)", "clamp(low=1)")).contains("requires \"value\""));
+    assert!(refused(&source.replace("clamp(-3, -2)", "clamp(low=1, 2)")).contains("positional argument cannot follow"));
 }
 
 #[test]
@@ -127,14 +118,16 @@ fn main() -> i16:
     // The runtime routine stays declared either way; only its calls go.
     let checks = |unchecked_bounds| {
         let module = super::parse(super::lex(source).unwrap()).unwrap();
-        let hir = super::compile_module(module, "t", &super::Frontend { unchecked_bounds, ..crate::real_mode() }).unwrap();
+        let hir =
+            super::compile_module(module, "t", &super::Frontend { unchecked_bounds, ..crate::real_mode() }).unwrap();
         hir.replace([' ', '\n'], "").matches("\"callee\":\"N$EBND\"").count()
     };
     assert_eq!(checks(false), 3);
     assert_eq!(checks(true), 0);
     let constant = "fn main() -> i16:\n    let values: i16[3] = [1, 2, 3]\n    return values[3]\n";
     let module = super::parse(super::lex(constant).unwrap()).unwrap();
-    let refused = super::compile_module(module, "t", &super::Frontend { unchecked_bounds: true, ..crate::real_mode() }).expect_err("refused");
+    let refused = super::compile_module(module, "t", &super::Frontend { unchecked_bounds: true, ..crate::real_mode() })
+        .expect_err("refused");
     assert!(refused.message.contains("3 is outside 0..3"), "{}", refused.message);
 }
 
@@ -171,10 +164,7 @@ fn main() -> i16:
 #[test]
 fn enums_match_exhaustively_on_tags_and_payloads() {
     let source = include_str!("../../../../examples/shapes.nib");
-    assert_eq!(
-        output(source),
-        "area 87\nmode 19 has 320 columns\ntext is 80\n"
-    );
+    assert_eq!(output(source), "area 87\nmode 19 has 320 columns\ntext is 80\n");
     let partial = source.replace("        .cga:\n            return 40\n", "");
     assert!(refused(&partial).contains("does not cover .cga"));
 }
@@ -182,25 +172,15 @@ fn enums_match_exhaustively_on_tags_and_payloads() {
 #[test]
 fn question_mark_returns_the_failure_and_nested_patterns_cover_every_error() {
     let source = include_str!("../../../../examples/digits.nib");
-    assert_eq!(
-        output(source),
-        "1234\nempty\nnot a digit\ntoo big\nfirst even 8\n"
-    );
-    let partial = source.replace(
-        "        .err(.too_big):\n            print(\"too big\")\n",
-        "",
-    );
+    assert_eq!(output(source), "1234\nempty\nnot a digit\ntoo big\nfirst even 8\n");
+    let partial = source.replace("        .err(.too_big):\n            print(\"too big\")\n", "");
     assert!(refused(&partial).contains("does not cover .err(.too_big)"));
 }
 
 /// What `main` prints, having checked every heap buffer was dropped.
 pub(crate) fn output_without_leaks(source: &str) -> String {
-    let hir = super::compile(source, "t").unwrap_or_else(|error| {
-        panic!(
-            "{}:{}: {}",
-            error.span.line, error.span.column, error.message
-        )
-    });
+    let hir = super::compile(source, "t")
+        .unwrap_or_else(|error| panic!("{}:{}: {}", error.span.line, error.span.column, error.message));
     let executed = execute::run(&codec::decode(&hir).expect("decodes"), "main", &[]).expect("runs");
     assert_eq!(executed.leaked, 0, "heap buffers leaked");
     executed.output
@@ -374,10 +354,7 @@ fn main() -> i16:
     print(f\"{s.attr.fg} {s.attr.bg} {u8(s.mode)} {s.level} {s.ready} {u16(s)}\")
     return 0
 ";
-    assert_eq!(
-        output(source),
-        "31\n12 6 true 236\n12 1 true\n1 6 2 -2 true 31457\n"
-    );
+    assert_eq!(output(source), "31\n12 6 true 236\n12 1 true\n1 6 2 -2 true 31457\n");
     let too_wide = "\
 bits struct Attr: u8
     fg: u4
@@ -438,10 +415,7 @@ fn main() -> i16:
     print(f\"{label}={value}\")
     return 0
 ";
-    assert_eq!(
-        output_without_leaks(source),
-        "3 2\n-2,-1 3,4\nseven and z\nitem4=40\n"
-    );
+    assert_eq!(output_without_leaks(source), "3 2\n-2,-1 3,4\nseven and z\nitem4=40\n");
     let refutable = "\
 fn main() -> i16:
     let (1, b) = (1, 2)
@@ -732,10 +706,7 @@ fn main() -> i16:
 fn maybe(x: i16) -> Option[i16]:
     return x > 0 ? .some(x) : .none
 ";
-    assert_eq!(
-        output_without_leaks(source),
-        "row0/5\nrow1/5\nrow2/5\n12 -1 3\n1\n5\n"
-    );
+    assert_eq!(output_without_leaks(source), "row0/5\nrow1/5\nrow2/5\n12 -1 3\n1\n5\n");
 }
 
 /// `x > 0 ? .some(x) : .none` returned from a function was "not an addressable struct".
@@ -830,10 +801,7 @@ fn main() -> i16:
         print(f\"{team.name}: {team.points()} from {team.played()}\")
     return 0
 ";
-    assert_eq!(
-        output_without_leaks(source),
-        "Rovers lead on 4\nRovers: 4 from 2\nUnited: 3 from 2\n"
-    );
+    assert_eq!(output_without_leaks(source), "Rovers lead on 4\nRovers: 4 from 2\nUnited: 3 from 2\n");
 }
 
 /// `for name in [...]` was refused: "for currently iterates a named sequence".
@@ -893,7 +861,10 @@ fn main() -> i16:
 }
 
 /// The output of the program whose main module is `main`, its imports read from `files`.
-fn linked_output(main: &str, files: &[(&str, &str)]) -> Result<String, String> {
+fn linked_output(
+    main: &str,
+    files: &[(&str, &str)],
+) -> Result<String, String> {
     let mut read = |name: &str| {
         files
             .iter()
@@ -901,8 +872,8 @@ fn linked_output(main: &str, files: &[(&str, &str)]) -> Result<String, String> {
             .map(|(_, source)| (*source).to_owned())
             .ok_or_else(|| "no such module".to_owned())
     };
-    let module = super::modules::load(main, &mut read)
-        .map_err(|(module, error)| format!("{module}: {}", error.message))?;
+    let module =
+        super::modules::load(main, &mut read).map_err(|(module, error)| format!("{module}: {}", error.message))?;
     let hir = super::compile_module(module, "t", &crate::real_mode()).map_err(|error| error.message)?;
     let executed = execute::run(&codec::decode(&hir).expect("decodes"), "main", &[]).expect("runs");
     assert_eq!(executed.leaked, 0, "heap buffers leaked");
@@ -951,26 +922,14 @@ fn main() -> i16:
     return 0
 ";
     let files = [("shapes.geometry", geometry), ("report", report)];
-    assert_eq!(
-        linked_output(main, &files).unwrap(),
-        "-3,4 left\n2,4 right\n"
-    );
+    assert_eq!(linked_output(main, &files).unwrap(), "-3,4 left\n2,4 right\n");
 
     let private = "import shapes.geometry as geo\n\nfn main() -> i16:\n    return geo.secret()\n";
-    assert_eq!(
-        linked_output(private, &files).unwrap_err(),
-        ": secret is private to module shapes.geometry"
-    );
+    assert_eq!(linked_output(private, &files).unwrap_err(), ": secret is private to module shapes.geometry");
 
-    let cycle = [
-        ("a", "import b\n\npub fn f() -> i16:\n    return 1\n"),
-        ("b", "import a\n"),
-    ];
+    let cycle = [("a", "import b\n\npub fn f() -> i16:\n    return 1\n"), ("b", "import a\n")];
     let main = "import a\n\nfn main() -> i16:\n    return a.f()\n";
-    assert_eq!(
-        linked_output(main, &cycle).unwrap_err(),
-        "b: import cycle: a -> b -> a"
-    );
+    assert_eq!(linked_output(main, &cycle).unwrap_err(), "b: import cycle: a -> b -> a");
 }
 
 #[test]
@@ -991,10 +950,7 @@ fn main() -> i16:
     return 0
 ";
     assert_eq!(output(source), "grid 8x3 = 24, 5 11 -1048576\n");
-    assert!(
-        refused("fn f() -> i16:\n    return 1\n\nconst X = f()\n")
-            .contains("X is not a compile-time value")
-    );
+    assert!(refused("fn f() -> i16:\n    return 1\n\nconst X = f()\n").contains("X is not a compile-time value"));
 }
 
 #[test]
@@ -1018,39 +974,18 @@ fn main() -> i16:
 ";
     let hir = super::compile(source, "t").expect("compiles");
     let program = codec::decode(&hir).expect("decodes");
-    let width = |name: &str| {
-        program.modules[0]
-            .types
-            .iter()
-            .find(|one| one.name == name)
-            .expect("a type")
-            .width
-    };
-    assert_eq!(
-        (width("Packet"), width("Loose")),
-        (3, 4),
-        "pack=1 aligns no field"
-    );
+    let width = |name: &str| program.modules[0].types.iter().find(|one| one.name == name).expect("a type").width;
+    assert_eq!((width("Packet"), width("Loose")), (3, 4), "pack=1 aligns no field");
+    assert!(refused(&source.replace("    unsafe:\n        return", "    return")).contains("unsafe"));
     assert!(
-        refused(&source.replace("    unsafe:\n        return", "    return")).contains("unsafe")
-    );
-    assert!(
-        refused(
-            &source
-                .replace("*far Packet", "*far Loose")
-                .replace("Packet(", "Loose(")
-        )
-        .contains("cross a foreign ABI")
+        refused(&source.replace("*far Packet", "*far Loose").replace("Packet(", "Loose("))
+            .contains("cross a foreign ABI")
     );
     assert!(refused(&source.replace("*far Packet", "*far mut Packet")).contains("'&mut'"));
     assert!(refused(&source.replace("*far Packet", "*near Packet")).contains("near pointer"));
     assert!(
-        refused(
-            &source
-                .replace("packet: *far Packet) -> i16", "name: string) -> i16")
-                .replace("&packet", "\"x\"")
-        )
-        .contains("cross a foreign ABI")
+        refused(&source.replace("packet: *far Packet) -> i16", "name: string) -> i16").replace("&packet", "\"x\""))
+            .contains("cross a foreign ABI")
     );
 }
 
@@ -1065,10 +1000,7 @@ fn main() -> i16:
     print(f\"{label} [{delta:5}] [{delta:05}] [{7:b}] [{8:o}] [{delta > 0 ? 1 : 2}]\")
     return 0
 ";
-    assert_eq!(
-        output(source),
-        "Ada  |000bee [  -42] [-0042] [111] [10] [2]\n"
-    );
+    assert_eq!(output(source), "Ada  |000bee [  -42] [-0042] [111] [10] [2]\n");
     assert!(refused(&source.replace("{name:-5}", "{name:x}")).contains("only an integer"));
 }
 
@@ -1086,11 +1018,7 @@ fn main() -> i16:
 
 #[test]
 fn string_views_borrow_ranges_and_temporaries_and_print_compare_and_copy() {
-    let source = std::fs::read_to_string(concat!(
-        env!("LLRM_ROOT"),
-        "/examples/settings.nib"
-    ))
-    .expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/examples/settings.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "name    = Ada\nrole    = pilot\nlevel   = 7\n          twice that is 14\n3 settings, kept Ada\n"
@@ -1185,7 +1113,9 @@ fn main() -> i16:
 fn a_for_takes_an_iterator_from_iter_and_calls_next_until_none() {
     let source = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/examples/dice.nib")).expect("the example");
     assert_eq!(output_without_leaks(&source), "1: 10\n2: 14\n3:  8\n4:  8\n5: 13\n6:  7\nfirst six\n");
-    assert!(refused(&source.replace("for face in dice:", "for face in &mut dice:")).contains("an iterator yields values"));
+    assert!(
+        refused(&source.replace("for face in dice:", "for face in &mut dice:")).contains("an iterator yields values")
+    );
 }
 
 #[test]
@@ -1220,7 +1150,8 @@ fn a_shift_past_the_width_and_a_wide_index_past_the_dimension_panic() {
 #[test]
 fn a_float_outside_the_integer_it_converts_to_panics() {
     let run = |value: &str, target: &str| {
-        let source = format!("fn main() -> i16:\n    let x: f32 = {value}\n    print(f\"{{{target}(x)}}\")\n    return 0\n");
+        let source =
+            format!("fn main() -> i16:\n    let x: f32 = {value}\n    print(f\"{{{target}(x)}}\")\n    return 0\n");
         let hir = super::compile(&source, "t").expect("compiles");
         let executed = execute::run(&codec::decode(&hir).expect("decodes"), "main", &[]).expect("runs");
         (executed.output, executed.panic)
@@ -1236,17 +1167,24 @@ fn a_float_outside_the_integer_it_converts_to_panics() {
 #[test]
 fn exports_are_declared_for_c_basic_and_assembler_callers() {
     use super::declarations::{Language, declarations};
-    let source = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/examples/pascal/levels.nib")).expect("the example");
+    let source =
+        std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/examples/pascal/levels.nib")).expect("the example");
     let module = super::parse(super::lex(&source).expect("lexes")).expect("parses");
     let declared = |language| declarations(&module, "levels", language).expect("declares");
     let c = declared(Language::C);
     assert!(c.contains("#pragma pack(1)\ntypedef struct {\n    short low;\n    short high;\n} Range;"), "{c}");
     assert!(c.contains("extern short __far __pascal clamp(short value, short low, short high);"), "{c}");
     let basic = declared(Language::Basic);
-    assert!(basic.contains("DECLARE FUNCTION clamp% (BYVAL value AS INTEGER, BYVAL low AS INTEGER, BYVAL high AS INTEGER)"), "{basic}");
+    assert!(
+        basic.contains("DECLARE FUNCTION clamp% (BYVAL value AS INTEGER, BYVAL low AS INTEGER, BYVAL high AS INTEGER)"),
+        "{basic}"
+    );
     let assembler = declared(Language::Assembler);
     assert!(assembler.contains("Range struct\n    low dw ?\n    high dw ?\nRange ends"), "{assembler}");
-    assert!(assembler.contains("extrn CLAMP:far    ; pascal16(value: i16, low: i16, high: i16) -> i16, retf 6"), "{assembler}");
+    assert!(
+        assembler.contains("extrn CLAMP:far    ; pascal16(value: i16, low: i16, high: i16) -> i16, retf 6"),
+        "{assembler}"
+    );
 }
 
 #[test]
@@ -1258,7 +1196,8 @@ fn sequence_patterns_match_lengths_and_view_the_rest() {
     );
     let falls = source.replace("        return -1\n", "        print(\"none\")\n");
     assert!(refused(&falls).contains("must leave"), "{}", refused(&falls));
-    let unguarded = source.replace("    let [first, *rest] = values else:\n        return -1\n", "    let [first, *rest] = values\n");
+    let unguarded = source
+        .replace("    let [first, *rest] = values else:\n        return -1\n", "    let [first, *rest] = values\n");
     assert!(refused(&unguarded).contains("needs 'else:'"), "{}", refused(&unguarded));
 }
 
@@ -1377,7 +1316,9 @@ fn main() -> i16:
 fn a_quotient_too_wide_for_its_type_panics_as_the_divide_fault_does() {
     // The host executor wrapped i16 -32768 // -1 to -32768; idiv faults.
     let run = |divisor: &str| {
-        let source = format!("fn main() -> i16:\n    let m: i16 = -32768\n    let d: i16 = {divisor}\n    print(\"a\")\n    print(f\"{{m // d}}\")\n    return 0\n");
+        let source = format!(
+            "fn main() -> i16:\n    let m: i16 = -32768\n    let d: i16 = {divisor}\n    print(\"a\")\n    print(f\"{{m // d}}\")\n    return 0\n"
+        );
         let hir = super::compile(&source, "t").expect("compiles");
         let executed = execute::run(&codec::decode(&hir).expect("decodes"), "main", &[]).expect("runs");
         (executed.output, executed.panic)
@@ -1436,7 +1377,10 @@ fn main() -> i16:
         output_without_leaks(include_str!("../../../../examples/meter.nib")),
         "health 255\nhealth 0\ntrue 2100000000\nfalse 2100000000\nfalse 2100000000\n"
     );
-    assert!(refused("fn i16.twice(self: i16) -> i16:\n    return self * 2\n\nfn main() -> i16:\n    return 0\n").contains("only the language defines i16's methods"));
+    assert!(
+        refused("fn i16.twice(self: i16) -> i16:\n    return self * 2\n\nfn main() -> i16:\n    return 0\n")
+            .contains("only the language defines i16's methods")
+    );
 }
 
 #[test]
@@ -1465,9 +1409,11 @@ fn main() -> i16:
     return 0
 ";
     assert_eq!(output_without_leaks(source), "32767\nnone\nnone none -5 199 none\n");
-    assert!(refused("fn f() -> i16:\n    return 1\n\nfn main() -> i16:\n    return f[i16]()\n").contains("f takes no type arguments"));
+    assert!(
+        refused("fn f() -> i16:\n    return 1\n\nfn main() -> i16:\n    return f[i16]()\n")
+            .contains("f takes no type arguments")
+    );
 }
-
 
 #[test]
 fn enumerate_zip_and_range_are_library_generators_yielding_references() {
@@ -1480,7 +1426,10 @@ fn enumerate_zip_and_range_are_library_generators_yielding_references() {
     let text = "fn main() -> i16:\n    for (i, c) in enumerate(\"hi\"):\n        print(f\"{i}{c}\")\n    return 0\n";
     assert_eq!(output_without_leaks(text), "0h\n1i\n");
     // A reference is taken, never made from a value.
-    assert!(refused("fn f() -> (i16, &i16):\n    return (1, 2)\n\nfn main() -> i16:\n    return 0\n").contains("a reference is taken with '&'"));
+    assert!(
+        refused("fn f() -> (i16, &i16):\n    return (1, 2)\n\nfn main() -> i16:\n    return 0\n")
+            .contains("a reference is taken with '&'")
+    );
 }
 
 #[test]
@@ -1533,7 +1482,10 @@ fn source_text_outside_ascii_is_the_target_code_page() {
     // "string literals contain target-code-page bytes; use a byte escape".
     let source = "fn main() -> i16:\n    let s = \"caf\u{e9} \u{bd}\"\n    print(f\"{s} {s.len} {i16('\u{e9}')}\")\n    return 0\n";
     assert_eq!(output(source), "caf\u{e9} \u{bd} 6 130\n");
-    assert!(refused("fn main() -> i16:\n    print(\"\u{20ac}\")\n    return 0\n").contains("is not in the target code page"));
+    assert!(
+        refused("fn main() -> i16:\n    print(\"\u{20ac}\")\n    return 0\n")
+            .contains("is not in the target code page")
+    );
 }
 
 #[test]
@@ -1555,7 +1507,8 @@ fn generic_structs_enums_and_methods_take_their_types_from_use() {
     // `Pair(first=1, ...)` was "unknown struct", `Maybe.yes(4)` "unknown
     // enum", `Result.ok()` of `Result[void, E]` wanted a payload, and a
     // generic type's method named an unknown `T`.
-    let source = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/examples/generic_types.nib")).expect("the example");
+    let source =
+        std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/examples/generic_types.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "ada 42 7 true\ntop 9\nstored 11\nfull at 12\nfull at 13\n200 -1\nfirst roll 4\nnothing held\n"
@@ -1594,7 +1547,8 @@ fn main() -> i16:
     return 0
 ";
     assert!(refused(inner).contains("\"o\" would outlive \"y\""), "{}", refused(inner));
-    let walked = "fn main() -> i16:\n    let mut v: vec[i16] = [1, 2]\n    for x in &v:\n        v.push(x)\n    return 0\n";
+    let walked =
+        "fn main() -> i16:\n    let mut v: vec[i16] = [1, 2]\n    for x in &v:\n        v.push(x)\n    return 0\n";
     assert!(refused(walked).contains("borrowed here"), "{}", refused(walked));
     // What may be done: return `&T` of a parameter, rename a reference,
     // and reseat a `let mut` view.
@@ -1624,7 +1578,9 @@ fn dicts_hash_their_keys_grow_and_lend_a_looked_up_key() {
 fn a_main_returning_result_exits_0_on_ok_and_1_on_err() {
     // It was run with no result slot: "expected 1 arguments, received 0".
     let exit = |outcome: &str| {
-        let source = format!("enum E:\n    bad(code: u16)\n\nfn main() -> Result[void, E]:\n    print(\"hi\")\n    return {outcome}\n");
+        let source = format!(
+            "enum E:\n    bad(code: u16)\n\nfn main() -> Result[void, E]:\n    print(\"hi\")\n    return {outcome}\n"
+        );
         let hir = super::compile(&source, "t").expect("compiles");
         let executed = execute::run(&codec::decode(&hir).expect("decodes"), "main", &[]).expect("runs");
         (executed.output, executed.value)
@@ -1732,7 +1688,8 @@ fn a_function_value_names_a_function_and_calls_through_its_type() {
     // be bound to a function passed by name.
     let source = "fn dbl(x: i16) -> i16:\n    return x * 2\n\nfn neg(x: i16) -> i16:\n    return -x\n\nfn apply[F](f: F, x: i16) -> i16:\n    return f(x)\n\nfn main() -> i16:\n    let g = dbl\n    let mut h: fn(i16) -> i16 = |x| x + 1\n    print(f\"{g(4)} {h(4)} {apply(neg, 4)} {apply(dbl, 5)}\")\n    h = neg\n    print(h(7))\n    return 0\n";
     assert_eq!(output(source), "8 5 -4 10\n-7\n");
-    let captures = "fn main() -> i16:\n    let k: i16 = 1\n    let h: fn(i16) -> i16 = |x| x + k\n    print(h(1))\n    return 0\n";
+    let captures =
+        "fn main() -> i16:\n    let k: i16 = 1\n    let h: fn(i16) -> i16 = |x| x + k\n    print(h(1))\n    return 0\n";
     assert!(refused(captures).contains("cannot capture \"k\""), "{}", refused(captures));
 }
 
@@ -1854,12 +1811,22 @@ fn a_literal_argument_takes_the_type_its_generic_gets_from_the_others() {
 
 #[test]
 fn module_variables_are_shared_by_every_function_and_a_local_hides_one() {
-    assert_eq!(output("const SLOTS = 4\nvar count: u16 = 0\nvar table: i16[SLOTS] = [0] * SLOTS\nvar grid: u8[2, 3] = [[1, 2, 3], [4, 5, 6]]\nvar ready: bool = false\n\nfn record(value: i16) -> void:\n    table[count] = value\n    count += 1\n\nfn main() -> i16:\n    record(7)\n    record(9)\n    ready = true\n    print(f\"{count} {table[0]} {table[1]} {table[2]} {grid[1, 2]} {ready}\")\n    let count: u16 = 99\n    print(count)\n    return 0\n"), "2 7 9 0 6 true\n99\n");
+    assert_eq!(
+        output(
+            "const SLOTS = 4\nvar count: u16 = 0\nvar table: i16[SLOTS] = [0] * SLOTS\nvar grid: u8[2, 3] = [[1, 2, 3], [4, 5, 6]]\nvar ready: bool = false\n\nfn record(value: i16) -> void:\n    table[count] = value\n    count += 1\n\nfn main() -> i16:\n    record(7)\n    record(9)\n    ready = true\n    print(f\"{count} {table[0]} {table[1]} {table[2]} {grid[1, 2]} {ready}\")\n    let count: u16 = 99\n    print(count)\n    return 0\n"
+        ),
+        "2 7 9 0 6 true\n99\n"
+    );
 }
 
 #[test]
 fn a_raw_pointer_steps_indexes_casts_and_compares() {
-    assert_eq!(output("var bytes: u8[8] = [1, 2, 3, 4, 5, 6, 7, 8]\n\nfn main() -> i16:\n    unsafe:\n        let base: *near mut u8 = &mut bytes\n        let words = base.cast[u16]()\n        let third = base.offset(2)\n        print(f\"{base[0]} {third[0]} {third[-1]} {words[1]}\")\n        third[1] = 40\n        words[3] = 0x0102\n        print(f\"{bytes[3]} {bytes[6]} {bytes[7]}\")\n        print(f\"{third > base} {third.offset(-2) == base} {base.is_null()}\")\n    return 0\n"), "1 3 2 1027\n40 2 1\ntrue true false\n");
+    assert_eq!(
+        output(
+            "var bytes: u8[8] = [1, 2, 3, 4, 5, 6, 7, 8]\n\nfn main() -> i16:\n    unsafe:\n        let base: *near mut u8 = &mut bytes\n        let words = base.cast[u16]()\n        let third = base.offset(2)\n        print(f\"{base[0]} {third[0]} {third[-1]} {words[1]}\")\n        third[1] = 40\n        words[3] = 0x0102\n        print(f\"{bytes[3]} {bytes[6]} {bytes[7]}\")\n        print(f\"{third > base} {third.offset(-2) == base} {base.is_null()}\")\n    return 0\n"
+        ),
+        "1 3 2 1027\n40 2 1\ntrue true false\n"
+    );
 }
 
 #[test]
@@ -1973,13 +1940,20 @@ fn main() -> i16:
     let program = codec::decode(&hir).expect("decodes");
     let width = |name: &str| program.modules[0].types.iter().find(|one| one.name == name).expect("a type").width;
     assert_eq!((width("Node"), width("Grid")), (10, 14));
-    assert!(refused(&source.replace("n.bound[2] = 5", "n.spare[0] = 5")).contains("\"spare\" of Node is not declared 'mut'"));
+    assert!(
+        refused(&source.replace("n.bound[2] = 5", "n.spare[0] = 5"))
+            .contains("\"spare\" of Node is not declared 'mut'")
+    );
     assert!(refused(&source.replace("n.bound[2] = 5", "n.bound[6] = 5")).contains("6 is outside 0..6"));
     assert!(refused(&source.replace("let mut n = Node", "let n = Node")).contains("immutable"));
-    assert!(refused(&source.replace("n.bound = fresh", "n.bound = [1, 2]")).contains("array expects 6 elements, got 2"));
+    assert!(
+        refused(&source.replace("n.bound = fresh", "n.bound = [1, 2]")).contains("array expects 6 elements, got 2")
+    );
     assert!(refused("bits struct B: u8\n    low: u4[2]\n").contains("a bits struct field cannot be an array"));
     let past = source.replace("n.bound[2] = 5", "let i: u16 = 6\n    n.bound[i] = 5");
-    let executed = execute::run(&codec::decode(&super::compile(&past, "t").expect("compiles")).expect("decodes"), "main", &[]).expect("runs");
+    let executed =
+        execute::run(&codec::decode(&super::compile(&past, "t").expect("compiles")).expect("decodes"), "main", &[])
+            .expect("runs");
     assert_eq!(executed.panic.as_deref(), Some("index out of bounds"));
 }
 
@@ -2032,7 +2006,10 @@ fn main() -> i16:
     return 0
 ";
     assert_eq!(output_without_leaks(source), "x y ada cy\n");
-    assert!(refused(&source.replace("r.names = [\"x\", \"y\"]", "r.names = c.names")).contains("cannot move out of a borrow, field, or element"));
+    assert!(
+        refused(&source.replace("r.names = [\"x\", \"y\"]", "r.names = c.names"))
+            .contains("cannot move out of a borrow, field, or element")
+    );
 }
 
 #[test]
@@ -2053,7 +2030,10 @@ fn main() -> i16:
 ";
     assert_eq!(output(source), "38 3\n");
     assert!(refused(&source.replace("const BASE = 2", "const BASE = TOTAL")).contains("depends on itself"));
-    assert!(refused(&source.replace("const BASE = 2", "const BASE = MISSING")).contains("BASE is not a compile-time value: MISSING is not a constant"));
+    assert!(
+        refused(&source.replace("const BASE = 2", "const BASE = MISSING"))
+            .contains("BASE is not a compile-time value: MISSING is not a constant")
+    );
 }
 
 #[test]
@@ -2065,7 +2045,12 @@ fn an_array_field_is_declared_for_c_and_assembler_and_refused_for_basic() {
     assert!(c.contains("    unsigned char bound[6];\n    short grid[2][3];\n"), "{c}");
     let assembler = declarations(&module, "t", Language::Assembler).expect("declares");
     assert!(assembler.contains("    bound db 6 dup (?)\n    grid dw 6 dup (?)\n"), "{assembler}");
-    assert!(declarations(&module, "t", Language::Basic).expect_err("refused").message.contains("\"bound\" has no declaration in BASIC"));
+    assert!(
+        declarations(&module, "t", Language::Basic)
+            .expect_err("refused")
+            .message
+            .contains("\"bound\" has no declaration in BASIC")
+    );
 }
 
 /// A near pointer field in the assembler's struct was `dw` whatever the target: on a flat one it is a dword, so a
@@ -2073,9 +2058,19 @@ fn an_array_field_is_declared_for_c_and_assembler_and_refused_for_basic() {
 #[test]
 fn a_pointer_field_in_an_assembler_struct_is_the_targets_pointer_width() {
     use super::declarations::{Language, declarations_on};
-    let source = "@repr(\"c\")\nstruct Node:\n    next: *near mut i16\n    id: i16\n\nfn main() -> i16:\n    return 0\n";
+    let source =
+        "@repr(\"c\")\nstruct Node:\n    next: *near mut i16\n    id: i16\n\nfn main() -> i16:\n    return 0\n";
     let module = super::parse(super::lex(source).expect("lexes")).expect("parses");
-    let on = |target: &dyn llrm_target::Target| declarations_on(&module, "t", Language::Assembler, crate::Frontend::for_target(target).unwrap().sizes(), crate::Frontend::for_target(target).unwrap().native()).expect("declares");
+    let on = |target: &dyn llrm_target::Target| {
+        declarations_on(
+            &module,
+            "t",
+            Language::Assembler,
+            crate::Frontend::for_target(target).unwrap().sizes(),
+            crate::Frontend::for_target(target).unwrap().native(),
+        )
+        .expect("declares")
+    };
     assert!(on(&llrm_x86_m16::M16).contains("    next dw ?\n"));
     assert!(on(&llrm_x86_m32::M32).contains("    next dd ?\n"));
 }
@@ -2095,7 +2090,11 @@ fn a_library_for_basic_refuses_the_nib_runtime_and_misplaced_adapters() {
     let checked = "import abi.qb45 as qb\n\n@export(\"qb45\")\nfn First(values: qb.ArrayRef[i16]) -> i16:\n    return values[0]\n";
     assert!(refused_with_imports(checked).contains("N$EBND"), "{}", refused_with_imports(checked));
     let other = library.replace("\"qb45\"", "\"pds71\"").replace("BODY", "return");
-    assert!(refused_with_imports(&other).contains("qb45.Ref, which only a qb45 export or extern takes"), "{}", refused_with_imports(&other));
+    assert!(
+        refused_with_imports(&other).contains("qb45.Ref, which only a qb45 export or extern takes"),
+        "{}",
+        refused_with_imports(&other)
+    );
     let plain = "import abi.qb45 as qb\n\nfn show(value: qb.Ref[i16]) -> void:\n    return\n";
     assert!(refused_with_imports(plain).contains("only a qb45 export or extern"), "{}", refused_with_imports(plain));
     let text = "import abi.qb45 as qb\n\n@export(\"qb45\")\nfn Name(text: qb.StringRef) -> string:\n    return \"\"\n";
@@ -2105,10 +2104,16 @@ fn a_library_for_basic_refuses_the_nib_runtime_and_misplaced_adapters() {
 #[test]
 fn qb45_exports_are_declared_as_basic_procedures() {
     use super::declarations::{Language, declarations};
-    let source = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/examples/basic/sortlib.nib")).expect("the example");
+    let source =
+        std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/examples/basic/sortlib.nib")).expect("the example");
     let module = super::modules::load(&source, &mut |name| Err(format!("{name} is not supplied"))).expect("loads");
     let basic = declarations(&module, "sortlib", Language::Basic).expect("declares");
-    assert!(basic.contains("DECLARE SUB SortScores (scores() AS INTEGER, count AS INTEGER)\nDECLARE SUB Upper (text AS STRING)\n"), "{basic}");
+    assert!(
+        basic.contains(
+            "DECLARE SUB SortScores (scores() AS INTEGER, count AS INTEGER)\nDECLARE SUB Upper (text AS STRING)\n"
+        ),
+        "{basic}"
+    );
     assert!(basic.contains("DECLARE FUNCTION Average# (scores() AS INTEGER, count AS INTEGER)\n"), "{basic}");
     assert!(basic.contains("DECLARE FUNCTION Initials$ (person AS STRING)\n"), "{basic}");
     assert!(!basic.contains("TYPE"), "{basic}");
@@ -2477,7 +2482,9 @@ fn a_slice_past_the_end_or_reversed_panics() {
         (executed.output, executed.panic)
     };
     let source = |slice: &str, a: u16, b: u16| {
-        format!("fn head(v: &[i16], n: u16) -> &[i16]:\n    return &v[0:n]\n\nfn main() -> i16:\n    let table: i16[4] = [4, 5, 6, 7]\n    let vals: vec[i16] = [4, 5, 6, 7]\n    let s: string = \"abcd\"\n    let a: u16 = {a}\n    let b: u16 = {b}\n    let h = {slice}\n    print(h.len)\n    return 0\n")
+        format!(
+            "fn head(v: &[i16], n: u16) -> &[i16]:\n    return &v[0:n]\n\nfn main() -> i16:\n    let table: i16[4] = [4, 5, 6, 7]\n    let vals: vec[i16] = [4, 5, 6, 7]\n    let s: string = \"abcd\"\n    let a: u16 = {a}\n    let b: u16 = {b}\n    let h = {slice}\n    print(h.len)\n    return 0\n"
+        )
     };
     for slice in ["head(&table, b)", "&vals[a:b]", "&s[a:b]", "&table[a:b]"] {
         let length = if slice.starts_with("head") { "4\n" } else { "3\n" };
@@ -2485,7 +2492,12 @@ fn a_slice_past_the_end_or_reversed_panics() {
         assert_eq!(run(&source(slice, 1, 5)).1.as_deref(), Some("index out of bounds"), "{slice} past the end");
     }
     assert_eq!(run(&source("&vals[a:b]", 3, 1)).1.as_deref(), Some("index out of bounds"), "reversed");
-    let checks = |source: &str| super::compile(source, "t").expect("compiles").matches(&format!("\"callee\":\"{}\"", llrm_core::abi::nib::ERROR_BOUNDS)).count();
+    let checks = |source: &str| {
+        super::compile(source, "t")
+            .expect("compiles")
+            .matches(&format!("\"callee\":\"{}\"", llrm_core::abi::nib::ERROR_BOUNDS))
+            .count()
+    };
     let constant = "fn main() -> i16:\n    let table: i16[4] = [4, 5, 6, 7]\n    let h = &table[1:3]\n    print(h.len)\n    return 0\n";
     assert_eq!(checks(constant), 0);
     assert!(refused(&constant.replace("[1:3]", "[1:5]")).contains("outside"));
@@ -2669,7 +2681,8 @@ pub fn Box.area(self: &Box) -> u16:
 fn Box.secret(self: &Box) -> u16:
     return self.w
 ";
-    let main = "import geo.shapes as sh\n\nfn main() -> i16:\n    let b = sh.Box(w=5)\n    print(b.area())\n    return 0\n";
+    let main =
+        "import geo.shapes as sh\n\nfn main() -> i16:\n    let b = sh.Box(w=5)\n    print(b.area())\n    return 0\n";
     let files = [("geo.shapes", shapes)];
     assert_eq!(linked_output(main, &files).unwrap(), "10\n");
     let private = main.replace("b.area()", "b.secret()");
@@ -2752,7 +2765,8 @@ fn an_import_alias_cannot_be_shadowed() {
 #[test]
 fn a_float_divided_by_zero_is_inf_or_nan_as_on_the_x87() {
     // The host interpreter stopped with "float division by zero" where compiled code gets inf or nan.
-    let source = "fn main() -> i16:\n    let z: f64 = 0.0\n    print(f\"{1.0 / z} {-1.0 / z} {z / z}\")\n    return 0\n";
+    let source =
+        "fn main() -> i16:\n    let z: f64 = 0.0\n    print(f\"{1.0 / z} {-1.0 / z} {z / z}\")\n    return 0\n";
     assert_eq!(output(source), "inf -inf nan\n");
 }
 
@@ -2951,7 +2965,11 @@ fn main() -> i16:
 ";
     assert_eq!(output_without_leaks(source), "1\n2\n2\n2\n4\n6\n2\n1\n0\n0=2\n1=4\n2=6\n");
     let own = "fn window() -> iter[i16]:\n    let a: i16[3] = [1, 2, 3]\n    let w = &a[0:2]\n    yield w[0]\n\nfn main() -> i16:\n    let mut g = window()\n    return 0\n";
-    assert!(refused(own).contains("keeps only borrows of what its caller lent it; \"w\" borrows its own \"a\""), "{}", refused(own));
+    assert!(
+        refused(own).contains("keeps only borrows of what its caller lent it; \"w\" borrows its own \"a\""),
+        "{}",
+        refused(own)
+    );
     let changed = "fn chars(text: &string) -> iter[char]:\n    for c in text:\n        yield c\n\nfn main() -> i16:\n    let mut t: string = \"ab\"\n    let mut g = chars(t)\n    t = \"zz\"\n    for c in g:\n        print(c)\n    return 0\n";
     assert!(refused(changed).contains("\"t\" is borrowed here"), "{}", refused(changed));
 }
@@ -3291,7 +3309,11 @@ fn main() -> i16:
 ";
     assert_eq!(output_without_leaks(source), "n5 1\nn5 3\n3\n");
     let own = "fn gen(x: i16) -> iter[i16]:\n    let mut y: i16 = x\n    let r = &mut y\n    yield 1\n    r += 1\n    yield y\n\nfn main() -> i16:\n    let mut g = gen(1)\n    return 0\n";
-    assert!(refused(own).contains("keeps only borrows of what its caller lent it; \"r\" borrows its own \"y\""), "{}", refused(own));
+    assert!(
+        refused(own).contains("keeps only borrows of what its caller lent it; \"r\" borrows its own \"y\""),
+        "{}",
+        refused(own)
+    );
 }
 
 /// A borrow's element address is in bounds of the object it borrows: the
@@ -3317,7 +3339,11 @@ fn total(values: &[i16]) -> i16:
 /// happen first.
 #[test]
 fn the_panic_routines_are_stated_to_end_the_program() {
-    let hir = super::compile("fn main() -> i16:\n    let mut a: i16[4] = [0] * 4\n    let n: i16 = 3\n    return a[n]\n", "t").unwrap_or_else(|error| panic!("{}", error.message));
+    let hir = super::compile(
+        "fn main() -> i16:\n    let mut a: i16[4] = [0] * 4\n    let n: i16 = 3\n    return a[n]\n",
+        "t",
+    )
+    .unwrap_or_else(|error| panic!("{}", error.message));
     let stated = |fact: &str| hir.matches(&format!("\"fact\":\"{fact}\"")).count();
     assert!(stated("noreturn") >= 1 && stated("memory") >= stated("noreturn"), "{hir}");
 }
@@ -3329,7 +3355,8 @@ fn the_panic_routines_are_stated_to_end_the_program() {
 #[test]
 fn the_runtime_routines_state_what_they_touch() {
     use llrm_core::abi::nib;
-    let hir = super::compile("fn main() -> i16:\n    print(1)\n    return 0\n", "t").unwrap_or_else(|error| panic!("{}", error.message));
+    let hir = super::compile("fn main() -> i16:\n    print(1)\n    return 0\n", "t")
+        .unwrap_or_else(|error| panic!("{}", error.message));
     let stated = |fact: &str| hir.matches(&format!("\"fact\":\"{fact}\"")).count();
     // N$EDIV is called by start.asm, not by compiled code: it is not declared.
     assert_eq!(stated("noreturn"), nib::TERMINATING.len() - 1);
@@ -3344,7 +3371,13 @@ fn a_module_variable_states_its_alignment() {
     let source = "var flag: u8 = 1\nvar words: i32[4] = [1, 2, 3, 4]\nvar pair: i16 = 5\n\nfn main() -> i16:\n    print(words[1] + i32(flag) + i32(pair))\n    return 0\n";
     let hir = super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message));
     let facts: serde_json::Value = serde_json::from_str(&hir).expect("JSON");
-    let mut aligned: Vec<u64> = facts["modules"][0]["facts"].as_array().unwrap().iter().filter(|one| one["fact"] == "align" && one["subject"] == "object").map(|one| one["value"].as_u64().unwrap()).collect();
+    let mut aligned: Vec<u64> = facts["modules"][0]["facts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|one| one["fact"] == "align" && one["subject"] == "object")
+        .map(|one| one["value"].as_u64().unwrap())
+        .collect();
     aligned.sort();
     // `flag` is a byte and has none to state.
     assert_eq!(aligned, [2, 4], "{hir}");
@@ -3355,7 +3388,8 @@ fn a_module_variable_states_its_alignment() {
 /// field and a ranked array alike. (Raw pointer arithmetic, `unsafe`, is not.)
 #[test]
 fn every_checked_index_form_states_inbounds() {
-    let source = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/fixtures/nib/indexing.nib")).expect("the fixture");
+    let source =
+        std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/fixtures/nib/indexing.nib")).expect("the fixture");
     let hir = super::compile(&source, "t").unwrap_or_else(|error| panic!("{}", error.message)).replace([' ', '\n'], "");
     let offsets = hir.matches("\"op\":\"ptr_offset\"").count();
     assert!(offsets >= 5, "the premise: the fixture indexes several forms ({offsets})");
@@ -3380,13 +3414,17 @@ fn main() -> i16:
     print(ticks + other)
     return 0
 ";
-    let hir: serde_json::Value = serde_json::from_str(&super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message))).expect("JSON");
+    let hir: serde_json::Value =
+        serde_json::from_str(&super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message)))
+            .expect("JSON");
     let mut volatile: Vec<(String, bool)> = hir["modules"][0]["functions"]
         .as_array()
         .unwrap()
         .iter()
         .flat_map(|function| function["places"].as_array().unwrap().iter())
-        .filter(|place| place["storage"] == "module" && place["name"].as_str().is_some_and(|name| !name.starts_with('$')))
+        .filter(|place| {
+            place["storage"] == "module" && place["name"].as_str().is_some_and(|name| !name.starts_with('$'))
+        })
         .map(|place| (place["name"].as_str().unwrap().to_owned(), place["volatile"].as_bool().unwrap()))
         .collect();
     volatile.sort();
@@ -3400,11 +3438,27 @@ fn main() -> i16:
 /// "expected *far pointer, found i16", a type it never had.
 #[test]
 fn an_integer_literal_is_a_raw_pointer_in_unsafe() {
-    assert!(super::compile("fn main() -> i16:\n    unsafe:\n        let p: *far mut u8 = 0xB8000000\n        p[0] = 1\n    return 0\n", "t").is_ok());
-    assert!(super::compile("fn main() -> i16:\n    unsafe:\n        let p: *near mut u8 = 0xFFFF\n        p[0] = 1\n    return 0\n", "t").is_ok());
-    let near = refused("fn main() -> i16:\n    unsafe:\n        let p: *near mut u8 = 0x10000\n        p[0] = 1\n    return 0\n");
+    assert!(
+        super::compile(
+            "fn main() -> i16:\n    unsafe:\n        let p: *far mut u8 = 0xB8000000\n        p[0] = 1\n    return 0\n",
+            "t"
+        )
+        .is_ok()
+    );
+    assert!(
+        super::compile(
+            "fn main() -> i16:\n    unsafe:\n        let p: *near mut u8 = 0xFFFF\n        p[0] = 1\n    return 0\n",
+            "t"
+        )
+        .is_ok()
+    );
+    let near = refused(
+        "fn main() -> i16:\n    unsafe:\n        let p: *near mut u8 = 0x10000\n        p[0] = 1\n    return 0\n",
+    );
     assert!(near.contains("integer literal 65536 is 17 bits, wider than a *near pointer"), "{near}");
-    let far = refused("fn main() -> i16:\n    unsafe:\n        let p: *far mut u8 = 0x100000000\n        p[0] = 1\n    return 0\n");
+    let far = refused(
+        "fn main() -> i16:\n    unsafe:\n        let p: *far mut u8 = 0x100000000\n        p[0] = 1\n    return 0\n",
+    );
     assert!(far.contains("integer literal 4294967296 is 33 bits, wider than a *far pointer"), "{far}");
     let safe = refused("fn main() -> i16:\n    let p: *far mut u8 = 0xB8000000\n    return 0\n");
     assert!(safe.contains("unsafe"), "{safe}");
@@ -3417,8 +3471,12 @@ fn an_integer_literal_is_a_raw_pointer_in_unsafe() {
 #[test]
 fn an_integer_literal_is_int_then_i32_then_u32() {
     let printed = |literal: &str| {
-        let source = format!("fn main() -> i16:\n    let x = {literal}\n    let y = x + 1\n    print(y)\n    return 0\n");
-        let program = llrm_core::hir::codec::decode(&super::compile(&source, "t").unwrap_or_else(|error| panic!("{}", error.message))).unwrap();
+        let source =
+            format!("fn main() -> i16:\n    let x = {literal}\n    let y = x + 1\n    print(y)\n    return 0\n");
+        let program = llrm_core::hir::codec::decode(
+            &super::compile(&source, "t").unwrap_or_else(|error| panic!("{}", error.message)),
+        )
+        .unwrap();
         llrm_core::hir::execute::run(&program, "main", &[]).unwrap().output
     };
     assert_eq!(printed("0x7FFF"), "-32768\n");
@@ -3433,12 +3491,24 @@ fn an_integer_literal_is_int_then_i32_then_u32() {
 
 #[test]
 fn a_borrow_covers_only_the_place_it_names_and_ends_at_its_last_use() {
-    let source = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/examples/borrow_puzzles.nib")).expect("the example");
+    let source =
+        std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/examples/borrow_puzzles.nib")).expect("the example");
     assert_eq!(output_without_leaks(&source), "southwest\n3\n6\n6\n");
     // Each puzzle's twin, where the places do overlap or the borrow is still live, is refused.
-    assert!(refused(&source.replace("add_into(p.a, p.b)", "add_into(p.a, p.a)")).contains("aliases a mutable argument"));
-    assert!(refused(&source.replace("struct Bag:\n    items:", "struct Bag:\n    mut items:").replace("self.total += x", "self.items.push(x)")).contains("is borrowed here"));
-    assert!(refused(&source.replace("        sum += e\n    v.push(sum)", "        v.push(e)")).contains("is borrowed here"));
+    assert!(
+        refused(&source.replace("add_into(p.a, p.b)", "add_into(p.a, p.a)")).contains("aliases a mutable argument")
+    );
+    assert!(
+        refused(
+            &source
+                .replace("struct Bag:\n    items:", "struct Bag:\n    mut items:")
+                .replace("self.total += x", "self.items.push(x)")
+        )
+        .contains("is borrowed here")
+    );
+    assert!(
+        refused(&source.replace("        sum += e\n    v.push(sum)", "        v.push(e)")).contains("is borrowed here")
+    );
 }
 
 #[test]
@@ -3447,7 +3517,9 @@ fn a_loader_returns_its_table_and_a_failed_load_drops_the_half_built_one() {
     assert_eq!(output_without_leaks(source), include_str!("../../../../examples/loader.out"));
     // The entry moved into the table; a use after the push is refused.
     assert_eq!(
-        refused(&source.replace("table.entries.push(entry)\n", "table.entries.push(entry)\n        print(entry.key)\n")),
+        refused(
+            &source.replace("table.entries.push(entry)\n", "table.entries.push(entry)\n        print(entry.key)\n")
+        ),
         "\"entry\" was moved; copy it with .copy() to keep using it"
     );
     // The table is the callee's own: a view of its name would dangle.
@@ -3464,7 +3536,10 @@ fn channels_close_once_on_every_exit_in_reverse_order_and_a_drop_type_moves_whol
     assert_eq!(output_without_leaks(source), include_str!("../../../../examples/channels.out"));
     // Taking a field out of a Link would close the channel twice.
     assert_eq!(
-        refused(&source.replace("print(f\"{link.near.name} to {link.far.name}\")", "let n = link.near\n            print(f\"{n.name} to {link.far.name}\")")),
+        refused(&source.replace(
+            "print(f\"{link.near.name} to {link.far.name}\")",
+            "let n = link.near\n            print(f\"{n.name} to {link.far.name}\")"
+        )),
         "cannot move a field out of Link, which has a drop"
     );
     // `drop` is the compiler's to call.
@@ -3480,12 +3555,18 @@ fn tickets_move_through_a_vec_an_option_and_a_struct_without_a_leak() {
     assert_eq!(output_without_leaks(source), include_str!("../../../../examples/desk.out"));
     // A ticket in `aside` is not also in `closed`.
     assert_eq!(
-        refused(&source.replace("            aside.push(ticket)\n", "            aside.push(ticket)\n            self.closed.push(ticket)\n")),
+        refused(&source.replace(
+            "            aside.push(ticket)\n",
+            "            aside.push(ticket)\n            self.closed.push(ticket)\n"
+        )),
         "\"ticket\" was moved; copy it with .copy() to keep using it"
     );
     // Closing moves the ticket into the desk.
     assert_eq!(
-        refused(&source.replace("desk.close(ticket)\n        .none:\n            print(\"no email", "desk.close(ticket)\n            print(ticket.title)\n        .none:\n            print(\"no email")),
+        refused(&source.replace(
+            "desk.close(ticket)\n        .none:\n            print(\"no email",
+            "desk.close(ticket)\n            print(ticket.title)\n        .none:\n            print(\"no email"
+        )),
         "\"ticket\" was moved; copy it with .copy() to keep using it"
     );
 }
@@ -3496,17 +3577,28 @@ fn borrows_of_a_returned_catalog_hold_the_catalog_still_until_their_last_use() {
     assert_eq!(output_without_leaks(source), include_str!("../../../../examples/catalog.out"));
     // The generator holds the parts for the whole loop.
     assert!(
-        refused(&source.replace("    for part in scarce(a.parts, 5):\n        print(", "    for part in scarce(a.parts, 5):\n        a.add(\"nut\", 1, 500)\n        print("))
-            .contains("\"a\" is borrowed here, so it cannot be changed")
+        refused(&source.replace(
+            "    for part in scarce(a.parts, 5):\n        print(",
+            "    for part in scarce(a.parts, 5):\n        a.add(\"nut\", 1, 500)\n        print("
+        ))
+        .contains("\"a\" is borrowed here, so it cannot be changed")
     );
     // A result may come from either catalog, so both stay put.
     let changed = source
         .replace("    let b = south()", "    let mut b = south()")
-        .replace("            print(f\"{part.name}: {part.stock} at {part.price}\")", "            b.add(\"x\", 1, 1)\n            print(f\"{part.name}: {part.stock} at {part.price}\")");
+        .replace(
+            "            print(f\"{part.name}: {part.stock} at {part.price}\")",
+            "            b.add(\"x\", 1, 1)\n            print(f\"{part.name}: {part.stock} at {part.price}\")",
+        );
     assert!(refused(&changed).contains("\"b\" is borrowed here, so it cannot be changed"));
     // A name of a catalog the function built itself is gone with it.
     assert_eq!(
-        refused(&source.replace("fn main", "fn title() -> &string:\n    let c = north()\n    return c.parts[0].name\n\nfn main")),
+        refused(
+            &source.replace(
+                "fn main",
+                "fn title() -> &string:\n    let c = north()\n    return c.parts[0].name\n\nfn main"
+            )
+        ),
         "a returned borrow of \"c\" would dangle; only a borrowed parameter's can be returned"
     );
 }
@@ -3546,19 +3638,35 @@ fn main() -> i16:
     return 0
 ";
     assert_eq!(output_without_leaks(source), "1\n2\n");
-    assert_eq!(refused("fn one() -> i16:\n    return 1\nfn f() -> void:\n    return one()\nfn main() -> i16:\n    f()\n    return 0\n"), "void function cannot return a value");
+    assert_eq!(
+        refused(
+            "fn one() -> i16:\n    return 1\nfn f() -> void:\n    return one()\nfn main() -> i16:\n    f()\n    return 0\n"
+        ),
+        "void function cannot return a value"
+    );
 }
 
 /// `@repr("c")` without `pack=` packs to the target's own alignment, its stack slot (2 on m16, 4
 /// on m32); `@repr("c16")` stays 2 and may not ask for 4.
 #[test]
 fn repr_c_packs_to_the_targets_alignment() {
-    let source = |layout: &str| format!("@repr(\"{layout}\")\nstruct S:\n    a: u8\n    b: i32\n\nfn main() -> i16:\n    print(size_of[S]())\n    return 0\n");
+    let source = |layout: &str| {
+        format!(
+            "@repr(\"{layout}\")\nstruct S:\n    a: u8\n    b: i32\n\nfn main() -> i16:\n    print(size_of[S]())\n    return 0\n"
+        )
+    };
     let run = |text: &str, slot: u32| {
         let module = super::modules::load(text, &mut |_| Err("no such module".to_owned())).expect("loads");
-        let hir = super::compile_module(module, "t", &super::Frontend { slot, ..crate::real_mode() }).expect("compiles");
+        let hir =
+            super::compile_module(module, "t", &super::Frontend { slot, ..crate::real_mode() }).expect("compiles");
         execute::run(&codec::decode(&hir).expect("decodes"), "main", &[]).expect("runs").output
     };
-    assert_eq!((run(&source("c"), 2), run(&source("c"), 4), run(&source("c16"), 4)), ("6\n".to_owned(), "8\n".to_owned(), "6\n".to_owned()));
-    assert!(refused("@repr(\"c16\", pack=4)\nstruct S:\n    a: u8\n\nfn main() -> i16:\n    return 0\n").contains("pack is 1 or 2"));
+    assert_eq!(
+        (run(&source("c"), 2), run(&source("c"), 4), run(&source("c16"), 4)),
+        ("6\n".to_owned(), "8\n".to_owned(), "6\n".to_owned())
+    );
+    assert!(
+        refused("@repr(\"c16\", pack=4)\nstruct S:\n    a: u8\n\nfn main() -> i16:\n    return 0\n")
+            .contains("pack is 1 or 2")
+    );
 }

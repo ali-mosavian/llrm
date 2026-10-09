@@ -15,11 +15,11 @@
 //! constants is left to folding. A neutral term's raised source bytes, and
 //! its flags read by a carry, have no counterpart either.
 
-use llrm_mir::context::{Context, ConstantKind};
+use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
-use llrm_mir::passes::{Analyses, FunctionPass, Loops, PreservedAnalyses, Unit, Dominators};
+use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
 
 use crate::algebraic;
 
@@ -31,7 +31,11 @@ impl FunctionPass for Canonical {
         "canonical"
     }
 
-    fn run(&mut self, unit: &mut Unit, _: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
         let swapped = compares(unit.context, unit.function);
         if identities(unit.context, unit.function) | swapped {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
@@ -42,8 +46,15 @@ impl FunctionPass for Canonical {
 }
 
 /// Whether any compare was swapped.
-pub fn compares(context: &Context, function: &mut Function) -> bool {
-    let swapped = function.walk().map(|(_, inst)| inst).filter(|&inst| _constant_left(context, function, inst)).collect::<Vec<_>>();
+pub fn compares(
+    context: &Context,
+    function: &mut Function,
+) -> bool {
+    let swapped = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| _constant_left(context, function, inst))
+        .collect::<Vec<_>>();
     for &inst in &swapped {
         let instruction = function.instruction(inst);
         let Opcode::ICmp(predicate) = instruction.opcode else { unreachable!("a compare") };
@@ -53,18 +64,35 @@ pub fn compares(context: &Context, function: &mut Function) -> bool {
     !swapped.is_empty()
 }
 
-fn _constant_left(context: &Context, function: &Function, inst: InstId) -> bool {
+fn _constant_left(
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+) -> bool {
     let instruction = function.instruction(inst);
-    let constant = |operand| matches!(operand, Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Int(_)));
-    matches!(instruction.opcode, Opcode::ICmp(_)) && constant(instruction.operands[0]) && !matches!(instruction.operands[1], Operand::Constant(_))
+    let constant = |operand| {
+        matches!(
+            operand,
+            Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Int(_))
+        )
+    };
+    matches!(instruction.opcode, Opcode::ICmp(_))
+        && constant(instruction.operands[0])
+        && !matches!(instruction.operands[1], Operand::Constant(_))
 }
 
 /// `inst` rebuilt with `opcode` and `operands`, where it was.
-fn replaced(function: &mut Function, inst: InstId, opcode: Opcode, operands: Vec<Operand>) {
+fn replaced(
+    function: &mut Function,
+    inst: InstId,
+    opcode: Opcode,
+    operands: Vec<Operand>,
+) {
     let instruction = function.instruction(inst);
     let new = function.create_instruction(opcode, instruction.ty, operands, instruction.flags, None);
     function.insert(new, Position::Before(inst)).expect("a placed instruction");
-    let (old, value) = (function.instruction(inst).result.expect("a value"), function.instruction(new).result.expect("a value"));
+    let (old, value) =
+        (function.instruction(inst).result.expect("a value"), function.instruction(new).result.expect("a value"));
     function.replace_value(old, Operand::Value(value));
     function.erase(inst).expect("its uses were replaced");
 }
@@ -75,7 +103,10 @@ fn replaced(function: &mut Function, inst: InstId, opcode: Opcode, operands: Vec
 /// A rewrite states what it computes from a proof in full -- rotation's
 /// trip count is `bound - start + inclusive` for any start -- and the
 /// neutral terms go here, so no rewrite folds its own.
-pub fn identities(context: &mut Context, function: &mut Function) -> bool {
+pub fn identities(
+    context: &mut Context,
+    function: &mut Function,
+) -> bool {
     let mut changed = false;
     for inst in function.walk().map(|(_, inst)| inst).collect::<Vec<_>>() {
         if let Some(kept) = algebraic::identity(context, function, inst) {
@@ -105,7 +136,11 @@ pub fn identities(context: &mut Context, function: &mut Function) -> bool {
 /// extension keeping whether a value is zero; and of an `i1`, `x != 0` is
 /// `x` and `x == 0` is `not x`. A frontend's truth, a sign-extended `i1`,
 /// is tested so, and induction reads the compare beneath it.
-fn _zero_tested(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+fn _zero_tested(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     let instruction = function.instruction(inst);
     let Opcode::ICmp(predicate @ (IntPredicate::Eq | IntPredicate::Ne)) = instruction.opcode else { return false };
     let (tested, result) = (instruction.operands[0], instruction.result.expect("a value"));
@@ -143,20 +178,33 @@ fn _zero_tested(context: &mut Context, function: &mut Function, inst: InstId) ->
 }
 
 /// A new `opcode` of type `ty` placed before `at`: its value.
-fn _before(function: &mut Function, at: InstId, opcode: Opcode, ty: llrm_mir::types::TypeId, operands: Vec<Operand>) -> Operand {
+fn _before(
+    function: &mut Function,
+    at: InstId,
+    opcode: Opcode,
+    ty: llrm_mir::types::TypeId,
+    operands: Vec<Operand>,
+) -> Operand {
     let new = function.create_instruction(opcode, ty, operands, Flags::default(), None);
     function.insert(new, Position::Before(at)).expect("a placed instruction");
     Operand::Value(function.instruction(new).result.expect("a value"))
 }
 
 /// An `icmp` against zero on the right.
-fn _zero_test(context: &Context, function: &Function, inst: InstId) -> bool {
+fn _zero_test(
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+) -> bool {
     let instruction = function.instruction(inst);
     matches!(instruction.opcode, Opcode::ICmp(_)) && _integer(context, instruction.operands[1]) == Some(0)
 }
 
 /// An integer constant's bits.
-fn _integer(context: &Context, operand: Operand) -> Option<u128> {
+fn _integer(
+    context: &Context,
+    operand: Operand,
+) -> Option<u128> {
     match operand {
         Operand::Constant(id) => match context.get(id).kind {
             ConstantKind::Int(bits) => Some(bits),

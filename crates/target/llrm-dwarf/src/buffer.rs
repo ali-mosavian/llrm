@@ -48,45 +48,76 @@ impl Buf {
         self.bytes.len()
     }
 
-    pub fn u8(&mut self, value: u8) {
+    pub fn u8(
+        &mut self,
+        value: u8,
+    ) {
         self.bytes.push(value);
     }
 
-    pub fn u16(&mut self, value: u16) {
+    pub fn u16(
+        &mut self,
+        value: u16,
+    ) {
         self.bytes.extend(value.to_le_bytes());
     }
 
-    pub fn u32(&mut self, value: u32) {
+    pub fn u32(
+        &mut self,
+        value: u32,
+    ) {
         self.bytes.extend(value.to_le_bytes());
     }
 
-    pub fn uleb(&mut self, value: u64) {
+    pub fn uleb(
+        &mut self,
+        value: u64,
+    ) {
         self.bytes.extend(uleb(value));
     }
 
-    pub fn sleb(&mut self, value: i64) {
+    pub fn sleb(
+        &mut self,
+        value: i64,
+    ) {
         self.bytes.extend(sleb(value));
     }
 
-    pub fn string(&mut self, text: &str) {
+    pub fn string(
+        &mut self,
+        text: &str,
+    ) {
         self.bytes.extend(text.as_bytes());
         self.bytes.push(0);
     }
 
     /// A 4-byte offset into section `section`, which the linker places.
-    pub fn section_offset(&mut self, section: usize, value: u32) {
+    pub fn section_offset(
+        &mut self,
+        section: usize,
+        value: u32,
+    ) {
         self.relocs.push(crate::section_reloc(self.bytes.len(), section, i64::from(value)));
         self.u32(0);
     }
 
     /// An address field of `width` bytes: `offset` into the section `symbol` is at `symbol_offset`.
-    pub fn address(&mut self, width: usize, symbol: usize, delta: i64) {
+    pub fn address(
+        &mut self,
+        width: usize,
+        symbol: usize,
+        delta: i64,
+    ) {
         self.relocs.push(crate::symbol_reloc(self.bytes.len(), width, symbol, delta));
         self.bytes.extend(std::iter::repeat_n(0, width));
     }
 
     /// `at` patched with `value`, a 4-byte length known only now.
-    pub fn patch32(&mut self, at: usize, value: u32) {
+    pub fn patch32(
+        &mut self,
+        at: usize,
+        value: u32,
+    ) {
         self.bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
     }
 
@@ -103,7 +134,10 @@ pub struct Strings {
 }
 
 impl Strings {
-    pub fn add(&mut self, text: &str) -> u32 {
+    pub fn add(
+        &mut self,
+        text: &str,
+    ) -> u32 {
         if let Some(&at) = self.seen.get(text) {
             return at;
         }

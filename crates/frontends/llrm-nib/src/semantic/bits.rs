@@ -45,34 +45,15 @@ impl TypeRegistry {
         if low > scalar_width(backing) * 8 {
             return Err(Diagnostic::new(
                 declaration.span,
-                format!(
-                    "{}'s fields take {low} bits, more than its {}",
-                    declaration.name,
-                    type_name_text(backing)
-                ),
+                format!("{}'s fields take {low} bits, more than its {}", declaration.name, type_name_text(backing)),
             ));
         }
         let type_id = self.types.len() as u32 + 1;
-        self.types.push(plain_type(
-            type_id,
-            &declaration.name,
-            "integer",
-            scalar_width(backing),
-            Some(false),
-            "none",
-        ));
-        let type_name = TypeName::Bits {
-            type_id,
-            width: scalar_width(backing) as u8,
-        };
+        self.types.push(plain_type(type_id, &declaration.name, "integer", scalar_width(backing), Some(false), "none"));
+        let type_name = TypeName::Bits { type_id, width: scalar_width(backing) as u8 };
         self.bits.insert(
             declaration.name.clone(),
-            BitsLayout {
-                name: declaration.name.clone(),
-                type_name,
-                backing,
-                fields,
-            },
+            BitsLayout { name: declaration.name.clone(), type_name, backing, fields },
         );
         Ok(())
     }
@@ -98,10 +79,7 @@ impl TypeRegistry {
                     (9..=16, true) => TypeName::I16,
                     (17..=32, true) => TypeName::I32,
                     _ => {
-                        return Err(Diagnostic::new(
-                            span,
-                            format!("{name} is not a field width"),
-                        ));
+                        return Err(Diagnostic::new(span, format!("{name} is not a field width")));
                     }
                 };
                 return Ok((bits, read));
@@ -109,10 +87,7 @@ impl TypeRegistry {
             if let Some(layout) = self.enums.get(name) {
                 return match layout.element {
                     ElementType::Scalar(read) => Ok((layout.bits, read)),
-                    ElementType::Struct(_) => Err(Diagnostic::new(
-                        span,
-                        "an enum with payloads cannot be a bit field",
-                    )),
+                    ElementType::Struct(_) => Err(Diagnostic::new(span, "an enum with payloads cannot be a bit field")),
                 };
             }
             // A bits struct, like an enum, is as wide as it is declared.
@@ -125,14 +100,14 @@ impl TypeRegistry {
             ElementType::Scalar(read @ (TypeName::U8 | TypeName::I8)) => Ok((8, read)),
             ElementType::Scalar(read @ (TypeName::U16 | TypeName::I16)) => Ok((16, read)),
             ElementType::Scalar(read @ (TypeName::U32 | TypeName::I32)) => Ok((32, read)),
-            _ => Err(Diagnostic::new(
-                span,
-                "a bit field is bool, uN, iN, a sized enum, or a bits struct",
-            )),
+            _ => Err(Diagnostic::new(span, "a bit field is bool, uN, iN, a sized enum, or a bits struct")),
         }
     }
 
-    pub(super) fn bits_of(&self, type_name: TypeName) -> Option<&BitsLayout> {
+    pub(super) fn bits_of(
+        &self,
+        type_name: TypeName,
+    ) -> Option<&BitsLayout> {
         self.bits.values().find(|one| one.type_name == type_name)
     }
 
@@ -154,18 +129,21 @@ impl TypeRegistry {
 
 impl FunctionCompiler<'_> {
     /// The bits type `expression` has, when it has one.
-    pub(super) fn bits_type(&self, expression: &Expr) -> Option<TypeName> {
-        self.expression_type_hint(expression)
-            .filter(|one| matches!(one, TypeName::Bits { .. }))
+    pub(super) fn bits_type(
+        &self,
+        expression: &Expr,
+    ) -> Option<TypeName> {
+        self.expression_type_hint(expression).filter(|one| matches!(one, TypeName::Bits { .. }))
     }
 
     /// The type a read of `base.field` gives, when `base` is a bits value.
-    pub(super) fn bit_field_hint(&self, base: &Expr, field: &str) -> Option<TypeName> {
+    pub(super) fn bit_field_hint(
+        &self,
+        base: &Expr,
+        field: &str,
+    ) -> Option<TypeName> {
         let type_name = self.bits_type(base)?;
-        self.types
-            .bit_field(type_name, field, base.span())
-            .ok()
-            .map(|one| one.read)
+        self.types.bit_field(type_name, field, base.span()).ok().map(|one| one.read)
     }
 
     /// `Attr(fg=15, bg=1, blink=false)`: each field shifted into place.
@@ -181,17 +159,9 @@ impl FunctionCompiler<'_> {
             let (_, value, value_span) = fields
                 .iter()
                 .find(|(given, _, _)| given == field_name)
-                .ok_or_else(|| {
-                    Diagnostic::new(span, format!("{name} needs field {field_name:?}"))
-                })?;
+                .ok_or_else(|| Diagnostic::new(span, format!("{name} needs field {field_name:?}")))?;
             let value = self.coerced(value, field.read)?;
-            packed = self.inserted(
-                packed,
-                layout.backing,
-                *field,
-                required(value, *value_span)?,
-                *value_span,
-            )?;
+            packed = self.inserted(packed, layout.backing, *field, required(value, *value_span)?, *value_span)?;
         }
         Ok(TypedOperand {
             operand: Some(self.resized(packed, layout.backing, layout.type_name)),
@@ -221,16 +191,9 @@ impl FunctionCompiler<'_> {
         value: TypedOperand,
         span: Span,
     ) -> Result<TypedOperand, Diagnostic> {
-        let backing = self
-            .types
-            .bits_of(value.type_name)
-            .expect("a bits type")
-            .backing;
+        let backing = self.types.bits_of(value.type_name).expect("a bits type").backing;
         let operand = required(value.clone(), span)?;
-        Ok(TypedOperand {
-            operand: Some(self.resized(operand, value.type_name, backing)),
-            type_name: backing,
-        })
+        Ok(TypedOperand { operand: Some(self.resized(operand, value.type_name, backing)), type_name: backing })
     }
 
     /// `a.bg`.
@@ -266,12 +229,7 @@ impl FunctionCompiler<'_> {
         } else {
             let shifted = self.bit_shift("shr", packed, field.low, backing);
             let masked = if field.low + field.bits < backing_bits {
-                self.binary_op(
-                    "and",
-                    shifted,
-                    hir::Operand::Constant(type_id(backing), field.mask()),
-                    backing,
-                )
+                self.binary_op("and", shifted, hir::Operand::Constant(type_id(backing), field.mask()), backing)
             } else {
                 shifted
             };
@@ -279,10 +237,7 @@ impl FunctionCompiler<'_> {
             let resized = self.resized(masked, backing, integer);
             self.resized(resized, integer, field.read)
         };
-        TypedOperand {
-            operand: Some(value),
-            type_name: field.read,
-        }
+        TypedOperand { operand: Some(value), type_name: field.read }
     }
 
     /// `packed` with `field` replaced by `value`, wrapped to the field's width.
@@ -295,8 +250,7 @@ impl FunctionCompiler<'_> {
         span: Span,
     ) -> Result<hir::Operand, Diagnostic> {
         let integer = integer_of(field.read, backing);
-        if let (hir::Operand::Constant(_, constant), false) = (&value, field.read == TypeName::Bool)
-        {
+        if let (hir::Operand::Constant(_, constant), false) = (&value, field.read == TypeName::Bool) {
             let constant = *constant;
             let fits = if field.signed() {
                 (-(1_i64 << (field.bits - 1))..1_i64 << (field.bits - 1)).contains(&constant)
@@ -304,28 +258,15 @@ impl FunctionCompiler<'_> {
                 (0..=field.mask()).contains(&constant)
             };
             if !fits {
-                return Err(Diagnostic::new(
-                    span,
-                    format!("{constant} does not fit in {} bits", field.bits),
-                ));
+                return Err(Diagnostic::new(span, format!("{constant} does not fit in {} bits", field.bits)));
             }
         }
         let value = self.resized(value, field.read, integer);
         let value = self.resized(value, integer, backing);
-        let value = self.binary_op(
-            "and",
-            value,
-            hir::Operand::Constant(type_id(backing), field.mask()),
-            backing,
-        );
+        let value = self.binary_op("and", value, hir::Operand::Constant(type_id(backing), field.mask()), backing);
         let value = self.bit_shift("shl", value, field.low, backing);
         let kept = !(field.mask() << field.low) & ((1_i64 << (scalar_width(backing) * 8)) - 1);
-        let cleared = self.binary_op(
-            "and",
-            packed,
-            hir::Operand::Constant(type_id(backing), kept),
-            backing,
-        );
+        let cleared = self.binary_op("and", packed, hir::Operand::Constant(type_id(backing), kept), backing);
         Ok(self.binary_op("or", cleared, value, backing))
     }
 
@@ -339,12 +280,7 @@ impl FunctionCompiler<'_> {
         if count == 0 {
             return value;
         }
-        self.binary_op(
-            op,
-            value,
-            hir::Operand::Constant(type_id(type_name), i64::from(count)),
-            type_name,
-        )
+        self.binary_op(op, value, hir::Operand::Constant(type_id(type_name), i64::from(count)), type_name)
     }
 
     pub(super) fn binary_op(
@@ -382,11 +318,12 @@ impl FunctionCompiler<'_> {
 }
 
 /// The integer a read type's bits travel as: a bool or enum as unsigned.
-fn integer_of(read: TypeName, backing: TypeName) -> TypeName {
+fn integer_of(
+    read: TypeName,
+    backing: TypeName,
+) -> TypeName {
     match read {
-        TypeName::Bool | TypeName::Enum { width: 1, .. } | TypeName::Bits { width: 1, .. } => {
-            TypeName::U8
-        }
+        TypeName::Bool | TypeName::Enum { width: 1, .. } | TypeName::Bits { width: 1, .. } => TypeName::U8,
         TypeName::Enum { width: 2, .. } | TypeName::Bits { width: 2, .. } => TypeName::U16,
         TypeName::Bits { width: 4, .. } => TypeName::U32,
         TypeName::Enum { .. } | TypeName::Bits { .. } => backing,

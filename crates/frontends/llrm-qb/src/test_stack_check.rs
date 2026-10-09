@@ -10,7 +10,11 @@ const SOURCE: &str = "SUB s (x AS INTEGER)\nx = x + 1\nEND SUB\n";
 /// A local STRING needs the runtime's frame.
 const STRING: &str = "SUB s\nDIM t AS STRING\nt = \"x\"\nPRINT t\nEND SUB\n";
 
-fn program(runtime: &str, checked: bool, source: &str) -> Program {
+fn program(
+    runtime: &str,
+    checked: bool,
+    source: &str,
+) -> Program {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "stack.bas", source.as_bytes());
     let frontend = qb_driver::Frontend { checked_stack: checked, ..qb_driver::Frontend::new(runtime, runtime) };
@@ -28,7 +32,13 @@ fn the_limit_and_handler_come_from_the_runtime_description() {
     for runtime in RUNTIMES {
         let mut checked = program(runtime, true, SOURCE);
         assert_eq!(checked.stack_check, llrm_core::abi::runtime::semantics::stack(runtime), "{runtime}");
-        checked.stack_check = Some(StackCheck { limit: "FOO".into(), handler: "BAR".into(), far: true, red_zone: 0, entry: Some("BAZ".into()) });
+        checked.stack_check = Some(StackCheck {
+            limit: "FOO".into(),
+            handler: "BAR".into(),
+            far: true,
+            red_zone: 0,
+            entry: Some("BAZ".into()),
+        });
         let own = procedure(&checked);
         assert!(own.contains("cmp sp, word ptr FOO") && own.contains("call far ptr BAR"), "{runtime}: {own}");
         assert!(!own.contains("pendchk") && !own.contains("ERR_OSS"), "{runtime}: {own}");
@@ -36,7 +46,10 @@ fn the_limit_and_handler_come_from_the_runtime_description() {
         let mut framed = program(runtime, true, STRING);
         framed.stack_check = checked.stack_check.clone();
         let entered = procedure(&framed);
-        assert!(entered.contains("call far ptr BAZ") && !entered.contains("B$ENRA") && !entered.contains("cmp sp"), "{runtime}: {entered}");
+        assert!(
+            entered.contains("call far ptr BAZ") && !entered.contains("B$ENRA") && !entered.contains("cmp sp"),
+            "{runtime}: {entered}"
+        );
         // Whichever entry it is, it builds the frame: a shell `push bp` before it made the first
         // argument read as garbage (29281 for 5) under the checking B$ENRD, and a run past it.
         assert!(!entered.contains("push bp") && !entered.contains("push si"), "{runtime}: {entered}");
@@ -51,7 +64,10 @@ fn the_default_build_checks_nothing() {
             let plain = program(runtime, false, source);
             assert_eq!(plain.stack_check, None);
             let text = listing(&plain);
-            assert!(!text.contains("pendchk") && !text.contains("ERR_OSS") && !text.contains("B$ENRD"), "{runtime}: {text}");
+            assert!(
+                !text.contains("pendchk") && !text.contains("ERR_OSS") && !text.contains("B$ENRD"),
+                "{runtime}: {text}"
+            );
             let mir = llrm_core::hir::mir::emit(&plain, &llrm_x86_m16::layout());
             assert!(mir.iter().all(|one| !format!("{:?}", one.module.globals).contains("stackcheck")), "{runtime}");
         }

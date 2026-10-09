@@ -14,10 +14,12 @@ fn object() -> Vec<Rc<omf::Record>> {
 
 /// tests/fixtures/c/`name`.cgs compiled as the CLI compiles it.
 fn object_of(name: &str) -> Vec<Rc<omf::Record>> {
-    let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs"))).expect("reads");
+    let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs")))
+        .expect("reads");
     let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
     // Not inlined: `twice` is a symbol to read.
-    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
+    let pipeline =
+        llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(machine) };
     let built = super::compile::selected(&text, name, None, &options).expect("compiles");
     omf::parse(&objbuild::written(&built, &format!("{name}.c")).expect("writes")).expect("parses")
@@ -38,8 +40,9 @@ fn c_symbols_read_with_their_types() {
             "DATA gu: union mix {b +0 UNSIGNED CHAR, w +0 UNSIGNED SHORT}",
             "DATA gul: UNSIGNED LONG",
             "DATA st: SHORT",
-            // The arguments the caller pushed: each is in its cell above the frame for the whole function. `l` is a copy of one, so it
-            // is in that cell too, and the reader, which tells a parameter by the sign of the offset, says so.
+            // The arguments the caller pushed: each is in its cell above the frame for the whole function. `l` is a
+            // copy of one, so it is in that cell too, and the reader, which tells a parameter by the sign
+            // of the offset, says so.
             "PARAM f.a: SHORT",
             "PARAM f.b: NEAR * struct pt {x +0 SHORT, y +2 LONG}",
             "PARAM f.c: RCHAR",
@@ -58,8 +61,14 @@ fn c_symbols_read_with_their_types() {
 /// Only the main file's lines: twice's, debug.h's, are none of debug.c's.
 #[test]
 fn c_lines_are_the_main_files() {
-    let lines: Vec<u16> = object().iter().filter(|one| one.r#type == omf::LINNUM).flat_map(|one| omf::lines(one).1).map(|(line, _)| line).collect();
-    // A statement whose code the optimiser removed has no line (it had one while `-g` kept the stores); one it copied has two.
+    let lines: Vec<u16> = object()
+        .iter()
+        .filter(|one| one.r#type == omf::LINNUM)
+        .flat_map(|one| omf::lines(one).1)
+        .map(|(line, _)| line)
+        .collect();
+    // A statement whose code the optimiser removed has no line (it had one while `-g` kept the stores); one it copied
+    // has two.
     assert_eq!(lines, [15, 16, 15, 16, 17]);
 }
 
@@ -68,8 +77,15 @@ fn c_lines_are_the_main_files() {
 #[test]
 fn bit_field_members_round_trip_through_the_codec_and_others_are_unchanged() {
     let hir = |name: &str| {
-        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs"))).expect("reads");
-        super::translate::program(&super::hir::unit(&super::stream::parse(&text)).unwrap(), name, llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).unwrap()
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs")))
+            .expect("reads");
+        super::translate::program(
+            &super::hir::unit(&super::stream::parse(&text)).unwrap(),
+            name,
+            llrm_target::Target::calling(&llrm_x86_m16::M16),
+            &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap(),
+        )
+        .unwrap()
     };
     let plain = llrm_core::hir::codec::encode(&hir("debug"), None).unwrap();
     assert!(!plain.contains("bit_start") && plain.contains("\"members\""), "premise: debug members, none a bit field");
@@ -95,10 +111,25 @@ fn c_bit_fields_read_with_their_width_and_first_bit() {
 /// no plain member: the verifier refuses it.
 #[test]
 fn a_debug_member_with_half_a_bit_field_is_refused() {
-    let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/debugbf.cgs")).expect("reads");
-    let mut program = super::translate::program(&super::hir::unit(&super::stream::parse(&text)).unwrap(), "debugbf", llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).unwrap();
+    let text =
+        std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/debugbf.cgs")).expect("reads");
+    let mut program = super::translate::program(
+        &super::hir::unit(&super::stream::parse(&text)).unwrap(),
+        "debugbf",
+        llrm_target::Target::calling(&llrm_x86_m16::M16),
+        &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap(),
+    )
+    .unwrap();
     assert!(llrm_core::hir::verify::verify(&program).is_ok(), "premise: valid as raised");
-    let member = program.modules[0].debug.as_mut().unwrap().types.iter_mut().flat_map(|one| &mut one.members).find(|one| one.bit_width.is_some()).expect("premise: a bit field");
+    let member = program.modules[0]
+        .debug
+        .as_mut()
+        .unwrap()
+        .types
+        .iter_mut()
+        .flat_map(|one| &mut one.members)
+        .find(|one| one.bit_width.is_some())
+        .expect("premise: a bit field");
     member.bit_width = None;
     let why = llrm_core::hir::verify::verify(&program).unwrap_err();
     assert!(why.0.contains("start or width alone"), "{why:?}");
@@ -113,14 +144,24 @@ fn the_model_tells_parameters_from_locals_and_places_the_code() {
     use llrm_object::debug::Kind;
     let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/debug.cgs")).expect("reads");
     let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
-    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
+    let pipeline =
+        llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(machine) };
     let built = super::compile::selected(&text, "debug", None, &options).expect("compiles");
     let object = objbuild::built(&built, "debug.c", objbuild::CodeLayout::OneSegment).expect("builds");
     let info = object.debug.expect("-g's information rides on the object");
     let f = info.functions.iter().find(|one| one.name == "f").expect("f");
     let kinds: Vec<(&str, Kind)> = f.variables.iter().map(|one| (one.name.as_str(), one.kind)).collect();
-    assert_eq!(kinds, [("st", Kind::Local), ("a", Kind::Parameter), ("b", Kind::Parameter), ("c", Kind::Parameter), ("l", Kind::Local)]);
+    assert_eq!(
+        kinds,
+        [
+            ("st", Kind::Local),
+            ("a", Kind::Parameter),
+            ("b", Kind::Parameter),
+            ("c", Kind::Parameter),
+            ("l", Kind::Local)
+        ]
+    );
     assert_eq!(object.symbols[f.symbol].name, "_f");
     let range = f.ranges[0];
     assert!(range.length > 0 && range.offset + range.length <= object.sections[range.section].image.len());
@@ -137,7 +178,13 @@ fn the_model_tells_parameters_from_locals_and_places_the_code() {
 #[test]
 fn a_parameters_home_round_trips_through_the_codec_and_others_are_unchanged() {
     let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/debug.cgs")).expect("reads");
-    let mut program = super::translate::program(&super::hir::unit(&super::stream::parse(&text)).unwrap(), "debug", llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).unwrap();
+    let mut program = super::translate::program(
+        &super::hir::unit(&super::stream::parse(&text)).unwrap(),
+        "debug",
+        llrm_target::Target::calling(&llrm_x86_m16::M16),
+        &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap(),
+    )
+    .unwrap();
     let encoded = llrm_core::hir::codec::encode(&program, None).unwrap();
     assert!(encoded.contains("\"parameter\""), "premise: debug.c has parameters");
     assert_eq!(llrm_core::hir::codec::decode(&encoded).unwrap(), program);

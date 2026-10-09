@@ -35,8 +35,11 @@ fn test_a_port_call_is_narrowed_only_where_the_target_says_its_device_reaches_no
     let mut manager = PassManager::default();
     manager.add(Ports);
     manager.run_module(&mut module, Rc::new(llrm_x86_m16::Dos::default())).unwrap();
-    let narrowed: Vec<bool> =
-        printed(&module).lines().filter(|line| line.contains("call void")).map(|line| line.ends_with("memory(inaccessiblemem: readwrite)")).collect();
+    let narrowed: Vec<bool> = printed(&module)
+        .lines()
+        .filter(|line| line.contains("call void"))
+        .map(|line| line.ends_with("memory(inaccessiblemem: readwrite)"))
+        .collect();
     assert_eq!(narrowed, [true, false, true, false]);
 }
 
@@ -48,13 +51,18 @@ impl llrm_mir::passes::FunctionPass for AsksBounds {
         "asks-bounds"
     }
 
-    fn run(&mut self, unit: &mut llrm_mir::passes::Unit, analyses: &mut llrm_mir::passes::Analyses) -> llrm_mir::passes::PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
         analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function);
         llrm_mir::passes::PreservedAnalyses::all()
     }
 }
 
-/// A port no constant names made `ports` solve what the counted loops bound by hand, beside the manager's. It reads the manager's.
+/// A port no constant names made `ports` solve what the counted loops bound by hand, beside the manager's. It reads the
+/// manager's.
 #[test]
 fn test_ports_reads_the_managers_bounds_for_a_port_no_constant_names() {
     let mut module = parsed(

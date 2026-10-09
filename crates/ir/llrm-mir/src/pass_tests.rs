@@ -2,15 +2,19 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::context::Context;
-use crate::datalayout::DataLayout;
 use crate::context::GlobalId;
+use crate::datalayout::DataLayout;
 use crate::module::{Change, Function, GlobalKind, Module, Operand};
 use crate::opcode::Attribute;
 use crate::parse;
-use crate::passes::{Analyses, Analysis, Dominators, FunctionPass, ModuleAnalyses, ModuleAnalysis, ModulePass, PassManager, PreservedAnalyses, Unit};
+use crate::passes::{
+    Analyses, Analysis, Dominators, FunctionPass, ModuleAnalyses, ModuleAnalysis, ModulePass, PassManager,
+    PreservedAnalyses, Unit,
+};
 use crate::target::Neutral;
 
-const TEXT: &str = "define i16 @f(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br label %b\nb:\n  ret i16 0\n}\n";
+const TEXT: &str =
+    "define i16 @f(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br label %b\nb:\n  ret i16 0\n}\n";
 
 fn module() -> Module {
     parse::module(TEXT).unwrap_or_else(|error| panic!("{error}"))
@@ -25,12 +29,18 @@ impl FunctionPass for Retarget {
         "retarget"
     }
 
-    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
         let function = &mut *unit.function;
         let entry = function.entry().unwrap();
         let branch = function.terminator(entry).unwrap();
-        let [.., Operand::Block(_), Operand::Block(second)] = function.instruction(branch).operands[..] else { panic!("a conditional branch") };
+        let [.., Operand::Block(_), Operand::Block(second)] = function.instruction(branch).operands[..] else {
+            panic!("a conditional branch")
+        };
         let at = function.instruction(branch).operands.len() - 2;
         function.set_operand(branch, at, Operand::Block(second));
         self.0.clone()
@@ -47,7 +57,12 @@ struct Counted;
 impl Analysis for Counted {
     type Result = usize;
     const NAME: &'static str = "counted";
-    fn run(_: &Context, _: &DataLayout, function: &Function, _: &mut Analyses) -> usize {
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        function: &Function,
+        _: &mut Analyses,
+    ) -> usize {
         COMPUTED.set(COMPUTED.get() + 1);
         function.layout().len()
     }
@@ -60,7 +75,11 @@ impl FunctionPass for Look {
         "look"
     }
 
-    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         analyses.get::<Counted>(unit.context, unit.layout, unit.function);
         self.0.clone()
     }
@@ -73,7 +92,11 @@ impl FunctionPass for DropReturn {
         "drop-return"
     }
 
-    fn run(&mut self, unit: &mut Unit, _: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
         let last = *unit.function.layout().last().unwrap();
         let ret = unit.function.terminator(last).unwrap();
         unit.function.erase(ret).unwrap();
@@ -87,7 +110,10 @@ impl FunctionPass for DropReturn {
 fn a_pass_keeping_dominators_it_changed_is_caught() {
     let mut passes = PassManager { verify_invalidation: true, ..Default::default() };
     passes.add(Retarget(PreservedAnalyses::none().preserve::<Dominators>()));
-    assert_eq!(passes.run_module(&mut module(), Rc::new(Neutral)).err().as_deref(), Some("retarget claims to preserve dominators but changed them"));
+    assert_eq!(
+        passes.run_module(&mut module(), Rc::new(Neutral)).err().as_deref(),
+        Some("retarget claims to preserve dominators but changed them")
+    );
 
     let mut passes = PassManager { verify_invalidation: true, ..Default::default() };
     passes.add(Retarget(PreservedAnalyses::none()));
@@ -105,8 +131,8 @@ fn an_analysis_is_computed_once_until_a_pass_drops_it() {
     assert_eq!(COMPUTED.get(), 2);
 }
 
-/// A pass that says it dropped everything and edited nothing (1272 of 17,000 drops in QCport, `gvn` and `dead` the most)
-/// cost every analysis a fresh run, and the next to ask got no more than the one before.
+/// A pass that says it dropped everything and edited nothing (1272 of 17,000 drops in QCport, `gvn` and `dead` the
+/// most) cost every analysis a fresh run, and the next to ask got no more than the one before.
 #[test]
 fn a_pass_that_edited_nothing_drops_nothing_whatever_it_says() {
     COMPUTED.set(0);
@@ -130,12 +156,21 @@ impl Analysis for Steady {
     type Result = usize;
     const NAME: &'static str = "steady";
     const SKIPS: bool = true;
-    fn run(_: &Context, _: &DataLayout, function: &Function, _: &mut Analyses) -> usize {
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        function: &Function,
+        _: &mut Analyses,
+    ) -> usize {
         KEPT.set(KEPT.get() + 1);
         function.layout().len()
     }
 
-    fn unaffected(_: &[Change], _: &Context, _: &Function) -> bool {
+    fn unaffected(
+        _: &[Change],
+        _: &Context,
+        _: &Function,
+    ) -> bool {
         SAME.get()
     }
 }
@@ -147,14 +182,18 @@ impl FunctionPass for LookSteady {
         "look-steady"
     }
 
-    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         analyses.get::<Steady>(unit.context, unit.layout, unit.function);
         PreservedAnalyses::all()
     }
 }
 
-/// A result the analysis says a change left true stands, however the pass that made it describes it; one it does not is derived
-/// again.
+/// A result the analysis says a change left true stands, however the pass that made it describes it; one it does not is
+/// derived again.
 #[test]
 fn a_result_a_change_leaves_true_stands_past_the_pass_that_made_it() {
     for (same, computed) in [(true, 1), (false, 2)] {
@@ -219,8 +258,19 @@ struct ReadsOnly;
 impl Analysis for ReadsOnly {
     type Result = bool;
     const NAME: &'static str = "reads-only";
-    fn run(_: &Context, _: &DataLayout, _: &Function, analyses: &mut Analyses) -> bool {
-        let g = analyses.outer().globals.iter().find(|one| one.name.as_deref() == Some("g")).and_then(|one| one.function()).expect("@g");
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        _: &Function,
+        analyses: &mut Analyses,
+    ) -> bool {
+        let g = analyses
+            .outer()
+            .globals
+            .iter()
+            .find(|one| one.name.as_deref() == Some("g"))
+            .and_then(|one| one.function())
+            .expect("@g");
         g.attrs.contains(&Attribute::Flag("readonly".to_owned()))
     }
 }
@@ -233,7 +283,11 @@ impl FunctionPass for Ask {
         "ask"
     }
 
-    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         let answer = *analyses.get::<ReadsOnly>(unit.context, unit.layout, unit.function);
         SEEN.with_borrow_mut(|seen| seen.push(answer));
         PreservedAnalyses::all()
@@ -248,7 +302,11 @@ impl ModulePass for MarkReadonly {
         "mark-readonly"
     }
 
-    fn run(&mut self, module: &mut Module, _: &mut ModuleAnalyses) -> Vec<GlobalId> {
+    fn run(
+        &mut self,
+        module: &mut Module,
+        _: &mut ModuleAnalyses,
+    ) -> Vec<GlobalId> {
         let g = module.named("g").unwrap();
         let GlobalKind::Function(function) = &mut module.globals[g.0 as usize].kind else { panic!("a function") };
         function.attrs.push(Attribute::Flag("readonly".to_owned()));
@@ -282,7 +340,10 @@ struct Bodies;
 impl ModuleAnalysis for Bodies {
     type Result = usize;
     const NAME: &'static str = "bodies";
-    fn run(module: &Module, _: &mut ModuleAnalyses) -> usize {
+    fn run(
+        module: &Module,
+        _: &mut ModuleAnalyses,
+    ) -> usize {
         SUMMED.set(SUMMED.get() + 1);
         module.functions().filter(|(_, _, function)| !function.is_declaration()).count()
     }
@@ -296,7 +357,11 @@ impl FunctionPass for Counts {
         "counts"
     }
 
-    fn run(&mut self, _: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        _: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         assert_eq!(analyses.outer().cached::<Bodies>().as_deref(), Some(&1));
         self.0.clone()
     }
@@ -325,7 +390,11 @@ fn a_pass_keeping_a_module_analysis_it_changed_is_caught() {
             "empty"
         }
 
-        fn run(&mut self, unit: &mut Unit, _: &mut Analyses) -> PreservedAnalyses {
+        fn run(
+            &mut self,
+            unit: &mut Unit,
+            _: &mut Analyses,
+        ) -> PreservedAnalyses {
             *unit.function = unit.function.declaration();
             PreservedAnalyses::all()
         }
@@ -334,7 +403,10 @@ fn a_pass_keeping_a_module_analysis_it_changed_is_caught() {
     let mut passes = PassManager { verify_invalidation: true, ..Default::default() };
     passes.require::<Bodies>();
     passes.add(Empty);
-    assert_eq!(passes.run_module(&mut module(), Rc::new(Neutral)).err().as_deref(), Some("empty claims to preserve bodies but changed them"));
+    assert_eq!(
+        passes.run_module(&mut module(), Rc::new(Neutral)).err().as_deref(),
+        Some("empty claims to preserve bodies but changed them")
+    );
 }
 
 thread_local! {
@@ -349,7 +421,11 @@ impl FunctionPass for Probe {
         "probe"
     }
 
-    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         HELD.with_borrow_mut(|held| held.push(analyses.cached::<Dominators>().is_some()));
         analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
         PreservedAnalyses::all()
@@ -371,31 +447,50 @@ fn a_change_to_the_module_keeps_what_reads_only_the_function() {
     assert_eq!(HELD.take(), [false, true]);
 }
 
-/// Every edit dropped the module analyses and each was worked out again from every global (66 times a compile of `callers-64`,
-/// 1 ms apiece in `call-registers` alone): while the declarations are those it worked from, the result is the same result.
+/// Every edit dropped the module analyses and each was worked out again from every global (66 times a compile of
+/// `callers-64`, 1 ms apiece in `call-registers` alone): while the declarations are those it worked from, the result is
+/// the same result.
 #[test]
 fn module_analyses_of_the_declarations_stand_until_a_declaration_changes() {
     use crate::passes::{CallRegisters, CalleeEffects, Declarations, GlobalSizes, TypeAncestry};
     let mut module = module();
     let program = crate::program::ProgramProxy::of(&module, Rc::new(Neutral));
     let mut analyses = ModuleAnalyses::new(program);
-    let first = (analyses.get::<Declarations>(&module), analyses.get::<CalleeEffects>(&module), analyses.get::<CallRegisters>(&module), analyses.get::<GlobalSizes>(&module), analyses.get::<TypeAncestry>(&module));
+    let first = (
+        analyses.get::<Declarations>(&module),
+        analyses.get::<CalleeEffects>(&module),
+        analyses.get::<CallRegisters>(&module),
+        analyses.get::<GlobalSizes>(&module),
+        analyses.get::<TypeAncestry>(&module),
+    );
     // A body edited: no declaration moved.
     let ran = crate::passes::module_runs();
     let (_, function) = module.function_mut("f").unwrap();
     let branch = function.terminator(function.entry().unwrap()).unwrap();
-    function.set_operand(branch, function.instruction(branch).operands.len() - 2, Operand::Block(crate::module::BlockId(2)));
+    function.set_operand(
+        branch,
+        function.instruction(branch).operands.len() - 2,
+        Operand::Block(crate::module::BlockId(2)),
+    );
     analyses.invalidate(&PreservedAnalyses::none());
     assert!(Rc::ptr_eq(&first.0, &analyses.get::<Declarations>(&module)), "declarations");
     assert!(Rc::ptr_eq(&first.1, &analyses.get::<CalleeEffects>(&module)), "callee effects");
     assert!(Rc::ptr_eq(&first.2, &analyses.get::<CallRegisters>(&module)), "call registers");
     assert!(Rc::ptr_eq(&first.3, &analyses.get::<GlobalSizes>(&module)), "global sizes");
     assert!(Rc::ptr_eq(&first.4, &analyses.get::<TypeAncestry>(&module)), "type ancestry");
-    assert_eq!(crate::passes::module_runs(), ran, "{} module analyses were worked out again for an edit to a body", crate::passes::module_runs() - ran);
+    assert_eq!(
+        crate::passes::module_runs(),
+        ran,
+        "{} module analyses were worked out again for an edit to a body",
+        crate::passes::module_runs() - ran
+    );
     // A declaration moved: an attribute on the function.
     let (_, function) = module.function_mut("f").unwrap();
     function.attrs.push(Attribute::Flag("readnone".to_owned()));
     analyses.invalidate(&PreservedAnalyses::none());
     assert!(!Rc::ptr_eq(&first.0, &analyses.get::<Declarations>(&module)), "declarations did not follow the attribute");
-    assert!(!Rc::ptr_eq(&first.1, &analyses.get::<CalleeEffects>(&module)), "callee effects did not follow the attribute");
+    assert!(
+        !Rc::ptr_eq(&first.1, &analyses.get::<CalleeEffects>(&module)),
+        "callee effects did not follow the attribute"
+    );
 }

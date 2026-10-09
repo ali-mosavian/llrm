@@ -9,7 +9,8 @@ use crate::support::hash::IndexMap;
 
 fn block_of(hexcode: &str) -> Block {
     let digits: String = hexcode.chars().filter(|c| !c.is_whitespace()).collect();
-    let code: Vec<u8> = (0..digits.len()).step_by(2).map(|i| u8::from_str_radix(&digits[i..i + 2], 16).unwrap()).collect();
+    let code: Vec<u8> =
+        (0..digits.len()).step_by(2).map(|i| u8::from_str_radix(&digits[i..i + 2], 16).unwrap()).collect();
     let (insns, stuck) = run(&code, 0, code.len());
     assert!(stuck.is_none(), "the test's own bytes must decode cleanly");
     Block { at: 0, end: code.len(), insns, ends: Ends::FallsThrough, succ: Vec::new() }

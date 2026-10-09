@@ -37,8 +37,18 @@ const NAMED: &[(&str, &str)] = &[
 /// The files git tracks under `directories` of `root`: what the repository holds, not what a build,
 /// a virtualenv or an editor left beside it (a `tools/.venv` held every key's name and let a key
 /// nobody reads pass).
-fn tracked(root: &Path, directories: &[&str]) -> Vec<PathBuf> {
-    let listed = std::process::Command::new("git").arg("-C").arg(root).arg("ls-files").arg("--").args(directories).output().expect("git runs");
+fn tracked(
+    root: &Path,
+    directories: &[&str],
+) -> Vec<PathBuf> {
+    let listed = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("ls-files")
+        .arg("--")
+        .args(directories)
+        .output()
+        .expect("git runs");
     assert!(listed.status.success(), "git ls-files: {}", String::from_utf8_lossy(&listed.stderr));
     String::from_utf8_lossy(&listed.stdout).lines().map(|line| root.join(line)).collect()
 }
@@ -48,8 +58,13 @@ fn descriptions() -> Vec<PathBuf> {
         .into_iter()
         .filter(|path| {
             let name = path.file_name().unwrap().to_string_lossy();
-            let in_src = path.components().any(|one| one.as_os_str() == "src" || one.as_os_str() == "runtime") || name == "platform.toml";
-            in_src && (matches!(path.extension().and_then(|one| one.to_str()), Some("toml" | "regs" | "times" | "instr" | "isel" | "peep" | "legal")) || name == "opcosts.txt")
+            let in_src = path.components().any(|one| one.as_os_str() == "src" || one.as_os_str() == "runtime")
+                || name == "platform.toml";
+            in_src
+                && (matches!(
+                    path.extension().and_then(|one| one.to_str()),
+                    Some("toml" | "regs" | "times" | "instr" | "isel" | "peep" | "legal")
+                ) || name == "opcosts.txt")
         })
         .collect();
     found.sort();
@@ -74,7 +89,11 @@ fn readers_in(root: &Path) -> String {
             // The tools read the link recipe: `object.toml`'s `[link]`.
             text += &fs::read_to_string(&path).unwrap_or_default();
             text.push('\n');
-        } else if name.ends_with(".rs") && !name.ends_with("_tests.rs") && name != "tests.rs" && !name.starts_with("test_") {
+        } else if name.ends_with(".rs")
+            && !name.ends_with("_tests.rs")
+            && name != "tests.rs"
+            && !name.starts_with("test_")
+        {
             let source = fs::read_to_string(&path).unwrap_or_default();
             // Not the tests of a module (`#[cfg(test)] mod tests`, wherever its file is): they would read anything.
             let tests = regex::Regex::new(r"\n#\[cfg\(test\)\]\n(?:#\[[^\n]*\n)*(?:pub )?mod \w+ \{").unwrap();
@@ -85,7 +104,11 @@ fn readers_in(root: &Path) -> String {
     text
 }
 
-fn keys(prefix: &str, value: &toml::Value, into: &mut Vec<(String, String)>) {
+fn keys(
+    prefix: &str,
+    value: &toml::Value,
+    into: &mut Vec<(String, String)>,
+) {
     match value {
         toml::Value::Table(table) => {
             for (key, one) in table {
@@ -105,7 +128,10 @@ fn keys(prefix: &str, value: &toml::Value, into: &mut Vec<(String, String)>) {
     }
 }
 
-fn matches(pattern: &str, path: &str) -> bool {
+fn matches(
+    pattern: &str,
+    path: &str,
+) -> bool {
     let (pattern, path): (Vec<&str>, Vec<&str>) = (pattern.split('.').collect(), path.split('.').collect());
     pattern.len() == path.len() && pattern.iter().zip(&path).all(|(one, other)| *one == "*" || one == other)
 }
@@ -148,20 +174,47 @@ fn every_toml_key_has_a_reader() {
             let called = regex::Regex::new(&format!(r#"(?:\w\(|,\s*)"{}"\s*[,)]"#, regex::escape(&key))).unwrap();
             // `assembler_defines = ["stack_base:STACK_BYTES"]`: a key the description itself names for the assembler.
             let defined = text.contains(&format!("\"{key}:"));
-            let read = [format!("get(\"{key}\")"), format!("[\"{key}\"]"), format!("remove(\"{key}\")"), format!("contains_key(\"{key}\")"), format!("\"{key}\" =>"), format!("\"{key}\","), format!("\"{key}\"]")];
-            if !named && !defined && !called.is_match(&sources) && !read.iter().any(|one| sources.contains(one.as_str())) {
+            let read = [
+                format!("get(\"{key}\")"),
+                format!("[\"{key}\"]"),
+                format!("remove(\"{key}\")"),
+                format!("contains_key(\"{key}\")"),
+                format!("\"{key}\" =>"),
+                format!("\"{key}\","),
+                format!("\"{key}\"]"),
+            ];
+            if !named
+                && !defined
+                && !called.is_match(&sources)
+                && !read.iter().any(|one| sources.contains(one.as_str()))
+            {
                 unread.insert(format!("{}: {at}", path.strip_prefix(ROOT).unwrap().display()));
             }
         }
     }
-    assert!(unread.is_empty(), "no reader names these keys; read them or delete them:\n{}", unread.into_iter().collect::<Vec<_>>().join("\n"));
+    assert!(
+        unread.is_empty(),
+        "no reader names these keys; read them or delete them:\n{}",
+        unread.into_iter().collect::<Vec<_>>().join("\n")
+    );
 }
 
 /// The instrument: the walk finds the descriptions, and a key nobody names is reported.
 #[test]
 fn the_search_finds_descriptions_and_misses_a_key_nobody_reads() {
-    let names: Vec<String> = descriptions().iter().map(|one| one.file_name().unwrap().to_string_lossy().into_owned()).collect();
-    for expected in ["calling.toml", "datalayout.toml", "registers.regs", "timings.times", "x86.instr", "patterns.isel", "peephole.peep", "opcosts.txt", "object.toml"] {
+    let names: Vec<String> =
+        descriptions().iter().map(|one| one.file_name().unwrap().to_string_lossy().into_owned()).collect();
+    for expected in [
+        "calling.toml",
+        "datalayout.toml",
+        "registers.regs",
+        "timings.times",
+        "x86.instr",
+        "patterns.isel",
+        "peephole.peep",
+        "opcosts.txt",
+        "object.toml",
+    ] {
         assert!(names.iter().any(|one| one == expected), "{expected} not found among {names:?}");
     }
     assert!(!readers().contains("\"a_key_no_reader_names_zz\""));
@@ -176,7 +229,9 @@ fn an_untracked_file_is_not_a_reader() {
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("tools/.venv/lib")).unwrap();
     fs::create_dir_all(root.join("crates/target/llrm-x/src")).unwrap();
-    let git = |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(&root).args(args).output().unwrap().status.success());
+    let git = |args: &[&str]| {
+        assert!(std::process::Command::new("git").arg("-C").arg(&root).args(args).output().unwrap().status.success())
+    };
     git(&["init", "-q"]);
     fs::write(root.join("tools/reads.py"), "x = table[\"tracked_key\"]\n").unwrap();
     fs::write(root.join("tools/.venv/lib/site.py"), "y = \"unread_key\"\n").unwrap();

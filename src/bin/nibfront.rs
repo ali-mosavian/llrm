@@ -19,8 +19,7 @@ fn main() -> ExitCode {
     let mut arguments = rest.into_iter();
     while let Some(argument) = arguments.next() {
         if argument == "--declare" {
-            let Some(language) = arguments.next().as_deref().and_then(llrm_nib::declarations::Language::named)
-            else {
+            let Some(language) = arguments.next().as_deref().and_then(llrm_nib::declarations::Language::named) else {
                 eprintln!("nibfront: --declare takes h, bi or inc");
                 return ExitCode::from(2);
             };
@@ -56,11 +55,7 @@ fn main() -> ExitCode {
         }
     };
     if tokens_only || syntax_only {
-        let text = if tokens_only {
-            llrm_nib::tokens_text(&source)
-        } else {
-            llrm_nib::syntax_text(&source)
-        };
+        let text = if tokens_only { llrm_nib::tokens_text(&source) } else { llrm_nib::syntax_text(&source) };
         return match text {
             Ok(text) => {
                 print!("{text}");
@@ -87,7 +82,10 @@ fn main() -> ExitCode {
     }
 }
 
-fn report(path: &str, error: llrm_nib::Diagnostic) -> ExitCode {
+fn report(
+    path: &str,
+    error: llrm_nib::Diagnostic,
+) -> ExitCode {
     eprintln!("{path}:{error}");
     ExitCode::FAILURE
 }

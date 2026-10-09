@@ -38,7 +38,10 @@ impl Model {
         result: &Loc,
         fresh: &mut dyn FnMut() -> u32,
     ) -> Result<Vec<ir::Semantics>, String> {
-        let wide = |arg: &Loc| matches!(arg, Loc::Held(ir::Held { width: 4, .. }) | Loc::Imm(ir::Imm { width: 4, .. }));
+        let wide = |arg: &Loc| matches!(
+            arg,
+            Loc::Held(ir::Held { width: 4, .. }) | Loc::Imm(ir::Imm { width: 4, .. })
+        );
         if !wide(pointer) || !wide(displacement) || !matches!(result, Loc::Held(ir::Held { width: 4, .. })) {
             return Err("pointer offset requires a pointer, displacement and result at width 4".into());
         }
@@ -68,7 +71,10 @@ impl Model {
     }
 }
 
-fn imm(value: i64, width: u32) -> Loc {
+fn imm(
+    value: i64,
+    width: u32,
+) -> Loc {
     Loc::Imm(ir::Imm { value, width, address: None })
 }
 
@@ -92,10 +98,9 @@ fn binary(
 
 #[cfg(test)]
 pub mod tests {
-    use crate::support::hash::HashMap;
-
     use super::*;
     use crate::objectfile::module::{Addr, Space};
+    use crate::support::hash::HashMap;
 
     fn held(value: u32) -> Loc {
         Loc::Held(ir::Held { value, width: 4 })
@@ -114,7 +119,12 @@ pub mod tests {
     }
 
     /// The test file's `execute`: interpret the parts over 32-bit values.
-    pub fn execute(parts: &[ir::Semantics], pointer: i64, offset: i64, memory: &HashMap<Addr, i64>) -> i64 {
+    pub fn execute(
+        parts: &[ir::Semantics],
+        pointer: i64,
+        offset: i64,
+        memory: &HashMap<Addr, i64>,
+    ) -> i64 {
         let mut values: HashMap<u32, i64> = HashMap::from_iter([(1, pointer), (2, offset)]);
         let dest = |part: &ir::Semantics| match &part.dests[0] {
             Loc::Held(one) => one.value,
@@ -160,9 +170,7 @@ pub mod tests {
         for shift in 0..16 {
             let parts = parts(&Model::new(HugeShift::Fixed(shift)).unwrap());
             for pointer in [0, 0xffff, 0x1234_fffe, 0xffff_0000, 0xffff_ffff_i64] {
-                for displacement in
-                    [0, 1, 2, 65535, 65536, 0x7fff_ffff, 0x8000_0000, 0xffff_fffe, 0xffff_ffff_i64]
-                {
+                for displacement in [0, 1, 2, 65535, 65536, 0x7fff_ffff, 0x8000_0000, 0xffff_fffe, 0xffff_ffff_i64] {
                     let sum = (pointer & 0xffff) + displacement;
                     let (pages, offset) = (sum / 65536, sum % 65536);
                     let selector = ((pointer >> 16) + pages * (1 << shift)) & 0xffff;

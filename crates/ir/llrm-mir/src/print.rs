@@ -1,13 +1,14 @@
 //! Writes MIR as LLVM's assembly language, following LLVM's `AsmWriter`
 //! except that function attributes are written inline, not as `#N` groups.
 
-use crate::hash::HashMap;
 use std::fmt::Write;
 
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, signed};
+use crate::hash::HashMap;
 use crate::lexer::is_name;
 use crate::module::{
-    BlockId, DebugWhat, Function, GlobalKind, GlobalValue, InstId, LINKAGE, Linkage, MetadataOperand, Module, Operand, UnnamedAddr, ValueId,
+    BlockId, DebugWhat, Function, GlobalKind, GlobalValue, InstId, LINKAGE, Linkage, MetadataOperand, Module, Operand,
+    UnnamedAddr, ValueId,
 };
 use crate::opcode::{Attribute, CAST, Clause, FLOAT_PREDICATE, INT_PREDICATE, Opcode, Tail, spelling};
 use crate::types::{FloatKind, Type, TypeId, struct_text};
@@ -19,16 +20,32 @@ pub fn module(module: &Module) -> String {
         let _ = writeln!(out, "target datalayout = {}", string(layout.as_bytes()));
     }
     let types = &module.context.types;
-    section(&mut out, types.named.iter().map(|(name, body)| {
-        let text = match body {
-            None => "opaque".to_owned(),
-            Some(body) => struct_text(&body.fields.iter().map(|&one| types.display(one)).collect::<Vec<_>>().join(", "), body.packed),
-        };
-        format!("%{} = type {text}\n", quoted(name))
-    }));
     section(
         &mut out,
-        module.globals.iter().enumerate().filter(|(_, one)| matches!(one.kind, GlobalKind::Variable(_))).map(|(at, one)| printer.variable(at, one)),
+        types
+            .named
+            .iter()
+            .map(
+                |(name, body)| {
+                    let text = match body {
+                        None => "opaque".to_owned(),
+                        Some(body) => struct_text(
+                            &body.fields.iter().map(|&one| types.display(one)).collect::<Vec<_>>().join(", "),
+                            body.packed,
+                        ),
+                    };
+                    format!("%{} = type {text}\n", quoted(name))
+                },
+            ),
+    );
+    section(
+        &mut out,
+        module
+            .globals
+            .iter()
+            .enumerate()
+            .filter(|(_, one)| matches!(one.kind, GlobalKind::Variable(_)))
+            .map(|(at, one)| printer.variable(at, one)),
     );
     for (at, global) in module.globals.iter().enumerate() {
         if let GlobalKind::Function(function) = &global.kind {
@@ -40,16 +57,27 @@ pub fn module(module: &Module) -> String {
     }
     section(
         &mut out,
-        module.named_metadata.iter().map(|(name, nodes)| {
-            let list = nodes.iter().map(|one| format!("!{}", one.0)).collect::<Vec<_>>().join(", ");
-            format!("!{name} = !{{{list}}}\n")
-        }),
+        module
+            .named_metadata
+            .iter()
+            .map(
+                |(name, nodes)| {
+                    let list = nodes.iter().map(|one| format!("!{}", one.0)).collect::<Vec<_>>().join(", ");
+                    format!("!{name} = !{{{list}}}\n")
+                },
+            ),
     );
     let nodes: Vec<String> = module
         .metadata
         .iter()
         .enumerate()
-        .map(|(at, node)| format!("!{at} = {}!{{{}}}\n", if node.distinct { "distinct " } else { "" }, printer.metadata_operands(&node.operands)))
+        .map(|(at, node)| {
+            format!(
+                "!{at} = {}!{{{}}}\n",
+                if node.distinct { "distinct " } else { "" },
+                printer.metadata_operands(&node.operands)
+            )
+        })
         .collect();
     section(&mut out, nodes.into_iter());
     out
@@ -57,12 +85,18 @@ pub fn module(module: &Module) -> String {
 
 /// `function`'s blocks, naming globals by index: two bodies print alike
 /// when they are the same up to value and block numbering.
-pub fn body(context: &Context, function: &Function) -> String {
+pub fn body(
+    context: &Context,
+    function: &Function,
+) -> String {
     Printer { context, globals: Vec::new() }.blocks(function, &Slots::new(function))
 }
 
 /// Lines under a blank line, when there are any.
-fn section(out: &mut String, lines: impl Iterator<Item = String>) {
+fn section(
+    out: &mut String,
+    lines: impl Iterator<Item = String>,
+) {
     let lines: Vec<String> = lines.collect();
     if !lines.is_empty() {
         if !out.is_empty() {
@@ -112,7 +146,10 @@ fn global_names(module: &Module) -> Vec<String> {
 
 /// LLVM's spelling of a floating constant: `%e` when that reads back exactly,
 /// else the hex of its bits as a double.
-fn float(kind: FloatKind, bits: u64) -> String {
+fn float(
+    kind: FloatKind,
+    bits: u64,
+) -> String {
     let value = match kind {
         FloatKind::Double | FloatKind::X86Fp80 => f64::from_bits(bits),
         FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
@@ -129,7 +166,10 @@ fn float(kind: FloatKind, bits: u64) -> String {
     format!("0x{:016X}", value.to_bits())
 }
 
-fn attributes(context: &Context, attrs: &[Attribute]) -> String {
+fn attributes(
+    context: &Context,
+    attrs: &[Attribute],
+) -> String {
     attrs
         .iter()
         .map(|one| match one {
@@ -210,7 +250,10 @@ impl Printer<'_> {
         &self.context.types
     }
 
-    fn ty(&self, ty: TypeId) -> String {
+    fn ty(
+        &self,
+        ty: TypeId,
+    ) -> String {
         self.types().display(ty)
     }
 
@@ -239,13 +282,18 @@ impl Printer<'_> {
         (space != 0).then(|| format!("addrspace({space})"))
     }
 
-    fn variable(&self, at: usize, global: &GlobalValue) -> String {
+    fn variable(
+        &self,
+        at: usize,
+        global: &GlobalValue,
+    ) -> String {
         let GlobalKind::Variable(variable) = &global.kind else { unreachable!("a variable") };
         let linkage = match (global.linkage, variable.initializer) {
             (Linkage::External, None) => Some("external"),
             (linkage, _) => Self::linkage(linkage),
         };
-        let mut words: Vec<String> = [linkage, Self::unnamed_addr(global.unnamed_addr)].into_iter().flatten().map(str::to_owned).collect();
+        let mut words: Vec<String> =
+            [linkage, Self::unnamed_addr(global.unnamed_addr)].into_iter().flatten().map(str::to_owned).collect();
         words.extend(Self::address_space(global.address_space));
         words.push((if variable.constant { "constant" } else { "global" }).to_owned());
         words.push(self.ty(variable.ty));
@@ -254,7 +302,12 @@ impl Printer<'_> {
         format!("{} = {}{align}\n", self.globals[at], words.join(" "))
     }
 
-    fn function(&self, at: usize, global: &GlobalValue, function: &Function) -> String {
+    fn function(
+        &self,
+        at: usize,
+        global: &GlobalValue,
+        function: &Function,
+    ) -> String {
         let (returns, parameter_types, variadic) = self.signature(function.ty);
         let slots = Slots::new(function);
         let declaration = function.is_declaration();
@@ -263,7 +316,11 @@ impl Printer<'_> {
             .enumerate()
             .map(|(index, &ty)| {
                 let attrs = spaced(attributes(&self.context, &function.parameter_attrs[index]));
-                let name = if declaration { String::new() } else { format!(" %{}", slots.values[&function.parameters[index]]) };
+                let name = if declaration {
+                    String::new()
+                } else {
+                    format!(" %{}", slots.values[&function.parameters[index]])
+                };
                 format!("{}{attrs}{name}", self.ty(ty))
             })
             .collect();
@@ -299,7 +356,11 @@ impl Printer<'_> {
         out
     }
 
-    fn blocks(&self, function: &Function, slots: &Slots) -> String {
+    fn blocks(
+        &self,
+        function: &Function,
+        slots: &Slots,
+    ) -> String {
         let mut out = String::new();
         for (index, &block) in function.layout.iter().enumerate() {
             if index > 0 {
@@ -311,10 +372,21 @@ impl Printer<'_> {
             for &inst in &function.block(block).instructions {
                 for record in function.debug_records().iter().filter(|one| one.before == inst) {
                     let _ = match record.what {
-                        DebugWhat::Declare(at) => writeln!(out, "  #dbg_declare({}, !{})", self.typed(function, slots, at), record.variable.0),
-                        DebugWhat::Value(at) => writeln!(out, "  #dbg_value({}, !{})", self.typed(function, slots, at), record.variable.0),
-                        DebugWhat::Piece { value, offset, bytes } => writeln!(out, "  #dbg_piece({}, !{}, {offset}, {bytes})", self.typed(function, slots, value), record.variable.0),
-                        DebugWhat::GonePiece { offset, bytes } => writeln!(out, "  #dbg_gonepiece(!{}, {offset}, {bytes})", record.variable.0),
+                        DebugWhat::Declare(at) => {
+                            writeln!(out, "  #dbg_declare({}, !{})", self.typed(function, slots, at), record.variable.0)
+                        }
+                        DebugWhat::Value(at) => {
+                            writeln!(out, "  #dbg_value({}, !{})", self.typed(function, slots, at), record.variable.0)
+                        }
+                        DebugWhat::Piece { value, offset, bytes } => writeln!(
+                            out,
+                            "  #dbg_piece({}, !{}, {offset}, {bytes})",
+                            self.typed(function, slots, value),
+                            record.variable.0
+                        ),
+                        DebugWhat::GonePiece { offset, bytes } => {
+                            writeln!(out, "  #dbg_gonepiece(!{}, {offset}, {bytes})", record.variable.0)
+                        }
                         DebugWhat::Gone => writeln!(out, "  #dbg_gone(!{})", record.variable.0),
                     };
                 }
@@ -326,14 +398,21 @@ impl Printer<'_> {
         out
     }
 
-    fn signature(&self, function_type: TypeId) -> (TypeId, &[TypeId], bool) {
+    fn signature(
+        &self,
+        function_type: TypeId,
+    ) -> (TypeId, &[TypeId], bool) {
         match self.context.types.get(function_type) {
             Type::Function { returns, parameters, variadic } => (*returns, parameters, *variadic),
             other => panic!("{other:?} is not a function type"),
         }
     }
 
-    fn operand(&self, slots: &Slots, operand: Operand) -> String {
+    fn operand(
+        &self,
+        slots: &Slots,
+        operand: Operand,
+    ) -> String {
         match operand {
             Operand::Value(id) => format!("%{}", slots.values[&id]),
             Operand::Constant(id) => self.constant(id),
@@ -341,14 +420,28 @@ impl Printer<'_> {
         }
     }
 
-    fn typed(&self, function: &Function, slots: &Slots, operand: Operand) -> String {
+    fn typed(
+        &self,
+        function: &Function,
+        slots: &Slots,
+        operand: Operand,
+    ) -> String {
         match operand {
             Operand::Block(_) => format!("label {}", self.operand(slots, operand)),
-            _ => format!("{} {}", self.ty(function.operand_type(&self.context, operand).expect("a value")), self.operand(slots, operand)),
+            _ => format!(
+                "{} {}",
+                self.ty(function.operand_type(&self.context, operand).expect("a value")),
+                self.operand(slots, operand)
+            ),
         }
     }
 
-    fn instruction(&self, function: &Function, slots: &Slots, id: InstId) -> String {
+    fn instruction(
+        &self,
+        function: &Function,
+        slots: &Slots,
+        id: InstId,
+    ) -> String {
         let inst = function.instruction(id);
         let ops = &inst.operands;
         let typed = |at: usize| self.typed(function, slots, ops[at]);
@@ -360,18 +453,34 @@ impl Printer<'_> {
             Opcode::Br if ops.len() == 1 => format!("br {}", typed(0)),
             Opcode::Br => format!("br {}, {}, {}", typed(0), typed(1), typed(2)),
             Opcode::Switch => {
-                let cases: String = ops[2..].chunks(2).map(|pair| format!("    {}, {}\n", self.typed(function, slots, pair[0]), self.typed(function, slots, pair[1]))).collect();
+                let cases: String = ops[2..]
+                    .chunks(2)
+                    .map(|pair| {
+                        format!(
+                            "    {}, {}\n",
+                            self.typed(function, slots, pair[0]),
+                            self.typed(function, slots, pair[1])
+                        )
+                    })
+                    .collect();
                 format!("switch {}, {} [\n{cases}  ]", typed(0), typed(1))
             }
             Opcode::Unreachable => "unreachable".to_owned(),
             Opcode::FNeg | Opcode::Freeze => format!("{}{flags} {}", inst.opcode.mnemonic(), typed(0)),
             Opcode::Binary(_) => format!("{}{flags} {}, {}", inst.opcode.mnemonic(), typed(0), bare(1)),
             Opcode::Cast(_) => format!("{}{flags} {} to {}", inst.opcode.mnemonic(), typed(0), self.ty(inst.ty)),
-            Opcode::ICmp(predicate) => format!("icmp{flags} {} {}, {}", spelling(&INT_PREDICATE, *predicate), typed(0), bare(1)),
-            Opcode::FCmp(predicate) => format!("fcmp{flags} {} {}, {}", spelling(&FLOAT_PREDICATE, *predicate), typed(0), bare(1)),
+            Opcode::ICmp(predicate) => {
+                format!("icmp{flags} {} {}, {}", spelling(&INT_PREDICATE, *predicate), typed(0), bare(1))
+            }
+            Opcode::FCmp(predicate) => {
+                format!("fcmp{flags} {} {}, {}", spelling(&FLOAT_PREDICATE, *predicate), typed(0), bare(1))
+            }
             Opcode::Select => format!("select{flags} {}, {}, {}", typed(0), typed(1), typed(2)),
             Opcode::Phi => {
-                let inputs: Vec<String> = ops.chunks(2).map(|pair| format!("[ {}, {} ]", self.operand(slots, pair[0]), self.operand(slots, pair[1]))).collect();
+                let inputs: Vec<String> = ops
+                    .chunks(2)
+                    .map(|pair| format!("[ {}, {} ]", self.operand(slots, pair[0]), self.operand(slots, pair[1])))
+                    .collect();
                 format!("phi{flags} {} {}", self.ty(inst.ty), inputs.join(", "))
             }
             Opcode::ExtractValue(indices) | Opcode::InsertValue(indices) => {
@@ -414,7 +523,11 @@ impl Printer<'_> {
                     .enumerate()
                     .map(|(at, &one)| {
                         let attrs = spaced(attributes(&self.context, &info.argument_attrs[at]));
-                        format!("{}{attrs} {}", self.ty(function.operand_type(&self.context, one).expect("a value")), self.operand(slots, one))
+                        format!(
+                            "{}{attrs} {}",
+                            self.ty(function.operand_type(&self.context, one).expect("a value")),
+                            self.operand(slots, one)
+                        )
                     })
                     .collect();
                 let tail = match info.tail {
@@ -426,11 +539,13 @@ impl Printer<'_> {
                 let return_attrs = spaced(attributes(&self.context, &info.return_attrs));
                 let callee_operand = *ops.last().expect("a callee");
                 let callee = self.operand(slots, callee_operand);
-                let convention = Self::convention(info.calling_convention).map_or_else(String::new, |one| format!(" {one}"));
-                let space = match function.operand_type(&self.context, callee_operand).map(|ty| self.context.types.get(ty)) {
-                    Some(Type::Pointer(space)) if *space != 0 => format!(" addrspace({space})"),
-                    _ => String::new(),
-                };
+                let convention =
+                    Self::convention(info.calling_convention).map_or_else(String::new, |one| format!(" {one}"));
+                let space =
+                    match function.operand_type(&self.context, callee_operand).map(|ty| self.context.types.get(ty)) {
+                        Some(Type::Pointer(space)) if *space != 0 => format!(" addrspace({space})"),
+                        _ => String::new(),
+                    };
                 let mut text = format!(
                     "{tail}{}{flags}{convention}{return_attrs}{space} {callee_ty} {callee}({}){}",
                     inst.opcode.mnemonic(),
@@ -463,13 +578,20 @@ impl Printer<'_> {
         }
     }
 
-    fn typed_constant(&self, id: ConstantId) -> String {
+    fn typed_constant(
+        &self,
+        id: ConstantId,
+    ) -> String {
         format!("{} {}", self.ty(self.context.get(id).ty), self.constant(id))
     }
 
-    fn constant(&self, id: ConstantId) -> String {
+    fn constant(
+        &self,
+        id: ConstantId,
+    ) -> String {
         let Constant { ty, kind } = self.context.get(id);
-        let members = |ids: &[ConstantId]| ids.iter().map(|&one| self.typed_constant(one)).collect::<Vec<_>>().join(", ");
+        let members =
+            |ids: &[ConstantId]| ids.iter().map(|&one| self.typed_constant(one)).collect::<Vec<_>>().join(", ");
         match kind {
             ConstantKind::Int(bits) => match self.types().int_bits(*ty) {
                 Some(1) => (if *bits == 0 { "false" } else { "true" }).to_owned(),
@@ -484,7 +606,9 @@ impl Printer<'_> {
             ConstantKind::Poison => "poison".to_owned(),
             ConstantKind::Zero => "zeroinitializer".to_owned(),
             ConstantKind::Bytes(bytes) => format!("c{}", string(bytes)),
-            ConstantKind::Global(global) => self.globals.get(global.0 as usize).cloned().unwrap_or_else(|| format!("@{}", global.0)),
+            ConstantKind::Global(global) => {
+                self.globals.get(global.0 as usize).cloned().unwrap_or_else(|| format!("@{}", global.0))
+            }
             ConstantKind::Aggregate(ids) => match self.types().get(*ty) {
                 Type::Array { .. } => format!("[{}]", members(ids)),
                 Type::Vector { .. } => format!("<{}>", members(ids)),
@@ -494,7 +618,12 @@ impl Printer<'_> {
             },
             ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, operands }) => {
                 let rest: Vec<String> = operands.iter().map(|&one| self.typed_constant(one)).collect();
-                format!("getelementptr {}({}, {})", if *inbounds { "inbounds " } else { "" }, self.ty(*source), rest.join(", "))
+                format!(
+                    "getelementptr {}({}, {})",
+                    if *inbounds { "inbounds " } else { "" },
+                    self.ty(*source),
+                    rest.join(", ")
+                )
             }
             ConstantKind::Expr(ConstantExpr::Cast { op, value }) => {
                 format!("{} ({} to {})", spelling(&CAST, *op), self.typed_constant(*value), self.ty(*ty))
@@ -502,7 +631,10 @@ impl Printer<'_> {
         }
     }
 
-    fn metadata_operands(&self, operands: &[MetadataOperand]) -> String {
+    fn metadata_operands(
+        &self,
+        operands: &[MetadataOperand],
+    ) -> String {
         operands
             .iter()
             .map(|one| match one {

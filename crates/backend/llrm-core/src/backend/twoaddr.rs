@@ -7,13 +7,12 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::support::hash::{IndexMap, IndexSet};
-
 use crate::analysis::intervals as ranges;
 use crate::backend::{allocate, coalesce, spiller};
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
+use crate::support::hash::{IndexMap, IndexSet};
 
 /// Operations that read their destination.
 pub const _TIED: [Operation; 3] = [Operation::Binary, Operation::Unary, Operation::Funnel];
@@ -33,7 +32,10 @@ impl LIRTransform for TwoAddress {
         Self::NAME
     }
 
-    fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
         Ok(tied(&body))
     }
 }
@@ -98,10 +100,15 @@ fn _reused(body: &LirBody) -> LirBody {
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
         let out = &leaving[&block.at];
-        // Where each value is read and written in the block, in order: what the scans below ask, in a log of the block's length.
+        // Where each value is read and written in the block, in order: what the scans below ask, in a log of the
+        // block's length.
         let mut reads: IndexMap<u32, BTreeSet<usize>> = IndexMap::default();
         let mut writes: IndexMap<u32, BTreeSet<usize>> = IndexMap::default();
-        let index = |reads: &mut IndexMap<u32, BTreeSet<usize>>, writes: &mut IndexMap<u32, BTreeSet<usize>>, at: usize, one: &Insn, add: bool| {
+        let index = |reads: &mut IndexMap<u32, BTreeSet<usize>>,
+                     writes: &mut IndexMap<u32, BTreeSet<usize>>,
+                     at: usize,
+                     one: &Insn,
+                     add: bool| {
             for (places, values) in [(&mut *reads, &one.uses), (&mut *writes, &one.defines)] {
                 for value in values {
                     if add {
@@ -118,13 +125,24 @@ fn _reused(body: &LirBody) -> LirBody {
         let none = BTreeSet::new();
         for at in 0..insns.len() {
             let Some(what) = insns[at].what.as_ref().filter(|what| ties(what)) else { continue };
-            let (Some(Loc::Held(into)), Some(Loc::Held(first))) = (what.dests.first(), what.sources.first()) else { continue };
+            let (Some(Loc::Held(into)), Some(Loc::Held(first))) = (what.dests.first(), what.sources.first()) else {
+                continue;
+            };
             let (into, first) = (*into, *first);
             let pinned = |value: u32| body.pins.contains_key(&value);
-            if what.dests.len() != 1 || into.value == first.value || into.width != first.width || pinned(into.value) || pinned(first.value) || insns[at].group.is_some() {
+            if what.dests.len() != 1
+                || into.value == first.value
+                || into.width != first.width
+                || pinned(into.value)
+                || pinned(first.value)
+                || insns[at].group.is_some()
+            {
                 continue;
             }
-            if defined.get(&into.value) != Some(&1) || out.contains(&into.value) || reads.get(&into.value).unwrap_or(&none).range(..at).next().is_some() {
+            if defined.get(&into.value) != Some(&1)
+                || out.contains(&into.value)
+                || reads.get(&into.value).unwrap_or(&none).range(..at).next().is_some()
+            {
                 continue;
             }
             // `first` dies here: nothing after reads it, not even a parallel
@@ -135,9 +153,15 @@ fn _reused(body: &LirBody) -> LirBody {
             // Only `first := into` reads it: the copy back of an update in place.
             let readers: Vec<usize> = reads.get(&into.value).unwrap_or(&none).range(at + 1..).copied().collect();
             let [last] = readers[..] else { continue };
-            let back = insns[last].what.as_ref().is_some_and(|what| {
-                what.op == Operation::Move && matches!((what.dests.as_slice(), what.sources.as_slice()), ([Loc::Held(to)], [Loc::Held(from)]) if to.value == first.value && from.value == into.value && to.width == from.width)
-            });
+            let back = insns[last]
+                .what
+                .as_ref()
+                .is_some_and(
+                    |what| what.op == Operation::Move && matches!(
+                        (what.dests.as_slice(), what.sources.as_slice()),
+                        ([Loc::Held(to)], [Loc::Held(from)]) if to.value == first.value && from.value == into.value && to.width == from.width
+                    ),
+                );
             if !back {
                 continue;
             }
@@ -179,7 +203,12 @@ fn _copy_destinations(body: &LirBody) -> IndexMap<u32, BTreeSet<u32>> {
 }
 
 /// How many copies apart two values are; infinite where none joins them within `limit`.
-fn _distance(copies: &IndexMap<u32, BTreeSet<u32>>, start: u32, goal: u32, limit: i64) -> f64 {
+fn _distance(
+    copies: &IndexMap<u32, BTreeSet<u32>>,
+    start: u32,
+    goal: u32,
+    limit: i64,
+) -> f64 {
     let mut seen: BTreeSet<u32> = BTreeSet::from([start]);
     let mut frontier: BTreeSet<u32> = BTreeSet::from([start]);
     let mut steps = 0;
@@ -207,7 +236,8 @@ fn _commuted(
     interference: Option<&IndexMap<u32, BTreeSet<u32>>>,
 ) -> Option<Arc<Insn>> {
     let what = one.what.as_ref()?;
-    let commutative = (what.op == Operation::Binary && matches!(what.name.as_deref(), Some("add" | "and" | "or" | "xor")))
+    let commutative = (what.op == Operation::Binary
+        && matches!(what.name.as_deref(), Some("add" | "and" | "or" | "xor")))
         || (what.op == Operation::Multiply && what.name.as_deref() == Some("imul"));
     if !commutative
         || what.dests.len() != 1
@@ -233,7 +263,9 @@ fn _commuted(
     let blocked = |source: u32| -> usize {
         affinities
             .iter()
-            .filter(|other| interference.and_then(|graph| graph.get(&source)).is_some_and(|found| found.contains(other)))
+            .filter(|other| {
+                interference.and_then(|graph| graph.get(&source)).is_some_and(|found| found.contains(other))
+            })
             .count()
     };
 
@@ -243,10 +275,7 @@ fn _commuted(
             (blocked(second.value), _distance(copies, into.value, second.value, 8)),
             (blocked(first.value), _distance(copies, into.value, first.value, 8)),
         );
-    if second.value == into.value
-        || alive.contains(&first.value) && !alive.contains(&second.value)
-        || reusable
-    {
+    if second.value == into.value || alive.contains(&first.value) && !alive.contains(&second.value) || reusable {
         let mut made = one.clone();
         made.what = Some(Semantics { sources: vec![Loc::Held(*second), Loc::Held(*first)], ..what.clone() });
         return Some(Arc::new(made));
@@ -255,7 +284,10 @@ fn _commuted(
 }
 
 /// Python's tuple `<` over `(int, float)`.
-fn _less(one: (usize, f64), other: (usize, f64)) -> bool {
+fn _less(
+    one: (usize, f64),
+    other: (usize, f64),
+) -> bool {
     one.0 < other.0 || (one.0 == other.0 && one.1 < other.1)
 }
 
@@ -265,25 +297,42 @@ fn _nothing(beside: &Insn) -> (i64, i64) {
     (at, at)
 }
 
-fn _inserted(beside: &Insn, what: Semantics, defines: Vec<u32>, uses: Vec<u32>) -> Arc<Insn> {
+fn _inserted(
+    beside: &Insn,
+    what: Semantics,
+    defines: Vec<u32>,
+    uses: Vec<u32>,
+) -> Arc<Insn> {
     let mut made = Insn::new(beside.at, Some(_nothing(beside)), Some(what), defines, uses);
     made.call = beside.call.clone();
     Arc::new(made)
 }
 
-fn _move(into: Loc, out_of: Loc) -> Semantics {
-    Semantics { name: Some("mov".to_owned()), dests: vec![into], sources: vec![out_of], ..Semantics::new(Operation::Move) }
+fn _move(
+    into: Loc,
+    out_of: Loc,
+) -> Semantics {
+    Semantics {
+        name: Some("mov".to_owned()),
+        dests: vec![into],
+        sources: vec![out_of],
+        ..Semantics::new(Operation::Move)
+    }
 }
 
 /// Whether `what` writes the register of its first source: x86's two-address form.
 pub fn ties(what: &Semantics) -> bool {
     !what.dests.is_empty()
         && !what.sources.is_empty()
-        && (_TIED.contains(&what.op) || (what.op == Operation::Multiply && what.dests.len() == 1 && what.sources.len() == 2))
+        && (_TIED.contains(&what.op)
+            || (what.op == Operation::Multiply && what.dests.len() == 1 && what.sources.len() == 2))
 }
 
 /// The copy and the fixed instruction, or None where it is already tied.
-fn _untied(one: &Insn, mint: &mut dyn FnMut() -> u32) -> Option<Vec<Arc<Insn>>> {
+fn _untied(
+    one: &Insn,
+    mint: &mut dyn FnMut() -> u32,
+) -> Option<Vec<Arc<Insn>>> {
     let what = one.what.as_ref()?;
     if what.dests.is_empty() || what.sources.is_empty() {
         return None;
@@ -310,7 +359,8 @@ fn _untied(one: &Insn, mint: &mut dyn FnMut() -> u32) -> Option<Vec<Arc<Insn>>> 
         Loc::Held(held) => Some(held.value),
         _ => None,
     };
-    let movement = _inserted(one, _move(Loc::Held(*into), first.clone()), vec![into.value], first_value.into_iter().collect());
+    let movement =
+        _inserted(one, _move(Loc::Held(*into), first.clone()), vec![into.value], first_value.into_iter().collect());
     let remaining: BTreeSet<u32> = what.sources[1..].iter().flat_map(ir::values).map(|value| value.value).collect();
     let uses: Vec<u32> = one
         .uses
@@ -327,11 +377,19 @@ fn _untied(one: &Insn, mint: &mut dyn FnMut() -> u32) -> Option<Vec<Arc<Insn>>> 
 }
 
 /// A memory destination computed in a register, then stored.
-fn _through_register(one: &Insn, what: &Semantics, into: &Mem, mint: &mut dyn FnMut() -> u32) -> Option<Vec<Arc<Insn>>> {
+fn _through_register(
+    one: &Insn,
+    what: &Semantics,
+    into: &Mem,
+    mint: &mut dyn FnMut() -> u32,
+) -> Option<Vec<Arc<Insn>>> {
     if what.dests.len() != 1 || what.sources[0] == Loc::Mem(into.clone()) || one.group.is_some() {
         return None;
     }
-    if what.sources.iter().any(|source| matches!(source, Loc::Mem(_))) || !one.requires.is_empty() || !one.delivers.is_empty() {
+    if what.sources.iter().any(|source| matches!(source, Loc::Mem(_)))
+        || !one.requires.is_empty()
+        || !one.delivers.is_empty()
+    {
         return None;
     }
     let held = Held { value: mint(), width: into.width };
@@ -370,16 +428,17 @@ mod tests {
     //! Port of `tests/test_twoaddr.py`.
 
     use std::collections::BTreeSet;
-
-    use crate::support::hash::IndexMap;
-
     use std::sync::Arc;
 
     use super::{_commuted, _untied, tied};
     use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::support::hash::IndexMap;
 
-    fn held(value: u32, width: u32) -> Loc {
+    fn held(
+        value: u32,
+        width: u32,
+    ) -> Loc {
         Loc::Held(Held { value, width })
     }
 
@@ -459,16 +518,45 @@ mod tests {
     /// copies, and its loop differed from C's by two moves.
     #[test]
     fn test_an_update_copied_back_is_made_in_place() {
-        let what = |op, name: &str, dests, sources| Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) });
-        let add = Insn::new(0, Some((0, 0)), what(Operation::Binary, "add", vec![held(2, 2)], vec![held(1, 2), Loc::Imm(Imm { value: 4, width: 2, address: None })]), vec![2], vec![1]);
-        let back = Insn::new(1, Some((1, 1)), what(Operation::Move, "mov", vec![held(1, 2)], vec![held(2, 2)]), vec![1], vec![2]);
-        let input = LirBody::new("update", 0, vec![LirBlock { succ: vec![0], ..LirBlock::new(0, vec![Arc::new(add), Arc::new(back)]) }], IndexMap::default(), IndexMap::default());
+        let what = |op, name: &str, dests, sources| {
+            Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
+        };
+        let add = Insn::new(
+            0,
+            Some((0, 0)),
+            what(
+                Operation::Binary,
+                "add",
+                vec![held(2, 2)],
+                vec![held(1, 2), Loc::Imm(Imm { value: 4, width: 2, address: None })],
+            ),
+            vec![2],
+            vec![1],
+        );
+        let back = Insn::new(
+            1,
+            Some((1, 1)),
+            what(Operation::Move, "mov", vec![held(1, 2)], vec![held(2, 2)]),
+            vec![1],
+            vec![2],
+        );
+        let input = LirBody::new(
+            "update",
+            0,
+            vec![LirBlock { succ: vec![0], ..LirBlock::new(0, vec![Arc::new(add), Arc::new(back)]) }],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
 
         let got = tied(&input);
 
         let insns = got.insns();
         let first = insns[0].what.as_ref().expect("semantics");
-        assert_eq!((first.name.as_deref(), first.dests.clone(), sources(&insns[0])[0].clone()), (Some("add"), vec![held(1, 2)], held(1, 2)), "{insns:?}");
+        assert_eq!(
+            (first.name.as_deref(), first.dests.clone(), sources(&insns[0])[0].clone()),
+            (Some("add"), vec![held(1, 2)], held(1, 2)),
+            "{insns:?}"
+        );
         assert_eq!(insns.len(), 2, "{insns:?}");
     }
 
@@ -477,16 +565,53 @@ mod tests {
     /// count and mandel.nib never finished.
     #[test]
     fn test_an_update_whose_old_value_is_still_copied_is_not_made_in_place() {
-        let what = |op, name: &str, dests, sources| Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) });
-        let add = Insn::new(0, Some((0, 0)), what(Operation::Binary, "add", vec![held(2, 2)], vec![held(1, 2), Loc::Imm(Imm { value: 1, width: 2, address: None })]), vec![2], vec![1]);
-        let back = Insn::new(1, Some((1, 1)), what(Operation::Move, "mov", vec![held(1, 2)], vec![held(2, 2)]), vec![1], vec![2]);
-        let old = Insn::new(1, Some((1, 1)), what(Operation::Move, "mov", vec![held(3, 2)], vec![held(1, 2)]), vec![3], vec![1]);
-        let input = LirBody::new("update", 0, vec![LirBlock { succ: vec![0], ..LirBlock::new(0, vec![Arc::new(add), Arc::new(back), Arc::new(old)]) }], IndexMap::default(), IndexMap::default());
+        let what = |op, name: &str, dests, sources| {
+            Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
+        };
+        let add = Insn::new(
+            0,
+            Some((0, 0)),
+            what(
+                Operation::Binary,
+                "add",
+                vec![held(2, 2)],
+                vec![held(1, 2), Loc::Imm(Imm { value: 1, width: 2, address: None })],
+            ),
+            vec![2],
+            vec![1],
+        );
+        let back = Insn::new(
+            1,
+            Some((1, 1)),
+            what(Operation::Move, "mov", vec![held(1, 2)], vec![held(2, 2)]),
+            vec![1],
+            vec![2],
+        );
+        let old = Insn::new(
+            1,
+            Some((1, 1)),
+            what(Operation::Move, "mov", vec![held(3, 2)], vec![held(1, 2)]),
+            vec![3],
+            vec![1],
+        );
+        let input = LirBody::new(
+            "update",
+            0,
+            vec![LirBlock { succ: vec![0], ..LirBlock::new(0, vec![Arc::new(add), Arc::new(back), Arc::new(old)]) }],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
 
         let got = tied(&input);
 
         let insns = got.insns();
-        assert!(insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.dests == vec![held(2, 2)] && what.name.as_deref() == Some("add"))), "{insns:?}");
+        assert!(
+            insns.iter().any(|one| one
+                .what
+                .as_ref()
+                .is_some_and(|what| what.dests == vec![held(2, 2)] && what.name.as_deref() == Some("add"))),
+            "{insns:?}"
+        );
     }
 
     #[test]
@@ -531,7 +656,10 @@ mod tests {
 
     // ------------------------------------------------------ tests/test_lir.py
 
-    fn imm(value: i64, width: u32) -> Loc {
+    fn imm(
+        value: i64,
+        width: u32,
+    ) -> Loc {
         Loc::Imm(Imm { value, width, address: None })
     }
 

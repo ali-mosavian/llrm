@@ -7,13 +7,21 @@ use super::*;
 pub(super) const SIZE_OF: &str = "size_of";
 
 impl<'a> FunctionCompiler<'a> {
-    pub(super) fn size_of(&mut self, types: &[TypeSpec], arguments: &[Expr], span: Span) -> Result<TypedOperand, Diagnostic> {
+    pub(super) fn size_of(
+        &mut self,
+        types: &[TypeSpec],
+        arguments: &[Expr],
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
         let ([spec], []) = (types, arguments) else {
             return Err(Diagnostic::new(span, "size_of takes one type and no values: size_of[T]()"));
         };
         let element = self.types.resolve_element(spec, span)?;
         let bytes = self.types.width(element.id());
-        Ok(TypedOperand { operand: Some(hir::Operand::Constant(self.word_id(), i64::from(bytes))), type_name: self.word() })
+        Ok(TypedOperand {
+            operand: Some(hir::Operand::Constant(self.word_id(), i64::from(bytes))),
+            type_name: self.word(),
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -31,27 +39,17 @@ impl<'a> FunctionCompiler<'a> {
             return self.inline_lambda(lambda, arguments, expected, span);
         }
         if self.is_generator_call(name) {
-            return Err(Diagnostic::new(
-                span,
-                format!("generator {name:?} is consumed by a 'for', not called"),
-            ));
+            return Err(Diagnostic::new(span, format!("generator {name:?} is consumed by a 'for', not called")));
         }
         if self.types.bits.contains_key(name) {
             let [value] = arguments else {
-                return Err(Diagnostic::new(
-                    span,
-                    format!("{name}(raw) takes one integer"),
-                ));
+                return Err(Diagnostic::new(span, format!("{name}(raw) takes one integer")));
             };
             return self.bits_from(name, value, span);
         }
         let signature = self.signature_of(name, span)?;
         if expected.is_some_and(|one| one != signature.result) {
-            return Err(type_mismatch(
-                span,
-                expected.expect("checked"),
-                signature.result,
-            ));
+            return Err(type_mismatch(span, expected.expect("checked"), signature.result));
         }
         if signature.view.is_some() {
             return Err(Diagnostic::new(span, format!("{name} returns a view: bind it, pass it, or print it")));
@@ -60,16 +58,10 @@ impl<'a> FunctionCompiler<'a> {
             // Called for its effect: the result lands in a temporary.
             let result = self.call_into(name, arguments, span)?;
             self.statement_temporary(result);
-            return Ok(TypedOperand {
-                operand: None,
-                type_name: TypeName::Void,
-            });
+            return Ok(TypedOperand { operand: None, type_name: TypeName::Void });
         }
         let result = self.emit_call(&signature, arguments, None, span)?;
-        Ok(TypedOperand {
-            operand: result.map(hir::Operand::Value),
-            type_name: signature.result,
-        })
+        Ok(TypedOperand { operand: result.map(hir::Operand::Value), type_name: signature.result })
     }
 
     /// Calls a function whose result is an aggregate, into a fresh temporary.
@@ -81,52 +73,54 @@ impl<'a> FunctionCompiler<'a> {
     ) -> Result<StructView, Diagnostic> {
         let signature = self.signature_of(name, span)?;
         let Some(struct_id) = signature.slot else {
-            return Err(Diagnostic::new(
-                span,
-                format!("{name} does not return a struct or enum"),
-            ));
+            return Err(Diagnostic::new(span, format!("{name} does not return a struct or enum")));
         };
         let view = self.temporary(struct_id);
         self.call_aggregate(&signature, arguments, &view, span)?;
         Ok(view)
     }
 
-    pub(super) fn signature_of(&self, name: &str, span: Span) -> Result<Signature, Diagnostic> {
-        self.known_signature(name)
-            .ok_or_else(|| Diagnostic::new(span, format!("unknown function {name:?}")))
+    pub(super) fn signature_of(
+        &self,
+        name: &str,
+        span: Span,
+    ) -> Result<Signature, Diagnostic> {
+        self.known_signature(name).ok_or_else(|| Diagnostic::new(span, format!("unknown function {name:?}")))
     }
 
     /// A module function's signature, or a generic instance's.
-    pub(super) fn known_signature(&self, name: &str) -> Option<Signature> {
-        self.signatures
-            .get(name)
-            .cloned()
-            .or_else(|| self.templates.borrow().instance(name))
+    pub(super) fn known_signature(
+        &self,
+        name: &str,
+    ) -> Option<Signature> {
+        self.signatures.get(name).cloned().or_else(|| self.templates.borrow().instance(name))
     }
 
     /// Storage for an intermediate aggregate, uninitialized.
-    pub(super) fn temporary(&mut self, struct_id: u32) -> StructView {
+    pub(super) fn temporary(
+        &mut self,
+        struct_id: u32,
+    ) -> StructView {
         let width = self.types.width(struct_id);
         let name = self.hidden("temporary");
         let place = self.local_place(&name, struct_id, width, true);
-        StructView {
-            struct_id,
-            place,
-            pointer: None,
-            indices: Vec::new(),
-            offset: 0,
-            mutable: true,
-            owner: name,
-        }
+        StructView { struct_id, place, pointer: None, indices: Vec::new(), offset: 0, mutable: true, owner: name }
     }
 
-    pub(super) fn address_of(&mut self, view: &StructView) -> hir::Operand {
+    pub(super) fn address_of(
+        &mut self,
+        view: &StructView,
+    ) -> hir::Operand {
         let pointer_type = self.types.pointer(view.struct_id, 0);
         self.address_as(view, pointer_type)
     }
 
     /// `view`'s address as a `pointer_type`, near or far.
-    pub(super) fn address_as(&mut self, view: &StructView, pointer_type: u32) -> hir::Operand {
+    pub(super) fn address_as(
+        &mut self,
+        view: &StructView,
+        pointer_type: u32,
+    ) -> hir::Operand {
         // A pointer to the whole struct of the same width is its address;
         // any other, such as a vec element's near one, is taken again.
         if let (Some(pointer), 0) = (view.pointer, view.offset) {
@@ -143,12 +137,9 @@ impl<'a> FunctionCompiler<'a> {
         let result = self.value_type(pointer_type);
         let place = self.projected_place(view, 0, TypeName::U8);
         let place = match place {
-            hir::Operand::ProjectedPlace {
-                place,
-                indices,
-                offset: 0,
-                ..
-            } if indices.is_empty() => hir::Operand::Place(place),
+            hir::Operand::ProjectedPlace { place, indices, offset: 0, .. } if indices.is_empty() => {
+                hir::Operand::Place(place)
+            }
             other => other,
         };
         self.emit("address", vec![result], vec![place], None);
@@ -163,25 +154,19 @@ impl<'a> FunctionCompiler<'a> {
         slot: Option<hir::Operand>,
         span: Span,
     ) -> Result<Option<u32>, Diagnostic> {
-        let formals: Vec<_> = signature
-            .formals
-            .iter()
-            .map(|(name, default)| Formal {
-                name,
-                default: default.as_ref(),
-            })
-            .collect();
+        let formals: Vec<_> =
+            signature.formals.iter().map(|(name, default)| Formal { name, default: default.as_ref() }).collect();
         if self.is_drop_method(&signature.name) {
             return Err(Diagnostic::new(span, "drop runs when its owner ends; it cannot be called"));
         }
         if signature.abi.interrupt() {
-            return Err(Diagnostic::new(span, format!("{} is an interrupt16 function: only an interrupt enters it", signature.name)));
+            return Err(Diagnostic::new(
+                span,
+                format!("{} is an interrupt16 function: only an interrupt enters it", signature.name),
+            ));
         }
         if signature.foreign {
-            self.require_unsafe(
-                &format!("calling the foreign function {}", signature.name),
-                span,
-            )?;
+            self.require_unsafe(&format!("calling the foreign function {}", signature.name), span)?;
         }
         let arguments = &arguments::bind(&signature.name, &formals, arguments.to_vec(), span)?;
         let lent = self.lent(arguments, &signature.parameters);
@@ -198,12 +183,7 @@ impl<'a> FunctionCompiler<'a> {
         let returned = signature.returned(self.types);
         let results = if returned == TypeName::Void { Vec::new() } else { vec![self.value(returned)] };
         let count = operands.len() as u32;
-        let instruction = self.emit(
-            "call",
-            results.clone(),
-            operands,
-            Some(signature.name.clone()),
-        );
+        let instruction = self.emit("call", results.clone(), operands, Some(signature.name.clone()));
         self.calls.push(hir::CallSite::new(instruction, signature.id, count, signature.abi));
         if let (Some(result), None) = (results.first(), signature.slot) {
             // The caller owns a result (section 9.5).
@@ -213,7 +193,11 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// What a call passes for `parameter`.
-    pub(super) fn argument_operand(&mut self, argument: &Expr, parameter: &SignatureParameter) -> Result<hir::Operand, Diagnostic> {
+    pub(super) fn argument_operand(
+        &mut self,
+        argument: &Expr,
+        parameter: &SignatureParameter,
+    ) -> Result<hir::Operand, Diagnostic> {
         match parameter {
             // A BASIC procedure takes the near pointer the adapter is.
             SignatureParameter::Adapter { pointer, .. } => {
@@ -239,11 +223,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.store_struct_expression(&copy, argument)?;
                 Ok(self.address_of(&copy))
             }
-            SignatureParameter::Borrowed {
-                mutable,
-                target,
-                pointer,
-            } => {
+            SignatureParameter::Borrowed { mutable, target, pointer } => {
                 Ok(self.borrow_argument(argument, *mutable, *target, *pointer)?.0)
             }
         }
@@ -256,18 +236,10 @@ impl<'a> FunctionCompiler<'a> {
         target: BindingType,
         pointer_type: u32,
     ) -> Result<(hir::Operand, String), Diagnostic> {
-        let Expr::Borrow {
-            mutable,
-            operand,
-            span,
-        } = argument
-        else {
+        let Expr::Borrow { mutable, operand, span } = argument else {
             // The parameter says it borrows, so the call site may write the argument alone.
-            let borrow = Expr::Borrow {
-                mutable: required_mutable,
-                operand: Box::new(argument.clone()),
-                span: argument.span(),
-            };
+            let borrow =
+                Expr::Borrow { mutable: required_mutable, operand: Box::new(argument.clone()), span: argument.span() };
             return self.borrow_argument(&borrow, required_mutable, target, pointer_type);
         };
         if required_mutable && !mutable {
@@ -292,12 +264,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         let (binding, name, range) = match operand.as_ref() {
             Expr::Name(name, name_span) => (self.binding(name, *name_span)?.clone(), name.clone(), None),
-            Expr::Slice {
-                base,
-                start,
-                end,
-                span: range_span,
-            } => {
+            Expr::Slice { base, start, end, span: range_span } => {
                 let (binding, name) = self.sequence_of(base)?;
                 (binding, name, Some((start.as_deref(), end.as_deref(), *range_span)))
             }
@@ -307,7 +274,9 @@ impl<'a> FunctionCompiler<'a> {
                 (binding, name, None)
             }
             _ => {
-                if let (Some((element, rank)), BindingType::Slice { element: wanted, rank: wanted_rank }) = (self.view_type_of(operand), target) {
+                if let (Some((element, rank)), BindingType::Slice { element: wanted, rank: wanted_rank }) =
+                    (self.view_type_of(operand), target)
+                {
                     if (element, rank) != (wanted, wanted_rank) {
                         return Err(Diagnostic::new(operand.span(), "the view has the wrong element type or rank"));
                     }
@@ -321,17 +290,17 @@ impl<'a> FunctionCompiler<'a> {
                 if let BindingType::Scalar(type_name) = target {
                     if let Some((place, actual, owner)) = self.place_of(operand, *span)? {
                         if actual != type_name {
-                            return Err(Diagnostic::new(*span, format!("borrow of {owner:?}'s {} has the wrong type", type_name_text(actual))));
+                            return Err(Diagnostic::new(
+                                *span,
+                                format!("borrow of {owner:?}'s {} has the wrong type", type_name_text(actual)),
+                            ));
                         }
                         let pointer = self.value_type(pointer_type);
                         self.emit("address", vec![pointer], vec![place], None);
                         return Ok((hir::Operand::Value(pointer), owner));
                     }
                 }
-                return Err(Diagnostic::new(
-                    operand.span(),
-                    "only a place or a sequence can be borrowed",
-                ));
+                return Err(Diagnostic::new(operand.span(), "only a place or a sequence can be borrowed"));
             }
         };
         let compatible = binding.type_ == target
@@ -342,12 +311,12 @@ impl<'a> FunctionCompiler<'a> {
                     BindingType::Slice { element: expected, rank }
                 ) if actual == expected && shape.rank == rank
             )
-            || matches!(target, BindingType::Slice { element, rank: 1 } if self.heap_sequence(&binding) == Some(element));
+            || matches!(
+                target,
+                BindingType::Slice { element, rank: 1 } if self.heap_sequence(&binding) == Some(element)
+            );
         if !compatible {
-            return Err(Diagnostic::new(
-                *span,
-                format!("borrow of {name:?} has the wrong type"),
-            ));
+            return Err(Diagnostic::new(*span, format!("borrow of {name:?} has the wrong type")));
         }
         if let BindingType::Slice { element, rank } = target {
             if let Storage::Slice(descriptor) = binding.storage {
@@ -357,45 +326,20 @@ impl<'a> FunctionCompiler<'a> {
                 // A range of a view is a view of its own.
                 if rank == 1 {
                     let (data, length) = self.view_parts_of(descriptor, element);
-                    let view = self.ranged_view(
-                        &name,
-                        data,
-                        length,
-                        element,
-                        range,
-                        pointer_type,
-                        operand.span(),
-                    )?;
+                    let view = self.ranged_view(&name, data, length, element, range, pointer_type, operand.span())?;
                     return Ok((view, name.clone()));
                 }
             }
             if self.heap_sequence(&binding).is_some() {
-                let view = self.sequence_view(
-                    &binding,
-                    &name,
-                    element,
-                    range,
-                    pointer_type,
-                    operand.span(),
-                )?;
+                let view = self.sequence_view(&binding, &name, element, range, pointer_type, operand.span())?;
                 return Ok((view, name.clone()));
             }
-            let BindingType::Array {
-                element: actual,
-                shape,
-            } = binding.type_
-            else {
-                return Err(Diagnostic::new(
-                    operand.span(),
-                    "a ranged borrow currently requires a fixed array",
-                ));
+            let BindingType::Array { element: actual, shape } = binding.type_ else {
+                return Err(Diagnostic::new(operand.span(), "a ranged borrow currently requires a fixed array"));
             };
             debug_assert_eq!(actual, element);
             if range.is_some() && rank != 1 {
-                return Err(Diagnostic::new(
-                    operand.span(),
-                    "only a one-dimensional array can be sliced",
-                ));
+                return Err(Diagnostic::new(operand.span(), "only a one-dimensional array can be sliced"));
             }
             let data = self.array_data(&binding, element, operand.span())?;
             if rank == 1 {
@@ -413,10 +357,7 @@ impl<'a> FunctionCompiler<'a> {
             return Ok((view, name.clone()));
         }
         if range.is_some() {
-            return Err(Diagnostic::new(
-                operand.span(),
-                "a range can only be borrowed as a slice",
-            ));
+            return Err(Diagnostic::new(operand.span(), "a range can only be borrowed as a slice"));
         }
         let place = match binding.storage {
             Storage::Place(place) => hir::Operand::Place(place),
@@ -427,10 +368,7 @@ impl<'a> FunctionCompiler<'a> {
                 unreachable!("borrow target is not a dictionary")
             }
             Storage::Parameter(_) => {
-                return Err(Diagnostic::new(
-                    *span,
-                    "a by-value parameter has no borrowable storage",
-                ));
+                return Err(Diagnostic::new(*span, "a by-value parameter has no borrowable storage"));
             }
         };
         let result = self.value_type(pointer_type);
@@ -456,30 +394,16 @@ impl<'a> FunctionCompiler<'a> {
             .expect("slice pointer has a descriptor pointee");
         let (word_bytes, word_id) = (self.word_bytes(), self.word_id());
         let size = word_bytes * words.len() as u32;
-        let descriptor =
-            self.local_place(&format!("$slice_{name}"), descriptor_type, size + 4, false);
+        let descriptor = self.local_place(&format!("$slice_{name}"), descriptor_type, size + 4, false);
         let data_type = self.type_of(data);
-        let stores = words
-            .into_iter()
-            .enumerate()
-            .map(|(word, value)| (word_bytes * word as u32, word_id, value));
-        for (offset, type_id, value) in stores.chain([(size, data_type, hir::Operand::Value(data))])
-        {
-            let place = hir::Operand::ProjectedPlace {
-                place: descriptor,
-                indices: Vec::new(),
-                offset,
-                type_id, member: None,
-            };
+        let stores = words.into_iter().enumerate().map(|(word, value)| (word_bytes * word as u32, word_id, value));
+        for (offset, type_id, value) in stores.chain([(size, data_type, hir::Operand::Value(data))]) {
+            let place =
+                hir::Operand::ProjectedPlace { place: descriptor, indices: Vec::new(), offset, type_id, member: None };
             self.emit("store", Vec::new(), vec![place, value], None);
         }
         let result = self.value_type(pointer_type);
-        self.emit(
-            "address",
-            vec![result],
-            vec![hir::Operand::Place(descriptor)],
-            None,
-        );
+        self.emit("address", vec![result], vec![hir::Operand::Place(descriptor)], None);
         hir::Operand::Value(result)
     }
 }

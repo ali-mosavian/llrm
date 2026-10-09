@@ -2,10 +2,10 @@
 //! around it (`Reg`, the registers a runtime routine's contract names).
 
 use iced_x86::Register;
+use llrm_x86::asm::REGISTERS;
+pub use llrm_x86::asm::{Mode, Refusal, assembled};
 
 use crate::abi::runtime::Reg;
-pub use llrm_x86::asm::{Mode, Refusal, assembled};
-use llrm_x86::asm::REGISTERS;
 
 /// The part of its 16-bit register an operand register is.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,15 +64,33 @@ pub fn view(name: &str) -> Option<(Reg, u32)> {
     if !(register.is_gpr8() || register.is_gpr16() || register.is_gpr32()) {
         return None;
     }
-    // iced numbers every view of a general register as the register itself: the root is the 16-bit register of that number.
-    let sixteen = [Register::AX, Register::CX, Register::DX, Register::BX, Register::SP, Register::BP, Register::SI, Register::DI][register.full_register32().number()];
-    let bits = if register.is_gpr8() { 8 } else if register.is_gpr16() { 16 } else { 32 };
+    // iced numbers every view of a general register as the register itself: the root is the 16-bit register of that
+    // number.
+    let sixteen = [
+        Register::AX,
+        Register::CX,
+        Register::DX,
+        Register::BX,
+        Register::SP,
+        Register::BP,
+        Register::SI,
+        Register::DI,
+    ][register.full_register32().number()];
+    let bits = if register.is_gpr8() {
+        8
+    } else if register.is_gpr16() {
+        16
+    } else {
+        32
+    };
     named(&format!("{sixteen:?}")).map(|reg| (reg, bits))
 }
 
 /// The machine register for the view of `bits` of the root `reg`: `Ax` of 32 bits is EAX.
-pub fn machine(reg: Reg, bits: u32) -> Option<Register> {
+pub fn machine(
+    reg: Reg,
+    bits: u32,
+) -> Option<Register> {
     let sixteen = REGISTERS.get(&reg.name().to_lowercase()).copied()?;
     Some(if bits == 32 { sixteen.full_register32() } else { sixteen })
 }
-

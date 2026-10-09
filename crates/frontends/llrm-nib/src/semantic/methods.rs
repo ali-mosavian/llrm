@@ -5,7 +5,10 @@ use super::*;
 
 impl FunctionCompiler<'_> {
     /// The namespace a receiver's methods are declared in.
-    pub(super) fn receiver_type(&self, receiver: &Expr) -> Option<String> {
+    pub(super) fn receiver_type(
+        &self,
+        receiver: &Expr,
+    ) -> Option<String> {
         if let Ok(Some(id)) = self.struct_expression_type(receiver, receiver.span()) {
             return self.types.structure(id).map(|one| one.name.clone());
         }
@@ -17,10 +20,9 @@ impl FunctionCompiler<'_> {
         }
         match self.expression_type_hint(receiver)? {
             bits @ TypeName::Bits { .. } => self.types.bits_of(bits).map(|one| one.name.clone()),
-            scalar @ TypeName::Enum { .. } => self
-                .types
-                .enum_of(ElementType::Scalar(scalar))
-                .map(|one| one.name.clone()),
+            scalar @ TypeName::Enum { .. } => {
+                self.types.enum_of(ElementType::Scalar(scalar)).map(|one| one.name.clone())
+            }
             scalar if is_integer(scalar) || is_float(scalar) => Some(type_name_text(scalar)),
             scalar @ (TypeName::Char | TypeName::Bool | TypeName::String) => Some(type_name_text(scalar)),
             _ => None,
@@ -29,7 +31,12 @@ impl FunctionCompiler<'_> {
 
     /// Refuses `receiver.name(...)` of a method another module keeps
     /// private (section 14).
-    pub(super) fn visible_method(&self, receiver: &Expr, name: &str, span: Span) -> Result<(), Diagnostic> {
+    pub(super) fn visible_method(
+        &self,
+        receiver: &Expr,
+        name: &str,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         let Some(owner) = self.receiver_type(receiver) else {
             return Ok(());
         };
@@ -42,22 +49,24 @@ impl FunctionCompiler<'_> {
     }
 
     /// `receiver.name(arguments)` as the call of the method it names, if any.
-    pub(super) fn method_as_call(&self, expression: &Expr) -> Option<Expr> {
-        let Expr::MethodCall {
-            receiver,
-            name,
-            arguments,
-            span,
-            ..
-        } = expression
-        else {
+    pub(super) fn method_as_call(
+        &self,
+        expression: &Expr,
+    ) -> Option<Expr> {
+        let Expr::MethodCall { receiver, name, arguments, span, .. } = expression else {
             return None;
         };
         if let Expr::Name(owner, _) = receiver.as_ref() {
             let qualified = format!("{owner}.{name}");
-            let associated = self.visible(owner).is_none() && self.known_signature(&qualified).is_some_and(|one| !one.method);
+            let associated =
+                self.visible(owner).is_none() && self.known_signature(&qualified).is_some_and(|one| !one.method);
             if associated {
-                return Some(Expr::Call { name: qualified, type_arguments: Vec::new(), arguments: arguments.clone(), span: *span });
+                return Some(Expr::Call {
+                    name: qualified,
+                    type_arguments: Vec::new(),
+                    arguments: arguments.clone(),
+                    span: *span,
+                });
             }
         }
         let owner = self.receiver_type(receiver)?;
@@ -69,17 +78,17 @@ impl FunctionCompiler<'_> {
         known.then(|| Expr::Call {
             name: qualified,
             type_arguments: Vec::new(),
-            arguments: std::iter::once(receiver.as_ref())
-                .chain(arguments)
-                .cloned()
-                .collect(),
+            arguments: std::iter::once(receiver.as_ref()).chain(arguments).cloned().collect(),
             span: *span,
         })
     }
 
     /// `receiver.name(arguments)` of a generic type's method, as the call of
     /// its template, which a call instantiates.
-    pub(super) fn generic_method_call(&self, expression: &Expr) -> Option<Expr> {
+    pub(super) fn generic_method_call(
+        &self,
+        expression: &Expr,
+    ) -> Option<Expr> {
         let Expr::MethodCall { receiver, name, type_arguments, arguments, span } = expression else {
             return None;
         };

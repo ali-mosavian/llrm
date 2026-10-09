@@ -15,17 +15,29 @@ use crate::testing::{DOS, function, layout, parsed, value};
 
 /// What `@f` returns as the manager's `ThroughMemory` knows it, `@g`
 /// stored 7 before `call`.
-fn kept(globals: &str, call: &str) -> Option<Known> {
+fn kept(
+    globals: &str,
+    call: &str,
+) -> Option<Known> {
     kept_by(globals, call, true)
 }
 
 /// `kept`, or without `Summaries` what `manager::call_effects` leaves.
-fn kept_by(globals: &str, call: &str, summarized: bool) -> Option<Known> {
+fn kept_by(
+    globals: &str,
+    call: &str,
+    summarized: bool,
+) -> Option<Known> {
     kept_under(globals, "", call, summarized)
 }
 
 /// `kept_by`, the program linked against the declarations `runtime`.
-fn kept_under(globals: &str, runtime: &str, call: &str, summarized: bool) -> Option<Known> {
+fn kept_under(
+    globals: &str,
+    runtime: &str,
+    call: &str,
+    summarized: bool,
+) -> Option<Known> {
     let module = parsed(&format!(
         "{DOS}{globals}
 define i16 @f() {{
@@ -38,7 +50,8 @@ b0:
 "
     ));
     let layout = layout(&module);
-    let program = Program::new(vec![module], Rc::new(Neutral)).unwrap().with_runtime(parsed(&format!("{DOS}{runtime}"))).unwrap();
+    let program =
+        Program::new(vec![module], Rc::new(Neutral)).unwrap().with_runtime(parsed(&format!("{DOS}{runtime}"))).unwrap();
     let module = &program.modules[0];
     let mut modules = ModuleAnalyses::new(ProgramAnalyses::default().proxy(&program, 0));
     modules.require::<GlobalsAA>();
@@ -49,7 +62,8 @@ b0:
     let f = function(module, "f");
     if !summarized {
         let unit = crate::testing::with_registers(Unit::within(&module.context, &layout, f, &outer));
-        let calls: Calls = call_effects(&unit, &outer).unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect();
+        let calls: Calls =
+            call_effects(&unit, &outer).unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect();
         return known(&unit, Some(&calls), None, None).get(&value(f, "r")).cloned();
     }
     let known = Analyses::new(outer).get::<ThroughMemory>(&module.context, &layout, f);
@@ -133,7 +147,8 @@ fn a_private_initializer_nothing_names_does_not_leak_the_address_it_holds() {
 #[test]
 fn a_global_held_only_by_a_noretain_argument_stays_tracked() {
     let held = |attrs: &str| {
-        let globals = format!("{PRIVATE}@desc = internal constant ptr @g\n\ndeclare void @erase(ptr {attrs}) nocallback\n");
+        let globals =
+            format!("{PRIVATE}@desc = internal constant ptr @g\n\ndeclare void @erase(ptr {attrs}) nocallback\n");
         kept(&globals, "call void @erase(ptr @desc)\n  store i16 7, ptr @g\n  call void @outside(ptr null)")
     };
     assert_eq!(held("nocapture noretain"), seven());
@@ -145,19 +160,27 @@ fn a_global_held_only_by_a_noretain_argument_stays_tracked() {
 /// back after it (Q45S34).
 #[test]
 fn a_noretain_call_clobbers_a_global_its_argument_holds() {
-    let globals = format!("{PRIVATE}@desc = internal constant ptr @g\n\ndeclare void @erase(ptr nocapture noretain) nocallback\n");
+    let globals = format!(
+        "{PRIVATE}@desc = internal constant ptr @g\n\ndeclare void @erase(ptr nocapture noretain) nocallback\n"
+    );
     assert_eq!(kept(&globals, "call void @erase(ptr @desc)"), None);
 }
 
 #[test]
 fn an_external_global_is_forgotten() {
-    assert_eq!(kept("@g = global i16 0\n\ndeclare void @outside(ptr) nocallback\n", "call void @outside(ptr null)"), None);
+    assert_eq!(
+        kept("@g = global i16 0\n\ndeclare void @outside(ptr) nocallback\n", "call void @outside(ptr null)"),
+        None
+    );
 }
 
 /// A callee that may call back runs `@f`, which writes `@g`.
 #[test]
 fn a_callee_that_may_call_back_forgets_what_the_module_writes() {
-    assert_eq!(kept("@g = internal global i16 0\n\ndeclare void @outside(ptr)\n", "call void @outside(ptr null)"), None);
+    assert_eq!(
+        kept("@g = internal global i16 0\n\ndeclare void @outside(ptr)\n", "call void @outside(ptr null)"),
+        None
+    );
 }
 
 const PROCEDURES: &str = "@g = internal global i16 0
@@ -246,9 +269,18 @@ fn a_named_global_is_forgotten_across_a_routine_that_may_call_back() {
 
 /// What `@f` of a program's second module returns, `@g` stored 7 before
 /// `call`, the first module holding `first`.
-fn kept_in(first: &str, globals: &str, call: &str, exports: Exports) -> Option<Known> {
-    let second = format!("{DOS}{globals}\ndefine i16 @f() {{\nb0:\n  store i16 7, ptr @g\n  {call}\n  %r = load i16, ptr @g\n  ret i16 %r\n}}\n");
-    let program = Program::new(vec![parsed(&format!("{DOS}{first}")), parsed(&second)], Rc::new(Neutral)).unwrap().exporting(exports);
+fn kept_in(
+    first: &str,
+    globals: &str,
+    call: &str,
+    exports: Exports,
+) -> Option<Known> {
+    let second = format!(
+        "{DOS}{globals}\ndefine i16 @f() {{\nb0:\n  store i16 7, ptr @g\n  {call}\n  %r = load i16, ptr @g\n  ret i16 %r\n}}\n"
+    );
+    let program = Program::new(vec![parsed(&format!("{DOS}{first}")), parsed(&second)], Rc::new(Neutral))
+        .unwrap()
+        .exporting(exports);
     let mut analyses = ProgramAnalyses::default();
     analyses.get::<ProgramSummaries>(&program);
     let module = &program.modules[1];
@@ -286,7 +318,9 @@ fn a_global_the_program_does_not_export_is_kept_across_the_runtime() {
 #[test]
 fn a_callee_declared_after_the_outer_facts_may_call_back() {
     let taken = parsed("@g = internal global i16 0\n\ndefine void @f() {\nb0:\n  ret void\n}\n");
-    let now = parsed("@g = internal global i16 0\n\ndefine void @f() {\nb0:\n  call void @late()\n  ret void\n}\n\ndeclare void @late() nocallback\n");
+    let now = parsed(
+        "@g = internal global i16 0\n\ndefine void @f() {\nb0:\n  call void @late()\n  ret void\n}\n\ndeclare void @late() nocallback\n",
+    );
     let mut outer = Outer::of(&taken, None);
     outer.require::<GlobalsAA>(&taken);
     let layout = layout(&now);

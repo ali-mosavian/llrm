@@ -12,19 +12,16 @@
 //! frame.
 //!
 //! What changed with the IR:
-//! - A global is never private. The old main body owned a program variable
-//!   no other code named; a global here is reached by the module's other
-//!   functions and, but for `internal` linkage, by other modules.
-//! - Every access goes through a pointer. The old rule that an access
-//!   through a pointer publishes what it reaches holds of one that does not
-//!   name its bytes (`MemRef::named`); the raw frame offsets and the direct
-//!   frame address operands are gone.
-//! - Dropped: `Exposure` and the BC descriptors, data segment and error
-//!   and event handlers. A handler here is an `invoke`'s unwind edge.
-
-use std::collections::BTreeSet;
+//! - A global is never private. The old main body owned a program variable no other code named; a global here is
+//!   reached by the module's other functions and, but for `internal` linkage, by other modules.
+//! - Every access goes through a pointer. The old rule that an access through a pointer publishes what it reaches holds
+//!   of one that does not name its bytes (`MemRef::named`); the raw frame offsets and the direct frame address operands
+//!   are gone.
+//! - Dropped: `Exposure` and the BC descriptors, data segment and error and event handlers. A handler here is an
+//!   `invoke`'s unwind edge.
 
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
@@ -40,24 +37,37 @@ use crate::memory::{MemRef, MemoryKind, ObjectRef, Unit};
 /// observe: each slice of the reference's provenance lies inside a frame
 /// object whose address did not escape, and that no access reaches without
 /// naming it.
-pub fn private<'a>(unit: Unit<'a>, pointers: &'a PointsTo) -> impl Fn(&MemRef) -> bool + 'a {
+pub fn private<'a>(
+    unit: Unit<'a>,
+    pointers: &'a PointsTo,
+) -> impl Fn(&MemRef) -> bool + 'a {
     let published = _published(&unit, pointers);
     _private(unit, pointers, Cow::Owned(published))
 }
 
 /// `private`, `published` being the manager's `Published`.
-pub fn private_of<'a>(unit: Unit<'a>, pointers: &'a PointsTo, published: &'a BTreeSet<ObjectRef>) -> impl Fn(&MemRef) -> bool + 'a {
+pub fn private_of<'a>(
+    unit: Unit<'a>,
+    pointers: &'a PointsTo,
+    published: &'a BTreeSet<ObjectRef>,
+) -> impl Fn(&MemRef) -> bool + 'a {
     _private(unit, pointers, Cow::Borrowed(published))
 }
 
-fn _private<'a>(unit: Unit<'a>, pointers: &'a PointsTo, published: Cow<'a, BTreeSet<ObjectRef>>) -> impl Fn(&MemRef) -> bool + 'a {
+fn _private<'a>(
+    unit: Unit<'a>,
+    pointers: &'a PointsTo,
+    published: Cow<'a, BTreeSet<ObjectRef>>,
+) -> impl Fn(&MemRef) -> bool + 'a {
     move |reference: &MemRef| {
         let provenance = reference.provenance.clone().or_else(|| pointers.reference(&unit, reference));
         provenance.is_some_and(|provenance| {
             !provenance.slices.is_empty()
                 && provenance.slices.iter().all(|one| {
                     one.object.kind == MemoryKind::Frame
-                        && one.object.extent.is_some_and(|extent| 0 <= one.low && one.low < one.high && one.high + one.width - 1 <= extent)
+                        && one.object.extent.is_some_and(|extent| {
+                            0 <= one.low && one.low < one.high && one.high + one.width - 1 <= extent
+                        })
                         && !pointers.escaped.contains(&one.object)
                         && !published.contains(&one.object)
                 })
@@ -72,7 +82,12 @@ impl Analysis for Published {
     type Result = Result<BTreeSet<ObjectRef>, String>;
     const NAME: &'static str = "published";
 
-    fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self::Result {
         let pointers = analyses.get::<Pointers>(context, layout, function);
         let pointers = Result::as_ref(&*pointers).map_err(String::clone)?;
         let exposed = analyses.get::<crate::manager::ExposedFrames>(context, layout, function);
@@ -87,7 +102,10 @@ impl Analysis for Published {
 ///
 /// So is what a call may read through an argument: `nocapture` keeps the
 /// address from escaping, not the callee from reading it during the call.
-fn _published(unit: &Unit, pointers: &PointsTo) -> BTreeSet<ObjectRef> {
+fn _published(
+    unit: &Unit,
+    pointers: &PointsTo,
+) -> BTreeSet<ObjectRef> {
     let mut published = BTreeSet::new();
     for (_, inst) in unit.function.walk() {
         for argument in crate::alias::read_arguments(unit, inst) {
@@ -96,11 +114,15 @@ fn _published(unit: &Unit, pointers: &PointsTo) -> BTreeSet<ObjectRef> {
             published.extend(passed.map(|one| one.object.clone()).filter(|one| one.kind != MemoryKind::Unknown));
         }
         let Some(reference) = MemRef::of(unit, inst).or_else(|| MemRef::filled(unit, inst)) else { continue };
-        let Some(provenance) = reference.provenance.clone().or_else(|| pointers.reference(unit, &reference)) else { continue };
+        let Some(provenance) = reference.provenance.clone().or_else(|| pointers.reference(unit, &reference)) else {
+            continue;
+        };
         // As `avail::dead_stores` asks it: of the access itself, not of what
         // points-to resolves. A variable index into a local is not a name.
         if !reference.named() {
-            published.extend(provenance.slices.into_iter().map(|one| one.object).filter(|one| one.kind != MemoryKind::Unknown));
+            published.extend(
+                provenance.slices.into_iter().map(|one| one.object).filter(|one| one.kind != MemoryKind::Unknown),
+            );
         }
     }
     // What a published object holds is read too: a callee given a struct
@@ -112,13 +134,22 @@ fn _published(unit: &Unit, pointers: &PointsTo) -> BTreeSet<ObjectRef> {
         .filter_map(|(_, inst)| {
             let instruction = unit.function.instruction(inst);
             match (&instruction.opcode, &instruction.operands[..]) {
-                (Opcode::Store { .. }, [Operand::Value(value), Operand::Value(address), ..]) => Some((*value, *address)),
+                (Opcode::Store { .. }, [Operand::Value(value), Operand::Value(address), ..]) => {
+                    Some((*value, *address))
+                }
                 _ => None,
             }
         })
         .collect();
     let objects = |value: &ValueId| -> Vec<ObjectRef> {
-        pointers.values.get(value).into_iter().flat_map(|provenance| provenance.slices.iter()).map(|one| one.object.clone()).filter(|one| one.kind != MemoryKind::Unknown).collect()
+        pointers
+            .values
+            .get(value)
+            .into_iter()
+            .flat_map(|provenance| provenance.slices.iter())
+            .map(|one| one.object.clone())
+            .filter(|one| one.kind != MemoryKind::Unknown)
+            .collect()
     };
     loop {
         let before = published.len();

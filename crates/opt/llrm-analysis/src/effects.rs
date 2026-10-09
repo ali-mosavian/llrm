@@ -11,12 +11,12 @@
 //! meaning: a raise reaches a handler in this body only along an `invoke`'s
 //! unwind edge, and `exposes_memory` asks for that edge.
 
-pub use llrm_mir::memory::callee;
+use llrm_mir::Context;
 use llrm_mir::facts::{Fact, Facts};
+pub use llrm_mir::memory::callee;
 use llrm_mir::memory::{Effects, stated_at};
 use llrm_mir::module::{Function, GlobalValue, InstId};
 use llrm_mir::opcode::Opcode;
-use llrm_mir::Context;
 
 /// Every global as its declaration, by id, which a call to it reads:
 /// the module analysis `passes::Declarations`, since a pass holds its own
@@ -24,64 +24,121 @@ use llrm_mir::Context;
 /// says what their attributes mean.
 pub type Declarations = [GlobalValue];
 
-fn declared<'a>(context: &Context, declarations: &'a Declarations, function: &Function, inst: InstId) -> Option<&'a Function> {
+fn declared<'a>(
+    context: &Context,
+    declarations: &'a Declarations,
+    function: &Function,
+    inst: InstId,
+) -> Option<&'a Function> {
     declarations.get(callee(context, function, inst)?.0 as usize).and_then(GlobalValue::function)
 }
 
 /// Whether the call `inst` or its callee states `fact`.
-pub fn states(context: &Context, declarations: &Declarations, function: &Function, inst: InstId, fact: Fact) -> bool {
+pub fn states(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+    fact: Fact,
+) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
-    Facts::of(&info.attrs).contains(fact) || declared(context, declarations, function, inst).is_some_and(|one| Facts::of(&one.attrs).contains(fact))
+    Facts::of(&info.attrs).contains(fact)
+        || declared(context, declarations, function, inst).is_some_and(|one| Facts::of(&one.attrs).contains(fact))
 }
 
 /// What the call `inst` may do to locations `counted` admits: what both the
 /// call site and the callee allow.
-fn call_effects(context: &Context, declarations: &Declarations, function: &Function, inst: InstId, counted: impl Fn(Option<&str>) -> bool + Copy) -> Effects {
+fn call_effects(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+    counted: impl Fn(Option<&str>) -> bool + Copy,
+) -> Effects {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return Effects::NONE };
     let site = stated_at(&info.attrs, counted);
-    let declared = declared(context, declarations, function, inst).map_or(Effects::ANY, |one| stated_at(&one.attrs, counted));
+    let declared =
+        declared(context, declarations, function, inst).map_or(Effects::ANY, |one| stated_at(&one.attrs, counted));
     Effects { reads: site.reads && declared.reads, writes: site.writes && declared.writes }
 }
 
 /// What an instruction may do to memory its operands do not name.
-fn unmodeled(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> Effects {
+fn unmodeled(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+) -> Effects {
     match function.instruction(inst).opcode {
         ref opcode if crate::memory::own_bytes(opcode).is_some() => Effects::NONE,
-        Opcode::Call(_) | Opcode::Invoke(_) => call_effects(context, declarations, function, inst, |location| location != Some("argmem")),
+        Opcode::Call(_) | Opcode::Invoke(_) => {
+            call_effects(context, declarations, function, inst, |location| location != Some("argmem"))
+        }
         _ => Effects::NONE,
     }
 }
 
 /// Whether an instruction may write memory its operands do not name.
-pub fn unmodeled_write(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> bool {
+pub fn unmodeled_write(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+) -> bool {
     unmodeled(context, declarations, function, inst).writes
 }
 
 /// Whether an instruction may read memory its operands do not name.
-pub fn unmodeled_read(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> bool {
+pub fn unmodeled_read(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+) -> bool {
     unmodeled(context, declarations, function, inst).reads
 }
 
 /// What the call `inst` may do to memory, through its arguments or
 /// otherwise; none where `inst` is no call.
-pub fn call(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> Effects {
+pub fn call(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+) -> Effects {
     call_effects(context, declarations, function, inst, |_| true)
 }
 
 /// Whether the call `inst` may touch memory at all.
-pub fn touches_memory(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> bool {
+pub fn touches_memory(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+) -> bool {
     call(context, declarations, function, inst) != Effects::NONE
 }
 
 /// Whether the call `inst` may write memory anywhere, inaccessible
 /// memory included.
-pub fn writes_memory(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> bool {
+pub fn writes_memory(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+) -> bool {
     call(context, declarations, function, inst).writes
 }
 
 /// Whether a raise here can reach a handler in this body, which reads memory.
-pub fn exposes_memory(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> bool {
-    matches!(function.instruction(inst).opcode, Opcode::Invoke(_)) && !states(context, declarations, function, inst, Fact::NoUnwind)
+pub fn exposes_memory(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    matches!(function.instruction(inst).opcode, Opcode::Invoke(_))
+        && !states(context, declarations, function, inst, Fact::NoUnwind)
 }
 
 #[cfg(test)]
@@ -111,8 +168,10 @@ b:
         let declarations = module.declarations();
         let f = function(&module, "f");
         let insts: Vec<InstId> = f.walk().map(|(_, inst)| inst).collect();
-        let writes: Vec<bool> = insts.iter().map(|&inst| unmodeled_write(&module.context, &declarations, f, inst)).collect();
-        let reads: Vec<bool> = insts.iter().map(|&inst| unmodeled_read(&module.context, &declarations, f, inst)).collect();
+        let writes: Vec<bool> =
+            insts.iter().map(|&inst| unmodeled_write(&module.context, &declarations, f, inst)).collect();
+        let reads: Vec<bool> =
+            insts.iter().map(|&inst| unmodeled_read(&module.context, &declarations, f, inst)).collect();
         assert_eq!(writes, [true, false, false, false, false, false, false]);
         assert_eq!(reads, [true, false, true, false, false, false, false]);
     }
@@ -183,7 +242,10 @@ b:
         let context = &module.context;
         for (_, inst) in f.walk().filter(|&(_, inst)| matches!(f.instruction(inst).opcode, Opcode::Call(_))) {
             let of = llrm_mir::memory::of(context, &callees, f, inst);
-            let effects = Effects { reads: unmodeled_read(context, &declarations, f, inst), writes: unmodeled_write(context, &declarations, f, inst) };
+            let effects = Effects {
+                reads: unmodeled_read(context, &declarations, f, inst),
+                writes: unmodeled_write(context, &declarations, f, inst),
+            };
             assert_eq!(effects, of, "{inst:?}");
         }
     }
@@ -250,13 +312,10 @@ b:
 }
 ",
         );
-        assert_eq!(found.iter().map(|&(read, write, _)| (read, write)).collect::<Vec<_>>(), [
-            (false, false),
-            (false, false),
-            (false, false),
-            (false, false),
-            (false, false)
-        ]);
+        assert_eq!(
+            found.iter().map(|&(read, write, _)| (read, write)).collect::<Vec<_>>(),
+            [(false, false), (false, false), (false, false), (false, false), (false, false)]
+        );
         assert!(found.iter().all(|&(_, _, touches)| !touches), "touches_memory asks only of calls");
     }
 
@@ -286,7 +345,8 @@ pad:
         );
         let declarations = module.declarations();
         let f = function(&module, "f");
-        let exposes = f.walk().map(|(_, inst)| exposes_memory(&module.context, &declarations, f, inst)).collect::<Vec<_>>();
+        let exposes =
+            f.walk().map(|(_, inst)| exposes_memory(&module.context, &declarations, f, inst)).collect::<Vec<_>>();
         assert_eq!(exposes[..3], [false, true, false]);
     }
 }

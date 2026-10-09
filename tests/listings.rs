@@ -58,7 +58,10 @@ fn normalized(lines: &[&str]) -> Vec<String> {
             let written = register(operands[0]).filter(|_| DEFINING.contains(&mnemonic) || idiom);
             let tokens: Vec<&str> = token.find_iter(rest).map(|one| one.as_str()).collect();
             let mut out = vec![String::new(); tokens.len()];
-            let mut name_of = |one: &str, at: usize, names: &mut BTreeMap<String, String>, versions: &BTreeMap<&str, usize>| {
+            let mut name_of = |one: &str,
+                               at: usize,
+                               names: &mut BTreeMap<String, String>,
+                               versions: &BTreeMap<&str, usize>| {
                 if one.starts_with("[bp") {
                     format!("[{}]", rename("F", one.to_owned(), names))
                 } else if let Some((family, width)) = register(one) {
@@ -66,7 +69,9 @@ fn normalized(lines: &[&str]) -> Vec<String> {
                     let new = written.is_some_and(|(of, _)| of == family) && (at == 0 || idiom);
                     let version = versions.get(family).copied().unwrap_or(0) + usize::from(new);
                     format!("{}.{width}", rename("R", format!("{family}#{version}"), names))
-                } else if one.chars().next().is_some_and(|first| first.is_ascii_alphabetic() || "_$@?".contains(first)) && !KEPT.contains(&one) {
+                } else if one.chars().next().is_some_and(|first| first.is_ascii_alphabetic() || "_$@?".contains(first))
+                    && !KEPT.contains(&one)
+                {
                     rename(if one.starts_with('L') && one.contains('_') { "L" } else { "S" }, one.to_owned(), names)
                 } else {
                     one.to_owned()
@@ -88,7 +93,10 @@ fn normalized(lines: &[&str]) -> Vec<String> {
 }
 
 /// The listing of the procedure `name` in `asm`.
-fn procedure<'a>(asm: &'a str, name: &str) -> Vec<&'a str> {
+fn procedure<'a>(
+    asm: &'a str,
+    name: &str,
+) -> Vec<&'a str> {
     let start = format!("{name} proc");
     let mut lines = asm.lines().skip_while(|line| !line.starts_with(&start));
     lines.next().unwrap_or_else(|| panic!("no {start} in the listing"));
@@ -101,15 +109,28 @@ fn loops<'a>(body: &[&'a str]) -> Vec<(Vec<&'a str>, bool)> {
     let mut spans = Vec::new();
     for (at, line) in body.iter().enumerate() {
         let Some(label) = line.strip_suffix(':') else { continue };
-        let back = body.iter().rposition(|one| one.trim().starts_with('j') && one.trim().ends_with(&format!(" {label}")));
+        let back =
+            body.iter().rposition(|one| one.trim().starts_with('j') && one.trim().ends_with(&format!(" {label}")));
         if let Some(end) = back.filter(|&end| end > at) {
             spans.push((at, end));
         }
     }
-    spans.iter().map(|&(at, end)| (body[at..=end].to_vec(), !spans.iter().any(|&(one, other)| (one, other) != (at, end) && at <= one && other <= end))).collect()
+    spans
+        .iter()
+        .map(|&(at, end)| {
+            (
+                body[at..=end].to_vec(),
+                !spans.iter().any(|&(one, other)| (one, other) != (at, end) && at <= one && other <= end),
+            )
+        })
+        .collect()
 }
 
-fn compiled(tool: &str, source: &Path, arguments: &[&str]) -> String {
+fn compiled(
+    tool: &str,
+    source: &Path,
+    arguments: &[&str],
+) -> String {
     let bin = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let out = scratch.path().join("out.asm");
@@ -119,15 +140,33 @@ fn compiled(tool: &str, source: &Path, arguments: &[&str]) -> String {
 }
 
 /// Each loop of `stem`'s kernel in BASIC, C and Nib, normalized.
-fn kernels(dir: &Path, stem: &str, basic: &str) -> [(&'static str, Vec<(Vec<String>, bool)>); 3] {
+fn kernels(
+    dir: &Path,
+    stem: &str,
+    basic: &str,
+) -> [(&'static str, Vec<(Vec<String>, bool)>); 3] {
     let source = |extension: &str| dir.join(format!("{stem}.{extension}"));
     let cpu = ["-O2", "-march=i486"];
-    let bas = compiled("llrm-qb", &source("bas"), &[&cpu[..], &["--dialect", "pds71", "--runtime", "pds71", "--huge-arrays", "-fno-inline-functions-called-once"]].concat());
+    let bas = compiled(
+        "llrm-qb",
+        &source("bas"),
+        &[
+            &cpu[..],
+            &["--dialect", "pds71", "--runtime", "pds71", "--huge-arrays", "-fno-inline-functions-called-once"],
+        ]
+        .concat(),
+    );
     let c = compiled("llrm-c", &source("c"), &[&cpu[..], &["-fno-inline-functions"]].concat());
     let nib = compiled("llrm-nib", &source("nib"), &[&cpu[..], &["-fno-inline-functions-called-once"]].concat());
-    let of = |asm: &str, name: &str| loops(&procedure(asm, name)).iter().map(|(one, inner)| (normalized(one), *inner)).collect();
+    let of = |asm: &str, name: &str| {
+        loops(&procedure(asm, name)).iter().map(|(one, inner)| (normalized(one), *inner)).collect()
+    };
     // C's kernel is spelled as the default ABI spells it; Nib's own procedures are not decorated.
-    [("bas", of(&bas, basic)), ("c", of(&c, &common::symbol(&format!("bench_{stem}")))), ("nib", of(&nib, &format!("_bench_{stem}")))]
+    [
+        ("bas", of(&bas, basic)),
+        ("c", of(&c, &common::symbol(&format!("bench_{stem}")))),
+        ("nib", of(&nib, &format!("_bench_{stem}"))),
+    ]
 }
 
 /// Huge arrays: QB called B$HARY for every element, C redid the 32-bit
@@ -138,25 +177,37 @@ fn kernels(dir: &Path, stem: &str, basic: &str) -> [(&'static str, Vec<(Vec<Stri
 #[test]
 fn test_huge_array_loops_are_the_same_in_basic_c_and_nib() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let mut programs: Vec<(PathBuf, String, String)> = vec![(root.join("bench/huge"), "huge".into(), "BENCHHUGE".into())];
+    let mut programs: Vec<(PathBuf, String, String)> =
+        vec![(root.join("bench/huge"), "huge".into(), "BENCHHUGE".into())];
     let corpus = root.join("tests/run/huge");
-    let mut stems: Vec<String> = std::fs::read_dir(&corpus).unwrap().flatten().filter_map(|one| {
-        let path = one.path();
-        // copyw and fillw are 16-bit words past 64K, which BASIC can only index as two columns (a subscript is at
-        // most 32767): their loops differ by construction. tests/run holds all three and compares their output.
-        let stem = path.file_stem()?.to_string_lossy().into_owned();
-        (path.extension()? == "nib" && !["copyw", "fillw"].contains(&stem.as_str())).then_some(stem)
-    }).collect();
+    let mut stems: Vec<String> = std::fs::read_dir(&corpus)
+        .unwrap()
+        .flatten()
+        .filter_map(|one| {
+            let path = one.path();
+            // copyw and fillw are 16-bit words past 64K, which BASIC can only index as two columns (a subscript is at
+            // most 32767): their loops differ by construction. tests/run holds all three and compares their output.
+            let stem = path.file_stem()?.to_string_lossy().into_owned();
+            (path.extension()? == "nib" && !["copyw", "fillw"].contains(&stem.as_str())).then_some(stem)
+        })
+        .collect();
     stems.sort();
     assert!(stems.len() >= 5, "premise: the corpus is found: {stems:?}");
-    programs.extend(stems.into_iter().map(|stem| (corpus.clone(), format!("BENCH{}", stem.to_uppercase()), stem)).map(|(dir, basic, stem)| (dir, stem, basic)));
+    programs.extend(
+        stems
+            .into_iter()
+            .map(|stem| (corpus.clone(), format!("BENCH{}", stem.to_uppercase()), stem))
+            .map(|(dir, basic, stem)| (dir, stem, basic)),
+    );
     let (mut differ, mut carried) = (Vec::new(), Vec::new());
     for (dir, stem, basic) in &programs {
         let languages = kernels(dir, stem, basic);
         let [(_, bas), (_, c), (_, nib)] = &languages;
         assert!(!c.is_empty(), "premise: {stem}.c has loops");
         if bas != c || nib != c {
-            let show = |loops: &Vec<(Vec<String>, bool)>| loops.iter().map(|(one, _)| one.join("\n")).collect::<Vec<_>>().join("\n--\n");
+            let show = |loops: &Vec<(Vec<String>, bool)>| {
+                loops.iter().map(|(one, _)| one.join("\n")).collect::<Vec<_>>().join("\n--\n")
+            };
             differ.push(format!("== {stem}\n-- bas\n{}\n-- c\n{}\n-- nib\n{}", show(bas), show(c), show(nib)));
         }
         // Inside a window nothing carries into a selector: no borrow mask.
@@ -185,7 +236,13 @@ fn test_scroll_loop_sets_no_segment_and_steps_no_start() {
         assert_eq!(strings.len(), 1, "premise: {language} has one loop of string ops: {loops:?}");
         let body = &strings[0].0;
         assert_eq!(body.iter().filter(|line| line.starts_with("rep ")).count(), 4, "premise: {language}: {body:?}");
-        let segment = body.iter().filter(|line| line.contains("es") && (line.starts_with("push") || line.starts_with("pop") || line.starts_with("mov es"))).count();
+        let segment = body
+            .iter()
+            .filter(|line| {
+                line.contains("es")
+                    && (line.starts_with("push") || line.starts_with("pop") || line.starts_with("mov es"))
+            })
+            .count();
         let stepped = body.iter().filter(|line| line.starts_with("sub ") && line.ends_with(", 3")).count();
         assert_eq!((segment, stepped), (0, 0), "{language}:\n{}", body.join("\n"));
     }

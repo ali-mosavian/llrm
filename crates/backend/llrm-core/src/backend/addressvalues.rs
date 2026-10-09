@@ -54,11 +54,8 @@ pub fn converted(body: &LirBody) -> LirBody {
     };
 
     let mut converted = body.clone();
-    converted.blocks = body
-        .blocks
-        .iter()
-        .map(|block| block.with_insns(block.insns.iter().map(instruction).collect()))
-        .collect();
+    converted.blocks =
+        body.blocks.iter().map(|block| block.with_insns(block.insns.iter().map(instruction).collect())).collect();
     converted
 }
 
@@ -66,12 +63,12 @@ pub fn converted(body: &LirBody) -> LirBody {
 mod tests {
     use std::sync::Arc;
 
-    use crate::support::hash::IndexMap;
     use iced_x86::Register;
 
     use super::converted;
     use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::support::hash::IndexMap;
     use crate::support::pyrepr::Repr;
 
     #[test]
@@ -85,12 +82,7 @@ mod tests {
             ..Semantics::new(op)
         };
         let held = |value| Loc::Held(Held { value, width: 2 });
-        let mem = |addr, through, offset, disp_width| Mem {
-            through,
-            offset,
-            disp_width,
-            ..Mem::new(Some(addr), 2)
-        };
+        let mem = |addr, through, offset, disp_width| Mem { through, offset, disp_width, ..Mem::new(Some(addr), 2) };
         let frame = Mem {
             base: Some(Held { value: 1, width: 2 }),
             scale: 2,

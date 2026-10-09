@@ -8,8 +8,8 @@
 //! `test_accumulation_has_no_backedge`.
 
 use llrm_analysis::cfg;
-use llrm_analysis::testing::{DOS, layout};
 use llrm_analysis::graph::loops;
+use llrm_analysis::testing::{DOS, layout};
 use llrm_mir::module::Module;
 use llrm_mir::passes::Outer;
 
@@ -25,7 +25,10 @@ fn evaluate(module: &mut Module) -> bool {
 
 /// `text` evaluated: its printed form, whether it changed, and how many
 /// loops it keeps. @f computes what it did on `inputs`.
-fn evaluated_text(text: &str, inputs: &[&[i128]]) -> (String, bool, usize) {
+fn evaluated_text(
+    text: &str,
+    inputs: &[&[i128]],
+) -> (String, bool, usize) {
     let before = parsed(&format!("{DOS}{text}"));
     let mut module = before.clone();
     let changed = evaluate(&mut module);
@@ -66,7 +69,10 @@ b3:
 fn disposable_loop_becomes_its_exit_values() {
     let (text, changed, kept) = evaluated_text(&counted(""), &[&[]]);
     assert!(changed && kept == 0);
-    assert!(text.ends_with("define i16 @f() {\nb0:\n  br label %b1\n\nb1:\n  br label %b3\n\nb3:\n  ret i16 6\n}\n"), "{text}");
+    assert!(
+        text.ends_with("define i16 @f() {\nb0:\n  br label %b1\n\nb1:\n  br label %b3\n\nb3:\n  ret i16 6\n}\n"),
+        "{text}"
+    );
 }
 
 /// An accumulator a store reads stays in the loop, and the read after the
@@ -154,7 +160,9 @@ fn a_loop_of_no_trips_is_kept() {
 /// loop computing it stays; the counter's, 4, replaces its read.
 #[test]
 fn an_exit_value_used_but_not_computable_keeps_the_loop() {
-    let text = counted("").replace("%s1 = add i16 %s, %i", "%s1 = add i16 %s, %s").replace("ret i16 %s", "%r = add i16 %s, %i\n  ret i16 %r");
+    let text = counted("")
+        .replace("%s1 = add i16 %s, %i", "%s1 = add i16 %s, %s")
+        .replace("ret i16 %s", "%r = add i16 %s, %i\n  ret i16 %r");
     let (after, changed, kept) = evaluated_text(&text, &[&[]]);
     assert!(changed && kept == 1, "{after}");
     assert!(after.contains("%r = add i16 %s, 4"), "{after}");

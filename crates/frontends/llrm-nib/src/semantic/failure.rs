@@ -6,11 +6,7 @@ use super::*;
 
 /// The success and failure variants of an `Option` or `Result` instance.
 fn outcome(layout: &EnumLayout) -> Option<(VariantLayout, VariantLayout)> {
-    let names: Vec<&str> = layout
-        .variants
-        .iter()
-        .map(|one| one.name.as_str())
-        .collect();
+    let names: Vec<&str> = layout.variants.iter().map(|one| one.name.as_str()).collect();
     matches!(names.as_slice(), ["some", "none"] | ["ok", "err"])
         .then(|| (layout.variants[0].clone(), layout.variants[1].clone()))
 }
@@ -20,17 +16,31 @@ impl FunctionCompiler<'_> {
     /// `value` bound to a hidden local, when it holds a `?`: a statement
     /// makes the place it writes, such as a pushed element or a dict entry,
     /// only after its value can no longer return early.
-    pub(super) fn settled_failure(&mut self, value: &Expr, span: Span) -> Result<Option<Expr>, Diagnostic> {
+    pub(super) fn settled_failure(
+        &mut self,
+        value: &Expr,
+        span: Span,
+    ) -> Result<Option<Expr>, Diagnostic> {
         let mut propagates = false;
-        let Ok(()) = value.clone().walk_mut(&mut |one| -> Result<(), std::convert::Infallible> {
-            propagates |= matches!(one, Expr::Try { .. });
-            Ok(())
-        });
+        let Ok(()) = value
+            .clone()
+            .walk_mut(
+                &mut |one| -> Result<(), std::convert::Infallible> {
+                    propagates |= matches!(one, Expr::Try { .. });
+                    Ok(())
+                },
+            );
         if !propagates {
             return Ok(None);
         }
         let name = self.hidden("settled");
-        self.statement(&Statement::Bind { mutable: false, name: name.clone(), annotation: None, value: value.clone(), span })?;
+        self.statement(&Statement::Bind {
+            mutable: false,
+            name: name.clone(),
+            annotation: None,
+            value: value.clone(),
+            span,
+        })?;
         Ok(Some(Expr::Name(name, span)))
     }
 
@@ -42,16 +52,10 @@ impl FunctionCompiler<'_> {
     ) -> Result<TypedOperand, Diagnostic> {
         let (view, payload) = self.unwrap(operand, span)?;
         let Some(field) = payload else {
-            return Ok(TypedOperand {
-                operand: None,
-                type_name: TypeName::Void,
-            });
+            return Ok(TypedOperand { operand: None, type_name: TypeName::Void });
         };
         let ElementType::Scalar(type_name) = field.type_ else {
-            return Err(Diagnostic::new(
-                span,
-                "this '?' yields a struct; bind it with 'let'",
-            ));
+            return Err(Diagnostic::new(span, "this '?' yields a struct; bind it with 'let'"));
         };
         if expected.is_some_and(|one| one != type_name) {
             return Err(type_mismatch(span, expected.expect("checked"), type_name));
@@ -61,10 +65,7 @@ impl FunctionCompiler<'_> {
         self.emit("load", vec![value], vec![place], None);
         // The payload leaves the outcome, which nothing drops: it is this
         // statement's to move or drop.
-        Ok(TypedOperand {
-            operand: Some(self.temporary_owned(hir::Operand::Value(value), type_name)),
-            type_name,
-        })
+        Ok(TypedOperand { operand: Some(self.temporary_owned(hir::Operand::Value(value), type_name)), type_name })
     }
 
     /// `operand?` as an aggregate: where its success payload is.
@@ -75,11 +76,9 @@ impl FunctionCompiler<'_> {
     ) -> Result<StructView, Diagnostic> {
         let (view, payload) = self.unwrap(operand, span)?;
         match payload.map(|one| (one.type_, one.offset)) {
-            Some((ElementType::Struct(struct_id), offset)) => Ok(StructView {
-                struct_id,
-                offset: view.offset + offset,
-                ..view
-            }),
+            Some((ElementType::Struct(struct_id), offset)) => {
+                Ok(StructView { struct_id, offset: view.offset + offset, ..view })
+            }
             _ => Err(Diagnostic::new(span, "this '?' yields no struct")),
         }
     }
@@ -93,11 +92,7 @@ impl FunctionCompiler<'_> {
         let Some(struct_id) = self.struct_expression_type(operand, span)? else {
             return Ok(None);
         };
-        let Some((success, _)) = self
-            .types
-            .enum_of(ElementType::Struct(struct_id))
-            .and_then(outcome)
-        else {
+        let Some((success, _)) = self.types.enum_of(ElementType::Struct(struct_id)).and_then(outcome) else {
             return Ok(None);
         };
         Ok(match success.fields.first().map(|(_, one)| one.type_) {
@@ -125,12 +120,7 @@ impl FunctionCompiler<'_> {
         };
         let layout = layout.expect("checked");
         let view = match operand {
-            Expr::Call {
-                name,
-                arguments,
-                span,
-                ..
-            } => self.call_into(name, arguments, *span)?,
+            Expr::Call { name, arguments, span, .. } => self.call_into(name, arguments, *span)?,
             other => match self.struct_view(other, span) {
                 Ok(view) => view,
                 Err(_) => {
@@ -145,10 +135,7 @@ impl FunctionCompiler<'_> {
         self.emit(
             "eq",
             vec![failed],
-            vec![
-                hir::Operand::Value(tag),
-                hir::Operand::Constant(type_id(layout.tag), failure.tag),
-            ],
+            vec![hir::Operand::Value(tag), hir::Operand::Constant(type_id(layout.tag), failure.tag)],
             None,
         );
         let (propagate, next) = (self.block(), self.block());
@@ -170,15 +157,9 @@ impl FunctionCompiler<'_> {
         failure: &VariantLayout,
         span: Span,
     ) -> Result<(), Diagnostic> {
-        let own = self
-            .signature
-            .slot
-            .and_then(|one| self.types.enum_of(ElementType::Struct(one)).cloned());
+        let own = self.signature.slot.and_then(|one| self.types.enum_of(ElementType::Struct(one)).cloned());
         let Some((_, own_failure)) = own.as_ref().and_then(outcome) else {
-            return Err(Diagnostic::new(
-                span,
-                "'?' needs a function that returns Option or Result",
-            ));
+            return Err(Diagnostic::new(span, "'?' needs a function that returns Option or Result"));
         };
         let own = own.expect("checked");
         let destination = self.struct_view(&Expr::Name(RESULT.into(), span), span)?;
@@ -188,12 +169,17 @@ impl FunctionCompiler<'_> {
         )];
         let (target, fields) = if own_failure.name == failure.name && same_types(&own_failure, failure) {
             (destination, own_failure.fields.clone())
-        } else if let Some((wrapper, wrapping)) = (own_failure.name == failure.name).then(|| self.wrapping(&own_failure, failure)).flatten() {
+        } else if let Some((wrapper, wrapping)) =
+            (own_failure.name == failure.name).then(|| self.wrapping(&own_failure, failure)).flatten()
+        {
             // `?` of `.err(e)` returns `.err(.wrapping(e))`.
             let (_, field) = &own_failure.fields[0];
             let target = StructView { struct_id: wrapper, offset: destination.offset + field.offset, ..destination };
             let tag = self.types.enum_of(ElementType::Struct(wrapper)).expect("an enum").tag;
-            stores.push(Store::One(self.field_place(&target, 0, tag), hir::Operand::Constant(type_id(tag), wrapping.tag)));
+            stores.push(Store::One(
+                self.field_place(&target, 0, tag),
+                hir::Operand::Constant(type_id(tag), wrapping.tag),
+            ));
             (target, wrapping.fields)
         } else {
             return Err(Diagnostic::new(
@@ -211,22 +197,12 @@ impl FunctionCompiler<'_> {
                     let value = self.value(type_name);
                     let place = self.field_place(source, from.offset, type_name);
                     self.emit("load", vec![value], vec![place], None);
-                    stores.push(Store::One(
-                        self.field_place(&target, to.offset, type_name),
-                        hir::Operand::Value(value),
-                    ));
+                    stores
+                        .push(Store::One(self.field_place(&target, to.offset, type_name), hir::Operand::Value(value)));
                 }
                 ElementType::Struct(struct_id) => {
-                    let (to, from) = (
-                        StructView {
-                            struct_id,
-                            ..at(&target, to)
-                        },
-                        StructView {
-                            struct_id,
-                            ..at(source, from)
-                        },
-                    );
+                    let (to, from) =
+                        (StructView { struct_id, ..at(&target, to) }, StructView { struct_id, ..at(source, from) });
                     self.prepare_struct_copy(&to, &from, &mut stores)?;
                 }
             }
@@ -239,7 +215,11 @@ impl FunctionCompiler<'_> {
 
     /// When `own` holds one enum with exactly one variant whose fields have
     /// `failure`'s types: that enum and variant.
-    fn wrapping(&self, own: &VariantLayout, failure: &VariantLayout) -> Option<(u32, VariantLayout)> {
+    fn wrapping(
+        &self,
+        own: &VariantLayout,
+        failure: &VariantLayout,
+    ) -> Option<(u32, VariantLayout)> {
         let [(_, field)] = own.fields.as_slice() else {
             return None;
         };
@@ -255,6 +235,9 @@ impl FunctionCompiler<'_> {
     }
 }
 
-fn same_types(one: &VariantLayout, other: &VariantLayout) -> bool {
+fn same_types(
+    one: &VariantLayout,
+    other: &VariantLayout,
+) -> bool {
     one.fields.iter().map(|(_, field)| field.type_).eq(other.fields.iter().map(|(_, field)| field.type_))
 }

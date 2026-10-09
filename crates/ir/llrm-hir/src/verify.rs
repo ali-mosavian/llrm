@@ -1,20 +1,23 @@
 //! Port of `qbopt/hir/verify.py`: structural and semantic checks at the
 //! source/frontend boundary.
 
-use llrm_support::hash::HashSet;
 use std::fmt;
 
+use llrm_support::hash::HashSet;
 use llrm_support::hash::IndexMap;
+use llrm_support::pyrepr::{self, Repr};
 
 use crate::model;
-use llrm_support::pyrepr::{self, Repr};
 
 /// HIR cannot be represented faithfully by the current MIR.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InvalidHIR(pub String);
 
 impl fmt::Display for InvalidHIR {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
@@ -37,7 +40,11 @@ macro_rules! invalid {
 fn _RESULTS(op: model::Op) -> Option<Option<usize>> {
     match op {
         model::Op::Store => Some(Some(0)),
-        model::Op::PortOut | model::Op::Assume | model::Op::CopyBytes | model::Op::LifetimeStart | model::Op::LifetimeEnd => Some(Some(0)),
+        model::Op::PortOut
+        | model::Op::Assume
+        | model::Op::CopyBytes
+        | model::Op::LifetimeStart
+        | model::Op::LifetimeEnd => Some(Some(0)),
         model::Op::Call | model::Op::Asm => Some(None),
         model::Op::Divmod => Some(Some(2)),
         model::Op::Udivmod => Some(Some(2)),
@@ -45,7 +52,14 @@ fn _RESULTS(op: model::Op) -> Option<Option<usize>> {
     }
 }
 
-const _PLACES: [model::Op; 6] = [model::Op::Load, model::Op::Store, model::Op::Address, model::Op::CopyBytes, model::Op::LifetimeStart, model::Op::LifetimeEnd];
+const _PLACES: [model::Op; 6] = [
+    model::Op::Load,
+    model::Op::Store,
+    model::Op::Address,
+    model::Op::CopyBytes,
+    model::Op::LifetimeStart,
+    model::Op::LifetimeEnd,
+];
 const _FLOAT: [model::Op; 13] = [
     model::Op::Fadd,
     model::Op::Fsub,
@@ -186,40 +200,73 @@ fn _facts(module: &model::Module) -> Result<(), InvalidHIR> {
         let function = |id: i64| index.function(id);
         let found = match subject {
             Subject::Callable(id) => callables.contains(&id),
-            Subject::Param { function: id, index } => function(id).is_some_and(|one| (0..one.parameters.len() as i64).contains(&index)),
+            Subject::Param { function: id, index } => {
+                function(id).is_some_and(|one| (0..one.parameters.len() as i64).contains(&index))
+            }
             Subject::Instruction { function: id, id: at } => index.instruction(id, at).is_some_and(|i| match fact {
                 // Of what it yields, and of what it accesses.
                 llrm_mir::facts::Fact::Range(_) => !i.results.is_empty(),
                 llrm_mir::facts::Fact::Align(_) => matches!(i.op, model::Op::Load | model::Op::Store),
                 _ => true,
             }),
-            Subject::Operand { function: id, instruction, operand } => index.instruction(id, instruction).is_some_and(|i| {
-                (0..i.operands.len() as i64).contains(&operand)
+            Subject::Operand { function: id, instruction, operand } => {
+                index.instruction(id, instruction).is_some_and(|i| {
+                    (0..i.operands.len() as i64).contains(&operand)
                     // What a callee does with a pointer is stated of a call's argument.
                     && (i.op == model::Op::Call || matches!(fact, llrm_mir::facts::Fact::InBounds))
-            }),
+                })
+            }
             Subject::Object(id) => objects.contains(&id),
-            Subject::Place { function: id, place } => function(id).is_some_and(|one| one.places.iter().any(|p| p.id == place)),
-            Subject::Field { owner, offset } => module.types.iter().any(|one| one.id == owner && (0..one.width.max(1)).contains(&offset)),
-            Subject::Terminator { function: id, block } => function(id).is_some_and(|one| one.blocks.iter().any(|b| b.id == block)),
+            Subject::Place { function: id, place } => {
+                function(id).is_some_and(|one| one.places.iter().any(|p| p.id == place))
+            }
+            Subject::Field { owner, offset } => {
+                module.types.iter().any(|one| one.id == owner && (0..one.width.max(1)).contains(&offset))
+            }
+            Subject::Terminator { function: id, block } => {
+                function(id).is_some_and(|one| one.blocks.iter().any(|b| b.id == block))
+            }
         };
         if !found {
-            invalid!("{}: {} is stated of a {} the module lacks", module.name, fact.key(), Subject::kind_key(subject.kind()));
+            invalid!(
+                "{}: {} is stated of a {} the module lacks",
+                module.name,
+                fact.key(),
+                Subject::kind_key(subject.kind())
+            );
         }
         // A freedom of floating arithmetic is of a floating operation, and a
         // wrap fact of integer add, sub, mul or neg (a sub from zero):
         // lowering gives a flag to nothing else.
         if let Subject::Instruction { function: id, id: at } = subject {
             use llrm_mir::facts::Fact;
-            let op = function(id).and_then(|one| one.blocks.iter().flat_map(|block| &block.instructions).find(|i| i.id == at)).map(|i| i.op);
-            let floating = matches!(op, Some(model::Op::Fadd | model::Op::Fsub | model::Op::Fmul | model::Op::Fdiv));
-            let integer = matches!(op, Some(model::Op::Add | model::Op::Sub | model::Op::Mul | model::Op::Neg));
+            let op = function(id)
+                .and_then(|one| one.blocks.iter().flat_map(|block| &block.instructions).find(|i| i.id == at))
+                .map(|i| i.op);
+            let floating = matches!(
+                op,
+                Some(model::Op::Fadd | model::Op::Fsub | model::Op::Fmul | model::Op::Fdiv)
+            );
+            let integer = matches!(
+                op,
+                Some(model::Op::Add | model::Op::Sub | model::Op::Mul | model::Op::Neg)
+            );
             match fact {
-                Fact::Reassoc | Fact::NoNaNs | Fact::NoInfs | Fact::NoSignedZeros | Fact::AllowReciprocal if !floating => {
-                    invalid!("{}: {} is stated of an instruction that is no floating operation", module.name, fact.key());
+                Fact::Reassoc | Fact::NoNaNs | Fact::NoInfs | Fact::NoSignedZeros | Fact::AllowReciprocal
+                    if !floating =>
+                {
+                    invalid!(
+                        "{}: {} is stated of an instruction that is no floating operation",
+                        module.name,
+                        fact.key()
+                    );
                 }
                 Fact::NoSignedWrap | Fact::NoUnsignedWrap if !integer => {
-                    invalid!("{}: {} is stated of {op:?} {at}, no integer add, sub, mul or neg", module.name, fact.key());
+                    invalid!(
+                        "{}: {} is stated of {op:?} {at}, no integer add, sub, mul or neg",
+                        module.name,
+                        fact.key()
+                    );
                 }
                 _ => {}
             }
@@ -264,7 +311,10 @@ pub fn verify(program: &model::Program) -> Result<(), InvalidHIR> {
                 if !relocation.code && !data.contains_key(&relocation.target) {
                     invalid!("{}: {} relocates to unknown data", module.name, object_.name);
                 }
-                let width = if matches!(relocation.address, model::AddressKind::Far | model::AddressKind::Huge) {
+                let width = if matches!(
+                    relocation.address,
+                    model::AddressKind::Far | model::AddressKind::Huge
+                ) {
                     4
                 } else {
                     2
@@ -304,9 +354,7 @@ pub fn verify(program: &model::Program) -> Result<(), InvalidHIR> {
             }
             let count = callable_.parameter_types.len();
             if callable_.parameter_types.iter().any(|one| !types.contains_key(one))
-                || ![&callable_.by_value, &callable_.segmented, &callable_.arrays]
-                    .iter()
-                    .all(|one| one.len() == count)
+                || ![&callable_.by_value, &callable_.segmented, &callable_.arrays].iter().all(|one| one.len() == count)
             {
                 invalid!("{}: {} has an incomplete signature", module.name, callable_.name);
             }
@@ -338,12 +386,8 @@ fn _function(
     let places: IndexMap<i64, &model::Place> = function.places.iter().map(|one| (one.id, one)).collect();
     let data: IndexMap<i64, &model::DataObject> = module.data.iter().map(|one| (one.id, one)).collect();
     let blocks: IndexMap<i64, &model::Block> = function.blocks.iter().map(|one| (one.id, one)).collect();
-    let instructions: IndexMap<i64, &model::Instruction> = function
-        .blocks
-        .iter()
-        .flat_map(|block| block.instructions.iter())
-        .map(|one| (one.id, one))
-        .collect();
+    let instructions: IndexMap<i64, &model::Instruction> =
+        function.blocks.iter().flat_map(|block| block.instructions.iter()).map(|one| (one.id, one)).collect();
     if values.len() != function.values.len() {
         invalid!("{prefix}: duplicate value id");
     }
@@ -385,7 +429,8 @@ fn _function(
         let mut order = site.order.clone();
         order.sort();
         // An indirect call's first operand is what it calls, and is not passed.
-        let passed = instruction.operands.len() - usize::from(instruction.op == model::Op::Call && instruction.callee.is_none());
+        let passed =
+            instruction.operands.len() - usize::from(instruction.op == model::Op::Call && instruction.callee.is_none());
         if order != (0..passed as i64).collect::<Vec<_>>() {
             invalid!("{prefix}: call {} has invalid argument order", site.instruction);
         }
@@ -397,7 +442,8 @@ fn _function(
         };
         // A value passes in its parameter's representation: a near pointer is not a far one.
         if callable.parameter_types.len() == instruction.operands.len() {
-            for (index, (operand, parameter)) in instruction.operands.iter().zip(&callable.parameter_types).enumerate() {
+            for (index, (operand, parameter)) in instruction.operands.iter().zip(&callable.parameter_types).enumerate()
+            {
                 let (model::Operand::ValueRef(_), true) = (operand, callable.by_value[index]) else {
                     continue;
                 };
@@ -421,7 +467,10 @@ fn _function(
             Some(extent) if extent >= types[&place.r#type].width => extent,
             _ => invalid!("{prefix}: place {} has incomplete extent", place.name),
         };
-        if !matches!(place.storage, model::Storage::Local | model::Storage::Parameter) {
+        if !matches!(
+            place.storage,
+            model::Storage::Local | model::Storage::Parameter
+        ) {
             let Some(object_) = data.get(&place.symbol) else {
                 invalid!("{prefix}: place {} has no data object", place.name);
             };
@@ -443,18 +492,20 @@ fn _function(
         for instruction in &block.instructions {
             let expected = _RESULTS(instruction.op).unwrap_or(Some(1));
             if let Some(expected) = expected.filter(|expected| instruction.results.len() != *expected) {
-                invalid!(
-                    "{prefix}: {} has {} results, expected {expected}",
-                    instruction.op,
-                    instruction.results.len()
-                );
+                invalid!("{prefix}: {} has {} results, expected {expected}", instruction.op, instruction.results.len());
             }
             // A call names its callee, or calls through the pointer its first operand is.
             let through_pointer = instruction.callee.is_none()
                 && instruction.operands.first().is_some_and(|first| {
-                    matches!(first, model::Operand::ValueRef(one) if values.get(&one.value).is_some_and(|value| types.get(&value.r#type).is_some_and(|ty| ty.kind == model::TypeKind::Pointer)))
+                    matches!(
+                        first,
+                        model::Operand::ValueRef(one) if values.get(&one.value).is_some_and(|value| types.get(&value.r#type).is_some_and(|ty| ty.kind == model::TypeKind::Pointer))
+                    )
                 });
-            if instruction.op == model::Op::Call && instruction.callee.as_deref().is_none_or(str::is_empty) && !through_pointer {
+            if instruction.op == model::Op::Call
+                && instruction.callee.as_deref().is_none_or(str::is_empty)
+                && !through_pointer
+            {
                 invalid!("{prefix}: call {} has no callee", instruction.id);
             }
             if (instruction.op == model::Op::Call || _STRING_COMPARE.contains(&instruction.op))
@@ -466,7 +517,8 @@ fn _function(
                 invalid!("{prefix}: string comparison is not B$SCMP");
             }
             // A code address names its function as its callee, and no place.
-            let code_address = instruction.op == model::Op::Address && instruction.callee.as_deref().is_some_and(|one| !one.is_empty());
+            let code_address = instruction.op == model::Op::Address
+                && instruction.callee.as_deref().is_some_and(|one| !one.is_empty());
             if _PLACES.contains(&instruction.op) && instruction.operands.is_empty() && !code_address {
                 invalid!("{prefix}: {} {} has no place", instruction.op, instruction.id);
             }
@@ -556,12 +608,22 @@ fn _function(
                     )
                 };
                 match &instruction.operands[..] {
-                    [destination, source, model::Operand::Constant(model::Constant { value: model::Number::Int(bytes), .. })] if place(destination) && place(source) && *bytes > 0 => {}
+                    [
+                        destination,
+                        source,
+                        model::Operand::Constant(model::Constant { value: model::Number::Int(bytes), .. }),
+                    ] if place(destination) && place(source) && *bytes > 0 => {}
                     _ => invalid!("{prefix}: {} takes two places and a positive constant byte count", instruction.op),
                 }
             }
-            if matches!(instruction.op, model::Op::LifetimeStart | model::Op::LifetimeEnd) {
-                let local = matches!(&instruction.operands[..], [model::Operand::PlaceRef(one)] if function.places.iter().any(|place| place.id == one.place && place.storage == model::Storage::Local));
+            if matches!(
+                instruction.op,
+                model::Op::LifetimeStart | model::Op::LifetimeEnd
+            ) {
+                let local = matches!(
+                    &instruction.operands[..],
+                    [model::Operand::PlaceRef(one)] if function.places.iter().any(|place| place.id == one.place && place.storage == model::Storage::Local)
+                );
                 if !local {
                     invalid!("{prefix}: {} names one local place", instruction.op);
                 }
@@ -593,7 +655,13 @@ fn _function(
                 }
             }
             if instruction.op == model::Op::Assume
-                && (instruction.operands.len() != 1 || operand_types.iter().any(|one| !matches!(types[one].kind, model::TypeKind::Boolean | model::TypeKind::Integer)))
+                && (instruction.operands.len() != 1
+                    || operand_types
+                        .iter()
+                        .any(|one| !matches!(
+                            types[one].kind,
+                            model::TypeKind::Boolean | model::TypeKind::Integer
+                        )))
             {
                 invalid!("{prefix}: assume {} takes one condition", instruction.id);
             }
@@ -624,7 +692,10 @@ fn _function(
                     .collect();
                 if involved
                     .iter()
-                    .any(|one| !matches!(types[one].kind, model::TypeKind::Integer | model::TypeKind::Boolean))
+                    .any(|one| !matches!(
+                        types[one].kind,
+                        model::TypeKind::Integer | model::TypeKind::Boolean
+                    ))
                 {
                     invalid!("{prefix}: {} has a non-integer operand", instruction.op);
                 }
@@ -688,10 +759,12 @@ fn _function(
                 // An ordered compare also orders pointers, as LLVM's `icmp ult ptr`: how
                 // a space's pointers order is the lowering's, not a conversion's.
                 let ordered_pointers = _COMPARE.contains(&instruction.op);
-                let unsigned = involved.iter().all(|one| {
-                    (types[one].kind == model::TypeKind::Integer && types[one].signed == Some(false))
-                        || (ordered_pointers && types[one].kind == model::TypeKind::Pointer)
-                });
+                let unsigned = involved
+                    .iter()
+                    .all(
+                        |one| (types[one].kind == model::TypeKind::Integer && types[one].signed == Some(false))
+                            || (ordered_pointers && types[one].kind == model::TypeKind::Pointer),
+                    );
                 if !unsigned {
                     invalid!("{prefix}: {} requires unsigned integer operands", instruction.op);
                 }
@@ -769,7 +842,9 @@ fn _function(
                         invalid!("{prefix}: invalid indirect place");
                     }
                     let pointer = types[&values[&operand.base].r#type];
-                    if pointer.kind != model::TypeKind::Pointer || pointer.element.is_some_and(|element| !types.contains_key(&element)) {
+                    if pointer.kind != model::TypeKind::Pointer
+                        || pointer.element.is_some_and(|element| !types.contains_key(&element))
+                    {
                         invalid!("{prefix}: indirect place disagrees with pointer type");
                     }
                     // An opaque pointer, as C's, states no pointee to stay inside.
@@ -787,8 +862,14 @@ fn _function(
                     {
                         invalid!("{prefix}: descriptor place needs a sequence pointer");
                     }
-                    if field.kind != model::TypeKind::Integer || field.width != descriptor_word || field.signed != Some(false) {
-                        invalid!("{prefix}: descriptor field is not an unsigned word of the program's {} bytes", descriptor_word);
+                    if field.kind != model::TypeKind::Integer
+                        || field.width != descriptor_word
+                        || field.signed != Some(false)
+                    {
+                        invalid!(
+                            "{prefix}: descriptor field is not an unsigned word of the program's {} bytes",
+                            descriptor_word
+                        );
                     }
                 }
             }
@@ -832,16 +913,22 @@ fn _function(
         {
             invalid!("{prefix}: return value type does not match the function");
         }
-        if matches!(term.kind, model::TerminatorKind::Branch | model::TerminatorKind::Switch) {
+        if matches!(
+            term.kind,
+            model::TerminatorKind::Branch | model::TerminatorKind::Switch
+        ) {
             let condition = types[&_operand_type(&term.operands[0], &values, &places)?];
-            if !matches!(condition.kind, model::TypeKind::Boolean | model::TypeKind::Integer) {
+            if !matches!(
+                condition.kind,
+                model::TypeKind::Boolean | model::TypeKind::Integer
+            ) {
                 invalid!("{prefix}: {} condition is not integral", term.kind);
             }
         }
     }
     let parameters: HashSet<i64> = function.parameters.iter().copied().collect();
-    let invalid_parameters =
-        parameters.len() != function.parameters.len() || function.parameters.iter().any(|one| !values.contains_key(one));
+    let invalid_parameters = parameters.len() != function.parameters.len()
+        || function.parameters.iter().any(|one| !values.contains_key(one));
     if invalid_parameters {
         invalid!("{prefix}: invalid parameter values");
     }

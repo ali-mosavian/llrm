@@ -32,16 +32,25 @@ fn unsupported(text: impl Into<String>) -> Unsupported {
     Unsupported(text.into())
 }
 
-fn put32(out: &mut Vec<u8>, value: u32) {
+fn put32(
+    out: &mut Vec<u8>,
+    value: u32,
+) {
     out.extend(value.to_le_bytes());
 }
 
-fn put64(out: &mut Vec<u8>, value: u64) {
+fn put64(
+    out: &mut Vec<u8>,
+    value: u64,
+) {
     out.extend(value.to_le_bytes());
 }
 
 /// A fixed-width name field, NUL padded.
-fn name16(out: &mut Vec<u8>, name: &str) {
+fn name16(
+    out: &mut Vec<u8>,
+    name: &str,
+) {
     let mut field = [0u8; 16];
     field[..name.len()].copy_from_slice(name.as_bytes());
     out.extend(field);
@@ -65,7 +74,10 @@ fn debug_name(name: &str) -> Result<&'static str, Unsupported> {
 /// The segment, section and type-and-attributes words of `section`.
 fn spelling(section: &Section) -> Result<(&'static str, &'static str, u32), Unsupported> {
     if !section.near {
-        return Err(unsupported(format!("{}: a segment addressed by its own selector has no Mach-O section", section.name)));
+        return Err(unsupported(format!(
+            "{}: a segment addressed by its own selector has no Mach-O section",
+            section.name
+        )));
     }
     Ok(match section.role {
         Role::Text => ("__TEXT", "__text", S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS),
@@ -74,7 +86,9 @@ fn spelling(section: &Section) -> Result<(&'static str, &'static str, u32), Unsu
         Role::ROData => ("__TEXT", "__const", 0),
         Role::Data => ("__DATA", "__data", 0),
         Role::Bss => ("__DATA", "__bss", S_ZEROFILL),
-        Role::Stack => return Err(unsupported(format!("{}: an OMF stack segment has no Mach-O section", section.name))),
+        Role::Stack => {
+            return Err(unsupported(format!("{}: an OMF stack segment has no Mach-O section", section.name)));
+        }
         // `.debug_info` is `__debug_info` of the segment `__DWARF`.
         Role::Debug => ("__DWARF", debug_name(&section.name)?, S_ATTR_DEBUG),
     })
@@ -97,7 +111,10 @@ fn relocation(kind: Kind) -> Result<(u32, u32, bool, i64), Unsupported> {
     })
 }
 
-fn align_up(value: usize, to: usize) -> usize {
+fn align_up(
+    value: usize,
+    to: usize,
+) -> usize {
     value.div_ceil(to) * to
 }
 
@@ -121,14 +138,18 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
     let spelled: Vec<(&str, &str, u32)> = object.sections.iter().map(spelling).collect::<Result<_, _>>()?;
     for (index, one) in spelled.iter().enumerate() {
         if spelled[..index].iter().any(|other| other.0 == one.0 && other.1 == one.1) {
-            return Err(unsupported(format!("{}: two sections would both be ({},{})", object.sections[index].name, one.0, one.1)));
+            return Err(unsupported(format!(
+                "{}: two sections would both be ({},{})",
+                object.sections[index].name, one.0, one.1
+            )));
         }
     }
 
     // Sections with contents come first in the file, then the zero-fill ones, which have none.
     let mut order: Vec<usize> = (0..object.sections.len()).filter(|&one| spelled[one].2 != S_ZEROFILL).collect();
     order.extend((0..object.sections.len()).filter(|&one| spelled[one].2 == S_ZEROFILL));
-    let ordinal = |section: usize| order.iter().position(|&one| one == section).expect("a section is in the order") as u32 + 1;
+    let ordinal =
+        |section: usize| order.iter().position(|&one| one == section).expect("a section is in the order") as u32 + 1;
     let mut address = vec![0usize; object.sections.len()];
     let mut next = 0;
     for &one in &order {
@@ -138,11 +159,18 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
     }
     let vm_size = next;
     let file_backed = order.iter().filter(|&&one| spelled[one].2 != S_ZEROFILL).count();
-    let file_size = order.iter().take(file_backed).last().map_or(0, |&one| address[one] + object.sections[one].image.len());
+    let file_size =
+        order.iter().take(file_backed).last().map_or(0, |&one| address[one] + object.sections[one].image.len());
 
     // Symbols the object exports, then the ones it declares; each by name within its kind.
-    let mut defined: Vec<usize> = (0..object.symbols.len()).filter(|&one| object.symbols[one].binding == Binding::Public && matches!(object.symbols[one].definition, Definition::Defined { .. })).collect();
-    let mut undefined: Vec<usize> = (0..object.symbols.len()).filter(|&one| object.symbols[one].definition == Definition::Undefined).collect();
+    let mut defined: Vec<usize> = (0..object.symbols.len())
+        .filter(|&one| {
+            object.symbols[one].binding == Binding::Public
+                && matches!(object.symbols[one].definition, Definition::Defined { .. })
+        })
+        .collect();
+    let mut undefined: Vec<usize> =
+        (0..object.symbols.len()).filter(|&one| object.symbols[one].definition == Definition::Undefined).collect();
     defined.sort_by(|&a, &b| object.symbols[a].name.cmp(&object.symbols[b].name));
     undefined.sort_by(|&a, &b| object.symbols[a].name.cmp(&object.symbols[b].name));
     let mut index_of = vec![None; object.symbols.len()];
@@ -189,7 +217,8 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
             // One debug section's offset into another is not relocated: dsymutil reads the object's
             // own sections, where it is the offset itself.
             if section.role == Role::Debug && home.is_some_and(|home| object.sections[home].role == Role::Debug) {
-                let offset = u32::try_from(one.addend).map_err(|_| unsupported(format!("{}: an offset of {} does not fit", section.name, one.addend)))?;
+                let offset = u32::try_from(one.addend)
+                    .map_err(|_| unsupported(format!("{}: an offset of {} does not fit", section.name, one.addend)))?;
                 image[one.at..one.at + width].copy_from_slice(&u64::from(offset).to_le_bytes()[..width]);
                 continue;
             }
@@ -216,10 +245,19 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
                 (_, false) => u32::try_from(field).is_ok(),
             };
             if !fits {
-                return Err(unsupported(format!("{}: a value of {field} does not fit its {width}-byte field", section.name)));
+                return Err(unsupported(format!(
+                    "{}: a value of {field} does not fit its {width}-byte field",
+                    section.name
+                )));
             }
             image[one.at..one.at + width].copy_from_slice(&field.to_le_bytes()[..width]);
-            made.push((one.at, [one.at as u32, symbolnum | u32::from(pcrel) << 24 | length << 25 | u32::from(external) << 27 | kind << 28]));
+            made.push((
+                one.at,
+                [
+                    one.at as u32,
+                    symbolnum | u32::from(pcrel) << 24 | length << 25 | u32::from(external) << 27 | kind << 28,
+                ],
+            ));
         }
         // LLVM writes them last first.
         made.sort_by_key(|one| std::cmp::Reverse(one.0));
@@ -280,7 +318,8 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
     }
     put32(&mut out, LC_SYMTAB);
     put32(&mut out, 24);
-    for field in [symbols_at as u32, (defined.len() + undefined.len()) as u32, strings_at as u32, strings.len() as u32] {
+    for field in [symbols_at as u32, (defined.len() + undefined.len()) as u32, strings_at as u32, strings.len() as u32]
+    {
         put32(&mut out, field);
     }
     put32(&mut out, LC_DYSYMTAB);
@@ -322,27 +361,49 @@ mod tests {
         Path::new(&path).exists().then_some(path)
     }
 
-    fn section(name: &str, role: Role, image: Vec<u8>, relocs: Vec<Reloc>) -> Section {
+    fn section(
+        name: &str,
+        role: Role,
+        image: Vec<u8>,
+        relocs: Vec<Reloc>,
+    ) -> Section {
         let spans = vec![[0, image.len()]];
         Section { name: name.into(), role, near: true, align: 1, image, spans, relocs }
     }
 
-    fn defined(name: &str, section: usize, offset: usize) -> Symbol {
-        Symbol { name: name.into(), binding: Binding::Public, definition: Definition::Defined { section, offset }, group: None }
+    fn defined(
+        name: &str,
+        section: usize,
+        offset: usize,
+    ) -> Symbol {
+        Symbol {
+            name: name.into(),
+            binding: Binding::Public,
+            definition: Definition::Defined { section, offset },
+            group: None,
+        }
     }
 
     fn external(name: &str) -> Symbol {
         Symbol { name: name.into(), binding: Binding::Public, definition: Definition::Undefined, group: None }
     }
 
-    fn reloc(at: usize, kind: Kind, target: usize, addend: i64) -> Reloc {
+    fn reloc(
+        at: usize,
+        kind: Kind,
+        target: usize,
+        addend: i64,
+    ) -> Reloc {
         Reloc { at, kind, target: Target::Symbol(target), addend }
     }
 
     /// The program `REFERENCE` assembles: a call, a `lea`, a `movb $1, flag(%rip)` (four bytes of
     /// field and one of immediate), a load, and a pointer to `msg+1`.
     fn program() -> Object {
-        let text = vec![0xE8, 0, 0, 0, 0, 0x48, 0x8D, 0x35, 0, 0, 0, 0, 0xC6, 0x05, 0, 0, 0, 0, 0x01, 0x48, 0x8B, 0x05, 0, 0, 0, 0, 0xC3];
+        let text = vec![
+            0xE8, 0, 0, 0, 0, 0x48, 0x8D, 0x35, 0, 0, 0, 0, 0xC6, 0x05, 0, 0, 0, 0, 0x01, 0x48, 0x8B, 0x05, 0, 0, 0, 0,
+            0xC3,
+        ];
         let relocs = vec![
             reloc(1, Kind::Branch { width: 4 }, 3, 0),
             reloc(8, Kind::PcRel { width: 4, from: 4 }, 1, 0),
@@ -352,12 +413,23 @@ mod tests {
         Object {
             name: "ref.s".into(),
             arch: Arch::X8664,
-            sections: vec![section("text", Role::Text, text, relocs), section("const", Role::ROData, b"hello\n".to_vec(), vec![]), {
-                let mut data = section("data", Role::Data, vec![0; 9], vec![reloc(0, Kind::Abs { width: 8 }, 1, 1)]);
-                data.image[8] = 0;
-                data
-            }],
-            symbols: vec![defined("_start", 0, 0), defined("_msg", 1, 0), defined("_ptr", 2, 0), external("_ext"), defined("_flag", 2, 8)],
+            sections: vec![
+                section("text", Role::Text, text, relocs),
+                section("const", Role::ROData, b"hello\n".to_vec(), vec![]),
+                {
+                    let mut data =
+                        section("data", Role::Data, vec![0; 9], vec![reloc(0, Kind::Abs { width: 8 }, 1, 1)]);
+                    data.image[8] = 0;
+                    data
+                },
+            ],
+            symbols: vec![
+                defined("_start", 0, 0),
+                defined("_msg", 1, 0),
+                defined("_ptr", 2, 0),
+                external("_ext"),
+                defined("_flag", 2, 8),
+            ],
             omf_groups: Vec::new(),
             debug: None,
         }
@@ -382,8 +454,15 @@ _ptr:   .quad _msg+1
 _flag:  .byte 0
 ";
 
-    fn dump(tool_path: &str, object: &Path) -> String {
-        let said = Command::new(tool_path).args(["-r", "-d", "-t", "--macho", "--full-contents"]).arg(object).output().unwrap();
+    fn dump(
+        tool_path: &str,
+        object: &Path,
+    ) -> String {
+        let said = Command::new(tool_path)
+            .args(["-r", "-d", "-t", "--macho", "--full-contents"])
+            .arg(object)
+            .output()
+            .unwrap();
         assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
         String::from_utf8_lossy(&said.stdout).into_owned()
     }
@@ -397,10 +476,17 @@ _flag:  .byte 0
             return;
         };
         let scratch = tempfile::tempdir().unwrap();
-        let (mine, theirs, source) = (scratch.path().join("mine.o"), scratch.path().join("theirs.o"), scratch.path().join("ref.s"));
+        let (mine, theirs, source) =
+            (scratch.path().join("mine.o"), scratch.path().join("theirs.o"), scratch.path().join("ref.s"));
         std::fs::write(&mine, write(&program()).unwrap()).unwrap();
         std::fs::write(&source, REFERENCE).unwrap();
-        let made = Command::new(mc).args(["-triple", "x86_64-apple-macos11", "-filetype=obj"]).arg(&source).arg("-o").arg(&theirs).output().unwrap();
+        let made = Command::new(mc)
+            .args(["-triple", "x86_64-apple-macos11", "-filetype=obj"])
+            .arg(&source)
+            .arg("-o")
+            .arg(&theirs)
+            .output()
+            .unwrap();
         assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
         // The reference's symbol `_flag` is a global there, as here; the dumps differ only in the file's name.
         let (mine, theirs) = (dump(&objdump, &mine), dump(&objdump, &theirs));
@@ -422,23 +508,60 @@ _flag:  .byte 0
         let made = Object {
             name: "m.s".into(),
             arch: Arch::X8664,
-            sections: vec![section("text", Role::Text, text, vec![reloc(1, Kind::Branch { width: 4 }, 1, 0), reloc(8, Kind::PcRel { width: 4, from: 4 }, 2, 0)]), section("data", Role::Data, vec![7, 0, 0, 0], vec![])],
-            symbols: vec![defined("_start", 0, 0), external("_ext"), Symbol { name: "local".into(), binding: Binding::Local, definition: Definition::Defined { section: 1, offset: 0 }, group: None }],
+            sections: vec![
+                section(
+                    "text",
+                    Role::Text,
+                    text,
+                    vec![reloc(1, Kind::Branch { width: 4 }, 1, 0), reloc(8, Kind::PcRel { width: 4, from: 4 }, 2, 0)],
+                ),
+                section("data", Role::Data, vec![7, 0, 0, 0], vec![]),
+            ],
+            symbols: vec![
+                defined("_start", 0, 0),
+                external("_ext"),
+                Symbol {
+                    name: "local".into(),
+                    binding: Binding::Local,
+                    definition: Definition::Defined { section: 1, offset: 0 },
+                    group: None,
+                },
+            ],
             omf_groups: Vec::new(),
             debug: None,
         };
         std::fs::write(dir.join("mine.o"), write(&made).unwrap()).unwrap();
         std::fs::write(dir.join("ext.c"), "int ext(void) { return 3; }\n").unwrap();
-        let compiled = Command::new("clang").args(["-target", "x86_64-apple-macos11", "-c", "-O1"]).arg(dir.join("ext.c")).arg("-o").arg(dir.join("ext.o")).output().unwrap();
+        let compiled = Command::new("clang")
+            .args(["-target", "x86_64-apple-macos11", "-c", "-O1"])
+            .arg(dir.join("ext.c"))
+            .arg("-o")
+            .arg(dir.join("ext.o"))
+            .output()
+            .unwrap();
         assert!(compiled.status.success(), "{}", String::from_utf8_lossy(&compiled.stderr));
-        let linked = Command::new(&ld).args(["-arch", "x86_64", "-platform_version", "macos", "11.0", "11.0", "-e", "_start", "-o"]).arg(dir.join("out")).arg(dir.join("mine.o")).arg(dir.join("ext.o")).output().unwrap();
+        let linked = Command::new(&ld)
+            .args(["-arch", "x86_64", "-platform_version", "macos", "11.0", "11.0", "-e", "_start", "-o"])
+            .arg(dir.join("out"))
+            .arg(dir.join("mine.o"))
+            .arg(dir.join("ext.o"))
+            .output()
+            .unwrap();
         assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
-        let run = |arguments: &[&str]| String::from_utf8_lossy(&Command::new(&objdump).args(arguments).arg(dir.join("out")).output().unwrap().stdout).into_owned();
+        let run = |arguments: &[&str]| {
+            String::from_utf8_lossy(
+                &Command::new(&objdump).args(arguments).arg(dir.join("out")).output().unwrap().stdout,
+            )
+            .into_owned()
+        };
         let text = run(&["-d", "--macho"]);
         assert!(text.contains("callq\t_ext"), "{text}");
         // The `lea`'s displacement reaches the start of __data, a section the reference named only by number.
         let lea = text.lines().find(|line| line.contains("leaq")).unwrap_or_else(|| panic!("{text}"));
-        let (at, disp) = (u64::from_str_radix(lea.split(':').next().unwrap().trim(), 16).unwrap(), u64::from_str_radix(lea.split("0x").nth(1).unwrap().split('(').next().unwrap(), 16).unwrap());
+        let (at, disp) = (
+            u64::from_str_radix(lea.split(':').next().unwrap().trim(), 16).unwrap(),
+            u64::from_str_radix(lea.split("0x").nth(1).unwrap().split('(').next().unwrap(), 16).unwrap(),
+        );
         let sections = run(&["-h", "--macho"]);
         let data = sections.lines().find(|line| line.contains("__data")).unwrap_or_else(|| panic!("{sections}"));
         let data = u64::from_str_radix(data.split_whitespace().nth(3).unwrap(), 16).unwrap();
@@ -462,7 +585,10 @@ _flag:  .byte 0
         made.sections[1] = section("const", Role::ROData, vec![0; 8], vec![reloc(0, Kind::Abs { width: 8 }, 0, 0)]);
         let bytes = write(&made).unwrap();
         let text = String::from_utf8_lossy(&bytes);
-        assert!(text.contains("__const") && !bytes.windows(14).any(|one| one == b"__const         __TEXT ".get(..14).unwrap() && false));
+        assert!(
+            text.contains("__const")
+                && !bytes.windows(14).any(|one| one == b"__const         __TEXT ".get(..14).unwrap() && false)
+        );
         let at = bytes.windows(7).position(|one| one == b"__const").unwrap();
         assert_eq!(&bytes[at + 16..at + 22], b"__DATA");
     }
@@ -490,7 +616,10 @@ _flag:  .byte 0
     /// information of another format is never written in its place.
     #[test]
     fn a_debug_format_this_object_cannot_carry_is_refused() {
-        for (format, name) in [(llrm_object::debug::Format::CodeView, "CodeView"), (llrm_object::debug::Format::TurboDebugger, "Turbo Debugger")] {
+        for (format, name) in [
+            (llrm_object::debug::Format::CodeView, "CodeView"),
+            (llrm_object::debug::Format::TurboDebugger, "Turbo Debugger"),
+        ] {
             let mut made = program();
             made.debug = Some(llrm_object::debug::Info { format, ..Default::default() });
             let why = write(&made).unwrap_err().0;

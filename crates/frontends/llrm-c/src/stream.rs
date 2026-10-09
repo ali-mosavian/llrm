@@ -33,11 +33,7 @@ pub fn parse(text: &str) -> Vec<Record> {
         }
         let mut result = None;
         if tokens[0] == "-" || is_handle(&tokens[0]) {
-            result = if tokens[0] == "-" {
-                None
-            } else {
-                Some(tokens[0].clone())
-            };
+            result = if tokens[0] == "-" { None } else { Some(tokens[0].clone()) };
             tokens.remove(0);
         }
         let mut args = Vec::new();
@@ -50,13 +46,7 @@ pub fn parse(text: &str) -> Vec<Record> {
                 _ => args.push(value_of(one)),
             }
         }
-        records.push(Record {
-            line: index + 1,
-            result,
-            call: tokens[0].clone(),
-            args,
-            fields,
-        });
+        records.push(Record { line: index + 1, result, call: tokens[0].clone(), args, fields });
     }
     records
 }
@@ -69,15 +59,7 @@ pub(crate) fn splitlines(text: &str) -> Vec<&str> {
     while let Some((at, character)) = chars.next() {
         let breaks = matches!(
             character,
-            '\n' | '\r'
-                | '\u{0b}'
-                | '\u{0c}'
-                | '\u{1c}'
-                | '\u{1d}'
-                | '\u{1e}'
-                | '\u{85}'
-                | '\u{2028}'
-                | '\u{2029}'
+            '\n' | '\r' | '\u{0b}' | '\u{0c}' | '\u{1c}' | '\u{1d}' | '\u{1e}' | '\u{85}' | '\u{2028}' | '\u{2029}'
         );
         if !breaks {
             continue;
@@ -98,8 +80,7 @@ pub(crate) fn splitlines(text: &str) -> Vec<&str> {
 /// `str.isidentifier` for the ASCII keys the shim writes.
 fn is_identifier(key: &str) -> bool {
     let mut chars = key.chars();
-    matches!(chars.next(), Some(c) if c == '_' || c.is_alphabetic())
-        && chars.all(|c| c == '_' || c.is_alphanumeric())
+    matches!(chars.next(), Some(c) if c == '_' || c.is_alphabetic()) && chars.all(|c| c == '_' || c.is_alphanumeric())
 }
 
 /// Space-separated tokens; a quoted string holds no quote, the shim escapes it.
@@ -114,11 +95,7 @@ fn split(line: &str) -> Vec<String> {
         let mut end = start;
         while end < bytes.len() && bytes[end] != b' ' {
             if bytes[end] == b'"' {
-                end = end
-                    + 1
-                    + line[end + 1..]
-                        .find('"')
-                        .expect("the shim closes every quote");
+                end = end + 1 + line[end + 1..].find('"').expect("the shim closes every quote");
             }
             end += 1;
         }
@@ -140,15 +117,11 @@ fn unescape(text: &str) -> String {
     let mut out = String::new();
     let mut rest = text;
     while let Some(at) = rest.find("\\x") {
-        let hex = rest
-            .get(at + 2..at + 4)
-            .filter(|hex| hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')));
+        let hex = rest.get(at + 2..at + 4).filter(|hex| hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')));
         match hex {
             Some(hex) => {
                 out.push_str(&rest[..at]);
-                out.push(char::from(
-                    u8::from_str_radix(hex, 16).expect("two hex digits"),
-                ));
+                out.push(char::from(u8::from_str_radix(hex, 16).expect("two hex digits")));
                 rest = &rest[at + 4..];
             }
             None => {
@@ -167,9 +140,7 @@ mod tests {
 
     #[test]
     fn parses_results_arguments_and_fields() {
-        let records = parse(
-            "n7 CGBinary O_PLUS n5 n6 TY_INTEGER\n- CGDone n7\nSYM y1 name=\"pal now\" attr=0x42\n",
-        );
+        let records = parse("n7 CGBinary O_PLUS n5 n6 TY_INTEGER\n- CGDone n7\nSYM y1 name=\"pal now\" attr=0x42\n");
         assert_eq!(records.len(), 3);
         assert_eq!(records[0].result.as_deref(), Some("n7"));
         assert_eq!(records[0].args, ["O_PLUS", "n5", "n6", "TY_INTEGER"]);

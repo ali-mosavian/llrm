@@ -3,9 +3,9 @@
 //! fit a word the machine traps and `sdiv i16` is undefined, as the core's
 //! 32-by-16 division leaves it.
 
+use llrm_mir::BinaryOp;
 use llrm_x86_bcmachine::model::ir::Operation;
 use llrm_x86_bcmachine::model::ir::nodes::Node;
-use llrm_mir::BinaryOp;
 
 use crate::emit::{Emit, Emitter};
 use crate::longs::extended;
@@ -14,9 +14,17 @@ use crate::sites::Recognizer;
 pub struct Division;
 
 impl Recognizer for Division {
-    fn node(&self, e: &mut Emitter, node: &Node) -> Option<Emit<()>> {
+    fn node(
+        &self,
+        e: &mut Emitter,
+        node: &Node,
+    ) -> Option<Emit<()>> {
         let what = node.semantics();
-        if what.op != Operation::Divide || what.name.as_deref() != Some("idiv") || what.sources.len() != 3 || what.dests.len() != 2 {
+        if what.op != Operation::Divide
+            || what.name.as_deref() != Some("idiv")
+            || what.sources.len() != 3
+            || what.dests.len() != 2
+        {
             return None;
         }
         let (high, low) = (e.read(&what.sources[0]).ok()?, e.read(&what.sources[1]).ok()?);

@@ -14,7 +14,11 @@ fn deadened(module: &mut Module) -> bool {
 }
 
 /// `text` after Dead is `expected`, and computes what it did on `inputs`.
-fn check(text: &str, expected: &str, inputs: &[&[i128]]) {
+fn check(
+    text: &str,
+    expected: &str,
+    inputs: &[&[i128]],
+) {
     let mut module = parsed(text);
     let before = results(&module, inputs);
     assert_eq!(deadened(&mut module), text != expected);

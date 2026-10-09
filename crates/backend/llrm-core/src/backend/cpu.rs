@@ -7,13 +7,12 @@
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
-use crate::support::hash::IndexMap;
-
 use llrm_target::Target;
 
 use crate::model::passes::{
     AddressForm, DEFAULT_MAX_UNROLL_ITERATIONS, DEFAULT_MAX_UNROLLED_OPERATIONS, OperationCosts,
 };
+use crate::support::hash::IndexMap;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Profile {
@@ -52,11 +51,14 @@ pub struct Profile {
     pub address_prefix_stall: i64,
     // -Os: where the costs tie on nothing else, the shorter encoding.
     pub size: bool,
-    /// Whether the allocator tries other shapes of a body than the one it is given and keeps the cheapest, as LLVM and GCC do not.
+    /// Whether the allocator tries other shapes of a body than the one it is given and keeps the cheapest, as LLVM and
+    /// GCC do not.
     pub search: bool,
-    /// Whether a function is made by both routes (the allocator alone and the spiller's) and the cheaper kept; else by the allocator alone.
+    /// Whether a function is made by both routes (the allocator alone and the spiller's) and the cheaper kept; else by
+    /// the allocator alone.
     pub routes: bool,
-    /// With `search`, whether it tries every shape (`-fallocation-search-all`, -Omax) or the one the spills suggest and the body without splitting.
+    /// With `search`, whether it tries every shape (`-fallocation-search-all`, -Omax) or the one the spills suggest
+    /// and the body without splitting.
     pub exhaustive: bool,
     /// How the target this profile is for builds its cost model from the CPU's prices.
     pub model: llrm_target::CostModel,
@@ -64,17 +66,28 @@ pub struct Profile {
     pub multiplies: MultiplyChains,
 }
 
-/// What `arithmetic` found for a multiply by a constant under one profile's prices, by constant and by whether a `lea` may be used:
-/// the profile owns it, so it lives and is keyed with the prices it was found under.
+/// What `arithmetic` found for a multiply by a constant under one profile's prices, by constant and by whether a `lea`
+/// may be used: the profile owns it, so it lives and is keyed with the prices it was found under.
 #[derive(Default)]
-pub struct MultiplyChains(std::sync::Mutex<crate::support::hash::HashMap<(i64, bool), Option<(Vec<(&'static str, i64)>, i64)>>>);
+pub struct MultiplyChains(
+    std::sync::Mutex<crate::support::hash::HashMap<(i64, bool), Option<(Vec<(&'static str, i64)>, i64)>>>,
+);
 
 impl MultiplyChains {
-    pub fn get(&self, number: i64, with_lea: bool) -> Option<Option<(Vec<(&'static str, i64)>, i64)>> {
+    pub fn get(
+        &self,
+        number: i64,
+        with_lea: bool,
+    ) -> Option<Option<(Vec<(&'static str, i64)>, i64)>> {
         self.0.lock().expect("not poisoned").get(&(number, with_lea)).cloned()
     }
 
-    pub fn put(&self, number: i64, with_lea: bool, found: Option<(Vec<(&'static str, i64)>, i64)>) {
+    pub fn put(
+        &self,
+        number: i64,
+        with_lea: bool,
+        found: Option<(Vec<(&'static str, i64)>, i64)>,
+    ) {
         self.0.lock().expect("not poisoned").insert((number, with_lea), found);
     }
 }
@@ -87,13 +100,19 @@ impl Clone for MultiplyChains {
 }
 
 impl std::fmt::Debug for MultiplyChains {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         formatter.write_str("MultiplyChains")
     }
 }
 
 impl PartialEq for MultiplyChains {
-    fn eq(&self, _: &Self) -> bool {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
         true
     }
 }
@@ -101,7 +120,11 @@ impl PartialEq for MultiplyChains {
 impl Eq for MultiplyChains {}
 
 impl std::hash::Hash for MultiplyChains {
-    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        _: &mut H,
+    ) {
+    }
 }
 
 impl Profile {
@@ -174,7 +197,10 @@ impl Profile {
     }
 
     /// The existing target-ranking cost for one named instruction form.
-    pub fn cost(&self, operation: &str) -> Result<i64, String> {
+    pub fn cost(
+        &self,
+        operation: &str,
+    ) -> Result<i64, String> {
         _listed(&self._costs, operation).ok_or_else(|| format!("{} has no cost for {operation}", self.name))
     }
 
@@ -187,23 +213,35 @@ impl Profile {
     /// Whether `words` pops into a dead register clean a call's arguments
     /// off the stack in place of `add sp,2*words`: shorter for one or two
     /// words, and where size is not wanted, only if no slower.
-    pub fn pops_arguments(&self, words: i64) -> Result<bool, String> {
+    pub fn pops_arguments(
+        &self,
+        words: i64,
+    ) -> Result<bool, String> {
         Ok(words <= 2 && (self.size || words * self.cost("pop_r")? <= self.cost("alu_rr")?))
     }
 
     /// Whether this profile has an explicit ranking for a form.
-    pub fn prices(&self, operation: &str) -> bool {
+    pub fn prices(
+        &self,
+        operation: &str,
+    ) -> bool {
         _listed(&self._costs, operation).is_some()
     }
 
     /// The existing dependency latency, distinct from occupancy cost.
-    pub fn latency(&self, operation: &str) -> Result<i64, String> {
+    pub fn latency(
+        &self,
+        operation: &str,
+    ) -> Result<i64, String> {
         _listed(&self._latencies, operation).ok_or_else(|| format!("{} has no latency for {operation}", self.name))
     }
 }
 
 /// What `table` lists for `operation`; the last of a name listed twice, as a map built from the table says.
-fn _listed(table: &[(String, i64)], operation: &str) -> Option<i64> {
+fn _listed(
+    table: &[(String, i64)],
+    operation: &str,
+) -> Option<i64> {
     table.iter().rev().find(|(name, _)| name == operation).map(|(_, value)| *value)
 }
 
@@ -232,11 +270,19 @@ impl<'a> From<&'a Profile> for ProfileOrName<'a> {
 /// Native medium-model addressing, then the legal secondary 67h form.
 /// The target's address forms, priced by `costs` and `prefix`: the 386's
 /// table has no prefix column, so its own is passed.
-fn _address_forms(arch: &dyn Target, costs: &OperationCosts, prefix: i64, address_stall: i64) -> Vec<AddressForm> {
+fn _address_forms(
+    arch: &dyn Target,
+    costs: &OperationCosts,
+    prefix: i64,
+    address_stall: i64,
+) -> Vec<AddressForm> {
     arch.address_forms(&OperationCosts { prefix, ..costs.clone() }, address_stall)
 }
 
-fn _profile(arch: &dyn Target, name: &str) -> Result<Profile, String> {
+fn _profile(
+    arch: &dyn Target,
+    name: &str,
+) -> Result<Profile, String> {
     let table = arch.cpu_table(name).ok_or_else(|| format!("unknown CPU target: {name}"))?;
     let costs: IndexMap<&str, i64> = table.clocks.iter().map(|(form, clocks)| (form.as_str(), *clocks)).collect();
     let operations = arch.operation_costs(&|form| costs[form], table.prefix);
@@ -252,30 +298,60 @@ fn _profile(arch: &dyn Target, name: &str) -> Result<Profile, String> {
 }
 
 /// The profiles made so far, by target, CPU and size: each made once, as the passes hold them.
-static _MADE: LazyLock<std::sync::Mutex<crate::support::hash::HashMap<(&'static str, String, bool, bool, bool, bool), &'static Profile>>> = LazyLock::new(Default::default);
+static _MADE: LazyLock<
+    std::sync::Mutex<crate::support::hash::HashMap<(&'static str, String, bool, bool, bool, bool), &'static Profile>>,
+> = LazyLock::new(Default::default);
 
 /// `name`'s profile on the target `arch`, tuned for size where `size`.
-pub fn tuned_for(arch: &dyn Target, name: &str, size: bool) -> Result<&'static Profile, String> {
+pub fn tuned_for(
+    arch: &dyn Target,
+    name: &str,
+    size: bool,
+) -> Result<&'static Profile, String> {
     tuned_searching(arch, name, size, true)
 }
 
 /// `tuned_for`, trying every shape of a body where `exhaustive`.
-pub fn tuned_exhaustive(arch: &dyn Target, name: &str, size: bool, exhaustive: bool) -> Result<&'static Profile, String> {
+pub fn tuned_exhaustive(
+    arch: &dyn Target,
+    name: &str,
+    size: bool,
+    exhaustive: bool,
+) -> Result<&'static Profile, String> {
     tuned_with(arch, name, size, true, exhaustive)
 }
 
 /// `tuned_for`, the allocator trying other shapes of a body only where `search`.
-pub fn tuned_searching(arch: &dyn Target, name: &str, size: bool, search: bool) -> Result<&'static Profile, String> {
+pub fn tuned_searching(
+    arch: &dyn Target,
+    name: &str,
+    size: bool,
+    search: bool,
+) -> Result<&'static Profile, String> {
     tuned_with(arch, name, size, search, false)
 }
 
 /// `tuned_searching`, every shape where `exhaustive`.
-pub fn tuned_with(arch: &dyn Target, name: &str, size: bool, search: bool, exhaustive: bool) -> Result<&'static Profile, String> {
+pub fn tuned_with(
+    arch: &dyn Target,
+    name: &str,
+    size: bool,
+    search: bool,
+    exhaustive: bool,
+) -> Result<&'static Profile, String> {
     tuned_routing(arch, name, size, search, exhaustive, search)
 }
 
-/// `tuned_with`, the routes compared where `routes` whatever the search: -O1 to -Os allocate once, and choose the route.
-pub fn tuned_routing(arch: &dyn Target, name: &str, size: bool, search: bool, exhaustive: bool, routes: bool) -> Result<&'static Profile, String> {
+/// `tuned_with`, the routes compared where `routes` whatever the search: -O1 to -Os allocate once, and choose the
+/// route.
+pub fn tuned_routing(
+    arch: &dyn Target,
+    name: &str,
+    size: bool,
+    search: bool,
+    exhaustive: bool,
+    routes: bool,
+) -> Result<&'static Profile, String> {
     if !arch.cpus().contains(&name) {
         return Err(format!("unknown CPU target: {name}; {} has {}", arch.name(), arch.cpus().join(", ")));
     }
@@ -284,14 +360,23 @@ pub fn tuned_routing(arch: &dyn Target, name: &str, size: bool, search: bool, ex
     if let Some(&one) = made.get(&key) {
         return Ok(one);
     }
-    let one: &'static Profile = Box::leak(Box::new(Profile { size, search, exhaustive, routes, ..(_profile(arch, name)).expect("every listed CPU has a profile") }));
+    let one: &'static Profile = Box::leak(Box::new(Profile {
+        size,
+        search,
+        exhaustive,
+        routes,
+        ..(_profile(arch, name)).expect("every listed CPU has a profile")
+    }));
     made.insert(key, one);
     Ok(one)
 }
 
 /// `name`'s profile on 16-bit x86, tuned for size where `size`.
 #[cfg(test)]
-pub fn tuned(name: &str, size: bool) -> Result<&'static Profile, String> {
+pub fn tuned(
+    name: &str,
+    size: bool,
+) -> Result<&'static Profile, String> {
     tuned_for(&llrm_x86_m16::M16, name, size)
 }
 
@@ -321,51 +406,26 @@ mod tests {
 
     #[test]
     fn test_every_public_cpu_name_has_one_immutable_profile() {
-        assert_eq!(
-            names()
-                .into_iter()
-                .map(|name| profile(name).unwrap().name.as_str())
-                .collect::<Vec<_>>(),
-            names()
-        );
+        assert_eq!(names().into_iter().map(|name| profile(name).unwrap().name.as_str()).collect::<Vec<_>>(), names());
         for name in names() {
             let target = profile(name).unwrap();
             assert_eq!(target.operations.add, target.cost("alu_rr").unwrap());
             assert_eq!(target.operations.address, target.cost("lea").unwrap());
-            assert_eq!(
-                target.operations.memory_update,
-                target.cost("alu_mr").unwrap()
-            );
+            assert_eq!(target.operations.memory_update, target.cost("alu_mr").unwrap());
             assert_eq!(target.operations.prefix, target.prefix_cost);
             assert_eq!(target.operations.r#move, target.cost("mov_rr").unwrap());
             assert_eq!(target.operations.call, target.cost("call_far").unwrap());
             assert_eq!(target.operations.return_, target.cost("ret_far").unwrap());
             assert_eq!(target.operations.float_add, target.cost("x87_add").unwrap());
-            assert_eq!(
-                target.operations.float_multiply,
-                target.cost("x87_mul").unwrap()
-            );
-            assert_eq!(
-                target.operations.float_divide,
-                target.cost("x87_div").unwrap()
-            );
-            assert_eq!(
-                target.operations.float_load,
-                target.cost("x87_load").unwrap()
-            );
-            assert_eq!(
-                target.operations.float_store,
-                target.cost("x87_store").unwrap()
-            );
+            assert_eq!(target.operations.float_multiply, target.cost("x87_mul").unwrap());
+            assert_eq!(target.operations.float_divide, target.cost("x87_div").unwrap());
+            assert_eq!(target.operations.float_load, target.cost("x87_load").unwrap());
+            assert_eq!(target.operations.float_store, target.cost("x87_store").unwrap());
             assert_eq!(target.max_unroll_iterations, 16);
             assert_eq!(target.max_unrolled_operations, 200);
         }
         assert!(profile("P5").unwrap().pentium_pairing);
-        assert!(
-            !names()
-                .into_iter()
-                .any(|name| name != "P5" && profile(name).unwrap().pentium_pairing)
-        );
+        assert!(!names().into_iter().any(|name| name != "P5" && profile(name).unwrap().pentium_pairing));
     }
 
     #[test]
@@ -389,17 +449,12 @@ mod tests {
     #[test]
     fn test_medium_model_profiles_distinguish_native_and_67h_addressing() {
         for target in names().into_iter().map(|name| profile(name).unwrap()) {
-            let [native, secondary] = target.address_forms.as_slice() else {
-                panic!("two forms")
-            };
+            let [native, secondary] = target.address_forms.as_slice() else { panic!("two forms") };
             assert!(target.address_scales == native.scales && native.scales == BTreeSet::from([1]));
             assert!(native.index_width == 2 && !native.secondary);
             assert!(secondary.index_width == 4 && secondary.scales == BTreeSet::from([1, 2, 4, 8]));
             assert!(secondary.secondary && secondary.extra_bytes == 1);
-            assert_eq!(
-                secondary.use_cost,
-                target.prefix_cost + target.address_prefix_stall
-            );
+            assert_eq!(secondary.use_cost, target.prefix_cost + target.address_prefix_stall);
             assert_eq!(secondary.extension_cost, target.operations.extend);
         }
 
@@ -411,18 +466,13 @@ mod tests {
                 .any(|name| profile(name).unwrap().address_prefix_stall != 0)
         );
 
-        let legacy =
-            AddressForm::new(4, BTreeSet::from([1, 2, 4, 8]), 0, 0, 0, false, Some(true)).unwrap();
+        let legacy = AddressForm::new(4, BTreeSet::from([1, 2, 4, 8]), 0, 0, 0, false, Some(true)).unwrap();
         assert!(legacy.secondary && legacy.fallback == Some(true));
     }
 
     #[test]
     fn test_unknown_cpu_is_rejected_at_the_shared_boundary() {
-        assert!(
-            profile("pentium")
-                .unwrap_err()
-                .contains("unknown CPU target")
-        );
+        assert!(profile("pentium").unwrap_err().contains("unknown CPU target"));
     }
 
     /// indexed.lru_use improved on Core but regressed P5/P6 when every legal
@@ -446,7 +496,12 @@ mod tests {
     #[test]
     fn test_the_lowered_target_forwards_its_size_costs() {
         use llrm_mir::target::Machine;
-        let abi = crate::abi::qb::HirAbi { runtime: crate::hir::model::RuntimeProfile::Freestanding, objects: Default::default(), preserved: Default::default(), stack_check: None };
+        let abi = crate::abi::qb::HirAbi {
+            runtime: crate::hir::model::RuntimeProfile::Freestanding,
+            objects: Default::default(),
+            preserved: Default::default(),
+            stack_check: None,
+        };
         let target = crate::abi::qb::LoweredTarget::of(profile("486").unwrap(), abi);
         assert_eq!((target.costs().call, target.size_costs().call), (18, 5));
     }
@@ -467,12 +522,16 @@ mod tests {
     }
 }
 
-
 /// The convention `arch`'s description gives a private function, and the ones that may take it.
 fn private_convention(arch: &dyn Target) -> Option<llrm_mir::target::PrivateConvention> {
     let calling = arch.calling();
     let to = llrm_target::calling::Calling::number_of(calling.private()?.cc.as_deref())?;
-    let mut from: Vec<u32> = calling.conventions.iter().filter(|one| calling.replaceable(one)).filter_map(|one| llrm_target::calling::Calling::number_of(one.cc.as_deref())).collect();
+    let mut from: Vec<u32> = calling
+        .conventions
+        .iter()
+        .filter(|one| calling.replaceable(one))
+        .filter_map(|one| llrm_target::calling::Calling::number_of(one.cc.as_deref()))
+        .collect();
     from.sort_unstable();
     from.dedup();
     Some(llrm_mir::target::PrivateConvention { to, from })

@@ -11,7 +11,11 @@ const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 fn build() -> String {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let done = Command::new(cargo).args(["build", "--release", "--bins", "-v"]).current_dir(ROOT).output().expect("cargo runs");
+    let done = Command::new(cargo)
+        .args(["build", "--release", "--bins", "-v"])
+        .current_dir(ROOT)
+        .output()
+        .expect("cargo runs");
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
     String::from_utf8_lossy(&done.stderr).into_owned()
 }

@@ -10,7 +10,12 @@ use super::test_hir::{between, listing, written};
 /// Each dialect, on its runtime.
 const DIALECTS: [(&str, &str); 4] = [("qbasic11", "qb45"), ("qb45", "qb45"), ("pds71", "pds71"), ("vbdos", "vbdos")];
 
-fn program(source: &str, dialect: &str, runtime: &str, own_frames: bool) -> Program {
+fn program(
+    source: &str,
+    dialect: &str,
+    runtime: &str,
+    own_frames: bool,
+) -> Program {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "frames.bas", source.as_bytes());
     let frontend = qb_driver::Frontend { runtime_frames: !own_frames, ..qb_driver::Frontend::new(dialect, runtime) };
@@ -18,7 +23,13 @@ fn program(source: &str, dialect: &str, runtime: &str, own_frames: bool) -> Prog
 }
 
 /// Procedure `name`'s listing on the rich route.
-fn procedure(source: &str, dialect: &str, runtime: &str, own_frames: bool, name: &str) -> String {
+fn procedure(
+    source: &str,
+    dialect: &str,
+    runtime: &str,
+    own_frames: bool,
+    name: &str,
+) -> String {
     let listing = listing(&program(source, dialect, runtime, own_frames));
     between(&listing, &format!("{name} proc"), &format!("{name} endp")).to_owned()
 }
@@ -75,7 +86,6 @@ fn own_frames_locals_still_start_at_zero() {
     }
 }
 
-
 /// Zeroed a word store at a time, qbdemo's PLASMA grew 38 stores for four
 /// local array descriptors, and the demo 10% more code, where B$ENRA had
 /// cleared the frame in one call.
@@ -95,7 +105,12 @@ fn own_frames_clear_zeroed_aggregates_in_one_fill() {
 /// first frame address: the REDIM array's descriptor.
 fn indexed_from_descriptor(listing: &str) -> Vec<i64> {
     let number = |text: &str| text[..text.find(']').unwrap()].parse::<i64>().unwrap();
-    let descriptor = listing.lines().filter(|line| line.trim().starts_with("lea ")).find_map(|line| line.split("[bp").nth(1)).map(number).expect("the descriptor's address");
+    let descriptor = listing
+        .lines()
+        .filter(|line| line.trim().starts_with("lea "))
+        .find_map(|line| line.split("[bp").nth(1))
+        .map(number)
+        .expect("the descriptor's address");
     let indexed: Vec<i64> = listing
         .lines()
         .filter_map(|line| line.split("[bp+").nth(1))
@@ -125,7 +140,9 @@ fn indexed_frame_cells_move_with_the_runtime_frame() {
 /// and change nothing, and `--runtime-frames` must reach the frontend.
 #[test]
 fn the_frame_switches_parse() {
-    let parse = |flag: &str| super::cli::parse_args(&["a.bas".to_owned(), flag.to_owned()]).expect("parses").frontend.runtime_frames;
+    let parse = |flag: &str| {
+        super::cli::parse_args(&["a.bas".to_owned(), flag.to_owned()]).expect("parses").frontend.runtime_frames
+    };
     assert!(!parse("--own-frames"));
     assert!(parse("--runtime-frames"));
 }
@@ -139,10 +156,22 @@ fn a_runtime_framed_procedure_still_zeroes_its_frame_in_mir() {
     let source = "SUB kept (n AS INTEGER)\nDIM k AS INTEGER, t AS STRING\nt = \"x\"\nPRINT k + n; t\nEND SUB\n\
         SUB own (n AS INTEGER)\nDIM k AS INTEGER\nPRINT k + n\nEND SUB\n";
     for (dialect, runtime) in DIALECTS {
-        let text = llrm_mir::print::module(&llrm_core::hir::mir::emit(&program(source, dialect, runtime, true), &llrm_x86_m16::layout()).swap_remove(0).module);
-        let entry = |name: &str| text.split(&format!("@{name}(")).nth(1).and_then(|rest| rest.split("\n}").next()).unwrap_or_else(|| panic!("{name} in {text}")).to_owned();
+        let text = llrm_mir::print::module(
+            &llrm_core::hir::mir::emit(&program(source, dialect, runtime, true), &llrm_x86_m16::layout())
+                .swap_remove(0)
+                .module,
+        );
+        let entry = |name: &str| {
+            text.split(&format!("@{name}("))
+                .nth(1)
+                .and_then(|rest| rest.split("\n}").next())
+                .unwrap_or_else(|| panic!("{name} in {text}"))
+                .to_owned()
+        };
         // The emitter's own zeroing carries no metadata; the frontend's stores do.
-        let zeroes = |name: &str| entry(name).lines().any(|line| line.trim().starts_with("store i16 0, ptr %") && !line.contains('!'));
+        let zeroes = |name: &str| {
+            entry(name).lines().any(|line| line.trim().starts_with("store i16 0, ptr %") && !line.contains('!'))
+        };
         assert!(zeroes("KEPT"), "{dialect}: {}", entry("KEPT"));
         assert!(!zeroes("OWN"), "{dialect}: {}", entry("OWN"));
     }

@@ -2,23 +2,28 @@
 //! `tests/test_float_constants.py`.
 
 use std::collections::BTreeSet;
-use crate::support::hash::HashMap;
 use std::sync::Arc;
 
 use iced_x86::Register;
-use crate::support::hash::IndexMap;
 
 use super::{_truncating, allocated};
-use crate::backend::floatassign::_equivalent_loads;
 use crate::backend::cpu;
+use crate::backend::floatassign::_equivalent_loads;
 use crate::backend::floatregions::Raised;
 use crate::backend::frame::Frame;
 use crate::backend::phielim;
 use crate::backend::select;
 use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space, St};
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
+use crate::support::hash::HashMap;
+use crate::support::hash::IndexMap;
 
-fn sem(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {
+fn sem(
+    op: Operation,
+    name: &str,
+    dests: Vec<Loc>,
+    sources: Vec<Loc>,
+) -> Semantics {
     Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
 }
 
@@ -34,7 +39,10 @@ fn st(index: u32) -> Loc {
     Loc::St(St { index })
 }
 
-fn frame_cell(disp: i64, width: u32) -> Mem {
+fn frame_cell(
+    disp: i64,
+    width: u32,
+) -> Mem {
     Mem::new(Some(Addr::new(Space::Frame, disp)), width)
 }
 
@@ -69,10 +77,17 @@ fn _body(operations: Vec<Semantics>) -> LirBody {
             Arc::new(Insn::new(at, Some((at, at + 8)), Some(what), defines, uses))
         })
         .collect();
-    LirBody { float_stack: llrm_target::Target::float_stack(&llrm_x86_m16::M16), ..LirBody::new("floating", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default()) }
+    LirBody {
+        float_stack: llrm_target::Target::float_stack(&llrm_x86_m16::M16),
+        ..LirBody::new("floating", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default())
+    }
 }
 
-fn block(at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>) -> LirBlock {
+fn block(
+    at: i64,
+    insns: Vec<Arc<Insn>>,
+    succ: Vec<i64>,
+) -> LirBlock {
     LirBlock { succ, ..LirBlock::new(at, insns) }
 }
 
@@ -81,11 +96,18 @@ fn run(body: &LirBody) -> LirBody {
     allocated(&phielim::eliminated(body).unwrap(), None, None, true, "386").unwrap()
 }
 
-fn with_frame(body: &LirBody, frame: &mut Frame) -> LirBody {
+fn with_frame(
+    body: &LirBody,
+    frame: &mut Frame,
+) -> LirBody {
     allocated(&phielim::eliminated(body).unwrap(), Some(frame), None, true, "386").unwrap()
 }
 
-fn arith(name: &str, d: f64, s: f64) -> f64 {
+fn arith(
+    name: &str,
+    d: f64,
+    s: f64,
+) -> f64 {
     match name {
         "fadd" => d + s,
         "fsub" => d - s,
@@ -98,18 +120,27 @@ fn arith(name: &str, d: f64, s: f64) -> f64 {
 }
 
 /// Run allocated instructions over `memory`, cells to numbers: the memory after and the stack left.
-fn _x87(insns: &[Arc<Insn>], memory: &[(&Mem, f64)]) -> (HashMap<Mem, f64>, Vec<f64>) {
+fn _x87(
+    insns: &[Arc<Insn>],
+    memory: &[(&Mem, f64)],
+) -> (HashMap<Mem, f64>, Vec<f64>) {
     let (memory, stack, _) = _x87_traced(insns, memory);
     (memory, stack)
 }
 
 /// `_x87`, and every store to memory in order.
-fn _x87_traced(insns: &[Arc<Insn>], memory: &[(&Mem, f64)]) -> (HashMap<Mem, f64>, Vec<f64>, Vec<(Mem, f64)>) {
+fn _x87_traced(
+    insns: &[Arc<Insn>],
+    memory: &[(&Mem, f64)],
+) -> (HashMap<Mem, f64>, Vec<f64>, Vec<(Mem, f64)>) {
     let mut memory: HashMap<Mem, f64> = memory.iter().map(|(cell, value)| ((*cell).clone(), *value)).collect();
     let (mut stack, mut stores): (Vec<f64>, Vec<(Mem, f64)>) = (Vec::new(), Vec::new());
     for one in insns {
         let what = what(one);
-        if matches!(what.op, Operation::Nothing | Operation::Jump | Operation::Branch) {
+        if matches!(
+            what.op,
+            Operation::Nothing | Operation::Jump | Operation::Branch
+        ) {
             continue;
         }
         if what.op == Operation::Barrier {
@@ -173,40 +204,64 @@ fn _x87_traced(insns: &[Arc<Insn>], memory: &[(&Mem, f64)]) -> (HashMap<Mem, f64
 }
 
 /// The instructions run along `path`, through any block allocation put on an edge of it.
-fn _along(result: &LirBody, path: &[i64]) -> Vec<Arc<Insn>> {
+fn _along(
+    result: &LirBody,
+    path: &[i64],
+) -> Vec<Arc<Insn>> {
     let by_at: HashMap<i64, &LirBlock> = result.blocks.iter().map(|block| (block.at, block)).collect();
     let mut insns = Vec::new();
     for (index, at) in path.iter().enumerate() {
         insns.extend(by_at[at].insns.iter().cloned());
         if let Some(next) = path.get(index + 1).filter(|next| !by_at[at].succ.contains(next)) {
-            let edge = by_at[at].succ.iter().find(|edge| by_at[*edge].succ == vec![*next]).expect("a block on the edge");
+            let edge =
+                by_at[at].succ.iter().find(|edge| by_at[*edge].succ == vec![*next]).expect("a block on the edge");
             insns.extend(by_at[edge].insns.iter().cloned());
         }
     }
     insns
 }
 
-fn _cells(displacements: impl IntoIterator<Item = i64>, width: u32) -> Vec<Mem> {
+fn _cells(
+    displacements: impl IntoIterator<Item = i64>,
+    width: u32,
+) -> Vec<Mem> {
     displacements.into_iter().map(|disp| frame_cell(disp, width)).collect()
 }
 
-fn _load(value: u32, cell: &Mem) -> Semantics {
+fn _load(
+    value: u32,
+    cell: &Mem,
+) -> Semantics {
     sem(Operation::FloatLoad, "fld", vec![fl(value)], vec![m(cell)])
 }
 
-fn _store(cell: &Mem, value: u32) -> Semantics {
+fn _store(
+    cell: &Mem,
+    value: u32,
+) -> Semantics {
     sem(Operation::FloatStore, "fstp", vec![m(cell)], vec![fl(value)])
 }
 
-fn _arithmetic(name: &str, result: u32, left: Loc, right: Loc) -> Semantics {
+fn _arithmetic(
+    name: &str,
+    result: u32,
+    left: Loc,
+    right: Loc,
+) -> Semantics {
     sem(Operation::FloatArith, name, vec![fl(result)], vec![left, right])
 }
 
-fn fchs(result: u32, source: u32) -> Semantics {
+fn fchs(
+    result: u32,
+    source: u32,
+) -> Semantics {
     sem(Operation::FloatUnary, "fchs", vec![fl(result)], vec![fl(source)])
 }
 
-fn reads(result: &LirBody, cell: &Mem) -> usize {
+fn reads(
+    result: &LirBody,
+    cell: &Mem,
+) -> usize {
     result.insns().iter().filter(|one| what(one).sources.contains(&m(cell))).count()
 }
 
@@ -230,13 +285,7 @@ fn test_truncation_saves_the_control_word_once_per_body() {
         .iter()
         .map(|block| (block.at, block.insns.iter().map(|one| name(one)).filter(|name| !name.is_empty()).collect()))
         .collect();
-    assert_eq!(
-        names,
-        vec![
-            (0, vec!["fnstcw", "mov", "or", "mov"]),
-            (5, vec!["fldcw", "fistp", "fistp", "fldcw"]),
-        ]
-    );
+    assert_eq!(names, vec![(0, vec!["fnstcw", "mov", "or", "mov"]), (5, vec!["fldcw", "fistp", "fistp", "fldcw"]),]);
 }
 
 #[test]
@@ -279,7 +328,8 @@ fn test_a_load_read_by_two_multiplies_is_their_memory_operand_on_the_486() {
         _store(py, 5),
     ]);
     let result = allocated(&phielim::eliminated(&body).unwrap(), None, None, true, "486").unwrap();
-    let fused = result.insns().iter().filter(|one| name(one) == "fmul" && what(one).sources.contains(&m(falloff))).count();
+    let fused =
+        result.insns().iter().filter(|one| name(one) == "fmul" && what(one).sources.contains(&m(falloff))).count();
     assert_eq!(fused, 2);
     let (memory, stack) = _x87(&result.insns(), &[(x, 3.0), (y, 5.0), (falloff, 0.5)]);
     assert_eq!((memory[px], memory[py], stack), (1.5, 2.5, vec![]));
@@ -338,8 +388,12 @@ fn test_a_first_read_moves_past_a_trapping_instruction_only_for_a_quiet_cell() {
         ]);
         let result = run(&_body(operations));
         let insns = result.insns();
-        let readers: Vec<usize> =
-            insns.iter().enumerate().filter(|(_, one)| what(one).sources.contains(&m(c))).map(|(index, _)| index).collect();
+        let readers: Vec<usize> = insns
+            .iter()
+            .enumerate()
+            .filter(|(_, one)| what(one).sources.contains(&m(c)))
+            .map(|(index, _)| index)
+            .collect();
         let division = insns.iter().position(|one| name(one).starts_with("fdiv")).unwrap();
         assert!(readers.len() == 1 && (readers[0] > division) == proven, "{proven}");
         let (memory, stack) = _x87(&insns, &[(w, 0.25), (x, 6.0), (y, 3.0), (c, 0.5), (z, 4.0)]);
@@ -382,7 +436,9 @@ fn _sparing_the_frame(body: LirBody) -> LirBody {
                     .insns
                     .iter()
                     .map(|one| match &one.what {
-                        Some(what) if matches!(what.op, Operation::Call | Operation::Barrier) => Arc::new(Insn { call: Some(Arc::clone(&call)), ..Insn::clone(one) }),
+                        Some(what) if matches!(what.op, Operation::Call | Operation::Barrier) => {
+                            Arc::new(Insn { call: Some(Arc::clone(&call)), ..Insn::clone(one) })
+                        }
                         _ => Arc::clone(one),
                     })
                     .collect(),
@@ -443,7 +499,12 @@ fn test_a_value_loaded_before_a_barrier_is_not_the_cell_after_it() {
     let insns = with_frame(&body, &mut Frame::new(-8)).insns();
     let barrier = insns.iter().position(|one| what(one).op == Operation::Barrier).expect("the barrier");
     // The value from before it waits in a slot of its own, not the cell the barrier may write.
-    assert!(insns[..barrier].iter().any(|one| what(one).dests.iter().any(|dest| matches!(dest, Loc::Mem(one) if *one != cell && *one != out))), "{insns:#?}");
+    assert!(
+        insns[..barrier]
+            .iter()
+            .any(|one| what(one).dests.iter().any(|dest| matches!(dest, Loc::Mem(one) if *one != cell && *one != out))),
+        "{insns:#?}"
+    );
 }
 
 #[test]
@@ -459,8 +520,11 @@ fn test_region_value_reuses_one_reload_until_an_unknown_effect() {
         operations.push(_store(&cell, 1));
         let mut body = _body(operations);
         let insns = body.insns();
-        body.blocks =
-            vec![block(0, insns[..1].to_vec(), vec![8, 80]), block(8, insns[1..].to_vec(), vec![]), block(80, vec![], vec![])];
+        body.blocks = vec![
+            block(0, insns[..1].to_vec(), vec![8, 80]),
+            block(8, insns[1..].to_vec(), vec![]),
+            block(80, vec![], vec![]),
+        ];
         let result = with_frame(&body, &mut Frame::new(-8));
         let consumer = result.blocks.iter().find(|block| block.at == 8).unwrap();
         let reloads = consumer
@@ -496,7 +560,12 @@ fn test_a_load_read_once_by_the_next_arithmetic_is_its_memory_operand() {
         let body = _body(vec![
             _load(1, &home),
             sem(Operation::FloatLoad, loaded, vec![fl(2)], vec![m(&cell)]),
-            sem(Operation::FloatArith, op, vec![fl(3)], if loaded_first { vec![fl(2), fl(1)] } else { vec![fl(1), fl(2)] }),
+            sem(
+                Operation::FloatArith,
+                op,
+                vec![fl(3)],
+                if loaded_first { vec![fl(2), fl(1)] } else { vec![fl(1), fl(2)] },
+            ),
             _store(&home, 3),
         ]);
         let result = run(&body);
@@ -525,8 +594,14 @@ fn test_a_load_folded_into_x87_memory_arithmetic_retains_its_source_bytes() {
     let (home, cell) = (&cells[0], &cells[1]);
     let body = _body(vec![_load(1, home), _load(2, cell), _arithmetic("fmul", 3, fl(1), fl(2)), _store(home, 3)]);
     let result = run(&body);
-    let covered: BTreeSet<i64> =
-        result.insns().iter().flat_map(|one| { let (start, end) = one.covers.unwrap(); start..end }).collect();
+    let covered: BTreeSet<i64> = result
+        .insns()
+        .iter()
+        .flat_map(|one| {
+            let (start, end) = one.covers.unwrap();
+            start..end
+        })
+        .collect();
     assert_eq!(covered, (0..32).collect());
     assert_eq!(
         result.insns().iter().filter(|one| what(one).op != Operation::Nothing).map(|one| name(one)).collect::<Vec<_>>(),
@@ -589,7 +664,10 @@ fn test_integer_result_waits_before_reading_owned_conversion_storage() {
         ]);
         let allocated = with_frame(&body, &mut Frame::new(-8));
         let insns = allocated.insns();
-        assert_eq!(insns.iter().map(|one| name(one)).collect::<Vec<_>>(), ["fld", "wait", "fistp", "wait", "mov", "mov"]);
+        assert_eq!(
+            insns.iter().map(|one| name(one)).collect::<Vec<_>>(),
+            ["fld", "wait", "fistp", "wait", "mov", "mov"]
+        );
         let (store, load) = (what(&insns[2]), what(&insns[4]));
         assert_eq!(store.dests, load.sources);
         let Loc::Mem(stored) = &store.dests[0] else { panic!() };
@@ -622,7 +700,8 @@ fn test_conversion_result_is_kept_for_non_operand_readers() {
     for reader in ["opaque", "barrier", "pinned", "uses"] {
         let result = Loc::Held(Held { value: 2, width: 4 });
         let cell = frame_cell(-8, 8);
-        let mut body = _body(vec![_load(1, &cell), sem(Operation::FloatStore, "fistp", vec![result.clone()], vec![fl(1)])]);
+        let mut body =
+            _body(vec![_load(1, &cell), sem(Operation::FloatStore, "fistp", vec![result.clone()], vec![fl(1)])]);
         let first = body.blocks[0].clone();
         match reader {
             "pinned" => body.pins = IndexMap::from_iter([(2, Register::None)]),
@@ -632,7 +711,8 @@ fn test_conversion_result_is_kept_for_non_operand_readers() {
                     "barrier" => Some(sem(Operation::Barrier, "", vec![], vec![])),
                     _ => Some(sem(Operation::Nothing, "", vec![], vec![])),
                 };
-                let extra = Insn::new(24, Some((24, 24)), what, vec![], if reader == "uses" { vec![2] } else { vec![] });
+                let extra =
+                    Insn::new(24, Some((24, 24)), what, vec![], if reader == "uses" { vec![2] } else { vec![] });
                 let mut extended = first;
                 extended.insns.edit(|insns| insns.push(Arc::new(extra)));
                 body.blocks = vec![extended];
@@ -678,7 +758,10 @@ fn test_ninth_float_uses_an_owned_spill() {
     }));
     let memory: Vec<(&Mem, f64)> = sources.iter().enumerate().map(|(index, cell)| (cell, index as f64 + 1.0)).collect();
     let (memory, stack) = _x87(&insns, &memory);
-    assert_eq!(answers.iter().map(|cell| memory[cell]).collect::<Vec<_>>(), (1..10).map(|index| -f64::from(index)).collect::<Vec<_>>());
+    assert_eq!(
+        answers.iter().map(|cell| memory[cell]).collect::<Vec<_>>(),
+        (1..10).map(|index| -f64::from(index)).collect::<Vec<_>>()
+    );
     assert!(stack.is_empty());
 }
 
@@ -725,7 +808,8 @@ fn test_floating_bridge_never_reads_an_unestablished_slot() {
         let cell = frame_cell(-10, 10);
         let body = _body(vec![_load(1, &cell), _store(&cell, 1)]);
         let (load, store) = (body.insns()[0].clone(), body.insns()[1].clone());
-        let mut blocks = vec![block(0, vec![load], vec![16, 32]), block(16, vec![store], vec![]), block(32, vec![], vec![16])];
+        let mut blocks =
+            vec![block(0, vec![load], vec![16, 32]), block(16, vec![store], vec![]), block(32, vec![], vec![16])];
         let mut body = body;
         if defect == "entry" {
             body.entry = 16;
@@ -765,7 +849,9 @@ fn test_floating_loop_phis_swap_in_parallel_on_the_critical_backedge() {
         ];
         let result = with_frame(&body, &mut Frame::new(-30));
         let insns = _along(&result, &[0, 16, 16, 48]);
-        assert!(insns.iter().all(|one| matches!(what(one).op, Operation::Branch | Operation::Jump) || emits(what(one))));
+        assert!(
+            insns.iter().all(|one| matches!(what(one).op, Operation::Branch | Operation::Jump) || emits(what(one)))
+        );
         let (_, stack, stores) = _x87_traced(&insns, &[(&cells[0], 1.0), (&cells[1], 2.0)]);
         let answers: Vec<f64> = stores.iter().filter(|(cell, _)| *cell == cells[2]).map(|(_, value)| *value).collect();
         assert_eq!(answers, vec![1.0, 2.0, 2.0, 1.0]);
@@ -830,14 +916,19 @@ fn test_shared_float_crosses_only_a_unique_straight_line_edge() {
         let by_at: HashMap<i64, &LirBlock> = allocated.blocks.iter().map(|block| (block.at, block)).collect();
         // Where the other way out reads none, the load is made once the fork is taken's way: the
         // fork's block 0 no longer loads for an arm half the calls never read.
-        let first: &[&str] = if boundary == "fork" { &["", "fld", "fmul", "fstp"] } else { &["fld", "fld", "fmul", "fstp"] };
+        let first: &[&str] =
+            if boundary == "fork" { &["", "fld", "fmul", "fstp"] } else { &["fld", "fld", "fmul", "fstp"] };
         assert_eq!(by_at[&0].insns.iter().map(|one| name(one)).collect::<Vec<_>>(), first, "{boundary}");
         if boundary == "fork" {
             // The arm that reads it loads it; the other keeps nothing on the stack to pop.
             assert_eq!(by_at[&24].insns.iter().map(|one| name(one)).collect::<Vec<_>>(), ["fld", "fdiv", "fstp"]);
             assert_eq!(by_at[&80].insns.iter().map(|one| name(one)).collect::<Vec<_>>(), Vec::<&str>::new());
         } else {
-            assert_eq!(by_at[&24].insns.iter().map(|one| name(one)).collect::<Vec<_>>(), ["fdiv", "fstp"], "{boundary}");
+            assert_eq!(
+                by_at[&24].insns.iter().map(|one| name(one)).collect::<Vec<_>>(),
+                ["fdiv", "fstp"],
+                "{boundary}"
+            );
             assert_eq!(what(&by_at[&24].insns[0]).sources, vec![st(0), m(&cell)]);
         }
         assert!(allocated.insns().iter().all(|one| emits(what(one))));
@@ -850,10 +941,12 @@ fn test_integer_conversion_materializes_a_frame_operand() {
     for width in [2, 4] {
         let integer = Loc::Held(Held { value: 1, width });
         let output = frame_cell(-8, 8);
-        let body = _body(vec![sem(Operation::FloatLoad, "fild", vec![fl(2)], vec![integer.clone()]), _store(&output, 2)]);
+        let body =
+            _body(vec![sem(Operation::FloatLoad, "fild", vec![fl(2)], vec![integer.clone()]), _store(&output, 2)]);
         let mut slots = Frame::new(-8);
         let result = with_frame(&body, &mut slots);
-        let emitted: Vec<Arc<Insn>> = result.insns().into_iter().filter(|one| what(one).op != Operation::Nothing).collect();
+        let emitted: Vec<Arc<Insn>> =
+            result.insns().into_iter().filter(|one| what(one).op != Operation::Nothing).collect();
         let [store, load, _] = emitted.as_slice() else { panic!("{emitted:?}") };
         assert_eq!(slots.size(), i64::from(width));
         assert_eq!(what(store).sources, vec![integer]);
@@ -889,7 +982,12 @@ fn test_buried_float_operand_is_exchanged_not_duplicated() {
         let cells = _cells([-4, -8, -12, -16], 4);
         let (first_cell, second_cell, answer, kept) = (&cells[0], &cells[1], &cells[2], &cells[3]);
         let (first_load, second_load, first, second, result) = (1, 2, 3, 4, 5);
-        let mut operations = vec![_load(first_load, first_cell), fchs(first, first_load), _load(second_load, second_cell), fchs(second, second_load)];
+        let mut operations = vec![
+            _load(first_load, first_cell),
+            fchs(first, first_load),
+            _load(second_load, second_cell),
+            fchs(second, second_load),
+        ];
         match operation {
             "fsub" => operations.push(_arithmetic("fsub", result, fl(first), m(second_cell))),
             "fchs" => operations.push(fchs(result, first)),
@@ -909,7 +1007,9 @@ fn test_buried_float_operand_is_exchanged_not_duplicated() {
             .filter(|one| {
                 let what = what(one);
                 what.op == Operation::Exchange
-                    || !what.sources.is_empty() && matches!(what.sources[0], Loc::St(_)) && what.op == Operation::FloatLoad
+                    || !what.sources.is_empty()
+                        && matches!(what.sources[0], Loc::St(_))
+                        && what.op == Operation::FloatLoad
             })
             .collect();
         // Both operands of the popping subtraction die, so the result overwrites one in place.
@@ -917,7 +1017,9 @@ fn test_buried_float_operand_is_exchanged_not_duplicated() {
             moves.iter().map(|one| name(one)).collect::<Vec<_>>(),
             if operation == "fsubp" { vec![] } else { vec!["fxch"] }
         );
-        assert!(moves.iter().all(|one| one.covers.unwrap().0 == one.covers.unwrap().1 && one.uses.is_empty() && one.defines.is_empty()));
+        assert!(moves.iter().all(|one| one.covers.unwrap().0 == one.covers.unwrap().1
+            && one.uses.is_empty()
+            && one.defines.is_empty()));
         let (memory, stack) = _x87(&insns, &[(first_cell, 7.0), (second_cell, 2.0)]);
         let expected = match operation {
             "fsub" => -9.0,
@@ -933,7 +1035,9 @@ fn test_buried_float_operand_is_exchanged_not_duplicated() {
 #[test]
 fn test_last_register_operand_is_consumed_without_reversing_arithmetic() {
     // Forwarded floating memory operands must die without leaking a stack slot or reversing division.
-    for (op, popping, expected) in [("fadd", "faddp", 9.0), ("fmul", "fmulp", 14.0), ("fsub", "fsubrp", 5.0), ("fdiv", "fdivrp", 3.5)] {
+    for (op, popping, expected) in
+        [("fadd", "faddp", 9.0), ("fmul", "fmulp", 14.0), ("fsub", "fsubrp", 5.0), ("fdiv", "fdivrp", 3.5)]
+    {
         for top in ["left", "right"] {
             let (left, right, result) = (1, 2, 3);
             // No arithmetic reads m80, so the loads stay register operands.
@@ -1115,7 +1219,8 @@ fn test_independent_x87_regions_select_their_own_complete_candidate() {
         sem(Operation::Barrier, "wait", vec![], vec![]),
     ];
     let others = _cells([-28, -32, -36, -40, -44], 4);
-    let (other, scale_cell, first_acc, second_acc, other_square) = (&others[0], &others[1], &others[2], &others[3], &others[4]);
+    let (other, scale_cell, first_acc, second_acc, other_square) =
+        (&others[0], &others[1], &others[2], &others[3], &others[4]);
     let (value, squared, scale, product, old, added, scale_again, product_again, old_again, subtracted) =
         (10, 11, 12, 13, 14, 15, 16, 17, 18, 19);
     operations.extend([
@@ -1141,10 +1246,25 @@ fn test_independent_x87_regions_select_their_own_complete_candidate() {
     assert!(!result.insns().iter().any(|one| name(one) == "fxch"));
     let (memory, stack) = _x87(
         &result.insns(),
-        &[(home, 7.0), (left_cell, 2.0), (right_cell, 3.0), (other, 5.0), (scale_cell, 2.0), (first_acc, 10.0), (second_acc, 20.0)],
+        &[
+            (home, 7.0),
+            (left_cell, 2.0),
+            (right_cell, 3.0),
+            (other, 5.0),
+            (scale_cell, 2.0),
+            (first_acc, 10.0),
+            (second_acc, 20.0),
+        ],
     );
     assert_eq!(
-        (memory[square_out], memory[left_out], memory[right_out], memory[other_square], memory[first_acc], memory[second_acc]),
+        (
+            memory[square_out],
+            memory[left_out],
+            memory[right_out],
+            memory[other_square],
+            memory[first_acc],
+            memory[second_acc]
+        ),
         (49.0, 14.0, 21.0, 25.0, 20.0, 10.0)
     );
     assert!(stack.is_empty());
@@ -1229,7 +1349,11 @@ fn test_popping_subtraction_preserves_reused_values() {
             "same" => vec![(out, 0.0), (again, -7.0)],
             _ => vec![(out, 0.0)],
         };
-        assert_eq!(expected.iter().map(|(cell, _)| memory[*cell]).collect::<Vec<_>>(), expected.iter().map(|(_, value)| *value).collect::<Vec<_>>(), "{live}");
+        assert_eq!(
+            expected.iter().map(|(cell, _)| memory[*cell]).collect::<Vec<_>>(),
+            expected.iter().map(|(_, value)| *value).collect::<Vec<_>>(),
+            "{live}"
+        );
         assert!(stack.is_empty());
     }
 }
@@ -1239,9 +1363,16 @@ fn test_popping_subtraction_preserves_reused_values() {
 fn test_exact_float_constants_need_no_frame() {
     for (value, encoded) in [(0, [0xd9, 0xee]), (1, [0xd9, 0xe8])] {
         for width in [2, 4] {
-            let constant = sem(Operation::FloatLoad, "fild", vec![st(0)], vec![Loc::Imm(Imm { value, width, address: None })]);
+            let constant =
+                sem(Operation::FloatLoad, "fild", vec![st(0)], vec![Loc::Imm(Imm { value, width, address: None })]);
             let instruction = Arc::new(Insn::new(0, Some((0, 2)), Some(constant), vec![], vec![]));
-            let body = LirBody::new("constant", 0, vec![LirBlock::new(0, vec![instruction])], IndexMap::default(), IndexMap::default());
+            let body = LirBody::new(
+                "constant",
+                0,
+                vec![LirBlock::new(0, vec![instruction])],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
             let allocated = run(&body);
             let insns = allocated.insns();
             assert_eq!(insns.len(), 1);
@@ -1263,16 +1394,26 @@ fn test_an_integer_constant_loads_from_the_pool() {
         (0xffff, 2, (-1f32).to_le_bytes().to_vec()),
         (16_777_217, 4, 16_777_217f64.to_le_bytes().to_vec()),
     ] {
-        let constant = sem(Operation::FloatLoad, "fild", vec![st(0)], vec![Loc::Imm(Imm { value, width, address: None })]);
+        let constant =
+            sem(Operation::FloatLoad, "fild", vec![st(0)], vec![Loc::Imm(Imm { value, width, address: None })]);
         let instruction = Arc::new(Insn::new(0, Some((0, 2)), Some(constant), vec![], vec![]));
-        let body = LirBody::new("constant", 0, vec![LirBlock::new(0, vec![instruction])], IndexMap::default(), IndexMap::default());
+        let body = LirBody::new(
+            "constant",
+            0,
+            vec![LirBlock::new(0, vec![instruction])],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
         let mut pool = Pool::new(7);
         let allocated = allocated(&body, None, Some(&mut pool), true, "386").unwrap();
         let insns = allocated.insns();
         assert_eq!(insns.len(), 1, "{insns:?}");
         assert_eq!(name(&insns[0]), "fld");
         let Loc::Mem(cell) = &what(&insns[0]).sources[0] else { panic!("{insns:?}") };
-        assert_eq!((cell.addr.map(|addr| (addr.space, addr.index)), cell.width), (Some((Space::Segment, 7)), bytes.len() as u32));
+        assert_eq!(
+            (cell.addr.map(|addr| (addr.space, addr.index)), cell.width),
+            (Some((Space::Segment, 7)), bytes.len() as u32)
+        );
         assert_eq!(pool.entries().collect::<Vec<_>>(), [(bytes.as_slice(), 7)]);
     }
 }
@@ -1291,7 +1432,10 @@ fn test_a_loop_accumulator_stays_on_the_stack_across_the_back_edge() {
     let insns = body.insns();
     body.blocks = vec![
         block(0, insns[..1].to_vec(), vec![16]),
-        LirBlock { phis: vec![Phi { result: 2, incoming: vec![(0, 1), (16, 4)] }], ..block(16, insns[1..4].to_vec(), vec![16, 48]) },
+        LirBlock {
+            phis: vec![Phi { result: 2, incoming: vec![(0, 1), (16, 4)] }],
+            ..block(16, insns[1..4].to_vec(), vec![16, 48])
+        },
         block(48, insns[4..].to_vec(), vec![]),
     ];
     let result = with_frame(&body, &mut Frame::new(-24));
@@ -1304,7 +1448,11 @@ fn test_a_loop_accumulator_stays_on_the_stack_across_the_back_edge() {
         .filter(|block| block.at == 16 || (block.at != 0 && block.succ == vec![16]))
         .flat_map(|block| block.insns.to_vec())
         .collect();
-    let memory: Vec<&Semantics> = looped.iter().map(|one| what(one)).filter(|what| what.sources.iter().chain(&what.dests).any(|arg| matches!(arg, Loc::Mem(_)))).collect();
+    let memory: Vec<&Semantics> = looped
+        .iter()
+        .map(|one| what(one))
+        .filter(|what| what.sources.iter().chain(&what.dests).any(|arg| matches!(arg, Loc::Mem(_))))
+        .collect();
     assert_eq!(memory.len(), 1, "{memory:?}");
     assert!(memory[0].sources.contains(&m(&step)));
 }
@@ -1314,7 +1462,18 @@ fn spill_traffic(result: &LirBody) -> usize {
     result
         .insns()
         .iter()
-        .filter(|one| what(one).sources.iter().chain(&what(one).dests).any(|arg| matches!(arg, Loc::Mem(cell) if cell.width == 8 && cell.through == Register::BP)))
+        .filter(|one| {
+            what(one)
+                .sources
+                .iter()
+                .chain(&what(one).dests)
+                .any(
+                    |arg| matches!(
+                        arg,
+                        Loc::Mem(cell) if cell.width == 8 && cell.through == Register::BP
+                    ),
+                )
+        })
         .count()
 }
 
@@ -1347,12 +1506,19 @@ fn test_a_copy_between_spilled_values_is_no_instruction() {
 #[test]
 fn test_a_volatile_load_is_its_adjacent_readers_operand_only() {
     let (sum, limit) = (frame_cell(-4, 4), frame_cell(-12, 8));
-    let volatile = |what: Semantics| Arc::new(Insn { volatile: true, ..Insn::new(8, Some((8, 16)), Some(what), vec![2], vec![]) });
+    let volatile =
+        |what: Semantics| Arc::new(Insn { volatile: true, ..Insn::new(8, Some((8, 16)), Some(what), vec![2], vec![]) });
     for twice in [false, true] {
         let mut body = _body(vec![_load(1, &sum)]);
         let mut insns = body.blocks[0].insns.to_vec();
         insns.push(volatile(_load(2, &limit)));
-        insns.push(Arc::new(Insn::new(16, Some((16, 24)), Some(sem(Operation::Compare, "fcom", vec![], vec![fl(1), fl(2)])), vec![], vec![1, 2])));
+        insns.push(Arc::new(Insn::new(
+            16,
+            Some((16, 24)),
+            Some(sem(Operation::Compare, "fcom", vec![], vec![fl(1), fl(2)])),
+            vec![],
+            vec![1, 2],
+        )));
         if twice {
             insns.push(Arc::new(Insn::new(24, Some((24, 32)), Some(_store(&sum, 2)), vec![], vec![2])));
         }
@@ -1360,7 +1526,12 @@ fn test_a_volatile_load_is_its_adjacent_readers_operand_only() {
         let result = with_frame(&body, &mut Frame::new(-12));
         let reads = result.insns().iter().filter(|one| what(one).sources.contains(&m(&limit))).count();
         let fused = result.insns().iter().any(|one| name(one) == "fcomp" && what(one).sources.contains(&m(&limit)));
-        assert_eq!((reads, fused), (1, !twice), "{:?}", result.insns().iter().map(|one| name(one).to_owned()).collect::<Vec<_>>());
+        assert_eq!(
+            (reads, fused),
+            (1, !twice),
+            "{:?}",
+            result.insns().iter().map(|one| name(one).to_owned()).collect::<Vec<_>>()
+        );
     }
 }
 
@@ -1379,10 +1550,21 @@ fn test_a_vacated_phi_copy_leaves_its_copy_group() {
         call(),
         _store(&target, 3),
     ]);
-    let insns: Vec<Arc<Insn>> = body.insns().iter().enumerate().map(|(at, one)| if at == 4 || at == 5 { Arc::new(Insn { group: Some(7), ..(**one).clone() }) } else { Arc::clone(one) }).collect();
+    let insns: Vec<Arc<Insn>> =
+        body.insns()
+            .iter()
+            .enumerate()
+            .map(|(at, one)| {
+                if at == 4 || at == 5 { Arc::new(Insn { group: Some(7), ..(**one).clone() }) } else { Arc::clone(one) }
+            })
+            .collect();
     body.blocks[0].insns = insns.into();
     let result = with_frame(&body, &mut Frame::new(-10));
-    assert!(result.insns().iter().filter(|one| one.group.is_some()).all(|one| what(one).op == Operation::Move), "{:?}", result.insns());
+    assert!(
+        result.insns().iter().filter(|one| one.group.is_some()).all(|one| what(one).op == Operation::Move),
+        "{:?}",
+        result.insns()
+    );
 }
 
 #[test]

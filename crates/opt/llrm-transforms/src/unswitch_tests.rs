@@ -1,8 +1,8 @@
 //! Adapted from llrm-core's `optimize/unswitch_tests.rs`, the port of
 //! `tests/test_unswitch.py`; which tests stay behind is in `unswitch.rs`.
 
-use llrm_analysis::graph::loops;
 use llrm_analysis::cfg;
+use llrm_analysis::graph::loops;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::Module;
 use llrm_mir::passes::{Outer, Unit};
@@ -96,7 +96,10 @@ fn test_a_condition_in_the_header_is_not_unswitched() {
 #[test]
 fn test_a_loop_without_one_preheader_is_not_unswitched() {
     let text = INVARIANT
-        .replace("b0:\n  br label %b1", "b0:\n  %skip = icmp eq i16 %n, 7\n  br i1 %skip, label %b6, label %b1\n\nb6:\n  br label %b1")
+        .replace(
+            "b0:\n  br label %b1",
+            "b0:\n  %skip = icmp eq i16 %n, 7\n  br i1 %skip, label %b6, label %b1\n\nb6:\n  br label %b1",
+        )
         .replace("[ 0, %b0 ], [ %next, %b4 ]", "[ 0, %b0 ], [ 1, %b6 ], [ %next, %b4 ]")
         .replace("[ 0, %b0 ], [ %total, %b4 ]", "[ 0, %b0 ], [ 0, %b6 ], [ %total, %b4 ]");
     assert!(specialize(&text).is_none());
@@ -104,7 +107,11 @@ fn test_a_loop_without_one_preheader_is_not_unswitched() {
 
 /// @f of `text` through `optimized`, its candidate re-optimized into a copy
 /// of `@replacement` when named; whether it was kept, and the module.
-fn through(text: &str, replacement: Option<&str>, costs: OperationCosts) -> (bool, String) {
+fn through(
+    text: &str,
+    replacement: Option<&str>,
+    costs: OperationCosts,
+) -> (bool, String) {
     let mut module = parsed(text);
     let replacement = replacement.map(|name| module.function_mut(name).expect("the replacement").1.clone());
     let layout = DataLayout::default();
@@ -155,7 +162,10 @@ fn test_unswitch_rejects_lower_count_but_higher_target_cost() {
     assert_eq!(through(&text, Some("divide"), dear), (false, printed(&parsed(&text))));
     let (kept, after) = through(&text, Some("divide"), OperationCosts::default());
     assert!(kept);
-    assert!(after.starts_with("define i16 @f(i16 %n, i16 %k) {\nb0:\n  %q = udiv i16 %n, %k\n  ret i16 %q\n}\n"), "{after}");
+    assert!(
+        after.starts_with("define i16 @f(i16 %n, i16 %k) {\nb0:\n  %q = udiv i16 %n, %k\n  ret i16 %q\n}\n"),
+        "{after}"
+    );
 }
 
 /// An unknown operation must not become cheap merely because it is unpriced.
@@ -173,7 +183,11 @@ impl llrm_mir::passes::FunctionPass for Replace {
         "replace"
     }
 
-    fn run(&mut self, unit: &mut Unit, _: &mut llrm_mir::passes::Analyses) -> llrm_mir::passes::PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        _: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
         *unit.function = self.0.clone();
         llrm_mir::passes::PreservedAnalyses::none()
     }
@@ -193,7 +207,10 @@ fn test_unswitch_prices_at_the_target_costs() {
         printed(&module) != printed(&parsed(&text))
     };
     assert!(kept(None));
-    assert!(!kept(Some(std::rc::Rc::new(crate::testing::Tuned { costs: OperationCosts { divide: 1000, ..OperationCosts::default() }, ..Default::default() }))));
+    assert!(!kept(Some(std::rc::Rc::new(crate::testing::Tuned {
+        costs: OperationCosts { divide: 1000, ..OperationCosts::default() },
+        ..Default::default()
+    }))));
 }
 
 /// Records the target's prices and registers each candidate's passes see.
@@ -204,7 +221,11 @@ impl llrm_mir::passes::FunctionPass for Seen {
         "seen"
     }
 
-    fn run(&mut self, _: &mut Unit, analyses: &mut llrm_mir::passes::Analyses) -> llrm_mir::passes::PreservedAnalyses {
+    fn run(
+        &mut self,
+        _: &mut Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
         let outer = analyses.outer();
         self.0.borrow_mut().push((crate::profit::costs(outer), crate::profit::registers(outer)));
         llrm_mir::passes::PreservedAnalyses::all()
@@ -220,8 +241,31 @@ fn test_unswitch_reoptimization_preserves_mir_target_costs() {
     let mut module = parsed(INVARIANT);
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.add(super::Unswitch { passes: vec![Box::new(Seen(std::rc::Rc::clone(&seen)))] });
-    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { costs: costs.clone(), registers: 5, call_registers: 2, ..Default::default() })).unwrap();
+    manager
+        .run_module(
+            &mut module,
+            std::rc::Rc::new(crate::testing::Tuned {
+                costs: costs.clone(),
+                registers: 5,
+                call_registers: 2,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
     let seen = seen.borrow();
     assert!(!seen.is_empty());
-    assert!(seen.iter().all(|one| *one == (costs.clone(), crate::spill::Room { registers: 5, across_call: 2, spaces: llrm_x86_m16::spaces(), index_scales: 1, ..Default::default() })), "{seen:?}");
+    assert!(
+        seen.iter().all(|one| *one
+            == (
+                costs.clone(),
+                crate::spill::Room {
+                    registers: 5,
+                    across_call: 2,
+                    spaces: llrm_x86_m16::spaces(),
+                    index_scales: 1,
+                    ..Default::default()
+                }
+            )),
+        "{seen:?}"
+    );
 }

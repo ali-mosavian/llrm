@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use llrm_core::hir::debug::Builder;
 use llrm_core::hir::model::{Debug, DebugReach, DebugScalar};
 
-use super::{hir, TypeRegistry};
+use super::{TypeRegistry, hir};
 
 struct Described<'t> {
     types: &'t TypeRegistry,
@@ -17,7 +17,10 @@ struct Described<'t> {
 
 impl Described<'_> {
     /// HIR type `id`'s debug type, where CodeView has one.
-    fn r#type(&mut self, id: u32) -> Option<i64> {
+    fn r#type(
+        &mut self,
+        id: u32,
+    ) -> Option<i64> {
         if let Some(&made) = self.made.get(&id) {
             return made;
         }
@@ -38,7 +41,10 @@ impl Described<'_> {
             ("float", 4, _) => scalar(&mut self.builder, DebugScalar::Float32),
             ("float", 8, _) => scalar(&mut self.builder, DebugScalar::Float64),
             ("pointer", ..) => {
-                let target = one.element.and_then(|element| self.r#type(element)).unwrap_or_else(|| self.builder.scalar(DebugScalar::Void));
+                let target = one
+                    .element
+                    .and_then(|element| self.r#type(element))
+                    .unwrap_or_else(|| self.builder.scalar(DebugScalar::Void));
                 let reach = match one.address {
                     "far" => DebugReach::Far,
                     "huge" => DebugReach::Huge,
@@ -59,7 +65,11 @@ impl Described<'_> {
     }
 
     /// Struct `id`, `width` bytes, of its source fields in declaration order.
-    fn structure(&mut self, id: u32, width: u32) -> Option<i64> {
+    fn structure(
+        &mut self,
+        id: u32,
+        width: u32,
+    ) -> Option<i64> {
         let layout = self.types.structure(id)?;
         let mut fields = Vec::new();
         for name in layout.order.iter().filter(|name| !name.starts_with('$')) {
@@ -71,15 +81,26 @@ impl Described<'_> {
             }
             fields.push((name.clone(), r#type, i64::from(field.offset)));
         }
-        let fields: Vec<(&str, i64, i64, Option<(i64, i64)>)> = fields.iter().map(|(name, r#type, offset)| (name.as_str(), *r#type, *offset, None)).collect();
+        let fields: Vec<(&str, i64, i64, Option<(i64, i64)>)> =
+            fields.iter().map(|(name, r#type, offset)| (name.as_str(), *r#type, *offset, None)).collect();
         Some(self.builder.structure(&layout.name, i64::from(width), &fields))
     }
 }
 
 /// `functions`' debug information: each one's source parameters and
 /// variables, and the module's variables, once.
-pub(super) fn described(functions: &[hir::Function], types: &TypeRegistry) -> Debug {
-    let mut described = Described { types, builder: Builder::for_language(llrm_core::hir::model::DebugLanguage::Nib, llrm_core::hir::model::DebugDialect::Cv4), made: BTreeMap::new() };
+pub(super) fn described(
+    functions: &[hir::Function],
+    types: &TypeRegistry,
+) -> Debug {
+    let mut described = Described {
+        types,
+        builder: Builder::for_language(
+            llrm_core::hir::model::DebugLanguage::Nib,
+            llrm_core::hir::model::DebugDialect::Cv4,
+        ),
+        made: BTreeMap::new(),
+    };
     let mut globals = BTreeSet::new();
     for function in functions {
         let value_type = |value: u32| function.values.iter().find(|one| one.id == value).map(|one| one.type_id);
@@ -87,14 +108,20 @@ pub(super) fn described(functions: &[hir::Function], types: &TypeRegistry) -> De
         let homed: BTreeSet<&str> = function.places.iter().map(|one| one.name.as_str()).collect();
         for (value, name) in function.named_parameters.iter().filter(|(_, name)| !homed.contains(name.as_str())) {
             let argument = function.parameters.iter().position(|one| one == value);
-            if let (Some(argument), Some(r#type)) = (argument, value_type(*value).and_then(|one| described.r#type(one))) {
+            if let (Some(argument), Some(r#type)) = (argument, value_type(*value).and_then(|one| described.r#type(one)))
+            {
                 described.builder.parameter(argument as i64, name, r#type);
             }
         }
         for place in function.places.iter().filter(|one| !one.name.starts_with('$')) {
             let Some(r#type) = described.r#type(place.type_id) else { continue };
             match place.storage {
-                "local" => described.builder.variable(i64::from(place.id), &place.name, r#type, function.named_parameters.iter().any(|(_, name)| name == &place.name)),
+                "local" => described.builder.variable(
+                    i64::from(place.id),
+                    &place.name,
+                    r#type,
+                    function.named_parameters.iter().any(|(_, name)| name == &place.name),
+                ),
                 // Every function binds the module's variables; described once.
                 "module" if globals.insert((place.symbol, place.offset)) => {
                     described.builder.global(i64::from(place.symbol), i64::from(place.offset), &place.name, r#type);
@@ -102,7 +129,8 @@ pub(super) fn described(functions: &[hir::Function], types: &TypeRegistry) -> De
                 _ => {}
             }
         }
-        let result = described.r#type(function.result_type).filter(|&one| one != described.builder.scalar(DebugScalar::Void));
+        let result =
+            described.r#type(function.result_type).filter(|&one| one != described.builder.scalar(DebugScalar::Void));
         described.builder.function(i64::from(function.id), &function.name, result);
     }
     described.builder.finish()

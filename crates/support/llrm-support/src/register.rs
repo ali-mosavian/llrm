@@ -10,11 +10,13 @@ use std::fmt;
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct PhysicalRegister(u32);
 
-impl PhysicalRegister {
-}
+impl PhysicalRegister {}
 
 impl fmt::Display for PhysicalRegister {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         self.0.fmt(formatter)
     }
 }

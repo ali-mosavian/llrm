@@ -55,16 +55,29 @@ mod tests {
 
     use super::*;
 
-    fn section(name: &str, role: Role, image: Vec<u8>, relocs: Vec<Reloc>) -> Section {
+    fn section(
+        name: &str,
+        role: Role,
+        image: Vec<u8>,
+        relocs: Vec<Reloc>,
+    ) -> Section {
         let spans = vec![[0, image.len()]];
         Section { name: name.into(), role, near: true, align: 8, image, spans, relocs }
     }
 
-    fn symbol(name: &str, binding: Binding, section: usize, offset: usize) -> Symbol {
+    fn symbol(
+        name: &str,
+        binding: Binding,
+        section: usize,
+        offset: usize,
+    ) -> Symbol {
         Symbol { name: name.into(), binding, definition: Definition::Defined { section, offset }, group: None }
     }
 
-    fn word(bytes: &[u8], at: usize) -> u64 {
+    fn word(
+        bytes: &[u8],
+        at: usize,
+    ) -> u64 {
         u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap())
     }
 
@@ -87,8 +100,16 @@ mod tests {
         Object {
             name: "hello.s".into(),
             arch: Arch::X8664,
-            sections: vec![section(".text", Role::Text, text, vec![load]), section(".rodata", Role::ROData, b"hello\n".to_vec(), vec![]), section(".data", Role::Data, vec![0; 8], vec![pointer])],
-            symbols: vec![symbol("_start", Binding::Public, 0, 0), symbol("msg", Binding::Public, 1, 0), symbol("ptr", Binding::Local, 2, 0)],
+            sections: vec![
+                section(".text", Role::Text, text, vec![load]),
+                section(".rodata", Role::ROData, b"hello\n".to_vec(), vec![]),
+                section(".data", Role::Data, vec![0; 8], vec![pointer]),
+            ],
+            symbols: vec![
+                symbol("_start", Binding::Public, 0, 0),
+                symbol("msg", Binding::Public, 1, 0),
+                symbol("ptr", Binding::Local, 2, 0),
+            ],
             omf_groups: Vec::new(),
             debug: None,
         }
@@ -106,7 +127,8 @@ mod tests {
         let named = |name: &str| {
             let strings = word(&bytes, header(u16::from_le_bytes([bytes[62], bytes[63]]) as usize) + 24) as usize;
             (0..count).find(|&index| {
-                let at = strings + u32::from_le_bytes(bytes[header(index)..header(index) + 4].try_into().unwrap()) as usize;
+                let at =
+                    strings + u32::from_le_bytes(bytes[header(index)..header(index) + 4].try_into().unwrap()) as usize;
                 bytes[at..].starts_with(name.as_bytes()) && bytes[at + name.len()] == 0
             })
         };
@@ -120,14 +142,21 @@ mod tests {
         assert_eq!((word(&bytes, data + 8) & 0xFFFF_FFFF, word(&bytes, data + 16)), (1, 1));
     }
 
-    fn rela_of(bytes: &[u8], name: &str, named: &dyn Fn(&str) -> Option<usize>, header: &dyn Fn(usize) -> usize) -> usize {
+    fn rela_of(
+        bytes: &[u8],
+        name: &str,
+        named: &dyn Fn(&str) -> Option<usize>,
+        header: &dyn Fn(usize) -> usize,
+    ) -> usize {
         word(bytes, header(named(name).unwrap()) + 24) as usize
     }
 
     /// The object, linked by GNU ld, runs and writes what the data's pointer plus its addend names.
     #[test]
     fn ld_links_it_and_it_runs() {
-        if cfg!(not(all(target_os = "linux", target_arch = "x86_64"))) || Command::new("ld").arg("--version").output().is_err() {
+        if cfg!(not(all(target_os = "linux", target_arch = "x86_64")))
+            || Command::new("ld").arg("--version").output().is_err()
+        {
             eprintln!("skipped: needs x86-64 Linux and GNU ld");
             return;
         }
@@ -157,7 +186,10 @@ mod tests {
     /// information of another format is never written in its place.
     #[test]
     fn a_debug_format_this_object_cannot_carry_is_refused() {
-        for (format, name) in [(llrm_object::debug::Format::CodeView, "CodeView"), (llrm_object::debug::Format::TurboDebugger, "Turbo Debugger")] {
+        for (format, name) in [
+            (llrm_object::debug::Format::CodeView, "CodeView"),
+            (llrm_object::debug::Format::TurboDebugger, "Turbo Debugger"),
+        ] {
             let mut made = hello();
             made.debug = Some(llrm_object::debug::Info { format, ..Default::default() });
             let why = write(&made).unwrap_err().0;

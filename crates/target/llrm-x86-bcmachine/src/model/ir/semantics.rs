@@ -40,7 +40,10 @@ pub fn _register_effects(insn: &Insn) -> (BTreeSet<Register>, BTreeSet<Register>
 pub const STACK_BASES: [Register; 2] = [Register::SP, Register::ESP];
 
 /// Every cell this instruction reads, and every one it writes.
-pub fn _memory_effects(insn: &Insn, resolve: &Resolver) -> (Vec<Mem>, Vec<Mem>) {
+pub fn _memory_effects(
+    insn: &Insn,
+    resolve: &Resolver,
+) -> (Vec<Mem>, Vec<Mem>) {
     let mut factory = instruction_info_factory();
     let used = factory.info(&insn.insn).used_memory().to_vec();
     let named = used.iter().filter(|one| !STACK_BASES.contains(&one.base())).count();
@@ -49,10 +52,8 @@ pub fn _memory_effects(insn: &Insn, resolve: &Resolver) -> (Vec<Mem>, Vec<Mem>) 
     let mut loads = Vec::new();
     let mut stores = Vec::new();
     for one in &used {
-        let cell = Mem::new(
-            if STACK_BASES.contains(&one.base()) { None } else { where_ },
-            one.memory_size().size() as u32,
-        );
+        let cell =
+            Mem::new(if STACK_BASES.contains(&one.base()) { None } else { where_ }, one.memory_size().size() as u32);
         if READS.contains(&one.access()) {
             loads.push(cell.clone());
         }
@@ -85,7 +86,10 @@ pub const OPAQUE_MEMORY_COMPLETE: [Code; 8] = [
 ];
 
 /// The conservative effect of one real instruction.
-pub fn instruction_effects(insn: &Insn, resolve: &Resolver) -> Effects {
+pub fn instruction_effects(
+    insn: &Insn,
+    resolve: &Resolver,
+) -> Effects {
     if CLOBBERS.contains(&insn.flow()) {
         return Effects {
             defs: None,
@@ -137,7 +141,11 @@ pub const IMMEDIATE_WIDTH: [(OpKind, u32); 5] = [
 ];
 
 /// One operand as a typed location, or `None` if this layer cannot say.
-pub fn _location(insn: &Insn, index: u32, resolve: &Resolver) -> Option<Loc> {
+pub fn _location(
+    insn: &Insn,
+    index: u32,
+    resolve: &Resolver,
+) -> Option<Loc> {
     let kind = insn.insn.op_kind(index);
     match kind {
         OpKind::Register => {
@@ -165,7 +173,11 @@ pub fn _location(insn: &Insn, index: u32, resolve: &Resolver) -> Option<Loc> {
     }
 }
 
-pub fn _destination(insn: &Insn, index: u32, resolve: &Resolver) -> Option<Loc> {
+pub fn _destination(
+    insn: &Insn,
+    index: u32,
+    resolve: &Resolver,
+) -> Option<Loc> {
     let found = _location(insn, index, resolve);
     match found {
         Some(Loc::Reg(_) | Loc::Mem(_)) => found,
@@ -174,7 +186,10 @@ pub fn _destination(insn: &Insn, index: u32, resolve: &Resolver) -> Option<Loc> 
 }
 
 /// One x87 register operand, `st(i)`.
-pub fn _stack_register(insn: &Insn, index: u32) -> Option<St> {
+pub fn _stack_register(
+    insn: &Insn,
+    index: u32,
+) -> Option<St> {
     if insn.insn.op_kind(index) != OpKind::Register {
         return None;
     }
@@ -184,11 +199,21 @@ pub fn _stack_register(insn: &Insn, index: u32) -> Option<St> {
 
 pub type Builder = fn(&Insn, &Resolver, Operation, &str) -> Option<Semantics>;
 
-fn shaped(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {
+fn shaped(
+    op: Operation,
+    name: &str,
+    dests: Vec<Loc>,
+    sources: Vec<Loc>,
+) -> Semantics {
     Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
 }
 
-pub fn _move(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _move(
+    insn: &Insn,
+    resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     if insn.insn.op_count() != 2 {
         return None;
     }
@@ -198,7 +223,12 @@ pub fn _move(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Opti
 }
 
 /// `xchg`: both operands read AND written, each receiving the other's old value.
-pub fn _exchange(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _exchange(
+    insn: &Insn,
+    resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     if insn.insn.op_count() != 2 {
         return None;
     }
@@ -207,7 +237,12 @@ pub fn _exchange(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> 
     Some(shaped(op, name, vec![first.clone(), second.clone()], vec![second, first]))
 }
 
-pub fn _address(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _address(
+    insn: &Insn,
+    resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     if insn.insn.op_count() != 2 || insn.insn.op_kind(1) != OpKind::Memory {
         return None;
     }
@@ -223,7 +258,12 @@ pub fn _address(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> O
     Some(shaped(op, name, vec![dest], vec![Loc::Address(where_)]))
 }
 
-pub fn _binary(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _binary(
+    insn: &Insn,
+    resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     if insn.insn.op_count() != 2 {
         return None;
     }
@@ -233,7 +273,10 @@ pub fn _binary(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Op
     Some(shaped(op, name, vec![dest.clone()], vec![dest, source]))
 }
 
-const fn reg(register: Register, width: u32) -> Loc {
+const fn reg(
+    register: Register,
+    width: u32,
+) -> Loc {
     Loc::Reg(Reg { register, width })
 }
 
@@ -246,7 +289,12 @@ pub const WIDE_MULTIPLY: [(u32, ([Loc; 2], Loc)); 2] = [
 ];
 
 /// `imul` in all three of its forms.
-pub fn _multiply(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _multiply(
+    insn: &Insn,
+    resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     match insn.insn.op_count() {
         1 => {
             let factor = _location(insn, 0, resolve)?;
@@ -282,7 +330,12 @@ pub const DIVIDE_PAIR: [(u32, ([Loc; 2], [Loc; 2])); 2] = [
 ];
 
 /// `idiv rm`: quotient in the accumulator, remainder in its partner.
-pub fn _divide(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _divide(
+    insn: &Insn,
+    resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     if insn.insn.op_count() != 1 {
         return None;
     }
@@ -296,7 +349,12 @@ pub fn _divide(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Op
     Some(shaped(op, name, dests.to_vec(), vec![high, low, divisor]))
 }
 
-pub fn _compare(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _compare(
+    insn: &Insn,
+    resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     if insn.insn.op_count() != 2 {
         return None;
     }
@@ -305,7 +363,12 @@ pub fn _compare(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> O
     Some(shaped(op, name, Vec::new(), vec![left, right]))
 }
 
-pub fn _unary(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _unary(
+    insn: &Insn,
+    resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     if insn.insn.op_count() != 1 {
         return None;
     }
@@ -319,13 +382,23 @@ pub const EXTEND_PAIR: [(Mnemonic, (Loc, Loc)); 2] = [
     (Mnemonic::Cdq, (reg(Register::EDX, 4), reg(Register::EAX, 4))),
 ];
 
-pub fn _extend(insn: &Insn, _resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _extend(
+    insn: &Insn,
+    _resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     let mnemonic = insn.insn.mnemonic();
     let (_, (dest, source)) = EXTEND_PAIR.iter().find(|(one, _)| *one == mnemonic)?.clone();
     Some(shaped(op, name, vec![dest], vec![source]))
 }
 
-pub fn _push(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _push(
+    insn: &Insn,
+    resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     if insn.insn.op_count() != 1 {
         return None;
     }
@@ -333,7 +406,12 @@ pub fn _push(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Opti
     Some(shaped(op, name, Vec::new(), vec![source]))
 }
 
-pub fn _pop(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _pop(
+    insn: &Insn,
+    resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     if insn.insn.op_count() != 1 {
         return None;
     }
@@ -342,7 +420,12 @@ pub fn _pop(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Optio
 }
 
 /// `leave` is exactly `mov sp,bp` then `pop bp`.
-pub fn _leave(insn: &Insn, _resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _leave(
+    insn: &Insn,
+    _resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     if insn.code() != Code::Leavew {
         return None;
     }
@@ -351,7 +434,12 @@ pub fn _leave(insn: &Insn, _resolve: &Resolver, op: Operation, name: &str) -> Op
 }
 
 /// `rep stosw`: cx words of ax written through es:di, di stepping by DF.
-pub fn _fill(insn: &Insn, _resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _fill(
+    insn: &Insn,
+    _resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     if insn.code() != Code::Stosw_m16_AX || !insn.insn.has_rep_prefix() {
         return None;
     }
@@ -361,7 +449,12 @@ pub fn _fill(insn: &Insn, _resolve: &Resolver, op: Operation, name: &str) -> Opt
 }
 
 /// A jump or a conditional branch whose target is a computable offset.
-pub fn _transfer(insn: &Insn, _resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _transfer(
+    insn: &Insn,
+    _resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     let target = insn.target()?;
     Some(Semantics { name: Some(name.to_owned()), target: Some(target as i64), ..Semantics::new(op) })
 }
@@ -370,7 +463,12 @@ pub fn _transfer(insn: &Insn, _resolve: &Resolver, op: Operation, name: &str) ->
 pub const FAR_BRANCH: [OpKind; 2] = [OpKind::FarBranch16, OpKind::FarBranch32];
 
 /// A near `jmp` goes where the instruction says. A direct far `jmp` does not.
-pub fn _jump(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _jump(
+    insn: &Insn,
+    resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     let near = _transfer(insn, resolve, op, name);
     if near.is_some() {
         return near;
@@ -381,7 +479,12 @@ pub fn _jump(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Opti
 }
 
 /// A call site's own shape; its effect stays conservative.
-pub fn _call(insn: &Insn, _resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _call(
+    insn: &Insn,
+    _resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     Some(Semantics {
         name: Some(name.to_owned()),
         target: insn.target().map(|target| target as i64),
@@ -390,11 +493,21 @@ pub fn _call(insn: &Insn, _resolve: &Resolver, op: Operation, name: &str) -> Opt
 }
 
 /// An instruction that does nothing at all -- padding between bodies.
-pub fn _nothing(insn: &Insn, _resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _nothing(
+    insn: &Insn,
+    _resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     (insn.insn.op_count() == 0).then(|| shaped(op, name, Vec::new(), Vec::new()))
 }
 
-pub fn _return(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _return(
+    insn: &Insn,
+    resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     match insn.insn.op_count() {
         0 => Some(shaped(op, name, Vec::new(), Vec::new())),
         1 => match _location(insn, 0, resolve) {
@@ -406,7 +519,12 @@ pub fn _return(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Op
 }
 
 /// `fld`/`fild`: pushes the one real memory operand onto the stack.
-pub fn _float_load(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _float_load(
+    insn: &Insn,
+    resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     let mnemonic = insn.insn.mnemonic();
     if insn.insn.op_count() == 0 && matches!(mnemonic, Mnemonic::Fldz | Mnemonic::Fld1) {
         let value = Imm { value: i64::from(mnemonic == Mnemonic::Fld1), width: 2, address: None };
@@ -421,7 +539,12 @@ pub fn _float_load(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -
 
 /// `fstp`/`fistp`: the current top, written to the one real memory operand,
 /// then popped.
-pub fn _float_store(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _float_store(
+    insn: &Insn,
+    resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     if insn.insn.op_count() != 1 || insn.insn.op_kind(0) != OpKind::Memory {
         return None;
     }
@@ -429,7 +552,12 @@ pub fn _float_store(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) 
     Some(shaped(op, name, vec![dest], vec![Loc::St(St { index: 0 })]))
 }
 
-pub fn _float_arith(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _float_arith(
+    insn: &Insn,
+    resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     if insn.insn.op_count() == 2 && ["fadd", "fsub", "fmul", "fdiv"].contains(&name) {
         let (dest, source) = (_stack_register(insn, 0), _stack_register(insn, 1));
         let (Some(dest), Some(source)) = (dest, source) else {
@@ -449,7 +577,12 @@ pub fn _float_arith(insn: &Insn, resolve: &Resolver, op: Operation, name: &str) 
 
 /// `faddp`/`fsubp`/`fmulp`/`fdivp st(i),st(0)`: combines the two, writes the
 /// result to st(i), then pops.
-pub fn _float_arith_pop(insn: &Insn, _resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _float_arith_pop(
+    insn: &Insn,
+    _resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     if insn.insn.op_count() != 2 {
         return None;
     }
@@ -464,7 +597,12 @@ pub fn _float_arith_pop(insn: &Insn, _resolve: &Resolver, op: Operation, name: &
 }
 
 /// `fchs`/`fabs`/`fsqrt`: the top, transformed in place.
-pub fn _float_unary(insn: &Insn, _resolve: &Resolver, op: Operation, name: &str) -> Option<Semantics> {
+pub fn _float_unary(
+    insn: &Insn,
+    _resolve: &Resolver,
+    op: Operation,
+    name: &str,
+) -> Option<Semantics> {
     (insn.insn.op_count() == 0)
         .then(|| shaped(op, name, vec![Loc::St(St { index: 0 })], vec![Loc::St(St { index: 0 })]))
 }
@@ -571,7 +709,10 @@ pub const SHAPE: [(Mnemonic, Operation, &str); 68] = [
 ];
 
 /// What one real instruction computes, or `Operation::Barrier`.
-pub fn instruction_semantics(insn: &Insn, resolve: &Resolver) -> Semantics {
+pub fn instruction_semantics(
+    insn: &Insn,
+    resolve: &Resolver,
+) -> Semantics {
     let mnemonic = insn.insn.mnemonic();
     let Some(&(_, op, name)) = SHAPE.iter().find(|(one, _, _)| *one == mnemonic) else {
         return UNMODELLED.clone();

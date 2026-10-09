@@ -73,7 +73,10 @@ pub struct CodeMap {
 }
 
 /// What this instruction does to control flow.
-pub fn terminator(insn: &Insn, module: Option<&Module>) -> Ends {
+pub fn terminator(
+    insn: &Insn,
+    module: Option<&Module>,
+) -> Ends {
     if let Some(module) = module {
         if module.calls.get(&(insn.at as i64)).map(String::as_str) == Some("B$RETA")
             && matches!(family(&module.records).value(), "pds71" | "vbdos")
@@ -93,7 +96,10 @@ pub fn terminator(insn: &Insn, module: Option<&Module>) -> Ends {
 }
 
 /// The extent of the table after a call, and the offsets it holds.
-pub fn inline_table(module: &Module, insn: &Insn) -> Option<(usize, usize, Vec<usize>)> {
+pub fn inline_table(
+    module: &Module,
+    insn: &Insn,
+) -> Option<(usize, usize, Vec<usize>)> {
     if !module.calls.get(&(insn.at as i64)).is_some_and(|name| INLINE_TABLE.contains(name.as_str())) {
         return None;
     }
@@ -110,7 +116,10 @@ pub fn inline_table(module: &Module, insn: &Insn) -> Option<(usize, usize, Vec<u
     Some((lo, hi, entries))
 }
 
-pub fn dispatch_targets(module: &Module, insn: &Insn) -> Option<Vec<i64>> {
+pub fn dispatch_targets(
+    module: &Module,
+    insn: &Insn,
+) -> Option<Vec<i64>> {
     let limit = (module.end as usize).min(module.code.len());
     if insn.end() >= limit {
         return None;
@@ -184,13 +193,15 @@ pub fn event_stub(module: &Module) -> Option<usize> {
     }
 
     let named = |at: i64, loc: i64, name: &str| -> bool {
-        fields.get(&at).is_some_and(|fixup| {
-            fixup.target == "external"
-                && fixup.disp == 0
-                && !fixup.selfrel
-                && fixup.loc == loc
-                && names[fixup.index as usize] == name
-        })
+        fields
+            .get(&at)
+            .is_some_and(
+                |fixup| fixup.target == "external"
+                    && fixup.disp == 0
+                    && !fixup.selfrel
+                    && fixup.loc == loc
+                    && names[fixup.index as usize] == name,
+            )
     };
 
     let flags: BTreeSet<i64> = fields.keys().copied().filter(|&at| named(at, omf::LOC_OFF16, "b$EVTFLG")).collect();
@@ -223,7 +234,10 @@ pub fn event_stub(module: &Module) -> Option<usize> {
     None
 }
 
-pub fn local_call_target(module: &Module, insn: &Insn) -> Option<usize> {
+pub fn local_call_target(
+    module: &Module,
+    insn: &Insn,
+) -> Option<usize> {
     let target = insn.target();
     if insn.flow() != FlowControl::Call
         || target.is_none()
@@ -236,7 +250,11 @@ pub fn local_call_target(module: &Module, insn: &Insn) -> Option<usize> {
 }
 
 /// Every byte reachable as an instruction, from the entry points on.
-pub fn walk(module: &Module, entry: usize, extra_entries: &BTreeSet<usize>) -> Result<CodeMap, String> {
+pub fn walk(
+    module: &Module,
+    entry: usize,
+    extra_entries: &BTreeSet<usize>,
+) -> Result<CodeMap, String> {
     let mut seeds: BTreeSet<usize> = BTreeSet::from([entry]);
     seeds.extend(module.targets.iter().map(|&at| at as usize));
     seeds.extend(module.publics.iter().map(|&at| at as usize));
@@ -372,7 +390,11 @@ pub fn native_gap_entry(
 }
 
 /// Ranges that reachability never explained, so nothing may be moved across them.
-pub fn gaps(module: &Module, starts: &BTreeSet<usize>, tables: &[(usize, usize)]) -> Vec<(usize, usize)> {
+pub fn gaps(
+    module: &Module,
+    starts: &BTreeSet<usize>,
+    tables: &[(usize, usize)],
+) -> Vec<(usize, usize)> {
     let end = module.end as usize;
     // bytearray slice assignment past the end only grows it, which no index
     // below `end` can see
@@ -461,7 +483,10 @@ pub fn statement_table(module: &Module) -> Option<(usize, usize)> {
 pub fn statements(module: &Module) -> Vec<(usize, i64)> {
     let Some((start, end)) = statement_table(module) else { return Vec::new() };
     let line = |at: usize| i64::from(u16::from_le_bytes([module.code[at + 2], module.code[at + 3]]));
-    (start..end - 2).step_by(4).filter_map(|at| module.operands.get(&(at as i64)).map(|address| (address.disp as usize, line(at)))).collect()
+    (start..end - 2)
+        .step_by(4)
+        .filter_map(|at| module.operands.get(&(at as i64)).map(|address| (address.disp as usize, line(at))))
+        .collect()
 }
 
 /// Runs of relocations no instruction accounts for, which are a table.
@@ -470,7 +495,11 @@ pub fn statements(module: &Module) -> Vec<(usize, i64)> {
 /// back sits past the end of the code and the walk falls into it. What finds
 /// it is the fixups: a run of them at a constant stride that no operand field
 /// explains. Misalignment does not produce that.
-pub fn unexplained_tables(module: &Module, fields: &BTreeSet<usize>, entry: usize) -> Vec<(usize, usize)> {
+pub fn unexplained_tables(
+    module: &Module,
+    fields: &BTreeSet<usize>,
+    entry: usize,
+) -> Vec<(usize, usize)> {
     // the header's own fields are below the entry and already exempt
     let missing: Vec<usize> = module
         .sites
@@ -506,7 +535,10 @@ pub fn unexplained_tables(module: &Module, fields: &BTreeSet<usize>, entry: usiz
 /// event-polling calls the optimiser jumps straight over. The test here is
 /// only that the whole span is instruction-shaped, rather than accepting
 /// arbitrary data because it happens to be unreachable.
-pub fn benign(module: &Module, gap: (usize, usize)) -> Option<Vec<Insn>> {
+pub fn benign(
+    module: &Module,
+    gap: (usize, usize),
+) -> Option<Vec<Insn>> {
     let (lo, hi) = gap;
     let bytes = slice(&module.code, lo, hi);
     if !bytes.is_empty() && bytes.iter().all(|&byte| byte == PAD) {
@@ -525,7 +557,11 @@ pub fn benign(module: &Module, gap: (usize, usize)) -> Option<Vec<Insn>> {
 ///
 /// The fixups are BC's own map of where operand fields are, so they are
 /// what says the alignment is right.
-pub fn operand_fields(module: &Module, found: &CodeMap, dead: &[Insn]) -> Option<BTreeSet<usize>> {
+pub fn operand_fields(
+    module: &Module,
+    found: &CodeMap,
+    dead: &[Insn],
+) -> Option<BTreeSet<usize>> {
     let mut fields = BTreeSet::new();
     let reached: Vec<Insn> = found.starts.iter().filter_map(|&at| decode(&module.code, at)).collect();
     if reached.len() != found.starts.len() {
@@ -575,11 +611,8 @@ pub fn code_map(module: &Module) -> Result<CodeMap, String> {
             let Some(stranded_gap) = stranded_gap else {
                 break Ok(found);
             };
-            let discovered = if native {
-                native_gap_entry(module, &found, stranded_gap, entry, &extra_entries)
-            } else {
-                None
-            };
+            let discovered =
+                if native { native_gap_entry(module, &found, stranded_gap, entry, &extra_entries) } else { None };
             let Some(discovered) = discovered else {
                 why = format!("{:#x}..{:#x} is neither reached nor inert", stranded_gap.0, stranded_gap.1);
                 break Err("unexplained code".to_owned());
@@ -633,11 +666,12 @@ pub fn code_map(module: &Module) -> Result<CodeMap, String> {
 }
 
 /// Decode with the FP emulator's segment protocol restored.
-pub fn decoded_instruction(module: &Module, at: usize) -> Option<Insn> {
+pub fn decoded_instruction(
+    module: &Module,
+    at: usize,
+) -> Option<Insn> {
     let insn = decode(&module.code, at)?;
-    if slice(&module.code, at, at + 2) == b"\xcd\x3c"
-        && insn.insn.code() != Code::Int_imm8
-        && emulated(&module.records)
+    if slice(&module.code, at, at + 2) == b"\xcd\x3c" && insn.insn.code() != Code::Int_imm8 && emulated(&module.records)
     {
         // The emulator patches CD 3C D9 07 into 90 26 D9 07: ES, not DS.
         // Read out of QuickBASIC 4.5's own deedlines at 0824:A3F2, so the
@@ -675,7 +709,10 @@ impl Block {
 }
 
 /// The reached instructions cut into basic blocks, with their successors.
-pub fn partition(module: &Module, mapped: &CodeMap) -> Vec<Block> {
+pub fn partition(
+    module: &Module,
+    mapped: &CodeMap,
+) -> Vec<Block> {
     let reached: Vec<Insn> = mapped.starts.iter().filter_map(|&at| decoded_instruction(module, at)).collect();
     let mut out: Vec<Block> = Vec::new();
     let mut run: Vec<Insn> = Vec::new();
@@ -686,7 +723,8 @@ pub fn partition(module: &Module, mapped: &CodeMap) -> Vec<Block> {
             out.push(_close(module, &run, mapped));
             run = Vec::new();
         }
-        let closes = terminator(&insn, Some(module)) != Ends::FallsThrough || _table_at(module, mapped, &insn).is_some();
+        let closes =
+            terminator(&insn, Some(module)) != Ends::FallsThrough || _table_at(module, mapped, &insn).is_some();
         run.push(insn);
         if closes {
             out.push(_close(module, &run, mapped));
@@ -699,11 +737,19 @@ pub fn partition(module: &Module, mapped: &CodeMap) -> Vec<Block> {
     out
 }
 
-pub fn _table_at(_module: &Module, mapped: &CodeMap, insn: &Insn) -> Option<(usize, usize)> {
+pub fn _table_at(
+    _module: &Module,
+    mapped: &CodeMap,
+    insn: &Insn,
+) -> Option<(usize, usize)> {
     mapped.tables.iter().copied().find(|table| table.0 == insn.end())
 }
 
-pub fn _close(module: &Module, run: &[Insn], mapped: &CodeMap) -> Block {
+pub fn _close(
+    module: &Module,
+    run: &[Insn],
+    mapped: &CodeMap,
+) -> Block {
     let last = run.last().unwrap();
     let mut ends = terminator(last, Some(module));
     let mut succ: Vec<i64> = Vec::new();
@@ -732,7 +778,11 @@ pub fn _close(module: &Module, run: &[Insn], mapped: &CodeMap) -> Block {
 }
 
 /// `b[lo:hi]` for non-negative bounds: clamped, and empty where `hi < lo`.
-fn slice(b: &[u8], lo: usize, hi: usize) -> &[u8] {
+fn slice(
+    b: &[u8],
+    lo: usize,
+    hi: usize,
+) -> &[u8] {
     let hi = hi.min(b.len());
     if lo >= hi { &[] } else { &b[lo..hi] }
 }

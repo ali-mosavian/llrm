@@ -2,16 +2,86 @@
 
 /// MIR opcodes a pattern may match, as `Opcode::mnemonic` spells them.
 pub const OPCODES: [&str; 51] = [
-    "ret", "br", "switch", "invoke", "resume", "unreachable", "fneg", "add", "sub", "mul", "udiv", "sdiv", "urem", "srem", "shl", "lshr", "ashr", "and", "or",
-    "xor", "fadd", "fsub", "fmul", "fdiv", "frem", "trunc", "zext", "sext", "fptrunc", "fpext", "fptoui", "fptosi", "uitofp", "sitofp", "ptrtoint",
-    "inttoptr", "bitcast", "addrspacecast", "extractvalue", "alloca", "load", "store", "getelementptr", "insertvalue", "icmp", "fcmp", "phi", "select",
-    "freeze", "call", "landingpad",
+    "ret",
+    "br",
+    "switch",
+    "invoke",
+    "resume",
+    "unreachable",
+    "fneg",
+    "add",
+    "sub",
+    "mul",
+    "udiv",
+    "sdiv",
+    "urem",
+    "srem",
+    "shl",
+    "lshr",
+    "ashr",
+    "and",
+    "or",
+    "xor",
+    "fadd",
+    "fsub",
+    "fmul",
+    "fdiv",
+    "frem",
+    "trunc",
+    "zext",
+    "sext",
+    "fptrunc",
+    "fpext",
+    "fptoui",
+    "fptosi",
+    "uitofp",
+    "sitofp",
+    "ptrtoint",
+    "inttoptr",
+    "bitcast",
+    "addrspacecast",
+    "extractvalue",
+    "alloca",
+    "load",
+    "store",
+    "getelementptr",
+    "insertvalue",
+    "icmp",
+    "fcmp",
+    "phi",
+    "select",
+    "freeze",
+    "call",
+    "landingpad",
 ];
 
 /// Shorthands for sets of opcodes.
 pub const OPCODE_SETS: [(&str, &[&str]); 2] = [
-    ("cast", &["trunc", "zext", "sext", "fptrunc", "fpext", "fptoui", "fptosi", "uitofp", "sitofp", "ptrtoint", "inttoptr", "bitcast", "addrspacecast"]),
-    ("binary", &["add", "sub", "mul", "udiv", "sdiv", "urem", "srem", "shl", "lshr", "ashr", "and", "or", "xor", "fadd", "fsub", "fmul", "fdiv", "frem"]),
+    (
+        "cast",
+        &[
+            "trunc",
+            "zext",
+            "sext",
+            "fptrunc",
+            "fpext",
+            "fptoui",
+            "fptosi",
+            "uitofp",
+            "sitofp",
+            "ptrtoint",
+            "inttoptr",
+            "bitcast",
+            "addrspacecast",
+        ],
+    ),
+    (
+        "binary",
+        &[
+            "add", "sub", "mul", "udiv", "sdiv", "urem", "srem", "shl", "lshr", "ashr", "and", "or", "xor", "fadd",
+            "fsub", "fmul", "fdiv", "frem",
+        ],
+    ),
 ];
 
 /// A value's type, as the selector classes it: `ptr` is near, `far` is
@@ -63,7 +133,12 @@ pub enum Expr {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
     Let(String, Expr),
-    Emit { name: String, dests: Vec<Expr>, sources: Vec<Expr>, volatile: bool },
+    Emit {
+        name: String,
+        dests: Vec<Expr>,
+        sources: Vec<Expr>,
+        volatile: bool,
+    },
     Hook(Call),
     /// Refused with this message, or the opcode's mnemonic.
     Refuse(Option<String>),
@@ -99,7 +174,10 @@ struct Lexer<'a> {
     line: usize,
 }
 
-fn error<T>(line: usize, what: impl std::fmt::Display) -> Result<T, String> {
+fn error<T>(
+    line: usize,
+    what: impl std::fmt::Display,
+) -> Result<T, String> {
     Err(format!("patterns.isel:{line}: {what}"))
 }
 
@@ -113,7 +191,10 @@ impl<'a> Lexer<'a> {
         self.at == self.text.len()
     }
 
-    fn eat(&mut self, token: &str) -> bool {
+    fn eat(
+        &mut self,
+        token: &str,
+    ) -> bool {
         self.skip();
         let found = self.text[self.at..].starts_with(token);
         if found {
@@ -122,14 +203,22 @@ impl<'a> Lexer<'a> {
         found
     }
 
-    fn expect(&mut self, token: &str) -> Result<(), String> {
-        if self.eat(token) { Ok(()) } else { error(self.line, format!("expected `{token}` at `{}`", &self.text[self.at..])) }
+    fn expect(
+        &mut self,
+        token: &str,
+    ) -> Result<(), String> {
+        if self.eat(token) {
+            Ok(())
+        } else {
+            error(self.line, format!("expected `{token}` at `{}`", &self.text[self.at..]))
+        }
     }
 
     fn word(&mut self) -> Option<&'a str> {
         self.skip();
         let rest = &self.text[self.at..];
-        let length = rest.find(|one: char| !(one.is_ascii_alphanumeric() || one == '_' || one == '$')).unwrap_or(rest.len());
+        let length =
+            rest.find(|one: char| !(one.is_ascii_alphanumeric() || one == '_' || one == '$')).unwrap_or(rest.len());
         (length > 0).then(|| {
             self.at += length;
             &rest[..length]
@@ -198,7 +287,10 @@ impl<'a> Lexer<'a> {
     }
 }
 
-fn types(line: usize, names: Vec<String>) -> Result<Vec<String>, String> {
+fn types(
+    line: usize,
+    names: Vec<String>,
+) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     for name in names {
         if let Some((_, set)) = TYPE_SETS.iter().find(|(set, _)| *set == name) {
@@ -271,7 +363,11 @@ fn operand(lexer: &mut Lexer) -> Result<OperandPattern, String> {
     Ok(one)
 }
 
-fn matched(pattern: &mut Pattern, text: &str, line: usize) -> Result<(), String> {
+fn matched(
+    pattern: &mut Pattern,
+    text: &str,
+    line: usize,
+) -> Result<(), String> {
     let mut lexer = Lexer { text, at: 0, line };
     if !lexer.eat("*") {
         pattern.opcodes = Some(opcodes(&mut lexer)?);
@@ -283,7 +379,10 @@ fn matched(pattern: &mut Pattern, text: &str, line: usize) -> Result<(), String>
     if !lexer.done() {
         return error(line, format!("`{}` after the match", &lexer.text[lexer.at..]));
     }
-    fn bound<'a>(operands: &'a [OperandPattern], into: &mut Vec<&'a String>) -> Option<&'a String> {
+    fn bound<'a>(
+        operands: &'a [OperandPattern],
+        into: &mut Vec<&'a String>,
+    ) -> Option<&'a String> {
         for one in operands {
             if let Some(binding) = &one.binding {
                 if into.contains(&binding) {
@@ -303,7 +402,11 @@ fn matched(pattern: &mut Pattern, text: &str, line: usize) -> Result<(), String>
     Ok(())
 }
 
-fn step(keyword: &str, rest: &str, line: usize) -> Result<Step, String> {
+fn step(
+    keyword: &str,
+    rest: &str,
+    line: usize,
+) -> Result<Step, String> {
     let mut lexer = Lexer { text: rest, at: 0, line };
     let step = match keyword {
         "let" => {
@@ -313,7 +416,9 @@ fn step(keyword: &str, rest: &str, line: usize) -> Result<Step, String> {
         }
         "emit" => {
             let name = lexer.name()?.to_owned();
-            let dests = if lexer.eat("<-") { Vec::new() } else {
+            let dests = if lexer.eat("<-") {
+                Vec::new()
+            } else {
                 let dests = lexer.list()?;
                 lexer.expect("<-")?;
                 dests
@@ -360,19 +465,43 @@ fn step(keyword: &str, rest: &str, line: usize) -> Result<Step, String> {
 }
 
 /// Each `for` instance of a pattern's lines: `$mir` and `$x86` replaced.
-fn instances(lines: &[(usize, String)], pairs: &[(String, String)]) -> Vec<Vec<(usize, String)>> {
+fn instances(
+    lines: &[(usize, String)],
+    pairs: &[(String, String)],
+) -> Vec<Vec<(usize, String)>> {
     if pairs.is_empty() {
         return vec![lines.to_vec()];
     }
-    pairs.iter().map(|(mir, x86)| lines.iter().map(|(line, text)| (*line, text.replace("$mir", mir).replace("$x86", x86))).collect()).collect()
+    pairs
+        .iter()
+        .map(|(mir, x86)| {
+            lines.iter().map(|(line, text)| (*line, text.replace("$mir", mir).replace("$x86", x86))).collect()
+        })
+        .collect()
 }
 
-fn pattern(name: &str, line: usize, lines: &[(usize, String)]) -> Result<Pattern, String> {
-    let mut pattern = Pattern { name: name.to_owned(), line, opcodes: None, result: None, operands: Vec::new(), group: None, when: Vec::new(), cost: None, covers: Vec::new(), body: Vec::new() };
+fn pattern(
+    name: &str,
+    line: usize,
+    lines: &[(usize, String)],
+) -> Result<Pattern, String> {
+    let mut pattern = Pattern {
+        name: name.to_owned(),
+        line,
+        opcodes: None,
+        result: None,
+        operands: Vec::new(),
+        group: None,
+        when: Vec::new(),
+        cost: None,
+        covers: Vec::new(),
+        body: Vec::new(),
+    };
     let mut matches = 0;
     for (line, text) in lines {
         let line = *line;
-        let (keyword, rest) = text.split_once(char::is_whitespace).map_or((text.as_str(), ""), |(keyword, rest)| (keyword, rest.trim()));
+        let (keyword, rest) =
+            text.split_once(char::is_whitespace).map_or((text.as_str(), ""), |(keyword, rest)| (keyword, rest.trim()));
         match keyword {
             "match" => {
                 matches += 1;
@@ -416,7 +545,8 @@ fn pattern(name: &str, line: usize, lines: &[(usize, String)]) -> Result<Pattern
     if pattern.body.is_empty() {
         return error(line, format!("pattern `{name}` selects nothing; say `nothing` if it means to"));
     }
-    let nested: Vec<&String> = pattern.operands.iter().filter(|one| one.nested.is_some()).filter_map(|one| one.binding.as_ref()).collect();
+    let nested: Vec<&String> =
+        pattern.operands.iter().filter(|one| one.nested.is_some()).filter_map(|one| one.binding.as_ref()).collect();
     if let Some(bad) = pattern.covers.iter().find(|one| !nested.contains(one)) {
         return error(line, format!("pattern `{name}` covers `{bad}`, which is no instruction its match nests"));
     }
@@ -439,7 +569,8 @@ pub fn parse(text: &str) -> Result<Patterns, String> {
         if content.is_empty() {
             continue;
         }
-        let (keyword, rest) = content.split_once(char::is_whitespace).map_or((content, ""), |(keyword, rest)| (keyword, rest.trim()));
+        let (keyword, rest) =
+            content.split_once(char::is_whitespace).map_or((content, ""), |(keyword, rest)| (keyword, rest.trim()));
         match (keyword, &mut open) {
             ("commutative", None) => out.commutative.extend(rest.split_whitespace().map(str::to_owned)),
             ("pattern", None) => {
@@ -450,7 +581,9 @@ pub fn parse(text: &str) -> Result<Patterns, String> {
                     None => {}
                     Some("for") => {
                         for pair in words {
-                            let Some((mir, x86)) = pair.split_once('=') else { return error(line, format!("`{pair}` is not mir=x86")) };
+                            let Some((mir, x86)) = pair.split_once('=') else {
+                                return error(line, format!("`{pair}` is not mir=x86"));
+                            };
                             pairs.push((mir.to_owned(), x86.to_owned()));
                         }
                     }

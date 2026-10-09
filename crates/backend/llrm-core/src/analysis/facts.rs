@@ -1,15 +1,16 @@
-//! The derived facts of a `LirBody`, kept while their inputs are: llvm's `MachineFunctionAnalysisManager`, in the shape of
-//! llrm-mir's `Analysis` (`NAME`, `run`, a result that is `PartialEq`).
+//! The derived facts of a `LirBody`, kept while their inputs are: llvm's `MachineFunctionAnalysisManager`, in the shape
+//! of llrm-mir's `Analysis` (`NAME`, `run`, a result that is `PartialEq`).
 //!
-//! The manager is a field of the body, shared by every body made from it (`with_blocks`, a clone), so it lives as long as the
-//! function's compile and no longer. A fact says what it read (`inputs`) and whether a body still has those (`held_by`); an ask
-//! of a body that does has the kept result. `LLRM_CHECK_FACTS` works every kept result out again and compares.
+//! The manager is a field of the body, shared by every body made from it (`with_blocks`, a clone), so it lives as long
+//! as the function's compile and no longer. A fact says what it read (`inputs`) and whether a body still has those
+//! (`held_by`); an ask of a body that does has the kept result. `LLRM_CHECK_FACTS` works every kept result out again
+//! and compares.
 
 use std::any::{Any, TypeId};
-use crate::support::hash::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::model::lir::LirBody;
+use crate::support::hash::HashMap;
 
 pub trait Fact: 'static {
     type Result: PartialEq + std::fmt::Debug + Send + Sync + 'static;
@@ -19,7 +20,10 @@ pub trait Fact: 'static {
     fn run(body: &LirBody) -> Self::Result;
     fn inputs(body: &LirBody) -> Self::Inputs;
     /// Whether `body` has the inputs `kept` was made from.
-    fn held_by(kept: &Self::Inputs, body: &LirBody) -> bool;
+    fn held_by(
+        kept: &Self::Inputs,
+        body: &LirBody,
+    ) -> bool;
 }
 
 struct Slot<F: Fact>(Option<(F::Inputs, Arc<F::Result>)>);
@@ -37,11 +41,18 @@ fn check() -> bool {
 
 impl Facts {
     /// `F` of `body`: the kept result where `body` has its inputs, else worked out.
-    pub fn get<F: Fact>(&self, body: &LirBody) -> Arc<F::Result> {
+    pub fn get<F: Fact>(
+        &self,
+        body: &LirBody,
+    ) -> Arc<F::Result> {
         self.get_checked::<F>(body, check())
     }
 
-    fn get_checked<F: Fact>(&self, body: &LirBody, checked: bool) -> Arc<F::Result> {
+    fn get_checked<F: Fact>(
+        &self,
+        body: &LirBody,
+        checked: bool,
+    ) -> Arc<F::Result> {
         let kept = {
             let mut slots = self.slots.lock().expect("facts");
             let slot = slots.entry(TypeId::of::<F>()).or_insert_with(|| Box::new(Slot::<F>(None)));
@@ -62,20 +73,29 @@ impl Facts {
         result
     }
 
-    /// A value of type `T` the manager holds for its users, made by `Default` on first use: for a fact that keeps several states
-    /// (a ring of answers) where `get`'s one slot is not enough. `change` must not ask the manager.
-    pub fn stash<T: Default + Send + 'static, R>(&self, change: impl FnOnce(&mut T) -> R) -> R {
+    /// A value of type `T` the manager holds for its users, made by `Default` on first use: for a fact that keeps
+    /// several states (a ring of answers) where `get`'s one slot is not enough. `change` must not ask the manager.
+    pub fn stash<T: Default + Send + 'static, R>(
+        &self,
+        change: impl FnOnce(&mut T) -> R,
+    ) -> R {
         let mut slots = self.slots.lock().expect("facts");
         let slot = slots.entry(TypeId::of::<T>()).or_insert_with(|| Box::<T>::default());
         change(slot.downcast_mut::<T>().expect("a stash is of its type"))
     }
 
     /// Counts what a test asserts was not done twice.
-    pub fn bump(&self, name: &'static str) {
+    pub fn bump(
+        &self,
+        name: &'static str,
+    ) {
         *self.runs.lock().expect("facts").entry(name).or_default() += 1;
     }
 
-    pub fn counted(&self, name: &'static str) -> usize {
+    pub fn counted(
+        &self,
+        name: &'static str,
+    ) -> usize {
         self.runs.lock().expect("facts").get(name).copied().unwrap_or(0)
     }
 
@@ -90,13 +110,19 @@ impl Facts {
 pub struct Kept(pub Arc<Facts>);
 
 impl std::fmt::Debug for Kept {
-    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         out.write_str("Facts")
     }
 }
 
 impl PartialEq for Kept {
-    fn eq(&self, _: &Self) -> bool {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
         true
     }
 }
@@ -120,13 +146,16 @@ mod tests {
             body.blocks.len()
         }
         fn inputs(_: &LirBody) {}
-        fn held_by(_: &(), _: &LirBody) -> bool {
+        fn held_by(
+            _: &(),
+            _: &LirBody,
+        ) -> bool {
             true
         }
     }
 
-    /// A kept result that the body no longer gives went unnoticed (a stale frequency made the allocator's costs wrong without a
-    /// word): the check mode works every kept result out again.
+    /// A kept result that the body no longer gives went unnoticed (a stale frequency made the allocator's costs wrong
+    /// without a word): the check mode works every kept result out again.
     #[test]
     fn test_the_check_catches_a_kept_fact_the_body_no_longer_gives() {
         let none = LirBody::new("f", 1, Vec::new(), IndexMap::default(), IndexMap::default());
@@ -134,6 +163,10 @@ mod tests {
         assert_eq!(*facts.get_checked::<Forgetful>(&none, true), 0);
         let one = none.with_blocks(vec![crate::model::lir::LirBlock::new(1, Vec::new())]);
         assert_eq!(*facts.get_checked::<Forgetful>(&one, false), 0, "unchecked, the stale result stands");
-        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| facts.get_checked::<Forgetful>(&one, true))).is_err(), "the stale result was not caught");
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| facts.get_checked::<Forgetful>(&one, true)))
+                .is_err(),
+            "the stale result was not caught"
+        );
     }
 }

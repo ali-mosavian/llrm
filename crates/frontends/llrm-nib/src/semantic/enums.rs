@@ -20,7 +20,11 @@ pub(super) struct EnumLayout {
 impl FunctionCompiler<'_> {
     /// The tag of the enum at `view`, loaded: a native enum holds only the
     /// tags its variants have, and says so.
-    pub(super) fn load_tag(&mut self, view: &StructView, layout: &EnumLayout) -> u32 {
+    pub(super) fn load_tag(
+        &mut self,
+        view: &StructView,
+        layout: &EnumLayout,
+    ) -> u32 {
         let tag = self.value(layout.tag);
         // The range of the tag is stated once, of the member (see `tag_ranges`).
         let place = self.field_place(view, 0, layout.tag);
@@ -37,8 +41,16 @@ impl TypeRegistry {
             .values()
             .filter_map(|layout| {
                 let ElementType::Struct(owner) = layout.element else { return None };
-                let (lo, hi) = layout.variants.iter().fold((i64::MAX, i64::MIN), |(lo, hi), variant| (lo.min(variant.tag), hi.max(variant.tag)));
-                (lo <= hi).then(|| (llrm_core::hir::facts::Subject::Field { owner: i64::from(owner), offset: 0 }, llrm_mir::facts::Fact::Range(llrm_mir::facts::Bounds { lo, hi })))
+                let (lo, hi) = layout
+                    .variants
+                    .iter()
+                    .fold((i64::MAX, i64::MIN), |(lo, hi), variant| (lo.min(variant.tag), hi.max(variant.tag)));
+                (lo <= hi).then(|| {
+                    (
+                        llrm_core::hir::facts::Subject::Field { owner: i64::from(owner), offset: 0 },
+                        llrm_mir::facts::Fact::Range(llrm_mir::facts::Bounds { lo, hi }),
+                    )
+                })
             })
             .collect()
     }
@@ -54,7 +66,11 @@ pub(super) struct VariantLayout {
 pub(super) const TAG: &str = "$tag";
 
 impl EnumLayout {
-    pub(super) fn variant(&self, name: &str, span: Span) -> Result<&VariantLayout, Diagnostic> {
+    pub(super) fn variant(
+        &self,
+        name: &str,
+        span: Span,
+    ) -> Result<&VariantLayout, Diagnostic> {
         self.variants
             .iter()
             .find(|one| one.name == name)
@@ -71,9 +87,7 @@ impl EnumLayout {
 
 /// The named types a declaration's fields refer to.
 fn references<'a>(fields: impl Iterator<Item = &'a StructField>) -> Vec<&'a str> {
-    fields
-        .flat_map(|field| generics::named_in(&field.type_spec))
-        .collect()
+    fields.flat_map(|field| generics::named_in(&field.type_spec)).collect()
 }
 
 impl TypeRegistry {
@@ -84,34 +98,23 @@ impl TypeRegistry {
         structs: &[Struct],
         enums: &[Enum],
     ) -> Result<(), Diagnostic> {
-        let names: BTreeSet<&str> = structs
-            .iter()
-            .map(|one| one.name.as_str())
-            .chain(enums.iter().map(|one| one.name.as_str()))
-            .collect();
+        let names: BTreeSet<&str> =
+            structs.iter().map(|one| one.name.as_str()).chain(enums.iter().map(|one| one.name.as_str())).collect();
         for one in structs {
             let fixed = one.fields.iter().filter(|field| !field.mutable);
             self.fixed_fields.extend(fixed.map(|field| (one.name.clone(), field.name.clone())));
         }
         for one in structs.iter().filter(|one| !one.generics.is_empty()) {
-            self.templates
-                .insert(one.name.clone(), generics::Template::Struct(one.clone()));
+            self.templates.insert(one.name.clone(), generics::Template::Struct(one.clone()));
         }
         for one in enums.iter().filter(|one| !one.generics.is_empty()) {
-            self.templates
-                .insert(one.name.clone(), generics::Template::Enum(one.clone()));
+            self.templates.insert(one.name.clone(), generics::Template::Enum(one.clone()));
         }
-        let mut pending_structs: Vec<&Struct> = structs
-            .iter()
-            .filter(|one| one.generics.is_empty())
-            .collect();
-        let mut pending_enums: Vec<&Enum> =
-            enums.iter().filter(|one| one.generics.is_empty()).collect();
+        let mut pending_structs: Vec<&Struct> = structs.iter().filter(|one| one.generics.is_empty()).collect();
+        let mut pending_enums: Vec<&Enum> = enums.iter().filter(|one| one.generics.is_empty()).collect();
         while !pending_structs.is_empty() || !pending_enums.is_empty() {
             let ready = |references: Vec<&str>, types: &Self| {
-                references
-                    .into_iter()
-                    .all(|name| !names.contains(name) || types.declared(name))
+                references.into_iter().all(|name| !names.contains(name) || types.declared(name))
             };
             let before = pending_structs.len() + pending_enums.len();
             let mut index = 0;
@@ -124,10 +127,7 @@ impl TypeRegistry {
             }
             let mut index = 0;
             while index < pending_enums.len() {
-                let fields = pending_enums[index]
-                    .variants
-                    .iter()
-                    .flat_map(|one| &one.fields);
+                let fields = pending_enums[index].variants.iter().flat_map(|one| &one.fields);
                 if ready(references(fields), self) {
                     self.register_enum(pending_enums.remove(index))?;
                 } else {
@@ -146,7 +146,10 @@ impl TypeRegistry {
         Ok(())
     }
 
-    pub(super) fn register_enum(&mut self, declaration: &Enum) -> Result<(), Diagnostic> {
+    pub(super) fn register_enum(
+        &mut self,
+        declaration: &Enum,
+    ) -> Result<(), Diagnostic> {
         if self.declared(&declaration.name) {
             return Err(Diagnostic::new(
                 declaration.span,
@@ -158,22 +161,11 @@ impl TypeRegistry {
         let mut variants = Vec::new();
         for variant in &declaration.variants {
             let tag = variant.tag.unwrap_or(next);
-            if !tags.insert(tag)
-                || variants
-                    .iter()
-                    .any(|one: &VariantLayout| one.name == variant.name)
-            {
-                return Err(Diagnostic::new(
-                    variant.span,
-                    format!("variant {:?} repeats a name or tag", variant.name),
-                ));
+            if !tags.insert(tag) || variants.iter().any(|one: &VariantLayout| one.name == variant.name) {
+                return Err(Diagnostic::new(variant.span, format!("variant {:?} repeats a name or tag", variant.name)));
             }
             next = tag + 1;
-            variants.push(VariantLayout {
-                name: variant.name.clone(),
-                tag,
-                fields: Vec::new(),
-            });
+            variants.push(VariantLayout { name: variant.name.clone(), tag, fields: Vec::new() });
         }
         let highest = *tags.last().expect("at least one variant");
         let (tag, bits) = match declaration.backing {
@@ -188,19 +180,12 @@ impl TypeRegistry {
                 format!("a tag of {} does not fit its type", declaration.name),
             ));
         }
-        let payload = declaration
-            .variants
-            .iter()
-            .any(|one| !one.fields.is_empty());
+        let payload = declaration.variants.iter().any(|one| !one.fields.is_empty());
         let element = if payload {
             let base = scalar_width(tag);
             let mut fields = BTreeMap::from([(
                 TAG.to_owned(),
-                FieldLayout {
-                    type_: ElementType::Scalar(tag),
-                    offset: 0,
-                    shape: None,
-                },
+                FieldLayout { type_: ElementType::Scalar(tag), offset: 0, shape: None },
             )]);
             let mut size = base;
             // The bytes a payload's arrays take, as (start, end).
@@ -211,7 +196,12 @@ impl TypeRegistry {
                     let (field_layout, _, units) = self.place_field(field, offset, 2)?;
                     fields.insert(format!("${}.{}", variant.name, field.name), field_layout);
                     layout.fields.push((field.name.clone(), field_layout));
-                    arrays.extend(units.into_iter().filter(|(_, _, count)| *count > 1).map(|(start, type_name, count)| (start, start + scalar_width(type_name) * count)));
+                    arrays.extend(
+                        units
+                            .into_iter()
+                            .filter(|(_, _, count)| *count > 1)
+                            .map(|(start, type_name, count)| (start, start + scalar_width(type_name) * count)),
+                    );
                     offset = field_layout.offset + self.field_width(field_layout);
                 }
                 size = size.max(offset);
@@ -234,34 +224,21 @@ impl TypeRegistry {
             ElementType::Struct(id)
         } else {
             let type_id = self.types.len() as u32 + 1;
-            self.types.push(plain_type(
-                type_id,
-                &declaration.name,
-                "integer",
-                scalar_width(tag),
-                Some(false),
-                "none",
-            ));
-            ElementType::Scalar(TypeName::Enum {
-                type_id,
-                width: scalar_width(tag) as u8,
-            })
+            self.types.push(plain_type(type_id, &declaration.name, "integer", scalar_width(tag), Some(false), "none"));
+            ElementType::Scalar(TypeName::Enum { type_id, width: scalar_width(tag) as u8 })
         };
         self.enums.insert(
             declaration.name.clone(),
-            EnumLayout {
-                name: declaration.name.clone(),
-                tag,
-                bits,
-                element,
-                variants,
-            },
+            EnumLayout { name: declaration.name.clone(), tag, bits, element, variants },
         );
         Ok(())
     }
 
     /// The enum a scalar or layout belongs to.
-    pub(super) fn enum_of(&self, element: ElementType) -> Option<&EnumLayout> {
+    pub(super) fn enum_of(
+        &self,
+        element: ElementType,
+    ) -> Option<&EnumLayout> {
         self.enums.values().find(|one| one.element == element)
     }
 }
@@ -277,7 +254,10 @@ impl FunctionCompiler<'_> {
         let expected_layout = expected.and_then(|one| self.types.enum_of(one));
         match (enum_name, expected) {
             // A generic enum's variant builds whichever instance is expected.
-            (Some(name), _) if expected_layout.is_some_and(|one| self.types.template_of(&one.name) == self.types.template_of(name)) => {
+            (Some(name), _)
+                if expected_layout
+                    .is_some_and(|one| self.types.template_of(&one.name) == self.types.template_of(name)) =>
+            {
                 Ok(expected_layout.expect("checked").clone())
             }
             (Some(name), _) => self
@@ -291,10 +271,7 @@ impl FunctionCompiler<'_> {
                 .enum_of(element)
                 .cloned()
                 .ok_or_else(|| Diagnostic::new(span, "a variant needs an expected enum type")),
-            (None, None) => Err(Diagnostic::new(
-                span,
-                "a variant needs an expected enum type",
-            )),
+            (None, None) => Err(Diagnostic::new(span, "a variant needs an expected enum type")),
         }
     }
 
@@ -309,25 +286,16 @@ impl FunctionCompiler<'_> {
     ) -> Result<TypedOperand, Diagnostic> {
         let layout = self.variant_enum(enum_name, expected.map(ElementType::Scalar), span)?;
         let Some(type_name) = layout.scalar() else {
-            return Err(Diagnostic::new(
-                span,
-                format!("{} carries a payload and must be bound first", layout.name),
-            ));
+            return Err(Diagnostic::new(span, format!("{} carries a payload and must be bound first", layout.name)));
         };
         if expected.is_some_and(|one| one != type_name) {
             return Err(type_mismatch(span, expected.expect("checked"), type_name));
         }
         if !arguments.is_empty() {
-            return Err(Diagnostic::new(
-                span,
-                format!("{}.{name} carries no payload", layout.name),
-            ));
+            return Err(Diagnostic::new(span, format!("{}.{name} carries no payload", layout.name)));
         }
         let tag = layout.variant(name, span)?.tag;
-        Ok(TypedOperand {
-            operand: Some(hir::Operand::Constant(type_id(type_name), tag)),
-            type_name,
-        })
+        Ok(TypedOperand { operand: Some(hir::Operand::Constant(type_id(type_name), tag)), type_name })
     }
 
     /// Writes a variant's tag and payload into an enum's storage.
@@ -340,21 +308,10 @@ impl FunctionCompiler<'_> {
         span: Span,
         stores: &mut Vec<Store>,
     ) -> Result<(), Diagnostic> {
-        let layout = self.variant_enum(
-            enum_name,
-            Some(ElementType::Struct(destination.struct_id)),
-            span,
-        )?;
+        let layout = self.variant_enum(enum_name, Some(ElementType::Struct(destination.struct_id)), span)?;
         if layout.element != ElementType::Struct(destination.struct_id) {
-            let expected = &self
-                .types
-                .structure(destination.struct_id)
-                .expect("resolved layout")
-                .name;
-            return Err(Diagnostic::new(
-                span,
-                format!("expected {expected}, found {}", layout.name),
-            ));
+            let expected = &self.types.structure(destination.struct_id).expect("resolved layout").name;
+            return Err(Diagnostic::new(span, format!("expected {expected}, found {}", layout.name)));
         }
         let variant = layout.variant(name, span)?.clone();
         // An enum that fits a register or a pair flows on as one integer,
@@ -372,7 +329,9 @@ impl FunctionCompiler<'_> {
             mark(field.offset, self.types.field_width(*field));
         }
         let tag_width = self.types.width(type_id(layout.tag));
-        let wide = [4u32, 2].into_iter().find(|&wide| wide > tag_width && wide <= width && covered[tag_width as usize..wide as usize].iter().all(|one| !one));
+        let wide = [4u32, 2].into_iter().find(|&wide| {
+            wide > tag_width && wide <= width && covered[tag_width as usize..wide as usize].iter().all(|one| !one)
+        });
         let (tag_type, tag_value) = match wide {
             Some(4) => (TypeName::U32, variant.tag),
             Some(_) => (TypeName::U16, variant.tag),
@@ -391,24 +350,18 @@ impl FunctionCompiler<'_> {
                 (2.., 0) => (TypeName::U16, 2),
                 _ => (TypeName::U8, 1),
             };
-            stores.push(Store::One(self.projected_place(destination, at, piece), hir::Operand::Constant(type_id(piece), 0)));
+            stores.push(Store::One(
+                self.projected_place(destination, at, piece),
+                hir::Operand::Constant(type_id(piece), 0),
+            ));
             at += step;
         }
-        stores.push(Store::One(self.projected_place(destination, 0, tag_type), hir::Operand::Constant(type_id(tag_type), tag_value)));
-        let formals: Vec<_> = variant
-            .fields
-            .iter()
-            .map(|(field, _)| Formal {
-                name: field,
-                default: None,
-            })
-            .collect();
-        let values = arguments::bind(
-            &format!("{}.{name}", layout.name),
-            &formals,
-            arguments.to_vec(),
-            span,
-        )?;
+        stores.push(Store::One(
+            self.projected_place(destination, 0, tag_type),
+            hir::Operand::Constant(type_id(tag_type), tag_value),
+        ));
+        let formals: Vec<_> = variant.fields.iter().map(|(field, _)| Formal { name: field, default: None }).collect();
+        let values = arguments::bind(&format!("{}.{name}", layout.name), &formals, arguments.to_vec(), span)?;
         let types: Vec<ElementType> = variant.fields.iter().map(|(_, field)| field.type_).collect();
         let lent = self.lent_to_fields(&values.iter().collect::<Vec<_>>(), &types);
         borrows::check_disjoint(&lent, &values.iter().map(Expr::span).collect::<Vec<_>>())?;

@@ -3,8 +3,9 @@
 //! ends. A change to a borrowed owner is noted where it happens and refused
 //! once the function is built, if a holder is used after it.
 
-use super::*;
 use borrows::BorrowKey;
+
+use super::*;
 
 /// A change to a borrowed owner, at an instruction of a block.
 pub(super) struct Conflict {
@@ -24,7 +25,11 @@ pub(super) struct Across {
 
 impl FunctionCompiler<'_> {
     /// Notes `holder`'s borrow across the call about to be emitted.
-    pub(super) fn hold_across(&mut self, lend: modref::Lend, holder: BorrowKey) {
+    pub(super) fn hold_across(
+        &mut self,
+        lend: modref::Lend,
+        holder: BorrowKey,
+    ) {
         let at = self.current_block_mut().instructions.len();
         self.across.push(Across { block: self.current, at, holder, lend });
     }
@@ -43,7 +48,13 @@ impl FunctionCompiler<'_> {
     /// what borrows it, other than the reference `via` it is made through,
     /// is used later. A sequence a loop walks is borrowed by the walk,
     /// for the whole loop.
-    pub(super) fn change_borrowed(&mut self, owner: BorrowKey, path: &[String], via: Option<BorrowKey>, error: Diagnostic) -> Result<(), Diagnostic> {
+    pub(super) fn change_borrowed(
+        &mut self,
+        owner: BorrowKey,
+        path: &[String],
+        via: Option<BorrowKey>,
+        error: Diagnostic,
+    ) -> Result<(), Diagnostic> {
         let element = via.is_some_and(|key| self.walking.contains(&key));
         if !element && self.iterated.iter().any(|root| root.overlaps(owner, path)) {
             return Err(error);
@@ -55,19 +66,33 @@ impl FunctionCompiler<'_> {
 
     /// Notes a shared borrow of `path` in `owner` here, refused with `error`
     /// if a `&mut` borrow of it, which may change it, is used later.
-    pub(super) fn share_borrowed(&mut self, owner: BorrowKey, path: &[String], via: Option<BorrowKey>, error: Diagnostic) {
+    pub(super) fn share_borrowed(
+        &mut self,
+        owner: BorrowKey,
+        path: &[String],
+        via: Option<BorrowKey>,
+        error: Diagnostic,
+    ) {
         let holders = self.holders(owner, path, true, via);
         self.conflict(holders, error);
     }
 
     /// Notes the drop of `owner` here, refused with `error` if what borrows
     /// it is used later, as a later drop uses its own owner.
-    pub(super) fn drop_borrowed(&mut self, owner: BorrowKey, error: Diagnostic) {
+    pub(super) fn drop_borrowed(
+        &mut self,
+        owner: BorrowKey,
+        error: Diagnostic,
+    ) {
         let holders = self.holders(owner, &[], false, None);
         self.conflict(holders, error);
     }
 
-    fn conflict(&mut self, holders: BTreeSet<BorrowKey>, error: Diagnostic) {
+    fn conflict(
+        &mut self,
+        holders: BTreeSet<BorrowKey>,
+        error: Diagnostic,
+    ) {
         if !holders.is_empty() {
             let at = self.current_block_mut().instructions.len();
             self.conflicts.push(Conflict { block: self.current, at, holders, error });
@@ -88,8 +113,16 @@ impl FunctionCompiler<'_> {
     /// `holders`, every pointer computed from one -- a view's data, a
     /// field's address -- and every place one is stored in. A borrow lives
     /// on in each.
-    fn derived(&self, holders: &BTreeSet<BorrowKey>) -> BTreeSet<BorrowKey> {
-        let pointers: BTreeSet<u32> = self.values.iter().filter(|one| self.types.types[(one.type_id - 1) as usize].kind == "pointer").map(|one| one.id).collect();
+    fn derived(
+        &self,
+        holders: &BTreeSet<BorrowKey>,
+    ) -> BTreeSet<BorrowKey> {
+        let pointers: BTreeSet<u32> = self
+            .values
+            .iter()
+            .filter(|one| self.types.types[(one.type_id - 1) as usize].kind == "pointer")
+            .map(|one| one.id)
+            .collect();
         let mut held = holders.clone();
         loop {
             let before = held.len();
@@ -103,7 +136,13 @@ impl FunctionCompiler<'_> {
                     continue;
                 }
                 if instruction.operands.iter().any(reads) && !self.makes_owned(instruction) {
-                    held.extend(instruction.results.iter().filter(|one| pointers.contains(one)).map(|one| BorrowKey::Value(*one)));
+                    held.extend(
+                        instruction
+                            .results
+                            .iter()
+                            .filter(|one| pointers.contains(one))
+                            .map(|one| BorrowKey::Value(*one)),
+                    );
                 }
             }
             if held.len() == before {
@@ -114,7 +153,10 @@ impl FunctionCompiler<'_> {
 
     /// Whether `instruction` is a call whose result is a new value the
     /// caller owns, a copy, which borrows nothing it was given.
-    fn makes_owned(&self, instruction: &hir::Instruction) -> bool {
+    fn makes_owned(
+        &self,
+        instruction: &hir::Instruction,
+    ) -> bool {
         let Some(callee) = instruction.callee.as_deref().filter(|_| instruction.op == "call") else {
             return false;
         };
@@ -127,7 +169,12 @@ impl FunctionCompiler<'_> {
 
     /// Whether an instruction from `at` in `block` on, or one a path from
     /// there reaches, uses one of `held` before redefining it.
-    fn used_after(&self, block: u32, at: usize, held: &BTreeSet<BorrowKey>) -> bool {
+    fn used_after(
+        &self,
+        block: u32,
+        at: usize,
+        held: &BTreeSet<BorrowKey>,
+    ) -> bool {
         let mut pending = vec![(block, at, BTreeSet::new())];
         let mut seen: BTreeSet<(u32, BTreeSet<BorrowKey>)> = BTreeSet::new();
         while let Some((block, at, mut killed)) = pending.pop() {
@@ -136,7 +183,12 @@ impl FunctionCompiler<'_> {
             for (index, instruction) in builder.instructions.iter().enumerate().skip(from) {
                 let reseat = self.reseats.contains(&(block, index));
                 // A store writes its place without reading it.
-                let written = matches!((instruction.op, instruction.operands.first()), ("store", Some(hir::Operand::Place(_)))) || reseat;
+                let written =
+                    matches!(
+                        (instruction.op, instruction.operands.first()),
+                        ("store", Some(hir::Operand::Place(_)))
+                    )
+                        || reseat;
                 let read = if written { &instruction.operands[1..] } else { &instruction.operands[..] };
                 if read.iter().flat_map(mentions).any(|one| held.contains(&one) && !killed.contains(&one)) {
                     return true;
@@ -171,13 +223,18 @@ fn mentions(operand: &hir::Operand) -> Vec<BorrowKey> {
         hir::Operand::ArrayElement(place, indices) | hir::Operand::ProjectedPlace { place, indices, .. } => {
             std::iter::once(BorrowKey::Place(*place)).chain(indices.iter().flat_map(mentions)).collect()
         }
-        hir::Operand::IndirectPlace { base, .. } | hir::Operand::DescriptorPlace { base, .. } => vec![BorrowKey::Value(*base)],
+        hir::Operand::IndirectPlace { base, .. } | hir::Operand::DescriptorPlace { base, .. } => {
+            vec![BorrowKey::Value(*base)]
+        }
     }
 }
 
 /// What `instruction` gives a new value: its results, or the whole place
 /// it stores to.
-fn redefined(instruction: &hir::Instruction, reseat: bool) -> Vec<BorrowKey> {
+fn redefined(
+    instruction: &hir::Instruction,
+    reseat: bool,
+) -> Vec<BorrowKey> {
     let stored = match (instruction.op, instruction.operands.first()) {
         ("store", Some(hir::Operand::Place(place))) => Some(BorrowKey::Place(*place)),
         // A reseated view's descriptor is written through its address.

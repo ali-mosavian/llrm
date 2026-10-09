@@ -12,19 +12,19 @@ use std::sync::Arc;
 use iced_x86::Register;
 
 use crate::analysis::frequency::Frequency;
-use crate::backend::overlap;
-use crate::backend::parcopy;
-use crate::backend::spiller::_next_value;
 use crate::backend::allocate::{Live, live};
 use crate::backend::constpool::{self, Pool};
 use crate::backend::cpu::Profile;
 use crate::backend::floatalloc::{
-    _compare_name, _float_copy, _floating, _loads_memory, _memory_name, _terminators, _two_values, cell_of, inserted, name_is, semantics,
-    unlowered, width_of,
+    _compare_name, _float_copy, _floating, _loads_memory, _memory_name, _terminators, _two_values, cell_of, inserted,
+    name_is, semantics, unlowered, width_of,
 };
 use crate::backend::floatregions::{Raised, boundary};
 use crate::backend::frame::Frame;
+use crate::backend::overlap;
+use crate::backend::parcopy;
 use crate::backend::select;
+use crate::backend::spiller::_next_value;
 use crate::backend::spillplacement::{self, Border, Constraint};
 use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody};
@@ -32,7 +32,11 @@ use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet, IndexMap, IndexSet};
 
 /// x87 reads integers from memory, for named values and physical stack slots.
-fn _integer_loads(body: &LirBody, mut frame: Option<&mut Frame>, mut pool: Option<&mut Pool>) -> Result<LirBody, Raised> {
+fn _integer_loads(
+    body: &LirBody,
+    mut frame: Option<&mut Frame>,
+    mut pool: Option<&mut Pool>,
+) -> Result<LirBody, Raised> {
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns = Vec::new();
@@ -61,7 +65,8 @@ fn _integer_loads(body: &LirBody, mut frame: Option<&mut Frame>, mut pool: Optio
                         let value = if *width == 2 { *value as i16 as i32 } else { *value as i32 };
                         let cell = pool.cell(constpool::narrowest(f64::from(value)));
                         let mut made = (*one).clone();
-                        made.what = Some(Semantics { name: Some("fld".to_owned()), sources: vec![Loc::Mem(cell)], ..what });
+                        made.what =
+                            Some(Semantics { name: Some("fld".to_owned()), sources: vec![Loc::Mem(cell)], ..what });
                         insns.push(Arc::new(made));
                         continue;
                     }
@@ -103,7 +108,11 @@ fn _integer_loads(body: &LirBody, mut frame: Option<&mut Frame>, mut pool: Optio
 }
 
 /// Materialize integer conversions, including runtime results in physical ST0.
-fn _integer_stores(body: &LirBody, mut frame: Option<&mut Frame>, basic_semantics: bool) -> Result<LirBody, Raised> {
+fn _integer_stores(
+    body: &LirBody,
+    mut frame: Option<&mut Frame>,
+    basic_semantics: bool,
+) -> Result<LirBody, Raised> {
     let mut integer_readers: HashSet<u32> = body.pins.keys().copied().collect();
     for block in &body.blocks {
         integer_readers.extend(block.phis.iter().flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value)));
@@ -117,10 +126,8 @@ fn _integer_stores(body: &LirBody, mut frame: Option<&mut Frame>, basic_semantic
             }
         }
     }
-    let unknown_readers = body
-        .insns()
-        .iter()
-        .any(|one| one.what.as_ref().is_none_or(|what| what.op == Operation::Barrier));
+    let unknown_readers =
+        body.insns().iter().any(|one| one.what.as_ref().is_none_or(|what| what.op == Operation::Barrier));
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns = Vec::new();
@@ -179,7 +186,6 @@ fn _integer_stores(body: &LirBody, mut frame: Option<&mut Frame>, basic_semantic
     Ok(out)
 }
 
-
 /// Whether the cell's address is made of SSA values, so every read of it names the same bytes.
 fn _stable(cell: &Mem) -> bool {
     match cell.addr {
@@ -207,7 +213,10 @@ fn _reached(cell: &Mem) -> Option<Addr> {
     Some(Addr { base, ..addr })
 }
 
-fn _may_write(one: &Insn, cell: &Mem) -> bool {
+fn _may_write(
+    one: &Insn,
+    cell: &Mem,
+) -> bool {
     let Some(what) = &one.what else {
         return true;
     };
@@ -220,7 +229,9 @@ fn _may_write(one: &Insn, cell: &Mem) -> bool {
             return true;
         }
         let framed = cell.addr.is_some_and(|addr| addr.space == Space::Frame);
-        if one.call.as_ref().is_some_and(|call| call.writes() && !(framed && call.spares(crate::backend::spiller::_frame_disp(cell), cell.width))) {
+        if one.call.as_ref().is_some_and(|call| {
+            call.writes() && !(framed && call.spares(crate::backend::spiller::_frame_disp(cell), cell.width))
+        }) {
             return true;
         }
     }
@@ -231,7 +242,8 @@ fn _may_write(one: &Insn, cell: &Mem) -> bool {
     }) {
         return true;
     }
-    let address: HashSet<u32> = [cell.base, cell.index, cell.selector].into_iter().flatten().map(|arg| arg.value).collect();
+    let address: HashSet<u32> =
+        [cell.base, cell.index, cell.selector].into_iter().flatten().map(|arg| arg.value).collect();
     one.defines.iter().any(|value| address.contains(value))
 }
 
@@ -255,7 +267,11 @@ fn _may_raise(one: &Insn) -> bool {
 }
 
 /// Whether an x87 store wrote the cell last, so it holds no signalling NaN.
-fn _quiet(sequence: &[Arc<Insn>], position: usize, cell: &Mem) -> bool {
+fn _quiet(
+    sequence: &[Arc<Insn>],
+    position: usize,
+    cell: &Mem,
+) -> bool {
     for one in sequence[..position].iter().rev() {
         let what = one.what.as_ref().expect("a region instruction has semantics");
         if what.op == Operation::FloatStore
@@ -276,7 +292,11 @@ fn _quiet(sequence: &[Arc<Insn>], position: usize, cell: &Mem) -> bool {
 /// GCC's memory equivalence: a value that is a cell nothing writes before its
 /// last reader is that cell. Its first read moves to its first reader, so
 /// nothing that can raise may come between unless the read cannot.
-fn _rereadable(sequence: &[Arc<Insn>], position: usize, reads: &VecDeque<i64>) -> bool {
+fn _rereadable(
+    sequence: &[Arc<Insn>],
+    position: usize,
+    reads: &VecDeque<i64>,
+) -> bool {
     let load = &sequence[position];
     if !_loads_memory(load.what.as_ref()) || !load.delivers.is_empty() || reads.is_empty() {
         return false;
@@ -316,7 +336,10 @@ fn _rereadable(sequence: &[Arc<Insn>], position: usize, reads: &VecDeque<i64>) -
 /// ``_may_write``; this is deliberately the same memory proof used by the
 /// existing memory-operand reuse path.
 /// A value read in a later block keeps its own name: the successor reads it.
-pub(crate) fn _equivalent_loads(sequence: &[Arc<Insn>], live_out: &BTreeSet<u32>) -> IndexMap<u32, u32> {
+pub(crate) fn _equivalent_loads(
+    sequence: &[Arc<Insn>],
+    live_out: &BTreeSet<u32>,
+) -> IndexMap<u32, u32> {
     let mut available: IndexMap<(Option<String>, Mem), u32> = IndexMap::default();
     let mut aliases: IndexMap<u32, u32> = IndexMap::default();
     for one in sequence {
@@ -353,15 +376,21 @@ pub(crate) fn _equivalent_loads(sequence: &[Arc<Insn>], live_out: &BTreeSet<u32>
     aliases
 }
 
-
 /// Value -> the value whose spill cell it shares.
 ///
 /// Values joined by copies share one cell where their lives do not overlap,
 /// so a copy between two spilled values is no instruction at all: LLVM's
 /// spill-slot coloring, within each copy-joined web.
-fn _shared_cells(body: &LirBody, floating: &HashSet<u32>, live_out: &Live) -> IndexMap<u32, u32> {
+fn _shared_cells(
+    body: &LirBody,
+    floating: &HashSet<u32>,
+    live_out: &Live,
+) -> IndexMap<u32, u32> {
     let mut web: IndexMap<u32, u32> = IndexMap::default();
-    fn find(web: &mut IndexMap<u32, u32>, mut one: u32) -> u32 {
+    fn find(
+        web: &mut IndexMap<u32, u32>,
+        mut one: u32,
+    ) -> u32 {
         while let Some(next) = web.get(&one).copied().filter(|next| *next != one) {
             one = next;
         }
@@ -379,7 +408,8 @@ fn _shared_cells(body: &LirBody, floating: &HashSet<u32>, live_out: &Live) -> In
     // Two members overlap where one is live as the other is defined.
     let mut overlaps: HashSet<(u32, u32)> = HashSet::default();
     for block in &body.blocks {
-        let mut alive: BTreeSet<u32> = live_out[&block.at].iter().copied().filter(|value| root.contains_key(value)).collect();
+        let mut alive: BTreeSet<u32> =
+            live_out[&block.at].iter().copied().filter(|value| root.contains_key(value)).collect();
         for one in block.insns.iter().rev() {
             for defined in one.defines.iter().filter(|value| root.contains_key(*value)) {
                 for other in alive.iter().filter(|other| *other != defined && root[*other] == root[defined]) {
@@ -397,7 +427,8 @@ fn _shared_cells(body: &LirBody, floating: &HashSet<u32>, live_out: &Live) -> In
     let mut colors: IndexMap<u32, Vec<u32>> = IndexMap::default(); // web -> each cell's owner
     for value in members.iter().copied().collect::<BTreeSet<u32>>() {
         let owners = colors.entry(root[&value]).or_default();
-        let taken = |owner: &u32| cells.iter().any(|(other, cell)| cell == owner && overlaps.contains(&(value, *other)));
+        let taken =
+            |owner: &u32| cells.iter().any(|(other, cell)| cell == owner && overlaps.contains(&(value, *other)));
         let owner = owners.iter().copied().find(|owner| !taken(owner)).unwrap_or(value);
         if owner == value {
             owners.push(value);
@@ -413,7 +444,13 @@ fn _shared_cells(body: &LirBody, floating: &HashSet<u32>, live_out: &Live) -> In
 /// before the stack is next emptied, or holds it after the stack was last
 /// emptied; memory where a call or barrier comes first. A block the value
 /// passes through links its bundles, or wants memory when it empties the stack.
-fn _stacked(body: &LirBody, floating: &HashSet<u32>, live_in: &Live, live_out: &Live, bundles: &spillplacement::Bundles) -> IndexMap<usize, BTreeSet<u32>> {
+fn _stacked(
+    body: &LirBody,
+    floating: &HashSet<u32>,
+    live_in: &Live,
+    live_out: &Live,
+    bundles: &spillplacement::Bundles,
+) -> IndexMap<usize, BTreeSet<u32>> {
     // Per block: where the stack is first and last emptied, and each value's first and last event.
     let mut borders: IndexMap<i64, (Option<usize>, Option<usize>, IndexMap<u32, (usize, usize)>)> = IndexMap::default();
     for block in &body.blocks {
@@ -425,9 +462,11 @@ fn _stacked(body: &LirBody, floating: &HashSet<u32>, live_in: &Live, live_out: &
                 last = Some(position);
             }
             // A copy moves a value between names, in whichever place its source is: it reads nothing, but the name it
-            // defines is made here, after any call before it (a join's input that a call returned is not spilled by it).
+            // defines is made here, after any call before it (a join's input that a call returned is not spilled by
+            // it).
             let copy = _float_copy(one).is_some();
-            for value in one.uses.iter().filter(|_| !copy).chain(&one.defines).filter(|value| floating.contains(value)) {
+            for value in one.uses.iter().filter(|_| !copy).chain(&one.defines).filter(|value| floating.contains(value))
+            {
                 events.entry(*value).or_insert((position, position)).1 = position;
             }
         }
@@ -445,7 +484,11 @@ fn _stacked(body: &LirBody, floating: &HashSet<u32>, live_in: &Live, live_out: &
             }
             let (first, last, events) = &borders[&block.at];
             let Some((earliest, latest)) = events.get(&value) else {
-                if first.is_some() { spilled.push(block.at) } else { links.push(block.at) }
+                if first.is_some() {
+                    spilled.push(block.at)
+                } else {
+                    links.push(block.at)
+                }
                 continue;
             };
             let border = |stacked: bool| if stacked { Border::PrefReg } else { Border::PrefSpill };
@@ -469,10 +512,12 @@ fn _stacked(body: &LirBody, floating: &HashSet<u32>, live_in: &Live, live_out: &
     stacked
 }
 
-
 /// Where a value is read back from: its own spill cell, or the load it is
 /// equivalent to, GCC's REG_EQUIV memory.
-fn _spill_home(value: u32, cell: Mem) -> Arc<Insn> {
+fn _spill_home(
+    value: u32,
+    cell: Mem,
+) -> Arc<Insn> {
     let load = semantics(Operation::FloatLoad, "fld", vec![Loc::Held(Held { value, width: 10 })], vec![Loc::Mem(cell)]);
     Arc::new(Insn { widths: vec![(value, 10)], ..inserted(0, load) })
 }
@@ -483,11 +528,18 @@ fn _probe() -> Mem {
 }
 
 /// `home` read again at `at`, defining `value`: LRA's restore.
-fn _restored(home: &Insn, value: u32, at: i64) -> Arc<Insn> {
+fn _restored(
+    home: &Insn,
+    value: u32,
+    at: i64,
+) -> Arc<Insn> {
     let mut made = home.clone();
     made.at = at;
     made.covers = Some((at, at));
-    made.what = Some(Semantics { dests: vec![Loc::Held(Held { value, width: 10 })], ..home.what.clone().expect("a home has semantics") });
+    made.what = Some(Semantics {
+        dests: vec![Loc::Held(Held { value, width: 10 })],
+        ..home.what.clone().expect("a home has semantics")
+    });
     made.defines = vec![value];
     made.widths = home.widths.iter().copied().filter(|(one, _)| *one != value).chain([(value, 10)]).collect();
     made.spread = Vec::new();
@@ -496,8 +548,17 @@ fn _restored(home: &Insn, value: u32, at: i64) -> Arc<Insn> {
 }
 
 /// `value` written to its spill cell at `at`.
-fn _stored(value: u32, cell: &Mem, at: i64) -> Arc<Insn> {
-    let what = semantics(Operation::FloatStore, "fstp", vec![Loc::Mem(cell.clone())], vec![Loc::Held(Held { value, width: 10 })]);
+fn _stored(
+    value: u32,
+    cell: &Mem,
+    at: i64,
+) -> Arc<Insn> {
+    let what = semantics(
+        Operation::FloatStore,
+        "fstp",
+        vec![Loc::Mem(cell.clone())],
+        vec![Loc::Held(Held { value, width: 10 })],
+    );
     Arc::new(Insn { spill_store: true, ..Insn::new(at, Some((at, at)), Some(what), Vec::new(), vec![value]) })
 }
 
@@ -532,7 +593,13 @@ fn _keeps_source(what: &Semantics) -> bool {
 /// What reading `value` at an instruction costs, `(register, memory)`, with
 /// `survives` saying which floating values are read again after it: the tied
 /// copy a register form needs, and the memory operand or reload otherwise.
-fn _use_costs(what: &Semantics, value: u32, home: &Insn, survives: &dyn Fn(u32) -> bool, cpu: &Profile) -> (f64, f64, bool) {
+fn _use_costs(
+    what: &Semantics,
+    value: u32,
+    home: &Insn,
+    survives: &dyn Fn(u32) -> bool,
+    cpu: &Profile,
+) -> (f64, f64, bool) {
     let price = |form: &str| _price(cpu, form);
     let load = price("x87_load");
     if let Some((name, left, right)) = _two_values(Some(what)) {
@@ -547,13 +614,19 @@ fn _use_costs(what: &Semantics, value: u32, home: &Insn, survives: &dyn Fn(u32) 
             "fmul" => "x87_mul",
             _ => "x87_div",
         };
-        let memory = _memory_name(&name, value == left, home)
-            .map_or(f64::INFINITY, |_| price(&format!("{base}_m")) - price(base) + if survives(other) { load } else { 0.0 });
+        let memory = _memory_name(&name, value == left, home).map_or(f64::INFINITY, |_| {
+            price(&format!("{base}_m")) - price(base) + if survives(other) { load } else { 0.0 }
+        });
         return (tie, memory.min(load), memory <= load);
     }
     let kept = if survives(value) { load } else { 0.0 };
     match what.op {
-        Operation::Compare if matches!(what.sources.get(1), Some(Loc::Held(held)) if held.value == value) => {
+        Operation::Compare
+            if matches!(
+                what.sources.get(1),
+                Some(Loc::Held(held)) if held.value == value
+            ) =>
+        {
             let fused = select::float_memory(_compare_name(home), cell_of(home), select::At::bits16(0)).is_some();
             (kept, if fused { 0.0 } else { load }, fused)
         }
@@ -564,7 +637,10 @@ fn _use_costs(what: &Semantics, value: u32, home: &Insn, survives: &dyn Fn(u32) 
 
 /// What an instruction form costs: its table price, and its issue, which
 /// the table's latencies leave out.
-fn _price(cpu: &Profile, form: &str) -> f64 {
+fn _price(
+    cpu: &Profile,
+    form: &str,
+) -> f64 {
     (cpu.cost(form).unwrap_or(1) + 1) as f64
 }
 
@@ -586,13 +662,20 @@ impl Piece {
         Self { reloads: Vec::new(), members, stores: Vec::new(), reads: Vec::new(), writes: Vec::new(), copy: None }
     }
 
-    fn emitted(self, out: &mut Vec<Arc<Insn>>) {
+    fn emitted(
+        self,
+        out: &mut Vec<Arc<Insn>>,
+    ) {
         out.extend(self.reloads.into_iter().chain(self.members).chain(self.stores));
     }
 
     /// The source read into `fresh` before anything is written, and the copy reading it from there:
     /// a cycle of copies is broken with one temporary.
-    fn source_taken_first(&mut self, fresh: u32, out: &mut Vec<Arc<Insn>>) {
+    fn source_taken_first(
+        &mut self,
+        fresh: u32,
+        out: &mut Vec<Arc<Insn>>,
+    ) {
         let (_, source) = self.copy.expect("only a copy is broken out of a cycle");
         let member = Arc::clone(&self.members[0]);
         if let Some(load) = self.reloads.first() {
@@ -612,7 +695,11 @@ fn _place(cell: &Loc) -> String {
 }
 
 /// `one` reading `fresh` where it read `source`, or writing `fresh` where it wrote.
-fn _renamed(one: &Insn, source: Option<(u32, u32)>, dest: Option<u32>) -> Arc<Insn> {
+fn _renamed(
+    one: &Insn,
+    source: Option<(u32, u32)>,
+    dest: Option<u32>,
+) -> Arc<Insn> {
     let mut made = one.clone();
     let what = made.what.as_mut().expect("a copy has semantics");
     let held = |value: u32| Loc::Held(Held { value, width: 10 });
@@ -648,7 +735,10 @@ struct Segment {
 }
 
 /// Each block's positions grouped as they execute: a phi's copies are one step.
-fn _steps(block: &LirBlock, cut: usize) -> Vec<(usize, usize)> {
+fn _steps(
+    block: &LirBlock,
+    cut: usize,
+) -> Vec<(usize, usize)> {
     let mut steps = Vec::new();
     let mut position = 0;
     while position < cut {
@@ -668,7 +758,12 @@ fn _steps(block: &LirBlock, cut: usize) -> Vec<(usize, usize)> {
 }
 
 /// The floating values live after each step, from the block's own exit.
-fn _live_after(block: &LirBlock, steps: &[(usize, usize)], out: &BTreeSet<u32>, floating: &HashSet<u32>) -> Vec<BTreeSet<u32>> {
+fn _live_after(
+    block: &LirBlock,
+    steps: &[(usize, usize)],
+    out: &BTreeSet<u32>,
+    floating: &HashSet<u32>,
+) -> Vec<BTreeSet<u32>> {
     let mut alive: BTreeSet<u32> = out.clone();
     let mut after = vec![BTreeSet::new(); steps.len()];
     for (index, (first, last)) in steps.iter().enumerate().rev() {
@@ -695,20 +790,30 @@ struct Allocnos {
 }
 
 impl Allocnos {
-    fn made(&mut self, value: u32) -> usize {
+    fn made(
+        &mut self,
+        value: u32,
+    ) -> usize {
         self.segments.push(Segment { value, ..Segment::default() });
         self.parent.push(self.parent.len());
         self.segments.len() - 1
     }
 
-    fn root(&self, mut one: usize) -> usize {
+    fn root(
+        &self,
+        mut one: usize,
+    ) -> usize {
         while self.parent[one] != one {
             one = self.parent[one];
         }
         one
     }
 
-    fn join(&mut self, one: usize, other: usize) {
+    fn join(
+        &mut self,
+        one: usize,
+        other: usize,
+    ) {
         let (one, other) = (self.root(one), self.root(other));
         if one != other {
             self.parent[other] = one;
@@ -737,7 +842,9 @@ fn _allocnos(
     cpu: &Profile,
 ) -> Allocnos {
     let (live_in, live_out) = live(body);
-    let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> { set.iter().copied().filter(|value| floating.contains(value)).collect() };
+    let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> {
+        set.iter().copied().filter(|value| floating.contains(value)).collect()
+    };
     let bundles = spillplacement::bundles(body);
     let stacked = _stacked(body, floating, &live_in, &live_out, &bundles);
     let cells = _shared_cells(body, floating, &live_out);
@@ -761,12 +868,13 @@ fn _allocnos(
         exits: IndexMap::default(),
     };
     let mut borders: IndexMap<(u32, usize), usize> = IndexMap::default();
-    let mut border = |allocnos: &mut Allocnos, value: u32, bundle: usize, segment: usize| match borders.get(&(value, bundle)) {
-        Some(other) => allocnos.join(*other, segment),
-        None => {
-            borders.insert((value, bundle), segment);
-        }
-    };
+    let mut border =
+        |allocnos: &mut Allocnos, value: u32, bundle: usize, segment: usize| match borders.get(&(value, bundle)) {
+            Some(other) => allocnos.join(*other, segment),
+            None => {
+                borders.insert((value, bundle), segment);
+            }
+        };
     for block in &body.blocks {
         let at = block.at;
         let weight = busy.block(at);
@@ -786,7 +894,9 @@ fn _allocnos(
         }
         for (index, (first, last)) in steps.iter().copied().enumerate() {
             let group = &block.insns[first..=last];
-            let floated = group.iter().any(|one| one.what.as_ref().is_some_and(|what| what.sources.iter().chain(&what.dests).any(_floating)));
+            let floated = group
+                .iter()
+                .any(|one| one.what.as_ref().is_some_and(|what| what.sources.iter().chain(&what.dests).any(_floating)));
             if !floated {
                 if group.iter().any(|one| boundary(one)) {
                     for (_, segment) in current.drain(..) {
@@ -799,13 +909,17 @@ fn _allocnos(
                 for (position, one) in group.iter().enumerate() {
                     let what = one.what.as_ref().expect("a floating instruction has semantics");
                     for value in _held_floats(&what.sources) {
-                        let segment = *current.entry(value).or_insert_with(|| {
-                            let segment = allocnos.made(value);
-                            allocnos.segments[segment].restore = Some((at, first));
-                            allocnos.segments[segment].points.push((at, first));
-                            allocnos.restores.entry((at, first)).or_default().push(segment);
-                            segment
-                        });
+                        let segment = *current
+                            .entry(value)
+                            .or_insert_with(
+                                || {
+                                    let segment = allocnos.made(value);
+                                    allocnos.segments[segment].restore = Some((at, first));
+                                    allocnos.segments[segment].points.push((at, first));
+                                    allocnos.restores.entry((at, first)).or_default().push(segment);
+                                    segment
+                                },
+                            );
                         let home = homes.get(&value).cloned().unwrap_or_else(|| _spill_home(value, _probe()));
                         let (register, memory, folds) = _use_costs(what, value, &home, &survives, cpu);
                         allocnos.segments[segment].folds += usize::from(folds);
@@ -814,7 +928,8 @@ fn _allocnos(
                         allocnos.at_use.insert((at, first + position, value), segment);
                     }
                 }
-                let read: BTreeSet<u32> = group.iter().flat_map(|one| _held_floats(&one.what.as_ref().expect("checked").sources)).collect();
+                let read: BTreeSet<u32> =
+                    group.iter().flat_map(|one| _held_floats(&one.what.as_ref().expect("checked").sources)).collect();
                 for value in read {
                     if !survives(value) {
                         current.shift_remove(&value);
@@ -885,7 +1000,10 @@ fn _allocnos(
 
 impl Plan<'_> {
     /// IRA's cost of each allocno: its register form against its memory form.
-    fn priced(&mut self, cpu: &Profile) {
+    fn priced(
+        &mut self,
+        cpu: &Profile,
+    ) {
         let busy = Frequency::of(self.body);
         let weight = |at: i64| busy.block(at);
         let (load, store) = (_price(cpu, "x87_load"), _price(cpu, "x87_store"));
@@ -936,8 +1054,14 @@ impl Plan<'_> {
     /// LRA's spill at a crowded point: of the allocnos holding a register
     /// there and not read or written by its instruction, the one read
     /// furthest ahead, as Belady; the cheaper to spill among equals.
-    fn victim(&self, block: i64, position: usize, spilled: &BTreeSet<usize>) -> Option<usize> {
-        let order: IndexMap<i64, usize> = self.body.blocks.iter().enumerate().map(|(index, one)| (one.at, index)).collect();
+    fn victim(
+        &self,
+        block: i64,
+        position: usize,
+        spilled: &BTreeSet<usize>,
+    ) -> Option<usize> {
+        let order: IndexMap<i64, usize> =
+            self.body.blocks.iter().enumerate().map(|(index, one)| (one.at, index)).collect();
         let here = (order[&block], position);
         let busy: BTreeSet<u32> = self
             .body
@@ -951,7 +1075,8 @@ impl Plan<'_> {
         let mut next: IndexMap<usize, (usize, usize)> = IndexMap::default();
         for (index, segment) in self.allocnos.segments.iter().enumerate() {
             let root = self.allocnos.root(index);
-            if spilled.contains(&root) || busy.contains(&segment.value) || !segment.points.contains(&(block, position)) {
+            if spilled.contains(&root) || busy.contains(&segment.value) || !segment.points.contains(&(block, position))
+            {
                 continue;
             }
             next.entry(root).or_insert((usize::MAX, usize::MAX));
@@ -959,13 +1084,17 @@ impl Plan<'_> {
         for (index, segment) in self.allocnos.segments.iter().enumerate() {
             let root = self.allocnos.root(index);
             if let Some(soonest) = next.get_mut(&root) {
-                for read in segment.reads.iter().map(|(at, position)| (order[at], *position)).filter(|read| *read > here) {
+                for read in
+                    segment.reads.iter().map(|(at, position)| (order[at], *position)).filter(|read| *read > here)
+                {
                     *soonest = (*soonest).min(read);
                 }
             }
         }
         next.into_iter()
-            .max_by(|(one, first), (other, second)| first.cmp(second).then(self.costs[one].total_cmp(&self.costs[other])).then(other.cmp(one)))
+            .max_by(|(one, first), (other, second)| {
+                first.cmp(second).then(self.costs[one].total_cmp(&self.costs[other])).then(other.cmp(one))
+            })
             .map(|(root, _)| root)
     }
 }
@@ -1001,13 +1130,16 @@ fn _aliased(body: &LirBody) -> LirBody {
                     .sources
                     .iter()
                     .map(|arg| match arg {
-                        Loc::Held(held) if held.width == 10 => Loc::Held(Held { value: canonical(held.value), ..*held }),
+                        Loc::Held(held) if held.width == 10 => {
+                            Loc::Held(Held { value: canonical(held.value), ..*held })
+                        }
                         _ => arg.clone(),
                     })
                     .collect();
                 let mut made = (**one).clone();
                 made.what = Some(Semantics { sources, ..what.clone() });
-                made.uses = one.uses.iter().map(|value| canonical(*value)).collect::<IndexSet<u32>>().into_iter().collect();
+                made.uses =
+                    one.uses.iter().map(|value| canonical(*value)).collect::<IndexSet<u32>>().into_iter().collect();
                 Arc::new(made)
             })
             .collect();
@@ -1017,11 +1149,16 @@ fn _aliased(body: &LirBody) -> LirBody {
 
 /// The phis' values the optimizer proved are a cell's (`!llrm.home`) where the body still holds it
 /// (`storedhomes`): each is read back from the cell, and a store of its own is never made.
-fn _stored_homes(body: &LirBody, floating: &HashSet<u32>) -> IndexMap<u32, Arc<Insn>> {
-    crate::backend::storedhomes::held(body, &|value, cell| floating.contains(&value) && (cell.width == 8 || cell.width == 4))
-        .into_iter()
-        .map(|(value, cell)| (value, _spill_home(value, cell)))
-        .collect()
+fn _stored_homes(
+    body: &LirBody,
+    floating: &HashSet<u32>,
+) -> IndexMap<u32, Arc<Insn>> {
+    crate::backend::storedhomes::held(body, &|value, cell| {
+        floating.contains(&value) && (cell.width == 8 || cell.width == 4)
+    })
+    .into_iter()
+    .map(|(value, cell)| (value, _spill_home(value, cell)))
+    .collect()
 }
 
 /// `body` without the constant loads nothing reads: a value whose copies were vacated (read back from its home
@@ -1040,27 +1177,40 @@ fn _without_dead_loads(body: &LirBody) -> LirBody {
         }
     }
     let dead = |one: &Insn| {
-        one.what.as_ref().is_some_and(|what| {
-            what.op == Operation::FloatLoad
-                && !one.volatile()
-                && one.group.is_none()
-                && matches!(what.dests.as_slice(), [Loc::Held(result)] if result.width == 10 && !read.contains(&result.value))
-                && match what.sources.as_slice() {
-                    [] => matches!(what.name.as_deref(), Some("fld1" | "fldz")),
-                    [Loc::Mem(cell)] => cell.base.is_none() && cell.index.is_none() && cell.addr.is_some(),
-                    _ => false,
-                }
-        })
+        one.what
+            .as_ref()
+            .is_some_and(
+                |what| what.op == Operation::FloatLoad
+                    && !one.volatile()
+                    && one.group.is_none()
+                    && matches!(
+                        what.dests.as_slice(),
+                        [Loc::Held(result)] if result.width == 10 && !read.contains(&result.value)
+                    )
+                    && match what.sources.as_slice() {
+                        [] => matches!(what.name.as_deref(), Some("fld1" | "fldz")),
+                        [Loc::Mem(cell)] => cell.base.is_none() && cell.index.is_none() && cell.addr.is_some(),
+                        _ => false,
+                    },
+            )
     };
     if !body.blocks.iter().flat_map(|block| &block.insns).any(|one| dead(one)) {
         return body.clone();
     }
-    body.with_blocks(body.blocks.iter().map(|block| block.with_insns(block.insns.iter().filter(|one| !dead(one)).cloned().collect())).collect())
+    body.with_blocks(
+        body.blocks
+            .iter()
+            .map(|block| block.with_insns(block.insns.iter().filter(|one| !dead(one)).cloned().collect()))
+            .collect(),
+    )
 }
 
 /// Values a block reads from a cell nothing writes before their last
 /// reader: GCC's memory equivalence, read again rather than kept.
-fn _homes(body: &LirBody, floating: &HashSet<u32>) -> IndexMap<u32, Arc<Insn>> {
+fn _homes(
+    body: &LirBody,
+    floating: &HashSet<u32>,
+) -> IndexMap<u32, Arc<Insn>> {
     let (live_in, live_out) = live(body);
     let mut defined: IndexMap<u32, usize> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
@@ -1087,7 +1237,9 @@ fn _homes(body: &LirBody, floating: &HashSet<u32>) -> IndexMap<u32, Arc<Insn>> {
             let reads: VecDeque<i64> = block.insns[position + 1..]
                 .iter()
                 .enumerate()
-                .filter(|(_, other)| other.what.as_ref().is_some_and(|what| _held_floats(&what.sources).contains(&result.value)))
+                .filter(|(_, other)| {
+                    other.what.as_ref().is_some_and(|what| _held_floats(&what.sources).contains(&result.value))
+                })
                 .map(|(offset, _)| (position + 1 + offset) as i64)
                 .collect();
             // A volatile read happens once, where it is: only its one reader, right after it, may take it.
@@ -1104,7 +1256,13 @@ fn _homes(body: &LirBody, floating: &HashSet<u32>) -> IndexMap<u32, Arc<Insn>> {
 /// may be read again wherever the value is read: a cell named by constants
 /// alone, which nothing in the body writes, and which no instruction that
 /// can raise precedes a read of, on any block the value is live in.
-fn _rereadable_across(body: &LirBody, block: &LirBlock, position: usize, value: u32, live_in: &Live) -> bool {
+fn _rereadable_across(
+    body: &LirBody,
+    block: &LirBlock,
+    position: usize,
+    value: u32,
+    live_in: &Live,
+) -> bool {
     let load = &block.insns[position];
     if !_loads_memory(load.what.as_ref()) || !load.delivers.is_empty() || load.volatile() {
         return false;
@@ -1115,7 +1273,8 @@ fn _rereadable_across(body: &LirBody, block: &LirBlock, position: usize, value: 
     }
     // As the integer spiller asks it: in a sealed body only the frame's own
     // stores reach an incoming argument's cell.
-    let written = |one: &Insn| crate::backend::spiller::_may_write(one, cell, body.sealed_arguments) && _may_write(one, cell);
+    let written =
+        |one: &Insn| crate::backend::spiller::_may_write(one, cell, body.sealed_arguments) && _may_write(one, cell);
     if body.blocks.iter().flat_map(|one| &one.insns).any(|one| !Arc::ptr_eq(one, load) && written(one)) {
         return false;
     }
@@ -1134,7 +1293,12 @@ impl Plan<'_> {
     /// stretch leaves for memory and a restore where one starts, as GCC's
     /// caller-save; a store after each definition of a spilled value, and
     /// each read of one as a memory operand or a reload.
-    fn rewritten(&self, spilled: &BTreeSet<usize>, frame: &mut Option<&mut Frame>, cpu: &Profile) -> Result<LirBody, Raised> {
+    fn rewritten(
+        &self,
+        spilled: &BTreeSet<usize>,
+        frame: &mut Option<&mut Frame>,
+        cpu: &Profile,
+    ) -> Result<LirBody, Raised> {
         let (_, live_out) = live(self.body);
         let cells = _shared_cells(self.body, &self.floating, &live_out);
         let mut homes = self.homes.clone();
@@ -1157,13 +1321,22 @@ impl Plan<'_> {
             let at = block.at;
             let cut = _terminators(block);
             let steps = _steps(block, cut);
-            let leaving: BTreeSet<u32> = live_out[&at].iter().copied().filter(|value| self.floating.contains(value)).collect();
+            let leaving: BTreeSet<u32> =
+                live_out[&at].iter().copied().filter(|value| self.floating.contains(value)).collect();
             let after = _live_after(block, &steps, &leaving, &self.floating);
             let mut insns: Vec<Arc<Insn>> = Vec::new();
-            let restore = |insns: &mut Vec<Arc<Insn>>, position: usize, here: i64, frame: &mut Option<&mut Frame>, home: &mut dyn FnMut(u32, &mut Option<&mut Frame>) -> Result<Arc<Insn>, Raised>| -> Result<(), Raised> {
+            let restore = |insns: &mut Vec<Arc<Insn>>,
+                           position: usize,
+                           here: i64,
+                           frame: &mut Option<&mut Frame>,
+                           home: &mut dyn FnMut(u32, &mut Option<&mut Frame>) -> Result<Arc<Insn>, Raised>|
+             -> Result<(), Raised> {
                 for segment in self.allocnos.exits.get(&(at, position)).into_iter().flatten() {
                     let one = &self.allocnos.segments[*segment];
-                    if !spilled.contains(&self.allocnos.root(*segment)) && one.restore.is_none() && !self.homes.contains_key(&one.value) {
+                    if !spilled.contains(&self.allocnos.root(*segment))
+                        && one.restore.is_none()
+                        && !self.homes.contains_key(&one.value)
+                    {
                         insns.push(_stored(one.value, cell_of(&*home(one.value, frame)?), here));
                     }
                 }
@@ -1182,15 +1355,22 @@ impl Plan<'_> {
                 for position in first..=last {
                     let one = &block.insns[position];
                     let mut piece = Piece::new(Vec::new());
-                    let Some(what) = one.what.as_ref().filter(|what| what.sources.iter().chain(&what.dests).any(_floating)) else {
+                    let Some(what) =
+                        one.what.as_ref().filter(|what| what.sources.iter().chain(&what.dests).any(_floating))
+                    else {
                         piece.members.push(Arc::clone(one));
                         pieces.push(piece);
                         continue;
                     };
                     let is_spilled = |value: u32, table: &HashMap<(i64, usize, u32), usize>| {
-                        table.get(&(at, position, value)).is_some_and(|segment| spilled.contains(&self.allocnos.root(*segment)))
+                        table
+                            .get(&(at, position, value))
+                            .is_some_and(|segment| spilled.contains(&self.allocnos.root(*segment)))
                     };
-                    let reads: Vec<u32> = _held_floats(&what.sources).into_iter().filter(|value| is_spilled(*value, &self.allocnos.at_use)).collect();
+                    let reads: Vec<u32> = _held_floats(&what.sources)
+                        .into_iter()
+                        .filter(|value| is_spilled(*value, &self.allocnos.at_use))
+                        .collect();
                     let writes = _held_floats(&what.dests);
                     // A copy between spilled values sharing a cell is no instruction at all.
                     if let (Some((result, source)), [read]) = (_float_copy(one), reads.as_slice()) {
@@ -1219,9 +1399,7 @@ impl Plan<'_> {
                     let mut order = reads.clone();
                     order.sort_by_key(|value| self.homes.get(value).map_or(i64::MIN, |home| home.at));
                     let fused = match order.last() {
-                        Some(value) => {
-                            self.fused(one, *value, &*home(*value, frame)?, &survives, &price)
-                        }
+                        Some(value) => self.fused(one, *value, &*home(*value, frame)?, &survives, &price),
                         None => None,
                     };
                     match fused {
@@ -1254,13 +1432,17 @@ impl Plan<'_> {
                 // overwritten, one copy at a time, not all reloaded, all made, all stored: two x87
                 // slots whatever the step's width. A step of registers stays a group, which
                 // floatalloc renames for free.
-                if pieces.len() > 1 && pieces.iter().any(|piece| !piece.reloads.is_empty() || !piece.stores.is_empty()) {
+                if pieces.len() > 1 && pieces.iter().any(|piece| !piece.reloads.is_empty() || !piece.stores.is_empty())
+                {
                     let mut left: Vec<usize> = (0..pieces.len()).collect();
                     while !left.is_empty() {
-                        let (reads, writes): (Vec<Vec<String>>, Vec<Vec<String>>) = pieces.iter().map(|piece| (piece.reads.clone(), piece.writes.clone())).unzip();
+                        let (reads, writes): (Vec<Vec<String>>, Vec<Vec<String>>) =
+                            pieces.iter().map(|piece| (piece.reads.clone(), piece.writes.clone())).unzip();
                         let ready = parcopy::ready(&reads, &writes, &left);
                         if ready.is_empty() {
-                            let Some(broken) = parcopy::in_cycle(&reads, &writes, &left).filter(|one| pieces[*one].copy.is_some()) else {
+                            let Some(broken) =
+                                parcopy::in_cycle(&reads, &writes, &left).filter(|one| pieces[*one].copy.is_some())
+                            else {
                                 return Err(unlowered("a floating copy step has no order"));
                             };
                             pieces[broken].source_taken_first(fresh, &mut insns);
@@ -1269,7 +1451,17 @@ impl Plan<'_> {
                         }
                         for one in ready {
                             let mut piece = std::mem::replace(&mut pieces[one], Piece::new(Vec::new()));
-                            piece.members = piece.members.iter().map(|member| if member.group.is_some() { _renamed(member, None, None) } else { Arc::clone(member) }).collect();
+                            piece.members = piece
+                                .members
+                                .iter()
+                                .map(|member| {
+                                    if member.group.is_some() {
+                                        _renamed(member, None, None)
+                                    } else {
+                                        Arc::clone(member)
+                                    }
+                                })
+                                .collect();
                             piece.emitted(&mut insns);
                             left.retain(|other| *other != one);
                         }
@@ -1290,7 +1482,14 @@ impl Plan<'_> {
 
     /// `one` reading spilled `value` straight from its home, where x87 has
     /// that form and it costs no more than a reload.
-    fn fused(&self, one: &Insn, value: u32, home: &Insn, survives: &dyn Fn(u32) -> bool, price: &dyn Fn(&str) -> f64) -> Option<Arc<Insn>> {
+    fn fused(
+        &self,
+        one: &Insn,
+        value: u32,
+        home: &Insn,
+        survives: &dyn Fn(u32) -> bool,
+        price: &dyn Fn(&str) -> f64,
+    ) -> Option<Arc<Insn>> {
         let what = one.what.as_ref()?;
         let cell = Loc::Mem(cell_of(home).clone());
         let made = if let Some((name, left, right)) = _two_values(Some(what)) {
@@ -1310,19 +1509,44 @@ impl Plan<'_> {
             }
             semantics(Operation::FloatArith, &operation, what.dests.clone(), vec![Loc::Held(other), cell])
         } else if what.op == Operation::Compare
-            && matches!(what.sources.as_slice(), [Loc::Held(left), Loc::Held(right)] if right.value == value && left.value != value)
+            && matches!(
+                what.sources.as_slice(),
+                [Loc::Held(left), Loc::Held(right)] if right.value == value && left.value != value
+            )
             && select::float_memory(_compare_name(home), cell_of(home), select::At::bits16(0)).is_some()
         {
-            Semantics { name: Some(_compare_name(home).to_owned()), sources: vec![what.sources[0].clone(), cell], ..what.clone() }
+            Semantics {
+                name: Some(_compare_name(home).to_owned()),
+                sources: vec![what.sources[0].clone(), cell],
+                ..what.clone()
+            }
         } else {
             return None;
         };
         let mut fused = one.clone();
         fused.what = Some(made);
-        let foreign = |values: &[u32]| values.iter().copied().filter(|one| !self.floating.contains(one)).collect::<Vec<u32>>();
-        fused.uses = one.uses.iter().copied().filter(|one| *one != value).chain(foreign(&home.uses)).collect::<IndexSet<u32>>().into_iter().collect();
-        fused.widths = one.widths.iter().chain(&home.widths).copied().filter(|(one, _)| *one != value && !(self.floating.contains(one) && home.defines.contains(one))).collect::<IndexSet<(u32, u32)>>().into_iter().collect();
-        fused.requires = home.requires.iter().chain(&one.requires).copied().collect::<IndexSet<_>>().into_iter().collect();
+        let foreign =
+            |values: &[u32]| values.iter().copied().filter(|one| !self.floating.contains(one)).collect::<Vec<u32>>();
+        fused.uses = one
+            .uses
+            .iter()
+            .copied()
+            .filter(|one| *one != value)
+            .chain(foreign(&home.uses))
+            .collect::<IndexSet<u32>>()
+            .into_iter()
+            .collect();
+        fused.widths = one
+            .widths
+            .iter()
+            .chain(&home.widths)
+            .copied()
+            .filter(|(one, _)| *one != value && !(self.floating.contains(one) && home.defines.contains(one)))
+            .collect::<IndexSet<(u32, u32)>>()
+            .into_iter()
+            .collect();
+        fused.requires =
+            home.requires.iter().chain(&one.requires).copied().collect::<IndexSet<_>>().into_iter().collect();
         // The operand is another instruction's: its fixup is bound by address, not by this one's record.
         fused.symbol = if one.covers.is_some_and(|(start, end)| start != end) { Some(false) } else { one.symbol };
         Some(Arc::new(fused))
@@ -1331,11 +1555,16 @@ impl Plan<'_> {
 
 /// The first instruction before which more floating values hold registers
 /// than there are, counting what each bundle's borders hold.
-fn _crowded(body: &LirBody, floating: &HashSet<u32>) -> Option<(i64, usize)> {
+fn _crowded(
+    body: &LirBody,
+    floating: &HashSet<u32>,
+) -> Option<(i64, usize)> {
     let registers = body.float_stack;
     let (live_in, live_out) = live(body);
     let bundles = spillplacement::bundles(body);
-    let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> { set.iter().copied().filter(|value| floating.contains(value)).collect() };
+    let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> {
+        set.iter().copied().filter(|value| floating.contains(value)).collect()
+    };
     let mut held: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
     for block in &body.blocks {
         let (entry, exit) = bundles.of[&block.at];
@@ -1355,14 +1584,20 @@ fn _crowded(body: &LirBody, floating: &HashSet<u32>) -> Option<(i64, usize)> {
         let after = _live_after(block, &steps, &floats(&live_out[&block.at]), floating);
         for (index, (first, last)) in steps.iter().copied().enumerate() {
             let group = &block.insns[first..=last];
-            let made: BTreeSet<u32> = group.iter().flat_map(|one| one.defines.iter().copied()).filter(|value| floating.contains(value)).collect();
+            let made: BTreeSet<u32> = group
+                .iter()
+                .flat_map(|one| one.defines.iter().copied())
+                .filter(|value| floating.contains(value))
+                .collect();
             // Stack form keeps an operand read again by duplicating it first:
             // a compare pops what it reads, and a store without `fst` its source.
             let duplicated: usize = group
                 .iter()
                 .filter_map(|one| one.what.as_ref())
                 .map(|what| match what.op {
-                    Operation::Compare => _held_floats(&what.sources).iter().filter(|value| after[index].contains(value)).count(),
+                    Operation::Compare => {
+                        _held_floats(&what.sources).iter().filter(|value| after[index].contains(value)).count()
+                    }
                     Operation::FloatStore if !what.dests.is_empty() && !_keeps_source(what) => {
                         _held_floats(&what.sources).iter().filter(|value| after[index].contains(value)).count()
                     }
@@ -1465,10 +1700,14 @@ impl LIRTransform for FloatAssign<'_> {
         "floatassign"
     }
 
-    fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
         let mut frame = self.frame.as_ref().map(|frame| frame.borrow_mut());
         let mut pool = self.pool.as_ref().map(|pool| pool.borrow_mut());
-        assigned(&body, frame.as_deref_mut(), pool.as_deref_mut(), self.basic_semantics, self.cpu).map_err(|error| error.to_string())
+        assigned(&body, frame.as_deref_mut(), pool.as_deref_mut(), self.basic_semantics, self.cpu)
+            .map_err(|error| error.to_string())
     }
 }
 

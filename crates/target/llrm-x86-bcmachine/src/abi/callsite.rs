@@ -4,7 +4,6 @@
 use std::collections::BTreeSet;
 
 use iced_x86::{Code, Register};
-
 use llrm_qbruntime::{Contract, Reg, per_call, worst};
 
 use crate::abi::events;
@@ -26,7 +25,10 @@ pub fn caller_cleanup(following: Option<&Insn>) -> bool {
         && instruction.immediate(1) < 0x8000
 }
 
-pub fn inferred(found: &Module, contracts: &IndexMap<i64, Contract>) -> IndexMap<i64, Contract> {
+pub fn inferred(
+    found: &Module,
+    contracts: &IndexMap<i64, Contract>,
+) -> IndexMap<i64, Contract> {
     let candidates: IndexMap<i64, &Contract> = contracts
         .iter()
         .filter(|(_, rule)| rule.inputs.is_none() && !rule.name.to_uppercase().starts_with("B$"))
@@ -102,7 +104,10 @@ pub fn for_module(
 }
 
 /// B$ExitDim removes three header words and two bound words per dimension.
-pub fn _redim_sites(found: &Module, contracts: &mut IndexMap<i64, Contract>) {
+pub fn _redim_sites(
+    found: &Module,
+    contracts: &mut IndexMap<i64, Contract>,
+) {
     if !found.calls.values().any(|name| name == "B$RDIM") {
         return;
     }
@@ -121,7 +126,11 @@ pub fn _redim_sites(found: &Module, contracts: &mut IndexMap<i64, Contract>) {
             if !matches!(rank.insn.code(), Code::Push_imm16 | Code::Pushw_imm8) {
                 continue;
             }
-            if !matches!(descriptor.insn.code(), Code::Push_imm16 | Code::Pushw_imm8 | Code::Push_r16 | Code::Push_rm16) {
+            if !matches!(
+                descriptor.insn.code(),
+                Code::Push_imm16 | Code::Pushw_imm8 | Code::Push_r16 | Code::Push_rm16
+            )
+            {
                 continue;
             }
             if found.fixup_at.keys().any(|&field| rank.at as i64 <= field && field < rank.end() as i64) {
@@ -149,7 +158,10 @@ pub fn _redim_sites(found: &Module, contracts: &mut IndexMap<i64, Contract>) {
 }
 
 /// VBDOS's zero-BX entry bypasses its unresolved helper call.
-pub fn _zero_entry_sites(found: &Module, contracts: &mut IndexMap<i64, Contract>) {
+pub fn _zero_entry_sites(
+    found: &Module,
+    contracts: &mut IndexMap<i64, Contract>,
+) {
     if !found.calls.values().any(|name| name == "B$ENRA") {
         return;
     }

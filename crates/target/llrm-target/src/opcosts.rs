@@ -27,13 +27,18 @@ pub struct Description {
     sizes: Vec<(String, Cost)>,
 }
 
-fn cost(text: &str, line: usize) -> Result<Cost, String> {
+fn cost(
+    text: &str,
+    line: usize,
+) -> Result<Cost, String> {
     let bad = |what: &str| format!("opcosts.txt:{line}: {what}");
     let text = text.trim();
     if text == "prefix" {
         return Ok(Cost::Prefix);
     }
-    let call = |name: &str| text.strip_prefix(name).and_then(|rest| rest.strip_prefix('(')).and_then(|rest| rest.strip_suffix(')'));
+    let call = |name: &str| {
+        text.strip_prefix(name).and_then(|rest| rest.strip_prefix('(')).and_then(|rest| rest.strip_suffix(')'))
+    };
     if let Some(arguments) = call("carry") {
         let names: Vec<String> = arguments.split(',').map(|one| one.trim().to_owned()).collect();
         let names: [String; 4] = names.try_into().map_err(|_| bad("carry takes four forms"))?;
@@ -50,7 +55,10 @@ fn cost(text: &str, line: usize) -> Result<Cost, String> {
             "-" => sign = -1,
             term => {
                 let (count, form) = match term.split_once('*') {
-                    Some((count, form)) => (count.trim().parse().map_err(|_| bad(&format!("`{count}` is no count")))?, Some(form.trim().to_owned())),
+                    Some((count, form)) => (
+                        count.trim().parse().map_err(|_| bad(&format!("`{count}` is no count")))?,
+                        Some(form.trim().to_owned()),
+                    ),
                     None => match term.parse::<i64>() {
                         Ok(number) => (number, None),
                         Err(_) => (1, Some(term.to_owned())),
@@ -68,8 +76,38 @@ fn cost(text: &str, line: usize) -> Result<Cost, String> {
 }
 
 const OPERATIONS: [&str; 32] = [
-    "add", "multiply", "divide", "shift", "address", "carry", "carry_step", "load", "store", "memory_update", "branch", "prefix", "move", "call", "return", "argument", "pop", "adjust",
-    "return_pops", "float_add", "float_multiply", "float_divide", "float_load", "float_store", "float_release", "extend", "fill", "fill_cell", "copy", "copy_cell", "direction", "unroll_budget",
+    "add",
+    "multiply",
+    "divide",
+    "shift",
+    "address",
+    "carry",
+    "carry_step",
+    "load",
+    "store",
+    "memory_update",
+    "branch",
+    "prefix",
+    "move",
+    "call",
+    "return",
+    "argument",
+    "pop",
+    "adjust",
+    "return_pops",
+    "float_add",
+    "float_multiply",
+    "float_divide",
+    "float_load",
+    "float_store",
+    "float_release",
+    "extend",
+    "fill",
+    "fill_cell",
+    "copy",
+    "copy_cell",
+    "direction",
+    "unroll_budget",
 ];
 
 impl Description {
@@ -85,13 +123,26 @@ impl Description {
                 if !["operations", "bytes", "size"].contains(&name) {
                     return Err(format!("opcosts.txt:{}: no section [{name}]", index + 1));
                 }
-                section = if name == "operations" { "operations" } else if name == "bytes" { "bytes" } else { "size" };
+                section = if name == "operations" {
+                    "operations"
+                } else if name == "bytes" {
+                    "bytes"
+                } else {
+                    "size"
+                };
                 continue;
             }
-            let (name, value) = line.split_once('=').ok_or_else(|| format!("opcosts.txt:{}: `{line}` has no `=`", index + 1))?;
+            let (name, value) =
+                line.split_once('=').ok_or_else(|| format!("opcosts.txt:{}: `{line}` has no `=`", index + 1))?;
             let name = name.trim().to_owned();
             if section == "bytes" {
-                bytes.push((name, value.trim().parse().map_err(|_| format!("opcosts.txt:{}: `{value}` is no byte count", index + 1))?));
+                bytes.push((
+                    name,
+                    value
+                        .trim()
+                        .parse()
+                        .map_err(|_| format!("opcosts.txt:{}: `{value}` is no byte count", index + 1))?,
+                ));
                 continue;
             }
             if !OPERATIONS.contains(&name.as_str()) {
@@ -110,27 +161,47 @@ impl Description {
 
     /// The operations priced by `price` (a form's cost), `prefix` the CPU's
     /// operand-size prefix cost.
-    pub fn operations(&self, price: &dyn Fn(&str) -> i64, prefix: i64) -> OperationCosts {
+    pub fn operations(
+        &self,
+        price: &dyn Fn(&str) -> i64,
+        prefix: i64,
+    ) -> OperationCosts {
         Self::evaluated(&self.operations, &[], price, prefix)
     }
 
     /// The operations in code bytes: the same sums over the forms' bytes, but
     /// where `[size]` says otherwise.
     pub fn size_costs(&self) -> OperationCosts {
-        let price = |form: &str| self.bytes.iter().find(|(one, _)| one == form).unwrap_or_else(|| panic!("opcosts.txt has no bytes for {form}")).1;
+        let price = |form: &str| {
+            self.bytes
+                .iter()
+                .find(|(one, _)| one == form)
+                .unwrap_or_else(|| panic!("opcosts.txt has no bytes for {form}"))
+                .1
+        };
         Self::evaluated(&self.operations, &self.sizes, &price, 0)
     }
 
     /// The code bytes of a form.
-    pub fn bytes(&self, form: &str) -> Option<i64> {
+    pub fn bytes(
+        &self,
+        form: &str,
+    ) -> Option<i64> {
         self.bytes.iter().find(|(one, _)| one == form).map(|(_, bytes)| *bytes)
     }
 
-    fn evaluated(operations: &[(String, Cost)], replaced: &[(String, Cost)], price: &dyn Fn(&str) -> i64, prefix: i64) -> OperationCosts {
+    fn evaluated(
+        operations: &[(String, Cost)],
+        replaced: &[(String, Cost)],
+        price: &dyn Fn(&str) -> i64,
+        prefix: i64,
+    ) -> OperationCosts {
         let value = |cost: &Cost| match cost {
             Cost::Prefix => prefix,
             Cost::Sum(terms) => terms.iter().map(|(count, form)| count * form.as_deref().map_or(1, price)).sum(),
-            Cost::Carry([extend, add, shift, r#move]) => carry_cost(price(extend), price(add), price(shift), price(r#move)),
+            Cost::Carry([extend, add, shift, r#move]) => {
+                carry_cost(price(extend), price(add), price(shift), price(r#move))
+            }
             Cost::Step(add) => step_cost(price(add)),
         };
         let mut out = OperationCosts::default();
@@ -186,14 +257,36 @@ mod tests {
     #[test]
     fn a_sum_is_terms_with_counts_and_signs() {
         let description = Description::parse(ALL).unwrap();
-        let prices = |form: &str| match form { "st" => 3, "ld" => 4, "rp" => 10, "t" => 6, "f" => 5, "p" => 7, "a" => 1, other => other.len() as i64 };
+        let prices = |form: &str| match form {
+            "st" => 3,
+            "ld" => 4,
+            "rp" => 10,
+            "t" => 6,
+            "f" => 5,
+            "p" => 7,
+            "a" => 1,
+            other => other.len() as i64,
+        };
         let costs = description.operations(&prices, 9);
-        assert_eq!((costs.argument, costs.return_pops, costs.fill, costs.prefix, costs.direction), (7, 4, 5 + 14 + 3, 9, 2));
+        assert_eq!(
+            (costs.argument, costs.return_pops, costs.fill, costs.prefix, costs.direction),
+            (7, 4, 5 + 14 + 3, 9, 2)
+        );
     }
 
     #[test]
     fn size_costs_replace_what_size_says_and_price_by_bytes() {
-        let text = format!("{ALL}[bytes]\n{}\n[size]\nprefix = 1\nargument = 2\n", ["a", "m", "d", "s", "l", "z", "r", "ld", "st", "u", "j", "c", "t", "p", "i", "rp", "fa", "fm", "fd", "fl", "fs", "fr", "f", "fc", "cp", "cc"].iter().map(|one| format!("{one} = 4")).collect::<Vec<_>>().join("\n"));
+        let text = format!(
+            "{ALL}[bytes]\n{}\n[size]\nprefix = 1\nargument = 2\n",
+            [
+                "a", "m", "d", "s", "l", "z", "r", "ld", "st", "u", "j", "c", "t", "p", "i", "rp", "fa", "fm", "fd",
+                "fl", "fs", "fr", "f", "fc", "cp", "cc"
+            ]
+            .iter()
+            .map(|one| format!("{one} = 4"))
+            .collect::<Vec<_>>()
+            .join("\n")
+        );
         let costs = Description::parse(&text).unwrap().size_costs();
         assert_eq!((costs.prefix, costs.argument, costs.add, costs.fill), (1, 2, 4, 4 + 8 + 3));
     }
@@ -201,6 +294,9 @@ mod tests {
     #[test]
     fn an_operation_missing_or_unknown_is_refused() {
         assert_eq!(Description::parse("add = a\n").unwrap_err(), "opcosts.txt: operation `multiply` has no cost");
-        assert_eq!(Description::parse(&format!("{ALL}bogus = a\n")).unwrap_err(), format!("opcosts.txt:{}: no operation `bogus`", ALL.lines().count() + 1));
+        assert_eq!(
+            Description::parse(&format!("{ALL}bogus = a\n")).unwrap_err(),
+            format!("opcosts.txt:{}: no operation `bogus`", ALL.lines().count() + 1)
+        );
     }
 }

@@ -1,13 +1,11 @@
 //! Port of `qbopt/analysis/flags.py`: which flags are live.
 
 use iced_x86::FlowControl;
+pub use llrm_lir::flag::{ALL, Flag};
 
 use crate::frontends::bc::blocks::Block;
 use crate::frontends::bc::declen::Insn;
 use crate::support::hash::IndexMap;
-
-pub use llrm_lir::flag::{ALL, Flag};
-
 
 /// `CLOBBERS`: a call does not itself write a flag, but its callee does.
 pub const CLOBBERS: [FlowControl; 3] = [FlowControl::Call, FlowControl::IndirectCall, FlowControl::Interrupt];

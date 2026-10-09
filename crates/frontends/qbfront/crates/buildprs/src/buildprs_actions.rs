@@ -13,11 +13,18 @@ pub struct GraphSharedSuffixes {
 }
 
 impl GraphSharedSuffixes {
-    pub fn insert(&mut self, key: Vec<String>, target: NodeId) {
+    pub fn insert(
+        &mut self,
+        key: Vec<String>,
+        target: NodeId,
+    ) {
         self.targets.entry(key).or_insert(target);
     }
 
-    pub fn target_for(&self, key: &[String]) -> Option<NodeId> {
+    pub fn target_for(
+        &self,
+        key: &[String],
+    ) -> Option<NodeId> {
         self.targets.get(key).copied()
     }
 }
@@ -30,8 +37,7 @@ pub fn compile_expr_to_graph(
 ) -> Result<NodeId, LoweringError> {
     let accept = graph.add_node(StateNode::accept());
     let reject = graph.add_node(StateNode::reject());
-    compile_expr(graph, symbols, config, expr, Some(accept), Some(reject))
-        .map(|entry| entry.unwrap_or(accept))
+    compile_expr(graph, symbols, config, expr, Some(accept), Some(reject)).map(|entry| entry.unwrap_or(accept))
 }
 
 pub fn compile_expr_to_graph_with_suffixes(
@@ -44,17 +50,8 @@ pub fn compile_expr_to_graph_with_suffixes(
 ) -> Result<NodeId, LoweringError> {
     let accept = graph.add_node(StateNode::accept());
     let reject = graph.add_node(StateNode::reject());
-    compile_expr_with_suffixes(
-        graph,
-        symbols,
-        config,
-        expr,
-        Some(accept),
-        Some(reject),
-        suffixes,
-        capture_suffixes,
-    )
-    .map(|entry| entry.unwrap_or(accept))
+    compile_expr_with_suffixes(graph, symbols, config, expr, Some(accept), Some(reject), suffixes, capture_suffixes)
+        .map(|entry| entry.unwrap_or(accept))
 }
 
 pub fn compile_expr(
@@ -75,15 +72,9 @@ pub fn compile_expr(
             }
             Ok(next)
         }
-        GrammarExpr::Alternative(items) => {
-            compile_alternative(graph, symbols, config, items, success, failure)
-        }
-        GrammarExpr::Optional(inner) => {
-            compile_optional(graph, symbols, config, inner, success, failure)
-        }
-        GrammarExpr::Repeat(inner) => {
-            compile_repeat(graph, symbols, config, inner, success, failure)
-        }
+        GrammarExpr::Alternative(items) => compile_alternative(graph, symbols, config, items, success, failure),
+        GrammarExpr::Optional(inner) => compile_optional(graph, symbols, config, inner, success, failure),
+        GrammarExpr::Repeat(inner) => compile_repeat(graph, symbols, config, inner, success, failure),
         GrammarExpr::TokenRef(token) => {
             let node_id = symbols.node_id_for_token(token, config)?;
             Ok(Some(add_branch(graph, node_id, success, failure)))
@@ -139,15 +130,8 @@ fn compile_alternative_from(
 
     if index + 1 < items.len() {
         if let Some((syntax_arm, action_arm)) = grouped_action_default_alternative(item) {
-            let next_alternative = compile_alternative_from(
-                graph,
-                symbols,
-                config,
-                items,
-                index + 1,
-                success,
-                failure,
-            )?;
+            let next_alternative =
+                compile_alternative_from(graph, symbols, config, items, index + 1, success, failure)?;
             let action_fallback = compile_action_alternative_arm(
                 graph,
                 symbols,
@@ -201,18 +185,8 @@ fn compile_alternative_from(
         );
     }
 
-    let next_alternative =
-        compile_alternative_from(graph, symbols, config, items, index + 1, success, failure)?;
-    compile_alternative_arm(
-        graph,
-        symbols,
-        config,
-        item,
-        success,
-        failure,
-        next_alternative,
-        index,
-    )
+    let next_alternative = compile_alternative_from(graph, symbols, config, items, index + 1, success, failure)?;
+    compile_alternative_arm(graph, symbols, config, item, success, failure, next_alternative, index)
 }
 
 fn compile_alternative_arm(
@@ -225,29 +199,14 @@ fn compile_alternative_arm(
     next_alternative: Option<NodeId>,
     source_index: usize,
 ) -> Result<Option<NodeId>, LoweringError> {
-    let Some((first, rest)) =
-        alternative_sequence_items(item).and_then(|items| items.split_first())
-    else {
-        return compile_action_alternative_arm(
-            graph,
-            symbols,
-            config,
-            item,
-            success,
-            next_alternative,
-            source_index,
-        );
+    let Some((first, rest)) = alternative_sequence_items(item).and_then(|items| items.split_first()) else {
+        return compile_action_alternative_arm(graph, symbols, config, item, success, next_alternative, source_index);
     };
     if rest.is_empty() || !is_node_expr(first) {
         if let Some(sequence) = alternative_sequence_items(item) {
-            if let Some(entry) = compile_sequence_with_late_commit(
-                graph,
-                symbols,
-                config,
-                sequence,
-                success,
-                next_alternative,
-            )? {
+            if let Some(entry) =
+                compile_sequence_with_late_commit(graph, symbols, config, sequence, success, next_alternative)?
+            {
                 return Ok(Some(entry));
             }
         }
@@ -255,23 +214,14 @@ fn compile_alternative_arm(
     }
 
     let rest_expr = GrammarExpr::Sequence(rest.to_vec());
-    let rest_success = if source_index != 0
-        && success_is_branch_or_action(graph, success)
-        && action_sequence_ends_with_action(rest)
-    {
-        optional_skip_target(graph, success)
-    } else {
-        success
-    };
+    let rest_success =
+        if source_index != 0 && success_is_branch_or_action(graph, success) && action_sequence_ends_with_action(rest) {
+            optional_skip_target(graph, success)
+        } else {
+            success
+        };
     let committed_failure = Some(graph.add_node(StateNode::reject()));
-    let rest_entry = compile_expr(
-        graph,
-        symbols,
-        config,
-        &rest_expr,
-        rest_success,
-        committed_failure,
-    )?;
+    let rest_entry = compile_expr(graph, symbols, config, &rest_expr, rest_success, committed_failure)?;
     compile_expr(graph, symbols, config, first, rest_entry, next_alternative)
 }
 
@@ -284,12 +234,11 @@ fn compile_action_alternative_arm(
     next_alternative: Option<NodeId>,
     source_index: usize,
 ) -> Result<Option<NodeId>, LoweringError> {
-    let arm_success =
-        if source_index != 0 && success_is_branch_like(graph, success) && is_action_expr(item) {
-            optional_skip_target(graph, success)
-        } else {
-            success
-        };
+    let arm_success = if source_index != 0 && success_is_branch_like(graph, success) && is_action_expr(item) {
+        optional_skip_target(graph, success)
+    } else {
+        success
+    };
     compile_expr(graph, symbols, config, item, arm_success, next_alternative)
 }
 
@@ -313,14 +262,7 @@ fn compile_sequence_with_late_commit(
     for item in items.iter().skip(commit_index + 1).rev() {
         next = compile_expr(graph, symbols, config, item, next, committed_failure)?;
     }
-    next = compile_expr(
-        graph,
-        symbols,
-        config,
-        &items[commit_index],
-        next,
-        next_alternative,
-    )?;
+    next = compile_expr(graph, symbols, config, &items[commit_index], next, next_alternative)?;
     for item in items.iter().take(commit_index).rev() {
         next = compile_expr(graph, symbols, config, item, next, next_alternative)?;
     }
@@ -336,54 +278,21 @@ fn compile_grouped_action_default_syntax_arm(
     action_fallback: Option<NodeId>,
     next_alternative: Option<NodeId>,
 ) -> Result<Option<NodeId>, LoweringError> {
-    let Some((first, rest)) =
-        alternative_sequence_items(syntax_arm).and_then(|items| items.split_first())
-    else {
-        return compile_expr(
-            graph,
-            symbols,
-            config,
-            syntax_arm,
-            success,
-            next_alternative,
-        );
+    let Some((first, rest)) = alternative_sequence_items(syntax_arm).and_then(|items| items.split_first()) else {
+        return compile_expr(graph, symbols, config, syntax_arm, success, next_alternative);
     };
     if rest.is_empty() || !is_node_expr(first) {
-        return compile_expr(
-            graph,
-            symbols,
-            config,
-            syntax_arm,
-            success,
-            next_alternative,
-        );
+        return compile_expr(graph, symbols, config, syntax_arm, success, next_alternative);
     }
 
-    if !rest
-        .first()
-        .is_some_and(|item| is_node_expr(first_expr_in_sequence(item)))
-    {
+    if !rest.first().is_some_and(|item| is_node_expr(first_expr_in_sequence(item))) {
         let rest_expr = GrammarExpr::Sequence(rest.to_vec());
         let committed_reject = graph.add_node(StateNode::reject());
-        let rest_entry = compile_expr(
-            graph,
-            symbols,
-            config,
-            &rest_expr,
-            success,
-            Some(committed_reject),
-        )?;
+        let rest_entry = compile_expr(graph, symbols, config, &rest_expr, success, Some(committed_reject))?;
         return compile_expr(graph, symbols, config, first, rest_entry, action_fallback);
     }
 
-    let rest_entry = compile_tail_with_first_item_fallback(
-        graph,
-        symbols,
-        config,
-        rest,
-        success,
-        action_fallback,
-    )?;
+    let rest_entry = compile_tail_with_first_item_fallback(graph, symbols, config, rest, success, action_fallback)?;
     compile_expr(graph, symbols, config, first, rest_entry, next_alternative)
 }
 
@@ -405,20 +314,12 @@ fn compile_tail_with_first_item_fallback(
 
     let committed_reject = graph.add_node(StateNode::reject());
     let rest_expr = GrammarExpr::Sequence(rest.to_vec());
-    let rest_success =
-        if success_is_branch_or_action(graph, success) && action_sequence_ends_with_action(rest) {
-            optional_skip_target(graph, success)
-        } else {
-            success
-        };
-    let rest_entry = compile_expr(
-        graph,
-        symbols,
-        config,
-        &rest_expr,
-        rest_success,
-        Some(committed_reject),
-    )?;
+    let rest_success = if success_is_branch_or_action(graph, success) && action_sequence_ends_with_action(rest) {
+        optional_skip_target(graph, success)
+    } else {
+        success
+    };
+    let rest_entry = compile_expr(graph, symbols, config, &rest_expr, rest_success, Some(committed_reject))?;
     compile_expr(graph, symbols, config, first, rest_entry, first_failure)
 }
 
@@ -454,9 +355,7 @@ fn grouped_action_default_alternative(expr: &GrammarExpr) -> Option<(&GrammarExp
     let [syntax_arm, action_arm] = items.as_slice() else {
         return None;
     };
-    let Some((first, rest)) =
-        alternative_sequence_items(syntax_arm).and_then(|items| items.split_first())
-    else {
+    let Some((first, rest)) = alternative_sequence_items(syntax_arm).and_then(|items| items.split_first()) else {
         return None;
     };
     if rest.is_empty() || !is_node_expr(first) || !is_action_expr(action_arm) {
@@ -466,10 +365,7 @@ fn grouped_action_default_alternative(expr: &GrammarExpr) -> Option<(&GrammarExp
 }
 
 fn is_action_expr(expr: &GrammarExpr) -> bool {
-    matches!(
-        single_expr(expr),
-        GrammarExpr::Emit(_) | GrammarExpr::Mark(_)
-    )
+    matches!(single_expr(expr), GrammarExpr::Emit(_) | GrammarExpr::Mark(_))
 }
 
 fn is_mark_expr(expr: &GrammarExpr) -> bool {
@@ -490,7 +386,10 @@ fn first_expr_in_sequence(expr: &GrammarExpr) -> &GrammarExpr {
     }
 }
 
-fn success_is_branch_or_action(graph: &StateGraph, success: Option<NodeId>) -> bool {
+fn success_is_branch_or_action(
+    graph: &StateGraph,
+    success: Option<NodeId>,
+) -> bool {
     let Some(success) = success else {
         return false;
     };
@@ -500,14 +399,20 @@ fn success_is_branch_or_action(graph: &StateGraph, success: Option<NodeId>) -> b
     )
 }
 
-fn success_is_branch_like(graph: &StateGraph, success: Option<NodeId>) -> bool {
+fn success_is_branch_like(
+    graph: &StateGraph,
+    success: Option<NodeId>,
+) -> bool {
     let Some(success) = success else {
         return false;
     };
     graph.node(success).kind == StateKind::Branch
 }
 
-fn success_is_accept(graph: &StateGraph, success: Option<NodeId>) -> bool {
+fn success_is_accept(
+    graph: &StateGraph,
+    success: Option<NodeId>,
+) -> bool {
     let Some(success) = success else {
         return false;
     };
@@ -593,52 +498,32 @@ fn compile_repeat(
         if let Some((first, rest)) = items.split_first() {
             if !rest.is_empty() {
                 let rest_expr = GrammarExpr::Sequence(rest.to_vec());
-                let rest_entry = compile_expr(
-                    graph,
-                    symbols,
-                    config,
-                    &rest_expr,
-                    Some(placeholder),
-                    failure,
-                )?;
+                let rest_entry = compile_expr(graph, symbols, config, &rest_expr, Some(placeholder), failure)?;
                 if rest.len() == 1 {
                     if let Some(rest_entry) = rest_entry {
-                        graph
-                            .node_mut(rest_entry)
-                            .flags
-                            .insert(StateFlags::TRUE_SHARED);
+                        graph.node_mut(rest_entry).flags.insert(StateFlags::TRUE_SHARED);
                     }
                 }
-                let entry = compile_expr(
-                    graph,
-                    symbols,
-                    config,
-                    first,
-                    rest_entry,
-                    success.or(failure),
-                )?
-                .unwrap_or(placeholder);
+                let entry = compile_expr(graph, symbols, config, first, rest_entry, success.or(failure))?
+                    .unwrap_or(placeholder);
                 rewire_repeat_placeholder(graph, placeholder, entry);
                 rewire_repeat_immediate_successes(graph, body_start, entry);
                 return Ok(Some(entry));
             }
         }
     }
-    let entry = compile_expr(
-        graph,
-        symbols,
-        config,
-        inner,
-        Some(placeholder),
-        success.or(failure),
-    )?
-    .unwrap_or(placeholder);
+    let entry =
+        compile_expr(graph, symbols, config, inner, Some(placeholder), success.or(failure))?.unwrap_or(placeholder);
     rewire_repeat_placeholder(graph, placeholder, entry);
     rewire_repeat_immediate_successes(graph, body_start, entry);
     Ok(Some(entry))
 }
 
-fn rewire_repeat_placeholder(graph: &mut StateGraph, placeholder: NodeId, entry: NodeId) {
+fn rewire_repeat_placeholder(
+    graph: &mut StateGraph,
+    placeholder: NodeId,
+    entry: NodeId,
+) {
     let ids = graph.ids().collect::<Vec<_>>();
     for id in ids {
         if id == placeholder || graph.node(id).kind != StateKind::Branch {
@@ -654,7 +539,11 @@ fn rewire_repeat_placeholder(graph: &mut StateGraph, placeholder: NodeId, entry:
     graph.add_true_link(placeholder, entry);
 }
 
-fn rewire_repeat_immediate_successes(graph: &mut StateGraph, body_start: usize, entry: NodeId) {
+fn rewire_repeat_immediate_successes(
+    graph: &mut StateGraph,
+    body_start: usize,
+    entry: NodeId,
+) {
     for index in body_start..graph.len() {
         let id = NodeId(index);
         if graph.node(id).kind == StateKind::Branch && graph.node(id).true_link.is_none() {
@@ -679,9 +568,7 @@ fn compile_optional(
         }
     }
 
-    if matches!(ungroup_expr(inner), GrammarExpr::Alternative(_))
-        && success_is_branch_or_action(graph, success)
-    {
+    if matches!(ungroup_expr(inner), GrammarExpr::Alternative(_)) && success_is_branch_or_action(graph, success) {
         let skip_entry = optional_skip_target(graph, success);
         let entry = compile_expr(graph, symbols, config, inner, success, skip_entry)?;
         return Ok(entry);
@@ -692,14 +579,7 @@ fn compile_optional(
             if !rest.is_empty() {
                 let rest_expr = GrammarExpr::Sequence(rest.to_vec());
                 let committed_failure = Some(graph.add_node(StateNode::reject()));
-                let rest_entry = compile_expr(
-                    graph,
-                    symbols,
-                    config,
-                    &rest_expr,
-                    success,
-                    committed_failure,
-                )?;
+                let rest_entry = compile_expr(graph, symbols, config, &rest_expr, success, committed_failure)?;
                 let skip_entry = if optional_sequence_uses_empty_skip(first, success, graph) {
                     optional_skip_target(graph, success)
                 } else {
@@ -714,9 +594,7 @@ fn compile_optional(
     Ok(entry)
 }
 
-fn optional_prefixed_tail_alternative(
-    inner: &GrammarExpr,
-) -> Option<(&GrammarExpr, Vec<GrammarExpr>)> {
+fn optional_prefixed_tail_alternative(inner: &GrammarExpr) -> Option<(&GrammarExpr, Vec<GrammarExpr>)> {
     let GrammarExpr::Alternative(items) = ungroup_expr(inner) else {
         return None;
     };
@@ -750,7 +628,10 @@ fn optional_sequence_items(inner: &GrammarExpr) -> Option<&[GrammarExpr]> {
     }
 }
 
-fn optional_skip_target(graph: &mut StateGraph, success: Option<NodeId>) -> Option<NodeId> {
+fn optional_skip_target(
+    graph: &mut StateGraph,
+    success: Option<NodeId>,
+) -> Option<NodeId> {
     let success = success?;
     let node = graph.add_node(StateNode::branch_node(u16::from(ND_BRANCH)));
     graph.add_true_link(node, success);
@@ -791,21 +672,30 @@ fn add_branch(
     node
 }
 
-fn branch_success_target(graph: &StateGraph, success: NodeId) -> Option<NodeId> {
+fn branch_success_target(
+    graph: &StateGraph,
+    success: NodeId,
+) -> Option<NodeId> {
     if graph.node(success).kind == StateKind::Accept {
         return None;
     }
     Some(success)
 }
 
-fn action_success_target(graph: &mut StateGraph, success: NodeId) -> NodeId {
+fn action_success_target(
+    graph: &mut StateGraph,
+    success: NodeId,
+) -> NodeId {
     if graph.node(success).kind == StateKind::Accept {
         return graph.add_node(StateNode::accept());
     }
     success
 }
 
-fn branch_failure_target(graph: &mut StateGraph, failure: NodeId) -> Option<NodeId> {
+fn branch_failure_target(
+    graph: &mut StateGraph,
+    failure: NodeId,
+) -> Option<NodeId> {
     if graph.node(failure).kind == StateKind::Accept {
         return Some(graph.add_node(StateNode::accept()));
     }
@@ -846,9 +736,8 @@ fn is_node_expr(expr: &GrammarExpr) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::buildprs_grammar::parse_grammar;
-
     use super::*;
+    use crate::buildprs_grammar::parse_grammar;
 
     fn sample_symbols(source: &str) -> (crate::buildprs_grammar::GrammarFile, LoweringSymbols) {
         let grammar = parse_grammar(source).expect("sample grammar should parse");
@@ -883,9 +772,7 @@ sample:
         let root_node = graph.node(root);
         assert!(root_node.true_link.is_some());
         assert!(root_node.false_link.is_some());
-        assert!(graph
-            .ids()
-            .any(|id| graph.node(id).kind == crate::buildprs_graph::StateKind::Emit));
+        assert!(graph.ids().any(|id| graph.node(id).kind == crate::buildprs_graph::StateKind::Emit));
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! process boundary as typed, name-resolved common HIR.
 
 pub mod arguments;
+pub mod cli;
 pub mod compile;
 pub mod consts;
 pub mod conversions;
@@ -15,14 +16,13 @@ pub mod hir;
 pub mod lexer;
 pub mod library;
 pub mod lsp;
-pub mod cli;
-pub mod nibstages;
 pub mod modules;
+pub mod nibstages;
 pub mod parser;
 pub mod resumable;
 pub mod scopes;
-pub mod standard;
 pub mod semantic;
+pub mod standard;
 pub mod syntax;
 
 #[cfg(test)]
@@ -56,7 +56,8 @@ pub struct Frontend {
     /// How each convention spells a symbol in the object format asked for (`*` is the name), where the target's
     /// description says: `symbols_for`. A convention it does not name spells it as `Abi::symbol` does.
     pub symbols: std::collections::BTreeMap<String, String>,
-    /// The convention the language's own functions have, by its name in `calling.toml`: the `-mabi=` family's, else the default's.
+    /// The convention the language's own functions have, by its name in `calling.toml`: the `-mabi=` family's, else
+    /// the default's.
     pub native_name: String,
     /// The target's OS layer under Nib's runtime.
     pub os: Os,
@@ -85,7 +86,10 @@ pub(crate) fn real_mode() -> Frontend {
 
 /// `source` compiled for real mode.
 #[cfg(test)]
-pub fn compile(source: &str, module_name: &str) -> Result<String, Diagnostic> {
+pub fn compile(
+    source: &str,
+    module_name: &str,
+) -> Result<String, Diagnostic> {
     let tokens = lex(source)?;
     compile_module(parse(tokens)?, module_name, &real_mode())
 }
@@ -116,7 +120,15 @@ pub struct Os {
 impl Frontend {
     /// The target's physical addresses as the constants `PHYSICAL_<NAME>` a module may name.
     pub fn physical_constants(&self) -> std::collections::BTreeMap<String, syntax::Expr> {
-        self.physical.iter().map(|(name, address)| (format!("PHYSICAL_{}", name.to_uppercase()), syntax::Expr::Integer(*address as i64, syntax::Span::new(1, 1, 1)))).collect()
+        self.physical
+            .iter()
+            .map(|(name, address)| {
+                (
+                    format!("PHYSICAL_{}", name.to_uppercase()),
+                    syntax::Expr::Integer(*address as i64, syntax::Span::new(1, 1, 1)),
+                )
+            })
+            .collect()
     }
 
     /// The frontend for `target`: its layout, slot, code bits, conventions and OS layer.
@@ -150,21 +162,34 @@ impl Os {
         )
     }
 
-    pub fn of(description: llrm_target::runtime::Description, layer: llrm_target::os::Layer) -> Result<Self, String> {
+    pub fn of(
+        description: llrm_target::runtime::Description,
+        layer: llrm_target::os::Layer,
+    ) -> Result<Self, String> {
         let table = description.table()?;
         let layer_table = layer.table()?;
-        let file = |key: &str| -> Result<String, String> { let name = description.string(key)?; description.file(&name).map(str::to_owned).ok_or(format!("the runtime description names {name}, which is not shipped")) };
+        let file = |key: &str| -> Result<String, String> {
+            let name = description.string(key)?;
+            description
+                .file(&name)
+                .map(str::to_owned)
+                .ok_or(format!("the runtime description names {name}, which is not shipped"))
+        };
         let stack = toml::Value::Table(file("stack")?.parse().map_err(|error: toml::de::Error| error.to_string())?);
         let mut defines = layer.defines()?;
         defines.extend(description.defines()?);
         Ok(Self {
             module: layer.nib_module()?,
             stack: llrm_core::hir::model::StackCheck::from_toml(&stack)?,
-            stack_base: table.get("stack_base").and_then(|one| one.as_integer()).ok_or("stack_base is not an integer")?,
+            stack_base: table
+                .get("stack_base")
+                .and_then(|one| one.as_integer())
+                .ok_or("stack_base is not an integer")?,
             stack_reserve: layer.integer("stack_reserve")?,
             far_bss: layer_table.get("far_bss").and_then(|one| one.as_bool()).ok_or("far_bss is not a boolean")?,
             defines,
-            directory: std::fs::canonicalize(layer.directory).map_or_else(|_| layer.directory.to_owned(), |path| path.to_string_lossy().into_owned()),
+            directory: std::fs::canonicalize(layer.directory)
+                .map_or_else(|_| layer.directory.to_owned(), |path| path.to_string_lossy().into_owned()),
             start: layer.string("start")?,
             implementation: layer.string("implementation")?,
         })
@@ -187,8 +212,16 @@ pub struct Sizes {
 
 impl Frontend {
     /// `target`'s symbol decorations in object format `format` (`omf`, `elf`, `macho`): each convention's pattern.
-    pub fn symbols_for(target: &dyn llrm_target::Target, format: &str) -> std::collections::BTreeMap<String, String> {
-        target.calling().conventions.iter().filter_map(|one| Some((one.name.clone(), one.symbol.get(format)?.clone()))).collect()
+    pub fn symbols_for(
+        target: &dyn llrm_target::Target,
+        format: &str,
+    ) -> std::collections::BTreeMap<String, String> {
+        target
+            .calling()
+            .conventions
+            .iter()
+            .filter_map(|one| Some((one.name.clone(), one.symbol.get(format)?.clone())))
+            .collect()
     }
 
     /// The convention the language's own functions have: the `-mabi=` family's, else the target's default.
@@ -198,17 +231,28 @@ impl Frontend {
 
     /// The pointers' sizes: what the datalayout says of the near and the far space.
     pub fn sizes(&self) -> Sizes {
-        let layout = llrm_mir::datalayout::DataLayout::parse(&self.layout.datalayout).expect("a target's datalayout parses");
+        let layout =
+            llrm_mir::datalayout::DataLayout::parse(&self.layout.datalayout).expect("a target's datalayout parses");
         let bytes = |space: u32| layout.pointer(space).bits / 8;
         let near = bytes(self.layout.spaces.near);
-        let max_object = self.layout.segment_bytes().map_or_else(|| (1_u64 << (8 * near)) - 1, |bytes| bytes as u64 - 1);
-        Sizes { near, far: bytes(self.layout.spaces.far), segmented: !self.layout.spaces.far_is_near(), slot: self.slot, max_object }
+        let max_object =
+            self.layout.segment_bytes().map_or_else(|| (1_u64 << (8 * near)) - 1, |bytes| bytes as u64 - 1);
+        Sizes {
+            near,
+            far: bytes(self.layout.spaces.far),
+            segmented: !self.layout.spaces.far_is_near(),
+            slot: self.slot,
+            max_object,
+        }
     }
 }
 
 /// `source`'s tokens, one `line:column kind` per line.
 pub fn tokens_text(source: &str) -> Result<String, Diagnostic> {
-    Ok(lex(source)?.iter().map(|token| format!("{}:{} {:?}\n", token.span.line, token.span.column, token.kind)).collect())
+    Ok(lex(source)?
+        .iter()
+        .map(|token| format!("{}:{} {:?}\n", token.span.line, token.span.column, token.kind))
+        .collect())
 }
 
 /// `source`'s syntax tree.
@@ -218,16 +262,22 @@ pub fn syntax_text(source: &str) -> Result<String, Diagnostic> {
 
 /// The program whose main module is the file `path`: its imports are the
 /// files under the same directory, `a.b` at `a/b.nib`.
-pub fn compile_file(path: &std::path::Path, frontend: &Frontend) -> Result<String, (std::path::PathBuf, Diagnostic)> {
+pub fn compile_file(
+    path: &std::path::Path,
+    frontend: &Frontend,
+) -> Result<String, (std::path::PathBuf, Diagnostic)> {
     let module = load_file(path, &frontend.os, frontend.sizes().near, &frontend.physical_constants())?;
     let sources = module.sources.clone();
-    let compiled = compile_module(module, module_name(path), frontend).map_err(|error| located(path, &sources, error))?;
+    let compiled =
+        compile_module(module, module_name(path), frontend).map_err(|error| located(path, &sources, error))?;
     *frontend.reported.borrow_mut() = frontend
         .warnings
         .borrow()
         .iter()
         .map(|warning| located(path, &sources, warning.clone()))
-        .filter(|(_, warning)| !sources.get(usize::from(warning.span.module)).is_some_and(|name| standard::supplied(name)))
+        .filter(|(_, warning)| {
+            !sources.get(usize::from(warning.span.module)).is_some_and(|name| standard::supplied(name))
+        })
         .collect();
     Ok(compiled)
 }
@@ -239,7 +289,8 @@ pub fn declare_file(
     frontend: &Frontend,
 ) -> Result<String, (std::path::PathBuf, Diagnostic)> {
     let module = load_file(path, &frontend.os, frontend.sizes().near, &frontend.physical_constants())?;
-    declarations::declarations_on(&module, module_name(path), language, frontend.sizes(), frontend.native()).map_err(|error| located(path, &module.sources, error))
+    declarations::declarations_on(&module, module_name(path), language, frontend.sizes(), frontend.native())
+        .map_err(|error| located(path, &module.sources, error))
 }
 
 fn module_name(path: &std::path::Path) -> &str {
@@ -248,19 +299,29 @@ fn module_name(path: &std::path::Path) -> &str {
 
 /// The module at `path`, linked with every module it imports.
 /// `error` with the file of the module its span is in.
-fn located(path: &std::path::Path, sources: &[String], error: Diagnostic) -> (std::path::PathBuf, Diagnostic) {
+fn located(
+    path: &std::path::Path,
+    sources: &[String],
+    error: Diagnostic,
+) -> (std::path::PathBuf, Diagnostic) {
     let (name, error) = in_module(sources, error);
     (module_path(path, &name), error)
 }
 
 /// `error` with the name of the module its span is in.
-fn in_module(sources: &[String], error: Diagnostic) -> modules::Located {
+fn in_module(
+    sources: &[String],
+    error: Diagnostic,
+) -> modules::Located {
     (sources.get(usize::from(error.span.module)).cloned().unwrap_or_default(), error)
 }
 
 /// Where the module `name`, which the program at `path` imports, is read
 /// from: `<std.io>` for one the compiler supplies.
-pub fn module_path(path: &std::path::Path, name: &str) -> std::path::PathBuf {
+pub fn module_path(
+    path: &std::path::Path,
+    name: &str,
+) -> std::path::PathBuf {
     if name.is_empty() {
         path.to_path_buf()
     } else if standard::supplied(name) {
@@ -270,24 +331,34 @@ pub fn module_path(path: &std::path::Path, name: &str) -> std::path::PathBuf {
     }
 }
 
-fn load_file(path: &std::path::Path, os: &Os, near_bytes: u32, seeded: &std::collections::BTreeMap<String, syntax::Expr>) -> Result<syntax::Module, (std::path::PathBuf, Diagnostic)> {
-    let source = std::fs::read_to_string(path).map_err(|error| {
-        (
-            path.to_path_buf(),
-            Diagnostic::new(syntax::Span::new(1, 1, 1), error.to_string()),
-        )
-    })?;
-    modules::load_for(&source, &mut |name| {
-        if matches!(name, "os" | "std.os") {
-            return Ok(os.module.clone());
-        }
-        std::fs::read_to_string(module_path(path, name)).map_err(|error| error.to_string())
-    }, near_bytes, seeded)
+fn load_file(
+    path: &std::path::Path,
+    os: &Os,
+    near_bytes: u32,
+    seeded: &std::collections::BTreeMap<String, syntax::Expr>,
+) -> Result<syntax::Module, (std::path::PathBuf, Diagnostic)> {
+    let source = std::fs::read_to_string(path)
+        .map_err(|error| (path.to_path_buf(), Diagnostic::new(syntax::Span::new(1, 1, 1), error.to_string())))?;
+    modules::load_for(
+        &source,
+        &mut |name| {
+            if matches!(name, "os" | "std.os") {
+                return Ok(os.module.clone());
+            }
+            std::fs::read_to_string(module_path(path, name)).map_err(|error| error.to_string())
+        },
+        near_bytes,
+        seeded,
+    )
     .map_err(|(name, error)| (module_path(path, &name), error))
 }
 
 /// Type-checks a parsed module and lowers it to HIR.
-pub fn compile_module(module: syntax::Module, module_name: &str, frontend: &Frontend) -> Result<String, Diagnostic> {
+pub fn compile_module(
+    module: syntax::Module,
+    module_name: &str,
+    frontend: &Frontend,
+) -> Result<String, Diagnostic> {
     semantic::compile(&prepared(module, frontend.sizes().near)?, module_name, frontend)
 }
 
@@ -302,7 +373,11 @@ pub struct Checked {
     pub error: Option<modules::Located>,
 }
 
-pub fn check(source: &str, read: &mut dyn FnMut(&str) -> Result<String, String>, frontend: &Frontend) -> Checked {
+pub fn check(
+    source: &str,
+    read: &mut dyn FnMut(&str) -> Result<String, String>,
+    frontend: &Frontend,
+) -> Checked {
     // An editor checks for its project's target: `std.os` is that target's OS layer.
     let mut read = |name: &str| if name == "std.os" { Ok(frontend.os.module.clone()) } else { read(name) };
     let loaded = match modules::read_all_for(source, &mut read, frontend.sizes().near, &frontend.physical_constants()) {
@@ -310,7 +385,10 @@ pub fn check(source: &str, read: &mut dyn FnMut(&str) -> Result<String, String>,
         Err(error) => return Checked { loaded: None, facts: Vec::new(), error: Some(error) },
     };
     let sources = loaded.sources.clone();
-    let prepared = loaded.clone().linked().and_then(|module| prepared(module, frontend.sizes().near).map_err(|error| in_module(&sources, error)));
+    let prepared = loaded
+        .clone()
+        .linked()
+        .and_then(|module| prepared(module, frontend.sizes().near).map_err(|error| in_module(&sources, error)));
     let (facts, error) = match prepared {
         Ok(module) => {
             let (facts, checked) = semantic::check(&module, frontend);
@@ -322,7 +400,10 @@ pub fn check(source: &str, read: &mut dyn FnMut(&str) -> Result<String, String>,
 }
 
 /// A linked module with the prelude and library it is checked with, desugared.
-fn prepared(mut module: syntax::Module, near_bytes: u32) -> Result<syntax::Module, Diagnostic> {
+fn prepared(
+    mut module: syntax::Module,
+    near_bytes: u32,
+) -> Result<syntax::Module, Diagnostic> {
     let prelude = parser::parse_for(lex(include_str!("prelude.nib"))?, near_bytes)?;
     module.enums.extend(prelude.enums);
     // A module's own function or protocol of a prelude name is the one it names.
@@ -338,8 +419,8 @@ fn prepared(mut module: syntax::Module, near_bytes: u32) -> Result<syntax::Modul
 }
 
 #[cfg(test)]
+mod test_debug;
+#[cfg(test)]
 mod test_execute;
 #[cfg(test)]
 mod test_pipeline;
-#[cfg(test)]
-mod test_debug;

@@ -9,8 +9,7 @@ use super::test_hir::written;
 fn compiled(source: &str) -> Result<llrm_core::hir::model::Program, String> {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "quickr.bas", source.as_bytes());
-    qb_driver::parsed(&path, &qb_driver::Frontend::new("quickr", "vbdos"), None)
-        .map_err(|error| error.to_string())
+    qb_driver::parsed(&path, &qb_driver::Frontend::new("quickr", "vbdos"), None).map_err(|error| error.to_string())
 }
 
 /// What FUNCTION `f` returns when the HIR interpreter runs it.
@@ -31,9 +30,6 @@ fn quickr_runs_declared_vbdos_programs() {
 fn long_function(lines: &str) -> i128 {
     returned(&format!("FUNCTION f&\n{lines}\nEND FUNCTION\n"))
 }
-
-
-
 
 #[test]
 fn unsigned_byte_wraps_at_256_and_widens_without_sign() {
@@ -87,14 +83,16 @@ fn byte_constant_out_of_range_is_an_overflow() {
 fn microsoft_profiles_reject_sized_integers() {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "vbdos.bas", b"DIM u AS UNSIGNED INTEGER\nu = 1\n");
-    let error = qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
-        .expect_err("VBDOS has no UNSIGNED");
+    let error =
+        qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect_err("VBDOS has no UNSIGNED");
     assert!(error.to_string().contains("quickr"), "{error}");
 }
 
-
 /// The machine code of procedure `name`, one instruction mnemonic per entry.
-fn mnemonics(source: &str, name: &str) -> Vec<String> {
+fn mnemonics(
+    source: &str,
+    name: &str,
+) -> Vec<String> {
     let program = compiled(source).unwrap_or_else(|error| panic!("{error}"));
     let listing = super::test_hir::listing(&program);
     super::test_hir::between(&listing, &format!("{name} proc far"), &format!("{name} endp"))
@@ -104,7 +102,10 @@ fn mnemonics(source: &str, name: &str) -> Vec<String> {
         .collect()
 }
 
-fn operation(type_name: &str, statement: &str) -> Vec<String> {
+fn operation(
+    type_name: &str,
+    statement: &str,
+) -> Vec<String> {
     mnemonics(&format!("SUB s(a AS {type_name}, b AS {type_name}, r AS LONG)\n{statement}\nEND SUB\n"), "S")
 }
 
@@ -192,8 +193,7 @@ fn every_declaring_statement_declares() {
 fn vbdos_still_declares_implicitly() {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "vbdos.bas", b"x = 1\n");
-    qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
-        .expect("VBDOS declares x");
+    qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("VBDOS declares x");
 }
 
 #[test]
@@ -211,13 +211,12 @@ fn defuint_types_function_names() {
     assert_eq!(returned(source), 65535);
 }
 
-
 #[test]
 fn microsoft_profiles_reject_defu_statements() {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "vbdos.bas", b"DEFUINT A-Z\n");
-    let error = qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
-        .expect_err("VBDOS has no DEFUINT");
+    let error =
+        qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect_err("VBDOS has no DEFUINT");
     assert!(error.to_string().contains("quickr"), "{error}");
 }
 
@@ -287,7 +286,6 @@ fn f_strings_are_string_values() {
     assert_eq!(printed(source), "<7>! 4 \n");
 }
 
-
 #[test]
 fn f_string_errors() {
     for (source, message) in [
@@ -303,98 +301,98 @@ fn f_string_errors() {
 
 /// Each field's expected text is what Python's own `format()` gives.
 const FORMAT_CASES: &[(&str, &str, &str, &str)] = &[
-        ("LONG", "42", "", "42"),
-        ("LONG", "-42", "5", "  -42"),
-        ("LONG", "42", "<5", "42   "),
-        ("LONG", "42", "^6", "  42  "),
-        ("LONG", "42", "*^7", "**42***"),
-        ("LONG", "-42", "=6", "-   42"),
-        ("LONG", "-42", "06", "-00042"),
-        ("LONG", "42", "+", "+42"),
-        ("LONG", "42", " ", " 42"),
-        ("LONG", "1234567", ",", "1,234,567"),
-        ("LONG", "1234567", "_", "1_234_567"),
-        ("LONG", "1234", "010,", "00,001,234"),
-        ("LONG", "255", "x", "ff"),
-        ("LONG", "255", "#X", "0XFF"),
-        ("LONG", "255", "#010b", "0b11111111"),
-        ("LONG", "255", "o", "377"),
-        ("LONG", "65535", "#_x", "0xffff"),
-        ("LONG", "65", "c", "A"),
-        ("LONG", "-7", "n", "-7"),
-        ("LONG", "3", ".2f", "3.00"),
-        ("LONG", "3", "e", "3.000000e+00"),
-        ("LONG", "-255", "#x", "-0xff"),
-        ("UNSIGNED LONG", "4000000000#", ",", "4,000,000,000"),
-        ("UNSIGNED LONG", "4000000000#", "x", "ee6b2800"),
-        ("DOUBLE", "3.14159#", ".2f", "3.14"),
-        ("DOUBLE", "-3.14159#", "+.3f", "-3.142"),
-        ("DOUBLE", "2.5#", ".0f", "2"),
-        ("DOUBLE", "3.5#", ".0f", "4"),
-        ("DOUBLE", "0.125#", ".2f", "0.12"),
-        ("DOUBLE", "2.675#", ".2f", "2.67"),
-        ("DOUBLE", "1234567.891#", ",.2f", "1,234,567.89"),
-        ("DOUBLE", "0.5#", "%", "50.000000%"),
-        ("DOUBLE", "0.1234#", ".1%", "12.3%"),
-        ("DOUBLE", "12345.678#", "e", "1.234568e+04"),
-        ("DOUBLE", "12345.678#", ".2E", "1.23E+04"),
-        ("DOUBLE", "0.000123#", ".3e", "1.230e-04"),
-        ("DOUBLE", "12345.678#", "g", "12345.7"),
-        ("DOUBLE", "0.0001#", "g", "0.0001"),
-        ("DOUBLE", "0.00001#", "g", "1e-05"),
-        ("DOUBLE", "123456789#", "g", "1.23457e+08"),
-        ("DOUBLE", "100#", "g", "100"),
-        ("DOUBLE", "100#", "#g", "100.000"),
-        ("DOUBLE", "1.5#", ".3", "1.5"),
-        ("DOUBLE", "1234.5#", ".3", "1.23e+03"),
-        ("DOUBLE", "1#", ".3", "1.0"),
-        ("DOUBLE", "-0.0001#", "z.2f", "0.00"),
-        ("DOUBLE", "-2.5#", "10.1f", "      -2.5"),
-        ("DOUBLE", "-2.5#", "<10.1f", "-2.5      "),
-        ("DOUBLE", "-2.5#", "010.1f", "-0000002.5"),
-        ("DOUBLE", "0.25#", "", "0.25"),
-        ("DOUBLE", "0.25#", "8", "    0.25"),
-        ("DOUBLE", "-0.25#", "+", "-0.25"),
-        ("DOUBLE", "1234.5#", ",", "1,234.5"),
-        ("DOUBLE", "3#", "#.0f", "3."),
-        ("DOUBLE", "3#", "#.0e", "3.e+00"),
-        ("DOUBLE", "0#", "e", "0.000000e+00"),
-        ("DOUBLE", "1D+100", ".2e", "1.00e+100"),
-        ("DOUBLE", "9.9999#", ".2f", "10.00"),
-        ("DOUBLE", "9.9999#", ".2e", "1.00e+01"),
-        ("STRING", "\"hi\"", "", "hi"),
-        ("STRING", "\"hi\"", "5", "hi   "),
-        ("STRING", "\"hi\"", ">5", "   hi"),
-        ("STRING", "\"hi\"", "^6", "  hi  "),
-        ("STRING", "\"hello\"", ".3", "hel"),
-        ("STRING", "\"hi\"", "-<6", "hi----"),
-        ("STRING", "\"hi\"", "05", "hi000"),
-        // Found by a 400-case comparison with Python.
-        ("DOUBLE", "6.02D+23", "+_.2%", "+60_200_000_000_000_001_459_617_792.00%"),
-        // Found by a 400-case comparison with Python.
-        ("DOUBLE", "6.02D+23", "#,f", "601,999,999,999,999,995,805,696.000000"),
-        // Found by a 400-case comparison with Python.
-        ("DOUBLE", "6.02D+23", " 7,.5F", " 601,999,999,999,999,995,805,696.00000"),
-        // Found by a 400-case comparison with Python.
-        ("DOUBLE", "1000000000000000.0#", "0^#", "1000000000000000.0"),
-        // Found by a 400-case comparison with Python.
-        ("LONG", "255", "=-#3.0g", "3.e+02"),
-        // Found by a 400-case comparison with Python.
-        ("DOUBLE", "-5687.276487884854#", "-=_", "-5_687.276487884854"),
-        // Found by a 400-case comparison with Python.
-        ("DOUBLE", "0.0#", " 10", "       0.0"),
-        // Found by a 400-case comparison with Python.
-        ("DOUBLE", "6.02D+23", ".0%", "60200000000000001459617792%"),
-        // Found by a 400-case comparison with Python.
-        ("DOUBLE", "0.0#", "0<1", "0.0"),
-        // Found by a 400-case comparison with Python.
-        ("LONG", "958510", "#1g", "958510."),
-        // Found by a 400-case comparison with Python.
-        ("DOUBLE", "0.1D0+0.2D0", "", "0.30000000000000004"),
-        // Found by a 400-case comparison with Python.
-        ("DOUBLE", "1D+16", "", "1e+16"),
-        // Found by a 400-case comparison with Python.
-        ("DOUBLE", "1D-05", "", "1e-05"),
+    ("LONG", "42", "", "42"),
+    ("LONG", "-42", "5", "  -42"),
+    ("LONG", "42", "<5", "42   "),
+    ("LONG", "42", "^6", "  42  "),
+    ("LONG", "42", "*^7", "**42***"),
+    ("LONG", "-42", "=6", "-   42"),
+    ("LONG", "-42", "06", "-00042"),
+    ("LONG", "42", "+", "+42"),
+    ("LONG", "42", " ", " 42"),
+    ("LONG", "1234567", ",", "1,234,567"),
+    ("LONG", "1234567", "_", "1_234_567"),
+    ("LONG", "1234", "010,", "00,001,234"),
+    ("LONG", "255", "x", "ff"),
+    ("LONG", "255", "#X", "0XFF"),
+    ("LONG", "255", "#010b", "0b11111111"),
+    ("LONG", "255", "o", "377"),
+    ("LONG", "65535", "#_x", "0xffff"),
+    ("LONG", "65", "c", "A"),
+    ("LONG", "-7", "n", "-7"),
+    ("LONG", "3", ".2f", "3.00"),
+    ("LONG", "3", "e", "3.000000e+00"),
+    ("LONG", "-255", "#x", "-0xff"),
+    ("UNSIGNED LONG", "4000000000#", ",", "4,000,000,000"),
+    ("UNSIGNED LONG", "4000000000#", "x", "ee6b2800"),
+    ("DOUBLE", "3.14159#", ".2f", "3.14"),
+    ("DOUBLE", "-3.14159#", "+.3f", "-3.142"),
+    ("DOUBLE", "2.5#", ".0f", "2"),
+    ("DOUBLE", "3.5#", ".0f", "4"),
+    ("DOUBLE", "0.125#", ".2f", "0.12"),
+    ("DOUBLE", "2.675#", ".2f", "2.67"),
+    ("DOUBLE", "1234567.891#", ",.2f", "1,234,567.89"),
+    ("DOUBLE", "0.5#", "%", "50.000000%"),
+    ("DOUBLE", "0.1234#", ".1%", "12.3%"),
+    ("DOUBLE", "12345.678#", "e", "1.234568e+04"),
+    ("DOUBLE", "12345.678#", ".2E", "1.23E+04"),
+    ("DOUBLE", "0.000123#", ".3e", "1.230e-04"),
+    ("DOUBLE", "12345.678#", "g", "12345.7"),
+    ("DOUBLE", "0.0001#", "g", "0.0001"),
+    ("DOUBLE", "0.00001#", "g", "1e-05"),
+    ("DOUBLE", "123456789#", "g", "1.23457e+08"),
+    ("DOUBLE", "100#", "g", "100"),
+    ("DOUBLE", "100#", "#g", "100.000"),
+    ("DOUBLE", "1.5#", ".3", "1.5"),
+    ("DOUBLE", "1234.5#", ".3", "1.23e+03"),
+    ("DOUBLE", "1#", ".3", "1.0"),
+    ("DOUBLE", "-0.0001#", "z.2f", "0.00"),
+    ("DOUBLE", "-2.5#", "10.1f", "      -2.5"),
+    ("DOUBLE", "-2.5#", "<10.1f", "-2.5      "),
+    ("DOUBLE", "-2.5#", "010.1f", "-0000002.5"),
+    ("DOUBLE", "0.25#", "", "0.25"),
+    ("DOUBLE", "0.25#", "8", "    0.25"),
+    ("DOUBLE", "-0.25#", "+", "-0.25"),
+    ("DOUBLE", "1234.5#", ",", "1,234.5"),
+    ("DOUBLE", "3#", "#.0f", "3."),
+    ("DOUBLE", "3#", "#.0e", "3.e+00"),
+    ("DOUBLE", "0#", "e", "0.000000e+00"),
+    ("DOUBLE", "1D+100", ".2e", "1.00e+100"),
+    ("DOUBLE", "9.9999#", ".2f", "10.00"),
+    ("DOUBLE", "9.9999#", ".2e", "1.00e+01"),
+    ("STRING", "\"hi\"", "", "hi"),
+    ("STRING", "\"hi\"", "5", "hi   "),
+    ("STRING", "\"hi\"", ">5", "   hi"),
+    ("STRING", "\"hi\"", "^6", "  hi  "),
+    ("STRING", "\"hello\"", ".3", "hel"),
+    ("STRING", "\"hi\"", "-<6", "hi----"),
+    ("STRING", "\"hi\"", "05", "hi000"),
+    // Found by a 400-case comparison with Python.
+    ("DOUBLE", "6.02D+23", "+_.2%", "+60_200_000_000_000_001_459_617_792.00%"),
+    // Found by a 400-case comparison with Python.
+    ("DOUBLE", "6.02D+23", "#,f", "601,999,999,999,999,995,805,696.000000"),
+    // Found by a 400-case comparison with Python.
+    ("DOUBLE", "6.02D+23", " 7,.5F", " 601,999,999,999,999,995,805,696.00000"),
+    // Found by a 400-case comparison with Python.
+    ("DOUBLE", "1000000000000000.0#", "0^#", "1000000000000000.0"),
+    // Found by a 400-case comparison with Python.
+    ("LONG", "255", "=-#3.0g", "3.e+02"),
+    // Found by a 400-case comparison with Python.
+    ("DOUBLE", "-5687.276487884854#", "-=_", "-5_687.276487884854"),
+    // Found by a 400-case comparison with Python.
+    ("DOUBLE", "0.0#", " 10", "       0.0"),
+    // Found by a 400-case comparison with Python.
+    ("DOUBLE", "6.02D+23", ".0%", "60200000000000001459617792%"),
+    // Found by a 400-case comparison with Python.
+    ("DOUBLE", "0.0#", "0<1", "0.0"),
+    // Found by a 400-case comparison with Python.
+    ("LONG", "958510", "#1g", "958510."),
+    // Found by a 400-case comparison with Python.
+    ("DOUBLE", "0.1D0+0.2D0", "", "0.30000000000000004"),
+    // Found by a 400-case comparison with Python.
+    ("DOUBLE", "1D+16", "", "1e+16"),
+    // Found by a 400-case comparison with Python.
+    ("DOUBLE", "1D-05", "", "1e-05"),
 ];
 
 #[test]
@@ -412,9 +410,6 @@ fn f_string_specs_format_as_python_does() {
     assert_eq!(printed.lines().count(), FORMAT_CASES.len());
 }
 
-
-
-
 #[test]
 fn plain_floats_print_as_python_repr() {
     // STR$ gave " .1" and 15 digits; repr is the shortest text that reads back.
@@ -423,7 +418,11 @@ fn plain_floats_print_as_python_repr() {
 }
 
 /// The listing of procedure `name` in `source` compiled as `dialect`.
-fn procedure_listing(source: &str, dialect: &str, name: &str) -> String {
+fn procedure_listing(
+    source: &str,
+    dialect: &str,
+    name: &str,
+) -> String {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "frame.bas", source.as_bytes());
     let program = qb_driver::parsed(&path, &qb_driver::Frontend::new(dialect, "vbdos"), None)
@@ -479,7 +478,10 @@ fn quickr_program(source: &str) -> llrm_core::hir::model::Program {
 }
 
 /// Each local of procedure `name` after the backend's layout: (name, low, high).
-fn frame_after_layout(source: &str, name: &str) -> Vec<(String, i64, i64)> {
+fn frame_after_layout(
+    source: &str,
+    name: &str,
+) -> Vec<(String, i64, i64)> {
     let program = quickr_program(source);
     let laid_out = super::zero_fill::laid_out(&program, |module, function| {
         !super::compile::_inline_frame(&program, module, function)
@@ -533,9 +535,14 @@ fn a_runtime_framed_procedure_keeps_no_zero_stores() {
 
 /// The memsets procedure `name` of `source` makes on the rich route, as
 /// compiled: its own-frame locals laid out, then the pipeline.
-fn fills(source: &str, name: &str) -> Vec<String> {
+fn fills(
+    source: &str,
+    name: &str,
+) -> Vec<String> {
     let program = compiled(source).unwrap_or_else(|error| panic!("{error}"));
-    let laid_out = super::zero_fill::laid_out(&program, |module, function| !super::compile::_inline_frame(&program, module, function));
+    let laid_out = super::zero_fill::laid_out(&program, |module, function| {
+        !super::compile::_inline_frame(&program, module, function)
+    });
     let mir = super::test_hir::optimized_mir(&laid_out);
     let start = mir.find(&format!("@{name}(")).expect("the procedure");
     let body = &mir[start..mir[start..].find("\n}").map_or(mir.len(), |end| start + end)];
@@ -558,7 +565,10 @@ fn a_large_zeroed_block_is_one_fill() {
 }
 
 /// The whole listing of `source`, compiled as `dialect`.
-fn module_listing(source: &str, dialect: &str) -> String {
+fn module_listing(
+    source: &str,
+    dialect: &str,
+) -> String {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "module.bas", source.as_bytes());
     let program = qb_driver::parsed(&path, &qb_driver::Frontend::new(dialect, "vbdos"), None)
@@ -593,8 +603,8 @@ fn a_private_procedure_on_the_runtime_frame_stays_far() {
 fn microsoft_profiles_reject_private() {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "vbdos.bas", b"PRIVATE SUB s\nEND SUB\n");
-    let error = qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
-        .expect_err("VBDOS has no PRIVATE");
+    let error =
+        qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect_err("VBDOS has no PRIVATE");
     assert!(error.to_string().contains("quickr"), "{error}");
 }
 
@@ -633,14 +643,16 @@ fn augmented_assignment_evaluates_its_target_once() {
 
 #[test]
 fn augmented_assignment_works_in_a_one_line_if() {
-    let source = "DIM t AS INTEGER\nt = 10\nIF t > 5 THEN t += 1 ELSE t -= 1\nIF t < 5 THEN t += 100 ELSE t -= 3\nPRINT t\n";
+    let source =
+        "DIM t AS INTEGER\nt = 10\nIF t > 5 THEN t += 1 ELSE t -= 1\nIF t < 5 THEN t += 100 ELSE t -= 3\nPRINT t\n";
     assert_eq!(printed(source), " 8 \n");
 }
 
 #[test]
 fn augmented_assignment_takes_a_conditional_value() {
     // The rewrite ended the value at the conditional's ELSE: a syntax error.
-    let source = "DIM t AS INTEGER\nt = 1\nt += 10 IF t > 0 ELSE 20\nIF t > 5 THEN t -= 1 IF t > 9 ELSE 2 ELSE t = 0\nPRINT t\n";
+    let source =
+        "DIM t AS INTEGER\nt = 1\nt += 10 IF t > 0 ELSE 20\nIF t > 5 THEN t -= 1 IF t > 9 ELSE 2 ELSE t = 0\nPRINT t\n";
     assert_eq!(printed(source), " 10 \n");
 }
 
@@ -648,8 +660,8 @@ fn augmented_assignment_takes_a_conditional_value() {
 fn microsoft_profiles_reject_augmented_assignment() {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "vbdos.bas", b"x = 1\nx += 1\n");
-    let error = qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
-        .expect_err("VBDOS has no +=");
+    let error =
+        qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect_err("VBDOS has no +=");
     assert!(error.to_string().contains("quickr"), "{error}");
 }
 
@@ -739,8 +751,8 @@ fn microsoft_profiles_keep_each_a_name() {
     assert_eq!(super::test_runtime_model::printed_on(source, "vbdos", "vbdos"), " 1  2 ");
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "vbdos.bas", b"DIM a(2)\nFOR v IN a()\nNEXT\n");
-    let error = qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
-        .expect_err("VBDOS has no FOR … IN");
+    let error =
+        qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect_err("VBDOS has no FOR … IN");
     assert!(error.to_string().contains("quickr"), "{error}");
 }
 
@@ -829,8 +841,7 @@ fn a_bare_return_still_ends_a_gosub() {
 fn microsoft_profiles_return_only_from_gosub() {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "vbdos.bas", b"FUNCTION f%\nRETURN 1 + 2\nEND FUNCTION\n");
-    qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
-        .expect_err("VBDOS returns no value");
+    qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect_err("VBDOS returns no value");
 }
 
 #[test]
@@ -866,8 +877,7 @@ fn tuple_errors() {
     }
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "vbdos.bas", b"a = 1: b = 2\na, b = b, a\n");
-    qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
-        .expect_err("VBDOS has no tuples");
+    qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect_err("VBDOS has no tuples");
 }
 
 #[test]
@@ -927,10 +937,7 @@ fn for_each_infers_its_variable_type() {
         FOR s IN squares(2)\nPRINT s;\nNEXT\nPRINT\n\
         FUNCTION squares (n AS INTEGER) AS LONG()\nDIM r() AS LONG\nREDIM r(n) AS LONG\n\
         r(n) = 99999\nRETURN r()\nEND FUNCTION\n";
-    assert_eq!(
-        printed(source),
-        " 100000  0 \n 0  7 \na!b!\n 69998  69999 \n 0  1  0  0 \n 0  0  99999 \n"
-    );
+    assert_eq!(printed(source), " 100000  0 \n 0  7 \na!b!\n 69998  69999 \n 0  1  0  0 \n 0  0  99999 \n");
 }
 
 #[test]
@@ -947,10 +954,7 @@ fn strings_slice_as_python_does() {
         PRINT s(::2); \"|\"; s(::-1); \"|\"; s(-1:0:-2); \"|\"; s(10:); \"|\"; s(3:1); \"|\"\n\
         PRINT s(1:)(:2); twice$(s)(8:); LEN(s(1:3)); \"ell\" IN s(:4); \"lo\" IN s(:4)\n\
         FUNCTION twice$ (t AS STRING)\nRETURN t + t\nEND FUNCTION\n";
-    assert_eq!(
-        printed(source),
-        "el|he|lo|llo|hell|hello\nhlo|olleh|ol|||\nello 2 -1  0 \n"
-    );
+    assert_eq!(printed(source), "el|he|lo|llo|hell|hello\nhlo|olleh|ol|||\nello 2 -1  0 \n");
 }
 
 #[test]
@@ -965,8 +969,7 @@ fn slice_assignment_splices() {
 fn microsoft_profiles_have_no_slices() {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "vbdos.bas", b"s$ = \"ab\"\nPRINT s$(0:1)\n");
-    qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
-        .expect_err("VBDOS has no slices");
+    qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect_err("VBDOS has no slices");
 }
 
 #[test]

@@ -37,7 +37,10 @@ impl LIRTransform for PressureSink {
         "pressuresink"
     }
 
-    fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
         Ok(sunk(&body, &self.segments, &self.classes))
     }
 }
@@ -52,7 +55,10 @@ enum Class {
 
 impl Class {
     /// Whether a value of class `value` is counted in the class `set` stands for.
-    fn counts_in(&self, set: &Class) -> bool {
+    fn counts_in(
+        &self,
+        set: &Class,
+    ) -> bool {
         match (self, set) {
             (Class::Stack, Class::Stack) => true,
             (Class::Stack, _) | (_, Class::Stack) => false,
@@ -79,14 +85,14 @@ fn plain_load(one: &Insn) -> Option<(u32, &Mem)> {
 }
 
 /// `body` with each plain load that can go and should made just before its one reader.
-pub fn sunk(body: &LirBody, segments: &Segments, registers: &RegisterClasses) -> LirBody {
+pub fn sunk(
+    body: &LirBody,
+    segments: &Segments,
+    registers: &RegisterClasses,
+) -> LirBody {
     let confined = regclass::classes(body, &BTreeSet::new(), segments, registers);
     let class_of = |value: u32, wide: bool| {
-        if wide {
-            Class::Stack
-        } else {
-            confined.get(&value).map_or(Class::Any, |set| Class::Within(set.clone()))
-        }
+        if wide { Class::Stack } else { confined.get(&value).map_or(Class::Any, |set| Class::Within(set.clone())) }
     };
     let (_, live_out) = live(body);
     let mut widths: IndexMap<u32, u32> = IndexMap::default();
@@ -112,8 +118,12 @@ pub fn sunk(body: &LirBody, segments: &Segments, registers: &RegisterClasses) ->
             let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
             // From the last: a load moved down lands past the positions already looked at, so each is looked at once.
             for position in (0..insns.len()).rev() {
-                let Some(target) = _reader(&insns, position, body, &live_out[&block.at], &defined, &class_of, &stack) else { continue };
-                // It takes its reader's position: instructions of one block stay in order by it, as a compare and its branches share one.
+                let Some(target) = _reader(&insns, position, body, &live_out[&block.at], &defined, &class_of, &stack)
+                else {
+                    continue;
+                };
+                // It takes its reader's position: instructions of one block stay in order by it, as a compare and its
+                // branches share one.
                 let mut load = (*insns.remove(position)).clone();
                 load.at = insns[target - 1].at;
                 insns.insert(target - 1, Arc::new(load));
@@ -145,7 +155,10 @@ fn _reader(
         return None;
     }
     // Operands of one reader made one after another are in no order that matters.
-    if insns[at + 1..reader].iter().all(|between| plain_load(between).is_some_and(|(other, _)| insns[reader].uses.contains(&other))) {
+    if insns[at + 1..reader]
+        .iter()
+        .all(|between| plain_load(between).is_some_and(|(other, _)| insns[reader].uses.contains(&other)))
+    {
         return None;
     }
     let addresses: BTreeSet<u32> = insns[at].uses.iter().copied().collect();
@@ -161,7 +174,11 @@ fn _reader(
         }
     }
     // Each address operand that dies at the load stays live to the reader: not one read at or after it.
-    let dying: Vec<u32> = addresses.iter().copied().filter(|operand| !live_out.contains(operand) && !insns[reader..].iter().any(|one| one.uses.contains(operand))).collect();
+    let dying: Vec<u32> = addresses
+        .iter()
+        .copied()
+        .filter(|operand| !live_out.contains(operand) && !insns[reader..].iter().any(|one| one.uses.contains(operand)))
+        .collect();
     let mut sets: Vec<Class> = vec![Class::Any, Class::Stack];
     for value in dying.iter().copied().chain([value]) {
         let class = class_of(value, stack(value));

@@ -13,7 +13,10 @@ fn function(module: &mut Module) -> &mut Function {
 }
 
 /// The instruction defining `name`, and its value.
-fn named(function: &Function, name: &str) -> (InstId, ValueId) {
+fn named(
+    function: &Function,
+    name: &str,
+) -> (InstId, ValueId) {
     function
         .walk()
         .find_map(|(_, inst)| {
@@ -35,7 +38,10 @@ fn replacing_every_use_lets_the_definition_go() {
     f.replace_all_uses_with(value, Operand::Value(a));
     f.erase(x).expect("unused now");
     assert!(f.check_uses().is_empty(), "{:?}", f.check_uses());
-    assert_eq!(f.take_changes(), [Change::Rewritten(y), Change::Erased { inst: x, block: f.entry().unwrap(), next: Some(y) }]);
+    assert_eq!(
+        f.take_changes(),
+        [Change::Rewritten(y), Change::Erased { inst: x, block: f.entry().unwrap(), next: Some(y) }]
+    );
     assert_eq!(print::module(&module), "define i16 @f(i16 %a) {\nentry:\n  %y = mul i16 %a, 2\n  ret i16 %y\n}\n");
 }
 
@@ -48,7 +54,13 @@ fn an_erased_id_is_never_reused() {
     let (y, value) = named(f, "y");
     let (x, _) = named(f, "x");
     let ret = f.terminator(f.entry().unwrap()).unwrap();
-    let z = f.create_instruction(Opcode::Binary(BinaryOp::Sub), i16, vec![Operand::Value(value), Operand::Constant(one)], Flags::default(), Some("x"));
+    let z = f.create_instruction(
+        Opcode::Binary(BinaryOp::Sub),
+        i16,
+        vec![Operand::Value(value), Operand::Constant(one)],
+        Flags::default(),
+        Some("x"),
+    );
     assert!(z.0 > ret.0 && z.0 > x.0 && z.0 > y.0);
     f.insert(z, Position::Before(ret)).expect("placed");
     let result = f.instruction(z).result.unwrap();
@@ -137,8 +149,9 @@ fn a_mark_names_the_changes_since_while_they_are_on_record_of_that_function() {
     let _ = &mut copy;
 }
 
-/// A parameter the passes removed leaves the others named by the position they had: `-g` named `scale(p, factor)`'s `factor` the
-/// second, and the function that kept only it made the first parameter `p`'s, a cell and a name that were not its own.
+/// A parameter the passes removed leaves the others named by the position they had: `-g` named `scale(p, factor)`'s
+/// `factor` the second, and the function that kept only it made the first parameter `p`'s, a cell and a name that were
+/// not its own.
 #[test]
 fn a_parameter_keeps_the_position_it_was_named_by() {
     let mut parsed = module("define i16 @f(i16 %a, i16 %b, i16 %c) {\nentry:\n  %x = add i16 %b, 1\n  ret i16 %x\n}\n");
@@ -159,8 +172,8 @@ fn records(function: &Function) -> Vec<(u32, crate::DebugWhat)> {
     function.debug_records().iter().map(|one| (one.before.0, one.what)).collect()
 }
 
-/// What `-g` says of a variable stands before an instruction, as LLVM's debug records print: a declare, a value, and one that
-/// says nothing; read back, it prints as it was, its variable the same node.
+/// What `-g` says of a variable stands before an instruction, as LLVM's debug records print: a declare, a value, and
+/// one that says nothing; read back, it prints as it was, its variable the same node.
 #[test]
 fn debug_records_print_and_parse_as_they_were() {
     let mut parsed = module(RECORDED);
@@ -172,13 +185,17 @@ fn debug_records_print_and_parse_as_they_were() {
     let ret = f.terminator(f.entry().unwrap()).unwrap();
     assert_eq!(
         records(f),
-        [(x.0, crate::DebugWhat::Declare(Operand::Value(pointer))), (y.0, crate::DebugWhat::Value(Operand::Value(value))), (ret.0, crate::DebugWhat::Gone)]
+        [
+            (x.0, crate::DebugWhat::Declare(Operand::Value(pointer))),
+            (y.0, crate::DebugWhat::Value(Operand::Value(value))),
+            (ret.0, crate::DebugWhat::Gone)
+        ]
     );
     let _ = p;
 }
 
-/// A value another stands for is the other in the records that named it: a debugger that was told `x` is told `a`, not a value that
-/// is no more.
+/// A value another stands for is the other in the records that named it: a debugger that was told `x` is told `a`, not
+/// a value that is no more.
 #[test]
 fn replacing_a_value_by_its_equal_replaces_it_in_the_records_too() {
     let mut parsed = module(RECORDED);
@@ -186,13 +203,18 @@ fn replacing_a_value_by_its_equal_replaces_it_in_the_records_too() {
     let (_, value) = named(f, "x");
     let a = f.parameters()[0];
     f.replace_value(value, Operand::Value(a));
-    assert!(f.debug_records().iter().any(|one| one.what == crate::DebugWhat::Value(Operand::Value(a))), "{:?}", f.debug_records());
+    assert!(
+        f.debug_records().iter().any(|one| one.what == crate::DebugWhat::Value(Operand::Value(a))),
+        "{:?}",
+        f.debug_records()
+    );
     assert!(!f.debug_records().iter().any(|one| one.what == crate::DebugWhat::Value(Operand::Value(value))));
 }
 
-/// A pass that rewrites a value's uses to rebuild a loop around it (`unroll` replaced the loop phi by its start value after the
-/// uses past the loop had been given the last trip's) does not say the variable is the start value: it was, at the end of the loop,
-/// the last trip's. A record stays on the value it named; once that value is erased it says nothing.
+/// A pass that rewrites a value's uses to rebuild a loop around it (`unroll` replaced the loop phi by its start value
+/// after the uses past the loop had been given the last trip's) does not say the variable is the start value: it was,
+/// at the end of the loop, the last trip's. A record stays on the value it named; once that value is erased it says
+/// nothing.
 #[test]
 fn rewriting_the_uses_of_a_value_leaves_the_records_naming_it() {
     let mut parsed = module(RECORDED);
@@ -200,11 +222,16 @@ fn rewriting_the_uses_of_a_value_leaves_the_records_naming_it() {
     let (_, value) = named(f, "x");
     let a = f.parameters()[0];
     f.replace_all_uses_with(value, Operand::Value(a));
-    assert!(f.debug_records().iter().any(|one| one.what == crate::DebugWhat::Value(Operand::Value(value))), "{:?}", f.debug_records());
+    assert!(
+        f.debug_records().iter().any(|one| one.what == crate::DebugWhat::Value(Operand::Value(value))),
+        "{:?}",
+        f.debug_records()
+    );
 }
 
-/// An erased value has no record that names it (a record is no use, so the erase goes through): they say it is gone. An erased
-/// instruction's records stand before what followed it, where the source said they were; so the verifier finds none dangling.
+/// An erased value has no record that names it (a record is no use, so the erase goes through): they say it is gone. An
+/// erased instruction's records stand before what followed it, where the source said they were; so the verifier finds
+/// none dangling.
 #[test]
 fn erasing_leaves_records_gone_or_with_the_next_instruction() {
     let mut parsed = module(RECORDED);
@@ -217,20 +244,28 @@ fn erasing_leaves_records_gone_or_with_the_next_instruction() {
         f.set_operand(y, 0, Operand::Value(a));
         assert!(f.users(value).is_empty());
         f.erase(x).expect("unused now");
-        assert!(f.debug_records().iter().any(|one| one.before == y && one.what == crate::DebugWhat::Gone), "{:?}", f.debug_records());
+        assert!(
+            f.debug_records().iter().any(|one| one.before == y && one.what == crate::DebugWhat::Gone),
+            "{:?}",
+            f.debug_records()
+        );
         // The record that stood before x stands before y, which followed it.
         let before_x: Vec<u32> = f.debug_records().iter().map(|one| one.before.0).collect();
         assert!(before_x.iter().all(|&at| at != x.0), "{before_x:?}");
         let ret = f.terminator(f.entry().unwrap()).unwrap();
         f.set_operand(ret, 0, Operand::Value(a));
         f.erase(y).expect("unused now");
-        assert!(f.debug_records().iter().all(|one| one.before == ret || matches!(one.what, crate::DebugWhat::Declare(_))), "{:?}", f.debug_records());
+        assert!(
+            f.debug_records().iter().all(|one| one.before == ret || matches!(one.what, crate::DebugWhat::Declare(_))),
+            "{:?}",
+            f.debug_records()
+        );
     }
     assert!(crate::verify::verify(&parsed).is_empty(), "{:?}", crate::verify::verify(&parsed));
 }
 
-/// A moved instruction leaves the records that stood before it where they were: they say what the source said at that point,
-/// and the instruction going elsewhere does not move the point.
+/// A moved instruction leaves the records that stood before it where they were: they say what the source said at that
+/// point, and the instruction going elsewhere does not move the point.
 #[test]
 fn moving_an_instruction_leaves_its_records_in_place() {
     let mut parsed = module(RECORDED);
@@ -239,7 +274,8 @@ fn moving_an_instruction_leaves_its_records_in_place() {
     let (x, _) = named(f, "x");
     let ret = f.terminator(f.entry().unwrap()).unwrap();
     f.move_to(y, Position::Before(x)).expect("moves");
-    // y reads x, which now follows it: the record of the value stood before y, and stays before `ret`, which followed y.
+    // y reads x, which now follows it: the record of the value stood before y, and stays before `ret`, which followed
+    // y.
     assert!(f.debug_records().iter().all(|one| one.before != y), "{:?}", f.debug_records());
     assert!(f.debug_records().iter().any(|one| one.before == ret && matches!(one.what, crate::DebugWhat::Value(_))));
 }
@@ -254,24 +290,34 @@ fn the_verifier_finds_a_record_before_an_erased_instruction() {
     let a = f.parameters()[0];
     f.set_operand(y, 0, Operand::Value(a));
     f.erase(x).expect("unused now");
-    f.debug_records.push(crate::DebugRecord { before: x, variable: crate::MetadataId(0), what: crate::DebugWhat::Gone });
+    f.debug_records.push(crate::DebugRecord {
+        before: x,
+        variable: crate::MetadataId(0),
+        what: crate::DebugWhat::Gone,
+    });
     let found = crate::verify::verify(&parsed);
-    assert!(found.iter().any(|one| one.contains("debug record") && one.contains("no longer in the function")), "{found:?}");
+    assert!(
+        found.iter().any(|one| one.contains("debug record") && one.contains("no longer in the function")),
+        "{found:?}"
+    );
 }
 
-/// A parameter the passes removed (dead-argument elimination) was named by a record, which is no use of it: the record stood naming
-/// a value of no function, and printing the body (the pipeline compares bodies by their text) panicked on `hanoi` at -Os with `-g`.
+/// A parameter the passes removed (dead-argument elimination) was named by a record, which is no use of it: the record
+/// stood naming a value of no function, and printing the body (the pipeline compares bodies by their text) panicked on
+/// `hanoi` at -Os with `-g`.
 #[test]
 fn removing_a_parameter_leaves_the_records_that_named_it_gone() {
-    let mut parsed = module("define i16 @f(i16 %a, i16 %b) {\nentry:\n  #dbg_value(i16 %b, !0)\n  ret i16 %a\n}\n\n!0 = !{!\"v\"}\n");
+    let mut parsed = module(
+        "define i16 @f(i16 %a, i16 %b) {\nentry:\n  #dbg_value(i16 %b, !0)\n  ret i16 %a\n}\n\n!0 = !{!\"v\"}\n",
+    );
     let (context, f) = parsed.function_mut("f").expect("@f");
     f.remove_parameter(context, 1);
     let text = print::module(&parsed);
     assert!(text.contains("#dbg_gone(!0)") && !text.contains("#dbg_value"), "{text}");
 }
 
-/// An analysis computed before the last `take_changes` could not be brought up to date: the log was emptied, so five in six
-/// of them, asked again after another pass, were derived afresh.
+/// An analysis computed before the last `take_changes` could not be brought up to date: the log was emptied, so five in
+/// six of them, asked again after another pass, were derived afresh.
 #[test]
 fn taken_changes_stay_for_an_analysis_computed_before_them() {
     let mut module = module(TEXT);
@@ -287,8 +333,9 @@ fn taken_changes_stay_for_an_analysis_computed_before_them() {
     assert!(f.take_changes().is_empty(), "a change was handed out twice");
 }
 
-/// A copy carried the original's whole log (up to 64k changes since the log stopped being emptied, #984): gvn clones the body to
-/// number it, and Vec<Change>::clone was 16% of compiling a program with a hundred inlines. A copy's edits are its own.
+/// A copy carried the original's whole log (up to 64k changes since the log stopped being emptied, #984): gvn clones
+/// the body to number it, and Vec<Change>::clone was 16% of compiling a program with a hundred inlines. A copy's edits
+/// are its own.
 #[test]
 fn a_copy_starts_with_an_empty_log_and_equals_the_function_it_copies() {
     let mut module = module(TEXT);
@@ -316,5 +363,11 @@ fn a_move_logs_what_the_position_named() {
     f.take_changes();
     f.move_to(y, Position::Before(x)).unwrap();
     f.move_to(x, Position::End(block)).unwrap();
-    assert_eq!(f.take_changes(), [Change::Moved { inst: y, block, next: Some(x), from: block }, Change::Moved { inst: x, block, next: None, from: block }]);
+    assert_eq!(
+        f.take_changes(),
+        [
+            Change::Moved { inst: y, block, next: Some(x), from: block },
+            Change::Moved { inst: x, block, next: None, from: block }
+        ]
+    );
 }

@@ -19,7 +19,11 @@ pub fn resolve(path: &Path) -> PathBuf {
 }
 
 /// Walk `rest` onto `out` the way `realpath` does; `depth` bounds a symlink loop.
-fn _join(out: &mut PathBuf, rest: &Path, depth: usize) {
+fn _join(
+    out: &mut PathBuf,
+    rest: &Path,
+    depth: usize,
+) {
     for component in rest.components() {
         match component {
             Component::Prefix(_) | Component::RootDir => *out = PathBuf::from(component.as_os_str()),
@@ -49,7 +53,8 @@ mod tests {
     /// link-unit fingerprint and every label disagreed with Python's.
     #[test]
     fn test_resolve_keeps_the_spelling_it_was_given() {
-        // Python: Path(concat!(env!("LLRM_ROOT"), "/tests/inputs/omf/arith-q-O.obj")).resolve() ends with the name as typed.
+        // Python: Path(concat!(env!("LLRM_ROOT"), "/tests/inputs/omf/arith-q-O.obj")).resolve() ends with the name as
+        // typed.
         let root = Path::new(env!("LLRM_ROOT"));
         let found = resolve(&root.join("tests/inputs/omf/./../omf/arith-q-O.obj"));
         assert!(found.ends_with(concat!(env!("LLRM_ROOT"), "/tests/inputs/omf/arith-q-O.obj")), "{}", found.display());

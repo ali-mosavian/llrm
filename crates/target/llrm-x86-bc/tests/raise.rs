@@ -2,22 +2,38 @@
 //! against each program's BASIC meaning, derived by hand.
 
 use llrm_mir::interpret::{self, Val};
-use llrm_mir::{BinaryOp, CastOp, Constant, ConstantKind, GlobalKind, GlobalVariable, Linkage, Module, Opcode, Operand, Position, Type};
+use llrm_mir::{
+    BinaryOp, CastOp, Constant, ConstantKind, GlobalKind, GlobalVariable, Linkage, Module, Opcode, Operand, Position,
+    Type,
+};
 
 fn raised(fixture: &str) -> Module {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf").join(fixture);
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
-    let module = llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
+    let module = llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN)
+        .unwrap_or_else(|refusal| panic!("{refusal}"))
+        .module;
     let errors = llrm_mir::verify::verify(&module);
     assert!(errors.is_empty(), "{errors:#?}\n{}", llrm_mir::print::module(&module));
     module
 }
 
 /// A global `@name` of `bits`, holding `value`.
-fn cell(module: &mut Module, name: &str, bits: u32, value: i128) -> Operand {
+fn cell(
+    module: &mut Module,
+    name: &str,
+    bits: u32,
+    value: i128,
+) -> Operand {
     let ty = module.context.types.int(bits);
     let initializer = module.context.int(ty, value);
-    let global = module.add_variable(name, GlobalVariable { ty, constant: false, initializer: Some(initializer), align: None }, Linkage::Internal).expect("free");
+    let global = module
+        .add_variable(
+            name,
+            GlobalVariable { ty, constant: false, initializer: Some(initializer), align: None },
+            Linkage::Internal,
+        )
+        .expect("free");
     Operand::Constant(module.reference(global))
 }
 
@@ -29,10 +45,23 @@ fn stub_runtime(module: &mut Module) {
     let long = module.context.types.int(32);
     let row = module.context.types.intern(Type::Array { element: long, count: 64 });
     let zero = module.context.constant(Constant { ty: row, kind: ConstantKind::Zero });
-    let printed = module.add_variable("printed", GlobalVariable { ty: row, constant: false, initializer: Some(zero), align: None }, Linkage::Internal).expect("free");
+    let printed = module
+        .add_variable(
+            "printed",
+            GlobalVariable { ty: row, constant: false, initializer: Some(zero), align: None },
+            Linkage::Internal,
+        )
+        .expect("free");
     let printed = Operand::Constant(module.reference(printed));
     let count = cell(module, "count", 16, 0);
-    let routines: Vec<_> = module.functions().filter(|(_, global, function)| function.is_declaration() && global.name.as_deref().is_some_and(|name| name.starts_with(llrm_x86_bc::RUNTIME))).map(|(id, global, _)| (id, global.name.clone().unwrap())).collect();
+    let routines: Vec<_> = module
+        .functions()
+        .filter(|(_, global, function)| {
+            function.is_declaration()
+                && global.name.as_deref().is_some_and(|name| name.starts_with(llrm_x86_bc::RUNTIME))
+        })
+        .map(|(id, global, _)| (id, global.name.clone().unwrap()))
+        .collect();
     for (id, name) in routines {
         let returns = match &module.globals[id.0 as usize].kind {
             GlobalKind::Function(function) => module.signature(function.ty).0,
@@ -67,13 +96,22 @@ fn stub_runtime(module: &mut Module) {
             b.store(next, count, false);
         }
         let void = b.context.types.void();
-        let answer = (returns != void).then(|| Operand::Constant(b.context.constant(Constant { ty: returns, kind: ConstantKind::Zero })));
+        let answer = (returns != void)
+            .then(|| Operand::Constant(b.context.constant(Constant { ty: returns, kind: ConstantKind::Zero })));
         b.ret(answer);
     }
     // The program ends in B$CENP, which does not return.
     let (context, main) = module.function_mut("main").expect("a main");
     let void = context.types.void();
-    let ends: Vec<_> = main.layout().iter().filter_map(|&block| main.terminator(block).filter(|&inst| main.instruction(inst).opcode == Opcode::Unreachable).map(|inst| (block, inst))).collect();
+    let ends: Vec<_> = main
+        .layout()
+        .iter()
+        .filter_map(|&block| {
+            main.terminator(block)
+                .filter(|&inst| main.instruction(inst).opcode == Opcode::Unreachable)
+                .map(|inst| (block, inst))
+        })
+        .collect();
     for (block, inst) in ends {
         main.erase(inst).expect("a terminator");
         let ret = main.create_instruction(Opcode::Ret, void, vec![], Default::default(), None);
@@ -82,7 +120,10 @@ fn stub_runtime(module: &mut Module) {
 }
 
 /// Every integer `main` prints, stubbed as `stub_runtime` does.
-fn printed(fixture: &str, count: usize) -> Vec<i64> {
+fn printed(
+    fixture: &str,
+    count: usize,
+) -> Vec<i64> {
     let mut module = raised(fixture);
     stub_runtime(&mut module);
     let (main, ty) = function(&mut module, "main");
@@ -101,14 +142,19 @@ fn printed(fixture: &str, count: usize) -> Vec<i64> {
     b.ret(Some(value));
     (0..count)
         .map(|at| {
-            let answer = interpret::run(&module, "probe", vec![Val::Int { bits: at as u128, width: 16 }], 10_000_000).unwrap_or_else(|trap| panic!("{trap:?}\n{}", llrm_mir::print::module(&module)));
+            let answer = interpret::run(&module, "probe", vec![Val::Int { bits: at as u128, width: 16 }], 10_000_000)
+                .unwrap_or_else(|trap| panic!("{trap:?}\n{}", llrm_mir::print::module(&module)));
             int(&answer) as i32 as i64
         })
         .collect()
 }
 
 /// `@probe`, returning what `body` builds.
-fn probe(module: &mut Module, returns: u32, body: impl FnOnce(&mut llrm_mir::build::Builder) -> Operand) -> Val {
+fn probe(
+    module: &mut Module,
+    returns: u32,
+    body: impl FnOnce(&mut llrm_mir::build::Builder) -> Operand,
+) -> Val {
     let ty = module.context.types.int(returns);
     let fn_ty = module.context.types.intern(Type::Function { returns: ty, parameters: vec![], variadic: false });
     let id = module.add_function("probe", fn_ty, Linkage::External).expect("free");
@@ -117,11 +163,15 @@ fn probe(module: &mut Module, returns: u32, body: impl FnOnce(&mut llrm_mir::bui
     b.position(entry);
     let value = body(&mut b);
     b.ret(Some(value));
-    interpret::run(module, "probe", vec![], 10_000_000).unwrap_or_else(|trap| panic!("{trap:?}\n{}", llrm_mir::print::module(module)))
+    interpret::run(module, "probe", vec![], 10_000_000)
+        .unwrap_or_else(|trap| panic!("{trap:?}\n{}", llrm_mir::print::module(module)))
 }
 
 /// A function's reference and type.
-fn function(module: &mut Module, name: &str) -> (llrm_mir::ConstantId, llrm_mir::TypeId) {
+fn function(
+    module: &mut Module,
+    name: &str,
+) -> (llrm_mir::ConstantId, llrm_mir::TypeId) {
     let id = module.named(name).expect("raised");
     let GlobalKind::Function(function) = &module.globals[id.0 as usize].kind else { unreachable!() };
     let ty = function.ty;
@@ -144,7 +194,10 @@ const PROCS: [&str; 5] = ["procs-q-o.obj", "procs-q-o-zd.obj", "procs-v-g2.obj",
 /// `FUNCTION Twice& (n AS LONG)`: `n + n`, a carry crossing its words, BYREF.
 #[test]
 fn twice_adds_a_long_through_its_carry() {
-    for (fixture, (n, expected)) in PROCS.iter().flat_map(|one| [(0x1234_5678i64, 0x2468_ACF0i64), (0xFFFF, 0x1_FFFE), (-3, -6)].map(|case| (one, case))) {
+    for (fixture, (n, expected)) in PROCS
+        .iter()
+        .flat_map(|one| [(0x1234_5678i64, 0x2468_ACF0i64), (0xFFFF, 0x1_FFFE), (-3, -6)].map(|case| (one, case)))
+    {
         let mut module = raised(fixture);
         let n = cell(&mut module, "n", 32, i128::from(n));
         let (reference, ty) = function(&mut module, "TWICE");
@@ -205,7 +258,21 @@ fn long_divide_and_remainder_sum() {
 /// the BASIC source: q = 1073741831 \\ 1024, a = q, b = 1024, s = q, t = 4.
 #[test]
 fn fpemu_prints_its_float_results() {
-    let expected = vec![1_048_576, 1_049_600, 1_047_552, 7, 1_073_741_824, 1024, 5, 1024, 1_048_580, 4_194_304, 1_073_741_824, -1, 0];
+    let expected = vec![
+        1_048_576,
+        1_049_600,
+        1_047_552,
+        7,
+        1_073_741_824,
+        1024,
+        5,
+        1024,
+        1_048_580,
+        4_194_304,
+        1_073_741_824,
+        -1,
+        0,
+    ];
     for fixture in ["fpemu-p-g2.obj", "fpemu-p-g2-zd.obj", "fpemu-v-g2.obj", "fpemu-v-g3.obj"] {
         assert_eq!(printed(fixture, expected.len()), expected, "{fixture}");
     }
@@ -247,7 +314,10 @@ fn fpcse_prints_its_single_sum() {
 /// returning SINGLE". Half(4) = 2, Doubled(8) = 16.
 #[test]
 fn a_float_function_answers_through_its_hidden_argument() {
-    for (name, bits, n, expected) in [("HALF", 32, u64::from(4f32.to_bits()), u64::from(2f32.to_bits())), ("DOUBLED", 64, 8f64.to_bits(), 16f64.to_bits())] {
+    for (name, bits, n, expected) in [
+        ("HALF", 32, u64::from(4f32.to_bits()), u64::from(2f32.to_bits())),
+        ("DOUBLED", 64, 8f64.to_bits(), 16f64.to_bits()),
+    ] {
         let mut module = raised("byref2-q-o.obj");
         let n = cell(&mut module, "n", bits, i128::from(n));
         let result = cell(&mut module, "result", bits, 0);
@@ -255,7 +325,8 @@ fn a_float_function_answers_through_its_hidden_argument() {
         let answer = probe(&mut module, bits, |b| {
             let word = b.context.types.int(16);
             let (n, at) = (b.cast(CastOp::PtrToInt, n, word, ""), b.cast(CastOp::PtrToInt, result, word, ""));
-            let answered = b.call_as(llrm_mir::opcode::BASIC, ty, Operand::Constant(reference), &[n, at], "").expect("an answer");
+            let answered =
+                b.call_as(llrm_mir::opcode::BASIC, ty, Operand::Constant(reference), &[n, at], "").expect("an answer");
             let ty = b.context.types.int(bits);
             let stored = b.load(ty, result, false, "");
             let same = b.icmp(llrm_mir::IntPredicate::Eq, answered, at, "");
@@ -268,10 +339,15 @@ fn a_float_function_answers_through_its_hidden_argument() {
 }
 
 /// Where a word operation of a long's word is left in `function`, if any.
-fn word_arithmetic(module: &Module, function: &str) -> Option<String> {
+fn word_arithmetic(
+    module: &Module,
+    function: &str,
+) -> Option<String> {
     let text = llrm_mir::print::module(module);
     let body = text.split("\ndefine ").find(|one| one.contains(&format!("@{function}(")))?;
-    let found = body.lines().find(|line| ["add i16", "sub i16", "and i16", "or i16", "xor i16", "call { i16, i1 }"].iter().any(|op| line.contains(op)));
+    let found = body.lines().find(|line| {
+        ["add i16", "sub i16", "and i16", "or i16", "xor i16", "call { i16, i1 }"].iter().any(|op| line.contains(op))
+    });
     found.map(str::to_owned)
 }
 
@@ -280,7 +356,13 @@ fn word_arithmetic(module: &Module, function: &str) -> Option<String> {
 /// through `neg / adc / neg`, and TWICE's `n + n` was an ADD/ADC pair.
 #[test]
 fn longs_are_whole_values() {
-    for (fixture, function) in [("arith-q-o.obj", "main"), ("negnot-q-o.obj", "main"), ("nots-q-o.obj", "main"), ("procs-q-o.obj", "TWICE"), ("arith-v-g3.obj", "main")] {
+    for (fixture, function) in [
+        ("arith-q-o.obj", "main"),
+        ("negnot-q-o.obj", "main"),
+        ("nots-q-o.obj", "main"),
+        ("procs-q-o.obj", "TWICE"),
+        ("arith-v-g3.obj", "main"),
+    ] {
         assert_eq!(word_arithmetic(&raised(fixture), function), None, "{fixture} {function}");
     }
 }
@@ -289,7 +371,19 @@ fn longs_are_whole_values() {
 /// two INTEGERs laid out as a long's halves. By hand from arith.bas.
 #[test]
 fn arith_prints_its_long_arithmetic() {
-    let expected = vec![33_818_120, 524_246_911, 490_428_791, 558_065_031, 52_774_761, -305_419_896, 524_246_911, 65_536, 65_535, 258, 772];
+    let expected = vec![
+        33_818_120,
+        524_246_911,
+        490_428_791,
+        558_065_031,
+        52_774_761,
+        -305_419_896,
+        524_246_911,
+        65_536,
+        65_535,
+        258,
+        772,
+    ];
     for fixture in ["arith-q-o.obj", "arith-p-g2.obj", "arith-v-g3.obj"] {
         assert_eq!(printed(fixture, 11), expected, "{fixture}");
     }
@@ -335,7 +429,19 @@ fn a_string_copy_moves_its_words() {
 /// refused, "a near call (GOSUB)" and "B$EVCK's control is unknown".
 #[test]
 fn an_event_poll_is_a_call_to_evck() {
-    let expected = vec![33_818_120, 524_246_911, 490_428_791, 558_065_031, 52_774_761, -305_419_896, 524_246_911, 65_536, 65_535, 258, 772];
+    let expected = vec![
+        33_818_120,
+        524_246_911,
+        490_428_791,
+        558_065_031,
+        52_774_761,
+        -305_419_896,
+        524_246_911,
+        65_536,
+        65_535,
+        258,
+        772,
+    ];
     for fixture in ["arith-q-evt.obj", "arith-p-evt.obj", "arith-v-evt.obj"] {
         assert_eq!(printed(fixture, 11), expected, "{fixture}");
     }
@@ -363,20 +469,26 @@ fn a_push_after_the_prologue_is_no_register_save() {
     let GlobalKind::Function(function) = &module.globals[inside.0 as usize].kind else { unreachable!() };
     let callee = |inst: llrm_mir::InstId| -> Option<String> {
         let one = function.instruction(inst);
-        matches!(one.opcode, Opcode::Call(_)).then(|| match one.operands.last() {
-            Some(Operand::Constant(id)) => match module.context.get(*id).kind {
-                ConstantKind::Global(global) => module.globals[global.0 as usize].name.clone(),
+        matches!(one.opcode, Opcode::Call(_))
+            .then(|| match one.operands.last() {
+                Some(Operand::Constant(id)) => match module.context.get(*id).kind {
+                    ConstantKind::Global(global) => module.globals[global.0 as usize].name.clone(),
+                    _ => None,
+                },
                 _ => None,
-            },
-            _ => None,
-        }).flatten()
+            })
+            .flatten()
     };
     let mut printed = 0;
     for &block in function.layout() {
         for &inst in function.block(block).instructions() {
             if callee(inst).as_deref() == Some("llrm.qb.B$PESD") {
-                let Operand::Value(argument) = function.instruction(inst).operands[0] else { panic!("B$PESD of a constant") };
-                let llrm_mir::ValueDef::Instruction(made) = function.value(argument).def else { panic!("B$PESD of a parameter") };
+                let Operand::Value(argument) = function.instruction(inst).operands[0] else {
+                    panic!("B$PESD of a constant")
+                };
+                let llrm_mir::ValueDef::Instruction(made) = function.value(argument).def else {
+                    panic!("B$PESD of a parameter")
+                };
                 assert_eq!(callee(made).as_deref(), Some("llrm.qb.B$LDFS"));
                 printed += 1;
             }
@@ -395,7 +507,8 @@ fn an_error_handler_is_the_main_bodys_landing_pad() {
         for config in ["q-o", "p-g2", "v-g3", "q-evt", "p-evt", "v-evt"] {
             let fixture = format!("{stem}-{config}.obj");
             let module = raised(&fixture);
-            let (_, _, main) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("main")).expect("main");
+            let (_, _, main) =
+                module.functions().find(|(_, global, _)| global.name.as_deref() == Some("main")).expect("main");
             assert!(main.personality.is_some(), "{fixture}");
             let opcodes: Vec<&Opcode> = main.walk().map(|(_, inst)| &main.instruction(inst).opcode).collect();
             assert_eq!(opcodes.iter().filter(|one| matches!(one, Opcode::LandingPad { .. })).count(), 1, "{fixture}");
@@ -409,9 +522,12 @@ fn an_error_handler_is_the_main_bodys_landing_pad() {
 /// "B$FIST outside the FP emulator's protocol" although BC asked for BCOM45.
 #[test]
 fn a_module_without_inline_floats_keeps_the_emulators_protocol() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions/nbody-q-o.obj");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions/nbody-q-o.obj");
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
-    let module = llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
+    let module = llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN)
+        .unwrap_or_else(|refusal| panic!("{refusal}"))
+        .module;
     assert!(llrm_mir::verify::verify(&module).is_empty());
 }
 
@@ -428,13 +544,18 @@ fn an_indexed_array_is_one_object() {
 /// order, their count last of those, then the descriptor in BX.
 #[test]
 fn an_element_address_passes_the_descriptor_last() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions/ndarr-q-o.obj");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions/ndarr-q-o.obj");
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
-    let module = llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
+    let module = llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN)
+        .unwrap_or_else(|refusal| panic!("{refusal}"))
+        .module;
     let text = llrm_mir::print::module(&module);
     let calls: Vec<Vec<&str>> = text
         .lines()
-        .filter_map(|line| line.split_once(" @llrm.qb.B$HARY(").filter(|_| line.contains(" = call "))?.1.strip_suffix(')'))
+        .filter_map(|line| {
+            line.split_once(" @llrm.qb.B$HARY(").filter(|_| line.contains(" = call "))?.1.strip_suffix(')')
+        })
         .map(|arguments| arguments.split(", ").collect())
         .collect();
     assert!(!calls.is_empty());
@@ -451,21 +572,33 @@ fn an_element_address_passes_the_descriptor_last() {
 #[test]
 fn erl_is_the_line_bcs_statement_table_gives() {
     for name in ["erlnum-q-o.obj", "erlnum-p-g2.obj", "erlnum-v-g3.obj"] {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions").join(name);
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions").join(name);
         let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
-        let module = llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{name}: {refusal}")).module;
+        let module = llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN)
+            .unwrap_or_else(|refusal| panic!("{name}: {refusal}"))
+            .module;
         let text = llrm_mir::print::module(&module);
-        let table = text.lines().find(|line| line.contains("$QB$ERL$main") && line.contains(" = internal constant")).expect("the ERL table");
-        let lines: std::collections::BTreeSet<&str> = table.split("i16 ").skip(1).map(|one| one.trim_end_matches([',', ' ', ']'])).collect();
+        let table = text
+            .lines()
+            .find(|line| line.contains("$QB$ERL$main") && line.contains(" = internal constant"))
+            .expect("the ERL table");
+        let lines: std::collections::BTreeSet<&str> =
+            table.split("i16 ").skip(1).map(|one| one.trim_end_matches([',', ' ', ']'])).collect();
         assert_eq!(lines, ["0", "100", "200"].into_iter().collect(), "{name}: {table}");
     }
 }
 
-/// BC matched address spaces 1 (far) and 2 (selector) as constants and held them equal to real mode's by a test: a machine
-/// of a target that numbers them 7 and 8 got its far globals in space 1. The machine's layout says which, once.
+/// BC matched address spaces 1 (far) and 2 (selector) as constants and held them equal to real mode's by a test: a
+/// machine of a target that numbers them 7 and 8 got its far globals in space 1. The machine's layout says which, once.
 #[test]
 fn the_far_and_selector_spaces_are_the_machines_layouts() {
-    let fixture = std::fs::read_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf")).unwrap().flatten().map(|one| one.path()).find(|path| path.extension().is_some_and(|ext| ext == "obj" || ext == "OBJ")).expect("an object");
+    let fixture = std::fs::read_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf"))
+        .unwrap()
+        .flatten()
+        .map(|one| one.path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "obj" || ext == "OBJ"))
+        .expect("an object");
     let found = llrm_omf::module::load(&fixture).expect("reads").expect("an object");
     let mut layout = llrm_x86_m16::layout();
     layout.spaces.roles.far = 7;

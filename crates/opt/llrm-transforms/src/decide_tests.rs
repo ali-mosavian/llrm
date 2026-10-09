@@ -16,7 +16,11 @@ fn decide(module: &mut Module) -> bool {
 }
 
 /// `text` decided is `expected`, and computes what it did on `inputs`.
-fn check(text: &str, expected: &str, inputs: &[&[i128]]) {
+fn check(
+    text: &str,
+    expected: &str,
+    inputs: &[&[i128]],
+) {
     let mut module = parsed(text);
     let before = results(&module, inputs);
     assert_eq!(decide(&mut module), text != expected, "{text}");
@@ -321,14 +325,20 @@ b0:
 /// the module's globals it took the call for a writer and left the branch.
 #[test]
 fn a_branch_on_a_cell_kept_across_a_readonly_call_is_decided() {
-    let text = ACROSS_READONLY_CALL.replace("  ret i16 %v\n", "  %c = icmp eq i16 %v, 7\n  br i1 %c, label %b1, label %b2\n\nb1:\n  ret i16 1\n\nb2:\n  ret i16 2\n");
+    let text = ACROSS_READONLY_CALL.replace(
+        "  ret i16 %v\n",
+        "  %c = icmp eq i16 %v, 7\n  br i1 %c, label %b1, label %b2\n\nb1:\n  ret i16 1\n\nb2:\n  ret i16 2\n",
+    );
     let mut module = parsed(&format!("{DOS}{text}"));
     let after = managed(&mut module, Decide);
     assert!(!after.contains("br i1"), "{after}");
 }
 
 /// Whether @f still has a block named `name`.
-fn has(module: &Module, name: &str) -> bool {
+fn has(
+    module: &Module,
+    name: &str,
+) -> bool {
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
     function.layout().iter().any(|&one| function.block(one).name.as_deref() == Some(name))
 }
@@ -551,7 +561,10 @@ fn test_an_index_that_follows_the_counter_is_below_the_length_the_loop_was_check
 /// Where the counter may be negative the check stays: `lo` is not known below `len`.
 #[test]
 fn test_an_index_from_an_unchecked_start_keeps_its_check() {
-    let mut module = parsed(&format!("{DOS}{}", PARTITION_CHECK.replace("  %both = and i1 %hi_ok, %lo_ok\n  br i1 %both,", "  br i1 %hi_ok,")));
+    let mut module = parsed(&format!(
+        "{DOS}{}",
+        PARTITION_CHECK.replace("  %both = and i1 %hi_ok, %lo_ok\n  br i1 %both,", "  br i1 %hi_ok,")
+    ));
     decide(&mut module);
     assert!(printed(&module).contains("br i1 %i_ok"), "{}", printed(&module));
 }
@@ -577,9 +590,9 @@ crash:
     assert!(!printed(&module).contains("br i1 %fits"), "{}", printed(&module));
 }
 
-/// Every guard query found the body's `llvm.assume`s again, a walk of the whole body naming each call's callee by string
-/// (`Intrinsic::named`): decide was 5.9% of QCport, a fifth of it that. The body's assumptions are found once, as LLVM's
-/// AssumptionCache.
+/// Every guard query found the body's `llvm.assume`s again, a walk of the whole body naming each call's callee by
+/// string (`Intrinsic::named`): decide was 5.9% of QCport, a fifth of it that. The body's assumptions are found once,
+/// as LLVM's AssumptionCache.
 #[test]
 fn test_a_body_is_searched_for_its_assumptions_once_however_many_guards_are_asked() {
     let mut module = parsed(&format!("{DOS}{PARTITION_CHECK}"));
@@ -589,8 +602,8 @@ fn test_a_body_is_searched_for_its_assumptions_once_however_many_guards_are_aske
     assert_eq!(searched, 1, "the body was searched {searched} times");
 }
 
-/// `decide` solved what the counted loops bound twice: once for the points-to it holds (the manager's `Bounded`) and again for its
-/// own branches (a hand solve): 26 Minstr of fpbench's -O1 compile. It reads the manager's.
+/// `decide` solved what the counted loops bound twice: once for the points-to it holds (the manager's `Bounded`) and
+/// again for its own branches (a hand solve): 26 Minstr of fpbench's -O1 compile. It reads the manager's.
 #[test]
 fn test_decide_works_a_loops_bounds_out_once() {
     let mut module = parsed(

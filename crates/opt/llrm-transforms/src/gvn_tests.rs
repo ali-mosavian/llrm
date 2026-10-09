@@ -4,15 +4,18 @@
 use llrm_analysis::manager::Summaries;
 use llrm_mir::passes::PassManager;
 
-use crate::testing::{f, parsed, printed, results};
-
 use super::{Gvn, joined};
+use crate::testing::{f, parsed, printed, results};
 
 const INPUTS: &[&[i128]] = &[&[0, 0, 0], &[3, 5, 1], &[-7, 2, 0], &[0x7fff, 1, 1]];
 
 /// A diamond on %c whose arms are `left` and `right`, joining at b3 to
 /// compute `join` into %r.
-fn diamond(left: &str, right: &str, join: &str) -> String {
+fn diamond(
+    left: &str,
+    right: &str,
+    join: &str,
+) -> String {
     format!(
         "define i16 @f(i16 %x, i16 %y, i1 %c) {{
 b0:
@@ -33,7 +36,10 @@ b3:
 
 /// `text` joined: its printed form, and whether anything changed. What
 /// `@f` returns is what it returned before.
-fn joined_once(text: &str, insert: bool) -> (String, bool) {
+fn joined_once(
+    text: &str,
+    insert: bool,
+) -> (String, bool) {
     let before = parsed(text);
     let mut module = before.clone();
     let changed = joined(f(&mut module), insert).unwrap();
@@ -42,7 +48,10 @@ fn joined_once(text: &str, insert: bool) -> (String, bool) {
     (text, changed)
 }
 
-fn kept(text: &str, insert: bool) {
+fn kept(
+    text: &str,
+    insert: bool,
+) {
     let (after, changed) = joined_once(text, insert);
     assert!(!changed);
     assert_eq!(after, printed(&parsed(text)));
@@ -50,15 +59,23 @@ fn kept(text: &str, insert: bool) {
 
 #[test]
 fn test_providers_on_every_edge_become_a_phi() {
-    let (text, changed) = joined_once(&diamond("  %a = add i16 %x, %y\n", "  %b = add i16 %y, %x\n", "  %r = add i16 %x, %y\n"), false);
+    let (text, changed) =
+        joined_once(&diamond("  %a = add i16 %x, %y\n", "  %b = add i16 %y, %x\n", "  %r = add i16 %x, %y\n"), false);
     assert!(changed);
-    assert!(text.ends_with("b3:\n  %r.pre-phi = phi i16 [ %a, %b1 ], [ %b, %b2 ]\n  ret i16 %r.pre-phi\n}\n"), "{text}");
+    assert!(
+        text.ends_with("b3:\n  %r.pre-phi = phi i16 [ %a, %b1 ], [ %b, %b2 ]\n  ret i16 %r.pre-phi\n}\n"),
+        "{text}"
+    );
 }
 
 #[test]
 fn test_a_join_expression_translates_through_its_phis() {
     let (text, changed) = joined_once(
-        &diamond("  %a = mul i16 %x, 3\n", "  %b = mul i16 %y, 3\n", "  %p = phi i16 [ %x, %b1 ], [ %y, %b2 ]\n  %r = mul i16 %p, 3\n"),
+        &diamond(
+            "  %a = mul i16 %x, 3\n",
+            "  %b = mul i16 %y, 3\n",
+            "  %p = phi i16 [ %x, %b1 ], [ %y, %b2 ]\n  %r = mul i16 %p, 3\n",
+        ),
         false,
     );
     assert!(changed);
@@ -221,8 +238,15 @@ b0:
 /// The pass makes a join's load the phi of what each arm stored.
 #[test]
 fn test_gvn_joins_the_values_each_arm_stored() {
-    let text = format!("@g = global i16 0\n\n{}", diamond("  store i16 %x, ptr @g\n", "  store i16 %y, ptr @g\n", "  %r = load i16, ptr @g\n"));
-    assert!(managed(&text).contains("b3:\n  %r1 = phi i16 [ %x, %b1 ], [ %y, %b2 ]\n  ret i16 %r1\n"), "{}", managed(&text));
+    let text = format!(
+        "@g = global i16 0\n\n{}",
+        diamond("  store i16 %x, ptr @g\n", "  store i16 %y, ptr @g\n", "  %r = load i16, ptr @g\n")
+    );
+    assert!(
+        managed(&text).contains("b3:\n  %r1 = phi i16 [ %x, %b1 ], [ %y, %b2 ]\n  ret i16 %r1\n"),
+        "{}",
+        managed(&text)
+    );
     let volatile = text.replace("load i16", "load volatile i16");
     assert_eq!(managed(&volatile), printed(&parsed(&volatile)));
 }
@@ -276,7 +300,9 @@ b3:
         let mut manager = PassManager::default();
         manager.require::<Summaries>();
         manager.add(Gvn::default());
-        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers, ..Default::default() })).unwrap();
+        manager
+            .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers, ..Default::default() }))
+            .unwrap();
         let inputs: &[&[i128]] = &[&[0, 1], &[1, 2], &[5, 3]];
         assert_eq!(results(&module, inputs), results(&before, inputs));
         printed(&module).contains("%b = load i16, ptr @x")
@@ -290,7 +316,12 @@ b3:
 /// precise. It panicked.
 #[test]
 fn a_bare_pass_manager_takes_every_call_for_unknown() {
-    let module = crate::testing::parsed(&format!("{}{}{}", llrm_analysis::testing::DOS, crate::testing::WRITES_ITS_ARGUMENT, "define i16 @f() {\nb0:\n  %a = load i16, ptr @g\n  call void @h(ptr @k)\n  %b = load i16, ptr @g\n  %r = add i16 %a, %b\n  ret i16 %r\n}\n"));
+    let module = crate::testing::parsed(&format!(
+        "{}{}{}",
+        llrm_analysis::testing::DOS,
+        crate::testing::WRITES_ITS_ARGUMENT,
+        "define i16 @f() {\nb0:\n  %a = load i16, ptr @g\n  call void @h(ptr @k)\n  %b = load i16, ptr @g\n  %r = add i16 %a, %b\n  ret i16 %r\n}\n"
+    ));
     let precise = crate::testing::summarized(&module, Gvn::default(), true, &[&[]]);
     let bare = crate::testing::summarized(&module, Gvn::default(), false, &[&[]]);
     assert!(precise.contains("%r = add i16 %a, %a") && !bare.contains("%r = add i16 %a, %a"), "{precise}\n{bare}");
@@ -401,7 +432,12 @@ b4:
 }
 ",
     );
-    assert!(after.contains("br i1 true, label %b2, label %b3") && after.contains("select i1 true") && after.contains("zext i1 false"), "{after}");
+    assert!(
+        after.contains("br i1 true, label %b2, label %b3")
+            && after.contains("select i1 true")
+            && after.contains("zext i1 false"),
+        "{after}"
+    );
 }
 
 /// A segment made a far pointer twice is one pointer: segld's load of
@@ -526,7 +562,11 @@ b0:
         manager.add(Gvn);
         manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
         let after = printed(&module);
-        assert_eq!(after.matches(&format!("load i16, ptr addrspace({space})")).count() == 2, reloaded, "space {space}\n{after}");
+        assert_eq!(
+            after.matches(&format!("load i16, ptr addrspace({space})")).count() == 2,
+            reloaded,
+            "space {space}\n{after}"
+        );
     }
 }
 
@@ -644,7 +684,9 @@ fn a_pass_derives_the_shape_of_its_body_once_however_many_loops_it_has() {
     for at in 0..loops {
         let next = if at + 1 == loops { "end".to_owned() } else { format!("h{}", at + 1) };
         let from = if at == 0 { "b0".to_owned() } else { format!("h{}", at - 1) };
-        text += &format!("h{at}:\n  %i{at} = phi i16 [ 0, %{from} ], [ %n{at}, %l{at} ]\n  %c{at} = icmp slt i16 %i{at}, %n\n  br i1 %c{at}, label %l{at}, label %{next}\n\nl{at}:\n  %v{at} = load i16, ptr @y\n  store i16 %i{at}, ptr @y\n  %n{at} = add i16 %i{at}, 1\n  br label %h{at}\n\n");
+        text += &format!(
+            "h{at}:\n  %i{at} = phi i16 [ 0, %{from} ], [ %n{at}, %l{at} ]\n  %c{at} = icmp slt i16 %i{at}, %n\n  br i1 %c{at}, label %l{at}, label %{next}\n\nl{at}:\n  %v{at} = load i16, ptr @y\n  store i16 %i{at}, ptr @y\n  %n{at} = add i16 %i{at}, 1\n  br label %h{at}\n\n"
+        );
     }
     text += "end:\n  ret i16 %n\n}\n";
     let mut module = parsed(&text);
@@ -652,13 +694,15 @@ fn a_pass_derives_the_shape_of_its_body_once_however_many_loops_it_has() {
     let mut manager = PassManager::default();
     manager.require::<Summaries>();
     manager.add(Gvn::default());
-    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 4, ..Default::default() })).unwrap();
+    manager
+        .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 4, ..Default::default() }))
+        .unwrap();
     let derived = llrm_analysis::cfg::shapes_derived() - before;
     assert!(derived <= 8, "{derived} shapes derived for one pass over a body of {loops} loops");
 }
 
-/// Gvn priced the loops from trip counts it proved for itself, which `Annotated` had proved already for the same body: 20
-/// sequential loops were proved 60 times, 20 now. The counts are the manager's, proved once.
+/// Gvn priced the loops from trip counts it proved for itself, which `Annotated` had proved already for the same body:
+/// 20 sequential loops were proved 60 times, 20 now. The counts are the manager's, proved once.
 #[test]
 fn a_pass_takes_the_trip_counts_the_manager_proved() {
     // The check proves them again to compare, and is counted.
@@ -670,7 +714,9 @@ fn a_pass_takes_the_trip_counts_the_manager_proved() {
     for at in 0..loops {
         let next = if at + 1 == loops { "end".to_owned() } else { format!("h{}", at + 1) };
         let from = if at == 0 { "b0".to_owned() } else { format!("h{}", at - 1) };
-        text += &format!("h{at}:\n  %i{at} = phi i16 [ 0, %{from} ], [ %n{at}, %l{at} ]\n  %c{at} = icmp slt i16 %i{at}, 9\n  br i1 %c{at}, label %l{at}, label %{next}\n\nl{at}:\n  %v{at} = load i16, ptr @y\n  store i16 %i{at}, ptr @y\n  %n{at} = add i16 %i{at}, 1\n  br label %h{at}\n\n");
+        text += &format!(
+            "h{at}:\n  %i{at} = phi i16 [ 0, %{from} ], [ %n{at}, %l{at} ]\n  %c{at} = icmp slt i16 %i{at}, 9\n  br i1 %c{at}, label %l{at}, label %{next}\n\nl{at}:\n  %v{at} = load i16, ptr @y\n  store i16 %i{at}, ptr @y\n  %n{at} = add i16 %i{at}, 1\n  br label %h{at}\n\n"
+        );
     }
     text += "end:\n  ret i16 %n\n}\n";
     let mut module = parsed(&text);
@@ -678,14 +724,16 @@ fn a_pass_takes_the_trip_counts_the_manager_proved() {
     let mut manager = PassManager::default();
     manager.require::<Summaries>();
     manager.add(Gvn::default());
-    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 4, ..Default::default() })).unwrap();
+    manager
+        .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 4, ..Default::default() }))
+        .unwrap();
     let proved = llrm_analysis::induction::proved() - before;
     assert!(proved <= loops, "{proved} loops proved for one pass over a body of {loops} loops");
 }
 
-/// Where the machine prices registers, Gvn numbers the function twice (crossing stores, and not) and keeps the cheaper; each run solved
-/// what every block holds again, for the same instructions: 638 solutions for 343 runs compiling `mdl_ai.c`, 12.7% of its compile. It
-/// is solved once for the function as it comes in.
+/// Where the machine prices registers, Gvn numbers the function twice (crossing stores, and not) and keeps the cheaper;
+/// each run solved what every block holds again, for the same instructions: 638 solutions for 343 runs compiling
+/// `mdl_ai.c`, 12.7% of its compile. It is solved once for the function as it comes in.
 #[test]
 fn test_availability_is_solved_once_when_a_function_is_numbered_twice() {
     let text = "@x = global i16 0
@@ -724,13 +772,15 @@ b3:
     manager.require::<Summaries>();
     manager.add(Gvn::default());
     let before = llrm_analysis::avail::solved();
-    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() })).unwrap();
+    manager
+        .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
+        .unwrap();
     assert_eq!(llrm_analysis::avail::solved() - before, 1, "availability solved again for the second numbering");
 }
 
-/// A function numbered both ways (crossing stores and not) and priced twice, 4067 times over QCport and the programs at -O2: 72% of
-/// them priced alike and the second won 2.3%. The ways differ only where a load is served across a store; where none is, the second
-/// numbering is the first and is neither made nor priced.
+/// A function numbered both ways (crossing stores and not) and priced twice, 4067 times over QCport and the programs at
+/// -O2: 72% of them priced alike and the second won 2.3%. The ways differ only where a load is served across a store;
+/// where none is, the second numbering is the first and is neither made nor priced.
 #[test]
 fn test_a_function_with_no_load_served_across_a_store_is_numbered_once() {
     let numberings = |text: &str| {
@@ -739,7 +789,9 @@ fn test_a_function_with_no_load_served_across_a_store_is_numbered_once() {
         manager.require::<Summaries>();
         manager.add(Gvn::default());
         let before = super::numberings();
-        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() })).unwrap();
+        manager
+            .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
+            .unwrap();
         super::numberings() - before
     };
     let plain = "@x = global i16 0

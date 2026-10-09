@@ -38,7 +38,9 @@ pub enum Format {
     #[default]
     Default,
     CodeView,
-    Dwarf { version: u16 },
+    Dwarf {
+        version: u16,
+    },
     TurboDebugger,
 }
 
@@ -68,9 +70,9 @@ pub enum FrameBase {
     /// The frame register, which the code keeps for it.
     #[default]
     Register,
-    /// The frame register as the code would set it: `bias` bytes below the canonical frame address (the return address and
-    /// the saved register). The code keeps none; a debugger finds the cell from the caller's frame, which call frame
-    /// information gives at every address.
+    /// The frame register as the code would set it: `bias` bytes below the canonical frame address (the return address
+    /// and the saved register). The code keeps none; a debugger finds the cell from the caller's frame, which call
+    /// frame information gives at every address.
     Cfa { bias: i64 },
 }
 
@@ -117,13 +119,22 @@ pub struct File {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Scalar {
     Void,
-    Bool { bytes: u8 },
+    Bool {
+        bytes: u8,
+    },
     Char,
-    Int { bytes: u8, signed: bool },
-    Float { bytes: u8 },
+    Int {
+        bytes: u8,
+        signed: bool,
+    },
+    Float {
+        bytes: u8,
+    },
     Currency,
     /// BASIC's variable-length STRING: a near or a far descriptor.
-    BasicString { far: bool },
+    BasicString {
+        far: bool,
+    },
 }
 
 /// How far a pointer reaches.
@@ -154,24 +165,54 @@ pub enum Type {
     Scalar(Scalar),
     /// A scalar the source spells `name` (`unsigned long`): laid out as `scalar`, which only a format that names
     /// base types (DWARF) tells apart from the plain one.
-    Basic { name: String, scalar: Scalar },
+    Basic {
+        name: String,
+        scalar: Scalar,
+    },
     /// BASIC's `STRING * n`.
     FixedString(u32),
     /// `bytes` of its elements in place, as C lays one out; None: BASIC's, whose bounds are its
     /// descriptor's.
-    Array { element: TypeId, bytes: Option<u32> },
+    Array {
+        element: TypeId,
+        bytes: Option<u32>,
+    },
     /// A struct or, with `union`, a union: a type a member may reach again (a pointer to itself), by its
     /// index, which may be a later one.
-    Struct { name: String, bytes: u32, fields: Vec<Field>, union: bool },
-    Enum { name: String, underlying: TypeId, enumerators: Vec<Enumerator> },
+    Struct {
+        name: String,
+        bytes: u32,
+        fields: Vec<Field>,
+        union: bool,
+    },
+    Enum {
+        name: String,
+        underlying: TypeId,
+        enumerators: Vec<Enumerator>,
+    },
     /// A pointer of `bytes` (the offset's width, a far one's too).
-    Pointer { target: TypeId, bytes: u8, reach: Reach },
+    Pointer {
+        target: TypeId,
+        bytes: u8,
+        reach: Reach,
+    },
     /// A parameter passed by reference.
     Reference(TypeId),
-    Typedef { name: String, target: TypeId },
-    Qualified { target: TypeId, constant: bool, volatile: bool },
+    Typedef {
+        name: String,
+        target: TypeId,
+    },
+    Qualified {
+        target: TypeId,
+        constant: bool,
+        volatile: bool,
+    },
     /// `result` None returns nothing: void. `convention` is the calling convention's own name.
-    Procedure { result: Option<TypeId>, parameters: Vec<TypeId>, convention: Option<String> },
+    Procedure {
+        result: Option<TypeId>,
+        parameters: Vec<TypeId>,
+        convention: Option<String>,
+    },
 }
 
 /// `length` bytes of section `section` from `offset`.
@@ -193,12 +234,14 @@ pub enum Location {
     List(Vec<(Range, Location)>),
     /// `disp` bytes into the data `symbol` names.
     Static { symbol: SymbolId, disp: i64 },
-    /// `disp` bytes from the register `register` names: a cell reached through the stack pointer where the code keeps no frame
-    /// register (the displacement changes as the stack pointer does, so it is told over the ranges it holds for).
+    /// `disp` bytes from the register `register` names: a cell reached through the stack pointer where the code keeps
+    /// no frame register (the displacement changes as the stack pointer does, so it is told over the ranges it
+    /// holds for).
     Relative { register: String, disp: i64 },
     /// The value itself, which is in no place.
     Constant(i64),
-    /// Its bytes in pieces, from the first: each piece's size in bytes and where it is; none for a piece that is nowhere.
+    /// Its bytes in pieces, from the first: each piece's size in bytes and where it is; none for a piece that is
+    /// nowhere.
     Pieces(Vec<(u32, Option<Location>)>),
 }
 
@@ -206,10 +249,16 @@ impl Location {
     /// Where the value is from the last range to the end of `scope`: what a format whose records name one place for a
     /// whole scope can say of it. A list with no range that reaches the end (a register parameter, there only until
     /// the body starts) has none.
-    pub fn settled(&self, scope: &[Range]) -> Option<&Location> {
+    pub fn settled(
+        &self,
+        scope: &[Range],
+    ) -> Option<&Location> {
         let Location::List(entries) = self else { return Some(self) };
         let end = scope.last().map(|last| (last.section, last.offset + last.length))?;
-        entries.iter().find(|(range, _)| (range.section, range.offset + range.length) == end).map(|(_, location)| location)
+        entries
+            .iter()
+            .find(|(range, _)| (range.section, range.offset + range.length) == end)
+            .map(|(_, location)| location)
     }
 }
 
@@ -288,7 +337,10 @@ impl Type {
             Type::Array { element, .. } => vec![*element],
             Type::Struct { fields, .. } => fields.iter().map(|field| field.r#type).collect(),
             Type::Enum { underlying, .. } => vec![*underlying],
-            Type::Pointer { target, .. } | Type::Reference(target) | Type::Typedef { target, .. } | Type::Qualified { target, .. } => vec![*target],
+            Type::Pointer { target, .. }
+            | Type::Reference(target)
+            | Type::Typedef { target, .. }
+            | Type::Qualified { target, .. } => vec![*target],
             Type::Procedure { result, parameters, .. } => result.iter().chain(parameters).copied().collect(),
         }
     }
@@ -297,14 +349,23 @@ impl Type {
 impl Info {
     /// The bytes a value of `ty` occupies, where the type says: None for a type that has no size
     /// of its own (void, a procedure, BASIC's array whose bounds are a descriptor's).
-    pub fn size_of(&self, ty: TypeId) -> Option<u64> {
+    pub fn size_of(
+        &self,
+        ty: TypeId,
+    ) -> Option<u64> {
         Some(match self.types.get(ty)? {
             Type::Scalar(scalar) | Type::Basic { scalar, .. } => match *scalar {
                 Scalar::Void => return None,
                 Scalar::Bool { bytes } | Scalar::Int { bytes, .. } | Scalar::Float { bytes } => u64::from(bytes),
                 Scalar::Char => 1,
                 Scalar::Currency => 8,
-                Scalar::BasicString { far } => if far { 4 } else { 2 },
+                Scalar::BasicString { far } => {
+                    if far {
+                        4
+                    } else {
+                        2
+                    }
+                }
             },
             Type::FixedString(bytes) => u64::from(*bytes),
             Type::Array { bytes, .. } => u64::from((*bytes)?),
@@ -327,7 +388,11 @@ mod tests {
         let info = Info {
             types: vec![
                 Type::Scalar(Scalar::Int { bytes: 1, signed: false }),
-                Type::Enum { name: "e".into(), underlying: 0, enumerators: vec![Enumerator { name: "a".into(), value: 0 }] },
+                Type::Enum {
+                    name: "e".into(),
+                    underlying: 0,
+                    enumerators: vec![Enumerator { name: "a".into(), value: 0 }],
+                },
                 Type::Typedef { name: "t".into(), target: 1 },
             ],
             ..Info::default()
@@ -337,7 +402,10 @@ mod tests {
 
     #[test]
     fn a_basic_array_has_no_size_of_its_own() {
-        let info = Info { types: vec![Type::Scalar(Scalar::Int { bytes: 2, signed: true }), Type::Array { element: 0, bytes: None }], ..Info::default() };
+        let info = Info {
+            types: vec![Type::Scalar(Scalar::Int { bytes: 2, signed: true }), Type::Array { element: 0, bytes: None }],
+            ..Info::default()
+        };
         assert_eq!(info.size_of(1), None);
     }
 }
@@ -346,7 +414,10 @@ mod tests {
 mod settled_tests {
     use super::*;
 
-    fn range(offset: usize, length: usize) -> Range {
+    fn range(
+        offset: usize,
+        length: usize,
+    ) -> Range {
         Range { section: 0, offset, length }
     }
 
@@ -356,7 +427,10 @@ mod settled_tests {
     #[test]
     fn a_value_settles_where_its_last_range_reaches_the_end_of_the_scope() {
         let scope = [range(0, 32)];
-        let homed = Location::List(vec![(range(0, 10), Location::Register("eax".into())), (range(10, 22), Location::Frame { disp: -4 })]);
+        let homed = Location::List(vec![
+            (range(0, 10), Location::Register("eax".into())),
+            (range(10, 22), Location::Frame { disp: -4 }),
+        ]);
         assert_eq!(homed.settled(&scope), Some(&Location::Frame { disp: -4 }));
         let entry_only = Location::List(vec![(range(0, 7), Location::Register("eax".into()))]);
         assert_eq!(entry_only.settled(&scope), None);

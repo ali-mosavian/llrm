@@ -2,13 +2,13 @@
 
 use std::collections::BTreeMap;
 
+use llrm_mir::module::ValueId;
+use llrm_mir::opcode::IntPredicate::{self, *};
 use num_bigint::BigInt;
 
 use super::proves;
 use crate::guards::Guard;
 use crate::induction::{Monomial, Scev};
-use llrm_mir::module::ValueId;
-use llrm_mir::opcode::IntPredicate::{self, *};
 
 const W: u32 = 16;
 
@@ -16,7 +16,11 @@ fn unknown(n: u32) -> Scev {
     Scev::unknown(ValueId(n), W)
 }
 
-fn guard(predicate: IntPredicate, left: &Scev, right: &Scev) -> Guard {
+fn guard(
+    predicate: IntPredicate,
+    left: &Scev,
+    right: &Scev,
+) -> Guard {
     Guard { predicate, left: left.clone(), right: right.clone() }
 }
 

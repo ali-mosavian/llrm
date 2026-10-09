@@ -14,12 +14,12 @@
 use std::collections::BTreeSet;
 
 use iced_x86::Register;
+use llrm_mir::{BinaryOp, CastOp, Constant, ConstantKind, FloatKind, FloatPredicate, Module, Operand, Type, TypeId};
 use llrm_qbruntime::{self as runtime, Control, Memory};
 use llrm_x86_bcmachine::frontends::bc::declen::Insn;
 use llrm_x86_bcmachine::model::ir::nodes::{Call, Node};
 use llrm_x86_bcmachine::model::ir::{Loc, Operation, Semantics};
 use llrm_x86_bcmachine::objectfile::module;
-use llrm_mir::{BinaryOp, CastOp, Constant, ConstantKind, FloatKind, FloatPredicate, Module, Operand, Type, TypeId};
 
 use crate::emit::{Bit, Emit, Emitter, Var};
 use crate::machine::Facts;
@@ -60,13 +60,24 @@ pub fn absorbed(name: &str) -> bool {
 }
 
 fn x87(op: Operation) -> bool {
-    matches!(op, Operation::FloatLoad | Operation::FloatStore | Operation::FloatArith | Operation::FloatArithPop | Operation::FloatUnary)
+    matches!(
+        op,
+        Operation::FloatLoad
+            | Operation::FloatStore
+            | Operation::FloatArith
+            | Operation::FloatArithPop
+            | Operation::FloatUnary
+    )
 }
 
 pub struct Floats;
 
 impl Recognizer for Floats {
-    fn node(&self, emitter: &mut Emitter, node: &Node) -> Option<Emit<()>> {
+    fn node(
+        &self,
+        emitter: &mut Emitter,
+        node: &Node,
+    ) -> Option<Emit<()>> {
         match node {
             Node::Opaque(one) if x87(one.semantics.op) => Some(instruction(emitter, &one.insn, &one.semantics)),
             Node::Call(call) => match helper(&call.name) {
@@ -83,7 +94,10 @@ fn double(emitter: &mut Emitter) -> TypeId {
 }
 
 /// The value in st(`index`).
-fn st(emitter: &mut Emitter, index: u32) -> Emit<Operand> {
+fn st(
+    emitter: &mut Emitter,
+    index: u32,
+) -> Emit<Operand> {
     let depth = u32::from(emitter.floats);
     if index >= depth {
         return Err(format!("reads st({index}) of an x87 stack {depth} deep"));
@@ -91,7 +105,11 @@ fn st(emitter: &mut Emitter, index: u32) -> Emit<Operand> {
     Ok(emitter.get(Var::St((depth - 1 - index) as u8)))
 }
 
-fn set_st(emitter: &mut Emitter, index: u32, value: Operand) -> Emit<()> {
+fn set_st(
+    emitter: &mut Emitter,
+    index: u32,
+    value: Operand,
+) -> Emit<()> {
     let depth = u32::from(emitter.floats);
     if index >= depth {
         return Err(format!("writes st({index}) of an x87 stack {depth} deep"));
@@ -100,7 +118,10 @@ fn set_st(emitter: &mut Emitter, index: u32, value: Operand) -> Emit<()> {
     Ok(())
 }
 
-fn push(emitter: &mut Emitter, value: Operand) -> Emit<()> {
+fn push(
+    emitter: &mut Emitter,
+    value: Operand,
+) -> Emit<()> {
     if emitter.floats >= DEPTH {
         return Err("a ninth value on the x87 stack".to_owned());
     }
@@ -124,7 +145,12 @@ fn slot(loc: &Loc) -> Option<u32> {
 
 /// A memory operand as the x87 reads it: a real of its width, or an
 /// integer for `fi*`.
-fn load(emitter: &mut Emitter, insn: &Insn, width: u32, integer: bool) -> Emit<Operand> {
+fn load(
+    emitter: &mut Emitter,
+    insn: &Insn,
+    width: u32,
+    integer: bool,
+) -> Emit<Operand> {
     let pointer = emitter.pointer(insn)?;
     let to = double(emitter);
     if integer {
@@ -148,13 +174,20 @@ fn load(emitter: &mut Emitter, insn: &Insn, width: u32, integer: bool) -> Emit<O
     Ok(emitter.cast(CastOp::FPExt, value, to))
 }
 
-fn float_constant(emitter: &mut Emitter, value: f64) -> Operand {
+fn float_constant(
+    emitter: &mut Emitter,
+    value: f64,
+) -> Operand {
     let ty = double(emitter);
     Operand::Constant(emitter.b.context.constant(Constant { ty, kind: ConstantKind::Float(value.to_bits()) }))
 }
 
 /// `@name`, declared by `declare`, called on `arguments`.
-fn intrinsic(emitter: &mut Emitter, name: &str, arguments: &[Operand]) -> Emit<Operand> {
+fn intrinsic(
+    emitter: &mut Emitter,
+    name: &str,
+    arguments: &[Operand],
+) -> Emit<Operand> {
     let &(callee, ty) = emitter.unit.intrinsics.get(name).ok_or_else(|| format!("@{name} undeclared"))?;
     let made = emitter.b.call(ty, Operand::Constant(callee), arguments, "").ok_or("an intrinsic answering nothing")?;
     emitter.note_pure();
@@ -162,7 +195,11 @@ fn intrinsic(emitter: &mut Emitter, name: &str, arguments: &[Operand]) -> Emit<O
 }
 
 /// `value` rounded to a `bits`-wide integer.
-fn rounded(emitter: &mut Emitter, value: Operand, bits: u32) -> Emit<Operand> {
+fn rounded(
+    emitter: &mut Emitter,
+    value: Operand,
+    bits: u32,
+) -> Emit<Operand> {
     intrinsic(emitter, &format!("llvm.lrint.i{bits}.f64"), &[value])
 }
 
@@ -176,7 +213,11 @@ fn arithmetic(name: &str) -> Option<BinaryOp> {
     })
 }
 
-fn instruction(emitter: &mut Emitter, insn: &Insn, what: &Semantics) -> Emit<()> {
+fn instruction(
+    emitter: &mut Emitter,
+    insn: &Insn,
+    what: &Semantics,
+) -> Emit<()> {
     let name = what.name.as_deref().unwrap_or("");
     match what.op {
         Operation::FloatLoad => {
@@ -240,7 +281,11 @@ fn instruction(emitter: &mut Emitter, insn: &Insn, what: &Semantics) -> Emit<()>
 /// Whether the call at `at` is the emulator's `name`, whose contract is the
 /// one its meaning is: no memory, no error, returns, and the table's own
 /// inputs and clobbers.
-fn trusted(emitter: &Emitter, name: &str, at: usize) -> Emit<()> {
+fn trusted(
+    emitter: &Emitter,
+    name: &str,
+    at: usize,
+) -> Emit<()> {
     let found = emitter.unit.facts.found;
     if !module::emulated(&found.records) {
         return Err(format!("{name} outside the FP emulator's protocol"));
@@ -261,7 +306,11 @@ fn trusted(emitter: &Emitter, name: &str, at: usize) -> Emit<()> {
     if kept { Ok(()) } else { Err(format!("{name}'s contract is not its meaning's")) }
 }
 
-fn helped(emitter: &mut Emitter, helper: Helper, call: &Call) -> Emit<()> {
+fn helped(
+    emitter: &mut Emitter,
+    helper: Helper,
+    call: &Call,
+) -> Emit<()> {
     trusted(emitter, &call.name, call.insn.at)?;
     let why = format!("{} clobbers it", call.name);
     let to = double(emitter);
@@ -320,22 +369,28 @@ fn helped(emitter: &mut Emitter, helper: Helper, call: &Call) -> Emit<()> {
 
 /// The intrinsics the module's x87 code calls: each `@llvm.*` a body's
 /// nodes need, declared once.
-pub fn declare(facts: &Facts, module: &mut Module, into: &mut std::collections::BTreeMap<String, (llrm_mir::ConstantId, TypeId)>) -> Result<(), String> {
+pub fn declare(
+    facts: &Facts,
+    module: &mut Module,
+    into: &mut std::collections::BTreeMap<String, (llrm_mir::ConstantId, TypeId)>,
+) -> Result<(), String> {
     let mut needed: BTreeSet<(String, u32)> = BTreeSet::new();
     for node in facts.bodies.iter().flat_map(|body| body.nodes.values()) {
         match &**node {
-            Node::Opaque(one) if x87(one.semantics.op) => match (one.semantics.name.as_deref(), &one.semantics.dests[..]) {
-                (Some("fsqrt"), _) => {
-                    needed.insert(("llvm.sqrt.f64".to_owned(), 0));
+            Node::Opaque(one) if x87(one.semantics.op) => {
+                match (one.semantics.name.as_deref(), &one.semantics.dests[..]) {
+                    (Some("fsqrt"), _) => {
+                        needed.insert(("llvm.sqrt.f64".to_owned(), 0));
+                    }
+                    (Some("fabs"), _) => {
+                        needed.insert(("llvm.fabs.f64".to_owned(), 0));
+                    }
+                    (Some("fistp"), [Loc::Mem(mem)]) => {
+                        needed.insert((format!("llvm.lrint.i{}.f64", mem.width * 8), mem.width * 8));
+                    }
+                    _ => {}
                 }
-                (Some("fabs"), _) => {
-                    needed.insert(("llvm.fabs.f64".to_owned(), 0));
-                }
-                (Some("fistp"), [Loc::Mem(mem)]) => {
-                    needed.insert((format!("llvm.lrint.i{}.f64", mem.width * 8), mem.width * 8));
-                }
-                _ => {}
-            },
+            }
             Node::Call(call) => match helper(&call.name) {
                 Some(Helper::Fist) => {
                     needed.insert(("llvm.lrint.i32.f64".to_owned(), 32));

@@ -3,18 +3,13 @@
 //! condition, entirely in MIR.
 //!
 //! What changed with the IR:
-//! - The old candidate was re-optimized by `transform::recorded`, the whole
-//!   pipeline with unswitching off and the machine's tuning forwarded. That
-//!   pipeline is not ported, so the re-optimization is the passes the pass
-//!   is given; its price is `profit::weighted` at the target's costs, each
-//!   loop weighted by the trips induction proves.
-//! - The old stage records and `watch` hook are the pass manager's dump and
-//!   change log.
-//! - A condition's purity was checked on the old operations' memory, flag,
-//!   stack and x87 fields; an `icmp` has none, so what is left is that its
-//!   operands are defined before the loop.
-//! - The guard and dispatch dropped the old operations' byte provenance; a
-//!   clone's is its `Cloned` change.
+//! - The old candidate was re-optimized by `transform::recorded`, the whole pipeline with unswitching off and the
+//!   machine's tuning forwarded. That pipeline is not ported, so the re-optimization is the passes the pass is given;
+//!   its price is `profit::weighted` at the target's costs, each loop weighted by the trips induction proves.
+//! - The old stage records and `watch` hook are the pass manager's dump and change log.
+//! - A condition's purity was checked on the old operations' memory, flag, stack and x87 fields; an `icmp` has none, so
+//!   what is left is that its operands are defined before the loop.
+//! - The guard and dispatch dropped the old operations' byte provenance; a clone's is its `Cloned` change.
 //!
 //! Python's `ValueError`s are the `Err` text.
 //!
@@ -35,10 +30,10 @@
 
 use std::collections::BTreeMap;
 
-use llrm_analysis::{cfg, memory, occurrence};
 use llrm_analysis::graph::loops::{self, Loop};
-use llrm_mir::edit::Position;
+use llrm_analysis::{cfg, memory, occurrence};
 use llrm_mir::context::Context;
+use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
@@ -57,7 +52,11 @@ impl FunctionPass for Unswitch {
         "unswitch"
     }
 
-    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
         let costs = profit::costs(&outer);
         let passes = &mut self.passes;
@@ -77,7 +76,12 @@ impl FunctionPass for Unswitch {
 /// `unit`'s function specialized and re-optimized, kept only when that
 /// removed a loop without growing the function or its price; whether it was.
 /// `outer` is what the prices' analyses read of the module.
-pub fn optimized(unit: &mut Unit, outer: &Outer, costs: &OperationCosts, reoptimize: &mut dyn FnMut(&mut Unit)) -> Result<bool, String> {
+pub fn optimized(
+    unit: &mut Unit,
+    outer: &Outer,
+    costs: &OperationCosts,
+    reoptimize: &mut dyn FnMut(&mut Unit),
+) -> Result<bool, String> {
     let Some(mut candidate) = specialized(unit.context, unit.function)? else {
         return Ok(false);
     };
@@ -116,7 +120,10 @@ pub fn optimized(unit: &mut Unit, outer: &Outer, costs: &OperationCosts, reoptim
 
 /// `function` with its first loop that has a pure invariant condition
 /// specialized into a copy for each way the condition goes, or `None`.
-pub fn specialized(context: &mut Context, function: &Function) -> Result<Option<Function>, String> {
+pub fn specialized(
+    context: &mut Context,
+    function: &Function,
+) -> Result<Option<Function>, String> {
     let mut closed = function.clone();
     lcssa::closed(&mut closed)?;
     let mut owners = BTreeMap::new();
@@ -130,13 +137,19 @@ pub fn specialized(context: &mut Context, function: &Function) -> Result<Option<
     let predecessors = loops::predecessors(&graph);
     for loop_ in found {
         let outside = predecessors[&loop_.header].difference(&loop_.body).copied().collect::<Vec<_>>();
-        if outside.len() != 1 || loop_.body.iter().map(|&at| operations(&closed, cfg::block(at)).len()).sum::<usize>() > 128 {
+        if outside.len() != 1
+            || loop_.body.iter().map(|&at| operations(&closed, cfg::block(at)).len()).sum::<usize>() > 128
+        {
             continue;
         }
         let entry = outside[0];
         for block in &graph {
             let at = cfg::block(block.at);
-            if !loop_.body.contains(&block.at) || block.at == loop_.header || block.succ.len() != 2 || operations(&closed, at).is_empty() {
+            if !loop_.body.contains(&block.at)
+                || block.at == loop_.header
+                || block.succ.len() != 2
+                || operations(&closed, at).is_empty()
+            {
                 continue;
             }
             let branch = closed.terminator(at).expect("a terminated block");
@@ -144,7 +157,9 @@ pub fn specialized(context: &mut Context, function: &Function) -> Result<Option<
                 continue;
             };
             if closed.instruction(compare).operands.iter().any(|operand| match operand {
-                Operand::Value(value) => owners.get(value).is_some_and(|&owner| loop_.body.contains(&owner) || !dominance.dominates(owner, entry)),
+                Operand::Value(value) => owners
+                    .get(value)
+                    .is_some_and(|&owner| loop_.body.contains(&owner) || !dominance.dominates(owner, entry)),
                 _ => false,
             }) {
                 continue;
@@ -209,7 +224,8 @@ pub fn _specialized(
     for target in [header, cloned_header] {
         edges::split(copied, parent, target, Vec::new())?;
     }
-    for version in [loop_.body.iter().map(|&at| cfg::block(at)).collect::<Vec<_>>(), labels.values().copied().collect()] {
+    for version in [loop_.body.iter().map(|&at| cfg::block(at)).collect::<Vec<_>>(), labels.values().copied().collect()]
+    {
         let exits = version
             .iter()
             .flat_map(|&source| copied.successors(source).into_iter().map(move |target| (source, target)))

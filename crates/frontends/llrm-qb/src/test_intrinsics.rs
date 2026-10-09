@@ -12,19 +12,33 @@ use super::test_hir::written;
 /// Each dialect, on its own runtime.
 const DIALECTS: [&str; 3] = ["qb45", "pds71", "vbdos"];
 
-fn parsed(source: &str, dialect: &str) -> Result<Program, String> {
+fn parsed(
+    source: &str,
+    dialect: &str,
+) -> Result<Program, String> {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "intrinsic.bas", source.as_bytes());
     qb_driver::parsed(&path, &qb_driver::Frontend::new(dialect, dialect), None).map_err(|error| error.0)
 }
 
 fn callees(program: &Program) -> Vec<&str> {
-    let instructions = program.modules.iter().flat_map(|one| &one.functions).flat_map(|one| &one.blocks).flat_map(|one| &one.instructions);
+    let instructions = program
+        .modules
+        .iter()
+        .flat_map(|one| &one.functions)
+        .flat_map(|one| &one.blocks)
+        .flat_map(|one| &one.instructions);
     instructions.filter_map(|one| one.callee.as_deref()).collect()
 }
 
 fn places(program: &Program) -> Vec<&str> {
-    program.modules.iter().flat_map(|one| &one.functions).flat_map(|one| &one.places).map(|one| one.name.as_str()).collect()
+    program
+        .modules
+        .iter()
+        .flat_map(|one| &one.functions)
+        .flat_map(|one| &one.places)
+        .map(|one| one.name.as_str())
+        .collect()
 }
 
 /// CSRLIN was an implicit variable, `CSRLIN%`, always 0: BC printed 23
@@ -68,7 +82,8 @@ fn str_of_every_numeric_type_compiles() {
 #[test]
 fn a_function_keyword_without_an_intrinsic_is_refused() {
     for dialect in DIALECTS {
-        for (source, keyword) in [("PRINT DATE$\n", "DATE$"), ("x = ERDEV\n", "ERDEV"), ("x = VARPTR$(a)\n", "VARPTR$")] {
+        for (source, keyword) in [("PRINT DATE$\n", "DATE$"), ("x = ERDEV\n", "ERDEV"), ("x = VARPTR$(a)\n", "VARPTR$")]
+        {
             let error = parsed(source, dialect).expect_err(source);
             assert!(error.contains(&format!("{keyword} is not supported")), "{dialect}: {error}");
         }

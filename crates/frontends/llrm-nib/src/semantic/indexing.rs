@@ -14,16 +14,10 @@ impl<'a> FunctionCompiler<'a> {
     ) -> Result<(ElementType, ElementAt), Diagnostic> {
         if let Some(element) = self.heap_sequence(binding) {
             let pointer = self.string_pointer(binding, span)?;
-            return Ok((
-                element,
-                self.sequence_element_at(pointer, element, indices, span)?,
-            ));
+            return Ok((element, self.sequence_element_at(pointer, element, indices, span)?));
         }
         let Some((element, rank, shape)) = binding.type_.ranked() else {
-            return Err(Diagnostic::new(
-                span,
-                format!("binding {name:?} is not an array"),
-            ));
+            return Err(Diagnostic::new(span, format!("binding {name:?} is not an array")));
         };
         if indices.len() != usize::from(rank) {
             return Err(Diagnostic::new(
@@ -50,10 +44,7 @@ impl<'a> FunctionCompiler<'a> {
             Storage::Place(place) => ElementAt::Element(place, indices),
             Storage::Reference(pointer) => {
                 let Some(shape) = shape else {
-                    return Err(Diagnostic::new(
-                        span,
-                        "a reference to an array needs its shape",
-                    ));
+                    return Err(Diagnostic::new(span, "a reference to an array needs its shape"));
                 };
                 let strides = shape
                     .strides()
@@ -97,18 +88,13 @@ impl<'a> FunctionCompiler<'a> {
                     base: descriptor,
                     offset: descriptor::dim(axis, self.word_bytes()),
                     type_id: self.word_id(),
-                    inbounds: false, member: None,
+                    inbounds: false,
+                    member: None,
                 }],
                 None,
             );
-            let inner = TypedOperand {
-                operand: Some(strides[0].clone()),
-                type_name: self.word(),
-            };
-            let dim = TypedOperand {
-                operand: Some(hir::Operand::Value(dim)),
-                type_name: self.word(),
-            };
+            let inner = TypedOperand { operand: Some(strides[0].clone()), type_name: self.word() };
+            let dim = TypedOperand { operand: Some(hir::Operand::Value(dim)), type_name: self.word() };
             strides.insert(0, self.folded("mul", dim, inner, self.word()));
         }
         let flat = self.linear(indices, strides, span)?;
@@ -123,8 +109,7 @@ impl<'a> FunctionCompiler<'a> {
         strides: Vec<hir::Operand>,
         span: Span,
     ) -> Result<hir::Operand, Diagnostic> {
-        if let ([index], [hir::Operand::Constant(_, 1)]) = (indices.as_slice(), strides.as_slice())
-        {
+        if let ([index], [hir::Operand::Constant(_, 1)]) = (indices.as_slice(), strides.as_slice()) {
             return Ok(index.clone());
         }
         let typed = |this: &Self, operand: &hir::Operand| match operand {
@@ -140,14 +125,8 @@ impl<'a> FunctionCompiler<'a> {
         let index_name = self.word();
         let mut total: Option<hir::Operand> = None;
         for (index, stride) in indices.into_iter().zip(strides) {
-            let index = TypedOperand {
-                type_name: type_name_of(typed(self, &index)),
-                operand: Some(index),
-            };
-            let stride = TypedOperand {
-                type_name: type_name_of(typed(self, &stride)),
-                operand: Some(stride),
-            };
+            let index = TypedOperand { type_name: type_name_of(typed(self, &index)), operand: Some(index) };
+            let stride = TypedOperand { type_name: type_name_of(typed(self, &stride)), operand: Some(stride) };
             let index = self.converted(index, index_name, span)?;
             let stride = self.converted(stride, index_name, span)?;
             let term = self.folded("mul", index, stride, index_name);
@@ -155,14 +134,8 @@ impl<'a> FunctionCompiler<'a> {
                 None => term,
                 Some(sum) => self.folded(
                     "add",
-                    TypedOperand {
-                        operand: Some(sum),
-                        type_name: index_name,
-                    },
-                    TypedOperand {
-                        operand: Some(term),
-                        type_name: index_name,
-                    },
+                    TypedOperand { operand: Some(sum), type_name: index_name },
+                    TypedOperand { operand: Some(term), type_name: index_name },
                     index_name,
                 ),
             });
@@ -178,10 +151,7 @@ impl<'a> FunctionCompiler<'a> {
         right: TypedOperand,
         type_name: TypeName,
     ) -> hir::Operand {
-        let (left, right) = (
-            left.operand.expect("an operand"),
-            right.operand.expect("an operand"),
-        );
+        let (left, right) = (left.operand.expect("an operand"), right.operand.expect("an operand"));
         if let (hir::Operand::Constant(_, a), hir::Operand::Constant(_, b)) = (&left, &right) {
             let value = if op == "mul" { a * b } else { a + b };
             return hir::Operand::Constant(type_id(type_name), wrapped(value, type_name));
@@ -204,29 +174,21 @@ impl<'a> FunctionCompiler<'a> {
         let (binding, name) = self.sequence_of(base)?;
         let (element, at) = self.element_at(&binding, &name, indices, span)?;
         let ElementType::Scalar(element) = element else {
-            return Err(Diagnostic::new(
-                span,
-                "a struct array element must be used through one of its fields",
-            ));
+            return Err(Diagnostic::new(span, "a struct array element must be used through one of its fields"));
         };
         if expected.is_some_and(|one| one != element) {
             return Err(type_mismatch(span, expected.expect("checked"), element));
         }
         let result = self.value(element);
-        self.emit(
-            "load",
-            vec![result],
-            vec![at.operand(type_id(element))],
-            None,
-        );
-        Ok(TypedOperand {
-            operand: Some(hir::Operand::Value(result)),
-            type_name: element,
-        })
+        self.emit("load", vec![result], vec![at.operand(type_id(element))], None);
+        Ok(TypedOperand { operand: Some(hir::Operand::Value(result)), type_name: element })
     }
 
     /// The heap sequence's element, when `binding` holds a string or vec.
-    pub(super) fn heap_sequence(&self, binding: &Binding) -> Option<ElementType> {
+    pub(super) fn heap_sequence(
+        &self,
+        binding: &Binding,
+    ) -> Option<ElementType> {
         match binding.type_ {
             BindingType::Scalar(type_name) => self.types.sequence_element(type_name),
             _ => None,
@@ -234,7 +196,11 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// A string's or vec's pointer, read from where `binding` keeps it.
-    pub(super) fn string_pointer(&mut self, binding: &Binding, span: Span) -> Result<u32, Diagnostic> {
+    pub(super) fn string_pointer(
+        &mut self,
+        binding: &Binding,
+        span: Span,
+    ) -> Result<u32, Diagnostic> {
         let BindingType::Scalar(type_name) = binding.type_ else {
             return Err(Diagnostic::new(span, "not a heap sequence"));
         };
@@ -249,7 +215,8 @@ impl<'a> FunctionCompiler<'a> {
                         base: pointer,
                         offset: 0,
                         type_id: type_id(type_name),
-                        inbounds: false, member: None,
+                        inbounds: false,
+                        member: None,
                     }],
                     None,
                 );
@@ -264,7 +231,12 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    pub(super) fn slice_data_pointer(&mut self, descriptor: u32, element: ElementType, rank: u8) -> u32 {
+    pub(super) fn slice_data_pointer(
+        &mut self,
+        descriptor: u32,
+        element: ElementType,
+        rank: u8,
+    ) -> u32 {
         let pointer_type = self.types.pointer(element.id(), 0);
         let pointer = self.value_type(pointer_type);
         self.emit(
@@ -274,7 +246,8 @@ impl<'a> FunctionCompiler<'a> {
                 base: descriptor,
                 offset: descriptor::size(rank, self.word_bytes()),
                 type_id: pointer_type,
-                inbounds: false, member: None,
+                inbounds: false,
+                member: None,
             }],
             None,
         );
@@ -304,10 +277,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.emit(
                     "mul",
                     vec![scaled],
-                    vec![
-                        hir::Operand::Value(value),
-                        hir::Operand::Constant(index_type, i64::from(element_width)),
-                    ],
+                    vec![hir::Operand::Value(value), hir::Operand::Constant(index_type, i64::from(element_width))],
                     None,
                 );
                 hir::Operand::Value(scaled)
@@ -321,12 +291,7 @@ impl<'a> FunctionCompiler<'a> {
             .map(|one| one.type_id)
             .ok_or_else(|| Diagnostic::new(span, "array reference has no type"))?;
         let address = self.value_type(pointer_type);
-        self.emit(
-            "ptr_offset",
-            vec![address],
-            vec![hir::Operand::Value(pointer), byte_offset],
-            None,
-        );
+        self.emit("ptr_offset", vec![address], vec![hir::Operand::Value(pointer), byte_offset], None);
         // Every caller checked the index against the borrow's length.
         self.current_block_mut().instructions.last_mut().expect("the offset just made").inbounds = true;
         Ok(address)

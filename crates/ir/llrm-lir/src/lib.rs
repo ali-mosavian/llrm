@@ -13,9 +13,8 @@ use std::fmt;
 use std::hash::Hash;
 use std::sync::LazyLock;
 
-pub use llrm_omf::module::{Addr, Space};
 use iced_x86::Register;
-
+pub use llrm_omf::module::{Addr, Space};
 use llrm_support::pyrepr::{self, Repr};
 
 pub mod flag;
@@ -83,7 +82,10 @@ impl Address {
 impl Address {
     /// The same address, not necessarily spelled the same way: `==` less its encoding fields, which are the
     /// registers it is reached through, its scale, and the displacement of one that has an `addr`.
-    pub fn same_place(&self, other: &Self) -> bool {
+    pub fn same_place(
+        &self,
+        other: &Self,
+    ) -> bool {
         self.addr == other.addr && (self.addr.is_some() || self.offset == other.offset)
     }
 
@@ -91,7 +93,6 @@ impl Address {
     pub fn in_frame(&self) -> bool {
         _in_frame(self.addr, self.through, false)
     }
-
 }
 
 /// A memory operand.
@@ -121,7 +122,10 @@ impl Mem {
     /// The same cell, not necessarily spelled the same way: `==` less its encoding fields (`through`, `offset` of
     /// a cell that has an `addr`, `disp_width`, `index_through`, `exact`). What a caller means by "the same
     /// operand" when it asks of operands not yet emitted, or of one in two spellings.
-    pub fn same_place(&self, other: &Self) -> bool {
+    pub fn same_place(
+        &self,
+        other: &Self,
+    ) -> bool {
         self.addr == other.addr
             && self.width == other.width
             && self.base == other.base
@@ -133,11 +137,21 @@ impl Mem {
     }
 
     /// `self` is the word above `low`: the cell two bytes on, however either is spelled.
-    pub fn word_above(&self, low: &Self) -> bool {
-        self.same_place(&Self { addr: low.addr.map(|addr| addr.plus(2)), offset: if low.addr.is_some() { low.offset } else { low.offset + 2 }, ..low.clone() })
+    pub fn word_above(
+        &self,
+        low: &Self,
+    ) -> bool {
+        self.same_place(&Self {
+            addr: low.addr.map(|addr| addr.plus(2)),
+            offset: if low.addr.is_some() { low.offset } else { low.offset + 2 },
+            ..low.clone()
+        })
     }
 
-    pub const fn new(addr: Option<Addr>, width: u32) -> Self {
+    pub const fn new(
+        addr: Option<Addr>,
+        width: u32,
+    ) -> Self {
         Self {
             addr,
             width,
@@ -159,12 +173,18 @@ impl Mem {
     pub fn in_frame(&self) -> bool {
         _in_frame(self.addr, self.through, self.base.is_some())
     }
-
 }
 
-fn _in_frame(addr: Option<Addr>, through: Register, valued: bool) -> bool {
+fn _in_frame(
+    addr: Option<Addr>,
+    through: Register,
+    valued: bool,
+) -> bool {
     // A base value is the register's: the frame register is a frame only where nothing was given it.
-    addr.is_some_and(|addr| addr.space == Space::Frame || (addr.space == Space::Literal && !valued && matches!(through, Register::BP | Register::EBP)))
+    addr.is_some_and(|addr| {
+        addr.space == Space::Frame
+            || (addr.space == Space::Literal && !valued && matches!(through, Register::BP | Register::EBP))
+    })
 }
 
 /// An x87 stack position relative to the current top.
@@ -343,7 +363,10 @@ impl Operation {
 }
 
 impl fmt::Display for Operation {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(self.as_str())
     }
 }
@@ -363,7 +386,10 @@ pub struct Semantics {
 
 impl Semantics {
     /// The same instruction, its operands not necessarily spelled the same way (`Mem::same_place`).
-    pub fn same_meaning(&self, other: &Self) -> bool {
+    pub fn same_meaning(
+        &self,
+        other: &Self,
+    ) -> bool {
         let same = |left: &[Loc], right: &[Loc]| {
             left.len() == right.len()
                 && left.iter().zip(right).all(|pair| match pair {
@@ -372,18 +398,16 @@ impl Semantics {
                     (x, y) => x == y,
                 })
         };
-        self.op == other.op && self.name == other.name && self.target == other.target && self.indirect == other.indirect && same(&self.dests, &other.dests) && same(&self.sources, &other.sources)
+        self.op == other.op
+            && self.name == other.name
+            && self.target == other.target
+            && self.indirect == other.indirect
+            && same(&self.dests, &other.dests)
+            && same(&self.sources, &other.sources)
     }
 
     pub fn new(op: Operation) -> Self {
-        Self {
-            op,
-            name: None,
-            dests: Vec::new(),
-            sources: Vec::new(),
-            target: None,
-            indirect: false,
-        }
+        Self { op, name: None, dests: Vec::new(), sources: Vec::new(), target: None, indirect: false }
     }
 }
 
@@ -420,7 +444,10 @@ impl std::ops::Deref for Values {
 }
 
 impl PartialEq<Vec<Held>> for Values {
-    fn eq(&self, other: &Vec<Held>) -> bool {
+    fn eq(
+        &self,
+        other: &Vec<Held>,
+    ) -> bool {
         **self == **other
     }
 }
@@ -455,15 +482,16 @@ pub fn values(where_: &Loc) -> Values {
 }
 
 /// Python `mapped`: replace every SSA value nested in one selected operand.
-pub fn mapped<F>(where_: &Loc, mut made: F) -> Loc
+pub fn mapped<F>(
+    where_: &Loc,
+    mut made: F,
+) -> Loc
 where
     F: FnMut(&Held) -> Held,
 {
     match where_ {
         Loc::Held(held) => Loc::Held(made(held)),
-        Loc::Mem(memory)
-            if memory.base.is_some() || memory.selector.is_some() || memory.index.is_some() =>
-        {
+        Loc::Mem(memory) if memory.base.is_some() || memory.selector.is_some() || memory.index.is_some() => {
             let mut mapped = memory.clone();
             mapped.base = memory.base.as_ref().map(&mut made);
             mapped.index = memory.index.as_ref().map(&mut made);
@@ -475,7 +503,11 @@ where
 }
 
 /// Python `restoring`: one wide value returned to the two original halves.
-pub fn restoring(wide: Loc, low: Loc, high: Loc) -> Semantics {
+pub fn restoring(
+    wide: Loc,
+    low: Loc,
+    high: Loc,
+) -> Semantics {
     Semantics {
         op: Operation::Restore,
         name: Some("restore".to_owned()),
@@ -498,11 +530,12 @@ pub fn barrier(semantics: &Semantics) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::root;
+    use super::*;
 
-    /// An indexed access through a register that holds a value (`[ebp+edx-16]`, the frame register freed) is not a frame cell: relayout
-    /// moved its displacement by the frame's hole and nib's dictionary lookups read 16 bytes off (tests/run nib/flat_containers at -O2).
+    /// An indexed access through a register that holds a value (`[ebp+edx-16]`, the frame register freed) is not a
+    /// frame cell: relayout moved its displacement by the frame's hole and nib's dictionary lookups read 16 bytes
+    /// off (tests/run nib/flat_containers at -O2).
     #[test]
     fn a_literal_displacement_through_a_register_holding_a_value_is_not_in_the_frame() {
         let table = |base| Mem {
@@ -519,12 +552,9 @@ mod tests {
     #[test]
     fn root_normalises_every_sub_register_of_the_ax_pair() {
         // Port of tests/test_ir.py::test_root_normalises_every_sub_register_of_the_ax_pair.
-        for register in [
-            iced_x86::Register::AL,
-            iced_x86::Register::AH,
-            iced_x86::Register::AX,
-            iced_x86::Register::EAX,
-        ] {
+        for register in
+            [iced_x86::Register::AL, iced_x86::Register::AH, iced_x86::Register::AX, iced_x86::Register::EAX]
+        {
             assert_eq!(root(register), iced_x86::Register::EAX);
         }
     }
@@ -591,14 +621,7 @@ mod tests {
         memory.base = Some(held);
         memory.index = Some(Held { value: 8, width: 2 });
         memory.selector = Some(Held { value: 9, width: 2 });
-        assert_eq!(
-            values(&Loc::Mem(memory)),
-            vec![
-                held,
-                Held { value: 8, width: 2 },
-                Held { value: 9, width: 2 }
-            ],
-        );
+        assert_eq!(values(&Loc::Mem(memory)), vec![held, Held { value: 8, width: 2 }, Held { value: 9, width: 2 }],);
     }
 
     #[test]
@@ -610,33 +633,14 @@ mod tests {
         memory.index = Some(Held { value: 3, width: 2 });
         memory.through = iced_x86::Register::BX;
 
-        let Loc::Mem(mapped_memory) = mapped(&Loc::Mem(memory.clone()), |held| Held {
-            value: held.value + 10,
-            width: held.width,
-        }) else {
+        let Loc::Mem(mapped_memory) =
+            mapped(&Loc::Mem(memory.clone()), |held| Held { value: held.value + 10, width: held.width })
+        else {
             panic!("a memory operand remains memory");
         };
-        assert_eq!(
-            mapped_memory.base,
-            Some(Held {
-                value: 11,
-                width: 2
-            })
-        );
-        assert_eq!(
-            mapped_memory.index,
-            Some(Held {
-                value: 13,
-                width: 2
-            })
-        );
-        assert_eq!(
-            mapped_memory.selector,
-            Some(Held {
-                value: 12,
-                width: 2
-            })
-        );
+        assert_eq!(mapped_memory.base, Some(Held { value: 11, width: 2 }));
+        assert_eq!(mapped_memory.index, Some(Held { value: 13, width: 2 }));
+        assert_eq!(mapped_memory.selector, Some(Held { value: 12, width: 2 }));
         assert_eq!(mapped_memory.through, memory.through);
         assert_eq!(mapped_memory.addr, memory.addr);
     }
@@ -685,10 +689,7 @@ mod tests {
             memory_complete: true,
         };
         assert!(effects.touches_memory());
-        assert_eq!(
-            effects.flags_written.bits(),
-            Flag::CF.bits() | Flag::ZF.bits()
-        );
+        assert_eq!(effects.flags_written.bits(), Flag::CF.bits() | Flag::ZF.bits());
     }
 
     #[test]
@@ -716,7 +717,10 @@ fn register_repr(register: Register) -> String {
 impl Operation {
     /// An x87 stack instruction.
     pub const fn is_x87(self) -> bool {
-        matches!(self, Self::FloatLoad | Self::FloatStore | Self::FloatArith | Self::FloatArithPop | Self::FloatUnary)
+        matches!(
+            self,
+            Self::FloatLoad | Self::FloatStore | Self::FloatArith | Self::FloatArithPop | Self::FloatUnary
+        )
     }
 
     /// The member name.
@@ -866,7 +870,10 @@ mod repr_tests {
             "Mem(addr=None, width=2, through=0, offset=0, disp_width=0, base=None, stack_argument=False, \
              selector=None, index=None, scale=1, index_through=0)"
         );
-        assert_eq!(Address::new(None).repr(), "Address(addr=None, through=0, index=0, scale=1, offset=0, disp_width=0)");
+        assert_eq!(
+            Address::new(None).repr(),
+            "Address(addr=None, through=0, index=0, scale=1, offset=0, disp_width=0)"
+        );
         assert_eq!(St { index: 1 }.repr(), "St(index=1)");
         assert_eq!(Held { value: 3, width: 2 }.repr(), "Held(value=3, width=2)");
         let semantics = Semantics {

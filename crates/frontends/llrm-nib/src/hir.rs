@@ -128,7 +128,12 @@ pub struct CallSite {
 
 impl CallSite {
     /// A call of `count` arguments, pushed as `abi` orders them.
-    pub fn new(instruction: u32, callee: u32, count: u32, abi: Abi) -> Self {
+    pub fn new(
+        instruction: u32,
+        callee: u32,
+        count: u32,
+        abi: Abi,
+    ) -> Self {
         Self {
             instruction,
             order: if abi.callee_cleans() { (0..count).collect() } else { (0..count).rev().collect() },
@@ -175,14 +180,48 @@ impl ProcedureAbi {
     /// A function of `abi`, taking `argument_bytes`, when it differs from a
     /// native one: it removes its arguments, or it returns with `iret`.
     /// An unexported one states no distance (`any`): only its own module calls it.
-    pub fn of(abi: Abi, argument_bytes: u32, exported: bool) -> Option<Self> {
+    pub fn of(
+        abi: Abi,
+        argument_bytes: u32,
+        exported: bool,
+    ) -> Option<Self> {
         let distance = if exported { "far" } else { "any" };
         match abi {
-            Abi::C | Abi::Cdecl16 | Abi::Cdecl32 => (!exported).then(|| Self { distance, cleanup: "caller", parameter_bytes: 0, float_return: abi.float_return(), convention: None }),
-            Abi::Pascal16 | Abi::Basic(_) => Some(Self { distance, cleanup: "callee", parameter_bytes: argument_bytes, float_return: abi.float_return(), convention: None }),
-            Abi::Watcall32 | Abi::Watcall16 => Some(Self { distance, cleanup: "callee", parameter_bytes: 0, float_return: abi.float_return(), convention: abi.convention() }),
-            Abi::Sysv32 | Abi::Ia16 | Abi::Regparm3 => Some(Self { distance, cleanup: "caller", parameter_bytes: 0, float_return: abi.float_return(), convention: abi.convention() }),
-            Abi::Interrupt16 => Some(Self { distance: "interrupt", cleanup: "callee", parameter_bytes: 0, float_return: abi.float_return(), convention: None }),
+            Abi::C | Abi::Cdecl16 | Abi::Cdecl32 => (!exported).then(|| Self {
+                distance,
+                cleanup: "caller",
+                parameter_bytes: 0,
+                float_return: abi.float_return(),
+                convention: None,
+            }),
+            Abi::Pascal16 | Abi::Basic(_) => Some(Self {
+                distance,
+                cleanup: "callee",
+                parameter_bytes: argument_bytes,
+                float_return: abi.float_return(),
+                convention: None,
+            }),
+            Abi::Watcall32 | Abi::Watcall16 => Some(Self {
+                distance,
+                cleanup: "callee",
+                parameter_bytes: 0,
+                float_return: abi.float_return(),
+                convention: abi.convention(),
+            }),
+            Abi::Sysv32 | Abi::Ia16 | Abi::Regparm3 => Some(Self {
+                distance,
+                cleanup: "caller",
+                parameter_bytes: 0,
+                float_return: abi.float_return(),
+                convention: abi.convention(),
+            }),
+            Abi::Interrupt16 => Some(Self {
+                distance: "interrupt",
+                cleanup: "callee",
+                parameter_bytes: 0,
+                float_return: abi.float_return(),
+                convention: None,
+            }),
         }
     }
 }
@@ -225,12 +264,7 @@ impl Program {
             booleans(&mut out, callable.parameter_types.len(), false);
             write!(out, "],\"by_value\":[").unwrap();
             booleans(&mut out, callable.parameter_types.len(), true);
-            write!(
-                out,
-                "],\"defined\":{},\"id\":{},\"name\":",
-                callable.defined, callable.id
-            )
-            .unwrap();
+            write!(out, "],\"defined\":{},\"id\":{},\"name\":", callable.defined, callable.id).unwrap();
             string(&mut out, &callable.name);
             out.push_str(",\"parameter_types\":[");
             numbers(&mut out, &callable.parameter_types);
@@ -243,14 +277,10 @@ impl Program {
         out.push_str("],\"data\":[");
         for (index, object) in self.data.iter().enumerate() {
             comma(&mut out, index);
-            write!(out, "{{\"address\":\"{}\",\"bytes\":[", if object.segment.is_some() { "huge" } else { "near" }).unwrap();
+            write!(out, "{{\"address\":\"{}\",\"bytes\":[", if object.segment.is_some() { "huge" } else { "near" })
+                .unwrap();
             bytes(&mut out, &object.bytes);
-            write!(
-                out,
-                "],\"id\":{},\"linkage\":\"internal\",\"name\":",
-                object.id
-            )
-            .unwrap();
+            write!(out, "],\"id\":{},\"linkage\":\"internal\",\"name\":", object.id).unwrap();
             string(&mut out, &object.name);
             if let Some(segment) = &object.segment {
                 out.push_str(",\"segment\":");
@@ -258,7 +288,8 @@ impl Program {
             }
             write!(out, ",\"readonly\":{},\"relocations\":[", object.readonly).unwrap();
             if let Some(callable) = object.code {
-                write!(out, "{{\"addend\":0,\"address\":\"far\",\"at\":0,\"code\":true,\"target\":{callable}}}").unwrap();
+                write!(out, "{{\"addend\":0,\"address\":\"far\",\"at\":0,\"code\":true,\"target\":{callable}}}")
+                    .unwrap();
             }
             out.push_str("]}");
         }
@@ -275,19 +306,41 @@ impl Program {
             // A reference's place stays inside what it refers to, where the language checked it.
             for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
                 // A bool is 0 or 1, whoever stored it.
-                let loaded = instruction.op == "load" && instruction.results.first().is_some_and(|result| {
-                    function.values.iter().find(|one| one.id == *result).and_then(|one| self.types.iter().find(|ty| ty.id == one.type_id)).is_some_and(|ty| ty.kind == "boolean")
-                });
+                let loaded = instruction.op == "load"
+                    && instruction.results.first().is_some_and(|result| {
+                        function
+                            .values
+                            .iter()
+                            .find(|one| one.id == *result)
+                            .and_then(|one| self.types.iter().find(|ty| ty.id == one.type_id))
+                            .is_some_and(|ty| ty.kind == "boolean")
+                    });
                 if loaded {
-                    stated.state(llrm_core::hir::facts::Subject::Instruction { function: i64::from(function.id), id: i64::from(instruction.id) }, llrm_mir::facts::Fact::Range(llrm_mir::facts::Bounds { lo: 0, hi: 1 }));
+                    stated.state(
+                        llrm_core::hir::facts::Subject::Instruction {
+                            function: i64::from(function.id),
+                            id: i64::from(instruction.id),
+                        },
+                        llrm_mir::facts::Fact::Range(llrm_mir::facts::Bounds { lo: 0, hi: 1 }),
+                    );
                 }
                 if instruction.inbounds {
-                    stated.state(llrm_core::hir::facts::Subject::Instruction { function: i64::from(function.id), id: i64::from(instruction.id) }, llrm_mir::facts::Fact::InBounds);
+                    stated.state(
+                        llrm_core::hir::facts::Subject::Instruction {
+                            function: i64::from(function.id),
+                            id: i64::from(instruction.id),
+                        },
+                        llrm_mir::facts::Fact::InBounds,
+                    );
                 }
                 for (index, operand) in instruction.operands.iter().enumerate() {
                     if matches!(operand, Operand::IndirectPlace { inbounds: true, .. }) {
                         stated.state(
-                            llrm_core::hir::facts::Subject::Operand { function: i64::from(function.id), instruction: i64::from(instruction.id), operand: index as i64 },
+                            llrm_core::hir::facts::Subject::Operand {
+                                function: i64::from(function.id),
+                                instruction: i64::from(instruction.id),
+                                operand: index as i64,
+                            },
                             llrm_mir::facts::Fact::InBounds,
                         );
                     }
@@ -338,7 +391,10 @@ impl Program {
     }
 }
 
-fn function_json(out: &mut String, function: &Function) {
+fn function_json(
+    out: &mut String,
+    function: &Function,
+) {
     match &function.abi {
         Some(ProcedureAbi { distance, cleanup, parameter_bytes, float_return, convention }) => write!(
             out,
@@ -371,12 +427,7 @@ fn function_json(out: &mut String, function: &Function) {
             } else {
                 out.push_str("null");
             }
-            write!(
-                out,
-                ",\"id\":{},\"op\":\"{}\",\"operands\":[",
-                instruction.id, instruction.op
-            )
-            .unwrap();
+            write!(out, ",\"id\":{},\"op\":\"{}\",\"operands\":[", instruction.id, instruction.op).unwrap();
             operands(out, &instruction.operands);
             out.push_str("],\"pure\":false,\"results\":[");
             numbers(out, &instruction.results);
@@ -424,12 +475,7 @@ fn function_json(out: &mut String, function: &Function) {
     out.push_str("],\"places\":[");
     for (index, place) in function.places.iter().enumerate() {
         comma(out, index);
-        write!(
-            out,
-            "{{\"address\":\"near\",\"extent\":{},\"id\":{},\"name\":",
-            place.extent, place.id
-        )
-        .unwrap();
+        write!(out, "{{\"address\":\"near\",\"extent\":{},\"id\":{},\"name\":", place.extent, place.id).unwrap();
         string(out, &place.name);
         write!(
             out,
@@ -438,12 +484,7 @@ fn function_json(out: &mut String, function: &Function) {
         )
         .unwrap();
     }
-    write!(
-        out,
-        "],\"result_type\":{},\"values\":[",
-        function.result_type
-    )
-    .unwrap();
+    write!(out, "],\"result_type\":{},\"values\":[", function.result_type).unwrap();
     for (index, value) in function.values.iter().enumerate() {
         comma(out, index);
         write!(out, "{{\"id\":{},\"type\":{}}}", value.id, value.type_id).unwrap();
@@ -451,104 +492,93 @@ fn function_json(out: &mut String, function: &Function) {
     out.push_str("]}");
 }
 
-fn operands(out: &mut String, values: &[Operand]) {
+fn operands(
+    out: &mut String,
+    values: &[Operand],
+) {
     for (index, operand) in values.iter().enumerate() {
         comma(out, index);
         match operand {
-            Operand::Value(value) => {
-                write!(out, "{{\"tag\":\"value\",\"value\":{value}}}").unwrap()
+            Operand::Value(value) => write!(out, "{{\"tag\":\"value\",\"value\":{value}}}").unwrap(),
+            Operand::Constant(type_id, value) => {
+                write!(out, "{{\"tag\":\"constant\",\"type\":{type_id},\"value\":{value}}}").unwrap()
             }
-            Operand::Constant(type_id, value) => write!(
-                out,
-                "{{\"tag\":\"constant\",\"type\":{type_id},\"value\":{value}}}"
-            )
-            .unwrap(),
-            Operand::Place(place) => {
-                write!(out, "{{\"place\":{place},\"tag\":\"place\"}}").unwrap()
-            }
+            Operand::Place(place) => write!(out, "{{\"place\":{place},\"tag\":\"place\"}}").unwrap(),
             Operand::ArrayElement(place, indices) => {
                 write!(out, "{{\"indices\":[").unwrap();
                 operands(out, indices);
                 write!(out, "],\"place\":{place},\"tag\":\"array_element\"}}").unwrap();
             }
-            Operand::ProjectedPlace {
-                place,
-                indices,
-                offset,
-                type_id,
-                member,
-            } => {
+            Operand::ProjectedPlace { place, indices, offset, type_id, member } => {
                 write!(out, "{{\"indices\":[").unwrap();
                 operands(out, indices);
                 write!(out, "],").unwrap();
                 if let Some((owner, at)) = member {
                     write!(out, "\"member\":{{\"offset\":{at},\"owner\":{owner}}},").unwrap();
                 }
-                write!(
-                    out,
-                    "\"offset\":{offset},\"place\":{place},\"tag\":\"projection\",\"type\":{type_id}}}"
-                )
-                .unwrap();
+                write!(out, "\"offset\":{offset},\"place\":{place},\"tag\":\"projection\",\"type\":{type_id}}}")
+                    .unwrap();
             }
-            Operand::IndirectPlace {
-                base,
-                offset,
-                type_id,
-                inbounds: _,
-                member,
-            } => {
+            Operand::IndirectPlace { base, offset, type_id, inbounds: _, member } => {
                 write!(out, "{{\"base\":{base},").unwrap();
                 if let Some((owner, at)) = member {
                     write!(out, "\"member\":{{\"offset\":{at},\"owner\":{owner}}},").unwrap();
                 }
-                write!(
-                    out,
-                    "\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":false}}"
-                )
-                .unwrap()
+                write!(out, "\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":false}}").unwrap()
             }
-            Operand::DescriptorPlace {
-                base,
-                field,
-                type_id,
-            } => write!(
-                out,
-                "{{\"base\":{base},\"field\":\"{field}\",\"tag\":\"descriptor\",\"type\":{type_id}}}"
-            )
-            .unwrap(),
+            Operand::DescriptorPlace { base, field, type_id } => {
+                write!(out, "{{\"base\":{base},\"field\":\"{field}\",\"tag\":\"descriptor\",\"type\":{type_id}}}")
+                    .unwrap()
+            }
         }
     }
 }
 
-fn numbers(out: &mut String, values: &[u32]) {
+fn numbers(
+    out: &mut String,
+    values: &[u32],
+) {
     for (index, value) in values.iter().enumerate() {
         comma(out, index);
         write!(out, "{value}").unwrap();
     }
 }
 
-fn strings(out: &mut String, values: &[String]) {
+fn strings(
+    out: &mut String,
+    values: &[String],
+) {
     for (index, value) in values.iter().enumerate() {
         comma(out, index);
         string(out, value);
     }
 }
 
-fn bytes(out: &mut String, values: &[u8]) {
+fn bytes(
+    out: &mut String,
+    values: &[u8],
+) {
     for (index, value) in values.iter().enumerate() {
         comma(out, index);
         write!(out, "{value}").unwrap();
     }
 }
 
-fn booleans(out: &mut String, count: usize, value: bool) {
+fn booleans(
+    out: &mut String,
+    count: usize,
+    value: bool,
+) {
     for index in 0..count {
         comma(out, index);
         out.push_str(if value { "true" } else { "false" });
     }
 }
 
-fn optional_number(out: &mut String, value: Option<u32>) {
+fn optional_number(
+    out: &mut String,
+    value: Option<u32>,
+) {
     if let Some(value) = value {
         write!(out, "{value}").unwrap();
     } else {
@@ -556,13 +586,19 @@ fn optional_number(out: &mut String, value: Option<u32>) {
     }
 }
 
-fn comma(out: &mut String, index: usize) {
+fn comma(
+    out: &mut String,
+    index: usize,
+) {
     if index != 0 {
         out.push(',');
     }
 }
 
-fn string(out: &mut String, value: &str) {
+fn string(
+    out: &mut String,
+    value: &str,
+) {
     out.push('"');
     for character in value.chars() {
         match character {

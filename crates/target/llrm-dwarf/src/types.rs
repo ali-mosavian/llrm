@@ -1,6 +1,8 @@
 //! The DIE tree of `Info`: the compile unit, its types, globals and functions.
 
-use llrm_object::debug::{self as model, Block, FrameBase, Function, Info, Kind, Language, Location, Reach, Scalar, Type, Variable};
+use llrm_object::debug::{
+    self as model, Block, FrameBase, Function, Info, Kind, Language, Location, Reach, Scalar, Type, Variable,
+};
 use llrm_object::{Binding, Object, Unsupported};
 
 use crate::die::*;
@@ -52,13 +54,19 @@ struct Tree<'a> {
 }
 
 impl Tree<'_> {
-    fn push(&mut self, die: Die) -> usize {
+    fn push(
+        &mut self,
+        die: Die,
+    ) -> usize {
         self.dies.push(die);
         self.dies.len() - 1
     }
 
     /// The DIE of type `index`, None for void.
-    fn ty(&self, index: usize) -> Result<Option<usize>, Unsupported> {
+    fn ty(
+        &self,
+        index: usize,
+    ) -> Result<Option<usize>, Unsupported> {
         if let Some(Some(why)) = self.bad.get(index) {
             return refused(why);
         }
@@ -68,20 +76,31 @@ impl Tree<'_> {
         })
     }
 
-    fn typed(&self, die: &mut Die, index: usize) -> Result<(), Unsupported> {
+    fn typed(
+        &self,
+        die: &mut Die,
+        index: usize,
+    ) -> Result<(), Unsupported> {
         if let Some(target) = self.ty(index)? {
             die.attrs.push((AT_TYPE, Value::Ref(target)));
         }
         Ok(())
     }
 
-    fn address(&self, section: usize, offset: usize) -> Result<Value, Unsupported> {
+    fn address(
+        &self,
+        section: usize,
+        offset: usize,
+    ) -> Result<Value, Unsupported> {
         let (symbol, base) = crate::anchor(self.object, section)?;
         Ok(Value::Addr { symbol, delta: offset as i64 - base as i64 })
     }
 
     /// Type `index`'s DIE, which sits at `1 + index`.
-    fn describe(&mut self, index: usize) -> Result<(), Unsupported> {
+    fn describe(
+        &mut self,
+        index: usize,
+    ) -> Result<(), Unsupported> {
         let one = self.info.types[index].clone();
         let mut die = match &one {
             Type::Scalar(Scalar::Void) => return Ok(()),
@@ -89,7 +108,11 @@ impl Tree<'_> {
             Type::Basic { name, scalar } => base(*scalar, Some(name))?,
             Type::FixedString(_) => return refused("a BASIC STRING * n has no DWARF type"),
             Type::Array { element, bytes: Some(bytes) } => {
-                let each = self.info.size_of(*element).filter(|&one| one > 0).ok_or_else(|| Unsupported("DWARF: an array of an element with no size".into()))?;
+                let each = self
+                    .info
+                    .size_of(*element)
+                    .filter(|&one| one > 0)
+                    .ok_or_else(|| Unsupported("DWARF: an array of an element with no size".into()))?;
                 let mut die = Die::new(TAG_ARRAY);
                 self.typed(&mut die, *element)?;
                 let mut range = Die::new(TAG_SUBRANGE);
@@ -98,7 +121,9 @@ impl Tree<'_> {
                 die.children.push(at);
                 die
             }
-            Type::Array { bytes: None, .. } => return refused("a BASIC array is its descriptor's: it has no DWARF type"),
+            Type::Array { bytes: None, .. } => {
+                return refused("a BASIC array is its descriptor's: it has no DWARF type");
+            }
             Type::Struct { name, bytes, fields, union } => {
                 let mut die = Die::new(if *union { TAG_UNION } else { TAG_STRUCTURE });
                 if !name.is_empty() {
@@ -113,7 +138,14 @@ impl Tree<'_> {
                         None => member.attrs.push((AT_DATA_MEMBER_LOCATION, Value::Udata(u64::from(field.offset)))),
                         Some((start, width)) => {
                             member.attrs.push((AT_BIT_SIZE, Value::Udata(u64::from(width))));
-                            member.attrs.push((AT_DATA_BIT_OFFSET, Value::Udata(u64::from(field.offset) * 8 + u64::from(start))));
+                            member
+                                .attrs
+                                .push(
+                                    (
+                                        AT_DATA_BIT_OFFSET,
+                                        Value::Udata(u64::from(field.offset) * 8 + u64::from(start)),
+                                    ),
+                                );
                         }
                     }
                     let at = self.push(member);
@@ -162,8 +194,14 @@ impl Tree<'_> {
             }
             Type::Qualified { target, constant, volatile } => {
                 // const over volatile over the target; the outer one is this type's DIE.
-                let tags: Vec<u16> = [(*constant, TAG_CONST), (*volatile, TAG_VOLATILE)].into_iter().filter(|(on, _)| *on).map(|(_, tag)| tag).collect();
-                let Some((&first, rest)) = tags.split_first() else { return refused("a qualified type with no qualifier") };
+                let tags: Vec<u16> = [(*constant, TAG_CONST), (*volatile, TAG_VOLATILE)]
+                    .into_iter()
+                    .filter(|(on, _)| *on)
+                    .map(|(_, tag)| tag)
+                    .collect();
+                let Some((&first, rest)) = tags.split_first() else {
+                    return refused("a qualified type with no qualifier");
+                };
                 let mut inner = self.ty(*target)?;
                 for &tag in rest.iter().rev() {
                     let mut die = Die::new(tag);
@@ -199,7 +237,10 @@ impl Tree<'_> {
     }
 
     /// The expression of where a frame cell or a register is.
-    fn expression(&self, location: &Location) -> Result<Vec<u8>, Unsupported> {
+    fn expression(
+        &self,
+        location: &Location,
+    ) -> Result<Vec<u8>, Unsupported> {
         match location {
             Location::Frame { disp } => {
                 let from_frame_base = match self.info.frame_base {
@@ -237,16 +278,26 @@ impl Tree<'_> {
     }
 
     /// The expression of where `location` is.
-    fn location(&mut self, location: &Location) -> Result<Value, Unsupported> {
+    fn location(
+        &mut self,
+        location: &Location,
+    ) -> Result<Value, Unsupported> {
         Ok(match location {
-            Location::Frame { .. } | Location::Register(_) | Location::Relative { .. } | Location::Constant(_) | Location::Pieces(_) => Value::Expr(self.expression(location)?),
+            Location::Frame { .. }
+            | Location::Register(_)
+            | Location::Relative { .. }
+            | Location::Constant(_)
+            | Location::Pieces(_) => Value::Expr(self.expression(location)?),
             Location::Static { symbol, disp } => Value::ExprAddr { symbol: *symbol, delta: *disp },
             Location::List(entries) => Value::LocList(self.list(entries)?),
         })
     }
 
     /// A list of where a value is over each range of the code, at its place in the section of lists.
-    fn list(&mut self, entries: &[(model::Range, Location)]) -> Result<u32, Unsupported> {
+    fn list(
+        &mut self,
+        entries: &[(model::Range, Location)],
+    ) -> Result<u32, Unsupported> {
         let (version, address) = (self.version, self.address);
         if version >= 5 && self.locations.at() == 0 {
             // unit_length, version, address size, segment selector size, offset entry count.
@@ -271,11 +322,15 @@ impl Tree<'_> {
                 self.locations.uleb(range.length as u64);
                 self.locations.uleb(expression.len() as u64);
             } else {
-                let Some(base) = base.filter(|one| one.section == range.section) else { return refused("a location list of a unit with no one code range") };
-                let (begin, end) = ((range.offset - base.offset) as u64, (range.offset - base.offset + range.length) as u64);
+                let Some(base) = base.filter(|one| one.section == range.section) else {
+                    return refused("a location list of a unit with no one code range");
+                };
+                let (begin, end) =
+                    ((range.offset - base.offset) as u64, (range.offset - base.offset + range.length) as u64);
                 self.locations.bytes.extend(&begin.to_le_bytes()[..address]);
                 self.locations.bytes.extend(&end.to_le_bytes()[..address]);
-                self.locations.u16(u16::try_from(expression.len()).or_else(|_| refused("a location expression of 64K"))?);
+                self.locations
+                    .u16(u16::try_from(expression.len()).or_else(|_| refused("a location expression of 64K"))?);
             }
             self.locations.bytes.extend(expression);
         }
@@ -288,7 +343,10 @@ impl Tree<'_> {
     }
 
     /// `DW_OP_reg`, of the register `name`.
-    fn register(&self, name: &str) -> Result<Vec<u8>, Unsupported> {
+    fn register(
+        &self,
+        name: &str,
+    ) -> Result<Vec<u8>, Unsupported> {
         let number = self.info.registers.iter().find(|one| one.name == name).and_then(|one| one.dwarf);
         match number {
             Some(number) if number < 32 => Ok(vec![0x50 + number as u8]),
@@ -297,7 +355,11 @@ impl Tree<'_> {
         }
     }
 
-    fn variable(&mut self, one: &Variable, global: bool) -> Result<usize, Unsupported> {
+    fn variable(
+        &mut self,
+        one: &Variable,
+        global: bool,
+    ) -> Result<usize, Unsupported> {
         let mut die = Die::new(if one.kind == Kind::Parameter { TAG_FORMAL_PARAMETER } else { TAG_VARIABLE });
         die.attrs.push((AT_NAME, Value::Str(one.name.clone())));
         self.typed(&mut die, one.r#type)?;
@@ -313,7 +375,12 @@ impl Tree<'_> {
         Ok(self.push(die))
     }
 
-    fn scope(&mut self, die: &mut Die, variables: &[Variable], blocks: &[Block]) -> Result<(), Unsupported> {
+    fn scope(
+        &mut self,
+        die: &mut Die,
+        variables: &[Variable],
+        blocks: &[Block],
+    ) -> Result<(), Unsupported> {
         for one in variables {
             let at = self.variable(one, false)?;
             die.children.push(at);
@@ -330,8 +397,13 @@ impl Tree<'_> {
         Ok(())
     }
 
-    fn function(&mut self, one: &Function) -> Result<usize, Unsupported> {
-        let [range] = one.ranges[..] else { return refused(format!("function {} has {} ranges: one is written", one.name, one.ranges.len())) };
+    fn function(
+        &mut self,
+        one: &Function,
+    ) -> Result<usize, Unsupported> {
+        let [range] = one.ranges[..] else {
+            return refused(format!("function {} has {} ranges: one is written", one.name, one.ranges.len()));
+        };
         let mut die = Die::new(TAG_SUBPROGRAM);
         if !one.name.is_empty() {
             die.attrs.push((AT_NAME, Value::Str(one.name.clone())));
@@ -345,17 +417,29 @@ impl Tree<'_> {
         }
         die.attrs.push((AT_LOW_PC, self.address(range.section, range.offset)?));
         die.attrs.push((AT_HIGH_PC, Value::Len(range.length as u32)));
-        let framed = one.variables.iter().chain(one.blocks.iter().flat_map(|block| &block.variables)).any(|variable| match &variable.location {
-            Location::Frame { .. } => true,
-            Location::List(entries) => entries.iter().any(|(_, place)| matches!(place, Location::Frame { .. })),
-            _ => false,
-        });
+        let framed = one
+            .variables
+            .iter()
+            .chain(one.blocks.iter().flat_map(|block| &block.variables))
+            .any(
+                |variable| match &variable.location {
+                    Location::Frame { .. } => true,
+                    Location::List(entries) => entries.iter().any(|(_, place)| matches!(place, Location::Frame { .. })),
+                    _ => false,
+                },
+            );
         if framed {
             let base = match self.info.frame_base {
                 // DW_OP_call_frame_cfa.
                 FrameBase::Cfa { .. } => vec![0x9C],
                 FrameBase::Register => {
-                    let base = self.info.registers.iter().find(|register| register.name == self.info.frame_register).map(|register| register.name.clone()).ok_or_else(|| Unsupported("DWARF: no frame register".into()))?;
+                    let base = self
+                        .info
+                        .registers
+                        .iter()
+                        .find(|register| register.name == self.info.frame_register)
+                        .map(|register| register.name.clone())
+                        .ok_or_else(|| Unsupported("DWARF: no frame register".into()))?;
                     self.register(&base)?
                 }
             };
@@ -367,13 +451,29 @@ impl Tree<'_> {
 }
 
 /// A base type of `scalar`, named as the source spells it where it says.
-fn base(scalar: Scalar, spelling: Option<&str>) -> Result<Die, Unsupported> {
+fn base(
+    scalar: Scalar,
+    spelling: Option<&str>,
+) -> Result<Die, Unsupported> {
     let (name, encoding, bytes): (String, u8, u8) = match scalar {
         Scalar::Void => unreachable!("void has no DIE"),
         Scalar::Bool { bytes } => ("bool".into(), ATE_BOOLEAN, bytes),
         Scalar::Char => ("char".into(), ATE_SIGNED_CHAR, 1),
-        Scalar::Int { bytes, signed } => (format!("{}int{}_t", if signed { "" } else { "u" }, u32::from(bytes) * 8), if signed { ATE_SIGNED } else { ATE_UNSIGNED }, bytes),
-        Scalar::Float { bytes } => (match bytes { 4 => "float", 8 => "double", _ => "long double" }.into(), ATE_FLOAT, bytes),
+        Scalar::Int { bytes, signed } => (
+            format!("{}int{}_t", if signed { "" } else { "u" }, u32::from(bytes) * 8),
+            if signed { ATE_SIGNED } else { ATE_UNSIGNED },
+            bytes,
+        ),
+        Scalar::Float { bytes } => (
+            match bytes {
+                4 => "float",
+                8 => "double",
+                _ => "long double",
+            }
+            .into(),
+            ATE_FLOAT,
+            bytes,
+        ),
         Scalar::Currency => return refused("BASIC's CURRENCY has no DWARF type"),
         Scalar::BasicString { .. } => return refused("BASIC's STRING has no DWARF type"),
     };
@@ -391,14 +491,30 @@ fn references(one: &Type) -> Vec<usize> {
         Type::Array { element, .. } => vec![*element],
         Type::Struct { fields, .. } => fields.iter().map(|field| field.r#type).collect(),
         Type::Enum { underlying, .. } => vec![*underlying],
-        Type::Pointer { target, .. } | Type::Reference(target) | Type::Typedef { target, .. } | Type::Qualified { target, .. } => vec![*target],
+        Type::Pointer { target, .. }
+        | Type::Reference(target)
+        | Type::Typedef { target, .. }
+        | Type::Qualified { target, .. } => vec![*target],
         Type::Procedure { result, parameters, .. } => result.iter().chain(parameters).copied().collect(),
     }
 }
 
 /// The tree: the compile unit is DIE 0 and type `i` is DIE `1 + i`.
-pub fn tree(object: &Object, info: &Info, version: u16, address: usize) -> Result<(Vec<Die>, crate::buffer::Done), Unsupported> {
-    let mut tree = Tree { object, info, dies: Vec::new(), bad: vec![None; info.types.len()], version, address, locations: crate::buffer::Buf::default() };
+pub fn tree(
+    object: &Object,
+    info: &Info,
+    version: u16,
+    address: usize,
+) -> Result<(Vec<Die>, crate::buffer::Done), Unsupported> {
+    let mut tree = Tree {
+        object,
+        info,
+        dies: Vec::new(),
+        bad: vec![None; info.types.len()],
+        version,
+        address,
+        locations: crate::buffer::Buf::default(),
+    };
     let mut unit = Die::new(TAG_COMPILE_UNIT);
     unit.attrs.push((AT_PRODUCER, Value::Str("llrm".into())));
     unit.attrs.push((AT_LANGUAGE, Value::U16(language(info.language))));
@@ -426,7 +542,10 @@ pub fn tree(object: &Object, info: &Info, version: u16, address: usize) -> Resul
         let mut changed = false;
         for index in 0..info.types.len() {
             if tree.bad[index].is_none() {
-                if let Some(why) = references(&info.types[index]).into_iter().find_map(|target| tree.bad.get(target).cloned().flatten()) {
+                if let Some(why) = references(&info.types[index])
+                    .into_iter()
+                    .find_map(|target| tree.bad.get(target).cloned().flatten())
+                {
                     tree.bad[index] = Some(why);
                     changed = true;
                 }

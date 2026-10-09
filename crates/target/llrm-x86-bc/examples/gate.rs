@@ -23,7 +23,8 @@ fn shape(reason: &str) -> String {
 fn main() {
     let arg = PathBuf::from(std::env::args().nth(1).expect("a directory or object"));
     let single = arg.is_file();
-    let mut paths: Vec<PathBuf> = if single { vec![arg] } else { std::fs::read_dir(&arg).unwrap().map(|one| one.unwrap().path()).collect() };
+    let mut paths: Vec<PathBuf> =
+        if single { vec![arg] } else { std::fs::read_dir(&arg).unwrap().map(|one| one.unwrap().path()).collect() };
     paths.sort();
     let (mut verified, mut refused, mut broken, mut modules, mut panics) = (0, 0, 0, 0, 0);
     let mut reasons: BTreeMap<String, (usize, String)> = BTreeMap::new();
@@ -34,7 +35,9 @@ fn main() {
     for path in paths {
         let Ok(Some(found)) = llrm_omf::module::load(&path) else { continue };
         let file = path.file_name().unwrap().to_string_lossy().into_owned();
-        let raised = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| llrm_x86_bc::raise_each(&found, &llrm_x86_m16::machine::BUILT_IN))) {
+        let raised = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            llrm_x86_bc::raise_each(&found, &llrm_x86_m16::machine::BUILT_IN)
+        })) {
             Ok(Ok(raised)) => raised,
             Ok(Err(refusal)) => {
                 modules += 1;
@@ -76,7 +79,9 @@ fn main() {
                 }
             }
         }
-        for error in errors.iter().filter(|one| !raised.outcomes.iter().any(|(name, _)| one.starts_with(&format!("@{name}: ")))) {
+        for error in
+            errors.iter().filter(|one| !raised.outcomes.iter().any(|(name, _)| one.starts_with(&format!("@{name}: "))))
+        {
             eprintln!("verify {file} {error}");
         }
     }

@@ -76,13 +76,20 @@ fn constant(operand: &Operand) -> Option<i64> {
     }
 }
 
-fn rounded(at: i64, align: i64) -> i64 {
+fn rounded(
+    at: i64,
+    align: i64,
+) -> i64 {
     (at + align - 1) / align * align
 }
 
 /// A value's computation spelled out, so equal subscripts compare equal;
 /// None when it is too deep to be worth comparing.
-fn spelled(defining: &BTreeMap<u32, &Instruction>, value: u32, depth: usize) -> Option<String> {
+fn spelled(
+    defining: &BTreeMap<u32, &Instruction>,
+    value: u32,
+    depth: usize,
+) -> Option<String> {
     let Some(one) = defining.get(&value) else {
         return Some(format!("v{value}"));
     };
@@ -135,23 +142,32 @@ fn surveyed(compiler: &Compiler) -> Survey {
         let places: BTreeMap<u32, Identity> =
             function.places.iter().map(|place| (place.id, shapes::identity(function, place))).collect();
         refused.extend(pointers.values().filter(|identity| matches!(identity, Identity::Parameter(..))));
-        refused.extend(function.places.iter().filter(|place| place.storage == "external").map(|place| places[&place.id]));
+        refused
+            .extend(function.places.iter().filter(|place| place.storage == "external").map(|place| places[&place.id]));
         for (at, block) in function.blocks.iter().enumerate() {
             let (mut touched, mut freed) = (BTreeSet::new(), BTreeSet::new());
             let mut subscripts: BTreeMap<String, BTreeSet<Identity>> = BTreeMap::new();
             for (position, one) in block.instructions.iter().enumerate() {
                 // The descriptor pointer this instruction may read as a member's.
                 let allowed = match &one.tag {
-                    Some(Tag::DescriptorField { descriptor, field }) if one.op == "load" && *field != Slot::Data => Some(*descriptor),
+                    Some(Tag::DescriptorField { descriptor, field }) if one.op == "load" && *field != Slot::Data => {
+                        Some(*descriptor)
+                    }
                     Some(Tag::Allocate(shape)) => {
                         if let Some(identity) = pointers.get(&shape.descriptor) {
                             *allocations.entry(*identity).or_default() += 1;
-                            let records: Option<Vec<(i64, i64)>> =
-                                shape.records.iter().map(|(lower, upper)| Some((constant(lower)?, constant(upper)?))).collect();
+                            let records: Option<Vec<(i64, i64)>> = shape
+                                .records
+                                .iter()
+                                .map(|(lower, upper)| Some((constant(lower)?, constant(upper)?)))
+                                .collect();
                             match records.filter(|_| shape.element != STRING) {
                                 Some(records) => {
                                     let width = compiler.width(shape.element) as i64;
-                                    members.insert(*identity, Member { function: index, block: at, position, records, width });
+                                    members.insert(
+                                        *identity,
+                                        Member { function: index, block: at, position, records, width },
+                                    );
                                 }
                                 None => {
                                     refused.insert(*identity);
@@ -174,7 +190,10 @@ fn surveyed(compiler: &Compiler) -> Survey {
                         };
                         // Only `origin + bytes` takes a constant between them.
                         let split = one.op == "add"
-                            && matches!((origin, one.operands.as_slice()), (Some(origin), [Operand::Value(first), Operand::Value(_)]) if first == origin);
+                            && matches!(
+                                (origin, one.operands.as_slice()),
+                                (Some(origin), [Operand::Value(first), Operand::Value(_)]) if first == origin
+                            );
                         if split {
                             touched.insert(*identity);
                             // `bytes` is `subscript * width`.
@@ -205,7 +224,13 @@ fn surveyed(compiler: &Compiler) -> Survey {
                 };
                 // The frame's entry zeroing (`zero_locals`) names every local aggregate, a
                 // descriptor included, and reads nothing.
-                if one.op == "store" && one.tag.is_none() && matches!(one.operands.as_slice(), [_, Operand::Constant(_, Number::Integer(0))]) {
+                if one.op == "store"
+                    && one.tag.is_none()
+                    && matches!(
+                        one.operands.as_slice(),
+                        [_, Operand::Constant(_, Number::Integer(0))]
+                    )
+                {
                     continue;
                 }
                 for operand in &one.operands {
@@ -280,7 +305,10 @@ struct Groups {
 }
 
 impl Groups {
-    fn root(&self, mut one: Identity) -> Identity {
+    fn root(
+        &self,
+        mut one: Identity,
+    ) -> Identity {
         while self.parent[&one] != one {
             one = self.parent[&one];
         }
@@ -330,10 +358,15 @@ fn grouped(survey: &Survey) -> Vec<Vec<Identity>> {
         .filter(|group| group.len() > 1)
         // A release frees the whole allocation: every member goes at once.
         .filter(|group| {
-            survey.released.iter().all(|freed| {
-                let here = group.iter().filter(|one| freed.contains(one)).count();
-                here == 0 || here == group.len()
-            })
+            survey
+                .released
+                .iter()
+                .all(
+                    |freed| {
+                        let here = group.iter().filter(|one| freed.contains(one)).count();
+                        here == 0 || here == group.len()
+                    },
+                )
         })
         .map(|mut group| {
             group.sort_by_key(|one| (members[one].function, members[one].block, members[one].position));
@@ -343,7 +376,10 @@ fn grouped(survey: &Survey) -> Vec<Vec<Identity>> {
 }
 
 /// A fresh value of `type_id` in `function`: ids are numbered per function.
-fn fresh(function: &mut Function, type_id: u32) -> u32 {
+fn fresh(
+    function: &mut Function,
+    type_id: u32,
+) -> u32 {
     let id = function.values.iter().map(|(id, _)| id + 1).max().unwrap_or(1);
     function.values.push((id, type_id));
     id
@@ -360,7 +396,11 @@ struct Layout {
 /// Each member's layout and the group's size. With `interleaved`, same-shape
 /// members some block reads at one subscript share records; the rest, and
 /// all without it, follow one another.
-fn laid_out(group: &[Identity], survey: &Survey, interleaved: bool) -> (BTreeMap<Identity, Layout>, i64) {
+fn laid_out(
+    group: &[Identity],
+    survey: &Survey,
+    interleaved: bool,
+) -> (BTreeMap<Identity, Layout>, i64) {
     let members = &survey.members;
     let joins = |one: &Identity, other: &Identity| {
         members[one].records == members[other].records
@@ -396,7 +436,11 @@ fn laid_out(group: &[Identity], survey: &Survey, interleaved: bool) -> (BTreeMap
 }
 
 /// Lay `group` out in one allocation, the first member's descriptor its own.
-fn merged(compiler: &mut Compiler, group: &[Identity], survey: &Survey) {
+fn merged(
+    compiler: &mut Compiler,
+    group: &[Identity],
+    survey: &Survey,
+) {
     let members = &survey.members;
     let (mut offsets, mut end) = laid_out(group, survey, true);
     // Record padding can push a group past 64K; end to end always fits.
@@ -448,7 +492,10 @@ fn merged(compiler: &mut Compiler, group: &[Identity], survey: &Survey) {
         for block in &mut function.blocks {
             for one in &mut block.instructions {
                 if let ("address", [Operand::Place(place)]) = (one.op, one.operands.as_slice()) {
-                    if matches!(identities[place], Identity::Local(..)) && identities[place] != first && offsets.contains_key(&identities[place]) {
+                    if matches!(identities[place], Identity::Local(..))
+                        && identities[place] != first
+                        && offsets.contains_key(&identities[place])
+                    {
                         one.operands = vec![Operand::Place(local)];
                     }
                 }
@@ -463,7 +510,8 @@ fn merged(compiler: &mut Compiler, group: &[Identity], survey: &Survey) {
                 match one.tag.take() {
                     Some(Tag::Allocate(shape)) if member_of(&shape.descriptor) == Some(first) => {
                         // The whole group, as words.
-                        let flags = constant(&one.operands[one.operands.len() - 2]).expect("B$DDIM's flags are constant");
+                        let flags =
+                            constant(&one.operands[one.operands.len() - 2]).expect("B$DDIM's flags are constant");
                         one.operands = vec![
                             Operand::Constant(INTEGER, Number::Integer(0)),
                             Operand::Constant(INTEGER, Number::Integer(words - 1)),
@@ -471,8 +519,12 @@ fn merged(compiler: &mut Compiler, group: &[Identity], survey: &Survey) {
                             Operand::Constant(INTEGER, Number::Integer(flags & !0xFF | 1)),
                             Operand::Value(shape.descriptor),
                         ];
-                        let records = vec![(Operand::Constant(INTEGER, Number::Integer(0)), Operand::Constant(INTEGER, Number::Integer(words - 1)))];
-                        one.tag = Some(Tag::Allocate(Shape { descriptor: shape.descriptor, records, element: INTEGER }));
+                        let records = vec![(
+                            Operand::Constant(INTEGER, Number::Integer(0)),
+                            Operand::Constant(INTEGER, Number::Integer(words - 1)),
+                        )];
+                        one.tag =
+                            Some(Tag::Allocate(Shape { descriptor: shape.descriptor, records, element: INTEGER }));
                         reordered.insert(one.id);
                     }
                     Some(Tag::Allocate(shape)) if member_of(&shape.descriptor).is_some() => {
@@ -518,7 +570,9 @@ fn merged(compiler: &mut Compiler, group: &[Identity], survey: &Survey) {
         for (at, position, id, shift, stride) in added.into_iter().rev() {
             if let Operand::Value(bytes) = function.blocks[at].instructions[position].operands[1] {
                 let scaled = function.blocks[at].instructions.iter_mut().find(|one| one.results == [bytes]);
-                if let Some(Operand::Constant(_, Number::Integer(width))) = scaled.and_then(|one| one.operands.get_mut(1)) {
+                if let Some(Operand::Constant(_, Number::Integer(width))) =
+                    scaled.and_then(|one| one.operands.get_mut(1))
+                {
                     *width = stride;
                 }
             }
@@ -528,7 +582,8 @@ fn merged(compiler: &mut Compiler, group: &[Identity], survey: &Survey) {
             // The shift is added last, where it can become a displacement;
             // the element's offset is then the new sum.
             let shifted = fresh(function, INTEGER);
-            let instruction = function.blocks.iter().flat_map(|block| &block.instructions).map(|one| one.id + 1).max().unwrap_or(1);
+            let instruction =
+                function.blocks.iter().flat_map(|block| &block.instructions).map(|one| one.id + 1).max().unwrap_or(1);
             let block = &mut function.blocks[at];
             debug_assert_eq!(block.instructions[position].id, id);
             let sum = block.instructions[position].results[0];
@@ -540,16 +595,21 @@ fn merged(compiler: &mut Compiler, group: &[Identity], survey: &Survey) {
                     }
                 }
             }
-            block.instructions.insert(position + 1, Instruction {
-                id: instruction,
-                op: "add",
-                results: vec![shifted],
-                operands: vec![Operand::Value(sum), Operand::Constant(INTEGER, Number::Integer(shift))],
-                callee: None,
-                tag,
-                nowrap: false,
-                line: block.instructions[position].line,
-            });
+            block
+                .instructions
+                .insert(
+                    position + 1,
+                    Instruction {
+                        id: instruction,
+                        op: "add",
+                        results: vec![shifted],
+                        operands: vec![Operand::Value(sum), Operand::Constant(INTEGER, Number::Integer(shift))],
+                        callee: None,
+                        tag,
+                        nowrap: false,
+                        line: block.instructions[position].line,
+                    },
+                );
         }
         for block in &mut function.blocks {
             block.instructions.retain(|one| !removed.contains(&one.id));
@@ -592,9 +652,13 @@ mod tests {
         instructions(compiler)
             .iter()
             .filter_map(|one| match &one.tag {
-                Some(Tag::Allocate(shape)) => {
-                    Some(shape.records.iter().map(|(lower, upper)| (constant(lower).unwrap(), constant(upper).unwrap())).collect())
-                }
+                Some(Tag::Allocate(shape)) => Some(
+                    shape
+                        .records
+                        .iter()
+                        .map(|(lower, upper)| (constant(lower).unwrap(), constant(upper).unwrap()))
+                        .collect(),
+                ),
                 _ => None,
             })
             .collect()
@@ -617,7 +681,9 @@ mod tests {
             .map(|one| {
                 // Past the shift, if any, to `origin + bytes`.
                 let sum = match &one.operands[..] {
-                    [Operand::Value(sum), Operand::Constant(..)] => all.iter().find(|other| other.results == [*sum]).expect("defined"),
+                    [Operand::Value(sum), Operand::Constant(..)] => {
+                        all.iter().find(|other| other.results == [*sum]).expect("defined")
+                    }
                     _ => one,
                 };
                 let mut value = sum.operands[1].clone();
@@ -635,7 +701,8 @@ mod tests {
 
     #[test]
     fn arrays_read_at_one_subscript_become_one_array_of_records() {
-        let compiler = applied_to("'$DYNAMIC\nDIM a(10) AS INTEGER, b(10) AS INTEGER\nFOR i = 1 TO 5\nb(i) = a(i)\nNEXT\n");
+        let compiler =
+            applied_to("'$DYNAMIC\nDIM a(10) AS INTEGER, b(10) AS INTEGER\nFOR i = 1 TO 5\nb(i) = a(i)\nNEXT\n");
         // Records of a then b, 4 bytes each: 11 records, 22 words.
         assert_eq!(allocations(&compiler), vec![vec![(0, 21)]]);
         assert_eq!(strides(&compiler), vec![4, 4]);
@@ -645,7 +712,9 @@ mod tests {
     /// `xo%(60) = 5` kept deedlines' xo%, yo%, zo% end to end.
     #[test]
     fn a_constant_subscript_still_steps_by_the_record() {
-        let compiler = applied_to("'$DYNAMIC\nDIM a(10) AS INTEGER, b(10) AS INTEGER\nFOR i = 1 TO 5\nb(i) = a(i)\nNEXT\na(3) = 1\n");
+        let compiler = applied_to(
+            "'$DYNAMIC\nDIM a(10) AS INTEGER, b(10) AS INTEGER\nFOR i = 1 TO 5\nb(i) = a(i)\nNEXT\na(3) = 1\n",
+        );
         assert_eq!(strides(&compiler), vec![4, 4, 4]);
     }
 
@@ -662,13 +731,15 @@ mod tests {
 
     #[test]
     fn arrays_read_at_different_subscripts_follow_one_another() {
-        let compiler = applied_to("'$DYNAMIC\nDIM a(10) AS INTEGER, b(10) AS INTEGER\nFOR i = 1 TO 5\nb(i) = a(i + 1)\nNEXT\n");
+        let compiler =
+            applied_to("'$DYNAMIC\nDIM a(10) AS INTEGER, b(10) AS INTEGER\nFOR i = 1 TO 5\nb(i) = a(i + 1)\nNEXT\n");
         assert_eq!(allocations(&compiler), vec![vec![(0, 21)]]);
         assert_eq!(strides(&compiler), vec![2, 2]);
         assert_eq!(shifts(&compiler), vec![22, 0]);
     }
 
-    const READ_TOGETHER: &str = "'$DYNAMIC\nDIM a(10) AS INTEGER, b(1 TO 5) AS LONG\nFOR i = 1 TO 5\nb(i) = a(i)\nNEXT\n";
+    const READ_TOGETHER: &str =
+        "'$DYNAMIC\nDIM a(10) AS INTEGER, b(1 TO 5) AS LONG\nFOR i = 1 TO 5\nb(i) = a(i)\nNEXT\n";
 
     #[test]
     fn arrays_read_together_share_one_allocation() {
@@ -686,14 +757,17 @@ mod tests {
         assert_eq!(allocations(&compiler), vec![vec![(0, 21)]]);
         let sub = compiler.functions.iter().find(|one| one.name.eq_ignore_ascii_case("s")).expect("s");
         let values: BTreeSet<u32> = sub.values.iter().map(|(id, _)| *id).collect();
-        let instructions: BTreeSet<u32> = sub.blocks.iter().flat_map(|block| &block.instructions).map(|one| one.id).collect();
+        let instructions: BTreeSet<u32> =
+            sub.blocks.iter().flat_map(|block| &block.instructions).map(|one| one.id).collect();
         assert_eq!(values.len(), sub.values.len());
         assert_eq!(instructions.len(), sub.blocks.iter().map(|block| block.instructions.len()).sum::<usize>());
     }
 
     #[test]
     fn a_whole_array_argument_keeps_its_own_allocation() {
-        let compiler = applied_to(&format!("DECLARE SUB s (x() AS INTEGER)\n{READ_TOGETHER}CALL s(a())\nSUB s (x() AS INTEGER)\nEND SUB\n"));
+        let compiler = applied_to(&format!(
+            "DECLARE SUB s (x() AS INTEGER)\n{READ_TOGETHER}CALL s(a())\nSUB s (x() AS INTEGER)\nEND SUB\n"
+        ));
         assert_eq!(allocations(&compiler).len(), 2);
     }
 

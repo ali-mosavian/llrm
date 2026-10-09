@@ -8,10 +8,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::analysis::intervals::{Interval, Segment};
-use crate::support::hash::IndexMap;
 use llrm_mir::module::{BlockId, Function, InstId, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
+
+use crate::analysis::intervals::{Interval, Segment};
+use crate::support::hash::IndexMap;
 
 /// What a lifetime marker says: its object, and whether it starts or ends.
 pub struct Marker {
@@ -21,7 +22,11 @@ pub struct Marker {
 
 /// `object`'s accesses, or none where it is used any other way: stored as a
 /// value, passed on, compared. Pointer arithmetic on it is followed.
-fn accesses(function: &Function, object: ValueId, marker: &impl Fn(InstId) -> Option<Marker>) -> Option<Vec<InstId>> {
+fn accesses(
+    function: &Function,
+    object: ValueId,
+    marker: &impl Fn(InstId) -> Option<Marker>,
+) -> Option<Vec<InstId>> {
     let mut found = Vec::new();
     let mut pending = vec![object];
     while let Some(value) = pending.pop() {
@@ -39,13 +44,21 @@ fn accesses(function: &Function, object: ValueId, marker: &impl Fn(InstId) -> Op
 }
 
 /// The tracked locals' live ranges in `positions`' numbering.
-pub fn intervals(function: &Function, layout: &[BlockId], positions: &IndexMap<InstId, i64>, marker: impl Fn(InstId) -> Option<Marker>) -> IndexMap<ValueId, Interval> {
+pub fn intervals(
+    function: &Function,
+    layout: &[BlockId],
+    positions: &IndexMap<InstId, i64>,
+    marker: impl Fn(InstId) -> Option<Marker>,
+) -> IndexMap<ValueId, Interval> {
     let in_layout: BTreeSet<BlockId> = layout.iter().copied().collect();
     let mut tracked: BTreeMap<ValueId, Vec<InstId>> = BTreeMap::new();
     for &block in layout {
         for &inst in function.block(block).instructions() {
             if let Some(Marker { object, .. }) = marker(inst)
-                && matches!(function.value(object).def, ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::Alloca { .. }))
+                && matches!(
+                    function.value(object).def,
+                    ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::Alloca { .. })
+                )
                 && let Some(touching) = accesses(function, object, &marker)
             {
                 tracked.entry(object).or_insert(touching);
@@ -65,7 +78,8 @@ pub fn intervals(function: &Function, layout: &[BlockId], positions: &IndexMap<I
             }
         }
     };
-    let mut entering: BTreeMap<BlockId, BTreeSet<ValueId>> = layout.iter().map(|&block| (block, BTreeSet::new())).collect();
+    let mut entering: BTreeMap<BlockId, BTreeSet<ValueId>> =
+        layout.iter().map(|&block| (block, BTreeSet::new())).collect();
     loop {
         let mut changed = false;
         for &block in layout {
@@ -91,7 +105,8 @@ pub fn intervals(function: &Function, layout: &[BlockId], positions: &IndexMap<I
         for &inst in function.block(block).instructions() {
             let at = positions[&inst];
             // Live at a marker that starts it, though it enters the state after.
-            let started = marker(inst).filter(|one| one.starts && tracked.contains_key(&one.object)).map(|one| one.object);
+            let started =
+                marker(inst).filter(|one| one.starts && tracked.contains_key(&one.object)).map(|one| one.object);
             for &object in state.iter().chain(started.iter()) {
                 let runs = segments.entry(object).or_default();
                 match runs.last_mut() {

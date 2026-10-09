@@ -8,11 +8,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use iced_x86::{Code, Register};
-use llrm_x86_bcmachine::frontends::bc::declen::{READS, WRITES, instruction_info_factory};
-use llrm_x86_bcmachine::abi::handlers;
-use llrm_target::machine::Machine;
 use llrm_qbruntime::{self as runtime, Contract, Control, Reg};
+use llrm_target::machine::Machine;
+use llrm_x86_bcmachine::abi::handlers;
 use llrm_x86_bcmachine::frontends::bc::blocks::{self, Block};
+use llrm_x86_bcmachine::frontends::bc::declen::{READS, WRITES, instruction_info_factory};
 use llrm_x86_bcmachine::frontends::bc::extent::{Body, BodyKind};
 use llrm_x86_bcmachine::frontends::bc::raising_control;
 use llrm_x86_bcmachine::model::ir::decode;
@@ -25,7 +25,8 @@ use llrm_x86_bcmachine::support::hash::IndexMap;
 use crate::pairs::{self, Pair};
 
 /// The registers that become values, rooted.
-pub const TRACKED: [Register; 6] = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
+pub const TRACKED: [Register; 6] =
+    [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
 
 /// The flags as one tracked name, where register sets hold them.
 pub const FLAGS: Register = Register::None;
@@ -85,7 +86,10 @@ fn words(register: Register) -> Vec<Word> {
 
 /// Both words of each root.
 fn whole(roots: impl IntoIterator<Item = Register>) -> Words {
-    roots.into_iter().flat_map(|one| if one == FLAGS { vec![Word::Flags] } else { vec![Word::Low(one), Word::High(one)] }).collect()
+    roots
+        .into_iter()
+        .flat_map(|one| if one == FLAGS { vec![Word::Flags] } else { vec![Word::Low(one), Word::High(one)] })
+        .collect()
 }
 
 /// What a call disturbs and reads, where its contract establishes it: it
@@ -98,17 +102,28 @@ pub fn call_touches(routine: &Contract) -> Option<(Words, Words)> {
     let mut disturbed = whole(TRACKED.into_iter().filter(|one| changed.contains(one)));
     disturbed.insert(Word::Flags);
     // A contract names 16-bit registers: an input is its root's low word.
-    let reads = runtime::direct_slots(routine).into_iter().filter_map(from_contract).map(|one| if one == FLAGS { Word::Flags } else { Word::Low(one) }).collect();
+    let reads = runtime::direct_slots(routine)
+        .into_iter()
+        .filter_map(from_contract)
+        .map(|one| if one == FLAGS { Word::Flags } else { Word::Low(one) })
+        .collect();
     Some((disturbed, reads))
 }
 
 /// (defines, uses) of one node as words. A return reads what its function
 /// answers in, `answer`.
-pub fn touched(node: &Node, contracts: &IndexMap<i64, Contract>, answer: &[Register]) -> (Words, Words) {
+pub fn touched(
+    node: &Node,
+    contracts: &IndexMap<i64, Contract>,
+    answer: &[Register],
+) -> (Words, Words) {
     if node.semantics().op == Operation::Return {
         return (Words::new(), answer.iter().map(|&one| Word::Low(one)).collect());
     }
-    if matches!(node, Node::Opaque(opaque) if opaque.insn.insn.code() == Code::Into) {
+    if matches!(
+        node,
+        Node::Opaque(opaque) if opaque.insn.insn.code() == Code::Into
+    ) {
         return (Words::new(), Words::from([Word::Flags]));
     }
     // The frame's exit hands AX and DX through and restores the rest.
@@ -188,13 +203,19 @@ pub struct Handler {
 
 impl BodyFacts {
     /// The node each block's instructions hold, in order.
-    pub fn nodes_of<'a>(&'a self, block: &'a Block) -> impl Iterator<Item = &'a Arc<Node>> + 'a {
+    pub fn nodes_of<'a>(
+        &'a self,
+        block: &'a Block,
+    ) -> impl Iterator<Item = &'a Arc<Node>> + 'a {
         block.insns.iter().filter_map(|insn| self.nodes.get(&(insn.at as i64)))
     }
 
     /// The tracked registers read after each call, before they are written:
     /// what a call must hand back of what it disturbs.
-    pub fn live_after(&self, contracts: &IndexMap<i64, Contract>) -> IndexMap<i64, Words> {
+    pub fn live_after(
+        &self,
+        contracts: &IndexMap<i64, Contract>,
+    ) -> IndexMap<i64, Words> {
         live_after(&self.blocks, &self.nodes, contracts, &self.answer())
     }
 
@@ -208,7 +229,12 @@ impl BodyFacts {
 }
 
 /// The registers live after each node, by the node's address.
-pub fn live_after(blocks: &[Block], nodes: &IndexMap<i64, Arc<Node>>, contracts: &IndexMap<i64, Contract>, answer: &[Register]) -> IndexMap<i64, Words> {
+pub fn live_after(
+    blocks: &[Block],
+    nodes: &IndexMap<i64, Arc<Node>>,
+    contracts: &IndexMap<i64, Contract>,
+    answer: &[Register],
+) -> IndexMap<i64, Words> {
     let known: BTreeSet<usize> = blocks.iter().map(|block| block.at).collect();
     let mut live_in: IndexMap<usize, Words> = blocks.iter().map(|block| (block.at, Words::new())).collect();
     let mut after: IndexMap<i64, Words> = IndexMap::default();
@@ -216,8 +242,12 @@ pub fn live_after(blocks: &[Block], nodes: &IndexMap<i64, Arc<Node>>, contracts:
     while moving {
         moving = false;
         for block in blocks.iter().rev() {
-            let mut live: Words =
-                block.succ.iter().filter(|one| known.contains(one)).flat_map(|one| live_in[one].iter().copied()).collect();
+            let mut live: Words = block
+                .succ
+                .iter()
+                .filter(|one| known.contains(one))
+                .flat_map(|one| live_in[one].iter().copied())
+                .collect();
             for insn in block.insns.iter().rev() {
                 let Some(node) = nodes.get(&(insn.at as i64)) else { continue };
                 after.insert(insn.at as i64, live.clone());
@@ -236,8 +266,12 @@ pub fn live_after(blocks: &[Block], nodes: &IndexMap<i64, Arc<Node>>, contracts:
 /// Each call site whose caller reads, after it, a register cmacros'
 /// convention keeps but its contract lists as clobbered: the value before
 /// the call is then an input. `raising_carried`'s rule.
-fn carried(body: &BodyFacts, contracts: &IndexMap<i64, Contract>) -> IndexMap<i64, Contract> {
-    let candidates: BTreeSet<Reg> = BTreeSet::from([Reg::Si, Reg::Di]).difference(&runtime::PER_CONVENTION).copied().collect();
+fn carried(
+    body: &BodyFacts,
+    contracts: &IndexMap<i64, Contract>,
+) -> IndexMap<i64, Contract> {
+    let candidates: BTreeSet<Reg> =
+        BTreeSet::from([Reg::Si, Reg::Di]).difference(&runtime::PER_CONVENTION).copied().collect();
     let mut chosen = contracts.clone();
     let mut changed: IndexMap<i64, Contract> = IndexMap::default();
     loop {
@@ -252,7 +286,11 @@ fn carried(body: &BodyFacts, contracts: &IndexMap<i64, Contract>) -> IndexMap<i6
             let extra: BTreeSet<Reg> = runtime::disturbs(routine)
                 .difference(&inputs)
                 .filter(|one| candidates.contains(one))
-                .filter(|&&one| from_contract(one).is_some_and(|root| after[&at].contains(&Word::Low(root)) || after[&at].contains(&Word::High(root))))
+                .filter(|&&one| {
+                    from_contract(one).is_some_and(|root| {
+                        after[&at].contains(&Word::Low(root)) || after[&at].contains(&Word::High(root))
+                    })
+                })
                 .copied()
                 .collect();
             if !extra.is_empty() {
@@ -294,14 +332,21 @@ pub struct Facts<'m> {
 }
 
 impl<'m> Facts<'m> {
-    pub fn new(found: &'m Module, machine: &Machine) -> Result<Self, String> {
+    pub fn new(
+        found: &'m Module,
+        machine: &Machine,
+    ) -> Result<Self, String> {
         let decoded = decode::decode_module(found, machine)?;
         let mapped = blocks::code_map(found)?;
         let all = blocks::partition(found, &mapped);
-        let mut contracts = llrm_x86_bcmachine::abi::callsite::for_module(found, None).map_err(|error| error.to_string())?;
+        let mut contracts =
+            llrm_x86_bcmachine::abi::callsite::for_module(found, None).map_err(|error| error.to_string())?;
         let header = blocks::has_header(found);
-        let procedures: IndexMap<usize, cvinfo::Procedure> =
-            if header { cvinfo::parse(&found.records).procedures.into_iter().map(|one| (one.offset as usize, one)).collect() } else { IndexMap::default() };
+        let procedures: IndexMap<usize, cvinfo::Procedure> = if header {
+            cvinfo::parse(&found.records).procedures.into_iter().map(|one| (one.offset as usize, one)).collect()
+        } else {
+            IndexMap::default()
+        };
         // A call to the event-poll adapter is a call to B$EVCK.
         let event_stub = blocks::event_stub(found);
         let polls: IndexMap<i64, String> = decoded
@@ -313,14 +358,22 @@ impl<'m> Facts<'m> {
         contracts.extend(runtime::per_call(&polls, module::family(&found.records).value(), &BTreeSet::new()));
         let mut bodies = Vec::new();
         for one in decoded {
-            let nodes: IndexMap<i64, Arc<Node>> = one.nodes.iter().map(|node| (span(node).0 as i64, node.clone())).collect();
-            let mine: Vec<Block> =
-                all.iter().filter(|block| one.body.ranges.iter().any(|&(lo, hi)| lo <= block.at && block.at < hi)).cloned().collect();
+            let nodes: IndexMap<i64, Arc<Node>> =
+                one.nodes.iter().map(|node| (span(node).0 as i64, node.clone())).collect();
+            let mine: Vec<Block> = all
+                .iter()
+                .filter(|block| one.body.ranges.iter().any(|&(lo, hi)| lo <= block.at && block.at < hi))
+                .cloned()
+                .collect();
             let seeds: Vec<usize> = std::iter::once(one.body.seed).chain(one.body.entries.iter().copied()).collect();
             let mine = reachable(raising_control::terminal_edges(mine, &contracts), &seeds);
-            let interface = (one.body.kind == BodyKind::Procedure).then(|| interface(&nodes, procedures.get(&one.body.seed)));
+            let interface =
+                (one.body.kind == BodyKind::Procedure).then(|| interface(&nodes, procedures.get(&one.body.seed)));
             let pairs = pairs::found(&mine, &nodes);
-            bodies.push((BodyFacts { body: one.body, blocks: mine, nodes, interface: None, pairs, handler: None }, interface));
+            bodies.push((
+                BodyFacts { body: one.body, blocks: mine, nodes, interface: None, pairs, handler: None },
+                interface,
+            ));
         }
         // Without CodeView, a procedure answers in what its callers read after it.
         let mut read: BTreeMap<String, Words> = BTreeMap::new();
@@ -339,7 +392,8 @@ impl<'m> Facts<'m> {
                 body.interface = interface.map(|made| {
                     made.map(|(popped, answer)| {
                         let answer = answer.unwrap_or_else(|| {
-                            let read = body.body.name.as_ref().and_then(|name| read.get(name)).cloned().unwrap_or_default();
+                            let read =
+                                body.body.name.as_ref().and_then(|name| read.get(name)).cloned().unwrap_or_default();
                             match (read.contains(&Word::Low(Register::EAX)), read.contains(&Word::Low(Register::EDX))) {
                                 (_, true) => Answer::Registers(vec![Register::EAX, Register::EDX]),
                                 (true, false) => Answer::Registers(vec![Register::EAX]),
@@ -356,7 +410,11 @@ impl<'m> Facts<'m> {
             contracts.extend(carried(body, &contracts));
         }
         let bodies = folded(bodies);
-        let handlers = bodies.iter().any(|body| matches!(body.body.kind, BodyKind::ErrorHandler | BodyKind::EventHandler));
+        let handlers =
+            bodies.iter().any(|body| matches!(
+                body.body.kind,
+                BodyKind::ErrorHandler | BodyKind::EventHandler
+            ));
         let registrations = handlers::error_registrations(found);
         let resumptions = handlers::resumptions(found);
         let mut statements = blocks::statements(found);
@@ -364,16 +422,33 @@ impl<'m> Facts<'m> {
         statements.reverse();
         statements.dedup_by_key(|&mut (at, _)| at);
         statements.reverse();
-        Ok(Facts { found, spaces: machine.layout().spaces.roles, bodies, contracts, procedures, event_stub, handlers, registrations, resumptions, statements })
+        Ok(Facts {
+            found,
+            spaces: machine.layout().spaces.roles,
+            bodies,
+            contracts,
+            procedures,
+            event_stub,
+            handlers,
+            registrations,
+            resumptions,
+            statements,
+        })
     }
 
     /// Whether `node` calls the event-poll adapter.
-    pub fn event_poll(&self, node: &Node) -> bool {
+    pub fn event_poll(
+        &self,
+        node: &Node,
+    ) -> bool {
         polls(node, self.event_stub)
     }
 
     /// The contract of the call at `at`.
-    pub fn contract(&self, at: usize) -> Option<&Contract> {
+    pub fn contract(
+        &self,
+        at: usize,
+    ) -> Option<&Contract> {
         self.contracts.get(&(at as i64))
     }
 
@@ -382,7 +457,10 @@ impl<'m> Facts<'m> {
     }
 }
 
-fn polls(node: &Node, stub: Option<usize>) -> bool {
+fn polls(
+    node: &Node,
+    stub: Option<usize>,
+) -> bool {
     let what = node.semantics();
     what.op == Operation::Call && !what.indirect && stub.is_some() && what.target.map(|one| one as usize) == stub
 }
@@ -406,7 +484,10 @@ pub struct Interface {
 
 /// A procedure's interface: what its `retf n` pops and its CodeView
 /// return type, None without a record.
-fn interface(nodes: &IndexMap<i64, Arc<Node>>, procedure: Option<&cvinfo::Procedure>) -> Result<(i64, Option<Answer>), String> {
+fn interface(
+    nodes: &IndexMap<i64, Arc<Node>>,
+    procedure: Option<&cvinfo::Procedure>,
+) -> Result<(i64, Option<Answer>), String> {
     let mut popped = None;
     for node in nodes.values() {
         let what = node.semantics();
@@ -416,10 +497,15 @@ fn interface(nodes: &IndexMap<i64, Arc<Node>>, procedure: Option<&cvinfo::Proced
         if what.name.as_deref() != Some("retf") {
             return Err("a near return".to_owned());
         }
-        let bytes = what.sources.iter().find_map(|one| match one {
-            Loc::Imm(imm) => Some(imm.value),
-            _ => None,
-        });
+        let bytes = what
+            .sources
+            .iter()
+            .find_map(
+                |one| match one {
+                    Loc::Imm(imm) => Some(imm.value),
+                    _ => None,
+                },
+            );
         let bytes = bytes.unwrap_or(0);
         if popped.is_some_and(|one| one != bytes) {
             return Err("its returns pop different byte counts".to_owned());
@@ -436,7 +522,9 @@ fn interface(nodes: &IndexMap<i64, Arc<Node>>, procedure: Option<&cvinfo::Proced
     let named = match procedure.return_type() {
         Some(one) => Some(one.to_owned()),
         None => {
-            let signed = procedure.signature().and_then(|signature| cvinfo::type_name(signature.return_type, Some(&procedure.types)));
+            let signed = procedure
+                .signature()
+                .and_then(|signature| cvinfo::type_name(signature.return_type, Some(&procedure.types)));
             let local = procedure.locals.iter().any(|local| local.name.eq_ignore_ascii_case(&procedure.name));
             signed.filter(|one| local || one != "INTEGER")
         }
@@ -457,19 +545,28 @@ fn interface(nodes: &IndexMap<i64, Arc<Node>>, procedure: Option<&cvinfo::Proced
 /// The one error handler folded into the main body, whose frame it runs on;
 /// a second is left a body of its own, which the raise refuses.
 fn folded(mut bodies: Vec<BodyFacts>) -> Vec<BodyFacts> {
-    let handlers: Vec<usize> = bodies.iter().enumerate().filter(|(_, one)| one.body.kind == BodyKind::ErrorHandler).map(|(index, _)| index).collect();
+    let handlers: Vec<usize> = bodies
+        .iter()
+        .enumerate()
+        .filter(|(_, one)| one.body.kind == BodyKind::ErrorHandler)
+        .map(|(index, _)| index)
+        .collect();
     let main = bodies.iter().position(|one| one.body.kind == BodyKind::Main);
     let (&[index], Some(main)) = (&handlers[..], main) else { return bodies };
     let handler = bodies.remove(index);
     let main = &mut bodies[if main > index { main - 1 } else { main }];
-    main.handler = Some(Handler { seed: handler.body.seed, blocks: handler.blocks.iter().map(|block| block.at).collect() });
+    main.handler =
+        Some(Handler { seed: handler.body.seed, blocks: handler.blocks.iter().map(|block| block.at).collect() });
     main.blocks.extend(handler.blocks);
     main.nodes.extend(handler.nodes);
     main.pairs.extend(handler.pairs);
     bodies
 }
 
-fn reachable(blocks: Vec<Block>, seeds: &[usize]) -> Vec<Block> {
+fn reachable(
+    blocks: Vec<Block>,
+    seeds: &[usize],
+) -> Vec<Block> {
     let by_at: BTreeMap<usize, &Block> = blocks.iter().map(|block| (block.at, block)).collect();
     let Some(&seed) = seeds.first().filter(|seed| by_at.contains_key(seed)) else {
         return Vec::new();

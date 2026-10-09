@@ -23,7 +23,9 @@ pub struct DominatorTree {
 
 impl DominatorTree {
     pub fn new(function: &Function) -> Self {
-        let Some(entry) = function.entry() else { return Self { idom: Vec::new(), order: Vec::new(), enter: Vec::new(), last: Vec::new() } };
+        let Some(entry) = function.entry() else {
+            return Self { idom: Vec::new(), order: Vec::new(), enter: Vec::new(), last: Vec::new() };
+        };
         let postorder = postorder(function, entry);
         let rpo: Vec<BlockId> = postorder.iter().rev().copied().collect();
         let size = rpo.iter().map(|block| block.0 as usize).max().map_or(0, |most| most + 1);
@@ -76,17 +78,27 @@ impl DominatorTree {
         Self { idom, order, enter, last }
     }
 
-    pub fn is_reachable(&self, block: BlockId) -> bool {
+    pub fn is_reachable(
+        &self,
+        block: BlockId,
+    ) -> bool {
         self.order.get(block.0 as usize).is_some_and(|one| *one != NONE)
     }
 
-    pub fn immediate_dominator(&self, block: BlockId) -> Option<BlockId> {
+    pub fn immediate_dominator(
+        &self,
+        block: BlockId,
+    ) -> Option<BlockId> {
         self.idom.get(block.0 as usize).copied().filter(|one| *one != NONE && *one != block.0).map(BlockId)
     }
 
     /// Whether every path from the entry to `b` passes `a`. An unreachable
     /// `b` is dominated by everything.
-    pub fn dominates(&self, a: BlockId, b: BlockId) -> bool {
+    pub fn dominates(
+        &self,
+        a: BlockId,
+        b: BlockId,
+    ) -> bool {
         if !self.is_reachable(b) {
             return true;
         }
@@ -98,7 +110,12 @@ impl DominatorTree {
     }
 
     /// Whether `def` comes before `user` on every path to `user`.
-    pub fn instruction_dominates(&self, function: &Function, def: InstId, user: InstId) -> bool {
+    pub fn instruction_dominates(
+        &self,
+        function: &Function,
+        def: InstId,
+        user: InstId,
+    ) -> bool {
         let (Some(a), Some(b)) = (function.parent(def), function.parent(user)) else { return false };
         if a != b {
             return self.dominates(a, b);
@@ -113,7 +130,13 @@ impl DominatorTree {
 
     /// `instruction_dominates`, where `position` is each instruction's index in its block
     /// (`Function::positions`): no scan of the block for two in the same one.
-    pub fn instruction_dominates_at(&self, function: &Function, def: InstId, user: InstId, position: &[u32]) -> bool {
+    pub fn instruction_dominates_at(
+        &self,
+        function: &Function,
+        def: InstId,
+        user: InstId,
+        position: &[u32],
+    ) -> bool {
         let (Some(a), Some(b)) = (function.parent(def), function.parent(user)) else { return false };
         if a != b {
             return self.dominates(a, b);
@@ -132,7 +155,12 @@ pub fn scans() -> usize {
     SCANS.with(std::cell::Cell::get)
 }
 
-fn intersect(idom: &[u32], order: &[u32], mut a: u32, mut b: u32) -> u32 {
+fn intersect(
+    idom: &[u32],
+    order: &[u32],
+    mut a: u32,
+    mut b: u32,
+) -> u32 {
     while a != b {
         while order[a as usize] > order[b as usize] {
             a = idom[a as usize];
@@ -145,7 +173,10 @@ fn intersect(idom: &[u32], order: &[u32], mut a: u32, mut b: u32) -> u32 {
 }
 
 /// The blocks reachable from `entry`, in postorder, without recursion.
-fn postorder(function: &Function, entry: BlockId) -> Vec<BlockId> {
+fn postorder(
+    function: &Function,
+    entry: BlockId,
+) -> Vec<BlockId> {
     let mut out = Vec::new();
     let mut seen = crate::hash::HashSet::from_iter([entry]);
     let mut stack = vec![(entry, function.successors(entry), 0)];
@@ -172,11 +203,19 @@ mod tests {
 
     fn function(text: &str) -> Function {
         let module = crate::parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"));
-        module.functions().find(|(_, _, function)| !function.is_declaration()).map(|(_, _, function)| function.clone()).expect("a body")
+        module
+            .functions()
+            .find(|(_, _, function)| !function.is_declaration())
+            .map(|(_, _, function)| function.clone())
+            .expect("a body")
     }
 
     /// `a` dominates `b` where `b` cannot be reached from the entry once `a` is gone.
-    fn by_definition(function: &Function, a: BlockId, b: BlockId) -> bool {
+    fn by_definition(
+        function: &Function,
+        a: BlockId,
+        b: BlockId,
+    ) -> bool {
         let entry = function.entry().expect("an entry");
         if a == entry {
             return true;
@@ -212,12 +251,17 @@ mod tests {
     fn asking_whether_a_block_dominates_does_not_walk_the_tree() {
         let depth = 20_000;
         let body: String = (0..depth).map(|at| format!("b{at}:\n  br label %b{}\n", at + 1)).collect();
-        let function = function(&format!("define void @f() {{\nentry:\n  br label %b0\n{body}b{depth}:\n  ret void\n}}\n"));
+        let function =
+            function(&format!("define void @f() {{\nentry:\n  br label %b0\n{body}b{depth}:\n  ret void\n}}\n"));
         let tree = DominatorTree::new(&function);
         let last = *function.layout().last().expect("blocks");
         let start = Instant::now();
         let asked = function.layout().iter().filter(|&&at| tree.dominates(at, last)).count();
         assert_eq!(asked, depth + 2);
-        assert!(start.elapsed() < Duration::from_secs(1), "{:?} for {depth} questions of depth {depth}", start.elapsed());
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "{:?} for {depth} questions of depth {depth}",
+            start.elapsed()
+        );
     }
 }

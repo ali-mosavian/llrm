@@ -14,7 +14,11 @@ use crate::syntax::{Adapter, Basic};
 
 impl TypeRegistry {
     /// The parameter an adapter type `spec` makes, when it is one.
-    pub(super) fn adapter_parameter(&mut self, spec: &TypeSpec, span: Span) -> Result<Option<SignatureParameter>, Diagnostic> {
+    pub(super) fn adapter_parameter(
+        &mut self,
+        spec: &TypeSpec,
+        span: Span,
+    ) -> Result<Option<SignatureParameter>, Diagnostic> {
         let Some((basic, adapter)) = Adapter::of(spec) else {
             return Ok(None);
         };
@@ -22,11 +26,21 @@ impl TypeRegistry {
             TypeSpec::Applied { args, .. } => args.as_slice(),
             _ => &[],
         };
-        let refused = || Diagnostic::new(span, format!("{}.{} takes {}", basic.name(), adapter.name(), match adapter {
-            Adapter::Ref => "one type: Ref[T]",
-            Adapter::String => "no type arguments",
-            Adapter::Array => "an element type and a rank: ArrayRef[T, N]",
-        }));
+        let refused = || {
+            Diagnostic::new(
+                span,
+                format!(
+                    "{}.{} takes {}",
+                    basic.name(),
+                    adapter.name(),
+                    match adapter {
+                        Adapter::Ref => "one type: Ref[T]",
+                        Adapter::String => "no type arguments",
+                        Adapter::Array => "an element type and a rank: ArrayRef[T, N]",
+                    }
+                ),
+            )
+        };
         let (target, pointer) = match (adapter, arguments) {
             (Adapter::Ref, [TypeAnnotation::Value(target)]) => {
                 let element = self.crossing_element(target, span)?;
@@ -56,7 +70,11 @@ impl TypeRegistry {
     }
 
     /// `spec`, when BASIC has it: a scalar or a represented struct.
-    fn crossing_element(&mut self, spec: &TypeSpec, span: Span) -> Result<ElementType, Diagnostic> {
+    fn crossing_element(
+        &mut self,
+        spec: &TypeSpec,
+        span: Span,
+    ) -> Result<ElementType, Diagnostic> {
         let element = self.resolve_element(spec, span)?;
         let crosses = match element {
             ElementType::Scalar(type_name) => !ownership::needs_drop(type_name),
@@ -68,7 +86,11 @@ impl TypeRegistry {
         Ok(element)
     }
 
-    fn declared_struct(&self, name: &str, span: Span) -> Result<ElementType, Diagnostic> {
+    fn declared_struct(
+        &self,
+        name: &str,
+        span: Span,
+    ) -> Result<ElementType, Diagnostic> {
         self.structs
             .get(name)
             .map(|one| ElementType::Struct(one.id))
@@ -91,7 +113,8 @@ impl FunctionCompiler<'_> {
             return Ok(Binding { type_: target, mutable: true, storage: Storage::Reference(value) });
         };
         let descriptor = self.hidden("descriptor");
-        let binding = Binding { type_: BindingType::Scalar(pointer), mutable: false, storage: Storage::Parameter(value) };
+        let binding =
+            Binding { type_: BindingType::Scalar(pointer), mutable: false, storage: Storage::Parameter(value) };
         self.scopes.last_mut().expect("scope").insert(descriptor.clone(), binding);
         let (module, data, length) = match adapter {
             Adapter::String => (basic.module(), "string_data", "string_length"),
@@ -112,7 +135,13 @@ impl FunctionCompiler<'_> {
         let view = self.view_slot(element, rank);
         let mut capacity = hir::Operand::Value(dimensions[0]);
         for (axis, dimension) in dimensions.iter().enumerate() {
-            let place = hir::Operand::IndirectPlace { base: view, offset: descriptor::basic::dim(axis as u8), type_id: U16, inbounds: false, member: None };
+            let place = hir::Operand::IndirectPlace {
+                base: view,
+                offset: descriptor::basic::dim(axis as u8),
+                type_id: U16,
+                inbounds: false,
+                member: None,
+            };
             self.emit("store", Vec::new(), vec![place, hir::Operand::Value(*dimension)], None);
             if axis > 0 {
                 let product = self.value(TypeName::U16);
@@ -120,12 +149,24 @@ impl FunctionCompiler<'_> {
                 capacity = hir::Operand::Value(product);
             }
         }
-        let place = hir::Operand::IndirectPlace { base: view, offset: descriptor::basic::capacity(rank), type_id: U16, inbounds: false, member: None };
+        let place = hir::Operand::IndirectPlace {
+            base: view,
+            offset: descriptor::basic::capacity(rank),
+            type_id: U16,
+            inbounds: false,
+            member: None,
+        };
         self.emit("store", Vec::new(), vec![place, capacity], None);
         let data_type = self.types.pointer(element.id(), 0);
         let elements = self.value_type(data_type);
         self.emit("copy", vec![elements], vec![hir::Operand::Value(data)], None);
-        let place = hir::Operand::IndirectPlace { base: view, offset: descriptor::basic::size(rank), type_id: data_type, inbounds: false, member: None };
+        let place = hir::Operand::IndirectPlace {
+            base: view,
+            offset: descriptor::basic::size(rank),
+            type_id: data_type,
+            inbounds: false,
+            member: None,
+        };
         self.emit("store", Vec::new(), vec![place, hir::Operand::Value(elements)], None);
         Ok(Binding { type_: target, mutable: true, storage: Storage::Slice(view) })
     }
@@ -138,7 +179,12 @@ impl FunctionCompiler<'_> {
     }
 
     /// Calls the ABI module's `function`: its result, as a value.
-    fn call_abi(&mut self, function: &str, arguments: Vec<Expr>, span: Span) -> Result<u32, Diagnostic> {
+    fn call_abi(
+        &mut self,
+        function: &str,
+        arguments: Vec<Expr>,
+        span: Span,
+    ) -> Result<u32, Diagnostic> {
         let call = Expr::Call { name: function.to_owned(), type_arguments: Vec::new(), arguments, span };
         self.unsafe_depth += 1;
         let result = self.expression(&call, None);
@@ -150,26 +196,40 @@ impl FunctionCompiler<'_> {
 
     /// A BASIC string function's result: the view in the `$result` slot,
     /// copied where BASIC takes it by its module's `string_result`.
-    pub(super) fn string_result(&mut self, span: Span) -> Result<hir::Operand, Diagnostic> {
+    pub(super) fn string_result(
+        &mut self,
+        span: Span,
+    ) -> Result<hir::Operand, Diagnostic> {
         let basic = self.signature.abi.basic().expect("a BASIC function");
-        let Storage::Slice(view) = self.binding(RESULT, span)?.storage else {
-            unreachable!("a view result's slot")
-        };
+        let Storage::Slice(view) = self.binding(RESULT, span)?.storage else { unreachable!("a view result's slot") };
         let element = ElementType::Scalar(TypeName::Char);
         let data_type = self.types.pointer(element.id(), 0);
         let raw = self.types.raw_pointer(element, "far", true);
         let data = self.value_type(data_type);
-        let place = hir::Operand::IndirectPlace { base: view, offset: descriptor::basic::size(1), type_id: data_type, inbounds: false, member: None };
+        let place = hir::Operand::IndirectPlace {
+            base: view,
+            offset: descriptor::basic::size(1),
+            type_id: data_type,
+            inbounds: false,
+            member: None,
+        };
         self.emit("load", vec![data], vec![place], None);
         let pointer = self.value(raw);
         self.emit("copy", vec![pointer], vec![hir::Operand::Value(data)], None);
         let length = self.value(TypeName::U16);
-        let place = hir::Operand::IndirectPlace { base: view, offset: descriptor::basic::dim(0), type_id: U16, inbounds: false, member: None };
+        let place = hir::Operand::IndirectPlace {
+            base: view,
+            offset: descriptor::basic::dim(0),
+            type_id: U16,
+            inbounds: false,
+            member: None,
+        };
         self.emit("load", vec![length], vec![place], None);
         let mut arguments = Vec::new();
         for (value, type_name) in [(pointer, raw), (length, TypeName::U16)] {
             let name = self.hidden("string");
-            let binding = Binding { type_: BindingType::Scalar(type_name), mutable: false, storage: Storage::Parameter(value) };
+            let binding =
+                Binding { type_: BindingType::Scalar(type_name), mutable: false, storage: Storage::Parameter(value) };
             self.scopes.last_mut().expect("scope").insert(name.clone(), binding);
             arguments.push(Expr::Name(name, span));
         }
@@ -179,13 +239,17 @@ impl FunctionCompiler<'_> {
 
     /// Refuses the Nib runtime routine the code since call `since` calls,
     /// in a library for BASIC.
-    pub(super) fn refuse_runtime(&self, since: usize, span: Span) -> Result<(), Diagnostic> {
+    pub(super) fn refuse_runtime(
+        &self,
+        since: usize,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         let Some(basic) = self.host() else {
             return Ok(());
         };
-        let called = self.calls[since..].iter().find_map(|call| {
-            self.builtin_ids.iter().find(|(_, (id, _))| *id == call.callee).map(|(name, _)| *name)
-        });
+        let called = self.calls[since..]
+            .iter()
+            .find_map(|call| self.builtin_ids.iter().find(|(_, (id, _))| *id == call.callee).map(|(name, _)| *name));
         match called {
             Some(routine) => Err(Diagnostic::new(
                 span,
@@ -201,11 +265,12 @@ impl FunctionCompiler<'_> {
 
     /// A near pointer to a temporary a BASIC float function stores its
     /// result in, which it passes last.
-    pub(super) fn result_pointer(&mut self, pointer: TypeName) -> hir::Operand {
+    pub(super) fn result_pointer(
+        &mut self,
+        pointer: TypeName,
+    ) -> hir::Operand {
         let result = self.types.raw_target(pointer).expect("a raw pointer");
-        let ElementType::Scalar(result) = result else {
-            unreachable!("a float result")
-        };
+        let ElementType::Scalar(result) = result else { unreachable!("a float result") };
         let place = self.place("$result", result, true);
         let address = self.value(pointer);
         self.emit("address", vec![address], vec![hir::Operand::Place(place)], None);

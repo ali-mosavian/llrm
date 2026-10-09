@@ -30,7 +30,7 @@ paths = [
 # `enforced = true` fails the step on any file the formatter would change; false only lists them. It is false until
 # the PR that formats the tree sets it to true: that one line is the switch.
 [fmt]
-enforced = false
+enforced = true
 paths = ["**/*.rs", "rustfmt.toml", "tools/fmt.sh", "tools/rfmt-post/**"]
 
 # Paths outside [shared] the cheap steps cover on their own; they select no heavy step.

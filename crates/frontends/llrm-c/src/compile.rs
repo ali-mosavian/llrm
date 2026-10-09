@@ -9,12 +9,10 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{hir, stream, translate};
-
-use llrm_core::backend::{
-    masm, objbuild,
-};
+use llrm_core::backend::{masm, objbuild};
 use llrm_core::driver::flags::{self, Flags};
+
+use super::{hir, stream, translate};
 
 #[derive(Debug)]
 pub enum CompileError {
@@ -24,7 +22,10 @@ pub enum CompileError {
 }
 
 impl fmt::Display for CompileError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
             Self::Unsupported(error) => write!(formatter, "{error}"),
             Self::Io(error) => write!(formatter, "{error}"),
@@ -65,7 +66,12 @@ impl From<std::io::Error> for CompileError {
 
 /// C through the rich MIR: translated to HIR, then compiled by the driver,
 /// which writes each stage to `dump` or where `LLRM_MIR_STAGES` names.
-pub fn selected(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_core::driver::Options) -> Result<masm::Module, CompileError> {
+pub fn selected(
+    text: &str,
+    module: &str,
+    dump: Option<&Path>,
+    codegen: &llrm_core::driver::Options,
+) -> Result<masm::Module, CompileError> {
     selected_checking(text, module, dump, codegen, None, false)
 }
 
@@ -83,22 +89,43 @@ fn stack_check_of(text: &str) -> llrm_core::hir::model::StackCheck {
 }
 
 /// [`selected`], each function checking its stack as `stack_check` says (`-fsanitize=stack`).
-pub fn selected_checking(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_core::driver::Options, stack_check: Option<llrm_core::hir::model::StackCheck>, wrapv: bool) -> Result<masm::Module, CompileError> {
+pub fn selected_checking(
+    text: &str,
+    module: &str,
+    dump: Option<&Path>,
+    codegen: &llrm_core::driver::Options,
+    stack_check: Option<llrm_core::hir::model::StackCheck>,
+    wrapv: bool,
+) -> Result<masm::Module, CompileError> {
     let program = llrm_core::support::debug::timed("frontend translate", || -> Result<_, CompileError> {
         let mut unit = hir::unit(&stream::parse(text))?;
         unit.wrapv = wrapv;
         let profile = Profile::for_abi(&*codegen.arch, codegen.abi.as_deref()).map_err(hir::Unsupported)?;
         let calling = codegen.arch.calling();
-        let cc_of = |name: &str| calling.named(name).and_then(|one| one.cc.clone()).ok_or_else(|| hir::Unsupported(format!("calling.toml has no {name} with a cc")));
+        let cc_of = |name: &str| {
+            calling
+                .named(name)
+                .and_then(|one| one.cc.clone())
+                .ok_or_else(|| hir::Unsupported(format!("calling.toml has no {name} with a cc")))
+        };
         unit.cdecl_cc = Some(cc_of(&profile.cdecl)?).filter(|cc| cc != "cdecl");
         unit.registers_cc = Some(cc_of(&profile.registers)?).filter(|cc| cc != "cdecl");
         unit.entry = profile.entry.clone();
         unit.default_registers = profile.default_registers.clone();
-        unit.entry_cc = calling.named(&profile.entry_convention).and_then(|one| one.cc.clone()).ok_or_else(|| hir::Unsupported(format!("calling.toml has no {} with a cc", profile.entry_convention)))?;
+        unit.entry_cc = calling
+            .named(&profile.entry_convention)
+            .and_then(|one| one.cc.clone())
+            .ok_or_else(|| hir::Unsupported(format!("calling.toml has no {} with a cc", profile.entry_convention)))?;
         unit.decorate(calling, codegen.object_format);
         // The front end was picked by the shim's flat flag; the target says what flat is.
         if unit.flat != codegen.arch.layout().spaces.far_is_near() {
-            return Err(hir::Unsupported(format!("the front end is {} but target {} is {}", if unit.flat { "flat" } else { "segmented" }, codegen.arch.name(), if unit.flat { "segmented" } else { "flat" })).into());
+            return Err(hir::Unsupported(format!(
+                "the front end is {} but target {} is {}",
+                if unit.flat { "flat" } else { "segmented" },
+                codegen.arch.name(),
+                if unit.flat { "segmented" } else { "flat" }
+            ))
+            .into());
         }
         let program = translate::program(&unit, module, codegen.arch.calling(), &profile)?;
         for warning in unit.warnings.borrow().iter() {
@@ -149,22 +176,24 @@ struct Args {
 pub struct Profile {
     /// The front end's tree: its CPU, `i86` or `386`.
     pub cpu: String,
-    /// The convention whose contract a call to a routine that states none has under this ABI, by its name in `calling.toml`.
+    /// The convention whose contract a call to a routine that states none has under this ABI, by its name in
+    /// `calling.toml`.
     pub convention: String,
     /// The routine the runtime's start calls, and the convention it calls it in by its name in `calling.toml`.
     pub entry: String,
     pub entry_convention: String,
-    /// What it records of a function it passes in its default registers: its own list (`[ff:0]`), which differs by tree.
+    /// What it records of a function it passes in its default registers: its own list (`[ff:0]`), which differs by
+    /// tree.
     pub default_registers: String,
-    /// The ABI the front end is asked for: what it is run with, and what its records mean in `calling.toml`'s conventions: one it
-    /// records as cdecl, and one it records in its default registers.
+    /// The ABI the front end is asked for: what it is run with, and what its records mean in `calling.toml`'s
+    /// conventions: one it records as cdecl, and one it records in its default registers.
     pub flags: Vec<String>,
     pub cdecl: String,
     pub registers: String,
     /// The header it includes first, from the repository root.
     pub header: String,
-    /// An interrupt handler's parameters, in order: the registers its frame holds, by name. None where the target has no
-    /// interrupt handlers.
+    /// An interrupt handler's parameters, in order: the registers its frame holds, by name. None where the target has
+    /// no interrupt handlers.
     pub interrupt_parameters: Vec<String>,
 }
 
@@ -175,43 +204,104 @@ impl Profile {
     }
 
     /// The profile under `-mabi=family`, the target's default without.
-    pub fn for_abi(target: &dyn llrm_target::Target, family: Option<&str>) -> Result<Self, String> {
+    pub fn for_abi(
+        target: &dyn llrm_target::Target,
+        family: Option<&str>,
+    ) -> Result<Self, String> {
         let description = target.runtime("c").ok_or_else(|| format!("target {} has no C runtime", target.name()))?;
         let calling = target.calling();
         calling.chosen(family)?;
         Self::parse(&description.table()?, family.unwrap_or(&calling.default))
     }
 
-    pub fn parse(table: &toml::Table, family: &str) -> Result<Self, String> {
-        let frontend = table.get("frontend").and_then(toml::Value::as_table).ok_or("the C runtime description has no [frontend]")?;
-        let text = |from: &toml::Table, key: &str| from.get(key).and_then(toml::Value::as_str).map(str::to_owned).ok_or_else(|| format!("frontend.{key} is not a string"));
-        let abi = frontend.get("abi").and_then(|one| one.get(family)).and_then(toml::Value::as_table).ok_or_else(|| format!("the C runtime description has no [frontend.abi.{family}]"))?;
-        let flags = abi.get("flags").and_then(toml::Value::as_array).ok_or("frontend.abi.flags is not a list")?.iter().map(|one| one.as_str().map(str::to_owned).ok_or("a frontend flag is not a string")).collect::<Result<_, _>>()?;
+    pub fn parse(
+        table: &toml::Table,
+        family: &str,
+    ) -> Result<Self, String> {
+        let frontend = table
+            .get("frontend")
+            .and_then(toml::Value::as_table)
+            .ok_or("the C runtime description has no [frontend]")?;
+        let text = |from: &toml::Table, key: &str| {
+            from.get(key)
+                .and_then(toml::Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| format!("frontend.{key} is not a string"))
+        };
+        let abi = frontend
+            .get("abi")
+            .and_then(|one| one.get(family))
+            .and_then(toml::Value::as_table)
+            .ok_or_else(|| format!("the C runtime description has no [frontend.abi.{family}]"))?;
+        let flags = abi
+            .get("flags")
+            .and_then(toml::Value::as_array)
+            .ok_or("frontend.abi.flags is not a list")?
+            .iter()
+            .map(|one| one.as_str().map(str::to_owned).ok_or("a frontend flag is not a string"))
+            .collect::<Result<_, _>>()?;
         let interrupt_parameters = match frontend.get("interrupt_parameters") {
             None => Vec::new(),
-            Some(list) => list.as_array().ok_or("frontend.interrupt_parameters is not a list")?.iter().map(|one| one.as_str().map(str::to_owned).ok_or("an interrupt parameter is not a string")).collect::<Result<_, _>>()?,
+            Some(list) => list
+                .as_array()
+                .ok_or("frontend.interrupt_parameters is not a list")?
+                .iter()
+                .map(|one| one.as_str().map(str::to_owned).ok_or("an interrupt parameter is not a string"))
+                .collect::<Result<_, _>>()?,
         };
-        Ok(Self { cpu: text(frontend, "watcom_cpu")?, convention: text(abi, "convention")?, entry: text(frontend, "entry")?, entry_convention: text(frontend, "entry_convention")?, default_registers: text(frontend, "default_registers")?, flags, cdecl: text(abi, "cdecl")?, registers: text(abi, "registers")?, header: text(frontend, "header")?, interrupt_parameters })
+        Ok(Self {
+            cpu: text(frontend, "watcom_cpu")?,
+            convention: text(abi, "convention")?,
+            entry: text(frontend, "entry")?,
+            entry_convention: text(frontend, "entry_convention")?,
+            default_registers: text(frontend, "default_registers")?,
+            flags,
+            cdecl: text(abi, "cdecl")?,
+            registers: text(abi, "registers")?,
+            header: text(frontend, "header")?,
+            interrupt_parameters,
+        })
     }
 }
 
 /// `recorded` for real mode, the target the tests of the recorded streams are for.
 #[cfg(test)]
-pub fn recorded(source: &Path, includes: &[String], debug: bool, watcom: &[&str]) -> Result<String, hir::Unsupported> {
-    recorded_for(source, includes, debug, watcom, &Profile::of(&llrm_x86_m16::M16).expect("real mode has a C front end profile"))
+pub fn recorded(
+    source: &Path,
+    includes: &[String],
+    debug: bool,
+    watcom: &[&str],
+) -> Result<String, hir::Unsupported> {
+    recorded_for(
+        source,
+        includes,
+        debug,
+        watcom,
+        &Profile::of(&llrm_x86_m16::M16).expect("real mode has a C front end profile"),
+    )
 }
 
 /// `source` recorded by the front end of `profile`'s tree, asked as it says.
-pub fn recorded_for(source: &Path, includes: &[String], debug: bool, watcom: &[&str], profile: &Profile) -> Result<String, hir::Unsupported> {
+pub fn recorded_for(
+    source: &Path,
+    includes: &[String],
+    debug: bool,
+    watcom: &[&str],
+    profile: &Profile,
+) -> Result<String, hir::Unsupported> {
     let root = Path::new(env!("LLRM_ROOT"));
     let unbuilt = || hir::Unsupported("llrm was built without the toolchain feature".into());
     let wccq = Path::new(option_env!("LLRM_WCCQ_DIR").ok_or_else(unbuilt)?).join(&profile.cpu).join("wccq");
     let failed = |detail: String| hir::Unsupported(format!("wccq failed on {}:\n{detail}", source.display()));
     let scratch = tempfile::tempdir().map_err(|error| failed(error.to_string()))?;
-    // One forced include (a second `-fi=` replaces the first): what GCC predefines and programs test (`__INT_MAX__`, `__SIZE_TYPE__`,
-    // `__BYTE_ORDER__`), as the target's sizes make them, and then the target's own header.
+    // One forced include (a second `-fi=` replaces the first): what GCC predefines and programs test (`__INT_MAX__`,
+    // `__SIZE_TYPE__`, `__BYTE_ORDER__`), as the target's sizes make them, and then the target's own header.
     let forced = scratch.path().join("predefined.h");
-    let text = format!("{}#include \"{}\"\n", crate::predefined::header(profile.cpu == "386"), root.join(&profile.header).display());
+    let text = format!(
+        "{}#include \"{}\"\n",
+        crate::predefined::header(profile.cpu == "386"),
+        root.join(&profile.header).display()
+    );
     fs::write(&forced, text).map_err(|error| failed(error.to_string()))?;
     let header = format!("-fi={}", forced.display());
     let flags: Vec<&str> = profile.flags.iter().map(String::as_str).chain([header.as_str()]).collect();
@@ -277,17 +367,18 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         (None, None) => return Err("the following arguments are required: source".to_owned()),
     };
     let bound = llrm_driver::target(&flags, Some(&["x86-m16", "x86-m32"]))?;
-    let os_layer = os_layer.map(|field| bound.target.os_layer().ok_or_else(|| "this target has no OS layer".to_owned()).and_then(|layer| layer.report(&bound.target.runtime("c").ok_or("this target has no C runtime")?, &field)));
+    let os_layer =
+        os_layer.map(|field| {
+            bound
+                .target
+                .os_layer()
+                .ok_or_else(|| "this target has no OS layer".to_owned())
+                .and_then(
+                    |layer| layer.report(&bound.target.runtime("c").ok_or("this target has no C runtime")?, &field),
+                )
+        });
     let machine = flags.machine(&*bound.target, bound.target.machine())?;
-    Ok(Args {
-        source,
-        os_layer,
-        dump,
-        include,
-        watcom,
-        codegen: bound.options(&flags, machine),
-        flags,
-    })
+    Ok(Args { source, os_layer, dump, include, watcom, codegen: bound.options(&flags, machine), flags })
 }
 
 /// `main`: exit status 0 on success, 1 on a refusal, 2 on bad arguments.
@@ -317,22 +408,43 @@ pub fn main(argv: &[String]) -> i32 {
         } else {
             llrm_core::support::debug::timed("frontend wccq", || {
                 // The target's physical addresses reach the program as `PHYSICAL_<NAME>`.
-                let defines: Vec<String> = args.codegen.arch.physical_addresses().iter().map(|(name, address)| format!("-dPHYSICAL_{}=0x{address:X}UL", name.to_uppercase())).collect();
-                let switches: Vec<&str> = args.watcom.iter().copied().chain(defines.iter().map(String::as_str)).collect();
-                recorded_for(&args.source, &args.include, args.flags.debug, &switches, &Profile::for_abi(&*args.codegen.arch, args.codegen.abi.as_deref()).map_err(hir::Unsupported)?)
+                let defines: Vec<String> = args
+                    .codegen
+                    .arch
+                    .physical_addresses()
+                    .iter()
+                    .map(|(name, address)| format!("-dPHYSICAL_{}=0x{address:X}UL", name.to_uppercase()))
+                    .collect();
+                let switches: Vec<&str> =
+                    args.watcom.iter().copied().chain(defines.iter().map(String::as_str)).collect();
+                recorded_for(
+                    &args.source,
+                    &args.include,
+                    args.flags.debug,
+                    &switches,
+                    &Profile::for_abi(&*args.codegen.arch, args.codegen.abi.as_deref()).map_err(hir::Unsupported)?,
+                )
             })?
         };
         let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
-        let module = args
-            .source
-            .file_stem()
-            .and_then(|one| one.to_str())
-            .unwrap_or_default();
+        let module = args.source.file_stem().and_then(|one| one.to_str()).unwrap_or_default();
         let format = args.flags.format(&*args.codegen.arch)?;
         let spelled = llrm_core::driver::Options { object_format: format.name(), ..args.codegen.clone() };
-        let built = selected_checking(&text, module, args.dump.as_deref(), &spelled, args.flags.sanitize.stack.then(|| stack_check(&*args.codegen.arch)), args.flags.wrapv)?;
+        let built = selected_checking(
+            &text,
+            module,
+            args.dump.as_deref(),
+            &spelled,
+            args.flags.sanitize.stack.then(|| stack_check(&*args.codegen.arch)),
+            args.flags.wrapv,
+        )?;
         let name = args.source.file_name().and_then(|one| one.to_str()).unwrap_or_default();
-        if !args.flags.assembly && matches!(output.extension().and_then(|one| one.to_str()).map(str::to_lowercase).as_deref(), Some("obj" | "o")) {
+        if !args.flags.assembly
+            && matches!(
+                output.extension().and_then(|one| one.to_str()).map(str::to_lowercase).as_deref(),
+                Some("obj" | "o")
+            )
+        {
             let bytes = objbuild::written_in(&built, name, objbuild::CodeLayout::OneSegment, format)?;
             llrm_core::support::debug::timed("write output", || fs::write(&output, bytes))?;
         } else {
@@ -359,7 +471,8 @@ mod tests {
     fn innermost(fixture: &str) -> Vec<String> {
         let path = Path::new(env!("LLRM_ROOT")).join(format!("{}/tests/fixtures/c/{fixture}.cgs", env!("LLRM_ROOT")));
         let text = std::fs::read_to_string(path).unwrap();
-        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         let built = super::selected(&text, fixture, None, &llrm_driver::m16_options(machine)).unwrap();
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let lines: Vec<&str> = asm.lines().map(str::trim).collect();
@@ -383,14 +496,30 @@ mod tests {
         let root = Path::new(env!("LLRM_ROOT"));
         let check = super::stack_check(&llrm_x86_m16::M16);
         let runtime = |name: &str| std::fs::read_to_string(root.join("runtime").join(name)).unwrap();
-        assert!(runtime("shared/dos/m16/os.asm").contains(&format!("public {}", check.limit)) && runtime("shared/dos/m16/start.asm").contains(&format!("mov {}, ax", check.limit)));
+        assert!(
+            runtime("shared/dos/m16/os.asm").contains(&format!("public {}", check.limit))
+                && runtime("shared/dos/m16/start.asm").contains(&format!("mov {}, ax", check.limit))
+        );
         assert!(runtime("c/x86-m16/ext.asm").contains(&format!("public {}", check.handler)));
         let text = std::fs::read_to_string(root.join("tests/fixtures/c/anims.cgs")).unwrap();
-        let options = llrm_driver::m16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() });
-        let listing = |check| llrm_core::backend::masm::text(&super::selected_checking(&text, "anims", None, &options, check, false).unwrap()).unwrap();
+        let options = llrm_driver::m16_options(llrm_core::abi::machine::Machine {
+            cpu: "486".to_owned(),
+            ..llrm_x86_m16::machine::BUILT_IN.clone()
+        });
+        let listing = |check| {
+            llrm_core::backend::masm::text(
+                &super::selected_checking(&text, "anims", None, &options, check, false).unwrap(),
+            )
+            .unwrap()
+        };
         let named = llrm_core::hir::model::StackCheck { limit: "FOO".into(), handler: "BAR".into(), ..check };
         let checked = listing(Some(named));
-        assert!(checked.contains("cmp sp, word ptr FOO") && checked.contains("call far ptr BAR") && !checked.contains("_llrm_os_stack_low"), "{checked}");
+        assert!(
+            checked.contains("cmp sp, word ptr FOO")
+                && checked.contains("call far ptr BAR")
+                && !checked.contains("_llrm_os_stack_low"),
+            "{checked}"
+        );
         assert!(!listing(None).contains("cmp sp"));
     }
 
@@ -437,8 +566,15 @@ mod tests {
 
     /// tests/fixtures/c/`path`.cgs's MIR as the front end emits it.
     fn emitted(path: &str) -> String {
-        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{path}.cgs"))).unwrap();
-        let program = crate::translate::program(&crate::hir::unit(&crate::stream::parse(&text)).unwrap(), "t", llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).unwrap();
+        let text =
+            std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{path}.cgs"))).unwrap();
+        let program = crate::translate::program(
+            &crate::hir::unit(&crate::stream::parse(&text)).unwrap(),
+            "t",
+            llrm_target::Target::calling(&llrm_x86_m16::M16),
+            &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap(),
+        )
+        .unwrap();
         let options = llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone());
         let (mir, _) = llrm_core::driver::emitted(&program, &options).unwrap();
         llrm_mir::print::module(&mir.modules[0])
@@ -446,7 +582,8 @@ mod tests {
 
     /// tests/fixtures/c/`path`.cgs compiled.
     fn compiles(path: &str) {
-        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{path}.cgs"))).unwrap();
+        let text =
+            std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{path}.cgs"))).unwrap();
         let options = llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone());
         super::selected(&text, "t", None, &options).unwrap_or_else(|error| panic!("{path}: {error}"));
     }
@@ -487,8 +624,12 @@ mod tests {
     }
 
     /// `name`'s listing of `function`, compiled from tests/fixtures/c/`name`.cgs.
-    fn listing_of(name: &str, function: &str) -> String {
-        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs"))).unwrap();
+    fn listing_of(
+        name: &str,
+        function: &str,
+    ) -> String {
+        let text =
+            std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs"))).unwrap();
         let options = llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone());
         let built = super::selected(&text, name, None, &options).unwrap_or_else(|error| panic!("{error:?}"));
         let listing = llrm_core::backend::masm::text(&built).unwrap();
@@ -502,9 +643,14 @@ mod tests {
     /// again after `*p = 5`. Without -oa they are read again, as C requires.
     #[test]
     fn test_relaxed_alias_checking_keeps_unaddressed_objects_across_a_store() {
-        let reads = |listing: &str, name: &str| listing.lines().filter(|one| one.contains(&format!("ptr {name}"))).count();
+        let reads =
+            |listing: &str, name: &str| listing.lines().filter(|one| one.contains(&format!("ptr {name}"))).count();
         let strict = listing_of("strictalias", "_after_store");
-        assert_eq!((reads(&strict, "_counter"), reads(&strict, "_seen")), (2, 2), "premise: read again without -oa\n{strict}");
+        assert_eq!(
+            (reads(&strict, "_counter"), reads(&strict, "_seen")),
+            (2, 2),
+            "premise: read again without -oa\n{strict}"
+        );
         let relaxed = listing_of("relaxalias", "_after_store");
         assert_eq!((reads(&relaxed, "_counter"), reads(&relaxed, "_seen")), (1, 1), "{relaxed}");
     }
@@ -515,7 +661,9 @@ mod tests {
     /// read again after `ext()`, `keep(tbl)` or `*p = 1`.
     #[test]
     fn test_a_const_object_is_read_once_across_a_call_or_a_store() {
-        let reads = |function: &str, name: &str| listing_of("constobj", function).lines().filter(|one| one.contains(&format!("ptr {name}"))).count();
+        let reads = |function: &str, name: &str| {
+            listing_of("constobj", function).lines().filter(|one| one.contains(&format!("ptr {name}"))).count()
+        };
         assert_eq!(reads("_ext_plain", "_ev"), 2, "premise: a plain extern is read again after a call");
         assert_eq!(reads("_ext_const", "_ek"), 1);
         assert_eq!(reads("_table", "_tbl"), 1);
@@ -528,7 +676,12 @@ mod tests {
     #[test]
     fn test_register_convention_is_refused() {
         let path = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/regs.cgs");
-        match super::selected(&std::fs::read_to_string(path).unwrap(), "regs", None, &llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())) {
+        match super::selected(
+            &std::fs::read_to_string(path).unwrap(),
+            "regs",
+            None,
+            &llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone()),
+        ) {
             Err(CompileError::Unsupported(refused)) => {
                 assert!(refused.to_string().contains("_twice has a register calling convention"), "{refused}");
             }
@@ -544,15 +697,23 @@ mod tests {
     fn test_wccq_built_here_records_the_committed_stream() {
         let root = Path::new(env!("LLRM_ROOT"));
         let source = root.join("tests/fixtures/c/halve.c");
-        let without_path = |text: &str| text.lines().filter(|line| !line.contains("DBSrcFile")).collect::<Vec<_>>().join("\n");
+        let without_path =
+            |text: &str| text.lines().filter(|line| !line.contains("DBSrcFile")).collect::<Vec<_>>().join("\n");
         // The committed streams are Borland's, every function cdecl.
-        let recorded = super::recorded_for(&source, &[], false, &[], &super::Profile::for_abi(&llrm_x86_m16::M16, Some("cdecl")).unwrap()).expect("wccq records halve.c");
+        let recorded = super::recorded_for(
+            &source,
+            &[],
+            false,
+            &[],
+            &super::Profile::for_abi(&llrm_x86_m16::M16, Some("cdecl")).unwrap(),
+        )
+        .expect("wccq records halve.c");
         let committed = std::fs::read_to_string(root.join("tests/fixtures/c/halve.cgs")).unwrap();
         assert_eq!(without_path(&recorded), without_path(&committed));
     }
 
-    /// A far pointer made from a long in memory had its segment as a word-wide view of the shifted dword, a second width of one
-    /// value: the allocator loaded ES again on every iteration of the loop that stores through it.
+    /// A far pointer made from a long in memory had its segment as a word-wide view of the shifted dword, a second
+    /// width of one value: the allocator loaded ES again on every iteration of the loop that stores through it.
     // It records C through wccq, which only the toolchain feature builds.
     #[cfg(feature = "toolchain")]
     #[test]
@@ -560,14 +721,29 @@ mod tests {
         let profile = super::Profile::of(&llrm_x86_m16::M16).unwrap();
         let source = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/farcast.c");
         let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records farcast.c");
-        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         let built = super::selected(&text, "farcast", None, &llrm_driver::m16_options(machine)).unwrap();
         let asm = llrm_core::backend::masm::text(&built).unwrap();
-        let name = llrm_target::Target::calling(&llrm_x86_m16::M16).native().decorated("omf", "fill").expect("the default convention spells its symbols");
+        let name = llrm_target::Target::calling(&llrm_x86_m16::M16)
+            .native()
+            .decorated("omf", "fill")
+            .expect("the default convention spells its symbols");
         let from = asm.find(&format!("{name} proc")).expect("the function");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
-        let loop_at = body.iter().position(|line| line.ends_with(':') && line.starts_with('L') && body.iter().any(|one| one.starts_with("jne") && line.starts_with(&one[4..]))).expect("the loop");
-        assert!(body.iter().filter(|line| line.starts_with("mov es,")).count() == 1 && !body[loop_at..].iter().any(|line| line.starts_with("mov es,")), "{body:?}");
+        let loop_at = body
+            .iter()
+            .position(|line| {
+                line.ends_with(':')
+                    && line.starts_with('L')
+                    && body.iter().any(|one| one.starts_with("jne") && line.starts_with(&one[4..]))
+            })
+            .expect("the loop");
+        assert!(
+            body.iter().filter(|line| line.starts_with("mov es,")).count() == 1
+                && !body[loop_at..].iter().any(|line| line.starts_with("mov es,")),
+            "{body:?}"
+        );
     }
 
     /// A long double global got its initializer as a double, 8 bytes, while
@@ -578,7 +754,8 @@ mod tests {
     fn test_a_long_double_initializer_is_ten_bytes() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("probe.c");
-        std::fs::write(&source, "long double gld = 3.5;\nshort after = 7;\nlong double get(void) { return gld; }\n").unwrap();
+        std::fs::write(&source, "long double gld = 3.5;\nshort after = 7;\nlong double get(void) { return gld; }\n")
+            .unwrap();
         let recorded = super::recorded(&source, &[], false, &[]).expect("wccq records probe.c");
         let data: Vec<&str> = recorded.lines().filter(|line| line.contains("DGBytes")).collect();
         assert_eq!(data, ["- DGBytes 10 00000000000000e00040"], "{recorded}");
@@ -590,8 +767,14 @@ mod tests {
     fn test_a_target_asks_the_front_end_as_its_description_says() {
         let real = super::Profile::of(&llrm_x86_m16::M16).unwrap();
         let flat = super::Profile::of(&llrm_x86_m32::M32).unwrap();
-        assert_eq!((real.cpu.as_str(), real.header.as_str(), real.flags.contains(&"-mm".to_owned())), ("i86", "crates/frontends/llrm-c/src/borland.h", true));
-        assert_eq!((flat.cpu.as_str(), flat.header.as_str(), flat.flags.contains(&"-zp4".to_owned())), ("386", "crates/frontends/llrm-c/src/flat.h", true));
+        assert_eq!(
+            (real.cpu.as_str(), real.header.as_str(), real.flags.contains(&"-mm".to_owned())),
+            ("i86", "crates/frontends/llrm-c/src/borland.h", true)
+        );
+        assert_eq!(
+            (flat.cpu.as_str(), flat.header.as_str(), flat.flags.contains(&"-zp4".to_owned())),
+            ("386", "crates/frontends/llrm-c/src/flat.h", true)
+        );
         let none: toml::Table = "stack = \"stack.toml\"\n".parse().unwrap();
         assert_eq!(super::Profile::parse(&none, "x").unwrap_err(), "the C runtime description has no [frontend]");
     }
@@ -603,30 +786,39 @@ mod tests {
     #[test]
     fn test_the_386_wccq_records_the_committed_flat_stream() {
         let dir = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c32");
-        let recorded = super::recorded_for(&dir.join("sum.c"), &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap()).expect("the 386 wccq records sum.c");
+        let recorded =
+            super::recorded_for(&dir.join("sum.c"), &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap())
+                .expect("the 386 wccq records sum.c");
         let committed = std::fs::read_to_string(dir.join("sum.cgs")).unwrap();
-        let body = |text: &str| text.lines().filter(|line| !line.contains("DBSrcFile")).map(str::to_owned).collect::<Vec<_>>();
+        let body =
+            |text: &str| text.lines().filter(|line| !line.contains("DBSrcFile")).map(str::to_owned).collect::<Vec<_>>();
         assert!(recorded.starts_with("INIT ") && recorded.lines().next().unwrap().ends_with(" flat=1"), "{recorded}");
         assert_eq!(body(&recorded), body(&committed));
     }
 
-    /// A second `-fi=` replaces the first: the predefined macros' header was forced after the target's, `far` was a far pointer
-    /// again on the flat target, and DWARF refused every bench program that used one ("a far or huge pointer has no DWARF type").
-    /// The target's header and the predefined macros are both in the one forced file.
+    /// A second `-fi=` replaces the first: the predefined macros' header was forced after the target's, `far` was a far
+    /// pointer again on the flat target, and DWARF refused every bench program that used one ("a far or huge
+    /// pointer has no DWARF type"). The target's header and the predefined macros are both in the one forced file.
     // It records C through wccq, which only the toolchain feature builds.
     #[cfg(feature = "toolchain")]
     #[test]
     fn test_the_targets_header_and_the_predefined_macros_are_both_forced() {
         let scratch = tempfile::tempdir().unwrap();
         let source = scratch.path().join("far.c");
-        std::fs::write(&source, "int far *cell;\nint widest = __INT_MAX__;\nint main(void) { return *cell + (widest != 2147483647); }\n").unwrap();
-        let recorded = super::recorded_for(&source, &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap()).expect("records far.c");
+        std::fs::write(
+            &source,
+            "int far *cell;\nint widest = __INT_MAX__;\nint main(void) { return *cell + (widest != 2147483647); }\n",
+        )
+        .unwrap();
+        let recorded = super::recorded_for(&source, &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap())
+            .expect("records far.c");
         assert!(!recorded.contains("TY_LONG_POINTER"), "`far` is a far pointer on a flat target: {recorded}");
         assert!(recorded.contains("2147483647"), "__INT_MAX__ is defined: {recorded}");
     }
 
-    /// Borland's dos.h names a parameter `__segment` (`peek( unsigned __segment, unsigned __offset )`), an Open Watcom keyword: on the flat
-    /// target the declaration was E1060 "Invalid type" (QCport host/dbg and game/mdl_ai at m32). Both targets' headers rename it.
+    /// Borland's dos.h names a parameter `__segment` (`peek( unsigned __segment, unsigned __offset )`), an Open Watcom
+    /// keyword: on the flat target the declaration was E1060 "Invalid type" (QCport host/dbg and game/mdl_ai at
+    /// m32). Both targets' headers rename it.
     // It records C through wccq, which only the toolchain feature builds.
     #[cfg(feature = "toolchain")]
     #[test]
@@ -634,17 +826,27 @@ mod tests {
         let scratch = tempfile::tempdir().unwrap();
         let source = scratch.path().join("seg.c");
         std::fs::write(&source, "int peek( unsigned __segment, unsigned __offset );\nint peek( unsigned __segment, unsigned __offset ) { return __segment + __offset; }\n").unwrap();
-        for target in [super::Profile::of(&llrm_x86_m16::M16).unwrap(), super::Profile::of(&llrm_x86_m32::M32).unwrap()] {
-            super::recorded_for(&source, &[], false, &[], &target).unwrap_or_else(|error| panic!("{}: {error:?}", target.cpu));
+        for target in [super::Profile::of(&llrm_x86_m16::M16).unwrap(), super::Profile::of(&llrm_x86_m32::M32).unwrap()]
+        {
+            super::recorded_for(&source, &[], false, &[], &target)
+                .unwrap_or_else(|error| panic!("{}: {error:?}", target.cpu));
         }
     }
 
     /// The loop in `function` that reads `marker`, from its label to its backward branch, as the rich route selects it.
-    fn selected_loop(fixture: &str, function: &str, marker: &str) -> Vec<String> {
+    fn selected_loop(
+        fixture: &str,
+        function: &str,
+        marker: &str,
+    ) -> Vec<String> {
         let path = Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"));
-        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         // At -O2: a loop is copied out only where the code does not grow, so the loop the test reads stays a loop.
-        let options = llrm_core::driver::Options { pipeline: llrm_transforms::pipeline::Options::standard(), ..llrm_driver::m16_options(machine) };
+        let options = llrm_core::driver::Options {
+            pipeline: llrm_transforms::pipeline::Options::standard(),
+            ..llrm_driver::m16_options(machine)
+        };
         let built = super::selected(&std::fs::read_to_string(path).unwrap(), fixture, None, &options).unwrap();
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find(&format!("{function} proc")).expect("the function");
@@ -663,26 +865,46 @@ mod tests {
     }
 
     /// The instructions of `function` as the rich route selects them.
-    fn selected_body(fixture: &str, function: &str) -> Vec<String> {
+    fn selected_body(
+        fixture: &str,
+        function: &str,
+    ) -> Vec<String> {
         let path = Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"));
-        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
-        let built = super::selected(&std::fs::read_to_string(path).unwrap(), fixture, None, &llrm_driver::m16_options(machine)).unwrap();
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let built =
+            super::selected(&std::fs::read_to_string(path).unwrap(), fixture, None, &llrm_driver::m16_options(machine))
+                .unwrap();
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find(&format!("{function} proc")).expect("the function");
-        asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).filter(|one| !one.ends_with(':')).map(str::to_owned).collect()
+        asm[from..]
+            .lines()
+            .skip(1)
+            .map(str::trim)
+            .take_while(|one| !one.ends_with("endp"))
+            .filter(|one| !one.ends_with(':'))
+            .map(str::to_owned)
+            .collect()
     }
 
-    /// `function` of tests/fixtures/c/regparm3.c under `-mabi=regparm3`: gcc's `-mregparm=3` by the size of the argument.
+    /// `function` of tests/fixtures/c/regparm3.c under `-mabi=regparm3`: gcc's `-mregparm=3` by the size of the
+    /// argument.
     fn regparm3(function: &str) -> Vec<String> {
         regparm3_at(function, llrm_core::driver::flags::Level::O2)
     }
 
-    fn regparm3_at(function: &str, level: llrm_core::driver::flags::Level) -> Vec<String> {
+    fn regparm3_at(
+        function: &str,
+        level: llrm_core::driver::flags::Level,
+    ) -> Vec<String> {
         procedure_of(&regparm3_listing(level), &format!("{function}@3"))
     }
 
     /// The lines of `symbol`'s procedure in `asm`.
-    fn procedure_of(asm: &str, symbol: &str) -> Vec<String> {
+    fn procedure_of(
+        asm: &str,
+        symbol: &str,
+    ) -> Vec<String> {
         let from = asm.find(&format!("{symbol} proc")).expect("the function");
         asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).map(str::to_owned).collect()
     }
@@ -692,15 +914,20 @@ mod tests {
         let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("regparm3")).unwrap();
         let source = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/regparm3.c");
         let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records regparm3.c");
-        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
-        let options = llrm_core::driver::Options { abi: Some("regparm3".to_owned()), pipeline: level.options(), ..llrm_driver::m16_options(machine) };
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let options = llrm_core::driver::Options {
+            abi: Some("regparm3".to_owned()),
+            pipeline: level.options(),
+            ..llrm_driver::m16_options(machine)
+        };
         let built = super::selected(&text, "regparm3", None, &options).unwrap();
         llrm_core::backend::masm::text(&built).unwrap()
     }
 
-    /// A definition has the convention of its prior declaration, as with any C compiler: `declared` follows a `__cdecl` prototype and
-    /// is `_declared`, cdecl's, under the regparm3 default, where `plain` after no prototype is `_plain@3`. The Borland routines a
-    /// program replaces are defined so (QCport's strlib.c).
+    /// A definition has the convention of its prior declaration, as with any C compiler: `declared` follows a `__cdecl`
+    /// prototype and is `_declared`, cdecl's, under the regparm3 default, where `plain` after no prototype is
+    /// `_plain@3`. The Borland routines a program replaces are defined so (QCport's strlib.c).
     #[test]
     fn test_m16_regparm3_a_definition_takes_the_convention_of_its_declaration() {
         let asm = regparm3_listing(llrm_core::driver::flags::Level::O2);
@@ -715,31 +942,49 @@ mod tests {
     fn test_a_definition_contradicting_its_prototype_is_refused() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("clash.c");
-        std::fs::write(&source, "int __cdecl f(int a, int b);\nint __pascal f(int a, int b) { return a - b; }\n").unwrap();
-        let error = super::recorded_for(&source, &[], false, &[], &super::Profile::for_abi(&llrm_x86_m16::M16, Some("regparm3")).unwrap()).unwrap_err();
+        std::fs::write(&source, "int __cdecl f(int a, int b);\nint __pascal f(int a, int b) { return a - b; }\n")
+            .unwrap();
+        let error = super::recorded_for(
+            &source,
+            &[],
+            false,
+            &[],
+            &super::Profile::for_abi(&llrm_x86_m16::M16, Some("regparm3")).unwrap(),
+        )
+        .unwrap_err();
         assert!(error.0.contains("Modifiers disagree"), "{}", error.0);
     }
 
-    /// The first three integer arguments arrive in AL, DX and ECX, each the width of its value (a long in one register); the fourth
-    /// is the stack's first word.
+    /// The first three integer arguments arrive in AL, DX and ECX, each the width of its value (a long in one
+    /// register); the fourth is the stack's first word.
     #[test]
     fn test_m16_regparm3_the_first_three_arguments_arrive_by_their_size_and_the_fourth_on_the_stack() {
         let body = regparm3("_sized");
-        assert!(body.contains(&"movsx ax, al".to_owned()) && body.contains(&"add ax, dx".to_owned()) && body.contains(&"add eax, ecx".to_owned()) && body.contains(&"add eax, dword ptr [bp+6]".to_owned()), "{body:?}");
+        assert!(
+            body.contains(&"movsx ax, al".to_owned())
+                && body.contains(&"add ax, dx".to_owned())
+                && body.contains(&"add eax, ecx".to_owned())
+                && body.contains(&"add eax, dword ptr [bp+6]".to_owned()),
+            "{body:?}"
+        );
     }
 
-    /// A float and a double are on the stack and leave the registers to the integers after them: `skip(float, int b, double, int d, int e)`
-    /// has b, d, e in AX, DX, CX. Open Watcom's convention stops at the first that fits none.
+    /// A float and a double are on the stack and leave the registers to the integers after them: `skip(float, int b,
+    /// double, int d, int e)` has b, d, e in AX, DX, CX. Open Watcom's convention stops at the first that fits
+    /// none.
     #[test]
     fn test_m16_regparm3_a_float_and_a_double_do_not_stop_the_later_integers_taking_registers() {
         let body = regparm3("_skip");
-        assert!(body.contains(&"fld dword ptr [bp+6]".to_owned()) && body.contains(&"fld qword ptr [bp+10]".to_owned()), "{body:?}");
+        assert!(
+            body.contains(&"fld dword ptr [bp+6]".to_owned()) && body.contains(&"fld qword ptr [bp+10]".to_owned()),
+            "{body:?}"
+        );
         assert!(!body.iter().any(|line| line.contains("[bp+18]") || line.contains("[bp+20]")), "{body:?}");
     }
 
-    /// A call in a register convention changes FS and GS, as any call into code that may use them does: the description names no
-    /// selector, and a far pointer's segment held in FS across `ext` was read again after it, whatever `ext` had put there
-    /// (QCport drew 37697 polygons for Borland's 37637, its pool's self-test failing).
+    /// A call in a register convention changes FS and GS, as any call into code that may use them does: the description
+    /// names no selector, and a far pointer's segment held in FS across `ext` was read again after it, whatever
+    /// `ext` had put there (QCport drew 37697 polygons for Borland's 37637, its pool's self-test failing).
     #[test]
     fn test_m16_regparm3_a_call_does_not_keep_a_segment_in_fs_or_gs() {
         let body = regparm3("_keep_far");
@@ -758,17 +1003,21 @@ mod tests {
         }
     }
 
-    /// A struct of 4 bytes passed by value is on the stack, whatever its size; Open Watcom's convention passes it as a long
-    /// in registers. `take4(struct S4 s, int a)` reads s at [bp+6] and [bp+8], a is in AX.
+    /// A struct of 4 bytes passed by value is on the stack, whatever its size; Open Watcom's convention passes it as a
+    /// long in registers. `take4(struct S4 s, int a)` reads s at [bp+6] and [bp+8], a is in AX.
     #[test]
     fn test_m16_regparm3_a_small_struct_argument_is_on_the_stack() {
         let body = regparm3("_take4");
-        assert!(body.contains(&"mov ax, word ptr [bp+6]".to_owned()) && body.contains(&"mov ax, word ptr [bp+8]".to_owned()), "{body:?}");
+        assert!(
+            body.contains(&"mov ax, word ptr [bp+6]".to_owned())
+                && body.contains(&"mov ax, word ptr [bp+8]".to_owned()),
+            "{body:?}"
+        );
     }
 
-    /// A copy and an add, `mov r,ax; add r,k`, are one `lea r,[eax+k]` where it costs no more: the 486's LEA is one clock (its table
-    /// held the 386's two), so with the address-size prefix it is the two instructions' two clocks in a byte less. Two values off one
-    /// argument took two instructions each.
+    /// A copy and an add, `mov r,ax; add r,k`, are one `lea r,[eax+k]` where it costs no more: the 486's LEA is one
+    /// clock (its table held the 386's two), so with the address-size prefix it is the two instructions' two clocks
+    /// in a byte less. Two values off one argument took two instructions each.
     #[test]
     fn test_m16_regparm3_a_copy_and_an_add_are_one_lea_where_it_costs_no_more() {
         let body = regparm3("_leas");
@@ -780,11 +1029,14 @@ mod tests {
     #[test]
     fn test_m16_regparm3_a_copy_and_a_unit_add_stay_when_the_lea_is_longer_than_the_inc() {
         let body = regparm3_at("_incs", llrm_core::driver::flags::Level::Os);
-        assert!(body.iter().any(|line| line.starts_with("inc ")) && !body.iter().any(|line| line.starts_with("lea ")), "{body:?}");
+        assert!(
+            body.iter().any(|line| line.starts_with("inc ")) && !body.iter().any(|line| line.starts_with("lea ")),
+            "{body:?}"
+        );
     }
 
-    /// `calleepop` serves a regparm3 function as it does a cdecl16 one: `many`'s fourth and fifth arguments are the only ones on the
-    /// stack, and its callee removes them (`ret 4`), its callers nothing.
+    /// `calleepop` serves a regparm3 function as it does a cdecl16 one: `many`'s fourth and fifth arguments are the
+    /// only ones on the stack, and its callee removes them (`ret 4`), its callers nothing.
     #[test]
     fn test_m16_regparm3_calleepop_removes_the_stack_arguments_in_the_callee() {
         let body = regparm3("_many");
@@ -793,23 +1045,34 @@ mod tests {
         assert!(!caller.iter().any(|line| line.starts_with("add sp")), "{caller:?}");
     }
 
-    /// A long on the stack is two words: `stack_long`'s fourth, fifth and sixth arguments (a byte, a long, a long) are at [bp+6], [bp+8]
-    /// and [bp+12]. The long was a word's worth to the stack's layout, so the sixth was read at [bp+10], from the middle of the fifth.
+    /// A long on the stack is two words: `stack_long`'s fourth, fifth and sixth arguments (a byte, a long, a long) are
+    /// at [bp+6], [bp+8] and [bp+12]. The long was a word's worth to the stack's layout, so the sixth was read at
+    /// [bp+10], from the middle of the fifth.
     #[test]
     fn test_m16_regparm3_a_long_on_the_stack_takes_two_words() {
         let body = regparm3("_stack_long");
-        assert!(body.iter().any(|line| line.ends_with("byte ptr [bp+6]")) && body.iter().any(|line| line.ends_with("dword ptr [bp+8]")) && body.iter().any(|line| line.ends_with("dword ptr [bp+12]")), "{body:?}");
+        assert!(
+            body.iter().any(|line| line.ends_with("byte ptr [bp+6]"))
+                && body.iter().any(|line| line.ends_with("dword ptr [bp+8]"))
+                && body.iter().any(|line| line.ends_with("dword ptr [bp+12]")),
+            "{body:?}"
+        );
     }
 
     /// An i64 is four stack words, low half first, and the int after it takes AX.
     #[test]
     fn test_m16_regparm3_an_i64_is_on_the_stack_and_the_next_integer_takes_ax() {
         let body = regparm3("_wide");
-        assert!(body.contains(&"mov eax, dword ptr [bp+6]".to_owned()) || body.iter().any(|line| line.contains("dword ptr [bp+6]")), "{body:?}");
+        assert!(
+            body.contains(&"mov eax, dword ptr [bp+6]".to_owned())
+                || body.iter().any(|line| line.contains("dword ptr [bp+6]")),
+            "{body:?}"
+        );
         assert!(!body.iter().any(|line| line.contains("[bp+14]")), "{body:?}");
     }
 
-    /// A long is returned in EAX: `long_result` ends with the product in EAX, the `shld edx, eax, 16` that made DX:AX gone.
+    /// A long is returned in EAX: `long_result` ends with the product in EAX, the `shld edx, eax, 16` that made DX:AX
+    /// gone.
     #[test]
     fn test_m16_regparm3_a_long_result_is_in_eax_with_no_dx_ax_repack() {
         let body = regparm3("_long_result");
@@ -817,33 +1080,53 @@ mod tests {
         assert!(!body.iter().any(|line| line.starts_with("shld")), "{body:?}");
     }
 
-    /// A far pointer comes back in EAX, the segment in the high word. Taken apart with the segment a dword's high half used as a word,
-    /// the allocator did not see it as the one value and loaded ES again on every iteration of the loop: 10007 more instructions in
-    /// bench textfill/nib.
+    /// A far pointer comes back in EAX, the segment in the high word. Taken apart with the segment a dword's high half
+    /// used as a word, the allocator did not see it as the one value and loaded ES again on every iteration of the
+    /// loop: 10007 more instructions in bench textfill/nib.
     #[test]
     fn test_m16_regparm3_a_far_pointer_returned_in_eax_loads_es_once_before_the_loop() {
         let body = regparm3("_fill");
         assert_eq!(body.iter().filter(|line| line.starts_with("mov es,")).count(), 1, "{body:?}");
-        let loop_start = body.iter().position(|line| line.starts_with("L") && line.ends_with(':') && body.iter().skip_while(|one| *one != line).any(|one| one.starts_with("jne") && one.ends_with(line.trim_end_matches(':')))).expect("the loop");
+        let loop_start = body
+            .iter()
+            .position(|line| {
+                line.starts_with("L")
+                    && line.ends_with(':')
+                    && body
+                        .iter()
+                        .skip_while(|one| *one != line)
+                        .any(|one| one.starts_with("jne") && one.ends_with(line.trim_end_matches(':')))
+            })
+            .expect("the loop");
         assert!(body[loop_start..].iter().all(|line| !line.starts_with("mov es,")), "{body:?}");
     }
 
-    /// A constant far pointer is returned as the one dword it is: it was split to words and joined again (six instructions) in
-    /// bench textfill's `os.text_screen`.
+    /// A constant far pointer is returned as the one dword it is: it was split to words and joined again (six
+    /// instructions) in bench textfill's `os.text_screen`.
     #[test]
     fn test_m16_regparm3_a_constant_far_pointer_is_returned_as_one_move() {
         let body = regparm3("_const_far");
-        assert_eq!(body.iter().filter(|line| !line.ends_with(':')).collect::<Vec<_>>(), ["mov eax, -1207959552", "retf"], "{body:?}");
+        assert_eq!(
+            body.iter().filter(|line| !line.ends_with(':')).collect::<Vec<_>>(),
+            ["mov eax, -1207959552", "retf"],
+            "{body:?}"
+        );
     }
 
-    /// An argument register stored to its slot at entry is still the value: a later read of the slot is a read of the register. They
-    /// were `mov [bp-2], dx` then `mov bx, [bp-2]`, and `add di, [bp-2]`: a memory operand more each (bench recchop/c -Os: +185).
+    /// An argument register stored to its slot at entry is still the value: a later read of the slot is a read of the
+    /// register. They were `mov [bp-2], dx` then `mov bx, [bp-2]`, and `add di, [bp-2]`: a memory operand more each
+    /// (bench recchop/c -Os: +185).
     #[test]
     fn test_m16_regparm3_a_slot_a_register_still_holds_is_read_from_the_register() {
         let body = regparm3_at("_chop", llrm_core::driver::flags::Level::Os);
-        let stored = body.iter().position(|line| line.starts_with("mov word ptr [bp-") && line.ends_with(", dx")).expect("dx is stored at entry");
+        let stored = body
+            .iter()
+            .position(|line| line.starts_with("mov word ptr [bp-") && line.ends_with(", dx"))
+            .expect("dx is stored at entry");
         let slot = body[stored].split(']').next().unwrap().rsplit(' ').next().unwrap().to_owned();
-        let until_dx_changes = body[stored + 1..].iter().take_while(|line| !line.contains(" dx,") && !line.contains(" edx,") && !line.contains("call"));
+        let until_dx_changes = body[stored + 1..]
+            .iter()
+            .take_while(|line| !line.contains(" dx,") && !line.contains(" edx,") && !line.contains("call"));
         assert!(until_dx_changes.clone().all(|line| !line.contains(&slot)), "{body:?}");
     }
 
@@ -851,15 +1134,23 @@ mod tests {
     #[test]
     fn test_m16_regparm3_a_far_pointer_result_is_one_dword_joined_and_split() {
         let body = regparm3("_far_result");
-        assert!(body.iter().any(|line| line.starts_with("shl") || line.starts_with("shld")) && !body.iter().any(|line| line.contains("edx")), "{body:?}");
+        assert!(
+            body.iter().any(|line| line.starts_with("shl") || line.starts_with("shld"))
+                && !body.iter().any(|line| line.contains("edx")),
+            "{body:?}"
+        );
         let body = regparm3("_caller");
-        assert!(body.contains(&"shr eax, 16".to_owned()) && body.iter().any(|line| line.starts_with("mov es,")), "{body:?}");
+        assert!(
+            body.contains(&"shr eax, 16".to_owned()) && body.iter().any(|line| line.starts_with("mov es,")),
+            "{body:?}"
+        );
     }
 
     /// `function` of tests/fixtures/c/ia16.cgs under `-mabi=ia16`: gcc-ia16's convention.
     fn ia16(function: &str) -> Vec<String> {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/ia16.cgs")).unwrap();
-        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         let options = llrm_core::driver::Options { abi: Some("ia16".to_owned()), ..llrm_driver::m16_options(machine) };
         let built = super::selected(&text, "ia16", None, &options).unwrap();
         let asm = llrm_core::backend::masm::text(&built).unwrap();
@@ -867,12 +1158,16 @@ mod tests {
         asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).map(str::to_owned).collect()
     }
 
-    /// `ia16-elf-gcc` writes a struct result larger than 4 bytes through a near pointer that is the first argument and returns it in
-    /// AX, the caller removing all it pushed (6 bytes, the pointer too); Borland's was a far pointer (4 bytes) returned in DX:AX.
+    /// `ia16-elf-gcc` writes a struct result larger than 4 bytes through a near pointer that is the first argument and
+    /// returns it in AX, the caller removing all it pushed (6 bytes, the pointer too); Borland's was a far pointer
+    /// (4 bytes) returned in DX:AX.
     #[test]
     fn test_m16_ia16_a_struct_result_is_a_near_first_argument_the_caller_removes() {
         let body = ia16("_fs");
-        assert!(body.contains(&"mov bx, word ptr [bp+6]".to_owned()) && body.contains(&"mov ax, bx".to_owned()), "{body:?}");
+        assert!(
+            body.contains(&"mov bx, word ptr [bp+6]".to_owned()) && body.contains(&"mov ax, bx".to_owned()),
+            "{body:?}"
+        );
         assert_eq!(body.last().map(String::as_str), Some("retf"));
         let body = ia16("_callsr");
         assert!(body.contains(&"lea ax, [bp-6]".to_owned()) && body.contains(&"add sp, 6".to_owned()), "{body:?}");
@@ -888,9 +1183,12 @@ mod tests {
 
     /// `function` of tests/fixtures/c/watcall16.cgs under `-mabi=watcom`: Open Watcom's 16-bit register convention.
     fn watcall16(function: &str) -> Vec<String> {
-        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/watcall16.cgs")).unwrap();
-        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
-        let options = llrm_core::driver::Options { abi: Some("watcom".to_owned()), ..llrm_driver::m16_options(machine) };
+        let text =
+            std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/watcall16.cgs")).unwrap();
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let options =
+            llrm_core::driver::Options { abi: Some("watcom".to_owned()), ..llrm_driver::m16_options(machine) };
         let built = super::selected(&text, "watcall16", None, &options).unwrap();
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find(&format!("{function} proc")).expect("the function");
@@ -902,24 +1200,53 @@ mod tests {
     #[test]
     fn test_m16_watcom_words_arrive_in_ax_dx_bx_cx_and_the_callee_pops_the_rest() {
         let body = watcall16("six_");
-        assert_eq!(body, ["push bp", "mov bp, sp", "L0_0:", "sub ax, dx", "imul bx, cx", "add ax, bx", "sub ax, word ptr [bp+6]", "add ax, word ptr [bp+8]", "pop bp", "retf 4"]);
+        assert_eq!(
+            body,
+            [
+                "push bp",
+                "mov bp, sp",
+                "L0_0:",
+                "sub ax, dx",
+                "imul bx, cx",
+                "add ax, bx",
+                "sub ax, word ptr [bp+6]",
+                "add ax, word ptr [bp+8]",
+                "pop bp",
+                "retf 4"
+            ]
+        );
     }
 
-    /// A long or a far pointer takes a pair: `mixed(int a, long b, int c)` has a in AX, b in BX:CX and c in DX, as `wcc` has it
-    /// (DX was passed over by the pair and stayed free); a far pointer is its offset in AX and its segment in DX.
+    /// A long or a far pointer takes a pair: `mixed(int a, long b, int c)` has a in AX, b in BX:CX and c in DX, as
+    /// `wcc` has it (DX was passed over by the pair and stayed free); a far pointer is its offset in AX and its
+    /// segment in DX.
     #[test]
     fn test_m16_watcom_a_long_and_a_far_pointer_take_a_pair_and_a_passed_over_register_stays_free() {
         let body = watcall16("mixed_");
-        assert!(body.contains(&"movzx esi, bx".to_owned()) && body.contains(&"movzx ebx, cx".to_owned()) && body.contains(&"movsx ebx, dx".to_owned()), "{body:?}");
+        assert!(
+            body.contains(&"movzx esi, bx".to_owned())
+                && body.contains(&"movzx ebx, cx".to_owned())
+                && body.contains(&"movsx ebx, dx".to_owned()),
+            "{body:?}"
+        );
         let body = watcall16("far_pointer_");
-        assert!(body.contains(&"mov si, ax".to_owned()) && body.contains(&"mov es, dx".to_owned()) && body.contains(&"add ax, bx".to_owned()) && body.contains(&"add ax, cx".to_owned()), "{body:?}");
+        assert!(
+            body.contains(&"mov si, ax".to_owned())
+                && body.contains(&"mov es, dx".to_owned())
+                && body.contains(&"add ax, bx".to_owned())
+                && body.contains(&"add ax, cx".to_owned()),
+            "{body:?}"
+        );
     }
 
     /// A struct larger than a dword is written through the near address in SI, which comes back in AX.
     #[test]
     fn test_m16_watcom_a_struct_result_is_written_through_si_and_returned_in_ax() {
         let body = watcall16("result_");
-        assert!(body.contains(&"mov dword ptr [si], ebx".to_owned()) && body.contains(&"mov ax, si".to_owned()), "{body:?}");
+        assert!(
+            body.contains(&"mov dword ptr [si], ebx".to_owned()) && body.contains(&"mov ax, si".to_owned()),
+            "{body:?}"
+        );
         assert_eq!(body.last().map(String::as_str), Some("retf"));
     }
 
@@ -933,15 +1260,23 @@ mod tests {
 
     /// The loop of `function` in `fixture`'s listing as `llrm-c -O2 -march=i486 -S`
     /// writes it: from the label its backward branch takes to the branch.
-    fn driven_loop(fixture: &str, function: &str) -> Vec<String> {
+    fn driven_loop(
+        fixture: &str,
+        function: &str,
+    ) -> Vec<String> {
         let directory = tempfile::tempdir().unwrap();
-        let (source, out) = (Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs")), directory.path().join("out.asm"));
-        let argv = ["-O2", "-march=i486", "-S", source.to_str().unwrap(), "-o", out.to_str().unwrap()].map(str::to_owned);
+        let (source, out) = (
+            Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs")),
+            directory.path().join("out.asm"),
+        );
+        let argv =
+            ["-O2", "-march=i486", "-S", source.to_str().unwrap(), "-o", out.to_str().unwrap()].map(str::to_owned);
         assert_eq!(super::main(&argv), 0);
         let asm = std::fs::read_to_string(out).unwrap();
         let from = asm.find(&format!("{function} proc")).expect("the function");
         let lines: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
-        let at = lines.iter().rposition(|one| one.starts_with('j') && !one.starts_with("jmp")).expect("a backward branch");
+        let at =
+            lines.iter().rposition(|one| one.starts_with('j') && !one.starts_with("jmp")).expect("a backward branch");
         let label = format!("{}:", lines[at].split_whitespace().nth(1).unwrap());
         let top = lines.iter().position(|one| *one == label).expect("its label");
         lines[top..=at].iter().map(|one| (*one).to_owned()).collect()
@@ -987,11 +1322,20 @@ mod tests {
                 .filter(|one| !one.starts_with("lea "))
                 .filter_map(|one| Some(one.split_once('[')?.1.split_once(']')?.0.to_owned()))
                 .flat_map(|inside| inside.split(['+', '-', '*']).map(str::trim).map(str::to_owned).collect::<Vec<_>>())
-                .filter(|part| part.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) && !matches!(part.as_str(), "bp" | "ebp"))
+                .filter(|part| {
+                    part.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+                        && !matches!(part.as_str(), "bp" | "ebp")
+                })
                 .filter(|part| ["ax", "bx", "cx", "dx", "si", "di"].iter().any(|name| part.ends_with(name)))
                 .collect();
             // A pointer kept in the frame is stepped there: `add word ptr [bp-76h], 1`.
-            let stepped = body.iter().any(|one| ["add ", "sub ", "inc ", "dec "].iter().any(|op| one.strip_prefix(op).is_some_and(|rest| rest.split(',').next().unwrap_or("").contains("ptr ["))));
+            let stepped = body
+                .iter()
+                .any(
+                    |one| ["add ", "sub ", "inc ", "dec "].iter().any(|op| {
+                        one.strip_prefix(op).is_some_and(|rest| rest.split(',').next().unwrap_or("").contains("ptr ["))
+                    }),
+                );
             assert!(registers.len() <= 2 && !stepped, "{function}: {registers:?}\n{body:#?}");
         }
     }
@@ -1002,7 +1346,8 @@ mod tests {
     #[test]
     fn test_code_addresses_in_data_are_called_through() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/codeptrs.cgs")).unwrap();
-        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         let built = super::selected(&text, "codeptrs", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let lines: Vec<&str> = asm.lines().map(str::trim).collect();
@@ -1010,15 +1355,21 @@ mod tests {
         let from = asm.find("_run proc").expect("_run");
         let run: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
         assert!(run.iter().any(|one| one.starts_with("call dword ptr [")), "{run:#?}");
-        assert!(run.iter().any(|one| one.split_whitespace().collect::<Vec<_>>() == ["call", "ax"] || one.starts_with("call word ptr [")), "{run:#?}");
+        assert!(
+            run.iter().any(|one| one.split_whitespace().collect::<Vec<_>>() == ["call", "ax"]
+                || one.starts_with("call word ptr [")),
+            "{run:#?}"
+        );
     }
 
     /// qcport's sc.c initializes `short links[5]` from a constant: an
     /// aggregate CGAssign, refused as "a 10-byte aggregate as a value".
     #[test]
     fn test_a_local_array_initializer_is_copied() {
-        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/arrayinit.cgs")).unwrap();
-        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let text =
+            std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/arrayinit.cgs")).unwrap();
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         let built = super::selected(&text, "arrayinit", None, &llrm_driver::m16_options(machine));
         assert!(built.is_ok(), "{:?}", built.err());
     }
@@ -1029,13 +1380,21 @@ mod tests {
     /// a value-less return after it answers what it left in dx:ax.
     #[test]
     fn test_inline_code_reads_and_writes_its_frame_places() {
-        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/inlinecode.cgs")).unwrap();
-        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let text =
+            std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/inlinecode.cgs")).unwrap();
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         let built = super::selected(&text, "inlinecode", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let body = |name: &str| -> Vec<String> {
             let from = asm.find(&format!("{name} proc")).expect("the procedure");
-            asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).map(str::to_owned).collect()
+            asm[from..]
+                .lines()
+                .skip(1)
+                .map(str::trim)
+                .take_while(|one| !one.ends_with("endp"))
+                .map(str::to_owned)
+                .collect()
         };
         // Each db line decoded: the code's own instructions, displacements patched.
         let decoded = |lines: &[String]| -> Vec<String> {
@@ -1043,26 +1402,44 @@ mod tests {
                 .iter()
                 .map(|line| match line.strip_prefix("db ") {
                     Some(bytes) => {
-                        let bytes: Vec<u8> = bytes.split(',').map(|one| u8::from_str_radix(one.trim_end_matches('h'), 16).unwrap()).collect();
+                        let bytes: Vec<u8> = bytes
+                            .split(',')
+                            .map(|one| u8::from_str_radix(one.trim_end_matches('h'), 16).unwrap())
+                            .collect();
                         let mut decoder = iced_x86::Decoder::new(16, &bytes, iced_x86::DecoderOptions::NONE);
                         let mut formatter = iced_x86::NasmFormatter::new();
                         iced_x86::Formatter::options_mut(&mut formatter).set_number_base(iced_x86::NumberBase::Decimal);
-                        decoder.iter().map(|one| {
-                            let mut text = String::new();
-                            iced_x86::Formatter::format(&mut formatter, &one, &mut text);
-                            text
-                        }).collect::<Vec<_>>().join("; ")
+                        decoder
+                            .iter()
+                            .map(|one| {
+                                let mut text = String::new();
+                                iced_x86::Formatter::format(&mut formatter, &one, &mut text);
+                                text
+                            })
+                            .collect::<Vec<_>>()
+                            .join("; ")
                     }
                     None => line.clone(),
                 })
                 .collect()
         };
         let sine = decoded(&body("_sine"));
-        let slot = |line: &str| line.split_once('[').map(|(_, rest)| rest.trim_end_matches(']').replace(' ', "").to_lowercase());
-        let stored = sine.iter().find(|one| one.starts_with("fstp qword ptr")).and_then(|one| slot(one)).expect("rad's slot");
+        let slot = |line: &str| {
+            line.split_once('[').map(|(_, rest)| rest.trim_end_matches(']').replace(' ', "").to_lowercase())
+        };
+        let stored =
+            sine.iter().find(|one| one.starts_with("fstp qword ptr")).and_then(|one| slot(one)).expect("rad's slot");
         let code = sine.iter().find(|one| one.contains("fsin")).expect("the code");
-        let returned = sine.iter().rev().find(|one| one.starts_with("fld qword ptr")).and_then(|one| slot(one)).expect("result's slot");
-        assert!(code.starts_with(&format!("fld qword [{stored}]")) && code.ends_with(&format!("fstp qword [{returned}]")), "{sine:#?}");
+        let returned = sine
+            .iter()
+            .rev()
+            .find(|one| one.starts_with("fld qword ptr"))
+            .and_then(|one| slot(one))
+            .expect("result's slot");
+        assert!(
+            code.starts_with(&format!("fld qword [{stored}]")) && code.ends_with(&format!("fstp qword [{returned}]")),
+            "{sine:#?}"
+        );
         let ticks = body("_ticks");
         assert!(ticks.contains(&"db 00fh,031h".to_owned()), "{ticks:#?}");
     }
@@ -1074,7 +1451,8 @@ mod tests {
     #[test]
     fn test_a_far_pointer_constant_keeps_its_segment() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/farconst.cgs")).unwrap();
-        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         let built = super::selected(&text, "farconst", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_ticks proc").expect("_ticks");
@@ -1091,7 +1469,8 @@ mod tests {
     #[test]
     fn test_an_integer_made_a_far_pointer_is_not_in_dgroup() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/farnull.cgs")).unwrap();
-        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         let built = super::selected(&text, "farnull", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_put proc").expect("_put");
@@ -1105,13 +1484,17 @@ mod tests {
     /// stack segment, and wrote the VGA BIOS ROM 107k times.
     #[test]
     fn test_near_data_is_reached_through_ds_alone() {
-        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/nearviads.cgs")).unwrap();
-        let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let text =
+            std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/nearviads.cgs")).unwrap();
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         let built = super::selected(&text, "nearviads", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_paint proc").expect("_paint");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
-        let through_stack = |one: &&str| one.contains("ss:[") || one.contains("mov ds,") || one.starts_with("lds ") || one.starts_with("pop ds");
+        let through_stack = |one: &&str| {
+            one.contains("ss:[") || one.contains("mov ds,") || one.starts_with("lds ") || one.starts_with("pop ds")
+        };
         assert!(!body.iter().any(through_stack), "{body:#?}");
     }
 
@@ -1121,12 +1504,16 @@ mod tests {
     #[test]
     fn test_a_far_pointer_to_a_local_is_in_the_stack_segment() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/localfar.cgs")).unwrap();
-        let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         let built = super::selected(&text, "localfar", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_caller proc").expect("_caller");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
-        assert!(!body.iter().any(|one| one.contains("DGROUP")) && body.iter().any(|one| one.ends_with("ss")), "{body:#?}");
+        assert!(
+            !body.iter().any(|one| one.contains("DGROUP")) && body.iter().any(|one| one.ends_with("ss")),
+            "{body:#?}"
+        );
     }
 
     /// A call's `add sp,2` is three bytes; BCC -Os pops the argument into CX
@@ -1136,12 +1523,19 @@ mod tests {
     fn test_arguments_are_popped_off_at_os_only() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/popargs.cgs")).unwrap();
         let cleanups = |level: Level| {
-            let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+            let machine =
+                llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
             let options = llrm_core::driver::Options { pipeline: level.options(), ..llrm_driver::m16_options(machine) };
             let built = super::selected(&text, "popargs", None, &options).expect("selects");
             let asm = llrm_core::backend::masm::text(&built).unwrap();
             let from = asm.find("_caller proc").expect("_caller");
-            asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).filter(|one| one.starts_with("add sp") || *one == "pop cx").map(str::to_owned).collect::<Vec<_>>()
+            asm[from..]
+                .lines()
+                .map(str::trim)
+                .take_while(|one| !one.ends_with("endp"))
+                .filter(|one| one.starts_with("add sp") || *one == "pop cx")
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
         };
         use llrm_core::driver::flags::Level;
         assert_eq!(cleanups(Level::Os), ["pop cx", "pop cx", "pop cx"]);
@@ -1153,10 +1547,16 @@ mod tests {
     #[test]
     fn test_a_leaf_function_comes_out_of_the_compile_norecurse() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/halve.cgs")).unwrap();
-        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         let directory = std::env::temp_dir().join(format!("llrm-c-norecurse-{}", std::process::id()));
         super::selected(&text, "halve", Some(&directory), &llrm_driver::m16_options(machine)).expect("selects");
-        let mut stages = std::fs::read_dir(&directory).unwrap().flatten().map(|one| one.path()).filter(|one| one.extension().is_some_and(|ext| ext == "ll")).collect::<Vec<_>>();
+        let mut stages = std::fs::read_dir(&directory)
+            .unwrap()
+            .flatten()
+            .map(|one| one.path())
+            .filter(|one| one.extension().is_some_and(|ext| ext == "ll"))
+            .collect::<Vec<_>>();
         stages.sort_by_key(|one| one.file_name().map(std::ffi::OsStr::to_owned));
         let last = std::fs::read_to_string(stages.last().expect("a stage")).unwrap();
         std::fs::remove_dir_all(&directory).ok();
@@ -1169,7 +1569,8 @@ mod tests {
     #[test]
     fn test_fabs_is_the_instruction() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/fabs.cgs")).unwrap();
-        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         let built = super::selected(&text, "fabs", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_halfabs proc").expect("_halfabs");
@@ -1181,8 +1582,10 @@ mod tests {
     /// their accesses took a two-byte displacement. QCport had 3,088 such.
     #[test]
     fn test_spill_slots_sit_above_a_big_frame_array() {
-        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/spillnear.cgs")).unwrap();
-        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let text =
+            std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/spillnear.cgs")).unwrap();
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         let built = super::selected(&text, "spillnear", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_spills proc").expect("_spills");
@@ -1191,7 +1594,12 @@ mod tests {
             .map(str::trim)
             .take_while(|one| !one.ends_with("endp"))
             .filter(|one| !one.starts_with("lea"))
-            .filter(|one| one.split("[bp-").nth(1).and_then(|rest| rest.split(']').next()?.parse::<i64>().ok()).is_some_and(|disp| disp > 128))
+            .filter(|one| {
+                one.split("[bp-")
+                    .nth(1)
+                    .and_then(|rest| rest.split(']').next()?.parse::<i64>().ok())
+                    .is_some_and(|disp| disp > 128)
+            })
             .collect();
         assert!(far.is_empty(), "{far:#?}");
     }
@@ -1202,18 +1610,34 @@ mod tests {
     #[test]
     fn test_stores_a_callee_reads_through_its_argument_stay() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/argread.cgs")).unwrap();
-        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_driver::m16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() }) };
+        let options = llrm_core::driver::Options {
+            pipeline: llrm_core::driver::flags::Level::Os.options(),
+            ..llrm_driver::m16_options(llrm_core::abi::machine::Machine {
+                cpu: "486".to_owned(),
+                ..llrm_x86_m16::machine::BUILT_IN.clone()
+            })
+        };
         let built = super::selected(&text, "argread", None, &options).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_test proc").expect("_test");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
-        let calls: Vec<usize> = body.iter().enumerate().filter(|(_, one)| **one == "call far ptr _animate").map(|(at, _)| at).collect();
+        let calls: Vec<usize> =
+            body.iter().enumerate().filter(|(_, one)| **one == "call far ptr _animate").map(|(at, _)| at).collect();
         // `s`, by the address passed to `animate`: `lea ax, [bp-N]`.
-        let base: i64 = body[..calls[1]].iter().rev().find_map(|one| one.strip_prefix("lea ax, [bp-")?.strip_suffix(']')?.parse().ok()).expect("&s");
+        let base: i64 = body[..calls[1]]
+            .iter()
+            .rev()
+            .find_map(|one| one.strip_prefix("lea ax, [bp-")?.strip_suffix(']')?.parse().ok())
+            .expect("&s");
         // Every byte the stores between the calls write, by frame offset.
         let mut written = std::collections::BTreeSet::new();
         for one in &body[calls[0]..calls[1]] {
-            let Some((width, rest)) = [("byte", 1), ("word", 2), ("dword", 4)].iter().find_map(|(name, width)| Some((*width, one.strip_prefix(&format!("mov {name} ptr [bp-"))?))) else { continue };
+            let Some((width, rest)) = [("byte", 1), ("word", 2), ("dword", 4)]
+                .iter()
+                .find_map(|(name, width)| Some((*width, one.strip_prefix(&format!("mov {name} ptr [bp-"))?)))
+            else {
+                continue;
+            };
             let at: i64 = rest.split(']').next().and_then(|one| one.parse().ok()).expect("an offset");
             written.extend(-at..-at + width);
         }
@@ -1226,13 +1650,23 @@ mod tests {
     /// initializing stores. QCport's sc_selftest returned -109.
     #[test]
     fn test_an_array_read_by_index_keeps_its_initializer() {
-        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/indexread.cgs")).unwrap();
-        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_driver::m16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() }) };
+        let text =
+            std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/indexread.cgs")).unwrap();
+        let options = llrm_core::driver::Options {
+            pipeline: llrm_core::driver::flags::Level::Os.options(),
+            ..llrm_driver::m16_options(llrm_core::abi::machine::Machine {
+                cpu: "486".to_owned(),
+                ..llrm_x86_m16::machine::BUILT_IN.clone()
+            })
+        };
         let built = super::selected(&text, "indexread", None, &options).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_test proc").expect("_test");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
-        let stored: Vec<&&str> = body.iter().filter(|one| one.starts_with("mov") && one.contains("ptr [bp-") && one.contains("],")).collect();
+        let stored: Vec<&&str> = body
+            .iter()
+            .filter(|one| one.starts_with("mov") && one.contains("ptr [bp-") && one.contains("],"))
+            .collect();
         assert!(stored.len() >= 3, "{body:#?}");
     }
 
@@ -1241,7 +1675,8 @@ mod tests {
     #[test]
     fn test_conversions_in_a_row_switch_the_rounding_mode_once() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/truncs.cgs")).unwrap();
-        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         let built = super::selected(&text, "truncs", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_truncs proc").expect("_truncs");
@@ -1255,7 +1690,8 @@ mod tests {
     #[test]
     fn test_both_arms_of_an_if_else_come_before_the_return() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/diamond.cgs")).unwrap();
-        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         let built = super::selected(&text, "diamond", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_diamond proc").expect("_diamond");
@@ -1268,8 +1704,15 @@ mod tests {
     /// which nothing writes, is read again instead.
     #[test]
     fn test_a_float_argument_is_read_from_its_own_cell() {
-        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/paramremat.cgs")).unwrap();
-        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_driver::m16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() }) };
+        let text =
+            std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/paramremat.cgs")).unwrap();
+        let options = llrm_core::driver::Options {
+            pipeline: llrm_core::driver::flags::Level::Os.options(),
+            ..llrm_driver::m16_options(llrm_core::abi::machine::Machine {
+                cpu: "486".to_owned(),
+                ..llrm_x86_m16::machine::BUILT_IN.clone()
+            })
+        };
         let built = super::selected(&text, "paramremat", None, &options).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_summed proc").expect("_summed");
@@ -1278,9 +1721,20 @@ mod tests {
     }
 
     /// The listing of each function in `fixture`, `-Os` on a 486.
-    fn listed(fixture: &str, functions: &[&str]) -> Vec<Vec<String>> {
-        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"))).unwrap();
-        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_driver::m16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() }) };
+    fn listed(
+        fixture: &str,
+        functions: &[&str],
+    ) -> Vec<Vec<String>> {
+        let text =
+            std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs")))
+                .unwrap();
+        let options = llrm_core::driver::Options {
+            pipeline: llrm_core::driver::flags::Level::Os.options(),
+            ..llrm_driver::m16_options(llrm_core::abi::machine::Machine {
+                cpu: "486".to_owned(),
+                ..llrm_x86_m16::machine::BUILT_IN.clone()
+            })
+        };
         let built = super::selected(&text, fixture, None, &options).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         functions
@@ -1298,7 +1752,11 @@ mod tests {
     #[test]
     fn test_a_far_null_test_ors_the_words() {
         for body in listed("farwords", &["_load", "_take"]) {
-            assert!(!body.iter().any(|one| one.starts_with("shld") || one.starts_with("xor e")) && body.iter().any(|one| one.starts_with("or ")), "{body:#?}");
+            assert!(
+                !body.iter().any(|one| one.starts_with("shld") || one.starts_with("xor e"))
+                    && body.iter().any(|one| one.starts_with("or ")),
+                "{body:#?}"
+            );
         }
     }
 
@@ -1307,7 +1765,10 @@ mod tests {
     #[test]
     fn test_a_long_made_a_far_pointer_is_stored_as_its_words() {
         let [body] = listed("farwords", &["_keep"]).try_into().expect("one");
-        assert!(!body.iter().any(|one| one.starts_with("shl") || one.starts_with("shrd") || one.starts_with("shld")), "{body:#?}");
+        assert!(
+            !body.iter().any(|one| one.starts_with("shl") || one.starts_with("shrd") || one.starts_with("shld")),
+            "{body:#?}"
+        );
         // Taken as they were, the words kept the call's dword width: a
         // selector went to EAX, `byte ptr eax:[...]`, and d_sky.c crashed.
         let [body] = listed("farwords", &["_copyrows"]).try_into().expect("one");
@@ -1320,7 +1781,8 @@ mod tests {
     #[test]
     fn test_floats_crowding_a_compare_before_its_branches_spill() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/x87crowd.cgs")).unwrap();
-        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let machine =
+            llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         let built = super::selected(&text, "x87crowd", None, &llrm_driver::m16_options(machine));
         assert!(built.is_ok(), "{:?}", built.err());
     }
@@ -1330,13 +1792,23 @@ mod tests {
     #[test]
     fn test_a_void_function_is_selected() {
         let path = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/parity/qmove.cgs");
-        let built = super::selected(&std::fs::read_to_string(path).unwrap(), "qmove", None, &llrm_driver::m16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() }));
+        let built = super::selected(
+            &std::fs::read_to_string(path).unwrap(),
+            "qmove",
+            None,
+            &llrm_driver::m16_options(llrm_core::abi::machine::Machine {
+                cpu: "486".to_owned(),
+                ..llrm_x86_m16::machine::BUILT_IN.clone()
+            }),
+        );
         assert!(built.is_ok(), "{:?}", built.err());
     }
 
     /// tests/fixtures/c32/`fixture`.cgs, as the 386 front end recorded it, selected for `-m32`.
     fn flat_listing(fixture: &str) -> Vec<String> {
-        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c32/{fixture}.cgs"))).unwrap();
+        let text =
+            std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c32/{fixture}.cgs")))
+                .unwrap();
         let argv: Vec<String> = ["-m32", "-O2", "x.c"].map(str::to_owned).to_vec();
         let args = super::parse_args(&argv).unwrap();
         let built = super::selected(&text, fixture, None, &args.codegen).unwrap();
@@ -1350,14 +1822,26 @@ mod tests {
     fn test_m32_lists_add_as_flat_cdecl32() {
         let lines = flat_listing("add");
         assert_eq!(&lines[..2], [".386", ".model flat"]);
-        let body: Vec<&str> = lines.iter().skip_while(|line| *line != "_add proc near").skip(1).take_while(|line| *line != "_add endp").map(String::as_str).collect();
+        let body: Vec<&str> = lines
+            .iter()
+            .skip_while(|line| *line != "_add proc near")
+            .skip(1)
+            .take_while(|line| *line != "_add endp")
+            .map(String::as_str)
+            .collect();
         assert_eq!(body, ["L0_0:", "mov eax, dword ptr [esp+4]", "add eax, dword ptr [esp+8]", "ret"]);
     }
 
     /// The body of `name`'s procedure in the flat listing of `regs.c`, as the default convention compiles it.
     fn regs_body(name: &str) -> Vec<String> {
         let lines = flat_listing("regs");
-        lines.iter().skip_while(|line| **line != format!("{name} proc near")).skip(1).take_while(|line| **line != format!("{name} endp")).cloned().collect()
+        lines
+            .iter()
+            .skip_while(|line| **line != format!("{name} proc near"))
+            .skip(1)
+            .take_while(|line| **line != format!("{name} endp"))
+            .cloned()
+            .collect()
     }
 
     /// `fixture`'s flat listing under `-mabi=sysv`: gcc's i386 convention.
@@ -1366,15 +1850,26 @@ mod tests {
         let argv: Vec<String> = ["-m32", "-O2", "-mabi=sysv", "x.c"].map(str::to_owned).to_vec();
         let args = super::parse_args(&argv).unwrap();
         let built = super::selected(&text, "sysv", None, &args.codegen).unwrap();
-        let lines: Vec<String> = llrm_core::backend::masm::text(&built).unwrap().lines().map(|line| line.trim().to_owned()).collect();
-        lines.iter().skip_while(|line| **line != format!("{name} proc near")).skip(1).take_while(|line| **line != format!("{name} endp")).cloned().collect()
+        let lines: Vec<String> =
+            llrm_core::backend::masm::text(&built).unwrap().lines().map(|line| line.trim().to_owned()).collect();
+        lines
+            .iter()
+            .skip_while(|line| **line != format!("{name} proc near"))
+            .skip(1)
+            .take_while(|line| **line != format!("{name} endp"))
+            .cloned()
+            .collect()
     }
 
-    /// gcc -m32 writes every struct result, a one-byte one too, through a pointer that is the first argument and pops it,
-    /// `ret 4`: Open Watcom's rule (a 1, 2 or 4 byte struct in EAX, the address in ESI) was applied whatever the ABI.
+    /// gcc -m32 writes every struct result, a one-byte one too, through a pointer that is the first argument and pops
+    /// it, `ret 4`: Open Watcom's rule (a 1, 2 or 4 byte struct in EAX, the address in ESI) was applied whatever
+    /// the ABI.
     #[test]
     fn test_m32_sysv_writes_a_struct_result_through_the_first_argument_and_the_callee_pops_it() {
-        assert_eq!(sysv_body("_r1"), ["L0_0:", "mov eax, dword ptr [esp+4]", "mov ecx, dword ptr [esp+8]", "mov byte ptr [eax], cl", "ret 4"]);
+        assert_eq!(
+            sysv_body("_r1"),
+            ["L0_0:", "mov eax, dword ptr [esp+4]", "mov ecx, dword ptr [esp+8]", "mov byte ptr [eax], cl", "ret 4"]
+        );
         assert_eq!(sysv_body("_r12").last().map(String::as_str), Some("ret 4"));
     }
 
@@ -1398,7 +1893,10 @@ mod tests {
         let built = super::selected(&text, "regs", None, &args.codegen).unwrap();
         let listing = llrm_core::backend::masm::text(&built).unwrap();
         for name in ["six", "result", "explicit_cdecl", "far_away"] {
-            assert!(listing.contains(&format!("\n{name} proc near")) || listing.contains(&format!("extern {name}:near")), "{name} in {listing}");
+            assert!(
+                listing.contains(&format!("\n{name} proc near")) || listing.contains(&format!("extern {name}:near")),
+                "{name} in {listing}"
+            );
         }
         assert!(!listing.contains("six_") && !listing.contains("_explicit_cdecl"), "{listing}");
     }
@@ -1409,14 +1907,28 @@ mod tests {
     #[test]
     fn test_m32_an_unmarked_function_takes_registers_and_pops_its_stack_arguments() {
         let body = regs_body("six_");
-        assert_eq!(body, ["L0_0:", "add eax, edx", "add eax, ebx", "add eax, ecx", "add eax, dword ptr [esp+4]", "add eax, dword ptr [esp+8]", "ret 8"]);
+        assert_eq!(
+            body,
+            [
+                "L0_0:",
+                "add eax, edx",
+                "add eax, ebx",
+                "add eax, ecx",
+                "add eax, dword ptr [esp+4]",
+                "add eax, dword ptr [esp+8]",
+                "ret 8"
+            ]
+        );
     }
 
     /// A struct larger than a dword is written through the address in ESI, which comes back in EAX, as `wcc386` has it.
     #[test]
     fn test_m32_a_struct_result_is_written_through_esi_and_returned_in_eax() {
         let body = regs_body("result_");
-        assert!(body.contains(&"mov dword ptr [esi], eax".to_owned()) && body.contains(&"mov eax, esi".to_owned()), "{body:?}");
+        assert!(
+            body.contains(&"mov dword ptr [esi], eax".to_owned()) && body.contains(&"mov eax, esi".to_owned()),
+            "{body:?}"
+        );
         assert_eq!(body.last().map(String::as_str), Some("ret"));
     }
 
@@ -1425,7 +1937,11 @@ mod tests {
     fn test_m32_a_small_struct_argument_is_a_register_and_a_large_one_is_memory() {
         assert_eq!(regs_body("small_"), ["L4_0:", "movsx eax, al", "add eax, edx", "ret"]);
         let body = regs_body("by_value_");
-        assert!(body.contains(&"mov eax, dword ptr [esp+4]".to_owned()) && body.contains(&"add eax, dword ptr [esp+16]".to_owned()), "{body:?}");
+        assert!(
+            body.contains(&"mov eax, dword ptr [esp+4]".to_owned())
+                && body.contains(&"add eax, dword ptr [esp+16]".to_owned()),
+            "{body:?}"
+        );
         assert_eq!(body.last().map(String::as_str), Some("ret 16"));
     }
 
@@ -1441,7 +1957,13 @@ mod tests {
     #[test]
     fn test_m32_pushes_narrow_arguments_as_dwords() {
         let lines = flat_listing("args");
-        assert!(lines.iter().filter(|line| line.starts_with("push ")).all(|line| line.split_whitespace().nth(1).is_some_and(|operand| operand.starts_with('e') || operand.starts_with("offset"))), "{lines:#?}");
+        assert!(
+            lines.iter().filter(|line| line.starts_with("push ")).all(|line| line
+                .split_whitespace()
+                .nth(1)
+                .is_some_and(|operand| operand.starts_with('e') || operand.starts_with("offset"))),
+            "{lines:#?}"
+        );
         assert!(lines.contains(&"add esp, 8".to_owned()), "{lines:#?}");
     }
 
@@ -1457,8 +1979,9 @@ mod tests {
         assert!(lines.contains(&"mov byte ptr [esp+eax+2], al".to_owned()), "{lines:#?}");
     }
 
-    /// A struct wider than 16 bytes passed by value is one `byval` pointer and a copy, not a parameter and a store per word: a
-    /// 4 KB one was 1,024 parameters, and the backend quadratic in them (pr20621-1: a 64 KB one never finished compiling).
+    /// A struct wider than 16 bytes passed by value is one `byval` pointer and a copy, not a parameter and a store per
+    /// word: a 4 KB one was 1,024 parameters, and the backend quadratic in them (pr20621-1: a 64 KB one never
+    /// finished compiling).
     // It records C through wccq, which only the toolchain feature builds.
     #[cfg(feature = "toolchain")]
     #[test]
@@ -1468,9 +1991,11 @@ mod tests {
         std::fs::write(&source, "struct big { int i[1024]; };\nint foo(struct big b, int x) { return b.i[x]; }\nint main(void) { struct big g; g.i[3] = 7; return foo(g, 3); }\n").unwrap();
         let argv: Vec<String> = ["-m32", "-O0", "x.c"].map(str::to_owned).to_vec();
         let args = super::parse_args(&argv).unwrap();
-        let recorded = super::recorded_for(&source, &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap()).expect("records big.c");
+        let recorded = super::recorded_for(&source, &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap())
+            .expect("records big.c");
         let built = super::selected(&recorded, "big", None, &args.codegen).unwrap();
-        let lines: Vec<String> = llrm_core::backend::masm::text(&built).unwrap().lines().map(|line| line.trim().to_owned()).collect();
+        let lines: Vec<String> =
+            llrm_core::backend::masm::text(&built).unwrap().lines().map(|line| line.trim().to_owned()).collect();
         assert!(lines.len() < 80, "{} lines", lines.len());
         assert!(lines.contains(&"rep movsd".to_owned()) && lines.contains(&"ret 4100".to_owned()), "{lines:#?}");
     }
@@ -1480,9 +2005,15 @@ mod tests {
         flat_object_with(fixture, &[])
     }
 
-    fn flat_object_with(fixture: &str, flags: &[&str]) -> Vec<(u8, Vec<u8>)> {
-        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c32/{fixture}.cgs"))).unwrap();
-        let argv: Vec<String> = ["-m32", "-O2"].iter().chain(flags).chain(&["x.c"]).map(|one| (*one).to_owned()).collect();
+    fn flat_object_with(
+        fixture: &str,
+        flags: &[&str],
+    ) -> Vec<(u8, Vec<u8>)> {
+        let text =
+            std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c32/{fixture}.cgs")))
+                .unwrap();
+        let argv: Vec<String> =
+            ["-m32", "-O2"].iter().chain(flags).chain(&["x.c"]).map(|one| (*one).to_owned()).collect();
         let args = super::parse_args(&argv).unwrap();
         let built = super::selected(&text, fixture, None, &args.codegen).unwrap();
         let bytes = llrm_core::backend::objbuild::written(&built, "x.c").unwrap();
@@ -1503,7 +2034,11 @@ mod tests {
     fn test_m32_writes_a_use32_object_with_its_own_encoding() {
         let records = flat_object("add");
         let kinds: Vec<u8> = records.iter().map(|(kind, _)| *kind).collect();
-        assert_eq!(kinds, [0x80, 0x96, 0x99, 0x99, 0x91, 0xA1, 0x8A], "THEADR LNAMES SEGDEF32 x2 PUBDEF32 LEDATA32 MODEND");
+        assert_eq!(
+            kinds,
+            [0x80, 0x96, 0x99, 0x99, 0x91, 0xA1, 0x8A],
+            "THEADR LNAMES SEGDEF32 x2 PUBDEF32 LEDATA32 MODEND"
+        );
         assert!(records[2].1[0] & 1 == 1 && records[3].1[0] & 1 == 1, "both segments are USE32: {records:?}");
         let code = &records[5].1;
         assert_eq!(hex(&code[5..]), "8b44240403442408c3", "mov eax,[esp+4]; add eax,[esp+8]; ret");
@@ -1527,8 +2062,15 @@ mod tests {
         let lines = flat_listing("strings");
         let at = lines.iter().position(|line| line == "rep movsd").expect("a rep movsd");
         let before = &lines[..at];
-        assert!(before.iter().any(|line| line.starts_with("lea esi, [esp")) && before.iter().any(|line| line.starts_with("lea edi, [esp")), "{before:#?}");
-        assert!(before.iter().rev().take(4).any(|line| line == "shr ecx, 2" || line.starts_with("mov ecx")), "{before:#?}");
+        assert!(
+            before.iter().any(|line| line.starts_with("lea esi, [esp"))
+                && before.iter().any(|line| line.starts_with("lea edi, [esp")),
+            "{before:#?}"
+        );
+        assert!(
+            before.iter().rev().take(4).any(|line| line == "shr ecx, 2" || line.starts_with("mov ecx")),
+            "{before:#?}"
+        );
         let object = flat_object("strings");
         let code = hex(&object.iter().find(|(kind, _)| *kind == 0xA1).expect("code").1);
         assert!(code.contains("f3a5") && !code.contains("66f3a5"), "rep movsd, not its word form: {code}");
@@ -1541,9 +2083,20 @@ mod tests {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c32/add.cgs")).unwrap();
         let argv: Vec<String> = ["-m32", "-O2", "x.c"].map(str::to_owned).to_vec();
         let args = super::parse_args(&argv).unwrap();
-        let built = super::selected_checking(&text, "add", None, &args.codegen, Some(super::stack_check(&llrm_x86_m32::M32)), false).unwrap();
+        let built = super::selected_checking(
+            &text,
+            "add",
+            None,
+            &args.codegen,
+            Some(super::stack_check(&llrm_x86_m32::M32)),
+            false,
+        )
+        .unwrap();
         let listing = llrm_core::backend::masm::text(&built).unwrap();
-        assert!(listing.contains("cmp esp, dword ptr _llrm_os_stack_low") && listing.contains("call __STKOVERFLOW"), "{listing}");
+        assert!(
+            listing.contains("cmp esp, dword ptr _llrm_os_stack_low") && listing.contains("call __STKOVERFLOW"),
+            "{listing}"
+        );
         assert!(!listing.contains("far ptr") && listing.contains("extern __STKOVERFLOW:near"), "{listing}");
     }
 
@@ -1552,9 +2105,18 @@ mod tests {
     }
 
     /// The body of `name` in the flat listing of `fixture`.
-    fn flat_body(fixture: &str, name: &str) -> Vec<String> {
+    fn flat_body(
+        fixture: &str,
+        name: &str,
+    ) -> Vec<String> {
         let lines = flat_listing(fixture);
-        lines.iter().skip_while(|line| **line != format!("_{name} proc near")).skip(1).take_while(|line| **line != format!("_{name} endp")).cloned().collect()
+        lines
+            .iter()
+            .skip_while(|line| **line != format!("_{name} proc near"))
+            .skip(1)
+            .take_while(|line| **line != format!("_{name} endp"))
+            .cloned()
+            .collect()
     }
 
     /// A short read through a pointer and widened is one `movsx`. The peephole asked the 16-bit
@@ -1577,9 +2139,17 @@ mod tests {
         for line in &body {
             let Some((operation, operands)) = line.split_once(' ') else { continue };
             let Some((destination, rest)) = operands.split_once(", ") else { continue };
-            if let Some(inside) = rest.split_once('[').and_then(|(_, tail)| tail.split_once(']')).map(|(inside, _)| inside) {
-                for register in inside.split(|one: char| !one.is_ascii_alphanumeric()).filter(|one| one.len() == 3 && one.starts_with('e')) {
-                    assert!(register == "ebp" || register == "esp" || pointers.contains(&register), "{register} is a value in `{line}`: {body:#?}");
+            if let Some(inside) =
+                rest.split_once('[').and_then(|(_, tail)| tail.split_once(']')).map(|(inside, _)| inside)
+            {
+                for register in inside
+                    .split(|one: char| !one.is_ascii_alphanumeric())
+                    .filter(|one| one.len() == 3 && one.starts_with('e'))
+                {
+                    assert!(
+                        register == "ebp" || register == "esp" || pointers.contains(&register),
+                        "{register} is a value in `{line}`: {body:#?}"
+                    );
                 }
             }
             let destination = destination.trim();
@@ -1601,7 +2171,11 @@ mod tests {
     #[test]
     fn test_m32_adds_words_as_words() {
         let body = flat_body("narrow", "short_sum");
-        assert!(body.iter().any(|line| line.starts_with("add ax, ")) && !body.iter().any(|line| line.starts_with("add eax, ")), "{body:#?}");
+        assert!(
+            body.iter().any(|line| line.starts_with("add ax, "))
+                && !body.iter().any(|line| line.starts_with("add eax, ")),
+            "{body:#?}"
+        );
     }
 
     /// The same sum of dwords keeps the `movzx`: the word `add` would leave the upper half as it was,
@@ -1609,7 +2183,10 @@ mod tests {
     #[test]
     fn test_m32_keeps_the_extension_where_the_upper_half_is_not_zero() {
         let body = flat_body("narrow", "int_sum");
-        assert!(body.iter().any(|line| line.starts_with("add eax, ")) && body.iter().any(|line| line == "movzx eax, ax"), "{body:#?}");
+        assert!(
+            body.iter().any(|line| line.starts_with("add eax, ")) && body.iter().any(|line| line == "movzx eax, ax"),
+            "{body:#?}"
+        );
     }
 
     /// The sieve's inner loop indexes its array with a word counter, and the counter's register is the
@@ -1621,10 +2198,19 @@ mod tests {
         // From the store the loop makes (the trip's extension is the first thing after it).
         let from = body.iter().position(|line| line.starts_with("mov byte ptr [")).expect("the loop stores a byte");
         let loop_ = &body[from..];
-        let copies = |line: &&String| line.starts_with("movzx e") || line.split_once(' ').is_some_and(|(operation, operands)| operation == "mov" && operands.split_once(", ").is_some_and(|(to, from)| to.len() == 3 && from.len() == 3 && to.starts_with('e') && from.starts_with('e')));
-        // The counter is `(unsigned short)(multiple + i)` against an unknown `limit`: the 16-bit add may wrap, so it cannot be widened,
-        // and gcc zero-extends it every trip too (two instructions to ours one). The zero copies llrm once had came from ECX's upper
-        // half happening to be zero where the peephole could see it (register-choice luck); with EBP a value register it is one.
+        let copies = |line: &&String| {
+            line.starts_with("movzx e")
+                || line.split_once(' ').is_some_and(|(operation, operands)| {
+                    operation == "mov"
+                        && operands.split_once(", ").is_some_and(|(to, from)| {
+                            to.len() == 3 && from.len() == 3 && to.starts_with('e') && from.starts_with('e')
+                        })
+                })
+        };
+        // The counter is `(unsigned short)(multiple + i)` against an unknown `limit`: the 16-bit add may wrap, so it
+        // cannot be widened, and gcc zero-extends it every trip too (two instructions to ours one). The zero
+        // copies llrm once had came from ECX's upper half happening to be zero where the peephole could see it
+        // (register-choice luck); with EBP a value register it is one.
         assert!(loop_.iter().filter(copies).count() <= 1, "{loop_:#?}");
     }
 
@@ -1634,8 +2220,16 @@ mod tests {
     #[test]
     fn test_m32_adds_into_a_new_register_with_lea() {
         let body = flat_body("lea", "lea_sum");
-        assert!(body.iter().any(|line| line.starts_with("lea e") && line.contains("[e") && line.contains("+e")), "{body:#?}");
-        assert!(!body.iter().any(|line| line != "mov ebp, esp" && line.starts_with("mov e") && line.split_once(", ").is_some_and(|(_, from)| from.starts_with('e') && from.len() == 3)), "{body:#?}");
+        assert!(
+            body.iter().any(|line| line.starts_with("lea e") && line.contains("[e") && line.contains("+e")),
+            "{body:#?}"
+        );
+        assert!(
+            !body.iter().any(|line| line != "mov ebp, esp"
+                && line.starts_with("mov e")
+                && line.split_once(", ").is_some_and(|(_, from)| from.starts_with('e') && from.len() == 3)),
+            "{body:#?}"
+        );
     }
 
     /// A loop over `int *`: the pointer, the index and the sum are dwords in 32-bit registers,
@@ -1643,12 +2237,31 @@ mod tests {
     #[test]
     fn test_m32_lists_a_loop_over_int_pointers() {
         let lines = flat_listing("sum");
-        let body: Vec<&str> = lines.iter().skip_while(|line| *line != "sum_ proc near").skip(1).take_while(|line| *line != "sum_ endp").map(String::as_str).collect();
+        let body: Vec<&str> = lines
+            .iter()
+            .skip_while(|line| *line != "sum_ proc near")
+            .skip(1)
+            .take_while(|line| *line != "sum_ endp")
+            .map(String::as_str)
+            .collect();
         // The load is the add's operand, and the add of the stride sets the flags the branch reads.
-        assert!(body.iter().any(|line| line.starts_with("add e") && line.contains("dword ptr [e") && line.contains("+e")), "{body:#?}");
+        assert!(
+            body.iter().any(|line| line.starts_with("add e") && line.contains("dword ptr [e") && line.contains("+e")),
+            "{body:#?}"
+        );
         assert!(body.iter().any(|line| line.starts_with("add e") && line.ends_with(", 4")), "{body:#?}");
-        assert!(body.iter().any(|line| line.starts_with("jne ")) && !body.iter().any(|line| line.starts_with("cmp ") && line.ends_with(", 0")), "{body:#?}");
-        assert!(body.iter().all(|line| !line.contains(" bp") && !line.contains("[bx") && !line.contains("es:") && !line.contains("far")), "{body:#?}");
+        assert!(
+            body.iter().any(|line| line.starts_with("jne "))
+                && !body.iter().any(|line| line.starts_with("cmp ") && line.ends_with(", 0")),
+            "{body:#?}"
+        );
+        assert!(
+            body.iter().all(|line| !line.contains(" bp")
+                && !line.contains("[bx")
+                && !line.contains("es:")
+                && !line.contains("far")),
+            "{body:#?}"
+        );
         assert_eq!(body.last(), Some(&"ret"));
     }
 }

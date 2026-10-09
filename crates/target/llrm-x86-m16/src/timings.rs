@@ -8,7 +8,8 @@ use llrm_support::hash::IndexMap;
 use llrm_target::timings::{CpuTable, Timings};
 
 /// The file, read once.
-pub static TABLE: LazyLock<Timings> = LazyLock::new(|| Timings::parse(include_str!("timings.times")).expect("timings.times parses"));
+pub static TABLE: LazyLock<Timings> =
+    LazyLock::new(|| Timings::parse(include_str!("timings.times")).expect("timings.times parses"));
 
 pub const ARCHS: [&str; 7] = ["486", "P5", "P6", "K5", "K6", "K7", "Core"];
 
@@ -47,7 +48,10 @@ fn per_cpu(of: impl Fn(&CpuTable) -> &Vec<(String, i64)>) -> IndexMap<&'static s
     let tables = tables();
     let mut out = IndexMap::default();
     for (form, _) in of(tables[0]) {
-        let prices: Vec<Option<i64>> = tables.iter().map(|table| of(table).iter().find(|(one, _)| one == form).map(|(_, clocks)| *clocks)).collect();
+        let prices: Vec<Option<i64>> = tables
+            .iter()
+            .map(|table| of(table).iter().find(|(one, _)| one == form).map(|(_, clocks)| *clocks))
+            .collect();
         if prices.iter().all(Option::is_some) {
             let mut row = [0; 7];
             for (slot, price) in row.iter_mut().zip(prices) {
@@ -67,13 +71,28 @@ pub static LATENCY: LazyLock<IndexMap<&'static str, [i64; 7]>> = LazyLock::new(|
 mod tests {
     use super::*;
 
-    /// Figures spot-checked against the tables they were taken from. The 486's LEA is 1 clock (Intel's 486 table, as in HelpPC 2.10's
-    /// `LEA reg,mem 2+EA 3 2 1`: 286, 386, 486); the column held the 386's 2.
+    /// Figures spot-checked against the tables they were taken from. The 486's LEA is 1 clock (Intel's 486 table, as in
+    /// HelpPC 2.10's `LEA reg,mem 2+EA 3 2 1`: 286, 386, 486); the column held the 386's 2.
     #[test]
     fn the_table_has_the_figures_it_was_read_from() {
         assert_eq!(TABLE.cpus(), ["386", "486", "P5", "P6", "K5", "K6", "K7", "Core"]);
-        assert_eq!((*PARTIAL_STALL, *LCP_STALL, *ISSUE, *INORDER, *PREFIX), ([0, 0, 7, 0, 1, 1, 2], [0, 0, 6, 0, 0, 0, 3], [1, 2, 3, 4, 3, 3, 4], [1, 1, 0, 0, 0, 0, 0], [1, 1, 0, 0, 0, 0, 0]));
-        for (k, row) in [("pop_m", [6, 1, 4, 3, 3, 4, 4]), ("mul_r16", [13, 11, 4, 4, 3, 5, 3]), ("lea", [1, 1, 1, 1, 1, 1, 1]), ("x87_div_m", [73, 39, 38, 62, 58, 24, 30]), ("x87_control_store", [3, 2, 4, 6, 4, 1, 6])] {
+        assert_eq!(
+            (*PARTIAL_STALL, *LCP_STALL, *ISSUE, *INORDER, *PREFIX),
+            (
+                [0, 0, 7, 0, 1, 1, 2],
+                [0, 0, 6, 0, 0, 0, 3],
+                [1, 2, 3, 4, 3, 3, 4],
+                [1, 1, 0, 0, 0, 0, 0],
+                [1, 1, 0, 0, 0, 0, 0]
+            )
+        );
+        for (k, row) in [
+            ("pop_m", [6, 1, 4, 3, 3, 4, 4]),
+            ("mul_r16", [13, 11, 4, 4, 3, 5, 3]),
+            ("lea", [1, 1, 1, 1, 1, 1, 1]),
+            ("x87_div_m", [73, 39, 38, 62, 58, 24, 30]),
+            ("x87_control_store", [3, 2, 4, 6, 4, 1, 6]),
+        ] {
             assert_eq!(COST[k], row, "COST[{k}]");
             assert_eq!(LATENCY[k], row, "LATENCY[{k}]");
         }

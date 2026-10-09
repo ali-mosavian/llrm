@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 
 use iced_x86::Register;
-
 use llrm_x86_m16::cycles::*;
+
 use crate::backend::{cpu, schedule};
 use crate::model::{ir, lir};
 
@@ -74,8 +74,10 @@ fn test_complete_far_pointer_loads_share_one_priced_form() {
 fn test_x87_exchange_is_explicitly_priced_for_every_cpu() {
     let expected = [("386", 18), ("486", 4), ("P5", 1), ("P6", 0), ("K5", 1), ("K6", 2), ("K7", 0), ("Core", 0)];
     assert_eq!(classify("fxch", "st1", "d9c9"), "x87_exchange");
-    let got: Vec<(&str, i64)> =
-        cpu::names().into_iter().map(|name| (name, cpu::profile(name).unwrap().cost("x87_exchange").unwrap())).collect();
+    let got: Vec<(&str, i64)> = cpu::names()
+        .into_iter()
+        .map(|name| (name, cpu::profile(name).unwrap().cost("x87_exchange").unwrap()))
+        .collect();
     assert_eq!(got, expected);
 }
 
@@ -151,8 +153,9 @@ fn test_g_matches_python_format() {
     assert_eq!(_g(1234567.0), "1.23457e+06");
 }
 
-/// `lea esi, [ebx+ebx*2]` (a multiply by 3) has two registers and no cell: the encoder named no form for it and priced it as
-/// nothing, so a function with one could not be priced in bytes and its routes compared as unpriced (nbody_fixed -Os).
+/// `lea esi, [ebx+ebx*2]` (a multiply by 3) has two registers and no cell: the encoder named no form for it and priced
+/// it as nothing, so a function with one could not be priced in bytes and its routes compared as unpriced (nbody_fixed
+/// -Os).
 #[test]
 fn test_a_lea_of_a_register_and_a_scaled_copy_of_it_has_a_byte_price() {
     let reg = |register| ir::Loc::Reg(ir::Reg { register, width: 4 });
@@ -166,7 +169,12 @@ fn test_a_lea_of_a_register_and_a_scaled_copy_of_it_has_a_byte_price() {
         width: 4,
         ..ir::Mem::new(None, 0)
     };
-    let what = ir::Semantics { name: Some("lea".to_owned()), dests: vec![reg(Register::ESI)], sources: vec![ir::Loc::Mem(cell)], ..ir::Semantics::new(ir::Operation::Address) };
+    let what = ir::Semantics {
+        name: Some("lea".to_owned()),
+        dests: vec![reg(Register::ESI)],
+        sources: vec![ir::Loc::Mem(cell)],
+        ..ir::Semantics::new(ir::Operation::Address)
+    };
     let code = crate::backend::select::priced_in(32, &what, 0, None, false, false, None).expect("a price");
     assert_eq!(code.code, [0x8d, 0x34, 0x5b]);
 }

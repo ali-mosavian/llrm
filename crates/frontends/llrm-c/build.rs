@@ -19,7 +19,17 @@ fn toolchain() {
 
 #[cfg(unix)]
 fn toolchain() {
-    for input in ["../../../toolchain/cache.sh", "../../../toolchain/owshim/build.sh", "../../../toolchain/owshim/hash.sh", "../../../toolchain/owshim/ow-commit", "../../../toolchain/owshim/cgshim.c", "../../../toolchain/owshim/cc-objects.txt", "../../../toolchain/owshim/patches", "../../../runtime/c", "../../../crates/target"] {
+    for input in [
+        "../../../toolchain/cache.sh",
+        "../../../toolchain/owshim/build.sh",
+        "../../../toolchain/owshim/hash.sh",
+        "../../../toolchain/owshim/ow-commit",
+        "../../../toolchain/owshim/cgshim.c",
+        "../../../toolchain/owshim/cc-objects.txt",
+        "../../../toolchain/owshim/patches",
+        "../../../runtime/c",
+        "../../../crates/target",
+    ] {
         println!("cargo:rerun-if-changed={input}");
     }
     println!("cargo:rerun-if-env-changed=OWROOT");
@@ -29,17 +39,32 @@ fn toolchain() {
     let mut trees: std::collections::BTreeMap<String, [String; 4]> = std::collections::BTreeMap::new();
     for entry in std::fs::read_dir("../../../runtime/c").expect("runtime/c").flatten() {
         let Ok(text) = std::fs::read_to_string(entry.path().join("c.toml")) else { continue };
-        let table: toml::Table = text.parse().unwrap_or_else(|error| panic!("{}: {error}", entry.path().join("c.toml").display()));
+        let table: toml::Table =
+            text.parse().unwrap_or_else(|error| panic!("{}: {error}", entry.path().join("c.toml").display()));
         let frontend = table.get("frontend").unwrap_or_else(|| panic!("{} has no [frontend]", entry.path().display()));
-        let cpu = frontend.get("watcom_cpu").and_then(toml::Value::as_str).unwrap_or_else(|| panic!("{} has no frontend.watcom_cpu", entry.path().display()));
-        let int = frontend.get("int_bytes").and_then(toml::Value::as_integer).unwrap_or_else(|| panic!("{} has no frontend.int_bytes", entry.path().display()));
+        let cpu = frontend
+            .get("watcom_cpu")
+            .and_then(toml::Value::as_str)
+            .unwrap_or_else(|| panic!("{} has no frontend.watcom_cpu", entry.path().display()));
+        let int = frontend
+            .get("int_bytes")
+            .and_then(toml::Value::as_integer)
+            .unwrap_or_else(|| panic!("{} has no frontend.int_bytes", entry.path().display()));
         let target = entry.file_name().to_string_lossy().into_owned();
         let layout_file = format!("../../target/llrm-{target}/src/machines/datalayout.toml");
         println!("cargo:rerun-if-changed={layout_file}");
-        let layout = llrm_target::layout::Layout::parse(&std::fs::read_to_string(&layout_file).unwrap_or_else(|error| panic!("{layout_file}: {error}"))).unwrap_or_else(|error| panic!("{layout_file}: {error}"));
+        let layout = llrm_target::layout::Layout::parse(
+            &std::fs::read_to_string(&layout_file).unwrap_or_else(|error| panic!("{layout_file}: {error}")),
+        )
+        .unwrap_or_else(|error| panic!("{layout_file}: {error}"));
         let data = llrm_mir::datalayout::DataLayout::parse(&layout.datalayout).expect("a target's datalayout parses");
         let bytes = |space: u32| (data.pointer(space).bits / 8).to_string();
-        let sizes = [u32::from(layout.spaces.far_is_near()).to_string(), bytes(layout.spaces.near), bytes(layout.spaces.far), int.to_string()];
+        let sizes = [
+            u32::from(layout.spaces.far_is_near()).to_string(),
+            bytes(layout.spaces.near),
+            bytes(layout.spaces.far),
+            int.to_string(),
+        ];
         if let Some(had) = trees.insert(cpu.to_owned(), sizes.clone()) {
             assert_eq!(had, sizes, "two targets share the {cpu} front end and state different sizes");
         }

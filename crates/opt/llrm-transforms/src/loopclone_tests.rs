@@ -59,7 +59,10 @@ fn only_loop(module: &mut Module) -> loops::Loop {
 }
 
 /// `text` with `count` iterations peeled, which must go through.
-fn peel(text: &str, count: i64) -> Module {
+fn peel(
+    text: &str,
+    count: i64,
+) -> Module {
     let mut module = parsed(text);
     let loop_ = only_loop(&mut module);
     peeled(f(&mut module), &loop_, count).unwrap().expect("peeled");
@@ -100,10 +103,20 @@ fn test_clones_read_their_own_values() {
     let mut module = peel(DIAMOND, 1);
     let function = f(&mut module);
     let originals = before.functions().next().unwrap().2.layout().to_vec();
-    let defined = originals[1..6].iter().flat_map(|&block| function.block(block).instructions().to_vec()).filter_map(|inst| function.instruction(inst).result).collect::<BTreeSet<_>>();
+    let defined = originals[1..6]
+        .iter()
+        .flat_map(|&block| function.block(block).instructions().to_vec())
+        .filter_map(|inst| function.instruction(inst).result)
+        .collect::<BTreeSet<_>>();
     for &block in function.layout().iter().filter(|block| !originals.contains(block)) {
         for &inst in function.block(block).instructions() {
-            assert!(!function.instruction(inst).operands.iter().any(|operand| matches!(operand, Operand::Value(value) if defined.contains(value))));
+            assert!(
+                !function
+                    .instruction(inst)
+                    .operands
+                    .iter()
+                    .any(|operand| matches!(operand, Operand::Value(value) if defined.contains(value)))
+            );
         }
     }
     let text = printed(&module);
@@ -153,7 +166,10 @@ fn test_opaque_dispatch_is_not_cloned_as_an_ordinary_branch() {
     refused(&format!(
         "declare void @g()\n\ndeclare i32 @personality(...)\n\n{}",
         DIAMOND
-            .replace("define i16 @f(i16 %seed, i16 %n, i16 %limit) {", "define i16 @f(i16 %seed, i16 %n, i16 %limit) personality ptr @personality {")
+            .replace(
+                "define i16 @f(i16 %seed, i16 %n, i16 %limit) {",
+                "define i16 @f(i16 %seed, i16 %n, i16 %limit) personality ptr @personality {"
+            )
             .replace("  br i1 %even, label %b3, label %b4", "  invoke void @g() to label %b3 unwind label %b4")
             .replace("b4:\n", "b4:\n  %pad = landingpad { ptr, i32 } cleanup\n")
     ));
@@ -161,7 +177,10 @@ fn test_opaque_dispatch_is_not_cloned_as_an_ordinary_branch() {
 
 #[test]
 fn test_clones_keep_their_originals_metadata() {
-    let text = format!("{}\n!0 = !{{!\"fact\"}}\n", DIAMOND.replace("%left = add i16 %carried, 3", "%left = add i16 %carried, 3, !fact !0"));
+    let text = format!(
+        "{}\n!0 = !{{!\"fact\"}}\n",
+        DIAMOND.replace("%left = add i16 %carried, 3", "%left = add i16 %carried, 3, !fact !0")
+    );
     let mut module = peel(&text, 2);
     assert_eq!(printed(&module).matches(", !fact !0").count(), 3);
     let function = f(&mut module);

@@ -5,17 +5,16 @@
 //! the semantics Python printed instead: `masm` is not ported.
 use std::cell::RefCell;
 use std::rc::Rc;
-
-use crate::support::hash::HashMap;
 use std::sync::Arc;
 
 use iced_x86::{Decoder, DecoderOptions, Mnemonic, Register};
-use crate::support::hash::IndexMap;
 
 use super::*;
 use crate::backend::frame::Frame;
 use crate::backend::{copyprop, parcopy, prologue, spillforward, verify};
 use crate::model::ir::Addr;
+use crate::support::hash::HashMap;
+use crate::support::hash::IndexMap;
 use crate::support::pyrepr::Repr;
 
 /// The 16-bit x86 rules, as the phase takes them by default.
@@ -23,39 +22,79 @@ fn rules() -> &'static crate::backend::peep::Rules {
     &crate::backend::peep::targets::x86_m16::RULES
 }
 
-fn r(register: Register, width: u32) -> Reg {
+fn r(
+    register: Register,
+    width: u32,
+) -> Reg {
     Reg { register, width }
 }
 
-fn rl(register: Register, width: u32) -> Loc {
+fn rl(
+    register: Register,
+    width: u32,
+) -> Loc {
     Loc::Reg(r(register, width))
 }
 
-fn im(value: i64, width: u32) -> Loc {
+fn im(
+    value: i64,
+    width: u32,
+) -> Loc {
     Loc::Imm(imm(value, width))
 }
 
-fn sem(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {
+fn sem(
+    op: Operation,
+    name: &str,
+    dests: Vec<Loc>,
+    sources: Vec<Loc>,
+) -> Semantics {
     semantics(op, name, dests, sources)
 }
 
-fn semt(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>, target: Option<i64>) -> Semantics {
+fn semt(
+    op: Operation,
+    name: &str,
+    dests: Vec<Loc>,
+    sources: Vec<Loc>,
+    target: Option<i64>,
+) -> Semantics {
     Semantics { target, ..semantics(op, name, dests, sources) }
 }
 
-fn insn(at: i64, covers: Option<(i64, i64)>, what: Option<Semantics>, defines: Vec<u32>, uses: Vec<u32>) -> Insn {
+fn insn(
+    at: i64,
+    covers: Option<(i64, i64)>,
+    what: Option<Semantics>,
+    defines: Vec<u32>,
+    uses: Vec<u32>,
+) -> Insn {
     Insn::new(at, covers, what, defines, uses)
 }
 
-fn block(at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>) -> LirBlock {
+fn block(
+    at: i64,
+    insns: Vec<Arc<Insn>>,
+    succ: Vec<i64>,
+) -> LirBlock {
     LirBlock { succ, ..LirBlock::new(at, insns) }
 }
 
-fn body(name: &str, entry: i64, blocks: Vec<LirBlock>) -> LirBody {
+fn body(
+    name: &str,
+    entry: i64,
+    blocks: Vec<LirBlock>,
+) -> LirBody {
     LirBody::new(name, entry, blocks, IndexMap::default(), IndexMap::default())
 }
 
-fn mem(addr: Option<Addr>, width: u32, through: Register, offset: i64, disp_width: u32) -> Mem {
+fn mem(
+    addr: Option<Addr>,
+    width: u32,
+    through: Register,
+    offset: i64,
+    disp_width: u32,
+) -> Mem {
     Mem { through, offset, disp_width, ..Mem::new(addr, width) }
 }
 
@@ -95,14 +134,18 @@ fn test_screen_argument_reuses_its_required_register_constant() {
     for (width, register, value) in [(2, Register::AX, 1), (4, Register::ECX, 0x1234_5678)] {
         let operand = im(value, width);
         let dest = rl(register, width);
-        let push = insn(0, Some((0, 1)), Some(sem(Operation::Push, "push", vec![], vec![operand.clone()])), vec![], vec![]);
-        let moved =
-            insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![operand])), vec![7], vec![]);
-        let result = transform(body("screen", 0, vec![block(0, vec![Arc::new(push.clone()), Arc::new(moved.clone())], vec![])]));
-        let expected = [
-            moved.what.clone().unwrap(),
-            Semantics { sources: vec![dest], ..push.what.clone().unwrap() },
-        ];
+        let push =
+            insn(0, Some((0, 1)), Some(sem(Operation::Push, "push", vec![], vec![operand.clone()])), vec![], vec![]);
+        let moved = insn(
+            1,
+            Some((1, 1)),
+            Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![operand])),
+            vec![7],
+            vec![],
+        );
+        let result =
+            transform(body("screen", 0, vec![block(0, vec![Arc::new(push.clone()), Arc::new(moved.clone())], vec![])]));
+        let expected = [moved.what.clone().unwrap(), Semantics { sources: vec![dest], ..push.what.clone().unwrap() }];
         let insns = result.insns();
         assert_eq!(
             insns.iter().flat_map(|one| code(one.what.as_ref().unwrap())).collect::<Vec<u8>>(),
@@ -148,7 +191,11 @@ fn test_argument_materialization_does_not_cross_observable_boundaries() {
                     vec![rl(if barrier == "stack" { Register::SP } else { Register::BP }, 2)];
             }
             "relocation" => {
-                let symbol = Loc::Imm(Imm { value: 1, width: 2, address: Some(Addr { index: 1, ..Addr::new(Space::Segment, 0) }) });
+                let symbol = Loc::Imm(Imm {
+                    value: 1,
+                    width: 2,
+                    address: Some(Addr { index: 1, ..Addr::new(Space::Segment, 0) }),
+                });
                 push.what.as_mut().unwrap().sources = vec![symbol.clone()];
                 moved.what.as_mut().unwrap().sources = vec![symbol];
             }
@@ -220,10 +267,8 @@ fn test_entry_reload_requires_agreement_on_every_edge() {
             ],
         );
         let done = spillforward::forwarded(&input);
-        let kept = done.blocks[done.blocks.len() - 1]
-            .insns
-            .iter()
-            .any(|one| one.spill_reload || one.what == reload.what);
+        let kept =
+            done.blocks[done.blocks.len() - 1].insns.iter().any(|one| one.spill_reload || one.what == reload.what);
         assert_eq!(kept, !["none", "unowned"].contains(&mismatch), "{mismatch}");
     }
 }
@@ -235,14 +280,33 @@ fn test_entry_reload_requires_agreement_on_every_edge() {
 fn test_storing_a_slot_back_from_its_reload_is_dead() {
     let register = rl(Register::BX, 2);
     let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-32), 2) });
-    let reload = insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![register.clone()], vec![cell.clone()])), vec![], vec![]);
-    let back = insn(2, Some((2, 2)), Some(sem(Operation::Move, "mov", vec![cell.clone()], vec![register.clone()])), vec![], vec![]);
-    let other = insn(3, Some((3, 3)), Some(sem(Operation::Move, "mov", vec![cell], vec![rl(Register::CX, 2)])), vec![], vec![]);
+    let reload = insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Move, "mov", vec![register.clone()], vec![cell.clone()])),
+        vec![],
+        vec![],
+    );
+    let back = insn(
+        2,
+        Some((2, 2)),
+        Some(sem(Operation::Move, "mov", vec![cell.clone()], vec![register.clone()])),
+        vec![],
+        vec![],
+    );
+    let other =
+        insn(3, Some((3, 3)), Some(sem(Operation::Move, "mov", vec![cell], vec![rl(Register::CX, 2)])), vec![], vec![]);
     let input = body("back", 1, vec![block(1, vec![Arc::new(reload), Arc::new(back), Arc::new(other)], vec![])]);
 
     let done = spillforward::forwarded(&input);
 
-    let stores: Vec<_> = done.insns().iter().filter_map(|one| one.what.as_ref()).filter(|what| matches!(what.dests[..], [Loc::Mem(_)])).map(|what| what.sources.clone()).collect();
+    let stores: Vec<_> = done
+        .insns()
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .filter(|what| matches!(what.dests[..], [Loc::Mem(_)]))
+        .map(|what| what.sources.clone())
+        .collect();
     assert_eq!(stores, vec![vec![rl(Register::CX, 2)]]);
 }
 
@@ -261,7 +325,13 @@ fn test_forwarded_spill_reload_retains_its_virtual_definition() {
     );
     let reload = Insn {
         spill_reload: true,
-        ..insn(2, Some((2, 2)), Some(sem(Operation::Move, "mov", vec![register.clone()], vec![source])), vec![2], vec![])
+        ..insn(
+            2,
+            Some((2, 2)),
+            Some(sem(Operation::Move, "mov", vec![register.clone()], vec![source])),
+            vec![2],
+            vec![],
+        )
     };
     let consume =
         insn(3, Some((3, 4)), Some(sem(Operation::Move, "mov", vec![destination], vec![register])), vec![], vec![2]);
@@ -313,7 +383,12 @@ fn test_commuted_accumulator_keeps_the_saved_value() {
             let semantics = [
                 sem(Operation::Move, "mov", vec![Loc::Reg(temporary)], vec![Loc::Reg(accumulator)]),
                 sem(Operation::Move, "mov", vec![Loc::Reg(accumulator)], vec![Loc::Reg(term)]),
-                sem(Operation::Binary, name, vec![Loc::Reg(accumulator)], vec![Loc::Reg(accumulator), Loc::Reg(temporary)]),
+                sem(
+                    Operation::Binary,
+                    name,
+                    vec![Loc::Reg(accumulator)],
+                    vec![Loc::Reg(accumulator), Loc::Reg(temporary)],
+                ),
             ];
             let insns: Vec<Arc<Insn>> = semantics
                 .iter()
@@ -371,9 +446,17 @@ fn test_commuted_accumulator_keeps_the_saved_value() {
 /// word pushes join only where the dword is no longer (`push 0; push 0` is `pushd 0`, 3 for 4).
 #[test]
 fn test_word_push_pair_joins_tuned_for_size_only_where_the_dword_is_no_longer() {
-    for (high, low, joined, size) in [(0x70i64, 0x70i64, false, true), (0x70, 0x70, true, false), (0, 0, true, true), (0x3F80, 0, false, true)] {
+    for (high, low, joined, size) in
+        [(0x70i64, 0x70i64, false, true), (0x70, 0x70, true, false), (0, 0, true, true), (0x3F80, 0, false, true)]
+    {
         let push = |at: i64, number: i64| {
-            Arc::new(insn(at, Some((at, at + 3)), Some(sem(Operation::Push, "push", vec![], vec![im(number, 2)])), vec![], vec![]))
+            Arc::new(insn(
+                at,
+                Some((at, at + 3)),
+                Some(sem(Operation::Push, "push", vec![], vec![im(number, 2)])),
+                vec![],
+                vec![],
+            ))
         };
         let input = body("arguments", 0, vec![block(0, vec![push(0, high), push(3, low)], vec![])]);
 
@@ -387,17 +470,25 @@ fn test_word_push_pair_joins_tuned_for_size_only_where_the_dword_is_no_longer() 
 fn test_constant_push_pair_preserves_stack_bytes() {
     for (high, low) in [(0x43F3i64, 0xC000i64), (-1, -2), (0, 0), (0x8000, 0x7FFF)] {
         let push = |at: i64, number: i64| {
-            Arc::new(insn(at, Some((at, at + 3)), Some(sem(Operation::Push, "push", vec![], vec![im(number, 2)])), vec![], vec![]))
+            Arc::new(insn(
+                at,
+                Some((at, at + 3)),
+                Some(sem(Operation::Push, "push", vec![], vec![im(number, 2)])),
+                vec![],
+                vec![],
+            ))
         };
         let pair = vec![push(0, high), push(3, low)];
-        let result = pushes(rules(), &body("arguments", 0, vec![block(0, pair, vec![])]), crate::backend::cpu::tuned("486", false).unwrap()).insns();
+        let result = pushes(
+            rules(),
+            &body("arguments", 0, vec![block(0, pair, vec![])]),
+            crate::backend::cpu::tuned("486", false).unwrap(),
+        )
+        .insns();
         assert!(result.len() == 1 && result[0].covers == Some((0, 6)));
         let Loc::Imm(operand) = &result[0].what.as_ref().unwrap().sources[0] else { unreachable!() };
-        let expected: Vec<u8> = ((low & 0xFFFF) as u16)
-            .to_le_bytes()
-            .into_iter()
-            .chain(((high & 0xFFFF) as u16).to_le_bytes())
-            .collect();
+        let expected: Vec<u8> =
+            ((low & 0xFFFF) as u16).to_le_bytes().into_iter().chain(((high & 0xFFFF) as u16).to_le_bytes()).collect();
         assert_eq!(u32::try_from(operand.value).unwrap().to_le_bytes().to_vec(), expected);
         let made = code(result[0].what.as_ref().unwrap());
         let decoded = Decoder::new(16, &made, DecoderOptions::NONE).decode();
@@ -444,14 +535,22 @@ fn test_constant_push_fusion_stops_at_boundaries() {
 fn test_a_byte_gap_does_not_stop_push_fusion() {
     let first = insn(0, Some((0, 3)), Some(sem(Operation::Push, "push", vec![], vec![im(1, 2)])), vec![], vec![]);
     let second = Insn { at: 4, covers: Some((4, 7)), ..first.clone() };
-    let fused = pushes(rules(), &body("gap", 0, vec![block(0, vec![Arc::new(first.clone()), Arc::new(second.clone())], vec![])]), crate::backend::cpu::tuned("486", false).unwrap());
+    let fused = pushes(
+        rules(),
+        &body("gap", 0, vec![block(0, vec![Arc::new(first.clone()), Arc::new(second.clone())], vec![])]),
+        crate::backend::cpu::tuned("486", false).unwrap(),
+    );
     let code: Vec<_> = fused.insns().into_iter().filter(|one| !one.is_meta()).collect();
     assert_eq!(code.len(), 1, "{code:?}");
     assert_eq!(fused.owned_bytes(), [0, 1, 2, 4, 5, 6]);
 
     // Nor does a marker between them.
     let marker = insn(3, Some((3, 4)), Some(lir::inert()), vec![], vec![]);
-    let fused = pushes(rules(), &body("marked", 0, vec![block(0, vec![Arc::new(first), Arc::new(marker), Arc::new(second)], vec![])]), crate::backend::cpu::tuned("486", false).unwrap());
+    let fused = pushes(
+        rules(),
+        &body("marked", 0, vec![block(0, vec![Arc::new(first), Arc::new(marker), Arc::new(second)], vec![])]),
+        crate::backend::cpu::tuned("486", false).unwrap(),
+    );
     assert_eq!(fused.insns().iter().filter(|one| !one.is_meta()).count(), 1, "{:?}", fused.insns());
     assert_eq!(fused.owned_bytes(), [0, 1, 2, 3, 4, 5, 6]);
 }
@@ -465,7 +564,13 @@ fn test_dead_reload_requires_allocator_ownership_and_no_read() {
             let slot = Frame::new(0).cell(1i64, 2).unwrap();
             let load = Arc::new(Insn {
                 spill_reload: owned,
-                ..insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![Loc::Mem(slot)])), vec![], vec![])
+                ..insn(
+                    0,
+                    Some((0, 0)),
+                    Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![Loc::Mem(slot)])),
+                    vec![],
+                    vec![],
+                )
             });
             let used = Arc::new(insn(
                 1,
@@ -474,8 +579,13 @@ fn test_dead_reload_requires_allocator_ownership_and_no_read() {
                 vec![],
                 vec![],
             ));
-            let write =
-                Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Move, "mov", vec![ax], vec![im(4, 2)])), vec![], vec![]));
+            let write = Arc::new(insn(
+                2,
+                Some((2, 2)),
+                Some(sem(Operation::Move, "mov", vec![ax], vec![im(4, 2)])),
+                vec![],
+                vec![],
+            ));
             let insns = if read { vec![Arc::clone(&load), used, write] } else { vec![Arc::clone(&load), write] };
             let result = overwritten(&body("reload", 0, vec![block(0, insns, vec![])]));
             assert_eq!(!result.insns().contains(&load), owned && !read, "{owned} {read}");
@@ -490,7 +600,13 @@ fn test_overwritten_reload_keeps_virtual_definition() {
     let slot = Frame::new(0).cell(1i64, 2).unwrap();
     let load = Insn {
         spill_reload: true,
-        ..insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![Loc::Mem(slot)])), vec![1], vec![])
+        ..insn(
+            0,
+            Some((0, 0)),
+            Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![Loc::Mem(slot)])),
+            vec![1],
+            vec![],
+        )
     };
     let copy = lir::anchor(Arc::new(insn(
         1,
@@ -504,12 +620,7 @@ fn test_overwritten_reload_keeps_virtual_definition() {
 
     let result = overwritten(&input);
     assert!(verify::verify(&result, false).is_empty());
-    assert!(
-        result
-            .insns()
-            .iter()
-            .any(|one| one.what.as_ref().unwrap().op == Operation::Nothing && one.defines == [1])
-    );
+    assert!(result.insns().iter().any(|one| one.what.as_ref().unwrap().op == Operation::Nothing && one.defines == [1]));
 }
 
 #[test]
@@ -517,8 +628,13 @@ fn test_overwritten_register_copy_respects_byte_reads() {
     // FPDEEP retains AX/SI allocation shuffles overwritten before any use.
     for (middle, removed) in [(Register::CX, true), (Register::AL, false), (Register::AH, false)] {
         let (ax, si) = (rl(Register::AX, 2), rl(Register::SI, 2));
-        let copy =
-            Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![si])), vec![], vec![]));
+        let copy = Arc::new(insn(
+            0,
+            Some((0, 0)),
+            Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![si])),
+            vec![],
+            vec![],
+        ));
         let width = if [Register::AL, Register::AH].contains(&middle) { 1 } else { 2 };
         let read = Arc::new(insn(
             1,
@@ -532,8 +648,13 @@ fn test_overwritten_register_copy_respects_byte_reads() {
             vec![],
             vec![],
         ));
-        let overwrite =
-            Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Move, "mov", vec![ax], vec![im(4, 2)])), vec![], vec![]));
+        let overwrite = Arc::new(insn(
+            2,
+            Some((2, 2)),
+            Some(sem(Operation::Move, "mov", vec![ax], vec![im(4, 2)])),
+            vec![],
+            vec![],
+        ));
         let result = overwritten(&body("copies", 0, vec![block(0, vec![Arc::clone(&copy), read, overwrite], vec![])]));
         assert_eq!(!result.insns().contains(&copy), removed, "{middle:?}");
     }
@@ -544,7 +665,8 @@ fn test_word_copy_survives_partial_overwrite() {
     // Writing AL or AH alone cannot make a prior AX definition dead.
     for dest in [Register::AL, Register::AH] {
         let (ax, si) = (rl(Register::AX, 2), rl(Register::SI, 2));
-        let copy = Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![ax], vec![si])), vec![], vec![]));
+        let copy =
+            Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![ax], vec![si])), vec![], vec![]));
         let write = Arc::new(insn(
             1,
             Some((1, 1)),
@@ -563,7 +685,13 @@ fn test_index_lea_preserves_observed_shift_flags() {
     // ADDRM's copy/shift can become LEA only before a complete flag overwrite.
     for following in ["add", "adc", "inc", "shl", "call", "je"] {
         let (dest, source) = (rl(Register::SI, 2), rl(Register::BX, 2));
-        let copy = insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![source.clone()])), vec![2], vec![1]);
+        let copy = insn(
+            0,
+            Some((0, 0)),
+            Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![source.clone()])),
+            vec![2],
+            vec![1],
+        );
         let shift = insn(
             0,
             Some((0, 2)),
@@ -599,7 +727,13 @@ fn test_word_scaled_lea_prices_the_partial_register_read() {
         ("Core", vec!["mov", "shl", "cmp"]),
     ] {
         let (dest, source) = (rl(Register::CX, 2), rl(Register::AX, 2));
-        let copy = insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![source])), vec![2], vec![1]);
+        let copy = insn(
+            0,
+            Some((0, 0)),
+            Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![source])),
+            vec![2],
+            vec![1],
+        );
         let shift = insn(
             1,
             Some((1, 1)),
@@ -625,8 +759,13 @@ fn test_word_scaled_lea_prices_the_partial_register_read() {
 fn test_source_owned_scale_converges_with_a_synthetic_frontend() {
     // Frontend-parity ALGEBRA left BASIC's `mov; shl 2; add` intact.
     let (source, dest) = (rl(Register::EDX, 4), rl(Register::ECX, 4));
-    let copy =
-        insn(0x90, Some((0x90, 0x90)), Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![source.clone()])), vec![77], vec![72]);
+    let copy = insn(
+        0x90,
+        Some((0x90, 0x90)),
+        Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![source.clone()])),
+        vec![77],
+        vec![72],
+    );
     let shift = insn(
         0x90,
         Some((0x90, 0x95)),
@@ -641,12 +780,21 @@ fn test_source_owned_scale_converges_with_a_synthetic_frontend() {
         vec![77],
         vec![77, 72],
     );
-    let compare =
-        insn(0x95, Some((0x95, 0x95)), Some(sem(Operation::Compare, "cmp", vec![], vec![dest, im(0, 4)])), vec![], vec![77]);
+    let compare = insn(
+        0x95,
+        Some((0x95, 0x95)),
+        Some(sem(Operation::Compare, "cmp", vec![], vec![dest, im(0, 4)])),
+        vec![],
+        vec![77],
+    );
     let input = body(
         "frontend-scale",
         0x90,
-        vec![block(0x90, vec![Arc::new(copy.clone()), Arc::new(shift), Arc::new(addition.clone()), Arc::new(compare)], vec![])],
+        vec![block(
+            0x90,
+            vec![Arc::new(copy.clone()), Arc::new(shift), Arc::new(addition.clone()), Arc::new(compare)],
+            vec![],
+        )],
     );
 
     let result = addresses(&input, "386").unwrap().insns();
@@ -662,8 +810,13 @@ fn test_source_owned_scale_converges_with_a_synthetic_frontend() {
 #[test]
 fn test_scaled_lea_crosses_markers_and_byte_gaps() {
     let (source, dest) = (rl(Register::EDX, 4), rl(Register::ECX, 4));
-    let copy =
-        insn(0x90, Some((0x90, 0x90)), Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![source.clone()])), vec![77], vec![72]);
+    let copy = insn(
+        0x90,
+        Some((0x90, 0x90)),
+        Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![source.clone()])),
+        vec![77],
+        vec![72],
+    );
     let shift = insn(
         0x90,
         Some((0x90, 0x95)),
@@ -679,8 +832,13 @@ fn test_scaled_lea_crosses_markers_and_byte_gaps() {
         vec![77],
         vec![77, 72],
     );
-    let compare =
-        insn(0x9b, Some((0x9b, 0x9b)), Some(sem(Operation::Compare, "cmp", vec![], vec![dest, im(0, 4)])), vec![], vec![77]);
+    let compare = insn(
+        0x9b,
+        Some((0x9b, 0x9b)),
+        Some(sem(Operation::Compare, "cmp", vec![], vec![dest, im(0, 4)])),
+        vec![],
+        vec![77],
+    );
     let parts = [copy, shift, marker, addition, compare].map(Arc::new).to_vec();
     let input = body("marked-scale", 0x90, vec![block(0x90, parts, vec![])]);
 
@@ -722,7 +880,8 @@ fn test_scaled_lea_does_not_require_another_shift() {
                 };
                 assert_eq!(names(&result), expected, "{amount} {following} {width}");
                 if following == "cmp" {
-                    let emitted = crate::frontends::bc::declen::decode(&code(result[0].what.as_ref().unwrap()), 0).unwrap().insn;
+                    let emitted =
+                        crate::frontends::bc::declen::decode(&code(result[0].what.as_ref().unwrap()), 0).unwrap().insn;
                     assert_eq!(emitted.memory_index_scale(), 1 << amount);
                 }
             }
@@ -753,7 +912,8 @@ fn test_loaded_scaled_add_uses_67h_lea() {
         vec![2],
         vec![2, 1],
     );
-    let compare = insn(3, Some((3, 3)), Some(sem(Operation::Compare, "cmp", vec![], vec![total, im(0, 4)])), vec![], vec![2]);
+    let compare =
+        insn(3, Some((3, 3)), Some(sem(Operation::Compare, "cmp", vec![], vec![total, im(0, 4)])), vec![], vec![2]);
     let input = body(
         "matmul-scale",
         0,
@@ -815,7 +975,8 @@ fn test_repeated_allocated_address_copies_use_one_clean_67h_base() {
 
     let result = secondary_bases(&input, "386").unwrap().insns();
 
-    let moves: Vec<&Arc<Insn>> = result.iter().filter(|one| one.what.as_ref().unwrap().name.as_deref() == Some("mov")).collect();
+    let moves: Vec<&Arc<Insn>> =
+        result.iter().filter(|one| one.what.as_ref().unwrap().name.as_deref() == Some("mov")).collect();
     assert_eq!(moves.len(), 5); // the owner load and four actual memory loads
     let extension = result.iter().find(|one| one.what.as_ref().unwrap().name.as_deref() == Some("movzx")).unwrap();
     assert_eq!(extension.what.as_ref().unwrap().dests, [rl(Register::EDX, 4)]);
@@ -840,7 +1001,12 @@ fn test_a_frame_cell_keeps_its_bp_when_its_base_copies_are_unified() {
     let owner = insn(
         1,
         Some((1, 3)),
-        Some(sem(Operation::Move, "mov", vec![rl(Register::DX, 2)], vec![Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(6), 2) })])),
+        Some(sem(
+            Operation::Move,
+            "mov",
+            vec![rl(Register::DX, 2)],
+            vec![Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(6), 2) })],
+        )),
         vec![1],
         vec![],
     );
@@ -848,16 +1014,31 @@ fn test_a_frame_cell_keeps_its_bp_when_its_base_copies_are_unified() {
     for (index, register) in [Register::BX, Register::SI, Register::DI, Register::BX].into_iter().enumerate() {
         let index = index as i64 + 2;
         let value = u32::try_from(index).unwrap();
-        let copy = insn(index, Some((index, index)), Some(sem(Operation::Move, "mov", vec![rl(register, 2)], vec![rl(Register::DX, 2)])), vec![value], vec![1]);
+        let copy = insn(
+            index,
+            Some((index, index)),
+            Some(sem(Operation::Move, "mov", vec![rl(register, 2)], vec![rl(Register::DX, 2)])),
+            vec![value],
+            vec![1],
+        );
         let cell = Mem { through: register, base: Some(Held { value, width: 2 }), ..Mem::new(frame(-8), 2) };
-        let load = insn(index, Some((index, index)), Some(sem(Operation::Move, "mov", vec![rl(Register::AX, 2)], vec![Loc::Mem(cell)])), vec![30 + value], vec![value]);
+        let load = insn(
+            index,
+            Some((index, index)),
+            Some(sem(Operation::Move, "mov", vec![rl(Register::AX, 2)], vec![Loc::Mem(cell)])),
+            vec![30 + value],
+            vec![value],
+        );
         insns.extend([Arc::new(copy), Arc::new(load)]);
     }
     let input = body("secondary-base", 1, vec![block(1, insns, vec![])]);
 
     let result = secondary_bases(&input, "386").unwrap().insns();
 
-    assert!(!result.iter().any(|one| one.what.as_ref().unwrap().name.as_deref() == Some("movzx")), "a frame cell's base was widened");
+    assert!(
+        !result.iter().any(|one| one.what.as_ref().unwrap().name.as_deref() == Some("movzx")),
+        "a frame cell's base was widened"
+    );
     for one in result.iter().filter(|one| one.what.as_ref().unwrap().name.as_deref() == Some("mov")) {
         for source in &one.what.as_ref().unwrap().sources {
             if let Loc::Mem(cell) = source {
@@ -876,7 +1057,13 @@ fn test_loaded_scaled_add_skips_metadata_only_anchors() {
     let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-8), 4) });
     let load = Insn {
         symbol: Some(true),
-        ..insn(148, Some((148, 148)), Some(sem(Operation::Move, "mov", vec![temporary.clone()], vec![cell])), vec![1], vec![])
+        ..insn(
+            148,
+            Some((148, 148)),
+            Some(sem(Operation::Move, "mov", vec![temporary.clone()], vec![cell])),
+            vec![1],
+            vec![],
+        )
     };
     let shift = Insn {
         symbol: Some(true),
@@ -902,8 +1089,13 @@ fn test_loaded_scaled_add_skips_metadata_only_anchors() {
         Arc::new(insn(151, Some((151, 151)), Some(sem(Operation::Nothing, "", vec![], vec![])), vec![], vec![])),
         Arc::new(insn(154, Some((154, 154)), Some(sem(Operation::Nothing, "", vec![], vec![])), vec![], vec![])),
     ];
-    let compare =
-        insn(157, Some((157, 157)), Some(sem(Operation::Compare, "cmp", vec![], vec![total, im(0, 4)])), vec![], vec![2]);
+    let compare = insn(
+        157,
+        Some((157, 157)),
+        Some(sem(Operation::Compare, "cmp", vec![], vec![total, im(0, 4)])),
+        vec![],
+        vec![2],
+    );
     let input = body(
         "matmul-anchored-scale",
         148,
@@ -957,8 +1149,10 @@ fn test_loaded_scaled_add_preserves_a_shifted_value_live_into_a_successor() {
         vec![2],
         vec![2, 1],
     );
-    let compare = insn(3, Some((3, 3)), Some(sem(Operation::Compare, "cmp", vec![], vec![total, im(0, 4)])), vec![], vec![2]);
-    let preserve = insn(4, Some((4, 4)), Some(sem(Operation::Move, "mov", vec![saved], vec![temporary])), vec![3], vec![1]);
+    let compare =
+        insn(3, Some((3, 3)), Some(sem(Operation::Compare, "cmp", vec![], vec![total, im(0, 4)])), vec![], vec![2]);
+    let preserve =
+        insn(4, Some((4, 4)), Some(sem(Operation::Move, "mov", vec![saved], vec![temporary])), vec![3], vec![1]);
     let input = body(
         "live-scale",
         0,
@@ -1039,7 +1233,13 @@ fn test_affine_address_folds_a_copy_offset_and_shift() {
         make(0, Operation::Move, "mov", vec![dx.clone()]),
         make(1, Operation::Binary, "sub", vec![bx.clone(), im(-640, 2)]),
         make(2, Operation::Binary, "shl", vec![bx.clone(), im(1, 1)]),
-        Arc::new(insn(3, Some((3, 3)), Some(sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), im(0, 2)])), vec![], vec![])),
+        Arc::new(insn(
+            3,
+            Some((3, 3)),
+            Some(sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), im(0, 2)])),
+            vec![],
+            vec![],
+        )),
     ];
     let input = body("plasma", 0, vec![block(0, insns, vec![])]);
 
@@ -1049,7 +1249,10 @@ fn test_affine_address_folds_a_copy_offset_and_shift() {
     let Some(Loc::Address(address)) = result.blocks[0].insns[0].what.as_ref().unwrap().sources.first() else {
         panic!("not an address")
     };
-    assert_eq!((address.through, address.index, address.scale, address.offset), (Register::EDX, Register::EDX, 1, 1280));
+    assert_eq!(
+        (address.through, address.index, address.scale, address.offset),
+        (Register::EDX, Register::EDX, 1, 1280)
+    );
 }
 
 #[test]
@@ -1058,12 +1261,48 @@ fn test_affine_address_ignores_an_identity_read_only_before_it() {
     // that earlier read as a later one refused the fold.
     let (bx, dx) = (rl(Register::BX, 2), rl(Register::DX, 2));
     let insns = vec![
-        Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![dx.clone()], vec![im(7, 2)])), vec![5], vec![])),
-        Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Compare, "cmp", vec![], vec![dx.clone(), im(0, 2)])), vec![], vec![5])),
-        Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Move, "mov", vec![bx.clone()], vec![dx])), vec![8], vec![5])),
-        Arc::new(insn(3, Some((3, 3)), Some(sem(Operation::Binary, "sub", vec![bx.clone()], vec![bx.clone(), im(-640, 2)])), vec![5], vec![5])),
-        Arc::new(insn(4, Some((4, 4)), Some(sem(Operation::Binary, "shl", vec![bx.clone()], vec![bx.clone(), im(1, 1)])), vec![8], vec![8])),
-        Arc::new(insn(5, Some((5, 5)), Some(sem(Operation::Compare, "cmp", vec![], vec![bx, im(0, 2)])), vec![], vec![8])),
+        Arc::new(insn(
+            0,
+            Some((0, 0)),
+            Some(sem(Operation::Move, "mov", vec![dx.clone()], vec![im(7, 2)])),
+            vec![5],
+            vec![],
+        )),
+        Arc::new(insn(
+            1,
+            Some((1, 1)),
+            Some(sem(Operation::Compare, "cmp", vec![], vec![dx.clone(), im(0, 2)])),
+            vec![],
+            vec![5],
+        )),
+        Arc::new(insn(
+            2,
+            Some((2, 2)),
+            Some(sem(Operation::Move, "mov", vec![bx.clone()], vec![dx])),
+            vec![8],
+            vec![5],
+        )),
+        Arc::new(insn(
+            3,
+            Some((3, 3)),
+            Some(sem(Operation::Binary, "sub", vec![bx.clone()], vec![bx.clone(), im(-640, 2)])),
+            vec![5],
+            vec![5],
+        )),
+        Arc::new(insn(
+            4,
+            Some((4, 4)),
+            Some(sem(Operation::Binary, "shl", vec![bx.clone()], vec![bx.clone(), im(1, 1)])),
+            vec![8],
+            vec![8],
+        )),
+        Arc::new(insn(
+            5,
+            Some((5, 5)),
+            Some(sem(Operation::Compare, "cmp", vec![], vec![bx, im(0, 2)])),
+            vec![],
+            vec![8],
+        )),
     ];
     let input = body("reach", 0, vec![block(0, insns, vec![])]);
 
@@ -1079,9 +1318,21 @@ fn test_affine_address_sees_flags_dead_past_its_block() {
     let (bx, dx) = (rl(Register::BX, 2), rl(Register::DX, 2));
     let insns = vec![
         Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![bx.clone()], vec![dx])), vec![], vec![])),
-        Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Binary, "shl", vec![bx.clone()], vec![bx.clone(), im(1, 1)])), vec![], vec![])),
+        Arc::new(insn(
+            1,
+            Some((1, 1)),
+            Some(sem(Operation::Binary, "shl", vec![bx.clone()], vec![bx.clone(), im(1, 1)])),
+            vec![],
+            vec![],
+        )),
     ];
-    let next = vec![Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Compare, "cmp", vec![], vec![bx, im(0, 2)])), vec![], vec![]))];
+    let next = vec![Arc::new(insn(
+        2,
+        Some((2, 2)),
+        Some(sem(Operation::Compare, "cmp", vec![], vec![bx, im(0, 2)])),
+        vec![],
+        vec![],
+    ))];
     let input = body("edge", 0, vec![block(0, insns, vec![1]), block(1, next, vec![])]);
 
     let result = addresses(&input, "386").unwrap();
@@ -1096,16 +1347,54 @@ fn test_affine_address_sees_flags_dead_past_its_block() {
 fn test_affine_address_is_a_word_lea_where_the_sum_is_a_real_mode_address() {
     for (label, source, then, expected, through, index, offset) in [
         ("base and offset", Register::DI, ("sub", im(4, 2)), vec!["lea", "call"], Register::DI, Register::None, -4),
-        ("base and index", Register::BX, ("add", rl(Register::SI, 2)), vec!["lea", "call"], Register::BX, Register::SI, 0),
-        // CX names no word address: the dword form `lea ax,[ecx-4]`, which the 486 prices at its two clocks and a prefix, as the pair.
-        ("not an address register", Register::CX, ("sub", im(4, 2)), vec!["lea", "call"], Register::ECX, Register::None, -4),
-        // Two index registers are no word address either: the dword form, `lea ax,[esi+edi]`, in the pair's bytes and clocks.
-        ("two indexes", Register::SI, ("add", rl(Register::DI, 2)), vec!["lea", "call"], Register::ESI, Register::EDI, 0),
+        (
+            "base and index",
+            Register::BX,
+            ("add", rl(Register::SI, 2)),
+            vec!["lea", "call"],
+            Register::BX,
+            Register::SI,
+            0,
+        ),
+        // CX names no word address: the dword form `lea ax,[ecx-4]`, which the 486 prices at its two clocks and a
+        // prefix, as the pair.
+        (
+            "not an address register",
+            Register::CX,
+            ("sub", im(4, 2)),
+            vec!["lea", "call"],
+            Register::ECX,
+            Register::None,
+            -4,
+        ),
+        // Two index registers are no word address either: the dword form, `lea ax,[esi+edi]`, in the pair's bytes and
+        // clocks.
+        (
+            "two indexes",
+            Register::SI,
+            ("add", rl(Register::DI, 2)),
+            vec!["lea", "call"],
+            Register::ESI,
+            Register::EDI,
+            0,
+        ),
     ] {
         let ax = rl(Register::AX, 2);
         let insns = vec![
-            Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![rl(source, 2)])), vec![], vec![])),
-            Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Binary, then.0, vec![ax.clone()], vec![ax.clone(), then.1])), vec![], vec![])),
+            Arc::new(insn(
+                0,
+                Some((0, 0)),
+                Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![rl(source, 2)])),
+                vec![],
+                vec![],
+            )),
+            Arc::new(insn(
+                1,
+                Some((1, 1)),
+                Some(sem(Operation::Binary, then.0, vec![ax.clone()], vec![ax.clone(), then.1])),
+                vec![],
+                vec![],
+            )),
             Arc::new(Insn {
                 clobbers: BTreeSet::from([Register::AX, Register::CX, Register::DX]),
                 ..insn(2, Some((2, 2)), Some(sem(Operation::Call, "call", vec![], vec![])), vec![], vec![])
@@ -1128,8 +1417,20 @@ fn test_affine_address_word_lea_keeps_a_flag_still_read() {
     let (ax, di) = (rl(Register::AX, 2), rl(Register::DI, 2));
     let insns = vec![
         Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![di])), vec![], vec![])),
-        Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Binary, "sub", vec![ax.clone()], vec![ax.clone(), im(4, 2)])), vec![], vec![])),
-        Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Binary, "adc", vec![ax.clone()], vec![ax, im(0, 2)])), vec![], vec![])),
+        Arc::new(insn(
+            1,
+            Some((1, 1)),
+            Some(sem(Operation::Binary, "sub", vec![ax.clone()], vec![ax.clone(), im(4, 2)])),
+            vec![],
+            vec![],
+        )),
+        Arc::new(insn(
+            2,
+            Some((2, 2)),
+            Some(sem(Operation::Binary, "adc", vec![ax.clone()], vec![ax, im(0, 2)])),
+            vec![],
+            vec![],
+        )),
     ];
     let input = body("word-lea-flags", 0, vec![block(0, insns, vec![])]);
 
@@ -1144,13 +1445,27 @@ fn saved() -> Vec<Register> {
 }
 
 /// A store of a literal into a cell: `mov dword ptr [bp-N],0` is 8 bytes; `mov [bp-N],eax` is 4.
-fn literal_store(at: i64, width: u32, disp: i64, value: i64) -> Arc<Insn> {
+fn literal_store(
+    at: i64,
+    width: u32,
+    disp: i64,
+    value: i64,
+) -> Arc<Insn> {
     let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(disp), width) });
-    Arc::new(insn(at, Some((at, at + 1)), Some(sem(Operation::Move, "mov", vec![cell], vec![im(value, width)])), vec![], vec![]))
+    Arc::new(insn(
+        at,
+        Some((at, at + 1)),
+        Some(sem(Operation::Move, "mov", vec![cell], vec![im(value, width)])),
+        vec![],
+        vec![],
+    ))
 }
 
 /// The function's remaining block, which reads `reads` and writes the flags (`flags`) or reads them.
-fn after_stores(reads_flags: bool, reads: &[Register]) -> Vec<Arc<Insn>> {
+fn after_stores(
+    reads_flags: bool,
+    reads: &[Register],
+) -> Vec<Arc<Insn>> {
     let first = if reads_flags {
         sem(Operation::Binary, "adc", vec![rl(Register::SI, 2)], vec![rl(Register::SI, 2), im(0, 2)])
     } else {
@@ -1222,16 +1537,49 @@ fn test_a_shared_store_takes_no_register_the_convention_preserves_unless_the_bod
     };
     let preserving_bx = [Register::ESI, Register::EDI, Register::EBX];
 
-    assert_eq!(names(&sharedstores::shared(&input(false), size, &preserving_bx, &crate::backend::classes::RegisterClasses::m16()).blocks[0].insns), ["mov", "mov"]);
-    assert_eq!(names(&sharedstores::shared(&input(false), size, &saved(), &crate::backend::classes::RegisterClasses::m16()).blocks[0].insns), ["xor", "mov", "mov"]);
-    assert_eq!(names(&sharedstores::shared(&input(true), size, &preserving_bx, &crate::backend::classes::RegisterClasses::m16()).blocks[0].insns), ["mov", "xor", "mov", "mov"]);
+    assert_eq!(
+        names(
+            &sharedstores::shared(
+                &input(false),
+                size,
+                &preserving_bx,
+                &crate::backend::classes::RegisterClasses::m16()
+            )
+            .blocks[0]
+                .insns
+        ),
+        ["mov", "mov"]
+    );
+    assert_eq!(
+        names(
+            &sharedstores::shared(&input(false), size, &saved(), &crate::backend::classes::RegisterClasses::m16())
+                .blocks[0]
+                .insns
+        ),
+        ["xor", "mov", "mov"]
+    );
+    assert_eq!(
+        names(
+            &sharedstores::shared(&input(true), size, &preserving_bx, &crate::backend::classes::RegisterClasses::m16())
+                .blocks[0]
+                .insns
+        ),
+        ["mov", "xor", "mov", "mov"]
+    );
 }
 
 /// Two pushes of a clock are not a size choice: -O2 keeps the stores.
 #[test]
 fn test_stores_of_one_literal_are_not_shared_at_o2() {
     let o2 = crate::backend::cpu::tuned("486", false).unwrap();
-    let input = body("stores", 0, vec![block(0, vec![literal_store(0, 4, -4, 0), literal_store(1, 4, -8, 0)], vec![1]), block(1, after_stores(false, &[]), vec![])]);
+    let input = body(
+        "stores",
+        0,
+        vec![
+            block(0, vec![literal_store(0, 4, -4, 0), literal_store(1, 4, -8, 0)], vec![1]),
+            block(1, after_stores(false, &[]), vec![]),
+        ],
+    );
 
     assert_eq!(sharedstores::shared(&input, o2, &saved(), &crate::backend::classes::RegisterClasses::m16()), input);
 }
@@ -1241,7 +1589,13 @@ fn test_lea_of_a_frame_cell_is_decoded() {
     // `lea ax,[bp-18]` read as touching every lane kept all upper halves live
     // across the B$ERAS calls after a loop.
     let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-18), 2) });
-    let lea = insn(0, Some((0, 0)), Some(sem(Operation::Address, "lea", vec![rl(Register::AX, 2)], vec![cell])), vec![], vec![]);
+    let lea = insn(
+        0,
+        Some((0, 0)),
+        Some(sem(Operation::Address, "lea", vec![rl(Register::AX, 2)], vec![cell])),
+        vec![],
+        vec![],
+    );
 
     let (reads, writes) = _register_effects(16, &lea, false, true).expect("decoded");
 
@@ -1256,7 +1610,13 @@ fn test_zeroing_requires_flags_overwritten_before_observation() {
         [("cmp", true), ("add", true), ("adc", false), ("inc", false), ("shl", false), ("call", false), ("je", false)]
     {
         let dest = rl(Register::AX, 2);
-        let first = insn(0, Some((0, 3)), Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![im(0, 2)])), vec![], vec![]);
+        let first = insn(
+            0,
+            Some((0, 3)),
+            Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![im(0, 2)])),
+            vec![],
+            vec![],
+        );
         let last = insn(
             3,
             Some((3, 5)),
@@ -1335,7 +1695,13 @@ fn test_zeroing_before_a_jump_asks_what_the_target_reads() {
     // `mov bx,0; jmp` stayed three bytes: every block end was taken to have its flags read.
     for (successor, zeroed) in [(Some("cmp"), true), (Some("jb"), false), (None, false)] {
         let dest = rl(Register::BX, 2);
-        let zero = insn(0, Some((0, 3)), Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![im(0, 2)])), vec![], vec![]);
+        let zero = insn(
+            0,
+            Some((0, 3)),
+            Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![im(0, 2)])),
+            vec![],
+            vec![],
+        );
         let jump = insn(3, Some((3, 5)), Some(semt(Operation::Jump, "jmp", vec![], vec![], Some(5))), vec![], vec![]);
         let first = match successor {
             Some("cmp") => Some(sem(Operation::Compare, "cmp", vec![], vec![dest, im(1, 2)])),
@@ -1368,23 +1734,23 @@ fn test_zero_compare_before_its_branch_is_or() {
     ] {
         let ax = rl(Register::AX, 2);
         let tested = if variant == "memory" { Loc::Mem(mem(frame(-2), 2, Register::BP, 0, 2)) } else { ax.clone() };
-        let compare = insn(0, Some((0, 3)), Some(sem(Operation::Compare, "cmp", vec![], vec![tested, im(0, 2)])), vec![], vec![]);
+        let compare =
+            insn(0, Some((0, 3)), Some(sem(Operation::Compare, "cmp", vec![], vec![tested, im(0, 2)])), vec![], vec![]);
         let moved = sem(Operation::Move, "mov", vec![rl(Register::BX, 2)], vec![rl(Register::CX, 2)]);
         let between = insn(3, Some((3, 5)), if variant == "between" { None } else { Some(moved) }, vec![], vec![]);
-        let branch = insn(6, Some((6, 8)), Some(semt(Operation::Branch, "jl", vec![], vec![], Some(9))), vec![], vec![]);
+        let branch =
+            insn(6, Some((6, 8)), Some(semt(Operation::Branch, "jl", vec![], vec![], Some(9))), vec![], vec![]);
         let after = sem(Operation::Compare, "cmp", vec![], vec![ax.clone(), im(1, 2)]);
-        let symbol = Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index: 1, ..Addr::new(Space::Segment, 0) }) });
+        let symbol =
+            Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index: 1, ..Addr::new(Space::Segment, 0) }) });
         let last = match variant {
             "adjust" => None,
             "call" => Some(sem(Operation::Call, "call", vec![], vec![])),
             "return" => Some(sem(Operation::Return, "", vec![], vec![])),
             "relocated" => Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![symbol.clone()])),
-            "x87" => Some(sem(
-                Operation::Compare,
-                "fcomp",
-                vec![],
-                vec![Loc::Mem(mem(frame(-4), 4, Register::BP, 0, 2))],
-            )),
+            "x87" => {
+                Some(sem(Operation::Compare, "fcomp", vec![], vec![Loc::Mem(mem(frame(-4), 4, Register::BP, 0, 2))]))
+            }
             "pushf" => Some(sem(Operation::Nothing, "pushf", vec![], vec![symbol])),
             _ => Some(after.clone()),
         };
@@ -1425,18 +1791,35 @@ fn test_zero_compare_before_its_branch_is_or() {
 #[test]
 fn test_a_zero_test_before_a_branch_and_a_jump_reads_the_step() {
     let bx = rl(Register::BX, 2);
-    let step = insn(0, Some((0, 3)), Some(sem(Operation::Binary, "add", vec![bx.clone()], vec![bx.clone(), im(2, 2)])), vec![], vec![]);
-    let compare = insn(3, Some((3, 6)), Some(sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), im(0, 2)])), vec![], vec![]);
+    let step = insn(
+        0,
+        Some((0, 3)),
+        Some(sem(Operation::Binary, "add", vec![bx.clone()], vec![bx.clone(), im(2, 2)])),
+        vec![],
+        vec![],
+    );
+    let compare =
+        insn(3, Some((3, 6)), Some(sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), im(0, 2)])), vec![], vec![]);
     let branch = insn(6, Some((6, 8)), Some(semt(Operation::Branch, "jne", vec![], vec![], Some(0))), vec![], vec![]);
     let jump = insn(8, Some((8, 10)), Some(semt(Operation::Jump, "jmp", vec![], vec![], Some(10))), vec![], vec![]);
     let ax = rl(Register::AX, 2);
-    let flags = insn(10, Some((10, 12)), Some(sem(Operation::Binary, "xor", vec![ax.clone()], vec![ax.clone(), ax])), vec![], vec![]);
+    let flags = insn(
+        10,
+        Some((10, 12)),
+        Some(sem(Operation::Binary, "xor", vec![ax.clone()], vec![ax.clone(), ax])),
+        vec![],
+        vec![],
+    );
     let exit = insn(12, Some((12, 13)), Some(sem(Operation::Return, "", vec![], vec![])), vec![], vec![]);
     let blocks = vec![
         block(0, vec![Arc::new(step), Arc::new(compare), Arc::new(branch), Arc::new(jump)], vec![0, 10]),
         block(10, vec![Arc::new(flags), Arc::new(exit)], vec![]),
     ];
-    let names = tested(rules(), &body("zero", 0, blocks)).blocks[0].insns.iter().map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default()).collect::<Vec<_>>();
+    let names = tested(rules(), &body("zero", 0, blocks)).blocks[0]
+        .insns
+        .iter()
+        .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+        .collect::<Vec<_>>();
     assert_eq!(names, ["add", "", "jne", "jmp"]);
 }
 
@@ -1445,18 +1828,35 @@ fn test_a_zero_test_before_a_branch_and_a_jump_reads_the_step() {
 #[test]
 fn test_a_zero_test_before_an_anchor_and_its_branch_reads_the_step() {
     let bx = rl(Register::BX, 2);
-    let step = insn(0, Some((0, 3)), Some(sem(Operation::Binary, "add", vec![bx.clone()], vec![bx.clone(), im(2, 2)])), vec![], vec![]);
-    let compare = insn(3, Some((3, 6)), Some(sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), im(0, 2)])), vec![], vec![]);
+    let step = insn(
+        0,
+        Some((0, 3)),
+        Some(sem(Operation::Binary, "add", vec![bx.clone()], vec![bx.clone(), im(2, 2)])),
+        vec![],
+        vec![],
+    );
+    let compare =
+        insn(3, Some((3, 6)), Some(sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), im(0, 2)])), vec![], vec![]);
     let anchor = insn(6, None, Some(sem(Operation::Nothing, "", vec![], vec![])), vec![7], vec![5]);
     let branch = insn(6, Some((6, 8)), Some(semt(Operation::Branch, "jne", vec![], vec![], Some(0))), vec![], vec![]);
     let ax = rl(Register::AX, 2);
-    let flags = insn(10, Some((10, 12)), Some(sem(Operation::Binary, "xor", vec![ax.clone()], vec![ax.clone(), ax])), vec![], vec![]);
+    let flags = insn(
+        10,
+        Some((10, 12)),
+        Some(sem(Operation::Binary, "xor", vec![ax.clone()], vec![ax.clone(), ax])),
+        vec![],
+        vec![],
+    );
     let exit = insn(12, Some((12, 13)), Some(sem(Operation::Return, "", vec![], vec![])), vec![], vec![]);
     let blocks = vec![
         block(0, vec![Arc::new(step), Arc::new(compare), Arc::new(anchor), Arc::new(branch)], vec![0, 10]),
         block(10, vec![Arc::new(flags), Arc::new(exit)], vec![]),
     ];
-    let names = tested(rules(), &body("zero", 0, blocks)).blocks[0].insns.iter().map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default()).collect::<Vec<_>>();
+    let names = tested(rules(), &body("zero", 0, blocks)).blocks[0]
+        .insns
+        .iter()
+        .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+        .collect::<Vec<_>>();
     assert_eq!(names, ["add", "", "", "jne"]);
 }
 
@@ -1478,7 +1878,12 @@ fn test_register_round_trip_through_memory_is_one_instruction() {
     for (variant, expected) in [
         (
             "add",
-            Some(vec![printed(binary, "add", format!("({word},)"), format!("({word}, Imm(value=1, width=2, address=None))"))]),
+            Some(vec![printed(
+                binary,
+                "add",
+                format!("({word},)"),
+                format!("({word}, Imm(value=1, width=2, address=None))"),
+            )]),
         ),
         (
             "register",
@@ -1487,15 +1892,24 @@ fn test_register_round_trip_through_memory_is_one_instruction() {
         ("unary", Some(vec![printed("<Operation.UNARY: 'unary'>", "neg", format!("({word},)"), format!("({word},)"))])),
         (
             "compare",
-            Some(vec![printed(cmp, "cmp", "()".to_owned(), format!("({word}, Imm(value=5, width=2, address=None))")), jl.to_owned()]),
+            Some(vec![
+                printed(cmp, "cmp", "()".to_owned(), format!("({word}, Imm(value=5, width=2, address=None))")),
+                jl.to_owned(),
+            ]),
         ),
         (
             "zero",
-            Some(vec![printed(cmp, "cmp", "()".to_owned(), format!("({word}, Imm(value=0, width=2, address=None))")), jl.to_owned()]),
+            Some(vec![
+                printed(cmp, "cmp", "()".to_owned(), format!("({word}, Imm(value=0, width=2, address=None))")),
+                jl.to_owned(),
+            ]),
         ),
         (
             "signed byte",
-            Some(vec![printed(cmp, "cmp", "()".to_owned(), format!("({byte}, Imm(value=0, width=1, address=None))")), jl.to_owned()]),
+            Some(vec![
+                printed(cmp, "cmp", "()".to_owned(), format!("({byte}, Imm(value=0, width=1, address=None))")),
+                jl.to_owned(),
+            ]),
         ),
         ("unsigned byte, sign read", None),
         ("live", None),
@@ -1515,9 +1929,10 @@ fn test_register_round_trip_through_memory_is_one_instruction() {
         }
         let cell = Loc::Mem(cell);
         let spans = if variant == "bytes" { Some((0, 3)) } else { None };
-        let make = |at: i64, op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>, target: Option<i64>, covers| {
-            Arc::new(insn(at, covers, Some(semt(op, name, dests, sources, target)), vec![], vec![]))
-        };
+        let make =
+            |at: i64, op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>, target: Option<i64>, covers| {
+                Arc::new(insn(at, covers, Some(semt(op, name, dests, sources, target)), vec![], vec![]))
+            };
         let mut load = make(0, Operation::Move, "mov", vec![bx.clone()], vec![cell.clone()], None, spans);
         if let Some(extension) = extension {
             load = make(0, Operation::Extend, extension, vec![bx.clone()], vec![cell.clone()], None, None);
@@ -1573,7 +1988,8 @@ fn test_fusion_preserves_a_virtual_dataflow_anchor() {
         ..insn(1, None, Some(sem(Operation::Move, "mov", vec![bx.clone()], vec![cell.clone()])), vec![2], vec![])
     };
     let anchor = insn(2, None, Some(sem(Operation::Nothing, "", vec![], vec![])), vec![3], vec![2]);
-    let compare = insn(3, None, Some(sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), im(0, 2)])), vec![], vec![3]);
+    let compare =
+        insn(3, None, Some(sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), im(0, 2)])), vec![], vec![3]);
     let branch = insn(4, None, Some(semt(Operation::Branch, "je", vec![], vec![], Some(2))), vec![], vec![]);
     let overwrite = Arc::new(insn(5, None, Some(sem(Operation::Move, "mov", vec![bx], vec![cx])), vec![], vec![]));
     let input = body(
@@ -1603,7 +2019,8 @@ fn test_indirect_call_target_is_physically_live_into_the_call() {
     let (bx, cx) = (rl(Register::BX, 2), rl(Register::CX, 2));
     let cell = Loc::Mem(mem(frame(-4), 2, Register::BP, 0, 2));
     let load = insn(1, None, Some(sem(Operation::Move, "mov", vec![bx.clone()], vec![cell])), vec![47], vec![]);
-    let compare = insn(2, None, Some(sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), im(0, 2)])), vec![], vec![47]);
+    let compare =
+        insn(2, None, Some(sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), im(0, 2)])), vec![], vec![47]);
     let branch = insn(3, None, Some(semt(Operation::Branch, "je", vec![], vec![], Some(2))), vec![], vec![]);
     let call = Insn {
         clobbers: [Register::EBX].into(),
@@ -1670,7 +2087,13 @@ fn test_far_pointer_loaded_in_one_instruction() {
             base = Register::SI;
         }
         let moved = |at: i64, dest: Loc, cell: Mem| {
-            Arc::new(insn(at, None, Some(sem(Operation::Move, "mov", vec![dest], vec![Loc::Mem(cell)])), vec![], vec![]))
+            Arc::new(insn(
+                at,
+                None,
+                Some(sem(Operation::Move, "mov", vec![dest], vec![Loc::Mem(cell)])),
+                vec![],
+                vec![],
+            ))
         };
         let mut pair = vec![moved(0, bx, low), moved(1, segment, high)];
         if variant.ends_with("segment first") {
@@ -1698,7 +2121,8 @@ fn test_wait_elimination_does_not_cross_observable_work() {
             let what = name.map(|name| sem(Operation::Nothing, name, vec![], vec![]));
             Arc::new(insn(at, Some((at, at + 1)), what, vec![], vec![]))
         };
-        let (first, between, last) = (instruction(0, Some("wait")), instruction(1, middle), instruction(2, Some("fld")));
+        let (first, between, last) =
+            (instruction(0, Some("wait")), instruction(1, middle), instruction(2, Some("fld")));
         let blocks = if middle == Some("block") {
             vec![block(0, vec![first], vec![2]), block(2, vec![last], vec![])]
         } else {
@@ -1735,7 +2159,8 @@ fn test_repeated_copy_requires_unchanged_source_and_destination() {
             extend.clobbers = [change].into();
         }
         let last = Insn { at: 2, covers: Some((2, 3)), ..moved.clone() };
-        let input = body("copies", 0, vec![block(0, vec![Arc::new(moved.clone()), Arc::new(extend), Arc::new(last)], vec![])]);
+        let input =
+            body("copies", 0, vec![block(0, vec![Arc::new(moved.clone()), Arc::new(extend), Arc::new(last)], vec![])]);
         let result = constants(&input);
         assert_eq!(
             result.insns().iter().filter(|one| one.what == moved.what).count(),
@@ -1749,7 +2174,13 @@ fn test_repeated_copy_requires_unchanged_source_and_destination() {
 fn test_copied_value_survives_overwriting_its_original_register() {
     // A copied value is a snapshot, not an alias of the register it came from.
     let copy = |at: i64, dest: Register, source: Loc| {
-        Arc::new(insn(at, Some((at, at + 1)), Some(sem(Operation::Move, "mov", vec![rl(dest, 4)], vec![source])), vec![], vec![]))
+        Arc::new(insn(
+            at,
+            Some((at, at + 1)),
+            Some(sem(Operation::Move, "mov", vec![rl(dest, 4)], vec![source])),
+            vec![],
+            vec![],
+        ))
     };
     let insns = vec![
         copy(0, Register::EAX, rl(Register::ECX, 4)),
@@ -1759,14 +2190,21 @@ fn test_copied_value_survives_overwriting_its_original_register() {
         copy(4, Register::EAX, rl(Register::ECX, 4)),
     ];
     let result = constants(&body("snapshot", 0, vec![block(0, insns.clone(), vec![])]));
-    let expected: Vec<Semantics> = insns.iter().filter(|one| one.at != 3).map(|one| one.what.clone().unwrap()).collect();
+    let expected: Vec<Semantics> =
+        insns.iter().filter(|one| one.at != 3).map(|one| one.what.clone().unwrap()).collect();
     assert_eq!(whats(&result.insns()), expected);
 }
 
 #[test]
 fn test_partial_write_invalidates_constant() {
     let moved = |at: i64, dest: Loc, source: Loc| {
-        Arc::new(insn(at, Some((at, at + 1)), Some(sem(Operation::Move, "mov", vec![dest], vec![source])), vec![], vec![]))
+        Arc::new(insn(
+            at,
+            Some((at, at + 1)),
+            Some(sem(Operation::Move, "mov", vec![dest], vec![source])),
+            vec![],
+            vec![],
+        ))
     };
     let first = moved(0, rl(Register::EAX, 4), im(512, 4));
     let change = moved(1, rl(Register::AH, 1), im(0, 1));
@@ -1828,27 +2266,59 @@ fn test_qlight_folds_batched_parameter_loads_into_their_extensions() {
     let left = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(6), 2) });
     let right = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(8), 2) });
     let insns = vec![
-        Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![left.clone()])), vec![1], vec![])),
-        Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![cx.clone()], vec![right.clone()])), vec![2], vec![])),
-        Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Extend, "movsx", vec![ebx.clone()], vec![ax])), vec![3], vec![1])),
-        Arc::new(insn(3, Some((3, 3)), Some(sem(Operation::Extend, "movsx", vec![eax.clone()], vec![cx])), vec![4], vec![2])),
+        Arc::new(insn(
+            0,
+            Some((0, 0)),
+            Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![left.clone()])),
+            vec![1],
+            vec![],
+        )),
+        Arc::new(insn(
+            1,
+            Some((1, 1)),
+            Some(sem(Operation::Move, "mov", vec![cx.clone()], vec![right.clone()])),
+            vec![2],
+            vec![],
+        )),
+        Arc::new(insn(
+            2,
+            Some((2, 2)),
+            Some(sem(Operation::Extend, "movsx", vec![ebx.clone()], vec![ax])),
+            vec![3],
+            vec![1],
+        )),
+        Arc::new(insn(
+            3,
+            Some((3, 3)),
+            Some(sem(Operation::Extend, "movsx", vec![eax.clone()], vec![cx])),
+            vec![4],
+            vec![2],
+        )),
     ];
     let input = body("qlight-parameters", 0, vec![block(0, insns, vec![])]);
 
     let real = whats(&extensions(rules(), &input).insns());
 
-    assert_eq!(real, [
-        sem(Operation::Extend, "movsx", vec![ebx], vec![left]),
-        sem(Operation::Extend, "movsx", vec![eax], vec![right]),
-    ]);
+    assert_eq!(
+        real,
+        [
+            sem(Operation::Extend, "movsx", vec![ebx], vec![left]),
+            sem(Operation::Extend, "movsx", vec![eax], vec![right]),
+        ]
+    );
 }
 
 #[test]
 fn test_transitive_extension_preserves_nonlocal_machine_state() {
     for guard in ["signedness", "register", "shared", "clobber"] {
         let cell = Loc::Mem(Mem { through: Register::BX, ..Mem::new(None, 1) });
-        let mut narrow =
-            insn(0, Some((0, 3)), Some(sem(Operation::Extend, "movzx", vec![rl(Register::DX, 2)], vec![cell])), vec![1], vec![]);
+        let mut narrow = insn(
+            0,
+            Some((0, 3)),
+            Some(sem(Operation::Extend, "movzx", vec![rl(Register::DX, 2)], vec![cell])),
+            vec![1],
+            vec![],
+        );
         let mut wide = insn(
             3,
             Some((3, 6)),
@@ -1881,8 +2351,13 @@ fn test_transitive_extension_preserves_nonlocal_machine_state() {
 #[test]
 fn test_register_only_extension_clone_does_not_claim_a_relocation() {
     let cell = Loc::Mem(Mem { through: Register::BX, ..Mem::new(None, 1) });
-    let mut narrow =
-        insn(0, Some((0, 3)), Some(sem(Operation::Extend, "movzx", vec![rl(Register::DX, 2)], vec![cell.clone()])), vec![1], vec![]);
+    let mut narrow = insn(
+        0,
+        Some((0, 3)),
+        Some(sem(Operation::Extend, "movzx", vec![rl(Register::DX, 2)], vec![cell.clone()])),
+        vec![1],
+        vec![],
+    );
     narrow.symbol = Some(true);
     let mut wide = insn(
         3,
@@ -1908,13 +2383,22 @@ fn test_constant_knowledge_is_local_and_invalidated() {
     {
         let mut source = im(512, 4);
         if interruption == "relocation" {
-            source = Loc::Imm(Imm { value: 512, width: 4, address: Some(Addr { index: 5, ..Addr::new(Space::Segment, 0) }) });
+            source = Loc::Imm(Imm {
+                value: 512,
+                width: 4,
+                address: Some(Addr { index: 5, ..Addr::new(Space::Segment, 0) }),
+            });
         }
         let what = sem(Operation::Move, "mov", vec![rl(Register::EAX, 4)], vec![source]);
         let first = insn(0, Some((0, 1)), Some(what.clone()), vec![], vec![]);
         let last = Insn { at: 2, covers: Some((2, 3)), ..first.clone() };
-        let mut middle =
-            insn(1, Some((1, 2)), Some(sem(Operation::Move, "mov", vec![rl(Register::BX, 2)], vec![im(7, 2)])), vec![], vec![]);
+        let mut middle = insn(
+            1,
+            Some((1, 2)),
+            Some(sem(Operation::Move, "mov", vec![rl(Register::BX, 2)], vec![im(7, 2)])),
+            vec![],
+            vec![],
+        );
         if interruption == "call" {
             middle.what = Some(sem(Operation::Call, "call", vec![], vec![]));
         }
@@ -1981,7 +2465,11 @@ fn test_a_string_fill_reading_the_direction_flag_leaves_zero_as_xor() {
 
 // ---------------------------------------------------------- test_machine_copyprop
 
-fn moved(at: i64, dest: Loc, source: Loc) -> Insn {
+fn moved(
+    at: i64,
+    dest: Loc,
+    source: Loc,
+) -> Insn {
     insn(at, Some((at, at)), Some(sem(Operation::Move, "mov", vec![dest], vec![source])), vec![], vec![])
 }
 
@@ -1993,7 +2481,8 @@ fn test_copy_at_join_requires_agreement_on_every_path() {
         for change in ["none", "other", "partial", "source", "unknown", "loop"] {
             let (dest, source) = (rl(Register::AX, 2), rl(Register::BX, 2));
             let (first, last) = (moved(0, dest.clone(), source.clone()), moved(30, dest, source));
-            let branch = insn(1, Some((1, 1)), Some(semt(Operation::Branch, "je", vec![], vec![], Some(20))), vec![], vec![]);
+            let branch =
+                insn(1, Some((1, 1)), Some(semt(Operation::Branch, "je", vec![], vec![], Some(20))), vec![], vec![]);
             let mut middle = vec![];
             if ["other", "partial", "source", "loop"].contains(&change) {
                 let register = match change {
@@ -2048,7 +2537,13 @@ fn test_copy_source_is_forwarded_to_an_explicit_use() {
     // ls_face_key spent `mov bx,ax` only to compare BX; the loop paid one instruction each trip.
     let (ax, bx) = (rl(Register::AX, 2), rl(Register::BX, 2));
     let copied = moved(0, bx.clone(), ax.clone());
-    let compared = insn(1, Some((1, 1)), Some(sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), im(116, 2)])), vec![], vec![]);
+    let compared = insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), im(116, 2)])),
+        vec![],
+        vec![],
+    );
     let overwritten = moved(2, bx, im(7, 2));
     let result = transform(body(
         "ls_face_key",
@@ -2067,14 +2562,20 @@ fn test_copy_forwarding_across_a_join_requires_every_lane_on_every_path() {
     for changed in [None, Some(Register::AX), Some(Register::AH), Some(Register::BX), Some(Register::BH)] {
         let (ax, bx) = (rl(Register::AX, 2), rl(Register::BX, 2));
         let copied = moved(0, bx.clone(), ax.clone());
-        let branch = insn(1, Some((1, 1)), Some(semt(Operation::Branch, "je", vec![], vec![], Some(20))), vec![], vec![]);
+        let branch =
+            insn(1, Some((1, 1)), Some(semt(Operation::Branch, "je", vec![], vec![], Some(20))), vec![], vec![]);
         let mut middle = vec![];
         if let Some(changed) = changed {
             let width = if [Register::AH, Register::BH].contains(&changed) { 1 } else { 2 };
             middle.push(Arc::new(moved(20, rl(changed, width), im(7, width))));
         }
-        let compared =
-            insn(30, Some((30, 30)), Some(sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), im(116, 2)])), vec![], vec![]);
+        let compared = insn(
+            30,
+            Some((30, 30)),
+            Some(sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), im(116, 2)])),
+            vec![],
+            vec![],
+        );
         let result = transform(body(
             "join",
             0,
@@ -2123,17 +2624,29 @@ fn test_copy_forwarding_maps_matching_subregister_lanes() {
         0,
         vec![block(0, vec![Arc::new(copied), Arc::new(high), Arc::new(compared.clone())], vec![])],
     ));
-    let found = result.insns().iter().find(|one| one.at == compared.at).unwrap().what.as_ref().unwrap().sources[0].clone();
+    let found =
+        result.insns().iter().find(|one| one.at == compared.at).unwrap().what.as_ref().unwrap().sources[0].clone();
     assert_eq!(found, rl(Register::BL, 1));
 }
 
 // ------------------------------------------------------------ test_memory_folding
 
-fn plain(at: i64, op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>, target: Option<i64>) -> Arc<Insn> {
+fn plain(
+    at: i64,
+    op: Operation,
+    name: &str,
+    dests: Vec<Loc>,
+    sources: Vec<Loc>,
+    target: Option<i64>,
+) -> Arc<Insn> {
     Arc::new(insn(at, None, Some(semt(op, name, dests, sources, target)), vec![], vec![]))
 }
 
-fn delayed(head: Vec<Arc<Insn>>, eax: &Loc, ecx: &Loc) -> LirBody {
+fn delayed(
+    head: Vec<Arc<Insn>>,
+    eax: &Loc,
+    ecx: &Loc,
+) -> LirBody {
     let overwrite = plain(4, Operation::Move, "mov", vec![eax.clone()], vec![ecx.clone()], None);
     let jump = plain(5, Operation::Jump, "jmp", vec![], vec![], Some(0));
     body("delayed-memory-read", 0, vec![block(0, head, vec![1]), block(1, vec![overwrite, jump], vec![0])])
@@ -2160,16 +2673,19 @@ fn test_memory_round_trip_folds_across_an_independent_operand_load() {
                selector=None, index=None, scale=1, index_through=0)";
     let vel = "Mem(addr=[bp-0x8], width=4, through=26, offset=0, disp_width=2, base=None, stack_argument=False, \
                selector=None, index=None, scale=1, index_through=0)";
-    assert_eq!(printed, [
-        format!(
-            "Semantics(op=<Operation.MOVE: 'move'>, name='mov', dests=(Reg(register=38, width=4),), \
+    assert_eq!(
+        printed,
+        [
+            format!(
+                "Semantics(op=<Operation.MOVE: 'move'>, name='mov', dests=(Reg(register=38, width=4),), \
              sources=({vel},), target=None, indirect=False)"
-        ),
-        format!(
-            "Semantics(op=<Operation.BINARY: 'binary'>, name='add', dests=({pos},), \
+            ),
+            format!(
+                "Semantics(op=<Operation.BINARY: 'binary'>, name='add', dests=({pos},), \
              sources=({pos}, Reg(register=38, width=4)), target=None, indirect=False)"
-        ),
-    ]);
+            ),
+        ]
+    );
 }
 
 #[test]
@@ -2187,7 +2703,10 @@ fn test_single_use_loaded_addend_folds_into_the_arithmetic_operand() {
 
     let physical = whats(&fused(rules(), &input).insns());
 
-    assert_eq!(physical, [sem(Operation::Binary, "add", vec![ax.clone()], vec![ax, delta]), finish.what.clone().unwrap()]);
+    assert_eq!(
+        physical,
+        [sem(Operation::Binary, "add", vec![ax.clone()], vec![ax, delta]), finish.what.clone().unwrap()]
+    );
 }
 
 /// lru bas `BENCHLRU&`: an argument loaded at the top and pushed forty instructions later, across stores to globals,
@@ -2210,7 +2729,12 @@ fn test_a_load_folds_into_its_push_across_stores_to_other_cells() {
     let pushed: Vec<_> = whats(&done.insns).into_iter().filter(|one| one.op == Operation::Push).collect();
     assert_eq!(pushed.len(), 1);
     assert_eq!(pushed[0].sources, [argument], "the push reads the cell: {:?}", whats(&done.insns));
-    assert!(!done.insns.iter().filter_map(|one| one.what.as_ref()).any(|what| what.name.as_deref() == Some("mov") && matches!(what.dests.as_slice(), [Loc::Reg(_)]) && matches!(what.sources.as_slice(), [Loc::Mem(_)])), "the load is gone");
+    assert!(
+        !done.insns.iter().filter_map(|one| one.what.as_ref()).any(|what| what.name.as_deref() == Some("mov")
+            && matches!(what.dests.as_slice(), [Loc::Reg(_)])
+            && matches!(what.sources.as_slice(), [Loc::Mem(_)])),
+        "the load is gone"
+    );
 }
 
 /// The same fold stops at a store that may change the cell.
@@ -2267,7 +2791,10 @@ fn test_narrow_load_folds_into_its_only_widening_use() {
     let emitted: Vec<Arc<Insn>> =
         result.insns().into_iter().filter(|one| one.what.as_ref().unwrap().op != Operation::Nothing).collect();
 
-    assert_eq!(emitted[0].what, Some(sem(Operation::Extend, "movsx", vec![rl(Register::EDX, 4)], vec![Loc::Mem(cell)])));
+    assert_eq!(
+        emitted[0].what,
+        Some(sem(Operation::Extend, "movsx", vec![rl(Register::EDX, 4)], vec![Loc::Mem(cell)]))
+    );
     assert_eq!(emitted[0].defines, [2]);
     assert_eq!(emitted.len(), 2);
     assert!(verify::verify(&result, false).is_empty());
@@ -2277,7 +2804,8 @@ fn test_narrow_load_folds_into_its_only_widening_use() {
 fn test_shared_narrow_load_is_not_folded_into_one_widening_use() {
     // The load must remain when another instruction still reads its narrow value.
     let (_cell, narrow, wide) = narrow_load_parts();
-    let other = Arc::new(insn(2, None, Some(sem(Operation::Push, "push", vec![], vec![rl(Register::CX, 2)])), vec![], vec![1]));
+    let other =
+        Arc::new(insn(2, None, Some(sem(Operation::Push, "push", vec![], vec![rl(Register::CX, 2)])), vec![], vec![1]));
     let input = body("shared-load", 0, vec![block(0, vec![narrow, wide, other], vec![])]);
     assert_eq!(extensions(rules(), &input), input);
 }
@@ -2287,8 +2815,15 @@ fn test_one_use_compare_folds_before_a_complete_return() {
     // indexed.lru_use loaded a sign test into DI before immediately returning.
     let di = rl(Register::DI, 2);
     let cell = Loc::Mem(mem(frame(-4), 2, Register::BP, 0, 2));
-    let load = Arc::new(insn(1, None, Some(sem(Operation::Move, "mov", vec![di.clone()], vec![cell.clone()])), vec![1], vec![]));
-    let compare = Arc::new(insn(2, None, Some(sem(Operation::Compare, "cmp", vec![], vec![di, im(0, 2)])), vec![], vec![1]));
+    let load = Arc::new(insn(
+        1,
+        None,
+        Some(sem(Operation::Move, "mov", vec![di.clone()], vec![cell.clone()])),
+        vec![1],
+        vec![],
+    ));
+    let compare =
+        Arc::new(insn(2, None, Some(sem(Operation::Compare, "cmp", vec![], vec![di, im(0, 2)])), vec![], vec![1]));
     let branch = plain(3, Operation::Branch, "jge", vec![], vec![], Some(2));
     let ret = Arc::new(Insn {
         reads_complete: true,
@@ -2306,10 +2841,10 @@ fn test_one_use_compare_folds_before_a_complete_return() {
 
     let result = fused(rules(), &input);
 
-    assert_eq!(whats(&result.blocks[0].insns), [
-        sem(Operation::Compare, "cmp", vec![], vec![cell, im(0, 2)]),
-        branch.what.clone().unwrap(),
-    ]);
+    assert_eq!(
+        whats(&result.blocks[0].insns),
+        [sem(Operation::Compare, "cmp", vec![], vec![cell, im(0, 2)]), branch.what.clone().unwrap(),]
+    );
 }
 
 #[test]
@@ -2323,7 +2858,11 @@ fn test_dead_compare_load_may_overwrite_its_own_address_register() {
     let input = body(
         "self-addressed-compare",
         0,
-        vec![block(0, vec![load, compare, overwrite, plain(4, Operation::Jump, "jmp", vec![], vec![], Some(0))], vec![0])],
+        vec![block(
+            0,
+            vec![load, compare, overwrite, plain(4, Operation::Jump, "jmp", vec![], vec![], Some(0))],
+            vec![0],
+        )],
     );
 
     let physical = whats(&fused(rules(), &input).insns());
@@ -2351,9 +2890,14 @@ fn test_memory_round_trip_does_not_cross_a_dependent_or_writing_instruction() {
         let velocity = Loc::Mem(mem(frame(-8), 4, Register::BP, 0, 2));
         let mut other = ecx.clone();
         let between = match hazard {
-            "uses loaded value" => {
-                plain(1, Operation::Move, "mov", vec![ecx.clone()], vec![Loc::Mem(mem(None, 4, Register::EAX, 0, 4))], None)
-            }
+            "uses loaded value" => plain(
+                1,
+                Operation::Move,
+                "mov",
+                vec![ecx.clone()],
+                vec![Loc::Mem(mem(None, 4, Register::EAX, 0, 4))],
+                None,
+            ),
             "changes address" => {
                 other = ebx.clone();
                 plain(1, Operation::Move, "mov", vec![ebx], vec![velocity], None)
@@ -2384,7 +2928,13 @@ fn test_mandel_sum_uses_67h_lea_before_preserving_a_copy() {
         let [dest, left, right] = registers.map(|register| rl(register, width));
         let copy = Insn {
             widths: vec![(1, width), (3, width)],
-            ..insn(47, Some((47, 47)), Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![left])), vec![3], vec![1])
+            ..insn(
+                47,
+                Some((47, 47)),
+                Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![left])),
+                vec![3],
+                vec![1],
+            )
         };
         let addition = Insn {
             widths: vec![(2, width), (3, width), (4, width)],
@@ -2398,9 +2948,16 @@ fn test_mandel_sum_uses_67h_lea_before_preserving_a_copy() {
         };
         let compare = Insn {
             widths: vec![(4, width)],
-            ..insn(48, Some((48, 48)), Some(sem(Operation::Compare, "cmp", vec![], vec![dest, im(1024, width)])), vec![], vec![4])
+            ..insn(
+                48,
+                Some((48, 48)),
+                Some(sem(Operation::Compare, "cmp", vec![], vec![dest, im(1024, width)])),
+                vec![],
+                vec![4],
+            )
         };
-        let input = body("mandel", 47, vec![block(47, vec![Arc::new(copy), Arc::new(addition), Arc::new(compare)], vec![])]);
+        let input =
+            body("mandel", 47, vec![block(47, vec![Arc::new(copy), Arc::new(addition), Arc::new(compare)], vec![])]);
 
         let result = addresses(&input, "386").unwrap().insns();
 
@@ -2421,7 +2978,8 @@ fn test_mandel_sum_uses_67h_lea_before_preserving_a_copy() {
 fn test_sum_lea_preserves_observed_add_flags() {
     // A conditional branch after the sum still reads ADD's flags.
     let [dest, left, right] = [Register::EDI, Register::EDX, Register::ESI].map(|register| rl(register, 4));
-    let copy = insn(47, Some((47, 47)), Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![left])), vec![3], vec![1]);
+    let copy =
+        insn(47, Some((47, 47)), Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![left])), vec![3], vec![1]);
     let addition = insn(
         47,
         Some((47, 48)),
@@ -2429,8 +2987,10 @@ fn test_sum_lea_preserves_observed_add_flags() {
         vec![4],
         vec![3, 2],
     );
-    let branch = insn(48, Some((48, 48)), Some(semt(Operation::Branch, "je", vec![], vec![], Some(60))), vec![], vec![]);
-    let input = body("flagged", 47, vec![block(47, vec![Arc::new(copy), Arc::new(addition), Arc::new(branch)], vec![60])]);
+    let branch =
+        insn(48, Some((48, 48)), Some(semt(Operation::Branch, "je", vec![], vec![], Some(60))), vec![], vec![]);
+    let input =
+        body("flagged", 47, vec![block(47, vec![Arc::new(copy), Arc::new(addition), Arc::new(branch)], vec![60])]);
 
     let result = addresses(&input, "386").unwrap().insns();
 
@@ -2442,8 +3002,13 @@ fn test_sum_lea_preserves_a_copy_result_read_after_the_add() {
     // Nib nbody lost value 333 and stopped in the LIR verifier.
     let (destination, left, right, saved) =
         (rl(Register::EAX, 4), rl(Register::EBP, 4), rl(Register::EDI, 4), rl(Register::EDX, 4));
-    let copy =
-        insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![destination.clone()], vec![left])), vec![3], vec![1]);
+    let copy = insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Move, "mov", vec![destination.clone()], vec![left])),
+        vec![3],
+        vec![1],
+    );
     let addition = insn(
         2,
         Some((2, 2)),
@@ -2451,10 +3016,20 @@ fn test_sum_lea_preserves_a_copy_result_read_after_the_add() {
         vec![1],
         vec![1, 2],
     );
-    let preserve =
-        insn(3, Some((3, 3)), Some(sem(Operation::Move, "mov", vec![saved], vec![destination.clone()])), vec![4], vec![3]);
-    let compare =
-        insn(4, Some((4, 4)), Some(sem(Operation::Compare, "cmp", vec![], vec![destination, im(0, 4)])), vec![], vec![1]);
+    let preserve = insn(
+        3,
+        Some((3, 3)),
+        Some(sem(Operation::Move, "mov", vec![saved], vec![destination.clone()])),
+        vec![4],
+        vec![3],
+    );
+    let compare = insn(
+        4,
+        Some((4, 4)),
+        Some(sem(Operation::Compare, "cmp", vec![], vec![destination, im(0, 4)])),
+        vec![],
+        vec![1],
+    );
     let input = LirBody {
         inputs: [1, 2].into(),
         ..body(
@@ -2470,11 +3045,20 @@ fn test_sum_lea_preserves_a_copy_result_read_after_the_add() {
     assert!(verify::verify(&transformed, false).is_empty());
 }
 
-fn _constant_sum_body(amount: i64, symbolic_add: bool) -> LirBody {
+fn _constant_sum_body(
+    amount: i64,
+    symbolic_add: bool,
+) -> LirBody {
     let (dest, source) = (rl(Register::BX, 2), rl(Register::AX, 2));
     let copy = Insn {
         widths: vec![(1, 2), (3, 2)],
-        ..insn(10, Some((10, 10)), Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![source.clone()])), vec![3], vec![1])
+        ..insn(
+            10,
+            Some((10, 10)),
+            Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![source.clone()])),
+            vec![3],
+            vec![1],
+        )
     };
     let addition = Insn {
         widths: vec![(3, 2), (4, 2)],
@@ -2504,7 +3088,13 @@ fn _constant_sum_body(amount: i64, symbolic_add: bool) -> LirBody {
     };
     let compare = Insn {
         widths: vec![(1, 2)],
-        ..insn(12, Some((12, 12)), Some(sem(Operation::Compare, "cmp", vec![], vec![source, im(0, 2)])), vec![], vec![1])
+        ..insn(
+            12,
+            Some((12, 12)),
+            Some(sem(Operation::Compare, "cmp", vec![], vec![source, im(0, 2)])),
+            vec![],
+            vec![1],
+        )
     };
     body(
         "constant_sum",
@@ -2515,17 +3105,17 @@ fn _constant_sum_body(amount: i64, symbolic_add: bool) -> LirBody {
 
 #[test]
 fn test_constant_sum_uses_67h_lea_without_code_growth() {
-    // Matmul initialized each local element with `mov bx,ax; add bx,1`; `increments` makes that `mov; inc`, three bytes, and the LEA is
-    // four: a unit sum stays. A sum of two is the LEA's four bytes against `mov; add` at five.
+    // Matmul initialized each local element with `mov bx,ax; add bx,1`; `increments` makes that `mov; inc`, three
+    // bytes, and the LEA is four: a unit sum stays. A sum of two is the LEA's four bytes against `mov; add` at
+    // five.
     for (amount, displacement) in [(2, 2), (0xFFFE, -2)] {
         let result = addresses(&_constant_sum_body(amount, false), "386").unwrap().insns();
 
         assert_eq!(names(&result), ["lea", "mov", "cmp"]);
-        assert_eq!(result[0].what.as_ref().unwrap().sources, [Loc::Address(Address {
-            through: Register::EAX,
-            offset: displacement,
-            ..Address::new(None)
-        })]);
+        assert_eq!(
+            result[0].what.as_ref().unwrap().sources,
+            [Loc::Address(Address { through: Register::EAX, offset: displacement, ..Address::new(None) })]
+        );
         let Loc::Address(address) = &result[0].what.as_ref().unwrap().sources[0] else { unreachable!() };
         // `Address` equality compares only `addr`; Python's does too.
         assert_eq!((address.through, address.offset), (Register::EAX, displacement));
@@ -2609,8 +3199,16 @@ fn test_folded_culling_address_drops_only_unobserved_arithmetic() {
 
 // ------------------------------------------------------------------ test_parcopy
 
-fn group_move(into: Loc, out_of: Loc, group: Option<i64>, at: i64) -> Arc<Insn> {
-    Arc::new(Insn { group, ..insn(at, Some((at, at)), Some(sem(Operation::Move, "mov", vec![into], vec![out_of])), vec![], vec![]) })
+fn group_move(
+    into: Loc,
+    out_of: Loc,
+    group: Option<i64>,
+    at: i64,
+) -> Arc<Insn> {
+    Arc::new(Insn {
+        group,
+        ..insn(at, Some((at, at)), Some(sem(Operation::Move, "mov", vec![into], vec![out_of])), vec![], vec![])
+    })
 }
 
 fn one_block(insns: Vec<Arc<Insn>>) -> LirBody {
@@ -2622,7 +3220,13 @@ fn frame_slots(width: u32) -> (Loc, Loc) {
 }
 
 fn reset() -> Arc<Insn> {
-    Arc::new(insn(0x102, Some((0x102, 0x102)), Some(sem(Operation::Move, "mov", vec![rl(Register::EAX, 4)], vec![im(0, 4)])), vec![], vec![]))
+    Arc::new(insn(
+        0x102,
+        Some((0x102, 0x102)),
+        Some(sem(Operation::Move, "mov", vec![rl(Register::EAX, 4)], vec![im(0, 4)])),
+        vec![],
+        vec![],
+    ))
 }
 
 #[test]
@@ -2630,9 +3234,13 @@ fn test_frame_copy_uses_a_dead_register_before_the_stack() {
     // Mandel reset its column recurrence with PUSH-memory/POP-memory each row.
     let (source, destination) = frame_slots(4);
     let scheduled =
-        parcopy::scheduled(&one_block(vec![group_move(destination.clone(), source.clone(), Some(1), 0x100), reset()])).unwrap();
+        parcopy::scheduled(&one_block(vec![group_move(destination.clone(), source.clone(), Some(1), 0x100), reset()]))
+            .unwrap();
 
-    let instructions = frame_copies(&scheduled, "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0].insns.clone();
+    let instructions =
+        frame_copies(&scheduled, "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0]
+            .insns
+            .clone();
 
     assert_eq!(names(&instructions), ["mov", "mov", "mov"]);
     assert_eq!(instructions[0].what, Some(sem(Operation::Move, "mov", vec![rl(Register::EAX, 4)], vec![source])));
@@ -2645,7 +3253,10 @@ fn test_frame_copy_keeps_the_stack_when_no_register_is_dead() {
     let (source, destination) = frame_slots(2);
     let scheduled = parcopy::scheduled(&one_block(vec![group_move(destination, source, Some(1), 0x100)])).unwrap();
 
-    let instructions = frame_copies(&scheduled, "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0].insns.clone();
+    let instructions =
+        frame_copies(&scheduled, "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0]
+            .insns
+            .clone();
 
     assert_eq!(names(&instructions), ["push", "pop"]);
 }
@@ -2654,13 +3265,17 @@ fn test_frame_copy_keeps_the_stack_when_no_register_is_dead() {
 fn test_source_push_pop_is_not_treated_as_a_parallel_copy() {
     // Only parcopy's synthetic pair may lose its observable stack traffic.
     let (source, destination) = frame_slots(2);
-    let mut pair = parcopy::scheduled(&one_block(vec![group_move(destination, source, Some(1), 0x100)])).unwrap().blocks[0]
-        .insns
-        .to_vec();
+    let mut pair =
+        parcopy::scheduled(&one_block(vec![group_move(destination, source, Some(1), 0x100)])).unwrap().blocks[0]
+            .insns
+            .to_vec();
     pair[1] = Arc::new(Insn { at: 0x101, covers: Some((0x101, 0x102)), ..(*pair[1]).clone() });
     pair.push(reset());
 
-    let instructions = frame_copies(&one_block(pair), "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0].insns.to_vec();
+    let instructions =
+        frame_copies(&one_block(pair), "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0]
+            .insns
+            .to_vec();
 
     assert_eq!(names(&instructions[..2]), ["push", "pop"]);
 }
@@ -2685,8 +3300,12 @@ fn test_dword_constant_is_narrowed_when_the_abi_reads_only_its_low_word() {
     };
     // Source/symbol ownership anchors from the unrolled frontend body must be
     // transparent to physical liveness even though they constrain layout.
-    let anchor = Insn { symbol: Some(true), ..insn(2, Some((2, 2)), Some(sem(Operation::Nothing, "", vec![], vec![])), vec![], vec![]) };
-    let input = body("return-low", 1, vec![block(1, vec![Arc::new(source), Arc::new(anchor), Arc::new(finish)], vec![])]);
+    let anchor = Insn {
+        symbol: Some(true),
+        ..insn(2, Some((2, 2)), Some(sem(Operation::Nothing, "", vec![], vec![])), vec![], vec![])
+    };
+    let input =
+        body("return-low", 1, vec![block(1, vec![Arc::new(source), Arc::new(anchor), Arc::new(finish)], vec![])]);
 
     let result = narrowed_moves(rules(), &input);
 
@@ -2696,8 +3315,15 @@ fn test_dword_constant_is_narrowed_when_the_abi_reads_only_its_low_word() {
 #[test]
 fn test_dword_constant_stays_wide_when_any_upper_lane_is_live() {
     let wide = rl(Register::EAX, 4);
-    let source = insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![wide.clone()], vec![im(1789, 4)])), vec![1], vec![]);
-    let used = insn(2, Some((2, 2)), Some(sem(Operation::Compare, "cmp", vec![], vec![wide, im(0, 4)])), vec![], vec![1]);
+    let source = insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Move, "mov", vec![wide.clone()], vec![im(1789, 4)])),
+        vec![1],
+        vec![],
+    );
+    let used =
+        insn(2, Some((2, 2)), Some(sem(Operation::Compare, "cmp", vec![], vec![wide, im(0, 4)])), vec![], vec![1]);
     let input = body("return-wide", 1, vec![block(1, vec![Arc::new(source), Arc::new(used)], vec![])]);
 
     assert_eq!(narrowed_moves(rules(), &input), input);
@@ -2706,8 +3332,13 @@ fn test_dword_constant_stays_wide_when_any_upper_lane_is_live() {
 #[test]
 fn test_dword_fixed_register_argument_keeps_all_value_lanes_live() {
     // Native nbody left its last Y velocity undamped: `mov bx,8192` with stale upper EBX bits.
-    let source =
-        insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![rl(Register::EBX, 4)], vec![im(8192, 4)])), vec![1], vec![]);
+    let source = insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Move, "mov", vec![rl(Register::EBX, 4)], vec![im(8192, 4)])),
+        vec![1],
+        vec![],
+    );
     let call = Insn {
         clobbers: [Register::EAX, Register::EBX, Register::ECX, Register::EDX].into(),
         requires: vec![(Held { value: 1, width: 4 }, Register::BX)],
@@ -2718,12 +3349,29 @@ fn test_dword_fixed_register_argument_keeps_all_value_lanes_live() {
     assert_eq!(narrowed_moves(rules(), &input), input);
 }
 
-fn extract_parts(source: Loc, high: Loc, discarded: Loc, last: Insn) -> Vec<Arc<Insn>> {
+fn extract_parts(
+    source: Loc,
+    high: Loc,
+    discarded: Loc,
+    last: Insn,
+) -> Vec<Arc<Insn>> {
     vec![
         Arc::new(insn(10, Some((10, 10)), Some(sem(Operation::Push, "push", vec![], vec![source])), vec![], vec![1])),
         Arc::new(insn(10, Some((10, 10)), Some(sem(Operation::Pop, "pop", vec![discarded], vec![])), vec![2], vec![])),
-        Arc::new(insn(10, Some((10, 10)), Some(sem(Operation::Pop, "pop", vec![high.clone()], vec![])), vec![3], vec![])),
-        Arc::new(insn(11, Some((11, 11)), Some(sem(Operation::Compare, "cmp", vec![], vec![high, im(0, 2)])), vec![], vec![3])),
+        Arc::new(insn(
+            10,
+            Some((10, 10)),
+            Some(sem(Operation::Pop, "pop", vec![high.clone()], vec![])),
+            vec![3],
+            vec![],
+        )),
+        Arc::new(insn(
+            11,
+            Some((11, 11)),
+            Some(sem(Operation::Compare, "cmp", vec![], vec![high, im(0, 2)])),
+            vec![],
+            vec![3],
+        )),
         Arc::new(last),
     ]
 }
@@ -2732,7 +3380,13 @@ fn extract_parts(source: Loc, high: Loc, discarded: Loc, last: Insn) -> Vec<Arc<
 fn test_register_high_extract_uses_one_double_shift_for_dx_ax_return() {
     // Frontend-parity ALGEBRA returned its high word with push/pop/pop.
     let source = rl(Register::EBX, 4);
-    let last = insn(12, Some((12, 12)), Some(sem(Operation::Move, "mov", vec![rl(Register::EDX, 4)], vec![im(0, 4)])), vec![4], vec![]);
+    let last = insn(
+        12,
+        Some((12, 12)),
+        Some(sem(Operation::Move, "mov", vec![rl(Register::EDX, 4)], vec![im(0, 4)])),
+        vec![4],
+        vec![],
+    );
     let parts = extract_parts(source.clone(), rl(Register::DX, 2), rl(Register::BX, 2), last);
     let input = body("return-high", 10, vec![block(10, parts, vec![])]);
 
@@ -2752,7 +3406,13 @@ fn test_selected_move_shift_high_extract_uses_the_same_double_shift() {
     // Frontend-parity ALGEBRA's C path retained MOV EDX,ECX; SHR EDX,16.
     let (source, high) = (rl(Register::ECX, 4), rl(Register::EDX, 4));
     let parts = vec![
-        Arc::new(insn(10, Some((10, 10)), Some(sem(Operation::Move, "mov", vec![high.clone()], vec![source.clone()])), vec![3], vec![1])),
+        Arc::new(insn(
+            10,
+            Some((10, 10)),
+            Some(sem(Operation::Move, "mov", vec![high.clone()], vec![source.clone()])),
+            vec![3],
+            vec![1],
+        )),
         Arc::new(insn(
             11,
             Some((11, 11)),
@@ -2786,7 +3446,13 @@ fn test_selected_move_shift_high_extract_uses_the_same_double_shift() {
 fn test_register_high_extract_shifts_a_dying_return_root_in_place() {
     // Frontend-parity LOOP returned EDX through push/pop/pop.
     let source = rl(Register::EDX, 4);
-    let last = insn(12, Some((12, 12)), Some(sem(Operation::Move, "mov", vec![source.clone()], vec![im(0, 4)])), vec![4], vec![]);
+    let last = insn(
+        12,
+        Some((12, 12)),
+        Some(sem(Operation::Move, "mov", vec![source.clone()], vec![im(0, 4)])),
+        vec![4],
+        vec![],
+    );
     let parts = extract_parts(source.clone(), rl(Register::DX, 2), rl(Register::BX, 2), last);
     let input = body("return-high-in-place", 10, vec![block(10, parts, vec![])]);
 
@@ -2803,9 +3469,27 @@ fn test_dead_flags_crossing_increment_do_not_block_zero_idiom() {
     // PARITYCONTROL kept `mov eax,0` because a later DEC preserved dead CF.
     let (eax, bx, cx) = (rl(Register::EAX, 4), rl(Register::BX, 2), rl(Register::CX, 2));
     let insns = vec![
-        Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![eax.clone()], vec![im(0, 4)])), vec![1], vec![])),
-        Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Unary, "dec", vec![bx.clone()], vec![bx])), vec![2], vec![2])),
-        Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Binary, "and", vec![cx.clone()], vec![cx.clone(), cx])), vec![3], vec![3])),
+        Arc::new(insn(
+            0,
+            Some((0, 0)),
+            Some(sem(Operation::Move, "mov", vec![eax.clone()], vec![im(0, 4)])),
+            vec![1],
+            vec![],
+        )),
+        Arc::new(insn(
+            1,
+            Some((1, 1)),
+            Some(sem(Operation::Unary, "dec", vec![bx.clone()], vec![bx])),
+            vec![2],
+            vec![2],
+        )),
+        Arc::new(insn(
+            2,
+            Some((2, 2)),
+            Some(sem(Operation::Binary, "and", vec![cx.clone()], vec![cx.clone(), cx])),
+            vec![3],
+            vec![3],
+        )),
         Arc::new(insn(3, Some((3, 3)), Some(semt(Operation::Branch, "jne", vec![], vec![], Some(1))), vec![], vec![])),
     ];
     let input = body("zero-before-dec", 0, vec![block(0, insns, vec![1])]);
@@ -2821,8 +3505,20 @@ fn test_return_high_extraction_drops_redundant_low_word_shuttle() {
     let (eax, ax, bx, edx, dx) =
         (rl(Register::EAX, 4), rl(Register::AX, 2), rl(Register::BX, 2), rl(Register::EDX, 4), rl(Register::DX, 2));
     let parts = vec![
-        Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![bx.clone()], vec![ax.clone()])), vec![2], vec![1])),
-        Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![edx.clone()], vec![eax])), vec![3], vec![1])),
+        Arc::new(insn(
+            0,
+            Some((0, 0)),
+            Some(sem(Operation::Move, "mov", vec![bx.clone()], vec![ax.clone()])),
+            vec![2],
+            vec![1],
+        )),
+        Arc::new(insn(
+            1,
+            Some((1, 1)),
+            Some(sem(Operation::Move, "mov", vec![edx.clone()], vec![eax])),
+            vec![3],
+            vec![1],
+        )),
         Arc::new(insn(
             2,
             Some((2, 2)),
@@ -2830,7 +3526,13 @@ fn test_return_high_extraction_drops_redundant_low_word_shuttle() {
             vec![4],
             vec![3],
         )),
-        Arc::new(insn(3, Some((3, 3)), Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![bx])), vec![5], vec![2])),
+        Arc::new(insn(
+            3,
+            Some((3, 3)),
+            Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![bx])),
+            vec![5],
+            vec![2],
+        )),
         Arc::new(Insn {
             clobbers: [Register::EBX].into(),
             ..insn(4, Some((4, 4)), Some(sem(Operation::Nothing, "", vec![], vec![])), vec![], vec![])
@@ -2844,11 +3546,10 @@ fn test_return_high_extraction_drops_redundant_low_word_shuttle() {
 
     let result = transform(input);
 
-    assert_eq!(whats(&result.insns()), [
-        parts[1].what.clone().unwrap(),
-        parts[2].what.clone().unwrap(),
-        parts[5].what.clone().unwrap(),
-    ]);
+    assert_eq!(
+        whats(&result.insns()),
+        [parts[1].what.clone().unwrap(), parts[2].what.clone().unwrap(), parts[5].what.clone().unwrap(),]
+    );
 }
 
 #[test]
@@ -2862,19 +3563,35 @@ fn test_unit_add_selects_inc_only_when_carry_is_dead() {
         vec![1],
         vec![1],
     ));
-    let compare =
-        Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Compare, "cmp", vec![], vec![counter, im(8, 2)])), vec![], vec![1]));
+    let compare = Arc::new(insn(
+        2,
+        Some((2, 2)),
+        Some(sem(Operation::Compare, "cmp", vec![], vec![counter, im(8, 2)])),
+        vec![],
+        vec![1],
+    ));
     let dead = body("counter", 1, vec![block(1, vec![Arc::clone(&add), compare], vec![])]);
-    let branch = Arc::new(insn(2, Some((2, 2)), Some(semt(Operation::Branch, "jb", vec![], vec![], Some(3))), vec![], vec![]));
+    let branch =
+        Arc::new(insn(2, Some((2, 2)), Some(semt(Operation::Branch, "jb", vec![], vec![], Some(3))), vec![], vec![]));
     let live = body("carry", 1, vec![block(1, vec![add, branch], vec![3]), block(3, vec![], vec![])]);
 
     assert_eq!(names(&increments(rules(), &dead).insns())[0], "inc");
     assert_eq!(names(&increments(rules(), &live).insns())[0], "add");
 }
 
-fn _pair(operation: Operation, name: &str, tail: Vec<Arc<Insn>>) -> (LirBody, Insn) {
+fn _pair(
+    operation: Operation,
+    name: &str,
+    tail: Vec<Arc<Insn>>,
+) -> (LirBody, Insn) {
     let (left, right) = (rl(Register::EBX, 4), rl(Register::ECX, 4));
-    let combined = insn(1, Some((1, 3)), Some(sem(operation, name, vec![left.clone()], vec![left.clone(), right.clone()])), vec![10], vec![1, 2]);
+    let combined = insn(
+        1,
+        Some((1, 3)),
+        Some(sem(operation, name, vec![left.clone()], vec![left.clone(), right.clone()])),
+        vec![10],
+        vec![1, 2],
+    );
     let copied = insn(3, Some((3, 3)), Some(sem(Operation::Move, "mov", vec![right], vec![left])), vec![11], vec![10]);
     let insns = [vec![Arc::new(combined), Arc::new(copied.clone())], tail].concat();
     (body("pair", 0, vec![block(0, insns, vec![])]), copied)
@@ -2898,8 +3615,13 @@ fn test_commutative_result_copy_uses_the_dying_other_operand() {
             vec![12],
             vec![11],
         ));
-        let overwrite =
-            Arc::new(insn(5, Some((5, 7)), Some(sem(Operation::Move, "mov", vec![left.clone()], vec![im(0, 4)])), vec![13], vec![]));
+        let overwrite = Arc::new(insn(
+            5,
+            Some((5, 7)),
+            Some(sem(Operation::Move, "mov", vec![left.clone()], vec![im(0, 4)])),
+            vec![13],
+            vec![],
+        ));
         let (input, copied) = _pair(operation, name, vec![Arc::clone(&shift), Arc::clone(&overwrite)]);
 
         let result = transferred(rules(), &input).insns();
@@ -2929,12 +3651,20 @@ fn test_commutative_result_copy_keeps_a_still_live_first_operand() {
 #[test]
 fn test_commutative_result_copy_keeps_source_owned_copy_bytes() {
     // A real input instruction is not the synthetic transfer this rewrite may erase.
-    let overwrite =
-        Arc::new(insn(5, Some((5, 7)), Some(sem(Operation::Move, "mov", vec![rl(Register::EBX, 4)], vec![im(0, 4)])), vec![13], vec![]));
+    let overwrite = Arc::new(insn(
+        5,
+        Some((5, 7)),
+        Some(sem(Operation::Move, "mov", vec![rl(Register::EBX, 4)], vec![im(0, 4)])),
+        vec![13],
+        vec![],
+    ));
     let (input, copied) = _pair(Operation::Multiply, "imul", vec![Arc::clone(&overwrite)]);
     let owned = Arc::new(Insn { covers: Some((3, 5)), ..copied });
     let input = LirBody {
-        blocks: vec![LirBlock { insns: vec![Arc::clone(&input.insns()[0]), owned, overwrite].into(), ..input.blocks[0].clone() }],
+        blocks: vec![LirBlock {
+            insns: vec![Arc::clone(&input.insns()[0]), owned, overwrite].into(),
+            ..input.blocks[0].clone()
+        }],
         ..input
     };
 
@@ -2946,13 +3676,23 @@ fn _high_extract_body(tail: Vec<Arc<Insn>>) -> LirBody {
     let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-4), 4) });
     // A reload carries the call memory of what it stands beside: here a call
     // that touches none.
-    let beside = crate::model::lir::CallMemory { effects: llrm_mir::memory::Effects::NONE, private: vec![], disturbs: Default::default() };
+    let beside = crate::model::lir::CallMemory {
+        effects: llrm_mir::memory::Effects::NONE,
+        private: vec![],
+        disturbs: Default::default(),
+    };
     let load = Insn {
         symbol: Some(false),
         call: Some(Arc::new(beside)),
         ..insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![wide.clone()], vec![cell])), vec![1], vec![])
     };
-    let shift = insn(1, Some((1, 1)), Some(sem(Operation::Binary, "shr", vec![wide.clone()], vec![wide, im(16, 1)])), vec![1], vec![1]);
+    let shift = insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Binary, "shr", vec![wide.clone()], vec![wide, im(16, 1)])),
+        vec![1],
+        vec![1],
+    );
     body("extract", 0, vec![block(0, [vec![Arc::new(load), Arc::new(shift)], tail].concat(), vec![])])
 }
 
@@ -3001,7 +3741,13 @@ fn test_high_extract_keeps_observable_wide_load_or_shift_effects() {
                 )),
                 _return_high(),
             ],
-            "flags" => vec![Arc::new(insn(2, Some((2, 4)), Some(semt(Operation::Branch, "je", vec![], vec![], Some(9))), vec![], vec![]))],
+            "flags" => vec![Arc::new(insn(
+                2,
+                Some((2, 4)),
+                Some(semt(Operation::Branch, "je", vec![], vec![], Some(9))),
+                vec![],
+                vec![],
+            ))],
             _ => vec![_return_high()],
         };
         let mut input = _high_extract_body(tail);
@@ -3084,21 +3830,49 @@ fn test_a_repeated_address_copy_does_not_hide_a_read_modify_write() {
     // DRAWBOB's counter took a load, an add and a store once allocation
     // copied its pointer into SI again, as a new value, before the store.
     let (si, ax, dx) = (rl(Register::SI, 2), rl(Register::AX, 2), rl(Register::DX, 2));
-    let cell = |base: u32| Loc::Mem(Mem { base: Some(Held { value: base, width: 2 }), ..mem(None, 2, Register::SI, 0, 0) });
+    let cell =
+        |base: u32| Loc::Mem(Mem { base: Some(Held { value: base, width: 2 }), ..mem(None, 2, Register::SI, 0, 0) });
     let copy = |at, into: u32| {
-        Arc::new(insn(at, None, Some(sem(Operation::Move, "mov", vec![si.clone()], vec![ax.clone()])), vec![into], vec![1]))
+        Arc::new(insn(
+            at,
+            None,
+            Some(sem(Operation::Move, "mov", vec![si.clone()], vec![ax.clone()])),
+            vec![into],
+            vec![1],
+        ))
     };
     let insns = vec![
         copy(1, 10),
-        Arc::new(insn(2, None, Some(sem(Operation::Move, "mov", vec![dx.clone()], vec![cell(10)])), vec![11], vec![10])),
-        Arc::new(insn(3, None, Some(sem(Operation::Binary, "add", vec![dx.clone()], vec![dx.clone(), im(1, 2)])), vec![12], vec![11])),
+        Arc::new(insn(
+            2,
+            None,
+            Some(sem(Operation::Move, "mov", vec![dx.clone()], vec![cell(10)])),
+            vec![11],
+            vec![10],
+        )),
+        Arc::new(insn(
+            3,
+            None,
+            Some(sem(Operation::Binary, "add", vec![dx.clone()], vec![dx.clone(), im(1, 2)])),
+            vec![12],
+            vec![11],
+        )),
         copy(4, 13),
-        Arc::new(insn(5, None, Some(sem(Operation::Move, "mov", vec![cell(13)], vec![dx.clone()])), vec![], vec![13, 12])),
+        Arc::new(insn(
+            5,
+            None,
+            Some(sem(Operation::Move, "mov", vec![cell(13)], vec![dx.clone()])),
+            vec![],
+            vec![13, 12],
+        )),
         Arc::new(insn(6, None, Some(sem(Operation::Move, "mov", vec![dx], vec![im(0, 2)])), vec![14], vec![])),
     ];
     let result = transform(body("rmw", 0, vec![block(0, insns, vec![])]));
     let found: Vec<String> = whats(&result.insns()).iter().map(Repr::repr).collect();
-    let loads = whats(&result.insns()).iter().filter(|what| what.op == Operation::Move && what.sources.iter().any(|one| matches!(one, Loc::Mem(_)))).count();
+    let loads = whats(&result.insns())
+        .iter()
+        .filter(|what| what.op == Operation::Move && what.sources.iter().any(|one| matches!(one, Loc::Mem(_))))
+        .count();
     assert_eq!(loads, 0, "{found:?}");
 }
 
@@ -3109,14 +3883,36 @@ fn test_a_repeated_address_copy_does_not_hide_a_read_modify_write() {
 #[test]
 fn test_a_store_through_another_register_is_not_fused() {
     let (dx, ax) = (rl(Register::DX, 2), rl(Register::AX, 2));
-    let through = |value: u32, register: Register| Loc::Mem(Mem { base: Some(Held { value, width: 2 }), through: register, ..Mem::new(None, 2) });
+    let through = |value: u32, register: Register| {
+        Loc::Mem(Mem { base: Some(Held { value, width: 2 }), through: register, ..Mem::new(None, 2) })
+    };
     let head: Vec<Arc<Insn>> = vec![
-        Arc::new(insn(1, None, Some(sem(Operation::Move, "mov", vec![dx.clone()], vec![through(1, Register::DI)])), vec![], vec![1])),
-        Arc::new(insn(2, None, Some(sem(Operation::Binary, "add", vec![dx.clone()], vec![dx.clone(), ax])), vec![], vec![])),
-        Arc::new(insn(3, None, Some(sem(Operation::Move, "mov", vec![through(2, Register::SI)], vec![dx.clone()])), vec![], vec![2])),
+        Arc::new(insn(
+            1,
+            None,
+            Some(sem(Operation::Move, "mov", vec![dx.clone()], vec![through(1, Register::DI)])),
+            vec![],
+            vec![1],
+        )),
+        Arc::new(insn(
+            2,
+            None,
+            Some(sem(Operation::Binary, "add", vec![dx.clone()], vec![dx.clone(), ax])),
+            vec![],
+            vec![],
+        )),
+        Arc::new(insn(
+            3,
+            None,
+            Some(sem(Operation::Move, "mov", vec![through(2, Register::SI)], vec![dx.clone()])),
+            vec![],
+            vec![2],
+        )),
     ];
-    let overwrite = insn(4, None, Some(sem(Operation::Move, "mov", vec![dx], vec![rl(Register::CX, 2)])), vec![], vec![]);
-    let input = body("two-cells", 0, vec![block(0, head.clone(), vec![1]), block(1, vec![Arc::new(overwrite)], vec![])]);
+    let overwrite =
+        insn(4, None, Some(sem(Operation::Move, "mov", vec![dx], vec![rl(Register::CX, 2)])), vec![], vec![]);
+    let input =
+        body("two-cells", 0, vec![block(0, head.clone(), vec![1]), block(1, vec![Arc::new(overwrite)], vec![])]);
 
     assert_eq!(whats(&fused(rules(), &input).blocks[0].insns), whats(&head));
 }
@@ -3126,15 +3922,35 @@ fn test_a_store_through_another_register_is_not_fused() {
 #[test]
 fn test_a_zero_test_of_a_cell_after_its_step_reads_the_step() {
     let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-10), 2) });
-    let step = insn(0, Some((0, 4)), Some(sem(Operation::Binary, "add", vec![cell.clone()], vec![cell.clone(), im(1, 2)])), vec![], vec![]);
-    let compare = insn(4, Some((4, 8)), Some(sem(Operation::Compare, "cmp", vec![], vec![cell, im(0, 2)])), vec![], vec![]);
+    let step = insn(
+        0,
+        Some((0, 4)),
+        Some(sem(Operation::Binary, "add", vec![cell.clone()], vec![cell.clone(), im(1, 2)])),
+        vec![],
+        vec![],
+    );
+    let compare =
+        insn(4, Some((4, 8)), Some(sem(Operation::Compare, "cmp", vec![], vec![cell, im(0, 2)])), vec![], vec![]);
     let branch = insn(8, Some((8, 10)), Some(semt(Operation::Branch, "jne", vec![], vec![], Some(0))), vec![], vec![]);
     let ax = rl(Register::AX, 2);
-    let flags = insn(10, Some((10, 12)), Some(sem(Operation::Binary, "xor", vec![ax.clone()], vec![ax.clone(), ax])), vec![], vec![]);
+    let flags = insn(
+        10,
+        Some((10, 12)),
+        Some(sem(Operation::Binary, "xor", vec![ax.clone()], vec![ax.clone(), ax])),
+        vec![],
+        vec![],
+    );
     let exit = insn(12, Some((12, 13)), Some(sem(Operation::Return, "", vec![], vec![])), vec![], vec![]);
     let anchor = insn(4, None, Some(sem(Operation::Nothing, "", vec![], vec![])), vec![7], vec![5]);
-    let blocks = vec![block(0, vec![Arc::new(step), Arc::new(anchor), Arc::new(compare), Arc::new(branch)], vec![0, 10]), block(10, vec![Arc::new(flags), Arc::new(exit)], vec![])];
-    let names = tested(rules(), &body("zero", 0, blocks)).blocks[0].insns.iter().map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default()).collect::<Vec<_>>();
+    let blocks = vec![
+        block(0, vec![Arc::new(step), Arc::new(anchor), Arc::new(compare), Arc::new(branch)], vec![0, 10]),
+        block(10, vec![Arc::new(flags), Arc::new(exit)], vec![]),
+    ];
+    let names = tested(rules(), &body("zero", 0, blocks)).blocks[0]
+        .insns
+        .iter()
+        .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+        .collect::<Vec<_>>();
     assert_eq!(names, ["add", "", "", "jne"]);
 }
 
@@ -3144,17 +3960,55 @@ fn test_a_borrow_mask_needs_no_zero() {
     // instruction more than `sbb si,si` each element of bench/huge.
     let (dx, si) = (rl(Register::DX, 2), rl(Register::SI, 2));
     let insns = vec![
-        Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Binary, "add", vec![dx.clone()], vec![dx.clone(), im(4, 2)])), vec![1], vec![1])),
-        Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![si.clone()], vec![im(0, 2)])), vec![2], vec![])),
-        Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Binary, "sbb", vec![si.clone()], vec![si.clone(), im(0, 2)])), vec![2], vec![2])),
-        Arc::new(insn(3, Some((3, 3)), Some(sem(Operation::Binary, "and", vec![si.clone()], vec![si.clone(), im(4096, 2)])), vec![2], vec![2])),
+        Arc::new(insn(
+            0,
+            Some((0, 0)),
+            Some(sem(Operation::Binary, "add", vec![dx.clone()], vec![dx.clone(), im(4, 2)])),
+            vec![1],
+            vec![1],
+        )),
+        Arc::new(insn(
+            1,
+            Some((1, 1)),
+            Some(sem(Operation::Move, "mov", vec![si.clone()], vec![im(0, 2)])),
+            vec![2],
+            vec![],
+        )),
+        Arc::new(insn(
+            2,
+            Some((2, 2)),
+            Some(sem(Operation::Binary, "sbb", vec![si.clone()], vec![si.clone(), im(0, 2)])),
+            vec![2],
+            vec![2],
+        )),
+        Arc::new(insn(
+            3,
+            Some((3, 3)),
+            Some(sem(Operation::Binary, "and", vec![si.clone()], vec![si.clone(), im(4096, 2)])),
+            vec![2],
+            vec![2],
+        )),
     ];
     let input = body("borrow", 0, vec![block(0, insns, vec![])]);
 
     let result = borrows(rules(), &input);
 
-    assert_eq!(names(&result.insns().into_iter().filter(|one| one.what.as_ref().is_some_and(|what| what.op != Operation::Nothing)).collect::<Vec<_>>()), ["add", "sbb", "and"]);
-    assert!(result.insns().iter().any(|one| one.what == Some(sem(Operation::Binary, "sbb", vec![si.clone()], vec![si.clone(), si.clone()]))));
+    assert_eq!(
+        names(
+            &result
+                .insns()
+                .into_iter()
+                .filter(|one| one.what.as_ref().is_some_and(|what| what.op != Operation::Nothing))
+                .collect::<Vec<_>>()
+        ),
+        ["add", "sbb", "and"]
+    );
+    assert!(
+        result
+            .insns()
+            .iter()
+            .any(|one| one.what == Some(sem(Operation::Binary, "sbb", vec![si.clone()], vec![si.clone(), si.clone()])))
+    );
 }
 
 /// A dword copy and add run under the operand-size prefix each, so on a CPU
@@ -3165,9 +4019,22 @@ fn test_a_borrow_mask_needs_no_zero() {
 #[test]
 fn test_a_dword_copy_and_add_are_priced_with_their_operand_size_prefixes() {
     let (dest, source) = (rl(Register::EDX, 4), rl(Register::ECX, 4));
-    let copy = insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![source.clone()])), vec![2], vec![1]);
-    let add = insn(1, Some((1, 1)), Some(sem(Operation::Binary, "add", vec![dest.clone()], vec![dest.clone(), im(1024, 4)])), vec![2], vec![2]);
-    let compare = insn(2, Some((2, 2)), Some(sem(Operation::Compare, "cmp", vec![], vec![dest, im(0, 4)])), vec![], vec![2]);
+    let copy = insn(
+        0,
+        Some((0, 0)),
+        Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![source.clone()])),
+        vec![2],
+        vec![1],
+    );
+    let add = insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Binary, "add", vec![dest.clone()], vec![dest.clone(), im(1024, 4)])),
+        vec![2],
+        vec![2],
+    );
+    let compare =
+        insn(2, Some((2, 2)), Some(sem(Operation::Compare, "cmp", vec![], vec![dest, im(0, 4)])), vec![], vec![2]);
     let input = body("dword-offset", 0, vec![block(0, vec![Arc::new(copy), Arc::new(add), Arc::new(compare)], vec![])]);
     let result = addresses(&input, "486").unwrap().insns();
     assert_eq!(names(&result), ["lea", "cmp"]);
@@ -3181,7 +4048,13 @@ fn flat() -> &'static crate::backend::peep::Rules {
 
 fn word_load(into: Register) -> Arc<Insn> {
     let cell = Loc::Mem(mem(frame(8), 2, Register::EBP, 0, 4));
-    Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Extend, "movzx", vec![rl(into, 4)], vec![cell])), vec![], vec![]))
+    Arc::new(insn(
+        0,
+        Some((0, 0)),
+        Some(sem(Operation::Extend, "movzx", vec![rl(into, 4)], vec![cell])),
+        vec![],
+        vec![],
+    ))
 }
 
 fn partial_load(into: Register) -> Arc<Insn> {
@@ -3189,8 +4062,17 @@ fn partial_load(into: Register) -> Arc<Insn> {
     Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![rl(into, 2)], vec![cell])), vec![], vec![]))
 }
 
-fn extension(into: Register, from: Register) -> Arc<Insn> {
-    Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Extend, "movzx", vec![rl(into, 4)], vec![rl(from, 2)])), vec![], vec![]))
+fn extension(
+    into: Register,
+    from: Register,
+) -> Arc<Insn> {
+    Arc::new(insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Extend, "movzx", vec![rl(into, 4)], vec![rl(from, 2)])),
+        vec![],
+        vec![],
+    ))
 }
 
 fn flat_body(insns: Vec<Arc<Insn>>) -> LirBody {
@@ -3201,61 +4083,121 @@ fn flat_body(insns: Vec<Arc<Insn>>) -> LirBody {
 /// The extension was a three clock `movzx` where a one clock `mov` does, and kept the copy from joining its source.
 #[test]
 fn test_flat_extension_of_a_zero_extended_word_is_a_copy() {
-    let made = zero_extensions(flat(), &flat_body(vec![word_load(Register::EAX), extension(Register::ESI, Register::AX)]));
+    let made =
+        zero_extensions(flat(), &flat_body(vec![word_load(Register::EAX), extension(Register::ESI, Register::AX)]));
     let kept: Vec<Semantics> = whats(&made.insns());
     assert_eq!(kept[1].name.as_deref(), Some("mov"), "{kept:?}");
-    assert_eq!((kept[1].dests.clone(), kept[1].sources.clone()), (vec![rl(Register::ESI, 4)], vec![rl(Register::EAX, 4)]));
+    assert_eq!(
+        (kept[1].dests.clone(), kept[1].sources.clone()),
+        (vec![rl(Register::ESI, 4)], vec![rl(Register::EAX, 4)])
+    );
 }
 
 /// The same extension in place is nothing.
 #[test]
 fn test_flat_extension_in_place_of_a_zero_extended_word_is_dropped() {
-    let made = zero_extensions(flat(), &flat_body(vec![word_load(Register::EAX), extension(Register::EAX, Register::AX)]));
-    assert_eq!(names(&whats(&made.insns()).into_iter().map(|what| Arc::new(insn(0, None, Some(what), vec![], vec![]))).collect::<Vec<_>>()), ["movzx"]);
+    let made =
+        zero_extensions(flat(), &flat_body(vec![word_load(Register::EAX), extension(Register::EAX, Register::AX)]));
+    assert_eq!(
+        names(
+            &whats(&made.insns())
+                .into_iter()
+                .map(|what| Arc::new(insn(0, None, Some(what), vec![], vec![])))
+                .collect::<Vec<_>>()
+        ),
+        ["movzx"]
+    );
 }
 
 /// Where the register's upper half is not known zero the extension stays: a word load leaves it as it was.
 /// Taking it for a copy read the old upper half.
 #[test]
 fn test_flat_extension_of_a_partial_load_stays() {
-    let made = zero_extensions(flat(), &flat_body(vec![partial_load(Register::EAX), extension(Register::ESI, Register::AX)]));
+    let made =
+        zero_extensions(flat(), &flat_body(vec![partial_load(Register::EAX), extension(Register::ESI, Register::AX)]));
     assert_eq!(whats(&made.insns())[1].name.as_deref(), Some("movzx"));
 }
 
 /// A word copy of a zero-extended register is the dword one when nothing reads the upper half it was leaving.
 #[test]
 fn test_flat_word_copy_of_a_zero_extended_register_is_a_dword_copy() {
-    let copy = Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![rl(Register::CX, 2)], vec![rl(Register::AX, 2)])), vec![], vec![]));
+    let copy = Arc::new(insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Move, "mov", vec![rl(Register::CX, 2)], vec![rl(Register::AX, 2)])),
+        vec![],
+        vec![],
+    ));
     // Overwritten whole after, so nothing reads the upper half the word copy was leaving.
-    let cleared = Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Binary, "xor", vec![rl(Register::ECX, 4)], vec![rl(Register::ECX, 4), rl(Register::ECX, 4)])), vec![], vec![]));
+    let cleared = Arc::new(insn(
+        2,
+        Some((2, 2)),
+        Some(sem(
+            Operation::Binary,
+            "xor",
+            vec![rl(Register::ECX, 4)],
+            vec![rl(Register::ECX, 4), rl(Register::ECX, 4)],
+        )),
+        vec![],
+        vec![],
+    ));
     let made = widened_moves(flat(), &flat_body(vec![word_load(Register::EAX), copy, cleared]));
     let kept = whats(&made.insns());
-    assert_eq!((kept[1].dests.clone(), kept[1].sources.clone()), (vec![rl(Register::ECX, 4)], vec![rl(Register::EAX, 4)]));
+    assert_eq!(
+        (kept[1].dests.clone(), kept[1].sources.clone()),
+        (vec![rl(Register::ECX, 4)], vec![rl(Register::EAX, 4)])
+    );
 }
 
 fn compared() -> Arc<Insn> {
-    Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Compare, "cmp", vec![], vec![rl(Register::EAX, 4), rl(Register::ECX, 4)])), vec![], vec![]))
+    Arc::new(insn(
+        2,
+        Some((2, 2)),
+        Some(sem(Operation::Compare, "cmp", vec![], vec![rl(Register::EAX, 4), rl(Register::ECX, 4)])),
+        vec![],
+        vec![],
+    ))
 }
 
 fn dword_sum() -> Arc<Insn> {
-    Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Binary, "add", vec![rl(Register::EAX, 4)], vec![rl(Register::EAX, 4), rl(Register::ECX, 4)])), vec![], vec![]))
+    Arc::new(insn(
+        1,
+        Some((1, 1)),
+        Some(sem(
+            Operation::Binary,
+            "add",
+            vec![rl(Register::EAX, 4)],
+            vec![rl(Register::EAX, 4), rl(Register::ECX, 4)],
+        )),
+        vec![],
+        vec![],
+    ))
 }
 
 /// A dword sum and the extension of its low word, where the sum's register is zero above: the word sum.
 #[test]
 fn test_flat_dword_sum_and_its_extension_is_the_word_sum() {
     // A compare after overwrites the flags the word sum would set differently.
-    let made = narrowed_arithmetic(flat(), &flat_body(vec![word_load(Register::EAX), dword_sum(), extension(Register::EAX, Register::AX), compared()]));
+    let made = narrowed_arithmetic(
+        flat(),
+        &flat_body(vec![word_load(Register::EAX), dword_sum(), extension(Register::EAX, Register::AX), compared()]),
+    );
     let kept = whats(&made.insns());
     assert_eq!(kept.len(), 3, "{kept:?}");
-    assert_eq!((kept[1].dests.clone(), kept[1].sources.clone()), (vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::CX, 2)]));
+    assert_eq!(
+        (kept[1].dests.clone(), kept[1].sources.clone()),
+        (vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::CX, 2)])
+    );
 }
 
 /// Not where it is not: the word sum leaves the upper half as it was, which the extension would have cleared.
 /// Taking the word sum there left the old upper half in a register read as a dword.
 #[test]
 fn test_flat_dword_sum_stays_where_the_upper_half_may_not_be_zero() {
-    let made = narrowed_arithmetic(flat(), &flat_body(vec![partial_load(Register::EAX), dword_sum(), extension(Register::EAX, Register::AX), compared()]));
+    let made = narrowed_arithmetic(
+        flat(),
+        &flat_body(vec![partial_load(Register::EAX), dword_sum(), extension(Register::EAX, Register::AX), compared()]),
+    );
     let kept = whats(&made.insns());
     assert_eq!((kept[1].name.as_deref(), kept[2].name.as_deref()), (Some("add"), Some("movzx")), "{kept:?}");
 }
@@ -3267,23 +4209,65 @@ fn test_flat_dword_sum_stays_where_the_upper_half_may_not_be_zero() {
 /// out, so a rewritten cell also read as unchanged and was dropped).
 #[test]
 fn test_a_copy_is_forwarded_into_the_address_that_reads_it() {
-    let copy = Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![rl(Register::ESI, 4)], vec![rl(Register::ECX, 4)])), vec![], vec![]));
-    let cell = Mem { index_through: Register::ESI, index: Some(Held { value: 32, width: 4 }), ..mem(Some(Addr { segment: Register::SS, ..Addr::new(Space::Literal, -1032) }), 1, Register::EBP, 0, 2) };
-    let store = Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![im(1, 1)])), vec![], vec![]));
+    let copy = Arc::new(insn(
+        0,
+        Some((0, 0)),
+        Some(sem(Operation::Move, "mov", vec![rl(Register::ESI, 4)], vec![rl(Register::ECX, 4)])),
+        vec![],
+        vec![],
+    ));
+    let cell = Mem {
+        index_through: Register::ESI,
+        index: Some(Held { value: 32, width: 4 }),
+        ..mem(Some(Addr { segment: Register::SS, ..Addr::new(Space::Literal, -1032) }), 1, Register::EBP, 0, 2)
+    };
+    let store = Arc::new(insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![im(1, 1)])),
+        vec![],
+        vec![],
+    ));
     let made = copyprop::forwarded(&flat_body(vec![copy, store]));
-    let Some(Loc::Mem(cell)) = made.insns()[1].what.as_ref().map(|what| what.dests[0].clone()) else { panic!("a store") };
+    let Some(Loc::Mem(cell)) = made.insns()[1].what.as_ref().map(|what| what.dests[0].clone()) else {
+        panic!("a store")
+    };
     assert_eq!(cell.index_through, Register::ECX);
 }
 
 /// Not where the older register changes between the copy and the read.
 #[test]
 fn test_a_copy_is_not_forwarded_past_a_write_of_its_source() {
-    let copy = Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![rl(Register::ESI, 4)], vec![rl(Register::ECX, 4)])), vec![], vec![]));
-    let bump = Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Binary, "add", vec![rl(Register::ECX, 4)], vec![rl(Register::ECX, 4), im(1, 4)])), vec![], vec![]));
-    let cell = Mem { index_through: Register::ESI, index: Some(Held { value: 32, width: 4 }), ..mem(Some(Addr { segment: Register::SS, ..Addr::new(Space::Literal, -1032) }), 1, Register::EBP, 0, 2) };
-    let store = Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![im(1, 1)])), vec![], vec![]));
+    let copy = Arc::new(insn(
+        0,
+        Some((0, 0)),
+        Some(sem(Operation::Move, "mov", vec![rl(Register::ESI, 4)], vec![rl(Register::ECX, 4)])),
+        vec![],
+        vec![],
+    ));
+    let bump = Arc::new(insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Binary, "add", vec![rl(Register::ECX, 4)], vec![rl(Register::ECX, 4), im(1, 4)])),
+        vec![],
+        vec![],
+    ));
+    let cell = Mem {
+        index_through: Register::ESI,
+        index: Some(Held { value: 32, width: 4 }),
+        ..mem(Some(Addr { segment: Register::SS, ..Addr::new(Space::Literal, -1032) }), 1, Register::EBP, 0, 2)
+    };
+    let store = Arc::new(insn(
+        2,
+        Some((2, 2)),
+        Some(sem(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![im(1, 1)])),
+        vec![],
+        vec![],
+    ));
     let made = copyprop::forwarded(&flat_body(vec![copy, bump, store]));
-    let Some(Loc::Mem(cell)) = made.insns()[2].what.as_ref().map(|what| what.dests[0].clone()) else { panic!("a store") };
+    let Some(Loc::Mem(cell)) = made.insns()[2].what.as_ref().map(|what| what.dests[0].clone()) else {
+        panic!("a store")
+    };
     assert_eq!(cell.index_through, Register::ESI);
 }
 
@@ -3291,8 +4275,20 @@ fn test_a_copy_is_not_forwarded_past_a_write_of_its_source() {
 
 /// `mov ebx, ecx` then a byte read through `[ebx]`. A 32-bit base encodes only in 32-bit mode.
 fn read_through_a_copy(bits: u32) -> LirBody {
-    let copy = Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![rl(Register::EBX, 4)], vec![rl(Register::ECX, 4)])), vec![], vec![]));
-    let read = Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![rl(Register::AL, 1)], vec![Loc::Mem(mem(None, 1, Register::EBX, 0, 0))])), vec![], vec![]));
+    let copy = Arc::new(insn(
+        0,
+        Some((0, 0)),
+        Some(sem(Operation::Move, "mov", vec![rl(Register::EBX, 4)], vec![rl(Register::ECX, 4)])),
+        vec![],
+        vec![],
+    ));
+    let read = Arc::new(insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Move, "mov", vec![rl(Register::AL, 1)], vec![Loc::Mem(mem(None, 1, Register::EBX, 0, 0))])),
+        vec![],
+        vec![],
+    ));
     LirBody { bits, ..flat_body(vec![copy, read]) }
 }
 
@@ -3329,8 +4325,19 @@ fn test_what_a_conditional_jump_reads_is_the_conditions_for_every_condition() {
 
 // ------------------------------------------------------------------ the count of a `rep`
 
-fn repeated_fill(name: &str, width: u32, di: Register, cx: Register, ax: Register) -> Insn {
-    let what = sem(Operation::Fill, name, vec![Loc::Mem(Mem::new(None, 0)), rl(di, width), rl(cx, width)], vec![rl(ax, width), rl(cx, width), rl(di, width)]);
+fn repeated_fill(
+    name: &str,
+    width: u32,
+    di: Register,
+    cx: Register,
+    ax: Register,
+) -> Insn {
+    let what = sem(
+        Operation::Fill,
+        name,
+        vec![Loc::Mem(Mem::new(None, 0)), rl(di, width), rl(cx, width)],
+        vec![rl(ax, width), rl(cx, width), rl(di, width)],
+    );
     insn(0, Some((0, 0)), Some(what), vec![], vec![])
 }
 
@@ -3338,7 +4345,9 @@ fn repeated_fill(name: &str, width: u32, di: Register, cx: Register, ax: Registe
 /// ECX whole, so a value live in ECX's upper half across it read as overwritten.
 #[test]
 fn test_a_rep_in_real_mode_writes_cx_and_not_the_upper_half_of_ecx() {
-    let (_, writes) = _register_effects(16, &repeated_fill("stosw", 2, Register::DI, Register::CX, Register::AX), true, false).expect("encodes");
+    let (_, writes) =
+        _register_effects(16, &repeated_fill("stosw", 2, Register::DI, Register::CX, Register::AX), true, false)
+            .expect("encodes");
     assert!(writes.contains(&(Register::ECX, 0)) && writes.contains(&(Register::ECX, 1)), "{writes:?}");
     assert!(!writes.contains(&(Register::ECX, 2)) && !writes.contains(&(Register::ECX, 3)), "{writes:?}");
 }
@@ -3346,13 +4355,15 @@ fn test_a_rep_in_real_mode_writes_cx_and_not_the_upper_half_of_ecx() {
 /// In 32-bit code it counts ECX.
 #[test]
 fn test_a_rep_in_flat_mode_writes_ecx_whole() {
-    let (_, writes) = _register_effects(32, &repeated_fill("stosd", 4, Register::EDI, Register::ECX, Register::EAX), true, false).expect("encodes");
+    let (_, writes) =
+        _register_effects(32, &repeated_fill("stosd", 4, Register::EDI, Register::ECX, Register::EAX), true, false)
+            .expect("encodes");
     assert!((0..4).all(|lane| writes.contains(&(Register::ECX, lane))), "{writes:?}");
 }
 
-/// Each pass of the peephole assembled the text of an instruction and decoded it, for every instruction of the body, again:
-/// `_decoded` was 8% of compiling matmul (#560). An instruction is decoded once however many passes ask of it, and another
-/// at the same place is not taken for it.
+/// Each pass of the peephole assembled the text of an instruction and decoded it, for every instruction of the body,
+/// again: `_decoded` was 8% of compiling matmul (#560). An instruction is decoded once however many passes ask of it,
+/// and another at the same place is not taken for it.
 #[test]
 fn test_an_instruction_the_passes_ask_of_again_is_decoded_once() {
     let what = sem(Operation::Binary, "add", vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::BX, 2)]);
@@ -3367,7 +4378,8 @@ fn test_an_instruction_the_passes_ask_of_again_is_decoded_once() {
     _decoded(32, &what).expect("encodes");
     assert_eq!(decodes() - before, 1, "a 32-bit ask was answered from the 16-bit one");
     // Another instruction, even if it came to stand where this one was, is its own.
-    let other = sem(Operation::Binary, "sub", vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::BX, 2)]);
+    let other =
+        sem(Operation::Binary, "sub", vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::BX, 2)]);
     assert_ne!(_decoded(16, &other).expect("encodes"), first);
 }
 
@@ -3381,7 +4393,10 @@ fn test_two_cells_equal_but_spelled_through_other_registers_are_decoded_apart() 
     };
     // One place in memory, the second instruction put where the first was (as a body's rewrite does).
     let mut place = through(Register::BX);
-    assert!(place.same_meaning(&through(Register::SI)) && place != through(Register::SI), "the same cell, spelled another way, is not equal to it");
+    assert!(
+        place.same_meaning(&through(Register::SI)) && place != through(Register::SI),
+        "the same cell, spelled another way, is not equal to it"
+    );
     let first = _decoded(16, &place).expect("encodes");
     place = through(Register::SI);
     let second = _decoded(16, &place).expect("encodes");
@@ -3389,41 +4404,77 @@ fn test_two_cells_equal_but_spelled_through_other_registers_are_decoded_apart() 
     assert_eq!(second[0].memory_base(), Register::SI);
 }
 
-/// The passes asked `_register_effects` of the same instruction again and again, each time lowering it to text and decoding
-/// it: 886,000 asks for 16,000 distinct instructions in one QCport module. An instruction equal to one already answered is
-/// answered from it, whichever `Insn` it is held in.
+/// The passes asked `_register_effects` of the same instruction again and again, each time lowering it to text and
+/// decoding it: 886,000 asks for 16,000 distinct instructions in one QCport module. An instruction equal to one already
+/// answered is answered from it, whichever `Insn` it is held in.
 #[test]
 fn test_an_instruction_equal_to_one_already_answered_is_not_worked_out_again() {
-    let add = |at| insn(at, Some((at, at + 2)), Some(sem(Operation::Binary, "add", vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::BX, 2)])), vec![], vec![]);
+    let add = |at| {
+        insn(
+            at,
+            Some((at, at + 2)),
+            Some(sem(
+                Operation::Binary,
+                "add",
+                vec![rl(Register::AX, 2)],
+                vec![rl(Register::AX, 2), rl(Register::BX, 2)],
+            )),
+            vec![],
+            vec![],
+        )
+    };
     let before = effects_computed();
     let first = _register_effects(16, &add(0), false, true);
     for at in 1..6 {
         assert_eq!(_register_effects(16, &add(at), false, true), first);
     }
     assert_eq!(effects_computed() - before, 1, "worked out again for each ask");
-    let other = insn(0, Some((0, 2)), Some(sem(Operation::Binary, "add", vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::CX, 2)])), vec![], vec![]);
+    let other = insn(
+        0,
+        Some((0, 2)),
+        Some(sem(Operation::Binary, "add", vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::CX, 2)])),
+        vec![],
+        vec![],
+    );
     assert_ne!(_register_effects(16, &other, false, true), first, "another instruction was given this one's answer");
 }
 
-/// `dead_at_exit` was worked out for the body ten passes in a row, though all but one of them left it as it was (#924). A body
-/// that is the same is answered from the last; one whose instruction changed is not.
+/// `dead_at_exit` was worked out for the body ten passes in a row, though all but one of them left it as it was (#924).
+/// A body that is the same is answered from the last; one whose instruction changed is not.
 #[test]
 fn test_the_dead_lanes_of_a_body_no_pass_changed_are_worked_out_once() {
-    let mov = |at, to, from| Arc::new(insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", vec![rl(to, 2)], vec![rl(from, 2)])), vec![], vec![]));
-    let input = body("f", 0, vec![block(0, vec![mov(0, Register::AX, Register::BX), mov(2, Register::CX, Register::AX)], vec![])]);
+    let mov = |at, to, from| {
+        Arc::new(insn(
+            at,
+            Some((at, at + 2)),
+            Some(sem(Operation::Move, "mov", vec![rl(to, 2)], vec![rl(from, 2)])),
+            vec![],
+            vec![],
+        ))
+    };
+    let input = body(
+        "f",
+        0,
+        vec![block(0, vec![mov(0, Register::AX, Register::BX), mov(2, Register::CX, Register::AX)], vec![])],
+    );
     let before = liveness::exits_computed();
     let first = liveness::dead_at_exit(&input);
     for _ in 0..5 {
         assert_eq!(liveness::dead_at_exit(&input.clone()), first);
     }
     assert_eq!(liveness::exits_computed() - before, 1, "worked out again for each ask");
-    let changed = body("f", 0, vec![block(0, vec![mov(0, Register::AX, Register::BX), mov(2, Register::DX, Register::AX)], vec![])]);
+    let changed = body(
+        "f",
+        0,
+        vec![block(0, vec![mov(0, Register::AX, Register::BX), mov(2, Register::DX, Register::AX)], vec![])],
+    );
     liveness::dead_at_exit(&changed);
     assert_eq!(liveness::exits_computed() - before, 2, "a changed body was given the last answer");
 }
 
-/// The flag liveness, upper-half zeroes and post-RA sink liveness each iterated every block to a fixed point: a backward chain of 30
-/// blocks took 30 rounds of 30. All go through `dataflow::solve`, which works a block again only when an input changed.
+/// The flag liveness, upper-half zeroes and post-RA sink liveness each iterated every block to a fixed point: a
+/// backward chain of 30 blocks took 30 rounds of 30. All go through `dataflow::solve`, which works a block again only
+/// when an input changed.
 #[test]
 fn test_flag_liveness_over_a_loop_is_not_worked_by_rounds() {
     let blocks = 30;
@@ -3440,8 +4491,9 @@ fn test_flag_liveness_over_a_loop_is_not_worked_by_rounds() {
     assert!(worked <= 4 * blocks as usize, "{worked} blocks worked for a loop of {blocks}");
 }
 
-/// Every block's transfer was worked again each round until no entry changed, and a fact crosses one block a round: a loop of 30
-/// blocks took 30 rounds of 30 transfers (a nest 8 deep: a quarter of lir peephole). A block is worked again when its entry changed.
+/// Every block's transfer was worked again each round until no entry changed, and a fact crosses one block a round: a
+/// loop of 30 blocks took 30 rounds of 30 transfers (a nest 8 deep: a quarter of lir peephole). A block is worked again
+/// when its entry changed.
 #[test]
 fn test_spill_forwarding_works_a_block_again_only_when_its_entry_changed() {
     let register = rl(Register::BX, 2);
@@ -3449,7 +4501,13 @@ fn test_spill_forwarding_works_a_block_again_only_when_its_entry_changed() {
     let blocks = 30;
     let mut list = Vec::new();
     for at in 1..=blocks {
-        let store = insn(at, Some((at, at)), Some(sem(Operation::Move, "mov", vec![cell.clone()], vec![register.clone()])), vec![], vec![]);
+        let store = insn(
+            at,
+            Some((at, at)),
+            Some(sem(Operation::Move, "mov", vec![cell.clone()], vec![register.clone()])),
+            vec![],
+            vec![],
+        );
         let next = if at == blocks { vec![1, blocks + 1] } else { vec![at + 1] };
         list.push(block(at, if at == 1 { vec![Arc::new(store)] } else { vec![] }, next));
     }
@@ -3461,15 +4519,21 @@ fn test_spill_forwarding_works_a_block_again_only_when_its_entry_changed() {
     assert!(worked <= 4 * blocks as usize, "{worked} transfers for a loop of {blocks} blocks");
 }
 
-/// Copy propagation worked every block again each round until no exit changed: a loop of 30 blocks took 30 rounds of 30 blocks.
-/// A block is worked again when a parent's exit changed.
+/// Copy propagation worked every block again each round until no exit changed: a loop of 30 blocks took 30 rounds of 30
+/// blocks. A block is worked again when a parent's exit changed.
 #[test]
 fn test_copy_propagation_works_a_block_again_only_when_a_parent_changed() {
     let (ax, bx) = (rl(Register::AX, 2), rl(Register::BX, 2));
     let blocks = 30;
     let mut list = Vec::new();
     for at in 1..=blocks {
-        let copy = insn(at, Some((at, at)), Some(sem(Operation::Move, "mov", vec![bx.clone()], vec![ax.clone()])), vec![], vec![]);
+        let copy = insn(
+            at,
+            Some((at, at)),
+            Some(sem(Operation::Move, "mov", vec![bx.clone()], vec![ax.clone()])),
+            vec![],
+            vec![],
+        );
         let next = if at == blocks { vec![1, blocks + 1] } else { vec![at + 1] };
         list.push(block(at, if at == 1 { vec![Arc::new(copy)] } else { vec![] }, next));
     }

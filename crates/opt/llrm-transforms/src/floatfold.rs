@@ -3,12 +3,11 @@
 //! `optimize/floatfold.rs`, the port of `qbopt/optimize/floatfold.py`.
 //!
 //! What changed with the IR:
-//! - `stored` wrote an exact x87 value's bits where it was stored, x87
-//!   having no immediate operand. Here every read of the value reads the
-//!   constant, a store's included, and Dead takes the definition, as Fold's
-//!   integers (`_dead_values` is Dead's).
-//! - `discarded` dropped an unread exact conversion. Here every read of the
-//!   conversion's integer reads the number, and Dead takes the conversion.
+//! - `stored` wrote an exact x87 value's bits where it was stored, x87 having no immediate operand. Here every read of
+//!   the value reads the constant, a store's included, and Dead takes the definition, as Fold's integers
+//!   (`_dead_values` is Dead's).
+//! - `discarded` dropped an unread exact conversion. Here every read of the conversion's integer reads the number, and
+//!   Dead takes the conversion.
 //!
 //! Dropped, no rich MIR analogue: `checks` and `_checked`, the `Fcheck`
 //! (FWAIT) kept for each removed operation's exceptions: the rich MIR
@@ -32,8 +31,8 @@ use llrm_mir::facts::Facts;
 use llrm_mir::interpret::{self, Val};
 use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
-use llrm_mir::types::{FloatKind, Type, TypeId};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses};
+use llrm_mir::types::{FloatKind, Type, TypeId};
 use llrm_support::hash::IndexMap;
 
 pub struct FloatFold;
@@ -43,7 +42,11 @@ impl FunctionPass for FloatFold {
         "floatfold"
     }
 
-    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         let calls = manager::writes(unit.context, unit.layout, unit.function, analyses);
         if _folded(unit.context, unit.layout, unit.function, analyses, &calls) {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
@@ -56,15 +59,28 @@ impl FunctionPass for FloatFold {
 /// `discarded`, then `stored`, with what floatfacts knows of `function`;
 /// `outer` is its module and target, `calls` what each call writes.
 /// Whether anything changed.
-pub fn folded(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, calls: &Calls) -> bool {
+pub fn folded(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &Outer,
+    calls: &Calls,
+) -> bool {
     _folded(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())), calls)
 }
 
 /// `folded`, `analyses` holding what is known of `function`.
-pub(crate) fn _folded(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses, calls: &Calls) -> bool {
+pub(crate) fn _folded(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    analyses: &mut Analyses,
+    calls: &Calls,
+) -> bool {
     let (facts, conversions) = {
         // The manager's solve, where it was of these writes.
-        let solved = (*calls == manager::writes(context, layout, function, analyses)).then(|| analyses.get::<manager::FloatFacts>(context, layout, function));
+        let solved = (*calls == manager::writes(context, layout, function, analyses))
+            .then(|| analyses.get::<manager::FloatFacts>(context, layout, function));
         let held = manager::Held::of(context, layout, function, analyses, true);
         let unit = held.unit(context, layout, function, analyses.outer());
         let facts = match solved {
@@ -78,18 +94,28 @@ pub(crate) fn _folded(context: &mut Context, layout: &DataLayout, function: &mut
 }
 
 /// A floating constant's value and format.
-fn float(context: &Context, operand: Operand) -> Option<(FloatKind, f64)> {
+fn float(
+    context: &Context,
+    operand: Operand,
+) -> Option<(FloatKind, f64)> {
     let Operand::Constant(id) = operand else { return None };
     let constant = context.get(id);
     match (&constant.kind, context.types.get(constant.ty)) {
-        (ConstantKind::Float(bits), Type::Float(FloatKind::Float)) => Some((FloatKind::Float, f64::from(f32::from_bits(*bits as u32)))),
+        (ConstantKind::Float(bits), Type::Float(FloatKind::Float)) => {
+            Some((FloatKind::Float, f64::from(f32::from_bits(*bits as u32))))
+        }
         (ConstantKind::Float(bits), Type::Float(kind)) => Some((*kind, f64::from_bits(*bits))),
         _ => None,
     }
 }
 
 /// A floating constant of `ty`.
-fn float_constant(context: &mut Context, ty: TypeId, kind: FloatKind, number: f64) -> Operand {
+fn float_constant(
+    context: &mut Context,
+    ty: TypeId,
+    kind: FloatKind,
+    number: f64,
+) -> Operand {
     let bits = if kind == FloatKind::Float { u64::from((number as f32).to_bits()) } else { number.to_bits() };
     Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Float(bits) }))
 }
@@ -101,7 +127,10 @@ fn float_constant(context: &mut Context, ty: TypeId, kind: FloatKind, number: f6
 /// (`nnan`, `nsz`), `x - x` is 0 and `x / x` is 1 (`nnan`, `ninf`), `x + 0.0`
 /// is `x` (`nsz`). `x + -0.0`, `x - 0.0` and `x * 1.0` need no flag. Whether
 /// anything changed.
-pub fn freedoms(context: &mut Context, function: &mut Function) -> bool {
+pub fn freedoms(
+    context: &mut Context,
+    function: &mut Function,
+) -> bool {
     let mut changed = false;
     for inst in function.walk().map(|(_, inst)| inst).collect::<Vec<_>>() {
         if function.is_erased(inst) {
@@ -120,67 +149,119 @@ pub fn freedoms(context: &mut Context, function: &mut Function) -> bool {
 }
 
 /// The operand `inst` equals, or a number it is, as its flags let it.
-fn _simplified(context: &mut Context, function: &Function, inst: InstId) -> Option<Operand> {
+fn _simplified(
+    context: &mut Context,
+    function: &Function,
+    inst: InstId,
+) -> Option<Operand> {
     let instruction = function.instruction(inst);
-    let Opcode::Binary(op @ (BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv)) = instruction.opcode else { return None };
+    let Opcode::Binary(op @ (BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv)) = instruction.opcode
+    else {
+        return None;
+    };
     let (a, b, ty) = (instruction.operands[0], instruction.operands[1], instruction.ty);
     let facts = Facts::of_flags(instruction.flags);
     let right = float(context, b);
     let Type::Float(kind) = *context.types.get(ty) else { return None };
-    let (zero, negative_zero) = (|number: f64| number == 0.0 && number.is_sign_positive(), |number: f64| number == 0.0 && number.is_sign_negative());
+    let (zero, negative_zero) = (
+        |number: f64| number == 0.0 && number.is_sign_positive(),
+        |number: f64| number == 0.0 && number.is_sign_negative(),
+    );
     match (op, right) {
         // x + -0.0 and x - +0.0 are x; the other zero turns -0.0 into +0.0.
-        (BinaryOp::FAdd, Some((_, number))) if negative_zero(number) || (zero(number) && facts.no_signed_zeros()) => Some(a),
-        (BinaryOp::FSub, Some((_, number))) if zero(number) || (negative_zero(number) && facts.no_signed_zeros()) => Some(a),
+        (BinaryOp::FAdd, Some((_, number))) if negative_zero(number) || (zero(number) && facts.no_signed_zeros()) => {
+            Some(a)
+        }
+        (BinaryOp::FSub, Some((_, number))) if zero(number) || (negative_zero(number) && facts.no_signed_zeros()) => {
+            Some(a)
+        }
         (BinaryOp::FMul | BinaryOp::FDiv, Some((_, number))) if number == 1.0 => Some(a),
         // 0 * x is NaN for a NaN or an infinity, and -0 for a negative x.
-        (BinaryOp::FMul, Some((_, number))) if number == 0.0 && facts.no_nans() && facts.no_signed_zeros() => Some(float_constant(context, ty, kind, 0.0)),
-        (BinaryOp::FSub, _) if a == b && facts.no_nans() && facts.no_infs() => Some(float_constant(context, ty, kind, 0.0)),
-        (BinaryOp::FDiv, _) if a == b && facts.no_nans() && facts.no_infs() => Some(float_constant(context, ty, kind, 1.0)),
+        (BinaryOp::FMul, Some((_, number))) if number == 0.0 && facts.no_nans() && facts.no_signed_zeros() => {
+            Some(float_constant(context, ty, kind, 0.0))
+        }
+        (BinaryOp::FSub, _) if a == b && facts.no_nans() && facts.no_infs() => {
+            Some(float_constant(context, ty, kind, 0.0))
+        }
+        (BinaryOp::FDiv, _) if a == b && facts.no_nans() && facts.no_infs() => {
+            Some(float_constant(context, ty, kind, 1.0))
+        }
         _ => None,
     }
 }
 
 /// Whether `1 / divisor` is exact in `kind`: a normal power of two whose reciprocal is normal too.
-fn exact_reciprocal(kind: FloatKind, divisor: f64) -> bool {
+fn exact_reciprocal(
+    kind: FloatKind,
+    divisor: f64,
+) -> bool {
     match kind {
         FloatKind::Float => {
             let divisor = divisor as f32;
             divisor.is_normal() && divisor.to_bits() & 0x7f_ffff == 0 && (1.0 / divisor).is_normal()
         }
-        FloatKind::Double | FloatKind::X86Fp80 => divisor.is_normal() && divisor.to_bits() & 0xf_ffff_ffff_ffff == 0 && (1.0 / divisor).is_normal(),
+        FloatKind::Double | FloatKind::X86Fp80 => {
+            divisor.is_normal() && divisor.to_bits() & 0xf_ffff_ffff_ffff == 0 && (1.0 / divisor).is_normal()
+        }
     }
 }
 
 /// `inst` rewritten where a flag lets the language's freedom be used.
-fn _combined(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+fn _combined(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     let instruction = function.instruction(inst).clone();
     let ty = instruction.ty;
     let facts = Facts::of_flags(instruction.flags);
     match instruction.opcode {
         // A constant goes to the right of a sum or a product, which commute.
-        Opcode::Binary(BinaryOp::FAdd | BinaryOp::FMul) if float(context, instruction.operands[0]).is_some() && float(context, instruction.operands[1]).is_none() => {
+        Opcode::Binary(BinaryOp::FAdd | BinaryOp::FMul)
+            if float(context, instruction.operands[0]).is_some()
+                && float(context, instruction.operands[1]).is_none() =>
+        {
             function.set_operand(inst, 0, instruction.operands[1]);
             function.set_operand(inst, 1, instruction.operands[0]);
             true
         }
-        // A division by a constant is a multiply by its reciprocal, as `arcp` lets, or whenever the reciprocal is exact (LLVM's
-        // InstCombine, GCC's `fold_binary` for `RDIV_EXPR`): the product rounds as the quotient did.
+        // A division by a constant is a multiply by its reciprocal, as `arcp` lets, or whenever the reciprocal is exact
+        // (LLVM's InstCombine, GCC's `fold_binary` for `RDIV_EXPR`): the product rounds as the quotient did.
         Opcode::Binary(BinaryOp::FDiv) => {
-            let Some((kind, divisor)) = float(context, instruction.operands[1]).filter(|(kind, divisor)| divisor.is_finite() && *divisor != 0.0 && (facts.allow_reciprocal() || exact_reciprocal(*kind, *divisor))) else { return false };
+            let Some((kind, divisor)) = float(context, instruction.operands[1]).filter(|(kind, divisor)| {
+                divisor.is_finite()
+                    && *divisor != 0.0
+                    && (facts.allow_reciprocal() || exact_reciprocal(*kind, *divisor))
+            }) else {
+                return false;
+            };
             let reciprocal = float_constant(context, ty, kind, 1.0 / divisor);
-            let multiply = function.create_instruction(Opcode::Binary(BinaryOp::FMul), ty, vec![instruction.operands[0], reciprocal], instruction.flags, None);
+            let multiply = function.create_instruction(
+                Opcode::Binary(BinaryOp::FMul),
+                ty,
+                vec![instruction.operands[0], reciprocal],
+                instruction.flags,
+                None,
+            );
             _replaced(function, inst, multiply)
         }
         // (x op c1) op c2 is x op (c1 op c2), where sums and products may regroup.
-        Opcode::Binary(op @ (BinaryOp::FAdd | BinaryOp::FMul)) if facts.reassoc() && float(context, instruction.operands[1]).is_some() => {
+        Opcode::Binary(op @ (BinaryOp::FAdd | BinaryOp::FMul))
+            if facts.reassoc() && float(context, instruction.operands[1]).is_some() =>
+        {
             let Operand::Value(inner) = instruction.operands[0] else { return false };
             let ValueDef::Instruction(def) = function.value(inner).def else { return false };
             let inner = function.instruction(def).clone();
-            if inner.opcode != Opcode::Binary(op) || float(context, inner.operands[1]).is_none() || !Facts::of_flags(inner.flags).reassoc() {
+            if inner.opcode != Opcode::Binary(op)
+                || float(context, inner.operands[1]).is_none()
+                || !Facts::of_flags(inner.flags).reassoc()
+            {
                 return false;
             }
-            let (Some(c1), Some(c2)) = (_value(context, inner.operands[1]), _value(context, instruction.operands[1])) else { return false };
+            let (Some(c1), Some(c2)) = (_value(context, inner.operands[1]), _value(context, instruction.operands[1]))
+            else {
+                return false;
+            };
             let Ok(Val::Float(_, bits)) = interpret::binary(op, instruction.flags, c1, c2) else { return false };
             let folded = Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Float(bits) }));
             function.set_operand(inst, 0, inner.operands[0]);
@@ -193,7 +274,10 @@ fn _combined(context: &mut Context, function: &mut Function, inst: InstId) -> bo
 }
 
 /// A floating constant as the interpreter holds values.
-fn _value(context: &Context, operand: Operand) -> Option<Val> {
+fn _value(
+    context: &Context,
+    operand: Operand,
+) -> Option<Val> {
     let Operand::Constant(id) = operand else { return None };
     let constant = context.get(id);
     match (&constant.kind, context.types.get(constant.ty)) {
@@ -203,16 +287,25 @@ fn _value(context: &Context, operand: Operand) -> Option<Val> {
 }
 
 /// `inst` replaced by `new`, placed where it was.
-fn _replaced(function: &mut Function, inst: InstId, new: InstId) -> bool {
+fn _replaced(
+    function: &mut Function,
+    inst: InstId,
+    new: InstId,
+) -> bool {
     function.insert(new, Position::Before(inst)).expect("a placed instruction");
-    let (old, value) = (function.instruction(inst).result.expect("a value"), function.instruction(new).result.expect("a value"));
+    let (old, value) =
+        (function.instruction(inst).result.expect("a value"), function.instruction(new).result.expect("a value"));
     function.replace_all_uses_with(old, Operand::Value(value));
     function.erase(inst).expect("its uses were replaced");
     true
 }
 
 /// Every read of a known float value reads its constant.
-pub fn stored(context: &mut Context, function: &mut Function, facts: &IndexMap<ValueId, Finite>) -> bool {
+pub fn stored(
+    context: &mut Context,
+    function: &mut Function,
+    facts: &IndexMap<ValueId, Finite>,
+) -> bool {
     let mut changed = false;
     for (&value, fact) in facts {
         let ty = function.value(value).ty;
@@ -221,7 +314,8 @@ pub fn stored(context: &mut Context, function: &mut Function, facts: &IndexMap<V
         }
         let format = Format::of(&context.types, ty).expect("a float");
         let bits = floatfacts::encoded(fact, format).expect("a fact fits its format");
-        let constant = context.constant(Constant { ty, kind: ConstantKind::Float(u64::try_from(bits).expect("64 bits")) });
+        let constant =
+            context.constant(Constant { ty, kind: ConstantKind::Float(u64::try_from(bits).expect("64 bits")) });
         function.replace_all_uses_with(value, Operand::Constant(constant));
         changed = true;
     }
@@ -229,7 +323,11 @@ pub fn stored(context: &mut Context, function: &mut Function, facts: &IndexMap<V
 }
 
 /// Every read of a known conversion result reads its number.
-pub fn discarded(context: &mut Context, function: &mut Function, converted: &IndexMap<ValueId, Known>) -> bool {
+pub fn discarded(
+    context: &mut Context,
+    function: &mut Function,
+    converted: &IndexMap<ValueId, Known>,
+) -> bool {
     let mut changed = false;
     for (&value, fact) in converted {
         if function.users(value).is_empty() {

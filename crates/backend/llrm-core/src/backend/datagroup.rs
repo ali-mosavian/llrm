@@ -23,23 +23,33 @@ use crate::objectfile::module::{Addr, Space};
 
 /// Whether `body` names the data segment register itself: it then manages
 /// that register, and allocation leaves it alone.
-pub fn names_data_segment(body: &LirBody, segments: &Segments) -> bool {
+pub fn names_data_segment(
+    body: &LirBody,
+    segments: &Segments,
+) -> bool {
     let data = segments.data;
-    body.blocks.iter().flat_map(|block| &block.insns).any(|one| {
-        one.requires.iter().chain(&one.delivers).any(|(_, register)| ir::root(*register) == data)
-            || one.what.as_ref().is_some_and(|what| {
-                what.dests
-                    .iter()
-                    .chain(&what.sources)
-                    .any(|place| matches!(place, Loc::Reg(reg) if ir::root(reg.register) == data))
-            })
-    })
+    body.blocks
+        .iter()
+        .flat_map(|block| &block.insns)
+        .any(
+            |one| one.requires.iter().chain(&one.delivers).any(|(_, register)| ir::root(*register) == data)
+                || one.what.as_ref().is_some_and(|what| {
+                    what.dests
+                        .iter()
+                        .chain(&what.sources)
+                        .any(|place| matches!(place, Loc::Reg(reg) if ir::root(reg.register) == data))
+                }),
+        )
 }
 
 /// `body`, allocated, with the data group reached through the stack segment
 /// wherever the data segment register may hold a value, and restored before
 /// every point that needs it.
-pub fn restored(body: &LirBody, data_free: bool, segments: &Segments) -> LirBody {
+pub fn restored(
+    body: &LirBody,
+    data_free: bool,
+    segments: &Segments,
+) -> LirBody {
     let data = segments.data;
     let Some(through) = segments.through else {
         return body.clone();
@@ -73,7 +83,8 @@ pub fn restored(body: &LirBody, data_free: bool, segments: &Segments) -> LirBody
         if left && block.succ.is_empty() {
             let last = insns.last().cloned();
             let position = if last.as_ref().is_some_and(|one| _leaves(one)) { insns.len() - 1 } else { insns.len() };
-            let beside = last.unwrap_or_else(|| Arc::new(Insn::new(block.at, Some((block.at, block.at)), None, vec![], vec![])));
+            let beside =
+                last.unwrap_or_else(|| Arc::new(Insn::new(block.at, Some((block.at, block.at)), None, vec![], vec![])));
             insns.insert(position, _restore(&beside, data, through));
         }
         out.blocks[index] = block.with_insns(insns);
@@ -83,7 +94,13 @@ pub fn restored(body: &LirBody, data_free: bool, segments: &Segments) -> LirBody
 
 /// Walk `insns` from `dirty`, returning whether the register may hold
 /// something else after them; into `out`, the rewritten instructions.
-fn _walk(insns: &[Arc<Insn>], mut dirty: bool, data: Register, through: Register, mut out: Option<&mut Vec<Arc<Insn>>>) -> bool {
+fn _walk(
+    insns: &[Arc<Insn>],
+    mut dirty: bool,
+    data: Register,
+    through: Register,
+    mut out: Option<&mut Vec<Arc<Insn>>>,
+) -> bool {
     for one in insns {
         if dirty && target::needs_data_group(one) {
             if let Some(out) = out.as_deref_mut() {
@@ -101,19 +118,35 @@ fn _walk(insns: &[Arc<Insn>], mut dirty: bool, data: Register, through: Register
     dirty
 }
 
-fn _writes_data(one: &Insn, data: Register) -> bool {
-    one.what.as_ref().is_some_and(|what| {
-        what.dests.iter().any(|place| matches!(place, Loc::Reg(reg) if ir::root(reg.register) == data))
-    })
+fn _writes_data(
+    one: &Insn,
+    data: Register,
+) -> bool {
+    one.what
+        .as_ref()
+        .is_some_and(
+            |what| what.dests.iter().any(|place| matches!(place, Loc::Reg(reg) if ir::root(reg.register) == data)),
+        )
 }
 
 /// A jump or return that ends its block.
 fn _leaves(one: &Insn) -> bool {
-    one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch | Operation::Return))
+    one.what
+        .as_ref()
+        .is_some_and(
+            |what| matches!(
+                what.op,
+                Operation::Jump | Operation::Branch | Operation::Return
+            ),
+        )
 }
 
 /// The data segment register loaded with the data group, beside `one`.
-fn _restore(one: &Insn, data: Register, through: Register) -> Arc<Insn> {
+fn _restore(
+    one: &Insn,
+    data: Register,
+    through: Register,
+) -> Arc<Insn> {
     let at = one.covers.map_or(one.at, |covers| covers.0);
     let what = Semantics {
         op: Operation::Move,
@@ -130,7 +163,10 @@ fn _restore(one: &Insn, data: Register, through: Register) -> Arc<Insn> {
 
 /// `one`, with each access that would read the data group through the data
 /// segment register reaching it through `through` instead.
-fn _through(one: &Arc<Insn>, through: Register) -> Arc<Insn> {
+fn _through(
+    one: &Arc<Insn>,
+    through: Register,
+) -> Arc<Insn> {
     let Some(what) = &one.what else {
         return Arc::clone(one);
     };
@@ -150,8 +186,14 @@ fn _through(one: &Arc<Insn>, through: Register) -> Arc<Insn> {
 /// `cell` reached through `through`, when without it the data segment
 /// register would supply its segment: no prefix, and no base that selects
 /// the stack segment itself.
-fn _prefixed(cell: &ir::Mem, through: Register) -> Option<ir::Mem> {
-    let stack_based = |base: Register| matches!(base, Register::BP | Register::EBP | Register::SP | Register::ESP);
+fn _prefixed(
+    cell: &ir::Mem,
+    through: Register,
+) -> Option<ir::Mem> {
+    let stack_based = |base: Register| matches!(
+        base,
+        Register::BP | Register::EBP | Register::SP | Register::ESP
+    );
     let Some(addr) = cell.addr else {
         if cell.index.is_some() || !matches!(cell.through, Register::SI | Register::DI | Register::BX) {
             return None;

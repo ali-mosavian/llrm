@@ -6,10 +6,10 @@
 use std::sync::Arc;
 
 use iced_x86::Register;
-use llrm_mir::module::{BlockId, InstId};
 use llrm_mir::Opcode;
+use llrm_mir::module::{BlockId, InstId};
 
-use super::{insn, semantics, Selector, Unselected};
+use super::{Selector, Unselected, insn, semantics};
 use crate::abi::runtime::EVERY;
 use crate::backend::callregs::{call_clobbered_high, call_clobbers};
 use crate::backend::lower_int64::_helper;
@@ -29,11 +29,22 @@ impl Selector<'_, '_, '_> {
             .layout()
             .iter()
             .copied()
-            .filter(|&block| function.block(block).instructions().iter().any(|&one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. })))
+            .filter(|&block| {
+                function
+                    .block(block)
+                    .instructions()
+                    .iter()
+                    .any(|&one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
+            })
             .collect()
     }
 
-    pub(super) fn landing_pad(&mut self, inst: InstId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+    pub(super) fn landing_pad(
+        &mut self,
+        inst: InstId,
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
         if self.function.instruction(inst).result.is_some_and(|value| !self.function.users(value).is_empty()) {
             return Err(Unselected("a landing pad's value read after the backend prepared it".to_owned()));
         }
@@ -53,7 +64,13 @@ impl Selector<'_, '_, '_> {
 
     /// `blocks` entered at a new root `at` when there is a pad: a branch
     /// that is never taken to it, and on to `entry`. The root, and `blocks`.
-    pub(super) fn rooted(&self, blocks: Vec<LirBlock>, entry: i64, pad: Option<i64>, at: i64) -> (Vec<LirBlock>, i64) {
+    pub(super) fn rooted(
+        &self,
+        blocks: Vec<LirBlock>,
+        entry: i64,
+        pad: Option<i64>,
+        at: i64,
+    ) -> (Vec<LirBlock>, i64) {
         let Some(pad) = pad else { return (blocks, entry) };
         let sp = Loc::Reg(Reg { register: Register::SP, width: 2 });
         let zero = Loc::Imm(Imm { value: 0, width: 2, address: None });

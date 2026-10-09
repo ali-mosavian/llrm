@@ -48,7 +48,12 @@ fn test_generated_recurrences_expand_to_what_the_loop_computes() {
             let loop_size = function.block(b1).instructions().len();
             let mut expander = Expander::new(function.terminator(b0).expect("a branch"));
             let (first, by) = (expander.int(context, function, &start), expander.int(context, function, &step));
-            assert_eq!(function.block(b1).instructions().len(), loop_size, "seed {seed}: expansion landed in the loop\n{}", case.text);
+            assert_eq!(
+                function.block(b1).instructions().len(),
+                loop_size,
+                "seed {seed}: expansion landed in the loop\n{}",
+                case.text
+            );
             let width = start.width;
             let ret = function.terminator(b2).expect("a return");
             let at = Position::Before(ret);
@@ -57,19 +62,38 @@ fn test_generated_recurrences_expand_to_what_the_loop_computes() {
             let wide = context.types.int(width);
             let narrow = context.types.int(16);
             let last = placed(context, function, Opcode::Binary(BinaryOp::Sub), narrow, vec![n, one], at);
-            let last = if width == 32 { placed(context, function, Opcode::Cast(CastOp::ZExt), wide, vec![last], at) } else { last };
+            let last = if width == 32 {
+                placed(context, function, Opcode::Cast(CastOp::ZExt), wide, vec![last], at)
+            } else {
+                last
+            };
             let moved = placed(context, function, Opcode::Binary(BinaryOp::Mul), wide, vec![by, last], at);
             let sum = placed(context, function, Opcode::Binary(BinaryOp::Add), wide, vec![first, moved], at);
             let i32 = context.types.int(32);
-            let result = if width == 32 { sum } else { placed(context, function, Opcode::Cast(CastOp::ZExt), i32, vec![sum], at) };
+            let result = if width == 32 {
+                sum
+            } else {
+                placed(context, function, Opcode::Cast(CastOp::ZExt), i32, vec![sum], at)
+            };
             function.set_operand(ret, 0, result);
-            assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "seed {seed}\n{}", llrm_mir::print::module(&module));
+            assert_eq!(
+                llrm_mir::verify::verify(&module),
+                Vec::<String>::new(),
+                "seed {seed}\n{}",
+                llrm_mir::print::module(&module)
+            );
             for _ in 0..3 {
                 let (inputs, trip) = (Inputs::random(&mut rng), rng.below(40) as u16);
                 let got = observed(&module, &inputs, which, trip).unwrap();
                 let expected = observed(&original, &inputs, which, trip).unwrap();
                 let mask = llrm_mir::context::mask(width);
-                assert_eq!(got & mask, expected & mask, "seed {seed} %{} at trip {trip}, {inputs:?}\n{}", case.tracked[which].name, case.text);
+                assert_eq!(
+                    got & mask,
+                    expected & mask,
+                    "seed {seed} %{} at trip {trip}, {inputs:?}\n{}",
+                    case.tracked[which].name,
+                    case.text
+                );
                 checked += 1;
             }
         }

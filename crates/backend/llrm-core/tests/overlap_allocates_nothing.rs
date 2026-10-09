@@ -12,12 +12,19 @@ struct Counting;
 static ALLOCATED: AtomicUsize = AtomicUsize::new(0);
 
 unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+    unsafe fn alloc(
+        &self,
+        layout: Layout,
+    ) -> *mut u8 {
         ALLOCATED.fetch_add(1, Ordering::Relaxed);
         unsafe { System.alloc(layout) }
     }
 
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+    unsafe fn dealloc(
+        &self,
+        pointer: *mut u8,
+        layout: Layout,
+    ) {
         unsafe { System.dealloc(pointer, layout) }
     }
 }

@@ -1,8 +1,9 @@
 use std::rc::Rc;
 
+use llrm_support::pyrepr::Repr;
+
 use super::*;
 use crate::cvinfo;
-use llrm_support::pyrepr::Repr;
 use crate::omf::{self, Record};
 
 /// An object holding only `written`'s two segments, named as BC names its.
@@ -10,7 +11,10 @@ fn object(written: &Written) -> Vec<Rc<Record>> {
     let pascal = |name: &str| [&[name.len() as u8][..], name.as_bytes()].concat();
     let mut records = vec![
         Record::new(omf::THEADR, pascal("P.BAS")),
-        Record::new(omf::LNAMES, ["", "$$SYMBOLS", "DEBSYM", "$$TYPES", "DEBTYP"].iter().flat_map(|one| pascal(one)).collect()),
+        Record::new(
+            omf::LNAMES,
+            ["", "$$SYMBOLS", "DEBSYM", "$$TYPES", "DEBTYP"].iter().flat_map(|one| pascal(one)).collect(),
+        ),
     ];
     for (name, bytes) in [(2u8, &written.symbols), (4, &written.types)] {
         let size = (bytes.len() as u16).to_le_bytes();
@@ -28,7 +32,8 @@ fn object(written: &Written) -> Vec<Rc<Record>> {
 /// The shape, and the kind of each $$TYPES record, sorted: QB 4.5 and the
 /// later compilers encode one BYREF parameter differently.
 fn shape(records: &[Rc<Record>]) -> (Vec<String>, Vec<String>) {
-    let mut kinds: Vec<String> = cvinfo::type_table(records).values().map(|one| one.repr().split('(').next().unwrap_or("").to_owned()).collect();
+    let mut kinds: Vec<String> =
+        cvinfo::type_table(records).values().map(|one| one.repr().split('(').next().unwrap_or("").to_owned()).collect();
     kinds.sort();
     (cvinfo::parse(records).shape(), kinds)
 }
@@ -42,7 +47,11 @@ fn bc(name: &str) -> (Vec<String>, Vec<String>) {
     found
 }
 
-fn procedure(name: &str, r#type: TypeId, locals: &[(&str, TypeId, i16)]) -> Procedure {
+fn procedure(
+    name: &str,
+    r#type: TypeId,
+    locals: &[(&str, TypeId, i16)],
+) -> Procedure {
     Procedure {
         name: name.into(),
         symbol: name.into(),
@@ -56,12 +65,18 @@ fn procedure(name: &str, r#type: TypeId, locals: &[(&str, TypeId, i16)]) -> Proc
     }
 }
 
-fn data(name: &str, r#type: TypeId) -> Data {
+fn data(
+    name: &str,
+    r#type: TypeId,
+) -> Data {
     Data { name: name.into(), r#type, symbol: name.into(), displacement: 0 }
 }
 
 /// byref2.bas: two FUNCTIONs of one BYREF parameter each.
-fn byref2(names: [&str; 6], extra: Option<&str>) -> Module {
+fn byref2(
+    names: [&str; 6],
+    extra: Option<&str>,
+) -> Module {
     let [half, doubled, n1, n2, d, s] = names;
     let types = vec![
         Type::Scalar(Scalar::Float32),
@@ -142,7 +157,11 @@ fn a_structure_and_an_array_of_it_read_as_bc_writes_them() {
         ("udt-p-g2-zi.obj", ["COORD", "X", "Y", "C", "PTS"], Flavor::default(), None),
         ("udt-q-o-zi.obj", ["COORD", "X", "Y", "C", "PTS"], Flavor { qb45: true }, Some("__bseg%")),
     ] {
-        assert_eq!(shape(&object(&written(&module(names, extra), flavor).expect("writes"))), bc(object_name), "{object_name}");
+        assert_eq!(
+            shape(&object(&written(&module(names, extra), flavor).expect("writes"))),
+            bc(object_name),
+            "{object_name}"
+        );
     }
 }
 
@@ -161,7 +180,11 @@ fn a_pointer_and_an_array_in_place_read_back() {
     let (read, _) = shape(&object(&written(&module, Flavor::default()).expect("writes")));
     assert_eq!(read, ["DATA a: 10 BYTES OF INTEGER", "DATA p: BYREF INTEGER"]);
     for reach in [Reach::Far, Reach::Huge] {
-        let module = Module { types: vec![Type::Scalar(Scalar::Int16), Type::Pointer { target: 0, reach }], data: vec![data("p", 1)], ..Module::default() };
+        let module = Module {
+            types: vec![Type::Scalar(Scalar::Int16), Type::Pointer { target: 0, reach }],
+            data: vec![data("p", 1)],
+            ..Module::default()
+        };
         let (read, _) = shape(&object(&written(&module, Flavor::default()).expect("writes")));
         assert_eq!(read, ["DATA p: BYREF INTEGER"], "{reach:?}");
     }

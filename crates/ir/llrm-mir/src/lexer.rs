@@ -9,7 +9,10 @@ pub struct ParseError {
 }
 
 impl fmt::Display for ParseError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         write!(formatter, "line {}: {}", self.line, self.message)
     }
 }
@@ -37,7 +40,10 @@ pub enum Token {
     AttributeGroup(u32),
     /// `name:`, `12:` or `"a b":`.
     Label(Name),
-    Int { negative: bool, magnitude: u128 },
+    Int {
+        negative: bool,
+        magnitude: u128,
+    },
     /// A decimal floating literal.
     Float(f64),
     /// `0x` and 16 hex digits: a double's bits.
@@ -86,7 +92,9 @@ pub fn lex(text: &str) -> Result<Vec<(Token, usize)>, ParseError> {
                 let token = if word.is_empty() {
                     Token::Exclaim
                 } else if word.bytes().all(|b| b.is_ascii_digit()) {
-                    Token::MetadataId(word.parse().map_err(|_| ParseError { line, message: format!("!{word} is too large") })?)
+                    Token::MetadataId(
+                        word.parse().map_err(|_| ParseError { line, message: format!("!{word} is too large") })?,
+                    )
                 } else {
                     Token::MetadataName(word.to_owned())
                 };
@@ -100,7 +108,9 @@ pub fn lex(text: &str) -> Result<Vec<(Token, usize)>, ParseError> {
             }
             b'#' => {
                 let end = scan(bytes, at + 1, |b| b.is_ascii_digit());
-                let Ok(group) = text[at + 1..end].parse() else { return fail(line, "`#` must be followed by a number".to_owned()) };
+                let Ok(group) = text[at + 1..end].parse() else {
+                    return fail(line, "`#` must be followed by a number".to_owned());
+                };
                 out.push((Token::AttributeGroup(group), line));
                 at = end;
             }
@@ -124,7 +134,8 @@ pub fn lex(text: &str) -> Result<Vec<(Token, usize)>, ParseError> {
                 match token {
                     Token::Int { negative: false, magnitude } if bytes.get(at) == Some(&b':') => {
                         at += 1;
-                        let number = u32::try_from(magnitude).map_err(|_| ParseError { line, message: "a label number is too large".to_owned() })?;
+                        let number = u32::try_from(magnitude)
+                            .map_err(|_| ParseError { line, message: "a label number is too large".to_owned() })?;
                         out.push((Token::Label(Name::Numbered(number)), line));
                     }
                     token => out.push((token, line)),
@@ -161,19 +172,29 @@ pub fn is_name(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'-' | b'$' | b'.' | b'_')
 }
 
-fn scan(bytes: &[u8], mut at: usize, keep: impl Fn(u8) -> bool) -> usize {
+fn scan(
+    bytes: &[u8],
+    mut at: usize,
+    keep: impl Fn(u8) -> bool,
+) -> usize {
     while at < bytes.len() && keep(bytes[at]) {
         at += 1;
     }
     at
 }
 
-fn utf8(bytes: Vec<u8>, line: usize) -> Result<String, ParseError> {
+fn utf8(
+    bytes: Vec<u8>,
+    line: usize,
+) -> Result<String, ParseError> {
     String::from_utf8(bytes).map_err(|_| ParseError { line, message: "a name is not UTF-8".to_owned() })
 }
 
 /// The name after a sigil at `at`.
-fn name_at(bytes: &[u8], at: usize) -> Result<Option<(Name, usize)>, String> {
+fn name_at(
+    bytes: &[u8],
+    at: usize,
+) -> Result<Option<(Name, usize)>, String> {
     if bytes.get(at) == Some(&b'"') {
         let (value, next) = string_at(bytes, at)?;
         return Ok(Some((Name::Named(String::from_utf8(value).map_err(|_| "a name is not UTF-8".to_owned())?), next)));
@@ -184,13 +205,19 @@ fn name_at(bytes: &[u8], at: usize) -> Result<Option<(Name, usize)>, String> {
     }
     let word = std::str::from_utf8(&bytes[at..end]).expect("names are ASCII");
     if word.bytes().all(|b| b.is_ascii_digit()) {
-        return word.parse().map(|number| Some((Name::Numbered(number), end))).map_err(|_| format!("{word} is too large"));
+        return word
+            .parse()
+            .map(|number| Some((Name::Numbered(number), end)))
+            .map_err(|_| format!("{word} is too large"));
     }
     Ok(Some((Name::Named(word.to_owned()), end)))
 }
 
 /// A quoted string at `at`, its `\XX` and `\\` escapes decoded.
-fn string_at(bytes: &[u8], at: usize) -> Result<(Vec<u8>, usize), String> {
+fn string_at(
+    bytes: &[u8],
+    at: usize,
+) -> Result<(Vec<u8>, usize), String> {
     let mut out = Vec::new();
     let mut here = at + 1;
     loop {
@@ -215,7 +242,10 @@ fn string_at(bytes: &[u8], at: usize) -> Result<(Vec<u8>, usize), String> {
     }
 }
 
-fn number_at(text: &str, at: usize) -> Result<(Token, usize), String> {
+fn number_at(
+    text: &str,
+    at: usize,
+) -> Result<(Token, usize), String> {
     let bytes = text.as_bytes();
     if text[at..].starts_with("0x") {
         let end = scan(bytes, at + 2, |b| b.is_ascii_hexdigit());

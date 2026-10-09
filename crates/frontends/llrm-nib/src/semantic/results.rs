@@ -7,13 +7,18 @@ use super::*;
 impl TypeRegistry {
     /// Whether `element`'s bytes hold an address. HIR addresses are not
     /// integers, so such an aggregate cannot travel as one.
-    fn holds_address(&self, element: ElementType) -> bool {
+    fn holds_address(
+        &self,
+        element: ElementType,
+    ) -> bool {
         match element {
             ElementType::Scalar(type_name) => matches!(
                 type_name,
                 TypeName::String | TypeName::Addr | TypeName::Vector { .. } | TypeName::Pointer { .. }
             ),
-            ElementType::Struct(id) if self.array_of(id).is_some() => self.holds_address(self.array_of(id).expect("an array").0),
+            ElementType::Struct(id) if self.array_of(id).is_some() => {
+                self.holds_address(self.array_of(id).expect("an array").0)
+            }
             ElementType::Struct(id) => {
                 let fields = self.structure(id).into_iter().flat_map(|layout| layout.fields.values());
                 let payloads = self
@@ -29,7 +34,10 @@ impl TypeRegistry {
 
 impl Signature {
     /// The integer an aggregate result travels as, when it fits registers.
-    pub(super) fn in_registers(&self, types: &TypeRegistry) -> Option<TypeName> {
+    pub(super) fn in_registers(
+        &self,
+        types: &TypeRegistry,
+    ) -> Option<TypeName> {
         let struct_id = self.slot?;
         if types.holds_address(ElementType::Struct(struct_id)) {
             return None;
@@ -43,7 +51,10 @@ impl Signature {
     }
 
     /// The result the object code returns.
-    pub(super) fn returned(&self, types: &TypeRegistry) -> TypeName {
+    pub(super) fn returned(
+        &self,
+        types: &TypeRegistry,
+    ) -> TypeName {
         self.string_result.or(self.in_registers(types)).unwrap_or(self.result)
     }
 }
@@ -60,7 +71,11 @@ fn pieces(width: u32) -> &'static [(u32, TypeName)] {
 
 impl FunctionCompiler<'_> {
     /// `view`'s bytes as the integer `image`.
-    fn register_image(&mut self, view: &StructView, image: TypeName) -> hir::Operand {
+    fn register_image(
+        &mut self,
+        view: &StructView,
+        image: TypeName,
+    ) -> hir::Operand {
         let view = &self.byte_view(view);
         let mut combined: Option<hir::Operand> = None;
         for &(offset, piece) in pieces(self.types.width(view.struct_id)) {
@@ -78,7 +93,12 @@ impl FunctionCompiler<'_> {
     }
 
     /// Stores the integer `image` into `view`'s bytes.
-    fn store_image(&mut self, view: &StructView, image: hir::Operand, type_name: TypeName) {
+    fn store_image(
+        &mut self,
+        view: &StructView,
+        image: hir::Operand,
+        type_name: TypeName,
+    ) {
         let view = &self.byte_view(view);
         for &(offset, piece) in pieces(self.types.width(view.struct_id)) {
             let shifted = self.bit_shift("shr", image.clone(), 8 * offset, type_name);
@@ -89,7 +109,10 @@ impl FunctionCompiler<'_> {
     }
 
     /// Returns the aggregate `$result` holds: in registers, or already in the slot.
-    pub(super) fn return_aggregate(&mut self, span: Span) -> Result<(), Diagnostic> {
+    pub(super) fn return_aggregate(
+        &mut self,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         let operands = match self.signature.in_registers(self.types) {
             Some(image) => {
                 let result = self.result_view(span)?;
@@ -102,7 +125,10 @@ impl FunctionCompiler<'_> {
     }
 
     /// Where `return` builds the result: a local image, or the caller's slot.
-    pub(super) fn result_view(&self, span: Span) -> Result<StructView, Diagnostic> {
+    pub(super) fn result_view(
+        &self,
+        span: Span,
+    ) -> Result<StructView, Diagnostic> {
         let aggregate = self.signature.slot.expect("an aggregate result");
         let binding = self.binding(RESULT, span)?;
         Ok(binding_view(aggregate, &binding.storage, true, RESULT).expect("a result has storage"))

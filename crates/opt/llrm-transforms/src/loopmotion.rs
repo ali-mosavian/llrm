@@ -8,14 +8,12 @@
 //! that changed: a moved store's narrowing was its old block's.
 //!
 //! What changed with the IR:
-//! - A store is moved, not copied; one that goes with another value has it
-//!   as its operand. An address is an operand too, and must reach the exit.
-//! - What refuses a loop is what `llrm_mir::memory` says is more than a
-//!   value, a store aside: a volatile access (the old barrier), a call that
-//!   may touch memory, an `invoke` (a raise a handler here observes). The
-//!   old refused every call; one with no effect that returns is a value.
-//! - A stored cell is in an object (`MemRef::object`), as the old `Segment`
-//!   and `Frame` spaces were, with no selector.
+//! - A store is moved, not copied; one that goes with another value has it as its operand. An address is an operand
+//!   too, and must reach the exit.
+//! - What refuses a loop is what `llrm_mir::memory` says is more than a value, a store aside: a volatile access (the
+//!   old barrier), a call that may touch memory, an `invoke` (a raise a handler here observes). The old refused every
+//!   call; one with no effect that returns is a value.
+//! - A stored cell is in an object (`MemRef::object`), as the old `Segment` and `Frame` spaces were, with no selector.
 //! - `root` followed copies, which have no instruction.
 //!
 //! Dropped, no rich MIR analogue: the `excludes` an indexed store had to
@@ -28,17 +26,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::consts::{self, Calls, HeldCells, Known, masked};
+use llrm_analysis::graph::loops::{self, Loop};
+use llrm_analysis::manager::{AssumptionCache, Bounded, Counted, DominatedEdges, Registers};
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, induction, regions};
-use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
-use llrm_analysis::manager::{AssumptionCache, Bounded, Counted, DominatedEdges, Registers};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
 use llrm_support::hash::{HashMap, IndexMap};
 use num_bigint::BigInt;
@@ -54,7 +52,11 @@ impl FunctionPass for LoopMotion {
         "loopmotion"
     }
 
-    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
         match sunk_stores(unit.context, unit.layout, outer.callees(), unit.function, analyses) {
             Ok(true) => kept_when_stores_move(),
@@ -78,7 +80,13 @@ fn kept_when_stores_move() -> PreservedAnalyses {
 
 /// Each loop's unobserved stores moved to the front of its one exit;
 /// whether any moved.
-pub fn sunk_stores(context: &mut Context, layout: &DataLayout, callees: &Callees, function: &mut Function, analyses: &mut Analyses) -> Result<bool, String> {
+pub fn sunk_stores(
+    context: &mut Context,
+    layout: &DataLayout,
+    callees: &Callees,
+    function: &mut Function,
+    analyses: &mut Analyses,
+) -> Result<bool, String> {
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let successors = graph.iter().map(|block| (block.at, block.succ.clone())).collect::<BTreeMap<_, _>>();
@@ -95,10 +103,16 @@ pub fn sunk_stores(context: &mut Context, layout: &DataLayout, callees: &Callees
             }
         }
         let [(source, destination)] = exits[..] else { continue };
-        if predecessors.get(&destination) != Some(&BTreeSet::from([source])) || loop_.body.iter().any(|at| successors[at].is_empty()) {
+        if predecessors.get(&destination) != Some(&BTreeSet::from([source]))
+            || loop_.body.iter().any(|at| successors[at].is_empty())
+        {
             continue;
         }
-        let inside = loop_.body.iter().flat_map(|&at| function.block(cfg::block(at)).instructions().to_vec()).collect::<Vec<_>>();
+        let inside = loop_
+            .body
+            .iter()
+            .flat_map(|&at| function.block(cfg::block(at)).instructions().to_vec())
+            .collect::<Vec<_>>();
         let refused = |inst: InstId| match function.instruction(inst).opcode {
             Opcode::Store { volatile, .. } => volatile,
             Opcode::Br | Opcode::Switch => false,
@@ -110,7 +124,8 @@ pub fn sunk_stores(context: &mut Context, layout: &DataLayout, callees: &Callees
         let accesses = Accesses::managed(context, layout, function, analyses)?;
         let registers = analyses.get::<llrm_analysis::manager::Registers>(context, layout, function);
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(context, layout, function);
-        let unit = Unit::within(context, layout, function, analyses.outer()).with_registers(&registers).with_shape(&shape);
+        let unit =
+            Unit::within(context, layout, function, analyses.outer()).with_registers(&registers).with_shape(&shape);
         let moved = _moved(&unit, &accesses, &loop_, &inside, &predecessors, &successors, &dominators, source)?;
         if moved.is_empty() {
             continue;
@@ -120,7 +135,9 @@ pub fn sunk_stores(context: &mut Context, layout: &DataLayout, callees: &Callees
             let value = match value {
                 Some(Stored::Operand(value)) => value,
                 Some(Stored::Number(number)) => {
-                    let stored = function.operand_type(context, function.instruction(store).operands[0]).expect("a stored value");
+                    let stored = function
+                        .operand_type(context, function.instruction(store).operands[0])
+                        .expect("a stored value");
                     let width = context.types.int_bits(stored).expect("an integer counter");
                     counting::constant(context, &number, width)
                 }
@@ -129,7 +146,8 @@ pub fn sunk_stores(context: &mut Context, layout: &DataLayout, callees: &Callees
             function.set_operand(store, 0, value);
             function.move_to(store, Position::Before(anchor))?;
         }
-        // What alias said of the old placement no longer holds; no value, block or edge changed, so what is said of them does.
+        // What alias said of the old placement no longer holds; no value, block or edge changed, so what is said of
+        // them does.
         analyses.invalidate(&kept_when_stores_move());
         changed = true;
     }
@@ -163,10 +181,13 @@ fn _moved(
         ValueDef::Instruction(inst) => function.parent(inst).map(cfg::id),
         ValueDef::Argument(_) => None,
     };
-    let address_values = |value: ValueId| defined_in(value).is_none_or(|at| !loop_.body.contains(&at) && header_dominators.contains(&at));
+    let address_values = |value: ValueId| {
+        defined_in(value).is_none_or(|at| !loop_.body.contains(&at) && header_dominators.contains(&at))
+    };
     // What a moved store reads must reach the exit, whose one way in is `source`.
     let reaches = |operand: Operand| match operand {
-        Operand::Value(value) => defined_in(value).is_none_or(|at| dominators.get(&source).is_some_and(|dominating| dominating.contains(&at))),
+        Operand::Value(value) => defined_in(value)
+            .is_none_or(|at| dominators.get(&source).is_some_and(|dominating| dominating.contains(&at))),
         _ => true,
     };
     let unobserved = |inst: InstId| _unobserved(unit, inst, operations, references, &address_values);
@@ -178,21 +199,35 @@ fn _moved(
     }
     let Some(&latch) = loop_.latches.first() else { return Ok(moved) };
     let outside = predecessors[&source].difference(&loop_.body).copied().collect::<Vec<_>>();
-    if loop_.latches.len() != 1 || source != loop_.header || outside.len() != 1 || latch == source || successors[&latch] != [source] {
+    if loop_.latches.len() != 1
+        || source != loop_.header
+        || outside.len() != 1
+        || latch == source
+        || successors[&latch] != [source]
+    {
         return Ok(moved);
     }
     let entry = outside[0];
     let nonempty = induction::nonempty(unit, loop_);
-    let invariant = if nonempty { induction::invariant(function, &loop_.body) } else { induction::Invariant::default() };
-    let mut exit = _Exit { unit, accesses, predecessors, entry: cfg::id(function.entry().expect("an entry")), memory: None };
+    let invariant =
+        if nonempty { induction::invariant(function, &loop_.body) } else { induction::Invariant::default() };
+    let mut exit =
+        _Exit { unit, accesses, predecessors, entry: cfg::id(function.entry().expect("an entry")), memory: None };
     for &inst in operations {
-        if moved.iter().any(|(one, _)| *one == inst) || !unobserved(inst) || !reaches(function.instruction(inst).operands[1]) {
+        if moved.iter().any(|(one, _)| *one == inst)
+            || !unobserved(inst)
+            || !reaches(function.instruction(inst).operands[1])
+        {
             continue;
         }
         let reference = &references[&inst];
-        let mut value = exit.exit_value(inst, reference, loop_.header, entry, latch)?.map(|phi| Stored::Operand(Operand::Value(phi)));
+        let mut value = exit
+            .exit_value(inst, reference, loop_.header, entry, latch)?
+            .map(|phi| Stored::Operand(Operand::Value(phi)));
         if value.is_none() && function.parent(inst) == Some(cfg::block(latch)) {
-            value = _invariant_value(function, inst, &invariant, nonempty).map(Stored::Operand).or_else(|| _last_counter_value(unit, inst, loop_).map(Stored::Number));
+            value = _invariant_value(function, inst, &invariant, nonempty)
+                .map(Stored::Operand)
+                .or_else(|| _last_counter_value(unit, inst, loop_).map(Stored::Number));
         }
         if let Some(value) = value {
             moved.push((inst, Some(value)));
@@ -202,7 +237,11 @@ fn _moved(
 }
 
 /// The counter's value on the last trip, where the latch stores the counter.
-fn _last_counter_value(unit: &Unit, inst: InstId, loop_: &Loop) -> Option<BigInt> {
+fn _last_counter_value(
+    unit: &Unit,
+    inst: InstId,
+    loop_: &Loop,
+) -> Option<BigInt> {
     let Operand::Value(stored) = unit.function.instruction(inst).operands[0] else { return None };
     let counter = induction::basics(unit, loop_).get(&stored)?.clone();
     let proof = induction::controlling(unit, loop_, &counter, &unit.registers())?;
@@ -210,7 +249,12 @@ fn _last_counter_value(unit: &Unit, inst: InstId, loop_: &Loop) -> Option<BigInt
 }
 
 /// The stored value, where the loop runs and does not change it.
-fn _invariant_value(function: &Function, inst: InstId, invariant: &induction::Invariant, nonempty: bool) -> Option<Operand> {
+fn _invariant_value(
+    function: &Function,
+    inst: InstId,
+    invariant: &induction::Invariant,
+    nonempty: bool,
+) -> Option<Operand> {
     let stored = function.instruction(inst).operands[0];
     (nonempty && invariant.operand(stored)).then_some(stored)
 }
@@ -227,14 +271,23 @@ struct _Exit<'a> {
 impl _Exit<'_> {
     /// A header phi the stored cell holds on every trip: the value the
     /// store may write once the loop is left.
-    fn exit_value(&mut self, inst: InstId, reference: &MemRef, header: i64, entry: i64, latch: i64) -> Result<Option<ValueId>, String> {
+    fn exit_value(
+        &mut self,
+        inst: InstId,
+        reference: &MemRef,
+        header: i64,
+        entry: i64,
+        latch: i64,
+    ) -> Result<Option<ValueId>, String> {
         let function = self.unit.function;
         if !matches!(function.instruction(inst).operands[0], Operand::Value(_)) {
             return Ok(None);
         }
         for phi in edges::phis(function, cfg::block(header)) {
             let incoming = arms(function, phi);
-            if incoming.iter().map(|(_, block)| cfg::id(*block)).collect::<BTreeSet<_>>() != BTreeSet::from([entry, latch]) {
+            if incoming.iter().map(|(_, block)| cfg::id(*block)).collect::<BTreeSet<_>>()
+                != BTreeSet::from([entry, latch])
+            {
                 continue;
             }
             let from = |at: i64| incoming.iter().find(|(_, block)| cfg::id(*block) == at).expect("an arm").0;
@@ -247,7 +300,12 @@ impl _Exit<'_> {
 
     /// Whether `reference` holds `expected` as block `at` ends, on every
     /// path into it.
-    fn stored_at(&mut self, reference: &MemRef, at: i64, expected: Operand) -> bool {
+    fn stored_at(
+        &mut self,
+        reference: &MemRef,
+        at: i64,
+        expected: Operand,
+    ) -> bool {
         self.stored_on(reference, at, expected, &[], &mut HashMap::default()).0
     }
 
@@ -255,7 +313,14 @@ impl _Exit<'_> {
     /// as Tarjan's lowlink. A block's answer is asked once, or a run of
     /// if/else is 2^n paths: a false one is final, and so is a true one
     /// assuming nothing shallower than itself.
-    fn stored_on(&mut self, reference: &MemRef, at: i64, expected: Operand, active: &[(i64, Operand)], known: &mut HashMap<(i64, Operand), bool>) -> (bool, usize) {
+    fn stored_on(
+        &mut self,
+        reference: &MemRef,
+        at: i64,
+        expected: Operand,
+        active: &[(i64, Operand)],
+        known: &mut HashMap<(i64, Operand), bool>,
+    ) -> (bool, usize) {
         let key = (at, expected);
         if let Some(depth) = active.iter().position(|one| *one == key) {
             return (true, depth); // inductive backedge; every entry path still needs a matching store
@@ -271,7 +336,14 @@ impl _Exit<'_> {
         (answer, lowest)
     }
 
-    fn stored_in(&mut self, reference: &MemRef, at: i64, expected: Operand, active: &[(i64, Operand)], known: &mut HashMap<(i64, Operand), bool>) -> (bool, usize) {
+    fn stored_in(
+        &mut self,
+        reference: &MemRef,
+        at: i64,
+        expected: Operand,
+        active: &[(i64, Operand)],
+        known: &mut HashMap<(i64, Operand), bool>,
+    ) -> (bool, usize) {
         let key = (at, expected);
         let unit = self.unit;
         let function = unit.function;
@@ -279,14 +351,19 @@ impl _Exit<'_> {
         for &inst in operations(function, block).iter().rev() {
             let op = function.instruction(inst);
             let writes = self.accesses.writes(inst);
-            let overlaps = |written: &MemRef| regions::overlapping(reference, written, None, None, unit.program).unwrap_or(true);
+            let overlaps =
+                |written: &MemRef| regions::overlapping(reference, written, None, None, unit.program).unwrap_or(true);
             if !llrm_analysis::memoryssa::changes(reference, false, writes, overlaps) {
                 continue;
             }
             if writes.is_none() {
                 return (false, usize::MAX);
             }
-            let (Opcode::Store { volatile: false, .. }, Some(written)) = (&op.opcode, self.accesses.references.get(&inst)) else { return (false, usize::MAX) };
+            let (Opcode::Store { volatile: false, .. }, Some(written)) =
+                (&op.opcode, self.accesses.references.get(&inst))
+            else {
+                return (false, usize::MAX);
+            };
             if let Some(wanted) = _known(unit, expected) {
                 let fact = consts::initialized(unit, inst, reference).or_else(|| self.after(inst, reference));
                 if fact == Some(wanted) {
@@ -300,27 +377,42 @@ impl _Exit<'_> {
             return (false, usize::MAX);
         }
         let phi = match expected {
-            Operand::Value(value) => edges::phis(function, block).into_iter().find(|&phi| function.instruction(phi).result == Some(value)),
+            Operand::Value(value) => {
+                edges::phis(function, block).into_iter().find(|&phi| function.instruction(phi).result == Some(value))
+            }
             _ => None,
         };
         let incoming = phi.map(|phi| arms(function, phi));
-        if incoming.as_ref().is_some_and(|incoming| incoming.iter().map(|(_, from)| cfg::id(*from)).collect::<BTreeSet<_>>() != parents) {
+        if incoming
+            .as_ref()
+            .is_some_and(|incoming| incoming.iter().map(|(_, from)| cfg::id(*from)).collect::<BTreeSet<_>>() != parents)
+        {
             return (false, usize::MAX);
         }
         let mut active = active.to_vec();
         active.push(key);
         let mut lowest = usize::MAX;
-        let answer = parents.into_iter().all(|parent| {
-            let next = incoming.as_ref().map_or(expected, |incoming| incoming.iter().find(|(_, from)| cfg::id(*from) == parent).expect("an arm per parent").0);
-            let (answer, low) = self.stored_on(reference, parent, next, &active, known);
-            lowest = lowest.min(low);
-            answer
-        });
+        let answer = parents
+            .into_iter()
+            .all(
+                |parent| {
+                    let next = incoming.as_ref().map_or(expected, |incoming| {
+                        incoming.iter().find(|(_, from)| cfg::id(*from) == parent).expect("an arm per parent").0
+                    });
+                    let (answer, low) = self.stored_on(reference, parent, next, &active, known);
+                    lowest = lowest.min(low);
+                    answer
+                },
+            );
         (answer, lowest)
     }
 
     /// What memory says `reference` holds once `inst` has run.
-    fn after(&mut self, inst: InstId, reference: &MemRef) -> Option<Known> {
+    fn after(
+        &mut self,
+        inst: InstId,
+        reference: &MemRef,
+    ) -> Option<Known> {
         let unit = self.unit;
         let calls = Calls::default();
         let cells = self.memory.get_or_insert_with(|| consts::cells(unit, &calls, None, None, None, None, None));
@@ -333,33 +425,54 @@ impl _Exit<'_> {
 }
 
 /// An integer constant as a fact.
-fn _known(unit: &Unit, operand: Operand) -> Option<Known> {
+fn _known(
+    unit: &Unit,
+    operand: Operand,
+) -> Option<Known> {
     let bits = unit.int_constant(operand)?;
     let width = unit.int_bits(operand)?;
     Some(Known::new(masked(&BigInt::from(bits), width), width))
 }
 
 /// Whether two references name the same bytes the same way.
-fn _same_cell(one: &MemRef, other: &MemRef) -> bool {
-    (one.root, one.disp, one.base, one.scale, one.segment, one.width) == (other.root, other.disp, other.base, other.scale, other.segment, other.width)
+fn _same_cell(
+    one: &MemRef,
+    other: &MemRef,
+) -> bool {
+    (one.root, one.disp, one.base, one.scale, one.segment, one.width)
+        == (other.root, other.disp, other.base, other.scale, other.segment, other.width)
 }
 
 /// Whether `inst` stores to an object's fixed or invariantly indexed cell
 /// that nothing else in the loop reads or writes.
-fn _unobserved(unit: &Unit, inst: InstId, operations: &[InstId], references: &IndexMap<InstId, MemRef>, address_values: &dyn Fn(ValueId) -> bool) -> bool {
-    if !matches!(unit.function.instruction(inst).opcode, Opcode::Store { volatile: false, .. }) {
+fn _unobserved(
+    unit: &Unit,
+    inst: InstId,
+    operations: &[InstId],
+    references: &IndexMap<InstId, MemRef>,
+    address_values: &dyn Fn(ValueId) -> bool,
+) -> bool {
+    if !matches!(
+        unit.function.instruction(inst).opcode,
+        Opcode::Store { volatile: false, .. }
+    ) {
         return false;
     }
     let Some(reference) = references.get(&inst) else { return false };
     if !reference.object || reference.segment.is_some() || reference.base.is_some_and(|base| !address_values(base)) {
         return false;
     }
-    if matches!(reference.root, Some(Operand::Value(root)) if !address_values(root)) {
+    if matches!(
+        reference.root,
+        Some(Operand::Value(root)) if !address_values(root)
+    ) {
         return false;
     }
-    operations.iter().filter(|&&one| one != inst).filter_map(|one| references.get(one)).all(|other| {
-        !regions::overlapping(reference, other, None, None, unit.program).unwrap_or(true)
-    })
+    operations
+        .iter()
+        .filter(|&&one| one != inst)
+        .filter_map(|one| references.get(one))
+        .all(|other| !regions::overlapping(reference, other, None, None, unit.program).unwrap_or(true))
 }
 
 #[cfg(test)]

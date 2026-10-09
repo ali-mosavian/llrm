@@ -2,56 +2,49 @@
 //! does it there, with that pass's tests. A pass asks llrm-analysis for
 //! its facts and names nothing about the machine.
 
+pub mod addresssink;
 pub mod algebraic;
-pub mod canonical;
-#[cfg(test)]
-mod corpus_tests;
-#[cfg(test)]
-mod pipeline_ported_tests;
-pub mod cfg;
-pub mod counting;
-pub mod dead;
-pub mod dse;
-pub mod decide;
-pub mod edges;
-pub mod exitfold;
-pub mod expand;
-pub mod exitsink;
-pub mod fill;
-pub mod floatfold;
-pub mod floatloop;
 pub mod argpromotion;
-pub mod calleepop;
-pub mod homes;
-pub mod spares;
-pub mod deadargs;
-pub mod inferspace;
-pub mod narrowspace;
-#[cfg(test)]
-mod calleepop_tests;
 #[cfg(test)]
 mod argpromotion_tests;
-#[cfg(test)]
-mod deadargs_tests;
-#[cfg(test)]
-mod inferspace_tests;
-#[cfg(test)]
-mod narrowspace_tests;
-pub mod globalopt;
-pub mod fold;
-pub mod splitcopy;
 pub mod availableexternally;
 #[cfg(test)]
 mod availableexternally_tests;
+pub mod calleepop;
+#[cfg(test)]
+mod calleepop_tests;
+pub mod canonical;
+pub mod cfg;
+#[cfg(test)]
+mod corpus_tests;
+pub mod counting;
+pub mod dead;
+pub mod deadargs;
+#[cfg(test)]
+mod deadargs_tests;
+pub mod decide;
+pub mod dse;
+pub mod edges;
+pub mod exitfold;
+pub mod exitsink;
+pub mod expand;
+pub mod fill;
+pub mod fixednarrow;
+pub mod floatfold;
+pub mod floatloop;
+pub mod fold;
+pub mod gepoffset;
 pub mod globaldce;
 #[cfg(test)]
 mod globaldce_tests;
-pub mod fixednarrow;
-pub mod addresssink;
-pub mod gepoffset;
+pub mod globalopt;
 pub mod gvn;
 pub mod hoist;
+pub mod homes;
 pub mod indvars;
+pub mod inferspace;
+#[cfg(test)]
+mod inferspace_tests;
 pub mod inline;
 pub mod interprocedural;
 pub mod ipacp;
@@ -59,26 +52,33 @@ pub mod jumpthread;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod loadjoins;
+pub mod loopclone;
 pub mod loopexit;
 pub mod loopmotion;
-pub mod loopclone;
 pub mod loopsimplify;
 pub mod lsr;
-pub mod window;
+pub mod narrowspace;
+#[cfg(test)]
+mod narrowspace_tests;
 pub mod peel;
 pub mod pipeline;
+#[cfg(test)]
+mod pipeline_ported_tests;
 pub mod ports;
 pub mod profit;
 pub mod promote;
 pub mod rotate;
+pub mod spares;
 pub mod spill;
+pub mod splitcopy;
+pub mod tailrec;
 #[cfg(test)]
 pub mod testing;
-pub mod tailrec;
 pub mod transform;
-pub mod unroll;
 pub mod trivialunswitch;
+pub mod unroll;
 pub mod unswitch;
+pub mod window;
 // Not ported, meaning nothing where a value is whole: `wholephis` and
 // `wholestores` joined word halves of the old MIR's split values (called
 // from `algebraic`).

@@ -8,10 +8,22 @@ fn int() -> Type {
 }
 
 /// `f(x) { y }` in 16 bytes of code with the body at 4..12, x and y in the frame, lines 3 and 4.
-fn object(variables: Vec<Variable>, mut types: Vec<Type>, format: Format) -> Object {
+fn object(
+    variables: Vec<Variable>,
+    mut types: Vec<Type>,
+    format: Format,
+) -> Object {
     types.push(Type::Procedure { result: Some(0), parameters: vec![0], convention: None });
     let procedure = types.len() - 1;
-    let text = Section { name: "_TEXT".into(), role: Role::Text, near: true, align: 1, image: vec![0x90; 16], spans: vec![[0, 16]], relocs: Vec::new() };
+    let text = Section {
+        name: "_TEXT".into(),
+        role: Role::Text,
+        near: true,
+        align: 1,
+        image: vec![0x90; 16],
+        spans: vec![[0, 16]],
+        relocs: Vec::new(),
+    };
     let function = Function {
         name: "f".into(),
         symbol: 0,
@@ -34,29 +46,47 @@ fn object(variables: Vec<Variable>, mut types: Vec<Type>, format: Format) -> Obj
         files: vec![llrm_object::debug::File { name: "f.c".into(), checksum: None }],
         types,
         functions: vec![function],
-        lines: vec![Line { section: 0, offset: 0, file: 0, line: 3, column: 0 }, Line { section: 0, offset: 8, file: 0, line: 4, column: 0 }],
+        lines: vec![
+            Line { section: 0, offset: 0, file: 0, line: 3, column: 0 },
+            Line { section: 0, offset: 8, file: 0, line: 4, column: 0 },
+        ],
         ..Info::default()
     };
     Object {
         name: "f.c".into(),
         arch: Arch::I386,
         sections: vec![text],
-        symbols: vec![Symbol { name: "_f".into(), binding: Binding::Public, definition: Definition::Defined { section: 0, offset: 0 }, group: None }],
+        symbols: vec![Symbol {
+            name: "_f".into(),
+            binding: Binding::Public,
+            definition: Definition::Defined { section: 0, offset: 0 },
+            group: None,
+        }],
         omf_groups: Vec::new(),
         debug: Some(info),
     }
 }
 
-fn frame(name: &str, disp: i64) -> Variable {
+fn frame(
+    name: &str,
+    disp: i64,
+) -> Variable {
     Variable { name: name.into(), r#type: 0, kind: Kind::Local, location: Location::Frame { disp } }
 }
 
-fn written(variables: Vec<Variable>, types: Vec<Type>, format: Format) -> Result<Object, Unsupported> {
+fn written(
+    variables: Vec<Variable>,
+    types: Vec<Type>,
+    format: Format,
+) -> Result<Object, Unsupported> {
     let made = object(variables, types, format);
     expanded(&made, made.debug.as_ref().unwrap())
 }
 
-fn named<'a>(made: &'a Object, name: &str) -> (usize, &'a Section) {
+fn named<'a>(
+    made: &'a Object,
+    name: &str,
+) -> (usize, &'a Section) {
     made.sections.iter().enumerate().find(|(_, one)| one.name == name).unwrap_or_else(|| panic!("no {name}"))
 }
 
@@ -85,10 +115,18 @@ fn a_unit_header_says_its_length_its_version_and_where_its_abbreviations_are() {
         let made = written(vec![frame("x", 8)], vec![int()], Format::Dwarf { version }).unwrap();
         let (abbrev, _) = named(&made, ".debug_abbrev");
         let (_, info) = named(&made, ".debug_info");
-        assert_eq!(u32::from_le_bytes(info.image[..4].try_into().unwrap()) as usize, info.image.len() - 4, "version {version}");
+        assert_eq!(
+            u32::from_le_bytes(info.image[..4].try_into().unwrap()) as usize,
+            info.image.len() - 4,
+            "version {version}"
+        );
         assert_eq!(u16::from_le_bytes([info.image[4], info.image[5]]), version);
         assert_eq!(info.image[size_at], 4, "an i386 address");
-        let reloc = info.relocs.iter().find(|one| one.at == offset_at).unwrap_or_else(|| panic!("no relocation at the abbreviation offset, version {version}"));
+        let reloc = info
+            .relocs
+            .iter()
+            .find(|one| one.at == offset_at)
+            .unwrap_or_else(|| panic!("no relocation at the abbreviation offset, version {version}"));
         assert_eq!((reloc.target, reloc.addend), (Target::Section(abbrev), 0));
     }
 }
@@ -140,10 +178,17 @@ fn what_dwarf_cannot_say_is_refused_by_name() {
     basic.r#type = 1;
     assert!(written(vec![basic], vec![int(), array], Format::Default).unwrap_err().0.contains("BASIC array"));
     let high = Variable { name: "h".into(), r#type: 0, kind: Kind::Local, location: Location::Register("ah".into()) };
-    assert!(written(vec![high], vec![int()], Format::Default).unwrap_err().0.contains("register ah has no DWARF number"));
+    assert!(
+        written(vec![high], vec![int()], Format::Default).unwrap_err().0.contains("register ah has no DWARF number")
+    );
     // A list of one that holds neither a frame cell nor a register (a static, say) has no expression here.
     let range = Range { section: 0, offset: 0, length: 4 };
-    let moved = Variable { name: "m".into(), r#type: 0, kind: Kind::Local, location: Location::List(vec![(range, Location::Static { symbol: 0, disp: 0 })]) };
+    let moved = Variable {
+        name: "m".into(),
+        r#type: 0,
+        kind: Kind::Local,
+        location: Location::List(vec![(range, Location::Static { symbol: 0, disp: 0 })]),
+    };
     assert!(written(vec![moved], vec![int()], Format::Default).unwrap_err().0.contains("holds frame cells, registers"));
 }
 
@@ -159,7 +204,12 @@ fn a_format_that_is_not_dwarf_is_refused() {
 /// A register is DW_OP_reg0 + its number, and a number past 31 is DW_OP_regx.
 #[test]
 fn a_registers_location_is_its_dwarf_number() {
-    let made = written(vec![Variable { name: "r".into(), r#type: 0, kind: Kind::Local, location: Location::Register("eax".into()) }], vec![int()], Format::Default).unwrap();
+    let made = written(
+        vec![Variable { name: "r".into(), r#type: 0, kind: Kind::Local, location: Location::Register("eax".into()) }],
+        vec![int()],
+        Format::Default,
+    )
+    .unwrap();
     let (_, info) = named(&made, ".debug_info");
     assert!(info.image.windows(2).any(|pair| pair == [1, 0x50]), "a one-byte expression, DW_OP_reg0");
 }
@@ -173,7 +223,8 @@ fn skipped(reason: &str) {
 }
 
 fn dwarfdump() -> Option<std::path::PathBuf> {
-    let mut dirs: Vec<std::path::PathBuf> = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
+    let mut dirs: Vec<std::path::PathBuf> =
+        std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
     dirs.push("/usr/lib/llvm-20/bin".into());
     dirs.iter().flat_map(|dir| [dir.join("llvm-dwarfdump"), dir.join("llvm-dwarfdump-20")]).find(|path| path.exists())
 }
@@ -192,22 +243,48 @@ fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
         for version in [4u16, 5] {
             let types = vec![
                 int(),
-                Type::Struct { name: "pt".into(), bytes: 8, fields: vec![llrm_object::debug::Field { name: "x".into(), r#type: 0, offset: 0, bits: None }, llrm_object::debug::Field { name: "f".into(), r#type: 0, offset: 4, bits: Some((3, 5)) }], union: false },
+                Type::Struct {
+                    name: "pt".into(),
+                    bytes: 8,
+                    fields: vec![
+                        llrm_object::debug::Field { name: "x".into(), r#type: 0, offset: 0, bits: None },
+                        llrm_object::debug::Field { name: "f".into(), r#type: 0, offset: 4, bits: Some((3, 5)) },
+                    ],
+                    union: false,
+                },
                 Type::Array { element: 1, bytes: Some(32) },
                 Type::Pointer { target: 1, bytes: 4, reach: Reach::Near },
             ];
             let mut made = object(
                 vec![
                     frame("x", 8),
-                    Variable { name: "s".into(), r#type: 2, kind: Kind::Local, location: Location::Frame { disp: -40 } },
-                    Variable { name: "p".into(), r#type: 3, kind: Kind::Parameter, location: Location::Register("eax".into()) },
-                    Variable { name: "g".into(), r#type: 0, kind: Kind::Local, location: Location::Static { symbol: 0, disp: 4 } },
+                    Variable {
+                        name: "s".into(),
+                        r#type: 2,
+                        kind: Kind::Local,
+                        location: Location::Frame { disp: -40 },
+                    },
+                    Variable {
+                        name: "p".into(),
+                        r#type: 3,
+                        kind: Kind::Parameter,
+                        location: Location::Register("eax".into()),
+                    },
+                    Variable {
+                        name: "g".into(),
+                        r#type: 0,
+                        kind: Kind::Local,
+                        location: Location::Static { symbol: 0, disp: 4 },
+                    },
                     // In eax over the first seven bytes, then in its frame cell: a list of two.
                     Variable {
                         name: "q".into(),
                         r#type: 0,
                         kind: Kind::Parameter,
-                        location: Location::List(vec![(Range { section: 0, offset: 0, length: 7 }, Location::Register("eax".into())), (Range { section: 0, offset: 7, length: 9 }, Location::Frame { disp: -4 })]),
+                        location: Location::List(vec![
+                            (Range { section: 0, offset: 0, length: 7 }, Location::Register("eax".into())),
+                            (Range { section: 0, offset: 7, length: 9 }, Location::Frame { disp: -4 }),
+                        ]),
                     },
                 ],
                 types,
@@ -224,16 +301,28 @@ fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
             std::fs::write(&path, bytes).unwrap();
             let said = std::process::Command::new(&dump).arg("--verify").arg(&path).output().unwrap();
             let text = format!("{}{}", String::from_utf8_lossy(&said.stdout), String::from_utf8_lossy(&said.stderr));
-            assert!(said.status.success() && text.trim_end().ends_with("No errors.") && !text.contains("warning"), "{bits} DWARF {version}:\n{text}");
+            assert!(
+                said.status.success() && text.trim_end().ends_with("No errors.") && !text.contains("warning"),
+                "{bits} DWARF {version}:\n{text}"
+            );
             let shown = std::process::Command::new(&dump).arg("--debug-info").arg(&path).output().unwrap();
             let shown = String::from_utf8_lossy(&shown.stdout);
-            for expected in ["DW_AT_name\t(\"pt\")", "DW_AT_bit_size", "DW_AT_upper_bound\t(3)", "DW_OP_reg0", "DW_OP_addr"] {
+            for expected in
+                ["DW_AT_name\t(\"pt\")", "DW_AT_bit_size", "DW_AT_upper_bound\t(3)", "DW_OP_reg0", "DW_OP_addr"]
+            {
                 assert!(shown.contains(expected), "{bits} DWARF {version}: no {expected} in\n{shown}");
             }
             // The list: register 0 over [0, 7) and fbreg -4 over [7, 16), in the section of lists its version has.
-            let lists = std::process::Command::new(&dump).arg(if version >= 5 { "--debug-loclists" } else { "--debug-loc" }).arg(&path).output().unwrap();
+            let lists = std::process::Command::new(&dump)
+                .arg(if version >= 5 { "--debug-loclists" } else { "--debug-loc" })
+                .arg(&path)
+                .output()
+                .unwrap();
             let lists = String::from_utf8_lossy(&lists.stdout);
-            assert!(lists.contains("DW_OP_reg0 ") && lists.contains("DW_OP_fbreg -4"), "{bits} DWARF {version}: the list in\n{lists}");
+            assert!(
+                lists.contains("DW_OP_reg0 ") && lists.contains("DW_OP_fbreg -4"),
+                "{bits} DWARF {version}: the list in\n{lists}"
+            );
         }
     }
 }
@@ -246,13 +335,18 @@ fn a_removed_variable_has_no_location_and_the_others_have_theirs() {
         skipped("llvm-dwarfdump is not installed");
         return;
     };
-    let removed = Variable { name: "gone".into(), r#type: 0, kind: Kind::Parameter, location: Location::List(Vec::new()) };
+    let removed =
+        Variable { name: "gone".into(), r#type: 0, kind: Kind::Parameter, location: Location::List(Vec::new()) };
     let made = written(vec![removed, frame("x", 8)], vec![int()], Format::Default).unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let path = scratch.path().join("x.o");
     std::fs::write(&path, llrm_elf32::write(&made).unwrap()).unwrap();
     let said = std::process::Command::new(&dump).arg("--verify").arg(&path).output().unwrap();
-    assert!(String::from_utf8_lossy(&said.stdout).trim_end().ends_with("No errors."), "{}", String::from_utf8_lossy(&said.stdout));
+    assert!(
+        String::from_utf8_lossy(&said.stdout).trim_end().ends_with("No errors."),
+        "{}",
+        String::from_utf8_lossy(&said.stdout)
+    );
     let shown = std::process::Command::new(&dump).arg("--debug-info").arg(&path).output().unwrap();
     let shown = String::from_utf8_lossy(&shown.stdout).into_owned();
     let parameter = &shown[shown.find("DW_AT_name\t(\"gone\")").expect("the parameter")..];
@@ -262,9 +356,9 @@ fn a_removed_variable_has_no_location_and_the_others_have_theirs() {
     assert!(local.contains("DW_OP_fbreg +8"), "{local}");
 }
 
-/// A function the code gives no frame register is found from the canonical frame address: `-g` kept `ebp` for every function with
-/// a variable, which cost the code a `push ebp` a build without `-g` does not have. A cell the register would have addressed at
-/// `disp` is `disp - bias` from the address.
+/// A function the code gives no frame register is found from the canonical frame address: `-g` kept `ebp` for every
+/// function with a variable, which cost the code a `push ebp` a build without `-g` does not have. A cell the register
+/// would have addressed at `disp` is `disp - bias` from the address.
 #[test]
 fn a_frame_cell_is_found_from_the_canonical_frame_address_where_the_code_keeps_no_register() {
     let Some(dump) = dwarfdump() else {
@@ -289,13 +383,23 @@ fn a_frame_cell_is_found_from_the_canonical_frame_address_where_the_code_keeps_n
 #[test]
 fn a_functions_frame_rows_are_the_cfa_instructions_the_dwarf_standard_gives() {
     use llrm_object::debug::FrameRow;
-    let row = |offset, register: &str, cfa, saved: &[(&str, i64)]| FrameRow { offset, cfa_register: register.into(), cfa_offset: cfa, saved: saved.iter().map(|&(name, at)| (name.to_owned(), at)).collect() };
+    let row = |offset, register: &str, cfa, saved: &[(&str, i64)]| FrameRow {
+        offset,
+        cfa_register: register.into(),
+        cfa_offset: cfa,
+        saved: saved.iter().map(|&(name, at)| (name.to_owned(), at)).collect(),
+    };
     let mut made = object(Vec::new(), vec![int()], Format::Dwarf { version: 4 });
     let info = made.debug.as_mut().unwrap();
     let register = |name: &str, number| Register { name: name.into(), bits: 32, dwarf: Some(number), codeview: None };
     info.registers.extend([register("esp", 4), register("eip", 8)]);
     info.return_register = "eip".into();
-    info.functions[0].frame = vec![row(0, "esp", 4, &[]), row(1, "esp", 8, &[("ebp", -8)]), row(3, "ebp", 8, &[("ebp", -8)]), row(70, "esp", 4, &[])];
+    info.functions[0].frame = vec![
+        row(0, "esp", 4, &[]),
+        row(1, "esp", 8, &[("ebp", -8)]),
+        row(3, "ebp", 8, &[("ebp", -8)]),
+        row(70, "esp", 4, &[]),
+    ];
     let written = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
     let image = &named(&written, ".debug_frame").1.image;
     let cie = [0x10, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 4, 0, 4, 0, 1, 0x7C, 8, 0x0C, 4, 4, 0x88, 1];
@@ -315,8 +419,14 @@ fn a_base_type_is_named_as_the_source_spells_it() {
         let made = written(Vec::new(), types, Format::Dwarf { version: 4 }).unwrap();
         named(&made, ".debug_str").1.image.clone()
     };
-    let has = |image: &[u8], name: &str| image.windows(name.len() + 2).any(|window| window[0] == 0 && &window[1..=name.len()] == name.as_bytes() && window[name.len() + 1] == 0) || image.starts_with(name.as_bytes());
-    let spelled = strings(vec![Type::Basic { name: "unsigned long".into(), scalar: Scalar::Int { bytes: 4, signed: false } }]);
+    let has = |image: &[u8], name: &str| {
+        image
+            .windows(name.len() + 2)
+            .any(|window| window[0] == 0 && &window[1..=name.len()] == name.as_bytes() && window[name.len() + 1] == 0)
+            || image.starts_with(name.as_bytes())
+    };
+    let spelled =
+        strings(vec![Type::Basic { name: "unsigned long".into(), scalar: Scalar::Int { bytes: 4, signed: false } }]);
     assert!(has(&spelled, "unsigned long") && !has(&spelled, "uint32_t"), "{:?}", String::from_utf8_lossy(&spelled));
     let plain = strings(vec![Type::Scalar(Scalar::Int { bytes: 4, signed: false })]);
     assert!(has(&plain, "uint32_t"), "{:?}", String::from_utf8_lossy(&plain));

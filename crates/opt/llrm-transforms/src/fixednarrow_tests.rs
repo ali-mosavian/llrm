@@ -35,7 +35,10 @@ fn narrowed(text: &str) -> llrm_mir::module::Module {
     module
 }
 
-fn body(module: &llrm_mir::module::Module, name: &str) -> String {
+fn body(
+    module: &llrm_mir::module::Module,
+    name: &str,
+) -> String {
     let text = printed(module);
     let start = text.find(&format!("@{name}(")).expect("the function");
     text[start..].split("\n}\n").next().unwrap().to_owned()
@@ -98,7 +101,13 @@ b0:
 fn a_doubled_factor_leaves_the_product_for_the_scale() {
     let module = narrowed(SHIFTED);
     let twice = body(&module, "twice");
-    assert!(twice.contains("mul i32 %a, %b") && twice.contains("ashr i32 %") && twice.contains(", 7") && !twice.contains("smul.fix"), "{twice}");
+    assert!(
+        twice.contains("mul i32 %a, %b")
+            && twice.contains("ashr i32 %")
+            && twice.contains(", 7")
+            && !twice.contains("smul.fix"),
+        "{twice}"
+    );
     for (a, b) in [(-1_i64, 1_i64), (3, -5), (-1000, 1000), (255, 1), (0, 7)] {
         let args = [a, b].map(|n| Val::Int { bits: n as u128 & 0xFFFF_FFFF, width: 32 }).to_vec();
         let Ok(Val::Int { bits, .. }) = run(&module, "twice", args, 1000) else { panic!() };

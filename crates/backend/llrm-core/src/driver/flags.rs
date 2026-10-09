@@ -4,7 +4,6 @@
 use std::path::PathBuf;
 
 use llrm_target::object::Format;
-
 use llrm_transforms::inline::Threshold;
 use llrm_transforms::pipeline;
 
@@ -40,7 +39,11 @@ impl Level {
             "s" => Self::Os,
             "z" => Self::Oz,
             "g" => Self::Og,
-            _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Omax, -Os, -Oz or -Og")),
+            _ => {
+                return Err(format!(
+                    "unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Omax, -Os, -Oz or -Og"
+                ));
+            }
         })
     }
 
@@ -65,7 +68,15 @@ const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 17] = [
     ("unroll-loops", |options, on| options.unroll = on),
     ("peel-loops", |options, on| options.peel = on),
     ("inline-functions-called-once", |options, on| options.inline.last = on),
-    ("inline-functions", |options, on| options.inline = if !on { Threshold { limit: 0, ..options.inline } } else if options.inline.limit == 0 { Threshold { limit: Threshold::default().limit, ..options.inline } } else { options.inline }),
+    ("inline-functions", |options, on| {
+        options.inline = if !on {
+            Threshold { limit: 0, ..options.inline }
+        } else if options.inline.limit == 0 {
+            Threshold { limit: Threshold::default().limit, ..options.inline }
+        } else {
+            options.inline
+        }
+    }),
     ("strength-reduce", |options, on| options.strength = on),
     ("unswitch-loops", |options, on| options.unswitch = on),
     ("ipa-cp-clone", |options, on| options.inline.cp_clone = on),
@@ -96,15 +107,26 @@ pub struct Sanitize {
 
 impl Sanitize {
     /// Each check `list` names, `undefined` all of them, set to `on`.
-    fn set(&mut self, list: &str, on: bool) -> Result<(), String> {
+    fn set(
+        &mut self,
+        list: &str,
+        on: bool,
+    ) -> Result<(), String> {
         for name in list.split(',') {
             match name {
                 "bounds" => self.bounds = on,
                 "integer-divide-by-zero" => self.integer_divide_by_zero = on,
                 "signed-integer-overflow" => self.signed_integer_overflow = on,
                 "stack" => self.stack = on,
-                "undefined" => *self = Self { bounds: on, integer_divide_by_zero: on, signed_integer_overflow: on, stack: self.stack },
-                _ => return Err(format!("unknown sanitizer {name}; choose bounds, integer-divide-by-zero, signed-integer-overflow, stack or undefined")),
+                "undefined" => {
+                    *self =
+                        Self { bounds: on, integer_divide_by_zero: on, signed_integer_overflow: on, stack: self.stack }
+                }
+                _ => {
+                    return Err(format!(
+                        "unknown sanitizer {name}; choose bounds, integer-divide-by-zero, signed-integer-overflow, stack or undefined"
+                    ));
+                }
             }
         }
         Ok(())
@@ -128,7 +150,8 @@ pub struct Flags {
     /// `-m[no-]stack-is-data`: whether the stack lives in the data group.
     stack_is_data: Option<bool>,
     far_bss: Option<bool>,
-    /// `--clocks-per-byte N`: the clocks an inline must save for each byte of code it adds (default 16; 0 allows no growth).
+    /// `--clocks-per-byte N`: the clocks an inline must save for each byte of code it adds (default 16; 0 allows no
+    /// growth).
     milliclocks_per_byte: Option<i64>,
     pub output: Option<PathBuf>,
     /// `-S`: assembly rather than an object.
@@ -142,7 +165,8 @@ pub struct Flags {
     pub debug_format: llrm_object::debug::Format,
     /// `-fobject-format=`: the object format to write, where the target has more than its default.
     pub object_format: Option<Format>,
-    /// `-mabi=`: the ABI an unmarked function has, by the family name the target's `calling.toml` gives; its default without.
+    /// `-mabi=`: the ABI an unmarked function has, by the family name the target's `calling.toml` gives; its default
+    /// without.
     pub abi: Option<String>,
     /// `-fstack-usage`.
     pub stack_usage: bool,
@@ -152,7 +176,27 @@ pub struct Flags {
 
 impl Default for Flags {
     fn default() -> Self {
-        Self { wrapv: false, level: Level::O2, passes: Vec::new(), march: None, mtune: None, machine: None, mode: None, stack_is_data: None, far_bss: None, milliclocks_per_byte: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false, abi: None, debug_format: Default::default(), object_format: None, stack_usage: false, stack_limit: None }
+        Self {
+            wrapv: false,
+            level: Level::O2,
+            passes: Vec::new(),
+            march: None,
+            mtune: None,
+            machine: None,
+            mode: None,
+            stack_is_data: None,
+            far_bss: None,
+            milliclocks_per_byte: None,
+            output: None,
+            assembly: false,
+            sanitize: Sanitize::default(),
+            debug: false,
+            abi: None,
+            debug_format: Default::default(),
+            object_format: None,
+            stack_usage: false,
+            stack_limit: None,
+        }
     }
 }
 
@@ -160,7 +204,11 @@ impl Flags {
     /// Takes `argv[*at]`, and its value, when it is one of these options,
     /// leaving `*at` on the last argument taken. False leaves it to the
     /// frontend.
-    pub fn take(&mut self, argv: &[String], at: &mut usize) -> Result<bool, String> {
+    pub fn take(
+        &mut self,
+        argv: &[String],
+        at: &mut usize,
+    ) -> Result<bool, String> {
         let argument = argv[*at].as_str();
         let (flag, inline) = match argument.split_once('=') {
             Some((flag, value)) if flag.starts_with("--") => (flag, Some(value)),
@@ -179,7 +227,9 @@ impl Flags {
             "-g" => (self.debug, self.debug_format) = (true, Default::default()),
             "-g0" => self.debug = false,
             "-gcodeview" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::CodeView),
-            "-gdwarf" | "-gdwarf-5" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 5 }),
+            "-gdwarf" | "-gdwarf-5" => {
+                (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 5 })
+            }
             "-gdwarf-4" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 4 }),
             "-gtd" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::TurboDebugger),
             "-mstack-is-data" => self.stack_is_data = Some(true),
@@ -189,7 +239,10 @@ impl Flags {
             "--clocks-per-byte" => {
                 let text = value("--clocks-per-byte")?;
                 let clocks = text.parse::<f64>().ok().filter(|clocks| clocks.is_finite() && *clocks >= 0.0);
-                self.milliclocks_per_byte = Some((clocks.ok_or_else(|| format!("--clocks-per-byte {text}: expected a number of clocks"))? * 1000.0).round() as i64);
+                self.milliclocks_per_byte = Some(
+                    (clocks.ok_or_else(|| format!("--clocks-per-byte {text}: expected a number of clocks"))? * 1000.0)
+                        .round() as i64,
+                );
             }
             "--machine" => self.machine = Some(PathBuf::from(value("--machine")?)),
             _ if flag.starts_with("-O") => self.level = Level::parse(&flag[2..])?,
@@ -199,10 +252,14 @@ impl Flags {
             "-fstack-usage" => self.stack_usage = true,
             _ if flag.starts_with("-Wstack-usage=") => {
                 let limit = &flag["-Wstack-usage=".len()..];
-                self.stack_limit = Some(limit.parse().map_err(|_| format!("-Wstack-usage={limit}: expected a number of bytes"))?);
+                self.stack_limit =
+                    Some(limit.parse().map_err(|_| format!("-Wstack-usage={limit}: expected a number of bytes"))?);
             }
             _ if flag.starts_with("-mabi=") => self.abi = Some(flag["-mabi=".len()..].to_owned()),
-            _ if flag.starts_with("-fobject-format=") => self.object_format = Some(Format::parse(&flag["-fobject-format=".len()..]).map_err(|error| format!("{flag}: {error}"))?),
+            _ if flag.starts_with("-fobject-format=") => {
+                self.object_format =
+                    Some(Format::parse(&flag["-fobject-format=".len()..]).map_err(|error| format!("{flag}: {error}"))?)
+            }
             "-fwrapv" | "-fno-wrapv" => self.wrapv = flag == "-fwrapv",
             "-ftrapv" | "-fno-trapv" => self.sanitize.signed_integer_overflow = flag == "-ftrapv",
             _ if flag.starts_with("-fsanitize=") => self.sanitize.set(&flag["-fsanitize=".len()..], true)?,
@@ -212,9 +269,15 @@ impl Flags {
                     Some(name) => (name, false),
                     None => (&flag[2..], true),
                 };
-                let known = PASSES.iter().position(|(one, _)| *one == name).ok_or_else(|| {
-                    format!("unknown option {flag}; the passes are {}", PASSES.map(|(one, _)| format!("-f{one}")).join(", "))
-                })?;
+                let known = PASSES
+                    .iter()
+                    .position(|(one, _)| *one == name)
+                    .ok_or_else(
+                        || format!(
+                            "unknown option {flag}; the passes are {}",
+                            PASSES.map(|(one, _)| format!("-f{one}")).join(", ")
+                        ),
+                    )?;
                 self.passes.push((known, on));
             }
             _ => return Ok(false),
@@ -223,12 +286,21 @@ impl Flags {
     }
 
     /// The convention an unmarked function has on `target`: the `-mabi=` family's, else the target's default.
-    pub fn convention(&self, target: &dyn llrm_target::Target) -> Result<&'static llrm_target::calling::Convention, String> {
-        target.calling().chosen(self.abi.as_deref()).map_err(|error| format!("-mabi={}: {error}", self.abi.as_deref().unwrap_or_default()))
+    pub fn convention(
+        &self,
+        target: &dyn llrm_target::Target,
+    ) -> Result<&'static llrm_target::calling::Convention, String> {
+        target
+            .calling()
+            .chosen(self.abi.as_deref())
+            .map_err(|error| format!("-mabi={}: {error}", self.abi.as_deref().unwrap_or_default()))
     }
 
     /// The object format to write for `target`: `-fobject-format=`, else the target's default.
-    pub fn format(&self, target: &dyn llrm_target::Target) -> Result<Format, String> {
+    pub fn format(
+        &self,
+        target: &dyn llrm_target::Target,
+    ) -> Result<Format, String> {
         target.object().choose(target.name(), self.object_format)
     }
 
@@ -259,7 +331,10 @@ impl Flags {
     }
 
     /// The CPU `-mtune`, else `-march`, names for `target`, if either is given.
-    fn cpu(&self, target: &dyn llrm_target::Target) -> Result<Option<String>, String> {
+    fn cpu(
+        &self,
+        target: &dyn llrm_target::Target,
+    ) -> Result<Option<String>, String> {
         let (option, name) = match (&self.mtune, &self.march) {
             (Some(name), _) => ("-mtune", name),
             (None, Some(name)) => ("-march", name),
@@ -272,7 +347,11 @@ impl Flags {
     }
 
     /// `default`, or the `--machine` description, on the CPU `-march` or `-mtune` names for `target`.
-    pub fn machine(&self, target: &dyn llrm_target::Target, default: Machine) -> Result<Machine, String> {
+    pub fn machine(
+        &self,
+        target: &dyn llrm_target::Target,
+        default: Machine,
+    ) -> Result<Machine, String> {
         let mut machine = match &self.machine {
             Some(path) => Machine { layout: default.layout.clone(), ..Machine::load(path, &default.cpu)? },
             None => default,
@@ -290,8 +369,20 @@ impl Flags {
     }
 
     /// The driver's options for `machine`.
-    pub fn driver(&self, machine: Machine, arch: std::rc::Rc<dyn llrm_target::Target>, selection: &'static crate::backend::isel::Compiled) -> super::Options {
-        super::Options { debug_format: self.debug_format, pipeline: self.pipeline(), stack_usage: self.stack_usage, stack_limit: self.stack_limit, abi: self.abi.clone(), ..super::Options::new(machine, arch, selection) }
+    pub fn driver(
+        &self,
+        machine: Machine,
+        arch: std::rc::Rc<dyn llrm_target::Target>,
+        selection: &'static crate::backend::isel::Compiled,
+    ) -> super::Options {
+        super::Options {
+            debug_format: self.debug_format,
+            pipeline: self.pipeline(),
+            stack_usage: self.stack_usage,
+            stack_limit: self.stack_limit,
+            abi: self.abi.clone(),
+            ..super::Options::new(machine, arch, selection)
+        }
     }
 }
 

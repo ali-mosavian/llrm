@@ -10,38 +10,33 @@
 //! the outer proxy.
 //!
 //! What changed with the IR:
-//! - A cell is its exact leaf, or else its pointer decomposed (`Key::Ref`)
-//!   over any root: the old `Addr` key, and `_allocation_leaves`' grouping
-//!   by affine root. A leaf of one start takes any stride.
-//! - One LLVM type per cell stands for the old width and float checks
-//!   (`_float_cells`, `_stores_value`, `_converts_integer`,
-//!   `_forwards_float`): a store keeps its type's value.
-//! - A load becomes the stored operand itself, so `_restated` and `_order`
-//!   have nothing to do; the phis are placed here, as `ssa::constructed`
-//!   was not ported.
-//! - `_canonical_leaf_types` types a leaf in both passes: the old `Sroa`
-//!   rewrote the body the old `Promote` then read.
+//! - A cell is its exact leaf, or else its pointer decomposed (`Key::Ref`) over any root: the old `Addr` key, and
+//!   `_allocation_leaves`' grouping by affine root. A leaf of one start takes any stride.
+//! - One LLVM type per cell stands for the old width and float checks (`_float_cells`, `_stores_value`,
+//!   `_converts_integer`, `_forwards_float`): a store keeps its type's value.
+//! - A load becomes the stored operand itself, so `_restated` and `_order` have nothing to do; the phis are placed
+//!   here, as `ssa::constructed` was not ported.
+//! - `_canonical_leaf_types` types a leaf in both passes: the old `Sroa` rewrote the body the old `Promote` then read.
 //!
 //! Dropped, with no rich MIR counterpart:
 //! - `READS`, `_separated`, `split_updates`: an arithmetic memory operand.
 //! - `CELLS`, `Bounds`: the x86 spaces and landmarks `regions` dropped.
-//! - `_initializers`: every object access carries exact provenance, so a
-//!   narrower store into a wider cell blocks both.
-//! - `_allocation_leaves`, `_affine_values`, `_signed`, `_rewritten_refs`:
-//!   no array request; `MemRef::at` decomposes an address.
-//! - `_bounded_leaves`, `_bounded_ref`, `_pointed_ref`: `alias::annotated`
-//!   narrows constant indices and follows exact pointers.
+//! - `_initializers`: every object access carries exact provenance, so a narrower store into a wider cell blocks both.
+//! - `_allocation_leaves`, `_affine_values`, `_signed`, `_rewritten_refs`: no array request; `MemRef::at` decomposes an
+//!   address.
+//! - `_bounded_leaves`, `_bounded_ref`, `_pointed_ref`: `alias::annotated` narrows constant indices and follows exact
+//!   pointers.
 //! - `_split_copies` and its helpers: `splitcopy`, for a `llvm.memcpy`.
 //! - `loop_only`: no caller set it.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_analysis::graph::loops;
 use llrm_analysis::manager::Held;
 use llrm_analysis::memory::{Identity, MemRef, ObjectRef, Provenance, Slice, Unit};
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, regions, ssa};
-use llrm_analysis::graph::loops;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
@@ -78,17 +73,25 @@ fn only_slice(provenance: &Provenance) -> Option<&Slice> {
     if provenance.slices.len() == 1 { provenance.slices.iter().next() } else { None }
 }
 
-fn slice(object: ObjectRef, low: i64, high: i64) -> Slice {
+fn slice(
+    object: ObjectRef,
+    low: i64,
+    high: i64,
+) -> Slice {
     Slice::new(object, low, high, 1, 1).expect("a nonempty exact byte range")
 }
 
 /// The leaf `reference` is, typed as `canonical` says where it has no type.
-pub fn _leaf(reference: &MemRef, canonical: &Canonical) -> Option<_Leaf> {
+pub fn _leaf(
+    reference: &MemRef,
+    canonical: &Canonical,
+) -> Option<_Leaf> {
     let span = only_slice(reference.provenance.as_ref()?)?;
     // One access is either the dense byte range `[low, low + width)` or one
     // start whose own width is the access's, whatever its stride.
     let width = i64::from(reference.width);
-    let contiguous = (span.width == 1 && span.stride == 1 && span.high - span.low == width) || (span.high - span.low == 1 && span.width == width);
+    let contiguous = (span.width == 1 && span.stride == 1 && span.high - span.low == width)
+        || (span.high - span.low == 1 && span.width == width);
     if !contiguous {
         return None;
     }
@@ -106,7 +109,10 @@ pub fn _leaf(reference: &MemRef, canonical: &Canonical) -> Option<_Leaf> {
 /// Equal ranges are one leaf, disjoint ranges independent leaves. A proper
 /// overlap keeps both ranges in memory and leaves the rest of their object
 /// alone; ambiguous multi-object provenance keeps every slice it names.
-pub fn _blocked<'a>(refs: impl IntoIterator<Item = &'a MemRef>, canonical: &Canonical) -> BTreeSet<Slice> {
+pub fn _blocked<'a>(
+    refs: impl IntoIterator<Item = &'a MemRef>,
+    canonical: &Canonical,
+) -> BTreeSet<Slice> {
     let mut accesses = IndexMap::<ObjectRef, Vec<_Leaf>>::default();
     let mut blocked = BTreeSet::new();
     for reference in refs {
@@ -136,13 +142,20 @@ pub fn _blocked<'a>(refs: impl IntoIterator<Item = &'a MemRef>, canonical: &Cano
 }
 
 /// Whether the reference reaches a byte of its own object that is blocked.
-fn _touches(reference: &MemRef, blocked: &BTreeSet<Slice>) -> bool {
+fn _touches(
+    reference: &MemRef,
+    blocked: &BTreeSet<Slice>,
+) -> bool {
     reference.provenance.as_ref().is_some_and(|provenance| {
         provenance.slices.iter().any(|span| blocked.iter().any(|one| span.object == one.object && span.intersects(one)))
     })
 }
 
-pub fn _key(reference: &MemRef, blocked: &BTreeSet<Slice>, canonical: &Canonical) -> Option<Key> {
+pub fn _key(
+    reference: &MemRef,
+    blocked: &BTreeSet<Slice>,
+    canonical: &Canonical,
+) -> Option<Key> {
     if reference.volatile || _touches(reference, blocked) {
         return None;
     }
@@ -155,9 +168,18 @@ pub fn _key(reference: &MemRef, blocked: &BTreeSet<Slice>, canonical: &Canonical
 }
 
 /// The access a cell is, `width` bytes wide.
-pub fn _reference(key: &Key, width: u32) -> MemRef {
+pub fn _reference(
+    key: &Key,
+    width: u32,
+) -> MemRef {
     match key {
-        Key::Leaf(leaf) => MemRef::reach(width, Provenance { slices: BTreeSet::from([slice(leaf.object.clone(), leaf.low, leaf.high)]), restrict: leaf.restrict.clone() }),
+        Key::Leaf(leaf) => MemRef::reach(
+            width,
+            Provenance {
+                slices: BTreeSet::from([slice(leaf.object.clone(), leaf.low, leaf.high)]),
+                restrict: leaf.restrict.clone(),
+            },
+        ),
         Key::Ref(reference) => MemRef { width, ..reference.clone() },
     }
 }
@@ -172,7 +194,9 @@ pub fn _aggregate_objects<'a>(leaves: impl IntoIterator<Item = &'a Key>) -> BTre
     }
     ranges
         .into_iter()
-        .filter(|(object, parts)| parts.len() > 1 || object.extent.is_some_and(|extent| parts.iter().any(|(low, high)| extent > high - low)))
+        .filter(|(object, parts)| {
+            parts.len() > 1 || object.extent.is_some_and(|extent| parts.iter().any(|(low, high)| extent > high - low))
+        })
         .map(|(object, _)| object)
         .collect()
 }
@@ -190,7 +214,11 @@ pub fn _canonical_leaf_types<'a>(refs: impl IntoIterator<Item = &'a MemRef>) -> 
             types.entry((leaf.object, leaf.low, leaf.high)).or_default().insert(type_class);
         }
     }
-    types.into_iter().filter(|(_, classes)| classes.len() == 1).map(|(key, classes)| (key, classes.into_iter().next().expect("one"))).collect()
+    types
+        .into_iter()
+        .filter(|(_, classes)| classes.len() == 1)
+        .map(|(key, classes)| (key, classes.into_iter().next().expect("one")))
+        .collect()
 }
 
 pub struct Promote;
@@ -200,7 +228,11 @@ impl FunctionPass for Promote {
         "promote"
     }
 
-    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         run(unit, analyses, false, "promote")
     }
 }
@@ -213,12 +245,21 @@ impl FunctionPass for Sroa {
         "sroa"
     }
 
-    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         run(unit, analyses, true, "sroa")
     }
 }
 
-fn run(unit: &mut passes::Unit, analyses: &mut Analyses, aggregate_only: bool, name: &str) -> PreservedAnalyses {
+fn run(
+    unit: &mut passes::Unit,
+    analyses: &mut Analyses,
+    aggregate_only: bool,
+    name: &str,
+) -> PreservedAnalyses {
     // A copy of an aggregate is its leaves' loads and stores before they are promoted.
     let split = aggregate_only && crate::splitcopy::split(unit.context, unit.layout, unit.function, analyses.outer());
     match _promoted(unit.context, unit.layout, unit.function, analyses, aggregate_only) {
@@ -231,12 +272,24 @@ fn run(unit: &mut passes::Unit, analyses: &mut Analyses, aggregate_only: bool, n
 
 /// `function` promoted, or with `aggregate_only` only its aggregates'
 /// leaves; `outer` is its module and target. Whether it changed.
-pub fn promoted(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, aggregate_only: bool) -> Result<bool, String> {
+pub fn promoted(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &Outer,
+    aggregate_only: bool,
+) -> Result<bool, String> {
     _promoted(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())), aggregate_only)
 }
 
 /// `promoted`, `analyses` holding what is known of `function`.
-fn _promoted(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses, aggregate_only: bool) -> Result<bool, String> {
+fn _promoted(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    analyses: &mut Analyses,
+    aggregate_only: bool,
+) -> Result<bool, String> {
     let plan = {
         let accesses = Accesses::managed(context, layout, function, analyses)?;
         let held = Held::of(context, layout, function, analyses, true);
@@ -263,15 +316,23 @@ struct Plan {
     loads: HashMap<InstId, usize>,
 }
 
-/// What `-g` declared that each cell of `plan` is: the variable whose frame object holds its bytes, and where in the variable it
-/// is, none where it is all of it.
-fn named_cells(unit: &Unit, plan: &Plan, metadata: &[llrm_mir::module::MetadataNode]) -> Vec<Option<Named>> {
+/// What `-g` declared that each cell of `plan` is: the variable whose frame object holds its bytes, and where in the
+/// variable it is, none where it is all of it.
+fn named_cells(
+    unit: &Unit,
+    plan: &Plan,
+    metadata: &[llrm_mir::module::MetadataNode],
+) -> Vec<Option<Named>> {
     let declared: Vec<(Operand, llrm_mir::MetadataId, i64)> = unit
         .function
         .debug_records()
         .iter()
         .filter_map(|one| match one.what {
-            llrm_mir::DebugWhat::Declare(address) => Some((address, one.variable, llrm_mir::debuginfo::variable_offset(metadata, unit.context, one.variable)?)),
+            llrm_mir::DebugWhat::Declare(address) => Some((
+                address,
+                one.variable,
+                llrm_mir::debuginfo::variable_offset(metadata, unit.context, one.variable)?,
+            )),
             _ => None,
         })
         .collect();
@@ -284,7 +345,8 @@ fn named_cells(unit: &Unit, plan: &Plan, metadata: &[llrm_mir::module::MetadataN
         let (base, offset) = llrm_mir::valuetracking::underlying(unit.context, unit.layout, unit.function, pointer);
         let Some(offset) = offset else { continue };
         // The variable of that object that starts last at or before the cell.
-        let owner = declared.iter().filter(|(address, _, at)| *address == base && *at <= offset).max_by_key(|(_, _, at)| *at);
+        let owner =
+            declared.iter().filter(|(address, _, at)| *address == base && *at <= offset).max_by_key(|(_, _, at)| *at);
         if let Some(&(_, variable, at)) = owner {
             let bytes = unit.layout.alloc_size(&unit.context.types, plan.types[slot]) as u32;
             named[slot] = Some((variable, offset - at, bytes));
@@ -310,7 +372,10 @@ struct Named {
 
 impl Named {
     /// What a debugger is told when the cell has `value`.
-    fn is(&self, value: Operand) -> llrm_mir::DebugWhat {
+    fn is(
+        &self,
+        value: Operand,
+    ) -> llrm_mir::DebugWhat {
         match self.piece {
             Some((offset, bytes)) => llrm_mir::DebugWhat::Piece { value, offset, bytes },
             None => llrm_mir::DebugWhat::Value(value),
@@ -319,7 +384,10 @@ impl Named {
 }
 
 /// The type `inst` loads or stores.
-fn accessed(unit: &Unit, inst: InstId) -> Option<TypeId> {
+fn accessed(
+    unit: &Unit,
+    inst: InstId,
+) -> Option<TypeId> {
     let instruction = unit.function.instruction(inst);
     match instruction.opcode {
         Opcode::Load { .. } => Some(instruction.ty),
@@ -328,20 +396,30 @@ fn accessed(unit: &Unit, inst: InstId) -> Option<TypeId> {
     }
 }
 
-fn is_load(unit: &Unit, inst: InstId) -> bool {
+fn is_load(
+    unit: &Unit,
+    inst: InstId,
+) -> bool {
     matches!(unit.function.instruction(inst).opcode, Opcode::Load { .. })
 }
 
 /// Cells whose reads can use a known stored value: touched more than once,
 /// loaded as one type, and available along every path to some load.
-fn plan(unit: &Unit, accesses: &Accesses, aggregate_only: bool) -> Result<Plan, String> {
+fn plan(
+    unit: &Unit,
+    accesses: &Accesses,
+    aggregate_only: bool,
+) -> Result<Plan, String> {
     let refs = &accesses.references;
     if !refs.keys().any(|&inst| is_load(unit, inst)) {
         return Ok(Plan::default());
     }
     let canonical = _canonical_leaf_types(refs.values());
     let blocked = _blocked(refs.values(), &canonical);
-    let keys = refs.iter().filter_map(|(&inst, reference)| _key(reference, &blocked, &canonical).map(|key| (inst, key))).collect::<IndexMap<_, _>>();
+    let keys = refs
+        .iter()
+        .filter_map(|(&inst, reference)| _key(reference, &blocked, &canonical).map(|key| (inst, key)))
+        .collect::<IndexMap<_, _>>();
     let aggregates = aggregate_only.then(|| _aggregate_objects(keys.values()));
     if aggregates.as_ref().is_some_and(BTreeSet::is_empty) {
         return Ok(Plan::default());
@@ -358,7 +436,9 @@ fn plan(unit: &Unit, accesses: &Accesses, aggregate_only: bool) -> Result<Plan, 
     let candidates = seen
         .into_iter()
         .filter(|(key, times)| *times > 1 && types.get(key).is_some_and(|found| found.len() == 1))
-        .filter(|(key, _)| aggregates.as_ref().is_none_or(|objects| matches!(key, Key::Leaf(leaf) if objects.contains(&leaf.object))))
+        .filter(|(key, _)| {
+            aggregates.as_ref().is_none_or(|objects| matches!(key, Key::Leaf(leaf) if objects.contains(&leaf.object)))
+        })
         .map(|(key, _)| (key.clone(), *types[key].first().expect("one type")))
         .collect::<IndexMap<_, _>>();
     if candidates.is_empty() {
@@ -368,7 +448,12 @@ fn plan(unit: &Unit, accesses: &Accesses, aggregate_only: bool) -> Result<Plan, 
     // An access of another type is no definition or use, only a write.
     let slots = keys
         .iter()
-        .filter_map(|(&inst, key)| candidates.get_full(key).filter(|(_, _, ty)| accessed(unit, inst) == Some(**ty)).map(|(slot, ..)| (inst, slot)))
+        .filter_map(|(&inst, key)| {
+            candidates
+                .get_full(key)
+                .filter(|(_, _, ty)| accessed(unit, inst) == Some(**ty))
+                .map(|(slot, ..)| (inst, slot))
+        })
         .collect::<HashMap<_, _>>();
     // A cell's `!tbaa` type, where every access of it agrees: what keeps a
     // write of another type from reaching it.
@@ -386,27 +471,49 @@ fn plan(unit: &Unit, accesses: &Accesses, aggregate_only: bool) -> Result<Plan, 
     let used = usable.iter().map(|inst| slots[inst]).collect::<BTreeSet<_>>();
     let renumbered = used.iter().enumerate().map(|(new, &old)| (old, new)).collect::<HashMap<_, _>>();
     let types = used.iter().map(|&slot| candidates[slot]).collect();
-    let stores = slots.iter().filter(|(inst, slot)| !is_load(unit, **inst) && used.contains(slot)).map(|(&inst, slot)| (inst, renumbered[slot])).collect();
+    let stores = slots
+        .iter()
+        .filter(|(inst, slot)| !is_load(unit, **inst) && used.contains(slot))
+        .map(|(&inst, slot)| (inst, renumbered[slot]))
+        .collect();
     let loads = usable.into_iter().map(|inst| (inst, renumbered[&slots[&inst]])).collect();
     Ok(Plan { variables: Vec::new(), types, stores, loads })
 }
 
 /// Loads a stored value reaches on every path, with no write between that
 /// may reach its cell.
-fn _available(unit: &Unit, accesses: &Accesses, cells: &IndexMap<Key, TypeId>, typed: &[Option<(std::rc::Rc<str>, std::rc::Rc<[String]>)>], slots: &HashMap<InstId, usize>) -> HashSet<InstId> {
+fn _available(
+    unit: &Unit,
+    accesses: &Accesses,
+    cells: &IndexMap<Key, TypeId>,
+    typed: &[Option<(std::rc::Rc<str>, std::rc::Rc<[String]>)>],
+    slots: &HashMap<InstId, usize>,
+) -> HashSet<InstId> {
     let function = unit.function;
     let Some(entry) = function.entry().map(cfg::id) else { return HashSet::default() };
     let graph = cfg::graph(function);
     let dominance = cfg::Dominance::of(function);
     let reachable = graph.iter().map(|block| block.at).filter(|&at| dominance.reachable(at)).collect::<BTreeSet<_>>();
     let predecessors = loops::predecessors(&graph);
-    let refs = cells.iter().zip(typed).map(|((key, &ty), typed)| MemRef { typed: typed.as_ref().map(|one| one.0.clone()), lineage: typed.as_ref().map(|one| one.1.clone()).unwrap_or_default(), .._reference(key, unit.layout.store_size(&unit.context.types, ty) as u32) }).collect::<Vec<_>>();
+    let refs = cells
+        .iter()
+        .zip(typed)
+        .map(|((key, &ty), typed)| MemRef {
+            typed: typed.as_ref().map(|one| one.0.clone()),
+            lineage: typed.as_ref().map(|one| one.1.clone()).unwrap_or_default(),
+            .._reference(key, unit.layout.store_size(&unit.context.types, ty) as u32)
+        })
+        .collect::<Vec<_>>();
     // The cells whose address a value is part of: its definition, a phi's
     // on a back edge among them, moves them.
     let mut based = HashMap::<ValueId, Vec<usize>>::default();
     for (at, reference) in refs.iter().enumerate() {
         let operands = [reference.root, reference.segment, reference.base.map(Operand::Value)];
-        for value in operands.into_iter().flatten().filter_map(|one| if let Operand::Value(value) = one { Some(value) } else { None }) {
+        for value in operands
+            .into_iter()
+            .flatten()
+            .filter_map(|one| if let Operand::Value(value) = one { Some(value) } else { None })
+        {
             based.entry(value).or_default().push(at);
         }
     }
@@ -417,7 +524,8 @@ fn _available(unit: &Unit, accesses: &Accesses, cells: &IndexMap<Key, TypeId>, t
     let clobbered = RefCell::new(HashMap::<(InstId, usize), bool>::default());
 
     let entering = |at: i64, leaving: &BTreeMap<i64, Bits>| -> Bits {
-        let parents = predecessors.get(&at).into_iter().flatten().filter(|parent| reachable.contains(parent)).collect::<Vec<_>>();
+        let parents =
+            predecessors.get(&at).into_iter().flatten().filter(|parent| reachable.contains(parent)).collect::<Vec<_>>();
         if parents.is_empty() || at == entry {
             return Bits::new(cells.len());
         }
@@ -451,9 +559,14 @@ fn _available(unit: &Unit, accesses: &Accesses, cells: &IndexMap<Key, TypeId>, t
                 let gone = available
                     .iter()
                     .filter(|&at| {
-                        *clobbered.borrow_mut().entry((inst, at)).or_insert_with(|| {
-                            writes.iter().any(|written| regions::overlapping(&refs[at], written, None, None, unit.program).unwrap_or(true))
-                        })
+                        *clobbered
+                            .borrow_mut()
+                            .entry((inst, at))
+                            .or_insert_with(
+                                || writes.iter().any(|written| {
+                                    regions::overlapping(&refs[at], written, None, None, unit.program).unwrap_or(true)
+                                }),
+                            )
                     })
                     .collect::<Vec<_>>();
                 gone.into_iter().for_each(|at| available.remove(at));
@@ -486,25 +599,52 @@ fn _available(unit: &Unit, accesses: &Accesses, cells: &IndexMap<Key, TypeId>, t
 }
 
 /// Each edge into `block`, by the block it leaves.
-fn edges(function: &Function, block: BlockId) -> Vec<BlockId> {
-    function.block_users(block).iter().filter(|one| function.instruction(one.user).opcode.is_terminator()).filter_map(|one| function.parent(one.user)).collect()
+fn edges(
+    function: &Function,
+    block: BlockId,
+) -> Vec<BlockId> {
+    function
+        .block_users(block)
+        .iter()
+        .filter(|one| function.instruction(one.user).opcode.is_terminator())
+        .filter_map(|one| function.parent(one.user))
+        .collect()
 }
 
 /// `function` with each planned load its cell's stored value: phis where
 /// the stores' dominance frontiers put them, named down the dominator tree.
-fn rewrite(context: &mut Context, function: &mut Function, plan: &Plan) {
+fn rewrite(
+    context: &mut Context,
+    function: &mut Function,
+    plan: &Plan,
+) {
     let entry = cfg::id(function.entry().expect("a defined function"));
     let dominance = cfg::Dominance::of(function);
     let frontiers = dominance.frontiers(function);
     let idom = dominance.immediate_dominators(function);
-    let existing = function.walk().map(|(_, inst)| function.instruction(inst)).filter(|one| one.opcode == Opcode::Phi).filter_map(|one| one.result).collect::<BTreeSet<_>>();
-    let poison = plan.types.iter().map(|&ty| Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison }))).collect::<Vec<_>>();
+    let existing = function
+        .walk()
+        .map(|(_, inst)| function.instruction(inst))
+        .filter(|one| one.opcode == Opcode::Phi)
+        .filter_map(|one| one.result)
+        .collect::<BTreeSet<_>>();
+    let poison = plan
+        .types
+        .iter()
+        .map(|&ty| Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison })))
+        .collect::<Vec<_>>();
 
     // Each phi placed, by block and cell, with the block each input comes from.
     let mut phis = HashMap::<(i64, usize), (InstId, Vec<BlockId>)>::default();
     let mut named_phis = Vec::new();
     for (slot, &ty) in plan.types.iter().enumerate() {
-        let defining = plan.stores.iter().filter(|(_, one)| **one == slot).filter_map(|(inst, _)| function.parent(*inst)).map(cfg::id).collect::<BTreeSet<_>>();
+        let defining = plan
+            .stores
+            .iter()
+            .filter(|(_, one)| **one == slot)
+            .filter_map(|(inst, _)| function.parent(*inst))
+            .map(cfg::id)
+            .collect::<BTreeSet<_>>();
         let mut work = defining.iter().copied().collect::<Vec<_>>();
         let mut placed = BTreeSet::new();
         while let Some(at) = work.pop() {
@@ -532,7 +672,12 @@ fn rewrite(context: &mut Context, function: &mut Function, plan: &Plan) {
     // What the debugger is told of a variable: the phi that merges its paths, from the top of the block on.
     for (block, phi, named) in named_phis {
         let value = function.instruction(phi).result.expect("a phi's value");
-        let first = function.block(block).instructions().iter().copied().find(|&one| function.instruction(one).opcode != Opcode::Phi);
+        let first = function
+            .block(block)
+            .instructions()
+            .iter()
+            .copied()
+            .find(|&one| function.instruction(one).opcode != Opcode::Phi);
         if let Some(first) = first {
             function.add_debug_record_first(first, named.variable, named.is(Operand::Value(value)));
         }
@@ -561,7 +706,8 @@ fn rewrite(context: &mut Context, function: &mut Function, plan: &Plan) {
                 current[slot] = function.instruction(inst).operands[0];
                 // And the value it stores, from the instruction after it on.
                 if let Some(named) = plan.variables.get(slot).copied().flatten()
-                    && let Some(next) = function.block(block).instructions().iter().copied().skip_while(|&one| one != inst).nth(1)
+                    && let Some(next) =
+                        function.block(block).instructions().iter().copied().skip_while(|&one| one != inst).nth(1)
                 {
                     function.add_debug_record_first(next, named.variable, named.is(current[slot]));
                 }

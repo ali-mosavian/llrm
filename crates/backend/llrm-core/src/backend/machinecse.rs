@@ -7,24 +7,20 @@
 //! retain an anchor for the virtual/data-source ownership of a redundant
 //! occurrence.
 
-use crate::support::hash::{HashMap, HashSet};
 use std::sync::Arc;
 
 use iced_x86::Register;
 
-use crate::backend::peephole::{Lane, Lanes, _lanes, id};
+use crate::backend::peephole::{_lanes, Lane, Lanes, id};
 use crate::backend::target;
 use crate::model::ir::{Addr, Loc, Operation, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
+use crate::support::hash::{HashMap, HashSet};
 use crate::support::pyrepr::Repr;
 
-const _REPRODUCIBLE: [(Operation, &str); 4] = [
-    (Operation::Move, "mov"),
-    (Operation::Extend, "movsx"),
-    (Operation::Extend, "movzx"),
-    (Operation::Address, "lea"),
-];
+const _REPRODUCIBLE: [(Operation, &str); 4] =
+    [(Operation::Move, "mov"), (Operation::Extend, "movsx"), (Operation::Extend, "movzx"), (Operation::Address, "lea")];
 
 fn _relocated(where_: &Loc) -> bool {
     match where_ {
@@ -134,7 +130,9 @@ fn _candidate(one: &Insn) -> Result<Option<(Expression, Vec<Lane>, Vec<Lane>)>, 
 /// Explicit and declared physical writes, or None for an opaque boundary.
 fn _written(one: &Insn) -> Option<Lanes> {
     let what = one.what.as_ref()?;
-    if [Operation::Barrier, Operation::Call, Operation::Return, Operation::Fill, Operation::Copy, Operation::Leave].contains(&what.op) {
+    if [Operation::Barrier, Operation::Call, Operation::Return, Operation::Fill, Operation::Copy, Operation::Leave]
+        .contains(&what.op)
+    {
         return None;
     }
     let mut writes = Lanes::new();
@@ -171,7 +169,10 @@ pub enum Token {
 pub type State = HashMap<Lane, Token>;
 
 /// Physical values leaving one block and redundant occurrences within it.
-fn _transfer(block: &LirBlock, incoming: &State) -> Result<(State, HashSet<usize>), String> {
+fn _transfer(
+    block: &LirBlock,
+    incoming: &State,
+) -> Result<(State, HashSet<usize>), String> {
     let mut state = incoming.clone();
     let mut redundant: HashSet<usize> = HashSet::default();
     for one in &block.insns {
@@ -249,8 +250,7 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
     for _round in 0..std::cmp::max(1, body.blocks.len() * 4) {
         let mut changed = false;
         for block in &body.blocks {
-            let mut states: Vec<&State> =
-                predecessors[&block.at].iter().filter_map(|at| outgoing.get(at)).collect();
+            let mut states: Vec<&State> = predecessors[&block.at].iter().filter_map(|at| outgoing.get(at)).collect();
             if states.len() != predecessors[&block.at].len() {
                 states.push(&empty);
             }
@@ -277,11 +277,13 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
         .blocks
         .iter()
         .map(|block| match redundant.get(&block.at) {
-            Some(gone) if !gone.is_empty() => block.with_insns(block
+            Some(gone) if !gone.is_empty() => block.with_insns(
+                block
                     .insns
                     .iter()
                     .map(|one| if gone.contains(&id(one)) { lir::anchor(Arc::clone(one)) } else { Arc::clone(one) })
-                    .collect()),
+                    .collect(),
+            ),
             _ => block.clone(),
         })
         .collect();
@@ -293,13 +295,18 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use crate::support::hash::IndexMap;
 
     use super::eliminated;
     use crate::model::ir::{Addr, Address, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::support::hash::IndexMap;
 
-    fn what(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Option<Semantics> {
+    fn what(
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+    ) -> Option<Semantics> {
         Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
     }
 
@@ -307,7 +314,10 @@ mod tests {
         Loc::Reg(Reg { register: Register::BX, width: 2 })
     }
 
-    fn _lea(value: u32, at: i64) -> Arc<Insn> {
+    fn _lea(
+        value: u32,
+        at: i64,
+    ) -> Arc<Insn> {
         let address = Address {
             through: Register::BP,
             offset: -100,
@@ -327,11 +337,19 @@ mod tests {
         LirBody::new("machine-cse", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default())
     }
 
-    fn block(at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>) -> LirBlock {
+    fn block(
+        at: i64,
+        insns: Vec<Arc<Insn>>,
+        succ: Vec<i64>,
+    ) -> LirBlock {
         LirBlock { succ, ..LirBlock::new(at, insns) }
     }
 
-    fn overwrite(at: i64, covers: (i64, i64), defines: u32) -> Arc<Insn> {
+    fn overwrite(
+        at: i64,
+        covers: (i64, i64),
+        defines: u32,
+    ) -> Arc<Insn> {
         Arc::new(Insn::new(
             at,
             Some(covers),
@@ -455,7 +473,11 @@ mod tests {
         let body = LirBody::new(
             "machine-cse",
             0,
-            vec![block(0, vec![first], vec![3]), block(3, vec![call], vec![5]), block(5, vec![Arc::clone(&repeated)], vec![])],
+            vec![
+                block(0, vec![first], vec![3]),
+                block(3, vec![call], vec![5]),
+                block(5, vec![Arc::clone(&repeated)], vec![]),
+            ],
             IndexMap::default(),
             IndexMap::default(),
         );

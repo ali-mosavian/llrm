@@ -75,7 +75,10 @@ impl Machine {
     }
 
     /// This machine as the platform of the target whose layout is `layout`.
-    pub fn with_layout(self, layout: crate::layout::Layout) -> Self {
+    pub fn with_layout(
+        self,
+        layout: crate::layout::Layout,
+    ) -> Self {
         Self { layout: Some(layout), ..self }
     }
 
@@ -86,7 +89,10 @@ impl Machine {
 
     /// The machine `text` describes, priced for `cpu`: the target's `default_cpu`,
     /// stated once in its `timings.times`, not by the machine.
-    pub fn parse(text: &str, cpu: &str) -> Result<Self, String> {
+    pub fn parse(
+        text: &str,
+        cpu: &str,
+    ) -> Result<Self, String> {
         let table: toml::Table = text.parse().map_err(|error: toml::de::Error| error.to_string())?;
         let addressing = match table.get("addressing").and_then(toml::Value::as_str) {
             Some("real") => Addressing::Real,
@@ -108,7 +114,9 @@ impl Machine {
             rows.iter()
                 .map(|row| {
                     let bound = |name: &str| {
-                        row.get(name).and_then(toml::Value::as_integer).ok_or_else(|| format!("{key} needs an integer {name}"))
+                        row.get(name)
+                            .and_then(toml::Value::as_integer)
+                            .ok_or_else(|| format!("{key} needs an integer {name}"))
                     };
                     let (low, high) = (bound("low")?, bound("high")?);
                     if low >= high {
@@ -118,7 +126,10 @@ impl Machine {
                 })
                 .collect()
         };
-        let segment_end_faults = table.get("segment_end_faults").and_then(toml::Value::as_bool).ok_or("segment_end_faults is not a boolean")?;
+        let segment_end_faults = table
+            .get("segment_end_faults")
+            .and_then(toml::Value::as_bool)
+            .ok_or("segment_end_faults is not a boolean")?;
         if table.contains_key("cpu") {
             return Err("a machine states no cpu: the target's timings.times names the default".to_owned());
         }
@@ -138,7 +149,11 @@ impl Machine {
     fn segments(table: &toml::Table) -> Result<Segments, String> {
         let segments = table.get("segments").and_then(toml::Value::as_table).ok_or("segments is not a table")?;
         let name = |key: &str| {
-            segments.get(key).and_then(toml::Value::as_str).map(str::to_owned).ok_or_else(|| format!("segments needs a {key}"))
+            segments
+                .get(key)
+                .and_then(toml::Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| format!("segments needs a {key}"))
         };
         Ok(Segments {
             data: name("data")?,
@@ -162,14 +177,22 @@ impl Machine {
         }
     }
 
-    pub fn load(path: &std::path::Path, cpu: &str) -> Result<Self, String> {
+    pub fn load(
+        path: &std::path::Path,
+        cpu: &str,
+    ) -> Result<Self, String> {
         Self::parse(&std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?, cpu)
     }
 
     /// The linear [start, end) that `width`-byte accesses at every selector
     /// and offset in the inclusive ranges given span, when all of it is memory
     /// no program data occupies.
-    pub fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)> {
+    pub fn foreign_span(
+        &self,
+        selectors: (i64, i64),
+        offsets: (i64, i64),
+        width: i64,
+    ) -> Option<(i64, i64)> {
         let word = |(low, high): (i64, i64)| 0 <= low && low <= high && high <= 0xFFFF;
         if self.addressing != Addressing::Real || !word(selectors) || !word(offsets) {
             return None;
@@ -190,16 +213,25 @@ impl Machine {
     /// Whether a `width`-byte access at an offset a multiple of `align` may
     /// trap. In real mode only one reaching past offset FFFFh may, where
     /// that faults; the last such offset is `0x10000 - align`.
-    pub fn access_may_trap(&self, width: u64, align: u64) -> bool {
+    pub fn access_may_trap(
+        &self,
+        width: u64,
+        align: u64,
+    ) -> bool {
         self.addressing != Addressing::Real || self.segment_end_faults && width > align
     }
 
     /// What an access to any port in the inclusive range may do to memory.
-    pub fn port_memory(&self, (low, high): (i64, i64)) -> PortMemory {
+    pub fn port_memory(
+        &self,
+        (low, high): (i64, i64),
+    ) -> PortMemory {
         let mut widest = PortMemory::None;
         let mut at = low;
         while at <= high {
-            let Some(port) = self.ports.iter().find(|port| port.low <= at && at < port.high) else { return PortMemory::Any };
+            let Some(port) = self.ports.iter().find(|port| port.low <= at && at < port.high) else {
+                return PortMemory::Any;
+            };
             widest = widest.max(port.memory);
             at = port.high;
         }
@@ -212,7 +244,9 @@ fn ports(table: &toml::Table) -> Result<Vec<Port>, String> {
     let rows = rows.as_array().ok_or("ports is not an array of tables")?;
     rows.iter()
         .map(|row| {
-            let bound = |name: &str| row.get(name).and_then(toml::Value::as_integer).ok_or_else(|| format!("ports needs an integer {name}"));
+            let bound = |name: &str| {
+                row.get(name).and_then(toml::Value::as_integer).ok_or_else(|| format!("ports needs an integer {name}"))
+            };
             let (low, high) = (bound("low")?, bound("high")?);
             if low >= high {
                 return Err(format!("ports: {low:#x} is not below {high:#x}"));
@@ -226,7 +260,6 @@ fn ports(table: &toml::Table) -> Result<Vec<Port>, String> {
         })
         .collect()
 }
-
 
 #[cfg(test)]
 mod tests {

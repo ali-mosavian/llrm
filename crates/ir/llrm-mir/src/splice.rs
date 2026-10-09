@@ -2,10 +2,9 @@
 //! branching to what followed. Where to inline is `llrm_transforms::inline`'s
 //! policy; this is only how.
 
-use crate::hash::HashMap;
-
 use crate::context::Context;
 use crate::edit::Position;
+use crate::hash::HashMap;
 use crate::module::{BlockId, Function, InstId, Operand, ValueId};
 use crate::opcode::{Flags, Opcode};
 
@@ -16,18 +15,35 @@ pub fn carries(body: &Function) -> bool {
     let entry = body.entry();
     body.walk().all(|(block, inst)| match &body.instruction(inst).opcode {
         Opcode::Invoke(_) | Opcode::LandingPad { .. } | Opcode::Resume => false,
-        Opcode::Alloca { .. } => Some(block) == entry && body.instruction(inst).operands.iter().all(|one| matches!(one, Operand::Constant(_))),
+        Opcode::Alloca { .. } => {
+            Some(block) == entry
+                && body.instruction(inst).operands.iter().all(|one| matches!(one, Operand::Constant(_)))
+        }
         _ => true,
     })
 }
 
-fn phis(function: &Function, block: BlockId) -> Vec<InstId> {
-    function.block(block).instructions().iter().copied().take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect()
+fn phis(
+    function: &Function,
+    block: BlockId,
+) -> Vec<InstId> {
+    function
+        .block(block)
+        .instructions()
+        .iter()
+        .copied()
+        .take_while(|&one| function.instruction(one).opcode == Opcode::Phi)
+        .collect()
 }
 
 /// `call`, a call to `callee`, replaced by a copy of its body, which
 /// `carries`.
-pub fn splice(context: &mut Context, function: &mut Function, call: InstId, callee: &Function) {
+pub fn splice(
+    context: &mut Context,
+    function: &mut Function,
+    call: InstId,
+    callee: &Function,
+) {
     let void = context.types.void();
     let block = function.parent(call).expect("a placed call");
     let instructions = function.block(block).instructions().to_vec();
@@ -48,7 +64,8 @@ pub fn splice(context: &mut Context, function: &mut Function, call: InstId, call
         }
     }
     let arguments = &function.instruction(call).operands;
-    let mut values: HashMap<ValueId, Operand> = callee.parameters().iter().copied().zip(arguments.iter().copied()).collect();
+    let mut values: HashMap<ValueId, Operand> =
+        callee.parameters().iter().copied().zip(arguments.iter().copied()).collect();
     let mut blocks: HashMap<BlockId, BlockId> = HashMap::default();
     let mut last = block;
     for &one in callee.layout() {
@@ -66,12 +83,19 @@ pub fn splice(context: &mut Context, function: &mut Function, call: InstId, call
             let instruction = callee.instruction(inst);
             if instruction.opcode == Opcode::Ret {
                 returns.push((instruction.operands.first().copied(), blocks[&one]));
-                let back = function.create_instruction(Opcode::Br, void, vec![Operand::Block(rest)], Flags::default(), None);
+                let back =
+                    function.create_instruction(Opcode::Br, void, vec![Operand::Block(rest)], Flags::default(), None);
                 function.insert(back, Position::End(blocks[&one])).expect("a placed block");
                 continue;
             }
             let name = instruction.result.and_then(|value| callee.value(value).name.clone());
-            let copy = function.create_instruction(instruction.opcode.clone(), instruction.ty, Vec::new(), instruction.flags, name.as_deref());
+            let copy = function.create_instruction(
+                instruction.opcode.clone(),
+                instruction.ty,
+                Vec::new(),
+                instruction.flags,
+                name.as_deref(),
+            );
             for (kind, node) in &instruction.metadata {
                 function.annotate(copy, kind, *node);
             }
@@ -96,10 +120,12 @@ pub fn splice(context: &mut Context, function: &mut Function, call: InstId, call
         let operands = callee.instruction(inst).operands.iter().map(|&operand| mapped(operand)).collect();
         function.set_operands(copy, operands);
     }
-    let enter = function.create_instruction(Opcode::Br, void, vec![Operand::Block(blocks[&entry])], Flags::default(), None);
+    let enter =
+        function.create_instruction(Opcode::Br, void, vec![Operand::Block(blocks[&entry])], Flags::default(), None);
     function.insert(enter, Position::End(block)).expect("a placed block");
     if let Some(result) = function.instruction(call).result {
-        let returned: Vec<(Operand, BlockId)> = returns.into_iter().map(|(value, from)| (mapped(value.expect("a value returned")), from)).collect();
+        let returned: Vec<(Operand, BlockId)> =
+            returns.into_iter().map(|(value, from)| (mapped(value.expect("a value returned")), from)).collect();
         let with = match returned[..] {
             [(value, _)] => value,
             _ => {

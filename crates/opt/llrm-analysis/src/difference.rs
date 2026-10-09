@@ -11,11 +11,11 @@
 
 use std::collections::BTreeMap;
 
+use llrm_mir::opcode::IntPredicate;
 use num_bigint::BigInt;
 
 use crate::guards::Guard;
 use crate::induction::{Monomial, Scev};
-use llrm_mir::opcode::IntPredicate;
 
 /// The most unknowns a system keeps: the closure is cubic in them.
 const MOST_NODES: usize = 24;
@@ -28,7 +28,11 @@ struct Side {
 
 /// The value of `scev` as `unknown + offset`, or a constant, as a number
 /// read signed at its width.
-fn side(scev: &Scev, nodes: &mut Vec<Monomial>, create: bool) -> Option<Side> {
+fn side(
+    scev: &Scev,
+    nodes: &mut Vec<Monomial>,
+    create: bool,
+) -> Option<Side> {
     if let Some(known) = scev.known() {
         return Some(Side { node: 0, offset: known });
     }
@@ -52,7 +56,14 @@ fn side(scev: &Scev, nodes: &mut Vec<Monomial>, create: bool) -> Option<Side> {
 
 /// Whether `left predicate right` follows from `facts` and `ranges`, each
 /// unknown's signed lowest and highest value. Every one is of `width` bits.
-pub fn proves(width: u32, facts: &[Guard], ranges: &BTreeMap<Monomial, (BigInt, BigInt)>, predicate: IntPredicate, left: &Scev, right: &Scev) -> bool {
+pub fn proves(
+    width: u32,
+    facts: &[Guard],
+    ranges: &BTreeMap<Monomial, (BigInt, BigInt)>,
+    predicate: IntPredicate,
+    left: &Scev,
+    right: &Scev,
+) -> bool {
     if left.width != width || right.width != width {
         return false;
     }
@@ -87,7 +98,9 @@ pub fn proves(width: u32, facts: &[Guard], ranges: &BTreeMap<Monomial, (BigInt, 
             small[at + 1] = true;
         }
     }
-    let nonnegative = |small: &[bool], one: &Side| if one.node == 0 { one.offset >= BigInt::from(0) } else { small[one.node] && one.offset == BigInt::from(0) };
+    let nonnegative = |small: &[bool], one: &Side| {
+        if one.node == 0 { one.offset >= BigInt::from(0) } else { small[one.node] && one.offset == BigInt::from(0) }
+    };
     loop {
         let mut grew = false;
         for (predicate, l, r) in &usable {
@@ -117,7 +130,9 @@ pub fn proves(width: u32, facts: &[Guard], ranges: &BTreeMap<Monomial, (BigInt, 
         if (0..size).any(|at| dist[at][at].as_ref().is_some_and(|one| *one < BigInt::from(0))) {
             return true;
         }
-        let found = (1..size).filter(|&node| !small[node] && dist[0][node].as_ref().is_some_and(|most| *most <= BigInt::from(0))).collect::<Vec<_>>();
+        let found = (1..size)
+            .filter(|&node| !small[node] && dist[0][node].as_ref().is_some_and(|most| *most <= BigInt::from(0)))
+            .collect::<Vec<_>>();
         rounds += 1;
         if found.is_empty() || rounds > 4 {
             break;
@@ -138,12 +153,20 @@ pub fn proves(width: u32, facts: &[Guard], ranges: &BTreeMap<Monomial, (BigInt, 
     };
     // An offset side is trusted only where its sum stays in the signed range.
     let sound = |one: &Side| {
-        one.offset == BigInt::from(0) || one.node == 0 || matches!(span(one), (Some(low), Some(high)) if low >= -half.clone() && high < half)
+        one.offset == BigInt::from(0)
+            || one.node == 0
+            || matches!(
+                span(one),
+                (Some(low), Some(high)) if low >= -half.clone() && high < half
+            )
     };
     if !sound(&goal_left) || !sound(&goal_right) {
         return false;
     }
-    let unsigned = matches!(predicate, IntPredicate::Ult | IntPredicate::Ule | IntPredicate::Ugt | IntPredicate::Uge);
+    let unsigned = matches!(
+        predicate,
+        IntPredicate::Ult | IntPredicate::Ule | IntPredicate::Ugt | IntPredicate::Uge
+    );
     if unsigned {
         // Both sides are to be non-negative sums, so the order is the signed one.
         let non_negative = |one: &Side| matches!(span(one).0, Some(low) if low >= BigInt::from(0));
@@ -152,17 +175,22 @@ pub fn proves(width: u32, facts: &[Guard], ranges: &BTreeMap<Monomial, (BigInt, 
         }
     }
     // `left - right <= most`, from the closure.
-    let at_most = |l: &Side, r: &Side, most: BigInt| dist[l.node][r.node].as_ref().is_some_and(|one| one + &l.offset - &r.offset <= most);
+    let at_most = |l: &Side, r: &Side, most: BigInt| {
+        dist[l.node][r.node].as_ref().is_some_and(|one| one + &l.offset - &r.offset <= most)
+    };
     match predicate {
         IntPredicate::Slt | IntPredicate::Ult => at_most(&goal_left, &goal_right, BigInt::from(-1)),
         IntPredicate::Sle | IntPredicate::Ule => at_most(&goal_left, &goal_right, BigInt::from(0)),
         IntPredicate::Sgt | IntPredicate::Ugt => at_most(&goal_right, &goal_left, BigInt::from(-1)),
         IntPredicate::Sge | IntPredicate::Uge => at_most(&goal_right, &goal_left, BigInt::from(0)),
-        IntPredicate::Eq => at_most(&goal_left, &goal_right, BigInt::from(0)) && at_most(&goal_right, &goal_left, BigInt::from(0)),
-        IntPredicate::Ne => at_most(&goal_left, &goal_right, BigInt::from(-1)) || at_most(&goal_right, &goal_left, BigInt::from(-1)),
+        IntPredicate::Eq => {
+            at_most(&goal_left, &goal_right, BigInt::from(0)) && at_most(&goal_right, &goal_left, BigInt::from(0))
+        }
+        IntPredicate::Ne => {
+            at_most(&goal_left, &goal_right, BigInt::from(-1)) || at_most(&goal_right, &goal_left, BigInt::from(-1))
+        }
     }
 }
-
 
 /// The closure of the compares `usable` over `size` nodes, `dist[a][b]` the most `a - b` can be.
 fn closed(
@@ -193,7 +221,11 @@ fn closed(
         }
     }
     for (predicate, l, r) in usable {
-        let unsigned = matches!(predicate, IntPredicate::Ult | IntPredicate::Ule | IntPredicate::Ugt | IntPredicate::Uge);
+        let unsigned =
+            matches!(
+                predicate,
+                IntPredicate::Ult | IntPredicate::Ule | IntPredicate::Ugt | IntPredicate::Uge
+            );
         if unsigned && !(nonnegative(small, l) && nonnegative(small, r)) {
             continue;
         }

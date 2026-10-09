@@ -24,7 +24,10 @@ const CIE_ID: u32 = 0xFFFF_FFFF;
 /// Every offset a register is saved at is a multiple of this, below the frame address.
 const DATA_ALIGNMENT: i64 = -4;
 
-fn number(info: &Info, name: &str) -> Result<u64, Unsupported> {
+fn number(
+    info: &Info,
+    name: &str,
+) -> Result<u64, Unsupported> {
     match info.registers.iter().find(|one| one.name == name).and_then(|one| one.dwarf) {
         Some(number) => Ok(u64::from(number)),
         None => refused(format!("register {name} has no DWARF number, which a frame rule names")),
@@ -32,7 +35,12 @@ fn number(info: &Info, name: &str) -> Result<u64, Unsupported> {
 }
 
 /// The instructions that take the state `from` to `to`: its frame address, then each register's rule.
-fn changes(info: &Info, buf: &mut Buf, from: &FrameRow, to: &FrameRow) -> Result<(), Unsupported> {
+fn changes(
+    info: &Info,
+    buf: &mut Buf,
+    from: &FrameRow,
+    to: &FrameRow,
+) -> Result<(), Unsupported> {
     if (&from.cfa_register, from.cfa_offset) != (&to.cfa_register, to.cfa_offset) {
         if from.cfa_register == to.cfa_register {
             buf.u8(DW_CFA_DEF_CFA_OFFSET);
@@ -68,7 +76,10 @@ fn changes(info: &Info, buf: &mut Buf, from: &FrameRow, to: &FrameRow) -> Result
     Ok(())
 }
 
-fn advance(buf: &mut Buf, delta: usize) {
+fn advance(
+    buf: &mut Buf,
+    delta: usize,
+) {
     match delta {
         0 => {}
         1..=0x3F => buf.u8(DW_CFA_ADVANCE_LOC | delta as u8),
@@ -88,7 +99,11 @@ fn advance(buf: &mut Buf, delta: usize) {
 }
 
 /// The section, None where no function has rows or the target numbers no return address.
-pub fn section(object: &Object, info: &Info, address: usize) -> Result<Option<Done>, Unsupported> {
+pub fn section(
+    object: &Object,
+    info: &Info,
+    address: usize,
+) -> Result<Option<Done>, Unsupported> {
     let Some(entry) = info.functions.iter().find_map(|one| one.frame.first()) else { return Ok(None) };
     if info.return_register.is_empty() {
         return Ok(None);
@@ -115,7 +130,12 @@ pub fn section(object: &Object, info: &Info, address: usize) -> Result<Option<Do
     }
     let length = buf.at() as u32 - 4;
     buf.patch32(0, length);
-    let initial = FrameRow { offset: 0, cfa_register: entry.cfa_register.clone(), cfa_offset: entry.cfa_offset, saved: Vec::new() };
+    let initial = FrameRow {
+        offset: 0,
+        cfa_register: entry.cfa_register.clone(),
+        cfa_offset: entry.cfa_offset,
+        saved: Vec::new(),
+    };
     for function in info.functions.iter().filter(|one| !one.frame.is_empty()) {
         let [range] = function.ranges[..] else { continue };
         let start = buf.at();

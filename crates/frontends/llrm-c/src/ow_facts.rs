@@ -18,7 +18,12 @@ pub const VERSION: &str = "v1";
 const TERMS: &str = include_str!("../../../../toolchain/owshim/qbfacts.def");
 
 pub fn terms() -> Vec<&'static str> {
-    TERMS.lines().filter_map(|line| line.strip_prefix("QBFACT(")).filter_map(|rest| rest.split(',').next()).map(str::trim).collect()
+    TERMS
+        .lines()
+        .filter_map(|line| line.strip_prefix("QBFACT("))
+        .filter_map(|rest| rest.split(',').next())
+        .map(str::trim)
+        .collect()
 }
 
 /// The fact a term of the language states of a parameter.
@@ -73,7 +78,9 @@ pub fn of_call_class(class: i64) -> Result<Vec<Fact>, Unsupported> {
     if class & !known != 0 {
         return Err(Unsupported(format!("call class bits {:#x} are in no table here", class & !known)));
     }
-    if let Some((_, name, Bit::Refused(why))) = CLASS.iter().find(|(bit, _, how)| class & bit != 0 && matches!(how, Bit::Refused(_))) {
+    if let Some((_, name, Bit::Refused(why))) =
+        CLASS.iter().find(|(bit, _, how)| class & bit != 0 && matches!(how, Bit::Refused(_)))
+    {
         return Err(Unsupported(format!("call class {name}: {why}")));
     }
     let mut facts = Vec::new();
@@ -98,18 +105,24 @@ pub fn returns_twice(class: i64) -> bool {
 pub fn check(node: &Node) -> Result<(), Unsupported> {
     match &node.args[..] {
         [version, _, term] if version == VERSION && param_fact(term).is_some() => Ok(()),
-        [version, ..] if version != VERSION => Err(Unsupported(format!("the stream's facts are {version}, this reads {VERSION}: rebuild wccq"))),
+        [version, ..] if version != VERSION => {
+            Err(Unsupported(format!("the stream's facts are {version}, this reads {VERSION}: rebuild wccq")))
+        }
         _ => Err(Unsupported(format!("a fact the stream states that no table here knows: {}", node.args.join(" ")))),
     }
 }
 
 /// The facts the language states of parameter `symbol`: each `CGFact` of
 /// its name.
-pub fn of_param(unit: &Unit, symbol: i64) -> Vec<Fact> {
+pub fn of_param(
+    unit: &Unit,
+    symbol: i64,
+) -> Vec<Fact> {
     let mut facts = Vec::new();
     for node in unit.nodes.values().filter(|node| node.call == "CGFact") {
         let [_, inner, term] = &node.args[..] else { continue };
-        let named = unit.nodes.get(&handle(inner)).is_some_and(|one| one.call == "CGFEName" && handle(&one.args[0]) == symbol);
+        let named =
+            unit.nodes.get(&handle(inner)).is_some_and(|one| one.call == "CGFEName" && handle(&one.args[0]) == symbol);
         if let Some(fact) = param_fact(term).filter(|_| named) {
             if !facts.contains(&fact) {
                 facts.push(fact);
@@ -161,7 +174,8 @@ mod tests {
     #[test]
     fn restrict_states_noalias_of_the_parameter_it_names() {
         let mut unit = Unit::default();
-        unit.nodes.insert(1, Node { call: "CGFEName".to_owned(), args: vec!["y5".to_owned(), "TY_POINTER".to_owned()] });
+        unit.nodes
+            .insert(1, Node { call: "CGFEName".to_owned(), args: vec!["y5".to_owned(), "TY_POINTER".to_owned()] });
         unit.nodes.insert(2, node(&["v1", "n1", "restrict"]));
         assert_eq!(of_param(&unit, 5), vec![Fact::NoAlias]);
         assert_eq!(of_param(&unit, 6), Vec::<Fact>::new());

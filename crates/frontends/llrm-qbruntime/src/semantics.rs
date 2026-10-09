@@ -3,8 +3,8 @@
 
 use std::sync::LazyLock;
 
-use llrm_hir::model::StackCheck;
 use llrm_hir::meaning::{Arithmetic, Descriptor, Expr, Form, Meaning, Parameter, Returns};
+use llrm_hir::model::StackCheck;
 
 static TABLE: LazyLock<toml::Table> = LazyLock::new(|| super::TABLE.parse().expect("runtime.toml parses"));
 
@@ -24,7 +24,8 @@ pub fn descriptor(family: &str) -> Option<Descriptor> {
         return None;
     }
     let row = TABLE.get("layout")?.get(family)?;
-    let at = |key: &str| row.get(key).and_then(toml::Value::as_integer).unwrap_or_else(|| panic!("layout.{family}.{key}"));
+    let at =
+        |key: &str| row.get(key).and_then(toml::Value::as_integer).unwrap_or_else(|| panic!("layout.{family}.{key}"));
     Some(Descriptor { length: at("length"), data: at("data"), size: at("size") })
 }
 
@@ -40,8 +41,13 @@ pub fn routines() -> Vec<Meaning> {
     rows.iter().map(|(name, row)| meaning(name, row).unwrap_or_else(|why| panic!("semantics.{name}: {why}"))).collect()
 }
 
-fn meaning(name: &str, row: &toml::Value) -> Result<Meaning, String> {
-    let text = |value: Option<&toml::Value>, what: &str| value.and_then(toml::Value::as_str).map(str::to_owned).ok_or_else(|| format!("{what} is not a string"));
+fn meaning(
+    name: &str,
+    row: &toml::Value,
+) -> Result<Meaning, String> {
+    let text = |value: Option<&toml::Value>, what: &str| {
+        value.and_then(toml::Value::as_str).map(str::to_owned).ok_or_else(|| format!("{what} is not a string"))
+    };
     let parameters = row
         .get("parameters")
         .and_then(toml::Value::as_array)
@@ -55,12 +61,21 @@ fn meaning(name: &str, row: &toml::Value) -> Result<Meaning, String> {
         .collect::<Result<Vec<_>, _>>()?;
     let result = match (row.get("result"), row.get("view")) {
         (Some(value), None) => Returns::Value(expression(&text(Some(value), "result")?)?),
-        (None, Some(view)) => Returns::View { length: expression(&text(view.get("length"), "view.length")?)?, data: expression(&text(view.get("data"), "view.data")?)? },
+        (None, Some(view)) => Returns::View {
+            length: expression(&text(view.get("length"), "view.length")?)?,
+            data: expression(&text(view.get("data"), "view.data")?)?,
+        },
         _ => return Err("states one of result and view".to_owned()),
     };
-    let releases = row.get("releases").and_then(toml::Value::as_array).map_or(Vec::new(), |list| list.iter().filter_map(|one| one.as_integer()).map(|one| one as usize).collect());
+    let releases = row
+        .get("releases")
+        .and_then(toml::Value::as_array)
+        .map_or(Vec::new(), |list| list.iter().filter_map(|one| one.as_integer()).map(|one| one as usize).collect());
     let check = match row.get("check") {
-        Some(check) => Some((expression(&text(check.get("when"), "check.when")?)?, check.get("raise").and_then(toml::Value::as_integer).ok_or("check.raise is not an integer")?)),
+        Some(check) => Some((
+            expression(&text(check.get("when"), "check.when")?)?,
+            check.get("raise").and_then(toml::Value::as_integer).ok_or("check.raise is not an integer")?,
+        )),
         None => None,
     };
     Ok(Meaning { routine: name.to_owned(), parameters, result, releases, check })
@@ -104,7 +119,10 @@ fn tokens(text: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-fn parse_or(tokens: &[String], at: &mut usize) -> Result<Expr, String> {
+fn parse_or(
+    tokens: &[String],
+    at: &mut usize,
+) -> Result<Expr, String> {
     let mut left = parse_compare(tokens, at)?;
     while tokens.get(*at).is_some_and(|one| one == "or") {
         *at += 1;
@@ -113,7 +131,10 @@ fn parse_or(tokens: &[String], at: &mut usize) -> Result<Expr, String> {
     Ok(left)
 }
 
-fn parse_compare(tokens: &[String], at: &mut usize) -> Result<Expr, String> {
+fn parse_compare(
+    tokens: &[String],
+    at: &mut usize,
+) -> Result<Expr, String> {
     let left = parse_sum(tokens, at)?;
     let op = match tokens.get(*at).map(String::as_str) {
         Some("==") => Arithmetic::Eq,
@@ -124,7 +145,10 @@ fn parse_compare(tokens: &[String], at: &mut usize) -> Result<Expr, String> {
     Ok(Expr::Binary(op, Box::new(left), Box::new(parse_sum(tokens, at)?)))
 }
 
-fn parse_sum(tokens: &[String], at: &mut usize) -> Result<Expr, String> {
+fn parse_sum(
+    tokens: &[String],
+    at: &mut usize,
+) -> Result<Expr, String> {
     let mut left = parse_atom(tokens, at)?;
     while let Some(op) = tokens.get(*at).and_then(|one| match one.as_str() {
         "+" => Some(Arithmetic::Add),
@@ -137,7 +161,10 @@ fn parse_sum(tokens: &[String], at: &mut usize) -> Result<Expr, String> {
     Ok(left)
 }
 
-fn parse_atom(tokens: &[String], at: &mut usize) -> Result<Expr, String> {
+fn parse_atom(
+    tokens: &[String],
+    at: &mut usize,
+) -> Result<Expr, String> {
     let token = tokens.get(*at).ok_or("the expression ends early")?.clone();
     *at += 1;
     if token == "(" {
@@ -173,7 +200,11 @@ fn parse_atom(tokens: &[String], at: &mut usize) -> Result<Expr, String> {
     }
 }
 
-fn expect(tokens: &[String], at: &mut usize, want: &str) -> Result<(), String> {
+fn expect(
+    tokens: &[String],
+    at: &mut usize,
+    want: &str,
+) -> Result<(), String> {
     if tokens.get(*at).is_some_and(|one| one == want) {
         *at += 1;
         Ok(())
@@ -209,7 +240,11 @@ mod tests {
     fn each_basic_runtime_states_its_stack_limit() {
         for family in ["qb45", "pds71", "vbdos"] {
             let check = stack(family).unwrap_or_else(|| panic!("{family} states no stack"));
-            assert_eq!((check.limit.as_str(), check.handler.as_str(), check.entry.as_deref()), ("b$pendchk", "B$ERR_OSS", Some("B$ENRD")), "{family}");
+            assert_eq!(
+                (check.limit.as_str(), check.handler.as_str(), check.entry.as_deref()),
+                ("b$pendchk", "B$ERR_OSS", Some("B$ENRD")),
+                "{family}"
+            );
         }
         assert_eq!(stack("freestanding"), None);
     }
@@ -217,7 +252,14 @@ mod tests {
     #[test]
     fn an_expression_reads_as_written() {
         let one = |n| Box::new(Expr::Int(n));
-        assert_eq!(expression("$1 - 1 + 2").unwrap(), Expr::Binary(Arithmetic::Add, Box::new(Expr::Binary(Arithmetic::Sub, Box::new(Expr::Param(1)), one(1))), one(2)));
+        assert_eq!(
+            expression("$1 - 1 + 2").unwrap(),
+            Expr::Binary(
+                Arithmetic::Add,
+                Box::new(Expr::Binary(Arithmetic::Sub, Box::new(Expr::Param(1)), one(1))),
+                one(2)
+            )
+        );
         assert!(expression("len($0) == 0").is_ok() && expression("byte(data($0) + ($1 - 1))").is_ok());
         assert!(expression("len(1)").is_err() && expression("$0 $1").is_err());
     }

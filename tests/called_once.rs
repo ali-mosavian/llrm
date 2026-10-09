@@ -31,7 +31,13 @@ fn listing(flags: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c")).current_dir(directory).args(["-m32", "-march=i486"]).args(flags).args(["-S", "-o", "a.s", "a.c"]).output().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(directory)
+        .args(["-m32", "-march=i486"])
+        .args(flags)
+        .args(["-S", "-o", "a.s", "a.c"])
+        .output()
+        .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }
@@ -52,11 +58,18 @@ fn test_a_static_function_called_once_is_inlined_at_any_size() {
 
 /// What "nothing else reaches it" excludes: each of these is called from one place and stays defined, because
 /// something besides that call can still enter it.
-fn survives(source: &str, name: &str) {
+fn survives(
+    source: &str,
+    name: &str,
+) {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c")).current_dir(directory).args(["-m32", "-march=i486", "-O2", "-S", "-o", "a.s", "a.c"]).output().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(directory)
+        .args(["-m32", "-march=i486", "-O2", "-S", "-o", "a.s", "a.c"])
+        .output()
+        .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(directory.join("a.s")).unwrap();
     assert!(text.contains(&format!("{name} proc")), "{name} was inlined away: {text}");
@@ -66,15 +79,28 @@ const BODY: &str = "{ int s = 0, i; for (i = 0; i < n; ++i) { if (a[i] > 3) s +=
 
 #[test]
 fn test_an_exported_function_called_once_stays_defined() {
-    survives(&format!("int body(const int *a, int n) {BODY}\nint f(const int *a, int n) {{ return body(a, n) + 1; }}"), "body_");
+    survives(
+        &format!("int body(const int *a, int n) {BODY}\nint f(const int *a, int n) {{ return body(a, n) + 1; }}"),
+        "body_",
+    );
 }
 
 #[test]
 fn test_a_function_whose_address_is_taken_stays_defined() {
-    survives(&format!("static int body(const int *a, int n) {BODY}\nint (*volatile hook)(const int *, int);\nint f(const int *a, int n) {{ hook = body; return body(a, n) + 1; }}"), "body_");
+    survives(
+        &format!(
+            "static int body(const int *a, int n) {BODY}\nint (*volatile hook)(const int *, int);\nint f(const int *a, int n) {{ hook = body; return body(a, n) + 1; }}"
+        ),
+        "body_",
+    );
 }
 
 #[test]
 fn test_a_function_a_table_names_stays_defined() {
-    survives(&format!("static int body(const int *a, int n) {BODY}\nint (*const table[1])(const int *, int) = {{ body }};\nint f(const int *a, int n) {{ return body(a, n) + 1; }}\nint g(const int *a, int n) {{ return table[0](a, n); }}"), "body_");
+    survives(
+        &format!(
+            "static int body(const int *a, int n) {BODY}\nint (*const table[1])(const int *, int) = {{ body }};\nint f(const int *a, int n) {{ return body(a, n) + 1; }}\nint g(const int *a, int n) {{ return table[0](a, n); }}"
+        ),
+        "body_",
+    );
 }

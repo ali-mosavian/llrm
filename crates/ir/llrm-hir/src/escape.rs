@@ -11,7 +11,14 @@ use llrm_support::hash::IndexMap;
 
 use crate::model;
 
-const _NAMING: [model::Op; 6] = [model::Op::Load, model::Op::Store, model::Op::Copy, model::Op::CopyBytes, model::Op::LifetimeStart, model::Op::LifetimeEnd];
+const _NAMING: [model::Op; 6] = [
+    model::Op::Load,
+    model::Op::Store,
+    model::Op::Copy,
+    model::Op::CopyBytes,
+    model::Op::LifetimeStart,
+    model::Op::LifetimeEnd,
+];
 
 /// The frame places whose address `function` hands out. Every other local
 /// and parameter is reached only by name: no pointer, far or near, can.
@@ -20,7 +27,10 @@ pub fn exposed_frame(function: &model::Function) -> BTreeSet<i64> {
 }
 
 fn _framed(place: &model::Place) -> bool {
-    matches!(place.storage, model::Storage::Local | model::Storage::Parameter)
+    matches!(
+        place.storage,
+        model::Storage::Local | model::Storage::Parameter
+    )
 }
 
 /// Each place an operation other than a naming one is given.

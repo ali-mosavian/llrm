@@ -6,18 +6,14 @@
 //! constant_cycles along the edges that run.
 //!
 //! What changed with the IR:
-//! - A branch reads an `i1`: the flags a compare left are the `icmp`
-//!   `_comparison` finds, and a condition consts knows outright decides the
-//!   branch too.
-//! - A branch not taken became an inert owner falling through; here it is
-//!   a jump to the other arm.
-//! - Threading bypasses a block holding only a jump, for a `br` or a
-//!   `switch`; explicit and fall-through edges are one kind here. A
-//!   conditional branch both of whose arms go one way is a jump, as the
-//!   old one was when threading made it so.
+//! - A branch reads an `i1`: the flags a compare left are the `icmp` `_comparison` finds, and a condition consts knows
+//!   outright decides the branch too.
+//! - A branch not taken became an inert owner falling through; here it is a jump to the other arm.
+//! - Threading bypasses a block holding only a jump, for a `br` or a `switch`; explicit and fall-through edges are one
+//!   kind here. A conditional branch both of whose arms go one way is a jump, as the old one was when threading made it
+//!   so.
 //! - consts reads the module's globals through the outer proxy.
-//! - A compare's answer (`_signed`, `_TAKEN`) is `consts::holds`, which
-//!   folds an `icmp`.
+//! - A compare's answer (`_signed`, `_TAKEN`) is `consts::holds`, which folds an `icmp`.
 //!
 //! Dropped, no rich MIR analogue: the memory a compare's operand read
 //! (`held`: a load is its own instruction, and its fact consts'), and the
@@ -34,12 +30,12 @@ use llrm_analysis::alias;
 use llrm_analysis::cfg;
 use llrm_analysis::constant_cycles::{self, State};
 use llrm_analysis::consts::{self, Calls, Known, masked};
-use llrm_analysis::manager::Held;
-use llrm_analysis::memory::Unit;
-use llrm_analysis::ranges;
 use llrm_analysis::graph::loops;
 use llrm_analysis::guards;
 use llrm_analysis::induction::{self, Scev};
+use llrm_analysis::manager::Held;
+use llrm_analysis::memory::Unit;
+use llrm_analysis::ranges;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -60,20 +56,35 @@ impl FunctionPass for Decide {
         "decide"
     }
 
-    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
-        let decided = _decided(unit.context, unit.layout, unit.function, analyses).unwrap_or_else(|error| panic!("decide: {error}"));
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let decided = _decided(unit.context, unit.layout, unit.function, analyses)
+            .unwrap_or_else(|error| panic!("decide: {error}"));
         if decided | crate::cfg::merged(unit.function) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 
 /// `function` threaded, and each branch whose way is known a jump that
 /// way; `outer` is its module and target. Whether anything changed.
-pub fn decided(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> Result<bool, String> {
+pub fn decided(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &Outer,
+) -> Result<bool, String> {
     _decided(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())))
 }
 
 /// `decided`, `analyses` holding what is known of `function`.
-fn _decided(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses) -> Result<bool, String> {
+fn _decided(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    analyses: &mut Analyses,
+) -> Result<bool, String> {
     let threaded = _threaded(context, function) | _phi_threaded(context, function)?;
     if threaded {
         analyses.invalidate(&PreservedAnalyses::none());
@@ -102,11 +113,13 @@ fn _decisions(unit: &Unit) -> Result<Vec<(BlockId, BlockId)>, String> {
     let pointing = alias::may_point(unit);
     let nonnull = |value: ValueId| {
         pointing.contains(&value)
-            && alias::nonnull_by_definition(unit, value)
-                .unwrap_or_else(|| pointers.get_or_init(|| unit.pointers()).as_ref().is_ok_and(|facts| facts.nonnull(value)))
+            && alias::nonnull_by_definition(unit, value).unwrap_or_else(|| {
+                pointers.get_or_init(|| unit.pointers()).as_ref().is_ok_and(|facts| facts.nonnull(value))
+            })
     };
-    let successors =
-        |at: i64, values: &IndexMap<ValueId, Known>, states: &IndexMap<ValueId, State>| _executable_successors(unit, at, values, states, Some(&nonnull));
+    let successors = |at: i64, values: &IndexMap<ValueId, Known>, states: &IndexMap<ValueId, State>| {
+        _executable_successors(unit, at, values, states, Some(&nonnull))
+    };
     let facts = constant_cycles::propagated(unit, &facts, Some(&successors));
     let scoped = ranges::bounds(unit)?;
     let mut out = Vec::new();
@@ -146,7 +159,11 @@ fn _decisions(unit: &Unit) -> Result<Vec<(BlockId, BlockId)>, String> {
 
 /// Whether the compare `last` branches on holds or fails there, by what the
 /// guards over `block` and the loops holding it prove of its two sides.
-fn _implied(unit: &Unit, block: BlockId, last: InstId) -> Option<bool> {
+fn _implied(
+    unit: &Unit,
+    block: BlockId,
+    last: InstId,
+) -> Option<bool> {
     let function = unit.function;
     let Some(Operand::Value(condition)) = function.instruction(last).operands.first().copied() else { return None };
     let (_, compare) = unit.defining(Operand::Value(condition))?;
@@ -163,8 +180,18 @@ fn _implied(unit: &Unit, block: BlockId, last: InstId) -> Option<bool> {
 }
 
 /// `last`, a terminator, replaced by a jump to `target`.
-fn _jump(function: &mut Function, last: InstId, target: BlockId) {
-    let jump = function.create_instruction(Opcode::Br, function.instruction(last).ty, vec![Operand::Block(target)], Flags::default(), None);
+fn _jump(
+    function: &mut Function,
+    last: InstId,
+    target: BlockId,
+) {
+    let jump = function.create_instruction(
+        Opcode::Br,
+        function.instruction(last).ty,
+        vec![Operand::Block(target)],
+        Flags::default(),
+        None,
+    );
     function.insert(jump, Position::Before(last)).expect("a placed terminator");
     function.erase(last).expect("a terminator defines nothing");
 }
@@ -172,7 +199,12 @@ fn _jump(function: &mut Function, last: InstId, target: BlockId) {
 /// Whether `block`'s conditional branch is taken: its condition is known,
 /// the compare that makes it has two known operands, or it compares with
 /// null a pointer `nonnull` says is not.
-pub fn _outcome(unit: &Unit, block: BlockId, facts: &IndexMap<ValueId, Known>, nonnull: Option<&dyn Fn(ValueId) -> bool>) -> Option<bool> {
+pub fn _outcome(
+    unit: &Unit,
+    block: BlockId,
+    facts: &IndexMap<ValueId, Known>,
+    nonnull: Option<&dyn Fn(ValueId) -> bool>,
+) -> Option<bool> {
     let branch = unit.function.terminator(block)?;
     let instruction = unit.function.instruction(branch);
     if instruction.opcode != Opcode::Br || instruction.operands.len() != 3 {
@@ -182,17 +214,23 @@ pub fn _outcome(unit: &Unit, block: BlockId, facts: &IndexMap<ValueId, Known>, n
         return Some(masked(&condition.n, 1) != BigInt::from(0));
     }
     let compare = unit.function.instruction(transform::_comparison(unit.function, block, branch)?);
-    let Opcode::ICmp(predicate) = compare.opcode else {
-        unreachable!("_comparison finds an icmp")
-    };
-    let (left, right) = (consts::_operand(unit, compare.operands[0], facts, None), consts::_operand(unit, compare.operands[1], facts, None));
+    let Opcode::ICmp(predicate) = compare.opcode else { unreachable!("_comparison finds an icmp") };
+    let (left, right) = (
+        consts::_operand(unit, compare.operands[0], facts, None),
+        consts::_operand(unit, compare.operands[1], facts, None),
+    );
     if let (Some(left), Some(right)) = (&left, &right) {
         return Some(consts::holds(predicate, left, right));
     }
     if !matches!(predicate, IntPredicate::Eq | IntPredicate::Ne) {
         return None;
     }
-    let null = |one: Operand| matches!(one, Operand::Constant(id) if unit.context.get(id).kind == ConstantKind::Null);
+    let null = |one: Operand| {
+        matches!(
+            one,
+            Operand::Constant(id) if unit.context.get(id).kind == ConstantKind::Null
+        )
+    };
     let pointer = match compare.operands[..] {
         [Operand::Value(pointer), other] | [other, Operand::Value(pointer)] if null(other) => pointer,
         _ => return None,
@@ -202,7 +240,11 @@ pub fn _outcome(unit: &Unit, block: BlockId, facts: &IndexMap<ValueId, Known>, n
 
 /// Where the switch `inst` goes, where its condition is known and its
 /// cases distinct.
-pub fn _switch_target(unit: &Unit, inst: InstId, facts: &IndexMap<ValueId, Known>) -> Option<BlockId> {
+pub fn _switch_target(
+    unit: &Unit,
+    inst: InstId,
+    facts: &IndexMap<ValueId, Known>,
+) -> Option<BlockId> {
     let op = unit.function.instruction(inst);
     if op.opcode != Opcode::Switch {
         return None;
@@ -236,7 +278,16 @@ pub fn _executable_successors(
     let function = unit.function;
     let block = cfg::block(at);
     let all = function.successors(block).into_iter().map(cfg::id).collect::<Vec<_>>();
-    let pending = |operands: &[Operand]| operands.iter().any(|operand| matches!(operand, Operand::Value(value) if states.get(value) == Some(&State::Pending)));
+    let pending = |operands: &[Operand]| {
+        operands
+            .iter()
+            .any(
+                |operand| matches!(
+                    operand,
+                    Operand::Value(value) if states.get(value) == Some(&State::Pending)
+                ),
+            )
+    };
     let Some(last) = function.terminator(block) else {
         return Some(all);
     };
@@ -253,7 +304,9 @@ pub fn _executable_successors(
     if let Some(answer) = _outcome(unit, block, facts, nonnull) {
         return Some(vec![cfg::id(if answer { taken } else { other })]);
     }
-    let compared = transform::_comparison(function, block, last).map(|compare| function.instruction(compare).operands.clone()).unwrap_or_default();
+    let compared = transform::_comparison(function, block, last)
+        .map(|compare| function.instruction(compare).operands.clone())
+        .unwrap_or_default();
     if pending(&[condition]) || pending(&compared) {
         return None;
     }
@@ -264,17 +317,27 @@ pub fn _executable_successors(
 /// branch on it, and gives the phi a constant, goes straight where that
 /// constant leads: LLVM JumpThreading's `ProcessBranchOnPHI`. A loop's
 /// header keeps its edges. Whether anything changed.
-pub fn _phi_threaded(context: &mut Context, function: &mut Function) -> Result<bool, String> {
+pub fn _phi_threaded(
+    context: &mut Context,
+    function: &mut Function,
+) -> Result<bool, String> {
     let headers = cfg::Shape::of(function).loops.iter().map(|one| one.header).collect::<BTreeSet<_>>();
     let mut changed = false;
     for block in function.layout().to_vec() {
         let instructions = function.block(block).instructions().to_vec();
         let [phi, last] = instructions[..] else { continue };
         let branch = function.instruction(last);
-        let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else { continue };
+        let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else {
+            continue;
+        };
         let reads_only = function.users(condition).len() == 1;
         let is_phi = function.instruction(phi).opcode == Opcode::Phi;
-        if headers.contains(&cfg::id(block)) || branch.opcode != Opcode::Br || !is_phi || function.instruction(phi).result != Some(condition) || !reads_only {
+        if headers.contains(&cfg::id(block))
+            || branch.opcode != Opcode::Br
+            || !is_phi
+            || function.instruction(phi).result != Some(condition)
+            || !reads_only
+        {
             continue;
         }
         for (value, from) in crate::lcssa::arms(function, phi) {
@@ -289,11 +352,13 @@ pub fn _phi_threaded(context: &mut Context, function: &mut Function) -> Result<b
             // What the target's phis took from `block` they now take from `from` too.
             for one in edges::phis(function, target) {
                 let mut incoming = crate::lcssa::arms(function, one);
-                let (carried, _) = *incoming.iter().find(|(_, source)| *source == block).expect("an arm from the block");
+                let (carried, _) =
+                    *incoming.iter().find(|(_, source)| *source == block).expect("an arm from the block");
                 incoming.push((if carried == Operand::Value(condition) { value } else { carried }, from));
                 function.set_operands(one, crate::lcssa::from_arms(&incoming));
             }
-            let kept = crate::lcssa::arms(function, phi).into_iter().filter(|(_, source)| *source != from).collect::<Vec<_>>();
+            let kept =
+                crate::lcssa::arms(function, phi).into_iter().filter(|(_, source)| *source != from).collect::<Vec<_>>();
             function.set_operands(phi, crate::lcssa::from_arms(&kept));
             function.set_operands(jump, vec![Operand::Block(target)]);
             changed = true;
@@ -311,7 +376,10 @@ pub fn _phi_threaded(context: &mut Context, function: &mut Function) -> Result<b
 ///
 /// Loop-simplify form keeps a loop's one entry edge, its one back edge and
 /// its dedicated exits as blocks of their own.
-pub fn _threaded(context: &mut Context, function: &mut Function) -> bool {
+pub fn _threaded(
+    context: &mut Context,
+    function: &mut Function,
+) -> bool {
     if function.entry().is_none() {
         return false;
     }
@@ -321,7 +389,8 @@ pub fn _threaded(context: &mut Context, function: &mut Function) -> bool {
     let none = BTreeSet::new();
     let mut loop_edges = BTreeSet::new();
     for loop_ in cfg::Shape::of(function).loops {
-        let outside = predecessors.get(&loop_.header).unwrap_or(&none).difference(&loop_.body).copied().collect::<Vec<_>>();
+        let outside =
+            predecessors.get(&loop_.header).unwrap_or(&none).difference(&loop_.body).copied().collect::<Vec<_>>();
         if let [parent] = outside[..]
             && *known[&parent] == [loop_.header]
         {
@@ -337,7 +406,11 @@ pub fn _threaded(context: &mut Context, function: &mut Function) -> bool {
                 .iter()
                 .filter(|block| {
                     let parents = predecessors.get(&block.at).unwrap_or(&none);
-                    !loop_.body.contains(&block.at) && !parents.is_empty() && parents.is_subset(&loop_.body) && block.succ.len() == 1 && !loop_.body.contains(&block.succ[0])
+                    !loop_.body.contains(&block.at)
+                        && !parents.is_empty()
+                        && parents.is_subset(&loop_.body)
+                        && block.succ.len() == 1
+                        && !loop_.body.contains(&block.succ[0])
                 })
                 .map(|block| block.at),
         );

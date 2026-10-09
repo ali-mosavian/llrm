@@ -10,28 +10,72 @@ fn int() -> T {
     T::Scalar(S::Int { bytes: 2, signed: false })
 }
 
-fn variable(name: &str, r#type: usize, kind: Kind, location: Location) -> Variable {
+fn variable(
+    name: &str,
+    r#type: usize,
+    kind: Kind,
+    location: Location,
+) -> Variable {
     Variable { name: name.into(), r#type, kind, location }
 }
 
 /// `f` in 0x16 bytes of code with `types` and `variables`, its type the last of `types`.
-fn object(arch: Arch, types: Vec<T>, variables: Vec<Variable>) -> Object {
-    let text = Section { name: "_TEXT".into(), role: Role::Text, near: true, align: 1, image: vec![0x90; 0x16], spans: vec![[0, 0x16]], relocs: Vec::new() };
+fn object(
+    arch: Arch,
+    types: Vec<T>,
+    variables: Vec<Variable>,
+) -> Object {
+    let text = Section {
+        name: "_TEXT".into(),
+        role: Role::Text,
+        near: true,
+        align: 1,
+        image: vec![0x90; 0x16],
+        spans: vec![[0, 0x16]],
+        relocs: Vec::new(),
+    };
     let range = Range { section: 0, offset: 0, length: 0x16 };
-    let function = Function { name: "f".into(), symbol: 0, r#type: types.len() - 1, ranges: vec![range], body: Some((6, 0x16)), far: false, module: false, variables, blocks: Vec::new(), frame: Vec::new() };
-    let info = Info { language: Language::C, dialect: llrm_object::debug::Dialect::Cv4, frame_register: if arch == Arch::I8086 { "bp" } else { "ebp" }.into(), code: vec![range], types, functions: vec![function], ..Info::default() };
+    let function = Function {
+        name: "f".into(),
+        symbol: 0,
+        r#type: types.len() - 1,
+        ranges: vec![range],
+        body: Some((6, 0x16)),
+        far: false,
+        module: false,
+        variables,
+        blocks: Vec::new(),
+        frame: Vec::new(),
+    };
+    let info = Info {
+        language: Language::C,
+        dialect: llrm_object::debug::Dialect::Cv4,
+        frame_register: if arch == Arch::I8086 { "bp" } else { "ebp" }.into(),
+        code: vec![range],
+        types,
+        functions: vec![function],
+        ..Info::default()
+    };
     Object {
         name: "t.obj".into(),
         arch,
         sections: vec![text],
-        symbols: vec![Symbol { name: "_f".into(), binding: Binding::Public, definition: Definition::Defined { section: 0, offset: 0 }, group: None }],
+        symbols: vec![Symbol {
+            name: "_f".into(),
+            binding: Binding::Public,
+            definition: Definition::Defined { section: 0, offset: 0 },
+            group: None,
+        }],
         omf_groups: Vec::new(),
         debug: Some(info),
     }
 }
 
 /// A table's records as (code, data), signature checked.
-fn records(image: &[u8], padded: bool) -> Vec<(u16, Vec<u8>)> {
+fn records(
+    image: &[u8],
+    padded: bool,
+) -> Vec<(u16, Vec<u8>)> {
     assert_eq!(image[..4], [1, 0, 0, 0], "the CodeView 4 signature");
     let mut out = Vec::new();
     let mut at = 4;
@@ -60,7 +104,11 @@ fn a_16_bit_procedure_is_the_records_ml_writes() {
     let made = object(
         Arch::I8086,
         vec![int(), procedure()],
-        vec![variable("a", 0, Kind::Parameter, Location::Frame { disp: 4 }), variable("b", 0, Kind::Parameter, Location::Frame { disp: 6 }), variable("x", 0, Kind::Local, Location::Frame { disp: -2 })],
+        vec![
+            variable("a", 0, Kind::Parameter, Location::Frame { disp: 4 }),
+            variable("b", 0, Kind::Parameter, Location::Frame { disp: 6 }),
+            variable("x", 0, Kind::Local, Location::Frame { disp: -2 }),
+        ],
     );
     let [symbols, types] = sections(&made, made.debug.as_ref().unwrap()).unwrap();
     assert_eq!(types.name, "$$TYPES");
@@ -88,7 +136,10 @@ fn a_16_bit_procedure_is_the_records_ml_writes() {
     assert_eq!(symbols.relocs[0].at, 4 + (all[0].1.len() + 4) + (all[1].1.len() + 4) + 4 + 12 + 6);
 }
 
-fn only_function(made: &mut Object, change: impl FnOnce(&mut Function)) {
+fn only_function(
+    made: &mut Object,
+    change: impl FnOnce(&mut Function),
+) {
     change(&mut made.debug.as_mut().unwrap().functions[0]);
 }
 
@@ -105,23 +156,48 @@ fn a_struct_that_points_to_itself_is_named_before_its_members_and_has_a_udt() {
     let node = T::Struct {
         name: "node".into(),
         bytes: 4,
-        fields: vec![Field { name: "next".into(), r#type: 2, offset: 0, bits: None }, Field { name: "v".into(), r#type: 0, offset: 2, bits: None }],
+        fields: vec![
+            Field { name: "next".into(), r#type: 2, offset: 0, bits: None },
+            Field { name: "v".into(), r#type: 0, offset: 2, bits: None },
+        ],
         union: false,
     };
-    let types = vec![T::Scalar(S::Int { bytes: 2, signed: true }), node, T::Pointer { target: 1, bytes: 2, reach: llrm_object::debug::Reach::Near }, T::Procedure { result: None, parameters: vec![2], convention: None }];
+    let types = vec![
+        T::Scalar(S::Int { bytes: 2, signed: true }),
+        node,
+        T::Pointer { target: 1, bytes: 2, reach: llrm_object::debug::Reach::Near },
+        T::Procedure { result: None, parameters: vec![2], convention: None },
+    ];
     let (symbols, types, _) = written(&object(Arch::I8086, types, Vec::new()));
-    let member = |kind: u16, offset: u8, name: &[u8], pad: &[u8]| [vec![0x06, 0x04, kind as u8, (kind >> 8) as u8, 3, 0, offset, 0, name.len() as u8], name.to_vec(), pad.to_vec()].concat();
+    let member = |kind: u16, offset: u8, name: &[u8], pad: &[u8]| {
+        [
+            vec![0x06, 0x04, kind as u8, (kind >> 8) as u8, 3, 0, offset, 0, name.len() as u8],
+            name.to_vec(),
+            pad.to_vec(),
+        ]
+        .concat()
+    };
     assert_eq!(
         types,
         [
-            (0x0005, [vec![2, 0, 0x02, 0x10, 0, 0, 0, 0, 0, 0, 4, 0, 4], b"node".to_vec(), vec![0xF3, 0xF2, 0xF1]].concat()),
+            (
+                0x0005,
+                [vec![2, 0, 0x02, 0x10, 0, 0, 0, 0, 0, 0, 4, 0, 4], b"node".to_vec(), vec![0xF3, 0xF2, 0xF1]].concat()
+            ),
             (0x0002, vec![0, 0, 0x00, 0x10, 0, 0, 0, 0]),
-            (0x0204, [member(0x1001, 0, b"next", &[0xF3, 0xF2, 0xF1]), member(0x0011, 2, b"v", &[0xF2, 0xF1])].concat()),
+            (
+                0x0204,
+                [member(0x1001, 0, b"next", &[0xF3, 0xF2, 0xF1]), member(0x0011, 2, b"v", &[0xF2, 0xF1])].concat()
+            ),
             (0x0201, vec![1, 0, 0x01, 0x10]),
             (0x0008, vec![3, 0, 0, 0, 1, 0, 0x03, 0x10]),
         ]
     );
-    assert_eq!(symbols.last().unwrap(), &(0x0004, [vec![0x00, 0x10, 4], b"node".to_vec()].concat()), "S_UDT names the struct");
+    assert_eq!(
+        symbols.last().unwrap(),
+        &(0x0004, [vec![0x00, 0x10, 4], b"node".to_vec()].concat()),
+        "S_UDT names the struct"
+    );
 }
 
 /// ML's `.386 flat` /Zi object: S_GPROC32 is the three links, three four-byte lengths, a four-byte offset and a
@@ -129,15 +205,26 @@ fn a_struct_that_points_to_itself_is_named_before_its_members_and_has_a_udt() {
 /// offset and the segment are two fixups here (an offset32 and a base), ML's one 16:32 pointer's two halves.
 #[test]
 fn a_32_bit_procedure_has_four_byte_fields_and_two_fixups() {
-    let mut made = object(Arch::I386, vec![T::Scalar(S::Int { bytes: 4, signed: true }), T::Procedure { result: None, parameters: vec![0], convention: None }], vec![variable("a", 0, Kind::Parameter, Location::Frame { disp: 8 })]);
+    let mut made = object(
+        Arch::I386,
+        vec![
+            T::Scalar(S::Int { bytes: 4, signed: true }),
+            T::Procedure { result: None, parameters: vec![0], convention: None },
+        ],
+        vec![variable("a", 0, Kind::Parameter, Location::Frame { disp: 8 })],
+    );
     made.debug.as_mut().unwrap().functions[0].body = Some((3, 5));
     made.debug.as_mut().unwrap().functions[0].ranges[0].length = 5;
     let (symbols, types, relocs) = written(&made);
     // A 32-bit program's four-byte integer is T_INT4.
     assert_eq!(types[0], (0x0201, vec![1, 0, 0x74, 0]));
-    let proc32 = [vec![0; 12], vec![5, 0, 0, 0, 3, 0, 0, 0, 5, 0, 0, 0], vec![0; 6], vec![0x01, 0x10, 0, 1, b'f']].concat();
+    let proc32 =
+        [vec![0; 12], vec![5, 0, 0, 0, 3, 0, 0, 0, 5, 0, 0, 0], vec![0; 6], vec![0x01, 0x10, 0, 1, b'f']].concat();
     assert_eq!(symbols[2..], [(0x0205, proc32), (0x0200, vec![8, 0, 0, 0, 0x74, 0, 1, b'a']), (0x0006, vec![])]);
-    assert_eq!(relocs.iter().map(|one| (one.kind, one.at - relocs[0].at)).collect::<Vec<_>>(), [(llrm_object::Kind::Abs { width: 4 }, 0), (llrm_object::Kind::SegmentBase, 4)]);
+    assert_eq!(
+        relocs.iter().map(|one| (one.kind, one.at - relocs[0].at)).collect::<Vec<_>>(),
+        [(llrm_object::Kind::Abs { width: 4 }, 0), (llrm_object::Kind::SegmentBase, 4)]
+    );
 }
 
 /// Far is the function's, not the type's: the same procedure type called far is a second record whose call
@@ -155,7 +242,10 @@ fn a_far_function_has_a_far_procedure_type_and_the_far_flag() {
 
 /// `local`'s records and the type index its `S_BPREL16` names, for a function of no parameters: the function's own
 /// two records (an empty argument list at 0x1000 and the procedure at 0x1001) come first.
-fn local_of(types: Vec<T>, local: usize) -> (Vec<(u16, Vec<u8>)>, u16) {
+fn local_of(
+    types: Vec<T>,
+    local: usize,
+) -> (Vec<(u16, Vec<u8>)>, u16) {
     let mut all = types;
     all.push(T::Procedure { result: None, parameters: Vec::new(), convention: None });
     let made = object(Arch::I8086, all, vec![variable("v", local, Kind::Local, Location::Frame { disp: -2 })]);
@@ -175,12 +265,24 @@ fn a_c_programs_types_are_the_records_cv4f_h_describes() {
     let (records, at) = local_of(vec![short(), T::Array { element: 0, bytes: Some(20) }], 1);
     assert_eq!((records, at), (vec![(0x0003, vec![0x11, 0, 0x21, 0, 0x14, 0, 0, 0xF1])], 0x1002), "array");
 
-    let enumerators = vec![llrm_object::debug::Enumerator { name: "a".into(), value: 0 }, llrm_object::debug::Enumerator { name: "b".into(), value: -1 }];
+    let enumerators = vec![
+        llrm_object::debug::Enumerator { name: "a".into(), value: 0 },
+        llrm_object::debug::Enumerator { name: "b".into(), value: -1 },
+    ];
     let (records, at) = local_of(vec![short(), T::Enum { name: "e".into(), underlying: 0, enumerators }], 1);
-    let list = [vec![0x03, 0x04, 3, 0, 0, 0, 1, b'a'], vec![0x03, 0x04, 3, 0, 0x00, 0x80, 0xFF, 1, b'b', 0xF3, 0xF2, 0xF1]].concat();
-    assert_eq!((records, at), (vec![(0x0204, list), (0x0007, vec![2, 0, 0x11, 0, 0x02, 0x10, 0, 0, 1, b'e', 0xF2, 0xF1])], 0x1003), "enum");
+    let list =
+        [vec![0x03, 0x04, 3, 0, 0, 0, 1, b'a'], vec![0x03, 0x04, 3, 0, 0x00, 0x80, 0xFF, 1, b'b', 0xF3, 0xF2, 0xF1]]
+            .concat();
+    assert_eq!(
+        (records, at),
+        (vec![(0x0204, list), (0x0007, vec![2, 0, 0x11, 0, 0x02, 0x10, 0, 0, 1, b'e', 0xF2, 0xF1])], 0x1003),
+        "enum"
+    );
 
-    let (records, at) = local_of(vec![short(), T::Struct { name: "s".into(), bytes: 2, fields: vec![field("a", Some((0, 3)))], union: false }], 1);
+    let (records, at) = local_of(
+        vec![short(), T::Struct { name: "s".into(), bytes: 2, fields: vec![field("a", Some((0, 3)))], union: false }],
+        1,
+    );
     assert_eq!(
         (records, at),
         (
@@ -193,9 +295,16 @@ fn a_c_programs_types_are_the_records_cv4f_h_describes() {
         ),
         "a struct with a bit field: the struct is numbered before its members"
     );
-    let (records, at) = local_of(vec![short(), T::Struct { name: "u".into(), bytes: 2, fields: vec![field("a", None)], union: true }], 1);
+    let (records, at) = local_of(
+        vec![short(), T::Struct { name: "u".into(), bytes: 2, fields: vec![field("a", None)], union: true }],
+        1,
+    );
     assert_eq!(at, 0x1002);
-    assert_eq!(records[0], (0x0006, vec![1, 0, 0x03, 0x10, 0, 0, 2, 0, 1, b'u', 0xF2, 0xF1]), "a union has no derived list or vshape");
+    assert_eq!(
+        records[0],
+        (0x0006, vec![1, 0, 0x03, 0x10, 0, 0, 2, 0, 1, b'u', 0xF2, 0xF1]),
+        "a union has no derived list or vshape"
+    );
 
     let (records, at) = local_of(vec![short(), T::Qualified { target: 0, constant: true, volatile: false }], 1);
     assert_eq!((records, at), (vec![(0x0001, vec![1, 0, 0x11, 0])], 0x1002), "const");
@@ -212,7 +321,10 @@ fn a_pointer_to_a_primitive_is_a_primitive_pointer_and_to_a_record_is_a_record()
         let (records, at) = local_of(vec![short(), pointer(reach, bytes)], 1);
         assert_eq!((records.len(), at), (0, expected), "{reach:?}");
     }
-    let (records, at) = local_of(vec![short(), T::Array { element: 0, bytes: Some(2) }, T::Pointer { target: 1, bytes: 2, reach: Near }], 2);
+    let (records, at) = local_of(
+        vec![short(), T::Array { element: 0, bytes: Some(2) }, T::Pointer { target: 1, bytes: 2, reach: Near }],
+        2,
+    );
     // The array is first, the pointer second; near is kind 0, and ML writes four zero bytes after the type.
     assert_eq!((records[1].clone(), at), ((0x0002, vec![0, 0, 0x02, 0x10, 0, 0, 0, 0]), 0x1003));
 }
@@ -236,7 +348,14 @@ fn a_value_in_a_register_throughout_is_s_register_and_one_part_of_the_time_is_le
             variable("c", 0, Kind::Local, Location::Frame { disp: -2 }),
         ],
     );
-    made.debug.as_mut().unwrap().registers = [("ax", 9), ("cx", 10), ("dx", 11)].map(|(name, number)| llrm_object::debug::Register { name: name.into(), bits: 16, dwarf: None, codeview: Some(number) }).to_vec();
+    made.debug.as_mut().unwrap().registers = [("ax", 9), ("cx", 10), ("dx", 11)]
+        .map(|(name, number)| llrm_object::debug::Register {
+            name: name.into(),
+            bits: 16,
+            dwarf: None,
+            codeview: Some(number),
+        })
+        .to_vec();
     let (symbols, ..) = written(&made);
     let found: Vec<(u16, Vec<u8>)> = symbols[3..].to_vec();
     assert_eq!(
@@ -254,14 +373,27 @@ fn a_value_in_a_register_throughout_is_s_register_and_one_part_of_the_time_is_le
 /// variables and S_END, its offset a fixup against the section it is in.
 #[test]
 fn a_block_is_a_scope_with_its_variables_and_an_end() {
-    let mut made = object(Arch::I8086, vec![int(), T::Procedure { result: None, parameters: Vec::new(), convention: None }], Vec::new());
+    let mut made = object(
+        Arch::I8086,
+        vec![int(), T::Procedure { result: None, parameters: Vec::new(), convention: None }],
+        Vec::new(),
+    );
     only_function(&mut made, |one| {
-        one.blocks = vec![llrm_object::debug::Block { ranges: vec![Range { section: 0, offset: 8, length: 6 }], variables: vec![variable("i", 0, Kind::Local, Location::Frame { disp: -4 })], blocks: Vec::new() }];
+        one.blocks = vec![llrm_object::debug::Block {
+            ranges: vec![Range { section: 0, offset: 8, length: 6 }],
+            variables: vec![variable("i", 0, Kind::Local, Location::Frame { disp: -4 })],
+            blocks: Vec::new(),
+        }];
     });
     let (symbols, _, relocs) = written(&made);
     assert_eq!(
         symbols[3..],
-        [(0x0107, [vec![0; 8], vec![6, 0, 0, 0, 0, 0, 0]].concat()), (0x0100, vec![0xFC, 0xFF, 0x21, 0, 1, b'i']), (0x0006, vec![]), (0x0006, vec![])]
+        [
+            (0x0107, [vec![0; 8], vec![6, 0, 0, 0, 0, 0, 0]].concat()),
+            (0x0100, vec![0xFC, 0xFF, 0x21, 0, 1, b'i']),
+            (0x0006, vec![]),
+            (0x0006, vec![])
+        ]
     );
     assert_eq!(relocs.len(), 2, "the procedure's and the block's address");
     assert_eq!(relocs[1].addend, 8);
@@ -281,7 +413,10 @@ fn the_writers_object_reads_as_mls_for_the_same_program() {
     let point = T::Struct {
         name: "point".into(),
         bytes: 4,
-        fields: vec![Field { name: "px".into(), r#type: 0, offset: 0, bits: None }, Field { name: "py".into(), r#type: 0, offset: 2, bits: None }],
+        fields: vec![
+            Field { name: "px".into(), r#type: 0, offset: 0, bits: None },
+            Field { name: "py".into(), r#type: 0, offset: 2, bits: None },
+        ],
         union: false,
     };
     let made = object(
@@ -306,12 +441,18 @@ fn the_writers_object_reads_as_mls_for_the_same_program() {
 fn the_32_bit_writers_object_reads_as_mls_flat_object_does() {
     use crate::{cv4info, omf, write};
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/cv4/p2.obj");
-    let ml: Vec<String> = cv4info::shape(&omf::parse(&std::fs::read(path).unwrap()).unwrap()).into_iter().filter(|one| !one.starts_with("DATA")).collect();
+    let ml: Vec<String> = cv4info::shape(&omf::parse(&std::fs::read(path).unwrap()).unwrap())
+        .into_iter()
+        .filter(|one| !one.starts_with("DATA"))
+        .collect();
     let dword = T::Scalar(S::Int { bytes: 4, signed: false });
     let point = T::Struct {
         name: "point".into(),
         bytes: 8,
-        fields: vec![Field { name: "px".into(), r#type: 0, offset: 0, bits: None }, Field { name: "py".into(), r#type: 0, offset: 4, bits: None }],
+        fields: vec![
+            Field { name: "px".into(), r#type: 0, offset: 0, bits: None },
+            Field { name: "py".into(), r#type: 0, offset: 4, bits: None },
+        ],
         union: false,
     };
     let made = object(
@@ -324,7 +465,10 @@ fn the_32_bit_writers_object_reads_as_mls_flat_object_does() {
             variable("q", 1, Kind::Local, Location::Frame { disp: -12 }),
         ],
     );
-    let ours: Vec<String> = cv4info::shape(&omf::parse(&write::write(&made).unwrap()).unwrap()).into_iter().map(|one| one.replace("UINT4", "UNSIGNED LONG")).collect();
+    let ours: Vec<String> = cv4info::shape(&omf::parse(&write::write(&made).unwrap()).unwrap())
+        .into_iter()
+        .map(|one| one.replace("UINT4", "UNSIGNED LONG"))
+        .collect();
     assert_eq!(ours, ml);
 }
 
@@ -342,15 +486,36 @@ fn a_pointer_to_a_function_points_to_a_procedure_called_as_far_as_the_pointer_re
         T::Pointer { target: 1, bytes: 2, reach: Near },
         T::Procedure { result: None, parameters: Vec::new(), convention: None },
     ];
-    let made = object(Arch::I8086, types, vec![variable("p", 2, Kind::Local, Location::Frame { disp: -4 }), variable("q", 3, Kind::Local, Location::Frame { disp: -6 })]);
+    let made = object(
+        Arch::I8086,
+        types,
+        vec![
+            variable("p", 2, Kind::Local, Location::Frame { disp: -4 }),
+            variable("q", 3, Kind::Local, Location::Frame { disp: -6 }),
+        ],
+    );
     let (_, table, _) = written(&made);
     let index = |one: usize| 0x1000 + one as u16;
-    let one_parameter: Vec<(u16, u8)> = table.iter().enumerate().filter(|(_, (leaf, data))| *leaf == 0x0008 && data[4] == 1).map(|(at, (_, data))| (index(at), data[2])).collect();
+    let one_parameter: Vec<(u16, u8)> = table
+        .iter()
+        .enumerate()
+        .filter(|(_, (leaf, data))| *leaf == 0x0008 && data[4] == 1)
+        .map(|(at, (_, data))| (index(at), data[2]))
+        .collect();
     // Two procedures of one parameter: the far one (call 1) and the near one (call 0).
     let call = |wanted: u8| one_parameter.iter().find(|(_, kind)| *kind == wanted).map(|(at, _)| *at);
     let (far, near) = (call(1).expect("a far procedure"), call(0).expect("a near procedure"));
-    let target = |reach: u16| table.iter().find(|(leaf, data)| *leaf == 0x0002 && u16::from_le_bytes([data[0], data[1]]) == reach).map(|(_, data)| u16::from_le_bytes([data[2], data[3]]));
-    assert_eq!((target(1), target(0)), (Some(far), Some(near)), "a far pointer to the far procedure, a near one to the near");
+    let target = |reach: u16| {
+        table
+            .iter()
+            .find(|(leaf, data)| *leaf == 0x0002 && u16::from_le_bytes([data[0], data[1]]) == reach)
+            .map(|(_, data)| u16::from_le_bytes([data[2], data[3]]))
+    };
+    assert_eq!(
+        (target(1), target(0)),
+        (Some(far), Some(near)),
+        "a far pointer to the far procedure, a near one to the near"
+    );
 }
 
 /// Two types of the model that read alike, an array of `int` and one of `long` (the source spells each, so they are
@@ -361,8 +526,17 @@ fn arrays_of_scalars_of_two_spellings_are_one_record() {
     let array = |element| T::Array { element, bytes: Some(8) };
     let made = object(
         Arch::I8086,
-        vec![spelled("int"), spelled("short"), array(0), array(1), T::Procedure { result: None, parameters: Vec::new(), convention: None }],
-        vec![variable("a", 2, Kind::Local, Location::Frame { disp: -8 }), variable("b", 3, Kind::Local, Location::Frame { disp: -16 })],
+        vec![
+            spelled("int"),
+            spelled("short"),
+            array(0),
+            array(1),
+            T::Procedure { result: None, parameters: Vec::new(), convention: None },
+        ],
+        vec![
+            variable("a", 2, Kind::Local, Location::Frame { disp: -8 }),
+            variable("b", 3, Kind::Local, Location::Frame { disp: -16 }),
+        ],
     );
     let (symbols, types, _) = written(&made);
     assert_eq!(types.iter().filter(|(leaf, _)| *leaf == 0x0003).count(), 1, "one LF_ARRAY");
@@ -371,11 +545,14 @@ fn arrays_of_scalars_of_two_spellings_are_one_record() {
 }
 
 /// A parameter in its register until the function stores it and in its frame cell for the rest has one place for the
-/// scope as CodeView 4 names it, the cell: written as a frame variable. Left out, as any list was, a debugger lost every
-/// parameter of a C function.
+/// scope as CodeView 4 names it, the cell: written as a frame variable. Left out, as any list was, a debugger lost
+/// every parameter of a C function.
 #[test]
 fn a_parameter_in_a_register_and_then_its_cell_is_written_as_the_cell() {
-    let list = Location::List(vec![(Range { section: 0, offset: 0, length: 9 }, Location::Register("ax".into())), (Range { section: 0, offset: 9, length: 0x16 - 9 }, Location::Frame { disp: 4 })]);
+    let list = Location::List(vec![
+        (Range { section: 0, offset: 0, length: 9 }, Location::Register("ax".into())),
+        (Range { section: 0, offset: 9, length: 0x16 - 9 }, Location::Frame { disp: 4 }),
+    ]);
     let made = object(Arch::I8086, vec![int(), procedure()], vec![variable("a", 0, Kind::Parameter, list)]);
     let (symbols, ..) = written(&made);
     assert_eq!(symbols[3..], [(0x0100, vec![4, 0, 0x21, 0, 1, b'a']), (0x0006, vec![])]);

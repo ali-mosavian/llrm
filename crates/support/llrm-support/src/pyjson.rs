@@ -5,7 +5,6 @@
 //! `json.encoder`'s `ensure_ascii` spelling.
 
 use crate::hash::IndexMap;
-
 use crate::pyrepr;
 
 /// A value `json.loads` produces: `None | bool | int | float | str | list |
@@ -45,7 +44,11 @@ impl Json {
 }
 
 /// `json.JSONDecodeError.__str__`: `msg: line L column C (char P)`.
-fn error(message: &str, doc: &[char], pos: usize) -> String {
+fn error(
+    message: &str,
+    doc: &[char],
+    pos: usize,
+) -> String {
     let lineno = doc[..pos].iter().filter(|one| **one == '\n').count() + 1;
     let colno = match doc[..pos].iter().rposition(|one| *one == '\n') {
         Some(newline) => pos - newline,
@@ -56,7 +59,10 @@ fn error(message: &str, doc: &[char], pos: usize) -> String {
 
 const WHITESPACE: [char; 4] = [' ', '\t', '\n', '\r'];
 
-fn whitespace_end(s: &[char], mut end: usize) -> usize {
+fn whitespace_end(
+    s: &[char],
+    mut end: usize,
+) -> usize {
     while end < s.len() && WHITESPACE.contains(&s[end]) {
         end += 1;
     }
@@ -72,7 +78,10 @@ pub fn loads(text: &str) -> Result<Json, String> {
 }
 
 /// `json.loads(text, object_pairs_hook=hook)`; the hook's error propagates as it is.
-pub fn loads_with(text: &str, hook: PairsHook) -> Result<Json, String> {
+pub fn loads_with(
+    text: &str,
+    hook: PairsHook,
+) -> Result<Json, String> {
     let s: Vec<char> = text.chars().collect();
     if s.first() == Some(&'\u{feff}') {
         return Err(error("Unexpected UTF-8 BOM (decode using utf-8-sig)", &s, 0));
@@ -95,12 +104,20 @@ enum Scanned {
     Stop(usize),
 }
 
-fn starts(s: &[char], idx: usize, word: &str) -> bool {
+fn starts(
+    s: &[char],
+    idx: usize,
+    word: &str,
+) -> bool {
     let word: Vec<char> = word.chars().collect();
     s.len() >= idx + word.len() && s[idx..idx + word.len()] == word[..]
 }
 
-fn scan_once(s: &[char], idx: usize, hook: PairsHook) -> Result<Scanned, String> {
+fn scan_once(
+    s: &[char],
+    idx: usize,
+    hook: PairsHook,
+) -> Result<Scanned, String> {
     let Some(&nextchar) = s.get(idx) else {
         return Ok(Scanned::Stop(idx));
     };
@@ -142,7 +159,10 @@ fn scan_once(s: &[char], idx: usize, hook: PairsHook) -> Result<Scanned, String>
 }
 
 /// `NUMBER_RE = r'(-?(?:0|[1-9]\d*))(\.\d+)?([eE][-+]?\d+)?'`.
-fn match_number(s: &[char], idx: usize) -> Option<(String, Option<String>, Option<String>, usize)> {
+fn match_number(
+    s: &[char],
+    idx: usize,
+) -> Option<(String, Option<String>, Option<String>, usize)> {
     let digit = |at: usize| s.get(at).is_some_and(char::is_ascii_digit);
     let mut end = idx;
     if s.get(end) == Some(&'-') {
@@ -186,7 +206,10 @@ fn match_number(s: &[char], idx: usize) -> Option<(String, Option<String>, Optio
     Some((integer, frac, exp, end))
 }
 
-fn _decode_uxxxx(s: &[char], pos: usize) -> Result<u32, String> {
+fn _decode_uxxxx(
+    s: &[char],
+    pos: usize,
+) -> Result<u32, String> {
     let esc: String = s.get(pos + 1..pos + 5).map(|one| one.iter().collect()).unwrap_or_default();
     if esc.chars().count() == 4 && !matches!(esc.chars().nth(1), Some('x' | 'X')) {
         if let Ok(value) = u32::from_str_radix(&esc, 16) {
@@ -197,7 +220,10 @@ fn _decode_uxxxx(s: &[char], pos: usize) -> Result<u32, String> {
 }
 
 /// `py_scanstring(s, end, strict=True)`.
-fn scanstring(s: &[char], mut end: usize) -> Result<(String, usize), String> {
+fn scanstring(
+    s: &[char],
+    mut end: usize,
+) -> Result<(String, usize), String> {
     let mut chunks = String::new();
     let begin = end - 1;
     loop {
@@ -253,7 +279,11 @@ fn scanstring(s: &[char], mut end: usize) -> Result<(String, usize), String> {
 }
 
 /// `JSONObject((s, end), strict=True, ...)`.
-fn parse_object(s: &[char], mut end: usize, hook: PairsHook) -> Result<(Json, usize), String> {
+fn parse_object(
+    s: &[char],
+    mut end: usize,
+    hook: PairsHook,
+) -> Result<(Json, usize), String> {
     let mut pairs: Vec<(String, Json)> = Vec::new();
     let made = |pairs: Vec<(String, Json)>| match hook {
         Some(hook) => hook(pairs),
@@ -320,7 +350,11 @@ fn parse_object(s: &[char], mut end: usize, hook: PairsHook) -> Result<(Json, us
 }
 
 /// `JSONArray((s, end), scan_once)`.
-fn parse_array(s: &[char], mut end: usize, hook: PairsHook) -> Result<(Json, usize), String> {
+fn parse_array(
+    s: &[char],
+    mut end: usize,
+    hook: PairsHook,
+) -> Result<(Json, usize), String> {
     let mut values = Vec::new();
     let mut nextchar = s.get(end).copied();
     if nextchar.is_some_and(|one| WHITESPACE.contains(&one)) {
@@ -363,7 +397,10 @@ fn parse_array(s: &[char], mut end: usize, hook: PairsHook) -> Result<(Json, usi
 }
 
 /// `py_encode_basestring_ascii`.
-fn encode_string(value: &str, out: &mut String) {
+fn encode_string(
+    value: &str,
+    out: &mut String,
+) {
     out.push('"');
     for character in value.chars() {
         match character {
@@ -390,14 +427,27 @@ fn encode_string(value: &str, out: &mut String) {
 /// sort_keys=sort_keys)` with Python's `ensure_ascii` and `allow_nan`
 /// defaults.  `separators=None` is `(', ', ': ')`, or `(',', ': ')` with an
 /// indent.
-pub fn dumps(value: &Json, indent: Option<usize>, separators: Option<(&str, &str)>, sort_keys: bool) -> String {
+pub fn dumps(
+    value: &Json,
+    indent: Option<usize>,
+    separators: Option<(&str, &str)>,
+    sort_keys: bool,
+) -> String {
     let (item, key) = separators.unwrap_or(if indent.is_some() { (",", ": ") } else { (", ", ": ") });
     let mut out = String::new();
     encode(value, indent, item, key, sort_keys, 0, &mut out);
     out
 }
 
-fn encode(value: &Json, indent: Option<usize>, item: &str, key: &str, sort_keys: bool, level: usize, out: &mut String) {
+fn encode(
+    value: &Json,
+    indent: Option<usize>,
+    item: &str,
+    key: &str,
+    sort_keys: bool,
+    level: usize,
+    out: &mut String,
+) {
     let newline = |level: usize| indent.map(|width| format!("\n{}", " ".repeat(width * level)));
     match value {
         Json::None => out.push_str("null"),
@@ -461,7 +511,10 @@ mod tests {
     fn loads_refuses_with_pythons_messages() {
         // Expected text from CPython 3.13 json.loads.
         assert_eq!(loads("").unwrap_err(), "Expecting value: line 1 column 1 (char 0)");
-        assert_eq!(loads("{\"a\":1,}").unwrap_err(), "Illegal trailing comma before end of object: line 1 column 7 (char 6)");
+        assert_eq!(
+            loads("{\"a\":1,}").unwrap_err(),
+            "Illegal trailing comma before end of object: line 1 column 7 (char 6)"
+        );
         assert_eq!(loads("[1 2]").unwrap_err(), "Expecting ',' delimiter: line 1 column 4 (char 3)");
         assert_eq!(loads("{}\n x").unwrap_err(), "Extra data: line 2 column 2 (char 4)");
     }
@@ -470,6 +523,9 @@ mod tests {
     fn dumps_spells_floats_and_non_ascii_as_python() {
         let value = loads("{\"b\":[1.5,1e20,\"\u{e9}\"],\"a\":-0}").unwrap();
         assert_eq!(dumps(&value, None, Some((",", ":")), true), "{\"a\":0,\"b\":[1.5,1e+20,\"\\u00e9\"]}");
-        assert_eq!(dumps(&value, Some(2), None, true), "{\n  \"a\": 0,\n  \"b\": [\n    1.5,\n    1e+20,\n    \"\\u00e9\"\n  ]\n}");
+        assert_eq!(
+            dumps(&value, Some(2), None, true),
+            "{\n  \"a\": 0,\n  \"b\": [\n    1.5,\n    1e+20,\n    \"\\u00e9\"\n  ]\n}"
+        );
     }
 }

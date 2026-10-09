@@ -2,21 +2,28 @@
 //! Python's `str(insn)` checks read iced's decoded fields instead, or the
 //! bytes Python printed: this crate builds iced without a formatter.
 
+use llrm_lir::Addr;
+
 use super::sweep_support::{a, h, rg, sem};
 use super::*;
-use llrm_lir::Addr;
 
 /// The instruction an encoding decodes to, in real mode.
 struct Seen {
     insn: Instruction,
 }
 
-fn seen(code: &[u8], at: u64) -> Option<Seen> {
+fn seen(
+    code: &[u8],
+    at: u64,
+) -> Option<Seen> {
     Some(Seen { insn: decoded(code, at) })
 }
 use iced_x86::{Mnemonic, OpKind};
 
-fn decoded(code: &[u8], ip: u64) -> Instruction {
+fn decoded(
+    code: &[u8],
+    ip: u64,
+) -> Instruction {
     Decoder::with_ip(BITNESS, code, ip, DecoderOptions::NONE).decode()
 }
 
@@ -32,15 +39,26 @@ fn emitted(what: &Semantics) -> Option<Emitted> {
     emit(what, 0, None, false, false, None)
 }
 
-fn frame(disp: i64, width: u32) -> ir::Mem {
+fn frame(
+    disp: i64,
+    width: u32,
+) -> ir::Mem {
     ir::Mem::new(Some(Addr::new(Space::Frame, disp)), width)
 }
 
-fn at(space: Space, disp: i64, base: Register, segment: Register) -> Addr {
+fn at(
+    space: Space,
+    disp: i64,
+    base: Register,
+    segment: Register,
+) -> Addr {
     a(space, disp, 0, base, segment)
 }
 
-fn imm(value: i64, width: u32) -> Loc {
+fn imm(
+    value: i64,
+    width: u32,
+) -> Loc {
     Loc::Imm(ir::Imm { value, width, address: None })
 }
 
@@ -81,7 +99,8 @@ fn test_byte_copy_for_nbody_timer() {
 
 #[test]
 fn test_signed_word_extension_uses_explicit_operands() {
-    let what = sem(Operation::Extend, Some("movsx"), vec![rg(Register::EBX, 4)], vec![rg(Register::SI, 2)], None, false);
+    let what =
+        sem(Operation::Extend, Some("movsx"), vec![rg(Register::EBX, 4)], vec![rg(Register::SI, 2)], None, false);
     let instruction = decoded(&made(emitted(&what)).code, 0);
     assert_eq!(instruction.code(), Code::Movsx_r32_rm16);
     assert!(instruction.op0_register() == Register::EBX && instruction.op1_register() == Register::SI);
@@ -284,7 +303,9 @@ fn test_a_relocated_push_keeps_the_wide_immediate() {
 
 #[test]
 fn test_a_shift_by_one_takes_its_own_opcode() {
-    for (name, reg, want) in [("shl", Register::AX, "d1e0"), ("shl", Register::BX, "d1e3"), ("sar", Register::AX, "d1f8")] {
+    for (name, reg, want) in
+        [("shl", Register::AX, "d1e0"), ("shl", Register::BX, "d1e3"), ("sar", Register::AX, "d1f8")]
+    {
         assert_eq!(hex(&made(shift(name, RegisterOrCell::Reg(reg), Some(1), At::bits16(0))).code), want);
     }
 }
@@ -378,7 +399,9 @@ fn test_a_relocated_immediate_against_memory_keeps_its_width() {
 
 #[test]
 fn test_a_comparison_against_zero_takes_the_test_form() {
-    for (reg, want) in [(Register::EAX, "6685c0"), (Register::ECX, "6685c9"), (Register::AX, "85c0"), (Register::BX, "85db")] {
+    for (reg, want) in
+        [(Register::EAX, "6685c0"), (Register::ECX, "6685c9"), (Register::AX, "85c0"), (Register::BX, "85db")]
+    {
         let width = if matches!(reg, Register::EAX | Register::ECX) { 4 } else { 2 };
         assert_eq!(hex(&made(compare(&rg(reg, width), 0, At::bits16(0), false)).code), want);
     }
@@ -399,7 +422,14 @@ fn test_a_remap_reaches_inside_a_memory_operand() {
         disp_width: 1,
         ..ir::Mem::new(Some(at(Space::Literal, 0x0A, Register::SI, Register::None)), 2)
     };
-    let what = sem(Operation::Binary, Some("add"), vec![rg(Register::BX, 2)], vec![rg(Register::BX, 2), Loc::Mem(cell)], None, false);
+    let what = sem(
+        Operation::Binary,
+        Some("add"),
+        vec![rg(Register::BX, 2)],
+        vec![rg(Register::BX, 2), Loc::Mem(cell)],
+        None,
+        false,
+    );
     let plain = made(emitted(&what));
     let moved = made(emit(&what, 0, Some(Where::One(&r#where)), false, false, None));
     assert_ne!(plain.code, moved.code, "the remap never reached the operand");
@@ -428,7 +458,10 @@ fn test_an_unresolved_held_is_refused_rather_than_guessed() {
     assert!(emit(&what, 0, None, false, false, Some(&held)).is_some(), "and it emits once there is");
 }
 
-fn funnel_of(count: Loc, name: &str) -> Semantics {
+fn funnel_of(
+    count: Loc,
+    name: &str,
+) -> Semantics {
     let low = rg(Register::EAX, 4);
     sem(Operation::Funnel, Some(name), vec![low.clone()], vec![low, rg(Register::EDX, 4), count], None, false)
 }
@@ -445,7 +478,11 @@ fn test_a_left_funnel_shift_emits_shld() {
     assert_eq!(hex(&made(emitted(&funnel_of(imm(16, 1), "shld"))).code), "660fa4d010");
 }
 
-fn restoring_of(wide: Register, low: Register, high: Register) -> Semantics {
+fn restoring_of(
+    wide: Register,
+    low: Register,
+    high: Register,
+) -> Semantics {
     ir::restoring(rg(wide, 4), rg(low, 2), rg(high, 2))
 }
 
@@ -468,7 +505,13 @@ fn test_a_restore_encodes_the_registers_the_allocation_chose() {
     }
 }
 
-fn placed(r#where: Addr, through: Register, offset: i64, disp_width: u32, value: u32) -> ir::Mem {
+fn placed(
+    r#where: Addr,
+    through: Register,
+    offset: i64,
+    disp_width: u32,
+    value: u32,
+) -> ir::Mem {
     ir::Mem { through, offset, disp_width, base: Some(h(value, 2)), ..ir::Mem::new(Some(r#where), 2) }
 }
 
@@ -516,7 +559,10 @@ fn test_a_frame_slots_displacement_is_not_a_relocatable_field() {
     let store = made(emitted(&store));
     assert!(store.places().is_empty(), "the frame slot offered a field at {:?}", store.places());
 
-    let array = ir::Mem { through: Register::SI, ..ir::Mem::new(Some(at(Space::Segment, 0x6, Register::SI, Register::None)), 2) };
+    let array = ir::Mem {
+        through: Register::SI,
+        ..ir::Mem::new(Some(at(Space::Segment, 0x6, Register::SI, Register::None)), 2)
+    };
     let indexed = sem(Operation::Move, Some("mov"), vec![Loc::Mem(array)], vec![rg(Register::BX, 2)], None, false);
     assert!(!made(emitted(&indexed)).places().is_empty(), "an array reached through si still carries its own address");
 }
@@ -570,7 +616,8 @@ fn test_a_product_into_another_register_keeps_its_operand() {
         (rg(Register::BX, 2), ("register", Register::BX, 0)),
         (rg(Register::CX, 2), ("register", Register::CX, 0)),
     ] {
-        let what = sem(Operation::Multiply, Some("imul"), vec![rg(Register::CX, 2)], vec![source, imm(2, 2)], None, false);
+        let what =
+            sem(Operation::Multiply, Some("imul"), vec![rg(Register::CX, 2)], vec![source, imm(2, 2)], None, false);
         let code = made(emitted(&what)).code;
         let mut decoder = Decoder::new(BITNESS, &code, DecoderOptions::NONE);
         let insn = decoder.decode();
@@ -594,7 +641,9 @@ fn test_discarded_x87_result_has_a_register_pop_encoding() {
 // tests/test_select_float_stack.py
 #[test]
 fn test_register_arithmetic_preserves_operand_direction() {
-    for (name, base) in [("fadd", 0xc0_u8), ("fmul", 0xc8), ("fsub", 0xe0), ("fsubr", 0xe8), ("fdiv", 0xf0), ("fdivr", 0xf8)] {
+    for (name, base) in
+        [("fadd", 0xc0_u8), ("fmul", 0xc8), ("fsub", 0xe0), ("fsubr", 0xe8), ("fdiv", 0xf0), ("fdivr", 0xf8)]
+    {
         for index in [1_u8, 3, 7] {
             for top in [true, false] {
                 let (dest, source) = if top { (st(0), st(u32::from(index))) } else { (st(u32::from(index)), st(0)) };
@@ -611,7 +660,8 @@ fn test_register_arithmetic_preserves_operand_direction() {
 #[test]
 fn test_stack_duplicate_and_exchange() {
     for index in [0_u8, 1, 7] {
-        let load = emitted(&sem(Operation::FloatLoad, Some("fld"), vec![st(0)], vec![st(u32::from(index))], None, false));
+        let load =
+            emitted(&sem(Operation::FloatLoad, Some("fld"), vec![st(0)], vec![st(u32::from(index))], None, false));
         let both = vec![st(0), st(u32::from(index))];
         let exchange = emitted(&sem(Operation::Exchange, Some("fxch"), both.clone(), both, None, false));
         assert_eq!(made(load).code, [0xd9, 0xc0 + index]);
@@ -652,7 +702,8 @@ fn test_test_immediate_keeps_mask_and_flags() {
             } else {
                 rg([Register::AL, Register::AX, Register::None, Register::EAX][width as usize - 1], width)
             };
-            let what = sem(Operation::Compare, Some("test"), vec![], vec![operand, imm(value as i64, width)], None, false);
+            let what =
+                sem(Operation::Compare, Some("test"), vec![], vec![operand, imm(value as i64, width)], None, false);
             let made = made(emitted(&what));
             let decoded = seen(&made.code, 0).expect("decodes");
             assert_eq!(decoded.insn.mnemonic(), Mnemonic::Test);
@@ -686,7 +737,8 @@ fn test_a_far_cell_is_encoded_with_its_scaled_index() {
 
 #[test]
 fn test_a_word_is_zero_extended_into_a_dword_register() {
-    let what = sem(Operation::Extend, Some("movzx"), vec![rg(Register::ECX, 4)], vec![rg(Register::CX, 2)], None, false);
+    let what =
+        sem(Operation::Extend, Some("movzx"), vec![rg(Register::ECX, 4)], vec![rg(Register::CX, 2)], None, false);
     assert_eq!(hex(&made(emitted(&what)).code), "660fb7c9"); // movzx ecx,cx
 }
 
@@ -786,8 +838,24 @@ fn test_a_count_in_ch_is_not_one_in_cl() {
 #[test]
 fn near_counted_return() {
     use super::sweep_support::*;
-    check(sem(Op::Return, Some("ret"), vec![], vec![im(2, 2, None)], None, false), 0, false, false, None, None, Some(("c20200", None, Some(1), vec![1], true)));
-    check(sem(Op::Return, Some("ret"), vec![], vec![im(0, 2, None)], None, false), 0, false, false, None, None, Some(("c3", None, None, vec![], true)));
+    check(
+        sem(Op::Return, Some("ret"), vec![], vec![im(2, 2, None)], None, false),
+        0,
+        false,
+        false,
+        None,
+        None,
+        Some(("c20200", None, Some(1), vec![1], true)),
+    );
+    check(
+        sem(Op::Return, Some("ret"), vec![], vec![im(0, 2, None)], None, false),
+        0,
+        false,
+        false,
+        None,
+        None,
+        Some(("c3", None, None, vec![], true)),
+    );
 }
 
 /// sweep_07 failed on rustc 1.99.0: an immediate too wide for i32 raised std's own
@@ -850,4 +918,3 @@ fn test_enter_encodes_its_size_and_nesting_level() {
     let what = sem(Operation::Nothing, Some("enter"), vec![], vec![imm(300, 2), imm(0, 1)], None, false);
     assert_eq!(hex(&made(emitted(&what)).code), "c82c0100");
 }
-

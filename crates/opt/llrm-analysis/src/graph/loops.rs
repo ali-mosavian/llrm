@@ -8,9 +8,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_support::hash::IndexMap;
-
 pub use llrm_support::graph::{Dominance, Dominates, Node, dominance, dominators, predecessors, reverse_postorder};
+use llrm_support::hash::IndexMap;
 
 /// One natural loop: where control comes back to, and what is inside.
 ///
@@ -25,7 +24,10 @@ pub struct Loop {
 }
 
 /// (latch, header) for every edge to a block that dominates its source.
-pub fn back_edges<N: Node>(blocks: &[N], dominance: &impl Dominates) -> Vec<(i64, i64)> {
+pub fn back_edges<N: Node>(
+    blocks: &[N],
+    dominance: &impl Dominates,
+) -> Vec<(i64, i64)> {
     let known = blocks.iter().map(Node::at).collect::<BTreeSet<_>>();
     let mut found = Vec::new();
     for block in blocks {
@@ -41,7 +43,11 @@ pub fn back_edges<N: Node>(blocks: &[N], dominance: &impl Dominates) -> Vec<(i64
 /// Everything that reaches the latch without going back through the header.
 ///
 /// The header goes in before the walk starts, which is what stops it.
-pub fn _body(latch: i64, header: i64, preds: &BTreeMap<i64, BTreeSet<i64>>) -> BTreeSet<i64> {
+pub fn _body(
+    latch: i64,
+    header: i64,
+    preds: &BTreeMap<i64, BTreeSet<i64>>,
+) -> BTreeSet<i64> {
     let mut body = BTreeSet::from([header]);
     if latch == header {
         return body;
@@ -63,7 +69,10 @@ pub fn _body(latch: i64, header: i64, preds: &BTreeMap<i64, BTreeSet<i64>>) -> B
 ///
 /// Back edges sharing a header are one loop whose body is the union of
 /// theirs.
-pub fn loops<N: Node>(blocks: &[N], entry: Option<i64>) -> Vec<Loop> {
+pub fn loops<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> Vec<Loop> {
     let doms = dominance(blocks, entry);
     let preds = predecessors(&blocks.iter().filter(|block| doms.reachable(block.at())).collect::<Vec<_>>());
 
@@ -86,12 +95,18 @@ pub fn loops<N: Node>(blocks: &[N], entry: Option<i64>) -> Vec<Loop> {
 ///
 /// Decided by actually cutting the edges and looking for a remaining cycle,
 /// not by address order.
-pub fn irreducible<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeSet<i64> {
+pub fn irreducible<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> BTreeSet<i64> {
     irreducible_under(blocks, &*dominance(blocks, entry))
 }
 
 /// `irreducible`, of dominance found already.
-pub fn irreducible_under<N: Node>(blocks: &[N], doms: &impl Dominates) -> BTreeSet<i64> {
+pub fn irreducible_under<N: Node>(
+    blocks: &[N],
+    doms: &impl Dominates,
+) -> BTreeSet<i64> {
     let known = blocks.iter().filter(|block| doms.reachable(block.at())).map(Node::at).collect::<BTreeSet<_>>();
     let cut = back_edges(blocks, doms).into_iter().collect::<BTreeSet<_>>();
     let forward = blocks
@@ -150,7 +165,10 @@ pub fn irreducible_under<N: Node>(blocks: &[N], doms: &impl Dominates) -> BTreeS
 }
 
 /// How many loops each block is inside -- 0 for straight-line code.
-pub fn depth<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeMap<i64, usize> {
+pub fn depth<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> BTreeMap<i64, usize> {
     let mut found = blocks.iter().map(|block| (block.at(), 0_usize)).collect::<BTreeMap<_, _>>();
     for loop_ in loops(blocks, entry) {
         for at in &loop_.body {
@@ -167,7 +185,10 @@ pub fn depth<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeMap<i64, usize> 
 ///
 /// The nearest strict dominator is the one with the most dominators of its
 /// own.
-pub fn immediate_dominators<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeMap<i64, Option<i64>> {
+pub fn immediate_dominators<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> BTreeMap<i64, Option<i64>> {
     let doms = dominators(blocks, entry);
     let mut found = BTreeMap::new();
     for block in blocks {
@@ -185,7 +206,10 @@ pub fn immediate_dominators<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeM
 
 /// Where a definition stops being the only one that reaches -- the blocks
 /// a phi belongs in.
-pub fn frontiers<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeMap<i64, BTreeSet<i64>> {
+pub fn frontiers<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> BTreeMap<i64, BTreeSet<i64>> {
     let doms = dominators(blocks, entry);
     let live = blocks.iter().filter(|block| !doms[&block.at()].is_empty()).collect::<Vec<_>>();
     let idom = immediate_dominators(&live, entry);

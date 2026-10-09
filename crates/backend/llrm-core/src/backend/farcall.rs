@@ -36,13 +36,19 @@ impl LIRTransform for FarIndirectCalls {
         "far-indirect-calls"
     }
 
-    fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
         materialized(&body, &mut self.frame.borrow_mut()).map_err(|refused| refused.0)
     }
 }
 
 /// Materialize every packed far call target in one shared frame slot.
-pub fn materialized(body: &LirBody, frame: &mut Frame) -> Result<LirBody, frames::Refused> {
+pub fn materialized(
+    body: &LirBody,
+    frame: &mut Frame,
+) -> Result<LirBody, frames::Refused> {
     let mut slot = None;
     let mut out = body.clone();
     for block in &mut out.blocks {
@@ -76,11 +82,9 @@ pub fn materialized(body: &LirBody, frame: &mut Frame) -> Result<LirBody, frames
                     store.symbol = Some(false);
                     insns.push(Arc::new(store));
                     let mut call = (**one).clone();
-                    call.what = Some(Semantics {
-                        sources: vec![cell],
-                        ..what.clone()
-                    });
-                    // The target now comes from the cell; what the call still reads (its register arguments) stays read.
+                    call.what = Some(Semantics { sources: vec![cell], ..what.clone() });
+                    // The target now comes from the cell; what the call still reads (its register arguments) stays
+                    // read.
                     call.uses.retain(|&value| value != target.value);
                     insns.push(Arc::new(call));
                 }
@@ -98,13 +102,12 @@ mod tests {
     use std::rc::Rc;
     use std::sync::Arc;
 
-    use crate::support::hash::IndexMap;
-
     use super::FarIndirectCalls;
     use crate::backend::frame::{Frame, SlotKey};
     use crate::model::ir::{Held, Loc, Operation, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::model::passes::LIRTransform;
+    use crate::support::hash::IndexMap;
     use crate::support::pyrepr::Repr;
 
     #[test]
@@ -146,7 +149,15 @@ mod tests {
             .insns()
             .iter()
             .map(|one| {
-                format!("{} {:?} {} {:?} {:?} {:?}", one.at, one.covers, one.what.repr(), one.defines, one.uses, one.symbol)
+                format!(
+                    "{} {:?} {} {:?} {:?} {:?}",
+                    one.at,
+                    one.covers,
+                    one.what.repr(),
+                    one.defines,
+                    one.uses,
+                    one.symbol
+                )
             })
             .collect();
         assert_eq!(got, vec![store.clone(), called.clone(), near, store, called]);
@@ -161,14 +172,29 @@ mod tests {
         let mut call = Insn::new(
             4,
             Some((4, 7)),
-            Some(Semantics { name: Some("call".to_owned()), sources: vec![Loc::Held(Held { value: 5, width: 4 })], indirect: true, ..Semantics::new(Operation::Call) }),
+            Some(Semantics {
+                name: Some("call".to_owned()),
+                sources: vec![Loc::Held(Held { value: 5, width: 4 })],
+                indirect: true,
+                ..Semantics::new(Operation::Call)
+            }),
             vec![],
             vec![7, 5],
         );
         call.requires = vec![(Held { value: 7, width: 4 }, iced_x86::Register::EAX)];
-        let body = LirBody::new("far", 0, vec![LirBlock::new(0, vec![Arc::new(call)])], IndexMap::default(), IndexMap::default());
+        let body = LirBody::new(
+            "far",
+            0,
+            vec![LirBlock::new(0, vec![Arc::new(call)])],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
         let out = FarIndirectCalls::new(Rc::new(RefCell::new(Frame::new(-16)))).transform(body).unwrap();
-        let called = out.insns().into_iter().find(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Call)).unwrap();
+        let called = out
+            .insns()
+            .into_iter()
+            .find(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Call))
+            .unwrap();
         assert_eq!(called.uses, vec![7]);
     }
 
@@ -178,11 +204,17 @@ mod tests {
         let call = Arc::new(Insn::new(
             4,
             Some((4, 7)),
-            Some(Semantics { name: Some("call".to_owned()), sources: vec![Loc::Held(Held { value: 5, width: 4 })], indirect: true, ..Semantics::new(Operation::Call) }),
+            Some(Semantics {
+                name: Some("call".to_owned()),
+                sources: vec![Loc::Held(Held { value: 5, width: 4 })],
+                indirect: true,
+                ..Semantics::new(Operation::Call)
+            }),
             vec![],
             vec![5],
         ));
-        let mut body = LirBody::new("near", 0, vec![LirBlock::new(0, vec![call])], IndexMap::default(), IndexMap::default());
+        let mut body =
+            LirBody::new("near", 0, vec![LirBlock::new(0, vec![call])], IndexMap::default(), IndexMap::default());
         body.bits = 32;
         let out = FarIndirectCalls::new(Rc::new(RefCell::new(Frame::new(-16)))).transform(body).unwrap();
         assert_eq!(out.insns().len(), 1);

@@ -7,7 +7,11 @@ use super::protocol::{Location, Position, Range};
 use super::resolve::{Target, resolve};
 use super::text;
 
-pub fn definition(documents: &Documents, path: &Path, position: Position) -> Option<Location> {
+pub fn definition(
+    documents: &Documents,
+    path: &Path,
+    position: Position,
+) -> Option<Location> {
     let (module, range) = match resolve(documents, path, position)? {
         Target::Declaration { module, declaration } => {
             let text = documents.source(path, &module)?;

@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 
 use crate::buildprs_encoder::{BranchTarget, EncodeConfig, StateDecoder, StateEntry, ND_BRANCH};
 use crate::buildprs_generator::{
-    generate_tables_from_graph, generate_tables_from_prsstate, parse_opcode_equates_from_peropcod,
-    GenerateError, GeneratedParserTables, ENCODE1BYTE_QBASIC_11,
+    generate_tables_from_graph, generate_tables_from_prsstate, parse_opcode_equates_from_peropcod, GenerateError,
+    GeneratedParserTables, ENCODE1BYTE_QBASIC_11,
 };
 use crate::buildprs_grammar::{parse_grammar, parse_grammar_file, GrammarFile};
 use crate::buildprs_graph::OptLevel;
@@ -20,19 +20,11 @@ pub const MICRO_FIXTURE_ROOT: &str = "../../fixtures/buildprs/micro";
 pub const MICRO_SEMANTIC_MAX_INPUT_LEN: usize = 4;
 
 /// Plain grammar constructs exercised before `<Cg...>` hint families.
-pub const PLAIN_MICRO_FIXTURES: &[&str] = &[
-    "emit_only",
-    "sequence",
-    "alternative",
-    "optional",
-    "repeat",
-    "mark_emit",
-    "empty",
-];
+pub const PLAIN_MICRO_FIXTURES: &[&str] =
+    &["emit_only", "sequence", "alternative", "optional", "repeat", "mark_emit", "empty"];
 
 /// Priority `<Cg...>` hint families from the microfixture parity plan.
-pub const CG_HINT_MICRO_FIXTURES: &[&str] =
-    &["cg_1or2_args", "cg_0or1_args", "cg_stmt_cnt", "cg_call"];
+pub const CG_HINT_MICRO_FIXTURES: &[&str] = &["cg_1or2_args", "cg_0or1_args", "cg_stmt_cnt", "cg_call"];
 
 /// Focused reproductions of full `qbasbnf` parity gaps. These are DOS-captured
 /// but not part of the always-green parity set until the related algorithm is fixed.
@@ -126,7 +118,10 @@ pub struct SemanticDiff {
 }
 
 impl std::fmt::Display for SemanticDiff {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         writeln!(
             f,
             "start generated={} golden={} input={:?}",
@@ -138,7 +133,10 @@ impl std::fmt::Display for SemanticDiff {
 }
 
 impl std::fmt::Display for MicroFixtureDiff {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         writeln!(
             f,
             "fixture={} opt={:?} generated_len={} golden_len={} byte_ranges={} entry_diffs={} match={}",
@@ -154,11 +152,7 @@ impl std::fmt::Display for MicroFixtureDiff {
             writeln!(
                 f,
                 "  entry {:03}: generated@{} {} | golden@{} {}",
-                diff.entry_index,
-                diff.generated_offset,
-                diff.generated_entry,
-                diff.golden_offset,
-                diff.golden_entry
+                diff.entry_index, diff.generated_offset, diff.generated_entry, diff.golden_offset, diff.golden_entry
             )?;
         }
         Ok(())
@@ -181,14 +175,7 @@ pub fn load_micro_fixture(name: &str) -> Result<MicroFixture, GenerateError> {
     let golden_o0 = read_optional_dos_prsstate(&root.join("o0/prsstate.asm"))?;
     let golden_o1 = read_optional_dos_prsstate(&root.join("o1/prsstate.asm"))?;
     let golden_o2 = read_optional_dos_prsstate(&root.join("o2/prsstate.asm"))?;
-    Ok(MicroFixture {
-        name: name.to_string(),
-        grammar,
-        peropcod,
-        golden_o0,
-        golden_o1,
-        golden_o2,
-    })
+    Ok(MicroFixture { name: name.to_string(), grammar, peropcod, golden_o0, golden_o1, golden_o2 })
 }
 
 pub fn load_micro_fixture_from_strings(
@@ -199,8 +186,7 @@ pub fn load_micro_fixture_from_strings(
     golden_o1: Option<&str>,
     golden_o2: Option<&str>,
 ) -> Result<MicroFixture, GenerateError> {
-    let grammar = parse_grammar(grammar_source)
-        .map_err(|error| GenerateError::ArtifactParse(error.to_string()))?;
+    let grammar = parse_grammar(grammar_source).map_err(|error| GenerateError::ArtifactParse(error.to_string()))?;
     Ok(MicroFixture {
         name: name.to_string(),
         grammar,
@@ -242,15 +228,9 @@ pub fn compare_micro_fixture(
     opt_level: OptLevel,
 ) -> Result<MicroFixtureDiff, GenerateError> {
     let generated = generate_graph_tables_for_fixture(fixture, opt_level)?;
-    let golden = golden_tables_for_fixture(fixture, opt_level)?.ok_or_else(|| {
-        GenerateError::ArtifactParse(format!("missing golden for {:?}", opt_level))
-    })?;
-    Ok(compare_generated_to_golden(
-        &fixture.name,
-        opt_level,
-        &generated,
-        &golden,
-    ))
+    let golden = golden_tables_for_fixture(fixture, opt_level)?
+        .ok_or_else(|| GenerateError::ArtifactParse(format!("missing golden for {:?}", opt_level)))?;
+    Ok(compare_generated_to_golden(&fixture.name, opt_level, &generated, &golden))
 }
 
 pub fn compare_generated_to_golden(
@@ -265,11 +245,7 @@ pub fn compare_generated_to_golden(
     let compared = generated_entries.len().min(golden_entries.len());
     let mut decoded_entry_diffs = Vec::new();
     for (entry_index, ((generated_offset, generated_entry), (golden_offset, golden_entry))) in
-        generated_entries
-            .iter()
-            .zip(&golden_entries)
-            .take(compared)
-            .enumerate()
+        generated_entries.iter().zip(&golden_entries).take(compared).enumerate()
     {
         if generated_entry != golden_entry {
             decoded_entry_diffs.push(DecodedEntryDiff {
@@ -284,12 +260,8 @@ pub fn compare_generated_to_golden(
     if generated_entries.len() != golden_entries.len() {
         decoded_entry_diffs.push(DecodedEntryDiff {
             entry_index: compared,
-            generated_offset: generated_entries
-                .get(compared)
-                .map_or(0, |(offset, _)| *offset),
-            golden_offset: golden_entries
-                .get(compared)
-                .map_or(0, |(offset, _)| *offset),
+            generated_offset: generated_entries.get(compared).map_or(0, |(offset, _)| *offset),
+            golden_offset: golden_entries.get(compared).map_or(0, |(offset, _)| *offset),
             generated_entry: format!("count={}", generated_entries.len()),
             golden_entry: format!("count={}", golden_entries.len()),
         });
@@ -324,9 +296,8 @@ pub fn compare_micro_fixture_semantics(
     max_input_len: usize,
 ) -> Result<Option<SemanticDiff>, GenerateError> {
     let generated = generate_graph_tables_for_fixture(fixture, opt_level)?;
-    let golden = golden_tables_for_fixture(fixture, opt_level)?.ok_or_else(|| {
-        GenerateError::ArtifactParse(format!("missing golden for {:?}", opt_level))
-    })?;
+    let golden = golden_tables_for_fixture(fixture, opt_level)?
+        .ok_or_else(|| GenerateError::ArtifactParse(format!("missing golden for {:?}", opt_level)))?;
     Ok(first_semantic_diff(&generated, &golden, max_input_len))
 }
 
@@ -339,10 +310,7 @@ pub fn assert_micro_fixture_semantics(
     let Some(diff) = diff else {
         return Ok(());
     };
-    Err(format!(
-        "fixture {} {:?} semantic mismatch:\n{diff}",
-        fixture.name, opt_level
-    ))
+    Err(format!("fixture {} {:?} semantic mismatch:\n{diff}", fixture.name, opt_level))
 }
 
 fn first_semantic_diff(
@@ -402,9 +370,7 @@ fn semantic_start_offsets(
             .int_nt_disp
             .iter()
             .zip(&golden.dispatch.int_nt_disp)
-            .map(|(generated_offset, golden_offset)| {
-                (usize::from(*generated_offset), usize::from(*golden_offset))
-            }),
+            .map(|(generated_offset, golden_offset)| (usize::from(*generated_offset), usize::from(*golden_offset))),
     );
     starts.sort_unstable();
     starts.dedup();
@@ -423,7 +389,10 @@ fn semantic_alphabet(
     alphabet
 }
 
-fn collect_consuming_node_ids(tables: &GeneratedParserTables, alphabet: &mut Vec<u16>) {
+fn collect_consuming_node_ids(
+    tables: &GeneratedParserTables,
+    alphabet: &mut Vec<u16>,
+) {
     let config = semantic_encode_config();
     let consuming_base = u16::from(ND_BRANCH) + 1 + tables.dispatch.int_nt_disp.len() as u16;
     let mut decoder = StateDecoder::with_config(&tables.state, config);
@@ -436,7 +405,10 @@ fn collect_consuming_node_ids(tables: &GeneratedParserTables, alphabet: &mut Vec
     }
 }
 
-fn bounded_inputs(alphabet: &[u16], max_len: usize) -> Vec<Vec<u16>> {
+fn bounded_inputs(
+    alphabet: &[u16],
+    max_len: usize,
+) -> Vec<Vec<u16>> {
     let mut inputs = Vec::new();
     let mut current = Vec::new();
     collect_bounded_inputs(alphabet, max_len, &mut current, &mut inputs);
@@ -479,44 +451,24 @@ fn execute_state(
     depth: usize,
 ) -> SemanticTrace {
     if depth > 64 {
-        return SemanticTrace {
-            outcome: SemanticOutcome::StepLimit,
-            consumed,
-            effects,
-        };
+        return SemanticTrace { outcome: SemanticOutcome::StepLimit, consumed, effects };
     }
     loop {
         if *budget == 0 {
-            return SemanticTrace {
-                outcome: SemanticOutcome::StepLimit,
-                consumed,
-                effects,
-            };
+            return SemanticTrace { outcome: SemanticOutcome::StepLimit, consumed, effects };
         }
         *budget -= 1;
 
         let Some((entry, next_pc)) = decode_semantic_entry(&tables.state, pc) else {
-            return SemanticTrace {
-                outcome: SemanticOutcome::Invalid,
-                consumed,
-                effects,
-            };
+            return SemanticTrace { outcome: SemanticOutcome::Invalid, consumed, effects };
         };
 
         match entry {
             StateEntry::Accept => {
-                return SemanticTrace {
-                    outcome: SemanticOutcome::Accept,
-                    consumed,
-                    effects,
-                };
+                return SemanticTrace { outcome: SemanticOutcome::Accept, consumed, effects };
             }
             StateEntry::Reject => {
-                return SemanticTrace {
-                    outcome: SemanticOutcome::Reject,
-                    consumed,
-                    effects,
-                };
+                return SemanticTrace { outcome: SemanticOutcome::Reject, consumed, effects };
             }
             StateEntry::Mark(slot) => {
                 effects.push(SemanticEffect::Mark(slot));
@@ -529,35 +481,19 @@ fn execute_state(
             StateEntry::Branch(branch) => match branch_target_offset(branch) {
                 Some(target) => pc = target,
                 None => {
-                    return SemanticTrace {
-                        outcome: SemanticOutcome::Accept,
-                        consumed,
-                        effects,
-                    };
+                    return SemanticTrace { outcome: SemanticOutcome::Accept, consumed, effects };
                 }
             },
             StateEntry::Node { node_id, branch } => {
                 if let Some(root) = internal_root_offset(tables, node_id) {
-                    let candidate = execute_state(
-                        tables,
-                        root,
-                        input,
-                        consumed,
-                        effects.clone(),
-                        budget,
-                        depth + 1,
-                    );
+                    let candidate = execute_state(tables, root, input, consumed, effects.clone(), budget, depth + 1);
                     if candidate.outcome == SemanticOutcome::Accept {
                         consumed = candidate.consumed;
                         effects = candidate.effects;
                         match branch_target_offset(branch) {
                             Some(target) => pc = target,
                             None => {
-                                return SemanticTrace {
-                                    outcome: SemanticOutcome::Accept,
-                                    consumed,
-                                    effects,
-                                };
+                                return SemanticTrace { outcome: SemanticOutcome::Accept, consumed, effects };
                             }
                         }
                     } else {
@@ -568,11 +504,7 @@ fn execute_state(
                     match branch_target_offset(branch) {
                         Some(target) => pc = target,
                         None => {
-                            return SemanticTrace {
-                                outcome: SemanticOutcome::Accept,
-                                consumed,
-                                effects,
-                            };
+                            return SemanticTrace { outcome: SemanticOutcome::Accept, consumed, effects };
                         }
                     }
                 } else {
@@ -583,21 +515,22 @@ fn execute_state(
     }
 }
 
-fn decode_semantic_entry(state: &[u8], pc: usize) -> Option<(StateEntry, usize)> {
+fn decode_semantic_entry(
+    state: &[u8],
+    pc: usize,
+) -> Option<(StateEntry, usize)> {
     let mut decoder = StateDecoder::with_config_at(state, semantic_encode_config(), pc);
     let entry = decoder.next().ok()??;
     Some((entry, decoder.pc()))
 }
 
-fn internal_root_offset(tables: &GeneratedParserTables, node_id: u16) -> Option<usize> {
+fn internal_root_offset(
+    tables: &GeneratedParserTables,
+    node_id: u16,
+) -> Option<usize> {
     let first_internal = u16::from(ND_BRANCH) + 1;
     let internal_index = node_id.checked_sub(first_internal)? as usize;
-    tables
-        .dispatch
-        .int_nt_disp
-        .get(internal_index)
-        .copied()
-        .map(usize::from)
+    tables.dispatch.int_nt_disp.get(internal_index).copied().map(usize::from)
 }
 
 fn branch_target_offset(branch: BranchTarget) -> Option<usize> {
@@ -614,10 +547,9 @@ fn semantic_encode_config() -> EncodeConfig {
 fn read_optional_dos_prsstate(path: &Path) -> Result<Option<String>, GenerateError> {
     match std::fs::read_to_string(path) {
         Ok(source) if is_dos_prsstate(&source) => Ok(Some(source)),
-        Ok(_) => Err(GenerateError::ArtifactParse(format!(
-            "{} is not a DOS buildprs PRSSTATE.ASM capture",
-            path.display()
-        ))),
+        Ok(_) => {
+            Err(GenerateError::ArtifactParse(format!("{} is not a DOS buildprs PRSSTATE.ASM capture", path.display())))
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(GenerateError::ArtifactParse(error.to_string())),
     }
@@ -629,7 +561,10 @@ fn is_dos_prsstate(source: &str) -> bool {
         && source.contains("tState")
 }
 
-fn byte_diff_ranges(generated: &[u8], golden: &[u8]) -> Vec<(usize, usize)> {
+fn byte_diff_ranges(
+    generated: &[u8],
+    golden: &[u8],
+) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let max_len = generated.len().max(golden.len());
     let mut index = 0;
@@ -661,7 +596,10 @@ fn decode_state_entries(bytes: &[u8]) -> Vec<(usize, String)> {
     entries
 }
 
-fn decode_state_entry(bytes: &[u8], pc: &mut usize) -> Option<String> {
+fn decode_state_entry(
+    bytes: &[u8],
+    pc: &mut usize,
+) -> Option<String> {
     let first = read_diag_byte(bytes, pc)?;
     match first {
         0 => Some("accept".to_string()),
@@ -685,13 +623,19 @@ fn decode_state_entry(bytes: &[u8], pc: &mut usize) -> Option<String> {
     }
 }
 
-fn read_diag_byte(bytes: &[u8], pc: &mut usize) -> Option<u8> {
+fn read_diag_byte(
+    bytes: &[u8],
+    pc: &mut usize,
+) -> Option<u8> {
     let value = *bytes.get(*pc)?;
     *pc += 1;
     Some(value)
 }
 
-fn decode_diag_node_id(bytes: &[u8], pc: &mut usize) -> Option<u16> {
+fn decode_diag_node_id(
+    bytes: &[u8],
+    pc: &mut usize,
+) -> Option<u16> {
     let first = read_diag_byte(bytes, pc)?;
     if first < ENCODE1BYTE_QBASIC_11 {
         return Some(u16::from(first));
@@ -700,7 +644,10 @@ fn decode_diag_node_id(bytes: &[u8], pc: &mut usize) -> Option<u16> {
     Some(((u16::from(first) << 8) | u16::from(second)) - 255 * u16::from(ENCODE1BYTE_QBASIC_11))
 }
 
-fn decode_diag_branch(bytes: &[u8], pc: &mut usize) -> Option<String> {
+fn decode_diag_branch(
+    bytes: &[u8],
+    pc: &mut usize,
+) -> Option<String> {
     let first = read_diag_byte(bytes, pc)?;
     if first == 255 {
         return Some("accept".to_string());
@@ -824,10 +771,7 @@ pub fn ensure_plain_micro_fixture_sources(name: &str) -> std::io::Result<()> {
     let root = micro_fixture_root().join(name);
     std::fs::create_dir_all(&root)?;
     let grammar = plain_micro_fixture_grammar(name).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("unknown plain micro fixture {name}"),
-        )
+        std::io::Error::new(std::io::ErrorKind::NotFound, format!("unknown plain micro fixture {name}"))
     })?;
     std::fs::write(root.join("grammar.prs"), grammar)?;
     std::fs::write(root.join("peropcod.txt"), PLAIN_MICRO_PEROPCOD)?;
@@ -861,15 +805,20 @@ NonTerminals:
         .expect("emit_only fixture should load")
     }
 
-    fn fixture_state_bytes(name: &str, opt_level: OptLevel) -> Vec<u8> {
-        let fixture = load_micro_fixture(name)
-            .unwrap_or_else(|error| panic!("fixture {name} should load: {error}"));
+    fn fixture_state_bytes(
+        name: &str,
+        opt_level: OptLevel,
+    ) -> Vec<u8> {
+        let fixture = load_micro_fixture(name).unwrap_or_else(|error| panic!("fixture {name} should load: {error}"));
         generate_graph_tables_for_fixture(&fixture, opt_level)
             .unwrap_or_else(|error| panic!("fixture {name} should generate: {error}"))
             .state
     }
 
-    fn assert_fixture_state(name: &str, expected: &[u8]) {
+    fn assert_fixture_state(
+        name: &str,
+        expected: &[u8],
+    ) {
         assert_eq!(
             fixture_state_bytes(name, OptLevel::O0),
             expected,
@@ -904,13 +853,13 @@ NonTerminals:
 
     #[test]
     fn regression_multi_item_repeat_loops_after_required_tail_success() {
-        assert_fixture_state(
-            "cg_call",
-            &[2, 1, 9, 1, 1, 5, 1, 0, 9, 1, 1, 7, 3, 6, 255, 1, 9, 217, 1],
-        );
+        assert_fixture_state("cg_call", &[2, 1, 9, 1, 1, 5, 1, 0, 9, 1, 1, 7, 3, 6, 255, 1, 9, 217, 1]);
     }
 
-    fn assert_fixture_semantics_for_opt_levels(fixture: &MicroFixture, name: &str) {
+    fn assert_fixture_semantics_for_opt_levels(
+        fixture: &MicroFixture,
+        name: &str,
+    ) {
         assert_micro_fixture_semantics(fixture, OptLevel::O0)
             .unwrap_or_else(|report| panic!("O0 semantics failed for {name}:\n{report}"));
         assert_micro_fixture_semantics(fixture, OptLevel::O1)
@@ -924,30 +873,13 @@ NonTerminals:
     #[test]
     fn graph_backend_matches_cg_hint_microfixtures() {
         for name in CG_HINT_MICRO_FIXTURES {
-            let fixture = load_micro_fixture(name)
-                .unwrap_or_else(|error| panic!("fixture {name} should load: {error}"));
-            let has_hint = fixture
-                .grammar
-                .statements
-                .rules
-                .iter()
-                .any(|rule| rule.production.cg_hint.is_some());
-            assert!(
-                has_hint,
-                "fixture {name} should include a cg_hint production"
-            );
-            assert!(
-                fixture.golden_o0.is_some(),
-                "fixture {name} is missing DOS O0 prsstate.asm"
-            );
-            assert!(
-                fixture.golden_o1.is_some(),
-                "fixture {name} is missing DOS O1 prsstate.asm"
-            );
-            assert!(
-                fixture.golden_o2.is_some(),
-                "fixture {name} is missing DOS O2 prsstate.asm"
-            );
+            let fixture =
+                load_micro_fixture(name).unwrap_or_else(|error| panic!("fixture {name} should load: {error}"));
+            let has_hint = fixture.grammar.statements.rules.iter().any(|rule| rule.production.cg_hint.is_some());
+            assert!(has_hint, "fixture {name} should include a cg_hint production");
+            assert!(fixture.golden_o0.is_some(), "fixture {name} is missing DOS O0 prsstate.asm");
+            assert!(fixture.golden_o1.is_some(), "fixture {name} is missing DOS O1 prsstate.asm");
+            assert!(fixture.golden_o2.is_some(), "fixture {name} is missing DOS O2 prsstate.asm");
             assert_fixture_semantics_for_opt_levels(&fixture, name);
         }
     }
@@ -955,19 +887,13 @@ NonTerminals:
     #[test]
     #[ignore = "full qbasbnf graph O0 byte parity gate"]
     fn graph_backend_full_o0_matches_qbasic_11_default_prsstate_fixture() {
-        let grammar = crate::buildprs_grammar::parse_grammar_file(
-            "../../grammar/qbasbnf.prs",
-        )
-        .expect("qbasbnf should parse");
-        let peropcod =
-            std::fs::read_to_string("../../grammar/peropcod.txt")
-                .expect("peropcod should read");
-        let golden_source =
-            std::fs::read_to_string("../../fixtures/buildprs/qbasic-1.1-o0/PRSSTATE.ASM")
-                .expect("golden prsstate should read");
+        let grammar =
+            crate::buildprs_grammar::parse_grammar_file("../../grammar/qbasbnf.prs").expect("qbasbnf should parse");
+        let peropcod = std::fs::read_to_string("../../grammar/peropcod.txt").expect("peropcod should read");
+        let golden_source = std::fs::read_to_string("../../fixtures/buildprs/qbasic-1.1-o0/PRSSTATE.ASM")
+            .expect("golden prsstate should read");
         let opcodes = parse_opcode_equates_from_peropcod(&peropcod);
-        let golden =
-            generate_tables_from_prsstate(&golden_source, &opcodes).expect("golden should decode");
+        let golden = generate_tables_from_prsstate(&golden_source, &opcodes).expect("golden should decode");
         let generated = generate_tables_from_graph(&grammar, &peropcod, OptLevel::O0)
             .expect("graph backend should generate tables");
         let diff = compare_generated_to_golden("qbasic-1.1-o0", OptLevel::O0, &generated, &golden);
@@ -977,19 +903,13 @@ NonTerminals:
     #[test]
     #[ignore = "full qbasbnf graph O0 parity is not complete yet; run for progress metrics"]
     fn graph_backend_full_o0_parity_progress_against_qbasic_11_fixture() {
-        let grammar = crate::buildprs_grammar::parse_grammar_file(
-            "../../grammar/qbasbnf.prs",
-        )
-        .expect("qbasbnf should parse");
-        let peropcod =
-            std::fs::read_to_string("../../grammar/peropcod.txt")
-                .expect("peropcod should read");
-        let golden_source =
-            std::fs::read_to_string("../../fixtures/buildprs/qbasic-1.1-o0/PRSSTATE.ASM")
-                .expect("golden prsstate should read");
+        let grammar =
+            crate::buildprs_grammar::parse_grammar_file("../../grammar/qbasbnf.prs").expect("qbasbnf should parse");
+        let peropcod = std::fs::read_to_string("../../grammar/peropcod.txt").expect("peropcod should read");
+        let golden_source = std::fs::read_to_string("../../fixtures/buildprs/qbasic-1.1-o0/PRSSTATE.ASM")
+            .expect("golden prsstate should read");
         let opcodes = parse_opcode_equates_from_peropcod(&peropcod);
-        let golden =
-            generate_tables_from_prsstate(&golden_source, &opcodes).expect("golden should decode");
+        let golden = generate_tables_from_prsstate(&golden_source, &opcodes).expect("golden should decode");
         let generated = generate_tables_from_graph(&grammar, &peropcod, OptLevel::O0)
             .expect("graph backend should generate tables");
         let diff = compare_generated_to_golden("qbasic-1.1-o0", OptLevel::O0, &generated, &golden);
@@ -1031,21 +951,15 @@ NonTerminals:
     }
 
     fn full_qbasic_semantic_diff_for_sampled_inputs(opt_level: OptLevel) -> Option<SemanticDiff> {
-        let grammar = crate::buildprs_grammar::parse_grammar_file(
-            "../../grammar/qbasbnf.prs",
-        )
-        .expect("qbasbnf should parse");
-        let peropcod =
-            std::fs::read_to_string("../../grammar/peropcod.txt")
-                .expect("peropcod should read");
-        let golden_source =
-            std::fs::read_to_string("../../fixtures/buildprs/qbasic-1.1/prsstate.asm")
-                .expect("golden prsstate should read");
+        let grammar =
+            crate::buildprs_grammar::parse_grammar_file("../../grammar/qbasbnf.prs").expect("qbasbnf should parse");
+        let peropcod = std::fs::read_to_string("../../grammar/peropcod.txt").expect("peropcod should read");
+        let golden_source = std::fs::read_to_string("../../fixtures/buildprs/qbasic-1.1/prsstate.asm")
+            .expect("golden prsstate should read");
         let opcodes = parse_opcode_equates_from_peropcod(&peropcod);
-        let golden =
-            generate_tables_from_prsstate(&golden_source, &opcodes).expect("golden should decode");
-        let generated = generate_tables_from_graph(&grammar, &peropcod, opt_level)
-            .expect("graph backend should generate tables");
+        let golden = generate_tables_from_prsstate(&golden_source, &opcodes).expect("golden should decode");
+        let generated =
+            generate_tables_from_graph(&grammar, &peropcod, opt_level).expect("graph backend should generate tables");
 
         let alphabet = semantic_alphabet(&generated, &golden);
         let starts = semantic_start_offsets(&generated, &golden);
@@ -1067,31 +981,20 @@ NonTerminals:
 
     #[test]
     fn micro_fixtures_have_checked_in_dos_goldens_for_all_captured_levels() {
-        let names = PLAIN_MICRO_FIXTURES
-            .iter()
-            .chain(CG_HINT_MICRO_FIXTURES.iter())
-            .chain(FULL_GAP_MICRO_FIXTURES.iter());
+        let names =
+            PLAIN_MICRO_FIXTURES.iter().chain(CG_HINT_MICRO_FIXTURES.iter()).chain(FULL_GAP_MICRO_FIXTURES.iter());
         for name in names {
-            let fixture = load_micro_fixture(name)
-                .unwrap_or_else(|error| panic!("fixture {name} should load: {error}"));
-            assert!(
-                fixture.golden_o0.is_some(),
-                "fixture {name} is missing DOS o0/prsstate.asm"
-            );
-            assert!(
-                fixture.golden_o1.is_some(),
-                "fixture {name} is missing DOS o1/prsstate.asm"
-            );
+            let fixture =
+                load_micro_fixture(name).unwrap_or_else(|error| panic!("fixture {name} should load: {error}"));
+            assert!(fixture.golden_o0.is_some(), "fixture {name} is missing DOS o0/prsstate.asm");
+            assert!(fixture.golden_o1.is_some(), "fixture {name} is missing DOS o1/prsstate.asm");
             if DOS_O2_HANG_MICRO_FIXTURES.contains(name) {
                 assert!(
                     fixture.golden_o2.is_none(),
                     "fixture {name} should not check in DOS o2/prsstate.asm because DOS buildprs hangs"
                 );
             } else {
-                assert!(
-                    fixture.golden_o2.is_some(),
-                    "fixture {name} is missing DOS o2/prsstate.asm"
-                );
+                assert!(fixture.golden_o2.is_some(), "fixture {name} is missing DOS o2/prsstate.asm");
             }
         }
     }
@@ -1099,8 +1002,8 @@ NonTerminals:
     #[test]
     fn graph_backend_o0_is_semantically_equivalent_for_plain_microfixtures() {
         for name in PLAIN_MICRO_FIXTURES {
-            let fixture = load_micro_fixture(name)
-                .unwrap_or_else(|error| panic!("fixture {name} should load: {error}"));
+            let fixture =
+                load_micro_fixture(name).unwrap_or_else(|error| panic!("fixture {name} should load: {error}"));
             assert_micro_fixture_semantics(&fixture, OptLevel::O0)
                 .unwrap_or_else(|report| panic!("O0 semantics failed for {name}:\n{report}"));
         }
@@ -1109,8 +1012,8 @@ NonTerminals:
     #[test]
     fn graph_backend_o1_is_semantically_equivalent_for_plain_microfixtures() {
         for name in PLAIN_MICRO_FIXTURES {
-            let fixture = load_micro_fixture(name)
-                .unwrap_or_else(|error| panic!("fixture {name} should load: {error}"));
+            let fixture =
+                load_micro_fixture(name).unwrap_or_else(|error| panic!("fixture {name} should load: {error}"));
             assert_micro_fixture_semantics(&fixture, OptLevel::O1)
                 .unwrap_or_else(|report| panic!("O1 semantics failed for {name}:\n{report}"));
         }
@@ -1119,8 +1022,8 @@ NonTerminals:
     #[test]
     fn graph_backend_o2_is_semantically_equivalent_for_plain_microfixtures() {
         for name in PLAIN_MICRO_FIXTURES {
-            let fixture = load_micro_fixture(name)
-                .unwrap_or_else(|error| panic!("fixture {name} should load: {error}"));
+            let fixture =
+                load_micro_fixture(name).unwrap_or_else(|error| panic!("fixture {name} should load: {error}"));
             assert_micro_fixture_semantics(&fixture, OptLevel::O2)
                 .unwrap_or_else(|report| panic!("O2 semantics failed for {name}:\n{report}"));
         }
@@ -1129,8 +1032,8 @@ NonTerminals:
     #[test]
     fn graph_backend_is_semantically_equivalent_for_full_gap_microfixtures() {
         for name in FULL_GAP_MICRO_FIXTURES {
-            let fixture = load_micro_fixture(name)
-                .unwrap_or_else(|error| panic!("fixture {name} should load: {error}"));
+            let fixture =
+                load_micro_fixture(name).unwrap_or_else(|error| panic!("fixture {name} should load: {error}"));
             assert_fixture_semantics_for_opt_levels(&fixture, name);
         }
     }

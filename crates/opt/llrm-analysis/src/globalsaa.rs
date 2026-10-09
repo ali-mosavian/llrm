@@ -13,10 +13,8 @@
 //! tracked globals as `alias` asks here:
 //!
 //! - a body of the module: all of them;
-//! - otherwise the named ones it writes -- those its `!llrm.writes` node
-//!   in the runtime module lists, or all without one -- and, unless it is
-//!   `nocallback`, what the module's entries do, as it may call back into
-//!   them.
+//! - otherwise the named ones it writes -- those its `!llrm.writes` node in the runtime module lists, or all without
+//!   one -- and, unless it is `nocallback`, what the module's entries do, as it may call back into them.
 //!
 //! `!llrm.named = !{!0}` with `!0 = !{ptr @g, ...}`; `!llrm.writes = !{!1,
 //! ...}` with `!1 = !{ptr @routine, ptr @g, ...}`: of the named globals,
@@ -24,15 +22,14 @@
 //! globals stand for each module's of the same names.
 
 use std::collections::{BTreeMap, BTreeSet};
-
-use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
 use std::rc::Rc;
 
+use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
 use llrm_mir::module::{GlobalKind, GlobalValue, InstId, Linkage, Mark, MetadataOperand, Module, Operand};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::passes::{Declarations, ModuleAnalyses};
-use llrm_support::hash::IndexMap;
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramProxy, defines};
+use llrm_support::hash::IndexMap;
 
 use crate::alias;
 use crate::cfg::Shape;
@@ -52,7 +49,10 @@ pub struct Globals {
 }
 
 impl Globals {
-    pub fn tracked(&self, global: GlobalId) -> bool {
+    pub fn tracked(
+        &self,
+        global: GlobalId,
+    ) -> bool {
         self.tracked.contains(&global)
     }
 
@@ -62,7 +62,10 @@ impl Globals {
 
     /// The tracked globals the call of `callee`, which no summary
     /// describes, may read and may write, but for callbacks.
-    pub fn unsummarized(&self, callee: Option<GlobalId>) -> (BTreeSet<GlobalId>, BTreeSet<GlobalId>) {
+    pub fn unsummarized(
+        &self,
+        callee: Option<GlobalId>,
+    ) -> (BTreeSet<GlobalId>, BTreeSet<GlobalId>) {
         if callee.is_some_and(|one| self.bodies.contains(&one)) {
             return (self.tracked.clone(), self.tracked.clone());
         }
@@ -82,13 +85,19 @@ impl Globals {
 
 /// The globals `constant` holds the address of, through aggregates and
 /// constant expressions.
-pub fn embedded(context: &Context, constant: ConstantId, out: &mut BTreeSet<GlobalId>) {
+pub fn embedded(
+    context: &Context,
+    constant: ConstantId,
+    out: &mut BTreeSet<GlobalId>,
+) {
     match &context.get(constant).kind {
         ConstantKind::Global(global) => {
             out.insert(*global);
         }
         ConstantKind::Aggregate(members) => members.iter().for_each(|&one| embedded(context, one, out)),
-        ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => operands.iter().for_each(|&one| embedded(context, one, out)),
+        ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => {
+            operands.iter().for_each(|&one| embedded(context, one, out))
+        }
         ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => embedded(context, *value, out),
         _ => {}
     }
@@ -96,16 +105,23 @@ pub fn embedded(context: &Context, constant: ConstantId, out: &mut BTreeSet<Glob
 
 /// Whether the call `at` may call back into the module: LLVM's
 /// `nocallback`, at the site or on the callee, says it may not.
-pub fn calls_back(unit: &Unit, at: InstId) -> bool {
+pub fn calls_back(
+    unit: &Unit,
+    at: InstId,
+) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
     let flagged = |attrs: &[Attribute]| llrm_mir::facts::Facts::of(attrs).no_callback();
     // A callee a pass declared after the outer facts were taken is not among them.
-    let callee = llrm_mir::memory::callee(unit.context, unit.function, at).and_then(|one| unit.globals.get(one.0 as usize)?.function());
+    let callee = llrm_mir::memory::callee(unit.context, unit.function, at)
+        .and_then(|one| unit.globals.get(one.0 as usize)?.function());
     !(flagged(&info.attrs) || callee.is_some_and(|one| flagged(&one.attrs)))
 }
 
 /// The first operand and the rest of each `!name` node, as globals.
-fn listed(module: &Module, name: &str) -> Vec<(Option<GlobalId>, BTreeSet<GlobalId>)> {
+fn listed(
+    module: &Module,
+    name: &str,
+) -> Vec<(Option<GlobalId>, BTreeSet<GlobalId>)> {
     let global = |operand: &MetadataOperand| match operand {
         MetadataOperand::Constant(id) => match module.context.get(*id).kind {
             ConstantKind::Global(global) => Some(global),
@@ -124,16 +140,30 @@ fn listed(module: &Module, name: &str) -> Vec<(Option<GlobalId>, BTreeSet<Global
 
 /// `runtime`'s `!llrm.named` cells and `!llrm.writes` lists, as
 /// `module`'s globals of the same names.
-fn promised(module: &Module, runtime: &Module) -> (BTreeSet<GlobalId>, BTreeMap<GlobalId, BTreeSet<GlobalId>>) {
+fn promised(
+    module: &Module,
+    runtime: &Module,
+) -> (BTreeSet<GlobalId>, BTreeMap<GlobalId, BTreeSet<GlobalId>>) {
     let here = |id: GlobalId| runtime.global(id).name.as_deref().and_then(|name| module.named(name));
-    let named = listed(runtime, "llrm.named").into_iter().flat_map(|(first, rest)| first.into_iter().chain(rest)).filter_map(here).collect();
-    let writes = listed(runtime, "llrm.writes").into_iter().filter_map(|(routine, cells)| Some((here(routine?)?, cells.into_iter().filter_map(here).collect()))).collect();
+    let named = listed(runtime, "llrm.named")
+        .into_iter()
+        .flat_map(|(first, rest)| first.into_iter().chain(rest))
+        .filter_map(here)
+        .collect();
+    let writes = listed(runtime, "llrm.writes")
+        .into_iter()
+        .filter_map(|(routine, cells)| Some((here(routine?)?, cells.into_iter().filter_map(here).collect())))
+        .collect();
     (named, writes)
 }
 
-/// The globals one body's instructions name other than as a call's callee; with `retained`, not those it passes as an argument the
-/// callee `noretain`s.
-fn named_in(module: &Module, function: &llrm_mir::module::Function, retained: bool) -> BTreeSet<GlobalId> {
+/// The globals one body's instructions name other than as a call's callee; with `retained`, not those it passes as an
+/// argument the callee `noretain`s.
+fn named_in(
+    module: &Module,
+    function: &llrm_mir::module::Function,
+    retained: bool,
+) -> BTreeSet<GlobalId> {
     let mut out = BTreeSet::new();
     for (_, inst) in function.walk() {
         let op = function.instruction(inst);
@@ -152,7 +182,10 @@ fn named_in(module: &Module, function: &llrm_mir::module::Function, retained: bo
 
 /// The globals an instruction names other than as a call's callee; with
 /// `retained`, not those it passes as an argument the callee `noretain`s.
-fn named_by_bodies(module: &Module, retained: bool) -> BTreeSet<GlobalId> {
+fn named_by_bodies(
+    module: &Module,
+    retained: bool,
+) -> BTreeSet<GlobalId> {
     let mut out = BTreeSet::new();
     for global in &module.globals {
         if let GlobalKind::Function(function) = &global.kind {
@@ -169,7 +202,10 @@ fn referenced(module: &Module) -> BTreeSet<GlobalId> {
 }
 
 /// `referenced`, the bodies' part found.
-fn referenced_from(module: &Module, mut out: BTreeSet<GlobalId>) -> BTreeSet<GlobalId> {
+fn referenced_from(
+    module: &Module,
+    mut out: BTreeSet<GlobalId>,
+) -> BTreeSet<GlobalId> {
     for global in &module.globals {
         if let GlobalKind::Variable(variable) = &global.kind {
             variable.initializer.iter().for_each(|&one| embedded(&module.context, one, &mut out));
@@ -190,8 +226,8 @@ pub struct Elsewhere {
     pub taken: BTreeSet<GlobalId>,
 }
 
-/// What one body contributes: the globals whose address it lets escape, and those it names (plainly, and but as an argument its
-/// callee `noretain`s). Of the body and the declarations alone.
+/// What one body contributes: the globals whose address it lets escape, and those it names (plainly, and but as an
+/// argument its callee `noretain`s). Of the body and the declarations alone.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Contribution {
     escaped: BTreeSet<GlobalId>,
@@ -199,8 +235,8 @@ pub struct Contribution {
     retained: BTreeSet<GlobalId>,
 }
 
-/// What `GlobalsAA` keeps for its next run: each body's contribution as of the history it had, good while the declarations and the
-/// other modules' doing are those it was made under.
+/// What `GlobalsAA` keeps for its next run: each body's contribution as of the history it had, good while the
+/// declarations and the other modules' doing are those it was made under.
 #[derive(Default)]
 pub struct Bodies {
     declarations: Option<Rc<Vec<GlobalValue>>>,
@@ -210,7 +246,10 @@ pub struct Bodies {
 
 /// `module`'s, each body's shape from its manager in `analyses` and the
 /// other modules as the cached `ProgramGlobals` finds them.
-pub fn analysis(module: &Module, analyses: &mut ModuleAnalyses) -> Result<Globals, String> {
+pub fn analysis(
+    module: &Module,
+    analyses: &mut ModuleAnalyses,
+) -> Result<Globals, String> {
     let program = Rc::clone(analyses.program());
     let elsewhere = match program.cached::<ProgramGlobals>() {
         Some(all) => Result::as_ref(&*all).map_err(String::clone)?[program.module].clone(),
@@ -218,19 +257,28 @@ pub fn analysis(module: &Module, analyses: &mut ModuleAnalyses) -> Result<Global
     };
     let declarations = analyses.get::<Declarations>(module);
     let mut memo = std::mem::take(analyses.memo::<Bodies>());
-    if analyses.from_scratch() || !memo.declarations.as_ref().is_some_and(|then| Rc::ptr_eq(then, &declarations)) || memo.elsewhere.as_ref() != Some(&elsewhere) {
+    if analyses.from_scratch()
+        || !memo.declarations.as_ref().is_some_and(|then| Rc::ptr_eq(then, &declarations))
+        || memo.elsewhere.as_ref() != Some(&elsewhere)
+    {
         memo.per.clear();
     }
     memo.declarations = Some(declarations);
     memo.elsewhere = Some(elsewhere.clone());
-    let found = found_with(module, &program, &elsewhere, &mut |id| analyses.function::<Shape>(module, id), Some(&mut memo.per));
+    let found =
+        found_with(module, &program, &elsewhere, &mut |id| analyses.function::<Shape>(module, id), Some(&mut memo.per));
     *analyses.memo::<Bodies>() = memo;
     found
 }
 
 /// `module`'s under `program`, the other modules doing `elsewhere`, each
 /// body's shape as `shape` gives it.
-pub fn found(module: &Module, program: &ProgramProxy, elsewhere: &Elsewhere, shape: &mut dyn FnMut(GlobalId) -> Rc<Shape>) -> Result<Globals, String> {
+pub fn found(
+    module: &Module,
+    program: &ProgramProxy,
+    elsewhere: &Elsewhere,
+    shape: &mut dyn FnMut(GlobalId) -> Rc<Shape>,
+) -> Result<Globals, String> {
     found_with(module, program, elsewhere, shape, None)
 }
 
@@ -245,13 +293,17 @@ fn found_with(
     let (named, writes) = promised(module, &program.runtime);
     // Outside code reaches a global by name only where the program exports
     // it, or the runtime names it.
-    let unexported = |id: GlobalId, global: &GlobalValue| !program.exports.exported(global) && (defines(global) || elsewhere.defined.contains(&id));
+    let unexported = |id: GlobalId, global: &GlobalValue| {
+        !program.exports.exported(global) && (defines(global) || elsewhere.defined.contains(&id))
+    };
     let mut tracked = module
         .globals
         .iter()
         .enumerate()
         .map(|(at, global)| (GlobalId(at as u32), global))
-        .filter(|&(id, global)| matches!(global.kind, GlobalKind::Variable(_)) && (named.contains(&id) || unexported(id, global)))
+        .filter(|&(id, global)| {
+            matches!(global.kind, GlobalKind::Variable(_)) && (named.contains(&id) || unexported(id, global))
+        })
         .map(|(id, _)| id)
         .filter(|id| !elsewhere.escaped.contains(id))
         .collect::<BTreeSet<_>>();
@@ -259,7 +311,11 @@ fn found_with(
     let (mut plain, mut retained) = (BTreeSet::new(), BTreeSet::new());
     for &(id, _, function) in &bodies {
         let mark = function.mark();
-        let reused = kept.as_ref().and_then(|kept| kept.get(&id)).filter(|(then, _)| *then == mark).map(|(_, one)| Rc::clone(one));
+        let reused = kept
+            .as_ref()
+            .and_then(|kept| kept.get(&id))
+            .filter(|(then, _)| *then == mark)
+            .map(|(_, one)| Rc::clone(one));
         let contribution = match reused {
             Some(one) => one,
             None => {
@@ -277,7 +333,11 @@ fn found_with(
                         _ => None,
                     })
                     .collect();
-                let made = Rc::new(Contribution { escaped, named: named_in(module, function, false), retained: named_in(module, function, true) });
+                let made = Rc::new(Contribution {
+                    escaped,
+                    named: named_in(module, function, false),
+                    retained: named_in(module, function, true),
+                });
                 if let Some(kept) = kept.as_mut() {
                     kept.insert(id, (mark, Rc::clone(&made)));
                 }
@@ -303,7 +363,11 @@ fn found_with(
         .filter(|(id, global, _)| program.exports.exported(global) || taken.contains(id))
         .filter_map(|(_, global, _)| global.name.clone())
         .collect();
-    let bodies = bodies.iter().map(|(id, _, _)| *id).chain(elsewhere.defined.iter().copied().filter(|&one| module.global(one).function().is_some())).collect();
+    let bodies = bodies
+        .iter()
+        .map(|(id, _, _)| *id)
+        .chain(elsewhere.defined.iter().copied().filter(|&one| module.global(one).function().is_some()))
+        .collect();
     Ok(Globals { tracked, named, writes, bodies, entries })
 }
 
@@ -316,8 +380,18 @@ fn held(module: &Module) -> BTreeSet<GlobalId> {
 }
 
 /// `held`, the bodies' part found.
-fn held_from(module: &Module, mut live: BTreeSet<GlobalId>) -> BTreeSet<GlobalId> {
-    live.extend(module.globals.iter().enumerate().filter(|(_, global)| !matches!(global.linkage, Linkage::Internal | Linkage::Private)).map(|(at, _)| GlobalId(at as u32)));
+fn held_from(
+    module: &Module,
+    mut live: BTreeSet<GlobalId>,
+) -> BTreeSet<GlobalId> {
+    live.extend(
+        module
+            .globals
+            .iter()
+            .enumerate()
+            .filter(|(_, global)| !matches!(global.linkage, Linkage::Internal | Linkage::Private))
+            .map(|(at, _)| GlobalId(at as u32)),
+    );
     let mut out = BTreeSet::new();
     let mut pending = live.iter().copied().collect::<Vec<_>>();
     while let Some(at) = pending.pop() {
@@ -338,7 +412,11 @@ enum Symbol {
     Named(String),
 }
 
-fn symbol(program: &Program, at: usize, id: GlobalId) -> Option<Symbol> {
+fn symbol(
+    program: &Program,
+    at: usize,
+    id: GlobalId,
+) -> Option<Symbol> {
     match program.definition(at, id) {
         Some((module, global)) => Some(Symbol::Defined(module, global)),
         None => program.modules[at].global(id).name.clone().map(Symbol::Named),
@@ -351,7 +429,10 @@ pub struct ProgramGlobals;
 impl ProgramAnalysis for ProgramGlobals {
     type Result = Result<Vec<Elsewhere>, String>;
     const NAME: &'static str = "program-globals";
-    fn run(program: &Program, analyses: &mut ProgramAnalyses) -> Self::Result {
+    fn run(
+        program: &Program,
+        analyses: &mut ProgramAnalyses,
+    ) -> Self::Result {
         let count = program.modules.len();
         if count < 2 {
             return Ok(vec![Elsewhere::default(); count]);
@@ -366,16 +447,22 @@ impl ProgramAnalysis for ProgramGlobals {
                 let unit = Unit { program: Some(&proxy), ..Unit::of(module, &program.layout, function) };
                 let exposed = crate::memory::exposed_frames(&unit);
                 let facts = alias::points_to(&unit.with_shape(&shape).with_exposed(&exposed), None, None)?;
-                ids.extend(facts.escaped.iter().filter(|one| one.kind == MemoryKind::Global).filter_map(|one| match one.key {
-                    Key::Global(global) => Some(GlobalId(global)),
-                    _ => None,
+                ids.extend(facts.escaped.iter().filter(|one| one.kind == MemoryKind::Global).filter_map(|one| {
+                    match one.key {
+                        Key::Global(global) => Some(GlobalId(global)),
+                        _ => None,
+                    }
                 }));
             }
-            let symbols = |ids: BTreeSet<GlobalId>| ids.into_iter().filter_map(|id| symbol(program, at, id)).collect::<BTreeSet<_>>();
+            let symbols = |ids: BTreeSet<GlobalId>| {
+                ids.into_iter().filter_map(|id| symbol(program, at, id)).collect::<BTreeSet<_>>()
+            };
             escaped.push(symbols(ids));
             taken.push(symbols(referenced(module)));
         }
-        let elsewhere = |sets: &[BTreeSet<Symbol>], at: usize, one: &Symbol| sets.iter().enumerate().any(|(other, set)| other != at && set.contains(one));
+        let elsewhere = |sets: &[BTreeSet<Symbol>], at: usize, one: &Symbol| {
+            sets.iter().enumerate().any(|(other, set)| other != at && set.contains(one))
+        };
         Ok(program
             .modules
             .iter()

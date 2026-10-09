@@ -65,7 +65,11 @@ pub struct Frame {
 /// `arity` says how many long arguments a routine by that name takes, or
 /// None if it is not one this can reason about at all; an answer under one
 /// is treated the same as None.
-pub fn frames(block: &Block, calls: &IndexMap<i64, String>, arity: &dyn Fn(&str) -> Option<i64>) -> Vec<Frame> {
+pub fn frames(
+    block: &Block,
+    calls: &IndexMap<i64, String>,
+    arity: &dyn Fn(&str) -> Option<i64>,
+) -> Vec<Frame> {
     let mut stack: Vec<&Insn> = Vec::new();
     let mut found: Vec<Frame> = Vec::new();
 

@@ -1,8 +1,8 @@
 //! What the tests share: a module read from its text, printed once it
 //! verifies, and run.
 
-use llrm_mir::interpret::{self, Val};
 use llrm_mir::GlobalId;
+use llrm_mir::interpret::{self, Val};
 use llrm_mir::module::{Function, Module};
 
 pub fn parsed(text: &str) -> Module {
@@ -23,13 +23,24 @@ pub fn f(module: &mut Module) -> &mut Function {
 
 /// What @f returns for each of `inputs`, each argument an integer of the
 /// width `@f` declares; it must return.
-pub fn results(module: &Module, inputs: &[&[i128]]) -> Vec<Val> {
+pub fn results(
+    module: &Module,
+    inputs: &[&[i128]],
+) -> Vec<Val> {
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
-    let widths = function.parameters().iter().map(|&one| module.context.types.int_bits(function.value(one).ty).expect("an integer")).collect::<Vec<_>>();
+    let widths = function
+        .parameters()
+        .iter()
+        .map(|&one| module.context.types.int_bits(function.value(one).ty).expect("an integer"))
+        .collect::<Vec<_>>();
     inputs
         .iter()
         .map(|input| {
-            let arguments = input.iter().zip(&widths).map(|(&value, &width)| Val::Int { bits: llrm_mir::context::mask(width) & value as u128, width }).collect();
+            let arguments = input
+                .iter()
+                .zip(&widths)
+                .map(|(&value, &width)| Val::Int { bits: llrm_mir::context::mask(width) & value as u128, width })
+                .collect();
             interpret::run(module, "f", arguments, 100_000).unwrap_or_else(|trap| panic!("@f{input:?}: {trap:?}"))
         })
         .collect()
@@ -51,12 +62,19 @@ b0:
 ";
 
 /// `module` through `pass` under the pass manager, printed.
-pub fn managed(module: &mut Module, pass: impl llrm_mir::passes::FunctionPass + 'static) -> String {
+pub fn managed(
+    module: &mut Module,
+    pass: impl llrm_mir::passes::FunctionPass + 'static,
+) -> String {
     managed_on(module, pass, Tuned::default())
 }
 
 /// `managed` for `machine`.
-pub fn managed_on(module: &mut Module, pass: impl llrm_mir::passes::FunctionPass + 'static, machine: Tuned) -> String {
+pub fn managed_on(
+    module: &mut Module,
+    pass: impl llrm_mir::passes::FunctionPass + 'static,
+    machine: Tuned,
+) -> String {
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.add(pass);
     manager.run_module(module, std::rc::Rc::new(machine)).unwrap();
@@ -79,7 +97,12 @@ b0:
 /// `module` through `pass` under a pass manager that requires `Summaries`
 /// where `summaries`, as LLVM's `RequireAnalysisPass`, or a bare one;
 /// printed. @f computes what it did on `inputs`.
-pub fn summarized(module: &Module, pass: impl llrm_mir::passes::FunctionPass + 'static, summaries: bool, inputs: &[&[i128]]) -> String {
+pub fn summarized(
+    module: &Module,
+    pass: impl llrm_mir::passes::FunctionPass + 'static,
+    summaries: bool,
+    inputs: &[&[i128]],
+) -> String {
     let mut after = module.clone();
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.verify_each = true;
@@ -128,7 +151,12 @@ impl llrm_mir::target::Machine for Tuned {
         self.spaces.unwrap_or_else(llrm_x86_m16::spaces)
     }
 
-    fn foreign_span(&self, _: (i64, i64), _: (i64, i64), _: i64) -> Option<(i64, i64)> {
+    fn foreign_span(
+        &self,
+        _: (i64, i64),
+        _: (i64, i64),
+        _: i64,
+    ) -> Option<(i64, i64)> {
         None
     }
 
@@ -157,10 +185,17 @@ impl llrm_mir::target::Machine for Tuned {
     }
 
     fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
-        if self.address_forms.is_empty() { llrm_mir::target::Neutral.address_forms() } else { self.address_forms.clone() }
+        if self.address_forms.is_empty() {
+            llrm_mir::target::Neutral.address_forms()
+        } else {
+            self.address_forms.clone()
+        }
     }
 
-    fn multiply_by(&self, factor: i64) -> i64 {
+    fn multiply_by(
+        &self,
+        factor: i64,
+    ) -> i64 {
         self.multiplies.get(&factor).copied().unwrap_or(self.costs.multiply)
     }
 

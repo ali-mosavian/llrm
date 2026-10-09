@@ -55,7 +55,9 @@ fn specialize(body: &str) -> (bool, String) {
     let (context, function) = module.function_mut("f").expect("@f");
     let calls = llrm_analysis::consts::Calls::default();
     let solved = {
-        let unit = llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::within(context, &layout, function, &outer));
+        let unit = llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::within(
+            context, &layout, function, &outer,
+        ));
         llrm_analysis::floatfacts::solved_with(&unit, &calls, None)
     };
     let changed = specialized(context, &layout, &callees, function, &outer, &calls, &solved);
@@ -164,7 +166,10 @@ fn test_unproved_or_observable_iterations_remain() {
         ("%w = fadd float %v, STEP", "%ic = sitofp i16 %i to float\n  %w = fadd float %v, %ic"),
         ("%kf = sitofp i16 %k to float", "%kf = uitofp i1 %c to float"),
     ] {
-        let body = format!("{}\ndefine void @h() {{\nb0:\n  ret void\n}}\n", FPCSE.replace("TRIPS", "10").replace(from, to).replace("STEP", "4.875000e+01"));
+        let body = format!(
+            "{}\ndefine void @h() {{\nb0:\n  ret void\n}}\n",
+            FPCSE.replace("TRIPS", "10").replace(from, to).replace("STEP", "4.875000e+01")
+        );
         let (changed, text) = specialize(&body);
         assert!(!changed, "{to}: {text}");
     }
@@ -179,8 +184,8 @@ fn test_the_pass_runs_under_the_manager() {
     assert_eq!(results(&module, &[&[]]), before);
 }
 
-/// A body with no float in it was solved for floats whole (a dataflow over memory) for every round of every body, and never changed:
-/// 18.9 G of QCport's 458 G at -O2 was billed to it. It is not solved, and nothing is changed.
+/// A body with no float in it was solved for floats whole (a dataflow over memory) for every round of every body, and
+/// never changed: 18.9 G of QCport's 458 G at -O2 was billed to it. It is not solved, and nothing is changed.
 #[test]
 fn test_a_body_with_no_float_is_not_solved_for_floats() {
     let integer = "define i16 @f(i16 %n) {
@@ -214,6 +219,10 @@ fn test_what_touches_floats_is_every_float_value_operand_and_aggregate() {
         llrm_analysis::floatfacts::touches(&module.context, llrm_analysis::testing::function(&module, "f"))
     };
     assert!(!touches("define i16 @f(i16 %n) {\nb0:\n  %a = add i16 %n, 1\n  ret i16 %a\n}\n"));
-    assert!(touches("define i16 @f(i16 %n) {\nb0:\n  %a = sitofp i16 %n to float\n  %b = fptosi float %a to i16\n  ret i16 %b\n}\n"));
-    assert!(touches("@m = global [2 x float] zeroinitializer\ndefine i16 @f(i16 %n) {\nb0:\n  store float 1.0, ptr @m\n  ret i16 %n\n}\n"));
+    assert!(touches(
+        "define i16 @f(i16 %n) {\nb0:\n  %a = sitofp i16 %n to float\n  %b = fptosi float %a to i16\n  ret i16 %b\n}\n"
+    ));
+    assert!(touches(
+        "@m = global [2 x float] zeroinitializer\ndefine i16 @f(i16 %n) {\nb0:\n  store float 1.0, ptr @m\n  ret i16 %n\n}\n"
+    ));
 }

@@ -29,7 +29,11 @@ impl FunctionPass for TrivialUnswitch {
         "trivialunswitch"
     }
 
-    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         let callees = analyses.outer().callees().clone();
         let mut changed = false;
         while unswitched(unit.context, &callees, unit.function) {
@@ -40,7 +44,11 @@ impl FunctionPass for TrivialUnswitch {
 }
 
 /// Whether one loop's header branch was moved to its preheader.
-pub fn unswitched(context: &Context, callees: &Callees, function: &mut Function) -> bool {
+pub fn unswitched(
+    context: &Context,
+    callees: &Callees,
+    function: &mut Function,
+) -> bool {
     let shape = cfg::Shape::of(function);
     for loop_ in &shape.loops {
         if let Some(plan) = planned(context, callees, function, loop_) {
@@ -61,10 +69,16 @@ struct Plan {
     condition: Operand,
 }
 
-fn planned(context: &Context, callees: &Callees, function: &Function, loop_: &Loop) -> Option<Plan> {
+fn planned(
+    context: &Context,
+    callees: &Callees,
+    function: &Function,
+    loop_: &Loop,
+) -> Option<Plan> {
     let graph = cfg::graph(function);
     let header = cfg::block(loop_.header);
-    let outside: Vec<BlockId> = function.predecessors(header).into_iter().filter(|one| !loop_.body.contains(&cfg::id(*one))).collect();
+    let outside: Vec<BlockId> =
+        function.predecessors(header).into_iter().filter(|one| !loop_.body.contains(&cfg::id(*one))).collect();
     let [preheader] = outside[..] else { return None };
     if function.successors(preheader) != [header] {
         return None;
@@ -73,15 +87,18 @@ fn planned(context: &Context, callees: &Callees, function: &Function, loop_: &Lo
     let instruction = function.instruction(branch);
     let [condition, Operand::Block(first), Operand::Block(second)] = instruction.operands[..] else { return None };
     let Operand::Value(value) = condition else { return None };
-    let defined_in = |block: BlockId| function.block(block).instructions().iter().any(|&one| function.instruction(one).result == Some(value));
+    let defined_in = |block: BlockId| {
+        function.block(block).instructions().iter().any(|&one| function.instruction(one).result == Some(value))
+    };
     if loop_.body.iter().any(|&at| defined_in(cfg::block(at))) {
         return None;
     }
-    let (exit_if_true, exit, stays) = match (loop_.body.contains(&cfg::id(first)), loop_.body.contains(&cfg::id(second))) {
-        (false, true) => (true, first, second),
-        (true, false) => (false, second, first),
-        _ => return None,
-    };
+    let (exit_if_true, exit, stays) =
+        match (loop_.body.contains(&cfg::id(first)), loop_.body.contains(&cfg::id(second))) {
+            (false, true) => (true, first, second),
+            (true, false) => (false, second, first),
+            _ => return None,
+        };
     // What the header does before the branch is skipped where the loop is never entered: it does nothing but phis and
     // work that cannot trap, and its results leave only through the exit's phis.
     for &inst in function.block(header).instructions() {
@@ -123,7 +140,10 @@ fn planned(context: &Context, callees: &Callees, function: &Function, loop_: &Lo
                 continue;
             }
             // A header phi has its value on entry; anything else the loop computes is not there yet.
-            let own = matches!(function.value(carried).def, ValueDef::Instruction(def) if function.parent(def) == Some(header) && function.instruction(def).opcode == Opcode::Phi);
+            let own = matches!(
+                function.value(carried).def,
+                ValueDef::Instruction(def) if function.parent(def) == Some(header) && function.instruction(def).opcode == Opcode::Phi
+            );
             if !own {
                 return None;
             }
@@ -132,7 +152,10 @@ fn planned(context: &Context, callees: &Callees, function: &Function, loop_: &Lo
     Some(Plan { header, preheader, exit, stays, exit_if_true, condition })
 }
 
-fn moved(function: &mut Function, plan: Plan) {
+fn moved(
+    function: &mut Function,
+    plan: Plan,
+) {
     let Plan { header, preheader, exit, stays, exit_if_true, condition } = plan;
     // The exit's phis take the header's value on the new edge from the preheader: a header phi's value on entry.
     for phi in edges::phis(function, exit) {
@@ -144,8 +167,13 @@ fn moved(function: &mut Function, plan: Plan) {
             }
             let entry = match operand {
                 Operand::Value(value) => match function.value(value).def {
-                    ValueDef::Instruction(def) if function.parent(def) == Some(header) && function.instruction(def).opcode == Opcode::Phi => {
-                        arms(function, def).into_iter().find(|&(_, source)| source == preheader).map_or(operand, |(first, _)| first)
+                    ValueDef::Instruction(def)
+                        if function.parent(def) == Some(header) && function.instruction(def).opcode == Opcode::Phi =>
+                    {
+                        arms(function, def)
+                            .into_iter()
+                            .find(|&(_, source)| source == preheader)
+                            .map_or(operand, |(first, _)| first)
                     }
                     _ => operand,
                 },
@@ -165,7 +193,13 @@ fn moved(function: &mut Function, plan: Plan) {
     function.erase(branch).expect("the branch had no users");
     let last = function.terminator(preheader).expect("a terminated preheader");
     let targets = if exit_if_true { [exit, header] } else { [header, exit] };
-    let decide = function.create_instruction(Opcode::Br, void, vec![condition, Operand::Block(targets[0]), Operand::Block(targets[1])], Default::default(), None);
+    let decide = function.create_instruction(
+        Opcode::Br,
+        void,
+        vec![condition, Operand::Block(targets[0]), Operand::Block(targets[1])],
+        Default::default(),
+        None,
+    );
     function.insert(decide, llrm_mir::edit::Position::Before(last)).expect("a placed block");
     function.erase(last).expect("the jump had no users");
 }

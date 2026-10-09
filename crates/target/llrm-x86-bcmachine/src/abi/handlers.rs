@@ -5,12 +5,20 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::objectfile::module::{self, Module, Space};
 
-pub fn registered(found: &Module, routine: &str, families: &[&str]) -> BTreeSet<i64> {
+pub fn registered(
+    found: &Module,
+    routine: &str,
+    families: &[&str],
+) -> BTreeSet<i64> {
     registrations(found, routine, families).into_values().collect()
 }
 
 /// The code entry each call of `routine` registers, by the call's offset.
-pub fn registrations(found: &Module, routine: &str, families: &[&str]) -> BTreeMap<i64, i64> {
+pub fn registrations(
+    found: &Module,
+    routine: &str,
+    families: &[&str],
+) -> BTreeMap<i64, i64> {
     if !families.contains(&module::family(&found.records).value())
         || module::defines(&found.records, found.seg).contains(routine)
     {
@@ -60,9 +68,15 @@ pub fn registrations(found: &Module, routine: &str, families: &[&str]) -> BTreeM
 }
 
 /// The code offset the relocated word at `field` holds, if it is one.
-fn code_entry(found: &Module, field: i64) -> Option<i64> {
+fn code_entry(
+    found: &Module,
+    field: i64,
+) -> Option<i64> {
     let reference = found.operands.get(&field)?;
-    (reference.space == Space::Segment && reference.index == found.seg && found.start <= reference.disp && reference.disp < found.end)
+    (reference.space == Space::Segment
+        && reference.index == found.seg
+        && found.start <= reference.disp
+        && reference.disp < found.end)
         .then_some(reference.disp)
 }
 
@@ -94,7 +108,11 @@ pub fn resumptions(found: &Module) -> BTreeMap<i64, i64> {
 }
 
 /// `b[lo:hi]` for non-negative bounds: clamped, and empty where `hi < lo`.
-fn slice(b: &[u8], lo: i64, hi: i64) -> &[u8] {
+fn slice(
+    b: &[u8],
+    lo: i64,
+    hi: i64,
+) -> &[u8] {
     let hi = (hi.max(0) as usize).min(b.len());
     let lo = lo.max(0) as usize;
     if lo >= hi { &[] } else { &b[lo..hi] }

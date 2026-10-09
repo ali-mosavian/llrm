@@ -57,16 +57,17 @@ pub struct Convention {
     pub wide_pairs: Vec<[String; 2]>,
     /// Whether a register an argument skipped is free for a later one.
     pub backfill: bool,
-    /// The most bytes of an integer one argument register holds, where that is more than a stack slot (a long in a 32-bit
-    /// register on a 16-bit target); a slot's worth where the file gives none.
+    /// The most bytes of an integer one argument register holds, where that is more than a stack slot (a long in a
+    /// 32-bit register on a 16-bit target); a slot's worth where the file gives none.
     pub register_bytes: Option<i64>,
-    /// A register takes the width of the value it holds (AL, AX or EAX for 1, 2 or 4 bytes) rather than its own: the argument
-    /// registers are named by their widest part.
+    /// A register takes the width of the value it holds (AL, AX or EAX for 1, 2 or 4 bytes) rather than its own: the
+    /// argument registers are named by their widest part.
     pub sized_arguments: bool,
-    /// An argument that travels in memory (a float, an i64, a struct) leaves the registers free for the arguments after it.
+    /// An argument that travels in memory (a float, an i64, a struct) leaves the registers free for the arguments
+    /// after it.
     pub skip_memory: bool,
-    /// A struct passed by value travels in memory whatever its size; else a struct of a size that returns in a register is passed
-    /// as that integer.
+    /// A struct passed by value travels in memory whatever its size; else a struct of a size that returns in a
+    /// register is passed as that integer.
     pub aggregate_arguments_in_memory: bool,
     /// What a call's arguments in registers are the callee's to change; everything else it keeps.
     pub arguments_clobbered: bool,
@@ -74,10 +75,11 @@ pub struct Convention {
     pub results_clobbered: bool,
     /// The convention a variadic call uses in place of this one: it moves the arguments, not the symbol.
     pub variadic: Option<String>,
-    /// The convention a function of this one's takes when the callee, not the caller, removes its stack arguments (`calleepop`),
-    /// where that is no convention MIR already names (`fastcc` is C's).
+    /// The convention a function of this one's takes when the callee, not the caller, removes its stack arguments
+    /// (`calleepop`), where that is no convention MIR already names (`fastcc` is C's).
     pub pops_as: Option<String>,
-    /// How a symbol is written in each object format, `*` standing for its name and `^*` for its name in capitals (`spell`).
+    /// How a symbol is written in each object format, `*` standing for its name and `^*` for its name in capitals
+    /// (`spell`).
     pub symbol: BTreeMap<String, String>,
     pub return_address_bytes: i64,
     /// Where the first argument lies from the frame register, past the saved frame register and
@@ -91,7 +93,8 @@ pub struct Convention {
     /// stack pointer, and the frame register is not set. gcc's `-fomit-frame-pointer`.
     pub frame_optional: bool,
     /// A frame tuned for size is opened with `enter N,0` (4 bytes against 6). Left false where the target prices it
-    /// above `push bp; mov bp,sp; sub sp,N`: the 486 takes 14 clocks against 3 (Intel 240440-002), and neither GCC nor LLVM emits it.
+    /// above `push bp; mov bp,sp; sub sp,N`: the 486 takes 14 clocks against 3 (Intel 240440-002), and neither GCC nor
+    /// LLVM emits it.
     pub frame_enter: bool,
     pub stack: String,
     /// The registers a callee keeps, the frame register among them.
@@ -111,12 +114,16 @@ pub struct Convention {
     pub interrupt_frame: Vec<(String, i64)>,
 }
 
-/// A target's description of its conventions, by its address: one per target, so what a profile that holds it is keyed by.
+/// A target's description of its conventions, by its address: one per target, so what a profile that holds it is keyed
+/// by.
 #[derive(Clone, Copy, Debug)]
 pub struct Stated(pub &'static Calling);
 
 impl PartialEq for Stated {
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
         std::ptr::eq(self.0, other.0)
     }
 }
@@ -124,7 +131,10 @@ impl PartialEq for Stated {
 impl Eq for Stated {}
 
 impl std::hash::Hash for Stated {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
         std::ptr::hash(self.0, state);
     }
 }
@@ -133,12 +143,13 @@ impl std::hash::Hash for Stated {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Calling {
     pub conventions: Vec<Convention>,
-    /// The ABI families a program may ask for with `-mabi=`: each names the convention an unmarked function has under it.
+    /// The ABI families a program may ask for with `-mabi=`: each names the convention an unmarked function has under
+    /// it.
     pub abis: BTreeMap<String, String>,
     /// The family a program gets without the switch.
     pub default: String,
-    /// The convention a function nothing outside the program reaches takes, whatever ABI the program has: no one else sees it,
-    /// so the target's best serves. None where its default is that.
+    /// The convention a function nothing outside the program reaches takes, whatever ABI the program has: no one else
+    /// sees it, so the target's best serves. None where its default is that.
     pub private: Option<String>,
 }
 
@@ -190,10 +201,20 @@ impl Calling {
         let table: toml::Table = text.parse().map_err(|error: toml::de::Error| error.to_string())?;
         let mut conventions = Vec::new();
         let mut stated: Vec<(&String, toml::Table)> = Vec::new();
-        let default = table.get("default").and_then(toml::Value::as_str).ok_or("calling.toml: `default` names the ABI a program has without -mabi=")?.to_owned();
+        let default = table
+            .get("default")
+            .and_then(toml::Value::as_str)
+            .ok_or("calling.toml: `default` names the ABI a program has without -mabi=")?
+            .to_owned();
         let mut abis = BTreeMap::new();
-        for (family, one) in table.get("abi").and_then(toml::Value::as_table).ok_or("calling.toml: no [abi.<family>]")? {
-            let convention = one.as_table().and_then(|one| one.get("convention")).and_then(toml::Value::as_str).ok_or_else(|| format!("calling.toml: abi.{family}.convention is not a name"))?;
+        for (family, one) in
+            table.get("abi").and_then(toml::Value::as_table).ok_or("calling.toml: no [abi.<family>]")?
+        {
+            let convention = one
+                .as_table()
+                .and_then(|one| one.get("convention"))
+                .and_then(toml::Value::as_str)
+                .ok_or_else(|| format!("calling.toml: abi.{family}.convention is not a name"))?;
             abis.insert(family.clone(), convention.to_owned());
         }
         for (name, value) in table.iter().filter(|(name, _)| !matches!(name.as_str(), "default" | "abi" | "private")) {
@@ -201,7 +222,10 @@ impl Calling {
             // `like = "other"`: everything `other` states that this does not.
             if let Some(like) = one.remove("like") {
                 let like = like.as_str().ok_or_else(|| format!("calling.toml: {name}.like is not a name"))?;
-                let base = stated.iter().find(|(one, _)| one.as_str() == like).ok_or_else(|| format!("calling.toml: {name} is like {like}, which is not given before it"))?;
+                let base = stated
+                    .iter()
+                    .find(|(one, _)| one.as_str() == like)
+                    .ok_or_else(|| format!("calling.toml: {name} is like {like}, which is not given before it"))?;
                 // Each states the cc MIR names it by; it is not inherited.
                 for (key, value) in base.1.iter().filter(|(key, _)| key.as_str() != "cc") {
                     one.entry(key.clone()).or_insert_with(|| value.clone());
@@ -213,13 +237,22 @@ impl Calling {
         if conventions.is_empty() {
             return Err("calling.toml: no convention".to_owned());
         }
-        let private = table.get("private").map(|one| one.as_str().map(str::to_owned).ok_or("calling.toml: `private` names a convention")).transpose()?;
+        let private = table
+            .get("private")
+            .map(|one| one.as_str().map(str::to_owned).ok_or("calling.toml: `private` names a convention"))
+            .transpose()?;
         let calling = Self { conventions, abis, default, private };
         if let Some(name) = &calling.private {
-            calling.named(name).ok_or_else(|| format!("calling.toml: private is the convention {name}, which is not given"))?;
+            calling
+                .named(name)
+                .ok_or_else(|| format!("calling.toml: private is the convention {name}, which is not given"))?;
         }
         for (family, convention) in &calling.abis {
-            calling.named(convention).ok_or_else(|| format!("calling.toml: abi.{family} is the convention {convention}, which is not given"))?;
+            calling
+                .named(convention)
+                .ok_or_else(
+                    || format!("calling.toml: abi.{family} is the convention {convention}, which is not given"),
+                )?;
         }
         calling.chosen(None)?;
         Ok(calling)
@@ -230,9 +263,13 @@ impl Calling {
         self.private.as_deref().and_then(|name| self.named(name))
     }
 
-    /// Whether a function with `convention` may take the private one instead: the ABIs' own conventions are the ones a program's
-    /// functions have unless marked, and a marked one (Pascal's, an interrupt's) is a protocol its marker names.
-    pub fn replaceable(&self, convention: &Convention) -> bool {
+    /// Whether a function with `convention` may take the private one instead: the ABIs' own conventions are the ones a
+    /// program's functions have unless marked, and a marked one (Pascal's, an interrupt's) is a protocol its marker
+    /// names.
+    pub fn replaceable(
+        &self,
+        convention: &Convention,
+    ) -> bool {
         self.abis.values().any(|name| *name == convention.name)
     }
 
@@ -243,10 +280,18 @@ impl Calling {
 
     /// The convention an unmarked function has under `-mabi=family`, or the default's without one; a family this target
     /// has not is refused, saying which it has.
-    pub fn chosen(&self, family: Option<&str>) -> Result<&Convention, String> {
+    pub fn chosen(
+        &self,
+        family: Option<&str>,
+    ) -> Result<&Convention, String> {
         let family = family.unwrap_or(&self.default);
         let found = self.abis.get(family).and_then(|name| self.named(name));
-        found.ok_or_else(|| format!("no ABI \"{family}\": this target has {}", self.abis.keys().map(String::as_str).collect::<Vec<_>>().join(", ")))
+        found.ok_or_else(|| {
+            format!(
+                "no ABI \"{family}\": this target has {}",
+                self.abis.keys().map(String::as_str).collect::<Vec<_>>().join(", ")
+            )
+        })
     }
 
     /// The names, in file order.
@@ -259,27 +304,45 @@ impl Calling {
         self.conventions.iter().find(|one| !one.interrupt_frame.is_empty())
     }
 
-    pub fn named(&self, name: &str) -> Option<&Convention> {
+    pub fn named(
+        &self,
+        name: &str,
+    ) -> Option<&Convention> {
         self.conventions.iter().find(|one| one.name == name)
     }
 
     /// `pattern`, a symbol's OMF decoration (`*_`) as the front end records it, in `format`: the one the convention
     /// whose OMF decoration it is gives. None where no convention states `format`, or none has that pattern.
-    pub fn redecorated(&self, pattern: &str, format: &str) -> Option<String> {
-        self.conventions.iter().find(|one| one.symbol.get("omf").is_some_and(|omf| omf == pattern)).and_then(|one| one.symbol.get(format)).cloned()
+    pub fn redecorated(
+        &self,
+        pattern: &str,
+        format: &str,
+    ) -> Option<String> {
+        self.conventions
+            .iter()
+            .find(|one| one.symbol.get("omf").is_some_and(|omf| omf == pattern))
+            .and_then(|one| one.symbol.get(format))
+            .cloned()
     }
 
     /// The convention MIR's `cc` names: the file's first answers `ccc`, whose `cc` is 0.
-    pub fn by_cc(&self, cc: &str) -> Option<&Convention> {
+    pub fn by_cc(
+        &self,
+        cc: &str,
+    ) -> Option<&Convention> {
         self.conventions.iter().find(|one| one.cc.as_deref() == Some(cc))
     }
 
-    /// The convention a MIR calling-convention number names: `ccc` and `fastcc` the one stating `cc = "cdecl"`, any other
-    /// the one whose `cc` is the number's name without its `cc`.
-    pub fn by_number(&self, number: u32) -> Option<&Convention> {
+    /// The convention a MIR calling-convention number names: `ccc` and `fastcc` the one stating `cc = "cdecl"`, any
+    /// other the one whose `cc` is the number's name without its `cc`.
+    pub fn by_number(
+        &self,
+        number: u32,
+    ) -> Option<&Convention> {
         match number {
             0 | llrm_mir::opcode::FAST => self.by_cc("cdecl"),
-            other => self.by_cc(llrm_mir::opcode::CONVENTIONS.iter().find(|(_, one)| *one == other)?.0.trim_end_matches("cc")),
+            other => self
+                .by_cc(llrm_mir::opcode::CONVENTIONS.iter().find(|(_, one)| *one == other)?.0.trim_end_matches("cc")),
         }
     }
 
@@ -287,13 +350,19 @@ impl Calling {
     pub fn number_of(cc: Option<&str>) -> Option<u32> {
         match cc? {
             "cdecl" => Some(0),
-            other => llrm_mir::opcode::CONVENTIONS.iter().find(|(name, _)| name.strip_suffix("cc") == Some(other)).map(|(_, number)| *number),
+            other => llrm_mir::opcode::CONVENTIONS
+                .iter()
+                .find(|(name, _)| name.strip_suffix("cc") == Some(other))
+                .map(|(_, number)| *number),
         }
     }
 
-    /// The convention a function in MIR convention `number` takes when its callee removes the stack arguments: the one it
-    /// names (`pops_as`), else MIR's `fastcc` for C's own.
-    pub fn callee_pop(&self, number: u32) -> Option<u32> {
+    /// The convention a function in MIR convention `number` takes when its callee removes the stack arguments: the one
+    /// it names (`pops_as`), else MIR's `fastcc` for C's own.
+    pub fn callee_pop(
+        &self,
+        number: u32,
+    ) -> Option<u32> {
         let from = self.by_number(number)?;
         // The convention that removes them itself has none to take: `like` carried `pops_as` to it.
         match &from.pops_as {
@@ -304,10 +373,15 @@ impl Calling {
 }
 
 impl Convention {
-    /// What `argument` is to this convention's registers, with `slot` bytes in a stack slot: a word that fits a slot, an integer
-    /// that fits a register wider than a slot (a long in a 32-bit register on a 16-bit target), a pair for an integer or a pointer of
-    /// two slots (an i64 in 32 bits, a long or a far pointer in 16), and memory for the rest.
-    pub fn kind(&self, argument: llrm_mir::target::Argument, slot: i64) -> Kind {
+    /// What `argument` is to this convention's registers, with `slot` bytes in a stack slot: a word that fits a slot,
+    /// an integer that fits a register wider than a slot (a long in a 32-bit register on a 16-bit target), a pair
+    /// for an integer or a pointer of two slots (an i64 in 32 bits, a long or a far pointer in 16), and memory for
+    /// the rest.
+    pub fn kind(
+        &self,
+        argument: llrm_mir::target::Argument,
+        slot: i64,
+    ) -> Kind {
         let register = self.register_bytes.unwrap_or(slot);
         match () {
             _ if argument.memory || argument.floating => Kind::Memory(argument.bytes),
@@ -324,7 +398,8 @@ impl Convention {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Kind {
     Word,
-    /// An integer of this many bytes, more than a slot, that one register holds: a long in a 32-bit register on a 16-bit target.
+    /// An integer of this many bytes, more than a slot, that one register holds: a long in a 32-bit register on a
+    /// 16-bit target.
     Sized(i64),
     Wide,
     Memory(i64),
@@ -349,13 +424,24 @@ pub struct Placement {
 }
 
 impl Convention {
-    fn parse(name: &str, table: &toml::Table) -> Result<Self, String> {
+    fn parse(
+        name: &str,
+        table: &toml::Table,
+    ) -> Result<Self, String> {
         let at = |key: &str| format!("calling.toml: {name}.{key}");
         if let Some(unknown) = table.keys().find(|key| !KEYS.contains(&key.as_str())) {
             return Err(format!("{}: no such key", at(unknown)));
         }
-        let integer = |key: &str| -> Result<i64, String> { table.get(key).and_then(toml::Value::as_integer).ok_or_else(|| format!("{} is not an integer", at(key))) };
-        let text = |key: &str| -> Result<String, String> { table.get(key).and_then(toml::Value::as_str).map(str::to_owned).ok_or_else(|| format!("{} is not a string", at(key))) };
+        let integer = |key: &str| -> Result<i64, String> {
+            table.get(key).and_then(toml::Value::as_integer).ok_or_else(|| format!("{} is not an integer", at(key)))
+        };
+        let text = |key: &str| -> Result<String, String> {
+            table
+                .get(key)
+                .and_then(toml::Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| format!("{} is not a string", at(key)))
+        };
         let names = |value: Option<&toml::Value>, key: &str| -> Result<Vec<String>, String> {
             value
                 .and_then(toml::Value::as_array)
@@ -389,22 +475,36 @@ impl Convention {
             })
             .collect::<Result<Vec<_>, String>>()?;
         let mut results = BTreeMap::new();
-        for (class, registers) in table.get("result").and_then(toml::Value::as_table).ok_or_else(|| format!("{} is missing", at("result")))? {
+        for (class, registers) in
+            table.get("result").and_then(toml::Value::as_table).ok_or_else(|| format!("{} is missing", at("result")))?
+        {
             results.insert(class.clone(), names(Some(registers), "result")?);
         }
         let aggregate = match table.get("aggregate") {
             None => None,
             Some(_) => Some(Aggregate {
                 style: text("aggregate")?,
-                in_register_bytes: names_as_integers(table.get("aggregate_in_register_bytes"), &at("aggregate_in_register_bytes"))?,
+                in_register_bytes: names_as_integers(
+                    table.get("aggregate_in_register_bytes"),
+                    &at("aggregate_in_register_bytes"),
+                )?,
                 pointer: text("aggregate_pointer")?,
-                pointer_register: table.contains_key("aggregate_pointer_register").then(|| text("aggregate_pointer_register")).transpose()?,
-                pointer_far: table.get("aggregate_pointer_far").map_or(Ok(false), |one| one.as_bool().ok_or_else(|| format!("{} is not true or false", at("aggregate_pointer_far"))))?,
+                pointer_register: table
+                    .contains_key("aggregate_pointer_register")
+                    .then(|| text("aggregate_pointer_register"))
+                    .transpose()?,
+                pointer_far: table.get("aggregate_pointer_far").map_or(Ok(false), |one| {
+                    one.as_bool().ok_or_else(|| format!("{} is not true or false", at("aggregate_pointer_far")))
+                })?,
                 pointer_returned: text("aggregate_pointer_returned")?,
                 pointer_popped_by: text("aggregate_pointer_popped_by")?,
             }),
         };
-        let flag = |key: &str| -> Result<bool, String> { table.get(key).map_or(Ok(false), |one| one.as_bool().ok_or_else(|| format!("{} is not true or false", at(key)))) };
+        let flag = |key: &str| -> Result<bool, String> {
+            table
+                .get(key)
+                .map_or(Ok(false), |one| one.as_bool().ok_or_else(|| format!("{} is not true or false", at(key))))
+        };
         let wide_pairs = match table.get("wide_pairs") {
             None => Vec::new(),
             Some(pairs) => pairs
@@ -412,7 +512,8 @@ impl Convention {
                 .ok_or_else(|| format!("{} is not a list", at("wide_pairs")))?
                 .iter()
                 .map(|pair| {
-                    let names: Vec<Option<&str>> = pair.as_array().map_or(Vec::new(), |pair| pair.iter().map(toml::Value::as_str).collect());
+                    let names: Vec<Option<&str>> =
+                        pair.as_array().map_or(Vec::new(), |pair| pair.iter().map(toml::Value::as_str).collect());
                     match names[..] {
                         [Some(low), Some(high)] => Ok([low.to_owned(), high.to_owned()]),
                         _ => Err(format!("{}: a pair is [low, high]", at("wide_pairs"))),
@@ -421,8 +522,13 @@ impl Convention {
                 .collect::<Result<Vec<_>, String>>()?,
         };
         let mut symbol = BTreeMap::new();
-        for (format, pattern) in table.get("symbol").map_or(Ok(&toml::Table::new()), |one| one.as_table().ok_or_else(|| format!("{} is not a table", at("symbol"))))? {
-            let pattern = pattern.as_str().filter(|pattern| pattern.contains('*')).ok_or_else(|| format!("{}.{format} is a pattern with a `*` for the name", at("symbol")))?;
+        for (format, pattern) in table.get("symbol").map_or(Ok(&toml::Table::new()), |one| {
+            one.as_table().ok_or_else(|| format!("{} is not a table", at("symbol")))
+        })? {
+            let pattern = pattern
+                .as_str()
+                .filter(|pattern| pattern.contains('*'))
+                .ok_or_else(|| format!("{}.{format} is a pattern with a `*` for the name", at("symbol")))?;
             symbol.insert(format.clone(), pattern.to_owned());
         }
         Ok(Self {
@@ -445,7 +551,10 @@ impl Convention {
             argument_registers: names(table.get("argument_registers"), "argument_registers")?,
             return_address_bytes: integer("return_address_bytes")?,
             first_argument_offset: integer("first_argument_offset")?,
-            first_argument_offset_far: table.contains_key("first_argument_offset_far").then(|| integer("first_argument_offset_far")).transpose()?,
+            first_argument_offset_far: table
+                .contains_key("first_argument_offset_far")
+                .then(|| integer("first_argument_offset_far"))
+                .transpose()?,
             frame: text("frame")?,
             frame_optional: flag("frame_optional")?,
             frame_enter: flag("frame_enter")?,
@@ -464,9 +573,13 @@ impl Convention {
                     .as_array()
                     .ok_or_else(|| format!("{} is not a list", at("interrupt_frame")))?
                     .iter()
-                    .map(|row| match row.as_array().map(|pair| (pair.first().and_then(toml::Value::as_str), pair.get(1).and_then(toml::Value::as_integer))) {
-                        Some((Some(register), Some(bytes))) => Ok((register.to_owned(), bytes)),
-                        _ => Err(format!("{}: a slot is [register, bytes]", at("interrupt_frame"))),
+                    .map(|row| {
+                        match row.as_array().map(|pair| {
+                            (pair.first().and_then(toml::Value::as_str), pair.get(1).and_then(toml::Value::as_integer))
+                        }) {
+                            Some((Some(register), Some(bytes))) => Ok((register.to_owned(), bytes)),
+                            _ => Err(format!("{}: a slot is [register, bytes]", at("interrupt_frame"))),
+                        }
                     })
                     .collect::<Result<_, _>>()?,
             },
@@ -475,16 +588,26 @@ impl Convention {
 
     /// The registers a result `width` bytes wide leaves in, low part first; the widest entry that
     /// holds it where none is that width.
-    pub fn result_registers(&self, width: i64) -> Option<&[String]> {
-        let by_width = self.results.iter().filter_map(|(class, registers)| Some((class.parse::<i64>().ok()?, registers)));
-        by_width.filter(|(bytes, _)| *bytes >= width).min_by_key(|(bytes, _)| *bytes).map(|(_, registers)| registers.as_slice())
+    pub fn result_registers(
+        &self,
+        width: i64,
+    ) -> Option<&[String]> {
+        let by_width =
+            self.results.iter().filter_map(|(class, registers)| Some((class.parse::<i64>().ok()?, registers)));
+        by_width
+            .filter(|(bytes, _)| *bytes >= width)
+            .min_by_key(|(bytes, _)| *bytes)
+            .map(|(_, registers)| registers.as_slice())
     }
 
     /// Where `arguments` go: each takes the first register free, an i64 the first pair with both
     /// free; the first that fits no register, and all after it, go on the stack, each at least a
     /// slot. Without `backfill`, a register passed over is not free for a later argument. With `skip_memory`, only
     /// the ones that fit none go on the stack: a later argument still takes a free register.
-    pub fn place(&self, arguments: &[Kind]) -> Placement {
+    pub fn place(
+        &self,
+        arguments: &[Kind],
+    ) -> Placement {
         let mut free: Vec<bool> = vec![true; self.argument_registers.len()];
         let at = |name: &String| self.argument_registers.iter().position(|one| one == name);
         let mut places = Vec::new();
@@ -513,7 +636,9 @@ impl Convention {
                         free[index] = false;
                         used.push(self.argument_registers[index].clone());
                     }
-                    places.push(Place::Registers(registers.into_iter().map(|index| self.argument_registers[index].clone()).collect()));
+                    places.push(Place::Registers(
+                        registers.into_iter().map(|index| self.argument_registers[index].clone()).collect(),
+                    ));
                 }
                 None => {
                     spilled = !self.skip_memory;
@@ -534,7 +659,11 @@ impl Convention {
     /// The registers a call changes that the callee does not keep: what the convention clobbers,
     /// the registers it passed arguments in where those are the callee's, and those it returned a
     /// result of `width` bytes in where those are.
-    pub fn clobbers(&self, used: &[String], result_width: Option<i64>) -> Vec<String> {
+    pub fn clobbers(
+        &self,
+        used: &[String],
+        result_width: Option<i64>,
+    ) -> Vec<String> {
         let mut out = self.clobbered.clone();
         if self.arguments_clobbered {
             out.extend(used.iter().cloned());
@@ -547,8 +676,13 @@ impl Convention {
         out
     }
 
-    /// `name` as an object in `format` (`omf`, `elf`, `macho`) spells it under this convention, where the description gives it.
-    pub fn decorated(&self, format: &str, name: &str) -> Option<String> {
+    /// `name` as an object in `format` (`omf`, `elf`, `macho`) spells it under this convention, where the description
+    /// gives it.
+    pub fn decorated(
+        &self,
+        format: &str,
+        name: &str,
+    ) -> Option<String> {
         self.symbol.get(format).map(|pattern| spell(pattern, name))
     }
 
@@ -559,11 +693,17 @@ impl Convention {
 }
 
 /// `name` in a symbol `pattern`: `*` is the name, `^*` the name in capitals.
-pub fn spell(pattern: &str, name: &str) -> String {
+pub fn spell(
+    pattern: &str,
+    name: &str,
+) -> String {
     pattern.replace("^*", &name.to_ascii_uppercase()).replace('*', name)
 }
 
-fn names_as_integers(value: Option<&toml::Value>, at: &str) -> Result<Vec<i64>, String> {
+fn names_as_integers(
+    value: Option<&toml::Value>,
+    at: &str,
+) -> Result<Vec<i64>, String> {
     value
         .and_then(toml::Value::as_array)
         .ok_or_else(|| format!("{at} is not a list"))?
@@ -582,12 +722,18 @@ mod tests {
     fn a_convention_names_its_frame_its_kept_registers_and_its_results() {
         let calling = Calling::parse(ONE).unwrap();
         let one = calling.native();
-        assert_eq!((one.slot_bytes, one.order, one.cleanup, one.first_argument_offset, one.first_argument_offset_far), (2, Order::LeftToRight, Cleanup::Callee, 4, Some(6)));
+        assert_eq!(
+            (one.slot_bytes, one.order, one.cleanup, one.first_argument_offset, one.first_argument_offset_far),
+            (2, Order::LeftToRight, Cleanup::Callee, 4, Some(6))
+        );
         // The frame register is kept, but no value is held in it.
         assert_eq!(one.preserved.len(), 2);
         assert_eq!(one.callee_saved(), [&Kept { full: "esi".into(), pushed: "si".into() }]);
         // A width no entry names takes the narrowest that holds it.
-        assert_eq!((one.result_registers(2).unwrap(), one.result_registers(4).unwrap(), one.result_registers(8)), (&["eax".to_owned(), "edx".to_owned()][..], &["eax".to_owned(), "edx".to_owned()][..], None));
+        assert_eq!(
+            (one.result_registers(2).unwrap(), one.result_registers(4).unwrap(), one.result_registers(8)),
+            (&["eax".to_owned(), "edx".to_owned()][..], &["eax".to_owned(), "edx".to_owned()][..], None)
+        );
         assert_eq!(one.result_registers(1).unwrap(), ["eax".to_owned()]);
     }
 
@@ -599,14 +745,20 @@ mod tests {
         let d = calling.named("d").unwrap();
         assert_eq!((d.cleanup, d.slot_bytes, d.order), (Cleanup::Caller, 2, Order::LeftToRight));
         assert_eq!(d.results.len(), 1);
-        assert!(Calling::parse(&text.replace("like = \"c\"", "like = \"z\"")).unwrap_err().contains("not given before it"));
+        assert!(
+            Calling::parse(&text.replace("like = \"c\"", "like = \"z\"")).unwrap_err().contains("not given before it")
+        );
     }
 
     #[test]
     fn a_key_nobody_reads_is_refused() {
         let error = Calling::parse(&ONE.replace("wide_slots = 2", "wide_slots = 2\nred_zone = 128")).unwrap_err();
         assert_eq!(error, "calling.toml: c.red_zone: no such key");
-        assert!(Calling::parse(&ONE.replace("left-to-right", "sideways")).unwrap_err().contains("not right-to-left or left-to-right"));
+        assert!(
+            Calling::parse(&ONE.replace("left-to-right", "sideways"))
+                .unwrap_err()
+                .contains("not right-to-left or left-to-right")
+        );
     }
 
     /// Open Watcom's flat register convention, as `wcc386 -3r` emits it (read from its disassembly).
@@ -643,38 +795,62 @@ mod tests {
         assert_eq!((placed.places[3].clone(), placed.stack_bytes), (Place::Stack(0), 8));
         // Six words: four in registers, the fifth lowest on the stack.
         let six = w.place(&[Kind::Word; 6]);
-        assert_eq!((six.places[4].clone(), six.places[5].clone(), six.stack_bytes), (Place::Stack(0), Place::Stack(4), 8));
+        assert_eq!(
+            (six.places[4].clone(), six.places[5].clone(), six.stack_bytes),
+            (Place::Stack(0), Place::Stack(4), 8)
+        );
     }
 
-    /// gcc's regparm(3) puts `(float, int b, double, int d, int e)` in EAX, EDX, ECX (b, d, e) and the float and the double on the
-    /// stack: it counts integers only. With `skip_memory` off the float stopped the rest, as Open Watcom's does (b, d, e to the stack).
+    /// gcc's regparm(3) puts `(float, int b, double, int d, int e)` in EAX, EDX, ECX (b, d, e) and the float and the
+    /// double on the stack: it counts integers only. With `skip_memory` off the float stopped the rest, as Open
+    /// Watcom's does (b, d, e to the stack).
     #[test]
     fn an_argument_in_memory_leaves_the_registers_to_the_later_ones_where_the_convention_says_so() {
-        let regparm = WATCALL.replace("wide_pairs = [[\"eax\", \"edx\"], [\"ebx\", \"ecx\"]]\n", "").replace("\"ebx\", ", "").replace("backfill = true\n", "skip_memory = true\n");
+        let regparm = WATCALL
+            .replace("wide_pairs = [[\"eax\", \"edx\"], [\"ebx\", \"ecx\"]]\n", "")
+            .replace("\"ebx\", ", "")
+            .replace("backfill = true\n", "skip_memory = true\n");
         let calling = Calling::parse(&regparm).unwrap();
-        let placed = calling.native().place(&[Kind::Memory(4), Kind::Word, Kind::Memory(8), Kind::Word, Kind::Word, Kind::Word]);
-        assert_eq!(placed.places, [Place::Stack(0), registers(&["eax"]), Place::Stack(4), registers(&["edx"]), registers(&["ecx"]), Place::Stack(12)]);
+        let placed =
+            calling.native().place(&[Kind::Memory(4), Kind::Word, Kind::Memory(8), Kind::Word, Kind::Word, Kind::Word]);
+        assert_eq!(
+            placed.places,
+            [
+                Place::Stack(0),
+                registers(&["eax"]),
+                Place::Stack(4),
+                registers(&["edx"]),
+                registers(&["ecx"]),
+                Place::Stack(12)
+            ]
+        );
         let watcom = Calling::parse(WATCALL).unwrap();
         let placed = watcom.native().place(&[Kind::Memory(4), Kind::Word]);
         assert_eq!(placed.places, [Place::Stack(0), Place::Stack(4)]);
     }
 
-    /// A long that reaches the stack takes its own two words: `(int, int, int, long)` has the long at the stack's start and
-    /// `(long, long, long, long, long)` the fifth four bytes past the fourth. A word's worth put the next one in its middle.
+    /// A long that reaches the stack takes its own two words: `(int, int, int, long)` has the long at the stack's start
+    /// and `(long, long, long, long, long)` the fifth four bytes past the fourth. A word's worth put the next one
+    /// in its middle.
     #[test]
     fn a_sized_argument_takes_its_bytes_on_the_stack() {
-        let regparm = WATCALL.replace("wide_pairs = [[\"eax\", \"edx\"], [\"ebx\", \"ecx\"]]\n", "").replace("\"ebx\", ", "").replace("slot_bytes = 4", "slot_bytes = 2");
+        let regparm = WATCALL
+            .replace("wide_pairs = [[\"eax\", \"edx\"], [\"ebx\", \"ecx\"]]\n", "")
+            .replace("\"ebx\", ", "")
+            .replace("slot_bytes = 4", "slot_bytes = 2");
         let calling = Calling::parse(&regparm).unwrap();
         let placed = calling.native().place(&[Kind::Sized(4); 6]);
         assert_eq!(placed.places[3..], [Place::Stack(0), Place::Stack(4), Place::Stack(8)]);
         assert_eq!(placed.stack_bytes, 12);
     }
 
-    /// A function whose callers remove its stack arguments takes, when the callee is to, the convention its description names
-    /// (`pops_as`), or MIR's `fastcc` where it is C's own and names none.
+    /// A function whose callers remove its stack arguments takes, when the callee is to, the convention its description
+    /// names (`pops_as`), or MIR's `fastcc` where it is C's own and names none.
     #[test]
     fn a_convention_names_the_one_it_takes_when_its_callee_pops() {
-        let text = format!("{WATCALL}[c]\nlike = \"w\"\ncc = \"cdecl\"\ncleanup = \"caller\"\n[r]\nlike = \"w\"\ncc = \"regparm3\"\ncleanup = \"caller\"\npops_as = \"rp\"\n[rp]\nlike = \"r\"\ncc = \"regparm3pop\"\ncleanup = \"callee\"\n");
+        let text = format!(
+            "{WATCALL}[c]\nlike = \"w\"\ncc = \"cdecl\"\ncleanup = \"caller\"\n[r]\nlike = \"w\"\ncc = \"regparm3\"\ncleanup = \"caller\"\npops_as = \"rp\"\n[rp]\nlike = \"r\"\ncc = \"regparm3pop\"\ncleanup = \"callee\"\n"
+        );
         let calling = Calling::parse(&text).unwrap();
         assert_eq!(calling.callee_pop(0), Some(llrm_mir::opcode::FAST));
         assert_eq!(calling.callee_pop(llrm_mir::opcode::REGPARM3), Some(llrm_mir::opcode::REGPARM3POP));
@@ -698,27 +874,43 @@ mod tests {
     /// convention, and a pattern the front end recorded (OMF's) is turned into the format's.
     #[test]
     fn a_symbol_is_decorated_as_its_object_format_spells_it() {
-        let text = format!("{WATCALL}[w.symbol]\nomf = \"*_\"\nelf = \"*\"\nmacho = \"_*\"\n[c]\nlike = \"w\"\ncc = \"cdecl\"\n[c.symbol]\nomf = \"_*\"\nelf = \"*\"\nmacho = \"_*\"\n");
+        let text = format!(
+            "{WATCALL}[w.symbol]\nomf = \"*_\"\nelf = \"*\"\nmacho = \"_*\"\n[c]\nlike = \"w\"\ncc = \"cdecl\"\n[c.symbol]\nomf = \"_*\"\nelf = \"*\"\nmacho = \"_*\"\n"
+        );
         let calling = Calling::parse(&text).unwrap();
         assert_eq!(calling.named("w").unwrap().decorated("omf", "f").as_deref(), Some("f_"));
         assert_eq!(calling.named("c").unwrap().decorated("macho", "f").as_deref(), Some("_f"));
-        assert_eq!((calling.redecorated("*_", "elf").as_deref(), calling.redecorated("_*", "elf").as_deref(), calling.redecorated("_*", "macho").as_deref()), (Some("*"), Some("*"), Some("_*")));
+        assert_eq!(
+            (
+                calling.redecorated("*_", "elf").as_deref(),
+                calling.redecorated("_*", "elf").as_deref(),
+                calling.redecorated("_*", "macho").as_deref()
+            ),
+            (Some("*"), Some("*"), Some("_*"))
+        );
         assert_eq!((calling.redecorated("^", "elf"), calling.redecorated("*_", "coff")), (None, None));
     }
 
-    /// The default ABI is the file's `default`, not its first entry: a second family is chosen by name, and one the target has not is
-    /// refused with the ones it has.
+    /// The default ABI is the file's `default`, not its first entry: a second family is chosen by name, and one the
+    /// target has not is refused with the ones it has.
     #[test]
     fn an_abi_family_names_the_convention_an_unmarked_function_has() {
-        let text = format!("{WATCALL}[c]\nlike = \"w\"\ncc = \"cdecl\"\n").replace("default = \"w\"\n[abi.w]\nconvention = \"w\"\n", "default = \"stack\"\n[abi.reg]\nconvention = \"w\"\n[abi.stack]\nconvention = \"c\"\n");
+        let text = format!("{WATCALL}[c]\nlike = \"w\"\ncc = \"cdecl\"\n").replace(
+            "default = \"w\"\n[abi.w]\nconvention = \"w\"\n",
+            "default = \"stack\"\n[abi.reg]\nconvention = \"w\"\n[abi.stack]\nconvention = \"c\"\n",
+        );
         let calling = Calling::parse(&text).unwrap();
         assert_eq!((calling.native().name.as_str(), calling.chosen(Some("reg")).unwrap().name.as_str()), ("c", "w"));
         assert_eq!(calling.chosen(Some("gcc")).unwrap_err(), "no ABI \"gcc\": this target has reg, stack");
-        assert!(Calling::parse(&text.replace("default = \"stack\"", "default = \"nowhere\"")).unwrap_err().contains("no ABI \"nowhere\""));
+        assert!(
+            Calling::parse(&text.replace("default = \"stack\"", "default = \"nowhere\""))
+                .unwrap_err()
+                .contains("no ABI \"nowhere\"")
+        );
     }
 
-    /// A private function takes the convention `private` names under any ABI; only the ABIs' own conventions may be replaced, and a
-    /// name the file does not give is refused.
+    /// A private function takes the convention `private` names under any ABI; only the ABIs' own conventions may be
+    /// replaced, and a name the file does not give is refused.
     #[test]
     fn a_private_function_has_the_convention_the_description_names() {
         let stack = format!("{WATCALL}[c]\nlike = \"w\"\ncc = \"cdecl\"\n[p]\nlike = \"c\"\ncc = \"pascal\"\n").replace("default = \"w\"\n[abi.w]\nconvention = \"w\"\n", "default = \"stack\"\nprivate = \"w\"\n[abi.reg]\nconvention = \"w\"\n[abi.stack]\nconvention = \"c\"\n");
@@ -726,7 +918,11 @@ mod tests {
         assert_eq!(calling.private().map(|one| one.name.as_str()), Some("w"));
         let named = |name: &str| calling.named(name).unwrap();
         assert!(calling.replaceable(named("c")) && calling.replaceable(named("w")) && !calling.replaceable(named("p")));
-        assert!(Calling::parse(&stack.replace("private = \"w\"", "private = \"nowhere\"")).unwrap_err().contains("private is the convention nowhere"));
+        assert!(
+            Calling::parse(&stack.replace("private = \"w\"", "private = \"nowhere\""))
+                .unwrap_err()
+                .contains("private is the convention nowhere")
+        );
         assert!(Calling::parse(&stack.replace("private = \"w\"\n", "")).unwrap().private().is_none());
     }
 
@@ -742,11 +938,13 @@ mod tests {
 mod interrupt_frame_tests {
     use super::*;
 
-    /// The interrupt frame was a constant in llrm-mir beside the description; a convention states it now. A slot that is
-    /// not `[register, bytes]` was nobody's error before and is refused.
+    /// The interrupt frame was a constant in llrm-mir beside the description; a convention states it now. A slot that
+    /// is not `[register, bytes]` was nobody's error before and is refused.
     #[test]
     fn test_an_interrupt_frame_is_read_from_the_description() {
-        let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../llrm-x86-m16/src/machines/calling.toml")).unwrap();
+        let text =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../llrm-x86-m16/src/machines/calling.toml"))
+                .unwrap();
         let calling = Calling::parse(&text).unwrap();
         let frame = &calling.interrupt().expect("m16 has an interrupt handler").interrupt_frame;
         assert_eq!(frame.len(), 15);

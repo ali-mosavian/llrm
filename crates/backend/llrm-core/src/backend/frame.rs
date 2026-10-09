@@ -7,11 +7,11 @@
 use std::fmt;
 
 use iced_x86::Register;
-use crate::support::hash::IndexMap;
 
 use crate::backend::nativeframe::{self, Plan};
 use crate::model::ir::{Addr, Loc, Mem, Operation, Space};
 use crate::model::lir::LirBody;
+use crate::support::hash::IndexMap;
 
 // BC's frame is word-aligned. Extended floating spills occupy five words.
 pub const WORD: i64 = 2;
@@ -56,7 +56,10 @@ impl From<(&str, i64)> for SlotKey {
 pub struct Refused(pub String);
 
 impl fmt::Display for Refused {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
@@ -95,34 +98,52 @@ impl Frame {
         }
     }
 
-    /// The first byte of the slot that holds `disp`, as the layout the cells were selected under put it: the lowest of the
-    /// selector's extents nearest it, the incoming arguments (from BP up) as one slot at 0; none when it laid out no slot.
-    pub(crate) fn home_of(&self, disp: i64) -> Option<i64> {
+    /// The first byte of the slot that holds `disp`, as the layout the cells were selected under put it: the lowest of
+    /// the selector's extents nearest it, the incoming arguments (from BP up) as one slot at 0; none when it laid
+    /// out no slot.
+    pub(crate) fn home_of(
+        &self,
+        disp: i64,
+    ) -> Option<i64> {
         // [bp+0] holds the caller's BP, never data: an address there is one past the end of the slot that ends at BP.
         if disp > 0 || (disp == 0 && !self.extents.iter().any(|(start, size)| start + size == 0)) {
             return Some(0);
         }
-        // The slot nearest the displacement, the lowest on a tie: a pointer into a slot, one past its end (a strength-reduced
-        // loop's limit) or before its start (a pre-incremented one) belongs to the slot it was made from.
-        let gap = |(start, size): &(i64, i64)| if disp < *start { start - disp } else { (disp - (start + size - 1)).max(0) };
+        // The slot nearest the displacement, the lowest on a tie: a pointer into a slot, one past its end (a
+        // strength-reduced loop's limit) or before its start (a pre-incremented one) belongs to the slot it was
+        // made from.
+        let gap =
+            |(start, size): &(i64, i64)| if disp < *start { start - disp } else { (disp - (start + size - 1)).max(0) };
         self.extents.iter().min_by_key(|extent| (gap(extent), extent.0)).map(|(start, _)| *start)
     }
 
-    /// `body` with every frame cell tagged with its slot (`Addr::in_slot`) and the body marked `slotted`: the verifier then fails
-    /// any cell a later phase makes without one. A cell in no slot is refused.
-    pub fn tagged(&self, body: &LirBody) -> Result<LirBody, Refused> {
+    /// `body` with every frame cell tagged with its slot (`Addr::in_slot`) and the body marked `slotted`: the verifier
+    /// then fails any cell a later phase makes without one. A cell in no slot is refused.
+    pub fn tagged(
+        &self,
+        body: &LirBody,
+    ) -> Result<LirBody, Refused> {
         let tag = |addr: Addr| -> Result<Addr, Refused> {
             if addr.slot_home().is_some() {
                 return Ok(addr);
             }
             self.home_of(addr.disp)
                 .map(|home| addr.in_slot(home))
-                .ok_or_else(|| Refused(format!("@{}: a frame cell at {} is in no slot the selector laid out ({:?})", body.name, addr.disp, self.extents)))
+                .ok_or_else(
+                    || Refused(format!(
+                        "@{}: a frame cell at {} is in no slot the selector laid out ({:?})",
+                        body.name, addr.disp, self.extents
+                    )),
+                )
         };
         let tag_loc = |place: &Loc| -> Result<Loc, Refused> {
             Ok(match place {
-                Loc::Mem(cell) if framed(cell.addr) => Loc::Mem(Mem { addr: cell.addr.map(&tag).transpose()?, ..cell.clone() }),
-                Loc::Address(cell) if framed(cell.addr) => Loc::Address(crate::model::ir::Address { addr: cell.addr.map(&tag).transpose()?, ..cell.clone() }),
+                Loc::Mem(cell) if framed(cell.addr) => {
+                    Loc::Mem(Mem { addr: cell.addr.map(&tag).transpose()?, ..cell.clone() })
+                }
+                Loc::Address(cell) if framed(cell.addr) => {
+                    Loc::Address(crate::model::ir::Address { addr: cell.addr.map(&tag).transpose()?, ..cell.clone() })
+                }
                 other => other.clone(),
             })
         };
@@ -139,7 +160,10 @@ impl Frame {
                 if !what.dests.iter().chain(&what.sources).any(untagged) {
                     insns.push(std::sync::Arc::clone(one));
                 } else {
-                    insns.push(std::sync::Arc::new(crate::model::lir::Insn { what: Some(crate::model::ir::Semantics { dests, sources, ..what.clone() }), ..(**one).clone() }));
+                    insns.push(std::sync::Arc::new(crate::model::lir::Insn {
+                        what: Some(crate::model::ir::Semantics { dests, sources, ..what.clone() }),
+                        ..(**one).clone()
+                    }));
                 }
             }
             blocks.push(crate::model::lir::LirBlock { insns: insns.into(), ..block.clone() });
@@ -148,7 +172,16 @@ impl Frame {
         let homes = body
             .homes
             .iter()
-            .map(|(value, cell)| Ok((*value, if framed(cell.addr) { Mem { addr: cell.addr.map(&tag).transpose()?, ..cell.clone() } } else { cell.clone() })))
+            .map(|(value, cell)| {
+                Ok((
+                    *value,
+                    if framed(cell.addr) {
+                        Mem { addr: cell.addr.map(&tag).transpose()?, ..cell.clone() }
+                    } else {
+                        cell.clone()
+                    },
+                ))
+            })
             .collect::<Result<std::collections::BTreeMap<_, _>, Refused>>()?;
         tagged.homes = std::sync::Arc::new(homes);
         tagged.variables = body
@@ -156,7 +189,10 @@ impl Frame {
             .iter()
             .map(|variable| match &variable.place {
                 crate::model::lir::DebugPlace::At(addr) if addr.space == Space::Frame => {
-                    Ok(crate::model::lir::DebugVariable { place: crate::model::lir::DebugPlace::At(tag(*addr)?), ..variable.clone() })
+                    Ok(crate::model::lir::DebugVariable {
+                        place: crate::model::lir::DebugPlace::At(tag(*addr)?),
+                        ..variable.clone()
+                    })
                 }
                 _ => Ok(variable.clone()),
             })
@@ -177,7 +213,10 @@ impl Frame {
     }
 
     /// Whether `disp` is in spill storage: below the floor, or in the hole.
-    pub fn spills_at(&self, disp: i64) -> bool {
+    pub fn spills_at(
+        &self,
+        disp: i64,
+    ) -> bool {
         disp < self.floor || (-self.hole..0).contains(&disp)
     }
 
@@ -189,13 +228,15 @@ impl Frame {
     /// (`LirBody::returns_twice`, `memory::calls_returns_twice`): after `longjmp` a value
     /// spilled before `setjmp` is read from its slot, so a slot recycled for another
     /// value (LLVM's stack colouring) would hand back the wrong one.
-    pub fn slot(&mut self, value: impl Into<SlotKey>, width: impl Into<i64>) -> Result<i64, Refused> {
+    pub fn slot(
+        &mut self,
+        value: impl Into<SlotKey>,
+        width: impl Into<i64>,
+    ) -> Result<i64, Refused> {
         let value = value.into();
         let width: i64 = width.into();
         if self.native.as_ref().is_some_and(|native| !native.framed) {
-            return Err(Refused(
-                "a frameless native procedure cannot hold a spill below its caller's BP".to_owned(),
-            ));
+            return Err(Refused("a frameless native procedure cannot hold a spill below its caller's BP".to_owned()));
         }
         if !self.slots.contains_key(&value) {
             let capacity = width.max(WORD);
@@ -214,12 +255,19 @@ impl Frame {
 
     /// Forget a discarded trial's slots. Kept, a later spill of the same
     /// value reuses its stale slot without an overlap check.
-    pub fn restore(&mut self, saved: &(IndexMap<SlotKey, i64>, IndexMap<i64, i64>)) {
+    pub fn restore(
+        &mut self,
+        saved: &(IndexMap<SlotKey, i64>, IndexMap<i64, i64>),
+    ) {
         self.slots = saved.0.clone();
         self.capacities = saved.1.clone();
     }
 
-    pub fn cell(&mut self, value: impl Into<SlotKey>, width: impl Into<i64>) -> Result<Mem, Refused> {
+    pub fn cell(
+        &mut self,
+        value: impl Into<SlotKey>,
+        width: impl Into<i64>,
+    ) -> Result<Mem, Refused> {
         let width: i64 = width.into();
         let disp = self.slot(value, width)?;
         Ok(Mem {
@@ -231,8 +279,8 @@ impl Frame {
     }
 }
 
-/// Whether `addr` is a frame cell proper: the indexed form of an array (a literal displacement through BP) is not tagged, since
-/// a literal address's `index` may be a symbol's.
+/// Whether `addr` is a frame cell proper: the indexed form of an array (a literal displacement through BP) is not
+/// tagged, since a literal address's `index` may be a symbol's.
 fn framed(addr: Option<Addr>) -> bool {
     addr.is_some_and(|addr| addr.space == Space::Frame)
 }
@@ -300,16 +348,10 @@ pub fn of(
         }
     }
     if native.as_ref().is_some_and(|native| floor < native.entry.floor) {
-        return Err(Refused(
-            "native frame references extend below its established reservation".to_owned(),
-        ));
+        return Err(Refused("native frame references extend below its established reservation".to_owned()));
     }
     let native_pins = native.as_ref().map_or_else(IndexMap::default, |native| nativeframe::pins(body, native));
-    Ok(Frame {
-        native,
-        native_pins,
-        ..Frame::new(floor)
-    })
+    Ok(Frame { native, native_pins, ..Frame::new(floor) })
 }
 
 #[cfg(test)]
@@ -317,13 +359,18 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use crate::support::hash::IndexMap;
 
     use super::{Refused, of};
     use crate::model::ir::{Addr, Address, Held, Imm, Loc, Operation, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::support::hash::IndexMap;
 
-    fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {
+    fn semantics(
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+    ) -> Semantics {
         Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
     }
 
@@ -393,8 +440,8 @@ mod tests {
         }
     }
 
-    /// matmul's end pointer is one past its array and quicksort's one before: an address made from a slot is tagged with that
-    /// slot, not refused (bench matmul -O2: "a frame cell at -32 is in no slot").
+    /// matmul's end pointer is one past its array and quicksort's one before: an address made from a slot is tagged
+    /// with that slot, not refused (bench matmul -O2: "a frame cell at -32 is in no slot").
     #[test]
     fn test_a_pointer_one_past_a_slot_or_before_it_is_tagged_with_the_slot() {
         let mut frame = super::Frame::new(0);

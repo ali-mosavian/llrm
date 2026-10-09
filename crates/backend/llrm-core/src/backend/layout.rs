@@ -12,10 +12,9 @@
 
 use std::sync::LazyLock;
 
-use crate::support::hash::IndexMap;
-
 // The assembler's, re-exported: this module builds them and hands them over.
 pub use crate::backend::asm::{Item, Laid, Table};
+use crate::support::hash::IndexMap;
 
 /// Each condition and the one that is true exactly when it is false. `jcxz`
 /// and `loop*` are absent on purpose: they have no inverse to name, so a
@@ -38,6 +37,5 @@ pub const _PAIRS: [(&str, &str); 15] = [
     ("jpe", "jpo"),
 ];
 
-pub static _OPPOSITE: LazyLock<IndexMap<&'static str, &'static str>> = LazyLock::new(|| {
-    _PAIRS.iter().flat_map(|&(one, other)| [(one, other), (other, one)]).collect()
-});
+pub static _OPPOSITE: LazyLock<IndexMap<&'static str, &'static str>> =
+    LazyLock::new(|| _PAIRS.iter().flat_map(|&(one, other)| [(one, other), (other, one)]).collect());

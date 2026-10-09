@@ -13,10 +13,10 @@ use std::path::Path;
 use std::rc::Rc;
 
 use iced_x86::Register;
-
-use crate::omf::{self, Fixup, Record};
 use llrm_support::hash::IndexMap;
 use llrm_support::pyrepr::{self, Repr};
+
+use crate::omf::{self, Fixup, Record};
 
 pub const CALL_FAR: u8 = 0x9A;
 
@@ -71,19 +71,28 @@ impl Space {
 
 /// A `StrEnum` orders as its string value.
 impl Ord for Space {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(
+        &self,
+        other: &Self,
+    ) -> std::cmp::Ordering {
         self.value().cmp(other.value())
     }
 }
 
 impl PartialOrd for Space {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(
+        &self,
+        other: &Self,
+    ) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl fmt::Display for Space {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(self.value())
     }
 }
@@ -126,9 +135,13 @@ pub struct Addr {
     pub segment: Register,
 }
 
-/// A frame cell is the same place whichever slot it is tagged with: the tag (`Addr.index` of a frame address, see `slot_tag`) rides along and decides nothing, so two views of the same bytes stay equal and hash alike.
+/// A frame cell is the same place whichever slot it is tagged with: the tag (`Addr.index` of a frame address, see
+/// `slot_tag`) rides along and decides nothing, so two views of the same bytes stay equal and hash alike.
 impl PartialEq for Addr {
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
         self.space == other.space
             && self.disp == other.disp
             && self.base == other.base
@@ -140,7 +153,10 @@ impl PartialEq for Addr {
 impl Eq for Addr {}
 
 impl std::hash::Hash for Addr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
         self.space.hash(state);
         self.disp.hash(state);
         self.base.hash(state);
@@ -151,15 +167,18 @@ impl std::hash::Hash for Addr {
     }
 }
 
-/// What a frame cell's `Addr.index` holds: the slot it lies in, named by the displacement of the slot's first byte in the layout
-/// the cell was made under (odd, so never the 0 of a cell that names none).
+/// What a frame cell's `Addr.index` holds: the slot it lies in, named by the displacement of the slot's first byte in
+/// the layout the cell was made under (odd, so never the 0 of a cell that names none).
 pub const fn slot_tag(home: i64) -> i64 {
     home * 2 + 1
 }
 
 impl Addr {
     /// `Addr(space, disp)`.
-    pub const fn new(space: Space, disp: i64) -> Self {
+    pub const fn new(
+        space: Space,
+        disp: i64,
+    ) -> Self {
         Addr { space, disp, index: 0, base: Register::None, segment: Register::None }
     }
 
@@ -168,18 +187,24 @@ impl Addr {
         self.base == Register::None
     }
 
-    /// The slot a frame cell belongs to, named by `slot_tag` of the slot's first byte as the cell's layout put it; a cell
-    /// that names none (including every cell of another space) has `None`.
+    /// The slot a frame cell belongs to, named by `slot_tag` of the slot's first byte as the cell's layout put it; a
+    /// cell that names none (including every cell of another space) has `None`.
     pub fn slot_home(&self) -> Option<i64> {
         (self.space == Space::Frame && self.index & 1 == 1).then(|| (self.index - 1) / 2)
     }
 
     /// This cell, tagged as belonging to the slot whose first byte is at `home`.
-    pub fn in_slot(&self, home: i64) -> Addr {
+    pub fn in_slot(
+        &self,
+        home: i64,
+    ) -> Addr {
         Addr { index: slot_tag(home), ..*self }
     }
 
-    pub fn plus(&self, bytes_along: i64) -> Addr {
+    pub fn plus(
+        &self,
+        bytes_along: i64,
+    ) -> Addr {
         Addr { disp: self.disp + bytes_along, ..*self }
     }
 }
@@ -224,11 +249,17 @@ pub struct Group {
 }
 
 impl Group {
-    pub fn new(members: impl IntoIterator<Item = i64>, shared: impl IntoIterator<Item = i64>) -> Self {
+    pub fn new(
+        members: impl IntoIterator<Item = i64>,
+        shared: impl IntoIterator<Item = i64>,
+    ) -> Self {
         Group { members: members.into_iter().collect(), shared: shared.into_iter().collect() }
     }
 
-    pub fn contains(&self, index: i64) -> bool {
+    pub fn contains(
+        &self,
+        index: i64,
+    ) -> bool {
         self.members.contains(&index)
     }
 }
@@ -270,7 +301,10 @@ impl Family {
 }
 
 impl fmt::Display for Family {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(self.value())
     }
 }
@@ -281,16 +315,16 @@ impl Repr for Family {
     }
 }
 
-const _MADE_BY: [(&[u8], Family); 3] = [
-    (b"QuickBASIC Compiler 4.5", Family::Quickbasic),
-    (b"BASIC Compiler 7.1", Family::Pds),
-    (b"VBDOS", Family::Vbdos),
-];
+const _MADE_BY: [(&[u8], Family); 3] =
+    [(b"QuickBASIC Compiler 4.5", Family::Quickbasic), (b"BASIC Compiler 7.1", Family::Pds), (b"VBDOS", Family::Vbdos)];
 
 /// Every name this module declares itself: BC compiles a SUB as a
 /// PUBDEF and calls it through an EXTDEF fixup of the same object, so the
 /// call target alone cannot say whether it is the runtime's or its own.
-pub fn defines(records: &[Rc<Record>], seg: i64) -> BTreeSet<String> {
+pub fn defines(
+    records: &[Rc<Record>],
+    seg: i64,
+) -> BTreeSet<String> {
     match omf::pubdef_names(records, seg) {
         Ok(names) => names.into_values().collect(),
         Err(error) => panic!("ValueError: {error}"),
@@ -388,7 +422,11 @@ pub struct Module {
 
 impl Module {
     /// What the operand whose displacement field sits here points at.
-    pub fn resolve(&self, field_offset: i64, literal: i64) -> Addr {
+    pub fn resolve(
+        &self,
+        field_offset: i64,
+        literal: i64,
+    ) -> Addr {
         self.operands.get(&field_offset).copied().unwrap_or(Addr::new(Space::Literal, literal))
     }
 }
@@ -397,12 +435,19 @@ pub fn frame_relative(literal: i64) -> Addr {
     Addr::new(Space::Frame, literal)
 }
 
-pub fn far_pointer(literal: i64, base: Register, segment: Register) -> Addr {
+pub fn far_pointer(
+    literal: i64,
+    base: Register,
+    segment: Register,
+) -> Addr {
     Addr { base, segment, ..Addr::new(Space::Far, literal) }
 }
 
 /// The resolver for code with no fixups behind it, as every unit test has.
-pub fn literal_only(_field_offset: i64, literal: i64) -> Addr {
+pub fn literal_only(
+    _field_offset: i64,
+    literal: i64,
+) -> Addr {
     Addr::new(Space::Literal, literal)
 }
 
@@ -471,7 +516,11 @@ pub fn of(records: &[Rc<Record>]) -> Option<Module> {
             .flat_map(|record| omf::code_offsets(record, seg).into_iter().map(move |at| (record, at)))
             .filter(|(record, _)| record.r#type & 0xFE == kind)
             .map(|(record, at)| {
-                assert!(at + 2 <= record.body.len(), "struct.error: unpack_from requires a buffer of at least {} bytes", at + 2);
+                assert!(
+                    at + 2 <= record.body.len(),
+                    "struct.error: unpack_from requires a buffer of at least {} bytes",
+                    at + 2
+                );
                 u16::from_le_bytes([record.body[at], record.body[at + 1]]) as i64
             })
             .collect()
