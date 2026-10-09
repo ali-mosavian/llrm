@@ -1,8 +1,8 @@
-reason = "a diamond-bodied loop's latch falls into the header (x_collatz -15.7% clocks); costs one jmp per loop entry: quicksort bas +2.1% instructions"
+reason = "rotation priced in clocks (jmp, jcc taken, not taken from the CPU): x_adler -12.1% clocks, x_bubble -3.0%, quicksort -2.0%; one jmp more per entry: quicksort +3.3% instructions, matmul +0.1%, grep +8 bytes"
 blessed = "2026-10-09"
 
 [bas.O2]
-code_bytes = 987
+code_bytes = 995
 data_bytes = 113
 bss_bytes = 0
 kernel_ms = 3887.2019
@@ -26,7 +26,7 @@ bss_bytes = 3056
 kernel_ms = 3415.6629
 
 [nib.O2]
-code_bytes = 1457
+code_bytes = 1465
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4239.5804
