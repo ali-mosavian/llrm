@@ -670,6 +670,10 @@ fn test_loads_of_one_address_ask_each_store_whether_it_clobbers_once() {
         assert!(graph.unchanged(first, later, &cell(&unit, later)));
     }
     assert!(clobber_runs() - before <= 30, "{} clobber questions for 30 stores", clobber_runs() - before);
+    // A walk hashes its cell once for the whole walk (the memo is by number),
+    // not once for each store it passes: the hash of a MemRef was 6% of gvn
+    // on host.c.
+    assert_eq!(graph.slots.borrow().len(), 1, "one cell was asked about");
 }
 
 /// The walk back from a load stopped at every access and asked of it. A chain
