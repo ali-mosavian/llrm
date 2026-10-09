@@ -2137,3 +2137,27 @@ fn test_past_the_candidate_bound_the_search_prices_fewer_sets() {
     let (_, within) = super::TOTALS.with(std::cell::Cell::get);
     assert!(within < whole, "{within} sets priced of {whole}");
 }
+
+/// Each loop lsr looked at, one after another, found the function's registers, pressure and frequencies again though the loop before
+/// changed nothing: a nest 16 deep, a third of lsr (308 Minstr). They are found once for as long as the function is as it was.
+#[test]
+fn test_loops_that_change_nothing_share_what_is_found_of_the_function() {
+    let depth = 8;
+    let mut text = String::from("define i32 @f(i32 %n) {\nb0:\n  br label %h0\n\n");
+    for k in 0..depth {
+        let (outer_exit, inner) = if k == 0 { ("end".to_owned(), "h1".to_owned()) } else { (format!("l{}", k - 1), format!("h{}", k + 1)) };
+        let inner = if k + 1 == depth { format!("l{k}") } else { inner };
+        let from = if k == 0 { "b0".to_owned() } else { format!("h{}", k - 1) };
+        text += &format!("h{k}:\n  %i{k} = phi i32 [ 0, %{from} ], [ %n{k}, %l{k} ]\n  %c{k} = icmp slt i32 %i{k}, %n\n  br i1 %c{k}, label %{inner}, label %{outer_exit}\n\n");
+    }
+    for k in (0..depth).rev() {
+        text += &format!("l{k}:\n  %n{k} = add nsw i32 %i{k}, 1\n  br label %h{k}\n\n");
+    }
+    text += "end:\n  ret i32 0\n}\n";
+    super::FRESH.with(|count| count.set(0));
+    super::PRODUCTS.with(|count| count.set(0));
+    let (before, after) = reduced(&text);
+    assert_eq!(printed(&before), after, "nothing to change");
+    assert_eq!(super::FRESH.with(std::cell::Cell::get), 1, "the function's state was found again for a loop that changed nothing");
+    assert!(super::PRODUCTS.with(std::cell::Cell::get) <= 1);
+}

@@ -115,23 +115,47 @@ enum Resident {
     Rebuilt(usize),
 }
 
+/// What is found of the function as it stands, for the loops asked of until one is changed.
+struct Stands {
+    fresh: Analyses,
+    frequencies: std::cell::OnceCell<Option<std::collections::BTreeMap<i64, i64>>>,
+}
+
+impl Stands {
+    fn new(analyses: &Analyses) -> Self {
+        #[cfg(test)]
+        FRESH.with(|count| count.set(count.get() + 1));
+        Self { fresh: analyses.fresh(), frequencies: std::cell::OnceCell::new() }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// (function states found, frequency tables found), for a test that a loop left alone does not ask them again.
+    pub(crate) static FRESH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static PRODUCTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Each loop's counters chosen, innermost first; whether any changed.
 pub fn reduced(unit: &mut Unit, analyses: &Analyses, outer: &Outer, size: bool, bounds: Bounds) -> bool {
     let target = Target { machine: outer.target(), costs: profit::costs(outer), room: profit::registers(outer), forms: outer.target().address_forms(), bounds };
     let mut done = BTreeSet::<i64>::new();
     let mut changed = false;
+    // What is known of the function as it stands, found when first asked and again only after a loop is changed: a loop that is
+    // not changed left every loop after it the same function (16 loops of a nest found the registers, the pressure and the
+    // frequencies of the whole function each: a third of lsr).
+    let mut stands = Stands::new(analyses);
     loop {
-        let mut fresh = analyses.fresh();
-        let facts = fresh.get::<Registers>(unit.context, unit.layout, unit.function);
-        let shape = fresh.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
         let plan = {
+            let facts = stands.fresh.get::<Registers>(unit.context, unit.layout, unit.function);
+            let shape = stands.fresh.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
             let view = memory::Unit::within(unit.context, unit.layout, unit.function, outer).with_registers(&facts).with_shape(&shape);
             let mut loops = shape.loops.clone();
             loops.sort_by_key(|one| (one.body.len(), one.header));
             let Some(loop_) = loops.into_iter().find(|one| !done.contains(&one.header)) else { break };
             done.insert(loop_.header);
-            let pressure = analyses.fresh().get::<spill::Pressure>(unit.context, unit.layout, unit.function);
-            _plan(&view, outer, &loop_, &target, &pressure)
+            let pressure = stands.fresh.get::<spill::Pressure>(unit.context, unit.layout, unit.function);
+            _plan(&view, outer, &loop_, &target, &pressure, &stands.frequencies)
         };
         let Some(plan) = plan else { continue };
         // A loop with another way out was never counted before: its choice is held to the function's whole price, work and
@@ -145,6 +169,7 @@ pub fn reduced(unit: &mut Unit, analyses: &Analyses, outer: &Outer, size: bool, 
         if let Some(first) = _applied(unit, &plan) {
             done.insert(cfg::id(first));
         }
+        stands = Stands::new(analyses);
         if let Some((before, Some(kept))) = saved {
             dead::dead(unit.context, outer.callees(), unit.function);
             let moved_price = _function_price(unit, analyses, outer, &target);
@@ -319,7 +344,7 @@ fn _preheader(function: &Function, loop_: &Loop) -> Option<BlockId> {
     }
 }
 
-fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target, pressure: &spill::Pressure) -> Option<Plan> {
+fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target, pressure: &spill::Pressure, stands: &std::cell::OnceCell<Option<std::collections::BTreeMap<i64, i64>>>) -> Option<Plan> {
     let function = view.function;
     let preheader = _preheader(function, loop_)?;
     let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return None };
@@ -330,7 +355,13 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target, pres
     }
     let facts = view.registers();
     // lsr's prices were fitted to trips multiplied, ten where unproven (#203), and a branch's cold arm less.
-    let frequencies = profit::_loop_products_by_branch(view.context, view.metadata, &outer.globals, function, Some(&profit::proven_trips(view, &facts)))?;
+    let frequencies = stands
+        .get_or_init(|| {
+            #[cfg(test)]
+            PRODUCTS.with(|count| count.set(count.get() + 1));
+            profit::_loop_products_by_branch(view.context, view.metadata, &outer.globals, function, Some(&profit::proven_trips(view, &facts)))
+        })
+        .as_ref()?;
     let frequency = |block: BlockId| frequencies.get(&cfg::id(block)).copied().unwrap_or(1);
     let exit = _exit(view, loop_, &users);
     let nested = view.shape().loops.iter().filter(|one| one.header != loop_.header && loop_.body.contains(&one.header)).cloned().collect::<Vec<_>>();
