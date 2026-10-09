@@ -345,8 +345,20 @@ pub fn operand_of(
     what: &ir::Mem,
     bits: u32,
 ) -> Option<(MemoryOperand, bool)> {
+    place_operand(&what.address(), what.base.is_some(), what.index.is_some(), bits)
+}
+
+/// An address as an encodable memory operand, and whether it is relocated.
+/// `based` and `indexed`: a pass made a value of the cell's base or index, and
+/// `through` is where the allocation put it.
+pub fn place_operand(
+    what: &ir::AddressRef,
+    based: bool,
+    indexed: bool,
+    bits: u32,
+) -> Option<(MemoryOperand, bool)> {
     let addr = what.addr;
-    if what.index.is_some() {
+    if indexed {
         return _scaled_operand(what, bits);
     }
     let Some(addr) = addr else {
@@ -368,7 +380,7 @@ pub fn operand_of(
             // Once a pass makes a value of the offset, `through` is where the
             // allocation put it. The relocation fills the displacement, which
             // a 32-bit base carries in four bytes.
-            let base = if what.base.is_some() { what.through } else { addr.base };
+            let base = if based { what.through } else { addr.base };
             let wide = if bits == 32 || width_of(base) == Some(4) { 4 } else { 2 };
             Some((memory_operand(base, Register::None, 1, 0, wide, addr.segment), true))
         }
@@ -397,7 +409,7 @@ pub fn operand_of(
             if addr.segment == Register::None {
                 return None;
             }
-            let base = if what.base.is_some() { what.through } else { addr.base };
+            let base = if based { what.through } else { addr.base };
             Some((
                 memory_operand(
                     base,
@@ -413,7 +425,7 @@ pub fn operand_of(
         Space::Literal => {
             // Two bytes without a base: 16-bit mod=00 r/m=110 is the
             // direct-address form, and mod=01 would mean `[bp+disp8]`.
-            let base = if what.base.is_some() { what.through } else { addr.base };
+            let base = if based { what.through } else { addr.base };
             let wide = _displacement_size(base, Register::None, addr.disp, bits);
             Some((memory_operand(base, Register::None, 1, addr.disp, wide, addr.segment), false))
         }
@@ -427,7 +439,7 @@ pub const _WORD_INDEXES: [Register; 2] = crate::addressing16::INDEXES;
 /// `[base+index*scale+disp]`. A relocated cell takes only the word form,
 /// `[bx|bp+si|di+disp16]`: its fixup is 16 bits.
 pub fn _scaled_operand(
-    what: &ir::Mem,
+    what: &ir::AddressRef,
     bits: u32,
 ) -> Option<(MemoryOperand, bool)> {
     if what.index_through == Register::None {
@@ -550,27 +562,18 @@ pub fn _operand(
     };
     match one {
         Loc::Reg(reg) => Loc::Reg(ir::Reg { register: _remapped(reg.register, Some(map)), ..reg }),
-        Loc::Mem(mut cell) => {
-            // `index` is a Held on a cell, which no register map names.
-            cell.through = _remapped(cell.through, Some(map));
-            if let Some(addr) = cell.addr.as_mut() {
+        // The registers a cell or an address is made of; an `index` Held on a
+        // cell is no register a map names.
+        _ => one.map_address(|mut at| {
+            at.through = _remapped(at.through, Some(map));
+            at.index_through = _remapped(at.index_through, Some(map));
+            if let Some(addr) = at.addr.as_mut() {
                 if addr.base != Register::None {
                     addr.base = _remapped(addr.base, Some(map));
                 }
             }
-            Loc::Mem(cell)
-        }
-        Loc::Address(mut cell) => {
-            cell.through = _remapped(cell.through, Some(map));
-            cell.index_through = _remapped(cell.index_through, Some(map));
-            if let Some(addr) = cell.addr.as_mut() {
-                if addr.base != Register::None {
-                    addr.base = _remapped(addr.base, Some(map));
-                }
-            }
-            Loc::Address(cell)
-        }
-        other => other,
+            at
+        }),
     }
 }
 
@@ -1210,7 +1213,7 @@ pub fn address_of(
 ) -> Option<Emitted> {
     let width = width_of(into)?;
     let code = _code(&format!("LEA_R{}_M", width * 8))?;
-    let (built, relocated) = address_operand(cell, at.bits, width as u32)?;
+    let (built, relocated) = address_operand(cell, at.bits)?;
     _assemble(&raised(create_reg_mem(code, into, built)), at, relocated)
 }
 
@@ -1219,10 +1222,14 @@ pub fn address_of(
 pub fn address_operand(
     cell: &ir::AddressRef,
     bits: u32,
-    width: u32,
 ) -> Option<(MemoryOperand, bool)> {
     if cell.addr.is_some() && cell.index_through == Register::None {
-        return operand_of(&ir::Mem { through: cell.through, ..ir::Mem::new(cell.addr, width) }, bits);
+        return place_operand(
+            &ir::AddressRef { through: cell.through, ..ir::AddressRef::new(cell.addr) },
+            false,
+            false,
+            bits,
+        );
     }
     if cell.through == Register::None && cell.index_through == Register::None {
         return None;

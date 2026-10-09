@@ -34,9 +34,9 @@ def straight(n: int) -> str:
     return "unsigned fn(unsigned a, unsigned b, unsigned c, unsigned d) {\n" + body + "    return a ^ b ^ c ^ d;\n}\n"
 
 
-def steps(compiler: Path, source: Path) -> dict[str, float]:
+def steps(compiler: Path, source: Path, level: str = "-O1") -> dict[str, float]:
     """Each step's own instructions in millions (`LLRM_DEBUG=time`'s `[instr]` rows); skips where the host has no counter."""
-    done = subprocess.run([str(compiler), "-m32", "-march=i486", "-O1", "-o", os.devnull, str(source)], capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
+    done = subprocess.run([str(compiler), "-m32", "-march=i486", level, "-o", os.devnull, str(source)], capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
     assert done.returncode == 0, done.stderr[-500:]
     rows = re.findall(r"^\[instr\]\s+([\d.]+) (Minstr|Mcpu-ns) own\s+[\d.]+ \S+ total\s+\d+x (.+)$", done.stderr, re.M)
     if not rows or any(unit != "Minstr" for _, unit, _ in rows):
@@ -57,3 +57,19 @@ def test_the_allocators_passes_grow_as_the_program_does():
             best[n] = {name: run[name] for name in PASSES}
     grown = {name: best[LARGE][name] / max(best[SMALL][name], 1e-9) for name in PASSES}
     assert all(grown[name] < LIMITS[name] for name in PASSES), f"4x the statements cost {grown} times as much (limits {LIMITS}): {best}"
+
+
+def test_a_rewrite_finds_what_it_changed_by_pointer_not_by_looking_up_every_instruction():
+    """`facts intervals` and `intervals homes` hashed every instruction of an edited block, old and new, at each of a function's
+    ~430 rewrites to find the few that changed: 380 + 71 Minstr became 625 + 74 on `cells` at N=224 (one block, ~900 spills),
+    a pointer comparison against the parent's list finds the same instructions."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](224))
+        run = steps(compiler, source, "-O2")
+    spent = run["facts intervals"] + run["intervals homes"]
+    assert spent < 520, f"cells N=224 -O2: facts intervals + intervals homes cost {spent} Minstr (520 allowed; 700 before the pointer diff): {run}"

@@ -5827,6 +5827,64 @@ mod tests {
         assert!(kept == afresh, "the kept intervals differ from finding them afresh");
     }
 
+    /// A rewrite's edited block was compared with its parent by looking up
+    /// every instruction of both in a hash (`facts intervals`, `intervals
+    /// homes`: 380 + 71 Minstr became 625 + 74 on cells N=224). The
+    /// instructions it kept are the same allocations, so runs of them are
+    /// found by pointer; every run must hold one instruction in both, in
+    /// order, and a list edited by insertions and removals alone has every
+    /// instruction it shares in a run.
+    #[test]
+    fn test_the_instructions_two_lists_share_are_found_by_pointer() {
+        use crate::analysis::intervals::aligned;
+        use crate::model::ir::Semantics;
+        use crate::model::lir::Insn;
+        let nop = |at: i64| {
+            Arc::new(Insn::new(
+                at,
+                Some((at, at)),
+                Some(Semantics { name: Some("nop".to_owned()), ..Semantics::new(Operation::Nothing) }),
+                vec![],
+                vec![],
+            ))
+        };
+        let mut seed = 7u64;
+        let mut next = |bound: usize| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as usize % bound
+        };
+        for round in 0..200 {
+            let old: Vec<Arc<Insn>> = (0..20 + next(60)).map(|at| nop(at as i64)).collect();
+            let mut new = old.clone();
+            for _ in 0..next(12) {
+                let at = next(new.len() + 1);
+                match next(3) {
+                    0 => new.insert(at, nop(1000 + at as i64)),
+                    1 if !new.is_empty() => {
+                        new.remove(at.min(new.len() - 1));
+                    }
+                    _ if !new.is_empty() => {
+                        let moved = new.remove(at.min(new.len() - 1));
+                        new.insert(next(new.len() + 1), moved);
+                    }
+                    _ => {}
+                }
+            }
+            let runs = aligned(&old, &new).expect("alike").runs;
+            let mut covered = 0;
+            let mut after_old = 0;
+            for (i, j, len) in &runs {
+                assert!(*i >= after_old, "round {round}: runs out of order");
+                for k in 0..*len {
+                    assert!(Arc::ptr_eq(&old[i + k], &new[j + k]), "round {round}: a run holds different instructions");
+                }
+                (after_old, covered) = (i + len, covered + len);
+            }
+            let shared = old.iter().filter(|one| new.iter().any(|other| Arc::ptr_eq(one, other))).count();
+            assert_eq!(covered, shared, "round {round}: an instruction both lists hold is in no run");
+        }
+    }
+
     #[test]
     fn test_a_spill_redoes_the_occurrences_of_the_blocks_it_changed_only() {
         let body = _three_blocks();

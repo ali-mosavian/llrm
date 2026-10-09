@@ -1140,6 +1140,7 @@ impl Analysis for MemoryCells {
             None,
             None,
             None,
+            true,
         )
     }
 
@@ -1148,6 +1149,17 @@ impl Analysis for MemoryCells {
     /// (`consts::cells_restarted`); any other change derives them afresh.
     fn update(
         previous: &Self::Result,
+        changes: &[Change],
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Option<Self::Result> {
+        Self::update_owned(Rc::new(previous.clone()), changes, context, layout, function, analyses)
+    }
+
+    fn update_owned(
+        previous: Rc<Self::Result>,
         changes: &[Change],
         context: &Context,
         layout: &DataLayout,
@@ -1169,11 +1181,10 @@ impl Analysis for MemoryCells {
         }
         let shape = analyses.get::<Shape>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        consts::cells_restarted(
-            &Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed),
-            previous,
-            &touched,
-        )
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed);
+        // Changed where it stands when no one else holds it.
+        let mut cells = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone());
+        cells.restarted(&unit, &touched).then_some(cells)
     }
 }
 

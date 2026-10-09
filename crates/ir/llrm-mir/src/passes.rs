@@ -266,6 +266,21 @@ pub trait Analysis: 'static {
         None
     }
 
+    /// `update`, handed the only reference to `previous` there is when no one
+    /// else holds the result: one that can change what it holds in place does,
+    /// rather than copy it.
+    #[allow(unused_variables)]
+    fn update_owned(
+        previous: Rc<Self::Result>,
+        changes: &[crate::module::Change],
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Option<Self::Result> {
+        Self::update(&previous, changes, context, layout, function, analyses)
+    }
+
     /// Whether a pass returning `preserved` left the result true: when it
     /// names this analysis, or keeps the function and the result reads
     /// nothing else. One derived from others asks after them, as LLVM's
@@ -840,20 +855,26 @@ impl Analyses {
         } else {
             None
         };
-        let updated = self.kept.remove(&key).and_then(|old| {
-            let old = old.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
-            let changes = function.changes_since(old.mark)?;
+        let updated = self.kept.remove(&key).and_then(|held| {
+            // Taken out of its box, so that `update_owned` is handed the only
+            // reference there is.
+            let (result, outer, mark) = {
+                let old = held.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
+                (Rc::clone(&old.result), Rc::clone(&old.outer), old.mark)
+            };
+            drop(held);
+            let changes = function.changes_since(mark)?;
             // Asking of a long log again and again is more than the run it
             // saves.
             if A::SKIPS
                 && changes.len() <= 256
-                && (!A::READS_OUTER || Rc::ptr_eq(&old.outer, &self.outer))
+                && (!A::READS_OUTER || Rc::ptr_eq(&outer, &self.outer))
                 && A::unaffected(changes, context, function)
             {
                 if check_replay() {
                     let whole = A::run(context, layout, function, &mut Analyses::new(Rc::clone(&self.outer)));
                     assert!(
-                        *old.result == whole,
+                        *result == whole,
                         "{}: the result kept past {} changes is not what deriving it afresh gives: {:?}",
                         A::NAME,
                         changes.len(),
@@ -871,10 +892,10 @@ impl Analyses {
                             .collect::<Vec<_>>()
                     );
                 }
-                return Some(Rc::clone(&old.result));
+                return Some(Rc::clone(&result));
             }
             let made =
-                spanned_as("analysis", A::NAME, || A::update(&old.result, changes, context, layout, function, self))?;
+                spanned_as("analysis", A::NAME, || A::update_owned(result, changes, context, layout, function, self))?;
             if check_replay() {
                 let whole = A::run(context, layout, function, &mut Analyses::new(Rc::clone(&self.outer)));
                 assert!(

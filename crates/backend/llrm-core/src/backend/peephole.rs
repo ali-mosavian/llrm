@@ -145,10 +145,9 @@ impl Peephole {
                 return body;
             }
             for arg in what.sources.iter().chain(&what.dests) {
-                let (address, through) = match arg {
-                    Loc::Mem(cell) => (cell.addr, Some(cell.through)),
-                    Loc::Address(cell) => (cell.addr, Some(cell.through)),
-                    Loc::Imm(value) => (value.address, None),
+                let (address, through) = match (arg.address(), arg) {
+                    (Some(one), _) => (one.addr, Some(one.through)),
+                    (None, Loc::Imm(value)) => (value.address, None),
                     _ => continue,
                 };
                 if address.is_none() && through.is_some() {
