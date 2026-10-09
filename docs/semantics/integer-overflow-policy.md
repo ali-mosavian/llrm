@@ -22,10 +22,6 @@ BC and BASIC-compatible output print `ERR 6` and `DONE`. Native output prints
 `-32768` and `DONE`. All six optimized runs were verified; compiler logs report
 zero severe errors and linker logs no errors.
 
-Runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-overflow-policy-final-savmsx9f`.
-HARR pass dumps after this change:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-native-overflow-4mwg1ulw/stages`.
 
 HARR's debug builds still contain tracing/break barriers. Removing those
 barriers just to hoist descriptor loads would discard behavior; this change

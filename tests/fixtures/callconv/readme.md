@@ -44,6 +44,6 @@ callee, and the slots the modules keep values in (llrm-qb refuses COMMON).
 ## Running them
 
 `cargo test --release --test callconv -- --ignored` runs both matrices
-under dosrun (`DOSRUN`, else ~/scratch/pr-dosbox's, else the built one),
+under dosrun (`DOSRUN`, else the built one),
 about ten seconds. `runs.txt` beside each lists the failures still
 expected.

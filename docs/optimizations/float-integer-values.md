@@ -69,7 +69,3 @@ both result widths' wait/temporary placement. Only FPDEEP and FPEMU changed
 in the ordinary PDS scan. All 69 output cases pass across three compilers,
 with LIR required rather than fallback.
 
-FPDEEP runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-float-integer-2x0plurx`.
-FPEMU checks and FPDEEP stage dumps:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-conversion-check-3lt7tszp`.

@@ -96,7 +96,7 @@ only after MIR.
 
 ## LLVM is a reference, not an intermediate layer
 
-The local LLVM checkout under `~/work/other/llvm-project` is the reference for
+[LLVM](https://github.com/llvm/llvm-project) is the reference for
 several proven separations:
 
 - LLVM's data layout keeps sizes and alignment in one target description;

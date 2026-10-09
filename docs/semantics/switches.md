@@ -41,8 +41,7 @@ runtime call. User-defined helpers are excluded.
 
 PDS JUMPS emits through LIR and runs: all six rows and DONE match baseline
 byte-for-byte, both return to DOS, and both link without errors. Evidence:
-`/tmp/qbopt-dispatch-runtime.a5980U/result.png`, BASE.TXT and OPT.TXT.
-All-stage dumps: `/tmp/qbopt-dispatch-raised-jumps-20260911`.
+`dispatch-runtime/result.png`, BASE.TXT and OPT.TXT.
 Object size grows 1140 -> 1176 bytes before loop simplification; no speedup
 or target improvement is claimed. FPS does not apply to this console test.
 
@@ -88,7 +87,7 @@ emission (no fallback), successful links and observed return to DOS:
 Six normal outputs are byte-identical. Error diagnostics retain their class
 and module, but their reported address changes `0825:0045 -> 0825:0085`
 because the runtime call moved. They are not byte-identical outputs.
-Evidence: `/tmp/qbopt-dispatch-boundary.9ap9IY/result-final.png`; per-case
+Per-case
 compiler/linker logs, original/emitted objects, output logs and replay scripts
 are beside it. Every compile reports zero severe errors. FPS is inapplicable.
 
@@ -143,9 +142,9 @@ Object size **1176 -> 1095 bytes**; modeled cost **1366 -> 1058**, or
 **1.84x -> 1.43x** of the unchanged 742 target. No runtime speedup claim.
 PDS native-FPU baseline/candidate link successfully and print byte-identical
 six rows plus DONE. Both return to DOS; FPS is inapplicable.
-Evidence: `/tmp/qbopt-dispatch-range-run.3LhAlM/result.png`, output/link logs
+Evidence: `dispatch-range-run/result.png`, output/link logs
 and replay scripts alongside it. Every stage is dumped in
-`/tmp/qbopt-dispatch-range-fixed-20260911`.
+`dispatch-range-fixed`.
 
 Focused switch/range tests: 92 pass, including emitted QB/PDS/VBDOS objects,
 live error-table retention, and positive/negative unsigned boundaries.
@@ -159,5 +158,5 @@ The expanded unsigned-edge check passes 80 cases across 16/32-bit widths.
 Layout and constant-condition checks finish with 2955 passed and one failure:
 `test_a_fold_does_not_keep_the_fixup_of_the_read_it_replaced` no longer finds
 a folded memory read in its BOOLS witness. It fails identically in an isolated
-HEAD archive (`/tmp/qbopt-head-layout-check.jqp2wg`); its assertion is retained.
+HEAD archive; its assertion is retained.
 The full commit gate is not green, and this batch remains uncommitted.

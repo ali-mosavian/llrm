@@ -40,7 +40,7 @@ SYM y6 name="nvoice" base="nvoice" pattern="_*" attr=0x42 seg=11
 b6 BENewBack y6
 - DGLabel b6
 - DGUBytes 2
-f7 DBSrcFile "/Users/alim/work/personal/qbopt/.claude/worktrees/watcom-16bit-qbopt-qcport-1d97c8/fixtures/c/fill.c"
+f7 DBSrcFile "tests/fixtures/c/fill.c"
 - DBSrcCue f7 5 1
 SYM y7 name="fill_bytes" base="fill_bytes" pattern="_*" attr=0x7 seg=1
 CALLCONV y7 class=0x80 target=0x716 parms=[] ret=0:0

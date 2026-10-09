@@ -4,7 +4,7 @@ SEG 2 attr=0x1c name="CONST" align=2
 SEG 3 attr=0xc name="CONST2" align=2
 SEG 4 attr=0x6 name="_DATA" align=2
 START
-f1 DBSrcFile "/Users/alim/work/personal/qbopt/bench/parity/qlight.c"
+f1 DBSrcFile "qlight.c"
 - DBSrcCue f1 4 1
 SYM y1 name="ls_scale_byte" base="ls_scale_byte" pattern="_*" attr=0x7 seg=1
 CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0

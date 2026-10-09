@@ -28,7 +28,7 @@ Rust: `compiler/rustc_borrowck/src` of rust-lang/rust (shallow clone). Nib: `cra
 
 ## 2. Shortfalls: accepted, unsound
 
-Probes are in `~/scratch/nibborrow-probe/p` (copied below). Each was compiled with `llrm-nib` (accepted) and run with `llrm-run`.
+Probes are copied below. Each was compiled with `llrm-nib` (accepted) and run with `llrm-run`.
 
 ### S1 Shadowed parameter name — #120 (fixed in #126)
 
