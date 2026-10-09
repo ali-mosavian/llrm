@@ -774,7 +774,7 @@ b3:
     let mut module = parsed(text);
     let mut manager = PassManager::default();
     manager.require::<Summaries>();
-    manager.add(Gvn::default());
+    manager.add(Gvn { dataflow: true });
     let before = llrm_analysis::avail::solved();
     manager
         .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))

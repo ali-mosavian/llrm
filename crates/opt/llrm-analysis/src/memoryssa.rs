@@ -484,6 +484,9 @@ pub struct MemorySSA<'a> {
     /// the def.
     reaches: std::cell::RefCell<IndexMap<InstId, Rc<Reach>>>,
     unit: Unit<'a>,
+    /// The values that are constants, for placing an index away from a cell
+    /// (`with_known`).
+    known: Option<BTreeMap<ValueId, Interval>>,
     /// Whether a def's writes may clobber a cell, once for each pair: the loads
     /// of one address ask it of the same defs again and again.
     /// Keyed by the cell's slot (`slot`) and the def's access number: 0 not
@@ -505,6 +508,17 @@ pub struct MemorySSA<'a> {
 }
 
 impl MemorySSA<'_> {
+    /// This graph with the register constants `known` tells, as the
+    /// availability map had them: an index a constant places away
+    /// from a cell is not a clobber of it.
+    pub fn with_known(
+        mut self,
+        known: BTreeMap<ValueId, Interval>,
+    ) -> Self {
+        self.known = Some(known);
+        self
+    }
+
     pub fn at(
         &self,
         site: InstId,
@@ -533,6 +547,17 @@ impl MemorySSA<'_> {
         memory: &MemRef,
     ) -> BTreeSet<usize> {
         self.frontier(site, memory, None, None, None)
+    }
+
+    /// `clobbers` for a load that is invariant, as if it were not: the store
+    /// that initialises what it reads is found, so its value serves the
+    /// load.
+    pub fn clobbers_ignoring_invariance(
+        &self,
+        site: InstId,
+        memory: &MemRef,
+    ) -> BTreeSet<usize> {
+        self.frontier_for(site, memory, None, None, None, false)
     }
 
     /// Whether a dominating earlier read's memory state still applies.
@@ -576,7 +601,7 @@ impl MemorySSA<'_> {
         } else {
             #[cfg(test)]
             MAY_CLOBBERS.with(|asked| asked.set(asked.get() + stores.len()));
-            let found = stores.iter().any(|store| may_clobber(&self.unit, None, cell, store));
+            let found = stores.iter().any(|store| may_clobber(&self.unit, self.known.as_ref(), cell, store));
             assert!(!(missed && found), "LLRM_CHECK_CLOBBERS: objects that cannot meet were found to clobber");
             found
         };
@@ -625,11 +650,25 @@ impl MemorySSA<'_> {
         edge: Option<i64>,
         edge_memory: Option<&MemRef>,
     ) -> BTreeSet<usize> {
-        let found = self.walked(site, memory, boundary, edge, edge_memory, true);
+        self.frontier_for(site, memory, boundary, edge, edge_memory, true)
+    }
+
+    /// `frontier`; `honor` whether a load that is invariant is taken to be
+    /// clobbered by nothing.
+    fn frontier_for(
+        &self,
+        site: InstId,
+        memory: &MemRef,
+        boundary: Option<usize>,
+        edge: Option<i64>,
+        edge_memory: Option<&MemRef>,
+        honor: bool,
+    ) -> BTreeSet<usize> {
+        let found = self.walked(site, memory, boundary, edge, edge_memory, true, honor);
         if check_jumps() {
             assert_eq!(
                 found,
-                self.walked(site, memory, boundary, edge, edge_memory, false),
+                self.walked(site, memory, boundary, edge, edge_memory, false, honor),
                 "LLRM_CHECK_JUMPS: a walk that jumps found other than a walk step by step"
             );
         }
@@ -657,11 +696,13 @@ impl MemorySSA<'_> {
         edge: Option<i64>,
         edge_memory: Option<&MemRef>,
         jumping: bool,
+        honor: bool,
     ) -> BTreeSet<usize> {
         let block = self.at(site).block;
         // A load of what is written once, then never: no write changes what it
         // reads.
-        let invariant = llrm_mir::memory::invariant_load(self.unit.context, self.unit.layout, self.unit.function, site);
+        let invariant =
+            honor && llrm_mir::memory::invariant_load(self.unit.context, self.unit.layout, self.unit.function, site);
         let mut pending = vec![self.at(site).defining];
         let mut seen = BTreeSet::new();
         let mut found = BTreeSet::new();
@@ -903,6 +944,7 @@ pub fn built<'a>(
         written,
         reaches: Default::default(),
         unit: *unit,
+        known: None,
         clobbers: Default::default(),
         slots: Default::default(),
         jumps: Default::default(),
