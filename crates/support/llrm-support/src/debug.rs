@@ -101,6 +101,11 @@ fn work_now() -> u64 {
     u64::try_from(cpu_now().as_nanos()).unwrap_or(u64::MAX)
 }
 
+/// The thread's work so far (instructions, or CPU nanoseconds where there is no counter), for a caller that bills its own steps.
+pub fn work() -> u64 {
+    work_now()
+}
+
 fn work_unit() -> &'static str {
     if work_fd() >= 0 { "Minstr" } else { "Mcpu-ns" }
 }

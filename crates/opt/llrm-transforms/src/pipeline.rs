@@ -296,7 +296,12 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     // driver's whole-module step: a body it changes goes back through.
     let mut again = Fixed::new(&Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() });
     manager.add_program(Interprocedural {
-        pipeline: Box::new(move |module, analyses, id, _| rerun(module, analyses, id, &mut again).unwrap_or_else(|error| panic!("pipeline: {error}"))),
+        pipeline: Box::new(move |module, analyses, id, stage| {
+            TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
+            let done = rerun(module, analyses, id, &mut again).unwrap_or_else(|error| panic!("pipeline: {error}"));
+            TRIGGER.with(|trigger| trigger.borrow_mut().clear());
+            done
+        }),
         proved: None,
         inline: applied.options.inline,
         rate: Some(if applied.options.prefers_size() { 0 } else { applied.options.limits.milliclocks_per_byte }),
@@ -347,6 +352,11 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     manager.add_module(crate::spares::Spares);
     manager.add_module(crate::homes::Homes);
     manager.run(program)
+}
+
+thread_local! {
+    /// What made the interprocedural step run a body's pipeline again (empty: the first run), for `LLRM_DEBUG=runs`.
+    static TRIGGER: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
 }
 
 /// `fixed` over body `id` alone, as the manager runs a function pass, its
@@ -466,10 +476,13 @@ impl Fixed {
         // Separately reject a repeated state, so an oscillator fails at once
         // instead of consuming the limit.
         let mut history = BTreeSet::from([print::body(unit.context, unit.function)]);
+        run.fixed += 1;
         for iteration in 0..limit {
             let before = run.version;
+            run.rounds += 1;
             for (one, settled) in self.passes.iter_mut().zip(&mut settled) {
                 if *settled == Some(run.version) {
+                    run.skipped += 1;
                     continue;
                 }
                 let name = format!("{prefix}r{:02}-{}", iteration + 1, one.name());
@@ -509,8 +522,21 @@ impl FunctionPass for Fixed {
         self.runs += 1;
         let promotes = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function).dominance.irreducible(unit.function).is_empty();
         let dump = self.dump.as_ref().map(|directory| directory.join(format!("{:02}", self.runs)));
-        let mut run = Run { version: 0, promotes, dump };
+        let mut run = Run { version: 0, promotes, dump, rounds: 0, steps: 0, skipped: 0, fixed: 0, billing: llrm_support::debug::enabled("runs"), idle: 0, useful: 0 };
         self.transacted(unit, analyses, &mut run).unwrap_or_else(|error| panic!("pipeline: {error}"));
+        llrm_support::debug!(
+            "runs",
+            "body {} trigger {:?}: {} fixed points, {} rounds, {} pass runs, {} skipped as settled, {} changes, work idle {} useful {}",
+            unit.id.map_or(-1, |id| i64::from(id.0)),
+            TRIGGER.with(|trigger| trigger.borrow().clone()),
+            run.fixed,
+            run.rounds,
+            run.steps,
+            run.skipped,
+            run.version,
+            run.idle,
+            run.useful
+        );
         if run.version == 0 { PreservedAnalyses::all() } else { PreservedAnalyses::none() }
     }
 }
@@ -522,6 +548,15 @@ struct Run {
     /// Whether promotion may run: not over an irreducible CFG.
     promotes: bool,
     dump: Option<PathBuf>,
+    /// For `LLRM_DEBUG=runs`: fixed points reached, rounds in them, passes run, passes skipped as settled.
+    fixed: usize,
+    rounds: usize,
+    steps: usize,
+    skipped: usize,
+    /// The work of passes that changed nothing, and of those that did (only where `runs` is on).
+    billing: bool,
+    idle: u64,
+    useful: u64,
 }
 
 impl Run {
@@ -530,8 +565,15 @@ impl Run {
         if !self.promotes && matches!(pass.name(), "sroa" | "promote") {
             return false;
         }
+        self.steps += 1;
         let before = unit.function.mark();
+        let billed = self.billing.then(llrm_support::debug::work);
         let preserved = llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses)).unless_unchanged(unit.function, before);
+        if let Some(billed) = billed {
+            let spent = llrm_support::debug::work() - billed;
+            *(if preserved.are_all_preserved() { &mut self.idle } else { &mut self.useful }) += spent;
+            llrm_support::debug!("runs", "step {stage} {} {spent}", if preserved.are_all_preserved() { "idle" } else { "changed" });
+        }
         if preserved.are_all_preserved() {
             return false;
         }
