@@ -315,13 +315,38 @@ pub fn may_clobber(
     cell: &MemRef,
     store: &MemRef,
 ) -> bool {
+    // Two references of one frame at fixed displacements, their bytes apart:
+    // what `regions::overlapping` settles first of everything it does, and
+    // most of the writes a walk passes.
+    if let (Some((frame, low, high)), Some((other_frame, other_low, other_high))) =
+        (crate::regions::displaced_span(cell), crate::regions::displaced_span(store))
+        && frame == other_frame
+        && !(low < other_high && other_low < high)
+    {
+        assert!(
+            !check_clobbers() || !may_clobber_slowly(unit, known, cell, store),
+            "LLRM_CHECK_CLOBBERS: bytes apart in one frame were found to overlap"
+        );
+        return false;
+    }
+    may_clobber_slowly(unit, known, cell, store)
+}
+
+fn may_clobber_slowly(
+    unit: &Unit,
+    known: Option<&BTreeMap<ValueId, Interval>>,
+    cell: &MemRef,
+    store: &MemRef,
+) -> bool {
+    #[cfg(test)]
+    SLOW_CLOBBERS.with(|asked| asked.set(asked.get() + 1));
     let offsets = pointerfacts::offsets(unit.context, unit.layout, unit.function);
     let apart = matches!(
         (located(cell), located(store)),
         (Some(one), Some(other)) if offsets.disjoint(one, other)
     );
     // An answer Rust cannot represent is taken to overlap.
-    overlapping(cell, store, known, known, unit.program).unwrap_or(true) && !apart
+    !apart && overlapping(cell, store, known, known, unit.program).unwrap_or(true)
 }
 
 /// Whether `outer` certainly holds every byte of `inner`: both at fixed
@@ -463,6 +488,7 @@ thread_local! {
     /// Writes asked of `may_clobber` by the walks: the alias reasoning the
     /// object summary spares.
     pub(crate) static MAY_CLOBBERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static SLOW_CLOBBERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -505,6 +531,8 @@ pub struct MemorySSA<'a> {
     /// `defining` links make, by access number: one is behind another when
     /// its interval holds the other's.
     span: Vec<(u32, u32)>,
+    /// Per access, the walk that last visited it, and the walks made.
+    stamps: std::cell::RefCell<(Vec<u32>, u32)>,
 }
 
 impl MemorySSA<'_> {
@@ -703,7 +731,13 @@ impl MemorySSA<'_> {
         let invariant =
             honor && llrm_mir::memory::invariant_load(self.unit.context, self.unit.layout, self.unit.function, site);
         let mut pending = vec![self.at(site).defining];
-        let mut seen = BTreeSet::new();
+        // Visited accesses by stamp: a set built per walk was most of its cost.
+        let mut stamps = self.stamps.borrow_mut();
+        if stamps.0.len() < self.span.len() {
+            stamps.0.resize(self.span.len(), 0);
+        }
+        stamps.1 += 1;
+        let epoch = stamps.1;
         let mut found = BTreeSet::new();
         // Where no edge chooses, the chain of uses and untouching defs back
         // from an access is the same for every load of the cell: its
@@ -749,7 +783,7 @@ impl MemorySSA<'_> {
                 }
                 continue;
             }
-            if !seen.insert(current) {
+            if std::mem::replace(&mut stamps.0[current], epoch) == epoch {
                 chain.clear();
                 continue;
             }
@@ -948,6 +982,7 @@ pub fn built<'a>(
         slots: Default::default(),
         jumps: Default::default(),
         span,
+        stamps: Default::default(),
     }
 }
 

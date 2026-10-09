@@ -195,6 +195,18 @@ pub fn forecast<K: Ord + Dense>(
     fitted(points, price)
 }
 
+// Cells handled by `fitted` and by the sweep: a test that the sweep's work
+// follows what changes and not what is live.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TOUCHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn touched(_cells: usize) {
+    #[cfg(test)]
+    TOUCHED.with(|touched| touched.set(touched.get() + _cells));
+}
+
 fn fitted<K: Ord + Copy, S: Spilled<K>>(
     points: impl IntoIterator<Item = Point<K>>,
     price: impl Fn(K) -> i64,
@@ -202,6 +214,7 @@ fn fitted<K: Ord + Copy, S: Spilled<K>>(
     let mut spilled = S::default();
     let (mut cost, mut peak) = (0, 0);
     for point in points {
+        touched(point.residents.len());
         // Sorted and without repeats, as a set would hold them: a set built per
         // point was most of lsr's work on a loop of many uses.
         let mut resident = point.residents.into_iter().filter(|one| !spilled.has(one)).collect::<Vec<_>>();
@@ -1089,9 +1102,222 @@ impl<'a> View<'a> {
         let traffic = traffic(self.function, frequency, &self.pressure.cells, costs, &|_| true, &|value| {
             words(self.context, self.layout, self.function, value)
         });
+        let price = |cell: ValueId| traffic.get(&cell).map_or(0, |one| one.price(costs));
+        let swept = self.swept(&price);
+        if llrm_support::env_set("LLRM_CHECK_FORECAST") {
+            let each = self.pointed(&price);
+            let (swept_cells, each_cells) =
+                (swept.spilled.iter().collect::<Vec<_>>(), each.spilled.iter().collect::<Vec<_>>());
+            assert!(
+                (swept.cost, swept.peak, &swept_cells) == (each.cost, each.peak, &each_cells),
+                "LLRM_CHECK_FORECAST: the sweep spills {swept_cells:?} for {} (peak {}); the points {each_cells:?} for {} (peak {})",
+                swept.cost,
+                swept.peak,
+                each.cost,
+                each.peak
+            );
+        }
+        swept
+    }
+
+    /// `forecast` as the points of every site give it: `swept` must give the
+    /// same.
+    #[cfg(test)]
+    pub(crate) fn forecast_by_points(
+        &self,
+        costs: &OperationCosts,
+        frequency: &BTreeMap<i64, i64>,
+    ) -> Forecast<IdSet<ValueId>> {
+        let traffic = traffic(self.function, frequency, &self.pressure.cells, costs, &|_| true, &|value| {
+            words(self.context, self.layout, self.function, value)
+        });
+        self.pointed(&|cell| traffic.get(&cell).map_or(0, |one| one.price(costs)))
+    }
+
+    /// `forecast` over every site's points, each with its residents listed:
+    /// what `swept` must give, and the work of a set copied for each point.
+    fn pointed(
+        &self,
+        price: &dyn Fn(ValueId) -> i64,
+    ) -> Forecast<IdSet<ValueId>> {
         let points =
             self.function.layout().iter().flat_map(|&block| self.sites(block, &|_| false)).flat_map(Site::points);
-        forecast(points, |cell| traffic.get(&cell).map_or(0, |one| one.price(costs)))
+        forecast(points, price)
+    }
+
+    /// `forecast` over the points of every site, found without a set copied
+    /// for each: the live set is stepped through each block, and each kind of
+    /// point keeps its cells not yet spilled in order of price, so a point
+    /// costs what changed at it, not what is live.
+    fn swept(
+        &self,
+        price: &dyn Fn(ValueId) -> i64,
+    ) -> Forecast<IdSet<ValueId>> {
+        let (context, layout, function, room) = (self.context, self.layout, self.function, self.room);
+        let counted = |value: ValueId| self.pressure.counted.contains(&value);
+        let mut folded = |value: ValueId| {
+            if self.pressure.folds.asked.contains(&value) {
+                self.pressure.folds.yes.contains(&value)
+            } else {
+                folded_in(context, function, value, room.index_scales)
+            }
+        };
+        let mut sweep = Sweep { spilled: IdSet::default(), cost: 0, peak: 0 };
+        let mut kinds = [Resident::default(), Resident::default(), Resident::default()];
+        // A value's cell, and which kinds of point it is a resident of.
+        let mut classes: llrm_support::hash::HashMap<ValueId, (ValueId, [bool; 3])> = Default::default();
+        let mut class = |value: ValueId| {
+            *classes
+                .entry(value)
+                .or_insert_with(
+                    || {
+                        let viewed = room.segments > 0 && segment_view(context, layout, room.spaces, function, value);
+                        let counted = counted(value);
+                        let resident = counted && !viewed;
+                        let routed = room.addresses > 0 && resident && self.pressure.addressed.contains(&value);
+                        (_cell(&self.pressure.cells, value), [resident, counted && viewed, routed])
+                    },
+                )
+        };
+        for &block in function.layout() {
+            let liveness::Steps { first, steps } = liveness::live_steps(function, &self.pressure.found, block);
+            for kind in &mut kinds {
+                kind.clear();
+            }
+            let mut live = first.iter().copied().collect::<BTreeSet<_>>();
+            for &value in &first {
+                let (cell, member) = class(value);
+                for (kind, _) in kinds.iter_mut().zip(member).filter(|(_, member)| *member) {
+                    kind.add(cell, price(cell), &sweep.spilled);
+                }
+            }
+            for step in &steps {
+                let inst = step.inst;
+                let wanted = room.registers - transient_by(context, layout, function, inst, room, &live, &mut folded);
+                // Live across the instruction: what it reads and nothing else
+                // holds is not.
+                for value in &step.read {
+                    live.remove(value);
+                }
+                let registers = wanted - copied(function, inst, &live, room, &counted);
+                // Points, in order: before, across a call, held, routed.
+                sweep.fit(&mut kinds, 0, registers);
+                for value in &step.read {
+                    let (cell, member) = class(*value);
+                    if member[0] {
+                        kinds[0].remove(cell);
+                    }
+                }
+                if calls(function, inst) {
+                    sweep.fit(&mut kinds, 0, (self.across)(inst));
+                }
+                sweep.fit(&mut kinds, 1, room.segments);
+                sweep.fit(&mut kinds, 2, room.addresses);
+                for value in &step.read {
+                    let (cell, member) = class(*value);
+                    for (kind, _) in kinds[1..].iter_mut().zip(&member[1..]).filter(|(_, member)| **member) {
+                        kind.remove(cell);
+                    }
+                }
+                if let Some(value) = step.made {
+                    live.insert(value);
+                    let (cell, member) = class(value);
+                    for (kind, _) in kinds.iter_mut().zip(member).filter(|(_, member)| *member) {
+                        kind.add(cell, price(cell), &sweep.spilled);
+                    }
+                }
+            }
+        }
+        Forecast { cost: sweep.cost, spilled: sweep.spilled, peak: sweep.peak }
+    }
+}
+
+/// What `View::swept` has spilled so far.
+struct Sweep {
+    spilled: IdSet<ValueId>,
+    cost: i64,
+    peak: i64,
+}
+
+impl Sweep {
+    /// `fitted`'s step at one point of kind `which`: spill the cells that
+    /// number past `registers`, the cheapest first, dearer ties to the larger
+    /// cell, out of every kind.
+    fn fit(
+        &mut self,
+        kinds: &mut [Resident; 3],
+        which: usize,
+        registers: i64,
+    ) {
+        let excess = kinds[which].order.len() as i64 - registers.max(0);
+        self.peak = self.peak.max(excess);
+        if excess <= 0 {
+            return;
+        }
+        let victims = kinds[which].order.iter().take(excess as usize).copied().collect::<Vec<_>>();
+        touched(victims.len());
+        for (each, cell) in victims {
+            self.cost += each;
+            self.spilled.insert(cell);
+            for kind in kinds.iter_mut() {
+                kind.purge(cell);
+            }
+        }
+    }
+}
+
+/// The cells live at a point and not spilled: how many values of each, and
+/// their prices in order.
+#[derive(Default)]
+struct Resident {
+    count: llrm_support::hash::HashMap<ValueId, (u32, i64)>,
+    order: BTreeSet<(i64, ValueId)>,
+}
+
+impl Resident {
+    fn clear(&mut self) {
+        self.count.clear();
+        self.order.clear();
+    }
+
+    fn add(
+        &mut self,
+        cell: ValueId,
+        price: i64,
+        spilled: &IdSet<ValueId>,
+    ) {
+        if spilled.contains(&cell) {
+            return;
+        }
+        touched(1);
+        let held = self.count.entry(cell).or_insert((0, price));
+        held.0 += 1;
+        if held.0 == 1 {
+            self.order.insert((price, cell));
+        }
+    }
+
+    fn remove(
+        &mut self,
+        cell: ValueId,
+    ) {
+        let Some(held) = self.count.get_mut(&cell) else { return };
+        touched(1);
+        held.0 -= 1;
+        if held.0 == 0 {
+            let price = held.1;
+            self.count.remove(&cell);
+            self.order.remove(&(price, cell));
+        }
+    }
+
+    fn purge(
+        &mut self,
+        cell: ValueId,
+    ) {
+        if let Some((_, price)) = self.count.remove(&cell) {
+            self.order.remove(&(price, cell));
+        }
     }
 }
 
