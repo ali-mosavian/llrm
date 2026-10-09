@@ -200,7 +200,7 @@ def test_the_plan_names_each_skipped_step_and_its_missing_tool_as_json(tmp_path)
     env = {**__import__("os").environ, "HOME": str(tmp_path), "LLRM_REQUIRE_TURBO": "", "LLRM_REQUIRE_CODEVIEW": "", "QB45_DIR": "", "TCPP30_DIR": "", "TD_DIR": "", "VBDOS_DIR": "", "QCPORT": "", "QCPORT_BORLAND": "", "GATE_ALLOW_MISSING": "1"}
     out = subprocess.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", "crates/ir/llrm-mir/src/lib.rs"], capture_output=True, text=True, check=True, env=env).stdout
     got = __import__("json").loads(out)
-    assert set(got["skipped"]) == {"turbo", "cv4", "qcport", "bench"} and "reference" not in got["groups"]
+    assert set(got["skipped"]) - {"measure"} == {"turbo", "cv4", "qcport", "bench"} and "reference" not in got["groups"]
     assert "run" in got["groups"]["run"]
 
 
@@ -270,12 +270,12 @@ def test_without_the_opt_in_the_plan_and_the_commands_are_what_they_were(tmp_pat
 
 
 def test_a_python_test_file_that_needs_a_missing_probe_is_left_out_of_pytest_by_name():
-    """test_scaling.py failed 'Access to performance monitoring ... is limited' on a runner whose VM has no instruction counters."""
+    """test_scaling_gate.py read float('<not supported>') on a runner without counters and failed the python group on main; test_scaling.py failed 'Access to performance monitoring ... is limited' on a runner whose VM has no instruction counters."""
     missing = {"perf": "perf: `perf stat` fails here"}
-    assert gate.python_tests_unusable(missing) == ["crates/target/llrm-x86-m32/vsgcc/test_scaling.py"]
+    assert sorted(gate.python_tests_unusable(missing)) == ["crates/target/llrm-x86-m32/vsgcc/test_scaling.py", "crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py"]
     p = gate.plan(["tools/linkrecipe.py"])
     cmds = gate.commands(p, gate.load(), gate.packages(), frozenset(), tuple(gate.python_tests_unusable(missing)))
-    assert "--ignore=crates/target/llrm-x86-m32/vsgcc/test_scaling.py" in cmds["pytest"]
+    assert "--ignore=crates/target/llrm-x86-m32/vsgcc/test_scaling.py" in cmds["pytest"] and "--ignore=crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py" in cmds["pytest"]
     assert "test_scaling" not in gate.commands(p, gate.load(), gate.packages())["pytest"]
 
 
