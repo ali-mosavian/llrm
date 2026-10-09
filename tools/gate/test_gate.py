@@ -457,3 +457,15 @@ def test_the_full_tier_has_every_step_the_fast_tier_has_for_the_same_paths():
         fast, full = gate.plan(files, "fast"), gate.plan(files, "full")
         assert set(fast.steps) <= set(full.steps), (files, set(fast.steps) - set(full.steps))
     assert "scans" in gate.plan(["crates/ir/llrm-mir/src/lib.rs"], "full").steps
+
+
+def test_a_failed_step_keeps_its_log_past_the_next_run_of_the_step(tmp_path):
+    """A pytest failure under host load was lost: the gate prints the last 30 lines of the log and a rerun overwrote it, so the
+    failing test was never named (#1184)."""
+    env = {**__import__("os").environ}
+    assert gate.run_step("probe", "echo FAILED tests/test_x.py::test_y; exit 1", tmp_path, env)[1] == 1
+    assert gate.run_step("probe", "echo fine", tmp_path, env)[1] == 0
+    assert "FAILED tests/test_x.py::test_y" in (tmp_path / "probe.failed.log").read_text()
+    assert (tmp_path / "probe.log").read_text() == "fine\n"
+    assert gate.run_step("skipped", "exit 77", tmp_path, env)[1] == 77
+    assert not (tmp_path / "skipped.failed.log").exists()
