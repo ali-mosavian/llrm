@@ -413,6 +413,31 @@ fn erasing_many_instructions_scans_their_block_once_not_once_each() {
     assert!(many_scans > few_scans * 10, "the one-by-one scans no longer show the cost: {many_scans}");
 }
 
+/// Each use an erased instruction made was looked for in its operand's list of
+/// uses: 200 adds of one parameter that go were 200 scans of up to 400 uses,
+/// and `mir gvn` on `straight` spent a third of its time there at N=16384.
+#[test]
+fn erasing_many_users_of_one_value_filters_its_uses_once() {
+    let erase = |batch: bool| {
+        let mut module = module(&adds(400));
+        let f = function(&mut module);
+        let gone: Vec<InstId> = (0..400).step_by(2).map(|i| named(f, &format!("x{i}")).0).collect();
+        crate::edit::USES_SCANNED.with(|scanned| scanned.set(0));
+        if batch {
+            f.erase_all(&gone).expect("unused");
+        } else {
+            gone.iter().rev().for_each(|&one| f.erase(one).expect("unused"));
+        }
+        assert!(f.check_uses().is_empty());
+        (print::module(&module), crate::edit::USES_SCANNED.with(|scanned| scanned.get()))
+    };
+    let (one_by_one, many_scans) = erase(false);
+    let (together, few_scans) = erase(true);
+    assert_eq!(together, one_by_one);
+    assert!(few_scans <= 2 * 401, "{few_scans} uses scanned erasing 200 of 400 users of one value");
+    assert!(many_scans > few_scans * 10, "the one-by-one scans no longer show the cost: {many_scans}");
+}
+
 #[test]
 fn erase_all_refuses_a_result_something_outside_it_uses() {
     let mut module =

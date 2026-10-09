@@ -1018,3 +1018,26 @@ b3:
     let done = checked_flat(text, &inputs);
     assert!(done.contains("urem") && !done.contains("srem"), "{done}");
 }
+
+/// A mask asked the ranges of the whole body, worked out afresh for the pass's
+/// own round (the bounds of every counted loop and the edges of every block:
+/// 2.4% of branches(512) at -O2, once for each round that had a mask) though
+/// the manager held them. It asks the manager's.
+#[test]
+fn a_mask_is_judged_by_the_bounds_the_manager_holds_not_by_new_ones() {
+    use llrm_analysis::manager::Bounded;
+    // The check derives them afresh to compare, and is counted.
+    if std::env::var_os("LLRM_CHECK_REPLAY").is_some() {
+        return;
+    }
+    let mut module = parsed(&masked_loop(40, 63));
+    let layout = llrm_analysis::testing::layout(&module);
+    let outer = std::rc::Rc::new(llrm_mir::passes::Outer::of(&module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut analyses = llrm_mir::passes::Analyses::new(outer);
+    analyses.get::<Bounded>(context, &layout, function);
+    let before = llrm_analysis::ranges::loops_solved();
+    assert!(super::simplified(context, &layout, function, &mut analyses, false), "premise: the mask went");
+    let solved = llrm_analysis::ranges::loops_solved() - before;
+    assert_eq!(solved, 0, "{solved} loops worked again for one mask");
+}
