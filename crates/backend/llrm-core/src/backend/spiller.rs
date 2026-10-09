@@ -1064,6 +1064,140 @@ fn homes_by_sparse_body(body: &LirBody, index: &ranges::Indexes, changed: &[(usi
 }
 
 /// The same from where the homes occur: the instructions `changed` name them, so the walk need not look at the others.
+/// What the last bodies the homes were asked of left: their blocks, numbering, the homes' intervals (by the home's frame offset) and
+/// which instruction names which homes.
+#[derive(Default)]
+struct HomesHeld(Vec<Arc<HomesState>>);
+
+struct HomesState {
+    structure: Arc<HomesStructure>,
+    insns: Vec<crate::model::lir::Insns>,
+    index: Arc<ranges::Indexes>,
+    intervals: IndexMap<i64, Interval>,
+    known: BTreeSet<i64>,
+    names: crate::support::hash::HashMap<usize, Vec<i64>>,
+    count: usize,
+}
+
+/// How many homes' intervals this body's facts have found afresh from their occurrences, for a test that an edit finds those it touched only.
+pub fn homes_redone(body: &LirBody) -> usize {
+    body.facts.0.counted("homes-redone")
+}
+
+/// How many blocks a body has before the homes' intervals are kept from an earlier body's.
+const KEPT_FROM_BLOCKS: usize = 48;
+
+/// What of a body's shape the homes' intervals depend on besides its instructions: shared by the states of bodies that keep it.
+#[derive(PartialEq)]
+struct HomesStructure {
+    entry: i64,
+    blocks: Vec<(i64, Vec<i64>, Vec<crate::model::lir::Phi>)>,
+    odds: crate::model::lir::BlockOdds,
+    trips: Vec<(i64, i64)>,
+}
+
+impl HomesStructure {
+    fn is_of(&self, body: &LirBody) -> bool {
+        self.entry == body.entry
+            && self.blocks.len() == body.blocks.len()
+            && self.blocks.iter().zip(&body.blocks).all(|((at, succ, phis), block)| *at == block.at && *succ == block.succ && *phis == block.phis)
+            && self.odds == body.odds
+            && self.trips == body.loop_trip_counts
+    }
+
+    fn of(body: &LirBody) -> Self {
+        Self {
+            entry: body.entry,
+            blocks: body.blocks.iter().map(|block| (block.at, block.succ.clone(), block.phis.clone())).collect(),
+            odds: body.odds.clone(),
+            trips: body.loop_trip_counts.clone(),
+        }
+    }
+}
+
+/// The homes' intervals: those of the homes the instructions that changed since an earlier body do not name are that body's, shifted
+/// to the new numbering; the others are found from where they occur. A spill changes a few blocks and names one home or two; the
+/// intervals of the rest, across the whole body, were found afresh for each (2.0 G of compiling d_faces, 616 times).
+fn homes_kept(body: &LirBody, index: &Arc<ranges::Indexes>, named: &[(usize, usize, BTreeSet<u32>, BTreeSet<u32>)], homes: &[i64], first: u32) -> IndexMap<u32, Interval> {
+    let pseudo = |home: usize| first + home as u32;
+    // The walk of a home costs the blocks it is live in, the shift the blocks of the body: a body of few blocks is not worth keeping
+    // (QCport x_transpose, 41 intervals, kept +0.3%).
+    if body.blocks.len() < KEPT_FROM_BLOCKS {
+        let values: Vec<u32> = (first..first + homes.len() as u32).collect();
+        return crate::analysis::occurrences::Occurrences::planned(named).ranges(body, index, &values);
+    }
+    let mut now: crate::support::hash::HashMap<usize, Vec<i64>> = Default::default();
+    for (block, at, defined, used) in named {
+        let one = &body.blocks[*block].insns[*at];
+        now.insert(ranges::key(one), defined.union(used).map(|value| homes[(*value - first) as usize]).collect());
+    }
+    let fresh_for = |wanted: &[usize]| -> IndexMap<u32, Interval> {
+        let values: Vec<u32> = wanted.iter().map(|home| pseudo(*home)).collect();
+        crate::analysis::occurrences::Occurrences::planned(named).ranges(body, index, &values)
+    };
+    let kept = body.facts.0.stash(|held: &mut HomesHeld| {
+        held.0
+            .iter()
+            .filter(|state| state.structure.is_of(body))
+            .min_by_key(|state| state.insns.iter().zip(&body.blocks).filter(|(insns, block)| !insns.same_insns(&block.insns)).count())
+            .cloned()
+    });
+    let mut result: Option<IndexMap<u32, Interval>> = None;
+    if let Some(state) = &kept {
+        let blocks: Vec<(i64, &crate::model::lir::Insns)> = state.structure.blocks.iter().zip(&state.insns).map(|((at, _, _), insns)| (*at, insns)).collect();
+        let differing = ranges::differing_blocks(&blocks, body);
+        let mut touched: BTreeSet<i64> = BTreeSet::new();
+        let changed = ranges::changed_runs(&blocks, &state.index, body, index, &differing, &mut |run| {
+            for one in run {
+                let key = ranges::key(one);
+                touched.extend(state.names.get(&key).into_iter().flatten().chain(now.get(&key).into_iter().flatten()).copied());
+            }
+        });
+        if changed * 4 <= state.count + 16 {
+            let shift = ranges::Shift::between(&blocks, &state.index, body, index, &differing);
+            let redone: Vec<usize> = homes.iter().enumerate().filter(|(_, home)| touched.contains(home) || !state.known.contains(home)).map(|(at, _)| at).collect();
+            for _ in &redone {
+                body.facts.0.bump("homes-redone");
+            }
+            let fresh = fresh_for(&redone);
+            let mut out: IndexMap<u32, Interval> = IndexMap::default();
+            for (at, home) in homes.iter().enumerate() {
+                let value = pseudo(at);
+                if redone.binary_search(&at).is_ok() {
+                    if let Some(found) = fresh.get(&value) {
+                        out.insert(value, found.clone());
+                    }
+                } else if let Some(old) = state.intervals.get(home) {
+                    out.insert(value, Interval::new(value, old.segments.iter().map(|segment| ranges::Segment { start: shift.start(segment.start), end: shift.end(segment.end) }).collect()));
+                }
+            }
+            result = Some(out);
+        }
+    }
+    let result = result.unwrap_or_else(|| fresh_for(&(0..homes.len()).collect::<Vec<_>>()));
+    if kept.is_some() && llrm_support::env_set("LLRM_CHECK_OCCURRENCES") {
+        assert!(result == fresh_for(&(0..homes.len()).collect::<Vec<_>>()), "{}: the homes' intervals kept from an earlier body differ from finding them afresh", body.name);
+    }
+    let structure = match &kept {
+        Some(state) if state.structure.is_of(body) => Arc::clone(&state.structure),
+        _ => Arc::new(HomesStructure::of(body)),
+    };
+    let state = HomesState {
+        structure,
+        insns: body.blocks.iter().map(|block| block.insns.clone()).collect(),
+        index: Arc::clone(index),
+        intervals: homes.iter().enumerate().filter_map(|(at, home)| result.get(&pseudo(at)).map(|found| (*home, found.clone()))).collect(),
+        known: homes.iter().copied().collect(),
+        names: now,
+        count: body.blocks.iter().map(|block| block.insns.len()).sum(),
+    };
+    body.facts.0.stash(|held: &mut HomesHeld| {
+        held.0.insert(0, Arc::new(state));
+        held.0.truncate(3);
+    });
+    result
+}
+
 fn homes_by_occurrences(body: &LirBody, index: &ranges::Indexes, named: &[(usize, usize, BTreeSet<u32>, BTreeSet<u32>)], first: u32, count: usize) -> IndexMap<u32, Interval> {
     let values: Vec<u32> = (first..first + count as u32).collect();
     crate::analysis::occurrences::Occurrences::planned(named).ranges(body, index, &values)
@@ -1171,7 +1305,7 @@ fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(
         // that name them alone (whole parallel copies, which share a point), at the slots they have in the body.
         shared = ranges::indexed_shared(body);
         index = &*shared;
-        let homes_found = llrm_support::debug::timed("intervals by occurrences", || homes_by_occurrences(body, index, &named, first, homes.len()));
+        let homes_found = llrm_support::debug::timed("intervals homes", || homes_kept(body, &shared, &named, &homes, first));
         if llrm_support::env_set("LLRM_CHECK_OCCURRENCES") {
             let walked = homes_by_sparse_body(body, index, &changed_insns(), first);
             assert!(homes_found == walked, "{}: the homes' intervals by occurrences differ from the walk of the body of their instructions", body.name);
@@ -4496,6 +4630,57 @@ mod tests {
         let before = Occurrences::scans(&body);
         planned(&body, &set(&[1]), &mut Frame::new(0)).expect("plans");
         assert_eq!(Occurrences::scans(&body), before, "the body was scanned for the stable loads of the values");
+    }
+
+    /// The homes' intervals were found afresh for every home after every spill, across the whole body (2.0 G of compiling d_faces, 616
+    /// times), though a spill names one or two of them. An earlier body's are shifted, and only the homes the changed instructions name
+    /// are found again; the answer is the same as finding all of them.
+    #[test]
+    fn test_a_spill_finds_the_intervals_of_the_homes_it_names_only() {
+        use crate::analysis::intervals as ranges;
+        use crate::model::ir::Semantics;
+        use crate::model::lir::{Insn, LirBlock};
+        let nop = |at: i64| Arc::new(Insn::new(at, Some((at, at)), Some(Semantics { name: Some("nop".to_owned()), ..Semantics::new(Operation::Nothing) }), vec![], vec![]));
+        let chain = |extra_at_30: bool| {
+            let blocks: Vec<LirBlock> = (0..60i64)
+                .map(|at| {
+                    let insns = if at == 30 && extra_at_30 { vec![nop(0x1000), nop(0x1001 + at), nop(0x2000 + at)] } else { vec![nop(0x1001 + at), nop(0x2000 + at)] };
+                    LirBlock { succ: if at < 59 { vec![at + 1] } else { vec![] }, ..LirBlock::new(at, insns) }
+                })
+                .collect();
+            LirBody::new("chain", 0, blocks, IndexMap::default(), IndexMap::default())
+        };
+        let homes = [-2i64, -4, -6];
+        let first = 1000u32;
+        let names = |extra: bool| {
+            let one = |home: usize| first + home as u32;
+            vec![
+                (5, 0, BTreeSet::from([one(0)]), BTreeSet::new()),
+                (50, 1, BTreeSet::new(), BTreeSet::from([one(0)])),
+                (10, 0, BTreeSet::from([one(1)]), BTreeSet::new()),
+                (20, 1, BTreeSet::new(), BTreeSet::from([one(1)])),
+                (30, usize::from(extra), BTreeSet::from([one(2)]), BTreeSet::new()),
+                (40, 1, BTreeSet::new(), BTreeSet::from([one(2)])),
+            ]
+        };
+        let sorted = |mut named: Vec<(usize, usize, BTreeSet<u32>, BTreeSet<u32>)>| {
+            named.sort_by_key(|(block, at, _, _)| (*block, *at));
+            named
+        };
+        let before = chain(false);
+        let first_found = super::homes_kept(&before, &ranges::indexed_shared(&before), &sorted(names(false)), &homes, first);
+        assert_eq!(first_found.len(), 3, "premise: all three homes are live somewhere");
+        // A spill puts an instruction in block 30, which names the third home.
+        let mut after = before.clone();
+        let replaced = chain(true).blocks[30].insns.clone();
+        after = after.with_blocks(after.blocks.iter().map(|block| if block.at == 30 { block.with_insns(replaced.to_vec()) } else { block.clone() }).collect());
+        let redone = super::homes_redone(&after);
+        let kept = super::homes_kept(&after, &ranges::indexed_shared(&after), &sorted(names(true)), &homes, first);
+        assert_eq!(super::homes_redone(&after) - redone, 1, "the homes the change does not name were found again");
+        let index = ranges::indexed_shared(&after);
+        let values: Vec<u32> = (first..first + 3).collect();
+        let afresh = crate::analysis::occurrences::Occurrences::planned(&sorted(names(true))).ranges(&after, &index, &values);
+        assert!(kept == afresh, "the kept intervals differ from finding them afresh");
     }
 
     #[test]

@@ -241,14 +241,14 @@ pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i6
     let mut certain: Option<BTreeSet<InstId>> = None;
     let mut bounded: Option<std::rc::Rc<Result<ranges::Bounds, String>>> = None;
     let mut run: Vec<InstId> = Vec::new();
-    let mut taken: llrm_support::hash::HashSet<InstId> = llrm_support::hash::HashSet::default();
+    let mut taken: llrm_mir::dense::IdSet<InstId> = llrm_mir::dense::IdSet::new();
     // Whether an instruction may move is a fact of the loop, not of how much of it has moved: asked of each once, not once a round.
-    let mut movable: llrm_support::hash::HashMap<InstId, bool> = llrm_support::hash::HashMap::default();
+    let mut movable: llrm_mir::dense::IdMap<InstId, bool> = llrm_mir::dense::IdMap::new();
     let mut made: BTreeSet<ValueId> = BTreeSet::new();
     loop {
         let mut grew = false;
         for &inst in &insts {
-            if taken.contains(&inst) || !*movable.entry(inst).or_insert_with(|| _movable(unit, inst, &insts, accesses, Some(outer.program()))) {
+            if taken.contains(&inst) || !*movable.get_or_insert_with(inst, || _movable(unit, inst, &insts, accesses, Some(outer.program()))) {
                 continue;
             }
             let ready = function.instruction(inst).operands.iter().all(|&operand| match operand {

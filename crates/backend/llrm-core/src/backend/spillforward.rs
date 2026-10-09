@@ -151,6 +151,12 @@ fn _held(bits: u32, one: &Insn, facts: Facts) -> (Facts, bool, Option<(usize, Re
     (facts, false, held_source)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Block transfers worked out by `_available`, for a test that a block whose input is as it was is not worked again.
+    pub(crate) static TRANSFERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The facts true on entry to each block, met over every incoming edge.
 ///
 /// `None` stands for the top of the lattice -- a block not reached yet, whose
@@ -178,14 +184,25 @@ fn _available(body: &LirBody) -> IndexMap<i64, Facts> {
         })
         .collect();
     let mut outof: IndexMap<i64, Facts> = IndexMap::default();
+    // A block's transfer is worked again when its entry changed, and its entry when a parent's exit did: working a block whose input is
+    // as it was gives what it gave (a block of a loop nest took a round for each level, every block each round).
+    let mut entered: crate::support::hash::HashSet<i64> = into.iter().filter(|(_, facts)| facts.is_some()).map(|(at, _)| *at).collect();
+    let mut left: crate::support::hash::HashSet<i64> = crate::support::hash::HashSet::default();
     let mut changing = true;
     while changing {
         changing = false;
+        left.clear();
         for (at, facts) in &into {
             if let Some(facts) = facts {
+                if !entered.remove(at) {
+                    continue;
+                }
+                #[cfg(test)]
+                TRANSFERS.with(|count| count.set(count.get() + 1));
                 let leaving = _transfer(body.bits, blocks[at], facts.clone()).2;
                 if outof.get(at) != Some(&leaving) {
                     outof.insert(*at, leaving);
+                    left.insert(*at);
                     changing = true;
                 }
             }
@@ -193,6 +210,9 @@ fn _available(body: &LirBody) -> IndexMap<i64, Facts> {
         let ats: Vec<i64> = into.keys().copied().collect();
         for at in ats {
             if at == body.entry || predecessors[&at].is_empty() {
+                continue;
+            }
+            if !predecessors[&at].iter().any(|parent| left.contains(parent)) {
                 continue;
             }
             let mut met: Option<Facts> = None;
@@ -208,6 +228,7 @@ fn _available(body: &LirBody) -> IndexMap<i64, Facts> {
             if let Some(met) = met {
                 if into[&at].as_ref() != Some(&met) {
                     into.insert(at, Some(met));
+                    entered.insert(at);
                     changing = true;
                 }
             }
