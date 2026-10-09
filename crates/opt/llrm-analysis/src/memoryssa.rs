@@ -378,6 +378,26 @@ pub fn placed(
         .map(|(low, inner_low)| (i128::from(low - inner_low), i128::from(low - inner_low) + i128::from(one.bytes)))
 }
 
+/// What references naming the same bytes (`same_bytes`) share, to find them
+/// without comparing each pair: the frame and displaced span, or the base
+/// pointer, constant offset and width. Two references `same_bytes` accepts have
+/// at least one key in common; a common key is not proof, `same_bytes` decides.
+pub struct ByteKeys {
+    pub frame: Option<(crate::regions::Frame, i128, i128)>,
+    pub pointer: Option<(llrm_mir::module::Operand, i64, u64)>,
+}
+
+pub fn byte_keys(
+    unit: &Unit,
+    reference: &MemRef,
+) -> ByteKeys {
+    let pointer = located(reference).and_then(|at| {
+        let (base, offset) = pointerfacts::offsets(unit.context, unit.layout, unit.function).relative(at.pointer)?;
+        Some((base, offset, at.bytes))
+    });
+    ByteKeys { frame: displaced_span(reference), pointer }
+}
+
 /// Whether `one` and `other` certainly name the same bytes.
 pub fn same_bytes(
     unit: &Unit,
