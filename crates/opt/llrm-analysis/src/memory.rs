@@ -794,7 +794,7 @@ pub fn is_lifetime_marker(unit: &Unit, inst: InstId) -> bool {
 }
 
 /// What is known of each value without memory (`consts::known`).
-pub type Knowns = IndexMap<ValueId, Known>;
+pub type Knowns = llrm_support::hash::SparseIdMap<ValueId, Known>;
 
 /// What is known of a body without memory (`consts::known`), for a caller that changes the body as it goes: the
 /// manager's where the body is as the manager saw it, derived again, once for each state, once it is not. The one
