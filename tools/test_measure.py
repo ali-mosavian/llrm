@@ -324,7 +324,7 @@ def test_a_new_row_of_seven_tenths_of_the_compile_on_an_axis_that_rose_still_fai
     base = made(axes={"callers O2": cost(0, 100, 0.02)}, passes={"callers O2 analysis call-effects": quad(0.02)})
     grown = made(
         axes={"callers O2": cost(0, 100, 0.020467)},
-        passes={"callers O2 analysis call-effects": quad(0.02), "callers O2 analysis pointer-values": quad(0.000467)},
+        passes={"callers O2 analysis call-effects": quad(0.02), "callers O2 analysis pointer-values": [*cost(0, 0.1, 0.000467), whole]},
     )
     bad = measure.rises(base, grown, TOL)[1]
     assert any("pointer-values" in line for line in bad), bad
