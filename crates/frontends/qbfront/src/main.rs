@@ -21,7 +21,11 @@ fn main() -> ExitCode {
         }
         taken += 1;
     }
-    let segment_bytes = match llrm_driver::target(&flags, Some(&["x86-m16"])) {
+    let segment_bytes = match llrm_driver::planned(
+        &flags,
+        Some(&["x86-m16"]),
+        Some("https://github.com/ali-mosavian/llrm/issues/1160"),
+    ) {
         Ok(bound) => bound.target.layout().segment_bytes(),
         Err(why) => {
             eprintln!("qbfront: {why}");
