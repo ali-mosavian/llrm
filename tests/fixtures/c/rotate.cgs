@@ -17,7 +17,7 @@ SYM y2 name="mb" base="mb" pattern="_*" attr=0x42 seg=11
 b2 BENewBack y2
 - DGLabel b2
 - DGUBytes 40
-f3 DBSrcFile "/Users/alim/work/personal/qbopt/.claude/worktrees/watcom-16bit-qbopt-qcport-1d97c8/fixtures/c/rotate.c"
+f3 DBSrcFile "tests/fixtures/c/rotate.c"
 - DBSrcCue f3 4 1
 SYM y3 name="dot" base="dot" pattern="_*" attr=0x7 seg=1
 CALLCONV y3 class=0x80 target=0x716 parms=[] ret=0:0
