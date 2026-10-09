@@ -257,14 +257,46 @@ fn _numbered(
     // neither made nor priced.
     let chosen = if !room.priced() || !crossed.get() {
         crossing
-    } else if let Some(crossed) = price(&crossing.0) {
-        let careful = numbered(unit.function, true)?;
-        if price(&careful.0).is_some_and(|kept| kept < crossed) { careful } else { crossing }
     } else {
-        crossing
+        match crossing_price(unit, outer, costs, room, trips, &crossing.0) {
+            // The careful numbering forwards no load crossing one forwards, so where crossing spills nothing it can
+            // only be dearer in work: it is not made.
+            Some((_, true)) | None => crossing,
+            Some((crossed, false)) => {
+                let careful = numbered(unit.function, true)?;
+                if price(&careful.0).is_some_and(|kept| kept < crossed) { careful } else { crossing }
+            }
+        }
     };
     *unit.function = chosen.0;
     Ok(chosen.1)
+}
+
+/// What `function` costs, as `profit::motion_price` has it, and whether it fits its registers everywhere: the work is
+/// not weighed where it does.
+fn crossing_price(
+    unit: &Unit,
+    outer: &Outer,
+    costs: &OperationCosts,
+    room: crate::spill::Room,
+    trips: &IndexMap<i64, i64>,
+    function: &Function,
+) -> Option<(i64, bool)> {
+    let frequency = profit::_frequencies(unit.context, unit.metadata, &outer.globals, function, Some(trips))?;
+    let forecast = profit::spill_forecast(
+        unit.context,
+        unit.layout,
+        function,
+        costs,
+        room,
+        &|inst| crate::spill::kept_across(outer, unit.context, function, inst),
+        &frequency,
+    )?;
+    if forecast.peak <= 0 {
+        return Some((0, true));
+    }
+    let work = profit::weighted(unit.context, unit.layout, function, outer.callees(), costs, &frequency)?;
+    Some((work + forecast.cost, false))
 }
 
 /// Translate simultaneously: an incoming phi value belongs to the prior edge.
