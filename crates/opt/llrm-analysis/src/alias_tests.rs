@@ -1218,3 +1218,78 @@ fn initialized_solves_the_pointer_values_of_a_body_once() {
     initialized(&Procedure::of(unit), &IndexMap::default()).unwrap();
     assert_eq!(crate::alias::value_solves() - before, 1, "initialized solved the pointer values again");
 }
+
+/// A loop the shape does not know of: the shape was taken before a copy loop
+/// was spliced in, so its dominance says no block dominates a latch and no back
+/// edge widens the pointers that walk it. Each round adds an offset to them
+/// (`p`, `p+1`, `p+2`, ...) and the value solve never settles: qb-runtime's
+/// i8out.c compiled for minutes in a GlobalsAA that read a stale shape. Past
+/// gcc's `max-fields-for-field-sensitive` a fact is taken whole, and the solve
+/// ends in a few hundred rounds.
+#[test]
+fn test_a_pointer_that_walks_a_loop_the_shape_does_not_know_settles() {
+    let text = "define internal void @copy(ptr %a, ptr %b, i16 %n) {
+entry:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %entry ], [ %next, %body ]
+  %p = phi ptr [ %a, %entry ], [ %p1, %body ]
+  %q = phi ptr [ %b, %entry ], [ %q1, %body ]
+  %more = icmp ult i16 %i, %n
+  br i1 %more, label %body, label %exit
+
+body:
+  %v = load i8, ptr %q
+  store i8 %v, ptr %p
+  %p1 = getelementptr inbounds i8, ptr %p, i16 1
+  %q1 = getelementptr inbounds i8, ptr %q, i16 1
+  %next = add i16 %i, 1
+  br label %head
+
+exit:
+  ret void
+}
+
+define void @f(ptr %x, ptr %y, i16 %m) {
+entry:
+  call void @copy(ptr %x, ptr %y, i16 %m)
+  ret void
+}
+";
+    let mut module = crate::testing::parsed(text);
+    let layout = crate::testing::layout(&module);
+    let (copy, f) = (module.named("copy").unwrap(), module.named("f").unwrap());
+    let body = module.global(copy).function().unwrap().clone();
+    let stale = crate::cfg::Shape::of(module.global(f).function().unwrap());
+    let call = {
+        let function = module.global(f).function().unwrap();
+        function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| llrm_mir::memory::callee(&module.context, function, inst) == Some(copy))
+            .unwrap()
+    };
+    let llrm_mir::module::GlobalKind::Function(function) = &mut module.globals[f.0 as usize].kind else {
+        unreachable!()
+    };
+    llrm_mir::splice::splice(&mut module.context, function, call, &body);
+    let function = module.global(f).function().unwrap();
+    let known = crate::cfg::Shape::of(function);
+    let exposed = std::collections::BTreeSet::new();
+    let solve = |shape: &crate::cfg::Shape| {
+        let unit = crate::memory::Unit::of(&module, &layout, function).with_shape(shape).with_exposed(&exposed);
+        let (before, collapsed) = (crate::alias::value_rounds(), crate::alias::limit_collapses());
+        crate::alias::point_values(&unit).unwrap();
+        (crate::alias::value_rounds() - before, crate::alias::limit_collapses() - collapsed)
+    };
+    // The premise: with the shape of the spliced body the loop is known,
+    // nothing grows without bound, and nothing needs the limit.
+    let (settled, collapsed) = solve(&known);
+    assert_eq!(collapsed, 0, "the solve with the right shape reached the limit");
+    assert!(settled < 20, "{settled} rounds with the right shape");
+    // The stale shape: the pointers walk past the limit and are taken whole.
+    let (rounds, collapsed) = solve(&stale);
+    assert!(collapsed > 0, "the premise: the pointers walked past the limit");
+    assert!(rounds < 4 * crate::alias::MAX_FIELDS_FOR_FIELD_SENSITIVE, "{rounds} rounds");
+}
