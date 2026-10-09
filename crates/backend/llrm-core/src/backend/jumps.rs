@@ -99,7 +99,7 @@ fn inverted(body: &LirBody) -> LirBody {
         let (last_what, branch_what) = (last.what.as_ref().expect(NO_OP), branch.what.as_ref().expect(NO_OP));
         let after = blocks[index + 1..].iter().find(|next| !next.phis.is_empty() || next.insns.iter().any(|one| !one.is_meta())).map(|next| next.at);
         let opposite = branch_what.name.as_deref().and_then(|name| _OPPOSITE.get(name));
-        if last_what.op != Operation::Jump || branch_what.op != Operation::Branch || branch_what.indirect || branch_what.target.is_none() || branch_what.target != after || last_what.target.is_none() {
+        if last_what.op != Operation::Jump || branch_what.op != Operation::Branch || branch_what.indirect || branch_what.target.is_none() || branch_what.target != after || last_what.target.is_none() || blocks[index].succ.len() != 2 {
             continue;
         }
         let Some(opposite) = opposite else { continue };

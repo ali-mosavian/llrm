@@ -904,3 +904,22 @@ fn test_a_branch_taken_to_the_next_block_then_a_jump_is_one_opposite_branch() {
     let names: Vec<(String, Option<i64>)> = got.blocks[0].insns.iter().map(|one| one.what.as_ref().unwrap()).map(|what| (what.name.clone().unwrap(), what.target)).collect();
     assert_eq!(names, vec![("cmp".to_owned(), None), ("je".to_owned(), Some(3))]);
 }
+
+/// A block with two branches and a jump (a three-way split) has three successors; flipping its second branch would leave two of them
+/// with no instruction choosing (queens nib: "block 0 leaves for (13, 20, 14)").
+#[test]
+fn test_a_three_way_block_keeps_its_jump() {
+    let body = LirBody::new(
+        "f",
+        1,
+        vec![
+            LirBlock { succ: vec![4, 2, 3], ..LirBlock::new(1, vec![_compare(1), _branch(2, "je", 4), _branch(3, "jne", 2), _jump(4, 3)]) },
+            LirBlock { succ: vec![], ..LirBlock::new(2, vec![_return(5)]) },
+            LirBlock { succ: vec![], ..LirBlock::new(3, vec![_return(6)]) },
+            LirBlock { succ: vec![], ..LirBlock::new(4, vec![_return(7)]) },
+        ],
+        IndexMap::default(),
+        IndexMap::default(),
+    );
+    assert_eq!(inverted(&body).blocks[0].insns.len(), 4);
+}

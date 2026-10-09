@@ -1,4 +1,4 @@
-reason = "PostRAMachineSinking: a copy only one successor reads moves into it: instructions fall (rectwo c -15%, hanoi nib -24%, hanoi c -7%, fib nib -22%, fib c -3.8%, bintree -3%), code bytes equal or smaller"
+reason = "branch inversion after tail copying: a jump over a branch to the next block is gone: queens -0.4% instructions, code bytes 1-6 smaller (shellsort, quicksort, queens)"
 blessed = "2026-10-09"
 
 [c.O2]
