@@ -26,7 +26,7 @@ use crate::cfg;
 use crate::consts::Calls;
 use crate::graph::loops;
 use crate::manager::{Annotated, CallEffects};
-use crate::memory::{MemRef, Unit, own_bytes, unmodeled_write};
+use crate::memory::{MemRef, ObjectRef, Unit, own_bytes, unmodeled_write};
 use crate::pointerfacts::{self, Location};
 use crate::ranges::Interval;
 use crate::regions::{displaced_span, overlapping};
@@ -84,6 +84,50 @@ pub struct Accesses {
     touched: IndexMap<InstId, Footprint>,
     /// Of each call, the bytes it writes before reading any.
     fills: IndexMap<InstId, Vec<MemRef>>,
+}
+
+/// The objects an instruction's writes can reach, for ruling a cell out before
+/// any alias reasoning: a cell none of whose objects may alias any of them is
+/// not written. `unknown` when a write names no object, or may write anything.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Reach {
+    unknown: bool,
+    objects: Vec<ObjectRef>,
+}
+
+impl Reach {
+    fn of(writes: &Option<Rc<[MemRef]>>) -> Self {
+        let Some(writes) = writes else { return Self { unknown: true, objects: Vec::new() } };
+        let mut reach = Self::default();
+        for write in writes.iter() {
+            match write.provenance.as_ref().filter(|one| !one.slices.is_empty()) {
+                None => reach.unknown = true,
+                Some(provenance) => {
+                    for slice in &provenance.slices {
+                        if !reach.objects.contains(&slice.object) {
+                            reach.objects.push(slice.object);
+                        }
+                    }
+                }
+            }
+        }
+        reach
+    }
+
+    /// Whether the writes certainly leave `cell` alone, by the objects each
+    /// names alone.
+    pub fn misses(
+        &self,
+        cell: &MemRef,
+    ) -> bool {
+        !self.unknown
+            && cell.provenance.as_ref().is_some_and(|one| {
+                !one.slices.is_empty()
+                    && one.slices.iter().all(|slice| {
+                        self.objects.iter().all(|written| !crate::memory::objects_may_alias(&slice.object, written))
+                    })
+            })
+    }
 }
 
 impl Analysis for Accesses {
@@ -396,6 +440,13 @@ fn check_clobbers() -> bool {
 
 #[cfg(test)]
 thread_local! {
+    /// Writes asked of `may_clobber` by the walks: the alias reasoning the
+    /// object summary spares.
+    pub(crate) static MAY_CLOBBERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! {
     /// Times a cell was looked up by value (hashed whole) rather than by
     /// number, for a test that a walk does it once.
     pub(crate) static CELL_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -409,6 +460,9 @@ pub struct MemorySSA<'a> {
     pub phis: IndexMap<i64, Access>,
     /// What each def writes, as `Accesses::writes` says.
     written: IndexMap<InstId, Option<Rc<[MemRef]>>>,
+    /// What each def's writes can reach, worked out when a walk first asks of
+    /// the def.
+    reaches: std::cell::RefCell<IndexMap<InstId, Rc<Reach>>>,
     unit: Unit<'a>,
     /// Whether a def's writes may clobber a cell, once for each pair: the loads
     /// of one address ask it of the same defs again and again.
@@ -492,7 +546,20 @@ impl MemorySSA<'_> {
             return remembered == 2;
         }
         let stores = self.written[&site].as_deref().unwrap_or(&[]);
-        let found = stores.iter().any(|store| may_clobber(&self.unit, None, cell, store));
+        // Objects that cannot meet rule a def out before any alias reasoning.
+        let reach = Rc::clone(
+            self.reaches.borrow_mut().entry(site).or_insert_with(|| Rc::new(Reach::of(&self.written[&site]))),
+        );
+        let missed = reach.misses(cell);
+        let found = if missed && !check_clobbers() {
+            false
+        } else {
+            #[cfg(test)]
+            MAY_CLOBBERS.with(|asked| asked.set(asked.get() + stores.len()));
+            let found = stores.iter().any(|store| may_clobber(&self.unit, None, cell, store));
+            assert!(!(missed && found), "LLRM_CHECK_CLOBBERS: objects that cannot meet were found to clobber");
+            found
+        };
         RUNS.with(|runs| runs.set(runs.get() + 1));
         let mut memo = self.clobbers.borrow_mut();
         if memo.len() <= slot {
@@ -814,6 +881,7 @@ pub fn built<'a>(
         sites,
         phis,
         written,
+        reaches: Default::default(),
         unit: *unit,
         clobbers: Default::default(),
         slots: Default::default(),
