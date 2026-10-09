@@ -145,3 +145,18 @@ def test_a_rewrite_prices_the_siblings_of_the_values_it_changed_only():
         source.write_text(scaling.AXES["cells"](224))
         run = steps(compiler, source, "-O2")
     assert run["facts sibling prices"] < 70, f"cells N=224 -O2: facts sibling prices cost {run['facts sibling prices']} Minstr (70 allowed; 263 before): {run}"
+
+
+def test_a_rewrite_that_changes_most_instructions_finds_the_homes_afresh():
+    """`intervals homes` compared an earlier body's instructions with this one's before taking its answer, and a spill of a value
+    read all through a block changes most of them: 895 Minstr on `cells` at N=448, where finding the homes' intervals afresh costs
+    316. A comparison longer than the instructions that name a home is not made."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    assert run["intervals homes"] < 700, f"cells N=448 -O2: intervals homes cost {run['intervals homes']} Minstr (700 allowed; 895 before): {run}"
