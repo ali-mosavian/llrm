@@ -61,6 +61,12 @@ fn reverse_post_order(body: &LirBody) -> Vec<i64> {
     order
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Blocks whose instructions were read to find who reads a spill cell.
+    static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The register a plain spill store writes to a fixed frame cell, and the cell.
 fn spill_store_of(one: &Insn) -> Option<(Reg, Mem)> {
     if !one.spill_store || !one.clobbers.is_empty() || !one.requires.is_empty() || !one.delivers.is_empty() {
@@ -94,28 +100,133 @@ fn may_read(
     what.sources.iter().any(reads) || (!plain_store && what.dests.iter().any(reads))
 }
 
-/// Whether a block from `from` on may read `cell`, before or after any store to
-/// it.
-fn read_beyond(
-    body: &LirBody,
-    by_at: &IndexMap<i64, &LirBlock>,
-    from: i64,
-    cell: &Mem,
-) -> bool {
-    let mut seen = crate::support::hash::HashSet::default();
-    let mut stack = vec![from];
-    while let Some(at) = stack.pop() {
-        if !seen.insert(at) {
-            continue;
+/// Which spill cells each block, and the blocks reachable from it, may read:
+/// liveness over cells, worked out once for the function. `read_beyond` asked
+/// it per store and successor by a walk of everything reachable, which grew
+/// with the square of the stores.
+struct Reads {
+    /// The cells of the spill stores, as the byte ranges they cover.
+    keys: IndexMap<(i64, i64), usize>,
+    /// Per block, a bit for each cell and one past them for "any cell".
+    later: IndexMap<i64, Vec<u64>>,
+}
+
+impl Reads {
+    fn of(body: &LirBody) -> Self {
+        let mut keys: IndexMap<(i64, i64), usize> = IndexMap::default();
+        for one in body.blocks.iter().flat_map(|block| &block.insns) {
+            if let Some((_, cell)) = spill_store_of(one) {
+                let low = cell.addr.map_or(0, |addr| addr.disp);
+                let next = keys.len();
+                keys.entry((low, low + i64::from(cell.width))).or_insert(next);
+            }
         }
-        let Some(block) = by_at.get(&at) else { continue };
-        if let Some(hit) = block.insns.iter().find(|one| may_read(one, cell)) {
-            return true;
+        let any = keys.len();
+        let words = (any + 1).div_ceil(64);
+        let sorted: Vec<((i64, i64), usize)> = {
+            let mut sorted: Vec<_> = keys.iter().map(|(range, id)| (*range, *id)).collect();
+            sorted.sort();
+            sorted
+        };
+        let widest = sorted.iter().map(|((low, high), _)| high - low).max().unwrap_or(0);
+        // Whether the frame and another fixed space may overlap is a question
+        // of the two spaces, not of the offsets.
+        let mut across: IndexMap<(crate::objectfile::module::Space, i64), bool> = IndexMap::default();
+        let proxy =
+            body.blocks.iter().flat_map(|block| &block.insns).find_map(|one| spill_store_of(one)).map(|(_, cell)| cell);
+        let mut reading: IndexMap<i64, Vec<u64>> = IndexMap::default();
+        for block in &body.blocks {
+            #[cfg(test)]
+            SCANNED.with(|scanned| scanned.set(scanned.get() + 1));
+            let mut bits = vec![0u64; words];
+            let mut set = |id: usize, bits: &mut Vec<u64>| bits[id / 64] |= 1 << (id % 64);
+            for one in &block.insns {
+                let Some(what) = one.what.as_ref() else { continue };
+                // A plain store to a cell reads nothing of it.
+                let stores = what.op == Operation::Move && what.dests.len() == 1;
+                let places = what.sources.iter().chain(if stores { [].iter() } else { what.dests.iter() });
+                for place in places {
+                    match place {
+                        Loc::Address(_) => set(any, &mut bits),
+                        Loc::Mem(other) => {
+                            let fixed = other.base.is_none()
+                                && other.index.is_none()
+                                && other.selector.is_none()
+                                && other.addr.is_some();
+                            match other.addr.filter(|_| fixed) {
+                                Some(addr) if addr.space == crate::objectfile::module::Space::Frame => {
+                                    let (low, high) = (addr.disp, addr.disp + i64::from(other.width));
+                                    let from = sorted.partition_point(|((start, _), _)| *start < low - widest);
+                                    for ((start, end), id) in &sorted[from..] {
+                                        if *start >= high {
+                                            break;
+                                        }
+                                        if *end > low {
+                                            set(*id, &mut bits);
+                                        }
+                                    }
+                                }
+                                Some(addr) => {
+                                    let overlaps = *across
+                                        .entry((addr.space, addr.index))
+                                        .or_insert_with(
+                                            || proxy
+                                                .as_ref()
+                                                .is_none_or(|cell| !crate::backend::storedhomes::apart(cell, other)),
+                                        );
+                                    if overlaps {
+                                        set(any, &mut bits);
+                                    }
+                                }
+                                None => set(any, &mut bits),
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            reading.insert(block.at, bits);
         }
-        stack.extend(block.succ.iter().copied());
+        // Backwards to a fixed point: what a block reads, and what is read
+        // after it.
+        let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &block.succ)).collect();
+        let mut later = reading;
+        let order: Vec<i64> = reverse_post_order(body).into_iter().rev().collect();
+        loop {
+            let mut changed = false;
+            for at in &order {
+                let mut bits = later[at].clone();
+                for to in succ[at] {
+                    if let Some(after) = later.get(to) {
+                        for (word, other) in bits.iter_mut().zip(after) {
+                            *word |= other;
+                        }
+                    }
+                }
+                if bits != later[at] {
+                    later.insert(*at, bits);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        Self { keys, later }
     }
-    let _ = body;
-    false
+
+    /// Whether the blocks from `from` on may read `cell`.
+    fn beyond(
+        &self,
+        from: i64,
+        cell: &Mem,
+    ) -> bool {
+        let Some(bits) = self.later.get(&from) else { return false };
+        let low = cell.addr.map_or(0, |addr| addr.disp);
+        let id = self.keys[&(low, low + i64::from(cell.width))];
+        let has = |bit: usize| bits[bit / 64] >> (bit % 64) & 1 == 1;
+        has(id) || has(self.keys.len())
+    }
 }
 
 /// `body` with each copy moved into the one successor that reads it. One pass
@@ -131,6 +242,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
         return body.clone();
     }
     let live = live_in(body);
+    let reads = std::cell::OnceCell::new();
     let mut preds: IndexMap<i64, usize> = IndexMap::default();
     for block in &body.blocks {
         for to in &block.succ {
@@ -152,8 +264,11 @@ pub fn sunk(body: &LirBody) -> LirBody {
             let one = Arc::clone(&insns[&at][index]);
             if let Some((source, cell)) = spill_store_of(&one) {
                 let read = _lanes(source.register);
-                let readers: Vec<i64> =
-                    to.iter().copied().filter(|next| read_beyond(body, &by_at, *next, &cell)).collect();
+                let readers: Vec<i64> = to
+                    .iter()
+                    .copied()
+                    .filter(|next| reads.get_or_init(|| Reads::of(body)).beyond(*next, &cell))
+                    .collect();
                 let [target] = readers[..] else { continue };
                 if target == at
                     || !insns.contains_key(&target)
@@ -436,5 +551,70 @@ mod tests {
         );
         let after = sunk(&body);
         assert_eq!((copies_in(&after, 1), copies_in(&after, 7), copies_in(&after, 9)), (0, 0, 1));
+    }
+
+    /// A chain of `n` diamonds, each head storing a spill cell ahead of the
+    /// branch to an arm that reads it.
+    fn diamonds(n: i64) -> LirBody {
+        use crate::objectfile::module::{Addr, Space};
+        let cell = |k: i64| {
+            let addr = Addr {
+                space: Space::Frame,
+                disp: -4 * (k + 1),
+                index: -(k + 1),
+                base: Register::None,
+                segment: Register::None,
+            };
+            crate::model::ir::Mem { through: Register::BP, ..crate::model::ir::Mem::new(Some(addr), 2) }
+        };
+        let mut blocks = Vec::new();
+        for k in 0..n {
+            let (head, arm, next) = (10 * k + 1, 10 * k + 5, 10 * (k + 1) + 1);
+            let store = Arc::new(Insn {
+                spill_store: true,
+                ..Arc::unwrap_or_clone(insn(head, Operation::Move, "mov", vec![Loc::Mem(cell(k))], vec![r(AX)], None))
+            });
+            let branch = insn(head + 2, Operation::Branch, "jl", vec![], vec![], Some(arm));
+            blocks.push(block(
+                head,
+                vec![store, insn(head + 1, Operation::Compare, "cmp", vec![], vec![r(AX), r(BX)], None), branch],
+                vec![arm, next],
+            ));
+            let read = insn(arm, Operation::Move, "mov", vec![r(DX)], vec![Loc::Mem(cell(k))], None);
+            blocks.push(block(
+                arm,
+                vec![read, insn(arm + 1, Operation::Jump, "jmp", vec![], vec![], Some(next))],
+                vec![next],
+            ));
+        }
+        let ret = Arc::new(Insn {
+            reads_complete: true,
+            ..Arc::unwrap_or_clone(insn(10 * n + 1, Operation::Return, "ret", vec![], vec![], None))
+        });
+        blocks.push(block(10 * n + 1, vec![ret], vec![]));
+        LirBody::new("f", 1, blocks, IndexMap::default(), IndexMap::default())
+    }
+
+    fn scanned(n: i64) -> usize {
+        super::SCANNED.with(|scanned| scanned.set(0));
+        let after = sunk(&diamonds(n));
+        // Each store went to its arm.
+        assert!(
+            after
+                .blocks
+                .iter()
+                .filter(|block| block.at % 10 == 1)
+                .all(|head| head.insns.iter().all(|one| !one.spill_store))
+        );
+        super::SCANNED.with(std::cell::Cell::get)
+    }
+
+    /// Each spill store read the blocks beyond each successor again: the work
+    /// grew with the square of the stores (`read_beyond`, found in review
+    /// of the spill-store sinking).
+    #[test]
+    fn test_the_blocks_read_to_place_spill_stores_grow_with_the_stores() {
+        let (small, large) = (scanned(40), scanned(80));
+        assert!(large <= 3 * small, "40 stores read {small} blocks, 80 read {large}");
     }
 }
