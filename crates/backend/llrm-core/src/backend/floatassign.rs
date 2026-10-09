@@ -31,7 +31,7 @@ use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet, IndexMap, IndexSet};
 
-/// Rounds `assigned` took to settle, and blocks written over all of them.
+// Rounds `assigned` took to settle, and blocks written over all of them.
 #[cfg(test)]
 thread_local! {
     static ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -1750,9 +1750,13 @@ pub fn assigned(
             at_of.entry((block.at, one.at)).or_default().push(position);
         }
     }
+    #[cfg(test)]
     let mut rounds = 0;
     loop {
-        rounds += 1;
+        #[cfg(test)]
+        {
+            rounds += 1;
+        }
         let rewritten = plan.rewritten(&spilled, &mut frame, cpu)?;
         let Some((block, position)) = _crowded(&rewritten, &_floating_values(&rewritten)) else {
             #[cfg(test)]
