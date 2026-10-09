@@ -655,6 +655,30 @@ pub fn _next_value(body: &LirBody) -> u32 {
     largest + 1
 }
 
+/// `_next_value`, from the postings the allocator follows the body with: the
+/// largest value they hold and the phis' results, not a walk of every
+/// instruction. For the allocator's own rewrites, which ask it of each body
+/// they make.
+thread_local! {
+    static NEXT_VALUE_ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread asked `_next_value_following`, for a test that
+/// the allocator's rewrites do.
+pub fn next_value_asks() -> usize {
+    NEXT_VALUE_ASKS.with(std::cell::Cell::get)
+}
+
+pub fn _next_value_following(body: &LirBody) -> u32 {
+    let phis = body.blocks.iter().flat_map(|block| block.phis.iter().map(|phi| phi.result)).max().unwrap_or(0);
+    let found = crate::backend::postings::following(body, |postings| postings.largest()).max(phis) + 1;
+    NEXT_VALUE_ASKS.with(|n| n.set(n.get() + 1));
+    if llrm_support::env_set("LLRM_CHECK_POSTINGS") {
+        assert_eq!(found, _next_value(body), "{}: the next value from the postings differs from the walk", body.name);
+    }
+    found
+}
+
 /// One block `value` is referenced in: LLVM's `SplitAnalysis::BlockInfo`.
 struct UseBlock {
     block: i64,
@@ -1433,6 +1457,20 @@ mod tests {
         for value in &values {
             assert_eq!(all[value], super::_references(&body, *value), "references of value {value}");
         }
+    }
+
+    /// Every spill, carve and rewrite walked all instructions of the body for
+    /// the largest value it names (`_next_value`: d_faces -O1, 1.2 k asks,
+    /// 274 M of 24.6 G instructions). The allocator's asks read it off the
+    /// postings the body is followed with, and get the same number after
+    /// the body changes.
+    #[test]
+    fn test_the_next_value_comes_from_the_postings_and_follows_the_body() {
+        let body = _pointer_across_a_loop();
+        assert_eq!(super::_next_value_following(&body), super::_next_value(&body));
+        let cut = carved(&body, 3, 9, 2, &region(&body, &[0x10])).expect("cut");
+        assert_eq!(super::_next_value_following(&cut), super::_next_value(&cut));
+        assert_eq!(super::_next_value_following(&cut), 10, "the carve made value 9");
     }
 
     /// A carve copied every block of the body three times (into the new blocks,

@@ -64,6 +64,11 @@ impl Postings {
         self.frames.get(block).map_or(&[], Vec::as_slice)
     }
 
+    /// The largest value an instruction defines or reads, or 0.
+    pub fn largest(&self) -> u32 {
+        self.defs.keys().chain(self.uses.keys()).copied().max().unwrap_or(0)
+    }
+
     pub fn needs(
         &self,
         value: u32,
