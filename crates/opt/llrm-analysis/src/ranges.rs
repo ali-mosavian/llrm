@@ -520,7 +520,7 @@ pub fn dominated_edges_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Re
 }
 
 /// What is known of each value at a point: an interval of it.
-pub type Intervals = IndexMap<ValueId, Interval>;
+pub type Intervals = llrm_support::hash::SparseIdMap<ValueId, Interval>;
 
 type Scope = Rc<Intervals>;
 
