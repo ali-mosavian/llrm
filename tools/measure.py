@@ -125,14 +125,29 @@ def base_of(head: str, ref: str = "origin/main") -> str:
     return git("rev-parse", f"{head}^1") if base == git("rev-parse", head) else base
 
 
+def checked_out(sha: str, tree: Path, source: Path = ROOT) -> Path:
+    """`sha` checked out in `tree`, a clone of `source` that measure.py owns (made once, never a worktree of anyone's repository): the
+    commit is fetched from `source`, then from `source`'s own origin, so one that exists only on the remote is built too."""
+    if not (tree / ".git").exists():
+        tree.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "clone", "--quiet", "--no-checkout", str(source), str(tree)], check=True)
+        origin = subprocess.run(["git", "remote", "get-url", "origin"], cwd=source, capture_output=True, text=True)
+        if origin.returncode == 0:
+            git("remote", "add", "upstream", origin.stdout.strip(), cwd=tree)
+    if subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=tree, capture_output=True).returncode:
+        for remote in ("origin", "upstream"):
+            if subprocess.run(["git", "fetch", "--quiet", remote, sha], cwd=tree, capture_output=True).returncode == 0:
+                break
+        else:
+            raise SystemExit(f"measure: {sha[:9]} is in neither {source} nor its origin")
+    git("checkout", "--quiet", "--detach", "--force", sha, cwd=tree)
+    return tree
+
+
 def built(sha: str) -> Path:
     """`sha` built in a tree and target directory of its own (reused, so each build is an increment); its release directory."""
-    tree = BUILD / "tree"
     BUILD.mkdir(parents=True, exist_ok=True)
-    if not tree.is_dir():
-        git("worktree", "add", "--detach", str(tree), sha)
-    else:
-        git("checkout", "--detach", "--force", sha, cwd=tree)
+    tree = checked_out(sha, BUILD / "tree")
     env = {**os.environ, "CARGO_TARGET_DIR": str(BUILD / "target")}
     env.pop("LLRM_BIN", None)
     done = subprocess.run(["bash", "-c", gate.BUILD], cwd=tree, env=env, capture_output=True, text=True)
