@@ -1,5 +1,6 @@
 """scaling_gate.py: a pass gone quadratic reads as 2N/N = 4, a linear one as 2, and neither direction of change passes unseen."""
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -69,3 +70,13 @@ def test_the_costs_read_back_give_a_second_difference_of_fixed_and_linear_work_n
     quadratic = gate.costs("straight", "O2", tmp_path, stand_in("60000 * n + 300 * n * n + 5000000"), "q")
     assert abs(second(fixed_and_linear)) < 0.03 * fixed_and_linear[2] and abs(second(cheaper)) < 0.03 * cheaper[2]
     assert second(quadratic) > 0.1 * quadratic[2]
+
+
+def test_the_16_bit_axes_compile_with_m16_and_the_others_with_m32():
+    """Every axis ran -m32 only, and `chain` at N=7 with -m16 never finished unseen. The interprocedural axes run at both."""
+    import levels_time
+    sixteen = gate.commanded("chain-m16", levels_time.command)("llrm", "O2", Path("x.c"))
+    assert "-m16" in sixteen and "-m32" not in sixteen
+    assert "-m32" in gate.commanded("chain", levels_time.command)("llrm", "O2", Path("x.c"))
+    assert {"chain-m16", "callers-m16"} <= set(gate.SIZES)
+    assert scaling.AXES["chain"](3) == gate.generated("chain-m16", 3)
