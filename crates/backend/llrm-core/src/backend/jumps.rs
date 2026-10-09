@@ -90,6 +90,7 @@ pub fn optimized(
 ) -> Result<LirBody, masm::Unprintable> {
     let mut candidate = _placed(&_hoisted(body), size)?;
     let baseline = threaded(&candidate);
+    let settled = candidate.clone();
     // Merging one physical tail may make the condition selecting between its
     // former copies dead; deleting that compare can in turn make predecessor
     // tails identical.  Settle those two machine facts before final threading
@@ -103,7 +104,9 @@ pub fn optimized(
             break;
         }
     }
-    let placed = preferred(&baseline, &threaded(&candidate)).clone();
+    // Merging nothing leaves the candidate the baseline was threaded from.
+    let again = if candidate == settled { baseline.clone() } else { threaded(&candidate) };
+    let placed = preferred(&baseline, &again).clone();
     Ok(inverted(&if size {
         placed
     } else {
@@ -845,7 +848,18 @@ pub fn threaded(body: &LirBody) -> LirBody {
     let mut body = _reachable(&body, body.blocks.clone());
     let protected: BTreeSet<i64> = body.loop_trip_counts.iter().map(|(header, _count)| *header).collect();
     let mut at: IndexMap<i64, usize> = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect();
-    while _step(&mut body, &mut at, &protected) {}
+    // One pass applies every change it meets, going on from the changed block
+    // (LLVM's BranchFolding, gcc's `cleanup_cfg`); a change can open one in a
+    // block before it, so passes repeat from the top until one finds none.
+    let (mut from, mut visits) = (0, 0);
+    loop {
+        match _step(&mut body, &mut at, &protected, from, &mut visits) {
+            Some(next) => from = next,
+            None if from == 0 => break,
+            None => from = 0,
+        }
+    }
+    body.facts.0.bump_by("jump-visits", visits);
     body
 }
 
@@ -1363,9 +1377,12 @@ pub fn _step(
     body: &mut LirBody,
     at: &mut IndexMap<i64, usize>,
     protected: &BTreeSet<i64>,
-) -> bool {
+    from: usize,
+    visits: &mut usize,
+) -> Option<usize> {
     let mut blocks = std::mem::take(&mut body.blocks);
-    for index in 0..blocks.len() {
+    for index in from..blocks.len() {
+        *visits += 1;
         // The block's last two real instructions, which is all the rules read
         // of the rest: nothing is copied for a block no rule applies
         // to.
@@ -1378,6 +1395,7 @@ pub fn _step(
             continue;
         }
         let block = blocks[index].clone();
+        let here = block.at;
         let last = &last;
         // Control falls through blocks of only meta instructions, as layout
         // places them.
@@ -1394,7 +1412,7 @@ pub fn _step(
             blocks[index] = _retargeted(&block, last, onward);
             body.blocks = blocks;
             _stranded(body, at);
-            return true;
+            return Some(at.get(&here).copied().unwrap_or(0));
         }
         if last_what.op == Operation::Jump && target == after {
             // A fall-through needs no machine jump.  A decoded jump may still
@@ -1415,7 +1433,7 @@ pub fn _step(
                 .collect();
             blocks[index] = LirBlock { insns: kept, ..block };
             body.blocks = blocks;
-            return true;
+            return Some(at.get(&here).copied().unwrap_or(0));
         }
         if last_what.op == Operation::Jump
             && before.as_ref().is_some_and(|one| one.what.as_ref().expect(NO_OP).op == Operation::Branch)
@@ -1440,7 +1458,7 @@ pub fn _step(
                     .collect();
                 blocks[index] = LirBlock { insns, ..block };
                 body.blocks = blocks;
-                return true;
+                return Some(at.get(&here).copied().unwrap_or(0));
             }
         }
         let opposite = last_what.name.as_deref().and_then(|name| _OPPOSITE.get(name));
@@ -1474,12 +1492,12 @@ pub fn _step(
                 blocks[index + 1] = LirBlock { succ: Vec::new(), ..over };
                 body.blocks = blocks;
                 _stranded(body, at);
-                return true;
+                return Some(at.get(&here).copied().unwrap_or(0));
             }
         }
     }
     body.blocks = blocks;
-    false
+    None
 }
 
 /// The last two of `_real(block)`, the last first, without making the rest.
