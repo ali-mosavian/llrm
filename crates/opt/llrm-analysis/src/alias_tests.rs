@@ -1083,6 +1083,28 @@ fn a_typed_reference_is_copied_without_allocating() {
     drop((copy, copies));
 }
 
+/// A reference of a unit with no type tree was given the names of its type and
+/// every ancestor as new strings, for each reference: 7% of the compile's
+/// allocations (QCport). The names are read once for each type of a module.
+#[test]
+fn a_reference_of_a_unit_with_no_type_tree_reads_its_type_names_once() {
+    let parsed = Parsed::new(&format!(
+        "define void @f(ptr %p) {{\n  store i16 1, ptr %p, !tbaa !5\n  store i16 2, ptr %p, !tbaa !5\n  ret void\n}}\n{TYPE_TREE}"
+    ));
+    let unit = parsed.unit();
+    assert!(unit.tbaa.is_none(), "premise: the unit has no tree");
+    let stores = parsed.all(|op| matches!(op, Opcode::Store { .. }));
+    let first = crate::memory::lineage(&unit, stores[0]);
+    assert_eq!(first.len(), 3);
+    crate::memory::typed(&unit, stores[0]).expect("a name");
+    let before = counted::made();
+    let second = crate::memory::lineage(&unit, stores[1]);
+    let named = crate::memory::typed(&unit, stores[1]);
+    assert_eq!(counted::made() - before, 0, "the names of a type already read were read again");
+    assert_eq!(second, first);
+    assert!(named.is_some());
+}
+
 /// Picking the buckets a write reaches made a vector for the objects, one for
 /// the classes and one grown a few times for the answer: 7% of the compile's
 /// allocations (QCport). One vector, sized once, is the answer.
