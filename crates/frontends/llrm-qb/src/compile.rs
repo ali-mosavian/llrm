@@ -281,7 +281,7 @@ fn _compiler_switches(program: &model::Program) -> Result<i64, CompileError> {
         return Ok(0x1088); // BC /O /FPa /G2
     }
     let mut flags = match program.runtime {
-        model::RuntimeProfile::Qb45 => 0x1080,  // BC /O /FPi
+        model::RuntimeProfile::Qb45 | model::RuntimeProfile::Llrm => 0x1080, // BC /O /FPi; llrm keeps QB's
         model::RuntimeProfile::Pds71 => 0x1084, // BC /O /FPi /G2
         model::RuntimeProfile::Vbdos => 0x12C4, // BC /O /FPi /G3 /E
         model::RuntimeProfile::Freestanding => {

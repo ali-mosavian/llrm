@@ -61,7 +61,7 @@ pub fn _reg(register: Register) -> Loc {
 #[allow(non_snake_case)]
 pub fn _RUNTIME_FRAME_HEADER(runtime: model::RuntimeProfile) -> Result<i64, String> {
     match runtime {
-        model::RuntimeProfile::Qb45 => Ok(10),
+        model::RuntimeProfile::Qb45 | model::RuntimeProfile::Llrm => Ok(10),
         model::RuntimeProfile::Pds71 => Ok(18),
         model::RuntimeProfile::Vbdos => Ok(20),
         model::RuntimeProfile::Freestanding => Err(format!("KeyError: {}", runtime.repr())),
@@ -800,7 +800,7 @@ pub fn assembled(
             selection: options.selection,
             arch: &*options.arch,
             classes: &classes,
-            runtime: runtime.value(),
+            runtime: runtime.tables(),
             basic: true,
             zeroed: matches!(frame, Frame::Runtime { .. }),
         };

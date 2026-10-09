@@ -14,7 +14,7 @@ pub fn ROOT() -> PathBuf {
 /// `DIALECTS`: the QB-family `hir.Dialect` values.
 pub const DIALECTS: [&str; 5] = ["qbasic11", "qb45", "pds71", "vbdos", "quickr"];
 /// `RUNTIMES`: the QB-family `hir.RuntimeProfile` values.
-pub const RUNTIMES: [&str; 3] = ["qb45", "pds71", "vbdos"];
+pub const RUNTIMES: [&str; 4] = ["qb45", "pds71", "vbdos", "llrm"];
 /// `ARRAY_ORDERS`: every `hir.ArrayOrder` value.
 pub const ARRAY_ORDERS: [&str; 2] = ["column-major", "row-major"];
 
@@ -171,7 +171,7 @@ pub fn parsed(
     }
     let mut program = decoded(&stdout, frontend.checked_arrays)?;
     if frontend.checked_stack {
-        let family = program.runtime.value();
+        let family = program.runtime.tables();
         program.stack_check = Some(
             llrm_core::abi::runtime::semantics::stack(family)
                 .ok_or_else(|| FrontendError(format!("the {family} runtime states no stack limit")))?,
@@ -189,7 +189,7 @@ pub fn decoded(
 ) -> Result<model::Program, FrontendError> {
     let mut program =
         codec::decode(text).map_err(|error| FrontendError(format!("qbfront produced invalid HIR: {error}")))?;
-    let family = program.runtime.value();
+    let family = program.runtime.tables();
     for object_ in program.modules.iter_mut().flat_map(|module| &mut module.data) {
         if object_.linkage == model::DataLinkage::External && llrm_core::abi::runtime::named_only(&object_.name, family)
         {
@@ -221,4 +221,21 @@ pub fn decoded(
     program.promises.no_retain = llrm_core::abi::runtime::captures_nothing().into_iter().map(str::to_owned).collect();
     program.promises.no_return = llrm_core::abi::runtime::never_returning().into_iter().map(str::to_owned).collect();
     Ok(program)
+}
+
+/// The program's runtime calls made as the target calls any function it has not marked: the target's
+/// own convention (`native_cc`, its description's `cc`), the caller popping, the first argument the last pushed. The other runtimes keep their
+/// stack ABI, which the Microsoft routines fix.
+pub fn natively_called(
+    program: &mut model::Program,
+    native_cc: Option<&str>,
+) {
+    let named = native_cc.filter(|cc| *cc != "cdecl").map(str::to_owned);
+    for function in program.modules.iter_mut().flat_map(|module| &mut module.functions) {
+        for call in function.calls.iter_mut().filter(|call| call.callee.is_none()) {
+            call.cleanup = model::StackCleanup::Caller;
+            call.order.reverse();
+            call.convention = named.clone();
+        }
+    }
 }

@@ -20,7 +20,7 @@ use llrm_core::driver::{
 use llrm_core::hir::codec;
 
 use super::compile;
-use super::driver::{Frontend, parsed};
+use super::driver::{self, Frontend, parsed};
 use super::qbstages;
 
 fn usage() -> String {
@@ -49,6 +49,12 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let (mut dump_hir, mut flags, mut dump) = (None, Flags::default(), None);
     let mut at = 0;
     while at < argv.len() {
+        // The runtime the program calls: the Microsoft ones by their stack ABI, or llrm's by the target's own.
+        if let Some(runtime) = argv[at].strip_prefix("-fqb-runtime=") {
+            frontend.runtime = runtime.to_owned();
+            at += 1;
+            continue;
+        }
         if flags.take(argv, &mut at)? {
             at += 1;
             continue;
@@ -119,10 +125,13 @@ pub fn main(argv: &[String]) -> i32 {
         if let Some(dump) = &args.dump {
             qbstages::dumped(&args.source, dump, &args.frontend, &args.codegen)?;
         }
-        let program = llrm_core::support::debug::timed("frontend", || {
+        let mut program = llrm_core::support::debug::timed("frontend", || {
             parsed(&args.source, &args.frontend, args.dump_hir.as_deref())
         })
         .map_err(|error| error.0)?;
+        if program.runtime.calls_natively() {
+            driver::natively_called(&mut program, args.codegen.arch.calling().native().cc.as_deref());
+        }
         if args.flags.assembly {
             let module = compile::assembled(&program, None, &args.codegen).map_err(|error| error.to_string())?;
             let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));

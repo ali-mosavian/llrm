@@ -14,14 +14,14 @@ static void finish(void)
 }
 
 /* B$CEND: SYSTEM and END. */
-void QB B_CEND(void)
+void B_CEND(void)
 {
     b_errnum = 0;
     finish();
 }
 
 /* B$CENP: the end of the module; an ON ERROR handler still running is a No RESUME error. */
-void QB B_CENP(void)
+void B_CENP(void)
 {
     if (b_inonerr)
         qb_no_resume();

@@ -1,16 +1,15 @@
-/* PRINT of one value (QB rt/prnval.asm B$P<terminator><type>).  The terminator is C for a comma,
-   S for a semicolon and E for the end of the statement; the type is I2, I4 or SD.  The frontend
-   passes the value and the entry removes it, so each is a fixed-arity entry here. */
+/* PRINT of one value (QB rt/prnval.asm B$P<terminator><type>).  The terminator is C for a comma, S for a
+   semicolon and E for the end of the statement; the type is I2, I4 or SD. */
 #include "console.h"
 #include "fout.h"
 #include "nhstutil.h"
 
-enum { COMMA, SEMI, EOL };
+enum Terminator { COMMA, SEMI, EOL };
 enum { ZONE = 14 };
 
-/* B$PRTCHK: make room for `len` more characters on the line, starting a new one when they do not fit.
-   False when it did (the caller then has nothing left to align). */
-static byte room(word len)
+/* B$PRTCHK: make room for `len` more characters on the line, ending it first when they do not fit.
+   False when it did. */
+static int room(word len)
 {
     byte pos = cn_pos(), width = cn_width();
 
@@ -21,50 +20,51 @@ static byte room(word len)
     return 0;
 }
 
-static void terminate(byte term)
+static void terminate(enum Terminator end)
 {
-    byte pad, n;
-
-    if (term == EOL) {
+    if (end == EOL) {
         cn_crlf();
-    } else if (term == COMMA) {
-        pad = ZONE - cn_pos() % ZONE;
+    } else if (end == COMMA) {
+        byte pad = ZONE - cn_pos() % ZONE;
+
         if (room(pad + ZONE))
-            for (n = 0; n < pad; n++)
+            while (pad--)
                 cn_putc(' ');
     }
 }
 
-static void number(long v, byte term)
+static void number(
+    long v,
+    enum Terminator end)
 {
-    byte text[FOUT_MAX];
-    word len = fout_i4(v, text);
+    char text[FOUT_MAX];
+    word length = fout_i4(v, text);
 
-    text[len++] = ' ';
-    room(len);
-    cn_write(text, len);
-    terminate(term);
+    text[length++] = ' ';
+    room(length);
+    cn_write(text, length);
+    terminate(end);
 }
 
-static void string(word sd, byte term)
+static void string(
+    SD *sd,
+    enum Terminator end)
 {
-    SD *s = (SD *)sd;
-
-    room(s->len);
-    cn_write((const byte *)s->ptr, s->len);
-    str_tmp_free(s);
-    terminate(term);
+    room(sd->len);
+    cn_write(sd->ptr, sd->len);
+    str_tmp_free(sd);
+    terminate(end);
 }
 
-void QB B_PCI2(int v) { number(v, COMMA); }
-void QB B_PSI2(int v) { number(v, SEMI); }
-void QB B_PEI2(int v) { number(v, EOL); }
-void QB B_PCI4(long v) { number(v, COMMA); }
-void QB B_PSI4(long v) { number(v, SEMI); }
-void QB B_PEI4(long v) { number(v, EOL); }
-void QB B_PCSD(word sd) { string(sd, COMMA); }
-void QB B_PSSD(word sd) { string(sd, SEMI); }
-void QB B_PESD(word sd) { string(sd, EOL); }
+void B_PCI2(int v) { number(v, COMMA); }
+void B_PSI2(int v) { number(v, SEMI); }
+void B_PEI2(int v) { number(v, EOL); }
+void B_PCI4(long v) { number(v, COMMA); }
+void B_PSI4(long v) { number(v, SEMI); }
+void B_PEI4(long v) { number(v, EOL); }
+void B_PCSD(SD *sd) { string(sd, COMMA); }
+void B_PSSD(SD *sd) { string(sd, SEMI); }
+void B_PESD(SD *sd) { string(sd, EOL); }
 #pragma aux B_PCI2 "B$PCI2"
 #pragma aux B_PSI2 "B$PSI2"
 #pragma aux B_PEI2 "B$PEI2"

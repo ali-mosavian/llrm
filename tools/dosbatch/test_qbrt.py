@@ -10,7 +10,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))
 
 import qbruntime  # noqa: E402
-import run_tests  # noqa: E402
 
 PROBES = sorted((qbruntime.dosbatch.ROOT / "tests" / "qbrt").glob("*.bas"))
 SOURCES = {path.stem: path for path in [*PROBES, *qbruntime.milestone_sources()]}
@@ -24,10 +23,11 @@ def results(tmp_path_factory):
     work = tmp_path_factory.mktemp("qbrt")
     objects = {}
     for name, source in SOURCES.items():
-        obj = work / f"{name}.obj"
-        error = run_tests.compile_one(run_tests.Program(source, ["-O2"], None, "qb45"), obj)
-        assert error is None, error
-        objects[name] = obj
+        pair = (work / f"{name}.qb45.obj", work / f"{name}.llrm.obj")
+        for runtime, obj in zip(("qb45", "llrm"), pair):
+            error = qbruntime.compile_basic(source, obj, runtime)
+            assert error is None, error
+        objects[name] = pair
     archive, _ = qbruntime.build(work / "archive")
     return qbruntime.differential_batch(objects, archive, work / "differential")
 

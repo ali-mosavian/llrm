@@ -1,242 +1,221 @@
-/* The local heap and the boundary it shares with string space (QB rt/nhlhcore.asm, nhlhutil.asm,
-   nhinit.asm).  See nheap.h for the layout. */
+/* The local heap (QB rt/nhlhcore.asm, nhlhutil.asm) and the dynamic region's setup (nhinit.asm). */
+#include "nheap.h"
 #include "nhstutil.h"
-#include "ad.h"
 #include "rtinit.h"
 
-word nh_first, nh_last;
-word heap_first, heap_free, heap_end;
+char *heap_low;
+char *heap_top;
 
-/* An FDB entry that moved `delta` bytes up (file.c sets it); the heap knows nothing else of it. */
-void (*lh_file_moved)(word entry, word delta);
+static LhMoved moved[LH_FILE + 1];
 
-/* The entry pointer for the data pointer a caller was given. */
-word lh_entry(word data)
+enum { HEADER = sizeof(LhEntry), FOOTER = sizeof(word) };
+
+void lh_on_move(
+    enum LhType type,
+    LhMoved hook)
 {
-    word back = data - 2;
-
-    return back + W(back) - 1;
+    moved[type] = hook;
 }
 
-static word entry_data(word p)
+static LhEntry *lowest(void)
 {
-    return p - LHLEN(p) + 3;
+    return (LhEntry *)heap_low;
 }
 
-static word entry_size(word bytes, byte type)
+static LhEntry *next(const LhEntry *entry)
 {
-    word size = (bytes + LH_STD_HDR + 2 + 1) & ~1u;
-
-    return type == LH_FILE ? size + (LH_FDB_HDR - LH_STD_HDR) : size;
+    return (LhEntry *)((char *)entry + entry->size);
 }
 
-/* An entry of `size` bytes at p, with its trailing length in the entry below. */
-static void set_entry(word p, word size, byte type)
+static LhEntry *previous(const LhEntry *entry)
 {
-    LHTYPE(p) = type;
-    LHLEN(p) = size;
-    W(p - size + 1) = size;
+    return (LhEntry *)((char *)entry - ((word *)entry)[-1]);
 }
 
-/* B$LH_ALC_FREE: allocate from the entry at heap_free; 0 when it does not fit. */
-static word alloc_free(word size, byte type, word owner)
+static int at_top(const LhEntry *entry)
 {
-    word p = heap_free, len, rest, at;
+    return (char *)entry == heap_top;
+}
 
-    if (LHTYPE(p) != LH_FREE)
-        return 0;
-    len = LHLEN(p);
-    if (len < size)
-        return 0;
-    rest = len - size;
-    if (rest < LH_STD_HDR) {
-        size = len;
+/* An entry of `size` bytes at `at`, with its footer. */
+static LhEntry *make(
+    void *at,
+    word size,
+    enum LhType type)
+{
+    LhEntry *entry = at;
+
+    entry->size = size;
+    entry->type = type;
+    entry->file = 0;
+    entry->owner = NULL;
+    *(word *)((char *)at + size - FOOTER) = size;
+    return entry;
+}
+
+LhEntry *lh_entry(void *data)
+{
+    return (LhEntry *)data - 1;
+}
+
+void *lh_data(LhEntry *entry)
+{
+    return entry + 1;
+}
+
+static word entry_size(word bytes)
+{
+    return (HEADER + bytes + FOOTER + 1) & ~1u;
+}
+
+static void zero(LhEntry *entry)
+{
+    word *at = lh_data(entry);
+    word *end = (word *)((char *)entry + entry->size - FOOTER);
+
+    while (at < end)
+        *at++ = 0;
+}
+
+/* Take `size` bytes from the top of free `entry`, as the heap allocates downwards; the rest stays free. */
+static void *carve(
+    LhEntry *entry,
+    word size,
+    enum LhType type)
+{
+    word rest = entry->size - size;
+    LhEntry *taken;
+
+    if (rest < HEADER + FOOTER) {
+        size = entry->size;
         rest = 0;
     }
+    taken = (LhEntry *)((char *)entry + rest);
     if (rest)
-        set_entry(p - size, rest, LH_FREE);
-    heap_free = p - size;
-    for (at = p - size + 1; at < p - 3; at += 2)
-        W(at) = 0;
-    set_entry(p, size, type);
-    LHFNUM(p) = type == LH_FILE ? (byte)owner : 0;
-    if (type != LH_FILE)
-        LHBAKP(p) = owner;
-    return entry_data(p);
+        make(entry, rest, LH_FREE);
+    make(taken, size, type);
+    zero(taken);
+    return lh_data(taken);
 }
 
-/* B$LH_SCAN: first fit over the whole heap, joining free neighbours as it goes. */
-static word scan(word size, byte type, word owner)
+/* First fit over the heap, joining free neighbours as it goes. */
+static void *first_fit(
+    word size,
+    enum LhType type)
 {
-    word p = heap_first, len, next;
+    LhEntry *entry, *after;
 
-    while (LHTYPE(p) != LH_END) {
-        if (LHTYPE(p) != LH_FREE) {
-            p -= LHLEN(p);
+    for (entry = lowest(); !at_top(entry); entry = next(entry)) {
+        if (entry->type != LH_FREE)
             continue;
-        }
-        len = LHLEN(p);
-        for (next = p - len; LHTYPE(next) == LH_FREE; next = p - len)
-            len += LHLEN(next);
-        set_entry(p, len, LH_FREE);
-        if (len >= size) {
-            heap_free = p;
-            return alloc_free(size, type, owner);
-        }
-        p = next;
+        for (after = next(entry); !at_top(after) && after->type == LH_FREE; after = next(entry))
+            make(entry, entry->size + after->size, LH_FREE);
+        if (entry->size >= size)
+            return carve(entry, size, type);
     }
-    return 0;
+    return NULL;
 }
 
-/* B$LHSetFree: heap_free names the free entry just above END, or END itself. */
-void lh_set_free(void)
+int lh_take_from_strings(void)
 {
-    word p = heap_free, last;
+    word room = str_give_tail();
 
-    if (LHTYPE(p) == LH_FREE && p - LHLEN(p) == heap_end)
-        return;
-    p = heap_end;
-    if (p != heap_first) {
-        last = p + W(p + 1);
-        if (LHTYPE(last) == LH_FREE)
-            p = last;
-    }
-    heap_free = p;
-}
-
-/* B$LH_FROM_SS: take the free string space at the end of string space into the heap, as a free
-   entry (or as more of the one already there). */
-word lh_from_ss(void)
-{
-    word at, len, p, last;
-
-    str_set_free();
-    at = str_free;
-    len = str_end - at;
-    if (len == 0)
+    if (room < HEADER + FOOTER) {
+        str_take(room);
         return 0;
-    if (heap_end != heap_first && LHTYPE(last = heap_end + W(heap_end + 1)) == LH_FREE) {
-        p = last;
-        len += LHLEN(p);
-    } else {
-        if (len < LH_STD_HDR + 2)
-            return 0;
-        p = at + LH_STD_HDR + 1 + len;
     }
-    W(at) = 0xFFFF;
-    str_end = str_free = at;
-    heap_end = at + LH_STD_HDR + 1;
-    LHTYPE(heap_end) = LH_END;
-    set_entry(p, len, LH_FREE);
-    heap_free = p;
+    heap_low -= room;
+    make(heap_low, room, LH_FREE);
+    if (heap_low + room != heap_top && next(lowest())->type == LH_FREE)
+        make(heap_low, room + next(lowest())->size, LH_FREE);
     return 1;
 }
 
-/* B$LH_CPCT: slide every allocated entry up over the free ones, adjusting what points at it, so the
-   free space is one entry beside string space. */
+/* B$STFromLH */
+void lh_give_free_to_strings(void)
+{
+    while (heap_low != heap_top && lowest()->type == LH_FREE) {
+        word room = lowest()->size;
+
+        heap_low += room;
+        str_take(room);
+    }
+}
+
+/* Slide every entry up against the top, so the free room is one entry at the bottom (B$LH_CPCT). */
 void lh_compact(void)
 {
-    word src = heap_first, dst, len, delta, from, to, n;
+    char *top = heap_top;
+    LhEntry *entry = heap_low == heap_top ? NULL : previous((LhEntry *)heap_top);
 
-    while (LHTYPE(src) != LH_END && LHTYPE(src) != LH_FREE)
-        src -= LHLEN(src);
-    if (LHTYPE(src) == LH_END)
-        return;
-    dst = src;
-    src -= LHLEN(src);
-    for (;;) {
-        if (LHTYPE(src) == LH_END)
-            break;
-        if (LHTYPE(src) == LH_FREE) {
-            src -= LHLEN(src);
-            continue;
+    while (entry) {
+        LhEntry *before = (char *)entry == heap_low ? NULL : previous(entry);
+
+        if (entry->type != LH_FREE) {
+            word *from = (word *)((char *)entry + entry->size);
+            word *to = (word *)top;
+
+            top -= entry->size;
+            if (top != (char *)entry) {
+                if (moved[entry->type])
+                    moved[entry->type](lh_data(entry), top - (char *)entry);
+                /* from the end down, so a move over itself reads each word before it writes it */
+                while (from > (word *)entry)
+                    *--to = *--from;
+            }
         }
-        len = LHLEN(src);
-        delta = dst - src;
-        lh_adjust(src, delta);
-        /* upwards, so a copy over itself reads each word before it writes it */
-        from = src + 1 - len;
-        to = dst + 1 - len;
-        for (n = len / 2; n; n--)
-            W(to + 2 * (n - 1)) = W(from + 2 * (n - 1));
-        src -= len;
-        dst -= len;
+        entry = before;
     }
-    if (dst != heap_end)
-        set_entry(dst, dst - heap_end, LH_FREE);
-    heap_free = dst;
+    if (top != heap_low)
+        make(heap_low, top - heap_low, LH_FREE);
 }
 
-/* B$LHADJ with a delta: an entry about to move `delta` bytes up tells what holds its address. */
-void lh_adjust(word p, word delta)
+/* An entry of `bytes` of data, for `owner`: the free room, then a scan, then room from string space,
+   with string space compacted first when that is not enough (LH_ALC_GROW). */
+void *lh_alloc(
+    word bytes,
+    enum LhType type,
+    void *owner,
+    byte file)
 {
-    word owner, sd, n;
+    word size = entry_size(bytes);
+    void *data = first_fit(size, type);
 
-    if (LHTYPE(p) == LH_FILE) {
-        if (lh_file_moved)
-            lh_file_moved(p, delta);
-        return;
-    }
-    owner = LHBAKP(p);
-    if (LHTYPE(p) == LH_ARRAY) {
-        sd = p - LHLEN(p) + 3;
-        for (n = (LHLEN(p) - LH_STD_HDR - 2) / 4; n; n--, sd += 4)
-            str_adjust(sd, delta);
-        ((AD *)owner)->adjusted += delta;
-    }
-    W(owner) += delta;
-}
-
-/* B$LHDALC: free an entry by its data pointer.  A dynamic string array frees its strings. */
-void lh_free(word data)
-{
-    word p = lh_entry(data), sd, n;
-
-    if (LHTYPE(p) == LH_ARRAY) {
-        ((AD *)LHBAKP(p))->data_seg = 0;
-        LHBAKP(p) = 0;
-        sd = data;
-        for (n = (LHLEN(p) - LH_STD_HDR - 2) / 4; n; n--, sd += 4)
-            str_adjust(sd, 0);
-    }
-    LHTYPE(p) = LH_FREE;
-}
-
-/* B$ILHALC with the growth steps of LH_ALC_GROW: the free entry, a scan, then more room taken from
-   string space, with string space compacted first when that is not enough. */
-word lh_alloc(word bytes, byte type, word owner)
-{
-    word size = entry_size(bytes, type), data;
-
-    data = alloc_free(size, type, owner);
-    if (!data)
-        data = scan(size, type, owner);
-    if (!data && lh_from_ss())
-        data = alloc_free(size, type, owner);
+    if (!data && lh_take_from_strings())
+        data = first_fit(size, type);
     if (!data) {
         str_compact();
-        if (lh_from_ss())
-            data = alloc_free(size, type, owner);
+        if (lh_take_from_strings())
+            data = first_fit(size, type);
+    }
+    if (data) {
+        lh_entry(data)->owner = owner;
+        lh_entry(data)->file = file;
     }
     return data;
 }
 
-/* B$NHINIT: the dynamic region is all string space until the heap asks for some. */
-void nh_init(word first, word last)
+void lh_free(void *data)
 {
-    heap_first = heap_free = heap_end = last + 1;
-    LHTYPE(heap_end) = LH_END;
-    nh_first = first;
-    nh_last = last;
-    str_init(first, last + 1 - (LH_STD_HDR + 1));
+    lh_entry(data)->type = LH_FREE;
+}
+
+/* B$NHINIT: all of the region is string space until the heap asks for some. */
+void nh_init(
+    char *first,
+    char *top)
+{
+    heap_low = heap_top = top;
+    str_init(first, top);
 }
 
 /* B$xNHINI and B$NHINI: the heaps claim everything from the stack's end to the top of DGROUP. */
-extern word qb_atopsp, qb_asizds;
+extern char qb_atopsp;
+extern word qb_asizds;
 
 static void nh_ini(void)
 {
-    nh_init((word)&qb_atopsp, qb_asizds);
+    nh_init(&qb_atopsp, (char *)qb_asizds);
 }
 
 static Comp nh_comp = { 0, C_NH, { nh_ini } };

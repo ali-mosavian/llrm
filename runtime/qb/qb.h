@@ -1,21 +1,18 @@
-/* The QB runtime's shared types.  Every B$ entry is __far __pascal, which is what the frontend emits,
-   and takes its link name from a `#pragma aux` (the `$` is not a C identifier). */
+/* The QB runtime's shared types.  An entry is a plain public function, which the medium model makes far
+   and llrm-qb calls (-fqb-runtime=llrm) with the target's own convention; its link name is the B$ name
+   a `#pragma aux` gives it, since `$` is not a C identifier. */
 #ifndef QB_H
 #define QB_H
+
+#define NULL ((void *)0)
 
 typedef unsigned char byte;
 typedef unsigned int word;
 
-/* A word or byte at a DGROUP offset: the runtime's heaps are addressed as QB's are, by offset. */
-#define W(a) (*(word *)(a))
-#define B(a) (*(byte *)(a))
-
-#define QB __far __pascal
-
-/* A string descriptor (inc/string.inc): length, then the offset of the data in DGROUP. */
+/* A string descriptor (inc/string.inc): the length, and the data's address in DGROUP. */
 typedef struct SD {
     word len;
-    word ptr;
+    char *ptr;
 } SD;
 
 /* Value types of the frontend's numeric ABI (inc/rtps.inc VT_*). */
@@ -31,7 +28,17 @@ enum {
     FE_CORRUPT = 0x9000, FE_NOSTACK = 0x9007
 };
 
-/* error.c: raise run-time error `n`; it returns only when ON ERROR RESUME NEXT continues. */
+static void copy_bytes(
+    char *to,
+    const char *from,
+    word n)
+{
+    while (n--)
+        *to++ = *from++;
+}
+
+/* error.c: raise run-time error `n`.  It does not return: control goes to the ON ERROR handler, or the
+   program ends. */
 void qb_error(word n);
 
 #endif

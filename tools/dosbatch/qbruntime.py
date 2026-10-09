@@ -125,17 +125,20 @@ class Differential:
     screen_difference: str
 
 
-def differential_batch(objects: dict[str, Path], archive: Path, work: Path) -> dict[str, Differential]:
-    """Link each unchanged object against BCOM45 and LLRMQB in two DOS sessions, then compare bytes.
+def differential_batch(
+    objects: dict[str, tuple[Path, Path]], archive: Path, work: Path
+) -> dict[str, Differential]:
+    """Each program as two objects of one source: BCOM45's (`qb45`) linked with BCOM45, and llrm's
+    (`-fqb-runtime=llrm`) linked with LLRMQB.  Raw bytes are compared.
 
     Jobs are named J000, J001, ...: a source name is not always an 8.3 basename, or unique in 8 characters.
     """
     names = {name: f"J{at:03d}" for at, name in enumerate(objects)}
     reference_work = work / "bcom45"
     candidate_work = work / "llrmqb"
-    reference = dosbatch.run([dosbatch.Job(names[name], "obj", path) for name, path in objects.items()], reference_work)
+    reference = dosbatch.run([dosbatch.Job(names[name], "obj", pair[0]) for name, pair in objects.items()], reference_work)
     candidate = dosbatch.run(
-        [dosbatch.Job(names[name], "obj", path, runtime="llrmqb", runtime_file=archive) for name, path in objects.items()],
+        [dosbatch.Job(names[name], "obj", pair[1], runtime="llrmqb", runtime_file=archive) for name, pair in objects.items()],
         candidate_work,
     )
     found = {}
@@ -155,9 +158,15 @@ def differential_batch(objects: dict[str, Path], archive: Path, work: Path) -> d
     return found
 
 
-def differential(object_: Path, archive: Path, work: Path, stem: str) -> Differential:
-    """One object's two runs; the batch form is faster for several."""
-    return differential_batch({stem: object_}, archive, work)[stem]
+def compile_basic(source: Path, obj: Path, runtime: str) -> str | None:
+    """`source` as llrm-qb compiles it for `runtime` (qb45 or llrm); the reason it did not, or None."""
+    done = subprocess.run(
+        [str(dosbatch.BIN / "llrm-qb"), str(source), "--dialect", "qb45", f"-fqb-runtime={runtime}", "-O2", "-o", str(obj)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    return None if done.returncode == 0 and obj.exists() else "compile: " + (done.stderr or done.stdout).strip()[-600:]
 
 
 def undefined_symbols(link_log: str) -> list[str]:

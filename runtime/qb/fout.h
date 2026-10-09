@@ -6,8 +6,8 @@
 
 enum { FOUT_MAX = 34 };
 
-/* Writes the text of the INTEGER or LONG `v` to `out` (a sign column, ' ' or '-', then the digits)
-   and returns its length. */
-word fout_i4(long v, byte *out);
+/* Writes the text of the INTEGER or LONG `v` to `out`: a sign column (' ' or '-'), then the digits.
+   Returns its length. */
+word fout_i4(long v, char *out);
 
 #endif

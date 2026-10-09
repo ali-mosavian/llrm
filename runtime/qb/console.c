@@ -5,28 +5,30 @@
 
 enum { WIDTH = 80, CHUNK = 64 };
 
-static byte col;
-static byte buf[CHUNK];
+static byte column;
+static char pending[CHUNK];
 static word used;
 
 static void flush(void)
 {
     if (used) {
-        llrm_os_write_file(LLRM_OS_STDOUT, (const unsigned char __far *)buf, used);
+        llrm_os_write_file(LLRM_OS_STDOUT, (const unsigned char __far *)pending, used);
         used = 0;
     }
 }
 
-static void put(byte c)
+static void put(char c)
 {
     if (used == CHUNK)
         flush();
-    buf[used++] = c;
+    pending[used++] = c;
+    if (c == '\r' || c == '\n' || ++column == WIDTH)
+        column = 0;
 }
 
 byte cn_pos(void)
 {
-    return col;
+    return column;
 }
 
 byte cn_width(void)
@@ -34,29 +36,22 @@ byte cn_width(void)
     return WIDTH;
 }
 
-void cn_putc(byte c)
+void cn_putc(char c)
 {
     put(c);
-    if (c == '\r' || c == '\n')
-        col = 0;
-    else if (++col == WIDTH)
-        col = 0;
     flush();
 }
 
-void cn_write(const byte *s, word n)
+void cn_write(
+    const char *s,
+    word n)
 {
-    for (; n; n--, s++) {
-        put(*s);
-        if (*s == '\r' || *s == '\n')
-            col = 0;
-        else if (++col == WIDTH)
-            col = 0;
-    }
+    while (n--)
+        put(*s++);
     flush();
 }
 
 void cn_crlf(void)
 {
-    cn_write((const byte *)"\r\n", 2);
+    cn_write("\r\n", 2);
 }

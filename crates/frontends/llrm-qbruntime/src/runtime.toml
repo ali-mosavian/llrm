@@ -1042,6 +1042,9 @@ size = 4
 [layout.vbdos]
 form = "far"
 
+[layout.llrm]
+like = "qb45"
+
 # What `-fsanitize=stack` compares and calls, per runtime. `limit` is the data-group word holding
 # the lowest SP the runtime allows, `handler` the far routine entered when SP falls below it, and
 # `entry` the runtime's own frame entry that checks (BC's /D calls it in place of B$ENRA, which
@@ -1069,6 +1072,9 @@ limit = "b$pendchk"
 handler = "B$ERR_OSS"
 entry = "B$ENRD"
 red_zone = 0
+
+[stack.llrm]
+like = "qb45"
 
 # `parameters`: `string` is a descriptor's address, `int` a word. `result`
 # is a word, or a `view`: a string made of a `length` and a `data` address,

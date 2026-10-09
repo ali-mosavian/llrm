@@ -1,45 +1,40 @@
-/* The dynamic region of DGROUP (QB rt/nhlhcore.asm, nhinit.asm, nhstutil.asm): from qb_atopsp to the
-   top of the group, string space grows up from the bottom and the local heap grows down from the
-   top, and the boundary between them moves.  Entries are addressed by DGROUP offset.
+/* The dynamic region of DGROUP (QB rt/nhinit.asm, nhlhcore.asm, nhstutil.asm): from the end of the stack
+   to the top of the group.  String space is at the bottom and the local heap at the top, and the boundary
+   between them (`heap_low`) moves as either needs room.
 
-   String space: entries of a header word then the data.  An allocated entry's header is the
-   offset of the string's descriptor (even); a free one's is its data size plus one (odd).  The word
-   at str_end is 0xFFFF.
-
-   Local heap: entry pointers name the entry's type byte, its highest byte; the entry reaches down
-   from there, its length is repeated at its lowest word, and the next entry is `length` below.  The
-   END entry lies at heap_end, next to the string space. */
+   Local heap entries tile the heap from `heap_low` up to `heap_top`.  Each is a header, the data, and a
+   copy of its size at its end, so the heap can be walked either way. */
 #ifndef QB_NHEAP_H
 #define QB_NHEAP_H
 
 #include "qb.h"
 
-enum { LH_FREE = 0x01, LH_ARRAY = 0x02, LH_END = 0x04, LH_FILE = 0x08 };
-enum { LH_STD_HDR = 6, LH_FDB_HDR = 10 };
+enum LhType { LH_FREE = 1, LH_ARRAY, LH_FILE };
 
-#define LHTYPE(p) B(p)
-#define LHFNUM(p) B((p) - 1)
-#define LHLEN(p) W((p) - 3)
-#define LHBAKP(p) W((p) - 5)
+typedef struct LhEntry {
+    word size;     /* the whole entry in bytes, even */
+    byte type;     /* an LhType */
+    byte file;     /* an FDB's channel */
+    void *owner;   /* what points at the data, for the type's relocation hook */
+} LhEntry;
 
-extern word nh_first, nh_last;
-extern word str_first, str_free, str_end;
-extern word heap_first, heap_free, heap_end;
+extern char *heap_low;
+extern char *heap_top;
 
-/* nheap.c */
-void nh_init(word first, word last);
-word lh_alloc(word size, byte type, word owner);
-void lh_free(word data);
+/* A type's hook, called when compaction moves an entry's data `delta` bytes up. */
+typedef void (*LhMoved)(void *data, int delta);
+void lh_on_move(enum LhType type, LhMoved moved);
+
+void nh_init(char *first, char *top);
+void *lh_alloc(word bytes, enum LhType type, void *owner, byte file);
+void lh_free(void *data);
 void lh_compact(void);
-word lh_entry(word data);
-word lh_from_ss(void);
-void lh_set_free(void);
-void lh_adjust(word entry, word delta);
+LhEntry *lh_entry(void *data);
+void *lh_data(LhEntry *entry);
 
-/* strcore.c */
-void str_init(word first, word end);
-void str_compact(void);
-void str_set_free(void);
-void str_from_lh(void);
+/* The two heaps trade room (nhstutil.c is the other side): the free tail of string space becomes free
+   heap, and free heap at the boundary becomes string space.  False when there is none to take. */
+int lh_take_from_strings(void);
+void lh_give_free_to_strings(void);
 
 #endif

@@ -221,7 +221,7 @@ fn _contract_keeping(
         name
     };
     let found =
-        runtime::per_call(&IndexMap::from_iter([(0, physical_name.to_owned())]), family.value(), &BTreeSet::new())
+        runtime::per_call(&IndexMap::from_iter([(0, physical_name.to_owned())]), family.tables(), &BTreeSet::new())
             .swap_remove(&0)
             .expect("one call in, one contract out");
     let evidence = &found.evidence;
@@ -782,6 +782,31 @@ impl HirAbi {
     }
 }
 
+/// A routine of llrm's runtime, called as the target calls any function: the table's effects (what it
+/// reads and writes, whether it raises an error or never returns), but not its Microsoft stack block or
+/// registers, which the convention states. What the callee pops is `pops`; the stack bytes pushed are
+/// `pushed`, past the registers.
+fn native_contract(
+    name: &str,
+    pops: bool,
+    pushed: i64,
+    family: model::RuntimeProfile,
+) -> Contract {
+    let found = runtime::per_call(&IndexMap::from_iter([(0, name.to_owned())]), family.tables(), &BTreeSet::new())
+        .swap_remove(&0)
+        .expect("one call in, one contract out");
+    Contract {
+        cleanup: Some(if pops { pushed } else { 0 }),
+        caller_cleanup: if pops { 0 } else { pushed },
+        established: true,
+        inputs: Some(BTreeSet::new()),
+        flags_result: false,
+        i386: true,
+        evidence: format!("{} Called as the target's own convention calls a function.", found.evidence),
+        ..found
+    }
+}
+
 /// A runtime routine's register interface beside its stack block. B$HARY
 /// takes the subscripts and their count pushed and the descriptor in BX,
 /// and answers the element's address in ES:BX: PDS71 PDHUGE.OBJ 0047..0055
@@ -819,6 +844,9 @@ impl crate::backend::assemble::Abi for HirAbi {
         }
         let cleanup = if pops { model::StackCleanup::Callee } else { model::StackCleanup::Caller };
         let name = callee.strip_prefix(crate::hir::mir::RUNTIME).unwrap_or(callee);
+        if self.runtime.calls_natively() {
+            return Ok(native_contract(name, pops, pushed, self.runtime));
+        }
         _contract_keeping(name, cleanup, pushed, self.runtime, &self.preserved).map_err(|error| error.0)
     }
 

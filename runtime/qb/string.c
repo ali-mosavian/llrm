@@ -3,25 +3,31 @@
 #include "nhstutil.h"
 
 /* B$STR_COMMON: STR$ of a number is a temporary holding its text. */
-static SD *str_of(long v)
+static SD *text_of(long v)
 {
-    byte text[FOUT_MAX];
-    word len = fout_i4(v, text), data, n;
-    SD *t = str_tmp(len, &data);
+    char text[FOUT_MAX], *data;
+    word length = fout_i4(v, text);
+    SD *result = str_tmp(length, &data);
 
-    for (n = 0; n < len; n++)
-        B(data + n) = text[n];
-    return t;
+    copy_bytes(data, text, length);
+    return result;
 }
 
-SD *QB B_STI2(int v) { return str_of(v); }
-SD *QB B_STI4(long v) { return str_of(v); }
-
-/* B$STDL: deallocate a string and leave its descriptor empty. */
-void QB B_STDL(word sd)
+SD *B_STI2(int v)
 {
-    str_free_sd((SD *)sd);
-    ((SD *)sd)->len = 0;
+    return text_of(v);
+}
+
+SD *B_STI4(long v)
+{
+    return text_of(v);
+}
+
+/* B$STDL: deallocate a string, leaving its descriptor empty. */
+void B_STDL(SD *sd)
+{
+    str_release(sd);
+    sd->len = 0;
 }
 #pragma aux B_STI2 "B$STI2"
 #pragma aux B_STI4 "B$STI4"

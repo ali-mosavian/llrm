@@ -8,9 +8,22 @@ use llrm_hir::model::StackCheck;
 
 static TABLE: LazyLock<toml::Table> = LazyLock::new(|| super::TABLE.parse().expect("runtime.toml parses"));
 
+/// `section.family`'s row, or the row of the family it is `like`: llrm's runtime keeps QB 4.5's strings
+/// and checks its stack as QB 4.5's does.
+fn row(
+    section: &str,
+    family: &str,
+) -> Option<&'static toml::Value> {
+    let row = TABLE.get(section)?.get(family)?;
+    match row.get("like").and_then(toml::Value::as_str) {
+        Some(other) => TABLE.get(section)?.get(other),
+        None => Some(row),
+    }
+}
+
 /// How `family`'s runtime keeps its strings.
 pub fn form(family: &str) -> Option<Form> {
-    match TABLE.get("layout")?.get(family)?.get("form")?.as_str()? {
+    match row("layout", family)?.get("form")?.as_str()? {
         "near" => Some(Form::Near),
         "far" => Some(Form::Far),
         other => panic!("layout.{family}.form is {other}"),
@@ -23,7 +36,7 @@ pub fn descriptor(family: &str) -> Option<Descriptor> {
     if form(family)? != Form::Near {
         return None;
     }
-    let row = TABLE.get("layout")?.get(family)?;
+    let row = row("layout", family)?;
     let at =
         |key: &str| row.get(key).and_then(toml::Value::as_integer).unwrap_or_else(|| panic!("layout.{family}.{key}"));
     Some(Descriptor { length: at("length"), data: at("data"), size: at("size") })
@@ -31,7 +44,7 @@ pub fn descriptor(family: &str) -> Option<Descriptor> {
 
 /// What `family`'s runtime says of its stack, where it checks one.
 pub fn stack(family: &str) -> Option<StackCheck> {
-    let row = TABLE.get("stack")?.get(family)?;
+    let row = row("stack", family)?;
     Some(StackCheck::from_toml(row).unwrap_or_else(|why| panic!("stack.{family}: {why}")))
 }
 

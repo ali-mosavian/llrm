@@ -1,6 +1,6 @@
 /* The array descriptor (QB inc/array.inc AD and FHD), which the frontend emits and indexes
-   (docs/frontends/qb/abi.md): a far pointer to the data, the next descriptor of the far heap, the
-   size, then the rank, features, adjusted base and element width, then a DM per dimension. */
+   (docs/frontends/qb/abi.md): the data's address, the next descriptor of the far heap, the size, then
+   the rank, features, adjusted base and element width, then a DM per dimension. */
 #ifndef QB_AD_H
 #define QB_AD_H
 
@@ -14,7 +14,7 @@ typedef struct DM {
 typedef struct AD {
     word data_off;   /* FHD_oData */
     word data_seg;   /* FHD_hData: the data's segment, DS for a near array, 0 when none */
-    word next;       /* FHD_pNext: the next descriptor on the far heap's list */
+    word next;       /* FHD_pNext: the next descriptor of the far heap */
     word size;       /* FHD_cPara: paragraphs, or bytes for a near array */
     byte dims;
     byte features;

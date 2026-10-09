@@ -1,23 +1,28 @@
-/* String space and string temporaries (QB rt/nhstutil.asm).  See nheap.h for the entry format. */
+/* String space and string temporaries (QB rt/nhstutil.asm).  See nhstutil.h for the layout. */
 #include "nhstutil.h"
 
-enum { NUMTEMPS = 20 };
+enum { NUMTEMPS = 20, WORD = 2 };
 
-/* A string temporary (inc/string.inc LenTemp = 6): a descriptor and the program level that made it.
-   While free, `len` links to the next free one and `level` is -1. */
+typedef struct StrEntry {
+    word header;
+} StrEntry;
+
+/* A string temporary (inc/string.inc LenTemp = 6): a descriptor, and the program level that made it or
+   -1 while it is free. */
 typedef struct Tmp {
-    word len;
-    word ptr;
+    SD sd;
     int level;
 } Tmp;
 
-word str_first, str_free, str_end;
-word cur_level;
+static StrEntry *str_first;
+static StrEntry *str_free;   /* where the last allocation left off: a hint */
+static char *str_end;
+
+int cur_level;
 SD str_nul;
 
-static word nul_back;
 static Tmp temps[NUMTEMPS];
-static Tmp *tmp_head;
+static byte nul_owner_slot;
 
 /* B$ERR_SSC */
 static void corrupt(void)
@@ -25,277 +30,330 @@ static void corrupt(void)
     qb_error(FE_CORRUPT);
 }
 
-static word entry_len(word sd)
+static word even(word n)
 {
-    return (W(sd) + 3) & ~1u;
+    return (n + 1) & ~1u;
 }
 
-/* B$STSetFree: str_free is only a hint; keep it only if it names the free entry that ends the space. */
-void str_set_free(void)
+static int is_free(const StrEntry *entry)
 {
-    word h = W(str_free);
-
-    if ((h & 1) && (h == 0xFFFF || str_free + h + 1 == str_end))
-        return;
-    str_free = str_end;
+    return entry->header & 1;
 }
 
-/* SS_ALC: take hdr out of the free entry at `at`, whose header is h >= hdr. */
-static word take(word at, word h, word hdr)
+static word free_data(const StrEntry *entry)
 {
-    if (h == hdr) {
-        str_free = at + h + 1;
-    } else {
-        W(at) = hdr;
-        str_free = at + hdr + 1;
-        W(str_free) = h - hdr - 1;
-    }
-    return at + 2;
+    return entry->header - 1;
 }
 
-/* SS_SCAN_START: first fit from `si` while si <= to, joining free neighbours as it goes. */
-static word scan(word hdr, word si, word to, word *stop)
+static SD *owner_of(const StrEntry *entry)
 {
-    word h, c, di;
-
-    for (;;) {
-        h = W(si);
-        if (h & 1) {
-            if (h == 0xFFFF)
-                break;
-            for (di = si + h + 1;; di += c + 1) {
-                c = W(di);
-                if (c == 0xFFFF || !(c & 1)) {
-                    W(si) = h;
-                    if (h >= hdr) {
-                        str_free = si;
-                        return take(si, h, hdr);
-                    }
-                    if (c == 0xFFFF) {
-                        *stop = si;
-                        return 0;
-                    }
-                    si = di;
-                    h = c;
-                    break;
-                }
-                h += c + 1;
-            }
-        }
-        si += entry_len(h);
-        if (si > to)
-            break;
-    }
-    *stop = si;
-    return 0;
+    return (SD *)entry->header;
 }
 
-/* SS_SCAN: from the free hint to the end, then from the start up to the hint. */
-static word scan_both(word hdr)
+static char *data_of(StrEntry *entry)
 {
-    word stop, stop2, at;
-
-    at = scan(hdr, str_free, str_end, &stop);
-    if (at)
-        return at;
-    at = scan(hdr, str_first, str_free, &stop2);
-    if (at)
-        return at;
-    str_free = stop2 < stop ? stop2 : stop;
-    str_set_free();
-    return 0;
+    return (char *)(entry + 1);
 }
 
-/* B$STCPCT: slide every string down over the free entries, fixing the descriptors, so the free space
-   is one entry at the end. */
-void str_compact(void)
+static StrEntry *entry_of(const char *data)
 {
-    word si = str_first, di, h, n;
-
-    for (h = W(si); !(h & 1); h = W(si)) {
-        if (W(h + 2) - 2 != si)
-            corrupt();
-        si += entry_len(h);
-    }
-    di = si;
-    for (;;) {
-        if (h == 0xFFFF)
-            break;
-        si += h + 1;
-        for (h = W(si); !(h & 1); h = W(si)) {
-            if (W(h + 2) - 2 != si)
-                corrupt();
-            W(h + 2) = di + 2;
-            for (n = entry_len(h) / 2; n; n--, si += 2, di += 2)
-                W(di) = W(si);
-        }
-    }
-    if (si != di)
-        W(di) = si - di - 1;
-    str_free = di;
+    return (StrEntry *)data - 1;
 }
 
-/* B$STFromLH: free entries at the heap's end become string space. */
-void str_from_lh(void)
+static word entry_bytes(const StrEntry *entry)
 {
-    word end, at;
-
-    lh_set_free();
-    if (heap_free == heap_end)
-        return;
-    heap_end = heap_free;
-    LHTYPE(heap_end) = LH_END;
-    end = heap_end - (LH_STD_HDR + 1);
-    W(end) = 0xFFFF;
-    str_set_free();
-    at = str_free;
-    str_end = end;
-    W(at) = end - at - 1;
+    return WORD + (is_free(entry) ? free_data(entry) : even(owner_of(entry)->len));
 }
 
-/* B$STALC: the data of a new string of `len` bytes; the caller sets the back-pointer at data - 2.
-   Out of room, it tries the free entry, a scan, the heap's free space, then compaction. */
-word str_alloc(word len)
+static StrEntry *following(const StrEntry *entry)
 {
-    word hdr, h, data;
-
-    if (len == 0xFFFF)
-        qb_error(BE_STRINGSP);
-    hdr = (len + 1) | 1;
-    h = W(str_free);
-    if ((h & 1) && h != 0xFFFF && hdr <= h)
-        return take(str_free, h, hdr);
-    data = scan_both(hdr);
-    if (data)
-        return data;
-    str_from_lh();
-    h = W(str_free);
-    if ((h & 1) && h != 0xFFFF && hdr <= h)
-        return take(str_free, h, hdr);
-    str_compact();
-    h = W(str_free);
-    if ((h & 1) && h != 0xFFFF && hdr <= h)
-        return take(str_free, h, hdr);
-    qb_error(BE_STRINGSP);
-    return 0;
+    return (StrEntry *)((char *)entry + entry_bytes(entry));
 }
 
-/* B$STADJ: a descriptor moved `delta` bytes (its string's back-pointer follows), or with delta 0 is
-   deleted (its string freed).  Constants lie below string space; above it are fielded strings. */
-void str_adjust(word sd, word delta)
+static int at_end(const StrEntry *entry)
 {
-    word data = ((SD *)sd)->ptr, old;
+    return (char *)entry >= str_end;
+}
 
-    if (((SD *)sd)->len == 0 || data < str_first || data > str_end)
-        return;
-    if (delta) {
-        W(data - 2) += delta;
-        return;
-    }
-    old = W(data - 2);
-    W(data - 2) = (((SD *)sd)->len + 1) | 1;
-    if (old != sd)
+static void make_free(
+    StrEntry *entry,
+    word bytes)
+{
+    entry->header = bytes - WORD + 1;
+}
+
+/* A string of `len` bytes is in string space when its data is between the constants and the boundary. */
+static int in_space(const SD *sd)
+{
+    return sd->len && sd->ptr >= (char *)str_first && sd->ptr < str_end;
+}
+
+static void check_owner(
+    const StrEntry *entry,
+    const SD *owner)
+{
+    if (owner_of(entry) != owner || owner->ptr != (char *)(entry + 1))
         corrupt();
 }
 
-void str_free_sd(SD *sd)
+/* B$STSetFree: the hint is kept only if it names the free entry that ends string space. */
+static void set_hint(void)
 {
-    str_adjust((word)sd, 0);
+    if (at_end(str_free) || !is_free(str_free) || !at_end(following(str_free)))
+        str_free = (StrEntry *)str_end;
 }
 
-static byte is_tmp(SD *sd)
+/* Takes `bytes` for `owner` from free `entry`, leaving the rest free. */
+static char *take(
+    StrEntry *entry,
+    word bytes,
+    SD *owner)
 {
-    return (word)sd >= (word)temps && (word)sd < (word)(temps + NUMTEMPS);
+    word have = entry_bytes(entry);
+
+    if (have > bytes) {
+        make_free((StrEntry *)((char *)entry + bytes), have - bytes);
+        str_free = (StrEntry *)((char *)entry + bytes);
+    } else {
+        str_free = following(entry);
+    }
+    entry->header = (word)owner;
+    return data_of(entry);
 }
 
-static void tmp_release(Tmp *t)
+/* First fit from `from` up to `limit`, joining free neighbours as it goes (SS_SCAN). */
+static StrEntry *scan(
+    StrEntry *from,
+    StrEntry *limit,
+    word bytes)
 {
-    t->len = (word)tmp_head;
-    t->ptr = 0xFFFF;
-    t->level = -1;
-    tmp_head = t;
+    StrEntry *entry = from, *after;
+
+    while (entry <= limit && !at_end(entry)) {
+        if (is_free(entry)) {
+            for (after = following(entry); !at_end(after) && is_free(after); after = following(entry))
+                make_free(entry, entry_bytes(entry) + entry_bytes(after));
+            if (entry_bytes(entry) >= bytes)
+                return entry;
+        }
+        entry = following(entry);
+    }
+    return NULL;
 }
 
-/* B$STDALCTMPDSC: give a temporary descriptor back without touching its string. */
-void str_tmp_release(SD *sd)
+static StrEntry *fit(word bytes)
 {
-    if (is_tmp(sd))
-        tmp_release((Tmp *)sd);
+    StrEntry *found = scan(str_free, (StrEntry *)str_end, bytes);
+
+    if (!found)
+        found = scan(str_first, str_free, bytes);
+    return found;
 }
 
-/* B$STCHKTMP */
-byte str_is_tmp(SD *sd)
+/* B$STCPCT: slide every string down over the free entries, so the free room is one entry at the end. */
+void str_compact(void)
 {
-    return is_tmp(sd);
+    StrEntry *to = str_first, *entry = str_first;
+
+    while (!at_end(entry)) {
+        word bytes = entry_bytes(entry), i;
+        StrEntry *after = (StrEntry *)((char *)entry + bytes);
+
+        if (!is_free(entry)) {
+            SD *owner = owner_of(entry);
+
+            check_owner(entry, owner);
+            if (to != entry)
+                for (i = 0; i < bytes; i += WORD)
+                    *(word *)((char *)to + i) = *(word *)((char *)entry + i);
+            owner->ptr = data_of(to);
+            to = (StrEntry *)((char *)to + bytes);
+        }
+        entry = after;
+    }
+    if ((char *)to != str_end)
+        make_free(to, str_end - (char *)to);
+    str_free = to;
 }
 
-/* B$STDALCTMP: free a string if it is a temporary. */
+/* The free entry that ends string space, which the heap may take: its size, and the boundary moves up
+   by as much as is given. */
+word str_give_tail(void)
+{
+    word room;
+
+    set_hint();
+    if (at_end(str_free))
+        return 0;
+    room = entry_bytes(str_free);
+    str_end = (char *)str_free;
+    str_free = (StrEntry *)str_end;
+    return room;
+}
+
+/* The heap's free room at the boundary becomes the end of string space. */
+void str_take(word bytes)
+{
+    if (!bytes)
+        return;
+    set_hint();
+    if (at_end(str_free)) {
+        str_free = (StrEntry *)str_end;
+        make_free(str_free, bytes);
+    } else {
+        make_free(str_free, entry_bytes(str_free) + bytes);
+    }
+    str_end += bytes;
+}
+
+/* B$STALC: room for `owner`'s string.  Out of room, it tries a scan, the heap's free room, then
+   compaction (nhstutil.asm:161-215), and raises Out of string space if there is still none. */
+char *str_alloc(
+    SD *owner,
+    word len)
+{
+    word bytes = WORD + even(len);
+    StrEntry *entry;
+
+    if (len == 0xFFFF)
+        qb_error(BE_STRINGSP);
+    owner->len = len;
+    entry = !at_end(str_free) && is_free(str_free) && entry_bytes(str_free) >= bytes ? str_free : fit(bytes);
+    if (!entry) {
+        lh_give_free_to_strings();
+        entry = fit(bytes);
+    }
+    if (!entry) {
+        str_compact();
+        entry = fit(bytes);
+    }
+    if (!entry)
+        qb_error(BE_STRINGSP);
+    owner->ptr = take(entry, bytes, owner);
+    return owner->ptr;
+}
+
+void str_release(SD *owner)
+{
+    StrEntry *entry;
+
+    if (!in_space(owner))
+        return;
+    entry = entry_of(owner->ptr);
+    check_owner(entry, owner);
+    make_free(entry, entry_bytes(entry));
+}
+
+void str_owner_moved(
+    SD *owner,
+    int delta)
+{
+    if (in_space(owner))
+        entry_of(owner->ptr)->header += delta;
+}
+
+static Tmp *as_tmp(SD *sd)
+{
+    return (Tmp *)sd;
+}
+
+byte str_is_tmp(const SD *sd)
+{
+    return (const Tmp *)sd >= temps && (const Tmp *)sd < temps + NUMTEMPS;
+}
+
+static Tmp *free_tmp(void)
+{
+    Tmp *tmp;
+
+    for (tmp = temps; tmp < temps + NUMTEMPS; tmp++)
+        if (tmp->level < 0)
+            return tmp;
+    qb_error(BE_STRINGFO);
+    return NULL;
+}
+
+/* B$STDALCTMPDSC: the descriptor is free again, the string untouched. */
+static void tmp_release(Tmp *tmp)
+{
+    tmp->level = -1;
+}
+
+void str_adopt(
+    SD *to,
+    SD *from)
+{
+    str_release(to);
+    *to = *from;
+    if (to->len)
+        entry_of(to->ptr)->header = (word)to;
+    if (str_is_tmp(from))
+        tmp_release(as_tmp(from));
+}
+
+/* B$STDALCTMP: a temporary's string and descriptor, freed; anything else is left. */
 void str_tmp_free(SD *sd)
 {
-    if (is_tmp(sd)) {
-        str_free_sd(sd);
-        tmp_release((Tmp *)sd);
+    if (str_is_tmp(sd)) {
+        str_release(sd);
+        tmp_release(as_tmp(sd));
     }
 }
 
-/* B$STALCTMP: a temporary of `len` bytes; its data in *data.  A zero length is the shared null string. */
-SD *str_tmp(word len, word *data)
+/* B$STALCTMP: a temporary of `len` bytes, its data in *data.  Zero bytes is the shared empty string. */
+SD *str_tmp(
+    word len,
+    char **data)
 {
-    Tmp *t;
+    Tmp *tmp;
 
     if (len == 0) {
         *data = str_nul.ptr;
         return &str_nul;
     }
-    if (!tmp_head)
-        qb_error(BE_STRINGFO);
-    *data = str_alloc(len);
-    t = tmp_head;
-    tmp_head = (Tmp *)t->len;
-    t->len = len;
-    t->ptr = *data;
-    t->level = cur_level;
-    W(*data - 2) = (word)t;
-    return (SD *)t;
+    tmp = free_tmp();
+    *data = str_alloc(&tmp->sd, len);
+    tmp->level = cur_level;
+    return &tmp->sd;
 }
 
-/* B$STALCTMPSUB: a temporary copy of `len` bytes of src from `off`; a temporary src is freed. */
-SD *str_tmp_sub(SD *src, word off, word len)
+/* B$STALCTMPSUB: a temporary copy of `len` bytes of source from `from`; a temporary source is freed. */
+SD *str_tmp_copy(
+    SD *source,
+    word from,
+    word len)
 {
-    word data, n;
-    SD *t = str_tmp(len, &data);
-    byte *from = (byte *)(src->ptr + off);
+    char *data;
+    SD *tmp = str_tmp(len, &data);
 
-    for (n = 0; n < len; n++)
-        B(data + n) = from[n];
-    str_tmp_free(src);
-    return t;
+    copy_bytes(data, source->ptr + from, len);
+    str_tmp_free(source);
+    return tmp;
 }
 
-/* B$STDALCALLTMP: free the temporaries made at program level `level` or deeper. */
-void str_all_tmp_free(word level)
+/* B$STDALCALLTMP: the temporaries made at program level `level` or deeper are freed. */
+void str_all_tmp_free(int level)
 {
-    Tmp *t;
+    Tmp *tmp;
 
-    for (t = temps; t < temps + NUMTEMPS; t++)
-        if (t->level >= (int)level)
-            str_tmp_free((SD *)t);
+    for (tmp = temps; tmp < temps + NUMTEMPS; tmp++)
+        if (tmp->level >= level)
+            str_tmp_free(&tmp->sd);
 }
 
-/* B$STINIT: all of the dynamic region is string space, and every temporary is free. */
-void str_init(word first, word end)
+/* B$STINIT: all of string space is one free entry, and every temporary is free. */
+void str_init(
+    char *first,
+    char *end)
 {
-    word n;
+    Tmp *tmp;
 
-    str_first = str_free = first;
+    str_first = str_free = (StrEntry *)first;
     str_end = end;
-    W(end) = 0xFFFF;
-    W(first) = end - first - 1;
+    make_free(str_first, end - first);
     cur_level = 0;
-    nul_back = (word)&str_nul;
     str_nul.len = 0;
-    str_nul.ptr = (word)&nul_back + 2;
-    tmp_head = 0;
-    for (n = NUMTEMPS; n; n--)
-        tmp_release(&temps[n - 1]);
+    str_nul.ptr = &nul_owner_slot;
+    for (tmp = temps; tmp < temps + NUMTEMPS; tmp++)
+        tmp_release(tmp);
 }
