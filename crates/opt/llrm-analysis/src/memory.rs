@@ -1190,6 +1190,9 @@ pub struct MemRef {
     /// `root`'s offset in its segment where an integer constant makes it,
     /// else 0: `disp` counts from it.
     pub origin: i64,
+    /// `root` is an integer constant a target with one address space made a
+    /// pointer of: `origin` is its linear address.
+    pub linear: bool,
     /// `root` is an object's own address, so `disp` is an offset in it:
     /// old `Space::Segment` and `Space::Frame`, as against a pointer.
     pub object: bool,
@@ -1236,6 +1239,7 @@ impl MemRef {
             segment: None,
             selector: None,
             origin: 0,
+            linear: false,
             object: false,
             space,
             index_bits,
@@ -1274,6 +1278,8 @@ impl MemRef {
         made.selector = made.segment.and_then(|one| unit.int_constant(one)).map(|bits| bits as i64);
         if let Some((selector, origin)) = pair_constant(unit, root) {
             (made.selector, made.origin) = (Some(selector), origin);
+        } else if let Some(address) = flat_constant(unit, root) {
+            (made.origin, made.linear) = (address, true);
         }
         made.object = object_of(unit, root).is_some();
         made
@@ -1351,6 +1357,7 @@ impl MemRef {
             segment: None,
             selector: None,
             origin: 0,
+            linear: false,
             object: false,
             space: 0,
             index_bits: 16,
@@ -1536,6 +1543,31 @@ fn bits_signed(
     bits: u128,
 ) -> i128 {
     signed(bits, unit.int_bits(operand).unwrap_or(128))
+}
+
+/// The linear address of a flat pointer `root` an integer constant makes: a
+/// target with one address space has no selector, and its pointer's integer is
+/// the address.
+fn flat_constant(
+    unit: &Unit,
+    root: Operand,
+) -> Option<i64> {
+    let spaces = unit.spaces();
+    if !spaces.far_is_near() || spaces.segment_bytes.is_some() {
+        return None;
+    }
+    let integer = match root {
+        Operand::Value(_) => match unit.defining(root)? {
+            (_, made) if matches!(made.opcode, Opcode::Cast(CastOp::IntToPtr)) => made.operands[0],
+            _ => return None,
+        },
+        Operand::Constant(id) => match &unit.context.get(id).kind {
+            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value }) => Operand::Constant(*value),
+            _ => return None,
+        },
+        Operand::Block(_) => return None,
+    };
+    unit.int_constant(integer).and_then(|bits| i64::try_from(bits).ok())
 }
 
 /// The selector `root` is `segment:0` of: the integer an `inttoptr` made

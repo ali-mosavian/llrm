@@ -252,6 +252,7 @@ mod tests {
             spaces: layout().spaces.roles,
             private: None,
             calling: None,
+            foreign: Vec::new(),
         };
         let model = (M32.cost_model())(&prices);
         let sizes = model.size_costs();
@@ -280,6 +281,7 @@ mod tests {
             spaces: layout().spaces.roles,
             private: None,
             calling: None,
+            foreign: Vec::new(),
         });
         assert_eq!((model.registers(), model.call_registers()), (6, 5));
         assert_eq!(model.address_forms(), forms);

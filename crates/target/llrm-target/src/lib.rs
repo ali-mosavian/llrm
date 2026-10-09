@@ -40,6 +40,10 @@ pub struct CpuPrices {
     pub private: Option<llrm_mir::target::PrivateConvention>,
     /// The conventions as the description states them.
     pub calling: Option<&'static calling::Calling>,
+    /// The platform's linear [low, high) ranges no program data occupies, for a
+    /// flat target (`Machine::flat_foreign`): there is no selector to find them
+    /// by.
+    pub foreign: Vec<(i64, i64)>,
 }
 
 /// A cost model that is only what a target describes: its registers, address
@@ -63,6 +67,7 @@ pub fn described_by_size(
         spaces: prices.spaces,
         private: prices.private.clone(),
         calling: prices.calling,
+        foreign: prices.foreign.clone(),
     })
 }
 
@@ -75,6 +80,7 @@ struct Described {
     spaces: llrm_mir::spaces::Spaces,
     private: Option<llrm_mir::target::PrivateConvention>,
     calling: Option<&'static calling::Calling>,
+    foreign: Vec<(i64, i64)>,
 }
 
 impl llrm_mir::target::Machine for Described {
@@ -106,15 +112,19 @@ impl llrm_mir::target::Machine for Described {
         self.spaces
     }
 
-    /// Memory without segments is linear: no selector and offset reach foreign
-    /// memory.
+    /// Memory without segments is linear, the offset the address: the
+    /// platform's ranges (`CpuPrices::foreign`) hold it or not.
     fn foreign_span(
         &self,
-        _: (i64, i64),
-        _: (i64, i64),
-        _: i64,
+        selectors: (i64, i64),
+        offsets: (i64, i64),
+        width: i64,
     ) -> Option<(i64, i64)> {
-        None
+        let linear = |(low, high): (i64, i64)| 0 <= low && low <= high && high <= 0xFFFF_FFFF;
+        if selectors != (0, 0) || !linear(offsets) {
+            return None;
+        }
+        machine::covered(&self.foreign, offsets.0, offsets.1 + width)
     }
 
     fn costs(&self) -> OperationCosts {
