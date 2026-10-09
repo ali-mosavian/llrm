@@ -10,6 +10,7 @@ use std::sync::Arc;
 use crate::analysis::frequency::Frequency;
 use crate::analysis::loops as loopy;
 use crate::backend::allocate;
+use crate::model::ir;
 use crate::model::lir::{Insn, Insns, LirBlock, LirBody};
 use crate::support::hash::{IndexMap, IndexSet};
 
@@ -310,9 +311,69 @@ pub fn differing_blocks(
     Differing { blocks, aligned }
 }
 
+/// Every value an instruction names: as it defines or reads it, as an operand,
+/// or in a constraint.
+pub fn names(one: &Insn) -> impl Iterator<Item = u32> + '_ {
+    one.defines
+        .iter()
+        .chain(&one.uses)
+        .copied()
+        .chain(
+            one.what
+                .iter()
+                .flat_map(|what| what.dests.iter().chain(&what.sources))
+                .flat_map(ir::values)
+                .map(|held| held.value),
+        )
+        .chain(one.requires.iter().chain(&one.delivers).map(|(held, _)| held.value))
+        .chain(one.widths.iter().map(|(value, _)| *value))
+}
+
+/// What a rewrite changed in a body: the instructions in only the body before
+/// (a block made over is all of them) or only the body after, and the values
+/// they name, which are the ones whose facts can differ.
+pub struct Changes {
+    pub gone: Vec<Arc<Insn>>,
+    pub added: Vec<Arc<Insn>>,
+    pub touched: crate::support::hash::HashSet<u32>,
+}
+
+/// The changes from `before` to `after`; None where they are not the same
+/// shape.
+pub fn changes(
+    before: &LirBody,
+    after: &LirBody,
+) -> Option<Changes> {
+    if before.blocks.len() != after.blocks.len()
+        || before.blocks.iter().zip(&after.blocks).any(|(one, two)| one.at != two.at)
+    {
+        return None;
+    }
+    let mut found = Changes { gone: Vec::new(), added: Vec::new(), touched: Default::default() };
+    for (one, two) in before.blocks.iter().zip(&after.blocks) {
+        if one.insns.same_insns(&two.insns) {
+            continue;
+        }
+        match aligned(&one.insns, &two.insns) {
+            Some(alike) => {
+                found.gone.extend(alike.gone.iter().map(|at| Arc::clone(&one.insns[*at])));
+                found.added.extend(alike.added.iter().map(|at| Arc::clone(&two.insns[*at])));
+            }
+            None => {
+                found.gone.extend(one.insns.iter().cloned());
+                found.added.extend(two.insns.iter().cloned());
+            }
+        }
+    }
+    found.touched = found.gone.iter().chain(&found.added).flat_map(|insn| names(insn)).collect();
+    Some(found)
+}
+
 /// What `aligned` finds: the runs both hold, as (position in `old`, position in
 /// `new`, length), in order of `old`, and the positions of what only one holds.
 pub struct Aligned {
+    /// How many instructions `old` held.
+    pub len_old: usize,
     pub runs: Vec<(usize, usize, usize)>,
     pub gone: Vec<usize>,
     pub added: Vec<usize>,
@@ -408,7 +469,7 @@ pub fn aligned(
             runs.sort_by_key(|run| run.0);
         }
     }
-    Some(Aligned { runs, gone, added })
+    Some(Aligned { len_old: old.len(), runs, gone, added })
 }
 
 /// The runs of instructions in only one of the two bodies, and of the parallel
