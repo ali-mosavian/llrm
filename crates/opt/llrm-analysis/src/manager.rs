@@ -566,10 +566,20 @@ pub fn writes(context: &Context, layout: &DataLayout, function: &Function, analy
 /// `writes` says: `floatfacts::solved_with`.
 pub struct FloatFacts;
 
+thread_local! {
+    static FLOAT_SOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has solved a function's floats.
+pub fn float_solves() -> usize {
+    FLOAT_SOLVES.with(std::cell::Cell::get)
+}
+
 impl Analysis for FloatFacts {
     type Result = floatfacts::Solved;
     const NAME: &'static str = "float-facts";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
+        FLOAT_SOLVES.with(|solves| solves.set(solves.get() + 1));
         let calls = writes(context, layout, function, analyses);
         let shape = analyses.get::<Shape>(context, layout, function);
         let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
