@@ -1140,6 +1140,7 @@ impl Analysis for MemoryCells {
             None,
             None,
             None,
+            true,
         )
     }
 

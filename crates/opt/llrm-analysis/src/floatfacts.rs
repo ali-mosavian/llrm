@@ -932,8 +932,9 @@ pub fn solved_over(
                 None,
                 None,
                 None,
+                false,
             )
-            .held();
+            .flat;
             reshadow = false;
         }
         let mut learned = |value: ValueId, fact: Finite, facts: &mut IndexMap<ValueId, Finite>| {

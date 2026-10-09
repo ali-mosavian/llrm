@@ -599,8 +599,11 @@ fn _killed(
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SolvedCells {
     /// Each block's instructions' cells, a block's together: a restart replaces
-    /// those of the blocks it works and shares the rest.
-    pub blocks: IndexMap<i64, Rc<HeldCells>>,
+    /// those of the blocks it works and shares the rest. One per instruction,
+    /// in the block's order; only where the solve is asked to keep them.
+    pub blocks: IndexMap<i64, Rc<Vec<Rc<Cells>>>>,
+    /// Otherwise every instruction's, in one map.
+    pub flat: HeldCells,
     pub outof: IndexMap<i64, Option<Rc<Cells>>>,
     /// The body's blocks and edges, as solved: a restart is of the same ones.
     frame: Rc<Frame>,
@@ -660,7 +663,9 @@ impl SolvedCells {
         function: &llrm_mir::module::Function,
         inst: InstId,
     ) -> Option<&Rc<Cells>> {
-        self.blocks.get(&cfg::id(function.parent(inst)?))?.get(&inst)
+        let block = function.parent(inst)?;
+        let at = function.block(block).instructions().iter().position(|one| *one == inst)?;
+        self.blocks.get(&cfg::id(block))?.get(at)
     }
 
     /// This, with the blocks `touched` had instructions moved in or out brought
@@ -674,11 +679,6 @@ impl SolvedCells {
         self.blocks.extend(worked.blocks);
         self.outof.extend(worked.outof);
         true
-    }
-
-    /// Every instruction's cells in one map.
-    pub fn held(&self) -> HeldCells {
-        self.blocks.values().flat_map(|block| block.iter().map(|(inst, cells)| (*inst, Rc::clone(cells)))).collect()
     }
 }
 
@@ -703,6 +703,7 @@ pub fn cells_solved(
     mut assume: Option<&mut BTreeSet<ValueId>>,
     allowed: Option<&BTreeSet<ValueId>>,
     restart: Option<(&SolvedCells, &BTreeSet<i64>)>,
+    keep: bool,
 ) -> SolvedCells {
     if restart.is_none() {
         CELL_DERIVATIONS.with(|count| count.set(count.get() + 1));
@@ -807,14 +808,20 @@ pub fn cells_solved(
     }
 
     let mut found = IndexMap::default();
+    let mut flat = IndexMap::default();
     for &at in &work {
         let mut here = entering(&outof, at).unwrap_or(Here::Plain(Cells::default()));
         // Instructions between two writes see one map, shared rather than
         // copied per instruction.
         let mut shared: Option<Rc<Cells>> = None;
-        let mut within = HeldCells::default();
+        let mut within = Vec::new();
         for &inst in function.block(cfg::block(at)).instructions() {
-            within.insert(inst, Rc::clone(shared.get_or_insert_with(|| Rc::new(here.cells().clone()))));
+            let here_cells = Rc::clone(shared.get_or_insert_with(|| Rc::new(here.cells().clone())));
+            if keep {
+                within.push(here_cells);
+            } else {
+                flat.insert(inst, here_cells);
+            }
             let writes = is_call(unit, inst)
                 || unmodeled_write(unit, inst)
                 || matches!(function.instruction(inst).opcode, Opcode::Store { .. });
@@ -823,13 +830,16 @@ pub fn cells_solved(
             }
             here = _killed(here, inst, known, calls, assume.as_deref_mut(), allowed, edge_facts, &mut queries);
         }
-        found.insert(at, Rc::new(within));
+        if keep {
+            found.insert(at, Rc::new(within));
+        }
     }
     let ends = work
         .iter()
+        .filter(|_| keep)
         .map(|at| (*at, outof.get(at).and_then(|held| held.as_ref()).map(|cells| Rc::new((**cells).clone()))))
         .collect();
-    SolvedCells { blocks: found, outof: ends, frame: Rc::clone(&frame) }
+    SolvedCells { blocks: found, flat, outof: ends, frame: Rc::clone(&frame) }
 }
 
 /// `previous`, what `cells` gave the body of the default question (no callee's
@@ -858,7 +868,8 @@ pub fn cells_restarted(
     };
     let mut reset = whole(touched);
     loop {
-        let solved = cells_solved(unit, &Calls::default(), None, None, None, None, None, Some((previous, &reset)));
+        let solved =
+            cells_solved(unit, &Calls::default(), None, None, None, None, None, Some((previous, &reset)), true);
         let spread = reset
             .iter()
             .filter(|at| solved.outof[*at] != previous.outof[*at])
@@ -1334,7 +1345,8 @@ fn _solved(
         // feed each other and run to one fixed point together.
         if let Some(calls) = calls {
             if rounds > 1 && (learned || !remembered) {
-                held = cells_solved(unit, calls, Some(&facts), initial, edges, assume.as_mut(), allowed, None).held();
+                held =
+                    cells_solved(unit, calls, Some(&facts), initial, edges, assume.as_mut(), allowed, None, false).flat;
                 remembered = true;
             }
             learned = false;
