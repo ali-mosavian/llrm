@@ -509,8 +509,17 @@ pub fn required(
     body: &LirBody,
     classes: &RegisterClasses,
 ) -> IndexMap<u32, Register> {
+    required_in(body, classes, &(0..body.blocks.len()).collect::<Vec<_>>())
+}
+
+/// `required` of the blocks at `positions` alone.
+pub fn required_in(
+    body: &LirBody,
+    classes: &RegisterClasses,
+    positions: &[usize],
+) -> IndexMap<u32, Register> {
     let mut out: IndexMap<u32, Register> = IndexMap::default();
-    for block in &body.blocks {
+    for block in positions.iter().map(|at| &body.blocks[*at]) {
         for one in &block.insns {
             for wanted in _wanted(one, classes) {
                 out.insert(wanted.value, wanted.register);
