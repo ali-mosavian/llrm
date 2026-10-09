@@ -82,7 +82,7 @@ struct Rename {
 /// for that stretch alone, and the next copy to try is no earlier than the first instruction whose liveness moved: an earlier
 /// one saw the same instructions and the same liveness, and failed.
 fn _thrash_block(bits: u32, block: &LirBlock, dead: Lanes) -> Option<LirBlock> {
-    let mut insns: Vec<Arc<Insn>> = block.insns.clone();
+    let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
     let exit = dead;
     let mut after = _dead_after_by(bits, &insns, exit);
     let (mut from, mut renamed) = (0, 0);
@@ -119,7 +119,7 @@ fn _thrash_block(bits: u32, block: &LirBlock, dead: Lanes) -> Option<LirBlock> {
             from = index;
             dead = liveness::with_effect(bits, &insns[index], |effect| effect.map_or_else(Lanes::new, |effect| effect.dead_before(&dead)));
         }
-        if cfg!(test) || std::env::var_os("LLRM_CHECK_THRASH").is_some() {
+        if cfg!(test) || llrm_support::env_set("LLRM_CHECK_THRASH") {
             assert!(after == _dead_after_by(bits, &insns, exit), "a rename changed what is dead beyond what was worked out again");
         }
         renamed += 1;
@@ -458,9 +458,9 @@ mod tests {
         let copy = Insn { defines: vec![2], uses: vec![1], .._insn(1, "mov", Operation::Move, vec![di], vec![ax]) };
         let body = _body(vec![producer, copy], Register::EDI);
         let following = body.blocks[1].clone();
-        let mut insns = following.insns.clone();
+        let mut insns = following.insns.to_vec();
         insns[0] = Arc::new(Insn { uses: vec![2], ..(*insns[0]).clone() });
-        let body = LirBody { blocks: vec![body.blocks[0].clone(), LirBlock { insns, ..following }], ..body };
+        let body = LirBody { blocks: vec![body.blocks[0].clone(), LirBlock { insns: insns.into(), ..following }], ..body };
 
         let result = thrashed(body);
 

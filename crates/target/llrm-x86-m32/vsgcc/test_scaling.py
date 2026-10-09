@@ -37,13 +37,14 @@ def test_slope_of_exact_powers():
 def test_the_generated_work_is_still_there_after_optimisation(axis, tmp_path):
     """A generator whose program folds away measures nothing: llrm -O2's MIR must grow with N (it was 0 growth for a constant chain)."""
     sizes = {}
-    for n in (32, 64):
+    small, large = (8, 16) if axis == "nest" else (32, 64)  # a nest 64 deep is a minute's compile
+    for n in (small, large):
         source = tmp_path / f"{axis}{n}.c"
         source.write_text(scaling.AXES[axis](n))
         sizes[n] = scaling.llrm_profile(source)
         assert sizes[n]["mir"], "llrm printed no [mir] line"
-    assert sizes[64]["mir"] >= 1.6 * sizes[32]["mir"]
-    assert sizes[64]["functions"] >= sizes[32]["functions"]
+    assert sizes[large]["mir"] >= 1.6 * sizes[small]["mir"]
+    assert sizes[large]["functions"] >= sizes[small]["functions"]
 
 
 def test_parse_time_reads_own_ms_and_the_mir_line():

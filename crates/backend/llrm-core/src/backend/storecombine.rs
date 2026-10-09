@@ -56,7 +56,7 @@ pub fn combined(body: &LirBody) -> LirBody {
         ..Semantics::new(Operation::Nothing)
     };
     for block in &mut out.blocks {
-        let mut insns = block.insns.clone();
+        let mut insns = block.insns.to_vec();
         let mut pending: Option<(usize, (Mem, i64))> = None;
         for index in 0..insns.len() {
             let one = Arc::clone(&insns[index]);
@@ -89,7 +89,7 @@ pub fn combined(body: &LirBody) -> LirBody {
             }
             pending = current.map(|current| (index, current));
         }
-        block.insns = insns;
+        block.insns = insns.into();
     }
     out
 }

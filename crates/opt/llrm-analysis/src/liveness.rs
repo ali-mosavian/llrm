@@ -165,9 +165,19 @@ pub fn phi_inputs(function: &Function, found: Option<&Liveness>) -> BTreeSet<Val
 
 /// What is live at each block's entry and exit, to a fixed point.
 ///
+thread_local! {
+    static SOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has solved a function's liveness, for a test that a caller asks the one it holds.
+pub fn solves() -> usize {
+    SOLVES.with(std::cell::Cell::get)
+}
+
 /// Run on bit sets over dense value indices; the sets, and the order they
 /// are updated in, are Python's.
 pub fn live(function: &Function) -> Liveness {
+    SOLVES.with(|solves| solves.set(solves.get() + 1));
     let layout = function.layout();
     let mut index: HashMap<ValueId, usize> = HashMap::default();
     let mut values: Vec<ValueId> = Vec::new();

@@ -142,7 +142,7 @@ impl Frame {
                     insns.push(std::sync::Arc::new(crate::model::lir::Insn { what: Some(crate::model::ir::Semantics { dests, sources, ..what.clone() }), ..(**one).clone() }));
                 }
             }
-            blocks.push(crate::model::lir::LirBlock { insns, ..block.clone() });
+            blocks.push(crate::model::lir::LirBlock { insns: insns.into(), ..block.clone() });
         }
         let mut tagged = body.with_blocks(blocks);
         let homes = body

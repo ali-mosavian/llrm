@@ -148,9 +148,14 @@ pub fn stamp(program: &mut Program, eligible: &BTreeSet<Defined>) -> BTreeSet<De
                 // Found once, for the body as it is: its ranges and the arguments' proofs ask the same.
                 let registers = crate::consts::known(&unit, None, None, None);
                 let unit = unit.with_registers(&registers);
-                let scoped = ranges::bounded(&unit).unwrap_or_default();
+                let scoped = ranges::bounds(&unit).map(std::borrow::Cow::into_owned).unwrap_or_default();
                 for (block, inst, target) in calls {
-                    let scope = scoped.get(&cfg::id(block)).cloned().unwrap_or_default();
+                    // A round assumes a range before it proves it: where the loops' facts contradict each other under the assumption the
+                    // block is not reached, and a call in it passes nothing.
+                    if scoped.unreachable(cfg::id(block)) {
+                        continue;
+                    }
+                    let scope = scoped.at(cfg::id(block)).cloned().unwrap_or_default();
                     let parameters = program.modules[target.0].global(target.1).function().expect("a procedure").parameters().len();
                     for index in 0..parameters {
                         let Some(entry) = next.get_mut(&(target, index)) else { continue };

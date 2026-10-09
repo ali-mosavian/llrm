@@ -125,6 +125,8 @@ pub struct Insn {
     pub debug: DebugTags,
     /// What it does to the registers (`liveness::effect`), worked out once for everything that asks.
     pub effect: Derived<(u32, Option<crate::backend::liveness::Effect>)>,
+    /// Its identity (`Insn::id`): given when first asked, never again to another instruction.
+    pub ident: Derived<u64>,
 }
 
 /// A fact worked out from an instruction's fields, kept on it for every pass that asks. Cloning gives an empty one: a clone is
@@ -351,7 +353,18 @@ impl Insn {
             line: None,
             debug: DebugTags::default(),
             effect: Derived::default(),
+            ident: Derived::default(),
         }
+    }
+
+    /// The instruction itself, as a number: what a table keeps of an instruction it must find again in a later body that shares it. It is
+    /// given when first asked and shared by every `Arc` of the instruction; a clone, which is made to be changed, is another instruction
+    /// and has its own. Numbers are never reused, where the address of a dropped instruction is (a table kept past the instruction it
+    /// named would answer for whatever was allocated there). They name, and no order or iteration of them is ever read.
+    #[must_use]
+    pub fn id(&self) -> u64 {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        *self.ident.get_or_init(|| NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Whether it was inserted beside a source instruction: it covers no bytes.
@@ -447,11 +460,82 @@ impl Repr for Phi {
 #[derive(Debug, Eq, PartialEq)]
 pub struct LirBlock {
     pub at: i64,
-    pub insns: Vec<Arc<Insn>>,
+    pub insns: Insns,
     pub succ: Vec<i64>,
     pub phis: Vec<Phi>,
     /// Laid out after the hot code: every path from it ends in `unreachable`, isel finds.
     pub cold: bool,
+}
+
+/// A block's instructions, shared: a copy of the block is the same instructions, and two blocks are the same instructions when
+/// they are the same allocation (`same_as`), which is how the facts of a block are kept for every body that has it.
+#[derive(Clone, Debug, Default)]
+pub struct Insns(Arc<[Arc<Insn>]>);
+
+impl Insns {
+    /// `change` made to a copy of the instructions, which then are these: the way a test or a one-off edit changes a block.
+    pub fn edit<R>(&mut self, change: impl FnOnce(&mut Vec<Arc<Insn>>) -> R) -> R {
+        let mut insns = self.0.to_vec();
+        let out = change(&mut insns);
+        *self = insns.into();
+        out
+    }
+
+    pub fn same_as(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
+    /// The same instructions, whether or not they were put in a list of their own: the allocation, or each instruction by identity.
+    pub fn same_insns(&self, other: &Self) -> bool {
+        self.same_as(other) || (self.len() == other.len() && self.iter().zip(other.iter()).all(|(one, two)| Arc::ptr_eq(one, two)))
+    }
+}
+
+impl std::ops::Deref for Insns {
+    type Target = [Arc<Insn>];
+    fn deref(&self) -> &[Arc<Insn>] {
+        &self.0
+    }
+}
+
+impl From<Vec<Arc<Insn>>> for Insns {
+    fn from(insns: Vec<Arc<Insn>>) -> Self {
+        Self(insns.into())
+    }
+}
+
+impl PartialEq for Insns {
+    fn eq(&self, other: &Self) -> bool {
+        self.same_as(other) || *self.0 == *other.0
+    }
+}
+
+impl Eq for Insns {}
+
+impl PartialEq<Vec<Arc<Insn>>> for Insns {
+    fn eq(&self, other: &Vec<Arc<Insn>>) -> bool {
+        *self.0 == **other
+    }
+}
+
+impl<const N: usize> PartialEq<[Arc<Insn>; N]> for Insns {
+    fn eq(&self, other: &[Arc<Insn>; N]) -> bool {
+        *self.0 == *other
+    }
+}
+
+impl FromIterator<Arc<Insn>> for Insns {
+    fn from_iter<I: IntoIterator<Item = Arc<Insn>>>(insns: I) -> Self {
+        Self(insns.into_iter().collect())
+    }
+}
+
+impl<'a> IntoIterator for &'a Insns {
+    type Item = &'a Arc<Insn>;
+    type IntoIter = std::slice::Iter<'a, Arc<Insn>>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
 }
 
 #[cfg(test)]
@@ -473,7 +557,7 @@ impl LirBlock {
     pub fn new(at: i64, insns: Vec<Arc<Insn>>) -> Self {
         Self {
             at,
-            insns,
+            insns: insns.into(),
             succ: Vec::new(),
             phis: Vec::new(),
             cold: false,
@@ -483,7 +567,7 @@ impl LirBlock {
     /// Python's `replace(block, insns=insns)`: the old insns are never copied.
     #[must_use]
     pub fn with_insns(&self, insns: Vec<Arc<Insn>>) -> Self {
-        Self { at: self.at, insns, succ: self.succ.clone(), phis: self.phis.clone(), cold: self.cold }
+        Self { at: self.at, insns: insns.into(), succ: self.succ.clone(), phis: self.phis.clone(), cold: self.cold }
     }
 
     /// Python `LirBlock.arrives`.
@@ -908,6 +992,36 @@ where
 
 #[cfg(test)]
 mod tests {
+
+    /// A table kept past the instruction it named answered for whatever was allocated at its address next: the key of an instruction was its
+    /// address, which a dropped instruction gives back. An instruction is its number, never reused; its clone is another instruction.
+    #[test]
+    fn test_a_dropped_instructions_key_is_not_given_to_the_next_one_made() {
+        let mut seen = std::collections::BTreeSet::new();
+        for at in 0..200 {
+            let made = instruction(at, None);
+            assert!(seen.insert(crate::analysis::intervals::key(&made)), "the key of instruction {at} is one an earlier instruction had");
+            drop(made);
+        }
+        let one = instruction(0, None);
+        let same = Arc::clone(&one);
+        let other = Arc::new((*one).clone());
+        assert_eq!(crate::analysis::intervals::key(&one), crate::analysis::intervals::key(&same), "a share is the instruction");
+        assert_ne!(crate::analysis::intervals::key(&one), crate::analysis::intervals::key(&other), "a clone is another instruction");
+    }
+
+    /// A copy of a body copied every block's instruction list (a block clone was 2.5% of compiling d_faces), and no block could say it
+    /// was the one a fact had been made of. A copy shares them; a rewritten block is the only one that is not the same.
+    #[test]
+    fn test_a_copy_of_a_body_shares_its_blocks_instructions_and_a_rewrite_shares_the_rest() {
+        let one = Arc::new(Insn::new(1, None, None, Vec::new(), Vec::new()));
+        let body = super::LirBody::new("f", 1, vec![super::LirBlock::new(1, vec![Arc::clone(&one)]), super::LirBlock::new(2, vec![one])], Default::default(), Default::default());
+        let copy = body.clone();
+        assert!(body.blocks.iter().zip(&copy.blocks).all(|(a, b)| a.insns.same_as(&b.insns)), "a copy made its own instruction lists");
+        let rewritten = body.with_blocks(vec![body.blocks[0].with_insns(Vec::new()), body.blocks[1].clone()]);
+        assert!(!rewritten.blocks[0].insns.same_as(&body.blocks[0].insns) && rewritten.blocks[1].insns.same_as(&body.blocks[1].insns));
+        assert!(body.blocks[0].insns == body.blocks[0].insns.to_vec(), "same instructions compare equal as lists");
+    }
     use std::sync::Arc;
 
     use super::{Insn, anchor, without};

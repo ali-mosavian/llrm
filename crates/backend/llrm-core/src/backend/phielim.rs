@@ -473,7 +473,7 @@ fn _nothing(beside: Option<&Insn>, at: i64) -> (i64, i64) {
 /// The copies at the end of the block, but ahead of what leaves it.
 fn _before_the_terminator(block: &LirBlock, added: &[Arc<Insn>]) -> Vec<Arc<Insn>> {
     if added.is_empty() {
-        return block.insns.clone();
+        return block.insns.to_vec();
     }
     let insns = &block.insns;
     let mut cut = insns.len();
@@ -505,7 +505,7 @@ pub fn placed_on_edges(body: &LirBody, transfers: &IndexMap<(i64, i64), Vec<Arc<
     if split.is_empty() {
         let mut out = body.clone();
         for block in &mut out.blocks {
-            block.insns = _before_the_terminator(block, copies.get(&block.at).map_or(&[][..], Vec::as_slice));
+            block.insns = _before_the_terminator(block, copies.get(&block.at).map_or(&[][..], Vec::as_slice)).into();
         }
         return out;
     }
@@ -769,7 +769,7 @@ mod tests {
     }
 
     fn block(at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>, phis: Vec<Phi>) -> LirBlock {
-        LirBlock { at, insns, succ, phis, cold: false }
+        LirBlock { at, insns: insns.into(), succ, phis, cold: false }
     }
 
     fn body(name: &str, blocks: Vec<LirBlock>) -> LirBody {

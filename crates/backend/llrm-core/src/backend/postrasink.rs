@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use crate::support::hash::IndexMap;
 
+use crate::analysis::dataflow::{self, Direction};
 use crate::backend::liveness::{_before, _effects, _universe};
 use crate::backend::peephole::{Lanes, _lanes};
 use crate::backend::copysink::{copy_of, touches};
@@ -18,22 +19,18 @@ use crate::model::lir::{Insn, LirBlock, LirBody};
 /// The lanes live on entry to each block.
 fn live_in(body: &LirBody) -> IndexMap<i64, Lanes> {
     let universe = _universe();
-    let mut into: IndexMap<i64, Lanes> = body.blocks.iter().map(|block| (block.at, Lanes::new())).collect();
     // Decoded once: the fixed point reads each block several times.
     let decoded: IndexMap<i64, _> = body.blocks.iter().map(|block| (block.at, _effects(body.bits, block))).collect();
-    let mut changing = true;
-    while changing {
-        changing = false;
-        for block in body.blocks.iter().rev() {
-            let after: Lanes = block.succ.iter().filter_map(|to| into.get(to)).flat_map(|lanes| lanes.iter().copied()).collect();
-            let before = _before(&decoded[&block.at], after, &universe);
-            if before != into[&block.at] {
-                into.insert(block.at, before);
-                changing = true;
-            }
-        }
-    }
-    into
+    let nodes: Vec<&LirBlock> = body.blocks.iter().collect();
+    let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &block.succ)).collect();
+    dataflow::solve(
+        &nodes,
+        Direction::Backward,
+        |_| Lanes::new(),
+        |at, into| succ[&at].iter().filter_map(|to| into.get(to)).flat_map(|lanes| lanes.iter().copied()).collect(),
+        |at, after| _before(&decoded[&at], after.clone(), &universe),
+    )
+    .output
 }
 
 /// Blocks reachable from the entry, each before the successors it does not come back to (reverse post-order).
@@ -73,7 +70,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
         }
     }
     let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &block.succ)).collect();
-    let mut insns: IndexMap<i64, Vec<Arc<Insn>>> = body.blocks.iter().map(|block| (block.at, block.insns.clone())).collect();
+    let mut insns: IndexMap<i64, Vec<Arc<Insn>>> = body.blocks.iter().map(|block| (block.at, block.insns.to_vec())).collect();
     let mut changed = false;
     for at in reverse_post_order(body) {
         let to = succ[&at];

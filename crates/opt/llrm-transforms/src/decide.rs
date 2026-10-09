@@ -78,7 +78,7 @@ fn _decided(context: &mut Context, layout: &DataLayout, function: &mut Function,
     if threaded {
         analyses.invalidate(&PreservedAnalyses::none());
     }
-    let held = Held::of(context, layout, function, analyses, true);
+    let held = Held::of(context, layout, function, analyses, true).with_bounded(context, layout, function, analyses);
     let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()))?;
     if decisions.is_empty() {
         return Ok(threaded);
@@ -108,7 +108,7 @@ fn _decisions(unit: &Unit) -> Result<Vec<(BlockId, BlockId)>, String> {
     let successors =
         |at: i64, values: &IndexMap<ValueId, Known>, states: &IndexMap<ValueId, State>| _executable_successors(unit, at, values, states, Some(&nonnull));
     let facts = constant_cycles::propagated(unit, &facts, Some(&successors));
-    let scoped = ranges::bounded(unit)?;
+    let scoped = ranges::bounds(unit)?;
     let mut out = Vec::new();
     for &block in function.layout() {
         let Some(last) = function.terminator(block) else {
@@ -124,7 +124,7 @@ fn _decisions(unit: &Unit) -> Result<Vec<(BlockId, BlockId)>, String> {
         };
         let mut answer = _outcome(unit, block, &facts, Some(&nonnull));
         if answer.is_none()
-            && let Some(scope) = scoped.get(&cfg::id(block))
+            && let Some(scope) = scoped.at(cfg::id(block))
         {
             let mut possible = Vec::new();
             for target in function.successors(block) {
@@ -155,10 +155,11 @@ fn _implied(unit: &Unit, block: BlockId, last: InstId) -> Option<bool> {
     let (left, right) = (induction::term(unit, *left)?, induction::term(unit, *right)?);
     let (left, right) = (Scev::of(&left, width), Scev::of(&right, width));
     let at = cfg::id(block);
-    if guards::holds_given(unit, at, &[], *predicate, &left, &right) {
+    let given = guards::Given::at(unit, at, &[]);
+    if given.holds(unit, *predicate, &left, &right) {
         return Some(true);
     }
-    guards::holds_given(unit, at, &[], predicate.inverse(), &left, &right).then_some(false)
+    given.holds(unit, predicate.inverse(), &left, &right).then_some(false)
 }
 
 /// `last`, a terminator, replaced by a jump to `target`.

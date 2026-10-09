@@ -24,6 +24,15 @@ the Python tests, the compile-everything test: 2-2.5 minutes); the tiers cut the
 skips ~190 s of debugger and identity steps) and the load it puts on the host. Replaying the 45 red steps in the 194
 gate logs, the fast tier selects the failing step every time. Of the last 80 merges, 61 pick fast, 17 full, 2 nothing.
 
+## CI
+
+`.github/workflows/ci.yml` runs the same gate on every pull request and on main, as a status that nothing waits for
+(it is not a required check). `gate.py plan --json` picks the tier from the diff and the job groups it needs
+(`[groups]` in tiers.toml); one build job makes the target dir, the groups run in parallel on it. A step that needs a
+tool not in the repository (Turbo C++, CodeView, QCport's Borland C, QuickBASIC) is SKIPPED with the reason, and a
+run language or test binary that needs one is `[dropped]` by name; this happens only with `GATE_ALLOW_MISSING=1`,
+which only the workflow sets. Your own gate and the full run on main still run them.
+
 
 ### Compile cost and its growth
 
@@ -66,6 +75,13 @@ measured in each, as -% of the compile instructions of the file named (2026-10-0
 Same sign and size, except where one step shrinks a share the faster build has already made smaller (#1032's -17.3% is -13.8% on `dist`:
 the peel it removed was a larger part of a slower compile).
 
+### Reading a flagged step
+
+Work done by a shared engine is timed under the engine's own span, and a step's row is only its own code. Moving a step's work into an
+engine that runs inside another step's span (a cleanup, an allocator route, a solver) raises that step's row even where the total falls;
+the fix is to give the engine its own span, not to move the tolerance. A flagged step row names the steps of its axis and level whose
+cost at 2N rose most: the callee that took the work is among them.
+
 ## What belongs in the suite
 
 Tests assert program behavior, representation invariants, or a named regression.
@@ -87,7 +103,7 @@ skipped, loudly, when `target/release` has no binaries.
 ## QCport compiles
 
 QCport, the largest C program llrm-c compiles, is not in this repository,
-so CI cannot build it. Before merging a change to llrm-c, HIR, its verifier
+so CI skips it. Before merging a change to llrm-c, HIR, its verifier
 or MIR lowering, compile its 65 modules at -O2 and -Os; every one must
 compile (#238 made the driver's verifier refuse five, unseen):
 

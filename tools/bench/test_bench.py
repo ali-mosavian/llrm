@@ -58,6 +58,25 @@ class KnownTests(unittest.TestCase):
 
 
 class BlessTests(unittest.TestCase):
+    def test_blessing_changes_the_files_whose_numbers_moved_and_no_others(self):
+        """A bless rewrote the reason and date of every benchmark: a pull request of 43 files where 6 had moved (#1024, #1085)."""
+        import tempfile
+        import tomllib
+
+        with tempfile.TemporaryDirectory() as where:
+            one, other = Path(where) / "one", Path(where) / "other"
+            for directory in (one, other):
+                directory.mkdir()
+                bench.write_expected(directory, {("x", "c", "O2"): dict(BASE)}, "x", "first")
+            before = {d: (d / "expected.toml").read_bytes() for d in (one, other)}
+            moved = dict(BASE, instructions=BASE["instructions"] - 7)
+            self.assertFalse(bench.write_expected(other, {("x", "c", "O2"): dict(BASE)}, "x", "second"))
+            self.assertTrue(bench.write_expected(one, {("x", "c", "O2"): moved}, "x", "second"))
+            self.assertEqual((other / "expected.toml").read_bytes(), before[other])
+            changed = tomllib.loads((one / "expected.toml").read_text())
+        self.assertEqual(changed["reason"], "second")
+        self.assertEqual(changed["c"]["O2"]["instructions"], BASE["instructions"] - 7)
+
     def test_a_reason_with_quotes_leaves_a_readable_file(self):
         """--reason 'VAL("0")' wrote reason = "...VAL("0")...": the next gate run died on the TOML."""
         import tempfile

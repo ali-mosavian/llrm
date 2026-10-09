@@ -63,6 +63,36 @@ fn test_a_value_only_phis_name_is_spilled_at_its_full_width() {
     }
 }
 
+/// A web of phis was closed by growing every value's set from its members' sets, round after round until none grew: a chain of phis
+/// the other way round from the blocks took a round for each link, each round over every set (56 M of a 16-deep nest's compile).
+/// The webs are the connected values, found once, and a value is as wide as anything in its web, whatever order the phis come in.
+#[test]
+fn test_a_chain_of_phis_is_one_web_whatever_order_its_links_come_in() {
+    use crate::model::ir::{Held, Operation, Semantics};
+    use crate::model::lir::{Insn, LirBlock, Phi};
+    let links = 40;
+    let wide = |value: u32, width: u32| {
+        let what = Semantics { name: Some("mov".to_owned()), dests: vec![Loc::Held(Held { value, width })], sources: vec![], ..Semantics::new(Operation::Move) };
+        std::sync::Arc::new(Insn::new(i64::from(value), None, Some(what), vec![value], vec![]))
+    };
+    // Block k joins value 100 + links - k - 1 to 100 + links - k: the chain's links come from its far end towards its start.
+    let blocks: Vec<LirBlock> = (0..links)
+        .map(|k| {
+            let value = 100 + links - k;
+            let mut block = LirBlock::new(i64::from(k), vec![wide(value, if k == links - 1 { 4 } else { 2 })]);
+            block.phis = vec![Phi { result: value - 1, incoming: vec![(i64::from(k), value)] }];
+            block
+        })
+        .collect();
+    let body = LirBody::new("chain", 0, blocks, IndexMap::default(), IndexMap::default());
+    let stored: BTreeSet<u32> = (100..=100 + links).collect();
+    let widths = ssaspill::widths_through_phis(&body, &stored);
+    for value in &stored {
+        assert_eq!(widths[value], joined_width(&body, *value).max(2), "value#{value}");
+    }
+    assert!(widths.values().all(|width| *width == 4), "the chain is one web, as wide as its widest member");
+}
+
 /// A phi whose arguments are all one value stayed a value of its own: SsaSpill
 /// held it apart from the value it renames, stored it to a slot on every
 /// iteration and spilled the original around it (deedlines PLASMABLOBS' 160-trip
@@ -410,9 +440,11 @@ fn test_a_copy_group_is_one_point_not_one_per_copy() {
     let grouped = found(&eliminated);
     let mut apart = eliminated.clone();
     for block in &mut apart.blocks {
-        for one in block.insns.iter_mut().filter(|one| one.group.is_some()) {
-            std::sync::Arc::make_mut(one).group = None;
-        }
+        block.insns.edit(|insns| {
+            for one in insns.iter_mut().filter(|one| one.group.is_some()) {
+                std::sync::Arc::make_mut(one).group = None;
+            }
+        });
     }
     assert!(grouped < found(&apart), "{grouped} points with the copies grouped, {} apart", found(&apart));
 }
@@ -457,7 +489,7 @@ fn test_a_placeholder_between_a_groups_copies_does_not_end_the_group() {
     for block in &mut split.blocks {
         let Some(first) = block.insns.iter().position(|one| one.group.is_some()) else { continue };
         let blank = std::sync::Arc::new(crate::model::lir::Insn::new(block.insns[first].at, Some((block.insns[first].at, block.insns[first].at)), None, Vec::new(), Vec::new()));
-        let mut insns = block.insns.clone();
+        let mut insns = block.insns.to_vec();
         insns.insert(first + 1, blank);
         *block = block.with_insns(insns);
     }

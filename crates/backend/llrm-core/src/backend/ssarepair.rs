@@ -197,7 +197,7 @@ pub fn repaired(body: &LirBody, redefined: &BTreeSet<u32>, held: &IndexMap<i64, 
         .blocks
         .iter()
         .map(|block| {
-            let insns = insns_of.get(&block.at).cloned().unwrap_or_else(|| block.insns.clone());
+            let insns = insns_of.get(&block.at).cloned().unwrap_or_else(|| block.insns.to_vec());
             let phis = phis_of.get(&block.at).cloned().unwrap_or_default();
             LirBlock { phis, ..block.with_insns(insns) }
         })

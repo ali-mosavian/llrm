@@ -21,7 +21,7 @@ use crate::support::hash::IndexMap;
 pub(super) fn combined(bits: u32, blocks: Vec<LirBlock>, cpu: &Profile, rules: &peep::Rules) -> Vec<LirBlock> {
     let exposed = BTreeSet::new();
     let read_by_phis: BTreeSet<u32> = blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value)).collect();
-    let made: IndexMap<i64, Vec<Arc<Insn>>> = blocks.iter().map(|block| (block.at, block.insns.clone())).collect();
+    let made: IndexMap<i64, Vec<Arc<Insn>>> = blocks.iter().map(|block| (block.at, block.insns.to_vec())).collect();
     // A far-pointer field is two language-visible word loads but one target instruction.
     let selecting = farload::selectors(&made, &read_by_phis);
     let made: IndexMap<i64, Vec<Arc<Insn>>> = made.into_iter().map(|(at, insns)| (at, farload::selected(&insns, &selecting))).collect();
@@ -40,7 +40,7 @@ pub(super) fn combined(bits: u32, blocks: Vec<LirBlock>, cpu: &Profile, rules: &
         made.into_iter().map(|(at, insns)| (at, _rematerialized_arguments(&insns, &uses, &exposed))).collect();
     let uses = recount(&made, &blocks);
     let mut made = dword_pairs(made, &uses, &blocks);
-    blocks.into_iter().map(|block| LirBlock { insns: made.shift_remove(&block.at).expect("every block"), ..block }).collect()
+    blocks.into_iter().map(|block| LirBlock { insns: made.shift_remove(&block.at).expect("every block").into(), ..block }).collect()
 }
 
 /// How many times each value is read: by instructions, their fixed

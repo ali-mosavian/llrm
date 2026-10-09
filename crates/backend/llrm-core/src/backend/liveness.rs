@@ -103,7 +103,7 @@ pub fn effect(bits: u32, one: &Insn) -> Option<Effect> {
     let (was, answer) = one.effect.get_or_init(|| (bits, worked_out(bits, one)));
     // Asked at another width than the first time: not the answer kept.
     let found = if *was == bits { answer.clone() } else { worked_out(bits, one) };
-    if std::env::var_os("LLRM_CHECK_EFFECT").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_EFFECT") {
         assert!(format!("{found:?}") == format!("{:?}", worked_out(bits, one)), "an instruction's kept effect is not the one its fields give");
     }
     found
@@ -137,7 +137,8 @@ pub fn _before(effects: &[Option<Effect>], live: Lanes, universe: &Lanes) -> Lan
 
 /// The lanes live before `block`, given those live after it.
 pub fn _backwards(bits: u32, block: &LirBlock, live: Lanes, universe: &Lanes) -> Lanes {
-    _before(&_effects(bits, block), live, universe)
+    // Each effect is read where it is kept: a copy of every instruction's, for each round of a fixed point, was a tenth of peephole.
+    block.insns.iter().rev().fold(live, |live, one| with_effect(bits, one, |effect| effect.map_or_else(|| *universe, |effect| effect.live_before(&live))))
 }
 
 /// What a call says it reads and writes, for an instruction no decoder covers.

@@ -105,7 +105,7 @@ impl ModuleAnalysis for Summaries {
         memo.facts = body_facts.clone();
         memo.globals = Some(Rc::clone(&globals_held));
         memo.declarations = Some(declarations);
-        if std::env::var_os("LLRM_CHECK_MODULES").is_some() {
+        if llrm_support::env_set("LLRM_CHECK_MODULES") {
             let fresh = alias::summaries(&procedures, known.as_ref());
             if found != fresh {
                 let (now, then) = (found.as_ref().ok(), fresh.as_ref().ok());
@@ -591,7 +591,7 @@ impl Analysis for FloatFacts {
         let unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_assumptions(&assumptions).with_registers(&registers).with_annotated(&references).with_exposed(&exposed);
         match &*through {
             Ok(integers) => {
-                if std::env::var_os("LLRM_CHECK_FACTS").is_some() {
+                if llrm_support::env_set("LLRM_CHECK_FACTS") {
                     assert!(*integers == consts::known(&unit, Some(&calls), None, None), "ThroughMemory's integers are not those the float solve derives for itself");
                 }
                 floatfacts::solved_over(&unit, &calls, None, integers)
@@ -704,6 +704,7 @@ pub struct Held {
     pointers: Option<Rc<<Pointers as Analysis>::Result>>,
     annotated: Option<Rc<<Annotated as Analysis>::Result>>,
     counted: Option<Rc<<Counted as Analysis>::Result>>,
+    bounded: Option<Rc<<Bounded as Analysis>::Result>>,
 }
 
 impl Held {
@@ -717,7 +718,15 @@ impl Held {
             annotated: alias.then(|| analyses.get::<Annotated>(context, layout, function)),
             // Annotated has proved them already.
             counted: alias.then(|| analyses.get::<Counted>(context, layout, function)),
+            bounded: None,
         }
+    }
+
+    /// Also what the counted loops bound: for a pass that asks it, so that it is the manager's, kept and brought up to date, and
+    /// not a solve of the pass's own.
+    pub fn with_bounded(mut self, context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self {
+        self.bounded = Some(analyses.get::<Bounded>(context, layout, function));
+        self
     }
 
     /// A unit over `function`, the body these were found of.
@@ -731,6 +740,9 @@ impl Held {
         }
         if let Some(counted) = self.counted.as_deref() {
             unit = unit.with_counted(counted);
+        }
+        if let Some(Ok(bounds)) = self.bounded.as_deref() {
+            unit = unit.with_bounds(bounds);
         }
         unit
     }
