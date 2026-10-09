@@ -60,3 +60,23 @@ fn test_a_latch_that_ends_in_a_jump_elsewhere_is_not_priced_as_falling_through()
     let jumps = text.lines().filter(|line| line.trim().starts_with("jmp ")).count();
     assert!(jumps <= 2, "{jumps} jumps: {text}");
 }
+
+/// A turn was kept only for a third fewer jumps, counted alike whatever the
+/// jump cost: x_adler's loop, whose `jb` over one arm and `jne` back are the
+/// clocks of a taken `jcc` each, stayed as written (1.12 of gcc's clocks; 12%
+/// for the turn).
+#[test]
+fn test_a_turn_that_saves_clocks_is_made_whatever_the_share_of_jumps() {
+    let source = concat!(env!("CARGO_MANIFEST_DIR"), "/crates/target/llrm-x86-m32/vsgcc/kernels/x_adler/x_adler.c");
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-O2", "-m32", "-mabi=sysv", "-march=i486", "-S", "-o", "a.s", source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let counters: Vec<&str> = lines.windows(2).filter(|pair| pair[0].starts_with("inc ")).map(|pair| pair[1]).collect();
+    assert!(counters.iter().any(|next| next.starts_with("je ")), "the loop's test branches back: {counters:?}\n{text}");
+}

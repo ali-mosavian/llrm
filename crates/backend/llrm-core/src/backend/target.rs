@@ -258,10 +258,12 @@ impl Segments {
     }
 }
 
-/// The built-in machine's.
+/// The built-in machine's, for the tests of this crate.
+#[cfg(test)]
 pub static BUILT_IN: LazyLock<Segments> = LazyLock::new(|| Segments::of(&llrm_x86_m16::machine::BUILT_IN));
 
-/// The segment registers of `machine::BASIC`.
+/// The segment registers of `machine::BASIC`, for the tests of this crate.
+#[cfg(test)]
 pub static BASIC: LazyLock<Segments> = LazyLock::new(|| Segments::of(&llrm_x86_m16::machine::BASIC));
 
 /// Whether `one` needs the data segment register to hold the data group: it

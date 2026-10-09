@@ -1203,7 +1203,7 @@ fn _allocated(
     // and `RS_Spill`.
     let mut pieces: BTreeSet<u32> = BTreeSet::new();
     let mut splits_made = 0_usize;
-    let mut placing: Option<(spillplacement::Bundles, LiveRows)> = None;
+    let mut placing: Option<LiveRows> = None;
     let no_preference = IndexMap::default();
     let preferred = preferred.unwrap_or(&no_preference);
 
@@ -1377,9 +1377,9 @@ fn _allocated(
         let mut rewritten: Option<Vec<u32>> = None;
         if splitting && at == Stage::Split && !pieces.contains(&value) && !bound {
             let _split = llrm_support::debug::span("regalloc split");
-            let (bundles, live_sets) = placing.get_or_insert_with(|| {
-                llrm_support::debug::timed("split placing", || (spillplacement::bundles(&body), live_rows(&body)))
-            });
+            let bundles = spillplacement::edge_bundles(&body);
+            let live_sets =
+                placing.get_or_insert_with(|| llrm_support::debug::timed("split placing", || live_rows(&body)));
             let spread =
                 llrm_support::debug::timed("split spread", || splitkit::live_blocks(&body, value, &*live_sets));
             let occupied = llrm_support::debug::timed("split occupied", || {
@@ -1408,7 +1408,7 @@ fn _allocated(
                 Some(found) => vec![found],
                 None => {
                     let placed = llrm_support::debug::timed("split placed", || {
-                        splitkit::placed(&body, value, &facts.index, sets, bundles, &order, &occupied, width)
+                        splitkit::placed(&body, value, &facts.index, sets, &bundles, &order, &occupied, width)
                     });
                     if placed.is_empty() {
                         llrm_support::debug::timed("split per block", || splitkit::per_block(&body, value, sets))

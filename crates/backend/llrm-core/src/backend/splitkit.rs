@@ -689,12 +689,11 @@ fn analysed(
 ) -> Analysis {
     let mut uses = Vec::new();
     let mut through = Vec::new();
-    for block in &body.blocks {
+    let names = named_in(body, value);
+    for (position, block) in body.blocks.iter().enumerate() {
         let (entering, leaving) = (live.live_in(block.at, value), live.live_out(block.at, value));
-        let arrives = block.arrives().contains(&value);
-        let named: Vec<usize> = (0..block.insns.len())
-            .filter(|at| block.insns[*at].defines.contains(&value) || block.insns[*at].uses.contains(&value))
-            .collect();
+        let arrives = block.phis.iter().any(|phi| phi.result == value);
+        let named: &[usize] = names.get(&position).map_or(&[], Vec::as_slice);
         if !named.is_empty() || arrives {
             uses.push(UseBlock {
                 block: block.at,
@@ -709,6 +708,45 @@ fn analysed(
         }
     }
     Analysis { uses, through }
+}
+
+/// The positions in each block, by the block's place in the body, of the
+/// instructions that define or read `value`: from the postings the spiller
+/// follows the body with, not a walk of every instruction.
+fn named_in(
+    body: &LirBody,
+    value: u32,
+) -> std::collections::BTreeMap<usize, Vec<usize>> {
+    let mut names: std::collections::BTreeMap<usize, Vec<usize>> = std::collections::BTreeMap::new();
+    crate::backend::postings::following(body, |postings| {
+        for &(block, position) in postings.defs(value).iter().chain(postings.uses(value)) {
+            names.entry(block as usize).or_default().push(position as usize);
+        }
+    });
+    for positions in names.values_mut() {
+        positions.sort_unstable();
+        positions.dedup();
+    }
+    body.facts.0.bump_by("split-names", names.values().map(Vec::len).sum());
+    if llrm_support::env_set("LLRM_CHECK_POSTINGS") {
+        let walked: std::collections::BTreeMap<usize, Vec<usize>> = body
+            .blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(at, block)| {
+                let found: Vec<usize> = (0..block.insns.len())
+                    .filter(|at| block.insns[*at].defines.contains(&value) || block.insns[*at].uses.contains(&value))
+                    .collect();
+                (!found.is_empty()).then_some((at, found))
+            })
+            .collect();
+        assert_eq!(
+            names, walked,
+            "{}: instructions naming value {value} from the postings differ from the walk",
+            body.name
+        );
+    }
+    names
 }
 
 /// What holds a register where: the occupants' segments and the points that
@@ -1016,15 +1054,11 @@ fn _benefit(
     frequency: &IndexMap<i64, f64>,
     live: &dyn allocate::LiveAt,
 ) -> f64 {
-    let saved: f64 = body
-        .blocks
+    let saved: f64 = named_in(body, value)
         .iter()
-        .map(|block| {
-            let covered = (0..block.insns.len())
-                .filter(|at| region.covers(block.at, *at))
-                .filter(|at| block.insns[*at].defines.contains(&value) || block.insns[*at].uses.contains(&value))
-                .count();
-            covered as f64 * frequency[&block.at]
+        .map(|(block, positions)| {
+            let at = body.blocks[*block].at;
+            positions.iter().filter(|position| region.covers(at, **position)).count() as f64 * frequency[&at]
         })
         .sum();
     let copies: f64 = crossings(body, value, region, live)
@@ -1046,7 +1080,7 @@ pub fn pays(
     live: &dyn allocate::LiveAt,
 ) -> bool {
     let frequency: IndexMap<i64, f64> =
-        ranges::depths(body).into_iter().map(|(at, depth)| (at, ranges::level(depth))).collect();
+        ranges::depths_shared(body).iter().map(|(at, depth)| (*at, ranges::level(*depth))).collect();
     _benefit(body, value, region, &frequency, live) > 0.0
 }
 
@@ -1057,11 +1091,13 @@ fn _whole_range(
     region: &Region,
     live: &dyn allocate::LiveAt,
 ) -> bool {
+    let names = named_in(body, value);
     body.blocks
         .iter()
+        .enumerate()
         .all(
-            |block| {
-                let named = block.insns.iter().any(|one| one.defines.contains(&value) || one.uses.contains(&value));
+            |(position, block)| {
+                let named = names.contains_key(&position);
                 let across = live.live_in(block.at, value) || live.live_out(block.at, value);
                 !(named || across) || region.spans.get(&block.at) == Some(&vec![(0, block.insns.len())])
             },
@@ -1312,6 +1348,20 @@ mod tests {
 
     fn where_() -> Addr {
         Addr { base: Register::SI, ..Addr::new(Space::Segment, 0x10) }
+    }
+
+    /// `analysed`, `_benefit` and `_whole_range` walked every instruction of
+    /// the body, for each candidate register of each split, to find the few
+    /// that name the value (d_faces -O1: 490 splits, ~700 M of 30 G
+    /// instructions). They read the positions that name it from the
+    /// postings.
+    #[test]
+    fn test_the_instructions_naming_a_value_come_from_the_postings_not_a_walk() {
+        let body = _pointer_across_a_loop();
+        let live = crate::backend::allocate::live(&body);
+        let analysis = super::analysed(&body, 3, &(&live.0, &live.1));
+        assert_eq!(analysis.uses.len(), 3, "premise: made, read in the loop, read after it");
+        assert_eq!(body.facts.0.counted("split-names"), 3, "the three instructions naming v3, from the postings");
     }
 
     /// v3 is made before the loop, read in it and after it, as a cell's base.

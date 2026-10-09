@@ -16,7 +16,6 @@
 23 crates/backend/llrm-core/src/backend/inline_asm.rs
 23 crates/backend/llrm-core/src/backend/isel.rs
 1 crates/backend/llrm-core/src/backend/isel/combined.rs
-1 crates/backend/llrm-core/src/backend/isel/generator/mod.rs
 1 crates/backend/llrm-core/src/backend/isel/unwind.rs
 11 crates/backend/llrm-core/src/backend/isel/wide.rs
 2 crates/backend/llrm-core/src/backend/liveness.rs
@@ -30,14 +29,13 @@
 31 crates/backend/llrm-core/src/backend/peephole.rs
 1 crates/backend/llrm-core/src/backend/pointers.rs
 1 crates/backend/llrm-core/src/backend/prologue.rs
-3 crates/backend/llrm-core/src/backend/regalloc_input.rs
 4 crates/backend/llrm-core/src/backend/regclass.rs
 7 crates/backend/llrm-core/src/backend/schedule.rs
 5 crates/backend/llrm-core/src/backend/spiller.rs
 1 crates/backend/llrm-core/src/backend/spillforward.rs
 3 crates/backend/llrm-core/src/backend/ssaspill.rs
 2 crates/backend/llrm-core/src/backend/storecombine.rs
-9 crates/backend/llrm-core/src/backend/target.rs
+7 crates/backend/llrm-core/src/backend/target.rs
 1 crates/backend/llrm-core/src/backend/upperzero.rs
 5 crates/backend/llrm-core/src/driver/basic.rs
 1 crates/backend/llrm-peepgen/src/table.rs

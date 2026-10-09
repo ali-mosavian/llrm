@@ -172,14 +172,52 @@ fn code_of(
     lines
 }
 
+/// The files a `#[cfg(test)] mod name;` declares: test code that is not in a
+/// file the name says is one.
+fn test_modules(all: &[PathBuf]) -> std::collections::BTreeSet<PathBuf> {
+    let declaration = Regex::new(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;").expect("the declaration pattern");
+    let path_attribute = Regex::new(r#"^\s*#\[path\s*=\s*"([^"]+)"\]"#).expect("the path pattern");
+    let mut declared = std::collections::BTreeSet::new();
+    for path in all {
+        let Some(own) = path.parent() else { continue };
+        let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("");
+        let directory = if matches!(stem, "mod" | "lib" | "main") { own.to_path_buf() } else { own.join(stem) };
+        let text = fs::read_to_string(path).unwrap_or_default();
+        let (mut test, mut at) = (false, None::<PathBuf>);
+        for line in text.lines() {
+            if line.trim() == "#[cfg(test)]" {
+                (test, at) = (true, None);
+            } else if !test {
+                continue;
+            } else if let Some(found) = path_attribute.captures(line) {
+                at = Some(own.join(&found[1]));
+            } else if let Some(found) = declaration.captures(line) {
+                match at.take() {
+                    Some(file) => declared.insert(file),
+                    None => {
+                        let name = &found[1];
+                        declared.insert(directory.join(format!("{name}.rs")))
+                            | declared.insert(directory.join(name).join("mod.rs"))
+                    }
+                };
+                test = false;
+            } else if !line.trim_start().starts_with("#[") {
+                test = false;
+            }
+        }
+    }
+    declared
+}
+
 fn counts(root: &Path) -> BTreeMap<String, usize> {
     let facts = facts();
     let mut all = Vec::new();
     for directory in SHARED {
         files(root, directory, &mut all);
     }
+    let in_tests = test_modules(&all);
     let mut found = BTreeMap::new();
-    for path in all {
+    for path in all.into_iter().filter(|path| !in_tests.contains(path)) {
         let n = code(&path).iter().map(|line| facts.find_iter(line).count()).sum();
         if n > 0 {
             found.insert(path.strip_prefix(root).unwrap().to_string_lossy().into_owned(), n);
@@ -270,6 +308,22 @@ fn tree(
     root
 }
 
+/// A tree of the shared files `files`, as `(path under the sample crate's src,
+/// text)`.
+fn tree_of(
+    name: &str,
+    files: &[(&str, &str)],
+) -> PathBuf {
+    let root = tree(name, "");
+    for (path, text) in files {
+        let at = root.join("crates/ir/sample/src").join(path);
+        fs::create_dir_all(at.parent().unwrap()).unwrap();
+        fs::write(at, text).unwrap();
+    }
+    assert!(Command::new("git").arg("-C").arg(&root).args(["add", "-A"]).output().unwrap().status.success());
+    root
+}
+
 const SAMPLE: &str = "crates/ir/sample/src/lib.rs";
 
 /// The guard is an instrument: a register name added to a shared crate must
@@ -306,6 +360,24 @@ fn comments_and_test_modules_are_not_counted() {
     let root =
         tree("quiet", "// the \"ax\" register\nfn f() {}\n#[cfg(test)]\nmod tests { fn g() { let _ = \"bx\"; } }\n");
     assert!(problems(&root, &BTreeMap::new()).is_empty());
+}
+
+/// A file that a `#[cfg(test)] mod` declares is test code whatever it is called
+/// (`regalloc_input.rs` held three copies the guard counted, for tests alone).
+#[test]
+fn a_file_a_test_module_declares_is_not_counted() {
+    let root = tree_of(
+        "declared",
+        &[
+            ("lib.rs", "#[cfg(test)]\npub mod support;\nmod real;\n"),
+            ("support.rs", "fn f() { let _ = \"ax\"; }\n"),
+            ("real.rs", "fn g() { let _ = \"bx\"; }\n"),
+        ],
+    );
+    assert_eq!(
+        problems(&root, &BTreeMap::new()),
+        vec!["crates/ir/sample/src/real.rs: 1 copies of a target fact, none allowed".to_string()]
+    );
 }
 
 /// Cost of the first version: a pattern that matched nothing passed for "no

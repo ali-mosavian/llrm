@@ -1,10 +1,10 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
+reason = "rotation priced in clocks (jmp, jcc taken, not taken from the CPU): x_adler -12.1% clocks, x_bubble -3.0%, quicksort -2.0%; one jmp more per entry: quicksort +3.3% instructions, matmul +0.1%, grep +8 bytes"
 blessed = "2026-10-09"
 
 [bas.O2]
-instructions = 9348
+instructions = 9356
 memory_operands = 4602
-code_bytes = 485
+code_bytes = 487
 data_bytes = 15
 bss_bytes = 0
 
@@ -16,9 +16,9 @@ data_bytes = 15
 bss_bytes = 0
 
 [c.O2]
-instructions = 5829
+instructions = 5837
 memory_operands = 1561
-code_bytes = 234
+code_bytes = 236
 data_bytes = 0
 bss_bytes = 0
 
@@ -30,9 +30,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 5961
+instructions = 5969
 memory_operands = 1689
-code_bytes = 277
+code_bytes = 279
 data_bytes = 0
 bss_bytes = 0
 

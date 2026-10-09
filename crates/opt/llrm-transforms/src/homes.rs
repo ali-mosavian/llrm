@@ -33,6 +33,10 @@ impl ModulePass for Homes {
         "homes"
     }
 
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
     fn run(
         &mut self,
         module: &mut Module,
