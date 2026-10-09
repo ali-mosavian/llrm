@@ -12,7 +12,7 @@ enum {
 };
 
 /* QB's number for what DOS refused with (messages.inc). */
-static word dos_error(long code)
+static unsigned os_error(long code)
 {
     switch (-code) {
     case LLRM_OS_NOT_FOUND:
@@ -51,9 +51,9 @@ static void path_of(const SD *name, char *path)
 
 /* DOS's handle for `path` opened as `mode` asks: INPUT must exist, OUTPUT
    starts empty, the others are made if they are missing. */
-static short dos_open(const char *path, enum FileMode mode)
+static short open_file(const char *path, enum FileMode mode)
 {
-    const char __far *name = (const char __far *)path;
+    os_path name = (os_path)path;
     long handle;
 
     if (mode == MD_OUTPUT)
@@ -62,7 +62,7 @@ static short dos_open(const char *path, enum FileMode mode)
     if (handle < 0 && mode != MD_INPUT && -handle == LLRM_OS_NOT_FOUND)
         handle = llrm_os_create(name);
     if (handle < 0)
-        qb_error(dos_error(handle));
+        qb_error(os_error(handle));
     return handle;
 }
 
@@ -83,7 +83,7 @@ void B_OPEN(SD *name, int channel, int record_length, unsigned mode)
         record_length = DEFAULT_RECORD;
     if (record_length <= 0)
         qb_error(BE_ILLFUN);
-    handle = dos_open(path, mode);
+    handle = open_file(path, mode);
     fdb = lh_alloc(sizeof(Fdb), LH_FILE, NULL, channel);
     if (!fdb) {
         llrm_os_close(handle);
@@ -104,7 +104,7 @@ static void close_fdb(Fdb *fdb)
 
 /* B$CLOS: CLOSE #a, #b ... closes those channels, and a bare CLOSE every file.
    */
-void file_close(const int *channels, word count)
+void file_close(const int *channels, unsigned count)
 {
     Fdb *fdb;
 
@@ -134,48 +134,48 @@ long B_FLOF(int channel)
 /* A record variable of `length` bytes, or the data of a string descriptor when
    the length is 0. */
 static void record_of(
-    char __far *record,
+    qb_data_ptr record,
     int length,
-    unsigned char __far **data,
-    word *bytes
+    os_data_mut *data,
+    unsigned *bytes
 )
 {
     if (length) {
-        *data = (unsigned char __far *)record;
+        *data = (os_data_mut)record;
         *bytes = length;
     } else {
-        SD *sd = (SD *)(word)(unsigned long)record;
+        SD *sd = QB_NEAR_OF(record);
 
-        *data = (unsigned char __far *)sd->ptr;
+        *data = (os_data_mut)sd->ptr;
         *bytes = sd->len;
     }
 }
 
-void B_GET3(int channel, char __far *record, int length)
+void B_GET3(int channel, qb_data_ptr record, int length)
 {
     Fdb *fdb = open_fdb(channel);
-    unsigned char __far *data;
-    word bytes;
+    os_data_mut data;
+    unsigned bytes;
     long got;
 
     record_of(record, length, &data, &bytes);
     got = llrm_os_read(fdb->handle, data, bytes);
     if (got < 0)
-        qb_error(dos_error(got));
+        qb_error(os_error(got));
 }
 
-void B_PUT3(int channel, char __far *record, int length)
+void B_PUT3(int channel, qb_data_ptr record, int length)
 {
     Fdb *fdb = open_fdb(channel);
-    unsigned char __far *data;
-    word bytes;
+    os_data_mut data;
+    unsigned bytes;
     long put;
 
     record_of(record, length, &data, &bytes);
     put = llrm_os_write_file(fdb->handle, data, bytes);
     if (put < 0)
-        qb_error(dos_error(put));
-    if ((word)put != bytes)
+        qb_error(os_error(put));
+    if ((unsigned)put != bytes)
         qb_error(BE_DISKFULL);
 }
 

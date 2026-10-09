@@ -10,7 +10,7 @@ enum { ZONE = 14 };
 
 /* B$PRTCHK: make room for `len` more characters on the line, ending it first
    when they do not fit. False when it did. */
-static int room(word len)
+static int room(unsigned len)
 {
     byte pos = cn_pos(), width = cn_width();
 
@@ -35,7 +35,7 @@ static void terminate(enum Terminator end)
 }
 
 /* A number's text, its trailing space, and the terminator. */
-static void numeral(char *text, word length, enum Terminator end)
+static void numeral(char *text, unsigned length, enum Terminator end)
 {
     text[length++] = ' ';
     room(length);

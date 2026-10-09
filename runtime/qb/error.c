@@ -5,10 +5,10 @@
 #include "error.h"
 #include "llrm_os.h"
 
-word b_errnum;
-word b_inonerr;
+unsigned b_errnum;
+unsigned b_inonerr;
 
-void qb_error(word n)
+void qb_error(unsigned n)
 {
     b_errnum = n;
     qb_dispatch(V_ERR);

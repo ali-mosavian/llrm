@@ -18,17 +18,17 @@ enum FileMode {
 
 typedef struct Fdb {
     SD fielded;           /* the FIELD back-pointer string, if any */
-    short handle;         /* DOS's */
+    short handle;         /* the OS's */
     byte mode;            /* an enum FileMode */
     byte flags;
-    word record_length;   /* RANDOM's record, INPUT's and OUTPUT's buffer */
+    unsigned record_length;   /* RANDOM's record, INPUT's and OUTPUT's buffer */
 } Fdb;
 
 /* B$OPEN, B$CLOS, B$GETn, B$PUTn, B$FLOF, B$FLOC, B$FEOF */
 void B_OPEN(SD *name, int channel, int record_length, unsigned mode);
-void file_close(const int *channels, word count);
-void B_GET3(int channel, char __far *record, int length);
-void B_PUT3(int channel, char __far *record, int length);
+void file_close(const int *channels, unsigned count);
+void B_GET3(int channel, qb_data_ptr record, int length);
+void B_PUT3(int channel, qb_data_ptr record, int length);
 long B_FLOF(int channel);
 
 #endif

@@ -4,7 +4,7 @@
 #include "far.h"
 #include "rtinit.h"
 
-word b_seg;
+u16 b_seg;
 
 /* DEF SEG with no segment: the data segment. */
 void B_DSG0(void)

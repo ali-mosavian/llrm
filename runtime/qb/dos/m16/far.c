@@ -6,21 +6,21 @@ enum { CHUNK = 0x1000, WORDS_PER_PARA = 8 };
 
 static char marker;
 
-word dgroup_segment(void)
+u16 dgroup_segment(void)
 {
-    return (word)((unsigned long)(char __far *)&marker >> 16);
+    return (u16)((unsigned long)(char __far *)&marker >> 16);
 }
 
-FarWords far_words(word segment)
+FarWords far_words(u16 segment)
 {
     return (FarWords)((unsigned long)segment << 16);
 }
 
-void far_clear(word segment, word paras)
+void far_clear(u16 segment, u16 paras)
 {
     while (paras) {
-        word chunk = paras < CHUNK ? paras : CHUNK;
-        word left = chunk * WORDS_PER_PARA;
+        u16 chunk = paras < CHUNK ? paras : CHUNK;
+        u16 left = chunk * WORDS_PER_PARA;
         FarWords at = far_words(segment);
 
         while (left--)
@@ -30,10 +30,10 @@ void far_clear(word segment, word paras)
     }
 }
 
-void far_clear_bytes(word segment, word offset, unsigned long bytes)
+void far_clear_bytes(u16 segment, u16 offset, unsigned long bytes)
 {
     while (bytes) {
-        word piece = bytes < 0x8000 ? bytes : 0x8000, left = (piece + 1) / 2;
+        u16 piece = bytes < 0x8000 ? bytes : 0x8000, left = (piece + 1) / 2;
         FarWords at = (FarWords)(((unsigned long)segment << 16) | offset);
 
         while (left--)
@@ -45,16 +45,16 @@ void far_clear_bytes(word segment, word offset, unsigned long bytes)
     }
 }
 
-/* A move up starts from the end, so a move over itself reads each word before
-   it writes it. */
-void far_move(word from, word to, word paras)
+/* A move up starts from the end, so a move over itself reads each u16 before it
+   writes it. */
+void far_move(u16 from, u16 to, u16 paras)
 {
     int up = to > from;
 
     while (paras) {
-        word chunk = paras < CHUNK ? paras : CHUNK;
-        word left = chunk * WORDS_PER_PARA;
-        word offset = up ? paras - chunk : 0;
+        u16 chunk = paras < CHUNK ? paras : CHUNK;
+        u16 left = chunk * WORDS_PER_PARA;
+        u16 offset = up ? paras - chunk : 0;
         FarWords source = far_words(from + offset);
         FarWords target = far_words(to + offset);
 

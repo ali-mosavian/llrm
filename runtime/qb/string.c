@@ -3,7 +3,7 @@
 #include "nhstutil.h"
 
 /* B$STR_COMMON: a number's text, in a temporary. */
-static SD *temporary_of(const char *text, word length)
+static SD *temporary_of(const char *text, unsigned length)
 {
     char *data;
     SD *result = str_tmp(length, &data);

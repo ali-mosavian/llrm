@@ -6,7 +6,7 @@
 
 #include "qb.h"
 
-typedef void (__far *Vec)(void);
+typedef qb_init_fn Vec;
 
 /* The slots of compvect.inc: ini, run, clrt and err run in id order; end and
    term in reverse. */

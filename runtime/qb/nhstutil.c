@@ -5,7 +5,7 @@
 enum { NUMTEMPS = 20, WORD = 2 };
 
 typedef struct StrEntry {
-    word header;
+    uword header;
 } StrEntry;
 
 /* A string temporary (inc/string.inc LenTemp = 6): a descriptor, and the
@@ -31,7 +31,7 @@ static void corrupt(void)
     qb_error(FE_CORRUPT);
 }
 
-static word even(word n)
+static uword even(uword n)
 {
     return (n + 1) & ~1u;
 }
@@ -41,7 +41,7 @@ static int is_free(const StrEntry *entry)
     return entry->header & 1;
 }
 
-static word free_data(const StrEntry *entry)
+static uword free_data(const StrEntry *entry)
 {
     return entry->header - 1;
 }
@@ -61,9 +61,9 @@ static StrEntry *entry_of(const char *data)
     return (StrEntry *)data - 1;
 }
 
-static word entry_bytes(const StrEntry *entry)
+static uword entry_bytes(const StrEntry *entry)
 {
-    word data = is_free(entry) ? free_data(entry) : even(owner_of(entry)->len);
+    uword data = is_free(entry) ? free_data(entry) : even(owner_of(entry)->len);
 
     return WORD + data;
 }
@@ -78,7 +78,7 @@ static int at_end(const StrEntry *entry)
     return (char *)entry >= str_end;
 }
 
-static void make_free(StrEntry *entry, word bytes)
+static void make_free(StrEntry *entry, uword bytes)
 {
     entry->header = bytes - WORD + 1;
 }
@@ -105,9 +105,9 @@ static void set_hint(void)
 }
 
 /* Takes `bytes` for `owner` from free `entry`, leaving the rest free. */
-static char *take(StrEntry *entry, word bytes, SD *owner)
+static char *take(StrEntry *entry, uword bytes, SD *owner)
 {
-    word have = entry_bytes(entry);
+    uword have = entry_bytes(entry);
 
     if (have > bytes) {
         make_free((StrEntry *)((char *)entry + bytes), have - bytes);
@@ -115,13 +115,13 @@ static char *take(StrEntry *entry, word bytes, SD *owner)
     } else {
         str_free = following(entry);
     }
-    entry->header = (word)owner;
+    entry->header = (uword)owner;
     return data_of(entry);
 }
 
 /* First fit from `from` up to `limit`, joining free neighbours as it goes
    (SS_SCAN). */
-static StrEntry *scan(StrEntry *from, StrEntry *limit, word bytes)
+static StrEntry *scan(StrEntry *from, StrEntry *limit, uword bytes)
 {
     StrEntry *entry = from, *after;
 
@@ -140,7 +140,7 @@ static StrEntry *scan(StrEntry *from, StrEntry *limit, word bytes)
     return NULL;
 }
 
-static StrEntry *fit(word bytes)
+static StrEntry *fit(uword bytes)
 {
     StrEntry *found = scan(str_free, (StrEntry *)str_end, bytes);
 
@@ -156,7 +156,7 @@ void str_compact(void)
     StrEntry *to = str_first, *entry = str_first;
 
     while (!at_end(entry)) {
-        word bytes = entry_bytes(entry), i;
+        uword bytes = entry_bytes(entry), i;
         StrEntry *after = (StrEntry *)((char *)entry + bytes);
 
         if (!is_free(entry)) {
@@ -165,7 +165,7 @@ void str_compact(void)
             check_owner(entry, owner);
             if (to != entry)
                 for (i = 0; i < bytes; i += WORD)
-                    *(word *)((char *)to + i) = *(word *)((char *)entry + i);
+                    *(uword *)((char *)to + i) = *(uword *)((char *)entry + i);
             owner->ptr = data_of(to);
             to = (StrEntry *)((char *)to + bytes);
         }
@@ -178,9 +178,9 @@ void str_compact(void)
 
 /* The free entry that ends string space, which the heap may take: its size, and
    the boundary moves up by as much as is given. */
-word str_give_tail(void)
+uword str_give_tail(void)
 {
-    word room;
+    uword room;
 
     set_hint();
     if (at_end(str_free))
@@ -192,7 +192,7 @@ word str_give_tail(void)
 }
 
 /* The heap's free room at the boundary becomes the end of string space. */
-void str_take(word bytes)
+void str_take(uword bytes)
 {
     if (!bytes)
         return;
@@ -209,9 +209,9 @@ void str_take(word bytes)
 /* B$STALC: room for `owner`'s string.  Out of room, it tries a scan, the heap's
    free room, then compaction (nhstutil.asm:161-215), and raises Out of string
    space if there is still none. */
-char *str_alloc(SD *owner, word len)
+char *str_alloc(SD *owner, uword len)
 {
-    word bytes = WORD + even(len);
+    uword bytes = WORD + even(len);
     StrEntry *entry;
 
     if (len == 0xFFFF)
@@ -281,7 +281,7 @@ void str_adopt(SD *to, SD *from)
     str_release(to);
     *to = *from;
     if (to->len)
-        entry_of(to->ptr)->header = (word)to;
+        entry_of(to->ptr)->header = (uword)to;
     if (str_is_tmp(from))
         tmp_release(as_tmp(from));
 }
@@ -298,7 +298,7 @@ void str_tmp_free(SD *sd)
 
 /* B$STALCTMP: a temporary of `len` bytes, its data in *data.  Zero bytes is the
    shared empty string. */
-SD *str_tmp(word len, char **data)
+SD *str_tmp(uword len, char **data)
 {
     Tmp *tmp;
 
@@ -314,7 +314,7 @@ SD *str_tmp(word len, char **data)
 
 /* B$STALCTMPSUB: a temporary copy of `len` bytes of source from `from`; a
    temporary source is freed. */
-SD *str_tmp_copy(SD *source, word from, word len)
+SD *str_tmp_copy(SD *source, uword from, uword len)
 {
     char *data;
     SD *tmp = str_tmp(len, &data);

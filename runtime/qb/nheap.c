@@ -3,13 +3,14 @@
 #include "nheap.h"
 #include "nhstutil.h"
 #include "rtinit.h"
+#include "startup.h"
 
 char *heap_low;
 char *heap_top;
 
 static LhMoved moved[LH_FILE + 1];
 
-enum { HEADER = sizeof(LhEntry), FOOTER = sizeof(word) };
+enum { HEADER = sizeof(LhEntry), FOOTER = sizeof(uword) };
 
 void lh_on_move(enum LhType type, LhMoved hook)
 {
@@ -28,7 +29,7 @@ static LhEntry *next(const LhEntry *entry)
 
 static LhEntry *previous(const LhEntry *entry)
 {
-    return (LhEntry *)((char *)entry - ((word *)entry)[-1]);
+    return (LhEntry *)((char *)entry - ((uword *)entry)[-1]);
 }
 
 static int at_top(const LhEntry *entry)
@@ -37,7 +38,7 @@ static int at_top(const LhEntry *entry)
 }
 
 /* An entry of `size` bytes at `at`, with its footer. */
-static LhEntry *make(void *at, word size, enum LhType type)
+static LhEntry *make(void *at, uword size, enum LhType type)
 {
     LhEntry *entry = at;
 
@@ -45,7 +46,7 @@ static LhEntry *make(void *at, word size, enum LhType type)
     entry->type = type;
     entry->file = 0;
     entry->owner = NULL;
-    *(word *)((char *)at + size - FOOTER) = size;
+    *(uword *)((char *)at + size - FOOTER) = size;
     return entry;
 }
 
@@ -59,15 +60,15 @@ void *lh_data(LhEntry *entry)
     return entry + 1;
 }
 
-static word entry_size(word bytes)
+static uword entry_size(uword bytes)
 {
     return (HEADER + bytes + FOOTER + 1) & ~1u;
 }
 
 static void zero(LhEntry *entry)
 {
-    word *at = lh_data(entry);
-    word *end = (word *)((char *)entry + entry->size - FOOTER);
+    uword *at = lh_data(entry);
+    uword *end = (uword *)((char *)entry + entry->size - FOOTER);
 
     while (at < end)
         *at++ = 0;
@@ -75,9 +76,9 @@ static void zero(LhEntry *entry)
 
 /* Take `size` bytes from the top of free `entry`, as the heap allocates
    downwards; the rest stays free. */
-static void *carve(LhEntry *entry, word size, enum LhType type)
+static void *carve(LhEntry *entry, uword size, enum LhType type)
 {
-    word rest = entry->size - size;
+    uword rest = entry->size - size;
     LhEntry *taken;
 
     if (rest < HEADER + FOOTER) {
@@ -93,7 +94,7 @@ static void *carve(LhEntry *entry, word size, enum LhType type)
 }
 
 /* First fit over the heap, joining free neighbours as it goes. */
-static void *first_fit(word size, enum LhType type)
+static void *first_fit(uword size, enum LhType type)
 {
     LhEntry *entry, *after;
 
@@ -113,7 +114,7 @@ static void *first_fit(word size, enum LhType type)
 
 int lh_take_from_strings(void)
 {
-    word room = str_give_tail();
+    uword room = str_give_tail();
 
     if (room < HEADER + FOOTER) {
         str_take(room);
@@ -130,7 +131,7 @@ int lh_take_from_strings(void)
 void lh_give_free_to_strings(void)
 {
     while (heap_low != heap_top && lowest()->type == LH_FREE) {
-        word room = lowest()->size;
+        uword room = lowest()->size;
 
         heap_low += room;
         str_take(room);
@@ -150,16 +151,16 @@ void lh_compact(void)
         LhEntry *before = (char *)entry == heap_low ? NULL : previous(entry);
 
         if (entry->type != LH_FREE) {
-            word *from = (word *)((char *)entry + entry->size);
-            word *to = (word *)top;
+            uword *from = (uword *)((char *)entry + entry->size);
+            uword *to = (uword *)top;
 
             top -= entry->size;
             if (top != (char *)entry) {
                 if (moved[entry->type])
                     moved[entry->type](lh_data(entry), top - (char *)entry);
-                /* from the end down, so a move over itself reads each word
+                /* from the end down, so a move over itself reads each uword
                    before it writes it */
-                while (from > (word *)entry)
+                while (from > (uword *)entry)
                     *--to = *--from;
             }
         }
@@ -172,9 +173,9 @@ void lh_compact(void)
 /* An entry of `bytes` of data, for `owner`: the free room, then a scan, then
    room from string space, with string space compacted first when that is not
    enough (LH_ALC_GROW). */
-void *lh_alloc(word bytes, enum LhType type, void *owner, byte file)
+void *lh_alloc(uword bytes, enum LhType type, void *owner, byte file)
 {
-    word size = entry_size(bytes);
+    uword size = entry_size(bytes);
     void *data = first_fit(size, type);
 
     if (!data && lh_take_from_strings())
@@ -215,12 +216,12 @@ void nh_init(char *first, char *top)
 
 /* B$xNHINI and B$NHINI: the heaps claim everything from the stack's end to the
    top of DGROUP. */
-extern char qb_atopsp;
-extern word qb_asizds;
-
 static void nh_ini(void)
 {
-    nh_init(&qb_atopsp, (char *)qb_asizds);
+    char *first, *top;
+
+    qb_dynamic_region(&first, &top);
+    nh_init(first, top);
 }
 
 static Comp nh_comp = { 0, C_NH, { nh_ini } };

@@ -18,8 +18,8 @@ static char upper(char c)
     return c >= 'a' && c <= 'z' ? c - 'a' + 'A' : c;
 }
 
-/* B$GETCH: the next character that is not a blank, in capitals, and the
-   cursor after it. */
+/* B$GETCH: the next character that is not a blank, in capitals, and the cursor
+   after it. */
 static char next_char(const char **cursor)
 {
     char c;
@@ -53,8 +53,8 @@ typedef struct Parsed {
     int whole;                     /* an integer, with nothing left over */
 } Parsed;
 
-/* &H and &O numbers, which are 16 or 32 bits wide, and whose high half is
-   the sign bit (&HFFFF is -1). */
+/* &H and &O numbers, which are 16 or 32 bits wide, and whose high half is the
+   sign bit (&HFFFF is -1). */
 static char radix_number(
     const char **cursor,
     int radix,
@@ -138,8 +138,8 @@ static const char *decimal(const char *p, Parsed *out)
     return p;
 }
 
-/* The value as a double: the mantissa scaled by its power of ten in
-   extended precision, then rounded to a double as it is stored. */
+/* The value as a double: the mantissa scaled by its power of ten in extended
+   precision, then rounded to a double as it is stored. */
 static double to_real(const Parsed *parsed)
 {
     unsigned long long mantissa = parsed->mantissa;
@@ -211,7 +211,7 @@ char fin_number(const char **cursor, byte type, FinValue *value)
     return next_char(cursor);
 }
 
-char fin_string(const char **cursor, const char **start, word *length)
+char fin_string(const char **cursor, const char **start, unsigned *length)
 {
     const char *p = skip_blanks(*cursor);
     char end = ',';

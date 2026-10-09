@@ -35,7 +35,7 @@ paths = ["**/*.rs", "rustfmt.toml", "tools/fmt.sh", "tools/rfmt-post/**"]
 
 # Paths outside [shared] the cheap steps cover on their own; they select no heavy step.
 [plain]
-paths = ["rustfmt.toml", "tests/**", "tools/**", "bench/**", "examples/**", "runtime/**", "platform/**", "toolchain/**", "crates/**"]
+paths = ["rustfmt.toml", "tests/**", "tools/**", "bench/**", "examples/**", "runtime/**", "toolchain/**", "crates/**"]
 
 # Heavy steps (> 15 s on the loaded host): fast runs one only when a changed path matches its owners.
 [[heavy]]

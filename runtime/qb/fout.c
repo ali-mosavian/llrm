@@ -5,11 +5,11 @@
 
 enum { SINGLE_DIGITS = 7, DOUBLE_DIGITS = 16 };
 
-/* B$ASCRND: round the digits to `want` places, half up, and drop the zeros
-   that leaves at the end.  `exponent` is that of the last digit. */
-static void round_digits(Decimal *d, int *exponent, word want)
+/* B$ASCRND: round the digits to `want` places, half up, and drop the zeros that
+   leaves at the end.  `exponent` is that of the last digit. */
+static void round_digits(Decimal *d, int *exponent, unsigned want)
 {
-    word at;
+    unsigned at;
 
     if (d->count > want) {
         char next = d->text[want];
@@ -37,15 +37,15 @@ static void round_digits(Decimal *d, int *exponent, word want)
     }
 }
 
-static word put_digits(char *out, const char *digits, word count)
+static unsigned put_digits(char *out, const char *digits, unsigned count)
 {
     copy_bytes(out, digits, count);
     return count;
 }
 
-static word put_zeros(char *out, word count)
+static unsigned put_zeros(char *out, unsigned count)
 {
-    word at;
+    unsigned at;
 
     for (at = 0; at < count; at++)
         out[at] = '0';
@@ -53,10 +53,10 @@ static word put_zeros(char *out, word count)
 }
 
 /* 123.45, 1000, .005: the digits laid out without an exponent. */
-static word plain(char *out, const Decimal *d, int exponent)
+static unsigned plain(char *out, const Decimal *d, int exponent)
 {
     int left = exponent + d->count;
-    word length = 0, used = 0;
+    unsigned length = 0, used = 0;
 
     if (left > 0) {
         used = left < d->count ? left : d->count;
@@ -73,11 +73,11 @@ static word plain(char *out, const Decimal *d, int exponent)
     return length + put_digits(out + length, d->text + used, d->count - used);
 }
 
-/* 1.5E+20, 2D-08: the first digit, a point, the rest, and the exponent of
-   the first digit with two places at least. */
-static word scientific(char *out, const Decimal *d, int exponent, int is_double)
+/* 1.5E+20, 2D-08: the first digit, a point, the rest, and the exponent of the
+   first digit with two places at least. */
+static unsigned scientific(char *out, const Decimal *d, int exponent, int is_double)
 {
-    word length = 0;
+    unsigned length = 0;
 
     out[length++] = d->text[0];
     if (d->count > 1) {
@@ -96,7 +96,7 @@ static word scientific(char *out, const Decimal *d, int exponent, int is_double)
     return length;
 }
 
-word fout_real(double v, int is_double, char *out)
+unsigned fout_real(double v, int is_double, char *out)
 {
     Decimal d;
     int limit = is_double ? DOUBLE_DIGITS : SINGLE_DIGITS, exponent;

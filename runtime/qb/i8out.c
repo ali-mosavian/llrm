@@ -1,10 +1,10 @@
 /* Binary to decimal digits, the math pack's $i8_output (BCOM45's emfout and
    emtmul): the number is scaled by a power of ten in extended precision, then
-   its sixteen leading digits are read off the fraction.  The scaling, its
-   table and its rounding are the library's own, since the digits QB prints
-   are what that arithmetic leaves, not the double's exact expansion (62.5
-   comes out 6249999999999999).  Needs the x87 in extended precision, as the
-   runtime start leaves it. */
+   its sixteen leading digits are read off the fraction.  The scaling, its table
+   and its rounding are the library's own, since the digits QB prints are what
+   that arithmetic leaves, not the double's exact expansion (62.5 comes out
+   6249999999999999).  Needs the x87 in extended precision, as the runtime start
+   leaves it. */
 #include "i8out.h"
 
 enum {
@@ -14,8 +14,8 @@ enum {
     LIMBS = 5         /* the fraction: 8 bits and four 16-bit words */
 };
 
-/* $i8_tpwr10: 10^1..10^7, 10^8..10^56 by 8, 10^64..10^320 by 64, then the
-   same for the negative powers, each rounded to a 64-bit mantissa. */
+/* $i8_tpwr10: 10^1..10^7, 10^8..10^56 by 8, 10^64..10^320 by 64, then the same
+   for the negative powers, each rounded to a 64-bit mantissa. */
 static const unsigned char powers[38][10] = {
     { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA0, 0x02, 0x40 },
     { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC8, 0x05, 0x40 },
@@ -57,8 +57,8 @@ static const unsigned char powers[38][10] = {
     { 0xD1, 0x38, 0x82, 0x47, 0x97, 0xB8, 0x00, 0xFD, 0xD7, 0x3B },
 };
 
-/* 1 - 921 * 2^-64 (the largest the rounding bias below cannot carry past 1)
-   and 0.1, as extended numbers. */
+/* 1 - 921 * 2^-64 (the largest the rounding bias below cannot carry past 1) and
+   0.1, as extended numbers. */
 static const unsigned char below_one[10] = {
     0x66, 0xFC, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 0x3F
 };
@@ -77,10 +77,10 @@ static long double extended(const unsigned char *bytes)
 long double i8_scale(long double x, int k)
 {
     int base = k < 0 ? NEGATIVE : 0, place = 0;
-    word left = k < 0 ? -k : k;
+    u16 left = k < 0 ? -k : k;
 
     while (left) {
-        word digit = left & 7;
+        u16 digit = left & 7;
 
         if (digit)
             x *= extended(powers[base + place * GROUP + digit - 1]);
@@ -90,23 +90,23 @@ long double i8_scale(long double x, int k)
     return x;
 }
 
-/* The estimate of the decimal exponent, from the extended exponent and the
-   top mantissa byte. */
-static int estimate(word exponent, byte top)
+/* The estimate of the decimal exponent, from the extended exponent and the top
+   mantissa byte. */
+static int estimate(u16 exponent, byte top)
 {
     unsigned long sum = (unsigned long)exponent * 0x4D10U;
 
-    sum += (word)(exponent >> 8) * 0x4DU;
-    sum += (word)top * 0x9AU;
+    sum += (u16)(exponent >> 8) * 0x4DU;
+    sum += (u16)top * 0x9AU;
     sum -= 0x134312F4UL;
     return (int)(sum >> 16);
 }
 
 /* The fraction as the digit loop wants it: the mantissa and a byte of zeros,
    shifted right to put its exponent at 0x3FFE, plus the rounding bias. */
-static void fraction(const unsigned char *raw, word limb[LIMBS])
+static void fraction(const unsigned char *raw, u16 limb[LIMBS])
 {
-    word exponent = raw[8] | raw[9] << 8, shift = 0x3FFE - exponent, carry = 0;
+    u16 exponent = raw[8] | raw[9] << 8, shift = 0x3FFE - exponent, carry = 0;
     int at;
 
     limb[0] = 0;
@@ -115,7 +115,7 @@ static void fraction(const unsigned char *raw, word limb[LIMBS])
     while (shift--) {
         carry = limb[0] & 1;
         for (at = 0; at < LIMBS; at++) {
-            word below = at + 1 < LIMBS ? limb[at + 1] & 1 : 0;
+            u16 below = at + 1 < LIMBS ? limb[at + 1] & 1 : 0;
 
             limb[at] = (limb[at] >> 1) | (at == 0 ? below << 7 : below << 15);
         }
@@ -124,17 +124,17 @@ static void fraction(const unsigned char *raw, word limb[LIMBS])
     {
         unsigned long sum = (unsigned long)limb[1] + 0x39AU + carry;
 
-        limb[1] = (word)sum;
+        limb[1] = (u16)sum;
         for (at = 2; at < LIMBS && (sum >>= 16); at++) {
             sum += limb[at];
-            limb[at] = (word)sum;
+            limb[at] = (u16)sum;
         }
     }
 }
 
-/* One digit: the integer part of ten times the fraction, which keeps the
-   rest. */
-static byte next_digit(word limb[LIMBS])
+/* One digit: the integer part of ten times the fraction, which keeps the rest.
+   */
+static byte next_digit(u16 limb[LIMBS])
 {
     unsigned long carry = 0;
     int at;
@@ -146,7 +146,7 @@ static byte next_digit(word limb[LIMBS])
             limb[at] = product & 0xFF;
             carry = product >> 8;
         } else {
-            limb[at] = (word)product;
+            limb[at] = (u16)product;
             carry = product >> 16;
         }
     }
@@ -156,11 +156,11 @@ static byte next_digit(word limb[LIMBS])
 void i8_output(double value, Decimal *out)
 {
     unsigned char bits[8];
-    word w0, w1, w2, high;
+    u16 w0, w1, w2, high;
     long double scaled;
     unsigned char raw[10];
     int k, at;
-    word limb[LIMBS];
+    u16 limb[LIMBS];
     byte count = DIGITS;
 
     copy_bytes((char *)bits, (const char *)&value, 8);

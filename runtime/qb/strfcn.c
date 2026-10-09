@@ -8,7 +8,7 @@ enum { TRIM_LEFT = 1, TRIM_RIGHT = 2 };
    blanks leave. */
 static SD *trim(SD *sd, byte sides)
 {
-    word first = 0, last = sd->len;
+    unsigned first = 0, last = sd->len;
 
     if (sd->len == 0)
         return sd;
@@ -67,7 +67,7 @@ SD *B_SCPF(SD *sd)
 static SD *recase(SD *sd, char low, char high, int shift)
 {
     char *data;
-    word at;
+    unsigned at;
     SD *result = str_tmp(sd->len, &data);
 
     for (at = 0; at < sd->len; at++) {

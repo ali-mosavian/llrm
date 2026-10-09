@@ -14,7 +14,7 @@
 enum LhType { LH_FREE = 1, LH_ARRAY, LH_FILE };
 
 typedef struct LhEntry {
-    word size;     /* the whole entry in bytes, even */
+    uword size;     /* the whole entry in bytes, even */
     byte type;     /* an LhType */
     byte file;     /* an FDB's channel */
     void *owner;   /* what points at the data, for the type's relocation hook */
@@ -29,7 +29,7 @@ typedef void (*LhMoved)(void *data, int delta);
 void lh_on_move(enum LhType type, LhMoved moved);
 
 void nh_init(char *first, char *top);
-void *lh_alloc(word bytes, enum LhType type, void *owner, byte file);
+void *lh_alloc(uword bytes, enum LhType type, void *owner, byte file);
 void lh_free(void *data);
 void lh_compact(void);
 LhEntry *lh_entry(void *data);

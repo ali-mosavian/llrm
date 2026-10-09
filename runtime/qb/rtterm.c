@@ -1,5 +1,5 @@
 /* Termination (QB rt/rtterm.asm): END and the end of the module run the end
-   slots, which close files, then the term slots, then leave for DOS. */
+   slots, which close files, then the term slots, then leave the program. */
 #include "rtinit.h"
 #include "error.h"
 #include "llrm_os.h"

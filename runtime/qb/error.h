@@ -4,8 +4,8 @@
 
 #include "qb.h"
 
-extern word b_errnum;
-extern word b_inonerr;
+extern unsigned b_errnum;
+extern unsigned b_inonerr;
 void qb_no_resume(void);
 
 #endif

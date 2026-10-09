@@ -1,9 +1,7 @@
 /* Startup (QB rt/rtinit.asm B$Init, B$COMP_DISP): run the XI initializers,
-   which register their components, then the ini slots.  The segment bounds are
-   start.asm's. */
+   which register their components, then the ini slots. */
 #include "rtinit.h"
-
-extern word qb_xi_begin, qb_xi_end;
+#include "startup.h"
 
 static Comp *comps;
 static byte rt_inited;
@@ -50,11 +48,7 @@ byte qb_rt_inited(void)
 
 void __cdecl qb_start(void)
 {
-    Vec *xi;
-
-    for (xi = (Vec *)qb_xi_begin; (word)xi < qb_xi_end; xi++)
-        if (*xi)
-            (*xi)();
+    qb_run_initializers();
     qb_dispatch(V_INI);
     rt_inited = 1;
 }

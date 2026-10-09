@@ -262,9 +262,9 @@ def os_directory() -> Path:
 
 
 def platform_directory() -> Path:
-    """The QB runtime's assembly for that target: platform/qb/<os>/<mode>."""
+    """The QB runtime's own code for that target: runtime/qb/<os>/<mode>."""
     layer = os_directory()
-    return dosbatch.ROOT / "platform" / "qb" / layer.parent.name / layer.name
+    return RUNTIME / layer.parent.name / layer.name
 
 
 def shared_sources() -> list[Path]:
@@ -277,7 +277,8 @@ def portable_sources() -> list[Path]:
 
 
 def platform_sources() -> list[Path]:
-    return sorted(platform_directory().glob("*.asm"))
+    """The target's own code: its C and its assembly."""
+    return sorted([*platform_directory().glob("*.c"), *platform_directory().glob("*.asm")])
 
 
 def _compile_c(source: Path, obj: Path, include: Path) -> None:
@@ -291,6 +292,8 @@ def _compile_c(source: Path, obj: Path, include: Path) -> None:
             str(include),
             "-I",
             str(RUNTIME),
+            "-I",
+            str(platform_directory()),
             "-o",
             str(obj),
         ]
@@ -347,7 +350,9 @@ def build(directory: Path) -> tuple[Path, Path]:
     shared = shared_sources()
     for source in [*platform_sources(), *shared]:
         obj = directory / f"{source.stem}.obj"
-        if source in shared:
+        if source.suffix == ".c":
+            _compile_c(source, obj, include)
+        elif source in shared:
             dosbatch.assemble(source, obj, *dosbatch.os_defines(dosbatch.REAL_MODE, "c"))
         else:
             dosbatch.assemble(source, obj)

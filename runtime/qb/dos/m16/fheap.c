@@ -5,7 +5,7 @@
 #include "rtinit.h"
 #include "llrm_os.h"
 
-extern word llrm_os_psp;
+extern u16 llrm_os_psp;
 
 /* The list's ends: the top, from which entries are placed downwards, and the
    bottom, above DGROUP. */
@@ -18,14 +18,14 @@ static FHD *next_of(const FHD *entry)
 
 /* The paragraphs of free room just below `entry`, before the one that follows
    it. */
-static word room_below(const FHD *entry)
+static u16 room_below(const FHD *entry)
 {
     const FHD *next = next_of(entry);
 
     return entry->data_seg - (next->data_seg + next->size);
 }
 
-static int place(FHD *after, FHD *owner, word paras)
+static int place(FHD *after, FHD *owner, u16 paras)
 {
     FHD *next = next_of(after);
 
@@ -33,13 +33,13 @@ static int place(FHD *after, FHD *owner, word paras)
         return 0;
     owner->data_seg = after->data_seg - paras;
     owner->size = paras;
-    owner->next = (word)next;
-    after->next = (word)owner;
+    owner->next = (u16)next;
+    after->next = (u16)owner;
     far_clear(owner->data_seg, paras);
     return 1;
 }
 
-static int place_anywhere(FHD *owner, word paras)
+static int place_anywhere(FHD *owner, u16 paras)
 {
     FHD *entry;
 
@@ -53,7 +53,7 @@ static int place_anywhere(FHD *owner, word paras)
    one piece at the bottom. */
 static void compact(void)
 {
-    word at = top.data_seg;
+    u16 at = top.data_seg;
     FHD *entry;
 
     for (entry = next_of(&top); entry != &bottom; entry = next_of(entry)) {
@@ -93,7 +93,7 @@ void fh_free(FHD *owner)
 }
 
 /* The paragraphs DGROUP takes, up to the top of the local heap. */
-static word heap_paragraphs(void)
+static u16 heap_paragraphs(void)
 {
     return ((unsigned long)heap_top + 15) >> 4;
 }
@@ -102,11 +102,11 @@ static word heap_paragraphs(void)
    leaves of it. */
 static void fh_ini(void)
 {
-    word block = llrm_os_block_resize(llrm_os_psp, 0xFFFF);
+    u16 block = llrm_os_block_resize(llrm_os_psp, 0xFFFF);
 
     top.data_seg = llrm_os_psp + block;
     top.size = 0;
-    top.next = (word)&bottom;
+    top.next = (u16)&bottom;
     bottom.data_seg = dgroup_segment() + heap_paragraphs();
     bottom.size = 0;
     bottom.next = 0;

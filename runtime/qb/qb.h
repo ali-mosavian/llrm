@@ -5,15 +5,16 @@
 #ifndef QB_H
 #define QB_H
 
+#include "platform.h"
+
 #define NULL ((void *)0)
 
-typedef unsigned char byte;
-typedef unsigned int word;
+typedef u8 byte;
 
 /* A string descriptor (inc/string.inc): the length, and the data's address in
    DGROUP. */
 typedef struct SD {
-    word len;
+    u16 len;
     char *ptr;
 } SD;
 
@@ -32,7 +33,7 @@ enum {
     FE_CORRUPT = 0x9000, FE_NOSTACK = 0x9007
 };
 
-static void copy_bytes(char *to, const char *from, word n)
+static void copy_bytes(char *to, const char *from, unsigned n)
 {
     while (n--)
         *to++ = *from++;
@@ -40,6 +41,6 @@ static void copy_bytes(char *to, const char *from, word n)
 
 /* error.c: raise run-time error `n`.  It does not return: control goes to the
    ON ERROR handler, or the program ends. */
-void qb_error(word n);
+void qb_error(unsigned n);
 
 #endif

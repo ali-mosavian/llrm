@@ -2,6 +2,7 @@
 #ifndef QB_ARRAY_H
 #define QB_ARRAY_H
 
+#include "qb.h"
 #include "ad.h"
 
 /* The stack block of B$DDIM and B$RDIM as the frontend pushed it, last argument
@@ -10,8 +11,8 @@
    the front being the first stored. */
 typedef struct DimCall {
     AD *ad;
-    word rank_and_features;
-    word element;
+    u16 rank_and_features;
+    u16 element;
     struct {
         int upper;
         int lower;
