@@ -1521,6 +1521,29 @@ pub fn initialized(
     let unit = &procedure.unit;
     let function = unit.function;
     let count = function.parameters().len();
+    // Only a pointer parameter is an object a body can write before it reads.
+    // Two points-to solves and the effects of every call were made for each
+    // body of the module (45% of `mir interprocedural` over QCport at -O1),
+    // most of them for bodies whose parameters are integers.
+    // LLRM_CHECK_INITIALIZED works it out anyway and asserts nothing is
+    // initialized. And only a store, or a call that initializes its
+    // argument, writes one.
+    let pointers = function
+        .parameters()
+        .iter()
+        .any(|&one| matches!(
+            unit.context.types.get(function.value(one).ty),
+            llrm_mir::types::Type::Pointer(_)
+        ))
+        && function.walk().any(|(_, inst)| {
+            matches!(
+                function.instruction(inst).opcode,
+                Opcode::Store { volatile: false, .. } | Opcode::Call(_) | Opcode::Invoke(_)
+            )
+        });
+    if !pointers && !llrm_support::env_set("LLRM_CHECK_INITIALIZED") {
+        return Ok(vec![Vec::new(); count]);
+    }
     let facts = points_to(unit, None, None)?;
     let effects = calls_annotated(procedure, known)?;
     let actuals = points_to(unit, Some(&procedure.arguments), None)?;
@@ -1635,7 +1658,13 @@ pub fn initialized(
     let first = graph.first().map_or_else(|| vec![None; count], |block| entry[&block.at].clone());
     // A range reaching the sentinels was found only on paths that never return.
     let bounded = |(low, high): &(i64, i64)| i64::MIN < *low && *high < i64::MAX && low < high;
-    Ok(first.into_iter().map(|one| one.unwrap_or_default().into_iter().filter(bounded).collect()).collect())
+    let made: Vec<Ranges> =
+        first.into_iter().map(|one| one.unwrap_or_default().into_iter().filter(bounded).collect()).collect();
+    assert!(
+        pointers || made.iter().all(Vec::is_empty),
+        "initialized: a body with no pointer parameter written initializes bytes"
+    );
+    Ok(made)
 }
 
 fn _union<'a>(parts: impl IntoIterator<Item = Option<&'a Provenance>>) -> Option<Provenance> {

@@ -35,7 +35,7 @@ LEVELS = ("O1", "O2", "Os")
 # branches 2.92 2.84 2.75 3.46 over 16..256), so no size is "past the overhead"; the rule keeps the gate's cost flat and each
 # axis as far up as it allows. A step whose ratio is a small-N artifact (branches' recolor reads 2.75 at 32->64, 1.9-2.2 at 64->256:
 # the pairwise scan fills up to its 48-holder limit) is recorded as it reads; its budget says so, not that it is superlinear.
-SIZES = {"functions": 64, "straight": 512, "branches": 32, "live": 64, "callers": 32, "chain": 32, "mulconst": 512, "nest": 16}
+SIZES = {"functions": 64, "straight": 512, "branches": 32, "live": 64, "callers": 32, "chain": 32, "mulconst": 512, "nest": 16, "cells": 112}
 # The axes that cross calls, again at -m16: another register file and calling convention, where a hang once hid (chain at N=7 never
 # finished) while every -m32 axis passed.
 SIZES |= {"chain-m16": 32, "callers-m16": 32}
