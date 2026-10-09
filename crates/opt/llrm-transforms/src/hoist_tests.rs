@@ -603,3 +603,46 @@ fn test_a_motion_is_priced_by_one_forecast() {
     assert!(priced > 0, "nothing was priced");
     assert_eq!(forecast, priced, "a price and its forecast were found separately");
 }
+
+/// Each loop whose run was priced priced the function as it stood again for
+/// `kept`, though the loop before had just priced it moved (branches(512) at
+/// -O2: 64 loops, 128 whole-function prices). The price of a function a motion
+/// was accepted for is the next motion's `kept`.
+#[test]
+fn test_a_function_a_motion_was_priced_for_is_not_priced_again_for_the_next() {
+    let text = two_inner_loops();
+    let mut after = parsed(&text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.require::<Summaries>();
+    passes.add(super::Hoist { size: true });
+    crate::profit::PRICED.with(|count| count.set((0, 0)));
+    passes
+        .run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
+        .unwrap();
+    let (priced, _) = crate::profit::PRICED.with(std::cell::Cell::get);
+    assert!(priced > 0, "nothing was priced");
+    // Seven before: each of the three motions priced `kept` and its move.
+    assert!(priced <= 5, "{priced} prices of the function for three motions");
+}
+
+/// The traffic of every cell was found for each motion to price the values it
+/// makes cross the loop, which most motions have none of that the model
+/// spills (4.5% of branches(512) at -O2): the forecast finds it once, and
+/// hoist does only when one is asked.
+#[test]
+fn test_a_motion_that_makes_no_spilled_value_cross_finds_no_traffic_of_its_own() {
+    let text = two_inner_loops();
+    let mut after = parsed(&text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.require::<Summaries>();
+    passes.add(super::Hoist { size: true });
+    crate::profit::PRICED.with(|count| count.set((0, 0)));
+    crate::spill::TRAFFIC.with(|count| count.set(0));
+    passes
+        .run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 16, ..Default::default() }))
+        .unwrap();
+    let (priced, forecast) = crate::profit::PRICED.with(std::cell::Cell::get);
+    let found = crate::spill::TRAFFIC.with(std::cell::Cell::get);
+    assert!(priced > 0, "nothing was priced");
+    assert_eq!(found, forecast, "{found} traffics for {forecast} forecasts");
+}
