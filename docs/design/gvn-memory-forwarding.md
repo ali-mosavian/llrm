@@ -58,6 +58,10 @@ The saving is net. Profile of the same compile after the switch (samples):
 cache-missing allocation. The -O1 row (0.9989) is inside the method's spread;
 gvn is off there.
 
+With the prototype and `LLRM_CHECK_JUMPS=1 LLRM_CHECK_CLOBBERS=1`, the gate's
+`build`, `integration`, `bench`, `run` (the programs executed), `qcport` and
+`pytest-programs` steps pass.
+
 The walk subsumes the dataflow on 517 of 524 objects by bytes, which is not
 yet a statement about loads (see Check mode).
 
