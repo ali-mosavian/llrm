@@ -27,9 +27,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::consts::{self, Calls, HeldCells, Known, masked};
+use llrm_analysis::consts::{self, Calls, Known, masked};
 use llrm_analysis::graph::loops::{self, Loop};
-use llrm_analysis::manager::{AssumptionCache, Bounded, Counted, DominatedEdges, Registers};
+use llrm_analysis::manager::{AssumptionCache, Bounded, Counted, DominatedEdges, MemoryCells, Registers};
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, induction, regions};
@@ -127,9 +127,10 @@ pub fn sunk_stores(
         let accesses = Accesses::managed(context, layout, function, analyses)?;
         let registers = analyses.get::<llrm_analysis::manager::Registers>(context, layout, function);
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(context, layout, function);
-        let unit =
-            Unit::within(context, layout, function, analyses.outer()).with_registers(&registers).with_shape(&shape);
-        let moved = _moved(&unit, &accesses, &loop_, &inside, &predecessors, &successors, &dominators, source)?;
+        let outer = std::rc::Rc::clone(analyses.outer());
+        let unit = Unit::within(context, layout, function, &outer).with_registers(&registers).with_shape(&shape);
+        let moved =
+            _moved(&unit, analyses, &accesses, &loop_, &inside, &predecessors, &successors, &dominators, source)?;
         if moved.is_empty() {
             continue;
         }
@@ -168,6 +169,7 @@ enum Stored {
 #[allow(clippy::too_many_arguments)]
 fn _moved(
     unit: &Unit,
+    analyses: &mut Analyses,
     accesses: &Accesses,
     loop_: &Loop,
     operations: &[InstId],
@@ -216,7 +218,7 @@ fn _moved(
     let invariant =
         if nonempty { induction::invariant(function, &loop_.body) } else { induction::Invariant::default() };
     let mut exit =
-        _Exit { unit, accesses, predecessors, entry: cfg::id(function.entry().expect("an entry")), memory: None };
+        _Exit { unit, accesses, predecessors, entry: cfg::id(function.entry().expect("an entry")), analyses };
     for &inst in operations {
         if moved.iter().any(|(one, _)| *one == inst)
             || !unobserved(inst)
@@ -269,7 +271,7 @@ struct _Exit<'a> {
     accesses: &'a Accesses,
     predecessors: &'a BTreeMap<i64, BTreeSet<i64>>,
     entry: i64,
-    memory: Option<HeldCells>,
+    analyses: &'a mut Analyses,
 }
 
 impl _Exit<'_> {
@@ -420,7 +422,7 @@ impl _Exit<'_> {
     ) -> Option<Known> {
         let unit = self.unit;
         let calls = Calls::default();
-        let cells = self.memory.get_or_insert_with(|| consts::cells(unit, &calls, None, None, None, None, None));
+        let cells = self.analyses.get::<MemoryCells>(unit.context, unit.layout, unit.function);
         let before = cells.get(&inst).map(|here| (**here).clone()).unwrap_or_default();
         let nothing = IndexMap::default();
         let mut queries = consts::memory_queries(*unit, &nothing);

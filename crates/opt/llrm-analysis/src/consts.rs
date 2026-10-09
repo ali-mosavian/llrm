@@ -609,6 +609,7 @@ pub fn cells(
     mut assume: Option<&mut BTreeSet<ValueId>>,
     allowed: Option<&BTreeSet<ValueId>>,
 ) -> HeldCells {
+    CELL_DERIVATIONS.with(|count| count.set(count.get() + 1));
     let exposed = unit.exposed.is_none().then(|| crate::memory::exposed_frames(unit));
     let unit = &exposed.as_ref().map_or(*unit, |table| unit.with_exposed(table));
     let function = unit.function;
@@ -994,6 +995,14 @@ pub fn known(
 thread_local! {
     static REGISTER_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static MEMORY_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static CELL_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has worked out what each memory cell holds at
+/// each instruction (`cells`), for a test that a pass asks the manager and not
+/// once for each loop.
+pub fn cell_derivations() -> usize {
+    CELL_DERIVATIONS.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has derived what is known of a body through

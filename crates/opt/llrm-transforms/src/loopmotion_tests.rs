@@ -375,3 +375,27 @@ fn test_moving_a_store_keeps_the_ranges_held() {
     assert!(sunk_stores(context, &layout, &callees, function, &mut analyses).unwrap(), "premise: a store moved");
     assert!(analyses.cached::<Bounded>().is_some(), "the ranges were thrown away by a store moving");
 }
+
+/// Each loop asked what its cells hold before the instructions of the body, a
+/// fresh pass over all of it: 40 loops, none moved, 40 derivations (branches(512)
+/// at -O2: 626 ms of loopmotion's 1.6 s). Nothing changed between the loops, so
+/// the manager's one serves them all.
+#[test]
+fn what_the_cells_hold_is_derived_once_for_loops_that_move_nothing() {
+    let loops = 40;
+    let globals: String = (0..loops).map(|at| format!("@a{at} = global i16 0\n")).collect();
+    let mut text = String::from("@t = global i16 0\n\ndefine i16 @f(i16 %k) {\nb0:\n  store i16 5, ptr @t\n  br label %s0\n\n");
+    for at in 0..loops {
+        let exit = if at + 1 == loops { "end".to_owned() } else { format!("s{}", at + 1) };
+        // Seeded 5 through a load, 6 in the phi: asked what the cell holds, not moved.
+        text += &format!(
+            "s{at}:\n  %x{at} = load i16, ptr @t\n  store i16 %x{at}, ptr @a{at}\n  br label %h{at}\n\nh{at}:\n  %i{at} = phi i16 [ 0, %s{at} ], [ %n{at}, %l{at} ]\n  %v{at} = phi i16 [ 6, %s{at} ], [ %t{at}, %l{at} ]\n  %c{at} = icmp slt i16 %i{at}, %k\n  br i1 %c{at}, label %l{at}, label %{exit}\n\nl{at}:\n  %t{at} = add i16 %v{at}, %i{at}\n  store i16 %t{at}, ptr @a{at}\n  %n{at} = add i16 %i{at}, 1\n  br label %h{at}\n\n"
+        );
+    }
+    text += "end:\n  ret i16 %k\n}\n";
+    let before = llrm_analysis::consts::cell_derivations();
+    let (after, changed) = sunk(&format!("{globals}{text}"), TRIPS);
+    let derived = llrm_analysis::consts::cell_derivations() - before;
+    assert!(!changed, "{after}");
+    assert!(derived <= 1, "{derived} derivations for {loops} loops that move nothing");
+}

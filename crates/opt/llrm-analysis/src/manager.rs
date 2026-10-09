@@ -1113,6 +1113,35 @@ impl DominatedEdges {
     }
 }
 
+/// What each memory cell holds before each instruction, where it is a number,
+/// of the body alone (no callee's writes, no facts from outside):
+/// `consts::cells`.
+pub struct MemoryCells;
+
+impl Analysis for MemoryCells {
+    type Result = consts::HeldCells;
+    const NAME: &'static str = "memory-cells";
+
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self::Result {
+        let shape = analyses.get::<Shape>(context, layout, function);
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        consts::cells(
+            &Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed),
+            &consts::Calls::default(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+}
+
 /// The facts each counted loop gives its blocks, and where there is none the
 /// edges': `ranges::bounded`.
 pub struct Bounded;
