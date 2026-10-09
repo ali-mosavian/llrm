@@ -838,10 +838,11 @@ fn _entered(
     crate::guards::holds(unit, preheader, test, &start, &bound) || _ranged(unit, preheader, value, limit, test, width)
 }
 
-/// Whether the ranges known at `at` put the start of a counter on the loop's
-/// side of a constant bound for good: a signed compare of a value that cannot
-/// be below (or above) it. A guard the program no longer holds was folded on
-/// those ranges, and a loop entered behind it is entered all the same.
+/// Whether the counters of the loops around the entry put the start of a
+/// counter on the loop's side of a constant bound for good: a signed compare of
+/// `outer + c`, `outer` the counter of an enclosing counted loop, whose values
+/// the proof of that loop bounds. A guard the program no longer holds was
+/// folded on that range, and a loop entered behind it is entered all the same.
 fn _ranged(
     unit: &Unit,
     at: i64,
@@ -851,21 +852,57 @@ fn _ranged(
     width: u32,
 ) -> bool {
     let (AffineOperand::Value(value, _), AffineOperand::Const(limit)) = (start, bound) else { return false };
-    let Ok(bounds) = crate::ranges::bounds(unit) else { return false };
-    let Some(interval) = bounds.at(at).and_then(|facts| facts.get(value)) else { return false };
-    if interval.width != width {
-        return false;
-    }
-    let half = BigInt::from(1) << (width - 1);
+    let function = unit.function;
+    // `start` is `outer + offset`, or `outer`.
+    let (outer, offset) = match function.value(*value).def {
+        ValueDef::Instruction(made) => {
+            let made = function.instruction(made);
+            match (&made.opcode, made.operands.as_slice()) {
+                (Opcode::Binary(BinaryOp::Add), [Operand::Value(base), other])
+                | (Opcode::Binary(BinaryOp::Add), [other, Operand::Value(base)]) => {
+                    let Some(constant) = unit.int_constant(*other) else { return false };
+                    (*base, BigInt::from(constant))
+                }
+                (Opcode::Binary(BinaryOp::Sub), [Operand::Value(base), other]) => {
+                    let Some(constant) = unit.int_constant(*other) else { return false };
+                    (*base, -BigInt::from(constant))
+                }
+                _ => (*value, BigInt::from(0)),
+            }
+        }
+        ValueDef::Argument(_) => return false,
+    };
+    let shape = unit.shape();
     let limit = _signed_value(&limit.n, width);
-    let _ = half;
-    match test {
-        IntPredicate::Sge => interval.low >= limit,
-        IntPredicate::Sgt => interval.low > limit,
-        IntPredicate::Sle => interval.high <= limit,
-        IntPredicate::Slt => interval.high < limit,
-        _ => false,
+    for around in shape.loops.iter().filter(|one| one.body.contains(&at)) {
+        for proof in counted_unless_stopped(unit, around, None, false) {
+            if proof.counter.value != outer || proof.width() != width {
+                continue;
+            }
+            // Its values run from the start toward the bound: the start is the
+            // lowest (highest) of an ascending (descending) one,
+            // and the span, where the count is known, bounds the other end too.
+            let AffineOperand::Const(origin) = &proof.start else { continue };
+            let origin = _signed_value(&origin.n, width);
+            let (low, high) = match (proof.span(), proof.step > BigInt::from(0)) {
+                (Some((low, high)), _) => (low, high),
+                (None, true) => (origin.clone(), BigInt::from(1) << (width - 1)),
+                (None, false) => (-(BigInt::from(1) << (width - 1)), origin.clone()),
+            };
+            let (low, high) = (low + &offset, high + &offset);
+            let holds = match test {
+                IntPredicate::Sge => low >= limit,
+                IntPredicate::Sgt => low > limit,
+                IntPredicate::Sle => high <= limit,
+                IntPredicate::Slt => high < limit,
+                _ => false,
+            };
+            if holds {
+                return true;
+            }
+        }
     }
+    false
 }
 
 fn _signed_value(
