@@ -106,6 +106,15 @@ impl<K: Ord> Spilled<K> for BTreeSet<K> {
     }
 }
 
+impl<K: Eq + std::hash::Hash> Spilled<K> for llrm_support::hash::HashSet<K> {
+    fn has(&self, cell: &K) -> bool {
+        self.contains(cell)
+    }
+    fn add(&mut self, cell: K) {
+        self.insert(cell);
+    }
+}
+
 impl<K: Dense> Spilled<K> for IdSet<K> {
     fn has(&self, cell: &K) -> bool {
         self.contains(cell)
@@ -117,8 +126,8 @@ impl<K: Dense> Spilled<K> for IdSet<K> {
 
 /// What spilling costs to fit `points`, in order: at each, the cheapest
 /// residents past its registers are spilled, and stay spilled.
-pub fn spilled<K: Ord + Copy>(points: impl IntoIterator<Item = Point<K>>, price: impl Fn(K) -> i64) -> i64 {
-    fitted::<K, BTreeSet<K>>(points, price).cost
+pub fn spilled<K: Ord + std::hash::Hash + Copy>(points: impl IntoIterator<Item = Point<K>>, price: impl Fn(K) -> i64) -> i64 {
+    fitted::<K, llrm_support::hash::HashSet<K>>(points, price).cost
 }
 
 /// `spilled`, and which cells it spills and how far past its registers the pressure goes.

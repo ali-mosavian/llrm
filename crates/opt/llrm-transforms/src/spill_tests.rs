@@ -537,3 +537,21 @@ fn test_the_forecast_is_what_a_set_and_a_full_sort_give() {
         assert_eq!((got.cost, got.spilled.iter().collect::<std::collections::BTreeSet<_>>(), got.peak), (cost, expected_spilled, peak));
     }
 }
+
+/// `spilled` keeps what it has spilled in a hash set (lsr asks it of every resident of every point of every candidate set, on cells that are not
+/// ids); it must price the same as `forecast`, which keeps an id set.
+#[test]
+fn test_spilled_prices_what_forecast_does_whichever_set_remembers_the_spilled() {
+    let mut seed = 777_u64;
+    let mut next = move |most: u64| {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (seed >> 33) % most
+    };
+    for _ in 0..300 {
+        let points: Vec<super::Point<llrm_mir::module::ValueId>> =
+            (0..10).map(|_| super::Point { registers: next(5) as i64, residents: (0..next(10)).map(|_| llrm_mir::module::ValueId(next(12) as u32)).collect() }).collect();
+        let prices: Vec<i64> = (0..12).map(|_| next(5) as i64).collect();
+        let by_forecast = forecast(points.clone(), |one| prices[one.0 as usize]).cost;
+        assert_eq!(spilled(points, |one| prices[one.0 as usize]), by_forecast);
+    }
+}
