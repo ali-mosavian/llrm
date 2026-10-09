@@ -242,3 +242,31 @@ def test_a_diff_that_selects_only_the_root_crate_runs_no_lib_or_doc_tests():
     expected = gate.expected(p, gate.load(), gate.packages())
     assert "lib" not in expected and "doc" not in expected
     assert "-p llrm-mir" in gate.commands(gate.plan(["crates/ir/llrm-mir/src/lib.rs"]), gate.load(), gate.packages())["lib"] or "--workspace" in gate.commands(gate.plan(["crates/ir/llrm-mir/src/lib.rs"]), gate.load(), gate.packages())["lib"]
+
+
+def test_a_one_line_change_to_any_rust_file_selects_the_fmt_step_in_the_fast_tier():
+    """The formatter was not in the gate at all: a tree could drift from tools/fmt.sh and nothing said so."""
+    for touched in ("crates/opt/llrm-analysis/src/ranges.rs", "tests/run.rs", "tools/rfmt-post/src/main.rs"):
+        assert "fmt" in gate.plan([touched]).steps, touched
+    assert gate.plan(["crates/opt/llrm-analysis/src/ranges.rs"]).tier == "fast"
+    assert "fmt" in gate.plan(["rustfmt.toml"]).steps and "fmt" in gate.plan(["tools/fmt.sh"]).steps
+    assert "fmt" not in gate.plan(["tools/measure.py"]).steps and "fmt" not in gate.plan(["docs/testing.md"]).steps
+
+
+def test_a_formatter_change_runs_its_tests_and_neither_step_needs_the_compiler_built():
+    """`fmt` and `rfmt-post` format text; a build before them is minutes spent on binaries they never run."""
+    for touched in ("tools/rfmt-post/src/lib.rs", "tools/fmt.sh", "rustfmt.toml"):
+        p = gate.plan([touched])
+        assert {"fmt", "rfmt-post"} <= set(p.steps), (touched, p.steps)
+    assert "build" not in gate.plan(["tools/rfmt-post/src/lib.rs"]).steps
+    assert "rfmt-post" not in gate.plan(["crates/opt/llrm-analysis/src/ranges.rs"]).steps
+
+
+def test_the_fmt_step_fails_only_once_enforced_and_the_switch_is_one_line_of_tiers_toml():
+    """Unformatted, the tree would fail every PR: the step is reported until PR 2 formats the tree and sets `enforced`."""
+    cfg, pkgs = gate.load(), gate.packages()
+    p = gate.plan(["tools/fmt.sh"])
+    on = gate.commands(p, {**cfg, "fmt": {**cfg["fmt"], "enforced": True}}, pkgs)["fmt"]
+    off = gate.commands(p, {**cfg, "fmt": {**cfg["fmt"], "enforced": False}}, pkgs)["fmt"]
+    assert on == "tools/fmt.sh --check" and off.startswith(on) and "||" in off
+    assert isinstance(cfg["fmt"]["enforced"], bool)

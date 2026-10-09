@@ -26,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 LANGUAGES = ("qb", "c", "nib")
+NO_BINARIES = {"pytest", "fmt", "rfmt-post"}  # steps that do not run the release binaries, so need no build first
 
 
 @functools.cache  # read once: a bisect checks out commits that predate this file
@@ -131,6 +132,8 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
         steps.append("scans")
     if not cargo and p.tier != "full" and any(f.startswith("tools/torture/") for f in live):
         steps += ["torture"]
+    if p.tier == "full" or any(matches(f, cfg["fmt"]["paths"]) for f in live):
+        steps.append("fmt")
     heavy = {}
     for h in cfg["heavy"]:
         heavy[h["step"]] = h["owners"]
@@ -148,7 +151,7 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
             langs |= hit or set(LANGUAGES)
         p.languages = list(LANGUAGES) if p.tier == "full" else [l for l in LANGUAGES if l in langs]
     # Every step but the plain Python tests runs the release binaries: they must be built, and current, first.
-    if any(one != "pytest" for one in steps) and "build" not in steps:
+    if any(one not in NO_BINARIES for one in steps) and "build" not in steps:
         steps.insert(0, "build")
     p.steps = list(dict.fromkeys(steps))
     return p
@@ -162,7 +165,7 @@ def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
     if unknown:
         raise SystemExit(f"gate: no step named {' '.join(unknown)}; the steps are {' '.join(sorted(known))}")
     steps = [n for n in dict.fromkeys(names) if n != "build"]
-    if any(one != "pytest" for one in steps) or "build" in names:
+    if any(one not in NO_BINARIES for one in steps) or "build" in names:
         steps.insert(0, "build")
     return Plan(p.tier, p.reason + " (steps asked for)", steps, p.packages, p.languages)
 
@@ -203,6 +206,9 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict]) -> dict[str, str]:
         + "; exit $rc",
         "bench": bench,
         "torture": "timeout 600 uv run -q --project tools python tools/torture/torture.py --gate --work $CARGO_TARGET_DIR/torture-work",
+        # Enforced or not (tiers.toml [fmt]), the check runs and lists the files; only an enforced one fails the step.
+        "fmt": "tools/fmt.sh --check" if cfg["fmt"]["enforced"] else "tools/fmt.sh --check || echo 'fmt: not enforced yet (tiers.toml [fmt])'",
+        "rfmt-post": 'cargo test --release -q --manifest-path tools/rfmt-post/Cargo.toml --target-dir "${CARGO_TARGET_DIR:-target}/rfmt-post"',
         "pytest": "uv run -q --project tools python -m pytest tools crates tests/*.py -q -p no:cacheprovider --ignore=tests/test_programs_compile.py --ignore=tests/test_loops.py",
         "pytest-programs": "uv run -q --project tools python -m pytest tests/test_programs_compile.py tests/test_loops.py -q -p no:cacheprovider",
         "qcport": "[ -f ~/scratch/qcport-env.sh ] || { echo SKIPPED: no ~/scratch/qcport-env.sh; exit 77; }; . ~/scratch/qcport-env.sh && uv run -q --project tools python tools/qcport-run.py",
@@ -241,6 +247,7 @@ def expected(p: Plan, cfg: dict, pkgs: dict[str, dict]) -> dict[str, tuple[int |
         "integration": (sum(1 for t in root_tests() if t != "timing" and t not in whole), False),
         "run": (1, True),
         "scans": (None, True),
+        "rfmt-post": (None, False),
     }
     ct = sum(1 for n, _ in crate_tests(pkgs) if n in selected)
     if ct:

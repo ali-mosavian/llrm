@@ -25,9 +25,16 @@ paths = [
   "tools/gate/**",
 ]
 
+# The formatter (tools/fmt.sh): `fmt` checks the whole tree whenever a Rust file or the formatter itself changes.
+# `enforced = true` fails the step on any file the formatter would change; false only lists them. It is false until
+# the PR that formats the tree sets it to true: that one line is the switch.
+[fmt]
+enforced = false
+paths = ["**/*.rs", "rustfmt.toml", "tools/fmt.sh", "tools/rfmt-post/**"]
+
 # Paths outside [shared] the cheap steps cover on their own; they select no heavy step.
 [plain]
-paths = ["tests/**", "tools/**", "bench/**", "examples/**", "runtime/**", "toolchain/**", "crates/**"]
+paths = ["rustfmt.toml", "tests/**", "tools/**", "bench/**", "examples/**", "runtime/**", "toolchain/**", "crates/**"]
 
 # Heavy steps (> 15 s on the loaded host): fast runs one only when a changed path matches its owners.
 [[heavy]]
@@ -54,6 +61,11 @@ owners = ["tests/test_programs_compile.py", "tests/test_loops.py", "tests/test_i
 step = "qcport"
 why = "builds and runs QCport against the all-Borland build: 100 s"
 owners = ["tools/qcport*", "tools/qcport/**", "tools/linkrecipe.py", "crates/frontends/llrm-c/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-omf/**", "crates/target/llrm-x86/**", "crates/backend/**", "crates/opt/**", "runtime/**"]
+
+[[heavy]]
+step = "rfmt-post"
+why = "the formatter's own tests (cold build of its parser dependency: 40 s)"
+owners = ["tools/rfmt-post/**", "tools/fmt.sh", "rustfmt.toml"]
 
 [[heavy]]
 step = "measure"
