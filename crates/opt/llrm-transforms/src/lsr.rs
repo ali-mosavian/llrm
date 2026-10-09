@@ -899,7 +899,7 @@ fn _alive(
                 liveness::live_points(function, found, cfg::block(at))
                     .into_iter()
                     .map(|(_, before, _)| before)
-                    .collect(),
+                    .collect::<Vec<_>>(),
             )
         })
         .collect();
