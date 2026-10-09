@@ -156,6 +156,8 @@ def test_loopmotion_and_the_cells_it_asks_stay_linear_in_the_loops_of_one_functi
         small, big = (own[label].get(step, 0.0) - own["empty"].get(step, 0.0) for label in ("n", "2n"))
         if big > 2.6 * small + 5.0:
             grown[step] = f"{small:.1f} -> {big:.1f} Minstr"
+    assert not grown, grown
+
 
 def test_gvn_stays_below_quadratic_in_the_live_values_and_the_cells(tmp_path):
     """Pricing copied the live set at every instruction and the MemorySSA walk compared each load with every write it passed by the
