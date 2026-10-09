@@ -416,6 +416,25 @@ pub fn _undisturbed(
     between.iter().all(|&other| llrm_analysis::memoryssa::spares(accesses, program, read, other))
 }
 
+/// The walk's answer for every load in one gvn run, kept for the run's second
+/// numbering of the same function: it does not depend on
+/// `avoid_store_crossing`.
+#[derive(Default)]
+pub struct Forwarding {
+    walked: std::cell::OnceCell<Vec<avail::Forward>>,
+}
+
+impl Forwarding {
+    fn served(
+        &self,
+        unit: &memory::Unit,
+        accesses: &Accesses,
+        want: &IdSet<InstId>,
+    ) -> Vec<avail::Forward> {
+        self.walked.get_or_init(|| avail::forwardable_walk(unit, accesses, want)).clone()
+    }
+}
+
 /// Store-to-load forwarding: each load a known value serves becomes that
 /// value; whether any did. `accesses` are `function`'s as it stands.
 ///
@@ -423,43 +442,6 @@ pub fn _undisturbed(
 /// `avoid_store_crossing` changes: where it is not set the run is the same
 /// either way.
 ///
-/// How loads are forwarded in one gvn run, and what is kept for the run's
-/// second numbering of the same function: the availability of each block
-/// (`dataflow`), or the walk's answer for every load, which neither depends on
-/// `avoid_store_crossing`.
-pub struct Forwarding {
-    dataflow: bool,
-    held: std::cell::OnceCell<avail::Held>,
-    walked: std::cell::OnceCell<Vec<avail::Forward>>,
-}
-
-impl Forwarding {
-    pub fn new(dataflow: bool) -> Self {
-        Self { dataflow, held: Default::default(), walked: Default::default() }
-    }
-
-    fn served(
-        &self,
-        unit: &memory::Unit,
-        accesses: &Accesses,
-        want: &IdSet<InstId>,
-    ) -> Vec<avail::Forward> {
-        let map =
-            || avail::forwardable_by(unit, accesses, want, self.held.get_or_init(|| avail::holders(unit, accesses)));
-        let walk = || self.walked.get_or_init(|| avail::forwardable_walk(unit, accesses, want)).clone();
-        if llrm_support::env_set("LLRM_CHECK_GVN") {
-            let (map, walk) = (map(), walk());
-            let seen = avail::compared(unit, &map, &walk);
-            eprintln!(
-                "GVNCHECK same={} different={} map_only={} map_only_invariant={} walk_only={}",
-                seen.same, seen.different, seen.map_only, seen.map_only_invariant, seen.walk_only
-            );
-            return if self.dataflow { map } else { walk };
-        }
-        if self.dataflow { map() } else { walk() }
-    }
-}
-
 /// `avoid_store_crossing` keeps a value from serving a load when a store
 /// lies on a path from its definition to the load.
 pub fn forwarded(
@@ -734,7 +716,7 @@ b0:
             &registers,
             &shape,
             avoid_store_crossing,
-            &super::Forwarding::new(true),
+            &super::Forwarding::default(),
             &std::cell::Cell::new(false),
         )
         .unwrap();
