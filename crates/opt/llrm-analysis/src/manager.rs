@@ -289,7 +289,8 @@ fn calls_found(
         let one = facts.get_mut(&id).expect("facts for every body");
         if one.values.is_none() {
             let unit = summarized_in(module, program, globals, &shapes[&id], &one.exposed, None, function);
-            one.values = alias::point_values(&unit).ok().map(Rc::new);
+            one.values =
+                llrm_support::debug::timed("summaries values", || alias::point_values(&unit).ok().map(Rc::new));
         }
         if one.calls.is_none() {
             one.calls = Some(Rc::new(alias::CallFacts::of(&summarized_in(
