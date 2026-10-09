@@ -254,9 +254,9 @@ pub fn weighted(context: &Context, layout: &DataLayout, function: &Function, cal
 
 /// What fitting MIR within `room` spills, a call keeping what `across`
 /// says, as the one spill model (`spill`) forecasts it.
-pub fn spill_forecast(context: &Context, layout: &DataLayout, function: &Function, costs: &OperationCosts, room: Room, across: &dyn Fn(InstId) -> i64, frequency: &BTreeMap<i64, i64>) -> Option<spill::Forecast<ValueId>> {
+pub fn spill_forecast(context: &Context, layout: &DataLayout, function: &Function, costs: &OperationCosts, room: Room, across: &dyn Fn(InstId) -> i64, frequency: &BTreeMap<i64, i64>) -> Option<spill::Forecast<llrm_mir::dense::IdSet<ValueId>>> {
     if !room.priced() {
-        return Some(spill::Forecast { cost: 0, spilled: BTreeSet::new(), peak: 0 });
+        return Some(spill::Forecast { cost: 0, spilled: Default::default(), peak: 0 });
     }
     Some(spill::View::of(context, layout, function, room, across).forecast(costs, frequency))
 }
