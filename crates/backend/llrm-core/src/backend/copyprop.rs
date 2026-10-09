@@ -404,28 +404,19 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
                 for through in [true, false] {
                     let current = changed.clone();
                     let place = if side { &current.dests[index] } else { &current.sources[index] };
-                    let register = match (place, through) {
-                        (Loc::Mem(cell), true) => cell.through,
-                        (Loc::Mem(cell), false) => cell.index_through,
-                        (Loc::Address(address), true) => address.through,
-                        (Loc::Address(address), false) => address.index_through,
-                        _ => continue,
-                    };
+                    let Some(at) = place.address() else { continue };
+                    let register = if through { at.through } else { at.index_through };
                     if register == Register::None {
                         continue;
                     }
                     let put = |replacement: Register| {
-                        let renamed = match place {
-                            Loc::Mem(cell) if through => Loc::Mem(ir::Mem { through: replacement, ..cell.clone() }),
-                            Loc::Mem(cell) => Loc::Mem(ir::Mem { index_through: replacement, ..cell.clone() }),
-                            Loc::Address(address) if through => {
-                                Loc::Address(ir::AddressRef { through: replacement, ..address.clone() })
+                        let renamed = place.map_address(|at| {
+                            if through {
+                                ir::AddressRef { through: replacement, ..at }
+                            } else {
+                                ir::AddressRef { index_through: replacement, ..at }
                             }
-                            Loc::Address(address) => {
-                                Loc::Address(ir::AddressRef { index_through: replacement, ..address.clone() })
-                            }
-                            other => other.clone(),
-                        };
+                        });
                         let (mut dests, mut sources) = (current.dests.clone(), current.sources.clone());
                         if side {
                             dests[index] = renamed

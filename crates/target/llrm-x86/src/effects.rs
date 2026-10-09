@@ -118,7 +118,7 @@ fn used(
                     found => found,
                 }
             }
-            Loc::Address(one) => match select::address_operand(one, bits, bits / 8) {
+            Loc::Address(one) => match select::address_operand(one, bits) {
                 None => return false,
                 found => found,
             },
