@@ -324,22 +324,11 @@ pub fn far_load(what: &Semantics) -> bool {
         && what.dests.len() == 2
 }
 
-/// The registers the description calls positional: a position in a stack,
-/// where an exchange is an effect and no pass may rename or drop the register.
-pub static POSITIONAL: LazyLock<BTreeSet<Register>> = LazyLock::new(|| {
-    use llrm_target::Target;
-    let file = llrm_target::registers::parse(&llrm_x86_m16::M16.registers_text()).expect("the registers parse");
-    let named = |name: &str| {
-        Register::values()
-            .find(|one| format!("{one:?}").eq_ignore_ascii_case(name))
-            .expect("a register the description names")
-    };
-    llrm_target::registers::of_class(&file, "positional").into_iter().map(named).collect()
-});
-
-/// Whether the description calls this register positional.
+/// Whether the register is a position in a stack, where an exchange is an
+/// effect and no pass may rename or drop it. The descriptions state the same
+/// set (`positional` in registers.regs); a test holds the two together.
 pub fn positional(register: Register) -> bool {
-    POSITIONAL.contains(&register)
+    llrm_x86::registers::positional(register)
 }
 
 /// Whether the operand is a positional register.
