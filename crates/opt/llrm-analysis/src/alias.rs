@@ -251,7 +251,7 @@ pub struct Summary {
 }
 
 /// An access type: its name and its ancestors', as `MemRef::typed` and `lineage`.
-pub type Access = (String, Vec<String>);
+pub type Access = (std::rc::Rc<str>, std::rc::Rc<[String]>);
 
 /// The types of two writes' unplaced stores together.
 fn merged_types(one: (bool, &Option<BTreeSet<Access>>), other: (bool, &Option<BTreeSet<Access>>)) -> Option<BTreeSet<Access>> {
@@ -1649,16 +1649,11 @@ pub fn points_to(
         publishes.insert(block.at, mine);
     }
     let objects = objects.into_inner();
-    let bits_of = |escapes: &Vec<usize>| {
-        let mut bits = Bits::new(objects.len());
-        escapes.iter().for_each(|one| bits.insert(*one));
-        bits
-    };
     let generated = publishes
         .iter()
         .map(|(at, mine)| {
             let mut all = Bits::new(objects.len());
-            mine.iter().for_each(|escapes| all.union_with(&bits_of(escapes)));
+            mine.iter().flatten().for_each(|one| all.insert(*one));
             (*at, all)
         })
         .collect::<IndexMap<_, _>>();
@@ -1687,11 +1682,11 @@ pub fn points_to(
     for block in &graph {
         let mut state = entering(block.at, &out);
         for (&inst, escapes) in instructions(block.at).iter().zip(&publishes[&block.at]) {
-            state.union_with(&bits_of(escapes));
+            escapes.iter().for_each(|one| state.insert(*one));
             if calls.contains(&inst) || matches!(function.instruction(inst).opcode, Opcode::Load { .. } | Opcode::Store { .. }) {
                 let mut visible = state.clone();
                 if let Some(reached) = during.get(&inst) {
-                    visible.union_with(&bits_of(reached));
+                    reached.iter().for_each(|one| visible.insert(*one));
                 }
                 before.insert(inst, visible);
             }

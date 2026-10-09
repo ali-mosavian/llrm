@@ -891,3 +891,69 @@ fn test_calls_alike_to_something_unknown_are_worked_out_once() {
     summaries(&procedures, None).unwrap();
     assert_eq!(super::other_runs() - before, 1);
 }
+
+/// Allocations the calling thread made, for the tests below.
+#[cfg(test)]
+mod counted {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    thread_local! {
+        static MADE: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub struct Counting;
+
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            MADE.with(|made| made.set(made.get() + 1));
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(pointer, layout) }
+        }
+        unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            MADE.with(|made| made.set(made.get() + 1));
+            unsafe { System.realloc(pointer, layout, size) }
+        }
+    }
+
+    pub fn made() -> usize {
+        MADE.with(Cell::get)
+    }
+}
+
+#[cfg(test)]
+#[global_allocator]
+static COUNTING: counted::Counting = counted::Counting;
+
+/// A `MemRef` copied its type name and every ancestor's as strings, a vector, and a set: 5 allocations for a reference of a
+/// three-deep type, 8% of all the compile's allocations and ~3% of its instructions on QCport. The names are shared.
+#[test]
+fn a_typed_reference_is_copied_without_allocating() {
+    let parsed = Parsed::new(&format!("define void @f(ptr %p) {{\n  store i16 1, ptr %p, !tbaa !5\n  ret void\n}}\n{TYPE_TREE}"));
+    let unit = parsed.unit();
+    let store = parsed.all(|op| matches!(op, Opcode::Store { .. }))[0];
+    let tree = llrm_mir::tbaa::Tbaa::of(&parsed.module.metadata);
+    let unit = Unit { tbaa: Some(&tree), ..unit };
+    let reference = MemRef::of(&unit, store).expect("a store");
+    assert_eq!(reference.lineage.len(), 3);
+    let before = counted::made();
+    let copies: Vec<MemRef> = Vec::new();
+    let copy = reference.clone();
+    assert_eq!(counted::made() - before, 0, "a copy of a reference allocated");
+    drop((copy, copies));
+}
+
+/// Picking the buckets a write reaches made a vector for the objects, one for the classes and one grown a few times for the
+/// answer: 7% of the compile's allocations (QCport). One vector, sized once, is the answer.
+#[test]
+fn picking_the_buckets_of_a_write_allocates_once() {
+    let global = MemoryObject { identity: Some(Identity::Global(1)), extent: Some(16), ..MemoryObject::new(MemoryKind::Global) };
+    let reference = MemRef { provenance: Some(one(&global, 0, 4)), ..MemRef::reach(4, one(&global, 0, 4)) };
+    let parts = crate::regions::OverlapParts::default();
+    let before = counted::made();
+    let reached = crate::regions::overlap_buckets(&reference, &parts);
+    assert_eq!(counted::made() - before, 1, "the picking allocated more than its answer");
+    drop(reached);
+}
