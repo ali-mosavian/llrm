@@ -1203,3 +1203,18 @@ fn initialized_does_not_solve_a_body_that_writes_no_pointer_parameter() {
     assert_eq!(found, vec![vec![(0, 2)]], "premise: a store through a pointer parameter initializes it");
     assert!(asked > 0);
 }
+
+/// `initialized` solved where every pointer points three times (plain, with the
+/// call arguments, with arguments and captures), the escape phase being the
+/// only part that differs: 3,908 + 1,954 solves over QCport's front half at
+/// -O1. Once a body.
+#[test]
+fn initialized_solves_the_pointer_values_of_a_body_once() {
+    let parsed = Parsed::new(
+        "declare void @g(ptr)\n\ndefine void @f(ptr %p) {\nb0:\n  store i16 0, ptr %p\n  call void @g(ptr %p)\n  ret void\n}\n",
+    );
+    let unit = parsed.unit();
+    let before = crate::alias::value_solves();
+    initialized(&Procedure::of(unit), &IndexMap::default()).unwrap();
+    assert_eq!(crate::alias::value_solves() - before, 1, "initialized solved the pointer values again");
+}
