@@ -44,3 +44,20 @@ fn a_subtraction_borrows_through_the_halves() {
     );
     assert!(text.contains("sub ") && text.contains("sbb "), "{text}");
 }
+
+/// `a << (n & 31)` on an i64 made the branchless fix-up for counts from 32
+/// (about 22 instructions: `shl; sar 31; xor -1; and; or` around the shifts)
+/// though bit five of the count is known zero. A count not masked keeps it.
+#[test]
+fn a_masked_i64_shift_count_needs_no_fixup_for_counts_from_32() {
+    let masked = listing(
+        "unsigned long long f(unsigned long long a, unsigned long long n) { return a << (n & 31); }\n",
+        &["-m32", "-O2"],
+    );
+    assert!(masked.contains("shld") && !masked.contains("sar ") && !masked.contains("xor "), "{masked}");
+    let free = listing(
+        "unsigned long long f(unsigned long long a, unsigned long long n) { return a << n; }\n",
+        &["-m32", "-O2"],
+    );
+    assert!(free.contains("sar "), "{free}");
+}
