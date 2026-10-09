@@ -8,17 +8,50 @@
 //! bundle's sign.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
+use crate::analysis::facts::Fact;
+use crate::analysis::graph::Shape;
 use crate::analysis::intervals as ranges;
 use crate::model::lir::LirBody;
 use crate::support::hash::IndexMap;
 
 /// Every block's entry and exit bundle.
+#[derive(Debug, PartialEq)]
 pub struct Bundles {
     /// Block address -> (entry bundle, exit bundle).
     pub of: IndexMap<i64, (usize, usize)>,
     /// Bundle -> the blocks with an entry or exit in it.
     pub blocks: Vec<BTreeSet<i64>>,
+}
+
+/// `EdgeBundles`, the manager's: the bundles depend on the blocks' labels and
+/// successors alone, so every body a split makes of this one has them.
+pub fn edge_bundles(body: &LirBody) -> Arc<Bundles> {
+    body.facts.0.get::<EdgeBundles>(body)
+}
+
+pub struct EdgeBundles;
+
+impl Fact for EdgeBundles {
+    type Result = Bundles;
+    type Inputs = Shape;
+    const NAME: &'static str = "edge-bundles";
+
+    fn run(body: &LirBody) -> Bundles {
+        bundles(body)
+    }
+
+    fn inputs(body: &LirBody) -> Shape {
+        Shape::of(body)
+    }
+
+    fn held_by(
+        kept: &Shape,
+        body: &LirBody,
+    ) -> bool {
+        kept.holds(body)
+    }
 }
 
 /// `EdgeBundles`: a block's exit shares a bundle with each successor's entry.
@@ -157,7 +190,7 @@ impl<'a> Placement<'a> {
         body: &LirBody,
         bundles: &'a Bundles,
     ) -> Self {
-        let frequency = ranges::depths(body).into_iter().map(|(at, depth)| (at, ranges::level(depth))).collect();
+        let frequency = ranges::depths_shared(body).iter().map(|(at, depth)| (*at, ranges::level(*depth))).collect();
         Self {
             bundles,
             frequency,
