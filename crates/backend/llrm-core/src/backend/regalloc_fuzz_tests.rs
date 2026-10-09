@@ -878,10 +878,30 @@ fn test_a_base_and_its_trial_asked_in_turn_are_each_worked_out_once() {
         }
     }
     let after = (worked(&base), edited(&base), numbered(&base));
-    assert_eq!((after.0 - before.0, after.1 - before.1, after.2 - before.2), (2, 1, 2), "(worked, edited, numbered) over six turns of base and trial: the base once, the trial edited from it (which works out the values it names)");
+    assert_eq!((after.0 - before.0, after.1 - before.1, after.2 - before.2), (1, 1, 2), "(worked, edited, numbered) over six turns of base and trial: the base once, the trial edited from it");
     for body in [&base, &trial] {
         assert_eq!(intervals(body, None), intervals_afresh(body));
     }
+}
+
+/// An answer edited from an earlier one worked the changed values out by taking the body's liveness whole and walking every block
+/// (`intervals liveness` and `walk`, 1.5 G of compiling d_faces for 882 edits that name a few values each). It finds them from where
+/// they occur; the intervals and weights are the walk's.
+#[test]
+fn test_an_edited_answer_works_its_changed_values_out_from_where_they_occur() {
+    use crate::analysis::intervals::{by_occurrences, edited, intervals, intervals_afresh};
+    let (base, _) = body(4, &Shape { pool: 10, ops: 12 });
+    intervals(&base, None);
+    let mut blocks = base.blocks.clone();
+    let block = blocks.iter_mut().find(|block| block.insns.len() > 3).expect("a block with instructions");
+    let copy = std::sync::Arc::new((*block.insns[1]).clone());
+    block.insns.edit(|insns| insns[1] = copy);
+    let trial = base.with_blocks(blocks);
+    let before = (edited(&base), by_occurrences(&base));
+    let found = intervals(&trial, None);
+    assert_eq!(edited(&base) - before.0, 1, "premise: the trial's answer is an edit of the base's");
+    assert_eq!(by_occurrences(&base) - before.1, 1, "the changed values were walked for, not found from their occurrences");
+    assert_eq!(found, intervals_afresh(&trial));
 }
 
 /// The no-split allocation of a body the base allocation split nothing in is the base allocation again, and was made for every
@@ -932,10 +952,10 @@ fn test_dense_liveness_is_what_the_sorted_sets_gave() {
 fn test_the_intervals_of_the_same_instructions_are_worked_out_once() {
     use crate::analysis::intervals::{intervals, worked};
     let (generated, _) = body(3, &Shape { pool: 8, ops: 10 });
-    let before = worked(&generated);
+    let before = worked(&generated) + crate::analysis::intervals::by_occurrences(&generated);
     let first = intervals(&generated, None);
     let again = intervals(&generated, None);
-    assert_eq!(worked(&generated) - before, 1, "the same body was worked out twice");
+    assert_eq!(worked(&generated) + crate::analysis::intervals::by_occurrences(&generated) - before, 1, "the same body was worked out twice");
     assert_eq!(first, again);
     // A body with one instruction made afresh is another question.
     let mut other = generated.clone();
@@ -943,7 +963,7 @@ fn test_the_intervals_of_the_same_instructions_are_worked_out_once() {
     let copy = std::sync::Arc::new((*block.insns[0]).clone());
     block.insns.edit(|insns| insns[0] = copy);
     intervals(&other, None);
-    assert_eq!(worked(&generated) - before, 2, "another body was answered from the first");
+    assert_eq!(worked(&generated) + crate::analysis::intervals::by_occurrences(&generated) - before, 2, "another body was answered from the first");
 }
 
 /// A spill made a body of nearly the same instructions, and every fact of it was worked out afresh (the allocator's
