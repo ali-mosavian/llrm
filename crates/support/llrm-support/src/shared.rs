@@ -3,9 +3,10 @@
 use std::ops::Deref;
 use std::rc::Rc;
 
-/// A value many owners hold, copied only when one of them changes it and others still hold it: LLVM's copy-on-write
-/// sets, for the maps a dataflow carries from block to block. Cloning is a count; reading is free; `amend` copies only
-/// when there is something to change.
+/// A value many owners hold, copied only when one of them changes it and others
+/// still hold it: LLVM's copy-on-write sets, for the maps a dataflow carries
+/// from block to block. Cloning is a count; reading is free; `amend` copies
+/// only when there is something to change.
 #[derive(Debug, Default)]
 pub struct Shared<T>(Rc<T>);
 
@@ -47,8 +48,9 @@ impl<T> Shared<T> {
 }
 
 impl<T: Clone> Shared<T> {
-    /// `apply` the change `plan` finds to make by reading the value, and nothing where it finds none: the value is
-    /// copied, if others hold it, only then. Whether it changed.
+    /// `apply` the change `plan` finds to make by reading the value, and
+    /// nothing where it finds none: the value is copied, if others hold it,
+    /// only then. Whether it changed.
     pub fn amend<P>(
         &mut self,
         plan: impl FnOnce(&T) -> Option<P>,

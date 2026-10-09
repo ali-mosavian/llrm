@@ -146,22 +146,9 @@ impl<K: Clone + Eq + Hash, V, B: Bucket> CellMap<K, V, B> {
     pub fn kill(
         &mut self,
         reached: Option<Vec<B>>,
-        overlaps: impl FnMut(&K) -> bool,
-        displaced: Option<(HashSet<B>, ByteRange)>,
-    ) {
-        if let Some(doomed) = self.doomed(reached, overlaps, displaced) {
-            self.remove(doomed);
-        }
-    }
-
-    /// The cells `kill` would delete, none where there are none: a caller that shares the map asks first and copies it
-    /// only to delete.
-    pub fn doomed(
-        &self,
-        reached: Option<Vec<B>>,
         mut overlaps: impl FnMut(&K) -> bool,
         displaced: Option<(HashSet<B>, ByteRange)>,
-    ) -> Option<Vec<(B, K)>> {
+    ) {
         let mut doomed = Vec::new();
         let mut test = |bucket: &B| {
             let mut ask = |key: &K| {
@@ -193,11 +180,9 @@ impl<K: Clone + Eq + Hash, V, B: Bucket> CellMap<K, V, B> {
                 assert!(!overlaps(key), "a skipped cell is one the write reaches");
             }
         }
-        (!doomed.is_empty()).then_some(doomed)
-    }
-
-    /// Delete the cells `doomed` found.
-    pub fn remove(&mut self, doomed: Vec<(B, K)>) {
+        if doomed.is_empty() {
+            return;
+        }
         for (bucket, key) in &doomed {
             let keys = self.buckets.get_mut(bucket).expect("a doomed cell's bucket is held");
             if let Some(at) = keys.swap_remove(key).expect("a doomed cell is held") {

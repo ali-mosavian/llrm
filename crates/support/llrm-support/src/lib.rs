@@ -11,8 +11,8 @@ pub mod pyjson;
 pub mod pypath;
 pub mod pyrepr;
 pub mod pyset;
-pub mod shared;
 mod register;
+pub mod shared;
 
 pub use register::PhysicalRegister;
 
