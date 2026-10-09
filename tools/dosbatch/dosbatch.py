@@ -285,11 +285,26 @@ class Job:
     switches: str = "/O /FPi"  # BC's, for a bas job
     libs: tuple[str, ...] = ()  # more libraries to link, by DOS path
     library: str = ""  # the runtime library, where the toolchain's own is not it
+    runtime: str = "bcom45"  # bcom45, llrmqb or empty
+    runtime_file: Path | None = None  # the copied LLRMQB or empty archive
     args: str = ""  # the program's command line
     objects: tuple[Path, ...] = ()  # more objects to link with an obj job's
     files: tuple[Path, ...] = ()  # files the program reads, copied beside it under their upper-case names
     map: bool = False  # LINK /MAP: NAME.MAP lists the public symbols too
     runner: str = ""  # a program that runs this one (it must be among `files`), e.g. a timer
+
+
+def runtime_library(job: Job, tools: Toolchain, work: Path) -> str:
+    """The one runtime LINK receives; replacement archives are always mounted explicitly."""
+    if job.runtime == "bcom45":
+        return job.library or tools.library
+    if job.runtime not in ("llrmqb", "empty"):
+        raise BuildError(f"unknown QB runtime '{job.runtime}'")
+    if job.runtime_file is None or not job.runtime_file.is_file():
+        raise BuildError(f"runtime file for {job.runtime} is missing")
+    name = "LLRMQB.LIB" if job.runtime == "llrmqb" else "EMPTY.LIB"
+    place(job.runtime_file, work / name)
+    return rf"C:\{name}"
 
 
 @dataclass
@@ -325,6 +340,11 @@ def read_dos(workdir: Path, name: str) -> str:
         if (workdir / candidate).is_file():
             return (workdir / candidate).read_text(encoding="latin1")
     return ""
+
+
+def link_failed(output: str) -> bool:
+    """Whether LINK reported an error even though it left a partial EXE."""
+    return bool(re.search(r"(?:^|\n).*\berror L\d+\b", output, re.IGNORECASE))
 
 
 _PRIVATE = iter(range(1 << 30))
@@ -385,7 +405,7 @@ def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_0
     building = []
     for job in jobs:
         u = job.stem.upper()
-        libraries = "+".join([job.library or tools.library, *job.libs])
+        libraries = "+".join([runtime_library(job, tools, work), *job.libs])
         more = "".join(f"+{u}X{at}.OBJ" for at in range(len(job.objects)))
         link = f"{tools.link} /NOE{' /MAP' if job.map else ''} {u}.OBJ{more},{u}.EXE,,{libraries}; > {u}.LNK"
         for data in job.files:
@@ -440,11 +460,14 @@ def collect(jobs: list[Job], work: Path, events: Path) -> dict[str, Result]:
     for job, end in zip(jobs, ends[1:]):
         u = job.stem.upper()
         severe = re.search(r"(\d+) Severe\s+Error", read_dos(work, f"{u}.BCO"))
+        link_log = read_dos(work, f"{u}.LNK")
         if severe and int(severe.group(1)):
             # LINK makes an EXE of what BC refused: never run it
             out[job.stem] = Result("not built", detail="BC: " + read_dos(work, f"{u}.BCO").strip()[-600:])
+        elif link_failed(link_log):
+            out[job.stem] = Result("not built", detail="LINK: " + link_log.strip()[-600:])
         elif not (work / f"{u}.EXE").exists():
-            out[job.stem] = Result("not built", detail=(read_dos(work, f"{u}.BCO") + read_dos(work, f"{u}.LNK")).strip()[-600:])
+            out[job.stem] = Result("not built", detail=(read_dos(work, f"{u}.BCO") + link_log).strip()[-600:])
         elif end.get("reason") != "exit":
             out[job.stem] = Result("stopped", written.get(f"{u}.TXT", ""), f"{end.get('reason')} after {end.get('ms')} ms ({events})")
         else:
