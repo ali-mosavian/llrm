@@ -410,6 +410,22 @@ fn dense_key_counts(sources: &[(String, String)]) -> std::collections::BTreeMap<
         .flat_map(|(file, text)| text.lines().filter(|line| is_alias(line)).map(move |line| (file.as_str(), line)))
         .filter_map(|(file, line)| line.split_once("type ").and_then(|(_, rest)| rest.split(|c: char| !(c.is_alphanumeric() || c == '_')).next()).map(|name| (file, name.to_owned())))
         .collect();
+    // A generic alias (`type Sparse<K, V> = IndexMap<K, V>`) names no id on its own line: it is a keyed map wherever it is applied to an id.
+    // SparseIdMap and SparseIdSet are the sanctioned ones (a few of many ids: llrm_support::hash), by name and no other.
+    const SANCTIONED: [&str; 2] = ["SparseIdMap", "SparseIdSet"];
+    let generic_aliases: Vec<(&str, String)> = sources
+        .iter()
+        .flat_map(|(file, text)| text.lines().map(move |line| (file.as_str(), line)))
+        .filter(|(_, line)| line.starts_with("type ") || line.starts_with("pub type ") || line.starts_with("pub(crate) type "))
+        .filter_map(|(file, line)| {
+            let (head, right) = line.split_once(" = ")?;
+            let after = head.split_once("type ")?.1;
+            let (name, params) = after.split_once('<')?;
+            let first = params.split([',', '>']).next()?.trim();
+            let key_of_map = kinds.iter().any(|kind| right.find(kind).is_some_and(|at| right[at + kind.len()..].trim_start().starts_with(first)));
+            (!first.is_empty() && key_of_map && !SANCTIONED.contains(&name) && !kinds.contains(&format!("{name}<").as_str())).then(|| (file, name.to_owned()))
+        })
+        .collect();
     let whole_word = |text: &str, at: usize, word: &str| !text[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_') && !text[at + word.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_');
     let mut counts = std::collections::BTreeMap::new();
     for (name, text) in sources {
@@ -429,9 +445,38 @@ fn dense_key_counts(sources: &[(String, String)]) -> std::collections::BTreeMap<
             let uses: String = body.lines().filter(|line| !line.trim_start().starts_with("use ")).collect::<Vec<_>>().join("\n");
             found += uses.match_indices(alias.as_str()).filter(|(at, _)| whole_word(&uses, *at, alias)).count();
         }
+        // Where a generic alias is applied to an id.
+        for (home, alias) in &generic_aliases {
+            let module = std::path::Path::new(home).file_stem().and_then(|stem| stem.to_str()).unwrap_or("");
+            let imported = body.lines().any(|line| line.trim_start().starts_with("use ") && line.contains(module) && line.match_indices(alias.as_str()).any(|(at, _)| whole_word(line, at, alias)));
+            if name != home && !imported && !body.contains(&format!("{module}::{alias}")) {
+                continue;
+            }
+            let uses: String = body.lines().filter(|line| !line.trim_start().starts_with("use ") && !line.starts_with("type ") && !line.starts_with("pub type ")).collect::<Vec<_>>().join("\n");
+            found += uses
+                .match_indices(&format!("{alias}<"))
+                .filter(|(at, _)| whole_word(&uses, *at, &format!("{alias}<")[..alias.len()]))
+                .filter(|(at, _)| ids.iter().any(|id| uses[at + alias.len() + 1..].trim_start().starts_with(id.as_str()) && !uses[at + alias.len() + 1..].trim_start()[id.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_')))
+                .count();
+        }
         counts.insert(name.clone(), found);
     }
     counts
+}
+
+/// SparseIdMap is the sanctioned container for a few of many ids; any other alias of a keyed map, generic or not, counts where it is applied
+/// to an id: a new alias is no loophole.
+#[test]
+fn the_sparse_containers_are_sanctioned_by_name_and_a_generic_alias_is_not() {
+    let source = |name: &str, text: &str| (name.to_owned(), text.to_owned());
+    let counts = dense_key_counts(&[
+        source("hash.rs", "pub type SparseIdMap<K, V> = IndexMap<K, V>;\npub type Sparse<K, V> = IndexMap<K, V>;\n"),
+        source("a.rs", "use llrm_support::hash::SparseIdMap;\nfn f(x: SparseIdMap<ValueId, u8>, y: SparseIdMap<InstId, u8>) {}\n"),
+        source("b.rs", "use llrm_support::hash::Sparse;\nfn f(x: Sparse<ValueId, u8>, y: Sparse<String, u8>) {}\n"),
+    ]);
+    assert_eq!(counts["a.rs"], 0, "SparseIdMap is sanctioned");
+    assert_eq!(counts["b.rs"], 1, "a generic alias applied to an id is one keyed map; applied to a string it is none");
+    assert_eq!(counts["hash.rs"], 0, "the alias lines themselves count none");
 }
 
 #[test]
