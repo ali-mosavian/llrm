@@ -9,7 +9,6 @@ description = "llrm's HIR, MIR, optimizer, x86 backend, OMF object support and B
 llrm-support = { workspace = true }
 llrm-target = { workspace = true }
 llrm-x86 = { workspace = true }
-llrm-x86-m16 = { workspace = true }
 llrm-omf = { workspace = true }
 llrm-dwarf = { workspace = true }
 llrm-coff = { workspace = true }
@@ -48,6 +47,7 @@ default = ["testing"]
 testing = ["llrm-omf/testing"]
 
 [dev-dependencies]
+llrm-x86-m16 = { workspace = true }
 llrm-x86-m32 = { workspace = true }
 llrm-omf = { workspace = true, features = ["testing"] }
 regex = { workspace = true }

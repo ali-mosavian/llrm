@@ -4,11 +4,10 @@
 1 crates/backend/llrm-core/src/backend/affine.rs
 4 crates/backend/llrm-core/src/backend/allocate.rs
 4 crates/backend/llrm-core/src/backend/arithmetic.rs
-4 crates/backend/llrm-core/src/backend/callregs.rs
-19 crates/backend/llrm-core/src/backend/classes.rs
+1 crates/backend/llrm-core/src/backend/callregs.rs
+18 crates/backend/llrm-core/src/backend/classes.rs
 1 crates/backend/llrm-core/src/backend/copyprop.rs
 7 crates/backend/llrm-core/src/backend/datagroup.rs
-1 crates/backend/llrm-core/src/backend/ehprepare.rs
 1 crates/backend/llrm-core/src/backend/exactaddress.rs
 5 crates/backend/llrm-core/src/backend/floatalloc.rs
 3 crates/backend/llrm-core/src/backend/floatassign.rs
@@ -26,7 +25,7 @@
 1 crates/backend/llrm-core/src/backend/parcopy.rs
 9 crates/backend/llrm-core/src/backend/peep/guards.rs
 4 crates/backend/llrm-core/src/backend/peep/make.rs
-31 crates/backend/llrm-core/src/backend/peephole.rs
+30 crates/backend/llrm-core/src/backend/peephole.rs
 1 crates/backend/llrm-core/src/backend/pointers.rs
 1 crates/backend/llrm-core/src/backend/prologue.rs
 4 crates/backend/llrm-core/src/backend/regclass.rs

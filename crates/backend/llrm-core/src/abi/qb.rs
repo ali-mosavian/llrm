@@ -922,7 +922,7 @@ impl llrm_mir::target::Machine for LoweredTarget {
     ) -> i64 {
         use crate::backend::assemble::Abi;
         match callee.map(|name| self.abi.contract(name, false, 0)) {
-            Some(Ok(contract)) => crate::backend::callregs::call_keeps(&contract).len() as i64,
+            Some(Ok(contract)) => crate::backend::callregs::call_keeps(&contract, &self.cpu.general).len() as i64,
             _ => self.machine.call_registers(),
         }
     }

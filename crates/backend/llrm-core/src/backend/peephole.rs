@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
 use iced_x86::{FlowControl, Register, RflagsBits};
-use llrm_x86_m16::instructions;
+use llrm_x86::parse;
 
 use crate::analysis::dataflow::{self, Direction};
 use crate::backend::classes::RegisterClasses;
@@ -2158,7 +2158,7 @@ static _BRANCH_READS: LazyLock<HashMap<String, u32>> = LazyLock::new(|| {
         .filter_map(|code| {
             let name = format!("{:?}", code.mnemonic()).to_lowercase();
             let condition = name.strip_prefix('j')?;
-            instructions::parse::CONDITIONS.contains(&condition).then_some(())?;
+            parse::CONDITIONS.contains(&condition).then_some(())?;
             Some((name, iced_x86::Instruction::with_branch(code, 0).ok()?.rflags_read()))
         })
         .collect()

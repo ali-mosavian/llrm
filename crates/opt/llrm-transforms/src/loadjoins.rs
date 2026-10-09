@@ -235,11 +235,7 @@ fn planned(
         .filter_map(|&site| provided(unit, accesses, site).map(|(cell, value)| (site, cell, value)))
         .collect();
     let cfg::Shape { dominance, loops: natural } = unit.shape().into_owned();
-    let shape = Shape {
-        depth: dominance.dominators(function).into_iter().map(|(at, above)| (at, above.len())).collect(),
-        dominance,
-        loops: natural,
-    };
+    let shape = Shape { depth: dominance.depths(function), dominance, loops: natural };
 
     let mut found = Vec::new();
     for block in &graph {
