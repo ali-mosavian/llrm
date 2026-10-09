@@ -22,7 +22,7 @@ def files(**per_file):
 
 
 def test_a_branch_equal_to_its_base_passes():
-    base = made(files(a=1000, b=2000), {"functions O2": 2.1}, {"a O2 x": [3.0, 0.1]})
+    base = made(files(a=1000, b=2000), {"functions O2": [100, 210]}, {"a O2 x": [10.0, 30.0, 300.0]})
     assert measure.rises(base, base, TOL)[1] == []
 
 
@@ -41,25 +41,42 @@ def test_every_file_a_little_dearer_fails_on_the_geomean():
 
 def test_a_drop_is_not_a_failure_and_is_not_recorded_anywhere():
     """A baseline in the repository went stale downward and had to be refreshed by hand in every branch; the next branch's base has it."""
-    base = made(files(a=1000, b=2000), {"functions O2": 2.1}, {"a O2 x": [3.0, 0.1]})
-    now = made({k: v // 2 for k, v in base["compile"].items()}, {"functions O2": 2.0}, {"a O2 x": [2.0, 0.1]})
+    base = made(files(a=1000, b=2000), {"functions O2": [100, 210]}, {"a O2 x": [10.0, 30.0, 300.0]})
+    now = made({k: v // 2 for k, v in base["compile"].items()}, {"functions O2": [100, 200]}, {"a O2 x": [10.0, 20.0, 300.0]})
     assert measure.rises(base, now, TOL)[1] == []
 
 
-def test_an_axis_that_grows_faster_than_its_base_fails():
-    base = made(axes={"live O2": 3.0})
-    assert measure.rises(base, made(axes={"live O2": 3.01}), TOL)[1] == []
-    assert any("live O2" in line for line in measure.rises(base, made(axes={"live O2": 3.1}), TOL)[1])
+def test_an_axis_that_gains_superlinear_work_fails():
+    """Work at 2N beyond twice the work at N: the quadratic term. +10% of the base's cost at 2N in it is a pass gone quadratic."""
+    base = made(axes={"live O2": [100, 300]})
+    assert measure.rises(base, made(axes={"live O2": [100, 301]}), TOL)[1] == []
+    assert any("live O2" in line for line in measure.rises(base, made(axes={"live O2": [100, 330]}), TOL)[1])
 
 
-def test_a_step_is_judged_against_the_base_by_share_with_the_edge_free():
-    base = made(passes={"a O2 x": [3.0, 0.1], "b O2 y": [3.0, 0.03]})
-    assert measure.rises(base, made(passes={"a O2 x": [3.1, 0.1]}), TOL)[1] == []  # within pass_slack
-    assert any("a O2 x" in line for line in measure.rises(base, made(passes={"a O2 x": [3.4, 0.1]}), TOL)[1])
-    edge = made(passes={"c O2 z": [3.4, (0.015 + TOL["high"]) / 2]})
-    assert measure.rises(made(), edge, TOL)[1] == []  # new, but between the floor and `high`: neither fails
-    assert measure.rises(made(passes={"c O2 z": [3.4, 0.02]}), made(), TOL)[1] == []  # and gone
-    assert any("c O2 z" in line for line in measure.rises(made(), made(passes={"c O2 z": [3.4, TOL["high"]]}), TOL)[1])  # new, past linear, big
+def test_a_linear_saving_does_not_fail_an_axis_whose_2n_over_n_rose():
+    """regparm16's copyprop made linear work cheaper (straight -4.7%, byte-identical); the ratio 2N/N rose with the denominator
+    (branches 2.826 > 2.780) and the gate failed it. Nothing got slower: the excess fell, and so did the cost at 2N."""
+    base = made(axes={"branches O2": [100, 278]})
+    now = made(axes={"branches O2": [90.0, 254.34]})
+    assert 254.34 / 90.0 > 278 / 100 * 1.01
+    assert measure.rises(base, now, TOL)[1] == []
+
+
+def test_a_linear_addition_fails_an_axis_by_its_cost_at_2n_alone():
+    base = made(axes={"straight O2": [100, 200]})
+    assert any("cost at 2N" in line for line in measure.rises(base, made(axes={"straight O2": [110, 220]}), TOL)[1])
+
+
+def test_a_step_is_judged_against_the_base_by_its_excess_with_the_edge_free():
+    base = made(passes={"a O2 x": [10.0, 30.0, 300.0], "b O2 y": [3.0, 9.0, 300.0]})
+    assert measure.rises(base, made(passes={"a O2 x": [10.0, 30.5, 300.0]}), TOL)[1] == []  # within step_excess
+    assert any("a O2 x" in line for line in measure.rises(base, made(passes={"a O2 x": [10.0, 35.0, 300.0]}), TOL)[1])  # 5 Minstr of 300 gone quadratic
+    assert measure.rises(base, made(passes={"a O2 x": [8.0, 24.0, 300.0]}), TOL)[1] == []  # a linear saving: the ratio is 3.0 again, the excess fell
+    edge = made(passes={"c O2 z": [3.0, 9.0, 300.0]})  # 3% of the compile: past `high`
+    assert any("c O2 z" in line for line in measure.rises(made(), made(passes={"c O2 z": [3.0, 9.0 * 300 / 300 + 3.0, 100.0]}), TOL)[1])  # new, past linear
+    assert measure.rises(made(), made(passes={"c O2 z": [1.0, 3.0, 300.0]}), TOL)[1] == []  # new, under `high`
+    assert measure.rises(base, made(), TOL)[1] == []  # and gone
+    del edge
 
 
 def test_two_branches_from_one_base_write_nothing_in_the_repository(tmp_path, monkeypatch):

@@ -1,10 +1,10 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
+reason = "branch inversion after tail copying: a jump over a branch to the next block is gone: queens -0.4% instructions, code bytes 1-6 smaller (shellsort, quicksort, queens)"
 blessed = "2026-10-09"
 
 [bas.O2]
 instructions = 224965
 memory_operands = 113692
-code_bytes = 560
+code_bytes = 556
 data_bytes = 17
 bss_bytes = 0
 
@@ -18,7 +18,7 @@ bss_bytes = 0
 [c.O2]
 instructions = 159353
 memory_operands = 57516
-code_bytes = 298
+code_bytes = 296
 data_bytes = 0
 bss_bytes = 0
 
@@ -30,9 +30,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 159525
+instructions = 162253
 memory_operands = 59388
-code_bytes = 413
+code_bytes = 412
 data_bytes = 0
 bss_bytes = 0
 

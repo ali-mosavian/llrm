@@ -240,6 +240,37 @@ pub fn clobber_runs() -> usize {
     RUNS.with(std::cell::Cell::get)
 }
 
+/// `MemorySSA::span`.
+fn spans(accesses: &[Access]) -> Vec<(u32, u32)> {
+    let top = accesses.last().map_or(0, |last| last.id) + 1;
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); top];
+    let mut roots = Vec::new();
+    for access in accesses {
+        match access.defining {
+            Some(parent) => children[parent].push(access.id),
+            None => roots.push(access.id),
+        }
+    }
+    let mut span = vec![(0, 0); top];
+    let mut clock = 0;
+    for root in roots {
+        let mut stack = vec![(root, 0usize)];
+        span[root].0 = clock;
+        clock += 1;
+        while let Some((node, next)) = stack.pop() {
+            if let Some(&child) = children[node].get(next) {
+                stack.push((node, next + 1));
+                span[child].0 = clock;
+                clock += 1;
+                stack.push((child, 0));
+            } else {
+                span[node].1 = clock;
+            }
+        }
+    }
+    span
+}
+
 fn check_jumps() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_JUMPS").is_some())
@@ -262,10 +293,13 @@ pub struct MemorySSA<'a> {
     /// Whether a def's writes may clobber a cell, once for each pair: the loads of one address ask it of
     /// the same defs again and again.
     clobbers: std::cell::RefCell<llrm_support::hash::HashMap<MemRef, llrm_support::hash::HashMap<InstId, bool>>>,
-    /// For a cell, a boundary and whether the load is invariant: from an access that is a use or a def that leaves the cell
-    /// alone, the access the walk back reaches without passing a clobber, a join or the boundary (0: not known), by access number. A walk
-    /// takes the jump instead of the steps.
-    jumps: std::cell::RefCell<llrm_support::hash::HashMap<(MemRef, Option<usize>, bool), Vec<u32>>>,
+    /// For a cell and whether the load is invariant: from an access that is a use or a def that leaves the cell
+    /// alone, the access the walk back reaches before a clobber, a join, the live state or a boundary it was stopped at (plus one; 0: not
+    /// known), by access number. A walk takes the jump instead of the steps, unless its own boundary lies between.
+    jumps: std::cell::RefCell<llrm_support::hash::HashMap<(MemRef, bool), Vec<u32>>>,
+    /// Each access's entry and exit in a depth-first order of the tree its `defining` links make, by access number: one is behind another
+    /// when its interval holds the other's.
+    span: Vec<(u32, u32)>,
 }
 
 impl MemorySSA<'_> {
@@ -326,6 +360,13 @@ impl MemorySSA<'_> {
         found
     }
 
+    /// Whether `ahead` is `access` or reached from it by `defining` links.
+    fn behind(&self, access: usize, ahead: usize) -> bool {
+        let (entered, left) = self.span[ahead];
+        let (at, _) = self.span[access];
+        entered <= at && at < left
+    }
+
     /// `frontier`; `jumping` takes the remembered jumps along chains of accesses that leave the cell alone, or none.
     fn walked(&self, site: InstId, memory: &MemRef, boundary: Option<usize>, edge: Option<i64>, edge_memory: Option<&MemRef>, jumping: bool) -> BTreeSet<usize> {
         let block = self.at(site).block;
@@ -339,11 +380,12 @@ impl MemorySSA<'_> {
         let jumpable = jumping && edge.is_none() && edge_memory.is_none();
         let mut jumps = self.jumps.borrow_mut();
         let none = &mut Vec::new();
-        let table = if jumpable { jumps.entry((memory.clone(), boundary, invariant)).or_insert_with(|| vec![0; self.accesses.last().map_or(0, |last| last.id) + 2]) } else { none };
+        let table = if jumpable { jumps.entry((memory.clone(), invariant)).or_insert_with(|| vec![0; self.span.len()]) } else { none };
+        // Accesses passed that nothing on them touches the cell; a jump to `end + 1` says the ones before `end` are clean.
         let mut chain: Vec<usize> = Vec::new();
         let ended = |table: &mut Vec<u32>, chain: &mut Vec<usize>, end: usize| {
             for &passed in chain.iter() {
-                table[passed] = end as u32;
+                table[passed] = end as u32 + 1;
             }
             chain.clear();
         };
@@ -354,7 +396,14 @@ impl MemorySSA<'_> {
             };
             if jumpable && table[current] != 0 {
                 chain.clear();
-                pending.push(Some(table[current] as usize));
+                let end = table[current] as usize - 1;
+                // The boundary lies on the chain when it is behind `current` and `end` is behind it: the walk stops there.
+                match boundary {
+                    Some(stop) if stop != end && self.behind(current, stop) && self.behind(stop, end) => {
+                        found.insert(stop);
+                    }
+                    _ => pending.push(Some(end)),
+                }
                 continue;
             }
             if !seen.insert(current) {
@@ -513,7 +562,8 @@ pub fn built<'a>(unit: &Unit<'a>, accesses: &Accesses) -> MemorySSA<'a> {
         .collect();
     let mut accesses: Vec<Access> = std::iter::once(live.clone()).chain(phis.values().cloned()).chain(sites.values().cloned()).collect();
     accesses.sort_by_key(|access| access.id);
-    MemorySSA { live, accesses, sites, phis, written, unit: *unit, clobbers: Default::default(), jumps: Default::default() }
+    let span = spans(&accesses);
+    MemorySSA { live, accesses, sites, phis, written, unit: *unit, clobbers: Default::default(), jumps: Default::default(), span }
 }
 
 #[cfg(test)]
