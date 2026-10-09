@@ -164,16 +164,6 @@ impl Function {
         }
     }
 
-    /// Whatever follows `inst` in its block.
-    fn next_of(
-        &self,
-        block: BlockId,
-        inst: InstId,
-    ) -> Option<InstId> {
-        let list = &self.block(block).instructions;
-        list.iter().position(|one| *one == inst).and_then(|at| list.get(at + 1).copied())
-    }
-
     /// What stood before `from` now stands before `to`, ahead of what stood
     /// there: it was said earlier in the program, and where two records of
     /// a variable stand together the last one is what the variable is.
@@ -224,7 +214,25 @@ impl Function {
         moving: bool,
     ) -> Option<(BlockId, Option<InstId>)> {
         let block = self.parent(inst)?;
-        let next = self.next_of(block, inst);
+        let list = &self.blocks[block.0 as usize].instructions;
+        #[cfg(test)]
+        SCANNED.with(|scanned| scanned.set(scanned.get() + list.len()));
+        let at = list.iter().position(|one| *one == inst).expect("an instruction is in its parent");
+        let next = list.get(at + 1).copied();
+        self.settle_records(inst, next, moving);
+        self.blocks[block.0 as usize].instructions.remove(at);
+        self.parent[inst.0 as usize] = None;
+        Some((block, next))
+    }
+
+    /// Where the records said before `inst` go when it leaves its block, `next`
+    /// being what follows it.
+    fn settle_records(
+        &mut self,
+        inst: InstId,
+        next: Option<InstId>,
+        moving: bool,
+    ) {
         // What stood before it stays where the source says it was: before what
         // followed it. A last instruction has none to hand them to (a
         // block is erased with its terminator): they go with it.
@@ -250,9 +258,6 @@ impl Function {
                 }
             }
         }
-        self.blocks[block.0 as usize].instructions.retain(|one| *one != inst);
-        self.parent[inst.0 as usize] = None;
-        Some((block, next))
     }
 
     fn attach(
@@ -521,6 +526,60 @@ impl Function {
             self.log(Change::Erased { inst, block, next });
         }
         self.erased[inst.0 as usize] = true;
+        Ok(())
+    }
+
+    /// `erase` of each of `insts`, as erasing them one by one from the last in
+    /// program order to the first, but each block is rewritten once rather
+    /// than once per instruction: erasing k of the n instructions of a block
+    /// one at a time is O(kn). A result may be used by another of `insts`.
+    pub fn erase_all(
+        &mut self,
+        insts: &[InstId],
+    ) -> Result<(), String> {
+        let mut gone = crate::dense::IdSet::<InstId>::new();
+        let insts: Vec<InstId> = insts.iter().copied().filter(|&inst| gone.insert(inst)).collect();
+        for &inst in &insts {
+            if self.is_erased(inst) {
+                return Err(format!("instruction {} is already erased", inst.0));
+            }
+            if let Some(result) = self.instruction(inst).result
+                && let Some(user) = self.users(result).iter().find(|one| !gone.contains(&one.user))
+            {
+                return Err(format!("instruction {}'s result still has a user, {}", inst.0, user.user.0));
+            }
+        }
+        for &inst in &insts {
+            let operands = self.instructions[inst.0 as usize].operands.clone();
+            for (index, operand) in operands.into_iter().enumerate() {
+                self.remove_use(operand, Use { user: inst, index: index as u32 });
+            }
+            if let Some(result) = self.instruction(inst).result {
+                self.forget_debug_value(result);
+            }
+        }
+        let mut blocks: Vec<BlockId> = insts.iter().filter_map(|&inst| self.parent(inst)).collect();
+        blocks.sort_unstable();
+        blocks.dedup();
+        for block in blocks {
+            let list = self.blocks[block.0 as usize].instructions.clone();
+            #[cfg(test)]
+            SCANNED.with(|scanned| scanned.set(scanned.get() + list.len()));
+            let mut next = None;
+            for &inst in list.iter().rev() {
+                if gone.contains(&inst) {
+                    self.settle_records(inst, next, false);
+                    self.log(Change::Erased { inst, block, next });
+                } else {
+                    next = Some(inst);
+                }
+            }
+            self.blocks[block.0 as usize].instructions.retain(|one| !gone.contains(one));
+        }
+        for inst in insts {
+            self.parent[inst.0 as usize] = None;
+            self.erased[inst.0 as usize] = true;
+        }
         Ok(())
     }
 
@@ -819,4 +878,11 @@ impl Function {
         self.log(Change::BlockErased(block));
         Ok(())
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Instructions of a block looked over to take instructions out of it: the
+    /// cost of erasing, which was a scan of the block per instruction erased.
+    pub(crate) static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
