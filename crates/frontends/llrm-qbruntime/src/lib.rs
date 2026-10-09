@@ -1435,10 +1435,11 @@ pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> 
 
         for _family in ["qb45", "pds71", "vbdos"] {
             for _name in ["B$HARY", "B$LINA"] {
-                variants.insert((_name, _family), CONTRACTS[_name].clone());
+                variants.insert((_name, _family), contract(Some(_name)));
             }
         }
 
+        let evck = contract(Some("B$EVCK"));
         for (_family, _library, _offset) in [
             ("pds71", "BCL71ENR.LIB", "0103"),
             ("vbdos", "VBDCL10E.LIB", "0127"),
@@ -1451,8 +1452,8 @@ pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> 
                         "{_library} evtcore.asm PUBDEF: B$EVK1 and B$EVCK both name \
                      segment 1 offset {_offset}; exact entry aliases in this runtime family. \
                      Library hashes and scope: docs/optimizations/event-entry-blocker.md. "
-                    ) + &CONTRACTS["B$EVCK"].evidence,
-                    ..CONTRACTS["B$EVCK"].clone()
+                    ) + &evck.evidence,
+                    ..evck.clone()
                 },
             );
         }
@@ -1470,7 +1471,7 @@ pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> 
             ("B$SCAT", "stcore.asm 0117..01b1: PUSH SI/DI/DS, B$RefString on both operands, B$AlcTmpSH or B$ReallocTemp; the shared exit at 0099 pops DS/DI/SI and RETF 4."),
             ("B$SASS", "stcore.asm 0025..00b2: PUSH SI/DI/DS, B$RefString and B$ReallocHandle, which loads ES; POP DS/DI/SI / RETF 4."),
         ] {
-            let base = CONTRACTS[_name].clone();
+            let base = contract(Some(_name));
             let mut clobbers = base.clobbers.clone();
             clobbers.insert(Reg::Es);
             variants.insert(
@@ -1609,9 +1610,9 @@ pub fn per_call(
                 if defined.contains(name) {
                     own(name)
                 } else {
-                    in_table(name)
-                        .then(|| VARIANTS.get(&(name.as_str(), family)).cloned())
-                        .flatten()
+                                        VARIANTS
+                        .get(&(name.as_str(), family))
+                        .cloned()
                         .unwrap_or_else(|| contract(Some(name)))
                 },
             )
@@ -1716,15 +1717,81 @@ pub mod semantics;
 
 pub const TABLE: &str = include_str!("runtime.toml");
 
+/// One row of `runtime.toml`, as `build.rs` wrote it.
+pub struct Row {
+    pub name: &'static str,
+    cleanup: i64,
+    control: &'static str,
+    enters_user_code: bool,
+    raises_error: bool,
+    error_handling: bool,
+    writes: &'static str,
+    reads: &'static str,
+    clobbers: &'static [&'static str],
+    established: bool,
+    evidence: &'static str,
+    documented: Option<&'static [&'static str]>,
+    inputs: Option<&'static [&'static str]>,
+    direct_writes: Option<&'static str>,
+    direct_reads: Option<&'static str>,
+    pub captures: Option<&'static str>,
+}
+
+include!(concat!(env!("OUT_DIR"), "/rows.rs"));
+
+/// The row for `name`, if the table has one: a binary search, nothing parsed or built.
+pub fn row(name: &str) -> Option<&'static Row> {
+    row_at(name).map(|at| &ROWS[at])
+}
+
+fn row_at(name: &str) -> Option<usize> {
+    BY_NAME.binary_search_by(|(one, _)| (*one).cmp(name)).ok().map(|found| BY_NAME[found].1)
+}
+
+impl Row {
+    /// The routine's contract, built from the row alone.
+    pub fn contract(&self) -> Contract {
+        let regs = |names: &[&str]| -> BTreeSet<Reg> { names.iter().map(|one| Reg::from_value(one).expect("a register of the table")).collect() };
+        let memory = |name: &str| Memory::from_name(name).expect("a memory of the table");
+        let one = Contract {
+            name: self.name.to_owned(),
+            cleanup: (self.cleanup >= 0).then_some(self.cleanup),
+            control: Control::from_value(self.control).expect("a control of the table"),
+            enters_user_code: self.enters_user_code,
+            raises_error: self.raises_error,
+            error_handling: self.error_handling,
+            writes: memory(self.writes),
+            reads: memory(self.reads),
+            clobbers: regs(self.clobbers),
+            established: self.established,
+            evidence: self.evidence.trim().to_owned(),
+            documented: self.documented.map(regs),
+            inputs: self.inputs.map(regs),
+            direct_inputs: None,
+            clobbers_reached: false,
+            caller_cleanup: 0,
+            i386: false,
+            direct_writes: self.direct_writes.map(memory),
+            flags_result: flags_result(self.name),
+            direct_reads: self.direct_reads.map(memory),
+        };
+        if INLINE_TABLE.contains(self.name) {
+            Contract { control: Control::InlineTable, ..one }
+        } else {
+            one
+        }
+    }
+}
+
 /// One entry per runtime name the corpus calls, read from the table.
 ///
 /// B$OGTA's control kind comes from blocks.py rather than being restated
 /// in the table, which is why this is not simply the rows handed back.
 pub fn _contracts(path: Option<&std::path::Path>) -> Result<IndexMap<String, Contract>, String> {
-    let text = match path {
-        Some(path) => std::fs::read_to_string(path).map_err(|error| error.to_string())?,
-        None => TABLE.to_owned(),
+    let Some(path) = path else {
+        return Ok(ROWS.iter().map(|row| (row.name.to_owned(), contract(Some(row.name)))).collect());
     };
+    let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
     let rows: toml::Table = text
         .parse()
         .map_err(|error: toml::de::Error| error.to_string())?;
@@ -1833,9 +1900,7 @@ pub static ENTERS_USER_CODE: LazyLock<BTreeSet<&'static str>> =
 /// The runtime entries whose row says `captures = "NONE"`: they keep no
 /// pointer argument past their return.
 pub fn captures_nothing() -> Vec<&'static str> {
-    let rows: toml::Table = TABLE.parse().expect("runtime.toml parses");
-    let kept: BTreeSet<&str> = rows.iter().filter(|(_, row)| row.get("captures").and_then(|one| one.as_str()) == Some("NONE")).map(|(name, _)| name.as_str()).collect();
-    CONTRACTS.keys().map(String::as_str).filter(|name| kept.contains(name)).collect()
+    ROWS.iter().filter(|row| row.captures == Some("NONE")).map(|row| row.name).collect()
 }
 
 /// The runtime entries that never come back to their caller: the table's
@@ -1878,16 +1943,7 @@ pub fn contract(name: Option<&str>) -> Contract {
     let Some(name) = name else {
         return worst("");
     };
-    if !in_table(name) {
-        return worst(name);
-    }
-    CONTRACTS.get(name).cloned().unwrap_or_else(|| worst(name))
-}
-
-/// Whether `name` can be a row of the tables: every row is a `B$` entry, so any other name (every C function) is worst case
-/// without parsing the 64 KB table, which was 3% of a compile of a typical C program.
-fn in_table(name: &str) -> bool {
-    name.starts_with("B$")
+    row_at(name).map_or_else(|| worst(name), |at| BUILT[at].get_or_init(|| ROWS[at].contract()).clone())
 }
 
 #[cfg(test)]
@@ -2444,6 +2500,18 @@ mod tests {
         }
     }
 
+    /// `build.rs` writes the rows the table's text parses to: one parse at run time, which the build replaced, equals them all.
+    #[test]
+    fn the_rows_built_in_are_the_tables_text_parsed() {
+        let parsed = _contracts(Some(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/runtime.toml")))).unwrap();
+        let built = _contracts(None).unwrap();
+        assert_eq!(parsed.keys().collect::<Vec<_>>(), built.keys().collect::<Vec<_>>());
+        for (name, one) in &parsed {
+            assert_eq!(*one, built[name], "{name}");
+            assert_eq!(*one, row(name).unwrap().contract(), "{name}");
+        }
+    }
+
     #[test]
     fn test_every_row_in_the_table_is_loaded() {
         let rows: toml::Table = TABLE.parse().unwrap();
@@ -2453,7 +2521,6 @@ mod tests {
             CONTRACTS.keys().collect::<BTreeSet<_>>(),
             "the table and what loaded disagree"
         );
-        assert!(CONTRACTS.keys().all(|name| in_table(name)) && VARIANTS.keys().all(|(name, _)| in_table(name)), "a row outside B$ is skipped");
         for name in ["B$HARY", "B$LINA"] {
             for family in ["qb45", "pds71", "vbdos"] {
                 assert_eq!(VARIANTS[&(name, family)], CONTRACTS[name]);
