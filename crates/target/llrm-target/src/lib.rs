@@ -165,6 +165,13 @@ pub trait Target {
     /// The platform description a frontend of this target defaults to.
     fn machine(&self) -> Machine;
 
+    /// The linear ranges its platform states no program data occupies, where it
+    /// is flat and states its selector's base as 0 (`Machine::flat_foreign`),
+    /// worked out once, not for each profile.
+    fn flat_foreign(&self) -> Vec<(i64, i64)> {
+        Vec::new()
+    }
+
     /// Whether the machine has no instruction for `operation` (its
     /// description's `expand`), so the compiler expands it
     /// before selection.

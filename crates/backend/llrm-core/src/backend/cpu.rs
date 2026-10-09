@@ -186,7 +186,7 @@ impl Profile {
             spaces: arch.layout().spaces.roles,
             private: private_convention(arch),
             calling: Some(llrm_target::calling::Stated(arch.calling())),
-            foreign: arch.machine().flat_foreign(),
+            foreign: arch.flat_foreign(),
             operand_bytes: arch.operand_bytes(),
             call_register_capacity: arch.callee_saved().len() as i64,
             address_scales: BTreeSet::from([1]),

@@ -2617,7 +2617,7 @@ pub fn annotated_with(
         }
         // A flat access to a constant address the platform says is outside the
         // program names those linear bytes.
-        if reference.selector.is_none() && reference.segment.is_none() {
+        if reference.linear {
             if let Some(foreign) = regions::foreign_provenance(reference, &BTreeMap::new(), unit.program) {
                 got = Some(foreign);
             }

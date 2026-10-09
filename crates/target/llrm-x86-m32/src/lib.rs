@@ -68,6 +68,11 @@ impl llrm_target::Target for M32 {
             .with_layout(layout())
     }
 
+    fn flat_foreign(&self) -> Vec<(i64, i64)> {
+        static FOREIGN: LazyLock<Vec<(i64, i64)>> = LazyLock::new(|| M32.machine().flat_foreign());
+        FOREIGN.clone()
+    }
+
     fn cpus(&self) -> &'static [&'static str] {
         &CPUS
     }

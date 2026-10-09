@@ -993,7 +993,7 @@ impl<'a> Unit<'a> {
     /// The address spaces by role: the program's target's, or one flat space
     /// where none is named.
     pub fn spaces(&self) -> llrm_mir::spaces::Spaces {
-        self.program.map_or(self.spaces, |program| program.target.spaces())
+        self.program.map_or(self.spaces, |program| program.spaces)
     }
 
     /// A pointer operand's address space.
