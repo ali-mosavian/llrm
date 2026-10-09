@@ -566,7 +566,7 @@ fn _local_updates_whole(body: &LirBody, stored: &BTreeSet<u32>, frame: &mut Fram
     };
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let mut insns: Vec<Arc<Insn>> = block.insns.clone();
+        let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
         let mut position = 0;
         while position < insns.len() {
             let update = Arc::clone(&insns[position]);
@@ -1015,7 +1015,8 @@ impl Lives {
 /// copies, which share a point), at the slots they have in the body: what `homes_by_occurrences` is held to under
 /// `LLRM_CHECK_OCCURRENCES`.
 fn homes_by_sparse_body(body: &LirBody, index: &ranges::Indexes, changed: &[(usize, usize, Arc<Insn>)], first: u32) -> IndexMap<u32, Interval> {
-    let mut sparse_blocks: Vec<LirBlock> = body.blocks.iter().map(|block| LirBlock { at: block.at, insns: Vec::new(), succ: block.succ.clone(), phis: block.phis.clone(), cold: block.cold }).collect();
+    let mut sparse_blocks: Vec<LirBlock> = body.blocks.iter().map(|block| LirBlock { at: block.at, insns: Vec::new().into(), succ: block.succ.clone(), phis: block.phis.clone(), cold: block.cold }).collect();
+    let mut sparse_insns: Vec<Vec<Arc<Insn>>> = vec![Vec::new(); body.blocks.len()];
     let mut starts: Vec<Vec<i64>> = vec![Vec::new(); body.blocks.len()];
     let mut by_block: IndexMap<usize, Vec<(usize, Arc<Insn>)>> = IndexMap::default();
     for (block_index, at, made) in changed.iter().cloned() {
@@ -1047,18 +1048,18 @@ fn homes_by_sparse_body(body: &LirBody, index: &ranges::Indexes, changed: &[(usi
         for (position, one) in wanted {
             // Two instructions of one parallel copy with others between them are not one run here either.
             if let (Some(earlier), Some(group)) = (before, one.group) {
-                if position > earlier + 1 && sparse_blocks[block_index].insns.last().is_some_and(|last| last.group == Some(group)) {
+                if position > earlier + 1 && sparse_insns[block_index].last().is_some_and(|last| last.group == Some(group)) {
                     starts[block_index].push(index.slot(block, counted));
-                    sparse_blocks[block_index].insns.push(Arc::new(Insn::new(0, None, None, Vec::new(), Vec::new())));
+                    sparse_insns[block_index].push(Arc::new(Insn::new(0, None, None, Vec::new(), Vec::new())));
                 }
             }
             before = Some(position);
             counted = position;
             starts[block_index].push(index.slot(block, position));
-            sparse_blocks[block_index].insns.push(one);
+            sparse_insns[block_index].push(one);
         }
     }
-    let sparse = body.with_blocks(sparse_blocks);
+    let sparse = body.with_blocks(sparse_blocks.into_iter().zip(sparse_insns).map(|(block, insns)| block.with_insns(insns)).collect());
     ranges::intervals_sparse(&sparse, index, &starts, &|value| value >= first)
 }
 
@@ -1153,7 +1154,9 @@ fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(
     if whole || flipped || std::env::var_os("LLRM_CHECK_RANGES").is_some() {
         let mut tracked = body.clone();
         for (block_index, at, made) in changed_insns() {
-            tracked.blocks[block_index].insns[at] = made;
+            let mut insns = tracked.blocks[block_index].insns.to_vec();
+            insns[at] = made;
+            tracked.blocks[block_index].insns = insns.into();
         }
         owned = ranges::indexed(&tracked);
         index = &owned;
@@ -4147,7 +4150,7 @@ mod tests {
         }
         let last = blocks.last_mut().expect("a block");
         let used = insn(1000, (1000, 1001), semantics(Operation::Push, "push", vec![], vec![held(1, 2)]), &[], &[1]);
-        last.insns.push(Arc::new(used));
+        last.insns.edit(|insns| insns.push(Arc::new(used)));
         let body = LirBody::new("chain", 0, blocks, IndexMap::default(), IndexMap::default());
         let before = super::KEEPS.with(std::cell::Cell::get);
         let stable = super::_stable_loads(&body, &set(&[1]));

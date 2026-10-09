@@ -1236,7 +1236,9 @@ mod tests {
     fn test_a_spilled_index_or_selector_is_carved_into_the_loop_like_a_base() {
         for role in ["index", "selector"] {
             let mut moved = _pointer_across_a_loop();
-            for insn in moved.blocks.iter_mut().flat_map(|one| &mut one.insns) {
+            for block in &mut moved.blocks {
+                let mut insns = block.insns.to_vec();
+                for insn in &mut insns {
                 let mut changed = (**insn).clone();
                 if let Some(what) = changed.what.as_mut() {
                     for place in what.dests.iter_mut().chain(what.sources.iter_mut()) {
@@ -1251,6 +1253,8 @@ mod tests {
                     }
                 }
                 *insn = std::sync::Arc::new(changed);
+                }
+                block.insns = insns.into();
             }
             let (_cut, kept) = loop_bases(&moved, &BTreeSet::from([3]));
             assert_eq!(kept.len(), 1, "{role}");
@@ -1363,7 +1367,7 @@ mod tests {
     fn test_a_loop_piece_restores_only_on_its_exiting_edge() {
         let mut body = _pointer_across_a_loop();
         let found = body.blocks.iter_mut().find(|one| one.at == 0x10).expect("loop");
-        let mut insns = found.insns.clone();
+        let mut insns = found.insns.to_vec();
         insns.insert(1, add(0x10, 3));
         *found = found.with_insns(insns);
         let cut = carved(&body, 3, 9, 2, &region(&body, &[0x10])).expect("cut");

@@ -252,7 +252,7 @@ pub fn frame_copies<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>, class
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let dead_after = regthrash::_dead_after(body.bits, block, exits[&block.at].clone());
-        let mut insns = block.insns.clone();
+        let mut insns = block.insns.to_vec();
         for index in 0..insns.len().saturating_sub(1) {
             let (pushed, popped) = (Arc::clone(&insns[index]), Arc::clone(&insns[index + 1]));
             if [&pushed, &popped].into_iter().any(|one| one.what.is_none()
@@ -1291,7 +1291,7 @@ fn _loaded_scaled_add<'a>(
 /// Select physically adjacent load/scale/add tails across inert anchors.
 fn _loaded_addresses(bits: u32, block: &LirBlock, flags_dead_out: bool, uses: &Counter, cpu: &Profile) -> Result<LirBlock, String> {
     let dead = _flags_dead_after(bits, block, flags_dead_out);
-    let mut insns = block.insns.clone();
+    let mut insns = block.insns.to_vec();
     let work: Vec<usize> = insns
         .iter()
         .enumerate()
@@ -1335,7 +1335,7 @@ fn _loaded_addresses(bits: u32, block: &LirBlock, flags_dead_out: bool, uses: &C
         }
         at += 3;
     }
-    let insns =
+    let insns: Vec<_> =
         insns.into_iter().enumerate().filter(|(index, _)| !removed.contains(index)).map(|(_, one)| one).collect();
     Ok(block.with_insns(insns))
 }
@@ -1921,7 +1921,7 @@ pub fn tested(rules: &peep::Rules, body: &LirBody) -> LirBody {
             predecessors.entry(*to).or_default().push(at);
         }
     }
-    let mut blocks = body.blocks.iter().map(|block| block.insns.clone()).collect::<Vec<_>>();
+    let mut blocks = body.blocks.iter().map(|block| block.insns.to_vec()).collect::<Vec<_>>();
     for (block_index, block) in body.blocks.iter().enumerate() {
         let insns = &blocks[block_index];
         // Moves change no flag, so the three may have a phi's copies between them.

@@ -410,9 +410,11 @@ fn test_a_copy_group_is_one_point_not_one_per_copy() {
     let grouped = found(&eliminated);
     let mut apart = eliminated.clone();
     for block in &mut apart.blocks {
-        for one in block.insns.iter_mut().filter(|one| one.group.is_some()) {
-            std::sync::Arc::make_mut(one).group = None;
-        }
+        block.insns.edit(|insns| {
+            for one in insns.iter_mut().filter(|one| one.group.is_some()) {
+                std::sync::Arc::make_mut(one).group = None;
+            }
+        });
     }
     assert!(grouped < found(&apart), "{grouped} points with the copies grouped, {} apart", found(&apart));
 }
@@ -457,7 +459,7 @@ fn test_a_placeholder_between_a_groups_copies_does_not_end_the_group() {
     for block in &mut split.blocks {
         let Some(first) = block.insns.iter().position(|one| one.group.is_some()) else { continue };
         let blank = std::sync::Arc::new(crate::model::lir::Insn::new(block.insns[first].at, Some((block.insns[first].at, block.insns[first].at)), None, Vec::new(), Vec::new()));
-        let mut insns = block.insns.clone();
+        let mut insns = block.insns.to_vec();
         insns.insert(first + 1, blank);
         *block = block.with_insns(insns);
     }

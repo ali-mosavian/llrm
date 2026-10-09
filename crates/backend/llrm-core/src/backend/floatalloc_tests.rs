@@ -634,7 +634,7 @@ fn test_conversion_result_is_kept_for_non_operand_readers() {
                 };
                 let extra = Insn::new(24, Some((24, 24)), what, vec![], if reader == "uses" { vec![2] } else { vec![] });
                 let mut extended = first;
-                extended.insns.push(Arc::new(extra));
+                extended.insns.edit(|insns| insns.push(Arc::new(extra)));
                 body.blocks = vec![extended];
             }
         }
@@ -1302,7 +1302,7 @@ fn test_a_loop_accumulator_stays_on_the_stack_across_the_back_edge() {
         .blocks
         .iter()
         .filter(|block| block.at == 16 || (block.at != 0 && block.succ == vec![16]))
-        .flat_map(|block| block.insns.clone())
+        .flat_map(|block| block.insns.to_vec())
         .collect();
     let memory: Vec<&Semantics> = looped.iter().map(|one| what(one)).filter(|what| what.sources.iter().chain(&what.dests).any(|arg| matches!(arg, Loc::Mem(_)))).collect();
     assert_eq!(memory.len(), 1, "{memory:?}");
@@ -1350,13 +1350,13 @@ fn test_a_volatile_load_is_its_adjacent_readers_operand_only() {
     let volatile = |what: Semantics| Arc::new(Insn { volatile: true, ..Insn::new(8, Some((8, 16)), Some(what), vec![2], vec![]) });
     for twice in [false, true] {
         let mut body = _body(vec![_load(1, &sum)]);
-        let mut insns = body.blocks[0].insns.clone();
+        let mut insns = body.blocks[0].insns.to_vec();
         insns.push(volatile(_load(2, &limit)));
         insns.push(Arc::new(Insn::new(16, Some((16, 24)), Some(sem(Operation::Compare, "fcom", vec![], vec![fl(1), fl(2)])), vec![], vec![1, 2])));
         if twice {
             insns.push(Arc::new(Insn::new(24, Some((24, 32)), Some(_store(&sum, 2)), vec![], vec![2])));
         }
-        body.blocks[0].insns = insns;
+        body.blocks[0].insns = insns.into();
         let result = with_frame(&body, &mut Frame::new(-12));
         let reads = result.insns().iter().filter(|one| what(one).sources.contains(&m(&limit))).count();
         let fused = result.insns().iter().any(|one| name(one) == "fcomp" && what(one).sources.contains(&m(&limit)));
@@ -1380,7 +1380,7 @@ fn test_a_vacated_phi_copy_leaves_its_copy_group() {
         _store(&target, 3),
     ]);
     let insns: Vec<Arc<Insn>> = body.insns().iter().enumerate().map(|(at, one)| if at == 4 || at == 5 { Arc::new(Insn { group: Some(7), ..(**one).clone() }) } else { Arc::clone(one) }).collect();
-    body.blocks[0].insns = insns;
+    body.blocks[0].insns = insns.into();
     let result = with_frame(&body, &mut Frame::new(-10));
     assert!(result.insns().iter().filter(|one| one.group.is_some()).all(|one| what(one).op == Operation::Move), "{:?}", result.insns());
 }

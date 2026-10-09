@@ -219,7 +219,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
     }
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let mut insns = block.insns.clone();
+        let mut insns = block.insns.to_vec();
         if insns.iter().any(|one| removed.contains(&id(one))) {
             insns = lir::without(&insns, |one| removed.contains(&id(one)), None::<fn(&Arc<Insn>) -> Arc<Insn>>);
         }
