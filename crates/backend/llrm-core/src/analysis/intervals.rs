@@ -632,7 +632,16 @@ fn worked_among(
         return worked_out_with_totals(body, index, busy, &|value| only.contains(&value));
     }
     body.facts.0.bump("intervals-by-occurrences");
-    crate::analysis::occurrences::Occurrences::scan(body, &|value| only.contains(&value)).intervals(body, index, busy)
+    // The occurrences of the touched values from the postings the body is
+    // followed with, not a pass over every instruction.
+    let wanted: BTreeSet<u32> = only.iter().copied().collect();
+    let found = crate::backend::postings::following(body, |postings| {
+        crate::analysis::occurrences::Occurrences::of(postings, &wanted)
+    });
+    if llrm_support::env_set("LLRM_CHECK_OCCURRENCES") {
+        found.check_against_scan(body, &|value| only.contains(&value));
+    }
+    found.intervals(body, index, busy)
 }
 
 fn worked_out(

@@ -655,10 +655,10 @@ pub fn _next_value(body: &LirBody) -> u32 {
     largest + 1
 }
 
-/// `_next_value`, from the postings the allocator follows the body with: the
-/// largest value they hold and the phis' results, not a walk of every
-/// instruction. For the allocator's own rewrites, which ask it of each body
-/// they make.
+// `_next_value`, from the postings the allocator follows the body with: the
+// largest value they hold and the phis' results, not a walk of every
+// instruction. For the allocator's own rewrites, which ask it of each body
+// they make.
 thread_local! {
     static NEXT_VALUE_ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

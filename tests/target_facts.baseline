@@ -38,7 +38,6 @@
 7 crates/backend/llrm-core/src/backend/target.rs
 1 crates/backend/llrm-core/src/backend/upperzero.rs
 5 crates/backend/llrm-core/src/driver/basic.rs
-1 crates/backend/llrm-peepgen/src/table.rs
 3 crates/bc/llrm-bcdriver/src/lib.rs
 3 crates/frontends/llrm-c/src/compile.rs
 1 crates/frontends/llrm-c/src/translate.rs

@@ -139,7 +139,7 @@ impl Reads {
             #[cfg(test)]
             SCANNED.with(|scanned| scanned.set(scanned.get() + 1));
             let mut bits = vec![0u64; words];
-            let mut set = |id: usize, bits: &mut Vec<u64>| bits[id / 64] |= 1 << (id % 64);
+            let set = |id: usize, bits: &mut Vec<u64>| bits[id / 64] |= 1 << (id % 64);
             for one in &block.insns {
                 let Some(what) = one.what.as_ref() else { continue };
                 // A plain store to a cell reads nothing of it.
