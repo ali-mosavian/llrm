@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::model::ir::{Loc, Space};
 use crate::model::lir::{Insn, LirBody};
-use crate::support::hash::HashMap;
+use crate::support::hash::{HashMap, IndexMap};
 
 /// An instruction by its block's position in the body and its own in the block.
 pub type At = (u32, u32);
@@ -49,6 +49,28 @@ impl Postings {
     /// The positions in block `block` of the instructions that read or write a frame cell.
     pub fn frames(&self, block: usize) -> &[u32] {
         self.frames.get(block).map_or(&[], Vec::as_slice)
+    }
+
+    /// The instructions that name each of `values`, by block then position, once each, with whether each defines and whether it reads
+    /// the value (an instruction that `require`s it counts as a read of it, not a write).
+    pub fn occurrences(&self, values: &std::collections::BTreeSet<u32>) -> IndexMap<u32, Vec<((usize, usize), bool, bool)>> {
+        let mut out = IndexMap::default();
+        for value in values {
+            let mut named: std::collections::BTreeMap<At, (bool, bool)> = std::collections::BTreeMap::new();
+            for at in self.defs(*value) {
+                named.entry(*at).or_default().0 = true;
+            }
+            for at in self.uses(*value) {
+                named.entry(*at).or_default().1 = true;
+            }
+            out.insert(*value, named.into_iter().map(|((block, position), (defined, used))| ((block as usize, position as usize), defined, used)).collect());
+        }
+        out
+    }
+
+    /// Every instruction that defines, reads or requires one of `values`, by block then position.
+    pub fn naming(&self, values: &std::collections::BTreeSet<u32>) -> std::collections::BTreeSet<At> {
+        values.iter().flat_map(|value| self.defs(*value).iter().chain(self.uses(*value)).chain(self.needs(*value))).copied().collect()
     }
 
     pub fn needs(&self, value: u32) -> &[At] {

@@ -89,7 +89,7 @@ fn planned_with(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame, posti
     let constants = _through_copies(llrm_support::debug::timed("spill constants", || _literals_by(body, &wide, false, postings)), values, &copies);
     let addresses = _through_copies(llrm_support::debug::timed("spill addresses", || _addresses_by(body, &wide, postings)), values, &copies);
     let extensions = llrm_support::debug::timed("spill extensions", || _extensions_by(body, values, postings));
-    let mut frame_loads = llrm_support::debug::timed("spill stable loads", || _stable_loads_by(body, values, &IndexMap::default(), postings));
+    let mut frame_loads = llrm_support::debug::timed("spill stable loads", || _stable_loads(body, values));
     frame_loads.extend(llrm_support::debug::timed("spill frame loads", || _frame_loads(body, values)));
     // A phi's value the program also stores to a cell the body has not written since is read from there.
     if !body.homes.is_empty() {
@@ -100,7 +100,7 @@ fn planned_with(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame, posti
     // A copy of a load is made again as that load.
     if !copies.is_empty() {
         let apart: BTreeSet<u32> = values.iter().copied().filter(|value| !frame_loads.contains_key(value)).collect();
-        let copied = _through_copies(llrm_support::debug::timed("spill stable loads", || _stable_loads_by(body, &wide, &copies, postings)), &apart, &copies);
+        let copied = _through_copies(llrm_support::debug::timed("spill stable loads", || _stable_loads_through(body, &wide, &copies)), &apart, &copies);
         for (value, cell) in copied {
             frame_loads.entry(value).or_insert(cell);
         }
@@ -1316,18 +1316,9 @@ pub fn _stable_loads(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Me
     _stable_loads_through(body, values, &IndexMap::default())
 }
 
-/// `_stable_loads_through` with the postings of the body to hand: where the values occur is read from them, not found by a scan.
-pub fn _stable_loads_by(body: &LirBody, values: &BTreeSet<u32>, copies: &IndexMap<u32, u32>, postings: &Postings) -> IndexMap<u32, Mem> {
-    _stable_loads_from(body, values, copies, Some(postings))
-}
-
 /// `_stable_loads`, where a load's copies (`copies`: copy -> source) are made again as it is: the cell must hold until
 /// the last use of any of them, not only of the load.
 pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &IndexMap<u32, u32>) -> IndexMap<u32, Mem> {
-    _stable_loads_from(body, values, copies, None)
-}
-
-fn _stable_loads_from(body: &LirBody, values: &BTreeSet<u32>, copies: &IndexMap<u32, u32>, postings: Option<&Postings>) -> IndexMap<u32, Mem> {
     if values.is_empty() {
         return IndexMap::default();
     }
@@ -1343,35 +1334,20 @@ fn _stable_loads_from(body: &LirBody, values: &BTreeSet<u32>, copies: &IndexMap<
         }
         at
     };
-    // The values that matter are those asked of and their copies; where they occur is all that is read of the body.
-    let mut asked: BTreeSet<u32> = values.clone();
-    asked.extend(copies.keys().copied().filter(|copy| {
-        let owner = root(*copy);
-        owner != *copy && values.contains(&owner)
-    }));
-    let occurrences = match postings {
-        Some(postings) => crate::analysis::occurrences::Occurrences::of(postings, &asked),
-        None => crate::analysis::occurrences::Occurrences::scan(body, &|value| asked.contains(&value)),
-    };
-    if postings.is_some() && llrm_support::env_set("LLRM_CHECK_OCCURRENCES") {
-        occurrences.check_against_scan(body, &|value| asked.contains(&value));
-    }
-    // Each use of an owner by an instruction, once for every distinct value of it the instruction reads (the owner and its copies).
-    let mut reads: std::collections::BTreeMap<(u32, (usize, usize)), usize> = std::collections::BTreeMap::new();
-    for value in &asked {
-        for made in occurrences.named(*value) {
-            let (block_at, position) = made.place;
-            let one = &body.blocks[block_at].insns[position];
-            if made.used {
-                let owner = root(*value);
-                if owner != *value && values.contains(&owner) {
-                    *reads.entry((owner, made.place)).or_default() += 1;
-                }
-                if values.contains(value) {
-                    *reads.entry((*value, made.place)).or_default() += 1;
+    for (block_at, block) in body.blocks.iter().enumerate() {
+        for (position, one) in block.insns.iter().enumerate() {
+            for value in _set(&one.uses) {
+                let owner = root(value);
+                if owner != value && values.contains(&owner) {
+                    uses[&owner].push(Arc::clone(one));
+                    use_places[&owner].push((block_at, position));
                 }
             }
-            if made.defined && values.contains(value) {
+            for value in values.intersection(&_set(&one.uses)) {
+                uses[value].push(Arc::clone(one));
+                use_places[value].push((block_at, position));
+            }
+            for value in values.intersection(&_set(&one.defines)) {
                 let mut cell = None;
                 if let Some(what) = &one.what {
                     if what.op == Operation::Move && what.name.as_deref() == Some("mov") {
@@ -1392,14 +1368,8 @@ fn _stable_loads_from(body: &LirBody, values: &BTreeSet<u32>, copies: &IndexMap<
                         }
                     }
                 }
-                definitions.entry(*value).or_default().push((Arc::clone(one), cell, made.place));
+                definitions.entry(*value).or_default().push((Arc::clone(one), cell, (block_at, position)));
             }
-        }
-    }
-    for ((owner, place), times) in reads {
-        for _ in 0..times {
-            uses[&owner].push(Arc::clone(&body.blocks[place.0].insns[place.1]));
-            use_places[&owner].push(place);
         }
     }
 
@@ -3104,7 +3074,7 @@ mod tests {
     use iced_x86::Register;
     use crate::support::hash::IndexMap;
 
-    use super::{_color_slots, _constants, planned, spilled, spilled_from};
+    use super::{_color_slots, _constants, spilled, spilled_from};
     use crate::backend::frame::{Frame, SlotKey};
     use crate::backend::{objbuild, select};
     use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -4493,15 +4463,6 @@ mod tests {
         let before = super::made_for_homes();
         _color_slots(&again, &set(&[3]), &IndexMap::from_iter([(3, 2)]), &mut frame).expect("colours");
         assert_eq!(super::made_for_homes() - before, 0, "an instruction was made again for each that names a home");
-    }
-
-    #[test]
-    fn test_the_plan_of_a_spill_reads_where_values_occur_from_the_postings_not_a_scan_of_the_body() {
-        use crate::analysis::occurrences::Occurrences;
-        let body = _three_blocks();
-        let before = Occurrences::scans(&body);
-        planned(&body, &set(&[1]), &mut Frame::new(0)).expect("plans");
-        assert_eq!(Occurrences::scans(&body), before, "the body was scanned for the stable loads of the values");
     }
 
     #[test]

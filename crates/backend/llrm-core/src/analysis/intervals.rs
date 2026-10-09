@@ -437,7 +437,43 @@ fn worked_among(body: &LirBody, index: &Indexes, busy: &Frequency, only: &crate:
         return worked_out_with_totals(body, index, busy, &|value| only.contains(&value));
     }
     body.facts.0.bump("intervals-by-occurrences");
-    crate::analysis::occurrences::Occurrences::scan(body, &|value| only.contains(&value)).intervals(body, index, busy)
+    let mut places: IndexMap<u32, Vec<Occurrence>> = IndexMap::default();
+    let mut totals: IndexMap<u32, f64> = IndexMap::default();
+    let mut named: Vec<(u32, bool, bool)> = Vec::new();
+    for (block_index, block) in body.blocks.iter().enumerate() {
+        let each = busy.block(block.at);
+        for (position, one) in block.insns.iter().enumerate() {
+            named.clear();
+            for (value, defined) in one.defines.iter().map(|value| (value, true)).chain(one.uses.iter().map(|value| (value, false))) {
+                if !only.contains(value) {
+                    continue;
+                }
+                *totals.entry(*value).or_insert(0.0) += each;
+                match named.iter_mut().find(|(seen, _, _)| seen == value) {
+                    Some(flags) => {
+                        flags.1 |= defined;
+                        flags.2 |= !defined;
+                    }
+                    None => named.push((*value, defined, !defined)),
+                }
+            }
+            for &(value, defined, used) in &named {
+                places.entry(value).or_default().push(((block_index, position), defined, used));
+            }
+        }
+    }
+    let mut values: Vec<u32> = places.keys().copied().collect();
+    values.sort_unstable();
+    let ranges = intervals_by_occurrences(body, index, &values, &places);
+    let weight = _divided(&totals, &ranges);
+    let answer = ranges
+        .into_iter()
+        .map(|(value, one)| {
+            let weight = weight.get(&value).copied().unwrap_or(0.0);
+            (value, Interval { weight, ..one })
+        })
+        .collect();
+    (answer, totals)
 }
 
 fn worked_out(body: &LirBody, index: Option<&Indexes>, busy: &Frequency) -> IndexMap<u32, Interval> {
@@ -474,7 +510,7 @@ fn worked_out_with_totals(body: &LirBody, index: &Indexes, busy: &Frequency, kee
     body.facts.0.bump("intervals-worked");
     let ranges = _ranges(body, index, keep);
     let totals = llrm_support::debug::timed("intervals weights", || _totals(body, busy, keep));
-    let weight = divided(&totals, &ranges);
+    let weight = _divided(&totals, &ranges);
     let answer = ranges
         .into_iter()
         .map(|(value, one)| {
@@ -897,7 +933,7 @@ pub const GRACE: i64 = 25 * PER_INSN;
 /// `references weighted by block frequency / (live slots + grace)`.
 #[allow(dead_code)]
 fn _weights(body: &LirBody, busy: &Frequency, ranges: &IndexMap<u32, Interval>, keep: &impl Fn(u32) -> bool) -> IndexMap<u32, f64> {
-    divided(&_totals(body, busy, keep), ranges)
+    _divided(&_totals(body, busy, keep), ranges)
 }
 
 /// `references weighted by block frequency`, before the division.
@@ -914,7 +950,7 @@ fn _totals(body: &LirBody, busy: &Frequency, keep: &impl Fn(u32) -> bool) -> Ind
     total
 }
 
-pub(crate) fn divided(total: &IndexMap<u32, f64>, ranges: &IndexMap<u32, Interval>) -> IndexMap<u32, f64> {
+fn _divided(total: &IndexMap<u32, f64>, ranges: &IndexMap<u32, Interval>) -> IndexMap<u32, f64> {
     total
         .iter()
         .map(|(value, found)| {

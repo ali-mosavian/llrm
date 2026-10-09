@@ -6,4 +6,3 @@ pub mod facts;
 pub mod frequency;
 pub mod intervals;
 pub mod loops;
-pub mod occurrences;

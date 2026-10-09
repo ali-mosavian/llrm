@@ -544,23 +544,68 @@ impl Rows<'_> {
     }
 }
 
+/// The widest each wanted value is named by `insns`.
+fn _widths_among<'a>(insns: impl Iterator<Item = &'a Arc<Insn>>, wanted: &dyn Fn(u32) -> bool) -> IndexMap<u32, u32> {
+    let mut widths: IndexMap<u32, u32> = IndexMap::default();
+    for one in insns {
+        let mut held: Vec<Held> = match &one.what {
+            Some(what) => what.dests.iter().chain(&what.sources).flat_map(ir::values).collect(),
+            None => Vec::new(),
+        };
+        held.extend(one.requires.iter().chain(&one.delivers).map(|(value, _)| *value));
+        for value in held {
+            if wanted(value.value) {
+                let had = widths.get(&value.value).copied().unwrap_or(0);
+                widths.insert(value.value, had.max(value.width));
+            }
+        }
+        for (value, width) in &one.widths {
+            if wanted(*value) {
+                let had = widths.get(value).copied().unwrap_or(0);
+                widths.insert(*value, had.max(*width));
+            }
+        }
+    }
+    widths
+}
+
 pub fn _interference_among(body: &LirBody, only: Option<&BTreeSet<u32>>) -> Graph {
     ASKED.with(|asked| asked.set(only.map(BTreeSet::len)));
     let wanted = |value: u32| only.is_none_or(|only| only.contains(&value));
-    // Asked of a few values, the rows and widths come from where the values occur, not from a walk of every instruction (in a body with
-    // no phis, whose arguments are read in other blocks).
-    let among = only.map(|only| crate::backend::postings::following(body, |postings| crate::analysis::occurrences::Occurrences::of(postings, only)));
-    let web = among.as_ref().and_then(|found| found.rows(body));
-    let rows = match &web {
-        Some(web) => Rows::Web(web),
+    // Rows of the values asked of alone: a web of a few is not a liveness over every value in the body, nor found by walking every
+    // instruction: from where the values occur, in a body with no phis.
+    let sparse = only.filter(|_| body.blocks.iter().all(|block| block.phis.is_empty())).map(|only| {
+        crate::backend::postings::following(body, |postings| {
+            let places = postings.occurrences(only);
+            let values: Vec<u32> = only.iter().copied().collect();
+            (allocate::live_rows_among(body, &values, &places), postings.naming(only))
+        })
+    });
+    let rows = match &sparse {
+        Some((web, _)) => Rows::Web(web),
         None => Rows::Dense(allocate::live_rows_by(body, wanted)),
     };
+    if let (Some(only), Some((web, _))) = (only, &sparse) {
+        if llrm_support::env_set("LLRM_CHECK_ROWS") {
+            let dense = allocate::live_rows_by(body, wanted);
+            for block in &body.blocks {
+                let (a, b): (Vec<u32>, Vec<u32>) = (dense.entering(block.at).filter(|v| only.contains(v)).collect(), web.entering(block.at).collect());
+                let (c, d): (Vec<u32>, Vec<u32>) = (dense.leaving(block.at).filter(|v| only.contains(v)).collect(), web.leaving(block.at).collect());
+                assert!(a == b && c == d, "{}: the rows found from the occurrences differ from the walk in block {:#x}: in {a:?} / {b:?}, out {c:?} / {d:?}", body.name, block.at);
+            }
+        }
+    }
     NUMBERED.with(|numbered| numbered.set(rows.numbered()));
     // A copy's widths are read only where both its values are asked of (an edge needs both).
-    let widths = match (&among, &web) {
-        (Some(found), Some(_)) => found.widths(body, &wanted),
-        _ => crate::analysis::occurrences::widths_of(body.blocks.iter().flat_map(|block| &block.insns), &wanted),
+    let named: Vec<&Arc<Insn>> = match &sparse {
+        Some((_, at)) => at.iter().map(|(block, position)| &body.blocks[*block as usize].insns[*position as usize]).collect(),
+        None => body.blocks.iter().flat_map(|block| &block.insns).collect(),
     };
+    let widths = _widths_among(named.into_iter(), &wanted);
+    if sparse.is_some() && llrm_support::env_set("LLRM_CHECK_ROWS") {
+        let whole = _widths_among(body.blocks.iter().flat_map(|block| &block.insns), &wanted);
+        assert!(widths == whole, "{}: the widths found from the occurrences differ from the walk's", body.name);
+    }
     let mut graph: Graph = IndexMap::default();
 
     let edge = |graph: &mut Graph, one: u32, other: u32| {
