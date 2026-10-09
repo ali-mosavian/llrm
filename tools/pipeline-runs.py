@@ -118,10 +118,11 @@ def main() -> int:
 
         with ThreadPoolExecutor(args.jobs) as pool:
             texts = list(pool.map(one, files.items()))
-    if any("Mcpu-ns" in text for text in texts):
+    compiles = [parsed(text) for text in texts]
+    if not compiles or any(not c["total"] for c in compiles):
         print("SKIPPED: instruction counter unavailable")
         return 77
-    print(f"{args.group} {args.level}\n" + report([parsed(text) for text in texts]))
+    print(f"{args.group} {args.level}\n" + report(compiles))
     return 0
 
 

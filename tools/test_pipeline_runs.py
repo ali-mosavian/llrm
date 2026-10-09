@@ -31,3 +31,10 @@ def test_the_report_bills_idle_work_by_round_and_pass():
     assert "pipeline runs per body: median 2" in text
     assert "idle by round (5: five and later): r2 4.0 G" not in text and "r2 0.0 G" in text
     assert "fold 0.0 G (75% of its work)" in text and "first 37.5%" in text and "inline. 62.5%" in text
+
+
+def test_a_compile_with_instruction_counts_has_a_total_and_one_without_has_none():
+    """The `time` header names Mcpu-ns on every host, so a search for the word called every compile counterless and printed SKIPPED."""
+    header = "[instr] by own work, in Minstr (the thread's user-space instructions; Mcpu-ns where the host has no counter):\n"
+    assert pr.parsed(header + SAMPLE)["total"] == 20e6
+    assert pr.parsed(header + "[instr] total 5.0 Mcpu-ns\n")["total"] == 0.0
