@@ -79,39 +79,16 @@ impl Effect {
     }
 }
 
+/// `one`'s effect as it decodes, else as its contract declares; None when unknown.
 thread_local! {
-    /// The effect of each instruction asked of by identity: instructions are immutable and shared between bodies, and the
-    /// instruction is held so that its address is not another's while the answer stands.
-    static EFFECT_OF: std::cell::RefCell<crate::support::hash::HashMap<(u32, usize), (Arc<Insn>, Option<Effect>)>> = std::cell::RefCell::new(Default::default());
     static EFFECT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many effects this thread has worked out by `effect`, for a test that asking again of an instruction does not.
+/// How many effects this thread has worked out by `effect`, for a test that a pass does not ask of an instruction it has seen.
 pub fn effects_worked_out() -> usize {
     EFFECT_CALLS.with(std::cell::Cell::get)
 }
 
-/// `effect` of an instruction held in a body, remembered by identity. Every pass of the peephole asked of each instruction of
-/// a block again, to know what is dead after it, and each ask hashed and copied the instruction to look it up by what it says
-/// (the rename of a copy asked 8 times over a straight run of 1600 statements: 250 Minstr).
-pub fn effect_held(bits: u32, one: &Arc<Insn>) -> Option<Effect> {
-    let key = (bits, Arc::as_ptr(one) as usize);
-    if let Some(found) = EFFECT_OF.with(|held| held.borrow().get(&key).map(|(_, answer)| answer.clone())) {
-        return found;
-    }
-    let answer = effect(bits, one);
-    EFFECT_OF.with(|held| {
-        let mut held = held.borrow_mut();
-        // A function's instructions, not the run's.
-        if held.len() > 400_000 {
-            held.clear();
-        }
-        held.insert(key, (Arc::clone(one), answer.clone()));
-    });
-    answer
-}
-
-/// `one`'s effect as it decodes, else as its contract declares; None when unknown.
 pub fn effect(bits: u32, one: &Insn) -> Option<Effect> {
     EFFECT_CALLS.with(|count| count.set(count.get() + 1));
     if _terminator(one.what.as_ref()) {
@@ -129,7 +106,7 @@ pub fn effect(bits: u32, one: &Insn) -> Option<Effect> {
 
 /// Each instruction's effect in `block`, decoded once for a fixed point to reuse.
 pub fn _effects(bits: u32, block: &LirBlock) -> Vec<Option<Effect>> {
-    block.insns.iter().map(|one| effect_held(bits, one)).collect()
+    block.insns.iter().map(|one| effect(bits, one)).collect()
 }
 
 /// The lanes live before `effects`, given those live after them. An unknown

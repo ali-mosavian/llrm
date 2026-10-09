@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use iced_x86::Register;
 
-use crate::backend::liveness;
+use crate::backend::liveness::{self, Effect};
 use crate::backend::peephole::{DeadAfter, Lanes, _lanes, _register_effects, _register_operand, id};
 use crate::backend::select;
 use crate::support::hash::IndexMap;
@@ -33,15 +33,18 @@ pub const ROUNDS: usize = 8;
 pub fn thrashed(body: LirBody) -> LirBody {
     let mut body = body;
     // A rename leaves its block's live-in as it was, so what is dead at every block's exit is the same after each round: asked
-    // once, not once a round (the rounds grow with a function until ROUNDS, and each asked the whole body: a straight run of
-    // 1600 statements spent 250 Minstr of 340 here).
+    // once, not once a round.
     let exits = liveness::dead_at_exit(&body);
+    // And an instruction's effect is its own, so a round works out those of the instructions the last changed: each round asked of
+    // the whole block (the rounds grow with a function until ROUNDS: a straight run of 1600 statements spent 250 Minstr of 340
+    // in them).
+    let mut effects: IndexMap<i64, Vec<Option<Effect>>> = body.blocks.iter().map(|block| (block.at, liveness::_effects(body.bits, block))).collect();
     for _round in 0..ROUNDS {
         if std::env::var_os("LLRM_CHECK_THRASH").is_some() {
             assert!(liveness::dead_at_exit(&body) == exits, "{}: a rename changed what is dead at a block's exit", body.name);
         }
         // `after is body`: `_once` answers None where it returned `body` itself.
-        match _once(&body, &exits) {
+        match _once(&body, &exits, &mut effects) {
             None => return body,
             Some(after) => body = after,
         }
@@ -53,11 +56,18 @@ pub fn thrashed(body: LirBody) -> LirBody {
 ///
 /// A rename leaves its block's live-in as it was, so every block is judged
 /// against the same exit liveness.
-fn _once(body: &LirBody, exits: &IndexMap<i64, Lanes>) -> Option<LirBody> {
+fn _once(body: &LirBody, exits: &IndexMap<i64, Lanes>, effects: &mut IndexMap<i64, Vec<Option<Effect>>>) -> Option<LirBody> {
     let mut blocks = body.blocks.clone();
     let mut changed = false;
     for block in &mut blocks {
-        if let Some(done) = _block(body.bits, block, exits[&block.at].clone()) {
+        if let Some(done) = _block(body.bits, block, exits[&block.at].clone(), &effects[&block.at]) {
+            let kept = &effects[&block.at];
+            let now: Vec<Option<Effect>> = if done.insns.len() == block.insns.len() {
+                done.insns.iter().zip(&block.insns).zip(kept).map(|((new, old), had)| if Arc::ptr_eq(new, old) { had.clone() } else { liveness::effect(body.bits, new) }).collect()
+            } else {
+                liveness::_effects(body.bits, &done)
+            };
+            effects.insert(block.at, now);
             *block = done;
             changed = true;
         }
@@ -67,18 +77,23 @@ fn _once(body: &LirBody, exits: &IndexMap<i64, Lanes>) -> Option<LirBody> {
 
 /// Per instruction, the register lanes dead once it has run.
 pub fn _dead_after(bits: u32, block: &LirBlock, dead: Lanes) -> DeadAfter {
+    _dead_after_by(block, dead, &liveness::_effects(bits, block))
+}
+
+/// `_dead_after` with the effect of each instruction of `block` already worked out.
+fn _dead_after_by(block: &LirBlock, dead: Lanes, effects: &[Option<Effect>]) -> DeadAfter {
     let mut dead = dead;
     let mut out = DeadAfter::default();
-    for one in block.insns.iter().rev() {
+    for (one, effect) in block.insns.iter().zip(effects).rev() {
         out.insert(id(one), dead);
-        dead = liveness::effect_held(bits, one).map_or_else(Lanes::new, |effect| effect.dead_before(&dead));
+        dead = effect.as_ref().map_or_else(Lanes::new, |effect| effect.dead_before(&dead));
     }
     out
 }
 
 /// This block with one copy thrashed away, or None where none can be.
-fn _block(bits: u32, block: &LirBlock, dead: Lanes) -> Option<LirBlock> {
-    let after = _dead_after(bits, block, dead);
+fn _block(bits: u32, block: &LirBlock, dead: Lanes, effects: &[Option<Effect>]) -> Option<LirBlock> {
+    let after = _dead_after_by(block, dead, effects);
     for (position, one) in block.insns.iter().enumerate() {
         let Some((into, out_of)) = _plain_copy(one) else {
             continue;
@@ -457,17 +472,22 @@ mod tests {
 
     /// The rename of a copy asks what is dead after each instruction of its block every round, and each ask worked out the
     /// instruction's effect again: a straight run of 1600 statements spent 250 Minstr of 340 in the rounds, and the cost of a
-    /// body grew faster than its size while the rounds did. An instruction's effect is worked out once however often it is asked.
+    /// body grew faster than its size while the rounds did. A round works out the effects of the instructions the last changed.
     #[test]
-    fn test_what_is_dead_after_an_instruction_is_asked_of_its_effect_once() {
-        let insns: Vec<Insn> = (0..40).map(|at| _insn(at, "mov", Operation::Move, vec![_reg(Register::EAX)], vec![Loc::Imm(Imm { value: at, width: 4, address: None })])).collect();
-        let body = _body(insns, Register::EAX);
-        let block = &body.blocks[0];
-        let before = crate::backend::liveness::effects_worked_out();
-        for _ask in 0..3 {
-            super::_dead_after(body.bits, block, Default::default());
+    fn test_a_round_of_renames_works_out_the_effects_of_what_the_last_changed() {
+        let mut insns = Vec::new();
+        for at in 0..6_i64 {
+            insns.push(_insn(at * 3, "mov", Operation::Move, vec![_reg(Register::EAX)], vec![Loc::Imm(Imm { value: at, width: 4, address: None })]));
+            insns.push(_insn(at * 3 + 1, "mov", Operation::Move, vec![_reg(Register::EDX)], vec![_reg(Register::EAX)]));
+            insns.push(_insn(at * 3 + 2, "add", Operation::Binary, vec![_reg(Register::EBX)], vec![_reg(Register::EBX), _reg(Register::EDX)]));
         }
+        let body = _body(insns, Register::EBX);
+        let size = body.insns().len();
+        let before = crate::backend::liveness::effects_worked_out();
+        let after = thrashed(body.clone());
         let worked = crate::backend::liveness::effects_worked_out() - before;
-        assert!(worked <= block.insns.len(), "{worked} effects worked out for {} instructions asked of 3 times", block.insns.len());
+        let changed = after.insns().iter().zip(body.insns()).filter(|(new, old)| !Arc::ptr_eq(new, old)).count();
+        assert!(changed >= 4, "premise: several rounds rename ({changed} instructions changed)");
+        assert!(worked <= 2 * size + changed + 2, "{worked} effects worked out for {size} instructions and {changed} changed");
     }
 }
