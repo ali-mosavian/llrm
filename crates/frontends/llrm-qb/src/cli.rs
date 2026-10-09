@@ -100,11 +100,8 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     frontend.debug = flags.debug;
     frontend.checked_overflow = flags.sanitize.signed_integer_overflow;
     frontend.checked_stack = flags.sanitize.stack;
-    let bound = llrm_driver::planned(
-        &flags,
-        Some(&["x86-m16"]),
-        &[("x86-m32", "https://github.com/ali-mosavian/llrm/issues/1160")],
-    )?;
+    let bound =
+        llrm_driver::planned(&flags, Some(&["x86-m16"]), Some("https://github.com/ali-mosavian/llrm/issues/1160"))?;
     frontend.segment_bytes = bound.target.layout().segment_bytes();
     let codegen = bound.options(&flags, flags.machine(&*bound.target, bound.target.machine().with_stack_in_data())?);
     Ok(Arguments { source, frontend, dump_hir, flags, dump, codegen })

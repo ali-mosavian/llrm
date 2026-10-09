@@ -58,16 +58,16 @@ pub fn target(
     flags: &Flags,
     supported: Option<&[&str]>,
 ) -> Result<Bound, String> {
-    planned(flags, supported, &[])
+    planned(flags, supported, None)
 }
 
-/// `target`, for a frontend that will build for the targets in `later` and does
-/// not yet: it says so, and where the work is tracked, instead of saying it
-/// builds for another only.
+/// `target`, for a frontend that will build for the other targets and does not
+/// yet: it says so, and where the work is tracked (`tracked`), instead of
+/// saying it builds for another only.
 pub fn planned(
     flags: &Flags,
     supported: Option<&[&str]>,
-    later: &[(&str, &str)],
+    tracked: Option<&str>,
 ) -> Result<Bound, String> {
     let known = all();
     let found = match flags.mode() {
@@ -81,7 +81,7 @@ pub fn planned(
     };
     let name = found.name();
     if let Some(supported) = supported.filter(|list| !list.contains(&name)) {
-        if let Some((_, tracked)) = later.iter().find(|(planned, _)| *planned == name) {
+        if let Some(tracked) = tracked {
             let modes: Vec<String> = known
                 .iter()
                 .filter(|one| supported.contains(&one.name()))
