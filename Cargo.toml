@@ -9,7 +9,7 @@ edition = "2024"
 rust-version = "1.87"
 
 [workspace.dependencies]
-iced-x86 = { version = "=1.21.0", default-features = false, features = ["std", "decoder", "block_encoder", "op_code_info", "instr_info", "nasm"] }
+iced-x86 = { version = "=1.21.0", default-features = false, features = ["std", "decoder", "block_encoder", "op_code_info", "instr_info", "nasm", "no_vex", "no_evex", "no_xop", "no_d3now"] }
 indexmap = "2"
 num-bigint = "0.4"
 num-traits = "0.2"
