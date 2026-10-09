@@ -324,12 +324,7 @@ pub fn far_load(what: &Semantics) -> bool {
         && what.dests.len() == 2
 }
 
-/// Whether the register is a position in a stack, where an exchange is an
-/// effect and no pass may rename or drop it. The descriptions state the same
-/// set (`positional` in registers.regs); a test holds the two together.
-pub fn positional(register: Register) -> bool {
-    llrm_x86::registers::positional(register)
-}
+include!(concat!(env!("OUT_DIR"), "/positional.rs"));
 
 /// Whether the operand is a positional register.
 pub fn positional_place(place: &Loc) -> bool {
@@ -887,5 +882,20 @@ mod tests {
             ..Semantics::new(Operation::Extend)
         };
         assert!(RegisterClasses::m16().requirements(&what).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod positional_tests {
+    use super::*;
+
+    /// The set comes from the descriptions' `positional` class (build.rs): the
+    /// eight stack registers, no general register and no segment register.
+    #[test]
+    fn test_positional_is_the_stack_registers_the_descriptions_name() {
+        let stack: Vec<Register> = Register::values().filter(|one| positional(*one)).collect();
+        assert_eq!(stack.len(), 8);
+        assert!(stack.iter().all(|one| one.is_st()));
+        assert!(![Register::EAX, Register::AL, Register::DS, Register::None].iter().any(|one| positional(*one)));
     }
 }
