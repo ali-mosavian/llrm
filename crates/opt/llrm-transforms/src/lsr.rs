@@ -31,7 +31,8 @@ use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
-use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::passes::{Analyses, Analysis, FunctionPass, Outer, PreservedAnalyses, Unit};
 use llrm_mir::target::{AddressForm, Machine, OperationCosts};
 use num_traits::ToPrimitive;
 use llrm_mir::types::{Type, TypeId};
@@ -115,23 +116,42 @@ enum Resident {
     Rebuilt(usize),
 }
 
+/// The whole function's block frequencies as lsr's prices read them: a loop's trips multiplied, ten where unproven (#203), a branch's cold
+/// arm less. A manager analysis, so a loop lsr looks at and leaves alone does not find them again (16 loops of a nest: a fifth of lsr).
+pub struct Products;
+
+impl Analysis for Products {
+    type Result = Option<std::collections::BTreeMap<i64, i64>>;
+    const NAME: &'static str = "loop-products";
+
+    fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
+        let registers = analyses.get::<Registers>(context, layout, function);
+        let shape = analyses.get::<llrm_analysis::cfg::Shape>(context, layout, function);
+        let outer = std::rc::Rc::clone(analyses.outer());
+        let view = memory::Unit::within(context, layout, function, &outer).with_registers(&registers).with_shape(&shape);
+        profit::_loop_products_by_branch(view.context, view.metadata, &outer.globals, function, Some(&profit::proven_trips(&view, &registers)))
+    }
+}
+
 /// Each loop's counters chosen, innermost first; whether any changed.
-pub fn reduced(unit: &mut Unit, analyses: &Analyses, outer: &Outer, size: bool, bounds: Bounds) -> bool {
+pub fn reduced(unit: &mut Unit, analyses: &mut Analyses, outer: &Outer, size: bool, bounds: Bounds) -> bool {
     let target = Target { machine: outer.target(), costs: profit::costs(outer), room: profit::registers(outer), forms: outer.target().address_forms(), bounds };
     let mut done = BTreeSet::<i64>::new();
     let mut changed = false;
+    // What is known of the function is the manager's, kept until a loop is changed (and then it is `applied` that declares nothing kept).
     loop {
-        let mut fresh = analyses.fresh();
-        let facts = fresh.get::<Registers>(unit.context, unit.layout, unit.function);
-        let shape = fresh.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
         let plan = {
+            let facts = analyses.get::<Registers>(unit.context, unit.layout, unit.function);
+            let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
             let view = memory::Unit::within(unit.context, unit.layout, unit.function, outer).with_registers(&facts).with_shape(&shape);
             let mut loops = shape.loops.clone();
             loops.sort_by_key(|one| (one.body.len(), one.header));
             let Some(loop_) = loops.into_iter().find(|one| !done.contains(&one.header)) else { break };
             done.insert(loop_.header);
-            let pressure = analyses.fresh().get::<spill::Pressure>(unit.context, unit.layout, unit.function);
-            _plan(&view, outer, &loop_, &target, &pressure)
+            let pressure = analyses.get::<spill::Pressure>(unit.context, unit.layout, unit.function);
+            let (context, layout, function) = (&*unit.context, unit.layout, &*unit.function);
+            let mut products = || analyses.get::<Products>(context, layout, function);
+            _plan(&view, outer, &loop_, &target, &pressure, &mut products)
         };
         let Some(plan) = plan else { continue };
         // A loop with another way out was never counted before: its choice is held to the function's whole price, work and
@@ -141,13 +161,14 @@ pub fn reduced(unit: &mut Unit, analyses: &Analyses, outer: &Outer, size: bool, 
         if leaves && size {
             continue;
         }
-        let saved = leaves.then(|| (unit.function.clone(), _function_price(unit, analyses, outer, &target)));
+        let saved = leaves.then(|| (unit.function.clone(), _function_price(unit, &*analyses, outer, &target)));
         if let Some(first) = _applied(unit, &plan) {
             done.insert(cfg::id(first));
         }
+        analyses.invalidate(&PreservedAnalyses::none());
         if let Some((before, Some(kept))) = saved {
             dead::dead(unit.context, outer.callees(), unit.function);
-            let moved_price = _function_price(unit, analyses, outer, &target);
+            let moved_price = _function_price(unit, &*analyses, outer, &target);
             llrm_support::debug!("lsr", "leaving loop: kept {kept}, moved {moved_price:?}");
             if moved_price.is_some_and(|moved| moved > kept) {
                 *unit.function = before;
@@ -319,7 +340,7 @@ fn _preheader(function: &Function, loop_: &Loop) -> Option<BlockId> {
     }
 }
 
-fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target, pressure: &spill::Pressure) -> Option<Plan> {
+fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target, pressure: &spill::Pressure, products: &mut dyn FnMut() -> std::rc::Rc<Option<std::collections::BTreeMap<i64, i64>>>) -> Option<Plan> {
     let function = view.function;
     let preheader = _preheader(function, loop_)?;
     let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return None };
@@ -330,7 +351,8 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target, pres
     }
     let facts = view.registers();
     // lsr's prices were fitted to trips multiplied, ten where unproven (#203), and a branch's cold arm less.
-    let frequencies = profit::_loop_products_by_branch(view.context, view.metadata, &outer.globals, function, Some(&profit::proven_trips(view, &facts)))?;
+    let held = products();
+    let frequencies = held.as_ref().as_ref()?;
     let frequency = |block: BlockId| frequencies.get(&cfg::id(block)).copied().unwrap_or(1);
     let exit = _exit(view, loop_, &users);
     let nested = view.shape().loops.iter().filter(|one| one.header != loop_.header && loop_.body.contains(&one.header)).cloned().collect::<Vec<_>>();

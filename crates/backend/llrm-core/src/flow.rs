@@ -114,7 +114,7 @@ pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool, classe
     let stage = if phase.name().is_empty() { phase.class_name().to_owned() } else { phase.name().to_owned() };
     // The invariance instrument, LLVM's `-g` rule: stripped of meta
     // instructions, every phase must make the same code.
-    let body = if std::env::var_os("LLRM_STRIP_META").is_some() { without_meta(body) } else { body };
+    let body = if llrm_support::env_set("LLRM_STRIP_META") { without_meta(body) } else { body };
     let verifying = crate::support::debug::verifying();
     let owned = if verifying { crate::support::debug::timed("lir owned bytes", || body.owned_bytes()) } else { Vec::new() };
     let transformed =

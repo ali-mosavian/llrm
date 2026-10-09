@@ -189,6 +189,109 @@ impl LiveRows {
     }
 }
 
+/// How many times this body's facts have walked every instruction for liveness rows (`live_rows_by`), for a test that a web of a few
+/// values does not.
+pub fn live_rows_walks(body: &LirBody) -> usize {
+    body.facts.0.counted("live-rows-walks")
+}
+
+/// What is live at each block's entry and exit for a few values, found from where they occur: a value is live into a block that reads it
+/// before writing it and out of a block a successor has it live into, up the predecessors until one writes it. The rows of `values`
+/// as `live_rows_by` finds them in a body with no phis, at the cost of the occurrences and the blocks each is live in, not of every
+/// instruction of the body.
+pub struct WebRows {
+    position: IndexMap<i64, usize>,
+    into: Vec<Vec<u32>>,
+    out: Vec<Vec<u32>>,
+    numbered: usize,
+}
+
+impl WebRows {
+    pub fn numbered(&self) -> usize {
+        self.numbered
+    }
+
+    pub fn entering(&self, at: i64) -> impl Iterator<Item = u32> + '_ {
+        self.into[self.position[&at]].iter().copied()
+    }
+
+    pub fn leaving(&self, at: i64) -> impl Iterator<Item = u32> + '_ {
+        self.out[self.position[&at]].iter().copied()
+    }
+}
+
+/// `WebRows` of `values` (ascending); `places[value]` are the instructions that name it, by block then position, once each, and
+/// whether each defines and reads it.
+pub fn live_rows_among(body: &LirBody, values: &[u32], places: &IndexMap<u32, Vec<ranges::Occurrence>>) -> WebRows {
+    let count = body.blocks.len();
+    let position: IndexMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
+    let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for (at, block) in body.blocks.iter().enumerate() {
+        for to in &block.succ {
+            if let Some(&to) = position.get(to) {
+                predecessors[to].push(at);
+            }
+        }
+    }
+    let (mut in_mark, mut out_mark, mut written_mark, mut run_mark) = (vec![0u32; count], vec![0u32; count], vec![0u32; count], vec![0u32; count]);
+    // The first run of a block that names the value, as (defined, read): a read decides, a write beside it too.
+    let mut first_run: Vec<(usize, bool, bool)> = vec![(0, false, false); count];
+    let mut into: Vec<Vec<u32>> = vec![Vec::new(); count];
+    let mut out: Vec<Vec<u32>> = vec![Vec::new(); count];
+    let mut turn = 0u32;
+    let mut numbered = 0;
+    for &value in values {
+        let Some(found) = places.get(&value).filter(|found| !found.is_empty()) else { continue };
+        numbered += 1;
+        turn += 1;
+        let mut reached: Vec<usize> = Vec::new();
+        let mut work: Vec<usize> = Vec::new();
+        for &((block_index, at), defined, used) in found {
+            let end = ranges::_group_end(&body.blocks[block_index], at);
+            if run_mark[block_index] != turn {
+                run_mark[block_index] = turn;
+                first_run[block_index] = (end, defined, used);
+                reached.push(block_index);
+            } else if first_run[block_index].0 == end {
+                first_run[block_index].1 |= defined;
+                first_run[block_index].2 |= used;
+            }
+            if defined {
+                written_mark[block_index] = turn;
+            }
+        }
+        for &block_index in &reached {
+            if first_run[block_index].2 {
+                in_mark[block_index] = turn;
+                work.push(block_index);
+            }
+        }
+        let mut live_out: Vec<usize> = Vec::new();
+        while let Some(block_index) = work.pop() {
+            for &before in &predecessors[block_index] {
+                if out_mark[before] != turn {
+                    out_mark[before] = turn;
+                    live_out.push(before);
+                    if written_mark[before] != turn && in_mark[before] != turn {
+                        in_mark[before] = turn;
+                        reached.push(before);
+                        work.push(before);
+                    }
+                }
+            }
+        }
+        for &block_index in &reached {
+            if in_mark[block_index] == turn {
+                into[block_index].push(value);
+            }
+        }
+        for &block_index in &live_out {
+            out[block_index].push(value);
+        }
+    }
+    WebRows { position, into, out, numbered }
+}
+
 /// Whether a value is live at the entry or exit of a block: what a caller that asks of one value at a time reads,
 /// whether it has the sets of every block (`Live`) or the rows.
 pub trait LiveAt {
@@ -224,6 +327,7 @@ pub fn live_rows(body: &LirBody) -> LiveRows {
 /// `live_rows` of the values `keep` says only: each is live where it is as in the whole, the others are
 /// not numbered, so a caller that asks of a few values pays for rows of those.
 pub fn live_rows_by(body: &LirBody, keep: impl Fn(u32) -> bool) -> LiveRows {
+    body.facts.0.bump("live-rows-walks");
     // Every value the body names, numbered by order. Ids can be far apart, so the number of a value
     // is found by a table over the ids where they are dense enough, else by search.
     let mut numbered: Vec<u32> = Vec::new();
@@ -824,7 +928,7 @@ impl Facts {
         let confined = llrm_support::debug::timed("facts classes", || {
             let given = crate::backend::regclass::Found { live: &live, masks: &masks };
             let found = crate::backend::regclass::classes_given(body, protected, segments, registers, &given);
-            if std::env::var_os("LLRM_CHECK_CLASSES").is_some() {
+            if llrm_support::env_set("LLRM_CHECK_CLASSES") {
                 assert!(found.iter().eq(classes(body, protected, segments, registers).iter()), "{}: classes from the given intervals differ from working them out", body.name);
             }
             found
@@ -838,7 +942,7 @@ impl Facts {
 /// to a point that destroys it, or leave their class: the later of each pair.
 fn _overlapping(union: &LiveUnion, r#where: &IndexMap<u32, Register>, facts: &Facts) -> BTreeSet<u32> {
     let found = _overlapping_by_start(union, r#where, facts);
-    if std::env::var_os("LLRM_CHECK_OVERLAPPING").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_OVERLAPPING") {
         assert!(found == _overlapping_reference(union, r#where, facts), "values sharing a register found by start differ from the pairwise look");
     }
     found
@@ -1525,7 +1629,7 @@ pub fn _clobbered(one: &Interval, register: Register, masks: &Masks, width: u32)
 
 fn check_clobbered() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_CLOBBERED").is_some())
+    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_CLOBBERED"))
 }
 
 /// `_clobbered`, from where each register is destroyed: a segment meets a point where the point is after its
@@ -2337,7 +2441,7 @@ pub(crate) fn _fold_discount(one: &Insn, profile: &Profile) -> f64 {
 /// Discount reads by the target-specific saving from folding them.
 pub(crate) fn _fold_priced(body: &LirBody, live: IndexMap<u32, Interval>, profile: &Profile, busy: &Frequency) -> IndexMap<u32, Interval> {
     let discounts = FoldDiscounts::of(profile);
-    let check = std::env::var_os("LLRM_CHECK_FOLDS").is_some();
+    let check = llrm_support::env_set("LLRM_CHECK_FOLDS");
     let mut free: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
         let each = busy.block(block.at);

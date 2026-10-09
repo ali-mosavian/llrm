@@ -904,6 +904,27 @@ fn test_an_edited_answer_works_its_changed_values_out_from_where_they_occur() {
     assert_eq!(found, intervals_afresh(&trial));
 }
 
+/// The interference among a web of a few values walked every instruction of the body for liveness rows and again for the widths, per
+/// web (1 G of compiling d_faces, 454 webs). From where the values occur it is the same graph, and the body is not walked.
+#[test]
+fn test_the_interference_among_a_web_is_found_without_walking_the_body() {
+    use crate::analysis::intervals::intervals;
+    use crate::backend::allocate::live_rows_walks;
+    use crate::backend::coalesce::{_interference, _interference_among};
+    for seed in 0..40u64 {
+        let (plain, _) = body(seed, &Shape { pool: 8 + (seed % 7) as usize, ops: 8 + (seed % 11) as usize });
+        let web: std::collections::BTreeSet<u32> = intervals(&plain, None).keys().copied().step_by(3).take(4).collect();
+        let before = live_rows_walks(&plain);
+        let among = _interference_among(&plain, Some(&web));
+        assert_eq!(live_rows_walks(&plain), before, "seed {seed}: the body was walked for the rows of a web");
+        let whole = _interference(&plain);
+        for value in &web {
+            let of = |graph: &crate::backend::coalesce::Graph| graph.get(value).map(|near| near.intersection(&web).copied().collect::<std::collections::BTreeSet<u32>>()).unwrap_or_default();
+            assert_eq!(of(&among), of(&whole), "seed {seed}: value#{value}");
+        }
+    }
+}
+
 /// The no-split allocation of a body the base allocation split nothing in is the base allocation again, and was made for every
 /// body with a spill (10% of the trials over QCport, the bench and the 66 programs, none of them won).
 #[test]

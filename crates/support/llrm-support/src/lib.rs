@@ -15,6 +15,14 @@ mod register;
 
 pub use register::PhysicalRegister;
 
+/// Whether the environment variable `name` is set, from a snapshot of the environment taken at the first ask. `std::env::var_os` takes
+/// the environment lock and scans it on every call: the `LLRM_CHECK_*` switches asked in a loop (once for each instruction's liveness
+/// effect) were 2% of a compile of rectwo. The variables are those the process started with; none is set afterwards.
+pub fn env_set(name: &str) -> bool {
+    static NAMES: std::sync::OnceLock<hash::HashSet<std::ffi::OsString>> = std::sync::OnceLock::new();
+    NAMES.get_or_init(|| std::env::vars_os().map(|(name, _)| name).collect()).contains(std::ffi::OsStr::new(name))
+}
+
 /// `LLRM_CHECK_CACHES=1`: every identity-cache hit is recomputed and must equal what was cached.
 pub fn checking_caches() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
