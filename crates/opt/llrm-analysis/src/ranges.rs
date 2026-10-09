@@ -647,6 +647,22 @@ pub fn bounded(unit: &Unit) -> Result<Facts, String> {
     bounded_with(unit, &unit.registers())
 }
 
+/// `bounded`'s facts at each block without copying them: the manager's where the unit carries its `Bounded` (and works under the
+/// registers it was asked of), else worked out here. A caller that asks of the same body again and again asks the manager, whose
+/// result is kept and brought up to date, not a solve of its own.
+pub fn bounds<'u>(unit: &Unit<'u>) -> Result<std::borrow::Cow<'u, Bounds>, String> {
+    let registers = unit.registers();
+    match (unit.bounds, unit.registers) {
+        (Some(held), Some(carried)) if std::ptr::eq(&*registers, carried) => {
+            if std::env::var_os("LLRM_CHECK_REPLAY").is_some() {
+                assert!(held.facts() == bounded_with(&Unit { bounds: None, ..*unit }, &registers)?, "the bounds a unit carries are not those of the body it stands over: stale");
+            }
+            Ok(std::borrow::Cow::Borrowed(held))
+        }
+        _ => Ok(std::borrow::Cow::Owned(bounded_solved(unit, &registers, None)?)),
+    }
+}
+
 /// `bounded`, given what `consts::known` finds without memory.
 pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Facts, String> {
     Ok(bounded_solved(unit, facts, None)?.facts())
@@ -922,8 +938,9 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
         // and result are as they were in `known` as it found it there, so only those the narrowing reaches, and what they reach
         // in turn, are worked again from `known swept` with the narrowed values put over it.
         let settle = |mut scoped: IndexMap<ValueId, Interval>, known: &IndexMap<ValueId, Interval>| -> IndexMap<ValueId, Interval> {
-            // Putting the swept ones over a block's is a pass over its facts, as sweeping is two over the operations: a loop of few
-            // operations among many facts is swept.
+            // The cheaper of the two by the work each counts: a sweep evaluates every operation and then once more to see nothing
+            // change (2 x operations); settling finds what the block's edges narrowed and puts the swept facts over the rest (one
+            // pass over `scoped`'s facts), then evaluates only what that reaches.
             if 2 * operations.len() <= scoped.len() {
                 return sweep(scoped);
             }

@@ -146,7 +146,7 @@ pub fn exact(unit: &Unit, constants: &IndexMap<ValueId, Finite>) -> Result<BTree
         return Ok(BTreeSet::new());
     }
     let memory = floatfacts::cells(unit, &Calls::default());
-    let scoped = ranges::bounded(unit)?;
+    let scoped = ranges::bounds(unit)?;
     let phis = function
         .walk()
         .map(|(_, inst)| inst)
@@ -178,7 +178,7 @@ pub fn exact(unit: &Unit, constants: &IndexMap<ValueId, Finite>) -> Result<BTree
             let op = function.instruction(inst);
             let inputs = if let Opcode::Load { .. } = op.opcode {
                 let here = memory.get(&inst).map(|here| &**here).unwrap_or(&empty_cells);
-                _memory(unit, inst, rule.inputs[0], here, scoped.get(&cfg::id(block)).unwrap_or(&empty_scope)).map(|one| vec![one])
+                _memory(unit, inst, rule.inputs[0], here, scoped.at(cfg::id(block)).unwrap_or(&empty_scope)).map(|one| vec![one])
             } else {
                 rule.inputs.iter().zip(&op.operands).map(|(&format, &operand)| _operand(unit, operand, format, &values, constants)).collect()
             };

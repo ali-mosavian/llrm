@@ -276,3 +276,52 @@ done:
     assert!(!super::widened(context, &layout, function, &outer), "nothing to widen");
     assert!(llrm_analysis::consts::register_derivations() - before <= 1, "{} derivations for three loops", llrm_analysis::consts::register_derivations() - before);
 }
+
+/// A pass that asks the manager what the counted loops bound, and changes nothing.
+struct AsksBounds;
+
+impl llrm_mir::passes::FunctionPass for AsksBounds {
+    fn name(&self) -> &'static str {
+        "asks-bounds"
+    }
+
+    fn run(&mut self, unit: &mut llrm_mir::passes::Unit, analyses: &mut Analyses) -> llrm_mir::passes::PreservedAnalyses {
+        analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function);
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// A `sext` of a counter made indvars solve what the loops bound again, by hand, beside the manager's it could have asked:
+/// fpbench -O1 spent 40 Minstr in indvars, 29 of them in that solve.
+#[test]
+fn test_indvars_reads_the_managers_bounds_for_a_widened_counter() {
+    let mut module = parsed(
+        "define i32 @f(i32 %n) {
+b0:
+  br label %h
+
+h:
+  %i = phi i16 [ 0, %b0 ], [ %in, %l ]
+  %s = phi i32 [ 0, %b0 ], [ %sn, %l ]
+  %c = icmp slt i16 %i, 10
+  br i1 %c, label %l, label %end
+
+l:
+  %w = sext i16 %i to i32
+  %sn = add i32 %s, %w
+  %in = add nsw i16 %i, 1
+  br label %h
+
+end:
+  ret i32 %s
+}
+",
+    );
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(AsksBounds);
+    manager.add(super::IndVars);
+    let before = llrm_analysis::ranges::loops_solved();
+    manager.run_module(&mut module, Rc::new(crate::testing::Tuned::default())).unwrap();
+    // The pass that asks, and the one indvars's evaluation of the loop leaves the body needing; by hand it was a third.
+    assert_eq!(llrm_analysis::ranges::loops_solved() - before, 2, "the loop's bounds were worked out more than the manager's twice");
+}
