@@ -15,7 +15,7 @@ qb_temp_descriptor dw 0, offset qb_temp_data
 qb_temp_data db 12 dup (0)
 qb_newline db 13, 10
 
-QB_TEXT segment para public 'CODE'
+RUNTIME_TEXT segment para public 'CODE'
 ; STR$(long): the long is low word then high word.  QB prefixes a positive
 ; number with a blank and returns a descriptor in AX.
 B$STI4 proc far
@@ -106,5 +106,5 @@ B$PESD proc far
     retf 2
 B$PESD endp
 
-QB_TEXT ends
+RUNTIME_TEXT ends
 end
