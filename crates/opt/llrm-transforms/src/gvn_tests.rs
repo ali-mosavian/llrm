@@ -733,60 +733,10 @@ fn a_pass_takes_the_trip_counts_the_manager_proved() {
     assert!(proved <= loops, "{proved} loops proved for one pass over a body of {loops} loops");
 }
 
-/// Where the machine prices registers, Gvn numbers the function twice (crossing
-/// stores, and not) and keeps the cheaper; each run solved what every block
-/// holds again, for the same instructions: 638 solutions for 343 runs compiling
-/// `mdl_ai.c`, 12.7% of its compile. It is solved once for the function as it
-/// comes in.
+/// A function numbered twice walks once (the walk does not depend on
+/// `avoid_store_crossing`).
 #[test]
-fn test_availability_is_solved_once_when_a_function_is_numbered_twice() {
-    let text = "@x = global i16 0
-@y = global i16 0
-@z = global i16 0
-
-define i16 @f(i16 %n, i16 %p) {
-b0:
-  %a = load i16, ptr @x
-  store i16 %a, ptr @z
-  br label %b1
-
-b1:
-  %i = phi i16 [ 0, %b0 ], [ %i.next, %b2 ]
-  %more = icmp slt i16 %i, %n
-  br i1 %more, label %b2, label %b3
-
-b2:
-  %t1 = mul i16 %i, 3
-  %t2 = mul i16 %i, 5
-  %t3 = add i16 %t1, %t2
-  store i16 %t3, ptr @y
-  %b = load i16, ptr @x
-  store i16 %b, ptr @z
-  %i.next = add i16 %i, 1
-  br label %b1
-
-b3:
-  %q = mul i16 %p, %p
-  %r = add i16 %q, %p
-  ret i16 %r
-}
-";
-    let mut module = parsed(text);
-    let mut manager = PassManager::default();
-    manager.require::<Summaries>();
-    manager.add(Gvn { dataflow: true });
-    let before = llrm_analysis::avail::solved();
-    manager
-        .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
-        .unwrap();
-    assert_eq!(llrm_analysis::avail::solved() - before, 1, "availability solved again for the second numbering");
-}
-
-/// With `-fgvn-dataflow` off every load is forwarded by the walk: no
-/// availability is solved, and a function numbered twice walks once (the walk
-/// does not depend on `avoid_store_crossing`).
-#[test]
-fn the_walk_alone_solves_no_availability_and_a_function_numbered_twice_walks_once() {
+fn a_function_numbered_twice_walks_once() {
     let text = "@x = global i16 0
 @y = global i16 0
 
@@ -802,18 +752,16 @@ b0:
     let mut module = parsed(text);
     let mut manager = PassManager::default();
     manager.require::<Summaries>();
-    manager.add(Gvn { dataflow: false });
-    let (solved, walked, numbered) =
-        (llrm_analysis::avail::solved(), llrm_analysis::avail::walked(), super::numberings());
+    manager.add(Gvn);
+    let (walked, numbered) = (llrm_analysis::avail::walked(), super::numberings());
     manager
         .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 1, ..Default::default() }))
         .unwrap();
-    assert_eq!(llrm_analysis::avail::solved() - solved, 0, "availability solved with the dataflow off");
     assert_eq!(super::numberings() - numbered, 2, "the function is numbered both ways");
     assert_eq!(llrm_analysis::avail::walked() - walked, 1, "the walk ran again for the second numbering");
 }
 
-/// The walk alone forwards what the map forwards in the ordinary case.
+/// The walk forwards a stored value to its load.
 #[test]
 fn the_walk_alone_forwards_a_stored_value_to_its_load() {
     let text = "@g = global i16 0
@@ -829,7 +777,7 @@ b0:
     let mut module = before.clone();
     let mut manager = PassManager::default();
     manager.require::<Summaries>();
-    manager.add(Gvn { dataflow: false });
+    manager.add(Gvn);
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     assert!(printed(&module).contains("  store i16 %x, ptr @g\n  ret i16 %x\n"), "{}", printed(&module));
 }
@@ -909,9 +857,9 @@ b0:
     assert_eq!(super::numberings() - before, 1);
 }
 
-/// The three kinds of load the availability dataflow forwards and the MemorySSA
-/// walk alone does not (gvn forwards loads by the walk once the dataflow goes):
-/// each is pinned here so the loss is seen, not measured later.
+/// The three kinds of load the deleted availability map forwarded and the
+/// MemorySSA walk first did not: each is pinned here so a loss is seen, not
+/// measured later.
 ///
 /// (a) A join whose arms store the same operand, the load below the join.
 #[test]
