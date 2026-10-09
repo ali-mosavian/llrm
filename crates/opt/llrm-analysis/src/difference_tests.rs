@@ -56,7 +56,8 @@ fn test_an_unbounded_length_proves_nothing_of_the_last_index() {
     assert!(!proves(W, &facts, &ranges, Ule, &lo, &last));
 }
 
-/// A guard that holds of the sides in the other order, or is weaker, proves nothing more.
+/// A guard that holds of the sides in the other order, or is weaker, proves
+/// nothing more.
 #[test]
 fn test_a_weaker_guard_proves_nothing_stronger() {
     let (_, ranges, [_, hi, len]) = slice(Some(32767));

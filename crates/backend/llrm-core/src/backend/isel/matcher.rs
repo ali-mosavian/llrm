@@ -644,8 +644,9 @@ impl Selector<'_, '_, '_> {
 
     // Costs.
 
-    /// Bytes of `chain`'s shifts, adds and subtracts. The copy that seeds it is not counted:
-    /// the allocator drops it where the source dies, as `add si, si` shows.
+    /// Bytes of `chain`'s shifts, adds and subtracts. The copy that seeds it is
+    /// not counted: the allocator drops it where the source dies, as `add
+    /// si, si` shows.
     fn chain_bytes(
         chain: &[(&str, i64)],
         width: i64,
@@ -696,7 +697,8 @@ impl Selector<'_, '_, '_> {
         factor: Operand,
     ) -> Result<i64, Unselected> {
         let (chain, clocks) = self.chain(m, factor).expect("a scalable factor");
-        // Tuned for size, the two compete in bytes, as they compete in clocks otherwise.
+        // Tuned for size, the two compete in bytes, as they compete in clocks
+        // otherwise.
         let width = self.width(self.function.instruction(m.inst).ty)?;
         Ok(if self.cpu.size {
             Self::by_size(Self::chain_bytes(&chain, i64::from(width), self.cpu.operand_bytes), clocks)
@@ -732,7 +734,8 @@ impl Selector<'_, '_, '_> {
                 };
                 out.push(insn(m.at, semantics(Operation::Address, "lea", vec![Loc::Held(into)], vec![Loc::Mem(cell)])));
             } else if name == "lea" {
-                // `into = a + current*count`: the shift and add of one digit, made by the address unit.
+                // `into = a + current*count`: the shift and add of one digit,
+                // made by the address unit.
                 let (Loc::Held(base), Loc::Held(scaled)) = (a.clone(), current.clone()) else {
                     unreachable!("a chain works on registers")
                 };
@@ -752,7 +755,8 @@ impl Selector<'_, '_, '_> {
                     semantics(Operation::Binary, "sub", vec![Loc::Held(into)], vec![a.clone(), current]),
                 ));
             } else if name == "fadd" || name == "fsub" {
-                // `current*(2^count +- 1)`: the shifted copy, then the sum or difference with `current`.
+                // `current*(2^count +- 1)`: the shifted copy, then the sum or
+                // difference with `current`.
                 let Loc::Held(width_of) = current.clone() else { unreachable!("a chain works on registers") };
                 let shifted = self.fresh_held(width_of.width);
                 out.push(insn(
@@ -780,8 +784,8 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
-    /// A byte product, by the operand size's own multiply of both factors extended: only the low byte is kept, which no
-    /// extension changes.
+    /// A byte product, by the operand size's own multiply of both factors
+    /// extended: only the low byte is kept, which no extension changes.
     fn hook_byte_multiply(
         &mut self,
         m: &Match,
@@ -922,7 +926,8 @@ impl Selector<'_, '_, '_> {
         let ConstantKind::Float(bits) = self.module.context.get(id).kind else {
             return refuse("a float constant of no bits");
         };
-        // An extended float is its 10 bytes: a dword, a dword and a word, as a global's initializer lays them down.
+        // An extended float is its 10 bytes: a dword, a dword and a word, as a
+        // global's initializer lays them down.
         if size == 10 {
             let image = llrm_mir::types::x87_extended(bits);
             for (by, width) in [(0_usize, 4_u32), (4, 4), (8, 2)] {
@@ -956,7 +961,8 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
-    /// An i64 read as its two dwords, the low at the address: x86 is little-endian.
+    /// An i64 read as its two dwords, the low at the address: x86 is
+    /// little-endian.
     fn hook_wide_load(
         &mut self,
         m: &Match,

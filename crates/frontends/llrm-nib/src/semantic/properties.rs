@@ -1,4 +1,5 @@
-//! `a.len`, `a.capacity`, and `a.dim[i]`: a sequence's descriptor words, read as fields.
+//! `a.len`, `a.capacity`, and `a.dim[i]`: a sequence's descriptor words, read
+//! as fields.
 
 use super::*;
 

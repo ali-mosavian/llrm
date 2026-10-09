@@ -1,6 +1,8 @@
-//! A call contract was found by parsing the 64 KB runtime table (8 M instructions, 3% of a typical C compile, and the
-//! same for a BASIC program that asks of one routine). The table is Rust data from the build; a lookup builds the one
-//! row it wants. Alone in its process: no other test may have forced the whole table first.
+//! A call contract was found by parsing the 64 KB runtime table (8 M
+//! instructions, 3% of a typical C compile, and the same for a BASIC program
+//! that asks of one routine). The table is Rust data from the build; a lookup
+//! builds the one row it wants. Alone in its process: no other test may have
+//! forced the whole table first.
 
 use std::sync::LazyLock;
 

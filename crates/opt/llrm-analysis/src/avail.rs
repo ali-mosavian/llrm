@@ -39,8 +39,9 @@ use crate::memoryssa::{self, Accesses, changes, covered, covers, may_clobber, pl
 use crate::ranges::{self, Interval};
 use crate::regions::{OverlapBucket, OverlapBuckets, displaced_buckets, overlap_bucket, overlap_buckets, overlap_span};
 
-/// What each cell holds, indexed by the object and the bytes each cell names: a write asks only the cells it can
-/// reach, not every cell held, as `consts`' cell lattice does.
+/// What each cell holds, indexed by the object and the bytes each cell names: a
+/// write asks only the cells it can reach, not every cell held, as `consts`'
+/// cell lattice does.
 #[derive(Clone)]
 pub struct Holders {
     cells: CellMap<MemRef, Operand, OverlapBucket>,
@@ -62,9 +63,10 @@ impl Holders {
         Self { cells, buckets }
     }
 
-    /// The first cell held, in the order they are held, that names `cell`'s bytes and whose holder `serves`: what a
-    /// scan of every cell finds, asked only of the cells a write to `cell` can reach (a cell naming the same bytes
-    /// is one).
+    /// The first cell held, in the order they are held, that names `cell`'s
+    /// bytes and whose holder `serves`: what a scan of every cell finds,
+    /// asked only of the cells a write to `cell` can reach (a cell naming the
+    /// same bytes is one).
     fn naming(
         &self,
         unit: &Unit,
@@ -259,8 +261,8 @@ thread_local! {
     static CLOBBER_ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has asked whether a write clobbers a held cell, for a test that a store does not ask of
-/// every cell held.
+/// How many times this thread has asked whether a write clobbers a held cell,
+/// for a test that a store does not ask of every cell held.
 pub fn clobber_asks() -> usize {
     CLOBBER_ASKS.with(std::cell::Cell::get)
 }
@@ -271,7 +273,8 @@ pub fn holders(
     accesses: &Accesses,
 ) -> Held {
     SOLVED.with(|solved| solved.set(solved.get() + 1));
-    // Register facts only: a memory-aware solve per query costs more than it finds.
+    // Register facts only: a memory-aware solve per query costs more than it
+    // finds.
     let known: BTreeMap<ValueId, Interval> = ranges::constants(unit).into_iter().collect();
     let graph = cfg::graph(unit.function);
     let entry = unit.function.entry().map(cfg::id);
@@ -499,11 +502,13 @@ impl Solve<'_, '_> {
                 continue;
             }
 
-            // Anything this reads or writes puts the cells it may touch back in doubt.
+            // Anything this reads or writes puts the cells it may touch back in
+            // doubt.
             for reference in loads.iter().chain(stores) {
                 self.clobber(&mut overwritten, inst, reference, shielded && (call || !reference.named()));
             }
-            // What a call fills it writes before reading, unless it may read it otherwise.
+            // What a call fills it writes before reading, unless it may read it
+            // otherwise.
             for fill in self.accesses.fills(inst) {
                 let at = stored.number[fill];
                 if !loads.iter().any(|one| self.reaches(inst, one, at, shielded && (call || !one.named()))) {
@@ -548,7 +553,8 @@ impl Solve<'_, '_> {
         reference: &MemRef,
         unnamed: bool,
     ) {
-        // Nothing overwritten, nothing to forget: no need to find the cells it could reach.
+        // Nothing overwritten, nothing to forget: no need to find the cells it
+        // could reach.
         if overwritten.is_empty() {
             return;
         }
@@ -678,8 +684,9 @@ pub fn forwardable(
     forwardable_by(unit, accesses, want, &holders(unit, accesses))
 }
 
-/// `forwardable`, from the cells `held` says each block holds (`holders` of a function with the same instructions,
-/// which a caller that asks of the function twice, the second time as the first left it, works out once).
+/// `forwardable`, from the cells `held` says each block holds (`holders` of a
+/// function with the same instructions, which a caller that asks of the
+/// function twice, the second time as the first left it, works out once).
 pub fn forwardable_by(
     unit: &Unit,
     accesses: &Accesses,
@@ -714,13 +721,14 @@ thread_local! {
     static SAMES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has solved what each block holds (`holders`), for a test that a pass asking twice of one
-/// function solves it once.
+/// How many times this thread has solved what each block holds (`holders`), for
+/// a test that a pass asking twice of one function solves it once.
 pub fn solved() -> usize {
     SOLVED.with(std::cell::Cell::get)
 }
 
-/// How many times this thread has compared a load's bytes with a missing one's in `memory_providers`.
+/// How many times this thread has compared a load's bytes with a missing one's
+/// in `memory_providers`.
 pub fn same_runs() -> usize {
     SAMES.with(std::cell::Cell::get)
 }
@@ -784,8 +792,9 @@ fn memory_providers(
             found.push(Forward { at: site, value });
             continue;
         }
-        // Loads of one address are one group, whose bytes are compared with `cell` once; the candidates are
-        // then taken in load order, as when each was compared.
+        // Loads of one address are one group, whose bytes are compared with
+        // `cell` once; the candidates are then taken in load order, as
+        // when each was compared.
         let mut candidates: Vec<usize> = groups
             .iter()
             .filter(|(loaded, _)| {

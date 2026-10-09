@@ -104,8 +104,8 @@ pub fn form(
     }
 }
 
-/// The real-mode address naming `terms` plus `disp`, if one does: a lone base or index
-/// register, or one of BX/BP and one of SI/DI. No prefix, no scale.
+/// The real-mode address naming `terms` plus `disp`, if one does: a lone base
+/// or index register, or one of BX/BP and one of SI/DI. No prefix, no scale.
 pub fn word_form(
     terms: &[(Register, i64)],
     disp: i64,

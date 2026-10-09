@@ -42,12 +42,14 @@ struct Arguments {
     layout: CodeLayout,
     used_by: Vec<PathBuf>,
     frontend: super::Frontend,
-    /// The target, the built-in DOS on the target's default CPU unless `--machine` names
-    /// another, and the pipeline.
+    /// The target, the built-in DOS on the target's default CPU unless
+    /// `--machine` names another, and the pipeline.
     codegen: codegen::Options,
-    /// `--os-layer FIELD`: print a field of the target's OS layer instead of compiling.
+    /// `--os-layer FIELD`: print a field of the target's OS layer instead of
+    /// compiling.
     os_layer: Option<Result<String, String>>,
-    /// `--declare h|bi|inc`: print the declarations of the program's exports instead of compiling.
+    /// `--declare h|bi|inc`: print the declarations of the program's exports
+    /// instead of compiling.
     declare: Option<super::declarations::Language>,
 }
 
@@ -124,9 +126,9 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     Ok(Arguments { source, flags, entry, dump, layout, used_by, frontend, codegen, os_layer, declare })
 }
 
-/// The frontend for the target `-m<N>` among `arguments` names, those arguments taken out of
-/// them: for the tools that run or declare a program and take no other target flag (`-mabi=` too: it says what `"c"`
-/// is).
+/// The frontend for the target `-m<N>` among `arguments` names, those arguments
+/// taken out of them: for the tools that run or declare a program and take no
+/// other target flag (`-mabi=` too: it says what `"c"` is).
 pub fn frontend_with_mode(arguments: &mut Vec<String>) -> Result<super::Frontend, String> {
     let mut flags = llrm_core::driver::flags::Flags::default();
     let mut rest = Vec::new();
@@ -147,7 +149,8 @@ pub fn frontend_with_mode(arguments: &mut Vec<String>) -> Result<super::Frontend
     })
 }
 
-/// What the target's OS layer says of Nib's runtime; a target without one is refused.
+/// What the target's OS layer says of Nib's runtime; a target without one is
+/// refused.
 fn nib_os(target: &dyn llrm_target::Target) -> Result<super::Os, String> {
     super::Os::for_target(target)
 }
@@ -214,7 +217,8 @@ pub fn main(argv: &[String]) -> i32 {
         if !args.used_by.is_empty() {
             nib::keep_exports(&mut program, &used(&args.used_by)?);
         }
-        // A library cut to what some objects name has no entry to want, even when the cut leaves it no export.
+        // A library cut to what some objects name has no entry to want, even
+        // when the cut leaves it no export.
         let module = if args.used_by.is_empty() {
             nib::assembled(&program, &args.entry, &args.codegen, &args.frontend.os)?
         } else {
@@ -350,8 +354,8 @@ mod tests {
         }
     }
 
-    /// `-m` was a list the frontend kept by hand; a target without a Nib runtime is refused
-    /// by saying so, whatever else it is.
+    /// `-m` was a list the frontend kept by hand; a target without a Nib
+    /// runtime is refused by saying so, whatever else it is.
     #[test]
     fn a_target_without_a_nib_runtime_is_refused_by_that_message() {
         let error = super::nib_os(&Bare(llrm_x86_m16::M16)).expect_err("refused");

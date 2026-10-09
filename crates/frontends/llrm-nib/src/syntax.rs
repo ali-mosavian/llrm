@@ -81,16 +81,18 @@ pub enum TypeName {
     Function {
         type_id: u32,
     },
-    /// `*far [mut] T` or `*near [mut] T`: whether it is a far one, its width in bytes (the
-    /// target's: 2 and 4 in real mode, 4 and 4 flat), and its HIR type.
+    /// `*far [mut] T` or `*near [mut] T`: whether it is a far one, its width in
+    /// bytes (the target's: 2 and 4 in real mode, 4 and 4 flat), and its
+    /// HIR type.
     Pointer {
         type_id: u32,
         far: bool,
         width: u8,
         mutable: bool,
     },
-    /// `usize` or `isize`: the integer as wide as the target's near pointer, which is `plain()` to
-    /// the code generator and to every rule but one: a conversion that narrows warns.
+    /// `usize` or `isize`: the integer as wide as the target's near pointer,
+    /// which is `plain()` to the code generator and to every rule but one:
+    /// a conversion that narrows warns.
     Word {
         bytes: u8,
         signed: bool,
@@ -140,7 +142,8 @@ pub enum TypeAnnotation {
 pub enum TypeSpec {
     Primitive(TypeName),
     Named(String),
-    /// A generic type given its arguments: `Option[i16]`, `Result[Level, LoadError]`.
+    /// A generic type given its arguments: `Option[i16]`, `Result[Level,
+    /// LoadError]`.
     Applied {
         name: String,
         args: Vec<TypeAnnotation>,
@@ -199,7 +202,8 @@ pub struct Module {
     pub functions: Vec<Function>,
     /// Functions another object defines, called through a foreign ABI.
     pub externs: Vec<Extern>,
-    /// The functions `@export` exposes, each with its symbol and foreign ABI, if any.
+    /// The functions `@export` exposes, each with its symbol and foreign ABI,
+    /// if any.
     pub exports: BTreeMap<String, Export>,
     /// The language's library methods, compiled only where called.
     pub library: Vec<Function>,
@@ -215,21 +219,27 @@ pub struct Module {
 /// A foreign calling convention (section 15).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Abi {
-    /// `"c"`: the convention of an unmarked C function, the target's native one (cdecl16, watcall32): `resolved` says
-    /// which.
+    /// `"c"`: the convention of an unmarked C function, the target's native one
+    /// (cdecl16, watcall32): `resolved` says which.
     C,
     Cdecl16,
-    /// The same convention on the flat target: stack arguments in dwords, EAX results.
+    /// The same convention on the flat target: stack arguments in dwords, EAX
+    /// results.
     Cdecl32,
-    /// The flat target's default: Open Watcom's register convention (calling.toml's `watcall32`).
+    /// The flat target's default: Open Watcom's register convention
+    /// (calling.toml's `watcall32`).
     Watcall32,
-    /// Open Watcom's 16-bit register convention (calling.toml's `watcall16`): `-mabi=watcom` on the real-mode target.
+    /// Open Watcom's 16-bit register convention (calling.toml's `watcall16`):
+    /// `-mabi=watcom` on the real-mode target.
     Watcall16,
-    /// gcc-ia16's convention (calling.toml's `ia16`): `-mabi=ia16` on the real-mode target.
+    /// gcc-ia16's convention (calling.toml's `ia16`): `-mabi=ia16` on the
+    /// real-mode target.
     Ia16,
-    /// gcc's `-mregparm=3` by the size of the argument (calling.toml's `regparm3`): the real-mode target's default.
+    /// gcc's `-mregparm=3` by the size of the argument (calling.toml's
+    /// `regparm3`): the real-mode target's default.
     Regparm3,
-    /// The i386 System V ABI, gcc's on Linux (calling.toml's `sysv32`): the stack convention of `-mabi=sysv`.
+    /// The i386 System V ABI, gcc's on Linux (calling.toml's `sysv32`): the
+    /// stack convention of `-mabi=sysv`.
     Sysv32,
     /// Arguments pushed first to last; the callee removes them.
     Pascal16,
@@ -300,7 +310,8 @@ impl Adapter {
 }
 
 impl Abi {
-    /// `"c"`, the convention of C's own functions, is the target's native one: what an unmarked C function has.
+    /// `"c"`, the convention of C's own functions, is the target's native one:
+    /// what an unmarked C function has.
     pub fn resolved(
         self,
         native: Self,
@@ -362,7 +373,8 @@ impl Abi {
         )
     }
 
-    /// The `cc` of the description's convention this is, where it is not the C one: what HIR names it by.
+    /// The `cc` of the description's convention this is, where it is not the C
+    /// one: what HIR names it by.
     pub fn convention(self) -> Option<&'static str> {
         match self {
             Self::Watcall32 | Self::Watcall16 => Some("watcall"),
@@ -408,7 +420,8 @@ pub struct Extern {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Export {
     pub abi: Option<Abi>,
-    /// The object symbol `name=` gives; else its ABI's, or its own name where it has none.
+    /// The object symbol `name=` gives; else its ABI's, or its own name where
+    /// it has none.
     pub symbol: Option<String>,
 }
 
@@ -468,7 +481,8 @@ pub struct GenericParameter {
     pub bound: Option<TypeSpec>,
 }
 
-/// A tagged union. A variant's positional payload fields are named `_0`, `_1`, ...
+/// A tagged union. A variant's positional payload fields are named `_0`, `_1`,
+/// ...
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Enum {
     pub name: String,
@@ -645,7 +659,8 @@ pub enum Statement {
     Asm(Box<Asm>),
 }
 
-/// `asm(reg=value, out=(reg=target), clobbers=[reg]):` and its lines of assembly.
+/// `asm(reg=value, out=(reg=target), clobbers=[reg]):` and its lines of
+/// assembly.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Asm {
     pub inputs: Vec<(String, Expr, Span)>,
@@ -743,7 +758,8 @@ impl Pattern {
     }
 }
 
-/// One clause of a comprehension or generator expression; they nest left to right.
+/// One clause of a comprehension or generator expression; they nest left to
+/// right.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Clause {
     /// `for [case] pattern in [&[mut]] iterable`, or `for name in start..end`.
@@ -1017,7 +1033,8 @@ pub enum Expr {
         right: Box<Expr>,
         span: Span,
     },
-    /// `a < b < c`: `operations[i]` compares `operands[i]` with `operands[i + 1]`.
+    /// `a < b < c`: `operations[i]` compares `operands[i]` with `operands[i +
+    /// 1]`.
     Chain {
         operands: Vec<Expr>,
         operations: Vec<BinaryOp>,
@@ -1327,7 +1344,8 @@ impl Expr {
         }
     }
 
-    /// Calls `visit` on this expression and every one inside it, innermost first.
+    /// Calls `visit` on this expression and every one inside it, innermost
+    /// first.
     pub fn walk_mut<E>(
         &mut self,
         visit: &mut impl FnMut(&mut Expr) -> Result<(), E>,

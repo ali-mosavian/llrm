@@ -1,4 +1,5 @@
-//! tests/differential: each program run through its own compiler and a reference one.
+//! tests/differential: each program run through its own compiler and a
+//! reference one.
 
 use std::path::Path;
 use std::process::Command;

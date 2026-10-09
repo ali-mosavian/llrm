@@ -1,7 +1,8 @@
 //! Enter a loop proven to run at least once at its body, not at its test:
 //! llrm-core's `optimize/rotate.rs`, the port of `qbopt/optimize/rotate.py`,
 //! adapted to the rich MIR.
-//! LLVM: LoopRotate, entering at the body where the first test is proven to pass.
+//! LLVM: LoopRotate, entering at the body where the first test is proven to
+//! pass.
 //!
 //! BC writes `FOR` as `jmp test; body: ...; test: cmp; jle body`. Where the
 //! first test is proven to pass the entry goes straight to the body, and the
@@ -118,8 +119,9 @@ fn _test_only(
         ),
         _ => false,
     };
-    // A header phi reading it takes it round the back edge: it is the step of a counter, which must run before the
-    // trip it starts, not skip the first.
+    // A header phi reading it takes it round the back edge: it is the step of a
+    // counter, which must run before the trip it starts, not skip the
+    // first.
     computes
         && op.result.is_none_or(|value| {
             function.users(value).iter().all(|one| {

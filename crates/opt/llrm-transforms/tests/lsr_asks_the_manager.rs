@@ -1,5 +1,6 @@
-//! lsr looks at the loops of a function one after another, and a loop it leaves alone leaves the function as it was:
-//! what the manager holds of it (the registers) is asked of again only after a loop is changed.
+//! lsr looks at the loops of a function one after another, and a loop it leaves
+//! alone leaves the function as it was: what the manager holds of it (the
+//! registers) is asked of again only after a loop is changed.
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use llrm_mir::passes::{Observer, PassManager};
@@ -15,7 +16,8 @@ fn counting(
     }
 }
 
-/// `depth` loops one inside the other, counting and doing nothing lsr can change.
+/// `depth` loops one inside the other, counting and doing nothing lsr can
+/// change.
 fn nest(depth: usize) -> String {
     let mut text = String::from("define i32 @f(i32 %n) {\nb0:\n  br label %h0\n\n");
     for k in 0..depth {

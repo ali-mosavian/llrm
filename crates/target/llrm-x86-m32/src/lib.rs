@@ -234,8 +234,10 @@ mod tests {
 
     use super::*;
 
-    /// -Os on m32 priced in clocks: the description had no byte table, so `size_costs` was the clock costs and a
-    /// pass asked what a hoisted float costs in bytes was told 3, a load's clocks, not the 2 bytes of its release.
+    /// -Os on m32 priced in clocks: the description had no byte table, so
+    /// `size_costs` was the clock costs and a pass asked what a hoisted
+    /// float costs in bytes was told 3, a load's clocks, not the 2 bytes of its
+    /// release.
     #[test]
     fn test_m32_prices_code_size_in_bytes() {
         use llrm_mir::target::Machine;
@@ -291,8 +293,8 @@ mod tests {
         assert!(!machine.ports.is_empty());
     }
 
-    /// One address space of 32-bit pointers: `near` and `far` are space 0, an unmarked
-    /// dword pointer is near, and the pair kinds are none.
+    /// One address space of 32-bit pointers: `near` and `far` are space 0, an
+    /// unmarked dword pointer is near, and the pair kinds are none.
     #[test]
     fn test_m32_layout_is_one_32_bit_space() {
         let layout = M32.layout();
@@ -304,7 +306,8 @@ mod tests {
         );
     }
 
-    /// The register default comes first: the language's own functions use it, and `cdecl32` is named after it.
+    /// The register default comes first: the language's own functions use it,
+    /// and `cdecl32` is named after it.
     #[test]
     fn test_calling_toml_states_watcall32_at_the_top_of_its_table() {
         let one = CALLING.native();
@@ -317,8 +320,9 @@ mod tests {
         assert_eq!(CALLING.by_cc("cdecl").map(|one| one.name.as_str()), Some("cdecl32"));
     }
 
-    /// The aggregate return was marked provisional while the C ABI was open: it is Open Watcom's flat ABI
-    /// with this one stated difference, and the description says so.
+    /// The aggregate return was marked provisional while the C ABI was open: it
+    /// is Open Watcom's flat ABI with this one stated difference, and the
+    /// description says so.
     #[test]
     fn test_the_c_abi_is_open_watcoms_with_one_stated_difference() {
         let text = include_str!("machines/calling.toml");
@@ -330,8 +334,9 @@ mod tests {
         );
     }
 
-    /// watcall32 (calling.toml): EBP and ESP frame, every register but EAX kept by a callee that is not given one in an
-    /// argument, first stack argument at [ebp+8]; cdecl32 keeps EBX/ESI/EDI.
+    /// watcall32 (calling.toml): EBP and ESP frame, every register but EAX kept
+    /// by a callee that is not given one in an argument, first stack
+    /// argument at [ebp+8]; cdecl32 keeps EBX/ESI/EDI.
     #[test]
     fn test_m32_answers_watcall32() {
         let frame = M32.frame_registers();
@@ -351,9 +356,10 @@ mod tests {
         );
     }
 
-    /// Every convention that decorates a symbol for OMF says how for COFF: Open Watcom's own
-    /// COFF objects (wcc386 -eoc) name `_c` for cdecl and `w_` for its register convention, as
-    /// its OMF ones do. A convention with no `coff` entry leaves its COFF symbols undecorated.
+    /// Every convention that decorates a symbol for OMF says how for COFF: Open
+    /// Watcom's own COFF objects (wcc386 -eoc) name `_c` for cdecl and `w_`
+    /// for its register convention, as its OMF ones do. A convention with
+    /// no `coff` entry leaves its COFF symbols undecorated.
     #[test]
     fn a_convention_that_decorates_for_omf_decorates_the_same_for_coff() {
         let names = CALLING.names();
@@ -364,9 +370,11 @@ mod tests {
         }
     }
 
-    /// The debug numbers of the file: the i386 psABI's DWARF registers (eax 0 .. edi 7, st0 at 11)
-    /// and CodeView's (ebp 22, ax 9), checked against llvm's CodeViewRegisters.def. A view at lane 0
-    /// is read from its root's low bytes, so it has the root's DWARF number; one at lane 8 has none.
+    /// The debug numbers of the file: the i386 psABI's DWARF registers (eax 0
+    /// .. edi 7, st0 at 11) and CodeView's (ebp 22, ax 9), checked against
+    /// llvm's CodeViewRegisters.def. A view at lane 0 is read from its
+    /// root's low bytes, so it has the root's DWARF number; one at lane 8 has
+    /// none.
     #[test]
     fn the_register_file_numbers_each_debug_format() {
         let file = &*REGISTERS;

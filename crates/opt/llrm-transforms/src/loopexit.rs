@@ -9,13 +9,14 @@
 //! controlling recurrence must be proven not to wrap.
 //!
 //! What changed with the IR:
-//! - A deleted loop's header computes its phis' exit values, placed by `counting::Seeds`, and branches to the exit; the
-//!   latch goes as unreachable. The old header kept its cleared operations as byte owners.
-//! - A constant exit value is an operand where the old one was a copy placed in the exit block, and an exit block
-//!   always has a terminator.
+//! - A deleted loop's header computes its phis' exit values, placed by
+//!   `counting::Seeds`, and branches to the exit; the latch goes as
+//!   unreachable. The old header kept its cleared operations as byte owners.
+//! - A constant exit value is an operand where the old one was a copy placed in
+//!   the exit block, and an exit block always has a terminator.
 //! - The preheader and exit are the counted proof's.
-//! - `_disposable`'s kinds are `add`, `sub`, `icmp` and `br`: `Copy` and `Nothing` have no instruction, `Increment` and
-//!   `Decrement` are `add`s.
+//! - `_disposable`'s kinds are `add`, `sub`, `icmp` and `br`: `Copy` and
+//!   `Nothing` have no instruction, `Increment` and `Decrement` are `add`s.
 //! - `_widened_counters` reads a `sext`; the old `SignExtend` it was.
 //!
 //! llrm-mir's `loopdeletion` deletes a loop of any shape whose exit values
@@ -94,8 +95,9 @@ pub fn evaluated(
     evaluated_with(context, layout, function, outer, &mut Standing::underived())
 }
 
-/// `evaluated`, what is known of the body without memory given as `standing` says: the manager's for the body as
-/// the caller has it, derived again after each loop is changed.
+/// `evaluated`, what is known of the body without memory given as `standing`
+/// says: the manager's for the body as the caller has it, derived again after
+/// each loop is changed.
 pub fn evaluated_with(
     context: &mut Context,
     layout: &DataLayout,
@@ -247,7 +249,8 @@ fn _exit_terms(
     headers.extend(widened.keys().copied());
     let mut counters = counters.clone();
     counters.extend(widened);
-    // Each value affine in a counter is `start + step * trip`, summed over the trips.
+    // Each value affine in a counter is `start + step * trip`, summed over the
+    // trips.
     let recurrences = induction::recurrences(unit, loop_, &counters)
         .values
         .into_iter()
@@ -317,7 +320,8 @@ fn _exit_terms(
                     for (sum, times) in sums {
                         terms.push((AffineOperand::constant(sum.constant.clone(), width), times.clone()));
                         for (product, factor) in &sum.terms {
-                            // A term is one value: a product of unknowns is not an operand.
+                            // A term is one value: a product of unknowns is not
+                            // an operand.
                             let Some(term) = product.single() else {
                                 complete = false;
                                 break;

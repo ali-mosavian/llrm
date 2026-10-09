@@ -148,7 +148,8 @@ fn surveyed(compiler: &Compiler) -> Survey {
             let (mut touched, mut freed) = (BTreeSet::new(), BTreeSet::new());
             let mut subscripts: BTreeMap<String, BTreeSet<Identity>> = BTreeMap::new();
             for (position, one) in block.instructions.iter().enumerate() {
-                // The descriptor pointer this instruction may read as a member's.
+                // The descriptor pointer this instruction may read as a
+                // member's.
                 let allowed = match &one.tag {
                     Some(Tag::DescriptorField { descriptor, field }) if one.op == "load" && *field != Slot::Data => {
                         Some(*descriptor)
@@ -222,8 +223,9 @@ fn surveyed(compiler: &Compiler) -> Survey {
                     }
                     _ => None,
                 };
-                // The frame's entry zeroing (`zero_locals`) names every local aggregate, a
-                // descriptor included, and reads nothing.
+                // The frame's entry zeroing (`zero_locals`) names every local
+                // aggregate, a descriptor included, and reads
+                // nothing.
                 if one.op == "store"
                     && one.tag.is_none()
                     && matches!(
@@ -478,7 +480,8 @@ fn merged(
     for index in 0..compiler.functions.len() {
         let pointers = shapes::pointers(&compiler.functions[index]);
         let member_of = |value: &u32| pointers.get(value).filter(|one| offsets.contains_key(one)).copied();
-        // Every member's descriptor pointer names the first member's descriptor.
+        // Every member's descriptor pointer names the first member's
+        // descriptor.
         let function = &mut compiler.functions[index];
         let identities: BTreeMap<u32, Identity> =
             function.places.iter().map(|place| (place.id, shapes::identity(function, place))).collect();

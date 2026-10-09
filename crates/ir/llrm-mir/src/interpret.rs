@@ -62,8 +62,8 @@ pub fn run(
 /// where a `noalias` parameter's memory is also reached some other way and
 /// one of the accesses writes, where a `readonly` parameter's memory is
 /// written through it, where a `nonnull` parameter is null, and where a value
-/// is outside a `range` stated of a parameter, the result or an instruction. The oracle a
-/// stated fact is tested against.
+/// is outside a `range` stated of a parameter, the result or an instruction.
+/// The oracle a stated fact is tested against.
 /// Only accesses the function makes itself, through a pointer it can trace
 /// to a parameter, a slot or a global (also through a stack slot written
 /// once), are compared.
@@ -622,8 +622,9 @@ impl<'m> Machine<'m> {
         Ok(())
     }
 
-    /// Traps where the checked run finds `value` outside a `range(lower, upper)` of `attrs`:
-    /// half-open and modulo the width, as LLVM reads it; equal bounds say nothing.
+    /// Traps where the checked run finds `value` outside a `range(lower,
+    /// upper)` of `attrs`: half-open and modulo the width, as LLVM reads
+    /// it; equal bounds say nothing.
     fn within(
         value: &Val,
         attrs: &[Attribute],
@@ -673,7 +674,8 @@ impl<'m> Machine<'m> {
                 },
                 _ => None,
             };
-            // A list of pairs: the value is outside the promise only if outside every one.
+            // A list of pairs: the value is outside the promise only if outside
+            // every one.
             let pairs: Vec<(u128, u128)> =
                 (0..operands.len() / 2).filter_map(|one| Some((bound(2 * one)?, bound(2 * one + 1)?))).collect();
             if !pairs.is_empty() && pairs.iter().all(|&(lower, upper)| Self::outside(*bits, *width, lower, upper)) {

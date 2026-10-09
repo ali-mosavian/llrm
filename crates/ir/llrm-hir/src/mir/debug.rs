@@ -1,7 +1,8 @@
 //! `-g`: HIR's debug information as MIR's, through `llrm_mir::debuginfo`.
 //! A variable in data is listed with the module; one in a frame is an
-//! a record that it lives where its frame object is, which [`Body::declare_variables`]
-//! says: `llvm.dbg.declare`, as a [`DebugRecord`](llrm_mir::DebugRecord), no instruction.
+//! a record that it lives where its frame object is, which
+//! [`Body::declare_variables`] says: `llvm.dbg.declare`, as a
+//! [`DebugRecord`](llrm_mir::DebugRecord), no instruction.
 
 use llrm_mir::debuginfo as di;
 use llrm_mir::{GlobalId, MetadataId, Module};
@@ -26,7 +27,8 @@ impl Types<'_> {
             return Ok(made);
         }
         let one = *self.of.get(&id).ok_or_else(|| format!("no debug type {id}"))?;
-        // An aggregate may be reached from one of its own members: its node is made first, set after.
+        // An aggregate may be reached from one of its own members: its node is
+        // made first, set after.
         let reserved = matches!(one.kind, di::Kind::Struct | di::Kind::Union).then(|| di::reserve_type(module));
         if let Some(reserved) = reserved {
             self.made.insert(id, reserved);
@@ -180,7 +182,8 @@ pub(super) fn emitted<'h>(
     Ok(variables)
 }
 
-/// The number each frame variable is named by while the code is lowered, before its node is made.
+/// The number each frame variable is named by while the code is lowered, before
+/// its node is made.
 pub(super) fn provisional(hir: &model::Module) -> HashMap<(i64, i64), MetadataId> {
     let mut chosen = HashMap::default();
     let Some(debug) = &hir.debug else { return chosen };

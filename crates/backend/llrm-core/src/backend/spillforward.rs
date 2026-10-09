@@ -20,8 +20,8 @@ use crate::support::hash::IndexMap;
 
 /// Python's `frozenset[tuple[ir.Reg, ir.Mem]]`.  Only membership, overlap and
 /// equality are read; which of two equal cells a meet keeps reaches nothing.
-/// Each fact says whether the register is what a store wrote the slot from: a register a reload filled may be a dead
-/// one, which a read of it would keep.
+/// Each fact says whether the register is what a store wrote the slot from: a
+/// register a reload filled may be a dead one, which a read of it would keep.
 pub type Facts = crate::support::hash::HashMap<(Reg, Mem), bool>;
 
 fn _plain(one: &Insn) -> bool {
@@ -62,9 +62,10 @@ fn _held(
         && what.sources.is_empty()
         && what.target.is_some()
     {
-        // Its own effects cannot be read -- `_register_effects` answers only for
-        // instructions that fall through. It writes no register and no memory,
-        // and a block ending in one is otherwise the end of every fact.
+        // Its own effects cannot be read -- `_register_effects` answers only
+        // for instructions that fall through. It writes no register and
+        // no memory, and a block ending in one is otherwise the end of
+        // every fact.
         return (facts, false, None);
     }
     let Some(effects) = _register_effects(bits, one, false, false) else {
@@ -116,7 +117,8 @@ fn _held(
                     || one.symbol == Some(true));
                 return (facts, drop, None);
             }
-            // Another register of the width holds it: the reload is a copy of that register.
+            // Another register of the width holds it: the reload is a copy of
+            // that register.
             let held_in = facts
                 .iter()
                 .filter(|((other, held), stored)| {
@@ -136,7 +138,8 @@ fn _held(
         }
     }
 
-    // An ALU or compare operand read from a slot a register holds is that register.
+    // An ALU or compare operand read from a slot a register holds is that
+    // register.
     let held_source = (|| {
         let name = what.name.as_deref()?;
         if !matches!(
@@ -269,7 +272,8 @@ pub fn forwarded(body: &LirBody) -> LirBody {
                 if redundant.contains(&id(one)) {
                     lir::anchor(Arc::clone(one))
                 } else if let Some(from) = copies.get(&id(one)) {
-                    // A read of a slot a register holds is a read of that register: `mov r, [slot]` is `mov r, from`.
+                    // A read of a slot a register holds is a read of that
+                    // register: `mov r, [slot]` is `mov r, from`.
                     let mut what = one.what.clone().expect("a reload is an instruction");
                     what.sources[from.0] = Loc::Reg(from.1);
                     Arc::new(Insn { what: Some(what), spill_reload: false, ..(**one).clone() })

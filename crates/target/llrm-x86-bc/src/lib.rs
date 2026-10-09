@@ -26,7 +26,8 @@ use std::collections::BTreeMap;
 
 pub use llrm_hir::mir::RUNTIME;
 
-/// The selector-alone address space of `spaces`: BC's objects are real mode's, which has one.
+/// The selector-alone address space of `spaces`: BC's objects are real mode's,
+/// which has one.
 pub fn segment(spaces: &llrm_mir::spaces::Spaces) -> u32 {
     spaces.segment.expect("a BC object's target has selectors")
 }

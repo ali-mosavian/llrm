@@ -1,4 +1,5 @@
-//! A far pointer parameter every call fills from DGROUP is a near one; each case's text is the pass's input.
+//! A far pointer parameter every call fills from DGROUP is a near one; each
+//! case's text is the pass's input.
 
 use llrm_mir::datalayout::DataLayout;
 
@@ -35,8 +36,9 @@ out:
 }
 ";
 
-/// Nib's `total(table, i)` pushed the segment and offset of a global array at every call and read
-/// them back with `les`: DGROUP's selector is no news to anyone.
+/// Nib's `total(table, i)` pushed the segment and offset of a global array at
+/// every call and read them back with `les`: DGROUP's selector is no news to
+/// anyone.
 #[test]
 fn a_far_parameter_every_call_fills_from_a_global_is_near() {
     let after = run(&format!(
@@ -53,7 +55,8 @@ b0:
     assert!(!after.contains("call i16 @sum(ptr addrspace(1)"), "{after}");
 }
 
-/// A stack object's selector is SS, which no DGROUP pointer says: the parameter is the stack's.
+/// A stack object's selector is SS, which no DGROUP pointer says: the parameter
+/// is the stack's.
 #[test]
 fn a_far_parameter_every_call_fills_from_the_stack_is_a_stack_pointer() {
     let after = run(&format!(
@@ -121,8 +124,9 @@ b0:
     assert!(after.contains("@sum(ptr addrspace(1) %a"), "{after}");
 }
 
-/// The stack's space was 5 in the pass: a target that numbers it 6 got a stack object's parameter
-/// narrowed to the data space's near pointer, read through DS.
+/// The stack's space was 5 in the pass: a target that numbers it 6 got a stack
+/// object's parameter narrowed to the data space's near pointer, read through
+/// DS.
 #[test]
 fn a_target_names_the_space_of_the_stack_a_parameter_narrows_to() {
     let spaces = llrm_mir::spaces::Spaces { stack: 6, ..llrm_x86_m16::spaces() };

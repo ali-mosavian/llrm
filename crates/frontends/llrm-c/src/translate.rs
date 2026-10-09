@@ -28,7 +28,8 @@ fn refuse<T>(what: impl Into<String>) -> R<T> {
     Err(Unsupported(what.into()))
 }
 
-/// `data` without the extern objects no place of `functions`, and no data, names.
+/// `data` without the extern objects no place of `functions`, and no data,
+/// names.
 fn unreferenced_externs_dropped(
     data: Vec<h::DataObject>,
     functions: &[h::Function],
@@ -95,7 +96,8 @@ pub fn program(
     let valueless: HashSet<i64> = unit
         .procs
         .iter()
-        // `main` is the exception: reaching its closing brace returns 0 (C99 5.1.2.2.3), a value the host reads.
+        // `main` is the exception: reaching its closing brace returns 0 (C99
+        // 5.1.2.2.3), a value the host reads.
         .filter(|proc| {
             proc.body.iter().filter(|one| one.call == "CGReturn").all(|one| one.args[0] == "n0")
                 && !answered_by_inline_code(unit, proc)
@@ -139,9 +141,10 @@ pub fn program(
             }
         }
     }
-    // An extern the code never names is asked of no linker: the front end lists the ones `-g` describes (every extern a
-    // header declares), and a program built with `-g` would otherwise differ from one built without it by the
-    // symbols it asks for.
+    // An extern the code never names is asked of no linker: the front end lists
+    // the ones `-g` describes (every extern a header declares), and a
+    // program built with `-g` would otherwise differ from one built without it
+    // by the symbols it asks for.
     let data = unreferenced_externs_dropped(data.clone(), &functions);
     let (types, alias_classes) = types.finished();
     let module = h::Module {
@@ -152,7 +155,8 @@ pub fn program(
         facts: facts.finish(),
         ..h::Module::new(1, name, types, functions)
     };
-    // A call keeps what its target's C convention does not clobber; the compiler's constants go in CONST.
+    // A call keeps what its target's C convention does not clobber; the
+    // compiler's constants go in CONST.
     let contract = crate::raise_hir::contract(convention, String::new(), true, 0);
     let preserved = llrm_core::abi::runtime::preserves(&contract);
     Ok(h::Program {
@@ -238,12 +242,15 @@ fn number(text: &str) -> R<i64> {
 /// Each data segment's labelled objects, as the stream lays them down.
 fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
     let mut out: Vec<Object> = Vec::new();
-    // A flat unit's initializer of a local aggregate is laid down under `_TEXT` (the segment current when the front end
-    // names it): data in a code segment is still data, so a segment with items is read whatever its attributes.
+    // A flat unit's initializer of a local aggregate is laid down under `_TEXT`
+    // (the segment current when the front end names it): data in a code
+    // segment is still data, so a segment with items is read whatever its
+    // attributes.
     for segment in unit.segments.values().filter(|one| one.attr & 0x1 == 0 || !one.items.is_empty()) {
         let first = out.len();
-        // Data the front end laid under a code segment goes to the first data segment of the unit: a name of code
-        // holds nothing the linker may put with the program's code.
+        // Data the front end laid under a code segment goes to the first data
+        // segment of the unit: a name of code holds nothing the linker
+        // may put with the program's code.
         let placed = if segment.attr & 0x1 == 0 {
             segment.name.clone()
         } else {
@@ -276,8 +283,8 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
                 align = Some(number(to)? as u64);
                 continue;
             }
-            // A huge object runs on into further segments, which hold no label: each full
-            // 64K of it, and the rest in the last.
+            // A huge object runs on into further segments, which hold no label:
+            // each full 64K of it, and the rest in the last.
             let found = if continues && out.len() == first { out.last_mut() } else { out[first..].last_mut() };
             let Some(object) = found else { return refuse(format!("{} data before any label", segment.name)) };
             let near = widths_for(unit.flat, "TY_NEAR_POINTER").unwrap_or(2) as usize;
@@ -296,7 +303,8 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
                     let width = widths_for(unit.flat, type_).unwrap_or(2) as usize;
                     object.bytes.extend(&number(value)?.to_le_bytes()[..width]);
                 }
-                // A 64-bit datum: its eight bytes, whatever the sign the front end spells the value in.
+                // A 64-bit datum: its eight bytes, whatever the sign the front
+                // end spells the value in.
                 ("DGInteger64", [value, _]) => {
                     let value =
                         value.trim().parse::<i128>().map_err(|_| Unsupported(format!("not a number: {value}")))?;
@@ -518,8 +526,8 @@ impl<'u> Types<'u> {
     ) -> R<i64> {
         let type_ = self.unit.canonical_type(type_);
         let big = |flag| if self.unit.target & flag != 0 { 4 } else { 2 };
-        // A far code pointer is a far call; a far or huge data pointer is near where the target
-        // has one address space, with a warning.
+        // A far code pointer is a far call; a far or huge data pointer is near
+        // where the target has one address space, with a warning.
         if self.flat && type_ == "TY_LONG_CODE_PTR" {
             return refuse(format!("{type_} in flat code"));
         }
@@ -533,7 +541,8 @@ impl<'u> Types<'u> {
             {
                 Shape::Pointer(4)
             }
-            // An unmarked pointer is the target's near one, whatever model the front end was told.
+            // An unmarked pointer is the target's near one, whatever model the
+            // front end was told.
             "TY_POINTER" => Shape::Pointer(2),
             "TY_CODE_PTR" => Shape::Pointer(big(hir::BIG_CODE)),
             "TY_NEAR_POINTER" | "TY_NEAR_CODE_PTR" => Shape::Pointer(2),
@@ -636,11 +645,14 @@ struct Body<'a, 't> {
     inlined: Option<i64>,
     /// The far pointer to where a struct result goes, where it is passed one.
     destination: Option<i64>,
-    /// The convention the procedure or call is under, where it is not C's stack one.
+    /// The convention the procedure or call is under, where it is not C's stack
+    /// one.
     convention: Option<String>,
-    /// The parameters (by value) that are a struct's words, which travel in memory.
+    /// The parameters (by value) that are a struct's words, which travel in
+    /// memory.
     memory: Vec<i64>,
-    /// The parameters that are a large aggregate's address (`byval`), and the place each is the bytes of.
+    /// The parameters that are a large aggregate's address (`byval`), and the
+    /// place each is the bytes of.
     byval: Vec<i64>,
     byval_homes: Vec<(i64, i64)>,
     /// `-g`: the unit's debug types, and the statement's source line.
@@ -696,7 +708,8 @@ fn cleanup(
     symbol: &hir::Symbol,
     unit: &hir::Unit,
 ) -> R<(StackCleanup, Option<String>)> {
-    // The entry is called by the runtime's start in the stack convention its description names.
+    // The entry is called by the runtime's start in the stack convention its
+    // description names.
     if symbol.is_entry(&unit.entry) && !symbol.in_order() {
         return Ok((StackCleanup::Caller, None));
     }
@@ -704,7 +717,8 @@ fn cleanup(
     match (symbol.register_parms, stack) {
         (false, hir::CALLER_POPS) => Ok((StackCleanup::Caller, unit.cdecl_cc.clone())),
         (false, hir::REVERSE_PARMS) => Ok((StackCleanup::Callee, None)),
-        // Open Watcom's own register list, where the target's calling.toml states that convention.
+        // Open Watcom's own register list, where the target's calling.toml
+        // states that convention.
         (true, 0) if symbol.register_list == unit.default_registers => {
             Ok((StackCleanup::Callee, unit.registers_cc.clone()))
         }
@@ -734,8 +748,10 @@ fn in_their_slots(
     let exposed = llrm_core::hir::escape::exposed_frame(function);
     // STDARG.H's __size: rounded up to an int, the two bytes of Borland's.
     let rounded = |sizes: &[i64]| sizes.iter().map(|size| (size + 1) & !1).sum::<i64>();
-    // A struct parameter whose address is taken lives in its words' slots, which are consecutive and rising (the
-    // variadic functions push right to left), as a scalar's does: the pointer then reaches the arguments around it.
+    // A struct parameter whose address is taken lives in its words' slots,
+    // which are consecutive and rising (the variadic functions push right
+    // to left), as a scalar's does: the pointer then reaches the arguments
+    // around it.
     for (home, words) in struct_homes.iter().filter(|(home, _)| !interrupt && exposed.contains(home)) {
         let at = function.parameters.iter().position(|&one| one == words[0]).expect("a parameter");
         let place = function.places.iter_mut().find(|one| one.id == *home).expect("a home");
@@ -805,8 +821,8 @@ fn distance(symbol: &hir::Symbol) -> CallDistance {
 /// How Borland C returns a struct of `size` bytes: an integer that wide in
 /// AL, AX or DX:AX, or, where none, through a far pointer to the caller's
 /// memory that it pushes after every argument and gets back in DX:AX.
-/// The address space of the pointer a struct result is written through under `convention`: far where it states a far
-/// one (Borland's), else near.
+/// The address space of the pointer a struct result is written through under
+/// `convention`: far where it states a far one (Borland's), else near.
 fn result_space(
     calling: &llrm_target::calling::Calling,
     convention: &Option<String>,
@@ -830,8 +846,9 @@ fn returned_as_integer(
     sizes.contains(&size).then_some(size)
 }
 
-/// Whether a struct of `size` bytes passed under `convention` is one scalar of that size: Open Watcom's register
-/// convention takes 1, 2 and 4 byte structs as it takes an integer, and sends every other to memory; a convention that
+/// Whether a struct of `size` bytes passed under `convention` is one scalar of
+/// that size: Open Watcom's register convention takes 1, 2 and 4 byte structs
+/// as it takes an integer, and sends every other to memory; a convention that
 /// says so (`aggregate_arguments_in_memory`) sends them all.
 fn passed_as_scalar(
     calling: &llrm_target::calling::Calling,
@@ -845,17 +862,22 @@ fn passed_as_scalar(
         && returned_as_integer(calling, convention, size).is_some()
 }
 
-/// An aggregate wider than this is passed by value as one `byval` pointer, the callee's own copy made by the caller; up
-/// to it, as the words it would occupy. clang's X86_32ABIInfo::classifyArgumentType (clang/lib/CodeGen/Targets/X86.cpp)
-/// expands an aggregate of at most 4 * 32 bits when every field is a 32- or 64-bit scalar
-/// (`canExpandIndirectArgument`), and passes any other `byval`. llrm keeps the words for every aggregate up to 128
-/// bits, fields as they are: the stack bytes are the same either way, the front end here has no field list (its debug
-/// types are not always there), and the words are what its listings and tests have been. docs/targets.md.
+/// An aggregate wider than this is passed by value as one `byval` pointer, the
+/// callee's own copy made by the caller; up to it, as the words it would
+/// occupy. clang's X86_32ABIInfo::classifyArgumentType
+/// (clang/lib/CodeGen/Targets/X86.cpp) expands an aggregate of at most 4 * 32
+/// bits when every field is a 32- or 64-bit scalar
+/// (`canExpandIndirectArgument`), and passes any other `byval`. llrm keeps the
+/// words for every aggregate up to 128 bits, fields as they are: the stack
+/// bytes are the same either way, the front end here has no field list (its
+/// debug types are not always there), and the words are what its listings and
+/// tests have been. docs/targets.md.
 const BYVAL_ABOVE: i64 = 16;
 
-/// Whether an aggregate of `size` bytes passed to `callee` under `convention` goes as a `byval` pointer. A variadic
-/// callee walks its arguments as consecutive words and an interrupt handler's are its saved registers: both keep the
-/// words.
+/// Whether an aggregate of `size` bytes passed to `callee` under `convention`
+/// goes as a `byval` pointer. A variadic callee walks its arguments as
+/// consecutive words and an interrupt handler's are its saved registers: both
+/// keep the words.
 fn passes_byval(
     convention: &Option<String>,
     size: i64,
@@ -1018,12 +1040,14 @@ impl<'a, 't> Body<'a, 't> {
         }
         let sizes: Vec<i64> = function.parameters.iter().map(|&one| body_widths[&one]).collect();
         in_their_slots(&mut function, &homes, &sizes, &struct_homes, (calling, profile))?;
-        // A `byval` parameter's place is the bytes its address points to: nothing is stored to it at entry.
+        // A `byval` parameter's place is the bytes its address points to:
+        // nothing is stored to it at entry.
         for (home, parameter) in byval_homes {
             let place = function.places.iter_mut().find(|one| one.id == home).expect("a home");
             (place.storage, place.symbol, place.offset) = (Storage::Parameter, parameter, 0);
         }
-        // Every address C computes through a pointer stays inside the object it points into.
+        // Every address C computes through a pointer stays inside the object it
+        // points into.
         for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
             for (index, operand) in instruction.operands.iter().enumerate() {
                 if matches!(operand, h::Operand::IndirectPlace(_)) {
@@ -1039,7 +1063,8 @@ impl<'a, 't> Body<'a, 't> {
             for &(symbol, handle) in &proc.debug {
                 let name = &unit.symbols[&symbol].name;
                 match (body.slots.get(&format!("y{symbol}")), shared.keys.get(&Key::Symbol(symbol))) {
-                    // A scalar parameter's home says which argument it is: the one stored into it.
+                    // A scalar parameter's home says which argument it is: the
+                    // one stored into it.
                     (Some(&place), _) if homes.iter().any(|&(home, _)| home == place) => {
                         let value = homes.iter().find(|&&(home, _)| home == place).map(|&(_, value)| value);
                         match value.and_then(|value| function.parameters.iter().position(|&one| one == value)) {
@@ -1300,7 +1325,8 @@ impl<'a, 't> Body<'a, 't> {
         self.position(block);
     }
 
-    /// A block for code after a terminator, which nothing reaches unless a label follows.
+    /// A block for code after a terminator, which nothing reaches unless a
+    /// label follows.
     fn open(&mut self) {
         if self.terminated(self.current) {
             let block = self.block();
@@ -1432,14 +1458,16 @@ impl<'a, 't> Body<'a, 't> {
                     stores.push((place, -1, parameter));
                     homes.push((place, parameter));
                     self.slots.insert(format!("y{symbol}"), place);
-                    // What the language states of a parameter: C99 6.7.3.1 for restrict.
+                    // What the language states of a parameter: C99 6.7.3.1 for
+                    // restrict.
                     stated.extend(
                         crate::ow_facts::of_param(self.unit, *symbol).into_iter().map(|fact| (parameter, fact)),
                     );
                 }
             }
         }
-        // A struct result goes where a far pointer pushed after every argument says.
+        // A struct result goes where a far pointer pushed after every argument
+        // says.
         if self
             .types
             .aggregate(&self.proc.type_)
@@ -1462,7 +1490,8 @@ impl<'a, 't> Body<'a, 't> {
             self.slots.insert(key.clone(), place);
         }
         for (place, at, parameter) in stores {
-            // A struct's word is stored by naming the place and its offset: no address is made, so none is handed out.
+            // A struct's word is stored by naming the place and its offset: no
+            // address is made, so none is handed out.
             let target = if at < 0 {
                 Operand::place_ref(place)
             } else {
@@ -1575,7 +1604,8 @@ impl<'a, 't> Body<'a, 't> {
             return Ok(());
         }
         if node == "n0" {
-            // A value-less return from a function that has one: nothing the caller may read.
+            // A value-less return from a function that has one: nothing the
+            // caller may read.
             self.terminate(TerminatorKind::Return, Vec::new(), Vec::new());
             return Ok(());
         }
@@ -1743,9 +1773,10 @@ impl<'a, 't> Body<'a, 't> {
         }
     }
 
-    /// The type `target op= source` computes in where it is not the target's: the integer promotions of the target for
-    /// a shift, the usual arithmetic conversions of both otherwise. None where the target's own type is it (or an
-    /// operand is no integer).
+    /// The type `target op= source` computes in where it is not the target's:
+    /// the integer promotions of the target for a shift, the usual
+    /// arithmetic conversions of both otherwise. None where the target's own
+    /// type is it (or an operand is no integer).
     fn compound_type(
         &self,
         cg_op: &str,
@@ -1864,7 +1895,8 @@ impl<'a, 't> Body<'a, 't> {
                 };
                 match self.types.shape(ty) {
                     Shape::Int(width, _) => Got::Value(self.constant(ty, Number::Int(wrapped(width)))),
-                    // A pointer constant is an integer as wide: a far one segment:offset.
+                    // A pointer constant is an integer as wide: a far one
+                    // segment:offset.
                     Shape::Pointer(_) | Shape::Huge => {
                         let width = self.types.get(ty).width;
                         let int = self.types.int(width, false);
@@ -1914,7 +1946,8 @@ impl<'a, 't> Body<'a, 't> {
                 self.eval(right)?
             }
             ("CGBinary", [cg_op, left, right, type_]) if library_routine(cg_op).is_some() => {
-                // The runtime takes them last first, as every call's parms are listed.
+                // The runtime takes them last first, as every call's parms are
+                // listed.
                 let second = self.value_as(right, "TY_DOUBLE")?;
                 let first = self.value_as(left, "TY_DOUBLE")?;
                 let result = self.routine(cg_op, &[first, second])?;
@@ -1963,9 +1996,11 @@ impl<'a, 't> Body<'a, 't> {
                     let by = self.scalar(got)?;
                     self.moved(old, by, &from, *cg_op == "O_MINUS")?
                 } else if let Some(common) = self.compound_type(cg_op, type_, source) {
-                    // `x op= y` is `x = (T)(x op y)` in the usual arithmetic conversions of both, not in T: `unsigned
-                    // char x /= short y` divided in 8 bits, the front end having typed the
-                    // operation by the target's.
+                    // `x op= y` is `x = (T)(x op y)` in the usual arithmetic
+                    // conversions of both, not in T: `unsigned
+                    // char x /= short y` divided in 8 bits, the front end
+                    // having typed the operation by the
+                    // target's.
                     let old = self.converted(old, type_, &common)?;
                     let by = self.value_as(source, &common)?;
                     let made = self.arithmetic(cg_op, old, by, &common)?;
@@ -1980,9 +2015,11 @@ impl<'a, 't> Body<'a, 't> {
             ("CGCall", [call]) => {
                 let call = &self.unit.calls[&hir::handle(call)];
                 match self.call(call)? {
-                    // A function whose body returns no value is a MIR void function; `int f(int i) { }` called as
-                    // `return f(i)` has the value the C standard leaves undefined, and the front
-                    // end types its call as an int either way.
+                    // A function whose body returns no value is a MIR void
+                    // function; `int f(int i) { }` called as
+                    // `return f(i)` has the value the C standard leaves
+                    // undefined, and the front end types its call as an int
+                    // either way.
                     Got::Returned(None)
                         if self.types.aggregate(&call.type_).is_none() && self.ty(&call.type_).is_ok() =>
                     {
@@ -2029,7 +2066,8 @@ impl<'a, 't> Body<'a, 't> {
             }
             ("CGEval", [inner]) | ("CGAttr", [inner, _]) | ("CGFact", [_, inner, _]) => self.eval(inner)?,
             ("CGVolatile", [inner]) => match self.eval(inner)? {
-                // A bit field of a volatile object is read through its unit, volatile: it has no address of its own.
+                // A bit field of a volatile object is read through its unit,
+                // volatile: it has no address of its own.
                 Got::Bits { pointer, start, width, unit, signed, .. } => {
                     Got::Bits { pointer, volatile: true, start, width, unit, signed }
                 }
@@ -2089,7 +2127,8 @@ impl<'a, 't> Body<'a, 't> {
         let selector = match self.segment_symbol(segment) {
             // DGROUP's: the near pointer made far, as any near pointer is.
             Some(symbol) if self.unit.grouped(symbol) => return Ok(self.op(Op::Convert, far, vec![value_ref(near)])),
-            // Another segment's selector: its symbol is an empty object placed in it.
+            // Another segment's selector: its symbol is an empty object placed
+            // in it.
             Some(symbol) => {
                 let (name, key) = (symbol.name.clone(), Key::Symbol(symbol.id));
                 let Some(&object) = self.shared.keys.get(&key) else {
@@ -2136,9 +2175,11 @@ impl<'a, 't> Body<'a, 't> {
         self.unit.symbols.get(&hir::handle(symbol)).filter(|one| one.name.starts_with('.') && !one.proc())
     }
 
-    /// Where a bit field's bytes are: its byte offset in the unit, its first bit within them, and how many bytes (a
-    /// unit of the declared type, from its start, where that is a register's width; a long long's is cut to the
-    /// bytes the field covers, as a packed struct's last field leaves nothing after them to read or write).
+    /// Where a bit field's bytes are: its byte offset in the unit, its first
+    /// bit within them, and how many bytes (a unit of the declared type,
+    /// from its start, where that is a register's width; a long long's is cut
+    /// to the bytes the field covers, as a packed struct's last field
+    /// leaves nothing after them to read or write).
     fn container(
         &self,
         start: i64,
@@ -2153,8 +2194,8 @@ impl<'a, 't> Body<'a, 't> {
         (first, bit, (bit + width + 7) / 8)
     }
 
-    /// The `bytes` at `first` of what `pointer` addresses, as a `unit`, the most significant bytes zero: in pieces of
-    /// 4, 2 and 1.
+    /// The `bytes` at `first` of what `pointer` addresses, as a `unit`, the
+    /// most significant bytes zero: in pieces of 4, 2 and 1.
     fn loaded(
         &mut self,
         pointer: i64,
@@ -2184,7 +2225,8 @@ impl<'a, 't> Body<'a, 't> {
         whole.expect("a field has a byte")
     }
 
-    /// The low `bytes` of `value` (a `unit`) stored at `first` of what `pointer` addresses.
+    /// The low `bytes` of `value` (a `unit`) stored at `first` of what
+    /// `pointer` addresses.
     fn stored(
         &mut self,
         pointer: i64,
@@ -2351,7 +2393,8 @@ impl<'a, 't> Body<'a, 't> {
         Ok(())
     }
 
-    /// `size` bytes from `from` to `into`, widest first, as the old raise copies.
+    /// `size` bytes from `from` to `into`, widest first, as the old raise
+    /// copies.
     fn copy(
         &mut self,
         into: i64,
@@ -2402,7 +2445,8 @@ impl<'a, 't> Body<'a, 't> {
         Ok(self.fitted(changed, ty))
     }
 
-    /// `converted`, but for the type it may leave in another class or signedness.
+    /// `converted`, but for the type it may leave in another class or
+    /// signedness.
     fn changed(
         &mut self,
         value: i64,
@@ -2421,7 +2465,8 @@ impl<'a, 't> Body<'a, 't> {
                     let value = self.as_signed(value, true);
                     self.op(Op::Convert, ty, vec![value_ref(value)])
                 } else if bits < 64 {
-                    // No unsigned load: its zero extension, one width up, is signed.
+                    // No unsigned load: its zero extension, one width up, is
+                    // signed.
                     let wide = self.types.int(if bits < 32 { 4 } else { 8 }, true);
                     let wide = self.resized(value, false, wide);
                     let wide = self.as_signed(wide, true);
@@ -2506,7 +2551,8 @@ impl<'a, 't> Body<'a, 't> {
         })
     }
 
-    /// Whether C promises a signed result fits: an int or wider, unless `-fwrapv` says it wraps.
+    /// Whether C promises a signed result fits: an int or wider, unless
+    /// `-fwrapv` says it wraps.
     fn wraps(
         &self,
         type_: &str,
@@ -2518,9 +2564,10 @@ impl<'a, 't> Body<'a, 't> {
     /// The index of a pointer add scaled to bytes, `index * size`: the
     /// compiler's multiply, not an `int` product, so C promises nothing signed
     /// of it (`a[i]` with `i` past 16383 of a far word array is valid where the
-    /// byte offset passes 32767). An unsigned index promises the offset fits the
-    /// 64K segment an object lives in: the product does not wrap unsigned.
-    /// Stated here, where the scale is made, from the index's C type.
+    /// byte offset passes 32767). An unsigned index promises the offset fits
+    /// the 64K segment an object lives in: the product does not wrap
+    /// unsigned. Stated here, where the scale is made, from the index's C
+    /// type.
     fn scaled(
         &mut self,
         node: &str,
@@ -2576,8 +2623,9 @@ impl<'a, 't> Body<'a, 't> {
                 self.scaled(right)?;
             }
             let huge = canonical == "TY_HUGE_POINTER";
-            // Watcom states a folded displacement past 16 bits as a TY_INTEGER constant
-            // whose value is whole: a huge pointer takes all of it.
+            // Watcom states a folded displacement past 16 bits as a TY_INTEGER
+            // constant whose value is whole: a huge pointer takes
+            // all of it.
             let whole = if huge { self.whole_constant(right) } else { None };
             let b_got = match whole {
                 Some(bytes) => {
@@ -2589,7 +2637,8 @@ impl<'a, 't> Body<'a, 't> {
             let (a, b) = (self.scalar(a_got)?, self.scalar(b_got)?);
             // Pointer arithmetic: the pointer moved, or two pointers' distance.
             match (self.space(a).is_some(), self.space(b).is_some()) {
-                // The pointer is made huge first: a far one moves inside its segment.
+                // The pointer is made huge first: a far one moves inside its
+                // segment.
                 (true, false) if huge => {
                     let a = self.converted(a, &self.type_of_node(left), type_)?;
                     let from = self.type_of_node(right);
@@ -2610,7 +2659,8 @@ impl<'a, 't> Body<'a, 't> {
                     let moved = self.moved(b, a, &from, false)?;
                     return self.converted(moved, &self.type_of_node(right), type_);
                 }
-                // Two huge pointers' distance: their bytes, not their packed bits.
+                // Two huge pointers' distance: their bytes, not their packed
+                // bits.
                 (true, true)
                     if cg_op == "O_MINUS"
                         && !pointers(&canonical)
@@ -2630,7 +2680,8 @@ impl<'a, 't> Body<'a, 't> {
                     return Ok(self.op(Op::Sub, ty, vec![value_ref(a), value_ref(b)]));
                 }
                 _ if pointers(&canonical) => {
-                    // Integer arithmetic typed as a pointer: a displacement from its first operand.
+                    // Integer arithmetic typed as a pointer: a displacement
+                    // from its first operand.
                     let a = self.converted(a, &self.type_of_node(left), type_)?;
                     let from = self.type_of_node(right);
                     return self.moved(a, b, &from, cg_op == "O_MINUS");
@@ -2890,7 +2941,8 @@ impl<'a, 't> Body<'a, 't> {
         };
         // Evaluated as listed, last first; passed first first.
         let mut arguments = Vec::new();
-        // Which of them are a struct's words, listed as the arguments are, and which a large aggregate's address.
+        // Which of them are a struct's words, listed as the arguments are, and
+        // which a large aggregate's address.
         let mut in_memory = Vec::new();
         let mut by_value = Vec::new();
         for (node, type_) in &call.parms {
@@ -2903,8 +2955,8 @@ impl<'a, 't> Body<'a, 't> {
             let Got::Aggregate(from, _) = self.eval(node)? else {
                 return self.refuse("a scalar passed as an aggregate");
             };
-            // The callee's copy is made at the call from this address, which must be a near one: a far aggregate goes
-            // as words.
+            // The callee's copy is made at the call from this address, which
+            // must be a near one: a far aggregate goes as words.
             if passes_byval(&convention, size, symbol)
                 && matches!(
                     self.shape(from),
@@ -2918,14 +2970,16 @@ impl<'a, 't> Body<'a, 't> {
             }
             let scalar = passed_as_scalar(self.shared.calling, &convention, size);
             let unit = if scalar { size } else { self.types.word() };
-            // Listed last first, as the arguments are; a last partial word widened.
+            // Listed last first, as the arguments are; a last partial word
+            // widened.
             let word = self.types.raw(unit);
             for at in struct_words(size, symbol.in_order(), unit).into_iter().rev() {
                 let left = size - at;
                 let value = if left >= unit {
                     self.op(Op::Load, word, vec![Operand::IndirectPlace(indirect(from, at, word, false))])
                 } else {
-                    // The last partial word: its bytes in pieces of 2 and 1, the first at the lowest address and the
+                    // The last partial word: its bytes in pieces of 2 and 1,
+                    // the first at the lowest address and the
                     // least significant.
                     let mut whole: Option<i64> = None;
                     let mut taken = 0;
@@ -2982,7 +3036,8 @@ impl<'a, 't> Body<'a, 't> {
                 near
             };
             with_destination(&mut arguments, destination, symbol.in_order());
-            // Where it goes in the list: first where arguments are listed first first.
+            // Where it goes in the list: first where arguments are listed first
+            // first.
             result_at = Some(if symbol.in_order() { arguments.len() as i64 - 1 } else { 0 });
             in_memory.insert(result_at.unwrap() as usize, false);
             by_value.insert(result_at.unwrap() as usize, 0);
@@ -3194,7 +3249,8 @@ mod tests {
 
     /// `__based` pointers were refused (the binary O_CONVERT of a segment and
     /// an offset). One in DGROUP reads its object; one in the code segment or
-    /// in a segment holding an object of the unit is that segment's far pointer.
+    /// in a segment holding an object of the unit is that segment's far
+    /// pointer.
     #[test]
     fn test_based_pointers_are_far_pointers_into_their_segment() {
         let module = raised("based.cgs");
@@ -3384,7 +3440,8 @@ mod tests {
         assert_eq!(call("_same", 0x2000_0010, 0x2000_0010), yes);
     }
 
-    /// C99 6.7.3.1: the three restrict parameters of `add` reach distinct objects.
+    /// C99 6.7.3.1: the three restrict parameters of `add` reach distinct
+    /// objects.
     #[test]
     fn test_restrict_parameters_are_noalias() {
         let module = raised("tests/test_restrict_reaches_mir_as_distinct_noalias_roots.cgs");
@@ -3431,8 +3488,8 @@ mod tests {
 
     /// `a[i]` with an unsigned `i` was scaled by `mul nsw i16 %i, 2`, poison
     /// for i >= 16384 though the access of a far word array is valid (#100).
-    /// C promises nothing signed of the multiply that scales an index to bytes; of
-    /// an unsigned index, that it does not wrap unsigned.
+    /// C promises nothing signed of the multiply that scales an index to bytes;
+    /// of an unsigned index, that it does not wrap unsigned.
     #[test]
     fn test_the_multiply_scaling_an_index_states_no_wrap() {
         let module = raised("unsignedindex.cgs");
@@ -3442,9 +3499,9 @@ mod tests {
         assert!(scales.iter().all(|one| !one.contains("nsw") && one.contains("mul nuw i16")), "{scales:#?}");
     }
 
-    /// The scaling multiply's flag follows the index's C type, however the index
-    /// arrives: an unsigned one through a conversion (`(unsigned)c`) or a sum
-    /// (`u + 1`) is `nuw`; a signed one carries none (#150).
+    /// The scaling multiply's flag follows the index's C type, however the
+    /// index arrives: an unsigned one through a conversion (`(unsigned)c`)
+    /// or a sum (`u + 1`) is `nuw`; a signed one carries none (#150).
     #[test]
     fn test_the_scale_of_an_index_follows_the_indexs_type() {
         let module = raised("scaledindex.cgs");

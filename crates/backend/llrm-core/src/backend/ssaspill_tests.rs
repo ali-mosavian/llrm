@@ -10,7 +10,8 @@ use crate::model::ir::Loc;
 use crate::model::lir::LirBody;
 use crate::support::hash::IndexMap;
 
-/// The widest a value or anything a phi joins it with is read or written, by operands alone.
+/// The widest a value or anything a phi joins it with is read or written, by
+/// operands alone.
 fn joined_width(
     body: &LirBody,
     value: u32,
@@ -74,10 +75,12 @@ fn test_a_value_only_phis_name_is_spilled_at_its_full_width() {
     }
 }
 
-/// A web of phis was closed by growing every value's set from its members' sets, round after round until none grew: a
-/// chain of phis the other way round from the blocks took a round for each link, each round over every set (56 M of a
-/// 16-deep nest's compile). The webs are the connected values, found once, and a value is as wide as anything in its
-/// web, whatever order the phis come in.
+/// A web of phis was closed by growing every value's set from its members'
+/// sets, round after round until none grew: a chain of phis the other way round
+/// from the blocks took a round for each link, each round over every set (56 M
+/// of a 16-deep nest's compile). The webs are the connected values, found once,
+/// and a value is as wide as anything in its web, whatever order the phis come
+/// in.
 #[test]
 fn test_a_chain_of_phis_is_one_web_whatever_order_its_links_come_in() {
     use crate::model::ir::{Held, Operation, Semantics};
@@ -92,8 +95,8 @@ fn test_a_chain_of_phis_is_one_web_whatever_order_its_links_come_in() {
         };
         std::sync::Arc::new(Insn::new(i64::from(value), None, Some(what), vec![value], vec![]))
     };
-    // Block k joins value 100 + links - k - 1 to 100 + links - k: the chain's links come from its far end towards its
-    // start.
+    // Block k joins value 100 + links - k - 1 to 100 + links - k: the chain's
+    // links come from its far end towards its start.
     let blocks: Vec<LirBlock> = (0..links)
         .map(|k| {
             let value = 100 + links - k;
@@ -113,8 +116,8 @@ fn test_a_chain_of_phis_is_one_web_whatever_order_its_links_come_in() {
 
 /// A phi whose arguments are all one value stayed a value of its own: SsaSpill
 /// held it apart from the value it renames, stored it to a slot on every
-/// iteration and spilled the original around it (deedlines PLASMABLOBS' 160-trip
-/// loop, +7.2% executed instructions).
+/// iteration and spilled the original around it (deedlines PLASMABLOBS'
+/// 160-trip loop, +7.2% executed instructions).
 #[test]
 fn test_spilling_leaves_no_phi_that_names_one_value() {
     let trivial = |body: &LirBody| {
@@ -130,10 +133,11 @@ fn test_spilling_leaves_no_phi_that_names_one_value() {
     assert_eq!(trivial(&spilled), 0);
 }
 
-/// Under pressure Belady evicted the value used furthest ahead, which was a loop
-/// counter or accumulator redefined every iteration: a store each trip, where an
-/// invariant already in memory costs only its reload (deedlines PLASMABLOBS spilled
-/// its loop counter in a 1M-trip body, +7% executed instructions).
+/// Under pressure Belady evicted the value used furthest ahead, which was a
+/// loop counter or accumulator redefined every iteration: a store each trip,
+/// where an invariant already in memory costs only its reload (deedlines
+/// PLASMABLOBS spilled its loop counter in a 1M-trip body, +7% executed
+/// instructions).
 #[test]
 fn test_a_value_defined_in_the_loop_is_not_stored_on_every_trip() {
     let (body, mut phases) = before_phase(Calls::C, "hotstore.ll", "_f", "486", "SsaSpill");
@@ -152,7 +156,8 @@ fn test_a_value_defined_in_the_loop_is_not_stored_on_every_trip() {
     assert_eq!(stores(true), 0, "a store per iteration");
 }
 
-/// `body` with an empty block on every edge, as splitkit and jump threading leave them.
+/// `body` with an empty block on every edge, as splitkit and jump threading
+/// leave them.
 fn with_empty_edge_blocks(body: &LirBody) -> LirBody {
     use crate::model::ir::{Operation, Semantics};
     use crate::model::lir::LirBlock;
@@ -208,7 +213,8 @@ fn with_empty_edge_blocks(body: &LirBody) -> LirBody {
     body.with_blocks(blocks)
 }
 
-/// Whether every reload of a frame slot follows a store of it on every path from the entry.
+/// Whether every reload of a frame slot follows a store of it on every path
+/// from the entry.
 fn reloads_follow_stores(body: &LirBody) -> Result<(), String> {
     use crate::model::ir::Loc;
     let key = |one: &crate::model::lir::Insn, reads: bool| -> Option<String> {
@@ -287,9 +293,9 @@ fn reloads_follow_stores(body: &LirBody) -> Result<(), String> {
     Ok(())
 }
 
-/// A reload or store the edge fix-up put in an empty block was dropped (the code
-/// only ran when the block had an instruction), so a reload could read a slot
-/// nothing wrote; an empty block before a join was a hard error.
+/// A reload or store the edge fix-up put in an empty block was dropped (the
+/// code only ran when the block had an instruction), so a reload could read a
+/// slot nothing wrote; an empty block before a join was a hard error.
 #[test]
 fn test_spill_code_survives_empty_blocks() {
     let mut reloads = 0;
@@ -315,9 +321,10 @@ fn test_spill_code_survives_empty_blocks() {
     assert!(reloads > 0, "premise: the bodies spill");
 }
 
-/// The block SsaSpill puts on a critical edge carried no edge odds, so the branch
-/// it hangs on read 50/50 and everything behind it changed frequency: a split
-/// loop-closing edge made the loop's trips fewer, and later spill weights followed.
+/// The block SsaSpill puts on a critical edge carried no edge odds, so the
+/// branch it hangs on read 50/50 and everything behind it changed frequency: a
+/// split loop-closing edge made the loop's trips fewer, and later spill weights
+/// followed.
 #[test]
 fn test_a_bridge_keeps_every_blocks_frequency() {
     let (mut body, _) = before_phase(Calls::C, "phiwidth.ll", "_f", "486", "SsaSpill");
@@ -331,8 +338,9 @@ fn test_a_bridge_keeps_every_blocks_frequency() {
         Prices::clocks(),
     )
     .expect("spills");
-    // phiwidth's loop-closing edge was bridged to reload a remade load; the add takes the load's cell now,
-    // and the edge needs no code. Where a body does bridge an edge, the bridge's odds are stated too.
+    // phiwidth's loop-closing edge was bridged to reload a remade load; the add
+    // takes the load's cell now, and the edge needs no code. Where a body
+    // does bridge an edge, the bridge's odds are stated too.
     if let Some(bridge) = first.blocks.iter().find(|block| !had.contains(&block.at)) {
         let from =
             first.blocks.iter().find(|block| block.succ.contains(&bridge.at)).expect("a bridge has a predecessor");
@@ -356,9 +364,10 @@ fn test_a_bridge_keeps_every_blocks_frequency() {
     }
 }
 
-/// A value read as its low word in a web whose slot is a dword: the fold took the
-/// slot's width, so `add ax, bx` became `add ax, dword [slot]`, reading two bytes
-/// too many and 32-bit-wide in a 16-bit operation. Greedy sizes it by the operand.
+/// A value read as its low word in a web whose slot is a dword: the fold took
+/// the slot's width, so `add ax, bx` became `add ax, dword [slot]`, reading two
+/// bytes too many and 32-bit-wide in a 16-bit operation. Greedy sizes it by the
+/// operand.
 #[test]
 fn test_a_folded_operand_is_as_wide_as_the_instruction_reads_it() {
     use crate::model::ir::{Held, Loc, Mem, Operation, Semantics};
@@ -455,9 +464,10 @@ fn test_the_phase_list_has_the_spiller_only_when_asked() {
     assert!(!names(false).contains(&"SsaSpill"));
 }
 
-/// Seven invariant loads, each read once per trip of a 272-trip loop with more values live than
-/// registers. Each was made again before its read (a load, then the add) and a store ran per trip:
-/// 1905 executed remakes and 279 stores for 7 and 1 once the add takes the load's cell itself.
+/// Seven invariant loads, each read once per trip of a 272-trip loop with more
+/// values live than registers. Each was made again before its read (a load,
+/// then the add) and a store ran per trip: 1905 executed remakes and 279 stores
+/// for 7 and 1 once the add takes the load's cell itself.
 #[test]
 fn test_an_invariant_load_is_read_in_place_not_remade_each_trip() {
     let (body, mut phases) = before_phase(Calls::C, "remadeload.ll", "_f", "486", "SsaSpill");
@@ -468,7 +478,8 @@ fn test_an_invariant_load_is_read_in_place_not_remade_each_trip() {
     assert!(done.stores < 272.0, "{} stores executed", done.stores);
 }
 
-/// The most values of one register file live at once in `body`, where `member` picks the file's values.
+/// The most values of one register file live at once in `body`, where `member`
+/// picks the file's values.
 fn most_live(
     body: &LirBody,
     member: impl Fn(u32) -> bool,
@@ -489,9 +500,11 @@ fn most_live(
     most
 }
 
-/// Six far pointers read in one loop, three selector registers to hold them (the built-in machine's es, fs, gs).
-/// The spiller left all six live at once for the allocator to juggle (`mov gs, [slot]` before most reads, and a
-/// selector kept in a general register); the pressure of each register file now fits its size.
+/// Six far pointers read in one loop, three selector registers to hold them
+/// (the built-in machine's es, fs, gs). The spiller left all six live at once
+/// for the allocator to juggle (`mov gs, [slot]` before most reads, and a
+/// selector kept in a general register); the pressure of each register file now
+/// fits its size.
 #[test]
 fn test_selectors_live_at_once_fit_the_segment_registers() {
     let (body, mut phases) = before_phase(Calls::C, "selectorloop.ll", "_f", "486", "SsaSpill");
@@ -512,8 +525,9 @@ fn test_selectors_live_at_once_fit_the_segment_registers() {
     assert!(live <= target::BUILT_IN.selectors.len(), "{live} selectors live at once");
 }
 
-/// QCport's `_draw_string` at -march=i486: a word copied from the low half of a dword load was made again as
-/// that dword load into a word (`mov dx, dword [bp+20]`), which no encoding has; llrm-c refused four modules.
+/// QCport's `_draw_string` at -march=i486: a word copied from the low half of a
+/// dword load was made again as that dword load into a word (`mov dx, dword
+/// [bp+20]`), which no encoding has; llrm-c refused four modules.
 #[test]
 fn test_a_word_copied_from_a_dword_is_not_made_again_as_the_dword() {
     let (body, mut phases) = before_phase(Calls::C, "lowword.ll", "_draw_string", "486", "SsaSpill");
@@ -531,8 +545,9 @@ fn test_a_word_copied_from_a_dword_is_not_made_again_as_the_dword() {
     assert!(wrong.is_empty(), "loads of another width than their register: {wrong:?}");
 }
 
-/// Six far pointers read in a 32-trip loop. A selector the back edge reloaded went into a block of its own with a
-/// jump, which ran each trip: 32 jumps executed. It is read where it is used instead (the same load, no jump).
+/// Six far pointers read in a 32-trip loop. A selector the back edge reloaded
+/// went into a block of its own with a jump, which ran each trip: 32 jumps
+/// executed. It is read where it is used instead (the same load, no jump).
 #[test]
 fn test_a_loop_s_back_edge_reload_does_not_cost_a_jump_per_trip() {
     let (body, _) = before_phase(Calls::C, "selectorloop.ll", "_f", "486", "SsaSpill");
@@ -548,8 +563,8 @@ fn test_a_loop_s_back_edge_reload_does_not_cost_a_jump_per_trip() {
     assert!(done.jumps < 8.0, "{} jumps executed", done.jumps);
 }
 
-/// Six far pointers live in a loop against three segment registers: the points that do not fit are found, and SsaSpill
-/// leaves none.
+/// Six far pointers live in a loop against three segment registers: the points
+/// that do not fit are found, and SsaSpill leaves none.
 #[test]
 fn test_ssaspill_leaves_no_point_the_classes_cannot_hold() {
     let (body, mut phases) = before_phase(Calls::C, "selectorloop.ll", "_f", "486", "SsaSpill");
@@ -566,8 +581,9 @@ fn test_ssaspill_leaves_no_point_the_classes_cannot_hold() {
     assert_eq!(found(&spilled), Vec::new());
 }
 
-/// Twelve phi copies on one edge were scored once each, before and after: PhiElimination turned SsaSpill's 39 crowded
-/// points into 87 on PLASMABLOBS with no new pressure. A copy group is one parallel point.
+/// Twelve phi copies on one edge were scored once each, before and after:
+/// PhiElimination turned SsaSpill's 39 crowded points into 87 on PLASMABLOBS
+/// with no new pressure. A copy group is one parallel point.
 #[test]
 fn test_a_copy_group_is_one_point_not_one_per_copy() {
     let (body, _) = before_phase(Calls::C, "phiwide.ll", "_f", "486", "SsaSpill");
@@ -595,9 +611,11 @@ fn test_a_copy_group_is_one_point_not_one_per_copy() {
     assert!(grouped < found(&apart), "{grouped} points with the copies grouped, {} apart", found(&apart));
 }
 
-/// Sixteen loop-carried values on six registers: every phi stayed a register phi and the loop's header held twelve
-/// values live (PLASMABLOBS: 39 points that fit no register, #441). A phi the registers cannot hold lives in its slot;
-/// what remains is the one register an edge's stores borrow to load an argument.
+/// Sixteen loop-carried values on six registers: every phi stayed a register
+/// phi and the loop's header held twelve values live (PLASMABLOBS: 39 points
+/// that fit no register, #441). A phi the registers cannot hold lives in its
+/// slot; what remains is the one register an edge's stores borrow to load an
+/// argument.
 #[test]
 fn test_phis_that_do_not_fit_live_in_memory() {
     let (body, mut phases) = before_phase(Calls::C, "phiwide.ll", "_f", "486", "SsaSpill");
@@ -623,9 +641,10 @@ fn test_phis_that_do_not_fit_live_in_memory() {
     assert!(most <= 1, "{most} values over the registers at the worst point");
 }
 
-/// A memory phi's argument that is dead where its web is defined shares the result's slot: it is stored where it is
-/// made and the back edge carries no store. Without sharing every argument was stored on its edge, a store for each
-/// of sixteen carried values each trip.
+/// A memory phi's argument that is dead where its web is defined shares the
+/// result's slot: it is stored where it is made and the back edge carries no
+/// store. Without sharing every argument was stored on its edge, a store for
+/// each of sixteen carried values each trip.
 #[test]
 fn test_memory_phi_arguments_share_their_results_slot() {
     let stores = |share: bool| {
@@ -643,8 +662,9 @@ fn test_memory_phi_arguments_share_their_results_slot() {
     assert!(shared < apart, "{shared} memory operands with shared slots, {apart} without");
 }
 
-/// TwoAddress leaves an empty instruction where it made a phi copy unnecessary; it split the edge's copy group, and
-/// the points between the copies counted again: SPHEREMAPLASMA read 61 after PhiElimination and 91 after TwoAddress
+/// TwoAddress leaves an empty instruction where it made a phi copy unnecessary;
+/// it split the edge's copy group, and the points between the copies counted
+/// again: SPHEREMAPLASMA read 61 after PhiElimination and 91 after TwoAddress
 /// with the same pressure.
 #[test]
 fn test_a_placeholder_between_a_groups_copies_does_not_end_the_group() {

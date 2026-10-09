@@ -75,7 +75,8 @@ impl FunctionCompiler<'_> {
         self.origins.insert(*value, origin);
     }
 
-    /// A fresh owned value, dropped at the end of its statement unless it moves.
+    /// A fresh owned value, dropped at the end of its statement unless it
+    /// moves.
     pub(super) fn temporary_owned(
         &mut self,
         operand: hir::Operand,
@@ -168,7 +169,8 @@ impl FunctionCompiler<'_> {
         self.aggregate_temporaries.clear();
     }
 
-    /// The same, on a path that leaves the statement early: the rest of it still owns them.
+    /// The same, on a path that leaves the statement early: the rest of it
+    /// still owns them.
     pub(super) fn drop_pending(&mut self) {
         for (operand, type_name) in self.temporaries.clone() {
             self.emit_drop(operand, type_name);
@@ -482,13 +484,15 @@ impl FunctionCompiler<'_> {
         Ok(())
     }
 
-    /// Stores of zero to each of `units`, (offset, type, count) runs of cells at `view`.
+    /// Stores of zero to each of `units`, (offset, type, count) runs of cells
+    /// at `view`.
     pub(super) fn zero_stores(
         &self,
         view: &StructView,
         units: Vec<(u32, TypeName, u32)>,
     ) -> Vec<Store> {
-        // An array's cells are a run even when one: its place is projected by element.
+        // An array's cells are a run even when one: its place is projected by
+        // element.
         let array = self.types.array_of(view.struct_id).is_some();
         units
             .into_iter()

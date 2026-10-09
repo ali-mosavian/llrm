@@ -20,8 +20,9 @@ pub fn call_clobbers(
     out
 }
 
-/// The selectors a call under `contract` may change though the contract does not name them. A contract is about the
-/// 8086 and names no FS or GS; one reaching user code, or written for the 386, runs code that may use them.
+/// The selectors a call under `contract` may change though the contract does
+/// not name them. A contract is about the 8086 and names no FS or GS; one
+/// reaching user code, or written for the 386, runs code that may use them.
 pub fn unnamed_selectors_clobbered(
     contract: &runtime::Contract,
     segments: &Segments,
@@ -52,8 +53,9 @@ fn _named_clobbers(
         .collect()
 }
 
-/// The registers a call under `contract` keeps only the 16-bit half of, less `whole`: those the callee's
-/// convention saves in full (`Target::callee_saved` names the same register to keep and to push).
+/// The registers a call under `contract` keeps only the 16-bit half of, less
+/// `whole`: those the callee's convention saves in full (`Target::callee_saved`
+/// names the same register to keep and to push).
 pub fn call_clobbered_high_keeping(
     contract: &runtime::Contract,
     segments: &Segments,

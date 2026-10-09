@@ -4,17 +4,21 @@
 //! `_constant_operands`). What is known is consts' answer.
 //!
 //! What changed with the IR:
-//! - An operation whose answer was known became a move of that number, and each reader's register operand became the
-//!   number. Here every use of the value is the constant, and Dead takes the definition. So a store's value, a call's
-//!   argument (`_constant_argument`), a fill's byte and count (`_constant_fill`) and an address's index
-//!   (`_constant_based`) need no case of their own, and a load from a known cell is a value consts knows.
-//! - Operand order is no machine's: an ordered operand is replaced like any other. A commutative operation still takes
-//!   its constant on the right.
-//! - An edge fold put a copy of each number in its parent; a phi here takes the constant, so the parent's terminator no
-//!   longer matters.
-//! - consts reads the module's globals through the outer proxy, and what each call writes from the manager's `Writes`.
-//! - The old Fold left floatfold out of a body with loops, whose x87 observation points belonged to floatloop; the rich
-//!   MIR observes no FP exception, so it folds every body.
+//! - An operation whose answer was known became a move of that number, and each
+//!   reader's register operand became the number. Here every use of the value
+//!   is the constant, and Dead takes the definition. So a store's value, a
+//!   call's argument (`_constant_argument`), a fill's byte and count
+//!   (`_constant_fill`) and an address's index (`_constant_based`) need no case
+//!   of their own, and a load from a known cell is a value consts knows.
+//! - Operand order is no machine's: an ordered operand is replaced like any
+//!   other. A commutative operation still takes its constant on the right.
+//! - An edge fold put a copy of each number in its parent; a phi here takes the
+//!   constant, so the parent's terminator no longer matters.
+//! - consts reads the module's globals through the outer proxy, and what each
+//!   call writes from the manager's `Writes`.
+//! - The old Fold left floatfold out of a body with loops, whose x87
+//!   observation points belonged to floatloop; the rich MIR observes no FP
+//!   exception, so it folds every body.
 //!
 //! Dropped, no rich MIR analogue: `_constant_update` (a read-modify-write of
 //! a cell); `_symbol_copies` and the symbol half of `_literal_of` (a
@@ -126,7 +130,8 @@ fn _numbers(
         let outer = std::rc::Rc::clone(analyses.outer());
         let unit = held.unit(context, layout, function, &outer);
         let edges = floatfacts::exit_cells(&unit, calls);
-        // With no edges the answer is the manager's, where it was of these writes.
+        // With no edges the answer is the manager's, where it was of these
+        // writes.
         let shared = (edges.is_empty() && *calls == manager::writes(context, layout, function, analyses))
             .then(|| analyses.get::<manager::ThroughMemory>(context, layout, function));
         let facts = match shared.as_deref() {

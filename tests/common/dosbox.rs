@@ -1,7 +1,9 @@
-//! DOSBox-X for the tests that drive DOS tools: a one-shot run of commands, and a session on the fork's debug
-//! socket (`DOSBOX_DEBUG_PORT`, a private port) that types keys and reads the screen. The socket stops the
-//! emulator at every INT 3, which debuggers use for their breakpoints, so a reader thread answers those with
-//! `continue`; replies come back in the order commands went out, so each command's owner is queued.
+//! DOSBox-X for the tests that drive DOS tools: a one-shot run of commands, and
+//! a session on the fork's debug socket (`DOSBOX_DEBUG_PORT`, a private port)
+//! that types keys and reads the screen. The socket stops the emulator at every
+//! INT 3, which debuggers use for their breakpoints, so a reader thread answers
+//! those with `continue`; replies come back in the order commands went out, so
+//! each command's owner is queued.
 
 #![allow(dead_code)]
 
@@ -19,13 +21,15 @@ pub fn binary() -> PathBuf {
     Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap().join("dosbox-x")
 }
 
-/// A test that cannot run says so on stderr, and fails where `require` names an environment variable that is set, so
-/// a gate that has the tools cannot pass by skipping.
+/// A test that cannot run says so on stderr, and fails where `require` names an
+/// environment variable that is set, so a gate that has the tools cannot pass
+/// by skipping.
 pub fn skipped(
     require: &str,
     reason: &str,
 ) {
-    // Written to the stderr itself, which the harness does not capture: seen when the test passes.
+    // Written to the stderr itself, which the harness does not capture: seen
+    // when the test passes.
     let _ = Write::write_all(&mut std::io::stderr(), format!("SKIPPED: {reason}\n").as_bytes());
     assert!(std::env::var_os(require).is_none(), "{require} is set, and: {reason}");
 }
@@ -49,7 +53,8 @@ fn conf(
     conf
 }
 
-/// Runs `commands` in DOS with `mounts` (the last is the working drive) and exits.
+/// Runs `commands` in DOS with `mounts` (the last is the working drive) and
+/// exits.
 pub fn run(
     mounts: &[(char, &Path)],
     path: &str,
@@ -72,7 +77,8 @@ pub struct Session {
 }
 
 impl Session {
-    /// DOS up with `mounts` (the last is the working drive) and the socket connected.
+    /// DOS up with `mounts` (the last is the working drive) and the socket
+    /// connected.
     pub fn start(
         mounts: &[(char, &Path)],
         path: &str,
@@ -119,8 +125,9 @@ impl Session {
         let this = Session { child, stream, owners, replies };
         this.command(&serde_json::json!({"cmd": "continue"}));
         std::thread::sleep(Duration::from_secs(1));
-        // The shell is up before anything is armed or run: a breakpoint on the next program's load, set while the shell
-        // is still starting, stops it at the shell's own load, and no command is taken after that.
+        // The shell is up before anything is armed or run: a breakpoint on the
+        // next program's load, set while the shell is still starting,
+        // stops it at the shell's own load, and no command is taken after that.
         let waiting = std::time::Instant::now();
         while this.command(&serde_json::json!({"cmd": "wait_for_shell", "timeoutMs": 5000}))["status"] == "error" {
             assert!(waiting.elapsed() < Duration::from_secs(120), "the shell did not come up");
@@ -146,8 +153,9 @@ impl Session {
         assert_ne!(answer["status"], "error", "the shell refused `{line}`: {answer}");
     }
 
-    /// Types `line` and Enter through the keyboard controller, which is how a debugger that hooks the keyboard
-    /// interrupt reads keys (the BIOS buffer `key` fills is not): letters, digits and space only.
+    /// Types `line` and Enter through the keyboard controller, which is how a
+    /// debugger that hooks the keyboard interrupt reads keys (the BIOS
+    /// buffer `key` fills is not): letters, digits and space only.
     pub fn type_line(
         &self,
         line: &str,
@@ -160,8 +168,9 @@ impl Session {
         self.command(&serde_json::json!({"cmd": "key_hw", "key": "enter"}));
     }
 
-    /// The text on the screen: the 80x25 characters of the active page of the colour text buffer. A debugger
-    /// that draws its own screen is not in the shell's text (`text_screen` reads that).
+    /// The text on the screen: the 80x25 characters of the active page of the
+    /// colour text buffer. A debugger that draws its own screen is not in
+    /// the shell's text (`text_screen` reads that).
     pub fn video_text(&self) -> Vec<String> {
         let page = self.command(&serde_json::json!({"cmd": "mem_read_linear", "addr": 0x462, "len": 1}))["data"]
             .as_str()

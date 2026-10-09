@@ -2,7 +2,8 @@
 //!
 //!   llrm-run [-m16|-m32] SOURCE.nib [ENTRY] [INTEGER...] [< INPUT]
 //!
-//! Standard input, when it is not a terminal, is what the program reads from its console.
+//! Standard input, when it is not a terminal, is what the program reads from
+//! its console.
 
 use std::io::{IsTerminal, Read};
 use std::process::ExitCode;

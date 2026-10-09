@@ -104,7 +104,8 @@ pub fn intervals(
         let mut state = entering[&block].clone();
         for &inst in function.block(block).instructions() {
             let at = positions[&inst];
-            // Live at a marker that starts it, though it enters the state after.
+            // Live at a marker that starts it, though it enters the state
+            // after.
             let started =
                 marker(inst).filter(|one| one.starts && tracked.contains_key(&one.object)).map(|one| one.object);
             for &object in state.iter().chain(started.iter()) {

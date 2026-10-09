@@ -45,7 +45,8 @@ impl Parsed {
         self.entered(limits, ENTRY)
     }
 
-    /// `admitted`, the loop entered `entries` 256ths of the times its function is.
+    /// `admitted`, the loop entered `entries` 256ths of the times its function
+    /// is.
     fn entered(
         &self,
         limits: &Limits,
@@ -131,7 +132,8 @@ fn over_max_completely_peeled_insns_is_refused() {
     assert!(summing(8, "%x", "").admitted(&Limits { max_unrolled_operations: 2, ..Limits::default() }));
 }
 
-/// A branch on `%x` no iteration decides, once or twice a trip, seventeen trips.
+/// A branch on `%x` no iteration decides, once or twice a trip, seventeen
+/// trips.
 fn branching(twice: bool) -> Parsed {
     let second = if twice { "%c2, label %b5, label %b6" } else { "true, label %b5, label %b6" };
     Parsed::new(&format!(
@@ -179,13 +181,15 @@ b8:
 
 #[test]
 fn past_max_peel_branches_undecided_branches_are_refused() {
-    // gcc's `max-peel-branches` is 32: seventeen trips of one branch are 17, of two 34.
+    // gcc's `max-peel-branches` is 32: seventeen trips of one branch are 17, of
+    // two 34.
     let unbounded = Limits { max_unroll_iterations: 0, ..Limits::default() };
     assert!(branching(false).admitted(&unbounded));
     assert!(!branching(true).admitted(&unbounded));
 }
 
-/// An outer loop of two trips around an inner one: copied only when that shrinks it.
+/// An outer loop of two trips around an inner one: copied only when that
+/// shrinks it.
 #[test]
 fn a_loop_holding_another_is_copied_only_when_it_shrinks() {
     let nested = Parsed::new(
@@ -231,9 +235,9 @@ fn the_count_is_the_one_asked_about() {
     assert!(!admitted(&unit, &parsed.outer(), &BigInt::from(17), &facts, &Limits::default(), Site::default()));
 }
 
-/// QCport's savegame.c peeled loops its function enters once in 256 calls, 1 KB each, for clocks
-/// nobody spends. A loop entered under one function entry in 20 is cold: a copy that grows is refused,
-/// one that does not is still taken.
+/// QCport's savegame.c peeled loops its function enters once in 256 calls, 1 KB
+/// each, for clocks nobody spends. A loop entered under one function entry in
+/// 20 is cold: a copy that grows is refused, one that does not is still taken.
 #[test]
 fn a_cold_loop_is_not_copied_where_the_code_grows() {
     let limits = Limits::default();
@@ -243,9 +247,11 @@ fn a_cold_loop_is_not_copied_where_the_code_grows() {
     assert!(summing(10, "0", "").entered(&limits, 1));
 }
 
-/// QCport's 16-trip clear and fill loops (console.c, mdl.c) were copied 16 times, +100 to +400 bytes
-/// each, when the limit was 16; it was 10 (LLVM's `-unroll-max-iteration-count-to-analyze`) until -O2 became gcc's,
-/// where no complete copy grows the code (`grows: false`) and the limit is gcc's `max-completely-peel-times`, 16.
+/// QCport's 16-trip clear and fill loops (console.c, mdl.c) were copied 16
+/// times, +100 to +400 bytes each, when the limit was 16; it was 10 (LLVM's
+/// `-unroll-max-iteration-count-to-analyze`) until -O2 became gcc's,
+/// where no complete copy grows the code (`grows: false`) and the limit is
+/// gcc's `max-completely-peel-times`, 16.
 #[test]
 fn a_loop_of_sixteen_trips_is_copied_only_where_it_does_not_grow() {
     let kept = Limits { grows: false, ..Limits::default() };

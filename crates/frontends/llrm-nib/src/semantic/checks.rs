@@ -1,9 +1,10 @@
 //! Runtime checks that invoke the panic handler: an index at or past its
 //! dimension, a slice past its sequence or reversed (section 13), a shift
-//! count at or past its operand's width, and a float outside the integer type it converts to (section 3). A constant
-//! index into a known dimension is checked here instead, and `unsafe` code, which vouches for its indices, is not
-//! checked, nor any index or slice under `--unchecked-bounds`; a check a loop's range already proves is the optimizer's
-//! to fold.
+//! count at or past its operand's width, and a float outside the integer type
+//! it converts to (section 3). A constant index into a known dimension is
+//! checked here instead, and `unsafe` code, which vouches for its indices, is
+//! not checked, nor any index or slice under `--unchecked-bounds`; a check a
+//! loop's range already proves is the optimizer's to fold.
 
 use llrm_core::abi::nib as rt;
 
@@ -12,7 +13,8 @@ use super::*;
 impl FunctionCompiler<'_> {
     /// Checks each of `indices` against the view `descriptor`'s dimensions.
     /// A view is within one segment, so a dimension of `element_width`-byte
-    /// elements is at most the segment's last offset / `element_width`: stated of its load.
+    /// elements is at most the segment's last offset / `element_width`: stated
+    /// of its load.
     pub(super) fn check_view_bounds(
         &mut self,
         descriptor: u32,
@@ -144,7 +146,8 @@ impl FunctionCompiler<'_> {
         Ok(())
     }
 
-    /// Continues where `condition` holds; elsewhere calls `panic`, which never returns.
+    /// Continues where `condition` holds; elsewhere calls `panic`, which never
+    /// returns.
     pub(super) fn panic_unless(
         &mut self,
         condition: hir::Operand,

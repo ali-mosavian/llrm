@@ -214,7 +214,8 @@ thread_local! {
     static SOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has solved a function's liveness, for a test that a caller asks the one it holds.
+/// How many times this thread has solved a function's liveness, for a test that
+/// a caller asks the one it holds.
 pub fn solves() -> usize {
     SOLVES.with(std::cell::Cell::get)
 }
@@ -322,7 +323,8 @@ mod tests {
     use super::*;
     use crate::testing::{block, function, parsed, value};
 
-    /// PARITYCONTROL's dead join-flag phis kept ADD/ADC live as word operations.
+    /// PARITYCONTROL's dead join-flag phis kept ADD/ADC live as word
+    /// operations.
     #[test]
     fn test_a_dead_phi_does_not_keep_its_edge_operand_live() {
         let module = parsed(

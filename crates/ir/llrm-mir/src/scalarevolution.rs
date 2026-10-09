@@ -157,7 +157,8 @@ impl Solver<'_> {
         let width = self.width(value)?;
         let instruction = self.function.instruction(inst);
         let operands = instruction.operands.clone();
-        // Either side of a binary operation: a recurrence of this loop, or invariant in it.
+        // Either side of a binary operation: a recurrence of this loop, or
+        // invariant in it.
         let side = |this: &mut Self, operand: Operand| -> Option<(Linear, Linear)> {
             if let Some(start) = this.invariant(operand, one, width) {
                 return Some((start, Linear::default()));

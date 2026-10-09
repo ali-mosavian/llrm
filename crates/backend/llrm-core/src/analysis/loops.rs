@@ -129,13 +129,16 @@ fn shaped<N: Node, T: Clone>(
     computed
 }
 
-/// The dominator tree over the sorted block addresses, with a preorder interval for each block: `a`
-/// dominates `b` where `b` is in `a`'s interval. Naming every block's dominators as bits is quadratic.
+/// The dominator tree over the sorted block addresses, with a preorder interval
+/// for each block: `a` dominates `b` where `b` is in `a`'s interval. Naming
+/// every block's dominators as bits is quadratic.
 pub struct Dominance {
     ats: Vec<i64>,
-    /// The immediate dominator's slot; the entry's own, and unreachable blocks', is `NONE`.
+    /// The immediate dominator's slot; the entry's own, and unreachable
+    /// blocks', is `NONE`.
     idom: Vec<u32>,
-    /// Preorder numbers over the dominator tree; `NONE` for a block the entry does not reach.
+    /// Preorder numbers over the dominator tree; `NONE` for a block the entry
+    /// does not reach.
     enter: Vec<u32>,
     /// The last preorder number inside the block's subtree.
     last: Vec<u32>,
@@ -207,7 +210,8 @@ pub fn dominance<N: Node>(
     )
 }
 
-/// Cooper, Harvey and Kennedy's iteration over reverse postorder, on the blocks the entry reaches.
+/// Cooper, Harvey and Kennedy's iteration over reverse postorder, on the blocks
+/// the entry reaches.
 fn _dominance<N: Node>(
     blocks: &[N],
     entry: Option<i64>,
@@ -220,7 +224,8 @@ fn _dominance<N: Node>(
     }
     let start = entry.unwrap_or_else(|| blocks[0].at());
     let Some(start) = found.slot(start) else { return found };
-    // Each address's successors, as slots; a later block of one address replaces an earlier one's.
+    // Each address's successors, as slots; a later block of one address
+    // replaces an earlier one's.
     let mut successors: Vec<Vec<u32>> = vec![Vec::new(); count];
     for block in blocks {
         let from = found.slot(block.at()).expect("a block address");

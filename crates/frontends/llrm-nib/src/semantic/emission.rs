@@ -3,7 +3,8 @@
 use super::*;
 
 impl<'a> FunctionCompiler<'a> {
-    /// A name no source can write and no other hidden name has: `$stem` and a number.
+    /// A name no source can write and no other hidden name has: `$stem` and a
+    /// number.
     pub(super) fn hidden(
         &mut self,
         stem: &str,
@@ -149,7 +150,8 @@ impl<'a> FunctionCompiler<'a> {
         self.array_place_at(descriptor_offset, name, type_id, element, shape, mutable)
     }
 
-    /// An array whose descriptor starts at `descriptor_offset`, its data right after.
+    /// An array whose descriptor starts at `descriptor_offset`, its data right
+    /// after.
     pub(super) fn array_place_at(
         &mut self,
         descriptor_offset: i32,
@@ -234,7 +236,8 @@ impl<'a> FunctionCompiler<'a> {
             type_id: CHAR,
             mutable: false,
             // The exported string address is the byte payload. Its flags, pad,
-            // length, and capacity occupy the three words immediately before it.
+            // length, and capacity occupy the three words immediately before
+            // it.
             offset: 3 * self.word_bytes() as i32,
             extent,
             storage: "module",

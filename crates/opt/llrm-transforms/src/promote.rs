@@ -10,22 +10,27 @@
 //! the outer proxy.
 //!
 //! What changed with the IR:
-//! - A cell is its exact leaf, or else its pointer decomposed (`Key::Ref`) over any root: the old `Addr` key, and
-//!   `_allocation_leaves`' grouping by affine root. A leaf of one start takes any stride.
-//! - One LLVM type per cell stands for the old width and float checks (`_float_cells`, `_stores_value`,
-//!   `_converts_integer`, `_forwards_float`): a store keeps its type's value.
-//! - A load becomes the stored operand itself, so `_restated` and `_order` have nothing to do; the phis are placed
-//!   here, as `ssa::constructed` was not ported.
-//! - `_canonical_leaf_types` types a leaf in both passes: the old `Sroa` rewrote the body the old `Promote` then read.
+//! - A cell is its exact leaf, or else its pointer decomposed (`Key::Ref`) over
+//!   any root: the old `Addr` key, and `_allocation_leaves`' grouping by affine
+//!   root. A leaf of one start takes any stride.
+//! - One LLVM type per cell stands for the old width and float checks
+//!   (`_float_cells`, `_stores_value`, `_converts_integer`, `_forwards_float`):
+//!   a store keeps its type's value.
+//! - A load becomes the stored operand itself, so `_restated` and `_order` have
+//!   nothing to do; the phis are placed here, as `ssa::constructed` was not
+//!   ported.
+//! - `_canonical_leaf_types` types a leaf in both passes: the old `Sroa`
+//!   rewrote the body the old `Promote` then read.
 //!
 //! Dropped, with no rich MIR counterpart:
 //! - `READS`, `_separated`, `split_updates`: an arithmetic memory operand.
 //! - `CELLS`, `Bounds`: the x86 spaces and landmarks `regions` dropped.
-//! - `_initializers`: every object access carries exact provenance, so a narrower store into a wider cell blocks both.
-//! - `_allocation_leaves`, `_affine_values`, `_signed`, `_rewritten_refs`: no array request; `MemRef::at` decomposes an
-//!   address.
-//! - `_bounded_leaves`, `_bounded_ref`, `_pointed_ref`: `alias::annotated` narrows constant indices and follows exact
-//!   pointers.
+//! - `_initializers`: every object access carries exact provenance, so a
+//!   narrower store into a wider cell blocks both.
+//! - `_allocation_leaves`, `_affine_values`, `_signed`, `_rewritten_refs`: no
+//!   array request; `MemRef::at` decomposes an address.
+//! - `_bounded_leaves`, `_bounded_ref`, `_pointed_ref`: `alias::annotated`
+//!   narrows constant indices and follows exact pointers.
 //! - `_split_copies` and its helpers: `splitcopy`, for a `llvm.memcpy`.
 //! - `loop_only`: no caller set it.
 
@@ -260,7 +265,8 @@ fn run(
     aggregate_only: bool,
     name: &str,
 ) -> PreservedAnalyses {
-    // A copy of an aggregate is its leaves' loads and stores before they are promoted.
+    // A copy of an aggregate is its leaves' loads and stores before they are
+    // promoted.
     let split = aggregate_only && crate::splitcopy::split(unit.context, unit.layout, unit.function, analyses.outer());
     match _promoted(unit.context, unit.layout, unit.function, analyses, aggregate_only) {
         Ok(true) => PreservedAnalyses::none(),
@@ -309,15 +315,17 @@ fn _promoted(
 /// stores that define one, and the loads that read one's stored value.
 #[derive(Debug, Default)]
 struct Plan {
-    /// The variable `-g` names that each cell is, where it is one (`llrm_mir::DebugRecord`).
+    /// The variable `-g` names that each cell is, where it is one
+    /// (`llrm_mir::DebugRecord`).
     variables: Vec<Option<Named>>,
     types: Vec<TypeId>,
     stores: HashMap<InstId, usize>,
     loads: HashMap<InstId, usize>,
 }
 
-/// What `-g` declared that each cell of `plan` is: the variable whose frame object holds its bytes, and where in the
-/// variable it is, none where it is all of it.
+/// What `-g` declared that each cell of `plan` is: the variable whose frame
+/// object holds its bytes, and where in the variable it is, none where it is
+/// all of it.
 fn named_cells(
     unit: &Unit,
     plan: &Plan,
@@ -352,7 +360,8 @@ fn named_cells(
             named[slot] = Some((variable, offset - at, bytes));
         }
     }
-    // A variable one cell is all of is that value; a variable of several cells has each as a piece.
+    // A variable one cell is all of is that value; a variable of several cells
+    // has each as a piece.
     named
         .iter()
         .map(|one| {
@@ -363,7 +372,8 @@ fn named_cells(
         .collect()
 }
 
-/// A variable `-g` declared, and the bytes of it that a cell is when it is not all.
+/// A variable `-g` declared, and the bytes of it that a cell is when it is not
+/// all.
 #[derive(Clone, Copy, Debug)]
 struct Named {
     variable: llrm_mir::MetadataId,
@@ -520,7 +530,8 @@ fn _available(
     let mut every = Bits::new(cells.len());
     (0..cells.len()).for_each(|at| every.insert(at));
     let mut leaving = reachable.iter().map(|at| (*at, every.clone())).collect::<BTreeMap<_, _>>();
-    // Whether a write may reach a cell, per (instruction, cell): every round asks again.
+    // Whether a write may reach a cell, per (instruction, cell): every round
+    // asks again.
     let clobbered = RefCell::new(HashMap::<(InstId, usize), bool>::default());
 
     let entering = |at: i64, leaving: &BTreeMap<i64, Bits>| -> Bits {
@@ -540,7 +551,8 @@ fn _available(
         for &inst in function.block(cfg::block(at)).instructions() {
             let instruction = function.instruction(inst);
             let store = matches!(instruction.opcode, Opcode::Store { .. });
-            // A volatile access writes its own bytes: it orders, it does not clobber.
+            // A volatile access writes its own bytes: it orders, it does not
+            // clobber.
             let Some(writes) = accesses.writes(inst) else {
                 available = Bits::new(cells.len());
                 continue;
@@ -669,7 +681,8 @@ fn rewrite(
         }
     }
 
-    // What the debugger is told of a variable: the phi that merges its paths, from the top of the block on.
+    // What the debugger is told of a variable: the phi that merges its paths,
+    // from the top of the block on.
     for (block, phi, named) in named_phis {
         let value = function.instruction(phi).result.expect("a phi's value");
         let first = function

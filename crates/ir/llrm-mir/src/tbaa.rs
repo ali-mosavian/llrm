@@ -9,7 +9,8 @@ use crate::module::{MetadataId, MetadataNode, MetadataOperand};
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Tbaa {
     lineages: Vec<Vec<String>>,
-    /// The same lineages and the type names, each shared: asking for one is a count, not a copy of its strings.
+    /// The same lineages and the type names, each shared: asking for one is a
+    /// count, not a copy of its strings.
     shared: Vec<std::rc::Rc<[String]>>,
     names: Vec<Option<std::rc::Rc<str>>>,
     empty: std::rc::Rc<[String]>,
@@ -19,7 +20,8 @@ thread_local! {
     static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many type trees this thread has built, for a test that none is built per access.
+/// How many type trees this thread has built, for a test that none is built per
+/// access.
 pub fn built() -> usize {
     BUILT.with(std::cell::Cell::get)
 }
@@ -99,8 +101,9 @@ impl Tbaa {
         lineage
     }
 
-    /// `of_tag` where there is no tree: the ancestors of the type `tag` names, walked up from it, so
-    /// that asking costs its depth and not the module's metadata (the tree is built from all of it).
+    /// `of_tag` where there is no tree: the ancestors of the type `tag` names,
+    /// walked up from it, so that asking costs its depth and not the
+    /// module's metadata (the tree is built from all of it).
     pub fn chain(
         metadata: &[MetadataNode],
         tag: MetadataId,
@@ -126,7 +129,8 @@ impl Tbaa {
         names
     }
 
-    /// The ancestors of the access type tag `tag` names, nearest first, the root last.
+    /// The ancestors of the access type tag `tag` names, nearest first, the
+    /// root last.
     pub fn of_tag(
         &self,
         metadata: &[MetadataNode],

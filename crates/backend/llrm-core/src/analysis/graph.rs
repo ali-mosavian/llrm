@@ -1,7 +1,8 @@
-//! The blocks of a body by position, and each one's predecessors: asked of a body by every pass that walks its edges (a
-//! liveness for a few values, an interval, a carve, a spill's flow), and the same for every body that keeps the blocks'
-//! labels and successors, which is every rewrite of the instructions. The manager keeps it with the body
-//! (`analysis::facts`).
+//! The blocks of a body by position, and each one's predecessors: asked of a
+//! body by every pass that walks its edges (a liveness for a few values, an
+//! interval, a carve, a spill's flow), and the same for every body that keeps
+//! the blocks' labels and successors, which is every rewrite of the
+//! instructions. The manager keeps it with the body (`analysis::facts`).
 
 use std::sync::Arc;
 
@@ -9,8 +10,8 @@ use crate::analysis::facts::Fact;
 use crate::model::lir::LirBody;
 use crate::support::hash::IndexMap;
 
-/// The blocks' positions by label, and the positions of each block's predecessors, in the order the blocks list their
-/// successors.
+/// The blocks' positions by label, and the positions of each block's
+/// predecessors, in the order the blocks list their successors.
 #[derive(Debug, PartialEq)]
 pub struct Graph {
     pub position: IndexMap<i64, usize>,
@@ -32,7 +33,8 @@ impl Graph {
     }
 }
 
-/// The blocks' labels and successors, which a rewrite of the instructions leaves.
+/// The blocks' labels and successors, which a rewrite of the instructions
+/// leaves.
 pub struct Shape {
     entry: i64,
     blocks: Vec<(i64, Vec<i64>)>,
@@ -89,9 +91,10 @@ mod tests {
         )
     }
 
-    /// Every pass that walks a body's edges found the predecessors by a pass over the blocks of its own (some thirty of
-    /// them, a few thousand times a compile). They are the body's, found once for every body that keeps the labels
-    /// and successors, and again when an edge moves.
+    /// Every pass that walks a body's edges found the predecessors by a pass
+    /// over the blocks of its own (some thirty of them, a few thousand
+    /// times a compile). They are the body's, found once for every body that
+    /// keeps the labels and successors, and again when an edge moves.
     #[test]
     fn test_the_predecessors_are_found_once_for_bodies_that_keep_the_edges() {
         let body = diamond();

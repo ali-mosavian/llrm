@@ -155,7 +155,8 @@ impl FunctionCompiler<'_> {
                     return Err(Diagnostic::new(*span, format!("expected a {} variant", layout.name)));
                 }
                 let variant = layout.variant(name, *span)?.clone();
-                // `.ok(_)` of a `Result[void, E]`: `_` matches the void payload.
+                // `.ok(_)` of a `Result[void, E]`: `_` matches the void
+                // payload.
                 let fields = match fields.as_slice() {
                     [Pattern::Wildcard(_)] if variant.fields.is_empty() => &[][..],
                     _ => fields.as_slice(),
@@ -309,7 +310,8 @@ impl FunctionCompiler<'_> {
                     }
                     return self.bind(pattern, subject);
                 }
-                // Each element goes to its binding; those between, to `*_`, drop.
+                // Each element goes to its binding; those between, to `*_`,
+                // drop.
                 let length = shape.len() as usize;
                 for index in 0..length {
                     let named = match index {

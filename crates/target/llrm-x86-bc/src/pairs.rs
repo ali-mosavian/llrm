@@ -185,7 +185,8 @@ fn negate(
     (carried && WORDS[decoded.pair] == (low, high)).then_some((low, high))
 }
 
-/// Two word constants stored to adjacent bytes, low first: the address and the long.
+/// Two word constants stored to adjacent bytes, low first: the address and the
+/// long.
 fn constants(
     first: &Node,
     second: &Node,

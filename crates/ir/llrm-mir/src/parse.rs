@@ -431,7 +431,8 @@ impl Parser {
         }
     }
 
-    /// `ccc`, `fastcc` and their kin, `cc N` or `ccN`; C's when none is written.
+    /// `ccc`, `fastcc` and their kin, `cc N` or `ccN`; C's when none is
+    /// written.
     fn calling_convention(&mut self) -> Parsed<u32> {
         let Token::Word(word) = self.peek().clone() else { return Ok(0) };
         if let Some(&(_, number)) = crate::opcode::CONVENTIONS.iter().find(|(name, _)| *name == word) {
@@ -1386,7 +1387,8 @@ impl Parser {
         Ok(None)
     }
 
-    /// `, 4, 8` after a piece's variable: where in it the piece is, and how long.
+    /// `, 4, 8` after a piece's variable: where in it the piece is, and how
+    /// long.
     fn piece_span(&mut self) -> Parsed<(u32, u32)> {
         self.expect_punct(',')?;
         let offset = u32::try_from(self.unsigned()?).or_else(|_| self.fail("a piece's offset is a u32"))?;
@@ -1395,8 +1397,8 @@ impl Parser {
         Ok((offset, bytes))
     }
 
-    /// `#dbg_declare(ptr %x, !5)`, `#dbg_value(i16 %v, !5)` or `#dbg_gone(!5)`: what is said of a variable before the
-    /// instruction that follows.
+    /// `#dbg_declare(ptr %x, !5)`, `#dbg_value(i16 %v, !5)` or `#dbg_gone(!5)`:
+    /// what is said of a variable before the instruction that follows.
     fn debug_record(
         &mut self,
         local: &mut Local,

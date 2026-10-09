@@ -70,7 +70,8 @@ fn inline_with(
     changed
 }
 
-/// One call of `caller` inlined, where `available` admits it, with the declarations it needed placed.
+/// One call of `caller` inlined, where `available` admits it, with the
+/// declarations it needed placed.
 fn expand_once(
     module: &mut Module,
     caller: &str,
@@ -261,7 +262,8 @@ fn test_small_private_pure_helpers_inline_and_keep_their_results() {
 fn test_tiny_private_leaf_inlines_at_two_call_sites_only_when_the_call_costs_more() {
     let mut cheap = parsed(HELPERS);
     assert!(inline_into(&mut cheap, "main", 1));
-    // @clamp, called once, goes; @scale, called twice for two instructions each, stays.
+    // @clamp, called once, goes; @scale, called twice for two instructions
+    // each, stays.
     assert_eq!(printed(&cheap).matches("call i16 @scale").count(), 2);
     let mut dear = parsed(HELPERS);
     assert!(inline_into(&mut dear, "main", 3));
@@ -491,7 +493,8 @@ b1:
 
 /// QCport at -O2 grew by 8 KB where a callee of a few operations, which
 /// one known actual folds nothing of, was copied to every such site because
-/// its operation count was under the call's clocks, whatever the operations cost.
+/// its operation count was under the call's clocks, whatever the operations
+/// cost.
 #[test]
 fn test_a_constant_site_copies_only_the_work_its_actuals_leave_over_a_call() {
     let module = parsed(
@@ -519,7 +522,8 @@ b1:
     );
     let main = module.global(id(&module, "main")).function().unwrap();
     let constants = llrm_analysis::interprocedural::current_call_constants(&module.context, main);
-    // Two operations, under a call of 10 clocks by count; the multiply alone costs 30.
+    // Two operations, under a call of 10 clocks by count; the multiply alone
+    // costs 30.
     let priced = OperationCosts { call: 10, multiply: 30, ..OperationCosts::default() };
     let sites = constant_sites(
         &module,
@@ -555,8 +559,9 @@ b1:
     assert_eq!(sites.keys().copied().collect::<Vec<_>>(), vec![calls[1]]);
 }
 
-/// QCport's screen.c grew 1.5 KB: peeling made 16 calls of `font_bit(.., gx, gy)` with known
-/// coordinates, none of which folds anything, and each was copied as a constant site.
+/// QCport's screen.c grew 1.5 KB: peeling made 16 calls of `font_bit(.., gx,
+/// gy)` with known coordinates, none of which folds anything, and each was
+/// copied as a constant site.
 #[test]
 fn test_a_constant_site_whose_known_actual_folds_nothing_is_not_copied() {
     let module = parsed(
@@ -661,7 +666,8 @@ b1:
     assert!(!inline_into(&mut module, "main", 40));
 }
 
-/// A callee of `ops` additions, carrying `attr`, called at `sites` sites of @main.
+/// A callee of `ops` additions, carrying `attr`, called at `sites` sites of
+/// @main.
 fn chain(
     ops: usize,
     attr: &str,
@@ -702,8 +708,9 @@ fn test_a_callee_the_language_says_always_inline_is_inlined_at_any_size() {
 
 #[test]
 fn test_an_inline_hint_raises_the_budget_by_llvms_ratio_and_not_for_size() {
-    // Eight operations, two private sites (the last call of one, tuned for size, inlines at any
-    // size): the budget at this call price is 6, a hint's 8.
+    // Eight operations, two private sites (the last call of one, tuned for
+    // size, inlines at any size): the budget at this call price is 6, a
+    // hint's 8.
     let text = |attr: &str| chain(8, attr, 2).replace("define i16 @big", "define internal i16 @big");
     let admits = |attr: &str, threshold: Threshold| {
         let module = parsed(&text(attr));
@@ -762,7 +769,8 @@ b3:
     );
     let main = module.global(id(&module, "main")).function().unwrap();
     let constants = llrm_analysis::interprocedural::current_call_constants(&module.context, main);
-    // A multiply is 20 clocks, a call 10: kept above the overhead, below its hot weight (23).
+    // A multiply is 20 clocks, a call 10: kept above the overhead, below its
+    // hot weight (23).
     let priced = OperationCosts { call: 10, multiply: 20, store: 0, load: 0, return_: 0, ..OperationCosts::default() };
     let sites = constant_sites(
         &module,
@@ -798,9 +806,11 @@ b3:
     );
 }
 
-/// The last call of a private function inlines at any size, tuned for size or for speed: no copy is made, and
-/// the call, its arguments and the return go (QCport -Os, -548 bytes; queens -O2, -30% clocks). One called
-/// twice stays a call at any level, and where nothing inlines (`Threshold::none()`) so does the last call.
+/// The last call of a private function inlines at any size, tuned for size or
+/// for speed: no copy is made, and the call, its arguments and the return go
+/// (QCport -Os, -548 bytes; queens -O2, -30% clocks). One called twice stays a
+/// call at any level, and where nothing inlines (`Threshold::none()`) so does
+/// the last call.
 #[test]
 fn test_the_only_call_of_a_large_private_function_inlines_at_every_level() {
     let body: String = (0..40)
@@ -825,9 +835,10 @@ fn test_the_only_call_of_a_large_private_function_inlines_at_every_level() {
     assert!(!inline_with(&mut none, "main", 8, Threshold::none()));
 }
 
-/// Tuned for size a pure body every actual of which is known folds whole, though `folded` follows
-/// no loop: `parity_loop(7, 5)` was refused beside a call of 10 bytes with 28 bytes "kept" and
-/// stayed a call (loop.nib +114 bytes). Tuned for speed it is weighed as before.
+/// Tuned for size a pure body every actual of which is known folds whole,
+/// though `folded` follows no loop: `parity_loop(7, 5)` was refused beside a
+/// call of 10 bytes with 28 bytes "kept" and stayed a call (loop.nib +114
+/// bytes). Tuned for speed it is weighed as before.
 #[test]
 fn test_a_pure_body_on_known_actuals_folds_whole_tuned_for_size() {
     let module = parsed(
@@ -906,8 +917,9 @@ b1:
 }
 ";
 
-/// A routine that frees its string argument where the runtime allocated it was copied in at a
-/// call of a runtime temporary: the copy never freed it, and the string space leaked once a call.
+/// A routine that frees its string argument where the runtime allocated it was
+/// copied in at a call of a runtime temporary: the copy never freed it, and the
+/// string space leaked once a call.
 #[test]
 fn a_routine_that_frees_a_temporary_is_not_inlined_at_a_call_of_one() {
     let mut module = parsed(RELEASING);
@@ -929,10 +941,12 @@ fn a_routine_that_frees_a_temporary_is_not_inlined_at_a_call_of_one() {
     }
 }
 
-/// A caller of 2800 operations with forty callees of 100, each called once: the last call of each inlines, at any size,
-/// until the caller is over gcc's `large-function-insns` and has doubled (`large-function-growth` 100%), and no
-/// further. Called-once inlining had no limit and QCport's d_alias took 29% more compile time (102.5e9 -> 132.4e9
-/// instructions), every inline sending the larger body back through the pipeline.
+/// A caller of 2800 operations with forty callees of 100, each called once: the
+/// last call of each inlines, at any size, until the caller is over gcc's
+/// `large-function-insns` and has doubled (`large-function-growth` 100%), and
+/// no further. Called-once inlining had no limit and QCport's d_alias took 29%
+/// more compile time (102.5e9 -> 132.4e9 instructions), every inline sending
+/// the larger body back through the pipeline.
 #[test]
 fn test_the_last_calls_into_a_large_caller_stop_where_it_has_doubled() {
     let chain = |count: usize, from: &str| -> String {
@@ -985,8 +999,9 @@ fn test_the_last_calls_into_a_large_caller_stop_where_it_has_doubled() {
     assert!(after <= original * 2 + 100, "{after} operations after, from {original}");
 }
 
-/// The knee: a once-called body of 200 operations is not moved into its caller, one of 100 is. part_frame went from 435
-/// to 1647 instructions by absorbing such callees and took 42 times the backend time.
+/// The knee: a once-called body of 200 operations is not moved into its caller,
+/// one of 100 is. part_frame went from 435 to 1647 instructions by absorbing
+/// such callees and took 42 times the backend time.
 #[test]
 fn test_the_only_call_of_a_body_past_the_allocation_knee_stays_a_call() {
     let chain = |count: usize| -> String {
@@ -1012,9 +1027,10 @@ fn test_the_only_call_of_a_body_past_the_allocation_knee_stays_a_call() {
     assert!(inline_with(&mut within, "main", 8, Threshold::default()));
 }
 
-/// A body moved into a caller that is past the knee already stays a call: sb_build's once-called body of 40 operations
-/// went into a caller of 150 (465 LIR instructions) and left 667, backend 0.36 s -> 2.4 s (compile-time, #791). The
-/// same body goes into a caller within the knee.
+/// A body moved into a caller that is past the knee already stays a call:
+/// sb_build's once-called body of 40 operations went into a caller of 150 (465
+/// LIR instructions) and left 667, backend 0.36 s -> 2.4 s (compile-time,
+/// #791). The same body goes into a caller within the knee.
 #[test]
 fn test_a_body_moved_into_a_caller_past_the_allocation_knee_stays_a_call() {
     let chain = |count: usize| -> String {
@@ -1041,8 +1057,9 @@ fn test_a_body_moved_into_a_caller_past_the_allocation_knee_stays_a_call() {
     assert!(inline_with(&mut within, "main", 8, Threshold::default()));
 }
 
-/// The knee is measured in LIR instructions and counted in MIR operations: a body of the knee's operations comes to the
-/// knee's instructions at the stated rate. Counted as the same number it let sb_build's merge through (667
+/// The knee is measured in LIR instructions and counted in MIR operations: a
+/// body of the knee's operations comes to the knee's instructions at the stated
+/// rate. Counted as the same number it let sb_build's merge through (667
 /// instructions).
 #[test]
 fn test_the_knee_in_operations_is_the_knee_in_instructions_over_their_rate() {
@@ -1050,9 +1067,10 @@ fn test_the_knee_in_operations_is_the_knee_in_instructions_over_their_rate() {
     assert!(ALLOCATION_KNEE < KNEE_INSTRUCTIONS);
 }
 
-/// A callee that only reads memory takes a `byval` argument as the caller's own pointer (LLVM's HandleByValArgument):
-/// the call is gone. One that may write it gets a copy of the object: the pointer would be the caller's object, not the
-/// callee's own.
+/// A callee that only reads memory takes a `byval` argument as the caller's own
+/// pointer (LLVM's HandleByValArgument): the call is gone. One that may write
+/// it gets a copy of the object: the pointer would be the caller's object, not
+/// the callee's own.
 #[test]
 fn test_a_byval_argument_inlines_into_a_callee_that_only_reads_and_not_into_one_that_writes() {
     let text = |attrs: &str, body: &str| {
@@ -1076,7 +1094,8 @@ b1:
     let mut module = parsed(&reads);
     assert!(inline_into(&mut module, "main", 8));
     assert!(!printed(&module).contains("call "), "{}", printed(&module));
-    // One that may write it is inlined on a copy: an alloca the object is memcpy'd into, which the body writes instead.
+    // One that may write it is inlined on a copy: an alloca the object is
+    // memcpy'd into, which the body writes instead.
     let writes = text("", "  store i16 9, ptr %p\n  %v = load i16, ptr %p\n  ret i16 %v");
     let mut module = parsed(&writes);
     assert!(inline_into(&mut module, "main", 8));
@@ -1086,8 +1105,9 @@ b1:
     assert_eq!(printed.matches("alloca").count(), 2, "the object and its copy: {printed}");
 }
 
-/// The copy a `byval` argument costs is what an inline saves, as LLVM prices it: a reader of a large struct, called
-/// twice, is worth a copy of its body where the same body over a small struct is not.
+/// The copy a `byval` argument costs is what an inline saves, as LLVM prices
+/// it: a reader of a large struct, called twice, is worth a copy of its body
+/// where the same body over a small struct is not.
 #[test]
 fn test_a_byval_copy_is_part_of_what_an_inline_saves() {
     let text = |bytes: u32| {

@@ -235,7 +235,8 @@ mod tests {
         assert_eq!(tuple_hash(&[3, 5, 0, 3, 1]), 5904129870890306468);
     }
 
-    /// `list({(i, i + 1) for i in range(1, 20)})` in CPython 3.13, crossing two resizes.
+    /// `list({(i, i + 1) for i in range(1, 20)})` in CPython 3.13, crossing two
+    /// resizes.
     #[test]
     fn iteration_follows_cpython_slot_order() {
         let set: PySet<Pair> = (1..20).map(|i| Pair(i, i + 1)).collect();

@@ -19,7 +19,8 @@ pub enum Level {
     O1,
     O2,
     O3,
-    /// Every pass on, every budget as the compiler has them: what -O3 was before it meant gcc's.
+    /// Every pass on, every budget as the compiler has them: what -O3 was
+    /// before it meant gcc's.
     Omax,
     Os,
     Oz,
@@ -101,8 +102,8 @@ pub struct Sanitize {
     /// `signed-integer-overflow`, or `-ftrapv`: integer arithmetic and
     /// narrowing.
     pub signed_integer_overflow: bool,
-    /// `stack`: each procedure's entry compares SP with the runtime's limit. Not part of
-    /// `undefined`, as gcc's `-fstack-check` is not.
+    /// `stack`: each procedure's entry compares SP with the runtime's limit.
+    /// Not part of `undefined`, as gcc's `-fstack-check` is not.
     pub stack: bool,
 }
 
@@ -141,33 +142,38 @@ pub struct Flags {
     /// Each `-f` as (index into `PASSES`, on), in order. gcc applies them
     /// over the level wherever they stand.
     passes: Vec<(usize, bool)>,
-    /// `-march=`: the CPU, by the name the target's `timings.times` gives gcc's.
+    /// `-march=`: the CPU, by the name the target's `timings.times` gives
+    /// gcc's.
     march: Option<String>,
-    /// `-mtune=`: the CPU the code is priced for, where that is not the `-march` one.
+    /// `-mtune=`: the CPU the code is priced for, where that is not the
+    /// `-march` one.
     mtune: Option<String>,
     machine: Option<PathBuf>,
-    /// `-m16`, `-m32`, `-m64`: the target to build for, by the number its description gives.
+    /// `-m16`, `-m32`, `-m64`: the target to build for, by the number its
+    /// description gives.
     mode: Option<u32>,
     /// `-m[no-]stack-is-data`: whether the stack lives in the data group.
     stack_is_data: Option<bool>,
     far_bss: Option<bool>,
-    /// `--clocks-per-byte N`: the clocks an inline must save for each byte of code it adds (default 16; 0 allows no
-    /// growth).
+    /// `--clocks-per-byte N`: the clocks an inline must save for each byte of
+    /// code it adds (default 16; 0 allows no growth).
     milliclocks_per_byte: Option<i64>,
     pub output: Option<PathBuf>,
     /// `-S`: assembly rather than an object.
     pub assembly: bool,
     pub sanitize: Sanitize,
-    /// `-fwrapv`: signed arithmetic wraps, so a front end states no no-overflow promise of it.
+    /// `-fwrapv`: signed arithmetic wraps, so a front end states no no-overflow
+    /// promise of it.
     pub wrapv: bool,
-    /// `-g`: debug information, in the object format's own format unless `-gcodeview`, `-gdwarf[-N]`
-    /// or `-gtd` says which.
+    /// `-g`: debug information, in the object format's own format unless
+    /// `-gcodeview`, `-gdwarf[-N]` or `-gtd` says which.
     pub debug: bool,
     pub debug_format: llrm_object::debug::Format,
-    /// `-fobject-format=`: the object format to write, where the target has more than its default.
+    /// `-fobject-format=`: the object format to write, where the target has
+    /// more than its default.
     pub object_format: Option<Format>,
-    /// `-mabi=`: the ABI an unmarked function has, by the family name the target's `calling.toml` gives; its default
-    /// without.
+    /// `-mabi=`: the ABI an unmarked function has, by the family name the
+    /// target's `calling.toml` gives; its default without.
     pub abi: Option<String>,
     /// `-fstack-usage`.
     pub stack_usage: bool,
@@ -286,7 +292,8 @@ impl Flags {
         Ok(true)
     }
 
-    /// The convention an unmarked function has on `target`: the `-mabi=` family's, else the target's default.
+    /// The convention an unmarked function has on `target`: the `-mabi=`
+    /// family's, else the target's default.
     pub fn convention(
         &self,
         target: &dyn llrm_target::Target,
@@ -297,7 +304,8 @@ impl Flags {
             .map_err(|error| format!("-mabi={}: {error}", self.abi.as_deref().unwrap_or_default()))
     }
 
-    /// The object format to write for `target`: `-fobject-format=`, else the target's default.
+    /// The object format to write for `target`: `-fobject-format=`, else the
+    /// target's default.
     pub fn format(
         &self,
         target: &dyn llrm_target::Target,
@@ -347,7 +355,8 @@ impl Flags {
         }
     }
 
-    /// `default`, or the `--machine` description, on the CPU `-march` or `-mtune` names for `target`.
+    /// `default`, or the `--machine` description, on the CPU `-march` or
+    /// `-mtune` names for `target`.
     pub fn machine(
         &self,
         target: &dyn llrm_target::Target,

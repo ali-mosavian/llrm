@@ -258,7 +258,8 @@ impl Builder {
 mod tests {
     use super::*;
 
-    /// A fact stated twice of one subject is one fact, and the first says where.
+    /// A fact stated twice of one subject is one fact, and the first says
+    /// where.
     #[test]
     fn a_fact_stated_twice_is_one() {
         let mut builder = Builder::new("c");

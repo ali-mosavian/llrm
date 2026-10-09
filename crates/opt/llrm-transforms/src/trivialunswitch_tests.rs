@@ -1,5 +1,6 @@
-//! Each body is MIR text run by llrm-mir's interpreter before and after, so a wrong loop shows as a wrong
-//! answer; what is asserted of the text is where the invariant branch is.
+//! Each body is MIR text run by llrm-mir's interpreter before and after, so a
+//! wrong loop shows as a wrong answer; what is asserted of the text is where
+//! the invariant branch is.
 
 use llrm_analysis::testing::DOS;
 
@@ -18,7 +19,8 @@ fn unswitched(
     after
 }
 
-/// The loop of `paths` after tail recursion: `n == 0` is tested in the header on every trip, `m` is the counter.
+/// The loop of `paths` after tail recursion: `n == 0` is tested in the header
+/// on every trip, `m` is the counter.
 const HEADER: &str = "define i16 @f(i16 %n, i16 %m) {
 b0:
   %z = icmp eq i16 %n, 0
@@ -46,8 +48,9 @@ out:
 
 const INPUTS: &[&[i128]] = &[&[0, 5], &[1, 0], &[1, 5], &[3, 9]];
 
-/// `n == 0` was made at the head of every trip: tail-recursive `paths` ran `sete; mov [esp+14], al` once and
-/// `cmp byte [esp+14], 0; je` on each of its trips (rectwo 2212207 clocks, gcc 1191185).
+/// `n == 0` was made at the head of every trip: tail-recursive `paths` ran
+/// `sete; mov [esp+14], al` once and `cmp byte [esp+14], 0; je` on each of its
+/// trips (rectwo 2212207 clocks, gcc 1191185).
 #[test]
 fn an_invariant_exit_test_in_the_header_is_made_before_the_loop() {
     let after = unswitched(HEADER, INPUTS);
@@ -66,7 +69,8 @@ fn a_condition_the_loop_computes_stays_where_it_is() {
     assert!(after.contains("br i1 %z2, label %out, label %test"), "{after}");
 }
 
-/// Both sides in the loop is an unswitch that copies it (unswitch.rs), not this.
+/// Both sides in the loop is an unswitch that copies it (unswitch.rs), not
+/// this.
 #[test]
 fn a_branch_that_stays_in_the_loop_on_both_sides_is_not_moved() {
     let text = HEADER
@@ -77,7 +81,8 @@ fn a_branch_that_stays_in_the_loop_on_both_sides_is_not_moved() {
     assert!(after.contains("br i1 %z, label %body, label %test"), "{after}");
 }
 
-/// What the header does before the branch is skipped where the loop is not entered: a store is not skipped.
+/// What the header does before the branch is skipped where the loop is not
+/// entered: a store is not skipped.
 #[test]
 fn a_header_that_stores_before_its_branch_keeps_its_branch() {
     let text = HEADER
@@ -90,7 +95,8 @@ fn a_header_that_stores_before_its_branch_keeps_its_branch() {
     assert!(after.contains("br i1 %z, label %out, label %test"), "{after}");
 }
 
-/// A value the loop computes cannot reach the exit on the new edge: the exit's phi keeps it.
+/// A value the loop computes cannot reach the exit on the new edge: the exit's
+/// phi keeps it.
 #[test]
 fn an_exit_value_the_loop_computes_keeps_the_branch() {
     let text = HEADER

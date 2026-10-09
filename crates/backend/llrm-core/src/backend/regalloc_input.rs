@@ -19,7 +19,8 @@ pub enum Calls {
     Everything,
 }
 
-/// `name` of a C program's `tests/check/mir/{fixture}`, as `before_regalloc_in`.
+/// `name` of a C program's `tests/check/mir/{fixture}`, as
+/// `before_regalloc_in`.
 pub fn before_regalloc<'a>(
     fixture: &str,
     name: &str,
@@ -40,9 +41,10 @@ pub fn before_regalloc_in<'a>(
     before_phase_skipping(calls, fixture, name, cpu_name, "RegAlloc", &[])
 }
 
-/// `before_regalloc`, without the spiller: the allocator is handed the pressure the spiller
-/// takes away in production. For tests of the allocator on its own, which must hold for any input
-/// it is given; a test whose premise only holds here guards code the production pipeline may not reach.
+/// `before_regalloc`, without the spiller: the allocator is handed the pressure
+/// the spiller takes away in production. For tests of the allocator on its own,
+/// which must hold for any input it is given; a test whose premise only holds
+/// here guards code the production pipeline may not reach.
 pub fn before_regalloc_unspilled<'a>(
     fixture: &str,
     name: &str,

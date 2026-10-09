@@ -8,7 +8,8 @@ fn run(text: &str) -> String {
     run_for(text, true)
 }
 
-/// `text` after the pass, priced in bytes (`size`) or in clocks, on the real-mode target.
+/// `text` after the pass, priced in bytes (`size`) or in clocks, on the
+/// real-mode target.
 fn run_for(
     text: &str,
     size: bool,
@@ -27,9 +28,10 @@ b0:
 }
 ";
 
-/// QCport -Os spent `add sp,N` at some 720 calls of internal functions: 3 bytes each, where
-/// the callee popping them is `ret N` once. The function and each call of it take one
-/// convention, so the call's cleanup and the function's `ret N` cannot disagree.
+/// QCport -Os spent `add sp,N` at some 720 calls of internal functions: 3 bytes
+/// each, where the callee popping them is `ret N` once. The function and each
+/// call of it take one convention, so the call's cleanup and the function's
+/// `ret N` cannot disagree.
 #[test]
 fn an_internal_function_called_directly_twice_pops_its_own_arguments() {
     let after = run(&format!(
@@ -46,9 +48,10 @@ b0:
     assert_eq!(after.matches("call fastcc i16 @work").count(), 2, "{after}");
 }
 
-/// Where a caller outside the module's sight, or an indirect one, may reach it, the callee
-/// popping would unbalance that caller's stack: an external function, one whose address is
-/// stored or passed, one called with another convention, and a variadic one stay as they are.
+/// Where a caller outside the module's sight, or an indirect one, may reach it,
+/// the callee popping would unbalance that caller's stack: an external
+/// function, one whose address is stored or passed, one called with another
+/// convention, and a variadic one stay as they are.
 #[test]
 fn a_function_something_else_may_call_keeps_the_caller_cleaning() {
     let caller = "define i16 @f(i16 %x) {
@@ -69,9 +72,10 @@ b0:
     assert!(!passed.contains("fastcc"), "{passed}");
 }
 
-/// `ret N` costs 2 bytes more than `ret` at each return, and a one-word call saves 1 (a pop's worth
-/// is not worth an instruction more, so a byte over breaks even): one call of a function that returns
-/// twice keeps the caller's cleanup in bytes; in clocks `ret N` costs nothing and the call saves its
+/// `ret N` costs 2 bytes more than `ret` at each return, and a one-word call
+/// saves 1 (a pop's worth is not worth an instruction more, so a byte over
+/// breaks even): one call of a function that returns twice keeps the caller's
+/// cleanup in bytes; in clocks `ret N` costs nothing and the call saves its
 /// `add sp`, so -O2 takes it.
 #[test]
 fn a_function_the_convention_would_cost_bytes_keeps_the_caller_cleaning_only_for_size() {
@@ -95,9 +99,9 @@ b0:
     assert!(run_for(text, false).contains("define internal fastcc i16 @work"));
 }
 
-/// What a call saves is the words its arguments take, not how many there are: a dword argument is
-/// two words (two pops), so two calls of a function with two returns pay for `ret 4` where two
-/// calls of a one-word function do not.
+/// What a call saves is the words its arguments take, not how many there are: a
+/// dword argument is two words (two pops), so two calls of a function with two
+/// returns pay for `ret 4` where two calls of a one-word function do not.
 #[test]
 fn an_argument_of_two_words_counts_two_words_of_cleanup() {
     let callee = |ty: &str| {
@@ -114,8 +118,9 @@ fn an_argument_of_two_words_counts_two_words_of_cleanup() {
     assert!(!run(&format!("{}{}", callee("i16"), callers("i16", "1"))).contains("fastcc"));
 }
 
-/// `text` after the pass on a target whose description gives a private function the watcall convention, replacing the C
-/// convention (`ccc`) and the System V one.
+/// `text` after the pass on a target whose description gives a private function
+/// the watcall convention, replacing the C convention (`ccc`) and the System V
+/// one.
 fn run_private(text: &str) -> String {
     let private =
         llrm_mir::target::PrivateConvention { to: llrm_mir::opcode::WATCALL, from: vec![0, llrm_mir::opcode::SYSV] };
@@ -140,9 +145,11 @@ b0:
 }
 ";
 
-/// `-mabi=sysv` made every C function `sysvcc`, `GlobalOpt`'s `fastcc` mark an internal one's stack convention (gap32:
-/// hanoi +21% clocks, `push; push; call; add esp` where gcc has `mov; mov; call`): a function nothing outside reaches
-/// takes the description's private convention with each call of it, and the exported one keeps its own.
+/// `-mabi=sysv` made every C function `sysvcc`, `GlobalOpt`'s `fastcc` mark an
+/// internal one's stack convention (gap32: hanoi +21% clocks, `push; push;
+/// call; add esp` where gcc has `mov; mov; call`): a function nothing outside
+/// reaches takes the description's private convention with each call of it, and
+/// the exported one keeps its own.
 #[test]
 fn a_private_function_takes_the_targets_private_convention_under_any_abi() {
     let after = run_private(&format!("{SYSV_CALLEE}{SYSV_CALLER}"));
@@ -151,8 +158,9 @@ fn a_private_function_takes_the_targets_private_convention_under_any_abi() {
     assert!(after.contains("define sysvcc i16 @f"), "{after}");
 }
 
-/// What a caller outside the module's sight, an indirect call, a call in another convention, a variable argument list
-/// or a marked convention (an interrupt's) may rely on is not changed.
+/// What a caller outside the module's sight, an indirect call, a call in
+/// another convention, a variable argument list or a marked convention (an
+/// interrupt's) may rely on is not changed.
 #[test]
 fn what_something_else_may_reach_keeps_its_convention() {
     let external = run_private(&format!("{}{SYSV_CALLER}", SYSV_CALLEE.replace("internal ", "")));
@@ -175,7 +183,8 @@ fn what_something_else_may_reach_keeps_its_convention() {
     assert!(!handler.contains("watcallcc"), "{handler}");
 }
 
-/// A function that calls itself is private too: its own calls are among the calls of it.
+/// A function that calls itself is private too: its own calls are among the
+/// calls of it.
 #[test]
 fn a_recursive_private_function_and_its_own_calls_take_it_together() {
     let after = run_private(

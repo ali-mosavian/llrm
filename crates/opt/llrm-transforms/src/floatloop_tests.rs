@@ -184,8 +184,9 @@ fn test_the_pass_runs_under_the_manager() {
     assert_eq!(results(&module, &[&[]]), before);
 }
 
-/// A body with no float in it was solved for floats whole (a dataflow over memory) for every round of every body, and
-/// never changed: 18.9 G of QCport's 458 G at -O2 was billed to it. It is not solved, and nothing is changed.
+/// A body with no float in it was solved for floats whole (a dataflow over
+/// memory) for every round of every body, and never changed: 18.9 G of QCport's
+/// 458 G at -O2 was billed to it. It is not solved, and nothing is changed.
 #[test]
 fn test_a_body_with_no_float_is_not_solved_for_floats() {
     let integer = "define i16 @f(i16 %n) {

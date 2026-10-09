@@ -1,5 +1,5 @@
-//! A program's block locals through the whole pipeline: HIR with lifetime markers to the
-//! frame it reserves.
+//! A program's block locals through the whole pipeline: HIR with lifetime
+//! markers to the frame it reserves.
 
 use llrm_hir::model::{
     Block, Dialect, Function, Instruction, Module, Op, Operand, Place, Program, RuntimeProfile, Storage, Terminator,
@@ -11,8 +11,9 @@ use super::{Options, compiled};
 use crate::abi::machine::Machine;
 use crate::backend::masm;
 
-/// `F%(a)`: two arms, each with a local of its own, held in memory (volatile) so promotion
-/// leaves them, and with a scope of lifetime markers when `markers`.
+/// `F%(a)`: two arms, each with a local of its own, held in memory (volatile)
+/// so promotion leaves them, and with a scope of lifetime markers when
+/// `markers`.
 fn program(markers: bool) -> Program {
     let mut integer = Type::new(1, "integer", TypeKind::Integer, 2);
     integer.signed = Some(true);
@@ -66,7 +67,8 @@ fn program(markers: bool) -> Program {
     function.parameters = vec![1];
     let mut program =
         Program::new(Dialect::Qb45, RuntimeProfile::Qb45, vec![Module::new(1, "m", types, vec![function])]);
-    // A frame zeroed at entry writes every local outside its scope: no slot is then free to share.
+    // A frame zeroed at entry writes every local outside its scope: no slot is
+    // then free to share.
     program.zeroed_locals = false;
     program
 }
@@ -79,8 +81,8 @@ fn frame(markers: bool) -> i64 {
     text.lines().find_map(|line| line.trim().strip_prefix("sub sp, ")?.parse().ok()).unwrap_or(0)
 }
 
-/// Block locals of sibling scopes took a slot each; their markers say they are never live
-/// together, so the frame is one.
+/// Block locals of sibling scopes took a slot each; their markers say they are
+/// never live together, so the frame is one.
 #[test]
 fn test_sibling_scopes_share_their_locals_slot_through_the_whole_pipeline() {
     assert_eq!((frame(false), frame(true)), (4, 2));

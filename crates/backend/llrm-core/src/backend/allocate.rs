@@ -27,7 +27,8 @@ use crate::model::passes::{Exception, LIRTransform};
 use crate::support::hash::{IndexMap, IndexSet};
 use crate::support::pyrepr::Repr;
 
-/// Most queue visits an allocation may take: more means it does not converge, a bug.
+/// Most queue visits an allocation may take: more means it does not converge, a
+/// bug.
 pub const BUDGET: usize = 200_000;
 
 /// A value has no register, or no register it may take is free of values that
@@ -150,15 +151,17 @@ pub type Live = IndexMap<i64, BTreeSet<u32>>;
 
 /// What is live at each block's entry and exit, to a fixed point.
 ///
-/// Dense: the values numbered by their order, each block's sets one row of bits in one array, the
-/// fixed point a worklist over the rows. No set is built but the answer.
+/// Dense: the values numbered by their order, each block's sets one row of bits
+/// in one array, the fixed point a worklist over the rows. No set is built but
+/// the answer.
 pub fn live(body: &LirBody) -> (Live, Live) {
     let dense = live_rows(body);
     (dense.sets(&dense.into), dense.sets(&dense.out))
 }
 
-/// What is live at each block's entry and exit as the fixed point leaves it: rows of bits, which a
-/// reader that only walks the values need not turn into sets.
+/// What is live at each block's entry and exit as the fixed point leaves it:
+/// rows of bits, which a reader that only walks the values need not turn into
+/// sets.
 pub struct LiveRows {
     numbered: Vec<u32>,
     words: usize,
@@ -220,16 +223,18 @@ impl LiveRows {
     }
 }
 
-/// How many times this body's facts have walked every instruction for liveness rows (`live_rows_by`), for a test that a
-/// web of a few values does not.
+/// How many times this body's facts have walked every instruction for liveness
+/// rows (`live_rows_by`), for a test that a web of a few values does not.
 pub fn live_rows_walks(body: &LirBody) -> usize {
     body.facts.0.counted("live-rows-walks")
 }
 
-/// What is live at each block's entry and exit for a few values, found from where they occur: a value is live into a
-/// block that reads it before writing it and out of a block a successor has it live into, up the predecessors until one
-/// writes it. The rows of `values` as `live_rows_by` finds them in a body with no phis, at the cost of the occurrences
-/// and the blocks each is live in, not of every instruction of the body.
+/// What is live at each block's entry and exit for a few values, found from
+/// where they occur: a value is live into a block that reads it before writing
+/// it and out of a block a successor has it live into, up the predecessors
+/// until one writes it. The rows of `values` as `live_rows_by` finds them in a
+/// body with no phis, at the cost of the occurrences and the blocks each is
+/// live in, not of every instruction of the body.
 pub struct WebRows {
     graph: Arc<crate::analysis::graph::Graph>,
     into: Vec<Vec<u32>>,
@@ -275,8 +280,9 @@ impl WebRows {
     }
 }
 
-/// `WebRows` of `values` (ascending); `places[value]` are the instructions that name it, by block then position, once
-/// each, and whether each defines and reads it.
+/// `WebRows` of `values` (ascending); `places[value]` are the instructions that
+/// name it, by block then position, once each, and whether each defines and
+/// reads it.
 pub fn live_rows_among(
     body: &LirBody,
     values: &[u32],
@@ -287,7 +293,8 @@ pub fn live_rows_among(
     let predecessors = &graph.parents;
     let (mut in_mark, mut out_mark, mut written_mark, mut run_mark) =
         (vec![0u32; count], vec![0u32; count], vec![0u32; count], vec![0u32; count]);
-    // The first run of a block that names the value, as (defined, read): a read decides, a write beside it too.
+    // The first run of a block that names the value, as (defined, read): a read
+    // decides, a write beside it too.
     let mut first_run: Vec<(usize, bool, bool)> = vec![(0, false, false); count];
     let mut into: Vec<Vec<u32>> = vec![Vec::new(); count];
     let mut out: Vec<Vec<u32>> = vec![Vec::new(); count];
@@ -345,8 +352,9 @@ pub fn live_rows_among(
     WebRows { graph, into, out, numbered }
 }
 
-/// Whether a value is live at the entry or exit of a block: what a caller that asks of one value at a time reads,
-/// whether it has the sets of every block (`Live`) or the rows.
+/// Whether a value is live at the entry or exit of a block: what a caller that
+/// asks of one value at a time reads, whether it has the sets of every block
+/// (`Live`) or the rows.
 pub trait LiveAt {
     fn live_in(
         &self,
@@ -401,15 +409,17 @@ pub fn live_rows(body: &LirBody) -> LiveRows {
     live_rows_by(body, |_| true)
 }
 
-/// `live_rows` of the values `keep` says only: each is live where it is as in the whole, the others are
-/// not numbered, so a caller that asks of a few values pays for rows of those.
+/// `live_rows` of the values `keep` says only: each is live where it is as in
+/// the whole, the others are not numbered, so a caller that asks of a few
+/// values pays for rows of those.
 pub fn live_rows_by(
     body: &LirBody,
     keep: impl Fn(u32) -> bool,
 ) -> LiveRows {
     body.facts.0.bump("live-rows-walks");
-    // Every value the body names, numbered by order. Ids can be far apart, so the number of a value
-    // is found by a table over the ids where they are dense enough, else by search.
+    // Every value the body names, numbered by order. Ids can be far apart, so
+    // the number of a value is found by a table over the ids where they are
+    // dense enough, else by search.
     let mut numbered: Vec<u32> = Vec::new();
     for block in &body.blocks {
         numbered.extend(
@@ -461,7 +471,8 @@ pub fn live_rows_by(
                 if let Some(&at) = position.get(from) {
                     set(&mut handed[at * words..(at + 1) * words], *value);
                 } else {
-                    // A predecessor the body does not hold: its row is none, as its set was dropped.
+                    // A predecessor the body does not hold: its row is none, as
+                    // its set was dropped.
                 }
             }
         }
@@ -553,7 +564,8 @@ pub fn live_rows_by(
     LiveRows { numbered, words, position, blocks: body.blocks.iter().map(|block| block.at).collect(), into, out }
 }
 
-/// `live` as it was written over sorted sets, which the tests hold the dense one to.
+/// `live` as it was written over sorted sets, which the tests hold the dense
+/// one to.
 #[cfg(test)]
 pub fn live_reference(body: &LirBody) -> (Live, Live) {
     let defines: IndexMap<i64, BTreeSet<u32>> = body
@@ -595,9 +607,9 @@ pub fn live_reference(body: &LirBody) -> (Live, Live) {
         exposed.insert(block.at, alive.difference(&arrives).copied().collect());
     }
 
-    // The least fixed point of a backward problem, found by a worklist over dense bit
-    // sets: the round-robin over sorted sets it replaces reached the same sets.
-    // Values numbered densely: ids can be far apart.
+    // The least fixed point of a backward problem, found by a worklist over
+    // dense bit sets: the round-robin over sorted sets it replaces reached
+    // the same sets. Values numbered densely: ids can be far apart.
     let numbered: Vec<u32> = body
         .blocks
         .iter()
@@ -928,8 +940,9 @@ fn _wanted(
     wanted.into_iter().filter(|(value, _)| !fixed.contains_key(value)).collect()
 }
 
-/// The registers wanted by the values that want one and have none yet, where they are live: found by looking at every
-/// such value until enough is asked since the intervals last moved, then by a tree over where they are live.
+/// The registers wanted by the values that want one and have none yet, where
+/// they are live: found by looking at every such value until enough is asked
+/// since the intervals last moved, then by a tree over where they are live.
 #[derive(Default)]
 struct Claims {
     tree: Option<Overlaps>,
@@ -937,7 +950,8 @@ struct Claims {
 }
 
 impl Claims {
-    /// The registers `wanted` for the values live where `mine` is, other than `value` and those placed.
+    /// The registers `wanted` for the values live where `mine` is, other than
+    /// `value` and those placed.
     fn by(
         &mut self,
         wanted: &IndexMap<u32, Register>,
@@ -1100,8 +1114,9 @@ fn _overlapping_by_start(
 ) -> BTreeSet<u32> {
     let mut out = BTreeSet::new();
     for (_, held) in union.registers() {
-        // The segments of the values kept so far, by start: kept values do not overlap one another, so a segment
-        // meets a kept one only if the last that starts before its end reaches past its start.
+        // The segments of the values kept so far, by start: kept values do not
+        // overlap one another, so a segment meets a kept one only if
+        // the last that starts before its end reaches past its start.
         let mut kept: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
         for value in &held {
             let Some(mine) = facts.live.get(value) else { continue };
@@ -1174,8 +1189,8 @@ fn _allocated(
     let empty = BTreeSet::new();
     let protected = protected.unwrap_or(&empty);
     let mut unspillable: BTreeSet<u32> = unspillable.cloned().unwrap_or_default();
-    // The values merging updates made: spilled in their turn they are not merged again, which would make the value
-    // spilled again, without end.
+    // The values merging updates made: spilled in their turn they are not
+    // merged again, which would make the value spilled again, without end.
     let mut plain: BTreeSet<u32> = BTreeSet::new();
     let mut facts = Facts::of(&body, profile, segments, classes, &unspillable, protected, &Frequency::of(&body));
     if let Some(why) = unallocatable(&facts, pinned.unwrap_or(&IndexMap::default()), &unspillable, segments, classes) {
@@ -1184,7 +1199,8 @@ fn _allocated(
     // Every value this allocation has known: a new one is numbered above them.
     let mut floor = splitkit::_next_value(&body);
     let mut fixed: IndexMap<u32, Register> = pinned.cloned().unwrap_or_default();
-    // Values a split made or left behind, never split again: LLVM's `RS_Split2` and `RS_Spill`.
+    // Values a split made or left behind, never split again: LLVM's `RS_Split2`
+    // and `RS_Spill`.
     let mut pieces: BTreeSet<u32> = BTreeSet::new();
     let mut splits_made = 0_usize;
     let mut placing: Option<(spillplacement::Bundles, LiveRows)> = None;
@@ -1205,8 +1221,8 @@ fn _allocated(
                   stage: &IndexMap<u32, Stage>,
                   fixed: &IndexMap<u32, Register>,
                   confined: &Classes| {
-        // A value that only some registers can hold goes first, as LLVM's register class priority puts it: the wide
-        // ones fit around it.
+        // A value that only some registers can hold goes first, as LLVM's
+        // register class priority puts it: the wide ones fit around it.
         Reverse(Queued(
             !fixed.contains_key(&value),
             -_queue_priority(
@@ -1524,7 +1540,8 @@ fn _allocated(
                 Some(frame) => {
                     let _spill = llrm_support::debug::span("regalloc spill");
                     // A sibling may already hold a register: it gives it up,
-                    // since sharing the slot makes the copies between them free.
+                    // since sharing the slot makes the copies between them
+                    // free.
                     let mut chosen = BTreeSet::from([value]);
                     let settled: BTreeSet<u32> =
                         fixed.keys().chain(protected.iter()).chain(unspillable.iter()).copied().collect();
@@ -1571,7 +1588,8 @@ fn _allocated(
             protected,
             &llrm_support::debug::timed("regalloc frequency", || Frequency::of(&body)),
         );
-        // What is done of the rewrite besides its facts: the pins, the placed values it disturbs, the queue.
+        // What is done of the rewrite besides its facts: the pins, the placed
+        // values it disturbs, the queue.
         let _after = llrm_support::debug::span("regalloc after rewrite");
         placing = None;
         llrm_support::debug::timed("after required", || {
@@ -1637,13 +1655,15 @@ thread_local! {
     static BASE_SPLITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many splits the base allocation of the last body this thread allocated made, for a test.
+/// How many splits the base allocation of the last body this thread allocated
+/// made, for a test.
 pub fn base_splits() -> usize {
     BASE_SPLITS.with(std::cell::Cell::get)
 }
 
 thread_local! {
-    /// The last allocation's (splits made, pieces, pieces spilled, values spilled), for the trial log.
+    /// The last allocation's (splits made, pieces, pieces spilled, values
+    /// spilled), for the trial log.
     static LAST_STATS: std::cell::Cell<(usize, usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0, 0)) };
 }
 
@@ -1731,9 +1751,10 @@ fn _values(body: &LirBody) -> Vec<u32> {
     out.into_iter().collect()
 }
 
-/// Where a range sits in the queue: first by how few registers may hold it (LLVM's register class `AllocationPriority`,
-/// which `RegClassPriorityTrumpsGlobalness` puts before anything else), then `_priority`. The wide values fit around
-/// the narrow ones.
+/// Where a range sits in the queue: first by how few registers may hold it
+/// (LLVM's register class `AllocationPriority`,
+/// which `RegClassPriorityTrumpsGlobalness` puts before anything else), then
+/// `_priority`. The wide values fit around the narrow ones.
 fn _queue_priority(
     one: Option<&Interval>,
     at: Stage,
@@ -1819,17 +1840,18 @@ pub struct Mask {
     pub before: BTreeSet<Register>,
 }
 
-/// The points that destroy registers, and, for each register, where, in order: whether a value is live
-/// across one is asked of every value and every register, over and over, and answered from the slots by
-/// bisection, not by a look at every point.
+/// The points that destroy registers, and, for each register, where, in order:
+/// whether a value is live across one is asked of every value and every
+/// register, over and over, and answered from the slots by bisection, not by a
+/// look at every point.
 #[derive(Default)]
 pub struct Masks {
     list: Vec<Mask>,
     reaching: std::cell::OnceCell<crate::support::hash::HashMap<Register, Reaching>>,
 }
 
-/// Where one register is destroyed, sorted: before the point's own reads (`read`), during it
-/// (`during`), or only its high half (`high`).
+/// Where one register is destroyed, sorted: before the point's own reads
+/// (`read`), during it (`during`), or only its high half (`high`).
 #[derive(Default)]
 struct Reaching {
     read: Vec<i64>,
@@ -1934,8 +1956,8 @@ fn check_clobbered() -> bool {
     *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_CLOBBERED"))
 }
 
-/// `_clobbered`, from where each register is destroyed: a segment meets a point where the point is after its
-/// start and, by `reaches`, no later than its end.
+/// `_clobbered`, from where each register is destroyed: a segment meets a point
+/// where the point is after its start and, by `reaches`, no later than its end.
 fn _clobbered_from(
     one: &Interval,
     register: Register,
@@ -1943,7 +1965,8 @@ fn _clobbered_from(
     width: u32,
 ) -> bool {
     let Some(places) = masks.reaching(_whole(register)) else { return false };
-    // The first slot after `start` is the best candidate: any later one reaches no further.
+    // The first slot after `start` is the best candidate: any later one reaches
+    // no further.
     let after = |slots: &[i64], start: i64| slots.get(slots.partition_point(|slot| *slot <= start)).copied();
     one.segments
         .iter()
@@ -2083,7 +2106,8 @@ thread_local! {
     static TRIALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many allocations this thread has made to try another shape of a body than the one it was given.
+/// How many allocations this thread has made to try another shape of a body
+/// than the one it was given.
 pub fn trials() -> usize {
     TRIALS.with(std::cell::Cell::get)
 }
@@ -2098,7 +2122,8 @@ pub fn last_resorts() -> usize {
     LAST_RESORTS.with(std::cell::Cell::get)
 }
 
-/// What last-chance recoloring may change: LLVM's `LiveRegMatrix` and `VirtRegMap`.
+/// What last-chance recoloring may change: LLVM's `LiveRegMatrix` and
+/// `VirtRegMap`.
 pub struct Coloring<'a> {
     pub union: &'a mut LiveUnion,
     pub r#where: &'a mut IndexMap<u32, Register>,
@@ -2119,9 +2144,11 @@ impl Coloring<'_> {
     /// LLVM's `lcr-max-depth` and `lcr-max-interf`.
     pub const DEPTH: usize = 5;
     pub const INTERFERENCES: usize = 8;
-    /// Registers tried per recoloring session. A search that fails tries every register at every level, so it grows
-    /// with the class (x_ll_arith: 7 registers instead of 6 took 8 of 25 sessions to the old 2000, 3x the time). Of
-    /// 19.6k sessions on QCport and the 66 programs, 178 succeed and 176 of those within 256 tries.
+    /// Registers tried per recoloring session. A search that fails tries every
+    /// register at every level, so it grows with the class (x_ll_arith: 7
+    /// registers instead of 6 took 8 of 25 sessions to the old 2000, 3x the
+    /// time). Of 19.6k sessions on QCport and the 66 programs, 178 succeed
+    /// and 176 of those within 256 tries.
     pub const BUDGET: usize = 256;
 
     fn take(
@@ -2402,8 +2429,10 @@ impl RegAlloc {
         self.pinned = prefer.clone();
         self.pinned.extend(constrain::required(&body, &self.classes));
         let frame = Rc::clone(self.frame.as_ref().expect("made above"));
-        // A value read once, from a cell that holds, by an instruction that takes the cell: never held in a register.
-        // Once per body, before the candidates: every trial starts from the body with those reads placed.
+        // A value read once, from a cell that holds, by an instruction that
+        // takes the cell: never held in a register. Once per body,
+        // before the candidates: every trial starts from the body with those
+        // reads placed.
         let mut reloads = reloads;
         {
             let wanted: BTreeSet<u32> = _values(&body)
@@ -2491,10 +2520,13 @@ impl RegAlloc {
             let whole = candidates.len();
             candidates.push((Shape::Whole, body.clone(), reloads.clone(), BTreeSet::new(), BTreeSet::new()));
             drop(building);
-            // Unless the search is exhaustive (-Omax): the first shape of `Shape::PICKED` the spills admit, and the
-            // body without splitting, which no spill suggests. Across 4045 allocations of QCport, the bench
-            // and the 66 programs this is the exhaustive search's output on every bench row, +0.04% on
-            // QCport's bytes, at 2 allocations instead of up to 12.
+            // Unless the search is exhaustive (-Omax): the first shape of
+            // `Shape::PICKED` the spills admit, and the
+            // body without splitting, which no spill suggests. Across 4045
+            // allocations of QCport, the bench and the 66 programs
+            // this is the exhaustive search's output on every bench row, +0.04%
+            // on QCport's bytes, at 2 allocations instead of up to
+            // 12.
             let picked = if cpu.exhaustive {
                 None
             } else {
@@ -2508,7 +2540,8 @@ impl RegAlloc {
                     {
                         continue;
                     }
-                    // The base allocation split nothing, so allocating without splitting is that allocation again.
+                    // The base allocation split nothing, so allocating without
+                    // splitting is that allocation again.
                     if shape == Shape::Whole && !splitting && base_stats.0 == 0 {
                         continue;
                     }
@@ -2542,14 +2575,16 @@ impl RegAlloc {
     }
 }
 
-/// The other shapes of a body the allocator may try after the first allocation, by what they change.
+/// The other shapes of a body the allocator may try after the first allocation,
+/// by what they change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Shape {
     /// Address computations of spilled values made apart from their users.
     Addressed,
     /// Folded indexes of spilled values opened.
     Unfolded,
-    /// Loop-local copies of the base values a loop's spills lost, protected from spilling.
+    /// Loop-local copies of the base values a loop's spills lost, protected
+    /// from spilling.
     Scoped,
     /// `Scoped`, with the indexes it can fold opened.
     ScopedOpened,
@@ -2560,8 +2595,8 @@ enum Shape {
 }
 
 impl Shape {
-    /// The order a shape is picked in: the one that won most often, by mean and worst case, over every order tried on
-    /// 4045 allocations.
+    /// The order a shape is picked in: the one that won most often, by mean and
+    /// worst case, over every order tried on 4045 allocations.
     const PICKED: [Shape; 4] = [Shape::Retainable, Shape::Scoped, Shape::Addressed, Shape::Unfolded];
 }
 
@@ -2580,7 +2615,8 @@ struct Outcome {
 /// weighted by how often its block runs. Alternatives differ only in what the
 /// allocator added, so this is the cost of that.
 fn _emitted(body: &LirBody) -> f64 {
-    // The count the run makes: an anchor that prints nothing is not an instruction.
+    // The count the run makes: an anchor that prints nothing is not an
+    // instruction.
     if let Some(work) = crate::backend::executed::work(body) {
         return work;
     }
@@ -2813,8 +2849,9 @@ fn _scoped_foldable_indexes(
     spiller::foldable_indexes(body, &indexes)
 }
 
-/// How much of a spilled read disappears when it becomes a memory operand, for each form an instruction
-/// can fold in: a profile's prices, looked up once for a rebuild and not once per instruction.
+/// How much of a spilled read disappears when it becomes a memory operand, for
+/// each form an instruction can fold in: a profile's prices, looked up once for
+/// a rebuild and not once per instruction.
 struct FoldDiscounts {
     alu: f64,
     imul32: f64,
@@ -2864,7 +2901,8 @@ impl FoldDiscounts {
     }
 }
 
-/// The old per-instruction form of `FoldDiscounts`, which `LLRM_CHECK_FOLDS=1` holds it to.
+/// The old per-instruction form of `FoldDiscounts`, which `LLRM_CHECK_FOLDS=1`
+/// holds it to.
 pub(crate) fn _fold_discount(
     one: &Insn,
     profile: &Profile,
@@ -2921,7 +2959,8 @@ pub(crate) fn _fold_priced(
             if discount == 0.0 {
                 continue;
             }
-            // Only the second source of the pair can fold, once for each time the instruction reads it.
+            // Only the second source of the pair can fold, once for each time
+            // the instruction reads it.
             let Some((_, right)) = spiller::folded_pair(one, true) else { continue };
             for value in &one.uses {
                 if *value == right.value {
@@ -3019,7 +3058,8 @@ pub fn applied(
     })
 }
 
-/// Delete unused allocator copies before physical identity loses their use graph.
+/// Delete unused allocator copies before physical identity loses their use
+/// graph.
 fn _dead_insertions(body: &LirBody) -> LirBody {
     if body
         .blocks
@@ -3277,9 +3317,11 @@ mod tests {
         LirBody::new(name, entry, vec![block(entry, insns)], IndexMap::default(), IndexMap::default())
     }
 
-    /// lru bas `BENCHLRU&` at -Os: an argument loaded in the entry block and pushed after two loops sat in ax the whole
-    /// way (`mov ax,[bp+6]` ... `push ax`), where re-reading its cell at the push is the same memory operand and one
-    /// instruction fewer; the registers it held took the constants' (+1 instruction, +3 B).
+    /// lru bas `BENCHLRU&` at -Os: an argument loaded in the entry block and
+    /// pushed after two loops sat in ax the whole way (`mov ax,[bp+6]` ...
+    /// `push ax`), where re-reading its cell at the push is the same memory
+    /// operand and one instruction fewer; the registers it held took the
+    /// constants' (+1 instruction, +3 B).
     #[test]
     fn test_a_load_read_once_by_a_push_is_read_at_the_push() {
         let cell = Mem { offset: 0, disp_width: 1, ..Mem::new(Some(Addr::new(Space::Frame, 6)), 2) };
@@ -3288,7 +3330,8 @@ mod tests {
         };
         let load = at(0, semantics(Operation::Move, "mov", vec![held(1, 2)], vec![Loc::Mem(cell)]), vec![1], vec![]);
         let enter = at(1, semantics(Operation::Jump, "jmp", vec![], vec![]), vec![], vec![]);
-        // A counted loop between the load and the push: the push's block runs as often as the load's.
+        // A counted loop between the load and the push: the push's block runs
+        // as often as the load's.
         let count = at(
             10,
             semantics(Operation::Binary, "add", vec![held(2, 2)], vec![held(2, 2), imm(1, 2)]),
@@ -3335,8 +3378,10 @@ mod tests {
         assert!(loads_in(20), "the load is not at the push");
     }
 
-    /// The first version of reading loads at their use ran once per allocation, and an allocation that spills runs
-    /// the base and each candidate shape: deedlines compiled 2% slower. The scan is a fact of the body: once.
+    /// The first version of reading loads at their use ran once per allocation,
+    /// and an allocation that spills runs the base and each candidate
+    /// shape: deedlines compiled 2% slower. The scan is a fact of the body:
+    /// once.
     #[test]
     fn test_loads_read_at_their_use_are_found_once_per_body_however_many_candidates_run() {
         // Volatile loads: not made again, so ten of them live at once spill.
@@ -3902,9 +3947,11 @@ mod tests {
         assert!(message.contains("both required in"), "{message}");
     }
 
-    /// A base or index on m16 may be BX, SI, DI or BP; a value of any class fits in the rest. The queue took the
-    /// longest range first whatever its class, so a short base found its three registers taken by wide values that
-    /// could have been elsewhere: bench/quicksort +18% instructions against the search over shapes, which tried the
+    /// A base or index on m16 may be BX, SI, DI or BP; a value of any class
+    /// fits in the rest. The queue took the longest range first whatever
+    /// its class, so a short base found its three registers taken by wide
+    /// values that could have been elsewhere: bench/quicksort +18%
+    /// instructions against the search over shapes, which tried the
     /// base first (#944).
     #[test]
     fn test_a_value_few_registers_may_hold_goes_before_a_longer_one_any_may() {
@@ -3985,9 +4032,10 @@ mod tests {
         assert_eq!(placed.get(&2), Some(&Register::CX));
     }
 
-    /// A failing recolor tries every register at every level: with a class one register larger it took 2000 tries,
-    /// three times the compile time of x_ll_arith, for a search that nearly never succeeds (3 of 366 sessions on
-    /// the 66 programs).
+    /// A failing recolor tries every register at every level: with a class one
+    /// register larger it took 2000 tries, three times the compile time of
+    /// x_ll_arith, for a search that nearly never succeeds (3 of 366 sessions
+    /// on the 66 programs).
     #[test]
     fn test_a_recolor_that_fails_over_a_full_class_stays_within_its_budget() {
         let registers =
@@ -4210,7 +4258,8 @@ mod tests {
 
     #[test]
     fn test_a_value_copied_on_to_a_fixed_register_is_seated_there_first() {
-        // A loop sum two copies from the return's AX lost AX to a counter placed first; the exit then moved it.
+        // A loop sum two copies from the return's AX lost AX to a counter
+        // placed first; the exit then moved it.
         let mov = |at: i64, dest: u32, source: Loc| {
             let uses = if let Loc::Held(one) = &source { vec![one.value] } else { vec![] };
             Insn::new(
@@ -4418,9 +4467,10 @@ mod tests {
         assert_eq!(confined[&2], crate::backend::classes::RegisterClasses::m16().word_bases);
     }
 
-    /// The allocator ranked its candidate bodies counting every instruction, anchors that print nothing among them: a
-    /// body with more anchors cost more than one with more code, and the run, which counts what prints, said the
-    /// reverse.
+    /// The allocator ranked its candidate bodies counting every instruction,
+    /// anchors that print nothing among them: a body with more anchors cost
+    /// more than one with more code, and the run, which counts what prints,
+    /// said the reverse.
     #[test]
     fn test_anchors_that_print_nothing_do_not_cost_the_candidate() {
         let anchor = |at| _instruction(at, semantics(Operation::Nothing, "", vec![], vec![]), vec![], vec![]);

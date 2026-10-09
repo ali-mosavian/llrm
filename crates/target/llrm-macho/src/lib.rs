@@ -1,10 +1,12 @@
-//! An [`Object`] as a 64-bit Mach-O relocatable file for x86-64: one segment holding the sections,
-//! a symbol table, and the 8-byte relocation entries Mach-O keeps per section, with the addend in
-//! the field. A reference to a symbol the object defines and exports, or declares, names it; a
-//! reference to a local one names its section, and the field holds the address.
+//! An [`Object`] as a 64-bit Mach-O relocatable file for x86-64: one segment
+//! holding the sections, a symbol table, and the 8-byte relocation entries
+//! Mach-O keeps per section, with the addend in the field. A reference to a
+//! symbol the object defines and exports, or declares, names it; a reference to
+//! a local one names its section, and the field holds the address.
 //!
-//! The file is not marked `MH_SUBSECTIONS_VIA_SYMBOLS`: a code section stays one atom, so a call
-//! between two functions of it may be resolved where it is written.
+//! The file is not marked `MH_SUBSECTIONS_VIA_SYMBOLS`: a code section stays
+//! one atom, so a call between two functions of it may be resolved where it is
+//! written.
 
 use llrm_object::{Arch, Binding, Definition, Kind, Object, Role, Section, Target, Unsupported};
 
@@ -81,7 +83,8 @@ fn spelling(section: &Section) -> Result<(&'static str, &'static str, u32), Unsu
     }
     Ok(match section.role {
         Role::Text => ("__TEXT", "__text", S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS),
-        // A constant with relocations is written to by the dynamic linker: ld64 refuses it in __TEXT.
+        // A constant with relocations is written to by the dynamic linker: ld64
+        // refuses it in __TEXT.
         Role::ROData if !section.relocs.is_empty() => ("__DATA", "__const", 0),
         Role::ROData => ("__TEXT", "__const", 0),
         Role::Data => ("__DATA", "__data", 0),
@@ -94,8 +97,9 @@ fn spelling(section: &Section) -> Result<(&'static str, &'static str, u32), Unsu
     })
 }
 
-/// The relocation type and length (log2 of the field's bytes) of a field, whether it is
-/// pc-relative, and the bytes between the field's end and the place it is relative to.
+/// The relocation type and length (log2 of the field's bytes) of a field,
+/// whether it is pc-relative, and the bytes between the field's end and the
+/// place it is relative to.
 fn relocation(kind: Kind) -> Result<(u32, u32, bool, i64), Unsupported> {
     Ok(match kind {
         Kind::Abs { width: 8 } => (X86_64_RELOC_UNSIGNED, 3, false, 0),
@@ -123,7 +127,8 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
     if object.arch != Arch::X8664 {
         return Err(unsupported(format!("{:?} has no Mach-O writer: only x86-64 is written", object.arch)));
     }
-    // DWARF's sections are this writer's, made from the object's debug information.
+    // DWARF's sections are this writer's, made from the object's debug
+    // information.
     let expanded;
     let object = match &object.debug {
         Some(info) => {
@@ -145,7 +150,8 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
         }
     }
 
-    // Sections with contents come first in the file, then the zero-fill ones, which have none.
+    // Sections with contents come first in the file, then the zero-fill ones,
+    // which have none.
     let mut order: Vec<usize> = (0..object.sections.len()).filter(|&one| spelled[one].2 != S_ZEROFILL).collect();
     order.extend((0..object.sections.len()).filter(|&one| spelled[one].2 == S_ZEROFILL));
     let ordinal =
@@ -162,7 +168,8 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
     let file_size =
         order.iter().take(file_backed).last().map_or(0, |&one| address[one] + object.sections[one].image.len());
 
-    // Symbols the object exports, then the ones it declares; each by name within its kind.
+    // Symbols the object exports, then the ones it declares; each by name
+    // within its kind.
     let mut defined: Vec<usize> = (0..object.symbols.len())
         .filter(|&one| {
             object.symbols[one].binding == Binding::Public
@@ -214,8 +221,9 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
                 Target::Section(section) => (None, Some(section)),
                 Target::OmfGroup(_) => return Err(unsupported("a reference to a group is OMF's")),
             };
-            // One debug section's offset into another is not relocated: dsymutil reads the object's
-            // own sections, where it is the offset itself.
+            // One debug section's offset into another is not relocated:
+            // dsymutil reads the object's own sections, where it is
+            // the offset itself.
             if section.role == Role::Debug && home.is_some_and(|home| object.sections[home].role == Role::Debug) {
                 let offset = u32::try_from(one.addend)
                     .map_err(|_| unsupported(format!("{}: an offset of {} does not fit", section.name, one.addend)))?;
@@ -225,7 +233,8 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
             let (symbolnum, external, field) = match target.and_then(|target| index_of[target]) {
                 Some(symbol) => (symbol, true, one.addend - beyond),
                 None => {
-                    // A local symbol: its section, and the address in the object's own space, which the
+                    // A local symbol: its section, and the address in the
+                    // object's own space, which the
                     // linker moves with the section.
                     let (home, offset) = match (target, home) {
                         (Some(target), _) => match object.symbols[target].definition {
@@ -270,7 +279,8 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
         entries.push(bytes);
     }
 
-    // Layout: header, load commands, section contents, relocations, symbols, strings.
+    // Layout: header, load commands, section contents, relocations, symbols,
+    // strings.
     let commands = 72 + 80 * order.len() + 24 + 80;
     let first = align_up(32 + commands, 16);
     let mut offsets = vec![0usize; object.sections.len()];
@@ -397,8 +407,9 @@ mod tests {
         Reloc { at, kind, target: Target::Symbol(target), addend }
     }
 
-    /// The program `REFERENCE` assembles: a call, a `lea`, a `movb $1, flag(%rip)` (four bytes of
-    /// field and one of immediate), a load, and a pointer to `msg+1`.
+    /// The program `REFERENCE` assembles: a call, a `lea`, a `movb $1,
+    /// flag(%rip)` (four bytes of field and one of immediate), a load, and
+    /// a pointer to `msg+1`.
     fn program() -> Object {
         let text = vec![
             0xE8, 0, 0, 0, 0, 0x48, 0x8D, 0x35, 0, 0, 0, 0, 0xC6, 0x05, 0, 0, 0, 0, 0x01, 0x48, 0x8B, 0x05, 0, 0, 0, 0,
@@ -467,8 +478,9 @@ _flag:  .byte 0
         String::from_utf8_lossy(&said.stdout).into_owned()
     }
 
-    /// The object, dumped by llvm-objdump, says what llvm-mc's object of the same program says:
-    /// relocations (BRANCH, SIGNED, SIGNED_1, UNSIGNED against a symbol), fields, sections, symbols.
+    /// The object, dumped by llvm-objdump, says what llvm-mc's object of the
+    /// same program says: relocations (BRANCH, SIGNED, SIGNED_1, UNSIGNED
+    /// against a symbol), fields, sections, symbols.
     #[test]
     fn it_reads_as_llvm_mc_writes_the_same_program() {
         let (Some(objdump), Some(mc)) = (tool("llvm-objdump"), tool("llvm-mc")) else {
@@ -488,13 +500,15 @@ _flag:  .byte 0
             .output()
             .unwrap();
         assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
-        // The reference's symbol `_flag` is a global there, as here; the dumps differ only in the file's name.
+        // The reference's symbol `_flag` is a global there, as here; the dumps
+        // differ only in the file's name.
         let (mine, theirs) = (dump(&objdump, &mine), dump(&objdump, &theirs));
         assert_eq!(mine.replace("mine.o", "x"), theirs.replace("theirs.o", "x"));
     }
 
-    /// A reference to a symbol the object keeps local names its section, and the link resolves it:
-    /// the call lands on clang's function, the load on the local data.
+    /// A reference to a symbol the object keeps local names its section, and
+    /// the link resolves it: the call lands on clang's function, the load
+    /// on the local data.
     #[test]
     fn ld64_links_it_with_a_clang_object() {
         let (Some(ld), Some(objdump)) = (tool("ld64.lld"), tool("llvm-objdump")) else {
@@ -503,7 +517,8 @@ _flag:  .byte 0
         };
         let scratch = tempfile::tempdir().unwrap();
         let dir = scratch.path();
-        // _start: call _ext; lea local(%rip), %rsi; ret. `local` is not exported.
+        // _start: call _ext; lea local(%rip), %rsi; ret. `local` is not
+        // exported.
         let text = vec![0xE8, 0, 0, 0, 0, 0x48, 0x8D, 0x35, 0, 0, 0, 0, 0xC3];
         let made = Object {
             name: "m.s".into(),
@@ -556,7 +571,8 @@ _flag:  .byte 0
         };
         let text = run(&["-d", "--macho"]);
         assert!(text.contains("callq\t_ext"), "{text}");
-        // The `lea`'s displacement reaches the start of __data, a section the reference named only by number.
+        // The `lea`'s displacement reaches the start of __data, a section the
+        // reference named only by number.
         let lea = text.lines().find(|line| line.contains("leaq")).unwrap_or_else(|| panic!("{text}"));
         let (at, disp) = (
             u64::from_str_radix(lea.split(':').next().unwrap().trim(), 16).unwrap(),
@@ -568,8 +584,8 @@ _flag:  .byte 0
         assert_eq!(at + 7 + disp, data, "{text}{sections}");
     }
 
-    /// A pc-relative field is signed: 0x8000_0000 was accepted as an unsigned value and wrote a call
-    /// that jumps backwards 2 GiB.
+    /// A pc-relative field is signed: 0x8000_0000 was accepted as an unsigned
+    /// value and wrote a call that jumps backwards 2 GiB.
     #[test]
     fn a_pc_relative_field_must_fit_a_signed_word() {
         let mut made = program();
@@ -577,8 +593,8 @@ _flag:  .byte 0
         assert!(write(&made).unwrap_err().0.contains("does not fit"));
     }
 
-    /// A constant that holds an address is written to by the dynamic linker, which ld64 refuses in
-    /// __TEXT: it is __DATA,__const.
+    /// A constant that holds an address is written to by the dynamic linker,
+    /// which ld64 refuses in __TEXT: it is __DATA,__const.
     #[test]
     fn a_constant_with_relocations_is_in_data_const() {
         let mut made = program();
@@ -612,8 +628,9 @@ _flag:  .byte 0
         assert!(write(&other).unwrap_err().0.contains("only x86-64"));
     }
 
-    /// An object that asks for CodeView or Turbo Debugger information is refused by name: the
-    /// information of another format is never written in its place.
+    /// An object that asks for CodeView or Turbo Debugger information is
+    /// refused by name: the information of another format is never written
+    /// in its place.
     #[test]
     fn a_debug_format_this_object_cannot_carry_is_refused() {
         for (format, name) in [

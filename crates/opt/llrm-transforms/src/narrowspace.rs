@@ -1,10 +1,12 @@
-//! A far pointer parameter of a function only direct calls reach, which every call fills with an address
-//! in one near space, is a near pointer of it: the caller passes the offset, the callee reads through that
-//! space's segment, and the segment is neither pushed nor loaded. The space is where the object is:
-//! DGROUP's for a module global, the stack's for a stack object of the caller (SS, which DS need not be).
-//! A recursive call passes the parameter on, a parameter an earlier round narrowed is its own space's.
-//! One actual that may be elsewhere, or in the other space, keeps it far. `inferspace` then folds the
-//! accesses in the callee and the casts at each call.
+//! A far pointer parameter of a function only direct calls reach, which every
+//! call fills with an address in one near space, is a near pointer of it: the
+//! caller passes the offset, the callee reads through that space's segment, and
+//! the segment is neither pushed nor loaded. The space is where the object is:
+//! DGROUP's for a module global, the stack's for a stack object of the caller
+//! (SS, which DS need not be). A recursive call passes the parameter on, a
+//! parameter an earlier round narrowed is its own space's. One actual that may
+//! be elsewhere, or in the other space, keeps it far. `inferspace` then folds
+//! the accesses in the callee and the casts at each call.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -20,7 +22,8 @@ use llrm_mir::valuetracking::underlying;
 
 use crate::inferspace::on_stack;
 
-/// The functions of `module` that narrowed a parameter, and the functions that call them.
+/// The functions of `module` that narrowed a parameter, and the functions that
+/// call them.
 pub fn narrowed(
     module: &mut Module,
     layout: &DataLayout,
@@ -28,7 +31,8 @@ pub fn narrowed(
 ) -> Vec<GlobalId> {
     let only = direct_only(module);
     let llrm_mir::callgraph::DirectCalls { sites, refused } = direct_calls(module);
-    // The parameters narrowed so far: a near pointer of one is DGROUP's, for the callers it feeds.
+    // The parameters narrowed so far: a near pointer of one is DGROUP's, for
+    // the callers it feeds.
     let mut proven: BTreeMap<(GlobalId, usize), u32> = BTreeMap::new();
     let mut changed = BTreeSet::new();
     let mut again = true;
@@ -53,7 +57,8 @@ pub fn narrowed(
                 }
                 changed.extend(narrow(module, id, parameter, far, space, calls));
                 changed.insert(id);
-                // The callers of this function that pass what they received, now a near pointer of it.
+                // The callers of this function that pass what they received,
+                // now a near pointer of it.
                 proven.retain(|&(function, at), _| function != id || at < parameter);
                 proven.insert((id, parameter), space);
                 again = true;
@@ -63,7 +68,8 @@ pub fn narrowed(
     changed.into_iter().collect()
 }
 
-/// The far space parameter `at` of `id` points into, where its selector may be dropped.
+/// The far space parameter `at` of `id` points into, where its selector may be
+/// dropped.
 fn far_space(
     module: &Module,
     layout: &DataLayout,
@@ -78,7 +84,8 @@ fn far_space(
     }
 }
 
-/// Whether `call` of `caller` passes its own parameter `parameter` on to `id`, itself.
+/// Whether `call` of `caller` passes its own parameter `parameter` on to `id`,
+/// itself.
 fn passes_on(
     module: &Module,
     id: GlobalId,
@@ -90,8 +97,9 @@ fn passes_on(
     caller == id && function.instruction(call).operands[parameter] == Operand::Value(function.parameters()[parameter])
 }
 
-/// The near space call `call` of `caller` fills parameter `parameter` of `id` from: where the object it
-/// addresses is. None for a pass-on and for what may be anywhere.
+/// The near space call `call` of `caller` fills parameter `parameter` of `id`
+/// from: where the object it addresses is. None for a pass-on and for what may
+/// be anywhere.
 fn space_of(
     module: &Module,
     layout: &DataLayout,
@@ -125,7 +133,8 @@ fn space_of(
     }
 }
 
-/// Parameter `parameter` of `id` becomes a near pointer, and each call's argument its offset.
+/// Parameter `parameter` of `id` becomes a near pointer, and each call's
+/// argument its offset.
 fn narrow(
     module: &mut Module,
     id: GlobalId,
@@ -174,7 +183,8 @@ fn narrow(
     for &(caller, call) in calls {
         let Module { context, globals, .. } = &mut *module;
         let GlobalKind::Function(function) = &mut globals[caller.0 as usize].kind else { unreachable!("a caller") };
-        // A recursive call that passed the parameter on already passes the near one.
+        // A recursive call that passed the parameter on already passes the near
+        // one.
         if caller == id
             && function.instruction(call).operands[parameter] == Operand::Value(function.parameters()[parameter])
         {

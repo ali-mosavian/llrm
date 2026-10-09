@@ -103,7 +103,8 @@ impl Repr for Space {
     }
 }
 
-/// `INDEX_NAMES`: base is si/di for a SEGMENT array element and bx for a FAR one.
+/// `INDEX_NAMES`: base is si/di for a SEGMENT array element and bx for a FAR
+/// one.
 pub fn index_names(register: Register) -> Option<&'static str> {
     match register {
         Register::SI => Some("si"),
@@ -135,8 +136,9 @@ pub struct Addr {
     pub segment: Register,
 }
 
-/// A frame cell is the same place whichever slot it is tagged with: the tag (`Addr.index` of a frame address, see
-/// `slot_tag`) rides along and decides nothing, so two views of the same bytes stay equal and hash alike.
+/// A frame cell is the same place whichever slot it is tagged with: the tag
+/// (`Addr.index` of a frame address, see `slot_tag`) rides along and decides
+/// nothing, so two views of the same bytes stay equal and hash alike.
 impl PartialEq for Addr {
     fn eq(
         &self,
@@ -167,8 +169,9 @@ impl std::hash::Hash for Addr {
     }
 }
 
-/// What a frame cell's `Addr.index` holds: the slot it lies in, named by the displacement of the slot's first byte in
-/// the layout the cell was made under (odd, so never the 0 of a cell that names none).
+/// What a frame cell's `Addr.index` holds: the slot it lies in, named by the
+/// displacement of the slot's first byte in the layout the cell was made under
+/// (odd, so never the 0 of a cell that names none).
 pub const fn slot_tag(home: i64) -> i64 {
     home * 2 + 1
 }
@@ -187,13 +190,15 @@ impl Addr {
         self.base == Register::None
     }
 
-    /// The slot a frame cell belongs to, named by `slot_tag` of the slot's first byte as the cell's layout put it; a
-    /// cell that names none (including every cell of another space) has `None`.
+    /// The slot a frame cell belongs to, named by `slot_tag` of the slot's
+    /// first byte as the cell's layout put it; a cell that names none
+    /// (including every cell of another space) has `None`.
     pub fn slot_home(&self) -> Option<i64> {
         (self.space == Space::Frame && self.index & 1 == 1).then(|| (self.index - 1) / 2)
     }
 
-    /// This cell, tagged as belonging to the slot whose first byte is at `home`.
+    /// This cell, tagged as belonging to the slot whose first byte is at
+    /// `home`.
     pub fn in_slot(
         &self,
         home: i64,

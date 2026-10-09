@@ -1,4 +1,5 @@
-//! `.debug_line`: the line program, one sequence per section of code with lines.
+//! `.debug_line`: the line program, one sequence per section of code with
+//! lines.
 
 use llrm_object::debug::{ChecksumKind, Info};
 use llrm_object::{Object, Unsupported};
@@ -29,7 +30,8 @@ const FORM_LINE_STRP: u8 = 0x1f;
 const FORM_UDATA: u8 = 0x0f;
 const FORM_DATA16: u8 = 0x1e;
 
-/// A file's directory and name apart; the directories of every file, the first being the current.
+/// A file's directory and name apart; the directories of every file, the first
+/// being the current.
 fn directories(info: &Info) -> (Vec<String>, Vec<(usize, String)>) {
     let mut dirs = vec![String::new()];
     let mut files = Vec::new();
@@ -47,7 +49,8 @@ fn directories(info: &Info) -> (Vec<String>, Vec<(usize, String)>) {
     (dirs, files)
 }
 
-/// A row of the line table: what `Line` says, and where the body starts and ends.
+/// A row of the line table: what `Line` says, and where the body starts and
+/// ends.
 #[derive(Clone, Copy)]
 struct Row {
     offset: usize,
@@ -99,7 +102,8 @@ pub fn program(
         buf.uleb(u64::from(FORM_LINE_STRP));
         buf.uleb(dirs.len() as u64);
         for dir in &dirs {
-            // Directory 0 is the compilation directory: the current one, spelled ".".
+            // Directory 0 is the compilation directory: the current one,
+            // spelled ".".
             let at = out.line_strings.add(if dir.is_empty() { "." } else { dir });
             buf.section_offset(strings, at);
         }
@@ -140,8 +144,8 @@ pub fn program(
     let length = (buf.at() - header_length - 4) as u32;
     buf.patch32(header_length, length);
 
-    // The file number of file `index` in the table above: 0-based in 5, 1-based before. A sequence
-    // starts at file 1, so one in file 0 sets it.
+    // The file number of file `index` in the table above: 0-based in 5, 1-based
+    // before. A sequence starts at file 1, so one in file 0 sets it.
     let number = |index: usize| -> u64 { index as u64 + u64::from(out.version < 5) };
     let mut sections: Vec<usize> = Vec::new();
     for one in &info.lines {
@@ -168,7 +172,8 @@ pub fn program(
             })
             .collect();
         rows.sort_by_key(|one| one.offset);
-        // Where each body starts and ends is a row, however the source's lines fall.
+        // Where each body starts and ends is a row, however the source's lines
+        // fall.
         for function in &info.functions {
             let Some(range) = function.ranges.first().filter(|range| range.section == section) else { continue };
             let Some((start, end)) = function.body else { continue };

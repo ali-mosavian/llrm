@@ -19,8 +19,9 @@ fn listing(
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }
 
-/// `&p[a]` as a value was `shl ecx, 2` and `add eax, ecx`, as bintree's insert loop paid three instructions for a
-/// pointer gcc makes with one `lea` (#834). A load or a store through it still takes the address mode itself.
+/// `&p[a]` as a value was `shl ecx, 2` and `add eax, ecx`, as bintree's insert
+/// loop paid three instructions for a pointer gcc makes with one `lea` (#834).
+/// A load or a store through it still takes the address mode itself.
 #[test]
 fn a_pointer_to_an_element_is_one_lea() {
     let text = listing(

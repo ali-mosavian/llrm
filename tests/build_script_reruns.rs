@@ -1,7 +1,9 @@
-//! A file created or removed in a target's directory (a Python tool leaves `__pycache__` there) reran llrm-core's
-//! build script, the instruction-selector generator, on the next build: the gate's `cargo test` rewrote the binaries'
-//! generated inputs after `cargo build --bins`, and every tool then judged the binaries stale. The script now watches
-//! the files it reads, not the directory that holds them.
+//! A file created or removed in a target's directory (a Python tool leaves
+//! `__pycache__` there) reran llrm-core's build script, the
+//! instruction-selector generator, on the next build: the gate's `cargo test`
+//! rewrote the binaries' generated inputs after `cargo build --bins`, and every
+//! tool then judged the binaries stale. The script now watches the files it
+//! reads, not the directory that holds them.
 
 use std::fs;
 use std::path::Path;

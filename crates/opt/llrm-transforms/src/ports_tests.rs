@@ -43,7 +43,8 @@ fn test_a_port_call_is_narrowed_only_where_the_target_says_its_device_reaches_no
     assert_eq!(narrowed, [true, false, true, false]);
 }
 
-/// A pass that asks the manager what the counted loops bound, and changes nothing.
+/// A pass that asks the manager what the counted loops bound, and changes
+/// nothing.
 struct AsksBounds;
 
 impl llrm_mir::passes::FunctionPass for AsksBounds {
@@ -61,8 +62,8 @@ impl llrm_mir::passes::FunctionPass for AsksBounds {
     }
 }
 
-/// A port no constant names made `ports` solve what the counted loops bound by hand, beside the manager's. It reads the
-/// manager's.
+/// A port no constant names made `ports` solve what the counted loops bound by
+/// hand, beside the manager's. It reads the manager's.
 #[test]
 fn test_ports_reads_the_managers_bounds_for_a_port_no_constant_names() {
     let mut module = parsed(

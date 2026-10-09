@@ -20,7 +20,8 @@
 //! which address spaces hold program data the segment layout's: both the
 //! program's, which the pass manager hands analyses as `Outer::program`.
 //!
-//! Tests skipped, the lattice's: `hierarchy_coarse_dgroup_meets_linked_static_but_stack_does_not`,
+//! Tests skipped, the lattice's:
+//! `hierarchy_coarse_dgroup_meets_linked_static_but_stack_does_not`,
 //! `one_hole_covers_but_the_union_of_holes_does_not`,
 //! `layout_makes_owned_segment_private_but_shared_segment_linked`,
 //! `indexed_access_stays_in_its_segment_and_landmarks_bound_physical_indexing`,
@@ -98,7 +99,8 @@ fn foreign(
     program: Option<&ProgramProxy>,
 ) -> Option<Slice> {
     let machine = &*program?.target;
-    // A selector or offset is a word of the segment's size: none where the target has no segments.
+    // A selector or offset is a word of the segment's size: none where the
+    // target has no segments.
     let segment = i64::try_from(machine.spaces().segment_bytes?).ok()?;
     // A selector or offset is an unsigned word; ranges may carry it signed,
     // and an offset wraps within its segment.
@@ -178,9 +180,11 @@ fn same_typed_start(
     first.object == second.object && first.low == second.low && first.low != FLOOR
 }
 
-/// Whether the address analysis has the two accesses in one object at bytes that overlap: each names one start in a
-/// single object, and their widths reach one another. Type-based alias analysis only tells accesses apart that the
-/// address analysis cannot (as LLVM asks it of MayAlias alone); it does not unsay an overlap that is known.
+/// Whether the address analysis has the two accesses in one object at bytes
+/// that overlap: each names one start in a single object, and their widths
+/// reach one another. Type-based alias analysis only tells accesses apart that
+/// the address analysis cannot (as LLVM asks it of MayAlias alone); it does not
+/// unsay an overlap that is known.
 fn provably_overlap(
     one: &MemRef,
     other: &MemRef,
@@ -526,7 +530,8 @@ pub fn object_bucket(
 /// object is unknown, one in the write's `_displaced` frame, one in the
 /// write's own object, and one whose alias class may alias the write's.
 ///
-/// Sorted and without repeats: a set per write, rehashed as it grew, was dearer than the kill.
+/// Sorted and without repeats: a set per write, rehashed as it grew, was dearer
+/// than the kill.
 pub fn overlap_buckets(
     reference: &MemRef,
     parts: &OverlapParts,
@@ -541,8 +546,9 @@ pub fn overlap_buckets(
             reached.extend(buckets.iter().cloned());
         }
     }
-    // A write names one or two objects, and a set of slices keeps one object's together (it orders by object first):
-    // the classes seen sit in a few inline slots, and a spill only past them.
+    // A write names one or two objects, and a set of slices keeps one object's
+    // together (it orders by object first): the classes seen sit in a few
+    // inline slots, and a spill only past them.
     let mut few = [None::<AliasClass>; 6];
     let mut spill = Vec::new();
     let mut last = None;
@@ -732,9 +738,10 @@ b0:
         assert!(!typed_apart(&with(short, one(&object, 0, 1)), &with(elsewhere, one(&object, 0, 1))));
     }
 
-    /// Types tell apart what the address analysis cannot place; two accesses it places in one object at overlapping
-    /// bytes are not told apart by their types (`long long` stored, `int` read at 4 of it, #677), and ones whose
-    /// bytes do not meet still are.
+    /// Types tell apart what the address analysis cannot place; two accesses it
+    /// places in one object at overlapping bytes are not told apart by
+    /// their types (`long long` stored, `int` read at 4 of it, #677), and ones
+    /// whose bytes do not meet still are.
     #[test]
     fn a_known_overlap_outranks_the_types() {
         let module = module(&format!(
@@ -750,7 +757,8 @@ b0:
         let dl = layout(&module);
         let [short, wide] = &accesses(&module, &dl)[..] else { panic!() };
         let object = global(1, Some(8));
-        // The short is bytes 0-1; the wide, at 1, is bytes 1-4 and at 2, bytes 2-5.
+        // The short is bytes 0-1; the wide, at 1, is bytes 1-4 and at 2, bytes
+        // 2-5.
         assert!(!typed_apart(&with(short, one(&object, 0, 1)), &with(wide, one(&object, 1, 2))));
         assert!(typed_apart(&with(short, one(&object, 0, 1)), &with(wide, one(&object, 2, 3))));
     }
@@ -787,7 +795,8 @@ b0:
         ));
         let dl = layout(&module);
         let [character, short, long, place] = &accesses(&module, &dl)[..] else { panic!() };
-        // The parent covers a child; siblings are apart; another root says nothing.
+        // The parent covers a child; siblings are apart; another root says
+        // nothing.
         assert!(!typed_apart(character, short));
         assert!(!typed_apart(long, character));
         assert!(typed_apart(short, long));
@@ -796,7 +805,8 @@ b0:
 
     #[test]
     fn provenance_alias_uses_canonical_subobjects_and_byte_ranges() {
-        // Fields of one object, and equal offsets in distinct objects, are disjoint.
+        // Fields of one object, and equal offsets in distinct objects, are
+        // disjoint.
         let module = module(
             "define void @f(ptr %p) {
 b0:

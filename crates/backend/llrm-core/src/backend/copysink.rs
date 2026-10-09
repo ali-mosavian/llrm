@@ -260,8 +260,8 @@ mod tests {
         sources: Vec<Loc>,
         target: Option<i64>,
     ) -> Arc<Insn> {
-        // Inserted, as the C path's are: an instruction standing for BC's bytes stays where `lir.without` finds no
-        // heir.
+        // Inserted, as the C path's are: an instruction standing for BC's bytes
+        // stays where `lir.without` finds no heir.
         Arc::new(Insn::new(
             at,
             Some((at, at)),
@@ -336,8 +336,9 @@ mod tests {
 
     #[test]
     fn test_copy_read_by_an_inner_loop_stays() {
-        // Shellsort's gap loop: `mov cx,dx` in the inner loop's header saved `i`
-        // for the inner loop's latch; it must not leave for the outer exit.
+        // Shellsort's gap loop: `mov cx,dx` in the inner loop's header saved
+        // `i` for the inner loop's latch; it must not leave for the
+        // outer exit.
         use Register::{AX, BX, CX, DX, SI};
         let body = LirBody::new(
             "f",
@@ -360,7 +361,8 @@ mod tests {
 
     #[test]
     fn test_copy_read_only_after_its_loop_moves_to_the_exit() {
-        // Plasmablobs: `mov di,dx` on the way back to the header ran every pass for one read after the loop.
+        // Plasmablobs: `mov di,dx` on the way back to the header ran every pass
+        // for one read after the loop.
         use Register::{AX, BX, DI, DX};
         let body = LirBody::new(
             "f",
@@ -454,8 +456,9 @@ mod tests {
 
     #[test]
     fn test_a_copy_an_inner_loop_reads_again_stays_in_it() {
-        // PRECALCULATIONS' map index was copied back once per row instead of once
-        // per pixel, and deedlines drew its minimap from stale plasma data.
+        // PRECALCULATIONS' map index was copied back once per row instead of
+        // once per pixel, and deedlines drew its minimap from stale
+        // plasma data.
         let (si, bx, dx) = (r(Register::SI), r(Register::BX), r(Register::DX));
         let body = LirBody::new(
             "one",

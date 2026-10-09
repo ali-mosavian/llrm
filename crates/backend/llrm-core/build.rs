@@ -1,7 +1,7 @@
 //! Generates one instruction selector per target from its definition
 //! directory (`crates/target/<name>/src/isel/patterns.isel` against
-//! `src/instructions/x86.instr`) and its peephole rules: the family's (`llrm-x86`) and its own
-//! `src/isel/peephole.peep`.
+//! `src/instructions/x86.instr`) and its peephole rules: the family's
+//! (`llrm-x86`) and its own `src/isel/peephole.peep`.
 
 // The tests read what build.rs does not.
 #[allow(dead_code)]
@@ -12,8 +12,9 @@ fn main() {
     let family_forms = "../../target/llrm-x86/src/instructions/x86.instr";
     let family_patterns = "../../target/llrm-x86/src/isel/family.isel";
     let family_peephole = "../../target/llrm-x86/src/isel/peephole.peep";
-    // Files, not `crates/target`: cargo scans a watched directory for the newest mtime in it, and tools leave files
-    // there. A new target is a new workspace member, so Cargo.lock says so.
+    // Files, not `crates/target`: cargo scans a watched directory for the
+    // newest mtime in it, and tools leave files there. A new target is a
+    // new workspace member, so Cargo.lock says so.
     for path in ["src/backend/isel/generator", "../../../Cargo.lock", family_forms, family_patterns, family_peephole] {
         println!("cargo:rerun-if-changed={path}");
     }
@@ -23,7 +24,8 @@ fn main() {
     // A target's forms are the family's, then its own.
     let forms_of = |own: &std::path::Path| format!("{}\n{}", read(std::path::Path::new(family_forms)), read(own));
     // And its patterns: the family's file with each `own NAME` line replaced by
-    // the target's patterns under `splice NAME`, so where they go is the family's to say.
+    // the target's patterns under `splice NAME`, so where they go is the
+    // family's to say.
     let patterns_of = |own: &std::path::Path| spliced(&read(std::path::Path::new(family_patterns)), &read(own));
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
@@ -154,8 +156,8 @@ fn peephole(
     )
 }
 
-/// The groups of `peep/groups.list`: each name and whether the schedule runs its
-/// `insns` form (else its body form).
+/// The groups of `peep/groups.list`: each name and whether the schedule runs
+/// its `insns` form (else its body form).
 fn rule_groups(text: &str) -> Vec<(String, bool)> {
     text.lines()
         .map(str::trim)
@@ -208,8 +210,9 @@ impl Rules {{
     )
 }
 
-/// `family` with each `own NAME` line replaced by the text under `splice NAME` in
-/// `own`; a splice the family has no line for is an error, not a dropped pattern.
+/// `family` with each `own NAME` line replaced by the text under `splice NAME`
+/// in `own`; a splice the family has no line for is an error, not a dropped
+/// pattern.
 fn spliced(
     family: &str,
     own: &str,

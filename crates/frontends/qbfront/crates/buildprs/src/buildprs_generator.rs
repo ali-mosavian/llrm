@@ -1,8 +1,8 @@
 //! Host-side `buildprs` generation boundary.
 //!
 //! This module is intentionally split from `build.rs`: tests can exercise the
-//! reverse-engineered generator directly, and `build.rs` can later call the same
-//! code once grammar-backed state lowering reaches full parity.
+//! reverse-engineered generator directly, and `build.rs` can later call the
+//! same code once grammar-backed state lowering reaches full parity.
 
 use std::collections::BTreeMap;
 
@@ -38,11 +38,13 @@ pub struct GeneratedDispatchTables {
 pub struct GeneratedParserTables {
     pub state: Vec<u8>,
     pub dispatch: GeneratedDispatchTables,
-    /// Offsets into `state` for each statement anchor keyword name (e.g. "BEEP" → 0).
-    /// Only stores the FIRST offset when multiple rules share an anchor.
+    /// Offsets into `state` for each statement anchor keyword name (e.g. "BEEP"
+    /// → 0). Only stores the FIRST offset when multiple rules share an
+    /// anchor.
     pub statement_offsets: BTreeMap<String, u16>,
-    /// All (anchor, offset) pairs in grammar order.  Multiple entries may share the same
-    /// anchor when two grammar rules start with the same keyword (e.g. file GET vs graphics GET).
+    /// All (anchor, offset) pairs in grammar order.  Multiple entries may share
+    /// the same anchor when two grammar rules start with the same keyword
+    /// (e.g. file GET vs graphics GET).
     pub statement_offset_list: Vec<(String, u16)>,
     /// Offsets into `state` for each function anchor keyword name.
     pub function_offsets: BTreeMap<String, u16>,
@@ -72,10 +74,12 @@ pub fn generate_token_artifacts(grammar: &GrammarFile) -> GeneratedTokenArtifact
     generate_token_artifacts_from_decls(&grammar.tokens)
 }
 
-/// Derive internal/external nonterminal ordering and external help table from grammar.
+/// Derive internal/external nonterminal ordering and external help table from
+/// grammar.
 ///
-/// Internal `int_nt_disp` offsets are left at zero until state lowering assigns each NT's
-/// `tState` byte start (see [`NonterminalDispatchOrder`] and `STI_*` equates in `prstab.inc`).
+/// Internal `int_nt_disp` offsets are left at zero until state lowering assigns
+/// each NT's `tState` byte start (see [`NonterminalDispatchOrder`] and `STI_*`
+/// equates in `prstab.inc`).
 pub fn generate_dispatch_order_from_grammar(grammar: &GrammarFile) -> GeneratedDispatchTables {
     dispatch_tables_from_order(&derive_nonterminal_dispatch_order(grammar))
 }

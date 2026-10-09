@@ -1,7 +1,8 @@
-//! LLVM's DeadArgumentElimination for a function only direct calls reach: a parameter nothing reads
-//! (but its own recursive calls, which pass it on to itself) goes, and with it the argument of every
-//! call. Promotion and the constants propagated into a body leave them: a length every caller passes
-//! as 12, folded into the body, is still pushed at every call.
+//! LLVM's DeadArgumentElimination for a function only direct calls reach: a
+//! parameter nothing reads (but its own recursive calls, which pass it on to
+//! itself) goes, and with it the argument of every call. Promotion and the
+//! constants propagated into a body leave them: a length every caller passes as
+//! 12, folded into the body, is still pushed at every call.
 
 use std::collections::BTreeSet;
 
@@ -11,7 +12,8 @@ use llrm_mir::memory;
 use llrm_mir::module::{GlobalKind, InstId, Module, Operand};
 use llrm_mir::opcode::Opcode;
 
-/// The functions of `module` that lost a parameter, and the functions that call them.
+/// The functions of `module` that lost a parameter, and the functions that call
+/// them.
 pub fn removed(module: &mut Module) -> Vec<GlobalId> {
     let only = direct_only(module);
     let llrm_mir::callgraph::DirectCalls { sites, refused } = direct_calls(module);
@@ -26,7 +28,8 @@ pub fn removed(module: &mut Module) -> Vec<GlobalId> {
         let ty = {
             let Module { context, globals, .. } = &mut *module;
             let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else { unreachable!("a function") };
-            // Every argument at a removed position goes first: each use of a removed parameter is one of them.
+            // Every argument at a removed position goes first: each use of a
+            // removed parameter is one of them.
             for &call in &own {
                 for &parameter in gone.iter().rev() {
                     function.replace_argument(call, parameter, &[], function.ty);
@@ -54,10 +57,12 @@ pub fn removed(module: &mut Module) -> Vec<GlobalId> {
     changed.into_iter().collect()
 }
 
-/// The parameters of `id` nothing reads but its own calls to itself, each as the argument of a parameter
-/// that nothing reads either: LLVM's DeadArgumentElimination (`MarkValue`/`SurveyUse`: a use as an argument of
-/// the function's own call is live only if that parameter is), taken to its fixed point. `hanoi(n - 1, a, c, b)`
-/// permutes three parameters among themselves and reads none.
+/// The parameters of `id` nothing reads but its own calls to itself, each as
+/// the argument of a parameter that nothing reads either: LLVM's
+/// DeadArgumentElimination (`MarkValue`/`SurveyUse`: a use as an argument of
+/// the function's own call is live only if that parameter is), taken to its
+/// fixed point. `hanoi(n - 1, a, c, b)` permutes three parameters among
+/// themselves and reads none.
 fn dead(
     module: &Module,
     id: GlobalId,

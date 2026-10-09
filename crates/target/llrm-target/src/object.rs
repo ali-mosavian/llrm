@@ -1,6 +1,6 @@
-//! What a target says of the object file and the listing it writes: the formats it can write and
-//! the default among them, its record widths, and the listing's opening lines. Read from the
-//! target's `object.toml`.
+//! What a target says of the object file and the listing it writes: the formats
+//! it can write and the default among them, its record widths, and the
+//! listing's opening lines. Read from the target's `object.toml`.
 
 /// An object file format.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -82,7 +82,8 @@ impl ObjectFormat {
         Ok(Self { formats, default, bitness, header })
     }
 
-    /// The format written when `asked` is the one `-fobject-format=` named, if any.
+    /// The format written when `asked` is the one `-fobject-format=` named, if
+    /// any.
     pub fn choose(
         &self,
         target: &str,
@@ -129,8 +130,8 @@ mod tests {
         assert_eq!(parse("[\"omf\"]", "omf", 24), "bitness is not 16 or 32");
     }
 
-    /// A format the target does not list was written as the target's own, or refused with no
-    /// word of what it can write.
+    /// A format the target does not list was written as the target's own, or
+    /// refused with no word of what it can write.
     #[test]
     fn a_format_the_target_does_not_list_is_refused_naming_what_it_writes() {
         let real = ObjectFormat::parse("formats = [\"omf\"]\ndefault = \"omf\"\nbitness = 16\nheader = []\n").unwrap();

@@ -1,7 +1,8 @@
 //! Exact CFG loop peeling, priced before anything is cloned: llrm-core's
 //! `optimize/peel.rs`, the port of `qbopt/optimize/peel.py`, adapted to the
 //! rich MIR.
-//! LLVM: LoopPeel (`peelLoop`) peeling every trip, priced by LoopUnrollPass's full-unroll cost model.
+//! LLVM: LoopPeel (`peelLoop`) peeling every trip, priced by LoopUnrollPass's
+//! full-unroll cost model.
 //!
 //! Peeling is the CFG counterpart of full straight-line unrolling: clone
 //! every block of a proven exact loop once per trip, keep the residual loop

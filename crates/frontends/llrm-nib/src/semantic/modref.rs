@@ -162,7 +162,8 @@ fn direct(function: &hir::Function) -> (Effects, BTreeSet<&str>) {
                 ("store", 0) => {
                     effects.writes.insert(*symbol);
                 }
-                // Its address escapes, or an operation both reads and writes it.
+                // Its address escapes, or an operation both reads and writes
+                // it.
                 _ => {
                     effects.reads.insert(*symbol);
                     effects.writes.insert(*symbol);

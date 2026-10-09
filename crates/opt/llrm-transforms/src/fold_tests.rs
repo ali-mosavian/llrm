@@ -476,8 +476,9 @@ fn comparing_constant_pointers_folds() {
     }
 }
 
-/// `fold` asked what is known of the body through memory for its integers and again, in `floatfold`, for the float
-/// solve under it: two derivations of one fact (#560). One serves both where nothing was changed between them.
+/// `fold` asked what is known of the body through memory for its integers and
+/// again, in `floatfold`, for the float solve under it: two derivations of one
+/// fact (#560). One serves both where nothing was changed between them.
 #[test]
 fn what_is_known_through_memory_is_derived_once_for_the_integers_and_the_floats() {
     let mut module = parsed(&format!(

@@ -72,8 +72,8 @@ fn test_only_adds_and_subtracts_move() {
     assert!(!changed);
 }
 
-/// bench/mandel: a `short` counter's `sext`, read after the loop by two exits (the break and the
-/// bound), was computed every trip. Each exit takes a copy.
+/// bench/mandel: a `short` counter's `sext`, read after the loop by two exits
+/// (the break and the bound), was computed every trip. Each exit takes a copy.
 #[test]
 fn test_an_extension_two_exits_read_moves_to_both() {
     let text = "define i32 @f(i16 %n, i16 %x) {

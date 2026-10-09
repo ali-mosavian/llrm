@@ -83,7 +83,8 @@ impl Dominance {
         self.reachable(at) && self.0.dominates(block(dominator), block(at))
     }
 
-    /// The nearest strict dominator: none for the entry or an unreachable block.
+    /// The nearest strict dominator: none for the entry or an unreachable
+    /// block.
     pub fn immediate(
         &self,
         at: i64,
@@ -213,7 +214,8 @@ thread_local! {
     static DERIVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many shapes this thread has derived, for a test that a pass asks for its body's once.
+/// How many shapes this thread has derived, for a test that a pass asks for its
+/// body's once.
 pub fn shapes_derived() -> usize {
     DERIVED.with(std::cell::Cell::get)
 }

@@ -1,6 +1,6 @@
-//! `textDocument/completion`: the locals in scope, keywords and the module's own names; after
-//! `alias.` the public names of the module imported as `alias`; after any
-//! other value and `.`, the fields and methods of its type.
+//! `textDocument/completion`: the locals in scope, keywords and the module's
+//! own names; after `alias.` the public names of the module imported as
+//! `alias`; after any other value and `.`, the fields and methods of its type.
 
 use std::path::Path;
 
@@ -17,7 +17,8 @@ use crate::{check, lex, module_path, parse};
 const KEYWORD: u8 = 14;
 const MODULE: u8 = 9;
 const VARIABLE: u8 = 6;
-/// A name put where one is being typed, so that the text parses and checks as far as it.
+/// A name put where one is being typed, so that the text parses and checks as
+/// far as it.
 const TYPING: &str = "nib_lsp_typing";
 
 pub fn completion(

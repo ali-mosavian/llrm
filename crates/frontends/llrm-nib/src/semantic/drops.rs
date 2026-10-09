@@ -95,7 +95,8 @@ impl FunctionCompiler<'_> {
         self.types.dropped.values().any(|one| one == name)
     }
 
-    /// Makes `storage` an owner of a `struct_id`, flagged live when it holds a `drop`.
+    /// Makes `storage` an owner of a `struct_id`, flagged live when it holds a
+    /// `drop`.
     pub(super) fn own_aggregate(
         &mut self,
         storage: &Storage,

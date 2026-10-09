@@ -695,8 +695,9 @@ b0:
     assert_eq!(parsed.result("z", &x), None, "a zero divisor is undefined");
 }
 
-/// `known` built each access's reference without the exposed-frames table, so each scanned its alloca's
-/// uses: 3.6% of compiling 100 sequential loops (#556). The table is made once for the body.
+/// `known` built each access's reference without the exposed-frames table, so
+/// each scanned its alloca's uses: 3.6% of compiling 100 sequential loops
+/// (#556). The table is made once for the body.
 #[test]
 fn test_known_asks_each_bodys_exposed_frames_once() {
     let accesses: String =
@@ -708,9 +709,10 @@ fn test_known_asks_each_bodys_exposed_frames_once() {
     assert_eq!(crate::frameescape::scans() - before, 0, "an access scanned its alloca's uses");
 }
 
-/// `overlaps` was keyed by a resolved reference's address, so which bucket an answer lived in, and the work of finding
-/// it, changed with ASLR: `mir hoist` varied up to 0.9% between identical compiles (#992). The key is the order the
-/// references were resolved.
+/// `overlaps` was keyed by a resolved reference's address, so which bucket an
+/// answer lived in, and the work of finding it, changed with ASLR: `mir hoist`
+/// varied up to 0.9% between identical compiles (#992). The key is the order
+/// the references were resolved.
 #[test]
 fn test_overlap_answers_are_keyed_by_the_order_resolved_and_not_by_address() {
     let parsed = Parsed::new(

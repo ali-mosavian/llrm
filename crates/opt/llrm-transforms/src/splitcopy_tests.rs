@@ -93,7 +93,8 @@ fn test_a_copy_of_a_copy_is_the_loads_of_the_first_source() {
     assert_eq!(results(&after, inputs), results(&module(body), inputs));
 }
 
-/// A destination another function can reach is read as more than its loads here.
+/// A destination another function can reach is read as more than its loads
+/// here.
 #[test]
 fn test_a_memcpy_into_a_passed_local_stays_whole() {
     let body = "define i16 @f(i16 %x) {
@@ -132,7 +133,8 @@ fn stays(body: &str) {
     assert!(!changed, "{}", printed(&after));
 }
 
-/// A volatile copy is an access in its own right: it is not the loads and stores of leaves.
+/// A volatile copy is an access in its own right: it is not the loads and
+/// stores of leaves.
 #[test]
 fn test_a_volatile_memcpy_stays_whole() {
     stays(

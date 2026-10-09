@@ -39,14 +39,15 @@ fn compiled(inlined: bool) -> Vec<Rc<omf::Record>> {
     std::fs::write(&path, SOURCE).expect("writes");
     let frontend = crate::Frontend { debug: true, ..crate::real_mode() };
     let program = crate::driver::parsed(&path, &frontend, None).expect("parses");
-    // Unless asked, not inlined: `scale` is a symbol and its lines are statements to read.
+    // Unless asked, not inlined: `scale` is a symbol and its lines are
+    // statements to read.
     let threshold = if inlined {
         llrm_transforms::inline::Threshold::default()
     } else {
         llrm_transforms::inline::Threshold::none()
     };
-    // Not optimised unless it inlines: a variable the optimiser keeps in no cell is left out of CodeView 4, which is
-    // what these read.
+    // Not optimised unless it inlines: a variable the optimiser keeps in no
+    // cell is left out of CodeView 4, which is what these read.
     let pipeline = llrm_transforms::pipeline::Options { inline: threshold, optimize: inlined, ..Default::default() };
     let options = llrm_core::driver::Options {
         pipeline,
@@ -65,8 +66,9 @@ fn compiled(inlined: bool) -> Vec<Rc<omf::Record>> {
     .expect("parses")
 }
 
-/// Each source local and module variable, and each parameter (a stack one an argument, a register one a cell of the
-/// frame), with its Nib type; no compiler temporary.
+/// Each source local and module variable, and each parameter (a stack one an
+/// argument, a register one a cell of the frame), with its Nib type; no
+/// compiler temporary.
 #[test]
 fn nib_symbols_read_with_their_types() {
     assert_eq!(
@@ -80,9 +82,10 @@ fn nib_symbols_read_with_their_types() {
             "LOCAL main.small: UNSIGNED CHAR",
             "LOCAL main.values: 8 BYTES OF SHORT",
             "LOCAL scale.doubled: LONG",
-            // `scale`'s second parameter arrives in a register (regparm3), which CodeView 4 cannot say for a whole
-            // scope, and `-g` stores nothing to a cell for it: it is left out. The first is on the stack,
-            // an argument.
+            // `scale`'s second parameter arrives in a register (regparm3),
+            // which CodeView 4 cannot say for a whole scope, and `-g` stores
+            // nothing to a cell for it: it is left out. The first is on the
+            // stack, an argument.
             "PARAM scale.p: FAR * struct point {x +0 SHORT, y +2 LONG}",
             "PROC main far () -> SHORT",
             "PROC scale near (FAR * struct point {x +0 SHORT, y +2 LONG}, SHORT) -> LONG",
@@ -114,8 +117,8 @@ fn nib_inlined_code_keeps_its_lines_and_loses_its_symbols() {
         .flat_map(|one| omf::lines(one).1)
         .map(|(line, _)| line)
         .collect();
-    // Optimised, a statement whose code is gone has no line (it kept one while `-g` kept the stores): `scale`'s 9,
-    // `main`'s locals.
+    // Optimised, a statement whose code is gone has no line (it kept one while
+    // `-g` kept the stores): `scale`'s 9, `main`'s locals.
     assert_eq!(lines, [17, 10, 19, 20, 21]);
     let shape = cv4info::shape(&object);
     assert!(shape.iter().all(|one| !one.contains("scale")), "{shape:?}");
@@ -142,9 +145,10 @@ fn model_of(source: &str) -> llrm_object::debug::Info {
         .expect("-g's information")
 }
 
-/// `gcd` is only ever called with two constants, so the optimiser takes both parameters out of it. They were
-/// dropped from the debug information with nothing said: a debugger had no `x` or `y` to show, not even to say
-/// they are optimized out. They are in the model with no location.
+/// `gcd` is only ever called with two constants, so the optimiser takes both
+/// parameters out of it. They were dropped from the debug information with
+/// nothing said: a debugger had no `x` or `y` to show, not even to say they are
+/// optimized out. They are in the model with no location.
 #[test]
 fn a_parameter_the_optimiser_removed_is_in_the_model_with_no_location() {
     use llrm_object::debug::{Kind, Location};
@@ -171,8 +175,9 @@ fn main() -> i16:
             .unwrap_or_else(|| panic!("no parameter {name}: {:?}", gcd.variables));
         assert_eq!((parameter.kind, &parameter.location), (Kind::Parameter, &Location::List(Vec::new())), "{name}");
     }
-    // The locals a, b and t were kept in cells for a debugger; the optimiser keeps them in registers, which CodeView 4
-    // cannot say, so they are left out.
+    // The locals a, b and t were kept in cells for a debugger; the optimiser
+    // keeps them in registers, which CodeView 4 cannot say, so they are
+    // left out.
     assert!(["a", "b", "t"].iter().all(|name| {
         !gcd.variables.iter().any(|one| one.name == *name && matches!(one.location, Location::Frame { .. }))
     }));
@@ -180,8 +185,8 @@ fn main() -> i16:
 
 const TWO: &str = "fn add(a: i16, b: i32) -> i32:\n    return i32(a) + b\n\nfn main() -> i16:\n    print(add(2, 3) + add(4, 5))\n    return 0\n";
 
-/// The model of the Nib `source` compiled for real mode, nothing inlined, with `flags` (`procedure_segments`: a code
-/// segment each).
+/// The model of the Nib `source` compiled for real mode, nothing inlined, with
+/// `flags` (`procedure_segments`: a code segment each).
 fn segmented_model(
     source: &str,
     procedure_segments: bool,
@@ -202,8 +207,10 @@ fn segmented_model(
     llrm_core::backend::objbuild::built(&module, "probe.nib", layout).expect("builds").debug.expect("-g's information")
 }
 
-/// `-g` with a code segment per procedure was refused, for the one-segment form of the BASIC dialect; CodeView 4 has
-/// the segment in each address. Each function is in the segment its code is, and the unit's code is each segment's.
+/// `-g` with a code segment per procedure was refused, for the one-segment form
+/// of the BASIC dialect; CodeView 4 has the segment in each address. Each
+/// function is in the segment its code is, and the unit's code is each
+/// segment's.
 #[test]
 fn cv4_describes_a_program_with_a_code_segment_per_procedure() {
     let info = segmented_model(TWO, true);
@@ -248,10 +255,12 @@ fn regparm_model(format: llrm_object::debug::Format) -> (llrm_object::debug::Inf
     (object.debug.expect("-g's information"), code)
 }
 
-/// Under `-mabi=regparm3` a parameter arrives in a register, and CodeView 4's BASIC-era records (and Turbo Debugger's)
-/// name one place for a whole scope: `add`'s `a` and `b` are in no CodeView. The backend stored each to a cell at the
-/// entry to give the format one; `-g` changes no code, so it stores nothing, and the model says only that each is in
-/// its register until the body starts.
+/// Under `-mabi=regparm3` a parameter arrives in a register, and CodeView 4's
+/// BASIC-era records (and Turbo Debugger's) name one place for a whole scope:
+/// `add`'s `a` and `b` are in no CodeView. The backend stored each to a cell at
+/// the entry to give the format one; `-g` changes no code, so it stores
+/// nothing, and the model says only that each is in its register until the body
+/// starts.
 #[test]
 fn a_register_parameter_is_not_stored_to_a_cell_for_a_format_that_names_one_place() {
     use llrm_object::debug::{Kind, Location};
@@ -295,8 +304,9 @@ fn compiled_regparm() -> Vec<Rc<omf::Record>> {
     .expect("parses")
 }
 
-/// Where the debug format can say it (DWARF's location lists), the parameter stays in its register until the code
-/// stores it: no cell is made for the debugger, and the code is the code of a build without `-g`.
+/// Where the debug format can say it (DWARF's location lists), the parameter
+/// stays in its register until the code stores it: no cell is made for the
+/// debugger, and the code is the code of a build without `-g`.
 #[test]
 fn where_the_format_says_ranges_a_register_parameter_stays_in_its_register() {
     use llrm_object::debug::Location;
