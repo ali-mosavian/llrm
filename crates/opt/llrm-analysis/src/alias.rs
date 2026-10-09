@@ -1544,6 +1544,15 @@ pub fn initialized(
     if !pointers && !llrm_support::env_set("LLRM_CHECK_INITIALIZED") {
         return Ok(vec![Vec::new(); count]);
     }
+    // The three solves below differ in the call arguments and captures they
+    // ask of the escape phase alone: the value solve is made once.
+    let values = match unit.point_values {
+        Some(_) => None,
+        None => Some(point_values(unit)?),
+    };
+    let held =
+        Procedure { unit: values.as_ref().map_or(*unit, |values| unit.with_point_values(values)), ..procedure.clone() };
+    let (procedure, unit) = (&held, &held.unit);
     let facts = points_to(unit, None, None)?;
     let effects = calls_annotated(procedure, known)?;
     let actuals = points_to(unit, Some(&procedure.arguments), None)?;
