@@ -14,17 +14,12 @@ use std::sync::Arc;
 use iced_x86::Register;
 use crate::support::hash::IndexMap;
 
+use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::loops;
 use crate::backend::peephole::{Lane, Lanes, _lanes, _register_effects, _register_effects_of_what, id};
 use crate::backend::{select, target};
 use crate::model::ir::{self, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
-
-#[cfg(test)]
-thread_local! {
-    /// Block entries and exits worked out, for a test that a block whose parents' exits are as they were is not worked again.
-    pub(crate) static EVALUATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
 
 /// Python's `frozenset[tuple[Lane, Lane]]`: the copies that reach a point, by direction.
 pub type Relations = BTreeSet<(Lane, Lane)>;
@@ -395,70 +390,34 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
     let predecessors = loops::predecessors(&graph);
     // Start at the must-analysis top, then intersect paths to a fixed point.
     // Entry contributes no equality, so a backedge cannot invent its own proof.
-    let mut entries: HashMap<i64, Equal> = reachable.iter().map(|at| (*at, Equal::top())).collect();
-    let mut exits = entries.clone();
-    let mut directed_entries: HashMap<i64, Relations> = reachable.iter().map(|at| (*at, Relations::new())).collect();
-    let mut directed_exits = directed_entries.clone();
-    let successors: HashMap<i64, Vec<i64>> = body.blocks.iter().map(|block| (block.at, block.succ.iter().copied().filter(|to| reachable.contains(to)).collect())).collect();
-    let position: HashMap<i64, usize> = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect();
-    // One block's entry from its parents' exits, its exit from that, and whether the exit changed.
-    let evaluate = |block: &LirBlock, entries: &mut HashMap<i64, Equal>, exits: &mut HashMap<i64, Equal>, directed_entries: &mut HashMap<i64, Relations>, directed_exits: &mut HashMap<i64, Relations>| -> bool {
-        #[cfg(test)]
-        EVALUATED.with(|count| count.set(count.get() + 1));
-        let parents: Vec<i64> = predecessors[&block.at].iter().copied().filter(|at| reachable.contains(at)).collect();
-        let none = parents.is_empty() || block.at == body.entry;
-        let incoming = if none { Equal::bottom() } else { parents[1..].iter().fold(exits[&parents[0]].clone(), |met, at| met.met(&exits[at])) };
-        entries.insert(block.at, incoming.clone());
-        let directed_incoming = if none {
-            Relations::new()
-        } else {
-            let mut met = directed_exits[&parents[0]].clone();
-            for at in &parents[1..] {
-                met = met.intersection(&directed_exits[at]).copied().collect();
+    let nodes: Vec<&LirBlock> = body.blocks.iter().filter(|block| reachable.contains(&block.at)).collect();
+    let solved = dataflow::solve(
+        &nodes,
+        Direction::Forward,
+        |_| (Equal::top(), Relations::new()),
+        |at, exits| {
+            let parents: Vec<i64> = predecessors[&at].iter().copied().filter(|from| reachable.contains(from)).collect();
+            if parents.is_empty() || at == body.entry {
+                return (Equal::bottom(), Relations::new());
             }
-            met
-        };
-        directed_entries.insert(block.at, directed_incoming.clone());
-        let mut facts = incoming;
-        let mut directed = directed_incoming;
-        for one in &block.insns {
-            facts = after(&facts, one);
-            directed = directed_after(&directed, one);
-        }
-        if exits[&block.at] != facts || directed_exits[&block.at] != directed {
-            exits.insert(block.at, facts);
-            directed_exits.insert(block.at, directed);
-            return true;
-        }
-        false
-    };
-    // A block is worked again when a parent's exit changed, not on every round of the body: the blocks of a loop nest 8 deep took
-    // a round for each level, each round every block (copyprop was a quarter of lir peephole on rectwo).
-    let mut pending: BTreeSet<usize> = body.blocks.iter().enumerate().filter(|(_, block)| reachable.contains(&block.at)).map(|(index, _)| index).collect();
-    while let Some(index) = pending.pop_first() {
-        let block = &body.blocks[index];
-        if evaluate(block, &mut entries, &mut exits, &mut directed_entries, &mut directed_exits) {
-            pending.extend(successors[&block.at].iter().map(|to| position[to]));
-        }
-    }
-    if llrm_support::env_set("LLRM_CHECK_COPYPROP") {
-        // The body's blocks round after round until none changes: the fixed point is the same.
-        let (mut again, mut again_exits, mut again_directed, mut again_directed_exits) = (entries.clone(), exits.clone(), directed_entries.clone(), directed_exits.clone());
-        for (at, _) in again.clone() {
-            again.insert(at, Equal::top());
-            again_exits.insert(at, Equal::top());
-            again_directed.insert(at, Relations::new());
-            again_directed_exits.insert(at, Relations::new());
-        }
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for block in body.blocks.iter().filter(|block| reachable.contains(&block.at)) {
-                changed |= evaluate(block, &mut again, &mut again_exits, &mut again_directed, &mut again_directed_exits);
+            let equal = parents[1..].iter().fold(exits[&parents[0]].0.clone(), |met, from| met.met(&exits[from].0));
+            let mut directed = exits[&parents[0]].1.clone();
+            for from in &parents[1..] {
+                directed = directed.intersection(&exits[from].1).copied().collect();
             }
-        }
-        assert!(again == entries && again_directed == directed_entries, "the blocks worked again where a parent changed are not what working all of them round after round gives");
-    }
+            (equal, directed)
+        },
+        |at, (equal, directed)| {
+            let (mut facts, mut directed) = (equal.clone(), directed.clone());
+            for one in &blocks[&at].insns {
+                facts = after(&facts, one);
+                directed = directed_after(&directed, one);
+            }
+            (facts, directed)
+        },
+    );
+    let entries: HashMap<i64, Equal> = solved.input.iter().map(|(at, (equal, _))| (*at, equal.clone())).collect();
+    let directed_entries: HashMap<i64, Relations> = solved.input.iter().map(|(at, (_, directed))| (*at, directed.clone())).collect();
 
     let mut result = Vec::new();
     for block in &body.blocks {

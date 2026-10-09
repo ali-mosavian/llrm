@@ -13,6 +13,7 @@ use std::sync::Arc;
 use iced_x86::Register;
 use crate::support::hash::IndexMap;
 
+use crate::analysis::dataflow::{self, Direction};
 use crate::backend::peephole::{_frame_cell, _frame_written, _lanes, _overlapping, _register_effects, id};
 use crate::model::ir::{Loc, Mem, Operation, Reg};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
@@ -151,12 +152,6 @@ fn _held(bits: u32, one: &Insn, facts: Facts) -> (Facts, bool, Option<(usize, Re
     (facts, false, held_source)
 }
 
-#[cfg(test)]
-thread_local! {
-    /// Block transfers worked out by `_available`, for a test that a block whose input is as it was is not worked again.
-    pub(crate) static TRANSFERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
 /// The facts true on entry to each block, met over every incoming edge.
 ///
 /// `None` stands for the top of the lattice -- a block not reached yet, whose
@@ -173,51 +168,18 @@ fn _available(body: &LirBody) -> IndexMap<i64, Facts> {
         }
     }
     let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    let mut into: IndexMap<i64, Option<Facts>> = body
-        .blocks
-        .iter()
-        .map(|block| {
-            (
-                block.at,
-                if block.at == body.entry || predecessors[&block.at].is_empty() { Some(Facts::default()) } else { None },
-            )
-        })
-        .collect();
-    let mut outof: IndexMap<i64, Facts> = IndexMap::default();
-    // A block's transfer is worked again when its entry changed, and its entry when a parent's exit did: working a block whose input is
-    // as it was gives what it gave (a block of a loop nest took a round for each level, every block each round).
-    let mut entered: crate::support::hash::HashSet<i64> = into.iter().filter(|(_, facts)| facts.is_some()).map(|(at, _)| *at).collect();
-    let mut left: crate::support::hash::HashSet<i64> = crate::support::hash::HashSet::default();
-    let mut changing = true;
-    while changing {
-        changing = false;
-        left.clear();
-        for (at, facts) in &into {
-            if let Some(facts) = facts {
-                if !entered.remove(at) {
-                    continue;
-                }
-                #[cfg(test)]
-                TRANSFERS.with(|count| count.set(count.get() + 1));
-                let leaving = _transfer(body.bits, blocks[at], facts.clone()).2;
-                if outof.get(at) != Some(&leaving) {
-                    outof.insert(*at, leaving);
-                    left.insert(*at);
-                    changing = true;
-                }
-            }
-        }
-        let ats: Vec<i64> = into.keys().copied().collect();
-        for at in ats {
+    let nodes: Vec<&LirBlock> = body.blocks.iter().collect();
+    let solved = dataflow::solve(
+        &nodes,
+        Direction::Forward,
+        |_| None::<Facts>,
+        |at, outs| {
             if at == body.entry || predecessors[&at].is_empty() {
-                continue;
-            }
-            if !predecessors[&at].iter().any(|parent| left.contains(parent)) {
-                continue;
+                return Some(Facts::default());
             }
             let mut met: Option<Facts> = None;
             for parent in &predecessors[&at] {
-                let Some(leaving) = outof.get(parent) else {
+                let Some(Some(leaving)) = outs.get(parent) else {
                     continue;
                 };
                 met = Some(match met {
@@ -225,16 +187,11 @@ fn _available(body: &LirBody) -> IndexMap<i64, Facts> {
                     Some(met) => met.iter().filter(|(fact, _)| leaving.contains_key(*fact)).map(|(fact, stored)| (fact.clone(), *stored && leaving[fact])).collect(),
                 });
             }
-            if let Some(met) = met {
-                if into[&at].as_ref() != Some(&met) {
-                    into.insert(at, Some(met));
-                    entered.insert(at);
-                    changing = true;
-                }
-            }
-        }
-    }
-    into.into_iter().map(|(at, facts)| (at, facts.unwrap_or_default())).collect()
+            met
+        },
+        |at, facts| facts.as_ref().map(|facts| _transfer(body.bits, blocks[&at], facts.clone()).2),
+    );
+    solved.input.into_iter().map(|(at, facts)| (at, facts.unwrap_or_default())).collect()
 }
 
 /// The reloads `facts` makes redundant in `block`, and the facts after it.

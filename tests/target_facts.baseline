@@ -5,6 +5,7 @@
 4 crates/backend/llrm-core/src/backend/arithmetic.rs
 4 crates/backend/llrm-core/src/backend/callregs.rs
 1 crates/backend/llrm-core/src/backend/classes.rs
+1 crates/backend/llrm-core/src/backend/copyprop.rs
 7 crates/backend/llrm-core/src/backend/datagroup.rs
 1 crates/backend/llrm-core/src/backend/ehprepare.rs
 1 crates/backend/llrm-core/src/backend/exactaddress.rs
