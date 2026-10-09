@@ -535,3 +535,124 @@ fn an_integer_edit_leaves_the_pointer_analyses_as_they_were_and_a_pointer_edit_d
     let gep = f.walk().map(|(_, one)| one).find(|one| f.instruction(*one).result == Some(q)).expect("the gep");
     assert!(!super::pointers_unaffected(&[llrm_mir::module::Change::Rewritten(gep)], &module.context, f, false), "an edit to an address left the pointer analyses as they were");
 }
+
+/// Every edit found every body's calls, actuals and exposed frames again (`Procedure::of` and `exposed_frames` per body per run,
+/// O(module) for an edit to one: 190 M instructions of excess work at chain-32). A body not edited since keeps them.
+#[test]
+fn an_edit_to_one_body_finds_that_bodys_calls_alone() {
+    let mut module = parsed(&format!(
+        "{DOS}define i16 @f(i16 %a) {{
+b0:
+  %x = add i16 %a, 1
+  %y = mul i16 %x, 2
+  ret i16 %y
+}}
+define i16 @h(i16 %a) {{
+b0:
+  %x = add i16 %a, 3
+  %y = mul i16 %x, 4
+  ret i16 %y
+}}
+"
+    ));
+    let program = llrm_mir::program::Program::new(vec![module.clone()], Rc::new(Neutral)).unwrap();
+    let mut analyses = ModuleAnalyses::new(llrm_mir::program::ProgramAnalyses::default().proxy(&program, 0));
+    analyses.get::<super::GlobalsAA>(&module);
+    analyses.get::<super::Summaries>(&module);
+    let (f, h) = (module.named("f").unwrap(), module.named("h").unwrap());
+    let before = {
+        let memo = analyses.memo::<super::SummariesMemo>();
+        (memo.facts[&f].calls.clone().expect("found"), memo.facts[&h].calls.clone().expect("found"))
+    };
+    let (_, function) = module.function_mut("f").unwrap();
+    let (x, a) = (value(function, "x"), function.parameters()[0]);
+    function.replace_all_uses_with(x, Operand::Value(a));
+    analyses.invalidate(&PreservedAnalyses::none());
+    analyses.get::<super::GlobalsAA>(&module);
+    analyses.get::<super::Summaries>(&module);
+    let memo = analyses.memo::<super::SummariesMemo>();
+    assert!(Rc::ptr_eq(&before.1, memo.facts[&h].calls.as_ref().unwrap()), "an unedited body's calls were found again");
+    assert!(!Rc::ptr_eq(&before.0, memo.facts[&f].calls.as_ref().unwrap()), "an edited body's calls were kept");
+}
+
+/// The calls kept were found as a plain unit sees them, which knows less than the unit a body is summarized in (its globals' facts):
+/// screen.c's summaries came out broader and the compile cost 4.6% more. What is kept is what the summarized unit finds.
+#[test]
+fn the_calls_kept_are_those_the_summarized_unit_finds() {
+    let module = parsed(&format!(
+        "{DOS}@g = internal global i16 0
+define internal void @take(ptr %p) {{
+b0:
+  store i16 1, ptr %p
+  ret void
+}}
+define void @f() {{
+b0:
+  %q = alloca i16
+  store ptr %q, ptr @g
+  call void @take(ptr getelementptr (i8, ptr @g, i16 1))
+  call void @take(ptr %q)
+  ret void
+}}
+"
+    ));
+    let program = llrm_mir::program::Program::new(vec![module.clone()], Rc::new(Neutral)).unwrap();
+    let mut analyses = ModuleAnalyses::new(llrm_mir::program::ProgramAnalyses::default().proxy(&program, 0));
+    let globals = analyses.get::<super::GlobalsAA>(&module);
+    analyses.get::<super::Summaries>(&module);
+    let f = module.named("f").unwrap();
+    let kept = format!("{:?}", analyses.memo::<super::SummariesMemo>().facts[&f].calls.as_ref().unwrap());
+    let layout = layout(&module);
+    let function = function(&module, "f");
+    let shape = crate::cfg::Shape::of(function);
+    let exposed = crate::memory::exposed_frames(&Unit::of(&module, &layout, function));
+    let program = analyses.program().clone();
+    let unit = super::summarized_in(&module, &program, Result::as_ref(&*globals).unwrap(), &shape, &exposed, function);
+    assert_eq!(kept, format!("{:?}", crate::alias::CallFacts::of(&unit)));
+}
+
+/// Call facts found under one unit were served to a body summarized under another (screen.c: +4.6% compile cost, found by the
+/// gate's worst-file rule). What the memo kept was found under the globals' facts of the run before: when those are other facts the
+/// entry is dropped and found again under the unit of this run, and the answer is a fresh computation under its own unit.
+#[test]
+fn call_facts_found_under_other_globals_facts_are_found_again() {
+    let module = parsed(&format!(
+        "{DOS}@g = internal global i16 0
+define internal void @take(ptr %p) {{
+b0:
+  store i16 1, ptr %p
+  ret void
+}}
+define void @f() {{
+b0:
+  call void @take(ptr @g)
+  ret void
+}}
+"
+    ));
+    let program = llrm_mir::program::Program::new(vec![module.clone()], Rc::new(Neutral)).unwrap();
+    let mut analyses = ModuleAnalyses::new(llrm_mir::program::ProgramAnalyses::default().proxy(&program, 0));
+    analyses.get::<super::GlobalsAA>(&module);
+    analyses.get::<super::Summaries>(&module);
+    let f = module.named("f").unwrap();
+    let kept = analyses.memo::<super::SummariesMemo>().facts[&f].calls.clone().expect("found");
+    // The same run again: the facts are the same, the entry stands.
+    analyses.invalidate(&PreservedAnalyses::none());
+    analyses.get::<super::GlobalsAA>(&module);
+    analyses.get::<super::Summaries>(&module);
+    assert!(Rc::ptr_eq(&kept, analyses.memo::<super::SummariesMemo>().facts[&f].calls.as_ref().unwrap()), "same facts, found again");
+    // Other globals' facts than the entry was made under: found again.
+    analyses.memo::<super::SummariesMemo>().globals = Some(Rc::new(Ok(super::Globals::default())));
+    analyses.invalidate(&PreservedAnalyses::none());
+    let globals = analyses.get::<super::GlobalsAA>(&module);
+    analyses.get::<super::Summaries>(&module);
+    let again = analyses.memo::<super::SummariesMemo>().facts[&f].calls.clone().expect("found");
+    assert!(!Rc::ptr_eq(&kept, &again), "calls found under other facts were served to this run");
+    let layout = layout(&module);
+    let function = function(&module, "f");
+    let shape = crate::cfg::Shape::of(function);
+    let exposed = crate::memory::exposed_frames(&Unit::of(&module, &layout, function));
+    let program = analyses.program().clone();
+    let unit = super::summarized_in(&module, &program, Result::as_ref(&*globals).unwrap(), &shape, &exposed, function);
+    assert_eq!(format!("{again:?}"), format!("{:?}", crate::alias::CallFacts::of(&unit)));
+}
