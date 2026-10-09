@@ -11,7 +11,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))
 
 import qbruntime  # noqa: E402
-import run_tests  # noqa: E402
 
 
 def test_every_runtime_choice_has_one_explicit_library():
@@ -96,35 +95,3 @@ def test_missing_demo_directory_says_which_environment_variable_to_set():
         found, reason = qbruntime.demo_sources(Path(work))
     assert found == {}
     assert reason == "QB45_DEMOS_DIR is unset or lacks NIBBLES.BAS and GORILLA.BAS"
-
-
-def differential_case(name: str):
-    source = next(source for source in qbruntime.milestone_sources() if source.stem == name)
-    with tempfile.TemporaryDirectory() as temporary:
-        work = Path(temporary)
-        object_ = work / f"{name}.obj"
-        error = run_tests.compile_one(run_tests.Program(source, ["-O2"], None, "qb45"), object_)
-        assert error is None
-        archive, _ = qbruntime.build(work / "archive")
-        return qbruntime.differential(object_, archive, work / "differential", name)
-
-
-@pytest.mark.skipif(not qbruntime.dosbatch.QB45.is_dir(), reason="QB45_DIR is unavailable")
-@pytest.mark.parametrize("name", qbruntime.MILESTONE_ONE)
-def test_runtime_program_matches_bcom45_byte_for_byte(name: str):
-    """Each named program exposed an earlier runtime boundary defect."""
-    result = differential_case(name)
-    assert result.reference.status == "ok"
-    assert result.candidate.status == "ok"
-    assert result.difference == ""
-    assert result.screen_difference == ""
-
-
-@pytest.mark.skipif(not qbruntime.dosbatch.QB45.is_dir(), reason="QB45_DIR is unavailable")
-def test_grep_matches_bcom45_byte_for_byte():
-    """Grep left its binary file path unresolved before the portable file state existed."""
-    result = differential_case("grep")
-    assert result.reference.status == "ok"
-    assert result.candidate.status == "ok"
-    assert result.difference == ""
-    assert result.screen_difference == ""

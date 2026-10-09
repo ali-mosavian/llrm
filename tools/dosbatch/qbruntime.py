@@ -185,8 +185,19 @@ def demo_sources(directory: Path | None = None) -> tuple[dict[str, Path], str]:
     return found, ""
 
 
-PLATFORM = dosbatch.ROOT / "platform" / "qb" / "dos" / "m16"
-SHARED = (dosbatch.ROOT / "runtime" / "shared" / "dos" / "m16" / "os.asm",)
+def os_directory() -> Path:
+    """The OS layer's directory for the real-mode target: runtime/shared/<os>/<mode>."""
+    return Path(dosbatch.os_layer(dosbatch.REAL_MODE, "directory", "c"))
+
+
+def platform_directory() -> Path:
+    """The QB runtime's assembly for that target: platform/qb/<os>/<mode>."""
+    layer = os_directory()
+    return dosbatch.ROOT / "platform" / "qb" / layer.parent.name / layer.name
+
+
+def shared_sources() -> list[Path]:
+    return [os_directory() / dosbatch.os_layer(dosbatch.REAL_MODE, "implementation", "c")]
 
 
 def portable_sources() -> list[Path]:
@@ -195,7 +206,7 @@ def portable_sources() -> list[Path]:
 
 
 def platform_sources() -> list[Path]:
-    return sorted(PLATFORM.glob("*.asm"))
+    return sorted(platform_directory().glob("*.asm"))
 
 
 def _compile_c(source: Path, obj: Path, include: Path) -> None:
@@ -262,9 +273,10 @@ def build(directory: Path) -> tuple[Path, Path]:
         obj = directory / f"{source.stem}.obj"
         _compile_c(source, obj, include)
         objects.append(obj)
-    for source in [*platform_sources(), *SHARED]:
+    shared = shared_sources()
+    for source in [*platform_sources(), *shared]:
         obj = directory / f"{source.stem}.obj"
-        if source in SHARED:
+        if source in shared:
             dosbatch.assemble(source, obj, *dosbatch.os_defines(dosbatch.REAL_MODE, "c"))
         else:
             dosbatch.assemble(source, obj)
