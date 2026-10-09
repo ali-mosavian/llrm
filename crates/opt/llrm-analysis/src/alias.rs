@@ -735,7 +735,6 @@ pub fn summaries_updating(procedures: &IndexMap<String, Procedure>, known: Optio
     if whole {
         result.extend(direct.iter().map(|(name, one)| (name.clone(), Summary { captures: BTreeSet::new(), ..one.clone() })));
     }
-    let _setup = llrm_support::debug::span("summaries graph");
     let edges = procedures
         .iter()
         .enumerate()
@@ -800,7 +799,6 @@ pub fn summaries_updating(procedures: &IndexMap<String, Procedure>, known: Optio
             }
         }
     }
-    drop(_setup);
     let called_back = |result: &IndexMap<String, Summary>| procedures.values().next().and_then(|one| _callbacks(&one.unit, result));
     let mut callbacks = called_back(&result);
     // What each body's points-to facts were found from: they change only with the callees' captures,

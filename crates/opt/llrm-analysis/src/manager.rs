@@ -65,9 +65,9 @@ impl ModuleAnalysis for Summaries {
             None => None,
         };
         let declarations = analyses.get::<Declarations>(module);
-        let shapes = llrm_support::debug::timed("summaries shapes", || bodies(module).map(|(id, _)| (id, analyses.function::<Shape>(module, id))).collect());
-        let exposures = llrm_support::debug::timed("summaries exposures", || exposures(module, &program.layout, program.target.spaces()));
-        let procedures = llrm_support::debug::timed("summaries procedures", || procedures(module, &program, globals, &shapes, &exposures));
+        let shapes = bodies(module).map(|(id, _)| (id, analyses.function::<Shape>(module, id))).collect();
+        let exposures = exposures(module, &program.layout, program.target.spaces());
+        let procedures = procedures(module, &program, globals, &shapes, &exposures);
         // Bodies edited since the last run: those whose history is not where the last run left it. What else the summaries read, the
         // globals' facts and the declarations, either is the same result as then or the whole is worked out again.
         let memo = analyses.memo::<SummariesMemo>();
