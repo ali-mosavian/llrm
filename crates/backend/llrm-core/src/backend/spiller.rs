@@ -1084,8 +1084,18 @@ pub fn homes_redone(body: &LirBody) -> usize {
     body.facts.0.counted("homes-redone")
 }
 
-/// How many blocks a body has before the homes' intervals are kept from an earlier body's.
-const KEPT_FROM_BLOCKS: usize = 48;
+/// Whether the homes' intervals of a body are worth keeping for the next: keeping them costs a fixed `FIXED` instructions a call (the
+/// state, the lookups) and `KEEP` for each block of the body, and saves, for each segment the intervals hold, what finding it from
+/// the occurrences cost (`WALK`) less shifting it (`SHIFT`). Measured: QCport d_faces found 5.2 M segments in 2.05 G (390 each) and
+/// shifted 6.1 M in 0.83 G (136 each); x_transpose, 23 calls of 41 intervals, lost 1.4 M kept (60 000 a call); a block of state
+/// is about 40.
+fn worth_keeping(blocks: usize, segments: usize) -> bool {
+    const FIXED: usize = 60_000;
+    const KEEP: usize = 40;
+    const WALK: usize = 390;
+    const SHIFT: usize = 136;
+    FIXED + blocks * KEEP < segments * (WALK - SHIFT)
+}
 
 /// What of a body's shape the homes' intervals depend on besides its instructions: shared by the states of bodies that keep it.
 #[derive(PartialEq)]
@@ -1120,17 +1130,15 @@ impl HomesStructure {
 /// intervals of the rest, across the whole body, were found afresh for each (2.0 G of compiling d_faces, 616 times).
 fn homes_kept(body: &LirBody, index: &Arc<ranges::Indexes>, named: &[(usize, usize, BTreeSet<u32>, BTreeSet<u32>)], homes: &[i64], first: u32) -> IndexMap<u32, Interval> {
     let pseudo = |home: usize| first + home as u32;
-    // The walk of a home costs the blocks it is live in, the shift the blocks of the body: a body of few blocks is not worth keeping
-    // (QCport x_transpose, 41 intervals, kept +0.3%).
-    if body.blocks.len() < KEPT_FROM_BLOCKS {
-        let values: Vec<u32> = (first..first + homes.len() as u32).collect();
-        return crate::analysis::occurrences::Occurrences::planned(named).ranges(body, index, &values);
-    }
-    let mut now: crate::support::hash::HashMap<usize, Vec<i64>> = Default::default();
-    for (block, at, defined, used) in named {
-        let one = &body.blocks[*block].insns[*at];
-        now.insert(ranges::key(one), defined.union(used).map(|value| homes[(*value - first) as usize]).collect());
-    }
+    // Which homes each instruction names: found when it is needed, for a body that is kept or has an earlier one to be kept from.
+    let names_now = || -> crate::support::hash::HashMap<usize, Vec<i64>> {
+        let mut now: crate::support::hash::HashMap<usize, Vec<i64>> = Default::default();
+        for (block, at, defined, used) in named {
+            let one = &body.blocks[*block].insns[*at];
+            now.insert(ranges::key(one), defined.union(used).map(|value| homes[(*value - first) as usize]).collect());
+        }
+        now
+    };
     let fresh_for = |wanted: &[usize]| -> IndexMap<u32, Interval> {
         let values: Vec<u32> = wanted.iter().map(|home| pseudo(*home)).collect();
         crate::analysis::occurrences::Occurrences::planned(named).ranges(body, index, &values)
@@ -1143,7 +1151,9 @@ fn homes_kept(body: &LirBody, index: &Arc<ranges::Indexes>, named: &[(usize, usi
             .cloned()
     });
     let mut result: Option<IndexMap<u32, Interval>> = None;
+    let mut now = None;
     if let Some(state) = &kept {
+        let now = now.insert(names_now());
         let blocks: Vec<(i64, &crate::model::lir::Insns)> = state.structure.blocks.iter().zip(&state.insns).map(|((at, _, _), insns)| (*at, insns)).collect();
         let differing = ranges::differing_blocks(&blocks, body);
         let mut touched: BTreeSet<i64> = BTreeSet::new();
@@ -1182,13 +1192,16 @@ fn homes_kept(body: &LirBody, index: &Arc<ranges::Indexes>, named: &[(usize, usi
         Some(state) if state.structure.is_of(body) => Arc::clone(&state.structure),
         _ => Arc::new(HomesStructure::of(body)),
     };
+    if !worth_keeping(body.blocks.len(), result.values().map(|found| found.segments.len()).sum()) {
+        return result;
+    }
     let state = HomesState {
         structure,
         insns: body.blocks.iter().map(|block| block.insns.clone()).collect(),
         index: Arc::clone(index),
         intervals: homes.iter().enumerate().filter_map(|(at, home)| result.get(&pseudo(at)).map(|found| (*home, found.clone()))).collect(),
         known: homes.iter().copied().collect(),
-        names: now,
+        names: now.unwrap_or_else(names_now),
         count: body.blocks.iter().map(|block| block.insns.len()).sum(),
     };
     body.facts.0.stash(|held: &mut HomesHeld| {
