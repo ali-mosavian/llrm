@@ -164,9 +164,11 @@ fn propagated(unit: &mut Unit) -> bool {
 /// lower for it: a provider held across a store saves loads but may spill.
 /// Whether it changed anything, and whether `subexpressions` did.
 fn _numbered(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &OperationCosts, room: crate::spill::Room, trips: &IndexMap<i64, i64>, registers: &IndexMap<ValueId, llrm_analysis::consts::Known>, shape: &cfg::Shape) -> Result<(bool, bool), String> {
+    // The availability of the function as it comes in: the same for both runs below, each of which changes a copy.
+    let held = std::cell::OnceCell::new();
     let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, (bool, bool)), String> {
         let mut function = function.clone();
-        let forwarded = transform::forwarded(unit.context, unit.layout, &mut function, outer, accesses, registers, shape, avoid_store_crossing)?;
+        let forwarded = transform::forwarded(unit.context, unit.layout, &mut function, outer, accesses, registers, shape, avoid_store_crossing, &held)?;
         let subexpressed = transform::subexpressions(&mut function, accesses, avoid_store_crossing, Some(outer.program()))?;
         Ok((function, (forwarded || subexpressed, subexpressed)))
     };
