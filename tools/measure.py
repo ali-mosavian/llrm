@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+"""What llrm-c costs to compile and how that cost grows, compared with the same measurement of the commit this one branches from.
+
+    tools/measure.py check              measure this tree's compiler, compare with the merge-base's; exit 1 on a rise past tolerance
+    tools/measure.py record SHA [BIN]   measure the compiler in BIN (default: this tree's) and store it as SHA's
+    tools/measure.py show               print this tree's measurement
+    tools/measure.py creep [REF]        compare REF (HEAD) with the commit 50 merges or a week back at the same tolerances
+
+Three measurements, all user-space instructions (`perf stat`), so a loaded host does not move them: the compile of the 66 vsgcc
+programs and QCport's modules at -O1/-O2/-Os (tools/compile-cost.py); the ratio of the compile at 2N to N on generated programs
+(vsgcc/scaling_gate.py); and the same ratio for each step of the compile (`LLRM_DEBUG=time`'s [instr] rows).
+
+A measurement is stored per commit under ~/.cache/llrm/measure (LLRM_MEASURE_DIR), never in the repository, so two branches never
+touch a shared file. The base's is read from there; if it is missing the base is built in a tree and target directory of its own
+and measured with this tree's tools and inputs (only the compiler differs), then stored. A rise past the tolerances in tiers.toml
+[measure] fails; a drop does not need recording, the next branch's base has it. LLVM's compile-time tracker compares with the
+parent the same way.
+"""
+from __future__ import annotations
+
+import argparse
+import contextlib
+import fcntl
+import hashlib
+import importlib.util
+import json
+import math
+import os
+import subprocess
+import sys
+import tempfile
+import tomllib
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+CACHE = Path(os.environ.get("LLRM_MEASURE_DIR") or Path.home() / ".cache/llrm/measure")
+BUILD = Path(os.environ.get("LLRM_MEASURE_BUILD") or Path.home() / ".cache/llrm/measure-build")
+VSGCC = next((ROOT / "crates/target").glob("*/vsgcc"))
+sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(VSGCC))
+
+import llrmbin  # noqa: E402
+import scaling_gate  # noqa: E402
+
+sys.path.insert(0, str(HERE / "gate"))
+import gate  # noqa: E402
+
+_spec = importlib.util.spec_from_file_location("compile_cost", HERE / "compile-cost.py")
+compile_cost = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(compile_cost)
+
+NoCounter = compile_cost.NoCounter
+
+
+def tolerances(path: Path = HERE / "gate" / "tiers.toml") -> dict:
+    return tomllib.loads(path.read_text())["measure"]
+
+
+def method() -> str:
+    """What the measurement is made of besides the compiler: the tools, the programs and QCport's modules. A stored measurement of
+    another method is not comparable and is made again."""
+    files = [HERE / "compile-cost.py", *(VSGCC / name for name in ("scaling_gate.py", "scaling.py", "levels_time.py", "programs.py", "wrap.py"))]
+    files += sorted((ROOT / "bench").glob("*/*.c")) + sorted((VSGCC / "kernels").glob("*/*.c"))
+    if qcport := os.environ.get("QCPORT"):
+        files += sorted(Path(qcport).expanduser().glob("*/*.c"))
+    digest = hashlib.sha256()
+    for one in files:
+        digest.update(str(one.name).encode() + b"\0" + one.read_bytes())
+    digest.update(b"qcport" if qcport else b"-")
+    return digest.hexdigest()[:12]
+
+
+def measure_all(jobs: int) -> dict:
+    """This process's compiler (LLRM_BIN, else the tree's target): compile cost, axis ratios and step ratios."""
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    passes = scaling_gate.measure_passes(jobs)
+    return {
+        "method": method(),
+        "compile": compile_cost.measure(compiler, jobs),
+        "axes": {k: round(v, 3) for k, v in scaling_gate.measure(jobs).items()},
+        "passes": {k: [round(r, 3), round(s, 4)] for k, (r, s) in passes.items()},
+    }
+
+
+# --- the store -------------------------------------------------------------------------------------------------------
+
+
+def stored_path(sha: str, which: str) -> Path:
+    return CACHE / f"{sha}-{which}.json"
+
+
+def stored(sha: str, which: str) -> dict | None:
+    one = stored_path(sha, which)
+    return json.loads(one.read_text()) if one.is_file() else None
+
+
+def save(sha: str, data: dict) -> Path:
+    """Written whole or not at all: a session reading while another writes never sees half a file."""
+    CACHE.mkdir(parents=True, exist_ok=True)
+    one = stored_path(sha, data["method"])
+    with tempfile.NamedTemporaryFile("w", dir=CACHE, suffix=".part", delete=False) as part:
+        part.write(json.dumps(data, separators=(",", ":")) + "\n")
+    os.replace(part.name, one)
+    return one
+
+
+def git(*args: str, cwd: Path = ROOT) -> str:
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def base_of(head: str, ref: str = "origin/main") -> str:
+    """The commit `head` branches from: the merge-base with `ref`, or its first parent where it is `ref` itself."""
+    base = git("merge-base", head, ref)
+    return git("rev-parse", f"{head}^1") if base == git("rev-parse", head) else base
+
+
+def built(sha: str) -> Path:
+    """`sha` built in a tree and target directory of its own (reused, so each build is an increment); its release directory."""
+    tree = BUILD / "tree"
+    BUILD.mkdir(parents=True, exist_ok=True)
+    if not tree.is_dir():
+        git("worktree", "add", "--detach", str(tree), sha)
+    else:
+        git("checkout", "--detach", "--force", sha, cwd=tree)
+    env = {**os.environ, "CARGO_TARGET_DIR": str(BUILD / "target")}
+    env.pop("LLRM_BIN", None)
+    done = subprocess.run(["bash", "-c", gate.BUILD], cwd=tree, env=env, capture_output=True, text=True)
+    if done.returncode:
+        raise SystemExit(f"measure: the base {sha[:9]} does not build:\n{done.stderr[-2000:]}")
+    return BUILD / "target" / "release"
+
+
+@contextlib.contextmanager
+def locked(name: str):
+    """An exclusive lock named `name` between sessions (and threads: each opens the file itself)."""
+    CACHE.mkdir(parents=True, exist_ok=True)
+    with open(CACHE / f"{name}.lock", "w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
+def base_measurement(base: str, jobs: int, build=built) -> dict:
+    """`base`'s measurement by this tree's method: stored, else made with `base` built by `build`. Sessions that miss the same base at
+    once wait on the base's lock and read what the first stored; the one tree and target the builds share are taken one at a time."""
+    which = method()
+    if (got := stored(base, which)) is not None:
+        return got
+    with locked(f"{base}-{which}"):
+        if (got := stored(base, which)) is not None:
+            return got
+        print(f"measure: no measurement of {base[:9]} by this method; building and measuring it", flush=True)
+        with locked("build"):
+            previous = os.environ.get("LLRM_BIN")
+            os.environ["LLRM_BIN"] = str(build(base))
+            try:
+                data = measure_all(jobs)
+            finally:
+                os.environ.pop("LLRM_BIN") if previous is None else os.environ.__setitem__("LLRM_BIN", previous)
+        save(base, data)
+        return data
+
+
+# --- the comparison: a rise past tolerance fails ----------------------------------------------------------------------
+
+
+def geomean(ratios: list[float]) -> float:
+    return math.exp(sum(math.log(r) for r in ratios) / len(ratios))
+
+
+def compile_rises(base: dict[str, int], now: dict[str, int], tol: dict) -> tuple[list[str], list[str]]:
+    """Per level, for QCport and for the programs: the geomean of now/base and the worst file."""
+    lines, bad = [], []
+    for group, member in {"qcport": lambda k: k.startswith("qcport/"), "programs": lambda k: not k.startswith("qcport/")}.items():
+        for level in compile_cost.LEVELS:
+            ratios = {k: now[k] / base[k] for k in base.keys() & now.keys() if member(k) and k.endswith(" " + level)}
+            if not ratios:
+                lines.append(f"{group} {level}: not in both measurements")
+                continue
+            g, worst = geomean(list(ratios.values())), max(ratios, key=ratios.get)
+            lines.append(f"{group} {level}: geomean {g:.4f}, worst {ratios[worst]:.4f} ({worst.rsplit(' ', 1)[0]}), {len(ratios)} files")
+            if g > tol["geomean"]:
+                bad.append(f"{group} {level}: geomean {g:.4f} > {tol['geomean']}")
+            if ratios[worst] > tol["worst"]:
+                bad.append(f"{group} {level}: {worst} {ratios[worst]:.4f} > {tol['worst']}")
+    return lines, bad
+
+
+def axis_rises(base: dict[str, float], now: dict[str, float], tol: dict) -> tuple[list[str], list[str]]:
+    lines, bad = [], []
+    for key in sorted(base.keys() & now.keys()):
+        lines.append(f"{key}: 2N/N {now[key]:.3f} (base {base[key]:.3f})")
+        if now[key] > base[key] * tol["axis_slack"]:
+            bad.append(f"{key}: grows faster, {now[key]:.3f} > {base[key]:.3f}: a step is superlinear where it was not")
+    return lines, bad
+
+
+def step_rises(base: dict[str, list[float]], now: dict[str, list[float]], tol: dict) -> tuple[list[str], list[str]]:
+    """A step of `high` share or more whose 2N/N rose past `pass_slack` of the base's (or of `linear`, where the base did not read it)
+    fails. A step the base did not read, or one below `high`, may sit on the edge of the share floor without failing either way."""
+    lines, bad = [], []
+    for key, (ratio, share) in sorted(now.items()):
+        was = base.get(key, [tol["linear"], 0.0])[0]
+        allowed = max(was, tol["linear"]) * tol["pass_slack"] if key not in base else was * tol["pass_slack"]
+        if ratio > allowed and share >= tol["high"]:
+            lines.append(f"{key}: {ratio:.3f} (base {was:.3f})")
+            bad.append(f"{key}: 2N/N {ratio:.3f} > {allowed:.3f} (base {was:.3f}): a step more than doubles" + ("" if key in base else f" (linear is {tol['linear']})"))
+    return lines, bad
+
+
+def rises(base: dict, now: dict, tol: dict | None = None) -> tuple[list[str], list[str]]:
+    tol = tol or tolerances()
+    lines, bad = [], []
+    for part, check in (("compile", compile_rises), ("axes", axis_rises), ("passes", step_rises)):
+        got = check(base[part], now[part], tol)
+        lines += got[0]
+        bad += got[1]
+    return lines, bad
+
+
+# --- creep: the parent forgives what the tolerance allows, ten times ----------------------------------------------------
+
+
+def anchor_of(head: str, merges: int = 50, days: float = 7, cwd: Path = ROOT) -> str:
+    """The commit on the first-parent line of `head` that is `merges` back or a week older, whichever is nearer `head`."""
+    line = [row.split() for row in git("rev-list", "--first-parent", "--timestamp", head, cwd=cwd).splitlines()]
+    by_count = min(merges, len(line) - 1)
+    stamp = int(line[0][0]) - days * 86400
+    by_age = next((at for at, (when, _) in enumerate(line) if int(when) <= stamp), len(line) - 1)
+    return line[min(by_count, by_age)][1]
+
+
+def trail(anchor: str, head: str, which: str, cwd: Path = ROOT) -> list[str]:
+    """The commits from `anchor` to `head`, oldest first, each measured one with its programs' -O2 geomean against the last measured."""
+    out, last = [], stored(anchor, which)
+    for sha in reversed(git("rev-list", "--first-parent", f"{anchor}..{head}", cwd=cwd).split()):
+        here = stored(sha, which)
+        subject = git("log", "-1", "--format=%s", sha, cwd=cwd)[:90]
+        if here is None or last is None:
+            out.append(f"{sha[:9]} {subject}: not measured")
+        else:
+            ratios = [here["compile"][k] / last["compile"][k] for k in here["compile"].keys() & last["compile"].keys() if k.endswith(" -O2")]
+            out.append(f"{sha[:9]} {subject}: -O2 geomean x{geomean(ratios):.4f} of the last measured")
+        if here is not None:
+            last = here
+    return out
+
+
+def creep(jobs: int, ref: str) -> int:
+    """`ref` against its anchor at the same tolerances: ten commits each inside them still add up."""
+    try:
+        head = git("rev-parse", ref)
+        which = method()
+        now = stored(head, which) or measure_all(jobs)
+        anchor = anchor_of(head)
+        base = base_measurement(anchor, jobs)
+    except NoCounter as why:
+        print(f"SKIPPED: instruction counter unavailable ({why})")
+        return 77
+    lines, bad = rises(base, now)
+    print(f"{head[:9]} against its anchor {anchor[:9]}")
+    print("\n".join(lines))
+    if bad:
+        print("CREEP:", *bad, sep="\n  ")
+        print("what added it, oldest first:", *trail(anchor, head, which), sep="\n  ")
+        return 1
+    return 0
+
+
+# --- commands --------------------------------------------------------------------------------------------------------
+
+
+def check(jobs: int, ref: str) -> int:
+    try:
+        now = measure_all(jobs)
+        head = git("rev-parse", "HEAD")
+        base_sha = base_of(head, ref)
+        base = base_measurement(base_sha, jobs)
+    except NoCounter as why:
+        print(f"SKIPPED: instruction counter unavailable ({why})")
+        return 77
+    lines, bad = rises(base, now)
+    print(f"measured against {base_sha[:9]}")
+    print("\n".join(lines))
+    # A commit of the reference branch is a base for the next branches; a branch's own head is not.
+    if not git("status", "--porcelain", "--untracked-files=no") and stored(head, now["method"]) is None and subprocess.run(["git", "merge-base", "--is-ancestor", head, ref], cwd=ROOT).returncode == 0:
+        save(head, now)
+    if bad:
+        print("COMPILE COST RISE:", *bad, sep="\n  ")
+        return 1
+    print(f"no rise past tolerance of {base_sha[:9]} ({len(now['compile'])} files, {len(now['axes'])} axes, {len(now['passes'])} steps)")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("command", choices=["check", "record", "show", "creep"])
+    parser.add_argument("rest", nargs="*", help="record: SHA [BIN]")
+    parser.add_argument("--base", default=os.environ.get("LLRM_MEASURE_REF", "origin/main"), help="check: the branch the merge-base is taken with")
+    parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "4")))
+    args = parser.parse_args()
+    if args.command == "check":
+        return check(args.jobs, args.base)
+    if args.command == "creep":
+        return creep(args.jobs, args.rest[0] if args.rest else "HEAD")
+    if args.command == "record":
+        sha = git("rev-parse", args.rest[0])
+        if len(args.rest) > 1:
+            os.environ["LLRM_BIN"] = args.rest[1]
+        try:
+            print(save(sha, measure_all(args.jobs)))
+        except NoCounter as why:
+            print(f"SKIPPED: instruction counter unavailable ({why})")
+            return 77
+        return 0
+    print(json.dumps(measure_all(args.jobs)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

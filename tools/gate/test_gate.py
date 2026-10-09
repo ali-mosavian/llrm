@@ -156,36 +156,29 @@ def test_the_qcport_step_has_no_wall_clock_limit_of_its_own():
     assert "timeout" not in gate.commands(p, gate.load(), gate.packages())["qcport"]
 
 
-def test_a_backend_change_runs_the_compile_cost_step_and_a_doc_or_test_change_does_not():
-    assert "compile-cost" in gate.plan(["crates/backend/llrm-core/src/backend/isel.rs"]).steps
-    assert "compile-cost" in gate.plan(["crates/ir/llrm-mir/src/lib.rs"]).steps  # full
-    assert "compile-cost" not in gate.plan(["tests/run.rs"]).steps
-    assert "compile-cost" not in gate.plan(["crates/frontends/llrm-qb/src/lib.rs"]).steps
+def test_a_backend_change_runs_the_measure_step_and_a_frontend_only_change_does_not():
+    assert "measure" in gate.plan(["crates/backend/llrm-core/src/backend/isel.rs"]).steps
+    assert "measure" in gate.plan(["crates/opt/llrm-transforms/src/gvn.rs"]).steps
+    assert "measure" in gate.plan(["crates/ir/llrm-mir/src/lib.rs"]).steps  # full
+    assert "measure" not in gate.plan(["tests/run.rs"]).steps
+    assert "measure" not in gate.plan(["crates/frontends/llrm-qb/src/lib.rs"]).steps
 
 
-def test_the_compile_cost_step_has_a_command_and_a_baseline():
-    p = gate.plan(["tools/compile-cost.py"])
-    assert "compile-cost" in p.steps
-    cmds = gate.commands(p, gate.load(), gate.packages())
-    assert "tools/compile-cost.py" in cmds["compile-cost"]
-    assert (ROOT / "tools/gate/compile-baseline.json").exists()
-
-
-def test_a_backend_change_runs_the_scaling_step_and_a_frontend_only_change_does_not():
-    assert "scaling" in gate.plan(["crates/opt/llrm-transforms/src/gvn.rs"]).steps
-    assert "scaling" in gate.plan(["crates/ir/llrm-mir/src/lib.rs"]).steps  # full
-    assert "scaling" not in gate.plan(["crates/frontends/llrm-qb/src/lib.rs"]).steps
-    cmds = gate.commands(gate.plan(["crates/opt/llrm-transforms/src/gvn.rs"]), gate.load(), gate.packages())
-    assert "scaling_gate.py" in cmds["scaling"] and (ROOT / "tools/gate/scaling-budget.json").exists()
+def test_the_measure_step_has_a_command_and_no_baseline_lives_in_the_repository():
+    p = gate.plan(["tools/measure.py"])
+    assert "measure" in p.steps
+    assert "tools/measure.py check" in gate.commands(p, gate.load(), gate.packages())["measure"]
+    tracked = subprocess.run(["git", "ls-files", "tools/gate"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
+    assert not [f for f in tracked if f.endswith(".json")], tracked  # two branches from one base share no file to conflict on
 
 
 def test_steps_asked_for_replace_the_planned_ones_and_the_build_comes_first():
-    """After a conflict in the budget files only build, compile-cost and scaling need to run again; the full gate took 5-7 minutes."""
+    """Re-running a change to the measurement tools needs build and measure; the full gate took 5-7 minutes."""
     known = set(gate.commands(gate.plan(["tools/gate/gate.py"]), gate.load(), gate.packages()))
-    p = gate.plan(["tools/gate/scaling-budget.json"])
+    p = gate.plan(["tools/gate/gate.py"])
     assert p.tier == "full" and len(p.steps) > 8
-    one = gate.restricted(p, ["scaling", "compile-cost"], known)
-    assert one.steps == ["build", "scaling", "compile-cost"] and one.tier == p.tier and one.languages == p.languages
+    one = gate.restricted(p, ["measure"], known)
+    assert one.steps == ["build", "measure"] and one.tier == p.tier and one.languages == p.languages
     assert gate.restricted(p, ["pytest"], known).steps == ["pytest"]
     with pytest.raises(SystemExit):
-        gate.restricted(p, ["scalling"], known)
+        gate.restricted(p, ["mesure"], known)
