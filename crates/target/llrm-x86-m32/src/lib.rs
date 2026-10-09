@@ -68,9 +68,9 @@ impl llrm_target::Target for M32 {
             .with_layout(layout())
     }
 
-    fn flat_foreign(&self) -> Vec<(i64, i64)> {
+    fn flat_foreign(&self) -> llrm_target::Foreign {
         static FOREIGN: LazyLock<Vec<(i64, i64)>> = LazyLock::new(|| M32.machine().flat_foreign());
-        FOREIGN.clone()
+        llrm_target::Foreign(|| &FOREIGN)
     }
 
     fn cpus(&self) -> &'static [&'static str] {
@@ -257,7 +257,7 @@ mod tests {
             spaces: layout().spaces.roles,
             private: None,
             calling: None,
-            foreign: Vec::new(),
+            foreign: llrm_target::Foreign::none(),
         };
         let model = (M32.cost_model())(&prices);
         let sizes = model.size_costs();
@@ -286,7 +286,7 @@ mod tests {
             spaces: layout().spaces.roles,
             private: None,
             calling: None,
-            foreign: Vec::new(),
+            foreign: llrm_target::Foreign::none(),
         });
         assert_eq!((model.registers(), model.call_registers()), (6, 5));
         assert_eq!(model.address_forms(), forms);

@@ -32,7 +32,7 @@ pub struct Profile {
     pub calling: Option<llrm_target::calling::Stated>,
     /// The platform's linear ranges no program data occupies, for a flat
     /// target.
-    pub foreign: Vec<(i64, i64)>,
+    pub foreign: llrm_target::Foreign,
     /// The operand size an instruction has without a prefix, in bytes.
     pub operand_bytes: i64,
     pub call_register_capacity: i64,
@@ -150,7 +150,7 @@ impl Profile {
             spaces: self.spaces,
             private: self.private.clone(),
             calling: self.calling.map(|one| one.0),
-            foreign: self.foreign.clone(),
+            foreign: self.foreign,
         }
     }
 
