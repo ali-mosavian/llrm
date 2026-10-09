@@ -38,7 +38,6 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
 
 use llrm_mir::module::{Operand, ValueId};
 use llrm_support::hash::{HashMap, HashSet};
