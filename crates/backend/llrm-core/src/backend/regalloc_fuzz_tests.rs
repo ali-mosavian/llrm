@@ -1178,8 +1178,14 @@ fn test_an_edited_answer_works_its_changed_values_out_from_where_they_occur() {
     block.insns.edit(|insns| insns[1] = copy);
     let trial = base.with_blocks(blocks);
     let before = (edited(&base), by_occurrences(&base));
+    let scans = crate::analysis::occurrences::Occurrences::scans(&base);
     let found = intervals(&trial, None);
     assert_eq!(edited(&base) - before.0, 1, "premise: the trial's answer is an edit of the base's");
+    assert_eq!(
+        crate::analysis::occurrences::Occurrences::scans(&base),
+        scans,
+        "every instruction of the body was scanned for the changed values' occurrences (156 M of d_faces -O1)"
+    );
     assert_eq!(
         by_occurrences(&base) - before.1,
         1,
