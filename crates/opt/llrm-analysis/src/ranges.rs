@@ -1241,7 +1241,11 @@ pub fn scoped(unit: &Unit) -> Result<Facts, String> {
 /// promise that places the start. A value is exact only if every access it
 /// indexes is.
 pub fn exact_offsets(unit: &Unit) -> Result<BTreeSet<ValueId>, String> {
-    let scoped = scoped(unit)?;
+    exact_offsets_given(unit, &scoped(unit)?)
+}
+
+/// `exact_offsets`, given the `scoped` facts of the unit: a caller that needs them too solves once.
+pub fn exact_offsets_given(unit: &Unit, scoped: &Facts) -> Result<BTreeSet<ValueId>, String> {
     let mut verdict = IndexMap::<ValueId, bool>::default();
     for (block, inst) in unit.function.walk() {
         let Some(reference) = MemRef::of(unit, inst) else { continue };
@@ -1251,7 +1255,7 @@ pub fn exact_offsets(unit: &Unit) -> Result<BTreeSet<ValueId>, String> {
         let placed = (reference.inbounds && reference.object) || reference.segment.is_some();
         let exact = placed
             && reference.base_width == bits
-            && _exact_sum(unit, base, cfg::id(block), &scoped, bits, 16).is_some_and(|(low, high)| {
+            && _exact_sum(unit, base, cfg::id(block), scoped, bits, 16).is_some_and(|(low, high)| {
                 let (low, high) = (BigInt::from(reference.disp) + low * reference.scale, BigInt::from(reference.disp) + high * reference.scale);
                 low >= BigInt::from(0) && high < BigInt::from(1) << bits
             });
