@@ -251,7 +251,7 @@ pub struct Summary {
 }
 
 /// An access type: its name and its ancestors', as `MemRef::typed` and `lineage`.
-pub type Access = (String, Vec<String>);
+pub type Access = (std::rc::Rc<str>, std::rc::Rc<[String]>);
 
 /// The types of two writes' unplaced stores together.
 fn merged_types(one: (bool, &Option<BTreeSet<Access>>), other: (bool, &Option<BTreeSet<Access>>)) -> Option<BTreeSet<Access>> {
@@ -299,30 +299,64 @@ impl Summary {
     }
 }
 
+/// What a procedure's calls are, of its body and the declarations alone: kept for the next run while neither has changed.
+#[derive(Debug, Default)]
+pub struct CallFacts {
+    pub calls: IndexMap<InstId, String>,
+    pub arguments: IndexMap<InstId, Vec<Actual>>,
+    /// The callees a definition elsewhere may replace: no summary describes a call to one.
+    pub replaceable: std::collections::BTreeSet<String>,
+    /// Every call and invoke, in order.
+    pub sites: Vec<InstId>,
+}
+
 /// Python `qbopt.analysis.alias:Procedure`: a function, its calls by
 /// callee name, and each call's actual arguments.
 #[derive(Clone)]
 pub struct Procedure<'a> {
     pub unit: Unit<'a>,
-    pub calls: IndexMap<InstId, String>,
-    pub arguments: IndexMap<InstId, Vec<Actual>>,
+    facts: Rc<CallFacts>,
+}
+
+impl std::ops::Deref for Procedure<'_> {
+    type Target = CallFacts;
+    fn deref(&self) -> &CallFacts {
+        &self.facts
+    }
 }
 
 impl<'a> Procedure<'a> {
     /// `unit`'s calls of named functions, and every call's actuals, one
     /// per argument.
     pub fn of(unit: Unit<'a>) -> Self {
+        let facts = Rc::new(CallFacts::of(&unit));
+        Self { unit, facts }
+    }
+
+    /// `unit`'s procedure, its calls as `facts` (of this body and these declarations) say.
+    pub fn with(unit: Unit<'a>, facts: Rc<CallFacts>) -> Self {
+        Self { unit, facts }
+    }
+}
+
+impl CallFacts {
+    pub fn of(unit: &Unit) -> Self {
         let function = unit.function;
         let mut calls = IndexMap::default();
         let mut arguments = IndexMap::default();
+        let mut replaceable = std::collections::BTreeSet::new();
         for (_, inst) in function.walk() {
             let op = function.instruction(inst);
             let (Opcode::Call(_) | Opcode::Invoke(_)) = op.opcode else { continue };
             let callee = *op.operands.last().expect("a call names its callee");
             if let Operand::Constant(id) = callee
                 && let ConstantKind::Global(global) = unit.context.get(id).kind
-                && let Some(name) = unit.globals.get(global.0 as usize).and_then(|one| one.name.clone())
+                && let Some(named) = unit.globals.get(global.0 as usize)
+                && let Some(name) = named.name.clone()
             {
+                if named.function().is_some() && !matches!(named.linkage, Linkage::External | Linkage::Internal | Linkage::Private | Linkage::ExternWeak) {
+                    replaceable.insert(name.clone());
+                }
                 calls.insert(inst, name);
             }
             let count = match op.opcode {
@@ -332,16 +366,17 @@ impl<'a> Procedure<'a> {
             let actual = op.operands[..count]
                 .iter()
                 .map(|&one| match one {
-                    Operand::Value(value) if is_pointer(&unit, one) => Actual::Pointer(value, 0),
+                    Operand::Value(value) if is_pointer(unit, one) => Actual::Pointer(value, 0),
                     // A null pointer points to nothing.
                     Operand::Constant(id) if matches!(unit.context.get(id).kind, ConstantKind::Null | ConstantKind::Zero | ConstantKind::Poison) => Actual::Absent,
-                    Operand::Constant(_) if is_pointer(&unit, one) => _operand(&unit, one, &IndexMap::default()).map_or(Actual::Provenance(UNKNOWN.clone()), Actual::Provenance),
+                    Operand::Constant(_) if is_pointer(unit, one) => _operand(unit, one, &IndexMap::default()).map_or(Actual::Provenance(UNKNOWN.clone()), Actual::Provenance),
                     _ => Actual::Absent,
                 })
                 .collect();
             arguments.insert(inst, actual);
         }
-        Self { unit, calls, arguments }
+        let sites = call_sites(unit);
+        Self { calls, arguments, replaceable, sites }
     }
 }
 
@@ -669,10 +704,8 @@ fn _index(index: &Option<Identity>) -> Result<i64, String> {
 /// The summary `known` holds of `name`, where the body it describes is the
 /// one that runs: LLVM's `hasExactDefinition`. A weak or linkonce body may
 /// be replaced by another.
-fn _summary<'s>(unit: &Unit, known: &'s IndexMap<String, Summary>, name: &str) -> Option<&'s Summary> {
-    let global = unit.globals.iter().find(|one| one.name.as_deref() == Some(name));
-    let replaceable = global.is_some_and(|one| one.function().is_some() && !matches!(one.linkage, Linkage::External | Linkage::Internal | Linkage::Private | Linkage::ExternWeak));
-    (!replaceable).then(|| known.get(name)).flatten()
+fn _summary<'s>(procedure: &Procedure, known: &'s IndexMap<String, Summary>, name: &str) -> Option<&'s Summary> {
+    (!procedure.replaceable.contains(name)).then(|| known.get(name)).flatten()
 }
 
 /// Transitive per-procedure mod/ref and capture summaries to a fixed point.
@@ -762,7 +795,7 @@ pub fn summaries_updating(procedures: &IndexMap<String, Procedure>, known: Optio
             readers[target].insert(at);
         }
         // Asked against the summaries as the bodies' own start from them: whether a callee has one does not change.
-        if call_sites(&procedure.unit).iter().any(|site| procedure.calls.get(site).and_then(|target| _summary(&procedure.unit, &result, target)).is_none()) {
+        if procedure.sites.iter().any(|site| procedure.calls.get(site).and_then(|target| _summary(procedure, &result, target)).is_none()) {
             callers_of_unknown.insert(at);
         }
     }
@@ -808,12 +841,12 @@ pub fn summaries_updating(procedures: &IndexMap<String, Procedure>, known: Optio
         queued[at] = false;
         llrm_support::debug::counted("summaries rounds", true);
         let (name, procedure) = procedures.get_index(at).expect("a member of the graph");
-        let made = _summarized(at, procedure, &direct[name], &result, (callbacks.as_ref(), version), &mut found[at], &graph, procedures)?;
+        let made = llrm_support::debug::timed("summaries visit", || _summarized(at, procedure, &direct[name], &result, (callbacks.as_ref(), version), &mut found[at], &graph, procedures))?;
         if made != result[name] {
             result.insert(name.clone(), made);
             let mut woken: Vec<usize> = readers[at].iter().copied().collect();
             if entries.contains(&at) {
-                let now = called_back(&result);
+                let now = llrm_support::debug::timed("summaries callbacks", || called_back(&result));
                 if now != callbacks {
                     callbacks = now;
                     version += 1;
@@ -860,7 +893,7 @@ fn _summarized(
     procedures: &IndexMap<String, Procedure>,
 ) -> Result<Summary, String> {
     VISITS.with(|visits| visits.set(visits.get() + 1));
-    let captured_at = procedure.calls.iter().map(|(at, target)| (*at, _summary(&procedure.unit, result, target).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
+    let captured_at = procedure.calls.iter().map(|(at, target)| (*at, _summary(procedure, result, target).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
     if memo.as_ref().is_none_or(|one| one.captured != captured_at) {
         let facts = Rc::new(llrm_support::debug::timed("summaries points-to", || points_to(&procedure.unit, Some(&procedure.arguments), Some(&captured_at)))?);
         *memo = Some(Visit { captured: captured_at, facts, version: None, unknown: Default::default(), base: None });
@@ -877,8 +910,8 @@ fn _summarized(
         // once, and added to the whole once.
         #[allow(clippy::type_complexity)]
         let mut others: Vec<(Option<GlobalId>, Option<&Bits>, bool, bool, (BTreeSet<Slice>, BTreeSet<Slice>, bool))> = Vec::new();
-        for at in call_sites(unit) {
-            if procedure.calls.get(&at).and_then(|target| _summary(unit, result, target)).is_some() {
+        for at in procedure.sites.iter().copied() {
+            if procedure.calls.get(&at).and_then(|target| _summary(procedure, result, target)).is_some() {
                 continue;
             }
             let allowed = _allowed(unit, at);
@@ -923,9 +956,9 @@ fn _summarized(
     let captures = facts.escaped.iter().filter(|one| one.kind == MemoryKind::Parameter).filter_map(|one| match one.key { Key::Int(number) => Some(Some(Identity::Int(number))), _ => None }).collect();
     let (mut unknown_read, mut unknown_write) = (direct.unknown_read, direct.unknown_write);
     let mut types = direct.unknown_write_types.clone();
-    for at in call_sites(&procedure.unit) {
+    for at in procedure.sites.iter().copied() {
         let target = procedure.calls.get(&at);
-        let callee = target.and_then(|target| _summary(&procedure.unit, result, target));
+        let callee = target.and_then(|target| _summary(procedure, result, target));
         let Some(callee) = callee else { continue };
         let actual = _actuals(procedure, &facts, at);
         let mut effect = callee.instantiated(&actual);
@@ -960,7 +993,7 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
     // Capture is part of escape flow. Unknown callees may retain every
     // pointer actual; known callees retain only the parameters their fixed
     // point summary says they capture.
-    let callee = |at: &InstId| procedure.calls.get(at).and_then(|target| _summary(&procedure.unit, known, target));
+    let callee = |at: &InstId| procedure.calls.get(at).and_then(|target| _summary(procedure, known, target));
     let captures = procedure.calls.keys().map(|at| (*at, callee(at).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
     let facts = points_to(&procedure.unit, Some(&procedure.arguments), Some(&captures))?;
     let callbacks = _callbacks(&procedure.unit, known);
@@ -970,7 +1003,7 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
     };
 
     let mut out = IndexMap::default();
-    for at in call_sites(&procedure.unit) {
+    for at in procedure.sites.iter().copied() {
         let actual = _actuals(procedure, &facts, at);
         let mut effect = match callee(&at) {
             Some(callee) => {
@@ -1649,16 +1682,11 @@ pub fn points_to(
         publishes.insert(block.at, mine);
     }
     let objects = objects.into_inner();
-    let bits_of = |escapes: &Vec<usize>| {
-        let mut bits = Bits::new(objects.len());
-        escapes.iter().for_each(|one| bits.insert(*one));
-        bits
-    };
     let generated = publishes
         .iter()
         .map(|(at, mine)| {
             let mut all = Bits::new(objects.len());
-            mine.iter().for_each(|escapes| all.union_with(&bits_of(escapes)));
+            mine.iter().flatten().for_each(|one| all.insert(*one));
             (*at, all)
         })
         .collect::<IndexMap<_, _>>();
@@ -1687,11 +1715,11 @@ pub fn points_to(
     for block in &graph {
         let mut state = entering(block.at, &out);
         for (&inst, escapes) in instructions(block.at).iter().zip(&publishes[&block.at]) {
-            state.union_with(&bits_of(escapes));
+            escapes.iter().for_each(|one| state.insert(*one));
             if calls.contains(&inst) || matches!(function.instruction(inst).opcode, Opcode::Load { .. } | Opcode::Store { .. }) {
                 let mut visible = state.clone();
                 if let Some(reached) = during.get(&inst) {
-                    visible.union_with(&bits_of(reached));
+                    reached.iter().for_each(|one| visible.insert(*one));
                 }
                 before.insert(inst, visible);
             }

@@ -58,3 +58,14 @@ def test_cpu_time_instead_of_instruction_counts_is_no_counter(tmp_path):
     with pytest.raises(gate.NoCounter):
         gate.own_work(steps_compiler(unit="Mcpu-ns")("llrm", "O2", source))
     assert gate.own_work(steps_compiler()("llrm", "O2", source))["linear step"] == pytest.approx(0.01)
+
+
+def test_the_costs_read_back_give_a_second_difference_of_fixed_and_linear_work_nil_and_of_quadratic_not(tmp_path):
+    """The ratio 2N/N rose when linear work got cheaper, and c(2N) - 2c(N) when a fixed cost went: the gate compares
+    c(2N) - 3c(N) + 2c(N/2), which cancels both."""
+    second = lambda c: c[2] - 3 * c[1] + 2 * c[0]
+    fixed_and_linear = gate.costs("straight", "O2", tmp_path, stand_in("60000 * n + 5000000"), "l")
+    cheaper = gate.costs("straight", "O2", tmp_path, stand_in("30000 * n + 1000000"), "c")
+    quadratic = gate.costs("straight", "O2", tmp_path, stand_in("60000 * n + 300 * n * n + 5000000"), "q")
+    assert abs(second(fixed_and_linear)) < 0.03 * fixed_and_linear[2] and abs(second(cheaper)) < 0.03 * cheaper[2]
+    assert second(quadratic) > 0.1 * quadratic[2]

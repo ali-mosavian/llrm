@@ -727,3 +727,45 @@ b3:
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() })).unwrap();
     assert_eq!(llrm_analysis::avail::solved() - before, 1, "availability solved again for the second numbering");
 }
+
+/// A function numbered both ways (crossing stores and not) and priced twice, 4067 times over QCport and the programs at -O2: 72% of
+/// them priced alike and the second won 2.3%. The ways differ only where a load is served across a store; where none is, the second
+/// numbering is the first and is neither made nor priced.
+#[test]
+fn test_a_function_with_no_load_served_across_a_store_is_numbered_once() {
+    let numberings = |text: &str| {
+        let mut module = parsed(text);
+        let mut manager = PassManager::default();
+        manager.require::<Summaries>();
+        manager.add(Gvn::default());
+        let before = super::numberings();
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() })).unwrap();
+        super::numberings() - before
+    };
+    let plain = "@x = global i16 0
+@z = global i16 0
+
+define i16 @f(i16 %p) {
+b0:
+  %a = load i16, ptr @x
+  %b = load i16, ptr @x
+  %r = add i16 %a, %b
+  store i16 %r, ptr @z
+  ret i16 %r
+}
+";
+    let across = "@x = global i16 0
+@y = global i16 0
+
+define i16 @f(i16 %p) {
+b0:
+  %a = load i16, ptr @x
+  store i16 %p, ptr @y
+  %b = load i16, ptr @x
+  %r = add i16 %a, %b
+  ret i16 %r
+}
+";
+    assert_eq!(numberings(plain), 1, "the second numbering is the first");
+    assert_eq!(numberings(across), 2, "a load served across a store is numbered both ways");
+}
