@@ -17,6 +17,47 @@ use std::rc::Rc;
 use llrm_mir::target::{AddressForm, OperationCosts};
 use machine::Machine;
 
+/// A flat platform's foreign linear ranges, read when a constant address is
+/// first asked of: parsing a platform's description is not paid by a compile
+/// that never asks. Profiles are equal by their prices, so these compare equal.
+#[derive(Clone, Copy)]
+pub struct Foreign(pub fn() -> &'static [(i64, i64)]);
+
+impl Foreign {
+    /// No ranges: a target that is not flat, or whose platform states none.
+    pub fn none() -> Self {
+        Self(|| &[])
+    }
+}
+
+impl std::fmt::Debug for Foreign {
+    fn fmt(
+        &self,
+        formatter: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        formatter.write_str("Foreign")
+    }
+}
+
+impl PartialEq for Foreign {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
+}
+
+impl Eq for Foreign {}
+
+impl std::hash::Hash for Foreign {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        _: &mut H,
+    ) {
+    }
+}
+
 /// What a CPU's profile states that a target prices its operations from.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CpuPrices {
@@ -40,6 +81,10 @@ pub struct CpuPrices {
     pub private: Option<llrm_mir::target::PrivateConvention>,
     /// The conventions as the description states them.
     pub calling: Option<&'static calling::Calling>,
+    /// The platform's linear [low, high) ranges no program data occupies, for a
+    /// flat target (`Machine::flat_foreign`): there is no selector to find them
+    /// by.
+    pub foreign: Foreign,
 }
 
 /// A cost model that is only what a target describes: its registers, address
@@ -63,6 +108,7 @@ pub fn described_by_size(
         spaces: prices.spaces,
         private: prices.private.clone(),
         calling: prices.calling,
+        foreign: prices.foreign,
     })
 }
 
@@ -75,6 +121,7 @@ struct Described {
     spaces: llrm_mir::spaces::Spaces,
     private: Option<llrm_mir::target::PrivateConvention>,
     calling: Option<&'static calling::Calling>,
+    foreign: Foreign,
 }
 
 impl llrm_mir::target::Machine for Described {
@@ -106,15 +153,19 @@ impl llrm_mir::target::Machine for Described {
         self.spaces
     }
 
-    /// Memory without segments is linear: no selector and offset reach foreign
-    /// memory.
+    /// Memory without segments is linear, the offset the address: the
+    /// platform's ranges (`CpuPrices::foreign`) hold it or not.
     fn foreign_span(
         &self,
-        _: (i64, i64),
-        _: (i64, i64),
-        _: i64,
+        selectors: (i64, i64),
+        offsets: (i64, i64),
+        width: i64,
     ) -> Option<(i64, i64)> {
-        None
+        let linear = |(low, high): (i64, i64)| 0 <= low && low <= high && high <= 0xFFFF_FFFF;
+        if selectors != (0, 0) || !linear(offsets) {
+            return None;
+        }
+        machine::covered((self.foreign.0)(), offsets.0, offsets.1 + width)
     }
 
     fn costs(&self) -> OperationCosts {
@@ -154,6 +205,13 @@ pub trait Target {
 
     /// The platform description a frontend of this target defaults to.
     fn machine(&self) -> Machine;
+
+    /// The linear ranges its platform states no program data occupies, where it
+    /// is flat and states its selector's base as 0 (`Machine::flat_foreign`),
+    /// worked out once, not for each profile.
+    fn flat_foreign(&self) -> Foreign {
+        Foreign::none()
+    }
 
     /// Whether the machine has no instruction for `operation` (its
     /// description's `expand`), so the compiler expands it

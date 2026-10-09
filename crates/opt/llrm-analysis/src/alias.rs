@@ -2615,6 +2615,13 @@ pub fn annotated_with(
                 got = Some(foreign);
             }
         }
+        // A flat access to a constant address the platform says is outside the
+        // program names those linear bytes.
+        if reference.linear {
+            if let Some(foreign) = regions::foreign_provenance(reference, &BTreeMap::new(), unit.program) {
+                got = Some(foreign);
+            }
+        }
         // An access the language says is at a fixed address names linear
         // memory, whatever its pointer was made from.
         // The frontend states it only where the target says the address is
