@@ -1028,3 +1028,41 @@ pub fn built<'a>(
 #[cfg(test)]
 #[path = "memoryssa_tests.rs"]
 mod tests;
+
+/// What some instructions write, indexed by object: whether they spare a
+/// read is asked of the writers that may reach it (`regions::Index`), not of
+/// every one.
+pub struct Writers<'a> {
+    index: crate::regions::Index<'a, InstId>,
+    /// One of them writes anything.
+    anywhere: bool,
+}
+
+impl<'a> Writers<'a> {
+    pub fn of(
+        accesses: &'a Accesses,
+        insts: &[InstId],
+    ) -> Self {
+        let mut index = crate::regions::Index::default();
+        let mut anywhere = false;
+        for &inst in insts {
+            match accesses.writes(inst) {
+                None => anywhere = true,
+                Some(writes) => writes.iter().for_each(|write| index.push(inst, write)),
+            }
+        }
+        Self { index, anywhere }
+    }
+
+    /// `spares` of every one of them.
+    pub fn spare(
+        &self,
+        accesses: &Accesses,
+        program: Option<&llrm_mir::program::ProgramProxy>,
+        read: &MemRef,
+    ) -> bool {
+        read.unwritable()
+            || (!self.anywhere
+                && self.index.near(read).into_iter().all(|(writer, _)| spares(accesses, program, read, writer)))
+    }
+}

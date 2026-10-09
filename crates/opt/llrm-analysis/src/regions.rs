@@ -1341,3 +1341,79 @@ b0:
         assert_eq!(word("e-p:64:64-n8:16:32:64"), None);
     }
 }
+
+/// References indexed by the objects they name: the ones that may overlap a
+/// reference are found among those naming an object it may alias, not by
+/// asking `overlapping` of each. A loop of N references asked N times was N^2
+/// asks (a nest of N loops, N^3).
+///
+/// `overlapping` of two references that both have provenance is false unless
+/// some pair of their slices' objects may alias (`Provenance::intersects`;
+/// `_displaced` settles only references of one frame, an object's); objects
+/// may alias when they are one, or both are addressed and their classes allow
+/// it (`objects_may_alias`). So the candidates of a reference are the entries
+/// naming one of its objects, and, if it names an addressed object, those
+/// naming an addressed one; and every entry without provenance.
+pub struct Index<'a, T> {
+    entries: Vec<(T, &'a MemRef)>,
+    by_object: llrm_support::hash::HashMap<crate::memory::ObjectRef, Vec<usize>>,
+    addressed: Vec<usize>,
+    loose: Vec<usize>,
+}
+
+impl<T> Default for Index<'_, T> {
+    fn default() -> Self {
+        Self { entries: Vec::new(), by_object: Default::default(), addressed: Vec::new(), loose: Vec::new() }
+    }
+}
+
+impl<'a, T: Copy> Index<'a, T> {
+    pub fn push(
+        &mut self,
+        key: T,
+        reference: &'a MemRef,
+    ) {
+        let at = self.entries.len();
+        self.entries.push((key, reference));
+        match &reference.provenance {
+            None => self.loose.push(at),
+            Some(provenance) => {
+                let mut seen = Vec::new();
+                for slice in &provenance.slices {
+                    if !seen.contains(&slice.object) {
+                        seen.push(slice.object);
+                        self.by_object.entry(slice.object).or_default().push(at);
+                    }
+                }
+                if seen.iter().any(|object| object.addressed) {
+                    self.addressed.push(at);
+                }
+            }
+        }
+    }
+
+    /// Every entry that may overlap `reference`, with its key: more, never
+    /// fewer.
+    pub fn near(
+        &self,
+        reference: &MemRef,
+    ) -> Vec<(T, &'a MemRef)> {
+        let Some(provenance) = &reference.provenance else {
+            return self.entries.clone();
+        };
+        let mut found: Vec<usize> = self.loose.clone();
+        let mut asked = Vec::new();
+        for slice in &provenance.slices {
+            if !asked.contains(&slice.object) {
+                asked.push(slice.object);
+                found.extend(self.by_object.get(&slice.object).into_iter().flatten());
+            }
+        }
+        if asked.iter().any(|object| object.addressed) {
+            found.extend(&self.addressed);
+        }
+        found.sort_unstable();
+        found.dedup();
+        found.into_iter().map(|at| self.entries[at]).collect()
+    }
+}

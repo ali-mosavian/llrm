@@ -188,3 +188,22 @@ def test_gvn_stays_below_quadratic_in_the_live_values_and_the_cells(tmp_path):
         if big > 3.2 * small + 5.0:
             grown[axis] = f"{small:.1f} -> {big:.1f} Minstr"
     assert not grown, grown
+
+
+def test_hoist_and_loopmotion_stay_quadratic_at_worst_in_the_depth_of_a_loop_nest(tmp_path):
+    """nest(64) at -O2 (#1110): each load asked every instruction of the loop whether it writes it, and each store every access
+    of the loop whether it reaches it, per loop: hoist read 2N/N = 5.5, 6.5, 7.1 (7.1 G at N=128) and loopmotion 6.0, 7.0 (N^3).
+    Every block lies in as many loops as it is deep, so N^2 is the least; they now read 3.6 to 4.0, gcc's slope here being 2.1
+    (4.3). A step above 4.8 (slope 2.26) fails; a few Minstr of start-up are allowed."""
+    n = 32
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"nest_{label}.c"
+        source.write_text("" if size == 0 else scaling.nest(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    grown = {}
+    for step in ("mir hoist", "mir loopmotion"):
+        small, big = (own[label].get(step, 0.0) - own["empty"].get(step, 0.0) for label in ("n", "2n"))
+        if big > 4.8 * small + 5.0:
+            grown[step] = f"{small:.1f} -> {big:.1f} Minstr"
+    assert not grown, grown
