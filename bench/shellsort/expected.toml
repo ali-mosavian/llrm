@@ -1,4 +1,4 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
+reason = "guards prove more (a phi tested on every edge into its block): shellsort nib m16 loses a bounds check (-1.0% instructions) and the CFG it leaves loads values[at - gap] twice (4 loads in the pipeline's MIR, 3 before): memory operands +17%"
 blessed = "2026-10-09"
 
 [bas.O2]
@@ -32,16 +32,16 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 11369
-memory_operands = 1661
-code_bytes = 208
+instructions = 11258
+memory_operands = 1939
+code_bytes = 205
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 11793
-memory_operands = 1757
-code_bytes = 199
+instructions = 11682
+memory_operands = 2035
+code_bytes = 196
 data_bytes = 0
 bss_bytes = 0
 
