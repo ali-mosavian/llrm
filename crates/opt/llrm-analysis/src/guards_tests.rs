@@ -1,6 +1,6 @@
 //! Guards proven by the branches over a block.
 
-use super::{guards, holds};
+use super::{Given, found, guards, holds};
 use crate::induction::{AffineOperand, Scev};
 use crate::induction::tests::Parsed;
 use llrm_mir::opcode::IntPredicate;
@@ -144,4 +144,19 @@ done:
         let (p, hi) = (Scev::of(&AffineOperand::Value(parsed.value("p"), 32), 32), Scev::of(&AffineOperand::Value(parsed.value("hi"), 32), 32));
         assert_eq!(holds(&unit, block_named(&parsed, "body"), IntPredicate::Slt, &p, &hi), expected, "back edge tested against hi: {tested}");
     }
+}
+
+/// `decide` asked `holds_given` of a branch's compare and its inverse, and each found the block's guards twice: four times, half
+/// of its time on QCport's sc. The block's guards are found once for any number of questions of it.
+#[test]
+fn test_the_guards_of_a_block_are_found_once_for_all_asked_of_it() {
+    let parsed = Parsed::new(GUARDED);
+    let unit = parsed.unit();
+    let (n, len) = (Scev::of(&AffineOperand::Value(parsed.value("n"), 16), 16), Scev::of(&AffineOperand::Value(parsed.value("len"), 16), 16));
+    let before = found();
+    let given = Given::at(&unit, block_named(&parsed, "done"), &[]);
+    for predicate in [IntPredicate::Ult, IntPredicate::Uge, IntPredicate::Eq, IntPredicate::Ne] {
+        given.holds(&unit, predicate, &n, &len);
+    }
+    assert_eq!(found() - before, 1, "the block's guards were found more than once");
 }
