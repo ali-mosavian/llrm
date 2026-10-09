@@ -1327,7 +1327,7 @@ pub trait ModulePass {
     ) -> Vec<GlobalId>;
 }
 
-pub enum Pass {
+pub(crate) enum Pass {
     Function(Box<dyn FunctionPass>),
     Module(Box<dyn ModulePass>),
     /// Over every module at once, between the module-by-module runs of the
