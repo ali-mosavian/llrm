@@ -17,6 +17,8 @@ const BASIC: &str = "PRINT 1\n";
 enum Meets {
     Builds,
     Refuses,
+    /// Takes the flag and says it does not build for it yet.
+    Postponed,
 }
 
 struct Tool {
@@ -49,7 +51,7 @@ fn tools() -> Vec<Tool> {
             path: env!("CARGO_BIN_EXE_llrm-qb"),
             input: ("a.bas", BASIC),
             more: &["--dialect", "qb45", "--runtime", "qb45", "-S", "-o", "a.s"],
-            meets: Meets::Refuses,
+            meets: Meets::Postponed,
         },
         Tool {
             name: "llrm-omf",
@@ -122,6 +124,14 @@ fn every_compiler_takes_m32_from_the_one_parser() {
             Meets::Refuses => {
                 let said = text(&done);
                 assert!(!done.status.success() && said.contains("-m16 only, not -m32"), "{} -m32: {said}", tool.name);
+            }
+            Meets::Postponed => {
+                let said = text(&done);
+                assert!(
+                    !done.status.success() && said.contains("does not build for -m32 yet") && said.contains("issues/"),
+                    "{} -m32: {said}",
+                    tool.name
+                );
             }
         }
     }

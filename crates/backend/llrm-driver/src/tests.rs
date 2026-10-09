@@ -32,6 +32,14 @@ fn a_target_the_frontend_does_not_build_for_is_refused() {
     assert_eq!(error, "this compiler builds for -m32 only, not -m16");
 }
 
+/// A frontend that will build for another target says it does not yet, and
+/// where the work is.
+#[test]
+fn a_target_the_frontend_will_build_for_is_refused_as_not_yet() {
+    let error = planned(&flags(&["-m32"]), Some(&["x86-m16"]), &[("x86-m32", "issue 1")]).err().unwrap();
+    assert_eq!(error, "this compiler does not build for -m32 yet (issue 1); it builds for -m16");
+}
+
 /// A target's options select with the selector built from its own definitions.
 #[test]
 fn a_target_is_bound_to_its_own_selector() {
