@@ -75,7 +75,7 @@ the dataflow.
    dataflow back in) or accept it with numbers.
 4. **Flip the default, then delete** `avail::holders`, `after`, `meet`,
    `forwardable_by`'s dataflow half, `Held`, `provider` and the
-   `LLRM_CHECK_HOLDERS` mode (`avail.rs`, about 700 of 823 lines). The `CellMap`
+   `LLRM_CHECK_HOLDERS` mode (`avail.rs`, about 300 of its 823 lines; the dead-store solve stays). The `CellMap`
    stays: `consts` uses it.
 5. **Then speed the walk.** `covered`/`placed` per pair; the groups scan in
    `memory_providers` (`same_bytes` against every group, quadratic in distinct
