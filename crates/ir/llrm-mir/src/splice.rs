@@ -51,9 +51,7 @@ pub fn splice(
     // What followed the call, and the phis that named its block.
     let rest = function.create_block(None);
     function.insert_block(rest, Some(block)).expect("a placed block");
-    for &inst in &instructions[at + 1..] {
-        function.move_to(inst, Position::End(rest)).expect("a placed instruction");
-    }
+    function.move_run(&instructions[at + 1..], rest).expect("a placed instruction");
     for successor in function.successors(rest) {
         for phi in phis(function, successor) {
             for (index, operand) in function.instruction(phi).operands.clone().into_iter().enumerate() {

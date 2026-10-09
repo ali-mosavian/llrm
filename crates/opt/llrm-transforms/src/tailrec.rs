@@ -373,11 +373,14 @@ fn rewrite(
         .iter()
         .copied()
         .find(|&inst| !matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }));
-    for inst in function.block(entry).instructions().to_vec() {
-        if !matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }) {
-            function.move_to(inst, Position::End(header)).expect("a placed instruction");
-        }
-    }
+    let rest: Vec<_> = function
+        .block(entry)
+        .instructions()
+        .iter()
+        .copied()
+        .filter(|&inst| !matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }))
+        .collect();
+    function.move_run(&rest, header).expect("a placed instruction");
     function.replace_block_uses_with(entry, header);
     let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(header)], Flags::default(), None);
     function.insert(jump, Position::End(entry)).expect("a placed block");

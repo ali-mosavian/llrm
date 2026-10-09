@@ -3,6 +3,7 @@
 # run of instructions (isel/combined.rs). build.rs makes `peep::Rules` from this
 # list and refuses a group the .peep has that is not here, or lacks its form.
 extensions body
+zeroed_loads body
 pushed_constants body
 pushes body
 narrowed_moves body

@@ -97,6 +97,24 @@ fn test_a_compare_crowded_before_its_branches_spills() {
     assert!(assigned.is_ok(), "{:?}", assigned.err());
 }
 
+/// Each spill took one more round, and each round wrote every block again: an
+/// unrolled fpbench spilled 24 values in 25 rounds, a third of its compile.
+/// A block is written again only when a victim reaches it.
+#[test]
+fn test_a_round_writes_only_the_blocks_a_new_spill_reaches() {
+    let (body, mut frame) = before_float_assign();
+    let cpu = crate::backend::cpu::profile("486").unwrap();
+    WRITTEN.with(|one| one.set(0));
+    assigned(&body, Some(&mut frame), None, false, cpu).unwrap();
+    let (rounds, written) = (ROUNDS.with(|one| one.get()), WRITTEN.with(|one| one.get()));
+    assert!(rounds > 1, "the premise: a body that spills ({rounds} rounds)");
+    assert!(
+        written < rounds * body.blocks.len(),
+        "{written} blocks written in {rounds} rounds of {}",
+        body.blocks.len()
+    );
+}
+
 /// Nine floats copy at once into a loop's phis (fpbench, #358). Each spilled
 /// copy was stored after all nine were made, nine registers wide, and
 /// FloatAlloc refused the body with "floating instruction requires too many
