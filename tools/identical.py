@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Whether two llrm-c builds write the same bytes: every program and every QCport module, at each level.
 
-    tools/identical.py OLD_LLRM_C NEW_LLRM_C [--levels -O1 -O2 -Os -Omax] [--programs-only]
+    tools/identical.py OLD_LLRM_C NEW_LLRM_C [--levels=-O1,-O2,-Os,-Omax] [--programs-only]
 
 The corpus is this tool's own: the vsgcc programs (programs.py, wrapped as vsgcc compiles them) and, from QCPORT and QCPORT_INC, QCport's
 modules. It fails rather than skips: a corpus smaller than the known one (66 programs, 65 modules) is an error, and so is QCPORT unset
@@ -69,7 +69,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("old")
     parser.add_argument("new")
-    parser.add_argument("--levels", nargs="+", default=["-O1", "-O2", "-Os", "-Omax"])
+    parser.add_argument("--levels", default="-O1,-O2,-Os,-Omax", help="comma-separated, e.g. -O2,-Os")
     parser.add_argument("--programs-only", action="store_true")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "6")))
     args = parser.parse_args()
@@ -77,11 +77,12 @@ def main() -> int:
     with tempfile.TemporaryDirectory(dir=os.environ.get("CARGO_TARGET_DIR")) as tmp:
         work = Path(tmp)
         files = corpus(work, Path(qcport).expanduser() if qcport else None, Path(headers).expanduser() if headers else None, args.programs_only)
-        jobs = [(name, level, source, flags) for name, (source, flags) in files.items() for level in args.levels]
+        levels = args.levels.split(",")
+        jobs = [(name, level, source, flags) for name, (source, flags) in files.items() for level in levels]
         with ThreadPoolExecutor(args.jobs) as pool:
             results = list(pool.map(lambda job: same(job, args.old, args.new, work), jobs))
     bad = [r for r in results if r[2]]
-    print(f"{len(files)} files x {len(args.levels)} levels = {len(results)} objects compared, {len(bad)} differ or failed")
+    print(f"{len(files)} files x {len(levels)} levels = {len(results)} objects compared, {len(bad)} differ or failed")
     for name, level, why in bad[:20]:
         print(f"  {name} {level}: {why}")
     return 1 if bad else 0

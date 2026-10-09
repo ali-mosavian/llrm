@@ -36,3 +36,15 @@ def test_the_known_corpus_is_all_of_it(tmp_path):
         pytest.skip("no QCport")
     files = identical.corpus(tmp_path, Path(qcport).expanduser(), Path(headers).expanduser())
     assert len(files) >= identical.KNOWN_PROGRAMS + identical.KNOWN_QCPORT
+
+
+def test_levels_given_on_the_command_line_are_not_read_as_options(tmp_path, monkeypatch):
+    """`--levels -O2 -Os` was an argparse error (a value that starts with '-'), and a walk over forty commits printed the usage line forty
+    times where it meant to say 'identical'."""
+    import subprocess
+    import sys
+    fake = tmp_path / "cc"
+    fake.write_text('#!/bin/sh\nwhile [ "$1" != -o ]; do shift; done\necho x > "$2"\n')
+    fake.chmod(0o755)
+    done = subprocess.run([sys.executable, str(HERE / "identical.py"), str(fake), str(fake), "--levels=-O2,-Os", "--programs-only"], capture_output=True, text=True, env={**__import__("os").environ, "CARGO_TARGET_DIR": str(tmp_path)})
+    assert "usage:" not in done.stderr and "objects compared" in done.stdout, done.stderr[-300:] + done.stdout[-300:]
