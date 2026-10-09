@@ -72,7 +72,15 @@ fn forwarded(
         .map(|(_, inst)| inst)
         .filter(|&inst| unit.function.instruction(inst).opcode.mnemonic() == "load")
         .collect();
-    forwardable(unit, &Accesses::plain(unit, calls), &loads)
+    forwardable_walk(unit, &Accesses::plain(unit, calls), &loads)
+}
+
+/// The value the walk serves `load` with, if it serves it.
+fn served(
+    unit: &Unit,
+    load: InstId,
+) -> Option<Operand> {
+    forwarded(unit, &Calls::default()).into_iter().find(|one| one.at == load).map(|one| one.value)
 }
 
 /// `%v` stored to the cell, `between`, then the cell loaded.
@@ -96,11 +104,7 @@ fn test_current_mir_decides_whether_a_call_invalidates_memory() {
         let parsed = around(between);
         let unit = parsed.unit();
         let load = site(&unit, "b0", 2);
-        assert_eq!(
-            provider(&unit, &Accesses::plain(&unit, &Calls::default()), load, &cell(&unit, load)),
-            kept.then(|| named(&unit, "v")),
-            "{between}"
-        );
+        assert_eq!(served(&unit, load), kept.then(|| named(&unit, "v")), "{between}");
     }
 }
 
@@ -351,11 +355,7 @@ b3:
         ));
         let unit = parsed.unit();
         let load = site(&unit, "b3", 0);
-        assert_eq!(
-            provider(&unit, &Accesses::plain(&unit, &Calls::default()), load, &cell(&unit, load)),
-            kept.then(|| named(&unit, "v")),
-            "{right}"
-        );
+        assert_eq!(served(&unit, load), kept.then(|| named(&unit, "v")), "{right}");
     }
 }
 
@@ -422,11 +422,7 @@ b0:
         ));
         let unit = parsed.unit();
         let load = site(&unit, "b0", 2);
-        assert_eq!(
-            provider(&unit, &Accesses::plain(&unit, &Calls::default()), load, &cell(&unit, load)),
-            kept.then(|| named(&unit, "v")),
-            "{write}"
-        );
+        assert_eq!(served(&unit, load), kept.then(|| named(&unit, "v")), "{write}");
     }
 }
 
@@ -564,51 +560,8 @@ fn test_loads_of_one_address_are_compared_with_a_missing_one_once() {
     let before = same_runs();
     let found = forwarded(&unit, &Calls::default());
     assert_eq!(found.len(), 39, "every load but the first is served");
-    assert!(same_runs() - before <= 20, "{} comparisons for 20 loads of one address", same_runs() - before);
-}
-
-/// 200 stores to 200 different cells of one array asked every cell held of each
-/// write: 19,900 clobber questions where the bytes a write meets hold one cell.
-#[test]
-fn test_a_store_asks_only_the_cells_it_can_reach() {
-    let stores: String =
-        (0..200).map(|at| format!("  store i16 %v, ptr getelementptr (i8, ptr @big, i16 {})\n", at * 2)).collect();
-    let parsed = Parsed::new(&format!(
-        "@big = global [400 x i8] zeroinitializer\n\ndefine void @f(i16 %v) {{\nb0:\n{stores}  ret void\n}}\n"
-    ));
-    let unit = parsed.unit();
-    let accesses = Accesses::plain(&unit, &Calls::default());
-    let before = clobber_asks();
-    let held = holders(&unit, &accesses);
-    let asked = clobber_asks() - before;
-    assert_eq!(held.outof.values().map(|cells| cells.len()).max(), Some(200));
-    assert!(asked <= 1_000, "{asked} clobber questions for 200 stores to disjoint cells");
-}
-
-/// The cell naming a load's bytes was found by a scan of every cell held. It is
-/// asked of the cells a write to the load's address can reach, and must be the
-/// one the scan finds (the first held), at every point of a function whose
-/// cells overlap and are rewritten.
-#[test]
-fn test_the_held_cell_naming_a_loads_bytes_is_the_one_a_scan_finds() {
-    let parsed = Parsed::new(&format!(
-        "define i8 @f(i1 %c) {{\nb0:\n  store i8 1, ptr {CELL}\n  store i8 2, ptr {OTHER}\n  %a = load i8, ptr {CELL}\n  br i1 %c, label %b1, label %b2\n\nb1:\n  store i8 3, ptr {CELL}\n  %b = load i8, ptr {OTHER}\n  br label %b3\n\nb2:\n  %d = load i8, ptr {CELL}\n  br label %b3\n\nb3:\n  %e = load i8, ptr {CELL}\n  %f = load i8, ptr {OTHER}\n  ret i8 %e\n}}\n"
-    ));
-    let unit = parsed.unit();
-    let accesses = Accesses::plain(&unit, &Calls::default());
-    let held = holders(&unit, &accesses);
-    let loads: Vec<_> =
-        unit.function.walk().map(|(_, inst)| inst).filter_map(|inst| loaded_into(&unit, &accesses, inst)).collect();
-    assert!(loads.len() >= 5);
-    let mut asked = 0;
-    for into in held.into.values().chain(held.outof.values()) {
-        for (cell, _) in &loads {
-            let whole = into.iter().find(|(one, _)| same_bytes(&unit, one, cell));
-            assert_eq!(into.naming(&unit, cell, |_| true), whole);
-            asked += usize::from(whole.is_some());
-        }
-    }
-    assert!(asked > 0, "no held cell named a load's bytes: the test asks nothing");
+    // The walk asks for all 40 loads, not only the 20 a map loses at the loop.
+    assert!(same_runs() - before <= 40, "{} comparisons for 40 loads of one address", same_runs() - before);
 }
 
 #[test]

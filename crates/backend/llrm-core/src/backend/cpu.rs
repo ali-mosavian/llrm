@@ -221,6 +221,15 @@ impl Profile {
         Ok(if self.cost("alu_rr")? < self.cost("shift_r1")? { "alu_rr" } else { "shift_r1" })
     }
 
+    /// Whether clearing a register and loading its low byte (`xor r,r; mov
+    /// rl,m`) is faster than `movzx r,m8`: the 486 takes three clocks for
+    /// the extension and two for the pair; a CPU that stalls on the partial
+    /// register, or that extends in one clock, does not.
+    pub fn clears_before_byte_load(&self) -> Result<bool, String> {
+        Ok(!self.size
+            && self.cost("alu_rr")? + self.cost("mov_rm")? + self.partial_register_stall < self.cost("movzx")?)
+    }
+
     /// Whether `words` pops into a dead register clean a call's arguments
     /// off the stack in place of `add sp,2*words`: shorter for one or two
     /// words, and where size is not wanted, only if no slower.
@@ -552,4 +561,21 @@ fn private_convention(arch: &dyn Target) -> Option<llrm_mir::target::PrivateConv
     from.sort_unstable();
     from.dedup();
     Some(llrm_mir::target::PrivateConvention { to, from })
+}
+
+#[cfg(test)]
+mod zeroed_load_tests {
+    use super::*;
+
+    /// The 486 and Pentium take three clocks for `movzx r,m8` and two for the
+    /// pair; the 386 (loads cost four), the Pentium Pro and later (one-clock
+    /// extension, a partial-register stall) do not. Priced from the CPU's
+    /// description, not named.
+    #[test]
+    fn test_the_pair_is_chosen_where_the_description_prices_it_lower() {
+        for (name, pair) in [("386", false), ("486", true), ("P5", true), ("P6", false), ("Core", false)] {
+            let cpu = profile(name).expect("a cpu");
+            assert_eq!(cpu.clears_before_byte_load(), Ok(pair), "{name}");
+        }
+    }
 }

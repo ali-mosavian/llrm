@@ -1546,6 +1546,7 @@ fn declare_outside(
 ) -> Emit<()> {
     let values: HashMap<i64, i64> = function.values.iter().map(|one| (one.id, one.r#type)).collect();
     let places: HashMap<i64, &model::Place> = function.places.iter().map(|one| (one.id, one)).collect();
+    let sites = call_sites(function);
     if function.error_handler.is_some() && !function.error_handler_local {
         // The module handler run to the module's end raises "No RESUME".
         declare_runtime(module, tables, handling::RAISE, 1)?;
@@ -1689,7 +1690,7 @@ fn declare_outside(
         if handling::owns(callee) {
             continue;
         }
-        let abi = match function.calls.iter().find(|one| one.instruction == instruction.id) {
+        let abi = match sites.get(&instruction.id).copied() {
             Some(site) => {
                 let abi = convention(&tables.spaces, site.cleanup, site.distance, site.convention.as_deref())?;
                 passed(site, instruction.operands.len())
@@ -1705,7 +1706,7 @@ fn declare_outside(
             continue;
         }
         let types = &mut module.context.types;
-        let site = function.calls.iter().find(|one| one.instruction == instruction.id);
+        let site = sites.get(&instruction.id).copied();
         let order = site
             .and_then(|site| passed(site, instruction.operands.len()))
             .unwrap_or_else(|| (0..instruction.operands.len()).collect());
@@ -1967,6 +1968,16 @@ fn three_way(op: Op) -> Option<Op> {
 }
 
 /// An operand's HIR type: a place's is what it holds.
+/// Each call's ABI by the instruction it is of: found once for a function,
+/// where every call instruction used to read all of `calls`.
+fn call_sites(function: &model::Function) -> HashMap<i64, &model::CallAbi> {
+    let mut sites = HashMap::default();
+    for one in &function.calls {
+        sites.entry(one.instruction).or_insert(one);
+    }
+    sites
+}
+
 fn operand_type(
     operand: &Operand,
     values: &HashMap<i64, i64>,
@@ -2056,6 +2067,8 @@ struct Body<'b, 'm, 'h> {
     function: &'h model::Function,
     value_types: HashMap<i64, i64>,
     places: HashMap<i64, &'h model::Place>,
+    /// Each call's ABI by its instruction.
+    sites: HashMap<i64, &'h model::CallAbi>,
     blocks: HashMap<i64, BlockId>,
     values: HashMap<i64, Value>,
     /// The `i1` each comparison's result was widened from: what an assumption
@@ -2106,6 +2119,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             function,
             value_types: function.values.iter().map(|one| (one.id, one.r#type)).collect(),
             places: function.places.iter().map(|one| (one.id, one)).collect(),
+            sites: call_sites(function),
             blocks: HashMap::default(),
             values,
             truths: HashMap::default(),
@@ -3210,7 +3224,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             Op::Call => {
                 let callee = instruction.callee.as_deref().ok_or("a call without a callee")?;
                 let operands = self.operands(instruction)?;
-                let site = self.function.calls.iter().find(|one| one.instruction == instruction.id);
+                let site = self.sites.get(&instruction.id).copied();
                 let order =
                     site.and_then(|site| passed(site, operands.len())).unwrap_or_else(|| (0..operands.len()).collect());
                 let arguments: Vec<Value> = order.iter().map(|&one| operands[one]).collect();
@@ -3287,20 +3301,17 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         instruction: &model::Instruction,
         order: &[usize],
     ) -> Vec<(usize, Attribute)> {
-        let values = self.function.values.iter().map(|one| (one.id, one.r#type)).collect();
-        let places = self.function.places.iter().map(|one| (one.id, one)).collect();
+        let (values, places) = (&self.value_types, &self.places);
         let classes = self
-            .function
-            .calls
-            .iter()
-            .find(|one| one.instruction == instruction.id)
+            .sites
+            .get(&instruction.id)
             .map(|site| argument_classes(&site.memory, site.result_pointer))
             .unwrap_or_default();
         order
             .iter()
             .enumerate()
             .filter_map(|(index, &at)| {
-                let ty = self.hir_type(operand_type(&instruction.operands[at], &values, &places));
+                let ty = self.hir_type(operand_type(&instruction.operands[at], values, places));
                 let signed = ty.signed.filter(|_| ty.kind == model::TypeKind::Integer && ty.width == 1)?;
                 Some((index, Attribute::Flag(if signed { "signext" } else { "zeroext" }.to_owned())))
             })
@@ -3314,7 +3325,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         &mut self,
         instruction: &model::Instruction,
     ) -> Vec<(usize, Attribute)> {
-        let Some(site) = self.function.calls.iter().find(|one| one.instruction == instruction.id) else {
+        let Some(site) = self.sites.get(&instruction.id).copied() else {
             return Vec::new();
         };
         byval_attributes(&mut self.b.context.types, &site.byval, &site.byval_bytes)
@@ -3325,7 +3336,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         &self,
         instruction: &model::Instruction,
     ) -> Answer {
-        let Some(site) = self.function.calls.iter().find(|one| one.instruction == instruction.id) else {
+        let Some(site) = self.sites.get(&instruction.id).copied() else {
             return Answer::Value;
         };
         answer(site, &instruction.results, |result| self.hir_type(self.value_types[&result]))

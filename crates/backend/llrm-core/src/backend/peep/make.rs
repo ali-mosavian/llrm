@@ -27,6 +27,11 @@ pub fn widen(one: Reg) -> Loc {
     Loc::Reg(Reg { register: crate::model::ir::root(one.register), width: 4 })
 }
 
+/// A register's low byte.
+pub fn low_byte(one: Reg) -> Loc {
+    Loc::Reg(Reg { register: target::named(one.register, 1), width: 1 })
+}
+
 /// Two word immediates, high then low, as the dword they push.
 pub fn dword(
     high: &Imm,
