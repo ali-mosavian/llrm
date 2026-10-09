@@ -406,7 +406,7 @@ fn updated(held: &Remembered, body: &LirBody, index: &Indexes, busy: &Frequency)
         let at = old.partition_point(|one| *one < slot) - 1;
         new[at] + (slot - old[at])
     };
-    let again = worked_among(body, index, busy, &touched);
+    let again = llrm_support::debug::timed("intervals among", || worked_among(body, index, busy, &touched));
     let mut answer: IndexMap<u32, Interval> = IndexMap::default();
     let mut totals: IndexMap<u32, f64> = IndexMap::default();
     for (value, kept) in held.answer.iter().filter(|(value, _)| !touched.contains(value)) {
