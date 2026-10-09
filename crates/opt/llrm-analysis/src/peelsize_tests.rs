@@ -231,8 +231,8 @@ fn the_count_is_the_one_asked_about() {
     let parsed = summing(4, "%x", "");
     let unit = parsed.unit();
     let facts = consts::known(&unit, None, None, None);
-    assert!(admitted(&unit, &parsed.outer(), &BigInt::from(4), &facts, &Limits::default(), Site::default()));
-    assert!(!admitted(&unit, &parsed.outer(), &BigInt::from(17), &facts, &Limits::default(), Site::default()));
+    assert!(admitted(&unit, &parsed.outer(), &BigInt::from(4), &facts, &Limits::default(), Site::default(), &|_| 1));
+    assert!(!admitted(&unit, &parsed.outer(), &BigInt::from(17), &facts, &Limits::default(), Site::default(), &|_| 1));
 }
 
 /// QCport's savegame.c peeled loops its function enters once in 256 calls, 1 KB
