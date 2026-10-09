@@ -559,31 +559,55 @@ pub fn propagated_edges(order: &[i64], predecessors: &dyn Fn(i64) -> Vec<i64>, s
     // How often a trip of each loop reaches its exiting blocks together, which its exit test runs: more than once where
     // one is in a loop nested in it, and each visit then takes that much less of the exit, so that the trips stay.
     let visits: std::cell::RefCell<BTreeMap<i64, f64>> = std::cell::RefCell::new(BTreeMap::new());
-    let counted = |from: i64, to: i64| -> Option<f64> {
-        let next = successors(from);
-        for one in cycles.iter().filter(|one| one.body.contains(&from)) {
-            let inside = next.iter().filter(|at| one.body.contains(at)).count();
-            let outside = next.len() - inside;
-            if inside == 0 || outside == 0 {
-                continue;
-            }
-            // A loop without proven trips leaves the edge to the loops around it, which may state them.
-            let Some(trips) = one.trips else { continue };
-            let exiting = one.body.iter().filter(|&&at| successors(at).iter().any(|to| !one.body.contains(to))).count();
-            if exiting != 1 && from != one.header && !one.latches.contains(&from) {
-                return None;
-            }
-            let tested = if from == one.header && !one.latches.contains(&from) { 0.0 } else { 1.0 };
-            let visited = visits.borrow().get(&one.header).copied().unwrap_or(1.0).max(1.0);
-            let stay = 1.0 - (1.0 - (trips as f64 - tested) / (trips as f64 + 1.0 - tested)) / visited;
-            // The trips fix how often the loop is left, not which way: each
-            // edge takes its side's mass by its own odds.
-            let side: BTreeSet<i64> = next.iter().copied().filter(|at| one.body.contains(at) == one.body.contains(&to)).collect();
-            let weight: f64 = side.iter().map(|at| given(from, *at)).sum();
-            let part = if weight > 0.0 { given(from, to) / weight } else { 1.0 / side.len() as f64 };
-            return Some(if one.body.contains(&to) { stay * part } else { (1.0 - stay) * part });
+    // Asked of every edge by every loop's weighing: a block's successors and a loop's exiting blocks do not change between asks.
+    let next_of: std::cell::RefCell<BTreeMap<i64, std::rc::Rc<Vec<i64>>>> = std::cell::RefCell::new(BTreeMap::new());
+    let successors = |at: i64| -> std::rc::Rc<Vec<i64>> { std::rc::Rc::clone(next_of.borrow_mut().entry(at).or_insert_with(|| std::rc::Rc::new(successors(at)))) };
+    let exiting_blocks: Vec<usize> = cycles.iter().map(|one| one.body.iter().filter(|&&at| successors(at).iter().any(|to| !one.body.contains(to))).count()).collect();
+    // Which loop's trips fix an edge, and its share of its side's mass: what the loops and the odds say, not what `visits` is by
+    // the time the edge is asked about, so it is worked out once (every loop's weighing asks every edge).
+    struct Counted {
+        header: i64,
+        trips: f64,
+        tested: f64,
+        part: f64,
+        inside: bool,
+    }
+    let plans: std::cell::RefCell<BTreeMap<(i64, i64), Option<std::rc::Rc<Counted>>>> = std::cell::RefCell::new(BTreeMap::new());
+    let plan = |from: i64, to: i64| -> Option<std::rc::Rc<Counted>> {
+        if let Some(known) = plans.borrow().get(&(from, to)) {
+            return known.clone();
         }
-        None
+        let made = (|| {
+            let next = successors(from);
+            for (index, one) in cycles.iter().enumerate().filter(|(_, one)| one.body.contains(&from)) {
+                let inside = next.iter().filter(|at| one.body.contains(at)).count();
+                let outside = next.len() - inside;
+                if inside == 0 || outside == 0 {
+                    continue;
+                }
+                // A loop without proven trips leaves the edge to the loops around it, which may state them.
+                let Some(trips) = one.trips else { continue };
+                if exiting_blocks[index] != 1 && from != one.header && !one.latches.contains(&from) {
+                    return None;
+                }
+                let tested = if from == one.header && !one.latches.contains(&from) { 0.0 } else { 1.0 };
+                // The trips fix how often the loop is left, not which way: each
+                // edge takes its side's mass by its own odds.
+                let side: BTreeSet<i64> = next.iter().copied().filter(|at| one.body.contains(at) == one.body.contains(&to)).collect();
+                let weight: f64 = side.iter().map(|at| given(from, *at)).sum();
+                let part = if weight > 0.0 { given(from, to) / weight } else { 1.0 / side.len() as f64 };
+                return Some(std::rc::Rc::new(Counted { header: one.header, trips: trips as f64, tested, part, inside: one.body.contains(&to) }));
+            }
+            None
+        })();
+        plans.borrow_mut().insert((from, to), made.clone());
+        made
+    };
+    let counted = |from: i64, to: i64| -> Option<f64> {
+        let found = plan(from, to)?;
+        let visited = visits.borrow().get(&found.header).copied().unwrap_or(1.0).max(1.0);
+        let stay = 1.0 - (1.0 - (found.trips - found.tested) / (found.trips + 1.0 - found.tested)) / visited;
+        Some(if found.inside { stay * found.part } else { (1.0 - stay) * found.part })
     };
     let edge = |from: i64, to: i64| counted(from, to).unwrap_or_else(|| given(from, to));
     // `to` is a loop header and `from` is in its loop.
@@ -642,7 +666,7 @@ pub fn propagated_edges(order: &[i64], predecessors: &dyn Fn(i64) -> Vec<i64>, s
         };
         frequency.insert(at, entering * scale.get(&at).copied().unwrap_or(1.0));
     }
-    let edges = order.iter().flat_map(|&from| successors(from).into_iter().map(move |to| (from, to))).map(|(from, to)| ((from, to), edge(from, to))).collect();
+    let edges = order.iter().flat_map(|&from| successors(from).iter().copied().collect::<Vec<_>>().into_iter().map(move |to| (from, to))).map(|(from, to)| ((from, to), edge(from, to))).collect();
     (frequency, edges)
 }
 
