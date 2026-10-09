@@ -9,10 +9,10 @@
 //! 31 in 32; and `branchprob::propagated` turns them into frequencies.
 
 use std::collections::BTreeSet;
-use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::model::lir::BlockOdds;
+use crate::analysis::facts::Fact;
+use crate::model::lir::{BlockFrequencies, BlockOdds};
 
 use llrm_analysis::branchprob;
 
@@ -20,23 +20,22 @@ use crate::analysis::loops;
 use crate::model::lir::{LirBlock, LirBody};
 use crate::support::hash::IndexMap;
 
-/// What the last `Frequency::of` was asked, and its answer.
-struct Held {
+/// The body's blocks as a frequency reads them: the flow between them, the odds on its edges and the proven trips. No
+/// instruction is read, so a spill or a reload leaves a frequency as it was.
+pub struct Cfg {
     entry: i64,
     shape: Vec<(i64, Vec<i64>)>,
     odds: BlockOdds,
     trips: Vec<(i64, i64)>,
-    answer: Rc<Frequency>,
 }
 
-impl Held {
-    fn of(body: &LirBody, answer: &Rc<Frequency>) -> Self {
+impl Cfg {
+    fn of(body: &LirBody) -> Self {
         Self {
             entry: body.entry,
             shape: body.blocks.iter().map(|block| (block.at, block.succ.clone())).collect(),
             odds: body.odds.clone(),
             trips: body.loop_trip_counts.clone(),
-            answer: Rc::clone(answer),
         }
     }
 
@@ -49,23 +48,43 @@ impl Held {
     }
 }
 
-thread_local! {
-    static LAST: std::cell::RefCell<Option<Held>> = const { std::cell::RefCell::new(None) };
-    static CARRIED: std::cell::RefCell<Option<(Arc<crate::model::lir::BlockFrequencies>, Held)>> = const { std::cell::RefCell::new(None) };
-    static CARRIED_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+/// Block frequencies worked out from the blocks alone.
+pub struct Worked;
+
+impl Fact for Worked {
+    type Result = Frequency;
+    type Inputs = Cfg;
+    const NAME: &'static str = "frequency";
+    fn run(body: &LirBody) -> Frequency {
+        Frequency::over(body, &body.blocks)
+    }
+    fn inputs(body: &LirBody) -> Cfg {
+        Cfg::of(body)
+    }
+    fn held_by(kept: &Cfg, body: &LirBody) -> bool {
+        kept.is_of(body)
+    }
 }
 
-/// How many frequencies this thread has worked out, for a test that asking again of one shape does not.
-/// How many tables this thread has carried over from a body's own, for a test that asking again of one shape does not.
-pub fn carried_built() -> usize {
-    CARRIED_BUILT.with(std::cell::Cell::get)
+/// The table kept on the body, filled in for the blocks made since; none where it cannot be.
+pub struct Carried;
+
+impl Fact for Carried {
+    type Result = Option<Arc<Frequency>>;
+    type Inputs = (Arc<BlockFrequencies>, Cfg);
+    const NAME: &'static str = "carried-frequency";
+    fn run(body: &LirBody) -> Option<Arc<Frequency>> {
+        body.frequencies.as_deref().and_then(|table| Frequency::carried(body, &table.0)).map(Arc::new)
+    }
+    fn inputs(body: &LirBody) -> Self::Inputs {
+        (Arc::clone(body.frequencies.as_ref().expect("asked of a body with a table")), Cfg::of(body))
+    }
+    fn held_by((table, cfg): &Self::Inputs, body: &LirBody) -> bool {
+        body.frequencies.as_ref().is_some_and(|now| Arc::ptr_eq(now, table)) && cfg.is_of(body)
+    }
 }
 
-pub fn built() -> usize {
-    BUILT.with(std::cell::Cell::get)
-}
-
+#[derive(Clone, Debug, PartialEq)]
 pub struct Frequency {
     block: IndexMap<i64, f64>,
     taken: IndexMap<(i64, i64), f64>,
@@ -75,29 +94,13 @@ impl Frequency {
     /// `body`'s blocks' frequencies. They depend on the blocks' shape, the odds and the trip counts
     /// and on no instruction, so the last answer stands for every body of that shape: a rewrite that
     /// only inserts instructions (a spill, a reload) asks the same question again and again.
-    pub fn of(body: &LirBody) -> Rc<Self> {
-        if let Some(table) = &body.frequencies {
-            // The carried table gives the same answer for the same table and shape: a spill or a reload changes neither, and
-            // working it out again for each ask was 1.5% of compiling d_faces.
-            let again = CARRIED.with(|last| last.borrow().as_ref().filter(|(was, held)| Arc::ptr_eq(was, table) && held.is_of(body)).map(|(_, held)| Rc::clone(&held.answer)));
-            if again.is_some() {
-                return again.expect("checked");
-            }
-            if let Some(kept) = Self::carried(body, &table.0) {
-                CARRIED_BUILT.with(|count| count.set(count.get() + 1));
-                let kept = Rc::new(kept);
-                CARRIED.with(|last| *last.borrow_mut() = Some((Arc::clone(table), Held::of(body, &kept))));
-                return kept;
+    pub fn of(body: &LirBody) -> Arc<Self> {
+        if body.frequencies.is_some() {
+            if let Some(kept) = body.facts.0.get::<Carried>(body).as_ref() {
+                return Arc::clone(kept);
             }
         }
-        LAST.with(|last| {
-            if let Some(held) = last.borrow().as_ref().filter(|held| held.is_of(body)) {
-                return Rc::clone(&held.answer);
-            }
-            let answer = Rc::new(Self::over(body, &body.blocks));
-            *last.borrow_mut() = Some(Held::of(body, &answer));
-            answer
-        })
+        body.facts.0.get::<Worked>(body)
     }
 
     /// The table kept on the body, with the blocks made since filled in from their predecessors' (a block put on an
@@ -188,7 +191,6 @@ impl Frequency {
 
     /// `blocks`, a later arrangement of `body`'s, on `body`'s odds and trips.
     pub fn over(body: &LirBody, blocks: &[LirBlock]) -> Self {
-        BUILT.with(|built| built.set(built.get() + 1));
         let mut taken = IndexMap::default();
         for block in blocks {
             for to in block.succ.iter().copied().collect::<BTreeSet<_>>() {
@@ -311,16 +313,17 @@ mod tests {
     #[test]
     fn test_the_same_blocks_are_not_worked_out_twice() {
         let body = counted(Some(5), 124.0 / 128.0);
-        let before = super::built();
+        let runs = |body: &LirBody| body.facts.0.runs::<super::Worked>();
+        let before = runs(&body);
         let first = Frequency::of(&body);
         let more = body.with_blocks(body.blocks.iter().map(|one| one.with_insns(vec![insn(one.at, Operation::Move, "mov"), one.insns[0].clone()])).collect());
         let again = Frequency::of(&more);
-        assert_eq!(super::built() - before, 1, "a second question of the same blocks was worked out");
+        assert_eq!(runs(&body) - before, 1, "a second question of the same blocks was worked out");
         assert_eq!(first.block(2), again.block(2));
         let mut moved = body.clone();
         moved.odds.taken.insert((2, 2), 1);
         Frequency::of(&moved);
-        assert_eq!(super::built() - before, 2, "other odds were answered from the old frequencies");
+        assert_eq!(runs(&moved) - before, 2, "other odds were answered from the old frequencies");
     }
 
     /// A body that carries its frequencies is asked for them by every fact of the allocator, with the same table and blocks after each
@@ -330,16 +333,17 @@ mod tests {
         let plain = counted(Some(5), 124.0 / 128.0);
         let mut body = plain.clone();
         body.frequencies = Some(Frequency::of(&plain).table());
-        let before = super::carried_built();
+        let runs = |body: &LirBody| body.facts.0.runs::<super::Carried>();
+        let before = runs(&body);
         let first = Frequency::of(&body);
         let more = body.with_blocks(body.blocks.iter().map(|one| one.with_insns(vec![insn(one.at, Operation::Move, "mov"), one.insns[0].clone()])).collect());
         let again = Frequency::of(&more);
-        assert_eq!(super::carried_built() - before, 1, "the same table over the same blocks was carried again");
+        assert_eq!(runs(&body) - before, 1, "the same table over the same blocks was carried again");
         assert_eq!(first.block(2), again.block(2));
         let mut moved = body.clone();
         moved.odds.taken.insert((2, 2), 1);
         Frequency::of(&moved);
-        assert_eq!(super::carried_built() - before, 2, "other odds were answered from the old table");
+        assert_eq!(runs(&moved) - before, 2, "other odds were answered from the old table");
     }
 
     fn counted(trips: Option<i64>, stay: f64) -> LirBody {
