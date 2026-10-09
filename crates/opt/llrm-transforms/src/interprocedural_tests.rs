@@ -1152,3 +1152,54 @@ fn test_a_small_recursive_function_is_inlined_into_itself_to_a_depth() {
     assert!(calls(Threshold::default()) > 2, "the body grew by copies of itself");
     assert_eq!(calls(Threshold::default().for_size()), 2, "not for size: the recursive call is cold there");
 }
+
+/// A callee trial that was refused is not made again in the state it was made in (host.c: three trials, each made in five rounds, 37%
+/// of the compile, objects the same). Each try re-ran the callers' pipelines.
+#[test]
+fn test_a_callee_the_trial_refused_is_not_tried_again_in_the_same_state() {
+    let text = "define internal i16 @mix(i16 %a, i16 %b) {
+b:
+  %t0 = xor i16 %a, %b
+  %t1 = shl i16 %a, 3
+  %t2 = add i16 %t0, %t1
+  %t3 = lshr i16 %b, 2
+  %t4 = sub i16 %t2, %t3
+  %t5 = and i16 %t4, 2047
+  %t6 = or i16 %t5, %a
+  %t7 = xor i16 %t6, %b
+  %t8 = add i16 %t7, 5
+  ret i16 %t8
+}
+
+define i16 @f(i16 %x, i16 %y) {
+b:
+  %p = call i16 @mix(i16 %x, i16 %y)
+  %q = call i16 @mix(i16 %y, i16 %x)
+  %r = add i16 %p, %q
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let clocks = OperationCosts { call: 20, ..OperationCosts::default() };
+    let bytes = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
+    let mix = module.named("mix").unwrap();
+    let counts = inline::call_counts(&module);
+    let candidates = inline::candidates(&module, &llrm_mir::memory::callees(&module), &layout, &counts, &BTreeSet::from([mix]), &clocks, 20, Threshold::default());
+    let more: llrm_support::hash::IndexMap<_, _> = candidates.into_iter().filter(|(id, _)| *id == mix).collect();
+    let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
+    let runs = std::cell::Cell::new(0);
+    let mut refused_trials: Vec<RefusedTrial> = Vec::new();
+    let again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused_trials: &mut Vec<RefusedTrial>| {
+        tried_callees::<String>(module, analyses, &layout, &BTreeSet::from([mix]), &BTreeSet::new(), &Default::default(), &more, &bytes, (&OperationCosts::default(), 0), refused_trials, &mut |_, _, _, _| {
+            runs.set(runs.get() + 1);
+            Ok(())
+        })
+        .unwrap()
+    };
+    assert!(!again(&mut module, &mut analyses, &mut refused_trials), "premise: the trial is refused");
+    let first = runs.get();
+    assert!(first > 0, "premise: the trial ran a pipeline");
+    again(&mut module, &mut analyses, &mut refused_trials);
+    assert_eq!(runs.get(), first, "the second round made the refused trial again");
+}
