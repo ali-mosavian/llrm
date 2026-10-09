@@ -211,8 +211,10 @@ impl Peephole {
         let body = gated(&mut seen, needs::COPY, body, |body| Ok(copyprop::forwarded(&body)))?;
         let body = extensions(self.rules, &body);
         let body = copysink::sunk(&body);
-        let body = crate::backend::postrasink::sunk(&body);
         let body = spillforward::forwarded(&body);
+        // After the forwarding: a reload on the other path is gone, and the
+        // store need not run there.
+        let body = crate::backend::postrasink::sunk(&body);
         let body = storecombine::combined(&body);
         let body = pushed_constants(self.rules, &body);
         let body = far_loads(

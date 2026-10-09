@@ -21,7 +21,7 @@ use crate::support::hash::IndexMap;
 /// cannot tell two pointers or two elements of one array apart, nor a pointer
 /// from a global (`overlap`'s rule: that is MIR's to say), so anything else may
 /// overlap.
-fn apart(
+pub(crate) fn apart(
     cell: &Mem,
     other: &Mem,
 ) -> bool {
