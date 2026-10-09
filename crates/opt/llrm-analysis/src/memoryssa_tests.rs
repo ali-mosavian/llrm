@@ -363,7 +363,7 @@ b0:
     let unit = parsed.unit();
     let (store, call, load) = (site(&unit, "b0", 0), site(&unit, "b0", 1), site(&unit, "b0", 2));
     for (footprint, clobber) in [(site(&unit, "b0", 3), store), (load, call)] {
-        let graph = built(&unit, &Accesses::plain(&unit, &Calls::from_iter([(call, vec![cell(&unit, footprint)])])));
+        let graph = built(&unit, &Accesses::plain(&unit, &Calls::from_iter([(call, std::rc::Rc::from(vec![cell(&unit, footprint)]))])));
         assert_eq!(graph.clobbers(load, &cell(&unit, load)), BTreeSet::from([graph.at(clobber).id]));
     }
 }
@@ -556,7 +556,7 @@ b0:
         let graph = built(&unit, &accesses);
         assert_eq!(graph.clobbers(load, &accesses.references[&load]), BTreeSet::from([graph.at(clobber).id]));
     }
-    let plain = Accesses::plain(&unit, &Calls::from_iter([(call, vec![])]));
+    let plain = Accesses::plain(&unit, &Calls::from_iter([(call, std::rc::Rc::from([]))]));
     assert_eq!(built(&unit, &plain).clobbers(load, &plain.references[&load]), BTreeSet::from([graph(&unit).at(second).id]), "unresolved, @h may be @g");
 }
 

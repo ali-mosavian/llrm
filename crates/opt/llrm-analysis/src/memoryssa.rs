@@ -57,7 +57,15 @@ impl Access {
 }
 
 /// What an instruction reads and what it writes; `None` for anything.
-type Footprint = (Option<Vec<MemRef>>, Option<Vec<MemRef>>);
+/// The list of no references, shared: an empty `Rc<[_]>` still allocates its counts.
+fn none() -> Rc<[MemRef]> {
+    thread_local! {
+        static NONE: Rc<[MemRef]> = Rc::from([]);
+    }
+    NONE.with(Rc::clone)
+}
+
+type Footprint = (Option<Rc<[MemRef]>>, Option<Rc<[MemRef]>>);
 
 /// What each instruction reads and writes, as MemorySSA and its clients
 /// ask: old `Op.loads` and `Op.stores`. A load's or store's bytes are its
@@ -106,14 +114,14 @@ impl Accesses {
     /// call's `effects` (`alias::calls_annotated`'s).
     pub fn of(unit: &Unit, references: IndexMap<InstId, MemRef>, effects: &IndexMap<InstId, Effect>) -> Self {
         let fills = effects.iter().filter(|(_, effect)| !effect.fills.is_empty()).map(|(&at, effect)| (at, effect.fills.clone())).collect();
-        Self { fills, ..Self::new(unit, references, |inst| effects.get(&inst).map(|effect| (Some(effect.loads.clone()), Some(effect.stores.clone())))) }
+        Self { fills, ..Self::new(unit, references, |inst| effects.get(&inst).map(|effect| (Some(Rc::clone(&effect.loads)), Some(Rc::clone(&effect.stores))))) }
     }
 
     /// `unit`'s accesses unresolved: each reference as the unit has it
     /// (`Unit::reference`), each call writing its footprint in `calls`.
     pub fn plain(unit: &Unit, calls: &Calls) -> Self {
         let references = unit.function.walk().filter_map(|(_, inst)| unit.reference(inst).map(|one| (inst, one))).collect();
-        Self::new(unit, references, |inst| calls.get(&inst).map(|stores| (None, Some(stores.clone()))))
+        Self::new(unit, references, |inst| calls.get(&inst).map(|stores| (None, Some(Rc::clone(stores)))))
     }
 
     /// `footprint` gives a call's reads and writes, where known.
@@ -121,19 +129,19 @@ impl Accesses {
         let function = unit.function;
         let mut touched = IndexMap::default();
         for (_, inst) in function.walk() {
-            let reference = || references.get(&inst).cloned().into_iter().collect::<Vec<_>>();
+            let reference = || references.get(&inst).cloned().into_iter().collect::<Rc<[_]>>();
             let opcode = &function.instruction(inst).opcode;
             let found = match opcode {
                 // Its order against other volatile accesses is the passes', which never move one.
                 _ if let Some(own) = own_bytes(opcode) => {
-                    let touched = |does: bool| Some(if does { reference() } else { Vec::new() });
+                    let touched = |does: bool| Some(if does { reference() } else { none() });
                     (touched(own.reads), touched(own.writes))
                 }
                 Opcode::Call(info) | Opcode::Invoke(info) => {
                     let callee = llrm_mir::memory::callee(unit.context, function, inst).and_then(|one| unit.globals.get(one.0 as usize)).and_then(GlobalValue::function);
                     let reading = stated(&info.attrs).reads && callee.is_none_or(|one| stated(&one.attrs).reads);
                     let (reads, writes) = footprint(inst).unwrap_or((None, None));
-                    (if reading { reads } else { Some(Vec::new()) }, if unmodeled_write(unit, inst) { writes } else { Some(Vec::new()) })
+                    (if reading { reads } else { Some(none()) }, if unmodeled_write(unit, inst) { writes } else { Some(none()) })
                 }
                 _ => continue,
             };

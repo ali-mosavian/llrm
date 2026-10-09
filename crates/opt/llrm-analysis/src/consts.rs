@@ -84,7 +84,7 @@ pub type HeldCells = IndexMap<InstId, Rc<Cells>>;
 /// What each call writes, where `alias::calls_annotated` found it. A call
 /// not here writes what `memory::unmodeled_write` says: everything, or
 /// nothing.
-pub type Calls = IndexMap<InstId, Vec<MemRef>>;
+pub type Calls = IndexMap<InstId, std::rc::Rc<[MemRef]>>;
 
 /// A reference as resolved for one epoch's queries, with the number it was given: a stable identity to key answers by, where
 /// its address varied from run to run and so did the work of the passes asking (`mir hoist`, up to 0.9%).
@@ -425,8 +425,8 @@ fn _killed(
         here = Here::Plain(Cells::default());
     }
     let stores = match calls.get(&inst) {
-        Some(stores) => stores.clone(),
-        None if call => Vec::new(),
+        Some(stores) => std::rc::Rc::clone(stores),
+        None if call => std::rc::Rc::from([]),
         None => unit.reference(inst).filter(|_| matches!(unit.function.instruction(inst).opcode, Opcode::Store { .. })).into_iter().collect(),
     };
     // Only a write changes a cell.
@@ -434,7 +434,7 @@ fn _killed(
         return here;
     }
     let put = _put(&unit, inst, known);
-    for reference in &stores {
+    for reference in stores.iter() {
         let reference = queries.resolve(reference);
         if let Some(assume) = assume.as_deref_mut() {
             if let Some(selector) = _selector(&unit, &reference, known, allowed) {
