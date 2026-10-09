@@ -21,6 +21,7 @@
 //! The old module had no tests of its own.
 
 use std::collections::BTreeSet;
+use std::rc::Rc;
 
 use llrm_analysis::alias::{self, Procedure, Summary};
 use llrm_analysis::cfg::Shape;
@@ -264,7 +265,9 @@ fn tried_sites<E: From<String>>(
         modules.changed(caller);
         modules.invalidate(&PreservedAnalyses::none());
         reoptimised(module, modules, caller, stage)?;
-        if before.is_some_and(|before| grew(module, &callees(modules, module), caller, &counts, private, costs, before, bought)) {
+        let sorry = before.is_some_and(|before| grew(module, &callees(modules, module), caller, &counts, private, costs, before, bought));
+        llrm_support::debug!("trial", "site caller {} before {:?} bought {bought} -> {}", module.global(caller).name.as_deref().unwrap_or("?"), before, if sorry { "refused" } else { "kept" });
+        if sorry {
             *function_mut(module, caller).1 = kept;
             modules.changed(caller);
             modules.invalidate(&PreservedAnalyses::none());
@@ -274,6 +277,26 @@ fn tried_sites<E: From<String>>(
         }
     }
     Ok(stayed)
+}
+
+/// A callee trial that was refused, and the state it was made in: the same trial in the same state is refused again, so it is not made
+/// again (host.c: 3 trials, each made in five rounds, and a trial is 37% of the compile). The state is the bodies it spliced and
+/// grew, the calls of the whole module, and the module analyses the pipeline of a body reads of the rest.
+pub struct RefusedTrial {
+    callees: Vec<GlobalId>,
+    bodies: Vec<(GlobalId, llrm_mir::module::Function)>,
+    counts: inline::Counter,
+    outer: Rc<llrm_mir::passes::Outer>,
+}
+
+impl RefusedTrial {
+    fn is_state(&self, module: &Module, callees: &[GlobalId], bodies: &[GlobalId], counts: &inline::Counter, outer: &Rc<llrm_mir::passes::Outer>) -> bool {
+        self.callees == callees
+            && Rc::ptr_eq(&self.outer, outer)
+            && self.counts == *counts
+            && self.bodies.len() == bodies.len()
+            && self.bodies.iter().zip(bodies).all(|((id, body), at)| id == at && module.global(*id).function() == Some(body))
+    }
 }
 
 /// Each of `more`, the callees the clocks admit and the bytes do not, tried (`trial`). Whether any stayed.
@@ -287,12 +310,13 @@ fn tried_callees<E: From<String>>(
     more: &llrm_support::hash::IndexMap<GlobalId, inline::Candidate>,
     costs: &OperationCosts,
     credit: (&OperationCosts, i64),
+    refused_trials: &mut Vec<RefusedTrial>,
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
 ) -> Result<bool, E> {
     let mut stayed = false;
     let mut refused = llrm_support::hash::IndexMap::default();
     for (callee, candidate) in more {
-        if trial(module, modules, layout, private, recursive, bases, &[(*callee, candidate)], None, costs, credit, reoptimised)? {
+        if trial(module, modules, layout, private, recursive, bases, &[(*callee, candidate)], None, costs, credit, refused_trials, reoptimised)? {
             stayed = true;
         } else {
             refused.insert(*callee, candidate);
@@ -302,7 +326,7 @@ fn tried_callees<E: From<String>>(
     // alone: each alone leaves the other's call holding what the pair would fold.
     if refused.len() > 1 {
         let together: Vec<_> = refused.iter().map(|(callee, candidate)| (*callee, *candidate)).collect();
-        stayed |= trial(module, modules, layout, private, recursive, bases, &together, None, costs, credit, reoptimised)?;
+        stayed |= trial(module, modules, layout, private, recursive, bases, &together, None, costs, credit, refused_trials, reoptimised)?;
     }
     Ok(stayed)
 }
@@ -321,6 +345,7 @@ fn trial<E: From<String>>(
     only: Option<GlobalId>,
     costs: &OperationCosts,
     credit: (&OperationCosts, i64),
+    refused_trials: &mut Vec<RefusedTrial>,
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
 ) -> Result<bool, E> {
     let reaches = |function: &llrm_mir::module::Function, module: &Module| function.walk().any(|(_, inst)| llrm_mir::memory::callee(&module.context, function, inst).is_some_and(|one| callees.iter().any(|(callee, _)| *callee == one)));
@@ -345,9 +370,18 @@ fn trial<E: From<String>>(
     if held && only.is_none() {
         let mut stayed = false;
         for &caller in &callers {
-            stayed |= trial(module, modules, layout, private, recursive, bases, callees, Some(caller), costs, credit, reoptimised)?;
+            stayed |= trial(module, modules, layout, private, recursive, bases, callees, Some(caller), costs, credit, refused_trials, reoptimised)?;
         }
         return Ok(stayed);
+    }
+    // The same trial in the same state is refused again.
+    let ids: Vec<GlobalId> = callees.iter().map(|(callee, _)| *callee).collect();
+    let bodies: Vec<GlobalId> = callers.iter().copied().chain(ids.iter().copied()).collect();
+    let outer = modules.outer(module);
+    let known = refused_trials.iter().any(|one| one.is_state(module, &ids, &bodies, &counts, &outer));
+    let checking = std::env::var_os("LLRM_CHECK_TRIALS").is_some();
+    if known && !checking {
+        return Ok(false);
     }
     let sizes = |modules: &mut ModuleAnalyses, module: &Module| {
         let held = self::callees(modules, module);
@@ -372,13 +406,10 @@ fn trial<E: From<String>>(
                 break;
             }
             spliced = true;
-            if !held {
-                modules.changed(id);
-                modules.invalidate(&PreservedAnalyses::none());
-                reoptimised(module, modules, id, "inline-trial.")?;
-            }
         }
-        if spliced && held {
+        // Every site spliced, the body through the pipeline once: the way gcc and LLVM inline, and a trial of a callee at several sites
+        // ran the pipeline once for each (host.c -6.6%, QCport -2.2%; the code of every program measured the same).
+        if spliced {
             modules.changed(id);
             modules.invalidate(&PreservedAnalyses::none());
             reoptimised(module, modules, id, "inline-trial.")?;
@@ -393,14 +424,23 @@ fn trial<E: From<String>>(
     let moved: i64 = owns.iter().sum();
     let allowed: i64 = callees.iter().zip(&sites).map(|((callee, _), &count)| allowance(module, *callee, count - now.get(callee).copied().unwrap_or(0), credit.0, credit.1)).sum();
     llrm_support::debug!("inline", "trial of {}: {before} bytes before, {:?} after, {gone} gone", callees.iter().map(|(callee, _)| module.global(*callee).name.as_deref().unwrap_or("?")).collect::<Vec<_>>().join(" + "), sizes(modules, module));
-    if sizes(modules, module).is_some_and(|after| stays(after, gone, before, moved, allowed)) {
+    let stays_now = sizes(modules, module).is_some_and(|after| stays(after, gone, before, moved, allowed));
+    llrm_support::debug!("trial", "callee {} callers {} sites {:?} held {held} before {before} after {:?} gone {gone} moved {moved} allowed {allowed} -> {}", callees.iter().map(|(callee, _)| module.global(*callee).name.as_deref().unwrap_or("?")).collect::<Vec<_>>().join("+"), callers.len(), sites, sizes(modules, module), if stays_now { "kept" } else { "refused" });
+    if stays_now {
+        assert!(!known, "a trial refused in this state was kept the second time");
         return Ok(true);
     }
+    let mut state: Vec<(GlobalId, llrm_mir::module::Function)> = Vec::new();
     for (id, function) in kept {
+        state.push((id, function.clone()));
         *function_mut(module, id).1 = function;
         modules.changed(id);
     }
     modules.invalidate(&PreservedAnalyses::none());
+    if !known {
+        state.extend(ids.iter().map(|&callee| (callee, module.global(callee).function().expect("a procedure").clone())));
+        refused_trials.push(RefusedTrial { callees: ids, bodies: state, counts, outer });
+    }
     Ok(false)
 }
 
@@ -464,6 +504,7 @@ pub fn optimized<E: From<String>>(
     // How large each body is before anything is inlined into it: what its growth is measured against.
     let mut bases: Vec<llrm_support::hash::IndexMap<GlobalId, i64>> = (0..count).map(|at| procedures[at].iter().filter_map(|&id| Some((id, inline::operations(program.modules[at].global(id).function()?)))).collect()).collect();
     let mut refused: BTreeSet<(GlobalId, llrm_mir::module::InstId)> = BTreeSet::new();
+    let mut refused_trials: Vec<RefusedTrial> = Vec::new();
     let mut inline_round = 0;
     loop {
         let mut changed = false;
@@ -494,7 +535,7 @@ pub fn optimized<E: From<String>>(
                     changed = true;
                 }
             }
-            if loose.is_some() && tried_callees(module, &mut modules[at], &program.layout, &private[at], &recursive, &bases[at], &more, costs, (loose.unwrap_or(costs), rate), reoptimised)? {
+            if loose.is_some() && tried_callees(module, &mut modules[at], &program.layout, &private[at], &recursive, &bases[at], &more, costs, (loose.unwrap_or(costs), rate), &mut refused_trials, reoptimised)? {
                 changed = true;
             }
         }
@@ -630,7 +671,7 @@ pub fn optimized<E: From<String>>(
                     inlined = true;
                 }
             }
-            if loose.is_some() && tried_callees(module, &mut modules[at], &program.layout, &private[at], &recursive, &bases[at], &more, costs, (loose.unwrap_or(costs), rate), reoptimised)? {
+            if loose.is_some() && tried_callees(module, &mut modules[at], &program.layout, &private[at], &recursive, &bases[at], &more, costs, (loose.unwrap_or(costs), rate), &mut refused_trials, reoptimised)? {
                 inlined = true;
             }
         }

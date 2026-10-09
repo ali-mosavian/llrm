@@ -101,15 +101,23 @@ pub fn forecast<K: Ord + Copy>(points: impl IntoIterator<Item = Point<K>>, price
     let mut spilled = BTreeSet::new();
     let (mut cost, mut peak) = (0, 0);
     for point in points {
-        let resident = point.residents.into_iter().filter(|one| !spilled.contains(one)).collect::<BTreeSet<_>>();
+        // Sorted and without repeats, as a set would hold them: a set built per point was most of lsr's work on a loop of many uses.
+        let mut resident = point.residents.into_iter().filter(|one| !spilled.contains(one)).collect::<Vec<_>>();
+        resident.sort_unstable();
+        resident.dedup();
         let excess = resident.len() as i64 - point.registers.max(0);
         peak = peak.max(excess);
         if excess <= 0 {
             continue;
         }
+        // The `excess` cheapest, dearer ties to the larger resident: a partial sort picks the same ones.
+        let take = excess as usize;
         let mut cheapest = resident.into_iter().map(|one| (price(one), one)).collect::<Vec<_>>();
-        cheapest.sort();
-        for (each, one) in cheapest.into_iter().take(excess as usize) {
+        if take < cheapest.len() {
+            cheapest.select_nth_unstable(take);
+            cheapest.truncate(take);
+        }
+        for (each, one) in cheapest {
             cost += each;
             spilled.insert(one);
         }

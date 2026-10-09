@@ -24,9 +24,9 @@ LEVELS = ["O0", "O1", "O2", "O3", "Os"]
 FLAGS = ["-m32", "-march=i486", "-fno-pic", "-fno-stack-protector", "-fcf-protection=none", "-Dfar="]
 
 
-def command(compiler: str, level: str, source: Path) -> list[str]:
+def command(compiler: str, level: str, source: Path, bits: int = 32) -> list[str]:
     if compiler == "llrm":
-        return [str(llrmbin.bin_dir() / "llrm-c"), "-m32", "-march=i486", f"-{level}", "-o", "/dev/null", str(source)]
+        return [str(llrmbin.bin_dir() / "llrm-c"), f"-m{bits}", *(["-march=i486"] if bits == 32 else []), f"-{level}", "-o", "/dev/null", str(source)]
     return [compiler, *FLAGS, f"-{level}", "-c", "-o", "/dev/null", str(source)]
 
 

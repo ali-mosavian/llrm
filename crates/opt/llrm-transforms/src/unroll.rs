@@ -102,6 +102,7 @@ pub fn expanded(context: &Context, layout: &DataLayout, function: &mut Function,
     let graph = cfg::graph(function);
     let mut found = None;
     let found_shape = cfg::Shape::of(function);
+    let frequencies = profit::Frequencies::default();
     for loop_ in found_shape.loops.clone() {
         let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_registers(&facts).with_shape(&found_shape);
         let Some(shape) = _shape(&unit, &graph, &loop_) else {
@@ -110,7 +111,7 @@ pub fn expanded(context: &Context, layout: &DataLayout, function: &mut Function,
         let Some(count) = induction::trip_count(&unit, &loop_, &facts) else {
             continue;
         };
-        if count < BigInt::from(2) || !peelsize::admitted(&unit, &loop_, &count, &facts, limits, profit::site(&unit, analyses.outer(), &loop_)) {
+        if count < BigInt::from(2) || !peelsize::admitted(&unit, &loop_, &count, &facts, limits, profit::site(&unit, analyses.outer(), &loop_, &frequencies)) {
             continue;
         }
         if let Some(count) = count.to_i64() {
