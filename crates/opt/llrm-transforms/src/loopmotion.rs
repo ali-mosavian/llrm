@@ -29,7 +29,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::consts::{self, Calls, Known, masked};
 use llrm_analysis::graph::loops::{self, Loop};
-use llrm_analysis::manager::{AssumptionCache, Bounded, Counted, DominatedEdges, MemoryCells, Registers};
+use llrm_analysis::manager::{
+    Annotated, AssumptionCache, Bounded, Counted, DominatedEdges, ExposedFrames, MemoryCells, Registers,
+};
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, induction, regions};
@@ -69,9 +71,13 @@ impl FunctionPass for LoopMotion {
 }
 
 /// What a store moved from a loop to its exit leaves: the blocks, the values
-/// and the facts about them, not the memory.
+/// and the facts about them, not the memory. The points-to solve is not kept:
+/// `LLRM_CHECK_PRESERVED` finds it differs after a store takes the header's phi
+/// as its value.
 fn kept_when_stores_move() -> PreservedAnalyses {
     PreservedAnalyses::none()
+        .preserve::<ExposedFrames>()
+        .preserve::<Annotated>()
         .preserve::<Dominators>()
         .preserve::<Loops>()
         .preserve::<Registers>()
@@ -423,7 +429,7 @@ impl _Exit<'_> {
         let unit = self.unit;
         let calls = Calls::default();
         let cells = self.analyses.get::<MemoryCells>(unit.context, unit.layout, unit.function);
-        let before = cells.get(&inst).map(|here| (**here).clone()).unwrap_or_default();
+        let before = cells.held.get(&inst).map(|here| (**here).clone()).unwrap_or_default();
         let nothing = IndexMap::default();
         let mut queries = consts::memory_queries(*unit, &nothing);
         let after = consts::_kills(before, inst, &nothing, &calls, None, None, false, &mut queries);
