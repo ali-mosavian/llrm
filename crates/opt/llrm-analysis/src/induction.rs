@@ -172,6 +172,18 @@ impl CountedLoop {
         !self.posttested && !self.stepped && self.test == IntPredicate::Ult && self.step == BigInt::from(1)
     }
 
+    /// `rises_unsigned` for a loop tested after its trips, entered behind a
+    /// copy of its test: the stepped counter is below the bound when the
+    /// loop goes round, so the step never passes the width's largest either.
+    pub fn rises_unsigned_after(&self) -> bool {
+        self.posttested
+            && self.stepped
+            && self.entry_guarded
+            && matches!(self.reach, Reach::Distance)
+            && self.test == IntPredicate::Ult
+            && self.step == BigInt::from(1)
+    }
+
     /// The signed values the header's counter takes on a trip, lowest first.
     pub fn span(&self) -> Option<(BigInt, BigInt)> {
         let (first, last) = (self.first.as_ref()?, self.last.as_ref()?);
