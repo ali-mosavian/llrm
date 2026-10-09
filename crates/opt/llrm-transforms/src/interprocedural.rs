@@ -1059,6 +1059,13 @@ pub fn optimized<E: From<String>>(
     // parameters nothing reads are gone and the tail calls are loops, as GCC's early passes have made them: a body
     // with two calls would be a tree, not a chain.
     if let Some(budget) = threshold.budget(reach).filter(|_| !threshold.single) {
+        // -O2 and up (`-finline-small-functions`) ask the recursive edge gcc's `max-inline-insns-auto`; -O1's smaller
+        // threshold keeps its budget.
+        let budget = if threshold.limit >= inline::Threshold::default().limit {
+            inline::recursive_growth(threshold)
+        } else {
+            budget
+        };
         for at in 0..count {
             for &id in &procedures[at] {
                 let module = &mut program.modules[at];

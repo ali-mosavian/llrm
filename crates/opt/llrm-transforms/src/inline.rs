@@ -737,6 +737,14 @@ const RECURSIVE_SIZE: i64 = 450;
 /// only if it runs more often than this per call of it.
 const RECURSIVE_PROBABILITY: i64 = 10;
 
+/// GCC's `max-inline-insns-auto` (params.opt:545): the growth `want_inline_small_function_p` admits for a call it
+/// inlines on its own account, which it asks of the recursive edge before `recursive_inlining`: 15, and 30 at -O3
+/// (opts.cc:690). `semantic_count` less the call is gcc's `size growth` (hanoi 5, fib 6, rectwo 8 against gcc's dump),
+/// so it is compared with the limit itself.
+pub fn recursive_growth(threshold: Threshold) -> i64 {
+    if threshold.cp_clone { 30 } else { 15 }
+}
+
 /// GCC's `recursive_inlining` (ipa-inline.cc): `function`, the body of `id`, with calls to itself replaced by copies of
 /// `original`, its body as it was, breadth first and each copy's own calls in turn, while a call is likelier than
 /// `RECURSIVE_PROBABILITY` percent of the function's calls, is no deeper than `RECURSIVE_DEPTH`, and the function stays

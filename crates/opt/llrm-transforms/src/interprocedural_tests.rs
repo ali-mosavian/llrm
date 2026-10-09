@@ -1319,6 +1319,41 @@ fn test_a_small_recursive_function_is_inlined_into_itself_to_a_depth() {
     assert_eq!(calls(Threshold::default().for_size()), 2, "not for size: the recursive call is cold there");
 }
 
+/// A recursive body that grows by 8 (gcc's rectwo) is inlined into itself: gcc asks the recursive edge
+/// `max-inline-insns-auto` (15), and the pass asked the call-cost budget (6), so rectwo, recchop and every body of more
+/// than six operations kept its calls (rectwo 2.6x gcc's clocks).
+#[test]
+fn test_a_recursive_body_of_eight_operations_is_inlined_into_itself() {
+    let text = "define i16 @f(i16 %n, i16 %k) {
+b0:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %done, label %rec
+
+rec:
+  %m = sub i16 %n, 1
+  %x0 = xor i16 %k, %n
+  %x1 = add i16 %x0, 3
+  %x2 = xor i16 %x1, %k
+  %a = call i16 @f(i16 %m, i16 %x2)
+  %b = call i16 @f(i16 %m, i16 %x1)
+  %s = add i16 %a, %b
+  %t = add i16 %s, %x0
+  ret i16 %t
+
+done:
+  ret i16 0
+}
+";
+    let inputs: &[&[i128]] = &[&[0, 1], &[1, 2], &[3, 5], &[5, 7]];
+    let calls = |threshold: Threshold| {
+        let mut module = parsed(text);
+        stepped(&mut module, &["f"], 20, threshold);
+        assert_eq!(results(&module, inputs), results(&parsed(text), inputs), "{}", printed(&module));
+        printed(&module).matches("call i16 @f").count()
+    };
+    assert!(calls(Threshold::default()) > 2, "the body grew by copies of itself");
+}
+
 /// A callee trial that was refused is not made again in the state it was made in (host.c: three trials, each made in
 /// five rounds, 37% of the compile, objects the same). Each try re-ran the callers' pipelines.
 #[test]
