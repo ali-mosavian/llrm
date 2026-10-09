@@ -105,11 +105,11 @@ impl Postings {
     fn replaced(
         &mut self,
         block: u32,
-        old: &[Arc<Insn>],
-        new: &[Arc<Insn>],
+        old: &Insns,
+        new: &Insns,
     ) {
         if old.len().max(new.len()) > LONG {
-            if let Some(found) = crate::analysis::intervals::aligned(old, new) {
+            if let Some(found) = crate::analysis::intervals::aligned_insns(old, new) {
                 self.patched(block, new, &found);
                 return;
             }
