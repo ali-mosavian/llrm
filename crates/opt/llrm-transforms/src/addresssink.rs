@@ -1,3 +1,9 @@
+//! CodeGenPrepare's `sinkCmpExpression`: a comparison a branch in another block
+//! reads is made again beside that branch, so isel keeps it in the flags (a
+//! loop's test, GVN'd with the copy of it made ahead of the loop, was an `i1`
+//! held across the loop's body: `sete`, a store of the byte, `cmp` and `jne`,
+//! hanoi).
+//!
 //! A phi read only as an address, whose arms each compute the same thing of
 //! values the join sees, is that computation made once in the join: GVNSink
 //! and CodeGenPrepare's address sinking, so that isel matches one addressing
@@ -32,10 +38,11 @@ impl FunctionPass for AddressSink {
     fn run(
         &mut self,
         unit: &mut passes::Unit,
-        _: &mut Analyses,
+        analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         // Blocks and edges are as they were.
-        if sunk(unit.function) {
+        let sunk_compares = !analyses.outer().target().multiple_condition_registers() && compares_sunk(unit.function);
+        if sunk(unit.function) || sunk_compares {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
             PreservedAnalyses::all()
@@ -102,6 +109,61 @@ fn sunk(function: &mut Function) -> bool {
             function.erase(def).expect("no one reads it");
         }
         changed = true;
+    }
+    changed
+}
+
+/// LLVM's `sinkCmpExpression`: each comparison made again at the top of every
+/// block that reads it and is not its own (a phi's incoming block is not a
+/// read), and erased once nothing reads the original.
+fn compares_sunk(function: &mut Function) -> bool {
+    let compares: Vec<(BlockId, InstId)> = function
+        .walk()
+        .filter(|&(_, inst)| matches!(
+            function.instruction(inst).opcode,
+            Opcode::ICmp(_) | Opcode::FCmp(_)
+        ))
+        .collect();
+    let mut changed = false;
+    for (home, compare) in compares {
+        let Some(result) = function.instruction(compare).result else { continue };
+        let mut made: Vec<(BlockId, Operand)> = Vec::new();
+        for one in function.users(result).to_vec() {
+            if function.instruction(one.user).opcode == Opcode::Phi {
+                continue;
+            }
+            let Some(there) = function.parent(one.user) else { continue };
+            if there == home {
+                continue;
+            }
+            let copy = match made.iter().find(|(block, _)| *block == there) {
+                Some((_, copy)) => *copy,
+                None => {
+                    let original = function.instruction(compare);
+                    let (opcode, ty, operands, flags) =
+                        (original.opcode.clone(), original.ty, original.operands.clone(), original.flags);
+                    let first = function
+                        .block(there)
+                        .instructions()
+                        .iter()
+                        .copied()
+                        .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
+                        .expect("a terminated block");
+                    let inserted = function.create_instruction(opcode, ty, operands, flags, None);
+                    function.insert(inserted, Position::Before(first)).expect("a placed instruction");
+                    let copy = Operand::Value(function.instruction(inserted).result.expect("a value"));
+                    made.push((there, copy));
+                    copy
+                }
+            };
+            let mut operands = function.instruction(one.user).operands.clone();
+            operands[one.index as usize] = copy;
+            function.set_operands(one.user, operands);
+            changed = true;
+        }
+        if function.users(result).is_empty() && !function.is_erased(compare) {
+            function.erase(compare).expect("no one reads it");
+        }
     }
     changed
 }
