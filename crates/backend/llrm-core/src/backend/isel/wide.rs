@@ -11,7 +11,7 @@ use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::sign_bits;
 use llrm_mir::{BinaryOp, CastOp, IntPredicate};
 
-use super::expand::expand_wide;
+use super::expand::{Half, expand_wide};
 use super::{Selector, Test, Unselected, condition_code, insn, refuse, semantics, swapped};
 use crate::backend::callregs::{call_clobbered_high, call_clobbers};
 use crate::model::ir::{Held, Imm, Loc, Operation};
@@ -93,6 +93,23 @@ impl Selector<'_, '_, '_> {
         }
     }
 
+    /// An i64's two halves, low first, at the target's native width.
+    pub(super) fn wide_halves(&self) -> Result<[Half; 2], Unselected> {
+        self.wide_halves_of(false)
+    }
+
+    /// As `wide_halves`, the upper taking the carry of the lower where
+    /// `chained`.
+    fn wide_halves_of(
+        &self,
+        chained: bool,
+    ) -> Result<[Half; 2], Unselected> {
+        match expand_wide(chained, 64, self.layout.largest_legal_integer())[..] {
+            [low, high] => Ok([low, high]),
+            _ => refuse("an i64 on a target whose native integer is not half its width"),
+        }
+    }
+
     /// A binary operation on an i64 as its halves (`expand_wide`): `first` the
     /// form of the lowest, `rest` of each above, which takes its
     /// predecessor's carry where it is not the same form. A constant operand is
@@ -107,8 +124,7 @@ impl Selector<'_, '_, '_> {
         right: Operand,
     ) -> Result<(), Unselected> {
         let at = m.at;
-        let halves = expand_wide(first != rest, 64, self.layout.largest_legal_integer());
-        let [_, _] = halves[..] else { return refuse("an i64 on a target whose native integer is not 32 bits") };
+        let halves = self.wide_halves_of(first != rest)?;
         let a = self.wide(left, at, out)?;
         let b = match self.constant(right, 8) {
             Some(bits) => [Self::dword(bits as u32 as i64), Self::dword((bits >> 32) as u32 as i64)],

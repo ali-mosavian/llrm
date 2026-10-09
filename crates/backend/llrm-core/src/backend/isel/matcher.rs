@@ -972,17 +972,18 @@ impl Selector<'_, '_, '_> {
         pointer: Operand,
     ) -> Result<(), Unselected> {
         let pointer = self.pointer(pointer)?;
-        let (low, high) = (self.fresh_held(4), self.fresh_held(4));
-        for (held, by) in [(low, 0), (high, 4)] {
+        let halves = self.wide_halves()?;
+        let held = [self.fresh_held(halves[0].bytes), self.fresh_held(halves[1].bytes)];
+        for (half, held) in halves.iter().zip(held) {
             let what = semantics(
                 Operation::Move,
                 "mov",
                 vec![Loc::Held(held)],
-                vec![Loc::Mem(Self::memory(pointer.moved(by), 4))],
+                vec![Loc::Mem(Self::memory(pointer.moved(half.offset), half.bytes))],
             );
             out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, what) }));
         }
-        self.wides.insert(self.function.instruction(m.inst).result.expect("a load's value"), (low, high));
+        self.wides.insert(self.function.instruction(m.inst).result.expect("a load's value"), (held[0], held[1]));
         Ok(())
     }
 
@@ -996,11 +997,11 @@ impl Selector<'_, '_, '_> {
     ) -> Result<(), Unselected> {
         let (low, high) = self.wide(value, m.at, out)?;
         let pointer = self.pointer(pointer)?;
-        for (held, by) in [(low, 0), (high, 4)] {
+        for (half, held) in self.wide_halves()?.iter().zip([low, high]) {
             let what = semantics(
                 Operation::Move,
                 "mov",
-                vec![Loc::Mem(Self::memory(pointer.moved(by), 4))],
+                vec![Loc::Mem(Self::memory(pointer.moved(half.offset), half.bytes))],
                 vec![Loc::Held(held)],
             );
             out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, what) }));

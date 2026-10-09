@@ -9,6 +9,11 @@
 pub struct Half {
     /// Its place, low half first.
     pub index: usize,
+    /// Its bytes' distance from the integer's first, in memory (little-endian:
+    /// low half first).
+    pub offset: i64,
+    /// Its width in bytes.
+    pub bytes: u32,
     /// It takes the carry (borrow) of the half below it.
     pub carried: bool,
 }
@@ -25,7 +30,14 @@ pub fn expand_wide(
     if legal == 0 || bits <= legal || bits % legal != 0 {
         return Vec::new();
     }
-    (0..(bits / legal) as usize).map(|index| Half { index, carried: chained && index > 0 }).collect()
+    (0..(bits / legal) as usize)
+        .map(|index| Half {
+            index,
+            offset: index as i64 * i64::from(legal / 8),
+            bytes: legal / 8,
+            carried: chained && index > 0,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -44,5 +56,9 @@ mod tests {
         let chain = expand_wide(true, 128, 32);
         assert_eq!(chain.iter().map(|half| half.carried).collect::<Vec<_>>(), [false, true, true, true]);
         assert!(expand_wide(false, 64, 32).iter().all(|half| !half.carried));
+        let places = |bits, legal| {
+            expand_wide(false, bits, legal).iter().map(|half| (half.offset, half.bytes)).collect::<Vec<_>>()
+        };
+        assert_eq!((places(64, 32), places(32, 16)), (vec![(0, 4), (4, 4)], vec![(0, 2), (2, 2)]));
     }
 }
