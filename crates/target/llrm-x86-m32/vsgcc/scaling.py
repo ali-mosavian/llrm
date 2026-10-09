@@ -114,9 +114,13 @@ AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "bra
 
 
 def sample(cmd: list[str], env: dict | None = None, timeout: float = 120) -> tuple[int, int, str]:
-    """(instructions:u, task-clock ns, stderr) of one run; raises on a failed compile."""
+    """(instructions:u, task-clock ns, stderr) of one run; raises on a failed compile.
+
+    The child sees no LLRM_ variable of the caller's but LLRM_BIN (and `env`'s own): LLRM_CHECK_*, LLRM_VERIFY and the like add work to
+    the step they check, and a count taken under them is not the compiler's (regparm16: 'lir peephole' read 4.5 Minstr over at every size).
+    """
     with tempfile.NamedTemporaryFile("r") as out:
-        done = subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, *cmd], capture_output=True, text=True, timeout=timeout, env={**os.environ, **(env or {})})
+        done = subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, *cmd], capture_output=True, text=True, timeout=timeout, env={**{k: v for k, v in os.environ.items() if not k.startswith("LLRM_") or k == "LLRM_BIN"}, **(env or {})})
         if done.returncode:
             said = [l for l in (done.stderr or done.stdout).splitlines() if l and not l.startswith(("[time]", "[mir]"))]
             raise RuntimeError(f"{' '.join(cmd[-1:])}: " + " | ".join(said)[:300])

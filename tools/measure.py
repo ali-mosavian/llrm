@@ -35,7 +35,16 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 CACHE = Path(os.environ.get("LLRM_MEASURE_DIR") or Path.home() / ".cache/llrm/measure")
-BUILD = Path(os.environ.get("LLRM_MEASURE_BUILD") or Path.home() / ".cache/llrm/measure-build")
+
+
+def build_tree(root: Path = ROOT, env: dict | None = None) -> Path:
+    """Where the base is built: `LLRM_MEASURE_BUILD`, else a tree of this repository's own. Two clones share a tree no `git checkout` of
+    the other's commit can enter ('unable to read tree'), so each is keyed by the path of its working tree."""
+    env = os.environ if env is None else env
+    return Path(env.get("LLRM_MEASURE_BUILD") or Path.home() / ".cache/llrm/measure-build" / hashlib.sha256(str(root).encode()).hexdigest()[:10])
+
+
+BUILD = build_tree()
 VSGCC = next((ROOT / "crates/target").glob("*/vsgcc"))
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(VSGCC))
@@ -77,6 +86,7 @@ def measure_all(jobs: int) -> dict:
     passes = scaling_gate.measure_passes(jobs)
     return {
         "method": method(),
+        "binary": {"path": str(compiler), "sha": hashlib.sha256(compiler.read_bytes()).hexdigest()[:12]},
         "compile": compile_cost.measure(compiler, jobs),
         "axes": {k: list(v) for k, v in scaling_gate.measure(jobs).items()},
         "passes": {k: [round(v, 3) for v in got] for k, got in passes.items()},
@@ -115,14 +125,29 @@ def base_of(head: str, ref: str = "origin/main") -> str:
     return git("rev-parse", f"{head}^1") if base == git("rev-parse", head) else base
 
 
+def checked_out(sha: str, tree: Path, source: Path = ROOT) -> Path:
+    """`sha` checked out in `tree`, a clone of `source` that measure.py owns (made once, never a worktree of anyone's repository): the
+    commit is fetched from `source`, then from `source`'s own origin, so one that exists only on the remote is built too."""
+    if not (tree / ".git").exists():
+        tree.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "clone", "--quiet", "--no-checkout", str(source), str(tree)], check=True)
+        origin = subprocess.run(["git", "remote", "get-url", "origin"], cwd=source, capture_output=True, text=True)
+        if origin.returncode == 0:
+            git("remote", "add", "upstream", origin.stdout.strip(), cwd=tree)
+    if subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=tree, capture_output=True).returncode:
+        for remote in ("origin", "upstream"):
+            if subprocess.run(["git", "fetch", "--quiet", remote, sha], cwd=tree, capture_output=True).returncode == 0:
+                break
+        else:
+            raise SystemExit(f"measure: {sha[:9]} is in neither {source} nor its origin")
+    git("checkout", "--quiet", "--detach", "--force", sha, cwd=tree)
+    return tree
+
+
 def built(sha: str) -> Path:
     """`sha` built in a tree and target directory of its own (reused, so each build is an increment); its release directory."""
-    tree = BUILD / "tree"
     BUILD.mkdir(parents=True, exist_ok=True)
-    if not tree.is_dir():
-        git("worktree", "add", "--detach", str(tree), sha)
-    else:
-        git("checkout", "--detach", "--force", sha, cwd=tree)
+    tree = checked_out(sha, BUILD / "tree")
     env = {**os.environ, "CARGO_TARGET_DIR": str(BUILD / "target")}
     env.pop("LLRM_BIN", None)
     done = subprocess.run(["bash", "-c", gate.BUILD], cwd=tree, env=env, capture_output=True, text=True)
@@ -301,7 +326,7 @@ def check(jobs: int, ref: str) -> int:
         print(f"SKIPPED: instruction counter unavailable ({why})")
         return 77
     lines, bad = rises(base, now)
-    print(f"measured against {base_sha[:9]}")
+    print(f"measured {now['binary']['path']} ({now['binary']['sha']}) against {base_sha[:9]}")
     print("\n".join(lines))
     # A commit of the reference branch is a base for the next branches; a branch's own head is not.
     if not git("status", "--porcelain", "--untracked-files=no") and stored(head, now["method"]) is None and subprocess.run(["git", "merge-base", "--is-ancestor", head, ref], cwd=ROOT).returncode == 0:

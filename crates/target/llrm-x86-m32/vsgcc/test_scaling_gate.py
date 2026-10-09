@@ -80,3 +80,12 @@ def test_the_16_bit_axes_compile_with_m16_and_the_others_with_m32():
     assert "-m32" in gate.commanded("chain", levels_time.command)("llrm", "O2", Path("x.c"))
     assert {"chain-m16", "callers-m16"} <= set(gate.SIZES)
     assert scaling.AXES["chain"](3) == gate.generated("chain-m16", 3)
+
+
+def test_a_count_does_not_inherit_the_callers_llrm_variables(monkeypatch):
+    """A caller's LLRM_CHECK_* or LLRM_VERIFY reached the compiler under measurement and added work to the step it checks: regparm16's
+    branch read 4.5 Minstr over in 'lir peephole' at every size, which failed measure on a flat constant."""
+    monkeypatch.setenv("LLRM_CHECK_FOO", "1")
+    monkeypatch.setenv("LLRM_BIN", "/kept")
+    seen = scaling.sample([sys.executable, "-I", "-c", "import os, sys; print(sorted(k for k in os.environ if k.startswith('LLRM_')), file=sys.stderr)"], {"LLRM_DEBUG": "time"})[2]
+    assert "LLRM_CHECK_FOO" not in seen and "LLRM_BIN" in seen and "LLRM_DEBUG" in seen, seen
