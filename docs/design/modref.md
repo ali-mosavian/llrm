@@ -48,6 +48,16 @@ What each consumer asks of a call (read from the code):
 
 Most consumers ask a yes/no about one reference or one flag. Enumeration is needed by four (`_killed`, `avail::after`, `dead_stores`, `Stored::new`) and each of them walks every call of every block, so a lazy API saves only the calls nothing enumerates.
 
+## Review findings
+
+A review of the first version against the code found:
+
+- Slice "Pointers takes the call arguments and captures from the held Summaries" is circular: the summaries fixed point takes its captures from its own partial result, and GlobalsAA feeds Summaries. It also moves `escaped` and `escaped_before` both ways, so dse and `observers` would lose transforms as well as gain them. Dropped.
+- Enumeration is needed by more consumers than the first census named: `Writes` copies every `stores` list into `Calls` for through-memory, float-facts, fold and floatloop; `Accesses::resolved` and `Accesses::plain` build further lists. `may_write` is not one predicate (`regions::overlapping` with the program, `may_clobber` with pointer-fact offsets, `queries.may_overlap`). The per-call summary API is expected under the stop rule.
+- `_callbacks` depends on the GlobalsAA entries and the held summaries only; it is made per body, not per call. `_tracked` is module level and made per call. `_summarized` dedupes by (callee, bits escaped before) and `calls_annotated` does not.
+- `Calls` equality in fold and floatfold is by content: keep it, with a pointer fast path, not a version number.
+- The call arguments and captures are read only by the escape phase of `points_to`: the lever below.
+
 ## Measured since the review
 
 Every `points_to` solve of the QCport -O1 compile, 34,762 of them, is 16.6% of the compile (spans included): 11.0% in the value solve and 5.7% in the escape phase. `arguments` and `captures` are read only by the escape phase (alias.rs lines 2122-2125); the value solve (1851-2013) never reads them, so the value solve of the plain, arguments-only and arguments-plus-captures configurations is the same computation. The solves are asked of 6,209 distinct body states and 17,144 distinct (state, unit configuration) pairs: a value solve made once per pair would be 56% fewer, once per state 84% fewer.
