@@ -1053,6 +1053,7 @@ impl Facts {
         unspillable: &BTreeSet<u32>,
         protected: &BTreeSet<u32>,
         busy: &Frequency,
+        prior: Option<(&Facts, &crate::support::hash::HashSet<u32>)>,
     ) -> Self {
         let _span = llrm_support::debug::span("regalloc facts");
         let index = llrm_support::debug::timed("facts slots", || ranges::indexed(body));
@@ -1071,7 +1072,16 @@ impl Facts {
             }
         }
         let masks = llrm_support::debug::timed("facts masks", || _masks(body, &index, segments));
-        let widths = llrm_support::debug::timed("facts widths", || _widest(body));
+        let widths = llrm_support::debug::timed("facts widths", || match prior {
+            Some((before, touched)) => {
+                let found = _widest_after(&before.widths, body, touched);
+                if llrm_support::env_set("LLRM_CHECK_FACTS") {
+                    assert!(found == _widest(body), "{}: the widths kept from the body before differ", body.name);
+                }
+                found
+            }
+            None => _widest(body),
+        });
         let confined = llrm_support::debug::timed("facts classes", || {
             let given = crate::backend::regclass::Found { live: &live, masks: &masks };
             let found = crate::backend::regclass::classes_given(body, protected, segments, registers, &given);
@@ -1191,7 +1201,7 @@ fn _allocated(
     // The values merging updates made: spilled in their turn they are not
     // merged again, which would make the value spilled again, without end.
     let mut plain: BTreeSet<u32> = BTreeSet::new();
-    let mut facts = Facts::of(&body, profile, segments, classes, &unspillable, protected, &Frequency::of(&body));
+    let mut facts = Facts::of(&body, profile, segments, classes, &unspillable, protected, &Frequency::of(&body), None);
     if let Some(why) = unallocatable(&facts, pinned.unwrap_or(&IndexMap::default()), &unspillable, segments, classes) {
         return Err(Unplaced(why).into());
     }
@@ -1375,6 +1385,8 @@ fn _allocated(
         let bound = fixed.contains_key(&value) || mine.weight == INF;
         // `trySplit`, carved at once: the pieces and the rest compete again.
         let mut rewritten: Option<Vec<u32>> = None;
+        // The body as it was before this round rewrote it.
+        let mut before: Option<LirBody> = None;
         if splitting && at == Stage::Split && !pieces.contains(&value) && !bound {
             let _split = llrm_support::debug::span("regalloc split");
             let bundles = spillplacement::edge_bundles(&body);
@@ -1451,6 +1463,7 @@ fn _allocated(
                 });
                 pieces.extend(made.iter().copied().filter(|one| splitkit::live_blocks(&cut, *one, &*after) >= spread));
                 pieces.insert(value);
+                before.get_or_insert_with(|| body.clone());
                 body = cut;
                 for one in &made {
                     stage.insert(*one, Stage::Assign);
@@ -1563,6 +1576,7 @@ fn _allocated(
                     let (spilt, mut made, merged) =
                         spiller::spilled_apart(&body, &chosen, frame, floor, classes, &plain)?;
                     plain.extend(merged.iter().copied());
+                    before.get_or_insert_with(|| body.clone());
                     body = spilt;
                     // A value the spiller keeps (a load from its own home
                     // cell) is now as short as a reload, and is placed as one.
@@ -1585,6 +1599,7 @@ fn _allocated(
         // the change left sharing a register competes again.
         let Some(made) = rewritten else { continue };
         floor = floor.max(splitkit::_next_value_following(&body));
+        let touched = before.as_ref().and_then(|before| ranges::touched_values(before, &body));
         facts = Facts::of(
             &body,
             profile,
@@ -1593,6 +1608,7 @@ fn _allocated(
             &unspillable,
             protected,
             &llrm_support::debug::timed("regalloc frequency", || Frequency::of(&body)),
+            touched.as_ref().map(|touched| (&facts, touched)),
         );
         // What is done of the rewrite besides its facts: the pins, the placed
         // values it disturbs, the queue.
@@ -1866,22 +1882,58 @@ pub fn _widest(body: &LirBody) -> IndexMap<u32, u32> {
     let mut out: IndexMap<u32, u32> = IndexMap::default();
     for block in &body.blocks {
         for one in &block.insns {
-            let named = one
-                .what
-                .iter()
-                .flat_map(|what| what.dests.iter().chain(&what.sources))
-                .flat_map(ir::values)
-                .chain(one.requires.iter().chain(&one.delivers).map(|(place, _register)| *place));
-            for place in named {
-                let widest = out.entry(place.value).or_insert(0);
-                *widest = (*widest).max(place.width);
-            }
-            for (value, width) in &one.widths {
-                let widest = out.entry(*value).or_insert(0);
-                *widest = (*widest).max(*width);
+            for (value, width) in _named_widths(one) {
+                let widest = out.entry(value).or_insert(0);
+                *widest = (*widest).max(width);
             }
         }
     }
+    out
+}
+
+/// Each (value, width) an instruction names.
+fn _named_widths(one: &Insn) -> impl Iterator<Item = (u32, u32)> + '_ {
+    one.what
+        .iter()
+        .flat_map(|what| what.dests.iter().chain(&what.sources))
+        .flat_map(ir::values)
+        .chain(one.requires.iter().chain(&one.delivers).map(|(place, _register)| *place))
+        .map(|place| (place.value, place.width))
+        .chain(one.widths.iter().copied())
+}
+
+/// `_widest` of the body made from one whose widths are `held`, where only the
+/// values in `touched` are named by an instruction that is in one body alone:
+/// theirs are worked out again from where they occur.
+fn _widest_after(
+    held: &IndexMap<u32, u32>,
+    body: &LirBody,
+    touched: &crate::support::hash::HashSet<u32>,
+) -> IndexMap<u32, u32> {
+    let mut out = held.clone();
+    for value in touched {
+        out.swap_remove(value);
+    }
+    crate::backend::postings::following(body, |postings| {
+        for value in touched {
+            let mut at: Vec<crate::backend::postings::At> = postings
+                .defs(*value)
+                .iter()
+                .chain(postings.uses(*value))
+                .chain(postings.needs(*value))
+                .copied()
+                .collect();
+            at.sort_unstable();
+            at.dedup();
+            for one in at {
+                let one = &body.blocks[one.0 as usize].insns[one.1 as usize];
+                for (named, width) in _named_widths(one).filter(|(named, _)| named == value) {
+                    let widest = out.entry(named).or_insert(0);
+                    *widest = (*widest).max(width);
+                }
+            }
+        }
+    });
     out
 }
 
@@ -4190,6 +4242,7 @@ mod tests {
             &BTreeSet::new(),
             &BTreeSet::new(),
             &Frequency::of(&body),
+            None,
         );
         let union = LiveUnion::of([(_whole(Register::AX), vec![1])], &facts.live);
         let placed = IndexMap::from_iter([(1, Register::AX)]);

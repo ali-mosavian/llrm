@@ -102,3 +102,17 @@ def test_a_spill_passes_over_the_instructions_that_name_no_spilled_value():
         source.write_text(scaling.AXES["cells"](224))
         run = steps(compiler, source, "-O2")
     assert run["spill rewrite"] < 150, f"cells N=224 -O2: spill rewrite cost {run['spill rewrite']} Minstr (150 allowed; 570 before): {run}"
+
+
+def test_a_rewrite_works_out_the_widths_of_the_values_it_changed_only():
+    """`facts widths` walked every operand of every instruction after each spill: 385 Minstr on `cells` at N=224 (one block, ~430
+    rewrites). The widths of the body before stand for the values no changed instruction names."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](224))
+        run = steps(compiler, source, "-O2")
+    assert run["facts widths"] < 100, f"cells N=224 -O2: facts widths cost {run['facts widths']} Minstr (100 allowed; 385 before): {run}"

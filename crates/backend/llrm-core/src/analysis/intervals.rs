@@ -10,6 +10,7 @@ use std::sync::Arc;
 use crate::analysis::frequency::Frequency;
 use crate::analysis::loops as loopy;
 use crate::backend::allocate;
+use crate::model::ir;
 use crate::model::lir::{Insn, Insns, LirBlock, LirBody};
 use crate::support::hash::{IndexMap, IndexSet};
 
@@ -308,6 +309,52 @@ pub fn differing_blocks(
         })
         .collect();
     Differing { blocks, aligned }
+}
+
+/// Every value an instruction names: as it defines or reads it, as an operand,
+/// or in a constraint.
+pub fn names(one: &Insn) -> impl Iterator<Item = u32> + '_ {
+    one.defines
+        .iter()
+        .chain(&one.uses)
+        .copied()
+        .chain(
+            one.what
+                .iter()
+                .flat_map(|what| what.dests.iter().chain(&what.sources))
+                .flat_map(ir::values)
+                .map(|held| held.value),
+        )
+        .chain(one.requires.iter().chain(&one.delivers).map(|(held, _)| held.value))
+        .chain(one.widths.iter().map(|(value, _)| *value))
+}
+
+/// The values named by an instruction that is in only one of the two bodies
+/// (a block made over names all its instructions'): the ones whose facts a
+/// rewrite can have changed. None where the bodies are not the same shape.
+pub fn touched_values(
+    before: &LirBody,
+    after: &LirBody,
+) -> Option<crate::support::hash::HashSet<u32>> {
+    if before.blocks.len() != after.blocks.len()
+        || before.blocks.iter().zip(&after.blocks).any(|(one, two)| one.at != two.at)
+    {
+        return None;
+    }
+    let mut touched: crate::support::hash::HashSet<u32> = Default::default();
+    for (one, two) in before.blocks.iter().zip(&after.blocks) {
+        if one.insns.same_insns(&two.insns) {
+            continue;
+        }
+        match aligned(&one.insns, &two.insns) {
+            Some(found) => {
+                touched.extend(found.gone.iter().flat_map(|at| names(&one.insns[*at])));
+                touched.extend(found.added.iter().flat_map(|at| names(&two.insns[*at])));
+            }
+            None => touched.extend(one.insns.iter().chain(two.insns.iter()).flat_map(|insn| names(insn))),
+        }
+    }
+    Some(touched)
 }
 
 /// What `aligned` finds: the runs both hold, as (position in `old`, position in
