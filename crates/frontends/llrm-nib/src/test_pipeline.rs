@@ -99,21 +99,43 @@ fn _innermost_loops(function: &str) -> Vec<Vec<&str>> {
     found
 }
 
+/// The branches in `body` that go to the code of a bounds check's failure
+/// (`N$EBND`), whatever form the test takes: a compare and `jae`, a flag held
+/// in a byte and tested, `je`. The mnemonics are no part of it: the first form
+/// of this test counted `jae`/`jb` and read 0 for a loop that tested a byte it
+/// had set before the loop on every trip.
+fn _trap_branches(
+    function: &str,
+    body: &[&str],
+) -> usize {
+    let lines: Vec<&str> = function.lines().collect();
+    let traps = |label: &str| {
+        let Some(at) = lines.iter().position(|one| one.trim_end() == format!("{label}:")) else { return false };
+        lines[at + 1..].iter().take_while(|one| !one.trim_end().ends_with(':')).any(|one| one.contains("EBND"))
+    };
+    body.iter()
+        .filter(|one| one.trim_start().starts_with('j') && !one.trim_start().starts_with("jmp"))
+        .filter(|one| one.split_whitespace().last().is_some_and(traps))
+        .count()
+}
+
 /// Nib's `a[hi]` check ahead of `for j in lo..hi` bounds every index in it:
 /// quicksort's partition tested `j` and `i` against the length on every
 /// trip (3 compare-and-branch pairs against C's none), 245,433 executed
 /// instructions against C's 163,105 (#453).
+///
+/// The loop still keeps one: `lo < len`, invariant, is in the second block of
+/// the loop and trivial unswitch handles only a header's branch (LLVM's runs
+/// after loop-rotate has made it the header; ours rotates only the loops it
+/// proves run). tracker: "partition loop keeps its bounds check: needs ch +
+/// trivial unswitch"; when that lands the 1 here is 0.
 #[test]
-fn test_a_partition_loop_has_no_bounds_check_in_it() {
+fn test_a_partition_loop_has_one_bounds_check_in_it_until_the_header_copy() {
     let function = _nib("partition", "partition", "_partition");
     let loops = _innermost_loops(&function);
     assert!(!loops.is_empty(), "premise: the loop is found\n{function}");
     for body in loops {
-        let checks: Vec<_> = body
-            .iter()
-            .filter(|one| one.trim_start().starts_with("jae ") || one.trim_start().starts_with("jb "))
-            .collect();
-        assert!(checks.is_empty(), "{checks:?} in {body:#?}");
+        assert_eq!(_trap_branches(&function, &body), 1, "{body:#?}\n{function}");
     }
 }
 
