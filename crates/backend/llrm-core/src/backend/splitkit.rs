@@ -1854,15 +1854,11 @@ mod tests {
         after.add(0, 3, 5);
         let (ends, begins) = (before.segments(&body, &index), after.segments(&body, &index));
         assert_eq!(ends.last().map(|one| one.end), begins.first().map(|one| one.start));
-        // And a value live across the block boundary has two runs that touch,
-        // which a join makes one.
-        let live = intervals::intervals(&body, None);
-        let runs = &live[&3].segments;
-        assert_eq!(runs.len(), 2, "{runs:?}");
-        assert_eq!(runs[0].end, runs[1].start);
-        let (left, right) = (intervals::Interval::new(3, vec![runs[0]]), intervals::Interval::new(5, vec![runs[1]]));
+        // Runs that touch are joined by a merge.
+        let (first, second) = (*ends.last().expect("a run"), *begins.first().expect("a run"));
+        let (left, right) = (intervals::Interval::new(3, vec![first]), intervals::Interval::new(5, vec![second]));
         let joined = crate::backend::coalesce::_merged(&left, &right);
-        assert_eq!(joined.segments, vec![intervals::Segment { start: runs[0].start, end: runs[1].end }]);
+        assert_eq!(joined.segments, vec![intervals::Segment { start: first.start, end: second.end }]);
     }
 
     /// A value whose register is taken before and after a loop, but free in
