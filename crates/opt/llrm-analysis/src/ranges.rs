@@ -902,7 +902,8 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
             }
         };
         // Which operations read or define each value, by place in `operations`.
-        let touching: HashMap<ValueId, Vec<usize>> = {
+        let touching: std::cell::OnceCell<HashMap<ValueId, Vec<usize>>> = std::cell::OnceCell::new();
+        let touching_of = || touching.get_or_init(|| {
             let mut touching = HashMap::<ValueId, Vec<usize>>::default();
             for (place, &inst) in operations.iter().enumerate() {
                 let op = function.instruction(inst);
@@ -914,13 +915,19 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
                 }
             }
             touching
-        };
+        });
         // `known` swept: what holds of the loop before any block's edges narrow it. Every block asks of the same one.
         let swept: RefCell<Option<(IndexMap<ValueId, Interval>, Rc<IndexMap<ValueId, Interval>>)>> = RefCell::new(None);
         // `scoped` (`known` narrowed by a block's edges) swept, found from `known` swept: a sweep leaves an operation whose operands
         // and result are as they were in `known` as it found it there, so only those the narrowing reaches, and what they reach
         // in turn, are worked again from `known swept` with the narrowed values put over it.
         let settle = |mut scoped: IndexMap<ValueId, Interval>, known: &IndexMap<ValueId, Interval>| -> IndexMap<ValueId, Interval> {
+            // Putting the swept ones over a block's is a pass over its facts, as sweeping is two over the operations: a loop of few
+            // operations among many facts is swept.
+            if 2 * operations.len() <= scoped.len() {
+                return sweep(scoped);
+            }
+            let touching = touching_of();
             let base = {
                 let held = swept.borrow().as_ref().filter(|(was, _)| was == known).map(|(_, base)| Rc::clone(base));
                 held.unwrap_or_else(|| {
