@@ -72,3 +72,32 @@ fn a_pointer_a_callee_keeps_no_copy_of_stays_local() {
     assert_eq!(kept(&declared.replace("(ptr)", "(ptr nocapture)"), "%a", "call void @use(ptr %a)\n  call void @other()"), seven());
     assert_eq!(kept(declared, "%a", "call void @use(ptr %a)\n  call void @other()"), None);
 }
+
+/// Each call to an unsummarized function listed its own copy of every global it may write (a one-slice provenance set apiece):
+/// 17% of host.c's compile, 1.2 G of its 6.8 G call-effects instructions. Calls reaching the same bytes share the one list.
+#[test]
+fn calls_that_reach_the_same_bytes_share_one_list_of_references() {
+    let module = parsed(&format!(
+        "{DOS}@g = global i16 0
+@h = global i16 0
+
+declare void @use(ptr)
+
+define void @f() {{
+b0:
+  call void @use(ptr @g)
+  call void @use(ptr @g)
+  ret void
+}}
+"
+    ));
+    let layout = layout(&module);
+    let outer = Outer::of(&module, None);
+    let f = function(&module, "f");
+    let unit = crate::testing::with_registers(Unit::within(&module.context, &layout, f, &outer));
+    let effects: Vec<_> = call_effects(&unit, &outer).unwrap().into_values().collect();
+    assert_eq!(effects.len(), 2);
+    assert!(!effects[0].stores.is_empty());
+    assert!(std::rc::Rc::ptr_eq(&effects[0].stores, &effects[1].stores), "each call listed its own references");
+    assert!(std::rc::Rc::ptr_eq(&effects[0].loads, &effects[1].loads));
+}
