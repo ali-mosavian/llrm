@@ -67,9 +67,9 @@ mod generator;
 mod matcher;
 mod unwind;
 
-#[cfg(test)]
-pub(crate) use matcher::m16;
 pub use matcher::{Compiled, selector};
+#[cfg(test)]
+pub(crate) use matcher::{HOOKED, m16};
 mod expand;
 mod wide;
 
