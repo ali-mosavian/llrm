@@ -299,22 +299,48 @@ impl Summary {
     }
 }
 
+/// What a procedure's calls are, of its body and the declarations alone: kept for the next run while neither has changed.
+#[derive(Debug, Default)]
+pub struct CallFacts {
+    pub calls: IndexMap<InstId, String>,
+    pub arguments: IndexMap<InstId, Vec<Actual>>,
+    /// The callees a definition elsewhere may replace: no summary describes a call to one.
+    pub replaceable: std::collections::BTreeSet<String>,
+    /// Every call and invoke, in order.
+    pub sites: Vec<InstId>,
+}
+
 /// Python `qbopt.analysis.alias:Procedure`: a function, its calls by
 /// callee name, and each call's actual arguments.
 #[derive(Clone)]
 pub struct Procedure<'a> {
     pub unit: Unit<'a>,
-    pub calls: IndexMap<InstId, String>,
-    pub arguments: IndexMap<InstId, Vec<Actual>>,
-    /// The callees a definition elsewhere may replace: no summary describes a call to one. Found once, where `_summary` looked
-    /// the callee up among every global by name at every call of every visit.
-    pub replaceable: std::collections::BTreeSet<String>,
+    facts: Rc<CallFacts>,
+}
+
+impl std::ops::Deref for Procedure<'_> {
+    type Target = CallFacts;
+    fn deref(&self) -> &CallFacts {
+        &self.facts
+    }
 }
 
 impl<'a> Procedure<'a> {
     /// `unit`'s calls of named functions, and every call's actuals, one
     /// per argument.
     pub fn of(unit: Unit<'a>) -> Self {
+        let facts = Rc::new(CallFacts::of(&unit));
+        Self { unit, facts }
+    }
+
+    /// `unit`'s procedure, its calls as `facts` (of this body and these declarations) say.
+    pub fn with(unit: Unit<'a>, facts: Rc<CallFacts>) -> Self {
+        Self { unit, facts }
+    }
+}
+
+impl CallFacts {
+    pub fn of(unit: &Unit) -> Self {
         let function = unit.function;
         let mut calls = IndexMap::default();
         let mut arguments = IndexMap::default();
@@ -340,16 +366,17 @@ impl<'a> Procedure<'a> {
             let actual = op.operands[..count]
                 .iter()
                 .map(|&one| match one {
-                    Operand::Value(value) if is_pointer(&unit, one) => Actual::Pointer(value, 0),
+                    Operand::Value(value) if is_pointer(unit, one) => Actual::Pointer(value, 0),
                     // A null pointer points to nothing.
                     Operand::Constant(id) if matches!(unit.context.get(id).kind, ConstantKind::Null | ConstantKind::Zero | ConstantKind::Poison) => Actual::Absent,
-                    Operand::Constant(_) if is_pointer(&unit, one) => _operand(&unit, one, &IndexMap::default()).map_or(Actual::Provenance(UNKNOWN.clone()), Actual::Provenance),
+                    Operand::Constant(_) if is_pointer(unit, one) => _operand(unit, one, &IndexMap::default()).map_or(Actual::Provenance(UNKNOWN.clone()), Actual::Provenance),
                     _ => Actual::Absent,
                 })
                 .collect();
             arguments.insert(inst, actual);
         }
-        Self { unit, calls, arguments, replaceable }
+        let sites = call_sites(unit);
+        Self { calls, arguments, replaceable, sites }
     }
 }
 
@@ -768,7 +795,7 @@ pub fn summaries_updating(procedures: &IndexMap<String, Procedure>, known: Optio
             readers[target].insert(at);
         }
         // Asked against the summaries as the bodies' own start from them: whether a callee has one does not change.
-        if call_sites(&procedure.unit).iter().any(|site| procedure.calls.get(site).and_then(|target| _summary(procedure, &result, target)).is_none()) {
+        if procedure.sites.iter().any(|site| procedure.calls.get(site).and_then(|target| _summary(procedure, &result, target)).is_none()) {
             callers_of_unknown.insert(at);
         }
     }
@@ -883,7 +910,7 @@ fn _summarized(
         // once, and added to the whole once.
         #[allow(clippy::type_complexity)]
         let mut others: Vec<(Option<GlobalId>, Option<&Bits>, bool, bool, (BTreeSet<Slice>, BTreeSet<Slice>, bool))> = Vec::new();
-        for at in call_sites(unit) {
+        for at in procedure.sites.iter().copied() {
             if procedure.calls.get(&at).and_then(|target| _summary(procedure, result, target)).is_some() {
                 continue;
             }
@@ -929,7 +956,7 @@ fn _summarized(
     let captures = facts.escaped.iter().filter(|one| one.kind == MemoryKind::Parameter).filter_map(|one| match one.key { Key::Int(number) => Some(Some(Identity::Int(number))), _ => None }).collect();
     let (mut unknown_read, mut unknown_write) = (direct.unknown_read, direct.unknown_write);
     let mut types = direct.unknown_write_types.clone();
-    for at in call_sites(&procedure.unit) {
+    for at in procedure.sites.iter().copied() {
         let target = procedure.calls.get(&at);
         let callee = target.and_then(|target| _summary(procedure, result, target));
         let Some(callee) = callee else { continue };
@@ -976,7 +1003,7 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
     };
 
     let mut out = IndexMap::default();
-    for at in call_sites(&procedure.unit) {
+    for at in procedure.sites.iter().copied() {
         let actual = _actuals(procedure, &facts, at);
         let mut effect = match callee(&at) {
             Some(callee) => {
