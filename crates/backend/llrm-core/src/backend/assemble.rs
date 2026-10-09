@@ -241,7 +241,7 @@ pub fn machined(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Po
         if !again.same_as(&first) {
             let plain = machined_once(module, name, abi, pool, &plain_target, again)?;
             // Its own cost leaves the pushes and pops of the registers it saves out: they are the frame's, made after.
-            let priced = |made: &Machined| cost(made, target).map(|one| one + saves(made) as f64 * 2.0);
+            let priced = |made: &Machined| route_cost(made, target);
             if let Some((with, without)) = priced(&kept).zip(priced(&plain)) {
                 if without < with {
                     kept = plain;
@@ -331,12 +331,8 @@ fn cheaper(staged: &Staged, module: &Module, name: &str, pool: &Rc<RefCell<Pool>
         return Ok(spilled);
     }
     let (allocator_alone, _) = timed("candidate allocator alone", || phased(staged, module, name, pool, target, false, true))?;
-    let priced = timed("candidate cost", || (cost(&spilled.0, target), cost(&allocator_alone.0, target)));
-    llrm_support::debug!("candidates", "{name}: spiller {:?}, allocator alone {:?}", priced.0, priced.1);
-    let (kept, from_spiller) = match priced {
-        (Some(with), Some(without)) if without < with => (allocator_alone, false),
-        _ => (spilled, true),
-    };
+    llrm_support::debug!("candidates", "{name}: spiller {:?}, allocator alone {:?}", route_cost(&spilled.0, target), route_cost(&allocator_alone.0, target));
+    let (kept, from_spiller) = if timed("candidate cost", || cheaper_route(&allocator_alone.0, &spilled.0, target)) { (allocator_alone, false) } else { (spilled, true) };
     if from_spiller && ran.ties() {
         return admitted_or_plain(staged, module, name, pool, target, kept);
     }
@@ -369,10 +365,11 @@ fn directed(staged: &Staged, module: &Module, name: &str, pool: &Rc<RefCell<Pool
         return Ok(alone);
     }
     let Some((spilled, ran)) = timed("candidate spiller", || phased_to(staged, module, name, pool, target, true, true, true))? else { return Ok(alone) };
-    let kept = match timed("candidate cost", || (cost(&spilled.0, target), cost(&alone.0, target))) {
-        (Some(with), Some(without)) if without < with => return Ok(alone),
-        _ => spilled,
-    };
+    llrm_support::debug!("candidates", "{name}: spiller {:?} / {:?}, allocator alone {:?} / {:?}", route_cost(&spilled.0, target), other_cost(&spilled.0, target), route_cost(&alone.0, target), other_cost(&alone.0, target));
+    if timed("candidate cost", || cheaper_route(&alone.0, &spilled.0, target)) {
+        return Ok(alone);
+    }
+    let kept = spilled;
     if ran.ties() {
         return admitted_or_plain(staged, module, name, pool, target, kept);
     }
@@ -383,7 +380,7 @@ fn directed(staged: &Staged, module: &Module, name: &str, pool: &Rc<RefCell<Pool
 /// counts, is checked against the encoded code: the loads it moved to the entry are not all it changed.
 fn admitted_or_plain(staged: &Staged, module: &Module, name: &str, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, admitted: (Machined, frame::Frame)) -> Result<(Machined, frame::Frame), String> {
     let (plain, _) = timed("candidate plain", || phased(staged, module, name, pool, target, true, false))?;
-    if timed("candidate cost", || cost(&plain.0, target).zip(cost(&admitted.0, target))).is_some_and(|(plain, admitted)| plain < admitted) {
+    if timed("candidate cost", || route_cost(&plain.0, target).zip(route_cost(&admitted.0, target))).is_some_and(|(plain, admitted)| plain < admitted) {
         return Ok(plain);
     }
     Ok(admitted)
@@ -438,11 +435,73 @@ pub fn trying<T>(candidates: Candidates, run: impl FnOnce() -> T) -> T {
     done
 }
 
+/// What a route's function costs with the prologue and epilogue its registers cause: `cost` leaves out the pushes and pops of
+/// the registers it saves, which are the frame's, made after, and a route that uses more registers pays more of them (nbody_fixed
+/// -Os: the spiller's route was smaller by the count and larger by 17 bytes, and 7% slower).
+fn route_cost(made: &Machined, target: &Target<'_>) -> Option<f64> {
+    cost(made, target).map(|one| one + saves(made) as f64 * 2.0)
+}
+
+/// What a finished function costs by the other measure: the instructions and memory operands it is expected to execute where
+/// bytes are the measure, else its bytes.
+fn other_cost(made: &Machined, target: &Target<'_>) -> Option<f64> {
+    if target.cpu.size {
+        executed::work(&made.body)
+    } else {
+        made.body.insns().iter().filter_map(|one| one.what.as_ref()).map(|what| select::priced_in(made.body.bits, what, 0, None, false, false, None).map(|code| code.code.len() as f64)).sum()
+    }
+}
+
+/// Whether `candidate` is strictly cheaper than `kept`: by the measure the target optimizes for, and where that ties or cannot
+/// be worked out for either (an instruction with no price), by the other. The two cost the same by bytes in sieve -Os and
+/// the spiller's route was kept: 19% more clocks; nbody_fixed -Os had no price for either, and it was kept: 7% more clocks and
+/// 17 bytes more.
+fn cheaper_route(candidate: &Machined, kept: &Machined, target: &Target<'_>) -> bool {
+    cheaper_by((route_cost(candidate, target), other_cost(candidate, target)), (route_cost(kept, target), other_cost(kept, target)))
+}
+
+/// `cheaper_route` of the costs by the measure the target optimizes for and by the other.
+fn cheaper_by(candidate: (Option<f64>, Option<f64>), kept: (Option<f64>, Option<f64>)) -> bool {
+    match (candidate.0, kept.0) {
+        (Some(new), Some(old)) if new != old => new < old,
+        _ => candidate.1.zip(kept.1).is_some_and(|(new, old)| new < old),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cheaper_by;
+
+    /// The spiller's route was kept unless the allocator alone was cheaper by bytes: where bytes tied (sieve -Os) or neither had
+    /// a price (nbody_fixed -Os) the spiller's was kept whatever the other measure said, and ran 19% and 7% slower.
+    #[test]
+    fn test_a_tie_or_an_unpriced_route_is_decided_by_the_other_measure() {
+        // Tied on the measure of the target: the other decides.
+        assert!(cheaper_by((Some(142.0), Some(1.0)), (Some(142.0), Some(2.0))));
+        assert!(!cheaper_by((Some(142.0), Some(2.0)), (Some(142.0), Some(1.0))));
+        // No price for either: the other decides.
+        assert!(cheaper_by((None, Some(1.0)), (None, Some(2.0))));
+        // A strictly cheaper one by the measure of the target wins whatever the other says.
+        assert!(cheaper_by((Some(141.0), Some(9.0)), (Some(142.0), Some(1.0))));
+        assert!(!cheaper_by((Some(143.0), Some(0.0)), (Some(142.0), Some(1.0))));
+        // Equal on both: the kept one stays.
+        assert!(!cheaper_by((Some(1.0), Some(1.0)), (Some(1.0), Some(1.0))));
+    }
+}
+
 /// What a finished function costs: its encoded bytes where the target optimizes for size,
 /// else the instructions and memory operands it is expected to execute per call.
 fn cost(made: &Machined, target: &Target<'_>) -> Option<f64> {
     if target.cpu.size {
-        made.body.insns().iter().filter_map(|one| one.what.as_ref()).map(|what| select::priced_in(made.body.bits, what, 0, None, false, false, None).map(|code| code.code.len() as f64)).sum()
+        made.body.insns().iter().filter_map(|one| one.what.as_ref()).map(|what| {
+            let priced = select::priced_in(made.body.bits, what, 0, None, false, false, None).map(|code| code.code.len() as f64);
+            // A function with one instruction the encoder cannot price is priced as nothing: its routes compare as unpriced and the
+            // first kept (nbody_fixed -Os: `lea esi, [ebx+ebx*2]` had no price).
+            if priced.is_none() && llrm_support::debug::verifying() {
+                panic!("@{}: no byte price for {what:?}", made.body.name);
+            }
+            priced
+        }).sum()
     } else {
         executed::work(&made.body)
     }
