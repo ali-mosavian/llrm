@@ -12,6 +12,7 @@ on:
       - "build.rs"
       - "crates/backend/llrm-core/**"
       - "crates/backend/llrm-driver/**"
+      - "crates/backend/llrm-iselgen/**"
       - "crates/backend/llrm-peepgen/**"
       - "crates/bc/llrm-bcdriver/**"
       - "crates/frontends/llrm-c/**"
