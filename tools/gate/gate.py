@@ -179,7 +179,7 @@ def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
 
 # The build every step runs after, and every measurement is taken with: `cargo build --bins` alone produces a different llrm-c (the
 # test build unifies features differently), whose compile costs differ by up to 6% a step. tools/measure.py builds a base with it too.
-BUILD = "cargo build --release -q --bins && cargo test --release -q --workspace --no-run"
+BUILD = "RUSTFLAGS='-D warnings' cargo build --release -q --bins && RUSTFLAGS='-D warnings' cargo test --release -q --workspace --no-run"
 # The shipped build (Cargo.toml `[profile.dist]`): what the creep run on main measures. Not a gate step: three minutes cold.
 DIST_BUILD = "cargo build --profile dist -q --bins"
 
