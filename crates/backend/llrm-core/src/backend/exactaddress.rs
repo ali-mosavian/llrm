@@ -104,7 +104,7 @@ fn add(
 
 /// The one exact cell `one` addresses, where `one` reads its registers
 /// nowhere else.
-pub(crate) fn cell_of(one: &Insn) -> Option<&Mem> {
+fn cell_of(one: &Insn) -> Option<&Mem> {
     let what = one.what.as_ref()?;
     let mut cells = what
         .dests

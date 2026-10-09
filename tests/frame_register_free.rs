@@ -149,3 +149,40 @@ long f(int n) { int i; for (i = 0; i < n; ++i) peg[0][top[0]++] = n - i; mv(n, 0
         assert!(output.status.success(), "{level}: {}", String::from_utf8_lossy(&output.stderr));
     }
 }
+
+/// A label passed as dead and reached only by a branch further on was addressed
+/// at depth 0 when the branch that reached it was itself in a block passed as
+/// dead: `mov esi, dword ptr [esp-8]` read below the stack (compare_to_int64 at
+/// -O2 printed 310126006 for 39196).
+#[test]
+fn test_a_dead_looking_run_of_labels_is_addressed_again_once_a_branch_reaches_it() {
+    let source = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/run/c/compare_to_int64.c");
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-m32", "-O2", "-S", "-o", "a.s", source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    assert!(!text.contains("[esp-"), "a cell below the stack pointer: {text}");
+}
+
+/// A label reached by a branch seen after a run assumed dead was still taken
+/// for dead, so what it reaches was never learned and a cell below it was
+/// addressed at depth 0: `add dword ptr [esp-8], ebp` (x_binsearch at -O2
+/// returned a wrong sum).
+#[test]
+fn test_a_label_a_known_branch_reaches_ends_the_run_taken_for_dead() {
+    let source =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/crates/target/llrm-x86-m32/vsgcc/kernels/x_binsearch/x_binsearch.c");
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "-S", "-o", "a.s", source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    assert!(!text.contains("[esp-"), "a cell below the stack pointer: {text}");
+}

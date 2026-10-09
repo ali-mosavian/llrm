@@ -147,18 +147,7 @@ pub enum Source {
 /// and the same in the partition's lane numbers.
 type Recipe = Option<(Lanes, Vec<(Lane, Lane)>, u32, Vec<(usize, Source)>)>;
 
-thread_local! {
-    static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many times this thread has run copy propagation, for a test that a body
-/// with no copy is not given to it.
-pub fn runs() -> usize {
-    RUNS.with(std::cell::Cell::get)
-}
-
 pub fn forwarded(body: &LirBody) -> LirBody {
-    RUNS.with(|runs| runs.set(runs.get() + 1));
     forwarded_inner(body)
 }
 

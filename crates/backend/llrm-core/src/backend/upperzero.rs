@@ -244,7 +244,7 @@ pub fn preheaded(
 
 /// The roots `one`'s cells read 32 bits wide through a register holding no
 /// value, the frame pointer: nothing defines their upper half.
-pub(crate) fn unheld(one: &Insn) -> Roots {
+fn unheld(one: &Insn) -> Roots {
     let Some(what) = &one.what else {
         return 0;
     };
