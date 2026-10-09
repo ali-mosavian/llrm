@@ -9,6 +9,10 @@ use crate::module::{MetadataId, MetadataNode, MetadataOperand};
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Tbaa {
     lineages: Vec<Vec<String>>,
+    /// The same lineages and the type names, each shared: asking for one is a count, not a copy of its strings.
+    shared: Vec<std::rc::Rc<[String]>>,
+    names: Vec<Option<std::rc::Rc<str>>>,
+    empty: std::rc::Rc<[String]>,
 }
 
 thread_local! {
@@ -27,7 +31,30 @@ impl Tbaa {
         for at in 0..metadata.len() {
             Self::lineage_of(metadata, at, &mut lineages, 0);
         }
-        Self { lineages: lineages.into_iter().map(Option::unwrap_or_default).collect() }
+        let lineages: Vec<Vec<String>> = lineages.into_iter().map(Option::unwrap_or_default).collect();
+        let shared = lineages.iter().map(|one| std::rc::Rc::from(one.as_slice())).collect();
+        let names = metadata
+            .iter()
+            .map(|node| match node.operands.first() {
+                Some(MetadataOperand::String(name)) => Some(std::rc::Rc::from(name.as_str())),
+                _ => None,
+            })
+            .collect();
+        Self { lineages, shared, names, empty: std::rc::Rc::from(Vec::new()) }
+    }
+
+    /// `of_tag`, shared.
+    pub fn shared_of_tag(&self, metadata: &[MetadataNode], tag: MetadataId) -> std::rc::Rc<[String]> {
+        match metadata.get(tag.0 as usize).and_then(|node| node.operands.first()) {
+            Some(MetadataOperand::Node(ty)) => self.shared.get(ty.0 as usize).map_or_else(|| self.empty.clone(), std::rc::Rc::clone),
+            _ => self.empty.clone(),
+        }
+    }
+
+    /// The name of the access type `tag` names, shared.
+    pub fn name_of_tag(&self, metadata: &[MetadataNode], tag: MetadataId) -> Option<std::rc::Rc<str>> {
+        let Some(MetadataOperand::Node(ty)) = metadata.get(tag.0 as usize)?.operands.first() else { return None };
+        self.names.get(ty.0 as usize)?.clone()
     }
 
     /// The ancestors of type node `at`, memoized; none past a cycle.
