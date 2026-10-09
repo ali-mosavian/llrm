@@ -70,9 +70,9 @@ impl Interval {
     }
 }
 
-/// Python `id(insn)`: the instruction's identity in the body that holds it.
+/// Python `id(insn)`: the instruction's identity, in every body that holds it (`Insn::id`).
 pub fn key(one: &Arc<Insn>) -> usize {
-    Arc::as_ptr(one) as usize
+    one.id() as usize
 }
 
 /// Every instruction's slot number, and every block's span.
@@ -605,15 +605,8 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
         return IndexMap::default();
     }
     let count = body.blocks.len();
-    let position: crate::support::hash::HashMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
-    let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); count];
-    for (at, block) in body.blocks.iter().enumerate() {
-        for to in &block.succ {
-            if let Some(&to) = position.get(to) {
-                predecessors[to].push(at);
-            }
-        }
-    }
+    let graph = crate::analysis::graph::Graph::of(body);
+    let predecessors = &graph.parents;
     let spans: Vec<(i64, i64)> = body.blocks.iter().map(|block| index.span[&block.at]).collect();
     // Marks by block, a mark current when it equals the value's turn: no table is cleared between values.
     let (mut in_mark, mut out_mark, mut written_mark, mut run_mark, mut reach_mark) = (vec![0u32; count], vec![0u32; count], vec![0u32; count], vec![0u32; count], vec![0u32; count]);

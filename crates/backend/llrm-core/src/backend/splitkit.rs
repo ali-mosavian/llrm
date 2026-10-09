@@ -193,19 +193,14 @@ impl Region {
     /// their first reference; ranges that end where it only leaves stop
     /// after their last. The copies are the same; the piece is shorter.
     pub fn trimmed(&self, body: &LirBody, value: u32) -> Self {
-        let mut predecessors: IndexMap<i64, Vec<i64>> = IndexMap::default();
-        for block in &body.blocks {
-            for next in &block.succ {
-                predecessors.entry(*next).or_default().push(block.at);
-            }
-        }
+        let graph = crate::analysis::graph::Graph::of(body);
         let mut out = Self::default();
         for block in &body.blocks {
             let Some(ranges) = self.spans.get(&block.at) else { continue };
             let named: Vec<usize> =
                 (0..block.insns.len()).filter(|at| block.insns[*at].defines.contains(&value) || block.insns[*at].uses.contains(&value)).collect();
             let outside_in = block.at != body.entry
-                && predecessors.get(&block.at).is_none_or(|all| all.iter().all(|one| !self.leaves(&body.blocks[body.blocks.iter().position(|b| b.at == *one).expect("a block")])));
+                && graph.position.get(&block.at).is_none_or(|at| graph.parents[*at].iter().all(|parent| !self.leaves(&body.blocks[*parent])));
             let outside_out = block.succ.iter().all(|next| !self.enters(*next));
             for (index, (from, to)) in ranges.iter().copied().enumerate() {
                 let inner: Vec<usize> = named.iter().copied().filter(|at| from <= *at && *at < to).collect();
@@ -265,7 +260,7 @@ pub fn crossings(body: &LirBody, value: u32, region: &Region, live: &dyn allocat
     });
     let mut out = Vec::new();
     // The phis a block's successor arrives with, found by the successor's address: a scan of every block for each edge was the square of the blocks.
-    let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let graph = crate::analysis::graph::Graph::of(body);
     for block in &body.blocks {
         if let Some(ranges) = region.spans.get(&block.at) {
             let before = _live_before(block, value, live.live_out(block.at, value));
@@ -282,7 +277,7 @@ pub fn crossings(body: &LirBody, value: u32, region: &Region, live: &dyn allocat
         for next in &block.succ {
             let entering = region.enters(*next);
             let across = live.live_in(*next, value)
-                || by_at.get(next).is_some_and(|one| one.phis.iter().any(|phi| phi.incoming.contains(&(block.at, value))));
+                || graph.position.get(next).is_some_and(|at| body.blocks[*at].phis.iter().any(|phi| phi.incoming.contains(&(block.at, value))));
             if leaving != entering && across && (entering || written) {
                 out.push((Crossing::Edge { from: block.at, to: *next }, entering));
             }
@@ -344,12 +339,7 @@ pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region:
     // Only `value` is asked of: its liveness alone.
     let live = crate::analysis::occurrences::live_among(body, &BTreeSet::from([value]));
     let found = crossings(body, value, &region, &*live);
-    let mut predecessors: IndexMap<i64, Vec<i64>> = IndexMap::default();
-    for block in &body.blocks {
-        for next in &block.succ {
-            predecessors.entry(*next).or_default().push(block.at);
-        }
-    }
+    let graph = crate::analysis::graph::Graph::of(body);
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     // (block, position) -> copies before it; usize::MAX is before the terminator.
     let mut inserted: BTreeMap<(i64, usize), Vec<bool>> = BTreeMap::new();
@@ -362,7 +352,7 @@ pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region:
         }
     }
     for (from, to, entering) in &edges {
-        let same = predecessors[to].iter().all(|one| edges.contains(&(*one, *to, *entering)));
+        let same = graph.predecessors(body, graph.position[to]).all(|one| edges.contains(&(one, *to, *entering)));
         let every = at_of[from].succ.iter().all(|next| edges.contains(&(*from, *next, *entering)));
         if every && !at_of[from].insns.is_empty() {
             if !inserted.get(&(*from, usize::MAX)).is_some_and(|had| had.contains(entering)) {
