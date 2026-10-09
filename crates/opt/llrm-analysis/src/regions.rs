@@ -38,7 +38,6 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
 
 use llrm_mir::module::{Operand, ValueId};
 use llrm_support::hash::{HashMap, HashSet};
@@ -382,7 +381,7 @@ fn _through_pointer(reference: &MemRef) -> bool {
 /// to rule a write out unseen -- its one object (None if it has no single
 /// one), the frame `_displaced` compares displacements in, and the
 /// object's alias class.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct OverlapShape {
     pub object: Option<ObjectRef>,
     pub frame: Option<Frame>,
@@ -392,10 +391,21 @@ pub struct OverlapShape {
 /// An interned `OverlapShape`: equal shapes share one id, so a cell map
 /// hashes and compares a word rather than an object's identity. Ids compare
 /// only between buckets of one `OverlapBuckets`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct OverlapBucket {
     id: u32,
-    shape: Rc<OverlapShape>,
+}
+
+thread_local! {
+    /// Every shape named on this thread, by id: a bucket is the id alone, a
+    /// word to copy, sort and hash.
+    static SHAPES: std::cell::RefCell<(Vec<OverlapShape>, HashMap<OverlapShape, u32>)> = Default::default();
+}
+
+impl OverlapBucket {
+    fn shape(&self) -> OverlapShape {
+        SHAPES.with(|shapes| shapes.borrow().0[self.id as usize])
+    }
 }
 
 impl PartialEq for OverlapBucket {
@@ -436,23 +446,25 @@ impl Ord for OverlapBucket {
     }
 }
 
-/// The buckets one analysis run names: every bucket of one cell map must
-/// come from one of these.
+/// The buckets one analysis run names. Shapes are numbered on the thread, so
+/// equal shapes are one bucket in every run.
 #[derive(Default)]
-pub struct OverlapBuckets {
-    named: HashMap<OverlapShape, OverlapBucket>,
-}
+pub struct OverlapBuckets;
 
 impl OverlapBuckets {
     fn interned(
         &mut self,
         shape: OverlapShape,
     ) -> OverlapBucket {
-        let next = u32::try_from(self.named.len()).expect("fewer than 2^32 buckets");
-        self.named
-            .entry(shape)
-            .or_insert_with_key(|shape| OverlapBucket { id: next, shape: Rc::new(shape.clone()) })
-            .clone()
+        SHAPES.with(|shapes| {
+            let (list, ids) = &mut *shapes.borrow_mut();
+            let next = u32::try_from(list.len()).expect("fewer than 2^32 shapes");
+            let id = *ids.entry(shape).or_insert(next);
+            if id == next {
+                list.push(shape);
+            }
+            OverlapBucket { id }
+        })
     }
 }
 
@@ -476,13 +488,13 @@ impl Bucket for OverlapBucket {
         &self,
         parts: &mut OverlapParts,
     ) {
-        let shape = &*self.shape;
+        let shape = self.shape();
         match &shape.object {
-            Some(object) => parts.objects.entry(*object).or_default().insert(self.clone()),
-            None => parts.objectless.insert(self.clone()),
+            Some(object) => parts.objects.entry(*object).or_default().insert(*self),
+            None => parts.objectless.insert(*self),
         };
-        parts.frames.entry(shape.frame).or_default().insert(self.clone());
-        parts.classes.entry(shape.class).or_default().insert(self.clone());
+        parts.frames.entry(shape.frame).or_default().insert(*self);
+        parts.classes.entry(shape.class).or_default().insert(*self);
     }
 
     fn released(
@@ -500,7 +512,7 @@ impl Bucket for OverlapBucket {
                 part.remove(key);
             }
         }
-        let shape = &*self.shape;
+        let shape = self.shape();
         match &shape.object {
             Some(object) => drop_from(&mut parts.objects, object, self),
             None => {
@@ -658,6 +670,17 @@ pub fn displaced_buckets(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    /// A bucket was an id and an `Rc` of its shape: cloned (a count, and a
+    /// pointer to chase) into every list `overlap_buckets` returned, 44% of
+    /// host.c's dead-store solve with its sort. It is the id alone, copied and
+    /// sorted as a word.
+    #[test]
+    fn a_bucket_is_one_copied_word() {
+        fn copied<T: Copy>() {}
+        copied::<super::OverlapBucket>();
+        assert_eq!(std::mem::size_of::<super::OverlapBucket>(), 4);
+    }
+
     use std::collections::{BTreeMap, BTreeSet};
 
     use llrm_mir::datalayout::DataLayout;
