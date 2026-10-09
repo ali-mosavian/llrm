@@ -705,7 +705,8 @@ pub fn optimized<E: From<String>>(
     // GCC's recursive inlining: a function that calls itself is given copies of itself (`inline::inlined_into_itself`), as -finline-functions
     // does, so not at -O1's none or -Os (the recursive call is cold there). After the parameters nothing reads are gone and the tail calls
     // are loops, as GCC's early passes have made them: a body with two calls would be a tree, not a chain.
-    if let Some(budget) = threshold.budget(reach).filter(|_| !threshold.single) {
+    if threshold.budget(reach).is_some() && !threshold.single {
+        let budget = inline::recursive_growth(threshold);
         for at in 0..count {
             for &id in &procedures[at] {
                 let module = &mut program.modules[at];
