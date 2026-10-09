@@ -471,6 +471,11 @@ impl Insns {
     pub fn same_as(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
+
+    /// The same instructions, whether or not they were put in a list of their own: the allocation, or each instruction by identity.
+    pub fn same_insns(&self, other: &Self) -> bool {
+        self.same_as(other) || (self.len() == other.len() && self.iter().zip(other.iter()).all(|(one, two)| Arc::ptr_eq(one, two)))
+    }
 }
 
 impl std::ops::Deref for Insns {
