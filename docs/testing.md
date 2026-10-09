@@ -65,7 +65,7 @@ method (tools, programs, QCport modules) is not used. A rise past the tolerances
 level's geomean 1.003, one file 1.02, an axis' second difference 1% of its cost at 2N and that cost 1.02, a step's 0.5% of the compile and its cost 1.05 (a step needs 2.5% of the work to fail, so one on the edge of the
 share floor does not flip). Only superlinear work above nothing counts (`max(0, D)`): a concave base made linear has not got worse. `measure.py compare BASE SHA` reads two stored measurements with the same comparison, and a flagged row prints the three costs and the base's. D's noise on one build measured three times is 0.0005 of the compile (steps) and 0.0009 of an axis' 2N cost. A drop is recorded nowhere; the next branch's base has it. Sessions that miss one base at once wait on its lock and read what the first stored. Against the parent alone, ten commits of +0.2% each pass; the scheduled run (`gate.py main`) also compares each main commit with the one 50 merges or a week back (`measure.py creep`), at the same tolerances, and lists the commits between with their steps. Tolerances come from the same build
 measured twice (`tools/compile-cost.py --noise`: geomean within 0.0001, worst file 0.0047 of 393). The QCport files need `QCPORT`
-and `QCPORT_INC` (`~/scratch/qcport-env.sh`); without them they are not measured. Without a working counter the step exits 77
+and `QCPORT_INC`; without them they are not measured. Without a working counter the step exits 77
 (SKIPPED). Wall time per step is not usable (a linear step read 4-6x at 2N under load).
 
 ### Build profiles
@@ -120,7 +120,7 @@ so CI skips it. Before merging a change to llrm-c, HIR, its verifier
 or MIR lowering, compile its 65 modules at -O2 and -Os; every one must
 compile (#238 made the driver's verifier refuse five, unseen):
 
-    QCPORT=~/scratch/qcport/src QCPORT_INC=~/scratch/qctc/inc tools/qcport-compile.sh
+    QCPORT=/path/to/qcport/src QCPORT_INC=/path/to/qctc/inc tools/qcport-compile.sh
 
 ## QCport runs
 
@@ -129,13 +129,13 @@ Borland build of it, runs it headless (`start.qmp -ticks 300`) beside the all-Bo
 frames, polygons or the md5 of `BENCH.BMP`. About 13 s when the objects exist (`QCPORT_OBJECTS`, the gate's qcport-cmp.sh
 output), 70 s when it compiles them; each run has 30 s (`QCPORT_RUN_SECONDS`).
 
-    QCPORT=~/scratch/qcport/src QCPORT_INC=~/scratch/qctc/inc QCPORT_BORLAND=~/scratch/qcbcc \
-        JWLINK=~/scratch/pr-jwlink/GccUnixR/jwlink tools/qcport-run.py
+    QCPORT=/path/to/qcport/src QCPORT_INC=/path/to/qctc/inc QCPORT_BORLAND=/path/to/qcbcc \
+        JWLINK=/path/to/jwlink tools/qcport-run.py
 
 ## gcc.c-torture
 
-`tools/torture/torture.py` builds GCC's `gcc.c-torture/execute` (1698 self-checking programs, `TORTURE_CORPUS`, default
-~/work/personal/gcc/gcc/testsuite/gcc.c-torture/execute) at -O0, -O2 and -Os for m32 and runs each on the emulator: a program passes
+`tools/torture/torture.py` builds GCC's `gcc.c-torture/execute` (1698 self-checking programs, `TORTURE_CORPUS`, a checkout of
+[`gcc/testsuite/gcc.c-torture/execute`](https://github.com/gcc-mirror/gcc/tree/master/gcc/testsuite/gcc.c-torture/execute)) at -O0, -O2 and -Os for m32 and runs each on the emulator: a program passes
 by exiting 0. Every program ends in one class: pass, refused by design (`tools/torture/expected.toml` `[[refused]]`: a regular
 expression on the compiler's complaint and why), differs by design (`[[differs]]`: a program that runs and exits non-zero, with its
 reason), or a finding: compile failure, link failure, wrong result. None is skipped quietly. The full run is 2 minutes and is not

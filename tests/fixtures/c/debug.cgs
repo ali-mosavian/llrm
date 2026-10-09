@@ -71,7 +71,7 @@ SETSEG 4
 b25 BENewBack y4
 - DGLabel b25
 - DGInteger 4000000000 TY_UINT_4
-f26 DBSrcFile "/tmp/tmp.hXdUAQIN3e/debug.h" main=0
+f26 DBSrcFile "tests/fixtures/c/debug.h" main=0
 - DBSrcCue f26 1 1
 SYM y7 name="twice" base="twice" pattern="_*" attr=0x43 seg=1
 CALLCONV y7 class=0x80 target=0x712 parms=[] ret=0:0
@@ -97,7 +97,7 @@ n36 CGAssign n35 n34 TY_INTEGER
 n37 CGTempName t29 TY_INTEGER
 n38 CGUnary O_POINTS n37 TY_INTEGER
 - CGReturn n38 TY_INTEGER
-f39 DBSrcFile "/tmp/tmp.hXdUAQIN3e/debug.c" main=1
+f39 DBSrcFile "tests/fixtures/c/debug.c" main=1
 - DBSrcCue f39 11 1
 SYM y9 name="f" base="f" pattern="_*" attr=0x7 seg=1
 CALLCONV y9 class=0x80 target=0x716 parms=[] ret=0:0

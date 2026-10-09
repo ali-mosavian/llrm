@@ -5,7 +5,7 @@ SEG 3 attr=0xc name="CONST2" align=2
 SEG 4 attr=0x6 name="_DATA" align=2
 START
 TYPE T25 size=6 align=1
-f1 DBSrcFile "/home/alim/work/personal/llrm/.claude/worktrees/agent-a34e27a392c4cf18d/tests/fixtures/c/farwords.c"
+f1 DBSrcFile "tests/fixtures/c/farwords.c"
 - DBSrcCue f1 7 1
 SYM y1 name="load" base="load" pattern="_*" attr=0x7 seg=1
 CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0

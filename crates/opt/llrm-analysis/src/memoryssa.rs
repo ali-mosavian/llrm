@@ -206,6 +206,16 @@ impl Accesses {
         self.touched.get(&inst).map_or(Some(&[]), |(_, writes)| writes.as_deref())
     }
 
+    /// `writes`, shared rather than copied; `nothing` for an instruction that
+    /// touches no memory.
+    fn shared_writes(
+        &self,
+        inst: InstId,
+        nothing: &Rc<[MemRef]>,
+    ) -> Option<Rc<[MemRef]>> {
+        self.touched.get(&inst).map_or_else(|| Some(Rc::clone(nothing)), |(_, writes)| writes.clone())
+    }
+
     /// What the call `inst` writes before reading any: `initializes`.
     pub fn fills(
         &self,
@@ -391,7 +401,7 @@ pub struct MemorySSA<'a> {
     pub sites: IndexMap<InstId, Access>,
     pub phis: IndexMap<i64, Access>,
     /// What each def writes, as `Accesses::writes` says.
-    written: IndexMap<InstId, Option<Vec<MemRef>>>,
+    written: IndexMap<InstId, Option<Rc<[MemRef]>>>,
     unit: Unit<'a>,
     /// Whether a def's writes may clobber a cell, once for each pair: the loads
     /// of one address ask it of the same defs again and again.
@@ -690,13 +700,14 @@ pub fn built<'a>(
     let live = Access::new(0, Kind::Live);
     let entries: IndexMap<i64, usize> = graph.iter().enumerate().map(|(index, block)| (block.at, index + 1)).collect();
     let mut sites: IndexMap<InstId, Access> = IndexMap::default();
-    let mut written: IndexMap<InstId, Option<Vec<MemRef>>> = IndexMap::default();
+    let mut written: IndexMap<InstId, Option<Rc<[MemRef]>>> = IndexMap::default();
+    let nothing: Rc<[MemRef]> = Rc::from(Vec::new());
     let mut outgoing: BTreeMap<i64, usize> = BTreeMap::new();
     let mut next_id = entries.len() + 1;
     for block in &graph {
         let mut current = entries[&block.at];
         for &inst in function.block(cfg::block(block.at)).instructions() {
-            let writes = accesses.writes(inst).map(<[MemRef]>::to_vec);
+            let writes = accesses.shared_writes(inst, &nothing);
             let defines = writes.as_ref().is_none_or(|stores| !stores.is_empty());
             if !defines && accesses.reads(inst).is_some_and(<[MemRef]>::is_empty) {
                 continue;

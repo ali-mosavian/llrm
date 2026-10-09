@@ -11,7 +11,7 @@ b1 BENewBack y1
 - DGLabel b1
 - DGUBytes 4
 TYPE T25 size=4 align=1
-f2 DBSrcFile "/Users/alim/work/personal/qbopt/.claude/worktrees/watcom-16bit-qbopt-qcport-1d97c8/fixtures/c/farderef.c"
+f2 DBSrcFile "tests/fixtures/c/farderef.c"
 - DBSrcCue f2 6 1
 SYM y2 name="sum" base="sum" pattern="_*" attr=0x7 seg=1
 CALLCONV y2 class=0x80 target=0x716 parms=[] ret=0:0

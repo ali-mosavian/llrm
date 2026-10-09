@@ -7,7 +7,7 @@ START
 TYPE T25 size=16 align=1
 TYPE T26 size=12 align=1
 TYPE T27 size=6 align=1
-f1 DBSrcFile "/Users/alim/work/personal/qbopt/bench/parity/qbsp.c"
+f1 DBSrcFile "qbsp.c"
 - DBSrcCue f1 19 1
 SYM y1 name="r_plane_dist" base="r_plane_dist" pattern="_*" attr=0x7 seg=1
 CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0

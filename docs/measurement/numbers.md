@@ -16,8 +16,7 @@ from the previous result. Three runs, 50,000 steps, VBDOS v-g3, tuning 386,
 native-FPU replacement off, pinned DOSBox configuration. Baseline PIT ticks:
 `9269762, 9269760, 9269760`; optimized: `6831062, 6831062, 6831060`.
 All printed answers and DONE matched. This is not real-CPU latency evidence
-or an FPDEEP timing. Artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-timing-validated-z_t27opg`.
+or an FPDEEP timing.
 
 ## Runtime refresh — 2026-09-10, revision b040b61
 
@@ -57,7 +56,7 @@ FPBENCH acceleration.
 | fpbench EXE | `0ec3907e2e980d16290a6afa57a132064972942656dc8ce65f2a548852c62146` |
 
 Build logs, executables and individual outputs are retained locally under
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-runtime-current-2wnpyctg`.
+`runtime-current`.
 
 ## Current nbody runtime check — 2026-09-09
 
@@ -143,7 +142,7 @@ fstp dword [dist2]
 
 The arithmetic optimization gap remains; do not describe this as improved
 floating CSE or a fully optimized integrator. Full stages are in
-`/tmp/qbopt-fpbench-current-stages`.
+`fpbench-current-stages`.
 
 | Artifact | SHA256 |
 |---|---|

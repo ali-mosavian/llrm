@@ -10,7 +10,7 @@ SYM y1 name="demo_value" base="demo_value" pattern="_*" attr=0x42 seg=11
 b1 BENewBack y1
 - DGLabel b1
 - DGUBytes 2
-f2 DBSrcFile "/Users/alim/work/personal/qbopt/bench/parity/branch.c"
+f2 DBSrcFile "branch.c"
 - DBSrcCue f2 1 1
 SYM y2 name="parity_branch" base="parity_branch" pattern="_*" attr=0x7 seg=1
 CALLCONV y2 class=0x80 target=0x716 parms=[] ret=0:0

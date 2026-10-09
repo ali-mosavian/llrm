@@ -13,7 +13,7 @@ b1 BENewBack y1
 - DGInteger 1025 TY_UINT_2
 - DGInteger 7 TY_UINT_2
 - DGInteger 1793 TY_UINT_2
-f2 DBSrcFile "/home/alim/scratch/qcfix/tests/fixtures/c/indexread.c"
+f2 DBSrcFile "tests/fixtures/c/indexread.c"
 - DBSrcCue f2 5 1
 SYM y2 name="test" base="test" pattern="_*" attr=0x7 seg=1
 CALLCONV y2 class=0x80 target=0x716 parms=[] ret=0:0

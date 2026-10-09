@@ -4,7 +4,7 @@ SEG 2 attr=0x1c name="CONST" align=2
 SEG 3 attr=0xc name="CONST2" align=2
 SEG 4 attr=0x6 name="_DATA" align=2
 START
-f1 DBSrcFile "/home/alim/scratch/abi32/tests/fixtures/c/ia16.c" main=1
+f1 DBSrcFile "tests/fixtures/c/ia16.c" main=1
 - DBSrcCue f1 3 1
 TYPE T25 size=6 align=1
 SYM y1 name="fs" base="fs" pattern="_*" attr=0x7 seg=1

@@ -153,7 +153,7 @@ and runtime calls, without a local CLD. Establishing the runtime direction
 and selector contracts and propagating them through control flow remains
 necessary. All 96 primary outputs are byte-identical with this raiser
 enabled or disabled. Production stage dumps are in
-`/tmp/qbopt-copy-raising-current`.
+`copy-raising-current`.
 
 The 46 focused copy/literal/floating-value tests pass. Four copy proof
 tests fail with scalarization disabled; the literal propagation test also

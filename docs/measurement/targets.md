@@ -25,7 +25,6 @@ Historical pre-dispatch snapshot:
 The pre-dispatch allocator/rematerialization worktree emitted 29
 target-bearing `*-p-g2.obj` fixtures with `native_fpu=True`. The scorer read
 those emitted files directly (`--raw`), not a second default rewrite.
-Artifacts and the measurement script: `/tmp/qbopt-native-targets.Xr96r6`.
 This is a modeled-cost snapshot, not runtime validation or all-compiler coverage.
 
 - 26 comparable programs are within 1.5x.
@@ -59,7 +58,7 @@ The regression failed first and failed again with the fix disabled. Fourteen
 focused dispatch cases pass, including QB/PDS/VBDOS and event-enabled output;
 the preceding block check passed 1,977 cases.
 
-All-stage dumps in `/tmp/qbopt-dispatch-edges-{before,after}-20260911`
+All-stage dumps in `dispatch-edges-{before,after}-20260911`
 show identical MIR and emitted ASM for this fixture: later reachability had
 already discarded that non-code edge. This is a frontend CFG correction,
 not a measured speedup or closure of JUMPS's target gap:
@@ -767,7 +766,7 @@ push dword 144
 call far B$PEI4
 ```
 
-Native-FPU run evidence: `/tmp/qbopt-fpdeep-jwasm.xq6rYz`. BASE, REF and OPT
+BASE, REF and OPT
 link without errors and print byte-identical eleven answers plus DONE; all
 return to DOS. `result.png` was captured and inspected. FPS is inapplicable
 to this console program. Raw scoring independently gives REF=1317 and the
@@ -1598,7 +1597,7 @@ LLVM. Its backend behavior and exception-visibility differences need auditing;
 see `tools/references/readme.md`. The old reassociated, unrounded target is
 still invalid, but useful code-generation opportunities demonstrably remain.
 
-The current PDS stage dump (`/tmp/qbopt-fpcsex-strict-current`) retains both
+The current PDS stage dump retains both
 additions in both CSE rounds. Emission still evaluates, in order:
 
 ```asm

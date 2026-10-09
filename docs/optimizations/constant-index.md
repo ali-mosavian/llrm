@@ -40,7 +40,7 @@ Five regression cases fail with the previous analysis, including the actual
 FPDEEP fixture. The focused constant, floating-fact and expansion tests pass
 (59 tests). Before/after dumps of every stage and SUBEXP runtime artifacts:
 
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-constant-index-wcdqjg68`
+`constant-index`
 
 ## Exact conversion results reach arguments
 
@@ -58,7 +58,7 @@ An isolated experimental run enabling expansion and ordered emission passes
 all 11 FPDEEP output checks on PDS. These experimental switches are still
 off in the production pipeline. Artifacts:
 
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-fp-arguments-vss0qb5s`
+`fp-arguments`
 
 This is not yet the target-sized program: arithmetic and conversion work
 remain. The missing mix facts were traced to the memory operand at MIR
@@ -166,7 +166,7 @@ expansion selected and no checker/emitter bypass. The fixture regression
 fails with pair deletion disabled; focused guards cover shared/live values,
 memory effects and retained checks. Stage dumps and execution artifacts:
 
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-exact-checkpoints-k47dqj3q`
+`exact-checkpoints`
 
 ## Exact SINGLE stores and unused arithmetic
 
@@ -214,4 +214,4 @@ also fail with the previous folding/layout/assembly functions restored in
 process; they are not treated as passing or as newly introduced failures.
 Stage dumps and runtime artifacts:
 
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-exact-stores-s9k235ua`
+`exact-stores`

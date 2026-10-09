@@ -22,7 +22,7 @@ b1 BENewBack y1
 SETSEG 14
 - DGIBytes 8192 0
 - DGIBytes 6272 0
-f2 DBSrcFile "/home/alim/scratch/ctime-probe/hg/a.c" main=1
+f2 DBSrcFile "a.c" main=1
 - DBSrcCue f2 2 1
 SYM y2 name="first" base="first" pattern="_*" attr=0x7 seg=1
 CALLCONV y2 class=0x80 target=0x716 parms=[] ret=0:0

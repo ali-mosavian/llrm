@@ -256,8 +256,8 @@ Reproduce the PDS evidence:
 
 ```sh
 uv run python tools/contracts.py 'B$EVK1' \
-  --lib /Users/alim/work/other/d32x/toolchains/pds71/LIB/BCL71ENR.LIB \
-  --functions 32 --dump /tmp/qbopt-evk1-pds.json
+  --lib /path/to/BCL71ENR.LIB \
+  --functions 32 --dump evk1-pds.json
 ```
 
 Required implementation work is to model the stub and event continuation,

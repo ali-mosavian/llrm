@@ -789,14 +789,14 @@ b3:
 /// nor priced.
 #[test]
 fn test_a_function_with_no_load_served_across_a_store_is_numbered_once() {
-    let numberings = |text: &str| {
+    let numberings = |text: &str, registers: i64| {
         let mut module = parsed(text);
         let mut manager = PassManager::default();
         manager.require::<Summaries>();
         manager.add(Gvn::default());
         let before = super::numberings();
         manager
-            .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
+            .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers, ..Default::default() }))
             .unwrap();
         super::numberings() - before
     };
@@ -824,6 +824,35 @@ b0:
   ret i16 %r
 }
 ";
-    assert_eq!(numberings(plain), 1, "the second numbering is the first");
-    assert_eq!(numberings(across), 2, "a load served across a store is numbered both ways");
+    assert_eq!(numberings(plain, 6), 1, "the second numbering is the first");
+    assert_eq!(numberings(across, 1), 2, "a load served across a store is numbered both ways where crossing spills");
+}
+
+/// Crossing the store is dearer only through the registers it holds a value in:
+/// where the function fits its registers everywhere, the careful numbering
+/// (which keeps the load) can only cost more work, and is not made or priced.
+/// The forecast it needed was 40% of gvn on a 2048-statement function.
+#[test]
+fn a_load_served_across_a_store_is_numbered_once_where_crossing_spills_nothing() {
+    let across = "@x = global i16 0
+@y = global i16 0
+
+define i16 @f(i16 %p) {
+b0:
+  %a = load i16, ptr @x
+  store i16 %p, ptr @y
+  %b = load i16, ptr @x
+  %r = add i16 %a, %b
+  ret i16 %r
+}
+";
+    let mut module = parsed(across);
+    let mut manager = PassManager::default();
+    manager.require::<Summaries>();
+    manager.add(Gvn::default());
+    let before = super::numberings();
+    manager
+        .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
+        .unwrap();
+    assert_eq!(super::numberings() - before, 1);
 }

@@ -3,7 +3,7 @@
 The parser reference is the tracked tree at:
 
 ```text
-repository  ~/work/personal/qbasic-port
+repository  qbasic-port
 commit      e468001b32a96a70c44b5767790de71698ef57c0
 ```
 

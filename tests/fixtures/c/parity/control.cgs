@@ -15,7 +15,7 @@ SYM y2 name="demo_value" base="demo_value" pattern="_*" attr=0x42 seg=11
 b2 BENewBack y2
 - DGLabel b2
 - DGUBytes 2
-f3 DBSrcFile "/Users/alim/work/personal/qbopt/bench/parity/control.c"
+f3 DBSrcFile "control.c"
 - DBSrcCue f3 1 1
 SYM y3 name="parity_control" base="parity_control" pattern="_*" attr=0x7 seg=1
 CALLCONV y3 class=0x80 target=0x716 parms=[] ret=0:0
