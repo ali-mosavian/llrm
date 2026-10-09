@@ -619,7 +619,7 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
     }
     let spans: Vec<(i64, i64)> = body.blocks.iter().map(|block| index.span[&block.at]).collect();
     // Marks by block, a mark current when it equals the value's turn: no table is cleared between values.
-    let (mut in_mark, mut out_mark, mut written_mark, mut run_mark) = (vec![0u32; count], vec![0u32; count], vec![0u32; count], vec![0u32; count]);
+    let (mut in_mark, mut out_mark, mut written_mark, mut run_mark, mut reach_mark) = (vec![0u32; count], vec![0u32; count], vec![0u32; count], vec![0u32; count], vec![0u32; count]);
     let mut run_of: Vec<usize> = vec![0; count];
     let mut out: IndexMap<u32, Interval> = IndexMap::default();
     let mut turn = 0u32;
@@ -629,6 +629,8 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
         // By block: the parallel-copy runs it occurs in, as (last position of the run, defined there, read there), ascending.
         let mut by_block: Vec<Vec<(usize, bool, bool)>> = Vec::new();
         let mut work: Vec<usize> = Vec::new();
+        // The blocks this value occurs in or is live through: all else is none of its business, so no pass is over every block.
+        let mut reached: Vec<usize> = Vec::new();
         for &((block_index, at), defined, used) in found {
             let block = &body.blocks[block_index];
             let end = _group_end(block, at);
@@ -636,6 +638,10 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
                 run_mark[block_index] = turn;
                 run_of[block_index] = by_block.len();
                 by_block.push(Vec::new());
+                if reach_mark[block_index] != turn {
+                    reach_mark[block_index] = turn;
+                    reached.push(block_index);
+                }
             }
             let runs = &mut by_block[run_of[block_index]];
             match runs.last_mut() {
@@ -649,10 +655,7 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
         // Live in a block, and out of it, by the occurrences: read before it is written there, and so up its predecessors until
         // a block writes it. The first run that names it decides: a read, even with a write beside it (the walk takes the
         // group's writes first).
-        for block_index in 0..count {
-            if run_mark[block_index] != turn {
-                continue;
-            }
+        for &block_index in &reached {
             let runs = &by_block[run_of[block_index]];
             if runs.iter().any(|(_, defined, _)| *defined) {
                 written_mark[block_index] = turn;
@@ -666,6 +669,10 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
             for &before in &predecessors[block_index] {
                 if out_mark[before] != turn {
                     out_mark[before] = turn;
+                    if reach_mark[before] != turn {
+                        reach_mark[before] = turn;
+                        reached.push(before);
+                    }
                     if written_mark[before] != turn && in_mark[before] != turn {
                         in_mark[before] = turn;
                         work.push(before);
@@ -673,9 +680,10 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
                 }
             }
         }
+        reached.sort_unstable();
         let mut segments: Vec<Segment> = Vec::new();
         let mut here: Vec<Segment> = Vec::new();
-        for block_index in 0..count {
+        for &block_index in &reached {
             let occurs = run_mark[block_index] == turn;
             let live_out = out_mark[block_index] == turn;
             let live_in = in_mark[block_index] == turn;

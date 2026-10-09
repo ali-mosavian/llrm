@@ -952,10 +952,10 @@ fn test_dense_liveness_is_what_the_sorted_sets_gave() {
 fn test_the_intervals_of_the_same_instructions_are_worked_out_once() {
     use crate::analysis::intervals::{intervals, worked};
     let (generated, _) = body(3, &Shape { pool: 8, ops: 10 });
-    let before = worked(&generated);
+    let before = worked(&generated) + crate::analysis::intervals::by_occurrences(&generated);
     let first = intervals(&generated, None);
     let again = intervals(&generated, None);
-    assert_eq!(worked(&generated) - before, 1, "the same body was worked out twice");
+    assert_eq!(worked(&generated) + crate::analysis::intervals::by_occurrences(&generated) - before, 1, "the same body was worked out twice");
     assert_eq!(first, again);
     // A body with one instruction made afresh is another question.
     let mut other = generated.clone();
@@ -963,7 +963,7 @@ fn test_the_intervals_of_the_same_instructions_are_worked_out_once() {
     let copy = std::sync::Arc::new((*block.insns[0]).clone());
     block.insns.edit(|insns| insns[0] = copy);
     intervals(&other, None);
-    assert_eq!(worked(&generated) - before, 2, "another body was answered from the first");
+    assert_eq!(worked(&generated) + crate::analysis::intervals::by_occurrences(&generated) - before, 2, "another body was answered from the first");
 }
 
 /// A spill made a body of nearly the same instructions, and every fact of it was worked out afresh (the allocator's
