@@ -615,8 +615,8 @@ fn _short_update_runs_whole(
     frame: &mut Frame,
     fresh: u32,
 ) -> Result<(LirBody, u32), Error> {
-    let index = ranges::indexed(body);
-    let live = ranges::intervals(body, Some(&index));
+    let index = ranges::indexed_shared(body);
+    let live = ranges::intervals_shared(body, Some(&index));
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = Vec::new();
@@ -695,8 +695,8 @@ fn _local_updates_whole(
     frame: &mut Frame,
     mut fresh: u32,
 ) -> Result<(LirBody, u32), Error> {
-    let index = ranges::indexed(body);
-    let live = ranges::intervals(body, Some(&index));
+    let index = ranges::indexed_shared(body);
+    let live = ranges::intervals_shared(body, Some(&index));
     let register_only = |one: &Insn| {
         one.group.is_none()
             && one.requires.is_empty()
@@ -4200,6 +4200,30 @@ mod tests {
             .count();
         // The product stored, and read back once.
         assert_eq!(memory, 2, "{insns:#?}");
+    }
+
+    /// The short and local update passes numbered the body again (and asked its
+    /// intervals unshared) each time they found something to do, though the
+    /// spill had just numbered it: d_faces -O1, 634 spills, 249 + 54 M of 24 G
+    /// instructions. They read the remembered numbering.
+    #[test]
+    fn test_the_update_passes_read_the_remembered_numbering_of_the_body() {
+        let copied = _move(2, 1, None, 0x10);
+        let shifted = insn(
+            0x11,
+            (0x11, 0x11),
+            semantics(Operation::Binary, "shl", vec![held(2, 2)], vec![held(2, 2), imm(1, 1)]),
+            &[2],
+            &[2],
+        );
+        let body = _body(vec![copied, shifted]);
+        crate::analysis::intervals::indexed_shared(&body);
+        let mut frame = crate::backend::frame::Frame::new(0);
+        super::_short_update_runs(&body, &BTreeSet::from([2]), &mut frame, 100).expect("runs");
+        super::_local_updates(&body, &BTreeSet::from([2]), &mut frame, 100).expect("updates");
+        // One ask above, then one by each pass.
+        assert_eq!(body.facts.0.counted("indexed-remembered"), 2, "the passes numbered the body again");
+        assert_eq!(body.facts.0.counted("indexed"), 1);
     }
 
     #[test]
