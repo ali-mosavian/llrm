@@ -419,6 +419,10 @@ def test_a_formatter_change_runs_its_tests_and_neither_step_needs_the_compiler_b
     assert "rfmt-post" not in gate.plan(["crates/opt/llrm-analysis/src/ranges.rs"]).steps
 
 
+def test_the_formatter_helper_tests_run_after_the_formatter():
+    assert gate.SERIAL_STEPS == frozenset({"rfmt-post"})
+
+
 def test_the_fmt_step_fails_only_once_enforced_and_the_switch_is_one_line_of_tiers_toml():
     """Unformatted, the tree would fail every PR: the step is reported until PR 2 formats the tree and sets `enforced`."""
     cfg, pkgs = gate.load(), gate.packages()

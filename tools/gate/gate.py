@@ -32,6 +32,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 LANGUAGES = ("qb", "c", "nib")
 NO_BINARIES = {"pytest", "fmt", "rfmt-post"}  # steps that do not run the release binaries, so need no build first
+SERIAL_STEPS = frozenset({"rfmt-post"})
 
 
 @functools.cache  # read once: a bisect checks out commits that predate this file
@@ -185,6 +186,9 @@ BUILD = (
     "RUSTFLAGS='-D warnings' cargo build --release -q --bins && "
     "RUSTFLAGS='-D warnings' cargo test --release -q --workspace --no-run"
 )
+# Measurements compare two revisions, so their historical base is built without
+# today's warning policy.
+MEASURE_BUILD = "cargo build --release -q --bins && cargo test --release -q --workspace --no-run"
 # The shipped build (Cargo.toml `[profile.dist]`): what the creep run on main measures. Not a gate step: three minutes cold.
 DIST_BUILD = "cargo build --profile dist -q --bins"
 
@@ -395,7 +399,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
         if results["build"][0]:
             print(f"GATE {p.tier} FAIL: build")
             return 1, ["build"]
-    alone = [s for s in p.steps if s in load()["exclusive"]]
+    alone = [s for s in p.steps if s in load()["exclusive"] or s in SERIAL_STEPS]
     rest = [s for s in p.steps if s != "build" and s not in alone]
     jobs = int(os.environ.get("JOBS", "4"))
     with ThreadPoolExecutor(jobs) as pool:
