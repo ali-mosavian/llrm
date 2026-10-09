@@ -5834,6 +5834,59 @@ mod tests {
     /// found by pointer; every run must hold one instruction in both, in
     /// order, and a list edited by insertions and removals alone has every
     /// instruction it shares in a run.
+    /// The postings of a long block were made again, entry by entry, after
+    /// every spill: 2978 of cells N=448's 28 700 Minstr. They are patched
+    /// from what the rewrite changed, and must be what working them out
+    /// gives, for insertions, removals and moves, and for values the edit
+    /// adds and drops.
+    #[test]
+    fn test_the_postings_of_a_long_edited_block_are_those_of_working_them_out() {
+        use crate::model::ir::Semantics;
+        use crate::model::lir::{Insn, LirBlock};
+        let make = |at: i64, defines: Vec<u32>, uses: Vec<u32>| {
+            Arc::new(Insn::new(
+                at,
+                Some((at, at)),
+                Some(Semantics { name: Some("nop".to_owned()), ..Semantics::new(Operation::Nothing) }),
+                defines,
+                uses,
+            ))
+        };
+        let mut seed = 11u64;
+        let mut next = |bound: usize| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as usize % bound
+        };
+        let mut insns: Vec<Arc<Insn>> =
+            (0..120).map(|at| make(at, vec![at as u32 % 9], vec![(at as u32 * 7) % 11, at as u32 % 5])).collect();
+        let block = |insns: &[Arc<Insn>]| LirBlock::new(0, insns.to_vec());
+        let mut body = LirBody::new("long", 0, vec![block(&insns)], IndexMap::default(), IndexMap::default());
+        crate::backend::postings::following(&body, |_| ());
+        for round in 0..200 {
+            for _ in 0..1 + next(6) {
+                let at = next(insns.len());
+                match next(4) {
+                    0 => insns.insert(at, make(1000 + round, vec![20 + next(4) as u32], vec![next(12) as u32])),
+                    1 if insns.len() > 60 => {
+                        insns.remove(at);
+                    }
+                    2 => insns[at] = make(2000 + round, vec![next(9) as u32], vec![next(30) as u32]),
+                    _ => {
+                        let moved = insns.remove(at);
+                        insns.insert(next(insns.len() + 1), moved);
+                    }
+                }
+            }
+            body = body.with_blocks(vec![block(&insns)]);
+            crate::backend::postings::following(&body, |found| {
+                assert!(
+                    *found == crate::backend::postings::Postings::of(&body),
+                    "round {round}: the patched postings differ from working them out"
+                );
+            });
+        }
+    }
+
     #[test]
     fn test_the_instructions_two_lists_share_are_found_by_pointer() {
         use crate::analysis::intervals::aligned;

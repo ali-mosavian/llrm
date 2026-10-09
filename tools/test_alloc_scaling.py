@@ -73,3 +73,17 @@ def test_a_rewrite_finds_what_it_changed_by_pointer_not_by_looking_up_every_inst
         run = steps(compiler, source, "-O2")
     spent = run["facts intervals"] + run["intervals homes"]
     assert spent < 520, f"cells N=224 -O2: facts intervals + intervals homes cost {spent} Minstr (520 allowed; 700 before the pointer diff): {run}"
+
+
+def test_a_spill_patches_the_postings_of_the_block_it_changed_instead_of_making_them_again():
+    """`spill cleanup` rebuilt the postings of a long block entry by entry after every spill: 699 Minstr on `cells` at N=224 (one
+    block, ~600 spills) and 4.3x that for twice the size. The kept instructions' entries move to their new positions."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](224))
+        run = steps(compiler, source, "-O2")
+    assert run["spill cleanup"] < 250, f"cells N=224 -O2: spill cleanup cost {run['spill cleanup']} Minstr (250 allowed; 699 before): {run}"

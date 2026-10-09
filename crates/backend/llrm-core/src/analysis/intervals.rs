@@ -313,6 +313,8 @@ pub fn differing_blocks(
 /// What `aligned` finds: the runs both hold, as (position in `old`, position in
 /// `new`, length), in order of `old`, and the positions of what only one holds.
 pub struct Aligned {
+    /// How many instructions `old` held.
+    pub len_old: usize,
     pub runs: Vec<(usize, usize, usize)>,
     pub gone: Vec<usize>,
     pub added: Vec<usize>,
@@ -408,7 +410,7 @@ pub fn aligned(
             runs.sort_by_key(|run| run.0);
         }
     }
-    Some(Aligned { runs, gone, added })
+    Some(Aligned { len_old: old.len(), runs, gone, added })
 }
 
 /// The runs of instructions in only one of the two bodies, and of the parallel
