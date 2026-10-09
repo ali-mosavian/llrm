@@ -77,9 +77,11 @@ build_tool() {
 # failure there; an empty list is one too (cargo +nightly not found, a crash before the first file).
 listed() {
     local out rc=0
-    out=$(cd "$root" && cargo +nightly fmt "$@" -- --check -v) || rc=$?
+    out=$(mktemp) # the diffs can hold a NUL byte, which a shell variable drops with a warning
+    (cd "$root" && cargo +nightly fmt "$@" -- --check -v) > "$out" || rc=$?
+    if [ "$rc" -le 1 ]; then LC_ALL=C sed -n 's/^Formatting //p' "$out"; fi
+    rm -f "$out"
     [ "$rc" -le 1 ] || fail "cargo fmt $* failed ($rc)"
-    printf '%s\n' "$out" | LC_ALL=C sed -n 's/^Formatting //p'
 }
 
 # The files `cargo fmt --all` formats, and the tool's own sources (outside the workspace); each once.
