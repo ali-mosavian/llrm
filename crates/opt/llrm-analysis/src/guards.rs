@@ -82,13 +82,21 @@ pub fn holds(unit: &Unit, at: i64, predicate: IntPredicate, left: &Scev, right: 
     if let (Some(one), Some(other)) = (left.known(), right.known()) {
         return evaluated(predicate, &one, &other, left.width);
     }
-    let facts = guards(unit, at);
+    holds_in(unit, at, &guards(unit, at), predicate, left, right)
+}
+
+/// `holds`, given the guards on entry to `at` (`guards`), which a caller asking of one block again and again finds once: they were
+/// found four times for each branch `decide` asked of (half of its time on QCport's sc).
+fn holds_in(unit: &Unit, at: i64, facts: &[Guard], predicate: IntPredicate, left: &Scev, right: &Scev) -> bool {
+    if let (Some(one), Some(other)) = (left.known(), right.known()) {
+        return evaluated(predicate, &one, &other, left.width);
+    }
     if facts.iter().any(|guard| implies(guard, predicate, left, right)) {
         return true;
     }
     // An unsigned compare of zero extensions is the compare of what they extend: the guard may be in the narrow type.
     if let Some((left, right)) = narrowed(unit, predicate, left, right)
-        && (facts.iter().any(|guard| implies(guard, predicate, &left, &right)) || holds(unit, at, predicate, &left, &right))
+        && (facts.iter().any(|guard| implies(guard, predicate, &left, &right)) || holds_in(unit, at, facts, predicate, &left, &right))
     {
         return true;
     }
@@ -183,32 +191,55 @@ fn narrowed(unit: &Unit, predicate: IntPredicate, left: &Scev, right: &Scev) -> 
 /// `holds`, given also `assumed` and what the program states of the
 /// values the guards test: their ranges, by difference bounds.
 pub fn holds_given(unit: &Unit, at: i64, assumed: &[Guard], predicate: IntPredicate, left: &Scev, right: &Scev) -> bool {
-    if holds(unit, at, predicate, left, right) {
-        return true;
+    Given::at(unit, at, assumed).holds(unit, predicate, left, right)
+}
+
+/// What is given on entry to a block: the guards there, and with the `assumed` ones and the loops' proofs of their counters'
+/// followers the facts a range proof reads. Found once, for as many questions of the block as are asked.
+pub struct Given<'a> {
+    at: i64,
+    guards: Vec<Guard>,
+    assumed: &'a [Guard],
+    facts: std::cell::OnceCell<Vec<Guard>>,
+}
+
+impl<'a> Given<'a> {
+    pub fn at(unit: &Unit, at: i64, assumed: &'a [Guard]) -> Self {
+        Self { at, guards: guards(unit, at), assumed, facts: std::cell::OnceCell::new() }
     }
-    let mut facts = guards(unit, at);
-    facts.extend(assumed.iter().cloned());
-    // What the loops holding the block prove of the phis that follow their counters.
-    let shape = unit.shape();
-    for loop_ in shape.loops.iter().filter(|one| one.body.contains(&at)) {
-        for (follower, counter, start) in crate::induction::followers(unit, loop_) {
-            let Some(width) = unit.int_bits(Operand::Value(follower)) else { continue };
-            let (follower, counter) = (Scev::unknown(follower, width), Scev::unknown(counter, width));
-            facts.push(Guard { predicate: IntPredicate::Sle, left: Scev::of(&start, width), right: follower.clone() });
-            facts.push(Guard { predicate: IntPredicate::Sle, left: follower, right: counter });
+
+    /// `holds_given`.
+    pub fn holds(&self, unit: &Unit, predicate: IntPredicate, left: &Scev, right: &Scev) -> bool {
+        if holds_in(unit, self.at, &self.guards, predicate, left, right) {
+            return true;
         }
-    }
-    let mut ranges = BTreeMap::new();
-    for side in facts.iter().flat_map(|one| [&one.left, &one.right]).chain([left, right]) {
-        for monomial in side.terms.keys() {
-            if let Some(value) = monomial.single()
-                && let Some(interval) = declared(unit, value).filter(|one| one.width == left.width)
-            {
-                ranges.insert(monomial.clone(), (interval.low, interval.high));
+        let facts = self.facts.get_or_init(|| {
+            let mut facts = self.guards.clone();
+            facts.extend(self.assumed.iter().cloned());
+            // What the loops holding the block prove of the phis that follow their counters.
+            let shape = unit.shape();
+            for loop_ in shape.loops.iter().filter(|one| one.body.contains(&self.at)) {
+                for (follower, counter, start) in crate::induction::followers(unit, loop_) {
+                    let Some(width) = unit.int_bits(Operand::Value(follower)) else { continue };
+                    let (follower, counter) = (Scev::unknown(follower, width), Scev::unknown(counter, width));
+                    facts.push(Guard { predicate: IntPredicate::Sle, left: Scev::of(&start, width), right: follower.clone() });
+                    facts.push(Guard { predicate: IntPredicate::Sle, left: follower, right: counter });
+                }
+            }
+            facts
+        });
+        let mut ranges = BTreeMap::new();
+        for side in facts.iter().flat_map(|one| [&one.left, &one.right]).chain([left, right]) {
+            for monomial in side.terms.keys() {
+                if let Some(value) = monomial.single()
+                    && let Some(interval) = declared(unit, value).filter(|one| one.width == left.width)
+                {
+                    ranges.insert(monomial.clone(), (interval.low, interval.high));
+                }
             }
         }
+        difference::proves(left.width, facts, &ranges, predicate, left, right)
     }
-    difference::proves(left.width, &facts, &ranges, predicate, left, right)
 }
 
 /// Whether `guard` proves `left predicate right`.

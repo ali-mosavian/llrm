@@ -155,10 +155,11 @@ fn _implied(unit: &Unit, block: BlockId, last: InstId) -> Option<bool> {
     let (left, right) = (induction::term(unit, *left)?, induction::term(unit, *right)?);
     let (left, right) = (Scev::of(&left, width), Scev::of(&right, width));
     let at = cfg::id(block);
-    if guards::holds_given(unit, at, &[], *predicate, &left, &right) {
+    let given = guards::Given::at(unit, at, &[]);
+    if given.holds(unit, *predicate, &left, &right) {
         return Some(true);
     }
-    guards::holds_given(unit, at, &[], predicate.inverse(), &left, &right).then_some(false)
+    given.holds(unit, predicate.inverse(), &left, &right).then_some(false)
 }
 
 /// `last`, a terminator, replaced by a jump to `target`.
