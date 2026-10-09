@@ -1382,20 +1382,22 @@ fn _allocated(
             });
             let spread =
                 llrm_support::debug::timed("split spread", || splitkit::live_blocks(&body, value, &*live_sets));
-            let occupied = llrm_support::debug::timed("split occupied", || splitkit::Occupied {
-                segments: union
-                    .registers()
-                    .map(|(register, held)| {
-                        (
-                            register,
-                            held.iter()
-                                .filter(|other| **other != value)
-                                .flat_map(|other| facts.live[other].segments.clone())
-                                .collect(),
-                        )
-                    })
-                    .collect(),
-                masks: &facts.masks,
+            let occupied = llrm_support::debug::timed("split occupied", || {
+                splitkit::Occupied::new(
+                    union
+                        .registers()
+                        .map(|(register, held)| {
+                            (
+                                register,
+                                held.iter()
+                                    .filter(|other| **other != value)
+                                    .flat_map(|other| facts.live[other].segments.clone())
+                                    .collect(),
+                            )
+                        })
+                        .collect(),
+                    &facts.masks,
+                )
             });
             let sets: &dyn LiveAt = &*live_sets;
             // A range in one block splits locally; any other by region, and
@@ -1847,6 +1849,9 @@ pub struct Mask {
 #[derive(Default)]
 pub struct Masks {
     list: Vec<Mask>,
+    /// Points handed out by `iter`, for a test that a query by span does not
+    /// walk them all.
+    walked: std::cell::Cell<usize>,
     reaching: std::cell::OnceCell<crate::support::hash::HashMap<Register, Reaching>>,
 }
 
@@ -1861,15 +1866,50 @@ struct Reaching {
 
 impl Masks {
     pub fn new(list: Vec<Mask>) -> Self {
-        Self { list, reaching: std::cell::OnceCell::new() }
+        Self { list, walked: std::cell::Cell::new(0), reaching: std::cell::OnceCell::new() }
     }
 
     pub fn is_empty(&self) -> bool {
         self.list.is_empty()
     }
 
+    /// How many points `iter` has handed out.
+    pub fn walked(&self) -> usize {
+        self.walked.get()
+    }
+
     pub fn iter(&self) -> std::slice::Iter<'_, Mask> {
+        self.walked.set(self.walked.get() + self.list.len());
         self.list.iter()
+    }
+
+    /// The first and last point in `lo..hi` that destroys `register` (its high
+    /// half only counts for a register wider than a word): the points of one
+    /// register are sorted, so a block's span asks two searches, not every
+    /// point of the function.
+    pub fn destroyed_within(
+        &self,
+        register: Register,
+        width: u32,
+        lo: i64,
+        hi: i64,
+    ) -> Option<(i64, i64)> {
+        let reaching = self.reaching(register)?;
+        let lists: &[&Vec<i64>] = if width > 2 {
+            &[&reaching.read, &reaching.during, &reaching.high]
+        } else {
+            &[&reaching.read, &reaching.during]
+        };
+        let mut found: Option<(i64, i64)> = None;
+        for list in lists {
+            let from = list.partition_point(|slot| *slot < lo);
+            let to = list.partition_point(|slot| *slot < hi);
+            if from < to {
+                let (first, last) = (list[from], list[to - 1]);
+                found = Some(found.map_or((first, last), |(low, high)| (low.min(first), high.max(last))));
+            }
+        }
+        found
     }
 
     fn reaching(
