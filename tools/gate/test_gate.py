@@ -182,3 +182,51 @@ def test_steps_asked_for_replace_the_planned_ones_and_the_build_comes_first():
     assert gate.restricted(p, ["pytest"], known).steps == ["pytest"]
     with pytest.raises(SystemExit):
         gate.restricted(p, ["mesure"], known)
+
+
+def test_a_one_line_change_to_any_source_runs_every_source_scan_in_the_fast_tier():
+    """#1057 and #1071 gated fast and skipped llrm-mir's dense-key ratchet (a lib test of a crate they did not touch); main's full run went
+    red. A ratchet reads every crate's source, so any .rs change selects it, whichever crate holds the test."""
+    cfg = gate.load()
+    for touched in ("crates/opt/llrm-analysis/src/ranges.rs", "crates/backend/llrm-core/src/backend/spiller.rs", "crates/frontends/llrm-c/src/lib.rs"):
+        p = gate.plan([touched])
+        assert p.tier == "fast" and "scans" in p.steps, (touched, p.steps)
+    command = gate.commands(gate.plan(["crates/opt/llrm-analysis/src/ranges.rs"]), cfg, gate.packages())["scans"]
+    for one in cfg["scan"]:
+        if "package" in one:
+            assert one["package"] in command and (one.get("lib") or one["test"]) in command, one
+    assert "scans" not in gate.plan(["tools/measure.py"]).steps and "scans" not in gate.plan(["docs/testing.md"]).steps
+
+
+def test_every_scan_names_a_test_that_exists():
+    for one in gate.load()["scan"]:
+        text = (ROOT / one["file"]).read_text()
+        name = one.get("lib") or one.get("test") or Path(one["file"]).stem
+        assert one.get("step") == "integration" or f"fn {name}" in text or Path(one["file"]).stem == name, one
+        if one.get("step") == "integration":
+            assert Path(one["file"]).stem in gate.root_tests(), one
+
+
+def test_every_test_that_reads_the_trees_sources_is_a_listed_scan():
+    """A test that walks the directories for `.rs` files is a source scan; one nobody lists is skipped by a diff to any other crate."""
+    listed = {one["file"] for one in gate.load()["scan"]}
+    found = []
+    for path in sorted(ROOT.glob("**/*.rs")):
+        relative = str(path.relative_to(ROOT))
+        if relative.startswith(("target/", ".git/")) or "/target/" in relative:
+            continue
+        in_tests = "/tests/" in relative or relative.startswith("tests/") or relative.endswith(("_tests.rs", "/tests.rs"))
+        if not in_tests:
+            continue
+        text = path.read_text()
+        if "read_dir" in text and '".rs"' in text and "#[test]" in text:
+            found.append(relative)
+    assert found, "the scan discovery found nothing: it is broken"
+    missing = [f for f in found if f not in listed]
+    assert not missing, f"source-scan tests missing from tiers.toml [[scan]]: {missing}"
+
+
+def test_a_failing_scan_does_not_hide_the_ones_after_it(tmp_path):
+    """&& stopped at the first red scan; the step runs every scan and fails if any did."""
+    command = gate.commands(gate.plan(["crates/opt/llrm-analysis/src/ranges.rs"]), gate.load(), gate.packages())["scans"]
+    assert "&&" not in command.replace("cargo test", "") and command.count("|| rc=1") == 3 and command.endswith("exit $rc")
