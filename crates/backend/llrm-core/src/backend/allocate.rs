@@ -855,23 +855,62 @@ pub fn explicit_selectors(
     body.with_blocks(blocks)
 }
 
+/// The values an instruction is a plain same-width copy between, if it is.
+fn _copy_pair(one: &Insn) -> Option<(u32, u32)> {
+    let what = one.what.as_ref()?;
+    if what.op == Operation::Move && what.name.as_deref() == Some("mov") {
+        if let ([Loc::Held(dest)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice()) {
+            if dest.width == source.width && dest.value != source.value {
+                return Some((dest.value, source.value));
+            }
+        }
+    }
+    None
+}
+
 fn _copy_hints(body: &LirBody) -> IndexMap<u32, Vec<u32>> {
     let mut hints: IndexMap<u32, Vec<u32>> = IndexMap::default();
     for block in &body.blocks {
         for one in &block.insns {
-            if let Some(what) = &one.what {
-                if what.op == Operation::Move && what.name.as_deref() == Some("mov") {
-                    if let ([Loc::Held(dest)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice()) {
-                        if dest.width == source.width && dest.value != source.value {
-                            hints.entry(dest.value).or_default().push(source.value);
-                            hints.entry(source.value).or_default().push(dest.value);
-                        }
-                    }
-                }
+            if let Some((dest, source)) = _copy_pair(one) {
+                hints.entry(dest).or_default().push(source);
+                hints.entry(source).or_default().push(dest);
             }
         }
     }
     hints
+}
+
+/// `_copy_hints` of the body made from one whose hints are `held`, where only
+/// the values in `touched` are named by an instruction that is in one body
+/// alone: a copy between two values names both, so theirs are the only lists
+/// that can differ, and are worked out again from where they occur.
+fn _copy_hints_after(
+    held: &IndexMap<u32, Vec<u32>>,
+    body: &LirBody,
+    touched: &crate::support::hash::HashSet<u32>,
+) -> IndexMap<u32, Vec<u32>> {
+    let mut out = held.clone();
+    for value in touched {
+        out.swap_remove(value);
+    }
+    crate::backend::postings::following(body, |postings| {
+        for value in touched {
+            let mut at: Vec<crate::backend::postings::At> =
+                postings.defs(*value).iter().chain(postings.uses(*value)).copied().collect();
+            at.sort_unstable();
+            at.dedup();
+            let partners: Vec<u32> = at
+                .iter()
+                .filter_map(|one| _copy_pair(&body.blocks[one.0 as usize].insns[one.1 as usize]))
+                .map(|(dest, source)| if dest == *value { source } else { dest })
+                .collect();
+            if !partners.is_empty() {
+                out.insert(*value, partners);
+            }
+        }
+    });
+    out
 }
 
 /// A heap entry: `(value not in fixed, -priority, value)`.
@@ -1094,7 +1133,16 @@ impl Facts {
             }
             found
         });
-        let hints = llrm_support::debug::timed("facts hints", || _copy_hints(body));
+        let hints = llrm_support::debug::timed("facts hints", || match prior {
+            Some((before, touched)) => {
+                let found = _copy_hints_after(&before.hints, body, touched);
+                if llrm_support::env_set("LLRM_CHECK_FACTS") {
+                    assert!(found == _copy_hints(body), "{}: the hints kept from the body before differ", body.name);
+                }
+                found
+            }
+            None => _copy_hints(body),
+        });
         Self { index, live, masks, widths, confined, hints }
     }
 }
@@ -1622,7 +1670,12 @@ fn _allocated(
             let found = match &changed {
                 Some(blocks) => {
                     REQUIRED_SKIPPED.with(|n| n.set(n.get() + body.blocks.len() - blocks.len()));
-                    constrain::required_in(&body, classes, blocks)
+                    match &before {
+                        Some(before) if before.blocks.len() == body.blocks.len() => {
+                            constrain::required_added(&body, before, classes, blocks)
+                        }
+                        _ => constrain::required_in(&body, classes, blocks),
+                    }
                 }
                 None => constrain::required(&body, classes),
             };
