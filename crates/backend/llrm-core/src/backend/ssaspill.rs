@@ -162,40 +162,72 @@ impl LIRTransform for SsaSpill {
 
 /// The widest each value of `values` is read or written, a phi's result and
 /// arguments counting as one value: a value only phis name has no width of its own.
-fn widths_through_phis(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, u32> {
-    let mut web: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
-    for block in &body.blocks {
-        for phi in &block.phis {
-            let members: BTreeSet<u32> = std::iter::once(phi.result).chain(phi.incoming.iter().map(|(_, value)| *value)).collect();
-            for one in &members {
-                web.entry(*one).or_default().extend(members.iter().copied());
-            }
-        }
-    }
-    // Close each web.
-    loop {
-        let mut grew = false;
-        let keys: Vec<u32> = web.keys().copied().collect();
-        for key in keys {
-            let reach: BTreeSet<u32> = web[&key].iter().flat_map(|one| web.get(one).cloned().unwrap_or_default()).collect();
-            if !reach.is_subset(&web[&key]) {
-                web.get_mut(&key).expect("a member").extend(reach);
-                grew = true;
-            }
-        }
-        if !grew {
-            break;
-        }
-    }
-    let every: BTreeSet<u32> = values.iter().flat_map(|one| web.get(one).cloned().unwrap_or_else(|| BTreeSet::from([*one]))).collect();
+pub(crate) fn widths_through_phis(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, u32> {
+    let (web, members) = phi_webs(body);
+    let every: BTreeSet<u32> = values.iter().flat_map(|one| web.get(one).map_or_else(|| vec![*one], |root| members[root].clone())).collect();
     let known = spiller::_widest(body, &every);
+    // A web's width is found once, whoever of it asks.
+    let mut widest: IndexMap<u32, u32> = IndexMap::default();
     values
         .iter()
         .map(|one| {
-            let members = web.get(one).cloned().unwrap_or_else(|| BTreeSet::from([*one]));
-            (*one, members.iter().filter_map(|member| known.get(member)).copied().max().unwrap_or(2))
+            let width = match web.get(one) {
+                Some(root) => *widest.entry(*root).or_insert_with(|| members[root].iter().filter_map(|member| known.get(member)).copied().max().unwrap_or(2)),
+                None => known.get(one).copied().unwrap_or(2),
+            };
+            (*one, width)
         })
         .collect()
+}
+
+/// The webs of phis: each value a phi names (its result or an argument) to the representative of the values joined to it by phis,
+/// transitively, and each representative to its members. (A fixpoint that grew every value's set from its members' sets, round after
+/// round, was cubic in the webs: 56 M of a 16-deep nest's compile.)
+fn phi_webs(body: &LirBody) -> (IndexMap<u32, u32>, IndexMap<u32, Vec<u32>>) {
+    fn find(parent: &mut IndexMap<u32, u32>, value: u32) -> u32 {
+        let mut root = value;
+        while parent[&root] != root {
+            root = parent[&root];
+        }
+        let mut walk = value;
+        while parent[&walk] != root {
+            let next = parent[&walk];
+            parent.insert(walk, root);
+            walk = next;
+        }
+        root
+    }
+    let mut parent: IndexMap<u32, u32> = IndexMap::default();
+    for block in &body.blocks {
+        for phi in &block.phis {
+            let named = std::iter::once(phi.result).chain(phi.incoming.iter().map(|(_, value)| *value));
+            let mut first: Option<u32> = None;
+            for one in named {
+                parent.entry(one).or_insert(one);
+                let root = find(&mut parent, one);
+                match first {
+                    None => first = Some(root),
+                    Some(joined) => {
+                        let joined = find(&mut parent, joined);
+                        if root != joined {
+                            // The smaller number is the root, so a web is named the same whatever order its phis come in.
+                            let (low, high) = if joined < root { (joined, root) } else { (root, joined) };
+                            parent.insert(high, low);
+                            first = Some(low);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut web: IndexMap<u32, u32> = IndexMap::default();
+    let mut members: IndexMap<u32, Vec<u32>> = IndexMap::default();
+    for value in parent.keys().copied().collect::<Vec<_>>() {
+        let root = find(&mut parent, value);
+        web.insert(value, root);
+        members.entry(root).or_default().push(value);
+    }
+    (web, members)
 }
 
 /// What each block does with each value: where it reads it, in order.
@@ -505,17 +537,17 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments, classes: 
 
 /// `body` spilled, or None where there was nothing to spill and nothing to simplify.
 fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, classes: &RegisterClasses, prices: Prices, run: &Run) -> Result<Option<LirBody>, String> {
-    let simple = ssarepair::simplified(original);
+    let simple = llrm_support::debug::timed("ssa simplified", || ssarepair::simplified(original));
     let body = simple.as_ref().unwrap_or(original);
     // The loops, found once: depths, headers and each loop's pressure all come from them.
     let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
-    let flow = Flow::of(body, &loops);
-    let confined = regclass::classes(body, &BTreeSet::new(), segments, classes);
+    let flow = llrm_support::debug::timed("ssa flow", || Flow::of(body, &loops));
+    let confined = llrm_support::debug::timed("ssa classes", || regclass::classes(body, &BTreeSet::new(), segments, classes));
     let skip = untouchable(body);
     let order = reverse_postorder(body);
     let place: IndexMap<i64, usize> = order.iter().enumerate().map(|(at, block)| (*block, at)).collect();
     let all: BTreeSet<u32> = body.insns().iter().flat_map(|one| one.defines.iter().copied()).collect();
-    let remakes = remakable(body, &all);
+    let remakes = llrm_support::debug::timed("ssa remakable", || remakable(body, &all));
     let frequency = Frequency::of(body);
     let headers: BTreeSet<i64> = loops.iter().map(|found| found.header).collect();
     let mut result = Simulated::default();
@@ -534,7 +566,7 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, classes: 
             selectors.extend(kept.keys().copied().filter(|value| machine.registered(*value)));
         }
         let bridged: BTreeSet<(i64, i64)> = result.across.keys().copied().collect();
-        let one = simulated_in(body, &flow, &machine, &skip, &kept, &order, &place, &frequency, &headers, &loops, prices, &bridged, run);
+        let one = llrm_support::debug::timed("ssa simulated", || simulated_in(body, &flow, &machine, &skip, &kept, &order, &place, &frequency, &headers, &loops, prices, &bridged, run));
         result.merge(one);
     }
     if result.stored.is_empty() {
@@ -566,9 +598,9 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, classes: 
         .filter(|value| !remakes.contains_key(value) && !result.shared.contains_key(value))
         .filter(|value| leaving.get(value).copied().unwrap_or(0.0) < home.get(value).map_or(f64::INFINITY, |at| frequency.block(*at)))
         .collect();
-    let spilled = written(body, &result.edits, &result.across, &result.left, &result.stored, &result.memory, &result.shared, &result.moves, &at_leaves, &remakes, frame)?;
+    let spilled = llrm_support::debug::timed("ssa written", || written(body, &result.edits, &result.across, &result.left, &result.stored, &result.memory, &result.shared, &result.moves, &at_leaves, &remakes, frame))?;
     let held: IndexMap<i64, BTreeSet<u32>> = result.edits.iter().map(|(at, edit)| (*at, edit.w_in.clone())).collect();
-    Ok(Some(without_dead_remakes(ssarepair::repaired(&spilled, &result.stored, &held), &selectors)))
+    Ok(Some(llrm_support::debug::timed("ssa repaired", || without_dead_remakes(ssarepair::repaired(&spilled, &result.stored, &held), &selectors))))
 }
 
 /// `body` without the definitions of remade selectors that nothing reads any more: each read made its own.
