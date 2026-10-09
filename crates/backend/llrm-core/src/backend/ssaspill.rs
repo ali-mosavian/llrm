@@ -355,31 +355,114 @@ impl Flow {
             .unwrap_or(FAR)
     }
 
-    /// Distance from every block's entry to each live-in value's next use, to a
-    /// fixed point.
+    /// Distance from every block's entry to each live-in value's next use: the
+    /// shortest way to a block that reads it, a block that reads it being that
+    /// far in by its first read. A value is walked back from its readers
+    /// alone, so the work follows the pairs of block and live value that
+    /// exist and not a sweep of all of them for each step of the longest way.
     fn distances(
         &mut self,
         body: &LirBody,
     ) {
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
+        let mut holders: IndexMap<u32, Vec<i64>> = IndexMap::default();
+        for block in &body.blocks {
+            let entering: BTreeSet<u32> = self.live_in[&block.at].iter().copied().chain(block.arrives()).collect();
+            for value in entering {
+                holders.entry(value).or_default().push(block.at);
+            }
+        }
+        let mut before: IndexMap<i64, Vec<i64>> = body.blocks.iter().map(|block| (block.at, Vec::new())).collect();
+        for block in &body.blocks {
+            for to in &block.succ {
+                before.entry(*to).or_default().push(block.at);
+            }
+        }
+        for (value, blocks) in holders {
+            let mut here: IndexMap<i64, i64> = blocks.iter().map(|at| (*at, FAR)).collect();
+            let mut queue = BinaryHeap::new();
+            for at in &blocks {
+                if let Some(first) = self.uses[at].get(&value).and_then(|list| list.first().copied()) {
+                    here.insert(*at, first as i64);
+                    queue.push(Reverse((first as i64, *at)));
+                }
+            }
+            while let Some(Reverse((far, at))) = queue.pop() {
+                if here[&at] != far {
+                    continue;
+                }
+                for parent in &before[&at] {
+                    // A block that reads the value is that far in by its first
+                    // read, whatever follows it.
+                    if !here.contains_key(parent) || self.uses[parent].get(&value).is_some_and(|list| !list.is_empty())
+                    {
+                        continue;
+                    }
+                    let through = far
+                        .saturating_add(self.leaving(*parent, at))
+                        .saturating_add(self.length[parent] as i64)
+                        .min(FAR);
+                    if through < here[parent] {
+                        here.insert(*parent, through);
+                        queue.push(Reverse((through, *parent)));
+                    }
+                }
+            }
+            for (at, far) in here {
+                self.from_top.get_mut(&at).expect("a block").insert(value, far);
+            }
+        }
+    }
+
+    /// `distances` as it was: sweeps of every block and live value to a fixed
+    /// point or 64 rounds. What the shortest ways must agree with, where the
+    /// rounds settle.
+    #[cfg(test)]
+    fn distances_by_rounds(
+        &self,
+        body: &LirBody,
+    ) -> (IndexMap<i64, IndexMap<u32, i64>>, bool) {
+        let mut flow = Self {
+            from_top: body.blocks.iter().map(|block| (block.at, IndexMap::default())).collect(),
+            ..self.cloned()
+        };
+        let mut settled = false;
         for _ in 0..64 {
             let mut changed = false;
             for block in body.blocks.iter().rev() {
-                let entering: BTreeSet<u32> = self.live_in[&block.at].iter().copied().chain(block.arrives()).collect();
+                let entering: BTreeSet<u32> = flow.live_in[&block.at].iter().copied().chain(block.arrives()).collect();
                 for value in entering {
-                    let first = self.uses[&block.at].get(&value).and_then(|list| list.first().copied());
+                    let first = flow.uses[&block.at].get(&value).and_then(|list| list.first().copied());
                     let here = match first {
                         Some(at) => at as i64,
-                        None => self.beyond(block.at, value).saturating_add(self.length[&block.at] as i64).min(FAR),
+                        None => flow.beyond(block.at, value).saturating_add(flow.length[&block.at] as i64).min(FAR),
                     };
-                    if self.from_top[&block.at].get(&value) != Some(&here) {
-                        self.from_top.get_mut(&block.at).expect("a block").insert(value, here);
+                    if flow.from_top[&block.at].get(&value) != Some(&here) {
+                        flow.from_top.get_mut(&block.at).expect("a block").insert(value, here);
                         changed = true;
                     }
                 }
             }
             if !changed {
+                settled = true;
                 break;
             }
+        }
+        (flow.from_top, settled)
+    }
+
+    #[cfg(test)]
+    fn cloned(&self) -> Self {
+        Self {
+            uses: self.uses.clone(),
+            defines: self.defines.clone(),
+            live_in: self.live_in.clone(),
+            live_out: self.live_out.clone(),
+            depth: self.depth.clone(),
+            from_top: self.from_top.clone(),
+            length: self.length.clone(),
+            succ: self.succ.clone(),
         }
     }
 
@@ -2334,5 +2417,31 @@ mod tests {
             !machine.fits(&held, &BTreeSet::from([1, 2]), 6),
             "premise: two acting BX values cannot both sit in BX"
         );
+    }
+
+    /// The shortest ways to the next use must be what sweeping every block and
+    /// live value gave where the sweeps settled, on bodies with loops and
+    /// joins.
+    #[test]
+    fn test_next_use_distances_are_what_the_sweeps_settle_on() {
+        use crate::backend::regalloc_input::{Calls, before_phase};
+        let mut compared = 0;
+        for (fixture, function) in
+            [("phiwidth.ll", "_f"), ("trivialphi.ll", "_bench_shellsort"), ("x87crowd.ll", "_deep")]
+        {
+            let (body, _) = before_phase(Calls::C, fixture, function, "486", "SsaSpill");
+            let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
+            let flow = Flow::of(&body, &loops);
+            let (rounds, settled) = flow.distances_by_rounds(&body);
+            assert!(settled, "{fixture}: the sweeps did not settle");
+            for (at, found) in &rounds {
+                for (value, far) in found {
+                    assert_eq!(flow.from_top[at].get(value), Some(far), "{fixture}: value {value} at block {at}");
+                    compared += 1;
+                }
+                assert_eq!(flow.from_top[at].len(), found.len(), "{fixture}: block {at}");
+            }
+        }
+        assert!(compared > 50, "the premise: bodies with values to compare ({compared})");
     }
 }
