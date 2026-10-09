@@ -636,7 +636,7 @@ fn folds(
 }
 
 /// What the simulation of one block decided.
-#[derive(Default)]
+#[derive(Clone, Default, PartialEq)]
 struct Edits {
     /// Values reloaded before the instruction at each position.
     before: IndexMap<usize, Vec<u32>>,
@@ -653,6 +653,8 @@ struct Edits {
     leaves_at_top: Vec<u32>,
     w_in: BTreeSet<u32>,
     w_out: BTreeSet<u32>,
+    /// Values the block reads from memory: stored once where they are made.
+    stored: BTreeSet<u32>,
 }
 
 pub fn spilled(
@@ -844,10 +846,12 @@ fn simulated_in(
     run: &Run,
 ) -> Simulated {
     let weights = Weights { frequency, by_frequency: prices.by_frequency };
+    let memo = Memo::default();
+    let memo = &memo;
     let attempt = |admit: &BTreeSet<i64>| {
         simulated_with(
             body, flow, machine, skip, remakes, order, place, frequency, headers, loops, prices, &weights, bridged,
-            admit,
+            admit, memo,
         )
     };
     let nothing: BTreeSet<i64> = BTreeSet::new();
@@ -917,6 +921,7 @@ fn simulated_with(
     weights: &Weights<'_>,
     bridged: &BTreeSet<(i64, i64)>,
     admit: &BTreeSet<i64>,
+    memo: &Memo,
 ) -> Simulated {
     // A value a loop's back edge must reload each trip is not worth holding at
     // its header.
@@ -930,8 +935,9 @@ fn simulated_with(
     // another phi out.
     let mut memory: BTreeSet<u32> = BTreeSet::new();
     for _ in 0..if MEMORY_PHIS.with(std::cell::Cell::get) { 4 } else { 0 } {
-        let probe =
-            simulated(body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers, admit, &memory);
+        let probe = simulated(
+            body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers, admit, &memory, memo,
+        );
         let more = memory_phis(body, flow, remakes, &probe, machine, skip, weights);
         if more.is_subset(&memory) {
             break;
@@ -939,7 +945,7 @@ fn simulated_with(
         memory.extend(more);
     }
     let mut result =
-        simulated(body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers, admit, &memory);
+        simulated(body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers, admit, &memory, memo);
     // A loop header keeps a value its back edge must reload only while those
     // reloads run at most half as often as reloads at its first uses inside one
     // trip.
@@ -969,8 +975,9 @@ fn simulated_with(
         if !more {
             break;
         }
-        result =
-            simulated(body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers, admit, &memory);
+        result = simulated(
+            body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers, admit, &memory, memo,
+        );
     }
     // Dropping what a loop evicts leaves the loop's registers short of use: a
     // value is let back in where the loop then moves less to and from
@@ -995,8 +1002,9 @@ fn simulated_with(
         for (header, value) in letting {
             let mut trial = dropped.clone();
             trial.get_mut(&header).map(|values| values.remove(&value));
-            let tried =
-                simulated(body, flow, machine, skip, remakes, order, &trial, &room, frequency, headers, admit, &memory);
+            let tried = simulated(
+                body, flow, machine, skip, remakes, order, &trial, &room, frequency, headers, admit, &memory, memo,
+            );
             let moved = traffic(body.bits, &tried, weights, prices, &critical, remakes);
             if moved < best {
                 best = moved;
@@ -1166,9 +1174,9 @@ fn remade(
     Arc::new(made)
 }
 
-#[derive(Default)]
+#[derive(Default, PartialEq)]
 struct Simulated {
-    edits: IndexMap<i64, Edits>,
+    edits: IndexMap<i64, Arc<Edits>>,
     across: IndexMap<(i64, i64), Vec<u32>>,
     left: IndexMap<(i64, i64), Vec<u32>>,
     stored: BTreeSet<u32>,
@@ -1189,7 +1197,12 @@ impl Simulated {
         other: Simulated,
     ) {
         for (at, edit) in other.edits {
-            self.edits.entry(at).or_default().merge(edit);
+            match self.edits.get_mut(&at) {
+                Some(mine) => Arc::make_mut(mine).merge(&edit),
+                None => {
+                    self.edits.insert(at, edit);
+                }
+            }
         }
         for (edge, values) in other.across {
             self.across.entry(edge).or_default().extend(values);
@@ -1209,22 +1222,81 @@ impl Simulated {
 impl Edits {
     fn merge(
         &mut self,
-        other: Edits,
+        other: &Edits,
     ) {
-        for (position, values) in other.before {
-            self.before.entry(position).or_default().extend(values);
+        for (position, values) in &other.before {
+            self.before.entry(*position).or_default().extend(values);
         }
-        self.at_end.extend(other.at_end);
-        for (position, values) in other.folded {
-            self.folded.entry(position).or_default().extend(values);
+        self.at_end.extend(&other.at_end);
+        for (position, values) in &other.folded {
+            self.folded.entry(*position).or_default().extend(values);
         }
-        for (position, values) in other.leaves {
-            self.leaves.entry(position).or_default().extend(values);
+        for (position, values) in &other.leaves {
+            self.leaves.entry(*position).or_default().extend(values);
         }
-        self.leaves_at_end.extend(other.leaves_at_end);
-        self.leaves_at_top.extend(other.leaves_at_top);
-        self.w_in.extend(other.w_in);
-        self.w_out.extend(other.w_out);
+        self.leaves_at_end.extend(&other.leaves_at_end);
+        self.leaves_at_top.extend(&other.leaves_at_top);
+        self.w_in.extend(&other.w_in);
+        self.w_out.extend(&other.w_out);
+        self.stored.extend(&other.stored);
+    }
+}
+
+/// Earlier walks of one file's blocks: a walk that differs from one of them
+/// only at some blocks (a loop entry admitted or dropped) is that walk's up to
+/// the first such block, since a block's edits read only its predecessors' ends
+/// and its own parameters.
+#[derive(Default)]
+struct Memo(RefCell<Vec<Walked>>);
+
+struct Walked {
+    memory: BTreeSet<u32>,
+    dropped: IndexMap<i64, BTreeSet<u32>>,
+    admit: BTreeSet<i64>,
+    edits: IndexMap<i64, Arc<Edits>>,
+}
+
+impl Memo {
+    const KEPT: usize = 8;
+
+    /// The walk to go on from, and the position in `order` of the first block
+    /// whose parameters differ from it.
+    fn nearest(
+        &self,
+        order: &[i64],
+        memory: &BTreeSet<u32>,
+        dropped: &IndexMap<i64, BTreeSet<u32>>,
+        admit: &BTreeSet<i64>,
+    ) -> Option<(IndexMap<i64, Arc<Edits>>, usize)> {
+        let none = BTreeSet::new();
+        self.0
+            .borrow()
+            .iter()
+            .filter(|walked| walked.memory == *memory)
+            .map(|walked| {
+                let at = order
+                    .iter()
+                    .position(|at| {
+                        walked.dropped.get(at).unwrap_or(&none) != dropped.get(at).unwrap_or(&none)
+                            || walked.admit.contains(at) != admit.contains(at)
+                    })
+                    .unwrap_or(order.len());
+                (walked, at)
+            })
+            .max_by_key(|(_, at)| *at)
+            .filter(|(_, at)| *at > 0)
+            .map(|(walked, at)| (walked.edits.clone(), at))
+    }
+
+    fn keep(
+        &self,
+        walked: Walked,
+    ) {
+        let mut all = self.0.borrow_mut();
+        if all.len() == Self::KEPT {
+            all.remove(0);
+        }
+        all.push(walked);
     }
 }
 
@@ -1241,12 +1313,17 @@ fn simulated(
     headers: &BTreeSet<i64>,
     admit: &BTreeSet<i64>,
     memory: &BTreeSet<u32>,
+    memo: &Memo,
 ) -> Simulated {
     let k = machine.general.len();
     let wanted = |value: u32| machine.registered(value) && !skip.contains(&value);
     let shared = shared_slots(body, flow, remakes, &wanted, memory);
-    let mut edits: IndexMap<i64, Edits> = IndexMap::default();
+    let mut edits: IndexMap<i64, Arc<Edits>> = IndexMap::default();
     let mut stored: BTreeSet<u32> = BTreeSet::new();
+    let resume = memo.nearest(order, memory, dropped, admit);
+    let resumed = resume.as_ref().map_or(0, |(_, at)| *at);
+    body.facts.0.bump_by("sim-blocks-walked", order.len() - resumed);
+    body.facts.0.bump_by("sim-blocks-resumed", resumed);
     let mut preds: IndexMap<i64, Vec<i64>> = IndexMap::default();
     for block in &body.blocks {
         for to in &block.succ {
@@ -1260,7 +1337,13 @@ fn simulated(
             made_in.insert(*value, *at);
         }
     }
-    for at in order {
+    for (position, at) in order.iter().enumerate() {
+        if position < resumed {
+            let kept = &resume.as_ref().expect("resumed from a walk").0[at];
+            stored.extend(kept.stored.iter().copied());
+            edits.insert(*at, Arc::clone(kept));
+            continue;
+        }
         let block = by_at[at];
         // What is stored where it is defined, as often as this block runs,
         // costs a store each time it leaves: evicted last.
@@ -1351,7 +1434,7 @@ fn simulated(
             let mut used = used;
             for value in used.clone() {
                 if !held.contains(&value) {
-                    stored.insert(value);
+                    done.stored.insert(value);
                     if remakes.get(&value).is_none_or(|made| remade_cell(made, value).is_some())
                         && done.folded.get(&position).is_none_or(Vec::is_empty)
                         && folds(one, value)
@@ -1451,7 +1534,7 @@ fn simulated(
         for value in &handed {
             if !held.contains(value) {
                 done.at_end.push(*value);
-                stored.insert(*value);
+                done.stored.insert(*value);
                 held.insert(*value);
             }
         }
@@ -1492,7 +1575,8 @@ fn simulated(
         }
         held.retain(|value| flow.live_out[at].contains(value) || handed.contains(value));
         done.w_out = held;
-        edits.insert(*at, done);
+        stored.extend(done.stored.iter().copied());
+        edits.insert(*at, Arc::new(done));
     }
     // Where a successor expects a register the predecessor does not end with,
     // the edge reloads.
@@ -1541,7 +1625,31 @@ fn simulated(
             }
         }
     }
-    Simulated { edits, across, left, stored, memory: memory.clone(), shared, moves }
+    memo.keep(Walked { memory: memory.clone(), dropped: dropped.clone(), admit: admit.clone(), edits: edits.clone() });
+    let result = Simulated { edits, across, left, stored, memory: memory.clone(), shared, moves };
+    if resumed > 0 && llrm_support::env_set("LLRM_CHECK_SIMULATION") {
+        let afresh = simulated(
+            body,
+            flow,
+            machine,
+            skip,
+            remakes,
+            order,
+            dropped,
+            room,
+            frequency,
+            headers,
+            admit,
+            memory,
+            &Memo::default(),
+        );
+        assert!(
+            result == afresh,
+            "{}: the walk resumed at block {resumed} differs from walking every block",
+            body.name
+        );
+    }
+    result
 }
 
 /// The phis of `first` whose results the block does not take into registers,
@@ -1824,7 +1932,7 @@ struct Crossing {
 #[allow(clippy::too_many_arguments)]
 fn written(
     body: &LirBody,
-    edits: &IndexMap<i64, Edits>,
+    edits: &IndexMap<i64, Arc<Edits>>,
     across: &IndexMap<(i64, i64), Vec<u32>>,
     left: &IndexMap<(i64, i64), Vec<u32>>,
     stored: &BTreeSet<u32>,
