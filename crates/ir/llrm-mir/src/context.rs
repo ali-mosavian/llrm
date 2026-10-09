@@ -54,7 +54,7 @@ pub struct Context {
 /// What a layer above MIR keeps in the context, one value per type, dropped with it: LLVMContext's uniqued tables (an
 /// analysis's interned objects live and die with the module, not in a global).
 #[derive(Clone, Default)]
-struct Extensions(std::cell::RefCell<std::collections::HashMap<std::any::TypeId, std::rc::Rc<dyn std::any::Any>>>);
+struct Extensions(std::cell::RefCell<crate::hash::HashMap<std::any::TypeId, std::rc::Rc<dyn std::any::Any>>>);
 
 impl std::fmt::Debug for Extensions {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
