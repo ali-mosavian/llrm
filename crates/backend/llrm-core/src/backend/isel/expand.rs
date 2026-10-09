@@ -4,23 +4,6 @@
 //! arithmetic and the same for every target; the target maps each half to a
 //! form (x86's `add` then `adc`).
 
-/// The operations whose halves are independent or chained by a carry.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Kind {
-    Add,
-    Sub,
-    And,
-    Or,
-    Xor,
-}
-
-impl Kind {
-    /// Whether a half is computed from the carry of the half below it.
-    pub fn carries(self) -> bool {
-        matches!(self, Self::Add | Self::Sub)
-    }
-}
-
 /// One half of an expanded operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Half {
@@ -30,18 +13,19 @@ pub struct Half {
     pub carried: bool,
 }
 
-/// The halves of `kind` on `bits`-wide integers where `legal` is the widest
-/// native width, low first: none where `bits` is native or not a whole number
-/// of halves.
+/// The halves of an operation on `bits`-wide integers where `legal` is the
+/// widest native width, low first, each above the lowest taking the carry
+/// (borrow) of the one below where `chained` (an add or a subtraction): none
+/// where `bits` is native or not a whole number of halves.
 pub fn expand_wide(
-    kind: Kind,
+    chained: bool,
     bits: u32,
     legal: u32,
 ) -> Vec<Half> {
     if legal == 0 || bits <= legal || bits % legal != 0 {
         return Vec::new();
     }
-    (0..(bits / legal) as usize).map(|index| Half { index, carried: kind.carries() && index > 0 }).collect()
+    (0..(bits / legal) as usize).map(|index| Half { index, carried: chained && index > 0 }).collect()
 }
 
 #[cfg(test)]
@@ -53,12 +37,12 @@ mod tests {
     /// and only an add or a subtraction chains a carry.
     #[test]
     fn a_wide_operation_is_as_many_halves_as_the_native_width_goes_into_it() {
-        let halves = |kind, bits, legal| expand_wide(kind, bits, legal).len();
-        assert_eq!((halves(Kind::Add, 64, 32), halves(Kind::Add, 32, 16), halves(Kind::Add, 128, 64)), (2, 2, 2));
-        assert_eq!(halves(Kind::Xor, 128, 32), 4);
-        assert_eq!((halves(Kind::Add, 32, 32), halves(Kind::Add, 8, 32), halves(Kind::Add, 48, 32)), (0, 0, 0));
-        let chain = expand_wide(Kind::Sub, 128, 32);
+        let halves = |chained, bits, legal| expand_wide(chained, bits, legal).len();
+        assert_eq!((halves(true, 64, 32), halves(true, 32, 16), halves(true, 128, 64)), (2, 2, 2));
+        assert_eq!(halves(false, 128, 32), 4);
+        assert_eq!((halves(true, 32, 32), halves(true, 8, 32), halves(true, 48, 32)), (0, 0, 0));
+        let chain = expand_wide(true, 128, 32);
         assert_eq!(chain.iter().map(|half| half.carried).collect::<Vec<_>>(), [false, true, true, true]);
-        assert!(expand_wide(Kind::And, 64, 32).iter().all(|half| !half.carried));
+        assert!(expand_wide(false, 64, 32).iter().all(|half| !half.carried));
     }
 }

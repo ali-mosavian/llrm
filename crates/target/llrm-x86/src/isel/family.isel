@@ -17,6 +17,8 @@
 #     let NAME = CONSTRUCTOR(..)      made in order, as written
 #     emit X86 DEST, .. <- SOURCE, .. [volatile]
 #     call HOOK(..)   selected by hand, in matcher.rs
+#     chain FIRST REST <- a, b   an operation on an integer wider than the native one, as its halves: FIRST for the
+#                     lowest, REST for each above it (the same form, or the one that takes the carry)
 #     refuse "why" | refuse mnemonic
 #     nothing
 #   end
@@ -99,6 +101,33 @@ end
 pattern wide_cast_from
   match cast(_.i64)
   call wide_cast
+end
+
+# An i64 as its halves, low first (isel/expand.rs): the first form for the lowest, the second for each above it,
+# which takes the carry of the half below.
+pattern wide_add
+  match add.i64(a, b)
+  chain add adc <- a, b
+end
+
+pattern wide_sub
+  match sub.i64(a, b)
+  chain sub sbb <- a, b
+end
+
+pattern wide_and
+  match and.i64(a, b)
+  chain and and <- a, b
+end
+
+pattern wide_or
+  match or.i64(a, b)
+  chain or or <- a, b
+end
+
+pattern wide_xor
+  match xor.i64(a, b)
+  chain xor xor <- a, b
 end
 
 pattern wide_binary
