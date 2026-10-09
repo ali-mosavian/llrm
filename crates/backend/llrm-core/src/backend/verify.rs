@@ -210,8 +210,9 @@ fn _operands(body: &LirBody) -> Vec<String> {
                 let Loc::Reg(reg) = r#where else {
                     continue;
                 };
-                // The x87 stack is not a register class the target lists.
-                if reg.st_index().is_some() {
+                // A position in a stack is not a register the target's tables
+                // list.
+                if target::positional(reg.register) {
                     continue;
                 }
                 let register = reg.register as u32;

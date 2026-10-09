@@ -49,7 +49,8 @@ fn _integer_loads(
                     && what.dests.len() == 1
                     && matches!(what.sources[0], Loc::Held(_) | Loc::Imm(_))
                     && width_of(&what.sources[0]).is_some_and(|width| width == 2 || width == 4)
-                    && (matches!(what.dests[0], Loc::Held(_)) || what.dests[0].st_index().is_some())
+                    && (matches!(what.dests[0], Loc::Held(_))
+                        || crate::backend::target::positional_place(&what.dests[0]))
                 {
                     if let Loc::Imm(Imm { value: value @ (0 | 1), .. }) = what.sources[0] {
                         let mut made = (*one).clone();
