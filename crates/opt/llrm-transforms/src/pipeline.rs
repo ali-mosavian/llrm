@@ -378,6 +378,18 @@ fn rerun(module: &mut Module, analyses: &mut ModuleAnalyses, id: GlobalId, fixed
     Ok(())
 }
 
+/// Our 19 passes at gcc -O2's positions, each as often as passes.def runs its counterpart there: early (sra, ccp, forwprop, cddce,
+/// tailr), the main scalar chain (ccp, forwprop, sra, vrp/thread, fre, dce, phiopt/copyprop, reassoc, pre), the loop chain (lim, unswitch,
+/// ivcanon, cunroll, ivopts-side cleanups), and the cleanup after it (ccp, fre, dse, dce); `ports` and `inferspace` where the passes that
+/// ask need them.
+const SCHEDULE: &[&str] = &[
+    "ports", "sroa", "fold", "algebraic", "dead", "tailrec", "inferspace",
+    "fold", "algebraic", "sroa", "decide", "gvn", "dead", "promote", "algebraic", "gvn", "dse", "dead",
+    "loopsimplify", "lcssa", "floatloop", "hoist", "loopmotion", "trivialunswitch", "indvars", "unroll",
+    "fold", "gvn", "dse", "algebraic", "decide", "dead",
+    "peel", "fold", "dead", "fill", "merge",
+];
+
 /// The pipeline over one body, the old `_Transaction`: the structural
 /// passes at its boundaries, the scalar ones to a fixed point with
 /// unrolling after each round, peeling once that settles, then
@@ -420,7 +432,30 @@ impl Fixed {
         Self { boundary, passes, unrollers, peelers, last, unswitch, only: only.is_some(), dump: applied.dump.clone(), runs: 0 }
     }
 
+    /// An experiment (LLRM_SCHEDULE=gcc): one pass through `SCHEDULE`, each pass at fixed positions as gcc's passes.def has them, no rounds.
+    fn scheduled(&mut self, unit: &mut Unit, analyses: &mut Analyses, run: &mut Run) {
+        self.scalarized(unit, analyses, run, "s");
+        let listed = std::env::var("LLRM_SCHEDULE_LIST").ok();
+        let names: Vec<&str> = listed.as_deref().map_or_else(|| SCHEDULE.to_vec(), |list| list.split(',').collect());
+        for (at, name) in names.iter().enumerate() {
+            let stage = format!("s{at:02}-{name}");
+            let changed = if let Some(one) = self.passes.iter_mut().chain(&mut self.unrollers).chain(&mut self.peelers).chain(&mut self.last).find(|one| one.name() == *name) {
+                run.step(&mut **one, &stage, unit, analyses)
+            } else {
+                false
+            };
+            if changed && matches!(*name, "unroll" | "peel") {
+                self.scalarized(unit, analyses, run, &format!("s{at:02}"));
+            }
+        }
+        run.settled(unit, analyses);
+    }
+
     fn transacted(&mut self, unit: &mut Unit, analyses: &mut Analyses, run: &mut Run) -> Result<(), String> {
+        if std::env::var_os("LLRM_SCHEDULE").is_some_and(|one| one == "gcc") {
+            self.scheduled(unit, analyses, run);
+            return Ok(());
+        }
         self.scalarized(unit, analyses, run, "r01");
         if self.only && !self.boundary.is_empty() {
             return Ok(run.settled(unit, analyses));
