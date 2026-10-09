@@ -1356,7 +1356,7 @@ b0:
 /// naming an addressed one; and every entry without provenance.
 pub struct Index<'a, T> {
     entries: Vec<(T, &'a MemRef)>,
-    by_object: std::collections::HashMap<crate::memory::ObjectRef, Vec<usize>>,
+    by_object: llrm_support::hash::HashMap<crate::memory::ObjectRef, Vec<usize>>,
     addressed: Vec<usize>,
     loose: Vec<usize>,
 }
