@@ -35,7 +35,16 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 CACHE = Path(os.environ.get("LLRM_MEASURE_DIR") or Path.home() / ".cache/llrm/measure")
-BUILD = Path(os.environ.get("LLRM_MEASURE_BUILD") or Path.home() / ".cache/llrm/measure-build")
+
+
+def build_tree(root: Path = ROOT, env: dict | None = None) -> Path:
+    """Where the base is built: `LLRM_MEASURE_BUILD`, else a tree of this repository's own. Two clones share a tree no `git checkout` of
+    the other's commit can enter ('unable to read tree'), so each is keyed by the path of its working tree."""
+    env = os.environ if env is None else env
+    return Path(env.get("LLRM_MEASURE_BUILD") or Path.home() / ".cache/llrm/measure-build" / hashlib.sha256(str(root).encode()).hexdigest()[:10])
+
+
+BUILD = build_tree()
 VSGCC = next((ROOT / "crates/target").glob("*/vsgcc"))
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(VSGCC))
@@ -77,6 +86,7 @@ def measure_all(jobs: int) -> dict:
     passes = scaling_gate.measure_passes(jobs)
     return {
         "method": method(),
+        "binary": {"path": str(compiler), "sha": hashlib.sha256(compiler.read_bytes()).hexdigest()[:12]},
         "compile": compile_cost.measure(compiler, jobs),
         "axes": {k: list(v) for k, v in scaling_gate.measure(jobs).items()},
         "passes": {k: [round(v, 3) for v in got] for k, got in passes.items()},
@@ -115,14 +125,29 @@ def base_of(head: str, ref: str = "origin/main") -> str:
     return git("rev-parse", f"{head}^1") if base == git("rev-parse", head) else base
 
 
+def checked_out(sha: str, tree: Path, source: Path = ROOT) -> Path:
+    """`sha` checked out in `tree`, a clone of `source` that measure.py owns (made once, never a worktree of anyone's repository): the
+    commit is fetched from `source`, then from `source`'s own origin, so one that exists only on the remote is built too."""
+    if not (tree / ".git").exists():
+        tree.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "clone", "--quiet", "--no-checkout", str(source), str(tree)], check=True)
+        origin = subprocess.run(["git", "remote", "get-url", "origin"], cwd=source, capture_output=True, text=True)
+        if origin.returncode == 0:
+            git("remote", "add", "upstream", origin.stdout.strip(), cwd=tree)
+    if subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=tree, capture_output=True).returncode:
+        for remote in ("origin", "upstream"):
+            if subprocess.run(["git", "fetch", "--quiet", remote, sha], cwd=tree, capture_output=True).returncode == 0:
+                break
+        else:
+            raise SystemExit(f"measure: {sha[:9]} is in neither {source} nor its origin")
+    git("checkout", "--quiet", "--detach", "--force", sha, cwd=tree)
+    return tree
+
+
 def built(sha: str) -> Path:
     """`sha` built in a tree and target directory of its own (reused, so each build is an increment); its release directory."""
-    tree = BUILD / "tree"
     BUILD.mkdir(parents=True, exist_ok=True)
-    if not tree.is_dir():
-        git("worktree", "add", "--detach", str(tree), sha)
-    else:
-        git("checkout", "--detach", "--force", sha, cwd=tree)
+    tree = checked_out(sha, BUILD / "tree")
     env = {**os.environ, "CARGO_TARGET_DIR": str(BUILD / "target")}
     env.pop("LLRM_BIN", None)
     done = subprocess.run(["bash", "-c", gate.BUILD], cwd=tree, env=env, capture_output=True, text=True)
@@ -192,13 +217,19 @@ def second(half: float, small: float, big: float) -> float:
     return big - 3 * small + 2 * half
 
 
+def superlinear(half: float, small: float, big: float) -> float:
+    """`second` where it is above nothing: a sublinear cost (a ramp that flattens, a cap) has a negative one, which is no credit a later
+    superlinear term may spend. A base that was concave and is now linear has not got worse; one that was linear and grows N^2 has."""
+    return max(0.0, second(half, small, big))
+
+
 def axis_rises(base: dict[str, list[int]], now: dict[str, list[int]], tol: dict) -> tuple[list[str], list[str]]:
     """Per axis and level: the second difference may not rise by more than `excess` of the base's cost at 2N, nor the cost at 2N by `worst`."""
     lines, bad = [], []
     for key in sorted(base.keys() & now.keys()):
         (half, small, big), (was_half, was_small, was_big) = now[key], base[key]
-        more = second(half, small, big) - second(was_half, was_small, was_big)
-        lines.append(f"{key}: second difference {second(half, small, big) / was_big:+.4f} of the base's 2N (base {second(was_half, was_small, was_big) / was_big:+.4f}), 2N x{big / was_big:.4f}")
+        more = superlinear(half, small, big) - superlinear(was_half, was_small, was_big)
+        lines.append(f"{key}: second difference {second(half, small, big) / was_big:+.4f} of the base's 2N (base {second(was_half, was_small, was_big) / was_big:+.4f}), 2N x{big / was_big:.4f} ({half}/{small}/{big} against {was_half}/{was_small}/{was_big})")
         if more > tol["excess"] * was_big:
             bad.append(f"{key}: superlinear work grew by {more / was_big:.4f} of the base's cost at 2N (> {tol['excess']}): a step is superlinear where it was not")
         if big > was_big * tol["worst"]:
@@ -215,10 +246,11 @@ def step_rises(base: dict[str, list[float]], now: dict[str, list[float]], tol: d
         if big < tol["high"] * whole:
             continue
         was_half, was_small, was_big, _ = base.get(key, [half, small, big, whole])
-        more = second(half, small, big) - (second(was_half, was_small, was_big) if key in base else 0.0)
+        more = superlinear(half, small, big) - (superlinear(was_half, was_small, was_big) if key in base else 0.0)
         if more > tol["step_excess"] * whole or (key in base and big > was_big * tol["pass_slack"]):
-            lines.append(f"{key}: second difference {second(half, small, big):.1f} Minstr (base {second(was_half, was_small, was_big) if key in base else 0.0:.1f}), 2N x{big / was_big:.3f}")
-            bad.append(f"{key}: superlinear work {second(half, small, big):.1f} Minstr rose by {more / whole:.4f} of the compile (> {tol['step_excess']}), or 2N x{big / was_big:.3f}")
+            shown = f"{half}/{small}/{big} against {was_half}/{was_small}/{was_big}"
+            lines.append(f"{key}: second difference {second(half, small, big):.1f} Minstr (base {second(was_half, was_small, was_big) if key in base else 0.0:.1f}), 2N x{big / was_big:.3f} ({shown})")
+            bad.append(f"{key}: superlinear work {second(half, small, big):.1f} Minstr rose by {more / whole:.4f} of the compile (> {tol['step_excess']}), or 2N x{big / was_big:.3f} ({shown})")
     return lines, bad
 
 
@@ -294,7 +326,7 @@ def check(jobs: int, ref: str) -> int:
         print(f"SKIPPED: instruction counter unavailable ({why})")
         return 77
     lines, bad = rises(base, now)
-    print(f"measured against {base_sha[:9]}")
+    print(f"measured {now['binary']['path']} ({now['binary']['sha']}) against {base_sha[:9]}")
     print("\n".join(lines))
     # A commit of the reference branch is a base for the next branches; a branch's own head is not.
     if not git("status", "--porcelain", "--untracked-files=no") and stored(head, now["method"]) is None and subprocess.run(["git", "merge-base", "--is-ancestor", head, ref], cwd=ROOT).returncode == 0:
@@ -306,15 +338,31 @@ def check(jobs: int, ref: str) -> int:
     return 0
 
 
+def compare(base_sha: str, sha: str) -> int:
+    """`check` over two stored measurements of the current method: the same lines and verdict, nothing measured. A reading that
+    disagrees with a fresh `show` is then a disagreement of the measurements, not of the comparison."""
+    which = method()
+    base, now = (stored(git("rev-parse", one), which) for one in (base_sha, sha))
+    if base is None or now is None:
+        print(f"no stored measurement of {base_sha if base is None else sha} by this method ({which})")
+        return 2
+    lines, bad = rises(base, now)
+    print("\n".join(lines))
+    print(*(["COMPILE COST RISE:", *bad] if bad else ["no rise past tolerance"]), sep="\n  ")
+    return 1 if bad else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=["check", "record", "show", "creep"])
-    parser.add_argument("rest", nargs="*", help="record: SHA [BIN]")
+    parser.add_argument("command", choices=["check", "record", "show", "creep", "compare"])
+    parser.add_argument("rest", nargs="*", help="record: SHA [BIN]; compare: BASE_SHA SHA, two stored measurements, nothing measured")
     parser.add_argument("--base", default=os.environ.get("LLRM_MEASURE_REF", "origin/main"), help="check: the branch the merge-base is taken with")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "4")))
     args = parser.parse_args()
     if args.command == "check":
         return check(args.jobs, args.base)
+    if args.command == "compare":
+        return compare(*args.rest)
     if args.command == "creep":
         return creep(args.jobs, args.rest[0] if args.rest else "HEAD")
     if args.command == "record":
