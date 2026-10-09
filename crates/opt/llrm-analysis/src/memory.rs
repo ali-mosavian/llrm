@@ -751,6 +751,9 @@ pub struct Unit<'a> {
     /// The allocas whose address is exposed, the manager's `ExposedFrames`;
     /// without it each ask scans the alloca's uses.
     pub exposed: Option<&'a BTreeSet<ValueId>>,
+    /// The pointer value solve of this body, the manager's `PointerValues`;
+    /// without it each `points_to` makes its own.
+    pub point_values: Option<&'a crate::alias::PointValues>,
 }
 
 impl<'a> Unit<'a> {
@@ -801,6 +804,7 @@ impl<'a> Unit<'a> {
             edges: None,
             bounds: None,
             exposed: None,
+            point_values: None,
         }
     }
 
@@ -809,6 +813,13 @@ impl<'a> Unit<'a> {
         spaces: llrm_mir::spaces::Spaces,
     ) -> Self {
         Self { spaces, ..self }
+    }
+
+    pub fn with_point_values(
+        self,
+        point_values: &'a crate::alias::PointValues,
+    ) -> Self {
+        Self { point_values: Some(point_values), ..self }
     }
 
     pub fn with_exposed(
