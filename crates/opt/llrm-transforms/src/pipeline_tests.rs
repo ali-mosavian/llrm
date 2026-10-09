@@ -578,3 +578,40 @@ b:
     .unwrap();
     assert_eq!(llrm_mir::print::module(&module).matches("call i16 @mix").count(), 3);
 }
+
+/// gcc states what a function's callers pass as a range on its parameters at -O2 and up (`-fipa-vrp`). -O1 ran it too,
+/// 1.0% of the compile of bench and QCport for no change in size to within 0.2% of four files.
+#[test]
+fn test_o1_states_no_ranges_from_the_callers_arguments_and_o2_does() {
+    let text = "define internal i16 @pick(i16 %x) {
+b:
+  %small = icmp ult i16 %x, 10
+  %r = select i1 %small, i16 %x, i16 7
+  ret i16 %r
+}
+
+define i16 @main() {
+b:
+  %a = call i16 @pick(i16 3)
+  %c = call i16 @pick(i16 4)
+  %s = add i16 %a, %c
+  ret i16 %s
+}
+";
+    let ranged = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let options = pipeline::Options { inline: crate::inline::Threshold::none(), ..options };
+        let applied = Applied { options, ..Applied::default() };
+        let entered = |program: &mut Program| {
+            program.exports.entries.insert("main".to_owned());
+            pipeline::applied(program, &applied)
+        };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), entered)
+            .and_then(|done| done)
+            .unwrap();
+        crate::testing::printed(&module).contains("range(")
+    };
+    assert!(!pipeline::Options::basic().ipa_ranges && pipeline::Options::standard().ipa_ranges);
+    assert!(ranged(pipeline::Options::standard()), "premise: -O2 states the range");
+    assert!(!ranged(pipeline::Options::basic()), "-O1 stated a range from the callers' arguments");
+}
