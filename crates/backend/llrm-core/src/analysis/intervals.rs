@@ -5,7 +5,6 @@
 //! where it writes.
 
 use std::collections::BTreeSet;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::analysis::frequency::Frequency;
@@ -13,7 +12,7 @@ use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::analysis::loops as loopy;
 use crate::backend::allocate;
-use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::model::lir::{Insn, Insns, LirBlock, LirBody};
 
 pub const DEF: i64 = 1;
 pub const PER_INSN: i64 = 2;
@@ -138,89 +137,88 @@ pub fn indexed(body: &LirBody) -> Indexes {
     Indexes { at, span, order: body.blocks.iter().map(|block| block.at).collect() }
 }
 
-thread_local! {
-    static NUMBERED: std::cell::RefCell<Option<(Vec<Arc<Insn>>, Vec<(i64, usize)>, Rc<Indexes>)>> = const { std::cell::RefCell::new(None) };
-    static INDEXED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+/// The numberings made, most recent first, each with the blocks' instructions it was of (held): the bodies a function's allocator
+/// alternates among each find theirs.
+#[derive(Default)]
+struct Numbered(Vec<(Vec<(i64, Insns)>, Arc<Indexes>)>);
+
+/// How many times this body's facts have numbered it for `indexed_shared`, for a test that asking again of one body does not.
+pub fn numbered(body: &LirBody) -> usize {
+    body.facts.0.counted("indexed")
 }
 
-/// How many times this thread has numbered a body for `indexed_shared`, for a test that asking again of one body
-/// does not.
-pub fn numbered() -> usize {
-    INDEXED.with(std::cell::Cell::get)
+/// `indexed(body)`, remembered for the next ask of the same instructions (block by block, by identity, in the same order).
+pub fn indexed_shared(body: &LirBody) -> Arc<Indexes> {
+    let kept = body.facts.0.stash(|held: &mut Numbered| {
+        let at = held.0.iter().position(|(blocks, _)| blocks.len() == body.blocks.len() && blocks.iter().zip(&body.blocks).all(|((at, insns), block)| *at == block.at && insns.same_insns(&block.insns)))?;
+        let found = held.0.remove(at);
+        let index = Arc::clone(&found.1);
+        held.0.insert(0, found);
+        Some(index)
+    });
+    if let Some(found) = kept {
+        return found;
+    }
+    body.facts.0.bump("indexed");
+    let found = Arc::new(indexed(body));
+    body.facts.0.stash(|held: &mut Numbered| {
+        held.0.insert(0, (body.blocks.iter().map(|block| (block.at, block.insns.clone())).collect(), Arc::clone(&found)));
+        held.0.truncate(REMEMBERED);
+    });
+    found
 }
 
-/// `indexed(body)`, remembered for the next ask of the same instructions (by identity, in the same blocks).
-pub fn indexed_shared(body: &LirBody) -> Rc<Indexes> {
-    NUMBERED.with(|held| {
-        let mut held = held.borrow_mut();
-        if let Some((insns, blocks, found)) = held.as_ref() {
-            let same = blocks.len() == body.blocks.len()
-                && blocks.iter().zip(&body.blocks).all(|((at, count), block)| *at == block.at && *count == block.insns.len())
-                && insns.iter().zip(body.blocks.iter().flat_map(|block| block.insns.iter())).all(|(held, one)| Arc::ptr_eq(held, one));
-            if same {
-                return Rc::clone(found);
-            }
-        }
-        INDEXED.with(|count| count.set(count.get() + 1));
-        let found = Rc::new(indexed(body));
-        *held = Some((body.blocks.iter().flat_map(|block| block.insns.iter().cloned()).collect(), body.blocks.iter().map(|block| (block.at, block.insns.len())).collect(), Rc::clone(&found)));
-        found
-    })
-}
-
-/// What an answer of `intervals_over` was made of: the body's instructions by identity (held, so
-/// that an address is not reused while it is remembered), its blocks and phis, and what its
+/// What an answer of `intervals_over` was made of: the body's blocks, each by the instructions it held (shared, so that an address is
+/// not reused while it is remembered, and a block that is the same allocation needs no looking at), its phis, and what its
 /// frequencies read.
 struct Remembered {
     entry: i64,
-    blocks: Vec<(i64, Vec<i64>, Vec<crate::model::lir::Phi>, usize)>,
-    insns: Vec<Arc<Insn>>,
+    blocks: Vec<(i64, Vec<i64>, Vec<crate::model::lir::Phi>, Insns)>,
+    count: usize,
     odds: crate::model::lir::BlockOdds,
     trips: Vec<(i64, i64)>,
-    answer: Rc<IndexMap<u32, Interval>>,
+    answer: Arc<IndexMap<u32, Interval>>,
     /// The body's numbering, and what each value's references weigh before they are divided by its size.
-    index: Rc<Indexes>,
-    totals: Rc<IndexMap<u32, f64>>,
+    index: Arc<Indexes>,
+    totals: Arc<IndexMap<u32, f64>>,
 }
 
 impl Remembered {
-    fn of(body: &LirBody, answer: &Rc<IndexMap<u32, Interval>>, index: &Indexes, totals: IndexMap<u32, f64>) -> Self {
+    fn of(body: &LirBody, answer: &Arc<IndexMap<u32, Interval>>, index: &Arc<Indexes>, totals: IndexMap<u32, f64>) -> Self {
         Self {
             entry: body.entry,
-            blocks: body.blocks.iter().map(|block| (block.at, block.succ.clone(), block.phis.clone(), block.insns.len())).collect(),
-            insns: body.blocks.iter().flat_map(|block| block.insns.iter().cloned()).collect(),
+            blocks: body.blocks.iter().map(|block| (block.at, block.succ.clone(), block.phis.clone(), block.insns.clone())).collect(),
+            count: body.blocks.iter().map(|block| block.insns.len()).sum(),
             odds: body.odds.clone(),
             trips: body.loop_trip_counts.clone(),
-            answer: Rc::clone(answer),
-            index: Rc::new(index.clone()),
-            totals: Rc::new(totals),
+            answer: Arc::clone(answer),
+            index: Arc::clone(index),
+            totals: Arc::new(totals),
         }
     }
 
     fn is_of(&self, body: &LirBody) -> bool {
         self.entry == body.entry
             && self.blocks.len() == body.blocks.len()
-            && self.blocks.iter().zip(&body.blocks).all(|((at, succ, phis, count), block)| *at == block.at && *count == block.insns.len() && *succ == block.succ && *phis == block.phis)
-            && self.insns.iter().zip(body.blocks.iter().flat_map(|block| block.insns.iter())).all(|(held, one)| Arc::ptr_eq(held, one))
+            && self.blocks.iter().zip(&body.blocks).all(|((at, succ, phis, insns), block)| *at == block.at && *succ == block.succ && *phis == block.phis && insns.same_insns(&block.insns))
             && self.odds == body.odds
             && self.trips == body.loop_trip_counts
     }
 }
 
-thread_local! {
-    static EDITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static RECENT: std::cell::RefCell<Vec<Remembered>> = const { std::cell::RefCell::new(Vec::new()) };
-    static WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+/// The answers remembered for this function's bodies, most recent first: the allocator's rewrites and its trial candidates alternate
+/// among a few, and they share the manager, so each is found by its blocks whichever asked last.
+#[derive(Default)]
+struct Recent(Vec<Arc<Remembered>>);
+
+/// How many times this body's facts have worked out intervals, for a test that asking again of one body does not.
+pub fn worked(body: &LirBody) -> usize {
+    body.facts.0.counted("intervals-worked")
 }
 
-/// How many times this thread has worked out intervals, for a test that asking again of one body does not.
-pub fn worked() -> usize {
-    WORKED.with(std::cell::Cell::get)
-}
-
-/// How many answers this thread has made by editing an earlier one, for a test that a body made of another's instructions is.
-pub fn edited() -> usize {
-    EDITED.with(std::cell::Cell::get)
+/// How many answers this body's facts have made by editing an earlier one, for a test that a body made of another's instructions is.
+pub fn edited(body: &LirBody) -> usize {
+    body.facts.0.counted("intervals-edited")
 }
 
 /// `intervals` worked out from the body alone, whatever is remembered: what an edited answer is held to.
@@ -250,19 +248,18 @@ pub fn intervals_over(body: &LirBody, index: Option<&Indexes>, busy: &Frequency)
 }
 
 /// `intervals`, the remembered answer itself: for a caller that only reads it, which would copy every interval of the body to do so.
-pub fn intervals_shared(body: &LirBody, index: Option<&Indexes>) -> Rc<IndexMap<u32, Interval>> {
+pub fn intervals_shared(body: &LirBody, index: Option<&Indexes>) -> Arc<IndexMap<u32, Interval>> {
     intervals_shared_over(body, index, &Frequency::of(body))
 }
 
 /// `intervals_over` without the copy.
-pub fn intervals_shared_over(body: &LirBody, index: Option<&Indexes>, busy: &Frequency) -> Rc<IndexMap<u32, Interval>> {
-    if let Some(found) = RECENT.with(|recent| {
-        let mut recent = recent.borrow_mut();
-        let at = recent.iter().position(|held| held.is_of(body))?;
+pub fn intervals_shared_over(body: &LirBody, index: Option<&Indexes>, busy: &Frequency) -> Arc<IndexMap<u32, Interval>> {
+    if let Some(found) = body.facts.0.stash(|recent: &mut Recent| {
+        let at = recent.0.iter().position(|held| held.is_of(body))?;
         // Most recent first.
-        let held = recent.remove(at);
-        let answer = Rc::clone(&held.answer);
-        recent.insert(0, held);
+        let held = recent.0.remove(at);
+        let answer = Arc::clone(&held.answer);
+        recent.0.insert(0, held);
         Some(answer)
     }) {
         if std::env::var_os("LLRM_CHECK_INTERVALS").is_some() {
@@ -272,21 +269,23 @@ pub fn intervals_shared_over(body: &LirBody, index: Option<&Indexes>, busy: &Fre
         return found;
     }
     llrm_support::debug::counted("intervals remembered", false);
-    let owned;
-    let index = match index {
+    let numbered;
+    let index: &Indexes = match index {
         Some(index) => index,
         None => {
-            owned = indexed(body);
-            &owned
+            numbered = indexed_shared(body);
+            &numbered
         }
     };
+    let shared_index = index_is_numbered(body, index);
     // A body made of the last one's instructions and a few others: its answer is that one's, moved to the new slots, and
     // worked out again only for the values the others name (LLVM's `LiveIntervals` edited across a spill).
-    let edited = RECENT.with(|recent| recent.borrow().first().and_then(|held| updated(held, body, index, busy)));
+    let latest = body.facts.0.stash(|recent: &mut Recent| recent.0.first().cloned());
+    let edited = latest.and_then(|held| updated(&held, body, index, busy));
     let (answer, totals) = match edited {
         Some(found) => {
             llrm_support::debug::counted("intervals edited", true);
-            EDITED.with(|count| count.set(count.get() + 1));
+            body.facts.0.bump("intervals-edited");
             if std::env::var_os("LLRM_CHECK_INTERVALS").is_some() {
                 let whole = worked_out(body, Some(index), busy);
                 if found.0 != whole {
@@ -310,13 +309,18 @@ pub fn intervals_shared_over(body: &LirBody, index: Option<&Indexes>, busy: &Fre
             llrm_support::debug::timed("intervals worked out", || worked_out_with_totals(body, index, busy, &|_| true))
         }
     };
-    let answer = Rc::new(answer);
-    RECENT.with(|recent| {
-        let mut recent = recent.borrow_mut();
-        recent.insert(0, Remembered::of(body, &answer, index, totals));
-        recent.truncate(REMEMBERED);
+    let answer = Arc::new(answer);
+    let remembered = Arc::new(Remembered::of(body, &answer, &shared_index.unwrap_or_else(|| Arc::new(index.clone())), totals));
+    body.facts.0.stash(|recent: &mut Recent| {
+        recent.0.insert(0, remembered);
+        recent.0.truncate(REMEMBERED);
     });
     answer
+}
+
+/// The numbering `indexed_shared` holds for `body`, if `index` is it: kept as it is, not copied.
+fn index_is_numbered(body: &LirBody, index: &Indexes) -> Option<Arc<Indexes>> {
+    body.facts.0.stash(|held: &mut Numbered| held.0.iter().find(|(_, found)| std::ptr::eq(&**found, index)).map(|(_, found)| Arc::clone(found)))
 }
 
 /// The answer for `body` made from `held`'s, where `body` keeps most of the instructions `held` had: those it keeps are
@@ -330,8 +334,10 @@ fn updated(held: &Remembered, body: &LirBody, index: &Indexes, busy: &Frequency)
     if !same_blocks {
         return None;
     }
-    // The values the instructions that are not in both name, and those of the parallel copy each is in: a copy's moves are
-    // all read and written at its last, which a change to any of them moves.
+    // A block that is the same instructions needs no looking at: it is where it was, shifted. The others are compared by
+    // instruction, for the values the instructions that are not in both name, and those of the parallel copy each is in: a copy's
+    // moves are all read and written at its last, which a change to any of them moves.
+    let differing: Vec<usize> = (0..body.blocks.len()).filter(|at| !held.blocks[*at].3.same_insns(&body.blocks[*at].insns)).collect();
     let mut touched: crate::support::hash::HashSet<u32> = Default::default();
     let mut changed = 0;
     let mut names = |run: &[&Arc<Insn>], gone: &dyn Fn(&Arc<Insn>) -> bool| {
@@ -353,33 +359,31 @@ fn updated(held: &Remembered, body: &LirBody, index: &Indexes, busy: &Frequency)
             start = end;
         }
     };
-    let mut at = 0;
-    for (_, _, _, count) in &held.blocks {
-        let run: Vec<&Arc<Insn>> = held.insns[at..at + count].iter().collect();
+    for at in &differing {
+        let run: Vec<&Arc<Insn>> = held.blocks[*at].3.iter().collect();
         names(&run, &|one| !index.at.contains_key(&key(one)));
-        at += count;
-    }
-    for block in &body.blocks {
-        let run: Vec<&Arc<Insn>> = block.insns.iter().collect();
+        let run: Vec<&Arc<Insn>> = body.blocks[*at].insns.iter().collect();
         names(&run, &|one| !held.index.at.contains_key(&key(one)));
     }
-    if changed * 4 > held.insns.len() + 16 || touched.len() * 3 > held.answer.len() + 16 {
+    if changed * 4 > held.count + 16 || touched.len() * 3 > held.answer.len() + 16 {
         return None;
     }
-    // Where each slot of the old numbering is in the new one: the block tops, and each instruction both have.
+    // Where each slot of the old numbering is in the new one: the block tops, which carry the instructions of the blocks that are
+    // the same (each is where it was, relative to its top), and each instruction both have in the others.
     let (mut old, mut new): (Vec<i64>, Vec<i64>) = (Vec::new(), Vec::new());
     let mut tops: crate::support::hash::HashMap<i64, i64> = Default::default();
-    let mut insns = held.insns.iter();
-    for ((at, _, _, count), block) in held.blocks.iter().zip(&body.blocks) {
+    for (position, ((at, _, _, insns), block)) in held.blocks.iter().zip(&body.blocks).enumerate() {
         let (before, now) = (held.index.span[at], index.span[&block.at]);
         old.push(before.0);
         new.push(now.0);
         tops.insert(before.0, now.0);
         tops.insert(before.1, now.1);
-        for one in insns.by_ref().take(*count) {
-            if let Some(slot) = index.at.get(&key(one)) {
-                old.push(held.index.at[&key(one)]);
-                new.push(*slot);
+        if differing.binary_search(&position).is_ok() {
+            for one in insns.iter() {
+                if let Some(slot) = index.at.get(&key(one)) {
+                    old.push(held.index.at[&key(one)]);
+                    new.push(*slot);
+                }
             }
         }
     }
@@ -451,7 +455,7 @@ fn worked_out_by(body: &LirBody, index: Option<&Indexes>, busy: &Frequency, keep
 
 /// `worked_out_by`, and what each value's references weigh before they are divided by its size.
 fn worked_out_with_totals(body: &LirBody, index: &Indexes, busy: &Frequency, keep: &impl Fn(u32) -> bool) -> (IndexMap<u32, Interval>, IndexMap<u32, f64>) {
-    WORKED.with(|worked| worked.set(worked.get() + 1));
+    body.facts.0.bump("intervals-worked");
     let ranges = _ranges(body, index, keep);
     let totals = llrm_support::debug::timed("intervals weights", || _totals(body, busy, keep));
     let weight = _divided(&totals, &ranges);

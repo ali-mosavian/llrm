@@ -109,7 +109,7 @@ pub fn sunk(body: &LirBody, segments: &Segments, registers: &RegisterClasses) ->
         .blocks
         .iter()
         .map(|block| {
-            let mut insns: Vec<Arc<Insn>> = block.insns.clone();
+            let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
             // From the last: a load moved down lands past the positions already looked at, so each is looked at once.
             for position in (0..insns.len()).rev() {
                 let Some(target) = _reader(&insns, position, body, &live_out[&block.at], &defined, &class_of, &stack) else { continue };

@@ -73,7 +73,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
         }
     }
     let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &block.succ)).collect();
-    let mut insns: IndexMap<i64, Vec<Arc<Insn>>> = body.blocks.iter().map(|block| (block.at, block.insns.clone())).collect();
+    let mut insns: IndexMap<i64, Vec<Arc<Insn>>> = body.blocks.iter().map(|block| (block.at, block.insns.to_vec())).collect();
     let mut changed = false;
     for at in reverse_post_order(body) {
         let to = succ[&at];

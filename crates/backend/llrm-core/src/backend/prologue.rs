@@ -173,7 +173,8 @@ pub fn reserved(
             if block.at == body.entry { Some(&take) } else { None },
             &give,
             entry_index,
-        );
+        )
+        .into();
     }
     Ok(out)
 }
@@ -215,7 +216,7 @@ fn _arguments(body: &LirBody, size: i64) -> Result<LirBody, Refused> {
             replaced.what = Some(what);
             insns.push(Arc::new(replaced));
         }
-        block.insns = insns;
+        block.insns = insns.into();
     }
     Ok(out)
 }
@@ -346,7 +347,7 @@ mod tests {
     fn test_explicit_end_needs_no_spill_frame_return() {
         // EVTRAP main refused four spill bytes after its END edge was corrected.
         let mut body = procedure();
-        body.blocks[0].insns.truncate(3);
+        body.blocks[0].insns.edit(|insns| insns.truncate(3));
         let mut slots = Frame::new(-16);
         slots.slot(1_i64, 4).unwrap();
         let result = reserved(&body, &slots, Some(&IndexMap::from_iter([(2, "B$CEND".to_owned())]))).unwrap();

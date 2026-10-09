@@ -143,7 +143,7 @@ pub fn following<R>(body: &LirBody, read: impl FnOnce(&Postings) -> R) -> R {
             let same_shape = state.as_ref().is_some_and(|held| held.blocks.len() == body.blocks.len() && held.blocks.iter().zip(&body.blocks).all(|((at, _), block)| *at == block.at));
             if !same_shape {
                 REDONE.with(|redone| redone.set(redone.get() + body.blocks.len()));
-                *state = Some(Followed { blocks: body.blocks.iter().map(|block| (block.at, block.insns.clone())).collect(), found: Postings::of(body) });
+                *state = Some(Followed { blocks: body.blocks.iter().map(|block| (block.at, block.insns.to_vec())).collect(), found: Postings::of(body) });
             } else {
                 let held = state.as_mut().expect("checked");
                 for (block, (one, (_, before))) in body.blocks.iter().zip(&mut held.blocks).enumerate() {
@@ -153,7 +153,7 @@ pub fn following<R>(body: &LirBody, read: impl FnOnce(&Postings) -> R) -> R {
                     }
                     REDONE.with(|redone| redone.set(redone.get() + 1));
                     held.found.replaced(block as u32, before, &one.insns);
-                    *before = one.insns.clone();
+                    *before = one.insns.to_vec();
                 }
             }
             if check() {

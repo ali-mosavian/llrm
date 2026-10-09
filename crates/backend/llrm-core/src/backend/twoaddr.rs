@@ -96,7 +96,7 @@ fn _reused(body: &LirBody) -> LirBody {
     let mut changed = false;
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let mut insns: Vec<Arc<Insn>> = block.insns.clone();
+        let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
         let out = &leaving[&block.at];
         // Where each value is read and written in the block, in order: what the scans below ask, in a log of the block's length.
         let mut reads: IndexMap<u32, BTreeSet<usize>> = IndexMap::default();
