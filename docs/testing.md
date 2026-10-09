@@ -7,6 +7,14 @@ Unit tests sit beside their module (`*_tests.rs`); frontend tests are
 bootstrapped DOS toolchain and runs them. Release builds are incremental, so a
 rebuild after an edit takes about 30 seconds.
 
+## Formatting
+
+    tools/fmt.sh            format the tree (nightly rustfmt, then tools/rfmt-post)
+    tools/fmt.sh --check    list what would change, change nothing
+
+Plain `cargo fmt` is not enough: it leaves the method chains and `matches!` calls that `tools/rfmt-post` lays out. Editors
+format through `tools/fmt.sh --stdin FILE` (`.zed/settings.json` does).
+
 ## The gate in tiers
 
     python3 tools/gate/gate.py plan            what the diff against origin/main selects

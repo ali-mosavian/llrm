@@ -23,6 +23,9 @@ runs:
     # rust-toolchain.toml names the compiler, here as on every machine.
     - shell: bash
       run: rustup toolchain install
+    # tools/fmt.sh, the gate's fmt step, runs nightly rustfmt.
+    - shell: bash
+      run: rustup toolchain install nightly --profile minimal --component rustfmt
     - uses: actions/cache/restore@v4
       if: inputs.save != 'true'
       with:

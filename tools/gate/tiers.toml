@@ -1,7 +1,8 @@
 # The gate's tiers and the path map. `gate.py plan` shows what a diff selects; `gate.py run` runs it.
 #
 #   fast  every cheap step, plus each heavy step whose owner paths the diff touches.
-#         Purpose: the confidence most PRs need. Budget: 5 minutes on the loaded host.
+#         Purpose: the confidence most PRs need. Budget: 5 minutes on the loaded host (a cold build of the formatter, ~40 s,
+#         can be inside it once `fmt` is enforced; the host keeps the build between runs).
 #   full  every step. Chosen when the diff touches [shared] or a path no rule knows. Budget: 10 minutes.
 #         Also run over main after every 5 merges and nightly (`gate.py run --tier full`); red -> `gate.py bisect`.
 #
@@ -10,7 +11,7 @@
 # A diff of only [inert] paths runs nothing. Changed paths in no table below are unknown: full.
 
 [inert]
-paths = ["docs/**", "**/*.md", "editors/**", ".gitignore", ".github/**"]
+paths = ["docs/**", "**/*.md", "editors/**", ".gitignore", ".github/**", ".zed/**"]
 
 # Shared code every area runs through: the IR, the support library, target descriptions, the workspace. A change here
 # takes the full tier. The backend (isel, regalloc, conventions, driver) and transforms are not listed: they take the
@@ -25,9 +26,16 @@ paths = [
   "tools/gate/**",
 ]
 
+# The formatter (tools/fmt.sh): `fmt` checks the whole tree whenever a Rust file or the formatter itself changes.
+# `enforced = true` fails the step on any file the formatter would change; false only lists them. It is false until
+# the PR that formats the tree sets it to true: that one line is the switch.
+[fmt]
+enforced = false
+paths = ["**/*.rs", "rustfmt.toml", "tools/fmt.sh", "tools/rfmt-post/**"]
+
 # Paths outside [shared] the cheap steps cover on their own; they select no heavy step.
 [plain]
-paths = ["tests/**", "tools/**", "bench/**", "examples/**", "runtime/**", "toolchain/**", "crates/**"]
+paths = ["rustfmt.toml", "tests/**", "tools/**", "bench/**", "examples/**", "runtime/**", "toolchain/**", "crates/**"]
 
 # Heavy steps (> 15 s on the loaded host): fast runs one only when a changed path matches its owners.
 [[heavy]]
@@ -54,6 +62,11 @@ owners = ["tests/test_programs_compile.py", "tests/test_loops.py", "tests/test_i
 step = "qcport"
 why = "builds and runs QCport against the all-Borland build: 100 s"
 owners = ["tools/qcport*", "tools/qcport/**", "tools/linkrecipe.py", "crates/frontends/llrm-c/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-omf/**", "crates/target/llrm-x86/**", "crates/backend/**", "crates/opt/**", "runtime/**"]
+
+[[heavy]]
+step = "rfmt-post"
+why = "the formatter's own tests (cold build of its parser dependency: 40 s)"
+owners = ["tools/rfmt-post/**", "tools/fmt.sh", "rustfmt.toml"]
 
 [[heavy]]
 step = "measure"
@@ -120,7 +133,7 @@ build-script-reruns = "build_script_reruns"
 # CI job groups (.github/workflows/ci.yml runs one job per group that has a step to run, in parallel, after the build).
 # Every step the planner can produce is in exactly one group (a test checks).
 [groups]
-unit = ["lib", "doc", "crate-tests", "scans"]
+unit = ["lib", "doc", "crate-tests", "scans", "fmt", "rfmt-post"]
 integration = ["integration", "build-script-reruns"]
 run = ["run"]
 python = ["pytest", "pytest-programs"]

@@ -1,0 +1,10 @@
+{
+  "languages": {
+    "Rust": {
+      "format_on_save": "on",
+      "formatter": {
+        "external": { "command": "bash", "arguments": ["tools/fmt.sh", "--stdin", "{buffer_path}"] }
+      }
+    }
+  }
+}
