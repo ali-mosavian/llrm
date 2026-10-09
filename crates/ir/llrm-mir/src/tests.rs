@@ -469,7 +469,7 @@ fn an_alias_of_a_keyed_map_and_three_uses_of_it_count_as_three() {
     let source = |name: &str, text: &str| (name.to_owned(), text.to_owned());
     let counts = dense_key_counts(&[
         source("defines.rs", "pub type Intervals = IndexMap<ValueId, Interval>;\nfn a(x: Intervals) {}\n"),
-        source("uses.rs", "use crate::defines::Intervals;\nfn b(x: &Intervals) -> Intervals { Intervals::default() }\n"),
+        source("uses.rs", "use crate::defines::Intervals;\nfn b(x: &Intervals) -> Intervals { todo!() }\n"),
         source("other.rs", "fn c(x: &IntervalsIndex, y: Vec<Intervals>) {}\n    type Result = BTreeSet<InstId>;\n"),
     ]);
     assert_eq!(counts["defines.rs"], 1);
