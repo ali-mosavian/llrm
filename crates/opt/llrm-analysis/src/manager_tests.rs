@@ -610,3 +610,49 @@ b0:
     let unit = super::summarized_in(&module, &program, Result::as_ref(&*globals).unwrap(), &shape, &exposed, function);
     assert_eq!(kept, format!("{:?}", crate::alias::CallFacts::of(&unit)));
 }
+
+/// Call facts found under one unit were served to a body summarized under another (screen.c: +4.6% compile cost, found by the
+/// gate's worst-file rule). What the memo kept was found under the globals' facts of the run before: when those are other facts the
+/// entry is dropped and found again under the unit of this run, and the answer is a fresh computation under its own unit.
+#[test]
+fn call_facts_found_under_other_globals_facts_are_found_again() {
+    let module = parsed(&format!(
+        "{DOS}@g = internal global i16 0
+define internal void @take(ptr %p) {{
+b0:
+  store i16 1, ptr %p
+  ret void
+}}
+define void @f() {{
+b0:
+  call void @take(ptr @g)
+  ret void
+}}
+"
+    ));
+    let program = llrm_mir::program::Program::new(vec![module.clone()], Rc::new(Neutral)).unwrap();
+    let mut analyses = ModuleAnalyses::new(llrm_mir::program::ProgramAnalyses::default().proxy(&program, 0));
+    analyses.get::<super::GlobalsAA>(&module);
+    analyses.get::<super::Summaries>(&module);
+    let f = module.named("f").unwrap();
+    let kept = analyses.memo::<super::SummariesMemo>().facts[&f].calls.clone().expect("found");
+    // The same run again: the facts are the same, the entry stands.
+    analyses.invalidate(&PreservedAnalyses::none());
+    analyses.get::<super::GlobalsAA>(&module);
+    analyses.get::<super::Summaries>(&module);
+    assert!(Rc::ptr_eq(&kept, analyses.memo::<super::SummariesMemo>().facts[&f].calls.as_ref().unwrap()), "same facts, found again");
+    // Other globals' facts than the entry was made under: found again.
+    analyses.memo::<super::SummariesMemo>().globals = Some(Rc::new(Ok(super::Globals::default())));
+    analyses.invalidate(&PreservedAnalyses::none());
+    let globals = analyses.get::<super::GlobalsAA>(&module);
+    analyses.get::<super::Summaries>(&module);
+    let again = analyses.memo::<super::SummariesMemo>().facts[&f].calls.clone().expect("found");
+    assert!(!Rc::ptr_eq(&kept, &again), "calls found under other facts were served to this run");
+    let layout = layout(&module);
+    let function = function(&module, "f");
+    let shape = crate::cfg::Shape::of(function);
+    let exposed = crate::memory::exposed_frames(&Unit::of(&module, &layout, function));
+    let program = analyses.program().clone();
+    let unit = super::summarized_in(&module, &program, Result::as_ref(&*globals).unwrap(), &shape, &exposed, function);
+    assert_eq!(format!("{again:?}"), format!("{:?}", crate::alias::CallFacts::of(&unit)));
+}
