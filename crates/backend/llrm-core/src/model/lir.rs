@@ -607,6 +607,8 @@ pub struct LirBody {
     /// The values (by number) that arrive in a cell above the frame, with the cell's displacement and size: arguments the
     /// caller pushed.
     pub arguments_in_cells: Arc<Vec<(u32, i64, u32)>>,
+    /// The facts worked out of this body and the bodies made from it (`analysis::facts`).
+    pub facts: crate::analysis::facts::Kept,
 }
 
 /// Fixed point, in 2^31sts, so a body stays `Eq`.
@@ -713,6 +715,7 @@ impl LirBody {
             cfa_variables: false,
             notes: Arc::default(),
             arguments_in_cells: Arc::default(),
+            facts: Default::default(),
         }
     }
 
@@ -752,6 +755,7 @@ impl LirBody {
             cfa_variables: self.cfa_variables,
             notes: Arc::clone(&self.notes),
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),
+            facts: self.facts.clone(),
         }
     }
 
