@@ -348,6 +348,30 @@ fn merged_types(
 }
 
 impl Summary {
+    /// Whether `fresh` shows a read or write that `self`, held past passes that
+    /// add no memory operation, does not state. A fresh summary that gives
+    /// up (a flag says anything, or a slice of the unknown object or of a whole
+    /// object does) refutes nothing: a rewrite such as strength reduction hides
+    /// an address from the analysis without touching more memory.
+    pub fn covers(
+        &self,
+        fresh: &Summary,
+    ) -> bool {
+        // A slice of a whole object, any byte of it: an address nothing placed,
+        // as a pointer strength reduction made does.
+        let unplaced = |one: &Slice| one.low <= -(1_i64 << 31) && one.high >= 1_i64 << 31;
+        let within = |old_unknown: bool, new_unknown: bool, old: &BTreeSet<Slice>, new: &BTreeSet<Slice>| {
+            old_unknown
+                || new_unknown
+                || new
+                    .iter()
+                    .filter(|one| one.object.kind != MemoryKind::Unknown && !unplaced(one))
+                    .all(|one| old.contains(one))
+        };
+        within(self.unknown_read, fresh.unknown_read, &self.reads, &fresh.reads)
+            && within(self.unknown_write, fresh.unknown_write, &self.writes, &fresh.writes)
+    }
+
     pub fn instantiated(
         &self,
         arguments: &[Provenance],

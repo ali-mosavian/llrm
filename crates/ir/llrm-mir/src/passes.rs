@@ -291,6 +291,18 @@ pub trait ModuleAnalysis: 'static {
         analyses: &mut ModuleAnalyses,
     ) -> Self::Result;
 
+    /// Whether `stale`, a result held past passes that add no memory operation
+    /// (`freeze`), still says no more than `fresh`, what `run` gives now,
+    /// does: whatever it states of the module, `fresh` states too. Equal by
+    /// default.
+    #[allow(unused_variables)]
+    fn covers(
+        stale: &Self::Result,
+        fresh: &Self::Result,
+    ) -> bool {
+        stale == fresh
+    }
+
     /// Whether `previous`, a result dropped by a pass, is what `run` would give
     /// now, found without working it out: the result then stands as the
     /// same one, so what holds it (an outer proxy) is the same too. Saying no,
@@ -959,12 +971,30 @@ pub(crate) struct Kind {
     name: &'static str,
     run: fn(&Module, &mut ModuleAnalyses) -> Rc<dyn Any>,
     agree: fn(&dyn Any, &dyn Any) -> bool,
+    covers: fn(&dyn Any, &dyn Any) -> bool,
     unchanged: fn(&Module, &mut ModuleAnalyses, &dyn Any) -> bool,
 }
 
 impl Kind {
     fn of<M: ModuleAnalysis>() -> Self {
-        Self { id: TypeId::of::<M>(), name: M::NAME, run: computed::<M>, agree: agree::<M>, unchanged: unchanged::<M> }
+        Self {
+            id: TypeId::of::<M>(),
+            name: M::NAME,
+            run: computed::<M>,
+            agree: agree::<M>,
+            covers: covers::<M>,
+            unchanged: unchanged::<M>,
+        }
+    }
+}
+
+fn covers<M: ModuleAnalysis>(
+    stale: &dyn Any,
+    fresh: &dyn Any,
+) -> bool {
+    match (stale.downcast_ref::<M::Result>(), fresh.downcast_ref::<M::Result>()) {
+        (Some(stale), Some(fresh)) => M::covers(stale, fresh),
+        _ => false,
     }
 }
 
@@ -1265,6 +1295,15 @@ impl ModuleAnalyses {
 
 pub trait FunctionPass {
     fn name(&self) -> &'static str;
+    /// Whether the pass may add a memory operation a function did not have (a
+    /// load speculated, a call made). The module analyses frozen at a point
+    /// of the pipeline (`PassManager::freeze`) are held past a pass that says
+    /// it does not: what they state of a function stays an upper bound of
+    /// what it does. `LLRM_CHECK_STALE` recomputes them after such a pass
+    /// and says if it did.
+    fn adds_memory_operations(&self) -> bool {
+        true
+    }
     fn run(
         &mut self,
         unit: &mut Unit,
@@ -1277,6 +1316,10 @@ pub trait FunctionPass {
 /// analyses and its program, and drops those it invalidates as it goes.
 pub trait ModulePass {
     fn name(&self) -> &'static str;
+    /// As `FunctionPass::adds_memory_operations`.
+    fn adds_memory_operations(&self) -> bool {
+        true
+    }
     fn run(
         &mut self,
         module: &mut Module,
@@ -1290,6 +1333,9 @@ pub enum Pass {
     /// Over every module at once, between the module-by-module runs of the
     /// passes before and after it.
     Program(Box<dyn ProgramPass>),
+    /// Not a pass: from here the module analyses it names are not dropped by a
+    /// pass that adds no memory operation.
+    Freeze(Vec<Kind>),
 }
 
 impl Pass {
@@ -1298,6 +1344,7 @@ impl Pass {
             Pass::Function(pass) => pass.name(),
             Pass::Module(pass) => pass.name(),
             Pass::Program(pass) => pass.name(),
+            Pass::Freeze(_) => "freeze",
         }
     }
 }
@@ -1336,6 +1383,14 @@ impl PassManager {
         pass: impl FunctionPass + 'static,
     ) {
         self.passes.push(Pass::Function(Box::new(pass)));
+    }
+
+    /// From this point of the pipeline `M` is held as it is past every pass
+    /// that adds no memory operation: gcc computes its modref and points-to
+    /// summaries at fixed points and the passes after them read that one, which
+    /// stays conservative.
+    pub fn freeze<M: ModuleAnalysis>(&mut self) {
+        self.passes.push(Pass::Freeze(vec![Kind::of::<M>()]));
     }
 
     pub fn add_module(
@@ -1487,6 +1542,7 @@ impl PassManager {
             eprintln!("BISECT: {}running pass ({runs}) {name} on {unit}", if running { "" } else { "NOT " });
             running
         };
+        let mut frozen: Vec<Kind> = Vec::new();
         for (number, pass) in self.passes.iter_mut().enumerate().skip(passes.start).take(passes.len()) {
             let name = pass.name();
             PASS.with(|p| p.set(name));
@@ -1496,13 +1552,24 @@ impl PassManager {
             let pass = match pass {
                 Pass::Function(pass) => pass,
                 Pass::Program(_) => unreachable!("a program pass runs over every module"),
+                Pass::Freeze(kinds) => {
+                    frozen.extend(kinds.iter().copied());
+                    continue;
+                }
                 Pass::Module(pass) => {
                     if !bisected(name, "the module") {
                         continue;
                     }
                     let changed = spanned(name, || pass.run(module, analyses));
                     if !changed.is_empty() {
-                        analyses.invalidate(&PreservedAnalyses::none());
+                        let mut preserved = PreservedAnalyses::none();
+                        if !pass.adds_memory_operations() {
+                            preserved.kept = frozen.iter().map(|one| one.id).collect();
+                        }
+                        analyses.invalidate(&preserved);
+                        if !pass.adds_memory_operations() {
+                            checked_stale(module, analyses, &frozen, name);
+                        }
                     }
                     for id in changed {
                         analyses.changed(id);
@@ -1565,12 +1632,55 @@ impl PassManager {
                     return Err(format!("{name} claims to preserve {} but changed them", stale.join(", ")));
                 }
             }
+            // What the pipeline froze is held past a pass that adds no memory
+            // operation.
+            if !pass.adds_memory_operations() {
+                kept.extend(frozen.iter().map(|one| one.id).filter(|one| analyses.results.contains_key(one)));
+            }
             let mut preserved = PreservedAnalyses::none();
             preserved.kept = kept;
             analyses.invalidate(&preserved);
+            if !pass.adds_memory_operations() {
+                checked_stale(module, analyses, &frozen, name);
+            }
             after(dump, self.verify_each, number, name, module)?;
         }
         Ok(stages)
+    }
+}
+
+thread_local! {
+    static CHECK_STALE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `LLRM_CHECK_STALE` for this thread, for a test.
+pub fn check_stale(on: bool) {
+    CHECK_STALE.with(|check| check.set(on));
+}
+
+/// `LLRM_CHECK_STALE`: the module analyses held past `pass`, which said it adds
+/// no memory operation, still cover what working them out afresh gives.
+fn checked_stale(
+    module: &Module,
+    analyses: &mut ModuleAnalyses,
+    frozen: &[Kind],
+    pass: &str,
+) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let on =
+        CHECK_STALE.with(std::cell::Cell::get) || *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_STALE").is_some());
+    if frozen.is_empty() || !on {
+        return;
+    }
+    for kind in frozen {
+        let Some((_, held)) = analyses.results.get(&kind.id) else { continue };
+        let held = Rc::clone(held);
+        let fresh = (kind.run)(module, &mut ModuleAnalyses::new(Rc::clone(analyses.program())));
+        assert!(
+            (kind.covers)(&*held, &*fresh),
+            "{pass} added a memory operation: the frozen {} no longer covers the module",
+            kind.name
+        );
     }
 }
 

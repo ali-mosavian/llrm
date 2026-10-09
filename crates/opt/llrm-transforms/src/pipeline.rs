@@ -380,6 +380,12 @@ pub fn recorded(
     if applied.options.wanted("calleepop") {
         manager.add_module(calleepop::CalleePop { size: applied.options.prefers_size() });
     }
+    // The summaries are made. The passes below move and rewrite what a function
+    // does and add nothing to it, so they read these and do not make them
+    // again after each edit, as gcc's passes after IPA read the modref
+    // summaries it made there.
+    manager.freeze::<Summaries>();
+    manager.freeze::<GlobalsAA>();
     // Before LSR: a factor of two or a scale the product carries still shows as
     // a shift.
     if applied.options.wanted("fixednarrow") {

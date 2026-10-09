@@ -61,6 +61,10 @@ impl FunctionPass for JumpThread {
         "jumpthread"
     }
 
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,
