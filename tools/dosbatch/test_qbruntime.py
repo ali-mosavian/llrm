@@ -41,6 +41,13 @@ class DosNameTests(unittest.TestCase):
         self.assertTrue(all(len(qbruntime.dos_stem(name)) <= 8 for name in qbruntime.MILESTONE_ONE))
 
 
+class LinkResultTests(unittest.TestCase):
+    def test_partial_exe_after_unresolved_runtime_symbol_is_not_a_run(self):
+        """Grep's partial EXE crashed after LINK reported five unresolved runtime symbols."""
+        self.assertTrue(qbruntime.dosbatch.link_failed("GREP.OBJ : error L2029 : 'B$OPEN' : unresolved external\n"))
+        self.assertFalse(qbruntime.dosbatch.link_failed("LINK : warning L4021 : no stack segment\n"))
+
+
 class ArchiveTests(unittest.TestCase):
     def test_archive_rebuild_removes_the_old_library_first(self):
         """LIB ignored replacement members, so a changed runtime still linked the old archive."""
