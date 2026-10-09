@@ -133,9 +133,9 @@ pub fn simplified(
     let mut changed = false;
     loop {
         let mut round = _whole_fixed(context, layout, function, &outer);
-        round |= _unsigned_divisions(context, layout, function, &outer, analyses, &facts, size);
+        round |= _unsigned_divisions(context, layout, function, &outer, analyses, changed || round, &facts, size);
         round |= _divisions(context, layout, function, &outer, &facts);
-        round |= _redundant_masks(context, layout, function, &outer, analyses);
+        round |= _redundant_masks(context, layout, function, &outer, analyses, changed || round);
         let recurrences = _recurrences(context, layout, function, &outer);
         for (_, inst) in function.walk().collect::<Vec<_>>() {
             if !function.is_erased(inst) {
@@ -1433,6 +1433,7 @@ fn _redundant_masks(
     function: &mut Function,
     outer: &Outer,
     analyses: &mut Analyses,
+    edited: bool,
 ) -> bool {
     let candidates: Vec<(llrm_mir::module::BlockId, InstId, Operand, u128, u32)> = function
         .walk()
@@ -1448,7 +1449,9 @@ fn _redundant_masks(
     // The body is as the rounds before left it: the manager's ranges of it,
     // brought up to date by what they changed, not worked out afresh for
     // each round.
-    analyses.invalidate(&PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+    if edited {
+        analyses.invalidate(&PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+    }
     let held = Ranges::of(context, layout, function, analyses, true);
     let registers = held.registers();
     let unit = held.unit(context, layout, function, outer);
@@ -1486,6 +1489,7 @@ fn _unsigned_divisions(
     function: &mut Function,
     outer: &Outer,
     analyses: &mut Analyses,
+    edited: bool,
     facts: &IndexMap<ValueId, Known>,
     size: bool,
 ) -> bool {
@@ -1507,7 +1511,9 @@ fn _unsigned_divisions(
     // The body is as the rounds before left it: the manager's ranges of it,
     // brought up to date by what they changed, not worked out afresh for
     // each round.
-    analyses.invalidate(&PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+    if edited {
+        analyses.invalidate(&PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+    }
     let held = Ranges::of(context, layout, function, analyses, true);
     let registers = held.registers();
     let unit = held.unit(context, layout, function, outer);

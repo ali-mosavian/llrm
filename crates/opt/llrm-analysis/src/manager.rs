@@ -1281,7 +1281,7 @@ impl Ranges {
         self
     }
 
-    pub fn registers(&self) -> &IndexMap<ValueId, Known> {
+    pub fn registers(&self) -> &Rc<<Registers as Analysis>::Result> {
         &self.registers
     }
 
