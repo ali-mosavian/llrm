@@ -94,7 +94,12 @@ fn each_level_selects_gcc_s_passes() {
     let scalar = [true; 5];
     assert!(!pipeline(&["-O0"]).optimize);
     assert_eq!(row("-O1"), (scalar, true, true, false, false, false, false, false, false, true));
-    assert_eq!(row("-O2"), (scalar, true, true, true, true, true, false, false, false, true));
+    // -O2 lets a complete copy grow the code where it removes a quarter of the
+    // loop's clocks: a departure from gcc, decided after the vsgcc table
+    // (docs/levels.md); -Os takes no growth.
+    assert_eq!(row("-O2"), (scalar, true, true, true, true, true, false, false, true, true));
+    assert_eq!(pipeline(&["-O2"]).limits.saved_percent, 25);
+    assert_eq!(pipeline(&["-Os"]).limits.grows, false);
     assert_eq!(row("-O3"), (scalar, true, true, true, true, true, true, true, true, true));
     assert_eq!(pipeline(&["-O"]), pipeline(&["-O1"]));
     assert_eq!(pipeline(&["-Og"]), pipeline(&["-O1"]));
