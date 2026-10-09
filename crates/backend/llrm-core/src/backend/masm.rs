@@ -1023,13 +1023,21 @@ fn addressed_pass(
                             &format!("label {} reached at depth {here} and {there}", label.name),
                         ));
                     }
-                    (None, Some(there)) => depth = Some(there),
+                    // Entered by a branch seen: the depth is the real one from
+                    // here, and what follows teaches the labels it reaches.
+                    (None, Some(there)) => {
+                        depth = Some(there);
+                        in_dead = false;
+                    }
                     (None, None) if dead_ok => {
                         depth = Some(0);
                         in_dead = true;
                         assumed.push(label.name.clone());
                     }
                     (None, None) => return Err(Stop::Stalled(label.name.clone())),
+                    // Passed as dead and not yet reached: a later branch may
+                    // reach it, and then the pass is made again.
+                    (Some(_), None) if in_dead => assumed.push(label.name.clone()),
                     _ => {}
                 }
                 if !in_dead {
