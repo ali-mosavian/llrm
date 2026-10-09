@@ -97,6 +97,15 @@ impl Facts {
         *self.runs.lock().expect("facts").entry(name).or_default() += 1;
     }
 
+    /// `bump`, by `n`.
+    pub fn bump_by(
+        &self,
+        name: &'static str,
+        n: usize,
+    ) {
+        *self.runs.lock().expect("facts").entry(name).or_default() += n;
+    }
+
     pub fn counted(
         &self,
         name: &'static str,
