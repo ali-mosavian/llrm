@@ -1291,6 +1291,20 @@ fn _allocated(
         if !facts.pairs.is_empty() {
             order.retain(|register| pair_ok(value, *register, &r#where));
         }
+        if let (Some((first, second)), true) = (&classes.pair, facts.pairs.contains_key(&value)) {
+            // Taking a register puts each partner in the other class, which must still hold the partner's other unplaced partners:
+            // a hub whose leaves are all unplaced cannot sit in a one-register class.
+            let unplaced = |of: u32| -> BTreeSet<u32> {
+                facts.pairs[&of].iter().copied().filter(|p| *p != value && !fixed.contains_key(p) && !r#where.contains_key(p)).collect()
+            };
+            let size_of = |register: &Register| {
+                let has = |class: &BTreeSet<Register>| class.iter().any(|member| _whole(*member) == _whole(*register));
+                if has(first) { first.len() } else { second.len() }
+            };
+            let need = facts.pairs[&value].iter().filter(|p| !fixed.contains_key(*p) && !r#where.contains_key(*p)).map(|p| unplaced(*p).len()).max().unwrap_or(0);
+            let (fits, rest): (Vec<Register>, Vec<Register>) = order.iter().partition(|register| size_of(register) >= need);
+            order = fits.into_iter().chain(rest).collect();
+        }
         if llrm_support::env_set("LLRM_PAIRS") && !facts.pairs.is_empty() && facts.pairs.contains_key(&value) && order.len() > 1 {
             // Prefer the register that fewest unplaced, overlapping values have no other choice but: the demand it would meet.
             let demand = |register: &Register| -> usize {
