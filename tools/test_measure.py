@@ -129,7 +129,7 @@ def test_a_base_is_built_the_way_the_gate_builds(tmp_path, monkeypatch):
     base built the other way would be measured with another compiler than the branch."""
     ran = []
     monkeypatch.setattr(measure, "BUILD", tmp_path)
-    monkeypatch.setattr(measure, "git", lambda *args, **kw: "")
+    monkeypatch.setattr(measure, "checked_out", lambda sha, tree, source=None: tmp_path)
     monkeypatch.setattr(measure.subprocess, "run", lambda command, **kw: ran.append(command) or subprocess.CompletedProcess(command, 0, "", ""))
     assert measure.built("0" * 40) == tmp_path / "target" / "release"
     assert ran == [["bash", "-c", measure.gate.BUILD]]
@@ -218,3 +218,33 @@ def test_compare_reads_two_stored_measurements_and_agrees_with_rises(monkeypatch
     assert measure.compare("b", "c") == 1
     assert "52.5/93.3/180.8 against 52.2/91.4/169.6" in capsys.readouterr().out
     assert measure.compare("b", "b") == 0
+
+
+def test_two_clones_do_not_share_the_tree_the_base_is_built_in(tmp_path):
+    """regparm16's `git checkout --detach <its commit>` failed in a tree another session's clone had made ('unable to read tree')."""
+    a, b = measure.build_tree(tmp_path / "a", {}), measure.build_tree(tmp_path / "b", {})
+    assert a != b and a.parent == b.parent and a == measure.build_tree(tmp_path / "a", {})
+    assert measure.build_tree(tmp_path / "a", {"LLRM_MEASURE_BUILD": "/elsewhere"}) == Path("/elsewhere")
+
+
+def test_a_commit_only_the_remote_has_is_checked_out_in_a_clone_measure_owns(tmp_path):
+    """'unable to read tree': the build tree was a worktree of another session's repository. It is a clone measure.py makes of this
+    repository, and a commit this repository has not got is fetched from its origin."""
+    def sh(*args, cwd):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    sh("init", "-q", "-b", "main", cwd=origin)
+    (origin / "a").write_text("1")
+    sh("add", "a", cwd=origin)
+    sh("commit", "-q", "-m", "one", cwd=origin)
+    local = tmp_path / "local"
+    sh("clone", "-q", str(origin), str(local), cwd=tmp_path)
+    (origin / "a").write_text("2")
+    sh("commit", "-q", "-am", "two", cwd=origin)
+    only_remote = sh("rev-parse", "HEAD", cwd=origin)
+    assert subprocess.run(["git", "cat-file", "-e", only_remote], cwd=local).returncode != 0
+    tree = measure.checked_out(only_remote, tmp_path / "build" / "tree", local)
+    assert (tree / "a").read_text() == "2" and sh("rev-parse", "HEAD", cwd=tree) == only_remote
+    assert measure.checked_out(sh("rev-parse", "HEAD~1", cwd=origin), tree, local) == tree and (tree / "a").read_text() == "1"
