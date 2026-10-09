@@ -341,6 +341,9 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
     if code == 0 and check and (why := incomplete((logs / f"{name}.log").read_text(), *check)):
         (logs / f"{name}.log").open("a").write(f"\nINCOMPLETE: {why}\n")
         code = 78
+    if code not in (0, 77):
+        # The next run of the step overwrites its log; the failure is evidence, kept.
+        (logs / f"{name}.failed.log").write_text((logs / f"{name}.log").read_text())
     return name, code, time.time() - start
 
 
