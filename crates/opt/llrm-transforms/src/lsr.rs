@@ -125,6 +125,65 @@ enum Resident {
     Rebuilt(usize),
 }
 
+/// What `Resident`s are held in while spill prices are worked out: a bit each for those named by a number, the products
+/// (named by three) in a list. A hash set of them was 13% of lsr on d_faces.
+#[derive(Default)]
+struct Residents {
+    named: llrm_mir::dense::IdSet<Packed>,
+    products: Vec<(usize, i64, i64)>,
+}
+
+#[derive(Clone, Copy)]
+struct Packed(usize);
+
+impl llrm_mir::dense::Dense for Packed {
+    fn index(self) -> usize {
+        self.0
+    }
+    fn at(index: usize) -> Self {
+        Self(index)
+    }
+}
+
+impl Residents {
+    /// The bit of a resident named by a number, its kind in the low three bits.
+    fn packed(one: &Resident) -> Option<Packed> {
+        Some(Packed(match *one {
+            Resident::Value(value) => value.0 as usize * 8,
+            Resident::Counter(at) => at * 8 + 1,
+            Resident::Held(at) => at * 8 + 2,
+            Resident::Step(at) => at * 8 + 3,
+            Resident::Rebuilt(at) => at * 8 + 4,
+            Resident::Product(..) => return None,
+        }))
+    }
+}
+
+impl spill::Spilled<Resident> for Residents {
+    fn has(
+        &self,
+        cell: &Resident,
+    ) -> bool {
+        match (Self::packed(cell), cell) {
+            (Some(at), _) => self.named.contains(&at),
+            (None, Resident::Product(one, k, block)) => self.products.contains(&(*one, *k, *block)),
+            _ => unreachable!("a product has no number"),
+        }
+    }
+    fn add(
+        &mut self,
+        cell: Resident,
+    ) {
+        match (Self::packed(&cell), cell) {
+            (Some(at), _) => {
+                self.named.insert(at);
+            }
+            (None, Resident::Product(one, k, block)) => self.products.push((one, k, block)),
+            _ => unreachable!("a product has no number"),
+        }
+    }
+}
+
 /// The whole function's block frequencies as lsr's prices read them: a loop's trips multiplied, ten where unproven
 /// (#203), a branch's cold arm less. A manager analysis, so a loop lsr looks at and leaves alone does not find them
 /// again (16 loops of a nest: a fifth of lsr).
@@ -827,25 +886,37 @@ fn _alive(
     loop_: &Loop,
     sites: &[Site],
 ) -> Vec<BTreeMap<i64, Vec<bool>>> {
+    // What is live before each instruction of a block is the block's, not the site's: worked out once, not once a site
+    // (22 sites of a loop took a fifth of lsr on d_faces).
+    let live: Vec<(i64, Vec<BTreeSet<ValueId>>)> = loop_
+        .body
+        .iter()
+        .map(|&at| {
+            #[cfg(test)]
+            LIVE_POINTS.with(|count| count.set(count.get() + 1));
+            (
+                at,
+                liveness::live_points(function, found, cfg::block(at))
+                    .into_iter()
+                    .map(|(_, before, _)| before)
+                    .collect(),
+            )
+        })
+        .collect();
     sites
         .iter()
         .map(|site| {
-            let own = |value: ValueId| value == site.one.value;
-            loop_
-                .body
-                .iter()
-                .map(|&at| {
-                    (
-                        at,
-                        liveness::live_points(function, found, cfg::block(at))
-                            .into_iter()
-                            .map(|(_, before, _)| before.iter().any(|&one| own(one)))
-                            .collect(),
-                    )
-                })
+            live.iter()
+                .map(|(at, points)| (*at, points.iter().map(|before| before.contains(&site.one.value)).collect()))
                 .collect()
         })
         .collect()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Block liveness walks made by `_alive`, for a test that they do not grow with the sites.
+    pub(crate) static LIVE_POINTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// What a trip pays to advance `one`: an add, or a pointer's own advance.
@@ -1851,7 +1922,9 @@ impl Problem<'_> {
                 },
             );
         if self.target.room.priced() {
-            cost += spill::spilled(points.chain(segment_points), |one| self.spill_price(one, &reads));
+            cost += spill::spilled_in::<Resident, Residents>(points.chain(segment_points), |one| {
+                self.spill_price(one, &reads)
+            });
         }
         if let Some((bases, indices)) = self.target.forms.first().and_then(AddressForm::register_classes) {
             cost += _misplaced(&address, &pairs, bases, indices) * costs.r#move * self.header;
