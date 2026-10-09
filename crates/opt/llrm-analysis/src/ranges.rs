@@ -657,7 +657,7 @@ pub fn bounds<'u>(unit: &Unit<'u>) -> Result<std::borrow::Cow<'u, Bounds>, Strin
     let registers = unit.registers();
     match (unit.bounds, unit.registers) {
         (Some(held), Some(carried)) if std::ptr::eq(&*registers, carried) => {
-            if std::env::var_os("LLRM_CHECK_REPLAY").is_some() {
+            if llrm_support::env_set("LLRM_CHECK_REPLAY") {
                 assert!(held.facts() == bounded_with(&Unit { bounds: None, ..*unit }, &registers)?, "the bounds a unit carries are not those of the body it stands over: stale");
             }
             Ok(std::borrow::Cow::Borrowed(held))
@@ -812,7 +812,7 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
     let edges_above = match (unit.edges, unit.registers) {
         (Some(states), Some(registers)) if std::ptr::eq(facts, registers) => {
             let held = states.shared(function);
-            if std::env::var_os("LLRM_CHECK_REPLAY").is_some() {
+            if llrm_support::env_set("LLRM_CHECK_REPLAY") {
                 assert!(held.iter().map(|(at, scope)| (*at, (**scope).clone())).collect::<IndexMap<_, _>>() == dominated_edges_with(unit, facts)?, "the edges a unit carries are not those of the body it stands over: stale");
             }
             held
@@ -1226,7 +1226,7 @@ pub(crate) fn edge_deltas() -> usize {
 
 fn check_scopes() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_SCOPES").is_some())
+    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_SCOPES"))
 }
 
 /// Header phis, made by no counted proof, that every entry and every trip round the
