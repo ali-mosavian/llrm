@@ -200,7 +200,7 @@ pub fn live_rows_walks(body: &LirBody) -> usize {
 /// as `live_rows_by` finds them in a body with no phis, at the cost of the occurrences and the blocks each is live in, not of every
 /// instruction of the body.
 pub struct WebRows {
-    position: IndexMap<i64, usize>,
+    graph: Arc<crate::analysis::graph::Graph>,
     into: Vec<Vec<u32>>,
     out: Vec<Vec<u32>>,
     numbered: usize,
@@ -208,11 +208,11 @@ pub struct WebRows {
 
 impl LiveAt for WebRows {
     fn live_in(&self, block: i64, value: u32) -> bool {
-        self.position.get(&block).is_some_and(|at| self.into[*at].binary_search(&value).is_ok())
+        self.graph.position.get(&block).is_some_and(|at| self.into[*at].binary_search(&value).is_ok())
     }
 
     fn live_out(&self, block: i64, value: u32) -> bool {
-        self.position.get(&block).is_some_and(|at| self.out[*at].binary_search(&value).is_ok())
+        self.graph.position.get(&block).is_some_and(|at| self.out[*at].binary_search(&value).is_ok())
     }
 }
 
@@ -222,11 +222,11 @@ impl WebRows {
     }
 
     pub fn entering(&self, at: i64) -> impl Iterator<Item = u32> + '_ {
-        self.into[self.position[&at]].iter().copied()
+        self.into[self.graph.position[&at]].iter().copied()
     }
 
     pub fn leaving(&self, at: i64) -> impl Iterator<Item = u32> + '_ {
-        self.out[self.position[&at]].iter().copied()
+        self.out[self.graph.position[&at]].iter().copied()
     }
 }
 
@@ -234,15 +234,8 @@ impl WebRows {
 /// whether each defines and reads it.
 pub fn live_rows_among(body: &LirBody, values: &[u32], places: &IndexMap<u32, Vec<ranges::Occurrence>>) -> WebRows {
     let count = body.blocks.len();
-    let position: IndexMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
-    let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); count];
-    for (at, block) in body.blocks.iter().enumerate() {
-        for to in &block.succ {
-            if let Some(&to) = position.get(to) {
-                predecessors[to].push(at);
-            }
-        }
-    }
+    let graph = crate::analysis::graph::Graph::of(body);
+    let predecessors = &graph.parents;
     let (mut in_mark, mut out_mark, mut written_mark, mut run_mark) = (vec![0u32; count], vec![0u32; count], vec![0u32; count], vec![0u32; count]);
     // The first run of a block that names the value, as (defined, read): a read decides, a write beside it too.
     let mut first_run: Vec<(usize, bool, bool)> = vec![(0, false, false); count];
@@ -299,7 +292,7 @@ pub fn live_rows_among(body: &LirBody, values: &[u32], places: &IndexMap<u32, Ve
             out[block_index].push(value);
         }
     }
-    WebRows { position, into, out, numbered }
+    WebRows { graph, into, out, numbered }
 }
 
 /// Whether a value is live at the entry or exit of a block: what a caller that asks of one value at a time reads,
