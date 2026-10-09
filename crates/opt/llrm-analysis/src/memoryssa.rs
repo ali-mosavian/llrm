@@ -528,6 +528,7 @@ thread_local! {
     /// object summary spares.
     pub(crate) static MAY_CLOBBERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static SLOW_CLOBBERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static UNCHANGED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -638,6 +639,8 @@ impl MemorySSA<'_> {
         later: InstId,
         memory: &MemRef,
     ) -> bool {
+        #[cfg(test)]
+        UNCHANGED.with(|asked| asked.set(asked.get() + 1));
         let boundary = self.at(earlier).defining;
         boundary.is_some_and(|boundary| {
             self.frontier(later, memory, Some(boundary), None, None) == BTreeSet::from([boundary])

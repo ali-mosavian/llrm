@@ -188,3 +188,17 @@ def test_gvn_stays_below_quadratic_in_the_live_values_and_the_cells(tmp_path):
         if big > 3.2 * small + 5.0:
             grown[axis] = f"{small:.1f} -> {big:.1f} Minstr"
     assert not grown, grown
+
+
+def test_gvn_stays_below_cubic_in_the_blocks_of_a_chain_of_branches(tmp_path):
+    """`mir gvn` on `branches` read 2N/N = 4.3, 5.2, 5.7 per doubling at N = 128..1024 (82.7 G at 1024): liveness took a round per block
+    of a chain, every pass that asked who dominates built each block's whole set, and a load tried every earlier load of its bytes
+    with a walk each. It reads 2.6 at N=128 (3.1 after #1247 alone); a step above 2.9 fails; a few Minstr of start-up are allowed."""
+    n = 128
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"branches_{label}.c"
+        source.write_text("" if size == 0 else scaling.AXES["branches"](size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("mir gvn", 0.0) - own["empty"].get("mir gvn", 0.0) for label in ("n", "2n"))
+    assert big <= 2.9 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
