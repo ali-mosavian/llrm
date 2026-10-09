@@ -70,3 +70,18 @@ fn test_fxch_survives_dead_code_elimination() {
     let listing = std::fs::read_to_string(directory.join("a.s")).unwrap();
     assert!(listing.matches("fxch").count() >= 10, "{listing}");
 }
+
+/// `machinedce` and `verify` ask the description whether a register is
+/// positional, not whether it is `st(i)`. A target whose x87 lines lack the
+/// class would see `fxch` deleted again; both targets state it for exactly the
+/// eight stack registers.
+#[test]
+fn test_both_targets_call_exactly_the_stack_registers_positional() {
+    use llrm_target::Target;
+    for registers in [llrm_x86_m16::M16.registers_text(), llrm_x86_m32::M32.registers_text()] {
+        let file = llrm_target::registers::parse(&registers).unwrap();
+        let positional: Vec<&str> =
+            file.iter().filter(|one| one.is("positional")).map(|one| one.name.as_str()).collect();
+        assert_eq!(positional, ["st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7"]);
+    }
+}

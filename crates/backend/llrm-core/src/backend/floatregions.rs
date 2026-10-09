@@ -64,5 +64,5 @@ pub fn boundary(one: &Insn) -> bool {
         return true;
     };
     matches!(what.op, Operation::Call | Operation::Barrier)
-        || what.sources.iter().chain(&what.dests).any(|arg| arg.st_index().is_some())
+        || what.sources.iter().chain(&what.dests).any(crate::backend::target::positional_place)
 }

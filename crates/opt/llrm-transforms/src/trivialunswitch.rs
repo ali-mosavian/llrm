@@ -38,9 +38,9 @@ impl FunctionPass for TrivialUnswitch {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let callees = analyses.outer().callees().clone();
+        let outer = std::rc::Rc::clone(analyses.outer());
         let mut changed = false;
-        while unswitched(unit.context, &callees, unit.function) {
+        while unswitched(unit.context, outer.callees(), unit.function) {
             changed = true;
         }
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }

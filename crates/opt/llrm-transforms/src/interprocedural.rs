@@ -27,7 +27,7 @@ use llrm_analysis::alias::{self, Procedure, Summary};
 use llrm_analysis::cfg::Shape;
 use llrm_analysis::effects;
 use llrm_analysis::interprocedural as facts;
-use llrm_analysis::manager::{GlobalsAA, ProgramSummaries, Summaries};
+use llrm_analysis::manager::{Callbacks, GlobalsAA, ProgramSummaries, Summaries};
 use llrm_analysis::memory::{Identity, MemoryKind, Slice, Unit};
 use llrm_mir::callgraph::{CallGraph, CallGraphAnalysis, Defined};
 use llrm_mir::context::GlobalId;
@@ -199,6 +199,7 @@ pub fn managers(
             // As the first run's: a body sent back through reads what no code
             // outside reaches.
             one.require::<GlobalsAA>();
+            one.require::<Callbacks>();
             one
         })
         .collect()
@@ -1267,6 +1268,8 @@ pub fn stamped(
     let known = Result::as_ref(&*known).map_err(String::clone)?;
     let globals = analyses.get::<GlobalsAA>(module);
     let globals = Result::as_ref(&*globals).map_err(String::clone)?;
+    let callbacks = analyses.get::<Callbacks>(module);
+    let callbacks = Result::as_ref(&*callbacks).map_err(String::clone)?;
     let mut declarations = (*analyses.get::<Declarations>(module)).clone();
     let mut changed = Vec::new();
     let graph = analyses.get::<CallGraphAnalysis>(module);
@@ -1287,7 +1290,8 @@ pub fn stamped(
             Unit { program: Some(&program), ..Unit::of(module, layout, function) }
                 .with_globals_aa(globals)
                 .with_shape(&shape)
-                .with_exposed(&exposed),
+                .with_exposed(&exposed)
+                .with_callbacks(callbacks),
         );
         let initialized = alias::initialized(&procedure, known)?;
         let calls = function
