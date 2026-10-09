@@ -74,8 +74,8 @@ pub enum Intrinsic {
 }
 
 /// Metadata on a `llvm.memmove` call saying which way its copy may run, as the
-/// pass that made it proved: ascending addresses, or descending. Without either,
-/// lowering compares the two pointers itself.
+/// pass that made it proved: ascending addresses, or descending. Without
+/// either, lowering compares the two pointers itself.
 pub const FORWARD: &str = "llrm.forward";
 pub const BACKWARD: &str = "llrm.backward";
 

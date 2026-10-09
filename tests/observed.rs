@@ -1,5 +1,6 @@
-//! `-g` keeps no store for a debugger: a variable's stores are the optimiser's like any other, and what a debugger
-//! reads is found from the records of what the variable was set to (`#dbg_value`). What the optimiser leaves is read in
+//! `-g` keeps no store for a debugger: a variable's stores are the optimiser's
+//! like any other, and what a debugger reads is found from the records of what
+//! the variable was set to (`#dbg_value`). What the optimiser leaves is read in
 //! the last stage the pipeline dumps.
 
 use std::path::{Path, PathBuf};
@@ -34,8 +35,9 @@ fn final_mir(
     std::fs::read_to_string(stages.last().expect("a stage")).unwrap()
 }
 
-/// `-g` made every store to a declared variable volatile (and kept a frame register, and a global): no volatile is left
-/// in a program that writes none, at any level.
+/// `-g` made every store to a declared variable volatile (and kept a frame
+/// register, and a global): no volatile is left in a program that writes none,
+/// at any level.
 #[test]
 fn nothing_is_volatile_with_g_or_without() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");

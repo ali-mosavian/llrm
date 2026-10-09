@@ -13,7 +13,8 @@ use llrm_support::pyrepr::{self, Repr};
 
 use crate::omf::{self, Record};
 
-/// $$SYMBOLS record kinds -- see docs/machine/codeview.md's own table for each one's data.
+/// $$SYMBOLS record kinds -- see docs/machine/codeview.md's own table for each
+/// one's data.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Kind {
     Block = 0x00,
@@ -981,7 +982,9 @@ pub fn parse(records: &[Rc<Record>]) -> DebugInfo {
     let r#where = _relocated(records);
     for (kind, data, at) in _records(&buf) {
         match Kind::of(kind) {
-            Some(Kind::Block) => {} // module-open record: shape (and presence of a name) varies by compiler
+            // module-open record: shape (and presence of a name) varies by
+            // compiler
+            Some(Kind::Block) => {}
             Some(Kind::Proc) => {
                 // data[10:12] is still unaccounted for -- always 0x0000 across
                 // every procedure measured.

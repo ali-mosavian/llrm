@@ -709,7 +709,8 @@ fn maybe(x: i16) -> Option[i16]:
     assert_eq!(output_without_leaks(source), "row0/5\nrow1/5\nrow2/5\n12 -1 3\n1\n5\n");
 }
 
-/// `x > 0 ? .some(x) : .none` returned from a function was "not an addressable struct".
+/// `x > 0 ? .some(x) : .none` returned from a function was "not an addressable
+/// struct".
 #[test]
 fn a_conditional_builds_an_enum_in_either_arm() {
     let source = "\
@@ -818,8 +819,8 @@ fn main() -> i16:
     assert_eq!(output_without_leaks(source), "a\nbc\n2\n4\n6\n");
 }
 
-/// `v[0].bump()` on a vec of structs was "array methods currently require a named array",
-/// and `v[0].copy()` could not be taken out of the vec.
+/// `v[0].bump()` on a vec of structs was "array methods currently require a
+/// named array", and `v[0].copy()` could not be taken out of the vec.
 #[test]
 fn a_vec_element_takes_methods_and_copies() {
     let source = "\
@@ -860,7 +861,8 @@ fn main() -> i16:
     assert_eq!(output_without_leaks(source), "30 13 25\n");
 }
 
-/// The output of the program whose main module is `main`, its imports read from `files`.
+/// The output of the program whose main module is `main`, its imports read from
+/// `files`.
 fn linked_output(
     main: &str,
     files: &[(&str, &str)],
@@ -1127,7 +1129,8 @@ fn a_view_result_borrows_what_the_caller_lent_and_never_a_local() {
     );
     let dangling = source.replace("    return &row[0:0]", "    let empty = \"\"\n    return &empty[0:0]");
     assert!(refused(&dangling).contains("would dangle"));
-    // Row 13 of section 9.3: a borrowed string is copied, never returned as owned.
+    // Row 13 of section 9.3: a borrowed string is copied, never returned as
+    // owned.
     let owned = "fn pick(x: &string) -> string:\n    return x\n\nfn main() -> i16:\n    return 0\n";
     assert!(refused(owned).contains("borrowed view of a string"), "{}", refused(owned));
 }
@@ -1203,7 +1206,8 @@ fn sequence_patterns_match_lengths_and_view_the_rest() {
 
 #[test]
 fn a_question_mark_moves_an_owned_payload_out() {
-    // `let s = make(n)?` of a Result[string, E]: "cannot move out of a borrow, field, or element".
+    // `let s = make(n)?` of a Result[string, E]: "cannot move out of a borrow,
+    // field, or element".
     let source = "\
 enum E:
     bad
@@ -1236,7 +1240,8 @@ fn main() -> i16:
 
 #[test]
 fn locals_of_loop_bodies_and_match_arms_drop_each_pass() {
-    // They were bound in the loop's or arm's own scope, which never dropped: one leak per pass.
+    // They were bound in the loop's or arm's own scope, which never dropped:
+    // one leak per pass.
     let source = "\
 fn main() -> i16:
     let words = [\"a\", \"b\", \"c\"]
@@ -1660,7 +1665,8 @@ fn a_type_with_display_prints_and_formats_through_it() {
 
 #[test]
 fn a_matched_call_result_is_dropped_when_the_match_ends() {
-    // `match all(a):` never dropped the vec its `.ok` held: "1 heap buffers leaked".
+    // `match all(a):` never dropped the vec its `.ok` held: "1 heap buffers
+    // leaked".
     let source = "enum E:\n    bad\n\nfn all(xs: &[i16]) -> Result[vec[i16], E]:\n    return .ok([x * 2 for x in xs])\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    match all(a):\n        .ok(v):\n            print(v[1])\n        .err(_):\n            print(\"err\")\n    return 0\n";
     assert_eq!(output_without_leaks(source), "4\n");
 }
@@ -1742,7 +1748,8 @@ fn a_function_ending_in_a_loop_only_break_leaves_needs_no_return() {
 
 #[test]
 fn a_mutable_name_for_a_struct_parameter_is_a_copy_of_its_own() {
-    // `let mut q = p` aliased the parameter immutably: "cannot borrow "q" mutably".
+    // `let mut q = p` aliased the parameter immutably: "cannot borrow "q"
+    // mutably".
     let source = "struct C:\n    mut n: i16\n\nfn C.bump(self: &mut C) -> void:\n    self.n += 1\n\nfn bumped(p: C) -> i16:\n    let mut q = p\n    q.bump()\n    return q.n\n\nfn main() -> i16:\n    let c = C(n=1)\n    print(f\"{bumped(c)} {c.n}\")\n    return 0\n";
     assert_eq!(output(source), "2 1\n");
 }
@@ -1804,7 +1811,8 @@ fn a_mut_pointer_passes_where_a_read_only_one_is_expected() {
 
 #[test]
 fn a_literal_argument_takes_the_type_its_generic_gets_from_the_others() {
-    // `upto(0, n)` bound T to the literal's i16: "i16 and u16 have no common type".
+    // `upto(0, n)` bound T to the literal's i16: "i16 and u16 have no common
+    // type".
     let source = "fn upto[T](start: T, end: T) -> iter[T]:\n    let mut i = start\n    while i < end:\n        yield i\n        i += 1\n\nfn f(n: u16) -> u16:\n    let mut t: u16 = 0\n    for i in upto(0, n):\n        t += i * n\n    return t\n\nfn main() -> i16:\n    print(f(3))\n    return 0\n";
     assert_eq!(output(source), "9\n");
 }
@@ -1851,7 +1859,8 @@ fn the_planets_example_prints_floats_as_the_shortest_text_that_reads_back() {
 
 #[test]
 fn a_default_may_name_a_constant() {
-    // Constants were not substituted in defaults: "a default must be a literal".
+    // Constants were not substituted in defaults: "a default must be a
+    // literal".
     let source = "const STEP: i16 = 3\n\nfn next(at: i16, step: i16 = STEP) -> i16:\n    return at + step\n\nfn main() -> i16:\n    print(next(1))\n    return 0\n";
     assert_eq!(output(source), "4\n");
 }
@@ -1865,7 +1874,8 @@ fn arithmetic_on_literals_takes_the_type_of_the_other_operand() {
 
 #[test]
 fn a_raw_pointer_reaches_a_fields_place_and_a_sequence_fields_data() {
-    // Only a named place had a raw address: a struct's buffer could not be filled.
+    // Only a named place had a raw address: a struct's buffer could not be
+    // filled.
     let source = "struct Reader:\n    mut count: i16\n    mut buffer: vec[u8]\n    mut cells: u8[3]\n\nfn fill(reader: &mut Reader) -> void:\n    unsafe:\n        let data: *far mut u8 = &mut reader.buffer\n        *data.offset(1) = 7\n        let count: *far mut i16 = &mut reader.count\n        *count = 2\n        let cells: *far mut u8 = &mut reader.cells\n        *cells.offset(2) = 9\n\nfn main() -> i16:\n    let mut reader = Reader(count=0, buffer=[0] * 3, cells=[0] * 3)\n    fill(&mut reader)\n    print(f\"{reader.count} {reader.buffer[1]} {reader.cells[2]}\")\n    return 0\n";
     assert_eq!(output(source), "2 7 9\n");
 }
@@ -1879,14 +1889,16 @@ fn a_string_pushes_and_pops_chars_and_a_nul_follows_its_last() {
 
 #[test]
 fn a_loop_walks_a_generator_method() {
-    // Only a plain call was a generator: "\"counter\" is not an array or string".
+    // Only a plain call was a generator: "\"counter\" is not an array or
+    // string".
     let source = "struct Counter:\n    limit: i16\n\nfn Counter.upto(self: &Counter) -> iter[i16]:\n    for i in 0..self.limit:\n        yield i\n\nfn main() -> i16:\n    let counter = Counter(limit=3)\n    for i in counter.upto():\n        print(i)\n    return 0\n";
     assert_eq!(output(source), "0\n1\n2\n");
 }
 
 #[test]
 fn a_match_on_a_temporary_moves_what_its_arm_binds_and_drops_the_rest() {
-    // Bindings borrowed from the temporary: "cannot move out of a borrow, field, or element".
+    // Bindings borrowed from the temporary: "cannot move out of a borrow,
+    // field, or element".
     let source = "enum Found:\n    none\n    both(first: string, second: string)\n\nfn find(n: i16) -> Found:\n    if n == 0:\n        return .none\n    return .both(f\"a{n}\", f\"b{n}\")\n\nfn main() -> i16:\n    let mut kept: vec[string] = []\n    for i in 0..3:\n        match find(i):\n            .both(first, _):\n                kept.push(first)\n            .none:\n                print(\"none\")\n    for one in kept:\n        print(one)\n    return 0\n";
     assert_eq!(output(source), "none\na1\na2\n");
 }
@@ -2014,7 +2026,8 @@ fn main() -> i16:
 
 #[test]
 fn a_constant_folds_from_constants_declared_in_any_order() {
-    // `const GEOM_MAXREC: i32 = 20 + GEOM_MAXVTX * 6` before GEOM_MAXVTX: "GEOM_MAXREC is not a compile-time value".
+    // `const GEOM_MAXREC: i32 = 20 + GEOM_MAXVTX * 6` before GEOM_MAXVTX:
+    // "GEOM_MAXREC is not a compile-time value".
     let source = "\
 struct Row:
     cells: u8[WIDE]
@@ -2053,8 +2066,9 @@ fn an_array_field_is_declared_for_c_and_assembler_and_refused_for_basic() {
     );
 }
 
-/// A near pointer field in the assembler's struct was `dw` whatever the target: on a flat one it is a dword, so a
-/// struct a C or assembler caller laid out from it was two bytes short and every field after the pointer was misplaced.
+/// A near pointer field in the assembler's struct was `dw` whatever the target:
+/// on a flat one it is a dword, so a struct a C or assembler caller laid out
+/// from it was two bytes short and every field after the pointer was misplaced.
 #[test]
 fn a_pointer_field_in_an_assembler_struct_is_the_targets_pointer_width() {
     use super::declarations::{Language, declarations_on};
@@ -2086,7 +2100,8 @@ fn a_library_for_basic_refuses_the_nib_runtime_and_misplaced_adapters() {
     let library = "import abi.qb45 as qb\n\n@export(\"qb45\")\nfn Show(value: qb.Ref[i16]) -> void:\n    BODY\n";
     let printing = refused_with_imports(&library.replace("BODY", "print(value)"));
     assert!(printing.contains("Nib runtime (N$PI2)") && printing.contains("qb45"), "{printing}");
-    // An index outside `unsafe:` is checked, and the check panics through the runtime.
+    // An index outside `unsafe:` is checked, and the check panics through the
+    // runtime.
     let checked = "import abi.qb45 as qb\n\n@export(\"qb45\")\nfn First(values: qb.ArrayRef[i16]) -> i16:\n    return values[0]\n";
     assert!(refused_with_imports(checked).contains("N$EBND"), "{}", refused_with_imports(checked));
     let other = library.replace("\"qb45\"", "\"pds71\"").replace("BODY", "return");
@@ -2128,7 +2143,8 @@ fn a_module_variable_may_be_a_struct_its_literal_laid_out_in_the_executable() {
 
 #[test]
 fn a_struct_assigned_from_its_own_array_fields_reads_them_first() {
-    // An array copy reads its cells when stored: `t = T(a=t.b, b=t.a)` printed "2 2".
+    // An array copy reads its cells when stored: `t = T(a=t.b, b=t.a)` printed
+    // "2 2".
     let source = "\
 struct T:
     mut a: u8[3]
@@ -2176,7 +2192,8 @@ fn main() -> i16:
 
 #[test]
 fn a_refutable_let_on_a_temporary_moves_what_it_binds() {
-    // Its binding borrowed from the temporary: "cannot move out of a borrow, field, or element".
+    // Its binding borrowed from the temporary: "cannot move out of a borrow,
+    // field, or element".
     let source = "fn find(n: i16) -> Option[string]:\n    if n == 0:\n        return .none\n    return .some(f\"n{n}\")\n\nfn first(n: i16) -> string:\n    let .some(text) = find(n) else:\n        return \"none\"\n    return text\n\nfn main() -> i16:\n    print(first(0))\n    print(first(4))\n    return 0\n";
     assert_eq!(output(source), "none\nn4\n");
 }
@@ -2191,14 +2208,16 @@ fn a_public_fixed_point_type_is_named_by_its_importers() {
 
 #[test]
 fn size_of_is_a_types_bytes_as_laid_out_generic_or_not() {
-    // Nothing gave a type's size, so a record could not be read or written as bytes.
+    // Nothing gave a type's size, so a record could not be read or written as
+    // bytes.
     let source = "@repr(\"c16\", pack=1)\nstruct Node:\n    id: i16\n    bound: u8[6]\n\nfn bytes[T](count: u16) -> u16:\n    return size_of[T]() * count\n\nfn main() -> i16:\n    print(f\"{size_of[Node]()} {size_of[i32]()} {bytes[Node](3)}\")\n    return 0\n";
     assert_eq!(output(source), "8 4 24\n");
 }
 
 #[test]
 fn a_variant_carries_a_fixed_array_that_matches_copies_and_drops() {
-    // A variant field could not be an array: "a variant field cannot be an array yet".
+    // A variant field could not be an array: "a variant field cannot be an
+    // array yet".
     let source = "\
 enum Message:
     quit
@@ -2241,7 +2260,8 @@ fn main() -> i16:
 
 #[test]
 fn a_tuple_holds_a_fixed_array_built_indexed_taken_apart_and_returned() {
-    // A tuple element could not be an array: "a tuple element cannot be an array yet".
+    // A tuple element could not be an array: "a tuple element cannot be an
+    // array yet".
     let source = "\
 fn extremes(values: &i16[4]) -> (i16[2], u16):
     let mut low = values[0]
@@ -2292,7 +2312,8 @@ fn main() -> i16:
 
 #[test]
 fn patterns_bind_and_take_apart_array_fields() {
-    // A struct pattern over an array field was "a pattern cannot take array field \"body\" yet".
+    // A struct pattern over an array field was "a pattern cannot take array
+    // field \"body\" yet".
     let source = "\
 struct Frame:
     id: u8
@@ -2321,7 +2342,8 @@ fn main() -> i16:
 
 #[test]
 fn pop_moves_a_struct_out_of_its_vec() {
-    // `v.pop()` on a `vec[Point]` was "pop() of a struct element is not supported yet".
+    // `v.pop()` on a `vec[Point]` was "pop() of a struct element is not
+    // supported yet".
     let source = "\
 struct Point:
     x: i16
@@ -2345,7 +2367,8 @@ fn main() -> i16:
 
 #[test]
 fn a_failure_is_returned_wrapped_in_the_one_variant_that_holds_its_type() {
-    // "'?' cannot return this failure": each other module's error needed a match to wrap it.
+    // "'?' cannot return this failure": each other module's error needed a
+    // match to wrap it.
     let source = "\
 enum ReadError:
     missing
@@ -2415,7 +2438,8 @@ fn main() -> i16:
 
 #[test]
 fn a_pattern_on_a_temporary_moves_out_an_array_of_owned_values() {
-    // It was refused: "an array of owned values moves only inside its owner; match it by reference".
+    // It was refused: "an array of owned values moves only inside its owner;
+    // match it by reference".
     let source = "\
 struct Entry:
     names: string[2]
@@ -2449,7 +2473,8 @@ fn main() -> i16:
 
 #[test]
 fn a_moved_array_of_values_with_drop_methods_drops_each_once_where_it_ends() {
-    // Zeroing the moved one-word array projected its place whole: "projection exceeds place".
+    // Zeroing the moved one-word array projected its place whole: "projection
+    // exceeds place".
     let source = "\
 struct R:
     id: u8
@@ -2475,7 +2500,8 @@ fn main() -> i16:
 
 #[test]
 fn a_slice_past_the_end_or_reversed_panics() {
-    // Slice bounds were never checked: `&v[1:5]` of four elements gave a view of 4, `&v[3:1]` one of 65534.
+    // Slice bounds were never checked: `&v[1:5]` of four elements gave a view
+    // of 4, `&v[3:1]` one of 65534.
     let run = |source: &str| {
         let hir = super::compile(source, "t").expect("compiles");
         let executed = execute::run(&codec::decode(&hir).expect("decodes"), "main", &[]).expect("runs");
@@ -2505,14 +2531,16 @@ fn a_slice_past_the_end_or_reversed_panics() {
 
 #[test]
 fn a_fixed_array_slices_with_runtime_bounds() {
-    // `&vals[0:n]` of a fixed array was refused: "this slice requires compile-time integer bounds".
+    // `&vals[0:n]` of a fixed array was refused: "this slice requires
+    // compile-time integer bounds".
     let source = "fn main() -> i16:\n    let vals: i16[4] = [4, 5, 6, 7]\n    let n: u16 = 3\n    let h = &vals[1:n]\n    print(f\"{h.len} {h[1]}\")\n    return 0\n";
     assert_eq!(output(source), "2 6\n");
 }
 
 #[test]
 fn a_for_walks_a_slice_of_a_vec_or_string() {
-    // `for x in &v[1:3]` over a vec or string was refused: "string and vec ranges are not in this slice".
+    // `for x in &v[1:3]` over a vec or string was refused: "string and vec
+    // ranges are not in this slice".
     let source = "\
 fn main() -> i16:
     let v: vec[i16] = [1, 2, 3, 4]
@@ -2539,7 +2567,8 @@ fn let_on_a_named_value_borrows_its_parts() {
 
 #[test]
 fn a_borrowed_value_cannot_move() {
-    // Moving a borrowed struct or viewed string compiled, and the borrow read freed memory.
+    // Moving a borrowed struct or viewed string compiled, and the borrow read
+    // freed memory.
     let borrowed = "struct P:\n    name: string\n\nfn main() -> i16:\n    let p = P(name=\"a\" + \"b\")\n    let r = &p\n    let q = p\n    print(r.name)\n    return 0\n";
     assert!(refused(borrowed).contains("\"p\" is borrowed here"), "{}", refused(borrowed));
     let viewed = "fn main() -> i16:\n    let s: string = \"abc\" + \"d\"\n    let v = &s[0:2]\n    let t = s\n    print(v)\n    print(t)\n    return 0\n";
@@ -2548,14 +2577,16 @@ fn a_borrowed_value_cannot_move() {
 
 #[test]
 fn a_near_pointer_reaches_a_module_variable_its_fields_and_arrays() {
-    // A field or array field was "near pointer reaches only static data", the whole struct a bad copy.
+    // A field or array field was "near pointer reaches only static data", the
+    // whole struct a bad copy.
     let source = "struct Point:\n    mut x: i16\n    mut y: i16\n    mut bound: u8[4]\n\nvar origin: Point = Point(x=1, y=2, bound=[5, 6, 7, 8])\n\nfn main() -> i16:\n    unsafe:\n        let y: *near mut i16 = &mut origin.y\n        *y = 9\n        let b: *near u8 = &origin.bound\n        print(b[2])\n        let p: *near mut Point = &mut origin\n        (*p).x = 4\n    print(f\"{origin.x} {origin.y}\")\n    return 0\n";
     assert_eq!(output(source), "7\n4 9\n");
 }
 
 #[test]
 fn a_type_parameter_is_inferred_through_a_borrowed_argument() {
-    // "cannot infer T": a `&v` or `&l.xs` argument had no type to unify with `&vec[T]`.
+    // "cannot infer T": a `&v` or `&l.xs` argument had no type to unify with
+    // `&vec[T]`.
     let source = "struct L:\n    xs: vec[i16]\n\nfn count[T](items: &vec[T]) -> u16:\n    return items.len\n\nfn main() -> i16:\n    let l = L(xs=[1, 2, 3])\n    let v: vec[i16] = [4]\n    print(f\"{count(&v)} {count(&l.xs)}\")\n    return 0\n";
     assert_eq!(output(source), "1 3\n");
 }
@@ -2601,7 +2632,8 @@ fn main() -> i16:
 
 #[test]
 fn a_raw_pointer_compares_with_its_read_only_kind_and_with_zero() {
-    // `*near mut T` beside `*near T`, or `0` beside any pointer, had no common type.
+    // `*near mut T` beside `*near T`, or `0` beside any pointer, had no common
+    // type.
     let source = "\
 var n: i16 = 4
 
@@ -2650,7 +2682,8 @@ fn main() -> i16:
 
 #[test]
 fn an_imported_constant_sizes_an_array_and_folds_like_a_local_one() {
-    // `u8[sh.MAX]` and `const N = sh.MAX` were refused: the parser folded only its own module's constants.
+    // `u8[sh.MAX]` and `const N = sh.MAX` were refused: the parser folded only
+    // its own module's constants.
     let shapes = "pub const MAX: u16 = 40\n";
     let main = "\
 import geo.shapes as sh
@@ -2670,7 +2703,8 @@ fn main() -> i16:
 
 #[test]
 fn a_method_without_pub_is_private_to_its_module() {
-    // `b.secret()` on another module's type ran: `pub` was checked on paths, not on a method called on a value.
+    // `b.secret()` on another module's type ran: `pub` was checked on paths,
+    // not on a method called on a value.
     let shapes = "\
 pub struct Box:
     w: u16
@@ -2691,7 +2725,8 @@ fn Box.secret(self: &Box) -> u16:
 
 #[test]
 fn the_built_in_protocols_bound_a_type_parameter() {
-    // `T: Ordered` was refused as an unknown protocol: the built-in protocols were never declared.
+    // `T: Ordered` was refused as an unknown protocol: the built-in protocols
+    // were never declared.
     let source = "\
 struct Point:
     x: i16
@@ -2725,7 +2760,8 @@ fn main() -> i16:
 
 #[test]
 fn a_protocol_takes_type_parameters_that_its_bound_supplies() {
-    // `protocol Source[T]:` did not parse, and no bound could name a protocol's type argument.
+    // `protocol Source[T]:` did not parse, and no bound could name a protocol's
+    // type argument.
     let source = "\
 protocol Source[T]:
     fn get(self: &Self) -> T
@@ -2764,7 +2800,8 @@ fn an_import_alias_cannot_be_shadowed() {
 
 #[test]
 fn a_float_divided_by_zero_is_inf_or_nan_as_on_the_x87() {
-    // The host interpreter stopped with "float division by zero" where compiled code gets inf or nan.
+    // The host interpreter stopped with "float division by zero" where compiled
+    // code gets inf or nan.
     let source =
         "fn main() -> i16:\n    let z: f64 = 0.0\n    print(f\"{1.0 / z} {-1.0 / z} {z / z}\")\n    return 0\n";
     assert_eq!(output(source), "inf -inf nan\n");
@@ -2772,7 +2809,8 @@ fn a_float_divided_by_zero_is_inf_or_nan_as_on_the_x87() {
 
 #[test]
 fn a_name_moved_before_continue_is_out_of_scope_in_the_next_iteration() {
-    // Its own scope ends at the jump, yet it was "moved in one loop iteration and used in the next".
+    // Its own scope ends at the jump, yet it was "moved in one loop iteration
+    // and used in the next".
     let source = "fn take(s: string) -> void:\n    print(s)\n\nfn main() -> i16:\n    let mut n: i16 = 0\n    while n < 2:\n        n += 1\n        match n:\n            1:\n                let s: string = f\"x{n}\"\n                take(s)\n                continue\n            _:\n                print(\"other\")\n    return 0\n";
     assert_eq!(output_without_leaks(source), "x1\nother\n");
     let used = "fn take(s: string) -> void:\n    print(s)\n\nfn main() -> i16:\n    let s: string = f\"x{1}\"\n    let mut n: i16 = 0\n    while n < 2:\n        n += 1\n        take(s)\n        continue\n    return 0\n";
@@ -2832,7 +2870,8 @@ fn main() -> i16:
 fn an_escaping_generator_drops_what_it_holds_at_its_scope_or_its_own_end() {
     // A `with` was "cannot yield inside 'unsafe', 'with' or a destructuring
     // 'let' yet". A resource the frame holds is dropped once: where its scope
-    // ends, or with the iterator; a generator given one holds it from the start.
+    // ends, or with the iterator; a generator given one holds it from the
+    // start.
     let source = "\
 struct Log:
     name: string
@@ -3081,7 +3120,8 @@ fn main() -> i16:
 
 #[test]
 fn an_aggregate_result_called_for_its_effect_drops_what_it_owns() {
-    // The result's temporary was never dropped: "1 heap buffers leaked", per call.
+    // The result's temporary was never dropped: "1 heap buffers leaked", per
+    // call.
     let source = "\
 struct Named:
     name: string
@@ -3103,7 +3143,8 @@ fn main() -> i16:
 
 #[test]
 fn a_sequence_pattern_on_a_temporary_array_moves_its_elements_out() {
-    // The temporary was borrowed and never dropped: "2 heap buffers leaked", and `let [a, b]` needed 'else:'.
+    // The temporary was borrowed and never dropped: "2 heap buffers leaked",
+    // and `let [a, b]` needed 'else:'.
     let source = "\
 struct Tag:
     label: string
@@ -3137,7 +3178,8 @@ fn main() -> i16:
 
 #[test]
 fn a_borrowed_fixed_array_parameter_keeps_its_length() {
-    // `&T[N]` was a slice view that lost N: `return values` as `-> i16[4]` gave "expected an array of dimensions [4]".
+    // `&T[N]` was a slice view that lost N: `return values` as `-> i16[4]` gave
+    // "expected an array of dimensions [4]".
     let source = "\
 fn total(values: &i16[4]) -> i16:
     let mut sum: i16 = 0
@@ -3176,7 +3218,8 @@ fn main() -> i16:
 
 #[test]
 fn a_borrowed_fixed_array_from_any_expression_is_used_as_the_parameter_is() {
-    // `same(x)[2]` on a `-> &i16[3]` result: "a *far pointer is not a sequence".
+    // `same(x)[2]` on a `-> &i16[3]` result: "a *far pointer is not a
+    // sequence".
     let source = "\
 fn same(a: &i16[3]) -> &i16[3]:
     return a
@@ -3203,7 +3246,8 @@ fn main() -> i16:
 
 #[test]
 fn a_function_returning_an_iterator_hands_over_the_one_it_returns() {
-    // `return upto(n)` from an `iter[T]` function was "a generator returns no value".
+    // `return upto(n)` from an `iter[T]` function was "a generator returns no
+    // value".
     let source = "\
 fn upto(n: i16) -> iter[i16]:
     for i in 0..n:
@@ -3257,7 +3301,8 @@ fn a_move_in_a_generator_body_is_checked_however_the_body_is_compiled() {
 
 #[test]
 fn an_escaping_generator_keeps_each_binding_of_a_name_apart() {
-    // Two loops binding "x", one over strings, was "keeps one "x"; rename this one".
+    // Two loops binding "x", one over strings, was "keeps one "x"; rename this
+    // one".
     let source = "\
 fn both(words: &vec[string], n: i16) -> iter[string]:
     for x in words:
@@ -3351,7 +3396,8 @@ fn the_panic_routines_are_stated_to_end_the_program() {
 /// Printing a number touches only the runtime's own state: a loop's loads
 /// ahead of `print(i)` need not be redone after it. The routines were
 /// declared with no effects stated, so each call was assumed to write all
-/// of memory and a function that prints came out `memory(readwrite, argmem: read)`.
+/// of memory and a function that prints came out `memory(readwrite, argmem:
+/// read)`.
 #[test]
 fn the_runtime_routines_state_what_they_touch() {
     use llrm_core::abi::nib;
@@ -3494,7 +3540,8 @@ fn a_borrow_covers_only_the_place_it_names_and_ends_at_its_last_use() {
     let source =
         std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/examples/borrow_puzzles.nib")).expect("the example");
     assert_eq!(output_without_leaks(&source), "southwest\n3\n6\n6\n");
-    // Each puzzle's twin, where the places do overlap or the borrow is still live, is refused.
+    // Each puzzle's twin, where the places do overlap or the borrow is still
+    // live, is refused.
     assert!(
         refused(&source.replace("add_into(p.a, p.b)", "add_into(p.a, p.a)")).contains("aliases a mutable argument")
     );
@@ -3646,8 +3693,8 @@ fn main() -> i16:
     );
 }
 
-/// `@repr("c")` without `pack=` packs to the target's own alignment, its stack slot (2 on m16, 4
-/// on m32); `@repr("c16")` stays 2 and may not ask for 4.
+/// `@repr("c")` without `pack=` packs to the target's own alignment, its stack
+/// slot (2 on m16, 4 on m32); `@repr("c16")` stays 2 and may not ask for 4.
 #[test]
 fn repr_c_packs_to_the_targets_alignment() {
     let source = |layout: &str| {

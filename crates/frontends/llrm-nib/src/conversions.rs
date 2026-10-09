@@ -43,7 +43,8 @@ impl Rules {
         right: TypeName,
     ) -> Option<TypeName> {
         let common = self.common_plain(left, right)?;
-        // Where a word and its plain twin meet, the word is the type: usize stays usize.
+        // Where a word and its plain twin meet, the word is the type: usize
+        // stays usize.
         Some(
             [left, right]
                 .into_iter()

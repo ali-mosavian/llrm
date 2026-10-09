@@ -97,7 +97,8 @@ fn test_event_stub_near_call_has_no_register_arguments() {
 
 #[test]
 fn test_changed_event_stub_remains_unknown() {
-    // Only instruction bytes: a relocated field's addend is folded into its fixup before recognition.
+    // Only instruction bytes: a relocated field's addend is folded into its
+    // fixup before recognition.
     let found = loaded(concat!(env!("LLRM_ROOT"), "/tests/inputs/omf/addrm-p-evt.obj"));
     let width = |loc: i64| match loc {
         omf::LOC_OFF16 => 2,

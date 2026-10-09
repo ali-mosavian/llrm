@@ -8,17 +8,22 @@
 //! trip, and noreturn which calls end one.
 //!
 //! What changed with the IR:
-//! - A value is SSA, and an operand defined outside the loop dominates the preheader's end, so the run goes before its
-//!   terminator. `_placement`, `_reparented`, `_pruned`, `_effective`, `_starts` and `_rewritten` placed, renamed and
-//!   thinned variables and copies there are none of.
-//! - A call keeps only the loads it may write in the loop. The old `motion_blocked` refused a whole loop holding a
-//!   call, which clobbered the machine's registers.
-//! - What may fault -- a load of what is not known dereferenceable and the target says may trap at its alignment
-//!   (`Machine::load_may_trap`), a division by other than a constant neither 0 nor -1 -- moves only from where the loop
-//!   certainly runs it: `_guaranteed`, the old `_guaranteed_float_work` asked of faults rather than of the x87
+//! - A value is SSA, and an operand defined outside the loop dominates the
+//!   preheader's end, so the run goes before its terminator. `_placement`,
+//!   `_reparented`, `_pruned`, `_effective`, `_starts` and `_rewritten` placed,
+//!   renamed and thinned variables and copies there are none of.
+//! - A call keeps only the loads it may write in the loop. The old
+//!   `motion_blocked` refused a whole loop holding a call, which clobbered the
+//!   machine's registers.
+//! - What may fault -- a load of what is not known dereferenceable and the
+//!   target says may trap at its alignment (`Machine::load_may_trap`), a
+//!   division by other than a constant neither 0 nor -1 -- moves only from
+//!   where the loop certainly runs it: `_guaranteed`, the old
+//!   `_guaranteed_float_work` asked of faults rather than of the x87
 //!   environment. Floating arithmetic is pure here.
-//! - Dropped: flags (`_crossing`'s refusal), volatile published reads (a volatile access never moves), and
-//!   `loopmotion::sunk_stores`, which the old `Hoist` ran after this and loopmotion's port owns.
+//! - Dropped: flags (`_crossing`'s refusal), volatile published reads (a
+//!   volatile access never moves), and `loopmotion::sunk_stores`, which the old
+//!   `Hoist` ran after this and loopmotion's port owns.
 
 use std::collections::BTreeSet;
 
@@ -83,14 +88,16 @@ pub fn hoisted(
     let room = profit::registers(&outer);
     let costs = if size { outer.target().size_costs() } else { profit::costs(&outer) };
     // Moving instructions leaves every block and loop as they are.
-    // The registers are priced where the function is in SSA; before that, with scalar slots still in memory, only
-    // what a held value costs to release is.
+    // The registers are priced where the function is in SSA; before that, with
+    // scalar slots still in memory, only what a held value costs to release
+    // is.
     let pressure = room.priced() && !_slots_remain(unit);
     let frequency = (pressure || room.priced() && costs.float_release > 0)
         .then(|| _frequency(unit, analyses, &outer, size))
         .flatten();
     let room = if pressure { room } else { crate::spill::Room { registers: 0, ..room } };
-    // What is known without memory holds as instructions move: no block, edge or value changes.
+    // What is known without memory holds as instructions move: no block, edge
+    // or value changes.
     let registers = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
     let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
     let mut changed = false;
@@ -121,7 +128,8 @@ pub fn hoisted(
 /// `before` costs more than leaving it, the values crossing the loop that the
 /// spill model spills, and the instructions reading them, stay in the loop.
 /// What the model charges for spilling a value that needs no register, a
-/// displacement the accesses fold or a value made again at each read, is not counted.
+/// displacement the accesses fold or a value made again at each read, is not
+/// counted.
 fn _affordable(
     unit: &passes::Unit,
     outer: &Outer,
@@ -140,13 +148,15 @@ fn _affordable(
         for &inst in &run {
             hoisted.move_to(inst, Position::Before(before)).expect("a placed instruction");
         }
-        // The price of `hoisted` is its work and the forecast below, which is found once (it was found twice: 41% of
-        // hoist on a 16-deep nest, where the loops' passes cost 6 G).
+        // The price of `hoisted` is its work and the forecast below, which is
+        // found once (it was found twice: 41% of hoist on a 16-deep
+        // nest, where the loops' passes cost 6 G).
         let Some(work) = profit::weighted(unit.context, unit.layout, &hoisted, outer.callees(), costs, frequency)
         else {
             return run;
         };
-        // A floating value held across the loop is released after it, once for each time the loop is entered.
+        // A floating value held across the loop is released after it, once for
+        // each time the loop is entered.
         let floats: BTreeSet<ValueId> = _crossed_values(&hoisted, &run)
             .into_iter()
             .filter(|&value| matches!(
@@ -250,8 +260,8 @@ fn _affordable(
     run
 }
 
-/// Whether `value` is a `getelementptr` by constants that only memory accesses, or such
-/// `getelementptr`s, read.
+/// Whether `value` is a `getelementptr` by constants that only memory accesses,
+/// or such `getelementptr`s, read.
 fn _displacement(
     function: &Function,
     value: ValueId,
@@ -364,8 +374,8 @@ pub fn _invariant_run(
     let mut bounded: Option<std::rc::Rc<Result<ranges::Bounds, String>>> = None;
     let mut run: Vec<InstId> = Vec::new();
     let mut taken: llrm_mir::dense::IdSet<InstId> = llrm_mir::dense::IdSet::new();
-    // Whether an instruction may move is a fact of the loop, not of how much of it has moved: asked of each once, not
-    // once a round.
+    // Whether an instruction may move is a fact of the loop, not of how much of
+    // it has moved: asked of each once, not once a round.
     let mut movable: llrm_mir::dense::IdMap<InstId, bool> = llrm_mir::dense::IdMap::new();
     let mut made: BTreeSet<ValueId> = BTreeSet::new();
     loop {
@@ -489,7 +499,8 @@ fn _bounded_inside(
     let Some(reference) = memory.reference(inst) else { return false };
     // What the counted loops bound is the manager's, asked when first needed.
     let held = bounded.get_or_insert_with(|| bounds());
-    // What holds on the edge into the loop, as the preheader's branch narrows it.
+    // What holds on the edge into the loop, as the preheader's branch narrows
+    // it.
     let scope = held.as_ref().as_ref().ok().and_then(|facts| facts.at(into)).cloned().unwrap_or_default();
     let Ok(Some(known)) = ranges::on_edge(&memory, cfg::block(into), cfg::block(header), &scope, None) else {
         return false;

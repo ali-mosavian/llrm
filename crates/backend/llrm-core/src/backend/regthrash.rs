@@ -31,8 +31,9 @@ use crate::support::hash::IndexMap;
 pub const ROUNDS: usize = 8;
 
 pub fn thrashed(body: LirBody) -> LirBody {
-    // A rename leaves its block's live-in as it was, so what is dead at every block's exit is the same whatever is
-    // renamed, and the blocks do not depend on one another: each is renamed to a fixed point of its own.
+    // A rename leaves its block's live-in as it was, so what is dead at every
+    // block's exit is the same whatever is renamed, and the blocks do not
+    // depend on one another: each is renamed to a fixed point of its own.
     let exits = liveness::dead_at_exit(&body);
     let mut changed = false;
     let blocks: Vec<LirBlock> = body
@@ -77,8 +78,8 @@ fn _dead_after_by(
     out
 }
 
-/// One rename found: the copy at `position` of what the instruction at `at` made, which is `rewritten` writing the
-/// copy's register.
+/// One rename found: the copy at `position` of what the instruction at `at`
+/// made, which is `rewritten` writing the copy's register.
 struct Rename {
     position: usize,
     at: usize,
@@ -86,12 +87,15 @@ struct Rename {
     rewritten: Arc<Insn>,
 }
 
-/// This block with copies thrashed away, at most ROUNDS of them, or None where none can be.
+/// This block with copies thrashed away, at most ROUNDS of them, or None where
+/// none can be.
 ///
-/// Each rename is the first the block now offers, and changes the liveness between the producer and the copy, and
-/// before the producer as far back as it moves; after the copy nothing moved. So what is dead after each instruction is
-/// worked out again for that stretch alone, and the next copy to try is no earlier than the first instruction whose
-/// liveness moved: an earlier one saw the same instructions and the same liveness, and failed.
+/// Each rename is the first the block now offers, and changes the liveness
+/// between the producer and the copy, and before the producer as far back as it
+/// moves; after the copy nothing moved. So what is dead after each instruction
+/// is worked out again for that stretch alone, and the next copy to try is no
+/// earlier than the first instruction whose liveness moved: an earlier one saw
+/// the same instructions and the same liveness, and failed.
 fn _thrash_block(
     bits: u32,
     block: &LirBlock,
@@ -125,8 +129,9 @@ fn _thrash_block(
                 effect.map_or_else(Lanes::new, |effect| effect.dead_before(&dead))
             });
         }
-        // Before the producer, what is dead moves only where the producer read less of Y than the copy does (a shift by
-        // a byte reads half of it): the liveness is worked out backwards until it is what it was.
+        // Before the producer, what is dead moves only where the producer read
+        // less of Y than the copy does (a shift by a byte reads half of
+        // it): the liveness is worked out backwards until it is what it was.
         from = at;
         for index in (0..at).rev() {
             if after[index] == dead {
@@ -463,7 +468,8 @@ mod tests {
 
     #[test]
     fn test_a_rename_does_not_merge_the_producers_other_operand() {
-        // `ecx += edx; edx = ecx` renamed to `edx = ecx; edx += edx` doubles ecx.
+        // `ecx += edx; edx = ecx` renamed to `edx = ecx; edx += edx` doubles
+        // ecx.
         let (ecx, edx) = (_reg(Register::ECX), _reg(Register::EDX));
         let body = _body(
             vec![
@@ -543,10 +549,12 @@ mod tests {
         assert!(anchor.what.as_ref().unwrap().op == Operation::Nothing && anchor.uses == [1]);
     }
 
-    /// The rename of a copy asks what is dead after each instruction of its block every round, and each ask worked out
-    /// the instruction's effect again: a straight run of 1600 statements spent 250 Minstr of 340 in the rounds, and
-    /// the cost of a body grew faster than its size while the rounds did. An instruction's effect is worked out
-    /// once: those of the instructions a round changed are new ones.
+    /// The rename of a copy asks what is dead after each instruction of its
+    /// block every round, and each ask worked out the instruction's effect
+    /// again: a straight run of 1600 statements spent 250 Minstr of 340 in the
+    /// rounds, and the cost of a body grew faster than its size while the
+    /// rounds did. An instruction's effect is worked out once: those of the
+    /// instructions a round changed are new ones.
     #[test]
     fn test_an_instructions_effect_is_worked_out_once_however_many_rounds_ask() {
         let mut insns = Vec::new();
@@ -580,10 +588,12 @@ mod tests {
         );
     }
 
-    /// Moving a copy ahead of a producer that reads half of what it copies makes the other half live before it: `shr
-    /// cx, 8` reads CX's high byte alone, `mov ax, cx` reads both. What is dead after the instruction before the
-    /// producer is not what it was, and the rename that worked it out for the window between producer and copy
-    /// alone left the old answer there.
+    /// Moving a copy ahead of a producer that reads half of what it copies
+    /// makes the other half live before it: `shr cx, 8` reads CX's high
+    /// byte alone, `mov ax, cx` reads both. What is dead after the instruction
+    /// before the producer is not what it was, and the rename that worked
+    /// it out for the window between producer and copy alone left the old
+    /// answer there.
     #[test]
     fn test_a_copy_moved_ahead_of_a_shift_by_a_byte_changes_what_is_dead_before_it() {
         let word = |register| Loc::Reg(Reg { register, width: 2 });
@@ -606,8 +616,8 @@ mod tests {
         ];
         let body = _body(insns, Register::EAX);
         let after = thrashed(body.clone());
-        // Whether or not it renamed, `thrashed` checked the liveness it kept against working it out whole; a rename is
-        // the premise.
+        // Whether or not it renamed, `thrashed` checked the liveness it kept
+        // against working it out whole; a rename is the premise.
         assert!(
             after.insns().iter().zip(body.insns().iter()).any(|(new, old)| !Arc::ptr_eq(new, &old)),
             "premise: the copy was renamed"

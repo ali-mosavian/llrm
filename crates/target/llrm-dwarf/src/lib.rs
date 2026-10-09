@@ -1,15 +1,16 @@
-//! [`llrm_object::debug::Info`] as DWARF 4 or 5: `.debug_abbrev`, `.debug_info`, `.debug_str`,
-//! `.debug_line` (and `.debug_line_str` in 5), `.debug_aranges`. A format of object file calls
-//! [`expanded`] and writes the result as it writes any object: the sections are ordinary ones,
-//! their cross references relocations against another section (`Target::Section`) and an address
-//! one against a symbol of the code's section.
+//! [`llrm_object::debug::Info`] as DWARF 4 or 5: `.debug_abbrev`,
+//! `.debug_info`, `.debug_str`, `.debug_line` (and `.debug_line_str` in 5),
+//! `.debug_aranges`. A format of object file calls [`expanded`] and writes the
+//! result as it writes any object: the sections are ordinary ones, their cross
+//! references relocations against another section (`Target::Section`) and an
+//! address one against a symbol of the code's section.
 //!
 //! A fact DWARF as written here cannot say is refused by name, never dropped.
 
 /// Location lists say where a value is over each range of the code.
 pub const LOCATION_RANGES: bool = true;
-/// A frame cell is placed from the canonical frame address, which call frame information gives at every address: `-g`
-/// keeps no frame register for it.
+/// A frame cell is placed from the canonical frame address, which call frame
+/// information gives at every address: `-g` keeps no frame register for it.
 pub const CFA_LOCATIONS: bool = true;
 
 mod buffer;
@@ -29,7 +30,8 @@ fn refused<T>(what: impl std::fmt::Display) -> Result<T, Unsupported> {
     Err(Unsupported(format!("DWARF: {what}")))
 }
 
-/// Where in `object` a section's address is: a symbol defined in it, and the symbol's offset.
+/// Where in `object` a section's address is: a symbol defined in it, and the
+/// symbol's offset.
 pub(crate) fn anchor(
     object: &Object,
     section: usize,
@@ -47,7 +49,8 @@ pub(crate) fn anchor(
         })
 }
 
-/// `object` with its debug information written as DWARF sections, and `debug` cleared.
+/// `object` with its debug information written as DWARF sections, and `debug`
+/// cleared.
 pub fn expanded(
     object: &Object,
     info: &Info,

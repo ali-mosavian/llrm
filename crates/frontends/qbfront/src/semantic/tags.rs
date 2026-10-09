@@ -24,7 +24,8 @@ pub(super) enum Tag {
     Reallocate(Shape),
     /// ERASE.
     Release { descriptor: u32 },
-    /// The test that `descriptor` has data: true wherever an allocation dominates it.
+    /// The test that `descriptor` has data: true wherever an allocation
+    /// dominates it.
     Allocated { descriptor: u32 },
     /// A load of one descriptor field.
     DescriptorField { descriptor: u32, field: Slot },

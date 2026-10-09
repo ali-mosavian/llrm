@@ -129,7 +129,8 @@ b0:
 
 /// QB's `REDIM` descriptor held every array's address in a private constant
 /// nothing read: the array was untracked, and a runtime call that writes
-/// through a pointer it loaded then reloaded it (deedlines, +128 memory operands).
+/// through a pointer it loaded then reloaded it (deedlines, +128 memory
+/// operands).
 #[test]
 fn a_private_initializer_nothing_names_does_not_leak_the_address_it_holds() {
     let dead = format!("{PRIVATE}@held = internal constant ptr @g\n");
@@ -155,9 +156,9 @@ fn a_global_held_only_by_a_noretain_argument_stays_tracked() {
     assert_eq!(held("nocapture"), None);
 }
 
-/// `noretain` says what a call keeps, not what it writes: `ERASE` of a `$STATIC`
-/// array zeroes it through the descriptor, so a 9 stored before the call was read
-/// back after it (Q45S34).
+/// `noretain` says what a call keeps, not what it writes: `ERASE` of a
+/// `$STATIC` array zeroes it through the descriptor, so a 9 stored before the
+/// call was read back after it (Q45S34).
 #[test]
 fn a_noretain_call_clobbers_a_global_its_argument_holds() {
     let globals = format!(
@@ -330,8 +331,9 @@ fn a_callee_declared_after_the_outer_facts_may_call_back() {
     assert!(crate::globalsaa::calls_back(&unit, call));
 }
 
-/// Every edit to a body worked out what every body contributes to `GlobalsAA` again: an escape analysis of each, whole
-/// (`chain-32`: 135 runs, 15% of the compile). A body not edited since keeps its contribution.
+/// Every edit to a body worked out what every body contributes to `GlobalsAA`
+/// again: an escape analysis of each, whole (`chain-32`: 135 runs, 15% of the
+/// compile). A body not edited since keeps its contribution.
 #[test]
 fn an_edit_to_one_body_works_out_that_body_alone() {
     let mut module = parsed(&format!(

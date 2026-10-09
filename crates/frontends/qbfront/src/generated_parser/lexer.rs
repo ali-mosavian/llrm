@@ -140,7 +140,8 @@ pub fn lex(
                 }
                 b'?' => {
                     at += 1;
-                    // `?` is the recovered `PRINT` shorthand, not an unknown character.
+                    // `?` is the recovered `PRINT` shorthand, not an unknown
+                    // character.
                     reserved_token("?")
                 }
                 byte @ (b'+' | b'-' | b'*' | b'/' | b'\\' | b'^' | b'=' | b',' | b'#' | b';' | b':') => {

@@ -48,7 +48,8 @@ pub struct Lowering<'a> {
     /// The state that has ended: every later `next` is `.none`.
     done: usize,
     loops: Vec<Targets>,
-    /// The owning names in scope, a list per open split block, each in binding order.
+    /// The owning names in scope, a list per open split block, each in binding
+    /// order.
     scopes: Vec<Vec<String>>,
     /// Each split loop's item that is an element of the sequence it steps.
     elements: BTreeMap<String, Expr>,
@@ -178,7 +179,8 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// Resets, innermost last binding first, what the scopes from `depth` on hold.
+    /// Resets, innermost last binding first, what the scopes from `depth` on
+    /// hold.
     fn leave(
         &self,
         depth: usize,
@@ -327,7 +329,8 @@ impl<'a> Lowering<'a> {
                 let mut iterable = iterable.clone();
                 self.expression(&mut iterable);
                 if let Some(state_type) = generator_state(&iterable) {
-                    // Another generator, kept in this one's state while the loop runs.
+                    // Another generator, kept in this one's state while the
+                    // loop runs.
                     let iterator = self.hidden_field("iterator", HiddenType::Named(TypeSpec::Named(state_type)));
                     let made = self.set(&iterator, iterable);
                     self.states[state].push(made);
@@ -367,7 +370,8 @@ impl<'a> Lowering<'a> {
                 let mut dispatched = Vec::new();
                 for arm in arms.iter_mut() {
                     let inside = self.reserve();
-                    // The arm's names are fields; the pattern binds them afresh.
+                    // The arm's names are fields; the pattern binds them
+                    // afresh.
                     let (pattern, names) = rename_bindings(&arm.pattern);
                     let mut taken = self.taken(&names);
                     taken.extend(self.goto(inside));
@@ -388,7 +392,8 @@ impl<'a> Lowering<'a> {
                 Ok(state)
             }
             Statement::Unsafe { body, .. } => {
-                // Each piece of the body, whichever state runs it, stays unsafe.
+                // Each piece of the body, whichever state runs it, stays
+                // unsafe.
                 let marks: Vec<usize> = self.states.iter().map(Vec::len).collect();
                 self.open(&[]);
                 let end = self.inline(body, state)?;

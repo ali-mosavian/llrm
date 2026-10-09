@@ -24,8 +24,9 @@ fn of(
     rows(code, 32, EBP, ESP, 4, pops)
 }
 
-/// `push ebp; mov ebp, esp; sub esp, 8; nop; leave; ret`: the frame address is the stack pointer's plus four
-/// at the entry, plus eight once ebp is saved, the frame register's plus eight from `mov` to `leave`, and the
+/// `push ebp; mov ebp, esp; sub esp, 8; nop; leave; ret`: the frame address is
+/// the stack pointer's plus four at the entry, plus eight once ebp is saved,
+/// the frame register's plus eight from `mov` to `leave`, and the
 /// stack pointer's plus four again for the `ret`, ebp restored.
 #[test]
 fn a_frame_register_function_is_the_stack_pointer_then_the_frame_register_then_the_stack_pointer() {
@@ -41,8 +42,9 @@ fn a_frame_register_function_is_the_stack_pointer_then_the_frame_register_then_t
     );
 }
 
-/// A function with no frame register: each argument pushed moves the frame address from the stack pointer, and
-/// the `add esp` after the call moves it back. Without the rows, a debugger stopped in the callee took the
+/// A function with no frame register: each argument pushed moves the frame
+/// address from the stack pointer, and the `add esp` after the call moves it
+/// back. Without the rows, a debugger stopped in the callee took the
 /// caller's frame to start four bytes after where it does.
 #[test]
 fn each_push_and_pop_moves_the_frame_address_from_the_stack_pointer() {
@@ -54,8 +56,9 @@ fn each_push_and_pop_moves_the_frame_address_from_the_stack_pointer() {
     );
 }
 
-/// A callee that pops its arguments leaves the stack higher after the call with no instruction to say so: the
-/// compiler's own record of what the callee pops (`pops`, by where the call ends) is what moves the frame address.
+/// A callee that pops its arguments leaves the stack higher after the call with
+/// no instruction to say so: the compiler's own record of what the callee pops
+/// (`pops`, by where the call ends) is what moves the frame address.
 #[test]
 fn a_call_whose_callee_pops_its_arguments_moves_the_frame_address_by_what_it_pops() {
     let code = [0x6A, 0x02, 0x6A, 0x01, 0xE8, 0, 0, 0, 0, 0xC3];
@@ -65,8 +68,9 @@ fn a_call_whose_callee_pops_its_arguments_moves_the_frame_address_by_what_it_pop
     );
 }
 
-/// A register saved where it is first needed and restored before each return: a rule from its push to its pop on
-/// each path, and the branch's target has the state its jump had, not the one the return before it left.
+/// A register saved where it is first needed and restored before each return: a
+/// rule from its push to its pop on each path, and the branch's target has the
+/// state its jump had, not the one the return before it left.
 #[test]
 fn a_saved_register_is_saved_from_its_push_to_each_pop_on_every_path() {
     // push esi; test eax, eax; jz 7; pop esi; ret; pop esi; ret
@@ -84,8 +88,8 @@ fn a_saved_register_is_saved_from_its_push_to_each_pop_on_every_path() {
     let _ = ESI;
 }
 
-/// Two paths that reach one place with different depths have no single rule: refused, since a wrong one would
-/// unwind into the wrong frame.
+/// Two paths that reach one place with different depths have no single rule:
+/// refused, since a wrong one would unwind into the wrong frame.
 #[test]
 fn two_stack_depths_at_one_place_are_refused() {
     // test eax, eax; jz 5; push eax; ret
@@ -93,7 +97,8 @@ fn two_stack_depths_at_one_place_are_refused() {
     assert!(of(&code, &[]).unwrap_err().contains("two stack depths"));
 }
 
-/// A register pushed after it was written is a value, not the caller's: no save.
+/// A register pushed after it was written is a value, not the caller's: no
+/// save.
 #[test]
 fn a_push_of_a_register_written_since_entry_is_no_save() {
     // mov esi, 1; push esi; add esp, 4; ret

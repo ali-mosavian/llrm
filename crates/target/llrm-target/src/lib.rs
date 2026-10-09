@@ -35,19 +35,21 @@ pub struct CpuPrices {
     pub operations: OperationCosts,
     /// The target's address spaces by role.
     pub spaces: llrm_mir::spaces::Spaces,
-    /// What its description gives a function nothing outside the program reaches.
+    /// What its description gives a function nothing outside the program
+    /// reaches.
     pub private: Option<llrm_mir::target::PrivateConvention>,
     /// The conventions as the description states them.
     pub calling: Option<&'static calling::Calling>,
 }
 
-/// A cost model that is only what a target describes: its registers, address forms and
-/// operation prices.
+/// A cost model that is only what a target describes: its registers, address
+/// forms and operation prices.
 pub fn described(prices: &CpuPrices) -> Rc<dyn llrm_mir::target::Machine> {
     described_by_size(prices, None)
 }
 
-/// `described`, with what each operation costs in code bytes where the description states them.
+/// `described`, with what each operation costs in code bytes where the
+/// description states them.
 pub fn described_by_size(
     prices: &CpuPrices,
     sizes: Option<OperationCosts>,
@@ -104,7 +106,8 @@ impl llrm_mir::target::Machine for Described {
         self.spaces
     }
 
-    /// Memory without segments is linear: no selector and offset reach foreign memory.
+    /// Memory without segments is linear: no selector and offset reach foreign
+    /// memory.
     fn foreign_span(
         &self,
         _: (i64, i64),
@@ -152,7 +155,8 @@ pub trait Target {
     /// The platform description a frontend of this target defaults to.
     fn machine(&self) -> Machine;
 
-    /// Whether the machine has no instruction for `operation` (its description's `expand`), so the compiler expands it
+    /// Whether the machine has no instruction for `operation` (its
+    /// description's `expand`), so the compiler expands it
     /// before selection.
     fn expands(
         &self,
@@ -191,8 +195,8 @@ pub trait Target {
         far: bool,
     ) -> i64;
 
-    /// What a call leaves on the stack before the callee's frame: the return address, which a far call
-    /// makes longer.
+    /// What a call leaves on the stack before the callee's frame: the return
+    /// address, which a far call makes longer.
     fn return_address_bytes(
         &self,
         far: bool,
@@ -211,7 +215,8 @@ pub trait Target {
     /// a value in: each by its full register and by the one a prologue pushes.
     fn callee_saved(&self) -> Vec<(iced_x86::Register, iced_x86::Register)>;
 
-    /// One CPU's timings (a column of the target's `timings.times`), if the target prices it.
+    /// One CPU's timings (a column of the target's `timings.times`), if the
+    /// target prices it.
     fn cpu_table(
         &self,
         name: &str,
@@ -220,7 +225,8 @@ pub trait Target {
     /// The target's register file, in `registers.regs`'s format.
     fn registers_text(&self) -> String;
 
-    /// The target's instruction forms: the family's and its own, in `x86.instr`'s format.
+    /// The target's instruction forms: the family's and its own, in
+    /// `x86.instr`'s format.
     fn forms_text(&self) -> String;
 
     /// The operand size an instruction has without a size prefix, in bytes.
@@ -229,8 +235,9 @@ pub trait Target {
     /// The CPU a compile is priced for where none is asked.
     fn default_cpu(&self) -> &'static str;
 
-    /// The operations priced by `price` (the CPU's clocks of a form), as the target's
-    /// `opcosts.txt` makes them of forms; `prefix` is the CPU's operand-size prefix cost.
+    /// The operations priced by `price` (the CPU's clocks of a form), as the
+    /// target's `opcosts.txt` makes them of forms; `prefix` is the CPU's
+    /// operand-size prefix cost.
     fn operation_costs(
         &self,
         price: &dyn Fn(&str) -> i64,
@@ -240,7 +247,8 @@ pub trait Target {
     /// The registers an allocator may hold values in.
     fn register_capacity(&self) -> i64;
 
-    /// How deep the floating register stack is: the roots of class `x87` its register file states.
+    /// How deep the floating register stack is: the roots of class `x87` its
+    /// register file states.
     fn float_stack(&self) -> usize {
         registers::parse(&self.registers_text()).map_or(0, |all| registers::of_class(&all, "x87").len())
     }
@@ -256,20 +264,24 @@ pub trait Target {
     /// How this target's passes are given the prices of a CPU.
     fn cost_model(&self) -> CostModel;
 
-    /// The calling conventions a program for this target may name, by the names `calling.toml`
-    /// gives them; the first is the one a language's own functions use.
+    /// The calling conventions a program for this target may name, by the names
+    /// `calling.toml` gives them; the first is the one a language's own
+    /// functions use.
     fn conventions(&self) -> &'static [&'static str];
 
-    /// The calling conventions themselves, `calling.toml` read: where each passes arguments, what it keeps.
+    /// The calling conventions themselves, `calling.toml` read: where each
+    /// passes arguments, what it keeps.
     fn calling(&self) -> &'static calling::Calling;
 
-    /// The machine's physical addresses by name (the text screen's video memory): one fact, which a
-    /// target's address space turns into the pointer it has.
+    /// The machine's physical addresses by name (the text screen's video
+    /// memory): one fact, which a target's address space turns into the
+    /// pointer it has.
     fn physical_addresses(&self) -> Vec<(String, u64)> {
         Vec::new()
     }
 
-    /// The OS layer a language's runtime is built on here, if the target has one for it.
+    /// The OS layer a language's runtime is built on here, if the target has
+    /// one for it.
     fn runtime(
         &self,
         _language: &str,
@@ -277,7 +289,8 @@ pub trait Target {
         None
     }
 
-    /// The OS layer every language's runtime on this target calls: the one interface, implemented here.
+    /// The OS layer every language's runtime on this target calls: the one
+    /// interface, implemented here.
     fn os_layer(&self) -> Option<os::Layer> {
         None
     }
@@ -298,12 +311,14 @@ pub trait Target {
         }
     }
 
-    /// Whether a function that needs no frame register may leave it out (`calling.toml`'s `frame_optional`).
+    /// Whether a function that needs no frame register may leave it out
+    /// (`calling.toml`'s `frame_optional`).
     fn frame_optional(&self) -> bool {
         false
     }
 
-    /// Whether a frame tuned for size opens with `enter` (`calling.toml`'s `frame_enter`).
+    /// Whether a frame tuned for size opens with `enter` (`calling.toml`'s
+    /// `frame_enter`).
     fn frame_enter(&self) -> bool {
         false
     }
@@ -324,19 +339,21 @@ pub struct FrameRegisters {
     pub optional: bool,
     /// A frame tuned for size opens with `enter`.
     pub enter: bool,
-    /// The function has no frame register: it holds a value, and a frame cell is addressed through the stack pointer.
+    /// The function has no frame register: it holds a value, and a frame cell
+    /// is addressed through the stack pointer.
     pub free: bool,
 }
 
 impl FrameRegisters {
-    /// `register` as this target spells it: the frame register and stack pointer
-    /// LIR calls BP and SP.
+    /// `register` as this target spells it: the frame register and stack
+    /// pointer LIR calls BP and SP.
     pub fn spelled(
         &self,
         register: iced_x86::Register,
     ) -> iced_x86::Register {
         match register {
-            // Where the frame register holds a value, BP is its word view, not the frame token.
+            // Where the frame register holds a value, BP is its word view, not
+            // the frame token.
             iced_x86::Register::BP if !self.free => self.pointer,
             iced_x86::Register::SP => self.stack,
             other => other,
@@ -344,6 +361,6 @@ impl FrameRegisters {
     }
 }
 
-/// The I/O ports of a PC: a `[[ports]]`-only description that a platform appends to
-/// its own text.
+/// The I/O ports of a PC: a `[[ports]]`-only description that a platform
+/// appends to its own text.
 pub const PC_PORTS: &str = include_str!("machines/pc-ports.toml");

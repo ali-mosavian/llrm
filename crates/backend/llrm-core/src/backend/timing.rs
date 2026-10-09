@@ -1,8 +1,8 @@
 //! Port of `qbopt/backend/timing.py`: audited instruction core-clock
 //! bounds, separate from scoreboard estimates.
 //!
-//! Sources and limitations: docs/measurement/timing-audit.md. Bounds exclude decode,
-//! prefix, memory and scheduling costs.
+//! Sources and limitations: docs/measurement/timing-audit.md. Bounds exclude
+//! decode, prefix, memory and scheduling costs.
 
 use crate::backend::cpu::{self as targets, ProfileOrName};
 
@@ -31,7 +31,8 @@ pub fn signed_multiply<'a>(
     let profile = targets::profile(cpu)?;
     let of = |what: &str| stated(profile, &format!("smul_{what}_w{width}"));
     if let (Some(minimum), Some(maximum)) = (of("min"), of("max")) {
-        // Where the CPU prices the full product of a word apart, that figure is both bounds.
+        // Where the CPU prices the full product of a word apart, that figure is
+        // both bounds.
         if let Some(clocks) = stated(profile, "smul_full_w2").filter(|_| full && width == 2) {
             return Ok(Some(Clocks { minimum: clocks, maximum: clocks }));
         }
@@ -40,11 +41,13 @@ pub fn signed_multiply<'a>(
     Ok(None)
 }
 
-/// Clocks of a multiply whose multiplier has `bits` significant bits (`None`: unknown), for a CPU whose multiply ends
-/// early on a short multiplier: the stated minimum at 3 bits to the stated maximum at the full width, a step per bit
-/// (the 486's `10 + max(bits, 3)`, Intel 240440-002 Table 10.1 note 3). A CPU whose two bounds are one has no such
-/// dependence. An unknown multiplier is priced at the middle of the range: the estimate with no information on which
-/// bit length it has, an assumption and not a fact about any program.
+/// Clocks of a multiply whose multiplier has `bits` significant bits (`None`:
+/// unknown), for a CPU whose multiply ends early on a short multiplier: the
+/// stated minimum at 3 bits to the stated maximum at the full width, a step per
+/// bit (the 486's `10 + max(bits, 3)`, Intel 240440-002 Table 10.1 note 3). A
+/// CPU whose two bounds are one has no such dependence. An unknown multiplier
+/// is priced at the middle of the range: the estimate with no information on
+/// which bit length it has, an assumption and not a fact about any program.
 pub fn multiply_clocks<'a>(
     cpu: impl Into<ProfileOrName<'a>>,
     width: i64,
@@ -53,9 +56,10 @@ pub fn multiply_clocks<'a>(
     multiply_clocks_of(cpu, width, bits, false)
 }
 
-/// `multiply_clocks`, for a multiplier of either sign: where the CPU's description gives a negative one a higher floor
-/// of bits (`smul_negative_bits`: the 486's `n = 5` against `3`), a negative multiplier of fewer bits costs as one of
-/// that many.
+/// `multiply_clocks`, for a multiplier of either sign: where the CPU's
+/// description gives a negative one a higher floor
+/// of bits (`smul_negative_bits`: the 486's `n = 5` against `3`), a negative
+/// multiplier of fewer bits costs as one of that many.
 pub fn multiply_clocks_of<'a>(
     cpu: impl Into<ProfileOrName<'a>>,
     width: i64,
@@ -113,7 +117,8 @@ mod tests {
         }
     }
 
-    /// LNGMXX was selected on 486 using 26 clocks for a product that may take 42.
+    /// LNGMXX was selected on 486 using 26 clocks for a product that may take
+    /// 42.
     #[test]
     fn test_486_reciprocal_does_not_win_using_midpoint_multiply() {
         let mut count = 4..;
@@ -129,7 +134,8 @@ mod tests {
         assert_eq!(signed_divide("P6", 4), Ok(None));
     }
 
-    /// A quotient-only divide should not multiply back and subtract for a dead remainder.
+    /// A quotient-only divide should not multiply back and subtract for a dead
+    /// remainder.
     #[test]
     fn test_quotient_only_reciprocal_omits_remainder_reconstruction() {
         let (quotient, remainder) = (ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 });

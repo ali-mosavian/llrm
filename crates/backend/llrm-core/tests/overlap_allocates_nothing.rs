@@ -1,5 +1,6 @@
-//! A function taking a large struct by value asks whether each of its frame cells meets each store (n^2 asks): each
-//! ask built five sets, so 2048 words took 13 s (#830).
+//! A function taking a large struct by value asks whether each of its frame
+//! cells meets each store (n^2 asks): each ask built five sets, so 2048 words
+//! took 13 s (#830).
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};

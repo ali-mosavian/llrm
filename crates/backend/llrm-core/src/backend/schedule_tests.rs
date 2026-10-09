@@ -141,7 +141,8 @@ fn test_pentium_pairs_a_frame_lea_after_an_independent_prefixed_move() {
     assert_eq!(dests(&result), [Register::EAX, Register::BX]);
 }
 
-/// A LEA with a non-frame symbol owns relocation/segment meaning, unlike a frame address.
+/// A LEA with a non-frame symbol owns relocation/segment meaning, unlike a
+/// frame address.
 #[test]
 fn test_scheduler_keeps_symbolic_or_nonframe_addresses_out_of_its_window() {
     let address = Address {

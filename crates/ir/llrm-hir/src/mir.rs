@@ -56,8 +56,8 @@ pub fn emit(
         .collect()
 }
 
-/// Every function the module defines checks the stack on entry, but one that runs on a stack of its
-/// own making: an interrupt handler's, a naked one's.
+/// Every function the module defines checks the stack on entry, but one that
+/// runs on a stack of its own making: an interrupt handler's, a naked one's.
 fn check_stack(module: &mut Module) {
     for global in &mut module.globals {
         if global.linkage == Linkage::AvailableExternally {
@@ -261,10 +261,10 @@ fn stored_type(
 pub struct Tags {
     pub place: MetadataId,
     pub allocation: MetadataId,
-    /// The `!tbaa` access tag of each array allocation a function reaches through
-    /// its descriptor, by function and descriptor place: a type of its own
-    /// under `allocation`, so two arrays are apart and the generic tag, which
-    /// a parameter's array carries, covers them all.
+    /// The `!tbaa` access tag of each array allocation a function reaches
+    /// through its descriptor, by function and descriptor place: a type of
+    /// its own under `allocation`, so two arrays are apart and the generic
+    /// tag, which a parameter's array carries, covers them all.
     pub arrays: HashMap<(i64, i64), MetadataId>,
 }
 
@@ -312,13 +312,15 @@ impl Tags {
                 );
             for descriptor in described {
                 let Some(place) = places.get(&descriptor) else { continue };
-                // What names the array in every function: a data symbol, or this local.
+                // What names the array in every function: a data symbol, or
+                // this local.
                 let identity = match place.storage {
                     Storage::Static | Storage::Module => {
                         (-1 - i64::from(place.storage == Storage::Module), place.symbol)
                     }
                     Storage::Local => (function.id, place.id),
-                    // Another module may name the same object under another tag: generic.
+                    // Another module may name the same object under another
+                    // tag: generic.
                     Storage::Parameter | Storage::External | Storage::Common => continue,
                 };
                 let tag = *identities.entry(identity).or_insert_with(|| {
@@ -388,21 +390,27 @@ fn class_tags(
 }
 
 struct Tables<'h> {
-    /// The node that marks an access made volatile for `-g`'s sake (`llrm_mir::debuginfo::OBSERVED`), where the module
-    /// declares any.
+    /// The node that marks an access made volatile for `-g`'s sake
+    /// (`llrm_mir::debuginfo::OBSERVED`), where the module declares any.
     observed: Option<MetadataId>,
-    /// The target's address spaces: what the HIR's near, far, segment, huge and fixed addresses are.
+    /// The target's address spaces: what the HIR's near, far, segment, huge and
+    /// fixed addresses are.
     spaces: AddressSpaces,
-    /// The bytes of a descriptor's words, which the program states (`Program::descriptor_word`).
+    /// The bytes of a descriptor's words, which the program states
+    /// (`Program::descriptor_word`).
     descriptor_word: i64,
-    /// The flags facts state of each instruction, by function and instruction id.
+    /// The flags facts state of each instruction, by function and instruction
+    /// id.
     instruction_flags: HashMap<(i64, i64), Flags>,
-    /// The facts stated of each call's arguments, by function and instruction id: the operand and the fact.
+    /// The facts stated of each call's arguments, by function and instruction
+    /// id: the operand and the fact.
     argument_facts: HashMap<(i64, i64), Vec<(i64, Fact)>>,
-    /// The flags facts state of each instruction's operands, by function, instruction and operand index.
+    /// The flags facts state of each instruction's operands, by function,
+    /// instruction and operand index.
     operand_flags: HashMap<(i64, i64, i64), Flags>,
     array_order: model::ArrayOrder,
-    /// The module body's ON ERROR GOTO handlers, which every procedure's pad calls.
+    /// The module body's ON ERROR GOTO handlers, which every procedure's pad
+    /// calls.
     module_handler: Option<handling::ModuleHandler>,
     tags: Tags,
     /// The aliasing class tag of an access as a type, by its id.
@@ -414,7 +422,8 @@ struct Tables<'h> {
     callables: HashMap<&'h str, &'h model::Callable>,
     /// Each data object's global, by its id: a place's symbol.
     data: HashMap<i64, ConstantId>,
-    /// The huge data objects, by id: their places are reached through huge pointers.
+    /// The huge data objects, by id: their places are reached through huge
+    /// pointers.
     huge: llrm_support::hash::HashSet<i64>,
     /// Each callee's function and its declared type, by HIR name.
     callees: HashMap<String, ConstantId>,
@@ -424,15 +433,19 @@ struct Tables<'h> {
     nounwind: &'h [String],
     /// Each source line's `!dbg` node, `!{i32 line}`.
     lines: HashMap<i64, MetadataId>,
-    /// The metadata the language's facts give an instruction's result, by function and instruction id.
+    /// The metadata the language's facts give an instruction's result, by
+    /// function and instruction id.
     fact_nodes: HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>,
     /// The alignment the language states of an instruction's access.
     accesses: HashMap<(i64, i64), u64>,
-    /// The metadata the language's facts give a block's terminator, by function and block id.
+    /// The metadata the language's facts give a block's terminator, by function
+    /// and block id.
     terminator_nodes: HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>,
-    /// The facts stated of a place, by function and place: every access of it has them.
+    /// The facts stated of a place, by function and place: every access of it
+    /// has them.
     place_facts: HashMap<(i64, i64), Vec<Fact>>,
-    /// The facts stated of a member of an aggregate type, by type and offset: every access of it has them.
+    /// The facts stated of a member of an aggregate type, by type and offset:
+    /// every access of it has them.
     field_facts: HashMap<(i64, i64), Vec<Fact>>,
     /// Each frame variable's `!var` node, by its function and place.
     variables: HashMap<(i64, i64), MetadataId>,
@@ -441,7 +454,8 @@ struct Tables<'h> {
 /// The `!dbg` metadata kind: the source line an instruction came from.
 pub const DEBUG_LINE: &str = "dbg";
 
-/// Node numbers the lowering names `-g`'s nodes by until they are made, past any a module has.
+/// Node numbers the lowering names `-g`'s nodes by until they are made, past
+/// any a module has.
 const PROVISIONAL_OBSERVED: MetadataId = MetadataId(0x7000_0000);
 const PROVISIONAL_LINES: u32 = 0x6000_0000;
 pub(crate) const PROVISIONAL_VARIABLES: u32 = 0x4000_0000;
@@ -531,14 +545,16 @@ fn fact_nodes(
     Ok((nodes, accesses, terminators))
 }
 
-/// What `fact_nodes` finds: metadata of instructions, alignments of accesses, metadata of terminators.
+/// What `fact_nodes` finds: metadata of instructions, alignments of accesses,
+/// metadata of terminators.
 type FactNodes = (
     HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>,
     HashMap<(i64, i64), u64>,
     HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>,
 );
 
-/// A loop's `!llvm.loop` node: distinct, naming itself and what it says of unrolling.
+/// A loop's `!llvm.loop` node: distinct, naming itself and what it says of
+/// unrolling.
 fn loop_node(
     module: &mut Module,
     copies: u32,
@@ -666,7 +682,8 @@ fn emit_module<'h>(
         let global = declare_data(&mut module, &tables.spaces, object, layout.as_ref().ok().copied());
         data.insert(object.id, global);
         match layout {
-            // Another module's object, however much of it this module reads: declared only.
+            // Another module's object, however much of it this module reads:
+            // declared only.
             Ok(_) if object.linkage == model::DataLinkage::External => {}
             Ok(_) => defined.push((object, global)),
             Err(why) => refused.push((object.name.clone(), why)),
@@ -691,7 +708,8 @@ fn emit_module<'h>(
     }
     for (function, global) in &mut functions {
         if let Err(why) = declare_outside(&mut module, &mut tables, function) {
-            // What it calls is undeclared: it stays a declaration, external as LLVM's `deleteBody` leaves one.
+            // What it calls is undeclared: it stays a declaration, external as
+            // LLVM's `deleteBody` leaves one.
             if let Some(global) = global.take() {
                 module.globals[global.0 as usize].linkage = Linkage::External;
             }
@@ -705,7 +723,8 @@ fn emit_module<'h>(
             refused.push((hir.name.clone(), why));
         }
     }
-    // What changes what the code after a call means is not a fact a pass may drop.
+    // What changes what the code after a call means is not a fact a pass may
+    // drop.
     for callable in hir.callables.iter().filter(|one| one.returns_twice) {
         let Some(&reference) = tables.callees.get(&callable.name) else { continue };
         let llrm_mir::ConstantKind::Global(global) = module.context.get(reference).kind else { continue };
@@ -713,7 +732,8 @@ fn emit_module<'h>(
             function.attrs.push(Attribute::Flag(RETURNS_TWICE.to_owned()));
         }
     }
-    // Initialized once every function its data addresses is declared: one only addressed, far and C's.
+    // Initialized once every function its data addresses is declared: one only
+    // addressed, far and C's.
     let mut code = HashMap::default();
     for callable in hir
         .data
@@ -764,10 +784,11 @@ fn emit_module<'h>(
         };
         variable.initializer = Some(initializer);
     }
-    // What `-g` adds to the metadata comes after all that the code is made of, so that the numbers of the nodes the
-    // optimiser reads are the same with and without it (a pass that orders by node number would otherwise order
-    // differently). The code is lowered naming those nodes by numbers it chooses; the nodes are made last and the
-    // code renumbered.
+    // What `-g` adds to the metadata comes after all that the code is made of,
+    // so that the numbers of the nodes the optimiser reads are the same
+    // with and without it (a pass that orders by node number would otherwise
+    // order differently). The code is lowered naming those nodes by numbers
+    // it chooses; the nodes are made last and the code renumbered.
     tables.variables = debug::provisional(hir);
     if !tables.variables.is_empty() {
         tables.observed = Some(PROVISIONAL_OBSERVED);
@@ -829,7 +850,8 @@ fn emit_module<'h>(
         let name = module.global(global).name.clone().unwrap_or_default();
         let mut builder = module.builder(global);
         let emitted = Body::new(&mut builder, &tables, owner).and_then(|mut body| {
-            // The handler is its own function; the owner's parameters are not its.
+            // The handler is its own function; the owner's parameters are not
+            // its.
             body.destination = None;
             body.outline(handler, handled)
         });
@@ -962,7 +984,8 @@ fn data_type(
     Ok(if fields.len() == 1 { fields[0] } else { types.intern(Type::Struct { fields, packed: true }) })
 }
 
-/// The bytes of the cells a data object's relocations fill, by what they hold: the target's pointers'.
+/// The bytes of the cells a data object's relocations fill, by what they hold:
+/// the target's pointers'.
 struct Widths {
     near: i64,
     far: i64,
@@ -1017,7 +1040,8 @@ fn relocations<'o>(
     Ok(out)
 }
 
-/// The address space of a data object's global: far data's, a huge object's too.
+/// The address space of a data object's global: far data's, a huge object's
+/// too.
 fn data_space(
     spaces: &AddressSpaces,
     address: AddressKind,
@@ -1103,7 +1127,8 @@ fn data_initializer(
         };
         members.push(match (relocation.address, space) {
             (AddressKind::Near, far) if far == spaces.far && far != spaces.near => cast(context, CastOp::PtrToInt, i16),
-            // Where code is apart from near data (segments), a near address of it is its offset; flat code is near.
+            // Where code is apart from near data (segments), a near address of
+            // it is its offset; flat code is near.
             (AddressKind::Near, _) if relocation.code && spaces.far != spaces.near => {
                 cast(context, CastOp::PtrToInt, i16)
             }
@@ -1174,7 +1199,8 @@ fn convention(
     Ok((convention, space))
 }
 
-/// The string attribute of each argument, by position, that is passed in memory or is where a struct result goes.
+/// The string attribute of each argument, by position, that is passed in memory
+/// or is where a struct result goes.
 fn argument_classes(
     memory: &[i64],
     result_pointer: Option<i64>,
@@ -1187,8 +1213,8 @@ fn argument_classes(
         .collect()
 }
 
-/// The position of the `byval` parameter `place` is the bytes of: its symbol is the parameter, the pointer to the
-/// caller's copy.
+/// The position of the `byval` parameter `place` is the bytes of: its symbol is
+/// the parameter, the pointer to the caller's copy.
 fn byval_home_at(
     function: &model::Function,
     place: &model::Place,
@@ -1204,7 +1230,8 @@ fn byval_home(
     byval_home_at(function, place).is_some()
 }
 
-/// `byval([bytes x i8])` for each of `positions`: the aggregate its pointer argument stands for.
+/// `byval([bytes x i8])` for each of `positions`: the aggregate its pointer
+/// argument stands for.
 fn byval_attributes(
     types: &mut Types,
     positions: &[i64],
@@ -1254,7 +1281,8 @@ fn declare(
 ) -> Emit<(GlobalId, u32)> {
     let values: HashMap<i64, i64> = function.values.iter().map(|one| (one.id, one.r#type)).collect();
     let types = &mut module.context.types;
-    // An interrupt handler is given the registers it saved, as LLVM's x86_intrcc its frame.
+    // An interrupt handler is given the registers it saved, as LLVM's
+    // x86_intrcc its frame.
     let parameters: Vec<TypeId> = match interrupted(function) {
         true => vec![types.ptr(0)],
         false => function
@@ -1694,13 +1722,15 @@ fn declare_outside(
         let answer = site
             .map_or(Answer::Value, |site| answer(site, &instruction.results, |result| tables.types[&values[&result]]));
         let returns = match instruction.results[..] {
-            // A comparison's callee returns the sign of the first against the second.
+            // A comparison's callee returns the sign of the first against the
+            // second.
             [_] if three_way(instruction.op).is_some() => types.int(16),
             [_] if answer == Answer::Through => *parameters.last().ok_or("a floating result with no destination")?,
             [_] if answer == Answer::Address => types.ptr(0),
             [result] => value_type(types, &tables.spaces, tables.types[&values[&result]])?,
             [] => types.void(),
-            // Answered in several registers: one aggregate, as LLVM returns them.
+            // Answered in several registers: one aggregate, as LLVM returns
+            // them.
             ref results => {
                 let fields = results
                     .iter()
@@ -1854,7 +1884,8 @@ fn interrupted(function: &model::Function) -> bool {
     function.abi.as_ref().is_some_and(|abi| abi.distance == model::CallDistance::Interrupt)
 }
 
-/// A routine that may return twice, LLVM's attribute: not a fact, since dropping it changes what the code means.
+/// A routine that may return twice, LLVM's attribute: not a fact, since
+/// dropping it changes what the code means.
 pub const RETURNS_TWICE: &str = "returns_twice";
 
 /// What the language promises holds, LLVM's intrinsic.
@@ -2027,19 +2058,21 @@ struct Body<'b, 'm, 'h> {
     places: HashMap<i64, &'h model::Place>,
     blocks: HashMap<i64, BlockId>,
     values: HashMap<i64, Value>,
-    /// The `i1` each comparison's result was widened from: what an assumption is made of.
+    /// The `i1` each comparison's result was widened from: what an assumption
+    /// is made of.
     truths: HashMap<i64, Value>,
     /// Each local place's frame object, and its offset in it.
     frame: HashMap<i64, (usize, i64)>,
-    /// Where a variadic function's variadic arguments start, if a parameter lives with them.
+    /// Where a variadic function's variadic arguments start, if a parameter
+    /// lives with them.
     passed: Option<Value>,
     objects: Vec<Value>,
     /// Each value that is a place's address, and that place's size.
     addresses: HashMap<i64, i64>,
     /// The addresses of the variables `-g` declares.
     declared_addresses: HashSet<i64>,
-    /// Of those, the ones that are an address into a variable, with the variable, how far into it, and how many bytes
-    /// it is.
+    /// Of those, the ones that are an address into a variable, with the
+    /// variable, how far into it, and how many bytes it is.
     declared_offsets: HashMap<i64, (MetadataId, i64, i64)>,
     handling: Option<handling::Handling>,
     /// The module handler, where this emits its own function.
@@ -2050,7 +2083,8 @@ struct Body<'b, 'm, 'h> {
     /// know which operand a place is.
     at_instruction: i64,
     operands_at: Vec<usize>,
-    /// The `!range` node of each bounds at each integer type, made on the first access that wants it.
+    /// The `!range` node of each bounds at each integer type, made on the first
+    /// access that wants it.
     range_nodes: HashMap<(i64, i64, TypeId), MetadataId>,
 }
 
@@ -2126,18 +2160,22 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         self.close_handling()
     }
 
-    /// A debugger reads a declared variable from its cell at any time, so every store into one stays, in order, as a
-    /// volatile one does: not only those the language writes as stores to the variable, but any through an address
-    /// into it. The optimiser asks nothing else; `-g` of a variable the allocator keeps in a register will not need
-    /// it. A store of `value` to the declared place `place` says so to the debugger from the next instruction on:
-    /// the variable, or the bytes of it a member is, has the value. A store the optimiser may delete leaves that,
+    /// A debugger reads a declared variable from its cell at any time, so every
+    /// store into one stays, in order, as a volatile one does: not only
+    /// those the language writes as stores to the variable, but any through an
+    /// address into it. The optimiser asks nothing else; `-g` of a variable
+    /// the allocator keeps in a register will not need it. A store of
+    /// `value` to the declared place `place` says so to the debugger from the
+    /// next instruction on: the variable, or the bytes of it a member is,
+    /// has the value. A store the optimiser may delete leaves that,
     /// where it left the cell.
     fn say_stored(
         &mut self,
         place: &Operand,
         value: llrm_mir::Operand,
     ) {
-        // The variable, how far into it the store is, how many bytes it writes, and how many the variable is.
+        // The variable, how far into it the store is, how many bytes it writes,
+        // and how many the variable is.
         let (variable, at, bytes, whole) = match place {
             Operand::PlaceRef(one) => {
                 let Some(&variable) = self.tables.variables.get(&(self.function.id, one.place)) else { return };
@@ -2254,7 +2292,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     }
 
     /// What the language's facts say of the instruction lowered as the ones
-    /// made since the `first`th: metadata on its result's, an alignment on its accesses.
+    /// made since the `first`th: metadata on its result's, an alignment on its
+    /// accesses.
     fn stated(
         &mut self,
         first: usize,
@@ -2523,8 +2562,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     }
 
     /// The access just emitted, tagged `tag`.
-    /// What the language's facts say of the place or member `operand` names, on the access
-    /// just emitted: a range on a load, an alignment on either.
+    /// What the language's facts say of the place or member `operand` names, on
+    /// the access just emitted: a range on a load, an alignment on either.
     fn stated_access(
         &mut self,
         operand: &Operand,
@@ -2562,7 +2601,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         }
     }
 
-    /// The `!range` node saying a value of `ty` is within `bounds`, if `ty` is an integer.
+    /// The `!range` node saying a value of `ty` is within `bounds`, if `ty` is
+    /// an integer.
     fn range_node(
         &mut self,
         bounds: llrm_mir::facts::Bounds,
@@ -2712,7 +2752,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         instruction.operands.iter().map(|one| self.value(one)).collect()
     }
 
-    /// The flags facts state of `operand`, one of the operands of the instruction being lowered.
+    /// The flags facts state of `operand`, one of the operands of the
+    /// instruction being lowered.
     fn operand_flags(
         &self,
         operand: &Operand,
@@ -2772,8 +2813,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 self.trapping(instruction.id, b)?;
             }
             let result = self.b.binary(binary, a, b, flags, "");
-            // An address of a declared variable moved by an offset is an address into it: a store through it is a store
-            // to it.
+            // An address of a declared variable moved by an offset is an
+            // address into it: a store through it is a store to it.
             if matches!(op, Op::Add | Op::Sub)
                 && instruction.operands.iter().any(|one| {
                     matches!(
@@ -2846,7 +2887,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             return Ok(());
         }
         if op == Op::Assume {
-            // A comparison's own `i1`, so that a reader before instcombine sees the test.
+            // A comparison's own `i1`, so that a reader before instcombine sees
+            // the test.
             let made = match &instruction.operands[0] {
                 Operand::ValueRef(one) => self.truths.get(&one.value).copied(),
                 _ => None,
@@ -2931,8 +2973,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             Op::Store => {
                 let (pointer, _, volatile, tag) = self.place(&instruction.operands[0])?;
                 let value = self.value(&instruction.operands[1])?;
-                // A debugger reads a declared variable from its cell at any time: every store to
-                // it stays, in order, as one to a volatile does. The optimiser asks nothing else.
+                // A debugger reads a declared variable from its cell at any
+                // time: every store to it stays, in order, as
+                // one to a volatile does. The optimiser asks nothing else.
                 let observed = self.declared_place(&instruction.operands[0]);
                 let first = self.b.function.instruction_count();
                 self.b.store(value, pointer, volatile || observed);
@@ -2967,7 +3010,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     (self.declared_place(&instruction.operands[0]), instruction.results.first())
                 {
                     self.declared_addresses.insert(result);
-                    // Where in which variable the address is, if it is a place or a member of one.
+                    // Where in which variable the address is, if it is a place
+                    // or a member of one.
                     let (id, at) = match &instruction.operands[0] {
                         Operand::PlaceRef(one) => (Some(one.place), 0),
                         Operand::ProjectedPlace(one)
@@ -3032,7 +3076,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             Op::Not => {
                 let value = self.value(&instruction.operands[0])?;
                 let bits = self.b.context.types.int_bits(self.b.type_of(value)).ok_or("a complemented non-integer")?;
-                // An unsigned boolean is 0 or 1, as C's: its negation flips that one bit.
+                // An unsigned boolean is 0 or 1, as C's: its negation flips
+                // that one bit.
                 let one = self.hir_type(self.value_types[&instruction.results[0]]).kind == model::TypeKind::Boolean
                     && self.hir_type(self.value_types[&instruction.results[0]]).signed == Some(false);
                 let ones = self.b.int(bits, if one { 1 } else { -1 });
@@ -3263,7 +3308,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             .collect()
     }
 
-    /// The `byval` attribute of each argument of `instruction`'s call that is a large aggregate's address.
+    /// The `byval` attribute of each argument of `instruction`'s call that is a
+    /// large aggregate's address.
     fn byval_arguments(
         &mut self,
         instruction: &model::Instruction,
@@ -3413,7 +3459,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             TerminatorKind::Return => {
                 let mut value = terminator.operands.first().map(|one| self.value(one)).transpose()?;
                 if let Some(destination) = self.destination {
-                    // No value stores nothing, and the caller still loads through what comes back.
+                    // No value stores nothing, and the caller still loads
+                    // through what comes back.
                     if let Some(result) = value {
                         self.b.store(result, destination, false);
                     }
@@ -3423,7 +3470,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     unreachable!("a function type")
                 };
                 if value.is_none() && !self.b.context.types.is_void(returns) {
-                    // No value from a function that has one: nothing the caller may read.
+                    // No value from a function that has one: nothing the caller
+                    // may read.
                     value = Some(Value::Constant(
                         self.b.context.constant(Constant { ty: returns, kind: ConstantKind::Poison }),
                     ));

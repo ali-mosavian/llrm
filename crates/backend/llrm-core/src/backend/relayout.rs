@@ -1,12 +1,16 @@
-//! The frame laid out again: a function whose frame reaches past `[bp-128]` is also tried with a hole above its allocas
-//! for the spill slots; this makes that layout from the first one, by the slot each frame cell names, where it used to
-//! run the whole backend a second time (docs/optimizations/second-frame.md).
+//! The frame laid out again: a function whose frame reaches past `[bp-128]` is
+//! also tried with a hole above its allocas for the spill slots; this makes
+//! that layout from the first one, by the slot each frame cell names, where it
+//! used to run the whole backend a second time
+//! (docs/optimizations/second-frame.md).
 //!
-//! A cell is moved by its slot: the incoming arguments stay, a slot instruction selection laid out moves down by the
-//! hole, a spill slot goes where `Frame::slot` would hand it out in a frame that has the hole. Anything this does not
-//! know how to move (bytes of inline code that name a displacement, a cell in no known slot, a set of call-private
-//! ranges that is not what `outside` makes) makes it give up, and the caller runs the backend again as before.
-//! `LLRM_CHECK_FRAME=1` runs it again either way and compares.
+//! A cell is moved by its slot: the incoming arguments stay, a slot instruction
+//! selection laid out moves down by the hole, a spill slot goes where
+//! `Frame::slot` would hand it out in a frame that has the hole. Anything this
+//! does not know how to move (bytes of inline code that name a displacement, a
+//! cell in no known slot, a set of call-private ranges that is not what
+//! `outside` makes) makes it give up, and the caller runs the backend again as
+//! before. `LLRM_CHECK_FRAME=1` runs it again either way and compares.
 
 use std::sync::Arc;
 
@@ -16,8 +20,9 @@ use crate::model::ir::{Addr, Address, Loc, Mem, Semantics, Space};
 use crate::model::lir::{CallMemory, DebugPlace, DebugVariable, Insn, LirBlock, WHOLE_FRAME, outside};
 use crate::support::hash::IndexMap;
 
-/// `first`, which was laid out under `frame` (no hole), laid out with `hole` bytes above the allocas for spill slots;
-/// and its frame. None where it cannot be moved by its slots alone.
+/// `first`, which was laid out under `frame` (no hole), laid out with `hole`
+/// bytes above the allocas for spill slots; and its frame. None where it cannot
+/// be moved by its slots alone.
 pub fn laid_again(
     first: &Machined,
     frame: &Frame,
@@ -84,8 +89,9 @@ pub fn laid_again(
     Some((machined, again))
 }
 
-/// The frame `frame` would be with `hole`: the same floor lowered by the hole, the selector's slots moved, and the
-/// spill slots handed out again in the order they were first made.
+/// The frame `frame` would be with `hole`: the same floor lowered by the hole,
+/// the selector's slots moved, and the spill slots handed out again in the
+/// order they were first made.
 fn replayed(
     frame: &Frame,
     hole: i64,
@@ -121,7 +127,8 @@ struct Moves<'a> {
 }
 
 impl Moves<'_> {
-    /// Where the byte at `disp` of a cell tagged with slot `home` is in the new layout.
+    /// Where the byte at `disp` of a cell tagged with slot `home` is in the new
+    /// layout.
     fn disp(
         &self,
         home: i64,
@@ -130,7 +137,8 @@ impl Moves<'_> {
         if home == 0 {
             return Some(disp);
         }
-        // A spill slot: where the replay put the slot, and the cell's place in it.
+        // A spill slot: where the replay put the slot, and the cell's place in
+        // it.
         if let Some(found) = self.homes.get(&home) {
             return Some(disp - home + found);
         }
@@ -149,11 +157,13 @@ impl Moves<'_> {
         let new = match (addr.space, addr.slot_home()) {
             (Space::Frame, Some(home)) => self.disp(home, addr.disp)?,
             (Space::Frame, None) => return None,
-            // An indexed array: a literal displacement through BP, the selector's.
+            // An indexed array: a literal displacement through BP, the
+            // selector's.
             (Space::Literal, _) if in_frame => addr.disp - self.hole,
             _ => return Some((addr, offset)),
         };
-        // `offset` repeats the displacement on a cell the spiller made from a folded frame address.
+        // `offset` repeats the displacement on a cell the spiller made from a
+        // folded frame address.
         let offset = if addr.space == Space::Frame && addr.disp != 0 && offset == addr.disp { new } else { offset };
         Some((Addr { disp: new, ..addr }, offset))
     }
@@ -209,8 +219,8 @@ impl Moves<'_> {
         Some(Arc::new(Insn { what, call, ..(**one).clone() }))
     }
 
-    /// The call-private ranges when the selector's slots are `hole` lower: the complement of the bytes some pointer
-    /// reaches.
+    /// The call-private ranges when the selector's slots are `hole` lower: the
+    /// complement of the bytes some pointer reaches.
     fn private(
         &self,
         private: &[(Addr, u32)],
@@ -241,7 +251,8 @@ impl Moves<'_> {
         if reach.iter().any(|(start, end)| *start <= low || *end >= high) {
             return None;
         }
-        // An incoming argument's range (from BP up) stays; what the selector laid out below BP moves.
+        // An incoming argument's range (from BP up) stays; what the selector
+        // laid out below BP moves.
         Some(outside(
             &reach
                 .iter()
@@ -267,7 +278,8 @@ impl Moves<'_> {
     }
 }
 
-/// What differs between two machined functions, or None where they are the same.
+/// What differs between two machined functions, or None where they are the
+/// same.
 pub fn difference(
     left: &Machined,
     right: &Machined,
@@ -330,10 +342,11 @@ mod tests {
         }
     }
 
-    /// A frame cell was priced by the displacement its slot happened to have under the first layout, so the second
-    /// layout (which puts the spill slots near) decided differently, and the second backend run could not be
-    /// replaced by moving the cells: sieve at -m32 -O2 allocated `add [slot], 1` in one and a reload, add and store
-    /// in the other.
+    /// A frame cell was priced by the displacement its slot happened to have
+    /// under the first layout, so the second layout (which puts the spill
+    /// slots near) decided differently, and the second backend run could not be
+    /// replaced by moving the cells: sieve at -m32 -O2 allocated `add [slot],
+    /// 1` in one and a reload, add and store in the other.
     #[test]
     fn test_a_frame_cell_is_priced_the_same_wherever_its_slot_is() {
         let length = |addr| priced_in(32, &load(addr), 0, None, false, false, None).expect("encodes").code.len();
@@ -350,7 +363,8 @@ mod tests {
         assert_ne!(incoming(8), incoming(2000));
     }
 
-    /// A byval argument's incoming range is escaped like a local, but it does not move with the hole.
+    /// A byval argument's incoming range is escaped like a local, but it does
+    /// not move with the hole.
     #[test]
     fn test_an_escaped_incoming_range_stays_where_it_is_when_the_slots_move() {
         use super::Moves;

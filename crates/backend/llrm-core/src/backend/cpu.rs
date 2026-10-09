@@ -24,9 +24,11 @@ pub struct Profile {
     pub register_capacity: i64,
     /// The target's address spaces by role.
     pub spaces: llrm_mir::spaces::Spaces,
-    /// The convention its description gives a function nothing outside the program reaches.
+    /// The convention its description gives a function nothing outside the
+    /// program reaches.
     pub private: Option<llrm_mir::target::PrivateConvention>,
-    /// The conventions as the description states them, which decide where a call's arguments go and what removes them.
+    /// The conventions as the description states them, which decide where a
+    /// call's arguments go and what removes them.
     pub calling: Option<llrm_target::calling::Stated>,
     /// The operand size an instruction has without a prefix, in bytes.
     pub operand_bytes: i64,
@@ -51,23 +53,26 @@ pub struct Profile {
     pub address_prefix_stall: i64,
     // -Os: where the costs tie on nothing else, the shorter encoding.
     pub size: bool,
-    /// Whether the allocator tries other shapes of a body than the one it is given and keeps the cheapest, as LLVM and
-    /// GCC do not.
+    /// Whether the allocator tries other shapes of a body than the one it is
+    /// given and keeps the cheapest, as LLVM and GCC do not.
     pub search: bool,
-    /// Whether a function is made by both routes (the allocator alone and the spiller's) and the cheaper kept; else by
-    /// the allocator alone.
+    /// Whether a function is made by both routes (the allocator alone and the
+    /// spiller's) and the cheaper kept; else by the allocator alone.
     pub routes: bool,
-    /// With `search`, whether it tries every shape (`-fallocation-search-all`, -Omax) or the one the spills suggest
-    /// and the body without splitting.
+    /// With `search`, whether it tries every shape (`-fallocation-search-all`,
+    /// -Omax) or the one the spills suggest and the body without splitting.
     pub exhaustive: bool,
-    /// How the target this profile is for builds its cost model from the CPU's prices.
+    /// How the target this profile is for builds its cost model from the CPU's
+    /// prices.
     pub model: llrm_target::CostModel,
-    /// The chains of shifts and adds found for constant multiplies under this profile's prices (GCC's `alg_hash`).
+    /// The chains of shifts and adds found for constant multiplies under this
+    /// profile's prices (GCC's `alg_hash`).
     pub multiplies: MultiplyChains,
 }
 
-/// What `arithmetic` found for a multiply by a constant under one profile's prices, by constant and by whether a `lea`
-/// may be used: the profile owns it, so it lives and is keyed with the prices it was found under.
+/// What `arithmetic` found for a multiply by a constant under one profile's
+/// prices, by constant and by whether a `lea` may be used: the profile owns it,
+/// so it lives and is keyed with the prices it was found under.
 #[derive(Default)]
 pub struct MultiplyChains(
     std::sync::Mutex<crate::support::hash::HashMap<(i64, bool), Option<(Vec<(&'static str, i64)>, i64)>>>,
@@ -92,7 +97,8 @@ impl MultiplyChains {
     }
 }
 
-// A cache is not part of what a profile is: a clone starts empty and two profiles are equal by their prices.
+// A cache is not part of what a profile is: a clone starts empty and two
+// profiles are equal by their prices.
 impl Clone for MultiplyChains {
     fn clone(&self) -> Self {
         Self::default()
@@ -150,14 +156,14 @@ impl Profile {
     }
 
     /// The form that indexes by a dword register: where a target has one, a
-    /// 16-bit target's behind the address-size prefix (`secondary`), a flat one's
-    /// native.
+    /// 16-bit target's behind the address-size prefix (`secondary`), a flat
+    /// one's native.
     pub fn dword_address_form(&self) -> Option<&AddressForm> {
         self.address_forms.iter().find(|form| form.index_width == 4)
     }
 
-    /// The dataclass constructor with every defaulted field at its default, and the
-    /// registers and cost model of the target `arch`.
+    /// The dataclass constructor with every defaulted field at its default, and
+    /// the registers and cost model of the target `arch`.
     pub fn new(
         arch: &dyn Target,
         name: &str,
@@ -237,7 +243,8 @@ impl Profile {
     }
 }
 
-/// What `table` lists for `operation`; the last of a name listed twice, as a map built from the table says.
+/// What `table` lists for `operation`; the last of a name listed twice, as a
+/// map built from the table says.
 fn _listed(
     table: &[(String, i64)],
     operation: &str,
@@ -297,7 +304,8 @@ fn _profile(
     })
 }
 
-/// The profiles made so far, by target, CPU and size: each made once, as the passes hold them.
+/// The profiles made so far, by target, CPU and size: each made once, as the
+/// passes hold them.
 static _MADE: LazyLock<
     std::sync::Mutex<crate::support::hash::HashMap<(&'static str, String, bool, bool, bool, bool), &'static Profile>>,
 > = LazyLock::new(Default::default);
@@ -321,7 +329,8 @@ pub fn tuned_exhaustive(
     tuned_with(arch, name, size, true, exhaustive)
 }
 
-/// `tuned_for`, the allocator trying other shapes of a body only where `search`.
+/// `tuned_for`, the allocator trying other shapes of a body only where
+/// `search`.
 pub fn tuned_searching(
     arch: &dyn Target,
     name: &str,
@@ -342,8 +351,8 @@ pub fn tuned_with(
     tuned_routing(arch, name, size, search, exhaustive, search)
 }
 
-/// `tuned_with`, the routes compared where `routes` whatever the search: -O1 to -Os allocate once, and choose the
-/// route.
+/// `tuned_with`, the routes compared where `routes` whatever the search: -O1 to
+/// -Os allocate once, and choose the route.
 pub fn tuned_routing(
     arch: &dyn Target,
     name: &str,
@@ -490,9 +499,10 @@ mod tests {
         assert_eq!(selected, BTreeSet::from(["386", "K5", "K6", "K7", "Core"]));
     }
 
-    /// The target every frontend lowers to prices a call at its clocks and, tuned for size, at its
-    /// bytes: `size_costs` was not forwarded, so it was `costs`, and every MIR decision made "for
-    /// size" (the inliner, the callee-pop convention) weighed clocks.
+    /// The target every frontend lowers to prices a call at its clocks and,
+    /// tuned for size, at its bytes: `size_costs` was not forwarded, so it
+    /// was `costs`, and every MIR decision made "for size" (the inliner,
+    /// the callee-pop convention) weighed clocks.
     #[test]
     fn test_the_lowered_target_forwards_its_size_costs() {
         use llrm_mir::target::Machine;
@@ -506,8 +516,9 @@ mod tests {
         assert_eq!((target.costs().call, target.size_costs().call), (18, 5));
     }
 
-    /// Real mode indexes by a dword behind the address-size prefix; a flat target's form is
-    /// native. Both are the form that takes a dword index, and the word form is not.
+    /// Real mode indexes by a dword behind the address-size prefix; a flat
+    /// target's form is native. Both are the form that takes a dword index,
+    /// and the word form is not.
     #[test]
     fn test_the_dword_address_form_is_the_one_that_indexes_by_dwords() {
         let real = profile("486").unwrap();
@@ -522,7 +533,8 @@ mod tests {
     }
 }
 
-/// The convention `arch`'s description gives a private function, and the ones that may take it.
+/// The convention `arch`'s description gives a private function, and the ones
+/// that may take it.
 fn private_convention(arch: &dyn Target) -> Option<llrm_mir::target::PrivateConvention> {
     let calling = arch.calling();
     let to = llrm_target::calling::Calling::number_of(calling.private()?.cc.as_deref())?;

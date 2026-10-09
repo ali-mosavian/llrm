@@ -24,7 +24,8 @@ pub struct Documents {
 }
 
 impl Default for Documents {
-    /// Checking for the driver's default target until the editor names the project's.
+    /// Checking for the driver's default target until the editor names the
+    /// project's.
     fn default() -> Self {
         let bound = llrm_driver::target(&llrm_core::driver::flags::Flags::default(), None)
             .expect("the default target is built in");
@@ -85,7 +86,8 @@ impl Documents {
         }
     }
 
-    /// The source of module `name` of the program whose main module is at `main`.
+    /// The source of module `name` of the program whose main module is at
+    /// `main`.
     pub fn source(
         &self,
         main: &Path,
@@ -97,7 +99,8 @@ impl Documents {
         }
     }
 
-    /// The document's own module: as its last check parsed it, else its text alone.
+    /// The document's own module: as its last check parsed it, else its text
+    /// alone.
     pub fn module(
         &self,
         path: &Path,

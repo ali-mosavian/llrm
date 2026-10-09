@@ -372,7 +372,8 @@ impl FunctionCompiler<'_> {
         Ok((fields, borrowed))
     }
 
-    /// Registers the state struct of `fields`, after the resume point; its name.
+    /// Registers the state struct of `fields`, after the resume point; its
+    /// name.
     fn declare_frame(
         &mut self,
         fields: &[Field],
@@ -426,7 +427,8 @@ impl FunctionCompiler<'_> {
     ) -> Function {
         let this = || Expr::Name("self".into(), span);
         let resume = Expr::Member { base: Box::new(this()), field: RESUME.into(), span };
-        // A reference is bound as itself, a view as another name for the kept one.
+        // A reference is bound as itself, a view as another name for the kept
+        // one.
         let bound = borrowed
             .iter()
             .map(
@@ -514,7 +516,8 @@ impl FunctionCompiler<'_> {
                 }
                 Statement::For { name, iterable, span, .. } if split => {
                     self.started_generators(iterable)?;
-                    // An iterator's item is kept; a sequence's is its element, read in place.
+                    // An iterator's item is kept; a sequence's is its element,
+                    // read in place.
                     if let Some(frame) = self.frame_of_expression(iterable) {
                         self.check_lent(name, frame.item, iterable, *span)?;
                         self.keep(name, frame.item, None, fields);

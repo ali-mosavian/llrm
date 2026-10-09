@@ -131,8 +131,9 @@ fn an_analysis_is_computed_once_until_a_pass_drops_it() {
     assert_eq!(COMPUTED.get(), 2);
 }
 
-/// A pass that says it dropped everything and edited nothing (1272 of 17,000 drops in QCport, `gvn` and `dead` the
-/// most) cost every analysis a fresh run, and the next to ask got no more than the one before.
+/// A pass that says it dropped everything and edited nothing (1272 of 17,000
+/// drops in QCport, `gvn` and `dead` the most) cost every analysis a fresh run,
+/// and the next to ask got no more than the one before.
 #[test]
 fn a_pass_that_edited_nothing_drops_nothing_whatever_it_says() {
     COMPUTED.set(0);
@@ -192,8 +193,8 @@ impl FunctionPass for LookSteady {
     }
 }
 
-/// A result the analysis says a change left true stands, however the pass that made it describes it; one it does not is
-/// derived again.
+/// A result the analysis says a change left true stands, however the pass that
+/// made it describes it; one it does not is derived again.
 #[test]
 fn a_result_a_change_leaves_true_stands_past_the_pass_that_made_it() {
     for (same, computed) in [(true, 1), (false, 2)] {
@@ -447,9 +448,10 @@ fn a_change_to_the_module_keeps_what_reads_only_the_function() {
     assert_eq!(HELD.take(), [false, true]);
 }
 
-/// Every edit dropped the module analyses and each was worked out again from every global (66 times a compile of
-/// `callers-64`, 1 ms apiece in `call-registers` alone): while the declarations are those it worked from, the result is
-/// the same result.
+/// Every edit dropped the module analyses and each was worked out again from
+/// every global (66 times a compile of `callers-64`, 1 ms apiece in
+/// `call-registers` alone): while the declarations are those it worked from,
+/// the result is the same result.
 #[test]
 fn module_analyses_of_the_declarations_stand_until_a_declaration_changes() {
     use crate::passes::{CallRegisters, CalleeEffects, Declarations, GlobalSizes, TypeAncestry};

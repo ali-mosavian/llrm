@@ -75,8 +75,9 @@ pub fn selected(
     selected_checking(text, module, dump, codegen, None, false)
 }
 
-/// What C's runtime says of its stack on `target`: the `stack.toml` its description names, the OS layer's
-/// stack limit and Open Watcom's `__STKOVERFLOW`, which a checked function compares with and enters.
+/// What C's runtime says of its stack on `target`: the `stack.toml` its
+/// description names, the OS layer's stack limit and Open Watcom's
+/// `__STKOVERFLOW`, which a checked function compares with and enters.
 pub fn stack_check(target: &dyn llrm_target::Target) -> llrm_core::hir::model::StackCheck {
     let description = target.runtime("c").expect("a C target has a C runtime");
     let name = description.string("stack").expect("c.toml names its stack check");
@@ -88,7 +89,8 @@ fn stack_check_of(text: &str) -> llrm_core::hir::model::StackCheck {
     llrm_core::hir::model::StackCheck::from_toml(&row).expect("stack.toml states a stack check")
 }
 
-/// [`selected`], each function checking its stack as `stack_check` says (`-fsanitize=stack`).
+/// [`selected`], each function checking its stack as `stack_check` says
+/// (`-fsanitize=stack`).
 pub fn selected_checking(
     text: &str,
     module: &str,
@@ -117,7 +119,8 @@ pub fn selected_checking(
             .and_then(|one| one.cc.clone())
             .ok_or_else(|| hir::Unsupported(format!("calling.toml has no {} with a cc", profile.entry_convention)))?;
         unit.decorate(calling, codegen.object_format);
-        // The front end was picked by the shim's flat flag; the target says what flat is.
+        // The front end was picked by the shim's flat flag; the target says
+        // what flat is.
         if unit.flat != codegen.arch.layout().spaces.far_is_near() {
             return Err(hir::Unsupported(format!(
                 "the front end is {} but target {} is {}",
@@ -156,7 +159,8 @@ pub(crate) fn hex_bytes(raw: &str) -> Vec<u8> {
 
 struct Args {
     source: PathBuf,
-    /// `--os-layer FIELD`: what the target's OS layer says of C's runtime, printed instead of compiling.
+    /// `--os-layer FIELD`: what the target's OS layer says of C's runtime,
+    /// printed instead of compiling.
     os_layer: Option<Result<String, String>>,
     flags: Flags,
     dump: Option<PathBuf>,
@@ -170,30 +174,32 @@ struct Args {
 
 /// The code-generator stream wccq records for one C file; with `debug`,
 /// its debug types and symbols too (-d2).
-/// How the target asks Open Watcom's front end to record C: the `[frontend]` of its C runtime
-/// description (`runtime/c/<target>/c.toml`).
+/// How the target asks Open Watcom's front end to record C: the `[frontend]` of
+/// its C runtime description (`runtime/c/<target>/c.toml`).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Profile {
     /// The front end's tree: its CPU, `i86` or `386`.
     pub cpu: String,
-    /// The convention whose contract a call to a routine that states none has under this ABI, by its name in
-    /// `calling.toml`.
+    /// The convention whose contract a call to a routine that states none has
+    /// under this ABI, by its name in `calling.toml`.
     pub convention: String,
-    /// The routine the runtime's start calls, and the convention it calls it in by its name in `calling.toml`.
+    /// The routine the runtime's start calls, and the convention it calls it in
+    /// by its name in `calling.toml`.
     pub entry: String,
     pub entry_convention: String,
-    /// What it records of a function it passes in its default registers: its own list (`[ff:0]`), which differs by
-    /// tree.
+    /// What it records of a function it passes in its default registers: its
+    /// own list (`[ff:0]`), which differs by tree.
     pub default_registers: String,
-    /// The ABI the front end is asked for: what it is run with, and what its records mean in `calling.toml`'s
-    /// conventions: one it records as cdecl, and one it records in its default registers.
+    /// The ABI the front end is asked for: what it is run with, and what its
+    /// records mean in `calling.toml`'s conventions: one it records as
+    /// cdecl, and one it records in its default registers.
     pub flags: Vec<String>,
     pub cdecl: String,
     pub registers: String,
     /// The header it includes first, from the repository root.
     pub header: String,
-    /// An interrupt handler's parameters, in order: the registers its frame holds, by name. None where the target has
-    /// no interrupt handlers.
+    /// An interrupt handler's parameters, in order: the registers its frame
+    /// holds, by name. None where the target has no interrupt handlers.
     pub interrupt_parameters: Vec<String>,
 }
 
@@ -264,7 +270,8 @@ impl Profile {
     }
 }
 
-/// `recorded` for real mode, the target the tests of the recorded streams are for.
+/// `recorded` for real mode, the target the tests of the recorded streams are
+/// for.
 #[cfg(test)]
 pub fn recorded(
     source: &Path,
@@ -294,8 +301,10 @@ pub fn recorded_for(
     let wccq = Path::new(option_env!("LLRM_WCCQ_DIR").ok_or_else(unbuilt)?).join(&profile.cpu).join("wccq");
     let failed = |detail: String| hir::Unsupported(format!("wccq failed on {}:\n{detail}", source.display()));
     let scratch = tempfile::tempdir().map_err(|error| failed(error.to_string()))?;
-    // One forced include (a second `-fi=` replaces the first): what GCC predefines and programs test (`__INT_MAX__`,
-    // `__SIZE_TYPE__`, `__BYTE_ORDER__`), as the target's sizes make them, and then the target's own header.
+    // One forced include (a second `-fi=` replaces the first): what GCC
+    // predefines and programs test (`__INT_MAX__`, `__SIZE_TYPE__`,
+    // `__BYTE_ORDER__`), as the target's sizes make them, and then the target's
+    // own header.
     let forced = scratch.path().join("predefined.h");
     let text = format!(
         "{}#include \"{}\"\n",
@@ -407,7 +416,8 @@ pub fn main(argv: &[String]) -> i32 {
             fs::read_to_string(&args.source)?
         } else {
             llrm_core::support::debug::timed("frontend wccq", || {
-                // The target's physical addresses reach the program as `PHYSICAL_<NAME>`.
+                // The target's physical addresses reach the program as
+                // `PHYSICAL_<NAME>`.
                 let defines: Vec<String> = args
                     .codegen
                     .arch
@@ -488,9 +498,10 @@ mod tests {
         lines[top..back].iter().map(|one| (*one).to_owned()).collect()
     }
 
-    /// `-fsanitize=stack` compares with the word and calls the routine `stack.toml` names, and the C
-    /// start-up the tests link defines both: a description naming a word start-up never fills would
-    /// compare with zero. The default build checks nothing.
+    /// `-fsanitize=stack` compares with the word and calls the routine
+    /// `stack.toml` names, and the C start-up the tests link defines both:
+    /// a description naming a word start-up never fills would compare with
+    /// zero. The default build checks nothing.
     #[test]
     fn the_stack_check_names_what_the_c_runtime_defines() {
         let root = Path::new(env!("LLRM_ROOT"));
@@ -537,22 +548,25 @@ mod tests {
             .collect()
     }
 
-    /// `dot` indexes `a[i]` and `b[i]`: before strength waited for the other passes to
-    /// settle, it kept two pointers and a counter, three steps per iteration.
+    /// `dot` indexes `a[i]` and `b[i]`: before strength waited for the other
+    /// passes to settle, it kept two pointers and a counter, three steps
+    /// per iteration.
     #[test]
     fn test_addresses_differing_by_base_share_one_stepped_offset() {
         assert_eq!(loop_counting("dot"), ["add bx, 2"]);
     }
 
     /// `bytes` indexes by `i` itself, with a bound only known at run time: the
-    /// counter never counted to zero, so each iteration compared it with `n` in memory.
+    /// counter never counted to zero, so each iteration compared it with `n` in
+    /// memory.
     #[test]
     fn test_a_counter_read_only_as_offsets_counts_to_zero() {
         assert_eq!(loop_counting("bytes"), ["inc bx"]);
     }
 
-    /// `from1` reads `a[i]` and `b[i - 1]`: `(i - 1) * 2` was a second root beside
-    /// `i * 2`, so each array stepped its own pointer beside a counter.
+    /// `from1` reads `a[i]` and `b[i - 1]`: `(i - 1) * 2` was a second root
+    /// beside `i * 2`, so each array stepped its own pointer beside a
+    /// counter.
     #[test]
     fn test_subscripts_of_one_stride_share_one_offset() {
         assert_eq!(loop_counting("from1"), ["add bx, 2"]);
@@ -596,7 +610,8 @@ mod tests {
         assert_eq!(define.matches("ptr noalias").count(), 3, "{text}");
     }
 
-    /// `ls_animate(&ls, 0.05f)` pushes the single's four bytes; CGFloat was refused.
+    /// `ls_animate(&ls, 0.05f)` pushes the single's four bytes; CGFloat was
+    /// refused.
     #[test]
     fn test_float_moves_as_its_bits() {
         compiles("ls");
@@ -617,13 +632,15 @@ mod tests {
     }
 
     /// qcport's combat_radius passes a BspVec3 by value; the frontend stopped
-    /// at `no scalar width for T51` instead of laying its 12 bytes on the stack.
+    /// at `no scalar width for T51` instead of laying its 12 bytes on the
+    /// stack.
     #[test]
     fn test_aggregate_argument_is_pushed_by_value() {
         compiles("tests/test_aggregate_argument_is_pushed_by_value");
     }
 
-    /// `name`'s listing of `function`, compiled from tests/fixtures/c/`name`.cgs.
+    /// `name`'s listing of `function`, compiled from
+    /// tests/fixtures/c/`name`.cgs.
     fn listing_of(
         name: &str,
         function: &str,
@@ -689,8 +706,9 @@ mod tests {
         }
     }
 
-    /// toolchain/owshim/build.sh hardcoded macOS ARM64's defines and clang, so no wccq
-    /// could be built on any other host and llrm-c refused every C file.
+    /// toolchain/owshim/build.sh hardcoded macOS ARM64's defines and clang, so
+    /// no wccq could be built on any other host and llrm-c refused every C
+    /// file.
     // It records C through wccq, which only the toolchain feature builds.
     #[cfg(feature = "toolchain")]
     #[test]
@@ -712,8 +730,10 @@ mod tests {
         assert_eq!(without_path(&recorded), without_path(&committed));
     }
 
-    /// A far pointer made from a long in memory had its segment as a word-wide view of the shifted dword, a second
-    /// width of one value: the allocator loaded ES again on every iteration of the loop that stores through it.
+    /// A far pointer made from a long in memory had its segment as a word-wide
+    /// view of the shifted dword, a second width of one value: the
+    /// allocator loaded ES again on every iteration of the loop that stores
+    /// through it.
     // It records C through wccq, which only the toolchain feature builds.
     #[cfg(feature = "toolchain")]
     #[test]
@@ -747,7 +767,8 @@ mod tests {
     }
 
     /// A long double global got its initializer as a double, 8 bytes, while
-    /// code loads it as 10 bytes: `gld` read 1.07e-49 and took two bytes of `after`.
+    /// code loads it as 10 bytes: `gld` read 1.07e-49 and took two bytes of
+    /// `after`.
     // It records C through wccq, which only the toolchain feature builds.
     #[cfg(feature = "toolchain")]
     #[test]
@@ -761,8 +782,9 @@ mod tests {
         assert_eq!(data, ["- DGBytes 10 00000000000000e00040"], "{recorded}");
     }
 
-    /// The front end, its switches and its header were `if flat` here and a pair of env names in build.rs: a
-    /// target now says them in its C runtime description, and a target with none is refused.
+    /// The front end, its switches and its header were `if flat` here and a
+    /// pair of env names in build.rs: a target now says them in its C
+    /// runtime description, and a target with none is refused.
     #[test]
     fn test_a_target_asks_the_front_end_as_its_description_says() {
         let real = super::Profile::of(&llrm_x86_m16::M16).unwrap();
@@ -779,8 +801,9 @@ mod tests {
         assert_eq!(super::Profile::parse(&none, "x").unwrap_err(), "the C runtime description has no [frontend]");
     }
 
-    /// The 386 front end records `sum.c` as the committed flat stream: `flat=1` in INIT, int and
-    /// pointers 4 bytes. (Its source path is the machine's, so that line is not compared.)
+    /// The 386 front end records `sum.c` as the committed flat stream: `flat=1`
+    /// in INIT, int and pointers 4 bytes. (Its source path is the
+    /// machine's, so that line is not compared.)
     // It records C through wccq, which only the toolchain feature builds.
     #[cfg(feature = "toolchain")]
     #[test]
@@ -796,9 +819,11 @@ mod tests {
         assert_eq!(body(&recorded), body(&committed));
     }
 
-    /// A second `-fi=` replaces the first: the predefined macros' header was forced after the target's, `far` was a far
-    /// pointer again on the flat target, and DWARF refused every bench program that used one ("a far or huge
-    /// pointer has no DWARF type"). The target's header and the predefined macros are both in the one forced file.
+    /// A second `-fi=` replaces the first: the predefined macros' header was
+    /// forced after the target's, `far` was a far pointer again on the flat
+    /// target, and DWARF refused every bench program that used one ("a far or
+    /// huge pointer has no DWARF type"). The target's header and the
+    /// predefined macros are both in the one forced file.
     // It records C through wccq, which only the toolchain feature builds.
     #[cfg(feature = "toolchain")]
     #[test]
@@ -816,9 +841,10 @@ mod tests {
         assert!(recorded.contains("2147483647"), "__INT_MAX__ is defined: {recorded}");
     }
 
-    /// Borland's dos.h names a parameter `__segment` (`peek( unsigned __segment, unsigned __offset )`), an Open Watcom
-    /// keyword: on the flat target the declaration was E1060 "Invalid type" (QCport host/dbg and game/mdl_ai at
-    /// m32). Both targets' headers rename it.
+    /// Borland's dos.h names a parameter `__segment` (`peek( unsigned
+    /// __segment, unsigned __offset )`), an Open Watcom keyword: on the
+    /// flat target the declaration was E1060 "Invalid type" (QCport host/dbg
+    /// and game/mdl_ai at m32). Both targets' headers rename it.
     // It records C through wccq, which only the toolchain feature builds.
     #[cfg(feature = "toolchain")]
     #[test]
@@ -833,7 +859,8 @@ mod tests {
         }
     }
 
-    /// The loop in `function` that reads `marker`, from its label to its backward branch, as the rich route selects it.
+    /// The loop in `function` that reads `marker`, from its label to its
+    /// backward branch, as the rich route selects it.
     fn selected_loop(
         fixture: &str,
         function: &str,
@@ -842,7 +869,8 @@ mod tests {
         let path = Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"));
         let machine =
             llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
-        // At -O2: a loop is copied out only where the code does not grow, so the loop the test reads stays a loop.
+        // At -O2: a loop is copied out only where the code does not grow, so
+        // the loop the test reads stays a loop.
         let options = llrm_core::driver::Options {
             pipeline: llrm_transforms::pipeline::Options::standard(),
             ..llrm_driver::m16_options(machine)
@@ -887,8 +915,8 @@ mod tests {
             .collect()
     }
 
-    /// `function` of tests/fixtures/c/regparm3.c under `-mabi=regparm3`: gcc's `-mregparm=3` by the size of the
-    /// argument.
+    /// `function` of tests/fixtures/c/regparm3.c under `-mabi=regparm3`: gcc's
+    /// `-mregparm=3` by the size of the argument.
     fn regparm3(function: &str) -> Vec<String> {
         regparm3_at(function, llrm_core::driver::flags::Level::O2)
     }
@@ -925,9 +953,11 @@ mod tests {
         llrm_core::backend::masm::text(&built).unwrap()
     }
 
-    /// A definition has the convention of its prior declaration, as with any C compiler: `declared` follows a `__cdecl`
-    /// prototype and is `_declared`, cdecl's, under the regparm3 default, where `plain` after no prototype is
-    /// `_plain@3`. The Borland routines a program replaces are defined so (QCport's strlib.c).
+    /// A definition has the convention of its prior declaration, as with any C
+    /// compiler: `declared` follows a `__cdecl` prototype and is
+    /// `_declared`, cdecl's, under the regparm3 default, where `plain` after no
+    /// prototype is `_plain@3`. The Borland routines a program replaces are
+    /// defined so (QCport's strlib.c).
     #[test]
     fn test_m16_regparm3_a_definition_takes_the_convention_of_its_declaration() {
         let asm = regparm3_listing(llrm_core::driver::flags::Level::O2);
@@ -937,7 +967,8 @@ mod tests {
         assert!(body.iter().any(|line| line.contains("[bp+6]")), "its arguments are on the stack: {body:?}");
     }
 
-    /// A definition that contradicts its prototype's convention is an error, as Open Watcom says.
+    /// A definition that contradicts its prototype's convention is an error, as
+    /// Open Watcom says.
     #[test]
     fn test_a_definition_contradicting_its_prototype_is_refused() {
         let directory = tempfile::tempdir().unwrap();
@@ -955,8 +986,9 @@ mod tests {
         assert!(error.0.contains("Modifiers disagree"), "{}", error.0);
     }
 
-    /// The first three integer arguments arrive in AL, DX and ECX, each the width of its value (a long in one
-    /// register); the fourth is the stack's first word.
+    /// The first three integer arguments arrive in AL, DX and ECX, each the
+    /// width of its value (a long in one register); the fourth is the
+    /// stack's first word.
     #[test]
     fn test_m16_regparm3_the_first_three_arguments_arrive_by_their_size_and_the_fourth_on_the_stack() {
         let body = regparm3("_sized");
@@ -969,9 +1001,10 @@ mod tests {
         );
     }
 
-    /// A float and a double are on the stack and leave the registers to the integers after them: `skip(float, int b,
-    /// double, int d, int e)` has b, d, e in AX, DX, CX. Open Watcom's convention stops at the first that fits
-    /// none.
+    /// A float and a double are on the stack and leave the registers to the
+    /// integers after them: `skip(float, int b, double, int d, int e)` has
+    /// b, d, e in AX, DX, CX. Open Watcom's convention stops at the first that
+    /// fits none.
     #[test]
     fn test_m16_regparm3_a_float_and_a_double_do_not_stop_the_later_integers_taking_registers() {
         let body = regparm3("_skip");
@@ -982,9 +1015,11 @@ mod tests {
         assert!(!body.iter().any(|line| line.contains("[bp+18]") || line.contains("[bp+20]")), "{body:?}");
     }
 
-    /// A call in a register convention changes FS and GS, as any call into code that may use them does: the description
-    /// names no selector, and a far pointer's segment held in FS across `ext` was read again after it, whatever
-    /// `ext` had put there (QCport drew 37697 polygons for Borland's 37637, its pool's self-test failing).
+    /// A call in a register convention changes FS and GS, as any call into code
+    /// that may use them does: the description names no selector, and a far
+    /// pointer's segment held in FS across `ext` was read again after it,
+    /// whatever `ext` had put there (QCport drew 37697 polygons for
+    /// Borland's 37637, its pool's self-test failing).
     #[test]
     fn test_m16_regparm3_a_call_does_not_keep_a_segment_in_fs_or_gs() {
         let body = regparm3("_keep_far");
@@ -1003,8 +1038,9 @@ mod tests {
         }
     }
 
-    /// A struct of 4 bytes passed by value is on the stack, whatever its size; Open Watcom's convention passes it as a
-    /// long in registers. `take4(struct S4 s, int a)` reads s at [bp+6] and [bp+8], a is in AX.
+    /// A struct of 4 bytes passed by value is on the stack, whatever its size;
+    /// Open Watcom's convention passes it as a long in registers.
+    /// `take4(struct S4 s, int a)` reads s at [bp+6] and [bp+8], a is in AX.
     #[test]
     fn test_m16_regparm3_a_small_struct_argument_is_on_the_stack() {
         let body = regparm3("_take4");
@@ -1015,9 +1051,11 @@ mod tests {
         );
     }
 
-    /// A copy and an add, `mov r,ax; add r,k`, are one `lea r,[eax+k]` where it costs no more: the 486's LEA is one
-    /// clock (its table held the 386's two), so with the address-size prefix it is the two instructions' two clocks
-    /// in a byte less. Two values off one argument took two instructions each.
+    /// A copy and an add, `mov r,ax; add r,k`, are one `lea r,[eax+k]` where it
+    /// costs no more: the 486's LEA is one clock (its table held the 386's
+    /// two), so with the address-size prefix it is the two instructions' two
+    /// clocks in a byte less. Two values off one argument took two
+    /// instructions each.
     #[test]
     fn test_m16_regparm3_a_copy_and_an_add_are_one_lea_where_it_costs_no_more() {
         let body = regparm3("_leas");
@@ -1025,7 +1063,8 @@ mod tests {
         assert!(leas == 2 && !body.iter().any(|line| line.starts_with("mov ")), "{body:?}");
     }
 
-    /// A copy and a unit add stay `mov r,ax; inc r`: the INC makes them three bytes, the LEA is four.
+    /// A copy and a unit add stay `mov r,ax; inc r`: the INC makes them three
+    /// bytes, the LEA is four.
     #[test]
     fn test_m16_regparm3_a_copy_and_a_unit_add_stay_when_the_lea_is_longer_than_the_inc() {
         let body = regparm3_at("_incs", llrm_core::driver::flags::Level::Os);
@@ -1035,8 +1074,9 @@ mod tests {
         );
     }
 
-    /// `calleepop` serves a regparm3 function as it does a cdecl16 one: `many`'s fourth and fifth arguments are the
-    /// only ones on the stack, and its callee removes them (`ret 4`), its callers nothing.
+    /// `calleepop` serves a regparm3 function as it does a cdecl16 one:
+    /// `many`'s fourth and fifth arguments are the only ones on the stack,
+    /// and its callee removes them (`ret 4`), its callers nothing.
     #[test]
     fn test_m16_regparm3_calleepop_removes_the_stack_arguments_in_the_callee() {
         let body = regparm3("_many");
@@ -1045,9 +1085,10 @@ mod tests {
         assert!(!caller.iter().any(|line| line.starts_with("add sp")), "{caller:?}");
     }
 
-    /// A long on the stack is two words: `stack_long`'s fourth, fifth and sixth arguments (a byte, a long, a long) are
-    /// at [bp+6], [bp+8] and [bp+12]. The long was a word's worth to the stack's layout, so the sixth was read at
-    /// [bp+10], from the middle of the fifth.
+    /// A long on the stack is two words: `stack_long`'s fourth, fifth and sixth
+    /// arguments (a byte, a long, a long) are at [bp+6], [bp+8] and
+    /// [bp+12]. The long was a word's worth to the stack's layout, so the sixth
+    /// was read at [bp+10], from the middle of the fifth.
     #[test]
     fn test_m16_regparm3_a_long_on_the_stack_takes_two_words() {
         let body = regparm3("_stack_long");
@@ -1059,7 +1100,8 @@ mod tests {
         );
     }
 
-    /// An i64 is four stack words, low half first, and the int after it takes AX.
+    /// An i64 is four stack words, low half first, and the int after it takes
+    /// AX.
     #[test]
     fn test_m16_regparm3_an_i64_is_on_the_stack_and_the_next_integer_takes_ax() {
         let body = regparm3("_wide");
@@ -1071,8 +1113,8 @@ mod tests {
         assert!(!body.iter().any(|line| line.contains("[bp+14]")), "{body:?}");
     }
 
-    /// A long is returned in EAX: `long_result` ends with the product in EAX, the `shld edx, eax, 16` that made DX:AX
-    /// gone.
+    /// A long is returned in EAX: `long_result` ends with the product in EAX,
+    /// the `shld edx, eax, 16` that made DX:AX gone.
     #[test]
     fn test_m16_regparm3_a_long_result_is_in_eax_with_no_dx_ax_repack() {
         let body = regparm3("_long_result");
@@ -1080,9 +1122,11 @@ mod tests {
         assert!(!body.iter().any(|line| line.starts_with("shld")), "{body:?}");
     }
 
-    /// A far pointer comes back in EAX, the segment in the high word. Taken apart with the segment a dword's high half
-    /// used as a word, the allocator did not see it as the one value and loaded ES again on every iteration of the
-    /// loop: 10007 more instructions in bench textfill/nib.
+    /// A far pointer comes back in EAX, the segment in the high word. Taken
+    /// apart with the segment a dword's high half used as a word, the
+    /// allocator did not see it as the one value and loaded ES again on every
+    /// iteration of the loop: 10007 more instructions in bench
+    /// textfill/nib.
     #[test]
     fn test_m16_regparm3_a_far_pointer_returned_in_eax_loads_es_once_before_the_loop() {
         let body = regparm3("_fill");
@@ -1101,8 +1145,9 @@ mod tests {
         assert!(body[loop_start..].iter().all(|line| !line.starts_with("mov es,")), "{body:?}");
     }
 
-    /// A constant far pointer is returned as the one dword it is: it was split to words and joined again (six
-    /// instructions) in bench textfill's `os.text_screen`.
+    /// A constant far pointer is returned as the one dword it is: it was split
+    /// to words and joined again (six instructions) in bench textfill's
+    /// `os.text_screen`.
     #[test]
     fn test_m16_regparm3_a_constant_far_pointer_is_returned_as_one_move() {
         let body = regparm3("_const_far");
@@ -1113,9 +1158,10 @@ mod tests {
         );
     }
 
-    /// An argument register stored to its slot at entry is still the value: a later read of the slot is a read of the
-    /// register. They were `mov [bp-2], dx` then `mov bx, [bp-2]`, and `add di, [bp-2]`: a memory operand more each
-    /// (bench recchop/c -Os: +185).
+    /// An argument register stored to its slot at entry is still the value: a
+    /// later read of the slot is a read of the register. They were `mov
+    /// [bp-2], dx` then `mov bx, [bp-2]`, and `add di, [bp-2]`: a memory
+    /// operand more each (bench recchop/c -Os: +185).
     #[test]
     fn test_m16_regparm3_a_slot_a_register_still_holds_is_read_from_the_register() {
         let body = regparm3_at("_chop", llrm_core::driver::flags::Level::Os);
@@ -1130,7 +1176,8 @@ mod tests {
         assert!(until_dx_changes.clone().all(|line| !line.contains(&slot)), "{body:?}");
     }
 
-    /// A far pointer is returned as one dword, offset low: the callee joins the words and the caller splits them.
+    /// A far pointer is returned as one dword, offset low: the callee joins the
+    /// words and the caller splits them.
     #[test]
     fn test_m16_regparm3_a_far_pointer_result_is_one_dword_joined_and_split() {
         let body = regparm3("_far_result");
@@ -1146,7 +1193,8 @@ mod tests {
         );
     }
 
-    /// `function` of tests/fixtures/c/ia16.cgs under `-mabi=ia16`: gcc-ia16's convention.
+    /// `function` of tests/fixtures/c/ia16.cgs under `-mabi=ia16`: gcc-ia16's
+    /// convention.
     fn ia16(function: &str) -> Vec<String> {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/ia16.cgs")).unwrap();
         let machine =
@@ -1158,9 +1206,10 @@ mod tests {
         asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).map(str::to_owned).collect()
     }
 
-    /// `ia16-elf-gcc` writes a struct result larger than 4 bytes through a near pointer that is the first argument and
-    /// returns it in AX, the caller removing all it pushed (6 bytes, the pointer too); Borland's was a far pointer
-    /// (4 bytes) returned in DX:AX.
+    /// `ia16-elf-gcc` writes a struct result larger than 4 bytes through a near
+    /// pointer that is the first argument and returns it in AX, the caller
+    /// removing all it pushed (6 bytes, the pointer too); Borland's was a far
+    /// pointer (4 bytes) returned in DX:AX.
     #[test]
     fn test_m16_ia16_a_struct_result_is_a_near_first_argument_the_caller_removes() {
         let body = ia16("_fs");
@@ -1181,7 +1230,8 @@ mod tests {
         assert!(!body.iter().any(|line| line.contains("[bp+10]")), "{body:?}");
     }
 
-    /// `function` of tests/fixtures/c/watcall16.cgs under `-mabi=watcom`: Open Watcom's 16-bit register convention.
+    /// `function` of tests/fixtures/c/watcall16.cgs under `-mabi=watcom`: Open
+    /// Watcom's 16-bit register convention.
     fn watcall16(function: &str) -> Vec<String> {
         let text =
             std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/watcall16.cgs")).unwrap();
@@ -1195,8 +1245,9 @@ mod tests {
         asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).map(str::to_owned).collect()
     }
 
-    /// `wcc -ecw` took the first four words in AX, DX, BX and CX and the rest from the stack, lowest first, popped with
-    /// `retf 4`; the stack convention read all six from [bp+6]...
+    /// `wcc -ecw` took the first four words in AX, DX, BX and CX and the rest
+    /// from the stack, lowest first, popped with `retf 4`; the stack
+    /// convention read all six from [bp+6]...
     #[test]
     fn test_m16_watcom_words_arrive_in_ax_dx_bx_cx_and_the_callee_pops_the_rest() {
         let body = watcall16("six_");
@@ -1217,8 +1268,9 @@ mod tests {
         );
     }
 
-    /// A long or a far pointer takes a pair: `mixed(int a, long b, int c)` has a in AX, b in BX:CX and c in DX, as
-    /// `wcc` has it (DX was passed over by the pair and stayed free); a far pointer is its offset in AX and its
+    /// A long or a far pointer takes a pair: `mixed(int a, long b, int c)` has
+    /// a in AX, b in BX:CX and c in DX, as `wcc` has it (DX was passed over
+    /// by the pair and stayed free); a far pointer is its offset in AX and its
     /// segment in DX.
     #[test]
     fn test_m16_watcom_a_long_and_a_far_pointer_take_a_pair_and_a_passed_over_register_stays_free() {
@@ -1239,7 +1291,8 @@ mod tests {
         );
     }
 
-    /// A struct larger than a dword is written through the near address in SI, which comes back in AX.
+    /// A struct larger than a dword is written through the near address in SI,
+    /// which comes back in AX.
     #[test]
     fn test_m16_watcom_a_struct_result_is_written_through_si_and_returned_in_ax() {
         let body = watcall16("result_");
@@ -1250,7 +1303,8 @@ mod tests {
         assert_eq!(body.last().map(String::as_str), Some("retf"));
     }
 
-    /// The call passes a long in DX:AX and an int in BX and leaves the callee's own `retf` to pop nothing.
+    /// The call passes a long in DX:AX and an int in BX and leaves the callee's
+    /// own `retf` to pop nothing.
     #[test]
     fn test_m16_watcom_a_call_passes_a_long_in_dx_ax_and_takes_the_result_in_dx_ax() {
         let body = watcall16("calls_");
@@ -1258,8 +1312,9 @@ mod tests {
         assert!(!body.iter().any(|line| line.starts_with("add sp")), "{body:?}");
     }
 
-    /// The loop of `function` in `fixture`'s listing as `llrm-c -O2 -march=i486 -S`
-    /// writes it: from the label its backward branch takes to the branch.
+    /// The loop of `function` in `fixture`'s listing as `llrm-c -O2 -march=i486
+    /// -S` writes it: from the label its backward branch takes to the
+    /// branch.
     fn driven_loop(
         fixture: &str,
         function: &str,
@@ -1308,15 +1363,17 @@ mod tests {
     }
 
     /// `strides` walks frame arrays of 1-, 2-, 4- and 8-byte elements with one
-    /// counter. Strength gave each stride its own pointer, and two of them lived
-    /// in the frame: loaded for every access and stepped in memory. Indexes in
-    /// registers are the cure: one per address width, as the byte array through
-    /// 16-bit `si` saves its two address-size prefixes for one more add.
+    /// counter. Strength gave each stride its own pointer, and two of them
+    /// lived in the frame: loaded for every access and stepped in memory.
+    /// Indexes in registers are the cure: one per address width, as the
+    /// byte array through 16-bit `si` saves its two address-size prefixes
+    /// for one more add.
     #[test]
     fn test_arrays_of_several_strides_keep_their_indexes_in_registers() {
         for function in ["_bench_strides3", "_bench_strides4"] {
             let body = selected_loop("strides", function, "xor");
-            // An access's address registers; a `lea` reaches no memory, its operands are arithmetic.
+            // An access's address registers; a `lea` reaches no memory, its
+            // operands are arithmetic.
             let registers: std::collections::BTreeSet<String> = body
                 .iter()
                 .filter(|one| !one.starts_with("lea "))
@@ -1328,7 +1385,8 @@ mod tests {
                 })
                 .filter(|part| ["ax", "bx", "cx", "dx", "si", "di"].iter().any(|name| part.ends_with(name)))
                 .collect();
-            // A pointer kept in the frame is stepped there: `add word ptr [bp-76h], 1`.
+            // A pointer kept in the frame is stepped there: `add word ptr
+            // [bp-76h], 1`.
             let stepped = body
                 .iter()
                 .any(
@@ -1396,7 +1454,8 @@ mod tests {
                 .map(str::to_owned)
                 .collect()
         };
-        // Each db line decoded: the code's own instructions, displacements patched.
+        // Each db line decoded: the code's own instructions, displacements
+        // patched.
         let decoded = |lines: &[String]| -> Vec<String> {
             lines
                 .iter()
@@ -1543,7 +1602,8 @@ mod tests {
     }
 
     /// A C function that calls nothing came out of the compile with no word
-    /// that nothing re-enters it: `norecurse` was inferred where no compiler ran.
+    /// that nothing re-enters it: `norecurse` was inferred where no compiler
+    /// ran.
     #[test]
     fn test_a_leaf_function_comes_out_of_the_compile_norecurse() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/halve.cgs")).unwrap();
@@ -1804,7 +1864,8 @@ mod tests {
         assert!(built.is_ok(), "{:?}", built.err());
     }
 
-    /// tests/fixtures/c32/`fixture`.cgs, as the 386 front end recorded it, selected for `-m32`.
+    /// tests/fixtures/c32/`fixture`.cgs, as the 386 front end recorded it,
+    /// selected for `-m32`.
     fn flat_listing(fixture: &str) -> Vec<String> {
         let text =
             std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c32/{fixture}.cgs")))
@@ -1815,9 +1876,10 @@ mod tests {
         llrm_core::backend::masm::text(&built).unwrap().lines().map(|line| line.trim().to_owned()).collect()
     }
 
-    /// `int add(int, int)` as flat 32-bit code: cdecl32's arguments at [esp+4] and [esp+8] (EBP is
-    /// no frame where nothing needs one), the result in EAX. It listed `bp`, `[bp+4]` and a DX:AX
-    /// result, and never reached the allocator, before the target stated them.
+    /// `int add(int, int)` as flat 32-bit code: cdecl32's arguments at [esp+4]
+    /// and [esp+8] (EBP is no frame where nothing needs one), the result in
+    /// EAX. It listed `bp`, `[bp+4]` and a DX:AX result, and never reached
+    /// the allocator, before the target stated them.
     #[test]
     fn test_m32_lists_add_as_flat_cdecl32() {
         let lines = flat_listing("add");
@@ -1832,7 +1894,8 @@ mod tests {
         assert_eq!(body, ["L0_0:", "mov eax, dword ptr [esp+4]", "add eax, dword ptr [esp+8]", "ret"]);
     }
 
-    /// The body of `name`'s procedure in the flat listing of `regs.c`, as the default convention compiles it.
+    /// The body of `name`'s procedure in the flat listing of `regs.c`, as the
+    /// default convention compiles it.
     fn regs_body(name: &str) -> Vec<String> {
         let lines = flat_listing("regs");
         lines
@@ -1861,9 +1924,10 @@ mod tests {
             .collect()
     }
 
-    /// gcc -m32 writes every struct result, a one-byte one too, through a pointer that is the first argument and pops
-    /// it, `ret 4`: Open Watcom's rule (a 1, 2 or 4 byte struct in EAX, the address in ESI) was applied whatever
-    /// the ABI.
+    /// gcc -m32 writes every struct result, a one-byte one too, through a
+    /// pointer that is the first argument and pops it, `ret 4`: Open
+    /// Watcom's rule (a 1, 2 or 4 byte struct in EAX, the address in ESI) was
+    /// applied whatever the ABI.
     #[test]
     fn test_m32_sysv_writes_a_struct_result_through_the_first_argument_and_the_callee_pops_it() {
         assert_eq!(
@@ -1873,7 +1937,8 @@ mod tests {
         assert_eq!(sysv_body("_r12").last().map(String::as_str), Some("ret 4"));
     }
 
-    /// The caller of such a function removes the arguments but the address: gcc added 8 after pushing 12 bytes.
+    /// The caller of such a function removes the arguments but the address: gcc
+    /// added 8 after pushing 12 bytes.
     #[test]
     fn test_m32_sysv_caller_does_not_remove_the_result_address_the_callee_popped() {
         let body = sysv_body("_calls");
@@ -1882,8 +1947,9 @@ mod tests {
         assert!(!after.iter().any(|line| line == "add esp, 12"), "{body:?}");
     }
 
-    /// An ELF object has no `_` before a C name and no `_` after a default one: `six_` and `_explicit_cdecl` were
-    /// printed whatever object format was asked, where the convention's `symbol` table says `*` for elf.
+    /// An ELF object has no `_` before a C name and no `_` after a default one:
+    /// `six_` and `_explicit_cdecl` were printed whatever object format was
+    /// asked, where the convention's `symbol` table says `*` for elf.
     #[test]
     fn test_m32_an_elf_object_spells_its_symbols_without_decoration() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c32/regs.cgs")).unwrap();
@@ -1901,8 +1967,9 @@ mod tests {
         assert!(!listing.contains("six_") && !listing.contains("_explicit_cdecl"), "{listing}");
     }
 
-    /// An unmarked C function takes Open Watcom's register convention: `six` read its fifth and sixth from the
-    /// stack and popped them with `ret 8`, the first four being in EAX, EDX, EBX and ECX. It had refused such
+    /// An unmarked C function takes Open Watcom's register convention: `six`
+    /// read its fifth and sixth from the stack and popped them with `ret
+    /// 8`, the first four being in EAX, EDX, EBX and ECX. It had refused such
     /// a function ("has a register calling convention"), compiled with -ecc.
     #[test]
     fn test_m32_an_unmarked_function_takes_registers_and_pops_its_stack_arguments() {
@@ -1921,7 +1988,8 @@ mod tests {
         );
     }
 
-    /// A struct larger than a dword is written through the address in ESI, which comes back in EAX, as `wcc386` has it.
+    /// A struct larger than a dword is written through the address in ESI,
+    /// which comes back in EAX, as `wcc386` has it.
     #[test]
     fn test_m32_a_struct_result_is_written_through_esi_and_returned_in_eax() {
         let body = regs_body("result_");
@@ -1932,7 +2000,8 @@ mod tests {
         assert_eq!(body.last().map(String::as_str), Some("ret"));
     }
 
-    /// A one-byte struct argument travels in AL as an integer does; a twelve-byte one is in memory with `a` after it.
+    /// A one-byte struct argument travels in AL as an integer does; a
+    /// twelve-byte one is in memory with `a` after it.
     #[test]
     fn test_m32_a_small_struct_argument_is_a_register_and_a_large_one_is_memory() {
         assert_eq!(regs_body("small_"), ["L4_0:", "movsx eax, al", "add eax, edx", "ret"]);
@@ -1945,15 +2014,17 @@ mod tests {
         assert_eq!(body.last().map(String::as_str), Some("ret 16"));
     }
 
-    /// `__cdecl` names the stack convention and its `_name` symbol on a target whose default is registers.
+    /// `__cdecl` names the stack convention and its `_name` symbol on a target
+    /// whose default is registers.
     #[test]
     fn test_m32_an_explicit_cdecl_function_keeps_the_stack_and_its_caller_pops() {
         let body = regs_body("_explicit_cdecl");
         assert_eq!(body, ["L5_0:", "mov eax, dword ptr [esp+4]", "sub eax, dword ptr [esp+8]", "ret"]);
     }
 
-    /// A narrow argument goes as a stack slot: `push ax` pushed two bytes, and cdecl32's next
-    /// argument, and the callee's read of it, lay a dword apart.
+    /// A narrow argument goes as a stack slot: `push ax` pushed two bytes, and
+    /// cdecl32's next argument, and the callee's read of it, lay a dword
+    /// apart.
     #[test]
     fn test_m32_pushes_narrow_arguments_as_dwords() {
         let lines = flat_listing("args");
@@ -1967,21 +2038,24 @@ mod tests {
         assert!(lines.contains(&"add esp, 8".to_owned()), "{lines:#?}");
     }
 
-    /// Native 32-bit addressing reads whole registers: the pass that zeroed EBP's upper half for a
-    /// cell read 32 bits wide (a 16-bit frame's `[bp]` under 32-bit addressing) wrote `movzx ebp, ebp`
-    /// into a flat frame, and the reserve was 70 bytes, not a multiple of the dword stack.
+    /// Native 32-bit addressing reads whole registers: the pass that zeroed
+    /// EBP's upper half for a cell read 32 bits wide (a 16-bit frame's
+    /// `[bp]` under 32-bit addressing) wrote `movzx ebp, ebp` into a flat
+    /// frame, and the reserve was 70 bytes, not a multiple of the dword stack.
     #[test]
     fn test_m32_keeps_the_dword_stack() {
         let lines = flat_listing("bytes");
         assert!(lines.iter().all(|line| !line.starts_with("movzx ebp")), "{lines:#?}");
         assert!(lines.contains(&"sub esp, 76".to_owned()), "{lines:#?}");
-        // 70 under the frame register, 76 reserved with its cell: 2 above the stack pointer.
+        // 70 under the frame register, 76 reserved with its cell: 2 above the
+        // stack pointer.
         assert!(lines.contains(&"mov byte ptr [esp+eax+2], al".to_owned()), "{lines:#?}");
     }
 
-    /// A struct wider than 16 bytes passed by value is one `byval` pointer and a copy, not a parameter and a store per
-    /// word: a 4 KB one was 1,024 parameters, and the backend quadratic in them (pr20621-1: a 64 KB one never
-    /// finished compiling).
+    /// A struct wider than 16 bytes passed by value is one `byval` pointer and
+    /// a copy, not a parameter and a store per word: a 4 KB one was 1,024
+    /// parameters, and the backend quadratic in them (pr20621-1: a 64 KB one
+    /// never finished compiling).
     // It records C through wccq, which only the toolchain feature builds.
     #[cfg(feature = "toolchain")]
     #[test]
@@ -2026,10 +2100,12 @@ mod tests {
         out
     }
 
-    /// A flat object is USE32 and its records are the 32-bit ones: a segment with its 32-bit length,
-    /// a public with a 32-bit offset, data at a 32-bit offset, no group; and `add`'s code is the
-    /// 32-bit encoding of what its listing says. It was 16-bit records and `67 8b 46 08` (`mov
-    /// eax, [bp+8]` under an address-size prefix) ending in `66 c3` (a word return).
+    /// A flat object is USE32 and its records are the 32-bit ones: a segment
+    /// with its 32-bit length, a public with a 32-bit offset, data at a
+    /// 32-bit offset, no group; and `add`'s code is the 32-bit encoding of
+    /// what its listing says. It was 16-bit records and `67 8b 46 08` (`mov
+    /// eax, [bp+8]` under an address-size prefix) ending in `66 c3` (a word
+    /// return).
     #[test]
     fn test_m32_writes_a_use32_object_with_its_own_encoding() {
         let records = flat_object("add");
@@ -2044,9 +2120,11 @@ mod tests {
         assert_eq!(hex(&code[5..]), "8b44240403442408c3", "mov eax,[esp+4]; add eax,[esp+8]; ret");
     }
 
-    /// A near procedure that pops its own arguments returns `ret 8` (`c2 0800`): the word form,
-    /// `66 c2 0800`, pops a 16-bit return address and sent the flat program into the vector table. A
-    /// function of six arguments has two on the stack under Watcom's convention, which its callee pops.
+    /// A near procedure that pops its own arguments returns `ret 8` (`c2
+    /// 0800`): the word form, `66 c2 0800`, pops a 16-bit return address
+    /// and sent the flat program into the vector table. A function of six
+    /// arguments has two on the stack under Watcom's convention, which its
+    /// callee pops.
     #[test]
     fn test_m32_returns_popping_arguments_with_a_dword_ret() {
         let object = flat_object_with("regs", &[]);
@@ -2054,9 +2132,10 @@ mod tests {
         assert!(code.contains("c20800") && !code.contains("66c2"), "{code}");
     }
 
-    /// A flat string operation takes its operands in ESI, EDI and ECX with no segment operand: it was
-    /// `movs dword ptr es:[di], dword ptr ebx:[si]` with the source and count in whatever registers
-    /// the allocator chose, and a refusal ("may be in no register") before that.
+    /// A flat string operation takes its operands in ESI, EDI and ECX with no
+    /// segment operand: it was `movs dword ptr es:[di], dword ptr ebx:[si]`
+    /// with the source and count in whatever registers the allocator chose,
+    /// and a refusal ("may be in no register") before that.
     #[test]
     fn test_m32_lists_a_string_copy_through_esi_edi_ecx() {
         let lines = flat_listing("strings");
@@ -2076,8 +2155,9 @@ mod tests {
         assert!(code.contains("f3a5") && !code.contains("66f3a5"), "rep movsd, not its word form: {code}");
     }
 
-    /// `-fsanitize=stack` compares ESP with a dword limit and enters a near handler: `cmp sp, word ptr`
-    /// and `call far ptr` were a 16-bit compare and a far call in a flat program.
+    /// `-fsanitize=stack` compares ESP with a dword limit and enters a near
+    /// handler: `cmp sp, word ptr` and `call far ptr` were a 16-bit compare
+    /// and a far call in a flat program.
     #[test]
     fn test_m32_checks_its_stack_against_a_dword_limit_and_a_near_handler() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c32/add.cgs")).unwrap();
@@ -2119,18 +2199,20 @@ mod tests {
             .collect()
     }
 
-    /// A short read through a pointer and widened is one `movsx`. The peephole asked the 16-bit
-    /// encoder whether `movsx eax, word ptr [eax]` encodes, which it does not, so a flat compile kept
-    /// `mov ax, word ptr [eax]; movsx eax, ax`.
+    /// A short read through a pointer and widened is one `movsx`. The peephole
+    /// asked the 16-bit encoder whether `movsx eax, word ptr [eax]`
+    /// encodes, which it does not, so a flat compile kept `mov ax, word ptr
+    /// [eax]; movsx eax, ax`.
     #[test]
     fn test_m32_widens_a_load_in_one_instruction() {
         let body = flat_body("extend", "extend");
         assert!(body.contains(&"movsx eax, word ptr [eax]".to_owned()), "{body:#?}");
     }
 
-    /// Every address register holds a pointer loaded from the arguments. The peephole decoded the
-    /// bytes of the flat code it was judging as 16-bit code, read the effects of `movsx eax, word ptr
-    /// [ebx]` wrongly, and moved it above a read of EAX: `movsx eax, [ebx]; movsx ebx, [eax]`
+    /// Every address register holds a pointer loaded from the arguments. The
+    /// peephole decoded the bytes of the flat code it was judging as 16-bit
+    /// code, read the effects of `movsx eax, word ptr [ebx]` wrongly, and
+    /// moved it above a read of EAX: `movsx eax, [ebx]; movsx ebx, [eax]`
     /// loaded through a value.
     #[test]
     fn test_m32_never_addresses_through_a_value() {
@@ -2166,8 +2248,9 @@ mod tests {
         }
     }
 
-    /// A word sum is the word `add`, not a dword one and the `movzx` of its low word: its upper
-    /// half stays as it was, which is zero where the words were zero-extended.
+    /// A word sum is the word `add`, not a dword one and the `movzx` of its low
+    /// word: its upper half stays as it was, which is zero where the words
+    /// were zero-extended.
     #[test]
     fn test_m32_adds_words_as_words() {
         let body = flat_body("narrow", "short_sum");
@@ -2178,8 +2261,8 @@ mod tests {
         );
     }
 
-    /// The same sum of dwords keeps the `movzx`: the word `add` would leave the upper half as it was,
-    /// and the result is read as a dword.
+    /// The same sum of dwords keeps the `movzx`: the word `add` would leave the
+    /// upper half as it was, and the result is read as a dword.
     #[test]
     fn test_m32_keeps_the_extension_where_the_upper_half_is_not_zero() {
         let body = flat_body("narrow", "int_sum");
@@ -2189,13 +2272,15 @@ mod tests {
         );
     }
 
-    /// The sieve's inner loop indexes its array with a word counter, and the counter's register is the
-    /// index: the zero extension of a word whose register is zero above it was a copy into another one
-    /// that the store read, one more instruction a trip than m16's `[bp+si]`.
+    /// The sieve's inner loop indexes its array with a word counter, and the
+    /// counter's register is the index: the zero extension of a word whose
+    /// register is zero above it was a copy into another one that the store
+    /// read, one more instruction a trip than m16's `[bp+si]`.
     #[test]
     fn test_m32_indexes_through_the_counter_not_a_copy_of_it() {
         let body = flat_body("sieve", "bench_sieve");
-        // From the store the loop makes (the trip's extension is the first thing after it).
+        // From the store the loop makes (the trip's extension is the first
+        // thing after it).
         let from = body.iter().position(|line| line.starts_with("mov byte ptr [")).expect("the loop stores a byte");
         let loop_ = &body[from..];
         let copies = |line: &&String| {
@@ -2207,16 +2292,20 @@ mod tests {
                         })
                 })
         };
-        // The counter is `(unsigned short)(multiple + i)` against an unknown `limit`: the 16-bit add may wrap, so it
-        // cannot be widened, and gcc zero-extends it every trip too (two instructions to ours one). The zero
-        // copies llrm once had came from ECX's upper half happening to be zero where the peephole could see it
+        // The counter is `(unsigned short)(multiple + i)` against an unknown
+        // `limit`: the 16-bit add may wrap, so it cannot be widened,
+        // and gcc zero-extends it every trip too (two instructions to ours
+        // one). The zero copies llrm once had came from ECX's upper
+        // half happening to be zero where the peephole could see it
         // (register-choice luck); with EBP a value register it is one.
         assert!(loop_.iter().filter(copies).count() <= 1, "{loop_:#?}");
     }
 
-    /// `d = a + b` into a register that is neither is one `lea`: no flags to keep, three bytes for the four of
-    /// `mov; add`, and a native form flat code has without a prefix. The target priced a flat dword's address
-    /// as the real-mode prefixed one and had no price for the native form, so it never chose it.
+    /// `d = a + b` into a register that is neither is one `lea`: no flags to
+    /// keep, three bytes for the four of `mov; add`, and a native form flat
+    /// code has without a prefix. The target priced a flat dword's address
+    /// as the real-mode prefixed one and had no price for the native form, so
+    /// it never chose it.
     #[test]
     fn test_m32_adds_into_a_new_register_with_lea() {
         let body = flat_body("lea", "lea_sum");
@@ -2232,8 +2321,9 @@ mod tests {
         );
     }
 
-    /// A loop over `int *`: the pointer, the index and the sum are dwords in 32-bit registers,
-    /// addressed `[base+index]` with no segment, selector or 16-bit register.
+    /// A loop over `int *`: the pointer, the index and the sum are dwords in
+    /// 32-bit registers, addressed `[base+index]` with no segment, selector
+    /// or 16-bit register.
     #[test]
     fn test_m32_lists_a_loop_over_int_pointers() {
         let lines = flat_listing("sum");
@@ -2244,7 +2334,8 @@ mod tests {
             .take_while(|line| *line != "sum_ endp")
             .map(String::as_str)
             .collect();
-        // The load is the add's operand, and the add of the stride sets the flags the branch reads.
+        // The load is the add's operand, and the add of the stride sets the
+        // flags the branch reads.
         assert!(
             body.iter().any(|line| line.starts_with("add e") && line.contains("dword ptr [e") && line.contains("+e")),
             "{body:#?}"

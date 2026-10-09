@@ -17,7 +17,8 @@ fn homed(text: &str) -> String {
     printed(&module)
 }
 
-/// A running sum kept in `%cell` as well: nbody's `x[0]`, promoted to a phi and stored on every trip.
+/// A running sum kept in `%cell` as well: nbody's `x[0]`, promoted to a phi and
+/// stored on every trip.
 const SUM: &str = "define double @f(i32 %n, double %d) {
 pre:
   %cell = alloca double
@@ -49,7 +50,8 @@ fn test_a_stored_loop_carried_value_is_its_cells() {
     assert!(!counter.contains("!llrm.home"), "{after}");
 }
 
-/// A write to the cell while the phi is live: `%s` is read after it, so the cell no longer holds it.
+/// A write to the cell while the phi is live: `%s` is read after it, so the
+/// cell no longer holds it.
 #[test]
 fn test_a_cell_written_while_the_value_is_live_is_not_its_home() {
     let after = homed(

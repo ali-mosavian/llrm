@@ -1,4 +1,5 @@
-//! The DIE tree as bytes: abbreviations found, offsets laid out, references resolved.
+//! The DIE tree as bytes: abbreviations found, offsets laid out, references
+//! resolved.
 
 use llrm_object::debug::Info;
 use llrm_object::{Object, Unsupported};
@@ -69,7 +70,8 @@ impl Die {
     }
 }
 
-/// The places of the sections the unit refers to, by index in the expanded object.
+/// The places of the sections the unit refers to, by index in the expanded
+/// object.
 pub struct Places {
     pub abbrev: usize,
     pub strings: usize,

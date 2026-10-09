@@ -1,5 +1,5 @@
-//! Port of `qbopt/cfront/stream.py`: the stream toolchain/owshim/cgshim.c writes, one
-//! code-generator call per line.
+//! Port of `qbopt/cfront/stream.py`: the stream toolchain/owshim/cgshim.c
+//! writes, one code-generator call per line.
 //!
 //! ```text
 //! n7 CGBinary O_PLUS n5 n6 TY_INTEGER     a call and the handle it returned

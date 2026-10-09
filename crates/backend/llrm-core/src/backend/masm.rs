@@ -17,7 +17,8 @@ use crate::model::lir;
 use crate::support::hash::IndexMap;
 use crate::support::pyrepr::Repr;
 
-/// What LIR calls the frame register and the stack pointer, whatever the target: `spelled` gives each its own.
+/// What LIR calls the frame register and the stack pointer, whatever the
+/// target: `spelled` gives each its own.
 const FRAME: Register = Register::BP;
 const STACK: Register = Register::SP;
 
@@ -60,7 +61,8 @@ pub enum InlinePart {
 pub struct Callee {
     pub name: String,
     pub far: bool,
-    /// The argument bytes it pops as it returns: the stack is that much higher after the call.
+    /// The argument bytes it pops as it returns: the stack is that much higher
+    /// after the call.
     pub pops: i64,
     /// Inline assembly laid down in place of a call.
     pub code: Vec<InlinePart>,
@@ -95,8 +97,9 @@ pub struct Procedure {
     pub interrupt: Option<Addr>,
     /// Tuned for size (-Os): the jumps `objbuild` lays out.
     pub size: bool,
-    /// Bytes the runtime's entry call (B$ENSA) takes below BP, which no instruction of the
-    /// procedure shows: its header and the locals `cx` names.
+    /// Bytes the runtime's entry call (B$ENSA) takes below BP, which no
+    /// instruction of the procedure shows: its header and the locals `cx`
+    /// names.
     pub entry: i64,
     /// Compare SP with the runtime's limit once the frame is allocated.
     pub stack_check: Option<StackCheck>,
@@ -122,8 +125,8 @@ pub struct Pointer {
     pub offset: i64,
     /// A selector and an offset, where the target has selectors.
     pub far: bool,
-    /// The bytes of the cell it fills: the target's pointer width (or the offset's, for a far one made of an offset
-    /// word and a selector word).
+    /// The bytes of the cell it fills: the target's pointer width (or the
+    /// offset's, for a far one made of an offset word and a selector word).
     pub bytes: u32,
 }
 
@@ -136,7 +139,8 @@ pub struct Align {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Datum {
     Label(Label),
-    /// A label heading data a writer drops when nothing names it: up to the next Object.
+    /// A label heading data a writer drops when nothing names it: up to the
+    /// next Object.
     Object(Label),
     Fill(Fill),
     Pointer(Pointer),
@@ -160,7 +164,8 @@ pub struct Module {
     pub procedures: Vec<Procedure>,
     /// data segments outside DGROUP; only ever asked for membership
     pub private: BTreeSet<String>,
-    /// Of those, the segments of uninitialised data: class FAR_BSS, which an image does not store.
+    /// Of those, the segments of uninitialised data: class FAR_BSS, which an
+    /// image does not store.
     pub far_bss: BTreeSet<String>,
     /// Externs nothing references, declared so LINK pulls in their module.
     pub requests: BTreeSet<String>,
@@ -174,9 +179,9 @@ pub struct Module {
 }
 
 impl Module {
-    /// Whether `segment` is outside DGROUP, so reached by its own selector alone
-    /// and paragraph aligned: its first byte is offset 0 of its frame, and a 64K
-    /// object in it fits. Every writer asks this.
+    /// Whether `segment` is outside DGROUP, so reached by its own selector
+    /// alone and paragraph aligned: its first byte is offset 0 of its
+    /// frame, and a 64K object in it fits. Every writer asks this.
     pub fn selector_addressed(
         &self,
         segment: &str,
@@ -288,14 +293,16 @@ pub enum Mark {
     /// The procedure's own code ends, its epilogue next: after the last
     /// code of a source line but a return.
     BodyEnd,
-    /// The call before it popped this many bytes of its arguments as it returned: the stack is that much higher
-    /// from here.
+    /// The call before it popped this many bytes of its arguments as it
+    /// returned: the stack is that much higher from here.
     Pops(i64),
-    /// The instruction before it made value `tag` (by the number its register had in SSA), in `place`.
+    /// The instruction before it made value `tag` (by the number its register
+    /// had in SSA), in `place`.
     Def { tag: u32, place: Place },
     /// Note `note` of the body (`LirBody::notes`) stands here.
     Note(u32),
-    /// The call before it clobbers this register (one mark for each it clobbers).
+    /// The call before it clobbers this register (one mark for each it
+    /// clobbers).
     Clobbered(Register),
 }
 
@@ -303,14 +310,16 @@ pub enum Mark {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Place {
     Register(Register),
-    /// A frame cell, as the frame register would address it at this displacement.
+    /// A frame cell, as the frame register would address it at this
+    /// displacement.
     Cell {
         disp: i64,
         bytes: u32,
     },
 }
 
-/// The arguments the caller pushed, as values in their cells from the first byte.
+/// The arguments the caller pushed, as values in their cells from the first
+/// byte.
 fn blocks_arguments(body: &lir::LirBody) -> Vec<Item> {
     body.arguments_in_cells
         .iter()
@@ -318,8 +327,8 @@ fn blocks_arguments(body: &lir::LirBody) -> Vec<Item> {
         .collect()
 }
 
-/// Where an instruction wrote `dest`, if a debugger can be told: a register, or a frame cell addressed by displacement
-/// alone.
+/// Where an instruction wrote `dest`, if a debugger can be told: a register, or
+/// a frame cell addressed by displacement alone.
 fn placed(dest: &Loc) -> Option<Place> {
     match dest {
         Loc::Reg(ir::Reg { register, .. }) => Some(Place::Register(*register)),
@@ -347,8 +356,9 @@ fn semantics(
 }
 
 /// Every return of `body` as `retf bytes`, for a callee that removes its
-/// arguments. `ret imm16` cannot remove 64 KB or more: a near return of a 32-bit target keeps the count, and the
-/// epilogue writes `pop [esp + n]; add esp, n; ret` (`moved_return`); `address` is the bytes of a return address.
+/// arguments. `ret imm16` cannot remove 64 KB or more: a near return of a
+/// 32-bit target keeps the count, and the epilogue writes `pop [esp + n]; add
+/// esp, n; ret` (`moved_return`); `address` is the bytes of a return address.
 pub fn cleaned_returns(
     body: &lir::LirBody,
     bytes: i64,
@@ -391,8 +401,9 @@ pub fn cleaned_returns(
     Ok(body.with_blocks(blocks))
 }
 
-/// Names the limit each procedure's stack check compares with, and the externs those checks
-/// need: the limit a data object, the handler a far routine, unless a procedure here is it.
+/// Names the limit each procedure's stack check compares with, and the externs
+/// those checks need: the limit a data object, the handler a far routine,
+/// unless a procedure here is it.
 pub fn stack_externs(
     procedures: &[Procedure],
     names: &mut IndexMap<(Space, i64), String>,
@@ -408,8 +419,9 @@ pub fn stack_externs(
     externs
 }
 
-/// Whether a procedure, by its symbol, is entered only by the direct calls `module`'s own
-/// functions make: its address is taken nowhere (`callgraph::addressed`).
+/// Whether a procedure, by its symbol, is entered only by the direct calls
+/// `module`'s own functions make: its address is taken nowhere
+/// (`callgraph::addressed`).
 pub fn entered_directly<'a>(
     module: &'a llrm_mir::Module,
     names: &'a IndexMap<(Space, i64), String>,
@@ -430,9 +442,11 @@ fn sp_reg() -> Loc {
     reg(STACK)
 }
 
-/// The registers `procedure` keeps for its caller: each one it names, or a call it makes disturbs by its
-/// convention, that this convention leaves to the callee, by its low half. A call to a routine whose
-/// convention disturbs more than this one's (cdecl's ECX and EDX under Watcom's) takes the caller's value.
+/// The registers `procedure` keeps for its caller: each one it names, or a call
+/// it makes disturbs by its convention, that this convention leaves to the
+/// callee, by its low half. A call to a routine whose convention disturbs more
+/// than this one's (cdecl's ECX and EDX under Watcom's) takes the caller's
+/// value.
 fn saved_of(procedure: &Procedure) -> Vec<Register> {
     let mut roots = if procedure.registers.free {
         _roots_of_values(&procedure.body, procedure.registers.pointer)
@@ -442,13 +456,15 @@ fn saved_of(procedure: &Procedure) -> Vec<Register> {
     for one in procedure.body.insns() {
         roots.extend(one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(ir::root)));
     }
-    // An interrupt handler has saved everything before its frame, and a runtime-built one has saved
-    // SI and DI (B$ENRA/B$ENRD, restored by B$EXSA).
+    // An interrupt handler has saved everything before its frame, and a
+    // runtime-built one has saved SI and DI (B$ENRA/B$ENRD, restored by
+    // B$EXSA).
     let owned = procedure.interrupt.is_some() || procedure.entry != 0;
     procedure.registers.saved.iter().filter(|(whole, _)| !owned && roots.contains(whole)).map(|(_, low)| *low).collect()
 }
 
-/// Where `procedure` saves them, and sets up its frame where `frame`, when that is not its entry (`shrinkwrap`).
+/// Where `procedure` saves them, and sets up its frame where `frame`, when that
+/// is not its entry (`shrinkwrap`).
 fn wrap_of(
     procedure: &Procedure,
     frame: bool,
@@ -460,8 +476,8 @@ fn wrap_of(
         .filter(|(_, low)| saved_of(procedure).contains(low))
         .map(|(whole, _)| *whole)
         .collect();
-    // The runtime's entry builds an `entry` frame, an interrupt handler and the stack check run at the entry, and
-    // inline code may address the frame.
+    // The runtime's entry builds an `entry` frame, an interrupt handler and the
+    // stack check run at the entry, and inline code may address the frame.
     let movable = procedure.entry == 0
         && procedure.interrupt.is_none()
         && procedure.stack_check.is_none()
@@ -479,8 +495,8 @@ pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
     parts(procedure, frame_omitted(procedure, 0, frame_held(procedure)).is_some())
 }
 
-/// `_frame_parts`, with no frame register where `omit`: the entry sets none and the return takes back
-/// what the entry reserved.
+/// `_frame_parts`, with no frame register where `omit`: the entry sets none and
+/// the return takes back what the entry reserved.
 fn parts(
     procedure: &Procedure,
     omit: bool,
@@ -489,11 +505,13 @@ fn parts(
     let saved = saved_of(procedure);
     let slot = procedure.registers.slot;
     let reserve = (procedure.reserve + slot - 1) / slot * slot;
-    // Where the frame register's own cell was stays reserved: a cell addressed through an index has
-    // no sign to say whether it lies above that cell or below it, so every one keeps its distance from it.
+    // Where the frame register's own cell was stays reserved: a cell addressed
+    // through an index has no sign to say whether it lies above that cell
+    // or below it, so every one keeps its distance from it.
     let reserve = if omit && reserve != 0 { reserve + slot } else { reserve };
-    // Inline code is bytes this printer cannot read, so it may address the frame.
-    // A frame the runtime's entry built (B$ENRA, B$ENRD) is not built again by a shell of ours.
+    // Inline code is bytes this printer cannot read, so it may address the
+    // frame. A frame the runtime's entry built (B$ENRA, B$ENRD) is not
+    // built again by a shell of ours.
     let framed = !omit
         && procedure.entry == 0
         && (reserve != 0
@@ -514,7 +532,8 @@ fn parts(
     } else if framed {
         leave.push(semantics(Operation::Pop, "pop", vec![bp.clone()], vec![]));
     }
-    // `enter` only where the target's description takes it for size (`frame_enter`).
+    // `enter` only where the target's description takes it for size
+    // (`frame_enter`).
     let opened =
         framed && reserve != 0 && procedure.size && procedure.registers.enter && procedure.stack_check.is_none();
     let mut enter: Vec<Semantics> = Vec::new();
@@ -565,7 +584,8 @@ fn parts(
 
 /// Where the frame an interrupt handler saved starts above its own BP: the
 /// last register it saved, past what its entry pushes after those and the BP
-/// its frame pushes. the target's `interrupt_frame` (calling.toml) is the frame.
+/// its frame pushes. the target's `interrupt_frame` (calling.toml) is the
+/// frame.
 pub fn interrupt_parameters() -> i64 {
     let (enter, _) = _interrupt_parts(Addr::new(Space::Group, 0));
     let pushed: i64 = enter[INTERRUPT_SAVED..]
@@ -586,10 +606,10 @@ const INTERRUPT_SAVED: usize = 5;
 
 /// What an interrupt handler wraps its frame in. It may interrupt anything,
 /// so it saves every register it or a callee may change once, as the frame
-/// the target's `interrupt_frame` (calling.toml) lays out, and gives compiled code what
-/// it assumes: DGROUP in DS and ES, the direction flag clear. A handler's
-/// register parameters are slots of that frame, so what it writes to them is
-/// what POPAD or `iret` goes back with. The x87 state is not saved.
+/// the target's `interrupt_frame` (calling.toml) lays out, and gives compiled
+/// code what it assumes: DGROUP in DS and ES, the direction flag clear. A
+/// handler's register parameters are slots of that frame, so what it writes to
+/// them is what POPAD or `iret` goes back with. The x87 state is not saved.
 fn _interrupt_parts(group: Addr) -> (Vec<Semantics>, Vec<Semantics>) {
     let push = |one: Loc| semantics(Operation::Push, "push", vec![], vec![one]);
     let pop = |one: Register| semantics(Operation::Pop, "pop", vec![reg(one)], vec![]);
@@ -628,7 +648,8 @@ pub fn return_overhead_bytes(procedure: &Procedure) -> Result<usize, Unprintable
 
 /// The procedure as emitted, frame included: what this prints and objbuild
 /// encodes. A branch's target is still a block; `label(number, at)` names it.
-/// A value lives in the frame register the description frees: there is no frame to fall back to.
+/// A value lives in the frame register the description frees: there is no frame
+/// to fall back to.
 fn frame_held(procedure: &Procedure) -> bool {
     let registers = &procedure.registers;
     registers.free && _roots_of_values(&procedure.body, registers.pointer).contains(&ir::root(registers.pointer))
@@ -654,15 +675,17 @@ pub fn listing(
     Ok(items.into_iter().map(|item| spelled(item, &registers)).collect())
 }
 
-/// The procedure's items with the frame register LIR names BP, or not where `omit`.
+/// The procedure's items with the frame register LIR names BP, or not where
+/// `omit`.
 fn built(
     procedure: &Procedure,
     number: usize,
     omit: bool,
 ) -> Result<Vec<Item>, Unprintable> {
     let (mut enter, mut leave) = parts(procedure, omit);
-    // Saved where first needed, restored where that path returns: not at the entry and every return. The frame too,
-    // where nothing outside the wrap touches it: the returns before it take none back.
+    // Saved where first needed, restored where that path returns: not at the
+    // entry and every return. The frame too, where nothing outside the wrap
+    // touches it: the returns before it take none back.
     let count = saved_of(procedure).len();
     let wrap = wrap_of(procedure, enter.len() > count);
     let (mut saves, mut restores, mut opened): (Vec<Semantics>, Vec<Semantics>, Vec<Semantics>) =
@@ -685,7 +708,8 @@ fn built(
     let mut line = first.and_then(|one| one.line);
     let mut lines = 0..;
     let mut marked = |line: u32| Item::Mark(Mark::Line { line, index: lines.next().expect("unbounded") });
-    // The arguments are in their registers from the first byte: what the entry says of them stands before the prologue.
+    // The arguments are in their registers from the first byte: what the entry
+    // says of them stands before the prologue.
     let arrival = blocks.iter().flat_map(|block| &block.insns).find(|one| one.arrival());
     let arrived: Vec<Item> =
         arrival
@@ -717,8 +741,8 @@ fn built(
             if first.is_some_and(|first| Arc::ptr_eq(first, one)) {
                 out.push(Item::Mark(Mark::BodyStart));
             }
-            // What is said before an instruction stands there whether or not it is emitted: a jump to the next block is
-            // not.
+            // What is said before an instruction stands there whether or not it
+            // is emitted: a jump to the next block is not.
             if !one.arrival() {
                 out.extend(one.debug.before.iter().map(|&note| Item::Mark(Mark::Note(note))));
             }
@@ -737,7 +761,8 @@ fn built(
             }
             match what.op {
                 Operation::Move if _segment(&what.dests[0]) && matches!(what.sources[0], Loc::Imm(_)) => {
-                    // x86 has no immediate move into a segment register; the stack holds it for one instruction.
+                    // x86 has no immediate move into a segment register; the
+                    // stack holds it for one instruction.
                     let Loc::Imm(source) = &what.sources[0] else { unreachable!() };
                     out.extend([
                         Item::Semantics(semantics(
@@ -760,7 +785,8 @@ fn built(
                             )));
                         };
                         out.push(Item::Callee(callee.clone()));
-                        // Said for call frame information, which `-g` writes: no code of its own.
+                        // Said for call frame information, which `-g` writes:
+                        // no code of its own.
                         if callee.pops != 0 && callee.code.is_empty() && first.is_some() {
                             out.push(Item::Mark(Mark::Pops(callee.pops)));
                         }
@@ -805,11 +831,13 @@ fn built(
                 }
                 _ => out.push(Item::Semantics(what.clone())),
             }
-            // Where the values it made went, for a debugger: the register or frame cell it wrote.
+            // Where the values it made went, for a debugger: the register or
+            // frame cell it wrote.
             if let Some(place) = what.dests.first().and_then(placed) {
                 out.extend(one.debug.defines.iter().map(|&tag| Item::Mark(Mark::Def { tag, place })));
             } else {
-                // A call's result comes back in the register it says it delivers.
+                // A call's result comes back in the register it says it
+                // delivers.
                 out.extend(one.delivers.iter().filter(|(held, _)| one.debug.defines.contains(&held.value)).map(
                     |(held, register)| Item::Mark(Mark::Def { tag: held.value, place: Place::Register(*register) }),
                 ));
@@ -836,8 +864,9 @@ fn built(
     Ok(out)
 }
 
-/// `stack_addressed`, but tuned for size only where it is no longer: `[esp+d]` is a byte longer than `[ebp+d]`, and a
-/// displacement past 127 three more, which a large frame's cells can cost more than the entry and return save.
+/// `stack_addressed`, but tuned for size only where it is no longer: `[esp+d]`
+/// is a byte longer than `[ebp+d]`, and a displacement past 127 three more,
+/// which a large frame's cells can cost more than the entry and return save.
 fn frame_omitted(
     procedure: &Procedure,
     number: usize,
@@ -862,10 +891,12 @@ fn frame_omitted(
     (bytes(&omitted) <= bytes(&framed)).then_some(omitted)
 }
 
-/// What removes `bytes` of arguments (`address` bytes of return address on top) where `ret imm16` cannot: the return
-/// address is popped into the last slot of the area, the stack raised to it, and a plain `ret` follows. LLVM's `pop
-/// ecx; add esp, n; push ecx; ret` (X86ExpandPseudo, the RET pseudo) holds the address in ECX, which Open Watcom's
-/// register convention keeps for its caller; the stack alone is as long and clobbers nothing.
+/// What removes `bytes` of arguments (`address` bytes of return address on top)
+/// where `ret imm16` cannot: the return address is popped into the last slot of
+/// the area, the stack raised to it, and a plain `ret` follows. LLVM's `pop
+/// ecx; add esp, n; push ecx; ret` (X86ExpandPseudo, the RET pseudo) holds the
+/// address in ECX, which Open Watcom's register convention keeps for its
+/// caller; the stack alone is as long and clobbers nothing.
 fn moved_return(
     bytes: i64,
     address: i64,
@@ -881,12 +912,14 @@ fn moved_return(
     ]
 }
 
-/// The items of a procedure that needs no frame register, its cells addressed through the stack
-/// pointer: gcc's `-fomit-frame-pointer`, as the target's `frame_optional` allows. A cell the frame
-/// register held at `[bp+d]` is at `[sp+d+depth-slot]`, `depth` the bytes pushed since the entry, which
-/// each instruction's stack effect moves and every way into a block must agree on. Where anything
-/// puts that out of reach (a stack pointer written another way, inline code, an indirect call whose
-/// callee may pop, a frame register read as a value) the frame stays.
+/// The items of a procedure that needs no frame register, its cells addressed
+/// through the stack pointer: gcc's `-fomit-frame-pointer`, as the target's
+/// `frame_optional` allows. A cell the frame register held at `[bp+d]` is at
+/// `[sp+d+depth-slot]`, `depth` the bytes pushed since the entry, which
+/// each instruction's stack effect moves and every way into a block must agree
+/// on. Where anything puts that out of reach (a stack pointer written another
+/// way, inline code, an indirect call whose callee may pop, a frame register
+/// read as a value) the frame stays.
 fn stack_addressed(
     procedure: &Procedure,
     number: usize,
@@ -921,20 +954,22 @@ fn stack_addressed(
             return None;
         }
     };
-    // The depth at each label, from whichever edge reached it first. A label only a later branch reaches (a loop
-    // entered at its test) has its depth from that branch: the pass is made again with what the last one learned.
+    // The depth at each label, from whichever edge reached it first. A label
+    // only a later branch reaches (a loop entered at its test) has its
+    // depth from that branch: the pass is made again with what the last one
+    // learned.
     let mut known: IndexMap<String, i64> = IndexMap::default();
     let mut dead = false;
     loop {
         let before = known.len();
         match addressed_pass(procedure, number, items.clone(), &mut known, dead) {
-            // A label taken for dead that a later branch reached was addressed at the wrong depth: again, with what
-            // that branch taught.
+            // A label taken for dead that a later branch reached was addressed
+            // at the wrong depth: again, with what that branch taught.
             Ok((out, assumed)) if assumed.iter().all(|one| !known.contains_key(one)) => return Some(out),
             Ok(_) => {}
             Err(Stop::Refused) => return None,
-            // What nothing reaches is dead code: no depth is wrong for it, and its jumps say nothing of the live
-            // labels.
+            // What nothing reaches is dead code: no depth is wrong for it, and
+            // its jumps say nothing of the live labels.
             Err(Stop::Stalled(_)) if known.len() == before && !dead => dead = true,
             Err(Stop::Stalled(label)) if known.len() == before => {
                 return refused(procedure, &format!("label {label} follows a jump and none reaches it"));
@@ -958,7 +993,8 @@ fn stop(
     Stop::Refused
 }
 
-/// One pass over `items` with the cells addressed through the stack pointer, given the depths `known` at the labels.
+/// One pass over `items` with the cells addressed through the stack pointer,
+/// given the depths `known` at the labels.
 fn addressed_pass(
     procedure: &Procedure,
     number: usize,
@@ -1008,7 +1044,8 @@ fn addressed_pass(
             Item::Mark(mark) => out.push(Item::Mark(mark)),
             Item::Semantics(mut what) => {
                 let here = depth.ok_or(Stop::Refused)?;
-                // `pop` to memory addresses the cell with the stack already taken back.
+                // `pop` to memory addresses the cell with the stack already
+                // taken back.
                 let at = match (what.op, &what.dests[..]) {
                     (Operation::Pop, [place @ Loc::Mem(_)]) => here - width_of(place).unwrap_or(0),
                     _ => here,
@@ -1026,7 +1063,8 @@ fn addressed_pass(
                 }
                 match what.op {
                     Operation::Push | Operation::Pop => {
-                        // A push or pop moves the stack by the width it names: a 16-bit `pop cx` takes back two bytes.
+                        // A push or pop moves the stack by the width it names:
+                        // a 16-bit `pop cx` takes back two bytes.
                         let (places, sign) =
                             if what.op == Operation::Push { (&what.sources, 1) } else { (&what.dests, -1) };
                         let [place] = &places[..] else { return Err(stop(procedure, &format!("{what:?}"))) };
@@ -1035,8 +1073,9 @@ fn addressed_pass(
                             _ => return Err(stop(procedure, &format!("{what:?}"))),
                         }
                     }
-                    // An exchange of x87 registers or of general ones (not the stack pointer) and the x87 and port
-                    // instructions that name no stack effect leave the stack pointer alone.
+                    // An exchange of x87 registers or of general ones (not the
+                    // stack pointer) and the x87 and port instructions that
+                    // name no stack effect leave the stack pointer alone.
                     Operation::Exchange
                         if what.dests.iter().chain(&what.sources).all(|place| {
                             matches!(place, Loc::St(_) | Loc::Mem(_))
@@ -1055,7 +1094,8 @@ fn addressed_pass(
                     | Operation::Escape
                     | Operation::Barrier
                     | Operation::Call => return Err(stop(procedure, &format!("{what:?}"))),
-                    // `pushf` and its kind move the stack and carry no operand to read the amount from.
+                    // `pushf` and its kind move the stack and carry no operand
+                    // to read the amount from.
                     Operation::Nothing
                         if what
                             .name
@@ -1129,7 +1169,8 @@ fn refused<T>(
 /// The width of a register or memory operand, where it has one.
 fn width_of(place: &Loc) -> Option<i64> {
     match place {
-        // A register is as wide as it is: its own `width` is where it was selected.
+        // A register is as wide as it is: its own `width` is where it was
+        // selected.
         Loc::Reg(one) => Some(one.register.size() as i64),
         Loc::Imm(one) => Some(i64::from(one.width)),
         Loc::Mem(one) => Some(i64::from(one.width)),
@@ -1141,8 +1182,9 @@ fn writes_stack_pointer(place: &Loc) -> bool {
     matches!(place, Loc::Reg(one) if one.register == STACK)
 }
 
-/// `place` with a frame cell addressed through the stack pointer; none where it reads the frame register
-/// as anything but a base. The frame register would have held the entry's stack pointer less `slot`.
+/// `place` with a frame cell addressed through the stack pointer; none where it
+/// reads the frame register as anything but a base. The frame register would
+/// have held the entry's stack pointer less `slot`.
 fn through_stack(
     place: &Loc,
     depth: i64,
@@ -1151,12 +1193,14 @@ fn through_stack(
     free: bool,
 ) -> Option<Loc> {
     let shift = |_disp: i64| depth - slot;
-    // Where the frame register holds a value (`FrameRegisters::free`), only a frame cell is the frame register's: a
-    // register of that name elsewhere is the value.
+    // Where the frame register holds a value (`FrameRegisters::free`), only a
+    // frame cell is the frame register's: a register of that name elsewhere
+    // is the value.
     let is_pointer = |one: Register| (one == FRAME || one == pointer) && !(free && one != Register::None);
-    // A frame place with no register, or a cell the frame register's own address names: a 32-bit
-    // index has no frame space, only `[ebp+index+d]`.
-    // A cell with a base value is that register's, even when it was given the frame register.
+    // A frame place with no register, or a cell the frame register's own
+    // address names: a 32-bit index has no frame space, only
+    // `[ebp+index+d]`. A cell with a base value is that register's, even
+    // when it was given the frame register.
     let based = |through: Register, addr: &Option<Addr>, valued: bool| match addr {
         Some(addr) if addr.space == Space::Frame => through == Register::None || through == FRAME || through == pointer,
         Some(addr) if addr.space == Space::Literal => (through == FRAME || through == pointer) && !(free && valued),
@@ -1346,7 +1390,8 @@ pub fn _falls_to(
     if rest.is_empty() {
         rest = block.succ.clone();
     }
-    // Both edges of a branch may meet at one block (two cases of a switch emptied to the same place): it falls there.
+    // Both edges of a branch may meet at one block (two cases of a switch
+    // emptied to the same place): it falls there.
     rest.dedup();
     if rest.len() > 1 {
         return Err(Unprintable(format!(
@@ -1358,8 +1403,8 @@ pub fn _falls_to(
     Ok(rest.first().copied())
 }
 
-/// `_roots` where the frame register holds a value: a frame cell (a stack array's too) names it only as the address it
-/// is, and does not use it.
+/// `_roots` where the frame register holds a value: a frame cell (a stack
+/// array's too) names it only as the address it is, and does not use it.
 fn _roots_of_values(
     body: &lir::LirBody,
     pointer: Register,
@@ -1401,7 +1446,8 @@ pub fn _roots(body: &lir::LirBody) -> BTreeSet<Register> {
                 Loc::Mem(ir::Mem { through, index_through, .. }) => {
                     found.extend([*through, *index_through].map(ir::root));
                 }
-                // `lea` of a cell reads the register the cell is addressed through as much as a load of it does.
+                // `lea` of a cell reads the register the cell is addressed
+                // through as much as a load of it does.
                 Loc::Address(ir::Address { through, index, .. }) => {
                     found.extend([*through, *index].map(ir::root));
                 }
@@ -1420,7 +1466,8 @@ pub fn _instruction(
     let name = what.name.as_deref().unwrap_or("");
     if what.op == Operation::Fill {
         // Its operands are the registers the instruction names in its opcode.
-        // A count (and so REP) is the extra result, whatever segments the target names.
+        // A count (and so REP) is the extra result, whatever segments the
+        // target names.
         return Ok(vec![format!("{}{name}", if what.dests.len() == 3 { "rep " } else { "" })]);
     }
     if what.op == Operation::Copy {
@@ -1688,11 +1735,13 @@ mod tests {
         Loc::Reg(ir::Reg { register: Register::AX, width: 2 })
     }
 
-    /// A string move prints as the instruction it is: `rep` where it has a count.
+    /// A string move prints as the instruction it is: `rep` where it has a
+    /// count.
     #[test]
     fn test_a_string_move_prints_with_rep_where_it_repeats() {
         let held = |value| Loc::Held(crate::model::ir::Held { value, width: 2 });
-        // A count is the extra result; the segments, where the target has them, the last two sources.
+        // A count is the extra result; the segments, where the target has them,
+        // the last two sources.
         let results = |count: usize| (0..count).map(|one| held(10 + one as u32)).collect::<Vec<_>>();
         let semantics = |dests: usize, sources: Vec<Loc>| Semantics {
             name: Some("movsw".to_owned()),
@@ -1704,7 +1753,8 @@ mod tests {
         let single = semantics(3, vec![held(2), held(3), held(4), held(5)]);
         assert_eq!(_instruction(&repeated, &no_names(), 0).unwrap(), ["rep movsw"]);
         assert_eq!(_instruction(&single, &no_names(), 0).unwrap(), ["movsw"]);
-        // A target with no segment registers names none: its operands are the registers.
+        // A target with no segment registers names none: its operands are the
+        // registers.
         assert_eq!(
             _instruction(&semantics(4, vec![held(1), held(2), held(3)]), &no_names(), 0).unwrap(),
             ["rep movsw"]
@@ -1798,8 +1848,9 @@ mod tests {
         );
     }
 
-    /// The frame the target's calling.toml states (`interrupt_frame`) is the one the entry builds, so
-    /// a handler's parameters read the registers they name.
+    /// The frame the target's calling.toml states (`interrupt_frame`) is the
+    /// one the entry builds, so a handler's parameters read the registers
+    /// they name.
     #[test]
     fn test_the_entry_builds_the_frame_mir_states() {
         let calling = llrm_target::Target::calling(&llrm_x86_m16::M16);
@@ -1853,8 +1904,9 @@ mod tests {
         lines.iter().any(|one| one == text)
     }
 
-    /// Every procedure got `push bp; mov bp,sp` .. `mov sp,bp; pop bp`: snd_mix_loops
-    /// read one global in seven instructions where bcc used two.
+    /// Every procedure got `push bp; mov bp,sp` .. `mov sp,bp; pop bp`:
+    /// snd_mix_loops read one global in seven instructions where bcc used
+    /// two.
     #[test]
     fn test_frame_only_where_something_uses_it() {
         let bx = Loc::Reg(ir::Reg { register: Register::BX, width: 2 });
@@ -1865,7 +1917,8 @@ mod tests {
         assert!(!has(&params, "mov sp, bp") && !has(&params, "leave"));
     }
 
-    /// `mov sp,bp; pop bp` where bcc writes `leave`: 261 instructions over qcport.
+    /// `mov sp,bp; pop bp` where bcc writes `leave`: 261 instructions over
+    /// qcport.
     #[test]
     fn test_reserved_frame_leaves_in_one_instruction() {
         let lines = _printed(vec![through_bp()], 4);
@@ -1873,8 +1926,9 @@ mod tests {
         assert!(!has(&lines, "mov sp, bp") && !has(&lines, "pop bp"));
     }
 
-    /// Tuned for size, a frame with locals opened with `enter N,0` (4 bytes against 6, but 14 clocks against 3
-    /// on the 486, 407 QCport functions): no level opens one.
+    /// Tuned for size, a frame with locals opened with `enter N,0` (4 bytes
+    /// against 6, but 14 clocks against 3 on the 486, 407 QCport
+    /// functions): no level opens one.
     #[test]
     fn test_no_level_opens_a_frame_with_enter() {
         for size in [true, false] {
@@ -1916,9 +1970,10 @@ mod tests {
         (_procedure(&procedure, &names, 0).unwrap().iter().map(|line| line.trim().to_owned()).collect(), externs)
     }
 
-    /// `-fsanitize=stack` compares SP with the word and calls the routine the runtime's description
-    /// names, here made-up ones: a pass that wrote `b$pendchk` itself would not follow them. The
-    /// call is last, where no block falls into it, and the default has neither.
+    /// `-fsanitize=stack` compares SP with the word and calls the routine the
+    /// runtime's description names, here made-up ones: a pass that wrote
+    /// `b$pendchk` itself would not follow them. The call is last, where no
+    /// block falls into it, and the default has neither.
     #[test]
     fn test_a_stack_check_names_what_the_runtime_states() {
         let check = StackCheck { limit: "FOO".into(), handler: "BAR".into(), far: true, red_zone: 0, entry: None };
@@ -1963,8 +2018,9 @@ mod tests {
         assert_eq!(return_overhead_bytes(&procedure(4)).unwrap(), 1);
     }
 
-    /// `ret imm16` pops at most 64 KB less one: a flat callee that pops more raises the stack over its arguments with
-    /// the return address moved to the top of them (pr20621-1: a 64 KB struct by value), not `ret 65540`.
+    /// `ret imm16` pops at most 64 KB less one: a flat callee that pops more
+    /// raises the stack over its arguments with the return address moved to
+    /// the top of them (pr20621-1: a 64 KB struct by value), not `ret 65540`.
     #[test]
     fn test_a_callee_that_pops_64_kb_moves_its_return_address_over_the_arguments() {
         let popping = |bytes: i64| {
@@ -2012,7 +2068,8 @@ mod tests {
         );
     }
 
-    /// The listing opened `.model medium` whatever the target: a flat program's header is its target's.
+    /// The listing opened `.model medium` whatever the target: a flat program's
+    /// header is its target's.
     #[test]
     fn test_a_listing_opens_with_its_targets_header() {
         let module = Module {
@@ -2038,8 +2095,8 @@ mod tests {
     }
 
     /// The frame register and stack pointer are LIR's BP and SP whatever the
-    /// target: a flat one listed `push bp; mov bp,sp` and `[bp+6]`, 16-bit code in a
-    /// 32-bit program.
+    /// target: a flat one listed `push bp; mov bp,sp` and `[bp+6]`, 16-bit code
+    /// in a 32-bit program.
     #[test]
     fn test_a_flat_frame_is_spelled_with_its_own_registers() {
         let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()]));
@@ -2083,8 +2140,9 @@ mod tests {
         );
     }
 
-    /// `enter` is the target's to take for size (`frame_enter`): a target that states it gets the 4-byte frame at -Os
-    /// only, where the 486's own description (false) gets push/mov/sub at both levels.
+    /// `enter` is the target's to take for size (`frame_enter`): a target that
+    /// states it gets the 4-byte frame at -Os only, where the 486's own
+    /// description (false) gets push/mov/sub at both levels.
     #[test]
     fn test_a_target_that_states_frame_enter_opens_a_size_frame_with_it() {
         let body = lir::LirBody {
@@ -2131,7 +2189,8 @@ mod tests {
         assert_eq!(listing(false, true)[1..4], ["push ebp", "mov ebp, esp", "sub esp, 4"]);
     }
 
-    /// A flat procedure whose frame register the target may leave out, `body` its instructions.
+    /// A flat procedure whose frame register the target may leave out, `body`
+    /// its instructions.
     fn flat(
         optional: bool,
         reserve: i64,
@@ -2180,10 +2239,11 @@ mod tests {
         insn(9, semantics(Operation::Return, "ret", vec![], vec![]))
     }
 
-    /// bench/fib's `push ebp; mov ebp,esp ... leave` cost three instructions a call. A function whose
-    /// cells the stack pointer can name keeps no frame register: an argument, above the return address,
-    /// is `[esp + depth + 4]` and a local `[esp + depth - 4 - n]`, `depth` the bytes pushed so far, which
-    /// a push moves and a callee's pop moves back.
+    /// bench/fib's `push ebp; mov ebp,esp ... leave` cost three instructions a
+    /// call. A function whose cells the stack pointer can name keeps no
+    /// frame register: an argument, above the return address, is `[esp +
+    /// depth + 4]` and a local `[esp + depth - 4 - n]`, `depth` the bytes
+    /// pushed so far, which a push moves and a callee's pop moves back.
     #[test]
     fn test_a_frame_the_stack_pointer_can_address_has_no_frame_register() {
         let push = insn(1, semantics(Operation::Push, "push", vec![], vec![eax()]));
@@ -2213,8 +2273,8 @@ mod tests {
         assert!(has(&lines, "sub esp, 12") && has(&lines, "add esp, 12"), "{lines:?}");
     }
 
-    /// A target that does not let its frame register go, and a body that reads it as a value or calls
-    /// through a pointer, keep the frame.
+    /// A target that does not let its frame register go, and a body that reads
+    /// it as a value or calls through a pointer, keep the frame.
     #[test]
     fn test_a_frame_register_that_is_read_or_may_not_go_stays() {
         let read = || vec![insn(0, semantics(Operation::Move, "mov", vec![eax()], vec![cell(8)])), ret()];
@@ -2246,8 +2306,8 @@ mod tests {
         assert!(!has(&flat(true, 8, read(), IndexMap::default()), "push ebp"));
     }
 
-    /// The frame's reserve was rounded to a word: a flat target keeps its stack in dwords, and
-    /// `sub esp, 70` left the next push misaligned.
+    /// The frame's reserve was rounded to a word: a flat target keeps its stack
+    /// in dwords, and `sub esp, 70` left the next push misaligned.
     #[test]
     fn test_the_reserve_is_a_multiple_of_the_targets_slot() {
         let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()]));
@@ -2286,8 +2346,9 @@ mod tests {
         assert!(has(&lines, "sub esp, 72"), "{lines:?}");
     }
 
-    /// SI and DI were pushed and popped whole: an operand-size prefix on every save
-    /// and restore, for upper halves no Borland caller keeps across a call.
+    /// SI and DI were pushed and popped whole: an operand-size prefix on every
+    /// save and restore, for upper halves no Borland caller keeps across a
+    /// call.
     #[test]
     fn test_callee_saves_only_what_the_convention_keeps() {
         let lines = _printed(vec![Loc::Reg(ir::Reg { register: Register::ESI, width: 4 })], 0);
@@ -2295,8 +2356,9 @@ mod tests {
         assert!(!has(&lines, "push esi") && !has(&lines, "pop esi"));
     }
 
-    /// `place` saved SI on every call, entered or not, though only its loop names it: the early
-    /// `return 1` pushed and popped it for nothing. The save is where the loop starts.
+    /// `place` saved SI on every call, entered or not, though only its loop
+    /// names it: the early `return 1` pushed and popped it for nothing. The
+    /// save is where the loop starts.
     #[test]
     fn test_a_register_only_a_later_block_names_is_saved_there() {
         let branch = Semantics { target: Some(3), ..semantics(Operation::Branch, "je", vec![], vec![]) };
@@ -2342,8 +2404,8 @@ mod tests {
         assert!(at("pop si") < at("L0_3:"), "{lines:?}");
     }
 
-    /// Reached around the block that names it as well, a return cannot pop what was not pushed: the
-    /// entry saves, as before.
+    /// Reached around the block that names it as well, a return cannot pop what
+    /// was not pushed: the entry saves, as before.
     #[test]
     fn test_a_return_reached_around_the_save_keeps_the_save_at_the_entry() {
         let branch = Semantics { target: Some(3), ..semantics(Operation::Branch, "je", vec![], vec![]) };

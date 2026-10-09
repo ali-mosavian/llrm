@@ -1,12 +1,14 @@
-//! A target's OS layer as a language's runtime needs it: the start-up and operating-system
-//! routines in assembly, the language's own module over them, what its stack check compares.
-//! Each target crate ships one description per language, `runtime/<language>/<language>.toml`,
-//! with the files it names embedded; a language reads what it needs and never asks which target.
+//! A target's OS layer as a language's runtime needs it: the start-up and
+//! operating-system routines in assembly, the language's own module over them,
+//! what its stack check compares. Each target crate ships one description per
+//! language, `runtime/<language>/<language>.toml`, with the files it names
+//! embedded; a language reads what it needs and never asks which target.
 
 /// One language's runtime on one target.
 #[derive(Clone, Copy, Debug)]
 pub struct Description {
-    /// The directory the description and its files are in, for a build step that assembles them.
+    /// The directory the description and its files are in, for a build step
+    /// that assembles them.
     pub directory: &'static str,
     /// The description, TOML.
     pub text: &'static str,
@@ -28,8 +30,9 @@ impl Description {
         self.text.parse().map_err(|error: toml::de::Error| error.to_string())
     }
 
-    /// What the assembler is told of the description: `assembler_defines = ["field:SYMBOL"]`, each
-    /// field an integer or a string of the description, as `SYMBOL` and its value.
+    /// What the assembler is told of the description: `assembler_defines =
+    /// ["field:SYMBOL"]`, each field an integer or a string of the
+    /// description, as `SYMBOL` and its value.
     pub fn defines(&self) -> Result<Vec<(String, String)>, String> {
         let table = self.table()?;
         table

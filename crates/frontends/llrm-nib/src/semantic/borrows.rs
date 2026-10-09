@@ -645,9 +645,9 @@ impl FunctionCompiler<'_> {
         }
     }
 
-    /// Errs when a binding in scope, other than `owner` itself, borrows `owner`.
-    /// Whether `binding` may change what it borrows: a `&mut`, or a value
-    /// holding one.
+    /// Errs when a binding in scope, other than `owner` itself, borrows
+    /// `owner`. Whether `binding` may change what it borrows: a `&mut`, or
+    /// a value holding one.
     fn may_change(
         &self,
         binding: &Binding,
@@ -774,7 +774,8 @@ impl FunctionCompiler<'_> {
             let held = identity(&binding.storage).filter(|key| borrows(self.held.get(key)));
             holders.extend(lent.into_iter().chain(held));
         }
-        // What a `let mut` reference's cell holds outlives each pointer loaded from it.
+        // What a `let mut` reference's cell holds outlives each pointer loaded
+        // from it.
         for cell in &self.reference_cells {
             if holders.contains(&BorrowKey::Value(cell.latest)) {
                 holders.insert(BorrowKey::Place(cell.place));

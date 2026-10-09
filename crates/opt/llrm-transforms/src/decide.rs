@@ -6,23 +6,28 @@
 //! constant_cycles along the edges that run.
 //!
 //! What changed with the IR:
-//! - A branch reads an `i1`: the flags a compare left are the `icmp` `_comparison` finds, and a condition consts knows
-//!   outright decides the branch too.
-//! - A branch not taken became an inert owner falling through; here it is a jump to the other arm.
-//! - Threading bypasses a block holding only a jump, for a `br` or a `switch`; explicit and fall-through edges are one
-//!   kind here. A conditional branch both of whose arms go one way is a jump, as the old one was when threading made it
-//!   so.
+//! - A branch reads an `i1`: the flags a compare left are the `icmp`
+//!   `_comparison` finds, and a condition consts knows outright decides the
+//!   branch too.
+//! - A branch not taken became an inert owner falling through; here it is a
+//!   jump to the other arm.
+//! - Threading bypasses a block holding only a jump, for a `br` or a `switch`;
+//!   explicit and fall-through edges are one kind here. A conditional branch
+//!   both of whose arms go one way is a jump, as the old one was when threading
+//!   made it so.
 //! - consts reads the module's globals through the outer proxy.
-//! - A compare's answer (`_signed`, `_TAKEN`) is `consts::holds`, which folds an `icmp`.
+//! - A compare's answer (`_signed`, `_TAKEN`) is `consts::holds`, which folds
+//!   an `icmp`.
 //!
 //! Dropped, no rich MIR analogue: the memory a compare's operand read
 //! (`held`: a load is its own instruction, and its fact consts'), and the
 //! case width checks (a switch's cases are its condition's type).
 //!
-//! Tests, in `decide_tests.rs`: `test_empty_jump_threading_preserves_phi_inputs_and_effects`
-//! is ported. The other old tests of `_outcome`, `_switch_target` and
-//! `_executable_successors` read BC objects through the raise
-//! (`raising_dispatch_tests`) or belong to `peelsize`, whose own tests cover them.
+//! Tests, in `decide_tests.rs`:
+//! `test_empty_jump_threading_preserves_phi_inputs_and_effects` is ported. The
+//! other old tests of `_outcome`, `_switch_target` and `_executable_successors`
+//! read BC objects through the raise (`raising_dispatch_tests`) or belong to
+//! `peelsize`, whose own tests cover them.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -349,7 +354,8 @@ pub fn _phi_threaded(
             if !only_jumps || target == block || function.predecessors(target).contains(&from) {
                 continue;
             }
-            // What the target's phis took from `block` they now take from `from` too.
+            // What the target's phis took from `block` they now take from
+            // `from` too.
             for one in edges::phis(function, target) {
                 let mut incoming = crate::lcssa::arms(function, one);
                 let (carried, _) =

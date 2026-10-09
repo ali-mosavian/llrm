@@ -120,13 +120,15 @@ pub fn proves(
         }
     }
 
-    // `dist[a][b]`: the most `a - b` can be. What the closure bounds below by zero is not
-    // negative either, which can turn an unsigned compare into a signed one: round again.
+    // `dist[a][b]`: the most `a - b` can be. What the closure bounds below by
+    // zero is not negative either, which can turn an unsigned compare into
+    // a signed one: round again.
     let mut dist;
     let mut rounds = 0;
     loop {
         dist = closed(size, &nodes, &small, ranges, &usable, &nonnegative);
-        // A negative cycle: the facts contradict each other, and prove anything.
+        // A negative cycle: the facts contradict each other, and prove
+        // anything.
         if (0..size).any(|at| dist[at][at].as_ref().is_some_and(|one| *one < BigInt::from(0))) {
             return true;
         }
@@ -168,7 +170,8 @@ pub fn proves(
         IntPredicate::Ult | IntPredicate::Ule | IntPredicate::Ugt | IntPredicate::Uge
     );
     if unsigned {
-        // Both sides are to be non-negative sums, so the order is the signed one.
+        // Both sides are to be non-negative sums, so the order is the signed
+        // one.
         let non_negative = |one: &Side| matches!(span(one).0, Some(low) if low >= BigInt::from(0));
         if !non_negative(&goal_left) || !non_negative(&goal_right) {
             return false;
@@ -192,7 +195,8 @@ pub fn proves(
     }
 }
 
-/// The closure of the compares `usable` over `size` nodes, `dist[a][b]` the most `a - b` can be.
+/// The closure of the compares `usable` over `size` nodes, `dist[a][b]` the
+/// most `a - b` can be.
 fn closed(
     size: usize,
     nodes: &[Monomial],
@@ -229,7 +233,8 @@ fn closed(
         if unsigned && !(nonnegative(small, l) && nonnegative(small, r)) {
             continue;
         }
-        // `l.node - r.node <= most`, where `l.offset` and `r.offset` are folded in.
+        // `l.node - r.node <= most`, where `l.offset` and `r.offset` are folded
+        // in.
         let gap = &r.offset - &l.offset;
         match predicate {
             IntPredicate::Slt | IntPredicate::Ult => bound(&mut dist, l.node, r.node, gap - 1),

@@ -106,7 +106,8 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
                     continue;
                 }
                 // Split the edge, unless nothing on the predecessor's other
-                // paths can read what the copies write (decided per edge below).
+                // paths can read what the copies write (decided per edge
+                // below).
                 for &(where_, value) in &edges {
                     if successors.get(&where_).copied().unwrap_or(0) > 1 {
                         crossing.entry(where_).or_default().push((phi.result, value));
@@ -994,7 +995,8 @@ mod tests {
 
     #[test]
     fn test_phi_elimination_copies_the_whole_scalar() {
-        // VBDOS nbody printed PX0=285219921 for 1258: phi copies truncated 32-bit accumulators.
+        // VBDOS nbody printed PX0=285219921 for 1258: phi copies truncated
+        // 32-bit accumulators.
         for critical in [false, true] {
             let load = |at: i64, value: u32| {
                 Arc::new(Insn::new(
@@ -1032,7 +1034,8 @@ mod tests {
 
     #[test]
     fn test_phi_on_a_single_predecessor_exit_does_not_split_the_edge() {
-        // HARR gained an empty jump trampoline after LCSSA closed its loop exit.
+        // HARR gained an empty jump trampoline after LCSSA closed its loop
+        // exit.
         let mut use_ =
             Insn::new(2, Some((2, 3)), what(Operation::Move, "mov", vec![], vec![held(3, 2)], None), vec![], vec![3]);
         use_.widths = vec![(3, 2)];
@@ -1057,7 +1060,8 @@ mod tests {
 
     #[test]
     fn test_phi_source_live_on_the_other_branch_gets_an_edge_copy() {
-        // nbody spilled its inner counter after exit copies extended both accumulators.
+        // nbody spilled its inner counter after exit copies extended both
+        // accumulators.
         let push = |at: i64, value: u32| {
             Arc::new(Insn::new(
                 at,
@@ -1155,7 +1159,8 @@ mod tests {
                     vec![2, 3],
                     vec![Phi { result: 2, incoming: vec![(0, 1)] }],
                 ),
-                // Reading the source down the other arm requires a real edge copy.
+                // Reading the source down the other arm requires a real edge
+                // copy.
                 block(2, vec![move_(2, 4, held(2, 4))], vec![], vec![]),
                 block(
                     3,
@@ -1196,7 +1201,8 @@ mod tests {
     #[test]
     fn test_phi_elimination_renames_a_value_a_cell_is_reached_by() {
         // Port of tests/test_lir.py: `_settled` looked for a Held in
-        // `Mem.through`, which is a register now, so a based cell kept the old id.
+        // `Mem.through`, which is a register now, so a based cell kept the old
+        // id.
         let where_ = Addr { base: Register::SI, ..Addr::new(Space::Segment, 0x10) };
         let cell = Mem {
             through: Register::None,

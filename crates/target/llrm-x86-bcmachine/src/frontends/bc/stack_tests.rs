@@ -30,7 +30,8 @@ fn calls<const N: usize>(items: [(usize, &str); N]) -> IndexMap<i64, String> {
 
 #[test]
 fn touches_sp_sees_writes_iced_gives_no_increment() {
-    // Python: touches_sp is True for push ax, add sp,4 and leave; False for nop and mov ax,sp.
+    // Python: touches_sp is True for push ax, add sp,4 and leave; False for nop
+    // and mov ax,sp.
     for (bytes, expected) in [
         (&[0x50][..], true),
         (&[0x83, 0xC4, 0x04][..], true),
@@ -56,8 +57,8 @@ fn test_two_contiguous_pushes_form_one_frame() {
 #[test]
 fn test_a_value_pushed_early_is_found_under_a_nested_call() {
     // push A -- for the OUTER call, but not consumed until the very end
-    // push B / push C / call INNER(2) -- entirely self-contained, consumes B and C
-    // push D -- the outer call's second argument
+    // push B / push C / call INNER(2) -- entirely self-contained, consumes B
+    // and C push D -- the outer call's second argument
     // call OUTER(2) -- consumes A (stranded beneath the inner call) and D
     let block = block_of(concat!(
         "66 FF 36 00 00", // push A
@@ -109,7 +110,8 @@ fn test_arithmetic_on_sp_is_a_gap_even_though_iced_reports_no_increment() {
 
 #[test]
 fn test_a_call_needing_more_than_was_pushed_is_not_a_frame() {
-    let block = block_of("66 FF 36 00 00  9A 00 00 00 00"); // one push, a call needing two
+    // one push, a call needing two
+    let block = block_of("66 FF 36 00 00  9A 00 00 00 00");
     let call = block.insns.last().unwrap();
     assert!(frames(&block, &calls([(call.at, "F2")]), &arity).is_empty());
 }

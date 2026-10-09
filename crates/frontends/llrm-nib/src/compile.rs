@@ -30,8 +30,9 @@ pub fn assembled(
     assembled_for(program, Some(entry), options, os)
 }
 
-/// `assembled` for a library cut to what some objects name (`keep_exports`): nothing may be left of it that calls an
-/// entry, and a cut to nothing is still a library, one with no export.
+/// `assembled` for a library cut to what some objects name (`keep_exports`):
+/// nothing may be left of it that calls an entry, and a cut to nothing is still
+/// a library, one with no export.
 pub fn assembled_library(
     program: &model::Program,
     options: &llrm_core::driver::Options,
@@ -89,8 +90,9 @@ pub fn keep_exports(
     }
 }
 
-/// `target`'s machine, priced for its default CPU, with the far uninitialised data zeroed where the
-/// target's OS layer under the runtime says its start-up does.
+/// `target`'s machine, priced for its default CPU, with the far uninitialised
+/// data zeroed where the target's OS layer under the runtime says its start-up
+/// does.
 pub fn machine(
     target: &dyn llrm_target::Target,
     os: &crate::Os,

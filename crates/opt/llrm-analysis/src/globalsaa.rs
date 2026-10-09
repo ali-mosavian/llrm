@@ -13,8 +13,9 @@
 //! tracked globals as `alias` asks here:
 //!
 //! - a body of the module: all of them;
-//! - otherwise the named ones it writes -- those its `!llrm.writes` node in the runtime module lists, or all without
-//!   one -- and, unless it is `nocallback`, what the module's entries do, as it may call back into them.
+//! - otherwise the named ones it writes -- those its `!llrm.writes` node in the
+//!   runtime module lists, or all without one -- and, unless it is
+//!   `nocallback`, what the module's entries do, as it may call back into them.
 //!
 //! `!llrm.named = !{!0}` with `!0 = !{ptr @g, ...}`; `!llrm.writes = !{!1,
 //! ...}` with `!1 = !{ptr @routine, ptr @g, ...}`: of the named globals,
@@ -111,7 +112,8 @@ pub fn calls_back(
 ) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
     let flagged = |attrs: &[Attribute]| llrm_mir::facts::Facts::of(attrs).no_callback();
-    // A callee a pass declared after the outer facts were taken is not among them.
+    // A callee a pass declared after the outer facts were taken is not among
+    // them.
     let callee = llrm_mir::memory::callee(unit.context, unit.function, at)
         .and_then(|one| unit.globals.get(one.0 as usize)?.function());
     !(flagged(&info.attrs) || callee.is_some_and(|one| flagged(&one.attrs)))
@@ -157,8 +159,8 @@ fn promised(
     (named, writes)
 }
 
-/// The globals one body's instructions name other than as a call's callee; with `retained`, not those it passes as an
-/// argument the callee `noretain`s.
+/// The globals one body's instructions name other than as a call's callee; with
+/// `retained`, not those it passes as an argument the callee `noretain`s.
 fn named_in(
     module: &Module,
     function: &llrm_mir::module::Function,
@@ -226,8 +228,9 @@ pub struct Elsewhere {
     pub taken: BTreeSet<GlobalId>,
 }
 
-/// What one body contributes: the globals whose address it lets escape, and those it names (plainly, and but as an
-/// argument its callee `noretain`s). Of the body and the declarations alone.
+/// What one body contributes: the globals whose address it lets escape, and
+/// those it names (plainly, and but as an argument its callee `noretain`s). Of
+/// the body and the declarations alone.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Contribution {
     escaped: BTreeSet<GlobalId>,
@@ -235,8 +238,9 @@ pub struct Contribution {
     retained: BTreeSet<GlobalId>,
 }
 
-/// What `GlobalsAA` keeps for its next run: each body's contribution as of the history it had, good while the
-/// declarations and the other modules' doing are those it was made under.
+/// What `GlobalsAA` keeps for its next run: each body's contribution as of the
+/// history it had, good while the declarations and the other modules' doing are
+/// those it was made under.
 #[derive(Default)]
 pub struct Bodies {
     declarations: Option<Rc<Vec<GlobalValue>>>,
@@ -321,7 +325,8 @@ fn found_with(
             None => {
                 let shape = shape(id);
                 let unit = Unit { program: Some(program), ..Unit::of(module, layout, function) };
-                // Each access asks whether its frame object's address is exposed: found once for the body.
+                // Each access asks whether its frame object's address is
+                // exposed: found once for the body.
                 let exposed = crate::memory::exposed_frames(&unit);
                 let facts = alias::points_to(&unit.with_shape(&shape).with_exposed(&exposed), None, None)?;
                 let escaped = facts

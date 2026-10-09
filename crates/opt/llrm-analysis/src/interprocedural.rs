@@ -7,23 +7,30 @@
 //! unless a separate purity proof says its effects are unobservable.
 //!
 //! What changed with the representation:
-//! - A call names its callee and carries its arguments, so the old call-site and ARG tables are gone, with
-//!   `argument_sites` and the C call contract. Procedures are keyed by `GlobalId`.
-//! - A constant is an operand. SCCP states what it proved by rewriting the value to its constant, so the old lookup in
-//!   `consts::known` is reading the operand, and `constant_parameters` (frontend facts) and
+//! - A call names its callee and carries its arguments, so the old call-site
+//!   and ARG tables are gone, with `argument_sites` and the C call contract.
+//!   Procedures are keyed by `GlobalId`.
+//! - A constant is an operand. SCCP states what it proved by rewriting the
+//!   value to its constant, so the old lookup in `consts::known` is reading the
+//!   operand, and `constant_parameters` (frontend facts) and
 //!   `current_parameter_constants` (SCCP facts) are one function.
 //! - A body returns one value, so `Returns` holds one constant, not a tuple.
-//! - `specialize_parameters` and `propagate_returns` replace uses with the constant rather than seeding `initial` or
-//!   defining fresh copies, which leaves nothing to redo and no `done` set to keep.
-//! - Purity is stated, not a set: the whole-module step stamps each body's attributes, and a call is pure or erasable
-//!   as it and its callee state (`stated_pure`, `erasable`). What the old fixed points proved,
-//!   `returns_without_looping` and `cannot_fault` answer for the stamp. `noreturn` ends a path.
-//! - Division is C's and floating exceptions the machine's, so the old trapping and floating kinds refuse nothing; the
-//!   old `Escape`, `Opaque` and `Fill` are calls, judged as calls.
-//! - A frame access is one whose pointer `frameescape::framed` places in an alloca; a static one is a constant offset
-//!   (`pointerfacts`) from a near global variable this module defines.
-//! - `noreturn_procedures`, `terminal_sites` and the `terminal_calls` cut are noreturn's facts and edit, asked for
-//!   here.
+//! - `specialize_parameters` and `propagate_returns` replace uses with the
+//!   constant rather than seeding `initial` or defining fresh copies, which
+//!   leaves nothing to redo and no `done` set to keep.
+//! - Purity is stated, not a set: the whole-module step stamps each body's
+//!   attributes, and a call is pure or erasable as it and its callee state
+//!   (`stated_pure`, `erasable`). What the old fixed points proved,
+//!   `returns_without_looping` and `cannot_fault` answer for the stamp.
+//!   `noreturn` ends a path.
+//! - Division is C's and floating exceptions the machine's, so the old trapping
+//!   and floating kinds refuse nothing; the old `Escape`, `Opaque` and `Fill`
+//!   are calls, judged as calls.
+//! - A frame access is one whose pointer `frameescape::framed` places in an
+//!   alloca; a static one is a constant offset (`pointerfacts`) from a near
+//!   global variable this module defines.
+//! - `noreturn_procedures`, `terminal_sites` and the `terminal_calls` cut are
+//!   noreturn's facts and edit, asked for here.
 
 use std::collections::{BTreeMap, BTreeSet};
 

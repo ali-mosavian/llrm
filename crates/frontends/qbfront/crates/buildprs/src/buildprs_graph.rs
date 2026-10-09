@@ -2,7 +2,8 @@
 //!
 //! This module models the 48-byte DOS `StateNode` record with typed links and
 //! phase fields. The current pattern-based lowering remains the active
-//! generator; this graph is the new backend scaffold that later passes will use.
+//! generator; this graph is the new backend scaffold that later passes will
+//! use.
 
 pub const STATE_RECORD_SIZE: usize = 0x30;
 pub const ENCODE1BYTE_QBASIC_11: u8 = 0xE0;

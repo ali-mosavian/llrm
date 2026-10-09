@@ -1,8 +1,9 @@
 //! Port of `tests/test_nib_frontend.py`.
 //!
 //! skipped: `execute.run` assertions (`qbopt/hir/execute.py` is tools-only),
-//! and the tests made of nothing else; test_dos_bootstrap_enters_the_runtime_before_language_main
-//! (reads runtime sources, no compiler).
+//! and the tests made of nothing else;
+//! test_dos_bootstrap_enters_the_runtime_before_language_main (reads runtime
+//! sources, no compiler).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -35,10 +36,10 @@ fn refused(source: &Path) -> String {
     driver::parsed(source, &crate::real_mode(), None).expect_err("the frontend refuses").0
 }
 
-/// A tag is within the tags its enum has, stated once of the tag's member, not of each load:
-/// every load of it, as many as the program makes, carries `!range` in the emitted MIR
-/// with no instruction fact from the frontend. A load a later change forgets to tag no
-/// longer loses the fact.
+/// A tag is within the tags its enum has, stated once of the tag's member, not
+/// of each load: every load of it, as many as the program makes, carries
+/// `!range` in the emitted MIR with no instruction fact from the frontend. A
+/// load a later change forgets to tag no longer loses the fact.
 #[test]
 fn every_load_of_an_enums_tag_has_its_range_from_one_statement() {
     use llrm_core::hir::facts::Subject;
@@ -64,10 +65,11 @@ fn every_load_of_an_enums_tag_has_its_range_from_one_statement() {
     assert!(tag_loads.iter().all(|one| one.contains("!range")), "{text}");
 }
 
-/// A view lies within one segment, so a dimension of 2-byte elements is at most 32767: stated of its
-/// load, or `lo <u len` leaves a negative `lo` possible and no pass can hoist an index check out
-/// of a loop (quicksort's `sort` tested `j <u len` on every trip). A byte view says nothing: 65535 is its type's whole
-/// range.
+/// A view lies within one segment, so a dimension of 2-byte elements is at most
+/// 32767: stated of its load, or `lo <u len` leaves a negative `lo` possible
+/// and no pass can hoist an index check out of a loop (quicksort's `sort`
+/// tested `j <u len` on every trip). A byte view says nothing: 65535 is its
+/// type's whole range.
 #[test]
 fn a_views_dimension_load_states_what_its_segment_holds() {
     let directory = tempfile::tempdir().expect("a directory");
@@ -89,8 +91,9 @@ fn a_views_dimension_load_states_what_its_segment_holds() {
     assert_eq!(program("u8"), 0, "a byte view's length may be any u16");
 }
 
-/// A fact stated once of any member, not only a tag, reaches every load and store of it,
-/// through a reference and through a local: each field access names its member.
+/// A fact stated once of any member, not only a tag, reaches every load and
+/// store of it, through a reference and through a local: each field access
+/// names its member.
 #[test]
 fn a_fact_of_a_member_reaches_every_load_and_store_of_it() {
     use llrm_core::hir::facts::Subject;
@@ -103,7 +106,8 @@ fn a_fact_of_a_member_reaches_every_load_and_store_of_it() {
     );
     let mut program = parsed(&source);
     let owner = program.modules[0].types.iter().find(|one| one.name == "P").expect("the struct P").id;
-    // The accesses of member b, as the frontend wrote them: loads and stores, by reference and by place.
+    // The accesses of member b, as the frontend wrote them: loads and stores,
+    // by reference and by place.
     let member_of = |operand: &model::Operand| match operand {
         model::Operand::ProjectedPlace(one) => one.member,
         model::Operand::IndirectPlace(one) => one.member,
@@ -162,9 +166,10 @@ fn a_fact_of_a_member_reaches_every_load_and_store_of_it() {
     assert_eq!((ranged, aligned_loads, aligned_stores), (loads, loads, stores), "{text}");
 }
 
-/// Every Nib program's emitted MIR lints clean: `lint::poison` called each stated
-/// wrap `poison` and each array filled an element at a time "stored after use",
-/// so `hir-mir` and the corpus tool dropped 56 of 124 programs, `sum_three` among them.
+/// Every Nib program's emitted MIR lints clean: `lint::poison` called each
+/// stated wrap `poison` and each array filled an element at a time "stored
+/// after use", so `hir-mir` and the corpus tool dropped 56 of 124 programs,
+/// `sum_three` among them.
 #[test]
 fn the_mir_of_sum_three_lints_clean() {
     let program = parsed(&fixture("sum_three.nib"));
@@ -245,8 +250,9 @@ pub(crate) fn level(name: &str) -> Options {
     }
 }
 
-/// -Os with no inlining: the function under test stays a function, as it does where more than
-/// one call reaches it (tuned for size the last call of a private function is inlined).
+/// -Os with no inlining: the function under test stays a function, as it does
+/// where more than one call reaches it (tuned for size the last call of a
+/// private function is inlined).
 fn os_calls_kept() -> Options {
     let mut options = level("Os");
     options.pipeline.inline = llrm_transforms::inline::Threshold::none();
@@ -276,14 +282,15 @@ pub(crate) fn O2() -> Options {
     level("O2")
 }
 
-/// -O3, where a complete copy of a loop may grow the code (gcc's `flag_cunroll_grow_size`); at -O2 it may not.
+/// -O3, where a complete copy of a loop may grow the code (gcc's
+/// `flag_cunroll_grow_size`); at -O2 it may not.
 #[allow(non_snake_case)]
 pub(crate) fn O3() -> Options {
     level("O3")
 }
 
-/// -O2 where the function under test stays a function: the last call of a private function is inlined, and
-/// these tests read the callee.
+/// -O2 where the function under test stays a function: the last call of a
+/// private function is inlined, and these tests read the callee.
 #[allow(non_snake_case)]
 pub(crate) fn O2_calls_kept() -> Options {
     let mut options = level("O2");
@@ -396,7 +403,8 @@ fn test_all_primitive_types_cross_hir_with_their_exact_representation() {
     let names: BTreeSet<&str> = types.keys().copied().collect();
     assert_eq!(
         names,
-        // The runtime's routines take a `&string` as the far pointer to its descriptor.
+        // The runtime's routines take a `&string` as the far pointer to its
+        // descriptor.
         BTreeSet::from([
             "void",
             "bool",
@@ -432,7 +440,8 @@ fn test_all_primitive_types_cross_hir_with_their_exact_representation() {
         ]
     );
     assert_eq!((types["bool"].width, types["void"].width), (1, 0));
-    // The x87 evaluates in extended precision and rounds on store, as DOS C does.
+    // The x87 evaluates in extended precision and rounds on store, as DOS C
+    // does.
     assert_eq!(types["f32"].evaluation, model::FloatEvaluation::Extended80);
     assert_eq!(types["f64"].evaluation, model::FloatEvaluation::Extended80);
     let sizes: Vec<usize> = program.modules[0].data.iter().map(|one| one.bytes.len()).collect();
@@ -603,7 +612,8 @@ fn test_nbody_position_loop_uses_one_end_relative_byte_offset() {
     // -O2 unrolls the loop away.
     let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &os_calls_kept());
     let function = between(&assembly, "_nbody proc near", "_nbody endp");
-    // The innermost loop closing on `jne` that adds each velocity to its position.
+    // The innermost loop closing on `jne` that adds each velocity to its
+    // position.
     let loop_ = Regex::new(r"(?m)^(L\w+):\n")
         .unwrap()
         .captures_iter(function)
@@ -687,7 +697,8 @@ fn test_counted_struct_loop_uses_its_record_width_as_the_byte_stride() {
 
 #[test]
 fn test_os_copies_no_loop_into_larger_code() {
-    // -O2 copies the five-record update loop; -Os must not grow the code doing so.
+    // -O2 copies the five-record update loop; -Os must not grow the code doing
+    // so.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
@@ -789,15 +800,16 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     let assembly = listing_on(&program, "main", &O2_calls_kept(), "486");
     let bump = between(&assembly, "_bump proc near", "_bump endp");
     let main = between(&assembly, "_main proc far", "_main endp");
-    // The payload's address is the view's pointer, the view's address the argument.
+    // The payload's address is the view's pointer, the view's address the
+    // argument.
     let payload =
         Regex::new(r"    lea ([a-z]+), \[bp-\d+\]\n").unwrap().captures(main).unwrap_or_else(|| panic!("{main}"))[1]
             .to_owned();
     assert!(Regex::new(&format!(r"    mov word ptr \[bp-\d+\], {payload}\n")).unwrap().is_match(main), "{main}");
     assert!(Regex::new(r"    mov [a-z]+, ss\n").unwrap().is_match(main));
     assert!(main.contains("call _bump"));
-    // `bump` is internal and called directly: the view, a stack pointer of one word, is its first argument, in AX, and
-    // nothing is pushed or popped.
+    // `bump` is internal and called directly: the view, a stack pointer of one
+    // word, is its first argument, in AX, and nothing is pushed or popped.
     assert!(!main.contains("add sp, 2") && !bump.contains("ret 2"), "{main}{bump}");
     assert!(Regex::new(r"    lea ax, \[bp-\d+\]\n    call _bump").unwrap().is_match(main), "{main}");
     assert!(bump.contains("es:["));
@@ -824,7 +836,8 @@ fn test_borrow_rules_reject_shared_mutation_and_aliasing_mutable_arguments() {
 
 #[test]
 fn test_readonly_array_borrow_keeps_payload_initialization_visible_to_callee() {
-    // sum returned stack garbage after DSE erased every payload store before its read-only call.
+    // sum returned stack garbage after DSE erased every payload store before
+    // its read-only call.
     let assembly = listing_on(&parsed(&fixture("sum.nib")), "main", &O2_calls_kept(), "486");
     let main = between(&assembly, "_main proc far", "_main endp");
 
@@ -865,7 +878,8 @@ fn test_array_parameter_is_one_unsized_view_pointer() {
 
 #[test]
 fn test_runtime_bounded_array_loop_advances_its_payload_address() {
-    // sum rebuilt `payload + index * 2` on every trip despite its invariant runtime bound.
+    // sum rebuilt `payload + index * 2` on every trip despite its invariant
+    // runtime bound.
     let assembly = listing_on(&parsed(&fixture("sum.nib")), "main", &O2_calls_kept(), "486");
     let function = between(&assembly, "_sum proc near", "_sum endp");
     let hot = closed_on_jne(function).unwrap_or_else(|| panic!("no loop closes on jne:\n{function}"));
@@ -878,8 +892,9 @@ fn test_runtime_bounded_array_loop_advances_its_payload_address() {
 
 #[test]
 fn test_three_array_initializer_keeps_the_fixed_frame_address_component() {
-    // sum_three wrote locals through EAX+SI after a secondary-base rewrite lost BP.
-    // The call kept: inlined, the sums fold to 1110 and no element is stored.
+    // sum_three wrote locals through EAX+SI after a secondary-base rewrite lost
+    // BP. The call kept: inlined, the sums fold to 1110 and no element is
+    // stored.
     let mut kept = O2();
     kept.pipeline.inline = llrm_transforms::inline::Threshold::none();
     let assembly = listing(&parsed(&fixture("sum_three.nib")), "main", &kept);
@@ -1024,7 +1039,8 @@ fn test_dictionary_comprehension_deduplicates_and_has_explicit_lookup() {
 
 #[test]
 fn test_a_repeat_literal_in_the_frame_is_one_string_fill() {
-    // The fill loop stepped its byte address to zero under `!=`, which `fill` missed: 64 stores in a loop.
+    // The fill loop stepped its byte address to zero under `!=`, which `fill`
+    // missed: 64 stores in a loop.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
@@ -1040,7 +1056,8 @@ fn test_a_repeat_literal_in_the_frame_is_one_string_fill() {
 
 #[test]
 fn test_a_fill_leaves_the_rest_of_its_function_priceable() {
-    // FILL had no price, so any function holding one refused every unroll: the 4-trip sum stayed a loop.
+    // FILL had no price, so any function holding one refused every unroll: the
+    // 4-trip sum stayed a loop.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
@@ -1056,14 +1073,16 @@ fn test_a_fill_leaves_the_rest_of_its_function_priceable() {
 
 #[test]
 fn test_an_array_field_fills_and_copies_as_one_run_each() {
-    // A 128-byte field's `[0] * 128` was 128 byte stores, and each copy of its struct 128 loads and stores.
+    // A 128-byte field's `[0] * 128` was 128 byte stores, and each copy of its
+    // struct 128 loads and stores.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
         "field_runs.nib",
         "struct File:\n    handle: i16\n    mut buffer: u8[128]\n    mut start: u16\n\nfn opened(h: i16) -> File:\n    return File(handle=h, buffer=[0] * 128, start=0)\n\nfn relay(h: i16) -> File:\n    let f = opened(h)\n    return f\n\nfn main() -> i16:\n    let f = relay(3)\n    return f.handle + i16(f.buffer[5])\n",
     );
-    // `opened` is inlined into `relay`: its fill and relay's copies are both there.
+    // `opened` is inlined into `relay`: its fill and relay's copies are both
+    // there.
     let assembly = listing(&parsed(&source), "main", &O2());
     let relay = between(&assembly, "_relay proc", "_relay endp");
 
@@ -1074,7 +1093,8 @@ fn test_an_array_field_fills_and_copies_as_one_run_each() {
 
 #[test]
 fn test_unroll_is_priced_against_the_loop_as_optimized() {
-    // Unroll compared its settled copy with the loop mid-round: `b`'s fill became eight at -Os, not one.
+    // Unroll compared its settled copy with the loop mid-round: `b`'s fill
+    // became eight at -Os, not one.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
@@ -1107,7 +1127,8 @@ fn test_unroll_is_priced_against_the_loop_as_optimized() {
 
 #[test]
 fn test_a_negative_index_is_out_of_bounds() {
-    // The check compared signed, so `i < 0` proved `i < 8` and the optimizer deleted the panic.
+    // The check compared signed, so `i < 0` proved `i < 8` and the optimizer
+    // deleted the panic.
     let directory = tempfile::tempdir().expect("a directory");
     let text = "@export(\"cdecl16\")\nfn value(i: i16) -> i16:\n    let a: i16[8] = [1] * 8\n    if i < 0:\n        return a[i]\n    return 0\n";
     let program = parsed(&written(&directory, "settled.nib", text));
@@ -1119,7 +1140,8 @@ fn test_a_negative_index_is_out_of_bounds() {
 
 #[test]
 fn test_a_new_counter_steps_where_no_condition_is_live() {
-    // A rotated loop branches on flags its body set; the pointer step went between them: Unlowered.
+    // A rotated loop branches on flags its body set; the pointer step went
+    // between them: Unlowered.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
@@ -1230,8 +1252,9 @@ fn test_ranked_arrays_reject_the_wrong_rank_or_shape() {
 
 #[test]
 fn test_a_loop_past_max_completely_peel_times_stays_rolled() {
-    // Copies were built for any trip count the simulation priced as folding: deedlines'
-    // 16384-trip loops became 360K operations. gcc's max-completely-peel-times is 16; past that nothing is copied.
+    // Copies were built for any trip count the simulation priced as folding:
+    // deedlines' 16384-trip loops became 360K operations. gcc's
+    // max-completely-peel-times is 16; past that nothing is copied.
     let directory = tempfile::tempdir().expect("a directory");
     let rolled = |trips: i16| {
         // `total * 3 + i` has no closed form, so only peeling removes the loop.
@@ -1250,8 +1273,8 @@ fn sum_three_on_486() -> String {
     between(&assembly, "_sum_three proc near", "_sum_three endp").to_owned()
 }
 
-/// Python's `re.search(r"(L\w+):\n(?:.*\n)*?\s*jne\s+\1\n", function)`: from the first
-/// label a later `jne` returns to, through the nearest such `jne`.
+/// Python's `re.search(r"(L\w+):\n(?:.*\n)*?\s*jne\s+\1\n", function)`: from
+/// the first label a later `jne` returns to, through the nearest such `jne`.
 fn closed_on_jne(function: &str) -> Option<String> {
     let lines: Vec<&str> = function.split_inclusive('\n').collect();
     for (at, line) in lines.iter().enumerate() {
@@ -1269,7 +1292,8 @@ fn closed_on_jne(function: &str) -> Option<String> {
 
 #[test]
 fn test_a_loop_whose_latch_copies_ends_on_its_branch() {
-    // sum_three left the latch's copies in the exit edge, so the loop ran je out plus jmp back.
+    // sum_three left the latch's copies in the exit edge, so the loop ran je
+    // out plus jmp back.
     let function = sum_three_on_486();
     let top = closed_on_jne(&function).unwrap_or_else(|| panic!("no loop closes on jne:\n{function}"));
     assert!(!top.contains("jmp"), "{top}");
@@ -1299,21 +1323,24 @@ fn column_loop() -> String {
 
 #[test]
 fn test_a_column_read_steps_a_pointer_by_its_runtime_stride() {
-    // `k * dim + j` had no pointer: strength could not multiply a runtime step, so every trip rebuilt it.
+    // `k * dim + j` had no pointer: strength could not multiply a runtime step,
+    // so every trip rebuilt it.
     let loop_ = column_loop();
     assert!(!loop_.contains("shl") && !loop_.contains("[bp"), "{loop_}");
 }
 
 #[test]
 fn test_a_pointer_stepped_by_a_runtime_stride_is_one_recurrence() {
-    // Strength reduced the pointer's own step, leaving a lagging copy: `xchg` and `jmp` on every trip.
+    // Strength reduced the pointer's own step, leaving a lagging copy: `xchg`
+    // and `jmp` on every trip.
     let loop_ = column_loop();
     assert!(!Regex::new(r"\b(?:jmp|xchg)\b|mov \w\w, \w\w\n").unwrap().is_match(&loop_), "{loop_}");
 }
 
 #[test]
 fn test_a_byte_argument_is_pushed_as_a_word() {
-    // A u8 or char argument reached the push as `push al`, which the assembler rejects.
+    // A u8 or char argument reached the push as `push al`, which the assembler
+    // rejects.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
@@ -1325,7 +1352,8 @@ fn test_a_byte_argument_is_pushed_as_a_word() {
     assert!(!Regex::new(r"push [abcd]l\b").unwrap().is_match(&assembly), "{assembly}");
 }
 
-/// `while true:` branched on a constant, which lowering refused: "branch condition must be a value".
+/// `while true:` branched on a constant, which lowering refused: "branch
+/// condition must be a value".
 #[test]
 fn test_a_branch_on_a_constant_lowers_as_a_jump() {
     let directory = tempfile::tempdir().expect("a directory");
@@ -1420,7 +1448,8 @@ fn test_pascal_functions_push_in_order_and_clean_up_after_themselves() {
     let text = masm::text(&module).expect("prints");
     let clamp = &text[text.find("CLAMP proc far").expect("CLAMP")..text.find("CLAMP endp").expect("its end")];
     assert!(clamp.contains("retf 6") && !clamp.contains("retf\n"), "{clamp}");
-    // scale(level, 255, 100): 255 is pushed first, so it is the high word of the pair.
+    // scale(level, 255, 100): 255 is pushed first, so it is the high word of
+    // the pair.
     assert!(text.contains(&format!("pushd {}", 255 << 16 | 100)), "{text}");
 }
 
@@ -1472,8 +1501,8 @@ fn test_a_near_raw_pointer_to_a_module_struct_is_its_offset() {
 #[test]
 /// Any integer converts to a float: a parameter, a temporary, a constant, of
 /// any width or sign. Only one already in memory in an x87 format did;
-/// `f64(high)` of an i16 parameter was "integer-to-float conversion needs a place",
-/// and the rich route refused every unsigned one: "UIToFP of a float".
+/// `f64(high)` of an i16 parameter was "integer-to-float conversion needs a
+/// place", and the rich route refused every unsigned one: "UIToFP of a float".
 #[test]
 fn test_any_integer_operand_converts_to_a_float() {
     let directory = tempfile::tempdir().expect("a directory");
@@ -1761,23 +1790,27 @@ fn test_a_qb45_library_takes_basic_arguments_by_reference() {
     assert_eq!(externs, ["B$SCPY", "MEAN"]);
     let text = masm::text(&module).expect("prints");
     let sort = between(&text, "SORTSCORES proc far", "SORTSCORES endp");
-    // scores() is pushed first, so it is further from the return address than count.
+    // scores() is pushed first, so it is further from the return address than
+    // count.
     assert!(sort.contains("retf 4") && sort.contains("word ptr [bp+8]"), "{sort}");
     let upper = between(&text, "UPPER proc far", "UPPER endp");
     assert!(upper.contains("retf 2"), "{upper}");
-    // Mean# takes two locals by reference and the DOUBLE's pointer, and returns that pointer.
+    // Mean# takes two locals by reference and the DOUBLE's pointer, and returns
+    // that pointer.
     let average = between(&text, "AVERAGE proc far", "AVERAGE endp");
     assert!(
         average.matches("lea ").count() >= 3
             && average.contains("call far ptr MEAN\n    mov bx, ax\n    fld qword ptr [bx]"),
         "{average}"
     );
-    // A rank-2 view reads both dimensions' counts: the descriptor's words at 14 and 18.
+    // A rank-2 view reads both dimensions' counts: the descriptor's words at 14
+    // and 18.
     let rows = between(&text, "ROWTOTAL proc far", "ROWTOTAL endp");
     let field = |offset: i64| Regex::new(&format!(r"word ptr \[\w+\+{offset}\]")).unwrap().is_match(rows);
     assert!(field(14) && field(18), "{rows}");
     let initials = between(&text, "INITIALS proc far", "INITIALS endp");
-    // The result is copied into BASIC's string by B$SCPY, inline or through `abi.qb45.string_result`.
+    // The result is copied into BASIC's string by B$SCPY, inline or through
+    // `abi.qb45.string_result`.
     assert!(
         (initials.contains("call far ptr B$SCPY") || initials.contains("call far ptr _abi.qb45.string_result"))
             && initials.contains("retf 2"),
@@ -2111,7 +2144,8 @@ fn test_an_export_no_object_uses_is_dropped_with_what_only_it_calls() {
 
 #[test]
 fn test_an_error_in_an_imported_module_names_that_module() {
-    // Semantic errors carried no module: one in shapes.nib was reported at main.nib's line.
+    // Semantic errors carried no module: one in shapes.nib was reported at
+    // main.nib's line.
     let directory = tempfile::tempdir().expect("a directory");
     written(&directory, "shapes.nib", "pub fn area(w: i16, h: u16) -> i16:\n    return w * h\n");
     let main = written(&directory, "main.nib", "import shapes\n\nfn main() -> i16:\n    return shapes.area(2, 3)\n");
@@ -2122,7 +2156,8 @@ fn test_an_error_in_an_imported_module_names_that_module() {
 
 #[test]
 fn test_a_borrowed_fixed_array_is_a_far_pointer_with_no_descriptor() {
-    // `&i16[4]` was passed as a view: a descriptor pointer, its length loaded at run time.
+    // `&i16[4]` was passed as a view: a descriptor pointer, its length loaded
+    // at run time.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
@@ -2481,7 +2516,8 @@ fn test_mir_infers_what_a_nib_function_touches() {
     let source = "@extern(\"cdecl16\")\nfn keep(x: i16) -> i16\n\nvar g: i16 = 3\n\nfn scalars(a: i16, b: i16) -> i16:\n    return a * b\n\nfn reads(p: &i16) -> i16:\n    return p + g\n\nfn writes(p: &mut i16) -> void:\n    p = 1\n\nfn main() -> i16:\n    unsafe:\n        let mut x: i16 = keep(2)\n        writes(x)\n        print(scalars(keep(x), reads(x)))\n    return 0\n";
     let directory = tempfile::tempdir().unwrap();
     let mut program = parsed(&written(&directory, "effects.nib", source));
-    // As the compile does: each function by its name, `main` the entry that keeps the rest alive.
+    // As the compile does: each function by its name, `main` the entry that
+    // keeps the rest alive.
     for function in &mut program.modules[0].functions {
         function.symbol = Some(function.name.clone());
         if function.name == "main" {
@@ -2526,8 +2562,9 @@ fn test_mir_infers_what_a_nib_function_touches() {
 
 /// A range loop's counter cannot wrap (`nsw`), so its trip count is `n` and
 /// the loop counts down to zero, testing the flags `dec` leaves: no `cmp`
-/// in the loop. Two callers pass different bounds: with one, the bound is a constant of the body, and the loop (which
-/// leaves by its bounds check as well) is copied out by it.
+/// in the loop. Two callers pass different bounds: with one, the bound is a
+/// constant of the body, and the loop (which leaves by its bounds check as
+/// well) is copied out by it.
 #[test]
 fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
     let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    print(total(a, 6))\n    return 0\n";
@@ -2553,9 +2590,10 @@ fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
     assert!(!looped.contains("cmp"), "{looped}");
 }
 
-/// One caller passes 5, so the body's bound is the constant 5: the loop, which also leaves by its bounds check, is
-/// copied out by that bound (gcc's `cunroll` by `loop_max_iterations`) and no backward jump is left. The test above
-/// needs two callers to keep the loop.
+/// One caller passes 5, so the body's bound is the constant 5: the loop, which
+/// also leaves by its bounds check, is copied out by that bound (gcc's
+/// `cunroll` by `loop_max_iterations`) and no backward jump is left. The test
+/// above needs two callers to keep the loop.
 #[test]
 fn test_a_range_loop_whose_bound_every_caller_passes_is_copied_out() {
     let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    return 0\n";
@@ -2906,7 +2944,8 @@ fn main() -> i16:
 /// A far pointer is its segment and offset words: a store through
 /// `screen[2]`, `screen` from the literal 0xB8000000, writes B800:0002. The
 /// MIR interpreter models no video memory, so it stops at the access and
-/// names its address. The literal was refused: "expected *far pointer, found i16".
+/// names its address. The literal was refused: "expected *far pointer, found
+/// i16".
 #[test]
 fn test_a_far_pointer_literal_stores_at_its_segment_and_offset() {
     use llrm_mir::interpret::{self, Trap};
@@ -2956,8 +2995,9 @@ fn test_a_module_array_past_64k_needs_huge() {
     assert!(error.contains("huge var"), "{error}");
 }
 
-/// The most a segment holds was the compiler's own 64K (65535 in the view check, a word's reach in
-/// the static check): a target whose segments hold 32K got an array past it accepted.
+/// The most a segment holds was the compiler's own 64K (65535 in the view
+/// check, a word's reach in the static check): a target whose segments hold 32K
+/// got an array past it accepted.
 #[test]
 fn a_target_states_how_much_a_segment_holds() {
     let source = "var a: i16[20000] = [0] * 20000\n";
@@ -2985,7 +3025,8 @@ const RECURSIVE: &str = "fn down(n: i16) -> i16:\n    if n == 0:\n        return
 
 #[test]
 fn test_an_internal_function_only_called_directly_is_entered_by_a_near_call() {
-    // Every Nib procedure was far: a 6-byte frame offset, retf, and a segment pushed per call.
+    // Every Nib procedure was far: a 6-byte frame offset, retf, and a segment
+    // pushed per call.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "near.nib", RECURSIVE);
     let text = listing(&parsed(&source), "main", &level("O2"));
@@ -2996,16 +3037,17 @@ fn test_an_internal_function_only_called_directly_is_entered_by_a_near_call() {
 
 #[test]
 fn test_a_near_call_reaches_a_procedure_in_another_code_segment_of_the_object() {
-    // With a segment per procedure, a near call between them was refused: "a near call to _down in another code
-    // segment".
+    // With a segment per procedure, a near call between them was refused: "a
+    // near call to _down in another code segment".
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "near.nib", RECURSIVE);
     object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::PerProcedure)
         .expect("writes");
 }
 
-/// A library cut to what an object names (`--used-by`) is still a library when the cut leaves it no export: the runtime
-/// of a program that calls none of its routines. It was an error, "entry function 'main' does not exist", and
+/// A library cut to what an object names (`--used-by`) is still a library when
+/// the cut leaves it no export: the runtime of a program that calls none of its
+/// routines. It was an error, "entry function 'main' does not exist", and
 /// tools/dosbatch could not link the program (#747).
 #[test]
 fn test_a_library_cut_to_nothing_assembles_without_an_entry() {

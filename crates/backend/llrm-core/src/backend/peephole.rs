@@ -239,7 +239,8 @@ impl Peephole {
         let body = borrows(self.rules, &increments(self.rules, &body));
         let body = doubled(self.rules, &body, &self.cpu)?;
         let body = narrowed_arithmetic(self.rules, &body);
-        // A zero upper half proven by the first is what the second reads, and the copies it makes are forwarded.
+        // A zero upper half proven by the first is what the second reads, and
+        // the copies it makes are forwarded.
         let body = if self.rules.zero_extensions.is_some() {
             copyprop::forwarded(&zero_extensions(self.rules, &widened_moves(self.rules, &body)))
         } else {
@@ -249,8 +250,9 @@ impl Peephole {
         let body = machinecse::eliminated(&body)?;
         let body = waits(&zero_compares(self.rules, &tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))));
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
-        // Last: EBP zeroed above for each cell reading it 32 bits wide, where a 32-bit address
-        // is the prefixed form of a 16-bit one. A native one reads whole registers.
+        // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
+        // 32-bit address is the prefixed form of a 16-bit one. A native
+        // one reads whole registers.
         let body = self._frame(body);
         let native = self.cpu.dword_address_form().is_some_and(|form| !form.secondary);
         Ok(if native { body } else { crate::backend::upperzero::established(&body) })
@@ -346,7 +348,8 @@ pub fn frame_copies<'a>(
                     && second.what.as_ref().is_some_and(|what| what.op == Operation::Pop),
             )
     }) {
-        return Ok(body.clone()); // avoid whole-body liveness when no stack shuttle exists
+        // avoid whole-body liveness when no stack shuttle exists
+        return Ok(body.clone());
     }
 
     let exits = liveness::dead_at_exit(body);
@@ -437,7 +440,8 @@ pub fn frame_copies<'a>(
     Ok(body.with_blocks(blocks))
 }
 
-/// Fold a load or transitive extension into one widening instruction (`peephole.peep`).
+/// Fold a load or transitive extension into one widening instruction
+/// (`peephole.peep`).
 pub fn extensions(
     rules: &peep::Rules,
     body: &LirBody,
@@ -445,7 +449,8 @@ pub fn extensions(
     peep::rewritten(rules.extensions, body, &Facts::new(body, None))
 }
 
-/// Materialize a call's literal once when both stack and register need it (`peephole.peep`).
+/// Materialize a call's literal once when both stack and register need it
+/// (`peephole.peep`).
 pub fn pushed_constants(
     rules: &peep::Rules,
     body: &LirBody,
@@ -488,7 +493,8 @@ fn _code_windows<E>(
     Ok(out)
 }
 
-/// Two adjacent immediate word pushes have one dword's stack layout (`peephole.peep`).
+/// Two adjacent immediate word pushes have one dword's stack layout
+/// (`peephole.peep`).
 pub fn pushes(
     rules: &peep::Rules,
     body: &LirBody,
@@ -512,7 +518,8 @@ pub fn _lanes(register: Register) -> Lanes {
     (start..start + register.size() as u32).map(|byte| (full, byte)).collect()
 }
 
-/// Write only the live low word of a register-only dword move (`peephole.peep`).
+/// Write only the live low word of a register-only dword move
+/// (`peephole.peep`).
 pub fn narrowed_moves(
     rules: &peep::Rules,
     body: &LirBody,
@@ -520,7 +527,8 @@ pub fn narrowed_moves(
     peep::rewritten(rules.narrowed_moves, body, &Facts::new(body, None))
 }
 
-/// Use a saved accumulator in place for commutative two-address operations (`peephole.peep`).
+/// Use a saved accumulator in place for commutative two-address operations
+/// (`peephole.peep`).
 pub fn commuted(
     rules: &peep::Rules,
     body: &LirBody,
@@ -528,7 +536,8 @@ pub fn commuted(
     peep::rewritten(rules.commuted, body, &Facts::new(body, None))
 }
 
-/// Write a commutative result directly into its copied destination (`peephole.peep`).
+/// Write a commutative result directly into its copied destination
+/// (`peephole.peep`).
 pub fn transferred(
     rules: &peep::Rules,
     body: &LirBody,
@@ -865,7 +874,8 @@ fn _high_extract(
     Some(vec![Arc::new(with_what(load, what)), lir::anchor(Arc::clone(shift))])
 }
 
-/// Do tied work in its source register when a copy restores the result (`peephole.peep`).
+/// Do tied work in its source register when a copy restores the result
+/// (`peephole.peep`).
 pub fn shuttles(
     rules: &peep::Rules,
     body: &LirBody,
@@ -873,7 +883,8 @@ pub fn shuttles(
     peep::rewritten(rules.shuttles, body, &Facts::new(body, None))
 }
 
-/// Remove a synthetic save/restore when the source survives between them (`peephole.peep`).
+/// Remove a synthetic save/restore when the source survives between them
+/// (`peephole.peep`).
 pub fn restored_copies(
     rules: &peep::Rules,
     body: &LirBody,
@@ -919,15 +930,17 @@ thread_local! {
     static DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has assembled and decoded an instruction, for a test that asking again of one does not.
+/// How many times this thread has assembled and decoded an instruction, for a
+/// test that asking again of one does not.
 pub fn decodes() -> usize {
     DECODES.with(std::cell::Cell::get)
 }
 
 /// The machine instructions `what` encodes to.
 ///
-/// Every pass of the peephole asks of the instructions of the body, which a pass leaves as they were (the same
-/// `Semantics`, at the same address), and the answer costs the assembly of its text and a decode: remembered
+/// Every pass of the peephole asks of the instructions of the body, which a
+/// pass leaves as they were (the same `Semantics`, at the same address), and
+/// the answer costs the assembly of its text and a decode: remembered
 /// by address, and kept only where the instruction is the one it was made of.
 fn _decoded(
     bits: u32,
@@ -1012,9 +1025,10 @@ pub fn _moved_lanes(
     Some((moved, _lanes(destination).or(&source.map(_lanes).unwrap_or_default())))
 }
 
-/// `_register_effects` of an instruction that says only what it does: no required or delivered register, no clobber and
-/// no symbol. Asked of a proposed rewrite of one, which needs no instruction made of it to ask (copy propagation made
-/// and dropped two per register it tried to forward).
+/// `_register_effects` of an instruction that says only what it does: no
+/// required or delivered register, no clobber and no symbol. Asked of a
+/// proposed rewrite of one, which needs no instruction made of it to ask (copy
+/// propagation made and dropped two per register it tried to forward).
 pub fn _register_effects_of_what(
     bits: u32,
     what: &Semantics,
@@ -1066,9 +1080,10 @@ pub fn _register_effects(
         // decoded-opaque fallback never applies and this is unknown.
         _ => return None,
     };
-    // Every pass of the peephole, and the liveness and copy propagation around it, asks of the same instructions again
-    // and again (50 asks for each of an `-O2` module's 16,000, #924): the answer depends on these fields alone, and
-    // is remembered by their value.
+    // Every pass of the peephole, and the liveness and copy propagation around
+    // it, asks of the same instructions again and again (50 asks for each
+    // of an `-O2` module's 16,000, #924): the answer depends on these fields
+    // alone, and is remembered by their value.
     let key = EffectKey { bits, may_write, flags, what, requires: &one.requires, delivers: &one.delivers };
     if let Some(found) = EFFECTS.with(|held| held.borrow().find(&key)) {
         return found;
@@ -1079,7 +1094,8 @@ pub fn _register_effects(
     answer
 }
 
-/// The inputs of `_register_effects` after the cases it answers at once: the same ones, the same answer.
+/// The inputs of `_register_effects` after the cases it answers at once: the
+/// same ones, the same answer.
 struct EffectKey<'a> {
     bits: u32,
     may_write: bool,
@@ -1100,8 +1116,8 @@ impl EffectKey<'_> {
 
 type Effects = Option<(Lanes, Lanes)>;
 
-/// What `_register_effects` answered, by the hash of what it was asked, and the asked kept to tell a hash that is
-/// another's.
+/// What `_register_effects` answered, by the hash of what it was asked, and the
+/// asked kept to tell a hash that is another's.
 #[derive(Default)]
 struct EffectsHeld {
     by_hash: HashMap<u64, Vec<(u32, bool, bool, Semantics, Vec<(Held, Register)>, Vec<(Held, Register)>, Effects)>>,
@@ -1159,8 +1175,8 @@ thread_local! {
     static EFFECTS_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has worked out an instruction's register effects, for a test that asking again of one
-/// does not.
+/// How many times this thread has worked out an instruction's register effects,
+/// for a test that asking again of one does not.
 pub fn effects_computed() -> usize {
     EFFECTS_COMPUTED.with(std::cell::Cell::get)
 }
@@ -1217,8 +1233,9 @@ fn _register_effects_of(
             }
         }
         // `rep` counts its register down to where it stops, which Iced calls a
-        // conditional write: a hoisted `mov cx, n` was run once, not per trip. The register
-        // is the one the address size names, CX in 16-bit code: its upper half is not touched.
+        // conditional write: a hoisted `mov cx, n` was run once, not per trip.
+        // The register is the one the address size names, CX in 16-bit
+        // code: its upper half is not touched.
         if insn.has_rep_prefix() || insn.has_repe_prefix() || insn.has_repne_prefix() {
             for (register, _) in used.iter().filter(|(register, _)| ir::root(*register) == Register::ECX) {
                 writes.extend(_lanes(*register));
@@ -1323,7 +1340,8 @@ pub fn overwritten(body: &LirBody) -> LirBody {
                     (Operation::Extend, Some("movsx" | "movzx"), [Loc::Reg(dest)], [Loc::Reg(_)]) => {
                         // Pure, and nothing else it writes. Lowering a divide's
                         // sign word as `cwd` leaves the widening it replaced
-                        // behind, with a register and an instruction to its name.
+                        // behind, with a register and an instruction to its
+                        // name.
                         if !effect.writes.is_empty()
                             && effect.writes.is_subset(&dead)
                             && !_lanes(dest.register).is_empty()
@@ -1369,7 +1387,8 @@ pub fn overwritten(body: &LirBody) -> LirBody {
     body.with_blocks(blocks)
 }
 
-/// Fold a load, an operation and a store into one memory operation (`peephole.peep`).
+/// Fold a load, an operation and a store into one memory operation
+/// (`peephole.peep`).
 pub fn fused(
     rules: &peep::Rules,
     body: &LirBody,
@@ -1377,7 +1396,8 @@ pub fn fused(
     peep::rewritten(rules.fused, body, &Facts::new(body, None))
 }
 
-/// Load a far pointer's two words with one les (lds, lfs, lgs) (`peephole.peep`).
+/// Load a far pointer's two words with one les (lds, lfs, lgs)
+/// (`peephole.peep`).
 pub fn far_loads(
     rules: &peep::Rules,
     body: &LirBody,
@@ -1764,7 +1784,8 @@ pub fn secondary_bases<'a>(
                             // A frame cell has two independent address
                             // components: fixed BP and the allocated dynamic
                             // index.  This rewrite widens one value only, so it
-                            // cannot legally turn the pair into a 32-bit address.
+                            // cannot legally turn the pair into a 32-bit
+                            // address.
                             && !cell.addr.is_some_and(|addr| addr.space == Space::Frame)
                             && target::width_of(cell.through) == Some(2))
                     {
@@ -1989,7 +2010,8 @@ fn _affine_address(
     let replaced = &parts[..=last];
     let partial: HashSet<Register> = terms.iter().map(|term| term.0).collect();
     let stalls = if dest.width < 4 { partial.len() as i64 * cpu.partial_register_stall } else { 0 };
-    // The target's own price of the form (`three_operand`): a word address has no prefix and reads no dword register.
+    // The target's own price of the form (`three_operand`): a word address has
+    // no prefix and reads no dword register.
     let scale = address.scale;
     let width = i64::from(dest.width);
     let Some(form) = llrm_mir::target::three_operand(
@@ -2010,7 +2032,8 @@ fn _affine_address(
     let Some(new) = emit(mode, &what) else {
         return Ok(None);
     };
-    // What the parts are in bytes once `increments` has run: a unit add whose carry is dead is the one-byte INC or DEC.
+    // What the parts are in bytes once `increments` has run: a unit add whose
+    // carry is dead is the one-byte INC or DEC.
     let mut before = 0;
     for one in replaced {
         let part = one.what.as_ref().expect("checked plain");
@@ -2021,7 +2044,8 @@ fn _affine_address(
             (Some(name @ ("add" | "sub")), [Loc::Reg(register)], [_, Loc::Imm(Imm { value, .. })])
                 if dead.contains(&id(one)) =>
             {
-                // By the register's width: 1 and -1 (0xFFFF in a word) are the unit.
+                // By the register's width: 1 and -1 (0xFFFF in a word) are the
+                // unit.
                 let bits = i64::from(register.width) * 8;
                 let step = match (*value + (1 << (bits - 1))).rem_euclid(1 << bits) - (1 << (bits - 1)) {
                     1 => Some(name == "add"),
@@ -2083,7 +2107,8 @@ fn _affine_address(
     Ok(Some((last + 1, made)))
 }
 
-/// Select compact INC/DEC for a unit add whose carry result is dead (`peephole.peep`).
+/// Select compact INC/DEC for a unit add whose carry result is dead
+/// (`peephole.peep`).
 pub fn increments(
     rules: &peep::Rules,
     body: &LirBody,
@@ -2099,7 +2124,8 @@ pub fn borrows(
     peep::rewritten(rules.borrows, body, &Facts::new(body, None))
 }
 
-/// `shl r,1` as `add r,r` where the target prices the add lower (`peephole.peep`).
+/// `shl r,1` as `add r,r` where the target prices the add lower
+/// (`peephole.peep`).
 pub fn doubled(
     rules: &peep::Rules,
     body: &LirBody,
@@ -2109,8 +2135,8 @@ pub fn doubled(
     Ok(peep::rewritten(rules.doubled, body, &Facts::new(body, Some(cpu))))
 }
 
-/// A dword operation and the `movzx` of its word, as the word operation where the register's upper half is zero
-/// (`peephole.peep`).
+/// A dword operation and the `movzx` of its word, as the word operation where
+/// the register's upper half is zero (`peephole.peep`).
 pub fn narrowed_arithmetic(
     rules: &peep::Rules,
     body: &LirBody,
@@ -2126,7 +2152,8 @@ pub fn widened_moves(
     peep::rewritten(rules.widened_moves, body, &Facts::new(body, None))
 }
 
-/// The extension of a word whose register is zero above it as a copy of the register (`peephole.peep`).
+/// The extension of a word whose register is zero above it as a copy of the
+/// register (`peephole.peep`).
 pub fn zero_extensions(
     rules: &peep::Rules,
     body: &LirBody,
@@ -2144,8 +2171,9 @@ fn _flags_before(
     _ARITHMETIC_LANES.is_subset(&dead.or(&writes).minus(&reads))
 }
 
-/// What each conditional jump reads: the condition's own flags, which is x86's and the same for every
-/// target and operand size, so iced states it from the mnemonic, not from any target's rows.
+/// What each conditional jump reads: the condition's own flags, which is x86's
+/// and the same for every target and operand size, so iced states it from the
+/// mnemonic, not from any target's rows.
 static _BRANCH_READS: LazyLock<HashMap<String, u32>> = LazyLock::new(|| {
     iced_x86::Code::values()
         .filter(|code| code.flow_control() == FlowControl::ConditionalBranch)
@@ -2158,7 +2186,8 @@ static _BRANCH_READS: LazyLock<HashMap<String, u32>> = LazyLock::new(|| {
         .collect()
 });
 
-/// The flags a conditional jump reads, or all where the description does not know it.
+/// The flags a conditional jump reads, or all where the description does not
+/// know it.
 pub fn _branch_reads(what: &Semantics) -> Lanes {
     _flag_lanes(_BRANCH_READS.get(what.name.as_deref().unwrap_or("")).copied().unwrap_or(0xFFFF_FFFF))
 }
@@ -2168,7 +2197,8 @@ const _ARITHMETIC: u32 =
 // What `cmp r,0` leaves that the instruction computing r may not: inc keeps
 // the carry, add and subtract set carry and overflow from their operands.
 static _DIFFERING: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(RflagsBits::OF | RflagsBits::CF | RflagsBits::AF));
-// What `xor r,r` writes: a direction flag read later, as a string fill reads it, is no objection.
+// What `xor r,r` writes: a direction flag read later, as a string fill reads
+// it, is no objection.
 static _ARITHMETIC_LANES: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(_ARITHMETIC));
 
 /// `inc edi; cmp edi,0; jne` is `inc edi; jne`.
@@ -2193,7 +2223,8 @@ pub fn tested(
     let mut blocks = body.blocks.iter().map(|block| block.insns.to_vec()).collect::<Vec<_>>();
     for (block_index, block) in body.blocks.iter().enumerate() {
         let insns = &blocks[block_index];
-        // Moves change no flag, so the three may have a phi's copies between them.
+        // Moves change no flag, so the three may have a phi's copies between
+        // them.
         let work: Vec<usize> =
             insns.iter().enumerate().filter(|(_, one)| !_skippable_nothing(one)).map(|(index, _)| index).collect();
         let at = |position: isize| work[usize::try_from(position).expect("a non-negative position")];
@@ -2238,7 +2269,8 @@ pub fn tested(
         let Some(register) = _zero_tested(&insns[at(test_at)]) else {
             continue;
         };
-        // The straight line into the test: a sole predecessor's work, then the block's.
+        // The straight line into the test: a sole predecessor's work, then the
+        // block's.
         let sole = match predecessors.get(&block.at).map(Vec::as_slice) {
             Some([one]) if *one != block_index && body.blocks[*one].succ == [block.at] => Some(*one),
             _ => None,
@@ -2319,10 +2351,10 @@ fn _flag_source(
     None
 }
 
-/// The flag lanes `one` reads and writes: the one answer flags liveness has, forwards and back.
-/// What a callee, a caller after a return, and whatever runs after the body leaves may read:
-/// no calling convention passes the adjust flag in or out, so only an instruction here
-/// that reads AF reads it.
+/// The flag lanes `one` reads and writes: the one answer flags liveness has,
+/// forwards and back. What a callee, a caller after a return, and whatever runs
+/// after the body leaves may read: no calling convention passes the adjust flag
+/// in or out, so only an instruction here that reads AF reads it.
 fn _exit_flags() -> Lanes {
     _flag_lanes(_ARITHMETIC).minus(&_ADJUST)
 }
@@ -2492,7 +2524,8 @@ pub fn _flags_live_out(body: &LirBody) -> HashMap<i64, Lanes> {
         body.blocks.iter().map(|block| (block.at, block.insns.iter().map(|one| effects(one)).collect())).collect();
     let nodes: Vec<&LirBlock> = body.blocks.iter().collect();
     let blocks: HashMap<i64, &LirBlock> = nodes.iter().map(|block| (block.at, *block)).collect();
-    // The solution's output is what is live on entry; what a block's last instruction leaves is its input.
+    // The solution's output is what is live on entry; what a block's last
+    // instruction leaves is its input.
     let solved = dataflow::solve(
         &nodes,
         Direction::Backward,
@@ -2510,7 +2543,8 @@ pub fn _flags_live_out(body: &LirBody) -> HashMap<i64, Lanes> {
     solved.input.into_iter().collect()
 }
 
-/// Use XOR for zero only when later integer work replaces every arithmetic flag.
+/// Use XOR for zero only when later integer work replaces every arithmetic
+/// flag.
 pub fn zeroes(body: &LirBody) -> LirBody {
     let live = _flags_live_out(body);
     let mut blocks = Vec::new();
@@ -2566,7 +2600,8 @@ const _WAITING: [&str; 36] = [
     "fchs", "fabs", "fsqrt", "fxch", "fcom", "fcomp", "fcompp", "fucom", "fucomp", "fucompp",
 ];
 
-/// An immediately following waiting instruction already checks pending FP exceptions.
+/// An immediately following waiting instruction already checks pending FP
+/// exceptions.
 ///
 /// Intel SDM Vol. 1 section 8.3.12. Never cross integer work, an unknown
 /// instruction, a non-waiting control instruction, or a block boundary.
@@ -2604,7 +2639,8 @@ enum Known {
     Object(usize),
 }
 
-/// Reuse identical scalar register contents until an instruction overwrites them.
+/// Reuse identical scalar register contents until an instruction overwrites
+/// them.
 pub fn constants(body: &LirBody) -> LirBody {
     let mut objects = 0usize;
     let mut blocks = Vec::new();

@@ -126,11 +126,13 @@ fn whats(insns: &[Arc<Insn>]) -> Vec<Semantics> {
         .collect()
 }
 
-// ---------------------------------------------------------------- test_peephole
+// ----------------------------------------------------------------
+// test_peephole
 
 #[test]
 fn test_screen_argument_reuses_its_required_register_constant() {
-    // SCREEN's duplicate PUSH 1/MOV AX,1 contributed to E1M1 exhausting its far heap.
+    // SCREEN's duplicate PUSH 1/MOV AX,1 contributed to E1M1 exhausting its far
+    // heap.
     for (width, register, value) in [(2, Register::AX, 1), (4, Register::ECX, 0x1234_5678)] {
         let operand = im(value, width);
         let dest = rl(register, width);
@@ -158,7 +160,8 @@ fn test_screen_argument_reuses_its_required_register_constant() {
 
 #[test]
 fn test_argument_materialization_does_not_cross_observable_boundaries() {
-    // SCREEN's stack argument must not change when its register setup cannot move before it.
+    // SCREEN's stack argument must not change when its register setup cannot
+    // move before it.
     for barrier in [
         "different",
         "width",
@@ -223,7 +226,8 @@ fn test_argument_materialization_does_not_cross_observable_boundaries() {
 
 #[test]
 fn test_entry_reload_requires_agreement_on_every_edge() {
-    // NBODY's header reload is redundant only when all paths carry the exact stored bits.
+    // NBODY's header reload is redundant only when all paths carry the exact
+    // stored bits.
     for mismatch in ["none", "register", "slot", "width", "clobber", "missing", "unowned", "entry"] {
         let register = rl(Register::EAX, 4);
         let cell = Mem { through: Register::BP, ..Mem::new(frame(-4), 4) };
@@ -312,7 +316,8 @@ fn test_storing_a_slot_back_from_its_reload_is_dead() {
 
 #[test]
 fn test_forwarded_spill_reload_retains_its_virtual_definition() {
-    // BASIC nbody's store read value#979 after spill forwarding removed its reload.
+    // BASIC nbody's store read value#979 after spill forwarding removed its
+    // reload.
     let register = rl(Register::EAX, 4);
     let source = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-4), 4) });
     let destination = Loc::Mem(Mem::new(Some(Addr::new(Space::Segment, 8)), 4));
@@ -371,7 +376,8 @@ fn test_forwarded_register_copy_retains_its_virtual_definition() {
 
 #[test]
 fn test_commuted_accumulator_keeps_the_saved_value() {
-    // NBODY's saved accumulator must remain valid even when a later instruction reads it.
+    // NBODY's saved accumulator must remain valid even when a later instruction
+    // reads it.
     for name in ["add", "and", "or", "xor", "sub", "adc"] {
         for width in [2u32, 4] {
             let registers = if width == 2 {
@@ -442,8 +448,9 @@ fn test_commuted_accumulator_keeps_the_saved_value() {
     }
 }
 
-/// `push 112; push 112` joined into `pushd 7340144` at -Os: 6 bytes for 4. Tuned for size two
-/// word pushes join only where the dword is no longer (`push 0; push 0` is `pushd 0`, 3 for 4).
+/// `push 112; push 112` joined into `pushd 7340144` at -Os: 6 bytes for 4.
+/// Tuned for size two word pushes join only where the dword is no longer (`push
+/// 0; push 0` is `pushd 0`, 3 for 4).
 #[test]
 fn test_word_push_pair_joins_tuned_for_size_only_where_the_dword_is_no_longer() {
     for (high, low, joined, size) in
@@ -557,7 +564,8 @@ fn test_a_byte_gap_does_not_stop_push_fusion() {
 
 #[test]
 fn test_dead_reload_requires_allocator_ownership_and_no_read() {
-    // FPCSE's dead spill is removable, but source loads and live spills are not.
+    // FPCSE's dead spill is removable, but source loads and live spills are
+    // not.
     for owned in [false, true] {
         for read in [false, true] {
             let ax = rl(Register::AX, 2);
@@ -595,7 +603,8 @@ fn test_dead_reload_requires_allocator_ownership_and_no_read() {
 
 #[test]
 fn test_overwritten_reload_keeps_virtual_definition() {
-    // mdl_draw_tris kept a zero-cost copy of a spilled selector after its reload was physically dead.
+    // mdl_draw_tris kept a zero-cost copy of a spilled selector after its
+    // reload was physically dead.
     let ax = rl(Register::AX, 2);
     let slot = Frame::new(0).cell(1i64, 2).unwrap();
     let load = Insn {
@@ -851,7 +860,8 @@ fn test_scaled_lea_crosses_markers_and_byte_gaps() {
 
 #[test]
 fn test_scaled_lea_does_not_require_another_shift() {
-    // HOTLPX's scale idiom needed three instructions when followed by CMP instead of SHL.
+    // HOTLPX's scale idiom needed three instructions when followed by CMP
+    // instead of SHL.
     for amount in [1i64, 2, 3] {
         for following in ["cmp", "adc", "je"] {
             for width in [2u32, 4] {
@@ -993,9 +1003,10 @@ fn test_repeated_allocated_address_copies_use_one_clean_67h_base() {
     }
 }
 
-/// A frame cell has two address components, its fixed BP and the dynamic base the allocator gave it.
-/// Widening the base to a 32-bit address would drop BP: Nib's sum_three wrote its locals through
-/// `[eax+si]`. The shape of the test above, each access a frame cell.
+/// A frame cell has two address components, its fixed BP and the dynamic base
+/// the allocator gave it. Widening the base to a 32-bit address would drop BP:
+/// Nib's sum_three wrote its locals through `[eax+si]`. The shape of the test
+/// above, each access a frame cell.
 #[test]
 fn test_a_frame_cell_keeps_its_bp_when_its_base_copies_are_unified() {
     let owner = insn(
@@ -1340,9 +1351,10 @@ fn test_affine_address_sees_flags_dead_past_its_block() {
     assert_eq!(names(&result.blocks[0].insns), ["lea"]);
 }
 
-/// `mov ax,di; sub ax,4` stayed two instructions (5 bytes) at 486: the only LEA the pass
-/// built was the 67h dword form, priced at its prefix. The word form `lea ax,[di-4]` is 3 bytes
-/// and no prefix: QCport -Os had some 700 such pairs.
+/// `mov ax,di; sub ax,4` stayed two instructions (5 bytes) at 486: the only LEA
+/// the pass built was the 67h dword form, priced at its prefix. The word form
+/// `lea ax,[di-4]` is 3 bytes and no prefix: QCport -Os had some 700 such
+/// pairs.
 #[test]
 fn test_affine_address_is_a_word_lea_where_the_sum_is_a_real_mode_address() {
     for (label, source, then, expected, through, index, offset) in [
@@ -1356,8 +1368,8 @@ fn test_affine_address_is_a_word_lea_where_the_sum_is_a_real_mode_address() {
             Register::SI,
             0,
         ),
-        // CX names no word address: the dword form `lea ax,[ecx-4]`, which the 486 prices at its two clocks and a
-        // prefix, as the pair.
+        // CX names no word address: the dword form `lea ax,[ecx-4]`, which the
+        // 486 prices at its two clocks and a prefix, as the pair.
         (
             "not an address register",
             Register::CX,
@@ -1367,8 +1379,8 @@ fn test_affine_address_is_a_word_lea_where_the_sum_is_a_real_mode_address() {
             Register::None,
             -4,
         ),
-        // Two index registers are no word address either: the dword form, `lea ax,[esi+edi]`, in the pair's bytes and
-        // clocks.
+        // Two index registers are no word address either: the dword form, `lea
+        // ax,[esi+edi]`, in the pair's bytes and clocks.
         (
             "two indexes",
             Register::SI,
@@ -1411,7 +1423,8 @@ fn test_affine_address_is_a_word_lea_where_the_sum_is_a_real_mode_address() {
     }
 }
 
-/// The word LEA keeps no flags: `mov ax,di; sub ax,4; adc ...` reads the borrow, so stays.
+/// The word LEA keeps no flags: `mov ax,di; sub ax,4; adc ...` reads the
+/// borrow, so stays.
 #[test]
 fn test_affine_address_word_lea_keeps_a_flag_still_read() {
     let (ax, di) = (rl(Register::AX, 2), rl(Register::DI, 2));
@@ -1444,7 +1457,8 @@ fn saved() -> Vec<Register> {
     llrm_x86_m16::PRESERVED.iter().map(|(whole, _)| *whole).collect()
 }
 
-/// A store of a literal into a cell: `mov dword ptr [bp-N],0` is 8 bytes; `mov [bp-N],eax` is 4.
+/// A store of a literal into a cell: `mov dword ptr [bp-N],0` is 8 bytes; `mov
+/// [bp-N],eax` is 4.
 fn literal_store(
     at: i64,
     width: u32,
@@ -1461,7 +1475,8 @@ fn literal_store(
     ))
 }
 
-/// The function's remaining block, which reads `reads` and writes the flags (`flags`) or reads them.
+/// The function's remaining block, which reads `reads` and writes the flags
+/// (`flags`) or reads them.
 fn after_stores(
     reads_flags: bool,
     reads: &[Register],
@@ -1472,9 +1487,9 @@ fn after_stores(
         sem(Operation::Compare, "cmp", vec![], vec![rl(Register::SI, 2), im(0, 2)])
     };
     let mut insns = vec![Arc::new(insn(10, Some((10, 11)), Some(first), vec![], vec![]))];
-    // Everything after the block is live (it has no successor), so what it does not write
-    // first is read: the four scratch registers are written last, except where `reads` first
-    // reads them.
+    // Everything after the block is live (it has no successor), so what it does
+    // not write first is read: the four scratch registers are written last,
+    // except where `reads` first reads them.
     for (at, register) in reads.iter().enumerate() {
         let what = sem(Operation::Compare, "cmp", vec![], vec![rl(*register, 4), im(0, 4)]);
         insns.push(Arc::new(insn(11 + at as i64, Some((11 + at as i64, 12 + at as i64)), Some(what), vec![], vec![])));
@@ -1486,9 +1501,10 @@ fn after_stores(
     insns
 }
 
-/// QCport -Os kept `mov dword ptr [bp-8],0` twice (16 bytes) where a zeroed register stores
-/// them in 3+4+4: some 270 runs. The literal's register must be dead, and the zero is `xor`
-/// only where the flags are, else `mov`; one that saves no byte (a lone word store) stays.
+/// QCport -Os kept `mov dword ptr [bp-8],0` twice (16 bytes) where a zeroed
+/// register stores them in 3+4+4: some 270 runs. The literal's register must be
+/// dead, and the zero is `xor` only where the flags are, else `mov`; one that
+/// saves no byte (a lone word store) stays.
 #[test]
 fn test_stores_of_one_literal_share_a_dead_register_when_that_is_fewer_bytes() {
     let size = crate::backend::cpu::tuned("486", true).unwrap();
@@ -1513,15 +1529,17 @@ fn test_stores_of_one_literal_share_a_dead_register_when_that_is_fewer_bytes() {
     }
 }
 
-/// Which scratch register a run may take is the convention's fact (`Target::callee_saved`): where it
-/// preserves BX, a run takes BX only if the body already names it (so its epilogue saves it),
-/// else it would push and pop a register to save a byte.
+/// Which scratch register a run may take is the convention's fact
+/// (`Target::callee_saved`): where it preserves BX, a run takes BX only if the
+/// body already names it (so its epilogue saves it), else it would push and pop
+/// a register to save a byte.
 #[test]
 fn test_a_shared_store_takes_no_register_the_convention_preserves_unless_the_body_names_it() {
     let size = crate::backend::cpu::tuned("486", true).unwrap();
     let input = |named: bool| {
-        // BX is dead after the stores (the call clobbers it, nothing reads it); the other
-        // scratch registers are read first. The body names BX only where it writes it first.
+        // BX is dead after the stores (the call clobbers it, nothing reads it);
+        // the other scratch registers are read first. The body names BX
+        // only where it writes it first.
         let mut insns = vec![literal_store(1, 4, -4, 0), literal_store(2, 4, -8, 0)];
         if named {
             let write = sem(Operation::Move, "mov", vec![rl(Register::EBX, 4)], vec![im(5, 4)]);
@@ -1679,7 +1697,8 @@ fn test_zeroing_preserves_width_relocations_and_unknown_flag_observers() {
             vec![block(0, vec![Arc::clone(&first), middle, last], vec![])]
         };
         let result = zeroes(&body("zero", 0, blocks)).insns()[0].clone();
-        // "boundary": the next block's cmp overwrites every flag before anything reads one.
+        // "boundary": the next block's cmp overwrites every flag before
+        // anything reads one.
         assert_eq!(
             result.what.as_ref().unwrap().name.as_deref(),
             Some(if ["plain", "dword", "boundary"].contains(&variant) { "xor" } else { "mov" }),
@@ -1692,7 +1711,8 @@ fn test_zeroing_preserves_width_relocations_and_unknown_flag_observers() {
 
 #[test]
 fn test_zeroing_before_a_jump_asks_what_the_target_reads() {
-    // `mov bx,0; jmp` stayed three bytes: every block end was taken to have its flags read.
+    // `mov bx,0; jmp` stayed three bytes: every block end was taken to have its
+    // flags read.
     for (successor, zeroed) in [(Some("cmp"), true), (Some("jb"), false), (None, false)] {
         let dest = rl(Register::BX, 2);
         let zero = insn(
@@ -1719,7 +1739,8 @@ fn test_zeroing_before_a_jump_asks_what_the_target_reads() {
 
 #[test]
 fn test_zero_compare_before_its_branch_is_or() {
-    // `cmp ax,0; jl` is three bytes where `or ax,ax; jl` is two. Only AF differs.
+    // `cmp ax,0; jl` is three bytes where `or ax,ax; jl` is two. Only AF
+    // differs.
     for (variant, rewritten) in [
         ("plain", true),
         ("moves", true),
@@ -1862,9 +1883,10 @@ fn test_a_zero_test_before_an_anchor_and_its_branch_reads_the_step() {
 
 #[test]
 fn test_register_round_trip_through_memory_is_one_instruction() {
-    // `mov bx,[bp-4]; add bx,1; mov [bp-4],bx` where bcc writes `add word ptr [bp-4],1`.
-    // Python printed these through `masm`; the reprs are of the semantics it printed.
-    // "unsigned byte" is not ported: it fails against the Python implementation too.
+    // `mov bx,[bp-4]; add bx,1; mov [bp-4],bx` where bcc writes `add word ptr
+    // [bp-4],1`. Python printed these through `masm`; the reprs are of the
+    // semantics it printed. "unsigned byte" is not ported: it fails against
+    // the Python implementation too.
     let word = "Mem(addr=[bp-0x4], width=2, through=26, offset=0, disp_width=2, base=None, stack_argument=False, \
                 selector=None, index=None, scale=1, index_through=0)";
     let byte = "Mem(addr=[bp-0x4], width=1, through=26, offset=0, disp_width=2, base=None, stack_argument=False, \
@@ -1954,7 +1976,8 @@ fn test_register_round_trip_through_memory_is_one_instruction() {
         };
         let reread = make(8, Operation::Move, "mov", vec![rl(Register::AX, 2)], vec![bx.clone()], None, None);
         let rewrite = make(8, Operation::Move, "mov", vec![bx], vec![cx], None, None);
-        // Back to the top rather than a return: liveness reads a return as reading every register.
+        // Back to the top rather than a return: liveness reads a return as
+        // reading every register.
         let blocks = vec![
             block(0, head.clone(), if compares { vec![8, 9] } else { vec![8] }),
             block(
@@ -1980,7 +2003,8 @@ fn test_register_round_trip_through_memory_is_one_instruction() {
 
 #[test]
 fn test_fusion_preserves_a_virtual_dataflow_anchor() {
-    // ls_animate emitted MOV AX,[bp-16]; OR AX,AX although BCC compares the slot.
+    // ls_animate emitted MOV AX,[bp-16]; OR AX,AX although BCC compares the
+    // slot.
     let (bx, cx) = (rl(Register::BX, 2), rl(Register::CX, 2));
     let cell = Loc::Mem(mem(frame(-4), 2, Register::BP, 0, 2));
     let load = Insn {
@@ -2015,7 +2039,8 @@ fn test_fusion_preserves_a_virtual_dataflow_anchor() {
 
 #[test]
 fn test_indirect_call_target_is_physically_live_into_the_call() {
-    // qcport's mdl_ai lost value#47 after fusion removed the function pointer load.
+    // qcport's mdl_ai lost value#47 after fusion removed the function pointer
+    // load.
     let (bx, cx) = (rl(Register::BX, 2), rl(Register::CX, 2));
     let cell = Loc::Mem(mem(frame(-4), 2, Register::BP, 0, 2));
     let load = insn(1, None, Some(sem(Operation::Move, "mov", vec![bx.clone()], vec![cell])), vec![47], vec![]);
@@ -2045,7 +2070,8 @@ fn test_indirect_call_target_is_physically_live_into_the_call() {
 #[test]
 fn test_far_pointer_loaded_in_one_instruction() {
     // `mov bx,[bp-8]; mov es,[bp-6]` where bcc writes `les bx,[bp-8]`.
-    // Python printed these through `masm`; the reprs are of the semantics it printed.
+    // Python printed these through `masm`; the reprs are of the semantics it
+    // printed.
     let les = |name: &str, segment: u32, cell: &str| {
         format!(
             "Semantics(op=<Operation.MOVE: 'move'>, name='{name}', dests=(Reg(register=24, width=2), \
@@ -2115,7 +2141,8 @@ fn test_far_pointer_loaded_in_one_instruction() {
 
 #[test]
 fn test_wait_elimination_does_not_cross_observable_work() {
-    // FPCSEX's redundant waits may disappear, but integer observers still need completion.
+    // FPCSEX's redundant waits may disappear, but integer observers still need
+    // completion.
     for middle in [Some(""), Some("mov"), Some("fnstsw"), Some("fninit"), None, Some("block")] {
         let instruction = |at: i64, name: Option<&str>| {
             let what = name.map(|name| sem(Operation::Nothing, name, vec![], vec![]));
@@ -2139,7 +2166,8 @@ fn test_wait_elimination_does_not_cross_observable_work() {
 
 #[test]
 fn test_repeated_copy_requires_unchanged_source_and_destination() {
-    // LNGMXX copied ECX into EAX twice around CDQ; partial writes must prevent reuse.
+    // LNGMXX copied ECX into EAX twice around CDQ; partial writes must prevent
+    // reuse.
     for change in [None, Some(Register::CH), Some(Register::AH)] {
         let moved = insn(
             0,
@@ -2215,7 +2243,8 @@ fn test_partial_write_invalidates_constant() {
 
 #[test]
 fn test_empty_ownership_marker_preserves_register_knowledge() {
-    // Expanded FPDEEP emitted MOV AX,0 twice, separated only by a removed instruction's marker.
+    // Expanded FPDEEP emitted MOV AX,0 twice, separated only by a removed
+    // instruction's marker.
     for clobbers in [vec![], vec![Register::AX]] {
         let what = sem(Operation::Move, "mov", vec![rl(Register::AX, 2)], vec![im(0, 2)]);
         let first = insn(0, Some((0, 3)), Some(what.clone()), vec![], vec![]);
@@ -2463,7 +2492,8 @@ fn test_a_string_fill_reading_the_direction_flag_leaves_zero_as_xor() {
     assert_eq!((what.op, what.name.as_deref()), (Operation::Binary, Some("xor")));
 }
 
-// ---------------------------------------------------------- test_machine_copyprop
+// ----------------------------------------------------------
+// test_machine_copyprop
 
 fn moved(
     at: i64,
@@ -2475,8 +2505,9 @@ fn moved(
 
 #[test]
 fn test_copy_at_join_requires_agreement_on_every_path() {
-    // An AX=BX copy survived a diamond despite unchanged contents; writing AH must keep it.
-    // "conditional" is not ported: it hangs a decoded node on `Insn.op`, which a `mir::Op` cannot carry.
+    // An AX=BX copy survived a diamond despite unchanged contents; writing AH
+    // must keep it. "conditional" is not ported: it hangs a decoded node on
+    // `Insn.op`, which a `mir::Op` cannot carry.
     for reverse_order in [false, true] {
         for change in ["none", "other", "partial", "source", "unknown", "loop"] {
             let (dest, source) = (rl(Register::AX, 2), rl(Register::BX, 2));
@@ -2520,7 +2551,8 @@ fn test_copy_at_join_requires_agreement_on_every_path() {
 
 #[test]
 fn test_high_byte_write_keeps_low_byte_copy_available() {
-    // Writing AH does not invalidate a known AL=BL relation across a block edge.
+    // Writing AH does not invalidate a known AL=BL relation across a block
+    // edge.
     let first = moved(0, rl(Register::AX, 2), rl(Register::BX, 2));
     let high = moved(1, rl(Register::AH, 1), im(7, 1));
     let low = moved(10, rl(Register::AL, 1), rl(Register::BL, 1));
@@ -2534,7 +2566,8 @@ fn test_high_byte_write_keeps_low_byte_copy_available() {
 
 #[test]
 fn test_copy_source_is_forwarded_to_an_explicit_use() {
-    // ls_face_key spent `mov bx,ax` only to compare BX; the loop paid one instruction each trip.
+    // ls_face_key spent `mov bx,ax` only to compare BX; the loop paid one
+    // instruction each trip.
     let (ax, bx) = (rl(Register::AX, 2), rl(Register::BX, 2));
     let copied = moved(0, bx.clone(), ax.clone());
     let compared = insn(
@@ -2558,7 +2591,8 @@ fn test_copy_source_is_forwarded_to_an_explicit_use() {
 
 #[test]
 fn test_copy_forwarding_across_a_join_requires_every_lane_on_every_path() {
-    // A reaching copy crosses a diamond only while neither full nor partial register is clobbered.
+    // A reaching copy crosses a diamond only while neither full nor partial
+    // register is clobbered.
     for changed in [None, Some(Register::AX), Some(Register::AH), Some(Register::BX), Some(Register::BH)] {
         let (ax, bx) = (rl(Register::AX, 2), rl(Register::BX, 2));
         let copied = moved(0, bx.clone(), ax.clone());
@@ -2598,7 +2632,8 @@ fn test_copy_forwarding_across_a_join_requires_every_lane_on_every_path() {
 
 #[test]
 fn test_copy_forwarding_does_not_rename_a_fixed_register_use() {
-    // GCC/LLVM both recheck constraints: CWD still reads AX even when AX is a copy of BX.
+    // GCC/LLVM both recheck constraints: CWD still reads AX even when AX is a
+    // copy of BX.
     let (ax, bx, dx) = (rl(Register::AX, 2), rl(Register::BX, 2), rl(Register::DX, 2));
     let copied = moved(0, ax.clone(), bx);
     let fixed = insn(1, Some((1, 1)), Some(sem(Operation::Extend, "cwd", vec![dx], vec![ax.clone()])), vec![], vec![]);
@@ -2609,7 +2644,8 @@ fn test_copy_forwarding_does_not_rename_a_fixed_register_use() {
 
 #[test]
 fn test_copy_forwarding_maps_matching_subregister_lanes() {
-    // An AX=BX fact forwards AL to BL after AH changes; the surviving low-byte fact is sufficient.
+    // An AX=BX fact forwards AL to BL after AH changes; the surviving low-byte
+    // fact is sufficient.
     let copied = moved(0, rl(Register::AX, 2), rl(Register::BX, 2));
     let high = moved(1, rl(Register::AH, 1), im(7, 1));
     let compared = insn(
@@ -2629,7 +2665,8 @@ fn test_copy_forwarding_maps_matching_subregister_lanes() {
     assert_eq!(found, rl(Register::BL, 1));
 }
 
-// ------------------------------------------------------------ test_memory_folding
+// ------------------------------------------------------------
+// test_memory_folding
 
 fn plain(
     at: i64,
@@ -2655,7 +2692,8 @@ fn delayed(
 #[test]
 fn test_memory_round_trip_folds_across_an_independent_operand_load() {
     // C nbody used four instructions where BCC writes `mov vel; add [pos],reg`.
-    // Python printed these through `masm`; the reprs are of the semantics it printed.
+    // Python printed these through `masm`; the reprs are of the semantics it
+    // printed.
     let (eax, ecx) = (rl(Register::EAX, 4), rl(Register::ECX, 4));
     let position = Loc::Mem(mem(frame(-4), 4, Register::BP, 0, 2));
     let velocity = Loc::Mem(mem(frame(-8), 4, Register::BP, 0, 2));
@@ -2709,10 +2747,11 @@ fn test_single_use_loaded_addend_folds_into_the_arithmetic_operand() {
     );
 }
 
-/// lru bas `BENCHLRU&`: an argument loaded at the top and pushed forty instructions later, across stores to globals,
-/// stayed `mov ax,[bp+6]` ... `push ax`; where the allocator spilled it, the reload sat beside the push and folded
-/// (+1 instruction, +5 B). A load whose cell no instruction in between writes is the push's memory operand wherever
-/// it sits.
+/// lru bas `BENCHLRU&`: an argument loaded at the top and pushed forty
+/// instructions later, across stores to globals, stayed `mov ax,[bp+6]` ...
+/// `push ax`; where the allocator spilled it, the reload sat beside the push
+/// and folded (+1 instruction, +5 B). A load whose cell no instruction in
+/// between writes is the push's memory operand wherever it sits.
 #[test]
 fn test_a_load_folds_into_its_push_across_stores_to_other_cells() {
     let ax = rl(Register::AX, 2);
@@ -2802,7 +2841,8 @@ fn test_narrow_load_folds_into_its_only_widening_use() {
 
 #[test]
 fn test_shared_narrow_load_is_not_folded_into_one_widening_use() {
-    // The load must remain when another instruction still reads its narrow value.
+    // The load must remain when another instruction still reads its narrow
+    // value.
     let (_cell, narrow, wide) = narrow_load_parts();
     let other =
         Arc::new(insn(2, None, Some(sem(Operation::Push, "push", vec![], vec![rl(Register::CX, 2)])), vec![], vec![1]));
@@ -2914,7 +2954,8 @@ fn test_memory_round_trip_does_not_cross_a_dependent_or_writing_instruction() {
     }
 }
 
-// --------------------------------------------------------------- test_addressforms
+// ---------------------------------------------------------------
+// test_addressforms
 
 #[test]
 fn test_mandel_sum_uses_67h_lea_before_preserving_a_copy() {
@@ -3105,9 +3146,10 @@ fn _constant_sum_body(
 
 #[test]
 fn test_constant_sum_uses_67h_lea_without_code_growth() {
-    // Matmul initialized each local element with `mov bx,ax; add bx,1`; `increments` makes that `mov; inc`, three
-    // bytes, and the LEA is four: a unit sum stays. A sum of two is the LEA's four bytes against `mov; add` at
-    // five.
+    // Matmul initialized each local element with `mov bx,ax; add bx,1`;
+    // `increments` makes that `mov; inc`, three bytes, and the LEA is four:
+    // a unit sum stays. A sum of two is the LEA's four bytes against `mov; add`
+    // at five.
     for (amount, displacement) in [(2, 2), (0xFFFE, -2)] {
         let result = addresses(&_constant_sum_body(amount, false), "386").unwrap().insns();
 
@@ -3126,7 +3168,8 @@ fn test_constant_sum_uses_67h_lea_without_code_growth() {
 
 #[test]
 fn test_constant_sum_of_one_stays_the_move_and_the_inc() {
-    // The unit sum is `mov; inc` once `increments` has run, a byte under the LEA, in both directions.
+    // The unit sum is `mov; inc` once `increments` has run, a byte under the
+    // LEA, in both directions.
     for amount in [1, 0xFFFF] {
         let result = addresses(&_constant_sum_body(amount, false), "386").unwrap().insns();
         assert_eq!(names(&result), ["mov", "add", "mov", "cmp"], "{amount}");
@@ -3162,11 +3205,13 @@ fn test_constant_sum_does_not_drop_a_predecessor_source_anchor() {
     assert_eq!(result[0].symbol, Some(true));
 }
 
-// ----------------------------------------------------- test_dead_address_arithmetic
+// -----------------------------------------------------
+// test_dead_address_arithmetic
 
 #[test]
 fn test_folded_culling_address_drops_only_unobserved_arithmetic() {
-    // r_walk's shared +8 address was folded into its loads but left MOV AX,SI / ADD AX,8.
+    // r_walk's shared +8 address was folded into its loads but left MOV AX,SI /
+    // ADD AX,8.
     for flag_user in [Some("add"), Some("adc"), None] {
         let (ax, si, di) = (rl(Register::AX, 2), rl(Register::SI, 2), rl(Register::DI, 2));
         let copy = Arc::new(moved(0, ax.clone(), si.clone()));
@@ -3197,7 +3242,8 @@ fn test_folded_culling_address_drops_only_unobserved_arithmetic() {
     }
 }
 
-// ------------------------------------------------------------------ test_parcopy
+// ------------------------------------------------------------------
+// test_parcopy
 
 fn group_move(
     into: Loc,
@@ -3280,7 +3326,8 @@ fn test_source_push_pop_is_not_treated_as_a_parallel_copy() {
     assert_eq!(names(&instructions[..2]), ["push", "pop"]);
 }
 
-// ------------------------------------------------------------ test_postallocation
+// ------------------------------------------------------------
+// test_postallocation
 
 #[test]
 fn test_dword_constant_is_narrowed_when_the_abi_reads_only_its_low_word() {
@@ -3331,7 +3378,8 @@ fn test_dword_constant_stays_wide_when_any_upper_lane_is_live() {
 
 #[test]
 fn test_dword_fixed_register_argument_keeps_all_value_lanes_live() {
-    // Native nbody left its last Y velocity undamped: `mov bx,8192` with stale upper EBX bits.
+    // Native nbody left its last Y velocity undamped: `mov bx,8192` with stale
+    // upper EBX bits.
     let source = insn(
         1,
         Some((1, 1)),
@@ -3635,7 +3683,8 @@ fn test_commutative_result_copy_uses_the_dying_other_operand() {
 
 #[test]
 fn test_commutative_result_copy_keeps_a_still_live_first_operand() {
-    // Changing which multiply input is destroyed is legal only when the old destination dies.
+    // Changing which multiply input is destroyed is legal only when the old
+    // destination dies.
     let used = Arc::new(insn(
         3,
         Some((3, 5)),
@@ -3650,7 +3699,8 @@ fn test_commutative_result_copy_keeps_a_still_live_first_operand() {
 
 #[test]
 fn test_commutative_result_copy_keeps_source_owned_copy_bytes() {
-    // A real input instruction is not the synthetic transfer this rewrite may erase.
+    // A real input instruction is not the synthetic transfer this rewrite may
+    // erase.
     let overwrite = Arc::new(insn(
         5,
         Some((5, 7)),
@@ -3706,7 +3756,8 @@ fn _return_high() -> Arc<Insn> {
 
 #[test]
 fn test_synthetic_high_extract_loads_only_the_high_word() {
-    // Mandel loaded a spilled dword and shifted it solely to return the high word.
+    // Mandel loaded a spilled dword and shifted it solely to return the high
+    // word.
     let returned = _return_high();
 
     let result = high_extracts(&_high_extract_body(vec![Arc::clone(&returned)]), "386").unwrap().insns();
@@ -3728,7 +3779,8 @@ fn test_synthetic_high_extract_loads_only_the_high_word() {
 
 #[test]
 fn test_high_extract_keeps_observable_wide_load_or_shift_effects() {
-    // Narrowing is legal only for a synthetic load with dead upper lanes and flags.
+    // Narrowing is legal only for a synthetic load with dead upper lanes and
+    // flags.
     for hazard in ["full-result", "flags", "source-load"] {
         let tail = match hazard {
             "full-result" => vec![
@@ -3761,7 +3813,8 @@ fn test_high_extract_keeps_observable_wide_load_or_shift_effects() {
     }
 }
 
-// ------------------------------------------------------------------- test_prologue
+// -------------------------------------------------------------------
+// test_prologue
 
 fn procedure() -> LirBody {
     let instruction = |at: i64, what: Semantics| insn(at, Some((at, at + 1)), Some(what), vec![], vec![]);
@@ -4040,7 +4093,8 @@ fn test_a_dword_copy_and_add_are_priced_with_their_operand_size_prefixes() {
     assert_eq!(names(&result), ["lea", "cmp"]);
 }
 
-// ------------------------------------------------------------ flat zero extensions
+// ------------------------------------------------------------ flat zero
+// extensions
 
 fn flat() -> &'static crate::backend::peep::Rules {
     &crate::backend::peep::targets::x86_m32::RULES
@@ -4079,8 +4133,9 @@ fn flat_body(insns: Vec<Arc<Insn>>) -> LirBody {
     body("flat", 0, vec![block(0, insns, vec![])])
 }
 
-/// A word whose register is zero above it, extended to another register: the register's own copy.
-/// The extension was a three clock `movzx` where a one clock `mov` does, and kept the copy from joining its source.
+/// A word whose register is zero above it, extended to another register: the
+/// register's own copy. The extension was a three clock `movzx` where a one
+/// clock `mov` does, and kept the copy from joining its source.
 #[test]
 fn test_flat_extension_of_a_zero_extended_word_is_a_copy() {
     let made =
@@ -4109,8 +4164,8 @@ fn test_flat_extension_in_place_of_a_zero_extended_word_is_dropped() {
     );
 }
 
-/// Where the register's upper half is not known zero the extension stays: a word load leaves it as it was.
-/// Taking it for a copy read the old upper half.
+/// Where the register's upper half is not known zero the extension stays: a
+/// word load leaves it as it was. Taking it for a copy read the old upper half.
 #[test]
 fn test_flat_extension_of_a_partial_load_stays() {
     let made =
@@ -4118,7 +4173,8 @@ fn test_flat_extension_of_a_partial_load_stays() {
     assert_eq!(whats(&made.insns())[1].name.as_deref(), Some("movzx"));
 }
 
-/// A word copy of a zero-extended register is the dword one when nothing reads the upper half it was leaving.
+/// A word copy of a zero-extended register is the dword one when nothing reads
+/// the upper half it was leaving.
 #[test]
 fn test_flat_word_copy_of_a_zero_extended_register_is_a_dword_copy() {
     let copy = Arc::new(insn(
@@ -4128,7 +4184,8 @@ fn test_flat_word_copy_of_a_zero_extended_register_is_a_dword_copy() {
         vec![],
         vec![],
     ));
-    // Overwritten whole after, so nothing reads the upper half the word copy was leaving.
+    // Overwritten whole after, so nothing reads the upper half the word copy
+    // was leaving.
     let cleared = Arc::new(insn(
         2,
         Some((2, 2)),
@@ -4174,7 +4231,8 @@ fn dword_sum() -> Arc<Insn> {
     ))
 }
 
-/// A dword sum and the extension of its low word, where the sum's register is zero above: the word sum.
+/// A dword sum and the extension of its low word, where the sum's register is
+/// zero above: the word sum.
 #[test]
 fn test_flat_dword_sum_and_its_extension_is_the_word_sum() {
     // A compare after overwrites the flags the word sum would set differently.
@@ -4190,8 +4248,9 @@ fn test_flat_dword_sum_and_its_extension_is_the_word_sum() {
     );
 }
 
-/// Not where it is not: the word sum leaves the upper half as it was, which the extension would have cleared.
-/// Taking the word sum there left the old upper half in a register read as a dword.
+/// Not where it is not: the word sum leaves the upper half as it was, which the
+/// extension would have cleared. Taking the word sum there left the old upper
+/// half in a register read as a dword.
 #[test]
 fn test_flat_dword_sum_stays_where_the_upper_half_may_not_be_zero() {
     let made = narrowed_arithmetic(
@@ -4202,11 +4261,13 @@ fn test_flat_dword_sum_stays_where_the_upper_half_may_not_be_zero() {
     assert_eq!((kept[1].name.as_deref(), kept[2].name.as_deref()), (Some("add"), Some("movzx")), "{kept:?}");
 }
 
-// ------------------------------------------------------- copies forwarded into addresses
+// ------------------------------------------------------- copies forwarded into
+// addresses
 
-/// `mov esi, ecx` then a store through `[ebp+esi-8]`: the store reads ECX. Only the register operands were
-/// forwarded, so an address kept the copy's register and the copy stayed (`Mem` equality leaves registers
-/// out, so a rewritten cell also read as unchanged and was dropped).
+/// `mov esi, ecx` then a store through `[ebp+esi-8]`: the store reads ECX. Only
+/// the register operands were forwarded, so an address kept the copy's register
+/// and the copy stayed (`Mem` equality leaves registers out, so a rewritten
+/// cell also read as unchanged and was dropped).
 #[test]
 fn test_a_copy_is_forwarded_into_the_address_that_reads_it() {
     let copy = Arc::new(insn(
@@ -4271,9 +4332,11 @@ fn test_a_copy_is_not_forwarded_past_a_write_of_its_source() {
     assert_eq!(cell.index_through, Register::ESI);
 }
 
-// ------------------------------------------------------------- the mode is the body's
+// ------------------------------------------------------------- the mode is the
+// body's
 
-/// `mov ebx, ecx` then a byte read through `[ebx]`. A 32-bit base encodes only in 32-bit mode.
+/// `mov ebx, ecx` then a byte read through `[ebx]`. A 32-bit base encodes only
+/// in 32-bit mode.
 fn read_through_a_copy(bits: u32) -> LirBody {
     let copy = Arc::new(insn(
         0,
@@ -4299,19 +4362,23 @@ fn through_of_the_read(body: &LirBody) -> Register {
     }
 }
 
-/// What a body encodes and touches depends on the mode it is for, which it carries: a flat body forwards a
-/// copy into a 32-bit base, a real-mode one does not (it has no such operand). The mode was a thread-local
-/// set around a compile, so a pass run on a body outside one read real mode whatever the body was for.
+/// What a body encodes and touches depends on the mode it is for, which it
+/// carries: a flat body forwards a copy into a 32-bit base, a real-mode one
+/// does not (it has no such operand). The mode was a thread-local set around a
+/// compile, so a pass run on a body outside one read real mode whatever the
+/// body was for.
 #[test]
 fn test_a_body_is_encoded_in_its_own_mode() {
     assert_eq!(through_of_the_read(&copyprop::forwarded(&read_through_a_copy(32))), Register::ECX);
     assert_eq!(through_of_the_read(&copyprop::forwarded(&read_through_a_copy(16))), Register::EBX);
 }
 
-// ----------------------------------------------------------------- what a jump reads
+// ----------------------------------------------------------------- what a jump
+// reads
 
-/// The flags a conditional jump reads are the condition's: what m16's rows say of each jump, iced states
-/// of the mnemonic, so a target whose jump rows are its own needs no copy of them.
+/// The flags a conditional jump reads are the condition's: what m16's rows say
+/// of each jump, iced states of the mnemonic, so a target whose jump rows are
+/// its own needs no copy of them.
 #[test]
 fn test_what_a_conditional_jump_reads_is_the_conditions_for_every_condition() {
     let rows: Vec<_> = instructions::FORMS.iter().filter(|form| form.operation == "branch").collect();
@@ -4323,7 +4390,8 @@ fn test_what_a_conditional_jump_reads_is_the_conditions_for_every_condition() {
     }
 }
 
-// ------------------------------------------------------------------ the count of a `rep`
+// ------------------------------------------------------------------ the count
+// of a `rep`
 
 fn repeated_fill(
     name: &str,
@@ -4341,8 +4409,9 @@ fn repeated_fill(
     insn(0, Some((0, 0)), Some(what), vec![], vec![])
 }
 
-/// `rep stosw` in 16-bit code counts CX down and leaves the upper half of ECX alone. `rep` was taken to write
-/// ECX whole, so a value live in ECX's upper half across it read as overwritten.
+/// `rep stosw` in 16-bit code counts CX down and leaves the upper half of ECX
+/// alone. `rep` was taken to write ECX whole, so a value live in ECX's upper
+/// half across it read as overwritten.
 #[test]
 fn test_a_rep_in_real_mode_writes_cx_and_not_the_upper_half_of_ecx() {
     let (_, writes) =
@@ -4361,8 +4430,9 @@ fn test_a_rep_in_flat_mode_writes_ecx_whole() {
     assert!((0..4).all(|lane| writes.contains(&(Register::ECX, lane))), "{writes:?}");
 }
 
-/// Each pass of the peephole assembled the text of an instruction and decoded it, for every instruction of the body,
-/// again: `_decoded` was 8% of compiling matmul (#560). An instruction is decoded once however many passes ask of it,
+/// Each pass of the peephole assembled the text of an instruction and decoded
+/// it, for every instruction of the body, again: `_decoded` was 8% of compiling
+/// matmul (#560). An instruction is decoded once however many passes ask of it,
 /// and another at the same place is not taken for it.
 #[test]
 fn test_an_instruction_the_passes_ask_of_again_is_decoded_once() {
@@ -4373,25 +4443,29 @@ fn test_an_instruction_the_passes_ask_of_again_is_decoded_once() {
         assert_eq!(_decoded(16, &what).expect("encodes"), first);
     }
     assert_eq!(decodes() - before, 1, "decoded again for each ask");
-    // The same instruction in 32-bit code is asked of again, not answered with the 16-bit code's.
+    // The same instruction in 32-bit code is asked of again, not answered with
+    // the 16-bit code's.
     let before = decodes();
     _decoded(32, &what).expect("encodes");
     assert_eq!(decodes() - before, 1, "a 32-bit ask was answered from the 16-bit one");
-    // Another instruction, even if it came to stand where this one was, is its own.
+    // Another instruction, even if it came to stand where this one was, is its
+    // own.
     let other =
         sem(Operation::Binary, "sub", vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::BX, 2)]);
     assert_ne!(_decoded(16, &other).expect("encodes"), first);
 }
 
-/// A cache of decoded instructions was given a memory operand equal, when `Mem`'s equality left out its encoding
-/// fields, to one spelled through another register (queens -Os: `mov es,[bx+2]` for `mov es,[si+2]`).
+/// A cache of decoded instructions was given a memory operand equal, when
+/// `Mem`'s equality left out its encoding fields, to one spelled through
+/// another register (queens -Os: `mov es,[bx+2]` for `mov es,[si+2]`).
 #[test]
 fn test_two_cells_equal_but_spelled_through_other_registers_are_decoded_apart() {
     let through = |register| {
         let cell = Mem { through: register, offset: 2, base: Some(Held { value: 1, width: 2 }), ..Mem::new(None, 2) };
         sem(Operation::Move, "mov", vec![rl(Register::ES, 2)], vec![Loc::Mem(cell)])
     };
-    // One place in memory, the second instruction put where the first was (as a body's rewrite does).
+    // One place in memory, the second instruction put where the first was (as a
+    // body's rewrite does).
     let mut place = through(Register::BX);
     assert!(
         place.same_meaning(&through(Register::SI)) && place != through(Register::SI),
@@ -4404,9 +4478,10 @@ fn test_two_cells_equal_but_spelled_through_other_registers_are_decoded_apart() 
     assert_eq!(second[0].memory_base(), Register::SI);
 }
 
-/// The passes asked `_register_effects` of the same instruction again and again, each time lowering it to text and
-/// decoding it: 886,000 asks for 16,000 distinct instructions in one QCport module. An instruction equal to one already
-/// answered is answered from it, whichever `Insn` it is held in.
+/// The passes asked `_register_effects` of the same instruction again and
+/// again, each time lowering it to text and decoding it: 886,000 asks for
+/// 16,000 distinct instructions in one QCport module. An instruction equal to
+/// one already answered is answered from it, whichever `Insn` it is held in.
 #[test]
 fn test_an_instruction_equal_to_one_already_answered_is_not_worked_out_again() {
     let add = |at| {
@@ -4439,8 +4514,9 @@ fn test_an_instruction_equal_to_one_already_answered_is_not_worked_out_again() {
     assert_ne!(_register_effects(16, &other, false, true), first, "another instruction was given this one's answer");
 }
 
-/// `dead_at_exit` was worked out for the body ten passes in a row, though all but one of them left it as it was (#924).
-/// A body that is the same is answered from the last; one whose instruction changed is not.
+/// `dead_at_exit` was worked out for the body ten passes in a row, though all
+/// but one of them left it as it was (#924). A body that is the same is
+/// answered from the last; one whose instruction changed is not.
 #[test]
 fn test_the_dead_lanes_of_a_body_no_pass_changed_are_worked_out_once() {
     let mov = |at, to, from| {
@@ -4472,9 +4548,10 @@ fn test_the_dead_lanes_of_a_body_no_pass_changed_are_worked_out_once() {
     assert_eq!(liveness::exits_computed() - before, 2, "a changed body was given the last answer");
 }
 
-/// The flag liveness, upper-half zeroes and post-RA sink liveness each iterated every block to a fixed point: a
-/// backward chain of 30 blocks took 30 rounds of 30. All go through `dataflow::solve`, which works a block again only
-/// when an input changed.
+/// The flag liveness, upper-half zeroes and post-RA sink liveness each iterated
+/// every block to a fixed point: a backward chain of 30 blocks took 30 rounds
+/// of 30. All go through `dataflow::solve`, which works a block again only when
+/// an input changed.
 #[test]
 fn test_flag_liveness_over_a_loop_is_not_worked_by_rounds() {
     let blocks = 30;
@@ -4491,9 +4568,10 @@ fn test_flag_liveness_over_a_loop_is_not_worked_by_rounds() {
     assert!(worked <= 4 * blocks as usize, "{worked} blocks worked for a loop of {blocks}");
 }
 
-/// Every block's transfer was worked again each round until no entry changed, and a fact crosses one block a round: a
-/// loop of 30 blocks took 30 rounds of 30 transfers (a nest 8 deep: a quarter of lir peephole). A block is worked again
-/// when its entry changed.
+/// Every block's transfer was worked again each round until no entry changed,
+/// and a fact crosses one block a round: a loop of 30 blocks took 30 rounds of
+/// 30 transfers (a nest 8 deep: a quarter of lir peephole). A block is worked
+/// again when its entry changed.
 #[test]
 fn test_spill_forwarding_works_a_block_again_only_when_its_entry_changed() {
     let register = rl(Register::BX, 2);
@@ -4519,8 +4597,9 @@ fn test_spill_forwarding_works_a_block_again_only_when_its_entry_changed() {
     assert!(worked <= 4 * blocks as usize, "{worked} transfers for a loop of {blocks} blocks");
 }
 
-/// Copy propagation worked every block again each round until no exit changed: a loop of 30 blocks took 30 rounds of 30
-/// blocks. A block is worked again when a parent's exit changed.
+/// Copy propagation worked every block again each round until no exit changed:
+/// a loop of 30 blocks took 30 rounds of 30 blocks. A block is worked again
+/// when a parent's exit changed.
 #[test]
 fn test_copy_propagation_works_a_block_again_only_when_a_parent_changed() {
     let (ax, bx) = (rl(Register::AX, 2), rl(Register::BX, 2));

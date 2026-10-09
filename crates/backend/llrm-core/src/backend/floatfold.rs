@@ -1,11 +1,13 @@
-//! A float load that only one arithmetic instruction reads is that instruction's memory operand: `fld [m]; faddp` is
-//! `fadd [m]`.
+//! A float load that only one arithmetic instruction reads is that
+//! instruction's memory operand: `fld [m]; faddp` is `fadd [m]`.
 //!
-//! x87 arithmetic has a memory form for a float or double (`fadd qword ptr [m]`), and LLVM folds a single-use load into
-//! it (`X86InstrInfo::foldMemoryOperand`); gcc's output has it everywhere. The allocator folds only a spilled value's
-//! reload (`floatassign::fused`). This is the same fold for any load, before the values are placed: it saves the load
-//! and the x87 register the loaded value held. Sound when nothing between the load and its reader may write what it
-//! reads.
+//! x87 arithmetic has a memory form for a float or double (`fadd qword ptr
+//! [m]`), and LLVM folds a single-use load into
+//! it (`X86InstrInfo::foldMemoryOperand`); gcc's output has it everywhere. The
+//! allocator folds only a spilled value's reload (`floatassign::fused`). This
+//! is the same fold for any load, before the values are placed: it saves the
+//! load and the x87 register the loaded value held. Sound when nothing between
+//! the load and its reader may write what it reads.
 
 use std::sync::Arc;
 
@@ -71,7 +73,8 @@ pub fn folded(body: &LirBody) -> LirBody {
                 at += 1;
                 continue;
             }
-            // The right operand's load first: the left is on the stack top, as `fadd st, [m]` has it.
+            // The right operand's load first: the left is on the stack top, as
+            // `fadd st, [m]` has it.
             let found = [(right.value, false, left), (left.value, true, right)]
                 .into_iter()
                 .find_map(
@@ -151,8 +154,9 @@ pub fn folded(body: &LirBody) -> LirBody {
     if changed { body.with_blocks(blocks) } else { body.clone() }
 }
 
-/// The memory form of `name` reading `load`'s cell: `fadd qword ptr [m]`, `fsubr dword ptr [m]`; none for an integer or
-/// a cell that is not a float or double. Where the cell is the left operand, the operation reversed.
+/// The memory form of `name` reading `load`'s cell: `fadd qword ptr [m]`,
+/// `fsubr dword ptr [m]`; none for an integer or a cell that is not a float or
+/// double. Where the cell is the left operand, the operation reversed.
 fn memory_form(
     name: &str,
     cell_is_left: bool,
@@ -166,8 +170,8 @@ fn memory_form(
         }
     };
     let name = if cell_is_left { reversed(name) } else { name.to_owned() };
-    // An integer load stays: `fild` then `fadd` is faster than `fiadd` on the 486, and the other operand may take the
-    // memory form instead.
+    // An integer load stays: `fild` then `fadd` is faster than `fiadd` on the
+    // 486, and the other operand may take the memory form instead.
     if name_is(load.what.as_ref()?, "fild") || !matches!(cell_of(load).width, 4 | 8) {
         return None;
     }

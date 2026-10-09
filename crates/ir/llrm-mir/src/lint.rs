@@ -60,7 +60,8 @@ fn function_poison(
         }
         if let Opcode::Alloca { allocated, .. } = instruction.opcode {
             let slot = instruction.result.expect("an alloca's pointer");
-            // The slot and every pointer derived from it by an address computation.
+            // The slot and every pointer derived from it by an address
+            // computation.
             let mut pointers = vec![slot];
             let mut at = 0;
             while at < pointers.len() {
@@ -72,9 +73,10 @@ fn function_poison(
                 }
                 at += 1;
             }
-            // What fills all of it: a store of the whole type through the slot, a memset of
-            // all of it, a call it is handed to. And what fills part: any other store through
-            // the slot or a pointer computed from it (an array is filled an element at a
+            // What fills all of it: a store of the whole type through the slot,
+            // a memset of all of it, a call it is handed to. And
+            // what fills part: any other store through the slot or
+            // a pointer computed from it (an array is filled an element at a
             // time, a loop at a time).
             let (mut whole, mut parts) = (Vec::new(), Vec::new());
             for &pointer in &pointers {
@@ -92,8 +94,9 @@ fn function_poison(
                     }
                 }
             }
-            // A load is read after a whole fill on every path, or after a part that can reach it
-            // (a loop's stores are not on the path that skips the loop); one reached by neither
+            // A load is read after a whole fill on every path, or after a part
+            // that can reach it (a loop's stores are not on the
+            // path that skips the loop); one reached by neither
             // reads what nothing stored.
             let after_whole = stored_on_every_path(function, &whole);
             let after_part = may_follow(function, &parts);
@@ -113,9 +116,11 @@ fn function_poison(
                     };
                     let whole_first = before(&whole) || after_whole.get(&block).copied().unwrap_or(false);
                     let part_first = before(&parts) || after_part.contains(&block);
-                    // A load of all of it needs all of it stored: bytes a constant-offset store
-                    // leaves out (a tag stored, its payload and padding not) are read unstored,
-                    // whatever the language says of them; a store at an offset not known could
+                    // A load of all of it needs all of it stored: bytes a
+                    // constant-offset store leaves out (a
+                    // tag stored, its payload and padding not) are read
+                    // unstored, whatever the language says
+                    // of them; a store at an offset not known could
                     // be any of them and is taken to cover the rest.
                     let uncovered = layout.as_ref().is_some_and(|layout| {
                         let size = layout.alloc_size(&context.types, allocated);
@@ -140,8 +145,8 @@ fn function_poison(
     out
 }
 
-/// Whether `stores`, into `slot` of `size` bytes, cover all of it: their constant ranges
-/// together do, or one of them is at an offset not known.
+/// Whether `stores`, into `slot` of `size` bytes, cover all of it: their
+/// constant ranges together do, or one of them is at an offset not known.
 fn stores_cover(
     context: &Context,
     layout: &DataLayout,
@@ -167,8 +172,9 @@ fn stores_cover(
     covered.iter().all(|&one| one)
 }
 
-/// The blocks every path to which, from the entry, has run one of `stores` by the
-/// time it enters them: the greatest fixed point from "none at the entry, all elsewhere".
+/// The blocks every path to which, from the entry, has run one of `stores` by
+/// the time it enters them: the greatest fixed point from "none at the entry,
+/// all elsewhere".
 fn stored_on_every_path(
     function: &Function,
     stores: &[InstId],
@@ -196,8 +202,8 @@ fn stored_on_every_path(
     at_entry
 }
 
-/// The blocks a block holding one of `stores` can reach, itself only round a loop:
-/// where something may have been stored before.
+/// The blocks a block holding one of `stores` can reach, itself only round a
+/// loop: where something may have been stored before.
 fn may_follow(
     function: &Function,
     stores: &[InstId],

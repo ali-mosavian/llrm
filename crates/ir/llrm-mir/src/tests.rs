@@ -31,7 +31,8 @@ fn refusal(text: &str) -> String {
 
 #[test]
 fn the_crate_depends_on_nothing() {
-    // MIR may name no decoder, object file or target; the dependency graph enforces it.
+    // MIR may name no decoder, object file or target; the dependency graph
+    // enforces it.
     let manifest = include_str!("../Cargo.toml");
     let dependencies = manifest.split("[dependencies]").nth(1).expect("a [dependencies] table");
     let entries: Vec<&str> = dependencies
@@ -392,8 +393,8 @@ d:
     );
 }
 
-/// `releases` read and written back, stated of a parameter: a copy of a routine that frees its
-/// argument has to know it.
+/// `releases` read and written back, stated of a parameter: a copy of a routine
+/// that frees its argument has to know it.
 #[test]
 fn releases_is_a_parameter_attribute_that_round_trips() {
     let text = format!("{DATALAYOUT}\ndeclare void @free(ptr releases)\n");
@@ -417,8 +418,9 @@ fn noretain_is_a_parameter_attribute_that_round_trips() {
     assert_eq!(round(&once), once);
 }
 
-/// Each use asked `instruction_dominates` of its definition, which scanned the block for both: the
-/// verifier was 12% of compiling 800 BASIC statements (#560). The positions are made once.
+/// Each use asked `instruction_dominates` of its definition, which scanned the
+/// block for both: the verifier was 12% of compiling 800 BASIC statements
+/// (#560). The positions are made once.
 #[test]
 fn test_verifying_a_block_does_not_scan_it_for_each_use() {
     let chain: String = (1..300).map(|at| format!("  %v{at} = add i16 %v{}, 1\n", at - 1)).collect();
@@ -439,8 +441,9 @@ fn test_a_use_before_its_definition_in_one_block_is_refused() {
     assert!(problems.iter().any(|one| one.contains("does not dominate")), "{problems:?}");
 }
 
-/// `Declared::over` the module's declarations answers as `of` the module does: a name the module has is its id, a new
-/// one the next, and `place` says how many it added (the caller's held declarations are then stale).
+/// `Declared::over` the module's declarations answers as `of` the module does:
+/// a name the module has is its id, a new one the next, and `place` says how
+/// many it added (the caller's held declarations are then stale).
 #[test]
 fn test_declared_over_the_declarations_answers_as_declared_of_the_module() {
     use crate::passes::{Declarations, Declared, ModuleAnalyses};
@@ -458,13 +461,15 @@ fn test_declared_over_the_declarations_answers_as_declared_of_the_module() {
     assert_eq!(Declared::over(Default::default(), 0).place(&mut module).unwrap(), 0);
 }
 
-/// Hash and tree maps keyed by a dense id cost 12% of a compile in hashing and 7% in tree nodes where gcc uses bitmaps
-/// and vectors: new keyed maps and sets use `dense::IdMap` / `IdSet`. A file may not gain one; the ceilings in
-/// `dense-keys.txt` fall as files convert (clippy's `disallowed-types` cannot tell a `HashMap<ValueId, _>` from any
-/// other).
+/// Hash and tree maps keyed by a dense id cost 12% of a compile in hashing and
+/// 7% in tree nodes where gcc uses bitmaps and vectors: new keyed maps and sets
+/// use `dense::IdMap` / `IdSet`. A file may not gain one; the ceilings in
+/// `dense-keys.txt` fall as files convert (clippy's `disallowed-types` cannot
+/// tell a `HashMap<ValueId, _>` from any other).
 ///
-/// A type alias hides its key from the text (`pub type Intervals = IndexMap<ValueId, Interval>`): the alias is resolved
-/// and each use of its name counts as one keyed map, the alias's own line as none.
+/// A type alias hides its key from the text (`pub type Intervals =
+/// IndexMap<ValueId, Interval>`): the alias is resolved and each use of its
+/// name counts as one keyed map, the alias's own line as none.
 fn dense_key_counts(sources: &[(String, String)]) -> std::collections::BTreeMap<String, usize> {
     let kinds = ["HashMap<", "HashSet<", "BTreeMap<", "BTreeSet<", "IndexMap<", "IndexSet<"];
     let ids = ["ValueId", "InstId", "BlockId", "module::ValueId", "module::InstId", "module::BlockId"]
@@ -490,8 +495,8 @@ fn dense_key_counts(sources: &[(String, String)]) -> std::collections::BTreeMap<
             })
             .sum()
     };
-    // An alias is a `type` at the start of a line (an associated type in an impl is indented), its right side a keyed
-    // map.
+    // An alias is a `type` at the start of a line (an associated type in an
+    // impl is indented), its right side a keyed map.
     let is_alias = |line: &str| {
         (line.starts_with("type ") || line.starts_with("pub type ") || line.starts_with("pub(crate) type "))
             && line.contains(" = ")
@@ -507,8 +512,9 @@ fn dense_key_counts(sources: &[(String, String)]) -> std::collections::BTreeMap<
                 .map(|name| (file, name.to_owned()))
         })
         .collect();
-    // A generic alias (`type Sparse<K, V> = IndexMap<K, V>`) names no id on its own line: it is a keyed map wherever it
-    // is applied to an id. SparseIdMap and SparseIdSet are the sanctioned ones (a few of many ids:
+    // A generic alias (`type Sparse<K, V> = IndexMap<K, V>`) names no id on its
+    // own line: it is a keyed map wherever it is applied to an id.
+    // SparseIdMap and SparseIdSet are the sanctioned ones (a few of many ids:
     // llrm_support::hash), by name and no other.
     const SANCTIONED: [&str; 2] = ["SparseIdMap", "SparseIdSet"];
     let generic_aliases: Vec<(&str, String)> = sources
@@ -543,8 +549,9 @@ fn dense_key_counts(sources: &[(String, String)]) -> std::collections::BTreeMap<
         let body: String = text.lines().filter(|line| !is_alias(line)).collect::<Vec<_>>().join("\n");
         let mut found = keyed(&body);
         for (home, alias) in &aliases {
-            // A name some other file also uses for something else (`Facts`, `Calls`) is the alias only where the file
-            // defines it, imports it, or writes it as a path.
+            // A name some other file also uses for something else (`Facts`,
+            // `Calls`) is the alias only where the file defines it,
+            // imports it, or writes it as a path.
             let module = std::path::Path::new(home).file_stem().and_then(|stem| stem.to_str()).unwrap_or("");
             let imported = body
                 .lines()
@@ -600,8 +607,9 @@ fn dense_key_counts(sources: &[(String, String)]) -> std::collections::BTreeMap<
     counts
 }
 
-/// SparseIdMap is the sanctioned container for a few of many ids; any other alias of a keyed map, generic or not,
-/// counts where it is applied to an id: a new alias is no loophole.
+/// SparseIdMap is the sanctioned container for a few of many ids; any other
+/// alias of a keyed map, generic or not, counts where it is applied to an id: a
+/// new alias is no loophole.
 #[test]
 fn the_sparse_containers_are_sanctioned_by_name_and_a_generic_alias_is_not() {
     let source = |name: &str, text: &str| (name.to_owned(), text.to_owned());
@@ -655,8 +663,8 @@ fn no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id() {
     assert!(over.is_empty(), "use llrm_mir::dense::{{IdMap, IdSet}} for ids: {over:?}");
 }
 
-/// `pub type Intervals = IndexMap<ValueId, Interval>` once let two files hold keyed maps the text scan could not see;
-/// each use of the alias is one.
+/// `pub type Intervals = IndexMap<ValueId, Interval>` once let two files hold
+/// keyed maps the text scan could not see; each use of the alias is one.
 #[test]
 fn an_alias_of_a_keyed_map_and_three_uses_of_it_count_as_three() {
     let source = |name: &str, text: &str| (name.to_owned(), text.to_owned());

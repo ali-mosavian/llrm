@@ -23,7 +23,8 @@ impl Parser {
         Ok(Enum { name, generics, backing, variants, span })
     }
 
-    /// `u8`, `u16`, or a field width `uN`, stored in the smallest type holding it.
+    /// `u8`, `u16`, or a field width `uN`, stored in the smallest type holding
+    /// it.
     fn tag_type(&mut self) -> Result<(TypeName, u32), Diagnostic> {
         let token = self.peek().clone();
         if let TokenKind::Identifier(name) = &token.kind {

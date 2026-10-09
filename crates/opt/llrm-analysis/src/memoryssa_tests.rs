@@ -652,9 +652,9 @@ b0:
     }
 }
 
-/// Each load of one address walked back over every store between it and the first, asking each store's
-/// clobbers afresh: `mir gvn` was 10 s of compiling 1600 BASIC statements (#560). A (cell, store) pair is
-/// worked out once.
+/// Each load of one address walked back over every store between it and the
+/// first, asking each store's clobbers afresh: `mir gvn` was 10 s of compiling
+/// 1600 BASIC statements (#560). A (cell, store) pair is worked out once.
 #[test]
 fn test_loads_of_one_address_ask_each_store_whether_it_clobbers_once() {
     let steps: String =
@@ -672,9 +672,11 @@ fn test_loads_of_one_address_ask_each_store_whether_it_clobbers_once() {
     assert!(clobber_runs() - before <= 30, "{} clobber questions for 30 stores", clobber_runs() - before);
 }
 
-/// The walk back from a load stopped at every access and asked of it. A chain of uses and defs that leave the cell
-/// alone ends in the same place for every load of the cell, so a walk remembers where and jumps there. It must find
-/// what the walk step by step finds, from every load, for every cell, with and without a boundary.
+/// The walk back from a load stopped at every access and asked of it. A chain
+/// of uses and defs that leave the cell alone ends in the same place for every
+/// load of the cell, so a walk remembers where and jumps there. It must find
+/// what the walk step by step finds, from every load, for every cell, with and
+/// without a boundary.
 #[test]
 fn test_a_walk_that_jumps_finds_what_a_walk_step_by_step_finds() {
     let stores: String = (0..12).map(|n| format!("  store i8 {n}, ptr getelementptr (i8, ptr @g, i16 {})\n  %v{n} = load i8, ptr getelementptr (i8, ptr @g, i16 {})\n", 8 + n % 3 * 16, 8 + (n + 1) % 3 * 16)).collect();

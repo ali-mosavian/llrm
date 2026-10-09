@@ -1,11 +1,11 @@
 //! Port of `qbopt/backend/jumps.py`: block order, and the jumps it makes
 //! redundant.
 //!
-//! Runs on the allocated body, after the last phase that adds or empties blocks:
-//! edge splits and their undoing leave jumps to the next block, and the raise's
-//! `if false goto` beside a `goto` leaves a `jcc` over a block that only jumps.
-//! `placed` orders the blocks; `threaded` keeps that order and drops the jumps
-//! and the blocks nothing reaches.
+//! Runs on the allocated body, after the last phase that adds or empties
+//! blocks: edge splits and their undoing leave jumps to the next block, and the
+//! raise's `if false goto` beside a `goto` leaves a `jcc` over a block that
+//! only jumps. `placed` orders the blocks; `threaded` keeps that order and
+//! drops the jumps and the blocks nothing reaches.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -107,9 +107,11 @@ pub fn optimized(
     Ok(inverted(&if size { placed } else { duplicated(&duplicated_tails(&placed), true) }))
 }
 
-/// A conditional branch taken to the block laid out next, followed by a jump: the opposite branch to the jump's target,
-/// and no jump (LLVM's `analyzeBranch` / `reverseBranchCondition` in BranchFolding). `_step` does this while it places
-/// blocks; copying a tail afterwards (`duplicated`) makes more of them.
+/// A conditional branch taken to the block laid out next, followed by a jump:
+/// the opposite branch to the jump's target, and no jump (LLVM's
+/// `analyzeBranch` / `reverseBranchCondition` in BranchFolding). `_step` does
+/// this while it places blocks; copying a tail afterwards (`duplicated`) makes
+/// more of them.
 fn inverted(body: &LirBody) -> LirBody {
     let mut blocks = body.blocks.clone();
     let mut changed = false;
@@ -153,22 +155,25 @@ fn inverted(body: &LirBody) -> LirBody {
     if changed { body.with_blocks(blocks) } else { body.clone() }
 }
 
-/// gcc's `max-grow-copy-bb-insns`: a block is copied while it is at most this many unconditional jumps long.
+/// gcc's `max-grow-copy-bb-insns`: a block is copied while it is at most this
+/// many unconditional jumps long.
 const COPY_BB_INSNS: usize = 8;
 
-/// gcc's `get_uncond_jump_length`: what the target prices one unconditional jump at, in its long form.
+/// gcc's `get_uncond_jump_length`: what the target prices one unconditional
+/// jump at, in its long form.
 pub(crate) fn uncond_jump_bytes(bits: u32) -> usize {
     let jump = Semantics { name: Some("jmp".into()), target: Some(2), ..Semantics::new(Operation::Jump) };
     select::priced_in(bits, &jump, 0, None, false, false, None).map_or(2, |made| made.code.len())
 }
 
-/// The bytes a block may be and still be copied (`copy_bb_p`): `COPY_BB_INSNS` jumps of code.
+/// The bytes a block may be and still be copied (`copy_bb_p`): `COPY_BB_INSNS`
+/// jumps of code.
 fn copy_limit(bits: u32) -> usize {
     COPY_BB_INSNS * uncond_jump_bytes(bits)
 }
 
-/// A block that only returns: plain operations then a `ret`, no way on, within `limit` bytes and none of it
-/// source-owned.
+/// A block that only returns: plain operations then a `ret`, no way on, within
+/// `limit` bytes and none of it source-owned.
 fn _return_tail(
     bits: u32,
     block: &LirBlock,
@@ -184,8 +189,8 @@ fn _return_tail(
     }
     let real = _real(block);
     let Some((last, rest)) = real.split_last() else { return false };
-    // A return that covers source bytes is the program's own (a BASIC module's end spells a runtime call at it): not
-    // copied.
+    // A return that covers source bytes is the program's own (a BASIC module's
+    // end spells a runtime call at it): not copied.
     if last.what.as_ref().is_none_or(|what| what.op != Operation::Return)
         || !last.inserted()
         || rest.iter().any(|one| {
@@ -212,7 +217,8 @@ fn _return_tail(
         .is_some_and(|bytes| bytes <= copy_limit(bits))
 }
 
-/// LLVM's `TailDupSize` at -O2: the instructions a tail may hold besides its jumps.
+/// LLVM's `TailDupSize` at -O2: the instructions a tail may hold besides its
+/// jumps.
 const TAIL_DUPLICATION: usize = 2;
 
 /// Each `jmp` to a short tail replaced by a copy of the tail, as LLVM's tail
@@ -225,7 +231,8 @@ pub fn duplicated_tails(body: &LirBody) -> LirBody {
     duplicated(body, false)
 }
 
-/// `duplicated_tails`, or only the tails that return: the jump a copied tail ended in may reach one.
+/// `duplicated_tails`, or only the tails that return: the jump a copied tail
+/// ended in may reach one.
 fn duplicated(
     body: &LirBody,
     returns: bool,
@@ -259,7 +266,8 @@ fn duplicated(
             else {
                 return None;
             };
-            // Per run of the jump: the fall-through's jump runs as often as the tail falls through.
+            // Per run of the jump: the fall-through's jump runs as often as the
+            // tail falls through.
             if let Some(next) = falls {
                 let share =
                     |from: i64, to: i64| frequency.edge(from, to) / frequency.block(from).max(f64::MIN_POSITIVE);
@@ -272,7 +280,8 @@ fn duplicated(
                 .iter()
                 .rposition(|one| Arc::ptr_eq(one, real.last().expect("checked")))
                 .expect("a real instruction")];
-            // The jump's work goes; its source bytes stay, as `_reachable` keeps them.
+            // The jump's work goes; its source bytes stay, as `_reachable`
+            // keeps them.
             let mut insns: Vec<Arc<Insn>> = parent
                 .insns
                 .iter()
@@ -319,7 +328,8 @@ fn _duplicable(
     if !tail.phis.is_empty() {
         return None;
     }
-    // gcc's bb-reorder `copy_bb_p` for a block that only returns: copied up to `max-grow-copy-bb-insns` jumps of code.
+    // gcc's bb-reorder `copy_bb_p` for a block that only returns: copied up to
+    // `max-grow-copy-bb-insns` jumps of code.
     if _return_tail(bits, tail) {
         return Some((_real(tail), None));
     }
@@ -467,18 +477,19 @@ fn _placed(
         let at = current.expect("set above");
         if let Some((inner, latches)) = tests.get(&at) {
             if source.is_none_or(|source| !latches.contains(&source)) && !done.contains(inner) {
-                // Reached from outside the loop: the body goes here, and the test after the latch
-                // that jumps back to it, so a pass takes one branch.
+                // Reached from outside the loop: the body goes here, and the
+                // test after the latch that jumps back to it,
+                // so a pass takes one branch.
                 (current, source) = (Some(*inner), None);
                 continue;
             }
         }
         // A join's other arm goes just before it, once everything reaching the
         // arm is placed: the arm falls into the join and the placed side jumps
-        // over it. Left for later, it lands after the return, both of its jumps long.
-        // By frequency, unless the block before it, whose fall-through the
-        // arm takes, reaches the join as `LIKELY` as MachineBlockPlacement
-        // asks: else the shorter layout stands.
+        // over it. Left for later, it lands after the return, both of its jumps
+        // long. By frequency, unless the block before it, whose
+        // fall-through the arm takes, reaches the join as `LIKELY` as
+        // MachineBlockPlacement asks: else the shorter layout stands.
         let before = order.last().filter(|last| last.succ.contains(&at));
         let arm = explicit
             .iter()
@@ -510,9 +521,11 @@ fn _placed(
     Ok(body.with_blocks(order))
 }
 
-/// The block to place next: where the final jump goes, or else where the branch before it goes.
+/// The block to place next: where the final jump goes, or else where the branch
+/// before it goes.
 ///
-/// The branch's target second, so that `jcc target; jmp placed` becomes one inverted branch.
+/// The branch's target second, so that `jcc target; jmp placed` becomes one
+/// inverted branch.
 pub fn _onward(
     bits: u32,
     block: &LirBlock,
@@ -612,7 +625,8 @@ pub fn _onward(
     None
 }
 
-/// Each loop header that only decides whether to go round: its one successor inside, and its latches.
+/// Each loop header that only decides whether to go round: its one successor
+/// inside, and its latches.
 pub fn _tests(
     natural: &[Loop],
     entry: i64,
@@ -650,7 +664,8 @@ pub fn threaded(body: &LirBody) -> LirBody {
     body
 }
 
-/// An edge block's anchors moved up before the branch into it, where the other way reads nothing they define.
+/// An edge block's anchors moved up before the branch into it, where the other
+/// way reads nothing they define.
 ///
 /// A phi copy the allocation made an identity emits nothing, but its anchor
 /// keeps a virtual definition on the edge, and `_passage` will not thread
@@ -665,7 +680,8 @@ pub fn _hoisted(body: &LirBody) -> LirBody {
     for position in 0..blocks.len() {
         let block = &blocks[position];
         let parents = predecessors.get(&block.at);
-        // The cheap tests first: most blocks have no anchor or are not a lone edge of their parent.
+        // The cheap tests first: most blocks have no anchor or are not a lone
+        // edge of their parent.
         if block.succ.len() != 1
             || parents.map_or(0, BTreeSet::len) != 1
             || !block.phis.is_empty()
@@ -1067,7 +1083,8 @@ pub fn _duplicable_return_size(
         || !block.succ.is_empty()
         || real.is_empty()
         || real[real.len() - 1].what.as_ref().is_none_or(|what| what.op != Operation::Return)
-        // A return that pops 64 KB or more is several instructions (`masm::moved_return`), not one `ret`.
+        // A return that pops 64 KB or more is several instructions
+        // (`masm::moved_return`), not one `ret`.
         || real[real.len() - 1].what.as_ref().is_some_and(|what| matches!(
             what.sources.first(),
             Some(crate::model::ir::Loc::Imm(popped)) if popped.value > llrm_x86::calling::RET_POPS_MOST
@@ -1150,11 +1167,13 @@ pub fn _with_return(
     LirBlock { succ: tail.succ.clone(), ..parent.with_insns(kept.chain(copies).collect()) }
 }
 
-/// One change to `body`, the first that applies, in place: its blocks are neither copied nor, but for the
-/// edited one and those the change strands, rebuilt. Whether it changed anything.
+/// One change to `body`, the first that applies, in place: its blocks are
+/// neither copied nor, but for the edited one and those the change strands,
+/// rebuilt. Whether it changed anything.
 ///
-/// `at` is each block's position, kept while the blocks stay as they are: a change that only rewrites an
-/// instruction strands nothing, so the body is not searched for what it reaches again.
+/// `at` is each block's position, kept while the blocks stay as they are: a
+/// change that only rewrites an instruction strands nothing, so the body is not
+/// searched for what it reaches again.
 pub fn _step(
     body: &mut LirBody,
     at: &mut IndexMap<i64, usize>,
@@ -1162,8 +1181,9 @@ pub fn _step(
 ) -> bool {
     let mut blocks = std::mem::take(&mut body.blocks);
     for index in 0..blocks.len() {
-        // The block's last two real instructions, which is all the rules read of the rest: nothing is
-        // copied for a block no rule applies to.
+        // The block's last two real instructions, which is all the rules read
+        // of the rest: nothing is copied for a block no rule applies
+        // to.
         let (last, before) = _real_tail(&blocks[index]);
         let Some(last) = last else {
             continue;
@@ -1240,7 +1260,8 @@ pub fn _step(
         }
         let opposite = last_what.name.as_deref().and_then(|name| _OPPOSITE.get(name));
         if last_what.op == Operation::Branch && after.is_some() && opposite.is_some() {
-            // Falling into a block that only jumps, with the branch taken to the block past it.
+            // Falling into a block that only jumps, with the branch taken to
+            // the block past it.
             let over = blocks[index + 1].clone();
             let beyond = blocks.get(index + 2).map(|past| past.at);
             let onward = _passage(&over);
@@ -1397,8 +1418,8 @@ fn _stranded(
     }
 }
 
-/// `body` with the blocks its entry does not reach stripped to their source bytes, in place: a reached
-/// block is moved, not copied.
+/// `body` with the blocks its entry does not reach stripped to their source
+/// bytes, in place: a reached block is moved, not copied.
 pub fn _prune(body: &mut LirBody) {
     let blocks = std::mem::take(&mut body.blocks);
     let reached: HashSet<i64> = {

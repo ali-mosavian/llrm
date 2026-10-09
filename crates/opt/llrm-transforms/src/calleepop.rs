@@ -1,13 +1,16 @@
-//! LLVM's GlobalOpt gives an internal function whose every caller it sees a calling convention
-//! of its own (`fastcc`). Here that is the callee popping its arguments: `ret N` once, and no
-//! cleanup of the arguments at each call. The convention is assigned here and nowhere else:
-//! isel takes both sides' cleanup from it (`passing`), so a call and the function it names
-//! agree. Priced by the target for the level being built, in clocks or in bytes.
+//! LLVM's GlobalOpt gives an internal function whose every caller it sees a
+//! calling convention of its own (`fastcc`). Here that is the callee popping
+//! its arguments: `ret N` once, and no cleanup of the arguments at each call.
+//! The convention is assigned here and nowhere else: isel takes both sides'
+//! cleanup from it (`passing`), so a call and the function it names
+//! agree. Priced by the target for the level being built, in clocks or in
+//! bytes.
 //!
-//! Where the target's description gives a private function a convention of its own (`private`),
-//! every such function takes that one, with the calls of it: no one outside sees it, so the
-//! target's best serves, whatever ABI the program has. No price is asked: registers cost no more
-//! than the stack at either end. LLVM's `fastcc` here is x86's ECX/EDX; gcc's `regparm(3)` for a
+//! Where the target's description gives a private function a convention of its
+//! own (`private`), every such function takes that one, with the calls of it:
+//! no one outside sees it, so the target's best serves, whatever ABI the
+//! program has. No price is asked: registers cost no more than the stack at
+//! either end. LLVM's `fastcc` here is x86's ECX/EDX; gcc's `regparm(3)` for a
 //! `local` function, EAX/EDX/ECX; this is the description's.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -59,10 +62,12 @@ impl ModulePass for CalleePop {
     }
 }
 
-/// The functions to give a convention, each with the one it takes, and the calls of them (caller, instruction,
-/// convention) that take it: internal, not variadic, with arguments, never named but as a callee, called only in its
-/// own convention, one the target has a twin of that removes the stack arguments in the callee, and called often enough
-/// that what each return costs is paid for by what each call saves, a word of arguments at least.
+/// The functions to give a convention, each with the one it takes, and the
+/// calls of them (caller, instruction, convention) that take it: internal, not
+/// variadic, with arguments, never named but as a callee, called only in its
+/// own convention, one the target has a twin of that removes the stack
+/// arguments in the callee, and called often enough that what each return costs
+/// is paid for by what each call saves, a word of arguments at least.
 fn decided(
     module: &Module,
     costs: &OperationCosts,
@@ -91,8 +96,9 @@ fn decided(
             let function = module.global(callee).function()?;
             let (_, parameters, variadic) = module.signature(function.ty);
             let twin = target.callee_pop(function.calling_convention)?;
-            // The stack words its arguments take: each a word at least, a dword or a far pointer two; the convention's
-            // registers take the ones it puts there.
+            // The stack words its arguments take: each a word at least, a dword
+            // or a far pointer two; the convention's registers take
+            // the ones it puts there.
             let arguments: Vec<Argument> =
                 parameters.iter().map(|&ty| argument_of(&module.context.types, layout, ty)).collect();
             let bytes = target
@@ -107,7 +113,8 @@ fn decided(
                 && !variadic
                 && !parameters.is_empty()
                 && !other.contains(&callee)
-                // A pop's worth of bytes saved is not worth an instruction more at every call.
+                // A pop's worth of bytes saved is not worth an instruction more
+                // at every call.
                 && words > 0
                 && sites.len() as i64 * costs.cleanup(words) + costs.pop >= returns * costs.return_pops)
                 .then_some((callee, twin))
@@ -136,9 +143,10 @@ fn argument_of(
     }
 }
 
-/// The functions nothing outside the module reaches (`direct_only`) that have a convention the
-/// target lets `private` replace, and the calls of them. A function is left as it is where a call
-/// of it is not a plain call in its own convention, or it takes a variable number of arguments.
+/// The functions nothing outside the module reaches (`direct_only`) that have a
+/// convention the target lets `private` replace, and the calls of them. A
+/// function is left as it is where a call of it is not a plain call in its own
+/// convention, or it takes a variable number of arguments.
 fn privately(
     module: &Module,
     private: &PrivateConvention,

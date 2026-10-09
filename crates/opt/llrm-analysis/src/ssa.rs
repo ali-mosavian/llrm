@@ -12,8 +12,9 @@
 //!
 //! Skipped, with no meaning on SSA IR:
 //! - `renumbered`: variable versions.
-//! - `cloned_pointer_metadata` and `cloned_integer_ranges`: the old body's side tables; a pointer is its type here, and
-//!   an instruction's metadata travels with `clone_instruction`.
+//! - `cloned_pointer_metadata` and `cloned_integer_ranges`: the old body's side
+//!   tables; a pointer is its type here, and an instruction's metadata travels
+//!   with `clone_instruction`.
 //!
 //! Tests skipped: `constructed_matches_blocks_by_identity_not_position` and
 //! `constructed_repairs_existing_phi_inputs_by_predecessor` (test
@@ -407,7 +408,8 @@ b2:
     }
 
     /// Direct Rust port of
-    /// `tests/test_sccp.py:test_ssa_use_index_preserves_modes_filtering_and_operation_order`.
+    /// `tests/test_sccp.py:
+    /// test_ssa_use_index_preserves_modes_filtering_and_operation_order`.
     #[test]
     fn use_index_preserves_modes_filtering_and_operation_order() {
         let module = parsed(

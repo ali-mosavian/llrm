@@ -1,6 +1,7 @@
-//! A function a frontend allows near (`nearcode`), only its own module calls, and only directly, is entered by a near
-//! call: its callers share its code segment, so a return address needs no segment. MIR states linkage
-//! and calls; which instruction enters the code is chosen here, as a target fact.
+//! A function a frontend allows near (`nearcode`), only its own module calls,
+//! and only directly, is entered by a near call: its callers share its code
+//! segment, so a return address needs no segment. MIR states linkage and calls;
+//! which instruction enters the code is chosen here, as a target fact.
 
 use std::borrow::Cow;
 

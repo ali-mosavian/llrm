@@ -1,12 +1,15 @@
-//! LLVM's ArgumentPromotion: a function only direct calls reach takes, in place of a pointer it only
-//! reads, the fields it reads through it. Each caller loads them before the call; a recursive call passes
-//! its own on. `&mut [T]` in Nib, a struct by pointer in C, a BASIC array descriptor are one case.
+//! LLVM's ArgumentPromotion: a function only direct calls reach takes, in place
+//! of a pointer it only reads, the fields it reads through it. Each caller
+//! loads them before the call; a recursive call passes its own on. `&mut [T]`
+//! in Nib, a struct by pointer in C, a BASIC array descriptor are one case.
 //!
-//! A parameter is promoted when every use of it is a load of a fixed offset (or the same parameter passed on
-//! to the function itself), the loads are safe where the callers make them (`dereferenceable` covers the
-//! fields) and read what nothing writes while the function runs (`noalias readonly`, or a function that
-//! writes nothing), and there are few of them. Priced by the target for the level being built: the loads
-//! each caller gains against the loads the function loses, in clocks or in bytes.
+//! A parameter is promoted when every use of it is a load of a fixed offset (or
+//! the same parameter passed on to the function itself), the loads are safe
+//! where the callers make them (`dereferenceable` covers the fields) and read
+//! what nothing writes while the function runs (`noalias readonly`, or a
+//! function that writes nothing), and there are few of them. Priced by the
+//! target for the level being built: the loads each caller gains against the
+//! loads the function loses, in clocks or in bytes.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,10 +27,12 @@ use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::target::OperationCosts;
 use llrm_mir::types::{Type, TypeId};
 
-/// What a function reads through one parameter before it is worth passing the fields.
+/// What a function reads through one parameter before it is worth passing the
+/// fields.
 const MOST_FIELDS: usize = 4;
 
-/// A field read: where, as what, how many bytes, by which loads (the first's metadata is kept).
+/// A field read: where, as what, how many bytes, by which loads (the first's
+/// metadata is kept).
 struct Field {
     offset: i64,
     ty: TypeId,
@@ -44,7 +49,8 @@ struct Plan {
     steps: Vec<InstId>,
 }
 
-/// The promotions of every function of `module` that has them, callees first; the functions changed.
+/// The promotions of every function of `module` that has them, callees first;
+/// the functions changed.
 pub fn promoted(
     module: &mut Module,
     layout: &DataLayout,
@@ -160,9 +166,11 @@ fn planned(
     {
         return None;
     }
-    // The callers load before the call what the function loaded after it: where the function loads it
-    // before it writes or calls anything, the value is the same and the load happens either way; else
-    // its own promise that the bytes are there (`dereferenceable`) and that nothing writes them holds.
+    // The callers load before the call what the function loaded after it: where
+    // the function loads it before it writes or calls anything, the value
+    // is the same and the load happens either way; else its own promise
+    // that the bytes are there (`dereferenceable`) and that nothing writes them
+    // holds.
     let entry = function.entry()?;
     let early: BTreeSet<InstId> = function
         .block(entry)
@@ -193,8 +201,9 @@ fn planned(
     );
     let extra = (after - before) * costs.argument;
     let loads = fields.len() as i64 * costs.load;
-    // What each call comes to: the loads it makes (none where it passes its own on, or where a loop of
-    // the caller leaves them to be hoisted, which only clocks credit) and the words it pushes more.
+    // What each call comes to: the loads it makes (none where it passes its own
+    // on, or where a loop of the caller leaves them to be hoisted, which
+    // only clocks credit) and the words it pushes more.
     let delta: i64 = calls
         .iter()
         .map(|&(caller, inst)| {
@@ -204,13 +213,14 @@ fn planned(
         })
         .sum::<i64>()
         - if size { loads } else { 0 };
-    // A recursive function is entered mostly by its own calls: each saves what it loaded, and the first
-    // call's loads are paid once.
+    // A recursive function is entered mostly by its own calls: each saves what
+    // it loaded, and the first call's loads are paid once.
     let worth = if !size && !passed_on.is_empty() { extra <= loads } else { delta <= 0 };
     worth.then_some(Plan { parameter, fields, passed_on, steps })
 }
 
-/// Whether call `inst` of `caller` is in a loop its pointer argument at `parameter` does not change in.
+/// Whether call `inst` of `caller` is in a loop its pointer argument at
+/// `parameter` does not change in.
 fn hoistable(
     module: &Module,
     caller: GlobalId,
@@ -230,7 +240,8 @@ fn hoistable(
     }
 }
 
-/// `plan` made: the function's parameter replaced, each call's argument too. The functions changed.
+/// `plan` made: the function's parameter replaced, each call's argument too.
+/// The functions changed.
 fn applied(
     module: &mut Module,
     id: GlobalId,

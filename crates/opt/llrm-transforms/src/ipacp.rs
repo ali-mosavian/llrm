@@ -1,15 +1,20 @@
-//! GCC's `ipa-cp` cloning (ipa-cp.cc): a function called with a constant actual is copied for it, the actual
-//! replaced by the constant in the copy, and the calls redirected. `-fipa-cp-clone` (-O3) lets the copy grow the unit;
-//! a copy that replaces the function (every call goes to it) needs no growth.
+//! GCC's `ipa-cp` cloning (ipa-cp.cc): a function called with a constant actual
+//! is copied for it, the actual replaced by the constant in the copy, and the
+//! calls redirected. `-fipa-cp-clone` (-O3) lets the copy grow the unit; a copy
+//! that replaces the function (every call goes to it) needs no growth.
 //!
-//! The copy is a function of its own, so the inliner takes it as any other: a clone with its one caller moves into it,
-//! and the recursive call a clone makes with a new constant (`place(q, row + 1, n)` in the clone for `row`) is the next
-//! clone, to `ipa-cp-max-recursive-depth`: GCC's -O3 unrolls `queens`' recursion this way, eight clones deep.
+//! The copy is a function of its own, so the inliner takes it as any other: a
+//! clone with its one caller moves into it, and the recursive call a clone
+//! makes with a new constant (`place(q, row + 1, n)` in the clone for `row`) is
+//! the next clone, to `ipa-cp-max-recursive-depth`: GCC's -O3 unrolls `queens`'
+//! recursion this way, eight clones deep.
 //!
-//! Differences. GCC propagates lattices over the whole call graph and evaluates each value with its function summaries'
-//! time and size under the context (`good_cloning_opportunity_p`); here a site's known actuals are the constants the
-//! caller's own folding proved (`current_call_constants`), and the benefit is the clocks `inline::folded` finds the
-//! callee no longer does, by the site's frequency. The thresholds are GCC's.
+//! Differences. GCC propagates lattices over the whole call graph and evaluates
+//! each value with its function summaries' time and size under the context
+//! (`good_cloning_opportunity_p`); here a site's known actuals are the
+//! constants the caller's own folding proved (`current_call_constants`), and
+//! the benefit is the clocks `inline::folded` finds the callee no longer does,
+//! by the site's frequency. The thresholds are GCC's.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -30,18 +35,22 @@ use crate::profit::{self, OperationCosts};
 
 /// `ipa-cp-eval-threshold` (params.opt:217).
 const EVAL_THRESHOLD: i64 = 500;
-/// `ipa-cp-max-recursive-depth` (params.opt:225), which `ipa-cp-value-list-size` (:253) also makes the clones one
-/// function gets.
+/// `ipa-cp-max-recursive-depth` (params.opt:225), which
+/// `ipa-cp-value-list-size` (:253) also makes the clones one function gets.
 const MAX_CLONES: usize = 8;
-/// Our clocks, at our block frequencies (held to ten trips), per GCC time unit: `place` with `row` known saves 667 here
-/// and 245.8 in GCC's dump (`-fdump-ipa-cp-details`), which also declines quicksort's clone (time 1) that this estimate
-/// has at 60 clocks.
+/// Our clocks, at our block frequencies (held to ten trips), per GCC time unit:
+/// `place` with `row` known saves 667 here and 245.8 in GCC's dump
+/// (`-fdump-ipa-cp-details`), which also declines quicksort's clone (time 1)
+/// that this estimate has at 60 clocks.
 const TIME_SCALE: i64 = 5;
-/// The most a block counts in a callee's time: the trips GCC's loop estimates stop at.
+/// The most a block counts in a callee's time: the trips GCC's loop estimates
+/// stop at.
 const MAX_FREQUENCY: i64 = 10;
-/// `ipa-cp-loop-hint-bonus` (params.opt:221): time units added where the known actuals make a loop's bound known.
+/// `ipa-cp-loop-hint-bonus` (params.opt:221): time units added where the known
+/// actuals make a loop's bound known.
 const LOOP_HINT_BONUS: i64 = 64;
-/// `ipa-cp-recursion-penalty` (params.opt:237): the percent a recursive function's benefit loses.
+/// `ipa-cp-recursion-penalty` (params.opt:237): the percent a recursive
+/// function's benefit loses.
 const RECURSION_PENALTY: i64 = 40;
 /// `ipa-cp-unit-growth` (params.opt:245) and `ipa-cp-large-unit-insns` (:249).
 const UNIT_GROWTH: i64 = 10;
@@ -53,7 +62,8 @@ pub struct Cloning {
     /// The function each clone is of.
     origin: BTreeMap<GlobalId, GlobalId>,
     made: BTreeMap<GlobalId, usize>,
-    /// The clone of a function for the constants it was called with: a value gets one.
+    /// The clone of a function for the constants it was called with: a value
+    /// gets one.
     contexts: BTreeMap<Key, GlobalId>,
     grown: i64,
 }
@@ -78,8 +88,8 @@ pub fn cloned(
     state: &mut Cloning,
 ) -> Changed {
     let mut changed = Changed { added: Vec::new(), edited: Vec::new() };
-    // GCC: "Not considering %s for cloning; -fipa-cp-clone disabled." What -O2 does without it is the propagation of
-    // constants every call agrees on.
+    // GCC: "Not considering %s for cloning; -fipa-cp-clone disabled." What -O2
+    // does without it is the propagation of constants every call agrees on.
     if !clone {
         return changed;
     }
@@ -124,8 +134,9 @@ pub fn cloned(
         {
             continue;
         }
-        // GCC clones only for a hot call (`ipcp_cloning_candidate_p`: "no hot calls"): one in a function that runs
-        // once, `main`, is hot only in a loop (`cgraph_edge::maybe_hot_p`: frequency 1.5 or more).
+        // GCC clones only for a hot call (`ipcp_cloning_candidate_p`: "no hot
+        // calls"): one in a function that runs once, `main`, is hot
+        // only in a loop (`cgraph_edge::maybe_hot_p`: frequency 1.5 or more).
         let hot =
             sites.iter().any(|&(caller, _, frequency)| !runs_once(module, caller) || frequency * 2 >= profit::UNIT * 3);
         if !hot {
@@ -135,10 +146,12 @@ pub fn cloned(
         let origin = state.origin.get(&name).copied().unwrap_or(name);
         if let Some(&existing) = state.contexts.get(&(origin, known.clone())) {
             if existing == name {
-                // A call of the clone, which still passes the constants it was made for.
+                // A call of the clone, which still passes the constants it was
+                // made for.
                 continue;
             }
-            // The calls that still name the function with these constants go to the clone already made for them.
+            // The calls that still name the function with these constants go to
+            // the clone already made for them.
             redirect(module, existing, &sites, &mut changed);
             continue;
         }
@@ -146,14 +159,16 @@ pub fn cloned(
             continue;
         }
         let size = inline::operations(body);
-        // Every call goes to the clone: the function it copies is dead, and the unit does not grow.
+        // Every call goes to the clone: the function it copies is dead, and the
+        // unit does not grow.
         let replaces = private.contains(&name)
             && !addressed.contains(&name)
             && counts.get(&name).copied().unwrap_or(0) == sites.len() as i64;
         let (saved, loops) = time_saved(module, layout, body, &known, &callees, costs);
         let frequency: i64 = sites.iter().map(|site| site.2).sum();
         let mut benefit = (saved / TIME_SCALE + if loops { LOOP_HINT_BONUS } else { 0 }) * frequency / profit::UNIT;
-        // GCC's `incorporate_penalties`: a function in a cycle with others, not one that calls itself.
+        // GCC's `incorporate_penalties`: a function in a cycle with others, not
+        // one that calls itself.
         let own = body.walk().any(|(_, inst)| llrm_mir::memory::callee(&module.context, body, inst) == Some(name));
         if recursive.contains(&name) && !own {
             benefit = benefit * (100 - RECURSION_PENALTY) / 100;
@@ -175,7 +190,8 @@ pub fn cloned(
         if !verdict {
             continue;
         }
-        // The copy: the constants for the parameters they are the actuals of, the function otherwise as it is.
+        // The copy: the constants for the parameters they are the actuals of,
+        // the function otherwise as it is.
         let mut copy = body.clone();
         for (&parameter, constant) in body.parameters().iter().zip(&known) {
             if let Some(constant) = constant {
@@ -215,8 +231,9 @@ pub fn cloned(
     changed
 }
 
-/// GCC's `time_benefit`: the clocks a call no longer spends in `body` given its known actuals: what they fold, and what
-/// only a branch they decide reaches, each at its block's frequency (a loop that does not run saves its trips).
+/// GCC's `time_benefit`: the clocks a call no longer spends in `body` given its
+/// known actuals: what they fold, and what only a branch they decide reaches,
+/// each at its block's frequency (a loop that does not run saves its trips).
 fn time_saved(
     module: &Module,
     layout: &DataLayout,
@@ -232,9 +249,10 @@ fn time_saved(
             values.insert(parameter, number);
         }
     }
-    // Optimistic constant propagation (Wegman and Zadeck): a value is not yet seen, a constant, or varying; a block is
-    // reached when a reached block's branch can go there; a phi is the meet of its reached edges. A loop whose
-    // first test is decided never runs.
+    // Optimistic constant propagation (Wegman and Zadeck): a value is not yet
+    // seen, a constant, or varying; a block is reached when a reached
+    // block's branch can go there; a phi is the meet of its reached edges. A
+    // loop whose first test is decided never runs.
     let mut folded = BTreeSet::new();
     let mut reached = BTreeSet::new();
     let mut edges: BTreeSet<(llrm_mir::module::BlockId, llrm_mir::module::BlockId)> = BTreeSet::new();
@@ -327,8 +345,9 @@ fn time_saved(
     }
     let frequency =
         profit::_frequencies(&module.context, &module.metadata, &module.globals, body, None).unwrap_or_default();
-    // A block runs about as often as GCC guesses a loop does (its time estimates stop at ten trips), not as often as
-    // the nest multiplies out.
+    // A block runs about as often as GCC guesses a loop does (its time
+    // estimates stop at ten trips), not as often as the nest multiplies
+    // out.
     let weight =
         |block| frequency.get(&cfg::id(block)).copied().unwrap_or(profit::UNIT).min(MAX_FREQUENCY * profit::UNIT);
     let (mut unknown, mut kept) = (0, 0);
@@ -342,8 +361,8 @@ fn time_saved(
             kept += price;
         }
     }
-    // `INLINE_HINT_loop_iterations`: a loop's exit tests a value the known actuals make constant against one that
-    // varies.
+    // `INLINE_HINT_loop_iterations`: a loop's exit tests a value the known
+    // actuals make constant against one that varies.
     let shape = cfg::Shape::of(body);
     let hint = shape
         .loops

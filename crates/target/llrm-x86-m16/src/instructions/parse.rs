@@ -1,5 +1,5 @@
-//! `x86.instr`'s reader. Its only dependency is `llrm-lir`, which a build script
-//! has too, so it can include this with `#[path]`.
+//! `x86.instr`'s reader. Its only dependency is `llrm-lir`, which a build
+//! script has too, so it can include this with `#[path]`.
 
 /// Condition codes, in iced's spelling, that `{cc}` expands to.
 pub const CONDITIONS: [&str; 16] =
@@ -39,9 +39,10 @@ pub struct Form {
     pub cost: String,
     /// Operands pinned to a register root when they are a register.
     pub fixed: Vec<(Side, usize, String)>,
-    /// Register roots it reads and writes beyond its operands (`push` uses `sp`). `-root` drops an operand register
-    /// the machine does not touch, `@8` only where the narrowest source is a byte: LIR carries DX through a byte
-    /// `div`, which leaves it alone.
+    /// Register roots it reads and writes beyond its operands (`push` uses
+    /// `sp`). `-root` drops an operand register the machine does not touch,
+    /// `@8` only where the narrowest source is a byte: LIR carries DX through a
+    /// byte `div`, which leaves it alone.
     pub reads: Vec<String>,
     pub writes: Vec<String>,
     /// iced's Code name, `{w}` still to substitute.
@@ -143,8 +144,9 @@ pub fn parse(text: &str) -> Result<Vec<Form>, String> {
     parse_rows(text, |_| true)
 }
 
-/// The forms that pin an operand to a register, for a reader that wants only those: the description is read at every
-/// compile, and a row costs about 5,000 instructions to read.
+/// The forms that pin an operand to a register, for a reader that wants only
+/// those: the description is read at every compile, and a row costs about 5,000
+/// instructions to read.
 pub fn pinned(text: &str) -> Result<Vec<Form>, String> {
     parse_rows(text, |pinned| pinned != "-")
 }

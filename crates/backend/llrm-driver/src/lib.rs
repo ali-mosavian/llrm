@@ -1,6 +1,6 @@
 //! The one place that names targets. A frontend asks for the target its flags
-//! name, among those it supports; nothing else in the tree matches on a target's
-//! name.
+//! name, among those it supports; nothing else in the tree matches on a
+//! target's name.
 
 use std::rc::Rc;
 
@@ -25,7 +25,8 @@ pub struct Bound {
 }
 
 impl Bound {
-    /// The driver's options for `machine`, selecting with this target's selector.
+    /// The driver's options for `machine`, selecting with this target's
+    /// selector.
     pub fn options(
         &self,
         flags: &Flags,
@@ -35,23 +36,24 @@ impl Bound {
     }
 }
 
-/// The options of the frontends that are built for 16-bit x86 only (BASIC, Nib, BC
-/// objects) and of the tests of those: the one place that names it for them.
+/// The options of the frontends that are built for 16-bit x86 only (BASIC, Nib,
+/// BC objects) and of the tests of those: the one place that names it for them.
 pub fn m16_options(machine: Machine) -> Options {
     let target: Rc<dyn Target> = Rc::new(llrm_x86_m16::M16);
     let selection = isel::selector(target.name()).expect("the 16-bit selector is built");
     Options::new(machine, target, selection)
 }
 
-/// BASIC's machine: real mode's, with its stack in the data group, which its programs run on.
+/// BASIC's machine: real mode's, with its stack in the data group, which its
+/// programs run on.
 pub fn m16_machine() -> Machine {
     use llrm_target::Target;
     llrm_x86_m16::M16.machine().with_stack_in_data()
 }
 
-/// The target `flags` name by its `-m` number (its `datalayout.toml` says which), or the default;
-/// refused if none is built in or the frontend does not build for it: `supported` lists the
-/// names of the ones it does, `None` any.
+/// The target `flags` name by its `-m` number (its `datalayout.toml` says
+/// which), or the default; refused if none is built in or the frontend does not
+/// build for it: `supported` lists the names of the ones it does, `None` any.
 pub fn target(
     flags: &Flags,
     supported: Option<&[&str]>,

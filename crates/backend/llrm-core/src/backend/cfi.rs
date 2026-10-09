@@ -1,11 +1,13 @@
-//! Call frame information, read back from the code as it was emitted: from every place in a function, how to
-//! find the caller's frame (the canonical frame address) and the registers the function saved.
+//! Call frame information, read back from the code as it was emitted: from
+//! every place in a function, how to find the caller's frame (the canonical
+//! frame address) and the registers the function saved.
 //!
-//! The code is decoded and followed from its entry along every path, so the rule is the code's own, whatever
-//! produced it: a frame register, none (a stack pointer that moves with each argument pushed), registers saved
-//! where first needed and restored before the return that needs it. A rule the code does not make
-//! single-valued (two paths reach a place with different stack depths) is refused: no information is better
-//! than a wrong one.
+//! The code is decoded and followed from its entry along every path, so the
+//! rule is the code's own, whatever produced it: a frame register, none (a
+//! stack pointer that moves with each argument pushed), registers saved
+//! where first needed and restored before the return that needs it. A rule the
+//! code does not make single-valued (two paths reach a place with different
+//! stack depths) is refused: no information is better than a wrong one.
 
 use iced_x86::{
     Code, Decoder, DecoderOptions, FlowControl, Instruction, InstructionInfoFactory, Mnemonic, OpAccess, OpKind,
@@ -28,7 +30,8 @@ struct State {
     stack: i64,
     /// The frame address minus the frame register, once it is set.
     frame: i64,
-    /// A register and where its value at entry was saved: its distance below the frame address.
+    /// A register and where its value at entry was saved: its distance below
+    /// the frame address.
     saved: Vec<(Register, i64)>,
     /// Registers written since the entry: a push of one of those is no save.
     changed: Vec<Register>,
@@ -42,10 +45,12 @@ fn name(register: Register) -> String {
     format!("{register:?}").to_lowercase()
 }
 
-/// The rows of the function whose bytes are `code`, entered with the frame address `entry` bytes past the stack
-/// pointer (the return address). `frame` is the register the code keeps its frame in, `stack` the stack pointer;
-/// `pops` the bytes a call popped, by the offset the call ends at. Code no path reaches (the targets of an
-/// indirect jump) is given no row, so it has the rule of the code before it.
+/// The rows of the function whose bytes are `code`, entered with the frame
+/// address `entry` bytes past the stack pointer (the return address). `frame`
+/// is the register the code keeps its frame in, `stack` the stack pointer;
+/// `pops` the bytes a call popped, by the offset the call ends at. Code no path
+/// reaches (the targets of an indirect jump) is given no row, so it has the
+/// rule of the code before it.
 pub fn rows(
     code: &[u8],
     bits: u32,
@@ -54,7 +59,8 @@ pub fn rows(
     entry: i64,
     pops: &[(usize, i64)],
 ) -> Result<Vec<FrameRow>, String> {
-    // Decoded where a path leads, never past a jump table or padding that is not code.
+    // Decoded where a path leads, never past a jump table or padding that is
+    // not code.
     let mut decoder = Decoder::with_ip(bits, code, 0, DecoderOptions::NONE);
     let mut decode = |at: usize| -> Result<Instruction, String> {
         decoder.set_position(at).map_err(|_| format!("a branch to {at}, outside the function"))?;
@@ -150,7 +156,8 @@ fn step(
     };
     match mnemonic {
         Mnemonic::Call => {
-            // The return address is pushed and popped by the callee; what it pops of the arguments is the stack's.
+            // The return address is pushed and popped by the callee; what it
+            // pops of the arguments is the stack's.
             state.stack -= pops.iter().filter(|(at, _)| *at == end).map(|(_, bytes)| bytes).sum::<i64>();
             return Ok(state);
         }
@@ -225,7 +232,8 @@ fn step(
     if written.contains(&stack) && !matches!(one.code(), Code::Pushad | Code::Popad) {
         return Err(format!("{mnemonic:?} writes the stack pointer at {}, which is not followed", one.ip()));
     }
-    // A write to the frame register while it holds the frame address would move it.
+    // A write to the frame register while it holds the frame address would move
+    // it.
     if state.base == Base::Frame && written.contains(&full(frame)) {
         return Err(format!("{mnemonic:?} writes the frame register at {}", one.ip()));
     }

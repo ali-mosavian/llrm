@@ -61,7 +61,8 @@ const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 
 impl Server {
-    /// The messages `message` causes: its reply, when it is a request, and notifications.
+    /// The messages `message` causes: its reply, when it is a request, and
+    /// notifications.
     fn handle(
         &mut self,
         message: &Value,
@@ -70,7 +71,8 @@ impl Server {
         let params = message.get("params").cloned().unwrap_or(Value::Null);
         match message.get("method").and_then(Value::as_str).unwrap_or("") {
             "initialize" => {
-                // The project's target: `initializationOptions: {"mode": 32}`, gcc's -m32; real mode's otherwise.
+                // The project's target: `initializationOptions: {"mode": 32}`,
+                // gcc's -m32; real mode's otherwise.
                 let named =
                     params.pointer("/initializationOptions/mode").and_then(Value::as_u64).map(|mode| mode as u32);
                 match named.map(frontend_for).transpose() {
@@ -121,7 +123,8 @@ impl Server {
         }
     }
 
-    /// Takes a document's new text, if any, and checks every open document again.
+    /// Takes a document's new text, if any, and checks every open document
+    /// again.
     fn edited<P: DeserializeOwned>(
         &mut self,
         params: Value,

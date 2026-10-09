@@ -31,7 +31,8 @@ pub(crate) fn _helper(
         direct_inputs: None,
         clobbers_reached: true,
         caller_cleanup: 0,
-        // Not a separately called 386 routine: `clobbers` describes the inline bytes exactly.
+        // Not a separately called 386 routine: `clobbers` describes the inline
+        // bytes exactly.
         i386: false,
         direct_writes: None,
         flags_result: false,
@@ -99,10 +100,11 @@ pub(crate) fn _four_clobbers() -> BTreeSet<Reg> {
     out
 }
 
-/// `bytes`, 386 code for a 16-bit segment, as the same instructions in a 32-bit one: each `66` operand-size prefix gone
-/// with the instruction's own operand size, a `ret` and a near jump or call taking the wider forms, every branch aimed
-/// again. Run as they were in a 32-bit segment the prefixes made 16-bit operations of them: a 64-bit remainder was
-/// garbage.
+/// `bytes`, 386 code for a 16-bit segment, as the same instructions in a 32-bit
+/// one: each `66` operand-size prefix gone with the instruction's own operand
+/// size, a `ret` and a near jump or call taking the wider forms, every branch
+/// aimed again. Run as they were in a 32-bit segment the prefixes made 16-bit
+/// operations of them: a 64-bit remainder was garbage.
 pub(crate) fn flat(bytes: &[u8]) -> Vec<u8> {
     use iced_x86::{
         BlockEncoder, BlockEncoderOptions, Code, Decoder, DecoderOptions, FlowControl, Instruction, InstructionBlock,
@@ -130,13 +132,15 @@ pub(crate) fn flat(bytes: &[u8]) -> Vec<u8> {
                 again
             }
             _ => {
-                // The operand size is in the code: the same instruction encodes without the prefix at 32 bits.
+                // The operand size is in the code: the same instruction encodes
+                // without the prefix at 32 bits.
                 one
             }
         };
         found.push(flat);
     }
-    // A branch to the end of the helper aims at what follows it: a nop there is the target, and is cut off after.
+    // A branch to the end of the helper aims at what follows it: a nop there is
+    // the target, and is cut off after.
     let mut end = Instruction::with(Code::Nopd);
     end.set_ip(bytes.len() as u64);
     found.push(end);
@@ -153,8 +157,8 @@ mod tests {
 
     use super::*;
 
-    /// The instructions of `bytes`, a branch's target as the index of the instruction it aims at (or their count, for
-    /// the end).
+    /// The instructions of `bytes`, a branch's target as the index of the
+    /// instruction it aims at (or their count, for the end).
     fn text(
         bytes: &[u8],
         bits: u32,
@@ -193,9 +197,10 @@ mod tests {
             .collect()
     }
 
-    /// Run in a 32-bit segment, the helpers' `66` prefixes made 16-bit operations of them: a 64-bit remainder by a
-    /// variable was wrong at every level (torture 920501-2). Each helper's instructions are the same ones, without
-    /// prefixes.
+    /// Run in a 32-bit segment, the helpers' `66` prefixes made 16-bit
+    /// operations of them: a 64-bit remainder by a variable was wrong at
+    /// every level (torture 920501-2). Each helper's instructions are the same
+    /// ones, without prefixes.
     #[test]
     fn test_the_division_helpers_are_the_same_instructions_at_32_bits() {
         for blob in [&*_UDIV, &*_SDIV, &*_UDIV_CONST32, &*_SDIV_CONST32] {

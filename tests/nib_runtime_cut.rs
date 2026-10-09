@@ -1,5 +1,6 @@
-//! `runtime.nib --used-by PROGRAM.obj` for a program that names no runtime routine: the cut runtime has no export and
-//! no entry, and tools/dosbatch could not link such a Nib program (#747).
+//! `runtime.nib --used-by PROGRAM.obj` for a program that names no runtime
+//! routine: the cut runtime has no export and no entry, and tools/dosbatch
+//! could not link such a Nib program (#747).
 
 use std::process::Command;
 

@@ -41,7 +41,8 @@ thread_local! {
     static SHARED_SLOTS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
-/// `run` with no phi web sharing a slot on this thread: every argument is stored on its edge.
+/// `run` with no phi web sharing a slot on this thread: every argument is
+/// stored on its edge.
 #[cfg(test)]
 pub fn without_shared_slots<T>(run: impl FnOnce() -> T) -> T {
     let before = SHARED_SLOTS.with(|one| one.replace(false));
@@ -50,8 +51,8 @@ pub fn without_shared_slots<T>(run: impl FnOnce() -> T) -> T {
     done
 }
 
-/// `run` with no phi taken into memory on this thread: every phi the registers cannot hold arrives in one and is
-/// stored.
+/// `run` with no phi taken into memory on this thread: every phi the registers
+/// cannot hold arrives in one and is stored.
 #[cfg(test)]
 pub fn without_memory_phis<T>(run: impl FnOnce() -> T) -> T {
     let before = MEMORY_PHIS.with(|one| one.replace(false));
@@ -60,9 +61,10 @@ pub fn without_memory_phis<T>(run: impl FnOnce() -> T) -> T {
     done
 }
 
-/// What one run of the spiller was asked and settled, for whoever built its phase: whether a loop's entry may load what
-/// the loop reads, and whether it changed the body and admitted a loop on a tie in the bytes it counts (the trips
-/// decided, and the encoded code may not agree).
+/// What one run of the spiller was asked and settled, for whoever built its
+/// phase: whether a loop's entry may load what the loop reads, and whether it
+/// changed the body and admitted a loop on a tie in the bytes it counts (the
+/// trips decided, and the encoded code may not agree).
 #[derive(Debug)]
 pub struct Run {
     pub admission: bool,
@@ -98,7 +100,8 @@ pub struct SsaSpill {
     pub run: Rc<Run>,
 }
 
-/// How much a block or an edge counts: by how often it runs, or once where the price is bytes.
+/// How much a block or an edge counts: by how often it runs, or once where the
+/// price is bytes.
 struct Weights<'a> {
     frequency: &'a Frequency,
     by_frequency: bool,
@@ -121,23 +124,28 @@ impl Weights<'_> {
     }
 }
 
-/// What a load from memory costs at the level being compiled, and whether it costs once per run or once per trip.
+/// What a load from memory costs at the level being compiled, and whether it
+/// costs once per run or once per trip.
 #[derive(Clone, Copy, Debug)]
 pub struct Prices {
     pub load: f64,
-    /// A jump: a branch's price on the machine, as the bridge block's last instruction takes it.
+    /// A jump: a branch's price on the machine, as the bridge block's last
+    /// instruction takes it.
     pub jump: f64,
-    /// By block frequency (clocks); not where the price is code bytes, which a loop's trips do not multiply.
+    /// By block frequency (clocks); not where the price is code bytes, which a
+    /// loop's trips do not multiply.
     pub by_frequency: bool,
 }
 
 impl Prices {
-    /// One clock a load and a jump, by block frequency: for a test that prices nothing in particular.
+    /// One clock a load and a jump, by block frequency: for a test that prices
+    /// nothing in particular.
     pub fn clocks() -> Self {
         Self { load: 1.0, jump: 1.0, by_frequency: true }
     }
 
-    /// The level `profile` compiles for: its machine's byte costs at -Os, its clocks otherwise.
+    /// The level `profile` compiles for: its machine's byte costs at -Os, its
+    /// clocks otherwise.
     pub fn of(profile: &crate::backend::cpu::Profile) -> Self {
         let machine = profile.target();
         let costs = if profile.size { machine.size_costs() } else { machine.costs() };
@@ -162,7 +170,8 @@ impl LIRTransform for SsaSpill {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        // A body nothing was done to is returned as it came: a copy loses what later phases know of it.
+        // A body nothing was done to is returned as it came: a copy loses what
+        // later phases know of it.
         let made = changed(&body, &mut self.frame.borrow_mut(), &self.segments, &self.classes, self.prices, &self.run)?;
         if made.is_some() {
             self.run.changed.set(true);
@@ -172,7 +181,8 @@ impl LIRTransform for SsaSpill {
 }
 
 /// The widest each value of `values` is read or written, a phi's result and
-/// arguments counting as one value: a value only phis name has no width of its own.
+/// arguments counting as one value: a value only phis name has no width of its
+/// own.
 pub(crate) fn widths_through_phis(
     body: &LirBody,
     values: &BTreeSet<u32>,
@@ -197,9 +207,11 @@ pub(crate) fn widths_through_phis(
         .collect()
 }
 
-/// The webs of phis: each value a phi names (its result or an argument) to the representative of the values joined to
-/// it by phis, transitively, and each representative to its members. (A fixpoint that grew every value's set from its
-/// members' sets, round after round, was cubic in the webs: 56 M of a 16-deep nest's compile.)
+/// The webs of phis: each value a phi names (its result or an argument) to the
+/// representative of the values joined to it by phis, transitively, and each
+/// representative to its members. (A fixpoint that grew every value's set from
+/// its members' sets, round after round, was cubic in the webs: 56 M of a
+/// 16-deep nest's compile.)
 fn phi_webs(body: &LirBody) -> (IndexMap<u32, u32>, IndexMap<u32, Vec<u32>>) {
     fn find(
         parent: &mut IndexMap<u32, u32>,
@@ -230,7 +242,8 @@ fn phi_webs(body: &LirBody) -> (IndexMap<u32, u32>, IndexMap<u32, Vec<u32>>) {
                     Some(joined) => {
                         let joined = find(&mut parent, joined);
                         if root != joined {
-                            // The smaller number is the root, so a web is named the same whatever order its phis come
+                            // The smaller number is the root, so a web is named
+                            // the same whatever order its phis come
                             // in.
                             let (low, high) = if joined < root { (joined, root) } else { (root, joined) };
                             parent.insert(high, low);
@@ -253,8 +266,8 @@ fn phi_webs(body: &LirBody) -> (IndexMap<u32, u32>, IndexMap<u32, Vec<u32>>) {
 
 /// What each block does with each value: where it reads it, in order.
 struct Flow {
-    /// The positions a block reads a value at; the block's length stands for its end,
-    /// where the phis of its successors read their arguments.
+    /// The positions a block reads a value at; the block's length stands for
+    /// its end, where the phis of its successors read their arguments.
     uses: IndexMap<i64, IndexMap<u32, Vec<usize>>>,
     /// Where a block defines a value (a phi result before position 0).
     defines: IndexMap<i64, IndexMap<u32, usize>>,
@@ -342,7 +355,8 @@ impl Flow {
             .unwrap_or(FAR)
     }
 
-    /// Distance from every block's entry to each live-in value's next use, to a fixed point.
+    /// Distance from every block's entry to each live-in value's next use, to a
+    /// fixed point.
     fn distances(
         &mut self,
         body: &LirBody,
@@ -369,8 +383,9 @@ impl Flow {
         }
     }
 
-    /// Whether `value` is read after position `at` of `block`, or lives out of it. Death is
-    /// decided here and never from `next_use`: its `FAR` is also what an unconverged distance reads.
+    /// Whether `value` is read after position `at` of `block`, or lives out of
+    /// it. Death is decided here and never from `next_use`: its `FAR` is
+    /// also what an unconverged distance reads.
     fn live_after(
         &self,
         block: i64,
@@ -400,8 +415,8 @@ impl Flow {
     }
 }
 
-/// A register file the spiller keeps within its size: the general registers, or the segment registers a selector value
-/// sits in.
+/// A register file the spiller keeps within its size: the general registers, or
+/// the segment registers a selector value sits in.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum File {
     General,
@@ -414,7 +429,8 @@ struct Machine<'a> {
     /// What the target requires of each instruction's operands.
     classes: &'a RegisterClasses,
     file: File,
-    /// The data segment register, which an instruction that needs the data group takes from the selectors.
+    /// The data segment register, which an instruction that needs the data
+    /// group takes from the selectors.
     data: Register,
     /// The file's registers (whole, as the allocator names them).
     general: BTreeSet<Register>,
@@ -452,7 +468,8 @@ impl<'a> Machine<'a> {
         }
     }
 
-    /// A value that lives in a register of this file at all: a selector only where the program names it so.
+    /// A value that lives in a register of this file at all: a selector only
+    /// where the program names it so.
     fn registered(
         &self,
         value: u32,
@@ -476,11 +493,12 @@ impl<'a> Machine<'a> {
             .map(|class| class.iter().map(|one| _whole(*one)).filter(|one| self.general.contains(one)).collect())
     }
 
-    /// Whether `held` fits `room` registers, and its values satisfy Hall's condition
-    /// over the classes: a byte value always (no other register has a byte half), a
-    /// value confined to one register (an address base) only for the `acting` values,
-    /// which an instruction needs in it just now (a value waiting in another register
-    /// costs a copy to act, not a place).
+    /// Whether `held` fits `room` registers, and its values satisfy Hall's
+    /// condition over the classes: a byte value always (no other register
+    /// has a byte half), a value confined to one register (an address base)
+    /// only for the `acting` values, which an instruction needs in it just
+    /// now (a value waiting in another register costs a copy to act, not a
+    /// place).
     fn fits(
         &self,
         held: &BTreeSet<u32>,
@@ -501,7 +519,8 @@ impl<'a> Machine<'a> {
     }
 }
 
-/// The registers an instruction states it takes: what it requires, delivers or clobbers.
+/// The registers an instruction states it takes: what it requires, delivers or
+/// clobbers.
 fn stated(
     one: &Insn,
     general: &BTreeSet<Register>,
@@ -520,14 +539,16 @@ fn stated(
     out
 }
 
-/// Values the spiller leaves alone: x87 values, pinned ones, and the body's inputs.
+/// Values the spiller leaves alone: x87 values, pinned ones, and the body's
+/// inputs.
 pub(crate) fn untouchable(body: &LirBody) -> BTreeSet<u32> {
     let mut out = floating(body);
     out.extend(body.pins.keys().copied().chain(body.inputs.iter().copied()));
     out
 }
 
-/// Values no general register holds: x87 values and wider ones, and every phi web they join.
+/// Values no general register holds: x87 values and wider ones, and every phi
+/// web they join.
 pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
     let mut out: BTreeSet<u32> = BTreeSet::new();
     for one in body.insns() {
@@ -543,7 +564,8 @@ pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
             }
         }
     }
-    // A phi joins its result and arguments: the web is as wide as its widest member.
+    // A phi joins its result and arguments: the web is as wide as its widest
+    // member.
     loop {
         let mut grew = false;
         for block in &body.blocks {
@@ -564,9 +586,10 @@ pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
     out
 }
 
-/// `one` reading `value` from `cell` as its second source (`op reg, [slot]`), a commutative
-/// operation turning its operands over first, as Greedy folds a spilled source; None where it cannot.
-/// The operand is as wide as the instruction reads it, which may be less than the slot.
+/// `one` reading `value` from `cell` as its second source (`op reg, [slot]`), a
+/// commutative operation turning its operands over first, as Greedy folds a
+/// spilled source; None where it cannot. The operand is as wide as the
+/// instruction reads it, which may be less than the slot.
 pub(crate) fn folded_into(
     one: &Insn,
     value: u32,
@@ -621,7 +644,8 @@ struct Edits {
     at_end: Vec<u32>,
     /// Values an instruction reads from their slot, at each position.
     folded: IndexMap<usize, Vec<u32>>,
-    /// Values that leave the register set while live, before the instruction at each position.
+    /// Values that leave the register set while live, before the instruction at
+    /// each position.
     leaves: IndexMap<usize, Vec<u32>>,
     /// Values that leave it before the block's terminators.
     leaves_at_end: Vec<u32>,
@@ -641,7 +665,8 @@ pub fn spilled(
     Ok(changed(body, frame, segments, classes, prices, &Run::default())?.unwrap_or_else(|| body.clone()))
 }
 
-/// `body` spilled, or None where there was nothing to spill and nothing to simplify.
+/// `body` spilled, or None where there was nothing to spill and nothing to
+/// simplify.
 fn changed(
     original: &LirBody,
     frame: &mut Frame,
@@ -652,7 +677,8 @@ fn changed(
 ) -> Result<Option<LirBody>, String> {
     let simple = llrm_support::debug::timed("ssa simplified", || ssarepair::simplified(original));
     let body = simple.as_ref().unwrap_or(original);
-    // The loops, found once: depths, headers and each loop's pressure all come from them.
+    // The loops, found once: depths, headers and each loop's pressure all come
+    // from them.
     let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
     let flow = llrm_support::debug::timed("ssa flow", || Flow::of(body, &loops));
     let confined =
@@ -671,7 +697,8 @@ fn changed(
         if machine.general.is_empty() {
             continue;
         }
-        // A selector is read from its cell or loaded into a register: never a constant it is made from.
+        // A selector is read from its cell or loaded into a register: never a
+        // constant it is made from.
         let kept: IndexMap<u32, Arc<Insn>> = match file {
             File::General => remakes.clone(),
             File::Selector => remakes
@@ -695,7 +722,8 @@ fn changed(
     if result.stored.is_empty() {
         return Ok(simple);
     }
-    // A value is stored once after its definition, or where it leaves the registers, whichever runs less.
+    // A value is stored once after its definition, or where it leaves the
+    // registers, whichever runs less.
     let mut home: IndexMap<u32, i64> = IndexMap::default();
     for (at, made) in &flow.defines {
         for value in made.keys() {
@@ -745,7 +773,8 @@ fn changed(
     })))
 }
 
-/// `body` without the definitions of remade selectors that nothing reads any more: each read made its own.
+/// `body` without the definitions of remade selectors that nothing reads any
+/// more: each read made its own.
 fn without_dead_remakes(
     body: LirBody,
     remade: &BTreeSet<u32>,
@@ -795,8 +824,9 @@ fn without_dead_remakes(
     body.with_blocks(blocks)
 }
 
-/// The simulation of one register file's values over every block; for the selectors, the cheaper at this level's price
-/// of holding at a loop's entry what no predecessor ends with, or not.
+/// The simulation of one register file's values over every block; for the
+/// selectors, the cheaper at this level's price of holding at a loop's entry
+/// what no predecessor ends with, or not.
 #[allow(clippy::too_many_arguments)]
 fn simulated_in(
     body: &LirBody,
@@ -825,8 +855,9 @@ fn simulated_in(
     if machine.file != File::Selector || !run.admission {
         return first;
     }
-    // Whether a loop's entry loads what the loop reads: none, all, or each loop by itself; priced by the level's
-    // measure (bytes at -Os), and by the trips where that measure ties.
+    // Whether a loop's entry loads what the loop reads: none, all, or each loop
+    // by itself; priced by the level's measure (bytes at -Os), and by the
+    // trips where that measure ties.
     let none: BTreeSet<(i64, i64)> = body.critical_edges().into_iter().collect();
     let by_trips = Weights { frequency, by_frequency: true };
     let tied = std::cell::Cell::new(false);
@@ -868,7 +899,8 @@ fn simulated_in(
     kept
 }
 
-/// `simulated_in` with the entry load of a loop settled: the values a loop header does not keep, to a fixed point.
+/// `simulated_in` with the entry load of a loop settled: the values a loop
+/// header does not keep, to a fixed point.
 #[allow(clippy::too_many_arguments)]
 fn simulated_with(
     body: &LirBody,
@@ -886,13 +918,16 @@ fn simulated_with(
     bridged: &BTreeSet<(i64, i64)>,
     admit: &BTreeSet<i64>,
 ) -> Simulated {
-    // A value a loop's back edge must reload each trip is not worth holding at its header.
+    // A value a loop's back edge must reload each trip is not worth holding at
+    // its header.
     let mut dropped: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
-    // The most values live at once in each loop, which decides whether what it does not read can wait in registers.
+    // The most values live at once in each loop, which decides whether what it
+    // does not read can wait in registers.
     let room = loop_room(body, flow, machine, skip, loops);
-    // The phis a block cannot take into registers live in memory: found by a first pass, then held out of the
-    // registers. Each round leaves one register to the moves of a block with a memory phi, which can push another
-    // phi out.
+    // The phis a block cannot take into registers live in memory: found by a
+    // first pass, then held out of the registers. Each round leaves one
+    // register to the moves of a block with a memory phi, which can push
+    // another phi out.
     let mut memory: BTreeSet<u32> = BTreeSet::new();
     for _ in 0..if MEMORY_PHIS.with(std::cell::Cell::get) { 4 } else { 0 } {
         let probe =
@@ -906,7 +941,8 @@ fn simulated_with(
     let mut result =
         simulated(body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers, admit, &memory);
     // A loop header keeps a value its back edge must reload only while those
-    // reloads run at most half as often as reloads at its first uses inside one trip.
+    // reloads run at most half as often as reloads at its first uses inside one
+    // trip.
     for _ in 0..4 {
         let mut more = false;
         for ((from, to), values) in &result.across {
@@ -922,8 +958,9 @@ fn simulated_with(
                     .map(|block| weights.edge(block.at, *to))
                     .sum();
                 let drop = first_uses(flow, weights, &within.body, *to, *value);
-                // Holding the value costs its register through the trip as well: keep it only when the back edge
-                // reloads it rarely.
+                // Holding the value costs its register through the trip as
+                // well: keep it only when the back edge reloads
+                // it rarely.
                 if 2.0 * keep >= drop {
                     more |= dropped.entry(*to).or_default().insert(*value);
                 }
@@ -935,11 +972,14 @@ fn simulated_with(
         result =
             simulated(body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers, admit, &memory);
     }
-    // Dropping what a loop evicts leaves the loop's registers short of use: a value is let back in
-    // where the loop then moves less to and from memory.
+    // Dropping what a loop evicts leaves the loop's registers short of use: a
+    // value is let back in where the loop then moves less to and from
+    // memory.
     if machine.file == File::Selector {
-        // The jump a bridge on a loop's back edge takes runs every trip, unless another file's values already bring the
-        // bridge; and what a loop that fits its registers does not hold, it need not bridge to hold.
+        // The jump a bridge on a loop's back edge takes runs every trip, unless
+        // another file's values already bring the bridge; and what a
+        // loop that fits its registers does not hold, it need not bridge to
+        // hold.
         let critical: BTreeSet<(i64, i64)> = body
             .critical_edges()
             .into_iter()
@@ -968,7 +1008,8 @@ fn simulated_with(
     result
 }
 
-/// What a simulation moves to and from memory, by block frequency: reloads, operands read in place, and edge reloads.
+/// What a simulation moves to and from memory, by block frequency: reloads,
+/// operands read in place, and edge reloads.
 fn traffic(
     bits: u32,
     result: &Simulated,
@@ -1009,8 +1050,9 @@ fn traffic(
     blocks + edges + stores + moves
 }
 
-/// What reading `value` from memory costs: a load by `prices`; where the code is what counts (-Os), the bytes the
-/// load that makes it again encodes to, in a selector register and with its address registers as they will be.
+/// What reading `value` from memory costs: a load by `prices`; where the code
+/// is what counts (-Os), the bytes the load that makes it again encodes to, in
+/// a selector register and with its address registers as they will be.
 fn reload_price(
     bits: u32,
     value: u32,
@@ -1068,7 +1110,8 @@ fn remakable(
             out.insert(*value, Arc::clone(only));
         }
     }
-    // A plain copy of a value made again is made again the same way: its own, as wide as it is.
+    // A plain copy of a value made again is made again the same way: its own,
+    // as wide as it is.
     for (value, source) in copies {
         let Some(made) = out.get(&source) else { continue };
         let width = made
@@ -1091,8 +1134,9 @@ fn remakable(
     out
 }
 
-/// The cell a remade `value` is read from, where its one instruction is a plain load: a user that
-/// takes a memory operand reads it there, with no register made for it.
+/// The cell a remade `value` is read from, where its one instruction is a plain
+/// load: a user that takes a memory operand reads it there, with no register
+/// made for it.
 fn remade_cell(
     one: &Insn,
     value: u32,
@@ -1108,7 +1152,8 @@ fn remade_cell(
     }
 }
 
-/// `one` where it is read again: made once more beside `beside`, owning no bytes.
+/// `one` where it is read again: made once more beside `beside`, owning no
+/// bytes.
 fn remade(
     one: &Insn,
     beside: &Insn,
@@ -1127,15 +1172,18 @@ struct Simulated {
     across: IndexMap<(i64, i64), Vec<u32>>,
     left: IndexMap<(i64, i64), Vec<u32>>,
     stored: BTreeSet<u32>,
-    /// Phi results that live in their slot: what each in-edge hands them is stored there, `(argument, result)`.
+    /// Phi results that live in their slot: what each in-edge hands them is
+    /// stored there, `(argument, result)`.
     memory: BTreeSet<u32>,
-    /// An argument that shares its phi result's slot: stored where it is defined, and no code on the edge.
+    /// An argument that shares its phi result's slot: stored where it is
+    /// defined, and no code on the edge.
     shared: IndexMap<u32, u32>,
     moves: IndexMap<(i64, i64), Vec<(u32, u32)>>,
 }
 
 impl Simulated {
-    /// This with the simulation of another file's values, which are other values.
+    /// This with the simulation of another file's values, which are other
+    /// values.
     fn merge(
         &mut self,
         other: Simulated,
@@ -1214,8 +1262,8 @@ fn simulated(
     }
     for at in order {
         let block = by_at[at];
-        // What is stored where it is defined, as often as this block runs, costs a store each time it leaves: evicted
-        // last.
+        // What is stored where it is defined, as often as this block runs,
+        // costs a store each time it leaves: evicted last.
         let hot =
             |value: &u32| made_in.get(value).is_some_and(|home| frequency.block(*home) >= 0.5 * frequency.block(*at));
         let mut done = Edits::default();
@@ -1247,18 +1295,22 @@ fn simulated(
             .collect();
         candidates.sort_unstable();
         let mut held: BTreeSet<u32> = BTreeSet::new();
-        // A memory phi's arguments go through a register on the way in: the block leaves one.
+        // A memory phi's arguments go through a register on the way in: the
+        // block leaves one.
         let top = k;
-        // Entering a loop, what is read only after it does not wait in a register.
+        // Entering a loop, what is read only after it does not wait in a
+        // register.
         let header = headers.contains(at);
-        // A loop that fits its registers with them keeps what it does not read; one that does not, makes room.
+        // A loop that fits its registers with them keeps what it does not read;
+        // one that does not, makes room.
         let through = candidates.iter().filter(|(_, near, _)| *near >= EXIT).count();
         let mut spare = match (header, room.get(at)) {
             (true, Some(peak)) if *peak > k => k.saturating_sub(peak - through.min(*peak)),
             _ => usize::MAX,
         };
         for (tier, near, value) in &candidates {
-            // What no predecessor ends with is reloaded where it is read, never on the edge.
+            // What no predecessor ends with is reloaded where it is read, never
+            // on the edge.
             let far = header && *near >= EXIT;
             if (!far || spare > 0) && (*tier < 2 || (header && admit.contains(at)) || block.arrives().contains(value)) {
                 let mut next = held.clone();
@@ -1313,7 +1365,8 @@ fn simulated(
                 }
             }
             evict(&mut held, &mut leaving, &used, k);
-            // What the instruction states it takes leaves less for what lives through it.
+            // What the instruction states it takes leaves less for what lives
+            // through it.
             let mut taken = stated(one, &machine.general, machine.classes);
             if machine.file == File::Selector
                 && machine.general.contains(&machine.data)
@@ -1321,7 +1374,8 @@ fn simulated(
             {
                 taken.insert(machine.data);
             }
-            // A register a value of this instruction sits in is that value's, not one more.
+            // A register a value of this instruction sits in is that value's,
+            // not one more.
             let mut covered: BTreeSet<Register> =
                 one.requires.iter().chain(&one.delivers).map(|(_, register)| _whole(*register)).collect();
             if let Some(what) = &one.what {
@@ -1350,7 +1404,8 @@ fn simulated(
                     leaving.push(victim);
                 }
             }
-            // The first source of a tied instruction gives its register to the result.
+            // The first source of a tied instruction gives its register to the
+            // result.
             let tied = one.what.as_ref().is_some_and(twoaddr::ties);
             let first = if tied {
                 one.what
@@ -1402,7 +1457,8 @@ fn simulated(
         }
         {
             let end = block.insns.len();
-            // An argument stored to a memory phi's slot that waits in memory is loaded into a register for the store.
+            // An argument stored to a memory phi's slot that waits in memory is
+            // loaded into a register for the store.
             let stored_through: BTreeSet<u32> = block
                 .succ
                 .iter()
@@ -1438,9 +1494,11 @@ fn simulated(
         done.w_out = held;
         edits.insert(*at, done);
     }
-    // Where a successor expects a register the predecessor does not end with, the edge reloads.
+    // Where a successor expects a register the predecessor does not end with,
+    // the edge reloads.
     let mut across: IndexMap<(i64, i64), Vec<u32>> = IndexMap::default();
-    // And where it ends with one the successor does not take, the value leaves on the edge.
+    // And where it ends with one the successor does not take, the value leaves
+    // on the edge.
     let mut left: IndexMap<(i64, i64), Vec<u32>> = IndexMap::default();
     for block in &body.blocks {
         for to in &block.succ {
@@ -1486,8 +1544,9 @@ fn simulated(
     Simulated { edits, across, left, stored, memory: memory.clone(), shared, moves }
 }
 
-/// The phis of `first` whose results the block does not take into registers, that can be stored through instead:
-/// result and arguments in this file, none of the arguments another such phi's result (the stores would need an order),
+/// The phis of `first` whose results the block does not take into registers,
+/// that can be stored through instead: result and arguments in this file, none
+/// of the arguments another such phi's result (the stores would need an order),
 /// and the result read somewhere.
 fn memory_phis(
     body: &LirBody,
@@ -1522,7 +1581,8 @@ fn memory_phis(
     let mut chosen: BTreeSet<u32> = BTreeSet::new();
     for block in &body.blocks {
         let Some(edit) = first.edits.get(&block.at) else { continue };
-        // What the block's parallel copy cannot hold in registers must be in memory; the price picks which.
+        // What the block's parallel copy cannot hold in registers must be in
+        // memory; the price picks which.
         let arriving: BTreeSet<u32> =
             edit.w_in.iter().copied().chain(block.arrives().into_iter().filter(|value| wanted(*value))).collect();
         let mut crowd = arriving.len().saturating_sub(machine.general.len());
@@ -1533,7 +1593,8 @@ fn memory_phis(
                 wanted(phi.result) && read.contains(&phi.result) && phi.incoming.iter().all(|(_, value)| wanted(*value))
             })
             .map(|phi| {
-                // A load at each read, a store on each in-edge, or at the definition of an argument that shares the
+                // A load at each read, a store on each in-edge, or at the
+                // definition of an argument that shares the
                 // slot.
                 let one = BTreeSet::from([phi.result]);
                 let shared = shared_slots(body, flow, remakes, &wanted, &one);
@@ -1554,8 +1615,9 @@ fn memory_phis(
             .collect();
         eligible.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         eligible.truncate(crowd);
-        // The register form spills each at the top and makes room for it at the copy by evicting what the block
-        // reads last, as the choice of what it holds at its top does: a store and the eviction's reloads.
+        // The register form spills each at the top and makes room for it at the
+        // copy by evicting what the block reads last, as the choice of
+        // what it holds at its top does: a store and the eviction's reloads.
         let top = weights.block(block.at);
         let mut held: Vec<(i64, u32)> = edit
             .w_in
@@ -1574,7 +1636,8 @@ fn memory_phis(
             })
             .collect();
         held.sort_unstable_by(|a, b| b.cmp(a));
-        // Past what it can evict the register form has no room: those are memory phis, whatever they cost.
+        // Past what it can evict the register form has no room: those are
+        // memory phis, whatever they cost.
         let forced = eligible.len().saturating_sub(held.len());
         chosen.extend(eligible.iter().take(forced).map(|(_, result)| *result));
         let rest = &eligible[forced..];
@@ -1602,8 +1665,9 @@ fn memory_phis(
     }
 }
 
-/// The arguments of the memory phis in `memory` that share their result's slot: stored where they are defined, which
-/// leaves the phi no code on the edge. A value shares only where it is dead whenever another member of the web is
+/// The arguments of the memory phis in `memory` that share their result's slot:
+/// stored where they are defined, which leaves the phi no code on the edge. A
+/// value shares only where it is dead whenever another member of the web is
 /// defined; any other argument is stored on its edge.
 fn shared_slots(
     body: &LirBody,
@@ -1650,8 +1714,9 @@ fn shared_slots(
     shared
 }
 
-/// What reloading `value` at its first register uses costs, within one trip of the loop
-/// `within` entered at `header`: the frequency of each block on that frontier.
+/// What reloading `value` at its first register uses costs, within one trip of
+/// the loop `within` entered at `header`: the frequency of each block on that
+/// frontier.
 fn first_uses(
     flow: &Flow,
     weights: &Weights<'_>,
@@ -1774,8 +1839,9 @@ fn written(
     let mut cells: IndexMap<u32, crate::model::ir::Mem> = IndexMap::default();
     for value in stored.iter().filter(|value| !remakes.contains_key(*value) && !shared.contains_key(*value)) {
         let width = widths.get(value).copied().unwrap_or(2);
-        // Its own keys: a later phase that spills a value with the same number (after phi elimination and coalescing
-        // renamed things) must not be handed this slot.
+        // Its own keys: a later phase that spills a value with the same number
+        // (after phi elimination and coalescing renamed things) must
+        // not be handed this slot.
         cells.insert(*value, frame.cell(("ssaspill", i64::from(*value)), width).map_err(|error| error.to_string())?);
     }
     // An argument that shares a phi result's slot: the same cell.
@@ -1807,7 +1873,8 @@ fn written(
     }
     let critical = body.critical_edges();
     let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    // What code put in a block sits beside: its last instruction, or the block's own address when it has none.
+    // What code put in a block sits beside: its last instruction, or the
+    // block's own address when it has none.
     let anchor =
         |block: &LirBlock| -> Arc<Insn> {
             block
@@ -1822,11 +1889,12 @@ fn written(
     let mut next_at = body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1;
     let mut bridges: Vec<LirBlock> = Vec::new();
     let mut retarget: IndexMap<(i64, i64), i64> = IndexMap::default();
-    // Edge code at the end of a predecessor with one successor, at the start of a successor with one predecessor, else
-    // in a block on the edge.
+    // Edge code at the end of a predecessor with one successor, at the start of
+    // a successor with one predecessor, else in a block on the edge.
     let mut at_end: IndexMap<i64, Vec<(i64, Code)>> = IndexMap::default();
     let mut at_top: IndexMap<i64, Vec<(i64, Code)>> = IndexMap::default();
-    // An argument leaves for the slot of the phi result it feeds, from a register or by way of one.
+    // An argument leaves for the slot of the phi result it feeds, from a
+    // register or by way of one.
     let encode = |beside: &Insn, from: i64, one: Code| -> Vec<Arc<Insn>> {
         match one {
             Code::Store(value) => vec![store(beside, value)],
@@ -1986,8 +2054,10 @@ fn written(
 mod tests {
     use super::*;
 
-    /// A copy of a load was made again as that load, from the source's stability alone: the cell it read was written
-    /// before the copy's last use, and the fuzz of the shared predicate stored through a wrong address.
+    /// A copy of a load was made again as that load, from the source's
+    /// stability alone: the cell it read was written before the copy's last
+    /// use, and the fuzz of the shared predicate stored through a wrong
+    /// address.
     #[test]
     fn test_a_copy_of_a_load_is_not_remade_after_its_cell_changes() {
         use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
@@ -2018,13 +2088,16 @@ mod tests {
         ];
         let body = LirBody::new("t", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
         let made = remakable(&body, &BTreeSet::from([1, 2]));
-        // The load is made again for its copies too, so it holds only to the last of their uses.
+        // The load is made again for its copies too, so it holds only to the
+        // last of their uses.
         assert!(!made.contains_key(&2), "the copy is read after the cell was written");
         assert!(!made.contains_key(&1), "the load is made again for a copy read after the write");
     }
 
-    /// A load the optimizer proved no write in the loop changes was held in a stack slot all the same: a store through
-    /// a far pointer has no address in LIR, so the cell never held (particle bas: +0.6% instructions, +30 B).
+    /// A load the optimizer proved no write in the loop changes was held in a
+    /// stack slot all the same: a store through a far pointer has no
+    /// address in LIR, so the cell never held (particle bas: +0.6%
+    /// instructions, +30 B).
     fn spared_body(
         spared: bool,
         store_address: Option<crate::model::ir::Addr>,
@@ -2091,9 +2164,11 @@ mod tests {
         );
     }
 
-    /// Before #516 nothing in `remakable` or `_stable_loads_through` looked at `volatile` (the #507 path included): a
-    /// load of a device cell, read twice, was made again at its second use, a second read the program never asked
-    /// for. No bench or QCport object differs with the guard removed, so no blessed row since #507 depended on it.
+    /// Before #516 nothing in `remakable` or `_stable_loads_through` looked at
+    /// `volatile` (the #507 path included): a load of a device cell, read
+    /// twice, was made again at its second use, a second read the program never
+    /// asked for. No bench or QCport object differs with the guard removed,
+    /// so no blessed row since #507 depended on it.
     #[test]
     fn test_a_volatile_load_is_never_made_again() {
         use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};

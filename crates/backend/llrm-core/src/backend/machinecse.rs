@@ -489,7 +489,8 @@ mod tests {
 
     #[test]
     fn test_address_coefficients_are_part_of_the_expression_identity() {
-        // `ax + si*2` and `si + ax*2` read the same lanes and compute different numbers.
+        // `ax + si*2` and `si + ax*2` read the same lanes and compute different
+        // numbers.
         let lea = |at: i64, covers: (i64, i64), through: Register, index: Register, defines: u32| {
             Arc::new(Insn::new(
                 at,

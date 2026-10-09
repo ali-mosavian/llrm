@@ -39,13 +39,15 @@ impl Parsed {
         name: &str,
     ) -> bool {
         let unit = self.unit();
-        // The manager's bounds of the body, as the analysis that asks carries them.
+        // The manager's bounds of the body, as the analysis that asks carries
+        // them.
         let bounds = ranges::bounds(&unit).unwrap();
         let unit = unit.with_bounds(&bounds);
         exact(&unit, &floatfacts::known(&unit, &Calls::default(), None)).unwrap().contains(&self.made(name))
     }
 
-    /// `_memory` of the load `%name`, its block's scope as `ranges::bounded` says.
+    /// `_memory` of the load `%name`, its block's scope as `ranges::bounded`
+    /// says.
     fn loaded(
         &self,
         name: &str,

@@ -1,8 +1,9 @@
-//! A masm module as an object: its code and data laid out in sections, each name resolved to where
-//! it is defined or declared, each reference to one a relocation. The result is a format-neutral
-//! `llrm_object::Object`; a writer crate turns it into bytes. A reference to anything the module
-//! defines is a relocation against its section with the addend in the code, as jwasm writes it;
-//! anything else is an undefined symbol.
+//! A masm module as an object: its code and data laid out in sections, each
+//! name resolved to where it is defined or declared, each reference to one a
+//! relocation. The result is a format-neutral `llrm_object::Object`; a writer
+//! crate turns it into bytes. A reference to anything the module defines is a
+//! relocation against its section with the addend in the code, as jwasm writes
+//! it; anything else is an undefined symbol.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -18,7 +19,8 @@ use crate::objectfile::omf;
 use crate::support::hash::IndexMap;
 use crate::support::pyrepr::{self, Repr};
 
-/// How an address is relocated: a near offset, a segment's selector, a far pointer.
+/// How an address is relocated: a near offset, a segment's selector, a far
+/// pointer.
 pub const OFFSET: Kind = Kind::Abs { width: 2 };
 pub const BASE: Kind = Kind::SegmentBase;
 pub const POINTER: Kind = Kind::FarPointer;
@@ -29,7 +31,8 @@ fn relative(width: usize) -> Kind {
     Kind::Branch { width }
 }
 
-/// The role of a data segment `name` that the object's classes name, and that it is otherwise.
+/// The role of a data segment `name` that the object's classes name, and that
+/// it is otherwise.
 fn data_role(
     name: &str,
     far_bss: bool,
@@ -306,7 +309,8 @@ fn pack_field(
     }
 }
 
-/// What a relocated field holds, sign-extended from the bytes that hold an offset.
+/// What a relocated field holds, sign-extended from the bytes that hold an
+/// offset.
 fn field(
     buffer: &[u8],
     at: usize,
@@ -498,8 +502,9 @@ fn built_inner(
     for (index, group) in groups.iter().enumerate() {
         _code(&mut segments[index], index, module, group, &mut symbols)?;
     }
-    // The BASIC dialect's records name an address by its offset alone, so they need the one code segment the module's
-    // code is in; CodeView 4 as C7 writes it has the segment in each address.
+    // The BASIC dialect's records name an address by its offset alone, so they
+    // need the one code segment the module's code is in; CodeView 4 as C7
+    // writes it has the segment in each address.
     if module.debug.as_ref().is_some_and(|debug| debug.dialect == llrm_object::debug::Dialect::Bc) && groups.len() != 1
     {
         return Err(Unencodable("-g of the BASIC dialect with a code segment per procedure".into()).into());
@@ -523,8 +528,9 @@ pub fn _data(
             masm::Datum::Fill(masm::Fill { size, byte: None }) => segment.skip(*size as usize),
             masm::Datum::Fill(masm::Fill { size, byte: Some(byte) }) => segment.put(&vec![*byte; *size as usize], &[]),
             masm::Datum::Pointer(masm::Pointer { name, offset, far, bytes }) => {
-                // A far pointer is an offset and a selector; a near one is the offset alone, as wide as the target's
-                // pointer (a 32-bit object's is a dword).
+                // A far pointer is an offset and a selector; a near one is the
+                // offset alone, as wide as the target's pointer
+                // (a 32-bit object's is a dword).
                 let loc = if *far {
                     POINTER
                 } else if bits == 32 {
@@ -581,7 +587,8 @@ pub fn _code_by(
             }
         }
     }
-    // Tuned for size, a long conditional jump may go through a `jmp` within reach.
+    // Tuned for size, a long conditional jump may go through a `jmp` within
+    // reach.
     let size = !group.is_empty() && group.iter().all(|&number| module.procedures[number].size);
     let bits = module.object.bitness;
     let labels = if size { _trampolined(&mut items, bits)? } else { _relaxed(&mut items, bits)? };
@@ -735,7 +742,8 @@ pub fn short_reaches(displacement: i64) -> bool {
     (-128..=127).contains(&displacement)
 }
 
-/// Every label's offset, with each jump short unless its target is out of reach.
+/// Every label's offset, with each jump short unless its target is out of
+/// reach.
 ///
 /// Short first and lengthened to a fixed point, as jwasm does: lengthening
 /// only moves targets further away, so it ends, and at the smallest layout.
@@ -754,7 +762,8 @@ pub fn _relaxed(
         let mut changed = false;
         at = 0;
         for item in items.iter_mut() {
-            // Measured before the jump may grow: `labels` is this pass's layout.
+            // Measured before the jump may grow: `labels` is this pass's
+            // layout.
             let length = _length(item, bits) as i64;
             if let Encoded::Jump(item) = item {
                 if !item.long {
@@ -775,10 +784,11 @@ pub fn _relaxed(
     }
 }
 
-/// Tuned for size, [`_relaxed`], then each conditional jump still long (a 386 `jcc rel16`, 4
-/// bytes) aimed at a label some `jmp` to it lies within short reach of becomes a short jump to
-/// that `jmp`, which carries on: 2 bytes saved, and the 3 clocks of a taken `jmp` more.
-/// Repeated while the shorter layout brings more within reach; Watcom's `SetBranches`.
+/// Tuned for size, [`_relaxed`], then each conditional jump still long (a 386
+/// `jcc rel16`, 4 bytes) aimed at a label some `jmp` to it lies within short
+/// reach of becomes a short jump to that `jmp`, which carries on: 2 bytes
+/// saved, and the 3 clocks of a taken `jmp` more. Repeated while the shorter
+/// layout brings more within reach; Watcom's `SetBranches`.
 pub fn _trampolined(
     items: &mut Vec<Encoded>,
     bits: u32,
@@ -817,7 +827,8 @@ pub fn _trampolined(
         if retargeted.is_empty() {
             return Ok(labels);
         }
-        // A label before each `jmp` taken, from the back so the indices below stay.
+        // A label before each `jmp` taken, from the back so the indices below
+        // stay.
         let mut taken: Vec<usize> = retargeted.iter().map(|(_, jump)| *jump).collect();
         taken.sort_unstable();
         taken.dedup();
@@ -887,8 +898,8 @@ pub fn _jump(
     }
 }
 
-/// The sections, symbols and relocations of `segments`, in `symbols`, the offsets of what they
-/// define, and `externs`, the kinds of what they declare.
+/// The sections, symbols and relocations of `segments`, in `symbols`, the
+/// offsets of what they define, and `externs`, the kinds of what they declare.
 pub fn object_of(
     module: &masm::Module,
     source: &str,
@@ -908,12 +919,14 @@ pub fn object_of(
         let printed = missing.iter().map(|one| pyrepr::string(one)).collect::<Vec<_>>().join(", ");
         return Err(Unencodable(format!("references to nothing defined or declared: [{printed}]")).into());
     }
-    // masm.text's order, data externals first; LINK searches libraries in EXTDEF order.
+    // masm.text's order, data externals first; LINK searches libraries in
+    // EXTDEF order.
     let mut declared: Vec<&String> = externs.keys().collect();
     declared.sort_by_key(|name| externs[*name] != "byte");
     let order: Vec<&String> =
         declared.into_iter().filter(|name| used.contains(*name) || module.requests.contains(*name)).collect();
-    // Every segment but the code and the debug sections is addressed in DGROUP, where there is one.
+    // Every segment but the code and the debug sections is addressed in DGROUP,
+    // where there is one.
     let grouped = |segment: &Segment| {
         bits == 16 && segment.near && matches!(
             segment.role,
@@ -933,7 +946,8 @@ pub fn object_of(
             group: None,
         })
         .collect();
-    // Data an object does not define is addressed in the group as its own data is.
+    // Data an object does not define is addressed in the group as its own data
+    // is.
     table.extend(order.iter().map(|name| Symbol {
         name: (*name).clone(),
         binding: Binding::Public,
@@ -1110,12 +1124,13 @@ mod tests {
         );
     }
 
-    /// Fresh QB D_SURF retained 83 jumps whose target label was physically next.
+    /// Fresh QB D_SURF retained 83 jumps whose target label was physically
+    /// next.
     ///
     /// SC_INIT alone printed ``jmp L21_2`` immediately before ``L21_2``. A
-    /// frontend is allowed to present explicit CFG edges; final emission owns the
-    /// physical block order and must not encode an unconditional edge that has
-    /// become fall-through.
+    /// frontend is allowed to present explicit CFG edges; final emission owns
+    /// the physical block order and must not encode an unconditional edge
+    /// that has become fall-through.
     #[test]
     fn test_fresh_emission_omits_an_explicit_jump_to_the_next_block() {
         let jump = insn(1, targeted(Operation::Jump, "jmp", 2));
@@ -1133,8 +1148,8 @@ mod tests {
     }
 
     /// The pass measured each item after a jump in it had grown, against labels
-    /// from before: a backward branch whose target also moved looked a byte out of
-    /// reach. 18 of 38 qcport objects came out longer than jwasm's.
+    /// from before: a backward branch whose target also moved looked a byte out
+    /// of reach. 18 of 38 qcport objects came out longer than jwasm's.
     #[test]
     fn test_a_jump_growing_before_a_backward_target_leaves_that_branch_short() {
         let mut items = vec![
@@ -1151,9 +1166,10 @@ mod tests {
         assert_eq!(labels["far"], 3 + 126 + 2 + 200);
     }
 
-    /// A `jcc rel16` (4 bytes) to a label a `jmp` to it is within short reach of is a short `jcc`
-    /// to that `jmp` (2): tuned for size, 141 of QCport's 1333 long conditional jumps. One with no
-    /// such `jmp`, or one out of reach, stays.
+    /// A `jcc rel16` (4 bytes) to a label a `jmp` to it is within short reach
+    /// of is a short `jcc` to that `jmp` (2): tuned for size, 141 of
+    /// QCport's 1333 long conditional jumps. One with no such `jmp`, or one
+    /// out of reach, stays.
     #[test]
     fn test_a_long_conditional_jump_goes_through_a_jump_to_its_target_within_reach() {
         let layout = |between: usize, jump_to: &str| {
@@ -1168,7 +1184,8 @@ mod tests {
             let labels = _trampolined(&mut items, 16).unwrap();
             (items.iter().map(|item| _length(item, 16)).sum::<usize>(), labels["far"])
         };
-        // 2 for the `je` short, the piece, a 3-byte `jmp`, and the 300 bytes: 2 + 20 + 3 + 300.
+        // 2 for the `je` short, the piece, a 3-byte `jmp`, and the 300 bytes: 2
+        // + 20 + 3 + 300.
         assert_eq!(layout(20, "far"), (2 + 20 + 3 + 300, 2 + 20 + 3 + 300));
         // The `jmp` aims elsewhere: the `je` is 4 long.
         assert_eq!(layout(20, "elsewhere").0, 4 + 20 + 3 + 300);
@@ -1176,8 +1193,10 @@ mod tests {
         assert_eq!(layout(200, "far").0, 4 + 200 + 3 + 300);
     }
 
-    /// The module of `test_externals_are_declared_in_the_order_jwasm_declares_them`,
-    /// whose jwasm half is deferred: text and object bytes as Python writes them.
+    /// The module of
+    /// `test_externals_are_declared_in_the_order_jwasm_declares_them`,
+    /// whose jwasm half is deferred: text and object bytes as Python writes
+    /// them.
     #[test]
     fn test_externals_module_matches_python() {
         let load = semantics(

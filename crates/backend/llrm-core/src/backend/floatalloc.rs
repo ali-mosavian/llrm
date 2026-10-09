@@ -84,7 +84,8 @@ pub(super) fn cell_of(load: &Insn) -> &Mem {
 }
 
 const _ARITHMETIC: [&str; 4] = ["fadd", "fsub", "fmul", "fdiv"];
-// `left op right` with the operands' places swapped: `st(i) := st(0) - st(i)` is `fsubr st(i),st(0)`.
+// `left op right` with the operands' places swapped: `st(i) := st(0) - st(i)`
+// is `fsubr st(i),st(0)`.
 const _REVERSED: [(&str, &str); 4] = [("fadd", "fadd"), ("fmul", "fmul"), ("fsub", "fsubr"), ("fdiv", "fdivr")];
 
 fn _reversed(name: &str) -> &'static str {
@@ -106,7 +107,8 @@ pub(super) fn _loads_memory(what: Option<&Semantics>) -> bool {
     })
 }
 
-/// Arithmetic on two floating values, as `result := left name right` with name in _ARITHMETIC.
+/// Arithmetic on two floating values, as `result := left name right` with name
+/// in _ARITHMETIC.
 pub(super) fn _two_values(what: Option<&Semantics>) -> Option<(String, Held, Held)> {
     let what = what?;
     if !matches!(what.op, Operation::FloatArith | Operation::FloatArithPop)
@@ -126,7 +128,8 @@ pub(super) fn _two_values(what: Option<&Semantics>) -> Option<(String, Held, Hel
     _ARITHMETIC.contains(&name).then(|| (name.to_owned(), *left, *right))
 }
 
-/// The instruction computing `name` with one operand read from `load`'s cell, if x87 has one.
+/// The instruction computing `name` with one operand read from `load`'s cell,
+/// if x87 has one.
 pub(super) fn _memory_name(
     name: &str,
     cell_is_left: bool,
@@ -139,7 +142,8 @@ pub(super) fn _memory_name(
     select::float_memory(&name, cell_of(load), select::At::bits16(0)).is_some().then_some(name)
 }
 
-/// The compare of a value against `load`'s cell: `fcomp`, or `ficomp` where the cell holds an integer `fild` reads.
+/// The compare of a value against `load`'s cell: `fcomp`, or `ficomp` where the
+/// cell holds an integer `fild` reads.
 pub(super) fn _compare_name(load: &Insn) -> &'static str {
     if name_is(load.what.as_ref().expect("a home load has semantics"), "fild") { "ficomp" } else { "fcomp" }
 }
@@ -203,7 +207,8 @@ impl _Stack {
     ) {
         self.sequence = block.insns.to_vec();
         (self.reads, self.defs) = (IndexMap::default(), IndexMap::default());
-        // A group's copies are simultaneous: all read at its first, all write at its last.
+        // A group's copies are simultaneous: all read at its first, all write
+        // at its last.
         let mut spans: IndexMap<i64, (i64, i64)> = IndexMap::default();
         for (position, instruction) in self.sequence.iter().enumerate() {
             if let (Some(group), Some(_)) = (instruction.group, _float_copy(instruction)) {
@@ -253,7 +258,8 @@ impl _Stack {
         }
     }
 
-    /// Before an instruction the stack cannot cross, where nothing is left on it.
+    /// Before an instruction the stack cannot cross, where nothing is left on
+    /// it.
     fn flush(&mut self) -> Result<(), Raised> {
         self.pop_dead();
         if !self.values.is_empty() {
@@ -281,7 +287,8 @@ impl _Stack {
             if self.values.contains(value) {
                 continue;
             }
-            // Not read on any path from here: the successors that share the slot pop it.
+            // Not read on any path from here: the successors that share the
+            // slot pop it.
             self.room(1)?;
             let filler = if self.values.is_empty() {
                 semantics(Operation::FloatLoad, "fldz", vec![st(0)], Vec::new())
@@ -291,7 +298,8 @@ impl _Stack {
             self.insert(filler);
             self.values.insert(0, *value);
         }
-        // Each exchange puts the top where it belongs, or brings the first misplaced value up.
+        // Each exchange puts the top where it belongs, or brings the first
+        // misplaced value up.
         while self.values != wanted {
             let slot = if self.values[0] == wanted[0] {
                 (0..wanted.len()).find(|slot| self.values[*slot] != wanted[*slot]).expect("the stacks differ")
@@ -324,7 +332,8 @@ impl _Stack {
         self.live_out.contains(&value) && self.next_def(value).is_none()
     }
 
-    /// Where the value is read after this instruction, before it is defined again.
+    /// Where the value is read after this instruction, before it is defined
+    /// again.
     fn pending(
         &mut self,
         value: u32,
@@ -444,8 +453,8 @@ impl _Stack {
         };
         let operands = held(&what.sources);
         let results = held(&what.dests);
-        // A result may be an operand's own name (`x = x / m`, the loop's carried value updated in place): that operand
-        // dies here.
+        // A result may be an operand's own name (`x = x / m`, the loop's
+        // carried value updated in place): that operand dies here.
         if results.len() > 1
             || (_float_copy(one).is_none()
                 && results.iter().any(|result| self.values.contains(result) && !operands.contains(result)))
@@ -486,7 +495,8 @@ impl _Stack {
             && operands.len() == 1
             && !results.is_empty()
         {
-            // A phi's copies on one edge are simultaneous: take the whole group here.
+            // A phi's copies on one edge are simultaneous: take the whole group
+            // here.
             let mut pairs = vec![(results[0], operands[0])];
             if let Some(group) = one.group {
                 for (position, other) in self.sequence.iter().enumerate().skip(self.here as usize + 1) {
@@ -592,14 +602,16 @@ impl _Stack {
             self.duplicate(left)?;
         }
         let what = self.one().what.clone().expect("a floating instruction has semantics");
-        // Fused from a home load, it is already `fcomp` or, over an integer cell, `ficomp`.
+        // Fused from a home load, it is already `fcomp` or, over an integer
+        // cell, `ficomp`.
         let name = if name_is(&what, "ficomp") { "ficomp" } else { "fcomp" };
         self.emit(Semantics { name: Some(name.to_owned()), dests: Vec::new(), sources: vec![st(0), cell], ..what });
         self.values.remove(0);
         self.status()
     }
 
-    /// `left` against `right`, the answer moved from the status word into the flags.
+    /// `left` against `right`, the answer moved from the status word into the
+    /// flags.
     fn compare(
         &mut self,
         left: u32,
@@ -679,8 +691,9 @@ impl _Stack {
         what: Semantics,
         result: u32,
     ) -> Result<(), Raised> {
-        // A value that stays is copied from where it is: exchanging it up first moved what lay above it. One the result
-        // is the new value of does not: its later reads are the result's.
+        // A value that stays is copied from where it is: exchanging it up first
+        // moved what lay above it. One the result is the new value of
+        // does not: its later reads are the result's.
         if source != result && self.survives(source) {
             self.duplicate(source)?;
         } else {
@@ -704,11 +717,13 @@ impl _Stack {
                 return Err(unlowered("floating stack input is unavailable"));
             }
         }
-        // An operand the result renames dies here: what reads it later reads the result.
+        // An operand the result renames dies here: what reads it later reads
+        // the result.
         let (mut dies_left, dies_right) =
             (left == result || !self.survives(left), right == result || !self.survives(right));
         if left == right {
-            // A value that stays is copied from where it is, and the product replaces the copy: no exchange.
+            // A value that stays is copied from where it is, and the product
+            // replaces the copy: no exchange.
             let depth = index_of(&self.values, left);
             if !dies_left && depth > 0 {
                 self.duplicate(left)?;
@@ -720,7 +735,8 @@ impl _Stack {
             let mut slot = 0;
             if !dies_left {
                 self.duplicate(left)?;
-                // Two copies of one value: the result takes the slot that leaves the sooner read on top.
+                // Two copies of one value: the result takes the slot that
+                // leaves the sooner read on top.
                 let (later, product) = (self.pending(left), self.pending(result));
                 slot = if !later.is_empty() && !product.is_empty() && later[0] < product[0] { 1 } else { 0 };
             }
@@ -729,7 +745,8 @@ impl _Stack {
             self.values[slot] = result;
             return Ok(());
         }
-        // LLVM's handleTwoArgFP: a dying operand goes on top so the result can overwrite it.
+        // LLVM's handleTwoArgFP: a dying operand goes on top so the result can
+        // overwrite it.
         if self.values[0] != left && self.values[0] != right {
             if dies_left || dies_right {
                 self.exchange(index_of(&self.values, if dies_left { left } else { right }));
@@ -774,7 +791,8 @@ pub(super) fn _float_copy(one: &Insn) -> Option<(u32, u32)> {
     }
 }
 
-/// The blocks in reverse postorder from the entry, then the unreachable ones, and how many are reached.
+/// The blocks in reverse postorder from the entry, then the unreachable ones,
+/// and how many are reached.
 fn _reverse_postorder(body: &LirBody) -> (Vec<i64>, usize) {
     let at_of: HashMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let (mut seen, mut order) = (HashSet::default(), Vec::new());

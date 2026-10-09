@@ -119,7 +119,8 @@ pub fn integer(expression: &Expr) -> Option<i64> {
     }
 }
 
-/// The literal a constant of `annotation` stands for: a number typed as declared.
+/// The literal a constant of `annotation` stands for: a number typed as
+/// declared.
 pub fn typed(
     literal: Expr,
     annotation: Option<&TypeAnnotation>,

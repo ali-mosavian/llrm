@@ -1,12 +1,13 @@
-//! -m32's default convention is Open Watcom's register one (calling.toml's `watcall32`): arguments in
-//! EAX, EDX, EBX, ECX, then the stack, popped by the callee. An explicit `cdecl32` keeps the stack.
-//! Each expectation was read from `wcc386 -3r`'s own output for the same signature.
+//! -m32's default convention is Open Watcom's register one (calling.toml's
+//! `watcall32`): arguments in EAX, EDX, EBX, ECX, then the stack, popped by the
+//! callee. An explicit `cdecl32` keeps the stack. Each expectation was read
+//! from `wcc386 -3r`'s own output for the same signature.
 
 use std::process::Command;
 
 /// The listing of `source` for -m32.
-/// `-fno-inline-functions`: these tests read one function's prologue and arguments; recursive inlining (#948) copies a
-/// recursive one into itself.
+/// `-fno-inline-functions`: these tests read one function's prologue and
+/// arguments; recursive inlining (#948) copies a recursive one into itself.
 fn listing(source: &str) -> String {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("t.nib");
@@ -42,7 +43,8 @@ fn pops_after(lines: &[String]) -> bool {
     lines.windows(2).any(|pair| pair[0].starts_with("call") && pair[1].starts_with("add esp"))
 }
 
-/// Before the default was registers, the third argument was read from [ebp+16]; it arrives in EBX.
+/// Before the default was registers, the third argument was read from [ebp+16];
+/// it arrives in EBX.
 #[test]
 fn the_first_four_arguments_arrive_in_eax_edx_ebx_ecx() {
     let text = listing(
@@ -52,8 +54,9 @@ fn the_first_four_arguments_arrive_in_eax_edx_ebx_ecx() {
     assert_eq!(procedure(&text, "fourth_"), ["L1_0:", "mov eax, ecx", "ret"]);
 }
 
-/// `wcc386` took the fifth and sixth from the stack, lowest first, and popped them with `ret 8`: a callee
-/// that left them for the caller to pop unbalanced every call.
+/// `wcc386` took the fifth and sixth from the stack, lowest first, and popped
+/// them with `ret 8`: a callee that left them for the caller to pop unbalanced
+/// every call.
 #[test]
 fn arguments_past_the_fourth_are_on_the_stack_and_the_callee_pops_them() {
     let text = listing(
@@ -68,7 +71,8 @@ fn arguments_past_the_fourth_are_on_the_stack_and_the_callee_pops_them() {
     assert_eq!(lines.last().map(String::as_str), Some("ret 8"));
 }
 
-/// A call passes in the same registers, pushes the rest right to left and does not pop what the callee does.
+/// A call passes in the same registers, pushes the rest right to left and does
+/// not pop what the callee does.
 #[test]
 fn a_call_loads_the_registers_and_pushes_the_rest_without_popping() {
     let text = listing(
@@ -83,8 +87,9 @@ fn a_call_loads_the_registers_and_pushes_the_rest_without_popping() {
     assert!(!pops_after(&lines), "{lines:?}");
 }
 
-/// `wcc386` sent `(int, double, int)` to EAX and two stack cells although EDX was free: the first argument that
-/// fits no register sends every later one to the stack. The callee read b from [ebp+16] and popped 12.
+/// `wcc386` sent `(int, double, int)` to EAX and two stack cells although EDX
+/// was free: the first argument that fits no register sends every later one to
+/// the stack. The callee read b from [ebp+16] and popped 12.
 #[test]
 fn the_argument_after_a_float_is_on_the_stack_too() {
     let text = listing("@export(\"watcall32\")\nfn after_float(a: i32, x: f64, b: i32) -> i32:\n    return b\n");
@@ -93,7 +98,8 @@ fn the_argument_after_a_float_is_on_the_stack_too() {
     assert_eq!(lines.last().map(String::as_str), Some("ret 12"));
 }
 
-/// An explicit cdecl32 keeps the stack: its arguments are pushed, its symbol is `_name`, and the caller pops.
+/// An explicit cdecl32 keeps the stack: its arguments are pushed, its symbol is
+/// `_name`, and the caller pops.
 #[test]
 fn an_explicit_cdecl32_keeps_stack_arguments_and_caller_cleanup() {
     let text = listing(
@@ -104,8 +110,9 @@ fn an_explicit_cdecl32_keeps_stack_arguments_and_caller_cleanup() {
     assert!(pops_after(&lines), "{lines:?}");
 }
 
-/// A callee keeps every register but EAX and those its arguments arrive in: `wcc386` pushed ECX and EDX
-/// around a body that used them, and `calls` below holds nothing in them across the call.
+/// A callee keeps every register but EAX and those its arguments arrive in:
+/// `wcc386` pushed ECX and EDX around a body that used them, and `calls` below
+/// holds nothing in them across the call.
 #[test]
 fn a_callee_saves_the_registers_it_uses_that_its_arguments_do_not() {
     let text = listing(
@@ -137,9 +144,11 @@ fn c_listing(
     std::fs::read_to_string(out).unwrap()
 }
 
-/// Under `-mabi=sysv` a `static` function took the stack too, though no one outside sees it (gcc passes it in
-/// registers, `regparm` for a `local` one): its arguments were read from [esp+4..], each call pushed them and popped
-/// them after. It takes the description's `private` convention; the exported function keeps sysv's.
+/// Under `-mabi=sysv` a `static` function took the stack too, though no one
+/// outside sees it (gcc passes it in registers, `regparm` for a `local` one):
+/// its arguments were read from [esp+4..], each call pushed them and popped
+/// them after. It takes the description's `private` convention; the exported
+/// function keeps sysv's.
 #[test]
 fn a_private_function_takes_registers_under_sysv_and_an_exported_one_keeps_the_stack() {
     let text = c_listing(
@@ -157,9 +166,11 @@ fn a_private_function_takes_registers_under_sysv_and_an_exported_one_keeps_the_s
     );
 }
 
-/// A callee keeps ECX under Watcom's convention unless its arguments arrive there; `g_` (two arguments, in EAX and EDX)
-/// called a cdecl routine, which clobbers ECX, and did not save it: a caller holding a value in ECX across `call g_`
-/// lost it (found as a crash at the end of tests/run/nib/flat_containers.nib under `-mabi=sysv`, whose private
+/// A callee keeps ECX under Watcom's convention unless its arguments arrive
+/// there; `g_` (two arguments, in EAX and EDX) called a cdecl routine, which
+/// clobbers ECX, and did not save it: a caller holding a value in ECX across
+/// `call g_` lost it (found as a crash at the end of
+/// tests/run/nib/flat_containers.nib under `-mabi=sysv`, whose private
 /// functions took the register convention).
 #[test]
 fn a_callee_saves_the_register_a_call_it_makes_clobbers() {
@@ -170,8 +181,10 @@ fn a_callee_saves_the_register_a_call_it_makes_clobbers() {
     assert!(lines.iter().any(|one| one == "pop ecx"), "{lines:?}");
 }
 
-/// `va_start` made the list's pointer with a 16-bit `lea ax,[esp+20]` and stored a word, whatever the target: on -m32
-/// every function with `...` that read an argument read through half a pointer (found by gcc.c-torture/20030914-2).
+/// `va_start` made the list's pointer with a 16-bit `lea ax,[esp+20]` and
+/// stored a word, whatever the target: on -m32 every function with `...` that
+/// read an argument read through half a pointer (found by
+/// gcc.c-torture/20030914-2).
 #[test]
 fn a_variadic_function_on_a_flat_target_makes_a_full_width_list_pointer() {
     let text = c_listing(&["-m32"], "int f(int a, int b, ...) { return b; }\n");

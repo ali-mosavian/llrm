@@ -1,4 +1,5 @@
-//! ShrinkWrap places the whole prologue: a function that leaves before it touches its frame builds none for that path.
+//! ShrinkWrap places the whole prologue: a function that leaves before it
+//! touches its frame builds none for that path.
 
 use std::process::Command;
 
@@ -32,8 +33,9 @@ fn early_path(listing: &str) -> String {
     listing.lines().take(end + 1).collect::<Vec<_>>().join("\n")
 }
 
-/// Every call paid `sub esp, 84` (m32, stack-addressed) or `push bp / mov bp, sp / sub sp, 40` (m16, framed) before the
-/// test that leaves at once (gcc and LLVM set the frame up after it).
+/// Every call paid `sub esp, 84` (m32, stack-addressed) or `push bp / mov bp,
+/// sp / sub sp, 40` (m16, framed) before the test that leaves at once (gcc and
+/// LLVM set the frame up after it).
 #[test]
 fn test_the_path_that_leaves_before_the_frame_is_used_builds_none() {
     for flags in [&["-O2", "-m32", "-march=i486"][..], &["-O2", "-m16"]] {

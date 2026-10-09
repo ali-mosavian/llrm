@@ -1,8 +1,11 @@
 //! `tests/test_hir.py` QB cases, part 3; helpers in `test_hir`.
 //!
-//! Also `tests/test_qbstages.py::test_stage_observer_uses_one_compilation_and_preserves_object_bytes`
-//! and `tests/test_qb_frontend_command.py::test_common_hir_profiles_do_not_become_qb_frontend_options`.
-// skipped: test_an_oversized_exact_loop_is_never_cloned_as_a_peel_candidate: monkeypatches loopclone.peeled
+//! Also `tests/test_qbstages.
+//! py::test_stage_observer_uses_one_compilation_and_preserves_object_bytes` and
+//! `tests/test_qb_frontend_command.
+//! py::test_common_hir_profiles_do_not_become_qb_frontend_options`.
+// skipped: test_an_oversized_exact_loop_is_never_cloned_as_a_peel_candidate:
+// monkeypatches loopclone.peeled
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -27,7 +30,8 @@ fn compat(path: &str) -> std::path::PathBuf {
     root().join("tests/differential/conformance").join(path)
 }
 
-/// `qb_driver.parsed(source, dialect=..., runtime=..., array_order=..., huge_arrays=..., checked_arrays=...)`.
+/// `qb_driver.parsed(source, dialect=..., runtime=..., array_order=...,
+/// huge_arrays=..., checked_arrays=...)`.
 fn parsed_with(
     source: &Path,
     dialect: &str,
@@ -126,7 +130,8 @@ fn has_indexed_field(
 }
 
 /// `re.finditer(r"\bj\w+ (\w+)\n", text)` when `newline`, else
-/// `re.findall(r"\bj(?!mp)\w+ (\w+)$", text, re.MULTILINE)`: `(start, end, label)`.
+/// `re.findall(r"\bj(?!mp)\w+ (\w+)$", text, re.MULTILINE)`: `(start, end,
+/// label)`.
 fn jumps(
     text: &str,
     newline: bool,
@@ -160,7 +165,8 @@ fn jumps(
 }
 
 /// `re.findall(r"^(\w+):$", text, re.MULTILINE)`.
-/// Labels of `re.findall(r"^(\w+):\n((?:    .*\n)*)", text, re.MULTILINE)` blocks calling B$...BND.
+/// Labels of `re.findall(r"^(\w+):\n((?:    .*\n)*)", text, re.MULTILINE)`
+/// blocks calling B$...BND.
 fn bound_call_labels(text: &str) -> BTreeSet<String> {
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let mut found = BTreeSet::new();
@@ -185,7 +191,8 @@ fn sum_three(checked: bool) -> String {
     text[start..end].to_owned()
 }
 
-/// `_backward_loop`: from the first label a later jump returns to, through that jump.
+/// `_backward_loop`: from the first label a later jump returns to, through that
+/// jump.
 fn backward_loop(procedure: &str) -> String {
     for (start, end, label) in jumps(procedure, true) {
         if let Some(at) = procedure.find(&format!("{label}:\n")) {
@@ -209,7 +216,8 @@ fn test_a_counter_whose_start_seeds_pointers_still_counts_to_zero() {
 
 #[test]
 fn test_a_loop_whose_exit_moves_a_value_closes_on_its_branch() {
-    // The exit's `mov ax,cx` sat after `retf`, so every trip ran `je` out and `jmp` back.
+    // The exit's `mov ax,cx` sat after `retf`, so every trip ran `je` out and
+    // `jmp` back.
     let loop_ = backward_loop(&sum_three(false));
     assert!(regex::Regex::new(r"\bjne \w+\n$").unwrap().is_match(&loop_), "{loop_}");
     assert!(!loop_.contains("jmp"), "{loop_}");
@@ -260,7 +268,8 @@ fn test_inline_square_leaves_no_float_live_out() {
     assert!(!object_bytes(&source, "SQUARE.BAS").expect("emits").is_empty());
 }
 
-/// SYS_MEM_MARK stopped before HIR because FRE("") was sent through numeric lowering.
+/// SYS_MEM_MARK stopped before HIR because FRE("") was sent through numeric
+/// lowering.
 #[test]
 fn test_string_fre_emits_the_measured_vbdos_runtime_call() {
     let directory = tempfile::TempDir::new().unwrap();
@@ -416,7 +425,8 @@ fn test_dynamic_array_walk_keeps_far_pointer_halves_defined() {
     assert!(!object_bytes(&source, "FARWALK.BAS").expect("emits").is_empty());
 }
 
-/// SCREEN stopped at ABI lowering although VBDOS B$DSG0 is a zero-argument RETF.
+/// SCREEN stopped at ABI lowering although VBDOS B$DSG0 is a zero-argument
+/// RETF.
 #[test]
 fn test_bare_def_seg_reaches_object_emission() {
     let directory = tempfile::TempDir::new().unwrap();
@@ -427,7 +437,8 @@ fn test_bare_def_seg_reaches_object_emission() {
     assert!(!names.iter().any(|one| one == "B$POKE"));
 }
 
-/// SCN9 called B$CSCN without B$EGAUSED, so LINK omitted EGA and SCREEN 9 raised error 5.
+/// SCN9 called B$CSCN without B$EGAUSED, so LINK omitted EGA and SCREEN 9
+/// raised error 5.
 #[test]
 fn test_constant_screen_mode_pulls_its_graphics_driver() {
     let directory = tempfile::TempDir::new().unwrap();
@@ -446,7 +457,8 @@ fn test_a_qb45_screen_mode_keeps_its_driver_request() {
     assert!(externals(&source, "SCN13.BAS").iter().any(|one| one == "B$VGAUSED"));
 }
 
-/// Gorillas SCREEN Mode linked no graphics modules and failed before drawing its first frame.
+/// Gorillas SCREEN Mode linked no graphics modules and failed before drawing
+/// its first frame.
 #[test]
 fn test_variable_screen_mode_pulls_all_graphics_drivers() {
     let directory = tempfile::TempDir::new().unwrap();
@@ -455,8 +467,9 @@ fn test_variable_screen_mode_pulls_all_graphics_drivers() {
     assert!(externals(&source, "SCNVAR.BAS").iter().any(|one| one == "B$GRPUSED"));
 }
 
-/// Gorillas emitted IDIV AX twice for 30 \\ (80 \\ MaxCol), faulting on its first shot.
-/// Once the frontend folded 80 to a LONG constant, lowering dropped it: `idiv eax`.
+/// Gorillas emitted IDIV AX twice for 30 \\ (80 \\ MaxCol), faulting on its
+/// first shot. Once the frontend folded 80 to a LONG constant, lowering dropped
+/// it: `idiv eax`.
 #[test]
 fn test_nested_integer_division_keeps_each_dividend() {
     let directory = tempfile::TempDir::new().unwrap();
@@ -529,8 +542,9 @@ fn test_a_raise_under_an_error_handler_resumes_after_its_statement() {
     );
     let source = parsed_as(&basic, "qb45", "qb45");
     let assembly = listing(&source);
-    // The raise names its statement (in whichever frame slot: the frame also holds the conversions' scratch cells), and
-    // RESUME NEXT from that statement continues at the PRINT.
+    // The raise names its statement (in whichever frame slot: the frame also
+    // holds the conversions' scratch cells), and RESUME NEXT from that
+    // statement continues at the PRINT.
     let raised =
         regex::Regex::new(r"mov word ptr \$QB\$FRAME\+\d+, (\d+)\n    pushw 5\n    call far ptr B\$SERR").unwrap();
     let statement = &raised.captures(&assembly).unwrap_or_else(|| panic!("{assembly}"))[1];
@@ -540,7 +554,8 @@ fn test_a_raise_under_an_error_handler_resumes_after_its_statement() {
     assert!(next.contains("call far ptr B$PER4"), "{assembly}");
 }
 
-/// ENT_MOVE_TRIGS passed a four-byte far field address to a two-byte scalar formal.
+/// ENT_MOVE_TRIGS passed a four-byte far field address to a two-byte scalar
+/// formal.
 #[test]
 fn test_byref_dynamic_array_field_copies_through_a_near_formal() {
     let directory = tempfile::TempDir::new().unwrap();
@@ -584,7 +599,8 @@ fn test_byref_dynamic_array_field_copies_through_a_near_formal() {
     assert!(!object_bytes(&source, "FARFIELD.BAS").expect("emits").is_empty());
 }
 
-/// Q45N01's native SUB SP shifted B$ENRA's documented frame fields by four bytes.
+/// Q45N01's native SUB SP shifted B$ENRA's documented frame fields by four
+/// bytes.
 #[test]
 fn test_runtime_frame_owns_spill_reservation_without_a_native_prefix() {
     let source = parsed_as(&compat("qb45/q45n01.bas"), "qb45", "qb45");
@@ -656,15 +672,16 @@ fn test_pds_huge_array_uses_measured_ddim_and_inline_huge_addresses() {
 #[test]
 fn test_byref_call_keeps_the_temporary_values_it_publishes() {
     let text = optimized_mir(&parsed_as(&compat("qb45/q45p04.bas"), "qb45", "qb45"));
-    // The sum is known: the program prints its PASS. A call to addLong that stays reads
-    // the slots its caller stores, so they stay too.
+    // The sum is known: the program prints its PASS. A call to addLong that
+    // stays reads the slots its caller stores, so they stay too.
     assert!(text.contains("PASS procedures") && !text.contains("FAIL"), "{text}");
     if text.lines().any(|line| line.contains("call") && line.contains("ADDLONG")) {
         assert!(text.contains("100000") && text.contains(" 23"), "{text}");
     }
 }
 
-/// FSTKBR's ``PICK = -1/0`` formerly left a volatile FILD live over its arm jump.
+/// FSTKBR's ``PICK = -1/0`` formerly left a volatile FILD live over its arm
+/// jump.
 ///
 /// Float allocation then refused the join with ``floating stack live-out
 /// requires cross-block allocation``.  `$arg` is only published when an
@@ -677,7 +694,8 @@ fn test_unpublished_float_conversion_temporary_does_not_hold_the_x87_stack_acros
     assert!(!object_bytes(&source, "FSTKBR.BAS").expect("emits").is_empty());
 }
 
-/// Q45LE71 reached B$LEFT but emission refused the previously VBDOS-only cleanup.
+/// Q45LE71 reached B$LEFT but emission refused the previously VBDOS-only
+/// cleanup.
 #[test]
 fn test_classic_string_stack_abis_are_measured_for_every_qb_runtime_family() {
     for family in [hir::RuntimeProfile::Qb45, hir::RuntimeProfile::Pds71, hir::RuntimeProfile::Vbdos] {
@@ -725,7 +743,8 @@ fn test_double_runtime_argument_is_split_high_to_low_at_the_qb_abi_boundary() {
     assert!(!object_bytes(&program, "Q45FP61.BAS").expect("emits").is_empty());
 }
 
-/// screen's green/blue fields formerly became an unlowerable address-of far cell.
+/// screen's green/blue fields formerly became an unlowerable address-of far
+/// cell.
 #[test]
 fn test_dynamic_fixed_field_address_compiles() {
     let source = parsed(&fixture("dynamic_fixed_fields.bas"));
@@ -739,14 +758,16 @@ fn test_segmented_local_array_address_splits_frame_base_from_dynamic_offset() {
     assert!(assembled(&source).is_ok());
 }
 
-/// common's g.env.cam_script formerly reached selection as ``lea [abs+offset]``.
+/// common's g.env.cam_script formerly reached selection as ``lea
+/// [abs+offset]``.
 #[test]
 fn test_byref_fixed_string_field_forms_far_offset_without_absolute_lea() {
     let source = parsed(&fixture("byref_fixed_string_field.bas"));
     assert!(assembled(&source).is_ok());
 }
 
-/// common's VAL result formerly vanished because its following load named no MIR use.
+/// common's VAL result formerly vanished because its following load named no
+/// MIR use.
 #[test]
 fn test_runtime_pointer_result_used_as_memory_base_is_an_explicit_mir_use() {
     let text = emitted_mir(&parsed(&fixture("val.bas")));
@@ -775,7 +796,8 @@ fn test_byval_float_is_stored_at_declared_width_before_stack_push() {
     assert!(assembled(&source).is_ok());
 }
 
-/// ent.bas reached B$RDIM with stack arguments but an object-raiser GP liveness contract.
+/// ent.bas reached B$RDIM with stack arguments but an object-raiser GP liveness
+/// contract.
 #[test]
 fn test_redim_stack_contract_uses_typed_rank_cleanup_not_register_arguments() {
     let directory = tempfile::tempdir().expect("a directory");
@@ -787,7 +809,8 @@ fn test_redim_stack_contract_uses_typed_rank_cleanup_not_register_arguments() {
     assert!(!after.lines().next().unwrap().contains("add sp"), "{assembly}");
 }
 
-/// r_bsp reached B$ERAS. VBDOS's erase.asm is QB 4.5's, so it shares the established OWN contract.
+/// r_bsp reached B$ERAS. VBDOS's erase.asm is QB 4.5's, so it shares the
+/// established OWN contract.
 #[test]
 fn test_vbdos_erase_uses_typed_stack_call_with_the_established_contract() {
     let directory = tempfile::tempdir().expect("a directory");
@@ -797,7 +820,8 @@ fn test_vbdos_erase_uses_typed_stack_call_with_the_established_contract() {
     assert!(!after.lines().next().unwrap().contains("add sp"), "{assembly}");
 }
 
-/// d_poly's SIN must stay an inline float value, not become B$SIN or cross CALL.
+/// d_poly's SIN must stay an inline float value, not become B$SIN or cross
+/// CALL.
 #[test]
 fn test_qb_inline_sin_is_inline_x87_without_a_runtime_call() {
     let directory = tempfile::tempdir().expect("a directory");
@@ -816,7 +840,8 @@ fn test_qb_inline_sin_is_inline_x87_without_a_runtime_call() {
     assert!(!wave.contains("B$SIN"), "{assembly}");
 }
 
-/// A fresh QB procedure must end in RETF n; semantic MIR carries no stack ABI bytes.
+/// A fresh QB procedure must end in RETF n; semantic MIR carries no stack ABI
+/// bytes.
 #[test]
 fn test_qb_finalizer_attaches_callee_cleanup_to_far_return() {
     let returned = lir::Insn::new(
@@ -932,7 +957,8 @@ fn test_whole_program_procedures_are_not_public() {
     assert!(!public(true));
 }
 
-/// `1 <= n` lowered to `cmp 1, bx`, which x86 cannot encode; UBOUND made it on every array.
+/// `1 <= n` lowered to `cmp 1, bx`, which x86 cannot encode; UBOUND made it on
+/// every array.
 #[test]
 fn test_a_constant_on_the_left_of_a_comparison_still_encodes() {
     let directory = tempfile::TempDir::new().unwrap();
@@ -965,7 +991,8 @@ fn test_array_parameters_do_not_pin_private_statics_inside_their_loop() {
     assert!(!loop_.contains("call"));
 }
 
-/// Every UBOUND called B$UBND, whose unknown writes pinned all memory around it.
+/// Every UBOUND called B$UBND, whose unknown writes pinned all memory around
+/// it.
 ///
 /// The descriptor holds the bounds; the call remains only where the runtime
 /// would raise "Subscript out of range".
@@ -988,7 +1015,8 @@ fn test_static_locals_are_stored_once_after_the_loop() {
     assert!(!backward_loop(&procedure).contains("SUM_THREE$D"));
 }
 
-/// LBOUND's runtime call was the fall-through; the descriptor read sat behind three jumps.
+/// LBOUND's runtime call was the fall-through; the descriptor read sat behind
+/// three jumps.
 ///
 /// The call only raises "Subscript out of range", so the frontend marks its
 /// block cold and layout places it after the return.
@@ -1036,7 +1064,8 @@ fn test_the_first_dimension_is_not_rank_checked() {
     assert_eq!(branches.len(), 2, "{branches:?}");
 }
 
-/// Without -fsanitize=bounds LBOUND trusts the descriptor: no B$LBND/B$UBND fallback.
+/// Without -fsanitize=bounds LBOUND trusts the descriptor: no B$LBND/B$UBND
+/// fallback.
 #[test]
 fn test_unchecked_bounds_read_the_descriptor_without_runtime_calls() {
     let procedure = sum_three(false);
@@ -1104,7 +1133,8 @@ fn test_circle_pushes_one_radius() {
     assert_eq!(pushed, 6, "{:?}", &lines[start..=end]);
 }
 
-/// Qlight printed 3492255: 1000000 was lexed as INTEGER 0x4240 and sign-extended.
+/// Qlight printed 3492255: 1000000 was lexed as INTEGER 0x4240 and
+/// sign-extended.
 #[test]
 fn test_an_unsuffixed_decimal_above_32767_is_a_long_literal() {
     let directory = tempfile::TempDir::new().unwrap();
@@ -1164,7 +1194,8 @@ fn test_a_long_function_reloads_its_result_after_erasing_local_arrays() {
     assert!(!loads.is_empty() && position(&calls, "B$ERAS") < *loads.last().unwrap());
 }
 
-/// The scalar reload must not reorder STRING results: B$SCPF runs before B$STDL frees OTHER.
+/// The scalar reload must not reorder STRING results: B$SCPF runs before B$STDL
+/// frees OTHER.
 #[test]
 fn test_a_string_function_copies_its_result_before_freeing_other_locals() {
     let directory = tempfile::TempDir::new().unwrap();
@@ -1194,7 +1225,8 @@ fn capture_program() -> hir::Program {
     vbdos(module)
 }
 
-/// qbstages used to lower manually, then assemble the same HIR again for its final listing.
+/// qbstages used to lower manually, then assemble the same HIR again for its
+/// final listing.
 #[test]
 fn test_stage_observer_sees_the_hir_once_and_preserves_object_bytes() {
     let program = capture_program();
@@ -1396,8 +1428,9 @@ fn test_a_global_is_one_object_in_every_function() {
 SUB a\r\nn% = 5\r\nDEF SEG = VARSEG(arr%(0))\r\nb\r\nDEF SEG = &HA000\r\nPOKE 1, n%\r\nEND SUB\r\n\
 SUB b\r\nPOKE 5, PEEK(4)\r\nEND SUB\r\n";
     let optimized = optimized_sub(text, "A");
-    // b inlined, its PEEK reads through the segment a stored for it: VARSEG's, not b's own
-    // stale b$seg. That store is then dead, a's last one the only one kept.
+    // b inlined, its PEEK reads through the segment a stored for it: VARSEG's,
+    // not b's own stale b$seg. That store is then dead, a's last one the
+    // only one kept.
     let loads = optimized.lines().filter(|line| line.contains("load i16") && line.contains("ptr @b$seg")).count();
     assert_eq!(loads, 0, "{optimized}");
     let kept =
@@ -1470,7 +1503,8 @@ fn test_a_poke_to_video_memory_leaves_invariant_globals_hoisted() {
     assert!(invariant_loads(&text).is_empty(), "{text}");
 }
 
-/// The listing of `name`'s loop around its POKE: its label through its back edge.
+/// The listing of `name`'s loop around its POKE: its label through its back
+/// edge.
 fn poke_loop(
     text: &str,
     name: &str,
@@ -1636,7 +1670,8 @@ fn test_a_merged_array_shift_is_a_displacement() {
     let frontend = qb_driver::Frontend { array_merging: true, ..qb_driver::Frontend::new("qb45", "qb45") };
     let program = qb_driver::parsed(&basic, &frontend, None).expect("parses");
     let lines = stripped_lines(&listing(&program));
-    // b's first element is at byte 24 of the group; `+ 1` cancels its lower bound.
+    // b's first element is at byte 24 of the group; `+ 1` cancels its lower
+    // bound.
     assert!(lines.iter().any(|line| line.contains("+24]")), "{lines:#?}");
     assert!(!lines.iter().any(|line| line.starts_with("add") && line.ends_with(", 24")), "{lines:#?}");
 }
@@ -1709,8 +1744,9 @@ fn test_text_memory_stores_leave_array_descriptors_invariant() {
 
 #[test]
 fn test_scalars_stored_in_a_loop_are_forwarded_across_its_array_store() {
-    // On the 486 GVN kept `i` from crossing the `a(i)` store, so the index was rebuilt
-    // (`lea bx,[edx+edx]`) and compared with 255 every trip: 18 instructions for 16.
+    // On the 486 GVN kept `i` from crossing the `a(i)` store, so the index was
+    // rebuilt (`lea bx,[edx+edx]`) and compared with 255 every trip: 18
+    // instructions for 16.
     let directory = tempfile::tempdir().expect("tempdir");
     let basic = written(
         &directory,
@@ -1728,8 +1764,8 @@ fn test_scalars_stored_in_a_loop_are_forwarded_across_its_array_store() {
 
 #[test]
 fn test_a_def_seg_known_only_to_promotion_is_not_rebuilt_per_poke() {
-    // Promotion carried `DEF SEG`'s selector from the entry across `Beat`, so the
-    // POKE loop rebuilt it every trip: `push 0A000h / pop fs`.
+    // Promotion carried `DEF SEG`'s selector from the entry across `Beat`, so
+    // the POKE loop rebuilt it every trip: `push 0A000h / pop fs`.
     let directory = tempfile::tempdir().expect("tempdir");
     let basic = written(
         &directory,
@@ -1959,7 +1995,8 @@ END SUB
     let masked = innermost.filter(|one| one.contains("and ")).collect::<Vec<_>>();
     let [first, second] = masked.as_slice() else { panic!("{procedure}") };
     assert!(!first.contains("test ") && !first.contains("cmp "), "{first}");
-    // The stores are addressed by the pointer that counts, not a scaled copy of `x`.
+    // The stores are addressed by the pointer that counts, not a scaled copy of
+    // `x`.
     let lea = regex::Regex::new(r"lea (\w+),").unwrap();
     let scaled: BTreeSet<&str> = lea.captures_iter(second).map(|one| one.get(1).unwrap().as_str()).collect();
     let store = regex::Regex::new(r"mov word ptr \w+:\[(\w+)").unwrap();
@@ -2095,7 +2132,8 @@ fn test_a_call_after_a_loop_that_moved_ds_gets_the_data_group_back() {
     let text = listing(&program);
     let start = text.find("proc far").unwrap_or_else(|| panic!("{text}"));
     let procedure = &text[start..start + text[start..].find(" endp").expect("endp")];
-    // The loop moves DS; every call, in layout order, finds it back on the data group.
+    // The loop moves DS; every call, in layout order, finds it back on the data
+    // group.
     assert!(procedure.contains("mov ds, "), "{procedure}");
     let mut moved = false;
     for line in procedure.lines().map(str::trim) {
@@ -2231,8 +2269,8 @@ fn a_fixed_length_assignment_fills_its_destination() {
 /// A FUNCTION AS SINGLE or AS DOUBLE returns as VBDOS's do: stored through
 /// the hidden destination its caller passes last, that pointer returned. The
 /// rich route left the result in ST(0), so a caller compiled by the old
-/// route read its frame time through the FPU status word fnstsw left in AX: qrender's dt read 0
-/// and it never ticked.
+/// route read its frame time through the FPU status word fnstsw left in AX:
+/// qrender's dt read 0 and it never ticked.
 #[test]
 fn test_a_floating_function_returns_through_its_hidden_destination() {
     for (suffix, mir, bytes) in [("!", "float", 4), ("#", "double", 8)] {
@@ -2499,7 +2537,8 @@ d = cd(x)\r\nIF d < 50 THEN POKE x, d ELSE POKE x, f3(y - k)\r\nNEXT x\r\nNEXT y
     let listing = listing(&parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45"));
     let lines = between(&listing, "BLOBS proc", "BLOBS endp").lines().collect::<Vec<_>>();
     let store = lines.iter().position(|line| line.contains("byte ptr es:[")).expect("the POKE");
-    // The innermost loop: the nearest label above the POKE a later jump returns to.
+    // The innermost loop: the nearest label above the POKE a later jump returns
+    // to.
     let (top, bottom) = (0..store)
         .rev()
         .filter(|&at| lines[at].ends_with(':'))
@@ -2893,7 +2932,8 @@ fn an_outlined_handler_takes_a_row_per_line() {
 /// END and SYSTEM call `B$CEND`, which "does not return" (rt/rtterm.asm): the
 /// runtime description says so, but its declaration did not, and the call's
 /// block ended only by the `unreachable` after it. The program's promises now
-/// name the routines that never come back, and their declarations are `noreturn`.
+/// name the routines that never come back, and their declarations are
+/// `noreturn`.
 #[test]
 fn the_runtime_routines_that_never_return_are_declared_noreturn() {
     let directory = tempfile::tempdir().expect("creates a directory");
@@ -2972,7 +3012,8 @@ fn peek_and_poke_touch_memory_every_time() {
     let path = written(&directory, "tick.bas", source);
     let text = listing(&parsed_as(&path, "qb45", "qb45"));
     assert!(source.windows(5).any(|one| one == b"PEEK("), "the shape that was folded");
-    // The loop re-reads: a label, a byte read of the tick (loaded, or compared in place), and a jump back to it.
+    // The loop re-reads: a label, a byte read of the tick (loaded, or compared
+    // in place), and a jump back to it.
     let read = regex::Regex::new(r"(L\d+_\d+):\n\s+(?:movzx \w+, byte ptr es:\[108\]|cmp byte ptr es:\[108\], \w+)\n")
         .unwrap();
     let back = |label: &str| regex::Regex::new(&format!(r"\s+j\w+ {label}\n")).unwrap().is_match(&text);

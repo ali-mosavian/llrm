@@ -1,6 +1,7 @@
-//! An [`Object`] as an ELF relocatable file, of either class. What a machine adds is its ELF
-//! machine number, its relocation types, and whether its relocations carry an addend (RELA) or
-//! leave it in the field (REL): see [`Machine`]. `llrm-elf32` and `llrm-elf64` are the machines.
+//! An [`Object`] as an ELF relocatable file, of either class. What a machine
+//! adds is its ELF machine number, its relocation types, and whether its
+//! relocations carry an addend (RELA) or leave it in the field (REL): see
+//! [`Machine`]. `llrm-elf32` and `llrm-elf64` are the machines.
 
 use llrm_object::{Arch, Binding, Definition, Kind, Object, Role, Section, Target, Unsupported};
 
@@ -22,8 +23,8 @@ const STT_SECTION: u8 = 3;
 const STT_FILE: u8 = 4;
 const SHN_ABS: u16 = 0xFFF1;
 
-/// A relocation type, the bytes of the field it patches, and the distance from the field's start
-/// to the place a pc-relative value is relative to.
+/// A relocation type, the bytes of the field it patches, and the distance from
+/// the field's start to the place a pc-relative value is relative to.
 pub struct Relocation {
     pub kind: u32,
     pub width: usize,
@@ -132,7 +133,8 @@ fn align(
     }
 }
 
-/// Whether `addend` is a value of a field of `width` bytes: signed where pc-relative.
+/// Whether `addend` is a value of a field of `width` bytes: signed where
+/// pc-relative.
 fn fits(
     addend: i64,
     width: usize,
@@ -154,7 +156,8 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     if object.arch != M::ARCH {
         return Err(unsupported(format!("{:?} is not the {:?} this ELF writer is for", object.arch, M::ARCH)));
     }
-    // DWARF's sections are this writer's, made from the object's debug information.
+    // DWARF's sections are this writer's, made from the object's debug
+    // information.
     let expanded;
     let object = match &object.debug {
         Some(info) => {
@@ -170,7 +173,8 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     // Section indices: 0 is the null section, the object's follow in order.
     let mut names = Strings::new();
     let spelled: Vec<(&str, u32, u64)> = object.sections.iter().map(spelling).collect::<Result<_, _>>()?;
-    // A role's first section is `.text`, `.data`...; a further one is told apart by its own name.
+    // A role's first section is `.text`, `.data`...; a further one is told
+    // apart by its own name.
     let mut section_names: Vec<String> = Vec::new();
     for (index, section) in object.sections.iter().enumerate() {
         let taken = section.role != Role::Debug && spelled[..index].iter().any(|one| one.0 == spelled[index].0);
@@ -183,7 +187,8 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         });
     }
 
-    // Symbols: null, the source's file, one section symbol per section, then the globals.
+    // Symbols: null, the source's file, one section symbol per section, then
+    // the globals.
     let mut strings = Strings::new();
     let symbol_size = if M::WIDE { 24 } else { 16 };
     let mut symtab: Vec<u8> = vec![0; symbol_size];
@@ -231,7 +236,8 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         next += 1;
     }
 
-    // Each section's bytes (with REL's addends in the fields), and its relocation entries.
+    // Each section's bytes (with REL's addends in the fields), and its
+    // relocation entries.
     let mut images: Vec<Vec<u8>> = Vec::new();
     let mut relocs: Vec<Vec<u8>> = Vec::new();
     for section in &object.sections {

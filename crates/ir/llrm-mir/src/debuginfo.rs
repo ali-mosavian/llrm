@@ -1,11 +1,12 @@
 //! `-g`'s metadata: source types, procedures, parameters and variables. A
 //! lowering writes it and a backend reads it, both through here.
 //!
-//! A type is a node `!{!"kind", !"name", i64 size, !"address", target, !{members}}`
-//! and a member `!{!"name", type, i64 offset}`, a bit field's with its `i64 start, i64 width` after. Named metadata
-//! [`TYPES`], [`FUNCTIONS`] and [`GLOBALS`] list the types, each after those it names,
-//! the procedures and the variables in data; a variable in a frame is an `llvm.dbg.declare` of its storage,
-//! its [`VARIABLE`] attachment naming it.
+//! A type is a node `!{!"kind", !"name", i64 size, !"address", target,
+//! !{members}}` and a member `!{!"name", type, i64 offset}`, a bit field's with
+//! its `i64 start, i64 width` after. Named metadata [`TYPES`], [`FUNCTIONS`]
+//! and [`GLOBALS`] list the types, each after those it names, the procedures
+//! and the variables in data; a variable in a frame is an `llvm.dbg.declare` of
+//! its storage, its [`VARIABLE`] attachment naming it.
 
 use crate::context::ConstantKind;
 use crate::module::{MetadataId, MetadataNode, MetadataOperand, Module};
@@ -92,7 +93,8 @@ spelled!(
 );
 
 spelled!(
-    /// The language a program is written in, which a debugger reads its values by.
+    /// The language a program is written in, which a debugger reads its values
+    /// by.
     Language {
         C = "c",
         Basic = "basic",
@@ -101,7 +103,8 @@ spelled!(
 );
 
 spelled!(
-    /// The form of CodeView 4 a program's records are written in: its frontend says.
+    /// The form of CodeView 4 a program's records are written in: its frontend
+    /// says.
     Dialect {
         /// What BASIC's compilers write.
         Bc = "bc",
@@ -126,7 +129,8 @@ pub struct Type {
     pub reach: Reach,
     pub target: Option<MetadataId>,
     pub members: Vec<Member>,
-    /// A scalar's name in the source, where it has one (`unsigned long`, not `uint32`): what a debugger prints.
+    /// A scalar's name in the source, where it has one (`unsigned long`, not
+    /// `uint32`): what a debugger prints.
     pub spelling: Option<String>,
 }
 
@@ -176,8 +180,9 @@ pub struct Variable {
     pub argument: Option<i64>,
 }
 
-/// Kind of the metadata that says a store or a `memcpy` is volatile only so the optimiser leaves it for a debugger to
-/// read the variable it writes (`-g`): a build that does not run the optimiser, or finds the variable another way,
+/// Kind of the metadata that says a store or a `memcpy` is volatile only so the
+/// optimiser leaves it for a debugger to read the variable it writes (`-g`): a
+/// build that does not run the optimiser, or finds the variable another way,
 /// lifts it.
 pub const OBSERVED: &str = "llrm.observed";
 
@@ -299,7 +304,8 @@ pub fn add_type(
     id
 }
 
-/// A type node to be set, so a member of it can name it: an aggregate that holds a pointer to itself.
+/// A type node to be set, so a member of it can name it: an aggregate that
+/// holds a pointer to itself.
 pub fn reserve_type(module: &mut Module) -> MetadataId {
     let id = node(module, Vec::new());
     named(module, TYPES, id);
@@ -325,13 +331,15 @@ pub fn set_type(
     let size = int(module, one.size);
     let target = one.target.map_or(MetadataOperand::Null, MetadataOperand::Node);
     let mut operands = vec![text(one.kind.value()), text(&one.name), size, text(one.reach.value()), target, members];
-    // After the members, only where there is one: a node without it has no spelling.
+    // After the members, only where there is one: a node without it has no
+    // spelling.
     operands.extend(one.spelling.as_deref().map(text));
     module.metadata[id.0 as usize].operands = operands;
 }
 
-/// Every type node, in the order they were made: a member may name one made after it (an aggregate that
-/// holds a pointer to itself), so a reader reads all before it resolves any.
+/// Every type node, in the order they were made: a member may name one made
+/// after it (an aggregate that holds a pointer to itself), so a reader reads
+/// all before it resolves any.
 pub fn types(module: &Module) -> Vec<MetadataId> {
     listed(module, TYPES).collect()
 }
@@ -385,7 +393,8 @@ pub fn set_language(
     named(module, LANGUAGE, id);
 }
 
-/// The form of CodeView 4 the frontend says: the BASIC compilers' where it says none.
+/// The form of CodeView 4 the frontend says: the BASIC compilers' where it says
+/// none.
 pub fn dialect(module: &Module) -> Dialect {
     listed(module, LANGUAGE)
         .next()
@@ -454,8 +463,8 @@ pub fn add_variable(
     node(module, operands)
 }
 
-/// The byte offset in its frame object of the variable node `id` names, read where only the module's metadata and
-/// constants are at hand (a pass).
+/// The byte offset in its frame object of the variable node `id` names, read
+/// where only the module's metadata and constants are at hand (a pass).
 pub fn variable_offset(
     metadata: &[crate::module::MetadataNode],
     context: &crate::context::Context,
@@ -533,8 +542,9 @@ mod tests {
         assert_eq!(pt.members.iter().map(|one| one.bits).collect::<Vec<_>>(), [None, Some((3, 5))]);
     }
 
-    /// A struct reserved before its members, one a pointer to it: it names a node made after it, and it
-    /// survives printing and parsing. Made after its members, as every type was, there is no such node.
+    /// A struct reserved before its members, one a pointer to it: it names a
+    /// node made after it, and it survives printing and parsing. Made after
+    /// its members, as every type was, there is no such node.
     #[test]
     fn a_struct_that_points_to_itself_reads_back_whole() {
         let mut module = Module::default();
@@ -639,8 +649,9 @@ mod tests {
         assert_eq!(read_variable(&module, id), Some(variable));
     }
 
-    /// A parameter's home read back as an ordinary local: the C frontend keeps a parameter in a
-    /// frame slot, and nothing past the frontend could say it was passed in.
+    /// A parameter's home read back as an ordinary local: the C frontend keeps
+    /// a parameter in a frame slot, and nothing past the frontend could say
+    /// it was passed in.
     #[test]
     fn a_parameters_home_reads_back_as_one_and_a_plain_node_as_none() {
         let mut module = Module::default();

@@ -1,10 +1,13 @@
-//! LLVM's `hasFP`, decided before allocation: whether a function can do without its frame register, which is then one
-//! more value register (and callee-saved: the prologue pushes it where it is used).
+//! LLVM's `hasFP`, decided before allocation: whether a function can do without
+//! its frame register, which is then one more value register (and callee-saved:
+//! the prologue pushes it where it is used).
 //!
-//! It can where `masm` can address every frame cell through the stack pointer, which needs the stack's depth at every
-//! instruction. This reads the same things `masm::stack_addressed` reads, from the LIR before allocation: spill code
-//! adds cells and moves, no push or pop. What cannot be known here (a stack pointer written another way, an indirect
-//! call that may pop, inline code, a frame register read as a value) keeps the frame register.
+//! It can where `masm` can address every frame cell through the stack pointer,
+//! which needs the stack's depth at every instruction. This reads the same
+//! things `masm::stack_addressed` reads, from the LIR before allocation: spill
+//! code adds cells and moves, no push or pop. What cannot be known here (a
+//! stack pointer written another way, an indirect call that may pop, inline
+//! code, a frame register read as a value) keeps the frame register.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,7 +24,8 @@ fn is_frame(
     register != Register::None && crate::model::ir::root(register) == crate::model::ir::root(pointer)
 }
 
-/// Whether the function described by `body` (its calls' popped bytes in `pops`) can have no frame register.
+/// Whether the function described by `body` (its calls' popped bytes in `pops`)
+/// can have no frame register.
 pub fn without_frame_register(
     body: &LirBody,
     registers: &llrm_target::FrameRegisters,
@@ -54,7 +58,8 @@ pub fn without_frame_register(
                     Loc::Reg(reg) if is_frame(reg.register, pointer) => return false,
                     Loc::Mem(cell) if is_frame(cell.index_through, pointer) => return false,
                     Loc::Address(address) if is_frame(address.index, pointer) => return false,
-                    // A register-based cell is fine; the frame register as a base is only a frame cell.
+                    // A register-based cell is fine; the frame register as a
+                    // base is only a frame cell.
                     Loc::Mem(cell) if is_frame(cell.through, pointer) && !cell.in_frame() => return false,
                     Loc::Address(address)
                         if is_frame(address.through, pointer)
@@ -83,7 +88,9 @@ pub fn without_frame_register(
                     }
                     depth += sign * width;
                 }
-                // As `masm::stack_addressed`: an exchange of x87 registers, memory or general registers and the x87 and port instructions leave the stack pointer alone.
+                // As `masm::stack_addressed`: an exchange of x87 registers,
+                // memory or general registers and the x87 and port instructions
+                // leave the stack pointer alone.
                 Operation::Exchange if what.dests.iter().chain(&what.sources).all(|place| matches!(place, Loc::St(_) | Loc::Mem(_)) || matches!(
                     place,
                     Loc::Reg(reg) if crate::model::ir::root(reg.register) != crate::model::ir::root(registers.stack)

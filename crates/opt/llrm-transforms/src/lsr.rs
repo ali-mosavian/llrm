@@ -44,7 +44,8 @@ use crate::expand::{self, Expander};
 use crate::spill::{self, Room, Traffic};
 use crate::{dead, profit, rotate};
 
-/// `size`: code size outranks speed, and a loop that has another way out is left as it is.
+/// `size`: code size outranks speed, and a loop that has another way out is
+/// left as it is.
 #[derive(Default)]
 pub struct Lsr {
     pub size: bool,
@@ -73,7 +74,8 @@ impl FunctionPass for Lsr {
 
 #[cfg(test)]
 thread_local! {
-    /// `total` asked and `total_of` worked out, for the test that a set is priced once.
+    /// `total` asked and `total_of` worked out, for the test that a set is
+    /// priced once.
     pub static TOTALS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 
 }
@@ -87,17 +89,21 @@ struct Target<'a> {
     bounds: Bounds,
 }
 
-/// gcc's ivopts parameters (tree-ssa-loop-ivopts.cc), and what each does past its bound.
+/// gcc's ivopts parameters (tree-ssa-loop-ivopts.cc), and what each does past
+/// its bound.
 #[derive(Clone, Copy, Debug)]
 pub struct Bounds {
-    /// `iv-max-considered-uses`: a loop of more groups of uses than this is left as it is.
+    /// `iv-max-considered-uses`: a loop of more groups of uses than this is
+    /// left as it is.
     pub groups: usize,
-    /// `iv-consider-all-candidates-bound`: below this many candidates the search is whole. gcc prices a use from the
-    /// important candidates and its own only past it; here that left the cheapest shared counter out and cost more
-    /// (QCport weapons.c).
+    /// `iv-consider-all-candidates-bound`: below this many candidates the
+    /// search is whole. gcc prices a use from the important candidates and
+    /// its own only past it; here that left the cheapest shared counter out and
+    /// cost more (QCport weapons.c).
     pub all_candidates: usize,
-    /// `iv-always-prune-cand-set-bound`: a candidate serving more uses than this is not replaced, and replacing is
-    /// tried only where no one candidate added or removed lowers the cost, once (`iv_ca_replace`).
+    /// `iv-always-prune-cand-set-bound`: a candidate serving more uses than
+    /// this is not replaced, and replacing is tried only where no one
+    /// candidate added or removed lowers the cost, once (`iv_ca_replace`).
     pub always_prune: usize,
 }
 
@@ -125,8 +131,9 @@ enum Resident {
     Rebuilt(usize),
 }
 
-/// The whole function's block frequencies as lsr's prices read them: a loop's trips multiplied, ten where unproven
-/// (#203), a branch's cold arm less. A manager analysis, so a loop lsr looks at and leaves alone does not find them
+/// The whole function's block frequencies as lsr's prices read them: a loop's
+/// trips multiplied, ten where unproven (#203), a branch's cold arm less. A
+/// manager analysis, so a loop lsr looks at and leaves alone does not find them
 /// again (16 loops of a nest: a fifth of lsr).
 pub struct Products;
 
@@ -143,8 +150,8 @@ impl Analysis for Products {
         let registers = analyses.get::<Registers>(context, layout, function);
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(context, layout, function);
         let outer = std::rc::Rc::clone(analyses.outer());
-        // The trips are the manager's proofs, renewed for the loops a change reached, not worked out again for every
-        // loop.
+        // The trips are the manager's proofs, renewed for the loops a change
+        // reached, not worked out again for every loop.
         let counted = analyses.get::<llrm_analysis::manager::Counted>(context, layout, function);
         let view = memory::Unit::within(context, layout, function, &outer)
             .with_registers(&registers)
@@ -177,8 +184,8 @@ pub fn reduced(
     };
     let mut done = BTreeSet::<i64>::new();
     let mut changed = false;
-    // What is known of the function is the manager's, kept until a loop is changed (and then it is `applied` that
-    // declares nothing kept).
+    // What is known of the function is the manager's, kept until a loop is
+    // changed (and then it is `applied` that declares nothing kept).
     loop {
         let plan = {
             let facts = analyses.get::<Registers>(unit.context, unit.layout, unit.function);
@@ -196,9 +203,11 @@ pub fn reduced(
             _plan(&view, outer, &loop_, &target, &pressure, &mut products)
         };
         let Some(plan) = plan else { continue };
-        // A loop with another way out was never counted before: its choice is held to the function's whole price, work
-        // and spill, as hoist's is, where the loop's own model has been wrong about the registers a call leaves
-        // it. Where size outranks speed it stays as it is: the setup is code, and the trips that repay it are
+        // A loop with another way out was never counted before: its choice is
+        // held to the function's whole price, work and spill, as
+        // hoist's is, where the loop's own model has been wrong about the
+        // registers a call leaves it. Where size outranks speed it
+        // stays as it is: the setup is code, and the trips that repay it are
         // an estimate.
         let leaves = plan.exit.as_ref().is_some_and(|(exit, _)| exit.proof.leaves);
         if leaves && size {
@@ -225,7 +234,8 @@ pub fn reduced(
     changed
 }
 
-/// What the function costs as it stands: `profit::motion_price` at the frequencies lsr's own prices use.
+/// What the function costs as it stands: `profit::motion_price` at the
+/// frequencies lsr's own prices use.
 fn _function_price(
     unit: &Unit,
     analyses: &Analyses,
@@ -310,7 +320,8 @@ struct Site {
     at: Place,
     frequency: i64,
     inside: bool,
-    /// The counted exit's compare, which may test a candidate's last value instead.
+    /// The counted exit's compare, which may test a candidate's last value
+    /// instead.
     exit: bool,
     /// Its value, where it is read as the loop leaves on a known count.
     known: Option<Scev>,
@@ -333,8 +344,8 @@ struct Exit {
     most: BigInt,
     /// A symbolic count needs a guard, and the loop entered at its body.
     guarded: bool,
-    /// The test is, or is made, the loop's last block: a loop with other exits is entered at its body only by a guard
-    /// here.
+    /// The test is, or is made, the loop's last block: a loop with other exits
+    /// is entered at its body only by a guard here.
     fused: bool,
 }
 
@@ -369,8 +380,8 @@ struct Problem<'a> {
     fixed: BTreeMap<i64, Vec<spill::Site>>,
     /// The spill traffic of what `fixed` keeps.
     traffic: BTreeMap<ValueId, Traffic>,
-    /// `total` of each set asked: the search asks the same set again from the other start and from each step's
-    /// neighbours.
+    /// `total` of each set asked: the search asks the same set again from the
+    /// other start and from each step's neighbours.
     totals: std::cell::RefCell<llrm_support::hash::HashMap<BTreeSet<usize>, Option<i64>>>,
     /// Where each site's value is live, at the points of `fixed`.
     alive: Vec<BTreeMap<i64, Vec<bool>>>,
@@ -382,7 +393,8 @@ struct Problem<'a> {
     frequencies: BTreeMap<i64, i64>,
     /// Values the loop holds anyway: a key of one alone is no new register.
     live: BTreeSet<ValueId>,
-    /// Frame objects: their addresses are the frame's register and a displacement.
+    /// Frame objects: their addresses are the frame's register and a
+    /// displacement.
     frames: BTreeSet<ValueId>,
     /// Far views of a segment: held in a segment register, not a general one.
     views: BTreeSet<ValueId>,
@@ -423,7 +435,8 @@ fn _plan(
         return None;
     }
     let facts = view.registers();
-    // lsr's prices were fitted to trips multiplied, ten where unproven (#203), and a branch's cold arm less.
+    // lsr's prices were fitted to trips multiplied, ten where unproven (#203),
+    // and a branch's cold arm less.
     let held = products();
     let frequencies = held.as_ref().as_ref()?;
     let frequency = |block: BlockId| frequencies.get(&cfg::id(block)).copied().unwrap_or(1);
@@ -488,8 +501,9 @@ fn _plan(
             }
         }
     }
-    // gcc leaves a loop of more groups of uses than `iv-max-considered-uses` as it is; a group is the uses of one step
-    // and base that differ in a constant.
+    // gcc leaves a loop of more groups of uses than `iv-max-considered-uses` as
+    // it is; a group is the uses of one step and base that differ in a
+    // constant.
     let groups = sites
         .iter()
         .map(|site| {
@@ -505,7 +519,8 @@ fn _plan(
     let live = _live_anyway(function, pressure.found(), loop_, &users, exit.as_ref());
     let cells = pressure.cells();
     let fixed = _fixed(view, outer, loop_, target.room, pressure, &web_values, &users, exit.as_ref(), &live);
-    // The web's reads are the uses the choice replaces; each use adds its own back.
+    // The web's reads are the uses the choice replaces; each use adds its own
+    // back.
     let kept = |inst: InstId| !users.web.contains(&inst);
     let traffic = spill::traffic(function, &frequencies, &cells, &target.costs, &kept, &|value| {
         spill::words(view.context, view.layout, function, value)
@@ -513,7 +528,8 @@ fn _plan(
     let alive = _alive(function, pressure.found(), loop_, &sites);
     let mut keys = Vec::new();
     let latch_block = cfg::block(latch);
-    // The most backedges: the counted exit's, or what an in-bounds access allows.
+    // The most backedges: the counted exit's, or what an in-bounds access
+    // allows.
     let most = exit.as_ref().map(|exit| exit.most.clone()).or_else(|| induction::inbounds_backedges(view, loop_));
     let fits = sites
         .iter()
@@ -1161,8 +1177,9 @@ fn _latch_arm(
     function.instruction(inst).operands.chunks(2).find(|pair| pair[1] == Operand::Block(latch)).map(|pair| pair[0])
 }
 
-/// What `k * r` costs a trip: nothing, a negation, a shift or a multiply. On a two-address target the
-/// candidate stays live, so a negation or a shift is made in a copy of it, unless `lea` scales it.
+/// What `k * r` costs a trip: nothing, a negation, a shift or a multiply. On a
+/// two-address target the candidate stays live, so a negation or a shift is
+/// made in a copy of it, unless `lea` scales it.
 fn _scaling(
     target: &Target,
     k: &BigInt,
@@ -1182,10 +1199,12 @@ fn _scaling(
     }
 }
 
-/// What `k * r` costs where a use adds `rest`, and whether the use is `rest - r`: one `sub` from a copy of
-/// `rest` (the copy is the use's, as `made` charges it), with no negation of `r` and no product to hold.
-/// Priced as a negation, a copy and an add, it made a counter that rebuilds `c - r` look dearer than it is
-/// (#721: Nib -Os queens, 34% in the model, tied in the code).
+/// What `k * r` costs where a use adds `rest`, and whether the use is `rest -
+/// r`: one `sub` from a copy of `rest` (the copy is the use's, as `made`
+/// charges it), with no negation of `r` and no product to hold. Priced as a
+/// negation, a copy and an add, it made a counter that rebuilds `c - r` look
+/// dearer than it is (#721: Nib -Os queens, 34% in the model, tied in the
+/// code).
 fn _scaled(
     target: &Target,
     k: &BigInt,
@@ -1195,8 +1214,9 @@ fn _scaled(
     (if subtracted { 0 } else { _scaling(target, k) }, subtracted)
 }
 
-/// Whether one `lea` makes `k * r + rest + constant`: where any register may be a base and an index
-/// (`[bx+si]` is no `lea` of `ax`), and its scales hold `k`.
+/// Whether one `lea` makes `k * r + rest + constant`: where any register may be
+/// a base and an index (`[bx+si]` is no `lea` of `ax`), and its scales hold
+/// `k`.
 fn _leas(
     target: &Target,
     k: &BigInt,
@@ -1297,8 +1317,9 @@ fn _priced(
         }
         UseKind::Address => {
             let native = target.forms.first()?;
-            // An integer cannot index a pair in a carrying space: the use advances
-            // the pointer by it, and pays what an advance there costs over an address's.
+            // An integer cannot index a pair in a carrying space: the use
+            // advances the pointer by it, and pays what an advance
+            // there costs over an address's.
             let advance = profit::advance(
                 view.context,
                 view.layout,
@@ -1309,8 +1330,9 @@ fn _priced(
             );
             price.cost += advance - costs.address;
             if pointer_base(&fit) {
-                // A global is a displacement beside two registers; a frame object
-                // takes BP for its own, and leaves one register for all it adds.
+                // A global is a displacement beside two registers; a frame
+                // object takes BP for its own, and leaves one
+                // register for all it adds.
                 let held = fit.base.filter(|base| matches!(base, Operand::Value(_)));
                 let key = _interned(keys, (held, fit.rest.clone()));
                 price.held.push(key);
@@ -1371,7 +1393,8 @@ fn _priced(
                     matches!(op.opcode, Opcode::ICmp(IntPredicate::Eq | IntPredicate::Ne))
                 } =>
         {
-            // `k * r + rest == w` is `r == k * (w - rest)`: the invariant absorbs the rest.
+            // `k * r + rest == w` is `r == k * (w - rest)`: the invariant
+            // absorbs the rest.
             let op = view.function.instruction(site.one.user);
             let other = op.operands[1 - site.one.index];
             let width = fit.rest.width;
@@ -1400,11 +1423,14 @@ fn _priced(
             if fit.trip.is_none() && scaling != 0 {
                 price.product = Some((small(&fit.k), scaling, block));
             }
-            // A pointer made from an integer, in a carrying space, carries into its selector.
-            // A two-address target makes a result in its first operand's register: the candidate stays
-            // live, as a counter does, so a form no address takes (a negation, a general scale) is
-            // copied first. `lea` makes `cand * k + rest + constant` in one, where its scales hold `k`.
-            // (A scaled one is made in a copy already, which the add then makes its result in.)
+            // A pointer made from an integer, in a carrying space, carries into
+            // its selector. A two-address target makes a result in
+            // its first operand's register: the candidate stays
+            // live, as a counter does, so a form no address takes (a negation,
+            // a general scale) is copied first. `lea` makes `cand *
+            // k + rest + constant` in one, where its scales hold `k`.
+            // (A scaled one is made in a copy already, which the add then makes
+            // its result in.)
             let copy = if target.room.two_address && (subtracted || fit.k == BigInt::from(1) && !_leas(target, &fit.k))
             {
                 costs.r#move
@@ -1485,9 +1511,10 @@ fn _exit_price(
         return None;
     }
     let end = _end(exit, candidate);
-    // Free only where the step's flags are the test's: the backend fuses a zero test with the step that precedes it
-    // along a single path: a test at the latch, not one at the head of a loop that has other exits and no guard to
-    // enter at its body.
+    // Free only where the step's flags are the test's: the backend fuses a zero
+    // test with the step that precedes it along a single path: a test at
+    // the latch, not one at the head of a loop that has other exits and no
+    // guard to enter at its body.
     if end.is_zero() && candidate.of.pointer.is_none() && exit.fused {
         return Some((0, None));
     }
@@ -1673,7 +1700,8 @@ impl Problem<'_> {
         }
         let costs = &self.target.costs;
         let mut cost = set.iter().map(|&one| self.steps[one]).sum::<i64>() * self.latch;
-        // A counter wider than the native index pays the operand-size prefix a step.
+        // A counter wider than the native index pays the operand-size prefix a
+        // step.
         let native = self.target.forms.first().map_or(i64::MAX, |form| form.index_width * 8);
         cost += set.iter().filter(|&&one| i64::from(self.candidates[one].of.width()) > native).count() as i64
             * costs.prefix
@@ -1785,7 +1813,8 @@ impl Problem<'_> {
                     .map(|&key| Resident::Held(key)),
             )
             .collect::<Vec<_>>();
-        // A held far view of a segment is in a segment register, with those live.
+        // A held far view of a segment is in a segment register, with those
+        // live.
         let segmented = held
             .iter()
             .filter(|&&key| !self.free(&self.keys[key]) && self.viewed(key))
@@ -1935,14 +1964,16 @@ impl Problem<'_> {
         mut set: BTreeSet<usize>,
     ) -> Option<BTreeSet<usize>> {
         let bounds = self.target.bounds;
-        // Past `iv-consider-all-candidates-bound`, where gcc stops considering every candidate for every use; below it
-        // the search is whole: measured on the bench, replacing once and not beyond ten uses costs 6% of crc's
-        // instructions.
+        // Past `iv-consider-all-candidates-bound`, where gcc stops considering
+        // every candidate for every use; below it the search is whole:
+        // measured on the bench, replacing once and not beyond ten uses costs
+        // 6% of crc's instructions.
         let bounded = self.candidates.len() > bounds.all_candidates;
         // Cheaper first, then fewer counters: a tie goes to fewer registers.
         let rank = |set: &BTreeSet<usize>| self.total(set).map(|total| (total, set.len()));
         let mut current = rank(&set).unwrap_or((i64::MAX, usize::MAX));
-        // gcc replaces a candidate (`iv_ca_replace`) once, where no one added or removed lowers the cost.
+        // gcc replaces a candidate (`iv_ca_replace`) once, where no one added
+        // or removed lowers the cost.
         let mut replace = true;
         loop {
             let mut best: Option<((i64, usize), BTreeSet<usize>)> = None;
@@ -1965,7 +1996,8 @@ impl Problem<'_> {
                 replace = false;
                 let serving = if bounded { self.serving(&set) } else { Vec::new() };
                 for &out in &set {
-                    // A candidate of one use is another's to prune; one of many is too costly to place again.
+                    // A candidate of one use is another's to prune; one of many
+                    // is too costly to place again.
                     if bounded && (serving[out] == 1 || serving[out] > bounds.always_prune) {
                         continue;
                     }
@@ -2009,7 +2041,8 @@ fn _applied(
     let entering = function.terminator(plan.preheader).expect("a preheader's branch");
     let mut expander = Expander::new(entering);
     let back = function.terminator(plan.latch).expect("a latch's branch");
-    // Each candidate: a header phi from its start, stepped before the latch's branch.
+    // Each candidate: a header phi from its start, stepped before the latch's
+    // branch.
     let mut registers = Vec::new();
     let mut steps = Vec::new();
     let mut stepping = Vec::new();
@@ -2177,7 +2210,8 @@ fn _applied(
     let shape = rotate::_shape(function, &plan.loop_).expect("a rotatable loop");
     rotate::_rotate(context, function, &shape, Some(Operand::Value(guard))).expect("a rotation");
     crate::cfg::merged(function);
-    // The guard also reaches the exit: the loop leaves through its own block again.
+    // The guard also reaches the exit: the loop leaves through its own block
+    // again.
     crate::loopsimplify::simplified(function);
     Some(shape.first)
 }
@@ -2345,7 +2379,8 @@ fn _realized(
             value
         }
         // An address or pointer from an integer candidate: its base indexed
-        // by the scaled candidate, then the constant, which the address form takes.
+        // by the scaled candidate, then the constant, which the address form
+        // takes.
         (None, Some(_)) => {
             let base = expander.value(context, function, fit.base, &fit.rest, ty);
             let mut value = match scaled(context, function, products) {

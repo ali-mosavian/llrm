@@ -393,15 +393,18 @@ pub const CONVENTIONS: [(&str, u32); 11] = [
     ("regparm3popcc", REGPARM3POP),
 ];
 
-/// The calling conventions a target names by the `cc` of its description (calling.toml): `ccc` is the
-/// one stating `cc = "cdecl"`, and each other is asked for as `<cc>cc`.
-/// The string attribute that says how an argument is passed where its convention's registers do not: `memory`
-/// (a struct's words, in memory with everything after) or `result-pointer` (where a struct result is written).
+/// The calling conventions a target names by the `cc` of its description
+/// (calling.toml): `ccc` is the one stating `cc = "cdecl"`, and each other is
+/// asked for as `<cc>cc`. The string attribute that says how an argument is
+/// passed where its convention's registers do not: `memory` (a struct's words,
+/// in memory with everything after) or `result-pointer` (where a struct result
+/// is written).
 pub const ARGUMENT: &str = "llrm-argument";
 pub const MEMORY: &str = "memory";
 pub const RESULT_POINTER: &str = "result-pointer";
 
-/// What `attrs` say of how its argument is passed: `MEMORY` or `RESULT_POINTER`.
+/// What `attrs` say of how its argument is passed: `MEMORY` or
+/// `RESULT_POINTER`.
 pub fn argument_class(attrs: &[Attribute]) -> Option<&str> {
     attrs
         .iter()
@@ -433,7 +436,8 @@ pub const BASIC: u32 = 1000;
 
 /// LLVM's `x86_intrcc`: an interrupt handler, entered with the flags pushed
 /// and left by `iret`. Unlike LLVM's, its one parameter points at the frame
-/// the handler saved (the target's `interrupt_frame` in its calling.toml), not at the IP, CS and flags alone.
+/// the handler saved (the target's `interrupt_frame` in its calling.toml), not
+/// at the IP, CS and flags alone.
 pub const X86_INTR: u32 = 83;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -509,7 +513,7 @@ impl Opcode {
     }
 }
 
-/// LLVM's `fastcc`, the convention the compiler gives a function it sees every caller of: here
-/// arguments pushed right to left and popped by the callee (`ret N`), which a caller's
-/// `add sp,N` then does not repeat.
+/// LLVM's `fastcc`, the convention the compiler gives a function it sees every
+/// caller of: here arguments pushed right to left and popped by the callee
+/// (`ret N`), which a caller's `add sp,N` then does not repeat.
 pub const FAST: u32 = 8;

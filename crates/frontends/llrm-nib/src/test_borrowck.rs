@@ -843,7 +843,8 @@ fn main() -> i16:
         .filter(|one| one["fact"] == "range" && one["subject"] == "field")
         .map(|one| (one["value"].as_i64().unwrap(), one["second"].as_i64().unwrap()))
         .collect();
-    // Stated once, of the tag member of the enum; each arm's test loads it as that member.
+    // Stated once, of the tag member of the enum; each arm's test loads it as
+    // that member.
     assert_eq!(ranges, [(0, 2)]);
     assert!(text.matches("\"member\"").count() >= 2, "{text}");
 }
@@ -909,7 +910,8 @@ fn main() -> i16:
 ";
     // read.0, pick.1 (b), stash.0 (out is only pushed to), reads_through.0
     assert_eq!(uncaptured(source), ["pick.1", "read.0", "reads_through.0", "stash.0"]);
-    // A view is a borrow too: returning a slice of it keeps it; summing it does not.
+    // A view is a borrow too: returning a slice of it keeps it; summing it does
+    // not.
     let views = "\
 fn tail(xs: &[i16]) -> &[i16]:
     return &xs[1:]
@@ -927,7 +929,8 @@ fn main() -> i16:
     return 0
 ";
     assert_eq!(uncaptured(views), ["sum.0"]);
-    // A generator's frame outlives its call; a raw pointer goes where nothing follows it.
+    // A generator's frame outlives its call; a raw pointer goes where nothing
+    // follows it.
     let escapes = "\
 fn walk(v: &[i16]) -> iter[i16]:
     for x in v:
@@ -983,9 +986,10 @@ fn main() -> i16:
     assert_eq!(noalias, [0, 1]);
 }
 
-/// What a Nib match states of a tag reached the reader: the enum's tag load, bounded
-/// by its variants, from source through the HIR's facts and their lowering to the
-/// interval ranges reads. The `!range` was written and nothing read it.
+/// What a Nib match states of a tag reached the reader: the enum's tag load,
+/// bounded by its variants, from source through the HIR's facts and their
+/// lowering to the interval ranges reads. The `!range` was written and nothing
+/// read it.
 #[test]
 fn a_matched_enums_tag_is_bounded_by_its_variants_where_ranges_reads_it() {
     let source = "\
@@ -1212,7 +1216,8 @@ fn main() -> i16:
     // Still a borrow of `v` until reseated (E0502).
     let held = source.replace("    last = &v[1]\n    print(last)\n", "    v.push(9)\n    print(last)\n");
     assert_eq!(refused_at(&held), "5: \"v\" is borrowed here, so it cannot be changed");
-    // A reseated borrow is of the new owner, which a return may not leak (E0515).
+    // A reseated borrow is of the new owner, which a return may not leak
+    // (E0515).
     let leak = "\
 fn bad() -> &i16:
     let v: vec[i16] = [1]
@@ -1248,7 +1253,8 @@ fn main() -> i16:
 "
         );
         assert_eq!(output_without_leaks(&source), shown, "{element}");
-        // Without the reseat the second `print` reads a buffer `push` may move (E0502).
+        // Without the reseat the second `print` reads a buffer `push` may move
+        // (E0502).
         let held = source.replace("    last = &v[1]\n", "");
         assert_eq!(refused_at(&held), "5: \"v\" is borrowed here, so it cannot be changed", "{element}");
     }
@@ -1347,7 +1353,8 @@ fn main() -> i16:
     return 0
 ";
     assert_eq!(output_without_leaks(source), "8\n7\n");
-    // The copy is still the caller's `src`: changing it while the copy lives is refused (E0506).
+    // The copy is still the caller's `src`: changing it while the copy lives is
+    // refused (E0506).
     let caller = "\
 struct Source:
     mut count: u16
@@ -1396,7 +1403,8 @@ fn main() -> i16:
     return 0
 ";
     assert_eq!(output_without_leaks(source), "move north\n10\n5\n3\nnorth\n5\n18\n");
-    // The field borrows what the view does: a local's is gone when the struct is returned (E0515)...
+    // The field borrows what the view does: a local's is gone when the struct
+    // is returned (E0515)...
     let local = "\
 struct Scanner:
     src: &string
