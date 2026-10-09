@@ -192,7 +192,7 @@ mod tests {
         fn transform(&mut self, mut body: LirBody) -> Result<LirBody, String> {
             let mut broken = (*body.blocks[0].insns[0]).clone();
             broken.uses = vec![99];
-            body.blocks[0].insns = vec![Arc::new(broken)];
+            body.blocks[0].insns = vec![Arc::new(broken)].into();
             Ok(body)
         }
     }
@@ -205,7 +205,7 @@ mod tests {
         }
 
         fn transform(&mut self, mut body: LirBody) -> Result<LirBody, String> {
-            body.blocks[0].insns.remove(0);
+            body.blocks[0].insns.edit(|insns| { insns.remove(0); });
             Ok(body)
         }
     }

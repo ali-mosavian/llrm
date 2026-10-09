@@ -2562,9 +2562,9 @@ fn test_constant_sum_preserves_unrolled_source_anchor_on_lea() {
 fn test_constant_sum_does_not_drop_a_predecessor_source_anchor() {
     // A fold cannot discard source ownership held by the removed copy.
     let input = _constant_sum_body(1, false);
-    let mut insns = input.blocks[0].insns.clone();
+    let mut insns = input.blocks[0].insns.to_vec();
     insns[0] = Arc::new(Insn { symbol: Some(true), ..(*insns[0]).clone() });
-    let input = LirBody { blocks: vec![LirBlock { insns, ..input.blocks[0].clone() }], ..input };
+    let input = LirBody { blocks: vec![LirBlock { insns: insns.into(), ..input.blocks[0].clone() }], ..input };
 
     let result = addresses(&input, "386").unwrap().insns();
 
@@ -2656,11 +2656,11 @@ fn test_source_push_pop_is_not_treated_as_a_parallel_copy() {
     let (source, destination) = frame_slots(2);
     let mut pair = parcopy::scheduled(&one_block(vec![group_move(destination, source, Some(1), 0x100)])).unwrap().blocks[0]
         .insns
-        .clone();
+        .to_vec();
     pair[1] = Arc::new(Insn { at: 0x101, covers: Some((0x101, 0x102)), ..(*pair[1]).clone() });
     pair.push(reset());
 
-    let instructions = frame_copies(&one_block(pair), "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0].insns.clone();
+    let instructions = frame_copies(&one_block(pair), "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0].insns.to_vec();
 
     assert_eq!(names(&instructions[..2]), ["push", "pop"]);
 }
@@ -2934,7 +2934,7 @@ fn test_commutative_result_copy_keeps_source_owned_copy_bytes() {
     let (input, copied) = _pair(Operation::Multiply, "imul", vec![Arc::clone(&overwrite)]);
     let owned = Arc::new(Insn { covers: Some((3, 5)), ..copied });
     let input = LirBody {
-        blocks: vec![LirBlock { insns: vec![Arc::clone(&input.insns()[0]), owned, overwrite], ..input.blocks[0].clone() }],
+        blocks: vec![LirBlock { insns: vec![Arc::clone(&input.insns()[0]), owned, overwrite].into(), ..input.blocks[0].clone() }],
         ..input
     };
 
@@ -3006,9 +3006,9 @@ fn test_high_extract_keeps_observable_wide_load_or_shift_effects() {
         };
         let mut input = _high_extract_body(tail);
         if hazard == "source-load" {
-            let mut insns = input.blocks[0].insns.clone();
+            let mut insns = input.blocks[0].insns.to_vec();
             insns[0] = Arc::new(Insn { covers: Some((1, 3)), symbol: None, ..(*insns[0]).clone() });
-            input = LirBody { blocks: vec![LirBlock { insns, ..input.blocks[0].clone() }], ..input };
+            input = LirBody { blocks: vec![LirBlock { insns: insns.into(), ..input.blocks[0].clone() }], ..input };
         }
 
         assert_eq!(high_extracts(&input, "386").unwrap(), input, "{hazard}");
@@ -3066,7 +3066,7 @@ fn test_empty_spill_reservation_is_removed_only_without_remaining_uses() {
                 )
             });
             let one = Arc::new(insn(4, Some((4, 4)), what, vec![], vec![]));
-            input.blocks[0].insns.push(one);
+            input.blocks[0].insns.edit(|insns| insns.push(one));
         }
         let calls = IndexMap::from_iter([(1, "B$ENRA".to_owned()), (2, "B$EXSA".to_owned())]);
         let reserved = prologue::reserved(&input, &slots, Some(&calls)).unwrap();

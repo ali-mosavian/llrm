@@ -150,7 +150,7 @@ pub fn _runtime_frame(
             let insns = if block.at == body.entry {
                 enter.iter().cloned().chain(block.insns.iter().cloned()).collect()
             } else {
-                block.insns.clone()
+                block.insns.to_vec()
             };
             block.with_insns(insns)
         })
@@ -165,7 +165,7 @@ pub fn _runtime_frame(
                 }
                 insns.push(Arc::clone(one));
             }
-            lir::LirBlock { insns, ..block }
+            lir::LirBlock { insns: insns.into(), ..block }
         })
         .collect();
 

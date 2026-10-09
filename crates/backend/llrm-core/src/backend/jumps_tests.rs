@@ -698,7 +698,7 @@ fn test_for_size_a_diamonds_likelier_arm_goes_second_where_size_allows() {
     let arm = large.blocks.iter_mut().find(|one| one.at == 10).unwrap();
     let mut insns: Vec<Arc<Insn>> = (0..60).map(|_| _move(10, imm(4660))).collect();
     insns.push(_jump(11, 30));
-    arm.insns = insns;
+    arm.insns = insns.into();
     assert!(_arm_bytes(16, large.blocks.iter().find(|one| one.at == 10).unwrap()).is_some_and(|bytes| bytes > 127));
     assert_eq!(order(large), vec![1, 10, 20, 30]);
 }

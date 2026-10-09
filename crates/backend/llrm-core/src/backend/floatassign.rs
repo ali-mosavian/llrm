@@ -94,7 +94,7 @@ fn _integer_loads(body: &LirBody, mut frame: Option<&mut Frame>, mut pool: Optio
             insns.push(one);
         }
         let mut made = block.clone();
-        made.insns = insns;
+        made.insns = insns.into();
         blocks.push(made);
     }
     let mut out = body.clone();
@@ -171,7 +171,7 @@ fn _integer_stores(body: &LirBody, mut frame: Option<&mut Frame>, basic_semantic
             }
         }
         let mut made = block.clone();
-        made.insns = insns;
+        made.insns = insns.into();
         blocks.push(made);
     }
     let mut out = body.clone();
@@ -1283,7 +1283,7 @@ impl Plan<'_> {
             let here = block.insns.get(cut).or(block.insns.last()).map_or(at, |one| one.at);
             restore(&mut insns, cut, here, frame, &mut home)?;
             insns.extend(block.insns[cut..].iter().cloned());
-            block.insns = insns;
+            block.insns = insns.into();
         }
         Ok(out)
     }

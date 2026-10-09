@@ -915,7 +915,7 @@ fn test_the_intervals_of_the_same_instructions_are_worked_out_once() {
     let mut other = generated.clone();
     let block = other.blocks.iter_mut().find(|block| !block.insns.is_empty()).expect("a block with instructions");
     let copy = std::sync::Arc::new((*block.insns[0]).clone());
-    block.insns[0] = copy;
+    block.insns.edit(|insns| insns[0] = copy);
     intervals(&other, None);
     assert_eq!(worked() - before, 2, "another body was answered from the first");
 }
@@ -941,9 +941,9 @@ fn test_the_intervals_of_an_edited_body_are_the_ones_worked_out_afresh() {
             };
             // One instruction made afresh, and another of the block's put in again beside it: as a spill's reload would be.
             let copy = Arc::new((*other.blocks[block].insns[at]).clone());
-            other.blocks[block].insns[at] = copy;
+            other.blocks[block].insns.edit(|insns| insns[at] = copy);
             let inserted = Arc::new((*other.blocks[block].insns[at - 1]).clone());
-            other.blocks[block].insns.insert(at, inserted);
+            other.blocks[block].insns.edit(|insns| insns.insert(at, inserted));
             let before = edited();
             let found = intervals(&other, None);
             made += edited() - before;

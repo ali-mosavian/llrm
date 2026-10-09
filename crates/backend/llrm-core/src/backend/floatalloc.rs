@@ -175,7 +175,7 @@ impl _Stack {
 
     /// Enter a block with `arriving` on the stack.
     fn block(&mut self, block: &LirBlock, live_out: BTreeSet<u32>, arriving: Vec<u32>) {
-        self.sequence = block.insns.clone();
+        self.sequence = block.insns.to_vec();
         (self.reads, self.defs) = (IndexMap::default(), IndexMap::default());
         // A group's copies are simultaneous: all read at its first, all write at its last.
         let mut spans: IndexMap<i64, (i64, i64)> = IndexMap::default();
@@ -769,7 +769,7 @@ fn _converted(body: &LirBody) -> Result<LirBody, Raised> {
         }
         stack.out.extend(block.insns[cut..].iter().cloned());
         let mut one = block.clone();
-        one.insns = std::mem::take(&mut stack.out);
+        one.insns = std::mem::take(&mut stack.out).into();
         made.insert(at, one);
     }
     let mut out = body.clone();
@@ -925,7 +925,7 @@ fn _truncating(body: &LirBody, frame: Option<&mut Frame>) -> Result<LirBody, Rai
             insns.push(insn(semantics(Operation::Barrier, "fldcw", Vec::new(), vec![Loc::Mem(saved.clone())]), at));
         }
         let mut made = block.clone();
-        made.insns = insns;
+        made.insns = insns.into();
         blocks.push(made);
     }
     let mut out = body.clone();

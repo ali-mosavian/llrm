@@ -278,7 +278,7 @@ fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
                 Vec::new(),
                 Vec::new(),
             );
-            block.insns.push(Arc::new(jump));
+            block.insns = block.insns.iter().cloned().chain([Arc::new(jump)]).collect();
         }
         explicit.push(block);
     }
