@@ -1,6 +1,8 @@
 /* Big unsigned integers (see bigint.h). */
 #include "bigint.h"
 
+Big big_w[4];
+
 static void trim(Big *b)
 {
     while (b->used && b->limb[b->used - 1] == 0)

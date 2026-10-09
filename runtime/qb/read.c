@@ -4,7 +4,7 @@
    of its items and a NUL, and after the last a key of 0xFFFF and the byte 1.
    The module's data area keeps where the next item is. */
 #include "fin.h"
-#include "input.h"
+#include "rtinit.h"
 #include "module.h"
 #include "nhstutil.h"
 
@@ -54,9 +54,9 @@ static const char *item_start(ModuleData **data)
 {
     const char *text;
 
-    if (input_active()) {
+    if (qb_input_line) {
         *data = NULL;
-        return input_cursor();
+        return qb_input_line;
     }
     *data = reading();
     text = md_cursor(*data);
@@ -72,7 +72,7 @@ static const char *item_start(ModuleData **data)
 static void item_end(ModuleData *data, const char *cursor, char delimiter)
 {
     if (!data) {
-        input_set_cursor(cursor);
+        qb_input_line = cursor;
         return;
     }
     if (delimiter != ',' && delimiter != 0)

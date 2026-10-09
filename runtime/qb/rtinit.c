@@ -52,3 +52,7 @@ void __cdecl qb_start(void)
     qb_dispatch(V_INI);
     rt_inited = 1;
 }
+
+/* Where the next item of a line of INPUT is, while one is waiting (input.c and
+   read.c share it without calling each other). */
+const char *qb_input_line;

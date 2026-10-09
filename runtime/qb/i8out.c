@@ -20,7 +20,10 @@ enum { DIGITS = 16 };
 
 /* Working numbers: kept off the stack, which is small, and used by one
    conversion at a time. */
-static Big number, rest, edge, whole;
+#define number big_w[0]
+#define rest big_w[1]
+#define edge big_w[2]
+#define whole big_w[3]
 
 /* The pieces of a finite double: value = mantissa * 2^exponent. */
 typedef struct Parts {
@@ -55,6 +58,40 @@ static int guess_exponent(const Parts *parts)
     return (int)(((long)(parts->exponent + length - 1) * 1233L) >> 12) + 1;
 }
 
+/* The magnitude of the value being converted, for the FPU's quick way. */
+static long double magnitude;
+
+/* llrm-c puts a long double local at the wrong place in the frame, so the FPU's
+   working numbers are statics. */
+static long double ten_power, product, integral, threshold, difference;
+
+/* x87's extended numbers hold 64 bits, enough for value * 10^s to be rounded
+   only once and a little (relative 2^-64, under 0.0006 of the last digit) when
+   10^s is exact, which it is up to 10^27.  The digits then come out of the
+   FPU's product, unless the part beyond them is so close to the rounding
+   threshold that the error could change the answer; those, and the numbers
+   outside that range, go on to digits_for.  Returns 0 for "not decided". */
+static int quick_digits(int k, unsigned long long *digits, int *up)
+{
+    enum { MOST = 27 };
+    int s = DIGITS - k, at;
+
+    if (s < 0 || s > MOST)
+        return 0;
+    ten_power = 1;
+    for (at = 0; at < s; at++)
+        ten_power *= 10;
+    product = magnitude * ten_power;
+    *digits = (unsigned long long)product;
+    integral = (long double)(long long)*digits;
+    threshold = (long double)ROUND_UP_FROM / 18446744073709551616.0L;
+    difference = product - integral - threshold;
+    if (difference < 0.001L && difference > -0.001L)
+        return 0;
+    *up = difference > 0;
+    return 1;
+}
+
 /* The sixteen digits of value * 10^(16-k), as a number, cut off and not yet
    rounded, and whether rounding adds one.  They are 16 digits only when k is
    right; otherwise one short of 10^15, or 10^16 and over, and the caller
@@ -62,8 +99,11 @@ static int guess_exponent(const Parts *parts)
 static unsigned long long digits_for(const Parts *parts, int k, int *up)
 {
     int s = DIGITS - k;
+    unsigned long long quick;
 
     *up = 0;
+    if (quick_digits(k, &quick, up))
+        return quick;
     big_set(&number, parts->mantissa);
     if (s >= 0) {
         big_mul_pow10(&number, (unsigned)s);
@@ -132,6 +172,7 @@ void i8_output(double value, Decimal *out)
     unsigned count = DIGITS;
 
     copy_bytes((char *)&bits, (const char *)&value, 8);
+    magnitude = value < 0 ? -value : value;
     out->sign = bits >> 63 ? '-' : ' ';
     if (special(bits, out))
         return;

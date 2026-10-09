@@ -94,8 +94,7 @@ static void fatal(unsigned n)
 {
     char name[MODULE_NAME_LENGTH];
 
-    if (cn_pos())
-        cn_crlf();
+    cn_crlf();
     write_text(qb_error_text(n));
     write_text(" in line No line number in module ");
     module_name(name);

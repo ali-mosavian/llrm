@@ -6,7 +6,7 @@
 #include "console.h"
 #include "error.h"
 #include "fin.h"
-#include "input.h"
+#include "rtinit.h"
 #include "llrm_os.h"
 #include "nhstutil.h"
 
@@ -33,28 +33,6 @@ typedef struct InputBlock {
 } InputBlock;
 
 static char line[LINE_MAX + 1];
-static const char *cursor;
-static int active;
-
-int input_active(void)
-{
-    return active;
-}
-
-const char *input_cursor(void)
-{
-    return cursor;
-}
-
-void input_set_cursor(const char *at)
-{
-    cursor = at;
-}
-
-void input_end(void)
-{
-    active = 0;
-}
 
 /* Reads and shows a line, with the backspace key to correct it. */
 static void read_line(void)
@@ -154,7 +132,6 @@ void B_INPP(SD *prompt, const InputBlock QB_FAR *block)
         cn_crlf();
     }
     str_tmp_free(prompt);
-    cursor = line;
-    active = 1;
+    qb_input_line = line;
 }
 #pragma aux B_INPP "B$INPP"

@@ -14,6 +14,10 @@ typedef struct Big {
     unsigned used;         /* limbs in use; the rest are zero */
 } Big;
 
+/* Four working numbers shared by the conversions in i8out.c and fin.c, which
+   never run together: one pool keeps the data small. */
+extern Big big_w[4];
+
 void big_set(Big *b, unsigned long long v);
 int big_is_zero(const Big *b);
 unsigned big_bits(const Big *b);

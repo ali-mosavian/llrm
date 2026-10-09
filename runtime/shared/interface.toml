@@ -148,6 +148,13 @@ returns = "void"
 
 [[op]]
 group = "screen"
+name = "screen_write"
+doc = "Writes `count` characters of `text`, all with `attribute`, into the cells from `row`, `column` along the row, leaving the cursor."
+args = [["row", "u8"], ["column", "u8"], ["text", "bytes"], ["count", "usize"], ["attribute", "u8"]]
+returns = "void"
+
+[[op]]
+group = "screen"
 name = "screen_get"
 doc = "A cell: its attribute in the high byte and its character in the low."
 args = [["row", "u8"], ["column", "u8"]]

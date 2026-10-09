@@ -18,6 +18,7 @@ public _llrm_os_screen_size
 public _llrm_os_screen_cursor
 public _llrm_os_screen_move
 public _llrm_os_screen_put
+public _llrm_os_screen_write
 public _llrm_os_screen_get
 public _llrm_os_screen_scroll
 public _llrm_os_more
@@ -451,6 +452,35 @@ _llrm_os_screen_put proc far
     pop bp
     retf
 _llrm_os_screen_put endp
+
+; _llrm_os_screen_write(row: u8, column: u8, text: bytes, count: usize, attribute: u8)
+_llrm_os_screen_write proc far
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push ds
+    push es
+    mov dh, [bp+6]
+    mov dl, [bp+8]
+    call cell_address
+    lds si, [bp+10]
+    mov cx, [bp+14]
+    mov ah, [bp+16]
+    cld
+    jcxz short written
+more:
+    lodsb
+    stosw
+    loop more
+written:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop bp
+    retf
+_llrm_os_screen_write endp
 
 ; _llrm_os_screen_get(row: u8, column: u8) -> u16
 _llrm_os_screen_get proc far

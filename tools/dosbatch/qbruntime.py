@@ -336,7 +336,7 @@ def _compile_c(source: Path, obj: Path, include: Path) -> None:
             str(dosbatch.BIN / "llrm-c"),
             str(source),
             dosbatch.m_flag(dosbatch.REAL_MODE),
-            "-O2",
+            "-Os",
             "-I",
             str(include),
             "-I",

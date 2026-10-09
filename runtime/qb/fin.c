@@ -157,7 +157,9 @@ static const char *decimal(const char *p, Parsed *out)
 }
 
 /* Working numbers for the conversion below, off the small stack. */
-static Big numerator, divisor, shifted;
+#define numerator big_w[0]
+#define divisor big_w[1]
+#define shifted big_w[2]
 
 /* floor(numerator * 2^scale / divisor), 63 or 64 bits, by long division; the
    scale is chosen to make it so, and *inexact says if there was a remainder. */
@@ -184,6 +186,41 @@ static unsigned long long divide_scaled(int *scale, int *inexact)
     return quotient;
 }
 
+/* llrm-c puts a long double local at the wrong place in the frame, so the FPU's
+   working numbers are statics. */
+static long double ten_power, quick;
+
+/* The FPU's way for a mantissa below 2^63 and a power of ten up to 10^27, both
+   exact in its 64 bits: one multiplication or division rounds to 64 bits, and
+   the double is that rounded again to 53.  The two roundings agree unless the
+   64-bit result sits within one unit of the point half way between two doubles,
+   which is when the answer goes on to the exact way.  Returns 0 for "not
+   decided". */
+static int quick_double(unsigned long long mantissa, int exponent, double *out)
+{
+    enum { MOST = 27, HALF_WAY = 0x400 };
+    byte bytes[10];
+    unsigned low;
+    int at, power = exponent < 0 ? -exponent : exponent;
+
+    if ((mantissa >> 63) || power > MOST)
+        return 0;
+    ten_power = 1;
+    for (at = 0; at < power; at++)
+        ten_power *= 10;
+    quick = (long double)(long long)mantissa;
+    if (exponent < 0)
+        quick /= ten_power;
+    else
+        quick *= ten_power;
+    copy_bytes((char *)bytes, (const char *)&quick, 8);
+    low = bytes[0] | (unsigned)(bytes[1] & 7) << 8;
+    if (low + 1 >= HALF_WAY && low <= HALF_WAY + 1 && mantissa)
+        return 0;
+    *out = (double)quick;
+    return 1;
+}
+
 /* The double nearest `mantissa` * 10^`exponent`, a tie going to the even one,
    built from its bits.  A value too big for a double is an Overflow, and one
    too small is a denormal or zero. */
@@ -195,6 +232,8 @@ static double nearest_double(unsigned long long mantissa, int exponent)
     unsigned length;
     double result;
 
+    if (quick_double(mantissa, exponent, &result))
+        return result;
     big_set(&numerator, mantissa);
     if (exponent >= 0) {
         big_mul_pow10(&numerator, (unsigned)exponent);

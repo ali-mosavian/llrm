@@ -4,21 +4,27 @@
 
 enum { COLOR_ARGUMENTS = 3, LOCATE_ARGUMENTS = 5 };
 
+enum { ABSENT = -1 };
+
 /* A statement's arguments from the block BASIC pushed: the count of words, then
    for each argument (the last at the lowest address) a flag and, only if the
-   flag is not zero, the value.  `values` get -1 where an argument is left out.
-   */
+   flag is not zero, the value.  `values` get ABSENT where an argument is left
+   out; one given as a negative number is an error, so ABSENT is free to mean
+   it. */
 static void arguments(const int *block, int *values, unsigned slots)
 {
     unsigned count = block[0], word = count, at;
 
     for (at = 0; at < slots; at++)
-        values[at] = -1;
+        values[at] = ABSENT;
     for (at = 0; word > 0 && at < slots; at++) {
         int present = block[word--];
 
-        if (present)
+        if (present) {
             values[at] = block[word--];
+            if (values[at] < 0)
+                qb_error(BE_ILLFUN);
+        }
     }
 }
 

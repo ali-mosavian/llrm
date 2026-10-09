@@ -8,7 +8,7 @@
    again from its start for each item left over. */
 #include "console.h"
 #include "fout.h"
-#include "using.h"
+#include "prnval.h"
 
 enum {
     FORMAT_MAX = 255,
@@ -43,17 +43,11 @@ typedef struct Number {
 
 static char format[FORMAT_MAX];
 static unsigned format_length, at;
-static int active;
 static Number number;
 static char body[FORMAT_MAX + DIGITS_MAX];   /* the number's own characters */
 static char line[FORMAT_MAX + DIGITS_MAX + 8];   /* the whole field */
 
-int using_active(void)
-{
-    return active;
-}
-
-void using_begin(SD *text)
+static void using_begin(SD *text)
 {
     unsigned length = text->len;
 
@@ -62,7 +56,6 @@ void using_begin(SD *text)
     copy_bytes(format, text->ptr, length);
     format_length = length;
     at = 0;
-    active = 1;
 }
 
 /* The numeric field that starts at `from`, if there is one. */
@@ -210,12 +203,10 @@ static enum FieldKind next_field(unsigned *length, NumberField *f)
     return field_at(at, length, f);
 }
 
-void using_end(int newline)
+static void using_end(int newline)
 {
-    if (active) {
-        literal();
-        active = 0;
-    }
+    literal();
+    using_ops = 0;
     if (newline)
         cn_crlf();
 }
@@ -522,19 +513,19 @@ static void number_item(void)
     write_field(&f);
 }
 
-void using_integer(long value)
+static void using_integer(long value)
 {
     load_integer(value);
     number_item();
 }
 
-void using_real(double value, int is_double)
+static void using_real(double value, int is_double)
 {
     load_real(value, is_double);
     number_item();
 }
 
-void using_string(SD *item)
+static void using_string(SD *item)
 {
     unsigned length, width, shown;
     NumberField scratch;
@@ -556,3 +547,14 @@ void using_string(SD *item)
     }
     str_tmp_free(item);
 }
+
+static const UsingOps ops = {using_integer, using_real, using_string, using_end};
+
+/* B$USNG: PRINT USING, with the format. */
+void B_USNG(SD *format)
+{
+    using_begin(format);
+    str_tmp_free(format);
+    using_ops = &ops;
+}
+#pragma aux B_USNG "B$USNG"

@@ -23,8 +23,8 @@ void cn_sync(void);
 /* Erases the character before the cursor, which is on the same line. */
 void cn_erase(void);
 
-/* COLOR: a foreground 0-31 (16 and up blink) and a background 0-7, either -1
-   to leave it. */
+/* COLOR: a foreground 0-31 (16 and up blink) and a background 0-15 (8 and up
+   are the colours 0 to 7), either -1 to leave it. */
 void cn_color(int foreground, int background);
 /* LOCATE: a 1-based row and column, either -1 to leave it. */
 void cn_locate(int row, int column);
