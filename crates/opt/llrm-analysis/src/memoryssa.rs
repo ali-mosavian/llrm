@@ -57,6 +57,14 @@ impl Access {
 }
 
 /// What an instruction reads and what it writes; `None` for anything.
+/// The list of no references, shared: an empty `Rc<[_]>` still allocates its counts.
+fn none() -> Rc<[MemRef]> {
+    thread_local! {
+        static NONE: Rc<[MemRef]> = Rc::from([]);
+    }
+    NONE.with(Rc::clone)
+}
+
 type Footprint = (Option<Rc<[MemRef]>>, Option<Rc<[MemRef]>>);
 
 /// What each instruction reads and writes, as MemorySSA and its clients
@@ -121,19 +129,19 @@ impl Accesses {
         let function = unit.function;
         let mut touched = IndexMap::default();
         for (_, inst) in function.walk() {
-            let reference = || references.get(&inst).cloned().into_iter().collect::<Vec<_>>();
+            let reference = || references.get(&inst).cloned().into_iter().collect::<Rc<[_]>>();
             let opcode = &function.instruction(inst).opcode;
             let found = match opcode {
                 // Its order against other volatile accesses is the passes', which never move one.
                 _ if let Some(own) = own_bytes(opcode) => {
-                    let touched = |does: bool| Some(if does { Rc::from(reference()) } else { Rc::from([]) });
+                    let touched = |does: bool| Some(if does { reference() } else { none() });
                     (touched(own.reads), touched(own.writes))
                 }
                 Opcode::Call(info) | Opcode::Invoke(info) => {
                     let callee = llrm_mir::memory::callee(unit.context, function, inst).and_then(|one| unit.globals.get(one.0 as usize)).and_then(GlobalValue::function);
                     let reading = stated(&info.attrs).reads && callee.is_none_or(|one| stated(&one.attrs).reads);
                     let (reads, writes) = footprint(inst).unwrap_or((None, None));
-                    (if reading { reads } else { Some(Rc::from([])) }, if unmodeled_write(unit, inst) { writes } else { Some(Rc::from([])) })
+                    (if reading { reads } else { Some(none()) }, if unmodeled_write(unit, inst) { writes } else { Some(none()) })
                 }
                 _ => continue,
             };
