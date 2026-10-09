@@ -69,6 +69,15 @@ pub struct GlobalsAA;
 impl ModuleAnalysis for GlobalsAA {
     type Result = Result<Globals, String>;
     const NAME: &'static str = "globals-aa";
+    fn covers(
+        stale: &Self::Result,
+        fresh: &Self::Result,
+    ) -> bool {
+        match (stale, fresh) {
+            (Ok(stale), Ok(fresh)) => stale.covers(fresh),
+            _ => stale == fresh,
+        }
+    }
     fn run(
         module: &Module,
         analyses: &mut ModuleAnalyses,
@@ -85,6 +94,17 @@ pub struct Summaries;
 impl ModuleAnalysis for Summaries {
     type Result = Result<IndexMap<String, Summary>, String>;
     const NAME: &'static str = "summaries";
+    fn covers(
+        stale: &Self::Result,
+        fresh: &Self::Result,
+    ) -> bool {
+        match (stale, fresh) {
+            (Ok(stale), Ok(fresh)) => {
+                fresh.iter().all(|(name, new)| stale.get(name).is_some_and(|old| old.covers(new)))
+            }
+            _ => stale == fresh,
+        }
+    }
     fn run(
         module: &Module,
         analyses: &mut ModuleAnalyses,

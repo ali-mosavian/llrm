@@ -515,3 +515,128 @@ fn a_recomputation_that_comes_to_the_same_result_is_counted() {
     crate::passes::trace_recomputes(false);
     assert_eq!(counts, vec![("counted", "", "first", 1), ("counted", "retarget", "same", 1)]);
 }
+
+/// A late pass: rewrites a branch, adds no memory operation.
+struct Quiet;
+
+impl FunctionPass for Quiet {
+    fn name(&self) -> &'static str {
+        "quiet"
+    }
+
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let function = &mut *unit.function;
+        let branch = function.terminator(function.entry().unwrap()).unwrap();
+        let at = function.instruction(branch).operands.len() - 2;
+        let target = function.instruction(branch).operands[at + 1];
+        function.set_operand(branch, at, target);
+        PreservedAnalyses::none()
+    }
+}
+
+/// Every run of a pass over the module analyses was a recomputation of what the
+/// passes after the summaries were made had left as it was (201 of 833 over
+/// QCport at -O1): the module analyses frozen at a point of the pipeline are
+/// held past passes that add no memory operation, and dropped by one that may.
+#[test]
+fn a_frozen_module_analysis_is_held_past_passes_that_add_no_memory_operation() {
+    SUMMED.set(0);
+    let mut passes = PassManager::default();
+    passes.require::<Bodies>();
+    passes.freeze::<Bodies>();
+    passes.add(Quiet);
+    passes.add(Quiet);
+    passes.add(Counts(PreservedAnalyses::all()));
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(SUMMED.get(), 1, "a pass that adds no memory operation dropped the frozen analysis");
+
+    SUMMED.set(0);
+    let mut passes = PassManager::default();
+    passes.require::<Bodies>();
+    passes.freeze::<Bodies>();
+    passes.add(Quiet);
+    passes.add(Retarget(PreservedAnalyses::none()));
+    passes.add(Counts(PreservedAnalyses::all()));
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(SUMMED.get(), 2, "a pass that may add one did not drop it");
+}
+
+/// What a body holds, as a number: a summary that can only be an upper bound.
+struct Size;
+
+impl ModuleAnalysis for Size {
+    type Result = usize;
+    const NAME: &'static str = "size";
+    fn run(
+        module: &Module,
+        _: &mut ModuleAnalyses,
+    ) -> usize {
+        module.functions().map(|(_, _, function)| function.walk().count()).sum()
+    }
+    fn covers(
+        stale: &usize,
+        fresh: &usize,
+    ) -> bool {
+        fresh <= stale
+    }
+}
+
+/// A late pass that says it adds nothing and does.
+struct Lies;
+
+impl FunctionPass for Lies {
+    fn name(&self) -> &'static str {
+        "lies"
+    }
+
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let ty = unit.context.types.int(16);
+        let one = unit.context.int(ty, 1);
+        let function = &mut *unit.function;
+        let first = function.block(function.entry().unwrap()).instructions()[0];
+        let made = function.create_instruction(
+            crate::opcode::Opcode::Binary(crate::opcode::BinaryOp::Add),
+            ty,
+            vec![Operand::Constant(one), Operand::Constant(one)],
+            crate::opcode::Flags::default(),
+            Some("extra"),
+        );
+        function.insert(made, crate::edit::Position::Before(first)).unwrap();
+        PreservedAnalyses::none()
+    }
+}
+
+/// `LLRM_CHECK_STALE` recomputes what a pass left frozen, and a pass that
+/// declared it adds nothing and did is named.
+#[test]
+fn a_late_pass_that_adds_what_it_said_it_would_not_fails_the_stale_check() {
+    crate::passes::check_stale(true);
+    let run = |pass: Box<dyn FnOnce(&mut PassManager)>| {
+        let mut passes = PassManager::default();
+        passes.require::<Size>();
+        passes.freeze::<Size>();
+        pass(&mut passes);
+        passes.run_module(&mut module(), Rc::new(Neutral))
+    };
+    assert!(run(Box::new(|passes| passes.add(Quiet))).is_ok(), "a rewrite adds nothing");
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(Box::new(|passes| passes.add(Lies)))));
+    crate::passes::check_stale(false);
+    let message = *caught.expect_err("the pass added an instruction").downcast::<String>().expect("a message");
+    assert!(message.contains("lies added a memory operation"), "{message}");
+}

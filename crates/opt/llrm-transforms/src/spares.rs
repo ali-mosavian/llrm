@@ -24,6 +24,10 @@ impl ModulePass for Spares {
         "spares"
     }
 
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
     fn run(
         &mut self,
         module: &mut Module,

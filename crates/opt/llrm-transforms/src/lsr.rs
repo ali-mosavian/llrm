@@ -58,6 +58,10 @@ impl FunctionPass for Lsr {
         "lsr"
     }
 
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,
