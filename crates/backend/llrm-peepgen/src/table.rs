@@ -5,7 +5,7 @@
 use iced_x86::RflagsBits;
 use indexmap::IndexMap;
 
-#[path = "../../../target/llrm-x86-m16/src/instructions/parse.rs"]
+#[path = "../../../target/llrm-x86/src/parse.rs"]
 #[allow(dead_code)]
 mod parse;
 

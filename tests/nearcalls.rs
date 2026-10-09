@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::process::Command;
 
-mod common;
+pub mod common;
 
 fn compiled(
     tool: &str,

@@ -11,11 +11,11 @@ use std::collections::BTreeSet;
 use iced_x86::Register;
 
 use crate::analysis::intervals as ranges;
-use crate::backend::allocate::{_clobbered, _masks, _unread_move};
+use crate::backend::allocate::{_clobbered, _masks};
 use crate::backend::classes::RegisterClasses;
 use crate::backend::target::{self, Segments};
-use crate::model::ir::{Held, Loc, Operation, Space};
-use crate::model::lir::{Insn, LirBody};
+use crate::model::ir::{Loc, Operation, Space};
+use crate::model::lir::LirBody;
 use crate::support::hash::IndexMap;
 
 pub type Classes = IndexMap<u32, BTreeSet<Register>>;
@@ -586,8 +586,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::model::ir::{Addr, Mem, Semantics};
-    use crate::model::lir::{LirBlock, Phi};
+    use crate::model::ir::{Addr, Held, Mem, Semantics};
+    use crate::model::lir::{Insn, LirBlock, Phi};
 
     /// A far pointer's segment that a loop reads only through its header phi:
     /// FADETOCOLOR's selectors had no class of their own after SsaSpill and

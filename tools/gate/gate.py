@@ -32,6 +32,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 LANGUAGES = ("qb", "c", "nib")
 NO_BINARIES = {"pytest", "fmt", "rfmt-post"}  # steps that do not run the release binaries, so need no build first
+SERIAL_STEPS = frozenset({"rfmt-post"})
 
 
 @functools.cache  # read once: a bisect checks out commits that predate this file
@@ -179,7 +180,16 @@ def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
 
 # The build every step runs after, and every measurement is taken with: `cargo build --bins` alone produces a different llrm-c (the
 # test build unifies features differently), whose compile costs differ by up to 6% a step. tools/measure.py builds a base with it too.
-BUILD = "cargo build --release -q --bins && cargo test --release -q --workspace --no-run"
+WARNINGS_AS_ERRORS = "RUSTFLAGS='-D warnings'"
+BUILD = (
+    f"{WARNINGS_AS_ERRORS} cargo check --workspace --all-targets -q && "
+    f"{WARNINGS_AS_ERRORS} cargo check --release --workspace --all-targets -q && "
+    f"{WARNINGS_AS_ERRORS} cargo build --release -q --bins && "
+    f"{WARNINGS_AS_ERRORS} cargo test --release -q --workspace --no-run"
+)
+# Measurements compare two revisions, so their historical base is built without
+# today's warning policy.
+MEASURE_BUILD = "cargo build --release -q --bins && cargo test --release -q --workspace --no-run"
 # The shipped build (Cargo.toml `[profile.dist]`): what the creep run on main measures. Not a gate step: three minutes cold.
 DIST_BUILD = "cargo build --profile dist -q --bins"
 
@@ -390,7 +400,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
         if results["build"][0]:
             print(f"GATE {p.tier} FAIL: build")
             return 1, ["build"]
-    alone = [s for s in p.steps if s in load()["exclusive"]]
+    alone = [s for s in p.steps if s in load()["exclusive"] or s in SERIAL_STEPS]
     rest = [s for s in p.steps if s != "build" and s not in alone]
     jobs = int(os.environ.get("JOBS", "4"))
     with ThreadPoolExecutor(jobs) as pool:

@@ -139,7 +139,7 @@ fn a_mark_names_the_changes_since_while_they_are_on_record_of_that_function() {
     assert_eq!(f.changes_since(mark), Some(&[][..]));
     f.replace_all_uses_with(value, Operand::Value(a));
     assert_eq!(f.changes_since(mark), Some(&[Change::Rewritten(y)][..]));
-    let mut copy = f.clone();
+    let copy = f.clone();
     assert_eq!(copy.changes_since(mark), None, "a copy's edits are its own");
     assert_eq!(copy.changes_since(copy.mark()), Some(&[][..]));
     f.erase(x).expect("unused now");
@@ -147,7 +147,6 @@ fn a_mark_names_the_changes_since_while_they_are_on_record_of_that_function() {
     f.take_changes();
     assert_eq!(f.changes_since(mark).map(<[Change]>::len), Some(2), "taken, and still on the log");
     assert_eq!(f.changes_since(f.mark()), Some(&[][..]));
-    let _ = &mut copy;
 }
 
 /// A parameter the passes removed leaves the others named by the position they
@@ -354,7 +353,7 @@ fn a_copy_starts_with_an_empty_log_and_equals_the_function_it_copies() {
     let a = f.parameters()[0];
     f.replace_all_uses_with(value, Operand::Value(a));
     assert!(!f.changes.0.is_empty());
-    let mut copy = f.clone();
+    let copy = f.clone();
     assert!(copy.changes.0.is_empty(), "the copy carries {} changes", copy.changes.0.len());
     assert!(*f == copy, "the log is no part of what a function is");
     let mark = copy.mark();

@@ -12,7 +12,6 @@ use super::borrows::expression_owner;
 use super::vectors::GENERATED;
 use super::*;
 use crate::lexer::lex;
-use crate::parser::parse;
 use crate::syntax::{Clause, Struct, StructField};
 
 /// Finds `KEY`'s slot in `SLOTS`: its own when `FOUND`, else the free one it

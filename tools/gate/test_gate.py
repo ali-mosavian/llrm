@@ -404,6 +404,13 @@ def test_a_one_line_change_to_any_rust_file_selects_the_fmt_step_in_the_fast_tie
     assert "fmt" not in gate.plan(["tools/measure.py"]).steps and "fmt" not in gate.plan(["docs/testing.md"]).steps
 
 
+def test_the_build_rejects_compiler_warnings():
+    assert gate.WARNINGS_AS_ERRORS == "RUSTFLAGS='-D warnings'"
+    assert gate.BUILD.count(gate.WARNINGS_AS_ERRORS) == 4
+    assert "cargo check --workspace --all-targets -q" in gate.BUILD
+    assert "cargo check --release --workspace --all-targets -q" in gate.BUILD
+
+
 def test_a_formatter_change_runs_its_tests_and_neither_step_needs_the_compiler_built():
     """`fmt` and `rfmt-post` format text; a build before them is minutes spent on binaries they never run."""
     for touched in ("tools/rfmt-post/src/lib.rs", "tools/fmt.sh", "rustfmt.toml"):
@@ -411,6 +418,10 @@ def test_a_formatter_change_runs_its_tests_and_neither_step_needs_the_compiler_b
         assert {"fmt", "rfmt-post"} <= set(p.steps), (touched, p.steps)
     assert "build" not in gate.plan(["tools/rfmt-post/src/lib.rs"]).steps
     assert "rfmt-post" not in gate.plan(["crates/opt/llrm-analysis/src/ranges.rs"]).steps
+
+
+def test_the_formatter_helper_tests_run_after_the_formatter():
+    assert gate.SERIAL_STEPS == frozenset({"rfmt-post"})
 
 
 def test_the_fmt_step_fails_only_once_enforced_and_the_switch_is_one_line_of_tiers_toml():
