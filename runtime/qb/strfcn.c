@@ -52,6 +52,43 @@ SD *B_SCPY(SD *sd)
     return str_tmp_copy(sd, 0, sd->len);
 }
 
+/* B$SCPF: a function's string result, copied to a temporary before the frame
+   that owns it goes; the original is deleted. */
+SD *B_SCPF(SD *sd)
+{
+    SD *copy = str_tmp_copy(sd, 0, sd->len);
+
+    str_release(sd);
+    sd->len = 0;
+    return copy;
+}
+
+/* UCASE$ and LCASE$: the argument's letters in one case, in a temporary. */
+static SD *recase(SD *sd, char low, char high, int shift)
+{
+    char *data;
+    word at;
+    SD *result = str_tmp(sd->len, &data);
+
+    for (at = 0; at < sd->len; at++) {
+        char c = sd->ptr[at];
+
+        data[at] = c >= low && c <= high ? c + shift : c;
+    }
+    str_tmp_free(sd);
+    return result;
+}
+
+SD *B_UCAS(SD *sd)
+{
+    return recase(sd, 'a', 'z', 'A' - 'a');
+}
+
+SD *B_LCAS(SD *sd)
+{
+    return recase(sd, 'A', 'Z', 'a' - 'A');
+}
+
 /* B$FLEN: LEN of a string; a temporary is consumed. */
 int B_FLEN(SD *sd)
 {
@@ -64,4 +101,7 @@ int B_FLEN(SD *sd)
 #pragma aux B_RTRM "B$RTRM"
 #pragma aux B_SPAC "B$SPAC"
 #pragma aux B_FLEN "B$FLEN"
+#pragma aux B_SCPF "B$SCPF"
+#pragma aux B_UCAS "B$UCAS"
+#pragma aux B_LCAS "B$LCAS"
 #pragma aux B_SCPY "B$SCPY"

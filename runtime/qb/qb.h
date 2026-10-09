@@ -22,7 +22,7 @@ enum { VT_I2 = 0x02, VT_SD = 0x03, VT_R4 = 0x04, VT_R8 = 0x08, VT_I4 = 0x14 };
 
 /* Run-time errors (inc/messages.inc BE_*) and the fatal ones (FE_*). */
 enum {
-    BE_RETURN = 3, BE_NODATA = 4, BE_ILLFUN = 5, BE_OVERFLOW = 6,
+    BE_SYNTAX = 2, BE_RETURN = 3, BE_NODATA = 4, BE_ILLFUN = 5, BE_OVERFLOW = 6,
     BE_MEMORY = 7, BE_SUBSCRIP = 9, BE_REDIM = 10, BE_DIVIDE0 = 11,
     BE_TYPE = 13, BE_STRINGSP = 14, BE_STRINGFO = 16, BE_NORESUME = 19,
     BE_RESUME = 20, BE_FILENUM = 52, BE_NOFILE = 53, BE_FILEMODE = 54,

@@ -15,7 +15,12 @@ typedef struct Decimal {
     int exponent;
 } Decimal;
 
-/* False for an infinity or NaN. */
-int i8_output(double value, Decimal *out);
+/* x * 10^k in extended precision, the math pack's own way (it scales both
+   the digits QB prints and the numbers it reads). */
+long double i8_scale(long double x, int k);
+
+/* The digits of `value`; an infinity or NaN comes out as the text 1#INF,
+   1#NAN or 1#IND, as in QB. */
+void i8_output(double value, Decimal *out);
 
 #endif

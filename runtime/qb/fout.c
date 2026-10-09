@@ -7,11 +7,7 @@ enum { SINGLE_DIGITS = 7, DOUBLE_DIGITS = 16 };
 
 /* B$ASCRND: round the digits to `want` places, half up, and drop the zeros
    that leaves at the end.  `exponent` is that of the last digit. */
-static void round_digits(
-    Decimal *d,
-    int *exponent,
-    word want
-)
+static void round_digits(Decimal *d, int *exponent, word want)
 {
     word at;
 
@@ -41,20 +37,13 @@ static void round_digits(
     }
 }
 
-static word put_digits(
-    char *out,
-    const char *digits,
-    word count
-)
+static word put_digits(char *out, const char *digits, word count)
 {
     copy_bytes(out, digits, count);
     return count;
 }
 
-static word put_zeros(
-    char *out,
-    word count
-)
+static word put_zeros(char *out, word count)
 {
     word at;
 
@@ -64,11 +53,7 @@ static word put_zeros(
 }
 
 /* 123.45, 1000, .005: the digits laid out without an exponent. */
-static word plain(
-    char *out,
-    const Decimal *d,
-    int exponent
-)
+static word plain(char *out, const Decimal *d, int exponent)
 {
     int left = exponent + d->count;
     word length = 0, used = 0;
@@ -90,12 +75,7 @@ static word plain(
 
 /* 1.5E+20, 2D-08: the first digit, a point, the rest, and the exponent of
    the first digit with two places at least. */
-static word scientific(
-    char *out,
-    const Decimal *d,
-    int exponent,
-    int is_double
-)
+static word scientific(char *out, const Decimal *d, int exponent, int is_double)
 {
     word length = 0;
 
@@ -116,18 +96,13 @@ static word scientific(
     return length;
 }
 
-word fout_real(
-    double v,
-    int is_double,
-    char *out
-)
+word fout_real(double v, int is_double, char *out)
 {
     Decimal d;
     int limit = is_double ? DOUBLE_DIGITS : SINGLE_DIGITS, exponent;
     int magnitude;
 
-    if (!i8_output(v, &d))
-        qb_error(BE_OVERFLOW);
+    i8_output(v, &d);
     exponent = d.exponent;
     if (!(d.count == 1 && d.text[0] == '0'))
         exponent -= d.count;

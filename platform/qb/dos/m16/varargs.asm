@@ -25,60 +25,46 @@
 
                 include qb.inc
 
-                extrn   c array_dim:far
-                extrn   c file_close:far
+;; fastcall: ax, dx (the C side, regparm3, takes them so); the name is @array_dim@4
+array_dim       proto   far fastcall :word, :word
+file_close      proto   far fastcall :word, :word
 
 DIM_ALLOCATE    equ     0                       ;; enum DimMode, array.h
 DIM_REALLOCATE  equ     1
 
+;; the DIM entries differ in the mode alone
+DIMPROC         macro   entry:req, mode:req
+entry           proc    public\
+                        elem:word, rankFeat:word, ad:ptr word
+
+                invoke  array_dim, mode, addr ad ;; the block, past bp and the return
+
+                movzx   ebx, B rankFeat         ;; rank
+                lea     bx, [4*ebx+6]           ;; bytes the caller pushed
+                jmp     popblock
+entry           endp
+                endm
+
 .code
 ;;::::::::::::::
-;; B$DDIM (...)
-B$DDIM          proc    public
-
-                mov     ax, DIM_ALLOCATE
-                jmp     short dimension
-B$DDIM          endp
+;; B$DDIM (...), B$RDIM (...)
+                DIMPROC B$DDIM, DIM_ALLOCATE
+                DIMPROC B$RDIM, DIM_REALLOCATE
 
 ;;::::::::::::::
-;; B$RDIM (...)
-B$RDIM          proc    public
+;; B$CLOS (channel:word..., count:word)
+B$CLOS          proc    public\
+                        channel:word, count:word
 
-                mov     ax, DIM_REALLOCATE
-B$RDIM          endp
+                invoke  file_close, addr channel, count
 
-;;::::::::::::::
-;; dimension (ax: mode) :  array_dim on the caller's block, then pops it
-dimension       proc
-
-                push    bp
-                mov     bp, sp
-
-                lea     dx, [bp+6]              ;; the block, past bp and the return
-                call    array_dim
-
-                movzx   ebx, B [bp+8]           ;; rank
-                lea     bx, [4*ebx+6]           ;; bytes the caller pushed
-                jmp     short popblock
-dimension       endp
-
-;;::::::::::::::
-;; B$CLOS (count:word, channel:word...)
-B$CLOS          proc    public
-
-                push    bp
-                mov     bp, sp
-
-                lea     ax, [bp+8]              ;; the channels
-                mov     dx, [bp+6]              ;; how many
-                call    file_close
-
-                movzx   ebx, W [bp+6]
+                movzx   ebx, count
                 lea     bx, [2*ebx+2]           ;; bytes the caller pushed
+                jmp     popblock
 B$CLOS          endp
 
 ;;::::::::::::::
-;; popblock (bx: bytes, bp pushed) :  return to the caller, popping bx bytes
+;; popblock (bx: bytes, bp pushed by the entry) :  return, popping bx bytes
 popblock        proc
 
                 pop     bp

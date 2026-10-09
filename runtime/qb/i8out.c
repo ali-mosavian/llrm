@@ -71,11 +71,10 @@ static long double extended(const unsigned char *bytes)
     return *(const long double *)bytes;
 }
 
-/* $i8_tpwr10: x * 10^k, one octal place of k at a time, lowest first. */
-static long double times_power_of_ten(
-    long double x,
-    int k
-)
+/* $i8_tpwr10: x * 10^k, one octal place of k at a time, lowest first.  The
+   products are rounded to 64 bits one after another, as the math pack's are,
+   which is why the digits come out as QB's do. */
+long double i8_scale(long double x, int k)
 {
     int base = k < 0 ? NEGATIVE : 0, place = 0;
     word left = k < 0 ? -k : k;
@@ -93,10 +92,7 @@ static long double times_power_of_ten(
 
 /* The estimate of the decimal exponent, from the extended exponent and the
    top mantissa byte. */
-static int estimate(
-    word exponent,
-    byte top
-)
+static int estimate(word exponent, byte top)
 {
     unsigned long sum = (unsigned long)exponent * 0x4D10U;
 
@@ -108,10 +104,7 @@ static int estimate(
 
 /* The fraction as the digit loop wants it: the mantissa and a byte of zeros,
    shifted right to put its exponent at 0x3FFE, plus the rounding bias. */
-static void fraction(
-    const unsigned char *raw,
-    word limb[LIMBS]
-)
+static void fraction(const unsigned char *raw, word limb[LIMBS])
 {
     word exponent = raw[8] | raw[9] << 8, shift = 0x3FFE - exponent, carry = 0;
     int at;
@@ -160,10 +153,7 @@ static byte next_digit(word limb[LIMBS])
     return (byte)carry;
 }
 
-int i8_output(
-    double value,
-    Decimal *out
-)
+void i8_output(double value, Decimal *out)
 {
     unsigned char bits[8];
     word w0, w1, w2, high;
@@ -185,14 +175,22 @@ int i8_output(
         out->text[0] = '0';
         out->count = 1;
         out->exponent = 0;
-        return 1;
+        return;
     }
-    if (((~high) & 0x7FF0) == 0)
-        return 0;
+    if (((~high) & 0x7FF0) == 0) {
+        const char *name = "1#NAN";
+
+        if (!(w0 | w1 | w2))
+            name = (high & 0x0F) == 0 ? "1#INF" : high == 0xFFF8 ? "1#IND" : name;
+        copy_bytes(out->text, name, 5);
+        out->count = 5;
+        out->exponent = 1;
+        return;
+    }
     scaled = *(const double *)bits;
     copy_bytes((char *)raw, (const char *)&scaled, 10);
     k = estimate(raw[8] | raw[9] << 8, raw[7]);
-    scaled = times_power_of_ten(scaled, -k);
+    scaled = i8_scale(scaled, -k);
     if (extended(below_one) <= scaled) {
         k++;
         scaled *= extended(tenth);
@@ -205,5 +203,4 @@ int i8_output(
         count--;
     out->count = count;
     out->exponent = k;
-    return 1;
 }

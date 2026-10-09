@@ -36,6 +36,8 @@ void str_owner_moved(SD *owner, int delta);
 void str_adopt(SD *to, SD *from);
 
 SD *str_tmp(word len, char **data);
+/* B$SASS's work (stcore.c) */
+void str_assign(SD *source, SD *destination);
 SD *str_tmp_copy(SD *source, word from, word len);
 byte str_is_tmp(const SD *sd);
 void str_tmp_free(SD *sd);

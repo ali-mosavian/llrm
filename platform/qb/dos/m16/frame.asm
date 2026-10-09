@@ -38,8 +38,8 @@
                 public  c b_curframe
 
 .data
-b_curframe      dw      0                       ;; frame of the procedure running
-retaddr         dd      0                       ;; where the entries return to
+b_curframe      word    0                       ;; frame of the procedure running
+retaddr         dword   0                       ;; where the entries return to
 
 .code
 ;;::::::::::::::

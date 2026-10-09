@@ -23,7 +23,7 @@
                 include qb.inc
                 dosseg
 
-                extrn   c qb_start:far
+qb_start        proto   far c
                 extrn   c llrm_os_psp:word
 
                 public  c qb_atopsp
@@ -36,6 +36,12 @@ PAGES_64K       equ     1000h                   ;; paragraphs in 64 KB
 LAST_WORD       equ     0FFFEh                  ;; the last word of 64 KB
 HEADER_CODE     equ     30h                     ;; where the module's code starts
 
+;; DGROUP's first bytes are zero: the compiled code uses address 0 as the
+;; empty string's descriptor (PRINT with nothing passes it)
+_NULL           segment para public 'BEGDATA'
+                word    8 dup (0)
+_NULL           ends
+
 XIB             segment word public 'DATA'
 XIB             ends
 XI              segment word public 'DATA'
@@ -44,17 +50,17 @@ XIE             segment word public 'DATA'
 XIE             ends
 
 _DATA           segment word public 'DATA'
-qb_asizds       dw      0                       ;; the last usable word of DGROUP
-qb_xi_begin     dw      O DGROUP:XIB
-qb_xi_end       dw      O DGROUP:XIE
-qb_module_segment dw    0                       ;; the module's code segment
+qb_asizds       word    0                       ;; the last usable word of DGROUP
+qb_xi_begin     word    O DGROUP:XIB
+qb_xi_end       word    O DGROUP:XIE
+qb_module_segment word  0                       ;; the module's code segment
 _DATA           ends
 
 _BSS            segment word public 'BSS'
 _BSS            ends
 
 STACK           segment para stack 'STACK'
-                db      2048 dup (?)
+                byte    2048 dup (?)
 qb_atopsp       label   byte
 STACK           ends
 
@@ -64,7 +70,7 @@ BC_SAB          segment word public 'BC_SEGS'
 bc_sa           label   byte
 BC_SAB          ends
 
-DGROUP          group   _DATA, _BSS, XIB, XI, XIE, STACK, BC_SAB
+DGROUP          group   _NULL, _DATA, _BSS, XIB, XI, XIE, STACK, BC_SAB
 
 .code
 ;;::::::::::::::
@@ -112,7 +118,7 @@ start           proc
                 and     cx, 3
                 rep     stosb
 
-                call    qb_start
+                invoke  qb_start
 
                 ;; enter the module: BC_SA's far address, code at 30h
                 mov     ax, W bc_sa+2

@@ -198,4 +198,4 @@ void file_xinit(void)
 #pragma aux B_GET3 "B$GET3"
 #pragma aux B_PUT3 "B$PUT3"
 #pragma aux B_FLOF "B$FLOF"
-#pragma aux file_close "_file_close"
+#pragma aux file_close "@file_close@4"

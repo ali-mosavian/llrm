@@ -5,3 +5,4 @@ PRINT "[" + LTRIM$(s$) + "]"
 PRINT LEN(s$)
 PRINT STR$(-5)
 PRINT STR$(12345)
+PRINT LCASE$("MiXed"); UCASE$("MiXed")
