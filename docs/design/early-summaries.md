@@ -1,6 +1,6 @@
 # Summaries at fixed points in the early phase
 
-Status: proposal, for review. Follows [#1153](https://github.com/ali-mosavian/llrm/pull/1153), which froze the module summaries after the interprocedural step.
+Status: parked. Measured ceiling 0.2-0.6% of the -O1 compile (see Review and measurement). Follows [#1153](https://github.com/ali-mosavian/llrm/pull/1153), which froze the module summaries after the interprocedural step.
 
 ## Where the time is
 
@@ -75,3 +75,17 @@ The alternative is to keep every recomputation and make each cheaper: update the
 1. Measure: the time of `Summaries` and `GlobalsAA` inside the interprocedural reruns and in the stretches' first computations, separately.
 2. If the reruns' share is above 2% of the compile: the merge, the check mode and the test (a pass that adds an access fails it, seen failing), in one PR; the callee-first order in another, because it moves objects.
 3. Stop if the first PR buys under 1% of the -O1 compile.
+
+## Review and measurement
+
+Measured: keeping `Summaries` and `GlobalsAA` across every `edited` splice, promote and deadargs in the interprocedural step (an unsound rule, a bound on what any fixed-point scheme can save) gave -0.17% at -O1 and -0.64% at -O2 over bench and QCport, objects identical on 272 programs. The proposal is parked at that ceiling; the "1-2%" above was a guess.
+
+A review of this document against the code found what to correct if it is ever taken up:
+
+- Summaries are already transitive: `_summarized` adds each callee's instantiated summary at its call site, so after an inline the caller's held summary is sound as it is and nothing is merged. The checker, not the summary, is what an inline strains.
+- Passes that change a signature or add a function are not "remove only": deadargs and argument promotion renumber parameters, so a held `Parameter(i)` slice or captures entry maps to the wrong actual; cloning adds a function the held summary lacks. They recompute.
+- `Summary::covers` (#1153) is built for the late passes: it is lax (a fresh `unknown_*` covers anything; captures and `unknown_write_types` are ignored) and strict (exact slice membership, not containment, so a reshaped slice would raise a false alarm). Early passes need a containment check of its own, with a regression test that fails on a dropped unknown write.
+- The dirty set after an edit is larger than "the caller and what is above it": once an exported or address-taken entry is in the closure, every caller of something unknown joins it. `GlobalsAA` is also solved over the whole module; only its per-body facts are kept.
+- The saving is not only the module analyses: a recomputed summary that differs gives a new `Outer`, and every body's analyses that read it are dropped. The measurement above includes that.
+- gcc: `pass_tail_recursion` runs before the summaries are made ([passes.def:97](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/passes.def#L97)), and the late `pass_local_pure_const` and `pass_modref` ([:368-369](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/passes.def#L368)) refine summaries for callers compiled later in the unit, not "for the next unit".
+- Stale summaries also feed the reruns' gvn and dse and the inline-candidate costs, not only the late passes.
