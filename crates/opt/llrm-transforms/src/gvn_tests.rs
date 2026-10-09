@@ -413,7 +413,7 @@ fn a_condition_is_known_below_the_edge_it_took() {
     let after = managed(
         "define i16 @f(i16 %x, i16 %y, i1 %c) {
 b0:
-  %k = and i16 12, 6
+  %k = icmp ugt i16 %x, 1
   br i1 %k, label %b1, label %b4
 
 b1:
