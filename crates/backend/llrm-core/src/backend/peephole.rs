@@ -160,6 +160,7 @@ impl Peephole {
         let body = copyprop::forwarded(&body);
         let body = extensions(self.rules, &body);
         let body = copysink::sunk(&body);
+        let body = crate::backend::postrasink::sunk(&body);
         let body = spillforward::forwarded(&body);
         let body = storecombine::combined(&body);
         let body = pushed_constants(self.rules, &body);

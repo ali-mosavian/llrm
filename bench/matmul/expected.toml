@@ -1,4 +1,4 @@
-reason = "return duplication (gcc copy_bb_p): a jump to a block that only returns is replaced by a copy of it at -O2: instructions fall (fib -3.7%, hanoi -3.6%, rectwo -2.4%, queens -0.4%), code bytes grow by the copies"
+reason = "PostRAMachineSinking: a copy only one successor reads moves into it: instructions fall (rectwo c -15%, hanoi nib -24%, hanoi c -7%, fib nib -22%, fib c -3.8%, bintree -3%), code bytes equal or smaller"
 blessed = "2026-10-09"
 
 [bas.O2]
