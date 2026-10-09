@@ -216,6 +216,11 @@ pub fn worked(body: &LirBody) -> usize {
     body.facts.0.counted("intervals-worked")
 }
 
+/// How many edited answers this body's facts have worked the changed values of out from where they occur, not by walking the body.
+pub fn by_occurrences(body: &LirBody) -> usize {
+    body.facts.0.counted("intervals-by-occurrences")
+}
+
 /// How many answers this body's facts have made by editing an earlier one, for a test that a body made of another's instructions is.
 pub fn edited(body: &LirBody) -> usize {
     body.facts.0.counted("intervals-edited")
@@ -401,7 +406,7 @@ fn updated(held: &Remembered, body: &LirBody, index: &Indexes, busy: &Frequency)
         let at = old.partition_point(|one| *one < slot) - 1;
         new[at] + (slot - old[at])
     };
-    let again = worked_out_with_totals(body, index, busy, &|value| touched.contains(&value));
+    let again = worked_among(body, index, busy, &touched);
     let mut answer: IndexMap<u32, Interval> = IndexMap::default();
     let mut totals: IndexMap<u32, f64> = IndexMap::default();
     for (value, kept) in held.answer.iter().filter(|(value, _)| !touched.contains(value)) {
@@ -422,6 +427,53 @@ fn updated(held: &Remembered, body: &LirBody, index: &Indexes, busy: &Frequency)
     answer.extend(again.0);
     totals.extend(again.1);
     Some((answer, totals))
+}
+
+/// `worked_out_with_totals` of the values `only` holds, from where they occur: one pass over the instructions finds each value's
+/// occurrences and weights, and the intervals are found from those (`intervals_by_occurrences`) where the walk would take the body's
+/// liveness whole and walk every block. For a body with phis, whose arguments are read in other blocks, the walk.
+fn worked_among(body: &LirBody, index: &Indexes, busy: &Frequency, only: &crate::support::hash::HashSet<u32>) -> (IndexMap<u32, Interval>, IndexMap<u32, f64>) {
+    if body.blocks.iter().any(|block| !block.phis.is_empty()) || std::env::var_os("LLRM_WALK_ALL").is_some() {
+        return worked_out_with_totals(body, index, busy, &|value| only.contains(&value));
+    }
+    body.facts.0.bump("intervals-by-occurrences");
+    let mut places: IndexMap<u32, Vec<Occurrence>> = IndexMap::default();
+    let mut totals: IndexMap<u32, f64> = IndexMap::default();
+    let mut named: Vec<(u32, bool, bool)> = Vec::new();
+    for (block_index, block) in body.blocks.iter().enumerate() {
+        let each = busy.block(block.at);
+        for (position, one) in block.insns.iter().enumerate() {
+            named.clear();
+            for (value, defined) in one.defines.iter().map(|value| (value, true)).chain(one.uses.iter().map(|value| (value, false))) {
+                if !only.contains(value) {
+                    continue;
+                }
+                *totals.entry(*value).or_insert(0.0) += each;
+                match named.iter_mut().find(|(seen, _, _)| seen == value) {
+                    Some(flags) => {
+                        flags.1 |= defined;
+                        flags.2 |= !defined;
+                    }
+                    None => named.push((*value, defined, !defined)),
+                }
+            }
+            for &(value, defined, used) in &named {
+                places.entry(value).or_default().push(((block_index, position), defined, used));
+            }
+        }
+    }
+    let mut values: Vec<u32> = places.keys().copied().collect();
+    values.sort_unstable();
+    let ranges = intervals_by_occurrences(body, index, &values, &places);
+    let weight = _divided(&totals, &ranges);
+    let answer = ranges
+        .into_iter()
+        .map(|(value, one)| {
+            let weight = weight.get(&value).copied().unwrap_or(0.0);
+            (value, Interval { weight, ..one })
+        })
+        .collect();
+    (answer, totals)
 }
 
 fn worked_out(body: &LirBody, index: Option<&Indexes>, busy: &Frequency) -> IndexMap<u32, Interval> {
