@@ -22,8 +22,6 @@ use crate::backend::peephole::{_lanes, _register_effects, _register_operand, Dea
 use crate::backend::select;
 use crate::model::ir::{Loc, Operation, Reg, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
-use crate::model::passes::LIRTransform;
-use crate::support::hash::IndexMap;
 
 // Enough to settle. Each pass makes at most one rename per block, because a
 // rename changes the liveness every later candidate is judged against, and

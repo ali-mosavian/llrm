@@ -513,7 +513,7 @@ pub fn laid_out(
                         }
                         _ => None,
                     };
-                    let mut entries: Vec<(model::Range, Location)> = match single {
+                    let entries: Vec<(model::Range, Location)> = match single {
                         Some(Some((from, place))) => vec![(
                             model::Range { section, offset: start + from, length: end - start - from },
                             located(place),

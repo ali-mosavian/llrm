@@ -209,7 +209,7 @@ pub fn phi_inputs(
     inputs
 }
 
-/// What is live at each block's entry and exit, to a fixed point.
+// What is live at each block's entry and exit, to a fixed point.
 thread_local! {
     static SOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-mod common;
+pub mod common;
 
 const REGISTERS: [&str; 8] = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp"];
 
@@ -59,10 +59,10 @@ fn normalized(lines: &[&str]) -> Vec<String> {
             let written = register(operands[0]).filter(|_| DEFINING.contains(&mnemonic) || idiom);
             let tokens: Vec<&str> = token.find_iter(rest).map(|one| one.as_str()).collect();
             let mut out = vec![String::new(); tokens.len()];
-            let mut name_of = |one: &str,
-                               at: usize,
-                               names: &mut BTreeMap<String, String>,
-                               versions: &BTreeMap<&str, usize>| {
+            let name_of = |one: &str,
+                           at: usize,
+                           names: &mut BTreeMap<String, String>,
+                           versions: &BTreeMap<&str, usize>| {
                 if one.starts_with("[bp") {
                     format!("[{}]", rename("F", one.to_owned(), names))
                 } else if let Some((family, width)) = register(one) {

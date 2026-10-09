@@ -97,12 +97,8 @@ pub(crate) fn pointers(type_: &str) -> bool {
     )
 }
 
-/// C's aliasing classes.
-pub(crate) fn classes(type_: &str) -> Option<&'static str> {
-    classes_for(false, type_)
-}
-
-/// `classes`, where flat code's `int` is a dword and its pointers 4 bytes.
+/// C's aliasing classes, where flat code's `int` is a dword and its pointers
+/// are 4 bytes.
 pub(crate) fn classes_for(
     flat: bool,
     type_: &str,

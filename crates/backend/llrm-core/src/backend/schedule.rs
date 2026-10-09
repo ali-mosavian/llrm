@@ -19,7 +19,7 @@ use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::peephole::{_lanes, _register_effects, Lanes};
 use crate::backend::select;
 use crate::model::ir::{Imm, Loc, Operation, Space};
-use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::IndexMap;
 
