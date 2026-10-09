@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import qbruntime  # noqa: E402
+import run_tests  # noqa: E402
 
 
 class RuntimeSelectionTests(unittest.TestCase):
@@ -41,7 +42,12 @@ class InventoryTests(unittest.TestCase):
 
     def test_linker_inventory_deduplicates_only_the_reported_b_symbols(self):
         """A broad symbol scan recorded private names that LINK did not require and hid a missing entry."""
-        log = "I000.OBJ(p.bas) : error L2029 : 'B$SASS' : unresolved external\nUnresolved external _main in module P\nI001.OBJ(q.bas) : error L2029 : 'B$SASS' : unresolved external\nI000.OBJ(p.bas) : error L2029 : 'B$FLEN' : unresolved external\n"
+        log = (
+            "I000.OBJ(p.bas) : error L2029 : 'B$SASS' : unresolved external\n"
+            "Unresolved external _main in module P\n"
+            "I001.OBJ(q.bas) : error L2029 : 'B$SASS' : unresolved external\n"
+            "I000.OBJ(p.bas) : error L2029 : 'B$FLEN' : unresolved external\n"
+        )
         self.assertEqual(qbruntime.undefined_symbols(log), ["B$FLEN", "B$SASS"])
 
 
@@ -52,3 +58,20 @@ class DemoSourceTests(unittest.TestCase):
             found, reason = qbruntime.demo_sources(Path(work))
         self.assertEqual(found, {})
         self.assertEqual(reason, "QB45_DEMOS_DIR is unset or lacks NIBBLES.BAS and GORILLA.BAS")
+
+
+@unittest.skipUnless(qbruntime.dosbatch.QB45.is_dir(), "QB45_DIR is unavailable")
+class RuntimeFibTests(unittest.TestCase):
+    def test_fib_matches_bcom45_byte_for_byte(self):
+        """A separate SS frame made fib's local addresses read as zero through DS."""
+        source = next(source for source in qbruntime.milestone_sources() if source.stem == "fib")
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            object_ = work / "fib.obj"
+            error = run_tests.compile_one(run_tests.Program(source, ["-O2"], None, "qb45"), object_)
+            self.assertIsNone(error)
+            archive, _ = qbruntime.build(work / "archive")
+            result = qbruntime.differential(object_, archive, work / "differential", "fib")
+        self.assertEqual(result.reference.status, "ok")
+        self.assertEqual(result.candidate.status, "ok")
+        self.assertEqual(result.difference, "")

@@ -1,5 +1,10 @@
 [portable]
 sources = []
 
+exports = ["B$CEND", "B$CENP", "B$LTRM", "B$PESD", "B$STI4"]
+
 [platform]
-sources = ["platform/qb/dos/m16/archive.asm"]
+sources = ["platform/qb/dos/m16/start.asm", "platform/qb/dos/m16/text.asm"]
+
+[shared]
+sources = ["runtime/shared/dos/m16/os.asm"]

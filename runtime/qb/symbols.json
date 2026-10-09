@@ -1,6 +1,6 @@
 [
-  {"name": "B$CEND", "milestone": "m1", "status": "planned"},
-  {"name": "B$CENP", "milestone": "m1", "status": "planned"},
+  {"name": "B$CEND", "milestone": "m1", "status": "implemented", "module": "platform/qb/dos/m16/start.asm"},
+  {"name": "B$CENP", "milestone": "m1", "status": "implemented", "module": "platform/qb/dos/m16/start.asm"},
   {"name": "B$CLOS", "milestone": "m1", "status": "planned"},
   {"name": "B$DDIM", "milestone": "m1", "status": "planned"},
   {"name": "B$DSG0", "milestone": "m1", "status": "planned"},
@@ -9,13 +9,13 @@
   {"name": "B$EXSA", "milestone": "m1", "status": "planned"},
   {"name": "B$FLOF", "milestone": "m1", "status": "planned"},
   {"name": "B$GET3", "milestone": "m1", "status": "planned"},
-  {"name": "B$LTRM", "milestone": "m1", "status": "planned"},
+  {"name": "B$LTRM", "milestone": "m1", "status": "implemented", "module": "platform/qb/dos/m16/text.asm"},
   {"name": "B$OPEN", "milestone": "m1", "status": "planned"},
-  {"name": "B$PESD", "milestone": "m1", "status": "planned"},
+  {"name": "B$PESD", "milestone": "m1", "status": "implemented", "module": "platform/qb/dos/m16/text.asm"},
   {"name": "B$RDIM", "milestone": "m1", "status": "planned"},
   {"name": "B$SASS", "milestone": "m1", "status": "planned"},
   {"name": "B$SPAC", "milestone": "m1", "status": "planned"},
   {"name": "B$STDL", "milestone": "m1", "status": "planned"},
-  {"name": "B$STI4", "milestone": "m1", "status": "planned"},
+  {"name": "B$STI4", "milestone": "m1", "status": "implemented", "module": "platform/qb/dos/m16/text.asm"},
   {"name": "b$seg", "milestone": "m1", "status": "planned", "kind": "data"}
 ]

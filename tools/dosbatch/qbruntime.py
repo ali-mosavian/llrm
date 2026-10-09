@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 
 import dosbatch
@@ -52,6 +53,38 @@ def first_byte_difference(want: bytes, got: bytes) -> str:
     return ""
 
 
+def raw_output(work: Path, stem: str) -> bytes:
+    """The exact redirected bytes for a completed DOS job."""
+    for name in (f"{stem}.TXT", f"{stem.upper()}.TXT", f"{stem.lower()}.txt"):
+        path = work / name
+        if path.is_file():
+            return path.read_bytes()
+    return b""
+
+
+@dataclass(frozen=True)
+class Differential:
+    """The two runs of one llrm-qb object and their raw-output difference."""
+
+    reference: dosbatch.Result
+    candidate: dosbatch.Result
+    difference: str
+
+
+def differential(object_: Path, archive: Path, work: Path, stem: str) -> Differential:
+    """Link one unchanged object against BCOM45 and LLRMQB, then compare bytes."""
+    reference_work = work / "bcom45"
+    candidate_work = work / "llrmqb"
+    reference = dosbatch.run([dosbatch.Job(stem, "obj", object_)], reference_work)[stem]
+    candidate = dosbatch.run(
+        [dosbatch.Job(stem, "obj", object_, runtime="llrmqb", runtime_file=archive)], candidate_work
+    )[stem]
+    if reference.status != "ok" or candidate.status != "ok":
+        return Differential(reference, candidate, "a differential side did not complete")
+    difference = first_byte_difference(raw_output(reference_work, stem), raw_output(candidate_work, stem))
+    return Differential(reference, candidate, difference)
+
+
 def undefined_symbols(link_log: str) -> list[str]:
     """The B$ entries Microsoft LINK actually reports for an empty archive."""
     return sorted({match.group(1) for match in UNDEFINED.finditer(link_log) if match.group(1).upper().startswith("B$")})
@@ -84,12 +117,28 @@ def source_groups() -> dict[str, list[Path]]:
     return {
         "portable": [RUNTIME / name for name in config["portable"]["sources"]],
         "platform": [dosbatch.ROOT / name for name in config["platform"]["sources"]],
+        "shared": [dosbatch.ROOT / name for name in config["shared"]["sources"]],
     }
+
+
+def exports() -> list[str]:
+    """The ABI entries the built archive intentionally makes public."""
+    with (RUNTIME / "runtime.toml").open("rb") as text:
+        return tomllib.load(text)["portable"]["exports"]
 
 
 def _compile_c(source: Path, obj: Path, include: Path) -> None:
     dosbatch._host(
-        [str(dosbatch.BIN / "llrm-c"), str(source), dosbatch.m_flag(dosbatch.REAL_MODE), "-O2", "-I", str(include), "-o", str(obj)]
+        [
+            str(dosbatch.BIN / "llrm-c"),
+            str(source),
+            dosbatch.m_flag(dosbatch.REAL_MODE),
+            "-O2",
+            "-I",
+            str(include),
+            "-o",
+            str(obj),
+        ]
     )
 
 
@@ -101,7 +150,8 @@ def archive(objects: list[Path], output: Path, work: Path) -> None:
         target = work / f"R{at:03d}.OBJ"
         shutil.copyfile(object_, target)
         copied.append(target.name)
-    commands = [f"mount c {work}", f"mount v {dosbatch.QB45}", "c:", f"V:\\LIB.EXE C:\\{ARCHIVE_NAME}" + "".join(f"+C:\\{name}" for name in copied) + ";", "."]
+    librarian = f"V:\\LIB.EXE C:\\{ARCHIVE_NAME}" + "".join(f"+C:\\{name}" for name in copied) + ";"
+    commands = [f"mount c {work}", f"mount v {dosbatch.QB45}", "c:", librarian, "."]
     (work / "jobs.txt").write_text("\n".join(commands) + "\n")
     (work / "job.conf").write_text(dosbatch.CONF)
     events = work / "events.txt"
@@ -132,7 +182,7 @@ def build(directory: Path) -> tuple[Path, Path]:
         obj = directory / f"C{at:03d}.OBJ"
         _compile_c(source, obj, include)
         objects.append(obj)
-    for at, source in enumerate(groups["platform"]):
+    for at, source in enumerate([*groups["platform"], *groups["shared"]]):
         obj = directory / f"A{at:03d}.OBJ"
         dosbatch.assemble(source, obj, *dosbatch.os_defines(dosbatch.REAL_MODE, "c"))
         objects.append(obj)
@@ -146,8 +196,9 @@ def build(directory: Path) -> tuple[Path, Path]:
                 "bytes": output.stat().st_size,
                 "portable": [str(path.relative_to(dosbatch.ROOT)) for path in groups["portable"]],
                 "platform": [str(path.relative_to(dosbatch.ROOT)) for path in groups["platform"]],
+                "shared": [str(path.relative_to(dosbatch.ROOT)) for path in groups["shared"]],
                 "objects": [path.name for path in objects],
-                "exports": [],
+                "exports": exports(),
             },
             indent=2,
         )
