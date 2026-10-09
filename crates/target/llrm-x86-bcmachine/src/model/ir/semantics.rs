@@ -7,7 +7,9 @@ use std::collections::BTreeSet;
 
 use iced_x86::{Code, Mnemonic, OpKind, Register};
 
-use super::{ANY_MEMORY, Address, Effects, Flag, Imm, Loc, Mem, Operation, Reg, Semantics, UNMODELLED, barrier, root};
+use super::{
+    ANY_MEMORY, AddressRef, Effects, Flag, Imm, Loc, Mem, Operation, Reg, Semantics, UNMODELLED, barrier, root,
+};
 use crate::analysis::flags::{ALL, CLOBBERS, written_by};
 use crate::frontends::bc::declen::{Insn, READS, WRITES, instruction_info_factory, to_signed};
 use crate::model::ir::lift::{Resolver, operand as long_operand};
@@ -247,10 +249,10 @@ pub fn _address(
         return None;
     }
     let dest = _destination(insn, 0, resolve)?;
-    let where_ = Address {
+    let where_ = AddressRef {
         addr: long_operand(insn, resolve),
         through: insn.insn.memory_base(),
-        index: insn.insn.memory_index(),
+        index_through: insn.insn.memory_index(),
         scale: i64::from(insn.insn.memory_index_scale()),
         offset: insn.displacement(),
         disp_width: insn.disp_len as u32,

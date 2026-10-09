@@ -18,7 +18,7 @@ use crate::backend::coalesce;
 use crate::backend::frame::{self as frames, Frame, SlotKey};
 use crate::backend::postings::{self, At, Postings};
 use crate::backend::target;
-use crate::model::ir::{self, Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
+use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::support::hash::{IndexMap, IndexSet};
 use crate::support::pyset::PySet;
@@ -74,7 +74,7 @@ pub fn spilled(
 /// slot of the frame.
 pub struct Plan {
     constants: IndexMap<u32, Imm>,
-    addresses: IndexMap<u32, Address>,
+    addresses: IndexMap<u32, AddressRef>,
     extensions: IndexMap<u32, Arc<Insn>>,
     frame_loads: IndexMap<u32, Mem>,
     /// The cell of each value made again from the frame.
@@ -3059,14 +3059,14 @@ fn _source<F: CellOf>(
 fn _address_source(
     one: &Insn,
     value: u32,
-    address: &Address,
+    address: &AddressRef,
 ) -> Option<Arc<Insn>> {
     let what = one.what.as_ref()?;
     let addr = address.addr?;
     if one.symbol == Some(true)
         || addr.space != Space::Frame
         || address.through != Register::BP
-        || address.index != Register::None
+        || address.index_through != Register::None
         || address.scale != 1
         || one.requires.iter().chain(&one.delivers).any(|(held, _register)| held.value == value)
     {
@@ -3229,7 +3229,7 @@ fn _addresses_by(
     body: &LirBody,
     values: &BTreeSet<u32>,
     postings: &Postings,
-) -> IndexMap<u32, Address> {
+) -> IndexMap<u32, AddressRef> {
     let mut order: Vec<(At, usize, u32)> = Vec::new();
     for &value in values {
         let Some(&first) = postings.defs(value).first() else { continue };
@@ -3493,7 +3493,7 @@ fn _literals(
 pub fn _addresses(
     body: &LirBody,
     values: &BTreeSet<u32>,
-) -> IndexMap<u32, Address> {
+) -> IndexMap<u32, AddressRef> {
     let mut definitions: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         for value in &one.defines {
@@ -3517,7 +3517,7 @@ pub fn _addresses(
 fn _address_of(
     value: u32,
     defining: &[Arc<Insn>],
-) -> Option<Address> {
+) -> Option<AddressRef> {
     let one = _one_definition(defining)?;
     let what = one.what.as_ref()?;
     if what.op != Operation::Address || what.name.as_deref() != Some("lea") {
@@ -3526,10 +3526,10 @@ fn _address_of(
     // A cell's address is an address like any other once nothing held is in it.
     let source = match what.sources.as_slice() {
         [Loc::Address(source)] => source.clone(),
-        [Loc::Mem(cell)] if cell.base.is_none() && cell.index.is_none() => Address {
+        [Loc::Mem(cell)] if cell.base.is_none() && cell.index.is_none() => AddressRef {
             addr: cell.addr,
             through: cell.through,
-            index: Register::None,
+            index_through: Register::None,
             scale: 1,
             offset: cell.offset,
             disp_width: cell.disp_width,
@@ -3550,7 +3550,7 @@ fn _address_of(
             addr.space == Space::Frame && source.through == Register::BP
                 || matches!(addr.space, Space::Segment | Space::External) && source.through == Register::None
         })
-        && source.index == Register::None)
+        && source.index_through == Register::None)
         .then_some(source)
 }
 
@@ -4003,7 +4003,7 @@ mod tests {
     use super::{_color_slots, _constants, planned, spilled, spilled_from};
     use crate::backend::frame::{Frame, SlotKey};
     use crate::backend::{objbuild, select};
-    use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
+    use crate::model::ir::{Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
@@ -4525,14 +4525,19 @@ mod tests {
     fn _frame_address(
         disp: i64,
         disp_width: u32,
-    ) -> Address {
-        Address { through: Register::BP, offset: disp, disp_width, ..Address::new(Some(Addr::new(Space::Frame, disp))) }
+    ) -> AddressRef {
+        AddressRef {
+            through: Register::BP,
+            offset: disp,
+            disp_width,
+            ..AddressRef::new(Some(Addr::new(Space::Frame, disp)))
+        }
     }
 
     fn _lea(
         at: i64,
         covers: (i64, i64),
-        source: &Address,
+        source: &AddressRef,
     ) -> Insn {
         let what = semantics(Operation::Address, "lea", vec![held(1, 2)], vec![Loc::Address(source.clone())]);
         insn(at, covers, what, &[1], &[])
@@ -4633,7 +4638,8 @@ mod tests {
     #[test]
     fn test_spilled_relocatable_address_is_rematerialized_without_a_frame_slot() {
         for space in [Space::Segment, Space::External] {
-            let source = Address { disp_width: 2, ..Address::new(Some(Addr { index: 7, ..Addr::new(space, 12) })) };
+            let source =
+                AddressRef { disp_width: 2, ..AddressRef::new(Some(Addr { index: 7, ..Addr::new(space, 12) })) };
             let mut frame = Frame::new(0);
             let body = _body(vec![_lea(0, (0, 3), &source), _add(2, 1, 0x100)]);
             let (result, _made) =

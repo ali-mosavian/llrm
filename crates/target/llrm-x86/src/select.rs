@@ -562,7 +562,7 @@ pub fn _operand(
         }
         Loc::Address(mut cell) => {
             cell.through = _remapped(cell.through, Some(map));
-            cell.index = _remapped(cell.index, Some(map));
+            cell.index_through = _remapped(cell.index_through, Some(map));
             if let Some(addr) = cell.addr.as_mut() {
                 if addr.base != Register::None {
                     addr.base = _remapped(addr.base, Some(map));
@@ -1205,7 +1205,7 @@ pub fn divide(
 /// `lea into,[cell]` -- the address as a value, reading no memory.
 pub fn address_of(
     into: Register,
-    cell: &ir::Address,
+    cell: &ir::AddressRef,
     at: At,
 ) -> Option<Emitted> {
     let width = width_of(into)?;
@@ -1217,23 +1217,23 @@ pub fn address_of(
 /// `cell` as an encodable memory operand, and whether it is relocated: what
 /// `lea` names, and so the registers it reads.
 pub fn address_operand(
-    cell: &ir::Address,
+    cell: &ir::AddressRef,
     bits: u32,
     width: u32,
 ) -> Option<(MemoryOperand, bool)> {
-    if cell.addr.is_some() && cell.index == Register::None {
+    if cell.addr.is_some() && cell.index_through == Register::None {
         return operand_of(&ir::Mem { through: cell.through, ..ir::Mem::new(cell.addr, width) }, bits);
     }
-    if cell.through == Register::None && cell.index == Register::None {
+    if cell.through == Register::None && cell.index_through == Register::None {
         return None;
     }
     let size = if cell.disp_width != 0 {
         displacement_in(cell.disp_width, bits)
     } else {
-        _displacement_size(cell.through, cell.index, cell.offset, bits)
+        _displacement_size(cell.through, cell.index_through, cell.offset, bits)
     };
     // No address to name, so the displacement is arithmetic and not a symbol.
-    Some((memory_operand(cell.through, cell.index, cell.scale, cell.offset, size, Register::None), false))
+    Some((memory_operand(cell.through, cell.index_through, cell.scale, cell.offset, size, Register::None), false))
 }
 
 /// `cmp a,b` or `test a,b` -- both flags-only, and not the same question.
@@ -2404,7 +2404,7 @@ mod sweep_support {
         offset: i64,
         disp_width: u32,
     ) -> Loc {
-        Loc::Address(ir::Address { addr, through, index, scale, offset, disp_width })
+        Loc::Address(ir::AddressRef { addr, through, index_through: index, scale, offset, disp_width })
     }
 
     pub fn sem(

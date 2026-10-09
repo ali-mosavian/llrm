@@ -7,7 +7,7 @@ use iced_x86::Register;
 use super::*;
 use crate::frontends::bc::declen::decode;
 use crate::model::ir::nodes::{Node, Opaque, pinned};
-use crate::model::ir::{Address, modelled};
+use crate::model::ir::{AddressRef, modelled};
 use crate::objectfile::module::{Addr, literal_only};
 
 /// helpers' `hx`.
@@ -101,7 +101,7 @@ fn test_a_barriers_memory_reach_is_unknown_in_both_directions() {
 
 #[test]
 fn test_one_instructions_own_operation_shape() {
-    let lea = Loc::Address(Address::new(Some(Addr::new(Space::Frame, -0x1A))));
+    let lea = Loc::Address(AddressRef::new(Some(Addr::new(Space::Frame, -0x1A))));
     let cases = [
         ("8B 06 34 12", semantics(Operation::Move, "mov", vec![AX], vec![mem(Some(STATIC), 2)])),
         ("89 46 FC", semantics(Operation::Move, "mov", vec![mem(Some(LOCAL), 2)], vec![AX])),

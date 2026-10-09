@@ -1226,10 +1226,10 @@ fn through_stack(
             }))
         }
         Loc::Mem(cell) if is_pointer(cell.through) => None,
-        Loc::Address(address) if is_pointer(address.index) => None,
+        Loc::Address(address) if is_pointer(address.index_through) => None,
         Loc::Address(address) if based(address.through, &address.addr, false) => {
             let addr = address.addr.as_ref()?;
-            Some(Loc::Address(ir::Address {
+            Some(Loc::Address(ir::AddressRef {
                 through: STACK,
                 addr: Some(Addr { disp: addr.disp + shift(addr.disp), ..addr.clone() }),
                 disp_width: 0,
@@ -1266,9 +1266,9 @@ fn spelled(
             index_through: register(cell.index_through),
             ..cell.clone()
         }),
-        Loc::Address(address) => Loc::Address(ir::Address {
-            through: framed(address.through, address.addr, address.index),
-            index: register(address.index),
+        Loc::Address(address) => Loc::Address(ir::AddressRef {
+            through: framed(address.through, address.addr, address.index_through),
+            index_through: register(address.index_through),
             ..address.clone()
         }),
         other => other.clone(),
@@ -1455,7 +1455,7 @@ pub fn _roots(body: &lir::LirBody) -> BTreeSet<Register> {
                 }
                 // `lea` of a cell reads the register the cell is addressed
                 // through as much as a load of it does.
-                Loc::Address(ir::Address { through, index, .. }) => {
+                Loc::Address(ir::AddressRef { through, index_through: index, .. }) => {
                     found.extend([*through, *index].map(ir::root));
                 }
                 _ => {}
@@ -1637,11 +1637,11 @@ pub fn _operand(
             }
         }
         Loc::Mem(cell) => _memory(cell, names)?,
-        Loc::Address(ir::Address { addr: Some(address), index: Register::None, through, .. }) => {
+        Loc::Address(ir::AddressRef { addr: Some(address), index_through: Register::None, through, .. }) => {
             let text = _memory(&ir::Mem { through: *through, ..ir::Mem::new(Some(*address), 2) }, names)?;
             text.strip_prefix("word ptr ").map_or(text.clone(), str::to_owned)
         }
-        Loc::Address(ir::Address { through, index, scale, offset, .. }) => {
+        Loc::Address(ir::AddressRef { through, index_through: index, scale, offset, .. }) => {
             format!("[{}{}]", _registers(*through, *index, *scale), _signed(*offset))
         }
         Loc::Held(_) => return Err(Unprintable(format!("operand {}", r#where.repr()))),
@@ -1783,11 +1783,11 @@ mod tests {
     /// ten bytes below where qglsurf then read it.
     #[test]
     fn test_frame_address_displacement_once() {
-        let placed = Loc::Address(ir::Address {
+        let placed = Loc::Address(ir::AddressRef {
             through: Register::BP,
             offset: -10,
             disp_width: 1,
-            ..ir::Address::new(Some(Addr::new(Space::Frame, -10)))
+            ..ir::AddressRef::new(Some(Addr::new(Space::Frame, -10)))
         });
         assert_eq!(_operand(&placed, &no_names()).unwrap(), "[bp-10]");
     }
@@ -2454,7 +2454,12 @@ mod tests {
     /// peephole's multiply by three has no address, only base, index and scale.
     #[test]
     fn test_arithmetic_lea_scales_its_index() {
-        let r#where = ir::Address { through: Register::EBX, index: Register::EBX, scale: 2, ..ir::Address::new(None) };
+        let r#where = ir::AddressRef {
+            through: Register::EBX,
+            index_through: Register::EBX,
+            scale: 2,
+            ..ir::AddressRef::new(None)
+        };
         assert_eq!(_operand(&Loc::Address(r#where), &no_names()).unwrap(), "[ebx+ebx*2]");
     }
 }

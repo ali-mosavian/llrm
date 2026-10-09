@@ -711,7 +711,7 @@ pub fn _encoded(
                 let wide = [through, index_through].into_iter().any(|one| target::width_of(*one) == Some(4));
                 (made.displacement_at, if wide { OFFSET32 } else { near }, addr.disp, addr)
             }
-            Loc::Address(ir::Address { addr: Some(addr), .. })
+            Loc::Address(ir::AddressRef { addr: Some(addr), .. })
                 if matches!(addr.space, Space::Segment | Space::External) =>
             {
                 (made.displacement_at, near, addr.disp, addr)

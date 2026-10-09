@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use iced_x86::Register;
 
-use crate::model::ir::{Address, Loc, Operation};
+use crate::model::ir::{AddressRef, Loc, Operation};
 use crate::model::lir::{Insn, LirBody};
 use crate::objectfile::module::{Addr, Space};
 
@@ -24,10 +24,10 @@ pub fn converted(body: &LirBody) -> LirBody {
             };
             let mut addr = source.addr;
             if addr.is_some_and(|addr| addr.space == Space::Frame) && source.base.is_some() {
-                sources.push(Loc::Address(Address {
+                sources.push(Loc::Address(AddressRef {
                     addr: None,
                     through: Register::BP,
-                    index: source.through,
+                    index_through: source.through,
                     scale: source.scale,
                     offset: addr.expect("checked").disp,
                     disp_width: source.disp_width,
@@ -37,10 +37,10 @@ pub fn converted(body: &LirBody) -> LirBody {
             if addr.is_some() && source.base.is_some() && source.through != Register::None {
                 addr = addr.map(|addr| Addr { base: source.through, ..addr });
             }
-            sources.push(Loc::Address(Address {
+            sources.push(Loc::Address(AddressRef {
                 addr,
                 through: source.through,
-                index: source.index_through,
+                index_through: source.index_through,
                 scale: source.scale,
                 offset: source.offset,
                 disp_width: source.disp_width,

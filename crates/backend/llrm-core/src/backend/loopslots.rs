@@ -233,7 +233,7 @@ fn touch(
                     }
                 }
             }
-            Loc::Address(address) if is_bp(address.through) || is_bp(address.index) => out.other = true,
+            Loc::Address(address) if is_bp(address.through) || is_bp(address.index_through) => out.other = true,
             _ => {}
         }
     }

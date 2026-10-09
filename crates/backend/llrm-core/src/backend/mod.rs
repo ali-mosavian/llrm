@@ -118,7 +118,7 @@ pub mod select {
                 addr: cell.addr.map(|addr| Addr { disp: NEAR, ..addr }),
                 ..cell.clone()
             }),
-            Loc::Address(cell) if placed(&cell.addr, cell.in_frame()) => Loc::Address(crate::model::ir::Address {
+            Loc::Address(cell) if placed(&cell.addr, cell.in_frame()) => Loc::Address(crate::model::ir::AddressRef {
                 addr: cell.addr.map(|addr| Addr { disp: NEAR, ..addr }),
                 ..cell.clone()
             }),

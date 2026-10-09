@@ -361,7 +361,7 @@ fn rewritten(
     let address = affine::form(&terms, 0, &form.scales)?;
     let value =
         |register: Register| sum.iter().find(|term| term.0 == register).map(|term| Held { value: term.2, width: 4 });
-    let (base, index) = (value(address.through), value(address.index));
+    let (base, index) = (value(address.through), value(address.index_through));
     // A far cell keeps its origin as the base, unless the origin was a
     // constant and the one register the cell had was all offset.
     if matches!(addr.space, Space::Far | Space::Literal)
@@ -378,7 +378,7 @@ fn rewritten(
         addr: Some(ir::Addr { disp: addr.disp + multiple * stage.disp, ..addr }),
         through: address.through,
         base,
-        index_through: address.index,
+        index_through: address.index_through,
         index,
         scale: address.scale,
         ..cell.clone()
