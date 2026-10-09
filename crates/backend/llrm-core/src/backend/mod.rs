@@ -105,24 +105,18 @@ pub mod select {
         let placed = |addr: &Option<Addr>, in_frame: bool| {
             addr.is_some_and(|addr| in_frame && addr.disp < 0 && addr.slot_home() != Some(0))
         };
-        let moves = |place: &Loc| match place {
-            Loc::Mem(cell) => placed(&cell.addr, cell.in_frame()),
-            Loc::Address(cell) => placed(&cell.addr, cell.in_frame()),
-            _ => false,
-        };
+        let moves = |place: &Loc| place.address().is_some_and(|cell| placed(&cell.addr, place.in_frame()));
         if !what.dests.iter().chain(&what.sources).any(moves) {
             return emit_in(bits, what, at, r#where, short, relocated, held);
         }
-        let near = |place: &Loc| match place {
-            Loc::Mem(cell) if placed(&cell.addr, cell.in_frame()) => Loc::Mem(crate::model::ir::Mem {
+        let near = |place: &Loc| {
+            if !moves(place) {
+                return place.clone();
+            }
+            place.map_address(|cell| crate::model::ir::AddressRef {
                 addr: cell.addr.map(|addr| Addr { disp: NEAR, ..addr }),
-                ..cell.clone()
-            }),
-            Loc::Address(cell) if placed(&cell.addr, cell.in_frame()) => Loc::Address(crate::model::ir::AddressRef {
-                addr: cell.addr.map(|addr| Addr { disp: NEAR, ..addr }),
-                ..cell.clone()
-            }),
-            other => other.clone(),
+                ..cell
+            })
         };
         let priced = crate::model::ir::Semantics {
             dests: what.dests.iter().map(&near).collect(),
