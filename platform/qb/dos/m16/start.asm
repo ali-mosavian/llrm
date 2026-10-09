@@ -22,7 +22,7 @@ qb_bc_sa label byte
 BC_SAB ends
 DGROUP group BC_SAB
 
-QB_TEXT segment para public 'CODE'
+RUNTIME_TEXT segment para public 'CODE'
 assume ds:DGROUP
 _main proc far
     mov bx, es
@@ -68,5 +68,5 @@ B$CENP label far
     call far ptr _llrm_os_exit
 B$CEND endp
 
-QB_TEXT ends
+RUNTIME_TEXT ends
 end _main

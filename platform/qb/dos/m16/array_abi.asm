@@ -2,8 +2,8 @@
 .model medium
 .386
 
-extrn _qb_array_dim@3:far
-extrn _qb_array_erase@3:far
+extrn _qb_array_dim@3:near
+extrn _qb_array_erase@3:near
 extrn _qb_array_bounds:word
 extrn _llrm_os_more:far
 
@@ -11,7 +11,7 @@ public B$DDIM
 public B$ERAS
 public _qb_array_more@3
 
-QB_TEXT segment para public 'CODE'
+RUNTIME_TEXT segment para public 'CODE'
 assume ds:DGROUP
 
 ; pAd, dimensions/type, element bytes, then one upper/lower pair per dimension.
@@ -25,7 +25,7 @@ B$DDIM proc far
     mov cx, word ptr [bp+10]
     lea si, [bp+12]
     mov _qb_array_bounds, si
-    call far ptr _qb_array_dim@3
+    call _qb_array_dim@3
     or ax, ax
     jz short cleanup
     mov di, word ptr [bp+6]
@@ -57,20 +57,20 @@ B$ERAS proc far
     push bp
     mov bp, sp
     mov ax, word ptr [bp+6]
-    call far ptr _qb_array_erase@3
+    call _qb_array_erase@3
     pop bp
     retf 2
 B$ERAS endp
 
 ; The shared OS layer is cdecl16 even when portable QB code is regparm3.
-_qb_array_more@3 proc far
+_qb_array_more@3 proc near
     push ax
     call far ptr _llrm_os_more
     add sp, 2
-    retf
+    ret
 _qb_array_more@3 endp
 
-QB_TEXT ends
+RUNTIME_TEXT ends
 
 _DATA segment word public 'DATA'
 array_cleanup dw ?

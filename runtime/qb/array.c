@@ -1,14 +1,11 @@
 /* QB dynamic-array descriptors and their reusable near allocation arena. */
 
-typedef unsigned char byte;
-typedef unsigned short word;
-typedef unsigned long dword;
-typedef short sword;
+#include "types.h"
 
 typedef struct {
     word count;
     word lower;
-} Dimension;
+} dimension;
 
 typedef struct {
     word data;
@@ -19,79 +16,79 @@ typedef struct {
     byte features;
     word adjusted;
     word element;
-    Dimension dimension[1];
-} Array;
+    dimension dimension[1];
+} array;
 
-typedef struct Block {
+typedef struct block {
     word next;
     word bytes;
     word data;
-} Block;
+} block;
 
-extern byte *qb_array_more(word bytes);
+extern byte *__near qb_array_more(word bytes);
 
-static word freeBlocks;
+static word free_blocks;
 word qb_array_bounds;
 
-static word addressOf(const void *pointer) {
+static word qb_array_address_of(const void *pointer) {
     return (word)pointer;
 }
 
-static Block *blockAt(word address) {
-    return (Block *)address;
+static block *block_at(word address) {
+    return (block *)address;
 }
 
-static Block *allocate(word bytes) {
-    Block *block = blockAt(freeBlocks);
+static block *qb_array_allocate(word bytes) {
+    block *record = block_at(free_blocks);
 
-    while (block != (Block *)0) {
-        if (block->bytes >= bytes) {
-            freeBlocks = block->next;
-            return block;
+    while (record != (block *)0) {
+        if (record->bytes >= bytes) {
+            free_blocks = record->next;
+            return record;
         }
-        block = blockAt(block->next);
+        record = block_at(record->next);
     }
 
-    if (bytes > 65535U - sizeof(Block) - 15U) {
-        return (Block *)0;
+    if (bytes > 65535U - sizeof(block) - 15U) {
+        return (block *)0;
     }
-    block = (Block *)qb_array_more(bytes + sizeof(Block) + 15U);
-    if (block == (Block *)0) {
-        return (Block *)0;
+    record = (block *)qb_array_more(bytes + sizeof(block) + 15U);
+    if (record == (block *)0) {
+        return (block *)0;
     }
-    block->next = 0;
-    block->bytes = bytes;
-    block->data = (addressOf(block + 1) + 15U) & (word)~15U;
-    return block;
+    record->next = 0;
+    record->bytes = bytes;
+    record->data = (qb_array_address_of(record + 1) + 15U) & (word)~15U;
+    return record;
 }
 
-static void clear(Array *array) {
-    array->data = 0;
-    array->segment = 0;
-    array->next = 0;
-    array->bytes = 0;
-    array->dimensions = 0;
-    array->features = 0;
-    array->adjusted = 0;
-    array->element = 0;
+static void qb_array_clear(array *value) {
+    value->data = 0;
+    value->segment = 0;
+    value->next = 0;
+    value->bytes = 0;
+    value->dimensions = 0;
+    value->features = 0;
+    value->adjusted = 0;
+    value->element = 0;
 }
 
-word qb_array_dim(word arrayAddress, word typeAndDimensions, word elementBytes) {
-    Array *array = (Array *)arrayAddress;
+word __near qb_array_dim(word array_address, word type_and_dimensions, word element_bytes) {
+    array *value = (array *)array_address;
     const word *bounds = (const word *)qb_array_bounds;
-    word dimensions = typeAndDimensions & 255;
+    word dimensions = type_and_dimensions & 255;
     word index;
     word count;
     sword upper;
     sword lower;
     sword adjustment = 0;
     dword total = 1;
-    dword byteCount;
-    Block *block;
+    dword byte_count;
+    block *record;
     byte *data;
 
-    clear(array);
-    if (dimensions == 0 || elementBytes == 0) {
+    qb_array_clear(value);
+    if (dimensions == 0 || element_bytes == 0) {
         return 0;
     }
 
@@ -99,54 +96,54 @@ word qb_array_dim(word arrayAddress, word typeAndDimensions, word elementBytes) 
         upper = (sword)bounds[index * 2];
         lower = (sword)bounds[index * 2 + 1];
         if (upper < lower) {
-            clear(array);
+            qb_array_clear(value);
             return 0;
         }
         count = (word)(upper - lower + 1);
         total *= count;
         if (total > 65535UL) {
-            clear(array);
+            qb_array_clear(value);
             return 0;
         }
         adjustment = adjustment * count - lower;
-        array->dimension[index].count = count;
-        array->dimension[index].lower = lower;
+        value->dimension[index].count = count;
+        value->dimension[index].lower = lower;
     }
 
-    byteCount = total * elementBytes;
-    if (byteCount == 0 || byteCount > 65535UL) {
-        clear(array);
+    byte_count = total * element_bytes;
+    if (byte_count == 0 || byte_count > 65535UL) {
+        qb_array_clear(value);
         return 0;
     }
 
-    block = allocate((word)byteCount);
-    if (block == (Block *)0) {
-        clear(array);
+    record = qb_array_allocate((word)byte_count);
+    if (record == (block *)0) {
+        qb_array_clear(value);
         return 0;
     }
-    data = (byte *)block->data;
+    data = (byte *)record->data;
 
-    array->data = addressOf(data);
-    array->next = addressOf(block);
-    array->bytes = (word)byteCount;
-    array->dimensions = (byte)dimensions;
-    array->features = (byte)(typeAndDimensions >> 8);
-    array->adjusted = adjustment * elementBytes + array->data;
-    array->element = elementBytes;
+    value->data = qb_array_address_of(data);
+    value->next = qb_array_address_of(record);
+    value->bytes = (word)byte_count;
+    value->dimensions = (byte)dimensions;
+    value->features = (byte)(type_and_dimensions >> 8);
+    value->adjusted = adjustment * element_bytes + value->data;
+    value->element = element_bytes;
     return 1;
 }
 
-void qb_array_erase(word arrayAddress) {
-    Array *array = (Array *)arrayAddress;
-    Block *block;
+void __near qb_array_erase(word array_address) {
+    array *value = (array *)array_address;
+    block *record;
 
-    if (array->data == 0) {
-        clear(array);
+    if (value->data == 0) {
+        qb_array_clear(value);
         return;
     }
 
-    block = blockAt(array->next);
-    block->next = freeBlocks;
-    freeBlocks = addressOf(block);
-    clear(array);
+    record = block_at(value->next);
+    record->next = free_blocks;
+    free_blocks = qb_array_address_of(record);
+    qb_array_clear(value);
 }

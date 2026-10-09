@@ -1,192 +1,191 @@
 /* QB dynamic strings: stable four-byte descriptors, movable near payloads. */
 
-typedef unsigned char byte;
-typedef unsigned short word;
+#include "types.h"
 
 typedef struct {
     word length;
     word data;
-} String;
+} string;
 
 typedef struct {
     word owner;
     word length;
-} Allocation;
+} allocation;
 
 #define HEAP_BYTES 8192
 #define TEMPORARIES 32
 
 static byte heap[HEAP_BYTES];
-static word heapUsed;
-static String nullString;
-static String temporary[TEMPORARIES];
-static byte temporaryUsed[TEMPORARIES];
+static word heap_used;
+static string null_string;
+static string temporary[TEMPORARIES];
+static byte temporary_used[TEMPORARIES];
 
-static word addressOf(const void *pointer) {
+static word qb_string_address_of(const void *pointer) {
     return (word)pointer;
 }
 
-static String *descriptor(word address) {
-    return (String *)address;
+static string *qb_string_descriptor(word address) {
+    return (string *)address;
 }
 
-static word descriptorAddress(const String *value) {
-    return addressOf(value);
+static word qb_string_descriptor_address(const string *value) {
+    return qb_string_address_of(value);
 }
 
-static word temporaryIndex(const String *value) {
-    word address = descriptorAddress(value);
-    word first = descriptorAddress(&temporary[0]);
-    word bytes = TEMPORARIES * sizeof(String);
+static word qb_string_temporary_index(const string *value) {
+    word address = qb_string_descriptor_address(value);
+    word first = qb_string_descriptor_address(&temporary[0]);
+    word bytes = TEMPORARIES * sizeof(string);
 
-    if (address < first || address >= first + bytes || ((address - first) % sizeof(String)) != 0) {
+    if (address < first || address >= first + bytes || ((address - first) % sizeof(string)) != 0) {
         return TEMPORARIES;
     }
-    return (address - first) / sizeof(String);
+    return (address - first) / sizeof(string);
 }
 
-static String *temporaryDescriptor(void) {
+static string *qb_string_temporary_descriptor(void) {
     word index;
 
     for (index = 0; index < TEMPORARIES; ++index) {
-        if (temporaryUsed[index] == 0) {
-            temporaryUsed[index] = 1;
+        if (temporary_used[index] == 0) {
+            temporary_used[index] = 1;
             temporary[index].length = 0;
             temporary[index].data = 0;
             return &temporary[index];
         }
     }
-    return (String *)0;
+    return (string *)0;
 }
 
-static void releaseTemporary(String *value) {
-    word index = temporaryIndex(value);
+static void qb_string_release_temporary(string *value) {
+    word index = qb_string_temporary_index(value);
 
     if (index != TEMPORARIES) {
-        temporaryUsed[index] = 0;
+        temporary_used[index] = 0;
         value->length = 0;
         value->data = 0;
     }
 }
 
-static void copyBytes(byte *destination, const byte *source, word length) {
+static void qb_string_copy_bytes(byte *destination, const byte *source, word length) {
     while (length != 0) {
         *destination++ = *source++;
         --length;
     }
 }
 
-static void compact(void) {
+static void qb_string_compact(void) {
     byte *read = heap;
     byte *write = heap;
-    byte *end = heap + heapUsed;
+    byte *end = heap + heap_used;
 
     while (read != end) {
-        Allocation *old = (Allocation *)read;
+        allocation *old = (allocation *)read;
         word bytes = old->length;
-        byte *payload = read + sizeof(Allocation);
-        String *owner = descriptor(old->owner);
+        byte *payload = read + sizeof(allocation);
+        string *owner = qb_string_descriptor(old->owner);
 
-        if (owner->data == addressOf(payload)) {
-            Allocation *next = (Allocation *)write;
-            byte *nextPayload = write + sizeof(Allocation);
+        if (owner->data == qb_string_address_of(payload)) {
+            allocation *next = (allocation *)write;
+            byte *next_payload = write + sizeof(allocation);
             if (write != read) {
-                copyBytes(nextPayload, payload, bytes);
+                qb_string_copy_bytes(next_payload, payload, bytes);
             }
             next->owner = old->owner;
             next->length = bytes;
-            owner->data = addressOf(nextPayload);
-            write = nextPayload + bytes;
+            owner->data = qb_string_address_of(next_payload);
+            write = next_payload + bytes;
         }
         read = payload + bytes;
     }
-    heapUsed = (word)(write - heap);
+    heap_used = (word)(write - heap);
 }
 
-static byte *allocate(word owner, word length) {
-    word header = sizeof(Allocation);
-    Allocation *allocation;
+static byte *qb_string_allocate(word owner, word length) {
+    word header = sizeof(allocation);
+    allocation *record;
     byte *payload;
 
-    compact();
-    if (length > HEAP_BYTES - header || heapUsed > HEAP_BYTES - header - length) {
+    qb_string_compact();
+    if (length > HEAP_BYTES - header || heap_used > HEAP_BYTES - header - length) {
         return (byte *)0;
     }
 
-    allocation = (Allocation *)(heap + heapUsed);
-    payload = (byte *)(allocation + 1);
-    allocation->owner = owner;
-    allocation->length = length;
-    heapUsed += header + length;
+    record = (allocation *)(heap + heap_used);
+    payload = (byte *)(record + 1);
+    record->owner = owner;
+    record->length = length;
+    heap_used += header + length;
     return payload;
 }
 
-void qb_string_delete(word destinationAddress) {
-    String *destination = descriptor(destinationAddress);
+void __near qb_string_delete(word destination_address) {
+    string *destination = qb_string_descriptor(destination_address);
 
     destination->length = 0;
     destination->data = 0;
-    releaseTemporary(destination);
+    qb_string_release_temporary(destination);
 }
 
-void qb_string_assign(word sourceAddress, word destinationAddress) {
-    String *source = descriptor(sourceAddress);
-    String *destination = descriptor(destinationAddress);
+void __near qb_string_assign(word source_address, word destination_address) {
+    string *source = qb_string_descriptor(source_address);
+    string *destination = qb_string_descriptor(destination_address);
     word length;
     byte *payload;
-    Allocation *allocation;
+    allocation *record;
 
     if (source == destination) {
         return;
     }
 
     length = source->length;
-    qb_string_delete(destinationAddress);
-    if (temporaryIndex(source) != TEMPORARIES) {
+    qb_string_delete(destination_address);
+    if (qb_string_temporary_index(source) != TEMPORARIES) {
         destination->length = length;
         destination->data = source->data;
         if (length != 0) {
-            allocation = ((Allocation *)source->data) - 1;
-            allocation->owner = destinationAddress;
+            record = ((allocation *)source->data) - 1;
+            record->owner = destination_address;
         }
-        releaseTemporary(source);
+        qb_string_release_temporary(source);
         return;
     }
     if (length == 0) {
         return;
     }
 
-    payload = allocate(destinationAddress, length);
+    payload = qb_string_allocate(destination_address, length);
     if (payload == (byte *)0) {
         return;
     }
 
-    copyBytes(payload, (const byte *)source->data, length);
+    qb_string_copy_bytes(payload, (const byte *)source->data, length);
     destination->length = length;
-    destination->data = addressOf(payload);
+    destination->data = qb_string_address_of(payload);
 }
 
-word qb_string_space(word length) {
-    String *result;
+word __near qb_string_space(word length) {
+    string *result;
     byte *payload;
     word index;
 
     if (length == 0) {
-        return descriptorAddress(&nullString);
+        return qb_string_descriptor_address(&null_string);
     }
-    result = temporaryDescriptor();
-    if (result == (String *)0) {
-        return descriptorAddress(&nullString);
+    result = qb_string_temporary_descriptor();
+    if (result == (string *)0) {
+        return qb_string_descriptor_address(&null_string);
     }
-    payload = allocate(descriptorAddress(result), length);
+    payload = qb_string_allocate(qb_string_descriptor_address(result), length);
     if (payload == (byte *)0) {
-        releaseTemporary(result);
-        return descriptorAddress(&nullString);
+        qb_string_release_temporary(result);
+        return qb_string_descriptor_address(&null_string);
     }
     for (index = 0; index < length; ++index) {
         payload[index] = ' ';
     }
     result->length = length;
-    result->data = addressOf(payload);
-    return descriptorAddress(result);
+    result->data = qb_string_address_of(payload);
+    return qb_string_descriptor_address(result);
 }

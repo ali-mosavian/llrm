@@ -1,5 +1,5 @@
 [portable]
-sources = ["string.c", "array.c"]
+sources = ["runtime.c"]
 
 exports = ["B$CEND", "B$CENP", "B$DDIM", "B$ENRA", "B$ERAS", "B$EXSA", "B$LTRM", "B$PESD", "B$SASS", "B$SPAC", "B$STDL", "B$STI4"]
 

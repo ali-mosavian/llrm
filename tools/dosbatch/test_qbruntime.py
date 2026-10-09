@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import sys
 import tempfile
-import unittest
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -13,157 +14,96 @@ import qbruntime  # noqa: E402
 import run_tests  # noqa: E402
 
 
-class RuntimeSelectionTests(unittest.TestCase):
-    def test_every_runtime_choice_has_one_explicit_library(self):
-        """A candidate run accidentally used BCOM45, so its output proved no replacement behavior."""
-        candidate = Path("candidate.lib")
-        empty = Path("empty.lib")
-        self.assertEqual(qbruntime.library("bcom45", candidate, empty), None)
-        self.assertEqual(qbruntime.library("llrmqb", candidate, empty), candidate)
-        self.assertEqual(qbruntime.library("empty", candidate, empty), empty)
-        with self.assertRaisesRegex(ValueError, "runtime"):
-            qbruntime.library("other", candidate, empty)
+def test_every_runtime_choice_has_one_explicit_library():
+    """A candidate run accidentally used BCOM45, so its output proved no replacement behavior."""
+    candidate = Path("candidate.lib")
+    empty = Path("empty.lib")
+    assert qbruntime.library("bcom45", candidate, empty) is None
+    assert qbruntime.library("llrmqb", candidate, empty) == candidate
+    assert qbruntime.library("empty", candidate, empty) == empty
+    with pytest.raises(ValueError, match="runtime"):
+        qbruntime.library("other", candidate, empty)
 
 
-class OutputTests(unittest.TestCase):
-    def test_raw_output_preserves_spaces_and_line_endings(self):
-        """The line-oriented checker accepted a candidate that lost a trailing space and CR byte."""
-        self.assertEqual(qbruntime.first_byte_difference(b"A \r\n", b"A \r\n"), "")
-        self.assertEqual(qbruntime.first_byte_difference(b"A \r\n", b"A\n"), "byte 2: want 32 got 10")
-        self.assertEqual(qbruntime.first_byte_difference(b"A", b"A "), "byte 2: want <end> got 32")
+def test_raw_output_preserves_spaces_and_line_endings():
+    """The line-oriented checker accepted a candidate that lost a trailing space and CR byte."""
+    assert qbruntime.first_byte_difference(b"A \r\n", b"A \r\n") == ""
+    assert qbruntime.first_byte_difference(b"A \r\n", b"A\n") == "byte 2: want 32 got 10"
+    assert qbruntime.first_byte_difference(b"A", b"A ") == "byte 2: want <end> got 32"
 
 
-class DosNameTests(unittest.TestCase):
-    def test_runtime_jobs_use_one_8_3_stem_for_every_artifact(self):
-        """Shellsort's nine-character source name made both DOS links report not built."""
-        self.assertEqual(qbruntime.dos_stem("shellsort"), "shellsor")
-        self.assertEqual(qbruntime.dos_stem("quicksort"), "quicksor")
-        self.assertTrue(all(len(qbruntime.dos_stem(name)) <= 8 for name in qbruntime.MILESTONE_ONE))
+def test_runtime_jobs_use_one_8_3_stem_for_every_artifact():
+    """Shellsort's nine-character source name made both DOS links report not built."""
+    assert qbruntime.dos_stem("shellsort") == "shellsor"
+    assert qbruntime.dos_stem("quicksort") == "quicksor"
+    assert all(len(qbruntime.dos_stem(name)) <= 8 for name in qbruntime.MILESTONE_ONE)
 
 
-class LinkResultTests(unittest.TestCase):
-    def test_partial_exe_after_unresolved_runtime_symbol_is_not_a_run(self):
-        """Grep's partial EXE crashed after LINK reported five unresolved runtime symbols."""
-        self.assertTrue(qbruntime.dosbatch.link_failed("GREP.OBJ : error L2029 : 'B$OPEN' : unresolved external\n"))
-        self.assertFalse(qbruntime.dosbatch.link_failed("LINK : warning L4021 : no stack segment\n"))
+def test_partial_exe_after_unresolved_runtime_symbol_is_not_a_run():
+    """Grep's partial EXE crashed after LINK reported five unresolved runtime symbols."""
+    assert qbruntime.dosbatch.link_failed("GREP.OBJ : error L2029 : 'B$OPEN' : unresolved external\n")
+    assert not qbruntime.dosbatch.link_failed("LINK : warning L4021 : no stack segment\n")
 
 
-class ArchiveTests(unittest.TestCase):
-    def test_archive_rebuild_removes_the_old_library_first(self):
-        """LIB ignored replacement members, so a changed runtime still linked the old archive."""
-        with tempfile.TemporaryDirectory() as temporary:
-            work = Path(temporary)
-            stale = work / qbruntime.ARCHIVE_NAME
-            stale.write_bytes(b"old archive")
-            qbruntime.remove_existing_archive(work)
-            self.assertFalse(stale.exists())
+def test_archive_rebuild_removes_the_old_library_first():
+    """LIB ignored replacement members, so a changed runtime still linked the old archive."""
+    with tempfile.TemporaryDirectory() as temporary:
+        work = Path(temporary)
+        stale = work / qbruntime.ARCHIVE_NAME
+        stale.write_bytes(b"old archive")
+        qbruntime.remove_existing_archive(work)
+        assert not stale.exists()
 
 
-class InventoryTests(unittest.TestCase):
-    def test_milestone_one_inventory_names_the_25_basic_benchmarks_once(self):
-        """A glob omitted nbody_fixed, so the claimed milestone inventory had 24 links."""
-        sources = qbruntime.milestone_sources()
-        self.assertEqual(len(sources), 25)
-        self.assertEqual({source.parent.name for source in sources}, set(qbruntime.MILESTONE_ONE))
-
-    def test_linker_inventory_deduplicates_only_the_reported_b_symbols(self):
-        """A broad symbol scan recorded private names that LINK did not require and hid a missing entry."""
-        log = (
-            "I000.OBJ(p.bas) : error L2029 : 'B$SASS' : unresolved external\n"
-            "Unresolved external _main in module P\n"
-            "I001.OBJ(q.bas) : error L2029 : 'B$SASS' : unresolved external\n"
-            "I000.OBJ(p.bas) : error L2029 : 'B$FLEN' : unresolved external\n"
-        )
-        self.assertEqual(qbruntime.undefined_symbols(log), ["B$FLEN", "B$SASS"])
+def test_milestone_one_inventory_names_the_25_basic_benchmarks_once():
+    """A glob omitted nbody_fixed, so the claimed milestone inventory had 24 links."""
+    sources = qbruntime.milestone_sources()
+    assert len(sources) == 25
+    assert {source.parent.name for source in sources} == set(qbruntime.MILESTONE_ONE)
 
 
-class DemoSourceTests(unittest.TestCase):
-    def test_missing_demo_directory_says_which_environment_variable_to_set(self):
-        """A missing demo tree looked like an empty successful test selection."""
-        with tempfile.TemporaryDirectory() as work:
-            found, reason = qbruntime.demo_sources(Path(work))
-        self.assertEqual(found, {})
-        self.assertEqual(reason, "QB45_DEMOS_DIR is unset or lacks NIBBLES.BAS and GORILLA.BAS")
+def test_linker_inventory_deduplicates_only_the_reported_b_symbols():
+    """A broad symbol scan recorded private names that LINK did not require and hid a missing entry."""
+    log = (
+        "I000.OBJ(p.bas) : error L2029 : 'B$SASS' : unresolved external\n"
+        "Unresolved external _main in module P\n"
+        "I001.OBJ(q.bas) : error L2029 : 'B$SASS' : unresolved external\n"
+        "I000.OBJ(p.bas) : error L2029 : 'B$FLEN' : unresolved external\n"
+    )
+    assert qbruntime.undefined_symbols(log) == ["B$FLEN", "B$SASS"]
 
 
-@unittest.skipUnless(qbruntime.dosbatch.QB45.is_dir(), "QB45_DIR is unavailable")
-class RuntimeFibTests(unittest.TestCase):
-    def test_fib_matches_bcom45_byte_for_byte(self):
-        """A separate SS frame made fib's local addresses read as zero through DS."""
-        source = next(source for source in qbruntime.milestone_sources() if source.stem == "fib")
-        with tempfile.TemporaryDirectory() as temporary:
-            work = Path(temporary)
-            object_ = work / "fib.obj"
-            error = run_tests.compile_one(run_tests.Program(source, ["-O2"], None, "qb45"), object_)
-            self.assertIsNone(error)
-            archive, _ = qbruntime.build(work / "archive")
-            result = qbruntime.differential(object_, archive, work / "differential", "fib")
-        self.assertEqual(result.reference.status, "ok")
-        self.assertEqual(result.candidate.status, "ok")
-        self.assertEqual(result.difference, "")
+def test_missing_demo_directory_says_which_environment_variable_to_set():
+    """A missing demo tree looked like an empty successful test selection."""
+    with tempfile.TemporaryDirectory() as work:
+        found, reason = qbruntime.demo_sources(Path(work))
+    assert found == {}
+    assert reason == "QB45_DEMOS_DIR is unset or lacks NIBBLES.BAS and GORILLA.BAS"
 
 
-@unittest.skipUnless(qbruntime.dosbatch.QB45.is_dir(), "QB45_DIR is unavailable")
-class RuntimeCrcTests(unittest.TestCase):
-    def test_crc_matches_bcom45_byte_for_byte(self):
-        """Stack arguments to regparm3 produced -435612498; cleanup then lost the far return."""
-        source = next(source for source in qbruntime.milestone_sources() if source.stem == "crc")
-        with tempfile.TemporaryDirectory() as temporary:
-            work = Path(temporary)
-            object_ = work / "crc.obj"
-            error = run_tests.compile_one(run_tests.Program(source, ["-O2"], None, "qb45"), object_)
-            self.assertIsNone(error)
-            archive, _ = qbruntime.build(work / "archive")
-            result = qbruntime.differential(object_, archive, work / "differential", "crc")
-        self.assertEqual(result.reference.status, "ok")
-        self.assertEqual(result.candidate.status, "ok")
-        self.assertEqual(result.difference, "")
+def differential_case(name: str):
+    source = next(source for source in qbruntime.milestone_sources() if source.stem == name)
+    with tempfile.TemporaryDirectory() as temporary:
+        work = Path(temporary)
+        object_ = work / f"{name}.obj"
+        error = run_tests.compile_one(run_tests.Program(source, ["-O2"], None, "qb45"), object_)
+        assert error is None
+        archive, _ = qbruntime.build(work / "archive")
+        return qbruntime.differential(object_, archive, work / "differential", name)
 
 
-@unittest.skipUnless(qbruntime.dosbatch.QB45.is_dir(), "QB45_DIR is unavailable")
-class RuntimeBintreeTests(unittest.TestCase):
-    def test_bintree_matches_bcom45_byte_for_byte(self):
-        """An uninitialised DOS heap made bintree crash while dimensioning its array."""
-        source = next(source for source in qbruntime.milestone_sources() if source.stem == "bintree")
-        with tempfile.TemporaryDirectory() as temporary:
-            work = Path(temporary)
-            object_ = work / "bintree.obj"
-            error = run_tests.compile_one(run_tests.Program(source, ["-O2"], None, "qb45"), object_)
-            self.assertIsNone(error)
-            archive, _ = qbruntime.build(work / "archive")
-            result = qbruntime.differential(object_, archive, work / "differential", "bintree")
-        self.assertEqual(result.reference.status, "ok")
-        self.assertEqual(result.candidate.status, "ok")
-        self.assertEqual(result.difference, "")
+@pytest.mark.skipif(not qbruntime.dosbatch.QB45.is_dir(), reason="QB45_DIR is unavailable")
+@pytest.mark.parametrize("name", ["fib", "crc", "bintree", "sieve"])
+def test_runtime_program_matches_bcom45_byte_for_byte(name: str):
+    """Each named program exposed an earlier runtime boundary defect."""
+    result = differential_case(name)
+    assert result.reference.status == "ok"
+    assert result.candidate.status == "ok"
+    assert result.difference == ""
 
 
-@unittest.skipUnless(qbruntime.dosbatch.QB45.is_dir(), "QB45_DIR is unavailable")
-class RuntimeSieveTests(unittest.TestCase):
-    def test_sieve_matches_bcom45_byte_for_byte(self):
-        """A near payload made sieve jump through an array segment with a nonzero offset."""
-        source = next(source for source in qbruntime.milestone_sources() if source.stem == "sieve")
-        with tempfile.TemporaryDirectory() as temporary:
-            work = Path(temporary)
-            object_ = work / "sieve.obj"
-            error = run_tests.compile_one(run_tests.Program(source, ["-O2"], None, "qb45"), object_)
-            self.assertIsNone(error)
-            archive, _ = qbruntime.build(work / "archive")
-            result = qbruntime.differential(object_, archive, work / "differential", "sieve")
-        self.assertEqual(result.reference.status, "ok")
-        self.assertEqual(result.candidate.status, "ok")
-        self.assertEqual(result.difference, "")
-
-
-@unittest.skipUnless(qbruntime.dosbatch.QB45.is_dir(), "QB45_DIR is unavailable")
-class RuntimeGrepInventoryTests(unittest.TestCase):
-    def test_grep_links_space_before_its_file_entries_exist(self):
-        """Grep left SPAC unresolved before SPACE$ returned a temporary descriptor."""
-        source = next(source for source in qbruntime.milestone_sources() if source.stem == "grep")
-        with tempfile.TemporaryDirectory() as temporary:
-            work = Path(temporary)
-            object_ = work / "grep.obj"
-            error = run_tests.compile_one(run_tests.Program(source, ["-O2"], None, "qb45"), object_)
-            self.assertIsNone(error)
-            archive, _ = qbruntime.build(work / "archive")
-            result = qbruntime.differential(object_, archive, work / "differential", "grep")
-        self.assertNotIn("B$SPAC", qbruntime.undefined_symbols(result.candidate.detail))
+@pytest.mark.skipif(not qbruntime.dosbatch.QB45.is_dir(), reason="QB45_DIR is unavailable")
+def test_grep_links_space_before_its_file_entries_exist():
+    """Grep left SPAC unresolved before SPACE$ returned a temporary descriptor."""
+    result = differential_case("grep")
+    assert "B$SPAC" not in qbruntime.undefined_symbols(result.candidate.detail)

@@ -5,12 +5,12 @@
 public B$ENRA
 public B$EXSA
 
-extrn _qb_string_delete@3:far
+extrn _qb_string_delete@3:near
 
 .data
 qb_current_frame dw 0
 
-QB_TEXT segment para public 'CODE'
+RUNTIME_TEXT segment para public 'CODE'
 assume ds:DGROUP
 
 ; CX is the compiler's local-byte count and BX its descriptor count.  The
@@ -65,7 +65,7 @@ clear_descriptor:
     sub si, 4
     push si
     mov ax, si
-    call far ptr _qb_string_delete@3
+    call _qb_string_delete@3
     pop si
     dec word ptr [bp-10]
     jmp short clear_descriptor
@@ -85,5 +85,5 @@ descriptors_cleared:
     retf
 B$EXSA endp
 
-QB_TEXT ends
+RUNTIME_TEXT ends
 end
