@@ -169,4 +169,4 @@ void array_xinit(void)
     lh_on_move(LH_ARRAY, moved);
 }
 #pragma aux B_ERAS "B$ERAS"
-#pragma aux array_dim "ARRAY_DIM"
+#pragma aux array_dim "_array_dim"

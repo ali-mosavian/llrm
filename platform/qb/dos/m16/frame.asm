@@ -1,114 +1,94 @@
-        TITLE   FRAME - BASIC procedure frames (B$ENRA, B$EXSA)
-;***
-; FRAME - BASIC procedure frames
-;
-;Purpose:
-;       A compiled SUB or FUNCTION calls B$ENRA before its body and B$EXSA
-;       after.  Between them BP addresses the frame QB's inc/stack.inc draws:
-;
-;               BP+0    previous BP
-;               BP-2    previous BASIC frame (b$curframe)
-;               BP-4    SI
-;               BP-6    DI
-;               BP-8    bytes of locals
-;               BP-10   GOSUB count
-;               ...     locals, zeroed
-;
-;       The error handler walks the frames through b$curframe.  Strings
-;       local to the procedure are freed by the procedure, with B$STDL.
-;       The same bytes as the entries of BCOM45's rtenexit.
-;
-;       Kept in assembly: the entries take the caller's frame apart and
-;       leave BP and SP as the procedure uses them, which C cannot do.
-;******************************************************************************
-        .MODEL  MEDIUM
-        .386
+;; name: B$ENRA, B$EXSA
+;; desc: BASIC procedure frames
+;;
+;; args: B$ENRA [in] cx:word           | bytes of locals, even
+;;                   bx:word           | temporary string slots (unused: the
+;;                                     | procedure frees its strings itself,
+;;                                     | with B$STDL)
+;;       B$EXSA [in] bp                | the frame B$ENRA built
+;;                   dx:ax             | the function's result, kept
+;; retn: B$ENRA bp -> the new frame, sp below its locals
+;;       B$EXSA si, di, bp and b$curframe as the caller had them
+;;
+;; chng: oct/26 written [ali]
+;; obs.: the frame is QB's (inc/stack.inc):
+;;
+;;           bp+0    previous bp
+;;           bp-2    previous BASIC frame (b$curframe)
+;;           bp-4    si
+;;           bp-6    di
+;;           bp-8    bytes of locals
+;;           bp-10   GOSUB count
+;;           ...     the locals, zeroed
+;;
+;;       The error handler walks the frames through b$curframe. These
+;;       are the instructions of BCOM45's rtenexit, B$ENRA and B$EXSA,
+;;       except that the locals are zeroed by dwords. They stay in
+;;       assembly because they take the caller's frame apart and leave
+;;       bp and sp as the procedure uses them, which C cannot do.
 
-        EXTRN   _cur_level:WORD         ; b$curlevel, in nhstutil.c
+                .model  medium, pascal
+                .386
+                option  proc:private
 
-        PUBLIC  B$ENRA
-        PUBLIC  B$EXSA
-        PUBLIC  _b_curframe
+                include qb.inc
 
-_DATA   SEGMENT WORD PUBLIC 'DATA'
-_b_curframe     DW      0               ; frame of the BASIC procedure running
-b$return        DD      0               ; where the entry returns to
-_DATA   ENDS
+                extrn   c cur_level:word        ;; b$curlevel, nhstutil.c
 
-        .CODE   FRAME_TEXT
-        ASSUME  DS:DGROUP
+                public  c b_curframe
 
-;***
-;B$ENRA - Enter a BASIC procedure
-;
-;Purpose:
-;       Build the frame and zero its locals.
-;
-;Entry:
-;       CX      Bytes of locals, even
-;       BX      Temporary string slots (not used: B$STDL frees them)
-;
-;Exit:
-;       BP      The new frame
-;       SP      Below the locals
-;
-;Uses:
-;       AX, CX, DI
-;
-;Exceptions:
-;       None.
-;****
-B$ENRA  PROC    FAR
-        POP     WORD PTR b$return       ; our return address, off the stack
-        POP     WORD PTR b$return+2
-        XOR     AX,AX
-        PUSH    BP
-        MOV     BP,SP
-        PUSH    _b_curframe             ; previous BASIC frame
-        PUSH    SI
-        PUSH    DI
-        PUSH    CX                      ; bytes of locals
-        PUSH    AX                      ; GOSUB count
-        SUB     SP,CX
-        MOV     _b_curframe,BP
-        INC     _cur_level
-        MOV     DI,SP
-        PUSH    ES
-        PUSH    DS
-        POP     ES
-        SHR     CX,1
-        XOR     AX,AX
-        REP     STOSW                   ; zero the locals
-        POP     ES
-        JMP     DWORD PTR b$return
-B$ENRA  ENDP
+.data
+b_curframe      dw      0                       ;; frame of the procedure running
+retaddr         dd      0                       ;; where the entries return to
 
-;***
-;B$EXSA - Exit a BASIC procedure
-;
-;Purpose:
-;       Take the frame down and return to the caller.
-;
-;Entry:
-;       BP      The frame B$ENRA built
-;       DX:AX   The function's result, kept
-;
-;Exit:
-;       SI, DI, BP, b$curframe as the caller had them
-;
-;Uses:
-;       None.
-;****
-B$EXSA  PROC    FAR
-        POP     WORD PTR b$return       ; our return address, off the stack
-        POP     WORD PTR b$return+2
-        DEC     _cur_level
-        LEA     SP,[BP-6]
-        POP     DI
-        POP     SI
-        POP     _b_curframe
-        POP     BP
-        JMP     DWORD PTR b$return
-B$EXSA  ENDP
+.code
+;;::::::::::::::
+;; B$ENRA ()
+B$ENRA          proc    public
 
-        END
+                pop     W retaddr               ;; our return, off the stack
+                pop     W retaddr+2
+
+                xor     eax, eax
+                push    bp
+                mov     bp, sp
+                push    b_curframe              ;; previous BASIC frame
+                push    si
+                push    di
+                push    cx                      ;; bytes of locals
+                push    ax                      ;; GOSUB count
+                sub     sp, cx
+                mov     b_curframe, bp
+                inc     cur_level
+
+                push    es                      ;; zero the locals
+                push    ds
+                pop     es
+                mov     di, sp
+                shr     cx, 1
+                shr     cx, 1                   ;; dwords; cf: a word is left
+                rep     stosd
+                adc     cx, cx
+                rep     stosw
+                pop     es
+
+                jmp     D retaddr
+B$ENRA          endp
+
+;;::::::::::::::
+;; B$EXSA ()
+B$EXSA          proc    public
+
+                pop     W retaddr               ;; our return, off the stack
+                pop     W retaddr+2
+
+                dec     cur_level
+                lea     sp, [bp-6]
+                pop     di
+                pop     si
+                pop     b_curframe
+                pop     bp
+
+                jmp     D retaddr
+B$EXSA          endp
+                end

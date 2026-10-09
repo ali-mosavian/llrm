@@ -1,102 +1,129 @@
-; Startup for a QB45 compiled module (QB: crt0 and rtinit.asm).
-; DGROUP is the static data, then STACK, then one dynamic region from qb_atopsp to the top of
-; the group (rtinit.asm:244-300). DOSSEG makes the linker put STACK last.
-.model medium
-.386
-dosseg
+;; name: start
+;; desc: startup of a QB45 compiled module
+;;
+;; args: [in] es -> PSP, ss:sp -> the STACK segment
+;; retn: none; enters the module at BC_SA:30h
+;;
+;; chng: oct/26 written [ali]
+;; obs.: DGROUP is the static data, then STACK, then one dynamic region
+;;       from qb_atopsp to the top of the group (rt/rtinit.asm:244-300).
+;;       DOSSEG makes the linker put STACK last. The linker gives ss the
+;;       STACK segment's own frame, so it is rebased to DGROUP, keeping
+;;       the physical stack, to let a near pointer to a frame cell reach
+;;       it through ds.
+;;
+;;       Every module with an initializer declares XIB, XI and XIE in that
+;;       order (xi.h), so the first the linker meets fixes the order, and
+;;       the bounds below are those segments' bases.
 
-extrn _qb_start:far
-extrn _llrm_os_psp:word
+                .model  medium, pascal
+                .386
+                option  proc:private
 
-public _main
-public _qb_atopsp
-public _qb_asizds
-public _qb_xi_begin
-public _qb_xi_end
+                include qb.inc
+                dosseg
 
-; The initializer segments bracket every module's XI contribution (rmacros.inc INITIALIZER).
-; Each C module declares them in this order too (xi.h), so the first to appear fixes it.
-XIB segment word public 'DATA'
-XIB ends
-XI segment word public 'DATA'
-XI ends
-XIE segment word public 'DATA'
-XIE ends
+                extrn   c qb_start:far
+                extrn   c llrm_os_psp:word
 
-_DATA segment word public 'DATA'
-; The last usable word of DGROUP, set below from the PSP: 64K, or the memory DOS gave.
-_qb_asizds dw 0
-_qb_xi_begin dw offset DGROUP:XIB
-_qb_xi_end dw offset DGROUP:XIE
-_DATA ends
+                public  c qb_atopsp
+                public  c qb_asizds
+                public  c qb_xi_begin
+                public  c qb_xi_end
+                public  c qb_module_segment
 
-_BSS segment word public 'BSS'
-_BSS ends
+PAGES_64K       equ     1000h                   ;; paragraphs in 64 KB
+LAST_WORD       equ     0FFFEh                  ;; the last word of 64 KB
+HEADER_CODE     equ     30h                     ;; where the module's code starts
 
-STACK segment para stack 'STACK'
-    db 2048 dup (?)
-_qb_atopsp label byte
-STACK ends
+XIB             segment word public 'DATA'
+XIB             ends
+XI              segment word public 'DATA'
+XI              ends
+XIE             segment word public 'DATA'
+XIE             ends
 
-; The compiler's zero-length BC_SAB precedes BC_SA.  A label contributed to the same public segment
-; is BC_SA's first far address, its module header, without an EXTDEF of its own.
-BC_SAB segment word public 'BC_SEGS'
-qb_bc_sa label byte
-BC_SAB ends
+_DATA           segment word public 'DATA'
+qb_asizds       dw      0                       ;; the last usable word of DGROUP
+qb_xi_begin     dw      O DGROUP:XIB
+qb_xi_end       dw      O DGROUP:XIE
+qb_module_segment dw    0                       ;; the module's code segment
+_DATA           ends
 
-DGROUP group _DATA, _BSS, XIB, XI, XIE, STACK, BC_SAB
+_BSS            segment word public 'BSS'
+_BSS            ends
+
+STACK           segment para stack 'STACK'
+                db      2048 dup (?)
+qb_atopsp       label   byte
+STACK           ends
+
+;; the compiler's zero-length BC_SAB precedes BC_SA: a label in the same
+;; public segment is BC_SA's first far address, the module header
+BC_SAB          segment word public 'BC_SEGS'
+bc_sa           label   byte
+BC_SAB          ends
+
+DGROUP          group   _DATA, _BSS, XIB, XI, XIE, STACK, BC_SAB
 
 .code
-assume ds:DGROUP
-_main proc far
-    mov bx, es                      ; the PSP, before DS leaves it
-    mov ax, DGROUP
-    mov ds, ax
-    ; The linker gives SS the STACK segment's own frame.  Rebase it to DGROUP, keeping the physical
-    ; stack, so a near pointer to a frame cell reaches it through DS.
-    mov dx, ss
-    sub dx, ax
-    shl dx, 4
-    cli
-    mov ss, ax
-    add sp, dx
-    sti
-    mov _llrm_os_psp, bx
-    ; PSP:2 is the first paragraph past the program's memory.
-    mov es, bx
-    mov cx, es:[2]
-    sub cx, ax
-    mov dx, 0fffeh
-    cmp cx, 1000h
-    jae short sized
-    shl cx, 4
-    mov dx, cx
-    dec dx
-    and dl, 0feh
-sized:
-    mov _qb_asizds, dx
-    ; The linker stores no BSS: zero it, from its start to the stack's.
-    mov ax, ds
-    mov es, ax
-    mov di, offset DGROUP:_BSS
-    mov cx, offset DGROUP:STACK
-    sub cx, di
-    xor ax, ax
-    cld
-    rep stosb
-    call far ptr _qb_start
-    ; Enter the module: its code segment is BC_SA, user code at the fixed offset 30h.
-    mov ax, word ptr qb_bc_sa+2
-    mov es, ax
-    mov bx, 30h
-    push cs
-    push offset hang
-    push es
-    push bx
-    xor dx, dx
-    retf
-hang:
-    jmp short hang                  ; a module ends through B$CENP or B$CEND
-_main endp
+;;::::::::::::::
+;; start ()
+start           proc
 
-end _main
+                mov     bx, es                  ;; the PSP, before ds leaves it
+                mov     ax, DGROUP
+                mov     ds, ax
+
+                mov     dx, ss                  ;; ss -> DGROUP, same stack
+                sub     dx, ax
+                shl     dx, 4
+                cli
+                mov     ss, ax
+                add     sp, dx
+                sti
+
+                mov     llrm_os_psp, bx
+
+                ;; PSP:2 is the first paragraph past the program's memory
+                mov     es, bx
+                mov     cx, es:[2]
+                sub     cx, ax
+                mov     dx, LAST_WORD
+                cmp     cx, PAGES_64K
+                jae     short @F
+                shl     cx, 4
+                lea     dx, [ecx-2]
+                and     dl, 0FEh
+@@:             mov     qb_asizds, dx
+
+                ;; the linker stores no BSS: zero it, up to the stack
+                mov     ax, ds
+                mov     es, ax
+                mov     di, O DGROUP:_BSS
+                mov     cx, O DGROUP:STACK
+                sub     cx, di
+                mov     dx, cx
+                xor     eax, eax
+                cld
+                shr     cx, 2
+                rep     stosd
+                mov     cx, dx
+                and     cx, 3
+                rep     stosb
+
+                call    qb_start
+
+                ;; enter the module: BC_SA's far address, code at 30h
+                mov     ax, W bc_sa+2
+                mov     qb_module_segment, ax
+                push    cs
+                push    O @@hang
+                push    ax
+                push    HEADER_CODE
+                xor     dx, dx
+                ret
+
+@@hang:         jmp     short @@hang            ;; a module ends through B$CENP/B$CEND
+start           endp
+                end     start
