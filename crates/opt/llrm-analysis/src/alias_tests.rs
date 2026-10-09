@@ -9,7 +9,7 @@ use llrm_support::hash::IndexMap;
 
 use super::{
     _direct_summary, Effect, PointsTo, Procedure, Summary, UNKNOWN, annotated, calls_annotated, congruences,
-    nonnull_by_definition, points_to, summaries,
+    initialized, nonnull_by_definition, points_to, summaries,
 };
 use crate::memory::{
     self, Identity, MemRef, MemoryKind, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit, object_of,
@@ -1101,4 +1101,20 @@ fn a_procedure_knows_which_callees_a_definition_elsewhere_may_replace() {
         // No summary describes a call that may be replaced: f then writes what an unknown callee may.
         assert_eq!(found["f"].writes.is_empty(), false, "f writes something, replaceable callee or not");
     }
+}
+
+#[test]
+fn initialized_asks_the_interner_per_parameter_not_per_read_and_parameter() {
+    // stamped_all interned one Parameter object per (read, parameter) pair: 112 M instructions per QCport file.
+    let loads: String = (0..24).map(|i| format!("  %l{i} = load i16, ptr %p{}\n", i % 6)).collect();
+    let text = format!(
+        "define i16 @f(ptr %p0, ptr %p1, ptr %p2, ptr %p3, ptr %p4, ptr %p5) {{\nb0:\n{loads}  ret i16 %l0\n}}\n"
+    );
+    let parsed = Parsed::new(&text);
+    let unit = parsed.unit();
+    let before = ObjectInterner::of(&parsed.module.context).lookups();
+    let found = initialized(&Procedure::of(unit), &IndexMap::default()).unwrap();
+    let asked = ObjectInterner::of(&parsed.module.context).lookups() - before;
+    assert_eq!(found.len(), 6);
+    assert!(asked < 24 * 6 / 2, "{asked} interner lookups for 24 reads and 6 parameters");
 }

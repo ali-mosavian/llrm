@@ -328,11 +328,12 @@ impl std::hash::Hash for Exact {
 /// `Context` (`ObjectInterner::of`) and is dropped with it, as LLVMContext's uniqued constants are.
 pub struct ObjectInterner {
     held: std::cell::RefCell<(Vec<MemoryObject>, llrm_support::hash::HashMap<Exact, u32>)>,
+    lookups: std::cell::Cell<u64>,
 }
 
 impl Default for ObjectInterner {
     fn default() -> Self {
-        let interner = Self { held: Default::default() };
+        let interner = Self { held: Default::default(), lookups: Default::default() };
         assert_eq!(interner.intern(MemoryObject::new(MemoryKind::Unknown)), ObjectRef::UNKNOWN);
         assert_eq!(interner.intern(MemoryObject::new(MemoryKind::Nonlocal)), ObjectRef::NONLOCAL);
         assert_eq!(
@@ -356,6 +357,7 @@ impl ObjectInterner {
         &self,
         object: MemoryObject,
     ) -> ObjectRef {
+        self.lookups.set(self.lookups.get() + 1);
         let mut held = self.held.borrow_mut();
         let (objects, ids) = &mut *held;
         let key = Exact(object);
@@ -378,6 +380,11 @@ impl ObjectInterner {
             extent: one.extent,
             key: Key::of(&one.identity),
         }
+    }
+
+    /// How many times `intern` was asked: a cost counter, for tests that a hot loop does not ask per step.
+    pub fn lookups(&self) -> u64 {
+        self.lookups.get()
     }
 
     /// The object `one` stands for.
