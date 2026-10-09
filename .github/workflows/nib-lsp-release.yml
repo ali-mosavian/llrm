@@ -1,19 +1,57 @@
 # Builds nib-lsp for the Zed extension, which downloads it from the release
-# tagged nib-lsp-v<extension version>. Pull requests build it without releasing.
+# tagged nib-lsp-v<extension version>. Main builds it (no release) only when a path in its closure changed:
+# the list is generated, `python3 tools/ci/nib_lsp_paths.py --write`, and a test checks it.
 name: nib-lsp release
 
 on:
   push:
     tags: ["nib-lsp-v*"]
-  pull_request:
-    paths: ["build.rs", "Cargo.toml", "Cargo.lock", "src/**", "crates/**", ".cargo/**", ".github/workflows/nib-lsp-release.yml"]
+    branches: [main]
+    paths:
+      - "Cargo.toml"
+      - "build.rs"
+      - "crates/backend/llrm-core/**"
+      - "crates/backend/llrm-driver/**"
+      - "crates/backend/llrm-peepgen/**"
+      - "crates/bc/llrm-bcdriver/**"
+      - "crates/frontends/llrm-c/**"
+      - "crates/frontends/llrm-nib/**"
+      - "crates/frontends/llrm-qb/**"
+      - "crates/frontends/llrm-qbruntime/**"
+      - "crates/frontends/qbfront/**"
+      - "crates/frontends/qbfront/crates/buildprs/**"
+      - "crates/ir/llrm-hir/**"
+      - "crates/ir/llrm-lir/**"
+      - "crates/ir/llrm-mir/**"
+      - "crates/opt/llrm-analysis/**"
+      - "crates/opt/llrm-transforms/**"
+      - "crates/support/llrm-support/**"
+      - "crates/target/llrm-coff/**"
+      - "crates/target/llrm-coff32/**"
+      - "crates/target/llrm-coff64/**"
+      - "crates/target/llrm-dwarf/**"
+      - "crates/target/llrm-elf/**"
+      - "crates/target/llrm-elf32/**"
+      - "crates/target/llrm-elf64/**"
+      - "crates/target/llrm-macho/**"
+      - "crates/target/llrm-object/**"
+      - "crates/target/llrm-omf/**"
+      - "crates/target/llrm-target/**"
+      - "crates/target/llrm-x86-bc/**"
+      - "crates/target/llrm-x86-bcmachine/**"
+      - "crates/target/llrm-x86-m16/**"
+      - "crates/target/llrm-x86-m32/**"
+      - "crates/target/llrm-x86/**"
+      - "src/**"
+      - "!src/bin/**"
+      - "src/bin/nib-lsp.rs"
 
 permissions:
   contents: write
 
 jobs:
   release:
-    if: github.event_name == 'push'
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes "nib-lsp for the Nib Zed extension."
@@ -36,9 +74,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
       - run: cargo build --release --locked --no-default-features --bin nib-lsp --target ${{ matrix.target }}
       - name: Upload
-        if: github.event_name == 'push'
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
