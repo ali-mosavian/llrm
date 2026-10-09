@@ -1,208 +1,165 @@
-/* Binary to decimal digits, the math pack's $i8_output (BCOM45's emfout and
-   emtmul): the number is scaled by a power of ten in extended precision, then
-   its sixteen leading digits are read off the fraction.  The scaling, its table
-   and its rounding are the library's own, since the digits QB prints are what
-   that arithmetic leaves, not the double's exact expansion (62.5 comes out
-   6249999999999999).  Needs the x87 in extended precision, as the runtime start
-   leaves it. */
+/* Binary to decimal digits: the sixteen leading digits of a double, rounded the
+   way QB's PRINT and STR$ round them.
+
+   The digits are exact, from big-integer arithmetic on the double's mantissa
+   and exponent, with one measured quirk: QB does not round up at one half but
+   when the part beyond the sixteenth digit reaches 1 - 922 * 10^16 / 2^64
+   (0.50018...), as if it added a bias of 922 / 2^64 before cutting the digits
+   off. */
+#include "bigint.h"
 #include "i8out.h"
 
-enum {
-    DIGITS = 16,
-    GROUP = 7,        /* table entries for the digits 1..7 of one octal place */
-    NEGATIVE = 19,    /* where the negative powers start */
-    LIMBS = 5         /* the fraction: 8 bits and four 16-bit words */
-};
+enum { DIGITS = 16 };
 
-/* $i8_tpwr10: 10^1..10^7, 10^8..10^56 by 8, 10^64..10^320 by 64, then the same
-   for the negative powers, each rounded to a 64-bit mantissa. */
-static const unsigned char powers[38][10] = {
-    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA0, 0x02, 0x40 },
-    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC8, 0x05, 0x40 },
-    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFA, 0x08, 0x40 },
-    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x9C, 0x0C, 0x40 },
-    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x50, 0xC3, 0x0F, 0x40 },
-    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x24, 0xF4, 0x12, 0x40 },
-    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x96, 0x98, 0x16, 0x40 },
-    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0xBC, 0xBE, 0x19, 0x40 },
-    { 0x00, 0x00, 0x00, 0x04, 0xBF, 0xC9, 0x1B, 0x8E, 0x34, 0x40 },
-    { 0x00, 0xA1, 0xED, 0xCC, 0xCE, 0x1B, 0xC2, 0xD3, 0x4E, 0x40 },
-    { 0x9E, 0xB5, 0x70, 0x2B, 0xA8, 0xAD, 0xC5, 0x9D, 0x69, 0x40 },
-    { 0xFD, 0x25, 0xE5, 0x1A, 0x8E, 0x4F, 0x19, 0xEB, 0x83, 0x40 },
-    { 0xD7, 0x95, 0x43, 0x0E, 0x05, 0x8D, 0x29, 0xAF, 0x9E, 0x40 },
-    { 0xA0, 0x44, 0xED, 0x81, 0x12, 0x8F, 0x81, 0x82, 0xB9, 0x40 },
-    { 0xD5, 0xA6, 0xCF, 0xFF, 0x49, 0x1F, 0x78, 0xC2, 0xD3, 0x40 },
-    { 0xE0, 0x8C, 0xE9, 0x80, 0xC9, 0x47, 0xBA, 0x93, 0xA8, 0x41 },
-    { 0x6B, 0x55, 0x27, 0x39, 0x8D, 0xF7, 0x70, 0xE0, 0x7C, 0x42 },
-    { 0x8E, 0xDE, 0xF9, 0x9D, 0xFB, 0xEB, 0x7E, 0xAA, 0x51, 0x43 },
-    { 0x76, 0xE3, 0xCC, 0xF2, 0x29, 0x2F, 0x84, 0x81, 0x26, 0x44 },
-    { 0xCD, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xFB, 0x3F },
-    { 0x0A, 0xD7, 0xA3, 0x70, 0x3D, 0x0A, 0xD7, 0xA3, 0xF8, 0x3F },
-    { 0x3B, 0xDF, 0x4F, 0x8D, 0x97, 0x6E, 0x12, 0x83, 0xF5, 0x3F },
-    { 0x2C, 0x65, 0x19, 0xE2, 0x58, 0x17, 0xB7, 0xD1, 0xF1, 0x3F },
-    { 0x23, 0x84, 0x47, 0x1B, 0x47, 0xAC, 0xC5, 0xA7, 0xEE, 0x3F },
-    { 0xB6, 0x69, 0x6C, 0xAF, 0x05, 0xBD, 0x37, 0x86, 0xEB, 0x3F },
-    { 0xBC, 0x42, 0x7A, 0xE5, 0xD5, 0x94, 0xBF, 0xD6, 0xE7, 0x3F },
-    { 0xFD, 0xCE, 0x61, 0x84, 0x11, 0x77, 0xCC, 0xAB, 0xE4, 0x3F },
-    { 0x5B, 0xE1, 0x4D, 0xC4, 0xBE, 0x94, 0x95, 0xE6, 0xC9, 0x3F },
-    { 0x53, 0x3B, 0x75, 0x44, 0xCD, 0x14, 0xBE, 0x9A, 0xAF, 0x3F },
-    { 0xBA, 0x94, 0x39, 0x45, 0xAD, 0x1E, 0xB1, 0xCF, 0x94, 0x3F },
-    { 0xC6, 0xE2, 0xBC, 0xBA, 0x3B, 0x31, 0x61, 0x8B, 0x7A, 0x3F },
-    { 0x59, 0xC1, 0x7E, 0xB1, 0x53, 0x7C, 0x12, 0xBB, 0x5F, 0x3F },
-    { 0x2F, 0x8D, 0x06, 0xBE, 0x92, 0x85, 0x15, 0xFB, 0x44, 0x3F },
-    { 0xA5, 0xE9, 0x39, 0xA5, 0x27, 0xEA, 0x7F, 0xA8, 0x2A, 0x3F },
-    { 0xA1, 0xE4, 0xBC, 0x64, 0x7C, 0x46, 0xD0, 0xDD, 0x55, 0x3E },
-    { 0x06, 0xCC, 0x23, 0x54, 0x77, 0x83, 0xFF, 0x91, 0x81, 0x3D },
-    { 0x3A, 0x19, 0x7A, 0x63, 0x25, 0x43, 0x31, 0xC0, 0xAC, 0x3C },
-    { 0xD1, 0x38, 0x82, 0x47, 0x97, 0xB8, 0x00, 0xFD, 0xD7, 0x3B },
-};
+/* 2^64 - 922 * 10^16: the fraction, in units of 2^-64, from which the last
+   digit rounds up. */
+#define ROUND_UP_FROM 9226744073709551616ULL
 
-/* 1 - 921 * 2^-64 (the largest the rounding bias below cannot carry past 1) and
-   0.1, as extended numbers. */
-static const unsigned char below_one[10] = {
-    0x66, 0xFC, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 0x3F
-};
-static const unsigned char tenth[10] = {
-    0xCD, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xFB, 0x3F
-};
+#define TEN_15 1000000000000000ULL
+#define TEN_16 10000000000000000ULL
 
-static long double extended(const unsigned char *bytes)
+/* Working numbers: kept off the stack, which is small, and used by one
+   conversion at a time. */
+static Big number, rest, edge, whole;
+
+/* The pieces of a finite double: value = mantissa * 2^exponent. */
+typedef struct Parts {
+    unsigned long long mantissa;
+    int exponent;
+    int negative;
+} Parts;
+
+static void split(unsigned long long bits, Parts *parts)
 {
-    return *(const long double *)bytes;
-}
+    unsigned biased = (unsigned)(bits >> 52) & 0x7FF;
 
-/* $i8_tpwr10: x * 10^k, one octal place of k at a time, lowest first.  The
-   products are rounded to 64 bits one after another, as the math pack's are,
-   which is why the digits come out as QB's do. */
-long double i8_scale(long double x, int k)
-{
-    int base = k < 0 ? NEGATIVE : 0, place = 0;
-    u16 left = k < 0 ? -k : k;
-
-    while (left) {
-        u16 digit = left & 7;
-
-        if (digit)
-            x *= extended(powers[base + place * GROUP + digit - 1]);
-        left >>= 3;
-        place++;
+    parts->negative = (int)(bits >> 63);
+    parts->mantissa = bits & 0xFFFFFFFFFFFFFULL;
+    if (biased) {
+        parts->mantissa |= 1ULL << 52;
+        parts->exponent = (int)biased - 1075;
+    } else {
+        parts->exponent = -1074;
     }
-    return x;
 }
 
-/* The estimate of the decimal exponent, from the extended exponent and the top
-   mantissa byte. */
-static int estimate(u16 exponent, byte top)
+/* A first guess at k, where 10^(k-1) <= value < 10^k: from the length of the
+   mantissa and log10(2); scaled() says if it is one off. */
+static int guess_exponent(const Parts *parts)
 {
-    unsigned long sum = (unsigned long)exponent * 0x4D10U;
+    unsigned long long m = parts->mantissa;
+    int length = 0;
 
-    sum += (u16)(exponent >> 8) * 0x4DU;
-    sum += (u16)top * 0x9AU;
-    sum -= 0x134312F4UL;
-    return (int)(sum >> 16);
+    for (; m; m >>= 1)
+        length++;
+    return (int)(((long)(parts->exponent + length - 1) * 1233L) >> 12) + 1;
 }
 
-/* The fraction as the digit loop wants it: the mantissa and a byte of zeros,
-   shifted right to put its exponent at 0x3FFE, plus the rounding bias. */
-static void fraction(const unsigned char *raw, u16 limb[LIMBS])
+/* The sixteen digits of value * 10^(16-k), as a number, cut off and not yet
+   rounded, and whether rounding adds one.  They are 16 digits only when k is
+   right; otherwise one short of 10^15, or 10^16 and over, and the caller
+   corrects k. */
+static unsigned long long digits_for(const Parts *parts, int k, int *up)
 {
-    u16 exponent = raw[8] | raw[9] << 8, shift = 0x3FFE - exponent, carry = 0;
-    int at;
+    int s = DIGITS - k;
 
-    limb[0] = 0;
-    for (at = 1; at < LIMBS; at++)
-        limb[at] = raw[(at - 1) * 2] | raw[(at - 1) * 2 + 1] << 8;
-    while (shift--) {
-        carry = limb[0] & 1;
-        for (at = 0; at < LIMBS; at++) {
-            u16 below = at + 1 < LIMBS ? limb[at + 1] & 1 : 0;
-
-            limb[at] = (limb[at] >> 1) | (at == 0 ? below << 7 : below << 15);
+    *up = 0;
+    big_set(&number, parts->mantissa);
+    if (s >= 0) {
+        big_mul_pow10(&number, (unsigned)s);
+        if (parts->exponent >= 0) {
+            big_shl(&number, (unsigned)parts->exponent);
+            return big_low64(&number);
         }
-        /* the top limb takes nothing from above */
-    }
-    {
-        unsigned long sum = (unsigned long)limb[1] + 0x39AU + carry;
+        /* a fraction of 2^-lost: the whole part, and what is left over */
+        {
+            unsigned lost = (unsigned)-parts->exponent;
 
-        limb[1] = (u16)sum;
-        for (at = 2; at < LIMBS && (sum >>= 16); at++) {
-            sum += limb[at];
-            limb[at] = (u16)sum;
+            rest = number;
+            big_keep_low(&rest, lost);
+            big_shr(&number, lost);
+            big_shl(&rest, 64);
+            big_set(&edge, ROUND_UP_FROM);
+            big_shl(&edge, lost);
         }
+    } else {
+        /* 10^16 or more is a whole number: cut -s digits off it */
+        unsigned cut = (unsigned)-s, at;
+
+        big_shl(&number, (unsigned)parts->exponent);
+        whole = number;
+        for (at = cut; at >= 4; at -= 4)
+            big_div_small(&whole, 10000);
+        for (; at; at--)
+            big_div_small(&whole, 10);
+        rest = whole;
+        big_mul_pow10(&rest, cut);
+        big_sub(&number, &rest);
+        rest = number;
+        number = whole;
+        big_shl(&rest, 64);
+        big_set(&edge, ROUND_UP_FROM);
+        big_mul_pow10(&edge, cut);
     }
+    *up = big_cmp(&rest, &edge) >= 0;
+    return big_low64(&number);
 }
 
-/* One digit: the integer part of ten times the fraction, which keeps the rest.
-   */
-static byte next_digit(u16 limb[LIMBS])
+/* Infinities and the not-numbers, which QB writes as text. */
+static int special(unsigned long long bits, Decimal *out)
 {
-    unsigned long carry = 0;
-    int at;
+    const char *name;
 
-    for (at = 0; at < LIMBS; at++) {
-        unsigned long product = (unsigned long)limb[at] * 10 + carry;
-
-        if (at == 0) {
-            limb[at] = product & 0xFF;
-            carry = product >> 8;
-        } else {
-            limb[at] = (u16)product;
-            carry = product >> 16;
-        }
-    }
-    return (byte)carry;
+    if (((bits >> 52) & 0x7FF) != 0x7FF)
+        return 0;
+    if (bits << 12 == 0)
+        name = "1#INF";
+    else if (bits == 0xFFF8000000000000ULL)
+        name = "1#IND";
+    else
+        name = "1#NAN";
+    copy_bytes(out->text, name, 5);
+    out->count = 5;
+    out->exponent = 1;
+    return 1;
 }
 
 void i8_output(double value, Decimal *out)
 {
-    unsigned char bits[8];
-    u16 w0, w1, w2, high;
-    long double scaled;
-    unsigned char raw[10];
-    int k, at;
-    u16 limb[LIMBS];
-    byte count = DIGITS;
+    unsigned long long bits, q;
+    Parts parts;
+    int k, at, up;
+    unsigned count = DIGITS;
 
-    copy_bytes((char *)bits, (const char *)&value, 8);
-    high = bits[6] | bits[7] << 8;
-    out->sign = (high & 0x8000) ? '-' : ' ';
-    bits[7] &= 0x7F;
-    w0 = bits[0] | bits[1] << 8;
-    w1 = bits[2] | bits[3] << 8;
-    w2 = bits[4] | bits[5] << 8;
-    if (!(w0 | w1 | w2 | (bits[6] | bits[7] << 8))) {
+    copy_bytes((char *)&bits, (const char *)&value, 8);
+    out->sign = bits >> 63 ? '-' : ' ';
+    if (special(bits, out))
+        return;
+    split(bits, &parts);
+    if (parts.mantissa == 0) {
         out->sign = ' ';
         out->text[0] = '0';
         out->count = 1;
         out->exponent = 0;
         return;
     }
-    if (((~high) & 0x7FF0) == 0) {
-        const char *name = "1#NAN";
-
-        if (!(w0 | w1 | w2)) {
-            if ((high & 0x0F) == 0)
-                name = "1#INF";
-            else if (high == 0xFFF8)
-                name = "1#IND";
-        }
-        copy_bytes(out->text, name, 5);
-        out->count = 5;
-        out->exponent = 1;
-        return;
+    k = guess_exponent(&parts);
+    for (;;) {
+        q = digits_for(&parts, k, &up);
+        if (q < TEN_15)
+            k--;
+        else if (q >= TEN_16)
+            k++;
+        else
+            break;
     }
-    scaled = *(const double *)bits;
-    copy_bytes((char *)raw, (const char *)&scaled, 10);
-    k = estimate(raw[8] | raw[9] << 8, raw[7]);
-    scaled = i8_scale(scaled, -k);
-    if (extended(below_one) <= scaled) {
+    q += up;
+    if (q == TEN_16) {
+        q = TEN_15;
         k++;
-        scaled *= extended(tenth);
     }
-    copy_bytes((char *)raw, (const char *)&scaled, 10);
-    fraction(raw, limb);
-    for (at = 0; at < DIGITS; at++)
-        out->text[at] = '0' + next_digit(limb);
+    for (at = DIGITS; at--; q /= 10)
+        out->text[at] = '0' + (int)(q % 10);
     while (count > 1 && out->text[count - 1] == '0')
         count--;
     out->count = count;

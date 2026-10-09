@@ -1,9 +1,7 @@
 /* Text to numbers and strings (QB rt/fin.asm, which hands the digits to the
    math pack's $i8_input; the scaling here is the one i8out.c ports). */
 #include "fin.h"
-#include "i8out.h"
-
-enum { MAX_EXPONENT = 308 };
+#include "bigint.h"
 
 /* The most a 64-bit mantissa takes another digit at. */
 #define MANTISSA_LIMIT 1844674407370955160ULL
@@ -138,24 +136,101 @@ static const char *decimal(const char *p, Parsed *out)
     return p;
 }
 
-/* The value as a double: the mantissa scaled by its power of ten in extended
-   precision, then rounded to a double as it is stored. */
+/* Working numbers for the conversion below, off the small stack. */
+static Big numerator, divisor, shifted;
+
+/* floor(numerator * 2^scale / divisor), 63 or 64 bits, by long division; the
+   scale is chosen to make it so, and *inexact says if there was a remainder. */
+static unsigned long long divide_scaled(int *scale, int *inexact)
+{
+    enum { QUOTIENT_BITS = 63 };
+    unsigned long long quotient = 0;
+    unsigned at;
+
+    *scale = QUOTIENT_BITS + (int)big_bits(&divisor) - (int)big_bits(&numerator);
+    if (*scale < 0)
+        *scale = 0;
+    big_shl(&numerator, (unsigned)*scale);
+    for (at = 64; at--;) {
+        shifted = divisor;
+        big_shl(&shifted, at);
+        if (big_cmp(&numerator, &shifted) >= 0) {
+            big_sub(&numerator, &shifted);
+            quotient |= 1ULL << at;
+        }
+    }
+    *inexact = !big_is_zero(&numerator);
+    return quotient;
+}
+
+/* The double nearest `mantissa` * 10^`exponent`, a tie going to the even one,
+   built from its bits.  A value too big for a double is an Overflow, and one
+   too small is a denormal or zero. */
+static double nearest_double(unsigned long long mantissa, int exponent)
+{
+    enum { PRECISION = 53, HIDDEN = 52, LOWEST = -1074, BIAS = 1075 };
+    unsigned long long kept, bits;
+    int scale = 0, inexact = 0, lowest, cut;
+    unsigned length;
+    double result;
+
+    big_set(&numerator, mantissa);
+    if (exponent >= 0) {
+        big_mul_pow10(&numerator, (unsigned)exponent);
+    } else {
+        big_set(&divisor, 1);
+        big_mul_pow10(&divisor, (unsigned)-exponent);
+        big_set(&shifted, divide_scaled(&scale, &inexact));
+        numerator = shifted;
+    }
+    /* the value is numerator * 2^-scale, and a little more if inexact; keep 53
+       bits of it, or fewer for a denormal */
+    length = big_bits(&numerator);
+    lowest = -scale;
+    cut = length > PRECISION ? (int)length - PRECISION : 0;
+    if (lowest + cut < LOWEST)
+        cut = LOWEST - lowest;
+    if (cut > 0) {
+        int roundbit, lost_bits_zero;
+
+        shifted = numerator;
+        lost_bits_zero = big_shr(&shifted, (unsigned)cut - 1);
+        roundbit = (int)(big_low64(&shifted) & 1);
+        kept = big_low64(&shifted) >> 1;
+        if (roundbit && (!lost_bits_zero || inexact || (kept & 1)))
+            kept++;
+    } else {
+        /* a short number is shifted up to put its top bit at the hidden one, as
+           far as the lowest denormal allows */
+        int grow = PRECISION - (int)length;
+
+        if (grow > lowest - LOWEST)
+            grow = lowest - LOWEST;
+        kept = big_low64(&numerator) << grow;
+        lowest -= grow;
+    }
+    lowest += cut > 0 ? cut : 0;
+    if (kept >> PRECISION) {
+        kept >>= 1;
+        lowest++;
+    }
+    bits = kept;
+    if (kept >> HIDDEN) {
+        if (lowest + BIAS >= 2047)
+            qb_error(BE_OVERFLOW);
+        bits = (unsigned long long)(lowest + BIAS) << HIDDEN;
+        bits |= kept & ((1ULL << HIDDEN) - 1);
+    }
+    copy_bytes((char *)&result, (const char *)&bits, 8);
+    return result;
+}
+
+/* The parsed number as a double. */
 static double to_real(const Parsed *parsed)
 {
-    unsigned long long mantissa = parsed->mantissa;
-    long double x;
+    double magnitude = nearest_double(parsed->mantissa, parsed->exponent);
 
-    if (mantissa == 0)
-        return 0;
-    if (parsed->exponent > MAX_EXPONENT + 20)
-        qb_error(BE_OVERFLOW);
-    /* a 64-bit mantissa above 2^63 is converted in two halves, exactly */
-    x = (long double)(long long)(mantissa >> 1) * 2;
-    x += (long double)(int)(mantissa & 1);
-    x = i8_scale(x, parsed->exponent);
-    if (x > 1.7976931348623157e308L)
-        qb_error(BE_OVERFLOW);
-    return parsed->negative ? -(double)x : (double)x;
+    return parsed->negative ? -magnitude : magnitude;
 }
 
 /* B$ftolrnd: to the nearest integer, a half going to the even one. */

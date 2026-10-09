@@ -11,7 +11,7 @@
 ;;       B$EXSA si, di, bp and b$curframe as the caller had them
 ;;
 ;; chng: oct/26 written [ali]
-;; obs.: the frame is QB's (inc/stack.inc):
+;; obs.: the frame is the one QB's inc/stack.inc draws, below bp:
 ;;
 ;;           bp+0    previous bp
 ;;           bp-2    previous BASIC frame (b$curframe)
@@ -21,11 +21,12 @@
 ;;           bp-10   GOSUB count
 ;;           ...     the locals, zeroed
 ;;
-;;       The error handler walks the frames through b$curframe. These
-;;       are the instructions of BCOM45's rtenexit, B$ENRA and B$EXSA,
-;;       except that the locals are zeroed by dwords. They stay in
-;;       assembly because they take the caller's frame apart and leave
-;;       bp and sp as the procedure uses them, which C cannot do.
+;;       The error handler finds the procedures through b$curframe and
+;;       the bytes of locals. Strings local to the procedure are freed by
+;;       the procedure, with B$STDL, before it calls B$EXSA.
+;;
+;;       Assembly because the entries take the caller's frame apart and
+;;       leave bp and sp as the procedure then uses them.
 
                 .model  medium, pascal
                 .386
@@ -37,58 +38,71 @@
 
                 public  c b_curframe
 
+FR_BFRAME       equ     -2
+FR_SI           equ     -4
+FR_DI           equ     -6
+FR_LOCALS       equ     -8
+FR_GOSUB        equ     -10
+FR_SIZE         equ     10                      ;; the header, bp-10 .. bp-1
+
 .data
 b_curframe      word    0                       ;; frame of the procedure running
-retaddr         dword   0                       ;; where the entries return to
 
 .code
 ;;::::::::::::::
 ;; B$ENRA ()
 B$ENRA          proc    public
 
-                pop     W retaddr               ;; our return, off the stack
-                pop     W retaddr+2
+                pop     bx                      ;; our caller's way back,
+                pop     dx                      ;; off the stack
 
-                xor     eax, eax
                 push    bp
                 mov     bp, sp
-                push    b_curframe              ;; previous BASIC frame
-                push    si
-                push    di
-                push    cx                      ;; bytes of locals
-                push    ax                      ;; GOSUB count
-                sub     sp, cx
+                sub     sp, FR_SIZE
+
+                mov     ax, b_curframe          ;; chain this frame to the last
+                mov     [bp+FR_BFRAME], ax
+                mov     [bp+FR_SI], si
+                mov     [bp+FR_DI], di
+                mov     [bp+FR_LOCALS], cx
+                mov     W [bp+FR_GOSUB], 0
                 mov     b_curframe, bp
                 inc     cur_level
 
-                push    es                      ;; zero the locals
+                sub     sp, cx                  ;; the locals, zeroed by dwords
+                mov     di, sp
+                push    es
                 push    ds
                 pop     es
-                mov     di, sp
+                xor     eax, eax
                 shr     cx, 1
-                shr     cx, 1                   ;; dwords; cf: a word is left
+                shr     cx, 1                   ;; cf: a word is left over
                 rep     stosd
                 adc     cx, cx
                 rep     stosw
                 pop     es
 
-                jmp     D retaddr
+                push    dx
+                push    bx
+                ret
 B$ENRA          endp
 
 ;;::::::::::::::
 ;; B$EXSA ()
 B$EXSA          proc    public
 
-                pop     W retaddr               ;; our return, off the stack
-                pop     W retaddr+2
+                pop     bx                      ;; our caller's way back
+                pop     cx
 
                 dec     cur_level
-                lea     sp, [bp-6]
-                pop     di
-                pop     si
+                mov     di, [bp+FR_DI]
+                mov     si, [bp+FR_SI]
+                push    W [bp+FR_BFRAME]
                 pop     b_curframe
-                pop     bp
 
-                jmp     D retaddr
+                leave
+                push    cx
+                push    bx
+                ret
 B$EXSA          endp
                 end

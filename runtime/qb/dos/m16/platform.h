@@ -3,8 +3,8 @@
    beside it, and nothing in runtime/qb names a segment, a paragraph or a DOS
    call.
 
-   u8 u16 u32       fixed widths, for what the frontend's ABI lays out uword
-   a machine word: what a near pointer or the size of a heap entry is held in
+   u8 u16 u32       fixed widths, for what the frontend's ABI lays out uword a
+   machine word: what a near pointer or the size of a heap entry is held in
    QB_FAR           a pointer past the program's near data, which is what the
    frontend passes for a caller's variable os_data          what the OS layer's
    calls take for data */
