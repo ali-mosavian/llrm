@@ -827,29 +827,3 @@ fn test_a_nest_of_counted_loops_asks_each_edge_which_trips_fix_it_once() {
     propagated(&order, &|at| preds.get(&at).cloned().unwrap_or_default(), &successors, &cycles, &given);
     assert!(asked.get() <= 20 * order.len(), "{} successor lists asked for {} blocks", asked.get(), order.len());
 }
-
-/// A branch that enters a loop or goes to where the loop leaves to takes the
-/// loop in 73 of 100 (GCC's `PRED_LOOP_GUARD`): a loop's test copied ahead of
-/// it (`-ftree-ch`) was an even branch, so the placer laid the skip out as the
-/// fall-through and shellsort's inner loop was entered by two jumps (+15%
-/// clocks at -O1).
-#[test]
-fn test_the_branch_that_enters_a_loop_is_the_likelier() {
-    let (odds, at) = estimate(
-        "define i16 @f(i16 %n, i16 %m) {
-entry:
-  %c = icmp slt i16 %m, %n
-  br i1 %c, label %head, label %out
-head:
-  %i = phi i16 [ %m, %entry ], [ %j, %head ]
-  %j = add i16 %i, 1
-  %d = icmp slt i16 %j, %n
-  br i1 %d, label %head, label %out
-out:
-  ret i16 %m
-}
-",
-    );
-    assert_eq!(odds.by.get(&at("entry")), Some(&Heuristic::Guard));
-    assert!(close(odds.probability(at("entry"), at("head")), 0.73), "{:?}", odds.taken);
-}

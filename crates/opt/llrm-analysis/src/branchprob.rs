@@ -49,8 +49,6 @@ pub enum Heuristic {
     /// A compare of an enclosing counted loop's counters: the share of its
     /// trips it holds on.
     Counted,
-    /// A loop's guard: the branch that skips the loop is the less taken.
-    Guard,
     Pointer,
     Zero,
     Float,
@@ -84,9 +82,6 @@ const UNREACHABLE: (f64, f64) = (1.0, ((1 << 20) - 1) as f64);
 const LOOP: (f64, f64) = (124.0, 4.0);
 const OPCODE: (f64, f64) = (20.0, 12.0);
 const ORDERED: (f64, f64) = ((1024 * 1024 - 1) as f64, 1.0);
-// GCC's PRED_LOOP_GUARD (predict.def): the edge that skips a loop is the
-// unlikelier.
-const GUARD: (f64, f64) = (73.0, 27.0);
 const CALL: (f64, f64) = (67.0, 33.0);
 const RETURN: (f64, f64) = (66.0, 34.0);
 // GCC's predict.def: a path that returns a constant, rather than computing a
@@ -232,9 +227,6 @@ fn weighed(
     if let Some(weights) = counted(context, function, shape, trips, runs, block, successors) {
         return (Heuristic::Counted, weights);
     }
-    if let Some(weights) = guard(function, shape, block, successors) {
-        return (Heuristic::Guard, weights);
-    }
     if successors.len() == 2 {
         if let Some((heuristic, likely, nan)) = compared(context, declarations, function, block) {
             let weights = if nan { ORDERED } else { OPCODE };
@@ -272,46 +264,6 @@ fn weighed(
         return (Heuristic::Return, weights);
     }
     (Heuristic::Even, vec![1.0; successors.len()])
-}
-
-/// A branch outside a loop that either enters it (through its preheader or at
-/// its header) or goes where the loop leaves to: the entering edge is the
-/// likelier (GCC's `PRED_LOOP_GUARD`). A copy of a loop's test ahead of it
-/// is one; so is an `if (n > 0)` around a `for`.
-fn guard(
-    function: &Function,
-    shape: &Shape,
-    block: BlockId,
-    successors: &[i64],
-) -> Option<Vec<f64>> {
-    let [first, second] = successors else { return None };
-    if first == second {
-        return None;
-    }
-    let entering = |at: i64, header: i64| {
-        at == header || function.successors(cfg::block(at)).into_iter().map(id).collect::<Vec<_>>() == [header]
-    };
-    for found in shape.loops.iter().filter(|one| !one.body.contains(&id(block))) {
-        // Cheap first: only a branch with an edge into the loop is a guard of
-        // it.
-        let enter = [(*first, *second), (*second, *first)]
-            .into_iter()
-            .find(|&(enter, skip)| entering(enter, found.header) && !found.body.contains(&skip));
-        let Some((enter, skip)) = enter else { continue };
-        let leaves: BTreeSet<i64> = found
-            .body
-            .iter()
-            .flat_map(|&at| function.successors(cfg::block(at)).into_iter().map(id))
-            .filter(|to| !found.body.contains(to))
-            .collect();
-        let past = leaves.contains(&skip)
-            || leaves.iter().any(|&at| function.successors(cfg::block(at)).into_iter().map(id).any(|to| to == skip));
-        if past {
-            let (yes, no) = GUARD;
-            return Some(if enter == *first { vec![yes, no] } else { vec![no, yes] });
-        }
-    }
-    None
 }
 
 /// The weights of `block`'s two successors where an enclosing loop with
