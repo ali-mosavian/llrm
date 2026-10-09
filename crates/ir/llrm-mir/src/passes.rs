@@ -1546,9 +1546,6 @@ impl PassManager {
         for (number, pass) in self.passes.iter_mut().enumerate().skip(passes.start).take(passes.len()) {
             let name = pass.name();
             PASS.with(|p| p.set(name));
-            // A function's analyses read the outer facts, so a change to
-            // them drops every function's.
-            let outer = spanned("outer analyses", || analyses.outer(module));
             let pass = match pass {
                 Pass::Function(pass) => pass,
                 Pass::Program(_) => unreachable!("a program pass runs over every module"),
@@ -1585,6 +1582,14 @@ impl PassManager {
                     continue;
                 }
             };
+            // A function's analyses read the outer facts, so a change to them
+            // drops every function's. Only a function pass reads
+            // them through `Outer`: a module pass asks `analyses` for what it
+            // needs, so the required analyses are made before
+            // a function pass and not before every pass (a module pass that
+            // changes the module drops them, so they were made
+            // for nothing: 2% of the -O1 compile of QCport).
+            let outer = spanned("outer analyses", || analyses.outer(module));
             // The module analyses every run of the pass preserved.
             let mut kept: HashSet<TypeId> = analyses.results.keys().copied().collect();
             let mut declared = Declared::of(module);

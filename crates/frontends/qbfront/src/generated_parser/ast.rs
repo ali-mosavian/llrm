@@ -1923,7 +1923,7 @@ fn on_branch_arms(
     span: Span,
 ) -> Vec<(Vec<CaseItem>, Vec<Statement>)> {
     let number = |value: i64| Expr::Literal(Literal::Integer(value, TypeName::Integer), span);
-    let mut arms = labels
+    let arms = labels
         .into_iter()
         .enumerate()
         .map(|(index, (label, label_span))| {

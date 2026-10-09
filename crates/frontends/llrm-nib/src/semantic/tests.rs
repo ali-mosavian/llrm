@@ -1,7 +1,5 @@
 use llrm_core::abi::nib as rt;
 
-use super::super::lexer::lex;
-use super::super::parser::parse;
 use super::*;
 
 fn compile_source(source: &str) -> Result<String, Diagnostic> {

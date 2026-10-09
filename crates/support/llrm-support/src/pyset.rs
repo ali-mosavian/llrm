@@ -62,7 +62,6 @@ impl PyHash for iced_x86::Register {
 #[derive(Clone, Debug)]
 enum Slot<T> {
     Unused,
-    Dummy,
     Active(i64, T),
 }
 
@@ -102,7 +101,6 @@ impl<T: PyHash + PartialEq> PySet<T> {
         let mask = self.mask();
         let mut perturb = hash as u64;
         let mut i = (hash as u64 as usize) & mask;
-        let mut free: Option<usize> = None;
         let found = loop {
             let probes = if i + LINEAR_PROBES <= mask { LINEAR_PROBES } else { 0 };
             let mut at = i;
@@ -110,11 +108,10 @@ impl<T: PyHash + PartialEq> PySet<T> {
             for _ in 0..=probes {
                 match &self.table[at] {
                     Slot::Unused => {
-                        hit = Some(free.unwrap_or(at));
+                        hit = Some(at);
                         break;
                     }
                     Slot::Active(stored, one) if *stored == hash && *one == key => return,
-                    Slot::Dummy if free.is_none() => free = Some(at),
                     _ => {}
                 }
                 at += 1;

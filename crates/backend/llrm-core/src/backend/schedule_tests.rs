@@ -8,6 +8,7 @@ use iced_x86::Register;
 use super::*;
 use crate::backend::cpu;
 use crate::model::ir::{Addr, Address, Mem, Reg, Semantics};
+use crate::model::lir::LirBlock;
 use crate::support::hash::IndexMap;
 
 fn _insn(

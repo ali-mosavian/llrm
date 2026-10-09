@@ -14,7 +14,7 @@ use crate::model::passes::{
 };
 use crate::support::hash::IndexMap;
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Profile {
     pub name: String,
     pub issue_width: i64,

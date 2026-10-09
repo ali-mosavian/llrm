@@ -498,7 +498,6 @@ fn _plan(
     {
         return None;
     }
-    let facts = view.registers();
     // lsr's prices were fitted to trips multiplied, ten where unproven (#203),
     // and a branch's cold arm less.
     let held = products();

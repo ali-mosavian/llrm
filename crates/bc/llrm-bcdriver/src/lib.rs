@@ -13,8 +13,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use llrm_core::abi::machine::{self, Machine};
-use llrm_core::driver::{self, basic};
+use llrm_core::abi::machine::Machine;
+use llrm_core::driver::basic;
 use llrm_core::hir::model::RuntimeProfile;
 use llrm_mir::GlobalId;
 use llrm_mir::program::SegmentLayout;

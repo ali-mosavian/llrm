@@ -1,7 +1,6 @@
 //! `.debug$S` and `.debug$T`: what LLVM's CodeView reader makes of the C13 an
 //! i386 object carries.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Command;
 

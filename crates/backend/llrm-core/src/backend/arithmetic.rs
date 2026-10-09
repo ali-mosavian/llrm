@@ -249,7 +249,7 @@ fn positive_chains<'a>(
     let ops = Ops { shift: &shifts, alu: cost(target, "alu_rr")?, mov: cost(target, "mov_rr")?, lea: &leas };
     let limit = best.as_ref().map_or(i64::MAX / 4, |(_, price)| *price);
     let synthesized = synth(number, limit, &mut BTreeMap::new(), &ops).map(|(parts, _)| parts);
-    for parts in synthesized {
+    if let Some(parts) = synthesized {
         let price = clocks(&parts)?;
         if best.as_ref().is_none_or(|(_, kept)| price < *kept) {
             best = Some((parts, price));

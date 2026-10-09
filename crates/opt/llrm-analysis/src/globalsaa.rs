@@ -34,7 +34,7 @@ use llrm_support::hash::IndexMap;
 
 use crate::alias;
 use crate::cfg::Shape;
-use crate::memory::{Identity, Key, MemoryKind, Unit};
+use crate::memory::{Key, MemoryKind, Unit};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Globals {

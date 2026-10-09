@@ -51,7 +51,7 @@ pub fn declarations_on(
     sizes: crate::Sizes,
     native: Abi,
 ) -> Result<String, Diagnostic> {
-    let (segmented, slot) = (sizes.segmented, sizes.slot);
+    let segmented = sizes.segmented;
     let exports: Vec<(&Function, Abi)> = module
         .functions
         .iter()
