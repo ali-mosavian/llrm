@@ -279,6 +279,16 @@ def test_a_python_test_file_that_needs_a_missing_probe_is_left_out_of_pytest_by_
     assert "test_scaling" not in gate.commands(p, gate.load(), gate.packages())["pytest"]
 
 
+def test_a_new_test_file_declares_its_own_need_and_is_ignored_where_it_is_missing(tmp_path):
+    """Each counter-reading file needed its own row in tiers.toml; test_scaling_gate.py had none and failed the python group on main."""
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "test_reads_counter.py").write_text('REQUIRES = ["perf"]\n\ndef test_x():\n    pass\n')
+    (tmp_path / "test_plain.py").write_text("def test_y():\n    pass\n")
+    assert gate.declared_requirements(tmp_path) == {"test_reads_counter.py": ["perf"]}
+    assert gate.python_tests_unusable({"perf": "no counter"}, tmp_path) == ["test_reads_counter.py"]
+    assert gate.python_tests_unusable({}, tmp_path) == []
+
+
 def test_a_probe_that_fails_makes_the_capability_missing_and_one_that_succeeds_does_not(tmp_path, monkeypatch):
     cfg = {"capability": {"x": {"require": [], "needs": [{"run": "false"}]}, "y": {"require": [], "needs": [{"run": "true"}]}}}
     monkeypatch.setattr(gate, "load", lambda: cfg)

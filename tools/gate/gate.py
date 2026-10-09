@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import functools
 import re
@@ -298,9 +299,23 @@ def skipped_steps(steps: list[str], missing: dict[str, str], languages: list[str
     return out
 
 
-def python_tests_unusable(missing: dict[str, str]) -> list[str]:
-    """Python test files (`py:` keys of [requires]) that need a capability this host lacks."""
-    return sorted(k[3:] for k, needs in load().get("requires", {}).items() if k.startswith("py:") and any(c in missing for c in needs))
+@functools.cache
+def declared_requirements(root: Path = ROOT) -> dict[str, list[str]]:
+    """Python test files -> the capabilities they declare: a module-level `REQUIRES = ["perf"]` beside the read that needs it."""
+    files = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "*test_*.py"], cwd=root, capture_output=True, text=True).stdout.split()
+    out = {}
+    for f in files:
+        text = (root / f).read_text()
+        if "REQUIRES" in text:
+            for node in ast.parse(text).body:
+                if isinstance(node, ast.Assign) and [t.id for t in node.targets if isinstance(t, ast.Name)] == ["REQUIRES"]:
+                    out[f] = list(ast.literal_eval(node.value))
+    return out
+
+
+def python_tests_unusable(missing: dict[str, str], root: Path = ROOT) -> list[str]:
+    """Python test files whose own REQUIRES names a capability this host lacks."""
+    return sorted(f for f, needs in declared_requirements(root).items() if any(c in missing for c in needs))
 
 
 def unusable(missing: dict[str, str]) -> tuple[list[str], frozenset[str]]:
@@ -362,8 +377,10 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
             report(name, 77, 0)
     p.steps = [s for s in p.steps if s not in skipped]
     for key, needs in load().get("requires", {}).items():
-        if key.startswith(("lang:", "bin:", "py:")) and (hit := [missing[c] for c in needs if c in missing]):
+        if key.startswith(("lang:", "bin:")) and (hit := [missing[c] for c in needs if c in missing]):
             print(f"[dropped] {key}: {'; '.join(hit)}", flush=True)
+    for f in python_tests_unusable(missing):
+        print(f"[dropped] {f}: REQUIRES {', '.join(declared_requirements()[f])}", flush=True)
     for name, why in missing.items():
         print(f"[unavailable] {why}: its tests in other steps skip; run languages {no_langs}, test binaries {sorted(skip_bins)} left out", flush=True)
     if "build" in p.steps:

@@ -7,6 +7,7 @@ import pytest
 import levels_time
 import scaling
 
+REQUIRES = ["perf"]  # the gate leaves this file out where `perf stat` reads no count
 STAND_IN = "import sys; n = len(open(sys.argv[1]).read().splitlines()); sum(range({work}))"
 
 

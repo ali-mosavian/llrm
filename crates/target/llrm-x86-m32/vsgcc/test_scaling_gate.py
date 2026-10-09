@@ -7,6 +7,7 @@ import pytest
 import scaling
 import scaling_gate as gate
 
+REQUIRES = ["perf"]  # the gate leaves this file out where `perf stat` reads no count
 STAND_IN = "import sys; n = len(open(sys.argv[1]).read().splitlines()); sum(range({work}))"
 
 
