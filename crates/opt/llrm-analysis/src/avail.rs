@@ -548,6 +548,10 @@ impl Solve<'_, '_> {
         reference: &MemRef,
         unnamed: bool,
     ) {
+        // Nothing overwritten, nothing to forget: no need to find the cells it could reach.
+        if overwritten.is_empty() {
+            return;
+        }
         let stored = &self.stored;
         let live = |at: &usize| overwritten.contains(*at) && self.within(inst, reference, *at, unnamed);
         let reached: Vec<usize> = match overlap_buckets(reference, &stored.index.parts) {

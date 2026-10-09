@@ -531,9 +531,9 @@ pub fn overlap_buckets(
     reference: &MemRef,
     parts: &OverlapParts,
 ) -> Option<Vec<OverlapBucket>> {
-    let provenance = reference.provenance.as_ref()?;
     #[cfg(test)]
     PICKED.with(|picked| picked.set((picked.get().0 + 1, picked.get().1 + parts.classes.len())));
+    let provenance = reference.provenance.as_ref()?;
     let mut reached = Vec::with_capacity(16);
     reached.extend(parts.objectless.iter().cloned());
     if let Some(frame) = _frame(reference) {

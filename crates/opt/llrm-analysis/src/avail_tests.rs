@@ -607,3 +607,19 @@ fn test_the_held_cell_naming_a_loads_bytes_is_the_one_a_scan_finds() {
     }
     assert!(asked > 0, "no held cell named a load's bytes: the test asks nothing");
 }
+
+#[test]
+fn a_dead_store_solve_picks_no_buckets_where_nothing_is_overwritten_yet() {
+    // Every load and store asked overlap_buckets what it could clobber, even with no cell overwritten to forget: 50% of
+    // dse in QCport's host.c.
+    let loads: String =
+        (0..12).map(|i| format!("  %l{i} = load i16, ptr getelementptr (i8, ptr @g, i16 {})\n", 2 * i)).collect();
+    let parsed =
+        Parsed::new(&format!("define i16 @f() {{\nb0:\n  store i16 1, ptr {CELL}\n{loads}  ret i16 %l0\n}}\n"));
+    let unit = parsed.unit();
+    let before = crate::regions::PICKED.with(|picked| picked.get().0);
+    let removed = dead_stores(&unit, &Accesses::plain(&unit, &Calls::default()), None);
+    let picked = crate::regions::PICKED.with(|picked| picked.get().0) - before;
+    assert_eq!(removed, vec![]);
+    assert_eq!(picked, 0, "{picked} bucket picks for 12 loads after which nothing is overwritten");
+}
