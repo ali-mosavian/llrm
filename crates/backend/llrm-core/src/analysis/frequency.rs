@@ -10,6 +10,7 @@
 
 use std::collections::BTreeSet;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::model::lir::BlockOdds;
 
@@ -50,10 +51,17 @@ impl Held {
 
 thread_local! {
     static LAST: std::cell::RefCell<Option<Held>> = const { std::cell::RefCell::new(None) };
+    static CARRIED: std::cell::RefCell<Option<(Arc<crate::model::lir::BlockFrequencies>, Held)>> = const { std::cell::RefCell::new(None) };
+    static CARRIED_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// How many frequencies this thread has worked out, for a test that asking again of one shape does not.
+/// How many tables this thread has carried over from a body's own, for a test that asking again of one shape does not.
+pub fn carried_built() -> usize {
+    CARRIED_BUILT.with(std::cell::Cell::get)
+}
+
 pub fn built() -> usize {
     BUILT.with(std::cell::Cell::get)
 }
@@ -68,8 +76,19 @@ impl Frequency {
     /// and on no instruction, so the last answer stands for every body of that shape: a rewrite that
     /// only inserts instructions (a spill, a reload) asks the same question again and again.
     pub fn of(body: &LirBody) -> Rc<Self> {
-        if let Some(kept) = body.frequencies.as_deref().and_then(|table| Self::carried(body, &table.0)) {
-            return Rc::new(kept);
+        if let Some(table) = &body.frequencies {
+            // The carried table gives the same answer for the same table and shape: a spill or a reload changes neither, and
+            // working it out again for each ask was 1.5% of compiling d_faces.
+            let again = CARRIED.with(|last| last.borrow().as_ref().filter(|(was, held)| Arc::ptr_eq(was, table) && held.is_of(body)).map(|(_, held)| Rc::clone(&held.answer)));
+            if again.is_some() {
+                return again.expect("checked");
+            }
+            if let Some(kept) = Self::carried(body, &table.0) {
+                CARRIED_BUILT.with(|count| count.set(count.get() + 1));
+                let kept = Rc::new(kept);
+                CARRIED.with(|last| *last.borrow_mut() = Some((Arc::clone(table), Held::of(body, &kept))));
+                return kept;
+            }
         }
         LAST.with(|last| {
             if let Some(held) = last.borrow().as_ref().filter(|held| held.is_of(body)) {
@@ -302,6 +321,25 @@ mod tests {
         moved.odds.taken.insert((2, 2), 1);
         Frequency::of(&moved);
         assert_eq!(super::built() - before, 2, "other odds were answered from the old frequencies");
+    }
+
+    /// A body that carries its frequencies is asked for them by every fact of the allocator, with the same table and blocks after each
+    /// spill: the carried answer is worked out once for them (1.5% of compiling d_faces, 1.2 G, was working it out again).
+    #[test]
+    fn test_a_carried_table_is_not_carried_again_for_the_same_blocks() {
+        let plain = counted(Some(5), 124.0 / 128.0);
+        let mut body = plain.clone();
+        body.frequencies = Some(Frequency::of(&plain).table());
+        let before = super::carried_built();
+        let first = Frequency::of(&body);
+        let more = body.with_blocks(body.blocks.iter().map(|one| one.with_insns(vec![insn(one.at, Operation::Move, "mov"), one.insns[0].clone()])).collect());
+        let again = Frequency::of(&more);
+        assert_eq!(super::carried_built() - before, 1, "the same table over the same blocks was carried again");
+        assert_eq!(first.block(2), again.block(2));
+        let mut moved = body.clone();
+        moved.odds.taken.insert((2, 2), 1);
+        Frequency::of(&moved);
+        assert_eq!(super::carried_built() - before, 2, "other odds were answered from the old table");
     }
 
     fn counted(trips: Option<i64>, stay: f64) -> LirBody {

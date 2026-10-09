@@ -117,8 +117,9 @@ impl Indexes {
 
 /// Number every point a value can start or stop being live.
 pub fn indexed(body: &LirBody) -> Indexes {
-    let mut at = IndexMap::default();
-    let mut span = IndexMap::default();
+    // Sized for what it holds: growing a table of a function's instructions by doubling rehashed it six times over.
+    let mut at = IndexMap::with_capacity_and_hasher(body.blocks.iter().map(|block| block.insns.len()).sum(), Default::default());
+    let mut span = IndexMap::with_capacity_and_hasher(body.blocks.len(), Default::default());
     let mut next_slot = 0;
     for block in &body.blocks {
         let first = next_slot;
