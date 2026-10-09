@@ -156,4 +156,19 @@ def test_loopmotion_and_the_cells_it_asks_stay_linear_in_the_loops_of_one_functi
         small, big = (own[label].get(step, 0.0) - own["empty"].get(step, 0.0) for label in ("n", "2n"))
         if big > 2.6 * small + 5.0:
             grown[step] = f"{small:.1f} -> {big:.1f} Minstr"
+
+def test_gvn_stays_below_quadratic_in_the_live_values_and_the_cells(tmp_path):
+    """Pricing copied the live set at every instruction and the MemorySSA walk compared each load with every write it passed by the
+    full alias rules: `mir gvn` at -O2 read 2N/N = 3.4 on `live` and on `cells` at N=128 (146 -> 494 and 122 -> 417 Minstr; 6.8 G
+    and 5.8 G at N=1024). Since #1234 it reads 2.4 and 2.7; a step above 3.2 (slope 1.7) fails; a few Minstr of start-up are allowed."""
+    grown = {}
+    for axis, n in (("live", 128), ("cells", 128)):
+        own = {}
+        for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+            source = tmp_path / f"{axis}_{label}.c"
+            source.write_text("" if size == 0 else scaling.AXES[axis](size))
+            own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+        small, big = (own[label].get("mir gvn", 0.0) - own["empty"].get("mir gvn", 0.0) for label in ("n", "2n"))
+        if big > 3.2 * small + 5.0:
+            grown[axis] = f"{small:.1f} -> {big:.1f} Minstr"
     assert not grown, grown

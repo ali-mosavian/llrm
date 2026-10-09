@@ -210,18 +210,13 @@ pub fn _declared(one: &Insn) -> Option<(Lanes, Lanes)> {
     // are still real reads. In particular an indirect `call bx` reads BX
     // before the calling convention clobbers it.
     for source in one.what.as_ref().map_or(&[][..], |what| what.sources.as_slice()) {
-        match source {
-            Loc::Reg(source) => reads.extend(_lanes(source.register)),
-            Loc::Mem(source) => {
-                reads.extend(_lanes(source.through));
-                reads.extend(_lanes(source.index_through));
-                // `selector` is a `Held`, never an `ir.Reg`.
-            }
-            Loc::Address(source) => {
-                reads.extend(_lanes(source.through));
-                reads.extend(_lanes(source.index_through));
-            }
-            _ => {}
+        if let Loc::Reg(source) = source {
+            reads.extend(_lanes(source.register));
+        }
+        // `selector` is a `Held`, never an `ir.Reg`.
+        if let Some(at) = source.address() {
+            reads.extend(_lanes(at.through));
+            reads.extend(_lanes(at.index_through));
         }
     }
     let mut writes: Lanes = one.delivers.iter().flat_map(|(held, register)| held_lanes(held, *register)).collect();

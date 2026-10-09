@@ -62,16 +62,7 @@ fn touches_frame(one: &Insn) -> bool {
     {
         return true;
     }
-    what.dests
-        .iter()
-        .chain(&what.sources)
-        .any(
-            |place| match place {
-                Loc::Mem(cell) => cell.in_frame(),
-                Loc::Address(cell) => cell.in_frame(),
-                _ => false,
-            },
-        )
+    what.dests.iter().chain(&what.sources).any(Loc::in_frame)
 }
 
 /// The wrap of `body` for the registers `kept`, and for the frame where `frame`

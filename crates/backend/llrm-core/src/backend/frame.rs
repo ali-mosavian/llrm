@@ -143,16 +143,9 @@ impl Frame {
                 )
         };
         let tag_loc = |place: &Loc| -> Result<Loc, Refused> {
-            Ok(match place {
-                Loc::Mem(cell) if framed(cell.addr) => {
-                    Loc::Mem(Mem { addr: cell.addr.map(&tag).transpose()?, ..cell.clone() })
-                }
-                Loc::Address(cell) if framed(cell.addr) => Loc::Address(crate::model::ir::AddressRef {
-                    addr: cell.addr.map(&tag).transpose()?,
-                    ..cell.clone()
-                }),
-                other => other.clone(),
-            })
+            let Some(at) = place.address().filter(|at| framed(at.addr)) else { return Ok(place.clone()) };
+            let addr = at.addr.map(&tag).transpose()?;
+            Ok(place.map_address(|at| crate::model::ir::AddressRef { addr, ..at }))
         };
         let mut blocks = Vec::with_capacity(body.blocks.len());
         for block in &body.blocks {
@@ -297,11 +290,7 @@ fn framed(addr: Option<Addr>) -> bool {
 
 /// Whether a frame operand names no slot: its `Addr` carries no tag.
 fn untagged(place: &Loc) -> bool {
-    match place {
-        Loc::Mem(cell) => framed(cell.addr) && cell.addr.is_some_and(|addr| addr.slot_home().is_none()),
-        Loc::Address(cell) => framed(cell.addr) && cell.addr.is_some_and(|addr| addr.slot_home().is_none()),
-        _ => false,
-    }
+    place.address().is_some_and(|cell| framed(cell.addr) && cell.addr.is_some_and(|addr| addr.slot_home().is_none()))
 }
 
 /// A frame for this body, starting below everything it already reaches.
@@ -339,12 +328,7 @@ pub fn of(
                 _ => {}
             }
             for where_ in what.dests.iter().chain(&what.sources) {
-                let addr = match where_ {
-                    Loc::Mem(memory) => memory.addr.as_ref(),
-                    Loc::Address(address) => address.addr.as_ref(),
-                    _ => None,
-                };
-                let Some(addr) = addr else { continue };
+                let Some(addr) = where_.address().and_then(|one| one.addr) else { continue };
                 if addr.space != Space::Frame {
                     continue;
                 }
