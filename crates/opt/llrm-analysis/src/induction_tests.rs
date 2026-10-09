@@ -2078,3 +2078,50 @@ fn test_a_follower_that_may_pass_its_counter_proves_nothing() {
     let fast = partition(2, "nsw");
     assert!(followers(&fast.unit(), &fast.only_loop()).is_empty(), "i + 2 may pass j + 1");
 }
+
+/// A loop tested after its trips, entered behind `a < b` through a block of its own, makes `b - a` trips: the count a pre-tested one would,
+/// materialised (`trips` gave none for a posttested loop whose step is one, so a copied loop test lost its symbolic count).
+#[test]
+fn test_a_guarded_posttested_loop_of_unit_steps_has_its_trips() {
+    let parsed = Parsed::new(
+        "define i8 @f(i8 %a, i8 %b) {
+b0:
+  %go = icmp ult i8 %a, %b
+  br i1 %go, label %pre, label %b3
+
+pre:
+  br label %b1
+
+b1:
+  %i = phi i8 [ %a, %pre ], [ %next, %b1 ]
+  %n = phi i8 [ 0, %pre ], [ %n1, %b1 ]
+  %next = add i8 %i, 1
+  %n1 = add i8 %n, 1
+  %c = icmp ult i8 %next, %b
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i8 %n1
+
+b3:
+  ret i8 0
+}
+",
+    );
+    let proofs = parsed.counted(false);
+    let [proof] = &proofs[..] else { panic!("one proof") };
+    assert!(proof.posttested && proof.entry_guarded, "{proof:?}");
+    let mut checked = 0;
+    for a in (0..256).step_by(3) {
+        for b in (0..256).step_by(5) {
+            if a >= b {
+                continue;
+            }
+            let actual = parsed.run(&[(a, 8), (b, 8)], 3_000).expect("it ends");
+            let counted = evaluated_trips(&parsed, proof, a as u128, b as u128, 0).expect("trips are placed");
+            assert_eq!(counted & 0xFF, actual & 0xFF, "a {a} b {b}");
+            checked += 1;
+        }
+    }
+    assert!(checked > 500, "{checked} runs");
+}
