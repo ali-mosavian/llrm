@@ -34,7 +34,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::cfg;
 use llrm_analysis::graph::loops;
-use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
@@ -122,9 +121,7 @@ pub fn merged(function: &mut Function) -> bool {
         for phi in phis {
             function.erase(phi).expect("a replaced phi");
         }
-        for inst in function.block(second).instructions().to_vec() {
-            function.move_to(inst, Position::End(source)).expect("a placed block");
-        }
+        function.move_run(&function.block(second).instructions().to_vec(), source).expect("a placed block");
         function.replace_block_uses_with(second, source);
         function.erase_block(second).expect("an emptied block nothing names");
         changed = true;

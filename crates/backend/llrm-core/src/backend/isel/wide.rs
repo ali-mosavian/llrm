@@ -482,6 +482,25 @@ impl Selector<'_, '_, '_> {
         let count = self.wide(right, at, out)?.0;
         let cl = Loc::Held(Held { width: 1, ..count });
         let by = |count: i64| Self::count(count);
+        // A count proven below 32 (bit five known zero, as `n & 31` is) needs
+        // no fix-up for counts from 32: shld and shrd count modulo 32 already.
+        if llrm_mir::valuetracking::known_zero(&self.module.context, self.function, right) >> 5 & 1 == 1 {
+            return Ok(match op {
+                BinaryOp::Shl => {
+                    let lower = self.made(Operation::Binary, "shl", vec![Loc::Held(low), cl.clone()], at, out);
+                    let upper =
+                        self.made(Operation::Funnel, "shld", vec![Loc::Held(high), Loc::Held(low), cl], at, out);
+                    (lower, upper)
+                }
+                _ => {
+                    let name = if op == BinaryOp::AShr { "sar" } else { "shr" };
+                    let upper = self.made(Operation::Binary, name, vec![Loc::Held(high), cl.clone()], at, out);
+                    let lower =
+                        self.made(Operation::Funnel, "shrd", vec![Loc::Held(low), Loc::Held(high), cl], at, out);
+                    (lower, upper)
+                }
+            });
+        }
         let all = |this: &mut Self, name: &str, a: Held, b: Held, out: &mut Vec<Arc<Insn>>| {
             this.made(Operation::Binary, name, vec![Loc::Held(a), Loc::Held(b)], at, out)
         };
