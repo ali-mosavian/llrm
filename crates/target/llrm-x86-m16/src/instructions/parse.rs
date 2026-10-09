@@ -39,9 +39,13 @@ pub struct Form {
     pub cost: String,
     /// Operands pinned to a register root when they are a register.
     pub fixed: Vec<(Side, usize, String)>,
-    /// Register roots it reads and writes beyond its operands (`push` uses `sp`). `-root` drops an operand register
-    /// the machine does not touch, `@8` only where the narrowest source is a byte: LIR carries DX through a byte
-    /// `div`, which leaves it alone.
+    /// Register roots it reads and writes beyond its operands (`push` uses `sp`). `rep` in `writes` marks a repeated
+    /// string operation, whose count register is written and whose other writes happen only if it runs; `count` a
+    /// shift, whose flags a constant count of none leaves alone; `idiom` in `reads` an operation that reads nothing
+    /// when both its operands are one register (`xor ax, ax`); `self` one that is no instruction then (`mov ax, ax`);
+    /// `narrow` one whose address registers are the destination's width; `same` one whose registers must be one size;
+    /// `ax*` is `ax` at the width of the row. `-root` drops an operand register the machine does not touch, `@8`
+    /// only where the narrowest source is a byte: LIR carries DX through a byte `div`, which leaves it alone.
     pub reads: Vec<String>,
     pub writes: Vec<String>,
     /// iced's Code name, `{w}` still to substitute.
@@ -128,7 +132,10 @@ fn implicit(
     }
     text.split(',')
         .map(|entry| {
-            let root = entry.trim_start_matches('-').split('@').next().unwrap_or("");
+            let root = entry.trim_start_matches('-').split('@').next().unwrap_or("").trim_end_matches('*');
+            if ["rep", "idiom", "count", "self", "narrow", "same"].contains(&entry) {
+                return Ok(entry.to_owned());
+            }
             let width = entry.split_once('@').map(|(_, width)| width);
             if !REGISTERS.contains(&root) || width.is_some_and(|width| width.parse::<u32>().is_err()) {
                 return Err(format!("x86.instr:{line}: `{entry}` is not [-]root[@width]"));
