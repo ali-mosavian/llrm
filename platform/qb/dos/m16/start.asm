@@ -4,6 +4,9 @@
 .386
 
 extrn _llrm_os_exit:far
+extrn _llrm_os_psp:word
+extrn _llrm_os_top:word
+extrn BSS_LAST:byte
 
 public _main
 public B$CEND
@@ -22,6 +25,7 @@ DGROUP group BC_SAB
 QB_TEXT segment para public 'CODE'
 assume ds:DGROUP
 _main proc far
+    mov bx, es
     mov ax, DGROUP
     mov ds, ax
     mov es, ax
@@ -34,6 +38,9 @@ _main proc far
     mov ss, ax
     add sp, dx
     sti
+    mov _llrm_os_psp, bx
+    mov ax, offset DGROUP:BSS_LAST
+    mov _llrm_os_top, ax
     mov ax, word ptr qb_bc_sa+2
     mov es, ax
     ; The module's code segment is the first BC_SA far address.  Its header

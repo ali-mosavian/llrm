@@ -103,3 +103,20 @@ class RuntimeCrcTests(unittest.TestCase):
         self.assertEqual(result.reference.status, "ok")
         self.assertEqual(result.candidate.status, "ok")
         self.assertEqual(result.difference, "")
+
+
+@unittest.skipUnless(qbruntime.dosbatch.QB45.is_dir(), "QB45_DIR is unavailable")
+class RuntimeBintreeTests(unittest.TestCase):
+    def test_bintree_matches_bcom45_byte_for_byte(self):
+        """An uninitialised DOS heap made bintree crash while dimensioning its array."""
+        source = next(source for source in qbruntime.milestone_sources() if source.stem == "bintree")
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            object_ = work / "bintree.obj"
+            error = run_tests.compile_one(run_tests.Program(source, ["-O2"], None, "qb45"), object_)
+            self.assertIsNone(error)
+            archive, _ = qbruntime.build(work / "archive")
+            result = qbruntime.differential(object_, archive, work / "differential", "bintree")
+        self.assertEqual(result.reference.status, "ok")
+        self.assertEqual(result.candidate.status, "ok")
+        self.assertEqual(result.difference, "")

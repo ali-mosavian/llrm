@@ -1,7 +1,7 @@
 [portable]
-sources = ["string.c"]
+sources = ["string.c", "array.c"]
 
-exports = ["B$CEND", "B$CENP", "B$ENRA", "B$EXSA", "B$LTRM", "B$PESD", "B$SASS", "B$STDL", "B$STI4"]
+exports = ["B$CEND", "B$CENP", "B$DDIM", "B$ENRA", "B$ERAS", "B$EXSA", "B$LTRM", "B$PESD", "B$SASS", "B$STDL", "B$STI4"]
 
 [platform]
 sources = [
@@ -9,6 +9,7 @@ sources = [
   "platform/qb/dos/m16/frame.asm",
   "platform/qb/dos/m16/string_abi.asm",
   "platform/qb/dos/m16/text.asm",
+  "platform/qb/dos/m16/array_abi.asm",
 ]
 
 [shared]
