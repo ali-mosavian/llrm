@@ -377,3 +377,40 @@ end:
         "the loop's bounds were worked out more than the manager's twice"
     );
 }
+
+/// The same loop entered behind a copy of its test (`-ftree-ch`): the counter
+/// is tested stepped, after its trip, and the phi lists its latch first. It
+/// stayed 16 bits (a `movzx` and a 5-instruction trip where the pre-tested loop
+/// had a pointer and a negative count: m32 sieve -O1 +11.7% clocks with the
+/// header copy).
+#[test]
+fn a_counter_tested_after_its_trip_behind_a_copy_of_its_test_is_widened() {
+    let text = "target datalayout = \"e-p:32:32-n8:16:32\"
+
+define i32 @f(i16 %n) {
+b0:
+  %buf = alloca [64 x i8]
+  %some = icmp ne i16 %n, 0
+  br i1 %some, label %pre, label %b3
+
+pre:
+  br label %b1
+
+b1:
+  %i = phi i16 [ %next, %b1 ], [ 0, %pre ]
+  %w = zext i16 %i to i32
+  %p = getelementptr inbounds i8, ptr %buf, i32 %w
+  store i8 1, ptr %p
+  %next = add i16 %i, 1
+  %go = icmp ult i16 %next, %n
+  br i1 %go, label %b1, label %b3
+
+b3:
+  ret i32 0
+}
+";
+    let (changed, after) = widening(text);
+    assert!(changed, "{after}");
+    assert!(after.contains("icmp ult i32 %widen.iv.next"), "{after}");
+    assert!(!after.contains("zext i16 %i to i32"), "{after}");
+}

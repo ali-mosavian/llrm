@@ -483,6 +483,9 @@ struct _Found {
     extensions: Vec<InstId>,
     /// Every other reader: its instruction and operand.
     rest: Vec<(InstId, u32)>,
+    /// The loop is tested after its trips: the compare reads the counter
+    /// stepped.
+    after: bool,
 }
 
 fn _find(
@@ -503,21 +506,30 @@ fn _find(
     let facts = unit.registers();
     for proof in induction::counted(unit, loop_, Some(&facts), false) {
         let width = proof.width();
-        if !proof.rises_unsigned() || width > 64 {
+        let after = proof.rises_unsigned_after();
+        if !(proof.rises_unsigned() || after) || width > 64 {
             continue;
         }
         let compare = function.instruction(proof.compare);
-        let (Operand::Value(counter), bound) = (compare.operands[0], compare.operands[1]) else { continue };
-        if !still.operand(bound)
-            || function.parent(proof.phi) != Some(header)
-            || function.instruction(proof.phi).result != Some(counter)
-        {
+        let (Operand::Value(tested), bound) = (compare.operands[0], compare.operands[1]) else { continue };
+        let Some(counter) = function.instruction(proof.phi).result else { continue };
+        // Tested before its trips the compare reads the counter, after them the
+        // counter stepped.
+        if !still.operand(bound) || function.parent(proof.phi) != Some(header) || (tested != counter && !after) {
             continue;
         }
         let arms =
             function.instruction(proof.phi).operands.chunks(2).map(|pair| (pair[0], pair[1])).collect::<Vec<_>>();
-        let [(_, Operand::Block(first_from)), (second, Operand::Block(second_from))] = arms[..] else { continue };
-        let next = if second_from == latch && first_from == preheader { second } else { continue };
+        // The arms in either order: a loop entered behind a copy of its test
+        // lists its latch first.
+        let [(one, Operand::Block(one_from)), (other, Operand::Block(other_from))] = arms[..] else { continue };
+        let next = if other_from == latch && one_from == preheader {
+            other
+        } else if one_from == latch && other_from == preheader {
+            one
+        } else {
+            continue;
+        };
         let Operand::Value(next_value) = next else { continue };
         let ValueDef::Instruction(next_inst) = function.value(next_value).def else { continue };
         let adds = function.instruction(next_inst);
@@ -527,7 +539,10 @@ fn _find(
         {
             continue;
         }
-        if function.users(next_value).iter().any(|one| one.user != proof.phi) {
+        if function.users(next_value).iter().any(|one| one.user != proof.phi && !(after && one.user == proof.compare)) {
+            continue;
+        }
+        if after && tested != next_value {
             continue;
         }
         // The default space's index width, which a use already extends to.
@@ -567,6 +582,7 @@ fn _find(
             wide,
             extensions,
             rest,
+            after,
         });
     }
     None
@@ -625,8 +641,9 @@ fn _widen(
     };
     function.set_operands(phi, vec![start, Operand::Block(found.preheader), next, Operand::Block(found.latch)]);
     let bit = context.types.int(1);
+    let tested = if found.after { next } else { value };
     let test =
-        function.create_instruction(Opcode::ICmp(IntPredicate::Ult), bit, vec![value, bound], Flags::default(), None);
+        function.create_instruction(Opcode::ICmp(IntPredicate::Ult), bit, vec![tested, bound], Flags::default(), None);
     function.insert(test, Position::Before(found.compare)).expect("a placed compare");
     let test = Operand::Value(function.instruction(test).result.expect("a value"));
     let old = function.instruction(found.compare).result.expect("a value");
