@@ -109,6 +109,33 @@ impl Dominance {
         function.layout().iter().map(|&one| (id(one), above(id(one)))).collect()
     }
 
+    /// How many blocks dominate each, itself among them (`dominators`' set
+    /// sizes): none for an unreachable block.
+    pub fn depths(
+        &self,
+        function: &Function,
+    ) -> BTreeMap<i64, usize> {
+        let mut found = BTreeMap::<i64, usize>::new();
+        for &start in function.layout() {
+            let mut path = Vec::new();
+            let mut next = self.reachable(id(start)).then_some(id(start));
+            let mut base = 0;
+            while let Some(one) = next {
+                if let Some(&known) = found.get(&one) {
+                    base = known;
+                    break;
+                }
+                path.push(one);
+                next = self.immediate(one);
+            }
+            for (below, one) in path.into_iter().rev().enumerate() {
+                found.insert(one, base + below + 1);
+            }
+            found.entry(id(start)).or_insert(0);
+        }
+        found
+    }
+
     pub fn immediate_dominators(
         &self,
         function: &Function,
@@ -365,5 +392,59 @@ dead:
                 Block { at: dead, succ: vec![b2] },
             ]
         );
+    }
+
+    /// Every pass that asked whether one block dominates another built every
+    /// block's whole set of dominators (a set a block deep in a chain of N
+    /// diamonds, N^2 entries): 39% of `mir gvn` at `branches` N=512. The answer
+    /// is `dominates`, and the count of a set is `depths`; both must give what
+    /// the sets did, unreachable blocks included.
+    #[test]
+    fn test_dominates_and_depths_are_what_the_dominator_sets_give() {
+        let module = parsed(
+            "define void @f(i1 %c, i1 %d) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br i1 %d, label %b3, label %b4
+
+b3:
+  br label %b5
+
+b4:
+  br label %b5
+
+b5:
+  br i1 %d, label %b5, label %b6
+
+b6:
+  ret void
+
+dead:
+  br label %b6
+}
+",
+        );
+        let function = function(&module, "f");
+        let dominance = Dominance::of(function);
+        let sets = dominance.dominators(function);
+        let depths = dominance.depths(function);
+        assert!(sets.values().any(|set| set.is_empty()), "the premise: a block the entry does not reach");
+        for &below in function.layout() {
+            assert_eq!(depths[&id(below)], sets[&id(below)].len(), "depth of {}", id(below));
+            for &above in function.layout() {
+                assert_eq!(
+                    dominance.dominates(id(above), id(below)),
+                    sets[&id(below)].contains(&id(above)),
+                    "{} over {}",
+                    id(above),
+                    id(below)
+                );
+            }
+        }
     }
 }
