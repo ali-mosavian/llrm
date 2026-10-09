@@ -292,22 +292,23 @@ fn guard(
         at == header || function.successors(cfg::block(at)).into_iter().map(id).collect::<Vec<_>>() == [header]
     };
     for found in shape.loops.iter().filter(|one| !one.body.contains(&id(block))) {
+        // Cheap first: only a branch with an edge into the loop is a guard of
+        // it.
+        let enter = [(*first, *second), (*second, *first)]
+            .into_iter()
+            .find(|&(enter, skip)| entering(enter, found.header) && !found.body.contains(&skip));
+        let Some((enter, skip)) = enter else { continue };
         let leaves: BTreeSet<i64> = found
             .body
             .iter()
             .flat_map(|&at| function.successors(cfg::block(at)).into_iter().map(id))
             .filter(|to| !found.body.contains(to))
             .collect();
-        let past: BTreeSet<i64> = leaves
-            .iter()
-            .copied()
-            .chain(leaves.iter().flat_map(|&at| function.successors(cfg::block(at)).into_iter().map(id)))
-            .collect();
-        for (enter, skip) in [(*first, *second), (*second, *first)] {
-            if entering(enter, found.header) && !found.body.contains(&skip) && past.contains(&skip) {
-                let (yes, no) = GUARD;
-                return Some(if enter == *first { vec![yes, no] } else { vec![no, yes] });
-            }
+        let past = leaves.contains(&skip)
+            || leaves.iter().any(|&at| function.successors(cfg::block(at)).into_iter().map(id).any(|to| to == skip));
+        if past {
+            let (yes, no) = GUARD;
+            return Some(if enter == *first { vec![yes, no] } else { vec![no, yes] });
         }
     }
     None
