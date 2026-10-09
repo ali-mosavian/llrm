@@ -140,6 +140,15 @@ pub enum Step {
         volatile: bool,
     },
     Hook(Call),
+    /// A binary operation on an integer wider than the native one, as its
+    /// halves: `first` for the low, `rest` for each above it (the form that
+    /// takes the carry, or the same).
+    Chain {
+        first: String,
+        rest: String,
+        left: Expr,
+        right: Expr,
+    },
     /// Refused with this message, or the opcode's mnemonic.
     Refuse(Option<String>),
     Nothing,
@@ -443,6 +452,14 @@ fn step(
             Step::Emit { name, dests, sources, volatile }
         }
         "call" => Step::Hook(lexer.call()?),
+        "chain" => {
+            let first = lexer.name()?.to_owned();
+            let rest = lexer.name()?.to_owned();
+            lexer.expect("<-")?;
+            let left = lexer.expr()?;
+            lexer.expect(",")?;
+            Step::Chain { first, rest, left, right: lexer.expr()? }
+        }
         "refuse" => {
             lexer.skip();
             let text = lexer.text[lexer.at..].trim();
@@ -535,7 +552,7 @@ fn pattern(
                     return error(line, "one cost hook");
                 }
             }
-            "let" | "emit" | "call" | "refuse" | "nothing" => pattern.body.push(step(keyword, rest, line)?),
+            "let" | "emit" | "call" | "chain" | "refuse" | "nothing" => pattern.body.push(step(keyword, rest, line)?),
             other => return error(line, format!("unknown line `{other}` in pattern `{name}`")),
         }
     }

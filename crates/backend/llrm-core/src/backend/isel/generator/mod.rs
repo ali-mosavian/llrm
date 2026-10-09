@@ -257,6 +257,14 @@ fn body(checker: &mut Checker) -> Result<String, String> {
                 let (d, s) = locals.split_at(dests.len());
                 writeln!(code, "                out.push(self.emitted(m, Operation::{operation}, {name:?}, vec![{}], vec![{}], {volatile}));", d.join(", "), s.join(", ")).unwrap();
             }
+            Step::Chain { first, rest, left, right } => {
+                for name in [first, rest] {
+                    checker.form(name, &["r".to_owned()], &["r".to_owned(), "ri".to_owned()])?;
+                }
+                let (left, right) = (checker.argument(left)?, checker.argument(right)?);
+                writeln!(code, "                self.wide_chain(m, out, {first:?}, {rest:?}, {left}, {right})?;")
+                    .unwrap();
+            }
             Step::Hook(call) => writeln!(code, "                {}?;", checker.call("hook", call)?).unwrap(),
             Step::Refuse(Some(message)) => writeln!(code, "                return refuse({message:?});").unwrap(),
             Step::Refuse(None) => {
