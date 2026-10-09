@@ -59,7 +59,48 @@ impl<'a> Unit<'a> {
             bounds: None,
             exposed: None,
             point_values: None,
+            callbacks: outer.cached_ref::<Callbacks>().and_then(|one| one.as_ref().ok()),
         }
+    }
+}
+
+/// What calling back into the module may do: the effects of GlobalsAA's
+/// entries added up. Every body that calls something unknown reads it, and it
+/// depends on the entries and the summaries alone, so it is made once for them
+/// and kept while both are the same results.
+pub struct Callbacks;
+
+/// The `GlobalsAA` and `Summaries` results `Callbacks` was last made from.
+#[derive(Default)]
+struct CallbacksSeen(Option<(Rc<Result<Globals, String>>, Rc<Result<IndexMap<String, Summary>, String>>)>);
+
+impl ModuleAnalysis for Callbacks {
+    type Result = Result<Option<Summary>, String>;
+    const NAME: &'static str = "callbacks";
+    fn run(
+        module: &Module,
+        analyses: &mut ModuleAnalyses,
+    ) -> Self::Result {
+        let globals = analyses.get::<GlobalsAA>(module);
+        let known = analyses.get::<Summaries>(module);
+        analyses.memo::<CallbacksSeen>().0 = Some((Rc::clone(&globals), Rc::clone(&known)));
+        Ok(alias::callbacks_over(
+            Result::as_ref(&*globals).map_err(String::clone)?,
+            Result::as_ref(&*known).map_err(String::clone)?,
+        ))
+    }
+    fn unchanged(
+        module: &Module,
+        analyses: &mut ModuleAnalyses,
+        _: &Self::Result,
+    ) -> bool {
+        let globals = analyses.get::<GlobalsAA>(module);
+        let known = analyses.get::<Summaries>(module);
+        analyses
+            .memo::<CallbacksSeen>()
+            .0
+            .as_ref()
+            .is_some_and(|(then, before)| Rc::ptr_eq(then, &globals) && Rc::ptr_eq(before, &known))
     }
 }
 
