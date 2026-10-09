@@ -496,3 +496,22 @@ fn module_analyses_of_the_declarations_stand_until_a_declaration_changes() {
         "callee effects did not follow the attribute"
     );
 }
+
+/// `LLRM_WHY`'s test form: an analysis a pass invalidated and that came to what
+/// it was is counted as `same`. 4209 of call-effects' 7009 runs over QCport at
+/// -O1 were so, and nothing said it until this did.
+#[test]
+fn a_recomputation_that_comes_to_the_same_result_is_counted() {
+    let module = module();
+    let function = module.global(module.named("f").unwrap()).function().unwrap();
+    let layout = DataLayout::default();
+    let mut analyses = Analyses::new(Rc::new(crate::passes::Outer::of(&module, None)));
+    crate::passes::trace_recomputes(true);
+    analyses.get::<Counted>(&module.context, &layout, function);
+    analyses.invalidate(&PreservedAnalyses::none());
+    crate::passes::note_pass("retarget");
+    analyses.get::<Counted>(&module.context, &layout, function);
+    let counts = crate::passes::recomputes();
+    crate::passes::trace_recomputes(false);
+    assert_eq!(counts, vec![("counted", "", "first", 1), ("counted", "retarget", "same", 1)]);
+}

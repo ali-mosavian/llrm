@@ -11,6 +11,7 @@ use std::rc::Rc;
 
 use llrm_mir::context::{Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::depends::Depends;
 use llrm_mir::module::{BlockId, Change, Function, GlobalValue, InstId, Linkage, Mark, Module, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, Analysis, Declarations, ModuleAnalyses, ModuleAnalysis, Outer};
@@ -431,17 +432,15 @@ fn carried(
     out
 }
 
-/// Whether `changes` leave what the pointer analyses derive (`ExposedFrames`,
-/// `Pointers`, `CallEffects`, `Writes`) as it was: no instruction they touched,
-/// and none that reads a value a touched one makes (through any chain of
-/// users), is one that can make, move or name a pointer or an aggregate, or is
-/// a call. An integer loaded, computed, stored and compared is nothing to them;
-/// one that reaches an address or a call is. Where a result is not so,
-/// `LLRM_CHECK_REPLAY` says.
-pub fn pointers_unaffected(
-    changes: &[Change],
+/// What the pointer analyses (`ExposedFrames`, `Pointers`, `CallEffects`,
+/// `Writes`) model: an instruction that can make, move or name a pointer or an
+/// aggregate, or is a call. An integer loaded, computed, stored and compared is
+/// nothing to them; one that reaches an address or a call is. Where a result is
+/// not so, `LLRM_CHECK_REPLAY` says.
+fn models(
     context: &Context,
     function: &Function,
+    inst: InstId,
     scalars_matter: bool,
 ) -> bool {
     let wide = |ty| {
@@ -450,71 +449,80 @@ pub fn pointers_unaffected(
             llrm_mir::types::Type::Int(_) | llrm_mir::types::Type::Float(_) | llrm_mir::types::Type::Void
         )
     };
-    let relevant = |inst: InstId| {
-        let one = function.instruction(inst);
-        match &one.opcode {
-            Opcode::Load { .. } if !scalars_matter => wide(one.ty),
-            Opcode::Store { .. } if !scalars_matter => {
-                one.operands.first().and_then(|value| function.operand_type(context, *value)).is_none_or(wide)
-            }
-            Opcode::Load { .. }
-            | Opcode::Store { .. }
-            | Opcode::Alloca { .. }
-            | Opcode::GetElementPtr { .. }
-            | Opcode::Call(_)
-            | Opcode::Invoke(_)
-            | Opcode::LandingPad { .. }
-            | Opcode::Resume => true,
-            Opcode::Cast(
-                llrm_mir::opcode::CastOp::PtrToInt
-                | llrm_mir::opcode::CastOp::IntToPtr
-                | llrm_mir::opcode::CastOp::BitCast
-                | llrm_mir::opcode::CastOp::AddrSpaceCast,
-            ) => true,
-            Opcode::Phi | Opcode::Select | Opcode::Freeze | Opcode::ExtractValue(_) | Opcode::InsertValue(_) => {
-                wide(one.ty)
-            }
-            op => op.is_terminator(),
+    let one = function.instruction(inst);
+    match &one.opcode {
+        Opcode::Load { .. } if !scalars_matter => wide(one.ty),
+        Opcode::Store { .. } if !scalars_matter => {
+            one.operands.first().and_then(|value| function.operand_type(context, *value)).is_none_or(wide)
         }
-    };
-    let mut work: Vec<InstId> = Vec::new();
-    for change in changes {
-        match *change {
-            Change::BlockCreated(_) | Change::BlockErased(_) => return false,
-            Change::Inserted { inst, .. }
-            | Change::Erased { inst, .. }
-            | Change::Moved { inst, .. }
-            | Change::Rewritten(inst)
-            | Change::Cloned { to: inst, .. } => work.push(inst),
+        Opcode::Load { .. }
+        | Opcode::Store { .. }
+        | Opcode::Alloca { .. }
+        | Opcode::GetElementPtr { .. }
+        | Opcode::Call(_)
+        | Opcode::Invoke(_)
+        | Opcode::LandingPad { .. }
+        | Opcode::Resume => true,
+        Opcode::Cast(
+            llrm_mir::opcode::CastOp::PtrToInt
+            | llrm_mir::opcode::CastOp::IntToPtr
+            | llrm_mir::opcode::CastOp::BitCast
+            | llrm_mir::opcode::CastOp::AddrSpaceCast,
+        ) => true,
+        Opcode::Phi | Opcode::Select | Opcode::Freeze | Opcode::ExtractValue(_) | Opcode::InsertValue(_) => {
+            wide(one.ty)
         }
+        // A branch picks between blocks; none made or erased (those are not
+        // asked of here) changes what a pointer reaches.
+        Opcode::Br | Opcode::Switch => false,
+        op => op.is_terminator(),
     }
-    let mut seen: BTreeSet<InstId> = work.iter().copied().collect();
-    while let Some(inst) = work.pop() {
-        if relevant(inst) {
-            return false;
-        }
-        if let Some(result) = function.instruction(inst).result {
-            for user in function.users(result) {
-                // A scalar a call, a branch, a return or a store takes is
-                // nothing to a pointer.
-                if matches!(
-                    function.instruction(user.user).opcode,
-                    Opcode::Call(_)
-                        | Opcode::Invoke(_)
-                        | Opcode::Br
-                        | Opcode::Switch
-                        | Opcode::Ret
-                        | Opcode::Store { .. }
-                ) {
-                    continue;
-                }
-                if seen.insert(user.user) {
-                    work.push(user.user);
-                }
-            }
-        }
-    }
-    true
+}
+
+fn models_scalars(
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    models(context, function, inst, true)
+}
+
+fn models_wide(
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    models(context, function, inst, false)
+}
+
+/// A scalar a call, a branch, a return or a store takes is nothing to a
+/// pointer.
+fn stops_at(opcode: &Opcode) -> bool {
+    matches!(
+        opcode,
+        Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Br | Opcode::Switch | Opcode::Ret | Opcode::Store { .. }
+    )
+}
+
+fn calls_only(
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    let _ = context;
+    matches!(
+        function.instruction(inst).opcode,
+        Opcode::Call(_) | Opcode::Invoke(_)
+    )
+}
+
+fn allocas_only(
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    let _ = context;
+    matches!(function.instruction(inst).opcode, Opcode::Alloca { .. })
 }
 
 /// The allocas whose address is exposed: `frameescape::exposed_allocas`, once
@@ -526,12 +534,8 @@ impl Analysis for ExposedFrames {
     type Result = BTreeSet<ValueId>;
     const NAME: &'static str = "exposed-frames";
     const SKIPS: bool = true;
-    fn unaffected(
-        changes: &[Change],
-        context: &Context,
-        function: &Function,
-    ) -> bool {
-        pointers_unaffected(changes, context, function, true)
+    fn depends() -> Option<Depends> {
+        Some(Depends { models: models_scalars, keyed: allocas_only, flows: Some(stops_at) })
     }
     fn run(
         context: &Context,
@@ -550,12 +554,8 @@ impl Analysis for Pointers {
     type Result = Result<PointsTo, String>;
     const NAME: &'static str = "points-to";
     const SKIPS: bool = true;
-    fn unaffected(
-        changes: &[Change],
-        context: &Context,
-        function: &Function,
-    ) -> bool {
-        pointers_unaffected(changes, context, function, true)
+    fn depends() -> Option<Depends> {
+        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at) })
     }
     fn run(
         context: &Context,
@@ -625,12 +625,8 @@ impl Analysis for CallEffects {
     type Result = Result<IndexMap<InstId, Effect>, String>;
     const NAME: &'static str = "call-effects";
     const SKIPS: bool = true;
-    fn unaffected(
-        changes: &[Change],
-        context: &Context,
-        function: &Function,
-    ) -> bool {
-        pointers_unaffected(changes, context, function, false)
+    fn depends() -> Option<Depends> {
+        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at) })
     }
     fn run(
         context: &Context,
@@ -828,12 +824,8 @@ impl Analysis for Writes {
     type Result = Result<Calls, String>;
     const NAME: &'static str = "writes";
     const SKIPS: bool = true;
-    fn unaffected(
-        changes: &[Change],
-        context: &Context,
-        function: &Function,
-    ) -> bool {
-        pointers_unaffected(changes, context, function, false)
+    fn depends() -> Option<Depends> {
+        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at) })
     }
     fn run(
         context: &Context,
