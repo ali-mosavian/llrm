@@ -240,3 +240,17 @@ def test_hoist_and_loopmotion_stay_quadratic_at_worst_in_the_depth_of_a_loop_nes
         if big > 4.8 * small + 5.0:
             grown[step] = f"{small:.1f} -> {big:.1f} Minstr"
     assert not grown, grown
+
+
+def test_gvn_stays_linear_in_the_statements_of_a_straight_line(tmp_path):
+    """Erasing the loads gvn forwarded looked each erased use up in the list of uses of its operand: a parameter read by every
+    statement made `mir gvn` on `straight` read 2N/N = 2.4 at N=2048 (19.6 G at N=32768, 3.25x a doubling there). It reads 2.0; a step
+    above 2.2 fails; a few Minstr of start-up are allowed."""
+    n = 2048
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"straight_{label}.c"
+        source.write_text("" if size == 0 else scaling.AXES["straight"](size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("mir gvn", 0.0) - own["empty"].get("mir gvn", 0.0) for label in ("n", "2n"))
+    assert big <= 2.2 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
