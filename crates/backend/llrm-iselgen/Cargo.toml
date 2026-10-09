@@ -1,0 +1,10 @@
+[package]
+name = "llrm-iselgen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Compiles a target's instruction-selection patterns into a decision automaton and an emitter per pattern"
+
+[dependencies]
+llrm-lir = { workspace = true }
+llrm-support = { workspace = true }

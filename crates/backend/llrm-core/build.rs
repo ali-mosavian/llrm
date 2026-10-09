@@ -3,10 +3,7 @@
 //! `src/instructions/x86.instr`) and its peephole rules: the family's
 //! (`llrm-x86`) and its own `src/isel/peephole.peep`.
 
-// The tests read what build.rs does not.
-#[allow(dead_code)]
-#[path = "src/backend/isel/generator/mod.rs"]
-mod generator;
+use llrm_iselgen as generator;
 
 fn main() {
     let family_forms = "../../target/llrm-x86/src/instructions/x86.instr";
@@ -15,7 +12,7 @@ fn main() {
     // Files, not `crates/target`: cargo scans a watched directory for the
     // newest mtime in it, and tools leave files there. A new target is a
     // new workspace member, so Cargo.lock says so.
-    for path in ["src/backend/isel/generator", "../../../Cargo.lock", family_forms, family_patterns, family_peephole] {
+    for path in ["../llrm-iselgen/src", "../../../Cargo.lock", family_forms, family_patterns, family_peephole] {
         println!("cargo:rerun-if-changed={path}");
     }
     let read = |path: &std::path::Path| {

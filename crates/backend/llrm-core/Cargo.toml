@@ -37,6 +37,7 @@ tempfile = { workspace = true }
 toml = { workspace = true }
 
 [build-dependencies]
+llrm-iselgen = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-peepgen = { workspace = true }
 llrm-support = { workspace = true }

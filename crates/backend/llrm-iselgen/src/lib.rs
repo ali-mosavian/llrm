@@ -3,7 +3,7 @@
 //! over MIR opcodes, types and operand kinds, and a Rust emitter per
 //! pattern. `build.rs` runs it; the selector includes what it writes.
 //!
-//! Dependency-free, so `build.rs` can include it with `#[path]`.
+//! A build-dependency of each crate that has selection patterns.
 
 pub mod automaton;
 pub mod parse;
@@ -14,7 +14,7 @@ use automaton::{Automaton, State};
 use parse::{Call, Expr, OperandPattern, Pattern, Step};
 
 /// The instruction description's reader.
-#[path = "../../../../../../target/llrm-x86/src/parse.rs"]
+#[path = "../../../target/llrm-x86/src/parse.rs"]
 pub mod description;
 
 /// What each operand constructor may make, as `x86.instr` spells kinds,
