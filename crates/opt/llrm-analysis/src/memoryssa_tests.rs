@@ -752,3 +752,25 @@ fn a_walk_looks_its_cell_up_by_value_once_however_many_stores_it_passes() {
     let probes = CELL_PROBES.with(std::cell::Cell::get) - before;
     assert_eq!(probes, 30, "{probes} lookups of a cell by value for 30 walks");
 }
+
+/// Every first question of a walk, whether a store clobbers a cell, went
+/// through the alias reasoning (a refined provenance per pair): 64% of those on
+/// host.c were stores to objects that cannot meet the cell, and `clobbered` was
+/// 1.4% of the compile. A store whose objects cannot meet the cell's is ruled
+/// out by `Accesses::reach` alone.
+#[test]
+fn a_store_to_another_object_is_ruled_out_without_alias_reasoning() {
+    let stores: String = (0..20).map(|at| format!("  store i16 {at}, ptr @h\n")).collect();
+    let parsed = Parsed::new(&format!(
+        "@h = global [8 x i8] zeroinitializer\n\ndefine void @f() {{\nb0:\n{stores}  %y = load i16, ptr {CELL}\n  ret void\n}}\n"
+    ));
+    let unit = parsed.unit();
+    let accesses = Accesses::resolved(&unit, &IndexMap::default()).expect("resolved");
+    let graph = built(&unit, &accesses);
+    let load = site(&unit, "b0", 20);
+    let before = MAY_CLOBBERS.with(std::cell::Cell::get);
+    let found = graph.clobbers(load, &accesses.references[&load]);
+    let asked = MAY_CLOBBERS.with(std::cell::Cell::get) - before;
+    assert_eq!(found.len(), 1, "only the live-on-entry memory reaches the load");
+    assert_eq!(asked, 0, "{asked} alias questions for 20 stores to another object");
+}
