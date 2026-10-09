@@ -109,6 +109,12 @@ pub fn _leaf(
     Some(_Leaf { object: span.object, low: span.low, high, type_class, restrict })
 }
 
+// Pairs of leaves `_blocked` has compared.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PAIRS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Bytes whose accesses cannot form disjoint scalar leaves.
 ///
 /// Equal ranges are one leaf, disjoint ranges independent leaves. A proper
@@ -131,12 +137,22 @@ pub fn _blocked<'a>(
             accesses.entry(leaf.object.clone()).or_default().push(leaf);
         }
     }
-    for (object, leaves) in &accesses {
+    for (object, mut leaves) in accesses {
+        // A leaf is its bytes and type, however many accesses make it: accesses
+        // of one leaf never block each other, and a pair of leaves is asked
+        // once, not once for each pair of accesses. In order of first byte a
+        // leaf meets only the ones that start before it ends.
+        leaves.sort_by(|one, other| {
+            (one.low, one.high, &one.type_class).cmp(&(other.low, other.high, &other.type_class))
+        });
+        leaves
+            .dedup_by(|one, other| (one.low, one.high, &one.type_class) == (other.low, other.high, &other.type_class));
         for (index, one) in leaves.iter().enumerate() {
-            for other in &leaves[index + 1..] {
-                let overlaps = one.low.max(other.low) < one.high.min(other.high);
+            for other in leaves[index + 1..].iter().take_while(|other| other.low < one.high) {
+                #[cfg(test)]
+                PAIRS.with(|asked| asked.set(asked.get() + 1));
                 let same_range = (one.low, one.high) == (other.low, other.high);
-                if overlaps && (!same_range || one.type_class != other.type_class) {
+                if !same_range || one.type_class != other.type_class {
                     blocked.insert(slice(object.clone(), one.low, one.high));
                     blocked.insert(slice(object.clone(), other.low, other.high));
                 }
