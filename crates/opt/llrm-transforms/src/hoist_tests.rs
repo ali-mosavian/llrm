@@ -340,12 +340,8 @@ fn test_a_load_the_language_says_is_invariant_leaves_past_a_store() {
     assert!(block_of(&printed, "f", "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{printed}");
 }
 
-/// Two inner loops each read three globals nothing writes and double them. Hoisted out of
-/// the outer loop too, six values live across both inner loops, more than
-/// the nine registers hold with the loop's own counters (PLASMABLOBS -Os
-/// +73 B, #529). At -Os the ones past the registers stay in their inner preheader.
-#[test]
-fn test_invariants_past_the_registers_stay_in_the_inner_preheader() {
+/// The function of the test below: two loops inside one, each with three invariant loads past six registers.
+fn two_inner_loops() -> String {
     let loads = |names: [&str; 3]| names.map(|name| format!("  %{name} = load i16, ptr @{name}\n  %w{name} = shl i16 %{name}, 1\n")).concat();
     let inner = |at: &str, names: [&str; 3], next: &str| {
         format!(
@@ -386,6 +382,16 @@ b9:
         first = inner("b3", ["g1", "g2", "g3"], "b4"),
         second = inner("b5", ["g4", "g5", "g6"], "b6"),
     );
+    text
+}
+
+/// Two inner loops each read three globals nothing writes and double them. Hoisted out of
+/// the outer loop too, six values live across both inner loops, more than
+/// the nine registers hold with the loop's own counters (PLASMABLOBS -Os
+/// +73 B, #529). At -Os the ones past the registers stay in their inner preheader.
+#[test]
+fn test_invariants_past_the_registers_stay_in_the_inner_preheader() {
+    let text = two_inner_loops();
     let before = parsed(&text);
     let mut after = before.clone();
     let mut passes = llrm_mir::passes::PassManager::default();
@@ -482,4 +488,20 @@ fn test_a_float_load_is_not_hoisted_where_its_release_costs_the_code_more() {
 #[test]
 fn test_a_float_load_is_hoisted_where_the_loop_pays_for_its_release() {
     assert_eq!(float_hoist(false, 2), 1);
+}
+
+/// A motion's price is its work and one spill forecast; hoist found the forecast twice (once for the price, again for the spilled
+/// set), 41% of its time on a 16-deep loop nest.
+#[test]
+fn test_a_motion_is_priced_by_one_forecast() {
+    let text = two_inner_loops();
+    let mut after = parsed(&text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.require::<Summaries>();
+    passes.add(super::Hoist { size: true });
+    crate::profit::PRICED.with(|count| count.set((0, 0)));
+    passes.run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() })).unwrap();
+    let (priced, forecast) = crate::profit::PRICED.with(std::cell::Cell::get);
+    assert!(priced > 0, "nothing was priced");
+    assert_eq!(forecast, priced, "a price and its forecast were found separately");
 }
