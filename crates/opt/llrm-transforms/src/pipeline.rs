@@ -438,7 +438,7 @@ pub fn recorded(
     if applied.options.wanted("jumpthread") {
         manager.add(jumpthread::JumpThread {
             size: applied.options.prefers_size(),
-            correlated: !applied.options.prefers_size(),
+            correlated: applied.options.copy_headers,
         });
     }
     // A loop entered at its body runs it at least once: what it loads
