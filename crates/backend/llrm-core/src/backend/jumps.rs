@@ -15,6 +15,7 @@ use iced_x86::Register;
 use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::analysis::loops::{self as loopy, Loop};
+use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::frequency::Frequency;
 use llrm_analysis::branchprob;
 use crate::backend::layout::_OPPOSITE;
@@ -84,7 +85,61 @@ pub fn optimized(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintabl
         }
     }
     let placed = preferred(&baseline, &threaded(&candidate)).clone();
-    Ok(if size { placed } else { duplicated_tails(&placed) })
+    Ok(inverted(&if size { placed } else { duplicated(&duplicated_tails(&placed), true) }))
+}
+
+/// A conditional branch taken to the block laid out next, followed by a jump: the opposite branch to the jump's target, and no jump
+/// (LLVM's `analyzeBranch` / `reverseBranchCondition` in BranchFolding). `_step` does this while it places blocks; copying a tail
+/// afterwards (`duplicated`) makes more of them.
+fn inverted(body: &LirBody) -> LirBody {
+    let mut blocks = body.blocks.clone();
+    let mut changed = false;
+    for index in 0..blocks.len() {
+        let (last, before) = _real_tail(&blocks[index]);
+        let (Some(last), Some(branch)) = (last, before) else { continue };
+        let (last_what, branch_what) = (last.what.as_ref().expect(NO_OP), branch.what.as_ref().expect(NO_OP));
+        let after = blocks[index + 1..].iter().find(|next| !next.phis.is_empty() || next.insns.iter().any(|one| !one.is_meta())).map(|next| next.at);
+        let opposite = branch_what.name.as_deref().and_then(|name| _OPPOSITE.get(name));
+        if last_what.op != Operation::Jump || branch_what.op != Operation::Branch || branch_what.indirect || branch_what.target.is_none() || branch_what.target != after || last_what.target.is_none() || blocks[index].succ.len() != 2 {
+            continue;
+        }
+        let Some(opposite) = opposite else { continue };
+        let flipped = Arc::new(Insn { what: Some(Semantics { name: Some((*opposite).to_owned()), target: last_what.target, ..branch_what.clone() }), ..(*branch).clone() });
+        let insns = blocks[index].insns.iter().filter(|one| !Arc::ptr_eq(one, &last)).map(|one| if Arc::ptr_eq(one, &branch) { Arc::clone(&flipped) } else { Arc::clone(one) }).collect();
+        blocks[index] = blocks[index].with_insns(insns);
+        changed = true;
+    }
+    if changed { body.with_blocks(blocks) } else { body.clone() }
+}
+
+/// gcc's `max-grow-copy-bb-insns`: a block is copied while it is at most this many unconditional jumps long.
+const COPY_BB_INSNS: usize = 8;
+
+/// gcc's `get_uncond_jump_length`: what the target prices one unconditional jump at, in its long form.
+pub(crate) fn uncond_jump_bytes(bits: u32) -> usize {
+    let jump = Semantics { name: Some("jmp".into()), target: Some(2), ..Semantics::new(Operation::Jump) };
+    select::priced_in(bits, &jump, 0, None, false, false, None).map_or(2, |made| made.code.len())
+}
+
+/// The bytes a block may be and still be copied (`copy_bb_p`): `COPY_BB_INSNS` jumps of code.
+fn copy_limit(bits: u32) -> usize {
+    COPY_BB_INSNS * uncond_jump_bytes(bits)
+}
+
+/// A block that only returns: plain operations then a `ret`, no way on, within `limit` bytes and none of it source-owned.
+fn _return_tail(bits: u32, block: &LirBlock) -> bool {
+    if !block.phis.is_empty() || !block.succ.is_empty() || block.insns.iter().any(|one| one.call.is_some() || one.group.is_some() || one.symbol == Some(true) || !one.spread.is_empty()) {
+        return false;
+    }
+    let real = _real(block);
+    let Some((last, rest)) = real.split_last() else { return false };
+    // A return that covers source bytes is the program's own (a BASIC module's end spells a runtime call at it): not copied.
+    if last.what.as_ref().is_none_or(|what| what.op != Operation::Return) || !last.inserted()
+        || rest.iter().any(|one| one.call.is_some() || one.what.as_ref().is_none_or(|what| matches!(what.op, Operation::Barrier | Operation::Branch | Operation::Call | Operation::Data | Operation::Jump | Operation::Return)))
+    {
+        return false;
+    }
+    real.iter().try_fold(0usize, |bytes, one| select::priced_in(bits, one.what.as_ref()?, 0, None, false, false, None).map(|made| bytes + made.code.len())).is_some_and(|bytes| bytes <= copy_limit(bits))
 }
 
 /// LLVM's `TailDupSize` at -O2: the instructions a tail may hold besides its jumps.
@@ -97,6 +152,11 @@ const TAIL_DUPLICATION: usize = 2;
 /// less often than the jump it removes. A copy claims none of the
 /// original's bytes, which the tail keeps.
 pub fn duplicated_tails(body: &LirBody) -> LirBody {
+    duplicated(body, false)
+}
+
+/// `duplicated_tails`, or only the tails that return: the jump a copied tail ended in may reach one.
+fn duplicated(body: &LirBody, returns: bool) -> LirBody {
     let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let after: IndexMap<i64, i64> = body.blocks.windows(2).map(|pair| (pair[0].at, pair[1].at)).collect();
     let frequency = Frequency::of(body);
@@ -114,7 +174,7 @@ pub fn duplicated_tails(body: &LirBody) -> LirBody {
             let Some(tail) = last.target.filter(|at| *at != parent.at && *at != body.entry).and_then(|at| by_at.get(&at)) else {
                 return None;
             };
-            let Some((copied, falls)) = _duplicable(tail, after.get(&tail.at).copied()) else {
+            let Some((copied, falls)) = _duplicable(body.bits, tail, after.get(&tail.at).copied()).filter(|(_, falls)| !returns || falls.is_none()).filter(|_| !returns || _return_tail(body.bits, tail)) else {
                 return None;
             };
             // Per run of the jump: the fall-through's jump runs as often as the tail falls through.
@@ -159,9 +219,13 @@ pub fn duplicated_tails(body: &LirBody) -> LirBody {
 /// A tail's printed instructions where it may be copied, and the block it
 /// falls through to: at most `TAIL_DUPLICATION` besides the branches it ends
 /// in, every one a plain operation.
-fn _duplicable(tail: &LirBlock, next: Option<i64>) -> Option<(Vec<Arc<Insn>>, Option<i64>)> {
+fn _duplicable(bits: u32, tail: &LirBlock, next: Option<i64>) -> Option<(Vec<Arc<Insn>>, Option<i64>)> {
     if !tail.phis.is_empty() {
         return None;
+    }
+    // gcc's bb-reorder `copy_bb_p` for a block that only returns: copied up to `max-grow-copy-bb-insns` jumps of code.
+    if _return_tail(bits, tail) {
+        return Some((_real(tail), None));
     }
     let real = _real(tail);
     let ops: Vec<Semantics> = real.iter().map(|one| one.what.clone()).collect::<Option<_>>()?;
@@ -215,7 +279,7 @@ fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
                 Vec::new(),
                 Vec::new(),
             );
-            block.insns.push(Arc::new(jump));
+            block.insns = block.insns.iter().cloned().chain([Arc::new(jump)]).collect();
         }
         explicit.push(block);
     }
@@ -460,14 +524,13 @@ pub fn _hoisted(body: &LirBody) -> LirBody {
     let mut live: Option<IndexMap<i64, BTreeSet<u32>>> = None;
     for position in 0..blocks.len() {
         let block = &blocks[position];
-        let (anchors, rest): (Vec<Arc<Insn>>, Vec<Arc<Insn>>) = block.insns.iter().cloned().partition(|one| _inert(one));
         let parents = predecessors.get(&block.at);
-        if anchors.is_empty()
-            || !block.phis.is_empty()
-            || block.succ.len() != 1
-            || rest.iter().any(|one| one.what.as_ref().is_none_or(|what| what.op != Operation::Jump))
-            || parents.map_or(0, BTreeSet::len) != 1
-        {
+        // The cheap tests first: most blocks have no anchor or are not a lone edge of their parent.
+        if block.succ.len() != 1 || parents.map_or(0, BTreeSet::len) != 1 || !block.phis.is_empty() || !block.insns.iter().any(|one| _inert(one)) {
+            continue;
+        }
+        let (anchors, rest): (Vec<Arc<Insn>>, Vec<Arc<Insn>>) = block.insns.iter().cloned().partition(|one| _inert(one));
+        if rest.iter().any(|one| one.what.as_ref().is_none_or(|what| what.op != Operation::Jump)) {
             continue;
         }
         let parent = *parents.and_then(|parents| parents.first()).expect("one predecessor");
@@ -511,17 +574,23 @@ fn _live_values(blocks: &[LirBlock]) -> IndexMap<i64, BTreeSet<u32>> {
             }
         }
     }
-    let mut into: IndexMap<i64, BTreeSet<u32>> = by_at.keys().map(|at| (*at, BTreeSet::new())).collect();
-    let mut changing = true;
-    while changing {
-        changing = false;
-        for (at, block) in &by_at {
-            let mut live = carried.get(at).cloned().unwrap_or_default();
-            for to in &block.succ {
+    let nodes: Vec<&LirBlock> = blocks.iter().collect();
+    dataflow::solve(
+        &nodes,
+        Direction::Backward,
+        |_| BTreeSet::new(),
+        |at, into: &IndexMap<i64, BTreeSet<u32>>| {
+            let mut live = carried.get(&at).cloned().unwrap_or_default();
+            for to in &by_at[&at].succ {
                 if let Some(after) = into.get(to) {
                     live.extend(after.iter().copied());
                 }
             }
+            live
+        },
+        |at, after| {
+            let block = by_at[&at];
+            let mut live = after.clone();
             for one in block.insns.iter().rev() {
                 for value in one.defines.iter().copied().chain(one.delivers.iter().map(|(held, _)| held.value)) {
                     live.remove(&value);
@@ -531,13 +600,10 @@ fn _live_values(blocks: &[LirBlock]) -> IndexMap<i64, BTreeSet<u32>> {
             for phi in &block.phis {
                 live.remove(&phi.result);
             }
-            if into[at] != live {
-                into.insert(*at, live);
-                changing = true;
-            }
-        }
-    }
-    into
+            live
+        },
+    )
+    .output
 }
 
 /// Python's `_tail_key` tuple.

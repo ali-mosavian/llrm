@@ -1,5 +1,6 @@
 """The gate's path map: a change in an area selects that area's tests, and nothing is left out by omission."""
 
+import pytest
 import sys
 import subprocess
 from pathlib import Path
@@ -156,7 +157,8 @@ def test_the_qcport_step_has_no_wall_clock_limit_of_its_own():
 
 def test_every_step_the_planner_can_produce_is_in_exactly_one_ci_group():
     """A step in no group would never run in CI, silently: the matrix is built from the groups."""
-    everything = [s for s in gate.plan(["crates/ir/llrm-mir/src/lib.rs"]).steps if s != "build"]  # the build is its own job
+    plans = [gate.plan(["crates/ir/llrm-mir/src/lib.rs"], "full"), gate.plan(["crates/ir/llrm-mir/src/lib.rs"], "auto"), gate.plan(["crates/backend/x.rs"], "fast")]  # `scans` and `measure` are fast-tier steps
+    everything = [s for q in plans for s in q.steps if s != "build"]  # the build is its own job
     grouped = [s for members in gate.load()["groups"].values() for s in members]
     assert sorted(grouped) == sorted(set(grouped)), "a step is in two groups"
     assert set(everything) <= set(grouped), set(everything) - set(grouped)
@@ -293,3 +295,91 @@ def test_the_perf_probe_reads_a_count_not_the_exit_status(tmp_path):
     assert "perf" in gate.missing_capabilities(env)
     fake.write_text("#!/bin/sh\necho '123456,,instructions:u,100,100.00,,'\n")
     assert "perf" not in gate.missing_capabilities(env)
+
+
+def test_a_backend_change_runs_the_measure_step_and_a_frontend_only_change_does_not():
+    assert "measure" in gate.plan(["crates/backend/llrm-core/src/backend/isel.rs"]).steps
+    assert "measure" in gate.plan(["crates/opt/llrm-transforms/src/gvn.rs"]).steps
+    assert "measure" in gate.plan(["crates/ir/llrm-mir/src/lib.rs"]).steps  # full
+    assert "measure" not in gate.plan(["tests/run.rs"]).steps
+    assert "measure" not in gate.plan(["crates/frontends/llrm-qb/src/lib.rs"]).steps
+
+
+def test_the_measure_step_has_a_command_and_no_baseline_lives_in_the_repository():
+    p = gate.plan(["tools/measure.py"])
+    assert "measure" in p.steps
+    assert "tools/measure.py check" in gate.commands(p, gate.load(), gate.packages())["measure"]
+    tracked = subprocess.run(["git", "ls-files", "tools/gate"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
+    assert not [f for f in tracked if f.endswith(".json")], tracked  # two branches from one base share no file to conflict on
+
+
+def test_steps_asked_for_replace_the_planned_ones_and_the_build_comes_first():
+    """Re-running a change to the measurement tools needs build and measure; the full gate took 5-7 minutes."""
+    known = set(gate.commands(gate.plan(["tools/gate/gate.py"]), gate.load(), gate.packages()))
+    p = gate.plan(["tools/gate/gate.py"])
+    assert p.tier == "full" and len(p.steps) > 8
+    one = gate.restricted(p, ["measure"], known)
+    assert one.steps == ["build", "measure"] and one.tier == p.tier and one.languages == p.languages
+    assert gate.restricted(p, ["pytest"], known).steps == ["pytest"]
+    with pytest.raises(SystemExit):
+        gate.restricted(p, ["mesure"], known)
+
+
+def test_a_one_line_change_to_any_source_runs_every_source_scan_in_the_fast_tier():
+    """#1057 and #1071 gated fast and skipped llrm-mir's dense-key ratchet (a lib test of a crate they did not touch); main's full run went
+    red. A ratchet reads every crate's source, so any .rs change selects it, whichever crate holds the test."""
+    cfg = gate.load()
+    for touched in ("crates/opt/llrm-analysis/src/ranges.rs", "crates/backend/llrm-core/src/backend/spiller.rs", "crates/frontends/llrm-c/src/lib.rs"):
+        p = gate.plan([touched])
+        assert p.tier == "fast" and "scans" in p.steps, (touched, p.steps)
+    command = gate.commands(gate.plan(["crates/opt/llrm-analysis/src/ranges.rs"]), cfg, gate.packages())["scans"]
+    for one in cfg["scan"]:
+        if "package" in one:
+            assert one["package"] in command and (one.get("lib") or one["test"]) in command, one
+    assert "scans" not in gate.plan(["tools/measure.py"]).steps and "scans" not in gate.plan(["docs/testing.md"]).steps
+
+
+def test_every_scan_names_a_test_that_exists():
+    for one in gate.load()["scan"]:
+        text = (ROOT / one["file"]).read_text()
+        name = one.get("lib") or one.get("test") or Path(one["file"]).stem
+        assert one.get("step") == "integration" or f"fn {name}" in text or Path(one["file"]).stem == name, one
+        if one.get("step") == "integration":
+            assert Path(one["file"]).stem in gate.root_tests(), one
+
+
+def test_every_test_that_reads_the_trees_sources_is_a_listed_scan():
+    """A test that walks the directories for `.rs` files is a source scan; one nobody lists is skipped by a diff to any other crate."""
+    listed = {one["file"] for one in gate.load()["scan"]}
+    found = []
+    for path in sorted(ROOT.glob("**/*.rs")):
+        relative = str(path.relative_to(ROOT))
+        if relative.startswith(("target/", ".git/")) or "/target/" in relative:
+            continue
+        in_tests = "/tests/" in relative or relative.startswith("tests/") or relative.endswith(("_tests.rs", "/tests.rs"))
+        if not in_tests:
+            continue
+        text = path.read_text()
+        if "read_dir" in text and '".rs"' in text and "#[test]" in text:
+            found.append(relative)
+    assert found, "the scan discovery found nothing: it is broken"
+    missing = [f for f in found if f not in listed]
+    assert not missing, f"source-scan tests missing from tiers.toml [[scan]]: {missing}"
+
+
+def test_a_failing_scan_does_not_hide_the_ones_after_it(tmp_path):
+    """&& stopped at the first red scan; the step runs every scan and fails if any did."""
+    command = gate.commands(gate.plan(["crates/opt/llrm-analysis/src/ranges.rs"]), gate.load(), gate.packages())["scans"]
+    assert "&&" not in command.replace("cargo test", "") and command.count("|| rc=1") == 3 and command.endswith("exit $rc")
+
+
+def test_a_diff_that_selects_only_the_root_crate_runs_no_lib_or_doc_tests():
+    """A change to tools/bench selected the root crate alone, which has no library: `cargo test -p llrm --lib` failed with 'no library
+    targets found' and the gate went red on a bench blessing."""
+    p = gate.plan(["tools/bench/bench.py"])
+    assert p.packages == ["llrm"], p.packages
+    steps = gate.commands(p, gate.load(), gate.packages())
+    assert steps["lib"] == "true" and steps["doc"] == "true"
+    expected = gate.expected(p, gate.load(), gate.packages())
+    assert "lib" not in expected and "doc" not in expected
+    assert "-p llrm-mir" in gate.commands(gate.plan(["crates/ir/llrm-mir/src/lib.rs"]), gate.load(), gate.packages())["lib"] or "--workspace" in gate.commands(gate.plan(["crates/ir/llrm-mir/src/lib.rs"]), gate.load(), gate.packages())["lib"]

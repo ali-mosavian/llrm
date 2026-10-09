@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use iced_x86::Register;
 
+use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::loops;
 use crate::backend::{liveness, target};
 use crate::backend::peephole::{_register_effects, id};
@@ -77,8 +78,25 @@ fn disturbed(bits: u32, one: &Insn) -> Roots {
 
 /// What `one` makes of `zero`, the roots known zero before it.
 pub fn after(bits: u32, one: &Insn, zero: Roots) -> Roots {
+    if let Some(swapped) = exchanged(one, zero) {
+        return swapped;
+    }
     let zeroed = zeroing(one) | copied(one, zero);
     (zero & !disturbed(bits, one)) | zeroed
+}
+
+/// `zero` after `xchg a, b` of two whole registers: each now holds the other's upper half.
+fn exchanged(one: &Insn, zero: Roots) -> Option<Roots> {
+    let Some(Semantics { op: Operation::Exchange, dests, .. }) = &one.what else {
+        return None;
+    };
+    let [Loc::Reg(Reg { register: left, width: 4 }), Loc::Reg(Reg { register: right, width: 4 })] = dests.as_slice() else {
+        return None;
+    };
+    let (left, right) = (bit(*left)?, bit(*right)?);
+    let (had_left, had_right) = (zero & left != 0, zero & right != 0);
+    let rest = zero & !(left | right);
+    Some(rest | if had_right { left } else { 0 } | if had_left { right } else { 0 })
 }
 
 /// The root a whole-register copy writes, where the root it copies from has a zero upper half.
@@ -99,26 +117,22 @@ fn copied(one: &Insn, zero: Roots) -> Roots {
 pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
     let graph = &body.blocks;
     let predecessors = loops::predecessors(&graph);
-    let mut into: IndexMap<i64, Roots> =
-        body.blocks.iter().map(|block| (block.at, if block.at == body.entry { 0 } else { ALL })).collect();
-    let mut out: IndexMap<i64, Roots> = body.blocks.iter().map(|block| (block.at, ALL)).collect();
-    let mut changing = true;
-    while changing {
-        changing = false;
-        for block in &body.blocks {
-            let known: BTreeSet<i64> = out.keys().copied().collect();
-            let mut zero = if block.at == body.entry { 0 } else { ALL };
-            for from in predecessors.get(&block.at).into_iter().flatten().filter(|at| known.contains(at)) {
+    let nodes: Vec<&LirBlock> = body.blocks.iter().collect();
+    let blocks: IndexMap<i64, &LirBlock> = nodes.iter().map(|block| (block.at, *block)).collect();
+    let solved = dataflow::solve(
+        &nodes,
+        Direction::Forward,
+        |_| ALL,
+        |at, out| {
+            let mut zero = if at == body.entry { 0 } else { ALL };
+            for from in predecessors.get(&at).into_iter().flatten().filter(|from| out.contains_key(*from)) {
                 zero &= out[from];
             }
-            into.insert(block.at, zero);
-            let leaving = block.insns.iter().fold(zero, |zero, one| after(body.bits, one, zero));
-            if leaving != out[&block.at] {
-                out.insert(block.at, leaving);
-                changing = true;
-            }
-        }
-    }
+            zero
+        },
+        |at, zero| blocks[&at].insns.iter().fold(*zero, |zero, one| after(body.bits, one, zero)),
+    );
+    let into = solved.input;
     let mut result = HashMap::default();
     for block in &body.blocks {
         let mut zero = into[&block.at];
@@ -132,7 +146,7 @@ pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
 
 /// `movzx root,word` for each root in `roots`, before `block`'s terminator.
 pub fn extended(block: &LirBlock, roots: Roots) -> LirBlock {
-    let mut insns = block.insns.clone();
+    let mut insns = block.insns.to_vec();
     let at = insns.last().map_or(block.at, |one| one.at);
     let position = if insns.last().is_some_and(|one| liveness::_terminator(one.what.as_ref())) { insns.len() - 1 } else { insns.len() };
     for (index, root) in ROOTS.iter().enumerate() {
@@ -265,8 +279,8 @@ pub fn established(body: &LirBody) -> LirBody {
                 None => block.clone(),
                 Some((position, roots)) => {
                     let at = block.insns.iter().position(|one| id(one) == *position).expect("the cell");
-                    let mut insns = block.insns.clone();
-                    let zeroed = extended(&LirBlock::new(block.at, Vec::new()), *roots).insns;
+                    let mut insns = block.insns.to_vec();
+                    let zeroed = extended(&LirBlock::new(block.at, Vec::new()), *roots).insns.to_vec();
                     let when = insns[at].at;
                     insns.splice(at..at, zeroed.into_iter().map(|one| Arc::new(Insn { at: when, ..(*one).clone() })));
                     block.with_insns(insns)
@@ -325,5 +339,25 @@ mod tests {
                 assert_ne!(zero[&crate::backend::peephole::id(insn)] & ebx, 0, "{:?}", insn.what);
             }
         }
+    }
+
+    /// `xchg esi, ecx` lost both registers' zero upper halves, so a counter that began as `mov ecx, 2` was copied by `movzx` before
+    /// it indexed (bench/sieve with EBP free: one more instruction a trip).
+    #[test]
+    fn test_an_exchange_swaps_the_zero_upper_halves() {
+        let (ecx, esi) = (Loc::Reg(Reg { register: Register::ECX, width: 4 }), Loc::Reg(Reg { register: Register::ESI, width: 4 }));
+        let two = Loc::Imm(Imm { value: 2, width: 4, address: None });
+        let entry = LirBlock::new(0, vec![
+            one(0, Operation::Move, "mov", vec![ecx.clone()], vec![two], None),
+            one(1, Operation::Exchange, "xchg", vec![esi.clone(), ecx.clone()], vec![ecx.clone(), esi.clone()], None),
+            one(2, Operation::Nothing, "nop", vec![], vec![], None),
+        ]);
+        let body = LirBody::new("swap", 0, vec![entry], IndexMap::default(), IndexMap::default());
+
+        let zero = before(&body);
+
+        let id = |at: usize| crate::backend::peephole::id(&body.blocks[0].insns[at]);
+        assert_ne!(zero[&id(2)] & bit(Register::ESI).unwrap(), 0);
+        assert_eq!(zero[&id(2)] & bit(Register::ECX).unwrap(), 0);
     }
 }

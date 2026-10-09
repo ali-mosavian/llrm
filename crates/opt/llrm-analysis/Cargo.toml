@@ -13,6 +13,7 @@ num-traits = { workspace = true }
 
 [features]
 # testing, for the other crates' tests
+default = ["testing"]
 testing = []
 
 [dev-dependencies]

@@ -5,7 +5,7 @@
 //! or rewrites them in place, and where the walk resumes decide the output.
 
 use std::cell::OnceCell;
-use std::collections::HashSet;
+use crate::support::hash::HashSet;
 use std::sync::Arc;
 
 use crate::backend::cpu::Profile;
@@ -413,7 +413,7 @@ fn windows(cx: &Cx, matcher: &Matcher, skip: Skip) -> Vec<Arc<Insn>> {
 pub fn slide(body: &LirBody, facts: &Facts, matcher: &Matcher, advance: usize) -> LirBody {
     blocks(body, facts, |cx| {
         let mut insns = cx.insns.to_vec();
-        let mut removed: HashSet<usize> = HashSet::new();
+        let mut removed: HashSet<usize> = HashSet::default();
         let mut at = 0;
         while at + matcher.width <= insns.len() {
             if insns[at..at + matcher.width].iter().any(|one| removed.contains(&id(one))) {

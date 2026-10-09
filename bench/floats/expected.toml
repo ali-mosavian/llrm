@@ -1,5 +1,5 @@
-reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
-blessed = "2026-10-08"
+reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
+blessed = "2026-10-09"
 
 [bas.O2]
 instructions = 5052

@@ -31,7 +31,8 @@ use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
-use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::passes::{Analyses, Analysis, FunctionPass, Outer, PreservedAnalyses, Unit};
 use llrm_mir::target::{AddressForm, Machine, OperationCosts};
 use num_traits::ToPrimitive;
 use llrm_mir::types::{Type, TypeId};
@@ -47,6 +48,8 @@ use crate::{dead, profit, rotate};
 #[derive(Default)]
 pub struct Lsr {
     pub size: bool,
+    /// gcc's ivopts limits (`Bounds::GCC`); -Omax searches without them.
+    pub bounds: Bounds,
 }
 
 impl FunctionPass for Lsr {
@@ -56,8 +59,15 @@ impl FunctionPass for Lsr {
 
     fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        if reduced(unit, analyses, &outer, self.size) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if reduced(unit, analyses, &outer, self.size, self.bounds) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// `total` asked and `total_of` worked out, for the test that a set is priced once.
+    pub static TOTALS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+
 }
 
 /// What the target says a loop's choice may cost.
@@ -66,12 +76,37 @@ struct Target<'a> {
     costs: OperationCosts,
     room: Room,
     forms: Vec<AddressForm>,
+    bounds: Bounds,
+}
+
+/// gcc's ivopts parameters (tree-ssa-loop-ivopts.cc), and what each does past its bound.
+#[derive(Clone, Copy, Debug)]
+pub struct Bounds {
+    /// `iv-max-considered-uses`: a loop of more groups of uses than this is left as it is.
+    pub groups: usize,
+    /// `iv-consider-all-candidates-bound`: below this many candidates the search is whole. gcc prices a use from the important
+    /// candidates and its own only past it; here that left the cheapest shared counter out and cost more (QCport weapons.c).
+    pub all_candidates: usize,
+    /// `iv-always-prune-cand-set-bound`: a candidate serving more uses than this is not replaced, and replacing is tried only
+    /// where no one candidate added or removed lowers the cost, once (`iv_ca_replace`).
+    pub always_prune: usize,
+}
+
+impl Default for Bounds {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+impl Bounds {
+    pub const GCC: Self = Self { groups: 250, all_candidates: 40, always_prune: 10 };
+    pub const NONE: Self = Self { groups: usize::MAX, all_candidates: usize::MAX, always_prune: usize::MAX };
 }
 
 /// What may take a register in a loop: a value it has, or one a choice
 /// adds -- a counter, an invariant, a symbolic step, a product, a value
 /// built from a counter.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Resident {
     Value(ValueId),
     Counter(usize),
@@ -81,23 +116,44 @@ enum Resident {
     Rebuilt(usize),
 }
 
+/// The whole function's block frequencies as lsr's prices read them: a loop's trips multiplied, ten where unproven (#203), a branch's cold
+/// arm less. A manager analysis, so a loop lsr looks at and leaves alone does not find them again (16 loops of a nest: a fifth of lsr).
+pub struct Products;
+
+impl Analysis for Products {
+    type Result = Option<std::collections::BTreeMap<i64, i64>>;
+    const NAME: &'static str = "loop-products";
+
+    fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
+        let registers = analyses.get::<Registers>(context, layout, function);
+        let shape = analyses.get::<llrm_analysis::cfg::Shape>(context, layout, function);
+        let outer = std::rc::Rc::clone(analyses.outer());
+        // The trips are the manager's proofs, renewed for the loops a change reached, not worked out again for every loop.
+        let counted = analyses.get::<llrm_analysis::manager::Counted>(context, layout, function);
+        let view = memory::Unit::within(context, layout, function, &outer).with_registers(&registers).with_shape(&shape).with_counted(&counted);
+        profit::_loop_products_by_branch(view.context, view.metadata, &outer.globals, function, Some(&profit::proven_trips(&view, &registers)))
+    }
+}
+
 /// Each loop's counters chosen, innermost first; whether any changed.
-pub fn reduced(unit: &mut Unit, analyses: &Analyses, outer: &Outer, size: bool) -> bool {
-    let target = Target { machine: outer.target(), costs: profit::costs(outer), room: profit::registers(outer), forms: outer.target().address_forms() };
+pub fn reduced(unit: &mut Unit, analyses: &mut Analyses, outer: &Outer, size: bool, bounds: Bounds) -> bool {
+    let target = Target { machine: outer.target(), costs: profit::costs(outer), room: profit::registers(outer), forms: outer.target().address_forms(), bounds };
     let mut done = BTreeSet::<i64>::new();
     let mut changed = false;
+    // What is known of the function is the manager's, kept until a loop is changed (and then it is `applied` that declares nothing kept).
     loop {
-        let mut fresh = analyses.fresh();
-        let facts = fresh.get::<Registers>(unit.context, unit.layout, unit.function);
-        let shape = fresh.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
         let plan = {
+            let facts = analyses.get::<Registers>(unit.context, unit.layout, unit.function);
+            let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
             let view = memory::Unit::within(unit.context, unit.layout, unit.function, outer).with_registers(&facts).with_shape(&shape);
             let mut loops = shape.loops.clone();
             loops.sort_by_key(|one| (one.body.len(), one.header));
             let Some(loop_) = loops.into_iter().find(|one| !done.contains(&one.header)) else { break };
             done.insert(loop_.header);
-            let pressure = analyses.fresh().get::<spill::Pressure>(unit.context, unit.layout, unit.function);
-            _plan(&view, outer, &loop_, &target, &pressure)
+            let pressure = analyses.get::<spill::Pressure>(unit.context, unit.layout, unit.function);
+            let (context, layout, function) = (&*unit.context, unit.layout, &*unit.function);
+            let mut products = || analyses.get::<Products>(context, layout, function);
+            _plan(&view, outer, &loop_, &target, &pressure, &mut products)
         };
         let Some(plan) = plan else { continue };
         // A loop with another way out was never counted before: its choice is held to the function's whole price, work and
@@ -107,13 +163,14 @@ pub fn reduced(unit: &mut Unit, analyses: &Analyses, outer: &Outer, size: bool) 
         if leaves && size {
             continue;
         }
-        let saved = leaves.then(|| (unit.function.clone(), _function_price(unit, analyses, outer, &target)));
+        let saved = leaves.then(|| (unit.function.clone(), _function_price(unit, &*analyses, outer, &target)));
         if let Some(first) = _applied(unit, &plan) {
             done.insert(cfg::id(first));
         }
+        analyses.invalidate(&PreservedAnalyses::none());
         if let Some((before, Some(kept))) = saved {
             dead::dead(unit.context, outer.callees(), unit.function);
-            let moved_price = _function_price(unit, analyses, outer, &target);
+            let moved_price = _function_price(unit, &*analyses, outer, &target);
             llrm_support::debug!("lsr", "leaving loop: kept {kept}, moved {moved_price:?}");
             if moved_price.is_some_and(|moved| moved > kept) {
                 *unit.function = before;
@@ -258,6 +315,8 @@ struct Problem<'a> {
     fixed: BTreeMap<i64, Vec<spill::Site>>,
     /// The spill traffic of what `fixed` keeps.
     traffic: BTreeMap<ValueId, Traffic>,
+    /// `total` of each set asked: the search asks the same set again from the other start and from each step's neighbours.
+    totals: std::cell::RefCell<llrm_support::hash::HashMap<BTreeSet<usize>, Option<i64>>>,
     /// Where each site's value is live, at the points of `fixed`.
     alive: Vec<BTreeMap<i64, Vec<bool>>>,
     latch: i64,
@@ -283,7 +342,7 @@ fn _preheader(function: &Function, loop_: &Loop) -> Option<BlockId> {
     }
 }
 
-fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target, pressure: &spill::Pressure) -> Option<Plan> {
+fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target, pressure: &spill::Pressure, products: &mut dyn FnMut() -> std::rc::Rc<Option<std::collections::BTreeMap<i64, i64>>>) -> Option<Plan> {
     let function = view.function;
     let preheader = _preheader(function, loop_)?;
     let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return None };
@@ -294,7 +353,8 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target, pres
     }
     let facts = view.registers();
     // lsr's prices were fitted to trips multiplied, ten where unproven (#203), and a branch's cold arm less.
-    let frequencies = profit::_loop_products_by_branch(view.context, view.metadata, &outer.globals, function, Some(&profit::proven_trips(view, &facts)))?;
+    let held = products();
+    let frequencies = held.as_ref().as_ref()?;
     let frequency = |block: BlockId| frequencies.get(&cfg::id(block)).copied().unwrap_or(1);
     let exit = _exit(view, loop_, &users);
     let nested = view.shape().loops.iter().filter(|one| one.header != loop_.header && loop_.body.contains(&one.header)).cloned().collect::<Vec<_>>();
@@ -347,9 +407,18 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target, pres
             }
         }
     }
+    // gcc leaves a loop of more groups of uses than `iv-max-considered-uses` as it is; a group is the uses of one step and base
+    // that differ in a constant.
+    let groups = sites.iter().map(|site| {
+        let of = _normal(view, &site.one);
+        (of.pointer.is_some(), of.step, of.start.symbolic())
+    }).collect::<BTreeSet<_>>();
+    if groups.len() > target.bounds.groups {
+        return None;
+    }
     let candidates = _candidates(view, target, &users, &sites, exit.as_ref());
     let web_values = users.values.keys().copied().collect::<BTreeSet<_>>();
-    let live = _live_anyway(function, loop_, &users, exit.as_ref());
+    let live = _live_anyway(function, pressure.found(), loop_, &users, exit.as_ref());
     let cells = pressure.cells();
     let fixed = _fixed(view, outer, loop_, target.room, pressure, &web_values, &users, exit.as_ref(), &live);
     // The web's reads are the uses the choice replaces; each use adds its own back.
@@ -377,6 +446,7 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target, pres
         keys,
         fixed,
         traffic,
+        totals: Default::default(),
         alive,
         latch: frequency(cfg::block(latch)),
         header: frequency(cfg::block(loop_.header)),
@@ -519,7 +589,7 @@ fn _steps_before_test(function: &Function, proof: &CountedLoop, candidate: &Cand
 
 /// Values read inside the loop by something other than a recurrence or
 /// the counted exit, or live after it.
-fn _live_anyway(function: &Function, loop_: &Loop, users: &Users, exit: Option<&Exit>) -> BTreeSet<ValueId> {
+fn _live_anyway(function: &Function, found: &liveness::Liveness, loop_: &Loop, users: &Users, exit: Option<&Exit>) -> BTreeSet<ValueId> {
     let mut live = BTreeSet::new();
     for &at in &loop_.body {
         for &inst in function.block(cfg::block(at)).instructions() {
@@ -532,7 +602,6 @@ fn _live_anyway(function: &Function, loop_: &Loop, users: &Users, exit: Option<&
             }));
         }
     }
-    let found = liveness::live(function);
     for &at in &loop_.body {
         for succ in function.successors(cfg::block(at)) {
             if !loop_.body.contains(&cfg::id(succ)) {
@@ -1151,7 +1220,16 @@ impl Problem<'_> {
 
     /// The cost of `set`, where every use has a fit in it.
     fn total(&self, set: &BTreeSet<usize>) -> Option<i64> {
-        self.total_of(set, false)
+        #[cfg(test)]
+        TOTALS.with(|counts| counts.set((counts.get().0 + 1, counts.get().1)));
+        if let Some(&known) = self.totals.borrow().get(set) {
+            return known;
+        }
+        #[cfg(test)]
+        TOTALS.with(|counts| counts.set((counts.get().0, counts.get().1 + 1)));
+        let total = self.total_of(set, false);
+        self.totals.borrow_mut().insert(set.clone(), total);
+        total
     }
 
     /// What site `index` costs from a counter of `set` that is already
@@ -1347,17 +1425,23 @@ impl Problem<'_> {
     /// `set` improved by adding, removing or swapping one candidate while
     /// any lowers the cost.
     fn improved(&self, mut set: BTreeSet<usize>) -> Option<BTreeSet<usize>> {
+        let bounds = self.target.bounds;
+        // Past `iv-consider-all-candidates-bound`, where gcc stops considering every candidate for every use; below it the search
+        // is whole: measured on the bench, replacing once and not beyond ten uses costs 6% of crc's instructions.
+        let bounded = self.candidates.len() > bounds.all_candidates;
         // Cheaper first, then fewer counters: a tie goes to fewer registers.
         let rank = |set: &BTreeSet<usize>| self.total(set).map(|total| (total, set.len()));
         let mut current = rank(&set).unwrap_or((i64::MAX, usize::MAX));
+        // gcc replaces a candidate (`iv_ca_replace`) once, where no one added or removed lowers the cost.
+        let mut replace = true;
         loop {
             let mut best: Option<((i64, usize), BTreeSet<usize>)> = None;
-            let mut consider = |with: BTreeSet<usize>| {
+            let consider = |best: &mut Option<((i64, usize), BTreeSet<usize>)>, with: BTreeSet<usize>| {
                 if let Some(ranked) = rank(&with)
                     && ranked < current
                     && best.as_ref().is_none_or(|(least, one)| ranked < *least || (ranked == *least && with < *one))
                 {
-                    best = Some((ranked, with));
+                    *best = Some((ranked, with));
                 }
             };
             for one in 0..self.candidates.len() {
@@ -1365,14 +1449,22 @@ impl Problem<'_> {
                 if !with.insert(one) {
                     with.remove(&one);
                 }
-                consider(with);
+                consider(&mut best, with);
             }
-            for &out in &set {
-                for into in (0..self.candidates.len()).filter(|one| !set.contains(one)) {
-                    let mut with = set.clone();
-                    with.remove(&out);
-                    with.insert(into);
-                    consider(with);
+            if !bounded || (replace && best.is_none()) {
+                replace = false;
+                let serving = if bounded { self.serving(&set) } else { Vec::new() };
+                for &out in &set {
+                    // A candidate of one use is another's to prune; one of many is too costly to place again.
+                    if bounded && (serving[out] == 1 || serving[out] > bounds.always_prune) {
+                        continue;
+                    }
+                    for into in (0..self.candidates.len()).filter(|one| !set.contains(one)) {
+                        let mut with = set.clone();
+                        with.remove(&out);
+                        with.insert(into);
+                        consider(&mut best, with);
+                    }
                 }
             }
             let Some((ranked, with)) = best else { break };
@@ -1380,6 +1472,18 @@ impl Problem<'_> {
             set = with;
         }
         (current.0 != i64::MAX).then_some(set)
+    }
+
+    /// How many sites each candidate serves in `set`: gcc's `n_cand_uses`.
+    fn serving(&self, set: &BTreeSet<usize>) -> Vec<usize> {
+        let mut served = vec![0; self.candidates.len()];
+        for index in 0..self.sites.len() {
+            match self.choice(set, index) {
+                Some((Some((one, ..)), _)) | Some((None, Some((one, _)))) => served[one] += 1,
+                _ => {}
+            }
+        }
+        served
     }
 }
 

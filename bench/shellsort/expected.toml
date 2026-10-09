@@ -1,10 +1,10 @@
-reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
-blessed = "2026-10-08"
+reason = "guards prove more (a phi tested on every edge into its block): shellsort nib loses a bounds check (-1.0% instructions) and the CFG it leaves loads values[at - gap] twice (4 loads in the pipeline MIR, 3 before): memory operands +17%"
+blessed = "2026-10-09"
 
 [bas.O2]
 instructions = 10449
 memory_operands = 2001
-code_bytes = 348
+code_bytes = 342
 data_bytes = 17
 bss_bytes = 0
 kernel_ms = 0.1557
@@ -20,7 +20,7 @@ kernel_ms = 0.1604
 [c.O2]
 instructions = 9036
 memory_operands = 1629
-code_bytes = 165
+code_bytes = 159
 data_bytes = 0
 bss_bytes = 0
 
@@ -32,16 +32,16 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 11369
-memory_operands = 1661
-code_bytes = 214
+instructions = 11258
+memory_operands = 1939
+code_bytes = 205
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 11793
-memory_operands = 1757
-code_bytes = 199
+instructions = 11682
+memory_operands = 2035
+code_bytes = 196
 data_bytes = 0
 bss_bytes = 0
 

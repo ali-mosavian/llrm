@@ -157,6 +157,11 @@ pub struct LiveRows {
 }
 
 impl LiveRows {
+    /// How many values the rows number.
+    pub fn numbered(&self) -> usize {
+        self.numbered.len()
+    }
+
     /// The values live at the entry of the block at `at`, in order.
     pub fn entering(&self, at: i64) -> impl Iterator<Item = u32> + '_ {
         self.values(&self.into, self.position[&at])
@@ -182,6 +187,112 @@ impl LiveRows {
     fn sets(&self, rows: &[u64]) -> Live {
         self.blocks.iter().enumerate().map(|(at, block)| (*block, self.values(rows, at).collect())).collect()
     }
+}
+
+/// How many times this body's facts have walked every instruction for liveness rows (`live_rows_by`), for a test that a web of a few
+/// values does not.
+pub fn live_rows_walks(body: &LirBody) -> usize {
+    body.facts.0.counted("live-rows-walks")
+}
+
+/// What is live at each block's entry and exit for a few values, found from where they occur: a value is live into a block that reads it
+/// before writing it and out of a block a successor has it live into, up the predecessors until one writes it. The rows of `values`
+/// as `live_rows_by` finds them in a body with no phis, at the cost of the occurrences and the blocks each is live in, not of every
+/// instruction of the body.
+pub struct WebRows {
+    graph: Arc<crate::analysis::graph::Graph>,
+    into: Vec<Vec<u32>>,
+    out: Vec<Vec<u32>>,
+    numbered: usize,
+}
+
+impl LiveAt for WebRows {
+    fn live_in(&self, block: i64, value: u32) -> bool {
+        self.graph.position.get(&block).is_some_and(|at| self.into[*at].binary_search(&value).is_ok())
+    }
+
+    fn live_out(&self, block: i64, value: u32) -> bool {
+        self.graph.position.get(&block).is_some_and(|at| self.out[*at].binary_search(&value).is_ok())
+    }
+}
+
+impl WebRows {
+    pub fn numbered(&self) -> usize {
+        self.numbered
+    }
+
+    pub fn entering(&self, at: i64) -> impl Iterator<Item = u32> + '_ {
+        self.into[self.graph.position[&at]].iter().copied()
+    }
+
+    pub fn leaving(&self, at: i64) -> impl Iterator<Item = u32> + '_ {
+        self.out[self.graph.position[&at]].iter().copied()
+    }
+}
+
+/// `WebRows` of `values` (ascending); `places[value]` are the instructions that name it, by block then position, once each, and
+/// whether each defines and reads it.
+pub fn live_rows_among(body: &LirBody, values: &[u32], places: &IndexMap<u32, Vec<ranges::Occurrence>>) -> WebRows {
+    let count = body.blocks.len();
+    let graph = crate::analysis::graph::Graph::of(body);
+    let predecessors = &graph.parents;
+    let (mut in_mark, mut out_mark, mut written_mark, mut run_mark) = (vec![0u32; count], vec![0u32; count], vec![0u32; count], vec![0u32; count]);
+    // The first run of a block that names the value, as (defined, read): a read decides, a write beside it too.
+    let mut first_run: Vec<(usize, bool, bool)> = vec![(0, false, false); count];
+    let mut into: Vec<Vec<u32>> = vec![Vec::new(); count];
+    let mut out: Vec<Vec<u32>> = vec![Vec::new(); count];
+    let mut turn = 0u32;
+    let mut numbered = 0;
+    for &value in values {
+        let Some(found) = places.get(&value).filter(|found| !found.is_empty()) else { continue };
+        numbered += 1;
+        turn += 1;
+        let mut reached: Vec<usize> = Vec::new();
+        let mut work: Vec<usize> = Vec::new();
+        for &((block_index, at), defined, used) in found {
+            let end = ranges::_group_end(&body.blocks[block_index], at);
+            if run_mark[block_index] != turn {
+                run_mark[block_index] = turn;
+                first_run[block_index] = (end, defined, used);
+                reached.push(block_index);
+            } else if first_run[block_index].0 == end {
+                first_run[block_index].1 |= defined;
+                first_run[block_index].2 |= used;
+            }
+            if defined {
+                written_mark[block_index] = turn;
+            }
+        }
+        for &block_index in &reached {
+            if first_run[block_index].2 {
+                in_mark[block_index] = turn;
+                work.push(block_index);
+            }
+        }
+        let mut live_out: Vec<usize> = Vec::new();
+        while let Some(block_index) = work.pop() {
+            for &before in &predecessors[block_index] {
+                if out_mark[before] != turn {
+                    out_mark[before] = turn;
+                    live_out.push(before);
+                    if written_mark[before] != turn && in_mark[before] != turn {
+                        in_mark[before] = turn;
+                        reached.push(before);
+                        work.push(before);
+                    }
+                }
+            }
+        }
+        for &block_index in &reached {
+            if in_mark[block_index] == turn {
+                into[block_index].push(value);
+            }
+        }
+        for &block_index in &live_out {
+            out[block_index].push(value);
+        }
+    }
+    WebRows { graph, into, out, numbered }
 }
 
 /// Whether a value is live at the entry or exit of a block: what a caller that asks of one value at a time reads,
@@ -219,6 +330,7 @@ pub fn live_rows(body: &LirBody) -> LiveRows {
 /// `live_rows` of the values `keep` says only: each is live where it is as in the whole, the others are
 /// not numbered, so a caller that asks of a few values pays for rows of those.
 pub fn live_rows_by(body: &LirBody, keep: impl Fn(u32) -> bool) -> LiveRows {
+    body.facts.0.bump("live-rows-walks");
     // Every value the body names, numbered by order. Ids can be far apart, so the number of a value
     // is found by a table over the ids where they are dense enough, else by search.
     let mut numbered: Vec<u32> = Vec::new();
@@ -819,7 +931,7 @@ impl Facts {
         let confined = llrm_support::debug::timed("facts classes", || {
             let given = crate::backend::regclass::Found { live: &live, masks: &masks };
             let found = crate::backend::regclass::classes_given(body, protected, segments, registers, &given);
-            if std::env::var_os("LLRM_CHECK_CLASSES").is_some() {
+            if llrm_support::env_set("LLRM_CHECK_CLASSES") {
                 assert!(found.iter().eq(classes(body, protected, segments, registers).iter()), "{}: classes from the given intervals differ from working them out", body.name);
             }
             found
@@ -833,7 +945,7 @@ impl Facts {
 /// to a point that destroys it, or leave their class: the later of each pair.
 fn _overlapping(union: &LiveUnion, r#where: &IndexMap<u32, Register>, facts: &Facts) -> BTreeSet<u32> {
     let found = _overlapping_by_start(union, r#where, facts);
-    if std::env::var_os("LLRM_CHECK_OVERLAPPING").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_OVERLAPPING") {
         assert!(found == _overlapping_reference(union, r#where, facts), "values sharing a register found by start differ from the pairwise look");
     }
     found
@@ -899,6 +1011,8 @@ fn _allocated(
     let empty = BTreeSet::new();
     let protected = protected.unwrap_or(&empty);
     let mut unspillable: BTreeSet<u32> = unspillable.cloned().unwrap_or_default();
+    // The values merging updates made: spilled in their turn they are not merged again, which would make the value spilled again, without end.
+    let mut plain: BTreeSet<u32> = BTreeSet::new();
     let mut facts = Facts::of(&body, profile, segments, classes, &unspillable, protected, &Frequency::of(&body));
     if let Some(why) = unallocatable(&facts, pinned.unwrap_or(&IndexMap::default()), &unspillable, segments, classes) {
         return Err(Unplaced(why).into());
@@ -908,6 +1022,7 @@ fn _allocated(
     let mut fixed: IndexMap<u32, Register> = pinned.cloned().unwrap_or_default();
     // Values a split made or left behind, never split again: LLVM's `RS_Split2` and `RS_Spill`.
     let mut pieces: BTreeSet<u32> = BTreeSet::new();
+    let mut splits_made = 0_usize;
     let mut placing: Option<(spillplacement::Bundles, LiveRows)> = None;
     let no_preference = IndexMap::default();
     let preferred = preferred.unwrap_or(&no_preference);
@@ -920,16 +1035,18 @@ fn _allocated(
     let mut cascades: IndexMap<u32, i64> = IndexMap::default();
     let mut newest = 1;
 
-    let queued = |value: u32, live: &IndexMap<u32, Interval>, stage: &IndexMap<u32, Stage>, fixed: &IndexMap<u32, Register>| {
+    let wide = classes.available.len();
+    let queued = |value: u32, live: &IndexMap<u32, Interval>, stage: &IndexMap<u32, Stage>, fixed: &IndexMap<u32, Register>, confined: &Classes| {
+        // A value that only some registers can hold goes first, as LLVM's register class priority puts it: the wide ones fit around it.
         Reverse(Queued(
             !fixed.contains_key(&value),
-            -_priority(live.get(&value), stage.get(&value).copied().unwrap_or(Stage::Assign)),
+            -_queue_priority(live.get(&value), stage.get(&value).copied().unwrap_or(Stage::Assign), confined.get(&value).map(BTreeSet::len), wide),
             value,
         ))
     };
 
     let mut queue: BinaryHeap<Reverse<Queued>> =
-        _values(&body).into_iter().map(|one| queued(one, &facts.live, &stage, &fixed)).collect();
+        _values(&body).into_iter().map(|one| queued(one, &facts.live, &stage, &fixed, &facts.confined)).collect();
     // How many entries each value has in the queue.
     let mut waiting: IndexMap<u32, usize> = IndexMap::default();
     for Reverse(Queued(_, _, one)) in &queue {
@@ -1039,7 +1156,7 @@ fn _allocated(
                     r#where.shift_remove(&one);
                     cascades.insert(one, cascades[&value]);
                     stage.insert(one, Stage::Assign);
-                    queue.push(queued(one, &facts.live, &stage, &fixed));
+                    queue.push(queued(one, &facts.live, &stage, &fixed, &facts.confined));
                     *waiting.entry(one).or_insert(0) += 1;
                 }
                 r#where.insert(value, got);
@@ -1049,7 +1166,7 @@ fn _allocated(
             }
             if at == Stage::Assign {
                 stage.insert(value, Stage::Split);
-                queue.push(queued(value, &facts.live, &stage, &fixed));
+                queue.push(queued(value, &facts.live, &stage, &fixed, &facts.confined));
                 *waiting.entry(value).or_insert(0) += 1;
                 continue;
             }
@@ -1104,8 +1221,8 @@ fn _allocated(
                 // live blocks strictly shrink, so splitting ends.
                 drop(_carving);
                 // Only the pieces made are asked of.
-                let after = llrm_support::debug::timed("split after liveness", || live_rows_by(&cut, |one| made.contains(&one)));
-                pieces.extend(made.iter().copied().filter(|one| splitkit::live_blocks(&cut, *one, &after) >= spread));
+                let after = llrm_support::debug::timed("split after liveness", || crate::analysis::occurrences::live_among(&cut, &made.iter().copied().collect()));
+                pieces.extend(made.iter().copied().filter(|one| splitkit::live_blocks(&cut, *one, &*after) >= spread));
                 pieces.insert(value);
                 body = cut;
                 for one in &made {
@@ -1114,6 +1231,7 @@ fn _allocated(
                 // The rest may only take a free register or spill.
                 stage.insert(value, Stage::Spill);
                 made.push(value);
+                splits_made += 1;
                 rewritten = Some(made);
             }
         }
@@ -1161,7 +1279,7 @@ fn _allocated(
                     union.remove(_whole(got), one, &facts.live);
                     r#where.shift_remove(&one);
                     stage.insert(one, Stage::Spill);
-                    queue.push(queued(one, &facts.live, &stage, &fixed));
+                    queue.push(queued(one, &facts.live, &stage, &fixed, &facts.confined));
                     *waiting.entry(one).or_insert(0) += 1;
                 }
                 r#where.insert(value, got);
@@ -1191,7 +1309,8 @@ fn _allocated(
                             union.remove(_whole(register), *one, &facts.live);
                         }
                     }
-                    let (spilt, mut made) = spiller::spilled_from(&body, &chosen, Some(frame), floor, classes)?;
+                    let (spilt, mut made, merged) = spiller::spilled_apart(&body, &chosen, frame, floor, classes, &plain)?;
+                    plain.extend(merged.iter().copied());
                     body = spilt;
                     // A value the spiller keeps (a load from its own home
                     // cell) is now as short as a reload, and is placed as one.
@@ -1206,7 +1325,7 @@ fn _allocated(
                     }
                     made.extend(kept);
                     unspillable.extend(made.iter().copied());
-                    rewritten = Some(made.into_iter().collect());
+                    rewritten = Some(made.into_iter().chain(merged).collect());
                 }
             }
         }
@@ -1239,7 +1358,7 @@ fn _allocated(
         llrm_support::debug::timed("after queue", || {
             for one in facts.live.keys().copied().filter(|one| !r#where.contains_key(one) && !spilled.contains(one)) {
                 if changed.contains(&one) || waiting.get(&one).copied().unwrap_or(0) == 0 {
-                    queue.push(queued(one, &facts.live, &stage, &fixed));
+                    queue.push(queued(one, &facts.live, &stage, &fixed, &facts.confined));
                     *waiting.entry(one).or_insert(0) += 1;
                 }
             }
@@ -1261,7 +1380,23 @@ fn _allocated(
     _recolored_hints(&mut r#where, &mut union, &settled, |value| {
         fixed.contains_key(&value) || protected.contains(&value) || preferred.contains_key(&value)
     });
+    LAST_STATS.with(|stats| stats.set((splits_made, pieces.len(), pieces.intersection(&spilled).count(), spilled.len())));
     Ok((Assignment { r#where, spilled: if rewrite.is_some() { BTreeSet::new() } else { spilled.clone() }, cost, optimal: false, why: "greedy with eviction".to_owned() }, body, spilled))
+}
+
+thread_local! {
+    /// How many splits the base allocation of the last body that had one made.
+    static BASE_SPLITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many splits the base allocation of the last body this thread allocated made, for a test.
+pub fn base_splits() -> usize {
+    BASE_SPLITS.with(std::cell::Cell::get)
+}
+
+thread_local! {
+    /// The last allocation's (splits made, pieces, pieces spilled, values spilled), for the trial log.
+    static LAST_STATS: std::cell::Cell<(usize, usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0, 0)) };
 }
 
 /// What recoloring reads of a finished assignment.
@@ -1337,6 +1472,13 @@ fn _values(body: &LirBody) -> Vec<u32> {
         }
     }
     out.into_iter().collect()
+}
+
+/// Where a range sits in the queue: first by how few registers may hold it (LLVM's register class `AllocationPriority`, which
+/// `RegClassPriorityTrumpsGlobalness` puts before anything else), then `_priority`. The wide values fit around the narrow ones.
+fn _queue_priority(one: Option<&Interval>, at: Stage, class: Option<usize>, wide: usize) -> f64 {
+    let narrow = class.map_or(0, |registers| wide.saturating_sub(registers));
+    _priority(one, at) + narrow as f64 * 1e9
 }
 
 /// Where this range sits in the queue. Larger first, as LLVM does.
@@ -1490,7 +1632,7 @@ pub fn _clobbered(one: &Interval, register: Register, masks: &Masks, width: u32)
 
 fn check_clobbered() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_CLOBBERED").is_some())
+    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_CLOBBERED"))
 }
 
 /// `_clobbered`, from where each register is destroyed: a segment meets a point where the point is after its
@@ -1627,6 +1769,15 @@ fn _forced(
 }
 
 thread_local! {
+    static TRIALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many allocations this thread has made to try another shape of a body than the one it was given.
+pub fn trials() -> usize {
+    TRIALS.with(std::cell::Cell::get)
+}
+
+thread_local! {
     static LAST_RESORTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -1657,8 +1808,10 @@ impl Coloring<'_> {
     /// LLVM's `lcr-max-depth` and `lcr-max-interf`.
     pub const DEPTH: usize = 5;
     pub const INTERFERENCES: usize = 8;
-    /// Registers tried per recoloring session.
-    pub const BUDGET: usize = 2000;
+    /// Registers tried per recoloring session. A search that fails tries every register at every level, so it grows with the
+    /// class (x_ll_arith: 7 registers instead of 6 took 8 of 25 sessions to the old 2000, 3x the time). Of 19.6k sessions on
+    /// QCport and the 66 programs, 178 succeed and 176 of those within 256 tries.
+    pub const BUDGET: usize = 256;
 
     fn take(&mut self, value: u32, register: Register) {
         self.r#where.insert(value, register);
@@ -1910,44 +2063,58 @@ impl RegAlloc {
         let mut best = run("regalloc base", &body, &reloads, &BTreeSet::new(), true)?;
         llrm_support::debug!("regalloc", "{}: {} insns, {} spilled, cost {}, {} forced", body.name, best.out.insns().len(), best.spilled.len(), best.cost, best.forced);
         let spilled = best.spilled.clone();
-        if !spilled.is_empty() {
+        let base_stats = LAST_STATS.with(std::cell::Cell::get);
+        BASE_SPLITS.with(|splits| splits.set(base_stats.0));
+        if !spilled.is_empty() && cpu.search {
             // Other shapes of the same body, which the base allocation's spills
             // suggest: each is kept only if its output is cheaper.
             let building = llrm_support::debug::span("regalloc candidates");
-            let mut candidates: Vec<(LirBody, BTreeSet<u32>, BTreeSet<u32>, BTreeSet<u32>)> = Vec::new();
+            let mut candidates: Vec<(Shape, LirBody, BTreeSet<u32>, BTreeSet<u32>, BTreeSet<u32>)> = Vec::new();
             let (separated, opened) = constrain::addressed(&body, &spilled);
             if !opened.is_empty() {
-                candidates.push((separated, reloads.clone(), BTreeSet::new(), opened));
+                candidates.push((Shape::Addressed, separated, reloads.clone(), BTreeSet::new(), opened));
             }
             let (unfolded, opened) = spiller::unfolded_indexes(&body, &spilled);
             if !opened.is_empty() {
-                candidates.push((unfolded, reloads.clone(), BTreeSet::new(), BTreeSet::new()));
+                candidates.push((Shape::Unfolded, unfolded, reloads.clone(), BTreeSet::new(), BTreeSet::new()));
             }
             let (scoped, keep) = splitkit::loop_bases(&body, &spilled);
             if !keep.is_empty() {
                 let folded = _scoped_foldable_indexes(&scoped, &keep);
                 let (opened_body, opened) = spiller::unfolded_indexes(&scoped, &folded);
                 if !opened.is_empty() {
-                    candidates.push((opened_body, reloads.clone(), keep.clone(), keep.clone()));
+                    candidates.push((Shape::ScopedOpened, opened_body, reloads.clone(), keep.clone(), keep.clone()));
                 }
-                candidates.push((scoped, reloads.clone(), keep.clone(), keep.clone()));
+                candidates.push((Shape::Scoped, scoped, reloads.clone(), keep.clone(), keep.clone()));
             }
             for candidate in _retainable_bases(&body, &spilled) {
                 let keep = BTreeSet::from([candidate]);
-                candidates.push((body.clone(), reloads.clone(), keep.clone(), keep));
+                candidates.push((Shape::Retainable, body.clone(), reloads.clone(), keep.clone(), keep));
             }
             // Splitting is priced one value at a time, against registers its
             // pieces may later lose; the whole output without it is the check.
             let whole = candidates.len();
-            candidates.push((body.clone(), reloads.clone(), BTreeSet::new(), BTreeSet::new()));
+            candidates.push((Shape::Whole, body.clone(), reloads.clone(), BTreeSet::new(), BTreeSet::new()));
             drop(building);
-            for (at, (candidate, unspillable, protected, kept)) in candidates.into_iter().enumerate() {
+            // Unless the search is exhaustive (-Omax): the first shape of `Shape::PICKED` the spills admit, and the body without
+            // splitting, which no spill suggests. Across 4045 allocations of QCport, the bench and the 66 programs this is the
+            // exhaustive search's output on every bench row, +0.04% on QCport's bytes, at 2 allocations instead of up to 12.
+            let picked = if cpu.exhaustive { None } else { Shape::PICKED.iter().find_map(|want| candidates.iter().position(|one| one.0 == *want)) };
+            for (at, (shape, candidate, unspillable, protected, kept)) in candidates.into_iter().enumerate() {
                 for splitting in [true, false] {
+                    if !cpu.exhaustive && !(shape == Shape::Whole && !splitting) && !(Some(at) == picked && splitting != (shape == Shape::Whole)) {
+                        continue;
+                    }
+                    // The base allocation split nothing, so allocating without splitting is that allocation again.
+                    if shape == Shape::Whole && !splitting && base_stats.0 == 0 {
+                        continue;
+                    }
                     // The base run was this body with splitting.
                     if at == whole && splitting {
                         continue;
                     }
                     frame.borrow_mut().restore(&start);
+                    TRIALS.with(|count| count.set(count.get() + 1));
                     let trial = match run("regalloc trial", &candidate, &unspillable, &protected, splitting) {
                         Ok(trial) => trial,
                         Err(other) => return Err(other),
@@ -1964,6 +2131,28 @@ impl RegAlloc {
         let _apply = llrm_support::debug::span("regalloc apply");
         applied(&best.out, &best.got, &self.classes).map(|placed| datagroup::restored(&placed, data_free, &segments))
     }
+}
+
+/// The other shapes of a body the allocator may try after the first allocation, by what they change.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    /// Address computations of spilled values made apart from their users.
+    Addressed,
+    /// Folded indexes of spilled values opened.
+    Unfolded,
+    /// Loop-local copies of the base values a loop's spills lost, protected from spilling.
+    Scoped,
+    /// `Scoped`, with the indexes it can fold opened.
+    ScopedOpened,
+    /// One spilled invariant base value protected from spilling.
+    Retainable,
+    /// The body as it was, for the no-splitting allocation.
+    Whole,
+}
+
+impl Shape {
+    /// The order a shape is picked in: the one that won most often, by mean and worst case, over every order tried on 4045 allocations.
+    const PICKED: [Shape; 4] = [Shape::Retainable, Shape::Scoped, Shape::Addressed, Shape::Unfolded];
 }
 
 /// One finished allocation: its output, what that costs, and the frame it left.
@@ -2255,7 +2444,7 @@ pub(crate) fn _fold_discount(one: &Insn, profile: &Profile) -> f64 {
 /// Discount reads by the target-specific saving from folding them.
 pub(crate) fn _fold_priced(body: &LirBody, live: IndexMap<u32, Interval>, profile: &Profile, busy: &Frequency) -> IndexMap<u32, Interval> {
     let discounts = FoldDiscounts::of(profile);
-    let check = std::env::var_os("LLRM_CHECK_FOLDS").is_some();
+    let check = llrm_support::env_set("LLRM_CHECK_FOLDS");
     let mut free: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
         let each = busy.block(block.at);
@@ -3048,6 +3237,19 @@ mod tests {
         assert!(message.contains("both required in"), "{message}");
     }
 
+    /// A base or index on m16 may be BX, SI, DI or BP; a value of any class fits in the rest. The queue took the longest range
+    /// first whatever its class, so a short base found its three registers taken by wide values that could have been elsewhere:
+    /// bench/quicksort +18% instructions against the search over shapes, which tried the base first (#944).
+    #[test]
+    fn test_a_value_few_registers_may_hold_goes_before_a_longer_one_any_may() {
+        let span = |end: i64| Interval::new(1, vec![Segment { start: 0, end }]);
+        let (short, long) = (span(4), span(400));
+        assert!(_queue_priority(Some(&short), Stage::Assign, Some(4), 6) > _queue_priority(Some(&long), Stage::Assign, Some(6), 6));
+        assert!(_queue_priority(Some(&short), Stage::Assign, None, 6) < _queue_priority(Some(&long), Stage::Assign, None, 6), "no class: longest first");
+        assert!(_queue_priority(Some(&long), Stage::Assign, Some(4), 6) > _queue_priority(Some(&short), Stage::Assign, Some(4), 6), "one class: longest first");
+        assert!(_queue_priority(Some(&short), Stage::Assign, Some(1), 6) > _queue_priority(Some(&short), Stage::Assign, Some(4), 6), "the fewer registers, the sooner");
+    }
+
     #[test]
     fn test_a_hard_register_assignment_is_not_an_eviction_victim() {
         let kept = Interval { weight: 0.1, ..Interval::new(1, vec![Segment { start: 0, end: 4 }]) };
@@ -3088,6 +3290,30 @@ mod tests {
         assert_eq!(placed.get(&3), Some(&Register::AX));
         assert_eq!(placed.get(&1), Some(&Register::BX));
         assert_eq!(placed.get(&2), Some(&Register::CX));
+    }
+
+    /// A failing recolor tries every register at every level: with a class one register larger it took 2000 tries, three times
+    /// the compile time of x_ll_arith, for a search that nearly never succeeds (3 of 366 sessions on the 66 programs).
+    #[test]
+    fn test_a_recolor_that_fails_over_a_full_class_stays_within_its_budget() {
+        let registers = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI, Register::EBP];
+        let live: IndexMap<u32, Interval> = (0..=registers.len() as u32).map(|value| (value, Interval { weight: 1.0, ..Interval::new(value, vec![Segment { start: 0, end: 10 }]) })).collect();
+        let choices = |_: u32| registers.to_vec();
+        let mut union = LiveUnion::of(registers.iter().enumerate().map(|(at, register)| (_whole(*register), vec![at as u32 + 1])), &live);
+        let mut placed: IndexMap<u32, Register> = registers.iter().enumerate().map(|(at, register)| (at as u32 + 1, *register)).collect();
+        let mut coloring = Coloring {
+            union: &mut union,
+            r#where: &mut placed,
+            live: &live,
+            masks: &Masks::default(),
+            order: &choices,
+            width: &|_| 4,
+            fenced: &BTreeSet::new(),
+            budget: Coloring::BUDGET,
+            stack: Vec::new(),
+        };
+        assert!(!coloring.recolor(0, 0, &mut BTreeSet::new()));
+        assert!(Coloring::BUDGET - coloring.budget <= 256, "{} tries", Coloring::BUDGET - coloring.budget);
     }
 
     /// A rewrite can leave a value's class narrower than the register it

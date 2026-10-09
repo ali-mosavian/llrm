@@ -60,6 +60,22 @@ impl FunctionPass for FloatLoop {
     }
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+        // With no float in the body no loop is a float loop. LLRM_CHECK_FLOATSKIP runs the pass anyway and says if it changed anything.
+        let none = !floatfacts::touches(unit.context, unit.function);
+        if none && !llrm_support::env_set("LLRM_CHECK_FLOATSKIP") {
+            return PreservedAnalyses::all();
+        }
+        let before = none.then(|| unit.function.clone());
+        let preserved = self.floated(unit, analyses);
+        if let Some(before) = before {
+            assert!(preserved.are_all_preserved() && llrm_mir::print::body(unit.context, unit.function) == llrm_mir::print::body(unit.context, &before), "LLRM_CHECK_FLOATSKIP: floatloop changed a body with no float in it");
+        }
+        preserved
+    }
+}
+
+impl FloatLoop {
+    fn floated(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let calls = manager::writes(unit.context, unit.layout, unit.function, analyses);
         let solved = analyses.get::<FloatFacts>(unit.context, unit.layout, unit.function);
         if specialized(unit.context, unit.layout, analyses.outer().callees(), unit.function, analyses.outer(), &calls, &solved) {

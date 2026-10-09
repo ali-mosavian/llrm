@@ -30,7 +30,7 @@ pub fn laid_again(first: &Machined, frame: &Frame, hole: i64) -> Option<(Machine
         for one in &block.insns {
             insns.push(moved.insn(one)?);
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(LirBlock { insns: insns.into(), ..block.clone() });
     }
     let mut body = first.body.with_blocks(blocks);
     body.homes = Arc::new(first.body.homes.iter().map(|(value, cell)| Some((*value, moved.mem(cell)?))).collect::<Option<std::collections::BTreeMap<_, _>>>()?);

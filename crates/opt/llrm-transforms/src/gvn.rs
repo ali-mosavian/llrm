@@ -160,14 +160,29 @@ fn propagated(unit: &mut Unit) -> bool {
     !found.is_empty()
 }
 
+thread_local! {
+    static NUMBERINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has numbered a function (once, or twice where a load could be served across a store), for a test
+/// that a function with no such load is numbered once.
+pub fn numberings() -> usize {
+    NUMBERINGS.with(std::cell::Cell::get)
+}
+
 /// Local numbering, crossing stores only where the whole function prices
 /// lower for it: a provider held across a store saves loads but may spill.
 /// Whether it changed anything, and whether `subexpressions` did.
 fn _numbered(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &OperationCosts, room: crate::spill::Room, trips: &IndexMap<i64, i64>, registers: &IndexMap<ValueId, llrm_analysis::consts::Known>, shape: &cfg::Shape) -> Result<(bool, bool), String> {
+    // The availability of the function as it comes in: the same for both runs below, each of which changes a copy.
+    let held = std::cell::OnceCell::new();
+    // Whether some load was served across a store: the one thing the second numbering does differently from the first.
+    let crossed = std::cell::Cell::new(false);
     let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, (bool, bool)), String> {
+        NUMBERINGS.with(|runs| runs.set(runs.get() + 1));
         let mut function = function.clone();
-        let forwarded = transform::forwarded(unit.context, unit.layout, &mut function, outer, accesses, registers, shape, avoid_store_crossing)?;
-        let subexpressed = transform::subexpressions(&mut function, accesses, avoid_store_crossing, Some(outer.program()))?;
+        let forwarded = transform::forwarded(unit.context, unit.layout, &mut function, outer, accesses, registers, shape, avoid_store_crossing, &held, &crossed)?;
+        let subexpressed = transform::subexpressions(&mut function, accesses, avoid_store_crossing, Some(outer.program()), &crossed)?;
         Ok((function, (forwarded || subexpressed, subexpressed)))
     };
     let crossing = numbered(unit.function, false)?;
@@ -175,7 +190,8 @@ fn _numbered(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &Operat
         let frequency = profit::_frequencies(unit.context, unit.metadata, &outer.globals, one, Some(trips))?;
         profit::motion_price(unit.context, unit.layout, outer, one, costs, room, &frequency)
     };
-    let chosen = if !room.priced() {
+    // Where no load crossed a store, the second numbering is the first: it is neither made nor priced.
+    let chosen = if !room.priced() || !crossed.get() {
         crossing
     } else if let Some(crossed) = price(&crossing.0) {
         let careful = numbered(unit.function, true)?;

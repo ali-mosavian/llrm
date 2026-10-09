@@ -151,9 +151,172 @@ impl PartialOrd for MemoryObject {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Structural comparisons of objects, for the test that sets of slices make none.
+    pub static OBJECT_COMPARES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl Ord for MemoryObject {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        #[cfg(test)]
+        OBJECT_COMPARES.with(|count| count.set(count.get() + 1));
         self.key().cmp(&other.key())
+    }
+}
+
+/// A `MemoryObject` as its module's interner numbered it: a small id compared, hashed and ordered as an integer, with the
+/// fields the passes ask of every slice beside it, so a slice is `Copy` and asking costs nothing. The rest (the identity, the
+/// generation) is `ObjectInterner::object`. Interned by every field, the facts too, so two spellings that differ in a fact are
+/// two objects here and a set keeps both (none was seen to differ in 1,700 programs and QCport). The order is the order of
+/// first interning in the module, which the same module always makes the same way; nothing may depend on it being
+/// `MemoryObject`'s.
+#[derive(Clone, Copy, Debug)]
+pub struct ObjectRef {
+    id: u32,
+    pub kind: MemoryKind,
+    pub addressed: bool,
+    pub captured: bool,
+    pub constant: bool,
+    pub extent: Option<i64>,
+    /// The identity where it is a number, which is all the passes make: a name or a tuple (a test's, the linear region's) is
+    /// `Other`, and `ObjectInterner::object` has it whole.
+    pub key: Key,
+}
+
+/// `Identity`, small enough to be copied beside the id.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Key {
+    None,
+    Int(i64),
+    Global(u32),
+    Value(u32),
+    Other,
+}
+
+impl Key {
+    fn of(identity: &Option<Identity>) -> Self {
+        match identity {
+            None => Self::None,
+            Some(Identity::Int(number)) => Self::Int(*number),
+            Some(Identity::Global(number)) => Self::Global(*number),
+            Some(Identity::Value(number)) => Self::Value(*number),
+            Some(Identity::Str(_) | Identity::Tuple(_)) => Self::Other,
+        }
+    }
+}
+
+impl ObjectRef {
+    /// Every interner starts with these three, so they are the same in all modules and in the statics.
+    pub const UNKNOWN: Self = Self { id: 0, kind: MemoryKind::Unknown, addressed: true, captured: true, constant: false, extent: None, key: Key::None };
+    /// Memory addressed linearly, which no program object occupies (`regions`).
+    pub const LINEAR: Self = Self { id: 2, kind: MemoryKind::Absolute, addressed: true, captured: true, constant: false, extent: None, key: Key::Other };
+    pub const NONLOCAL: Self = Self { id: 1, kind: MemoryKind::Nonlocal, addressed: true, captured: true, constant: false, extent: None, key: Key::None };
+
+    /// The number this object was given: the order it was first interned in.
+    pub fn id(self) -> u32 {
+        self.id
+    }
+}
+
+impl PartialEq for ObjectRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for ObjectRef {}
+
+impl std::hash::Hash for ObjectRef {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+impl PartialOrd for ObjectRef {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ObjectRef {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.id.cmp(&other.id)
+    }
+}
+
+struct Exact(MemoryObject);
+
+impl PartialEq for Exact {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0 && self.0.addressed == other.0.addressed && self.0.captured == other.0.captured && self.0.constant == other.0.constant
+    }
+}
+
+impl Eq for Exact {}
+
+impl std::hash::Hash for Exact {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+        (self.0.addressed, self.0.captured, self.0.constant).hash(state);
+    }
+}
+
+/// A module's memory objects, numbered densely in the order they are first asked for. It lives in the module's `Context`
+/// (`ObjectInterner::of`) and is dropped with it, as LLVMContext's uniqued constants are.
+pub struct ObjectInterner {
+    held: std::cell::RefCell<(Vec<MemoryObject>, llrm_support::hash::HashMap<Exact, u32>)>,
+}
+
+impl Default for ObjectInterner {
+    fn default() -> Self {
+        let interner = Self { held: Default::default() };
+        assert_eq!(interner.intern(MemoryObject::new(MemoryKind::Unknown)), ObjectRef::UNKNOWN);
+        assert_eq!(interner.intern(MemoryObject::new(MemoryKind::Nonlocal)), ObjectRef::NONLOCAL);
+        assert_eq!(interner.intern(MemoryObject { identity: Some(Identity::Str("linear".to_owned())), ..MemoryObject::new(MemoryKind::Absolute) }), ObjectRef::LINEAR);
+        interner
+    }
+}
+
+impl ObjectInterner {
+    /// The interner of `context`'s module.
+    pub fn of(context: &Context) -> std::rc::Rc<Self> {
+        context.extension::<Self>()
+    }
+
+    pub fn intern(&self, object: MemoryObject) -> ObjectRef {
+        let mut held = self.held.borrow_mut();
+        let (objects, ids) = &mut *held;
+        let key = Exact(object);
+        let id = match ids.get(&key) {
+            Some(&id) => id,
+            None => {
+                let id = objects.len() as u32;
+                objects.push(key.0.clone());
+                ids.insert(key, id);
+                id
+            }
+        };
+        let one = &objects[id as usize];
+        ObjectRef { id, kind: one.kind, addressed: one.addressed, captured: one.captured, constant: one.constant, extent: one.extent, key: Key::of(&one.identity) }
+    }
+
+    /// The object `one` stands for.
+    pub fn object(&self, one: ObjectRef) -> MemoryObject {
+        self.held.borrow().0[one.id as usize].clone()
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The interner `ObjectRef::from` uses in tests that have no module.
+    static TEST_OBJECTS: ObjectInterner = ObjectInterner::default();
+}
+
+#[cfg(test)]
+impl From<MemoryObject> for ObjectRef {
+    fn from(object: MemoryObject) -> Self {
+        TEST_OBJECTS.with(|interner| interner.intern(object))
     }
 }
 
@@ -161,9 +324,9 @@ pub const WHOLE_LOW: i64 = -(1_i64 << 31);
 pub const WHOLE_HIGH: i64 = 1_i64 << 31;
 
 /// Python `qbopt.model.memory:Slice`.
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Slice {
-    pub object: MemoryObject,
+    pub object: ObjectRef,
     pub low: i64,
     pub high: i64,
     pub stride: i64,
@@ -191,7 +354,8 @@ impl fmt::Display for SliceError {
 impl std::error::Error for SliceError {}
 
 impl Slice {
-    pub fn new(object: MemoryObject, low: i64, high: i64, stride: i64, width: i64) -> Result<Self, SliceError> {
+    pub fn new(object: impl Into<ObjectRef>, low: i64, high: i64, stride: i64, width: i64) -> Result<Self, SliceError> {
+        let object = object.into();
         if high <= low {
             return Err(SliceError::Empty);
         }
@@ -204,13 +368,14 @@ impl Slice {
         Ok(Self { object, low, high, stride, width })
     }
 
-    pub fn whole(object: MemoryObject) -> Self {
+    pub fn whole(object: impl Into<ObjectRef>) -> Self {
         Self::new(object, WHOLE_LOW, WHOLE_HIGH, 1, 1).expect("the fixed whole-object slice is valid")
     }
 
     /// Every byte of `object`; none of a zero-byte one, which overlaps
     /// nothing, as in LLVM.
-    pub fn every_byte(object: MemoryObject) -> Option<Self> {
+    pub fn every_byte(object: impl Into<ObjectRef>) -> Option<Self> {
+        let object = object.into();
         match object.extent {
             Some(extent) => Self::new(object, 0, extent, 1, 1).ok(),
             None => Some(Self::whole(object)),
@@ -218,7 +383,7 @@ impl Slice {
     }
 
     pub fn shifted(&self, amount: i64) -> Self {
-        Self::new(self.object.clone(), self.low + amount, self.high + amount, self.stride, self.width)
+        Self::new(self.object, self.low + amount, self.high + amount, self.stride, self.width)
             .expect("shifting a valid slice retains its positive shape")
     }
 
@@ -285,12 +450,12 @@ pub struct Provenance {
 
 impl Provenance {
     /// `Provenance.one` with the whole-object bounds and no restrict roots.
-    pub fn one(object: MemoryObject) -> Self {
+    pub fn one(object: impl Into<ObjectRef>) -> Self {
         Self { slices: BTreeSet::from([Slice::whole(object)]), restrict: BTreeSet::new() }
     }
 
     pub fn one_with_slice(
-        object: MemoryObject,
+        object: impl Into<ObjectRef>,
         low: i64,
         high: i64,
         stride: i64,
@@ -344,18 +509,36 @@ thread_local! {
     pub static OBJECT_ALIASES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-pub fn alias_class(one: &MemoryObject) -> AliasClass {
-    AliasClass { addressed: one.addressed, kind: one.kind, captured: one.captured }
+/// What `objects_may_alias` asks of an object: a `MemoryObject` or its interned `ObjectRef`.
+pub trait Aliasable: PartialEq {
+    fn class(&self) -> AliasClass;
 }
 
-pub fn objects_may_alias(one: &MemoryObject, other: &MemoryObject) -> bool {
+impl Aliasable for MemoryObject {
+    fn class(&self) -> AliasClass {
+        AliasClass { addressed: self.addressed, kind: self.kind, captured: self.captured }
+    }
+}
+
+impl Aliasable for ObjectRef {
+    fn class(&self) -> AliasClass {
+        AliasClass { addressed: self.addressed, kind: self.kind, captured: self.captured }
+    }
+}
+
+pub fn alias_class(one: &impl Aliasable) -> AliasClass {
+    one.class()
+}
+
+pub fn objects_may_alias<T: Aliasable>(one: &T, other: &T) -> bool {
     #[cfg(test)]
     OBJECT_ALIASES.with(|asked| asked.set(asked.get() + 1));
     if one == other {
         return true;
     }
     // classes_may_alias's first rule, asked before building either class.
-    one.addressed && other.addressed && classes_may_alias(alias_class(one), alias_class(other))
+    let (one, other) = (one.class(), other.class());
+    one.addressed && other.addressed && classes_may_alias(one, other)
 }
 
 /// Whether two distinct objects of these classes may alias.
@@ -471,6 +654,10 @@ impl<'a> Unit<'a> {
         Self { shape: Some(shape), ..self }
     }
 
+    pub fn with_assumptions(self, assumptions: &'a Assumptions) -> Self {
+        Self { assumptions: Some(assumptions), ..self }
+    }
+
     pub fn with_bounds(self, bounds: &'a crate::ranges::Bounds) -> Self {
         Self { bounds: Some(bounds), ..self }
     }
@@ -513,7 +700,7 @@ impl<'a> Unit<'a> {
     pub fn registers(&self) -> Cow<'a, IndexMap<ValueId, Known>> {
         match self.registers {
             Some(registers) => {
-                if std::env::var_os("LLRM_CHECK_FACTS").is_some() {
+                if llrm_support::env_set("LLRM_CHECK_FACTS") {
                     let fresh = crate::consts::known(&Unit { registers: None, ..*self }, None, None, None);
                     assert!(*registers == fresh, "the registers a unit carries are not those of the body it stands over: stale");
                 }
@@ -544,7 +731,7 @@ impl<'a> Unit<'a> {
     pub fn shape(&self) -> Cow<'a, Shape> {
         match self.shape {
             Some(shape) => {
-                if std::env::var_os("LLRM_CHECK_SHAPE").is_some() {
+                if llrm_support::env_set("LLRM_CHECK_SHAPE") {
                     assert!(*shape == Shape::of(self.function), "the shape a unit carries is not that of the body it stands over: stale");
                 }
                 Cow::Borrowed(shape)
@@ -606,33 +793,50 @@ pub fn is_lifetime_marker(unit: &Unit, inst: InstId) -> bool {
     matches!(unit.intrinsic(inst), Some(llrm_mir::intrinsics::Intrinsic::LifetimeStart | llrm_mir::intrinsics::Intrinsic::LifetimeEnd))
 }
 
+/// What is known of each value without memory (`consts::known`).
+pub type Knowns = llrm_support::hash::SparseIdMap<ValueId, Known>;
+
 /// What is known of a body without memory (`consts::known`), for a caller that changes the body as it goes: the
 /// manager's where the body is as the manager saw it, derived again, once for each state, once it is not. The one
 /// place a unit's registers are derived outside the manager.
 pub struct Standing<'h> {
-    held: Option<&'h IndexMap<ValueId, Known>>,
-    derived: Option<IndexMap<ValueId, Known>>,
+    held: Option<&'h Knowns>,
+    /// What the counted loops bound, held for the same body as `held`, where the caller has it.
+    bounds: Option<&'h crate::ranges::Bounds>,
+    derived: Option<Knowns>,
 }
 
 impl<'h> Standing<'h> {
     /// The body is as `registers` were found of it.
-    pub fn held(registers: &'h IndexMap<ValueId, Known>) -> Self {
-        Self { held: Some(registers), derived: None }
+    pub fn held(registers: &'h Knowns) -> Self {
+        Self { held: Some(registers), bounds: None, derived: None }
+    }
+
+    /// `held`, and the bounds the manager found of the same body.
+    pub fn held_with(registers: &'h Knowns, bounds: &'h crate::ranges::Bounds) -> Self {
+        Self { held: Some(registers), bounds: Some(bounds), derived: None }
     }
 
     /// No one has found them: derived when first asked.
     pub fn underived() -> Self {
-        Self { held: None, derived: None }
+        Self { held: None, bounds: None, derived: None }
     }
 
     /// The body changed: what was found of it no longer holds.
     pub fn changed(&mut self) {
         self.held = None;
+        self.bounds = None;
         self.derived = None;
     }
 
+    /// `of`, and the manager's bounds of the body where it is still as they were found of it.
+    pub fn of_with_bounds(&mut self, unit: &Unit) -> (&Knowns, Option<&'h crate::ranges::Bounds>) {
+        let bounds = self.bounds;
+        (self.of(unit), bounds)
+    }
+
     /// What is known of `unit`'s body as it stands, which it must be the one these were asked of.
-    pub fn of(&mut self, unit: &Unit) -> &IndexMap<ValueId, Known> {
+    pub fn of(&mut self, unit: &Unit) -> &Knowns {
         if let Some(held) = self.held {
             return held;
         }
@@ -648,7 +852,7 @@ pub fn exposed_frames(unit: &Unit) -> BTreeSet<ValueId> {
 
 /// The object `root` is the address of, where it is an object's own: an
 /// alloca (`Frame`) or a global variable (`Global`).
-pub fn object_of(unit: &Unit, root: Operand) -> Option<MemoryObject> {
+pub fn object_of(unit: &Unit, root: Operand) -> Option<ObjectRef> {
     match root {
         Operand::Value(value) => {
             let (_, instruction) = unit.defining(root)?;
@@ -664,13 +868,13 @@ pub fn object_of(unit: &Unit, root: Operand) -> Option<MemoryObject> {
                 Some(found) => found.contains(&value),
                 None => crate::frameescape::exposes(unit.function, value, |inst| is_lifetime_marker(unit, inst)),
             };
-            Some(MemoryObject {
+            Some(ObjectInterner::of(unit.context).intern(MemoryObject {
                 identity: Some(Identity::Value(value.0)),
                 extent: count.map(|count| size * count),
                 addressed: exposed,
                 captured: exposed,
                 ..MemoryObject::new(MemoryKind::Frame)
-            })
+            }))
         }
         Operand::Constant(id) => {
             let ConstantKind::Global(global) = unit.context.get(id).kind else { return None };
@@ -681,14 +885,14 @@ pub fn object_of(unit: &Unit, root: Operand) -> Option<MemoryObject> {
 }
 
 /// The object a global variable is.
-pub fn global_object(unit: &Unit, global: GlobalId) -> Option<MemoryObject> {
+pub fn global_object(unit: &Unit, global: GlobalId) -> Option<ObjectRef> {
     let extent = match &unit.globals.get(global.0 as usize)?.kind {
         GlobalKind::Variable(variable) => Some(unit.layout.alloc_size(&unit.context.types, variable.ty) as i64),
         GlobalKind::Function(_) => return None,
     };
     let captured = !unit.globals_aa.is_some_and(|aa| aa.tracked(global));
     let constant = matches!(&unit.globals.get(global.0 as usize)?.kind, GlobalKind::Variable(variable) if variable.constant);
-    Some(MemoryObject { identity: Some(Identity::Global(global.0)), extent, captured, constant, ..MemoryObject::new(MemoryKind::Global) })
+    Some(ObjectInterner::of(unit.context).intern(MemoryObject { identity: Some(Identity::Global(global.0)), extent, captured, constant, ..MemoryObject::new(MemoryKind::Global) }))
 }
 
 /// An access as the alias queries read it: LLVM's `MemoryLocation`, its
@@ -727,11 +931,11 @@ pub struct MemRef {
     /// Bytes accessed.
     pub width: u32,
     /// The `!tbaa` access type's name.
-    pub typed: Option<String>,
+    pub typed: Option<std::rc::Rc<str>>,
     /// The names of that type's ancestors, nearest first: an access whose type
     /// is one of them may alias this one's (a parent type covers its children,
     /// as C's `omnipotent char` covers every scalar).
-    pub lineage: Vec<String>,
+    pub lineage: std::rc::Rc<[String]>,
     /// Every GEP on the way from `root` was `inbounds`.
     pub inbounds: bool,
     pub volatile: bool,
@@ -764,7 +968,7 @@ impl MemRef {
             index_bits,
             width,
             typed: None,
-            lineage: Vec::new(),
+            lineage: no_lineage(),
             inbounds: true,
             volatile: false,
             provenance: None,
@@ -858,7 +1062,7 @@ impl MemRef {
             index_bits: 16,
             width,
             typed: None,
-            lineage: Vec::new(),
+            lineage: no_lineage(),
             inbounds: false,
             volatile: false,
             provenance: Some(provenance),
@@ -1040,11 +1244,15 @@ fn pair_constant(unit: &Unit, root: Operand) -> Option<(i64, i64)> {
 }
 
 /// The name of the `!tbaa` access type `inst` carries.
-pub fn typed(unit: &Unit, inst: InstId) -> Option<String> {
+pub fn typed(unit: &Unit, inst: InstId) -> Option<std::rc::Rc<str>> {
     let (_, tag) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa")?;
+    if let Some(tree) = unit.tbaa {
+        // A type's name read through the tree is the type node's first operand, which is the name below.
+        return tree.name_of_tag(unit.metadata, *tag);
+    }
     let MetadataOperand::Node(ty) = unit.metadata.get(tag.0 as usize)?.operands.first()? else { return None };
     match unit.metadata.get(ty.0 as usize)?.operands.first()? {
-        MetadataOperand::String(name) => Some(name.clone()),
+        MetadataOperand::String(name) => Some(std::rc::Rc::from(name.as_str())),
         _ => None,
     }
 }
@@ -1052,12 +1260,20 @@ pub fn typed(unit: &Unit, inst: InstId) -> Option<String> {
 /// The names of the ancestors of the `!tbaa` access type `inst` carries,
 /// nearest first, the root last: the module's type tree where the unit holds
 /// it, else built here from the metadata.
-pub fn lineage(unit: &Unit, inst: InstId) -> Vec<String> {
-    let Some((_, tag)) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa") else { return Vec::new() };
+pub fn lineage(unit: &Unit, inst: InstId) -> std::rc::Rc<[String]> {
+    let Some((_, tag)) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa") else { return no_lineage() };
     match unit.tbaa {
-        Some(tree) => tree.of_tag(unit.metadata, *tag).to_vec(),
-        None => llrm_mir::tbaa::Tbaa::chain(unit.metadata, *tag),
+        Some(tree) => tree.shared_of_tag(unit.metadata, *tag),
+        None => std::rc::Rc::from(llrm_mir::tbaa::Tbaa::chain(unit.metadata, *tag)),
     }
+}
+
+/// A lineage of no names, shared: an access with no type is the common one.
+pub fn no_lineage() -> std::rc::Rc<[String]> {
+    thread_local! {
+        static NONE: std::rc::Rc<[String]> = std::rc::Rc::from(Vec::new());
+    }
+    NONE.with(std::rc::Rc::clone)
 }
 
 /// What a load or store does to the bytes it addresses, and it touches no
@@ -1120,6 +1336,65 @@ mod tests {
         assert_eq!(Unit::of(&module, &layout, f).spaces(), llrm_mir::spaces::Spaces::FLAT);
         assert_eq!(Unit::of(&module, &layout, f).with_spaces(dos).spaces(), dos);
         assert!(Unit::of(&module, &layout, f).with_spaces(dos).spaces().is_fixed(4));
+    }
+
+    /// A set of slices compared the objects' identities (strings, tuples) tree against tree at every step of every insert, and
+    /// cloned them: `BTreeSet<Slice>` was 10% of host.c's compile, `MemoryObject::cmp` 8%, malloc 10%. An object is a number
+    /// once interned: building, probing and cloning sets of slices compares none structurally.
+    #[test]
+    fn a_set_of_slices_compares_no_object_structurally() {
+        let slices: Vec<Slice> = (0..200)
+            .map(|index| Slice::whole(MemoryObject { identity: Some(Identity::Tuple(vec![Identity::Str(format!("object{index}")), Identity::Int(index)])), ..object(MemoryKind::Global) }))
+            .collect();
+        let before = super::OBJECT_COMPARES.with(std::cell::Cell::get);
+        let set: BTreeSet<Slice> = slices.iter().copied().collect();
+        assert_eq!(set.len(), 200);
+        assert!(slices.iter().all(|one| set.contains(one)));
+        let copy = set.clone();
+        assert_eq!(copy, set);
+        assert_eq!(super::OBJECT_COMPARES.with(std::cell::Cell::get) - before, 0, "objects compared tree against tree");
+    }
+
+    /// Two spellings of an object that differ in a fact are two objects here, and one spelling is one object however often it
+    /// is interned.
+    #[test]
+    fn an_object_is_interned_by_every_field_once() {
+        let global = MemoryObject { identity: Some(Identity::Global(9)), ..object(MemoryKind::Global) };
+        let (one, again) = (super::ObjectRef::from(global.clone()), super::ObjectRef::from(global.clone()));
+        assert_eq!(one, again);
+        assert_eq!(one.id(), again.id());
+        let private = super::ObjectRef::from(MemoryObject { captured: false, ..global });
+        assert_ne!(one, private);
+    }
+
+    /// A process-wide interner numbered objects by everything interned before them in the process: a test thread, a compile
+    /// before this one, the LSP server's last hour. A module's ids are the module's: the same objects asked in the same order
+    /// get the same ids whichever module was done first.
+    #[test]
+    fn the_ids_of_a_module_do_not_depend_on_another_module_interned_before() {
+        use llrm_mir::context::Context;
+        let global = |number| MemoryObject { identity: Some(Identity::Global(number)), ..object(MemoryKind::Global) };
+        let ids = |context: &Context, numbers: &[u32]| -> Vec<u32> { numbers.iter().map(|&number| super::ObjectInterner::of(context).intern(global(number)).id()).collect() };
+        let (first, second) = (Context::new(), Context::new());
+        let (a, b) = (ids(&first, &[7, 8]), ids(&second, &[8, 7]));
+        let (other_second, other_first) = (Context::new(), Context::new());
+        let (b_again, a_again) = (ids(&other_second, &[8, 7]), ids(&other_first, &[7, 8]));
+        assert_eq!((a, b), (a_again, b_again));
+        assert_eq!(ids(&Context::new(), &[7]), [3], "dense from the objects every module starts with");
+    }
+
+    /// The interner lives in the module's context and dies with it: a server compiling a file again and again held every
+    /// object of every compile before.
+    #[test]
+    fn the_interner_is_dropped_with_its_module() {
+        use llrm_mir::context::Context;
+        let context = Context::new();
+        let interner = super::ObjectInterner::of(&context);
+        let weak = std::rc::Rc::downgrade(&interner);
+        drop(interner);
+        assert!(weak.upgrade().is_some(), "held by the context");
+        drop(context);
+        assert!(weak.upgrade().is_none(), "kept after its module");
     }
 
     #[test]

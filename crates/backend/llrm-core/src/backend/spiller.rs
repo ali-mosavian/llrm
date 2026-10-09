@@ -89,7 +89,7 @@ fn planned_with(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame, posti
     let constants = _through_copies(llrm_support::debug::timed("spill constants", || _literals_by(body, &wide, false, postings)), values, &copies);
     let addresses = _through_copies(llrm_support::debug::timed("spill addresses", || _addresses_by(body, &wide, postings)), values, &copies);
     let extensions = llrm_support::debug::timed("spill extensions", || _extensions_by(body, values, postings));
-    let mut frame_loads = llrm_support::debug::timed("spill stable loads", || _stable_loads(body, values));
+    let mut frame_loads = llrm_support::debug::timed("spill stable loads", || _stable_loads_by(body, values, &IndexMap::default(), postings));
     frame_loads.extend(llrm_support::debug::timed("spill frame loads", || _frame_loads(body, values)));
     // A phi's value the program also stores to a cell the body has not written since is read from there.
     if !body.homes.is_empty() {
@@ -100,7 +100,7 @@ fn planned_with(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame, posti
     // A copy of a load is made again as that load.
     if !copies.is_empty() {
         let apart: BTreeSet<u32> = values.iter().copied().filter(|value| !frame_loads.contains_key(value)).collect();
-        let copied = _through_copies(llrm_support::debug::timed("spill stable loads", || _stable_loads_through(body, &wide, &copies)), &apart, &copies);
+        let copied = _through_copies(llrm_support::debug::timed("spill stable loads", || _stable_loads_by(body, &wide, &copies, postings)), &apart, &copies);
         for (value, cell) in copied {
             frame_loads.entry(value).or_insert(cell);
         }
@@ -143,20 +143,44 @@ pub fn spilled_from(
         }
     };
     let plan = planned(body, values, frame)?;
-    materialized(body, &plan, frame, floor, classes)
+    let (body, made, merged) = materialized(body, &plan, frame, floor, classes, &BTreeSet::new())?;
+    Ok((body, made.union(&merged).copied().collect()))
+}
+
+/// `spilled_from`, with `plain` kept out of the merging of updates into one register value, and what that merging made told apart
+/// from the rest: (the body, the values made to live for one use, the values made to live across several).
+///
+/// A merged value that is spilled in its turn is merged again, as long as it is not told to be plain: a spill that makes what it
+/// spills, without end (`chain` at N=7 with -m16 never finished). The caller names each merged value plain once it is spilled.
+pub fn spilled_apart(
+    body: &LirBody,
+    values: &BTreeSet<u32>,
+    frame: &mut Frame,
+    floor: u32,
+    classes: &RegisterClasses,
+    plain: &BTreeSet<u32>,
+) -> Result<(LirBody, BTreeSet<u32>, BTreeSet<u32>), Error> {
+    if values.is_empty() {
+        return Ok((body.clone(), BTreeSet::new(), BTreeSet::new()));
+    }
+    let plan = planned(body, values, frame)?;
+    materialized(body, &plan, frame, floor, classes, plain)
 }
 
 /// `body` with `plan` written: a reload before each read of a stored value, a
 /// store after each write, and every other value made again where it is read.
 /// The values made are returned; each lives for one use.
-pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, classes: &RegisterClasses) -> Result<(LirBody, BTreeSet<u32>), Error> {
+pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, classes: &RegisterClasses, plain: &BTreeSet<u32>) -> Result<(LirBody, BTreeSet<u32>, BTreeSet<u32>), Error> {
     let mut fresh = _next_value(body).max(floor);
     let mut made: BTreeSet<u32> = BTreeSet::new();
     let Plan { constants, addresses, extensions, frame_loads, rebuilt, stored, narrow } = plan;
-    let (body, next) = llrm_support::debug::timed("spill short updates", || _short_update_runs(body, &stored, frame, fresh))?;
+    let merging: BTreeSet<u32> = stored.difference(plain).copied().collect();
+    let first = fresh;
+    let (body, next) = llrm_support::debug::timed("spill short updates", || _short_update_runs(body, &merging, frame, fresh))?;
     fresh = next;
-    let (body, next) = llrm_support::debug::timed("spill local updates", || _local_updates(&body, &stored, frame, fresh))?;
+    let (body, next) = llrm_support::debug::timed("spill local updates", || _local_updates(&body, &merging, frame, fresh))?;
     fresh = next;
+    let merged: BTreeSet<u32> = (first..fresh).collect();
     let mut abandoned: BTreeSet<usize> = BTreeSet::new();
     let mut rematerialized_definitions: BTreeSet<usize> = BTreeSet::new();
     let mut identities: BTreeSet<usize> = BTreeSet::new();
@@ -372,7 +396,7 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, 
     let result = _remove_abandoned_in(result, &abandoned, &marked);
     // The values made that something still defines.
     let made = postings::following(&result, |postings| made.iter().copied().filter(|value| !postings.defs(*value).is_empty()).collect::<BTreeSet<u32>>());
-    Ok((result, made))
+    Ok((result, made, merged))
 }
 
 /// The reloads of the spilled values `one` reads, and the value each is read as.
@@ -542,7 +566,7 @@ fn _local_updates_whole(body: &LirBody, stored: &BTreeSet<u32>, frame: &mut Fram
     };
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let mut insns: Vec<Arc<Insn>> = block.insns.clone();
+        let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
         let mut position = 0;
         while position < insns.len() {
             let update = Arc::clone(&insns[position]);
@@ -646,60 +670,125 @@ pub fn siblings(
     if values.is_empty() {
         return Ok(BTreeSet::new());
     }
-    let adjacency = llrm_support::debug::span("siblings adjacency");
-    let mut adjacent: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
-    for one in body.blocks.iter().flat_map(|block| &block.insns) {
-        let Some(pair) = _plain_move(one) else {
-            continue;
-        };
-        if pair.0 == pair.1 {
-            continue;
-        }
-        adjacent.entry(pair.0).or_default().insert(pair.1);
-        adjacent.entry(pair.1).or_default().insert(pair.0);
+    postings::following(body, |postings| siblings_over(body, values, frame, fixed, postings))
+}
+
+thread_local! {
+    static EXAMINED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many instructions this thread has looked at for the copies of a value, for a test that a spill asks of the web it is
+/// in and not of every move in the body.
+pub fn examined() -> usize {
+    EXAMINED.with(std::cell::Cell::get)
+}
+
+/// The values a plain move copies to or from `value`, from the instructions that name it alone.
+fn _copied_by(body: &LirBody, postings: &Postings, value: u32) -> BTreeSet<u32> {
+    let mut at: Vec<At> = postings.defs(value).iter().chain(postings.uses(value)).copied().collect();
+    at.sort_unstable();
+    at.dedup();
+    EXAMINED.with(|examined| examined.set(examined.get() + at.len()));
+    at.iter()
+        .filter_map(|one| _plain_move(_at(body, *one)))
+        .filter(|pair| pair.0 != pair.1)
+        .filter_map(|pair| if pair.0 == value { Some(pair.1) } else if pair.1 == value { Some(pair.0) } else { None })
+        .collect()
+}
+
+/// The plain-move neighbours of the values asked about, worked out as they are asked from the occurrences of each: a spill
+/// asks of one copy web, not of every move in the body.
+struct Adjacent<'b> {
+    body: &'b LirBody,
+    postings: &'b Postings,
+    known: std::cell::RefCell<IndexMap<u32, BTreeSet<u32>>>,
+}
+
+impl Adjacent<'_> {
+    fn of(&self, value: u32) -> BTreeSet<u32> {
+        self.known.borrow_mut().entry(value).or_insert_with(|| _copied_by(self.body, self.postings, value)).clone()
     }
-    if !values.iter().any(|one| adjacent.contains_key(one)) {
+
+    fn has(&self, value: u32) -> bool {
+        !self.of(value).is_empty()
+    }
+}
+
+fn siblings_over(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame, fixed: &BTreeSet<u32>, postings: &Postings) -> Result<BTreeSet<u32>, Error> {
+    let adjacency = llrm_support::debug::span("siblings adjacency");
+    let adjacent = Adjacent { body, postings, known: Default::default() };
+    if !values.iter().any(|one| adjacent.has(*one)) {
         return Ok(BTreeSet::new());
     }
     drop(adjacency);
     // Only the copy webs that hold a value of `values` are grown from: the others are asked of by no one.
     let wanted: BTreeSet<u32> = {
-        let mut web: BTreeSet<u32> = values.iter().copied().filter(|one| adjacent.contains_key(one)).collect();
+        let mut web: BTreeSet<u32> = values.iter().copied().filter(|one| adjacent.has(*one)).collect();
         let mut work: Vec<u32> = web.iter().copied().collect();
         while let Some(one) = work.pop() {
-            for next in &adjacent[&one] {
-                if web.insert(*next) {
-                    work.push(*next);
+            for next in adjacent.of(one) {
+                if web.insert(next) {
+                    work.push(next);
                 }
             }
         }
         web
     };
     // A shared slot holds each member at every width it is used, not just moved.
-    let widths = llrm_support::debug::timed("siblings widths", || _widest(body, &wanted));
+    let widths = llrm_support::debug::timed("siblings widths", || _widest_by(body, &wanted, postings));
 
     // Only pairs among the values of those webs are asked of.
     let near = llrm_support::debug::timed("siblings interference", || coalesce::_interference_among(body, Some(&wanted)));
-    if std::env::var_os("LLRM_CHECK_SIBLINGS").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_SIBLINGS") {
         let whole = coalesce::_interference(body);
         for value in &wanted {
             let among = |graph: &coalesce::Graph| graph.get(value).map(|near| near.intersection(&wanted).copied().collect::<BTreeSet<u32>>()).unwrap_or_default();
             assert!(among(&near) == among(&whole), "{}: the interference of value#{value} among its web differs from the whole graph's", body.name);
         }
+        // The copies, the web and the widths from the occurrences are those of a walk of the whole body.
+        let mut everywhere: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
+        for one in body.blocks.iter().flat_map(|block| &block.insns) {
+            let Some(pair) = _plain_move(one) else { continue };
+            if pair.0 != pair.1 {
+                everywhere.entry(pair.0).or_default().insert(pair.1);
+                everywhere.entry(pair.1).or_default().insert(pair.0);
+            }
+        }
+        for value in wanted.iter().chain(values) {
+            assert!(adjacent.of(*value) == everywhere.get(value).cloned().unwrap_or_default(), "{}: the copies of value#{value} from its occurrences differ from a walk of the body", body.name);
+        }
+        assert!(widths.iter().eq(_widest(body, &wanted).iter()), "{}: the widths of a copy web from its occurrences differ from a walk of the body", body.name);
     }
     let deep = llrm_support::debug::timed("siblings depths", || ranges::depths(body));
     let occurring = llrm_support::debug::span("siblings occurs");
     let mut occurs: IndexMap<u32, Vec<(f64, Arc<Insn>)>> = IndexMap::default();
-    for block in &body.blocks {
-        let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
-        for one in &block.insns {
-            let named: BTreeSet<u32> = one.defines.iter().chain(&one.uses).copied().collect();
-            for value in wanted.intersection(&named) {
-                occurs.entry(*value).or_default().push((each, Arc::clone(one)));
+    for &value in &wanted {
+        let mut at: Vec<At> = postings.defs(value).iter().chain(postings.uses(value)).copied().collect();
+        at.sort_unstable();
+        at.dedup();
+        if at.is_empty() {
+            continue;
+        }
+        let each = |block: u32| ranges::level(deep.get(&body.blocks[block as usize].at).copied().unwrap_or(0));
+        occurs.insert(value, at.iter().map(|one| (each(one.0), Arc::clone(_at(body, *one)))).collect());
+    }
+    if llrm_support::env_set("LLRM_CHECK_SIBLINGS") {
+        let mut everywhere: IndexMap<u32, Vec<(f64, Arc<Insn>)>> = IndexMap::default();
+        for block in &body.blocks {
+            let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
+            for one in &block.insns {
+                let named: BTreeSet<u32> = one.defines.iter().chain(&one.uses).copied().collect();
+                for value in wanted.intersection(&named) {
+                    everywhere.entry(*value).or_default().push((each, Arc::clone(one)));
+                }
             }
         }
+        assert!(
+            occurs.len() == everywhere.len() && occurs.iter().all(|(value, found)| everywhere.get(value).is_some_and(|other| other.len() == found.len() && other.iter().zip(found).all(|(a, b)| a.0 == b.0 && Arc::ptr_eq(&a.1, &b.1)))),
+            "{}: the occurrences of a copy web from the postings differ from a walk of the body",
+            body.name
+        );
     }
-
     drop(occurring);
     let worth = |candidate: u32, group: &PySet<i64>| -> bool {
         let (mut saved, mut cost) = (0.0, 0.0);
@@ -721,7 +810,7 @@ pub fn siblings(
 
     let mut taken: BTreeSet<u32> = BTreeSet::new();
     let mut chosen: BTreeSet<u32> = BTreeSet::new();
-    let firsts: Vec<u32> = values.iter().copied().filter(|one| adjacent.contains_key(one)).collect();
+    let firsts: Vec<u32> = values.iter().copied().filter(|one| adjacent.has(*one)).collect();
     for first in firsts {
         if taken.contains(&first) {
             continue;
@@ -734,7 +823,7 @@ pub fn siblings(
             let members: BTreeSet<u32> = group.iter().map(|one| *one as u32).collect();
             let frontier: BTreeSet<u32> = members
                 .iter()
-                .flat_map(|one| adjacent.get(one).into_iter().flatten().copied())
+                .flat_map(|one| adjacent.of(*one))
                 .filter(|one| !members.contains(one) && !taken.contains(one) && !fixed.contains(one))
                 .collect();
             for candidate in frontier {
@@ -870,9 +959,9 @@ fn _copied_with(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Vec<Res
 /// Python numbers each home's pseudo-value below every held value, which is
 /// negative; `u32` cannot say that, so they are numbered in the same order
 /// at the top of the range instead. Nothing compares them with a real value.
-fn _existing_colors(body: &LirBody, frame: &mut Frame) -> (Vec<(i64, u32, Vec<Interval>)>, IndexMap<u32, Interval>) {
+fn _existing_colors(body: &LirBody, frame: &mut Frame) -> (Vec<(i64, u32, Vec<Interval>)>, Lives) {
     let found = _existing_colors_by(body, frame, false);
-    if std::env::var_os("LLRM_CHECK_COLORS").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_COLORS") {
         let whole = _existing_colors_by(body, frame, true);
         assert!(_same_colors(&found.0, &whole.0), "{}: the slot colors differ from working them out whole", body.name);
         // What is asked of a value is where it is live (`slots::fits` overlaps segments). Its weight is not read, and
@@ -893,11 +982,245 @@ fn _same_colors(one: &[(i64, u32, Vec<Interval>)], other: &[(i64, u32, Vec<Inter
 
 /// `_existing_colors`, with the intervals of the homes' pseudo-values found among themselves and the body's
 /// own remembered, or, `whole`, as the body with the homes in it is worked out at once.
-fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(i64, u32, Vec<Interval>)>, IndexMap<u32, Interval>) {
+thread_local! {
+    static MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many instructions this thread has made again with the homes among their values, for a test that the usual ask does not.
+pub fn made_for_homes() -> usize {
+    MADE.with(std::cell::Cell::get)
+}
+
+/// The intervals `_existing_colors` reads: the body's own, as remembered and shared, and the homes' beside them.
+struct Lives {
+    shared: Option<std::sync::Arc<IndexMap<u32, Interval>>>,
+    own: IndexMap<u32, Interval>,
+}
+
+impl Lives {
+    fn get(&self, value: &u32) -> Option<&Interval> {
+        self.own.get(value).or_else(|| self.shared.as_ref().and_then(|shared| shared.get(value)))
+    }
+
+    fn len(&self) -> usize {
+        self.own.len() + self.shared.as_ref().map_or(0, |shared| shared.len())
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&u32, &Interval)> + '_ {
+        self.own.iter().chain(self.shared.iter().flat_map(|shared| shared.iter()))
+    }
+}
+
+/// The intervals of the homes' pseudo-values (`first..`) walked in a body of the instructions that name them alone (whole parallel
+/// copies, which share a point), at the slots they have in the body: what `homes_by_occurrences` is held to under
+/// `LLRM_CHECK_OCCURRENCES`.
+fn homes_by_sparse_body(body: &LirBody, index: &ranges::Indexes, changed: &[(usize, usize, Arc<Insn>)], first: u32) -> IndexMap<u32, Interval> {
+    let mut sparse_blocks: Vec<LirBlock> = body.blocks.iter().map(|block| LirBlock { at: block.at, insns: Vec::new().into(), succ: block.succ.clone(), phis: block.phis.clone(), cold: block.cold }).collect();
+    let mut sparse_insns: Vec<Vec<Arc<Insn>>> = vec![Vec::new(); body.blocks.len()];
+    let mut starts: Vec<Vec<i64>> = vec![Vec::new(); body.blocks.len()];
+    let mut by_block: IndexMap<usize, Vec<(usize, Arc<Insn>)>> = IndexMap::default();
+    for (block_index, at, made) in changed.iter().cloned() {
+        by_block.entry(block_index).or_default().push((at, made));
+    }
+    for (block_index, mut named) in by_block {
+        let original = &body.blocks[block_index].insns;
+        // The runs of a parallel copy a named instruction is in, as the walk takes them together.
+        let mut wanted: std::collections::BTreeMap<usize, Arc<Insn>> = std::collections::BTreeMap::new();
+        for (at, made) in named.drain(..) {
+            if let Some(group) = original[at].group {
+                let (mut low, mut high) = (at, at);
+                while low > 0 && original[low - 1].group == Some(group) {
+                    low -= 1;
+                }
+                while high + 1 < original.len() && original[high + 1].group == Some(group) {
+                    high += 1;
+                }
+                for position in low..=high {
+                    wanted.entry(position).or_insert_with(|| Arc::clone(&original[position]));
+                }
+            }
+            wanted.insert(at, made);
+        }
+        // An instruction's slot, which the body's numbering gives its original; `made` stands where that stood.
+        let block = &body.blocks[block_index];
+        let mut counted = 0;
+        let mut before: Option<usize> = None;
+        for (position, one) in wanted {
+            // Two instructions of one parallel copy with others between them are not one run here either.
+            if let (Some(earlier), Some(group)) = (before, one.group) {
+                if position > earlier + 1 && sparse_insns[block_index].last().is_some_and(|last| last.group == Some(group)) {
+                    starts[block_index].push(index.slot(block, counted));
+                    sparse_insns[block_index].push(Arc::new(Insn::new(0, None, None, Vec::new(), Vec::new())));
+                }
+            }
+            before = Some(position);
+            counted = position;
+            starts[block_index].push(index.slot(block, position));
+            sparse_insns[block_index].push(one);
+        }
+    }
+    let sparse = body.with_blocks(sparse_blocks.into_iter().zip(sparse_insns).map(|(block, insns)| block.with_insns(insns)).collect());
+    ranges::intervals_sparse(&sparse, index, &starts, &|value| value >= first)
+}
+
+/// The same from where the homes occur: the instructions `changed` name them, so the walk need not look at the others.
+/// What the last bodies the homes were asked of left: their blocks, numbering, the homes' intervals (by the home's frame offset) and
+/// which instruction names which homes.
+#[derive(Default)]
+struct HomesHeld(Vec<Arc<HomesState>>);
+
+struct HomesState {
+    structure: Arc<HomesStructure>,
+    insns: Vec<crate::model::lir::Insns>,
+    index: Arc<ranges::Indexes>,
+    intervals: IndexMap<i64, Interval>,
+    known: BTreeSet<i64>,
+    names: crate::support::hash::HashMap<usize, Vec<i64>>,
+    count: usize,
+}
+
+/// How many homes' intervals this body's facts have found afresh from their occurrences, for a test that an edit finds those it touched only.
+pub fn homes_redone(body: &LirBody) -> usize {
+    body.facts.0.counted("homes-redone")
+}
+
+/// Whether the homes' intervals of a body are worth keeping for the next: keeping them costs a fixed `FIXED` instructions a call (the
+/// state, the lookups) and `KEEP` for each block of the body, and saves, for each segment the intervals hold, what finding it from
+/// the occurrences cost (`WALK`) less shifting it (`SHIFT`). Measured: QCport d_faces found 5.2 M segments in 2.05 G (390 each) and
+/// shifted 6.1 M in 0.83 G (136 each); x_transpose, 23 calls of 41 intervals, lost 1.4 M kept (60 000 a call); a block of state
+/// is about 40.
+fn worth_keeping(blocks: usize, segments: usize) -> bool {
+    const FIXED: usize = 60_000;
+    const KEEP: usize = 40;
+    const WALK: usize = 390;
+    const SHIFT: usize = 136;
+    FIXED + blocks * KEEP < segments * (WALK - SHIFT)
+}
+
+/// What of a body's shape the homes' intervals depend on besides its instructions: shared by the states of bodies that keep it.
+#[derive(PartialEq)]
+struct HomesStructure {
+    entry: i64,
+    blocks: Vec<(i64, Vec<i64>, Vec<crate::model::lir::Phi>)>,
+    odds: crate::model::lir::BlockOdds,
+    trips: Vec<(i64, i64)>,
+}
+
+impl HomesStructure {
+    fn is_of(&self, body: &LirBody) -> bool {
+        self.entry == body.entry
+            && self.blocks.len() == body.blocks.len()
+            && self.blocks.iter().zip(&body.blocks).all(|((at, succ, phis), block)| *at == block.at && *succ == block.succ && *phis == block.phis)
+            && self.odds == body.odds
+            && self.trips == body.loop_trip_counts
+    }
+
+    fn of(body: &LirBody) -> Self {
+        Self {
+            entry: body.entry,
+            blocks: body.blocks.iter().map(|block| (block.at, block.succ.clone(), block.phis.clone())).collect(),
+            odds: body.odds.clone(),
+            trips: body.loop_trip_counts.clone(),
+        }
+    }
+}
+
+/// The homes' intervals: those of the homes the instructions that changed since an earlier body do not name are that body's, shifted
+/// to the new numbering; the others are found from where they occur. A spill changes a few blocks and names one home or two; the
+/// intervals of the rest, across the whole body, were found afresh for each (2.0 G of compiling d_faces, 616 times).
+fn homes_kept(body: &LirBody, index: &Arc<ranges::Indexes>, named: &[(usize, usize, BTreeSet<u32>, BTreeSet<u32>)], homes: &[i64], first: u32) -> IndexMap<u32, Interval> {
+    let pseudo = |home: usize| first + home as u32;
+    // Which homes each instruction names: found when it is needed, for a body that is kept or has an earlier one to be kept from.
+    let names_now = || -> crate::support::hash::HashMap<usize, Vec<i64>> {
+        let mut now: crate::support::hash::HashMap<usize, Vec<i64>> = Default::default();
+        for (block, at, defined, used) in named {
+            let one = &body.blocks[*block].insns[*at];
+            now.insert(ranges::key(one), defined.union(used).map(|value| homes[(*value - first) as usize]).collect());
+        }
+        now
+    };
+    let fresh_for = |wanted: &[usize]| -> IndexMap<u32, Interval> {
+        let values: Vec<u32> = wanted.iter().map(|home| pseudo(*home)).collect();
+        crate::analysis::occurrences::Occurrences::planned(named).ranges(body, index, &values)
+    };
+    let kept = body.facts.0.stash(|held: &mut HomesHeld| {
+        held.0
+            .iter()
+            .filter(|state| state.structure.is_of(body))
+            .min_by_key(|state| state.insns.iter().zip(&body.blocks).filter(|(insns, block)| !insns.same_insns(&block.insns)).count())
+            .cloned()
+    });
+    let mut result: Option<IndexMap<u32, Interval>> = None;
+    let mut now = None;
+    if let Some(state) = &kept {
+        let now = now.insert(names_now());
+        let blocks: Vec<(i64, &crate::model::lir::Insns)> = state.structure.blocks.iter().zip(&state.insns).map(|((at, _, _), insns)| (*at, insns)).collect();
+        let differing = ranges::differing_blocks(&blocks, body);
+        let mut touched: BTreeSet<i64> = BTreeSet::new();
+        let changed = ranges::changed_runs(&blocks, &state.index, body, index, &differing, &mut |run| {
+            for one in run {
+                let key = ranges::key(one);
+                touched.extend(state.names.get(&key).into_iter().flatten().chain(now.get(&key).into_iter().flatten()).copied());
+            }
+        });
+        if changed * 4 <= state.count + 16 {
+            let shift = ranges::Shift::between(&blocks, &state.index, body, index, &differing);
+            let redone: Vec<usize> = homes.iter().enumerate().filter(|(_, home)| touched.contains(home) || !state.known.contains(home)).map(|(at, _)| at).collect();
+            for _ in &redone {
+                body.facts.0.bump("homes-redone");
+            }
+            let fresh = fresh_for(&redone);
+            let mut out: IndexMap<u32, Interval> = IndexMap::default();
+            for (at, home) in homes.iter().enumerate() {
+                let value = pseudo(at);
+                if redone.binary_search(&at).is_ok() {
+                    if let Some(found) = fresh.get(&value) {
+                        out.insert(value, found.clone());
+                    }
+                } else if let Some(old) = state.intervals.get(home) {
+                    out.insert(value, Interval::new(value, old.segments.iter().map(|segment| ranges::Segment { start: shift.start(segment.start), end: shift.end(segment.end) }).collect()));
+                }
+            }
+            result = Some(out);
+        }
+    }
+    let result = result.unwrap_or_else(|| fresh_for(&(0..homes.len()).collect::<Vec<_>>()));
+    if kept.is_some() && llrm_support::env_set("LLRM_CHECK_OCCURRENCES") {
+        assert!(result == fresh_for(&(0..homes.len()).collect::<Vec<_>>()), "{}: the homes' intervals kept from an earlier body differ from finding them afresh", body.name);
+    }
+    let structure = match &kept {
+        Some(state) if state.structure.is_of(body) => Arc::clone(&state.structure),
+        _ => Arc::new(HomesStructure::of(body)),
+    };
+    if !worth_keeping(body.blocks.len(), result.values().map(|found| found.segments.len()).sum()) {
+        return result;
+    }
+    let state = HomesState {
+        structure,
+        insns: body.blocks.iter().map(|block| block.insns.clone()).collect(),
+        index: Arc::clone(index),
+        intervals: homes.iter().enumerate().filter_map(|(at, home)| result.get(&pseudo(at)).map(|found| (*home, found.clone()))).collect(),
+        known: homes.iter().copied().collect(),
+        names: now.unwrap_or_else(names_now),
+        count: body.blocks.iter().map(|block| block.insns.len()).sum(),
+    };
+    body.facts.0.stash(|held: &mut HomesHeld| {
+        held.0.insert(0, Arc::new(state));
+        held.0.truncate(3);
+    });
+    result
+}
+
+fn homes_by_occurrences(body: &LirBody, index: &ranges::Indexes, named: &[(usize, usize, BTreeSet<u32>, BTreeSet<u32>)], first: u32, count: usize) -> IndexMap<u32, Interval> {
+    let values: Vec<u32> = (first..first + count as u32).collect();
+    crate::analysis::occurrences::Occurrences::planned(named).ranges(body, index, &values)
+}
+
+fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(i64, u32, Vec<Interval>)>, Lives) {
     let mut homes: Vec<i64> = frame.slots.values().copied().collect::<BTreeSet<i64>>().into_iter().collect();
     homes.sort_unstable();
     if homes.is_empty() {
-        return (Vec::new(), ranges::intervals(body, None));
+        return (Vec::new(), Lives { shared: Some(ranges::intervals_shared(body, None)), own: IndexMap::default() });
     }
     let first = u32::MAX - homes.len() as u32;
     let pseudo: IndexMap<i64, u32> =
@@ -933,7 +1256,8 @@ fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(
     // Only an instruction that names a home is made again with it among its values; the others are the body's.
     // Only those with a frame cell among their operands can, which the occurrences hold by block.
     let mut flipped = false;
-    let mut changed: Vec<(usize, usize, Arc<Insn>)> = Vec::new();
+    // The instructions that name a home, and which: made again with them among their values only where the whole body is walked.
+    let mut named: Vec<(usize, usize, BTreeSet<u32>, BTreeSet<u32>)> = Vec::new();
     postings::following(body, |postings| {
         for (block_index, block) in body.blocks.iter().enumerate() {
             for &at in postings.frames(block_index) {
@@ -944,88 +1268,62 @@ fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(
                 if defined.is_empty() && used.is_empty() && !whole {
                     continue;
                 }
-                let made = _with(one, |made| {
-                    made.defines = one.defines.iter().copied().chain(defined).collect::<IndexSet<u32>>().into_iter().collect();
-                    made.uses = one.uses.iter().copied().chain(used).collect::<IndexSet<u32>>().into_iter().collect();
-                });
-                // A value changes whether an instruction is a mark, and with it the slots after it.
-                flipped |= made.is_meta() != one.is_meta();
-                changed.push((block_index, at as usize, made));
+                // A value changes whether an instruction is a mark, and with it the slots after it: it is one made of nothing.
+                flipped |= (!defined.is_empty() || !used.is_empty()) && one.is_meta();
+                named.push((block_index, at as usize, defined, used));
             }
         }
     });
+    let changed_insns = || -> Vec<(usize, usize, Arc<Insn>)> {
+        MADE.with(|count| count.set(count.get() + named.len()));
+        named
+            .iter()
+            .map(|(block_index, at, defined, used)| {
+                let one = &body.blocks[*block_index].insns[*at];
+                let made = _with(one, |made| {
+                    made.defines = one.defines.iter().copied().chain(defined.iter().copied()).collect::<IndexSet<u32>>().into_iter().collect();
+                    made.uses = one.uses.iter().copied().chain(used.iter().copied()).collect::<IndexSet<u32>>().into_iter().collect();
+                });
+                (*block_index, *at, made)
+            })
+            .collect()
+    };
     let shared;
     let owned;
     let index: &ranges::Indexes;
     let live;
-    if whole || flipped || std::env::var_os("LLRM_CHECK_RANGES").is_some() {
+    if whole || flipped || llrm_support::env_set("LLRM_CHECK_RANGES") {
         let mut tracked = body.clone();
-        for (block_index, at, made) in changed {
-            tracked.blocks[block_index].insns[at] = made;
+        for (block_index, at, made) in changed_insns() {
+            let mut insns = tracked.blocks[block_index].insns.to_vec();
+            insns[at] = made;
+            tracked.blocks[block_index].insns = insns.into();
         }
         owned = ranges::indexed(&tracked);
         index = &owned;
         let busy = crate::analysis::frequency::Frequency::of(&tracked);
-        live = if whole || flipped {
-            ranges::intervals_over(&tracked, Some(index), &busy)
-        } else {
-            let mut live = ranges::intervals(body, None);
-            // The homes' pseudo-values are the `first..` ids.
-            live.extend(ranges::intervals_where(&tracked, index, &busy, &|value| value >= first));
-            live
+        live = Lives {
+            shared: None,
+            own: if whole || flipped {
+                ranges::intervals_over(&tracked, Some(index), &busy)
+            } else {
+                let mut live = ranges::intervals(body, None);
+                // The homes' pseudo-values are the `first..` ids.
+                live.extend(ranges::intervals_where(&tracked, index, &busy, &|value| value >= first));
+                live
+            },
         };
     } else {
         // The slots are the body's own, remembered; the homes' pseudo-values are walked in a body of the instructions
         // that name them alone (whole parallel copies, which share a point), at the slots they have in the body.
         shared = ranges::indexed_shared(body);
         index = &*shared;
-        let mut sparse_blocks: Vec<LirBlock> = body.blocks.iter().map(|block| LirBlock { at: block.at, insns: Vec::new(), succ: block.succ.clone(), phis: block.phis.clone(), cold: block.cold }).collect();
-        let mut starts: Vec<Vec<i64>> = vec![Vec::new(); body.blocks.len()];
-        let mut by_block: IndexMap<usize, Vec<(usize, Arc<Insn>)>> = IndexMap::default();
-        for (block_index, at, made) in changed {
-            by_block.entry(block_index).or_default().push((at, made));
+        let homes_found = llrm_support::debug::timed("intervals homes", || homes_kept(body, &shared, &named, &homes, first));
+        if llrm_support::env_set("LLRM_CHECK_OCCURRENCES") {
+            let walked = homes_by_sparse_body(body, index, &changed_insns(), first);
+            assert!(homes_found == walked, "{}: the homes' intervals by occurrences differ from the walk of the body of their instructions", body.name);
         }
-        for (block_index, mut named) in by_block {
-            let original = &body.blocks[block_index].insns;
-            // The runs of a parallel copy a named instruction is in, as the walk takes them together.
-            let mut wanted: std::collections::BTreeMap<usize, Arc<Insn>> = std::collections::BTreeMap::new();
-            for (at, made) in named.drain(..) {
-                if let Some(group) = original[at].group {
-                    let (mut low, mut high) = (at, at);
-                    while low > 0 && original[low - 1].group == Some(group) {
-                        low -= 1;
-                    }
-                    while high + 1 < original.len() && original[high + 1].group == Some(group) {
-                        high += 1;
-                    }
-                    for position in low..=high {
-                        wanted.entry(position).or_insert_with(|| Arc::clone(&original[position]));
-                    }
-                }
-                wanted.insert(at, made);
-            }
-            // An instruction's slot, which the body's numbering gives its original; `made` stands where that stood.
-            let block = &body.blocks[block_index];
-            let mut counted = 0;
-            let mut before: Option<usize> = None;
-            for (position, one) in wanted {
-                // Two instructions of one parallel copy with others between them are not one run here either.
-                if let (Some(earlier), Some(group)) = (before, one.group) {
-                    if position > earlier + 1 && sparse_blocks[block_index].insns.last().is_some_and(|last| last.group == Some(group)) {
-                        starts[block_index].push(index.slot(block, counted));
-                        sparse_blocks[block_index].insns.push(Arc::new(Insn::new(0, None, None, Vec::new(), Vec::new())));
-                    }
-                }
-                before = Some(position);
-                counted = position;
-                starts[block_index].push(index.slot(block, position));
-                sparse_blocks[block_index].insns.push(one);
-            }
-        }
-        let sparse = body.with_blocks(sparse_blocks);
-        let mut all = ranges::intervals(body, None);
-        all.extend(ranges::intervals_sparse(&sparse, index, &starts, &|value| value >= first));
-        live = all;
+        live = Lives { shared: Some(ranges::intervals_shared(body, None)), own: homes_found };
     }
     let end = index.span.values().map(|(_first, last)| *last).max().unwrap_or(1);
     let mut colors = Vec::new();
@@ -1159,9 +1457,18 @@ pub fn _stable_loads(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Me
     _stable_loads_through(body, values, &IndexMap::default())
 }
 
+/// `_stable_loads_through` with the postings of the body to hand: where the values occur is read from them, not found by a scan.
+pub fn _stable_loads_by(body: &LirBody, values: &BTreeSet<u32>, copies: &IndexMap<u32, u32>, postings: &Postings) -> IndexMap<u32, Mem> {
+    _stable_loads_from(body, values, copies, Some(postings))
+}
+
 /// `_stable_loads`, where a load's copies (`copies`: copy -> source) are made again as it is: the cell must hold until
 /// the last use of any of them, not only of the load.
 pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &IndexMap<u32, u32>) -> IndexMap<u32, Mem> {
+    _stable_loads_from(body, values, copies, None)
+}
+
+fn _stable_loads_from(body: &LirBody, values: &BTreeSet<u32>, copies: &IndexMap<u32, u32>, postings: Option<&Postings>) -> IndexMap<u32, Mem> {
     if values.is_empty() {
         return IndexMap::default();
     }
@@ -1177,20 +1484,35 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
         }
         at
     };
-    for (block_at, block) in body.blocks.iter().enumerate() {
-        for (position, one) in block.insns.iter().enumerate() {
-            for value in _set(&one.uses) {
-                let owner = root(value);
-                if owner != value && values.contains(&owner) {
-                    uses[&owner].push(Arc::clone(one));
-                    use_places[&owner].push((block_at, position));
+    // The values that matter are those asked of and their copies; where they occur is all that is read of the body.
+    let mut asked: BTreeSet<u32> = values.clone();
+    asked.extend(copies.keys().copied().filter(|copy| {
+        let owner = root(*copy);
+        owner != *copy && values.contains(&owner)
+    }));
+    let occurrences = match postings {
+        Some(postings) => crate::analysis::occurrences::Occurrences::of(postings, &asked),
+        None => crate::analysis::occurrences::Occurrences::scan(body, &|value| asked.contains(&value)),
+    };
+    if postings.is_some() && llrm_support::env_set("LLRM_CHECK_OCCURRENCES") {
+        occurrences.check_against_scan(body, &|value| asked.contains(&value));
+    }
+    // Each use of an owner by an instruction, once for every distinct value of it the instruction reads (the owner and its copies).
+    let mut reads: std::collections::BTreeMap<(u32, (usize, usize)), usize> = std::collections::BTreeMap::new();
+    for value in &asked {
+        for made in occurrences.named(*value) {
+            let (block_at, position) = made.place;
+            let one = &body.blocks[block_at].insns[position];
+            if made.used {
+                let owner = root(*value);
+                if owner != *value && values.contains(&owner) {
+                    *reads.entry((owner, made.place)).or_default() += 1;
+                }
+                if values.contains(value) {
+                    *reads.entry((*value, made.place)).or_default() += 1;
                 }
             }
-            for value in values.intersection(&_set(&one.uses)) {
-                uses[value].push(Arc::clone(one));
-                use_places[value].push((block_at, position));
-            }
-            for value in values.intersection(&_set(&one.defines)) {
+            if made.defined && values.contains(value) {
                 let mut cell = None;
                 if let Some(what) = &one.what {
                     if what.op == Operation::Move && what.name.as_deref() == Some("mov") {
@@ -1211,8 +1533,14 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
                         }
                     }
                 }
-                definitions.entry(*value).or_default().push((Arc::clone(one), cell, (block_at, position)));
+                definitions.entry(*value).or_default().push((Arc::clone(one), cell, made.place));
             }
+        }
+    }
+    for ((owner, place), times) in reads {
+        for _ in 0..times {
+            uses[&owner].push(Arc::clone(&body.blocks[place.0].insns[place.1]));
+            use_places[&owner].push(place);
         }
     }
 
@@ -1238,7 +1566,7 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
         let held = if _exact_frame(cell) {
             // Only what may write the cell is asked of, and the blocks between the load and its uses are gone over.
             let writers = writers.get_or_init(|| Writers::of(body));
-            let mut events: std::collections::HashMap<usize, Vec<(usize, bool)>> = std::collections::HashMap::new();
+            let mut events: crate::support::hash::HashMap<usize, Vec<(usize, bool)>> = crate::support::hash::HashMap::default();
             for (block, position) in writers.near(cell) {
                 if !_keeps(&body.blocks[block].insns[position], define, cell, true, body) {
                     events.entry(block).or_default().push((position, false));
@@ -1252,7 +1580,7 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
         } else {
             _unchanged(body, flow, define, cell, &uses[value])
         };
-        if std::env::var_os("LLRM_CHECK_UNCHANGED").is_some() {
+        if llrm_support::env_set("LLRM_CHECK_UNCHANGED") {
             assert!(held == _unchanged_reference(body, define, cell, &uses[value]), "{}: whether the cell holds differs from working it out as before", body.name);
         }
         if held {
@@ -1341,12 +1669,12 @@ impl Writers {
 /// Whether the cell holds at every one of `uses` (block, position), given where it is made to hold and where it is written:
 /// `events` per block are (position, true for the load, false for a write) in order. The same answer as `_unchanged`, found over
 /// the blocks that lie between the load and the uses and not over the whole body.
-fn _holds_at(flow: &Flow, events: &std::collections::HashMap<usize, Vec<(usize, bool)>>, uses: &[(usize, usize)]) -> bool {
-    use std::collections::{HashMap, HashSet};
+fn _holds_at(flow: &Flow, events: &crate::support::hash::HashMap<usize, Vec<(usize, bool)>>, uses: &[(usize, usize)]) -> bool {
+    use crate::support::hash::{HashMap, HashSet};
     // Whether the cell holds out of a block that has an event: after its last.
     let decided = |block: usize| events.get(&block).and_then(|list| list.last()).map(|(_, load)| *load);
     let mut needed: Vec<usize> = Vec::new();
-    let mut seen: HashSet<usize> = HashSet::new();
+    let mut seen: HashSet<usize> = HashSet::default();
     for &(block, position) in uses {
         let before = events.get(&block).and_then(|list| list.iter().rev().find(|(at, _)| *at < position));
         if before.is_none() && seen.insert(block) {
@@ -2241,7 +2569,7 @@ pub fn _constants(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Imm> 
 
 fn check_postings() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_POSTINGS").is_some())
+    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_POSTINGS"))
 }
 
 fn _at<'b>(body: &'b LirBody, at: At) -> &'b Arc<Insn> {
@@ -2917,7 +3245,7 @@ mod tests {
     use iced_x86::Register;
     use crate::support::hash::IndexMap;
 
-    use super::{_color_slots, _constants, spilled, spilled_from};
+    use super::{_color_slots, _constants, planned, spilled, spilled_from};
     use crate::backend::frame::{Frame, SlotKey};
     use crate::backend::{objbuild, select};
     use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -3620,6 +3948,24 @@ mod tests {
         assert_eq!(crate::backend::coalesce::last_asked(), Some(3), "the other web's values were asked of");
     }
 
+    /// `siblings` walked every instruction of the body for its plain moves, numbered every value of it for the liveness of the
+    /// graph, and walked it again for the widths and the occurrences: 3.6 + 1.2 + 1.0 G of the 104 G of compiling `d_faces`
+    /// (6%), for a web of three values. It looks at the instructions that name the web's values.
+    #[test]
+    fn test_siblings_cost_the_size_of_the_web_not_the_size_of_the_body() {
+        let mut insns = vec![_move(1, 10, None, 0x10), _move(2, 1, None, 0x12), _add(31, 2, 0x14)];
+        for other in 0..60u32 {
+            insns.push(_move(100 + 2 * other, 101 + 2 * other, None, 0x20 + 2 * other as i64));
+        }
+        let body = _body(insns);
+        let mut frame = Frame::new(0);
+        let before = super::examined();
+        super::siblings(&body, &set(&[1]), Some(&mut frame), &BTreeSet::new()).expect("sibling slots");
+        let looked = super::examined() - before;
+        assert!(looked <= 12, "{looked} instructions looked at for the copies of a web of three values in a body of 63");
+        assert!(crate::backend::coalesce::last_numbered() <= 4, "{} values numbered for a graph of {:?}", crate::backend::coalesce::last_numbered(), crate::backend::coalesce::last_asked());
+    }
+
     /// Every spill made a body of every instruction with the slots in it as values, and numbered it and
     /// found every interval again to colour the slots: 16 s of compiling `d_faces` (#559). The slots
     /// are found among themselves and the body's own intervals are remembered; the answers are the same.
@@ -3975,7 +4321,7 @@ mod tests {
         }
         let last = blocks.last_mut().expect("a block");
         let used = insn(1000, (1000, 1001), semantics(Operation::Push, "push", vec![], vec![held(1, 2)]), &[], &[1]);
-        last.insns.push(Arc::new(used));
+        last.insns.edit(|insns| insns.push(Arc::new(used)));
         let body = LirBody::new("chain", 0, blocks, IndexMap::default(), IndexMap::default());
         let before = super::KEEPS.with(std::cell::Cell::get);
         let stable = super::_stable_loads(&body, &set(&[1]));
@@ -4279,6 +4625,77 @@ mod tests {
 
     /// Each spill scanned the body for the values it spills (copies, constants, addresses, extensions, widths):
     /// 8% of compiling d_alias (#559). The occurrences follow the body, redoing only the blocks a rewrite changed.
+    #[test]
+    fn test_the_homes_are_not_made_into_instructions_unless_the_whole_body_is_walked() {
+        let body = _three_blocks();
+        let (spilt, _) = spilled(&body, &set(&[1]), Some(&mut Frame::new(0)), &crate::backend::classes::RegisterClasses::m16()).expect("spills");
+        let mut frame = Frame::new(0);
+        let (again, _) = spilled(&spilt, &set(&[2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::m16()).expect("spills");
+        let before = super::made_for_homes();
+        _color_slots(&again, &set(&[3]), &IndexMap::from_iter([(3, 2)]), &mut frame).expect("colours");
+        assert_eq!(super::made_for_homes() - before, 0, "an instruction was made again for each that names a home");
+    }
+
+    #[test]
+    fn test_the_plan_of_a_spill_reads_where_values_occur_from_the_postings_not_a_scan_of_the_body() {
+        use crate::analysis::occurrences::Occurrences;
+        let body = _three_blocks();
+        let before = Occurrences::scans(&body);
+        planned(&body, &set(&[1]), &mut Frame::new(0)).expect("plans");
+        assert_eq!(Occurrences::scans(&body), before, "the body was scanned for the stable loads of the values");
+    }
+
+    /// The homes' intervals were found afresh for every home after every spill, across the whole body (2.0 G of compiling d_faces, 616
+    /// times), though a spill names one or two of them. An earlier body's are shifted, and only the homes the changed instructions name
+    /// are found again; the answer is the same as finding all of them.
+    #[test]
+    fn test_a_spill_finds_the_intervals_of_the_homes_it_names_only() {
+        use crate::analysis::intervals as ranges;
+        use crate::model::ir::Semantics;
+        use crate::model::lir::{Insn, LirBlock};
+        let nop = |at: i64| Arc::new(Insn::new(at, Some((at, at)), Some(Semantics { name: Some("nop".to_owned()), ..Semantics::new(Operation::Nothing) }), vec![], vec![]));
+        let chain = |extra_at_30: bool| {
+            let blocks: Vec<LirBlock> = (0..400i64)
+                .map(|at| {
+                    let insns = if at == 30 && extra_at_30 { vec![nop(0x1000), nop(0x1001 + at), nop(0x2000 + at)] } else { vec![nop(0x1001 + at), nop(0x2000 + at)] };
+                    LirBlock { succ: if at < 399 { vec![at + 1] } else { vec![] }, ..LirBlock::new(at, insns) }
+                })
+                .collect();
+            LirBody::new("chain", 0, blocks, IndexMap::default(), IndexMap::default())
+        };
+        let homes = [-2i64, -4, -6];
+        let first = 1000u32;
+        let names = |extra: bool| {
+            let one = |home: usize| first + home as u32;
+            vec![
+                (5, 0, BTreeSet::from([one(0)]), BTreeSet::new()),
+                (350, 1, BTreeSet::new(), BTreeSet::from([one(0)])),
+                (10, 0, BTreeSet::from([one(1)]), BTreeSet::new()),
+                (300, 1, BTreeSet::new(), BTreeSet::from([one(1)])),
+                (30, usize::from(extra), BTreeSet::from([one(2)]), BTreeSet::new()),
+                (380, 1, BTreeSet::new(), BTreeSet::from([one(2)])),
+            ]
+        };
+        let sorted = |mut named: Vec<(usize, usize, BTreeSet<u32>, BTreeSet<u32>)>| {
+            named.sort_by_key(|(block, at, _, _)| (*block, *at));
+            named
+        };
+        let before = chain(false);
+        let first_found = super::homes_kept(&before, &ranges::indexed_shared(&before), &sorted(names(false)), &homes, first);
+        assert_eq!(first_found.len(), 3, "premise: all three homes are live somewhere");
+        // A spill puts an instruction in block 30, which names the third home.
+        let mut after = before.clone();
+        let replaced = chain(true).blocks[30].insns.clone();
+        after = after.with_blocks(after.blocks.iter().map(|block| if block.at == 30 { block.with_insns(replaced.to_vec()) } else { block.clone() }).collect());
+        let redone = super::homes_redone(&after);
+        let kept = super::homes_kept(&after, &ranges::indexed_shared(&after), &sorted(names(true)), &homes, first);
+        assert_eq!(super::homes_redone(&after) - redone, 1, "the homes the change does not name were found again");
+        let index = ranges::indexed_shared(&after);
+        let values: Vec<u32> = (first..first + 3).collect();
+        let afresh = crate::analysis::occurrences::Occurrences::planned(&sorted(names(true))).ranges(&after, &index, &values);
+        assert!(kept == afresh, "the kept intervals differ from finding them afresh");
+    }
+
     #[test]
     fn test_a_spill_redoes_the_occurrences_of_the_blocks_it_changed_only() {
         let body = _three_blocks();

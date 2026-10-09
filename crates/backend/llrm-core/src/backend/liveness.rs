@@ -7,6 +7,8 @@
 //! its inner loop with `mov di,bx` whose destination no path reads before writing
 //! it again.
 
+use std::sync::Arc;
+
 use iced_x86::Register;
 use crate::support::hash::IndexMap;
 
@@ -77,8 +79,38 @@ impl Effect {
     }
 }
 
-/// `one`'s effect as it decodes, else as its contract declares; None when unknown.
+thread_local! {
+    static EFFECT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many effects this thread has worked out by `effect`, for a test that a pass does not ask of an instruction it has seen.
+pub fn effects_worked_out() -> usize {
+    EFFECT_CALLS.with(std::cell::Cell::get)
+}
+
+/// `with` given `one`'s effect, as `effect` has it but without a copy of it.
+pub fn with_effect<R>(bits: u32, one: &Insn, with: impl FnOnce(Option<&Effect>) -> R) -> R {
+    let (was, answer) = one.effect.get_or_init(|| (bits, worked_out(bits, one)));
+    if *was == bits {
+        with(answer.as_ref())
+    } else {
+        with(worked_out(bits, one).as_ref())
+    }
+}
+
+/// `one`'s effect as it decodes, else as its contract declares; None when unknown. Worked out once for the instruction, whoever asks.
 pub fn effect(bits: u32, one: &Insn) -> Option<Effect> {
+    let (was, answer) = one.effect.get_or_init(|| (bits, worked_out(bits, one)));
+    // Asked at another width than the first time: not the answer kept.
+    let found = if *was == bits { answer.clone() } else { worked_out(bits, one) };
+    if llrm_support::env_set("LLRM_CHECK_EFFECT") {
+        assert!(format!("{found:?}") == format!("{:?}", worked_out(bits, one)), "an instruction's kept effect is not the one its fields give");
+    }
+    found
+}
+
+fn worked_out(bits: u32, one: &Insn) -> Option<Effect> {
+    EFFECT_CALLS.with(|count| count.set(count.get() + 1));
     if _terminator(one.what.as_ref()) {
         // A jump or branch writes nothing; a branch reads its flags.
         let what = one.what.as_ref().expect("a terminator has semantics");
@@ -93,19 +125,20 @@ pub fn effect(bits: u32, one: &Insn) -> Option<Effect> {
 }
 
 /// Each instruction's effect in `block`, decoded once for a fixed point to reuse.
-fn _effects(bits: u32, block: &LirBlock) -> Vec<Option<Effect>> {
+pub fn _effects(bits: u32, block: &LirBlock) -> Vec<Option<Effect>> {
     block.insns.iter().map(|one| effect(bits, one)).collect()
 }
 
 /// The lanes live before `effects`, given those live after them. An unknown
 /// instruction may read anything.
-fn _before(effects: &[Option<Effect>], live: Lanes, universe: &Lanes) -> Lanes {
+pub fn _before(effects: &[Option<Effect>], live: Lanes, universe: &Lanes) -> Lanes {
     effects.iter().rev().fold(live, |live, one| one.as_ref().map_or_else(|| *universe, |one| one.live_before(&live)))
 }
 
 /// The lanes live before `block`, given those live after it.
 pub fn _backwards(bits: u32, block: &LirBlock, live: Lanes, universe: &Lanes) -> Lanes {
-    _before(&_effects(bits, block), live, universe)
+    // Each effect is read where it is kept: a copy of every instruction's, for each round of a fixed point, was a tenth of peephole.
+    block.insns.iter().rev().fold(live, |live, one| with_effect(bits, one, |effect| effect.map_or_else(|| *universe, |effect| effect.live_before(&live))))
 }
 
 /// What a call says it reads and writes, for an instruction no decoder covers.
@@ -222,8 +255,41 @@ pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64
     (into, successors, universe)
 }
 
-/// Per block, the lanes nothing reads again after it.
+thread_local! {
+    /// The body `dead_at_exit` last answered for, and its answer.
+    static EXITS: std::cell::RefCell<Option<(LirBody, IndexMap<i64, Lanes>)>> = const { std::cell::RefCell::new(None) };
+    static EXITS_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has worked out a body's dead lanes at its blocks' exits, for a test that asking again of a body
+/// no pass changed does not.
+pub fn exits_computed() -> usize {
+    EXITS_COMPUTED.with(std::cell::Cell::get)
+}
+
+/// Whether `body` is `kept` over again: the same blocks of the same instructions, which are immutable.
+fn unchanged(kept: &LirBody, body: &LirBody) -> bool {
+    kept.bits == body.bits
+        && kept.blocks.len() == body.blocks.len()
+        && kept.blocks.iter().zip(&body.blocks).all(|(one, other)| {
+            one.at == other.at && one.succ == other.succ && one.insns.len() == other.insns.len() && one.insns.iter().zip(&other.insns).all(|(a, b)| Arc::ptr_eq(a, b))
+        })
+}
+
+/// Per block, the lanes nothing reads again after it. Ten passes of the peephole ask in turn, most leaving the body as it was
+/// (the same instructions, shared): the last answer stands for a body that is the same (#924: 500,000 decodes of 16,000
+/// instructions in one module).
 pub fn dead_at_exit(body: &LirBody) -> IndexMap<i64, Lanes> {
+    if let Some(answer) = EXITS.with(|held| held.borrow().as_ref().filter(|(kept, _)| unchanged(kept, body)).map(|(_, answer)| answer.clone())) {
+        return answer;
+    }
+    EXITS_COMPUTED.with(|count| count.set(count.get() + 1));
+    let answer = _dead_at_exit(body);
+    EXITS.with(|held| *held.borrow_mut() = Some((body.clone(), answer.clone())));
+    answer
+}
+
+fn _dead_at_exit(body: &LirBody) -> IndexMap<i64, Lanes> {
     let (into, successors, universe) = live_into(body);
     into.keys()
         .map(|at| {

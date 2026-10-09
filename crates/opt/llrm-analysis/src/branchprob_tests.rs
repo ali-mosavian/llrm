@@ -674,3 +674,70 @@ out:
     let (guessed, _) = estimate(text);
     assert!(close(guessed.probability(at("guard"), at("enter")), 0.5), "premise: with no counted loop the guard is even");
 }
+
+/// Every branch in a counted loop was decided by running the loop's counters through all its trips again: k branches in a loop of
+/// n trips ran it k times (`nbody_single -Omax`: `peel` 22% of the compile, 17 points in `counted`). The counters' values at each
+/// trip are the loop's, so the loop is run once and each branch reads them.
+#[test]
+fn test_a_counted_loop_is_run_once_for_all_the_branches_in_it() {
+    let guards = 6;
+    let mut text = String::from("define i16 @f(i16 %n) {\nentry:\n  br label %outer\nouter:\n  %i = phi i16 [ 1, %entry ], [ %next, %latch ]\n  %done = icmp ne i16 %i, 5\n  br i1 %done, label %g0, label %out\n");
+    for k in 0..guards {
+        let after = if k + 1 == guards { "latch".to_owned() } else { format!("g{}", k + 1) };
+        text += &format!("g{k}:\n  %skip{k} = icmp sle i16 {k}, %i\n  br i1 %skip{k}, label %{after}, label %e{k}\ne{k}:\n  %x{k} = add i16 %i, %n\n  br label %{after}\n");
+    }
+    text += "latch:\n  %next = add i16 %i, 1\n  br label %outer\nout:\n  ret i16 %n\n}\n";
+    let module = parsed(&format!("{DOS}{text}"));
+    let function = function(&module, "f");
+    let names: Vec<(String, i64)> = function.layout().iter().map(|&one| (function.block(one).name.clone().unwrap_or_default(), id(one))).collect();
+    let at = move |name: &str| names.iter().find(|(one, _)| one == name).unwrap_or_else(|| panic!("no %{name}")).1;
+    let before = loops_run();
+    let odds = estimated(&module.context, &module.metadata, &module.globals, function, &Shape::of(function), &BTreeMap::from([(at("outer"), 4)]));
+    assert_eq!(loops_run() - before, 1, "the loop is run once for {guards} branches");
+    for k in 0..guards {
+        assert_eq!(odds.by.get(&at(&format!("g{k}"))), Some(&Heuristic::Counted), "g{k}");
+    }
+    // `3 <= i` holds on 2 of the 4 trips.
+    assert!(close(odds.probability(at("g3"), at("e3")), 0.5), "{:?}", odds.taken);
+}
+
+/// Every loop's weighing asked every edge which loop's trips fix it, and each ask walked the loops around the block and made a set of
+/// its successors: a nest 16 deep read 16 loops x every edge x 16 loops (lir jumps on it: 73 Minstr, a third of it here). An edge's
+/// answer does not change between asks.
+#[test]
+fn test_a_nest_of_counted_loops_asks_each_edge_which_trips_fix_it_once() {
+    let depth = 16;
+    let (header, latch) = (|k: i64| 10 * k, |k: i64| 10 * k + 1);
+    let end = 1000;
+    let succ = move |at: i64| -> Vec<i64> {
+        let loop_of = at / 10;
+        match (at % 10, loop_of) {
+            (_, 0) => vec![header(1)],
+            (0, k) if k == depth => vec![latch(k), latch(k - 1).max(if k == 1 { end } else { 0 })],
+            (0, k) => vec![header(k + 1), if k == 1 { end } else { latch(k - 1) }],
+            (1, k) => vec![header(k)],
+            _ => vec![],
+        }
+    };
+    let mut preds: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+    let mut order = vec![0];
+    order.extend((1..=depth).map(header));
+    order.extend((1..=depth).rev().map(latch));
+    order.push(end);
+    for &from in &order {
+        for to in succ(from) {
+            preds.entry(to).or_default().push(from);
+        }
+    }
+    let bodies: Vec<(BTreeSet<i64>, BTreeSet<i64>)> =
+        (1..=depth).map(|k| ((k..=depth).flat_map(|j| [header(j), latch(j)]).collect(), BTreeSet::from([latch(k)]))).collect();
+    let cycles: Vec<Cycle> = bodies.iter().enumerate().rev().map(|(k, (body, latches))| Cycle { header: header(k as i64 + 1), latches, body, trips: Some(4) }).collect();
+    let asked = std::cell::Cell::new(0usize);
+    let successors = |at: i64| {
+        asked.set(asked.get() + 1);
+        succ(at)
+    };
+    let given = |_: i64, _: i64| 0.5;
+    propagated(&order, &|at| preds.get(&at).cloned().unwrap_or_default(), &successors, &cycles, &given);
+    assert!(asked.get() <= 20 * order.len(), "{} successor lists asked for {} blocks", asked.get(), order.len());
+}

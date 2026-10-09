@@ -439,10 +439,14 @@ def read_expected(directory: Path) -> dict:
     return tomllib.loads(path.read_text()) if path.exists() else {}
 
 
-def write_expected(directory: Path, measured: dict, name: str, reason: str) -> None:
+def write_expected(directory: Path, measured: dict, name: str, reason: str) -> bool:
     """Merge what was measured into expected.toml: a table not measured this run (another level, a reference left alone)
-    stays. The kernel time of a table whose instructions moved is dropped: it belongs to the old counts."""
-    tables = {one: dict(table) for one, table in read_expected(directory).items() if isinstance(table, dict)}
+    stays. The kernel time of a table whose instructions moved is dropped: it belongs to the old counts.
+
+    The file is written, and its reason and date replaced, only where a number changed: whether any did is returned. A bless that
+    rewrote the reason of every benchmark made a pull request of 43 files where 6 had moved."""
+    before = {one: dict(table) for one, table in read_expected(directory).items() if isinstance(table, dict)}
+    tables = {one: dict(table) for one, table in before.items()}
     for (benchmark, language, opt), counts in measured.items():
         if benchmark != name or "error" in counts:
             continue
@@ -451,11 +455,14 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> N
         if "kernel_ms" not in new and "kernel_ms" in old and old.get("instructions") == new.get("instructions"):
             new["kernel_ms"] = old["kernel_ms"]
         tables.setdefault(language, {})[opt] = new
+    if {language: {opt: dict(table) for opt, table in by_opt.items()} for language, by_opt in tables.items()} == {language: {opt: dict(table) for opt, table in by_opt.items()} for language, by_opt in before.items()} and (directory / "expected.toml").exists():
+        return False
     lines = [f"reason = {json.dumps(reason)}", f'blessed = "{date.today()}"', ""]  # JSON escapes are TOML's
     for language in dict.fromkeys([*LANGUAGES, *BASIC_LANGUAGES, *(one for many in REFERENCES.values() for one in many)]):
         for opt in sorted(tables.get(language, {})):
             lines += [f"[{language}.{opt}]", *(f"{one} = {value}" for one, value in tables[language][opt].items()), ""]
     (directory / "expected.toml").write_text("\n".join(lines))
+    return True
 
 
 def against(label: str, got: dict, want: dict | None) -> list[str]:
@@ -600,14 +607,15 @@ def main() -> int:
         args.json.write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))
     if args.bless:
         names = {key[0] for key in measured}
+        changed = 0
         for directory in benchmarks(args.select):
             name = str(directory.relative_to(BENCH))
             broken = [f"{key}: {value['error']}" for key, value in measured.items() if key[0] == name and key[1] in (*LANGUAGES, *BASIC_LANGUAGES) and "error" in value and "known" not in value]
             if broken:
                 print(f"not blessing {name}: {broken}")
                 return 1
-            write_expected(directory, measured, name, args.reason)
-        print(f"blessed {len(names)} benchmarks")
+            changed += write_expected(directory, measured, name, args.reason)
+        print(f"blessed {len(names)} benchmarks, {changed} files changed")
         print(*standing(measured, args.select, args.opt), sep="\n")
         return 0
     problems = judge(measured, args.select, args.opt)

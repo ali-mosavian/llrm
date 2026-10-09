@@ -16,6 +16,7 @@ use llrm_analysis::cfg;
 use llrm_analysis::liveness::{self, Liveness};
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::{Dense, IdSet};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::passes::Outer;
@@ -83,35 +84,80 @@ pub struct Point<K> {
 }
 
 /// What fitting `points` costs and spills.
-pub struct Forecast<K> {
+pub struct Forecast<S> {
     pub cost: i64,
-    pub spilled: BTreeSet<K>,
+    pub spilled: S,
     /// The most residents past a point's registers, before any spill.
     pub peak: i64,
 }
 
+/// The cells spilled so far.
+pub trait Spilled<K>: Default {
+    fn has(&self, cell: &K) -> bool;
+    fn add(&mut self, cell: K);
+}
+
+impl<K: Ord> Spilled<K> for BTreeSet<K> {
+    fn has(&self, cell: &K) -> bool {
+        self.contains(cell)
+    }
+    fn add(&mut self, cell: K) {
+        self.insert(cell);
+    }
+}
+
+impl<K: Eq + std::hash::Hash> Spilled<K> for llrm_support::hash::HashSet<K> {
+    fn has(&self, cell: &K) -> bool {
+        self.contains(cell)
+    }
+    fn add(&mut self, cell: K) {
+        self.insert(cell);
+    }
+}
+
+impl<K: Dense> Spilled<K> for IdSet<K> {
+    fn has(&self, cell: &K) -> bool {
+        self.contains(cell)
+    }
+    fn add(&mut self, cell: K) {
+        self.insert(cell);
+    }
+}
+
 /// What spilling costs to fit `points`, in order: at each, the cheapest
 /// residents past its registers are spilled, and stay spilled.
-pub fn spilled<K: Ord + Copy>(points: impl IntoIterator<Item = Point<K>>, price: impl Fn(K) -> i64) -> i64 {
-    forecast(points, price).cost
+pub fn spilled<K: Ord + std::hash::Hash + Copy>(points: impl IntoIterator<Item = Point<K>>, price: impl Fn(K) -> i64) -> i64 {
+    fitted::<K, llrm_support::hash::HashSet<K>>(points, price).cost
 }
 
 /// `spilled`, and which cells it spills and how far past its registers the pressure goes.
-pub fn forecast<K: Ord + Copy>(points: impl IntoIterator<Item = Point<K>>, price: impl Fn(K) -> i64) -> Forecast<K> {
-    let mut spilled = BTreeSet::new();
+pub fn forecast<K: Ord + Dense>(points: impl IntoIterator<Item = Point<K>>, price: impl Fn(K) -> i64) -> Forecast<IdSet<K>> {
+    fitted(points, price)
+}
+
+fn fitted<K: Ord + Copy, S: Spilled<K>>(points: impl IntoIterator<Item = Point<K>>, price: impl Fn(K) -> i64) -> Forecast<S> {
+    let mut spilled = S::default();
     let (mut cost, mut peak) = (0, 0);
     for point in points {
-        let resident = point.residents.into_iter().filter(|one| !spilled.contains(one)).collect::<BTreeSet<_>>();
+        // Sorted and without repeats, as a set would hold them: a set built per point was most of lsr's work on a loop of many uses.
+        let mut resident = point.residents.into_iter().filter(|one| !spilled.has(one)).collect::<Vec<_>>();
+        resident.sort_unstable();
+        resident.dedup();
         let excess = resident.len() as i64 - point.registers.max(0);
         peak = peak.max(excess);
         if excess <= 0 {
             continue;
         }
+        // The `excess` cheapest, dearer ties to the larger resident: a partial sort picks the same ones.
+        let take = excess as usize;
         let mut cheapest = resident.into_iter().map(|one| (price(one), one)).collect::<Vec<_>>();
-        cheapest.sort();
-        for (each, one) in cheapest.into_iter().take(excess as usize) {
+        if take < cheapest.len() {
+            cheapest.select_nth_unstable(take);
+            cheapest.truncate(take);
+        }
+        for (each, one) in cheapest {
             cost += each;
-            spilled.insert(one);
+            spilled.add(one);
         }
     }
     Forecast { cost, spilled, peak }
@@ -180,7 +226,7 @@ fn addressed_by(function: &Function, is_folded: &mut dyn FnMut(ValueId) -> bool)
     let mut found = BTreeSet::new();
     // Whether a pointer is folded depends on all its users, and a frame slot has one user for each access
     // to it: asked once for each pointer, not once for each access.
-    let mut memo: std::collections::HashMap<ValueId, bool> = std::collections::HashMap::new();
+    let mut memo: llrm_support::hash::HashMap<ValueId, bool> = llrm_support::hash::HashMap::default();
     for &block in function.layout() {
         for &inst in function.block(block).instructions() {
             let op = function.instruction(inst);
@@ -679,7 +725,7 @@ impl<'a> View<'a> {
     }
 
     /// What fitting the function spills, each cell priced by its traffic.
-    pub fn forecast(&self, costs: &OperationCosts, frequency: &BTreeMap<i64, i64>) -> Forecast<ValueId> {
+    pub fn forecast(&self, costs: &OperationCosts, frequency: &BTreeMap<i64, i64>) -> Forecast<IdSet<ValueId>> {
         let traffic = traffic(self.function, frequency, &self.pressure.cells, costs, &|_| true, &|value| words(self.context, self.layout, self.function, value));
         let points = self.function.layout().iter().flat_map(|&block| self.sites(block, &|_| false)).flat_map(Site::points);
         forecast(points, |cell| traffic.get(&cell).map_or(0, |one| one.price(costs)))

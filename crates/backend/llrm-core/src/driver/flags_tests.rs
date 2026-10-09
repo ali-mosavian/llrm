@@ -19,6 +19,27 @@ fn pipeline(arguments: &[&str]) -> Options {
     parsed(arguments).unwrap().pipeline()
 }
 
+/// The allocator's search of other shapes of a body is on at every level and `-fno-allocation-search` turns it off.
+#[test]
+fn test_allocation_search_is_a_pass_every_level_has_on() {
+    for level in ["-O1", "-O2", "-O3", "-Os", "-Omax"] {
+        assert!(pipeline(&[level]).searches(), "{level}");
+        assert!(!pipeline(&[level, "-fno-allocation-search"]).searches(), "{level}");
+    }
+}
+
+/// Only -Omax tries every shape of a body; the other levels try the one its spills suggest, as the search over all of them
+/// cost 2.7x the compile time for +0.04% of QCport's bytes. `-f[no-]allocation-search-all` sets it at any level.
+#[test]
+fn test_only_omax_searches_every_shape() {
+    for level in ["-O1", "-O2", "-O3", "-Os"] {
+        assert!(!pipeline(&[level]).searches_all(), "{level}");
+        assert!(pipeline(&[level, "-fallocation-search-all"]).searches_all(), "{level}");
+    }
+    assert!(pipeline(&["-Omax"]).searches_all());
+    assert!(!pipeline(&["-Omax", "-fno-allocation-search-all"]).searches_all());
+}
+
 /// The passes a level runs are gcc 13.4.0's `default_options_table` (opts.cc 573-694) for the passes this compiler has:
 /// -O1 the scalar ones and the last call inlined, -O2 adds inlining, gcse, sibling calls and pattern fill, -O3 peeling,
 /// unswitching, complete copies of loops that grow the code, and the larger inline threshold. Before, -O1 and -O2 differed

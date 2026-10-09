@@ -358,7 +358,7 @@ fn complaints(done: &LirBody) -> Vec<String> {
 /// What a body does, run: the generator's body in values, and the allocator's
 /// in registers and frame cells, must store the same things.
 mod run {
-    use std::collections::HashMap;
+    use crate::support::hash::HashMap;
 
     use iced_x86::Register;
 
@@ -385,7 +385,7 @@ mod run {
 
     impl Machine {
         pub fn new(virtual_: bool) -> Self {
-            Self { virtual_, vals: HashMap::new(), regs: HashMap::new(), mem: HashMap::new(), stack: Vec::new(), poison: 0, log: Vec::new(), taken: 0 }
+            Self { virtual_, vals: HashMap::default(), regs: HashMap::default(), mem: HashMap::default(), stack: Vec::new(), poison: 0, log: Vec::new(), taken: 0 }
         }
 
         /// Nothing a body computes: the low word is hashed, so arithmetic that
@@ -760,6 +760,193 @@ fn test_a_value_that_cannot_be_spilled_takes_a_register_by_force() {
     assert!(crate::backend::allocate::last_resorts() > before, "premise: the allocation needed the last resort");
 }
 
+/// LLVM and GCC allocate a function once. The allocator here also allocated the body in each other shape its spills suggested,
+/// twice each, and kept the cheapest: 85 allocations of `d_faces`'s big function (#944). A profile that does not search makes
+/// the one allocation, and the same output where no other shape was cheaper.
+#[test]
+fn test_an_allocator_that_does_not_search_allocates_a_body_once() {
+    use crate::backend::allocate::trials;
+    let shape = Shape { pool: 12, ops: 11 };
+    let mut searched = 0;
+    for seed in 0..12 {
+        let run = |search: bool| {
+            let (body, _) = body(seed, &shape);
+            let cpu = crate::backend::cpu::tuned_searching(&llrm_x86_m16::M16, "386", false, search).expect("a profile");
+            let mut phase = RegAlloc::new(None, None, ProfileOrName::Profile(cpu), &*target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("a phase");
+            let before = trials();
+            let out = phase.transform(body).expect("allocated");
+            (trials() - before, out)
+        };
+        let (with, _) = run(true);
+        let (without, alone) = run(false);
+        searched += with;
+        assert_eq!(without, 0, "seed {seed}: allocated again by a profile that does not search");
+        assert!(complaints(&alone).is_empty(), "seed {seed}: {:?}", complaints(&alone));
+    }
+    assert!(searched > 0, "premise: some body had a shape to try");
+}
+
+/// The search tried every shape its spills suggested, twice each: up to 12 allocations of one body, and 80% of compiling
+/// `d_faces`. Unless it is exhaustive it allocates the shape the spills suggest and the body without splitting: at most 2
+/// more, and never a worse output than the first allocation's.
+#[test]
+fn test_a_search_that_is_not_exhaustive_makes_at_most_two_more_allocations() {
+    use crate::backend::allocate::trials;
+    let shape = Shape { pool: 12, ops: 11 };
+    let mut most_all = 0;
+    for seed in 0..40 {
+        let run = |exhaustive: bool| {
+            let (body, _) = body(seed, &shape);
+            let cpu = crate::backend::cpu::tuned_exhaustive(&llrm_x86_m16::M16, "386", false, exhaustive).expect("a profile");
+            let mut phase = RegAlloc::new(None, None, ProfileOrName::Profile(cpu), &*target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("a phase");
+            let before = trials();
+            let out = phase.transform(body).expect("allocated");
+            (trials() - before, out)
+        };
+        let (directed, out) = run(false);
+        let (all, _) = run(true);
+        assert!(directed <= 2, "seed {seed}: {directed} more allocations");
+        assert!(complaints(&out).is_empty(), "seed {seed}: {:?}", complaints(&out));
+        most_all = most_all.max(all);
+    }
+    assert!(most_all > 2, "premise: some body has more than two shapes to try (most: {most_all})");
+}
+
+/// The walk found a value's intervals by every value live in every block, hashed (the homes of d_faces: 56 values, 240 blocks, 4.4M
+/// instructions a call, 616 calls). From where the values occur and the blocks they are live through it finds the same.
+#[test]
+fn test_intervals_from_occurrences_are_those_of_the_walk() {
+    use crate::analysis::intervals as ranges;
+    use crate::backend::postings::Postings;
+    let mut compared = 0;
+    for seed in 0..120_u64 {
+        let shape = Shape { pool: 6 + (seed % 9) as usize, ops: 5 + (seed % 11) as usize };
+        let (plain, _) = body(seed, &shape);
+        let index = ranges::indexed(&plain);
+        let postings = Postings::of(&plain);
+        let every: Vec<u32> = plain.insns().iter().flat_map(|one| one.defines.iter().chain(&one.uses).copied()).collect::<std::collections::BTreeSet<u32>>().into_iter().collect();
+        for step in [1_usize, 2, 3] {
+            let values: Vec<u32> = every.iter().copied().enumerate().filter(|(at, _)| at % step == (seed as usize) % step).map(|(_, value)| value).collect();
+            let whole = ranges::_ranges_reference(&plain, &index, &|value| values.contains(&value));
+            let mut places: IndexMap<u32, Vec<ranges::Occurrence>> = IndexMap::default();
+            for &value in &values {
+                let mut at: Vec<ranges::Place> = postings.defs(value).iter().chain(postings.uses(value)).map(|(block, position)| (*block as usize, *position as usize)).collect();
+                at.sort_unstable();
+                at.dedup();
+                places.insert(value, at.into_iter().map(|(block, position)| {
+                    let one = &plain.blocks[block].insns[position];
+                    ((block, position), one.defines.contains(&value), one.uses.contains(&value))
+                }).collect());
+            }
+            let found = ranges::intervals_by_occurrences(&plain, &index, &values, &places);
+            assert!(found == whole, "seed {seed}, every {step}th value: the intervals from occurrences differ from the walk");
+            compared += whole.len();
+        }
+    }
+    assert!(compared > 0, "premise: some value was live");
+}
+
+/// Reading the intervals of a body copied every interval of it (`_existing_colors` asked for the body's own and added the homes':
+/// 0.14 G of d_faces, 616 calls of 8000 segments), though a read needs the remembered answer itself.
+#[test]
+fn test_reading_the_intervals_of_a_body_asked_of_twice_copies_none() {
+    use crate::analysis::intervals as ranges;
+    let (plain, _) = body(3, &Shape { pool: 9, ops: 8 });
+    let first = ranges::intervals_shared(&plain, None);
+    let again = ranges::intervals_shared(&plain, None);
+    assert!(std::sync::Arc::ptr_eq(&first, &again), "the second ask copied the answer");
+    assert!(*first == ranges::intervals(&plain, None));
+}
+
+/// A function's allocator alternates between its base body and a trial's (a spill or a split of it). The facts share one manager: a
+/// trial's asks must not evict the base's, or each switch worked both out again. Over six alternations the base is numbered and
+/// worked out once, the trial is edited from it once, and every later ask is answered from memory; each answer is the whole walk's.
+#[test]
+fn test_a_base_and_its_trial_asked_in_turn_are_each_worked_out_once() {
+    use crate::analysis::intervals::{edited, intervals, intervals_afresh, numbered, worked};
+    let (base, _) = body(4, &Shape { pool: 10, ops: 12 });
+    let mut trial_blocks = base.blocks.clone();
+    let block = trial_blocks.iter_mut().find(|block| block.insns.len() > 3).expect("a block with instructions");
+    let copy = std::sync::Arc::new((*block.insns[1]).clone());
+    block.insns.edit(|insns| insns[1] = copy);
+    let trial = base.with_blocks(trial_blocks);
+    let before = (worked(&base), edited(&base), numbered(&base));
+    for _ in 0..6 {
+        for body in [&base, &trial] {
+            intervals(body, None);
+            crate::analysis::intervals::indexed_shared(body);
+        }
+    }
+    let after = (worked(&base), edited(&base), numbered(&base));
+    assert_eq!((after.0 - before.0, after.1 - before.1, after.2 - before.2), (1, 1, 2), "(worked, edited, numbered) over six turns of base and trial: the base once, the trial edited from it");
+    for body in [&base, &trial] {
+        assert_eq!(intervals(body, None), intervals_afresh(body));
+    }
+}
+
+/// An answer edited from an earlier one worked the changed values out by taking the body's liveness whole and walking every block
+/// (`intervals liveness` and `walk`, 1.5 G of compiling d_faces for 882 edits that name a few values each). It finds them from where
+/// they occur; the intervals and weights are the walk's.
+#[test]
+fn test_an_edited_answer_works_its_changed_values_out_from_where_they_occur() {
+    use crate::analysis::intervals::{by_occurrences, edited, intervals, intervals_afresh};
+    let (base, _) = body(4, &Shape { pool: 10, ops: 12 });
+    intervals(&base, None);
+    let mut blocks = base.blocks.clone();
+    let block = blocks.iter_mut().find(|block| block.insns.len() > 3).expect("a block with instructions");
+    let copy = std::sync::Arc::new((*block.insns[1]).clone());
+    block.insns.edit(|insns| insns[1] = copy);
+    let trial = base.with_blocks(blocks);
+    let before = (edited(&base), by_occurrences(&base));
+    let found = intervals(&trial, None);
+    assert_eq!(edited(&base) - before.0, 1, "premise: the trial's answer is an edit of the base's");
+    assert_eq!(by_occurrences(&base) - before.1, 1, "the changed values were walked for, not found from their occurrences");
+    assert_eq!(found, intervals_afresh(&trial));
+}
+
+/// The interference among a web of a few values walked every instruction of the body for liveness rows and again for the widths, per
+/// web (1 G of compiling d_faces, 454 webs). From where the values occur it is the same graph, and the body is not walked.
+#[test]
+fn test_the_interference_among_a_web_is_found_without_walking_the_body() {
+    use crate::analysis::intervals::intervals;
+    use crate::backend::allocate::live_rows_walks;
+    use crate::backend::coalesce::{_interference, _interference_among};
+    for seed in 0..40u64 {
+        let (plain, _) = body(seed, &Shape { pool: 8 + (seed % 7) as usize, ops: 8 + (seed % 11) as usize });
+        let web: std::collections::BTreeSet<u32> = intervals(&plain, None).keys().copied().step_by(3).take(4).collect();
+        let before = live_rows_walks(&plain);
+        let among = _interference_among(&plain, Some(&web));
+        assert_eq!(live_rows_walks(&plain), before, "seed {seed}: the body was walked for the rows of a web");
+        let whole = _interference(&plain);
+        for value in &web {
+            let of = |graph: &crate::backend::coalesce::Graph| graph.get(value).map(|near| near.intersection(&web).copied().collect::<std::collections::BTreeSet<u32>>()).unwrap_or_default();
+            assert_eq!(of(&among), of(&whole), "seed {seed}: value#{value}");
+        }
+    }
+}
+
+/// The no-split allocation of a body the base allocation split nothing in is the base allocation again, and was made for every
+/// body with a spill (10% of the trials over QCport, the bench and the 66 programs, none of them won).
+#[test]
+fn test_a_body_the_base_allocation_split_nothing_in_is_not_allocated_again_without_splitting() {
+    use crate::backend::allocate::{base_splits, trials};
+    let mut unsplit = 0;
+    for seed in 0..240_u64 {
+        let shape = Shape { pool: 7 + (seed % 8) as usize, ops: 4 + (seed % 9) as usize };
+        let (body, _) = body(seed, &shape);
+        let cpu = crate::backend::cpu::tuned_exhaustive(&llrm_x86_m16::M16, "386", false, false).expect("a profile");
+        let mut phase = RegAlloc::new(None, None, ProfileOrName::Profile(cpu), &*target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("a phase");
+        let before = trials();
+        phase.transform(body).expect("allocated");
+        let made = trials() - before;
+        if made > 0 && base_splits() == 0 {
+            unsplit += 1;
+            assert!(made <= 1, "seed {seed}: {made} more allocations of a body nothing was split in");
+        }
+    }
+    assert!(unsplit > 0, "premise: some body with a spill was split nowhere");
+}
+
 /// `allocate::live` was built from per-block sorted sets and converted to bit rows for the fixed point:
 /// 24% of compiling QCport's `d_faces` (#559). Dense rows all the way give the same sets.
 #[test]
@@ -786,18 +973,18 @@ fn test_dense_liveness_is_what_the_sorted_sets_gave() {
 fn test_the_intervals_of_the_same_instructions_are_worked_out_once() {
     use crate::analysis::intervals::{intervals, worked};
     let (generated, _) = body(3, &Shape { pool: 8, ops: 10 });
-    let before = worked();
+    let before = worked(&generated) + crate::analysis::intervals::by_occurrences(&generated);
     let first = intervals(&generated, None);
     let again = intervals(&generated, None);
-    assert_eq!(worked() - before, 1, "the same body was worked out twice");
+    assert_eq!(worked(&generated) + crate::analysis::intervals::by_occurrences(&generated) - before, 1, "the same body was worked out twice");
     assert_eq!(first, again);
     // A body with one instruction made afresh is another question.
     let mut other = generated.clone();
     let block = other.blocks.iter_mut().find(|block| !block.insns.is_empty()).expect("a block with instructions");
     let copy = std::sync::Arc::new((*block.insns[0]).clone());
-    block.insns[0] = copy;
+    block.insns.edit(|insns| insns[0] = copy);
     intervals(&other, None);
-    assert_eq!(worked() - before, 2, "another body was answered from the first");
+    assert_eq!(worked(&generated) + crate::analysis::intervals::by_occurrences(&generated) - before, 2, "another body was answered from the first");
 }
 
 /// A spill made a body of nearly the same instructions, and every fact of it was worked out afresh (the allocator's
@@ -821,12 +1008,12 @@ fn test_the_intervals_of_an_edited_body_are_the_ones_worked_out_afresh() {
             };
             // One instruction made afresh, and another of the block's put in again beside it: as a spill's reload would be.
             let copy = Arc::new((*other.blocks[block].insns[at]).clone());
-            other.blocks[block].insns[at] = copy;
+            other.blocks[block].insns.edit(|insns| insns[at] = copy);
             let inserted = Arc::new((*other.blocks[block].insns[at - 1]).clone());
-            other.blocks[block].insns.insert(at, inserted);
-            let before = edited();
+            other.blocks[block].insns.edit(|insns| insns.insert(at, inserted));
+            let before = edited(&other);
             let found = intervals(&other, None);
-            made += edited() - before;
+            made += edited(&other) - before;
             assert_eq!(found, intervals_afresh(&other), "seed {seed}");
         }
     }
@@ -862,9 +1049,9 @@ fn test_interference_among_some_values_is_the_whole_graphs_among_them() {
 #[test]
 fn test_a_body_with_no_word_address_pairs_is_not_numbered_to_find_classes() {
     let (generated, _) = body(5, &Shape { pool: 8, ops: 6 });
-    let before = crate::analysis::intervals::worked();
+    let before = crate::analysis::intervals::worked(&generated);
     crate::backend::regclass::classes(&generated, &std::collections::BTreeSet::new(), &crate::backend::target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
-    assert_eq!(crate::analysis::intervals::worked() - before, 0, "intervals were worked out for a body with no word pairs");
+    assert_eq!(crate::analysis::intervals::worked(&generated) - before, 0, "intervals were worked out for a body with no word pairs");
 }
 
 /// The interval walk looked each instruction's slot up in a map hashed by its address, built a set per group
@@ -1050,9 +1237,9 @@ fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
         for body in [in_ssa(&plain), plain] {
             let live = intervals(&body, None);
             let masks = _masks(&body, &indexed(&body), &crate::backend::target::BUILT_IN);
-            let before = worked();
+            let before = worked(&body);
             let given = classes_given(&body, &std::collections::BTreeSet::new(), &crate::backend::target::BUILT_IN, &registers, &Found { live: &live, masks: &masks });
-            assert_eq!(worked() - before, 0, "seed {seed}: intervals were worked out again");
+            assert_eq!(worked(&body) - before, 0, "seed {seed}: intervals were worked out again");
             let alone = classes(&body, &std::collections::BTreeSet::new(), &crate::backend::target::BUILT_IN, &registers);
             assert!(given.iter().eq(alone.iter()), "seed {seed}");
         }

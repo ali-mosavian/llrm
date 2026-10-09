@@ -43,7 +43,13 @@ impl FunctionPass for IndVars {
         let outer = std::rc::Rc::clone(analyses.outer());
         // What is known without memory is the manager's until a step changes the body.
         let held = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
-        let mut standing = llrm_analysis::memory::Standing::held(&held);
+        // Only a `sext` of a counter asks what the loops bound.
+        let widens = unit.function.walk().any(|(_, inst)| unit.function.instruction(inst).opcode == Opcode::Cast(CastOp::SExt));
+        let bounded = widens.then(|| analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function));
+        let mut standing = match bounded.as_deref() {
+            Some(Ok(bounds)) => llrm_analysis::memory::Standing::held_with(&held, bounds),
+            _ => llrm_analysis::memory::Standing::held(&held),
+        };
         let evaluated = crate::loopexit::evaluated_with(unit.context, unit.layout, unit.function, &outer, &mut standing).unwrap_or_else(|error| panic!("indvars: {error}"));
         if evaluated {
             standing.changed();

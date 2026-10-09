@@ -8,7 +8,7 @@ use llrm_mir::opcode::Opcode;
 use llrm_support::hash::IndexMap;
 
 use super::{_direct_summary, Effect, PointsTo, Procedure, Summary, UNKNOWN, annotated, calls_annotated, congruences, nonnull_by_definition, points_to, summaries};
-use crate::memory::{self, Identity, MemRef, MemoryKind, MemoryObject, Provenance, Slice, Unit, object_of};
+use crate::memory::{self, Identity, MemRef, MemoryKind, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit, object_of};
 use crate::regions::overlapping;
 use crate::testing::{DOS, function, layout, parsed, value};
 
@@ -41,7 +41,7 @@ impl Parsed {
     }
 
     /// The object `%name` allocates.
-    fn object(&self, name: &str) -> MemoryObject {
+    fn object(&self, name: &str) -> ObjectRef {
         object_of(&self.unit(), Operand::Value(self.value(name))).expect("an object")
     }
 
@@ -70,7 +70,7 @@ fn parameter(index: i64) -> MemoryObject {
 }
 
 /// An access to bytes `low..high` of `object`.
-fn bytes(object: &MemoryObject, low: i64, high: i64) -> MemRef {
+fn bytes(object: &(impl Into<ObjectRef> + Clone), low: i64, high: i64) -> MemRef {
     let slice = Slice::new(object.clone(), low, low + 1, 1, high - low).unwrap();
     MemRef::reach(u32::try_from(high - low).unwrap(), Provenance { slices: BTreeSet::from([slice]), restrict: BTreeSet::new() })
 }
@@ -179,10 +179,10 @@ b20:
 }
 ",
         );
-        sender.send(parsed.facts().values[&parsed.value("loaded")].clone()).unwrap();
+        let loaded = parsed.facts().values[&parsed.value("loaded")].clone();
+        sender.send(loaded.slices.iter().any(|one| ObjectInterner::of(&parsed.module.context).object(one.object) == parameter(0))).unwrap();
     });
-    let loaded = receiver.recv_timeout(std::time::Duration::from_secs(10)).expect("points_to terminates");
-    assert!(loaded.slices.iter().any(|one| one.object == parameter(0)));
+    assert!(receiver.recv_timeout(std::time::Duration::from_secs(10)).expect("points_to terminates"));
 }
 
 #[test]
@@ -200,7 +200,7 @@ b0:
     );
     let load = parsed.all(|op| matches!(op, Opcode::Load { .. }))[0];
     let tagged = annotated(&parsed.unit()).unwrap()[&load].provenance.clone().expect("a derived provenance");
-    assert_eq!(tagged.slices.iter().map(|one| one.object.clone()).collect::<BTreeSet<_>>(), BTreeSet::from([parsed.object("a")]));
+    assert_eq!(tagged.slices.iter().map(|one| one.object).collect::<BTreeSet<_>>(), BTreeSet::from([parsed.object("a")]));
 }
 
 #[test]
@@ -225,7 +225,7 @@ b0:
     let summary = _direct_summary(&parsed.unit()).unwrap();
     assert_eq!(facts.values[&parsed.value("second")], facts.values[&parsed.value("root")]);
     assert!(!summary.unknown_write);
-    assert_eq!(summary.writes.iter().map(|one| one.object.clone()).collect::<BTreeSet<_>>(), BTreeSet::from([parameter(0)]));
+    assert_eq!(summary.writes.iter().map(|one| ObjectInterner::of(&parsed.module.context).object(one.object)).collect::<BTreeSet<_>>(), BTreeSet::from([parameter(0)]));
 }
 
 #[test]
@@ -315,7 +315,7 @@ fn test_interprocedural_modref_reaches_the_call_operation() {
     let known = summaries(&procedures, None).unwrap();
     let effect = &parsed.effects(&known)[0];
     let Some(super::Actual::Provenance(passed)) = procedures["f"].arguments.values().next().map(|actual| actual[0].clone()) else { panic!("@g's slice") };
-    let g = passed.slices.first().unwrap().object.clone();
+    let g = passed.slices.first().unwrap().object;
     assert!(effect.loads.is_empty());
     assert!(writes(effect, &bytes(&g, 6, 8)));
     assert!(!writes(effect, &bytes(&g, 4, 6)) && !writes(effect, &bytes(&g, 8, 16)));
@@ -515,7 +515,7 @@ b0:
 }
 
 /// The objects `@f` lets escape when `%a`'s address meets `use_`.
-fn escaped(use_: &str) -> BTreeSet<MemoryObject> {
+fn escaped(use_: &str) -> BTreeSet<ObjectRef> {
     let parsed = Parsed::new(&format!(
         "define ptr @f() {{
 b0:
@@ -890,4 +890,86 @@ fn test_calls_alike_to_something_unknown_are_worked_out_once() {
     let before = super::other_runs();
     summaries(&procedures, None).unwrap();
     assert_eq!(super::other_runs() - before, 1);
+}
+
+/// Allocations the calling thread made, for the tests below.
+#[cfg(test)]
+mod counted {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    thread_local! {
+        static MADE: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub struct Counting;
+
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            MADE.with(|made| made.set(made.get() + 1));
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(pointer, layout) }
+        }
+        unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            MADE.with(|made| made.set(made.get() + 1));
+            unsafe { System.realloc(pointer, layout, size) }
+        }
+    }
+
+    pub fn made() -> usize {
+        MADE.with(Cell::get)
+    }
+}
+
+#[cfg(test)]
+#[global_allocator]
+static COUNTING: counted::Counting = counted::Counting;
+
+/// A `MemRef` copied its type name and every ancestor's as strings, a vector, and a set: 5 allocations for a reference of a
+/// three-deep type, 8% of all the compile's allocations and ~3% of its instructions on QCport. The names are shared.
+#[test]
+fn a_typed_reference_is_copied_without_allocating() {
+    let parsed = Parsed::new(&format!("define void @f(ptr %p) {{\n  store i16 1, ptr %p, !tbaa !5\n  ret void\n}}\n{TYPE_TREE}"));
+    let unit = parsed.unit();
+    let store = parsed.all(|op| matches!(op, Opcode::Store { .. }))[0];
+    let tree = llrm_mir::tbaa::Tbaa::of(&parsed.module.metadata);
+    let unit = Unit { tbaa: Some(&tree), ..unit };
+    let reference = MemRef::of(&unit, store).expect("a store");
+    assert_eq!(reference.lineage.len(), 3);
+    let before = counted::made();
+    let copies: Vec<MemRef> = Vec::new();
+    let copy = reference.clone();
+    assert_eq!(counted::made() - before, 0, "a copy of a reference allocated");
+    drop((copy, copies));
+}
+
+/// Picking the buckets a write reaches made a vector for the objects, one for the classes and one grown a few times for the
+/// answer: 7% of the compile's allocations (QCport). One vector, sized once, is the answer.
+#[test]
+fn picking_the_buckets_of_a_write_allocates_once() {
+    let global = MemoryObject { identity: Some(Identity::Global(1)), extent: Some(16), ..MemoryObject::new(MemoryKind::Global) };
+    let reference = MemRef { provenance: Some(one(&global, 0, 4)), ..MemRef::reach(4, one(&global, 0, 4)) };
+    let parts = crate::regions::OverlapParts::default();
+    let before = counted::made();
+    let reached = crate::regions::overlap_buckets(&reference, &parts);
+    assert_eq!(counted::made() - before, 1, "the picking allocated more than its answer");
+    drop(reached);
+}
+
+/// A callee was looked up among every global by name at every call of every visit (`_summary`: 12.7 G of host.c's 94 G instructions
+/// in `summaries visit`, a quarter of it that scan). The procedure knows once which of its callees another definition may replace.
+#[test]
+fn a_procedure_knows_which_callees_a_definition_elsewhere_may_replace() {
+    let text = |linkage: &str| CALLEE_WRITES_ITS_PARAMETER.replace("define void @callee", &format!("define {linkage}void @callee"));
+    for (linkage, replaceable) in [("", false), ("weak ", true), ("linkonce_odr ", true), ("internal ", false)] {
+        let parsed = Parsed::new(&text(linkage));
+        let procedure = Procedure::of(parsed.unit_of("f"));
+        assert_eq!(procedure.replaceable.contains("callee"), replaceable, "linkage [{linkage}]");
+        let procedures = IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
+        let found = summaries(&procedures, None).unwrap();
+        // No summary describes a call that may be replaced: f then writes what an unknown callee may.
+        assert_eq!(found["f"].writes.is_empty(), false, "f writes something, replaceable callee or not");
+    }
 }

@@ -123,9 +123,15 @@ pub fn r#static(context: &Context, layout: &DataLayout, function: &Function, cal
 
 /// Where `loop_` stands in the unit's function: how often it is entered for each entry of the function, in
 /// `UNIT`ths (what its outside predecessors weigh), and whether it calls a function that may touch memory.
-pub fn site(unit: &memory::Unit, outer: &Outer, loop_: &llrm_analysis::graph::loops::Loop) -> llrm_analysis::peelsize::Site {
-    let trips = proven_trips(unit, &unit.registers());
-    let entries = match _frequencies(unit.context, unit.metadata, &outer.globals, unit.function, Some(&trips)) {
+///
+/// The frequencies are those of the whole function: `frequencies` holds them for as many loops as ask, which a caller makes once
+/// per version of the function.
+pub fn site(unit: &memory::Unit, outer: &Outer, loop_: &llrm_analysis::graph::loops::Loop, frequencies: &Frequencies) -> llrm_analysis::peelsize::Site {
+    let entries = match frequencies.0.get_or_init(|| {
+        FREQUENCIES.with(|runs| runs.set(runs.get() + 1));
+        let trips = proven_trips(unit, &unit.registers());
+        _frequencies(unit.context, unit.metadata, &outer.globals, unit.function, Some(&trips))
+    }) {
         Some(frequency) => cfg::graph(unit.function).iter().filter(|block| !loop_.body.contains(&block.at) && block.succ.contains(&loop_.header)).map(|block| frequency.get(&block.at).copied().unwrap_or(UNIT)).sum::<i64>().max(1),
         None => UNIT,
     };
@@ -135,6 +141,19 @@ pub fn site(unit: &memory::Unit, outer: &Outer, loop_: &llrm_analysis::graph::lo
     });
     llrm_support::debug!("peelsite", "callees of the loop at b{}: {:?}", loop_.header, unit.function.walk().filter(|(block, _)| loop_.body.contains(&cfg::id(*block))).filter(|(_, inst)| unit.calls_out(*inst)).map(|(_, inst)| callee(unit.context, unit.function, inst).map(|id| (id, callees.get(&id).map(|one| one.effects)))).collect::<Vec<_>>());
     llrm_analysis::peelsize::Site { entries, writes }
+}
+
+/// A function's block frequencies, worked out when the first loop asks (`site`) and kept for the rest.
+#[derive(Default)]
+pub struct Frequencies(std::cell::OnceCell<Option<BTreeMap<i64, i64>>>);
+
+thread_local! {
+    static FREQUENCIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has worked out a function's frequencies for `site`.
+pub fn frequencies_worked() -> usize {
+    FREQUENCIES.with(std::cell::Cell::get)
 }
 
 /// Whether the target prices every instruction here, which a copy's cost needs.
@@ -225,6 +244,8 @@ pub fn _loop_products_by_branch(context: &Context, metadata: &[llrm_mir::module:
 /// Profile-free expected work at `frequency`, a block's executions per entry
 /// (`_frequencies`, or the older `_loop_products`).
 pub fn weighted(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, costs: &OperationCosts, frequency: &BTreeMap<i64, i64>) -> Option<i64> {
+    #[cfg(test)]
+    PRICED.with(|count| count.set((count.get().0 + 1, count.get().1)));
     let mut total = 0;
     for &block in function.layout() {
         let priced = _block(context, layout, function, callees, cfg::id(block), costs)?;
@@ -235,9 +256,11 @@ pub fn weighted(context: &Context, layout: &DataLayout, function: &Function, cal
 
 /// What fitting MIR within `room` spills, a call keeping what `across`
 /// says, as the one spill model (`spill`) forecasts it.
-pub fn spill_forecast(context: &Context, layout: &DataLayout, function: &Function, costs: &OperationCosts, room: Room, across: &dyn Fn(InstId) -> i64, frequency: &BTreeMap<i64, i64>) -> Option<spill::Forecast<ValueId>> {
+pub fn spill_forecast(context: &Context, layout: &DataLayout, function: &Function, costs: &OperationCosts, room: Room, across: &dyn Fn(InstId) -> i64, frequency: &BTreeMap<i64, i64>) -> Option<spill::Forecast<llrm_mir::dense::IdSet<ValueId>>> {
+    #[cfg(test)]
+    PRICED.with(|count| count.set((count.get().0, count.get().1 + 1)));
     if !room.priced() {
-        return Some(spill::Forecast { cost: 0, spilled: BTreeSet::new(), peak: 0 });
+        return Some(spill::Forecast { cost: 0, spilled: Default::default(), peak: 0 });
     }
     Some(spill::View::of(context, layout, function, room, across).forecast(costs, frequency))
 }
@@ -253,6 +276,12 @@ pub fn pressure_adjusted(context: &Context, layout: &DataLayout, function: &Func
 /// price a motion is judged by, with the motion and without it.
 pub fn motion_price(context: &Context, layout: &DataLayout, outer: &Outer, function: &Function, costs: &OperationCosts, room: Room, frequency: &BTreeMap<i64, i64>) -> Option<i64> {
     pressure_adjusted(context, layout, function, outer.callees(), costs, room, &|inst| spill::kept_across(outer, context, function, inst), frequency)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// (`weighted`, `spill_forecast`) calls, for a test that a price is the work and one forecast.
+    pub(crate) static PRICED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 #[cfg(test)]

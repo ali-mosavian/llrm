@@ -146,7 +146,8 @@ pub fn exact(unit: &Unit, constants: &IndexMap<ValueId, Finite>) -> Result<BTree
         return Ok(BTreeSet::new());
     }
     let memory = floatfacts::cells(unit, &Calls::default());
-    let scoped = ranges::bounded(unit)?;
+    // What the counted loops bound is the manager's: it is never solved here (no program in the corpus reached a solve here).
+    let scoped = unit.bounds.ok_or("float bounds without the manager's bounds of the body")?;
     let phis = function
         .walk()
         .map(|(_, inst)| inst)
@@ -178,7 +179,7 @@ pub fn exact(unit: &Unit, constants: &IndexMap<ValueId, Finite>) -> Result<BTree
             let op = function.instruction(inst);
             let inputs = if let Opcode::Load { .. } = op.opcode {
                 let here = memory.get(&inst).map(|here| &**here).unwrap_or(&empty_cells);
-                _memory(unit, inst, rule.inputs[0], here, scoped.get(&cfg::id(block)).unwrap_or(&empty_scope)).map(|one| vec![one])
+                _memory(unit, inst, rule.inputs[0], here, scoped.at(cfg::id(block)).unwrap_or(&empty_scope)).map(|one| vec![one])
             } else {
                 rule.inputs.iter().zip(&op.operands).map(|(&format, &operand)| _operand(unit, operand, format, &values, constants)).collect()
             };

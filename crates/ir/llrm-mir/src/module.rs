@@ -9,11 +9,38 @@ use crate::types::{Type, TypeId};
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ValueId(pub u32);
 
+impl crate::dense::Dense for ValueId {
+    fn index(self) -> usize {
+        self.0 as usize
+    }
+    fn at(index: usize) -> Self {
+        Self(u32::try_from(index).expect("an id fits u32"))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct BlockId(pub u32);
 
+impl crate::dense::Dense for BlockId {
+    fn index(self) -> usize {
+        self.0 as usize
+    }
+    fn at(index: usize) -> Self {
+        Self(u32::try_from(index).expect("an id fits u32"))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct InstId(pub u32);
+
+impl crate::dense::Dense for InstId {
+    fn index(self) -> usize {
+        self.0 as usize
+    }
+    fn at(index: usize) -> Self {
+        Self(u32::try_from(index).expect("an id fits u32"))
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct MetadataId(pub u32);
@@ -110,6 +137,25 @@ pub enum Change {
     BlockErased(BlockId),
 }
 
+/// A function's log of changes. A copy is another function (`Lineage`), whose edits from then on are its own: it starts with an
+/// empty log, as a copy that carried the original's (up to 64k changes, cloned for each numbering of a body) cost 16% of
+/// compiling a program with a hundred inlines. The log is no part of what a function is, so two functions are equal whatever
+/// they logged.
+#[derive(Debug, Default)]
+pub(crate) struct ChangeLog(pub(crate) Vec<Change>);
+
+impl Clone for ChangeLog {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for ChangeLog {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
 static NEXT_LINEAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// Which function a log of changes belongs to, and how many changes it has held: `take_changes` drains the log
@@ -172,7 +218,10 @@ pub struct Function {
     pub(crate) layout: Vec<BlockId>,
     pub(crate) value_uses: Vec<Vec<Use>>,
     pub(crate) block_uses: Vec<Vec<Use>>,
-    pub(crate) changes: Vec<Change>,
+    pub(crate) changes: ChangeLog,
+    /// How many changes `take_changes` has handed out: the log keeps them, so an analysis computed before can still be
+    /// brought up to date.
+    pub(crate) taken: usize,
     /// What `-g` says of its variables, kept true by the edits that move, replace or erase what it names.
     pub(crate) debug_records: Vec<DebugRecord>,
     /// The variables a record of which went with the code it stood in (a block erased): what is said of them is not all that was.
@@ -201,7 +250,8 @@ impl Function {
             layout: Vec::new(),
             value_uses: Vec::new(),
             block_uses: Vec::new(),
-            changes: Vec::new(),
+            changes: ChangeLog::default(),
+            taken: 0,
             debug_records: Vec::new(),
             debug_dropped: Vec::new(),
             parameter_origins: Vec::new(),
@@ -235,6 +285,21 @@ impl Function {
             out.value_uses.push(Vec::new());
         }
         out
+    }
+
+    /// Whether `declared` is this function's `declaration()`, found without making one.
+    pub fn declares(&self, declared: &Function) -> bool {
+        self.ty == declared.ty
+            && self.void == declared.void
+            && self.calling_convention == declared.calling_convention
+            && self.attrs == declared.attrs
+            && self.return_attrs == declared.return_attrs
+            && self.parameter_attrs == declared.parameter_attrs
+            && self.parameters.len() == declared.parameters.len()
+            && self.parameters.iter().zip(&declared.parameters).all(|(one, other)| {
+                let (mine, theirs) = (self.value(*one), declared.value(*other));
+                mine.ty == theirs.ty && mine.def == theirs.def && theirs.name.is_none()
+            })
     }
 
     pub fn parameters(&self) -> &[ValueId] {
@@ -344,14 +409,23 @@ impl Function {
         self.layout.iter().flat_map(move |&block| self.block(block).instructions.iter().map(move |&one| (block, one)))
     }
 
-    /// The log of changes since the last `take_changes`.
+    /// The log of changes since the last `take_changes`. They stay in the log, to `changes_since`, until it holds more
+    /// than `LOG` of them.
     pub fn take_changes(&mut self) -> Vec<Change> {
-        std::mem::take(&mut self.changes)
+        const LOG: usize = 1 << 16;
+        let kept_from = self.lineage.logged - self.changes.0.len();
+        let out = self.changes.0[self.taken.max(kept_from) - kept_from..].to_vec();
+        self.taken = self.lineage.logged;
+        if self.changes.0.len() > LOG {
+            let from = self.changes.0.len() - LOG / 2;
+            self.changes.0.drain(..from);
+        }
+        out
     }
 
     pub(crate) fn log(&mut self, change: Change) {
         self.lineage.logged += 1;
-        self.changes.push(change);
+        self.changes.0.push(change);
     }
 
     /// Where the function stands now.
@@ -362,8 +436,8 @@ impl Function {
     /// What changed since `mark`, in order; none where `mark` is of another function or what followed it has been
     /// taken.
     pub fn changes_since(&self, mark: Mark) -> Option<&[Change]> {
-        let kept_from = self.lineage.logged - self.changes.len();
-        (mark.uid == self.lineage.uid && (kept_from..=self.lineage.logged).contains(&mark.at)).then(|| &self.changes[mark.at - kept_from..])
+        let kept_from = self.lineage.logged - self.changes.0.len();
+        (mark.uid == self.lineage.uid && (kept_from..=self.lineage.logged).contains(&mark.at)).then(|| &self.changes.0[mark.at - kept_from..])
     }
 }
 
@@ -438,6 +512,20 @@ impl GlobalValue {
                 GlobalKind::Variable(variable) => GlobalKind::Variable(variable.clone()),
             },
         }
+    }
+
+    /// Whether `declared` is this global's `declaration()`, found without making one: what `Declarations` holds of it still
+    /// stands.
+    pub fn declares(&self, declared: &GlobalValue) -> bool {
+        self.name == declared.name
+            && self.linkage == declared.linkage
+            && self.unnamed_addr == declared.unnamed_addr
+            && self.address_space == declared.address_space
+            && match (&self.kind, &declared.kind) {
+                (GlobalKind::Function(one), GlobalKind::Function(other)) => one.declares(other),
+                (GlobalKind::Variable(one), GlobalKind::Variable(other)) => one == other,
+                _ => false,
+            }
     }
 
     pub fn function(&self) -> Option<&Function> {

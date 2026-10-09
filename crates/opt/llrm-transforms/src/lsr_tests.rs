@@ -1998,7 +1998,7 @@ fn test_a_difference_is_one_sub_from_a_copy_of_the_minuend() {
     let mut machine = Tuned { two_address: true, ..target() };
     machine.address_forms.truncate(1);
     let room = crate::spill::Room { registers: 6, across_call: 2, two_address: true, spaces: llrm_x86_m16::spaces(), ..Default::default() };
-    let target = super::Target { machine: &machine, costs: machine.costs.clone(), room, forms: machine.address_forms.clone() };
+    let target = super::Target { machine: &machine, costs: machine.costs.clone(), room, forms: machine.address_forms.clone(), bounds: super::Bounds::NONE };
     let costs = &machine.costs;
     assert_eq!(super::_scaled(&target, &BigInt::from(-1), true), (0, true), "`rest - r`: a sub from a copy of rest");
     assert_eq!(super::_scaled(&target, &BigInt::from(-1), false), (costs.add + costs.r#move, false), "`-r`: a negation of a copy");
@@ -2087,4 +2087,86 @@ fn test_a_loop_with_another_way_out_counts_to_zero_at_its_own_exit() {
 fn test_a_constant_count_with_another_way_out_keeps_its_counter() {
     let printed = same(&leaving("32", 5), &[&[0, 9], &[0, 0], &[0, 3000]]);
     assert!(!printed.lines().any(|line| line.contains("icmp ne i16") && line.ends_with(", 0")), "{printed}");
+}
+
+/// The search priced a set of counters from nothing every time it met it: from each of its two starts, in each step's
+/// neighbours, and again to rank the two answers. A set is priced once (the dot product asked 423 times and priced 146 sets).
+#[test]
+fn test_a_set_of_counters_is_priced_once_however_often_the_search_meets_it() {
+    let text = program(&[("a", "i16", 2), ("b", "i16", 2)], "i32", DOT).replace("br label %l2.back\n\nl2.back:\n  br label %l1", "br label %l1").replace("%l2.back ]", "%l2 ]");
+    super::TOTALS.with(|counts| counts.set((0, 0)));
+    same(&text, TRIPS);
+    let (asked, priced) = super::TOTALS.with(std::cell::Cell::get);
+    assert!(asked > 0 && priced < asked, "asked {asked} sets, priced {priced}");
+}
+
+/// `text` through `Lsr` under `bounds`, printed.
+fn bounded(text: &str, bounds: super::Bounds) -> String {
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.add(Lsr { bounds, ..Lsr::default() });
+    manager.run_module(&mut module, Rc::new(target())).unwrap();
+    printed(&module)
+}
+
+fn dot() -> String {
+    program(&[("a", "i16", 2), ("b", "i16", 2)], "i32", DOT).replace("br label %l2.back\n\nl2.back:\n  br label %l1", "br label %l1").replace("%l2.back ]", "%l2 ]")
+}
+
+/// gcc leaves a loop of more groups of uses than `iv-max-considered-uses` as it is (it gives up before choosing). Past the
+/// bound lsr rewrote it all the same: 200 uses took 40 G instructions to choose counters for.
+#[test]
+fn test_a_loop_of_more_groups_than_the_bound_is_left_as_it_is() {
+    let text = dot();
+    let whole = bounded(&text, super::Bounds::NONE);
+    assert_ne!(whole, printed(&parsed(&format!("{DOS}{text}"))), "premise: lsr changes this loop");
+    assert_eq!(bounded(&text, super::Bounds { groups: 1, ..super::Bounds::NONE }), printed(&parsed(&format!("{DOS}{text}"))));
+}
+
+/// Past the candidate bound the search replaces a candidate once, only where no one added or removed lowers the cost, and
+/// never one serving more uses than `iv-always-prune-cand-set-bound`: it priced every swap of every step before.
+#[test]
+fn test_past_the_candidate_bound_the_search_prices_fewer_sets() {
+    let text = dot();
+    super::TOTALS.with(|counts| counts.set((0, 0)));
+    bounded(&text, super::Bounds::NONE);
+    let (_, whole) = super::TOTALS.with(std::cell::Cell::get);
+    super::TOTALS.with(|counts| counts.set((0, 0)));
+    bounded(&text, super::Bounds { all_candidates: 1, always_prune: 1, ..super::Bounds::NONE });
+    let (_, within) = super::TOTALS.with(std::cell::Cell::get);
+    assert!(within < whole, "{within} sets priced of {whole}");
+}
+
+/// Each state of the function lsr looked at had every loop's trip count worked out again for its frequencies, whichever loops the last
+/// change reached: the proofs are the manager's, renewed for the loops a change reached.
+#[test]
+fn test_the_trips_lsr_prices_with_are_proved_once_for_a_loop_no_change_reached() {
+    let depth = 4;
+    let mut text = String::from("@a = global [64 x i32] zeroinitializer\n\ndefine i32 @f(i32 %n) {\nb0:\n  br label %h0\n\n");
+    for k in 0..depth {
+        let (inner, exit) = (if k + 1 == depth { format!("l{k}") } else { format!("h{}", k + 1) }, if k == 0 { "end".to_owned() } else { format!("l{}", k - 1) });
+        let from = if k == 0 { "b0".to_owned() } else { format!("h{}", k - 1) };
+        text += &format!("h{k}:\n  %i{k} = phi i32 [ 0, %{from} ], [ %n{k}, %l{k} ]\n  %s{k} = phi i32 [ 0, %{from} ], [ %t{k}, %l{k} ]\n  %c{k} = icmp slt i32 %i{k}, 8\n  br i1 %c{k}, label %{inner}, label %{exit}\n\n");
+    }
+    for k in (0..depth).rev() {
+        text += &format!("l{k}:\n  %p{k} = getelementptr [64 x i32], ptr @a, i32 0, i32 %i{k}\n  %v{k} = load i32, ptr %p{k}\n  %t{k} = add i32 %s{k}, %v{k}\n  %n{k} = add nsw i32 %i{k}, 1\n  br label %h{k}\n\n");
+    }
+    text += "end:\n  ret i32 0\n}\n";
+    let before = llrm_analysis::induction::proved();
+    let (_, printed) = reduced(&text);
+    let proved = llrm_analysis::induction::proved() - before;
+    assert!(printed.contains("define"), "{printed}");
+    assert!(proved <= 2 * depth, "{proved} loop counts proved for {depth} loops");
+}
+
+/// `_live_anyway` solved the function's liveness for every loop it planned, when `Pressure`, which the same call holds, has it: a nest of
+/// d loops solved it d times more (16 loops: 1.6 of lsr's 5.8 points on the nest axis). It asks the one it holds.
+#[test]
+fn test_a_loop_is_planned_with_the_liveness_the_pressure_holds() {
+    let text = program(&[("a", "i16", 2), ("b", "i16", 2)], "i32", DOT).replace("br label %l2.back\n\nl2.back:\n  br label %l1", "br label %l1").replace("%l2.back ]", "%l2 ]");
+    let before = llrm_analysis::liveness::solves();
+    let _ = reduced(&text);
+    let solved = llrm_analysis::liveness::solves() - before;
+    assert!(solved <= 3, "{solved} solves of liveness for one loop");
 }

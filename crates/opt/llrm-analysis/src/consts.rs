@@ -84,17 +84,33 @@ pub type HeldCells = IndexMap<InstId, Rc<Cells>>;
 /// What each call writes, where `alias::calls_annotated` found it. A call
 /// not here writes what `memory::unmodeled_write` says: everything, or
 /// nothing.
-pub type Calls = IndexMap<InstId, Vec<MemRef>>;
+pub type Calls = IndexMap<InstId, std::rc::Rc<[MemRef]>>;
+
+/// A reference as resolved for one epoch's queries, with the number it was given: a stable identity to key answers by, where
+/// its address varied from run to run and so did the work of the passes asking (`mir hoist`, up to 0.9%).
+pub struct Resolved {
+    pub id: u32,
+    reference: MemRef,
+}
+
+impl std::ops::Deref for Resolved {
+    type Target = MemRef;
+    fn deref(&self) -> &MemRef {
+        &self.reference
+    }
+}
 
 /// Alias questions for one immutable known-value epoch.
 pub struct _MemoryQueries<'a> {
     pub unit: Unit<'a>,
     pub known: IndexMap<ValueId, Known>,
     pub facts: BTreeMap<ValueId, Interval>,
-    /// Each reference asked, resolved; kept, so a resolved one's address
-    /// is its identity in `overlaps`.
-    pub addressed: HashMap<MemRef, Rc<MemRef>>,
-    pub overlaps: HashMap<((Addr, u32), usize), bool>,
+    /// Each reference asked, resolved, numbered in the order asked: the number is its identity in `overlaps`.
+    pub addressed: HashMap<MemRef, Rc<Resolved>>,
+    /// Each call's shared list of references, resolved once: calls with the same effect hold one list, and hashing every
+    /// reference of it again at every call was 12% of through-memory. Keyed by the list's address, which its clone here keeps.
+    listed: HashMap<usize, (Rc<[MemRef]>, Rc<[Rc<Resolved>]>)>,
+    pub overlaps: HashMap<((Addr, u32), u32), bool>,
     pub places: HashMap<(Addr, u32), (OverlapBucket, Option<ByteRange>)>,
     /// The buckets `places` names, this epoch's own.
     pub buckets: OverlapBuckets,
@@ -133,17 +149,31 @@ impl<'a> _MemoryQueries<'a> {
             known: known.clone(),
             facts: _intervals(known),
             addressed: HashMap::default(),
+            listed: HashMap::default(),
             overlaps: HashMap::default(),
             places: HashMap::default(),
             buckets: OverlapBuckets::default(),
         }
     }
 
-    pub fn resolve(&mut self, reference: &MemRef) -> Rc<MemRef> {
+    /// `resolve` of every reference of a list `calls` shares among its calls.
+    pub fn resolve_list(&mut self, list: &Rc<[MemRef]>) -> Rc<[Rc<Resolved>]> {
+        let key = Rc::as_ptr(list).cast::<MemRef>() as usize;
+        if let Some((_, resolved)) = self.listed.get(&key) {
+            return Rc::clone(resolved);
+        }
+        let resolved: Rc<[Rc<Resolved>]> = list.iter().map(|one| self.resolve(one)).collect();
+        self.listed.insert(key, (Rc::clone(list), Rc::clone(&resolved)));
+        resolved
+    }
+
+    pub fn resolve(&mut self, reference: &MemRef) -> Rc<Resolved> {
+        #[cfg(test)]
+        RESOLVED.with(|asked| asked.set(asked.get() + 1));
         if let Some(saved) = self.addressed.get(reference) {
             return Rc::clone(saved);
         }
-        let made = Rc::new(_addressed(&self.unit, reference, &self.known));
+        let made = Rc::new(Resolved { id: self.addressed.len() as u32, reference: _addressed(&self.unit, reference, &self.known) });
         self.addressed.insert(reference.clone(), Rc::clone(&made));
         made
     }
@@ -180,10 +210,10 @@ impl<'a> _MemoryQueries<'a> {
         }
     }
 
-    pub fn may_overlap(&mut self, where_: (Addr, u32), reference: &Rc<MemRef>) -> bool {
+    pub fn may_overlap(&mut self, where_: (Addr, u32), reference: &Resolved) -> bool {
         #[cfg(test)]
         MAY_OVERLAP.with(|asked| asked.set(asked.get() + 1));
-        let key = (where_, Rc::as_ptr(reference) as usize);
+        let key = (where_, reference.id);
         if let Some(&answer) = self.overlaps.get(&key) {
             return answer;
         }
@@ -192,7 +222,7 @@ impl<'a> _MemoryQueries<'a> {
         answer
     }
 
-    fn _overlap(&mut self, where_: (Addr, u32), reference: &Rc<MemRef>) -> bool {
+    fn _overlap(&mut self, where_: (Addr, u32), reference: &Resolved) -> bool {
         // An answer Rust cannot represent is taken to overlap.
         overlapping(&self.cell(where_), reference, Some(&self.facts), Some(&self.facts), self.unit.program).unwrap_or(true)
     }
@@ -411,18 +441,18 @@ fn _killed(
     if unmodeled_write(&unit, inst) && !calls.contains_key(&inst) {
         here = Here::Plain(Cells::default());
     }
-    let stores = match calls.get(&inst) {
-        Some(stores) => stores.clone(),
-        None if call => Vec::new(),
-        None => unit.reference(inst).filter(|_| matches!(unit.function.instruction(inst).opcode, Opcode::Store { .. })).into_iter().collect(),
+    let stores: Rc<[Rc<Resolved>]> = match calls.get(&inst) {
+        Some(stores) => queries.resolve_list(stores),
+        None if call => Rc::from([]),
+        None => unit.reference(inst).filter(|_| matches!(unit.function.instruction(inst).opcode, Opcode::Store { .. })).iter().map(|one| queries.resolve(one)).collect(),
     };
     // Only a write changes a cell.
     if stores.is_empty() {
         return here;
     }
     let put = _put(&unit, inst, known);
-    for reference in &stores {
-        let reference = queries.resolve(reference);
+    for reference in stores.iter() {
+        let reference = Rc::clone(reference);
         if let Some(assume) = assume.as_deref_mut() {
             if let Some(selector) = _selector(&unit, &reference, known, allowed) {
                 // A cell in `here` is always in a program object, so an
@@ -803,6 +833,8 @@ thread_local! {
     pub static SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// `may_overlap` questions, for the test that pins the cell index.
     pub static MAY_OVERLAP: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// References resolved, hashed or not.
+    pub static RESOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A phi's or an operand's fact.

@@ -1,10 +1,10 @@
-reason = "synth_mult: a constant multiply is the cheaper of the Horner chain and gcc's (factors 2^m +- 1, t - 1, t + 1): quicksort c -O2 163104 -> 162079 instructions, qlight -5 bytes"
-blessed = "2026-10-08"
+reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
+blessed = "2026-10-09"
 
 [bas.O2]
 instructions = 224965
 memory_operands = 113692
-code_bytes = 560
+code_bytes = 556
 data_bytes = 17
 bss_bytes = 0
 
@@ -16,30 +16,30 @@ data_bytes = 17
 bss_bytes = 0
 
 [c.O2]
-instructions = 162079
-memory_operands = 58878
-code_bytes = 301
+instructions = 159353
+memory_operands = 57516
+code_bytes = 296
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 151839
-memory_operands = 58878
-code_bytes = 271
+instructions = 149114
+memory_operands = 57516
+code_bytes = 267
 data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 168387
-memory_operands = 60750
-code_bytes = 426
+instructions = 159525
+memory_operands = 59388
+code_bytes = 411
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 167059
-memory_operands = 73063
-code_bytes = 409
+instructions = 168977
+memory_operands = 69658
+code_bytes = 401
 data_bytes = 0
 bss_bytes = 0
 

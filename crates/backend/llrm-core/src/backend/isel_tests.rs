@@ -108,7 +108,8 @@ done:
             "xor cx, cx",
             "cmp cx, bx",
             "jl L0_5",
-            "jmp L0_8",
+            "pop bp",
+            "retf",
             "L0_5:",
             "add ax, cx",
             "inc cx",
@@ -455,16 +456,16 @@ no:
             "movzx ax, bl",
             "neg ax",
             "cmp cx, 3",
-            "sete dl",
-            "movzx cx, dl",
-            "and bl, dl",
+            "sete cl",
+            "movzx dx, cl",
+            "and bl, cl",
             "jne L0_6",
             "L0_8:",
             "xor ax, ax",
             "pop bp",
             "retf",
             "L0_6:",
-            "add ax, cx",
+            "add ax, dx",
             "pop bp",
             "retf",
         ]
@@ -620,7 +621,8 @@ define cc1000 void @MAIN() addrspace(1) {
             "helper endp",
             "MAIN proc far",
             "L1_0:",
-            "push word ptr count",
+            "mov ax, word ptr count",
+            "push ax",
             "call far ptr helper",
             "retf",
             "MAIN endp",
@@ -2051,9 +2053,9 @@ done:
         )
     };
     let element = |text: &str| inner(text).into_iter().find(|line| line.contains("a[")).expect("the element's read");
-    assert_eq!(element(&sum("inbounds")), "add ax, word ptr a[esi+esi]");
+    assert_eq!(element(&sum("inbounds")), "add ax, word ptr a[ebx+ebx]");
     // Without `inbounds` nothing places the start: the offset may wrap.
-    assert_eq!(element(&sum("")), "add ax, word ptr a[si]");
+    assert_eq!(element(&sum("")), "add ax, word ptr a[bx]");
 }
 
 /// A word product only cells read is the 67h form's scaled index on the
@@ -2197,7 +2199,7 @@ done:
     let body = got.iter().position(|line| line == "L0_2:").expect("the loop");
     let mut steps = got[body + 3..body + 5].to_vec();
     steps.sort();
-    assert_eq!((&got[body + 1..body + 3], steps, &got[body + 5..body + 7]), (&["mov cl, byte ptr es:[si]".to_owned(), "mov byte ptr [bx], cl".to_owned()][..], vec!["inc bx".to_owned(), "inc si".to_owned()], &["dec ax".to_owned(), "jne L0_2".to_owned()][..]), "{got:?}");
+    assert_eq!((&got[body + 1..body + 3], steps, &got[body + 5..body + 7]), (&["mov al, byte ptr es:[si]".to_owned(), "mov byte ptr [bx], al".to_owned()][..], vec!["inc bx".to_owned(), "inc si".to_owned()], &["dec cx".to_owned(), "jne L0_2".to_owned()][..]), "{got:?}");
 }
 
 /// An unsigned integer converts as the signed one twice its width it
@@ -3762,6 +3764,91 @@ fn test_a_function_the_spiller_makes_larger_is_built_without_it() {
     assert_eq!(sized_with(assemble::Candidates::Both, &text), allocator);
 }
 
+/// A function that called one whose registers are known was made twice, the second time without that, and the cheaper kept:
+/// the facts won in 4% of 947 such functions (0.3% of their cost). Only -Omax makes it twice.
+#[test]
+fn test_a_caller_is_made_without_its_callee_facts_only_with_an_exhaustive_search() {
+    let text = "
+define internal i16 @f(i16 %a) addrspace(1) {
+  %b = add i16 %a, 3
+  ret i16 %b
+}
+define i16 @g(i16 %a) addrspace(1) {
+  %b = call addrspace(1) i16 @f(i16 %a)
+  %c = add i16 %b, %a
+  ret i16 %c
+}
+";
+    let made = |exhaustive: bool| {
+        let profile = crate::backend::cpu::tuned_with(&llrm_x86_m16::M16, "486", false, true, exhaustive).expect("a profile");
+        let before = assemble::machinings();
+        assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Profile(profile), &crate::backend::target::BASIC).expect("assembles");
+        assemble::machinings() - before
+    };
+    let (directed, all) = (made(false), made(true));
+    assert!(all > directed, "premise: the caller has callee facts to be made without ({all} against {directed})");
+    assert_eq!(all - directed, 1);
+}
+
+/// A function ran the spiller's route and the allocator's alone, and the cheaper was kept, whatever the allocator left: for
+/// the 77% of 4422 functions with frame or spill traffic the spiller could remove, and none else, that is one route fewer,
+/// and the bytes of the 66 programs and QCport were the same. Below -Omax the allocator alone is the only route where it
+/// left no traffic.
+#[test]
+fn test_the_spiller_route_is_run_only_where_the_allocator_left_frame_traffic() {
+    let dir = concat!(env!("LLRM_ROOT"), "/tests/check/mir");
+    let (mut directed, mut both) = (0, 0);
+    for entry in std::fs::read_dir(dir).unwrap().map(|one| one.unwrap().path()).filter(|path| path.extension().is_some_and(|ext| ext == "ll")) {
+        let text = std::fs::read_to_string(&entry).unwrap();
+        let Ok(module) = llrm_mir::parse::module(&format!("{LAYOUT}{text}")) else { continue };
+        let profile = crate::backend::cpu::tuned_with(&llrm_x86_m16::M16, "486", false, true, false).expect("a profile");
+        let run = |candidates| {
+            assemble::trying(candidates, || {
+                let before = assemble::routes();
+                assemble::assembled(&module, &qb(), "T_TEXT", ProfileOrName::Profile(profile), &crate::backend::target::BASIC).ok().map(|_| assemble::routes() - before)
+            })
+        };
+        let (Some(each), Some(alone), Some(spiller)) = (run(assemble::Candidates::Both), run(assemble::Candidates::AllocatorOnly), run(assemble::Candidates::SpillerOnly)) else { continue };
+        directed += each;
+        both += alone + spiller;
+    }
+    let all = both;
+    assert!(all > 0, "premise: some file assembled");
+    assert!(directed < all, "{directed} routes against {all}");
+}
+
+/// -O0 ran the allocator's trials and both routes (the allocator alone and the spiller's) on every function: half of a -O0 compile
+/// (QCport d_faces 3.64 G, d_alias 4.32 G), for code the same size within 0.02%. gcc's IRA at -O0 builds no conflicts and allocates
+/// once. Without the search a function is made through one route.
+#[test]
+fn test_without_the_allocation_search_a_function_takes_one_route() {
+    let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/matmul.ll")).unwrap();
+    let routes = |search: bool| {
+        let profile = crate::backend::cpu::tuned_with(&llrm_x86_m16::M16, "486", false, search, false).expect("a profile");
+        let (routes, machinings) = (assemble::routes(), assemble::machinings());
+        assemble::assembled(&parsed(&text), &qb(), "T_TEXT", ProfileOrName::Profile(profile), &crate::backend::target::BASIC).expect("assembles");
+        (assemble::routes() - routes, assemble::machinings() - machinings)
+    };
+    let (routes_searching, functions) = routes(true);
+    assert!(routes_searching > functions, "premise: a function takes more than one route when searching ({routes_searching} routes, {functions} functions)");
+    let (routes_not, functions) = routes(false);
+    assert_eq!(routes_not, functions, "{routes_not} routes for {functions} functions without the search");
+}
+
+/// Each route through the machine phases selected the function's instructions again, though the selector's output is the same
+/// for all of them: the routes of one function share one selection (4-5% of a file's compile time on the files the probe ran
+/// twice).
+#[test]
+fn test_the_routes_of_a_function_share_one_selection() {
+    let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/matmul.ll")).unwrap();
+    let profile = crate::backend::cpu::tuned("486", true).expect("the 486 profile");
+    let (routes, selections, machinings) = (assemble::routes(), assemble::selections(), assemble::machinings());
+    assemble::assembled(&parsed(&text), &qb(), "T_TEXT", ProfileOrName::Profile(profile), &crate::backend::target::BASIC).expect("assembles");
+    let (routes, selections, machinings) = (assemble::routes() - routes, assemble::selections() - selections, assemble::machinings() - machinings);
+    assert!(routes > machinings, "premise: some function ran more than one route ({routes} routes for {machinings} functions)");
+    assert_eq!(selections, machinings, "{selections} selections for {machinings} functions and {routes} routes");
+}
+
 /// A memcpy past the unrolled moves is `rep movsd` through es:di, the source
 /// read through ss as an override and the tail by `movsw`: a refusal failed
 /// every program with a copy that long.
@@ -4108,4 +4195,32 @@ fn test_selecting_a_function_scans_for_exposed_allocas_once_not_once_per_alloca(
         let scans = llrm_analysis::frameescape::scans() - before;
         assert!(scans <= 1, "{scans} scans for {locals} locals");
     }
+}
+
+/// Selecting a function asked for what every function of the module does to memory by scanning the module: n functions made
+/// n scans of n functions (a quarter of the compile of 1024 functions). The module is scanned once, for every function.
+#[test]
+fn test_the_callees_of_a_module_are_scanned_once_for_all_its_functions_not_for_each() {
+    // The tests of this crate run side by side in one process: each counts the scans its own thread makes.
+    thread_local! {
+        static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+    llrm_mir::passes::observe(llrm_mir::passes::Observer {
+        span: |_, _, run| run(),
+        function: |_, run| run(),
+        count: |what, _| {
+            if what == "callees" {
+                SCANS.with(|scans| scans.set(scans.get() + 1));
+            }
+        },
+    });
+    let scans = |functions: usize| {
+        let text: String = (0..functions).map(|n| format!("define i16 @f{n}(i16 %x) {{\nb:\n  %y = add i16 %x, {n}\n  ret i16 %y\n}}\n\n")).collect();
+        SCANS.with(|scans| scans.set(0));
+        assembled_on("486", &text);
+        SCANS.with(std::cell::Cell::get)
+    };
+    assert!(scans(4) > 0, "the observer saw no scan: another test installed its own");
+    let (few, many) = (scans(4), scans(24));
+    assert_eq!(few, many, "{few} scans for 4 functions, {many} for 24");
 }

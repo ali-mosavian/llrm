@@ -1,7 +1,8 @@
 //! Where a module's data goes: the segments its frontend put each object
 //! in, the rest in the default data segment.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet};
+use crate::support::hash::HashMap;
 
 use llrm_mir::{GlobalId, GlobalKind, Linkage, Module};
 use llrm_support::hash::IndexMap;

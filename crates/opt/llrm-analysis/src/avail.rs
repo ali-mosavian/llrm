@@ -20,7 +20,8 @@
 //! `DEAD_OVERLAPS` counter.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
+use llrm_support::hash::HashSet;
 use std::ops::Deref;
 use std::rc::Rc;
 
@@ -56,6 +57,25 @@ impl Holders {
     fn of(items: IndexMap<MemRef, Operand>, buckets: Rc<RefCell<OverlapBuckets>>) -> Self {
         let cells = CellMap::new(items, |cell| (overlap_bucket(&mut buckets.borrow_mut(), cell), overlap_span(cell)));
         Self { cells, buckets }
+    }
+
+    /// The first cell held, in the order they are held, that names `cell`'s bytes and whose holder `serves`: what a scan of every cell
+    /// finds, asked only of the cells a write to `cell` can reach (a cell naming the same bytes is one).
+    fn naming(&self, unit: &Unit, cell: &MemRef, serves: impl Fn(&Operand) -> bool) -> Option<(&MemRef, &Operand)> {
+        let reached = overlap_buckets(cell, &self.cells.parts);
+        let displaced = displaced_buckets(cell, &self.cells.parts);
+        let found = self
+            .cells
+            .asked(reached, displaced)
+            .into_iter()
+            .filter(|one| same_bytes(unit, one, cell) && self.get(*one).is_some_and(&serves))
+            .min_by_key(|one| self.get_index_of(*one))
+            .and_then(|one| self.get_key_value(one));
+        if llrm_support::env_set("LLRM_CHECK_HOLDERS") {
+            let whole = self.iter().find(|(one, who)| same_bytes(unit, one, cell) && serves(who));
+            assert!(found == whole, "the cell naming these bytes, found through the index, is not the one a scan of every cell finds");
+        }
+        found
     }
 
     fn insert(&mut self, cell: MemRef, value: Operand) {
@@ -128,7 +148,7 @@ fn serves(unit: &Unit, holder: Operand, value: ValueId) -> bool {
 fn after(unit: &Unit, accesses: &Accesses, inst: InstId, mut holders: Holders, known: Option<&BTreeMap<ValueId, Interval>>) -> Holders {
     let writes = accesses.writes(inst);
     // What every cell is asked of every write, for the check below.
-    let expected = std::env::var_os("LLRM_CHECK_HOLDERS").is_some().then(|| {
+    let expected = llrm_support::env_set("LLRM_CHECK_HOLDERS").then(|| {
         let mut every: IndexMap<MemRef, Operand> = (*holders).clone();
         every.retain(|one, _| !changes(one, false, writes, |store| may_clobber(unit, known, one, store)));
         every
@@ -191,6 +211,7 @@ pub fn clobber_asks() -> usize {
 
 /// Which value each cell holds, at every block's entry and exit.
 pub fn holders(unit: &Unit, accesses: &Accesses) -> Held {
+    SOLVED.with(|solved| solved.set(solved.get() + 1));
     // Register facts only: a memory-aware solve per query costs more than it finds.
     let known: BTreeMap<ValueId, Interval> = ranges::constants(unit).into_iter().collect();
     let graph = cfg::graph(unit.function);
@@ -236,7 +257,7 @@ pub fn provider(unit: &Unit, accesses: &Accesses, at: InstId, reference: &MemRef
     let mut current = found.into[&cfg::id(block)].clone();
     for &inst in unit.function.block(block).instructions() {
         if inst == at {
-            return current.iter().find(|(one, _)| same_bytes(unit, one, reference)).map(|(_, who)| *who);
+            return current.naming(unit, reference, |_| true).map(|(_, who)| *who);
         }
         current = after(unit, accesses, inst, current, Some(&found.known));
     }
@@ -496,7 +517,12 @@ fn aborts(unit: &Unit, at: i64) -> bool {
 ///
 /// The caller replaces the load, extending the provider's lifetime.
 pub fn forwardable(unit: &Unit, accesses: &Accesses, want: &BTreeSet<InstId>) -> Vec<Forward> {
-    let held = holders(unit, accesses);
+    forwardable_by(unit, accesses, want, &holders(unit, accesses))
+}
+
+/// `forwardable`, from the cells `held` says each block holds (`holders` of a function with the same instructions, which a caller that
+/// asks of the function twice, the second time as the first left it, works out once).
+pub fn forwardable_by(unit: &Unit, accesses: &Accesses, want: &BTreeSet<InstId>, held: &Held) -> Vec<Forward> {
     let mut found = Vec::new();
     let mut missing = Vec::new();
 
@@ -506,7 +532,7 @@ pub fn forwardable(unit: &Unit, accesses: &Accesses, want: &BTreeSet<InstId>) ->
             if want.contains(&inst)
                 && let Some((cell, result)) = loaded_into(unit, accesses, inst)
             {
-                match current.iter().find(|(one, who)| same_bytes(unit, one, &cell) && serves(unit, **who, result)) {
+                match current.naming(unit, &cell, |who| serves(unit, *who, result)) {
                     Some((_, who)) => found.push(Forward { at: inst, value: *who }),
                     None => missing.push(inst),
                 }
@@ -521,7 +547,14 @@ pub fn forwardable(unit: &Unit, accesses: &Accesses, want: &BTreeSet<InstId>) ->
 }
 
 thread_local! {
+    static SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static SAMES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has solved what each block holds (`holders`), for a test that a pass asking twice of one function solves
+/// it once.
+pub fn solved() -> usize {
+    SOLVED.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has compared a load's bytes with a missing one's in `memory_providers`.

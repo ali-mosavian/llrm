@@ -1,45 +1,45 @@
-reason = "jumpthread decides a branch on a compare of a phi of constants on each way into it (gcc's budget, empty copies at -Os): queens c -O2 instructions 148191 -> 137439, -Os 174112 -> 160327; qlight c +1 instruction, -1 byte"
-blessed = "2026-10-08"
+reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
+blessed = "2026-10-09"
 
 [bas.O2]
-instructions = 338429
+instructions = 337838
 memory_operands = 103461
-code_bytes = 443
+code_bytes = 457
 data_bytes = 15
 bss_bytes = 0
 
 [bas.Os]
-instructions = 319614
+instructions = 320166
 memory_operands = 91158
-code_bytes = 401
+code_bytes = 403
 data_bytes = 15
 bss_bytes = 0
 
 [c.O2]
-instructions = 137439
+instructions = 136216
 memory_operands = 28501
-code_bytes = 178
+code_bytes = 181
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 160327
+instructions = 160247
 memory_operands = 19850
 code_bytes = 159
 data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 171685
+instructions = 171485
 memory_operands = 19817
-code_bytes = 207
+code_bytes = 205
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 272655
+instructions = 272295
 memory_operands = 36222
-code_bytes = 283
+code_bytes = 280
 data_bytes = 0
 bss_bytes = 0
 

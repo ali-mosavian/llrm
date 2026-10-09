@@ -504,3 +504,54 @@ fn test_a_forecast_is_the_same_from_the_managers_pressure_as_from_one_made_for_t
     let residents = |view: &View, hide: &dyn Fn(ValueId) -> bool| function.layout().iter().flat_map(|&block| view.sites(block, hide)).map(|site| site.before.residents.len()).sum::<usize>();
     assert!(residents(&kept, &hidden) < residents(&kept, &|_| false));
 }
+
+/// `forecast` as it was written, a set and a full sort per point: the one that picks the cheapest by a partial sort over a
+/// sorted vector must give the same cost, spills and peak, ties included.
+#[test]
+fn test_the_forecast_is_what_a_set_and_a_full_sort_give() {
+    let mut seed = 12345_u64;
+    let mut next = move |most: u64| {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (seed >> 33) % most
+    };
+    for _ in 0..200 {
+        let points: Vec<super::Point<u32>> = (0..8).map(|_| super::Point { registers: next(5) as i64, residents: (0..next(9)).map(|_| next(10) as u32).collect() }).collect();
+        let prices: Vec<i64> = (0..10).map(|_| next(4) as i64).collect();
+        let mut expected_spilled = std::collections::BTreeSet::new();
+        let (mut cost, mut peak) = (0, 0);
+        for point in points.clone() {
+            let resident = point.residents.into_iter().filter(|one| !expected_spilled.contains(one)).collect::<std::collections::BTreeSet<_>>();
+            let excess = resident.len() as i64 - point.registers.max(0);
+            peak = peak.max(excess);
+            if excess <= 0 {
+                continue;
+            }
+            let mut cheapest = resident.into_iter().map(|one| (prices[one as usize], one)).collect::<Vec<_>>();
+            cheapest.sort();
+            for (each, one) in cheapest.into_iter().take(excess as usize) {
+                cost += each;
+                expected_spilled.insert(one);
+            }
+        }
+        let got = forecast(points, |one| prices[one as usize]);
+        assert_eq!((got.cost, got.spilled.iter().collect::<std::collections::BTreeSet<_>>(), got.peak), (cost, expected_spilled, peak));
+    }
+}
+
+/// `spilled` keeps what it has spilled in a hash set (lsr asks it of every resident of every point of every candidate set, on cells that are not
+/// ids); it must price the same as `forecast`, which keeps an id set.
+#[test]
+fn test_spilled_prices_what_forecast_does_whichever_set_remembers_the_spilled() {
+    let mut seed = 777_u64;
+    let mut next = move |most: u64| {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (seed >> 33) % most
+    };
+    for _ in 0..300 {
+        let points: Vec<super::Point<llrm_mir::module::ValueId>> =
+            (0..10).map(|_| super::Point { registers: next(5) as i64, residents: (0..next(10)).map(|_| llrm_mir::module::ValueId(next(12) as u32)).collect() }).collect();
+        let prices: Vec<i64> = (0..12).map(|_| next(5) as i64).collect();
+        let by_forecast = forecast(points.clone(), |one| prices[one.0 as usize]).cost;
+        assert_eq!(spilled(points, |one| prices[one.0 as usize]), by_forecast);
+    }
+}

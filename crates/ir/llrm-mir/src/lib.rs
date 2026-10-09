@@ -6,6 +6,8 @@ pub mod alias;
 pub mod build;
 pub mod callgraph;
 pub mod context;
+pub mod dense;
+pub mod hash;
 pub mod datalayout;
 pub mod debuginfo;
 pub mod dominators;

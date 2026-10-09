@@ -1,38 +1,38 @@
-reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
-blessed = "2026-10-08"
+reason = "x87: a float load one arithmetic instruction reads is its memory operand (nbody c -8%/-12.5% Os, fpbench -1.2%, parity/qbsp -6.8%, nbody_single nib -5.3%)"
+blessed = "2026-10-09"
 
 [bas.O2]
-instructions = 1056
+instructions = 1036
 memory_operands = 463
-code_bytes = 734
+code_bytes = 732
 data_bytes = 13
 bss_bytes = 0
 
 [bas.Os]
-instructions = 1149
+instructions = 1134
 memory_operands = 535
-code_bytes = 662
+code_bytes = 656
 data_bytes = 13
 bss_bytes = 0
 
 [c.O2]
-instructions = 291
+instructions = 274
 memory_operands = 80
-code_bytes = 373
+code_bytes = 375
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 297
+instructions = 277
 memory_operands = 80
-code_bytes = 327
+code_bytes = 319
 data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
 instructions = 314
 memory_operands = 85
-code_bytes = 430
+code_bytes = 435
 data_bytes = 0
 bss_bytes = 0
 

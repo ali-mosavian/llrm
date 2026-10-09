@@ -1,46 +1,45 @@
-reason = "regparm3 is the default (user decision 2026-10-08), measured on main after #887: AX/DX/CX cannot address, only SI/DI survive a call; the rows here move down"
-blessed = "2026-10-08"
+reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
+blessed = "2026-10-09"
 
 [bas.O2]
-instructions = 1418168
-memory_operands = 333049
+instructions = 1448167
+memory_operands = 333048
 code_bytes = 568
 data_bytes = 125
 bss_bytes = 0
 
 [bas.Os]
-instructions = 1418162
-memory_operands = 333049
+instructions = 1448161
+memory_operands = 333048
 code_bytes = 555
 data_bytes = 125
 bss_bytes = 0
-kernel_ms = 18.928
 
 [c.O2]
-instructions = 1488167
+instructions = 1452167
 memory_operands = 326049
-code_bytes = 489
+code_bytes = 484
 data_bytes = 0
 bss_bytes = 96
 
 [c.Os]
-instructions = 1488161
+instructions = 1452161
 memory_operands = 326049
-code_bytes = 476
+code_bytes = 471
 data_bytes = 0
 bss_bytes = 96
 
 [nib.O2]
-instructions = 2945108
-memory_operands = 710068
-code_bytes = 786
+instructions = 2922133
+memory_operands = 615081
+code_bytes = 813
 data_bytes = 96
 bss_bytes = 0
 
 [nib.Os]
-instructions = 2945120
-memory_operands = 710068
-code_bytes = 784
+instructions = 3035120
+memory_operands = 548068
+code_bytes = 793
 data_bytes = 96
 bss_bytes = 0
 

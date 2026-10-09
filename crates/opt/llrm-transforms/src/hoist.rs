@@ -87,7 +87,8 @@ pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses, size: bool) -> 
     let mut changed = false;
     for one in found {
         let Some(into) = _preheader(&graph, one) else { continue };
-        let run = _invariant_run(unit, &outer, one, into, &accesses, &terminal, &registers, &shape);
+        let mut bounds = || analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function);
+        let run = _invariant_run(unit, &outer, one, into, &accesses, &terminal, &registers, &shape, &mut bounds);
         if _crossed_values(unit.function, &run).is_empty() {
             continue;
         }
@@ -120,17 +121,19 @@ fn _affordable(unit: &passes::Unit, outer: &Outer, mut run: Vec<InstId>, before:
         for &inst in &run {
             hoisted.move_to(inst, Position::Before(before)).expect("a placed instruction");
         }
-        let Some(moved) = price(&hoisted) else { return run };
+        // The price of `hoisted` is its work and the forecast below, which is found once (it was found twice: 41% of hoist on a
+        // 16-deep nest, where the loops' passes cost 6 G).
+        let Some(work) = profit::weighted(unit.context, unit.layout, &hoisted, outer.callees(), costs, frequency) else { return run };
         // A floating value held across the loop is released after it, once for each time the loop is entered.
         let floats: BTreeSet<ValueId> = _crossed_values(&hoisted, &run).into_iter().filter(|&value| matches!(unit.context.types.get(hoisted.value(value).ty), Type::Float(_))).collect();
-        let moved = moved + floats.len() as i64 * costs.float_release * frequency.get(&into).copied().unwrap_or(1);
         let Some(forecast) = profit::spill_forecast(unit.context, unit.layout, &hoisted, costs, room, &|inst| crate::spill::kept_across(outer, unit.context, &hoisted, inst), frequency) else { return run };
+        let moved = work + forecast.cost + floats.len() as i64 * costs.float_release * frequency.get(&into).copied().unwrap_or(1);
         let cells = crate::spill::cells(&hoisted);
         let traffic = crate::spill::traffic(&hoisted, frequency, &cells, costs, &|_| true, &|value| crate::spill::words(unit.context, unit.layout, &hoisted, value));
         let free = |value: ValueId| _displacement(&hoisted, value) || traffic.get(&value).is_some_and(|one| one.rebuild.is_some());
-        let crossing = _crossed_values(&hoisted, &run).intersection(&forecast.spilled).copied().collect::<BTreeSet<_>>();
+        let crossing = _crossed_values(&hoisted, &run).into_iter().filter(|value| forecast.spilled.contains(value)).collect::<BTreeSet<_>>();
         let uncounted: i64 = crossing.iter().filter(|&&value| free(value)).filter_map(|value| traffic.get(value)).map(|one| one.price(costs)).sum();
-        for &value in &forecast.spilled {
+        for value in forecast.spilled.iter() {
             if let ValueDef::Instruction(def) = hoisted.value(value).def {
                 llrm_support::debug!("hoist", "  spilled {value:?} = {:?} {:?}", hoisted.instruction(def).opcode, hoisted.instruction(def).operands);
             }
@@ -227,7 +230,7 @@ pub fn _preheader(graph: &[cfg::Block], loop_: &Loop) -> Option<i64> {
 /// The loop's instructions whose results never change, in an order each
 /// reads only what is outside the loop or earlier in it. Grown, to a fixed
 /// point.
-pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i64, accesses: &Accesses, terminal: &BTreeSet<InstId>, registers: &llrm_support::hash::IndexMap<ValueId, llrm_analysis::consts::Known>, shape: &llrm_analysis::cfg::Shape) -> Vec<InstId> {
+pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i64, accesses: &Accesses, terminal: &BTreeSet<InstId>, registers: &llrm_support::hash::IndexMap<ValueId, llrm_analysis::consts::Known>, shape: &llrm_analysis::cfg::Shape, bounds: &mut dyn FnMut() -> std::rc::Rc<Result<ranges::Bounds, String>>) -> Vec<InstId> {
     let function = &*unit.function;
     let inside = |block: BlockId| loop_.body.contains(&cfg::id(block));
     let insts: Vec<InstId> = function.layout().iter().filter(|&&block| inside(block)).flat_map(|&block| function.block(block).instructions().to_vec()).collect();
@@ -236,13 +239,16 @@ pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i6
         ValueDef::Instruction(def) => function.parent(def).is_some_and(|block| !inside(block)),
     };
     let mut certain: Option<BTreeSet<InstId>> = None;
-    let mut bounded: Option<ranges::Facts> = None;
+    let mut bounded: Option<std::rc::Rc<Result<ranges::Bounds, String>>> = None;
     let mut run: Vec<InstId> = Vec::new();
+    let mut taken: llrm_mir::dense::IdSet<InstId> = llrm_mir::dense::IdSet::new();
+    // Whether an instruction may move is a fact of the loop, not of how much of it has moved: asked of each once, not once a round.
+    let mut movable: llrm_mir::dense::IdMap<InstId, bool> = llrm_mir::dense::IdMap::new();
     let mut made: BTreeSet<ValueId> = BTreeSet::new();
     loop {
         let mut grew = false;
         for &inst in &insts {
-            if run.contains(&inst) || !_movable(unit, inst, &insts, accesses, Some(outer.program())) {
+            if taken.contains(&inst) || !*movable.get_or_insert_with(inst, || _movable(unit, inst, &insts, accesses, Some(outer.program()))) {
                 continue;
             }
             let ready = function.instruction(inst).operands.iter().all(|&operand| match operand {
@@ -253,11 +259,12 @@ pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i6
             if !ready
                 || (_may_fault(unit, outer, inst)
                     && !certain.get_or_insert_with(|| _guaranteed(unit, outer, loop_, into, terminal, registers, shape)).contains(&inst)
-                    && !_bounded_inside(unit, outer, inst, into, loop_.header, &mut bounded, registers, shape))
+                    && !_bounded_inside(unit, outer, inst, into, loop_.header, &mut bounded, bounds, registers, shape))
             {
                 continue;
             }
             run.push(inst);
+            taken.insert(inst);
             made.extend(function.instruction(inst).result);
             grew = true;
         }
@@ -307,17 +314,16 @@ fn _may_fault(unit: &passes::Unit, outer: &Outer, inst: InstId) -> bool {
 /// Whether `inst` loads only bytes inside its object wherever the
 /// preheader `into` enters the loop at `header`, its index's bounds on
 /// that edge as `ranges` finds them.
-fn _bounded_inside(unit: &passes::Unit, outer: &Outer, inst: InstId, into: i64, header: i64, bounded: &mut Option<ranges::Facts>, registers: &llrm_support::hash::IndexMap<ValueId, llrm_analysis::consts::Known>, shape: &llrm_analysis::cfg::Shape) -> bool {
+fn _bounded_inside(unit: &passes::Unit, outer: &Outer, inst: InstId, into: i64, header: i64, bounded: &mut Option<std::rc::Rc<Result<ranges::Bounds, String>>>, bounds: &mut dyn FnMut() -> std::rc::Rc<Result<ranges::Bounds, String>>, registers: &llrm_support::hash::IndexMap<ValueId, llrm_analysis::consts::Known>, shape: &llrm_analysis::cfg::Shape) -> bool {
     if !matches!(unit.function.instruction(inst).opcode, Opcode::Load { .. }) {
         return false;
     }
     let memory = Unit::within(unit.context, unit.layout, unit.function, outer).with_registers(registers).with_shape(shape);
     let Some(reference) = memory.reference(inst) else { return false };
-    if bounded.is_none() {
-        *bounded = Some(ranges::bounded(&memory).unwrap_or_default());
-    }
+    // What the counted loops bound is the manager's, asked when first needed.
+    let held = bounded.get_or_insert_with(|| bounds());
     // What holds on the edge into the loop, as the preheader's branch narrows it.
-    let scope = bounded.as_ref().and_then(|facts| facts.get(&into)).cloned().unwrap_or_default();
+    let scope = held.as_ref().as_ref().ok().and_then(|facts| facts.at(into)).cloned().unwrap_or_default();
     let Ok(Some(known)) = ranges::on_edge(&memory, cfg::block(into), cfg::block(header), &scope, None) else { return false };
     ranges::inside_object(&memory, &reference, &known.into_iter().collect())
 }

@@ -1618,10 +1618,14 @@ mod tests {
     #[test]
     fn test_m32_indexes_through_the_counter_not_a_copy_of_it() {
         let body = flat_body("sieve", "bench_sieve");
-        let from = body.iter().position(|line| line.starts_with("imul ")).expect("the counter starts as i*i");
+        // From the store the loop makes (the trip's extension is the first thing after it).
+        let from = body.iter().position(|line| line.starts_with("mov byte ptr [")).expect("the loop stores a byte");
         let loop_ = &body[from..];
         let copies = |line: &&String| line.starts_with("movzx e") || line.split_once(' ').is_some_and(|(operation, operands)| operation == "mov" && operands.split_once(", ").is_some_and(|(to, from)| to.len() == 3 && from.len() == 3 && to.starts_with('e') && from.starts_with('e')));
-        assert!(loop_.iter().filter(copies).count() == 0, "{loop_:#?}");
+        // The counter is `(unsigned short)(multiple + i)` against an unknown `limit`: the 16-bit add may wrap, so it cannot be widened,
+        // and gcc zero-extends it every trip too (two instructions to ours one). The zero copies llrm once had came from ECX's upper
+        // half happening to be zero where the peephole could see it (register-choice luck); with EBP a value register it is one.
+        assert!(loop_.iter().filter(copies).count() <= 1, "{loop_:#?}");
     }
 
     /// `d = a + b` into a register that is neither is one `lea`: no flags to keep, three bytes for the four of

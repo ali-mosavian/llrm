@@ -34,6 +34,8 @@ variadic = "cdecl32"
 return_address_bytes = 4
 first_argument_offset = 8
 frame = "ebp"
+# A function that can address its frame through the stack pointer has no frame register: it is then one more value register (last to be
+# given out, saved where used), decided before allocation (`backend/framefree.rs`).
 frame_optional = true
 stack = "esp"
 preserved = ["ebx", "ecx", "edx", "esi", "edi", "ebp"]
@@ -81,6 +83,8 @@ return_address_bytes = 4
 first_argument_offset = 8
 # The frame register: a cell is addressed through it, and no value is held in it.
 frame = "ebp"
+# A function that can address its frame through the stack pointer has no frame register: it is then one more value register (last to be
+# given out, saved where used), decided before allocation (`backend/framefree.rs`).
 frame_optional = true
 stack = "esp"
 preserved = ["ebx", "esi", "edi", "ebp"]

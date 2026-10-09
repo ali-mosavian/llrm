@@ -9,7 +9,7 @@ edition = "2024"
 rust-version = "1.87"
 
 [workspace.dependencies]
-iced-x86 = { version = "=1.21.0", default-features = false, features = ["std", "decoder", "block_encoder", "op_code_info", "instr_info", "nasm"] }
+iced-x86 = { version = "=1.21.0", default-features = false, features = ["std", "decoder", "block_encoder", "op_code_info", "instr_info", "nasm", "no_vex", "no_evex", "no_xop", "no_d3now"] }
 indexmap = "2"
 num-bigint = "0.4"
 num-traits = "0.2"
@@ -124,6 +124,16 @@ path = "src/bin/nib-lsp.rs"
 # Release, bench and `test --release` inherit this; only a clean rebuilds all.
 [profile.release]
 incremental = true
+
+# The shipped llrm-c, the vs-gcc compile-time table and the creep run on main: one codegen unit and fat LTO (about 3 minutes from cold, against
+# 7-60 s incremental). Compile instructions -11..-13% (d_faces, combat, cmd, mdl, nbody_single, queens, x_life, 2026-10-09); thin LTO with
+# 16 units gets -6.5..-7.4% in ~40 s. Not for the PR gate, which compares two commits built the same way on `release`:
+# the deltas of #1039, #1032 and #1029 agree in sign and size under release, thin and dist (docs/testing.md).
+[profile.dist]
+inherits = "release"
+incremental = false
+codegen-units = 1
+lto = "fat"
 
 # Iteration builds: `cargo test --profile fast`. More codegen units keep a
 # one-line change from re-optimizing most of the crate.

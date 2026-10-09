@@ -7,7 +7,7 @@ pub mod basic;
 mod data;
 pub mod flags;
 
-use std::collections::HashMap;
+use crate::support::hash::HashMap;
 use std::path::PathBuf;
 
 use llrm_mir::program::Program;
@@ -86,7 +86,7 @@ impl Options {
     }
 
     pub fn cpu(&self) -> Result<&'static Profile, String> {
-        cpu::tuned_for(&*self.arch, &self.machine.cpu, self.pipeline.prefers_size())
+        cpu::tuned_with(&*self.arch, &self.machine.cpu, self.pipeline.prefers_size(), self.pipeline.searches(), self.pipeline.searches_all())
     }
 }
 

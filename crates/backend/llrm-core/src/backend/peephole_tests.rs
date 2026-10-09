@@ -2562,9 +2562,9 @@ fn test_constant_sum_preserves_unrolled_source_anchor_on_lea() {
 fn test_constant_sum_does_not_drop_a_predecessor_source_anchor() {
     // A fold cannot discard source ownership held by the removed copy.
     let input = _constant_sum_body(1, false);
-    let mut insns = input.blocks[0].insns.clone();
+    let mut insns = input.blocks[0].insns.to_vec();
     insns[0] = Arc::new(Insn { symbol: Some(true), ..(*insns[0]).clone() });
-    let input = LirBody { blocks: vec![LirBlock { insns, ..input.blocks[0].clone() }], ..input };
+    let input = LirBody { blocks: vec![LirBlock { insns: insns.into(), ..input.blocks[0].clone() }], ..input };
 
     let result = addresses(&input, "386").unwrap().insns();
 
@@ -2656,11 +2656,11 @@ fn test_source_push_pop_is_not_treated_as_a_parallel_copy() {
     let (source, destination) = frame_slots(2);
     let mut pair = parcopy::scheduled(&one_block(vec![group_move(destination, source, Some(1), 0x100)])).unwrap().blocks[0]
         .insns
-        .clone();
+        .to_vec();
     pair[1] = Arc::new(Insn { at: 0x101, covers: Some((0x101, 0x102)), ..(*pair[1]).clone() });
     pair.push(reset());
 
-    let instructions = frame_copies(&one_block(pair), "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0].insns.clone();
+    let instructions = frame_copies(&one_block(pair), "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0].insns.to_vec();
 
     assert_eq!(names(&instructions[..2]), ["push", "pop"]);
 }
@@ -2934,7 +2934,7 @@ fn test_commutative_result_copy_keeps_source_owned_copy_bytes() {
     let (input, copied) = _pair(Operation::Multiply, "imul", vec![Arc::clone(&overwrite)]);
     let owned = Arc::new(Insn { covers: Some((3, 5)), ..copied });
     let input = LirBody {
-        blocks: vec![LirBlock { insns: vec![Arc::clone(&input.insns()[0]), owned, overwrite], ..input.blocks[0].clone() }],
+        blocks: vec![LirBlock { insns: vec![Arc::clone(&input.insns()[0]), owned, overwrite].into(), ..input.blocks[0].clone() }],
         ..input
     };
 
@@ -3006,9 +3006,9 @@ fn test_high_extract_keeps_observable_wide_load_or_shift_effects() {
         };
         let mut input = _high_extract_body(tail);
         if hazard == "source-load" {
-            let mut insns = input.blocks[0].insns.clone();
+            let mut insns = input.blocks[0].insns.to_vec();
             insns[0] = Arc::new(Insn { covers: Some((1, 3)), symbol: None, ..(*insns[0]).clone() });
-            input = LirBody { blocks: vec![LirBlock { insns, ..input.blocks[0].clone() }], ..input };
+            input = LirBody { blocks: vec![LirBlock { insns: insns.into(), ..input.blocks[0].clone() }], ..input };
         }
 
         assert_eq!(high_extracts(&input, "386").unwrap(), input, "{hazard}");
@@ -3066,7 +3066,7 @@ fn test_empty_spill_reservation_is_removed_only_without_remaining_uses() {
                 )
             });
             let one = Arc::new(insn(4, Some((4, 4)), what, vec![], vec![]));
-            input.blocks[0].insns.push(one);
+            input.blocks[0].insns.edit(|insns| insns.push(one));
         }
         let calls = IndexMap::from_iter([(1, "B$ENRA".to_owned()), (2, "B$EXSA".to_owned())]);
         let reserved = prologue::reserved(&input, &slots, Some(&calls)).unwrap();
@@ -3387,4 +3387,96 @@ fn test_two_cells_equal_but_spelled_through_other_registers_are_decoded_apart() 
     let second = _decoded(16, &place).expect("encodes");
     assert_ne!(first, second, "[si+2] decoded as [bx+2]");
     assert_eq!(second[0].memory_base(), Register::SI);
+}
+
+/// The passes asked `_register_effects` of the same instruction again and again, each time lowering it to text and decoding
+/// it: 886,000 asks for 16,000 distinct instructions in one QCport module. An instruction equal to one already answered is
+/// answered from it, whichever `Insn` it is held in.
+#[test]
+fn test_an_instruction_equal_to_one_already_answered_is_not_worked_out_again() {
+    let add = |at| insn(at, Some((at, at + 2)), Some(sem(Operation::Binary, "add", vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::BX, 2)])), vec![], vec![]);
+    let before = effects_computed();
+    let first = _register_effects(16, &add(0), false, true);
+    for at in 1..6 {
+        assert_eq!(_register_effects(16, &add(at), false, true), first);
+    }
+    assert_eq!(effects_computed() - before, 1, "worked out again for each ask");
+    let other = insn(0, Some((0, 2)), Some(sem(Operation::Binary, "add", vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::CX, 2)])), vec![], vec![]);
+    assert_ne!(_register_effects(16, &other, false, true), first, "another instruction was given this one's answer");
+}
+
+/// `dead_at_exit` was worked out for the body ten passes in a row, though all but one of them left it as it was (#924). A body
+/// that is the same is answered from the last; one whose instruction changed is not.
+#[test]
+fn test_the_dead_lanes_of_a_body_no_pass_changed_are_worked_out_once() {
+    let mov = |at, to, from| Arc::new(insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", vec![rl(to, 2)], vec![rl(from, 2)])), vec![], vec![]));
+    let input = body("f", 0, vec![block(0, vec![mov(0, Register::AX, Register::BX), mov(2, Register::CX, Register::AX)], vec![])]);
+    let before = liveness::exits_computed();
+    let first = liveness::dead_at_exit(&input);
+    for _ in 0..5 {
+        assert_eq!(liveness::dead_at_exit(&input.clone()), first);
+    }
+    assert_eq!(liveness::exits_computed() - before, 1, "worked out again for each ask");
+    let changed = body("f", 0, vec![block(0, vec![mov(0, Register::AX, Register::BX), mov(2, Register::DX, Register::AX)], vec![])]);
+    liveness::dead_at_exit(&changed);
+    assert_eq!(liveness::exits_computed() - before, 2, "a changed body was given the last answer");
+}
+
+/// The flag liveness, upper-half zeroes and post-RA sink liveness each iterated every block to a fixed point: a backward chain of 30
+/// blocks took 30 rounds of 30. All go through `dataflow::solve`, which works a block again only when an input changed.
+#[test]
+fn test_flag_liveness_over_a_loop_is_not_worked_by_rounds() {
+    let blocks = 30;
+    let mut list = Vec::new();
+    for at in 1..=blocks {
+        let next = if at == blocks { vec![1, blocks + 1] } else { vec![at + 1] };
+        list.push(block(at, vec![], next));
+    }
+    list.push(block(blocks + 1, vec![], vec![]));
+    let input = body("loop", 1, list);
+    crate::analysis::dataflow::WORKED.with(|count| count.set(0));
+    super::_flags_live_out(&input);
+    let worked = crate::analysis::dataflow::WORKED.with(std::cell::Cell::get);
+    assert!(worked <= 4 * blocks as usize, "{worked} blocks worked for a loop of {blocks}");
+}
+
+/// Every block's transfer was worked again each round until no entry changed, and a fact crosses one block a round: a loop of 30
+/// blocks took 30 rounds of 30 transfers (a nest 8 deep: a quarter of lir peephole). A block is worked again when its entry changed.
+#[test]
+fn test_spill_forwarding_works_a_block_again_only_when_its_entry_changed() {
+    let register = rl(Register::BX, 2);
+    let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-32), 2) });
+    let blocks = 30;
+    let mut list = Vec::new();
+    for at in 1..=blocks {
+        let store = insn(at, Some((at, at)), Some(sem(Operation::Move, "mov", vec![cell.clone()], vec![register.clone()])), vec![], vec![]);
+        let next = if at == blocks { vec![1, blocks + 1] } else { vec![at + 1] };
+        list.push(block(at, if at == 1 { vec![Arc::new(store)] } else { vec![] }, next));
+    }
+    list.push(block(blocks + 1, vec![], vec![]));
+    let input = body("loop", 1, list);
+    crate::analysis::dataflow::WORKED.with(|count| count.set(0));
+    spillforward::forwarded(&input);
+    let worked = crate::analysis::dataflow::WORKED.with(std::cell::Cell::get);
+    assert!(worked <= 4 * blocks as usize, "{worked} transfers for a loop of {blocks} blocks");
+}
+
+/// Copy propagation worked every block again each round until no exit changed: a loop of 30 blocks took 30 rounds of 30 blocks.
+/// A block is worked again when a parent's exit changed.
+#[test]
+fn test_copy_propagation_works_a_block_again_only_when_a_parent_changed() {
+    let (ax, bx) = (rl(Register::AX, 2), rl(Register::BX, 2));
+    let blocks = 30;
+    let mut list = Vec::new();
+    for at in 1..=blocks {
+        let copy = insn(at, Some((at, at)), Some(sem(Operation::Move, "mov", vec![bx.clone()], vec![ax.clone()])), vec![], vec![]);
+        let next = if at == blocks { vec![1, blocks + 1] } else { vec![at + 1] };
+        list.push(block(at, if at == 1 { vec![Arc::new(copy)] } else { vec![] }, next));
+    }
+    list.push(block(blocks + 1, vec![], vec![]));
+    let input = body("loop", 1, list);
+    crate::analysis::dataflow::WORKED.with(|count| count.set(0));
+    crate::backend::copyprop::forwarded(&input);
+    let worked = crate::analysis::dataflow::WORKED.with(std::cell::Cell::get);
+    assert!(worked <= 4 * blocks as usize, "{worked} blocks worked for a loop of {blocks}");
 }

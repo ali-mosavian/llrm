@@ -75,6 +75,7 @@ fn _candidate(context: &Context, layout: &DataLayout, function: &Function, analy
     lcssa::closed(&mut closed)?;
     let facts = analyses.fresh().get::<Registers>(context, layout, &closed);
     let shape = cfg::Shape::of(&closed);
+    let frequencies = profit::Frequencies::default();
     for loop_ in shape.loops.clone() {
         let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else {
             continue;
@@ -86,7 +87,7 @@ fn _candidate(context: &Context, layout: &DataLayout, function: &Function, analy
         let Some(count) = induction::trip_count(&unit, &loop_, &facts).or_else(|| induction::trip_bound(&unit, &loop_, &facts)) else {
             continue;
         };
-        if count < BigInt::from(2) || !peelsize::admitted(&unit, &loop_, &count, &facts, limits, profit::site(&unit, analyses.outer(), &loop_)) {
+        if count < BigInt::from(2) || !peelsize::admitted(&unit, &loop_, &count, &facts, limits, profit::site(&unit, analyses.outer(), &loop_, &frequencies)) {
             continue;
         }
         let Some(count) = count.to_i64() else {

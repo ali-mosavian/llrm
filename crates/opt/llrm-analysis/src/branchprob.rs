@@ -24,6 +24,9 @@
 //! capped as LLVM caps a loop's scale.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
+
+use llrm_support::hash::HashMap;
 
 use llrm_mir::module::{BlockId, Function, MetadataNode, MetadataOperand, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, FloatPredicate, IntPredicate, Opcode};
@@ -94,6 +97,7 @@ pub fn estimated(context: &Context, metadata: &[MetadataNode], declarations: &De
     let terminal = noreturn::terminal_sites(context, declarations, function, &BTreeSet::new());
     let cold = noreturn::cold(context, declarations, function, &terminal);
     let mut odds = Odds::default();
+    let runs = Runs::default();
     for &block in function.layout() {
         let successors: Vec<i64> = function.successors(block).into_iter().map(id).collect();
         match successors.as_slice() {
@@ -102,7 +106,7 @@ pub fn estimated(context: &Context, metadata: &[MetadataNode], declarations: &De
                 odds.taken.insert((id(block), *only), 1.0);
             }
             _ => {
-                let (heuristic, weights) = weighed(context, metadata, declarations, function, shape, trips, &cold, block, &successors);
+                let (heuristic, weights) = weighed(context, metadata, declarations, function, shape, trips, &cold, &runs, block, &successors);
                 let total: f64 = weights.iter().sum();
                 for (to, weight) in successors.iter().zip(&weights) {
                     *odds.taken.entry((id(block), *to)).or_default() += weight / total;
@@ -150,7 +154,7 @@ fn declared(context: &Context, metadata: &[MetadataNode], function: &Function, b
 }
 
 /// The first heuristic that tells `block`'s successors apart, and their weights.
-fn weighed(context: &Context, metadata: &[MetadataNode], declarations: &Declarations, function: &Function, shape: &Shape, trips: &BTreeMap<i64, i64>, cold: &BTreeSet<i64>, block: BlockId, successors: &[i64]) -> (Heuristic, Vec<f64>) {
+fn weighed(context: &Context, metadata: &[MetadataNode], declarations: &Declarations, function: &Function, shape: &Shape, trips: &BTreeMap<i64, i64>, cold: &BTreeSet<i64>, runs: &Runs, block: BlockId, successors: &[i64]) -> (Heuristic, Vec<f64>) {
     if let Some(weights) = declared(context, metadata, function, block, successors) {
         return (Heuristic::Declared, weights);
     }
@@ -178,7 +182,7 @@ fn weighed(context: &Context, metadata: &[MetadataNode], declarations: &Declarat
             return (Heuristic::Loop, weights);
         }
     }
-    if let Some(weights) = counted(context, function, shape, trips, block, successors) {
+    if let Some(weights) = counted(context, function, shape, trips, runs, block, successors) {
         return (Heuristic::Counted, weights);
     }
     if successors.len() == 2 {
@@ -212,7 +216,7 @@ fn weighed(context: &Context, metadata: &[MetadataNode], declarations: &Declarat
 /// `trips` proven decides its compare: the loop's counters (its header phis,
 /// from constant starts) are run trip by trip, and the branch is taken as
 /// often as the compare holds. Inner loops first; none that proves it, none.
-fn counted(context: &Context, function: &Function, shape: &Shape, trips: &BTreeMap<i64, i64>, block: BlockId, successors: &[i64]) -> Option<Vec<f64>> {
+fn counted(context: &Context, function: &Function, shape: &Shape, trips: &BTreeMap<i64, i64>, runs: &Runs, block: BlockId, successors: &[i64]) -> Option<Vec<f64>> {
     let branch = function.instruction(function.terminator(block)?);
     let (Opcode::Br, [Operand::Value(condition), Operand::Block(yes), Operand::Block(_)]) = (&branch.opcode, branch.operands.as_slice()) else { return None };
     let ValueDef::Instruction(compare) = function.value(*condition).def else { return None };
@@ -222,25 +226,16 @@ fn counted(context: &Context, function: &Function, shape: &Shape, trips: &BTreeM
     around.sort_by_key(|one| one.body.len());
     let share = around.into_iter().filter(|one| one.header != id(block)).find_map(|one| {
         let count = trips.get(&one.header).copied().filter(|count| (1..=COUNTED_TRIPS).contains(count))?;
-        let header = function.block(cfg::block(one.header));
-        let phis = header.instructions().iter().copied().filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect::<Vec<_>>();
-        let outside = |at: &Operand| matches!(at, Operand::Block(from) if !one.body.contains(&id(*from)));
-        let incoming = |inst, inside: bool| {
-            let pairs = function.instruction(inst).operands.chunks(2).filter(|pair| outside(&pair[1]) != inside).map(|pair| pair[0]).collect::<Vec<_>>();
-            (!pairs.is_empty() && pairs.iter().all(|one| *one == pairs[0])).then(|| pairs[0])
-        };
-        let mut values = BTreeMap::new();
-        for &inst in &phis {
-            let result = function.instruction(inst).result?;
-            values.insert(result, incoming(inst, false).and_then(|start| evaluated(context, function, &BTreeMap::new(), start, 6)));
-        }
+        let run = runs.of(one);
+        let mut run = run.borrow_mut();
         let mut held = 0;
-        for _ in 0..count {
-            let (a, b) = (evaluated(context, function, &values, *left, 6)?, evaluated(context, function, &values, *right, 6)?);
+        for trip in 0..count as usize {
+            let values = run.at(context, function, one, trip)?;
+            let (a, b) = (evaluated(context, function, values, *left, 6)?, evaluated(context, function, values, *right, 6)?);
             held += i64::from(compared_as(predicate, a, b));
-            let next = phis.iter().map(|&inst| Some((function.instruction(inst).result?, incoming(inst, true).and_then(|step| evaluated(context, function, &values, step, 6))))).collect::<Option<BTreeMap<_, _>>>()?;
-            values = next;
         }
+        // The state after the last trip is stepped to as well: a counter that has no value there leaves the loop unrun.
+        run.at(context, function, one, count as usize)?;
         Some(held as f64 / count as f64)
     })?;
     // Never all but certain: a block must stay ordered, not unreachable.
@@ -248,6 +243,72 @@ fn counted(context: &Context, function: &Function, shape: &Shape, trips: &BTreeM
     let [first, second] = successors else { return None };
     let taken = if first == &id(*yes) { share } else { 1.0 - share };
     (first != second).then(|| vec![taken, 1.0 - taken])
+}
+
+/// What a loop's counters hold at each of its trips, `counted`'s run of the loop: the same for every branch in the loop, so the trips
+/// are run for the first branch that asks and no further than any asks. `broken` once a counter has no value, or the loop no start.
+#[derive(Default)]
+struct Run {
+    values: Vec<BTreeMap<llrm_mir::module::ValueId, Option<(u128, u32)>>>,
+    broken: bool,
+}
+
+#[derive(Default)]
+struct Runs(std::cell::RefCell<HashMap<i64, Rc<std::cell::RefCell<Run>>>>);
+
+thread_local! {
+    static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many loops this thread has started to run trip by trip for `counted`.
+pub fn loops_run() -> usize {
+    RUNS.with(std::cell::Cell::get)
+}
+
+impl Runs {
+    fn of(&self, one: &crate::graph::loops::Loop) -> Rc<std::cell::RefCell<Run>> {
+        Rc::clone(self.0.borrow_mut().entry(one.header).or_insert_with(|| {
+            RUNS.with(|runs| runs.set(runs.get() + 1));
+            Rc::default()
+        }))
+    }
+}
+
+impl Run {
+    /// The counters at the start of trip `trip` of `one` (`trip` = its trips is the state after the last), run as far as that.
+    fn at(&mut self, context: &Context, function: &Function, one: &crate::graph::loops::Loop, trip: usize) -> Option<&BTreeMap<llrm_mir::module::ValueId, Option<(u128, u32)>>> {
+        if self.broken {
+            return None;
+        }
+        let header = function.block(cfg::block(one.header));
+        let phis = header.instructions().iter().copied().filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect::<Vec<_>>();
+        let outside = |at: &Operand| matches!(at, Operand::Block(from) if !one.body.contains(&id(*from)));
+        let incoming = |inst, inside: bool| {
+            let pairs = function.instruction(inst).operands.chunks(2).filter(|pair| outside(&pair[1]) != inside).map(|pair| pair[0]).collect::<Vec<_>>();
+            (!pairs.is_empty() && pairs.iter().all(|one| *one == pairs[0])).then(|| pairs[0])
+        };
+        if self.values.is_empty() {
+            let mut values = BTreeMap::new();
+            for &inst in &phis {
+                let Some(result) = function.instruction(inst).result else {
+                    self.broken = true;
+                    return None;
+                };
+                values.insert(result, incoming(inst, false).and_then(|start| evaluated(context, function, &BTreeMap::new(), start, 6)));
+            }
+            self.values.push(values);
+        }
+        while self.values.len() <= trip {
+            let values = self.values.last().expect("the start");
+            let next = phis.iter().map(|&inst| Some((function.instruction(inst).result?, incoming(inst, true).and_then(|step| evaluated(context, function, values, step, 6))))).collect::<Option<BTreeMap<_, _>>>();
+            let Some(next) = next else {
+                self.broken = true;
+                return None;
+            };
+            self.values.push(next);
+        }
+        self.values.get(trip)
+    }
 }
 
 /// The most trips `counted` will run.
@@ -498,31 +559,55 @@ pub fn propagated_edges(order: &[i64], predecessors: &dyn Fn(i64) -> Vec<i64>, s
     // How often a trip of each loop reaches its exiting blocks together, which its exit test runs: more than once where
     // one is in a loop nested in it, and each visit then takes that much less of the exit, so that the trips stay.
     let visits: std::cell::RefCell<BTreeMap<i64, f64>> = std::cell::RefCell::new(BTreeMap::new());
-    let counted = |from: i64, to: i64| -> Option<f64> {
-        let next = successors(from);
-        for one in cycles.iter().filter(|one| one.body.contains(&from)) {
-            let inside = next.iter().filter(|at| one.body.contains(at)).count();
-            let outside = next.len() - inside;
-            if inside == 0 || outside == 0 {
-                continue;
-            }
-            // A loop without proven trips leaves the edge to the loops around it, which may state them.
-            let Some(trips) = one.trips else { continue };
-            let exiting = one.body.iter().filter(|&&at| successors(at).iter().any(|to| !one.body.contains(to))).count();
-            if exiting != 1 && from != one.header && !one.latches.contains(&from) {
-                return None;
-            }
-            let tested = if from == one.header && !one.latches.contains(&from) { 0.0 } else { 1.0 };
-            let visited = visits.borrow().get(&one.header).copied().unwrap_or(1.0).max(1.0);
-            let stay = 1.0 - (1.0 - (trips as f64 - tested) / (trips as f64 + 1.0 - tested)) / visited;
-            // The trips fix how often the loop is left, not which way: each
-            // edge takes its side's mass by its own odds.
-            let side: BTreeSet<i64> = next.iter().copied().filter(|at| one.body.contains(at) == one.body.contains(&to)).collect();
-            let weight: f64 = side.iter().map(|at| given(from, *at)).sum();
-            let part = if weight > 0.0 { given(from, to) / weight } else { 1.0 / side.len() as f64 };
-            return Some(if one.body.contains(&to) { stay * part } else { (1.0 - stay) * part });
+    // Asked of every edge by every loop's weighing: a block's successors and a loop's exiting blocks do not change between asks.
+    let next_of: std::cell::RefCell<BTreeMap<i64, std::rc::Rc<Vec<i64>>>> = std::cell::RefCell::new(BTreeMap::new());
+    let successors = |at: i64| -> std::rc::Rc<Vec<i64>> { std::rc::Rc::clone(next_of.borrow_mut().entry(at).or_insert_with(|| std::rc::Rc::new(successors(at)))) };
+    let exiting_blocks: Vec<usize> = cycles.iter().map(|one| one.body.iter().filter(|&&at| successors(at).iter().any(|to| !one.body.contains(to))).count()).collect();
+    // Which loop's trips fix an edge, and its share of its side's mass: what the loops and the odds say, not what `visits` is by
+    // the time the edge is asked about, so it is worked out once (every loop's weighing asks every edge).
+    struct Counted {
+        header: i64,
+        trips: f64,
+        tested: f64,
+        part: f64,
+        inside: bool,
+    }
+    let plans: std::cell::RefCell<BTreeMap<(i64, i64), Option<std::rc::Rc<Counted>>>> = std::cell::RefCell::new(BTreeMap::new());
+    let plan = |from: i64, to: i64| -> Option<std::rc::Rc<Counted>> {
+        if let Some(known) = plans.borrow().get(&(from, to)) {
+            return known.clone();
         }
-        None
+        let made = (|| {
+            let next = successors(from);
+            for (index, one) in cycles.iter().enumerate().filter(|(_, one)| one.body.contains(&from)) {
+                let inside = next.iter().filter(|at| one.body.contains(at)).count();
+                let outside = next.len() - inside;
+                if inside == 0 || outside == 0 {
+                    continue;
+                }
+                // A loop without proven trips leaves the edge to the loops around it, which may state them.
+                let Some(trips) = one.trips else { continue };
+                if exiting_blocks[index] != 1 && from != one.header && !one.latches.contains(&from) {
+                    return None;
+                }
+                let tested = if from == one.header && !one.latches.contains(&from) { 0.0 } else { 1.0 };
+                // The trips fix how often the loop is left, not which way: each
+                // edge takes its side's mass by its own odds.
+                let side: BTreeSet<i64> = next.iter().copied().filter(|at| one.body.contains(at) == one.body.contains(&to)).collect();
+                let weight: f64 = side.iter().map(|at| given(from, *at)).sum();
+                let part = if weight > 0.0 { given(from, to) / weight } else { 1.0 / side.len() as f64 };
+                return Some(std::rc::Rc::new(Counted { header: one.header, trips: trips as f64, tested, part, inside: one.body.contains(&to) }));
+            }
+            None
+        })();
+        plans.borrow_mut().insert((from, to), made.clone());
+        made
+    };
+    let counted = |from: i64, to: i64| -> Option<f64> {
+        let found = plan(from, to)?;
+        let visited = visits.borrow().get(&found.header).copied().unwrap_or(1.0).max(1.0);
+        let stay = 1.0 - (1.0 - (found.trips - found.tested) / (found.trips + 1.0 - found.tested)) / visited;
+        Some(if found.inside { stay * found.part } else { (1.0 - stay) * found.part })
     };
     let edge = |from: i64, to: i64| counted(from, to).unwrap_or_else(|| given(from, to));
     // `to` is a loop header and `from` is in its loop.
@@ -581,7 +666,7 @@ pub fn propagated_edges(order: &[i64], predecessors: &dyn Fn(i64) -> Vec<i64>, s
         };
         frequency.insert(at, entering * scale.get(&at).copied().unwrap_or(1.0));
     }
-    let edges = order.iter().flat_map(|&from| successors(from).into_iter().map(move |to| (from, to))).map(|(from, to)| ((from, to), edge(from, to))).collect();
+    let edges = order.iter().flat_map(|&from| successors(from).iter().copied().collect::<Vec<_>>().into_iter().map(move |to| (from, to))).map(|(from, to)| ((from, to), edge(from, to))).collect();
     (frequency, edges)
 }
 

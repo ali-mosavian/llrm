@@ -66,6 +66,10 @@ pub struct Options {
     /// Code size outranks speed where they conflict: -Os and -Oz. (Whether a complete copy of a loop may grow the
     /// code is `limits.grows`, which gcc lets only -O3 do.)
     pub for_size: bool,
+    /// The allocator tries other shapes of a body and keeps the cheapest (`-fallocation-search`).
+    pub search: bool,
+    /// With `search`, every shape rather than the one the spills suggest (`-fallocation-search-all`; -Omax).
+    pub exhaustive: bool,
 }
 
 impl Default for Options {
@@ -91,6 +95,8 @@ impl Default for Options {
             sibcalls: true,
             unswitch: false,
             for_size: false,
+            search: true,
+            exhaustive: false,
         }
     }
 }
@@ -98,7 +104,7 @@ impl Default for Options {
 impl Options {
     /// -O0.
     pub fn none() -> Self {
-        Self { optimize: false, ..Self::default() }
+        Self { optimize: false, search: false, ..Self::default() }
     }
 
     /// -O1: gcc's: the scalar passes and `-finline-functions-called-once`; a loop is copied out completely only where the
@@ -131,7 +137,7 @@ impl Options {
 
     /// -Omax: every pass the default has on, LLVM's -O3 budgets, twice the target's unroll budget and a 250 inline threshold.
     pub fn aggressive() -> Self {
-        Self { limits: Limits { target_percent: 200, ..Limits::default() }, inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) }, ..Self::default() }
+        Self { limits: Limits { target_percent: 200, ..Limits::default() }, inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) }, exhaustive: true, ..Self::default() }
     }
 
     /// -Os: no copy grows the code. Inlining keeps -O2's threshold: the
@@ -141,6 +147,16 @@ impl Options {
     /// clone that folds away.
     pub fn size() -> Self {
         Self { limits: Limits { grows: false, target_percent: 100, ..Limits::default() }, inline: inline::Threshold::default().for_size(), for_size: true, ..Self::default() }
+    }
+
+    /// Whether the allocator tries other shapes of a body and keeps the cheapest.
+    pub fn searches(&self) -> bool {
+        self.search
+    }
+
+    /// Whether the search tries every shape of a body.
+    pub fn searches_all(&self) -> bool {
+        self.exhaustive
     }
 
     /// Whether code size outranks speed where they conflict: -Os and -Oz.
@@ -280,7 +296,12 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     // driver's whole-module step: a body it changes goes back through.
     let mut again = Fixed::new(&Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() });
     manager.add_program(Interprocedural {
-        pipeline: Box::new(move |module, analyses, id, _| rerun(module, analyses, id, &mut again).unwrap_or_else(|error| panic!("pipeline: {error}"))),
+        pipeline: Box::new(move |module, analyses, id, stage| {
+            TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
+            let done = rerun(module, analyses, id, &mut again).unwrap_or_else(|error| panic!("pipeline: {error}"));
+            TRIGGER.with(|trigger| trigger.borrow_mut().clear());
+            done
+        }),
         proved: None,
         inline: applied.options.inline,
         rate: Some(if applied.options.prefers_size() { 0 } else { applied.options.limits.milliclocks_per_byte }),
@@ -299,7 +320,7 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     }
     // Each loop's counters chosen once, on the loop the passes above leave.
     if applied.options.wanted("lsr") {
-        manager.add(lsr::Lsr { size: applied.options.prefers_size() });
+        manager.add(lsr::Lsr { size: applied.options.prefers_size(), bounds: if applied.options.searches_all() { lsr::Bounds::NONE } else { lsr::Bounds::GCC } });
         // What the counters it chose leave behind (a bound subtracted from a counter rebased by it), as LLVM's LSR cleans with SimplifyInstructions.
         manager.add(algebraic::Differences);
     }
@@ -333,12 +354,17 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     manager.run(program)
 }
 
+thread_local! {
+    /// What made the interprocedural step run a body's pipeline again (empty: the first run), for `LLRM_DEBUG=runs`.
+    static TRIGGER: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
 /// `fixed` over body `id` alone, as the manager runs a function pass, its
 /// module's analyses those `analyses` holds.
 fn rerun(module: &mut Module, analyses: &mut ModuleAnalyses, id: GlobalId, fixed: &mut Fixed) -> Result<(), String> {
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
-    let mut declared = Declared::of(module);
+    let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
     let Module { context, globals, metadata, .. } = &mut *module;
     let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else {
         return Err(format!("@{}: not a function", id.0));
@@ -346,7 +372,10 @@ fn rerun(module: &mut Module, analyses: &mut ModuleAnalyses, id: GlobalId, fixed
     let mut unit = Unit { context, layout: &layout, function, id: Some(id), metadata, declared: &mut declared };
     let preserved = fixed.run(&mut unit, analyses.manager(id, &outer));
     analyses.invalidate(&preserved);
-    declared.place(module)
+    if declared.place(module)? > 0 {
+        analyses.invalidate(&PreservedAnalyses::none());
+    }
+    Ok(())
 }
 
 /// The pipeline over one body, the old `_Transaction`: the structural
@@ -447,10 +476,13 @@ impl Fixed {
         // Separately reject a repeated state, so an oscillator fails at once
         // instead of consuming the limit.
         let mut history = BTreeSet::from([print::body(unit.context, unit.function)]);
+        run.fixed += 1;
         for iteration in 0..limit {
             let before = run.version;
+            run.rounds += 1;
             for (one, settled) in self.passes.iter_mut().zip(&mut settled) {
                 if *settled == Some(run.version) {
+                    run.skipped += 1;
                     continue;
                 }
                 let name = format!("{prefix}r{:02}-{}", iteration + 1, one.name());
@@ -490,8 +522,21 @@ impl FunctionPass for Fixed {
         self.runs += 1;
         let promotes = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function).dominance.irreducible(unit.function).is_empty();
         let dump = self.dump.as_ref().map(|directory| directory.join(format!("{:02}", self.runs)));
-        let mut run = Run { version: 0, promotes, dump };
+        let mut run = Run { version: 0, promotes, dump, rounds: 0, steps: 0, skipped: 0, fixed: 0, billing: llrm_support::debug::enabled("runs"), idle: 0, useful: 0 };
         self.transacted(unit, analyses, &mut run).unwrap_or_else(|error| panic!("pipeline: {error}"));
+        llrm_support::debug!(
+            "runs",
+            "body {} trigger {:?}: {} fixed points, {} rounds, {} pass runs, {} skipped as settled, {} changes, work idle {} useful {}",
+            unit.id.map_or(-1, |id| i64::from(id.0)),
+            TRIGGER.with(|trigger| trigger.borrow().clone()),
+            run.fixed,
+            run.rounds,
+            run.steps,
+            run.skipped,
+            run.version,
+            run.idle,
+            run.useful
+        );
         if run.version == 0 { PreservedAnalyses::all() } else { PreservedAnalyses::none() }
     }
 }
@@ -503,6 +548,15 @@ struct Run {
     /// Whether promotion may run: not over an irreducible CFG.
     promotes: bool,
     dump: Option<PathBuf>,
+    /// For `LLRM_DEBUG=runs`: fixed points reached, rounds in them, passes run, passes skipped as settled.
+    fixed: usize,
+    rounds: usize,
+    steps: usize,
+    skipped: usize,
+    /// The work of passes that changed nothing, and of those that did (only where `runs` is on).
+    billing: bool,
+    idle: u64,
+    useful: u64,
 }
 
 impl Run {
@@ -511,11 +565,20 @@ impl Run {
         if !self.promotes && matches!(pass.name(), "sroa" | "promote") {
             return false;
         }
-        let preserved = llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses));
+        self.steps += 1;
+        let before = unit.function.mark();
+        let billed = self.billing.then(llrm_support::debug::work);
+        let preserved = llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses)).unless_unchanged(unit.function, before);
+        if let Some(billed) = billed {
+            let spent = llrm_support::debug::work() - billed;
+            *(if preserved.are_all_preserved() { &mut self.idle } else { &mut self.useful }) += spent;
+            llrm_support::debug!("runs", "step {stage} {} {spent}", if preserved.are_all_preserved() { "idle" } else { "changed" });
+        }
         if preserved.are_all_preserved() {
             return false;
         }
         llrm_mir::passes::spanned("invalidate", || analyses.invalidate(&preserved));
+        analyses.check_kept(pass.name(), unit.context, unit.layout, unit.function);
         self.changed(stage, unit, analyses);
         true
     }

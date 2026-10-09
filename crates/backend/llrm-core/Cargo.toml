@@ -40,9 +40,11 @@ toml = { workspace = true }
 [build-dependencies]
 llrm-lir = { workspace = true }
 llrm-peepgen = { workspace = true }
+llrm-support = { workspace = true }
 
 [features]
 # testing, for the other crates' tests
+default = ["testing"]
 testing = ["llrm-omf/testing"]
 
 [dev-dependencies]

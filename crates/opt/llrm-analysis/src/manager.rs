@@ -24,7 +24,7 @@ use crate::consts::{self, Calls, Known};
 use crate::globalsaa::{self, Globals, ProgramGlobals};
 use crate::floatfacts;
 use crate::induction;
-use crate::memory::{Identity, MemRef, MemoryKind, MemoryObject, Slice, Unit};
+use crate::memory::{Identity, MemRef, MemoryKind, MemoryObject, ObjectInterner, Slice, Unit};
 use crate::ranges::{self, Interval};
 
 impl<'a> Unit<'a> {
@@ -66,8 +66,17 @@ impl ModuleAnalysis for Summaries {
         };
         let declarations = analyses.get::<Declarations>(module);
         let shapes = bodies(module).map(|(id, _)| (id, analyses.function::<Shape>(module, id))).collect();
-        let exposures = exposures(module, &program.layout, program.target.spaces());
-        let procedures = procedures(module, &program, globals, &shapes, &exposures);
+        // What a body's calls and exposed frames are depends on the body and the declarations: kept while neither moved.
+        let scratch = analyses.from_scratch();
+        let memo = analyses.memo::<SummariesMemo>();
+        let kept = if scratch || !memo.declarations.as_ref().is_some_and(|then| Rc::ptr_eq(then, &declarations)) { IndexMap::default() } else { std::mem::take(&mut memo.facts) };
+        // The calls were found under the globals' facts of the run before: other facts, the calls are found again.
+        let mut body_facts = body_facts(module, &program.layout, program.target.spaces(), kept);
+        if !memo.globals.as_ref().is_some_and(|then| Rc::ptr_eq(then, &globals_held)) {
+            body_facts.values_mut().for_each(|one| one.calls = None);
+        }
+        calls_found(module, &program, globals, &shapes, &mut body_facts);
+        let procedures = procedures(module, &program, globals, &shapes, &body_facts);
         // Bodies edited since the last run: those whose history is not where the last run left it. What else the summaries read, the
         // globals' facts and the declarations, either is the same result as then or the whole is worked out again.
         let memo = analyses.memo::<SummariesMemo>();
@@ -93,9 +102,10 @@ impl ModuleAnalysis for Summaries {
         counted("summaries updated", dirty.is_some());
         let found = alias::summaries_updating(&procedures, known.as_ref(), &mut memo.summaries, dirty.as_ref());
         memo.marks = marks;
+        memo.facts = body_facts.clone();
         memo.globals = Some(Rc::clone(&globals_held));
         memo.declarations = Some(declarations);
-        if std::env::var_os("LLRM_CHECK_MODULES").is_some() {
+        if llrm_support::env_set("LLRM_CHECK_MODULES") {
             let fresh = alias::summaries(&procedures, known.as_ref());
             if found != fresh {
                 let (now, then) = (found.as_ref().ok(), fresh.as_ref().ok());
@@ -117,6 +127,7 @@ struct SummariesMemo {
     marks: IndexMap<GlobalId, Mark>,
     globals: Option<Rc<Result<Globals, String>>>,
     declarations: Option<Rc<Vec<GlobalValue>>>,
+    facts: IndexMap<GlobalId, BodyFacts>,
 }
 
 /// `module`'s defined functions, each with its id.
@@ -124,10 +135,43 @@ fn bodies(module: &Module) -> impl Iterator<Item = (GlobalId, &Function)> {
     module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(id, _, function)| (id, function))
 }
 
-/// The exposed frames of each of `module`'s bodies, found once for the summaries that ask of every
-/// access.
-fn exposures(module: &Module, layout: &DataLayout, spaces: llrm_mir::spaces::Spaces) -> IndexMap<GlobalId, BTreeSet<ValueId>> {
-    bodies(module).map(|(id, function)| (id, crate::memory::exposed_frames(&Unit::of(module, layout, function).with_spaces(spaces)))).collect()
+/// What a body gives `Summaries` that is of the body, the declarations and (for its calls) the globals' facts alone, as of the body's
+/// history then.
+#[derive(Clone)]
+struct BodyFacts {
+    mark: Mark,
+    exposed: Rc<BTreeSet<ValueId>>,
+    calls: Option<Rc<alias::CallFacts>>,
+}
+
+/// The exposed frames of each of `module`'s bodies, found once for the summaries that ask of every access; those of a body whose
+/// history is where `kept` left it are `kept`'s.
+fn body_facts(module: &Module, layout: &DataLayout, spaces: llrm_mir::spaces::Spaces, mut kept: IndexMap<GlobalId, BodyFacts>) -> IndexMap<GlobalId, BodyFacts> {
+    bodies(module)
+        .map(|(id, function)| {
+            let mark = function.mark();
+            let facts = match kept.swap_remove(&id) {
+                Some(then) if then.mark == mark => then,
+                _ => BodyFacts { mark, exposed: Rc::new(crate::memory::exposed_frames(&Unit::of(module, layout, function).with_spaces(spaces))), calls: None },
+            };
+            (id, facts)
+        })
+        .collect()
+}
+
+/// `function` as `Summaries` sees it: its program, the globals' facts, its shape and its exposed frames.
+fn summarized_in<'a>(module: &'a Module, program: &'a ProgramProxy, globals: &'a Globals, shape: &'a Shape, exposed: &'a BTreeSet<ValueId>, function: &'a llrm_mir::module::Function) -> Unit<'a> {
+    Unit { program: Some(program), ..Unit::of(module, &program.layout, function) }.with_globals_aa(globals).with_shape(shape).with_exposed(exposed)
+}
+
+/// The calls of each body `facts` has none for, as the unit it is summarized in sees them.
+fn calls_found(module: &Module, program: &ProgramProxy, globals: &Globals, shapes: &IndexMap<GlobalId, Rc<Shape>>, facts: &mut IndexMap<GlobalId, BodyFacts>) {
+    for (id, function) in bodies(module) {
+        let one = facts.get_mut(&id).expect("facts for every body");
+        if one.calls.is_none() {
+            one.calls = Some(Rc::new(alias::CallFacts::of(&summarized_in(module, program, globals, &shapes[&id], &one.exposed, function))));
+        }
+    }
 }
 
 /// `module`'s named bodies as alias summarizes them.
@@ -136,12 +180,13 @@ fn procedures<'a>(
     program: &'a ProgramProxy,
     globals: &'a Globals,
     shapes: &'a IndexMap<GlobalId, Rc<Shape>>,
-    exposures: &'a IndexMap<GlobalId, BTreeSet<ValueId>>,
+    facts: &'a IndexMap<GlobalId, BodyFacts>,
 ) -> IndexMap<String, Procedure<'a>> {
     bodies(module)
         .filter_map(|(id, function)| {
             let name = module.global(id).name.clone()?;
-            Some((name, Procedure::of(Unit { program: Some(program), ..Unit::of(module, &program.layout, function) }.with_globals_aa(globals).with_shape(&shapes[&id]).with_exposed(&exposures[&id]))))
+            let one = &facts[&id];
+            Some((name, Procedure::with(summarized_in(module, program, globals, &shapes[&id], &one.exposed, function), Rc::clone(one.calls.as_ref().expect("found before")))))
         })
         .collect()
 }
@@ -164,7 +209,7 @@ impl ProgramAnalysis for ProgramSummaries {
         let elsewhere = Result::as_ref(&*elsewhere).map_err(String::clone)?;
         let proxies: Vec<_> = (0..count).map(|at| analyses.proxy(program, at)).collect();
         let shapes: Vec<IndexMap<GlobalId, Rc<Shape>>> = program.modules.iter().map(|module| bodies(module).map(|(id, function)| (id, Rc::new(Shape::of(function)))).collect()).collect();
-        let exposures: Vec<IndexMap<GlobalId, BTreeSet<ValueId>>> = program.modules.iter().map(|module| exposures(module, &program.layout, program.target.spaces())).collect();
+        let mut exposures: Vec<IndexMap<GlobalId, BodyFacts>> = program.modules.iter().map(|module| body_facts(module, &program.layout, program.target.spaces(), IndexMap::default())).collect();
         let globals = (0..count)
             .map(|at| globalsaa::found(&program.modules[at], &proxies[at], &elsewhere[at], &mut |id| Rc::clone(&shapes[at][&id])))
             .collect::<Result<Vec<_>, String>>()?;
@@ -174,6 +219,7 @@ impl ProgramAnalysis for ProgramSummaries {
         loop {
             let mut changed = false;
             for at in 0..count {
+                calls_found(&program.modules[at], &proxies[at], &globals[at], &shapes[at], &mut exposures[at]);
                 let procedures = procedures(&program.modules[at], &proxies[at], &globals[at], &shapes[at], &exposures[at]);
                 let found = alias::summaries(&procedures, Some(&known[at]))?;
                 let mine: IndexMap<String, Summary> = found.into_iter().filter(|(name, _)| procedures.contains_key(name)).collect();
@@ -227,22 +273,69 @@ fn moved(summary: &Summary, from: &Module, to: &Module) -> Summary {
 }
 
 fn carried(slices: &BTreeSet<Slice>, from: &Module, to: &Module, unknown: &mut bool) -> BTreeSet<Slice> {
+    // The objects are numbered by their module's interner: each is named again in the other's.
+    let (source, target) = (ObjectInterner::of(&from.context), ObjectInterner::of(&to.context));
     let mut out = BTreeSet::new();
     for one in slices {
-        let (MemoryKind::Global, Some(Identity::Global(id))) = (one.object.kind, &one.object.identity) else {
-            out.insert(one.clone());
+        let object = source.object(one.object);
+        let (MemoryKind::Global, Some(Identity::Global(id))) = (object.kind, &object.identity) else {
+            out.insert(Slice { object: target.intern(object), ..*one });
             continue;
         };
         let global = from.global(GlobalId(*id));
         let there = global.name.as_deref().filter(|_| !matches!(global.linkage, Linkage::Internal | Linkage::Private)).and_then(|name| to.named(name));
         match there {
             Some(there) => {
-                out.insert(Slice { object: MemoryObject { identity: Some(Identity::Global(there.0)), ..one.object.clone() }, ..one.clone() });
+                out.insert(Slice { object: target.intern(MemoryObject { identity: Some(Identity::Global(there.0)), ..object }), ..*one });
             }
             None => *unknown |= one.object.captured,
         }
     }
     out
+}
+
+/// Whether `changes` leave what the pointer analyses derive (`ExposedFrames`, `Pointers`, `CallEffects`, `Writes`) as it was:
+/// no instruction they touched, and none that reads a value a touched one makes (through any chain of users), is one that can
+/// make, move or name a pointer or an aggregate, or is a call. An integer loaded, computed, stored and compared is nothing to
+/// them; one that reaches an address or a call is. Where a result is not so, `LLRM_CHECK_REPLAY` says.
+pub fn pointers_unaffected(changes: &[Change], context: &Context, function: &Function, scalars_matter: bool) -> bool {
+    let wide = |ty| !matches!(context.types.get(ty), llrm_mir::types::Type::Int(_) | llrm_mir::types::Type::Float(_) | llrm_mir::types::Type::Void);
+    let relevant = |inst: InstId| {
+        let one = function.instruction(inst);
+        match &one.opcode {
+            Opcode::Load { .. } if !scalars_matter => wide(one.ty),
+            Opcode::Store { .. } if !scalars_matter => one.operands.first().and_then(|value| function.operand_type(context, *value)).is_none_or(wide),
+            Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Alloca { .. } | Opcode::GetElementPtr { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::LandingPad { .. } | Opcode::Resume => true,
+            Opcode::Cast(llrm_mir::opcode::CastOp::PtrToInt | llrm_mir::opcode::CastOp::IntToPtr | llrm_mir::opcode::CastOp::BitCast | llrm_mir::opcode::CastOp::AddrSpaceCast) => true,
+            Opcode::Phi | Opcode::Select | Opcode::Freeze | Opcode::ExtractValue(_) | Opcode::InsertValue(_) => wide(one.ty),
+            op => op.is_terminator(),
+        }
+    };
+    let mut work: Vec<InstId> = Vec::new();
+    for change in changes {
+        match *change {
+            Change::BlockCreated(_) | Change::BlockErased(_) => return false,
+            Change::Inserted { inst, .. } | Change::Erased { inst, .. } | Change::Moved { inst, .. } | Change::Rewritten(inst) | Change::Cloned { to: inst, .. } => work.push(inst),
+        }
+    }
+    let mut seen: BTreeSet<InstId> = work.iter().copied().collect();
+    while let Some(inst) = work.pop() {
+        if relevant(inst) {
+            return false;
+        }
+        if let Some(result) = function.instruction(inst).result {
+            for user in function.users(result) {
+                // A scalar a call, a branch, a return or a store takes is nothing to a pointer.
+                if matches!(function.instruction(user.user).opcode, Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Br | Opcode::Switch | Opcode::Ret | Opcode::Store { .. }) {
+                    continue;
+                }
+                if seen.insert(user.user) {
+                    work.push(user.user);
+                }
+            }
+        }
+    }
+    true
 }
 
 /// The allocas whose address is exposed: `frameescape::exposed_allocas`, once for the function where
@@ -252,6 +345,10 @@ pub struct ExposedFrames;
 impl Analysis for ExposedFrames {
     type Result = BTreeSet<ValueId>;
     const NAME: &'static str = "exposed-frames";
+    const SKIPS: bool = true;
+    fn unaffected(changes: &[Change], context: &Context, function: &Function) -> bool {
+        pointers_unaffected(changes, context, function, true)
+    }
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         crate::memory::exposed_frames(&Unit::within(context, layout, function, analyses.outer()))
     }
@@ -263,10 +360,15 @@ pub struct Pointers;
 impl Analysis for Pointers {
     type Result = Result<PointsTo, String>;
     const NAME: &'static str = "points-to";
+    const SKIPS: bool = true;
+    fn unaffected(changes: &[Change], context: &Context, function: &Function) -> bool {
+        pointers_unaffected(changes, context, function, true)
+    }
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let shape = analyses.get::<Shape>(context, layout, function);
+        let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        alias::points_to(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed), None, None)
+        alias::points_to(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_assumptions(&assumptions).with_exposed(&exposed), None, None)
     }
 }
 
@@ -281,11 +383,12 @@ impl Analysis for Annotated {
         let registers = analyses.get::<Registers>(context, layout, function);
         let pointers = Result::as_ref(&*pointers).map_err(String::clone)?;
         let shape = analyses.get::<Shape>(context, layout, function);
+        let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         let counted = analyses.get::<Counted>(context, layout, function);
         let edges = analyses.get::<DominatedEdges>(context, layout, function);
         let bounds = analyses.get::<Bounded>(context, layout, function);
-        let mut unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_pointers(pointers).with_exposed(&exposed).with_counted(&counted);
+        let mut unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_assumptions(&assumptions).with_registers(&registers).with_pointers(pointers).with_exposed(&exposed).with_counted(&counted);
         if let Ok(edges) = &*edges {
             unit = unit.with_edges(edges);
         }
@@ -305,6 +408,10 @@ pub struct CallEffects;
 impl Analysis for CallEffects {
     type Result = Result<IndexMap<InstId, Effect>, String>;
     const NAME: &'static str = "call-effects";
+    const SKIPS: bool = true;
+    fn unaffected(changes: &[Change], context: &Context, function: &Function) -> bool {
+        pointers_unaffected(changes, context, function, false)
+    }
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let shape = analyses.get::<Shape>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
@@ -334,8 +441,21 @@ impl Analysis for Registers {
     const NAME: &'static str = "registers";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let shape = analyses.get::<Shape>(context, layout, function);
+        let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        consts::known(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed), None, None, None)
+        consts::known(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_assumptions(&assumptions).with_exposed(&exposed), None, None, None)
+    }
+}
+
+/// What each block assumes, LLVM's AssumptionCache: a unit that carries none found them again, a walk of the whole body, at
+/// every `guards` and `ranges` query.
+pub struct AssumptionCache;
+
+impl Analysis for AssumptionCache {
+    type Result = crate::assumptions::Assumptions;
+    const NAME: &'static str = "assumptions";
+    fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
+        crate::assumptions::Assumptions::of(&Unit::within(context, layout, function, analyses.outer()))
     }
 }
 
@@ -349,9 +469,10 @@ impl Analysis for Counted {
 
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let shape = analyses.get::<Shape>(context, layout, function);
+        let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
         let registers = analyses.get::<Registers>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        induction::counted_all(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_exposed(&exposed))
+        induction::counted_all(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_assumptions(&assumptions).with_registers(&registers).with_exposed(&exposed))
     }
 
     /// A loop's proofs read its own blocks, and the values its operands come from, which `Registers` also derives from
@@ -361,12 +482,13 @@ impl Analysis for Counted {
     fn update(previous: &Self::Result, changes: &[Change], context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Option<Self::Result> {
         let reached = reached_by(function, changes)?.blocks;
         let shape = analyses.get::<Shape>(context, layout, function);
+        let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
         if !shape.loops.iter().map(|one| one.header).eq(previous.keys().copied()) {
             return None;
         }
         let registers = analyses.get::<Registers>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        let unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_exposed(&exposed);
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_assumptions(&assumptions).with_registers(&registers).with_exposed(&exposed);
         Some(induction::counted_renewed(&unit, previous, |one| one.body.iter().any(|at| reached.contains(&crate::cfg::block(*at)))))
     }
 }
@@ -424,6 +546,10 @@ pub struct Writes;
 impl Analysis for Writes {
     type Result = Result<Calls, String>;
     const NAME: &'static str = "writes";
+    const SKIPS: bool = true;
+    fn unaffected(changes: &[Change], context: &Context, function: &Function) -> bool {
+        pointers_unaffected(changes, context, function, false)
+    }
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let effects = analyses.get::<CallEffects>(context, layout, function);
         Ok(Result::as_ref(&*effects).map_err(String::clone)?.iter().map(|(&at, effect)| (at, effect.stores.clone())).collect())
@@ -440,21 +566,32 @@ pub fn writes(context: &Context, layout: &DataLayout, function: &Function, analy
 /// `writes` says: `floatfacts::solved_with`.
 pub struct FloatFacts;
 
+thread_local! {
+    static FLOAT_SOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has solved a function's floats.
+pub fn float_solves() -> usize {
+    FLOAT_SOLVES.with(std::cell::Cell::get)
+}
+
 impl Analysis for FloatFacts {
     type Result = floatfacts::Solved;
     const NAME: &'static str = "float-facts";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
+        FLOAT_SOLVES.with(|solves| solves.set(solves.get() + 1));
         let calls = writes(context, layout, function, analyses);
         let shape = analyses.get::<Shape>(context, layout, function);
+        let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
         let registers = analyses.get::<Registers>(context, layout, function);
         let references = analyses.get::<Annotated>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         // The integers under it are `ThroughMemory`'s, which others ask too.
         let through = analyses.get::<ThroughMemory>(context, layout, function);
-        let unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_annotated(&references).with_exposed(&exposed);
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_assumptions(&assumptions).with_registers(&registers).with_annotated(&references).with_exposed(&exposed);
         match &*through {
             Ok(integers) => {
-                if std::env::var_os("LLRM_CHECK_FACTS").is_some() {
+                if llrm_support::env_set("LLRM_CHECK_FACTS") {
                     assert!(*integers == consts::known(&unit, Some(&calls), None, None), "ThroughMemory's integers are not those the float solve derives for itself");
                 }
                 floatfacts::solved_over(&unit, &calls, None, integers)
@@ -476,9 +613,10 @@ impl Analysis for ThroughMemory {
         let references = analyses.get::<Annotated>(context, layout, function);
         let references = Result::as_ref(&*references).map_err(String::clone)?;
         let shape = analyses.get::<Shape>(context, layout, function);
+        let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
         let registers = analyses.get::<Registers>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        let unit = Unit::within(context, layout, function, analyses.outer()).with_references(references).with_shape(&shape).with_registers(&registers).with_exposed(&exposed);
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_references(references).with_shape(&shape).with_assumptions(&assumptions).with_registers(&registers).with_exposed(&exposed);
         Ok(consts::known(&unit, Some(&calls), None, None))
     }
 }
@@ -509,8 +647,9 @@ impl DominatedEdges {
     fn solved(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses, before: Option<(&ranges::EdgeStates, &BTreeSet<BlockId>)>) -> <Self as Analysis>::Result {
         let registers = analyses.get::<Registers>(context, layout, function);
         let shape = analyses.get::<Shape>(context, layout, function);
+        let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        ranges::edges_solved(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_exposed(&exposed), &registers, before)
+        ranges::edges_solved(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_assumptions(&assumptions).with_registers(&registers).with_exposed(&exposed), &registers, before)
     }
 }
 
@@ -541,11 +680,12 @@ impl Analysis for Bounded {
 impl Bounded {
     fn solved(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses, prior: Option<(&ranges::Bounds, &BTreeSet<i64>)>) -> <Self as Analysis>::Result {
         let shape = analyses.get::<Shape>(context, layout, function);
+        let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
         let registers = analyses.get::<Registers>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         let counted = analyses.get::<Counted>(context, layout, function);
         let edges = analyses.get::<DominatedEdges>(context, layout, function);
-        let mut unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_exposed(&exposed).with_counted(&counted);
+        let mut unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_assumptions(&assumptions).with_registers(&registers).with_exposed(&exposed).with_counted(&counted);
         if let Ok(edges) = &*edges {
             unit = unit.with_edges(edges);
         }
@@ -560,9 +700,11 @@ pub struct Held {
     shape: Rc<Shape>,
     exposed: Rc<BTreeSet<ValueId>>,
     registers: Rc<IndexMap<ValueId, Known>>,
+    assumptions: Rc<crate::assumptions::Assumptions>,
     pointers: Option<Rc<<Pointers as Analysis>::Result>>,
     annotated: Option<Rc<<Annotated as Analysis>::Result>>,
     counted: Option<Rc<<Counted as Analysis>::Result>>,
+    bounded: Option<Rc<<Bounded as Analysis>::Result>>,
 }
 
 impl Held {
@@ -571,16 +713,25 @@ impl Held {
             shape: analyses.get::<Shape>(context, layout, function),
             exposed: analyses.get::<ExposedFrames>(context, layout, function),
             registers: analyses.get::<Registers>(context, layout, function),
+            assumptions: analyses.get::<AssumptionCache>(context, layout, function),
             pointers: alias.then(|| analyses.get::<Pointers>(context, layout, function)),
             annotated: alias.then(|| analyses.get::<Annotated>(context, layout, function)),
             // Annotated has proved them already.
             counted: alias.then(|| analyses.get::<Counted>(context, layout, function)),
+            bounded: None,
         }
+    }
+
+    /// Also what the counted loops bound: for a pass that asks it, so that it is the manager's, kept and brought up to date, and
+    /// not a solve of the pass's own.
+    pub fn with_bounded(mut self, context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self {
+        self.bounded = Some(analyses.get::<Bounded>(context, layout, function));
+        self
     }
 
     /// A unit over `function`, the body these were found of.
     pub fn unit<'a>(&'a self, context: &'a Context, layout: &'a DataLayout, function: &'a Function, outer: &'a Outer) -> Unit<'a> {
-        let mut unit = Unit::within(context, layout, function, outer).with_shape(&self.shape).with_registers(&self.registers).with_exposed(&self.exposed);
+        let mut unit = Unit::within(context, layout, function, outer).with_shape(&self.shape).with_registers(&self.registers).with_assumptions(&self.assumptions).with_exposed(&self.exposed);
         if let Some(Ok(pointers)) = self.pointers.as_deref() {
             unit = unit.with_pointers(pointers);
         }
@@ -589,6 +740,9 @@ impl Held {
         }
         if let Some(counted) = self.counted.as_deref() {
             unit = unit.with_counted(counted);
+        }
+        if let Some(Ok(bounds)) = self.bounded.as_deref() {
+            unit = unit.with_bounds(bounds);
         }
         unit
     }

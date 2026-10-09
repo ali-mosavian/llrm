@@ -3,6 +3,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use crate::analysis::dataflow::{self, Direction};
 use crate::support::hash::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
@@ -146,6 +147,12 @@ impl LIRTransform for Peephole {
     }
 
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
+        self.once(body)
+    }
+}
+
+impl Peephole {
+    fn once(&mut self, body: LirBody) -> Result<LirBody, String> {
         // Before the rest: a thrashed copy is one fewer instruction for
         // everything below to reason about, and it is the only pass here
         // that can remove a copy the coalescer refused on colourability.
@@ -154,6 +161,7 @@ impl LIRTransform for Peephole {
         let body = copyprop::forwarded(&body);
         let body = extensions(self.rules, &body);
         let body = copysink::sunk(&body);
+        let body = crate::backend::postrasink::sunk(&body);
         let body = spillforward::forwarded(&body);
         let body = storecombine::combined(&body);
         let body = pushed_constants(self.rules, &body);
@@ -245,7 +253,7 @@ pub fn frame_copies<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>, class
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let dead_after = regthrash::_dead_after(body.bits, block, exits[&block.at].clone());
-        let mut insns = block.insns.clone();
+        let mut insns = block.insns.to_vec();
         for index in 0..insns.len().saturating_sub(1) {
             let (pushed, popped) = (Arc::clone(&insns[index]), Arc::clone(&insns[index + 1]));
             if [&pushed, &popped].into_iter().any(|one| one.what.is_none()
@@ -871,6 +879,26 @@ pub fn _moved_lanes(bits: u32, one: &Insn) -> Option<(Vec<(Lane, Lane)>, Lanes)>
     Some((moved, _lanes(destination).or(&source.map(_lanes).unwrap_or_default())))
 }
 
+/// `_register_effects` of an instruction that says only what it does: no required or delivered register, no clobber and no
+/// symbol. Asked of a proposed rewrite of one, which needs no instruction made of it to ask (copy propagation made and dropped
+/// two per register it tried to forward).
+pub fn _register_effects_of_what(bits: u32, what: &Semantics, may_write: bool, flags: bool) -> Option<(Lanes, Lanes)> {
+    if what.op == Operation::Nothing && what.name.as_deref().is_none_or(str::is_empty) {
+        return Some((Lanes::new(), Lanes::new()));
+    }
+    if what.op == Operation::Barrier {
+        return None;
+    }
+    let key = EffectKey { bits, may_write, flags, what, requires: &[], delivers: &[] };
+    if let Some(found) = EFFECTS.with(|held| held.borrow().find(&key)) {
+        return found;
+    }
+    EFFECTS_COMPUTED.with(|count| count.set(count.get() + 1));
+    let answer = _register_effects_of(bits, &Insn::new(0, None, None, vec![], vec![]), what, may_write, flags);
+    EFFECTS.with(|held| held.borrow_mut().remember(&key, answer.clone()));
+    answer
+}
+
 pub fn _register_effects(bits: u32, one: &Insn, may_write: bool, flags: bool) -> Option<(Lanes, Lanes)> {
     // A symbol/source anchor is a placement fact, not an unknown machine
     // instruction.  Complete unrolling can leave many of these between a
@@ -893,6 +921,74 @@ pub fn _register_effects(bits: u32, one: &Insn, may_write: bool, flags: bool) ->
         // decoded-opaque fallback never applies and this is unknown.
         _ => return None,
     };
+    // Every pass of the peephole, and the liveness and copy propagation around it, asks of the same instructions again and again (50 asks
+    // for each of an `-O2` module's 16,000, #924): the answer depends on these fields alone, and is remembered by their value.
+    let key = EffectKey { bits, may_write, flags, what, requires: &one.requires, delivers: &one.delivers };
+    if let Some(found) = EFFECTS.with(|held| held.borrow().find(&key)) {
+        return found;
+    }
+    EFFECTS_COMPUTED.with(|count| count.set(count.get() + 1));
+    let answer = _register_effects_of(bits, one, what, may_write, flags);
+    EFFECTS.with(|held| held.borrow_mut().remember(&key, answer.clone()));
+    answer
+}
+
+/// The inputs of `_register_effects` after the cases it answers at once: the same ones, the same answer.
+struct EffectKey<'a> {
+    bits: u32,
+    may_write: bool,
+    flags: bool,
+    what: &'a Semantics,
+    requires: &'a [(Held, Register)],
+    delivers: &'a [(Held, Register)],
+}
+
+impl EffectKey<'_> {
+    fn hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = rustc_hash::FxHasher::default();
+        (self.bits, self.may_write, self.flags, self.what, self.requires, self.delivers).hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+type Effects = Option<(Lanes, Lanes)>;
+
+/// What `_register_effects` answered, by the hash of what it was asked, and the asked kept to tell a hash that is another's.
+#[derive(Default)]
+struct EffectsHeld {
+    by_hash: HashMap<u64, Vec<(u32, bool, bool, Semantics, Vec<(Held, Register)>, Vec<(Held, Register)>, Effects)>>,
+    count: usize,
+}
+
+impl EffectsHeld {
+    fn find(&self, key: &EffectKey) -> Option<Effects> {
+        self.by_hash.get(&key.hash())?.iter().find(|(bits, may_write, flags, what, requires, delivers, _)| {
+            *bits == key.bits && *may_write == key.may_write && *flags == key.flags && what == key.what && requires == key.requires && delivers == key.delivers
+        }).map(|(.., answer)| answer.clone())
+    }
+
+    fn remember(&mut self, key: &EffectKey, answer: Effects) {
+        // A function's instructions, not the run's.
+        if self.count > 200_000 {
+            *self = Self::default();
+        }
+        self.count += 1;
+        self.by_hash.entry(key.hash()).or_default().push((key.bits, key.may_write, key.flags, key.what.clone(), key.requires.to_vec(), key.delivers.to_vec(), answer));
+    }
+}
+
+thread_local! {
+    static EFFECTS: RefCell<EffectsHeld> = RefCell::new(EffectsHeld::default());
+    static EFFECTS_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has worked out an instruction's register effects, for a test that asking again of one does not.
+pub fn effects_computed() -> usize {
+    EFFECTS_COMPUTED.with(std::cell::Cell::get)
+}
+
+fn _register_effects_of(bits: u32, one: &Insn, what: &Semantics, may_write: bool, flags: bool) -> Effects {
     let instructions = _decoded(bits, what)?;
     // A fixed-register ABI names the conventional register (AX, BX, ...)
     // separately from the value it carries.  The Held width is authoritative:
@@ -1196,7 +1292,7 @@ fn _loaded_scaled_add<'a>(
 /// Select physically adjacent load/scale/add tails across inert anchors.
 fn _loaded_addresses(bits: u32, block: &LirBlock, flags_dead_out: bool, uses: &Counter, cpu: &Profile) -> Result<LirBlock, String> {
     let dead = _flags_dead_after(bits, block, flags_dead_out);
-    let mut insns = block.insns.clone();
+    let mut insns = block.insns.to_vec();
     let work: Vec<usize> = insns
         .iter()
         .enumerate()
@@ -1240,7 +1336,7 @@ fn _loaded_addresses(bits: u32, block: &LirBlock, flags_dead_out: bool, uses: &C
         }
         at += 3;
     }
-    let insns =
+    let insns: Vec<_> =
         insns.into_iter().enumerate().filter(|(index, _)| !removed.contains(index)).map(|(_, one)| one).collect();
     Ok(block.with_insns(insns))
 }
@@ -1826,7 +1922,7 @@ pub fn tested(rules: &peep::Rules, body: &LirBody) -> LirBody {
             predecessors.entry(*to).or_default().push(at);
         }
     }
-    let mut blocks = body.blocks.iter().map(|block| block.insns.clone()).collect::<Vec<_>>();
+    let mut blocks = body.blocks.iter().map(|block| block.insns.to_vec()).collect::<Vec<_>>();
     for (block_index, block) in body.blocks.iter().enumerate() {
         let insns = &blocks[block_index];
         // Moves change no flag, so the three may have a phi's copies between them.
@@ -2098,29 +2194,24 @@ pub fn _flags_live_out(body: &LirBody) -> HashMap<i64, Lanes> {
         .iter()
         .map(|block| (block.at, block.insns.iter().map(|one| effects(one)).collect()))
         .collect();
-    let mut live_in: HashMap<i64, Lanes> = body.blocks.iter().map(|block| (block.at, Lanes::new())).collect();
-    let mut out: HashMap<i64, Lanes> = HashMap::default();
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for block in body.blocks.iter().rev() {
-            let after: Lanes = if block.succ.is_empty() {
+    let nodes: Vec<&LirBlock> = body.blocks.iter().collect();
+    let blocks: HashMap<i64, &LirBlock> = nodes.iter().map(|block| (block.at, *block)).collect();
+    // The solution's output is what is live on entry; what a block's last instruction leaves is its input.
+    let solved = dataflow::solve(
+        &nodes,
+        Direction::Backward,
+        |_| Lanes::new(),
+        |at, live_in| {
+            let block = blocks[&at];
+            if block.succ.is_empty() {
                 exits.clone()
             } else {
                 block.succ.iter().flat_map(|at| live_in.get(at).unwrap_or(&exits).iter().copied()).collect()
-            };
-            out.insert(block.at, after.clone());
-            let mut live = after;
-            for (reads, writes) in steps[&block.at].iter().rev() {
-                live = live.minus(writes).or(reads);
             }
-            if live != live_in[&block.at] {
-                live_in.insert(block.at, live);
-                changed = true;
-            }
-        }
-    }
-    out
+        },
+        |at, after| steps[&at].iter().rev().fold(after.clone(), |live, (reads, writes)| live.minus(writes).or(reads)),
+    );
+    solved.input.into_iter().collect()
 }
 
 /// Use XOR for zero only when later integer work replaces every arithmetic flag.

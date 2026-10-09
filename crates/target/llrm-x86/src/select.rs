@@ -327,10 +327,19 @@ pub const _WORD_INDEXES: [Register; 2] = crate::addressing16::INDEXES;
 /// `[base+index*scale+disp]`. A relocated cell takes only the word form,
 /// `[bx|bp+si|di+disp16]`: its fixup is 16 bits.
 pub fn _scaled_operand(what: &ir::Mem, bits: u32) -> Option<(MemoryOperand, bool)> {
-    let addr = what.addr?;
     if what.index_through == Register::None {
         return None;
     }
+    // Two registers and no cell: `[ebx+ebx*2]`, which a flat target spells with any 32-bit base and index (a multiply by 3, 5 or 9
+    // as `lea`). The price of it was none, so a function with one could not be priced in bytes at all.
+    let Some(addr) = what.addr else {
+        let wide = |register: Register| width_of(register) == Some(4);
+        if !(bits == 32 && wide(what.index_through) && wide(what.through)) {
+            return None;
+        }
+        let size = if what.disp_width != 0 { displacement_in(what.disp_width, bits) } else { _displacement_size(what.through, what.index_through, what.offset, bits) };
+        return Some((memory_operand(what.through, what.index_through, what.scale, what.offset, size, Register::None), false));
+    };
     if matches!(addr.space, Space::Segment | Space::External) {
         let word = what.scale == 1
             && _WORD_BASES.contains(&what.through)

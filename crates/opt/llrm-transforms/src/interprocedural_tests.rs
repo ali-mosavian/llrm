@@ -948,7 +948,7 @@ b:
     let bytes = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
     let (mix, f) = (module.named("mix").unwrap(), module.named("f").unwrap());
     let counts = inline::call_counts(&module);
-    let candidates = inline::candidates(&module, &layout, &counts, &BTreeSet::from([mix]), &clocks, 20, Threshold::default());
+    let candidates = inline::candidates(&module, &llrm_mir::memory::callees(&module), &layout, &counts, &BTreeSet::from([mix]), &clocks, 20, Threshold::default());
     let calls: Vec<_> = module.global(f).function().unwrap().walk().map(|(_, inst)| inst).filter(|&inst| llrm_mir::memory::callee(&module.context, module.global(f).function().unwrap(), inst).is_some()).collect();
     let sites: llrm_support::hash::IndexMap<_, _> = calls.iter().map(|&call| (call, candidates[&mix].clone())).collect();
     let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
@@ -1151,4 +1151,160 @@ fn test_a_small_recursive_function_is_inlined_into_itself_to_a_depth() {
     assert_eq!(calls(Threshold::none()), 2, "no inlining at all: the two calls it began with");
     assert!(calls(Threshold::default()) > 2, "the body grew by copies of itself");
     assert_eq!(calls(Threshold::default().for_size()), 2, "not for size: the recursive call is cold there");
+}
+
+/// A callee trial that was refused is not made again in the state it was made in (host.c: three trials, each made in five rounds, 37%
+/// of the compile, objects the same). Each try re-ran the callers' pipelines.
+#[test]
+fn test_a_callee_the_trial_refused_is_not_tried_again_in_the_same_state() {
+    let text = "define internal i16 @mix(i16 %a, i16 %b) {
+b:
+  %t0 = xor i16 %a, %b
+  %t1 = shl i16 %a, 3
+  %t2 = add i16 %t0, %t1
+  %t3 = lshr i16 %b, 2
+  %t4 = sub i16 %t2, %t3
+  %t5 = and i16 %t4, 2047
+  %t6 = or i16 %t5, %a
+  %t7 = xor i16 %t6, %b
+  %t8 = add i16 %t7, 5
+  ret i16 %t8
+}
+
+define i16 @f(i16 %x, i16 %y) {
+b:
+  %p = call i16 @mix(i16 %x, i16 %y)
+  %q = call i16 @mix(i16 %y, i16 %x)
+  %r = add i16 %p, %q
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let clocks = OperationCosts { call: 20, ..OperationCosts::default() };
+    let bytes = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
+    let mix = module.named("mix").unwrap();
+    let counts = inline::call_counts(&module);
+    let candidates = inline::candidates(&module, &llrm_mir::memory::callees(&module), &layout, &counts, &BTreeSet::from([mix]), &clocks, 20, Threshold::default());
+    let more: llrm_support::hash::IndexMap<_, _> = candidates.into_iter().filter(|(id, _)| *id == mix).collect();
+    let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
+    let runs = std::cell::Cell::new(0);
+    let mut refused_trials: Vec<RefusedTrial> = Vec::new();
+    let again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused_trials: &mut Vec<RefusedTrial>| {
+        tried_callees::<String>(module, analyses, &layout, &BTreeSet::from([mix]), &BTreeSet::new(), &Default::default(), &more, &bytes, (&OperationCosts::default(), 0), refused_trials, &mut |_, _, _, _| {
+            runs.set(runs.get() + 1);
+            Ok(())
+        })
+        .unwrap()
+    };
+    assert!(!again(&mut module, &mut analyses, &mut refused_trials), "premise: the trial is refused");
+    let first = runs.get();
+    assert!(first > 0, "premise: the trial ran a pipeline");
+    again(&mut module, &mut analyses, &mut refused_trials);
+    assert_eq!(runs.get(), first, "the second round made the refused trial again");
+}
+
+/// A trial of a callee at several sites splices them all and runs the caller's pipeline once, the way gcc and LLVM inline: it ran the
+/// pipeline after each site (host.c -6.6%, QCport -2.2%, the code the same).
+#[test]
+fn test_a_trial_of_a_callee_at_several_sites_runs_the_callers_pipeline_once() {
+    let text = "define internal i16 @mix(i16 %a, i16 %b) {
+b:
+  %t0 = xor i16 %a, %b
+  %t1 = shl i16 %a, 3
+  %t2 = add i16 %t0, %t1
+  %t3 = lshr i16 %b, 2
+  %t4 = sub i16 %t2, %t3
+  %t5 = and i16 %t4, 2047
+  %t6 = or i16 %t5, %a
+  %t7 = xor i16 %t6, %b
+  %t8 = add i16 %t7, 5
+  ret i16 %t8
+}
+
+define i16 @f(i16 %x, i16 %y) {
+b:
+  %p = call i16 @mix(i16 %x, i16 %y)
+  %q = call i16 @mix(i16 %y, i16 %x)
+  %r = add i16 %p, %q
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let clocks = OperationCosts { call: 20, ..OperationCosts::default() };
+    let bytes = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
+    let mix = module.named("mix").unwrap();
+    let counts = inline::call_counts(&module);
+    let candidates = inline::candidates(&module, &llrm_mir::memory::callees(&module), &layout, &counts, &BTreeSet::from([mix]), &clocks, 20, Threshold::default());
+    let more: llrm_support::hash::IndexMap<_, _> = candidates.into_iter().filter(|(id, _)| *id == mix).collect();
+    let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
+    let runs = std::cell::Cell::new(0);
+    let mut refused_trials: Vec<RefusedTrial> = Vec::new();
+    let again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused_trials: &mut Vec<RefusedTrial>| {
+        tried_callees::<String>(module, analyses, &layout, &BTreeSet::from([mix]), &BTreeSet::new(), &Default::default(), &more, &bytes, (&OperationCosts::default(), 0), refused_trials, &mut |_, _, _, _| {
+            runs.set(runs.get() + 1);
+            Ok(())
+        })
+        .unwrap()
+    };
+    again(&mut module, &mut analyses, &mut refused_trials);
+    assert_eq!(runs.get(), 1, "the pipeline ran once for each of the callee's two sites");
+}
+
+/// A round assumes a parameter's range before it proves it (`place`'s `row` is 0 at first), and under it a loop `r < row` that runs
+/// from 0 is never entered: the facts of the loop around it and of its own contradict each other there, and a call in it passes
+/// nothing. Passing what the contradiction left (`r` below 0) made the callee's parameter range wide for good.
+#[test]
+fn test_a_call_in_a_block_the_assumed_range_makes_unreachable_passes_nothing() {
+    let mut module = parsed(
+        "define internal i16 @sink(i16 %x) {
+b:
+  %y = add i16 %x, 1
+  ret i16 %y
+}
+
+define internal i16 @place(i16 %row, i16 %n) {
+b:
+  %done = icmp eq i16 %row, %n
+  br i1 %done, label %leaf, label %scan
+scan:
+  br label %outer
+outer:
+  %c = phi i16 [ 0, %scan ], [ %c1, %latch ]
+  %more = icmp slt i16 %c, %n
+  br i1 %more, label %pre, label %next
+pre:
+  br label %head
+head:
+  %r = phi i16 [ 0, %pre ], [ %r1, %body ]
+  %go = icmp slt i16 %r, %row
+  br i1 %go, label %body, label %latch
+body:
+  %s = call i16 @sink(i16 %r)
+  %r1 = add nsw i16 %r, 1
+  br label %head
+latch:
+  %c1 = add nsw i16 %c, 1
+  br label %outer
+next:
+  %up = add nsw i16 %row, 1
+  %p = call i16 @place(i16 %up, i16 %n)
+  ret i16 %p
+leaf:
+  ret i16 1
+}
+
+define i16 @f(i16 %a) {
+b:
+  %x = call i16 @place(i16 0, i16 7)
+  ret i16 %x
+}
+",
+    );
+    stepped(&mut module, &["f"], 40, Threshold::none());
+    let text = printed(&module);
+    assert!(text.contains("range(i16 0, ") && text.contains("%x)"), "{text}");
+    let sink = text.lines().find(|line| line.contains("@sink(")).unwrap_or_default();
+    assert!(!sink.contains("range(i16 -"), "{sink}\n{text}");
 }

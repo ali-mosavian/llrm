@@ -1,5 +1,5 @@
-reason = "frequency kept from isel: huge -O2 memory operands -200 (-0.12..-0.24%), instructions +1..2, code +2..7 B"
-blessed = "2026-10-08"
+reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
+blessed = "2026-10-09"
 
 [bas.O2]
 instructions = 609551

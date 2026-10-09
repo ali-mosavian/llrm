@@ -98,7 +98,7 @@ pub fn scheduled(body: &LirBody) -> Result<LirBody, Malformed> {
             }
             run.push(Arc::clone(one));
         }
-        block.insns = out;
+        block.insns = out.into();
     }
     Ok(out_body)
 }

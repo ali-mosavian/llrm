@@ -1,13 +1,12 @@
-reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
-blessed = "2026-10-08"
+reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
+blessed = "2026-10-09"
 
 [bas.O2]
-instructions = 344048
+instructions = 335856
 memory_operands = 131059
-code_bytes = 211
+code_bytes = 213
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 4.5989
 
 [bas.Os]
 instructions = 344048
@@ -18,30 +17,30 @@ bss_bytes = 0
 kernel_ms = 5.691
 
 [c.O2]
-instructions = 229362
+instructions = 204787
 memory_operands = 0
-code_bytes = 55
+code_bytes = 56
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 229362
+instructions = 212979
 memory_operands = 0
-code_bytes = 55
+code_bytes = 53
 data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 204788
+instructions = 155637
 memory_operands = 0
-code_bytes = 57
+code_bytes = 53
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 204788
+instructions = 155637
 memory_operands = 0
-code_bytes = 57
+code_bytes = 53
 data_bytes = 0
 bss_bytes = 0
 

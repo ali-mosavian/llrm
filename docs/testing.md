@@ -33,6 +33,55 @@ tool not in the repository (Turbo C++, CodeView, QCport's Borland C, QuickBASIC)
 run language or test binary that needs one is `[dropped]` by name; this happens only with `GATE_ALLOW_MISSING=1`,
 which only the workflow sets. Your own gate and the full run on main still run them.
 
+
+### Compile cost and its growth
+
+`tools/measure.py check` (step `measure`, run when the backend, transforms, front end or x86 targets change) compares this tree's
+`llrm-c` with the same measurement of the commit it branches from. Three measurements, all user-space instructions
+(`perf stat -e instructions:u`), so host load does not move them:
+
+- the compile of the 66 vsgcc programs and QCport's 65 modules at -O1, -O2 and -Os (`tools/compile-cost.py`);
+- the cost at N/2, N and 2N on generated programs, per axis and level (`crates/target/*/vsgcc/scaling_gate.py`): the gate holds the second difference c(2N) − 3c(N) + 2c(N/2), which is 1.5kN² of a cost a + bN + kN²: nil for fixed and linear work, so a saving of either does not move it and a pass gone quadratic does (neither the ratio 2N/N nor c(2N) − 2c(N) is free of both);
+- the same for each step of the compile with 1.5% or more of its work (`LLRM_DEBUG=time`'s `[instr]` rows).
+
+A measurement is stored per commit in `~/.cache/llrm/measure` (`LLRM_MEASURE_DIR`), never in the repository, so two branches
+share no file and nothing conflicts. The base's is read from there; if it is missing the base is built in a tree and target
+directory of its own with the gate's build command (`gate.BUILD`: `cargo build --bins` alone makes another llrm-c) and
+measured with this tree's tools and inputs, then stored (3-8 minutes, once per base). A stored measurement of another
+method (tools, programs, QCport modules) is not used. A rise past the tolerances in `tools/gate/tiers.toml` `[measure]` fails: a
+level's geomean 1.003, one file 1.02, an axis' second difference 1% of its cost at 2N and that cost 1.02, a step's 0.5% of the compile and its cost 1.05 (a step needs 2.5% of the work to fail, so one on the edge of the
+share floor does not flip). Only superlinear work above nothing counts (`max(0, D)`): a concave base made linear has not got worse. `measure.py compare BASE SHA` reads two stored measurements with the same comparison, and a flagged row prints the three costs and the base's. D's noise on one build measured three times is 0.0005 of the compile (steps) and 0.0009 of an axis' 2N cost. A drop is recorded nowhere; the next branch's base has it. Sessions that miss one base at once wait on its lock and read what the first stored. Against the parent alone, ten commits of +0.2% each pass; the scheduled run (`gate.py main`) also compares each main commit with the one 50 merges or a week back (`measure.py creep`), at the same tolerances, and lists the commits between with their steps. Tolerances come from the same build
+measured twice (`tools/compile-cost.py --noise`: geomean within 0.0001, worst file 0.0047 of 393). The QCport files need `QCPORT`
+and `QCPORT_INC` (`~/scratch/qcport-env.sh`); without them they are not measured. Without a working counter the step exits 77
+(SKIPPED). Wall time per step is not usable (a linear step read 4-6x at 2N under load).
+
+### Build profiles
+
+The PR gate builds and measures on `release` (incremental: a PR and its base are built the same way, in seconds to a minute). The shipped
+llrm-c and the creep run on main use `dist` (`cargo build --profile dist --bins`: one codegen unit, fat LTO, about 3 minutes cold). Against
+`release`, `dist` retires 11-13% fewer compile instructions (d_faces 0.886, combat 0.889, cmd 0.885, mdl 0.888, nbody_single -Omax 0.877,
+queens -O3 0.884, x_life -O1 0.887), thin LTO with 16 units 6.5-7.4% (~40 s). `release` is a valid instrument for deltas: the same three PRs
+measured in each, as -% of the compile instructions of the file named (2026-10-09):
+
+| PR, file | release | thin | dist |
+|---|---|---|---|
+| #1039 floatloop, cmd -O2 | -1.43 | -1.41 | -1.43 |
+| #1039, mdl -O2 | -1.94 | -1.91 | -1.97 |
+| #1039, nbody_fixed -O3 | -1.62 | -1.65 | -1.56 |
+| #1032 branchprob, nbody_single -Omax | -17.28 | -14.95 | -13.75 |
+| #1032, nbody_fixed -O3 | -0.36 | 0.00 | -0.23 |
+| #1029 trials, combat -O2 | +0.11 | +0.13 | +0.12 |
+
+Same sign and size, except where one step shrinks a share the faster build has already made smaller (#1032's -17.3% is -13.8% on `dist`:
+the peel it removed was a larger part of a slower compile).
+
+### Reading a flagged step
+
+Work done by a shared engine is timed under the engine's own span, and a step's row is only its own code. Moving a step's work into an
+engine that runs inside another step's span (a cleanup, an allocator route, a solver) raises that step's row even where the total falls;
+the fix is to give the engine its own span, not to move the tolerance. A flagged step row names the steps of its axis and level whose
+cost at 2N rose most: the callee that took the work is among them.
+
 ## What belongs in the suite
 
 Tests assert program behavior, representation invariants, or a named regression.

@@ -99,10 +99,73 @@ fn an_analysis_is_computed_once_until_a_pass_drops_it() {
     COMPUTED.set(0);
     let mut passes = PassManager::default();
     passes.add(Look(PreservedAnalyses::all()));
-    passes.add(Look(PreservedAnalyses::none()));
+    passes.add(Retarget(PreservedAnalyses::none()));
     passes.add(Look(PreservedAnalyses::all()));
     passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
     assert_eq!(COMPUTED.get(), 2);
+}
+
+/// A pass that says it dropped everything and edited nothing (1272 of 17,000 drops in QCport, `gvn` and `dead` the most)
+/// cost every analysis a fresh run, and the next to ask got no more than the one before.
+#[test]
+fn a_pass_that_edited_nothing_drops_nothing_whatever_it_says() {
+    COMPUTED.set(0);
+    let mut passes = PassManager::default();
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.add(Look(PreservedAnalyses::none()));
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(COMPUTED.get(), 1, "a pass that logged no change dropped an analysis");
+}
+
+thread_local! {
+    static KEPT: Cell<usize> = const { Cell::new(0) };
+    static SAME: Cell<bool> = const { Cell::new(true) };
+}
+
+/// Says a change to the function leaves it as it was, when `SAME`.
+struct Steady;
+
+impl Analysis for Steady {
+    type Result = usize;
+    const NAME: &'static str = "steady";
+    const SKIPS: bool = true;
+    fn run(_: &Context, _: &DataLayout, function: &Function, _: &mut Analyses) -> usize {
+        KEPT.set(KEPT.get() + 1);
+        function.layout().len()
+    }
+
+    fn unaffected(_: &[Change], _: &Context, _: &Function) -> bool {
+        SAME.get()
+    }
+}
+
+struct LookSteady;
+
+impl FunctionPass for LookSteady {
+    fn name(&self) -> &'static str {
+        "look-steady"
+    }
+
+    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+        analyses.get::<Steady>(unit.context, unit.layout, unit.function);
+        PreservedAnalyses::all()
+    }
+}
+
+/// A result the analysis says a change left true stands, however the pass that made it describes it; one it does not is derived
+/// again.
+#[test]
+fn a_result_a_change_leaves_true_stands_past_the_pass_that_made_it() {
+    for (same, computed) in [(true, 1), (false, 2)] {
+        (KEPT.set(0), SAME.set(same));
+        let mut passes = PassManager::default();
+        passes.add(LookSteady);
+        passes.add(Retarget(PreservedAnalyses::none()));
+        passes.add(LookSteady);
+        passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+        assert_eq!(KEPT.get(), computed, "unaffected = {same}");
+    }
 }
 
 /// The ledger reads which pass made which change from here.
@@ -245,7 +308,7 @@ fn a_required_module_analysis_is_computed_again_only_after_a_pass_drops_it() {
     let mut passes = PassManager::default();
     passes.require::<Bodies>();
     passes.add(Counts(PreservedAnalyses::none().preserve_module::<Bodies>()));
-    passes.add(Counts(PreservedAnalyses::none()));
+    passes.add(Retarget(PreservedAnalyses::none()));
     passes.add(Counts(PreservedAnalyses::all()));
     passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
     assert_eq!(SUMMED.get(), 2);
@@ -306,4 +369,33 @@ fn a_change_to_the_module_keeps_what_reads_only_the_function() {
     passes.add(Probe);
     passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
     assert_eq!(HELD.take(), [false, true]);
+}
+
+/// Every edit dropped the module analyses and each was worked out again from every global (66 times a compile of `callers-64`,
+/// 1 ms apiece in `call-registers` alone): while the declarations are those it worked from, the result is the same result.
+#[test]
+fn module_analyses_of_the_declarations_stand_until_a_declaration_changes() {
+    use crate::passes::{CallRegisters, CalleeEffects, Declarations, GlobalSizes, TypeAncestry};
+    let mut module = module();
+    let program = crate::program::ProgramProxy::of(&module, Rc::new(Neutral));
+    let mut analyses = ModuleAnalyses::new(program);
+    let first = (analyses.get::<Declarations>(&module), analyses.get::<CalleeEffects>(&module), analyses.get::<CallRegisters>(&module), analyses.get::<GlobalSizes>(&module), analyses.get::<TypeAncestry>(&module));
+    // A body edited: no declaration moved.
+    let ran = crate::passes::module_runs();
+    let (_, function) = module.function_mut("f").unwrap();
+    let branch = function.terminator(function.entry().unwrap()).unwrap();
+    function.set_operand(branch, function.instruction(branch).operands.len() - 2, Operand::Block(crate::module::BlockId(2)));
+    analyses.invalidate(&PreservedAnalyses::none());
+    assert!(Rc::ptr_eq(&first.0, &analyses.get::<Declarations>(&module)), "declarations");
+    assert!(Rc::ptr_eq(&first.1, &analyses.get::<CalleeEffects>(&module)), "callee effects");
+    assert!(Rc::ptr_eq(&first.2, &analyses.get::<CallRegisters>(&module)), "call registers");
+    assert!(Rc::ptr_eq(&first.3, &analyses.get::<GlobalSizes>(&module)), "global sizes");
+    assert!(Rc::ptr_eq(&first.4, &analyses.get::<TypeAncestry>(&module)), "type ancestry");
+    assert_eq!(crate::passes::module_runs(), ran, "{} module analyses were worked out again for an edit to a body", crate::passes::module_runs() - ran);
+    // A declaration moved: an attribute on the function.
+    let (_, function) = module.function_mut("f").unwrap();
+    function.attrs.push(Attribute::Flag("readnone".to_owned()));
+    analyses.invalidate(&PreservedAnalyses::none());
+    assert!(!Rc::ptr_eq(&first.0, &analyses.get::<Declarations>(&module)), "declarations did not follow the attribute");
+    assert!(!Rc::ptr_eq(&first.1, &analyses.get::<CalleeEffects>(&module)), "callee effects did not follow the attribute");
 }

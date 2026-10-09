@@ -485,7 +485,7 @@ fn frame_after_layout(source: &str, name: &str) -> Vec<(String, i64, i64)> {
         !super::compile::_inline_frame(&program, module, function)
     });
     let module = &laid_out.modules[0];
-    let widths: std::collections::HashMap<i64, i64> = module.types.iter().map(|one| (one.id, one.width)).collect();
+    let widths: llrm_support::hash::HashMap<i64, i64> = module.types.iter().map(|one| (one.id, one.width)).collect();
     let function = module.functions.iter().find(|one| one.name == name).expect("the procedure");
     let mut frame: Vec<_> = function
         .places

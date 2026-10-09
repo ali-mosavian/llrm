@@ -114,7 +114,7 @@ fn deleting_a_body_leaves_a_declaration() {
 }
 
 /// A result derived at a mark is brought up to date from what changed after it, only while that is on record and of the
-/// same function: a mark of the log a pass has taken, or of a copy's original, names changes no one can list.
+/// same function: a mark of a copy's original names changes no one can list.
 #[test]
 fn a_mark_names_the_changes_since_while_they_are_on_record_of_that_function() {
     let mut module = module(TEXT);
@@ -132,7 +132,7 @@ fn a_mark_names_the_changes_since_while_they_are_on_record_of_that_function() {
     f.erase(x).expect("unused now");
     assert_eq!(f.changes_since(mark).map(<[Change]>::len), Some(2));
     f.take_changes();
-    assert_eq!(f.changes_since(mark), None, "taken from the log");
+    assert_eq!(f.changes_since(mark).map(<[Change]>::len), Some(2), "taken, and still on the log");
     assert_eq!(f.changes_since(f.mark()), Some(&[][..]));
     let _ = &mut copy;
 }
@@ -268,4 +268,53 @@ fn removing_a_parameter_leaves_the_records_that_named_it_gone() {
     f.remove_parameter(context, 1);
     let text = print::module(&parsed);
     assert!(text.contains("#dbg_gone(!0)") && !text.contains("#dbg_value"), "{text}");
+}
+
+/// An analysis computed before the last `take_changes` could not be brought up to date: the log was emptied, so five in six
+/// of them, asked again after another pass, were derived afresh.
+#[test]
+fn taken_changes_stay_for_an_analysis_computed_before_them() {
+    let mut module = module(TEXT);
+    let f = function(&mut module);
+    let before = f.mark();
+    let (x, _) = named(f, "x");
+    let (y, value) = named(f, "y");
+    let a = f.parameters()[0];
+    f.replace_all_uses_with(value, Operand::Value(a));
+    assert_eq!(f.take_changes().len(), 1);
+    let _ = (x, y);
+    assert_eq!(f.changes_since(before).map(<[Change]>::len), Some(1), "the taken change is gone from the log");
+    assert!(f.take_changes().is_empty(), "a change was handed out twice");
+}
+
+/// A copy carried the original's whole log (up to 64k changes since the log stopped being emptied, #984): gvn clones the body to
+/// number it, and Vec<Change>::clone was 16% of compiling a program with a hundred inlines. A copy's edits are its own.
+#[test]
+fn a_copy_starts_with_an_empty_log_and_equals_the_function_it_copies() {
+    let mut module = module(TEXT);
+    let f = function(&mut module);
+    let (_, value) = named(f, "x");
+    let a = f.parameters()[0];
+    f.replace_all_uses_with(value, Operand::Value(a));
+    assert!(!f.changes.0.is_empty());
+    let mut copy = f.clone();
+    assert!(copy.changes.0.is_empty(), "the copy carries {} changes", copy.changes.0.len());
+    assert!(*f == copy, "the log is no part of what a function is");
+    let mark = copy.mark();
+    assert_eq!(copy.changes_since(mark), Some(&[][..]));
+}
+
+/// A move logs what follows it as the position named, without finding it in the block: that scan made each append of a
+/// straight-line body linear, and `hir to mir` 3.3x for twice the size (#992).
+#[test]
+fn a_move_logs_what_the_position_named() {
+    let mut module = module(TEXT);
+    let f = function(&mut module);
+    let (x, _) = named(f, "x");
+    let (y, _) = named(f, "y");
+    let block = f.entry().unwrap();
+    f.take_changes();
+    f.move_to(y, Position::Before(x)).unwrap();
+    f.move_to(x, Position::End(block)).unwrap();
+    assert_eq!(f.take_changes(), [Change::Moved { inst: y, block, next: Some(x), from: block }, Change::Moved { inst: x, block, next: None, from: block }]);
 }

@@ -131,6 +131,8 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
     if cargo or p.tier == "full":
         steps += ["build", "lib", "doc", "integration", "crate-tests", "bench", "torture"]
     steps += ["pytest"]
+    if cargo and p.tier != "full" and any(matches(f, cfg["scan_inputs"]["paths"]) for f in live):
+        steps.append("scans")
     if not cargo and p.tier != "full" and any(f.startswith("tools/torture/") for f in live):
         steps += ["torture"]
     heavy = {}
@@ -156,9 +158,32 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
     return p
 
 
+def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
+    """`p` with only the steps `names` (the tier, the languages and the crates as planned). A step the diff did not select may be named:
+    a change to the measurement tools re-runs build and measure, not the other fourteen steps. The build comes
+    first where a step needs the binaries, as `plan` has it."""
+    unknown = [n for n in names if n not in known]
+    if unknown:
+        raise SystemExit(f"gate: no step named {' '.join(unknown)}; the steps are {' '.join(sorted(known))}")
+    steps = [n for n in dict.fromkeys(names) if n != "build"]
+    if any(one != "pytest" for one in steps) or "build" in names:
+        steps.insert(0, "build")
+    return Plan(p.tier, p.reason + " (steps asked for)", steps, p.packages, p.languages)
+
+
+# The build every step runs after, and every measurement is taken with: `cargo build --bins` alone produces a different llrm-c (the
+# test build unifies features differently), whose compile costs differ by up to 6% a step. tools/measure.py builds a base with it too.
+BUILD = "cargo build --release -q --bins && cargo test --release -q --workspace --no-run"
+# The shipped build (Cargo.toml `[profile.dist]`): what the creep run on main measures. Not a gate step: three minutes cold.
+DIST_BUILD = "cargo build --profile dist -q --bins"
+
+
 # Commands. Each runs under bash in the repo root with CARGO_TARGET_DIR set.
 def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str] = frozenset(), skip_py: tuple[str, ...] = ()) -> dict[str, str]:
     scope = "--workspace" if p.packages is None else " ".join(f"-p {n}" for n in p.packages)
+    # The root crate has no library: a diff that selects it alone (a bench tool) has no lib or doc tests to run.
+    # (with another crate that has one, the root crate stays in the scope: it turns on the features the others need)
+    libs = scope if p.packages is None or any((ROOT / pkgs[n]["dir"] / "src/lib.rs").exists() for n in p.packages) else ""
     cargo = "cargo test --release -q --no-fail-fast"
     split = cfg["split"]
     whole = set(cfg["whole"].values()) | set(cfg["exclusive"].values())
@@ -171,16 +196,21 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         'echo "$out" | tail -1 | grep -q " 0 problems"'
     )
     steps = {
-        "build": "cargo build --release -q --bins && cargo test --release -q --workspace --no-run",
-        "lib": f"{cargo} {scope} --lib",
-        "doc": f"{cargo} {scope} --doc",
+        "build": BUILD,
+        "lib": f"{cargo} {libs} --lib" if libs else "true",
+        "doc": f"{cargo} {libs} --doc" if libs else "true",
         "integration": f"{cargo} {cheap_bins} -- {skips} --skip test_every_program_under_tests_run_prints_its_out",
         "crate-tests": f"{cargo} {ct}" if ct else "true",
+        # Every scan runs, and any failing fails the step: the first red must not hide the others.
+        "scans": "rc=0; "
+        + "; ".join(f"{cargo} -p {one['package']} " + (f"--lib -- {one['lib']}" if "lib" in one else f"--test {one['test']}") + " || rc=1" for one in cfg["scan"] if "package" in one)
+        + "; exit $rc",
         "bench": bench,
         "torture": "timeout 600 uv run -q --project tools python tools/torture/torture.py --gate --work $CARGO_TARGET_DIR/torture-work",
         "pytest": "uv run -q --project tools python -m pytest tools crates tests/*.py -q -p no:cacheprovider --ignore=tests/test_programs_compile.py --ignore=tests/test_loops.py" + "".join(f" --ignore={f}" for f in skip_py),
         "pytest-programs": "uv run -q --project tools python -m pytest tests/test_programs_compile.py tests/test_loops.py -q -p no:cacheprovider",
         "qcport": "[ -f ~/scratch/qcport-env.sh ] || { echo SKIPPED: no ~/scratch/qcport-env.sh; exit 77; }; . ~/scratch/qcport-env.sh && uv run -q --project tools python tools/qcport-run.py",
+        "measure": "[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; python3 tools/measure.py check",
         "run": f"LLRM_RUN_ONLY='{' '.join(p.languages)}' {cargo} --test run -- test_every_program_under_tests_run_prints_its_out",
     }
     for s in split:
@@ -209,11 +239,12 @@ def expected(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     """(test binaries that must report, whether a filter must match a test) per cargo test step."""
     whole = set(cfg["whole"].values()) | set(cfg["exclusive"].values())
     selected = set(p.packages or pkgs)
+    libs = p.packages is None or any((ROOT / pkgs[n]["dir"] / "src/lib.rs").exists() for n in p.packages)
     out = {
-        "lib": (None, False),
-        "doc": (None, False),
+        **({"lib": (None, False), "doc": (None, False)} if libs else {}),
         "integration": (sum(1 for t in root_tests() if t != "timing" and t not in whole and t not in skip_bins), False),
         "run": (1, True),
+        "scans": (None, True),
     }
     ct = sum(1 for n, _ in crate_tests(pkgs) if n in selected)
     if ct:
@@ -335,7 +366,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     jobs = int(os.environ.get("JOBS", "4"))
     with ThreadPoolExecutor(jobs) as pool:
         # The longest steps start first.
-        order = sorted(rest, key=lambda s: s not in ("run", "identity", "qcport", "pytest-programs", "turbo", "bench"))
+        order = sorted(rest, key=lambda s: s not in ("run", "identity", "qcport", "measure", "pytest-programs", "turbo", "bench"))
         for future in as_completed([pool.submit(run_step, s, cmds[s], logs, env, checks.get(s), unset) for s in order]):
             report(*future.result())
     for name in alone:
@@ -387,6 +418,16 @@ def watch_main(force: bool, every: int = 5, hours: float = 2.0) -> int:
     git("checkout", "-q", "--detach", "origin/main")
     git("clean", "-ffdxq")
     head, green = git("rev-parse", "HEAD"), state.get("green")
+    # Every commit of main this run sees gets its measurement (tools/measure.py): the base of the next branch from it.
+    if not list((Path(os.environ.get("LLRM_MEASURE_DIR") or Path.home() / ".cache/llrm/measure")).glob(f"{head}-*.json")):
+        full = plan(["Cargo.toml"], "full")
+        execute(restricted(full, ["measure"], set(commands(full, load(), packages())) | set(load()["exclusive"])))
+    # And against the main commit 50 merges or a week back: a branch may add up to the tolerance, ten of them may not.
+    # Both ends of the creep are built as the shipped llrm-c is (`dist`): the slow drift is the user's, not the gate's build's.
+    subprocess.run(["bash", "-c", DIST_BUILD], cwd=ROOT, env=os.environ, check=True)
+    creep = subprocess.run([sys.executable, "tools/measure.py", "creep", "HEAD"], cwd=ROOT, env={**os.environ, "LLRM_BIN": f"{target}/dist", "LLRM_MEASURE_PROFILE": "dist"})
+    if creep.returncode == 1:
+        return 1
     merges = len(git("rev-list", "--first-parent", f"{green}..{head}").split()) if green else every
     if not (force or merges >= every or merges and time.time() - state.get("when", 0) >= hours * 3600):
         print(f"main: {merges} merges since the last green; not due")
@@ -412,12 +453,15 @@ def main() -> int:
     ap.add_argument("--group")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--tier", default="auto", choices=["auto", "fast", "full"])
+    ap.add_argument("--steps", nargs="+", metavar="STEP", help="only these steps (the plan is otherwise as planned); `build measure`")
     args = ap.parse_args()
     if args.command == "main":
         return watch_main(args.force)
     if args.command == "bisect":
         return bisect(args.rest[0], args.rest[1], args.rest[2:])
     p = plan(args.files if args.files is not None else changed_files(args.base), args.tier)
+    if args.steps:
+        p = restricted(p, args.steps, set(commands(p, load(), packages())) | set(load()["exclusive"]))
     skipped = skipped_steps(p.steps, missing_capabilities(), p.languages)
     if args.json:
         print(json.dumps({"tier": p.tier, "steps": p.steps, "groups": groups_of(p, skipped), "skipped": skipped}))

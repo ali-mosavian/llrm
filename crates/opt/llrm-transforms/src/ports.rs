@@ -31,7 +31,8 @@ impl FunctionPass for Ports {
 fn silent(unit: &passes::Unit, analyses: &mut Analyses) -> Vec<InstId> {
     let held = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
     let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
-    let memory = Unit::within(unit.context, unit.layout, unit.function, analyses.outer()).with_registers(&held).with_shape(&shape);
+    let outer = std::rc::Rc::clone(analyses.outer());
+    let memory = Unit::within(unit.context, unit.layout, unit.function, &outer).with_registers(&held).with_shape(&shape);
     let calls: Vec<_> = unit
         .function
         .walk()
@@ -42,7 +43,7 @@ fn silent(unit: &passes::Unit, analyses: &mut Analyses) -> Vec<InstId> {
         })
         .collect();
     let mut bounded = None;
-    let target = analyses.outer().target();
+    let target = outer.target();
     calls
         .into_iter()
         .filter(|&(block, inst)| {
@@ -50,9 +51,10 @@ fn silent(unit: &passes::Unit, analyses: &mut Analyses) -> Vec<InstId> {
             let ports = match memory.int_constant(port) {
                 Some(bits) => Some(((bits & 0xFFFF) as i64, (bits & 0xFFFF) as i64)),
                 None => {
-                    let (facts, registers) = bounded.get_or_insert_with(|| (ranges::bounded(&memory).unwrap_or_default(), &*held));
-                    let scope = facts.get(&cfg::id(block)).cloned().unwrap_or_default();
-                    ranges::_operand(&memory, port, &scope, registers).and_then(|interval| unsigned(&interval.low, &interval.high))
+                    // What the counted loops bound is the manager's, asked when first needed.
+                    let facts = bounded.get_or_insert_with(|| analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function));
+                    let scope = facts.as_ref().as_ref().ok().and_then(|facts| facts.at(cfg::id(block))).cloned().unwrap_or_default();
+                    ranges::_operand(&memory, port, &scope, &held).and_then(|interval| unsigned(&interval.low, &interval.high))
                 }
             };
             ports.is_some_and(|ports| !target.port_touches_memory(ports))

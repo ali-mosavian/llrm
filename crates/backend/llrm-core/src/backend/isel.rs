@@ -520,6 +520,12 @@ enum Pointer {
     Absolute { offset: i64 },
 }
 
+/// `LLRM_CHECK_CALLEES=1`: the callees' effects selection was given are what a scan of the module gives.
+fn checking_callees() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_CALLEES"))
+}
+
 /// `hole` bytes below BP are left free, above the allocas, for spill slots.
 pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments, compiled: &'static Compiled, arch: &'c dyn llrm_target::Target, zeroed: bool, hole: i64) -> Result<Selected, Unselected> {
     selected_with(module, name, abi, pool, cpu, segments, compiled, arch, zeroed, hole, &CalleeFacts::none())
@@ -544,7 +550,9 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
     let unit = unit.with_exposed(&exposed);
     let registers = llrm_analysis::consts::known(&unit, None, None, None);
     let unit = unit.with_registers(&registers);
-    let exact = ranges::exact_offsets(&unit).map_err(Unselected)?;
+    // One solve of the scoped bounds serves the exact offsets and, below, the dword-indexed accesses.
+    let scoped = ranges::scoped(&unit).map_err(Unselected)?;
+    let exact = ranges::exact_offsets_given(&unit, &scoped).map_err(Unselected)?;
     let wide = cpu.dword_address_form();
     let secondary = wide.filter(|form| form.before_spill(&cpu.operations));
     let dword_indexed = wide.is_some() && function.walk().any(|(_, inst)| dword_indexed(module, function, inst));
@@ -552,7 +560,7 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
         false => (Facts::default(), BTreeSet::new()),
         true => {
             let typed = function.walk().map(|(_, inst)| inst).filter(|&inst| MemRef::of(&unit, inst).is_some_and(|one| one.typed.is_some())).collect();
-            (ranges::scoped(&unit).map_err(Unselected)?, typed)
+            (scoped, typed)
         }
     };
     let mut selector = Selector {
@@ -583,7 +591,7 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
         joins: IndexMap::default(),
         consumed: BTreeSet::new(),
         paired: IndexMap::default(),
-        callees: llrm_mir::memory::callees(module),
+        callees: callee_facts.callees().filter(|held| !checking_callees() || **held == llrm_mir::memory::callees(module)).unwrap_or_else(|| std::rc::Rc::new(llrm_mir::memory::callees(module))),
         private: Vec::new(),
         cpu,
         compiled,
@@ -936,7 +944,7 @@ struct Selector<'m, 'c, 'p> {
     /// instruction of its block is: that instruction's value.
     paired: IndexMap<InstId, ValueId>,
     /// What each callee does to memory.
-    callees: llrm_mir::memory::Callees,
+    callees: std::rc::Rc<llrm_mir::memory::Callees>,
     /// The frame bytes no exposed alloca occupies, which no call reaches.
     private: Vec<(crate::model::ir::Addr, u32)>,
     /// What each instruction costs, where a choice depends on it.
@@ -2736,7 +2744,7 @@ impl Selector<'_, '_, '_> {
         if self.promoted.is_empty() {
             return Ok(blocks);
         }
-        let by_at: IndexMap<i64, Vec<Arc<Insn>>> = blocks.iter().map(|block| (block.at, block.insns.clone())).collect();
+        let by_at: IndexMap<i64, Vec<Arc<Insn>>> = blocks.iter().map(|block| (block.at, block.insns.to_vec())).collect();
         assert_eq!(by_at.len(), blocks.len(), "a block per address");
         let mut next = self.next;
         let mut fresh = || {
@@ -3569,6 +3577,17 @@ impl Selector<'_, '_, '_> {
                     continue;
                 }
                 let held = self.float(argument, at, out)?;
+                // A float or double goes to the stack where the target addresses it (`[esp]`; 16-bit addressing has no stack pointer base):
+                // the space made, then the value stored into it, as gcc does, and not stored to a cell and pushed from it.
+                if matches!(size, 4 | 8) && self.arch.object().bitness == 32 {
+                    let sp = Loc::Reg(Reg { register: Register::SP, width: 2 });
+                    let count = Loc::Imm(Imm { value: i64::from(size), width: 2, address: None });
+                    out.push(insn(at, semantics(Operation::Binary, "sub", vec![sp.clone()], vec![sp, count])));
+                    let top = Mem { through: Register::SP, disp_width: 0, ..Mem::new(None, size) };
+                    out.push(insn(at, semantics(Operation::FloatStore, "fstp", vec![Loc::Mem(top)], vec![Loc::Held(held)])));
+                    pushed += i64::from(size);
+                    continue;
+                }
                 let cell = self.float_stored(held, "fstp", size, at, out);
                 // Its highest bytes pushed first: dwords, and an extended float's last word.
                 let dwords = (0..i64::from(size) / 4).map(|dword| (dword * 4, 4));

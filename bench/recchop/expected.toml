@@ -1,16 +1,16 @@
-reason = "the 486's LEA is one clock (the table held the 386's two): a copy and an add are one lea where it costs no more; down only"
-blessed = "2026-10-08"
+reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
+blessed = "2026-10-09"
 
 [c.O2]
-instructions = 6172
+instructions = 5408
 memory_operands = 763
-code_bytes = 168
+code_bytes = 162
 data_bytes = 0
 bss_bytes = 128
 
 [c.Os]
-instructions = 6110
+instructions = 5984
 memory_operands = 953
-code_bytes = 163
+code_bytes = 158
 data_bytes = 0
 bss_bytes = 128

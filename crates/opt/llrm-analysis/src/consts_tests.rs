@@ -7,7 +7,7 @@ use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use super::{_MemoryQueries, _result, Calls, Known, division, initialized, known, masked};
-use crate::memory::{MemRef, MemoryKind, MemoryObject, Provenance, Unit};
+use crate::memory::{Addr, MemRef, MemoryKind, MemoryObject, Provenance, Unit};
 use crate::regions::tests::dos;
 use crate::testing::{DOS, function, layout, parsed, value};
 
@@ -259,7 +259,7 @@ fn test_a_fact_is_never_wider_than_the_operation_that_made_it() {
 /// A call's reach, as `alias::calls_annotated` states it.
 fn reaching(parsed: &Parsed, provenance: Provenance) -> Calls {
     let call = parsed.all(|op| matches!(op, Opcode::Call(_)))[0];
-    Calls::from_iter([(call, vec![MemRef::reach(0, provenance)])])
+    Calls::from_iter([(call, std::rc::Rc::from(vec![MemRef::reach(0, provenance)]))])
 }
 
 const AROUND_A_CALL: &str = "declare void @g()
@@ -507,9 +507,9 @@ b0:
     let (first, second) = (MemRef::of(&unit, first).unwrap(), MemRef::of(&unit, second).unwrap());
     let mut queries = _MemoryQueries::new(unit, &IndexMap::default());
     let mut slot = first.clone();
-    assert_eq!(*queries.resolve(&slot), first);
+    assert_eq!(**queries.resolve(&slot), first);
     slot = second.clone();
-    assert_eq!(*queries.resolve(&slot), second);
+    assert_eq!(**queries.resolve(&slot), second);
 }
 
 /// A float store's bits are a number in memory: an integer load of them
@@ -652,4 +652,32 @@ fn test_known_asks_each_bodys_exposed_frames_once() {
     let before = crate::frameescape::scans();
     known(&parsed.unit(), Some(&Calls::default()), None, None);
     assert_eq!(crate::frameescape::scans() - before, 0, "an access scanned its alloca's uses");
+}
+
+/// `overlaps` was keyed by a resolved reference's address, so which bucket an answer lived in, and the work of finding it, changed
+/// with ASLR: `mir hoist` varied up to 0.9% between identical compiles (#992). The key is the order the references were resolved.
+#[test]
+fn test_overlap_answers_are_keyed_by_the_order_resolved_and_not_by_address() {
+    let parsed = Parsed::new(
+        "@g = global [64 x i8] zeroinitializer
+
+define void @f() {
+b0:
+  store i32 0, ptr getelementptr (i8, ptr @g, i16 18)
+  store i32 0, ptr getelementptr (i8, ptr @g, i16 26)
+  ret void
+}
+",
+    );
+    let unit = parsed.unit();
+    let stores = parsed.all(|op| matches!(op, Opcode::Store { .. }));
+    let mut queries = _MemoryQueries::new(unit, &IndexMap::default());
+    let resolved: Vec<_> = stores.iter().map(|&inst| queries.resolve(&MemRef::of(&unit, inst).unwrap())).collect();
+    let root = resolved[0].root.expect("a global");
+    for reference in &resolved {
+        queries.may_overlap((Addr { root, disp: 0 }, 4), reference);
+    }
+    let mut keys: Vec<u64> = queries.overlaps.keys().map(|&(_, id)| id as u64).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, [0, 1], "answers keyed by an address");
 }

@@ -107,16 +107,35 @@ def chain(n: int) -> str:
     return "\n".join(out)
 
 
-AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain}
+def nest(n: int) -> str:
+    """One function of loops N deep, each bounded by a different low bits of the argument, a statement at every depth: the passes that
+    walk a loop's blocks or its nest (hoist, lsr, jumps, peephole, the allocator) meet each block once per loop around it."""
+    v = "abcd"
+    out = [PRELUDE_C + "unsigned fn(unsigned a, unsigned b, unsigned c, unsigned d) {\n    unsigned " + ", ".join(f"i{k}" for k in range(n)) + ";\n"]
+    for k in range(n):
+        pad = "    " * (k + 1)
+        x, y = v[k % 4], v[(k + 1) % 4]
+        out.append(f"{pad}for (i{k} = 0; i{k} < (({x} >> {k % 5}) & 1u) + 1u; i{k}++) {{\n{pad}    {x} = {x} * {small(k)}u + ({y} ^ i{k});\n")
+    out.append("    " * (n + 1) + "a ^= b + c;\n")
+    out += ["    " * (k + 1) + "}\n" for k in reversed(range(n))]
+    out.append("    return a ^ b ^ c ^ d;\n}\n" + _main("nest", "    return (long)fn(1u, 2u, 3u, 4u);\n"))
+    return "".join(out)
+
+
+AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain, "nest": nest}
 
 
 # --- measuring -------------------------------------------------------------------------------------------------------
 
 
 def sample(cmd: list[str], env: dict | None = None, timeout: float = 120) -> tuple[int, int, str]:
-    """(instructions:u, task-clock ns, stderr) of one run; raises on a failed compile."""
+    """(instructions:u, task-clock ns, stderr) of one run; raises on a failed compile.
+
+    The child sees no LLRM_ variable of the caller's but LLRM_BIN (and `env`'s own): LLRM_CHECK_*, LLRM_VERIFY and the like add work to
+    the step they check, and a count taken under them is not the compiler's (regparm16: 'lir peephole' read 4.5 Minstr over at every size).
+    """
     with tempfile.NamedTemporaryFile("r") as out:
-        done = subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, *cmd], capture_output=True, text=True, timeout=timeout, env={**os.environ, **(env or {})})
+        done = subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, *cmd], capture_output=True, text=True, timeout=timeout, env={**{k: v for k, v in os.environ.items() if not k.startswith("LLRM_") or k == "LLRM_BIN"}, **(env or {})})
         if done.returncode:
             said = [l for l in (done.stderr or done.stdout).splitlines() if l and not l.startswith(("[time]", "[mir]"))]
             raise RuntimeError(f"{' '.join(cmd[-1:])}: " + " | ".join(said)[:300])

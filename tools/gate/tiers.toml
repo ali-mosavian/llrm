@@ -55,6 +55,11 @@ step = "qcport"
 why = "builds and runs QCport against the all-Borland build: 100 s"
 owners = ["tools/qcport*", "tools/qcport/**", "tools/linkrecipe.py", "crates/frontends/llrm-c/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-omf/**", "crates/target/llrm-x86/**", "crates/backend/**", "crates/opt/**", "runtime/**"]
 
+[[heavy]]
+step = "measure"
+why = "compile cost (QCport and the 66 programs at -O1/-O2/-Os) and its growth with size (axes at N and 2N, and each step of the compile) against the merge-base's measurement in ~/.cache/llrm/measure: 3-8 minutes when the base is not measured yet"
+owners = ["crates/backend/**", "crates/opt/**", "crates/frontends/llrm-c/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-x86/**", "tools/compile-cost.py", "tools/measure.py", "bench/**"]
+
 # `run` always runs when code changed, on the languages the diff can affect (all, in a full tier).
 [run_languages]
 qb = ["crates/frontends/llrm-qb/**", "crates/frontends/qbfront/**", "crates/frontends/llrm-qbruntime/**", "tests/run/qb/**"]
@@ -73,6 +78,36 @@ step = "identity"
 bin = "toolchain"
 filter = "test_the_identity_gate_passes"
 
+# Source scans: tests that read the tree's source text (a ratchet: no file may gain a pattern). They guard every crate whichever crate
+# holds the test, so a diff to any source selects them in the fast tier, not only a diff to the crate that owns the test (#1057 and #1071
+# skipped llrm-mir's dense-key ratchet and main's full run went red on it). A test that reads sources and is not listed here fails
+# test_gate. `step = "integration"`: a root test binary the integration step runs on every code change anyway.
+[scan_inputs]
+paths = ["**/*.rs", "crates/ir/llrm-mir/dense-keys.txt", "tests/target_facts.baseline"]
+
+[[scan]]
+file = "crates/ir/llrm-mir/src/tests.rs"
+package = "llrm-mir"
+lib = "no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id"
+
+[[scan]]
+file = "crates/opt/llrm-transforms/tests/no_hand_solved_bounds.rs"
+package = "llrm-transforms"
+test = "no_hand_solved_bounds"
+
+[[scan]]
+file = "crates/support/llrm-support/tests/no_uncached_env_checks.rs"
+package = "llrm-support"
+test = "no_uncached_env_checks"
+
+[[scan]]
+file = "tests/seeded_maps.rs"
+step = "integration"
+
+[[scan]]
+file = "tests/target_facts.rs"
+step = "integration"
+
 # Whole binaries that are heavy: every test in them is slow.
 [whole]
 cv4 = "cv4"
@@ -85,13 +120,14 @@ build-script-reruns = "build_script_reruns"
 # CI job groups (.github/workflows/ci.yml runs one job per group that has a step to run, in parallel, after the build).
 # Every step the planner can produce is in exactly one group (a test checks).
 [groups]
-unit = ["lib", "doc", "crate-tests"]
+unit = ["lib", "doc", "crate-tests", "scans"]
 integration = ["integration", "build-script-reruns"]
 run = ["run"]
 python = ["pytest", "pytest-programs"]
 tools = ["bench", "torture"]
 identity = ["identity"]
 reference = ["turbo", "cv4", "qcport"]
+cost = ["measure"]
 
 # Tools that are not in the repository and not free to fetch. A host without one has the capability missing:
 # its [requires] steps are SKIPPED with the reason, and the LLRM_REQUIRE_* variables in `require` are unset so the
@@ -125,6 +161,7 @@ needs = [
 turbo = ["turbo"]
 cv4 = ["codeview"]
 qcport = ["qcport"]
+measure = ["perf"]
 bench = ["qb45"]
 "lang:qb" = ["qb45"]
 "bin:differential" = ["qb45"]
@@ -141,3 +178,15 @@ needs = [{ env = "QB45_DIR", default = "~/work/42-labs/mini-qb/dosbox/qb45", mar
 require = []
 # perf exits 0 and prints "<not supported>" where there is no counter: the probe reads the count.
 needs = [{ run = "perf stat -x, -e instructions:u true 2>&1 | grep -Eq '^[0-9]+,'" }]
+
+# Tolerances of tools/measure.py, which compares a branch's compile cost and growth with its merge-base's. A rise past one fails; a
+# drop is not recorded anywhere, the next branch's base has it. Set from the same build measured twice (2026-10-08): geomean within
+# 0.0001 and the worst file 0.0047 of 393; axis ratios within 0.0014; a step's own count within 2.7% (242 steps, 3 runs).
+[measure]
+geomean = 1.003      # per level, over QCport's files or the programs
+worst = 1.02         # one file
+excess = 0.01        # an axis' superlinear work (the second difference c(2N) - 3c(N) + 2c(N/2)) may rise by this much of the base's cost at 2N
+step_excess = 0.005  # a step's, of the compile's cost at 2N; the same build measured 3 times spreads D by 0.0005 of it (axes 0.0009 of theirs, 2026-10-09), so 10x above noise
+pass_slack = 1.05    # a step's cost at 2N
+linear = 2.1         # where the base read no such step: what gcc's passes reach
+high = 0.025         # a step needs this share of the compile's work to fail (the scaling_gate reads steps down to 1.5%)

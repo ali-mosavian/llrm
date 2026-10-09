@@ -52,6 +52,7 @@ class Code:
     arch: str  # x86 or msp430
     data: bytes
     publics: dict[int, str]
+    bits: int = 16  # x86's code width: 16 (real mode) or 32
 
 
 # --- OMF ---------------------------------------------------------------------
@@ -72,10 +73,10 @@ def records(data: bytes):
         at += 3 + size
 
 
-def segments(data: bytes) -> list[tuple[bytes, dict[int, str]]]:
-    """Each code segment of an OMF object, in definition order: its bytes, and
-    the public names in it by offset."""
-    lnames, classes, chunks, publics = [""], [], {}, {}
+def segments(data: bytes) -> list[tuple[bytes, dict[int, str], int]]:
+    """Each code segment of an OMF object, in definition order: its bytes, the
+    public names in it by offset, and its width in bits (SEGDEF's Use32 bit, or a 32-bit SEGDEF record)."""
+    lnames, classes, chunks, publics, widths = [""], [], {}, {}, []
     for kind, body in records(data):
         if kind == 0x96:
             at = 0
@@ -87,6 +88,7 @@ def segments(data: bytes) -> list[tuple[bytes, dict[int, str]]]:
             name, at = _index(body, at)
             klass, at = _index(body, at)
             classes.append(lnames[klass])
+            widths.append(32 if kind == 0x99 or body[0] & 1 else 16)
         elif kind in (0xA0, 0xA1):
             segment, at = _index(body, 0)
             width = 4 if kind == 0xA1 else 2
@@ -109,20 +111,23 @@ def segments(data: bytes) -> list[tuple[bytes, dict[int, str]]]:
         if klass.endswith("CODE"):
             bytes_ = chunks.get(number, {})
             code = bytes(bytes_.get(at, 0) for at in range(max(bytes_, default=-1) + 1))
-            out.append((code, publics.get(number, {})))
+            out.append((code, publics.get(number, {}), widths[number - 1]))
     return out
 
 
 def image(data: bytes) -> tuple[bytes, dict[int, str]]:
     """An OMF object's first code segment's bytes, and the public names in it by offset."""
-    return segments(data)[0]
+    code, publics, _ = segments(data)[0]
+    return code, publics
 
 
 # --- ELF ---------------------------------------------------------------------
 
 
-def _elf(data: bytes) -> list[Code]:
-    """Each executable section of a 32-bit ELF object, with its symbols."""
+def _elf(data: bytes, bits: int | None = None) -> list[Code]:
+    """Each executable section of an ELF object, with its symbols. x86 ELF is 32-bit code unless `bits` says 16: the object does not say
+    (gcc-ia16 writes 16-bit code in an ELF32 object of machine 386), and guessing from how the bytes decode picks the wrong width for
+    code that decodes either way."""
     u16 = lambda at: int.from_bytes(data[at : at + 2], "little")  # noqa: E731
     u32 = lambda at: int.from_bytes(data[at : at + 4], "little")  # noqa: E731
     machine = u16(18)
@@ -148,21 +153,21 @@ def _elf(data: bytes) -> list[Code]:
                 if name:
                     names.setdefault(shndx, {})[value] = name
     return [
-        Code(arch, data[s["offset"] : s["offset"] + s["size"]], names.get(number, {}))
+        Code(arch, data[s["offset"] : s["offset"] + s["size"]], names.get(number, {}), (bits or 32) if arch == "x86" else 16)
         for number, s in enumerate(sections)
         if s["type"] == 1 and s["flags"] & 4 and s["size"]  # PROGBITS, executable
     ]
 
 
-def images(data: bytes, procedures: list[str] | None = None) -> list[Code]:
+def images(data: bytes, procedures: list[str] | None = None, bits: int | None = None) -> list[Code]:
     """The object's code. `procedures` names an object compiled one
     procedure per segment (llrm-nib --procedure-segments), in order."""
     if data[:4] == b"\x7fELF":
-        return _elf(data)
+        return _elf(data, bits)
     found = segments(data)
     if procedures and len(procedures) == len(found):
-        return [Code("x86", code, {0: name}) for (code, _), name in zip(found, procedures)]
-    return [Code("x86", code, publics) for code, publics in found]
+        return [Code("x86", code, {0: name}, width) for (code, _, width), name in zip(found, procedures)]
+    return [Code("x86", code, publics, width) for code, publics, width in found]
 
 
 def listed(listing: Path) -> list[str]:
@@ -211,10 +216,10 @@ ENDS = (
 CALLS = (ix.FlowControl.CALL, ix.FlowControl.INDIRECT_CALL)
 
 
-def _decode_one(arch: str, code: bytes, at: int):
+def _decode_one(arch: str, code: bytes, at: int, bits: int = 16):
     if arch == "msp430":
         return msp430.decode(code, at)
-    one = ix.Decoder(16, code[at:], ip=at).decode()
+    one = ix.Decoder(bits, code[at:], ip=at).decode()
     return None if one.code == ix.Code.INVALID else one
 
 
@@ -226,7 +231,7 @@ def _target(one) -> int | None:
     return None
 
 
-def _decoded(code: bytes, entries: list[int], arch: str = "x86") -> list:
+def _decoded(code: bytes, entries: list[int], arch: str = "x86", bits: int = 16) -> list:
     """The instructions control reaches from `entries`, in address order.
 
     Following flow rather than sweeping keeps data in the code segment -- a
@@ -237,7 +242,7 @@ def _decoded(code: bytes, entries: list[int], arch: str = "x86") -> list:
     while pending:
         at = pending.pop()
         while 0 <= at < len(code) and at not in found:
-            one = _decode_one(arch, code, at)
+            one = _decode_one(arch, code, at, bits)
             if one is None:
                 break
             found[at] = one
@@ -385,12 +390,12 @@ def _named(code: Code, text: list, names: list[str] | None) -> dict[int, str]:
 
 
 def loops(data: bytes, names: list[str] | None = None, calls: bool = False,
-          procedures: list[str] | None = None) -> list[Loop]:
+          procedures: list[str] | None = None, bits: int | None = None) -> list[Loop]:
     out, seen = [], {}
     formatter = ix.Formatter(ix.FormatterSyntax.MASM)
-    for code in images(data, procedures):
+    for code in images(data, procedures, bits):
         start = MODULE_CODE if code.data[:2] == b"bl" else 0
-        text = _decoded(code.data, [start, *code.publics], code.arch)
+        text = _decoded(code.data, [start, *code.publics], code.arch, code.bits)
         named = _named(code, text, names)
         offsets = sorted(named)
         where = {one.ip: index for index, one in enumerate(text)}
@@ -417,12 +422,12 @@ def loops(data: bytes, names: list[str] | None = None, calls: bool = False,
     return out
 
 
-def procedures(data: bytes, procedures_: list[str] | None = None) -> dict[str, list]:
+def procedures(data: bytes, procedures_: list[str] | None = None, bits: int | None = None) -> dict[str, list]:
     """Each procedure's reachable instructions, in address order."""
     out: dict[str, list] = {}
-    for code in images(data, procedures_):
+    for code in images(data, procedures_, bits):
         start = MODULE_CODE if code.data[:2] == b"bl" else 0
-        text = _decoded(code.data, [start, *code.publics], code.arch)
+        text = _decoded(code.data, [start, *code.publics], code.arch, code.bits)
         named = _named(code, text, None)
         offsets = sorted(named)
         for one in text:
@@ -438,9 +443,10 @@ def main() -> None:
     parser.add_argument("--names", type=Path, help="a --dump directory naming the procedures")
     parser.add_argument("--show", action="store_true", help="print each loop's instructions")
     parser.add_argument("--calls", action="store_true", help="keep loops that call")
+    parser.add_argument("--bits", type=int, choices=(16, 32), help="the width of an ELF object's x86 code (32 unless said: gcc-ia16 objects are 16)")
     arguments = parser.parse_args()
     names = _dumped(arguments.names) if arguments.names else None
-    runs = [{one.name: one for one in loops(path.read_bytes(), names, arguments.calls)} for path in arguments.objects]
+    runs = [{one.name: one for one in loops(path.read_bytes(), names, arguments.calls, bits=arguments.bits)} for path in arguments.objects]
     for name in runs[0]:
         row = [run.get(name) for run in runs]
         sizes = "  ".join(f"{one.size:4d} {one.memory:3d}m" if one else "   -     " for one in row)

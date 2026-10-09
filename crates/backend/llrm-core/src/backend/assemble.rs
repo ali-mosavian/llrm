@@ -228,17 +228,24 @@ pub struct Machined {
 /// the function is selected again with the allocas below a hole the spill
 /// slots fill, and whichever has fewer two-byte displacements is kept.
 pub fn machined(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>) -> Result<Machined, String> {
-    let mut kept = machined_once(module, name, abi, pool, target)?;
-    // A function that calls one whose registers are known is made without that too, and the cheaper kept: what the allocator
-    // costs is an estimate, and a freer choice of registers is not always the better code.
-    if calls_known(module, name, target.facts) {
+    let first = staged(module, name, abi, pool, target, 0)?;
+    let mut kept = machined_once(module, name, abi, pool, target, first.clone())?;
+    // With -Omax, a function that calls one whose registers are known is made without that too, and the cheaper kept: what the
+    // allocator costs is an estimate, and a freer choice of registers is not always the better code. The facts won in 4% of
+    // 947 such functions (0.3% of their cost), all in 6 of them.
+    if target.cpu.exhaustive && calls_known(module, name, target.facts) {
         let none = calleefacts::CalleeFacts::none();
-        let plain = machined_once(module, name, abi, pool, &Target { facts: &none, ..*target })?;
-        // Its own cost leaves the pushes and pops of the registers it saves out: they are the frame's, made after.
-        let priced = |made: &Machined| cost(made, target).map(|one| one + saves(made) as f64 * 2.0);
-        if let Some((with, without)) = priced(&kept).zip(priced(&plain)) {
-            if without < with {
-                kept = plain;
+        let plain_target = Target { facts: &none, ..*target };
+        let again = staged(module, name, abi, pool, &plain_target, 0)?;
+        // Selected the same without the facts, it is made the same: only the callee facts reach the selector.
+        if !again.same_as(&first) {
+            let plain = machined_once(module, name, abi, pool, &plain_target, again)?;
+            // Its own cost leaves the pushes and pops of the registers it saves out: they are the frame's, made after.
+            let priced = |made: &Machined| route_cost(made, target);
+            if let Some((with, without)) = priced(&kept).zip(priced(&plain)) {
+                if without < with {
+                    kept = plain;
+                }
             }
         }
     }
@@ -274,8 +281,9 @@ fn calls_known(module: &Module, name: &str, facts: &calleefacts::CalleeFacts) ->
     })
 }
 
-fn machined_once(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>) -> Result<Machined, String> {
-    let (first, frame) = timed("candidate first frame", || cheaper(module, name, abi, pool, target, 0))?;
+fn machined_once(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, first_stage: Staged) -> Result<Machined, String> {
+    MACHINED.with(|count| count.set(count.get() + 1));
+    let (first, frame) = timed("candidate first frame", || cheaper(&first_stage, module, name, pool, target))?;
     let spilled = frame.floor + first.reserve;
     let far = far_frame(&first.body);
     if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
@@ -284,8 +292,8 @@ fn machined_once(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<P
     // The second layout is made from the first run's frame, not by running the backend again; `LLRM_CHECK_FRAME=1` runs it again
     // beside, and the two must be the same function. A frame that cannot be moved keeps its first layout.
     let laid = timed("frame laid again", || crate::backend::relayout::laid_again(&first, &frame, spilled));
-    if std::env::var_os("LLRM_CHECK_FRAME").is_some() {
-        let (again, _) = cheaper(module, name, abi, pool, target, spilled)?;
+    if llrm_support::env_set("LLRM_CHECK_FRAME") {
+        let (again, _) = cheaper(&staged(module, name, abi, pool, target, spilled)?, module, name, pool, target)?;
         match &laid {
             Some((laid, _)) => {
                 if let Some(difference) = crate::backend::relayout::difference(laid, &again) {
@@ -305,34 +313,106 @@ fn machined_once(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<P
 /// one that costs less is kept. The spiller decides on the general registers alone, so where
 /// the allocator's pressure is elsewhere (segment registers, x87 and fixed-register glue) its
 /// spill code can be on top of what the allocator does anyway.
-fn cheaper(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, hole: i64) -> Result<(Machined, frame::Frame), String> {
+fn cheaper(staged: &Staged, module: &Module, name: &str, pool: &Rc<RefCell<Pool>>, target: &Target<'_>) -> Result<(Machined, frame::Frame), String> {
     // `LLRM_CANDIDATES=spiller|allocator` tries one route alone, to see what each makes.
     let candidates = match std::env::var("LLRM_CANDIDATES").as_deref() {
         Ok("spiller") => Candidates::SpillerOnly,
         Ok("allocator") => Candidates::AllocatorOnly,
         _ => CANDIDATES.with(std::cell::Cell::get),
     };
-    if candidates == Candidates::AllocatorOnly {
-        return timed("candidate allocator alone", || phased(module, name, abi, pool, target, hole, false, true)).map(|(made, _)| made);
+    // Without the search the allocator is run once, as gcc's IRA is at -O0 (`fast_allocation`, no conflicts built): one route.
+    if candidates == Candidates::AllocatorOnly || !target.cpu.search {
+        return timed("candidate allocator alone", || phased(staged, module, name, pool, target, false, true)).map(|(made, _)| made);
     }
-    let (spilled, ran) = timed("candidate spiller", || phased(module, name, abi, pool, target, hole, true, true))?;
+    if !target.cpu.exhaustive && candidates == Candidates::Both {
+        return directed(staged, module, name, pool, target);
+    }
+    let (spilled, ran) = timed("candidate spiller", || phased(staged, module, name, pool, target, true, true))?;
     if !ran.changed() || candidates == Candidates::SpillerOnly {
         return Ok(spilled);
     }
-    let (allocator_alone, _) = timed("candidate allocator alone", || phased(module, name, abi, pool, target, hole, false, true))?;
-    let (kept, from_spiller) = match timed("candidate cost", || (cost(&spilled.0, target), cost(&allocator_alone.0, target))) {
-        (Some(with), Some(without)) if without < with => (allocator_alone, false),
-        _ => (spilled, true),
-    };
-    // Where code bytes are the measure, a loop admitted because its trips are fewer, on a tie in the bytes the spiller
-    // counts, is checked against the encoded code: the loads it moved to the entry are not all it changed.
+    let (allocator_alone, _) = timed("candidate allocator alone", || phased(staged, module, name, pool, target, false, true))?;
+    llrm_support::debug!("candidates", "{name}: spiller {:?}, allocator alone {:?}", route_cost(&spilled.0, target), route_cost(&allocator_alone.0, target));
+    let (kept, from_spiller) = if timed("candidate cost", || cheaper_route(&allocator_alone.0, &spilled.0, target)) { (allocator_alone, false) } else { (spilled, true) };
     if from_spiller && ran.ties() {
-        let (plain, _) = timed("candidate plain", || phased(module, name, abi, pool, target, hole, true, false))?;
-        if timed("candidate cost", || cost(&plain.0, target).zip(cost(&kept.0, target))).is_some_and(|(plain, admitted)| plain < admitted) {
-            return Ok(plain);
-        }
+        return admitted_or_plain(staged, module, name, pool, target, kept);
     }
     Ok(kept)
+}
+
+/// The share of a function's work that is frame or spill traffic below which the spiller cannot help: it only moves that
+/// traffic. 4422 functions of QCport, the bench and the 66 programs: the cheaper of the two routes was the allocator's alone
+/// in all but 0.006% (log-mean) of the 23% with none, and the same output on every bench row below this share.
+const SPILLER_TRAFFIC: f64 = 0.005;
+
+/// What `cheaper` does below -Omax (LLVM allocates once; GCC runs its reload pass only on what the allocator left in memory):
+/// the allocator alone, and the spiller's route too only where the allocator left traffic through the frame worth removing.
+fn directed(staged: &Staged, module: &Module, name: &str, pool: &Rc<RefCell<Pool>>, target: &Target<'_>) -> Result<(Machined, frame::Frame), String> {
+    let (alone, _) = timed("candidate allocator alone", || phased(staged, module, name, pool, target, false, true))?;
+    let busy = crate::analysis::frequency::Frequency::of(&alone.0.body);
+    let (mut traffic, mut all) = (0.0, 0.0);
+    for block in &alone.0.body.blocks {
+        // Where bytes are the measure every instruction counts once, as `cost` does.
+        let weight = if target.cpu.size { 1.0 } else { busy.block(block.at) };
+        for one in block.insns.iter().filter(|one| masm::prints(one)) {
+            all += weight;
+            let frame = one.what.as_ref().is_some_and(|what| what.dests.iter().chain(&what.sources).any(|place| matches!(place, crate::model::ir::Loc::Mem(mem) if mem.addr.is_some_and(|addr| addr.space == Space::Frame))));
+            if one.spill_reload || one.spill_store || frame {
+                traffic += weight;
+            }
+        }
+    }
+    if traffic < SPILLER_TRAFFIC * all {
+        return Ok(alone);
+    }
+    let Some((spilled, ran)) = timed("candidate spiller", || phased_to(staged, module, name, pool, target, true, true, true))? else { return Ok(alone) };
+    llrm_support::debug!("candidates", "{name}: spiller {:?} / {:?}, allocator alone {:?} / {:?}", route_cost(&spilled.0, target), other_cost(&spilled.0, target), route_cost(&alone.0, target), other_cost(&alone.0, target));
+    if timed("candidate cost", || cheaper_route(&alone.0, &spilled.0, target)) {
+        return Ok(alone);
+    }
+    let kept = spilled;
+    if ran.ties() {
+        return admitted_or_plain(staged, module, name, pool, target, kept);
+    }
+    Ok(kept)
+}
+
+/// Where code bytes are the measure, a loop admitted because its trips are fewer, on a tie in the bytes the spiller
+/// counts, is checked against the encoded code: the loads it moved to the entry are not all it changed.
+fn admitted_or_plain(staged: &Staged, module: &Module, name: &str, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, admitted: (Machined, frame::Frame)) -> Result<(Machined, frame::Frame), String> {
+    let (plain, _) = timed("candidate plain", || phased(staged, module, name, pool, target, true, false))?;
+    if timed("candidate cost", || route_cost(&plain.0, target).zip(route_cost(&admitted.0, target))).is_some_and(|(plain, admitted)| plain < admitted) {
+        return Ok(plain);
+    }
+    Ok(admitted)
+}
+
+thread_local! {
+    static MACHINED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has made a function through the machine phases, one candidate each, for a test of how many
+/// a function takes.
+pub fn machinings() -> usize {
+    MACHINED.with(std::cell::Cell::get)
+}
+
+thread_local! {
+    static PHASED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+thread_local! {
+    static SELECTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has selected a function's instructions, for a test that the routes share one selection.
+pub fn selections() -> usize {
+    SELECTED.with(std::cell::Cell::get)
+}
+
+/// How many routes through the machine phases this thread has run.
+pub fn routes() -> usize {
+    PHASED.with(std::cell::Cell::get)
 }
 
 /// Which routes through the machine phases `machined` tries.
@@ -356,11 +436,73 @@ pub fn trying<T>(candidates: Candidates, run: impl FnOnce() -> T) -> T {
     done
 }
 
+/// What a route's function costs with the prologue and epilogue its registers cause: `cost` leaves out the pushes and pops of
+/// the registers it saves, which are the frame's, made after, and a route that uses more registers pays more of them (nbody_fixed
+/// -Os: the spiller's route was smaller by the count and larger by 17 bytes, and 7% slower).
+fn route_cost(made: &Machined, target: &Target<'_>) -> Option<f64> {
+    cost(made, target).map(|one| one + saves(made) as f64 * 2.0)
+}
+
+/// What a finished function costs by the other measure: the instructions and memory operands it is expected to execute where
+/// bytes are the measure, else its bytes.
+fn other_cost(made: &Machined, target: &Target<'_>) -> Option<f64> {
+    if target.cpu.size {
+        executed::work(&made.body)
+    } else {
+        made.body.insns().iter().filter_map(|one| one.what.as_ref()).map(|what| select::priced_in(made.body.bits, what, 0, None, false, false, None).map(|code| code.code.len() as f64)).sum()
+    }
+}
+
+/// Whether `candidate` is strictly cheaper than `kept`: by the measure the target optimizes for, and where that ties or cannot
+/// be worked out for either (an instruction with no price), by the other. The two cost the same by bytes in sieve -Os and
+/// the spiller's route was kept: 19% more clocks; nbody_fixed -Os had no price for either, and it was kept: 7% more clocks and
+/// 17 bytes more.
+fn cheaper_route(candidate: &Machined, kept: &Machined, target: &Target<'_>) -> bool {
+    cheaper_by((route_cost(candidate, target), other_cost(candidate, target)), (route_cost(kept, target), other_cost(kept, target)))
+}
+
+/// `cheaper_route` of the costs by the measure the target optimizes for and by the other.
+fn cheaper_by(candidate: (Option<f64>, Option<f64>), kept: (Option<f64>, Option<f64>)) -> bool {
+    match (candidate.0, kept.0) {
+        (Some(new), Some(old)) if new != old => new < old,
+        _ => candidate.1.zip(kept.1).is_some_and(|(new, old)| new < old),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cheaper_by;
+
+    /// The spiller's route was kept unless the allocator alone was cheaper by bytes: where bytes tied (sieve -Os) or neither had
+    /// a price (nbody_fixed -Os) the spiller's was kept whatever the other measure said, and ran 19% and 7% slower.
+    #[test]
+    fn test_a_tie_or_an_unpriced_route_is_decided_by_the_other_measure() {
+        // Tied on the measure of the target: the other decides.
+        assert!(cheaper_by((Some(142.0), Some(1.0)), (Some(142.0), Some(2.0))));
+        assert!(!cheaper_by((Some(142.0), Some(2.0)), (Some(142.0), Some(1.0))));
+        // No price for either: the other decides.
+        assert!(cheaper_by((None, Some(1.0)), (None, Some(2.0))));
+        // A strictly cheaper one by the measure of the target wins whatever the other says.
+        assert!(cheaper_by((Some(141.0), Some(9.0)), (Some(142.0), Some(1.0))));
+        assert!(!cheaper_by((Some(143.0), Some(0.0)), (Some(142.0), Some(1.0))));
+        // Equal on both: the kept one stays.
+        assert!(!cheaper_by((Some(1.0), Some(1.0)), (Some(1.0), Some(1.0))));
+    }
+}
+
 /// What a finished function costs: its encoded bytes where the target optimizes for size,
 /// else the instructions and memory operands it is expected to execute per call.
 fn cost(made: &Machined, target: &Target<'_>) -> Option<f64> {
     if target.cpu.size {
-        made.body.insns().iter().filter_map(|one| one.what.as_ref()).map(|what| select::priced_in(made.body.bits, what, 0, None, false, false, None).map(|code| code.code.len() as f64)).sum()
+        made.body.insns().iter().filter_map(|one| one.what.as_ref()).map(|what| {
+            let priced = select::priced_in(made.body.bits, what, 0, None, false, false, None).map(|code| code.code.len() as f64);
+            // A function with one instruction the encoder cannot price is priced as nothing: its routes compare as unpriced and the
+            // first kept (nbody_fixed -Os: `lea esi, [ebx+ebx*2]` had no price).
+            if priced.is_none() && llrm_support::debug::verifying() {
+                panic!("@{}: no byte price for {what:?}", made.body.name);
+            }
+            priced
+        }).sum()
     } else {
         executed::work(&made.body)
     }
@@ -386,22 +528,81 @@ fn far_frame(body: &LirBody) -> usize {
 /// `machined` once through the machine phases, with the spiller or not and, if so, letting a loop's entry load what the loop reads or
 /// not (`admission`); and what the spiller settled.
 #[allow(clippy::too_many_arguments)]
-fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, hole: i64, spilling: bool, admission: bool) -> Result<((Machined, frame::Frame), Rc<ssaspill::Run>), String> {
-    let run = ssaspill::Run::new(admission);
+fn phased(staged: &Staged, module: &Module, name: &str, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, spilling: bool, admission: bool) -> Result<((Machined, frame::Frame), Rc<ssaspill::Run>), String> {
+    Ok(phased_to(staged, module, name, pool, target, spilling, admission, false)?.expect("a route that runs to its end"))
+}
+
+/// A function selected and its frame made: what every route through the machine phases starts from, as the selector's output
+/// does not depend on the route (the spiller, admission) but on the hole and the callee facts alone.
+#[derive(Clone)]
+struct Staged {
+    body: LirBody,
+    frame: frame::Frame,
+    convention: isel::Convention,
+    calls: IndexMap<i64, String>,
+    inline: IndexMap<i64, Vec<u8>>,
+    inline_places: IndexMap<i64, Vec<(usize, i64, i64)>>,
+    far: BTreeSet<i64>,
+    pops: IndexMap<i64, i64>,
+    landing: Option<i64>,
+    registers: llrm_target::FrameRegisters,
+    /// The register classes the routes allocate from: the target's, with the frame register a value register where the function needs none.
+    classes: Rc<RegisterClasses>,
+}
+
+impl Staged {
+    /// Whether every route from `other` would make what the routes from this make.
+    fn same_as(&self, other: &Staged) -> bool {
+        self.body == other.body
+            && self.frame == other.frame
+            && format!("{:?}", self.convention) == format!("{:?}", other.convention)
+            && self.calls == other.calls
+            && self.inline == other.inline
+            && self.inline_places == other.inline_places
+            && self.far == other.far
+            && self.pops == other.pops
+            && self.landing == other.landing
+            && format!("{:?}", self.registers) == format!("{:?}", other.registers)
+    }
+}
+
+/// `name` selected with `hole` bytes left above the allocas, and its frame made.
+fn staged(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, hole: i64) -> Result<Staged, String> {
+    SELECTED.with(|count| count.set(count.get() + 1));
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
     let selected = timed("isel", || isel::selected_with(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, target.selection, target.arch, zeroed, hole, target.facts));
     let Selected { body, convention, calls, inline, inline_places, far, pops, depth, extents, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
-    let registers = llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
-    let mut body = if llrm_support::debug::verifying() { timed("lir verify", || flow::verified(body, "isel", true)).map_err(|error| error.0)? } else { body };
+    let mut registers = llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
+    // LLVM's `hasFP`, before allocation: a function that can do without its frame register has it as a value register.
+    let classes: Rc<RegisterClasses> = if crate::backend::framefree::without_frame_register(&body, &registers, &pops.iter().map(|(at, bytes)| (*at, *bytes)).collect(), !inline.is_empty(), false, landing.is_some()) {
+        registers.free = true;
+        registers.saved.push((registers.pointer, registers.pointer));
+        Rc::new(target.classes.with_frame_free())
+    } else {
+        Rc::clone(target.classes)
+    };
+    let body = if llrm_support::debug::verifying() { timed("lir verify", || flow::verified(body, "isel", true)).map_err(|error| error.0)? } else { body };
     let mut frame = timed("lir frame", || frame::of(&body, Some(&calls), target.runtime, None)).map_err(|error| error.0)?;
     frame.floor = frame.floor.min(-depth);
     frame.hole = hole;
     frame.extents = extents;
-    let mut body = frame.tagged(&body).map_err(|error| error.0)?;
-    let frame = Rc::new(RefCell::new(frame));
+    let body = frame.tagged(&body).map_err(|error| error.0)?;
+    Ok(Staged { body, frame, convention, calls, inline, inline_places, far, pops, landing, registers, classes })
+}
+
+/// `phased`; or, where `until_changed`, none if the spiller left the body as it was: the rest of that route is the
+/// allocator alone's, which the caller has.
+#[allow(clippy::too_many_arguments)]
+fn phased_to(staged: &Staged, module: &Module, name: &str, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, spilling: bool, admission: bool, until_changed: bool) -> Result<Option<((Machined, frame::Frame), Rc<ssaspill::Run>)>, String> {
+    PHASED.with(|count| count.set(count.get() + 1));
+    let run = ssaspill::Run::new(admission);
+    let Staged { calls, inline, inline_places, far, pops, landing, registers, convention, classes, .. } = staged.clone();
+    let classes = &classes;
+    let mut body = staged.body.clone();
+    let frame = Rc::new(RefCell::new(staged.frame.clone()));
     let pinned = body.pins.clone();
     let mut in_ssa = true;
-    for mut phase in flow::machine_with(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments, target.classes, spilling.then(|| Rc::clone(&run)), target.selection.rules(), &registers)? {
+    for mut phase in flow::machine_with(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments, classes, spilling.then(|| Rc::clone(&run)), target.selection.rules(), &registers)? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {
             continue;
@@ -410,17 +611,20 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
             in_ssa = false;
         }
         let kept = (!body.notes.is_empty()).then(|| body.clone());
-        body = flow::checked(body, phase.as_mut(), in_ssa, target.classes).map_err(|error| match error {
+        body = flow::checked(body, phase.as_mut(), in_ssa, classes).map_err(|error| match error {
             flow::Checked::Refused(raised) => format!("@{name}: {}", raised.message),
             flow::Checked::Malformed(malformed) => format!("@{name}: {}", malformed.0),
         })?;
         if let Some(before) = &kept {
             body = body.with_notes_kept(before).with_defs_kept(before);
         }
+        if until_changed && phase.class_name() == "SsaSpill" && !run.changed() {
+            return Ok(None);
+        }
         if phase.class_name() == "PhiElimination" {
             body = body.with_phi_copies_noted();
         }
-        if std::env::var_os("ISEL_DUMP").is_some() {
+        if llrm_support::env_set("ISEL_DUMP") {
             println!("{}", crate::backend::lirtext::lir_stage(phase.class_name(), &[(body.name.clone(), body.clone())]));
         }
     }
@@ -433,7 +637,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
         }
         None => (body, None),
     };
-    Ok(((Machined { body, reserve, calls, inline, inline_places, far, pops, popped: convention.popped, registers, landing }, frame), run))
+    Ok(Some(((Machined { body, reserve, calls, inline, inline_places, far, pops, popped: convention.popped, registers, landing }, frame), run)))
 }
 
 /// `body` with its landing pad, the block `marker` starts, laid out last:

@@ -34,7 +34,7 @@ use llrm_mir::passes::{Analyses, Analysis};
 
 use crate::alias::PointsTo;
 use crate::manager::Pointers;
-use crate::memory::{MemRef, MemoryKind, MemoryObject, Unit};
+use crate::memory::{MemRef, MemoryKind, ObjectRef, Unit};
 
 /// A test for the cells no call and no exit of `unit`'s function can
 /// observe: each slice of the reference's provenance lies inside a frame
@@ -46,11 +46,11 @@ pub fn private<'a>(unit: Unit<'a>, pointers: &'a PointsTo) -> impl Fn(&MemRef) -
 }
 
 /// `private`, `published` being the manager's `Published`.
-pub fn private_of<'a>(unit: Unit<'a>, pointers: &'a PointsTo, published: &'a BTreeSet<MemoryObject>) -> impl Fn(&MemRef) -> bool + 'a {
+pub fn private_of<'a>(unit: Unit<'a>, pointers: &'a PointsTo, published: &'a BTreeSet<ObjectRef>) -> impl Fn(&MemRef) -> bool + 'a {
     _private(unit, pointers, Cow::Borrowed(published))
 }
 
-fn _private<'a>(unit: Unit<'a>, pointers: &'a PointsTo, published: Cow<'a, BTreeSet<MemoryObject>>) -> impl Fn(&MemRef) -> bool + 'a {
+fn _private<'a>(unit: Unit<'a>, pointers: &'a PointsTo, published: Cow<'a, BTreeSet<ObjectRef>>) -> impl Fn(&MemRef) -> bool + 'a {
     move |reference: &MemRef| {
         let provenance = reference.provenance.clone().or_else(|| pointers.reference(&unit, reference));
         provenance.is_some_and(|provenance| {
@@ -69,7 +69,7 @@ fn _private<'a>(unit: Unit<'a>, pointers: &'a PointsTo, published: Cow<'a, BTree
 pub struct Published;
 
 impl Analysis for Published {
-    type Result = Result<BTreeSet<MemoryObject>, String>;
+    type Result = Result<BTreeSet<ObjectRef>, String>;
     const NAME: &'static str = "published";
 
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
@@ -87,7 +87,7 @@ impl Analysis for Published {
 ///
 /// So is what a call may read through an argument: `nocapture` keeps the
 /// address from escaping, not the callee from reading it during the call.
-fn _published(unit: &Unit, pointers: &PointsTo) -> BTreeSet<MemoryObject> {
+fn _published(unit: &Unit, pointers: &PointsTo) -> BTreeSet<ObjectRef> {
     let mut published = BTreeSet::new();
     for (_, inst) in unit.function.walk() {
         for argument in crate::alias::read_arguments(unit, inst) {
@@ -117,7 +117,7 @@ fn _published(unit: &Unit, pointers: &PointsTo) -> BTreeSet<MemoryObject> {
             }
         })
         .collect();
-    let objects = |value: &ValueId| -> Vec<MemoryObject> {
+    let objects = |value: &ValueId| -> Vec<ObjectRef> {
         pointers.values.get(value).into_iter().flat_map(|provenance| provenance.slices.iter()).map(|one| one.object.clone()).filter(|one| one.kind != MemoryKind::Unknown).collect()
     };
     loop {

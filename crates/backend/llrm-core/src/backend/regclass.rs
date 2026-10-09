@@ -495,7 +495,8 @@ mod tests {
                 make(1, vec![entry_segment], vec![], semantics(Operation::Move, "mov", vec![held(entry_segment)], vec![Loc::Imm(crate::model::ir::Imm { value: 1, width: 2, address: None })], None)),
                 make(2, vec![base], vec![], semantics(Operation::Move, "mov", vec![held(base)], vec![Loc::Imm(crate::model::ir::Imm { value: 2, width: 2, address: None })], None)),
                 make(3, vec![], vec![], semantics(Operation::Jump, "jmp", vec![], vec![], Some(1))),
-            ],
+            ]
+            .into(),
             succ: vec![1],
             phis: vec![],
             cold: false,
@@ -505,12 +506,13 @@ mod tests {
             insns: vec![
                 make(4, vec![loaded], vec![base, segment], semantics(Operation::Move, "mov", vec![held(loaded)], vec![Loc::Mem(cell)], None)),
                 make(5, vec![], vec![], semantics(Operation::Branch, "jne", vec![], vec![], Some(1))),
-            ],
+            ]
+            .into(),
             succ: vec![1, 2],
             phis: vec![Phi { result: segment, incoming: vec![(0, entry_segment), (1, segment)] }],
             cold: false,
         };
-        let exit = LirBlock { at: 2, insns: vec![make(6, vec![], vec![loaded], semantics(Operation::Return, "ret", vec![], vec![], None))], succ: vec![], phis: vec![], cold: false };
+        let exit = LirBlock { at: 2, insns: vec![make(6, vec![], vec![loaded], semantics(Operation::Return, "ret", vec![], vec![], None))].into(), succ: vec![], phis: vec![], cold: false };
         let body = LirBody::new("f", 0, vec![entry, looped, exit], IndexMap::default(), IndexMap::default());
         let segments = &target::BUILT_IN;
         let webs = classes(&body, &BTreeSet::new(), segments, &crate::backend::classes::RegisterClasses::m16());
