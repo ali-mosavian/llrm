@@ -3439,3 +3439,44 @@ fn test_flag_liveness_over_a_loop_is_not_worked_by_rounds() {
     let worked = crate::analysis::dataflow::WORKED.with(std::cell::Cell::get);
     assert!(worked <= 4 * blocks as usize, "{worked} blocks worked for a loop of {blocks}");
 }
+
+/// Every block's transfer was worked again each round until no entry changed, and a fact crosses one block a round: a loop of 30
+/// blocks took 30 rounds of 30 transfers (a nest 8 deep: a quarter of lir peephole). A block is worked again when its entry changed.
+#[test]
+fn test_spill_forwarding_works_a_block_again_only_when_its_entry_changed() {
+    let register = rl(Register::BX, 2);
+    let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-32), 2) });
+    let blocks = 30;
+    let mut list = Vec::new();
+    for at in 1..=blocks {
+        let store = insn(at, Some((at, at)), Some(sem(Operation::Move, "mov", vec![cell.clone()], vec![register.clone()])), vec![], vec![]);
+        let next = if at == blocks { vec![1, blocks + 1] } else { vec![at + 1] };
+        list.push(block(at, if at == 1 { vec![Arc::new(store)] } else { vec![] }, next));
+    }
+    list.push(block(blocks + 1, vec![], vec![]));
+    let input = body("loop", 1, list);
+    crate::analysis::dataflow::WORKED.with(|count| count.set(0));
+    spillforward::forwarded(&input);
+    let worked = crate::analysis::dataflow::WORKED.with(std::cell::Cell::get);
+    assert!(worked <= 4 * blocks as usize, "{worked} transfers for a loop of {blocks} blocks");
+}
+
+/// Copy propagation worked every block again each round until no exit changed: a loop of 30 blocks took 30 rounds of 30 blocks.
+/// A block is worked again when a parent's exit changed.
+#[test]
+fn test_copy_propagation_works_a_block_again_only_when_a_parent_changed() {
+    let (ax, bx) = (rl(Register::AX, 2), rl(Register::BX, 2));
+    let blocks = 30;
+    let mut list = Vec::new();
+    for at in 1..=blocks {
+        let copy = insn(at, Some((at, at)), Some(sem(Operation::Move, "mov", vec![bx.clone()], vec![ax.clone()])), vec![], vec![]);
+        let next = if at == blocks { vec![1, blocks + 1] } else { vec![at + 1] };
+        list.push(block(at, if at == 1 { vec![Arc::new(copy)] } else { vec![] }, next));
+    }
+    list.push(block(blocks + 1, vec![], vec![]));
+    let input = body("loop", 1, list);
+    crate::analysis::dataflow::WORKED.with(|count| count.set(0));
+    crate::backend::copyprop::forwarded(&input);
+    let worked = crate::analysis::dataflow::WORKED.with(std::cell::Cell::get);
+    assert!(worked <= 4 * blocks as usize, "{worked} blocks worked for a loop of {blocks}");
+}

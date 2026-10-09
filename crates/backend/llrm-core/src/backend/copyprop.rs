@@ -238,6 +238,10 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
         let Some((writes, copies, ..)) = &recipes[&id(one)] else {
             return Relations::new();
         };
+        // An instruction that copies nothing and writes no lane a relation names leaves the relations as they were.
+        if copies.is_empty() && !directed.iter().any(|(dest, source)| writes.contains(dest) || writes.contains(source)) {
+            return directed.clone();
+        }
         let before: HashMap<Lane, Lane> = directed.iter().copied().collect();
 
         let oldest = |lane: Lane| -> Lane {
