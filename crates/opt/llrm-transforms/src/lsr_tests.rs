@@ -1998,7 +1998,7 @@ fn test_a_difference_is_one_sub_from_a_copy_of_the_minuend() {
     let mut machine = Tuned { two_address: true, ..target() };
     machine.address_forms.truncate(1);
     let room = crate::spill::Room { registers: 6, across_call: 2, two_address: true, spaces: llrm_x86_m16::spaces(), ..Default::default() };
-    let target = super::Target { machine: &machine, costs: machine.costs.clone(), room, forms: machine.address_forms.clone() };
+    let target = super::Target { machine: &machine, costs: machine.costs.clone(), room, forms: machine.address_forms.clone(), bounds: super::Bounds::NONE };
     let costs = &machine.costs;
     assert_eq!(super::_scaled(&target, &BigInt::from(-1), true), (0, true), "`rest - r`: a sub from a copy of rest");
     assert_eq!(super::_scaled(&target, &BigInt::from(-1), false), (costs.add + costs.r#move, false), "`-r`: a negation of a copy");
@@ -2098,4 +2098,55 @@ fn test_a_set_of_counters_is_priced_once_however_often_the_search_meets_it() {
     same(&text, TRIPS);
     let (asked, priced) = super::TOTALS.with(std::cell::Cell::get);
     assert!(asked > 0 && priced < asked, "asked {asked} sets, priced {priced}");
+}
+
+/// `text` through `Lsr` under `bounds`, printed.
+fn bounded(text: &str, bounds: super::Bounds) -> String {
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.add(Lsr { bounds, ..Lsr::default() });
+    manager.run_module(&mut module, Rc::new(target())).unwrap();
+    printed(&module)
+}
+
+fn dot() -> String {
+    program(&[("a", "i16", 2), ("b", "i16", 2)], "i32", DOT).replace("br label %l2.back\n\nl2.back:\n  br label %l1", "br label %l1").replace("%l2.back ]", "%l2 ]")
+}
+
+/// gcc leaves a loop of more groups of uses than `iv-max-considered-uses` as it is (it gives up before choosing). Past the
+/// bound lsr rewrote it all the same: 200 uses took 40 G instructions to choose counters for.
+#[test]
+fn test_a_loop_of_more_groups_than_the_bound_is_left_as_it_is() {
+    let text = dot();
+    let whole = bounded(&text, super::Bounds::NONE);
+    assert_ne!(whole, printed(&parsed(&format!("{DOS}{text}"))), "premise: lsr changes this loop");
+    assert_eq!(bounded(&text, super::Bounds { groups: 1, ..super::Bounds::NONE }), printed(&parsed(&format!("{DOS}{text}"))));
+}
+
+/// Past `iv-consider-all-candidates-bound` a use is priced from the important candidates and its own, not from every candidate.
+#[test]
+fn test_past_the_candidate_bound_a_use_is_priced_from_its_own_candidates_only() {
+    let text = dot();
+    super::PRICED.with(|priced| priced.set(0));
+    bounded(&text, super::Bounds::NONE);
+    let all = super::PRICED.with(std::cell::Cell::get);
+    super::PRICED.with(|priced| priced.set(0));
+    bounded(&text, super::Bounds { all_candidates: 1, ..super::Bounds::NONE });
+    let related = super::PRICED.with(std::cell::Cell::get);
+    assert!(related < all, "{related} pairs priced of {all}");
+}
+
+/// Past the candidate bound the search replaces a candidate once, only where no one added or removed lowers the cost, and
+/// never one serving more uses than `iv-always-prune-cand-set-bound`: it priced every swap of every step before.
+#[test]
+fn test_past_the_candidate_bound_the_search_prices_fewer_sets() {
+    let text = dot();
+    super::TOTALS.with(|counts| counts.set((0, 0)));
+    bounded(&text, super::Bounds::NONE);
+    let (_, whole) = super::TOTALS.with(std::cell::Cell::get);
+    super::TOTALS.with(|counts| counts.set((0, 0)));
+    bounded(&text, super::Bounds { all_candidates: 1, always_prune: 1, ..super::Bounds::NONE });
+    let (_, within) = super::TOTALS.with(std::cell::Cell::get);
+    assert!(within < whole, "{within} sets priced of {whole}");
 }

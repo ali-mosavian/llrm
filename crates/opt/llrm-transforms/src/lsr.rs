@@ -47,6 +47,8 @@ use crate::{dead, profit, rotate};
 #[derive(Default)]
 pub struct Lsr {
     pub size: bool,
+    /// gcc's ivopts limits (`Bounds::GCC`); -Omax searches without them.
+    pub bounds: Bounds,
 }
 
 impl FunctionPass for Lsr {
@@ -56,7 +58,7 @@ impl FunctionPass for Lsr {
 
     fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        if reduced(unit, analyses, &outer, self.size) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if reduced(unit, analyses, &outer, self.size, self.bounds) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 
@@ -64,6 +66,8 @@ impl FunctionPass for Lsr {
 thread_local! {
     /// `total` asked and `total_of` worked out, for the test that a set is priced once.
     pub static TOTALS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    /// (site, candidate) pairs priced, for the test that a bound leaves the unrelated unpriced.
+    pub static PRICED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// What the target says a loop's choice may cost.
@@ -72,6 +76,30 @@ struct Target<'a> {
     costs: OperationCosts,
     room: Room,
     forms: Vec<AddressForm>,
+    bounds: Bounds,
+}
+
+/// gcc's ivopts parameters (tree-ssa-loop-ivopts.cc), and what each does past its bound.
+#[derive(Clone, Copy, Debug)]
+pub struct Bounds {
+    /// `iv-max-considered-uses`: a loop of more groups of uses than this is left as it is.
+    pub groups: usize,
+    /// `iv-consider-all-candidates-bound`: past this many candidates a use is priced only from the important ones and its own.
+    pub all_candidates: usize,
+    /// `iv-always-prune-cand-set-bound`: a candidate serving more uses than this is not replaced, and replacing is tried only
+    /// where no one candidate added or removed lowers the cost, once (`iv_ca_replace`).
+    pub always_prune: usize,
+}
+
+impl Default for Bounds {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+impl Bounds {
+    pub const GCC: Self = Self { groups: 250, all_candidates: 40, always_prune: 10 };
+    pub const NONE: Self = Self { groups: usize::MAX, all_candidates: usize::MAX, always_prune: usize::MAX };
 }
 
 /// What may take a register in a loop: a value it has, or one a choice
@@ -88,8 +116,8 @@ enum Resident {
 }
 
 /// Each loop's counters chosen, innermost first; whether any changed.
-pub fn reduced(unit: &mut Unit, analyses: &Analyses, outer: &Outer, size: bool) -> bool {
-    let target = Target { machine: outer.target(), costs: profit::costs(outer), room: profit::registers(outer), forms: outer.target().address_forms() };
+pub fn reduced(unit: &mut Unit, analyses: &Analyses, outer: &Outer, size: bool, bounds: Bounds) -> bool {
+    let target = Target { machine: outer.target(), costs: profit::costs(outer), room: profit::registers(outer), forms: outer.target().address_forms(), bounds };
     let mut done = BTreeSet::<i64>::new();
     let mut changed = false;
     loop {
@@ -150,6 +178,10 @@ struct Candidate {
     /// A pointer's type; an integer is its width's.
     pointer: Option<TypeId>,
     existing: Option<ValueId>,
+    /// The loop's own counters, the standard ones and each step counted to zero: related to every use (gcc's `important`).
+    important: bool,
+    /// The sites it was derived from; it is related to those.
+    sites: BTreeSet<usize>,
 }
 
 /// An invariant a realization keeps in a register: a pointer plus a sum.
@@ -355,6 +387,15 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target, pres
             }
         }
     }
+    // gcc leaves a loop of more groups of uses than `iv-max-considered-uses` as it is; a group is the uses of one step and base
+    // that differ in a constant.
+    let groups = sites.iter().map(|site| {
+        let of = _normal(view, &site.one);
+        (of.pointer.is_some(), of.step, of.start.symbolic())
+    }).collect::<BTreeSet<_>>();
+    if groups.len() > target.bounds.groups {
+        return None;
+    }
     let candidates = _candidates(view, target, &users, &sites, exit.as_ref());
     let web_values = users.values.keys().copied().collect::<BTreeSet<_>>();
     let live = _live_anyway(function, loop_, &users, exit.as_ref());
@@ -368,7 +409,9 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target, pres
     let latch_block = cfg::block(latch);
     // The most backedges: the counted exit's, or what an in-bounds access allows.
     let most = exit.as_ref().map(|exit| exit.most.clone()).or_else(|| induction::inbounds_backedges(view, loop_));
-    let fits = sites.iter().map(|site| candidates.iter().enumerate().map(|(index, one)| _priced(view, target, site, index, one, latch_block, most.as_ref(), &mut keys)).collect()).collect();
+    // Past `iv-consider-all-candidates-bound` a use is priced from the important candidates and its own only.
+    let related = |at: usize, one: &Candidate| candidates.len() <= target.bounds.all_candidates || one.important || one.sites.contains(&at);
+    let fits = sites.iter().enumerate().map(|(at, site)| candidates.iter().enumerate().map(|(index, one)| if related(at, one) { _priced(view, target, site, index, one, latch_block, most.as_ref(), &mut keys) } else { None }).collect()).collect();
     let exits = candidates
         .iter()
         .map(|one| exit.as_ref().filter(|exit| _steps_before_test(function, &exit.proof, one) && _comparable(view, one)).and_then(|exit| _exit_price(target, exit, one, &mut keys)))
@@ -617,20 +660,24 @@ fn _candidates(view: &memory::Unit, target: &Target, users: &Users, sites: &[Sit
         matches!(view.context.types.get(ty), Type::Pointer(_)).then_some(ty)
     };
     let mut found = Vec::<Candidate>::new();
-    let add = |found: &mut Vec<Candidate>, of: Recurrence, pointer: Option<TypeId>, existing: Option<ValueId>| {
+    let add = |found: &mut Vec<Candidate>, of: Recurrence, pointer: Option<TypeId>, existing: Option<ValueId>, home: Option<usize>| {
         if of.step.is_zero() {
             return;
         }
         match found.iter_mut().find(|one| one.of == of) {
-            Some(one) => one.existing = one.existing.or(existing),
-            None => found.push(Candidate { of, pointer, existing }),
+            Some(one) => {
+                one.existing = one.existing.or(existing);
+                one.important |= home.is_none();
+                one.sites.extend(home);
+            }
+            None => found.push(Candidate { of, pointer, existing, important: home.is_none(), sites: home.into_iter().collect() }),
         }
     };
     for &counter in &users.counters {
-        add(&mut found, users.values[&counter].clone(), pointer_type(counter), Some(counter));
+        add(&mut found, users.values[&counter].clone(), pointer_type(counter), Some(counter), None);
     }
     let mut steps = BTreeSet::<Scev>::new();
-    for site in sites {
+    for (at, site) in sites.iter().enumerate() {
         let of = _normal(view, &site.one);
         steps.insert(of.step.clone());
         let bare = Recurrence { pointer: None, start: of.start.clone(), step: of.step.clone() };
@@ -641,22 +688,22 @@ fn _candidates(view: &memory::Unit, target: &Target, users: &Users, sites: &[Sit
             for mask in 0..1_usize << terms.len() {
                 let part = terms.iter().enumerate().filter(|(bit, _)| mask >> bit & 1 == 1).map(|(_, (value, factor))| ((*value).clone(), (*factor).clone())).collect();
                 let symbolic = Scev { constant: BigInt::from(0), terms: part, width: of.width() };
-                add(&mut found, Recurrence { start: symbolic.clone(), ..bare.clone() }, None, None);
-                add(&mut found, Recurrence { start: symbolic.plus(&Scev::constant(of.start.constant.clone(), of.width())), ..bare.clone() }, None, None);
+                add(&mut found, Recurrence { start: symbolic.clone(), ..bare.clone() }, None, None, Some(at));
+                add(&mut found, Recurrence { start: symbolic.plus(&Scev::constant(of.start.constant.clone(), of.width())), ..bare.clone() }, None, None, Some(at));
             }
         } else {
-            add(&mut found, Recurrence { start: Scev::constant(0, of.width()), ..bare.clone() }, None, None);
-            add(&mut found, Recurrence { start: Scev::constant(of.start.constant.clone(), of.width()), ..bare.clone() }, None, None);
+            add(&mut found, Recurrence { start: Scev::constant(0, of.width()), ..bare.clone() }, None, None, Some(at));
+            add(&mut found, Recurrence { start: Scev::constant(of.start.constant.clone(), of.width()), ..bare.clone() }, None, None, Some(at));
         }
         match of.pointer {
             Some(_) => {
                 let pointer = pointer_type(site.one.value);
                 if pointer.is_some() {
-                    add(&mut found, of.clone(), pointer, None);
-                    add(&mut found, Recurrence { start: of.start.symbolic(), ..of.clone() }, pointer, None);
+                    add(&mut found, of.clone(), pointer, None, Some(at));
+                    add(&mut found, Recurrence { start: of.start.symbolic(), ..of.clone() }, pointer, None, Some(at));
                 }
             }
-            None => add(&mut found, bare, None, None),
+            None => add(&mut found, bare, None, None, Some(at)),
         }
     }
     // An address form whose index is wider takes a counter of its width,
@@ -672,7 +719,7 @@ fn _candidates(view: &memory::Unit, target: &Target, users: &Users, sites: &[Sit
                 }
                 let step = Scev::constant(&bytes / scale, width);
                 steps.insert(step.clone());
-                add(&mut found, Recurrence { pointer: None, start: Scev::constant(0, width), step }, None, None);
+                add(&mut found, Recurrence { pointer: None, start: Scev::constant(0, width), step }, None, None, None);
             }
         }
     }
@@ -685,7 +732,7 @@ fn _candidates(view: &memory::Unit, target: &Target, users: &Users, sites: &[Sit
             }
             let trips = exit.trips.truncated(step.width).times(&BigInt::from(-1));
             let Some(start) = trips.product(step) else { continue };
-            add(&mut found, Recurrence { pointer: None, start, step: step.clone() }, None, None);
+            add(&mut found, Recurrence { pointer: None, start, step: step.clone() }, None, None, None);
         }
     }
     found
@@ -874,6 +921,8 @@ fn _interned(keys: &mut Vec<Key>, key: Key) -> usize {
 
 #[allow(clippy::too_many_arguments)]
 fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, candidate: &Candidate, latch: BlockId, most: Option<&BigInt>, keys: &mut Vec<Key>) -> Option<(Fit, Price)> {
+    #[cfg(test)]
+    PRICED.with(|priced| priced.set(priced.get() + 1));
     let mut fit = _fit(view, site, candidate, most)?;
     // The candidate plus its step, in the latch, is the step itself: a new
     // one is placed before its first reader, a counter's must be what is read.
@@ -1365,17 +1414,23 @@ impl Problem<'_> {
     /// `set` improved by adding, removing or swapping one candidate while
     /// any lowers the cost.
     fn improved(&self, mut set: BTreeSet<usize>) -> Option<BTreeSet<usize>> {
+        let bounds = self.target.bounds;
+        // Past `iv-consider-all-candidates-bound`, where gcc stops considering every candidate for every use; below it the search
+        // is whole: measured on the bench, replacing once and not beyond ten uses costs 6% of crc's instructions.
+        let bounded = self.candidates.len() > bounds.all_candidates;
         // Cheaper first, then fewer counters: a tie goes to fewer registers.
         let rank = |set: &BTreeSet<usize>| self.total(set).map(|total| (total, set.len()));
         let mut current = rank(&set).unwrap_or((i64::MAX, usize::MAX));
+        // gcc replaces a candidate (`iv_ca_replace`) once, where no one added or removed lowers the cost.
+        let mut replace = true;
         loop {
             let mut best: Option<((i64, usize), BTreeSet<usize>)> = None;
-            let mut consider = |with: BTreeSet<usize>| {
+            let consider = |best: &mut Option<((i64, usize), BTreeSet<usize>)>, with: BTreeSet<usize>| {
                 if let Some(ranked) = rank(&with)
                     && ranked < current
                     && best.as_ref().is_none_or(|(least, one)| ranked < *least || (ranked == *least && with < *one))
                 {
-                    best = Some((ranked, with));
+                    *best = Some((ranked, with));
                 }
             };
             for one in 0..self.candidates.len() {
@@ -1383,14 +1438,22 @@ impl Problem<'_> {
                 if !with.insert(one) {
                     with.remove(&one);
                 }
-                consider(with);
+                consider(&mut best, with);
             }
-            for &out in &set {
-                for into in (0..self.candidates.len()).filter(|one| !set.contains(one)) {
-                    let mut with = set.clone();
-                    with.remove(&out);
-                    with.insert(into);
-                    consider(with);
+            if !bounded || (replace && best.is_none()) {
+                replace = false;
+                let serving = if bounded { self.serving(&set) } else { Vec::new() };
+                for &out in &set {
+                    // A candidate of one use is another's to prune; one of many is too costly to place again.
+                    if bounded && (serving[out] == 1 || serving[out] > bounds.always_prune) {
+                        continue;
+                    }
+                    for into in (0..self.candidates.len()).filter(|one| !set.contains(one)) {
+                        let mut with = set.clone();
+                        with.remove(&out);
+                        with.insert(into);
+                        consider(&mut best, with);
+                    }
                 }
             }
             let Some((ranked, with)) = best else { break };
@@ -1398,6 +1461,18 @@ impl Problem<'_> {
             set = with;
         }
         (current.0 != i64::MAX).then_some(set)
+    }
+
+    /// How many sites each candidate serves in `set`: gcc's `n_cand_uses`.
+    fn serving(&self, set: &BTreeSet<usize>) -> Vec<usize> {
+        let mut served = vec![0; self.candidates.len()];
+        for index in 0..self.sites.len() {
+            match self.choice(set, index) {
+                Some((Some((one, ..)), _)) | Some((None, Some((one, _)))) => served[one] += 1,
+                _ => {}
+            }
+        }
+        served
     }
 }
 
