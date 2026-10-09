@@ -218,3 +218,10 @@ def test_compare_reads_two_stored_measurements_and_agrees_with_rises(monkeypatch
     assert measure.compare("b", "c") == 1
     assert "52.5/93.3/180.8 against 52.2/91.4/169.6" in capsys.readouterr().out
     assert measure.compare("b", "b") == 0
+
+
+def test_two_clones_do_not_share_the_tree_the_base_is_built_in(tmp_path):
+    """regparm16's `git checkout --detach <its commit>` failed in a tree another session's clone had made ('unable to read tree')."""
+    a, b = measure.build_tree(tmp_path / "a", {}), measure.build_tree(tmp_path / "b", {})
+    assert a != b and a.parent == b.parent and a == measure.build_tree(tmp_path / "a", {})
+    assert measure.build_tree(tmp_path / "a", {"LLRM_MEASURE_BUILD": "/elsewhere"}) == Path("/elsewhere")

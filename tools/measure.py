@@ -35,7 +35,16 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 CACHE = Path(os.environ.get("LLRM_MEASURE_DIR") or Path.home() / ".cache/llrm/measure")
-BUILD = Path(os.environ.get("LLRM_MEASURE_BUILD") or Path.home() / ".cache/llrm/measure-build")
+
+
+def build_tree(root: Path = ROOT, env: dict | None = None) -> Path:
+    """Where the base is built: `LLRM_MEASURE_BUILD`, else a tree of this repository's own. Two clones share a tree no `git checkout` of
+    the other's commit can enter ('unable to read tree'), so each is keyed by the path of its working tree."""
+    env = os.environ if env is None else env
+    return Path(env.get("LLRM_MEASURE_BUILD") or Path.home() / ".cache/llrm/measure-build" / hashlib.sha256(str(root).encode()).hexdigest()[:10])
+
+
+BUILD = build_tree()
 VSGCC = next((ROOT / "crates/target").glob("*/vsgcc"))
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(VSGCC))
@@ -77,6 +86,7 @@ def measure_all(jobs: int) -> dict:
     passes = scaling_gate.measure_passes(jobs)
     return {
         "method": method(),
+        "binary": {"path": str(compiler), "sha": hashlib.sha256(compiler.read_bytes()).hexdigest()[:12]},
         "compile": compile_cost.measure(compiler, jobs),
         "axes": {k: list(v) for k, v in scaling_gate.measure(jobs).items()},
         "passes": {k: [round(v, 3) for v in got] for k, got in passes.items()},
@@ -301,7 +311,7 @@ def check(jobs: int, ref: str) -> int:
         print(f"SKIPPED: instruction counter unavailable ({why})")
         return 77
     lines, bad = rises(base, now)
-    print(f"measured against {base_sha[:9]}")
+    print(f"measured {now['binary']['path']} ({now['binary']['sha']}) against {base_sha[:9]}")
     print("\n".join(lines))
     # A commit of the reference branch is a base for the next branches; a branch's own head is not.
     if not git("status", "--porcelain", "--untracked-files=no") and stored(head, now["method"]) is None and subprocess.run(["git", "merge-base", "--is-ancestor", head, ref], cwd=ROOT).returncode == 0:
