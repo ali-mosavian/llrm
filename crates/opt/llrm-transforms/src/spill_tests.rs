@@ -758,7 +758,16 @@ fn forecast_of(
     let costs = OperationCosts { load: 3, store: 5, ..OperationCosts::default() };
     let frequency = function.layout().iter().map(|&block| (cfg::id(block), 256)).collect();
     let view = View::of(&module.context, &layout, function, room, &across);
-    let found = if swept { view.forecast(&costs, &frequency) } else { view.forecast_by_points(&costs, &frequency) };
+    let found = if swept {
+        view.forecast(&costs, &frequency)
+    } else {
+        // The points of every site, each with its residents listed.
+        let traffic = traffic(function, &frequency, &cells(function), &costs, &|_| true, &|value| {
+            words(&module.context, &layout, function, value)
+        });
+        let points = function.layout().iter().flat_map(|&block| view.sites(block, &|_| false)).flat_map(Site::points);
+        forecast(points, |cell| traffic.get(&cell).map_or(0, |one| one.price(&costs)))
+    };
     (found.cost, found.spilled.iter().collect(), found.peak)
 }
 

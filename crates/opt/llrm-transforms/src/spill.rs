@@ -1116,49 +1116,10 @@ impl<'a> View<'a> {
             words(self.context, self.layout, self.function, value)
         });
         let price = |cell: ValueId| traffic.get(&cell).map_or(0, |one| one.price(costs));
-        let swept = self.swept(&price);
-        if llrm_support::env_set("LLRM_CHECK_FORECAST") {
-            let each = self.pointed(&price);
-            let (swept_cells, each_cells) =
-                (swept.spilled.iter().collect::<Vec<_>>(), each.spilled.iter().collect::<Vec<_>>());
-            assert!(
-                (swept.cost, swept.peak, &swept_cells) == (each.cost, each.peak, &each_cells),
-                "LLRM_CHECK_FORECAST: the sweep spills {swept_cells:?} for {} (peak {}); the points {each_cells:?} for {} (peak {})",
-                swept.cost,
-                swept.peak,
-                each.cost,
-                each.peak
-            );
-        }
-        swept
+        self.swept(&price)
     }
 
-    /// `forecast` as the points of every site give it: `swept` must give the
-    /// same.
-    #[cfg(test)]
-    pub(crate) fn forecast_by_points(
-        &self,
-        costs: &OperationCosts,
-        frequency: &BTreeMap<i64, i64>,
-    ) -> Forecast<IdSet<ValueId>> {
-        let traffic = traffic(self.function, frequency, &self.pressure.cells, costs, &|_| true, &|value| {
-            words(self.context, self.layout, self.function, value)
-        });
-        self.pointed(&|cell| traffic.get(&cell).map_or(0, |one| one.price(costs)))
-    }
-
-    /// `forecast` over every site's points, each with its residents listed:
-    /// what `swept` must give, and the work of a set copied for each point.
-    fn pointed(
-        &self,
-        price: &dyn Fn(ValueId) -> i64,
-    ) -> Forecast<IdSet<ValueId>> {
-        let points =
-            self.function.layout().iter().flat_map(|&block| self.sites(block, &|_| false)).flat_map(Site::points);
-        forecast(points, price)
-    }
-
-    /// `forecast` over the points of every site, found without a set copied
+    /// The forecast over the points of every site, found without a set copied
     /// for each: the live set is stepped through each block, and each kind of
     /// point keeps its cells not yet spilled in order of price, so a point
     /// costs what changed at it, not what is live.
