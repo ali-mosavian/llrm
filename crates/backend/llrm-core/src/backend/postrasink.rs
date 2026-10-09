@@ -1,5 +1,7 @@
 //! LLVM's PostRAMachineSinking: a copy whose result only one successor reads
-//! moves into that successor.
+//! moves into that successor. A spill store does the same: a slot only one
+//! successor reads is stored there (hanoi's `n == 0` exit stored a slot it
+//! never read, and so built the frame).
 //!
 //! `mov edi, edx` ahead of `test eax, eax / jne body` is dead on the path that
 //! returns at once, where nothing reads EDI (a saved register's incoming value
@@ -15,6 +17,7 @@ use crate::analysis::dataflow::{self, Direction};
 use crate::backend::copysink::{copy_of, touches};
 use crate::backend::liveness::{_before, _effects, _universe};
 use crate::backend::peephole::{_lanes, Lanes};
+use crate::model::ir::{Loc, Mem, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::support::hash::IndexMap;
 
@@ -58,6 +61,63 @@ fn reverse_post_order(body: &LirBody) -> Vec<i64> {
     order
 }
 
+/// The register a plain spill store writes to a fixed frame cell, and the cell.
+fn spill_store_of(one: &Insn) -> Option<(Reg, Mem)> {
+    if !one.spill_store || !one.clobbers.is_empty() || !one.requires.is_empty() || !one.delivers.is_empty() {
+        return None;
+    }
+    let what = one.what.as_ref()?;
+    match (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice()) {
+        (Operation::Move, Some("mov"), [Loc::Mem(cell)], [Loc::Reg(source)])
+            if cell.addr.is_some() && cell.base.is_none() && cell.index.is_none() && cell.selector.is_none() =>
+        {
+            Some((*source, cell.clone()))
+        }
+        _ => None,
+    }
+}
+
+/// Whether `one` may read a byte of `cell`: any mention but a plain store to
+/// it. An address of the frame taken may be read through.
+fn may_read(
+    one: &Insn,
+    cell: &Mem,
+) -> bool {
+    let Some(what) = one.what.as_ref() else { return false };
+    let reads = |place: &Loc| match place {
+        Loc::Mem(other) => !crate::backend::storedhomes::apart(cell, other),
+        Loc::Address(_) => true,
+        _ => false,
+    };
+    let plain_store =
+        what.op == Operation::Move && what.dests.len() == 1 && what.sources.iter().all(|place| !reads(place));
+    what.sources.iter().any(reads) || (!plain_store && what.dests.iter().any(reads))
+}
+
+/// Whether a block from `from` on may read `cell`, before or after any store to
+/// it.
+fn read_beyond(
+    body: &LirBody,
+    by_at: &IndexMap<i64, &LirBlock>,
+    from: i64,
+    cell: &Mem,
+) -> bool {
+    let mut seen = crate::support::hash::HashSet::default();
+    let mut stack = vec![from];
+    while let Some(at) = stack.pop() {
+        if !seen.insert(at) {
+            continue;
+        }
+        let Some(block) = by_at.get(&at) else { continue };
+        if let Some(hit) = block.insns.iter().find(|one| may_read(one, cell)) {
+            return true;
+        }
+        stack.extend(block.succ.iter().copied());
+    }
+    let _ = body;
+    false
+}
+
 /// `body` with each copy moved into the one successor that reads it. One pass
 /// over the blocks, as LLVM makes: a copy that lands in a block is seen when
 /// that block's turn comes, and reverse post-order puts it after the block it
@@ -65,7 +125,9 @@ fn reverse_post_order(body: &LirBody) -> Vec<i64> {
 /// what is live into that block, not what is live into its successors, which is
 /// what the next step asks.
 pub fn sunk(body: &LirBody) -> LirBody {
-    if !body.blocks.iter().any(|block| block.succ.len() > 1 && block.insns.iter().any(|one| copy_of(one).is_some())) {
+    if !body.blocks.iter().any(|block| {
+        block.succ.len() > 1 && block.insns.iter().any(|one| copy_of(one).is_some() || spill_store_of(one).is_some())
+    }) {
         return body.clone();
     }
     let live = live_in(body);
@@ -76,9 +138,11 @@ pub fn sunk(body: &LirBody) -> LirBody {
         }
     }
     let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &block.succ)).collect();
+    let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut insns: IndexMap<i64, Vec<Arc<Insn>>> =
         body.blocks.iter().map(|block| (block.at, block.insns.to_vec())).collect();
     let mut changed = false;
+    let mut bridged: IndexMap<(i64, i64), Vec<Arc<Insn>>> = IndexMap::default();
     for at in reverse_post_order(body) {
         let to = succ[&at];
         if to.len() < 2 {
@@ -86,6 +150,32 @@ pub fn sunk(body: &LirBody) -> LirBody {
         }
         for index in (0..insns[&at].len()).rev() {
             let one = Arc::clone(&insns[&at][index]);
+            if let Some((source, cell)) = spill_store_of(&one) {
+                let read = _lanes(source.register);
+                let readers: Vec<i64> =
+                    to.iter().copied().filter(|next| read_beyond(body, &by_at, *next, &cell)).collect();
+                let [target] = readers[..] else { continue };
+                if target == at
+                    || !insns.contains_key(&target)
+                    || to.iter().filter(|next| **next == target).count() != 1
+                    || insns[&at][index + 1..]
+                        .iter()
+                        .any(|other| touches(body.bits, other, &read, false) || may_read(other, &cell))
+                {
+                    continue;
+                }
+                insns.get_mut(&at).expect("a block").remove(index);
+                if preds.get(&target) == Some(&1) {
+                    insns.get_mut(&target).expect("a block").insert(0, one);
+                } else {
+                    // The target is entered from elsewhere too (a loop's
+                    // header): the store goes on the edge,
+                    // in a block of its own that the layout puts in line.
+                    bridged.entry((at, target)).or_default().insert(0, one);
+                }
+                changed = true;
+                continue;
+            }
             let Some((dest, source)) = copy_of(&one) else { continue };
             let (written, read) = (_lanes(dest.register), _lanes(source.register));
             if written.is_empty() || read.is_empty() || !written.is_disjoint(&read) {
@@ -121,7 +211,29 @@ pub fn sunk(body: &LirBody) -> LirBody {
     if !changed {
         return body.clone();
     }
-    let blocks: Vec<LirBlock> = body
+    let mut odds = body.odds.clone();
+    let mut next_at = body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1;
+    let mut retarget: IndexMap<i64, (i64, i64)> = IndexMap::default();
+    let mut bridges: Vec<LirBlock> = Vec::new();
+    for ((from, target), stores) in &bridged {
+        let last = stores.last().expect("a store");
+        let mut stored = stores.clone();
+        let mut jump = Insn::new(
+            last.at,
+            Some((last.at, last.at)),
+            Some(Semantics { name: Some("jmp".to_owned()), target: Some(*target), ..Semantics::new(Operation::Jump) }),
+            Vec::new(),
+            Vec::new(),
+        );
+        jump.call = last.call.clone();
+        stored.push(Arc::new(jump));
+        let source = by_at[from];
+        odds.rerouted(*from, &source.succ, *target, &[(next_at, 1.0)]);
+        bridges.push(LirBlock { succ: vec![*target], ..LirBlock::new(next_at, stored) });
+        retarget.insert(*from, (*target, next_at));
+        next_at += 1;
+    }
+    let mut blocks: Vec<LirBlock> = body
         .blocks
         .iter()
         .map(|block| {
@@ -135,7 +247,44 @@ pub fn sunk(body: &LirBody) -> LirBody {
             }
         })
         .collect();
-    body.with_blocks(blocks)
+    for block in &mut blocks {
+        let Some(&(target, bridge)) = retarget.get(&block.at) else { continue };
+        let mut insns = block.insns.to_vec();
+        let mut jumped = false;
+        for one in &mut insns {
+            if let Some(what) = one.what.as_ref().filter(|what| {
+                matches!(what.op, Operation::Branch | Operation::Jump) && !what.indirect && what.target == Some(target)
+            }) {
+                let mut made = (**one).clone();
+                made.what = Some(Semantics { target: Some(bridge), ..what.clone() });
+                *one = Arc::new(made);
+                jumped = true;
+            }
+        }
+        if !jumped {
+            // The edge was a fall-through: the block now jumps to the bridge.
+            let last = insns.last().cloned().expect("a block with a branch");
+            let mut jump = Insn::new(
+                last.at,
+                Some((last.at, last.at)),
+                Some(Semantics {
+                    name: Some("jmp".to_owned()),
+                    target: Some(bridge),
+                    ..Semantics::new(Operation::Jump)
+                }),
+                Vec::new(),
+                Vec::new(),
+            );
+            jump.call = last.call.clone();
+            insns.push(Arc::new(jump));
+        }
+        block.succ = block.succ.iter().map(|to| if *to == target { bridge } else { *to }).collect();
+        *block = block.with_insns(insns);
+    }
+    blocks.extend(bridges);
+    let mut out = body.with_blocks(blocks);
+    out.odds = odds;
+    out
 }
 
 #[cfg(test)]

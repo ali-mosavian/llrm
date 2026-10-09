@@ -1,4 +1,4 @@
-reason = "rotation priced in clocks (jmp, jcc taken, not taken from the CPU): x_adler -12.1% clocks, x_bubble -3.0%, quicksort -2.0%; one jmp more per entry: quicksort +3.3% instructions, matmul +0.1%, grep +8 bytes"
+reason = "a spill store ahead of a branch is made on the path that reads the slot, off the other (bintree -2.5% instructions, quicksort c -0.8%, queens -0.1%); bintree nib -Os +1 byte (the store's edge block)"
 blessed = "2026-10-09"
 
 [bas.O2]
@@ -16,15 +16,15 @@ data_bytes = 17
 bss_bytes = 0
 
 [c.O2]
-instructions = 164677
-memory_operands = 57516
+instructions = 163313
+memory_operands = 56152
 code_bytes = 300
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 149114
-memory_operands = 57516
+instructions = 147750
+memory_operands = 56152
 code_bytes = 267
 data_bytes = 0
 bss_bytes = 0
@@ -37,8 +37,8 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 168977
-memory_operands = 69658
+instructions = 168295
+memory_operands = 68976
 code_bytes = 401
 data_bytes = 0
 bss_bytes = 0

@@ -1,4 +1,4 @@
-reason = "a diamond-bodied loop's latch falls into the header (x_collatz -15.7% clocks); costs one jmp per loop entry: quicksort bas +2.1% instructions"
+reason = "a spill store ahead of a branch is made on the path that reads the slot, off the other (bintree -2.5% instructions, quicksort c -0.8%, queens -0.1%); bintree nib -Os +1 byte (the store's edge block)"
 blessed = "2026-10-09"
 
 [bas.O2]
@@ -17,30 +17,30 @@ bss_bytes = 0
 kernel_ms = 1.9135
 
 [c.O2]
-instructions = 59068
-memory_operands = 11528
-code_bytes = 284
+instructions = 57563
+memory_operands = 11227
+code_bytes = 283
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 55836
-memory_operands = 12882
+instructions = 55535
+memory_operands = 12581
 code_bytes = 243
 data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 88883
-memory_operands = 13328
-code_bytes = 402
+instructions = 87378
+memory_operands = 13027
+code_bytes = 401
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 117950
-memory_operands = 27951
-code_bytes = 443
+instructions = 116445
+memory_operands = 27650
+code_bytes = 444
 data_bytes = 0
 bss_bytes = 0
 

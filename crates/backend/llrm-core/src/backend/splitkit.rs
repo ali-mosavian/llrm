@@ -519,7 +519,7 @@ pub fn carved_moving(
             && insns.iter().zip(block.insns.iter()).all(|(made, was)| Arc::ptr_eq(made, was));
         blocks.push(if same { block.clone() } else { block.with_insns(insns) });
     }
-    let mut by_at: IndexMap<i64, LirBlock> = blocks.iter().map(|block| (block.at, block.clone())).collect();
+    let mut by_at: IndexMap<i64, LirBlock> = blocks.into_iter().map(|block| (block.at, block)).collect();
     let mut made: Vec<LirBlock> = Vec::new();
     let mut next_at = body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1;
     let mut bridged: IndexMap<(i64, i64), i64> = IndexMap::default();
@@ -571,7 +571,8 @@ pub fn carved_moving(
             }
         }
     }
-    let mut out: Vec<LirBlock> = body.blocks.iter().map(|block| by_at[&block.at].clone()).collect();
+    let mut out: Vec<LirBlock> =
+        body.blocks.iter().map(|block| by_at.swap_remove(&block.at).expect("a block of the body")).collect();
     out.extend(made);
     let mut split = body.with_blocks(out);
     for (&(source, outside), &bridge) in &bridged {
@@ -652,6 +653,30 @@ pub fn _next_value(body: &LirBody) -> u32 {
         }
     }
     largest + 1
+}
+
+/// `_next_value`, from the postings the allocator follows the body with: the
+/// largest value they hold and the phis' results, not a walk of every
+/// instruction. For the allocator's own rewrites, which ask it of each body
+/// they make.
+thread_local! {
+    static NEXT_VALUE_ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread asked `_next_value_following`, for a test that
+/// the allocator's rewrites do.
+pub fn next_value_asks() -> usize {
+    NEXT_VALUE_ASKS.with(std::cell::Cell::get)
+}
+
+pub fn _next_value_following(body: &LirBody) -> u32 {
+    let phis = body.blocks.iter().flat_map(|block| block.phis.iter().map(|phi| phi.result)).max().unwrap_or(0);
+    let found = crate::backend::postings::following(body, |postings| postings.largest()).max(phis) + 1;
+    NEXT_VALUE_ASKS.with(|n| n.set(n.get() + 1));
+    if llrm_support::env_set("LLRM_CHECK_POSTINGS") {
+        assert_eq!(found, _next_value(body), "{}: the next value from the postings differs from the walk", body.name);
+    }
+    found
 }
 
 /// One block `value` is referenced in: LLVM's `SplitAnalysis::BlockInfo`.
@@ -1432,6 +1457,33 @@ mod tests {
         for value in &values {
             assert_eq!(all[value], super::_references(&body, *value), "references of value {value}");
         }
+    }
+
+    /// Every spill, carve and rewrite walked all instructions of the body for
+    /// the largest value it names (`_next_value`: d_faces -O1, 1.2 k asks,
+    /// 274 M of 24.6 G instructions). The allocator's asks read it off the
+    /// postings the body is followed with, and get the same number after
+    /// the body changes.
+    #[test]
+    fn test_the_next_value_comes_from_the_postings_and_follows_the_body() {
+        let body = _pointer_across_a_loop();
+        assert_eq!(super::_next_value_following(&body), super::_next_value(&body));
+        let cut = carved(&body, 3, 9, 2, &region(&body, &[0x10])).expect("cut");
+        assert_eq!(super::_next_value_following(&cut), super::_next_value(&cut));
+        assert_eq!(super::_next_value_following(&cut), 10, "the carve made value 9");
+    }
+
+    /// A carve copied every block of the body three times (into the new blocks,
+    /// into the map the bridges edit, and out of it again): d_faces -O1, 427
+    /// carves, 252 k of the compile's 624 k block copies. Each block is copied
+    /// once.
+    #[test]
+    fn test_a_carve_copies_each_block_of_the_body_once() {
+        let body = _pointer_across_a_loop();
+        let before = crate::model::lir::BLOCK_CLONES.with(std::cell::Cell::get);
+        carved(&body, 3, 9, 2, &region(&body, &[0x10])).expect("cut");
+        let copies = crate::model::lir::BLOCK_CLONES.with(std::cell::Cell::get) - before;
+        assert!(copies <= body.blocks.len() as u64, "{copies} block copies for {} blocks", body.blocks.len());
     }
 
     /// Carving a value out of a region walked every instruction of the body for
