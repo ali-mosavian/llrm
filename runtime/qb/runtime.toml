@@ -1,0 +1,5 @@
+[portable]
+sources = []
+
+[platform]
+sources = ["platform/qb/dos/m16/archive.asm"]
