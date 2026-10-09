@@ -32,7 +32,7 @@ gate logs, the fast tier selects the failing step every time. Of the last 80 mer
 (`perf stat -e instructions:u`), so host load does not move them:
 
 - the compile of the 66 vsgcc programs and QCport's 65 modules at -O1, -O2 and -Os (`tools/compile-cost.py`);
-- the cost at N and 2N on generated programs, per axis and level (`crates/target/*/vsgcc/scaling_gate.py`): the gate holds the superlinear excess, 2N - 2·N (nil for linear work, large for a pass gone quadratic), not the ratio, which rises when linear work gets cheaper;
+- the cost at N/2, N and 2N on generated programs, per axis and level (`crates/target/*/vsgcc/scaling_gate.py`): the gate holds the second difference c(2N) − 3c(N) + 2c(N/2), which is 1.5kN² of a cost a + bN + kN²: nil for fixed and linear work, so a saving of either does not move it and a pass gone quadratic does (neither the ratio 2N/N nor c(2N) − 2c(N) is free of both);
 - the same for each step of the compile with 1.5% or more of its work (`LLRM_DEBUG=time`'s `[instr]` rows).
 
 A measurement is stored per commit in `~/.cache/llrm/measure` (`LLRM_MEASURE_DIR`), never in the repository, so two branches
@@ -40,7 +40,7 @@ share no file and nothing conflicts. The base's is read from there; if it is mis
 directory of its own with the gate's build command (`gate.BUILD`: `cargo build --bins` alone makes another llrm-c) and
 measured with this tree's tools and inputs, then stored (3-8 minutes, once per base). A stored measurement of another
 method (tools, programs, QCport modules) is not used. A rise past the tolerances in `tools/gate/tiers.toml` `[measure]` fails: a
-level's geomean 1.003, one file 1.02, an axis' excess 1% of its cost at 2N and that cost 1.02, a step's excess 0.5% of the compile and its cost 1.05 (a step needs 2.5% of the work to fail, so one on the edge of the
+level's geomean 1.003, one file 1.02, an axis' second difference 1% of its cost at 2N and that cost 1.02, a step's 0.5% of the compile and its cost 1.05 (a step needs 2.5% of the work to fail, so one on the edge of the
 share floor does not flip). A drop is recorded nowhere; the next branch's base has it. Sessions that miss one base at once wait on its lock and read what the first stored. Against the parent alone, ten commits of +0.2% each pass; the scheduled run (`gate.py main`) also compares each main commit with the one 50 merges or a week back (`measure.py creep`), at the same tolerances, and lists the commits between with their steps. Tolerances come from the same build
 measured twice (`tools/compile-cost.py --noise`: geomean within 0.0001, worst file 0.0047 of 393). The QCport files need `QCPORT`
 and `QCPORT_INC` (`~/scratch/qcport-env.sh`); without them they are not measured. Without a working counter the step exits 77

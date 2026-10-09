@@ -576,3 +576,15 @@ crash:
     assert!(decide(&mut module));
     assert!(!printed(&module).contains("br i1 %fits"), "{}", printed(&module));
 }
+
+/// Every guard query found the body's `llvm.assume`s again, a walk of the whole body naming each call's callee by string
+/// (`Intrinsic::named`): decide was 5.9% of QCport, a fifth of it that. The body's assumptions are found once, as LLVM's
+/// AssumptionCache.
+#[test]
+fn test_a_body_is_searched_for_its_assumptions_once_however_many_guards_are_asked() {
+    let mut module = parsed(&format!("{DOS}{PARTITION_CHECK}"));
+    let before = llrm_analysis::assumptions::built();
+    assert!(decide(&mut module));
+    let searched = llrm_analysis::assumptions::built() - before;
+    assert_eq!(searched, 1, "the body was searched {searched} times");
+}

@@ -904,6 +904,8 @@ fn _allocated(
     let empty = BTreeSet::new();
     let protected = protected.unwrap_or(&empty);
     let mut unspillable: BTreeSet<u32> = unspillable.cloned().unwrap_or_default();
+    // The values merging updates made: spilled in their turn they are not merged again, which would make the value spilled again, without end.
+    let mut plain: BTreeSet<u32> = BTreeSet::new();
     let mut facts = Facts::of(&body, profile, segments, classes, &unspillable, protected, &Frequency::of(&body));
     if let Some(why) = unallocatable(&facts, pinned.unwrap_or(&IndexMap::default()), &unspillable, segments, classes) {
         return Err(Unplaced(why).into());
@@ -1198,7 +1200,8 @@ fn _allocated(
                             union.remove(_whole(register), *one, &facts.live);
                         }
                     }
-                    let (spilt, mut made) = spiller::spilled_from(&body, &chosen, Some(frame), floor, classes)?;
+                    let (spilt, mut made, merged) = spiller::spilled_apart(&body, &chosen, frame, floor, classes, &plain)?;
+                    plain.extend(merged.iter().copied());
                     body = spilt;
                     // A value the spiller keeps (a load from its own home
                     // cell) is now as short as a reload, and is placed as one.
@@ -1213,7 +1216,7 @@ fn _allocated(
                     }
                     made.extend(kept);
                     unspillable.extend(made.iter().copied());
-                    rewritten = Some(made.into_iter().collect());
+                    rewritten = Some(made.into_iter().chain(merged).collect());
                 }
             }
         }

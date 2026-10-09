@@ -375,10 +375,13 @@ fn saved_of(procedure: &Procedure) -> Vec<Register> {
     procedure.registers.saved.iter().filter(|(whole, _)| !owned && roots.contains(whole)).map(|(_, low)| *low).collect()
 }
 
-/// Where `procedure` saves them, where that is not its entry (`shrinkwrap`).
-fn wrap_of(procedure: &Procedure) -> Option<crate::backend::shrinkwrap::Wrap> {
+/// Where `procedure` saves them, and sets up its frame where `frame`, when that is not its entry (`shrinkwrap`).
+fn wrap_of(procedure: &Procedure, frame: bool) -> Option<crate::backend::shrinkwrap::Wrap> {
     let kept: BTreeSet<Register> = procedure.registers.saved.iter().filter(|(_, low)| saved_of(procedure).contains(low)).map(|(whole, _)| *whole).collect();
-    crate::backend::shrinkwrap::wrapped(&procedure.body, &kept)
+    // The runtime's entry builds an `entry` frame, an interrupt handler and the stack check run at the entry, and inline code may address the frame.
+    let movable = procedure.entry == 0 && procedure.interrupt.is_none() && procedure.stack_check.is_none() && procedure.callees.values().all(|one| one.code.is_empty());
+    let registers = &procedure.registers;
+    crate::backend::shrinkwrap::wrapped(&procedure.body, &kept, (frame && movable).then_some((registers.pointer, registers.stack)))
 }
 
 /// The implicit entry and return sequences shared by text and OMF emission.
@@ -542,17 +545,21 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
 /// The procedure's items with the frame register LIR names BP, or not where `omit`.
 fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, Unprintable> {
     let (mut enter, mut leave) = parts(procedure, omit);
-    // Saved where first needed, restored where that path returns: not at the entry and every return.
-    let wrap = wrap_of(procedure);
-    let (saves, restores): (Vec<Semantics>, Vec<Semantics>) = match &wrap {
-        Some(_) => {
-            let count = saved_of(procedure).len();
-            enter.truncate(enter.len() - count);
-            let pops: Vec<Semantics> = leave.drain(..count).collect();
-            (saved_of(procedure).iter().map(|one| semantics(Operation::Push, "push", vec![], vec![reg(*one)])).collect(), pops)
+    // Saved where first needed, restored where that path returns: not at the entry and every return. The frame too, where
+    // nothing outside the wrap touches it: the returns before it take none back.
+    let count = saved_of(procedure).len();
+    let wrap = wrap_of(procedure, enter.len() > count);
+    let (mut saves, mut restores, mut opened): (Vec<Semantics>, Vec<Semantics>, Vec<Semantics>) = (Vec::new(), Vec::new(), Vec::new());
+    if let Some(wrap) = &wrap {
+        let kept = enter.split_off(enter.len() - count);
+        restores = leave.drain(..count).collect();
+        saves = kept;
+        if wrap.frame {
+            opened = std::mem::take(&mut enter);
         }
-        None => (Vec::new(), Vec::new()),
-    };
+    }
+    let wrapped_frame = wrap.as_ref().is_some_and(|wrap| wrap.frame);
+    let unwrapped_leave = if wrapped_frame { Vec::new() } else { leave.clone() };
     let blocks = &procedure.body.blocks;
     let lined = || blocks.iter().flat_map(|block| &block.insns).filter(|one| one.line.is_some());
     let first = lined().next();
@@ -575,7 +582,7 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
     for (index, block) in blocks.iter().enumerate() {
         out.push(Item::Label(Label { name: label(number, block.at) }));
         if wrap.as_ref().is_some_and(|wrap| wrap.at == block.at) {
-            out.extend(saves.iter().cloned().map(Item::Semantics));
+            out.extend(opened.iter().chain(&saves).cloned().map(Item::Semantics));
         }
         let following = if index + 1 < blocks.len() { Some(blocks[index + 1].at) } else { None };
         let fallthrough = _fallthrough_jump(block, following);
@@ -633,9 +640,10 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
                 }
                 Operation::Return => {
                     if wrap.as_ref().is_some_and(|wrap| wrap.restored.contains(&block.at)) {
-                        out.extend(restores.iter().cloned().map(Item::Semantics));
+                        out.extend(restores.iter().chain(&leave).cloned().map(Item::Semantics));
+                    } else {
+                        out.extend(unwrapped_leave.iter().cloned().map(Item::Semantics));
                     }
-                    out.extend(leave.iter().cloned().map(Item::Semantics));
                     if let Some(Loc::Imm(popped)) = what.sources.first().filter(|_| procedure.interrupt.is_none() && !procedure.far) {
                         if popped.value > llrm_x86::calling::RET_POPS_MOST {
                             out.extend(moved_return(popped.value, procedure.registers.slot, procedure.registers.spelled(Register::SP)).into_iter().map(Item::Semantics));
