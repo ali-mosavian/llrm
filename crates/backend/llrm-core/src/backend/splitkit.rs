@@ -264,6 +264,8 @@ pub fn crossings(body: &LirBody, value: u32, region: &Region, live: &dyn allocat
         })
     });
     let mut out = Vec::new();
+    // The phis a block's successor arrives with, found by the successor's address: a scan of every block for each edge was the square of the blocks.
+    let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     for block in &body.blocks {
         if let Some(ranges) = region.spans.get(&block.at) {
             let before = _live_before(block, value, live.live_out(block.at, value));
@@ -280,7 +282,7 @@ pub fn crossings(body: &LirBody, value: u32, region: &Region, live: &dyn allocat
         for next in &block.succ {
             let entering = region.enters(*next);
             let across = live.live_in(*next, value)
-                || body.blocks.iter().filter(|one| one.at == *next).flat_map(|one| &one.phis).any(|phi| phi.incoming.contains(&(block.at, value)));
+                || by_at.get(next).is_some_and(|one| one.phis.iter().any(|phi| phi.incoming.contains(&(block.at, value))));
             if leaving != entering && across && (entering || written) {
                 out.push((Crossing::Edge { from: block.at, to: *next }, entering));
             }
