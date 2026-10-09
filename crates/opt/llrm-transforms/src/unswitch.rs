@@ -140,7 +140,7 @@ pub fn specialized(
         }
     }
     let graph = cfg::graph(&closed);
-    let cfg::Shape { dominance, loops: found } = cfg::Shape::of(&closed);
+    let cfg::Shape { dominance, loops: found, .. } = cfg::Shape::of(&closed);
     let predecessors = loops::predecessors(&graph);
     for loop_ in found {
         let outside = predecessors[&loop_.header].difference(&loop_.body).copied().collect::<Vec<_>>();

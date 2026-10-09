@@ -150,7 +150,7 @@ fn test_a_switch_on_a_state_the_join_makes_constant_is_entered_at_its_case() {
     let inputs: Vec<&[i128]> = pairs.iter().map(Vec::as_slice).collect();
     let before = parsed(&format!("{DOS}{MACHINE}"));
     let mut after = before.clone();
-    let printed = managed(&mut after, JumpThread { size: false });
+    let printed = managed(&mut after, JumpThread { size: false, correlated: false });
     assert_eq!(results(&after, &inputs), results(&before, &inputs), "{printed}");
     // Every way into the switch, the first trip's included, has its copy of the
     // blocks down to a case: no dispatch is left.
@@ -162,7 +162,7 @@ fn test_a_switch_on_a_state_the_join_makes_constant_is_entered_at_its_case() {
 fn test_tuned_for_size_nothing_is_copied() {
     let before = parsed(&format!("{DOS}{MACHINE}"));
     let mut after = before.clone();
-    let printed = managed(&mut after, JumpThread { size: true });
+    let printed = managed(&mut after, JumpThread { size: true, correlated: false });
     // The entry still reaches the loop through its header.
     assert!(printed.contains("head:"), "{printed}");
 }
@@ -238,7 +238,7 @@ fn test_a_state_made_by_two_joins_is_threaded_and_computes_the_same() {
     let inputs: Vec<&[i128]> = pairs.iter().map(Vec::as_slice).collect();
     let before = parsed(&format!("target datalayout = \"e-p:32:32-n8:16:32\"\n\n{ROTATED}"));
     let mut after = before.clone();
-    let printed = managed(&mut after, JumpThread { size: false });
+    let printed = managed(&mut after, JumpThread { size: false, correlated: false });
     assert_eq!(results(&after, &inputs), results(&before, &inputs), "{printed}");
     assert_eq!(printed.matches("switch").count(), 0, "{printed}");
 }
@@ -254,7 +254,7 @@ fn test_a_block_with_several_edges_to_a_join_gives_the_phi_an_input_for_each() {
     let inputs: Vec<&[i128]> = pairs.iter().map(Vec::as_slice).collect();
     let before = parsed(&format!("{DOS}{MULTI_EDGE}"));
     let mut after = before.clone();
-    let printed = managed(&mut after, JumpThread { size: false });
+    let printed = managed(&mut after, JumpThread { size: false, correlated: false });
     assert_eq!(results(&after, &inputs), results(&before, &inputs), "{printed}");
 }
 
@@ -268,7 +268,7 @@ fn test_a_copied_block_with_three_edges_to_a_block_gives_its_phi_three_inputs() 
     let inputs: Vec<&[i128]> = pairs.iter().map(Vec::as_slice).collect();
     let before = parsed(&format!("{DOS}{BEHIND_A_SWITCH}"));
     let mut after = before.clone();
-    let printed = managed(&mut after, JumpThread { size: false });
+    let printed = managed(&mut after, JumpThread { size: false, correlated: false });
     assert_eq!(results(&after, &inputs), results(&before, &inputs), "{printed}");
 }
 
@@ -323,7 +323,7 @@ fn test_a_branch_on_a_compare_of_a_phi_of_constants_is_decided_on_each_path() {
     let inputs: Vec<&[i128]> = pairs.iter().map(Vec::as_slice).collect();
     let before = parsed(&format!("{DOS}{TESTED_RESULT}"));
     let mut after = before.clone();
-    let printed = managed(&mut after, JumpThread { size: false });
+    let printed = managed(&mut after, JumpThread { size: false, correlated: false });
     assert_eq!(results(&after, &inputs), results(&before, &inputs), "{printed}");
     assert_eq!(printed.matches("icmp ne").count(), 0, "{printed}");
 }
@@ -339,7 +339,7 @@ fn test_tuned_for_size_a_branch_whose_copies_are_empty_is_still_decided() {
     let inputs: Vec<&[i128]> = pairs.iter().map(Vec::as_slice).collect();
     let before = parsed(&format!("{DOS}{TESTED_RESULT}"));
     let mut after = before.clone();
-    let printed = managed(&mut after, JumpThread { size: true });
+    let printed = managed(&mut after, JumpThread { size: true, correlated: false });
     assert_eq!(results(&after, &inputs), results(&before, &inputs), "{printed}");
     assert_eq!(printed.matches("icmp ne").count(), 0, "{printed}");
 }
@@ -370,7 +370,53 @@ done:
 ";
     let before = parsed(&format!("{DOS}{text}"));
     let mut after = before.clone();
-    let printed = managed(&mut after, JumpThread { size: false });
+    let printed = managed(&mut after, JumpThread { size: false, correlated: false });
     // The entry still reaches the loop through its header.
     assert!(printed.contains("head:"), "{printed}");
+}
+
+/// A loop whose test is branched on twice: at its top, and again in the join
+/// the two ways of the first reach, where the way in settles it (the rotated
+/// nest of hanoi). Each way is threaded to its arm; the loop computes what it
+/// did.
+const CORRELATED: &str = "define i16 @f(i16 %n, i16 %k) {
+b0:
+  %go = icmp ne i16 %n, 0
+  br i1 %go, label %pre, label %out
+
+pre:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %pre ], [ %i1, %join ]
+  %acc = phi i16 [ 0, %pre ], [ %acc1, %join ]
+  %i1 = add i16 %i, 1
+  %last = icmp eq i16 %i1, %n
+  br i1 %last, label %join, label %work
+
+work:
+  %w = mul i16 %i, %k
+  br label %join
+
+join:
+  %x = phi i16 [ 0, %head ], [ %w, %work ]
+  %acc1 = add i16 %acc, %x
+  br i1 %last, label %done, label %head
+
+done:
+  ret i16 %acc1
+
+out:
+  ret i16 -1
+}
+";
+
+#[test]
+fn test_a_branch_the_way_in_settles_is_threaded_on_each_way() {
+    let inputs: &[&[i128]] = &[&[0, 3], &[1, 3], &[2, 5], &[7, 2], &[9, 1]];
+    let before = parsed(&format!("{DOS}{CORRELATED}"));
+    let mut after = before.clone();
+    let printed = managed(&mut after, JumpThread { size: false, correlated: true });
+    assert_eq!(results(&after, inputs), results(&before, inputs), "{printed}");
+    assert!(printed.matches("br i1 %last").count() < 2, "the second branch on %last is decided on each way: {printed}");
 }
