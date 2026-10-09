@@ -7,6 +7,7 @@
 //! refused, not misread.
 
 use llrm_mir::facts::{Effect, Fact};
+use llrm_support::hash::HashMap;
 
 use crate::hir::{Node, Unit, Unsupported, handle};
 
@@ -115,24 +116,28 @@ pub fn check(node: &Node) -> Result<(), Unsupported> {
     }
 }
 
-/// The facts the language states of parameter `symbol`: each `CGFact` of
-/// its name.
+/// The facts the language states of each parameter, by its symbol: each
+/// `CGFact` of its name, found in one pass over the nodes.
+pub fn param_facts(unit: &Unit) -> HashMap<i64, Vec<Fact>> {
+    let mut by_symbol: HashMap<i64, Vec<Fact>> = HashMap::default();
+    for node in unit.nodes.values().filter(|node| node.call == "CGFact") {
+        let [_, inner, term] = &node.args[..] else { continue };
+        let Some(fact) = param_fact(term) else { continue };
+        let Some(named) = unit.nodes.get(&handle(inner)).filter(|one| one.call == "CGFEName") else { continue };
+        let facts = by_symbol.entry(handle(&named.args[0])).or_default();
+        if !facts.contains(&fact) {
+            facts.push(fact);
+        }
+    }
+    by_symbol
+}
+
+/// The facts the language states of parameter `symbol`.
 pub fn of_param(
     unit: &Unit,
     symbol: i64,
 ) -> Vec<Fact> {
-    let mut facts = Vec::new();
-    for node in unit.nodes.values().filter(|node| node.call == "CGFact") {
-        let [_, inner, term] = &node.args[..] else { continue };
-        let named =
-            unit.nodes.get(&handle(inner)).is_some_and(|one| one.call == "CGFEName" && handle(&one.args[0]) == symbol);
-        if let Some(fact) = param_fact(term).filter(|_| named) {
-            if !facts.contains(&fact) {
-                facts.push(fact);
-            }
-        }
-    }
-    facts
+    param_facts(unit).remove(&symbol).unwrap_or_default()
 }
 
 #[cfg(test)]
