@@ -690,3 +690,28 @@ fn test_spilled_prices_what_forecast_does_whichever_set_remembers_the_spilled() 
         assert_eq!(spilled(points, |one| prices[one.0 as usize]), by_forecast);
     }
 }
+
+/// `transient` asked whether an access's pointer is folded afresh at every
+/// access, and a frame slot has a user for each access to it: the forecast of a
+/// function of 2048 statements spent 3% of the compile there, growing 3.2 times
+/// a doubling. The answer is the function's, found once with its pressure.
+#[test]
+fn a_forecast_asks_whether_a_pointer_is_folded_once_however_many_accesses_use_it() {
+    let accesses: String =
+        (0..40).map(|at| format!("  store i16 {at}, ptr %slot\n  %v{at} = load i16, ptr %slot\n")).collect();
+    let module = crate::testing::parsed(&format!(
+        "{}define i16 @f() {{\nentry:\n  %slot = alloca i16\n{accesses}  ret i16 %v39\n}}\n",
+        llrm_analysis::testing::DOS
+    ));
+    let function = function(&module);
+    let layout = llrm_analysis::testing::layout(&module);
+    let room = Room { registers: 6, across_call: 2, far_access: 1, ..Room::default() };
+    let costs = OperationCosts { load: 3, store: 5, ..OperationCosts::default() };
+    let frequency = function.layout().iter().map(|&block| (cfg::id(block), 256)).collect();
+    let before = super::folded_runs();
+    View::of(&module.context, &layout, function, room, &|_| 2).forecast(&costs, &frequency);
+    let asked = super::folded_runs() - before;
+    // Once of each of the 41 pointers and loads (`integer_in`), not again for
+    // each of the 80 accesses.
+    assert!(asked <= 44, "{asked} asks for 80 accesses of one slot");
+}

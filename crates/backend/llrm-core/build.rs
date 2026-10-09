@@ -99,11 +99,10 @@ fn main() {
 /// forms read and write beyond their operands, and the flags (the table's, from
 /// iced's Code of the mnemonic's forms).
 fn effect_rows(forms: &str) -> String {
-    let table = llrm_peepgen::table::load(forms, "x86.instr").unwrap_or_else(|error| panic!("{error}"));
     let rows = generator::description::parse(forms).unwrap_or_else(|error| panic!("{error}"));
     let mut by_key: Vec<((String, usize, usize), Vec<String>)> = Vec::new();
     for form in &rows {
-        let (flags_read, flags_written) = (table.mnemonics[&form.name].reads, table.mnemonics[&form.name].writes);
+        let (flags_read, flags_written) = (form.flags_read, form.flags_written);
         let list = |names: &[String]| names.iter().map(|name| format!("{name:?}")).collect::<Vec<_>>().join(", ");
         let kinds = form
             .dests

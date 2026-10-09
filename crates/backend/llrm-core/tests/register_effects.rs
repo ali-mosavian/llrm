@@ -3,12 +3,104 @@
 //! description, at each width.
 
 use iced_x86::Register;
-use llrm_core::backend::peephole::{_effects_by_decoding, _effects_by_table, _moved_lanes, _moved_lanes_by_decoding};
+use iced_x86::{Decoder, DecoderOptions, FlowControl, InstructionInfoFactory, Mnemonic, OpAccess, OpKind};
+use llrm_core::backend::lanes::Lanes;
+use llrm_core::backend::peephole::{_effects_by_table, _flag_lanes, _lanes, _moved_by, _moved_lanes};
+use llrm_core::backend::target::named as named_register;
 use llrm_core::model::lir::Insn;
 use llrm_lir::{Addr, Address, Imm, Loc, Mem, Reg, Semantics, Space};
 use llrm_target::Target;
 use llrm_x86::effects::root;
 use llrm_x86_m16::instructions::parse::{self, Form, Side};
+
+/// The machine instructions `what` encodes to.
+fn decoded(
+    bits: u32,
+    what: &Semantics,
+) -> Option<Vec<iced_x86::Instruction>> {
+    let encoded = llrm_core::backend::select::priced_in(bits, what, 0, None, false, false, None)?;
+    Some((&mut Decoder::new(bits, &encoded.code, DecoderOptions::NONE)).into_iter().collect())
+}
+
+/// The accesses that read an operand.
+const READS: [OpAccess; 4] = [OpAccess::Read, OpAccess::ReadWrite, OpAccess::CondRead, OpAccess::ReadCondWrite];
+
+/// What the encoder's bytes read and write, in the lanes the passes see: the
+/// effects iced states of the bytes, which `x86.instr` must state of the
+/// instruction.
+fn by_decoding(
+    bits: u32,
+    one: &Insn,
+    what: &Semantics,
+    may_write: bool,
+    flags: bool,
+) -> Option<(Lanes, Lanes)> {
+    let instructions = decoded(bits, what)?;
+    let mut reads: Lanes = one
+        .requires
+        .iter()
+        .flat_map(|(held, register)| _lanes(named_register(*register, i64::from(held.width))))
+        .collect();
+    let mut writes: Lanes = one
+        .delivers
+        .iter()
+        .flat_map(|(held, register)| _lanes(named_register(*register, i64::from(held.width))))
+        .collect();
+    let mut info = InstructionInfoFactory::new();
+    for insn in &instructions {
+        if insn.is_invalid() || insn.flow_control() != FlowControl::Next {
+            return None;
+        }
+        if flags {
+            let read: Lanes = _flag_lanes(insn.rflags_read()).minus(&writes);
+            reads.extend(read);
+            writes.extend(_flag_lanes(insn.rflags_modified()));
+        }
+        let used: Vec<(Register, OpAccess)> =
+            info.info(insn).used_registers().iter().map(|access| (access.register(), access.access())).collect();
+        for (register, access) in &used {
+            if READS.contains(access) {
+                let read: Lanes = _lanes(*register).minus(&writes);
+                reads.extend(read);
+            }
+        }
+        for (register, access) in &used {
+            if [OpAccess::Write, OpAccess::ReadWrite].contains(access)
+                || may_write && [OpAccess::CondWrite, OpAccess::ReadCondWrite].contains(access)
+            {
+                writes.extend(_lanes(*register));
+            }
+        }
+        // `rep` counts its register down to where it stops, which iced calls a
+        // conditional write.
+        if insn.has_rep_prefix() || insn.has_repe_prefix() || insn.has_repne_prefix() {
+            for (register, _) in used.iter().filter(|(register, _)| register.full_register32() == Register::ECX) {
+                writes.extend(_lanes(*register));
+            }
+        }
+    }
+    Some((reads, writes))
+}
+
+/// The lanes a constant shift moves, from the decoded instruction.
+fn moved_by_decoding(
+    bits: u32,
+    what: &Semantics,
+) -> Option<(Vec<(llrm_core::backend::lanes::Lane, llrm_core::backend::lanes::Lane)>, Lanes)> {
+    let instructions = decoded(bits, what)?;
+    let [insn] = instructions.as_slice() else { return None };
+    let register = |index: u32| (insn.op_kind(index) == OpKind::Register).then(|| insn.op_register(index));
+    let shift = match insn.mnemonic() {
+        Mnemonic::Shl | Mnemonic::Shr if insn.op_count() == 2 && insn.op1_kind() == OpKind::Immediate8 => {
+            (insn.mnemonic() == Mnemonic::Shl, register(0), None, insn.immediate8())
+        }
+        Mnemonic::Shld | Mnemonic::Shrd if insn.op_count() == 3 && insn.op2_kind() == OpKind::Immediate8 => {
+            (insn.mnemonic() == Mnemonic::Shld, register(0), register(1), insn.immediate8())
+        }
+        _ => return None,
+    };
+    _moved_by(shift)
+}
 
 /// Whether the encoder has no bytes for `what`.
 fn refused_by_encoder(
@@ -163,8 +255,8 @@ fn the_table_gives_the_effects_the_decoder_does() {
                         };
                         let one = Insn::new(0, None, None, vec![], vec![]);
                         let with = Insn::new(0, None, Some(what.clone()), vec![], vec![]);
-                        shifts += usize::from(_moved_lanes_by_decoding(bits, &with).is_some());
-                        let (moved, decoded) = (_moved_lanes(bits, &with), _moved_lanes_by_decoding(bits, &with));
+                        shifts += usize::from(moved_by_decoding(bits, &what).is_some());
+                        let (moved, decoded) = (_moved_lanes(bits, &with), moved_by_decoding(bits, &what));
                         if moved != decoded && !(decoded.is_none() && refused_by_encoder(bits, &what)) {
                             wrong.push(format!(
                                 "x86.instr:{} {} w{width} m{bits}: moved lanes differ: {what:?}",
@@ -172,7 +264,7 @@ fn the_table_gives_the_effects_the_decoder_does() {
                             ));
                         }
                         for (may_write, flags) in [(false, false), (false, true), (true, false), (true, true)] {
-                            let by_decoding = _effects_by_decoding(bits, &one, &what, may_write, flags);
+                            let by_decoding = by_decoding(bits, &one, &what, may_write, flags);
                             let Some(by_table) = _effects_by_table(bits, &one, &what, may_write, flags) else {
                                 unanswered.push(format!("{} {}", form.operation, form.name));
                                 continue;
@@ -254,7 +346,7 @@ fn the_table_follows_the_encoder_into_what_it_lowers_to() {
         for what in &cases {
             let one = Insn::new(0, None, None, vec![], vec![]);
             for (may_write, flags) in [(false, false), (false, true), (true, false), (true, true)] {
-                let Some(by_decoding) = _effects_by_decoding(bits, &one, what, may_write, flags) else { continue };
+                let Some(by_decoding) = by_decoding(bits, &one, what, may_write, flags) else { continue };
                 let by_table = _effects_by_table(bits, &one, what, may_write, flags);
                 assert_eq!(by_table, Some(Some(by_decoding)), "m{bits} {what:?}");
                 checked += 1;
@@ -262,4 +354,37 @@ fn the_table_follows_the_encoder_into_what_it_lowers_to() {
         }
     }
     assert!(checked >= 16, "only {checked} compared");
+}
+
+/// A name the encoder emits that `x86.instr` has no row for is not known to the
+/// passes, which then treat it as reading and writing anything.
+/// `select_sweep.rs` holds what the encoder emits.
+#[test]
+fn every_name_the_encoder_emits_has_a_row() {
+    let sweep = include_str!("../../../target/llrm-x86/src/select_sweep.rs");
+    let mut emitted: Vec<(String, String)> = Vec::new();
+    for line in sweep.lines().filter(|line| line.contains(", 0, false, false, None, None, Some((\"")) {
+        let Some(rest) = line.trim_start().strip_prefix("check(sem(Op::") else { continue };
+        let Some((op, rest)) = rest.split_once(", ") else { continue };
+        let Some(name) = rest.strip_prefix("Some(\"").and_then(|rest| rest.split_once('"')).map(|(name, _)| name)
+        else {
+            continue;
+        };
+        if !name.is_empty() && !emitted.iter().any(|(was, one)| was == op && one == name) {
+            emitted.push((op.to_owned(), name.to_owned()));
+        }
+    }
+    assert!(emitted.len() > 40, "only {} names read from the sweep", emitted.len());
+    // Some target's: `les` is real mode's.
+    let forms: Vec<_> = [&llrm_x86_m16::M16 as &dyn Target, &llrm_x86_m32::M32]
+        .iter()
+        .flat_map(|target| parse::parse(&target.forms_text()).unwrap())
+        .collect();
+    let control = ["Branch", "Jump", "Call", "Return", "Escape", "Restore"];
+    let missing: Vec<String> = emitted
+        .iter()
+        .filter(|(op, name)| !control.contains(&op.as_str()) && !forms.iter().any(|form| &form.name == name))
+        .map(|(op, name)| format!("{op} {name}"))
+        .collect();
+    assert!(missing.is_empty(), "no row for {missing:?}");
 }
