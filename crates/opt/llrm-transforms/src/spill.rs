@@ -785,6 +785,13 @@ fn _cell(
     cells.get(&value).copied().unwrap_or(value)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// `traffic` calls, for a test that a pass finds the traffic of a function
+    /// only when it asks.
+    pub(crate) static TRAFFIC: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Each cell's traffic in `function`, weighted by `frequency`, from the
 /// instructions `kept` says stay; a cell of `words` words is stored a word
 /// at a time and loaded whole.
@@ -796,6 +803,8 @@ pub fn traffic(
     kept: &dyn Fn(InstId) -> bool,
     words: &dyn Fn(ValueId) -> i64,
 ) -> BTreeMap<ValueId, Traffic> {
+    #[cfg(test)]
+    TRAFFIC.with(|count| count.set(count.get() + 1));
     let mut found = BTreeMap::<ValueId, Traffic>::new();
     let often = |block: BlockId| frequency.get(&cfg::id(block)).copied().unwrap_or(1);
     let mut makers = BTreeMap::<ValueId, usize>::new();
