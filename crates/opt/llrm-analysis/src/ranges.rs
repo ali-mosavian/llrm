@@ -668,6 +668,25 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
     Ok(bounded_solved(unit, facts, None)?.facts())
 }
 
+/// The edges inside a loop, one after another, each node the state `known` is narrowed to by the path of edges to it.
+struct Prefix {
+    state: Rc<IndexMap<ValueId, Interval>>,
+    next: HashMap<(usize, usize, i64), usize>,
+    /// The node of the prefix one edge shorter, and the values this edge changed of its state.
+    parent: Option<usize>,
+    delta: Vec<ValueId>,
+    /// `state` swept: found from the parent's, and the values this edge changed.
+    settled: Option<Rc<IndexMap<ValueId, Interval>>>,
+}
+
+/// The states after every prefix of the edge chains met so far, for the `known` they were worked from.
+#[derive(Default)]
+struct Prefixes {
+    known: IndexMap<ValueId, Interval>,
+    roots: HashMap<Vec<(usize, usize, i64)>, usize>,
+    nodes: Vec<Prefix>,
+}
+
 /// `bounded`'s facts at each block, as the solve left them: those the counted loops give (`within`), and those with
 /// the edges' facts where a block is in none (`blocks`). A block that did not change shares its map with the solve
 /// before.
@@ -932,6 +951,18 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
             }
             touching
         });
+        // The operations `changed` values reach, and what those reach in turn, worked again in `scoped`.
+        let propagate = |scoped: &mut IndexMap<ValueId, Interval>, changed: &mut dyn Iterator<Item = &ValueId>| {
+            let touching = touching_of();
+            let mut queue: BTreeSet<usize> = changed.flat_map(|value| touching.get(value).into_iter().flatten().copied()).collect();
+            while let Some(place) = queue.pop_first() {
+                if let Some((result, previous)) = apply(scoped, operations[place])
+                    && previous.as_ref() != scoped.get(&result)
+                {
+                    queue.extend(touching.get(&result).into_iter().flatten().copied());
+                }
+            }
+        };
         // `known` swept: what holds of the loop before any block's edges narrow it. Every block asks of the same one.
         let swept: RefCell<Option<(IndexMap<ValueId, Interval>, Rc<IndexMap<ValueId, Interval>>)>> = RefCell::new(None);
         // `scoped` (`known` narrowed by a block's edges) swept, found from `known` swept: a sweep leaves an operation whose operands
@@ -959,17 +990,10 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
                     scoped.insert(*value, interval.clone());
                 }
             }
-            let mut queue: BTreeSet<usize> = narrowed.iter().flat_map(|value| touching.get(value).into_iter().flatten().copied()).collect();
-            while let Some(place) = queue.pop_first() {
-                if let Some((result, previous)) = apply(&mut scoped, operations[place])
-                    && previous.as_ref() != scoped.get(&result)
-                {
-                    queue.extend(touching.get(&result).into_iter().flatten().copied());
-                }
-            }
+            propagate(&mut scoped, &mut narrowed.iter());
             scoped
         };
-        let above_loop: RefCell<Option<(Vec<(usize, usize, i64)>, IndexMap<ValueId, Interval>)>> = RefCell::new(None);
+        let prefixes: RefCell<Prefixes> = RefCell::new(Prefixes::default());
         // Everything the branch edges above `at` and the assumes narrow `known` to there.
         let scope_at = |at: i64, known: &IndexMap<ValueId, Interval>| -> Result<IndexMap<ValueId, Interval>, String> {
             let mut scoped = known.clone();
@@ -1003,19 +1027,72 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
                 Ok(())
             };
             if separable {
-                let held = above_loop.borrow().as_ref().filter(|(edges, _)| *edges == chain[..outer]).map(|(_, delta)| delta.clone());
-                let delta = match held {
-                    Some(delta) => delta,
+                // The state after each prefix of the edges inside the loop is the same for every block that has them: a block whose
+                // dominator chain extends another's works out only the edges past it, not all of them again.
+                let mut held = prefixes.borrow_mut();
+                if held.known != *known {
+                    *held = Prefixes { known: known.clone(), ..Prefixes::default() };
+                }
+                let root = match held.roots.get(&chain[..outer]).copied() {
+                    Some(root) => root,
                     None => {
-                        let mut narrowed = scoped.clone();
+                        let mut narrowed = known.clone();
                         narrow_by(&chain[..outer], &mut narrowed)?;
-                        let delta: IndexMap<ValueId, Interval> = narrowed.into_iter().filter(|(value, interval)| scoped.get(value) != Some(interval)).collect();
-                        *above_loop.borrow_mut() = Some((chain[..outer].to_vec(), delta.clone()));
-                        delta
+                        held.nodes.push(Prefix { state: Rc::new(narrowed), next: HashMap::default(), parent: None, delta: Vec::new(), settled: None });
+                        let root = held.nodes.len() - 1;
+                        held.roots.insert(chain[..outer].to_vec(), root);
+                        root
                     }
                 };
-                scoped.extend(delta);
-                narrow_by(&chain[outer..], &mut scoped)?;
+                let mut node = root;
+                for edge in &chain[outer..] {
+                    node = match held.nodes[node].next.get(edge).copied() {
+                        Some(next) => next,
+                        None => {
+                            let mut state = (*held.nodes[node].state).clone();
+                            narrow_by(std::slice::from_ref(edge), &mut state)?;
+                            let delta = state.iter().filter(|(value, interval)| held.nodes[node].state.get(*value) != Some(*interval)).map(|(value, _)| *value).collect();
+                            held.nodes.push(Prefix { state: Rc::new(state), next: HashMap::default(), parent: Some(node), delta, settled: None });
+                            let next = held.nodes.len() - 1;
+                            held.nodes[node].next.insert(*edge, next);
+                            next
+                        }
+                    };
+                }
+                scoped = (*held.nodes[node].state).clone();
+                // A block no assume narrows is settled from its parent prefix's, with the one edge's values put over it: sweeping
+                // the narrowed state is that state's fixpoint, and the fixpoint of a state between this one and its fixpoint is the same.
+                if 2 * operations.len() > scoped.len() && assumed.above(&shape, at).is_empty() {
+                    let mut path = Vec::new();
+                    let mut at_node = Some(node);
+                    while let Some(one) = at_node.filter(|one| held.nodes[*one].settled.is_none()) {
+                        path.push(one);
+                        at_node = held.nodes[one].parent;
+                    }
+                    for one in path.into_iter().rev() {
+                        let settled = match held.nodes[one].parent {
+                            None => settle(held.nodes[one].state.as_ref().clone(), known),
+                            Some(parent) => {
+                                let mut y = held.nodes[parent].settled.as_ref().expect("the parent is settled first").as_ref().clone();
+                                for value in &held.nodes[one].delta {
+                                    narrow(&mut y, *value, held.nodes[one].state[value].clone());
+                                }
+                                propagate(&mut y, &mut held.nodes[one].delta.iter());
+                                y
+                            }
+                        };
+                        held.nodes[one].settled = Some(Rc::new(settled));
+                    }
+                    let settled = Rc::clone(held.nodes[node].settled.as_ref().expect("settled"));
+                    if check_scopes() {
+                        let whole = sweep(scoped.clone());
+                        if whole != *settled {
+                            let diff: Vec<String> = whole.iter().filter(|(v, i)| settled.get(*v) != Some(*i)).map(|(v, i)| format!("{:?}: sweep [{},{}] vs incremental {:?}", v, i.low, i.high, settled.get(v).map(|x| (x.low.to_string(), x.high.to_string())))).chain(settled.iter().filter(|(v, _)| !whole.contains_key(*v)).map(|(v, i)| format!("{:?}: only incremental [{},{}]", v, i.low, i.high))).collect();
+                            panic!("a block settled from its parent prefix's is not what sweeping its edges' state gives: {} (known {}, state {}, ops {})", diff.join("; "), known.len(), scoped.len(), operations.len());
+                        }
+                    }
+                    return Ok((*settled).clone());
+                }
             } else {
                 narrow_by(&chain, &mut scoped)?;
             }
