@@ -254,3 +254,19 @@ def test_gvn_stays_linear_in_the_statements_of_a_straight_line(tmp_path):
         own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     small, big = (own[label].get("mir gvn", 0.0) - own["empty"].get("mir gvn", 0.0) for label in ("n", "2n"))
     assert big <= 2.2 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
+def test_algebraic_stays_below_cubic_in_the_masks_of_one_function(tmp_path):
+    """branches(N) at -O2 (#1254's follow-up): each mask asked `ranges::scope_at` for its block's intervals, which built the map of
+    every block's scope from the manager's edges to give one: algebraic's own work read 2N/N = 3.7, 3.9, 4.0, 4.0 at N=128..1024
+    (5.9 G at 1024). The edges hold a block's scope; it is asked of them. It reads 2.7 to 3.3 (a mask's block is
+    cloned: the rest is the analyses it asks for, which are theirs). A step above 3.3 (slope 1.72) fails; a few Minstr of
+    start-up are allowed."""
+    n = 128
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"branches_{label}.c"
+        source.write_text("" if size == 0 else scaling.branches(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("mir algebraic", 0.0) - own["empty"].get("mir algebraic", 0.0) for label in ("n", "2n"))
+    assert big <= 3.3 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
