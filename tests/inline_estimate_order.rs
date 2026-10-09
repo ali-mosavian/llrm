@@ -4,10 +4,13 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// qb-runtime's `i8out.c` (source with an out-of-bounds store through a macro, which the compiler still has to finish): `_copy_bytes`
-/// is kept by the estimate at three sites in two callers. Spliced into both before the first was optimised, the GlobalsAA the first one's
-/// pipeline asked for ran for minutes (a 1 s compile at #1221 never finished at #1248): `mir interprocedural` spliced all of a
-/// callee's callers and then put them through the pipeline. 2.7 G instructions now; the bound is three times that.
+/// qb-runtime's `i8out.c` (source with an out-of-bounds store through a macro,
+/// which the compiler still has to finish): `_copy_bytes` is kept by the
+/// estimate at three sites in two callers. Spliced into both before the first
+/// was optimised, the GlobalsAA the first one's pipeline asked for ran for
+/// minutes (a 1 s compile at #1221 never finished at #1248): `mir
+/// interprocedural` spliced all of a callee's callers and then put them through
+/// the pipeline. 2.7 G instructions now; the bound is three times that.
 #[test]
 fn test_a_kept_inline_is_optimised_in_one_caller_before_the_next_is_spliced_into() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c/i8out");
