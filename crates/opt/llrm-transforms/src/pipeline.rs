@@ -301,14 +301,21 @@ pub fn passes() -> Vec<&'static str> {
     pipeline(&Applied::default()).iter().map(|one| one.name()).collect()
 }
 
-/// Plugs the pass manager's steps into `LLRM_DEBUG=time`, if it is on.
+/// Plugs the pass manager's steps into `LLRM_DEBUG=time` and `runs`, if either
+/// is on: `time` times them, `runs` tells a pass's own work from the analyses
+/// it computed.
 pub fn timed() {
     use llrm_support::debug;
-    if !debug::enabled("time") {
+    if !debug::enabled("time") && !debug::enabled("runs") {
         return;
     }
     llrm_mir::passes::observe(llrm_mir::passes::Observer {
-        span: |kind, name, run| debug::timed_by(|| format!("{kind} {name}"), run),
+        span: |kind, name, run| {
+            let timed = |run: &mut dyn FnMut()| {
+                if debug::enabled("time") { debug::timed_by(|| format!("{kind} {name}"), run) } else { run() }
+            };
+            if kind == "analysis" { debug::analysed(|| timed(run)) } else { timed(run) }
+        },
         function: |name, run| debug::in_function(name, run),
         count: |what, hit| debug::counted(what, hit),
     });
@@ -647,11 +654,13 @@ impl FunctionPass for Fixed {
             billing: llrm_support::debug::enabled("runs"),
             idle: 0,
             useful: 0,
+            idle_with_analyses: 0,
+            useful_with_analyses: 0,
         };
         self.transacted(unit, analyses, &mut run).unwrap_or_else(|error| panic!("pipeline: {error}"));
         llrm_support::debug!(
             "runs",
-            "body {} trigger {:?}: {} fixed points, {} rounds, {} pass runs, {} skipped as settled, {} changes, work idle {} useful {}",
+            "body {} trigger {:?}: {} fixed points, {} rounds, {} pass runs, {} skipped as settled, {} changes, work idle {} useful {} (with the analyses the passes computed first: idle {} useful {})",
             unit.id.map_or(-1, |id| i64::from(id.0)),
             TRIGGER.with(|trigger| trigger.borrow().clone()),
             run.fixed,
@@ -660,7 +669,9 @@ impl FunctionPass for Fixed {
             run.skipped,
             run.version,
             run.idle,
-            run.useful
+            run.useful,
+            run.idle_with_analyses,
+            run.useful_with_analyses
         );
         if run.version == 0 { PreservedAnalyses::all() } else { PreservedAnalyses::none() }
     }
@@ -684,6 +695,10 @@ struct Run {
     billing: bool,
     idle: u64,
     useful: u64,
+    /// The same two with the analyses the passes computed first: what skipping
+    /// a pass would not save, since the next pass to ask would pay it.
+    idle_with_analyses: u64,
+    useful_with_analyses: u64,
 }
 
 impl Run {
@@ -700,16 +715,19 @@ impl Run {
         }
         self.steps += 1;
         let before = unit.function.mark();
-        let billed = self.billing.then(llrm_support::debug::work);
+        let billed = self.billing.then(|| (llrm_support::debug::work(), llrm_support::debug::analysed_work()));
         let preserved =
             llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses)).unless_unchanged(unit.function, before);
-        if let Some(billed) = billed {
-            let spent = llrm_support::debug::work() - billed;
-            *(if preserved.are_all_preserved() { &mut self.idle } else { &mut self.useful }) += spent;
+        if let Some((billed, analysed)) = billed {
+            let with_analyses = llrm_support::debug::work() - billed;
+            let own = with_analyses.saturating_sub(llrm_support::debug::analysed_work() - analysed);
+            let idle = preserved.are_all_preserved();
+            *(if idle { &mut self.idle } else { &mut self.useful }) += own;
+            *(if idle { &mut self.idle_with_analyses } else { &mut self.useful_with_analyses }) += with_analyses;
             llrm_support::debug!(
                 "runs",
-                "step {stage} {} {spent}",
-                if preserved.are_all_preserved() { "idle" } else { "changed" }
+                "step {stage} {} {own} with-analyses {with_analyses}",
+                if idle { "idle" } else { "changed" }
             );
         }
         if preserved.are_all_preserved() {

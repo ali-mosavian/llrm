@@ -5,7 +5,7 @@
 
 Compiles each file of compile-cost.py's set with `LLRM_DEBUG=runs,time,regalloc` and prints, per body: pipeline runs (the first,
 then what the interprocedural step reruns it for), fixed-point rounds, pass runs; the work of the pass runs that changed nothing
-('idle', billed with whatever analyses they computed first) by round and by pass; and the backend's allocations per function.
+('idle': the pass's own work, the analyses it computed first left out, since the next pass to ask would pay them; `LLRM_DEBUG=runs` prints both) by round and by pass; and the backend's allocations per function.
 Exit 77 without a counter.
 """
 from __future__ import annotations
