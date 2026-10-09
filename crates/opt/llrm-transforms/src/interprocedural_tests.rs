@@ -51,6 +51,7 @@ fn stepped(
                 stages.push((module.global(id).name.clone().unwrap(), stage.to_owned()));
                 Ok(())
             },
+            &mut |_, _, function| Ok(function),
             &mut |_, _, _| Ok(()),
         )
     })
@@ -234,6 +235,7 @@ fn test_a_terminal_body_in_another_module_cuts_its_callers_tail() {
         1,
         Threshold::default(),
         &mut |_, _, _, _| Ok(()),
+        &mut |_, _, function| Ok(function),
         &mut |_, _, _| Ok(()),
     )
     .unwrap();
@@ -299,6 +301,7 @@ fn test_a_constant_another_module_returns_reaches_its_callers() {
         1,
         Threshold::default(),
         &mut |_, _, _, _| Ok(()),
+        &mut |_, _, function| Ok(function),
         &mut |_, _, _| Ok(()),
     )
     .unwrap();
@@ -327,6 +330,7 @@ fn test_an_entry_keeps_its_parameters_whatever_its_linkage() {
         1,
         Threshold::default(),
         &mut |_, _, _, _| Ok(()),
+        &mut |_, _, function| Ok(function),
         &mut |_, _, _| Ok(()),
     )
     .unwrap();
@@ -342,6 +346,7 @@ fn test_the_step_runs_as_a_program_pass() {
         crate::testing::Tuned { costs: OperationCosts { call: 4, ..OperationCosts::default() }, ..Default::default() };
     manager.add_program(Interprocedural {
         pipeline: Box::new(|_, _, _, _| {}),
+        specialise: Box::new(|_, _, function| function),
         proved: None,
         inline: Threshold::default(),
         rate: None,
@@ -390,6 +395,7 @@ b:
         };
         manager.add_program(Interprocedural {
             pipeline: Box::new(|_, _, _, _| {}),
+            specialise: Box::new(|_, _, function| function),
             proved: None,
             inline: Threshold::default(),
             rate,
@@ -1036,6 +1042,7 @@ b:
         };
         manager.add_program(Interprocedural {
             pipeline: Box::new(|_, _, _, _| {}),
+            specialise: Box::new(|_, _, function| function),
             proved: None,
             inline: Threshold::default(),
             rate: size.then_some(0),
@@ -1047,11 +1054,11 @@ b:
     assert_eq!((calls(false), calls(true)), (0, 0));
 }
 
-/// A site put back is not tried again: it is the same call in the same body
+/// Sites put back are not tried again: they are the same calls in the same body
 /// every round, and each try re-ran the caller's pipeline (mdl_ai.c: 59 s
 /// against 28 s for the same code).
 #[test]
-fn test_a_site_the_trial_put_back_is_not_tried_again() {
+fn test_sites_the_trial_put_back_are_not_tried_again() {
     let text = "define internal i16 @mix(i16 %a, i16 %b) {
 b:
   %t0 = xor i16 %a, %b
@@ -1104,7 +1111,7 @@ b:
     let runs = std::cell::Cell::new(0);
     let mut refused = BTreeSet::new();
     let again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused: &mut BTreeSet<_>| {
-        tried_sites::<String>(
+        together_trial::<String>(
             module,
             analyses,
             &layout,
@@ -1113,10 +1120,10 @@ b:
             &Default::default(),
             f,
             &sites,
-            refused,
+            &counts,
             &bytes,
             (&OperationCosts::default(), 0),
-            "trial.",
+            refused,
             &mut |_, _, _, _| {
                 runs.set(runs.get() + 1);
                 Ok(())
@@ -1128,6 +1135,87 @@ b:
     let first = runs.get();
     again(&mut module, &mut analyses, &mut refused);
     assert_eq!((first > 0, runs.get()), (true, first), "the second round runs no pipeline: {refused:?}");
+}
+
+/// A caller of many callees was spliced into and put through the pipeline once
+/// a callee, as a "trial" of each (the `callers` axis at N=64: 63 runs of the
+/// big body, each O(its size), 3,404 Minstr of the compile's 3,800). The sites
+/// the estimates refuse are tried together, once.
+#[test]
+fn test_a_caller_of_many_callees_is_put_through_the_pipeline_a_bounded_number_of_times() {
+    const CALLEES: usize = 12;
+    let body = |name: String| {
+        format!(
+            "define i16 @{name}(i16 %a, i16 %b) {{\nb:\n  %t0 = xor i16 %a, %b\n  %t1 = shl i16 %a, 3\n  %t2 = add i16 %t0, %t1\n  %t3 = lshr i16 %b, 2\n  %t4 = sub i16 %t2, %t3\n  %t5 = and i16 %t4, 2047\n  %t6 = or i16 %t5, %a\n  %t7 = xor i16 %t6, %b\n  %t8 = add i16 %t7, 5\n  ret i16 %t8\n}}\n\n"
+        )
+    };
+    let mut text: String = (0..CALLEES).map(|at| body(format!("g{at}"))).collect();
+    text.push_str("define i16 @f(i16 %x, i16 %y) {\nb:\n  %c0 = add i16 %x, %y\n");
+    for at in 0..CALLEES {
+        text.push_str(&format!("  %c{} = call i16 @g{at}(i16 %c{at}, i16 %y)\n", at + 1));
+    }
+    text.push_str(&format!("  ret i16 %c{CALLEES}\n}}\n"));
+    let mut program = Program::new(vec![parsed(&text)], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let roots = roots(&program);
+    let mut modules = managers(&program, &mut ProgramAnalyses::default());
+    let clocks = OperationCosts { call: 20, ..OperationCosts::default() };
+    let bytes = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
+    let runs = std::cell::Cell::new(0);
+    optimized::<String>(
+        &mut program,
+        &mut modules,
+        &roots,
+        &bytes,
+        Some(&clocks),
+        1,
+        20,
+        Threshold::default(),
+        &mut |module, _, id, _| {
+            if module.global(id).name.as_deref() == Some("f") {
+                runs.set(runs.get() + 1);
+            }
+            Ok(())
+        },
+        &mut |_, _, function| Ok(function),
+        &mut |_, _, _| Ok(()),
+    )
+    .unwrap();
+    assert!(runs.get() <= 3, "@f went through the pipeline {} times for {CALLEES} callees", runs.get());
+}
+
+/// A callee with the constants a site passes is run through the pipeline once,
+/// whatever number of sites pass them, and again only for another body or other
+/// constants: the fact that (callee, constants) comes to so many bytes, kept
+/// for the sites that ask and for a decision about a copy for those constants.
+#[test]
+fn test_a_callee_is_specialised_once_for_the_constants_its_sites_pass() {
+    let mut module = parsed(
+        "define i16 @mix(i16 %a, i16 %b) {\nb:\n  %t0 = xor i16 %a, %b\n  %t1 = shl i16 %a, 3\n  %t2 = add i16 %t0, %t1\n  ret i16 %t2\n}\n",
+    );
+    let mix = module.named("mix").unwrap();
+    let mut modules = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
+    let three = {
+        let ty = module.context.types.int(16);
+        module.context.int(ty, 3)
+    };
+    let four = {
+        let ty = module.context.types.int(16);
+        module.context.int(ty, 4)
+    };
+    let runs = std::cell::Cell::new(0);
+    let mut memo = Specialisations::default();
+    let costs = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
+    let mut bytes = |constants: &[Option<llrm_mir::context::ConstantId>]| {
+        memo.bytes::<String>(&mut module, &mut modules, mix, constants, &costs, &mut |_, _, function| {
+            runs.set(runs.get() + 1);
+            Ok(function)
+        })
+        .unwrap()
+    };
+    let (first, again) = (bytes(&[Some(three), None]), bytes(&[Some(three), None]));
+    assert_eq!((first, runs.get()), (again, 1), "the second site made the specialisation again");
+    bytes(&[Some(four), None]);
+    assert_eq!(runs.get(), 2, "other constants share the first's");
 }
 
 /// A body whose address is taken is also called through it, with actuals no
@@ -1331,84 +1419,11 @@ fn test_a_small_recursive_function_is_inlined_into_itself_to_a_depth() {
     assert_eq!(calls(Threshold::default().for_size()), 2, "not for size: the recursive call is cold there");
 }
 
-/// A callee trial that was refused is not made again in the state it was made
-/// in (host.c: three trials, each made in five rounds, 37% of the compile,
-/// objects the same). Each try re-ran the callers' pipelines.
-#[test]
-fn test_a_callee_the_trial_refused_is_not_tried_again_in_the_same_state() {
-    let text = "define internal i16 @mix(i16 %a, i16 %b) {
-b:
-  %t0 = xor i16 %a, %b
-  %t1 = shl i16 %a, 3
-  %t2 = add i16 %t0, %t1
-  %t3 = lshr i16 %b, 2
-  %t4 = sub i16 %t2, %t3
-  %t5 = and i16 %t4, 2047
-  %t6 = or i16 %t5, %a
-  %t7 = xor i16 %t6, %b
-  %t8 = add i16 %t7, 5
-  ret i16 %t8
-}
-
-define i16 @f(i16 %x, i16 %y) {
-b:
-  %p = call i16 @mix(i16 %x, i16 %y)
-  %q = call i16 @mix(i16 %y, i16 %x)
-  %r = add i16 %p, %q
-  ret i16 %r
-}
-";
-    let mut module = parsed(text);
-    let layout = llrm_mir::datalayout::DataLayout::default();
-    let clocks = OperationCosts { call: 20, ..OperationCosts::default() };
-    let bytes = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
-    let mix = module.named("mix").unwrap();
-    let counts = inline::call_counts(&module);
-    let candidates = inline::candidates(
-        &module,
-        &llrm_mir::memory::callees(&module),
-        &layout,
-        &counts,
-        &BTreeSet::from([mix]),
-        &clocks,
-        20,
-        Threshold::default(),
-    );
-    let more: llrm_support::hash::IndexMap<_, _> = candidates.into_iter().filter(|(id, _)| *id == mix).collect();
-    let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
-    let runs = std::cell::Cell::new(0);
-    let mut refused_trials: Vec<RefusedTrial> = Vec::new();
-    let again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused_trials: &mut Vec<RefusedTrial>| {
-        tried_callees::<String>(
-            module,
-            analyses,
-            &layout,
-            &BTreeSet::from([mix]),
-            &BTreeSet::new(),
-            &Default::default(),
-            &more,
-            &bytes,
-            (&OperationCosts::default(), 0),
-            refused_trials,
-            &mut |_, _, _, _| {
-                runs.set(runs.get() + 1);
-                Ok(())
-            },
-        )
-        .unwrap()
-    };
-    assert!(!again(&mut module, &mut analyses, &mut refused_trials), "premise: the trial is refused");
-    let first = runs.get();
-    assert!(first > 0, "premise: the trial ran a pipeline");
-    again(&mut module, &mut analyses, &mut refused_trials);
-    assert_eq!(runs.get(), first, "the second round made the refused trial again");
-}
-
-/// A trial of a callee at several sites splices them all and runs the caller's
+/// A trial of several sites splices them all and runs the caller's
 /// pipeline once, the way gcc and LLVM inline: it ran the pipeline after each
 /// site (host.c -6.6%, QCport -2.2%, the code the same).
 #[test]
-fn test_a_trial_of_a_callee_at_several_sites_runs_the_callers_pipeline_once() {
+fn test_a_trial_of_several_sites_runs_the_callers_pipeline_once() {
     let text = "define internal i16 @mix(i16 %a, i16 %b) {
 b:
   %t0 = xor i16 %a, %b
@@ -1447,30 +1462,41 @@ b:
         20,
         Threshold::default(),
     );
-    let more: llrm_support::hash::IndexMap<_, _> = candidates.into_iter().filter(|(id, _)| *id == mix).collect();
+    let f = module.named("f").unwrap();
+    let calls: Vec<_> = module
+        .global(f)
+        .function()
+        .unwrap()
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| {
+            llrm_mir::memory::callee(&module.context, module.global(f).function().unwrap(), inst) == Some(mix)
+        })
+        .collect();
+    let sites: llrm_support::hash::IndexMap<_, _> =
+        calls.iter().map(|&call| (call, candidates[&mix].clone())).collect();
     let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
     let runs = std::cell::Cell::new(0);
-    let mut refused_trials: Vec<RefusedTrial> = Vec::new();
-    let again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused_trials: &mut Vec<RefusedTrial>| {
-        tried_callees::<String>(
-            module,
-            analyses,
-            &layout,
-            &BTreeSet::from([mix]),
-            &BTreeSet::new(),
-            &Default::default(),
-            &more,
-            &bytes,
-            (&OperationCosts::default(), 0),
-            refused_trials,
-            &mut |_, _, _, _| {
-                runs.set(runs.get() + 1);
-                Ok(())
-            },
-        )
-        .unwrap()
-    };
-    again(&mut module, &mut analyses, &mut refused_trials);
+    let mut refused = BTreeSet::new();
+    together_trial::<String>(
+        &mut module,
+        &mut analyses,
+        &layout,
+        &BTreeSet::from([mix]),
+        &BTreeSet::new(),
+        &Default::default(),
+        f,
+        &sites,
+        &counts,
+        &bytes,
+        (&OperationCosts::default(), 0),
+        &mut refused,
+        &mut |_, _, _, _| {
+            runs.set(runs.get() + 1);
+            Ok(())
+        },
+    )
+    .unwrap();
     assert_eq!(runs.get(), 1, "the pipeline ran once for each of the callee's two sites");
 }
 
