@@ -85,10 +85,5 @@ pub static NO_NAMES: Set = Set { names: &[], fixed: &[] };
 
 include!(concat!(env!("OUT_DIR"), "/peep_rules.rs"));
 
-/// Every target's rules, as its definition directory is named.
-pub mod targets {
-    include!(concat!(env!("OUT_DIR"), "/peep_targets.rs"));
-}
-
 #[cfg(test)]
 mod tests;

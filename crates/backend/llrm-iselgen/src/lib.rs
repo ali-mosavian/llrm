@@ -6,6 +6,7 @@
 //! A build-dependency of each crate that has selection patterns.
 
 pub mod automaton;
+pub mod build;
 pub mod parse;
 
 use std::fmt::Write as _;
@@ -404,7 +405,7 @@ pub static SELECTOR: Compiled = Compiled {{
     covers_here: {ident}_covers,
     cost: {ident}_cost,
     emit: {ident}_emit,
-    rules: &crate::backend::peep::targets::{ident}::RULES,
+    rules: &RULES,
 }};"
     )
     .unwrap();

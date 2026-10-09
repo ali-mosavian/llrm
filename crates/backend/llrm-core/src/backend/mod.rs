@@ -39,6 +39,11 @@ pub mod globals;
 pub mod inline_asm;
 pub mod isel;
 
+/// Every target's peephole rules, as its definition directory is named.
+pub mod targets {
+    include!(concat!(env!("OUT_DIR"), "/peep_targets.rs"));
+}
+
 /// Every target's generated selector, bound by name (`isel::selector`).
 pub mod selectors {
     use super::isel::api::Compiled;

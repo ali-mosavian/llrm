@@ -395,6 +395,7 @@ name = "llrm-iselgen"
 version = "0.1.0"
 dependencies = [
  "llrm-lir",
+ "llrm-peepgen",
  "llrm-support",
 ]
 

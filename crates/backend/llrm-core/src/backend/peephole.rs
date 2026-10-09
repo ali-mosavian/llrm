@@ -109,7 +109,7 @@ impl Peephole {
         Self::with_rules(
             frame,
             cpu,
-            &peep::targets::x86_m16::RULES,
+            &crate::backend::targets::x86_m16::RULES,
             llrm_x86_m16::PRESERVED.iter().map(|(whole, _)| *whole).collect(),
             RegisterClasses::m16(),
         )
