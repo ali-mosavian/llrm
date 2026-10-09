@@ -978,12 +978,21 @@ pub fn _moved_lanes(
     bits: u32,
     one: &Insn,
 ) -> Option<(Vec<(Lane, Lane)>, Lanes)> {
+    let _ = bits;
+    moved_by(one.what.as_ref().and_then(constant_shift)?)
+}
+
+/// `_moved_lanes` as the encoder's bytes decode.
+pub fn _moved_lanes_by_decoding(
+    bits: u32,
+    one: &Insn,
+) -> Option<(Vec<(Lane, Lane)>, Lanes)> {
     let instructions = one.what.as_ref().and_then(|what| _decoded(bits, what))?;
     let [insn] = instructions.as_slice() else {
         return None;
     };
     let register = |index: u32| (insn.op_kind(index) == OpKind::Register).then(|| insn.op_register(index));
-    let (left, destination, source, count) = match insn.mnemonic() {
+    let shift = match insn.mnemonic() {
         Mnemonic::Shl | Mnemonic::Shr if insn.op_count() == 2 && insn.op1_kind() == OpKind::Immediate8 => {
             (insn.mnemonic() == Mnemonic::Shl, register(0), None, insn.immediate8())
         }
@@ -992,6 +1001,28 @@ pub fn _moved_lanes(
         }
         _ => return None,
     };
+    moved_by(shift)
+}
+
+/// A shift by a constant: whether it is left, its destination, the register
+/// shifted in, and the count.
+type Shift = (bool, Option<Register>, Option<Register>, u8);
+
+/// `what` as a shift by a constant, from its operands.
+fn constant_shift(what: &Semantics) -> Option<Shift> {
+    let left = matches!(what.name.as_deref()?, "shl" | "shld");
+    match (what.name.as_deref()?, what.dests.as_slice(), what.sources.as_slice()) {
+        ("shl" | "shr", [Loc::Reg(dest)], [Loc::Reg(_), Loc::Imm(count)]) => {
+            Some((left, Some(dest.register), None, count.value as u8))
+        }
+        ("shld" | "shrd", [Loc::Reg(dest)], [Loc::Reg(_), Loc::Reg(source), Loc::Imm(count)]) => {
+            Some((left, Some(dest.register), Some(source.register), count.value as u8))
+        }
+        _ => None,
+    }
+}
+
+fn moved_by((left, destination, source, count): Shift) -> Option<(Vec<(Lane, Lane)>, Lanes)> {
     let destination = destination.filter(|one| matches!(one.size(), 2 | 4) && !_lanes(*one).is_empty())?;
     if source.is_some_and(|one| one.size() != destination.size() || _lanes(one).is_empty()) {
         return None;
@@ -1181,7 +1212,89 @@ pub fn effects_computed() -> usize {
     EFFECTS_COMPUTED.with(std::cell::Cell::get)
 }
 
+thread_local! {
+    static SERVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static FALLBACKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many effects this thread has taken from `x86.instr`, and how many it had
+/// to decode, for a test that the table answers.
+pub fn served_and_decoded() -> (usize, usize) {
+    (SERVED.with(std::cell::Cell::get), FALLBACKS.with(std::cell::Cell::get))
+}
+
 fn _register_effects_of(
+    bits: u32,
+    one: &Insn,
+    what: &Semantics,
+    may_write: bool,
+    flags: bool,
+) -> Effects {
+    let Some(served) = _effects_by_table(bits, one, what, may_write, flags) else {
+        FALLBACKS.with(|count| count.set(count.get() + 1));
+        if llrm_support::env_set("LLRM_CHECK_EFFECTS") {
+            eprintln!("effects: decoded {:?} {:?}", what.op, what.name);
+        }
+        return _effects_by_decoding(bits, one, what, may_write, flags);
+    };
+    SERVED.with(|count| count.set(count.get() + 1));
+    if llrm_support::env_set("LLRM_CHECK_EFFECTS") {
+        let decoded = _effects_by_decoding(bits, one, what, may_write, flags);
+        // An instruction the encoder refuses has no bytes to decode; the table
+        // still says what it would do.
+        if decoded.is_none() && served.is_some() {
+            eprintln!("effects: the encoder refuses {what:?}");
+        }
+        assert!(
+            decoded.is_none() || served == decoded,
+            "x86.instr and the decoder differ on {what:?}: {served:?} against {decoded:?}"
+        );
+    }
+    served
+}
+
+/// `_register_effects_of` as `x86.instr` states it: None where it has no row.
+pub fn _effects_by_table(
+    bits: u32,
+    one: &Insn,
+    what: &Semantics,
+    may_write: bool,
+    flags: bool,
+) -> Option<Effects> {
+    let found = match crate::backend::effects::served(bits, what)? {
+        crate::backend::effects::Served::Unknown => return Some(None),
+        crate::backend::effects::Served::Known(found) => found,
+    };
+    let mut reads: Lanes = one
+        .requires
+        .iter()
+        .flat_map(|(held, register)| _lanes(target::named(*register, i64::from(held.width))))
+        .collect();
+    let mut writes: Lanes = one
+        .delivers
+        .iter()
+        .flat_map(|(held, register)| _lanes(target::named(*register, i64::from(held.width))))
+        .collect();
+    if flags {
+        reads.extend(_flag_lanes(found.flags_read).minus(&writes));
+        writes.extend(_flag_lanes(found.flags_written));
+    }
+    for register in &found.reads {
+        reads.extend(_lanes(*register).minus(&writes));
+    }
+    for register in &found.writes {
+        writes.extend(_lanes(*register));
+    }
+    if may_write {
+        for register in &found.maybe_writes {
+            writes.extend(_lanes(*register));
+        }
+    }
+    Some(Some((reads, writes)))
+}
+
+/// `_register_effects_of` as the encoder's bytes decode.
+pub fn _effects_by_decoding(
     bits: u32,
     one: &Insn,
     what: &Semantics,
