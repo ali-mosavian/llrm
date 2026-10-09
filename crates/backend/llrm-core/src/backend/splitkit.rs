@@ -1364,6 +1364,18 @@ mod tests {
         assert_eq!(body.facts.0.counted("split-names"), 3, "the three instructions naming v3, from the postings");
     }
 
+    /// A carve asked whether its value is a constant or an address by three
+    /// walks of every instruction of the body (`spiller::recomputed`: d_faces
+    /// -O1, 427 carves, 500 M of 25.6 G instructions). The value's definitions
+    /// come from the postings.
+    #[test]
+    fn test_a_carve_finds_the_definitions_of_its_value_from_the_postings() {
+        let body = _pointer_across_a_loop();
+        let made = spiller::recomputed(&body, 3).expect("v3 is a constant made once");
+        assert_eq!(made.defines, [3]);
+        assert_eq!(body.facts.0.counted("recomputed-definitions"), 1, "the one definition, from the postings");
+    }
+
     /// v3 is made before the loop, read in it and after it, as a cell's base.
     fn _pointer_across_a_loop() -> LirBody {
         let cell = Loc::Mem(Mem {
