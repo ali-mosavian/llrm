@@ -63,7 +63,9 @@ impl Compiled {
     }
 }
 
-/// The selector of the target `name`, as its definition directory is named.
+/// The fixture selector of the target `name`, as its definition directory is
+/// named: what the tests of this crate use in place of a select crate's.
+#[cfg(feature = "fixtures")]
 pub fn selector(name: &str) -> Option<&'static Compiled> {
     crate::backend::selectors::ALL.iter().copied().find(|one| one.name == name)
 }

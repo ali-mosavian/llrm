@@ -14,6 +14,7 @@ fn main() {
     }
     let family = build::family(std::path::Path::new("../../target/llrm-x86"));
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let fixtures = std::env::var_os("CARGO_FEATURE_FIXTURES").is_some();
     let targets = build::targets(std::path::Path::new("../../target"));
     println!("cargo:rerun-if-changed=src/backend/peep/groups.list");
     let groups =
@@ -24,7 +25,9 @@ fn main() {
     let mut modes: Vec<(String, String)> = Vec::new();
     let mut peep = String::new();
     let mut all = Vec::new();
-    for dir in &targets {
+    // Without the fixtures feature nothing is generated for a target: the
+    // select crates do that.
+    for dir in targets.iter().filter(|_| fixtures) {
         let built = build::target(dir, &family, &groups, "crate", &out);
         let ident = &built.ident;
         effects.push_str(&format!(
@@ -47,9 +50,9 @@ fn main() {
     std::fs::write(out.join("selectors.rs"), index).unwrap();
     // The table of the target whose code is `bits` bits, by what its
     // description says.
-    effects.push_str("pub fn rows_for(bits: u32) -> Option<&'static dyn Fn(&str, usize, usize) -> &'static [llrm_x86::effects::Row]> {\n");
+    effects.push_str("pub fn rows_for(bits: u32) -> Option<crate::backend::effects::Rows> {\n");
     for (ident, mode) in &modes {
-        effects.push_str(&format!("    if bits == {mode} {{\n        return Some(&{ident}::rows);\n    }}\n"));
+        effects.push_str(&format!("    if bits == {mode} {{\n        return Some({ident}::rows);\n    }}\n"));
     }
     effects.push_str("    None\n}\n");
     std::fs::write(out.join("effects.rs"), effects).unwrap();

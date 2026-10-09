@@ -73,6 +73,37 @@ pub fn target(
     Built { name, ident, mode, rules }
 }
 
+impl Built {
+    /// The source a target's select crate includes: its peephole `RULES`, its
+    /// `SELECTOR` (which holds them), its effect `rows` and the code width
+    /// `MODE`, the same names for every target.
+    pub fn select_source(&self) -> String {
+        let ident = &self.ident;
+        format!(
+            "{rules}
+pub use {ident}::RULES;
+
+mod selection {{
+    use super::RULES;
+
+    include!(concat!(env!(\"OUT_DIR\"), \"/isel_{ident}.rs\"));
+}}
+pub use selection::SELECTOR;
+
+mod effect_rows {{
+    include!(concat!(env!(\"OUT_DIR\"), \"/effects_{ident}.rs\"));
+}}
+pub use effect_rows::rows;
+
+/// The code width of the target, in bits.
+pub const MODE: u32 = {mode};
+",
+            rules = self.rules,
+            mode = self.mode
+        )
+    }
+}
+
 /// The target definition directories under `crates/target` (`dir`), sorted.
 pub fn targets(dir: &Path) -> Vec<PathBuf> {
     let mut found: Vec<_> = std::fs::read_dir(dir)

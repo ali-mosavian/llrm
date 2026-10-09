@@ -301,6 +301,7 @@ dependencies = [
  "llrm-coff",
  "llrm-coff32",
  "llrm-coff64",
+ "llrm-core",
  "llrm-dwarf",
  "llrm-elf32",
  "llrm-elf64",
@@ -340,7 +341,9 @@ dependencies = [
  "llrm-target",
  "llrm-x86",
  "llrm-x86-m16",
+ "llrm-x86-m16-select",
  "llrm-x86-m32",
+ "llrm-x86-m32-select",
 ]
 
 [[package]]
@@ -602,12 +605,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-x86-m16-select"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "llrm-core",
+ "llrm-iselgen",
+ "llrm-x86",
+]
+
+[[package]]
 name = "llrm-x86-m32"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
  "llrm-mir",
  "llrm-target",
+ "llrm-x86",
+]
+
+[[package]]
+name = "llrm-x86-m32-select"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "llrm-core",
+ "llrm-iselgen",
  "llrm-x86",
 ]
 
