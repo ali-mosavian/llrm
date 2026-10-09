@@ -11,6 +11,8 @@ rust-version = "1.87"
 [workspace.dependencies]
 iced-x86 = { version = "=1.21.0", default-features = false, features = ["std", "decoder", "block_encoder", "op_code_info", "instr_info", "nasm", "no_vex", "no_evex", "no_xop", "no_d3now"] }
 indexmap = "2"
+# The compilers' allocator: glibc's malloc and free were a quarter of a compile's instructions.
+mimalloc = { version = "0.1", default-features = false }
 num-bigint = "0.4"
 num-traits = "0.2"
 rustc-hash = "2"
@@ -61,6 +63,7 @@ description = "Low Level Real Machine: compiler suite for 16-bit real-mode DOS w
 default-run = "llrm-qb"
 
 [dependencies]
+mimalloc = { workspace = true }
 llrm-core = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-bcdriver = { workspace = true }
