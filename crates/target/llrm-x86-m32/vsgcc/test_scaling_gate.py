@@ -138,3 +138,22 @@ def test_the_steps_that_scanned_every_function_per_function_stay_linear_in_the_f
         if big > 2.2 * small + 5.0:
             grown[step] = f"{small:.1f} -> {big:.1f} Minstr"
     assert not grown, grown
+
+
+def test_the_steps_that_ran_for_every_inline_trial_stay_linear_in_the_callers(tmp_path):
+    """The inliner tried each call site of the caller of N callees by splicing it and putting the whole body through the pipeline
+    (N=64: 63 runs of the one big body), so call-effects, through-memory, points-to, annotated, float-facts and pointer-values read
+    2N/N = 3.9 each on the `callers` axis (190 G instructions at N=512; 10.8 G since). The sites the estimates refuse are tried
+    together, once. A step above 2.2 per doubling fails."""
+    n = 128
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"callers_{label}.c"
+        source.write_text("" if size == 0 else scaling.callers(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    grown = {}
+    for step in ("analysis call-effects", "analysis through-memory", "analysis points-to", "analysis annotated", "analysis float-facts", "analysis pointer-values"):
+        small, big = (own[label].get(step, 0.0) - own["empty"].get(step, 0.0) for label in ("n", "2n"))
+        if big > 2.2 * small + 5.0:
+            grown[step] = f"{small:.1f} -> {big:.1f} Minstr"
+    assert not grown, grown
