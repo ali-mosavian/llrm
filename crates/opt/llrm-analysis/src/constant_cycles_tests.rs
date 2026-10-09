@@ -81,3 +81,22 @@ fn a_join_of_a_constant_and_an_argument_is_not_known() {
     let (_, joined, _) = facts(&body_with_cycle(0, false).replace("[ 7, %b0 ]", "[ %incoming, %b0 ]"));
     assert!(joined.is_none());
 }
+
+/// The propagation was set up (a recipe for every value, the consumers, a copy
+/// of the graph) at the end of every solve of what is known, 25000 times over
+/// QCport at -O1 and 1.8% of that compile, for bodies with no phi left to
+/// resolve. It is worked only where a phi has no fact.
+#[test]
+fn test_a_body_with_no_open_phi_sets_no_propagation_up() {
+    let straight = "define i32 @f(i32 %a) {\nb0:\n  %x = add i32 %a, 1\n  %y = mul i32 %x, 3\n  ret i32 %y\n}\n";
+    let worked = |text: &str| {
+        let module = parsed(&format!("{DOS}{text}"));
+        let dl = layout(&module);
+        let f = function(&module, "f");
+        super::WORKED.with(|worked| worked.set(0));
+        known(&crate::testing::with_registers(Unit::of(&module, &dl, f)), None, None, None);
+        super::WORKED.with(std::cell::Cell::get)
+    };
+    assert_eq!(worked(straight), 0, "a body without a phi");
+    assert!(worked(&body_with_cycle(0, true)) > 0, "premise: a phi no seed has is propagated");
+}

@@ -1022,3 +1022,33 @@ fn test_a_three_way_block_keeps_its_jump() {
     );
     assert_eq!(inverted(&body).blocks[0].insns.len(), 4);
 }
+
+/// `threaded` restarted its scan at the first block after every change: a
+/// function of N blocks that each end in a jump to the next took N steps of
+/// up to N blocks (d_faces: 210 steps over 243 blocks, 0.45% of the compile;
+/// sc -O1 1.1%). It goes on from the changed block and repeats from the top
+/// only while a pass changed something.
+#[test]
+fn test_threading_a_chain_of_removable_jumps_visits_blocks_a_few_times_not_n_times() {
+    let count: i64 = 200;
+    let mut blocks: Vec<LirBlock> = (0..count)
+        .map(|at| {
+            block(
+                at * 0x10,
+                vec![_move(at * 0x10, imm(at)), _inserted(_jump(at * 0x10 + 1, (at + 1) * 0x10))],
+                vec![(at + 1) * 0x10],
+            )
+        })
+        .collect();
+    blocks.push(block(count * 0x10, vec![_return(count * 0x10)], Vec::new()));
+    let source = body("f", 0, blocks);
+    let result = threaded(&source);
+    let jumps = result
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Jump));
+    assert_eq!(jumps.count(), 0, "premise: every jump to the next block goes");
+    let visits = result.facts.0.counted("jump-visits");
+    assert!(visits <= 3 * (count as usize + 1), "{visits} block visits for {count} removable jumps");
+}

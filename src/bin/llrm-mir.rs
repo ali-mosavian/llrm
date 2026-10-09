@@ -8,6 +8,9 @@
 
 use std::process::ExitCode;
 
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> ExitCode {
     let mut arguments: Vec<String> = std::env::args().skip(1).collect();
     let run = arguments.first().is_some_and(|one| one == "--run");
