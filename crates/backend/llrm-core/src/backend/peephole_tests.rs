@@ -4618,3 +4618,35 @@ fn test_copy_propagation_works_a_block_again_only_when_a_parent_changed() {
     let worked = crate::analysis::dataflow::WORKED.with(std::cell::Cell::get);
     assert!(worked <= 4 * blocks as usize, "{worked} blocks worked for a loop of {blocks}");
 }
+
+/// Every sub-pass walked every function's whole body, `copyprop` and
+/// `regthrash` among them, found no copy in most and changed nothing: two
+/// thirds of the peephole's time went to passes that found nothing. A body with
+/// no copy is not given to copy propagation.
+#[test]
+fn test_a_function_without_a_copy_runs_copy_propagation_zero_times() {
+    let add = |at, into, from| {
+        Arc::new(insn(
+            at,
+            Some((at, at)),
+            Some(sem(Operation::Binary, "add", vec![rl(into, 2)], vec![rl(into, 2), rl(from, 2)])),
+            vec![],
+            vec![],
+        ))
+    };
+    let copy = |at, into, from| {
+        Arc::new(insn(
+            at,
+            Some((at, at)),
+            Some(sem(Operation::Move, "mov", vec![rl(into, 2)], vec![rl(from, 2)])),
+            vec![],
+            vec![],
+        ))
+    };
+    let before = copyprop::runs();
+    transform(one_block(vec![add(0, Register::CX, Register::DX), add(1, Register::BX, Register::CX)]));
+    assert_eq!(copyprop::runs() - before, 0, "copy propagation ran on a body with no copy");
+    let before = copyprop::runs();
+    transform(one_block(vec![copy(0, Register::AX, Register::BX), add(1, Register::CX, Register::AX)]));
+    assert!(copyprop::runs() - before >= 1, "copy propagation did not run on a body with a copy");
+}
