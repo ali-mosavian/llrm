@@ -57,6 +57,15 @@ pub trait Machine {
         false
     }
 
+    /// Whether the target has several registers a comparison's result can
+    /// be kept in (LLVM's `hasMultipleConditionRegisters`), so that one made
+    /// in a block and read by a branch in another is held there. Not where
+    /// the result is the flags, one register that anything arithmetic
+    /// overwrites: x86.
+    fn multiple_condition_registers(&self) -> bool {
+        false
+    }
+
     /// Of `registers`, how many an address's pointer and index may be held
     /// in, where only some can: none where any can.
     fn address_registers(&self) -> i64 {

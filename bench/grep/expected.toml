@@ -1,8 +1,8 @@
-reason = "a spill store ahead of a branch is made on the path that reads the slot, off the other (bintree -2.5% instructions, quicksort c -0.8%, queens -0.1%); bintree nib -Os +1 byte (the store's edge block)"
+reason = "a comparison another block's branch reads is made again there (CodeGenPrepare's sinkCmpExpression): queens -1.8% clocks, grep -12 bytes; queens nib -Os +551 memory operands (the byte held in memory is a compare made again)"
 blessed = "2026-10-09"
 
 [bas.O2]
-code_bytes = 995
+code_bytes = 993
 data_bytes = 113
 bss_bytes = 0
 kernel_ms = 3887.2019
@@ -26,13 +26,13 @@ bss_bytes = 3056
 kernel_ms = 3415.6629
 
 [nib.O2]
-code_bytes = 1465
+code_bytes = 1453
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4239.5804
 
 [nib.Os]
-code_bytes = 1386
+code_bytes = 1374
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4239.6052
