@@ -173,5 +173,5 @@ fn the_rule_groups_come_from_one_list() {
     all.sort_unstable();
     assert_eq!(present, all);
     assert!(super::Rules::NONE.present().is_empty());
-    assert_eq!(super::Rules::GROUPS.len(), 20);
+    assert_eq!(super::Rules::GROUPS.len(), 21);
 }

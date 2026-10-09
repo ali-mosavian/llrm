@@ -1,10 +1,10 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
+reason = "movzx r,m8 becomes xor r,r; mov rl,m8 where the CPU description prices the pair lower (486: 2 clocks against 3), one instruction and one byte more per load: vsgcc harness 486 clocks fall, crc 864 to 855, x_life 400178 to 356042 (now under gcc -O2's 368012); gcc -march=i486 emits the same pair"
 blessed = "2026-10-09"
 
 [bas.O2]
-instructions = 30045
+instructions = 34045
 memory_operands = 8013
-code_bytes = 232
+code_bytes = 233
 data_bytes = 13
 bss_bytes = 0
 
@@ -16,9 +16,9 @@ data_bytes = 13
 bss_bytes = 0
 
 [c.O2]
-instructions = 30009
+instructions = 34009
 memory_operands = 8000
-code_bytes = 75
+code_bytes = 76
 data_bytes = 0
 bss_bytes = 0
 
@@ -30,9 +30,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 30024
+instructions = 34024
 memory_operands = 8000
-code_bytes = 104
+code_bytes = 105
 data_bytes = 0
 bss_bytes = 0
 
