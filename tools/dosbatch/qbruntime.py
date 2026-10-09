@@ -53,6 +53,52 @@ def first_byte_difference(want: bytes, got: bytes) -> str:
     return ""
 
 
+def screen_samples(work: Path) -> tuple[tuple[str, ...], ...]:
+    """DOS text screens sampled at job boundaries."""
+    events = work / "events.txt"
+    if not events.is_file():
+        return ()
+    return tuple(
+        tuple(json.loads(line)["rows"])
+        for line in events.read_text().splitlines()
+        if line.startswith('{"ev":"screen"')
+    )
+
+
+def screen_delta(before: tuple[str, ...], after: tuple[str, ...]) -> tuple[str, ...]:
+    """Cells the program changed, with unchanged cells masked independently on each side."""
+    rows = []
+    for row in range(max(len(before), len(after))):
+        old = before[row] if row < len(before) else ""
+        new = after[row] if row < len(after) else ""
+        cells = []
+        for column in range(max(len(old), len(new))):
+            previous = old[column] if column < len(old) else "\0"
+            current = new[column] if column < len(new) else "\uffff"
+            cells.append(current if previous != current else "\0")
+        rows.append("".join(cells))
+    return tuple(rows)
+
+
+def screen_changes(work: Path) -> tuple[str, ...] | None:
+    """The final DOS screen relative to the screen after the link job."""
+    screens = screen_samples(work)
+    return screen_delta(screens[-2], screens[-1]) if len(screens) >= 2 else None
+
+
+def first_screen_difference(want: tuple[str, ...], got: tuple[str, ...]) -> str:
+    """The first differing text-mode screen cell, without line normalization."""
+    for row, (left, right) in enumerate(zip(want, got), 1):
+        for column, (wanted, actual) in enumerate(zip(left, right), 1):
+            if wanted != actual:
+                return f"cell {row}:{column}: want {wanted!r} got {actual!r}"
+        if len(left) != len(right):
+            return f"row {row}: want {len(left)} cells got {len(right)}"
+    if len(want) != len(got):
+        return f"screen: want {len(want)} rows got {len(got)}"
+    return ""
+
+
 def raw_output(work: Path, stem: str) -> bytes:
     """The exact redirected bytes for a completed DOS job."""
     for name in (f"{stem}.TXT", f"{stem.upper()}.TXT", f"{stem.lower()}.txt"):
@@ -76,6 +122,7 @@ class Differential:
     reference: dosbatch.Result
     candidate: dosbatch.Result
     difference: str
+    screen_difference: str
 
 
 def differential(object_: Path, archive: Path, work: Path, stem: str) -> Differential:
@@ -88,9 +135,15 @@ def differential(object_: Path, archive: Path, work: Path, stem: str) -> Differe
         [dosbatch.Job(job_stem, "obj", object_, runtime="llrmqb", runtime_file=archive)], candidate_work
     )[job_stem]
     if reference.status != "ok" or candidate.status != "ok":
-        return Differential(reference, candidate, "a differential side did not complete")
+        return Differential(reference, candidate, "a differential side did not complete", "")
     difference = first_byte_difference(raw_output(reference_work, job_stem), raw_output(candidate_work, job_stem))
-    return Differential(reference, candidate, difference)
+    reference_screen = screen_changes(reference_work)
+    candidate_screen = screen_changes(candidate_work)
+    if reference_screen is None or candidate_screen is None:
+        screen_difference = "screen capture unavailable"
+    else:
+        screen_difference = first_screen_difference(reference_screen, candidate_screen)
+    return Differential(reference, candidate, difference, screen_difference)
 
 
 def undefined_symbols(link_log: str) -> list[str]:

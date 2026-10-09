@@ -32,6 +32,23 @@ def test_raw_output_preserves_spaces_and_line_endings():
     assert qbruntime.first_byte_difference(b"A", b"A ") == "byte 2: want <end> got 32"
 
 
+def test_screen_output_preserves_every_cell_and_row():
+    """A display comparison that used stripped lines accepted a changed final screen cell."""
+    assert qbruntime.first_screen_difference(("A ", "B"), ("A ", "B")) == ""
+    assert qbruntime.first_screen_difference(("A ",), ("A",)) == "row 1: want 2 cells got 1"
+    assert qbruntime.first_screen_difference(("A",), ("B",)) == "cell 1:1: want 'A' got 'B'"
+
+
+def test_screen_delta_excludes_the_runners_own_screen_cells():
+    """The two runtime mount names differed, but neither belonged to the program's display."""
+    assert qbruntime.screen_delta(("bcom45",), ("bcom45X",)) == ("\0\0\0\0\0\0X",)
+
+
+def test_screen_changes_rejects_missing_job_boundary_samples(tmp_path: Path):
+    """A missing screen event once made a display comparison pass without display evidence."""
+    assert qbruntime.screen_changes(tmp_path) is None
+
+
 def test_runtime_jobs_use_one_8_3_stem_for_every_artifact():
     """Shellsort's nine-character source name made both DOS links report not built."""
     assert qbruntime.dos_stem("shellsort") == "shellsor"
@@ -100,6 +117,7 @@ def test_runtime_program_matches_bcom45_byte_for_byte(name: str):
     assert result.reference.status == "ok"
     assert result.candidate.status == "ok"
     assert result.difference == ""
+    assert result.screen_difference == ""
 
 
 @pytest.mark.skipif(not qbruntime.dosbatch.QB45.is_dir(), reason="QB45_DIR is unavailable")
@@ -109,3 +127,4 @@ def test_grep_matches_bcom45_byte_for_byte():
     assert result.reference.status == "ok"
     assert result.candidate.status == "ok"
     assert result.difference == ""
+    assert result.screen_difference == ""
