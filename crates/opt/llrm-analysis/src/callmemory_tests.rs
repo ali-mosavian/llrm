@@ -101,3 +101,16 @@ b0:
     assert!(std::rc::Rc::ptr_eq(&effects[0].stores, &effects[1].stores), "each call listed its own references");
     assert!(std::rc::Rc::ptr_eq(&effects[0].loads, &effects[1].loads));
 }
+
+/// Every call resolved each reference of its list again: hashing all of a shared list at every call site (12% of host.c's
+/// through-memory). Calls sharing a list resolve it once.
+#[test]
+fn calls_sharing_a_list_resolve_it_once() {
+    let calls = |count: usize| {
+        crate::consts::RESOLVED.with(|asked| asked.set(0));
+        let text = "call void @use(ptr @g)\n  ".repeat(count);
+        kept("declare void @use(ptr)", "%a", &text);
+        crate::consts::RESOLVED.with(|asked| asked.get())
+    };
+    assert_eq!(calls(8), calls(1), "each call resolved its list again");
+}
