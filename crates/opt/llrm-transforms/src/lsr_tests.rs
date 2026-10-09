@@ -2156,6 +2156,6 @@ fn test_the_trips_lsr_prices_with_are_proved_once_for_a_loop_no_change_reached()
     let before = llrm_analysis::induction::proved();
     let (_, printed) = reduced(&text);
     let proved = llrm_analysis::induction::proved() - before;
-    eprintln!("PROVED {proved}\n{printed}");
-    assert!(proved <= 3 * depth, "{proved} loop counts proved for {depth} loops");
+    assert!(printed.contains("define"), "{printed}");
+    assert!(proved <= 2 * depth, "{proved} loop counts proved for {depth} loops");
 }
