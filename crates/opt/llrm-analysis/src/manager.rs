@@ -1234,6 +1234,80 @@ impl Analysis for Bounded {
     }
 }
 
+/// What a pass asks of the ranges of a body as it stands: the manager's
+/// registers, bounds and edges, and the unit that carries them.
+pub struct Ranges {
+    shape: Rc<Shape>,
+    assumptions: Rc<<AssumptionCache as Analysis>::Result>,
+    registers: Rc<<Registers as Analysis>::Result>,
+    exposed: Rc<<ExposedFrames as Analysis>::Result>,
+    counted: Rc<<Counted as Analysis>::Result>,
+    edges: Rc<<DominatedEdges as Analysis>::Result>,
+    bounds: Option<Rc<<Bounded as Analysis>::Result>>,
+}
+
+impl Ranges {
+    /// With the bounds too, which `Bounded` itself works out from the rest.
+    pub fn of(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+        with_bounds: bool,
+    ) -> Self {
+        Self {
+            shape: analyses.get::<Shape>(context, layout, function),
+            assumptions: analyses.get::<AssumptionCache>(context, layout, function),
+            registers: analyses.get::<Registers>(context, layout, function),
+            exposed: analyses.get::<ExposedFrames>(context, layout, function),
+            counted: analyses.get::<Counted>(context, layout, function),
+            edges: analyses.get::<DominatedEdges>(context, layout, function),
+            bounds: None,
+        }
+        .bounded(context, layout, function, analyses, with_bounds)
+    }
+
+    fn bounded(
+        mut self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+        with_bounds: bool,
+    ) -> Self {
+        if with_bounds {
+            self.bounds = Some(analyses.get::<Bounded>(context, layout, function));
+        }
+        self
+    }
+
+    pub fn registers(&self) -> &IndexMap<ValueId, Known> {
+        &self.registers
+    }
+
+    pub fn unit<'a>(
+        &'a self,
+        context: &'a Context,
+        layout: &'a DataLayout,
+        function: &'a Function,
+        outer: &'a Outer,
+    ) -> Unit<'a> {
+        let mut unit = Unit::within(context, layout, function, outer)
+            .with_shape(&self.shape)
+            .with_assumptions(&self.assumptions)
+            .with_registers(&self.registers)
+            .with_exposed(&self.exposed)
+            .with_counted(&self.counted);
+        if let Ok(edges) = &*self.edges {
+            unit = unit.with_edges(edges);
+        }
+        if let Some(Ok(bounds)) = self.bounds.as_deref() {
+            unit = unit.with_bounds(bounds);
+        }
+        unit
+    }
+}
+
 impl Bounded {
     fn solved(
         context: &Context,
@@ -1242,22 +1316,8 @@ impl Bounded {
         analyses: &mut Analyses,
         prior: Option<(&ranges::Bounds, &BTreeSet<i64>)>,
     ) -> <Self as Analysis>::Result {
-        let shape = analyses.get::<Shape>(context, layout, function);
-        let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
-        let registers = analyses.get::<Registers>(context, layout, function);
-        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        let counted = analyses.get::<Counted>(context, layout, function);
-        let edges = analyses.get::<DominatedEdges>(context, layout, function);
-        let mut unit = Unit::within(context, layout, function, analyses.outer())
-            .with_shape(&shape)
-            .with_assumptions(&assumptions)
-            .with_registers(&registers)
-            .with_exposed(&exposed)
-            .with_counted(&counted);
-        if let Ok(edges) = &*edges {
-            unit = unit.with_edges(edges);
-        }
-        ranges::bounded_solved(&unit, &registers, prior)
+        let held = Ranges::of(context, layout, function, analyses, false);
+        ranges::bounded_solved(&held.unit(context, layout, function, analyses.outer()), held.registers(), prior)
     }
 }
 

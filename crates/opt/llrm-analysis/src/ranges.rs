@@ -1029,6 +1029,30 @@ pub fn loops_solved() -> usize {
     LOOPS_SOLVED.with(std::cell::Cell::get)
 }
 
+/// The edges' facts at each block, shared: the manager's where the unit carries
+/// its `DominatedEdges` (and works under the registers they were asked of),
+/// else worked out here.
+pub fn edges_of(
+    unit: &Unit,
+    facts: &IndexMap<ValueId, Known>,
+) -> Result<IndexMap<i64, Scope>, String> {
+    let function = unit.function;
+    Ok(match (unit.edges, unit.registers) {
+        (Some(states), Some(registers)) if std::ptr::eq(facts, registers) => {
+            let held = states.shared(function);
+            if llrm_support::env_set("LLRM_CHECK_REPLAY") {
+                assert!(
+                    held.iter().map(|(at, scope)| (*at, (**scope).clone())).collect::<IndexMap<_, _>>()
+                        == dominated_edges_with(unit, facts)?,
+                    "the edges a unit carries are not those of the body it stands over: stale"
+                );
+            }
+            held
+        }
+        _ => dominated_edges_with(unit, facts)?.into_iter().map(|(at, scope)| (at, Rc::new(scope))).collect(),
+    })
+}
+
 /// `bounded_with`'s solve: all of it, or, given the bounds of the function
 /// before and the headers of the loops a change can alter (`dirty`), only those
 /// loops; the blocks of the rest keep what they had.
@@ -1043,21 +1067,7 @@ pub fn bounded_solved(
     let positions: BTreeMap<i64, usize> = graph.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
     let shape = unit.shape();
     let assumed = unit.assumptions();
-    // The manager's, where the facts asked of are the unit's own registers.
-    let edges_above = match (unit.edges, unit.registers) {
-        (Some(states), Some(registers)) if std::ptr::eq(facts, registers) => {
-            let held = states.shared(function);
-            if llrm_support::env_set("LLRM_CHECK_REPLAY") {
-                assert!(
-                    held.iter().map(|(at, scope)| (*at, (**scope).clone())).collect::<IndexMap<_, _>>()
-                        == dominated_edges_with(unit, facts)?,
-                    "the edges a unit carries are not those of the body it stands over: stale"
-                );
-            }
-            held
-        }
-        _ => dominated_edges_with(unit, facts)?.into_iter().map(|(at, scope)| (at, Rc::new(scope))).collect(),
-    };
+    let edges_above = edges_of(unit, facts)?;
     let headers: Vec<i64> = shape.loops.iter().map(|one| one.header).collect();
     // An enclosing loop's facts are in `result` before an inner loop reads
     // them.
@@ -1786,6 +1796,30 @@ pub fn scoped(unit: &Unit) -> Result<Facts, String> {
         }
     }
     Ok(result)
+}
+
+/// `scoped`'s intervals at one block: the bounds of the counted loops holding
+/// it, narrowed by the edges that dominate it, without the other blocks' (which
+/// `scoped` copies). Over the manager's bounds and edges where the unit carries
+/// them.
+pub fn scope_at(
+    unit: &Unit,
+    at: i64,
+) -> Result<IndexMap<ValueId, Interval>, String> {
+    let held = bounds(unit)?;
+    let edges = edges_of(unit, &unit.registers())?;
+    let mut known = held.at(at).cloned().unwrap_or_default();
+    for (value, interval) in edges.get(&at).into_iter().flat_map(|scope| scope.iter()) {
+        match known.get(value) {
+            Some(previous) if previous.width == interval.width => {
+                narrow(&mut known, *value, interval.clone());
+            }
+            _ => {
+                known.insert(*value, interval.clone());
+            }
+        }
+    }
+    Ok(known)
 }
 
 /// The values that index accesses whose offset every wider sum names exactly.
