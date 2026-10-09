@@ -1246,6 +1246,31 @@ fn test_a_body_the_base_allocation_split_nothing_in_is_not_allocated_again_witho
     assert!(unsplit > 0, "premise: some body with a spill was split nowhere");
 }
 
+/// The pins were worked out of every instruction of the body after each
+/// rewrite (d_faces -O1: 970 rewrites, 628 M of 25.6 G instructions), though
+/// the allocation already holds every earlier body's. Only the blocks a rewrite
+/// changed are looked at.
+#[test]
+fn test_a_rewrite_looks_for_pins_in_the_blocks_it_changed_only() {
+    use crate::backend::allocate::required_skipped;
+    let before = required_skipped();
+    for seed in 0..240_u64 {
+        let shape = Shape { pool: 7 + (seed % 8) as usize, ops: 4 + (seed % 9) as usize };
+        let (body, _) = body(seed, &shape);
+        let cpu = crate::backend::cpu::tuned_exhaustive(&llrm_x86_m16::M16, "386", false, false).expect("a profile");
+        let mut phase = RegAlloc::new(
+            None,
+            None,
+            ProfileOrName::Profile(cpu),
+            &*target::BUILT_IN,
+            &crate::backend::classes::RegisterClasses::m16(),
+        )
+        .expect("a phase");
+        phase.transform(body).expect("allocated");
+    }
+    assert!(required_skipped() > before, "every rewrite looked at every block for pins");
+}
+
 /// `allocate::live` was built from per-block sorted sets and converted to bit
 /// rows for the fixed point: 24% of compiling QCport's `d_faces` (#559). Dense
 /// rows all the way give the same sets.

@@ -11,7 +11,7 @@
 use std::any::{Any, TypeId};
 use std::sync::{Arc, Mutex};
 
-use crate::model::lir::LirBody;
+use crate::model::lir::{Insns, LirBody};
 use crate::support::hash::HashMap;
 
 pub trait Fact: 'static {
@@ -117,6 +117,32 @@ impl Facts {
     /// does not.
     pub fn runs<F: Fact>(&self) -> usize {
         self.runs.lock().expect("facts").get(F::NAME).copied().unwrap_or(0)
+    }
+}
+
+/// The blocks of a body as they were when a fact last saw it: what a fact that
+/// is its last answer plus the part that changed asks (`differing`) before it
+/// works only the changed blocks out. A rewrite keeps every `Arc<Insn>` it does
+/// not touch, so a block is told apart by identity, not by looking.
+#[derive(Clone, Debug)]
+pub struct Stamp(Vec<(i64, Insns)>);
+
+impl Stamp {
+    pub fn of(body: &LirBody) -> Self {
+        Self(body.blocks.iter().map(|block| (block.at, block.insns.clone())).collect())
+    }
+
+    /// The positions of the blocks of `body` that are not the instructions this
+    /// stamp saw there; none where the blocks themselves are not the same.
+    pub fn differing(
+        &self,
+        body: &LirBody,
+    ) -> Option<Vec<usize>> {
+        if self.0.len() != body.blocks.len() || self.0.iter().zip(&body.blocks).any(|((at, _), block)| *at != block.at)
+        {
+            return None;
+        }
+        Some((0..body.blocks.len()).filter(|at| !self.0[*at].1.same_insns(&body.blocks[*at].insns)).collect())
     }
 }
 
