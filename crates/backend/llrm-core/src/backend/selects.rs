@@ -36,9 +36,7 @@ fn _branched(
     let join = function.create_block(None);
     function.insert_block(join, Some(block))?;
     let moved = body[after..].to_vec();
-    for &inst in &moved {
-        function.move_to(inst, Position::End(join))?;
-    }
+    function.move_run(&moved, join)?;
     for next in function.successors(join) {
         _renamed_edges(function, next, block, join);
     }

@@ -76,6 +76,17 @@ rule unsigned_extensions
             anchor @1 {defines: [], uses: []}
 
 
+// `movzx r,m8` as `xor r,r; mov rl,m` where the target prices the pair lower (the 486: two clocks
+// for three). The xor sets the flags, so none may be live, and r must not be in the address.
+group zeroed_loads
+    walk window
+
+rule zeroed_load
+    match   movzx d:reg, src:mem
+    when    clears_before_byte_load(), free(@0, widening), width_in(src, [8]), byte_loadable(d, src),
+            flags_dead(@0)
+    rewrite @0: xor d, d, d ; @0: mov low_byte(d), src
+
 // Materialize a call's literal once when both stack and register need it.
 group pushed_constants
     walk window

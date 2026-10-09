@@ -86,7 +86,8 @@ pub fn optimized(
         return Ok(false);
     }
     let mut changed = false;
-    while expanded(unit.context, unit.layout, unit.function, analyses, limits)? {
+    let mut refused = BTreeSet::new();
+    while expanded(unit.context, unit.layout, unit.function, analyses, limits, &mut refused)? {
         llrm_support::debug!("unroll", "expanded a loop");
         changed = true;
     }
@@ -104,6 +105,17 @@ struct Shape {
     path: Vec<BlockId>,
 }
 
+// Loops `peelsize` was asked about.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PRICED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// A loop as `refused` names it: its header, blocks and instruction count. A
+/// loop `peelsize` priced out stays priced out until one of them changes, so
+/// the next round, after another loop was expanded, does not simulate it again.
+type Refused = BTreeSet<(i64, Vec<i64>, usize)>;
+
 /// The first loop of the expandable shape with an exact count `peelsize`
 /// admits, expanded in place; whether there was one.
 pub fn expanded(
@@ -112,6 +124,7 @@ pub fn expanded(
     function: &mut Function,
     analyses: &Analyses,
     limits: &Limits,
+    refused: &mut Refused,
 ) -> Result<bool, String> {
     let facts = analyses.fresh().get::<Registers>(context, layout, function);
     let graph = cfg::graph(function);
@@ -128,16 +141,25 @@ pub fn expanded(
         let Some(count) = induction::trip_count(&unit, &loop_, &facts) else {
             continue;
         };
-        if count < BigInt::from(2)
-            || !peelsize::admitted(
-                &unit,
-                &loop_,
-                &count,
-                &facts,
-                limits,
-                profit::site(&unit, analyses.outer(), &loop_, &frequencies),
-            )
-        {
+        let name = (
+            loop_.header,
+            loop_.body.iter().copied().collect::<Vec<_>>(),
+            loop_.body.iter().map(|&block| function.block(cfg::block(block)).instructions().len()).sum::<usize>(),
+        );
+        if count < BigInt::from(2) || refused.contains(&name) {
+            continue;
+        }
+        #[cfg(test)]
+        PRICED.with(|one| one.set(one.get() + 1));
+        if !peelsize::admitted(
+            &unit,
+            &loop_,
+            &count,
+            &facts,
+            limits,
+            profit::site(&unit, analyses.outer(), &loop_, &frequencies),
+        ) {
+            refused.insert(name);
             continue;
         }
         if let Some(count) = count.to_i64() {
