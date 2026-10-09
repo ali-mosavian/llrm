@@ -4,7 +4,7 @@
 
 #include "ad.h"
 
-/* The stack block of B$ADIM, B$DDIM and B$RDIM as the frontend pushed it, last
+/* The stack block of B$DDIM and B$RDIM as the frontend pushed it, last
    argument first: the descriptor, the rank (low byte) with the features (high),
    the element size, then each dimension's upper and lower bound, the one
    nearest the front being the first stored. */
@@ -18,9 +18,9 @@ typedef struct DimCall {
     } bounds[1];
 } DimCall;
 
-enum DimMode { DIM_DESCRIBE, DIM_ALLOCATE, DIM_REALLOCATE };
+enum DimMode { DIM_ALLOCATE, DIM_REALLOCATE };
 
-/* B$ADIM, B$DDIM, B$RDIM: the asm entries (varargs.asm) call this. */
+/* B$DDIM and B$RDIM: the asm entries (varargs.asm) call this. */
 void array_dim(enum DimMode mode, const DimCall *call);
 
 /* B$ERAS */

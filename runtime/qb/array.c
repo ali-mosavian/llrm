@@ -95,8 +95,6 @@ void array_dim(enum DimMode mode, const DimCall *call)
     if (!array_bytes(ad, &bytes))
         qb_error(BE_SUBSCRIP);
     ad->size = bytes;
-    if (mode == DIM_DESCRIBE)
-        return;
     ad->data_off = 0;
     if (ad->features & FADF_HUGE) {
         fh_alloc(ad, align_huge(ad, bytes));
@@ -171,3 +169,4 @@ void array_xinit(void)
     lh_on_move(LH_ARRAY, moved);
 }
 #pragma aux B_ERAS "B$ERAS"
+#pragma aux array_dim "ARRAY_DIM"
