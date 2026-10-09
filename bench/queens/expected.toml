@@ -1,8 +1,8 @@
-reason = "the preheader of a turned loop is laid in front of it: queens bas -O2 +0.6% instructions"
+reason = "a comparison another block's branch reads is made again there (CodeGenPrepare's sinkCmpExpression): queens -1.8% clocks, grep -12 bytes; queens nib -Os +551 memory operands (the byte held in memory is a compare made again)"
 blessed = "2026-10-09"
 
 [bas.O2]
-instructions = 340532
+instructions = 338389
 memory_operands = 103461
 code_bytes = 459
 data_bytes = 15
