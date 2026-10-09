@@ -15,6 +15,7 @@ use iced_x86::Register;
 use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::analysis::loops::{self as loopy, Loop};
+use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::frequency::Frequency;
 use llrm_analysis::branchprob;
 use crate::backend::layout::_OPPOSITE;
@@ -523,14 +524,13 @@ pub fn _hoisted(body: &LirBody) -> LirBody {
     let mut live: Option<IndexMap<i64, BTreeSet<u32>>> = None;
     for position in 0..blocks.len() {
         let block = &blocks[position];
-        let (anchors, rest): (Vec<Arc<Insn>>, Vec<Arc<Insn>>) = block.insns.iter().cloned().partition(|one| _inert(one));
         let parents = predecessors.get(&block.at);
-        if anchors.is_empty()
-            || !block.phis.is_empty()
-            || block.succ.len() != 1
-            || rest.iter().any(|one| one.what.as_ref().is_none_or(|what| what.op != Operation::Jump))
-            || parents.map_or(0, BTreeSet::len) != 1
-        {
+        // The cheap tests first: most blocks have no anchor or are not a lone edge of their parent.
+        if block.succ.len() != 1 || parents.map_or(0, BTreeSet::len) != 1 || !block.phis.is_empty() || !block.insns.iter().any(|one| _inert(one)) {
+            continue;
+        }
+        let (anchors, rest): (Vec<Arc<Insn>>, Vec<Arc<Insn>>) = block.insns.iter().cloned().partition(|one| _inert(one));
+        if rest.iter().any(|one| one.what.as_ref().is_none_or(|what| what.op != Operation::Jump)) {
             continue;
         }
         let parent = *parents.and_then(|parents| parents.first()).expect("one predecessor");
@@ -574,17 +574,23 @@ fn _live_values(blocks: &[LirBlock]) -> IndexMap<i64, BTreeSet<u32>> {
             }
         }
     }
-    let mut into: IndexMap<i64, BTreeSet<u32>> = by_at.keys().map(|at| (*at, BTreeSet::new())).collect();
-    let mut changing = true;
-    while changing {
-        changing = false;
-        for (at, block) in &by_at {
-            let mut live = carried.get(at).cloned().unwrap_or_default();
-            for to in &block.succ {
+    let nodes: Vec<&LirBlock> = blocks.iter().collect();
+    dataflow::solve(
+        &nodes,
+        Direction::Backward,
+        |_| BTreeSet::new(),
+        |at, into: &IndexMap<i64, BTreeSet<u32>>| {
+            let mut live = carried.get(&at).cloned().unwrap_or_default();
+            for to in &by_at[&at].succ {
                 if let Some(after) = into.get(to) {
                     live.extend(after.iter().copied());
                 }
             }
+            live
+        },
+        |at, after| {
+            let block = by_at[&at];
+            let mut live = after.clone();
             for one in block.insns.iter().rev() {
                 for value in one.defines.iter().copied().chain(one.delivers.iter().map(|(held, _)| held.value)) {
                     live.remove(&value);
@@ -594,13 +600,10 @@ fn _live_values(blocks: &[LirBlock]) -> IndexMap<i64, BTreeSet<u32>> {
             for phi in &block.phis {
                 live.remove(&phi.result);
             }
-            if into[at] != live {
-                into.insert(*at, live);
-                changing = true;
-            }
-        }
-    }
-    into
+            live
+        },
+    )
+    .output
 }
 
 /// Python's `_tail_key` tuple.

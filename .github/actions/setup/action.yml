@@ -1,0 +1,55 @@
+name: setup
+description: Toolchains, the fork cache and the cargo cache, the same in every job.
+inputs:
+  save:
+    description: Save the caches at the end (the build job only).
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: apt
+      shell: bash
+      run: |
+        # LLVM 20, as on the development hosts (tools/debug-gate.env), from apt.llvm.org: the tests look in /usr/lib/llvm-20/bin.
+        curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
+        echo "deb https://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" | sudo tee /etc/apt/sources.list.d/llvm20.list
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq build-essential autoconf automake libtool pkg-config nasm libpng-dev zlib1g-dev libncurses-dev gdb binutils llvm-20 clang-20 lld-20 zstd
+        # ubuntu-24.04 is a fixed image: gdb 15.1, binutils 2.42 (printed below).
+        echo /usr/lib/llvm-20/bin >> "$GITHUB_PATH"
+        export PATH="/usr/lib/llvm-20/bin:$PATH"
+        sudo sysctl -q -w kernel.perf_event_paranoid=-1 || true
+        gdb --version | head -1; ld --version | head -1; llvm-dwarfdump --version | sed -n 2p; clang-cl --version | head -1; lld-link --version
+    # rust-toolchain.toml names the compiler, here as on every machine.
+    - shell: bash
+      run: rustup toolchain install
+    - uses: actions/cache/restore@v4
+      if: inputs.save != 'true'
+      with:
+        path: ~/.cache/llrm
+        key: llrm-forks-${{ hashFiles('toolchain/jwbuild.sh', 'toolchain/dosrunbuild.sh', 'toolchain/cache.sh', 'toolchain/owshim/ow-commit', 'toolchain/gcctorture.sh') }}
+        restore-keys: llrm-forks-
+    - uses: actions/cache@v4
+      if: inputs.save == 'true'
+      with:
+        path: ~/.cache/llrm
+        key: llrm-forks-${{ hashFiles('toolchain/jwbuild.sh', 'toolchain/dosrunbuild.sh', 'toolchain/cache.sh', 'toolchain/owshim/ow-commit', 'toolchain/gcctorture.sh') }}
+        restore-keys: llrm-forks-
+    - name: Drop trees whose pin is gone
+      shell: bash
+      run: |
+        for d in ~/.cache/llrm/*-[0-9a-f]*; do
+          [ -d "$d" ] || continue
+          grep -rqs "${d##*-}" toolchain/jwbuild.sh toolchain/dosrunbuild.sh toolchain/owshim/ow-commit toolchain/gcctorture.sh || { echo "pruned $d"; rm -rf "$d" "$d.lock"; }
+        done
+    - name: The gcc torture corpus (pinned, cached with the forks)
+      shell: bash
+      run: echo "TORTURE_CORPUS=$(sh toolchain/gcctorture.sh)" >> "$GITHUB_ENV"
+    - uses: Swatinem/rust-cache@v2
+      with:
+        cache-targets: false  # the target dir is the build job's own cache and artifact
+        save-if: ${{ inputs.save == 'true' }}
+    - uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: true
+        cache-dependency-glob: tools/uv.lock

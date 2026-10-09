@@ -700,3 +700,44 @@ fn test_a_counted_loop_is_run_once_for_all_the_branches_in_it() {
     // `3 <= i` holds on 2 of the 4 trips.
     assert!(close(odds.probability(at("g3"), at("e3")), 0.5), "{:?}", odds.taken);
 }
+
+/// Every loop's weighing asked every edge which loop's trips fix it, and each ask walked the loops around the block and made a set of
+/// its successors: a nest 16 deep read 16 loops x every edge x 16 loops (lir jumps on it: 73 Minstr, a third of it here). An edge's
+/// answer does not change between asks.
+#[test]
+fn test_a_nest_of_counted_loops_asks_each_edge_which_trips_fix_it_once() {
+    let depth = 16;
+    let (header, latch) = (|k: i64| 10 * k, |k: i64| 10 * k + 1);
+    let end = 1000;
+    let succ = move |at: i64| -> Vec<i64> {
+        let loop_of = at / 10;
+        match (at % 10, loop_of) {
+            (_, 0) => vec![header(1)],
+            (0, k) if k == depth => vec![latch(k), latch(k - 1).max(if k == 1 { end } else { 0 })],
+            (0, k) => vec![header(k + 1), if k == 1 { end } else { latch(k - 1) }],
+            (1, k) => vec![header(k)],
+            _ => vec![],
+        }
+    };
+    let mut preds: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+    let mut order = vec![0];
+    order.extend((1..=depth).map(header));
+    order.extend((1..=depth).rev().map(latch));
+    order.push(end);
+    for &from in &order {
+        for to in succ(from) {
+            preds.entry(to).or_default().push(from);
+        }
+    }
+    let bodies: Vec<(BTreeSet<i64>, BTreeSet<i64>)> =
+        (1..=depth).map(|k| ((k..=depth).flat_map(|j| [header(j), latch(j)]).collect(), BTreeSet::from([latch(k)]))).collect();
+    let cycles: Vec<Cycle> = bodies.iter().enumerate().rev().map(|(k, (body, latches))| Cycle { header: header(k as i64 + 1), latches, body, trips: Some(4) }).collect();
+    let asked = std::cell::Cell::new(0usize);
+    let successors = |at: i64| {
+        asked.set(asked.get() + 1);
+        succ(at)
+    };
+    let given = |_: i64, _: i64| 0.5;
+    propagated(&order, &|at| preds.get(&at).cloned().unwrap_or_default(), &successors, &cycles, &given);
+    assert!(asked.get() <= 20 * order.len(), "{} successor lists asked for {} blocks", asked.get(), order.len());
+}
