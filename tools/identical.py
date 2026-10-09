@@ -29,7 +29,7 @@ import wrap  # noqa: E402
 KNOWN_PROGRAMS = 66
 KNOWN_QCPORT = 65
 MODULES = ("host", "render", "model", "game", "sound", "ui")
-CHECKS = ("CALLEES", "SIBLINGS", "POSTINGS", "HOLDERS", "JUMPS", "FLOATSKIP")
+CHECKS = ("CALLEES", "SIBLINGS", "POSTINGS", "HOLDERS", "JUMPS", "FLOATSKIP", "REPLAY", "PRESERVED")
 
 
 def corpus(work: Path, qcport: Path | None, headers: Path | None, programs_only: bool = False) -> dict[str, tuple[Path, list[str]]]:

@@ -1832,3 +1832,24 @@ fn test_clobbered_does_not_look_at_every_point() {
     assert_eq!(clobbered, 0, "a value live between two points is not across either");
     assert!(started.elapsed().as_secs_f64() < 0.2, "{:?} for 20,000 questions", started.elapsed());
 }
+
+/// A value live through N blocks carried N segments, one per block, so every
+/// overlap test on it cost N and the allocator's cost grew with the square of
+/// the blocks (branches: 6 values over N blocks). One run goes on where a block
+/// begins; only a definition (an odd slot) leaves a gap.
+#[test]
+fn test_a_value_live_through_blocks_is_one_segment() {
+    use crate::analysis::intervals::{PER_INSN, intervals};
+    for seed in 0..40u64 {
+        let (plain, _) = body(seed, &Shape { pool: 8 + (seed % 7) as usize, ops: 8 + (seed % 11) as usize });
+        for (value, one) in intervals(&plain, None) {
+            for pair in one.segments.windows(2) {
+                assert!(
+                    pair[0].end != pair[1].start || pair[1].start % PER_INSN != 0,
+                    "seed {seed}: value {value} is cut at a block top, {:?}",
+                    one.segments
+                );
+            }
+        }
+    }
+}

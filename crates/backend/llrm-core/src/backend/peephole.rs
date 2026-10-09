@@ -252,6 +252,7 @@ impl Peephole {
         } else {
             body
         };
+        let body = zeroed_loads(self.rules, &body, &self.cpu)?;
         let body = sharedstores::shared(&body, &self.cpu, &self.saved, &self.classes);
         let body = machinecse::eliminated(&body)?;
         let body = waits(&zero_compares(self.rules, &tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))));
@@ -456,6 +457,17 @@ pub fn extensions(
     body: &LirBody,
 ) -> LirBody {
     peep::rewritten(rules.extensions, body, &Facts::new(body, None))
+}
+
+/// `movzx r,m8` as the register cleared and its low byte loaded, where the
+/// target prices the pair lower (`peephole.peep`).
+pub fn zeroed_loads(
+    rules: &peep::Rules,
+    body: &LirBody,
+    cpu: &Profile,
+) -> Result<LirBody, String> {
+    cpu.clears_before_byte_load()?;
+    Ok(peep::rewritten(rules.zeroed_loads, body, &Facts::new(body, Some(cpu))))
 }
 
 /// Materialize a call's literal once when both stack and register need it
