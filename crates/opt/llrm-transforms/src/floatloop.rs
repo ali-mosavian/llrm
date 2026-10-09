@@ -62,7 +62,7 @@ impl FunctionPass for FloatLoop {
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         // With no float in the body no loop is a float loop. LLRM_CHECK_FLOATSKIP runs the pass anyway and says if it changed anything.
         let none = !floatfacts::touches(unit.context, unit.function);
-        if none && std::env::var_os("LLRM_CHECK_FLOATSKIP").is_none() {
+        if none && !llrm_support::env_set("LLRM_CHECK_FLOATSKIP") {
             return PreservedAnalyses::all();
         }
         let before = none.then(|| unit.function.clone());

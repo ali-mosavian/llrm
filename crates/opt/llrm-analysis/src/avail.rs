@@ -71,7 +71,7 @@ impl Holders {
             .filter(|one| same_bytes(unit, one, cell) && self.get(*one).is_some_and(&serves))
             .min_by_key(|one| self.get_index_of(*one))
             .and_then(|one| self.get_key_value(one));
-        if std::env::var_os("LLRM_CHECK_HOLDERS").is_some() {
+        if llrm_support::env_set("LLRM_CHECK_HOLDERS") {
             let whole = self.iter().find(|(one, who)| same_bytes(unit, one, cell) && serves(who));
             assert!(found == whole, "the cell naming these bytes, found through the index, is not the one a scan of every cell finds");
         }
@@ -148,7 +148,7 @@ fn serves(unit: &Unit, holder: Operand, value: ValueId) -> bool {
 fn after(unit: &Unit, accesses: &Accesses, inst: InstId, mut holders: Holders, known: Option<&BTreeMap<ValueId, Interval>>) -> Holders {
     let writes = accesses.writes(inst);
     // What every cell is asked of every write, for the check below.
-    let expected = std::env::var_os("LLRM_CHECK_HOLDERS").is_some().then(|| {
+    let expected = llrm_support::env_set("LLRM_CHECK_HOLDERS").then(|| {
         let mut every: IndexMap<MemRef, Operand> = (*holders).clone();
         every.retain(|one, _| !changes(one, false, writes, |store| may_clobber(unit, known, one, store)));
         every

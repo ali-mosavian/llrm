@@ -119,7 +119,7 @@ fn _thrash_block(bits: u32, block: &LirBlock, dead: Lanes) -> Option<LirBlock> {
             from = index;
             dead = liveness::with_effect(bits, &insns[index], |effect| effect.map_or_else(Lanes::new, |effect| effect.dead_before(&dead)));
         }
-        if cfg!(test) || std::env::var_os("LLRM_CHECK_THRASH").is_some() {
+        if cfg!(test) || llrm_support::env_set("LLRM_CHECK_THRASH") {
             assert!(after == _dead_after_by(bits, &insns, exit), "a rename changed what is dead beyond what was worked out again");
         }
         renamed += 1;
