@@ -125,6 +125,8 @@ pub struct Insn {
     pub debug: DebugTags,
     /// What it does to the registers (`liveness::effect`), worked out once for everything that asks.
     pub effect: Derived<(u32, Option<crate::backend::liveness::Effect>)>,
+    /// Its identity (`Insn::id`): given when first asked, never again to another instruction.
+    pub ident: Derived<u64>,
 }
 
 /// A fact worked out from an instruction's fields, kept on it for every pass that asks. Cloning gives an empty one: a clone is
@@ -351,7 +353,18 @@ impl Insn {
             line: None,
             debug: DebugTags::default(),
             effect: Derived::default(),
+            ident: Derived::default(),
         }
+    }
+
+    /// The instruction itself, as a number: what a table keeps of an instruction it must find again in a later body that shares it. It is
+    /// given when first asked and shared by every `Arc` of the instruction; a clone, which is made to be changed, is another instruction
+    /// and has its own. Numbers are never reused, where the address of a dropped instruction is (a table kept past the instruction it
+    /// named would answer for whatever was allocated there). They name, and no order or iteration of them is ever read.
+    #[must_use]
+    pub fn id(&self) -> u64 {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        *self.ident.get_or_init(|| NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Whether it was inserted beside a source instruction: it covers no bytes.
@@ -979,6 +992,23 @@ where
 
 #[cfg(test)]
 mod tests {
+
+    /// A table kept past the instruction it named answered for whatever was allocated at its address next: the key of an instruction was its
+    /// address, which a dropped instruction gives back. An instruction is its number, never reused; its clone is another instruction.
+    #[test]
+    fn test_a_dropped_instructions_key_is_not_given_to_the_next_one_made() {
+        let mut seen = std::collections::BTreeSet::new();
+        for at in 0..200 {
+            let made = instruction(at, None);
+            assert!(seen.insert(crate::analysis::intervals::key(&made)), "the key of instruction {at} is one an earlier instruction had");
+            drop(made);
+        }
+        let one = instruction(0, None);
+        let same = Arc::clone(&one);
+        let other = Arc::new((*one).clone());
+        assert_eq!(crate::analysis::intervals::key(&one), crate::analysis::intervals::key(&same), "a share is the instruction");
+        assert_ne!(crate::analysis::intervals::key(&one), crate::analysis::intervals::key(&other), "a clone is another instruction");
+    }
 
     /// A copy of a body copied every block's instruction list (a block clone was 2.5% of compiling d_faces), and no block could say it
     /// was the one a fact had been made of. A copy shares them; a rewritten block is the only one that is not the same.
