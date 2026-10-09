@@ -1184,8 +1184,8 @@ impl<'a> View<'a> {
             for kind in &mut kinds {
                 kind.clear();
             }
-            let mut live = first;
-            for &value in &live {
+            let mut live = first.iter().copied().collect::<BTreeSet<_>>();
+            for &value in &first {
                 let (cell, member) = class(value);
                 for (kind, _) in kinds.iter_mut().zip(member).filter(|(_, member)| *member) {
                     kind.add(cell, price(cell), &sweep.spilled);

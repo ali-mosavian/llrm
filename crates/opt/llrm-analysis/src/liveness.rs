@@ -170,7 +170,7 @@ pub fn live_points(
 /// that is live after it. The live set before an instruction is the one
 /// after the one before it, less what it made, plus what it read.
 pub struct Steps {
-    pub first: BTreeSet<ValueId>,
+    pub first: Vec<ValueId>,
     pub steps: Vec<Step>,
 }
 
@@ -197,7 +197,7 @@ pub fn live_steps(
         steps.push(Step { inst, read, made });
     }
     steps.reverse();
-    Steps { first: alive, steps }
+    Steps { first: alive.into_iter().collect(), steps }
 }
 
 /// How many values `counted` says are live before each instruction of
