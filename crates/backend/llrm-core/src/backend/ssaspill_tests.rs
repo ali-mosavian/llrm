@@ -695,3 +695,22 @@ fn test_a_placeholder_between_a_groups_copies_does_not_end_the_group() {
     }
     assert_eq!(found(&split), found(&eliminated));
 }
+
+/// The simulation walked every block again for each loop entry it tried
+/// (d_faces `_d_draw_faces`: 92 walks of 259 blocks for 11 loops, 2.7% of the
+/// compile). A walk that differs from an earlier one at a loop entry goes on
+/// from that block.
+#[test]
+fn test_a_walk_that_differs_at_a_loop_entry_resumes_there_not_from_the_top() {
+    let (body, _) = before_phase(Calls::C, "selectorloop.ll", "_f", "486", "SsaSpill");
+    ssaspill::spilled(
+        &body,
+        &mut Frame::new(0),
+        &target::BUILT_IN,
+        &crate::backend::classes::RegisterClasses::m16(),
+        Prices::clocks(),
+    )
+    .expect("spills");
+    let (walked, resumed) = (body.facts.0.counted("sim-blocks-walked"), body.facts.0.counted("sim-blocks-resumed"));
+    assert!(resumed > 0, "{walked} blocks walked and none taken from an earlier walk");
+}
