@@ -393,14 +393,53 @@ fn test_declared_over_the_declarations_answers_as_declared_of_the_module() {
 /// Hash and tree maps keyed by a dense id cost 12% of a compile in hashing and 7% in tree nodes where gcc uses bitmaps and
 /// vectors: new keyed maps and sets use `dense::IdMap` / `IdSet`. A file may not gain one; the ceilings in `dense-keys.txt` fall as
 /// files convert (clippy's `disallowed-types` cannot tell a `HashMap<ValueId, _>` from any other).
+///
+/// A type alias hides its key from the text (`pub type Intervals = IndexMap<ValueId, Interval>`): the alias is resolved and each use of its
+/// name counts as one keyed map, the alias's own line as none.
+fn dense_key_counts(sources: &[(String, String)]) -> std::collections::BTreeMap<String, usize> {
+    let kinds = ["HashMap<", "HashSet<", "BTreeMap<", "BTreeSet<", "IndexMap<", "IndexSet<"];
+    let ids = ["ValueId", "InstId", "BlockId", "module::ValueId", "module::InstId", "module::BlockId"].map(String::from).into_iter().flat_map(|id| ["".to_owned(), "crate::".to_owned(), "llrm_mir::".to_owned()].into_iter().map(move |prefix| prefix + &id)).collect::<Vec<_>>();
+    let keyed = |text: &str| -> usize {
+        kinds.iter().map(|kind| text.match_indices(kind).filter(|(at, _)| ids.iter().any(|id| text[at + kind.len()..].trim_start().starts_with(id) && !text[at + kind.len()..].trim_start()[id.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_'))).count()).sum()
+    };
+    // An alias is a `type` at the start of a line (an associated type in an impl is indented), its right side a keyed map.
+    let is_alias = |line: &str| (line.starts_with("type ") || line.starts_with("pub type ") || line.starts_with("pub(crate) type ")) && line.contains(" = ") && keyed(line) > 0;
+    // (the file defining it, the name)
+    let aliases: Vec<(&str, String)> = sources
+        .iter()
+        .flat_map(|(file, text)| text.lines().filter(|line| is_alias(line)).map(move |line| (file.as_str(), line)))
+        .filter_map(|(file, line)| line.split_once("type ").and_then(|(_, rest)| rest.split(|c: char| !(c.is_alphanumeric() || c == '_')).next()).map(|name| (file, name.to_owned())))
+        .collect();
+    let whole_word = |text: &str, at: usize, word: &str| !text[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_') && !text[at + word.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_');
+    let mut counts = std::collections::BTreeMap::new();
+    for (name, text) in sources {
+        let body: String = text.lines().filter(|line| !is_alias(line)).collect::<Vec<_>>().join("\n");
+        let mut found = keyed(&body);
+        for (home, alias) in &aliases {
+            // A name some other file also uses for something else (`Facts`, `Calls`) is the alias only where the file defines it, imports it, or
+            // writes it as a path.
+            let module = std::path::Path::new(home).file_stem().and_then(|stem| stem.to_str()).unwrap_or("");
+            let imported = body.lines().any(|line| {
+                line.trim_start().starts_with("use ") && line.contains(module) && line.match_indices(alias.as_str()).any(|(at, _)| whole_word(line, at, alias))
+            });
+            let qualified = body.contains(&format!("{module}::{alias}"));
+            if name != home && !imported && !qualified {
+                continue;
+            }
+            let uses: String = body.lines().filter(|line| !line.trim_start().starts_with("use ")).collect::<Vec<_>>().join("\n");
+            found += uses.match_indices(alias.as_str()).filter(|(at, _)| whole_word(&uses, *at, alias)).count();
+        }
+        counts.insert(name.clone(), found);
+    }
+    counts
+}
+
 #[test]
 fn no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let ceilings: std::collections::BTreeMap<&str, usize> =
         include_str!("../dense-keys.txt").lines().filter(|line| !line.starts_with('#')).filter_map(|line| line.split_once('\t')).map(|(file, count)| (file, count.parse().expect("a count"))).collect();
-    let kinds = ["HashMap<", "HashSet<", "BTreeMap<", "BTreeSet<", "IndexMap<", "IndexSet<"];
-    let ids = ["ValueId", "InstId", "BlockId", "module::ValueId", "module::InstId", "module::BlockId"].map(String::from).into_iter().flat_map(|id| ["".to_owned(), "crate::".to_owned(), "llrm_mir::".to_owned()].into_iter().map(move |prefix| prefix + &id)).collect::<Vec<_>>();
-    let mut over = Vec::new();
+    let mut sources = Vec::new();
     let mut stack = vec![root.join("crates")];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir).expect("a directory reads").flatten() {
@@ -413,12 +452,28 @@ fn no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id() {
             if !name.ends_with(".rs") || name.ends_with("_tests.rs") || name.ends_with("/tests.rs") || name.contains("/tests/") {
                 continue;
             }
-            let text = std::fs::read_to_string(&path).expect("a source reads");
-            let found = kinds.iter().map(|kind| text.match_indices(kind).filter(|(at, _)| ids.iter().any(|id| text[at + kind.len()..].trim_start().starts_with(id) && !text[at + kind.len()..].trim_start()[id.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_'))).count()).sum::<usize>();
-            if found > ceilings.get(name.as_str()).copied().unwrap_or(0) {
-                over.push(format!("{name}: {found} > {}", ceilings.get(name.as_str()).copied().unwrap_or(0)));
-            }
+            sources.push((name, std::fs::read_to_string(&path).expect("a source reads")));
         }
     }
+    let over: Vec<String> = dense_key_counts(&sources)
+        .into_iter()
+        .filter(|(name, found)| *found > ceilings.get(name.as_str()).copied().unwrap_or(0))
+        .map(|(name, found)| format!("{name}: {found} > {}", ceilings.get(name.as_str()).copied().unwrap_or(0)))
+        .collect();
     assert!(over.is_empty(), "use llrm_mir::dense::{{IdMap, IdSet}} for ids: {over:?}");
+}
+
+/// `pub type Intervals = IndexMap<ValueId, Interval>` once let two files hold keyed maps the text scan could not see; each use of the alias is one.
+#[test]
+fn an_alias_of_a_keyed_map_and_three_uses_of_it_count_as_three() {
+    let source = |name: &str, text: &str| (name.to_owned(), text.to_owned());
+    let counts = dense_key_counts(&[
+        source("defines.rs", "pub type Intervals = IndexMap<ValueId, Interval>;\nfn a(x: Intervals) {}\n"),
+        source("uses.rs", "use crate::defines::Intervals;\nfn b(x: &Intervals) -> Intervals { Intervals::default() }\n"),
+        source("other.rs", "fn c(x: &IntervalsIndex, y: Vec<Intervals>) {}\n    type Result = BTreeSet<InstId>;\n"),
+    ]);
+    assert_eq!(counts["defines.rs"], 1);
+    assert_eq!(counts["uses.rs"], 2);
+    assert_eq!(counts["defines.rs"] + counts["uses.rs"], 3);
+    assert_eq!(counts["other.rs"], 1, "a file that neither imports nor defines the alias is no user of it (a name like Facts is another file's own); an indented associated type is no alias, but a keyed set itself");
 }
