@@ -58,6 +58,7 @@ impl<'a> Unit<'a> {
             edges: None,
             bounds: None,
             exposed: None,
+            point_values: None,
         }
     }
 }
@@ -570,6 +571,33 @@ impl Analysis for ExposedFrames {
 /// Every pointer's objects, with no caller context: `alias::pointers`.
 pub struct Pointers;
 
+/// What the pointer solve finds of a body before it asks what escapes:
+/// `alias::point_values`. The call arguments and captures never enter it, so
+/// `Pointers` and `CallEffects` ask this one and each runs only its own escape
+/// phase.
+pub struct PointerValues;
+
+impl Analysis for PointerValues {
+    type Result = Result<alias::PointValues, String>;
+    const NAME: &'static str = "pointer-values";
+    const SKIPS: bool = true;
+    fn depends() -> Option<Depends> {
+        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at) })
+    }
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self::Result {
+        let shape = analyses.get::<Shape>(context, layout, function);
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        alias::point_values(
+            &Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed),
+        )
+    }
+}
+
 impl Analysis for Pointers {
     type Result = Result<PointsTo, String>;
     const NAME: &'static str = "points-to";
@@ -586,14 +614,15 @@ impl Analysis for Pointers {
         let shape = analyses.get::<Shape>(context, layout, function);
         let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        alias::points_to(
-            &Unit::within(context, layout, function, analyses.outer())
-                .with_shape(&shape)
-                .with_assumptions(&assumptions)
-                .with_exposed(&exposed),
-            None,
-            None,
-        )
+        let values = analyses.get::<PointerValues>(context, layout, function);
+        let mut unit = Unit::within(context, layout, function, analyses.outer())
+            .with_shape(&shape)
+            .with_assumptions(&assumptions)
+            .with_exposed(&exposed);
+        if let Ok(values) = &*values {
+            unit = unit.with_point_values(values);
+        }
+        alias::points_to(&unit, None, None)
     }
 }
 
@@ -656,8 +685,13 @@ impl Analysis for CallEffects {
     ) -> Self::Result {
         let shape = analyses.get::<Shape>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let values = analyses.get::<PointerValues>(context, layout, function);
         let outer = analyses.outer();
-        call_effects(&Unit::within(context, layout, function, outer).with_shape(&shape).with_exposed(&exposed), outer)
+        let mut unit = Unit::within(context, layout, function, outer).with_shape(&shape).with_exposed(&exposed);
+        if let Ok(values) = &*values {
+            unit = unit.with_point_values(values);
+        }
+        call_effects(&unit, outer)
     }
 }
 

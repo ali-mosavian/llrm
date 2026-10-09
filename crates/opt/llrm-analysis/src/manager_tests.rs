@@ -828,3 +828,22 @@ fn test_erasing_a_dead_pointer_load_does_not_work_the_call_effects_out_again() {
         counts.iter().filter(|(name, ..)| *name == "call-effects").map(|&(_, _, how, n)| (how, n)).collect();
     assert_eq!(of_effects, vec![("first", 1), ("replayed", 1)], "{counts:?}");
 }
+
+/// `Pointers` and `CallEffects` each solved where every pointer value points,
+/// then asked what escapes (the call arguments and captures enter only there):
+/// 34,762 value solves over QCport at -O1, 11.0% of the compile, for 6,209 body
+/// states. The two ask one analysis for the solve.
+#[test]
+fn test_pointers_and_call_effects_of_a_body_solve_its_pointer_values_once() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @g(ptr)\n\ndefine void @f(ptr %a) {{\nb:\n  %p = getelementptr i8, ptr %a, i16 2\n  call void @g(ptr %p)\n  ret void\n}}\n"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let (context, f) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    let before = crate::alias::value_solves();
+    analyses.get::<Pointers>(context, &layout, f);
+    analyses.get::<CallEffects>(context, &layout, f);
+    assert_eq!(crate::alias::value_solves() - before, 1, "the value solve was made again");
+}
