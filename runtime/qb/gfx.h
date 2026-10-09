@@ -39,6 +39,9 @@ int gfx_pixel(int x, int y);
 /* Clears the screen to the background. */
 void gfx_clear(void);
 
+/* LINE, for the drawing that ends in lines (gline.c). */
+void gfx_line_between(int color, int style, int how);
+
 /* Raster operations, as the OS layer takes them. */
 enum { OP_SET, OP_AND, OP_OR, OP_XOR };
 

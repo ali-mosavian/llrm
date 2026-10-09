@@ -117,11 +117,13 @@ unsigned qb_land_sp, qb_land_bp, qb_land_to, qb_err_ip;
 void qb_land(void);
 
 /* B$OEGA: the handler's offset in the module's code, or 0 for none.  A handler
-   set again is not in the middle of an error any more. */
+   set again is how the compiled RESUME ends the error: ERR is 0 after it. */
 void on_error(unsigned target)
 {
     md_set_on_error(module_data(), target);
     b_inonerr = 0;
+    if (target)
+        b_errnum = 0;
 }
 
 /* B$SERR: ERROR n; 0 and numbers past 255 are Illegal function call. */

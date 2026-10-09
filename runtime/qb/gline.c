@@ -61,7 +61,7 @@ static void line(int x1, int y1, int x2, int y2, byte color, int solid)
 
 /* B$LINE: color (-1 for the foreground), style (-1 for solid), and how: a line,
    B for a box, BF for a filled one. */
-void B_LINE(int color, int style, int how)
+void gfx_line_between(int color, int style, int how)
 {
     byte c = gfx_color(color);
     int solid = style == SOLID, y;
@@ -82,5 +82,10 @@ void B_LINE(int color, int style, int how)
     } else {
         line(gfx_x1, gfx_y1, gfx_x2, gfx_y2, c, solid);
     }
+}
+/* B$LINE */
+void B_LINE(int color, int style, int how)
+{
+    gfx_line_between(color, style, how);
 }
 #pragma aux B_LINE "B$LINE"
