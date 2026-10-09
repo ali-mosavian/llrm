@@ -671,16 +671,24 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
 /// `bounded`'s facts at each block, as the solve left them: those the counted loops give (`within`), and those with
 /// the edges' facts where a block is in none (`blocks`). A block that did not change shares its map with the solve
 /// before.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Bounds {
     headers: Vec<i64>,
     /// The edges' facts it was worked out under: a loop reads them where it starts from.
     edges: IndexMap<i64, Scope>,
     within: IndexMap<i64, Scope>,
     blocks: IndexMap<i64, Scope>,
+    /// The blocks two loops' facts contradict each other at: none executes them.
+    dead: BTreeSet<i64>,
 }
 
 impl Bounds {
+    /// Whether the facts of the loops holding `at` contradict each other there: the block is unreachable, and a call in it
+    /// passes nothing to its callee (`parameter_ranges` rounds, which assume a range before they prove it).
+    pub fn unreachable(&self, at: i64) -> bool {
+        self.dead.contains(&at)
+    }
+
     /// What is known at `at`.
     pub fn at(&self, at: i64) -> Option<&IndexMap<ValueId, Interval>> {
         self.blocks.get(&at).map(|scope| &**scope)
@@ -789,6 +797,13 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
         None => IndexMap::default(),
     };
     let prior = prior.filter(|(held, _)| held.headers == headers);
+    let mut dead: BTreeSet<i64> = match prior {
+        Some((held, dirty)) => {
+            let redone: BTreeSet<i64> = nest.iter().filter(|one| dirty.contains(&one.header)).flat_map(|one| one.body.iter().copied()).collect();
+            held.dead.difference(&redone).copied().collect()
+        }
+        None => BTreeSet::new(),
+    };
     for loop_ in nest {
         if prior.is_some_and(|(_, dirty)| !dirty.contains(&loop_.header)) {
             continue;
@@ -1050,7 +1065,9 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
             let scoped = scope_at(at, &known)?;
             let destination = Rc::make_mut(result.entry(at).or_default());
             for (value, interval) in scoped {
-                narrow(destination, value, interval);
+                if narrow(destination, value, interval) {
+                    dead.insert(at);
+                }
             }
         }
     }
@@ -1058,7 +1075,7 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
     for (at, known) in &edges_above {
         result.entry(*at).or_insert_with(|| Rc::clone(known));
     }
-    Ok(Bounds { headers, edges: edges_above, within, blocks: result })
+    Ok(Bounds { headers, edges: edges_above, within, blocks: result, dead })
 }
 
 #[cfg(test)]
@@ -1197,8 +1214,9 @@ fn power_box(interval: &Interval, width: u32) -> Option<Interval> {
     (0..width - 1).map(|bits| BigInt::from(1_u8) << bits).find(|limit| -limit <= interval.low && interval.high < *limit).map(|limit| Interval { low: -limit.clone(), high: limit - 1, width })
 }
 
-/// `interval` for `value` in `known`, met with what it already held at that width.
-fn narrow(known: &mut IndexMap<ValueId, Interval>, value: ValueId, interval: Interval) {
+/// `interval` for `value` in `known`, met with what it already held at that width; whether the two have nothing in common, which
+/// no execution reaching the block can show (the block is unreachable under the facts that gave them), and `known` keeps the first.
+fn narrow(known: &mut IndexMap<ValueId, Interval>, value: ValueId, interval: Interval) -> bool {
     match known.get(&value) {
         None => {
             known.insert(value, interval);
@@ -1207,10 +1225,13 @@ fn narrow(known: &mut IndexMap<ValueId, Interval>, value: ValueId, interval: Int
             let (low, high) = (previous.low.clone().max(interval.low), previous.high.clone().min(interval.high));
             if low <= high {
                 known.insert(value, Interval { low, high, width: interval.width });
+            } else {
+                return true;
             }
         }
         Some(_) => {}
     }
+    false
 }
 
 /// Every interval known at each block: a loop's counters and what they
@@ -1221,7 +1242,7 @@ pub fn scoped(unit: &Unit) -> Result<Facts, String> {
         let known = result.entry(at).or_default();
         for (value, interval) in edges {
             match known.get(&value) {
-                Some(previous) if previous.width == interval.width => narrow(known, value, interval),
+                Some(previous) if previous.width == interval.width => { narrow(known, value, interval); }
                 _ => {
                     known.insert(value, interval);
                 }
