@@ -50,7 +50,7 @@ impl Wide for &Loc {
             Loc::Mem(one) => one.width,
             Loc::Imm(one) => one.width,
             Loc::Held(one) => one.width,
-            Loc::Address(_) | Loc::St(_) => 0,
+            Loc::Address(_) => 0,
         }
     }
 }

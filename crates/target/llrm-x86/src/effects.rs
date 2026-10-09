@@ -97,6 +97,8 @@ fn used(
     };
     for place in places {
         let address = match place {
+            // An x87 register is the stack's position, not a GPR to track.
+            Loc::Reg(one) if one.register.is_st() => continue,
             Loc::Reg(one) => {
                 match writes.as_deref_mut() {
                     Some(into) => add(into, one.register),
@@ -120,7 +122,7 @@ fn used(
                 None => return false,
                 found => found,
             },
-            Loc::Imm(_) | Loc::St(_) | Loc::Held(_) => continue,
+            Loc::Imm(_) | Loc::Held(_) => continue,
         };
         if let Some((operand, _)) = address {
             add(reads, operand.base);
@@ -148,6 +150,7 @@ fn used(
 /// The bytes `place` is, where it says.
 fn bytes_of(place: &Loc) -> Option<u32> {
     match place {
+        Loc::Reg(one) if one.register.is_st() => None,
         Loc::Reg(one) => Some(one.width),
         Loc::Mem(one) => Some(one.width),
         Loc::Imm(one) => Some(one.width),
@@ -158,11 +161,11 @@ fn bytes_of(place: &Loc) -> Option<u32> {
 /// The kind letter of an operand.
 fn kind_of(place: &Loc) -> char {
     match place {
+        Loc::Reg(one) if one.register.is_st() => 's',
         Loc::Reg(_) | Loc::Held(_) => 'r',
         Loc::Mem(_) => 'm',
         Loc::Imm(_) => 'i',
         Loc::Address(_) => 'a',
-        Loc::St(_) => 's',
     }
 }
 

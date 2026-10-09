@@ -63,7 +63,7 @@ fn imm(
 }
 
 fn st(index: u32) -> Loc {
-    Loc::St(ir::St { index })
+    Loc::st(index)
 }
 
 const ROOTS: [Register; 6] = [Register::EAX, Register::ECX, Register::EDX, Register::EBX, Register::ESI, Register::EDI];

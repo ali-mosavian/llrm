@@ -52,3 +52,21 @@ fn test_a_value_below_the_top_that_stays_is_copied_for_a_memory_operand() {
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
     assert!(!lines.windows(2).any(|pair| pair[0].starts_with("fxch") && pair[1] == "fld st(0)"), "{listing}");
 }
+
+/// With x87 registers as `Loc::Reg`, `machinedce` found an `fxch st(i)` to be
+/// an exchange of two registers nothing reads and deleted them: 13 `fxch` gone
+/// from x87rotate.c, a wrong program.
+#[test]
+fn test_fxch_survives_dead_code_elimination() {
+    let scratch = tempfile::tempdir().unwrap();
+    let directory = scratch.path();
+    std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/run/c/x87rotate.c"), directory.join("a.c")).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(directory)
+        .args(["-m32", "-O2", "-march=i486", "-S", "-o", "a.s", "a.c"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let listing = std::fs::read_to_string(directory.join("a.s")).unwrap();
+    assert!(listing.matches("fxch").count() >= 10, "{listing}");
+}

@@ -1451,10 +1451,7 @@ pub fn float_pop(
 }
 
 fn st_index(one: &Loc) -> Option<u32> {
-    match one {
-        Loc::St(st) => Some(st.index),
-        _ => None,
-    }
+    one.st_index()
 }
 
 /// Select explicit stack operands without changing their evaluation order.
@@ -1892,7 +1889,7 @@ pub fn emit_in(
         Operation::FloatLoad | Operation::FloatArith | Operation::Exchange
     )
         && !sources.is_empty()
-        && all().all(|operand| matches!(operand, Loc::St(_)))
+        && all().all(|operand| operand.st_index().is_some())
     {
         return float_stack(what, at);
     }
@@ -2101,10 +2098,14 @@ pub fn emit_in(
     if op == Operation::FloatStore && dests.len() == 1 {
         match &dests[0] {
             Loc::Mem(cell) => return float_memory(name, cell, at),
-            Loc::St(st)
-                if what.name.as_deref() == Some("fstp") && sources.len() == 1 && st_index(&sources[0]) == Some(0) =>
+            stack
+                if stack.st_index().is_some()
+                    && what.name.as_deref() == Some("fstp")
+                    && sources.len() == 1
+                    && st_index(&sources[0]) == Some(0) =>
             {
-                return _assemble(&raised(create_reg(Code::Fstp_sti, stack_register(st.index))), at, true);
+                let index = stack.st_index().expect("a stack register");
+                return _assemble(&raised(create_reg(Code::Fstp_sti, stack_register(index))), at, true);
             }
             _ => {}
         }
@@ -2232,10 +2233,7 @@ pub fn emit_in(
         };
     }
     if op == Operation::FloatArithPop && !dests.is_empty() {
-        return match &dests[0] {
-            Loc::St(st) => float_pop(name, st.index, at),
-            _ => None,
-        };
+        return dests[0].st_index().and_then(|index| float_pop(name, index, at));
     }
     if op == Operation::Divide && !sources.is_empty() {
         return match &sources[sources.len() - 1] {
@@ -2371,7 +2369,7 @@ mod sweep_support {
     }
 
     pub fn st(index: u32) -> Loc {
-        Loc::St(ir::St { index })
+        Loc::st(index)
     }
 
     #[allow(clippy::too_many_arguments)]

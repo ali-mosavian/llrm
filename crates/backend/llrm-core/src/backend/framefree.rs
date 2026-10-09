@@ -91,7 +91,7 @@ pub fn without_frame_register(
                 // As `masm::stack_addressed`: an exchange of x87 registers,
                 // memory or general registers and the x87 and port instructions
                 // leave the stack pointer alone.
-                Operation::Exchange if what.dests.iter().chain(&what.sources).all(|place| matches!(place, Loc::St(_) | Loc::Mem(_)) || matches!(
+                Operation::Exchange if what.dests.iter().chain(&what.sources).all(|place| (place.st_index().is_some() || matches!(place, Loc::Mem(_))) || matches!(
                     place,
                     Loc::Reg(reg) if crate::model::ir::root(reg.register) != crate::model::ir::root(registers.stack)
                 )) => {}

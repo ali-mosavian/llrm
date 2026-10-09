@@ -31,6 +31,33 @@ pub struct Reg {
     pub width: u32,
 }
 
+/// The eight x87 registers, top first.
+fn x87_stack() -> &'static [iced_x86::Register; 8] {
+    static STACK: std::sync::OnceLock<[iced_x86::Register; 8]> = std::sync::OnceLock::new();
+    STACK.get_or_init(|| {
+        let mut found = iced_x86::Register::values().filter(|one| one.is_st());
+        std::array::from_fn(|_| found.next().expect("eight x87 registers"))
+    })
+}
+
+impl Reg {
+    /// The x87 register `st(index)`, relative to the current top. A float is
+    /// ten bytes there. The stack is eight deep: a deeper position names no
+    /// register, and nothing encodes it.
+    pub fn st(index: u32) -> Self {
+        let register = x87_stack().get(index as usize).copied().unwrap_or_default();
+        Self { register, width: 10 }
+    }
+
+    /// Its position, where it is an x87 register.
+    pub fn st_index(&self) -> Option<u32> {
+        if !self.register.is_st() {
+            return None;
+        }
+        x87_stack().iter().position(|one| *one == self.register).map(|index| index as u32)
+    }
+}
+
 /// An SSA value held in an as-yet undecided physical register.
 ///
 /// Direct port of `qbopt.model.ir:Held`.
@@ -194,14 +221,6 @@ fn _in_frame(
     })
 }
 
-/// An x87 stack position relative to the current top.
-///
-/// Direct port of `qbopt.model.ir:St`.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct St {
-    pub index: u32,
-}
-
 /// Every selected machine operand Python LIR may carry.
 ///
 /// Direct port of `qbopt.model.ir:Loc`.
@@ -211,8 +230,22 @@ pub enum Loc {
     Mem(Mem),
     Imm(Imm),
     Address(Address),
-    St(St),
     Held(Held),
+}
+
+impl Loc {
+    /// The x87 register `st(index)`.
+    pub fn st(index: u32) -> Self {
+        Loc::Reg(Reg::st(index))
+    }
+
+    /// Its position, where this is an x87 register.
+    pub fn st_index(&self) -> Option<u32> {
+        match self {
+            Loc::Reg(register) => register.st_index(),
+            _ => None,
+        }
+    }
 }
 
 pub use flag::Flag;
@@ -485,7 +518,7 @@ pub fn values(where_: &Loc) -> Values {
                 named(held);
             }
         }
-        Loc::Reg(_) | Loc::Imm(_) | Loc::Address(_) | Loc::St(_) => {}
+        Loc::Reg(_) | Loc::Imm(_) | Loc::Address(_) => {}
     }
     found
 }
@@ -839,12 +872,6 @@ impl Repr for Mem {
     }
 }
 
-impl Repr for St {
-    fn repr(&self) -> String {
-        pyrepr::dataclass("St", &[("index", self.index.repr())])
-    }
-}
-
 impl Repr for Loc {
     fn repr(&self) -> String {
         match self {
@@ -852,7 +879,6 @@ impl Repr for Loc {
             Loc::Mem(one) => one.repr(),
             Loc::Imm(one) => one.repr(),
             Loc::Address(one) => one.repr(),
-            Loc::St(one) => one.repr(),
             Loc::Held(one) => one.repr(),
         }
     }
@@ -890,7 +916,6 @@ mod repr_tests {
             Address::new(None).repr(),
             "Address(addr=None, through=0, index=0, scale=1, offset=0, disp_width=0)"
         );
-        assert_eq!(St { index: 1 }.repr(), "St(index=1)");
         assert_eq!(Held { value: 3, width: 2 }.repr(), "Held(value=3, width=2)");
         let semantics = Semantics {
             name: Some("mov".to_owned()),

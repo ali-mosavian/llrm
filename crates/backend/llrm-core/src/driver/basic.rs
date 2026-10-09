@@ -547,7 +547,7 @@ pub fn finalized(
                 continue;
             };
             let what = what.expect("a named operation");
-            let st0 = vec![Loc::St(ir::St { index: 0 })];
+            let st0 = vec![Loc::st(0)];
             let name = what.name.clone().unwrap_or_default();
             if what.op != Operation::FloatUnary || what.dests != st0 || what.sources != st0 {
                 return Err(format!("{name} must be allocated as st(0) -> st(0)"));

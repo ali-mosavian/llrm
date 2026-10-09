@@ -27,8 +27,8 @@ const ECX: Loc = reg(Register::ECX, 4);
 const EDX: Loc = reg(Register::EDX, 4);
 const ES: Loc = reg(Register::ES, 2);
 const CS: Loc = reg(Register::CS, 2);
-const ST0: Loc = Loc::St(St { index: 0 });
-const ST1: Loc = Loc::St(St { index: 1 });
+const ST0: Loc = Loc::Reg(Reg { register: Register::ST0, width: 10 });
+const ST1: Loc = Loc::Reg(Reg { register: Register::ST1, width: 10 });
 
 fn mem(
     addr: Option<Addr>,

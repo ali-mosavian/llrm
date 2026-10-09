@@ -1085,7 +1085,7 @@ fn addressed_pass(
                     // name no stack effect leave the stack pointer alone.
                     Operation::Exchange
                         if what.dests.iter().chain(&what.sources).all(|place| {
-                            matches!(place, Loc::St(_) | Loc::Mem(_))
+                            (place.st_index().is_some() || matches!(place, Loc::Mem(_)))
                                 || matches!(
                                     place,
                                     Loc::Reg(reg) if ir::root(reg.register) != ir::root(registers.stack)
@@ -1626,8 +1626,8 @@ pub fn _operand(
     names: &IndexMap<(Space, i64), String>,
 ) -> Result<String, Unprintable> {
     Ok(match r#where {
+        Loc::Reg(one) if one.st_index().is_some() => format!("st({})", one.st_index().expect("an x87 register")),
         Loc::Reg(ir::Reg { register, .. }) => target::name_of(*register),
-        Loc::St(ir::St { index }) => format!("st({index})"),
         Loc::Imm(ir::Imm { value, address: None, .. }) => value.to_string(),
         Loc::Imm(ir::Imm { value, address: Some(address), .. }) => {
             if address.space == Space::Group {
@@ -1805,7 +1805,7 @@ mod tests {
     /// refuses: 122 errors over qcport.
     #[test]
     fn test_x87_exchange_is_fxch() {
-        let st = |index| Loc::St(ir::St { index });
+        let st = |index| Loc::st(index);
         let swap = semantics(Operation::Exchange, "fxch", vec![st(0), st(1)], vec![st(0), st(1)]);
         assert_eq!(_instruction(&swap, &no_names(), 0).unwrap(), ["fxch st(1)"]);
     }
