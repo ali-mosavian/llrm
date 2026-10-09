@@ -180,11 +180,12 @@ def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
 
 # The build every step runs after, and every measurement is taken with: `cargo build --bins` alone produces a different llrm-c (the
 # test build unifies features differently), whose compile costs differ by up to 6% a step. tools/measure.py builds a base with it too.
+WARNINGS_AS_ERRORS = "RUSTFLAGS='-D warnings'"
 BUILD = (
-    "RUSTFLAGS='-D warnings' cargo check --workspace --all-targets -q && "
-    "RUSTFLAGS='-D warnings' cargo check --release --workspace --all-targets -q && "
-    "RUSTFLAGS='-D warnings' cargo build --release -q --bins && "
-    "RUSTFLAGS='-D warnings' cargo test --release -q --workspace --no-run"
+    f"{WARNINGS_AS_ERRORS} cargo check --workspace --all-targets -q && "
+    f"{WARNINGS_AS_ERRORS} cargo check --release --workspace --all-targets -q && "
+    f"{WARNINGS_AS_ERRORS} cargo build --release -q --bins && "
+    f"{WARNINGS_AS_ERRORS} cargo test --release -q --workspace --no-run"
 )
 # Measurements compare two revisions, so their historical base is built without
 # today's warning policy.
