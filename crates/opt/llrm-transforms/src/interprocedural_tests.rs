@@ -345,6 +345,7 @@ fn test_the_step_runs_as_a_program_pass() {
         proved: None,
         inline: Threshold::default(),
         rate: None,
+        ranges: true,
     });
     let stages = manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
     assert_eq!(stages.iter().map(|stage| stage.function).collect::<BTreeSet<_>>(), ids(&module, &["f"]));
@@ -391,6 +392,7 @@ b:
             proved: None,
             inline: Threshold::default(),
             rate,
+            ranges: true,
         });
         manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
         printed(&module).matches("call i16 @mix").count()
@@ -1033,6 +1035,7 @@ b:
             proved: None,
             inline: Threshold::default(),
             rate: size.then_some(0),
+            ranges: true,
         });
         manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
         printed(&module).matches("call i16 @triple").count()
