@@ -33,6 +33,9 @@ impl Parsed {
     /// Whether `exact` proves `%name`'s instruction.
     fn exact(&self, name: &str) -> bool {
         let unit = self.unit();
+        // The manager's bounds of the body, as the analysis that asks carries them.
+        let bounds = ranges::bounds(&unit).unwrap();
+        let unit = unit.with_bounds(&bounds);
         exact(&unit, &floatfacts::known(&unit, &Calls::default(), None)).unwrap().contains(&self.made(name))
     }
 
