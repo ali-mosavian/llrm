@@ -40,3 +40,13 @@ SD *QB B_SPAC(int n)
 #pragma aux B_LTRM "B$LTRM"
 #pragma aux B_RTRM "B$RTRM"
 #pragma aux B_SPAC "B$SPAC"
+
+/* B$FLEN: LEN of a string; a temporary is consumed. */
+int QB B_FLEN(word sd)
+{
+    int len = ((SD *)sd)->len;
+
+    str_tmp_free((SD *)sd);
+    return len;
+}
+#pragma aux B_FLEN "B$FLEN"

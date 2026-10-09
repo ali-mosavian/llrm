@@ -216,6 +216,19 @@ static void tmp_release(Tmp *t)
     tmp_head = t;
 }
 
+/* B$STDALCTMPDSC: give a temporary descriptor back without touching its string. */
+void str_tmp_release(SD *sd)
+{
+    if (is_tmp(sd))
+        tmp_release((Tmp *)sd);
+}
+
+/* B$STCHKTMP */
+byte str_is_tmp(SD *sd)
+{
+    return is_tmp(sd);
+}
+
 /* B$STDALCTMP: free a string if it is a temporary. */
 void str_tmp_free(SD *sd)
 {

@@ -12,6 +12,8 @@ SD *str_tmp(word len, word *data);
 SD *str_tmp_sub(SD *src, word off, word len);
 void str_tmp_free(SD *sd);
 void str_free_sd(SD *sd);
+void str_tmp_release(SD *sd);
+byte str_is_tmp(SD *sd);
 void str_adjust(word sd, word delta);
 void str_all_tmp_free(word level);
 extern word cur_level;
