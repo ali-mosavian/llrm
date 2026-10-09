@@ -854,8 +854,34 @@ fn test_reading_the_intervals_of_a_body_asked_of_twice_copies_none() {
     let (plain, _) = body(3, &Shape { pool: 9, ops: 8 });
     let first = ranges::intervals_shared(&plain, None);
     let again = ranges::intervals_shared(&plain, None);
-    assert!(std::rc::Rc::ptr_eq(&first, &again), "the second ask copied the answer");
+    assert!(std::sync::Arc::ptr_eq(&first, &again), "the second ask copied the answer");
     assert!(*first == ranges::intervals(&plain, None));
+}
+
+/// A function's allocator alternates between its base body and a trial's (a spill or a split of it). The facts share one manager: a
+/// trial's asks must not evict the base's, or each switch worked both out again. Over six alternations the base is numbered and
+/// worked out once, the trial is edited from it once, and every later ask is answered from memory; each answer is the whole walk's.
+#[test]
+fn test_a_base_and_its_trial_asked_in_turn_are_each_worked_out_once() {
+    use crate::analysis::intervals::{edited, intervals, intervals_afresh, numbered, worked};
+    let (base, _) = body(4, &Shape { pool: 10, ops: 12 });
+    let mut trial_blocks = base.blocks.clone();
+    let block = trial_blocks.iter_mut().find(|block| block.insns.len() > 3).expect("a block with instructions");
+    let copy = std::sync::Arc::new((*block.insns[1]).clone());
+    block.insns.edit(|insns| insns[1] = copy);
+    let trial = base.with_blocks(trial_blocks);
+    let before = (worked(&base), edited(&base), numbered(&base));
+    for _ in 0..6 {
+        for body in [&base, &trial] {
+            intervals(body, None);
+            crate::analysis::intervals::indexed_shared(body);
+        }
+    }
+    let after = (worked(&base), edited(&base), numbered(&base));
+    assert_eq!((after.0 - before.0, after.1 - before.1, after.2 - before.2), (2, 1, 2), "(worked, edited, numbered) over six turns of base and trial: the base once, the trial edited from it (which works out the values it names)");
+    for body in [&base, &trial] {
+        assert_eq!(intervals(body, None), intervals_afresh(body));
+    }
 }
 
 /// The no-split allocation of a body the base allocation split nothing in is the base allocation again, and was made for every
@@ -906,10 +932,10 @@ fn test_dense_liveness_is_what_the_sorted_sets_gave() {
 fn test_the_intervals_of_the_same_instructions_are_worked_out_once() {
     use crate::analysis::intervals::{intervals, worked};
     let (generated, _) = body(3, &Shape { pool: 8, ops: 10 });
-    let before = worked();
+    let before = worked(&generated);
     let first = intervals(&generated, None);
     let again = intervals(&generated, None);
-    assert_eq!(worked() - before, 1, "the same body was worked out twice");
+    assert_eq!(worked(&generated) - before, 1, "the same body was worked out twice");
     assert_eq!(first, again);
     // A body with one instruction made afresh is another question.
     let mut other = generated.clone();
@@ -917,7 +943,7 @@ fn test_the_intervals_of_the_same_instructions_are_worked_out_once() {
     let copy = std::sync::Arc::new((*block.insns[0]).clone());
     block.insns.edit(|insns| insns[0] = copy);
     intervals(&other, None);
-    assert_eq!(worked() - before, 2, "another body was answered from the first");
+    assert_eq!(worked(&generated) - before, 2, "another body was answered from the first");
 }
 
 /// A spill made a body of nearly the same instructions, and every fact of it was worked out afresh (the allocator's
@@ -944,9 +970,9 @@ fn test_the_intervals_of_an_edited_body_are_the_ones_worked_out_afresh() {
             other.blocks[block].insns.edit(|insns| insns[at] = copy);
             let inserted = Arc::new((*other.blocks[block].insns[at - 1]).clone());
             other.blocks[block].insns.edit(|insns| insns.insert(at, inserted));
-            let before = edited();
+            let before = edited(&other);
             let found = intervals(&other, None);
-            made += edited() - before;
+            made += edited(&other) - before;
             assert_eq!(found, intervals_afresh(&other), "seed {seed}");
         }
     }
@@ -982,9 +1008,9 @@ fn test_interference_among_some_values_is_the_whole_graphs_among_them() {
 #[test]
 fn test_a_body_with_no_word_address_pairs_is_not_numbered_to_find_classes() {
     let (generated, _) = body(5, &Shape { pool: 8, ops: 6 });
-    let before = crate::analysis::intervals::worked();
+    let before = crate::analysis::intervals::worked(&generated);
     crate::backend::regclass::classes(&generated, &std::collections::BTreeSet::new(), &crate::backend::target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
-    assert_eq!(crate::analysis::intervals::worked() - before, 0, "intervals were worked out for a body with no word pairs");
+    assert_eq!(crate::analysis::intervals::worked(&generated) - before, 0, "intervals were worked out for a body with no word pairs");
 }
 
 /// The interval walk looked each instruction's slot up in a map hashed by its address, built a set per group
@@ -1170,9 +1196,9 @@ fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
         for body in [in_ssa(&plain), plain] {
             let live = intervals(&body, None);
             let masks = _masks(&body, &indexed(&body), &crate::backend::target::BUILT_IN);
-            let before = worked();
+            let before = worked(&body);
             let given = classes_given(&body, &std::collections::BTreeSet::new(), &crate::backend::target::BUILT_IN, &registers, &Found { live: &live, masks: &masks });
-            assert_eq!(worked() - before, 0, "seed {seed}: intervals were worked out again");
+            assert_eq!(worked(&body) - before, 0, "seed {seed}: intervals were worked out again");
             let alone = classes(&body, &std::collections::BTreeSet::new(), &crate::backend::target::BUILT_IN, &registers);
             assert!(given.iter().eq(alone.iter()), "seed {seed}");
         }

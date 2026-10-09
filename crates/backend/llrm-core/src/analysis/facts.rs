@@ -62,6 +62,23 @@ impl Facts {
         result
     }
 
+    /// A value of type `T` the manager holds for its users, made by `Default` on first use: for a fact that keeps several states
+    /// (a ring of answers) where `get`'s one slot is not enough. `change` must not ask the manager.
+    pub fn stash<T: Default + Send + 'static, R>(&self, change: impl FnOnce(&mut T) -> R) -> R {
+        let mut slots = self.slots.lock().expect("facts");
+        let slot = slots.entry(TypeId::of::<T>()).or_insert_with(|| Box::<T>::default());
+        change(slot.downcast_mut::<T>().expect("a stash is of its type"))
+    }
+
+    /// Counts what a test asserts was not done twice.
+    pub fn bump(&self, name: &'static str) {
+        *self.runs.lock().expect("facts").entry(name).or_default() += 1;
+    }
+
+    pub fn counted(&self, name: &'static str) -> usize {
+        self.runs.lock().expect("facts").get(name).copied().unwrap_or(0)
+    }
+
     /// How many times `F` has been worked out, for a test that asking again does not.
     pub fn runs<F: Fact>(&self) -> usize {
         self.runs.lock().expect("facts").get(F::NAME).copied().unwrap_or(0)

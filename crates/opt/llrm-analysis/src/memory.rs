@@ -798,24 +798,38 @@ pub fn is_lifetime_marker(unit: &Unit, inst: InstId) -> bool {
 /// place a unit's registers are derived outside the manager.
 pub struct Standing<'h> {
     held: Option<&'h IndexMap<ValueId, Known>>,
+    /// What the counted loops bound, held for the same body as `held`, where the caller has it.
+    bounds: Option<&'h crate::ranges::Bounds>,
     derived: Option<IndexMap<ValueId, Known>>,
 }
 
 impl<'h> Standing<'h> {
     /// The body is as `registers` were found of it.
     pub fn held(registers: &'h IndexMap<ValueId, Known>) -> Self {
-        Self { held: Some(registers), derived: None }
+        Self { held: Some(registers), bounds: None, derived: None }
+    }
+
+    /// `held`, and the bounds the manager found of the same body.
+    pub fn held_with(registers: &'h IndexMap<ValueId, Known>, bounds: &'h crate::ranges::Bounds) -> Self {
+        Self { held: Some(registers), bounds: Some(bounds), derived: None }
     }
 
     /// No one has found them: derived when first asked.
     pub fn underived() -> Self {
-        Self { held: None, derived: None }
+        Self { held: None, bounds: None, derived: None }
     }
 
     /// The body changed: what was found of it no longer holds.
     pub fn changed(&mut self) {
         self.held = None;
+        self.bounds = None;
         self.derived = None;
+    }
+
+    /// `of`, and the manager's bounds of the body where it is still as they were found of it.
+    pub fn of_with_bounds(&mut self, unit: &Unit) -> (&IndexMap<ValueId, Known>, Option<&'h crate::ranges::Bounds>) {
+        let bounds = self.bounds;
+        (self.of(unit), bounds)
     }
 
     /// What is known of `unit`'s body as it stands, which it must be the one these were asked of.

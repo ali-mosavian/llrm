@@ -53,7 +53,14 @@ impl FunctionPass for LoopExit {
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let registers = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
-        match evaluated_with(unit.context, unit.layout, unit.function, analyses.outer(), &mut Standing::held(&registers)) {
+        // Only a `sext` of a counter asks what the loops bound.
+        let widens = unit.function.walk().any(|(_, inst)| unit.function.instruction(inst).opcode == Opcode::Cast(CastOp::SExt));
+        let bounded = widens.then(|| analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function));
+        let mut standing = match bounded.as_deref() {
+            Some(Ok(bounds)) => Standing::held_with(&registers, bounds),
+            _ => Standing::held(&registers),
+        };
+        match evaluated_with(unit.context, unit.layout, unit.function, analyses.outer(), &mut standing) {
             Ok(true) => PreservedAnalyses::none(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("loopexit: {error}"),
@@ -97,8 +104,12 @@ pub fn evaluated_with(context: &mut Context, layout: &DataLayout, function: &mut
 fn _evaluation(context: &Context, layout: &DataLayout, function: &Function, outer: &Outer, standing: &mut Standing) -> Result<Option<Evaluation>, String> {
     let shape = cfg::Shape::of(function);
     let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
-    let facts = standing.of(&unit);
+    let (facts, bounds) = standing.of_with_bounds(&unit);
     let unit = unit.with_registers(facts);
+    let unit = match bounds {
+        Some(bounds) => unit.with_bounds(bounds),
+        None => unit,
+    };
     for loop_ in shape.loops.iter() {
         let Some(&latch) = loop_.latches.first() else { continue };
         if loop_.body.len() != 2 || loop_.latches.len() != 1 || !edges::phis(function, cfg::block(latch)).is_empty() {
@@ -273,7 +284,7 @@ fn _widened_counters(unit: &Unit, loop_: &Loop, counters: &IndexMap<ValueId, Aff
     if extensions.is_empty() {
         return Ok(IndexMap::default());
     }
-    let bounds = ranges::bounded(unit)?;
+    let bounds = ranges::bounds(unit)?;
     let mut widened = IndexMap::default();
     for (at, inst) in extensions {
         let op = function.instruction(inst);
@@ -282,7 +293,7 @@ fn _widened_counters(unit: &Unit, loop_: &Loop, counters: &IndexMap<ValueId, Aff
         if narrow >= wide {
             continue;
         }
-        let (Some(counter), Some(interval)) = (counters.get(&source), bounds.get(&at).and_then(|known| known.get(&source))) else { continue };
+        let (Some(counter), Some(interval)) = (counters.get(&source), bounds.at(at).and_then(|known| known.get(&source))) else { continue };
         if interval.width != narrow {
             continue;
         }
