@@ -865,3 +865,51 @@ fn summaries_solve_the_pointer_values_of_a_body_once() {
     analyses.get::<Summaries>(&module);
     assert_eq!(crate::alias::value_solves() - before, 1, "Summaries solved a body's pointer values again");
 }
+
+/// What calling back into the module does was added up from every entry's
+/// summary for each body that asked (and again for each entry whose summary
+/// changed): entries times bodies, 126 and 89 Ginstr of the 385 compiling 4,096
+/// small functions at -O2 (call-effects and summaries callbacks, slope 2.0
+/// each). Made once, and one entry's change folded in alone.
+#[test]
+fn test_callbacks_are_added_up_once_for_every_body_that_asks() {
+    const BODIES: usize = 24;
+    let mut text = String::from("declare void @ext()\n\n");
+    for at in 0..BODIES {
+        text.push_str(&format!("define void @f{at}() {{\nb0:\n  call void @ext()\n  ret void\n}}\n\n"));
+    }
+    let module = parsed(&text);
+    let layout = layout(&module);
+    let mut outer = Outer::of(&module, None);
+    outer.require::<GlobalsAA>(&module);
+    outer.require::<Summaries>(&module);
+    outer.require::<super::Callbacks>(&module);
+    let outer = Rc::new(outer);
+    let before = alias::callback_entries();
+    for at in 0..BODIES {
+        let (_, _, function) =
+            module.functions().find(|(_, global, _)| global.name.as_deref() == Some(&format!("f{at}"))).unwrap();
+        Analyses::new(Rc::clone(&outer)).get::<CallEffects>(&module.context, &layout, function);
+    }
+    let added = alias::callback_entries() - before;
+    assert!(added <= 6 * BODIES, "{added} entries instantiated for {BODIES} bodies");
+}
+
+/// The summaries fixed point added the callbacks up from every entry again
+/// whenever an entry's summary changed: entries times changes. An entry that
+/// changed is folded in alone.
+#[test]
+fn test_summaries_fold_one_changed_entry_into_the_callbacks_not_all_of_them() {
+    const BODIES: usize = 24;
+    let mut text = String::from("declare void @ext()\n\n");
+    for at in 0..BODIES {
+        text.push_str(&format!("define void @f{at}() {{\nb0:\n  call void @ext()\n  ret void\n}}\n\n"));
+    }
+    let module = parsed(&text);
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    analyses.get::<GlobalsAA>(&module);
+    let before = alias::callback_entries();
+    analyses.get::<Summaries>(&module);
+    let added = alias::callback_entries() - before;
+    assert!(added <= 4 * BODIES, "{added} entries instantiated for {BODIES} bodies");
+}
