@@ -287,7 +287,7 @@ pub struct Shift {
 /// position); of each long one, how it differs, found by pointer.
 pub struct Differing {
     pub blocks: Vec<usize>,
-    aligned: Vec<Option<Aligned>>,
+    aligned: Vec<Option<std::rc::Rc<Aligned>>>,
 }
 
 /// Lists this short are compared by looking each instruction up in the other
@@ -305,7 +305,7 @@ pub fn differing_blocks(
         .iter()
         .map(|at| {
             let (old, new) = (&held[*at].1[..], &body.blocks[*at].insns[..]);
-            (old.len().max(new.len()) > SHORT).then(|| aligned(old, new)).flatten()
+            (old.len().max(new.len()) > SHORT).then(|| aligned_insns(&held[*at].1, &body.blocks[*at].insns)).flatten()
         })
         .collect();
     Differing { blocks, aligned }
@@ -354,7 +354,7 @@ pub fn changes(
         if one.insns.same_insns(&two.insns) {
             continue;
         }
-        match aligned(&one.insns, &two.insns) {
+        match aligned_insns(&one.insns, &two.insns).as_deref() {
             Some(alike) => {
                 found.gone.extend(alike.gone.iter().map(|at| Arc::clone(&one.insns[*at])));
                 found.added.extend(alike.added.iter().map(|at| Arc::clone(&two.insns[*at])));
@@ -367,6 +367,33 @@ pub fn changes(
     }
     found.touched = found.gone.iter().chain(&found.added).flat_map(|insn| names(insn)).collect();
     Some(found)
+}
+
+thread_local! {
+    /// The last few lists `aligned_insns` compared, held so that the addresses
+    /// they are known by are not reused.
+    static ALIGNED: std::cell::RefCell<Vec<(Insns, Insns, Option<std::rc::Rc<Aligned>>)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// `aligned` of two blocks' instructions, remembered: a rewrite asks the same
+/// question of the same two blocks from half a dozen of the facts it keeps.
+pub fn aligned_insns(
+    old: &Insns,
+    new: &Insns,
+) -> Option<std::rc::Rc<Aligned>> {
+    const KEPT: usize = 8;
+    ALIGNED.with(|kept| {
+        let mut kept = kept.borrow_mut();
+        if let Some((_, _, found)) = kept.iter().find(|(one, two, _)| one.same_as(old) && two.same_as(new)) {
+            return found.clone();
+        }
+        let found = aligned(old, new).map(std::rc::Rc::new);
+        if kept.len() >= KEPT {
+            kept.remove(0);
+        }
+        kept.push((old.clone(), new.clone(), found.clone()));
+        found
+    })
 }
 
 /// What `aligned` finds: the runs both hold, as (position in `old`, position in
@@ -482,19 +509,19 @@ pub fn changed_runs(
     body: &LirBody,
     index: &Indexes,
     differing: &Differing,
-    visit: &mut dyn FnMut(&[&Arc<Insn>]),
+    visit: &mut dyn FnMut(&[Arc<Insn>]),
 ) -> usize {
     let mut changed = 0;
-    let mut report = |run: &[&Arc<Insn>], hits: usize| {
+    let mut report = |run: &[Arc<Insn>], hits: usize| {
         changed += hits;
         visit(run);
     };
     // The groups of `run` that hold an instruction `gone` says is in only one
     // body.
     fn runs(
-        run: &[&Arc<Insn>],
+        run: &[Arc<Insn>],
         gone: &dyn Fn(&Arc<Insn>) -> bool,
-        report: &mut dyn FnMut(&[&Arc<Insn>], usize),
+        report: &mut dyn FnMut(&[Arc<Insn>], usize),
     ) {
         let mut start = 0;
         while start < run.len() {
@@ -516,7 +543,7 @@ pub fn changed_runs(
     fn side(
         insns: &[Arc<Insn>],
         only: &[usize],
-        report: &mut dyn FnMut(&[&Arc<Insn>], usize),
+        report: &mut dyn FnMut(&[Arc<Insn>], usize),
     ) {
         let mut done = 0;
         for &at in only {
@@ -532,8 +559,7 @@ pub fn changed_runs(
                     last += 1;
                 }
             }
-            let run: Vec<&Arc<Insn>> = insns[first..last].iter().collect();
-            report(&run, only.partition_point(|p| *p < last) - only.partition_point(|p| *p < first));
+            report(&insns[first..last], only.partition_point(|p| *p < last) - only.partition_point(|p| *p < first));
             done = last;
         }
     }
@@ -544,10 +570,8 @@ pub fn changed_runs(
                 side(&body.blocks[*at].insns[..], &found.added, &mut report);
             }
             None => {
-                let (old, new): (Vec<&Arc<Insn>>, Vec<&Arc<Insn>>) =
-                    (held[*at].1.iter().collect(), body.blocks[*at].insns.iter().collect());
-                runs(&old, &|one| !index.at.contains_key(&key(one)), &mut report);
-                runs(&new, &|one| !held_index.at.contains_key(&key(one)), &mut report);
+                runs(&held[*at].1[..], &|one| !index.at.contains_key(&key(one)), &mut report);
+                runs(&body.blocks[*at].insns[..], &|one| !held_index.at.contains_key(&key(one)), &mut report);
             }
         }
     }
