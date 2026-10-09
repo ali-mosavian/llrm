@@ -593,37 +593,25 @@ fn _killed(
     here
 }
 
-/// What each memory cell holds before each instruction, where it is a
-/// number.
-///
-/// Forward to a fixed point, meeting at a join on agreement. A block none
-/// of whose predecessors have been visited yet is deferred, not treated as
-/// knowing nothing.
-#[allow(clippy::too_many_arguments)]
-pub fn cells(
-    unit: &Unit,
-    calls: &Calls,
-    known: Option<&IndexMap<ValueId, Known>>,
-    initial: Option<&Cells>,
-    edges: Option<&IndexMap<(i64, i64), Cells>>,
-    assume: Option<&mut BTreeSet<ValueId>>,
-    allowed: Option<&BTreeSet<ValueId>>,
-) -> HeldCells {
-    cells_solved(unit, calls, known, initial, edges, assume, allowed, None).held
-}
-
-/// What `cells` found, and what each block ends with, which a later solve of
-/// the same body with some blocks changed starts from.
+/// What `cells_solved` found, and what each block ends with, which a later
+/// solve of the same body with some blocks changed starts from.
 #[derive(Debug, Default, PartialEq)]
 pub struct SolvedCells {
     pub held: HeldCells,
     pub outof: IndexMap<i64, Option<Rc<Cells>>>,
 }
 
-/// `cells`, or with `restart` the blocks of `previous`' body it names worked
-/// again from nothing, the rest standing as `previous` left them: the result
-/// is the one a whole solve gives if what enters a block outside them is as
-/// it was, which the caller checks (`cells_restarted`).
+/// What each memory cell holds before each instruction, where it is a
+/// number.
+///
+/// Forward to a fixed point, meeting at a join on agreement. A block none
+/// of whose predecessors have been visited yet is deferred, not treated as
+/// knowing nothing.
+///
+/// With `restart`, the blocks of `previous`' body it names are worked again
+/// from nothing, the rest standing as `previous` left them: the result is the
+/// one a whole solve gives if what enters a block outside them is as it was,
+/// which the caller checks (`cells_restarted`).
 #[allow(clippy::too_many_arguments)]
 pub fn cells_solved(
     unit: &Unit,
@@ -1277,7 +1265,7 @@ fn _solved(
         // feed each other and run to one fixed point together.
         if let Some(calls) = calls {
             if rounds > 1 && (learned || !remembered) {
-                held = cells(unit, calls, Some(&facts), initial, edges, assume.as_mut(), allowed);
+                held = cells_solved(unit, calls, Some(&facts), initial, edges, assume.as_mut(), allowed, None).held;
                 remembered = true;
             }
             learned = false;
