@@ -34,7 +34,7 @@ def results(tmp_path_factory):
 
 # Milestone programs whose runtime entries are not ported yet.  Strict: a program that starts to pass
 # must leave this set.
-PENDING = {"grep", "huge", "textfill", "tile"}
+PENDING = {"grep", "huge"}
 
 
 def case(name: str):

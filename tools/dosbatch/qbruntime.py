@@ -129,32 +129,39 @@ def differential_batch(
     objects: dict[str, tuple[Path, Path]], archive: Path, work: Path
 ) -> dict[str, Differential]:
     """Each program as two objects of one source: BCOM45's (`qb45`) linked with BCOM45, and llrm's
-    (`-fqb-runtime=llrm`) linked with LLRMQB.  Raw bytes are compared.
+    (`-fqb-runtime=llrm`) linked with LLRMQB.  Raw bytes and screens are compared.
 
-    Jobs are named J000, J001, ...: a source name is not always an 8.3 basename, or unique in 8 characters.
+    Both sessions run in `work/run`, so the mount lines on the DOS screen are the same text.  Jobs are
+    named J000, J001, ...: a source name is not always an 8.3 basename, or unique in 8 characters.
     """
     names = {name: f"J{at:03d}" for at, name in enumerate(objects)}
-    reference_work = work / "bcom45"
-    candidate_work = work / "llrmqb"
-    reference = dosbatch.run([dosbatch.Job(names[name], "obj", pair[0]) for name, pair in objects.items()], reference_work)
-    candidate = dosbatch.run(
-        [dosbatch.Job(names[name], "obj", pair[1], runtime="llrmqb", runtime_file=archive) for name, pair in objects.items()],
-        candidate_work,
+    run = work / "run"
+
+    def session(pairs: list[tuple[str, dosbatch.Job]]):
+        results = dosbatch.run([job for _, job in pairs], run)
+        return {
+            name: (results[job.stem], raw_output(run, job.stem), screen_changes(run, at))
+            for at, (name, job) in enumerate(pairs)
+        }
+
+    reference = session([(n, dosbatch.Job(names[n], "obj", pair[0])) for n, pair in objects.items()])
+    candidate = session(
+        [
+            (n, dosbatch.Job(names[n], "obj", pair[1], runtime="llrmqb", runtime_file=archive))
+            for n, pair in objects.items()
+        ]
     )
     found = {}
-    for at, (name, job) in enumerate(names.items()):
-        want, got = reference[job], candidate[job]
+    for name in objects:
+        (want, want_bytes, want_screen), (got, got_bytes, got_screen) = reference[name], candidate[name]
         if want.status != "ok" or got.status != "ok":
             found[name] = Differential(want, got, "a differential side did not complete", "")
-            continue
-        difference = first_byte_difference(raw_output(reference_work, job), raw_output(candidate_work, job))
-        reference_screen = screen_changes(reference_work, at)
-        candidate_screen = screen_changes(candidate_work, at)
-        if reference_screen is None or candidate_screen is None:
-            screen_difference = "screen capture unavailable"
+        elif want_screen is None or got_screen is None:
+            found[name] = Differential(want, got, first_byte_difference(want_bytes, got_bytes), "screen capture unavailable")
         else:
-            screen_difference = first_screen_difference(reference_screen, candidate_screen)
-        found[name] = Differential(want, got, difference, screen_difference)
+            found[name] = Differential(
+                want, got, first_byte_difference(want_bytes, got_bytes), first_screen_difference(want_screen, got_screen)
+            )
     return found
 
 
