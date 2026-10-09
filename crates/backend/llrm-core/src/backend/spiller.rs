@@ -1048,7 +1048,7 @@ fn homes_by_occurrences(body: &LirBody, index: &ranges::Indexes, changed: &[(usi
     }
     let values: Vec<u32> = (first..first + count as u32).collect();
     ranges::intervals_by_occurrences(body, index, &values, &|value| places.get(&value).cloned().unwrap_or_default(), &|block, position| {
-        made.get(&(block, position)).cloned().unwrap_or_else(|| Arc::clone(&body.blocks[block].insns[position]))
+        made.get(&(block, position)).map_or(&*body.blocks[block].insns[position], |one| &**one)
     })
 }
 

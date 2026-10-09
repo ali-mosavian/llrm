@@ -531,12 +531,13 @@ pub type Place = (usize, usize);
 /// is the instruction there as it names the values (not the body's own, where a caller adds values to it). The answer holds
 /// what `intervals_sparse` does, in another order of values; it costs the occurrences and the blocks the values are live
 /// in, where the walk costs every value live in every block, hashed.
-pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32], places: &dyn Fn(u32) -> Vec<Place>, named: &dyn Fn(usize, usize) -> Arc<Insn>) -> IndexMap<u32, Interval> {
+pub fn intervals_by_occurrences<'x>(body: &'x LirBody, index: &Indexes, values: &[u32], places: &dyn Fn(u32) -> Vec<Place>, named: &dyn Fn(usize, usize) -> &'x Insn) -> IndexMap<u32, Interval> {
     if values.is_empty() {
         return IndexMap::default();
     }
+    let count = body.blocks.len();
     let position: crate::support::hash::HashMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
-    let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); body.blocks.len()];
+    let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); count];
     for (at, block) in body.blocks.iter().enumerate() {
         for to in &block.succ {
             if let Some(&to) = position.get(to) {
@@ -544,14 +545,21 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
             }
         }
     }
+    let spans: Vec<(i64, i64)> = body.blocks.iter().map(|block| index.span[&block.at]).collect();
+    // Marks by block, a mark current when it equals the value's turn: no table is cleared between values.
+    let (mut in_mark, mut out_mark, mut written_mark, mut run_mark) = (vec![0u32; count], vec![0u32; count], vec![0u32; count], vec![0u32; count]);
+    let mut run_of: Vec<usize> = vec![0; count];
     let mut out: IndexMap<u32, Interval> = IndexMap::default();
+    let mut turn = 0u32;
     for &value in values {
         let found = places(value);
         if found.is_empty() {
             continue;
         }
+        turn += 1;
         // By block: the parallel-copy runs it occurs in, as (last position of the run, defined there, read there), ascending.
-        let mut by_block: Vec<(usize, Vec<(usize, bool, bool)>)> = Vec::new();
+        let mut by_block: Vec<Vec<(usize, bool, bool)>> = Vec::new();
+        let mut work: Vec<usize> = Vec::new();
         for (block_index, at) in found {
             let block = &body.blocks[block_index];
             let end = _group_end(block, at);
@@ -562,75 +570,82 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
                 defined |= one.defines.contains(&value);
                 used |= one.uses.contains(&value);
             }
-            match by_block.last_mut() {
-                Some((last, runs)) if *last == block_index => match runs.last_mut() {
-                    Some((run, was_defined, was_used)) if *run == end => {
-                        *was_defined |= defined;
-                        *was_used |= used;
-                    }
-                    _ => runs.push((end, defined, used)),
-                },
-                _ => by_block.push((block_index, vec![(end, defined, used)])),
+            if run_mark[block_index] != turn {
+                run_mark[block_index] = turn;
+                run_of[block_index] = by_block.len();
+                by_block.push(Vec::new());
+            }
+            let runs = &mut by_block[run_of[block_index]];
+            match runs.last_mut() {
+                Some((run, was_defined, was_used)) if *run == end => {
+                    *was_defined |= defined;
+                    *was_used |= used;
+                }
+                _ => runs.push((end, defined, used)),
             }
         }
         // Live in a block, and out of it, by the occurrences: read before it is written there, and so up its predecessors until
-        // a block writes it.
-        let mut live_in: crate::support::hash::HashSet<usize> = Default::default();
-        let mut live_out: crate::support::hash::HashSet<usize> = Default::default();
-        let mut written: crate::support::hash::HashSet<usize> = Default::default();
-        let mut work: Vec<usize> = Vec::new();
-        for (block_index, runs) in &by_block {
-            if runs.iter().any(|(_, defined, _)| *defined) {
-                written.insert(*block_index);
+        // a block writes it. The first run that names it decides: a read, even with a write beside it (the walk takes the
+        // group's writes first).
+        for block_index in 0..count {
+            if run_mark[block_index] != turn {
+                continue;
             }
-            // The first run that names it decides: a read, even with a write beside it (the walk takes the group's writes first).
+            let runs = &by_block[run_of[block_index]];
+            if runs.iter().any(|(_, defined, _)| *defined) {
+                written_mark[block_index] = turn;
+            }
             if runs.first().is_some_and(|(_, _, used)| *used) {
-                live_in.insert(*block_index);
-                work.push(*block_index);
+                in_mark[block_index] = turn;
+                work.push(block_index);
             }
         }
         while let Some(block_index) = work.pop() {
             for &before in &predecessors[block_index] {
-                if live_out.insert(before) && !written.contains(&before) && live_in.insert(before) {
-                    work.push(before);
+                if out_mark[before] != turn {
+                    out_mark[before] = turn;
+                    if written_mark[before] != turn && in_mark[before] != turn {
+                        in_mark[before] = turn;
+                        work.push(before);
+                    }
                 }
             }
         }
-        let mut blocks: Vec<usize> = by_block.iter().map(|(block_index, _)| *block_index).chain(live_in.iter().copied()).chain(live_out.iter().copied()).collect();
-        blocks.sort_unstable();
-        blocks.dedup();
-        let mut occurring = by_block.iter().peekable();
         let mut segments: Vec<Segment> = Vec::new();
-        for block_index in blocks {
+        let mut here: Vec<Segment> = Vec::new();
+        for block_index in 0..count {
+            let occurs = run_mark[block_index] == turn;
+            let live_out = out_mark[block_index] == turn;
+            let live_in = in_mark[block_index] == turn;
+            if !(occurs || live_out || live_in) {
+                continue;
+            }
             let block = &body.blocks[block_index];
-            let (first, last) = index.span[&block.at];
-            let runs: &[(usize, bool, bool)] = match occurring.peek() {
-                Some((at, runs)) if *at == block_index => {
-                    let runs = runs.as_slice();
-                    occurring.next();
-                    runs
-                }
-                _ => &[],
-            };
-            let mut alive: Option<i64> = live_out.contains(&block_index).then_some(last);
+            let (first, last) = spans[block_index];
+            let mut alive: Option<i64> = live_out.then_some(last);
             let mut wrote = false;
-            for &(end, defined, used) in runs.iter().rev() {
-                let boundary = index.slot(block, end) + DEF;
-                if defined {
-                    wrote = true;
-                    segments.push(Segment { start: boundary, end: alive.take().unwrap_or(boundary + 1) });
-                }
-                if used && alive.is_none() {
-                    alive = Some(boundary);
+            here.clear();
+            if occurs {
+                for &(end, defined, used) in by_block[run_of[block_index]].iter().rev() {
+                    let boundary = index.slot(block, end) + DEF;
+                    if defined {
+                        wrote = true;
+                        here.push(Segment { start: boundary, end: alive.take().unwrap_or(boundary + 1) });
+                    }
+                    if used && alive.is_none() {
+                        alive = Some(boundary);
+                    }
                 }
             }
             if let Some(end) = alive {
                 if end > first {
-                    segments.push(Segment { start: first, end });
+                    here.push(Segment { start: first, end });
                 }
-            } else if live_in.contains(&block_index) && !wrote {
-                segments.push(Segment { start: first, end: last });
+            } else if live_in && !wrote {
+                here.push(Segment { start: first, end: last });
             }
+            // The block's pieces were found last to first.
+            segments.extend(here.iter().rev().copied());
         }
         out.insert(value, Interval::new(value, _merged(segments)));
     }

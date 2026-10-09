@@ -812,6 +812,36 @@ fn test_a_search_that_is_not_exhaustive_makes_at_most_two_more_allocations() {
     assert!(most_all > 2, "premise: some body has more than two shapes to try (most: {most_all})");
 }
 
+/// The walk found a value's intervals by every value live in every block, hashed (the homes of d_faces: 56 values, 240 blocks, 4.4M
+/// instructions a call, 616 calls). From where the values occur and the blocks they are live through it finds the same.
+#[test]
+fn test_intervals_from_occurrences_are_those_of_the_walk() {
+    use crate::analysis::intervals as ranges;
+    use crate::backend::postings::Postings;
+    let mut compared = 0;
+    for seed in 0..120_u64 {
+        let shape = Shape { pool: 6 + (seed % 9) as usize, ops: 5 + (seed % 11) as usize };
+        let (plain, _) = body(seed, &shape);
+        let index = ranges::indexed(&plain);
+        let postings = Postings::of(&plain);
+        let every: Vec<u32> = plain.insns().iter().flat_map(|one| one.defines.iter().chain(&one.uses).copied()).collect::<std::collections::BTreeSet<u32>>().into_iter().collect();
+        for step in [1_usize, 2, 3] {
+            let values: Vec<u32> = every.iter().copied().enumerate().filter(|(at, _)| at % step == (seed as usize) % step).map(|(_, value)| value).collect();
+            let whole = ranges::_ranges_reference(&plain, &index, &|value| values.contains(&value));
+            let places = |value: u32| -> Vec<ranges::Place> {
+                let mut at: Vec<ranges::Place> = postings.defs(value).iter().chain(postings.uses(value)).map(|(block, position)| (*block as usize, *position as usize)).collect();
+                at.sort_unstable();
+                at.dedup();
+                at
+            };
+            let found = ranges::intervals_by_occurrences(&plain, &index, &values, &places, &|block, position| &*plain.blocks[block].insns[position]);
+            assert!(found == whole, "seed {seed}, every {step}th value: the intervals from occurrences differ from the walk");
+            compared += whole.len();
+        }
+    }
+    assert!(compared > 0, "premise: some value was live");
+}
+
 /// `allocate::live` was built from per-block sorted sets and converted to bit rows for the fixed point:
 /// 24% of compiling QCport's `d_faces` (#559). Dense rows all the way give the same sets.
 #[test]
