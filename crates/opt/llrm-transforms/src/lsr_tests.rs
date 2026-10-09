@@ -2137,3 +2137,36 @@ fn test_past_the_candidate_bound_the_search_prices_fewer_sets() {
     let (_, within) = super::TOTALS.with(std::cell::Cell::get);
     assert!(within < whole, "{within} sets priced of {whole}");
 }
+
+/// Each state of the function lsr looked at had every loop's trip count worked out again for its frequencies, whichever loops the last
+/// change reached: the proofs are the manager's, renewed for the loops a change reached.
+#[test]
+fn test_the_trips_lsr_prices_with_are_proved_once_for_a_loop_no_change_reached() {
+    let depth = 4;
+    let mut text = String::from("@a = global [64 x i32] zeroinitializer\n\ndefine i32 @f(i32 %n) {\nb0:\n  br label %h0\n\n");
+    for k in 0..depth {
+        let (inner, exit) = (if k + 1 == depth { format!("l{k}") } else { format!("h{}", k + 1) }, if k == 0 { "end".to_owned() } else { format!("l{}", k - 1) });
+        let from = if k == 0 { "b0".to_owned() } else { format!("h{}", k - 1) };
+        text += &format!("h{k}:\n  %i{k} = phi i32 [ 0, %{from} ], [ %n{k}, %l{k} ]\n  %s{k} = phi i32 [ 0, %{from} ], [ %t{k}, %l{k} ]\n  %c{k} = icmp slt i32 %i{k}, 8\n  br i1 %c{k}, label %{inner}, label %{exit}\n\n");
+    }
+    for k in (0..depth).rev() {
+        text += &format!("l{k}:\n  %p{k} = getelementptr [64 x i32], ptr @a, i32 0, i32 %i{k}\n  %v{k} = load i32, ptr %p{k}\n  %t{k} = add i32 %s{k}, %v{k}\n  %n{k} = add nsw i32 %i{k}, 1\n  br label %h{k}\n\n");
+    }
+    text += "end:\n  ret i32 0\n}\n";
+    let before = llrm_analysis::induction::proved();
+    let (_, printed) = reduced(&text);
+    let proved = llrm_analysis::induction::proved() - before;
+    assert!(printed.contains("define"), "{printed}");
+    assert!(proved <= 2 * depth, "{proved} loop counts proved for {depth} loops");
+}
+
+/// `_live_anyway` solved the function's liveness for every loop it planned, when `Pressure`, which the same call holds, has it: a nest of
+/// d loops solved it d times more (16 loops: 1.6 of lsr's 5.8 points on the nest axis). It asks the one it holds.
+#[test]
+fn test_a_loop_is_planned_with_the_liveness_the_pressure_holds() {
+    let text = program(&[("a", "i16", 2), ("b", "i16", 2)], "i32", DOT).replace("br label %l2.back\n\nl2.back:\n  br label %l1", "br label %l1").replace("%l2.back ]", "%l2 ]");
+    let before = llrm_analysis::liveness::solves();
+    let _ = reduced(&text);
+    let solved = llrm_analysis::liveness::solves() - before;
+    assert!(solved <= 3, "{solved} solves of liveness for one loop");
+}

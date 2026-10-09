@@ -431,7 +431,7 @@ pub fn counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap
     if let (false, Some(held), Some(registers)) = (inbounds, unit.counted, unit.registers) {
         if facts.is_none_or(|facts| std::ptr::eq(facts, registers)) {
             if let Some(found) = held.get(&loop_.header) {
-                if std::env::var_os("LLRM_CHECK_COUNTED").is_some() {
+                if llrm_support::env_set("LLRM_CHECK_COUNTED") {
                     assert!(*found == _counted_unless_stopped(unit, loop_, registers, false, false), "the counted proofs a unit carries are not those of the body it stands over: stale");
                 }
                 return found.clone();

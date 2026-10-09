@@ -68,6 +68,8 @@ pub fn machine_with<'a>(
         Box::new(phielim::PhiElimination),
         // Before any value is placed: a load made where its reader is.
         Box::new(crate::backend::pressuresink::PressureSink { segments: segments.clone(), classes: Rc::clone(classes) }),
+        // A float load only one arithmetic instruction reads is its memory operand.
+        Box::new(crate::backend::floatfold::FloatFold),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
         Box::new(floatalloc::FloatAlloc { frame: frame.clone() }),
@@ -112,7 +114,7 @@ pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool, classe
     let stage = if phase.name().is_empty() { phase.class_name().to_owned() } else { phase.name().to_owned() };
     // The invariance instrument, LLVM's `-g` rule: stripped of meta
     // instructions, every phase must make the same code.
-    let body = if std::env::var_os("LLRM_STRIP_META").is_some() { without_meta(body) } else { body };
+    let body = if llrm_support::env_set("LLRM_STRIP_META") { without_meta(body) } else { body };
     let verifying = crate::support::debug::verifying();
     let owned = if verifying { crate::support::debug::timed("lir owned bytes", || body.owned_bytes()) } else { Vec::new() };
     let transformed =

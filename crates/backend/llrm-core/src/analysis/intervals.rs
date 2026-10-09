@@ -70,9 +70,9 @@ impl Interval {
     }
 }
 
-/// Python `id(insn)`: the instruction's identity in the body that holds it.
+/// Python `id(insn)`: the instruction's identity, in every body that holds it (`Insn::id`).
 pub fn key(one: &Arc<Insn>) -> usize {
-    Arc::as_ptr(one) as usize
+    one.id() as usize
 }
 
 /// Every instruction's slot number, and every block's span.
@@ -206,6 +206,91 @@ impl Remembered {
     }
 }
 
+/// Where the slots of an earlier numbering are in a later one, for a body that keeps most of the earlier one's blocks: the block
+/// tops carry the instructions of the blocks that are the same (each is where it was, relative to its top), and each instruction
+/// both have in the others is a point of its own.
+pub struct Shift {
+    old: Vec<i64>,
+    new: Vec<i64>,
+    tops: crate::support::hash::HashMap<i64, i64>,
+}
+
+/// The blocks of `body` that are not the same instructions as `held`'s (by position).
+pub fn differing_blocks(held: &[(i64, &Insns)], body: &LirBody) -> Vec<usize> {
+    (0..body.blocks.len()).filter(|at| !held[*at].1.same_insns(&body.blocks[*at].insns)).collect()
+}
+
+/// The runs of instructions in only one of the two bodies, and of the parallel copy each is in (a copy's moves are all read and
+/// written at its last, which a change to any of them moves), each run once; the number of instructions that changed.
+pub fn changed_runs(held: &[(i64, &Insns)], held_index: &Indexes, body: &LirBody, index: &Indexes, differing: &[usize], visit: &mut dyn FnMut(&[&Arc<Insn>])) -> usize {
+    let mut changed = 0;
+    let mut runs = |run: &[&Arc<Insn>], gone: &dyn Fn(&Arc<Insn>) -> bool| {
+        let mut start = 0;
+        while start < run.len() {
+            let mut end = start + 1;
+            if run[start].group.is_some() {
+                while end < run.len() && run[end].group == run[start].group {
+                    end += 1;
+                }
+            }
+            let hit = run[start..end].iter().filter(|one| gone(one)).count();
+            if hit > 0 {
+                changed += hit;
+                visit(&run[start..end]);
+            }
+            start = end;
+        }
+    };
+    for at in differing {
+        let run: Vec<&Arc<Insn>> = held[*at].1.iter().collect();
+        runs(&run, &|one| !index.at.contains_key(&key(one)));
+        let run: Vec<&Arc<Insn>> = body.blocks[*at].insns.iter().collect();
+        runs(&run, &|one| !held_index.at.contains_key(&key(one)));
+    }
+    changed
+}
+
+impl Shift {
+    pub fn between(held: &[(i64, &Insns)], held_index: &Indexes, body: &LirBody, index: &Indexes, differing: &[usize]) -> Self {
+        let (mut old, mut new): (Vec<i64>, Vec<i64>) = (Vec::new(), Vec::new());
+        let mut tops: crate::support::hash::HashMap<i64, i64> = Default::default();
+        for (position, ((at, insns), block)) in held.iter().zip(&body.blocks).enumerate() {
+            let (before, now) = (held_index.span[at], index.span[&block.at]);
+            old.push(before.0);
+            new.push(now.0);
+            tops.insert(before.0, now.0);
+            tops.insert(before.1, now.1);
+            if differing.binary_search(&position).is_ok() {
+                for one in insns.iter() {
+                    if let Some(slot) = index.at.get(&key(one)) {
+                        old.push(held_index.at[&key(one)]);
+                        new.push(*slot);
+                    }
+                }
+            }
+        }
+        Self { old, new, tops }
+    }
+
+    /// Where a segment's start was.
+    pub fn start(&self, slot: i64) -> i64 {
+        if let Some(top) = self.tops.get(&slot) {
+            return *top;
+        }
+        let at = self.old.partition_point(|one| *one <= slot) - 1;
+        self.new[at] + (slot - self.old[at])
+    }
+
+    /// Where a segment's end was.
+    pub fn end(&self, slot: i64) -> i64 {
+        if let Some(top) = self.tops.get(&slot) {
+            return *top;
+        }
+        let at = self.old.partition_point(|one| *one < slot) - 1;
+        self.new[at] + (slot - self.old[at])
+    }
+}
+
 /// The answers remembered for this function's bodies, most recent first: the allocator's rewrites and its trial candidates alternate
 /// among a few, and they share the manager, so each is found by its blocks whichever asked last.
 #[derive(Default)]
@@ -214,6 +299,11 @@ struct Recent(Vec<Arc<Remembered>>);
 /// How many times this body's facts have worked out intervals, for a test that asking again of one body does not.
 pub fn worked(body: &LirBody) -> usize {
     body.facts.0.counted("intervals-worked")
+}
+
+/// How many edited answers this body's facts have worked the changed values of out from where they occur, not by walking the body.
+pub fn by_occurrences(body: &LirBody) -> usize {
+    body.facts.0.counted("intervals-by-occurrences")
 }
 
 /// How many answers this body's facts have made by editing an earlier one, for a test that a body made of another's instructions is.
@@ -262,7 +352,7 @@ pub fn intervals_shared_over(body: &LirBody, index: Option<&Indexes>, busy: &Fre
         recent.0.insert(0, held);
         Some(answer)
     }) {
-        if std::env::var_os("LLRM_CHECK_INTERVALS").is_some() {
+        if llrm_support::env_set("LLRM_CHECK_INTERVALS") {
             assert!(*found == worked_out(body, index, busy), "{}: a remembered answer differs from working it out", body.name);
         }
         llrm_support::debug::counted("intervals remembered", true);
@@ -286,7 +376,7 @@ pub fn intervals_shared_over(body: &LirBody, index: Option<&Indexes>, busy: &Fre
         Some(found) => {
             llrm_support::debug::counted("intervals edited", true);
             body.facts.0.bump("intervals-edited");
-            if std::env::var_os("LLRM_CHECK_INTERVALS").is_some() {
+            if llrm_support::env_set("LLRM_CHECK_INTERVALS") {
                 let whole = worked_out(body, Some(index), busy);
                 if found.0 != whole {
                     let mut shown = 0;
@@ -335,73 +425,21 @@ fn updated(held: &Remembered, body: &LirBody, index: &Indexes, busy: &Frequency)
         return None;
     }
     // A block that is the same instructions needs no looking at: it is where it was, shifted. The others are compared by
-    // instruction, for the values the instructions that are not in both name, and those of the parallel copy each is in: a copy's
-    // moves are all read and written at its last, which a change to any of them moves.
-    let differing: Vec<usize> = (0..body.blocks.len()).filter(|at| !held.blocks[*at].3.same_insns(&body.blocks[*at].insns)).collect();
+    // instruction, for the values the instructions that are not in both name.
+    let blocks: Vec<(i64, &Insns)> = held.blocks.iter().map(|(at, _, _, insns)| (*at, insns)).collect();
+    let differing = differing_blocks(&blocks, body);
     let mut touched: crate::support::hash::HashSet<u32> = Default::default();
-    let mut changed = 0;
-    let mut names = |run: &[&Arc<Insn>], gone: &dyn Fn(&Arc<Insn>) -> bool| {
-        let mut start = 0;
-        while start < run.len() {
-            let mut end = start + 1;
-            if run[start].group.is_some() {
-                while end < run.len() && run[end].group == run[start].group {
-                    end += 1;
-                }
-            }
-            let hit = run[start..end].iter().filter(|one| gone(one)).count();
-            if hit > 0 {
-                changed += hit;
-                for one in &run[start..end] {
-                    touched.extend(one.defines.iter().chain(&one.uses).copied());
-                }
-            }
-            start = end;
+    let changed = changed_runs(&blocks, &held.index, body, index, &differing, &mut |run| {
+        for one in run {
+            touched.extend(one.defines.iter().chain(&one.uses).copied());
         }
-    };
-    for at in &differing {
-        let run: Vec<&Arc<Insn>> = held.blocks[*at].3.iter().collect();
-        names(&run, &|one| !index.at.contains_key(&key(one)));
-        let run: Vec<&Arc<Insn>> = body.blocks[*at].insns.iter().collect();
-        names(&run, &|one| !held.index.at.contains_key(&key(one)));
-    }
+    });
     if changed * 4 > held.count + 16 || touched.len() * 3 > held.answer.len() + 16 {
         return None;
     }
-    // Where each slot of the old numbering is in the new one: the block tops, which carry the instructions of the blocks that are
-    // the same (each is where it was, relative to its top), and each instruction both have in the others.
-    let (mut old, mut new): (Vec<i64>, Vec<i64>) = (Vec::new(), Vec::new());
-    let mut tops: crate::support::hash::HashMap<i64, i64> = Default::default();
-    for (position, ((at, _, _, insns), block)) in held.blocks.iter().zip(&body.blocks).enumerate() {
-        let (before, now) = (held.index.span[at], index.span[&block.at]);
-        old.push(before.0);
-        new.push(now.0);
-        tops.insert(before.0, now.0);
-        tops.insert(before.1, now.1);
-        if differing.binary_search(&position).is_ok() {
-            for one in insns.iter() {
-                if let Some(slot) = index.at.get(&key(one)) {
-                    old.push(held.index.at[&key(one)]);
-                    new.push(*slot);
-                }
-            }
-        }
-    }
-    let start = |slot: i64| -> i64 {
-        if let Some(top) = tops.get(&slot) {
-            return *top;
-        }
-        let at = old.partition_point(|one| *one <= slot) - 1;
-        new[at] + (slot - old[at])
-    };
-    let end = |slot: i64| -> i64 {
-        if let Some(top) = tops.get(&slot) {
-            return *top;
-        }
-        let at = old.partition_point(|one| *one < slot) - 1;
-        new[at] + (slot - old[at])
-    };
-    let again = worked_out_with_totals(body, index, busy, &|value| touched.contains(&value));
+    let shift = Shift::between(&blocks, &held.index, body, index, &differing);
+    let (start, end) = (|slot| shift.start(slot), |slot| shift.end(slot));
+    let again = llrm_support::debug::timed("intervals among", || worked_among(body, index, busy, &touched));
     let mut answer: IndexMap<u32, Interval> = IndexMap::default();
     let mut totals: IndexMap<u32, f64> = IndexMap::default();
     for (value, kept) in held.answer.iter().filter(|(value, _)| !touched.contains(value)) {
@@ -422,6 +460,17 @@ fn updated(held: &Remembered, body: &LirBody, index: &Indexes, busy: &Frequency)
     answer.extend(again.0);
     totals.extend(again.1);
     Some((answer, totals))
+}
+
+/// `worked_out_with_totals` of the values `only` holds, from where they occur: one pass over the instructions finds each value's
+/// occurrences and weights, and the intervals are found from those (`intervals_by_occurrences`) where the walk would take the body's
+/// liveness whole and walk every block. For a body with phis, whose arguments are read in other blocks, the walk.
+fn worked_among(body: &LirBody, index: &Indexes, busy: &Frequency, only: &crate::support::hash::HashSet<u32>) -> (IndexMap<u32, Interval>, IndexMap<u32, f64>) {
+    if body.blocks.iter().any(|block| !block.phis.is_empty()) || llrm_support::env_set("LLRM_WALK_ALL") {
+        return worked_out_with_totals(body, index, busy, &|value| only.contains(&value));
+    }
+    body.facts.0.bump("intervals-by-occurrences");
+    crate::analysis::occurrences::Occurrences::scan(body, &|value| only.contains(&value)).intervals(body, index, busy)
 }
 
 fn worked_out(body: &LirBody, index: Option<&Indexes>, busy: &Frequency) -> IndexMap<u32, Interval> {
@@ -458,7 +507,7 @@ fn worked_out_with_totals(body: &LirBody, index: &Indexes, busy: &Frequency, kee
     body.facts.0.bump("intervals-worked");
     let ranges = _ranges(body, index, keep);
     let totals = llrm_support::debug::timed("intervals weights", || _totals(body, busy, keep));
-    let weight = _divided(&totals, &ranges);
+    let weight = divided(&totals, &ranges);
     let answer = ranges
         .into_iter()
         .map(|(value, one)| {
@@ -487,7 +536,7 @@ fn _group_start(block: &LirBlock, position: usize) -> usize {
 /// and nothing reads it in order. (The order is kept as it was all the same.)
 fn _ranges(body: &LirBody, index: &Indexes, keep: &impl Fn(u32) -> bool) -> IndexMap<u32, Interval> {
     let found = _walked(body, index, keep);
-    if std::env::var_os("LLRM_CHECK_RANGES").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_RANGES") {
         let reference = _ranges_reference(body, index, keep);
         assert!(found.iter().eq(reference.iter()), "{}: the walk differs from the reference", body.name);
     }
@@ -556,18 +605,11 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
         return IndexMap::default();
     }
     let count = body.blocks.len();
-    let position: crate::support::hash::HashMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
-    let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); count];
-    for (at, block) in body.blocks.iter().enumerate() {
-        for to in &block.succ {
-            if let Some(&to) = position.get(to) {
-                predecessors[to].push(at);
-            }
-        }
-    }
+    let graph = crate::analysis::graph::Graph::of(body);
+    let predecessors = &graph.parents;
     let spans: Vec<(i64, i64)> = body.blocks.iter().map(|block| index.span[&block.at]).collect();
     // Marks by block, a mark current when it equals the value's turn: no table is cleared between values.
-    let (mut in_mark, mut out_mark, mut written_mark, mut run_mark) = (vec![0u32; count], vec![0u32; count], vec![0u32; count], vec![0u32; count]);
+    let (mut in_mark, mut out_mark, mut written_mark, mut run_mark, mut reach_mark) = (vec![0u32; count], vec![0u32; count], vec![0u32; count], vec![0u32; count], vec![0u32; count]);
     let mut run_of: Vec<usize> = vec![0; count];
     let mut out: IndexMap<u32, Interval> = IndexMap::default();
     let mut turn = 0u32;
@@ -577,6 +619,8 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
         // By block: the parallel-copy runs it occurs in, as (last position of the run, defined there, read there), ascending.
         let mut by_block: Vec<Vec<(usize, bool, bool)>> = Vec::new();
         let mut work: Vec<usize> = Vec::new();
+        // The blocks this value occurs in or is live through: all else is none of its business, so no pass is over every block.
+        let mut reached: Vec<usize> = Vec::new();
         for &((block_index, at), defined, used) in found {
             let block = &body.blocks[block_index];
             let end = _group_end(block, at);
@@ -584,6 +628,10 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
                 run_mark[block_index] = turn;
                 run_of[block_index] = by_block.len();
                 by_block.push(Vec::new());
+                if reach_mark[block_index] != turn {
+                    reach_mark[block_index] = turn;
+                    reached.push(block_index);
+                }
             }
             let runs = &mut by_block[run_of[block_index]];
             match runs.last_mut() {
@@ -597,10 +645,7 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
         // Live in a block, and out of it, by the occurrences: read before it is written there, and so up its predecessors until
         // a block writes it. The first run that names it decides: a read, even with a write beside it (the walk takes the
         // group's writes first).
-        for block_index in 0..count {
-            if run_mark[block_index] != turn {
-                continue;
-            }
+        for &block_index in &reached {
             let runs = &by_block[run_of[block_index]];
             if runs.iter().any(|(_, defined, _)| *defined) {
                 written_mark[block_index] = turn;
@@ -614,6 +659,10 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
             for &before in &predecessors[block_index] {
                 if out_mark[before] != turn {
                     out_mark[before] = turn;
+                    if reach_mark[before] != turn {
+                        reach_mark[before] = turn;
+                        reached.push(before);
+                    }
                     if written_mark[before] != turn && in_mark[before] != turn {
                         in_mark[before] = turn;
                         work.push(before);
@@ -621,9 +670,10 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
                 }
             }
         }
+        reached.sort_unstable();
         let mut segments: Vec<Segment> = Vec::new();
         let mut here: Vec<Segment> = Vec::new();
-        for block_index in 0..count {
+        for &block_index in &reached {
             let occurs = run_mark[block_index] == turn;
             let live_out = out_mark[block_index] == turn;
             let live_in = in_mark[block_index] == turn;
@@ -663,7 +713,7 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
 }
 
 /// The position of the last instruction of the parallel-copy run `position` is in.
-fn _group_end(block: &LirBlock, position: usize) -> usize {
+pub(crate) fn _group_end(block: &LirBlock, position: usize) -> usize {
     let Some(group) = block.insns[position].group else { return position };
     let mut end = position;
     while end + 1 < block.insns.len() && block.insns[end + 1].group == Some(group) {
@@ -873,7 +923,7 @@ pub const GRACE: i64 = 25 * PER_INSN;
 /// `references weighted by block frequency / (live slots + grace)`.
 #[allow(dead_code)]
 fn _weights(body: &LirBody, busy: &Frequency, ranges: &IndexMap<u32, Interval>, keep: &impl Fn(u32) -> bool) -> IndexMap<u32, f64> {
-    _divided(&_totals(body, busy, keep), ranges)
+    divided(&_totals(body, busy, keep), ranges)
 }
 
 /// `references weighted by block frequency`, before the division.
@@ -890,7 +940,7 @@ fn _totals(body: &LirBody, busy: &Frequency, keep: &impl Fn(u32) -> bool) -> Ind
     total
 }
 
-fn _divided(total: &IndexMap<u32, f64>, ranges: &IndexMap<u32, Interval>) -> IndexMap<u32, f64> {
+pub(crate) fn divided(total: &IndexMap<u32, f64>, ranges: &IndexMap<u32, Interval>) -> IndexMap<u32, f64> {
     total
         .iter()
         .map(|(value, found)| {

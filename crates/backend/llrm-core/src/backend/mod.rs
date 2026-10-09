@@ -32,6 +32,7 @@ pub mod farload;
 pub mod constpool;
 pub mod floatalloc;
 pub mod floatassign;
+pub mod floatfold;
 pub mod floatregions;
 pub mod inline_asm;
 pub mod frame;

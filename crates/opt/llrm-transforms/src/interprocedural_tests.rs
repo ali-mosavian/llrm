@@ -1285,3 +1285,60 @@ b:
     again(&mut module, &mut analyses, &mut refused_trials);
     assert_eq!(runs.get(), 1, "the pipeline ran once for each of the callee's two sites");
 }
+
+/// A round assumes a parameter's range before it proves it (`place`'s `row` is 0 at first), and under it a loop `r < row` that runs
+/// from 0 is never entered: the facts of the loop around it and of its own contradict each other there, and a call in it passes
+/// nothing. Passing what the contradiction left (`r` below 0) made the callee's parameter range wide for good.
+#[test]
+fn test_a_call_in_a_block_the_assumed_range_makes_unreachable_passes_nothing() {
+    let mut module = parsed(
+        "define internal i16 @sink(i16 %x) {
+b:
+  %y = add i16 %x, 1
+  ret i16 %y
+}
+
+define internal i16 @place(i16 %row, i16 %n) {
+b:
+  %done = icmp eq i16 %row, %n
+  br i1 %done, label %leaf, label %scan
+scan:
+  br label %outer
+outer:
+  %c = phi i16 [ 0, %scan ], [ %c1, %latch ]
+  %more = icmp slt i16 %c, %n
+  br i1 %more, label %pre, label %next
+pre:
+  br label %head
+head:
+  %r = phi i16 [ 0, %pre ], [ %r1, %body ]
+  %go = icmp slt i16 %r, %row
+  br i1 %go, label %body, label %latch
+body:
+  %s = call i16 @sink(i16 %r)
+  %r1 = add nsw i16 %r, 1
+  br label %head
+latch:
+  %c1 = add nsw i16 %c, 1
+  br label %outer
+next:
+  %up = add nsw i16 %row, 1
+  %p = call i16 @place(i16 %up, i16 %n)
+  ret i16 %p
+leaf:
+  ret i16 1
+}
+
+define i16 @f(i16 %a) {
+b:
+  %x = call i16 @place(i16 0, i16 7)
+  ret i16 %x
+}
+",
+    );
+    stepped(&mut module, &["f"], 40, Threshold::none());
+    let text = printed(&module);
+    assert!(text.contains("range(i16 0, ") && text.contains("%x)"), "{text}");
+    let sink = text.lines().find(|line| line.contains("@sink(")).unwrap_or_default();
+    assert!(!sink.contains("range(i16 -"), "{sink}\n{text}");
+}

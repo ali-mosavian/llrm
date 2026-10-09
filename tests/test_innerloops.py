@@ -111,3 +111,42 @@ def test_a_static_procedure_s_loop_is_not_charged_to_the_public_before_it():
     )
     found = innerloops.loops(_object(code, "PUB"))
     assert [one.name for one in found] == ["sub_0004#0"]
+
+
+def _sieve(tmp_path, *flags):
+    import subprocess
+    import sys
+
+    sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1] / "tools"))
+    import llrmbin
+
+    source = tmp_path / "sieve.c"
+    source.write_text("extern void report(long v);\nstatic unsigned char s[4096];\nlong bench_sieve(int n) {\n    long c = 0; int i, j;\n    for (i = 2; i < n; i++) if (!s[i]) { c++; for (j = i + i; j < 4096; j += i) s[j] = 1; }\n    return c;\n}\n")
+    out = tmp_path / "sieve.obj"
+    subprocess.run([str(llrmbin.bin_dir() / "llrm-c"), "-m32", "-mabi=sysv", "-march=i486", "-O2", *flags, str(source), "-o", str(out)], check=True, capture_output=True)
+    return out.read_bytes()
+
+
+def test_a_32_bit_omf_object_yields_its_inner_loop(tmp_path):
+    """innerloops decoded everything as 16-bit code and returned no loops for a -m32 object, without a word: sieve's loop at 0x59..0x63 is
+    plain in objdump."""
+    found = innerloops.loops(_sieve(tmp_path))
+    assert found and all(one.size >= 3 for one in found), found
+    assert any("sieve" in one.name for one in found), [one.name for one in found]
+    # decoded as 32-bit code: 16-bit decoding of the same bytes found a loop of other instructions (a `mov` through `sp` and `bp`)
+    assert any(" e" in line.replace("[e", " e") for one in found for line in one.lines), [one.lines for one in found]
+
+
+def test_a_32_bit_elf_object_yields_its_inner_loop(tmp_path):
+    found = innerloops.loops(_sieve(tmp_path, "-fobject-format=elf"))
+    assert found and any("sieve" in one.name for one in found), found
+    assert any(" e" in line.replace("[e", " e") for one in found for line in one.lines), [one.lines for one in found]
+
+
+def test_an_elf_objects_width_is_32_unless_said_otherwise(tmp_path):
+    """gcc-ia16's ELF32 objects hold 16-bit code and say nothing of it, so `bits=16` is how they are read; the default is the native 32."""
+    data = _sieve(tmp_path, "-fobject-format=elf")
+    wide = [line for one in innerloops.loops(data) for line in one.lines]
+    narrow = [line for one in innerloops.loops(data, bits=16) for line in one.lines]
+    assert any(" ebx" in line or "[ebx" in line or "esp" in line for line in wide)
+    assert wide != narrow

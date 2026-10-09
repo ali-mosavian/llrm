@@ -105,14 +105,45 @@ fn files(root: &Path, directory: &str, into: &mut Vec<PathBuf>) {
     }
 }
 
-/// The lines of code of `path`: no comment lines, nothing from `#[cfg(test)]` on.
+/// The lines of code of `path`: no comment lines, and nothing of an item `#[cfg(test)]` attributes.
 fn code(path: &Path) -> Vec<String> {
     let text = fs::read_to_string(path).unwrap_or_default();
     let comment = if path.extension().is_some_and(|ext| ext == "rs") { "//" } else { "#" };
+    code_of(&text, comment)
+}
+
+/// `code`, of the text. A `#[cfg(test)]` takes the item after it (a module, a static, a function: to the end of its brackets or its `;`),
+/// not the rest of the file: a test static once hid a target's spelling further down.
+fn code_of(text: &str, comment: &str) -> Vec<String> {
     let mut lines = Vec::new();
+    let mut skipping = false;
+    let mut depth = 0i32;
+    let mut started = false;
     for line in text.lines() {
+        if skipping {
+            // Attributes and doc lines between the cfg and the item are part of it; so is everything to the end of the item.
+            let code = line.split("//").next().unwrap_or("");
+            for c in code.chars() {
+                match c {
+                    '(' | '[' | '{' => {
+                        depth += 1;
+                        started = true;
+                    }
+                    ')' | ']' | '}' => depth -= 1,
+                    _ => {}
+                }
+            }
+            let attribute = line.trim_start().starts_with("#[") || line.trim_start().starts_with("///");
+            if !attribute && depth <= 0 && (started || code.trim_end().ends_with(';')) {
+                skipping = false;
+            }
+            continue;
+        }
         if line.trim() == "#[cfg(test)]" {
-            break;
+            skipping = true;
+            depth = 0;
+            started = false;
+            continue;
         }
         if !line.trim_start().starts_with(comment) {
             lines.push(line.to_string());
@@ -266,4 +297,28 @@ fn an_untracked_copy_is_not_counted() {
 fn a_file_listed_twice_is_found() {
     assert_eq!(listed_twice("# header\n3 a.rs\n2 b.rs\n1 a.rs\n"), ["a.rs"]);
     assert!(listed_twice("3 a.rs\n2 b.rs\n").is_empty());
+}
+
+/// `#[cfg(test)]` once ended the file's code: a test static in #1091 hid copyprop's ESP spelling below it, and the ceiling was blessed down by
+/// mistake. It takes the item it attributes, a module or a static or a function, and no more.
+#[test]
+fn test_cfg_test_hides_its_item_and_not_the_rest_of_the_file() {
+    let text = r#"fn a() { "shared"; }
+#[cfg(test)]
+static TABLE: [&str; 2] = [
+    "in-test",
+    "in-test",
+];
+fn b() { "after the static"; }
+#[cfg(test)]
+mod tests {
+    fn c() { "in-test"; }
+}
+#[cfg(test)]
+use std::x;
+fn d() { "after the use"; }
+"#;
+    let kept = code_of(text, "//").join("\\n");
+    assert!(kept.contains("after the static") && kept.contains("after the use") && kept.contains("shared"), "{kept}");
+    assert!(!kept.contains("in-test"), "{kept}");
 }

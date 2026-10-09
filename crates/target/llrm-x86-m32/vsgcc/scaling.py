@@ -107,7 +107,22 @@ def chain(n: int) -> str:
     return "\n".join(out)
 
 
-AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain}
+def nest(n: int) -> str:
+    """One function of loops N deep, each bounded by a different low bits of the argument, a statement at every depth: the passes that
+    walk a loop's blocks or its nest (hoist, lsr, jumps, peephole, the allocator) meet each block once per loop around it."""
+    v = "abcd"
+    out = [PRELUDE_C + "unsigned fn(unsigned a, unsigned b, unsigned c, unsigned d) {\n    unsigned " + ", ".join(f"i{k}" for k in range(n)) + ";\n"]
+    for k in range(n):
+        pad = "    " * (k + 1)
+        x, y = v[k % 4], v[(k + 1) % 4]
+        out.append(f"{pad}for (i{k} = 0; i{k} < (({x} >> {k % 5}) & 1u) + 1u; i{k}++) {{\n{pad}    {x} = {x} * {small(k)}u + ({y} ^ i{k});\n")
+    out.append("    " * (n + 1) + "a ^= b + c;\n")
+    out += ["    " * (k + 1) + "}\n" for k in reversed(range(n))]
+    out.append("    return a ^ b ^ c ^ d;\n}\n" + _main("nest", "    return (long)fn(1u, 2u, 3u, 4u);\n"))
+    return "".join(out)
+
+
+AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain, "nest": nest}
 
 
 # --- measuring -------------------------------------------------------------------------------------------------------

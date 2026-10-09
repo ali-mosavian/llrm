@@ -89,3 +89,13 @@ def test_a_count_does_not_inherit_the_callers_llrm_variables(monkeypatch):
     monkeypatch.setenv("LLRM_BIN", "/kept")
     seen = scaling.sample([sys.executable, "-I", "-c", "import os, sys; print(sorted(k for k in os.environ if k.startswith('LLRM_')), file=sys.stderr)"], {"LLRM_DEBUG": "time"})[2]
     assert "LLRM_CHECK_FOO" not in seen and "LLRM_BIN" in seen and "LLRM_DEBUG" in seen, seen
+
+
+def test_the_nest_axis_is_a_loop_nest_as_deep_as_it_says_and_the_gate_sizes_it():
+    """gap32's recursive inlining nested loops deeply and rectwo -O2 went 65 M -> 792 M: hoist, lsr, peephole, jumps and the allocator are
+    superlinear in nesting depth, which no axis measured (2N/N of a nest 16 deep is 4.3, D/c(2N) 0.44)."""
+    text = scaling.AXES["nest"](5)
+    assert text.count("for (") == 5
+    depths = [len(line) - len(line.lstrip()) for line in text.splitlines() if line.lstrip().startswith("for (")]
+    assert depths == sorted(depths) and len(set(depths)) == 5, depths
+    assert gate.SIZES["nest"] == 16

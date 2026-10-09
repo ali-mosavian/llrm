@@ -121,11 +121,13 @@ fn _affordable(unit: &passes::Unit, outer: &Outer, mut run: Vec<InstId>, before:
         for &inst in &run {
             hoisted.move_to(inst, Position::Before(before)).expect("a placed instruction");
         }
-        let Some(moved) = price(&hoisted) else { return run };
+        // The price of `hoisted` is its work and the forecast below, which is found once (it was found twice: 41% of hoist on a
+        // 16-deep nest, where the loops' passes cost 6 G).
+        let Some(work) = profit::weighted(unit.context, unit.layout, &hoisted, outer.callees(), costs, frequency) else { return run };
         // A floating value held across the loop is released after it, once for each time the loop is entered.
         let floats: BTreeSet<ValueId> = _crossed_values(&hoisted, &run).into_iter().filter(|&value| matches!(unit.context.types.get(hoisted.value(value).ty), Type::Float(_))).collect();
-        let moved = moved + floats.len() as i64 * costs.float_release * frequency.get(&into).copied().unwrap_or(1);
         let Some(forecast) = profit::spill_forecast(unit.context, unit.layout, &hoisted, costs, room, &|inst| crate::spill::kept_across(outer, unit.context, &hoisted, inst), frequency) else { return run };
+        let moved = work + forecast.cost + floats.len() as i64 * costs.float_release * frequency.get(&into).copied().unwrap_or(1);
         let cells = crate::spill::cells(&hoisted);
         let traffic = crate::spill::traffic(&hoisted, frequency, &cells, costs, &|_| true, &|value| crate::spill::words(unit.context, unit.layout, &hoisted, value));
         let free = |value: ValueId| _displacement(&hoisted, value) || traffic.get(&value).is_some_and(|one| one.rebuild.is_some());
@@ -239,11 +241,14 @@ pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i6
     let mut certain: Option<BTreeSet<InstId>> = None;
     let mut bounded: Option<std::rc::Rc<Result<ranges::Bounds, String>>> = None;
     let mut run: Vec<InstId> = Vec::new();
+    let mut taken: llrm_mir::dense::IdSet<InstId> = llrm_mir::dense::IdSet::new();
+    // Whether an instruction may move is a fact of the loop, not of how much of it has moved: asked of each once, not once a round.
+    let mut movable: llrm_mir::dense::IdMap<InstId, bool> = llrm_mir::dense::IdMap::new();
     let mut made: BTreeSet<ValueId> = BTreeSet::new();
     loop {
         let mut grew = false;
         for &inst in &insts {
-            if run.contains(&inst) || !_movable(unit, inst, &insts, accesses, Some(outer.program())) {
+            if taken.contains(&inst) || !*movable.get_or_insert_with(inst, || _movable(unit, inst, &insts, accesses, Some(outer.program()))) {
                 continue;
             }
             let ready = function.instruction(inst).operands.iter().all(|&operand| match operand {
@@ -259,6 +264,7 @@ pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i6
                 continue;
             }
             run.push(inst);
+            taken.insert(inst);
             made.extend(function.instruction(inst).result);
             grew = true;
         }

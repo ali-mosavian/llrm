@@ -900,17 +900,21 @@ pub fn divide(name: &str, divisor: Register, at: At) -> Option<Emitted> {
 pub fn address_of(into: Register, cell: &ir::Address, at: At) -> Option<Emitted> {
     let width = width_of(into)?;
     let code = _code(&format!("LEA_R{}_M", width * 8))?;
+    let (built, relocated) = address_operand(cell, at.bits, width as u32)?;
+    _assemble(&raised(create_reg_mem(code, into, built)), at, relocated)
+}
+
+/// `cell` as an encodable memory operand, and whether it is relocated: what `lea` names, and so the registers it reads.
+pub fn address_operand(cell: &ir::Address, bits: u32, width: u32) -> Option<(MemoryOperand, bool)> {
     if cell.addr.is_some() && cell.index == Register::None {
-        let (built, relocated) = operand_of(&ir::Mem { through: cell.through, ..ir::Mem::new(cell.addr, width as u32) }, at.bits)?;
-        return _assemble(&raised(create_reg_mem(code, into, built)), at, relocated);
+        return operand_of(&ir::Mem { through: cell.through, ..ir::Mem::new(cell.addr, width) }, bits);
     }
     if cell.through == Register::None && cell.index == Register::None {
         return None;
     }
-    let size = if cell.disp_width != 0 { displacement_in(cell.disp_width, at.bits) } else { _displacement_size(cell.through, cell.index, cell.offset, at.bits) };
-    let r#where = memory_operand(cell.through, cell.index, cell.scale, cell.offset, size, Register::None);
+    let size = if cell.disp_width != 0 { displacement_in(cell.disp_width, bits) } else { _displacement_size(cell.through, cell.index, cell.offset, bits) };
     // No address to name, so the displacement is arithmetic and not a symbol.
-    _assemble(&raised(create_reg_mem(code, into, r#where)), at, false)
+    Some((memory_operand(cell.through, cell.index, cell.scale, cell.offset, size, Register::None), false))
 }
 
 /// `cmp a,b` or `test a,b` -- both flags-only, and not the same question.

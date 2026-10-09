@@ -19,13 +19,30 @@ fn pipeline(arguments: &[&str]) -> Options {
     parsed(arguments).unwrap().pipeline()
 }
 
-/// The allocator's search of other shapes of a body is on at every level and `-fno-allocation-search` turns it off.
+/// The allocator tries other shapes of a body at every level but -O0, and `-f[no-]allocation-search` sets it anywhere. (gcc runs IRA
+/// once; turning the search off at -O1 to -Os cuts QCport's compile 26-29% for +0.1% of its bytes and nothing on the 66 m32 programs,
+/// but costs the 16-bit bench kernels 5-20% of their instructions: quicksort -O2 +20%, where `Scoped` keeps a loop's address base in a
+/// register. The default stays; the switch is there.)
 #[test]
-fn test_allocation_search_is_a_pass_every_level_has_on() {
-    for level in ["-O1", "-O2", "-O3", "-Os", "-Omax"] {
-        assert!(pipeline(&[level]).searches(), "{level}");
+fn test_allocation_search_is_on_at_every_level_but_o0_and_a_flag_sets_it_anywhere() {
+    for (level, on) in [("-O0", false), ("-O1", true), ("-O2", true), ("-Os", true), ("-O3", true), ("-Omax", true)] {
+        assert_eq!(pipeline(&[level]).searches(), on, "{level}");
+        assert!(pipeline(&[level, "-fallocation-search"]).searches(), "{level}");
         assert!(!pipeline(&[level, "-fno-allocation-search"]).searches(), "{level}");
     }
+}
+
+/// A function is made by the allocator alone and by the spiller's route and the cheaper kept at every level but -O0: that choice, not
+/// the search of shapes, is what the single allocation lost at x_dct (+15% clocks), x_ll_arith (+17.6% code) and recmany (+13%) when
+/// both were turned off together.
+#[test]
+fn test_the_routes_are_compared_at_every_level_but_o0() {
+    for (level, on) in [("-O0", false), ("-O1", true), ("-O2", true), ("-Os", true), ("-O3", true), ("-Omax", true)] {
+        assert_eq!(pipeline(&[level]).compares_routes(), on, "{level}");
+        assert_eq!(pipeline(&[level, "-fno-allocation-search"]).compares_routes(), on, "{level}: the search is not the routes");
+    }
+    assert!(pipeline(&["-O0", "-fallocation-routes"]).compares_routes());
+    assert!(!pipeline(&["-O2", "-fno-allocation-routes"]).compares_routes());
 }
 
 /// Only -Omax tries every shape of a body; the other levels try the one its spills suggest, as the search over all of them

@@ -35,6 +35,10 @@ pub struct Form {
     pub cost: String,
     /// Operands pinned to a register root when they are a register.
     pub fixed: Vec<(Side, usize, String)>,
+    /// Register roots it reads and writes beyond its operands (`push` uses `sp`). `-root` drops an operand register the
+    /// machine does not touch, `@8` only where the narrowest source is a byte: LIR carries DX through a byte `div`, which leaves it alone.
+    pub reads: Vec<String>,
+    pub writes: Vec<String>,
     /// iced's Code name, `{w}` still to substitute.
     pub iced: Option<String>,
     pub line: usize,
@@ -55,7 +59,7 @@ impl Form {
     }
 }
 
-const REGISTERS: [&str; 12] = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "es", "ds", "fs", "gs"];
+const REGISTERS: [&str; 14] = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "es", "ds", "fs", "gs", "ss", "ah"];
 
 fn operands(text: &str, line: usize) -> Result<Vec<Operand>, String> {
     if text == "-" {
@@ -97,8 +101,34 @@ fn fixed(text: &str, line: usize) -> Result<Vec<(Side, usize, String)>, String> 
         .collect()
 }
 
+fn implicit(text: &str, line: usize) -> Result<Vec<String>, String> {
+    if text == "-" {
+        return Ok(Vec::new());
+    }
+    text.split(',')
+        .map(|entry| {
+            let root = entry.trim_start_matches('-').split('@').next().unwrap_or("");
+            let width = entry.split_once('@').map(|(_, width)| width);
+            if !REGISTERS.contains(&root) || width.is_some_and(|width| width.parse::<u32>().is_err()) {
+                return Err(format!("x86.instr:{line}: `{entry}` is not [-]root[@width]"));
+            }
+            Ok(entry.to_owned())
+        })
+        .collect()
+}
+
 /// Every form `text` describes, `{cc}` expanded.
 pub fn parse(text: &str) -> Result<Vec<Form>, String> {
+    parse_rows(text, |_| true)
+}
+
+/// The forms that pin an operand to a register, for a reader that wants only those: the description is read at every
+/// compile, and a row costs about 5,000 instructions to read.
+pub fn pinned(text: &str) -> Result<Vec<Form>, String> {
+    parse_rows(text, |pinned| pinned != "-")
+}
+
+fn parse_rows(text: &str, keep: impl Fn(&str) -> bool) -> Result<Vec<Form>, String> {
     let mut forms = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let line = index + 1;
@@ -107,9 +137,12 @@ pub fn parse(text: &str) -> Result<Vec<Form>, String> {
             continue;
         }
         let columns: Vec<&str> = content.split_whitespace().collect();
-        let [name, operation, shape, widths, cost, pinned, iced] = columns[..] else {
-            return Err(format!("x86.instr:{line}: {} columns, not 7", columns.len()));
+        let [name, operation, shape, widths, cost, pinned, reads, writes, iced] = columns[..] else {
+            return Err(format!("x86.instr:{line}: {} columns, not 9", columns.len()));
         };
+        if !keep(pinned) {
+            continue;
+        }
         if llrm_lir::Operation::named(operation).is_none() {
             return Err(format!("x86.instr:{line}: no operation `{operation}`"));
         }
@@ -125,7 +158,7 @@ pub fn parse(text: &str) -> Result<Vec<Form>, String> {
         };
         let pinned = fixed(pinned, line)?;
         let iced = (iced != "-").then(|| iced.to_owned());
-        let form = Form { name: name.into(), operation: operation.into(), dests, sources, widths, cost: cost.into(), fixed: pinned, iced, line };
+        let form = Form { name: name.into(), operation: operation.into(), dests, sources, widths, cost: cost.into(), fixed: pinned, reads: implicit(reads, line)?, writes: implicit(writes, line)?, iced, line };
         if name.contains("{cc}") {
             for condition in CONDITIONS {
                 forms.push(Form { name: name.replace("{cc}", condition), iced: form.iced.as_ref().map(|one| one.replace("{cc}", condition)), ..form.clone() });
