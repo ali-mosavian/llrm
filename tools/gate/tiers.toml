@@ -179,6 +179,7 @@ bench = ["qb45"]
 "lang:qb" = ["qb45"]
 "bin:differential" = ["qb45"]
 "py:crates/target/llrm-x86-m32/vsgcc/test_scaling.py" = ["perf"]
+"py:crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py" = ["perf"]
 
 # Microsoft QuickBASIC 4.5's LINK and BC: the qb programs link with them, and the BC differential and the bench's BASIC rows run them.
 [capability.qb45]
