@@ -254,3 +254,13 @@ def test_gvn_stays_linear_in_the_statements_of_a_straight_line(tmp_path):
         own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     small, big = (own[label].get("mir gvn", 0.0) - own["empty"].get("mir gvn", 0.0) for label in ("n", "2n"))
     assert big <= 2.2 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
+def test_ssa_flow_is_not_swept_per_step_of_the_longest_way_in_a_loop_nest(tmp_path):
+    """`ssa flow` found each live value's distance to its next use by sweeping every block and live value up to 64 times: on `nest` at
+    N=128 (a counter per loop, all live in the inner blocks) it cost 1,295 Minstr, 64 sweeps of N^2 pairs. Each value is walked back from
+    its readers alone: 81 Minstr, the N^2 pairs once. The bound is on the cost, 2N/N being 4 for N^2 work."""
+    source = tmp_path / "nest_128.c"
+    source.write_text(scaling.AXES["nest"](128))
+    own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    assert own["ssa flow"] <= 200, f"{own['ssa flow']:.1f} Minstr"
