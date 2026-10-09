@@ -1481,12 +1481,18 @@ pub fn initialized(
             .collect()
     };
     // A read of another object that may be the parameter's reads all of it.
-    let read = |state: &mut State, one: &Slice| {
-        for (index, ranges) in state.iter_mut().enumerate() {
-            let parameter = ObjectInterner::of(unit.context).intern(MemoryObject {
+    let interner = ObjectInterner::of(unit.context);
+    let parameter_objects = (0..count)
+        .map(|index| {
+            interner.intern(MemoryObject {
                 identity: Some(Identity::Int(index as i64)),
                 ..MemoryObject::new(MemoryKind::Parameter)
-            });
+            })
+        })
+        .collect::<Vec<_>>();
+    let read = |state: &mut State, one: &Slice| {
+        for (index, ranges) in state.iter_mut().enumerate() {
+            let parameter = parameter_objects[index];
             let bytes = if one.object == parameter {
                 _bytes(one)
             } else if memory::objects_may_alias(&one.object, &parameter) {

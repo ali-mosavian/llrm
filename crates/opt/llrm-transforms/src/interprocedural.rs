@@ -111,6 +111,8 @@ pub struct Interprocedural {
     /// Inlining weighs code bytes, and what only the clocks admit stays where it comes to no more bytes,
     /// less what the clocks it saves buy at this many thousandths of a clock a byte; None weighs the clocks alone.
     pub rate: Option<i64>,
+    /// Whether what a body's callers pass is stated as a range on its parameters (gcc's `-fipa-vrp`, -O2 and up).
+    pub ranges: bool,
 }
 
 impl ProgramPass for Interprocedural {
@@ -132,7 +134,7 @@ impl ProgramPass for Interprocedural {
         let reach = program.target.costs().call;
         let roots = roots(program);
         let mut modules = managers(program, analyses);
-        let proved = optimized::<String>(
+        let proved = optimized_with::<String>(
             program,
             &mut modules,
             &roots,
@@ -141,6 +143,7 @@ impl ProgramPass for Interprocedural {
             rate,
             reach,
             self.inline,
+            self.ranges,
             &mut |module, analyses, id, stage| {
                 pipeline(module, analyses, id, stage);
                 Ok(())
@@ -711,6 +714,22 @@ pub fn optimized<E: From<String>>(
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
     spliced: &mut dyn FnMut(&Module, GlobalId, &str) -> Result<(), E>,
 ) -> Result<Proved, E> {
+    optimized_with::<E>(program, modules, roots, costs, loose, rate, reach, threshold, true, reoptimised, spliced)
+}
+
+pub fn optimized_with<E: From<String>>(
+    program: &mut Program,
+    modules: &mut [ModuleAnalyses],
+    roots: &BTreeSet<Defined>,
+    costs: &OperationCosts,
+    loose: Option<&OperationCosts>,
+    rate: i64,
+    reach: i64,
+    threshold: inline::Threshold,
+    ranges: bool,
+    reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
+    spliced: &mut dyn FnMut(&Module, GlobalId, &str) -> Result<(), E>,
+) -> Result<Proved, E> {
     let count = program.modules.len();
     let mut procedures: Vec<Vec<GlobalId>> = (0..count).map(|at| procedures(program, at)).collect();
     let mut private: Vec<BTreeSet<GlobalId>> = (0..count).map(|at| private(program, at)).collect();
@@ -1036,7 +1055,7 @@ pub fn optimized<E: From<String>>(
     }
     // What its callers pass bounds each parameter of a body only they call: stated as a range, which
     // the body's own proofs then read.
-    for round in 0..4 {
+    for round in 0..if ranges { 4 } else { 0 } {
         let stamped = llrm_analysis::parameter_ranges::stamp(program, &unexported);
         if stamped.is_empty() {
             break;

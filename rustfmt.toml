@@ -3,5 +3,5 @@ use_small_heuristics = "Max"
 fn_params_layout = "Vertical"
 group_imports = "StdExternalCrate"
 wrap_comments = true
-comment_width = 120
+comment_width = 80
 ignore = ["crates/target/llrm-x86/src/select_sweep.rs"]

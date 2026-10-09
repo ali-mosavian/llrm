@@ -44,6 +44,8 @@ pub struct Options {
     pub optimize: bool,
     pub limits: Limits,
     pub inline: inline::Threshold,
+    /// Whether the callers' arguments are stated as ranges on a body's parameters: gcc's `-fipa-vrp`, -O2 and up.
+    pub ipa_ranges: bool,
     pub lcssa: bool,
     pub floatloop: bool,
     pub fold: bool,
@@ -84,6 +86,7 @@ impl Default for Options {
             decide: true,
             dead: true,
             hoist: true,
+            ipa_ranges: true,
             forward: true,
             drop_loads: true,
             drop_stores: true,
@@ -115,6 +118,7 @@ impl Options {
         Self {
             limits: Limits { grows: false, ..Self::default().limits },
             inline: inline::Threshold::new(Self::default().inline.limit * 6 / 15),
+            ipa_ranges: false,
             forward: false,
             drop_loads: false,
             fill: false,
@@ -216,6 +220,7 @@ impl Options {
             "peel" => self.peel,
             "fill" | "merge" => self.fill,
             "tailrec" => self.sibcalls,
+            "ipa-ranges" => self.ipa_ranges,
             _ => true,
         }
     }
@@ -339,6 +344,7 @@ pub fn recorded(
         }),
         proved: None,
         inline: applied.options.inline,
+        ranges: applied.options.ipa_ranges,
         rate: Some(if applied.options.prefers_size() { 0 } else { applied.options.limits.milliclocks_per_byte }),
     });
     // What no live code names any more goes before selection, as LLVM runs

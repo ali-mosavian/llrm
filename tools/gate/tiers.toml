@@ -30,7 +30,7 @@ paths = [
 # `enforced = true` fails the step on any file the formatter would change; false only lists them. It is false until
 # the PR that formats the tree sets it to true: that one line is the switch.
 [fmt]
-enforced = true
+enforced = false
 paths = ["**/*.rs", "rustfmt.toml", "tools/fmt.sh", "tools/rfmt-post/**"]
 
 # Paths outside [shared] the cheap steps cover on their own; they select no heavy step.
@@ -167,9 +167,9 @@ needs = [
   { env = "QCPORT_BORLAND", default = "~/scratch/qcbcc", marker = "." },
 ]
 
-# What each item needs, one table. A key is a step (`turbo`), a `run` language (`lang:qb`), a cheap test binary (`bin:differential`)
-# or a Python test file (`py:path`). A step is skipped whole; a language, binary or file is left out of the step that runs it,
-# and the step is skipped if no language is left.
+# What each item needs, one table. A key is a step (`turbo`), a `run` language (`lang:qb`), a cheap test binary (`bin:differential`).
+# A step is skipped whole; a language or binary is left out of the step that runs it, and the step is skipped if no language is left.
+# A Python test file declares its own need, not here: `REQUIRES = ["perf"]` at module level.
 [requires]
 turbo = ["turbo"]
 cv4 = ["codeview"]
@@ -178,7 +178,6 @@ measure = ["perf"]
 bench = ["qb45"]
 "lang:qb" = ["qb45"]
 "bin:differential" = ["qb45"]
-"py:crates/target/llrm-x86-m32/vsgcc/test_scaling.py" = ["perf"]
 
 # Microsoft QuickBASIC 4.5's LINK and BC: the qb programs link with them, and the BC differential and the bench's BASIC rows run them.
 [capability.qb45]

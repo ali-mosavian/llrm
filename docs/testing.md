@@ -15,6 +15,9 @@ rebuild after an edit takes about 30 seconds.
 Plain `cargo fmt` is not enough: it leaves the method chains and `matches!` calls that `tools/rfmt-post` lays out. Editors
 format through `tools/fmt.sh --stdin FILE` (`.zed/settings.json` does).
 
+Code lines go to column 120, comments to 80. `tools/rfmt-post` moves a trailing comment above its line and breaks the comments
+rustfmt leaves; `--check` fails on any still past 80 unless it is one word (a URL), a code block or a table row.
+
 ## The gate in tiers
 
     python3 tools/gate/gate.py plan            what the diff against origin/main selects
@@ -40,6 +43,8 @@ gate logs, the fast tier selects the failing step every time. Of the last 80 mer
 tool not in the repository (Turbo C++, CodeView, QCport's Borland C, QuickBASIC) is SKIPPED with the reason, and a
 run language or test binary that needs one is `[dropped]` by name; this happens only with `GATE_ALLOW_MISSING=1`,
 which only the workflow sets. Your own gate and the full run on main still run them.
+
+Hosted runners have no instruction counters, so CI always SKIPS `measure` and the perf-reading tests; the local gate is where compile cost is checked.
 
 
 ### Compile cost and its growth

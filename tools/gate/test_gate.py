@@ -200,7 +200,7 @@ def test_the_plan_names_each_skipped_step_and_its_missing_tool_as_json(tmp_path)
     env = {**__import__("os").environ, "HOME": str(tmp_path), "LLRM_REQUIRE_TURBO": "", "LLRM_REQUIRE_CODEVIEW": "", "QB45_DIR": "", "TCPP30_DIR": "", "TD_DIR": "", "VBDOS_DIR": "", "QCPORT": "", "QCPORT_BORLAND": "", "GATE_ALLOW_MISSING": "1"}
     out = subprocess.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", "crates/ir/llrm-mir/src/lib.rs"], capture_output=True, text=True, check=True, env=env).stdout
     got = __import__("json").loads(out)
-    assert set(got["skipped"]) == {"turbo", "cv4", "qcport", "bench"} and "reference" not in got["groups"]
+    assert set(got["skipped"]) - {"measure"} == {"turbo", "cv4", "qcport", "bench"} and "reference" not in got["groups"]
     assert "run" in got["groups"]["run"]
 
 
@@ -270,13 +270,23 @@ def test_without_the_opt_in_the_plan_and_the_commands_are_what_they_were(tmp_pat
 
 
 def test_a_python_test_file_that_needs_a_missing_probe_is_left_out_of_pytest_by_name():
-    """test_scaling.py failed 'Access to performance monitoring ... is limited' on a runner whose VM has no instruction counters."""
+    """test_scaling_gate.py read float('<not supported>') on a runner without counters and failed the python group on main; test_scaling.py failed 'Access to performance monitoring ... is limited' on a runner whose VM has no instruction counters."""
     missing = {"perf": "perf: `perf stat` fails here"}
-    assert gate.python_tests_unusable(missing) == ["crates/target/llrm-x86-m32/vsgcc/test_scaling.py"]
+    assert sorted(gate.python_tests_unusable(missing)) == ["crates/target/llrm-x86-m32/vsgcc/test_scaling.py", "crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py"]
     p = gate.plan(["tools/linkrecipe.py"])
     cmds = gate.commands(p, gate.load(), gate.packages(), frozenset(), tuple(gate.python_tests_unusable(missing)))
-    assert "--ignore=crates/target/llrm-x86-m32/vsgcc/test_scaling.py" in cmds["pytest"]
+    assert "--ignore=crates/target/llrm-x86-m32/vsgcc/test_scaling.py" in cmds["pytest"] and "--ignore=crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py" in cmds["pytest"]
     assert "test_scaling" not in gate.commands(p, gate.load(), gate.packages())["pytest"]
+
+
+def test_a_new_test_file_declares_its_own_need_and_is_ignored_where_it_is_missing(tmp_path):
+    """Each counter-reading file needed its own row in tiers.toml; test_scaling_gate.py had none and failed the python group on main."""
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "test_reads_counter.py").write_text('REQUIRES = ["perf"]\n\ndef test_x():\n    pass\n')
+    (tmp_path / "test_plain.py").write_text("def test_y():\n    pass\n")
+    assert gate.declared_requirements(tmp_path) == {"test_reads_counter.py": ["perf"]}
+    assert gate.python_tests_unusable({"perf": "no counter"}, tmp_path) == ["test_reads_counter.py"]
+    assert gate.python_tests_unusable({}, tmp_path) == []
 
 
 def test_a_probe_that_fails_makes_the_capability_missing_and_one_that_succeeds_does_not(tmp_path, monkeypatch):
@@ -428,3 +438,11 @@ def test_the_unenforced_fmt_step_passes_on_clean_and_on_files_to_format_and_fail
 def test_edits_under_zed_plan_nothing():
     """.zed/settings.json was an unknown path: the full tier for an editor setting."""
     assert gate.plan([".zed/settings.json"]).tier == "none"
+
+
+def test_the_full_tier_has_every_step_the_fast_tier_has_for_the_same_paths():
+    """`scans` was fast-tier only: a diff that picked full skipped the source ratchets that a smaller diff ran."""
+    for files in (["crates/ir/llrm-mir/src/lib.rs"], ["crates/backend/x.rs"], ["tools/torture/a.py"], ["tools/gate/gate.py"], ["tools/gate/gate.py", "crates/ir/llrm-mir/src/lib.rs"], ["tests/target_facts.baseline"]):
+        fast, full = gate.plan(files, "fast"), gate.plan(files, "full")
+        assert set(fast.steps) <= set(full.steps), (files, set(fast.steps) - set(full.steps))
+    assert "scans" in gate.plan(["crates/ir/llrm-mir/src/lib.rs"], "full").steps
