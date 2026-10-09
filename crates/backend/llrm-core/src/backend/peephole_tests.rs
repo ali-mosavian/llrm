@@ -3422,6 +3422,24 @@ fn test_the_dead_lanes_of_a_body_no_pass_changed_are_worked_out_once() {
     assert_eq!(liveness::exits_computed() - before, 2, "a changed body was given the last answer");
 }
 
+/// The flag liveness, upper-half zeroes and post-RA sink liveness each iterated every block to a fixed point: a backward chain of 30
+/// blocks took 30 rounds of 30. All go through `dataflow::solve`, which works a block again only when an input changed.
+#[test]
+fn test_flag_liveness_over_a_loop_is_not_worked_by_rounds() {
+    let blocks = 30;
+    let mut list = Vec::new();
+    for at in 1..=blocks {
+        let next = if at == blocks { vec![1, blocks + 1] } else { vec![at + 1] };
+        list.push(block(at, vec![], next));
+    }
+    list.push(block(blocks + 1, vec![], vec![]));
+    let input = body("loop", 1, list);
+    crate::analysis::dataflow::WORKED.with(|count| count.set(0));
+    super::_flags_live_out(&input);
+    let worked = crate::analysis::dataflow::WORKED.with(std::cell::Cell::get);
+    assert!(worked <= 4 * blocks as usize, "{worked} blocks worked for a loop of {blocks}");
+}
+
 /// Every block's transfer was worked again each round until no entry changed, and a fact crosses one block a round: a loop of 30
 /// blocks took 30 rounds of 30 transfers (a nest 8 deep: a quarter of lir peephole). A block is worked again when its entry changed.
 #[test]
@@ -3437,9 +3455,9 @@ fn test_spill_forwarding_works_a_block_again_only_when_its_entry_changed() {
     }
     list.push(block(blocks + 1, vec![], vec![]));
     let input = body("loop", 1, list);
-    spillforward::TRANSFERS.with(|count| count.set(0));
+    crate::analysis::dataflow::WORKED.with(|count| count.set(0));
     spillforward::forwarded(&input);
-    let worked = spillforward::TRANSFERS.with(std::cell::Cell::get);
+    let worked = crate::analysis::dataflow::WORKED.with(std::cell::Cell::get);
     assert!(worked <= 4 * blocks as usize, "{worked} transfers for a loop of {blocks} blocks");
 }
 
@@ -3457,8 +3475,8 @@ fn test_copy_propagation_works_a_block_again_only_when_a_parent_changed() {
     }
     list.push(block(blocks + 1, vec![], vec![]));
     let input = body("loop", 1, list);
-    super::copyprop::EVALUATED.with(|count| count.set(0));
+    crate::analysis::dataflow::WORKED.with(|count| count.set(0));
     crate::backend::copyprop::forwarded(&input);
-    let worked = super::copyprop::EVALUATED.with(std::cell::Cell::get);
+    let worked = crate::analysis::dataflow::WORKED.with(std::cell::Cell::get);
     assert!(worked <= 4 * blocks as usize, "{worked} blocks worked for a loop of {blocks}");
 }
