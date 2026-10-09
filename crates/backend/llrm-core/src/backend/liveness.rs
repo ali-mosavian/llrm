@@ -79,8 +79,38 @@ impl Effect {
     }
 }
 
-/// `one`'s effect as it decodes, else as its contract declares; None when unknown.
+thread_local! {
+    static EFFECT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many effects this thread has worked out by `effect`, for a test that a pass does not ask of an instruction it has seen.
+pub fn effects_worked_out() -> usize {
+    EFFECT_CALLS.with(std::cell::Cell::get)
+}
+
+/// `with` given `one`'s effect, as `effect` has it but without a copy of it.
+pub fn with_effect<R>(bits: u32, one: &Insn, with: impl FnOnce(Option<&Effect>) -> R) -> R {
+    let (was, answer) = one.effect.get_or_init(|| (bits, worked_out(bits, one)));
+    if *was == bits {
+        with(answer.as_ref())
+    } else {
+        with(worked_out(bits, one).as_ref())
+    }
+}
+
+/// `one`'s effect as it decodes, else as its contract declares; None when unknown. Worked out once for the instruction, whoever asks.
 pub fn effect(bits: u32, one: &Insn) -> Option<Effect> {
+    let (was, answer) = one.effect.get_or_init(|| (bits, worked_out(bits, one)));
+    // Asked at another width than the first time: not the answer kept.
+    let found = if *was == bits { answer.clone() } else { worked_out(bits, one) };
+    if std::env::var_os("LLRM_CHECK_EFFECT").is_some() {
+        assert!(format!("{found:?}") == format!("{:?}", worked_out(bits, one)), "an instruction's kept effect is not the one its fields give");
+    }
+    found
+}
+
+fn worked_out(bits: u32, one: &Insn) -> Option<Effect> {
+    EFFECT_CALLS.with(|count| count.set(count.get() + 1));
     if _terminator(one.what.as_ref()) {
         // A jump or branch writes nothing; a branch reads its flags.
         let what = one.what.as_ref().expect("a terminator has semantics");

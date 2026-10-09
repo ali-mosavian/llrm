@@ -123,6 +123,46 @@ pub struct Insn {
     /// The source line of the MIR instruction it was selected from (`!dbg`).
     pub line: Option<u32>,
     pub debug: DebugTags,
+    /// What it does to the registers (`liveness::effect`), worked out once for everything that asks.
+    pub effect: Derived<(u32, Option<crate::backend::liveness::Effect>)>,
+}
+
+/// A fact worked out from an instruction's fields, kept on it for every pass that asks. Cloning gives an empty one: a clone is
+/// made to be changed (`Insn { what: x, ..(**one).clone() }`, a hundred places), and the old instruction's answer is not the
+/// new one's. Instructions in a body are shared and not changed, so what is asked of one is asked once.
+pub struct Derived<T>(std::sync::OnceLock<T>);
+
+impl<T> Derived<T> {
+    pub fn get_or_init(&self, work: impl FnOnce() -> T) -> &T {
+        self.0.get_or_init(work)
+    }
+}
+
+impl<T> Default for Derived<T> {
+    fn default() -> Self {
+        Self(std::sync::OnceLock::new())
+    }
+}
+
+impl<T> Clone for Derived<T> {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+/// Not a part of what an instruction is: two that say the same are equal whatever has been asked of them.
+impl<T> PartialEq for Derived<T> {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl<T> Eq for Derived<T> {}
+
+impl<T> std::fmt::Debug for Derived<T> {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str("Derived")
+    }
 }
 
 impl LirBody {
@@ -310,6 +350,7 @@ impl Insn {
             reads_complete: false,
             line: None,
             debug: DebugTags::default(),
+            effect: Derived::default(),
         }
     }
 

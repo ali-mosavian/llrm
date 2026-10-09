@@ -844,6 +844,27 @@ fn test_intervals_from_occurrences_are_those_of_the_walk() {
         }
     }
     assert!(compared > 0, "premise: some value was live");
+
+/// The no-split allocation of a body the base allocation split nothing in is the base allocation again, and was made for every
+/// body with a spill (10% of the trials over QCport, the bench and the 66 programs, none of them won).
+#[test]
+fn test_a_body_the_base_allocation_split_nothing_in_is_not_allocated_again_without_splitting() {
+    use crate::backend::allocate::{base_splits, trials};
+    let mut unsplit = 0;
+    for seed in 0..240_u64 {
+        let shape = Shape { pool: 7 + (seed % 8) as usize, ops: 4 + (seed % 9) as usize };
+        let (body, _) = body(seed, &shape);
+        let cpu = crate::backend::cpu::tuned_exhaustive(&llrm_x86_m16::M16, "386", false, false).expect("a profile");
+        let mut phase = RegAlloc::new(None, None, ProfileOrName::Profile(cpu), &*target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("a phase");
+        let before = trials();
+        phase.transform(body).expect("allocated");
+        let made = trials() - before;
+        if made > 0 && base_splits() == 0 {
+            unsplit += 1;
+            assert!(made <= 1, "seed {seed}: {made} more allocations of a body nothing was split in");
+        }
+    }
+    assert!(unsplit > 0, "premise: some body with a spill was split nowhere");
 }
 
 /// `allocate::live` was built from per-block sorted sets and converted to bit rows for the fixed point:
