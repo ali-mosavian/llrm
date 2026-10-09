@@ -234,7 +234,7 @@ fn planned(
         .keys()
         .filter_map(|&site| provided(unit, accesses, site).map(|(cell, value)| (site, cell, value)))
         .collect();
-    let cfg::Shape { dominance, loops: natural } = unit.shape().into_owned();
+    let cfg::Shape { dominance, loops: natural, .. } = unit.shape().into_owned();
     let shape = Shape { depth: dominance.depths(function), dominance, loops: natural };
 
     let mut found = Vec::new();
