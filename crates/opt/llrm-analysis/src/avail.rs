@@ -192,6 +192,7 @@ pub fn clobber_asks() -> usize {
 
 /// Which value each cell holds, at every block's entry and exit.
 pub fn holders(unit: &Unit, accesses: &Accesses) -> Held {
+    SOLVED.with(|solved| solved.set(solved.get() + 1));
     // Register facts only: a memory-aware solve per query costs more than it finds.
     let known: BTreeMap<ValueId, Interval> = ranges::constants(unit).into_iter().collect();
     let graph = cfg::graph(unit.function);
@@ -497,7 +498,12 @@ fn aborts(unit: &Unit, at: i64) -> bool {
 ///
 /// The caller replaces the load, extending the provider's lifetime.
 pub fn forwardable(unit: &Unit, accesses: &Accesses, want: &BTreeSet<InstId>) -> Vec<Forward> {
-    let held = holders(unit, accesses);
+    forwardable_by(unit, accesses, want, &holders(unit, accesses))
+}
+
+/// `forwardable`, from the cells `held` says each block holds (`holders` of a function with the same instructions, which a caller that
+/// asks of the function twice, the second time as the first left it, works out once).
+pub fn forwardable_by(unit: &Unit, accesses: &Accesses, want: &BTreeSet<InstId>, held: &Held) -> Vec<Forward> {
     let mut found = Vec::new();
     let mut missing = Vec::new();
 
@@ -522,7 +528,14 @@ pub fn forwardable(unit: &Unit, accesses: &Accesses, want: &BTreeSet<InstId>) ->
 }
 
 thread_local! {
+    static SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static SAMES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has solved what each block holds (`holders`), for a test that a pass asking twice of one function solves
+/// it once.
+pub fn solved() -> usize {
+    SOLVED.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has compared a load's bytes with a missing one's in `memory_providers`.
