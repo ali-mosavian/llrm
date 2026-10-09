@@ -123,7 +123,6 @@ impl Options {
             sibcalls: false,
             peel: false,
             unswitch: false,
-            search: false,
             ..Self::default()
         }
     }
@@ -131,7 +130,7 @@ impl Options {
     /// -O2: gcc's: -O1 with inlining, gcse, sibling calls and pattern fill; a complete copy of a loop still must not grow
     /// the code (`flag_cunroll_grow_size` is on at -O3, `-funroll-loops` and `-fpeel-loops` only).
     pub fn standard() -> Self {
-        Self { limits: Limits { grows: false, ..Self::default().limits }, peel: false, unswitch: false, search: false, ..Self::default() }
+        Self { limits: Limits { grows: false, ..Self::default().limits }, peel: false, unswitch: false, ..Self::default() }
     }
 
     /// -O3: gcc's: -O2 with peeling, unswitching, complete copies that grow the code, and the larger inline threshold.
@@ -150,7 +149,7 @@ impl Options {
     /// shrinks the code here. A lower one would also refuse a constant-site
     /// clone that folds away.
     pub fn size() -> Self {
-        Self { limits: Limits { grows: false, target_percent: 100, ..Limits::default() }, inline: inline::Threshold::default().for_size(), for_size: true, search: false, ..Self::default() }
+        Self { limits: Limits { grows: false, target_percent: 100, ..Limits::default() }, inline: inline::Threshold::default().for_size(), for_size: true, ..Self::default() }
     }
 
     /// Whether the allocator tries other shapes of a body and keeps the cheapest.

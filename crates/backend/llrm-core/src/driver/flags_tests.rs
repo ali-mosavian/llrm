@@ -19,12 +19,13 @@ fn pipeline(arguments: &[&str]) -> Options {
     parsed(arguments).unwrap().pipeline()
 }
 
-/// gcc runs IRA once at -O1, -O2 and -Os (`ira_conflicts_p = optimize > 0`; -O0 allocates without conflicts): the allocator tries other
-/// shapes of a body only at -O3 and -Omax, and `-f[no-]allocation-search` sets it at any level. Searching at every level cost 28-44% of
-/// QCport d_faces' compile at -O1 to -Os for 0.0-0.1% of the bytes once the route is chosen (see the routes test).
+/// The allocator tries other shapes of a body at every level but -O0, and `-f[no-]allocation-search` sets it anywhere. (gcc runs IRA
+/// once; turning the search off at -O1 to -Os cuts QCport's compile 26-29% for +0.1% of its bytes and nothing on the 66 m32 programs,
+/// but costs the 16-bit bench kernels 5-20% of their instructions: quicksort -O2 +20%, where `Scoped` keeps a loop's address base in a
+/// register. The default stays; the switch is there.)
 #[test]
-fn test_allocation_search_is_on_from_o3_and_a_flag_sets_it_anywhere() {
-    for (level, on) in [("-O0", false), ("-O1", false), ("-O2", false), ("-Os", false), ("-O3", true), ("-Omax", true)] {
+fn test_allocation_search_is_on_at_every_level_but_o0_and_a_flag_sets_it_anywhere() {
+    for (level, on) in [("-O0", false), ("-O1", true), ("-O2", true), ("-Os", true), ("-O3", true), ("-Omax", true)] {
         assert_eq!(pipeline(&[level]).searches(), on, "{level}");
         assert!(pipeline(&[level, "-fallocation-search"]).searches(), "{level}");
         assert!(!pipeline(&[level, "-fno-allocation-search"]).searches(), "{level}");
