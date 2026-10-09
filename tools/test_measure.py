@@ -279,3 +279,13 @@ def test_a_measurement_is_of_one_profile_and_the_dist_base_is_built_with_the_dis
     monkeypatch.setattr(measure.subprocess, "run", lambda command, **kw: ran.append(command) or subprocess.CompletedProcess(command, 0, "", ""))
     assert measure.built("0" * 40) == tmp_path / "target" / "dist"
     assert ran == [["bash", "-c", "cargo build --profile dist -q --bins"]]
+
+
+def test_a_flagged_step_names_the_steps_of_its_axis_that_rose():
+    """Work moved into an engine that runs inside another step's span flags that step though the total falls (regparm16, three times);
+    the flag now says where the rise is."""
+    whole = 300.0
+    base = made(passes={"live O1 lir peephole": [5.0, 10.0, 20.0, whole], "live O1 regalloc engine": [5.0, 10.0, 20.0, whole], "live O1 isel": [5.0, 10.0, 20.0, whole]})
+    now = made(passes={"live O1 lir peephole": [5.0, 10.0, 22.0, whole], "live O1 regalloc engine": [5.0, 10.0, 17.0, whole], "live O1 isel": [5.0, 10.0, 21.0, whole]})
+    bad = measure.rises(base, now, TOL)[1]
+    assert any("lir peephole" in line and "regalloc engine" not in line.split(";")[0] and "isel +1.0 Minstr" in line for line in bad), bad
