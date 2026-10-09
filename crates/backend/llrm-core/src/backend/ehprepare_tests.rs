@@ -53,7 +53,7 @@ fn printed(module: &Module) -> String {
 #[test]
 fn the_handler_registered_is_the_landing_and_err_is_what_it_kept() {
     let mut module = parsed(HANDLED);
-    prepared(&mut module).expect("prepared");
+    prepared(&mut module, llrm_x86_m16::layout().spaces.far).expect("prepared");
     let errors = llrm_mir::verify::verify(&module);
     assert!(errors.is_empty(), "{errors:?}");
     let text = printed(&module);
@@ -68,7 +68,7 @@ fn the_handler_registered_is_the_landing_and_err_is_what_it_kept() {
 #[test]
 fn a_value_live_into_the_pad_is_read_back_from_its_slot() {
     let mut module = parsed(HANDLED);
-    prepared(&mut module).expect("prepared");
+    prepared(&mut module, llrm_x86_m16::layout().spaces.far).expect("prepared");
     let text = printed(&module);
     let landing = &text[text.find("landing:").expect("the pad")..];
     let landing = &landing[..landing.find("\n\n").unwrap_or(landing.len())];
@@ -86,7 +86,7 @@ entry:
 }
 "#;
     let mut module = parsed(&format!("{HANDLED}{sub}"));
-    let refused = prepared(&mut module).expect_err("refused");
+    let refused = prepared(&mut module, llrm_x86_m16::layout().spaces.far).expect_err("refused");
     assert!(refused.contains("errors raised inside SUBs"), "{refused}");
 }
 
@@ -99,7 +99,7 @@ fn a_call_the_handler_makes_stays_a_call() {
         "  store i16 %code, ptr @\"CAUGHT%\"\n  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 2)",
     );
     let mut module = parsed(&nested);
-    prepared(&mut module).expect("prepared");
+    prepared(&mut module, llrm_x86_m16::layout().spaces.far).expect("prepared");
 }
 
 /// Where trapping may be on, the runtime would land a call's error on the
@@ -113,7 +113,7 @@ fn a_call_that_may_raise_where_trapping_is_on_is_refused() {
             "  store i16 %code, ptr @\"CAUGHT%\"\n  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 2)",
         );
     let mut module = parsed(&trapped);
-    let refused = prepared(&mut module).expect_err("refused");
+    let refused = prepared(&mut module, llrm_x86_m16::layout().spaces.far).expect_err("refused");
     assert!(refused.contains("where ON ERROR is on"), "{refused}");
 }
 
@@ -123,7 +123,7 @@ fn a_call_that_may_raise_where_trapping_is_on_is_refused() {
 fn a_statement_only_resume_reaches_may_raise() {
     let resumed = HANDLED.replace("  switch i16 %k, label %next [ i16 1, label %next ]", "  br label %after\nafter:\n  invoke cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 3) to label %next unwind label %landing");
     let mut module = parsed(&resumed);
-    prepared(&mut module).expect("prepared");
+    prepared(&mut module, llrm_x86_m16::layout().spaces.far).expect("prepared");
 }
 
 /// The pad selects as a second root of its function, laid out last so it
@@ -134,7 +134,7 @@ fn the_pad_is_selected_last_and_the_landing_is_its_own_procedure() {
     let early = HANDLED.replace(next, "").replace("\n}\n", &format!("\n{next}}}\n"));
     assert!(early.find("landing:") < early.find("next:"));
     let mut module = parsed(&early);
-    prepared(&mut module).expect("prepared");
+    prepared(&mut module, llrm_x86_m16::layout().spaces.far).expect("prepared");
     let abi = crate::abi::qb::HirAbi {
         runtime: crate::hir::model::RuntimeProfile::Qb45,
         objects: Default::default(),
@@ -170,7 +170,7 @@ entry:
 }
 "#;
     let mut module = parsed(quiet);
-    prepared(&mut module).expect("prepared");
+    prepared(&mut module, llrm_x86_m16::layout().spaces.far).expect("prepared");
     let text = printed(&module);
     assert!(!text.contains("call cc1000 addrspace(1) void @llrm.qb.onerror") && !text.contains("B$OEGA"), "{text}");
 }
@@ -192,7 +192,7 @@ entry:
 }
 "#;
     let mut module = parsed(&format!("{local}{main}"));
-    prepared(&mut module).expect("prepared");
+    prepared(&mut module, llrm_x86_m16::layout().spaces.far).expect("prepared");
     assert!(llrm_mir::verify::verify(&module).is_empty());
     let text = printed(&module);
     assert!(text.contains("ptrtoint ptr addrspace(1) @$QB$LANDING to i16"), "{text}");

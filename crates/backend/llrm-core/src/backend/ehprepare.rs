@@ -31,7 +31,10 @@ const RESUME: &str = "llrm.qb.B$RESN";
 
 /// Prepares each function of `module` with the QB personality, or refuses
 /// what the handlers cannot yet serve.
-pub fn prepared(module: &mut Module) -> Result<(), String> {
+pub fn prepared(
+    module: &mut Module,
+    far: u32,
+) -> Result<(), String> {
     // An intrinsic raises no BASIC error.
     let nounwind: BTreeSet<GlobalId> = module
         .functions()
@@ -104,7 +107,7 @@ pub fn prepared(module: &mut Module) -> Result<(), String> {
         }
         pads.push((name.clone(), pad(function).map_err(why)?));
     }
-    let routines = if pads.iter().any(|(_, pad)| pad.is_some()) { Some(declare(module)?) } else { None };
+    let routines = if pads.iter().any(|(_, pad)| pad.is_some()) { Some(declare(module, far)?) } else { None };
     for (name, pad) in pads {
         let why = |what: String| format!("@{name}: {what}");
         let (context, function) = module.function_mut(&name).expect("a handled function");
@@ -126,11 +129,6 @@ pub fn prepared(module: &mut Module) -> Result<(), String> {
 
 /// Whether trapping may be on where each block starts: off at entry, on
 /// where the runtime lands, and as each ON ERROR leaves it.
-/// The far address space of real mode, which BASIC's runtime is in.
-fn far() -> u32 {
-    llrm_x86_m16::layout().spaces.far
-}
-
 fn trapping(
     context: &Context,
     function: &Function,
@@ -268,9 +266,12 @@ struct Routines {
 
 /// The runtime routines the landing and the registrations call, and the
 /// landing itself and the ERR it keeps.
-fn declare(module: &mut Module) -> Result<Routines, String> {
+fn declare(
+    module: &mut Module,
+    space: u32,
+) -> Result<Routines, String> {
     let types = &mut module.context.types;
-    let (void, i16, far) = (types.void(), types.int(16), types.ptr(far()));
+    let (void, i16, far) = (types.void(), types.int(16), types.ptr(space));
     let register = types.intern(llrm_mir::Type::Function { returns: void, parameters: vec![far], variadic: false });
     let local = types.intern(llrm_mir::Type::Function { returns: void, parameters: vec![i16], variadic: false });
     let asked = types.intern(llrm_mir::Type::Function { returns: i16, parameters: Vec::new(), variadic: false });
@@ -288,7 +289,7 @@ fn declare(module: &mut Module) -> Result<Routines, String> {
             continue;
         }
         let id = module.add_function(name, ty, Linkage::External)?;
-        runtime(module, id, attrs);
+        runtime(module, id, attrs, space);
     }
     let zero = module.context.int(i16, 0);
     module.add_variable(
@@ -297,7 +298,7 @@ fn declare(module: &mut Module) -> Result<Routines, String> {
         Linkage::Internal,
     )?;
     let id = module.add_function(LANDING, nothing, Linkage::Internal)?;
-    runtime(module, id, &["naked", "noreturn", "nounwind"]);
+    runtime(module, id, &["naked", "noreturn", "nounwind"], space);
     let [err, resume, landed] = [ERR, RESUME, LANDED].map(|one| module.named(one).expect("declared"));
     let [err, resume, landed] = [err, resume, landed].map(|one| module.reference(one));
     let mut b = module.builder(id);
@@ -321,9 +322,10 @@ fn runtime(
     module: &mut Module,
     id: GlobalId,
     attrs: &[&str],
+    far: u32,
 ) {
     let global = &mut module.globals[id.0 as usize];
-    global.address_space = far();
+    global.address_space = far;
     let GlobalKind::Function(function) = &mut global.kind else { unreachable!("a function") };
     function.calling_convention = BASIC;
     function.attrs.extend(attrs.iter().map(|one| Attribute::Flag((*one).to_owned())));

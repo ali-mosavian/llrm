@@ -53,8 +53,8 @@ impl Selector<'_, '_, '_> {
         }
         let contract = _helper(LANDING, Default::default(), EVERY.clone());
         out.push(Arc::new(Insn {
-            clobbers: call_clobbers(&contract, self.segments),
-            clobbers_high: call_clobbered_high(&contract, self.segments),
+            clobbers: call_clobbers(&contract, self.segments, &self.cpu.general),
+            clobbers_high: call_clobbered_high(&contract, self.segments, &self.cpu.general),
             ..Insn::new(at, Some((at, at)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![], vec![])
         }));
         self.calls.insert(at, LANDING.to_owned());
