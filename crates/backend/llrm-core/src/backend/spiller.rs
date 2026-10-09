@@ -227,7 +227,7 @@ pub fn materialized(
     classes: &RegisterClasses,
     plain: &BTreeSet<u32>,
 ) -> Result<(LirBody, BTreeSet<u32>, BTreeSet<u32>), Error> {
-    let mut fresh = _next_value(body).max(floor);
+    let mut fresh = crate::backend::splitkit::_next_value_following(body).max(floor);
     let mut made: BTreeSet<u32> = BTreeSet::new();
     let Plan { constants, addresses, extensions, frame_loads, rebuilt, stored, narrow } = plan;
     let merging: BTreeSet<u32> = stored.difference(plain).copied().collect();
