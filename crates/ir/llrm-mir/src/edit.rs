@@ -537,8 +537,9 @@ impl Function {
         &mut self,
         insts: &[InstId],
     ) -> Result<(), String> {
-        let gone: std::collections::BTreeSet<InstId> = insts.iter().copied().collect();
-        for &inst in &gone {
+        let mut gone = crate::dense::IdSet::<InstId>::new();
+        let insts: Vec<InstId> = insts.iter().copied().filter(|&inst| gone.insert(inst)).collect();
+        for &inst in &insts {
             if self.is_erased(inst) {
                 return Err(format!("instruction {} is already erased", inst.0));
             }
@@ -548,7 +549,7 @@ impl Function {
                 return Err(format!("instruction {}'s result still has a user, {}", inst.0, user.user.0));
             }
         }
-        for &inst in &gone {
+        for &inst in &insts {
             let operands = self.instructions[inst.0 as usize].operands.clone();
             for (index, operand) in operands.into_iter().enumerate() {
                 self.remove_use(operand, Use { user: inst, index: index as u32 });
@@ -557,13 +558,10 @@ impl Function {
                 self.forget_debug_value(result);
             }
         }
-        let mut blocks: std::collections::BTreeMap<BlockId, Vec<InstId>> = Default::default();
-        for &inst in &gone {
-            if let Some(block) = self.parent(inst) {
-                blocks.entry(block).or_default().push(inst);
-            }
-        }
-        for (block, members) in blocks {
+        let mut blocks: Vec<BlockId> = insts.iter().filter_map(|&inst| self.parent(inst)).collect();
+        blocks.sort_unstable();
+        blocks.dedup();
+        for block in blocks {
             let list = self.blocks[block.0 as usize].instructions.clone();
             #[cfg(test)]
             SCANNED.with(|scanned| scanned.set(scanned.get() + list.len()));
@@ -577,11 +575,9 @@ impl Function {
                 }
             }
             self.blocks[block.0 as usize].instructions.retain(|one| !gone.contains(one));
-            for inst in members {
-                self.parent[inst.0 as usize] = None;
-            }
         }
-        for inst in gone {
+        for inst in insts {
+            self.parent[inst.0 as usize] = None;
             self.erased[inst.0 as usize] = true;
         }
         Ok(())
