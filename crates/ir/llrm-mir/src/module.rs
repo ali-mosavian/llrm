@@ -9,11 +9,38 @@ use crate::types::{Type, TypeId};
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ValueId(pub u32);
 
+impl crate::dense::Dense for ValueId {
+    fn index(self) -> usize {
+        self.0 as usize
+    }
+    fn at(index: usize) -> Self {
+        Self(u32::try_from(index).expect("an id fits u32"))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct BlockId(pub u32);
 
+impl crate::dense::Dense for BlockId {
+    fn index(self) -> usize {
+        self.0 as usize
+    }
+    fn at(index: usize) -> Self {
+        Self(u32::try_from(index).expect("an id fits u32"))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct InstId(pub u32);
+
+impl crate::dense::Dense for InstId {
+    fn index(self) -> usize {
+        self.0 as usize
+    }
+    fn at(index: usize) -> Self {
+        Self(u32::try_from(index).expect("an id fits u32"))
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct MetadataId(pub u32);

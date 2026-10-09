@@ -128,9 +128,9 @@ fn _affordable(unit: &passes::Unit, outer: &Outer, mut run: Vec<InstId>, before:
         let cells = crate::spill::cells(&hoisted);
         let traffic = crate::spill::traffic(&hoisted, frequency, &cells, costs, &|_| true, &|value| crate::spill::words(unit.context, unit.layout, &hoisted, value));
         let free = |value: ValueId| _displacement(&hoisted, value) || traffic.get(&value).is_some_and(|one| one.rebuild.is_some());
-        let crossing = _crossed_values(&hoisted, &run).intersection(&forecast.spilled).copied().collect::<BTreeSet<_>>();
+        let crossing = _crossed_values(&hoisted, &run).into_iter().filter(|value| forecast.spilled.contains(value)).collect::<BTreeSet<_>>();
         let uncounted: i64 = crossing.iter().filter(|&&value| free(value)).filter_map(|value| traffic.get(value)).map(|one| one.price(costs)).sum();
-        for &value in &forecast.spilled {
+        for value in forecast.spilled.iter() {
             if let ValueDef::Instruction(def) = hoisted.value(value).def {
                 llrm_support::debug!("hoist", "  spilled {value:?} = {:?} {:?}", hoisted.instruction(def).opcode, hoisted.instruction(def).operands);
             }

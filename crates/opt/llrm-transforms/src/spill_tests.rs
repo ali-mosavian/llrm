@@ -534,6 +534,6 @@ fn test_the_forecast_is_what_a_set_and_a_full_sort_give() {
             }
         }
         let got = forecast(points, |one| prices[one as usize]);
-        assert_eq!((got.cost, got.spilled, got.peak), (cost, expected_spilled, peak));
+        assert_eq!((got.cost, got.spilled.iter().collect::<std::collections::BTreeSet<_>>(), got.peak), (cost, expected_spilled, peak));
     }
 }
