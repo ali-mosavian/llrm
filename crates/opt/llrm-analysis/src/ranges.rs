@@ -1797,9 +1797,9 @@ pub fn scoped(unit: &Unit) -> Result<Facts, String> {
 }
 
 /// What is known of `operand` on entering block `at`, as `scoped` has it there
-/// (the bounds of the counted loops holding the block, narrowed by the edges that
-/// dominate it), without the intervals of the other values (which `scoped` copies).
-/// Over the manager's bounds and edges where the unit carries them.
+/// (the bounds of the counted loops holding the block, narrowed by the edges
+/// that dominate it), without the intervals of the other values (which `scoped`
+/// copies). Over the manager's bounds and edges where the unit carries them.
 pub fn operand_at(
     unit: &Unit,
     operand: Operand,
