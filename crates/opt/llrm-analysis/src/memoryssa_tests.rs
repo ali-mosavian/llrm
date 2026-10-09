@@ -610,3 +610,26 @@ fn test_loads_of_one_address_ask_each_store_whether_it_clobbers_once() {
     }
     assert!(clobber_runs() - before <= 30, "{} clobber questions for 30 stores", clobber_runs() - before);
 }
+
+/// The walk back from a load stopped at every access and asked of it. A chain of uses and defs that leave the cell alone ends in the
+/// same place for every load of the cell, so a walk remembers where and jumps there. It must find what the walk step by step finds,
+/// from every load, for every cell, with and without a boundary.
+#[test]
+fn test_a_walk_that_jumps_finds_what_a_walk_step_by_step_finds() {
+    let stores: String = (0..12).map(|n| format!("  store i8 {n}, ptr getelementptr (i8, ptr @g, i16 {})\n  %v{n} = load i8, ptr getelementptr (i8, ptr @g, i16 {})\n", 8 + n % 3 * 16, 8 + (n + 1) % 3 * 16)).collect();
+    let parsed = Parsed::new(&format!(
+        "define i8 @f(i1 %c) {{\nb0:\n{stores}  br i1 %c, label %b1, label %b2\n\nb1:\n  store i8 1, ptr getelementptr (i8, ptr @g, i16 24)\n  br label %b3\n\nb2:\n  br label %b3\n\nb3:\n  %w = load i8, ptr getelementptr (i8, ptr @g, i16 24)\n  %x = load i8, ptr getelementptr (i8, ptr @g, i16 8)\n  ret i8 %w\n}}\n"
+    ));
+    let unit = parsed.unit();
+    let graph = graph(&unit);
+    let loads: Vec<InstId> = graph.sites.keys().copied().filter(|&site| matches!(unit.function.instruction(site).opcode, llrm_mir::opcode::Opcode::Load { .. })).collect();
+    assert!(loads.len() >= 14);
+    for &site in &loads {
+        for &asked in &loads {
+            let cell = cell(&unit, asked);
+            for boundary in [None, graph.at(site).defining] {
+                assert_eq!(graph.walked(site, &cell, boundary, None, None, true), graph.walked(site, &cell, boundary, None, None, false), "{site:?} for {asked:?}");
+            }
+        }
+    }
+}

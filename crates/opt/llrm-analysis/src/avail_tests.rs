@@ -509,3 +509,26 @@ fn test_a_store_asks_only_the_cells_it_can_reach() {
     assert_eq!(held.outof.values().map(|cells| cells.len()).max(), Some(200));
     assert!(asked <= 1_000, "{asked} clobber questions for 200 stores to disjoint cells");
 }
+
+/// The cell naming a load's bytes was found by a scan of every cell held. It is asked of the cells a write to the load's address can
+/// reach, and must be the one the scan finds (the first held), at every point of a function whose cells overlap and are rewritten.
+#[test]
+fn test_the_held_cell_naming_a_loads_bytes_is_the_one_a_scan_finds() {
+    let parsed = Parsed::new(&format!(
+        "define i8 @f(i1 %c) {{\nb0:\n  store i8 1, ptr {CELL}\n  store i8 2, ptr {OTHER}\n  %a = load i8, ptr {CELL}\n  br i1 %c, label %b1, label %b2\n\nb1:\n  store i8 3, ptr {CELL}\n  %b = load i8, ptr {OTHER}\n  br label %b3\n\nb2:\n  %d = load i8, ptr {CELL}\n  br label %b3\n\nb3:\n  %e = load i8, ptr {CELL}\n  %f = load i8, ptr {OTHER}\n  ret i8 %e\n}}\n"
+    ));
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &Calls::default());
+    let held = holders(&unit, &accesses);
+    let loads: Vec<_> = unit.function.walk().map(|(_, inst)| inst).filter_map(|inst| loaded_into(&unit, &accesses, inst)).collect();
+    assert!(loads.len() >= 5);
+    let mut asked = 0;
+    for into in held.into.values().chain(held.outof.values()) {
+        for (cell, _) in &loads {
+            let whole = into.iter().find(|(one, _)| same_bytes(&unit, one, cell));
+            assert_eq!(into.naming(&unit, cell, |_| true), whole);
+            asked += usize::from(whole.is_some());
+        }
+    }
+    assert!(asked > 0, "no held cell named a load's bytes: the test asks nothing");
+}
