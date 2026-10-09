@@ -15,6 +15,9 @@ rebuild after an edit takes about 30 seconds.
 Plain `cargo fmt` is not enough: it leaves the method chains and `matches!` calls that `tools/rfmt-post` lays out. Editors
 format through `tools/fmt.sh --stdin FILE` (`.zed/settings.json` does).
 
+Code lines go to column 120, comments to 80. `tools/rfmt-post` moves a trailing comment above its line and breaks the comments
+rustfmt leaves; `--check` fails on any still past 80 unless it is one word (a URL), a code block or a table row.
+
 ## The gate in tiers
 
     python3 tools/gate/gate.py plan            what the diff against origin/main selects
