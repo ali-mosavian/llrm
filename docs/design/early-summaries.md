@@ -14,16 +14,20 @@ The module analyses `Summaries` and `GlobalsAA`, with the per-function alias ana
 | points-to | 3.4% |
 | through-memory | 3.2% |
 
-Both module analyses are `require`d, so the pass manager makes them again before the next pass whenever a pass changed anything. 642 computations of each over the 65 modules, by the pass they were made before:
+Both module analyses are `require`d, so the pass manager makes them again before the next pass whenever a pass changed anything. Timing their outermost spans by the pass they precede (230.1 G compile, 12.0% in the spans):
 
-| before | computations | what it is |
-|---|---:|---|
-| globalopt, pipeline, calleepop | 65 + 65 + 65 | the first of each stretch of passes between two program passes |
-| ports, freeze | 83 + 38 | the same, and the edit of ports |
-| dead, decide | 158 + 137 | the interprocedural step's reruns of a changed body, after an inline or a promote |
-| hoist, algebraic, others | ~30 | late; #1153 removed the rest |
+| made before | spans | share of the compile |
+|---|---:|---:|
+| ports | 101 | 3.0% |
+| pipeline | 130 | 2.1% |
+| globalopt | 130 | 2.1% |
+| dead (the interprocedural step's rerun of a changed body) | 158 | 1.8% |
+| decide (the same) | 137 | 1.1% |
+| calleepop | 130 | 1.0% |
+| freeze (marker after calleepop) | 76 | 0.7% |
+| the late passes, after #1153 | 31 | 0.3% |
 
-86% of the recomputations before #1153 gave the summaries they replaced. Most of the early ones do too, but an inline or a promote really changes a body, and the summary of its callers with it.
+Two kinds. The first computation of a stretch of passes (globalopt, ports, pipeline, calleepop, freeze: 8.9%) is the whole module, made again because the module pass before it changed the module; two thirds of it was made before a pass that reads nothing and dropped by that pass's edit. [#1182](https://github.com/ali-mosavian/llrm/pull/1182) stops that for module passes and the marker (-1.8% of the -O1 compile, objects identical). The reruns inside the interprocedural step (dead, decide: 2.9%) are made after an inline or a promote that really changed a body, and the summary of its callers with it; that is what this proposal is about.
 
 ## What gcc does
 
@@ -52,7 +56,9 @@ Soundness is checked the way #1153's is, with the same `covers` (a fresh read or
 
 ## What it should buy
 
-Today 573 of the 642 computations are early; the proposal makes three per module in the common case (after the early pipeline, after the interprocedural step, and the last), plus the SCC-local ones the first fixed point needs. The family rows above are 24% of the compile; the early share of their cost is not separate in the table, since the early computations are the larger ones (the first of a stretch is the whole module, an inline's rerun is a closure of callers). If the early cost is 70% of the family and it falls by two thirds, the saving is about 70% x 24% x 2/3 = 11%, which would be too good: the per-function rows (call-effects, points-to, through-memory) are driven by the bodies' own edits, which this does not change. Counting only the module rows (globals-aa, summaries: 11.8%), 70% early, two thirds saved: **about 5%**. The estimate has a wide error; the measurement that settles it is cheap and comes first: the cost of `Summaries` and `GlobalsAA` in the interprocedural reruns alone, by timing those spans.
+Counted, not estimated: after #1182 the spans that remain are ports 3.0%, pipeline 2.1% (the first of each stretch, needed by the pass that follows) and dead and decide 2.9% (the reruns). The proposal is for the last of these only: three computations per module (after the early pipeline, after the interprocedural step, the last) in place of one per rerun. The reruns are incremental, so the saving is a part of 2.9%, not all of it: **1-2% of the compile at most**. The measurement that settles it is cheap and comes first: the cost of those spans split into what the dirty closure re-derives and what is fixed overhead.
+
+The first computation of a stretch (ports, pipeline: 5.1%) is not helped by this. It is the whole module made again after a program pass or an edit; carrying the analyses' memo across the stretches (tried: `ModuleAnalyses.memos` kept between them) gave nothing measurable, so that cost is in re-deriving the bodies that changed, as in the table above.
 
 ## Against a body-level incremental points-to
 
@@ -67,5 +73,5 @@ The alternative is to keep every recomputation and make each cheaper: update the
 ## Plan
 
 1. Measure: the time of `Summaries` and `GlobalsAA` inside the interprocedural reruns and in the stretches' first computations, separately.
-2. If the early share is above 50% of the module rows: the merge, the check mode and the test (a pass that adds an access fails it, seen failing), in one PR; the callee-first order in another, because it moves objects.
+2. If the reruns' share is above 2% of the compile: the merge, the check mode and the test (a pass that adds an access fails it, seen failing), in one PR; the callee-first order in another, because it moves objects.
 3. Stop if the first PR buys under 1% of the -O1 compile.
