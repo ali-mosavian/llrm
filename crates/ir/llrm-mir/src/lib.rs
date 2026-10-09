@@ -9,6 +9,7 @@ pub mod context;
 pub mod datalayout;
 pub mod debuginfo;
 pub mod dense;
+pub mod depends;
 pub mod dominators;
 pub mod edit;
 pub mod facts;
