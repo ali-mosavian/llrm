@@ -100,7 +100,7 @@ impl Default for Options {
             ipa_ranges: true,
             forward: true,
             drop_loads: true,
-            gvn_dataflow: true,
+            gvn_dataflow: false,
             drop_stores: true,
             promote: true,
             strength: true,
