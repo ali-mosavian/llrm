@@ -790,7 +790,7 @@ mod tests {
     use crate::backend::cpu::ProfileOrName;
     use crate::backend::frame::Frame;
     use crate::backend::{allocate, select, spiller, target};
-    use crate::model::ir::{self, Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space, St};
+    use crate::model::ir::{self, Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
@@ -958,12 +958,7 @@ mod tests {
         let value = Held { value: 20, width: 2 };
         let cell = Mem { base: Some(value), ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2) };
         let mut instruction = _insn(
-            semantics(
-                Operation::FloatArith,
-                "fidiv",
-                vec![Loc::St(St { index: 0 })],
-                vec![Loc::St(St { index: 0 }), Loc::Mem(cell)],
-            ),
+            semantics(Operation::FloatArith, "fidiv", vec![Loc::st(0)], vec![Loc::st(0), Loc::Mem(cell)]),
             &[],
             &[20],
             0x100,

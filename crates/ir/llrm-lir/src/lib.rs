@@ -31,6 +31,29 @@ pub struct Reg {
     pub width: u32,
 }
 
+impl Reg {
+    /// The x87 register `st(index)`, relative to the current top. A float is
+    /// ten bytes there.
+    pub const fn st(index: u32) -> Self {
+        let register = [
+            iced_x86::Register::ST0,
+            iced_x86::Register::ST1,
+            iced_x86::Register::ST2,
+            iced_x86::Register::ST3,
+            iced_x86::Register::ST4,
+            iced_x86::Register::ST5,
+            iced_x86::Register::ST6,
+            iced_x86::Register::ST7,
+        ][index as usize];
+        Self { register, width: 10 }
+    }
+
+    /// Its position, where it is an x87 register.
+    pub fn st_index(&self) -> Option<u32> {
+        self.register.is_st().then(|| self.register as u32 - iced_x86::Register::ST0 as u32)
+    }
+}
+
 /// An SSA value held in an as-yet undecided physical register.
 ///
 /// Direct port of `qbopt.model.ir:Held`.
@@ -194,14 +217,6 @@ fn _in_frame(
     })
 }
 
-/// An x87 stack position relative to the current top.
-///
-/// Direct port of `qbopt.model.ir:St`.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct St {
-    pub index: u32,
-}
-
 /// Every selected machine operand Python LIR may carry.
 ///
 /// Direct port of `qbopt.model.ir:Loc`.
@@ -211,8 +226,22 @@ pub enum Loc {
     Mem(Mem),
     Imm(Imm),
     Address(Address),
-    St(St),
     Held(Held),
+}
+
+impl Loc {
+    /// The x87 register `st(index)`.
+    pub const fn st(index: u32) -> Self {
+        Loc::Reg(Reg::st(index))
+    }
+
+    /// Its position, where this is an x87 register.
+    pub fn st_index(&self) -> Option<u32> {
+        match self {
+            Loc::Reg(register) => register.st_index(),
+            _ => None,
+        }
+    }
 }
 
 pub use flag::Flag;
@@ -485,7 +514,7 @@ pub fn values(where_: &Loc) -> Values {
                 named(held);
             }
         }
-        Loc::Reg(_) | Loc::Imm(_) | Loc::Address(_) | Loc::St(_) => {}
+        Loc::Reg(_) | Loc::Imm(_) | Loc::Address(_) => {}
     }
     found
 }
@@ -839,12 +868,6 @@ impl Repr for Mem {
     }
 }
 
-impl Repr for St {
-    fn repr(&self) -> String {
-        pyrepr::dataclass("St", &[("index", self.index.repr())])
-    }
-}
-
 impl Repr for Loc {
     fn repr(&self) -> String {
         match self {
@@ -852,7 +875,6 @@ impl Repr for Loc {
             Loc::Mem(one) => one.repr(),
             Loc::Imm(one) => one.repr(),
             Loc::Address(one) => one.repr(),
-            Loc::St(one) => one.repr(),
             Loc::Held(one) => one.repr(),
         }
     }
@@ -890,7 +912,6 @@ mod repr_tests {
             Address::new(None).repr(),
             "Address(addr=None, through=0, index=0, scale=1, offset=0, disp_width=0)"
         );
-        assert_eq!(St { index: 1 }.repr(), "St(index=1)");
         assert_eq!(Held { value: 3, width: 2 }.repr(), "Held(value=3, width=2)");
         let semantics = Semantics {
             name: Some("mov".to_owned()),

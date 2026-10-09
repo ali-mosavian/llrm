@@ -7,9 +7,7 @@ use std::collections::BTreeSet;
 
 use iced_x86::{Code, Mnemonic, OpKind, Register};
 
-use super::{
-    ANY_MEMORY, Address, Effects, Flag, Imm, Loc, Mem, Operation, Reg, Semantics, St, UNMODELLED, barrier, root,
-};
+use super::{ANY_MEMORY, Address, Effects, Flag, Imm, Loc, Mem, Operation, Reg, Semantics, UNMODELLED, barrier, root};
 use crate::analysis::flags::{ALL, CLOBBERS, written_by};
 use crate::frontends::bc::declen::{Insn, READS, WRITES, instruction_info_factory, to_signed};
 use crate::model::ir::lift::{Resolver, operand as long_operand};
@@ -190,12 +188,12 @@ pub fn _destination(
 pub fn _stack_register(
     insn: &Insn,
     index: u32,
-) -> Option<St> {
+) -> Option<u32> {
     if insn.insn.op_kind(index) != OpKind::Register {
         return None;
     }
     let register = insn.insn.op_register(index);
-    register.is_st().then(|| St { index: register as u32 - Register::ST0 as u32 })
+    register.is_st().then(|| register as u32 - Register::ST0 as u32)
 }
 
 pub type Builder = fn(&Insn, &Resolver, Operation, &str) -> Option<Semantics>;
@@ -530,13 +528,13 @@ pub fn _float_load(
     let mnemonic = insn.insn.mnemonic();
     if insn.insn.op_count() == 0 && matches!(mnemonic, Mnemonic::Fldz | Mnemonic::Fld1) {
         let value = Imm { value: i64::from(mnemonic == Mnemonic::Fld1), width: 2, address: None };
-        return Some(shaped(op, name, vec![Loc::St(St { index: 0 })], vec![Loc::Imm(value)]));
+        return Some(shaped(op, name, vec![Loc::st(0)], vec![Loc::Imm(value)]));
     }
     if insn.insn.op_count() != 1 || insn.insn.op_kind(0) != OpKind::Memory {
         return None;
     }
     let source = _location(insn, 0, resolve)?;
-    Some(shaped(op, name, vec![Loc::St(St { index: 0 })], vec![source]))
+    Some(shaped(op, name, vec![Loc::st(0)], vec![source]))
 }
 
 /// `fstp`/`fistp`: the current top, written to the one real memory operand,
@@ -551,7 +549,7 @@ pub fn _float_store(
         return None;
     }
     let dest = _location(insn, 0, resolve)?;
-    Some(shaped(op, name, vec![dest], vec![Loc::St(St { index: 0 })]))
+    Some(shaped(op, name, vec![dest], vec![Loc::st(0)]))
 }
 
 pub fn _float_arith(
@@ -565,16 +563,16 @@ pub fn _float_arith(
         let (Some(dest), Some(source)) = (dest, source) else {
             return None;
         };
-        if dest.index != 0 && source.index != 0 {
+        if dest != 0 && source != 0 {
             return None;
         }
-        return Some(shaped(op, name, vec![Loc::St(dest)], vec![Loc::St(dest), Loc::St(source)]));
+        return Some(shaped(op, name, vec![Loc::st(dest)], vec![Loc::st(dest), Loc::st(source)]));
     }
     if insn.insn.op_count() != 1 || insn.insn.op_kind(0) != OpKind::Memory {
         return None;
     }
     let source = _location(insn, 0, resolve)?;
-    Some(shaped(op, name, vec![Loc::St(St { index: 0 })], vec![Loc::St(St { index: 0 }), source]))
+    Some(shaped(op, name, vec![Loc::st(0)], vec![Loc::st(0), source]))
 }
 
 /// `faddp`/`fsubp`/`fmulp`/`fdivp st(i),st(0)`: combines the two, writes the
@@ -592,10 +590,10 @@ pub fn _float_arith_pop(
     let (Some(dest), Some(second)) = (dest, second) else {
         return None;
     };
-    if second.index != 0 {
+    if second != 0 {
         return None;
     }
-    Some(shaped(op, name, vec![Loc::St(dest)], vec![Loc::St(dest), Loc::St(second)]))
+    Some(shaped(op, name, vec![Loc::st(dest)], vec![Loc::st(dest), Loc::st(second)]))
 }
 
 /// `fchs`/`fabs`/`fsqrt`: the top, transformed in place.
@@ -605,8 +603,7 @@ pub fn _float_unary(
     op: Operation,
     name: &str,
 ) -> Option<Semantics> {
-    (insn.insn.op_count() == 0)
-        .then(|| shaped(op, name, vec![Loc::St(St { index: 0 })], vec![Loc::St(St { index: 0 })]))
+    (insn.insn.op_count() == 0).then(|| shaped(op, name, vec![Loc::st(0)], vec![Loc::st(0)]))
 }
 
 pub const BUILD: [(Operation, Builder); 23] = [

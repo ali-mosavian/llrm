@@ -963,7 +963,7 @@ mod tests {
     use super::{_interference, _merged, joined};
     use crate::analysis::intervals;
     use crate::backend::{allocate, cpu::ProfileOrName, select, target};
-    use crate::model::ir::{self, Held, Imm, Loc, Mem, Operation, Reg, Semantics, St};
+    use crate::model::ir::{self, Held, Imm, Loc, Mem, Operation, Reg, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
@@ -1263,7 +1263,7 @@ mod tests {
             Some(semantics(
                 Operation::FloatLoad,
                 "fld",
-                vec![Loc::St(St { index: 0 })],
+                vec![Loc::st(0)],
                 vec![Loc::Mem(Mem { base: Some(Held { value: 2, width: 2 }), ..Mem::new(None, 8) })],
             )),
             vec![],

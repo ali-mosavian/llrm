@@ -60,7 +60,7 @@ fn _root(register: Register) -> Register {
 /// `ir` models `fdivp` as a DIVIDE, and the widening rule claimed it reads
 /// dx:ax.
 pub fn _on_the_stack(what: &Semantics) -> bool {
-    what.dests.iter().chain(&what.sources).any(|one| matches!(one, Loc::St(_)))
+    what.dests.iter().chain(&what.sources).any(|one| one.st_index().is_some())
         || what.name.as_deref().unwrap_or("").starts_with('f')
 }
 
@@ -101,10 +101,7 @@ pub fn popped_width(place: &Loc) -> Option<u32> {
 /// follows it, so nothing may live in AX across it.
 pub fn status_through_ax(what: &Semantics) -> bool {
     what.op == Operation::Compare
-        && what
-            .sources
-            .iter()
-            .any(|one| matches!(one, Loc::St(_)) || matches!(one, Loc::Held(held) if held.width == 10))
+        && what.sources.iter().any(|one| one.st_index().is_some() || matches!(one, Loc::Held(held) if held.width == 10))
 }
 
 /// The register a two-address instruction reads and writes as one.
@@ -579,7 +576,7 @@ mod tests {
         let apart = semantics(Operation::Binary, "add", vec![ax.clone()], vec![reg(Register::BX, 2), cell]);
         assert_eq!(tied(&apart), None, "and a three-operand form ties nothing");
 
-        let st = Loc::St(ir::St { index: 0 });
+        let st = Loc::st(0);
         let on_stack = semantics(Operation::FloatArith, "fadd", vec![st.clone()], vec![st]);
         assert_eq!(tied(&on_stack), None, "x87 shares no register with the rest");
     }
@@ -704,7 +701,7 @@ mod tests {
         let what = semantics(
             Operation::FloatLoad,
             "fld",
-            vec![Loc::St(ir::St { index: 0 })],
+            vec![Loc::st(0)],
             vec![Loc::Mem(ir::Mem { through: Register::SI, ..ir::Mem::new(None, 4) })],
         );
         let want: BTreeSet<Register> = RegisterClasses::m16().addressing.iter().map(|x| ir::root(*x)).collect();

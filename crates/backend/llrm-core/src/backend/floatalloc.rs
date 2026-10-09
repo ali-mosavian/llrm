@@ -17,7 +17,7 @@ use crate::backend::floatregions::{Raised, boundary};
 use crate::backend::frame::Frame;
 use crate::backend::select;
 use crate::backend::spillplacement;
-use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Reg, Semantics, St};
+use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::IndexMap;
@@ -28,7 +28,7 @@ pub(super) fn unlowered(message: &str) -> Raised {
 }
 
 pub(super) fn st(index: usize) -> Loc {
-    Loc::St(St { index: index as u32 })
+    Loc::st(index as u32)
 }
 
 pub(super) fn semantics(

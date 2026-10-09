@@ -3,7 +3,7 @@
 use std::fmt;
 
 use crate::backend::frame as frames;
-use crate::model::ir::{Loc, Operation};
+use crate::model::ir::Operation;
 use crate::model::lir::Insn;
 
 /// An operand nothing here can turn into a machine location.
@@ -64,5 +64,5 @@ pub fn boundary(one: &Insn) -> bool {
         return true;
     };
     matches!(what.op, Operation::Call | Operation::Barrier)
-        || what.sources.iter().chain(&what.dests).any(|arg| matches!(arg, Loc::St(_)))
+        || what.sources.iter().chain(&what.dests).any(|arg| arg.st_index().is_some())
 }

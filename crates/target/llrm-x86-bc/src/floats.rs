@@ -137,10 +137,7 @@ fn pop(emitter: &mut Emitter) -> Emit<Operand> {
 }
 
 fn slot(loc: &Loc) -> Option<u32> {
-    match loc {
-        Loc::St(one) => Some(one.index),
-        _ => None,
-    }
+    loc.st_index()
 }
 
 /// A memory operand as the x87 reads it: a real of its width, or an
@@ -249,7 +246,7 @@ fn instruction(
             let dest = what.dests.first().and_then(slot).ok_or_else(|| format!("x87 {name} into memory"))?;
             let a = st(emitter, what.sources.first().and_then(slot).ok_or_else(|| format!("x87 {name}"))?)?;
             let b = match what.sources.get(1) {
-                Some(Loc::St(one)) => st(emitter, one.index)?,
+                Some(stack) if stack.st_index().is_some() => st(emitter, stack.st_index().expect("a stack register"))?,
                 Some(Loc::Mem(mem)) => load(emitter, insn, mem.width, name.starts_with("fi"))?,
                 _ => return Err(format!("x87 {name} of that operand")),
             };

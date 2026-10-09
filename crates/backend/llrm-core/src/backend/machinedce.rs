@@ -48,6 +48,16 @@ fn _stateful_destination(where_: &Loc) -> bool {
     )
 }
 
+/// A general register, an immediate or an address: not the x87 stack, whose
+/// exchanges and loads change it through no register a liveness walk sees.
+fn _general(where_: &Loc) -> bool {
+    match where_ {
+        Loc::Reg(one) => one.st_index().is_none(),
+        Loc::Imm(_) | Loc::Address(_) => true,
+        _ => false,
+    }
+}
+
 /// A frame slot read by name: no fault, nothing else stored through it.
 fn _slot(where_: &Loc) -> bool {
     matches!(
@@ -64,8 +74,8 @@ fn _pure(one: &Insn) -> bool {
     _PURE.contains(&what.op)
         && what.target.is_none()
         && !what.indirect
-        && what.dests.iter().all(|arg| matches!(arg, Loc::Reg(_) | Loc::Imm(_) | Loc::Address(_)))
-        && what.sources.iter().all(|arg| matches!(arg, Loc::Reg(_) | Loc::Imm(_) | Loc::Address(_)) || _slot(arg))
+        && what.dests.iter().all(_general)
+        && what.sources.iter().all(|arg| _general(arg) || _slot(arg))
         && !what.dests.iter().chain(&what.sources).any(_relocated)
         && !what.dests.iter().any(_stateful_destination)
         && one.clobbers.is_empty()

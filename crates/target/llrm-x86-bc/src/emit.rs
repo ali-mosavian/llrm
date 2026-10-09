@@ -1534,6 +1534,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         loc: &Loc,
     ) -> Emit<Operand> {
         match loc {
+            Loc::Reg(one) if one.st_index().is_some() => Err("x87 registers".to_owned()),
             Loc::Reg(reg) => match reg.register {
                 register if self.unit.objects.names_data(register) => {
                     let selector = self.selector()?;
@@ -1592,7 +1593,6 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
                 let ty = self.b.context.types.int(mem.width * 8);
                 Ok(self.b.load(ty, pointer, false, ""))
             }
-            Loc::St(_) => Err("x87 registers".to_owned()),
             other => Err(format!("reads {other:?}")),
         }
     }
@@ -1603,6 +1603,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         value: Operand,
     ) -> Emit<()> {
         match loc {
+            Loc::Reg(one) if one.st_index().is_some() => Err(format!("writes {loc:?}")),
             Loc::Reg(reg) => match reg.register {
                 Register::ES => {
                     let segment = self.b.context.types.ptr(crate::segment(&self.unit.facts.spaces));

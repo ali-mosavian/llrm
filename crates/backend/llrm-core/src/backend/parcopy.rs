@@ -74,7 +74,7 @@ fn _width(one: &Loc) -> u32 {
         Loc::Mem(one) => one.width,
         Loc::Imm(one) => one.width,
         Loc::Held(one) => one.width,
-        Loc::Address(_) | Loc::St(_) => panic!("{} has no width", one.repr()),
+        Loc::Address(_) => panic!("{} has no width", one.repr()),
     }
 }
 

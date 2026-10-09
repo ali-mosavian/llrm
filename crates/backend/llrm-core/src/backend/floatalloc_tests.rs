@@ -13,7 +13,7 @@ use crate::backend::floatregions::Raised;
 use crate::backend::frame::Frame;
 use crate::backend::phielim;
 use crate::backend::select;
-use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space, St};
+use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::HashMap;
 use crate::support::hash::IndexMap;
@@ -36,7 +36,7 @@ fn m(cell: &Mem) -> Loc {
 }
 
 fn st(index: u32) -> Loc {
-    Loc::St(St { index })
+    Loc::st(index)
 }
 
 fn frame_cell(
@@ -150,13 +150,13 @@ fn _x87_traced(
         }
         assert!(emits(what), "{what:?}");
         let read = |arg: &Loc, stack: &Vec<f64>, memory: &HashMap<Mem, f64>| match arg {
-            Loc::St(index) => stack[index.index as usize],
+            stack_slot if stack_slot.st_index().is_some() => stack[stack_slot.st_index().unwrap() as usize],
             Loc::Mem(cell) => memory[cell],
             _ => panic!("{arg:?}"),
         };
-        let index_of = |arg: &Loc| match arg {
-            Loc::St(index) => index.index as usize,
-            _ => panic!("{arg:?}"),
+        let index_of = |arg: &Loc| match arg.st_index() {
+            Some(index) => index as usize,
+            None => panic!("{arg:?}"),
         };
         let name = what.name.as_deref().unwrap_or("");
         match what.op {
@@ -170,8 +170,8 @@ fn _x87_traced(
                 stack.swap(0, index);
             }
             Operation::FloatStore => match &what.dests[0] {
-                Loc::St(slot) => {
-                    stack[slot.index as usize] = stack[0];
+                slot if slot.st_index().is_some() => {
+                    stack[slot.st_index().unwrap() as usize] = stack[0];
                     stack.remove(0);
                 }
                 Loc::Mem(cell) => {
@@ -418,7 +418,7 @@ fn test_arithmetic_overwrites_the_operand_that_dies() {
     let result = run(&_body(operations));
     let insns = result.insns();
     assert_eq!(insns.iter().filter(|one| name(one) == "fxch").count(), 1);
-    assert!(!insns.iter().any(|one| name(one) == "fld" && matches!(what(one).sources[0], Loc::St(_))));
+    assert!(!insns.iter().any(|one| name(one) == "fld" && what(one).sources[0].st_index().is_some()));
     let (memory, stack) = _x87(&insns, &[(x, 8.0), (y, 2.0), (z, 1.0)]);
     assert_eq!((memory[first], memory[second], memory[third], stack), (-6.0, -1.0, -8.0, vec![]));
 }
@@ -1029,7 +1029,7 @@ fn test_buried_float_operand_is_exchanged_not_duplicated() {
                 let what = what(one);
                 what.op == Operation::Exchange
                     || !what.sources.is_empty()
-                        && matches!(what.sources[0], Loc::St(_))
+                        && what.sources[0].st_index().is_some()
                         && what.op == Operation::FloatLoad
             })
             .collect();
@@ -1083,16 +1083,15 @@ fn test_last_register_operand_is_consumed_without_reversing_arithmetic() {
                 match name(one) {
                     "fld" => stack.insert(0, values.next().unwrap()),
                     "fxch" => {
-                        let Loc::St(index) = what.sources[1] else { panic!() };
-                        stack.swap(0, index.index as usize);
+                        let index = what.sources[1].st_index().expect("a stack register");
+                        stack.swap(0, index as usize);
                     }
                     "fstp" => stored.push(stack.remove(0)),
                     "" => continue,
                     other => {
                         let want = if top == "left" { popping.to_owned() } else { popping.replace("rp", "p") };
                         assert_eq!(other, want);
-                        let Loc::St(index) = what.sources[0] else { panic!() };
-                        let index = index.index as usize;
+                        let index = what.sources[0].st_index().expect("a stack register") as usize;
                         let (a, b) = (stack[index], stack[0]);
                         stack[index] = match other {
                             "faddp" => a + b,
@@ -1170,7 +1169,7 @@ fn test_x87_memory_operand_follows_the_selected_cpu_cost() {
 
     let insns = result.insns();
     let multiply = what(insns.iter().find(|one| name(one).starts_with("fmul")).unwrap());
-    assert!(multiply.sources.iter().all(|arg| matches!(arg, Loc::St(_))));
+    assert!(multiply.sources.iter().all(|arg| arg.st_index().is_some()));
     let (memory, stack) = _x87(&insns, &[(source, 7.0), (home, 3.0)]);
     assert!(memory[out] == -21.0 && stack.is_empty());
 }
