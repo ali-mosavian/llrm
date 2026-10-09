@@ -69,6 +69,17 @@ mod tests {
         }
     }
 
+    /// The `flags` column is what iced says of the row's Code: the four x87
+    /// condition bits were once left out of the names, and every x87
+    /// instruction then wrote no status.
+    #[test]
+    fn the_flags_column_is_what_iced_says_of_the_code() {
+        for form in FORMS.iter().filter(|form| form.iced.is_some()) {
+            let says = flags(form).expect("a Code");
+            assert_eq!((form.flags_read, form.flags_written), says, "x86.instr:{} {}", form.line, form.name);
+        }
+    }
+
     #[test]
     fn flags_come_from_iced() {
         let (_, add) = flags(forms("add").next().unwrap()).unwrap();
@@ -83,7 +94,7 @@ mod tests {
 
     #[test]
     fn a_malformed_line_is_refused_with_its_line() {
-        let error = parse::parse("add binary rm/^0,rmx 16 alu_rr - - - Add_rm{w}_r{w}").unwrap_err();
+        let error = parse::parse("add binary rm/^0,rmx 16 alu_rr - - - -/- Add_rm{w}_r{w}").unwrap_err();
         assert_eq!(error, "x86.instr:1: operand `rmx` is not made of the kinds r m i a s");
     }
 
