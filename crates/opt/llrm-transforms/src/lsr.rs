@@ -128,7 +128,9 @@ impl Analysis for Products {
         let registers = analyses.get::<Registers>(context, layout, function);
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(context, layout, function);
         let outer = std::rc::Rc::clone(analyses.outer());
-        let view = memory::Unit::within(context, layout, function, &outer).with_registers(&registers).with_shape(&shape);
+        // The trips are the manager's proofs, renewed for the loops a change reached, not worked out again for every loop.
+        let counted = analyses.get::<llrm_analysis::manager::Counted>(context, layout, function);
+        let view = memory::Unit::within(context, layout, function, &outer).with_registers(&registers).with_shape(&shape).with_counted(&counted);
         profit::_loop_products_by_branch(view.context, view.metadata, &outer.globals, function, Some(&profit::proven_trips(&view, &registers)))
     }
 }
