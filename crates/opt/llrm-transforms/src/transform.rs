@@ -467,9 +467,7 @@ pub fn forwarded(
     for (&value, &with) in &replacements {
         function.replace_value(value, ssa::provider(with, &replacements).map_err(|error| error.to_string())?);
     }
-    for one in served {
-        function.erase(one.at)?;
-    }
+    function.erase_all(&served.iter().map(|one| one.at).collect::<Vec<_>>())?;
     Ok(true)
 }
 

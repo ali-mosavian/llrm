@@ -654,16 +654,19 @@ fn an_integer_edit_leaves_the_pointer_analyses_as_they_were_and_a_pointer_edit_d
     f.replace_all_uses_with(x, Operand::Value(a));
     let changes = f.changes_since(before).expect("on the log").to_vec();
     assert!(!changes.is_empty());
-    for scalars_matter in [true, false] {
+    let unaffected: [fn(&[llrm_mir::module::Change], &llrm_mir::context::Context, &llrm_mir::module::Function) -> bool;
+        4] =
+        [Pointers::unaffected, CallEffects::unaffected, super::Writes::unaffected, super::ExposedFrames::unaffected];
+    for unaffected in unaffected {
         assert!(
-            super::pointers_unaffected(&changes, &module.context, function(&module, "f"), scalars_matter),
+            unaffected(&changes, &module.context, function(&module, "f")),
             "an integer edit moved the pointer analyses"
         );
     }
     let (f, _) = (function(&module, "f"), y);
     let gep = f.walk().map(|(_, one)| one).find(|one| f.instruction(*one).result == Some(q)).expect("the gep");
     assert!(
-        !super::pointers_unaffected(&[llrm_mir::module::Change::Rewritten(gep)], &module.context, f, false),
+        !CallEffects::unaffected(&[llrm_mir::module::Change::Rewritten(gep)], &module.context, f),
         "an edit to an address left the pointer analyses as they were"
     );
 }
@@ -796,4 +799,32 @@ b0:
     let program = analyses.program().clone();
     let unit = super::summarized_in(&module, &program, Result::as_ref(&*globals).unwrap(), &shape, &exposed, function);
     assert_eq!(format!("{again:?}"), format!("{:?}", crate::alias::CallFacts::of(&unit)));
+}
+
+/// What each call does is nothing a dead load's erasure can change: the load
+/// has no user left and is no call. A pointer load was a part of `CallEffects`'
+/// declaration like any, so DCE worked the effects of every call out again to
+/// the same answer (4209 of 7009 runs over QCport at -O1 came to what they
+/// were).
+#[test]
+fn test_erasing_a_dead_pointer_load_does_not_work_the_call_effects_out_again() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @g(ptr)\n@p = global ptr null\n\ndefine void @f(ptr %a) {{\nb:\n  %dead = load ptr, ptr @p\n  call void @g(ptr %a)\n  ret void\n}}\n"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let (context, f) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    llrm_mir::passes::trace_recomputes(true);
+    analyses.get::<CallEffects>(context, &layout, f);
+    let entry = f.entry().expect("an entry");
+    let load = f.block(entry).instructions()[0];
+    f.erase(load).expect("an unused load");
+    analyses.invalidate(&PreservedAnalyses::none());
+    analyses.get::<CallEffects>(context, &layout, f);
+    let counts = llrm_mir::passes::recomputes();
+    llrm_mir::passes::trace_recomputes(false);
+    let of_effects: Vec<_> =
+        counts.iter().filter(|(name, ..)| *name == "call-effects").map(|&(_, _, how, n)| (how, n)).collect();
+    assert_eq!(of_effects, vec![("first", 1), ("replayed", 1)], "{counts:?}");
 }
