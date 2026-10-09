@@ -1,6 +1,7 @@
 //! What every x86 target shares. Each target's `x86.instr` holds only the forms
 //! it adds to `instructions::FAMILY`.
 
+pub mod effects;
 pub mod select;
 
 /// A calling convention's registers as the x86 family names them: the

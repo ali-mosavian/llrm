@@ -6,7 +6,6 @@ use std::sync::LazyLock;
 use iced_x86::{Code, Instruction};
 use llrm_support::hash::HashMap;
 
-pub mod effects;
 pub mod parse;
 
 pub use parse::{CONDITIONS, Form, Operand, Side};
