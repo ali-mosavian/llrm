@@ -844,6 +844,7 @@ fn test_intervals_from_occurrences_are_those_of_the_walk() {
         }
     }
     assert!(compared > 0, "premise: some value was live");
+}
 
 /// The no-split allocation of a body the base allocation split nothing in is the base allocation again, and was made for every
 /// body with a spill (10% of the trials over QCport, the bench and the 66 programs, none of them won).
