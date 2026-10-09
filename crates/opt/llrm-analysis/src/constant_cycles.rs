@@ -47,6 +47,13 @@ fn _meet(
     State::Overdefined
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Propagations set up, for a test that a body with no open phi does not
+    /// set one up.
+    pub static WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub fn propagated(
     unit: &Unit,
     seeds: &IndexMap<ValueId, Known>,
@@ -57,6 +64,21 @@ pub fn propagated(
         return seeds.clone();
     };
     let is_phi = |inst: InstId| function.instruction(inst).opcode == Opcode::Phi;
+    // What is left to propagate is a phi no seed has: every other value is as
+    // `seeds` has it, or derives from them. Setting the propagation up (a
+    // recipe for every value, the consumers, a copy of the graph) was 1.8% of
+    // the -O1 compile of QCport, 25000 times for bodies with nothing to
+    // resolve. LLRM_CHECK_CYCLES works it out anyway and asserts it comes to
+    // the seeds.
+    let open = function
+        .walk()
+        .filter(|(_, inst)| is_phi(*inst))
+        .any(|(_, inst)| consts::_defined(unit, inst).is_some_and(|value| !seeds.contains_key(&value)));
+    if !open && !llrm_support::env_set("LLRM_CHECK_CYCLES") {
+        return seeds.clone();
+    }
+    #[cfg(test)]
+    WORKED.with(|worked| worked.set(worked.get() + 1));
     // Phis first, then the other operations, as the old MIR kept them apart.
     let mut recipes = IndexMap::<ValueId, InstId>::default();
     let mut owners = IndexMap::<ValueId, i64>::default();
@@ -187,6 +209,7 @@ pub fn propagated(
             if changed || !pending.is_empty() {
                 continue;
             }
+            assert!(open || facts == *seeds, "constant cycles: a body with no open phi came to more than its seeds");
             return facts;
         };
         queued.remove(&value);
