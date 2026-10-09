@@ -92,7 +92,7 @@ mod tests {
         assert!(one.ptr_eq(&two));
         assert!(one.amend(|held| Some(held.0.len()), |held, len| held.0.push(len as i32)));
         assert_eq!(COPIES.with(Cell::get), 1, "changed while shared: copied once");
-        assert_eq!((one.0.clone(), two.0.clone()), (vec![1, 2, 3, 3], vec![1, 2, 3]));
+        assert_eq!((one.0.0.clone(), two.0.0.clone()), (vec![1, 2, 3, 3], vec![1, 2, 3]));
         COPIES.with(|copies| copies.set(0));
         assert!(one.amend(|_| Some(7), |held, n| held.0.push(n)));
         assert_eq!(COPIES.with(Cell::get), 0, "changed while alone: in place");
