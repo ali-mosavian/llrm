@@ -68,6 +68,8 @@ pub struct Options {
     pub for_size: bool,
     /// The allocator tries other shapes of a body and keeps the cheapest (`-fallocation-search`).
     pub search: bool,
+    /// Both routes through the machine phases are made and the cheaper kept (`-fallocation-routes`); else the allocator alone.
+    pub routes: bool,
     /// With `search`, every shape rather than the one the spills suggest (`-fallocation-search-all`; -Omax).
     pub exhaustive: bool,
 }
@@ -96,6 +98,7 @@ impl Default for Options {
             unswitch: false,
             for_size: false,
             search: true,
+            routes: true,
             exhaustive: false,
         }
     }
@@ -104,7 +107,7 @@ impl Default for Options {
 impl Options {
     /// -O0.
     pub fn none() -> Self {
-        Self { optimize: false, search: false, ..Self::default() }
+        Self { optimize: false, search: false, routes: false, ..Self::default() }
     }
 
     /// -O1: gcc's: the scalar passes and `-finline-functions-called-once`; a loop is copied out completely only where the
@@ -120,6 +123,7 @@ impl Options {
             sibcalls: false,
             peel: false,
             unswitch: false,
+            search: false,
             ..Self::default()
         }
     }
@@ -127,7 +131,7 @@ impl Options {
     /// -O2: gcc's: -O1 with inlining, gcse, sibling calls and pattern fill; a complete copy of a loop still must not grow
     /// the code (`flag_cunroll_grow_size` is on at -O3, `-funroll-loops` and `-fpeel-loops` only).
     pub fn standard() -> Self {
-        Self { limits: Limits { grows: false, ..Self::default().limits }, peel: false, unswitch: false, ..Self::default() }
+        Self { limits: Limits { grows: false, ..Self::default().limits }, peel: false, unswitch: false, search: false, ..Self::default() }
     }
 
     /// -O3: gcc's: -O2 with peeling, unswitching, complete copies that grow the code, and the larger inline threshold.
@@ -146,12 +150,17 @@ impl Options {
     /// shrinks the code here. A lower one would also refuse a constant-site
     /// clone that folds away.
     pub fn size() -> Self {
-        Self { limits: Limits { grows: false, target_percent: 100, ..Limits::default() }, inline: inline::Threshold::default().for_size(), for_size: true, ..Self::default() }
+        Self { limits: Limits { grows: false, target_percent: 100, ..Limits::default() }, inline: inline::Threshold::default().for_size(), for_size: true, search: false, ..Self::default() }
     }
 
     /// Whether the allocator tries other shapes of a body and keeps the cheapest.
     pub fn searches(&self) -> bool {
         self.search
+    }
+
+    /// Whether both routes are made and the cheaper kept.
+    pub fn compares_routes(&self) -> bool {
+        self.routes
     }
 
     /// Whether the search tries every shape of a body.

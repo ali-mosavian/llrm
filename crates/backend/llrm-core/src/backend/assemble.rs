@@ -320,8 +320,8 @@ fn cheaper(staged: &Staged, module: &Module, name: &str, pool: &Rc<RefCell<Pool>
         Ok("allocator") => Candidates::AllocatorOnly,
         _ => CANDIDATES.with(std::cell::Cell::get),
     };
-    // Without the search the allocator is run once, as gcc's IRA is at -O0 (`fast_allocation`, no conflicts built): one route.
-    if candidates == Candidates::AllocatorOnly || !target.cpu.search {
+    // Without the routes the allocator is run once, as gcc's IRA is at -O0 (`fast_allocation`, no conflicts built): one route.
+    if candidates == Candidates::AllocatorOnly || !target.cpu.routes {
         return timed("candidate allocator alone", || phased(staged, module, name, pool, target, false, true)).map(|(made, _)| made);
     }
     if !target.cpu.exhaustive && candidates == Candidates::Both {
