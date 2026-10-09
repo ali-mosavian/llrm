@@ -56,7 +56,7 @@ impl Parsed {
         let facts = consts::known(&unit, None, None, None);
         let loop_ = self.outer();
         let count = induction::trip_count(&unit, &loop_, &facts).expect("a proven count");
-        admitted(&unit, &loop_, &count, &facts, limits, Site { entries, ..Site::default() })
+        admitted(&unit, &loop_, &count, &facts, limits, Site { entries, ..Site::default() }, &|_| 1)
     }
 }
 

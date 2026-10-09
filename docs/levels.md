@@ -31,7 +31,7 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `mir indvars` | x | on | on | on | on | on |
 | `mir algebraic` | x | on | on | on | on | on |
 | `mir dead` | x | on | on | on | on | on |
-| `mir unroll`: operations, at most 16 iterations | x | 150, no growth | 150, no growth | 150, may grow | 300, may grow | 150, no growth |
+| `mir unroll`: operations, at most 16 iterations | x | 150, no growth | 150, may grow if it removes 25% of the loop's clocks | 150, may grow | 300, may grow | 150, no growth |
 | `mir peel`: operations | x | x | x | 150, may grow | 300, may grow | x |
 | `mir fill` | x | x | on | on | on | x |
 | `mir merge` | x | x | on | on | on | x |
@@ -125,7 +125,7 @@ Sources read:
 | `sibcalls` / `optimize-sibling-calls` | `-foptimize-sibling-calls` | -O2 ([636](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L636)) | same |
 | (`jumpthread`) | `-fthread-jumps` | -O1 and up (`OPT_LEVELS_1_PLUS`, [584](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L584)); `-ftree-dominator-opts` ([591](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L591)) threads in DOM at -O1 too | every level above -O0. Off at -O1 it costs x_switch x1.87 the clocks, queens x1.10, geomean of the 66 +1.1% clocks, code -2.2% (2026-10-09); gcc has it on there. (This row said -O2 until 2026-10-10: `opts.cc` [584](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L584) is `OPT_LEVELS_1_PLUS`.) |
 | `fill` / `tree-loop-distribute-patterns` | `-ftree-loop-distribute-patterns` | -O2 ([653](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L653)) | same |
-| `unroll` / `unroll-loops` | complete unrolling (`cunroll`) is in the loop passes at every level with loop optimisation; it may *grow* the code only with `-O3`, `-funroll-loops` or `-fpeel-loops` (`opts.cc` [1311-1316](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L1311-L1316), `flag_cunroll_grow_size`) | -O1 and up; may grow at -O3 | -O1 and up, may grow at -O3 ([`limits.grows`](../crates/opt/llrm-analysis/src/peelsize.rs#L83)) |
+| `unroll` / `unroll-loops` | complete unrolling (`cunroll`) is in the loop passes at every level with loop optimisation; it may *grow* the code only with `-O3`, `-funroll-loops` or `-fpeel-loops` (`opts.cc` [1311-1316](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L1311-L1316), `flag_cunroll_grow_size`) | -O1 and up; may grow at -O3 | -O1 and up, may grow at -O3 and, departing from gcc, at -O2 where the copy removes 25% of the loop's clocks (`Limits::saved_percent`; the user's decision of 2026-10-09 after the vsgcc table: crc, matmul, x_fir, x_horner ran 11-66% over clang rolled; the 25% is ours, LLVM's size threshold is the cap; -Os takes no growth) |
 | `peel` / `peel-loops` | `-fpeel-loops` | -O3 ([679](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L679)) | -O3 |
 | `unswitch` / `unswitch-loops` | `-funswitch-loops` | -O3 ([685](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L685)) | -O3 |
 | `inline.cp_clone` / `ipa-cp-clone` | `-fipa-cp-clone` | -O3 ([676](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L676)) | -O3: `ipacp` copies a function for the constants a hot call passes |

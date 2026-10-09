@@ -144,12 +144,12 @@ impl Options {
     }
 
     /// -O2: gcc's: -O1 with inlining, gcse, sibling calls and pattern fill; a
-    /// complete copy of a loop still must not grow the code
-    /// (`flag_cunroll_grow_size` is on at -O3, `-funroll-loops` and
-    /// `-fpeel-loops` only).
+    /// complete copy of a loop may grow the code where it removes a quarter of
+    /// the loop's clocks, which departs from gcc (`flag_cunroll_grow_size` is
+    /// on at -O3 only): LLVM's size threshold caps it, the quarter is ours.
     pub fn standard() -> Self {
         Self {
-            limits: Limits { grows: false, ..Self::default().limits },
+            limits: Limits { saved_percent: 25, ..Self::default().limits },
             peel: false,
             unswitch: false,
             ..Self::default()

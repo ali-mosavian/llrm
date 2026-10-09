@@ -94,6 +94,7 @@ fn _candidate(
     let facts = analyses.fresh().get::<Registers>(context, layout, &closed);
     let shape = cfg::Shape::of(&closed);
     let frequencies = profit::Frequencies::default();
+    let costs = profit::costs(analyses.outer());
     for loop_ in shape.loops.clone() {
         let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else {
             continue;
@@ -116,6 +117,9 @@ fn _candidate(
                 &facts,
                 limits,
                 profit::site(&unit, analyses.outer(), &loop_, &frequencies),
+                &|inst| {
+                    profit::operation(context, layout, &closed, analyses.outer().callees(), inst, &costs).unwrap_or(1)
+                },
             )
         {
             continue;

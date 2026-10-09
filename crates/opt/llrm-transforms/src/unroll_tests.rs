@@ -205,3 +205,72 @@ fn a_loop_the_language_permits_is_copied_past_the_budget_and_the_cap() {
     assert!(!through(&summing("40", ""), Unroll::default()).0);
     assert!(through(&hinted("40", "!\"llvm.loop.unroll.count\", i32 40"), Unroll::default()).0);
 }
+
+/// Eight trips of `work` on the counter and the accumulator.
+fn eight_trips(work: &str) -> String {
+    format!(
+        "define i16 @f(i16 %x, i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %acc = phi i16 [ %x, %b0 ], [ %v, %b2 ]
+  %go = icmp slt i16 %i, 8
+  br i1 %go, label %b2, label %b3
+
+b2:
+{work}  %s = add i16 %acc, %m
+  %u = xor i16 %s, %n
+  %v = sub i16 %u, %n
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 %acc
+}}
+"
+    )
+}
+
+/// `through` on a machine that prices a multiply and a divide as a 486 does;
+/// the default target prices everything at one.
+fn through_priced(
+    text: &str,
+    pass: Unroll,
+) -> (bool, Module) {
+    let mut module = parsed(text);
+    let before = (printed(&module), results(&module, INPUTS));
+    let costs = crate::profit::OperationCosts { multiply: 13, divide: 40, branch: 3, ..Default::default() };
+    let after = crate::testing::managed_on(&mut module, pass, crate::testing::Tuned { costs, ..Default::default() });
+    assert_eq!(results(&module, INPUTS), before.1, "{after}");
+    (after != before.0, module)
+}
+
+fn at_o2() -> Unroll {
+    Unroll { limits: crate::pipeline::Options::standard().limits }
+}
+
+/// -O2 kept an 8-trip loop whose copies fold to one add a trip rolled, "size
+/// would grow": clang unrolls it. Crc, x_fir, x_matmul, x_horner and matmul in
+/// vsgcc ran 11 to 66% more clocks than clang for it.
+#[test]
+fn at_o2_a_loop_whose_copies_fold_is_unrolled() {
+    let (changed, mut module) = through_priced(&eight_trips("  %t = mul i16 %i, 3\n  %m = and i16 %t, 5\n"), at_o2());
+    assert!(changed);
+    assert_eq!(loops_of(&mut module), 0);
+}
+
+/// A copy that keeps the loop's divide saves its counter and branch only: the
+/// bytes are not worth it, so -O2 leaves it, as nbody's loops are left.
+#[test]
+fn at_o2_a_loop_that_keeps_its_work_stays_rolled() {
+    assert!(!through_priced(&eight_trips("  %m = udiv i16 %acc, 3\n"), at_o2()).0);
+}
+
+/// -Os takes no growth, however much folds.
+#[test]
+fn at_os_a_loop_that_grows_stays_rolled() {
+    let os = Unroll { limits: crate::pipeline::Options::size().limits };
+    assert!(!through_priced(&eight_trips("  %t = mul i16 %i, 3\n  %m = and i16 %t, 5\n"), os).0);
+}

@@ -81,6 +81,11 @@ pub struct Limits {
     /// 0: `max_unrolled_operations` as it stands.
     pub target_percent: i64,
     pub grows: bool,
+    /// With `grows`, the share of the loop's clocks, in percent, a growing copy
+    /// must remove: a copy that keeps the loop's work (a float body, a divide)
+    /// saves its overhead only, and not worth the bytes. Ours: neither GCC nor
+    /// LLVM has it, LLVM's size threshold is the cap. 0: none.
+    pub saved_percent: i64,
     /// Clocks an inline that grows the code must save for each byte it adds:
     /// `--clocks-per-byte`.
     pub milliclocks_per_byte: i64,
@@ -107,6 +112,7 @@ impl Default for Limits {
             max_unrolled_operations: 200,
             target_percent: 0,
             grows: true,
+            saved_percent: 0,
             milliclocks_per_byte: 16_000,
         }
     }
@@ -137,6 +143,7 @@ pub fn admitted(
     facts: &IndexMap<ValueId, Known>,
     limits: &Limits,
     site: Site,
+    price: &dyn Fn(InstId) -> i64,
 ) -> bool {
     // What the language says of copying this loop: never, or as many as it
     // permits, which at least the trip count is asked, and is then copied
@@ -187,7 +194,7 @@ pub fn admitted(
     };
     let budget = if limits.max_unrolled_operations == 0 { i64::MAX } else { limits.max_unrolled_operations };
     let limit = if asked { HINTED_OPERATIONS } else { budget.saturating_mul(MAX_PERCENT_THRESHOLD_BOOST) / 100 };
-    let Some(unrolled) = unrolled(unit, &blocks, &order, loop_, count, facts, limit.max(size)) else {
+    let Some(unrolled) = unrolled(unit, &blocks, &order, loop_, count, facts, limit.max(size), price) else {
         llrm_support::debug!(
             "unroll",
             "loop b{} x{count}: {size} ops, refused: over {} ops unrolled",
@@ -205,6 +212,8 @@ pub fn admitted(
         None
     } else if !limits.grows {
         Some("size would grow")
+    } else if limits.saved_percent * unrolled.rolled_clocks > 100 * (unrolled.rolled_clocks - unrolled.kept_clocks) {
+        Some("saves too little of the loop's clocks")
     } else if site.entries * 100 < COLD_PERCENT * ENTRY {
         Some("cold")
     } else if site.writes {
@@ -218,11 +227,13 @@ pub fn admitted(
     };
     llrm_support::debug!(
         "unroll",
-        "loop b{} x{count}: {size} ops -> {} unrolled ({} rolled, boost {boost}%, {} branches), scaled {estimate}, budget {budget}, {}",
+        "loop b{} x{count}: {size} ops -> {} unrolled ({} rolled, boost {boost}%, {} branches), scaled {estimate}, budget {budget}, {}% of {} clocks saved, {}",
         loop_.header,
         unrolled.size,
         unrolled.rolled,
         unrolled.branches,
+        100 * (unrolled.rolled_clocks - unrolled.kept_clocks) / unrolled.rolled_clocks.max(1),
+        unrolled.rolled_clocks,
         refusal.map_or("admitted".to_owned(), |why| format!("refused: {why}"))
     );
     refusal.is_none()
@@ -246,6 +257,9 @@ struct Unrolled {
     /// Instructions the rolled loop executes over every iteration: LLVM's
     /// `RolledDynamicCost`.
     rolled: i64,
+    /// `rolled` and `size` in the target's clocks.
+    rolled_clocks: i64,
+    kept_clocks: i64,
 }
 
 /// The value a phi takes from the block `from`.
@@ -268,11 +282,12 @@ fn unrolled(
     count: i64,
     facts: &IndexMap<ValueId, Known>,
     limit: i64,
+    price: &dyn Fn(InstId) -> i64,
 ) -> Option<Unrolled> {
     let latch = *loop_.latches.first()?;
     let function = unit.function;
     let calls = Calls::default();
-    let mut out = Unrolled { size: 0, branches: 0, rolled: 0 };
+    let mut out = Unrolled { size: 0, branches: 0, rolled: 0, rolled_clocks: 0, kept_clocks: 0 };
     let mut cells = Cells::default();
     let mut previous = facts.clone();
     for iteration in 0..count {
@@ -314,6 +329,7 @@ fn unrolled(
                     continue;
                 }
                 out.rolled += _size(unit, inst);
+                out.rolled_clocks += price(inst);
                 // A branch is counted below, where it is decided or not.
                 if matches!(op.opcode, Opcode::Br | Opcode::Switch) {
                     continue;
@@ -328,6 +344,7 @@ fn unrolled(
                             values.shift_remove(&value);
                         }
                         out.size += _size(unit, inst);
+                        out.kept_clocks += price(inst);
                     }
                 }
                 if matches!(
@@ -358,6 +375,7 @@ fn unrolled(
             let successors = decided.unwrap_or_else(|| {
                 out.branches += 1;
                 out.size += 1;
+                out.kept_clocks += function.terminator(block).map_or(0, price);
                 blocks[&at].succ.clone()
             });
             for successor in successors {

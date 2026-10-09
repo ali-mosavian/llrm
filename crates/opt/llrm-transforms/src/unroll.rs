@@ -118,6 +118,7 @@ pub fn expanded(
     let mut found = None;
     let found_shape = cfg::Shape::of(function);
     let frequencies = profit::Frequencies::default();
+    let costs = profit::costs(analyses.outer());
     for loop_ in found_shape.loops.clone() {
         let unit = memory::Unit::within(context, layout, function, analyses.outer())
             .with_registers(&facts)
@@ -136,6 +137,9 @@ pub fn expanded(
                 &facts,
                 limits,
                 profit::site(&unit, analyses.outer(), &loop_, &frequencies),
+                &|inst| {
+                    profit::operation(context, layout, function, analyses.outer().callees(), inst, &costs).unwrap_or(1)
+                },
             )
         {
             continue;
