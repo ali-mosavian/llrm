@@ -4381,11 +4381,11 @@ fn test_a_body_is_encoded_in_its_own_mode() {
 /// its own needs no copy of them.
 #[test]
 fn test_what_a_conditional_jump_reads_is_the_conditions_for_every_condition() {
-    let rows: Vec<_> = instructions::FORMS.iter().filter(|form| form.operation == "branch").collect();
+    let rows: Vec<_> = llrm_x86_m16::instructions::FORMS.iter().filter(|form| form.operation == "branch").collect();
     assert_eq!(rows.len(), 16);
     for form in rows {
         let branch = Semantics { name: Some(form.name.clone()), ..Semantics::new(Operation::Branch) };
-        let wanted = _flag_lanes(instructions::flags(form).expect("a jump reads flags").0);
+        let wanted = _flag_lanes(llrm_x86_m16::instructions::flags(form).expect("a jump reads flags").0);
         assert_eq!(_branch_reads(&branch), wanted, "{}", form.name);
     }
 }

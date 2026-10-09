@@ -308,7 +308,11 @@ pub fn optimized(
     program.modules.iter_mut().for_each(lifted);
     timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
     timed("mir assumptions", || program.modules.iter_mut().for_each(llrm_transforms::dead::assumptions_dropped));
-    timed("mir ehprepare", || program.modules.iter_mut().try_for_each(crate::backend::ehprepare::prepared))?;
+    timed("mir ehprepare", || {
+        program.modules.iter_mut().try_for_each(|module| {
+            crate::backend::ehprepare::prepared(module, llrm_target::Target::layout(&*options.arch).spaces.far)
+        })
+    })?;
     if options.arch.expands("fptoui.i64") {
         timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;
     }
