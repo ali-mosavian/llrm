@@ -1,9 +1,9 @@
 # What `-fsanitize=stack` compares and calls: start.asm stores the lowest SP the program may
-# reach in _llrm_os_stack_low, a DGROUP word, and N$ESTK (errors.nib) panics. The stack is one segment in
+# reach in LL$STACK_LOW, a DGROUP word, and N$ESTK (errors.nib) panics. The stack is one segment in
 # DGROUP, SS and DS alike, so the word is an SS offset.
 #
 # `red_zone` is the bytes below the limit left for the panic's own frames, an interrupt and an
 # unchecked leaf's: start.asm's STACK_RESERVE leaves 512, and the panic reaches DOS in about 60.
-limit = "_llrm_os_stack_low"
+limit = "LL$STACK_LOW"
 handler = "N$ESTK"
 red_zone = 128

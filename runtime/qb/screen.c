@@ -6,6 +6,14 @@ enum { COLOR_ARGUMENTS = 3, LOCATE_ARGUMENTS = 5 };
 
 enum { ABSENT = -1 };
 
+/* The screen statements need the text screen's driver: referring to its
+   initializer links it. */
+extern void cn_text_xinit(void);
+void (*const screen_needs_text)(void) = cn_text_xinit;
+
+/* Set by gfx.c's initializer when the program has the graphics screen. */
+void (*screen_set_mode)(int mode);
+
 /* A statement's arguments from the block BASIC pushed: the count of words, then
    for each argument (the last at the lowest address) a flag and, only if the
    flag is not zero, the value.  `values` get ABSENT where an argument is left
@@ -54,8 +62,11 @@ void screen_mode(const int *block)
     int value[4];
 
     arguments(block, value, 4);
-    if (value[0] > 0)
+    if (value[0] == ABSENT || (value[0] == 0 && !screen_set_mode))
+        return;
+    if (!screen_set_mode)
         qb_error(BE_ILLFUN);
+    screen_set_mode(value[0]);
 }
 
 /* B$SCLS: CLS, with -1 for no argument. */

@@ -24,7 +24,7 @@
                 dosseg
 
 qb_start        proto   far c
-                extrn   c llrm_os_psp:word
+                extrn   LL$PSP:word
 
                 public  c qb_atopsp
                 public  c qb_asizds
@@ -89,7 +89,7 @@ start           proc
                 add     sp, dx
                 sti
 
-                mov     llrm_os_psp, bx
+                mov     LL$PSP, bx
 
                 ;; PSP:2 is the first paragraph past the program's memory
                 mov     es, bx

@@ -1,5 +1,5 @@
 # The OS layer's interface: what every target's operating system gives every language's runtime.
-# One symbol per operation, `<symbol_prefix><name>`, in the stack convention a target's `os.toml` names (cdecl16, cdecl32), whatever a language's default is; a target's
+# One symbol per operation, `<symbol_prefix><NAME>` (the name in capitals, as the BASIC runtime's `B$` ones are), in the stack convention a target's `os.toml` names (cdecl16, cdecl32), whatever a language's default is; a target's
 # `os.toml` says which groups it implements, its pointer kind and its convention, and the
 # languages' bindings (os.nib, a C header) are rendered from this file, never written by hand.
 #
@@ -10,7 +10,7 @@
 # flat otherwise); `heap` is a pointer into the program's near data; `handle` is an integer as wide
 # as the operating system's facts say (`handle_bits`); `bool` is 0 or 1; the rest are integers.
 
-symbol_prefix = "_llrm_os_"
+symbol_prefix = "LL$"
 
 # The handles every program starts with, whose numbers are the operating system's facts.
 handles = ["stdin", "stdout", "stderr"]
@@ -92,87 +92,6 @@ name = "console_key_ready"
 doc = "Whether `console_read_key` would not wait. What it says at the end of redirected input is the operating system's: DOSBox says ready."
 args = []
 returns = "bool"
-
-# The speaker.
-[[op]]
-group = "sound"
-name = "speaker_tone"
-doc = "Sounds a tone of `hertz` until the next call; 0 is silence."
-args = [["hertz", "usize"]]
-returns = "void"
-
-# The time of day.
-[[op]]
-group = "clock"
-name = "clock_hundredths"
-doc = "The time of day in hundredths of a second since midnight."
-args = []
-returns = "i32"
-
-# A text screen of character cells, rows and columns counted from 0, each cell a character and an
-# attribute (its colours). A target has it where the program may write the screen itself.
-[[op]]
-group = "screen"
-name = "screen_is_console"
-doc = "Whether standard output is the screen and not a file or a pipe."
-args = []
-returns = "bool"
-
-[[op]]
-group = "screen"
-name = "screen_size"
-doc = "The screen's rows in the high byte and columns in the low."
-args = []
-returns = "usize"
-
-[[op]]
-group = "screen"
-name = "screen_cursor"
-doc = "Where the hardware cursor is: the row in the high byte and the column in the low."
-args = []
-returns = "usize"
-
-[[op]]
-group = "screen"
-name = "screen_cursor_show"
-doc = "Shows the hardware cursor as it was when the program began, or hides it."
-args = [["visible", "u8"]]
-returns = "void"
-
-[[op]]
-group = "screen"
-name = "screen_move"
-doc = "Puts the hardware cursor at `row`, `column`."
-args = [["row", "u8"], ["column", "u8"]]
-returns = "void"
-
-[[op]]
-group = "screen"
-name = "screen_put"
-doc = "Writes `character` with `attribute` into a cell, leaving the cursor."
-args = [["row", "u8"], ["column", "u8"], ["character", "u8"], ["attribute", "u8"]]
-returns = "void"
-
-[[op]]
-group = "screen"
-name = "screen_write"
-doc = "Writes `count` characters of `text`, all with `attribute`, into the cells from `row`, `column` along the row, leaving the cursor."
-args = [["row", "u8"], ["column", "u8"], ["text", "bytes"], ["count", "usize"], ["attribute", "u8"]]
-returns = "void"
-
-[[op]]
-group = "screen"
-name = "screen_get"
-doc = "A cell: its attribute in the high byte and its character in the low."
-args = [["row", "u8"], ["column", "u8"]]
-returns = "usize"
-
-[[op]]
-group = "screen"
-name = "screen_scroll"
-doc = "Scrolls the rows `top` to `bottom` up by `lines`, the rows freed filled with blanks of `attribute`; 0 lines clears them."
-args = [["top", "u8"], ["bottom", "u8"], ["lines", "u8"], ["attribute", "u8"]]
-returns = "void"
 
 # Interrupt vectors: a target that has them (real mode).
 [[op]]

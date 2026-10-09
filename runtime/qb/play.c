@@ -5,7 +5,7 @@
    and the style (M).  Music in the background (MB) is accepted and not played;
    music in the foreground is played through the speaker, and the program waits
    for it. */
-#include "llrm_os.h"
+#include "device.h"
 #include "nhstutil.h"
 
 enum {
@@ -67,9 +67,9 @@ static long number(Player *p)
 /* Waits `hundredths` of a second. */
 static void wait(long hundredths)
 {
-    long start = llrm_os_clock_hundredths();
+    long start = dev_clock();
 
-    while ((llrm_os_clock_hundredths() - start + DAY) % DAY < hundredths)
+    while ((dev_clock() - start + DAY) % DAY < hundredths)
         ;
 }
 
@@ -103,9 +103,9 @@ static void play_note(Player *p, int note, long time)
 
     if (!p->foreground)
         return;
-    llrm_os_speaker_tone(note ? frequency(note) : 0);
+    dev_tone(note ? frequency(note) : 0);
     wait(note ? sounding : time);
-    llrm_os_speaker_tone(0);
+    dev_tone(0);
     if (note)
         wait(time - sounding);
 }

@@ -1,751 +1,428 @@
+;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$BLOCK_RESIZE, LL$VECTOR, LL$SET_VECTOR, LL$CHAIN, LL$RESTORE_VECTORS, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY
+;; desc: the OS layer shared by C, Nib and BASIC programs: x86-m16, real-mode DOS
+;;
+;; args: the interface of runtime/shared/interface.toml, in cdecl16: arguments in word slots from [bp+6],
+;;       a far pointer being two of them
+;; retn: ax (dx:ax for a long) -> the result, or the DOS error code negated
+;;
+;; chng: oct/26 restyled, symbols renamed to LL$ [ali]
+;; obs.: Each routine is named LL$<OP> for the operation of the interface (the QB runtime's own
+;;       entries are B$, and its devices are not here). The file holds one object per group: a
+;;       library is built with -DOS_GROUPS=<bit>, so a program links what it calls; assembled with
+;;       no definition it holds every group.
+
 .model medium
 .386
 
-; Which groups of the interface this object holds. A library has one object per group, each
-; assembled with -DOS_GROUPS=<its bit>, so a program links only what it calls; assembled with no
-; definition the file holds every group.
-G_CORE equ 1
-G_CONSOLE equ 2
-G_SOUND equ 4
-G_CLOCK equ 8
-G_SCREEN equ 16
+;; Which groups of the interface this object holds. A library has one object per group, each
+;; assembled with -DOS_GROUPS=<its bit>, so a program links only what it calls; assembled with no
+;; definition the file holds every group.
+G_CORE          equ     1
+G_CONSOLE       equ     2
 ifndef OS_GROUPS
-OS_GROUPS equ 31
+OS_GROUPS       equ     3
 endif
 
 if OS_GROUPS and G_CORE
-public _llrm_os_open
-public _llrm_os_create
-public _llrm_os_read
-public _llrm_os_seek
-public _llrm_os_block_resize
-public _llrm_os_write_file
-public _llrm_os_close
-public _llrm_os_exit
+public LL$OPEN
+public LL$CREATE
+public LL$READ
+public LL$SEEK
+public LL$BLOCK_RESIZE
+public LL$WRITE_FILE
+public LL$CLOSE
+public LL$EXIT
 endif
 if OS_GROUPS and G_CONSOLE
-public _llrm_os_console_read_key
-public _llrm_os_console_key_ready
-endif
-if OS_GROUPS and G_CLOCK
-public _llrm_os_clock_hundredths
-endif
-if OS_GROUPS and G_SOUND
-public _llrm_os_speaker_tone
-endif
-if OS_GROUPS and G_SCREEN
-public _llrm_os_screen_is_console
-public _llrm_os_screen_size
-public _llrm_os_screen_cursor
-public _llrm_os_screen_cursor_show
-public _llrm_os_screen_move
-public _llrm_os_screen_put
-public _llrm_os_screen_write
-public _llrm_os_screen_get
-public _llrm_os_screen_scroll
+public LL$CONSOLE_READ_KEY
+public LL$CONSOLE_KEY_READY
 endif
 if OS_GROUPS and G_CORE
-public _llrm_os_more
-public _llrm_os_vector
-public _llrm_os_set_vector
-public _llrm_os_chain
-public _llrm_os_restore_vectors
-public _llrm_os_top
-public _llrm_os_stack_low
-public _llrm_os_psp
+public LL$MORE
+public LL$VECTOR
+public LL$SET_VECTOR
+public LL$CHAIN
+public LL$RESTORE_VECTORS
+public LL$TOP
+public LL$STACK_LOW
+public LL$PSP
 public BSS_LAST
 public FBSS_LAST
 endif
 
-; What DOS's device information (IOCTL 44h) says of a handle: bit 7 is a character device.
-DEVICE_BIT equ 80h
-CTRL_Z equ 1Ah
+;; What DOS's device information (IOCTL 44h) says of a handle: bit 7 is a character device.
+DEVICE_BIT      equ     80h
+CTRL_Z          equ     1Ah
 
 if OS_GROUPS and G_CORE
-; Where the uninitialised data ends, near and far, which start.asm zeroes: this object is linked last.
-_BSS segment word public 'BSS'
-BSS_LAST label byte
-_BSS ends
-FBSS_END segment para public 'FAR_BSS'
-FBSS_LAST label byte
-    db 16 dup (?)
-FBSS_END ends
+;; Where the uninitialised data ends, near and far, which start.asm zeroes: this object is linked last.
+_BSS            segment word public 'BSS'
+BSS_LAST        label   byte
+_BSS            ends
+FBSS_END        segment para public 'FAR_BSS'
+FBSS_LAST       label   byte
+                db      16 dup (?)
+FBSS_END        ends
 
 .data
-; The near heap's end, a DGROUP offset, and the program's PSP, whose
-; memory block the heap grows. Startup sets both.
-_llrm_os_top dw 0
-_llrm_os_psp dw 0
-; The lowest SP a checked function may reach (-fsanitize=stack): the stack's bottom plus the
-; reserve the panic, DOS and an interrupt use below it. Startup sets it.
-_llrm_os_stack_low dw 0
+;; The near heap's end, a DGROUP offset, and the program's PSP, whose
+;; memory block the heap grows. Startup sets both.
+LL$TOP          dw      0
+LL$PSP          dw      0
+;; The lowest SP a checked function may reach (-fsanitize=stack): the stack's bottom plus the
+;; reserve the panic, DOS and an interrupt use below it. Startup sets it.
+LL$STACK_LOW    dw      0
 
-; Each vector the program replaced, and what it entered before, which
-; _llrm_os_restore_vectors puts back. A vector replaced past the last entry is not.
-SAVED equ 16
-saved_count dw 0
-saved_number db SAVED dup (0)
-saved_old dd SAVED dup (0)
+;; Each vector the program replaced, and what it entered before, which
+;; LL$RESTORE_VECTORS puts back. A vector replaced past the last entry is not.
+SAVED           equ     16
+saved_count     dw      0
+saved_number    db      SAVED dup (0)
+saved_old       dd      SAVED dup (0)
 endif
 
 
 .code
 if OS_GROUPS and G_CORE
-; _llrm_os_more(bytes: u16) -> *near mut u8: `bytes` more of DGROUP at the heap's end, or
-; 0 when DGROUP's 64 KB or DOS's memory runs out.
-_llrm_os_more proc far
-    push bp
-    mov bp, sp
-    push bx
-    push es
-    mov bx, _llrm_os_top
-    add bx, [bp+6]
-    jc short refused
-    cmp bx, 0fff0h
-    ja short refused
-    mov ax, bx
-    add ax, 15
-    shr ax, 4
-    mov bx, DGROUP
-    sub bx, _llrm_os_psp
-    add bx, ax
-    mov es, _llrm_os_psp
-    mov ah, DOS_RESIZE
-    int DOS_INT
-    jc short refused
-    mov ax, _llrm_os_top
-    mov bx, [bp+6]
-    add _llrm_os_top, bx
-    jmp short grown
+;;::::::::::::::
+;; LL$MORE(bytes: u16) -> *near mut u8: `bytes` more of DGROUP at the heap's end, or
+;; 0 when DGROUP's 64 KB or DOS's memory runs out.
+LL$MORE         proc    far
+                push    bp
+                mov     bp, sp
+                push    bx
+                push    es
+                mov     bx, LL$TOP
+                add     bx, [bp+6]
+                jc      short refused
+                cmp     bx, 0fff0h
+                ja      short refused
+                mov     ax, bx
+                add     ax, 15
+                shr     ax, 4
+                mov     bx, DGROUP
+                sub     bx, LL$PSP
+                add     bx, ax
+                mov     es, LL$PSP
+                mov     ah, DOS_RESIZE
+                int     DOS_INT
+                jc      short refused
+                mov     ax, LL$TOP
+                mov     bx, [bp+6]
+                add     LL$TOP, bx
+                jmp     short grown
 refused:
-    xor ax, ax
+                xor     ax, ax
 grown:
-    pop es
-    pop bx
-    pop bp
-    retf
-_llrm_os_more endp
+                pop     es
+                pop     bx
+                pop     bp
+                retf
+LL$MORE         endp
 
-; The DOS file calls. Each returns what DOS does, or when DOS sets carry,
-; its error code negated.
+;; The DOS file calls. Each returns what DOS does, or when DOS sets carry,
+;; its error code negated.
 
-; _llrm_os_open(name: *far char, mode: u8) -> i16: a handle to an existing file.
-_llrm_os_open proc far
-    push bp
-    mov bp, sp
-    push ds
-    lds dx, [bp+6]
-    mov al, [bp+10]
-    mov ah, DOS_OPEN
-    jmp short called
-_llrm_os_open endp
+;;::::::::::::::
+;; LL$OPEN(name: *far char, mode: u8) -> i16: a handle to an existing file.
+LL$OPEN         proc    far
+                push    bp
+                mov     bp, sp
+                push    ds
+                lds     dx, [bp+6]
+                mov     al, [bp+10]
+                mov     ah, DOS_OPEN
+                jmp     short called
+LL$OPEN         endp
 
-; _llrm_os_create(name: *far char) -> i16: a handle to a new, empty file.
-_llrm_os_create proc far
-    push bp
-    mov bp, sp
-    push ds
-    lds dx, [bp+6]
-    xor cx, cx
-    mov ah, DOS_CREATE
-    jmp short called
-_llrm_os_create endp
+;;::::::::::::::
+;; LL$CREATE(name: *far char) -> i16: a handle to a new, empty file.
+LL$CREATE       proc    far
+                push    bp
+                mov     bp, sp
+                push    ds
+                lds     dx, [bp+6]
+                xor     cx, cx
+                mov     ah, DOS_CREATE
+                jmp     short called
+LL$CREATE       endp
 
-; _llrm_os_read(handle: i16, data: *far mut u8, count: u16) -> i32: bytes read, or the error code negated: a count
-; to 65535 and a sign take 17 bits, so the result is DX:AX.
-_llrm_os_read proc far
-    mov ah, DOS_READ
-    jmp short transfer
-_llrm_os_read endp
+;;::::::::::::::
+;; LL$READ(handle: i16, data: *far mut u8, count: u16) -> i32: bytes read, or the error code negated: a count
+;; to 65535 and a sign take 17 bits, so the result is DX:AX.
+LL$READ         proc    far
+                mov     ah, DOS_READ
+                jmp     short transfer
+LL$READ         endp
 
-; _llrm_os_seek(handle: i16, position: i32, origin: u8) -> i32: the absolute position, or the error code negated.
-_llrm_os_seek proc far
-    push bp
-    mov bp, sp
-    push bx
-    mov bx, [bp+6]
-    mov dx, [bp+8]
-    mov cx, [bp+10]
-    mov al, [bp+12]
-    mov ah, DOS_SEEK
-    int DOS_INT
-    pop bx
-    jc short seek_failed
-    pop bp
-    retf
+;;::::::::::::::
+;; LL$SEEK(handle: i16, position: i32, origin: u8) -> i32: the absolute position, or the error code negated.
+LL$SEEK         proc    far
+                push    bp
+                mov     bp, sp
+                push    bx
+                mov     bx, [bp+6]
+                mov     dx, [bp+8]
+                mov     cx, [bp+10]
+                mov     al, [bp+12]
+                mov     ah, DOS_SEEK
+                int     DOS_INT
+                pop     bx
+                jc      short seek_failed
+                pop     bp
+                retf
 seek_failed:
-    neg ax
-    cwd
-    pop bp
-    retf
-_llrm_os_seek endp
+                neg     ax
+                cwd
+                pop     bp
+                retf
+LL$SEEK         endp
 
-; _llrm_os_block_resize(segment: u16, paragraphs: u16) -> u16: the paragraphs the block has once DOS 4Ah has
-; resized it to `paragraphs`, or to the most there is when that is more.
-_llrm_os_block_resize proc far
-    push bp
-    mov bp, sp
-    push bx
-    push es
-    mov es, [bp+6]
-    mov bx, [bp+8]
-    mov ah, DOS_RESIZE
-    int DOS_INT
-    jnc short resized
-    mov ah, DOS_RESIZE             ; BX is the most there is: take it
-    int DOS_INT
+;;::::::::::::::
+;; LL$BLOCK_RESIZE(segment: u16, paragraphs: u16) -> u16: the paragraphs the block has once DOS 4Ah has
+;; resized it to `paragraphs`, or to the most there is when that is more.
+LL$BLOCK_RESIZE proc    far
+                push    bp
+                mov     bp, sp
+                push    bx
+                push    es
+                mov     es, [bp+6]
+                mov     bx, [bp+8]
+                mov     ah, DOS_RESIZE
+                int     DOS_INT
+                jnc     short resized
+                mov     ah, DOS_RESIZE          ;; BX is the most there is: take it
+                int     DOS_INT
 resized:
-    mov ax, bx
-    pop es
-    pop bx
-    pop bp
-    retf
-_llrm_os_block_resize endp
+                mov     ax, bx
+                pop     es
+                pop     bx
+                pop     bp
+                retf
+LL$BLOCK_RESIZE endp
 
-; _llrm_os_write_file(handle: i16, data: *far u8, count: u16) -> i32: bytes written, as _llrm_os_read.
-_llrm_os_write_file proc far
-    mov ah, DOS_WRITE
+;;::::::::::::::
+;; LL$WRITE_FILE(handle: i16, data: *far u8, count: u16) -> i32: bytes written, as LL$READ.
+LL$WRITE_FILE   proc    far
+                mov     ah, DOS_WRITE
 transfer::
-    push bp
-    mov bp, sp
-    push ds
-    push bx
-    mov bx, [bp+6]
-    lds dx, [bp+8]
-    mov cx, [bp+12]
-    int DOS_INT
-    pop bx
-    jc short failed
-    xor dx, dx
-    jmp short transferred
+                push    bp
+                mov     bp, sp
+                push    ds
+                push    bx
+                mov     bx, [bp+6]
+                lds     dx, [bp+8]
+                mov     cx, [bp+12]
+                int     DOS_INT
+                pop     bx
+                jc      short failed
+                xor     dx, dx
+                jmp     short transferred
 failed:
-    neg ax
-    cwd
+                neg     ax
+                cwd
 transferred:
-    pop ds
-    pop bp
-    retf
-_llrm_os_write_file endp
+                pop     ds
+                pop     bp
+                retf
+LL$WRITE_FILE   endp
 
-; _llrm_os_close(handle: handle) -> isize
-_llrm_os_close proc far
-    push bp
-    mov bp, sp
-    push ds
-    push bx
-    mov bx, [bp+6]
-    mov ah, DOS_CLOSE
-    int DOS_INT
-    pop bx
-    jc short checked
-    xor ax, ax                     ; DOS leaves AX undefined on success
-    jmp short checked
+;;::::::::::::::
+;; LL$CLOSE(handle: handle) -> isize
+LL$CLOSE        proc    far
+                push    bp
+                mov     bp, sp
+                push    ds
+                push    bx
+                mov     bx, [bp+6]
+                mov     ah, DOS_CLOSE
+                int     DOS_INT
+                pop     bx
+                jc      short checked
+                xor     ax, ax                  ;; DOS leaves AX undefined on success
+                jmp     short checked
 called::
-    int DOS_INT
+                int     DOS_INT
 checked::
-    jnc short done
-    neg ax
+                jnc     short done
+                neg     ax
 done:
-    pop ds
-    pop bp
-    retf
-_llrm_os_close endp
+                pop     ds
+                pop     bp
+                retf
+LL$CLOSE        endp
 
 endif
 
 if OS_GROUPS and G_CONSOLE
-; The console's keyboard: standard input, so what DOS redirects it follows.
+;; The console's keyboard: standard input, so what DOS redirects it follows.
 
-; _llrm_os_console_read_key() -> u8: the keyboard's character, no echo (08h). From redirected
-; input it is the next byte read from the handle, or Ctrl-Z once there are none.
-_llrm_os_console_read_key proc far
-    push bx
-    push cx
-    push dx
-    mov ax, DOS_IOCTL * 256
-    mov bx, DOS_STDIN
-    int DOS_INT
-    jc short from_handle
-    test dl, DEVICE_BIT
-    jnz short from_device
+;;::::::::::::::
+;; LL$CONSOLE_READ_KEY() -> u8: the keyboard's character, no echo (08h). From redirected
+;; input it is the next byte read from the handle, or Ctrl-Z once there are none.
+LL$CONSOLE_READ_KEY proc    far
+                push    bx
+                push    cx
+                push    dx
+                mov     ax, DOS_IOCTL * 256
+                mov     bx, DOS_STDIN
+                int     DOS_INT
+                jc      short from_handle
+                test    dl, DEVICE_BIT
+                jnz     short from_device
 from_handle:
-    push ax                        ; the byte lands here
-    mov ah, DOS_READ
-    mov bx, DOS_STDIN
-    mov cx, 1
-    mov dx, sp
-    int DOS_INT
-    pop dx
-    jc short end_of_input
-    cmp ax, 1
-    jne short end_of_input
-    mov al, dl
-    jmp short key_done
+                push    ax                      ;; the byte lands here
+                mov     ah, DOS_READ
+                mov     bx, DOS_STDIN
+                mov     cx, 1
+                mov     dx, sp
+                int     DOS_INT
+                pop     dx
+                jc      short end_of_input
+                cmp     ax, 1
+                jne     short end_of_input
+                mov     al, dl
+                jmp     short key_done
 end_of_input:
-    mov al, CTRL_Z
-    jmp short key_done
+                mov     al, CTRL_Z
+                jmp     short key_done
 from_device:
-    mov ah, DOS_READ_KEY
-    int DOS_INT
+                mov     ah, DOS_READ_KEY
+                int     DOS_INT
 key_done:
-    xor ah, ah
-    pop dx
-    pop cx
-    pop bx
-    retf
-_llrm_os_console_read_key endp
+                xor     ah, ah
+                pop     dx
+                pop     cx
+                pop     bx
+                retf
+LL$CONSOLE_READ_KEY endp
 
-; _llrm_os_console_key_ready() -> bool: DOS's input status (0Bh), 0FFh or 0, as 1 or 0.
-_llrm_os_console_key_ready proc far
-    mov ah, DOS_KEY_READY
-    int DOS_INT
-    and ax, 1
-    retf
-_llrm_os_console_key_ready endp
-endif
-
-if OS_GROUPS and G_SOUND
-; The speaker: timer channel 2 square wave, gated by port 61h.
-
-TIMER_COMMAND equ 43h
-TIMER_CHANNEL_2 equ 42h
-SQUARE_WAVE_2 equ 0B6h              ; channel 2, low then high byte, mode 3
-SPEAKER_PORT equ 61h
-SPEAKER_ON equ 03h                  ; gate and speaker bits
-
-; _llrm_os_speaker_tone(hertz: usize): the tone, or silence for 0.
-_llrm_os_speaker_tone proc far
-    push bp
-    mov bp, sp
-    mov cx, [bp+6]
-    in al, SPEAKER_PORT
-    jcxz short silent
-    push ax
-    mov dx, DOS_TIMER_CLOCK / 10000h
-    mov ax, DOS_TIMER_CLOCK mod 10000h
-    div cx
-    mov cx, ax
-    mov al, SQUARE_WAVE_2
-    out TIMER_COMMAND, al
-    mov al, cl
-    out TIMER_CHANNEL_2, al
-    mov al, ch
-    out TIMER_CHANNEL_2, al
-    pop ax
-    or al, SPEAKER_ON
-    out SPEAKER_PORT, al
-    pop bp
-    retf
-silent:
-    and al, not SPEAKER_ON
-    out SPEAKER_PORT, al
-    pop bp
-    retf
-_llrm_os_speaker_tone endp
-endif
-
-if OS_GROUPS and G_CLOCK
-; The time of day.
-
-SECONDS_PER_MINUTE equ 60
-MINUTES_PER_HOUR equ 60
-HUNDREDTHS equ 100
-
-; _llrm_os_clock_hundredths() -> i32: DOS's clock (2Ch) as hundredths of a second since midnight.
-_llrm_os_clock_hundredths proc far
-    push cx
-    mov ah, DOS_GET_TIME
-    int DOS_INT
-    movzx eax, ch
-    imul eax, eax, MINUTES_PER_HOUR
-    movzx ecx, cl
-    add eax, ecx
-    imul eax, eax, SECONDS_PER_MINUTE
-    movzx ecx, dh
-    add eax, ecx
-    imul eax, eax, HUNDREDTHS
-    movzx ecx, dl
-    add eax, ecx
-    mov edx, eax
-    shr edx, 16
-    pop cx
-    retf
-_llrm_os_clock_hundredths endp
-endif
-
-if OS_GROUPS and G_SCREEN
-; The screen: the BIOS's text mode. A cell is read and written in video memory, which is how the
-; cursor stays where it is; the BIOS data area (0040h) says the mode, columns and rows.
-
-BIOS_DATA equ 0040h
-BIOS_COLUMNS equ 004Ah             ; word
-BIOS_MODE equ 0049h                ; byte
-BIOS_ROWS equ 0084h                ; byte, rows - 1; 0 where the BIOS predates it
-MONO_MODE equ 7
-MONO_SEGMENT equ 0B000h
-COLOR_SEGMENT equ 0B800h
-DEFAULT_ROWS equ 25
-CONSOLE_OUT_BIT equ 02h
-
-; _llrm_os_screen_is_console() -> bool: whether DOS says standard output is the console device.
-_llrm_os_screen_is_console proc far
-    push bx
-    mov ax, DOS_IOCTL * 256
-    mov bx, DOS_STDOUT
-    int DOS_INT
-    pop bx
-    xor ax, ax
-    jc short not_console
-    and dl, DEVICE_BIT or CONSOLE_OUT_BIT
-    cmp dl, DEVICE_BIT or CONSOLE_OUT_BIT
-    jne short not_console
-    inc ax
-not_console:
-    retf
-_llrm_os_screen_is_console endp
-
-; _llrm_os_screen_size() -> u16: rows in the high byte, columns in the low.
-_llrm_os_screen_size proc far
-    push ds
-    mov ax, BIOS_DATA
-    mov ds, ax
-    mov al, ds:[BIOS_COLUMNS]
-    mov ah, ds:[BIOS_ROWS]
-    pop ds
-    test ah, ah
-    jnz short have_rows
-    mov ah, DEFAULT_ROWS - 1
-have_rows:
-    inc ah
-    retf
-_llrm_os_screen_size endp
-
-; _llrm_os_screen_cursor() -> u16: the hardware cursor, row in the high byte.
-_llrm_os_screen_cursor proc far
-    push bx
-    push cx
-    push dx
-    xor bh, bh
-    mov ah, DOS_VIDEO_GET_CURSOR
-    int DOS_VIDEO_INT
-    mov ax, dx
-    pop dx
-    pop cx
-    pop bx
-    retf
-_llrm_os_screen_cursor endp
-
-; _llrm_os_screen_cursor_show(visible: u8): the cursor's shape as the program found it, or none.
-; The first call keeps the shape from the BIOS data area (0040h:0060h).
-BIOS_CURSOR_SHAPE equ 0060h
-CURSOR_OFF equ 2000h               ; start line with bit 5 set: no cursor
-
-.data
-cursor_shape dw 0
-.code
-_llrm_os_screen_cursor_show proc far
-    push bp
-    mov bp, sp
-    push ds
-    mov ax, BIOS_DATA
-    mov ds, ax
-    mov cx, ds:[BIOS_CURSOR_SHAPE]
-    pop ds
-    cmp cursor_shape, 0
-    jne short have_shape
-    test cx, CURSOR_OFF
-    jnz short have_shape
-    mov cursor_shape, cx
-have_shape:
-    cmp byte ptr [bp+6], 0
-    mov cx, cursor_shape
-    jne short shape_set
-    mov cx, CURSOR_OFF
-shape_set:
-    mov ah, DOS_VIDEO_SET_CURSOR_SHAPE
-    int DOS_VIDEO_INT
-    pop bp
-    retf
-_llrm_os_screen_cursor_show endp
-
-; _llrm_os_screen_move(row: u8, column: u8): the hardware cursor.
-_llrm_os_screen_move proc far
-    push bp
-    mov bp, sp
-    push bx
-    mov dh, [bp+6]
-    mov dl, [bp+8]
-    xor bh, bh
-    mov ah, DOS_VIDEO_SET_CURSOR
-    int DOS_VIDEO_INT
-    pop bx
-    pop bp
-    retf
-_llrm_os_screen_move endp
-
-; es:di -> the cell at row dh, column dl of the screen; the mode's own video segment.
-cell_address proc near
-    push ax
-    push ds
-    mov ax, BIOS_DATA
-    mov ds, ax
-    mov ax, COLOR_SEGMENT
-    cmp byte ptr ds:[BIOS_MODE], MONO_MODE
-    jne short have_segment
-    mov ax, MONO_SEGMENT
-have_segment:
-    mov es, ax
-    mov al, dh
-    mul byte ptr ds:[BIOS_COLUMNS]
-    xor dh, dh
-    add ax, dx
-    add ax, ax
-    mov di, ax
-    pop ds
-    pop ax
-    ret
-cell_address endp
-
-; _llrm_os_screen_put(row: u8, column: u8, character: u8, attribute: u8)
-_llrm_os_screen_put proc far
-    push bp
-    mov bp, sp
-    push di
-    push es
-    mov dh, [bp+6]
-    mov dl, [bp+8]
-    call cell_address
-    mov al, [bp+10]
-    mov ah, [bp+12]
-    stosw
-    pop es
-    pop di
-    pop bp
-    retf
-_llrm_os_screen_put endp
-
-; _llrm_os_screen_write(row: u8, column: u8, text: bytes, count: usize, attribute: u8)
-_llrm_os_screen_write proc far
-    push bp
-    mov bp, sp
-    push si
-    push di
-    push ds
-    push es
-    mov dh, [bp+6]
-    mov dl, [bp+8]
-    call cell_address
-    lds si, [bp+10]
-    mov cx, [bp+14]
-    mov ah, [bp+16]
-    cld
-    jcxz short written
-more:
-    lodsb
-    stosw
-    loop more
-written:
-    pop es
-    pop ds
-    pop di
-    pop si
-    pop bp
-    retf
-_llrm_os_screen_write endp
-
-; _llrm_os_screen_get(row: u8, column: u8) -> u16
-_llrm_os_screen_get proc far
-    push bp
-    mov bp, sp
-    push di
-    push es
-    mov dh, [bp+6]
-    mov dl, [bp+8]
-    call cell_address
-    mov ax, es:[di]
-    pop es
-    pop di
-    pop bp
-    retf
-_llrm_os_screen_get endp
-
-; _llrm_os_screen_scroll(top: u8, bottom: u8, lines: u8, attribute: u8): in video memory. The rows
-; `top` to `bottom` move up `lines`, and the rows freed are blanks of `attribute`; no lines, or
-; at least as many as the rows, clears them.
-_llrm_os_screen_scroll proc far
-    push bp
-    mov bp, sp
-    push si
-    push di
-    push ds
-    push es
-    mov dh, [bp+6]                 ; the first row, column 0
-    xor dl, dl
-    call cell_address              ; es:di -> its first cell
-    push ds
-    mov ax, BIOS_DATA
-    mov ds, ax
-    movzx bx, byte ptr ds:[BIOS_COLUMNS]
-    pop ds
-    movzx dx, byte ptr [bp+8]
-    movzx ax, byte ptr [bp+6]
-    sub dx, ax
-    inc dx                         ; rows in the window
-    movzx ax, byte ptr [bp+10]     ; rows to scroll
-    test ax, ax
-    jz short whole
-    cmp ax, dx
-    jb short part
-whole:
-    mov ax, dx                     ; all of them: nothing is moved
-part:
-    mov cx, dx
-    sub cx, ax
-    imul cx, bx                    ; cells that move up
-    mov dx, ax
-    imul dx, bx                    ; cells blanked, and the distance moved
-    mov si, dx
-    add si, si
-    add si, di                     ; the row `lines` below
-    push es
-    pop ds
-    cld
-    shr cx, 1
-    rep movsd
-    jnc short moved
-    movsw
-moved:
-    mov cx, dx
-    mov al, ' '
-    mov ah, [bp+12]
-    mov bx, ax
-    shl eax, 16
-    mov ax, bx
-    shr cx, 1
-    rep stosd
-    jnc short blanked
-    stosw
-blanked:
-    pop es
-    pop ds
-    pop di
-    pop si
-    pop bp
-    retf
-_llrm_os_screen_scroll endp
+;;::::::::::::::
+;; LL$CONSOLE_KEY_READY() -> bool: DOS's input status (0Bh), 0FFh or 0, as 1 or 0.
+LL$CONSOLE_KEY_READY proc    far
+                mov     ah, DOS_KEY_READY
+                int     DOS_INT
+                and     ax, 1
+                retf
+LL$CONSOLE_KEY_READY endp
 endif
 
 if OS_GROUPS and G_CORE
-; Interrupt vectors, for handlers the program installs. A handler is
-; entered with interrupts off and leaves by iret.
+;; Interrupt vectors, for handlers the program installs. A handler is
+;; entered with interrupts off and leaves by iret.
 
-; _llrm_os_vector(number: u8) -> extern "interrupt16" fn(): what interrupt `number`
-; enters now.
-_llrm_os_vector proc far
-    push bp
-    mov bp, sp
-    push bx
-    push es
-    mov al, [bp+6]
-    mov ah, DOS_GET_VECTOR
-    int DOS_INT
-    mov ax, bx
-    mov dx, es
-    pop es
-    pop bx
-    pop bp
-    retf
-_llrm_os_vector endp
+;;::::::::::::::
+;; LL$VECTOR(number: u8) -> extern "interrupt16" fn(): what interrupt `number`
+;; enters now.
+LL$VECTOR       proc    far
+                push    bp
+                mov     bp, sp
+                push    bx
+                push    es
+                mov     al, [bp+6]
+                mov     ah, DOS_GET_VECTOR
+                int     DOS_INT
+                mov     ax, bx
+                mov     dx, es
+                pop     es
+                pop     bx
+                pop     bp
+                retf
+LL$VECTOR       endp
 
-; _llrm_os_set_vector(number: u8, handler: extern "interrupt16" fn()): makes interrupt
-; `number` enter `handler`, the first time keeping the one it replaces.
-_llrm_os_set_vector proc far
-    push bp
-    mov bp, sp
-    push bx
-    push si
-    push es
-    mov al, [bp+6]
-    xor si, si
+;;::::::::::::::
+;; LL$SET_VECTOR(number: u8, handler: extern "interrupt16" fn()): makes interrupt
+;; `number` enter `handler`, the first time keeping the one it replaces.
+LL$SET_VECTOR   proc    far
+                push    bp
+                mov     bp, sp
+                push    bx
+                push    si
+                push    es
+                mov     al, [bp+6]
+                xor     si, si
 seek:
-    cmp si, saved_count
-    je short keep
-    cmp saved_number[si], al
-    je short install
-    inc si
-    jmp short seek
+                cmp     si, saved_count
+                je      short keep
+                cmp     saved_number[si], al
+                je      short install
+                inc     si
+                jmp     short seek
 keep:
-    cmp si, SAVED
-    je short install
-    mov saved_number[si], al
-    mov ah, DOS_GET_VECTOR
-    int DOS_INT
-    shl si, 2
-    mov word ptr saved_old[si], bx
-    mov word ptr saved_old[si+2], es
-    inc saved_count
+                cmp     si, SAVED
+                je      short install
+                mov     saved_number[si], al
+                mov     ah, DOS_GET_VECTOR
+                int     DOS_INT
+                shl     si, 2
+                mov     word ptr saved_old[si], bx
+                mov     word ptr saved_old[si+2], es
+                inc     saved_count
 install:
-    push ds
-    lds dx, [bp+8]
-    mov al, [bp+6]
-    mov ah, DOS_SET_VECTOR
-    int DOS_INT
-    pop ds
-    pop es
-    pop si
-    pop bx
-    pop bp
-    retf
-_llrm_os_set_vector endp
+                push    ds
+                lds     dx, [bp+8]
+                mov     al, [bp+6]
+                mov     ah, DOS_SET_VECTOR
+                int     DOS_INT
+                pop     ds
+                pop     es
+                pop     si
+                pop     bx
+                pop     bp
+                retf
+LL$SET_VECTOR   endp
 
-; _llrm_os_restore_vectors: puts back every vector _llrm_os_set_vector replaced, the last first. Every
-; exit path calls it.
-_llrm_os_restore_vectors proc far
-    push ds
-    push si
-    mov ax, DGROUP
-    mov ds, ax
-    mov si, saved_count
-    mov saved_count, 0
+;;::::::::::::::
+;; LL$RESTORE_VECTORS: puts back every vector LL$SET_VECTOR replaced, the last first. Every
+;; exit path calls it.
+LL$RESTORE_VECTORS proc    far
+                push    ds
+                push    si
+                mov     ax, DGROUP
+                mov     ds, ax
+                mov     si, saved_count
+                mov     saved_count, 0
 restore:
-    dec si
-    js short restored
-    mov al, saved_number[si]
-    push si
-    shl si, 2
-    push ds
-    lds dx, saved_old[si]
-    mov ah, DOS_SET_VECTOR
-    int DOS_INT
-    pop ds
-    pop si
-    jmp short restore
+                dec     si
+                js      short restored
+                mov     al, saved_number[si]
+                push    si
+                shl     si, 2
+                push    ds
+                lds     dx, saved_old[si]
+                mov     ah, DOS_SET_VECTOR
+                int     DOS_INT
+                pop     ds
+                pop     si
+                jmp     short restore
 restored:
-    pop si
-    pop ds
-    retf
-_llrm_os_restore_vectors endp
+                pop     si
+                pop     ds
+                retf
+LL$RESTORE_VECTORS endp
 
-; _llrm_os_chain(handler: extern "interrupt16" fn()): enters `handler` as its
-; interrupt would, flags pushed, and comes back.
-_llrm_os_chain proc far
-    push bp
-    mov bp, sp
-    pushf
-    call dword ptr [bp+6]
-    pop bp
-    retf
-_llrm_os_chain endp
+;;::::::::::::::
+;; LL$CHAIN(handler: extern "interrupt16" fn()): enters `handler` as its
+;; interrupt would, flags pushed, and comes back.
+LL$CHAIN        proc    far
+                push    bp
+                mov     bp, sp
+                pushf
+                call    dword ptr [bp+6]
+                pop     bp
+                retf
+LL$CHAIN        endp
 
-; _llrm_os_exit(code: u8): restores the vectors and ends the program.
-_llrm_os_exit proc far
-    push bp
-    mov bp, sp
-    call far ptr _llrm_os_restore_vectors
-    mov al, [bp+6]
-    mov ah, DOS_EXIT
-    int DOS_INT
-_llrm_os_exit endp
+;;::::::::::::::
+;; LL$EXIT(code: u8): restores the vectors and ends the program.
+LL$EXIT         proc    far
+                push    bp
+                mov     bp, sp
+                call    far ptr LL$RESTORE_VECTORS
+                mov     al, [bp+6]
+                mov     ah, DOS_EXIT
+                int     DOS_INT
+LL$EXIT         endp
 endif
 
 end

@@ -1,7 +1,7 @@
 // RUN: llrm-c %s -O2 -S -o /dev/stdout
 // The default build checks nothing: no limit word, no overflow routine.
 // CHECK-LABEL: deep{{(@3)?}} proc
-// CHECK-NOT: _llrm_os_stack_low
+// CHECK-NOT: LL$STACK_LOW
 // CHECK-NOT: __STKOVERFLOW
 // CHECK: deep{{(@3)?}} endp
 extern void report(long value);

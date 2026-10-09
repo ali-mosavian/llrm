@@ -2,7 +2,7 @@
    memory, the BIOS asked only to scroll and clear; the screen statements for
    it.  Linked by a program that uses them. */
 #include "cndriver.h"
-#include "llrm_os.h"
+#include "device.h"
 #include "rtinit.h"
 
 enum {
@@ -31,9 +31,9 @@ static int cursor_shown = 1;
 
 static void text_init(void)
 {
-    unsigned size = llrm_os_screen_size(), cursor = llrm_os_screen_cursor();
+    unsigned size = dev_text_size(), cursor = dev_text_cursor();
 
-    llrm_os_screen_cursor_show(0);
+    dev_text_cursor_show(0);
     cursor_shown = 0;
     columns = (byte)size;
     rows = (byte)(size >> 8);
@@ -58,14 +58,14 @@ static void text_newline(void)
     if (row < view_bottom) {
         row++;
     } else {
-        llrm_os_screen_scroll(view_top, view_bottom, 1, attribute);
+        dev_text_scroll(view_top, view_bottom, 1, attribute);
         row = view_bottom;
     }
 }
 
 static void text_clear(void)
 {
-    llrm_os_screen_scroll(view_top, view_bottom, 0, attribute);
+    dev_text_scroll(view_top, view_bottom, 0, attribute);
     row = view_top;
     column = 0;
     cursor_stale = 1;
@@ -74,12 +74,12 @@ static void text_clear(void)
 /* The bell: a tone for a quarter of a second. */
 static void bell(void)
 {
-    long start = llrm_os_clock_hundredths();
+    long start = dev_clock();
 
-    llrm_os_speaker_tone(BEEP_HERTZ);
-    while ((llrm_os_clock_hundredths() - start + DAY) % DAY < BEEP_LENGTH)
+    dev_tone(BEEP_HERTZ);
+    while ((dev_clock() - start + DAY) % DAY < BEEP_LENGTH)
         ;
-    llrm_os_speaker_tone(0);
+    dev_tone(0);
 }
 
 /* A control character of the console. */
@@ -97,7 +97,7 @@ static void control(char c)
         do {
             if (column == columns)
                 text_newline();
-            llrm_os_screen_put(row, column++, ' ', attribute);
+            dev_text_put(row, column++, ' ', attribute);
         } while (column % TAB_STOP);
         break;
     case HOME:
@@ -147,7 +147,7 @@ static unsigned put_run(const char *s, unsigned n)
         text_newline();
     while (run < n && plain_char(s[run]) && column + run < columns)
         run++;
-    llrm_os_screen_write(row, column, (os_data)s, run, attribute);
+    dev_text_write(row, column, s, run, attribute);
     column += run;
     return run;
 }
@@ -173,7 +173,7 @@ static void text_erase(void)
 {
     if (column)
         column--;
-    llrm_os_screen_put(row, column, ' ', attribute);
+    dev_text_put(row, column, ' ', attribute);
     cursor_stale = 1;
 }
 
@@ -234,7 +234,7 @@ static void text_crlf(void)
 static void text_sync(void)
 {
     if (cursor_stale) {
-        llrm_os_screen_move(row, column < columns ? column : columns - 1);
+        dev_text_move(row, column < columns ? column : columns - 1);
         cursor_stale = 0;
     }
 }
@@ -246,15 +246,12 @@ static void text_cursor(int waiting)
     int show = waiting || cursor_wanted;
 
     if (show != cursor_shown) {
-        llrm_os_screen_cursor_show(show);
+        dev_text_cursor_show(show);
         cursor_shown = show;
     }
 }
 
-static const Driver text_driver = {
-    text_init, text_write, text_crlf, text_erase, text_sync, text_cursor,
-    text_pos, text_width
-};
+static const Driver text_driver;
 
 #define XI_FN cn_text_xinit
 #include "xi.h"
@@ -263,18 +260,10 @@ void cn_text_xinit(void)
     cn_text_driver = &text_driver;
 }
 
-/* Whether output is on the screen: the statements do nothing otherwise. */
-static int on_screen(void)
-{
-    return cn_driver() == &text_driver;
-}
-
-void cn_color(int foreground, int background)
+static void text_color(int foreground, int background)
 {
     if (foreground > MAX_FOREGROUND || background > MAX_BACKGROUND)
         qb_error(BE_ILLFUN);
-    if (!on_screen())
-        return;
     if (foreground >= 0)
         attribute = (attribute & 0x70) | (foreground & 15)
                   | ((foreground & 16) ? BLINK : 0);
@@ -282,10 +271,8 @@ void cn_color(int foreground, int background)
         attribute = (attribute & 0x8F) | ((background & 7) << 4);
 }
 
-void cn_locate(int new_row, int new_column, int cursor)
+static void text_locate_cursor(int new_row, int new_column, int cursor)
 {
-    if (!on_screen())
-        return;
     text_locate(new_row, new_column);
     if (cursor >= 0) {
         cursor_wanted = cursor != 0;
@@ -293,20 +280,8 @@ void cn_locate(int new_row, int new_column, int cursor)
     }
 }
 
-void cn_cls(void)
-{
-    if (on_screen())
-        text_clear();
-}
-
-void cn_view(int top, int bottom)
-{
-    if (on_screen())
-        text_view(top, bottom);
-}
-
-void cn_set_size(int new_columns, int new_rows)
-{
-    if (on_screen())
-        text_size(new_columns, new_rows);
-}
+static const Driver text_driver = {
+    text_init, text_write, text_crlf, text_erase, text_sync, text_cursor,
+    text_pos, text_width, text_color, text_locate_cursor, text_clear,
+    text_view, text_size
+};

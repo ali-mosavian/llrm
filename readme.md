@@ -79,7 +79,7 @@ target/release/llrm-omf PROGRAM.OBJ -o PROGRAMQ.OBJ -march=i486
 | `-f[no-]PASS` | One pass on or off, by gcc's name: `unroll-loops`, `peel-loops`, `inline-functions`, `strength-reduce`, `unswitch-loops`, `gcse`, `tree-dse`, `tree-dce`, `tree-sra`, `move-loop-invariants`, `tree-loop-distribute-patterns`, `optimize-sibling-calls` |
 | `-march=CPU`, `-mtune=CPU` | The processor, gcc's name for it (`i386` through `core2`); `-m16`, `-m32` choose the target |
 | `-fsanitize=bounds,integer-divide-by-zero,signed-integer-overflow,undefined`, `-ftrapv` | The run-time checks BC's `/D` makes, as gcc names them |
-| `-fsanitize=stack` | Each function compares SP with its runtime's stack limit once its frame is allocated and calls the runtime's overflow routine out of line (BASIC: `b$pendchk`, `B$ERR_OSS`, as BC `/D`; C: Open Watcom's `_STACKLOW`, `__STKOVERFLOW`; Nib: `_llrm_os_stack_low`, `N$ESTK`). Not part of `undefined`. +8 bytes and 3 instructions per call, +5 bytes cold; a small leaf the runtime's red zone covers goes unchecked |
+| `-fsanitize=stack` | Each function compares SP with its runtime's stack limit once its frame is allocated and calls the runtime's overflow routine out of line (BASIC: `b$pendchk`, `B$ERR_OSS`, as BC `/D`; C: Open Watcom's `_STACKLOW`, `__STKOVERFLOW`; Nib: `LL$STACK_LOW`, `N$ESTK`). Not part of `undefined`. +8 bytes and 3 instructions per call, +5 bytes cold; a small leaf the runtime's red zone covers goes unchecked |
 | `-g` | CodeView line numbers, symbols and types, for `LINK /CO` and CodeView |
 | `-S` | Writes the assembly listing instead of an object |
 | `--dump DIR` | Writes every stage to `DIR`, for diffing |

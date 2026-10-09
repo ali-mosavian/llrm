@@ -6,6 +6,7 @@
 #include "llrm_os.h"
 
 extern u16 llrm_os_psp;
+#pragma aux llrm_os_psp "LL$PSP"
 
 /* The list's ends: the top, from which entries are placed downwards, and the
    bottom, above DGROUP. */

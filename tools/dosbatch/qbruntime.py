@@ -319,7 +319,7 @@ def platform_directory() -> Path:
 def os_group_bits(source: Path) -> dict[str, int]:
     """The groups the OS layer's assembly holds a bit each (its G_<GROUP> equates): the archive has an
     object for each, so a program links what it calls."""
-    found = re.findall(r"^G_(\w+) equ (\d+)", source.read_text(), re.M)
+    found = re.findall(r"^G_(\w+)\s+equ\s+(\d+)", source.read_text(), re.M)
     return {name.lower(): int(bit) for name, bit in found}
 
 

@@ -506,7 +506,11 @@ mod tests {
     fn the_stack_check_names_what_the_c_runtime_defines() {
         let root = Path::new(env!("LLRM_ROOT"));
         let check = super::stack_check(&llrm_x86_m16::M16);
-        let runtime = |name: &str| std::fs::read_to_string(root.join("runtime").join(name)).unwrap();
+        // The assembly is laid out in columns: its words are what is compared.
+        let runtime = |name: &str| {
+            let text = std::fs::read_to_string(root.join("runtime").join(name)).unwrap();
+            text.lines().map(|line| line.split_whitespace().collect::<Vec<_>>().join(" ")).collect::<Vec<_>>().join("\n")
+        };
         assert!(
             runtime("shared/dos/m16/os.asm").contains(&format!("public {}", check.limit))
                 && runtime("shared/dos/m16/start.asm").contains(&format!("mov {}, ax", check.limit))
@@ -528,7 +532,7 @@ mod tests {
         assert!(
             checked.contains("cmp sp, word ptr FOO")
                 && checked.contains("call far ptr BAR")
-                && !checked.contains("_llrm_os_stack_low"),
+                && !checked.contains("LL$STACK_LOW"),
             "{checked}"
         );
         assert!(!listing(None).contains("cmp sp"));
@@ -2174,7 +2178,7 @@ mod tests {
         .unwrap();
         let listing = llrm_core::backend::masm::text(&built).unwrap();
         assert!(
-            listing.contains("cmp esp, dword ptr _llrm_os_stack_low") && listing.contains("call __STKOVERFLOW"),
+            listing.contains("cmp esp, dword ptr LL$STACK_LOW") && listing.contains("call __STKOVERFLOW"),
             "{listing}"
         );
         assert!(!listing.contains("far ptr") && listing.contains("extern __STKOVERFLOW:near"), "{listing}");

@@ -83,6 +83,14 @@ class Session:
                 raise TimeoutError(f"{text!r} never appeared:\n{self.screen()}")
             time.sleep(0.25)
 
+    def wait_for_mode(self, mode: int, seconds: float = 60) -> None:
+        """Until the screen is in the BIOS video mode `mode`."""
+        deadline = time.monotonic() + seconds
+        while self.send({"cmd": "text_screen"}).get("video_mode") != mode:
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"the screen never went to mode {mode}")
+            time.sleep(0.25)
+
     def type(self, keys: list[str]) -> None:
         for key in keys:
             self.send({"cmd": "key", "key": key})
@@ -95,3 +103,50 @@ class Session:
     def close(self) -> None:
         self.process.kill()
         self.process.wait()
+
+
+def png_pixels(path: Path) -> tuple[int, int, bytes]:
+    """Width, height and the RGB bytes of a PNG DOSBox wrote (8 bits, no interlace)."""
+    import struct
+    import zlib
+
+    data = path.read_bytes()
+    at, chunks = 8, []
+    while at < len(data):
+        size, kind = struct.unpack(">I4s", data[at : at + 8])
+        chunks.append((kind, data[at + 8 : at + 8 + size]))
+        at += 12 + size
+    width, height, depth, color, _, _, interlace = struct.unpack(">IIBBBBB", chunks[0][1])
+    assert depth == 8 and color in (2, 6) and interlace == 0, (depth, color, interlace)
+    step = 3 if color == 2 else 4
+    raw = zlib.decompress(b"".join(body for kind, body in chunks if kind == b"IDAT"))
+    stride, rows, previous = width * step, [], bytearray(width * step)
+    for y in range(height):
+        base = y * (stride + 1)
+        method, line = raw[base], bytearray(raw[base + 1 : base + 1 + stride])
+        for x in range(stride):
+            left = line[x - step] if x >= step else 0
+            up = previous[x]
+            corner = previous[x - step] if x >= step else 0
+            if method == 1:
+                line[x] = (line[x] + left) & 255
+            elif method == 2:
+                line[x] = (line[x] + up) & 255
+            elif method == 3:
+                line[x] = (line[x] + (left + up) // 2) & 255
+            elif method == 4:
+                p = left + up - corner
+                pa, pb, pc = abs(p - left), abs(p - up), abs(p - corner)
+                line[x] = (line[x] + (left if pa <= pb and pa <= pc else up if pb <= pc else corner)) & 255
+        rows.append(bytes(line))
+        previous = line
+    rgb = b"".join(b"".join(row[i : i + 3] for i in range(0, stride, step)) for row in rows)
+    return width, height, rgb
+
+
+def differing_pixels(left: Path, right: Path) -> int:
+    """How many pixels of two screenshots differ (every one when their sizes do)."""
+    a, b = png_pixels(left), png_pixels(right)
+    if a[:2] != b[:2]:
+        return a[0] * a[1]
+    return sum(1 for i in range(0, len(a[2]), 3) if a[2][i : i + 3] != b[2][i : i + 3])
