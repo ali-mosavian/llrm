@@ -1120,6 +1120,24 @@ fn picking_the_buckets_of_a_write_allocates_once() {
     drop(reached);
 }
 
+/// `may_alias` copied both references' provenance, two sets of slices, for each
+/// pair it was asked of, though nothing narrowed them (`regions::refined`: 4.6%
+/// of the compile's allocations and 15% of its bytes, QCport). It reads them
+/// where they are.
+#[test]
+fn asking_whether_two_references_may_alias_copies_no_provenance() {
+    let global =
+        MemoryObject { identity: Some(Identity::Global(1)), extent: Some(16), ..MemoryObject::new(MemoryKind::Global) };
+    let other =
+        MemoryObject { identity: Some(Identity::Global(2)), extent: Some(16), ..MemoryObject::new(MemoryKind::Global) };
+    let write = MemRef { provenance: Some(one(&global, 0, 4)), ..MemRef::reach(4, one(&global, 0, 4)) };
+    let read = MemRef { provenance: Some(one(&other, 0, 4)), ..MemRef::reach(4, one(&other, 0, 4)) };
+    let before = counted::made();
+    let answer = crate::regions::may_alias(&write, &read, None, None, None).unwrap();
+    assert_eq!(counted::made() - before, 0, "the provenance of a pair was copied");
+    assert!(!answer);
+}
+
 /// A callee was looked up among every global by name at every call of every
 /// visit (`_summary`: 12.7 G of host.c's 94 G instructions in `summaries
 /// visit`, a quarter of it that scan). The procedure knows once which of its
