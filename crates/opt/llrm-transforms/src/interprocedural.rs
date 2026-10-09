@@ -453,6 +453,7 @@ fn estimated_callees<E: From<String>>(
         }
     }
     let mut touched: BTreeSet<GlobalId> = BTreeSet::new();
+    let mut accepted: llrm_support::hash::IndexMap<GlobalId, inline::Candidate> = Default::default();
     for (&callee, candidate) in more {
         let sites = counts.get(&callee).copied().unwrap_or(0);
         let calls = &calls[&callee];
@@ -484,32 +485,39 @@ fn estimated_callees<E: From<String>>(
         if !stays_now {
             continue;
         }
-        let available = llrm_support::hash::IndexMap::from_iter([(callee, candidate.clone())]);
-        for caller in calls.iter().map(|(caller, _)| *caller).collect::<BTreeSet<_>>() {
-            let by = inline::Caller {
-                layout,
-                recursive: recursive.contains(&caller),
-                base: bases.get(&caller).copied().unwrap_or(0),
-            };
-            loop {
-                let mut declared = declared(modules, module);
-                let (context, function) = function_mut(module, caller);
-                let more =
-                    inline::expanded(context, function, &by, &available, None, &mut declared).map_err(E::from)?;
-                placed(&mut declared, modules, module).map_err(E::from)?;
-                if !more {
-                    break;
-                }
-                touched.insert(caller);
+        accepted.insert(callee, candidate.clone());
+        touched.extend(calls.iter().map(|(caller, _)| *caller));
+    }
+    // A caller at a time, each through the pipeline before the next is spliced
+    // into: two callers with the same callee spliced and not yet optimised made
+    // the GlobalsAA that the first one's pipeline asks work for minutes
+    // (qb-runtime's i8out.c: 1 s to not finishing).
+    let mut stayed = false;
+    for &caller in &touched {
+        let by = inline::Caller {
+            layout,
+            recursive: recursive.contains(&caller),
+            base: bases.get(&caller).copied().unwrap_or(0),
+        };
+        let mut spliced = false;
+        loop {
+            let mut declared = declared(modules, module);
+            let (context, function) = function_mut(module, caller);
+            let more = inline::expanded(context, function, &by, &accepted, None, &mut declared).map_err(E::from)?;
+            placed(&mut declared, modules, module).map_err(E::from)?;
+            if !more {
+                break;
             }
+            spliced = true;
+        }
+        if spliced {
+            modules.changed(caller);
+            modules.invalidate(&PreservedAnalyses::none());
+            reoptimised(module, modules, caller, "inline-estimate.")?;
+            stayed = true;
         }
     }
-    for &caller in &touched {
-        modules.changed(caller);
-        modules.invalidate(&PreservedAnalyses::none());
-        reoptimised(module, modules, caller, "inline-estimate.")?;
-    }
-    Ok(!touched.is_empty())
+    Ok(stayed)
 }
 
 /// The constant `sites` of `caller` the clocks admit and the bytes do not,
