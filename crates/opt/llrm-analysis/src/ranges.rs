@@ -938,8 +938,9 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
         // and result are as they were in `known` as it found it there, so only those the narrowing reaches, and what they reach
         // in turn, are worked again from `known swept` with the narrowed values put over it.
         let settle = |mut scoped: IndexMap<ValueId, Interval>, known: &IndexMap<ValueId, Interval>| -> IndexMap<ValueId, Interval> {
-            // Putting the swept ones over a block's is a pass over its facts, as sweeping is two over the operations: a loop of few
-            // operations among many facts is swept.
+            // The cheaper of the two by the work each counts: a sweep evaluates every operation and then once more to see nothing
+            // change (2 x operations); settling finds what the block's edges narrowed and puts the swept facts over the rest (one
+            // pass over `scoped`'s facts), then evaluates only what that reaches.
             if 2 * operations.len() <= scoped.len() {
                 return sweep(scoped);
             }

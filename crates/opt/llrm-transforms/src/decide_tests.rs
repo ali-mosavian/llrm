@@ -588,3 +588,40 @@ fn test_a_body_is_searched_for_its_assumptions_once_however_many_guards_are_aske
     let searched = llrm_analysis::assumptions::built() - before;
     assert_eq!(searched, 1, "the body was searched {searched} times");
 }
+
+/// `decide` solved what the counted loops bound twice: once for the points-to it holds (the manager's `Bounded`) and again for its
+/// own branches (a hand solve): 26 Minstr of fpbench's -O1 compile. It reads the manager's.
+#[test]
+fn test_decide_works_a_loops_bounds_out_once() {
+    let mut module = parsed(
+        "define i32 @f(i32 %n) {
+b0:
+  br label %h
+
+h:
+  %i = phi i32 [ 0, %b0 ], [ %in, %l ]
+  %c = icmp slt i32 %i, 10
+  br i1 %c, label %l, label %end
+
+l:
+  %in = add nsw i32 %i, 1
+  br label %h
+
+end:
+  %t = icmp slt i32 %n, 5
+  br i1 %t, label %a, label %b
+
+a:
+  ret i32 1
+
+b:
+  ret i32 2
+}
+",
+    );
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let before = llrm_analysis::ranges::loops_solved();
+    decided(context, &layout, function, &outer).expect("decides");
+    assert_eq!(llrm_analysis::ranges::loops_solved() - before, 1, "the loop's bounds were worked out more than once");
+}
