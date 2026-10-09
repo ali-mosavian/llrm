@@ -31,6 +31,13 @@ use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet, IndexMap, IndexSet};
 
+// Rounds `assigned` took to settle, and blocks written over all of them.
+#[cfg(test)]
+thread_local! {
+    static ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static WRITTEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// x87 reads integers from memory, for named values and physical stack slots.
 fn _integer_loads(
     body: &LirBody,
@@ -844,6 +851,17 @@ struct Plan<'b> {
     /// Root -> register cost minus memory cost, and whether it holds a
     /// definition leaving for memory.
     costs: IndexMap<usize, f64>,
+    /// What does not change between rounds of `assigned`: what is live out
+    /// of each block, and the cells values share.
+    live_out: Live,
+    cells: IndexMap<u32, u32>,
+    /// Each block's allocno roots: a block is written the same way whenever
+    /// the same of them are spilled.
+    roots: HashMap<i64, Vec<usize>>,
+    /// Blocks as `rewritten` wrote them, by block and which of its roots
+    /// were spilled, so a round re-writes only the blocks a new victim
+    /// reaches.
+    written: RefCell<HashMap<(i64, Vec<bool>), Vec<Arc<Insn>>>>,
 }
 
 /// Where each value is kept and read: LLVM's SpillPlacement per bundle for
@@ -1317,8 +1335,7 @@ impl Plan<'_> {
         frame: &mut Option<&mut Frame>,
         cpu: &Profile,
     ) -> Result<LirBody, Raised> {
-        let (_, live_out) = live(self.body);
-        let cells = _shared_cells(self.body, &self.floating, &live_out);
+        let (live_out, cells) = (&self.live_out, &self.cells);
         let mut homes = self.homes.clone();
         let mut home = |value: u32, frame: &mut Option<&mut Frame>| -> Result<Arc<Insn>, Raised> {
             if let Some(home) = homes.get(&value) {
@@ -1337,6 +1354,14 @@ impl Plan<'_> {
         let mut fresh = _next_value(self.body);
         for block in &mut out.blocks {
             let at = block.at;
+            let key = (at, self.roots[&at].iter().map(|root| spilled.contains(root)).collect::<Vec<bool>>());
+            if let Some(done) = self.written.borrow().get(&key) {
+                block.insns = done.clone().into();
+                continue;
+            }
+            #[cfg(test)]
+            WRITTEN.with(|one| one.set(one.get() + 1));
+            let first_fresh = fresh;
             let cut = _terminators(block);
             let steps = _steps(block, cut);
             let leaving: BTreeSet<u32> =
@@ -1496,6 +1521,11 @@ impl Plan<'_> {
             let here = block.insns.get(cut).or(block.insns.last()).map_or(at, |one| one.at);
             restore(&mut insns, cut, here, frame, &mut home)?;
             insns.extend(block.insns[cut..].iter().cloned());
+            // A fresh value is numbered across blocks, so only a block that
+            // took none is the same in any round.
+            if fresh == first_fresh {
+                self.written.borrow_mut().insert(key, insns.clone());
+            }
             block.insns = insns.into();
         }
         Ok(out)
@@ -1677,7 +1707,40 @@ pub fn assigned(
     let stored_values: HashSet<u32> = stored.keys().copied().collect();
     homes.extend(stored);
     let allocnos = _allocnos(&body, &floating, &homes, cpu);
-    let mut plan = Plan { body: &body, floating, homes, stored: stored_values, allocnos, costs: IndexMap::default() };
+    let (_, live_out) = live(&body);
+    let cells = _shared_cells(&body, &floating, &live_out);
+    let mut roots: HashMap<i64, Vec<usize>> = body.blocks.iter().map(|block| (block.at, Vec::new())).collect();
+    let touched = allocnos
+        .at_use
+        .iter()
+        .map(|((at, _, _), segment)| (*at, *segment))
+        .chain(allocnos.at_def.iter().map(|((at, _, _), segment)| (*at, *segment)))
+        .chain(
+            allocnos
+                .exits
+                .iter()
+                .chain(&allocnos.restores)
+                .flat_map(|((at, _), list)| list.iter().map(|one| (*at, *one))),
+        );
+    for (at, segment) in touched {
+        roots.entry(at).or_default().push(allocnos.root(segment));
+    }
+    for list in roots.values_mut() {
+        list.sort_unstable();
+        list.dedup();
+    }
+    let mut plan = Plan {
+        body: &body,
+        floating,
+        homes,
+        stored: stored_values,
+        allocnos,
+        costs: IndexMap::default(),
+        live_out,
+        cells,
+        roots,
+        written: RefCell::default(),
+    };
     plan.priced(cpu);
     let mut spilled = plan.in_memory();
     // One `at` can name several instructions: a compare and its branches.
@@ -1687,9 +1750,17 @@ pub fn assigned(
             at_of.entry((block.at, one.at)).or_default().push(position);
         }
     }
+    #[cfg(test)]
+    let mut rounds = 0;
     loop {
+        #[cfg(test)]
+        {
+            rounds += 1;
+        }
         let rewritten = plan.rewritten(&spilled, &mut frame, cpu)?;
         let Some((block, position)) = _crowded(&rewritten, &_floating_values(&rewritten)) else {
+            #[cfg(test)]
+            ROUNDS.with(|one| one.set(rounds));
             return Ok(_without_dead_loads(&rewritten));
         };
         let originals = rewritten
