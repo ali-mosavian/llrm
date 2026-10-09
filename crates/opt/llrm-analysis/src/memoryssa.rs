@@ -479,10 +479,10 @@ pub struct MemorySSA<'a> {
     pub sites: IndexMap<InstId, Access>,
     pub phis: IndexMap<i64, Access>,
     /// What each def writes, as `Accesses::writes` says.
-    written: IndexMap<InstId, Option<Rc<[MemRef]>>>,
+    written: llrm_mir::dense::IdMap<InstId, Option<Rc<[MemRef]>>>,
     /// What each def's writes can reach, worked out when a walk first asks of
     /// the def.
-    reaches: std::cell::RefCell<IndexMap<InstId, Rc<Reach>>>,
+    reaches: std::cell::RefCell<llrm_mir::dense::IdMap<InstId, Rc<Reach>>>,
     unit: Unit<'a>,
     /// The values that are constants, for placing an index away from a cell
     /// (`with_known`).
@@ -592,9 +592,8 @@ impl MemorySSA<'_> {
         }
         let stores = self.written[&site].as_deref().unwrap_or(&[]);
         // Objects that cannot meet rule a def out before any alias reasoning.
-        let reach = Rc::clone(
-            self.reaches.borrow_mut().entry(site).or_insert_with(|| Rc::new(Reach::of(&self.written[&site]))),
-        );
+        let reach =
+            Rc::clone(self.reaches.borrow_mut().get_or_insert_with(site, || Rc::new(Reach::of(&self.written[&site]))));
         let missed = reach.misses(cell);
         let found = if missed && !check_clobbers() {
             false
@@ -842,7 +841,7 @@ pub fn built<'a>(
     let live = Access::new(0, Kind::Live);
     let entries: IndexMap<i64, usize> = graph.iter().enumerate().map(|(index, block)| (block.at, index + 1)).collect();
     let mut sites: IndexMap<InstId, Access> = IndexMap::default();
-    let mut written: IndexMap<InstId, Option<Rc<[MemRef]>>> = IndexMap::default();
+    let mut written: llrm_mir::dense::IdMap<InstId, Option<Rc<[MemRef]>>> = Default::default();
     let nothing: Rc<[MemRef]> = Rc::from(Vec::new());
     let mut outgoing: BTreeMap<i64, usize> = BTreeMap::new();
     let mut next_id = entries.len() + 1;
