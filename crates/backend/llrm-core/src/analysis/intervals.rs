@@ -204,6 +204,7 @@ pub fn indexed_shared(body: &LirBody) -> Arc<Indexes> {
             },
         );
     if let Some(found) = kept {
+        body.facts.0.bump("indexed-remembered");
         return found;
     }
     body.facts.0.bump("indexed");
