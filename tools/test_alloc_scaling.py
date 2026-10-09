@@ -87,3 +87,18 @@ def test_a_spill_patches_the_postings_of_the_block_it_changed_instead_of_making_
         source.write_text(scaling.AXES["cells"](224))
         run = steps(compiler, source, "-O2")
     assert run["spill cleanup"] < 250, f"cells N=224 -O2: spill cleanup cost {run['spill cleanup']} Minstr (250 allowed; 699 before): {run}"
+
+
+def test_a_spill_passes_over_the_instructions_that_name_no_spilled_value():
+    """`spill rewrite` ran its dozen rewrites over every instruction of a block that held one spilled value: 570 Minstr on `cells`
+    at N=224 (one block, ~600 spills), 1.3k instructions of work for each of ~3000 instructions per spill. An instruction that
+    names none of the values is left as it is, found from the postings."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](224))
+        run = steps(compiler, source, "-O2")
+    assert run["spill rewrite"] < 150, f"cells N=224 -O2: spill rewrite cost {run['spill rewrite']} Minstr (150 allowed; 570 before): {run}"

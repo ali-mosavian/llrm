@@ -263,13 +263,20 @@ pub fn materialized(
         .chain(frame_loads.keys())
         .copied()
         .collect();
-    let named: BTreeSet<usize> = postings::following(&body, |postings| {
-        relevant
-            .iter()
-            .flat_map(|value| postings.defs(*value).iter().chain(postings.uses(*value)).chain(postings.needs(*value)))
-            .map(|at| at.0 as usize)
-            .collect()
+    // The positions, in each block, of the instructions that name one.
+    let mut touching: Vec<Vec<u32>> = vec![Vec::new(); body.blocks.len()];
+    postings::following(&body, |postings| {
+        for value in &relevant {
+            for at in postings.defs(*value).iter().chain(postings.uses(*value)).chain(postings.needs(*value)) {
+                touching[at.0 as usize].push(at.1);
+            }
+        }
     });
+    for positions in &mut touching {
+        positions.sort_unstable();
+        positions.dedup();
+    }
+    let named: BTreeSet<usize> = (0..touching.len()).filter(|block| !touching[*block].is_empty()).collect();
     let mut blocks = Vec::new();
     for (block_index, block) in body.blocks.iter().enumerate() {
         if !named.contains(&block_index) && !check_postings() {
@@ -281,13 +288,19 @@ pub fn materialized(
         // Where the parallel copy being copied begins in `insns`: what its
         // moves read is made before all of them, not between two.
         let mut copy: Option<(i64, usize)> = None;
-        for original in &block.insns {
+        for (position, original) in block.insns.iter().enumerate() {
             let mut one = Arc::clone(original);
             copy = match (one.group, copy) {
                 (Some(group), Some((open, at))) if group == open => Some((open, at)),
                 (Some(group), _) => Some((group, insns.len())),
                 (None, _) => None,
             };
+            // One that names none of the values is left as it is.
+            let untouched = touching[block_index].binary_search(&(position as u32)).is_err();
+            if untouched && !check_postings() {
+                insns.push(one);
+                continue;
+            }
             if _identity(&one, &stored, frame) {
                 marked.insert(block_index);
                 identities.insert(key(&one));
@@ -453,6 +466,20 @@ pub fn materialized(
                 body.name,
                 block.at
             );
+        }
+        if check_postings() {
+            let kept: crate::support::hash::HashSet<*const Insn> = insns.iter().map(Arc::as_ptr).collect();
+            for (position, one) in block.insns.iter().enumerate() {
+                if touching[block_index].binary_search(&(position as u32)).is_err() {
+                    assert!(
+                        kept.contains(&Arc::as_ptr(one))
+                            && !identities.contains(&key(one))
+                            && !abandoned.contains(&key(one)),
+                        "{}: the instruction at {position} of block {block_index} names none of the values spilled and was changed",
+                        body.name
+                    );
+                }
+            }
         }
         blocks.push(block.with_insns(insns));
     }
