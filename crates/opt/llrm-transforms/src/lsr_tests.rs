@@ -2159,3 +2159,14 @@ fn test_the_trips_lsr_prices_with_are_proved_once_for_a_loop_no_change_reached()
     assert!(printed.contains("define"), "{printed}");
     assert!(proved <= 2 * depth, "{proved} loop counts proved for {depth} loops");
 }
+
+/// `_live_anyway` solved the function's liveness for every loop it planned, when `Pressure`, which the same call holds, has it: a nest of
+/// d loops solved it d times more (16 loops: 1.6 of lsr's 5.8 points on the nest axis). It asks the one it holds.
+#[test]
+fn test_a_loop_is_planned_with_the_liveness_the_pressure_holds() {
+    let text = program(&[("a", "i16", 2), ("b", "i16", 2)], "i32", DOT).replace("br label %l2.back\n\nl2.back:\n  br label %l1", "br label %l1").replace("%l2.back ]", "%l2 ]");
+    let before = llrm_analysis::liveness::solves();
+    let _ = reduced(&text);
+    let solved = llrm_analysis::liveness::solves() - before;
+    assert!(solved <= 3, "{solved} solves of liveness for one loop");
+}
