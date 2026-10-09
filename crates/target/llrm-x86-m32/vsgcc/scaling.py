@@ -396,6 +396,8 @@ def chart(name: str, data: dict, out: Path, level: str = "O2") -> None:
     fig, ax = plt.subplots(figsize=(6, 4.2))
     for compiler, colour in zip(COMPILERS, ("#d55e00", "#0072b2", "#009e73")):
         rows = data["series"].get(f"{compiler} {level}", [])
+        if f"{compiler} {level}" not in data["base"]:
+            continue
         base = data["base"][f"{compiler} {level}"]["ins"]
         xs, ys = net(rows, base)
         if len(xs) > 1:
