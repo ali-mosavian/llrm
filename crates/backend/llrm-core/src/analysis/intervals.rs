@@ -509,12 +509,16 @@ pub fn changed_runs(
     body: &LirBody,
     index: &Indexes,
     differing: &Differing,
+    limit: usize,
     visit: &mut dyn FnMut(&[Arc<Insn>]),
 ) -> usize {
-    let mut changed = 0;
+    let changed = std::cell::Cell::new(0);
     let mut report = |run: &[Arc<Insn>], hits: usize| {
-        changed += hits;
-        visit(run);
+        changed.set(changed.get() + hits);
+        // Past what the caller would take, the rest is not looked at.
+        if changed.get() <= limit {
+            visit(run);
+        }
     };
     // The groups of `run` that hold an instruction `gone` says is in only one
     // body.
@@ -566,6 +570,11 @@ pub fn changed_runs(
     for (position, at) in differing.blocks.iter().enumerate() {
         match &differing.aligned[position] {
             Some(found) => {
+                let all = found.gone.len() + found.added.len();
+                if changed.get() + all > limit {
+                    changed.set(changed.get() + all);
+                    continue;
+                }
                 side(&held[*at].1[..], &found.gone, &mut report);
                 side(&body.blocks[*at].insns[..], &found.added, &mut report);
             }
@@ -575,7 +584,7 @@ pub fn changed_runs(
             }
         }
     }
-    changed
+    changed.get()
 }
 
 impl Shift {
@@ -838,7 +847,7 @@ fn updated(
     let blocks: Vec<(i64, &Insns)> = held.blocks.iter().map(|(at, _, _, insns)| (*at, insns)).collect();
     let differing = differing_blocks(&blocks, body);
     let mut touched: crate::support::hash::HashSet<u32> = Default::default();
-    let changed = changed_runs(&blocks, &held.index, body, index, &differing, &mut |run| {
+    let changed = changed_runs(&blocks, &held.index, body, index, &differing, (held.count + 16) / 4, &mut |run| {
         for one in run {
             touched.extend(one.defines.iter().chain(&one.uses).copied());
         }
