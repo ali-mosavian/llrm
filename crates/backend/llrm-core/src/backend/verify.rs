@@ -23,6 +23,54 @@ impl fmt::Display for Malformed {
 
 impl std::error::Error for Malformed {}
 
+/// `verify`, and for a target with one address space what a flat program does
+/// not have: a segment register, a selector or a segment override. The target's
+/// description says whether it has one (`Spaces::far_is_near`, no segments).
+pub fn verify_for(
+    body: &LirBody,
+    in_ssa: bool,
+    spaces: &llrm_mir::spaces::Spaces,
+) -> Vec<String> {
+    let mut out = verify(body, in_ssa);
+    if spaces.far_is_near() && spaces.segment_bytes.is_none() {
+        out.extend(_flat(body));
+    }
+    out
+}
+
+/// No operand is a segment register, and no cell has a selector or an override
+/// of any segment but the stack's and the data's, which are the one space here
+/// (the encoder drops them): the machine of the target has no other to name.
+fn _flat(body: &LirBody) -> Vec<String> {
+    use iced_x86::Register::{DS, None as NoSegment, SS};
+    let other = |segment| segment != NoSegment && segment != SS && segment != DS;
+    let mut out = vec![];
+    for block in &body.blocks {
+        for one in &block.insns {
+            let Some(what) = &one.what else { continue };
+            for place in what.dests.iter().chain(&what.sources) {
+                let named = match place {
+                    Loc::Reg(reg) if llrm_x86::registers::SEGMENTS.contains(&reg.register) => {
+                        Some(format!("the segment register {:?}", reg.register))
+                    }
+                    Loc::Mem(cell) if cell.selector.is_some() => Some("a cell with a selector".to_owned()),
+                    Loc::Mem(cell) if cell.addr.is_some_and(|addr| other(addr.segment)) => {
+                        Some("a segment override".to_owned())
+                    }
+                    Loc::Address(cell) if cell.addr.is_some_and(|addr| other(addr.segment)) => {
+                        Some("a segment override".to_owned())
+                    }
+                    _ => None,
+                };
+                if let Some(what) = named {
+                    out.push(format!("{:#06x} names {what}, which a target with one address space has not", one.at));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Everything wrong with this body, as sentences. Empty is well formed.
 pub fn verify(
     body: &LirBody,
@@ -325,6 +373,39 @@ mod tests {
         let work = Insn::new(2, Some((2, 4)), Some(push), vec![], vec![]);
         let body = body("dead-work", vec![LirBlock::new(1, vec![]), LirBlock::new(2, vec![Arc::new(work)])]);
         assert!(verify(&body, false).iter().any(|complaint| complaint.contains("block 0x0002 is not reachable")));
+    }
+
+    /// A flat target has one address space and no segments: what its
+    /// description says, not an `-m32` check, decides that a segment
+    /// register or a selector in its code is a defect (real mode's
+    /// description says otherwise).
+    #[test]
+    fn test_a_target_with_one_address_space_refuses_what_names_a_segment() {
+        let reg = |register| Loc::Reg(ir::Reg { register, width: 2 });
+        let push = |source: Loc, uses: Vec<u32>| {
+            let what = semantics(Operation::Push, "push", vec![], vec![source]);
+            let mut body = body(
+                "segments",
+                vec![LirBlock::new(1, vec![Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![], uses))])],
+            );
+            body.inputs = BTreeSet::from([1]);
+            body
+        };
+        let selected = Loc::Mem(ir::Mem {
+            selector: Some(ir::Held { value: 1, width: 2 }),
+            ..ir::Mem::new(Some(ir::Addr::new(ir::Space::Segment, 0)), 2)
+        });
+        let flat = llrm_target::Target::layout(&llrm_x86_m32::M32).spaces.roles;
+        let real = llrm_target::Target::layout(&llrm_x86_m16::M16).spaces.roles;
+        for (source, uses, says) in [
+            (reg(iced_x86::Register::ES), vec![], "segment register ES"),
+            (selected, vec![1], "a cell with a selector"),
+        ] {
+            let body = push(source, uses);
+            assert_eq!(verify_for(&body, false, &real), Vec::<String>::new(), "real mode has segments");
+            let said = verify_for(&body, false, &flat);
+            assert!(said.iter().any(|complaint| complaint.contains(says)), "{said:?}");
+        }
     }
 
     /// A phase that made a frame cell from a displacement alone left the frame
