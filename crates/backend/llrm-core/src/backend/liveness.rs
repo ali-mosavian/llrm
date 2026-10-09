@@ -128,13 +128,13 @@ pub fn effect(bits: u32, one: &Insn) -> Option<Effect> {
 }
 
 /// Each instruction's effect in `block`, decoded once for a fixed point to reuse.
-fn _effects(bits: u32, block: &LirBlock) -> Vec<Option<Effect>> {
+pub fn _effects(bits: u32, block: &LirBlock) -> Vec<Option<Effect>> {
     block.insns.iter().map(|one| effect_held(bits, one)).collect()
 }
 
 /// The lanes live before `effects`, given those live after them. An unknown
 /// instruction may read anything.
-fn _before(effects: &[Option<Effect>], live: Lanes, universe: &Lanes) -> Lanes {
+pub fn _before(effects: &[Option<Effect>], live: Lanes, universe: &Lanes) -> Lanes {
     effects.iter().rev().fold(live, |live, one| one.as_ref().map_or_else(|| *universe, |one| one.live_before(&live)))
 }
 

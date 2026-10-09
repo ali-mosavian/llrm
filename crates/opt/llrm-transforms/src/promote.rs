@@ -38,7 +38,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::manager::Held;
-use llrm_analysis::memory::{Identity, MemRef, MemoryObject, Provenance, Slice, Unit};
+use llrm_analysis::memory::{Identity, MemRef, ObjectRef, Provenance, Slice, Unit};
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, regions, ssa};
 use llrm_analysis::graph::loops;
@@ -56,7 +56,7 @@ use llrm_support::hash::{HashMap, HashSet, IndexMap};
 /// pointers to it are based on.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct _Leaf {
-    pub object: MemoryObject,
+    pub object: ObjectRef,
     pub low: i64,
     pub high: i64,
     pub type_class: Option<String>,
@@ -72,13 +72,13 @@ pub enum Key {
 }
 
 /// The one explicit type each leaf's bytes are accessed as.
-pub type Canonical = HashMap<(MemoryObject, i64, i64), String>;
+pub type Canonical = HashMap<(ObjectRef, i64, i64), String>;
 
 fn only_slice(provenance: &Provenance) -> Option<&Slice> {
     if provenance.slices.len() == 1 { provenance.slices.iter().next() } else { None }
 }
 
-fn slice(object: MemoryObject, low: i64, high: i64) -> Slice {
+fn slice(object: ObjectRef, low: i64, high: i64) -> Slice {
     Slice::new(object, low, high, 1, 1).expect("a nonempty exact byte range")
 }
 
@@ -96,9 +96,9 @@ pub fn _leaf(reference: &MemRef, canonical: &Canonical) -> Option<_Leaf> {
     if span.object.extent.is_some_and(|extent| !(0 <= span.low && span.low < high && high <= extent)) {
         return None;
     }
-    let type_class = reference.typed.clone().or_else(|| canonical.get(&(span.object.clone(), span.low, high)).cloned());
+    let type_class = reference.typed.clone().or_else(|| canonical.get(&(span.object, span.low, high)).cloned());
     let restrict = reference.provenance.as_ref().map(|provenance| provenance.restrict.clone()).unwrap_or_default();
-    Some(_Leaf { object: span.object.clone(), low: span.low, high, type_class, restrict })
+    Some(_Leaf { object: span.object, low: span.low, high, type_class, restrict })
 }
 
 /// Bytes whose accesses cannot form disjoint scalar leaves.
@@ -107,7 +107,7 @@ pub fn _leaf(reference: &MemRef, canonical: &Canonical) -> Option<_Leaf> {
 /// overlap keeps both ranges in memory and leaves the rest of their object
 /// alone; ambiguous multi-object provenance keeps every slice it names.
 pub fn _blocked<'a>(refs: impl IntoIterator<Item = &'a MemRef>, canonical: &Canonical) -> BTreeSet<Slice> {
-    let mut accesses = IndexMap::<MemoryObject, Vec<_Leaf>>::default();
+    let mut accesses = IndexMap::<ObjectRef, Vec<_Leaf>>::default();
     let mut blocked = BTreeSet::new();
     for reference in refs {
         let Some(provenance) = &reference.provenance else { continue };
@@ -163,8 +163,8 @@ pub fn _reference(key: &Key, width: u32) -> MemRef {
 }
 
 /// Objects known to contain more than the scalar leaf being accessed.
-pub fn _aggregate_objects<'a>(leaves: impl IntoIterator<Item = &'a Key>) -> BTreeSet<MemoryObject> {
-    let mut ranges = IndexMap::<MemoryObject, BTreeSet<(i64, i64)>>::default();
+pub fn _aggregate_objects<'a>(leaves: impl IntoIterator<Item = &'a Key>) -> BTreeSet<ObjectRef> {
+    let mut ranges = IndexMap::<ObjectRef, BTreeSet<(i64, i64)>>::default();
     for leaf in leaves {
         if let Key::Leaf(leaf) = leaf {
             ranges.entry(leaf.object.clone()).or_default().insert((leaf.low, leaf.high));
@@ -182,7 +182,7 @@ pub fn _aggregate_objects<'a>(leaves: impl IntoIterator<Item = &'a Key>) -> BTre
 /// distinct types keep the union and type-pun rejection.
 pub fn _canonical_leaf_types<'a>(refs: impl IntoIterator<Item = &'a MemRef>) -> Canonical {
     let untyped = Canonical::default();
-    let mut types = HashMap::<(MemoryObject, i64, i64), BTreeSet<String>>::default();
+    let mut types = HashMap::<(ObjectRef, i64, i64), BTreeSet<String>>::default();
     for reference in refs {
         if let Some(leaf) = _leaf(reference, &untyped)
             && let Some(type_class) = leaf.type_class

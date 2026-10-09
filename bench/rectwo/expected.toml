@@ -1,15 +1,15 @@
-reason = "a route that ties or has no byte price is decided by the other measure; lea of a register and its scaled copy is priced: mandel nib -Os instructions -1.3%, code -2 bytes"
+reason = "PostRAMachineSinking: a copy only one successor reads moves into it: instructions fall (rectwo c -15%, hanoi nib -24%, hanoi c -7%, fib nib -22%, fib c -3.8%, bintree -3%), code bytes equal or smaller"
 blessed = "2026-10-09"
 
 [c.O2]
-instructions = 1944778
+instructions = 1653058
 memory_operands = 97238
-code_bytes = 82
+code_bytes = 80
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 1993398
+instructions = 1896158
 memory_operands = 97238
 code_bytes = 80
 data_bytes = 0

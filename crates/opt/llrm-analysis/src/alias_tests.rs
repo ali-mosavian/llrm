@@ -8,7 +8,7 @@ use llrm_mir::opcode::Opcode;
 use llrm_support::hash::IndexMap;
 
 use super::{_direct_summary, Effect, PointsTo, Procedure, Summary, UNKNOWN, annotated, calls_annotated, congruences, nonnull_by_definition, points_to, summaries};
-use crate::memory::{self, Identity, MemRef, MemoryKind, MemoryObject, Provenance, Slice, Unit, object_of};
+use crate::memory::{self, Identity, MemRef, MemoryKind, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit, object_of};
 use crate::regions::overlapping;
 use crate::testing::{DOS, function, layout, parsed, value};
 
@@ -41,7 +41,7 @@ impl Parsed {
     }
 
     /// The object `%name` allocates.
-    fn object(&self, name: &str) -> MemoryObject {
+    fn object(&self, name: &str) -> ObjectRef {
         object_of(&self.unit(), Operand::Value(self.value(name))).expect("an object")
     }
 
@@ -70,7 +70,7 @@ fn parameter(index: i64) -> MemoryObject {
 }
 
 /// An access to bytes `low..high` of `object`.
-fn bytes(object: &MemoryObject, low: i64, high: i64) -> MemRef {
+fn bytes(object: &(impl Into<ObjectRef> + Clone), low: i64, high: i64) -> MemRef {
     let slice = Slice::new(object.clone(), low, low + 1, 1, high - low).unwrap();
     MemRef::reach(u32::try_from(high - low).unwrap(), Provenance { slices: BTreeSet::from([slice]), restrict: BTreeSet::new() })
 }
@@ -179,10 +179,10 @@ b20:
 }
 ",
         );
-        sender.send(parsed.facts().values[&parsed.value("loaded")].clone()).unwrap();
+        let loaded = parsed.facts().values[&parsed.value("loaded")].clone();
+        sender.send(loaded.slices.iter().any(|one| ObjectInterner::of(&parsed.module.context).object(one.object) == parameter(0))).unwrap();
     });
-    let loaded = receiver.recv_timeout(std::time::Duration::from_secs(10)).expect("points_to terminates");
-    assert!(loaded.slices.iter().any(|one| one.object == parameter(0)));
+    assert!(receiver.recv_timeout(std::time::Duration::from_secs(10)).expect("points_to terminates"));
 }
 
 #[test]
@@ -200,7 +200,7 @@ b0:
     );
     let load = parsed.all(|op| matches!(op, Opcode::Load { .. }))[0];
     let tagged = annotated(&parsed.unit()).unwrap()[&load].provenance.clone().expect("a derived provenance");
-    assert_eq!(tagged.slices.iter().map(|one| one.object.clone()).collect::<BTreeSet<_>>(), BTreeSet::from([parsed.object("a")]));
+    assert_eq!(tagged.slices.iter().map(|one| one.object).collect::<BTreeSet<_>>(), BTreeSet::from([parsed.object("a")]));
 }
 
 #[test]
@@ -225,7 +225,7 @@ b0:
     let summary = _direct_summary(&parsed.unit()).unwrap();
     assert_eq!(facts.values[&parsed.value("second")], facts.values[&parsed.value("root")]);
     assert!(!summary.unknown_write);
-    assert_eq!(summary.writes.iter().map(|one| one.object.clone()).collect::<BTreeSet<_>>(), BTreeSet::from([parameter(0)]));
+    assert_eq!(summary.writes.iter().map(|one| ObjectInterner::of(&parsed.module.context).object(one.object)).collect::<BTreeSet<_>>(), BTreeSet::from([parameter(0)]));
 }
 
 #[test]
@@ -315,7 +315,7 @@ fn test_interprocedural_modref_reaches_the_call_operation() {
     let known = summaries(&procedures, None).unwrap();
     let effect = &parsed.effects(&known)[0];
     let Some(super::Actual::Provenance(passed)) = procedures["f"].arguments.values().next().map(|actual| actual[0].clone()) else { panic!("@g's slice") };
-    let g = passed.slices.first().unwrap().object.clone();
+    let g = passed.slices.first().unwrap().object;
     assert!(effect.loads.is_empty());
     assert!(writes(effect, &bytes(&g, 6, 8)));
     assert!(!writes(effect, &bytes(&g, 4, 6)) && !writes(effect, &bytes(&g, 8, 16)));
@@ -515,7 +515,7 @@ b0:
 }
 
 /// The objects `@f` lets escape when `%a`'s address meets `use_`.
-fn escaped(use_: &str) -> BTreeSet<MemoryObject> {
+fn escaped(use_: &str) -> BTreeSet<ObjectRef> {
     let parsed = Parsed::new(&format!(
         "define ptr @f() {{
 b0:
