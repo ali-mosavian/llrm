@@ -146,14 +146,16 @@ pub fn foreign_provenance(
 }
 
 /// What `reference` may name under `facts`: its linear bytes when its
-/// segment lands it in foreign memory, else its provenance narrowed.
-fn refined(
-    reference: &MemRef,
+/// segment lands it in foreign memory, else its provenance narrowed. Its own
+/// provenance, borrowed, where nothing narrows it: the common answer, and a
+/// copy of two sets of slices for each pair asked.
+fn refined<'a>(
+    reference: &'a MemRef,
     facts: Option<&BTreeMap<ValueId, Interval>>,
     program: Option<&ProgramProxy>,
-) -> Result<Option<Provenance>, RegionError> {
+) -> Result<Option<Cow<'a, Provenance>>, RegionError> {
     if let Some(slice) = foreign(reference, facts, program) {
-        return Ok(Some(Provenance { slices: BTreeSet::from([slice]), restrict: BTreeSet::new() }));
+        return Ok(Some(Cow::Owned(Provenance { slices: BTreeSet::from([slice]), restrict: BTreeSet::new() })));
     }
     reference.provenance.as_ref().map(|provenance| narrowed(reference, provenance, facts)).transpose()
 }
@@ -237,19 +239,19 @@ pub fn typed_apart(
 /// so the access width is included exactly once when calculating the final
 /// byte. BigInt retains Python arithmetic until the new `Slice` must be
 /// represented by Rust's bounded endpoints.
-fn narrowed(
+fn narrowed<'a>(
     reference: &MemRef,
-    provenance: &Provenance,
+    provenance: &'a Provenance,
     facts: Option<&BTreeMap<ValueId, Interval>>,
-) -> Result<Provenance, RegionError> {
+) -> Result<Cow<'a, Provenance>, RegionError> {
     let Some(base) = reference.base.filter(|_| reference.object) else {
-        return Ok(provenance.clone());
+        return Ok(Cow::Borrowed(provenance));
     };
     let Some(interval) = facts.and_then(|facts| facts.get(&base)) else {
-        return Ok(provenance.clone());
+        return Ok(Cow::Borrowed(provenance));
     };
     if interval.width != reference.base_width || provenance.slices.len() != 1 {
-        return Ok(provenance.clone());
+        return Ok(Cow::Borrowed(provenance));
     }
     let source = provenance.slices.first().expect("one source slice was checked above");
     let width = i64::from(reference.width.max(1));
@@ -260,7 +262,7 @@ fn narrowed(
     if let Some(extent) = source.object.extent {
         let extent = BigInt::from(extent);
         if low < BigInt::from(0_u8) || low >= high || end > extent {
-            return Ok(provenance.clone());
+            return Ok(Cow::Borrowed(provenance));
         }
     }
 
@@ -268,7 +270,7 @@ fn narrowed(
         return Err(RegionError::NarrowedSliceUnrepresentable);
     };
     let slice = Slice::new(source.object.clone(), low, high, 1, width).map_err(RegionError::InvalidNarrowedSlice)?;
-    Ok(Provenance { slices: BTreeSet::from([slice]), restrict: provenance.restrict.clone() })
+    Ok(Cow::Owned(Provenance { slices: BTreeSet::from([slice]), restrict: provenance.restrict.clone() }))
 }
 
 /// Whether one reference lands in foreign memory and the other in program

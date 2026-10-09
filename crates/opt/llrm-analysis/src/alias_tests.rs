@@ -1083,6 +1083,28 @@ fn a_typed_reference_is_copied_without_allocating() {
     drop((copy, copies));
 }
 
+/// A reference of a unit with no type tree was given the names of its type and
+/// every ancestor as new strings, for each reference: 7% of the compile's
+/// allocations (QCport). The names are read once for each type of a module.
+#[test]
+fn a_reference_of_a_unit_with_no_type_tree_reads_its_type_names_once() {
+    let parsed = Parsed::new(&format!(
+        "define void @f(ptr %p) {{\n  store i16 1, ptr %p, !tbaa !5\n  store i16 2, ptr %p, !tbaa !5\n  ret void\n}}\n{TYPE_TREE}"
+    ));
+    let unit = parsed.unit();
+    assert!(unit.tbaa.is_none(), "premise: the unit has no tree");
+    let stores = parsed.all(|op| matches!(op, Opcode::Store { .. }));
+    let first = crate::memory::lineage(&unit, stores[0]);
+    assert_eq!(first.len(), 3);
+    crate::memory::typed(&unit, stores[0]).expect("a name");
+    let before = counted::made();
+    let second = crate::memory::lineage(&unit, stores[1]);
+    let named = crate::memory::typed(&unit, stores[1]);
+    assert_eq!(counted::made() - before, 0, "the names of a type already read were read again");
+    assert_eq!(second, first);
+    assert!(named.is_some());
+}
+
 /// Picking the buckets a write reaches made a vector for the objects, one for
 /// the classes and one grown a few times for the answer: 7% of the compile's
 /// allocations (QCport). One vector, sized once, is the answer.
@@ -1096,6 +1118,24 @@ fn picking_the_buckets_of_a_write_allocates_once() {
     let reached = crate::regions::overlap_buckets(&reference, &parts);
     assert_eq!(counted::made() - before, 1, "the picking allocated more than its answer");
     drop(reached);
+}
+
+/// `may_alias` copied both references' provenance, two sets of slices, for each
+/// pair it was asked of, though nothing narrowed them (`regions::refined`: 4.6%
+/// of the compile's allocations and 15% of its bytes, QCport). It reads them
+/// where they are.
+#[test]
+fn asking_whether_two_references_may_alias_copies_no_provenance() {
+    let global =
+        MemoryObject { identity: Some(Identity::Global(1)), extent: Some(16), ..MemoryObject::new(MemoryKind::Global) };
+    let other =
+        MemoryObject { identity: Some(Identity::Global(2)), extent: Some(16), ..MemoryObject::new(MemoryKind::Global) };
+    let write = MemRef { provenance: Some(one(&global, 0, 4)), ..MemRef::reach(4, one(&global, 0, 4)) };
+    let read = MemRef { provenance: Some(one(&other, 0, 4)), ..MemRef::reach(4, one(&other, 0, 4)) };
+    let before = counted::made();
+    let answer = crate::regions::may_alias(&write, &read, None, None, None).unwrap();
+    assert_eq!(counted::made() - before, 0, "the provenance of a pair was copied");
+    assert!(!answer);
 }
 
 /// A callee was looked up among every global by name at every call of every
