@@ -72,7 +72,7 @@ def method() -> str:
 
 
 def measure_all(jobs: int) -> dict:
-    """This process's compiler (LLRM_BIN, else the tree's target): compile cost, and the cost at N and 2N of each axis and step."""
+    """This process's compiler (LLRM_BIN, else the tree's target): compile cost, and the cost at N/2, N and 2N of each axis and step."""
     compiler = llrmbin.bin_dir() / "llrm-c"
     passes = scaling_gate.measure_passes(jobs)
     return {
@@ -186,18 +186,19 @@ def compile_rises(base: dict[str, int], now: dict[str, int], tol: dict) -> tuple
     return lines, bad
 
 
-def excess(small: float, big: float) -> float:
-    """What the cost at 2N exceeds twice the cost at N by: nil for linear work, and unmoved by a saving or an addition that is linear."""
-    return big - 2 * small
+def second(half: float, small: float, big: float) -> float:
+    """c(2N) - 3c(N) + 2c(N/2): of a cost a + bN + kN^2, 1.5kN^2. A fixed cost or a linear one cancels, so removing either leaves it alone
+    (the excess c(2N) - 2c(N), -a + 2kN^2, rises when a fixed cost goes), and a quadratic term raises it."""
+    return big - 3 * small + 2 * half
 
 
 def axis_rises(base: dict[str, list[int]], now: dict[str, list[int]], tol: dict) -> tuple[list[str], list[str]]:
-    """Per axis and level: the superlinear excess may not rise by more than `excess` of the base's cost at 2N, nor the cost at 2N by `worst`."""
+    """Per axis and level: the second difference may not rise by more than `excess` of the base's cost at 2N, nor the cost at 2N by `worst`."""
     lines, bad = [], []
     for key in sorted(base.keys() & now.keys()):
-        (small, big), (was_small, was_big) = now[key], base[key]
-        more = excess(small, big) - excess(was_small, was_big)
-        lines.append(f"{key}: excess {excess(small, big) / was_big:+.4f} of the base's 2N (base {excess(was_small, was_big) / was_big:+.4f}), 2N x{big / was_big:.4f}")
+        (half, small, big), (was_half, was_small, was_big) = now[key], base[key]
+        more = second(half, small, big) - second(was_half, was_small, was_big)
+        lines.append(f"{key}: second difference {second(half, small, big) / was_big:+.4f} of the base's 2N (base {second(was_half, was_small, was_big) / was_big:+.4f}), 2N x{big / was_big:.4f}")
         if more > tol["excess"] * was_big:
             bad.append(f"{key}: superlinear work grew by {more / was_big:.4f} of the base's cost at 2N (> {tol['excess']}): a step is superlinear where it was not")
         if big > was_big * tol["worst"]:
@@ -206,18 +207,18 @@ def axis_rises(base: dict[str, list[int]], now: dict[str, list[int]], tol: dict)
 
 
 def step_rises(base: dict[str, list[float]], now: dict[str, list[float]], tol: dict) -> tuple[list[str], list[str]]:
-    """A step of `high` share or more whose excess rose by `step_excess` of the compile's cost at 2N, or whose cost at 2N rose by
-    `pass_slack`, fails. A step the base did not read is taken to have been `linear` (2N/N) there; one below `high`, or on the edge of
-    the share floor, does not fail either way."""
+    """A step of `high` share or more whose second difference rose by `step_excess` of the compile's cost at 2N, or whose cost at 2N rose
+    by `pass_slack`, fails. A step the base did not read is taken to have had none; one below `high`, or on the edge of the share floor,
+    does not fail either way."""
     lines, bad = [], []
-    for key, (small, big, whole) in sorted(now.items()):
+    for key, (half, small, big, whole) in sorted(now.items()):
         if big < tol["high"] * whole:
             continue
-        was_small, was_big, _ = base.get(key, [small, small * tol["linear"], whole])
-        more = excess(small, big) - excess(was_small, was_big)
+        was_half, was_small, was_big, _ = base.get(key, [half, small, big, whole])
+        more = second(half, small, big) - (second(was_half, was_small, was_big) if key in base else 0.0)
         if more > tol["step_excess"] * whole or (key in base and big > was_big * tol["pass_slack"]):
-            lines.append(f"{key}: excess {excess(small, big):.1f} Minstr (base {excess(was_small, was_big):.1f}), 2N x{big / was_big:.3f}")
-            bad.append(f"{key}: superlinear work {excess(small, big):.1f} Minstr > base {excess(was_small, was_big):.1f} by {more / whole:.4f} of the compile (> {tol['step_excess']}), or 2N x{big / was_big:.3f}" + ("" if key in base else f" (linear is {tol['linear']})"))
+            lines.append(f"{key}: second difference {second(half, small, big):.1f} Minstr (base {second(was_half, was_small, was_big) if key in base else 0.0:.1f}), 2N x{big / was_big:.3f}")
+            bad.append(f"{key}: superlinear work {second(half, small, big):.1f} Minstr rose by {more / whole:.4f} of the compile (> {tol['step_excess']}), or 2N x{big / was_big:.3f}")
     return lines, bad
 
 
