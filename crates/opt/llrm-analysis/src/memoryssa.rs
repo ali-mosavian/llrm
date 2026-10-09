@@ -394,6 +394,13 @@ fn check_clobbers() -> bool {
     *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_CLOBBERS"))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Times a cell was looked up by value (hashed whole) rather than by
+    /// number, for a test that a walk does it once.
+    pub(crate) static CELL_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Clone)]
 pub struct MemorySSA<'a> {
     pub live: Access,
@@ -506,14 +513,21 @@ impl MemorySSA<'_> {
         found
     }
 
-    /// `cell`'s number among the cells asked about.
+    /// `cell`'s number among the cells asked about; the cell is copied only the
+    /// first time.
     fn slot(
         &self,
         cell: &MemRef,
     ) -> usize {
+        #[cfg(test)]
+        CELL_PROBES.with(|probes| probes.set(probes.get() + 1));
         let mut slots = self.slots.borrow_mut();
+        if let Some(&slot) = slots.get(cell) {
+            return slot;
+        }
         let next = slots.len();
-        *slots.entry(cell.clone()).or_insert(next)
+        slots.insert(cell.clone(), next);
+        next
     }
 
     fn frontier(

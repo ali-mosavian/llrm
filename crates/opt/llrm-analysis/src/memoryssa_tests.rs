@@ -730,3 +730,25 @@ fn the_graph_shares_the_written_references_with_the_accesses_it_is_built_from() 
     let shared = graph.written[&store].as_deref().expect("the graph has the write");
     assert!(std::ptr::eq(shared.as_ptr(), kept.as_ptr()), "the graph copied the store's references");
 }
+
+/// A walk hashed its whole cell (a `MemRef`, provenance and all) at every store
+/// it passed, to find the remembered answer: 6% of gvn on host.c. Each walk
+/// looks its cell up by value once and the stores by number. Thirty loads of
+/// thirty cells, each walked back over thirty stores that leave it alone:
+/// thirty lookups, not nine hundred.
+#[test]
+fn a_walk_looks_its_cell_up_by_value_once_however_many_stores_it_passes() {
+    let stores: String = (0..30).map(|at| format!("  store i16 {at}, ptr {OTHER}\n")).collect();
+    let loads: String =
+        (0..30).map(|at| format!("  %y{at} = load i8, ptr getelementptr (i8, ptr @g, i16 {at})\n")).collect();
+    let parsed = Parsed::new(&format!("define void @f() {{\nb0:\n{stores}{loads}  ret void\n}}\n"));
+    let unit = parsed.unit();
+    let graph = graph(&unit);
+    let before = CELL_PROBES.with(std::cell::Cell::get);
+    for at in 0..30 {
+        let load = site(&unit, "b0", 30 + at);
+        assert_eq!(graph.clobbers(load, &cell(&unit, load)).len(), 1);
+    }
+    let probes = CELL_PROBES.with(std::cell::Cell::get) - before;
+    assert_eq!(probes, 30, "{probes} lookups of a cell by value for 30 walks");
+}
