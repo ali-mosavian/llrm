@@ -135,8 +135,9 @@ pub fn verified(
     body: LirBody,
     stage: &str,
     in_ssa: bool,
+    spaces: &llrm_mir::spaces::Spaces,
 ) -> Result<LirBody, Malformed> {
-    let complaints = verify::verify(&body, in_ssa);
+    let complaints = verify::verify_for(&body, in_ssa, spaces);
     if let Some(first) = complaints.first() {
         return Err(Malformed(format!("{stage}: {first}")));
     }
@@ -157,6 +158,7 @@ pub fn checked(
     in_ssa: bool,
     classes: &crate::backend::classes::RegisterClasses,
     segments: &Segments,
+    arch: &dyn llrm_target::Target,
 ) -> Result<LirBody, Checked> {
     let stage = if phase.name().is_empty() { phase.class_name().to_owned() } else { phase.name().to_owned() };
     // The invariance instrument, LLVM's `-g` rule: stripped of meta
@@ -168,8 +170,10 @@ pub fn checked(
     let transformed = crate::support::debug::timed_by(|| format!("lir {stage}"), || phase.transform_raising(body))
         .map_err(Checked::Refused)?;
     let body = if verifying {
-        crate::support::debug::timed("lir verify", || verified(transformed, &stage, in_ssa))
-            .map_err(Checked::Malformed)?
+        crate::support::debug::timed("lir verify", || {
+            verified(transformed, &stage, in_ssa, &arch.layout().spaces.roles)
+        })
+        .map_err(Checked::Malformed)?
     } else {
         transformed
     };
@@ -338,6 +342,7 @@ mod tests {
             false,
             &crate::backend::classes::RegisterClasses::m16(),
             &crate::backend::target::BUILT_IN,
+            &llrm_x86_m16::M16,
         ) else {
             panic!("the gate let three source bytes go");
         };
@@ -367,6 +372,7 @@ mod tests {
             false,
             &crate::backend::classes::RegisterClasses::m16(),
             &crate::backend::target::BUILT_IN,
+            &llrm_x86_m16::M16,
         ) else {
             panic!("the gate let a lost definition through");
         };

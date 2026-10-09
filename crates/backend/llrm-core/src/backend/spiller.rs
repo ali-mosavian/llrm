@@ -1698,11 +1698,33 @@ pub fn recomputed(
     value: u32,
 ) -> Option<Arc<Insn>> {
     let only = BTreeSet::from([value]);
-    if !_constants(body, &only).contains_key(&value) && !_addresses(body, &only).contains_key(&value) {
-        return None;
+    // The value's own occurrences, from the postings the body is followed with,
+    // not a walk of every instruction (a carve asks this of its value).
+    let defining: Vec<Arc<Insn>> = postings::following(body, |postings| {
+        if !_literals_by(body, &only, false, postings).contains_key(&value)
+            && !_addresses_by(body, &only, postings).contains_key(&value)
+        {
+            return None;
+        }
+        let mut at: Vec<At> = postings.defs(value).to_vec();
+        at.dedup();
+        Some(at.iter().map(|at| Arc::clone(_at(body, *at))).collect())
+    })?;
+    body.facts.0.bump_by("recomputed-definitions", defining.len());
+    if check_postings() {
+        let walked: Vec<Arc<Insn>> = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insns)
+            .filter(|one| one.defines.contains(&value))
+            .cloned()
+            .collect();
+        assert!(
+            walked.len() == defining.len() && walked.iter().zip(&defining).all(|(a, b)| Arc::ptr_eq(a, b)),
+            "{}: the definitions of value {value} from the postings differ from the walk",
+            body.name
+        );
     }
-    let defining: Vec<Arc<Insn>> =
-        body.blocks.iter().flat_map(|block| &block.insns).filter(|one| one.defines.contains(&value)).cloned().collect();
     let one = _one_definition(&defining)?;
     let alone = one.defines == [value]
         && one.uses.is_empty()
