@@ -407,6 +407,7 @@ def test_a_one_line_change_to_any_rust_file_selects_the_fmt_step_in_the_fast_tie
 def test_the_build_rejects_compiler_warnings():
     assert "RUSTFLAGS='-D warnings'" in gate.BUILD
     assert "cargo check --workspace --all-targets -q" in gate.BUILD
+    assert "cargo check --release --workspace --all-targets -q" in gate.BUILD
 
 
 def test_a_formatter_change_runs_its_tests_and_neither_step_needs_the_compiler_built():
