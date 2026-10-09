@@ -84,7 +84,31 @@ pub fn optimized(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintabl
         }
     }
     let placed = preferred(&baseline, &threaded(&candidate)).clone();
-    Ok(if size { placed } else { duplicated(&duplicated_tails(&placed), true) })
+    Ok(inverted(&if size { placed } else { duplicated(&duplicated_tails(&placed), true) }))
+}
+
+/// A conditional branch taken to the block laid out next, followed by a jump: the opposite branch to the jump's target, and no jump
+/// (LLVM's `analyzeBranch` / `reverseBranchCondition` in BranchFolding). `_step` does this while it places blocks; copying a tail
+/// afterwards (`duplicated`) makes more of them.
+fn inverted(body: &LirBody) -> LirBody {
+    let mut blocks = body.blocks.clone();
+    let mut changed = false;
+    for index in 0..blocks.len() {
+        let (last, before) = _real_tail(&blocks[index]);
+        let (Some(last), Some(branch)) = (last, before) else { continue };
+        let (last_what, branch_what) = (last.what.as_ref().expect(NO_OP), branch.what.as_ref().expect(NO_OP));
+        let after = blocks[index + 1..].iter().find(|next| !next.phis.is_empty() || next.insns.iter().any(|one| !one.is_meta())).map(|next| next.at);
+        let opposite = branch_what.name.as_deref().and_then(|name| _OPPOSITE.get(name));
+        if last_what.op != Operation::Jump || branch_what.op != Operation::Branch || branch_what.indirect || branch_what.target.is_none() || branch_what.target != after || last_what.target.is_none() {
+            continue;
+        }
+        let Some(opposite) = opposite else { continue };
+        let flipped = Arc::new(Insn { what: Some(Semantics { name: Some((*opposite).to_owned()), target: last_what.target, ..branch_what.clone() }), ..(*branch).clone() });
+        let insns = blocks[index].insns.iter().filter(|one| !Arc::ptr_eq(one, &last)).map(|one| if Arc::ptr_eq(one, &branch) { Arc::clone(&flipped) } else { Arc::clone(one) }).collect();
+        blocks[index] = blocks[index].with_insns(insns);
+        changed = true;
+    }
+    if changed { body.with_blocks(blocks) } else { body.clone() }
 }
 
 /// gcc's `max-grow-copy-bb-insns`: a block is copied while it is at most this many unconditional jumps long.

@@ -884,3 +884,23 @@ fn test_the_copy_limit_is_priced_from_the_targets_jump() {
     assert_eq!(uncond_jump_bytes(32), 5);
     assert_eq!(copy_limit(32), 40);
 }
+
+/// `jne next; jmp elsewhere; next:` ran a jump on the path that falls to `next` (hanoi: 3601 `jmp` in 99200 instructions, 72 sites in 34
+/// of the 66 programs): one `je elsewhere` falls into `next` instead.
+#[test]
+fn test_a_branch_taken_to_the_next_block_then_a_jump_is_one_opposite_branch() {
+    let body = LirBody::new(
+        "f",
+        1,
+        vec![
+            LirBlock { succ: vec![2, 3], ..LirBlock::new(1, vec![_compare(1), _branch(2, "jne", 2), _jump(3, 3)]) },
+            LirBlock { succ: vec![], ..LirBlock::new(2, vec![_return(4)]) },
+            LirBlock { succ: vec![], ..LirBlock::new(3, vec![_return(5)]) },
+        ],
+        IndexMap::default(),
+        IndexMap::default(),
+    );
+    let got = inverted(&body);
+    let names: Vec<(String, Option<i64>)> = got.blocks[0].insns.iter().map(|one| one.what.as_ref().unwrap()).map(|what| (what.name.clone().unwrap(), what.target)).collect();
+    assert_eq!(names, vec![("cmp".to_owned(), None), ("je".to_owned(), Some(3))]);
+}
