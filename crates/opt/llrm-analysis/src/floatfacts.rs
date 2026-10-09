@@ -40,10 +40,33 @@ use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use crate::cfg;
+use llrm_mir::context::Context;
+use llrm_mir::module::Function;
 use crate::consts::{self, Calls, Cells, HeldCells, Known, _MemoryQueries};
 use crate::induction;
 use crate::memory::{MemRef, Unit};
 use crate::regions;
+
+/// Whether `ty` is, or holds, a floating-point number; an identified struct, whose body this does not read, may.
+fn floating(types: &Types, ty: TypeId) -> bool {
+    match types.get(ty) {
+        Type::Float(_) | Type::Named(_) => true,
+        Type::Array { element, .. } | Type::Vector { element, .. } => floating(types, *element),
+        Type::Struct { fields, .. } => fields.iter().any(|&field| floating(types, field)),
+        _ => false,
+    }
+}
+
+/// Whether `function` has any floating-point value or operand. Every solve of floats starts from one: where there is none, no float
+/// loop, fold or fact exists, and asking for the solve (a whole-function dataflow over memory) is a cost for nothing.
+pub fn touches(context: &Context, function: &Function) -> bool {
+    let types = &context.types;
+    function.walk().any(|(_, inst)| {
+        let instruction = function.instruction(inst);
+        instruction.result.is_some_and(|value| floating(types, function.value(value).ty))
+            || instruction.operands.iter().any(|&operand| function.operand_type(context, operand).is_some_and(|ty| floating(types, ty)))
+    })
+}
 
 /// Python's `fractions.Fraction`: always in lowest terms, denominator positive.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

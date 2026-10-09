@@ -178,3 +178,42 @@ fn test_the_pass_runs_under_the_manager() {
     assert!(text.contains("store float 4.387500e+02, ptr @m") && !text.contains("br i1"), "{text}");
     assert_eq!(results(&module, &[&[]]), before);
 }
+
+/// A body with no float in it was solved for floats whole (a dataflow over memory) for every round of every body, and never changed:
+/// 18.9 G of QCport's 458 G at -O2 was billed to it. It is not solved, and nothing is changed.
+#[test]
+fn test_a_body_with_no_float_is_not_solved_for_floats() {
+    let integer = "define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]
+  %j = add i16 %i, 1
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %j
+}
+";
+    let before = llrm_analysis::manager::float_solves();
+    let mut module = parsed(&format!("{DOS}{integer}"));
+    let text = printed(&module);
+    assert_eq!(crate::testing::managed(&mut module, super::FloatLoop), text);
+    assert_eq!(llrm_analysis::manager::float_solves(), before, "solved the floats of a body with none");
+    let mut module = parsed(&format!("{DOS}{}", fpcse(10)));
+    crate::testing::managed(&mut module, super::FloatLoop);
+    assert!(llrm_analysis::manager::float_solves() > before, "a body with floats is solved");
+}
+
+#[test]
+fn test_what_touches_floats_is_every_float_value_operand_and_aggregate() {
+    let touches = |text: &str| {
+        let module = parsed(&format!("{DOS}{text}"));
+        llrm_analysis::floatfacts::touches(&module.context, llrm_analysis::testing::function(&module, "f"))
+    };
+    assert!(!touches("define i16 @f(i16 %n) {\nb0:\n  %a = add i16 %n, 1\n  ret i16 %a\n}\n"));
+    assert!(touches("define i16 @f(i16 %n) {\nb0:\n  %a = sitofp i16 %n to float\n  %b = fptosi float %a to i16\n  ret i16 %b\n}\n"));
+    assert!(touches("@m = global [2 x float] zeroinitializer\ndefine i16 @f(i16 %n) {\nb0:\n  store float 1.0, ptr @m\n  ret i16 %n\n}\n"));
+}
