@@ -206,6 +206,91 @@ impl Remembered {
     }
 }
 
+/// Where the slots of an earlier numbering are in a later one, for a body that keeps most of the earlier one's blocks: the block
+/// tops carry the instructions of the blocks that are the same (each is where it was, relative to its top), and each instruction
+/// both have in the others is a point of its own.
+pub struct Shift {
+    old: Vec<i64>,
+    new: Vec<i64>,
+    tops: crate::support::hash::HashMap<i64, i64>,
+}
+
+/// The blocks of `body` that are not the same instructions as `held`'s (by position).
+pub fn differing_blocks(held: &[(i64, &Insns)], body: &LirBody) -> Vec<usize> {
+    (0..body.blocks.len()).filter(|at| !held[*at].1.same_insns(&body.blocks[*at].insns)).collect()
+}
+
+/// The runs of instructions in only one of the two bodies, and of the parallel copy each is in (a copy's moves are all read and
+/// written at its last, which a change to any of them moves), each run once; the number of instructions that changed.
+pub fn changed_runs(held: &[(i64, &Insns)], held_index: &Indexes, body: &LirBody, index: &Indexes, differing: &[usize], visit: &mut dyn FnMut(&[&Arc<Insn>])) -> usize {
+    let mut changed = 0;
+    let mut runs = |run: &[&Arc<Insn>], gone: &dyn Fn(&Arc<Insn>) -> bool| {
+        let mut start = 0;
+        while start < run.len() {
+            let mut end = start + 1;
+            if run[start].group.is_some() {
+                while end < run.len() && run[end].group == run[start].group {
+                    end += 1;
+                }
+            }
+            let hit = run[start..end].iter().filter(|one| gone(one)).count();
+            if hit > 0 {
+                changed += hit;
+                visit(&run[start..end]);
+            }
+            start = end;
+        }
+    };
+    for at in differing {
+        let run: Vec<&Arc<Insn>> = held[*at].1.iter().collect();
+        runs(&run, &|one| !index.at.contains_key(&key(one)));
+        let run: Vec<&Arc<Insn>> = body.blocks[*at].insns.iter().collect();
+        runs(&run, &|one| !held_index.at.contains_key(&key(one)));
+    }
+    changed
+}
+
+impl Shift {
+    pub fn between(held: &[(i64, &Insns)], held_index: &Indexes, body: &LirBody, index: &Indexes, differing: &[usize]) -> Self {
+        let (mut old, mut new): (Vec<i64>, Vec<i64>) = (Vec::new(), Vec::new());
+        let mut tops: crate::support::hash::HashMap<i64, i64> = Default::default();
+        for (position, ((at, insns), block)) in held.iter().zip(&body.blocks).enumerate() {
+            let (before, now) = (held_index.span[at], index.span[&block.at]);
+            old.push(before.0);
+            new.push(now.0);
+            tops.insert(before.0, now.0);
+            tops.insert(before.1, now.1);
+            if differing.binary_search(&position).is_ok() {
+                for one in insns.iter() {
+                    if let Some(slot) = index.at.get(&key(one)) {
+                        old.push(held_index.at[&key(one)]);
+                        new.push(*slot);
+                    }
+                }
+            }
+        }
+        Self { old, new, tops }
+    }
+
+    /// Where a segment's start was.
+    pub fn start(&self, slot: i64) -> i64 {
+        if let Some(top) = self.tops.get(&slot) {
+            return *top;
+        }
+        let at = self.old.partition_point(|one| *one <= slot) - 1;
+        self.new[at] + (slot - self.old[at])
+    }
+
+    /// Where a segment's end was.
+    pub fn end(&self, slot: i64) -> i64 {
+        if let Some(top) = self.tops.get(&slot) {
+            return *top;
+        }
+        let at = self.old.partition_point(|one| *one < slot) - 1;
+        self.new[at] + (slot - self.old[at])
+    }
+}
+
 /// The answers remembered for this function's bodies, most recent first: the allocator's rewrites and its trial candidates alternate
 /// among a few, and they share the manager, so each is found by its blocks whichever asked last.
 #[derive(Default)]
@@ -340,72 +425,20 @@ fn updated(held: &Remembered, body: &LirBody, index: &Indexes, busy: &Frequency)
         return None;
     }
     // A block that is the same instructions needs no looking at: it is where it was, shifted. The others are compared by
-    // instruction, for the values the instructions that are not in both name, and those of the parallel copy each is in: a copy's
-    // moves are all read and written at its last, which a change to any of them moves.
-    let differing: Vec<usize> = (0..body.blocks.len()).filter(|at| !held.blocks[*at].3.same_insns(&body.blocks[*at].insns)).collect();
+    // instruction, for the values the instructions that are not in both name.
+    let blocks: Vec<(i64, &Insns)> = held.blocks.iter().map(|(at, _, _, insns)| (*at, insns)).collect();
+    let differing = differing_blocks(&blocks, body);
     let mut touched: crate::support::hash::HashSet<u32> = Default::default();
-    let mut changed = 0;
-    let mut names = |run: &[&Arc<Insn>], gone: &dyn Fn(&Arc<Insn>) -> bool| {
-        let mut start = 0;
-        while start < run.len() {
-            let mut end = start + 1;
-            if run[start].group.is_some() {
-                while end < run.len() && run[end].group == run[start].group {
-                    end += 1;
-                }
-            }
-            let hit = run[start..end].iter().filter(|one| gone(one)).count();
-            if hit > 0 {
-                changed += hit;
-                for one in &run[start..end] {
-                    touched.extend(one.defines.iter().chain(&one.uses).copied());
-                }
-            }
-            start = end;
+    let changed = changed_runs(&blocks, &held.index, body, index, &differing, &mut |run| {
+        for one in run {
+            touched.extend(one.defines.iter().chain(&one.uses).copied());
         }
-    };
-    for at in &differing {
-        let run: Vec<&Arc<Insn>> = held.blocks[*at].3.iter().collect();
-        names(&run, &|one| !index.at.contains_key(&key(one)));
-        let run: Vec<&Arc<Insn>> = body.blocks[*at].insns.iter().collect();
-        names(&run, &|one| !held.index.at.contains_key(&key(one)));
-    }
+    });
     if changed * 4 > held.count + 16 || touched.len() * 3 > held.answer.len() + 16 {
         return None;
     }
-    // Where each slot of the old numbering is in the new one: the block tops, which carry the instructions of the blocks that are
-    // the same (each is where it was, relative to its top), and each instruction both have in the others.
-    let (mut old, mut new): (Vec<i64>, Vec<i64>) = (Vec::new(), Vec::new());
-    let mut tops: crate::support::hash::HashMap<i64, i64> = Default::default();
-    for (position, ((at, _, _, insns), block)) in held.blocks.iter().zip(&body.blocks).enumerate() {
-        let (before, now) = (held.index.span[at], index.span[&block.at]);
-        old.push(before.0);
-        new.push(now.0);
-        tops.insert(before.0, now.0);
-        tops.insert(before.1, now.1);
-        if differing.binary_search(&position).is_ok() {
-            for one in insns.iter() {
-                if let Some(slot) = index.at.get(&key(one)) {
-                    old.push(held.index.at[&key(one)]);
-                    new.push(*slot);
-                }
-            }
-        }
-    }
-    let start = |slot: i64| -> i64 {
-        if let Some(top) = tops.get(&slot) {
-            return *top;
-        }
-        let at = old.partition_point(|one| *one <= slot) - 1;
-        new[at] + (slot - old[at])
-    };
-    let end = |slot: i64| -> i64 {
-        if let Some(top) = tops.get(&slot) {
-            return *top;
-        }
-        let at = old.partition_point(|one| *one < slot) - 1;
-        new[at] + (slot - old[at])
-    };
+    let shift = Shift::between(&blocks, &held.index, body, index, &differing);
+    let (start, end) = (|slot| shift.start(slot), |slot| shift.end(slot));
     let again = llrm_support::debug::timed("intervals among", || worked_among(body, index, busy, &touched));
     let mut answer: IndexMap<u32, Interval> = IndexMap::default();
     let mut totals: IndexMap<u32, f64> = IndexMap::default();
