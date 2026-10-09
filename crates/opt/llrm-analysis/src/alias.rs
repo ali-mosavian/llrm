@@ -981,8 +981,9 @@ fn _summarized(
 /// What one call reads and writes, as the bytes of the objects it reaches.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Effect {
-    pub loads: Vec<MemRef>,
-    pub stores: Vec<MemRef>,
+    /// Shared by the calls whose effect is the same: most are the unit's tracked globals and what escaped.
+    pub loads: Rc<[MemRef]>,
+    pub stores: Rc<[MemRef]>,
     /// The bytes it writes before reading any, as `initializes` states.
     pub fills: Vec<MemRef>,
 }
@@ -1003,6 +1004,8 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
     };
 
     let mut out = IndexMap::default();
+    // Calls reaching the same slices share one list of references.
+    let mut made: HashMap<BTreeSet<Slice>, Rc<[MemRef]>> = HashMap::default();
     for at in procedure.sites.iter().copied() {
         let actual = _actuals(procedure, &facts, at);
         let mut effect = match callee(&at) {
@@ -1049,8 +1052,14 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
             }
         }
         let fills = _fills(&procedure.unit, &facts, at);
-        let stores = effect.writes.iter().map(reference).chain(typed).collect();
-        out.insert(at, Effect { loads: effect.reads.iter().map(reference).collect(), stores, fills });
+        let mut shared = |slices: BTreeSet<Slice>, typed: Vec<MemRef>| -> Rc<[MemRef]> {
+            if !typed.is_empty() {
+                return slices.iter().map(reference).chain(typed).collect();
+            }
+            Rc::clone(made.entry(slices).or_insert_with_key(|slices| slices.iter().map(reference).collect()))
+        };
+        let (loads, stores) = (shared(effect.reads, Vec::new()), shared(effect.writes, typed));
+        out.insert(at, Effect { loads, stores, fills });
     }
     Ok(out)
 }

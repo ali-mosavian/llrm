@@ -259,7 +259,7 @@ fn test_a_fact_is_never_wider_than_the_operation_that_made_it() {
 /// A call's reach, as `alias::calls_annotated` states it.
 fn reaching(parsed: &Parsed, provenance: Provenance) -> Calls {
     let call = parsed.all(|op| matches!(op, Opcode::Call(_)))[0];
-    Calls::from_iter([(call, vec![MemRef::reach(0, provenance)])])
+    Calls::from_iter([(call, std::rc::Rc::from(vec![MemRef::reach(0, provenance)]))])
 }
 
 const AROUND_A_CALL: &str = "declare void @g()

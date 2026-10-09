@@ -111,7 +111,7 @@ spare:
         let call = site(&unit, "b0", 1);
         let calls: Calls = match footprint {
             None => Calls::default(),
-            Some(at) => Calls::from_iter([(call, vec![cell(&unit, if at == CELL { site(&unit, "b0", 0) } else { site(&unit, "spare", 0) })])]),
+            Some(at) => Calls::from_iter([(call, std::rc::Rc::from(vec![cell(&unit, if at == CELL { site(&unit, "b0", 0) } else { site(&unit, "spare", 0) })]))]),
         };
         let found = forwarded(&unit, &calls);
         assert_eq!(found, if reused { vec![Forward { at: site(&unit, "b0", 2), value: named(&unit, "v") }] } else { vec![] }, "{footprint:?}");
@@ -135,7 +135,7 @@ b0:
 "
         ));
         let unit = parsed.unit();
-        let calls = if disjoint { Calls::from_iter([(site(&unit, "b0", 1), vec![cell(&unit, site(&unit, "b0", 3))])]) } else { Calls::default() };
+        let calls = if disjoint { Calls::from_iter([(site(&unit, "b0", 1), std::rc::Rc::from(vec![cell(&unit, site(&unit, "b0", 3))]))]) } else { Calls::default() };
         let removed = dead_stores(&unit, &Accesses::plain(&unit, &calls), None);
         assert_eq!(removed, if disjoint { vec![site(&unit, "b0", 0)] } else { vec![] }, "{disjoint}");
     }
@@ -155,7 +155,7 @@ b0:
 "
     ));
     let unit = parsed.unit();
-    let calls = Calls::from_iter([(site(&unit, "b0", 1), vec![])]);
+    let calls = Calls::from_iter([(site(&unit, "b0", 1), std::rc::Rc::from([]))]);
     assert_eq!(dead_stores(&unit, &Accesses::plain(&unit, &calls), None), vec![]);
 }
 
@@ -476,7 +476,7 @@ pad:
         let invoke = site(&unit, "b0", 2);
         let slot = named(&unit, "s");
         let private = |one: &MemRef| one.root == Some(slot);
-        let removed = dead_stores(&unit, &Accesses::plain(&unit, &Calls::from_iter([(invoke, vec![])])), Some(&private));
+        let removed = dead_stores(&unit, &Accesses::plain(&unit, &Calls::from_iter([(invoke, std::rc::Rc::from([]))])), Some(&private));
         assert_eq!(removed.contains(&site(&unit, "b0", 1)), dead, "{handler}");
     }
 }

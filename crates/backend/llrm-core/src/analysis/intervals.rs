@@ -184,14 +184,14 @@ struct Remembered {
 }
 
 impl Remembered {
-    fn of(body: &LirBody, answer: &IndexMap<u32, Interval>, index: &Indexes, totals: IndexMap<u32, f64>) -> Self {
+    fn of(body: &LirBody, answer: &Rc<IndexMap<u32, Interval>>, index: &Indexes, totals: IndexMap<u32, f64>) -> Self {
         Self {
             entry: body.entry,
             blocks: body.blocks.iter().map(|block| (block.at, block.succ.clone(), block.phis.clone(), block.insns.len())).collect(),
             insns: body.blocks.iter().flat_map(|block| block.insns.iter().cloned()).collect(),
             odds: body.odds.clone(),
             trips: body.loop_trip_counts.clone(),
-            answer: Rc::new(answer.clone()),
+            answer: Rc::clone(answer),
             index: Rc::new(index.clone()),
             totals: Rc::new(totals),
         }
@@ -245,6 +245,17 @@ pub fn intervals(body: &LirBody, index: Option<&Indexes>) -> IndexMap<u32, Inter
 /// (58% of the asks of compiling `d_faces` were of a body already asked, #559). `index` is
 /// `indexed(body)` of this body, as every caller makes it, or none.
 pub fn intervals_over(body: &LirBody, index: Option<&Indexes>, busy: &Frequency) -> IndexMap<u32, Interval> {
+    let shared = intervals_shared_over(body, index, busy);
+    llrm_support::debug::timed("intervals cloned", || (*shared).clone())
+}
+
+/// `intervals`, the remembered answer itself: for a caller that only reads it, which would copy every interval of the body to do so.
+pub fn intervals_shared(body: &LirBody, index: Option<&Indexes>) -> Rc<IndexMap<u32, Interval>> {
+    intervals_shared_over(body, index, &Frequency::of(body))
+}
+
+/// `intervals_over` without the copy.
+pub fn intervals_shared_over(body: &LirBody, index: Option<&Indexes>, busy: &Frequency) -> Rc<IndexMap<u32, Interval>> {
     if let Some(found) = RECENT.with(|recent| {
         let mut recent = recent.borrow_mut();
         let at = recent.iter().position(|held| held.is_of(body))?;
@@ -258,7 +269,7 @@ pub fn intervals_over(body: &LirBody, index: Option<&Indexes>, busy: &Frequency)
             assert!(*found == worked_out(body, index, busy), "{}: a remembered answer differs from working it out", body.name);
         }
         llrm_support::debug::counted("intervals remembered", true);
-        return llrm_support::debug::timed("intervals cloned", || (*found).clone());
+        return found;
     }
     llrm_support::debug::counted("intervals remembered", false);
     let owned;
@@ -299,6 +310,7 @@ pub fn intervals_over(body: &LirBody, index: Option<&Indexes>, busy: &Frequency)
             llrm_support::debug::timed("intervals worked out", || worked_out_with_totals(body, index, busy, &|_| true))
         }
     };
+    let answer = Rc::new(answer);
     RECENT.with(|recent| {
         let mut recent = recent.borrow_mut();
         recent.insert(0, Remembered::of(body, &answer, index, totals));
