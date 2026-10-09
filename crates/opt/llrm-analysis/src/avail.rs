@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 use std::rc::Rc;
 
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::module::{InstId, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_support::bits::Bits;
@@ -259,6 +260,85 @@ fn meet(maps: &[&Holders]) -> Holders {
 
 thread_local! {
     static CLOBBER_ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Loads in `want` that a known value can serve, by the MemorySSA walk alone:
+/// no availability map is solved.
+pub fn forwardable_walk(
+    unit: &Unit,
+    accesses: &Accesses,
+    want: &IdSet<InstId>,
+) -> Vec<Forward> {
+    WALKED.with(|walked| walked.set(walked.get() + 1));
+    let missing: Vec<InstId> = unit
+        .function
+        .layout()
+        .iter()
+        .flat_map(|&block| unit.function.block(block).instructions().to_vec())
+        .filter(|inst| want.contains(inst) && loaded_into(unit, accesses, *inst).is_some())
+        .collect();
+    if missing.is_empty() { Vec::new() } else { memory_providers(unit, accesses, &missing) }
+}
+
+/// How the loads the availability map serves and those the walk serves compare.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Comparison {
+    /// Served by both, with the same value.
+    pub same: usize,
+    /// Served by both, with different values.
+    pub different: usize,
+    /// Served by the map only, and of those, invariant loads.
+    pub map_only: usize,
+    pub map_only_invariant: usize,
+    pub walk_only: usize,
+}
+
+/// `forwardable_by`'s loads against `forwardable_walk`'s.
+pub fn compared(
+    unit: &Unit,
+    map: &[Forward],
+    walk: &[Forward],
+) -> Comparison {
+    // A served load's own value is replaced by its provider, so a provider that
+    // is itself a served load stands for what serves that: both sides are
+    // compared at the end of their chains.
+    let root = |forwards: &[Forward], mut value: Operand| {
+        let served: HashMap<ValueId, Operand> =
+            forwards.iter().filter_map(|one| Some((unit.function.instruction(one.at).result?, one.value))).collect();
+        for _ in 0..forwards.len() + 1 {
+            match value {
+                Operand::Value(at) if served.contains_key(&at) => value = served[&at],
+                _ => break,
+            }
+        }
+        value
+    };
+    let by_walk: IdMap<InstId, Operand> = walk.iter().map(|one| (one.at, root(walk, one.value))).collect();
+    let by_map: IdMap<InstId, Operand> = map.iter().map(|one| (one.at, root(map, one.value))).collect();
+    let mut out = Comparison::default();
+    for one in map {
+        match by_walk.get(&one.at) {
+            Some(value) if *value == by_map[&one.at] => out.same += 1,
+            Some(_) => out.different += 1,
+            None => {
+                out.map_only += 1;
+                out.map_only_invariant +=
+                    usize::from(llrm_mir::memory::invariant_load(unit.context, unit.layout, unit.function, one.at));
+            }
+        }
+    }
+    out.walk_only = walk.iter().filter(|one| !by_map.contains_key(&one.at)).count();
+    out
+}
+
+thread_local! {
+    static WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has walked for every load, for a test that a
+/// function numbered twice walks once.
+pub fn walked() -> usize {
+    WALKED.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has asked whether a write clobbers a held cell,
@@ -679,7 +759,7 @@ fn aborts(
 pub fn forwardable(
     unit: &Unit,
     accesses: &Accesses,
-    want: &BTreeSet<InstId>,
+    want: &IdSet<InstId>,
 ) -> Vec<Forward> {
     forwardable_by(unit, accesses, want, &holders(unit, accesses))
 }
@@ -690,7 +770,7 @@ pub fn forwardable(
 pub fn forwardable_by(
     unit: &Unit,
     accesses: &Accesses,
-    want: &BTreeSet<InstId>,
+    want: &IdSet<InstId>,
     held: &Held,
 ) -> Vec<Forward> {
     let mut found = Vec::new();
@@ -740,7 +820,9 @@ fn memory_providers(
     missing: &[InstId],
 ) -> Vec<Forward> {
     let function = unit.function;
-    let graph = memoryssa::built(unit, accesses);
+    // Register facts only, as the availability map reads them: a memory-aware
+    // solve per query costs more than it finds.
+    let graph = memoryssa::built(unit, accesses).with_known(ranges::constants(unit).into_iter().collect());
     let shape = unit.shape();
     let dominance = &shape.dominance;
     let places: HashMap<InstId, (i64, usize)> = function
@@ -760,6 +842,17 @@ fn memory_providers(
     let available = |source: InstId, site: InstId| -> bool {
         let ((source_block, source_index), (block, index)) = (places[&source], places[&site]);
         dominance.dominates(source_block, block) && (source_block != block || source_index < index)
+    };
+
+    // Whether `value` is defined where `site` can read it.
+    let available_value = |value: Operand, site: InstId| -> bool {
+        match value {
+            Operand::Value(one) => match function.value(one).def {
+                llrm_mir::module::ValueDef::Instruction(def) => available(def, site),
+                _ => true,
+            },
+            _ => true,
+        }
     };
 
     let mut groups: Vec<(&MemRef, Vec<usize>)> = Vec::new();
@@ -792,12 +885,24 @@ fn memory_providers(
         let Some((cell, result)) = loaded_into(unit, accesses, site) else {
             continue;
         };
-        let clobbers = graph.clobbers(site, &cell);
+        // A load that is invariant is clobbered by nothing; the store before it
+        // that initialised what it reads is still the value it has.
+        let clobbers = graph.clobbers_ignoring_invariance(site, &cell);
         let single = if clobbers.len() == 1 { clobbers.first().map(|id| graph.access(*id)) } else { None };
         if let Some(source) = single.filter(|access| access.kind == memoryssa::Kind::Def).and_then(|access| access.site)
             && let Some((stored, value)) = stored_from(unit, accesses, source)
             && available(source, site)
             && same_bytes(unit, &stored, &cell)
+            && serves(unit, value, result)
+        {
+            found.push(Forward { at: site, value });
+            continue;
+        }
+        // Several clobbers, each an exact store of the one value, and that
+        // value defined where it reaches the load: the arms of a join
+        // that stored the same thing.
+        if clobbers.len() > 1
+            && let Some(value) = joined_store(unit, accesses, &graph, &clobbers, &cell, site, &available_value)
             && serves(unit, value, result)
         {
             found.push(Forward { at: site, value });
@@ -853,6 +958,30 @@ fn memory_providers(
         }
     }
     found
+}
+
+/// The one value every clobber of a load stores into its exact bytes, when each
+/// clobber is such a store and the value is defined where `site` reads it.
+fn joined_store(
+    unit: &Unit,
+    accesses: &Accesses,
+    graph: &memoryssa::MemorySSA,
+    clobbers: &BTreeSet<usize>,
+    cell: &MemRef,
+    site: InstId,
+    available_value: &dyn Fn(Operand, InstId) -> bool,
+) -> Option<Operand> {
+    let mut one = None;
+    for id in clobbers {
+        let access = graph.access(*id);
+        let source = access.site.filter(|_| access.kind == memoryssa::Kind::Def)?;
+        let (stored, value) = stored_from(unit, accesses, source)?;
+        if !same_bytes(unit, &stored, cell) || one.is_some_and(|before| before != value) {
+            return None;
+        }
+        one = Some(value);
+    }
+    one.filter(|&value| available_value(value, site))
 }
 
 #[cfg(test)]

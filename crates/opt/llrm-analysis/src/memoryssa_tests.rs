@@ -704,8 +704,8 @@ fn test_a_walk_that_jumps_finds_what_a_walk_step_by_step_finds() {
             let cell = cell(&unit, asked);
             for boundary in [None, graph.at(site).defining] {
                 assert_eq!(
-                    graph.walked(site, &cell, boundary, None, None, true),
-                    graph.walked(site, &cell, boundary, None, None, false),
+                    graph.walked(site, &cell, boundary, None, None, true, true),
+                    graph.walked(site, &cell, boundary, None, None, false, true),
                     "{site:?} for {asked:?}"
                 );
             }

@@ -528,7 +528,7 @@ b0:
         let mut module = parsed(&text);
         let mut manager = PassManager::default();
         manager.require::<Summaries>();
-        manager.add(Gvn);
+        manager.add(Gvn::default());
         manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
         let after = printed(&module);
         assert_eq!(after.matches("load i16, ptr @g").count() == 2, reloaded, "space {space}\n{after}");
@@ -559,7 +559,7 @@ b0:
         let mut module = parsed(&text);
         let mut manager = PassManager::default();
         manager.require::<Summaries>();
-        manager.add(Gvn);
+        manager.add(Gvn::default());
         manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
         let after = printed(&module);
         assert_eq!(
@@ -598,7 +598,7 @@ b0:
         let mut module = parsed(&text);
         let mut manager = PassManager::default();
         manager.require::<Summaries>();
-        manager.add(Gvn);
+        manager.add(Gvn::default());
         manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
         let after = printed(&module);
         assert_eq!(after.matches("load i16, ptr %q").count() == 2, reloaded, "{attribute:?}\n{after}");
@@ -610,7 +610,7 @@ fn numbered(text: &str) -> String {
     let mut module = parsed(text);
     let mut manager = PassManager::default();
     manager.require::<Summaries>();
-    manager.add(Gvn);
+    manager.add(Gvn::default());
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     printed(&module)
 }
@@ -774,12 +774,64 @@ b3:
     let mut module = parsed(text);
     let mut manager = PassManager::default();
     manager.require::<Summaries>();
-    manager.add(Gvn::default());
+    manager.add(Gvn { dataflow: true });
     let before = llrm_analysis::avail::solved();
     manager
         .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
         .unwrap();
     assert_eq!(llrm_analysis::avail::solved() - before, 1, "availability solved again for the second numbering");
+}
+
+/// With `-fgvn-dataflow` off every load is forwarded by the walk: no
+/// availability is solved, and a function numbered twice walks once (the walk
+/// does not depend on `avoid_store_crossing`).
+#[test]
+fn the_walk_alone_solves_no_availability_and_a_function_numbered_twice_walks_once() {
+    let text = "@x = global i16 0
+@y = global i16 0
+
+define i16 @f(i16 %p) {
+b0:
+  %a = load i16, ptr @x
+  store i16 %p, ptr @y
+  %b = load i16, ptr @x
+  %r = add i16 %a, %b
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    let mut manager = PassManager::default();
+    manager.require::<Summaries>();
+    manager.add(Gvn { dataflow: false });
+    let (solved, walked, numbered) =
+        (llrm_analysis::avail::solved(), llrm_analysis::avail::walked(), super::numberings());
+    manager
+        .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 1, ..Default::default() }))
+        .unwrap();
+    assert_eq!(llrm_analysis::avail::solved() - solved, 0, "availability solved with the dataflow off");
+    assert_eq!(super::numberings() - numbered, 2, "the function is numbered both ways");
+    assert_eq!(llrm_analysis::avail::walked() - walked, 1, "the walk ran again for the second numbering");
+}
+
+/// The walk alone forwards what the map forwards in the ordinary case.
+#[test]
+fn the_walk_alone_forwards_a_stored_value_to_its_load() {
+    let text = "@g = global i16 0
+
+define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  store i16 %x, ptr @g
+  %r = load i16, ptr @g
+  ret i16 %r
+}
+";
+    let before = parsed(text);
+    let mut module = before.clone();
+    let mut manager = PassManager::default();
+    manager.require::<Summaries>();
+    manager.add(Gvn { dataflow: false });
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+    assert!(printed(&module).contains("  store i16 %x, ptr @g\n  ret i16 %x\n"), "{}", printed(&module));
 }
 
 /// A function numbered both ways (crossing stores and not) and priced twice,
