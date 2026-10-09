@@ -105,7 +105,7 @@ impl Bounds {
 /// What may take a register in a loop: a value it has, or one a choice
 /// adds -- a counter, an invariant, a symbolic step, a product, a value
 /// built from a counter.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Resident {
     Value(ValueId),
     Counter(usize),
