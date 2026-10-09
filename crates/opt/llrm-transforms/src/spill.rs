@@ -954,8 +954,8 @@ impl Site {
 pub struct Pressure {
     found: Liveness,
     cells: BTreeMap<ValueId, ValueId>,
-    counted: BTreeSet<ValueId>,
-    addressed: BTreeSet<ValueId>,
+    counted: IdSet<ValueId>,
+    addressed: IdSet<ValueId>,
     /// Whether each pointer an access is made through is folded: asked of the
     /// function once.
     folds: Folds,
@@ -976,7 +976,7 @@ impl Pressure {
                 .map(ValueId)
                 .filter(|&value| integer_in(context, function, value, scales))
                 .collect(),
-            addressed,
+            addressed: addressed.into_iter().collect(),
             folds,
         }
     }

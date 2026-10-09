@@ -715,3 +715,18 @@ fn a_forecast_asks_whether_a_pointer_is_folded_once_however_many_accesses_use_it
     // each of the 80 accesses.
     assert!(asked <= 44, "{asked} asks for 80 accesses of one slot");
 }
+
+/// `View::sites` asks `counted` and `addressed` of every value live at every
+/// instruction: with a few hundred cells live that was 44% of gvn's pricing on
+/// the `cells` axis, a tree search each. A bit test each; typed so a set of ids
+/// it stays.
+#[test]
+fn pressure_answers_what_is_counted_and_addressed_by_bit() {
+    let module = module(COUNTED);
+    let function = self::function(&module);
+    let pressure = Pressure::of(&module.context, function, 0);
+    let counted: &llrm_mir::dense::IdSet<ValueId> = &pressure.counted;
+    let addressed: &llrm_mir::dense::IdSet<ValueId> = &pressure.addressed;
+    assert!(counted.len() > 0, "an integer value is counted");
+    assert!(addressed.len() <= counted.len() + function.value_count());
+}
