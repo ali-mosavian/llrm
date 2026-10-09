@@ -52,6 +52,19 @@ impl Selector<'_, '_, '_> {
         Loc::Imm(Imm { value, width: 1, address: None })
     }
 
+    /// A constant i64's halves as immediates, low first, at the native width.
+    fn immediates(
+        &self,
+        bits: i64,
+    ) -> Result<[Loc; 2], Unselected> {
+        Ok(self.wide_halves()?.map(|half| {
+            let shift = 8 * half.offset as u32;
+            let width = 8 * half.bytes;
+            let value = (bits >> shift) & (u64::MAX >> (64 - width)) as i64;
+            Loc::Imm(Imm { value, width: half.bytes, address: None })
+        }))
+    }
+
     /// A register for one half of a wide value, dropped where nothing reads it.
     pub(super) fn half(&mut self) -> Held {
         let half = self.fresh_held(4);
@@ -81,8 +94,9 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<Pair, Unselected> {
         if let Some(bits) = self.constant(operand, 8) {
-            let low = self.made(Operation::Move, "mov", vec![Self::dword(bits as u32 as i64)], at, out);
-            let high = self.made(Operation::Move, "mov", vec![Self::dword((bits >> 32) as u32 as i64)], at, out);
+            let [low, high] = self.immediates(bits)?;
+            let low = self.made(Operation::Move, "mov", vec![low], at, out);
+            let high = self.made(Operation::Move, "mov", vec![high], at, out);
             return Ok((low, high));
         }
         match operand {
@@ -127,7 +141,7 @@ impl Selector<'_, '_, '_> {
         let halves = self.wide_halves_of(first != rest)?;
         let a = self.wide(left, at, out)?;
         let b = match self.constant(right, 8) {
-            Some(bits) => [Self::dword(bits as u32 as i64), Self::dword((bits >> 32) as u32 as i64)],
+            Some(bits) => self.immediates(bits)?,
             None => {
                 let pair = self.wide(right, at, out)?;
                 [Loc::Held(pair.0), Loc::Held(pair.1)]
@@ -161,13 +175,13 @@ impl Selector<'_, '_, '_> {
         if op == CastOp::SIToFP && self.is_float(to) {
             let (low, high) = self.wide(operand, at, out)?;
             let cell = self.temporary(8);
-            for (half, by) in [(low, 0), (high, 4)] {
+            for (half, held) in self.wide_halves()?.into_iter().zip([low, high]) {
                 self.put(
                     semantics(
                         Operation::Move,
                         "mov",
-                        vec![Loc::Mem(Self::memory(cell.moved(by), 4))],
-                        vec![Loc::Held(half)],
+                        vec![Loc::Mem(Self::memory(cell.moved(half.offset), half.bytes))],
+                        vec![Loc::Held(held)],
                     ),
                     at,
                     out,
@@ -182,13 +196,13 @@ impl Selector<'_, '_, '_> {
             let held = self.float(operand, at, out)?;
             let cell = self.float_stored(held, "fisttp", 8, at, out);
             let (low, high) = (self.half(), self.half());
-            for (half, by) in [(low, 0), (high, 4)] {
+            for (half, held) in self.wide_halves()?.into_iter().zip([low, high]) {
                 self.put(
                     semantics(
                         Operation::Move,
                         "mov",
-                        vec![Loc::Held(half)],
-                        vec![Loc::Mem(Self::memory(cell.moved(by), 4))],
+                        vec![Loc::Held(held)],
+                        vec![Loc::Mem(Self::memory(cell.moved(half.offset), half.bytes))],
                     ),
                     at,
                     out,
@@ -204,11 +218,17 @@ impl Selector<'_, '_, '_> {
         // stored as a float or a double.
         if op == CastOp::UIToFP && self.is_float(to) {
             let (low, high) = self.wide(operand, at, out)?;
+            let places = self.wide_halves()?;
             let loaded = |this: &mut Self, below: Loc, above: Loc, out: &mut Vec<Arc<Insn>>| -> Held {
                 let cell = this.temporary(8);
-                for (part, by) in [(below, 0), (above, 4)] {
+                for (place, part) in places.iter().zip([below, above]) {
                     this.put(
-                        semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(cell.moved(by), 4))], vec![part]),
+                        semantics(
+                            Operation::Move,
+                            "mov",
+                            vec![Loc::Mem(Self::memory(cell.moved(place.offset), place.bytes))],
+                            vec![part],
+                        ),
                         at,
                         out,
                     );
@@ -558,7 +578,10 @@ impl Selector<'_, '_, '_> {
         let a = self.wide(a, at, out)?;
         // A constant's halves are immediates.
         let b = match self.constant(b, 8) {
-            Some(bits) => (Self::dword(bits as u32 as i64), Self::dword((bits >> 32) as u32 as i64)),
+            Some(bits) => {
+                let [low, high] = self.immediates(bits)?;
+                (low, high)
+            }
             None => {
                 let (low, high) = self.wide(b, at, out)?;
                 (Loc::Held(low), Loc::Held(high))

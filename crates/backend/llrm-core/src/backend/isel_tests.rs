@@ -5193,3 +5193,32 @@ fn test_an_i64_load_and_store_follow_the_native_width_not_a_dword() {
     .err();
     assert!(format!("{refused:?}").contains("not half its width"), "{refused:?}");
 }
+
+/// An i64 compared with a constant or converted to a float took dword halves
+/// whatever the native width, so on a 16-bit one they selected wrong code.
+/// Each refuses now.
+#[test]
+fn test_an_i64_compare_and_convert_follow_the_native_width_not_a_dword() {
+    let narrow = LAYOUT.replace("n8:16:32", "n8:16");
+    for body in [
+        "%v = icmp eq i64 %x, 5\n  %r = zext i1 %v to i16\n  ret i16 %r",
+        "%v = sitofp i64 %x to double\n  %r = fptosi double %v to i16\n  ret i16 %r",
+    ] {
+        let text = format!("define i16 @f(i64 %x) addrspace(1) {{\n  {body}\n}}\n");
+        let module = llrm_mir::parse::module(&format!("{narrow}{text}")).expect("parses");
+        let refused = isel::selected(
+            &module,
+            "f",
+            &qb(),
+            &mut Pool::new(0),
+            crate::backend::cpu::profile("486").expect("a target"),
+            &crate::backend::target::BASIC,
+            isel::m16(),
+            &llrm_x86_m16::M16,
+            false,
+            0,
+        )
+        .err();
+        assert!(format!("{refused:?}").contains("not half its width"), "{body}: {refused:?}");
+    }
+}
