@@ -292,7 +292,7 @@ fn machined_once(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<P
     // The second layout is made from the first run's frame, not by running the backend again; `LLRM_CHECK_FRAME=1` runs it again
     // beside, and the two must be the same function. A frame that cannot be moved keeps its first layout.
     let laid = timed("frame laid again", || crate::backend::relayout::laid_again(&first, &frame, spilled));
-    if std::env::var_os("LLRM_CHECK_FRAME").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_FRAME") {
         let (again, _) = cheaper(&staged(module, name, abi, pool, target, spilled)?, module, name, pool, target)?;
         match &laid {
             Some((laid, _)) => {
@@ -320,8 +320,8 @@ fn cheaper(staged: &Staged, module: &Module, name: &str, pool: &Rc<RefCell<Pool>
         Ok("allocator") => Candidates::AllocatorOnly,
         _ => CANDIDATES.with(std::cell::Cell::get),
     };
-    // Without the search the allocator is run once, as gcc's IRA is at -O0 (`fast_allocation`, no conflicts built): one route.
-    if candidates == Candidates::AllocatorOnly || !target.cpu.search {
+    // Without the routes the allocator is run once, as gcc's IRA is at -O0 (`fast_allocation`, no conflicts built): one route.
+    if candidates == Candidates::AllocatorOnly || !target.cpu.routes {
         return timed("candidate allocator alone", || phased(staged, module, name, pool, target, false, true)).map(|(made, _)| made);
     }
     if !target.cpu.exhaustive && candidates == Candidates::Both {
@@ -624,7 +624,7 @@ fn phased_to(staged: &Staged, module: &Module, name: &str, pool: &Rc<RefCell<Poo
         if phase.class_name() == "PhiElimination" {
             body = body.with_phi_copies_noted();
         }
-        if std::env::var_os("ISEL_DUMP").is_some() {
+        if llrm_support::env_set("ISEL_DUMP") {
             println!("{}", crate::backend::lirtext::lir_stage(phase.class_name(), &[(body.name.clone(), body.clone())]));
         }
     }

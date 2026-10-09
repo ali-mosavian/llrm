@@ -1,0 +1,10 @@
+[package]
+name = "rfmt-post"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ra_ap_syntax = "0.0.357"
+
+# Its own workspace: the llrm workspace and its dependency tree stay as they are.
+[workspace]

@@ -54,6 +54,8 @@ pub struct Profile {
     pub size: bool,
     /// Whether the allocator tries other shapes of a body than the one it is given and keeps the cheapest, as LLVM and GCC do not.
     pub search: bool,
+    /// Whether a function is made by both routes (the allocator alone and the spiller's) and the cheaper kept; else by the allocator alone.
+    pub routes: bool,
     /// With `search`, whether it tries every shape (`-fallocation-search-all`, -Omax) or the one the spills suggest and the body without splitting.
     pub exhaustive: bool,
     /// How the target this profile is for builds its cost model from the CPU's prices.
@@ -164,6 +166,7 @@ impl Profile {
             address_prefix_stall: 0,
             size: false,
             search: true,
+            routes: true,
             exhaustive: false,
             model: arch.cost_model(),
             multiplies: Default::default(),
@@ -249,7 +252,7 @@ fn _profile(arch: &dyn Target, name: &str) -> Result<Profile, String> {
 }
 
 /// The profiles made so far, by target, CPU and size: each made once, as the passes hold them.
-static _MADE: LazyLock<std::sync::Mutex<crate::support::hash::HashMap<(&'static str, String, bool, bool, bool), &'static Profile>>> = LazyLock::new(Default::default);
+static _MADE: LazyLock<std::sync::Mutex<crate::support::hash::HashMap<(&'static str, String, bool, bool, bool, bool), &'static Profile>>> = LazyLock::new(Default::default);
 
 /// `name`'s profile on the target `arch`, tuned for size where `size`.
 pub fn tuned_for(arch: &dyn Target, name: &str, size: bool) -> Result<&'static Profile, String> {
@@ -268,15 +271,20 @@ pub fn tuned_searching(arch: &dyn Target, name: &str, size: bool, search: bool) 
 
 /// `tuned_searching`, every shape where `exhaustive`.
 pub fn tuned_with(arch: &dyn Target, name: &str, size: bool, search: bool, exhaustive: bool) -> Result<&'static Profile, String> {
+    tuned_routing(arch, name, size, search, exhaustive, search)
+}
+
+/// `tuned_with`, the routes compared where `routes` whatever the search: -O1 to -Os allocate once, and choose the route.
+pub fn tuned_routing(arch: &dyn Target, name: &str, size: bool, search: bool, exhaustive: bool, routes: bool) -> Result<&'static Profile, String> {
     if !arch.cpus().contains(&name) {
         return Err(format!("unknown CPU target: {name}; {} has {}", arch.name(), arch.cpus().join(", ")));
     }
     let mut made = _MADE.lock().expect("the profiles are not poisoned");
-    let key = (arch.name(), name.to_owned(), size, search, exhaustive);
+    let key = (arch.name(), name.to_owned(), size, search, exhaustive, routes);
     if let Some(&one) = made.get(&key) {
         return Ok(one);
     }
-    let one: &'static Profile = Box::leak(Box::new(Profile { size, search, exhaustive, ..(_profile(arch, name)).expect("every listed CPU has a profile") }));
+    let one: &'static Profile = Box::leak(Box::new(Profile { size, search, exhaustive, routes, ..(_profile(arch, name)).expect("every listed CPU has a profile") }));
     made.insert(key, one);
     Ok(one)
 }

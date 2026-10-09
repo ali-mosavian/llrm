@@ -14,6 +14,7 @@ use std::sync::Arc;
 use iced_x86::Register;
 use crate::support::hash::IndexMap;
 
+use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::loops;
 use crate::backend::peephole::{Lane, Lanes, _lanes, _register_effects, _register_effects_of_what, id};
 use crate::backend::{select, target};
@@ -237,6 +238,10 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
         let Some((writes, copies, ..)) = &recipes[&id(one)] else {
             return Relations::new();
         };
+        // An instruction that copies nothing and writes no lane a relation names leaves the relations as they were.
+        if copies.is_empty() && !directed.iter().any(|(dest, source)| writes.contains(dest) || writes.contains(source)) {
+            return directed.clone();
+        }
         let before: HashMap<Lane, Lane> = directed.iter().copied().collect();
 
         let oldest = |lane: Lane| -> Lane {
@@ -385,49 +390,34 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
     let predecessors = loops::predecessors(&graph);
     // Start at the must-analysis top, then intersect paths to a fixed point.
     // Entry contributes no equality, so a backedge cannot invent its own proof.
-    let mut entries: HashMap<i64, Equal> = reachable.iter().map(|at| (*at, Equal::top())).collect();
-    let mut exits = entries.clone();
-    let mut directed_entries: HashMap<i64, Relations> = reachable.iter().map(|at| (*at, Relations::new())).collect();
-    let mut directed_exits = directed_entries.clone();
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for block in &body.blocks {
-            if !reachable.contains(&block.at) {
-                continue;
+    let nodes: Vec<&LirBlock> = body.blocks.iter().filter(|block| reachable.contains(&block.at)).collect();
+    let solved = dataflow::solve(
+        &nodes,
+        Direction::Forward,
+        |_| (Equal::top(), Relations::new()),
+        |at, exits| {
+            let parents: Vec<i64> = predecessors[&at].iter().copied().filter(|from| reachable.contains(from)).collect();
+            if parents.is_empty() || at == body.entry {
+                return (Equal::bottom(), Relations::new());
             }
-            let parents: Vec<i64> =
-                predecessors[&block.at].iter().copied().filter(|at| reachable.contains(at)).collect();
-            let none = parents.is_empty() || block.at == body.entry;
-            let incoming = if none {
-                Equal::bottom()
-            } else {
-                parents[1..].iter().fold(exits[&parents[0]].clone(), |met, at| met.met(&exits[at]))
-            };
-            entries.insert(block.at, incoming.clone());
-            let directed_incoming = if none {
-                Relations::new()
-            } else {
-                let mut met = directed_exits[&parents[0]].clone();
-                for at in &parents[1..] {
-                    met = met.intersection(&directed_exits[at]).copied().collect();
-                }
-                met
-            };
-            directed_entries.insert(block.at, directed_incoming.clone());
-            let mut facts = incoming;
-            let mut directed = directed_incoming;
-            for one in &block.insns {
+            let equal = parents[1..].iter().fold(exits[&parents[0]].0.clone(), |met, from| met.met(&exits[from].0));
+            let mut directed = exits[&parents[0]].1.clone();
+            for from in &parents[1..] {
+                directed = directed.intersection(&exits[from].1).copied().collect();
+            }
+            (equal, directed)
+        },
+        |at, (equal, directed)| {
+            let (mut facts, mut directed) = (equal.clone(), directed.clone());
+            for one in &blocks[&at].insns {
                 facts = after(&facts, one);
                 directed = directed_after(&directed, one);
             }
-            if exits[&block.at] != facts || directed_exits[&block.at] != directed {
-                exits.insert(block.at, facts);
-                directed_exits.insert(block.at, directed);
-                changed = true;
-            }
-        }
-    }
+            (facts, directed)
+        },
+    );
+    let entries: HashMap<i64, Equal> = solved.input.iter().map(|(at, (equal, _))| (*at, equal.clone())).collect();
+    let directed_entries: HashMap<i64, Relations> = solved.input.iter().map(|(at, (_, directed))| (*at, directed.clone())).collect();
 
     let mut result = Vec::new();
     for block in &body.blocks {

@@ -700,7 +700,7 @@ impl<'a> Unit<'a> {
     pub fn registers(&self) -> Cow<'a, IndexMap<ValueId, Known>> {
         match self.registers {
             Some(registers) => {
-                if std::env::var_os("LLRM_CHECK_FACTS").is_some() {
+                if llrm_support::env_set("LLRM_CHECK_FACTS") {
                     let fresh = crate::consts::known(&Unit { registers: None, ..*self }, None, None, None);
                     assert!(*registers == fresh, "the registers a unit carries are not those of the body it stands over: stale");
                 }
@@ -731,7 +731,7 @@ impl<'a> Unit<'a> {
     pub fn shape(&self) -> Cow<'a, Shape> {
         match self.shape {
             Some(shape) => {
-                if std::env::var_os("LLRM_CHECK_SHAPE").is_some() {
+                if llrm_support::env_set("LLRM_CHECK_SHAPE") {
                     assert!(*shape == Shape::of(self.function), "the shape a unit carries is not that of the body it stands over: stale");
                 }
                 Cow::Borrowed(shape)
@@ -793,24 +793,27 @@ pub fn is_lifetime_marker(unit: &Unit, inst: InstId) -> bool {
     matches!(unit.intrinsic(inst), Some(llrm_mir::intrinsics::Intrinsic::LifetimeStart | llrm_mir::intrinsics::Intrinsic::LifetimeEnd))
 }
 
+/// What is known of each value without memory (`consts::known`).
+pub type Knowns = llrm_support::hash::SparseIdMap<ValueId, Known>;
+
 /// What is known of a body without memory (`consts::known`), for a caller that changes the body as it goes: the
 /// manager's where the body is as the manager saw it, derived again, once for each state, once it is not. The one
 /// place a unit's registers are derived outside the manager.
 pub struct Standing<'h> {
-    held: Option<&'h IndexMap<ValueId, Known>>,
+    held: Option<&'h Knowns>,
     /// What the counted loops bound, held for the same body as `held`, where the caller has it.
     bounds: Option<&'h crate::ranges::Bounds>,
-    derived: Option<IndexMap<ValueId, Known>>,
+    derived: Option<Knowns>,
 }
 
 impl<'h> Standing<'h> {
     /// The body is as `registers` were found of it.
-    pub fn held(registers: &'h IndexMap<ValueId, Known>) -> Self {
+    pub fn held(registers: &'h Knowns) -> Self {
         Self { held: Some(registers), bounds: None, derived: None }
     }
 
     /// `held`, and the bounds the manager found of the same body.
-    pub fn held_with(registers: &'h IndexMap<ValueId, Known>, bounds: &'h crate::ranges::Bounds) -> Self {
+    pub fn held_with(registers: &'h Knowns, bounds: &'h crate::ranges::Bounds) -> Self {
         Self { held: Some(registers), bounds: Some(bounds), derived: None }
     }
 
@@ -827,13 +830,13 @@ impl<'h> Standing<'h> {
     }
 
     /// `of`, and the manager's bounds of the body where it is still as they were found of it.
-    pub fn of_with_bounds(&mut self, unit: &Unit) -> (&IndexMap<ValueId, Known>, Option<&'h crate::ranges::Bounds>) {
+    pub fn of_with_bounds(&mut self, unit: &Unit) -> (&Knowns, Option<&'h crate::ranges::Bounds>) {
         let bounds = self.bounds;
         (self.of(unit), bounds)
     }
 
     /// What is known of `unit`'s body as it stands, which it must be the one these were asked of.
-    pub fn of(&mut self, unit: &Unit) -> &IndexMap<ValueId, Known> {
+    pub fn of(&mut self, unit: &Unit) -> &Knowns {
         if let Some(held) = self.held {
             return held;
         }

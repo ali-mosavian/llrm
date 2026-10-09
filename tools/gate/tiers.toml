@@ -1,7 +1,8 @@
 # The gate's tiers and the path map. `gate.py plan` shows what a diff selects; `gate.py run` runs it.
 #
 #   fast  every cheap step, plus each heavy step whose owner paths the diff touches.
-#         Purpose: the confidence most PRs need. Budget: 5 minutes on the loaded host.
+#         Purpose: the confidence most PRs need. Budget: 5 minutes on the loaded host (a cold build of the formatter, ~40 s,
+#         can be inside it once `fmt` is enforced; the host keeps the build between runs).
 #   full  every step. Chosen when the diff touches [shared] or a path no rule knows. Budget: 10 minutes.
 #         Also run over main after every 5 merges and nightly (`gate.py run --tier full`); red -> `gate.py bisect`.
 #
@@ -10,7 +11,7 @@
 # A diff of only [inert] paths runs nothing. Changed paths in no table below are unknown: full.
 
 [inert]
-paths = ["docs/**", "**/*.md", "editors/**", ".gitignore", ".github/**"]
+paths = ["docs/**", "**/*.md", "editors/**", ".gitignore", ".github/**", ".zed/**"]
 
 # Shared code every area runs through: the IR, the support library, target descriptions, the workspace. A change here
 # takes the full tier. The backend (isel, regalloc, conventions, driver) and transforms are not listed: they take the
@@ -25,9 +26,16 @@ paths = [
   "tools/gate/**",
 ]
 
+# The formatter (tools/fmt.sh): `fmt` checks the whole tree whenever a Rust file or the formatter itself changes.
+# `enforced = true` fails the step on any file the formatter would change; false only lists them. It is false until
+# the PR that formats the tree sets it to true: that one line is the switch.
+[fmt]
+enforced = false
+paths = ["**/*.rs", "rustfmt.toml", "tools/fmt.sh", "tools/rfmt-post/**"]
+
 # Paths outside [shared] the cheap steps cover on their own; they select no heavy step.
 [plain]
-paths = ["tests/**", "tools/**", "bench/**", "examples/**", "runtime/**", "toolchain/**", "crates/**"]
+paths = ["rustfmt.toml", "tests/**", "tools/**", "bench/**", "examples/**", "runtime/**", "toolchain/**", "crates/**"]
 
 # Heavy steps (> 15 s on the loaded host): fast runs one only when a changed path matches its owners.
 [[heavy]]
@@ -56,6 +64,11 @@ why = "builds and runs QCport against the all-Borland build: 100 s"
 owners = ["tools/qcport*", "tools/qcport/**", "tools/linkrecipe.py", "crates/frontends/llrm-c/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-omf/**", "crates/target/llrm-x86/**", "crates/backend/**", "crates/opt/**", "runtime/**"]
 
 [[heavy]]
+step = "rfmt-post"
+why = "the formatter's own tests (cold build of its parser dependency: 40 s)"
+owners = ["tools/rfmt-post/**", "tools/fmt.sh", "rustfmt.toml"]
+
+[[heavy]]
 step = "measure"
 why = "compile cost (QCport and the 66 programs at -O1/-O2/-Os) and its growth with size (axes at N and 2N, and each step of the compile) against the merge-base's measurement in ~/.cache/llrm/measure: 3-8 minutes when the base is not measured yet"
 owners = ["crates/backend/**", "crates/opt/**", "crates/frontends/llrm-c/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-x86/**", "tools/compile-cost.py", "tools/measure.py", "bench/**"]
@@ -78,6 +91,36 @@ step = "identity"
 bin = "toolchain"
 filter = "test_the_identity_gate_passes"
 
+# Source scans: tests that read the tree's source text (a ratchet: no file may gain a pattern). They guard every crate whichever crate
+# holds the test, so a diff to any source selects them in the fast tier, not only a diff to the crate that owns the test (#1057 and #1071
+# skipped llrm-mir's dense-key ratchet and main's full run went red on it). A test that reads sources and is not listed here fails
+# test_gate. `step = "integration"`: a root test binary the integration step runs on every code change anyway.
+[scan_inputs]
+paths = ["**/*.rs", "crates/ir/llrm-mir/dense-keys.txt", "tests/target_facts.baseline"]
+
+[[scan]]
+file = "crates/ir/llrm-mir/src/tests.rs"
+package = "llrm-mir"
+lib = "no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id"
+
+[[scan]]
+file = "crates/opt/llrm-transforms/tests/no_hand_solved_bounds.rs"
+package = "llrm-transforms"
+test = "no_hand_solved_bounds"
+
+[[scan]]
+file = "crates/support/llrm-support/tests/no_uncached_env_checks.rs"
+package = "llrm-support"
+test = "no_uncached_env_checks"
+
+[[scan]]
+file = "tests/seeded_maps.rs"
+step = "integration"
+
+[[scan]]
+file = "tests/target_facts.rs"
+step = "integration"
+
 # Whole binaries that are heavy: every test in them is slow.
 [whole]
 cv4 = "cv4"
@@ -86,6 +129,68 @@ cv4 = "cv4"
 # compares the tree before and after, and cargo's lock serialises the rest. They run alone, after the other steps.
 [exclusive]
 build-script-reruns = "build_script_reruns"
+
+# CI job groups (.github/workflows/ci.yml runs one job per group that has a step to run, in parallel, after the build).
+# Every step the planner can produce is in exactly one group (a test checks).
+[groups]
+unit = ["lib", "doc", "crate-tests", "scans", "fmt", "rfmt-post"]
+integration = ["integration", "build-script-reruns"]
+run = ["run"]
+python = ["pytest", "pytest-programs"]
+tools = ["bench", "torture"]
+identity = ["identity"]
+reference = ["turbo", "cv4", "qcport"]
+cost = ["measure"]
+
+# Tools that are not in the repository and not free to fetch. A host without one has the capability missing:
+# its [requires] steps are SKIPPED with the reason, and the LLRM_REQUIRE_* variables in `require` are unset so the
+# tests in other steps that use it skip too (they print "SKIPPED: why"). A caller that sets one of them wants the
+# tool required: nothing is skipped and a missing tool fails, as before. needs: env var (or default path) + a file in it.
+[capability.turbo]
+require = ["LLRM_REQUIRE_TURBO"]
+needs = [
+  { env = "TCPP30_DIR", default = "~/scratch/toolchains/tcpp30", marker = "bin/TCC.EXE" },
+  { env = "TD_DIR", default = "~/scratch/toolchains/td", marker = "Td.exe" },
+]
+
+[capability.codeview]
+require = ["LLRM_REQUIRE_CODEVIEW"]
+needs = [
+  { env = "VBDOS_DIR", default = "~/work/other/d32x/toolchains/vbdos", marker = "BIN/CV.EXE" },
+  { env = "TCPP30_DIR", default = "~/scratch/toolchains/tcpp30", marker = "lib/C0M.OBJ" },
+]
+
+[capability.qcport]
+require = []
+needs = [
+  { env = "QCPORT", default = "~/scratch/qcport/src", marker = "." },
+  { env = "QCPORT_BORLAND", default = "~/scratch/qcbcc", marker = "." },
+]
+
+# What each item needs, one table. A key is a step (`turbo`), a `run` language (`lang:qb`), a cheap test binary (`bin:differential`)
+# or a Python test file (`py:path`). A step is skipped whole; a language, binary or file is left out of the step that runs it,
+# and the step is skipped if no language is left.
+[requires]
+turbo = ["turbo"]
+cv4 = ["codeview"]
+qcport = ["qcport"]
+measure = ["perf"]
+bench = ["qb45"]
+"lang:qb" = ["qb45"]
+"bin:differential" = ["qb45"]
+"py:crates/target/llrm-x86-m32/vsgcc/test_scaling.py" = ["perf"]
+
+# Microsoft QuickBASIC 4.5's LINK and BC: the qb programs link with them, and the BC differential and the bench's BASIC rows run them.
+[capability.qb45]
+require = []
+needs = [{ env = "QB45_DIR", default = "~/work/42-labs/mini-qb/dosbox/qb45", marker = "LINK.EXE" }]
+
+
+# Hardware instruction counters (`perf stat`): a VM often has none.
+[capability.perf]
+require = []
+# perf exits 0 and prints "<not supported>" where there is no counter: the probe reads the count.
+needs = [{ run = "perf stat -x, -e instructions:u true 2>&1 | grep -Eq '^[0-9]+,'" }]
 
 # Tolerances of tools/measure.py, which compares a branch's compile cost and growth with its merge-base's. A rise past one fails; a
 # drop is not recorded anywhere, the next branch's base has it. Set from the same build measured twice (2026-10-08): geomean within

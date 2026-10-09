@@ -146,7 +146,8 @@ pub fn exact(unit: &Unit, constants: &IndexMap<ValueId, Finite>) -> Result<BTree
         return Ok(BTreeSet::new());
     }
     let memory = floatfacts::cells(unit, &Calls::default());
-    let scoped = ranges::bounds(unit)?;
+    // What the counted loops bound is the manager's: it is never solved here (no program in the corpus reached a solve here).
+    let scoped = unit.bounds.ok_or("float bounds without the manager's bounds of the body")?;
     let phis = function
         .walk()
         .map(|(_, inst)| inst)

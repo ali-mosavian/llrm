@@ -334,7 +334,7 @@ mod tests {
     use super::automaton::State;
     use super::generate;
 
-    const FORMS: &str = "add binary rm/^0,rmi 16 alu_rr - Add_rm{w}_r{w}\nneg unary rm/^0 16 alu_rr - Neg_rm{w}\n";
+    const FORMS: &str = "add binary rm/^0,rmi 16 alu_rr - - - Add_rm{w}_r{w}\nneg unary rm/^0 16 alu_rr - - - Neg_rm{w}\n";
 
     fn refused(patterns: &str) -> String {
         generate(FORMS, patterns, "test").err().expect("refused")
