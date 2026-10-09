@@ -46,6 +46,26 @@ measured twice (`tools/compile-cost.py --noise`: geomean within 0.0001, worst fi
 and `QCPORT_INC` (`~/scratch/qcport-env.sh`); without them they are not measured. Without a working counter the step exits 77
 (SKIPPED). Wall time per step is not usable (a linear step read 4-6x at 2N under load).
 
+### Build profiles
+
+The PR gate builds and measures on `release` (incremental: a PR and its base are built the same way, in seconds to a minute). The shipped
+llrm-c and the creep run on main use `dist` (`cargo build --profile dist --bins`: one codegen unit, fat LTO, about 3 minutes cold). Against
+`release`, `dist` retires 11-13% fewer compile instructions (d_faces 0.886, combat 0.889, cmd 0.885, mdl 0.888, nbody_single -Omax 0.877,
+queens -O3 0.884, x_life -O1 0.887), thin LTO with 16 units 6.5-7.4% (~40 s). `release` is a valid instrument for deltas: the same three PRs
+measured in each, as -% of the compile instructions of the file named (2026-10-09):
+
+| PR, file | release | thin | dist |
+|---|---|---|---|
+| #1039 floatloop, cmd -O2 | -1.43 | -1.41 | -1.43 |
+| #1039, mdl -O2 | -1.94 | -1.91 | -1.97 |
+| #1039, nbody_fixed -O3 | -1.62 | -1.65 | -1.56 |
+| #1032 branchprob, nbody_single -Omax | -17.28 | -14.95 | -13.75 |
+| #1032, nbody_fixed -O3 | -0.36 | 0.00 | -0.23 |
+| #1029 trials, combat -O2 | +0.11 | +0.13 | +0.12 |
+
+Same sign and size, except where one step shrinks a share the faster build has already made smaller (#1032's -17.3% is -13.8% on `dist`:
+the peel it removed was a larger part of a slower compile).
+
 ## What belongs in the suite
 
 Tests assert program behavior, representation invariants, or a named regression.

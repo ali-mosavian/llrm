@@ -248,3 +248,34 @@ def test_a_commit_only_the_remote_has_is_checked_out_in_a_clone_measure_owns(tmp
     tree = measure.checked_out(only_remote, tmp_path / "build" / "tree", local)
     assert (tree / "a").read_text() == "2" and sh("rev-parse", "HEAD", cwd=tree) == only_remote
     assert measure.checked_out(sh("rev-parse", "HEAD~1", cwd=origin), tree, local) == tree and (tree / "a").read_text() == "1"
+
+
+def test_check_names_the_binary_it_measured_on_a_pass_as_on_a_failure(monkeypatch, capsys):
+    """regparm16 read a passing `check` and could not tell what it had measured: a pass is evidence only if we know what was measured.
+    The binary is on the first line and again on the verdict, whichever it is."""
+    base = made(files(a=1000))
+    for now_files, verdict in ((files(a=1000), 0), (files(a=2000), 1)):
+        now = made(now_files) | {"binary": {"path": "/x/llrm-c", "sha": "abc123def456"}}
+        monkeypatch.setattr(measure, "measure_all", lambda jobs, now=now: now)
+        monkeypatch.setattr(measure, "git", lambda *a, **k: "f" * 40)
+        monkeypatch.setattr(measure, "base_of", lambda head, ref: "e" * 40)
+        monkeypatch.setattr(measure, "base_measurement", lambda sha, jobs: base)
+        monkeypatch.setattr(measure, "stored", lambda sha, which: {})
+        assert measure.check(1, "origin/main") == verdict
+        out = capsys.readouterr().out
+        assert out.splitlines()[0].startswith("measured /x/llrm-c (abc123def456)")
+        assert "abc123def456" in out.splitlines()[-1] or verdict == 1
+
+
+def test_a_measurement_is_of_one_profile_and_the_dist_base_is_built_with_the_dist_profile(tmp_path, monkeypatch):
+    """The creep run on main measures the shipped build (`dist`: one codegen unit, fat LTO, 11-13% fewer instructions than `release`); a
+    release measurement is not comparable with it, and its base must be built the same way."""
+    release = measure.method()
+    monkeypatch.setattr(measure, "PROFILE", "dist")
+    assert measure.method() != release
+    ran = []
+    monkeypatch.setattr(measure, "BUILD", tmp_path)
+    monkeypatch.setattr(measure, "checked_out", lambda sha, tree, source=None: tmp_path)
+    monkeypatch.setattr(measure.subprocess, "run", lambda command, **kw: ran.append(command) or subprocess.CompletedProcess(command, 0, "", ""))
+    assert measure.built("0" * 40) == tmp_path / "target" / "dist"
+    assert ran == [["bash", "-c", "cargo build --profile dist -q --bins"]]
