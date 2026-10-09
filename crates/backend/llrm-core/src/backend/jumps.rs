@@ -463,6 +463,7 @@ fn rotated(
     // Of the body as it is laid out: the copies of tails made its entries.
     let mut estimate: Option<Arc<Frequency>> = None;
     let mut changed = false;
+    let mut fronts: Vec<(i64, i64)> = Vec::new();
     let runs: Vec<(usize, usize)> = latest.iter().map(|(&header, &last)| (header, last + 1)).collect();
     for &(start, end) in &runs {
         // A run round another is left as the inner one places it: rotating one
@@ -485,13 +486,16 @@ fn rotated(
             from
         });
         let outside = |at: &i64| position.get(at).is_none_or(|&index| index < start || index >= end);
-        if order[start..end]
-            .iter()
-            .skip(1)
-            .any(|block| from.get(&block.at).is_some_and(|from| from.iter().any(outside)))
-        {
+        // Entered at one block of the run: a loop laid out to be entered at its
+        // test, below its body. Only a turn that starts there
+        // (or the layout as it is) keeps the run entered at its first block.
+        let doors: Vec<usize> = (start..end)
+            .filter(|&index| from.get(&order[index].at).is_some_and(|from| from.iter().any(outside)))
+            .collect();
+        if doors.len() > 1 {
             continue;
         }
+        let door = doors.first().map(|&index| index - start).filter(|&index| index != 0);
         let frequency = estimate.get_or_insert_with(|| Frequency::of(body));
         // The jumps a run of blocks takes, `after` being what follows it and
         // `before` what leads into it.
@@ -507,8 +511,8 @@ fn rotated(
                     .and_then(|one| one.what.as_ref())
                     .is_some_and(|what| what.op == Operation::Jump && what.target == Some(to))
         };
-        let clocks = |run: &[LirBlock], before: Option<&LirBlock>, after: Option<i64>| -> f64 {
-            let sequence: Vec<&LirBlock> = before.into_iter().chain(run.iter()).collect();
+        let clocks = |lead: &[&LirBlock], run: &[LirBlock], after: Option<i64>| -> f64 {
+            let sequence: Vec<&LirBlock> = lead.iter().copied().chain(run.iter()).collect();
             let mut total = 0.0;
             for (index, block) in sequence.iter().enumerate() {
                 let next = sequence.get(index + 1).map(|one| one.at).or(after);
@@ -547,13 +551,44 @@ fn rotated(
         let before = start.checked_sub(1).map(|index| &order[index]);
         let after = order.get(end).map(|block| block.at);
         let run = &order[start..end];
-        let current = clocks(run, before, after);
-        let best = (1..run.len())
-            .map(|at| {
-                let turned: Vec<LirBlock> = run[at..].iter().chain(&run[..at]).cloned().collect();
-                (clocks(&turned, before, after), at)
-            })
-            .min_by(|one, other| one.0.total_cmp(&other.0));
+        // The block a loop is entered through by a jump of its own (a store or
+        // a copy on the edge the guard takes) could lie in front of the
+        // loop and fall into it: the one block that only
+        // goes to `first`, outside the run, that nothing falls into where it
+        // is.
+        let preheader_of = |first: &LirBlock| -> Option<&LirBlock> {
+            let found =
+                from.get(&first.at)?.iter().filter_map(|at| position.get(at).map(|&index| &order[index])).find(
+                    |one| {
+                        let index = position[&one.at];
+                        (index < start || index >= end)
+                            && one.succ == [first.at]
+                            && one.at != body.entry
+                            && index.checked_sub(1).is_none_or(|before| {
+                                masm::_falls_to(&order[before], &body.name).ok().flatten() != Some(one.at)
+                            })
+                            && start.checked_sub(1) != Some(index)
+                    },
+                )?;
+            Some(found)
+        };
+        // Each turn, with the preheader in front where it has one.
+        let mut candidates: Vec<(f64, usize, Option<i64>)> = Vec::new();
+        let lead: Vec<&LirBlock> = before.into_iter().collect();
+        for at in (0..run.len()).filter(|&at| at == 0 || door.is_none_or(|door| door == at)) {
+            let turned: Vec<LirBlock> = run[at..].iter().chain(&run[..at]).cloned().collect();
+            let kept = clocks(&lead, &turned, after);
+            let entered = preheader_of(&turned[0]);
+            let far = entered.map_or(0.0, |one| frequency.edge(one.at, turned[0].at) * price.jump);
+            candidates.push((kept + far, at, None));
+            if let Some(one) = entered {
+                let mut with: Vec<&LirBlock> = lead.clone();
+                with.push(one);
+                candidates.push((clocks(&with, &turned, after), at, Some(one.at)));
+            }
+        }
+        let current = candidates[0].0;
+        let best = candidates.iter().copied().min_by(|one, other| one.0.total_cmp(&other.0));
         // The estimate does not conserve flow: what a block is said to receive
         // is not what it is said to send. A gain smaller than that is the
         // estimate's own error, not a gain.
@@ -573,14 +608,33 @@ fn rotated(
                 (received - sent).abs() * price.taken
             })
             .sum();
-        if let Some((_, at)) = best.filter(|(cost, _)| current - *cost > noise) {
+        if std::env::var("ROT").is_ok() {
+            eprintln!(
+                "ROT {} run {:?} cands {:?} noise {noise:.1}",
+                body.name,
+                run.iter().map(|b| b.at).collect::<Vec<_>>(),
+                candidates
+            );
+        }
+        if let Some((_, at, hoisted)) = best.filter(|(cost, _, _)| current - *cost > noise) {
             let turned: Vec<LirBlock> = run[at..].iter().chain(&run[..at]).cloned().collect();
+            if let Some(preheader) = hoisted {
+                fronts.push((preheader, turned[0].at));
+            }
             order.splice(start..end, turned);
             for (index, block) in order.iter().enumerate().take(end).skip(start) {
                 position.insert(block.at, index);
             }
             changed = true;
         }
+    }
+    // Each preheader in front of its loop, after every run is turned: the
+    // positions the runs were found at move with it.
+    for (preheader, first) in fronts {
+        let Some(from_at) = order.iter().position(|one| one.at == preheader) else { continue };
+        let block = order.remove(from_at);
+        let to = order.iter().position(|one| one.at == first).expect("the loop's first block");
+        order.insert(to, block);
     }
     if !changed {
         return Ok(body.clone());

@@ -2287,7 +2287,7 @@ fn _applied(
     )
     .expect("a pre-tested loop");
     let shape = rotate::_shape(function, &plan.loop_).expect("a rotatable loop");
-    rotate::_rotate(context, function, &shape, Some(Operand::Value(guard))).expect("a rotation");
+    rotate::_rotate(context, function, &shape, Some((Operand::Value(guard), true))).expect("a rotation");
     crate::cfg::merged(function);
     // The guard also reaches the exit: the loop leaves through its own block
     // again.

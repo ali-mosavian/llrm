@@ -136,7 +136,7 @@ fn a_rewound_loop_keeps_its_count_for_rotate() {
     });
     assert!(changed);
     let (before, results_before) = (printed(&module), results(&module, inputs));
-    let after = managed(&mut module, Rotate);
+    let after = managed(&mut module, Rotate { proven: true, copy: false });
     assert_ne!(after, before);
     assert!(after.contains("  %done = icmp eq i32 %fol, %bound\n  br i1 %done, label %b5, label %b4\n"), "{after}");
     assert_eq!(results(&module, inputs), results_before, "{after}");

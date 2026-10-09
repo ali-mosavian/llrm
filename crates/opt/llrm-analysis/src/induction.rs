@@ -833,7 +833,48 @@ fn _entered(
     width: u32,
 ) -> bool {
     let Some(preheader) = shape.preheader else { return false };
-    crate::guards::holds(unit, preheader, test, &Scev::of(start, width), &Scev::of(bound, width))
+    let (value, limit) = (start, bound);
+    let (start, bound) = (Scev::of(start, width), Scev::of(bound, width));
+    crate::guards::holds(unit, preheader, test, &start, &bound) || _ranged(unit, preheader, value, limit, test, width)
+}
+
+/// Whether the ranges known at `at` put the start of a counter on the loop's
+/// side of a constant bound for good: a signed compare of a value that cannot
+/// be below (or above) it. A guard the program no longer holds was folded on
+/// those ranges, and a loop entered behind it is entered all the same.
+fn _ranged(
+    unit: &Unit,
+    at: i64,
+    start: &AffineOperand,
+    bound: &AffineOperand,
+    test: IntPredicate,
+    width: u32,
+) -> bool {
+    let (AffineOperand::Value(value, _), AffineOperand::Const(limit)) = (start, bound) else { return false };
+    let Ok(bounds) = crate::ranges::bounds(unit) else { return false };
+    let Some(interval) = bounds.at(at).and_then(|facts| facts.get(value)) else { return false };
+    if interval.width != width {
+        return false;
+    }
+    let half = BigInt::from(1) << (width - 1);
+    let limit = _signed_value(&limit.n, width);
+    let _ = half;
+    match test {
+        IntPredicate::Sge => interval.low >= limit,
+        IntPredicate::Sgt => interval.low > limit,
+        IntPredicate::Sle => interval.high <= limit,
+        IntPredicate::Slt => interval.high < limit,
+        _ => false,
+    }
+}
+
+fn _signed_value(
+    n: &BigInt,
+    width: u32,
+) -> BigInt {
+    let modulus = BigInt::from(1) << width;
+    let low = mod_floor(n, &modulus);
+    if low >= (BigInt::from(1) << (width - 1)) { low - modulus } else { low }
 }
 
 /// Where a loop leaves, and after how many trips: an exiting block, and
