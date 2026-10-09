@@ -177,6 +177,9 @@ DIST_BUILD = "cargo build --profile dist -q --bins"
 # Commands. Each runs under bash in the repo root with CARGO_TARGET_DIR set.
 def commands(p: Plan, cfg: dict, pkgs: dict[str, dict]) -> dict[str, str]:
     scope = "--workspace" if p.packages is None else " ".join(f"-p {n}" for n in p.packages)
+    # The root crate has no library: a diff that selects it alone (a bench tool) has no lib or doc tests to run.
+    # (with another crate that has one, the root crate stays in the scope: it turns on the features the others need)
+    libs = scope if p.packages is None or any((ROOT / pkgs[n]["dir"] / "src/lib.rs").exists() for n in p.packages) else ""
     cargo = "cargo test --release -q --no-fail-fast"
     split = cfg["split"]
     whole = set(cfg["whole"].values()) | set(cfg["exclusive"].values())
@@ -190,8 +193,8 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict]) -> dict[str, str]:
     )
     steps = {
         "build": BUILD,
-        "lib": f"{cargo} {scope} --lib",
-        "doc": f"{cargo} {scope} --doc",
+        "lib": f"{cargo} {libs} --lib" if libs else "true",
+        "doc": f"{cargo} {libs} --doc" if libs else "true",
         "integration": f"{cargo} {cheap_bins} -- {skips} --skip test_every_program_under_tests_run_prints_its_out",
         "crate-tests": f"{cargo} {ct}" if ct else "true",
         # Every scan runs, and any failing fails the step: the first red must not hide the others.
@@ -232,9 +235,9 @@ def expected(p: Plan, cfg: dict, pkgs: dict[str, dict]) -> dict[str, tuple[int |
     """(test binaries that must report, whether a filter must match a test) per cargo test step."""
     whole = set(cfg["whole"].values()) | set(cfg["exclusive"].values())
     selected = set(p.packages or pkgs)
+    libs = p.packages is None or any((ROOT / pkgs[n]["dir"] / "src/lib.rs").exists() for n in p.packages)
     out = {
-        "lib": (None, False),
-        "doc": (None, False),
+        **({"lib": (None, False), "doc": (None, False)} if libs else {}),
         "integration": (sum(1 for t in root_tests() if t != "timing" and t not in whole), False),
         "run": (1, True),
         "scans": (None, True),

@@ -230,3 +230,15 @@ def test_a_failing_scan_does_not_hide_the_ones_after_it(tmp_path):
     """&& stopped at the first red scan; the step runs every scan and fails if any did."""
     command = gate.commands(gate.plan(["crates/opt/llrm-analysis/src/ranges.rs"]), gate.load(), gate.packages())["scans"]
     assert "&&" not in command.replace("cargo test", "") and command.count("|| rc=1") == 3 and command.endswith("exit $rc")
+
+
+def test_a_diff_that_selects_only_the_root_crate_runs_no_lib_or_doc_tests():
+    """A change to tools/bench selected the root crate alone, which has no library: `cargo test -p llrm --lib` failed with 'no library
+    targets found' and the gate went red on a bench blessing."""
+    p = gate.plan(["tools/bench/bench.py"])
+    assert p.packages == ["llrm"], p.packages
+    steps = gate.commands(p, gate.load(), gate.packages())
+    assert steps["lib"] == "true" and steps["doc"] == "true"
+    expected = gate.expected(p, gate.load(), gate.packages())
+    assert "lib" not in expected and "doc" not in expected
+    assert "-p llrm-mir" in gate.commands(gate.plan(["crates/ir/llrm-mir/src/lib.rs"]), gate.load(), gate.packages())["lib"] or "--workspace" in gate.commands(gate.plan(["crates/ir/llrm-mir/src/lib.rs"]), gate.load(), gate.packages())["lib"]
