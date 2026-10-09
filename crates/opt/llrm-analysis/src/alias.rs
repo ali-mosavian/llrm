@@ -1103,11 +1103,15 @@ pub fn summaries_updating(
         })
         .collect();
     let graph = llrm_mir::callgraph::CallGraph::from_edges(edges);
+    let mut cyclic = vec![false; procedures.len()];
     let order: Vec<usize> = graph
         .bottom_up_components()
         .into_iter()
-        .flat_map(|(mut members, _)| {
+        .flat_map(|(mut members, in_cycle)| {
             members.sort_unstable();
+            if in_cycle {
+                members.iter().for_each(|&at| cyclic[at] = true);
+            }
             members
         })
         .collect();
@@ -1139,10 +1143,15 @@ pub fn summaries_updating(
             callers_of_unknown.insert(at);
         }
     }
-    // The bodies to work out again.
+    // The bodies to work out again, and of them those that start from nothing
+    // and those that are worked out from what their callees are now, and
+    // again only if one of those changed: the edited bodies start the second.
     let mut closure = vec![whole; procedures.len()];
+    let mut reset = vec![whole; procedures.len()];
+    let mut seeds = vec![whole; procedures.len()];
     if !whole {
         let mut todo: Vec<usize> = dirty_names.iter().filter_map(|name| procedures.get_index_of(*name)).collect();
+        todo.iter().for_each(|&at| seeds[at] = true);
         // A callee defined elsewhere whose declaration was restated: its
         // callers read it.
         todo.extend(
@@ -1154,6 +1163,7 @@ pub fn summaries_updating(
                 })
                 .map(|(at, _)| at),
         );
+        todo.iter().for_each(|&at| seeds[at] = true);
         // An entry's summary is what a call back into the module does
         // (`callbacks`), which the bodies that call something unknown
         // were made against, and an entry among those feeds it: they stand or
@@ -1172,8 +1182,22 @@ pub fn summaries_updating(
                 todo.extend(callers_of_unknown.iter().copied());
             }
         }
+        // What starts from nothing: a body in a cycle (its summary is a least
+        // fixed point, which a callee that shrank would leave too large), and
+        // where an entry is among them the entries and the bodies that call
+        // something unknown (which feed each other through the callbacks).
+        // The rest is a function of its callees' summaries alone.
+        let entry_among = entries.iter().any(|&at| closure[at]);
+        for at in 0..procedures.len() {
+            if closure[at]
+                && (cyclic[at] || (entry_among && (entries.contains(&at) || callers_of_unknown.contains(&at))))
+            {
+                reset[at] = true;
+                seeds[at] = true;
+            }
+        }
         for (at, (name, _)) in procedures.iter().enumerate() {
-            if closure[at] {
+            if reset[at] {
                 result.insert(name.clone(), Summary { captures: BTreeSet::new(), ..direct[name].clone() });
             }
         }
@@ -1193,15 +1217,15 @@ pub fn summaries_updating(
         .keys()
         .map(|name| {
             memo.found
-                .shift_remove(name)
+                .swap_remove(name)
                 .filter(|_| !dirty_names.contains(name))
                 .map(|visit| Visit { version: None, ..visit })
         })
         .collect();
     let mut version = 0;
-    let mut queued: Vec<bool> = closure.clone();
+    let mut queued: Vec<bool> = seeds.clone();
     let mut work: std::collections::BinaryHeap<std::cmp::Reverse<usize>> =
-        (0..procedures.len()).filter(|first| closure[order[*first]]).map(std::cmp::Reverse).collect();
+        (0..procedures.len()).filter(|first| seeds[order[*first]]).map(std::cmp::Reverse).collect();
     while let Some(std::cmp::Reverse(first)) = work.pop() {
         let at = order[first];
         queued[at] = false;
