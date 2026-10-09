@@ -247,7 +247,7 @@ pub fn subexpressions(
     program: Option<&ProgramProxy>,
     crossed: &std::cell::Cell<bool>,
 ) -> Result<bool, String> {
-    let doms = cfg::Dominance::of(function).dominators(function);
+    let dominance = cfg::Dominance::of(function);
     let order: IndexMap<BlockId, usize> =
         function.layout().iter().enumerate().map(|(index, &block)| (block, index)).collect();
 
@@ -267,7 +267,7 @@ pub fn subexpressions(
             let first = candidates
                 .iter()
                 .rev()
-                .find(|candidate| _reaches(candidate.0, candidate.1, here, index, &doms, function.layout(), block))
+                .find(|candidate| _reaches(candidate.0, candidate.1, here, index, &dominance, function.layout(), block))
                 .copied();
             let Some((at, where_, earlier)) = first else {
                 candidates.push((here, index, inst));
@@ -377,14 +377,14 @@ pub fn _reaches(
     where_: usize,
     then: usize,
     index: usize,
-    doms: &BTreeMap<i64, BTreeSet<i64>>,
+    dominance: &cfg::Dominance,
     layout: &[BlockId],
     block: BlockId,
 ) -> bool {
     if at == then {
         return where_ < index;
     }
-    doms.get(&cfg::id(block)).is_some_and(|dominating| dominating.contains(&cfg::id(layout[at])))
+    dominance.dominates(cfg::id(layout[at]), cfg::id(block))
 }
 
 thread_local! {
