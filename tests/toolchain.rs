@@ -1,6 +1,6 @@
 //! The tools build.rs puts beside llrm's binaries.
 
-mod common;
+pub mod common;
 
 use std::path::Path;
 use std::process::Command;
@@ -154,7 +154,6 @@ fn test_nib_start_puts_the_stack_in_dgroup() {
 /// garbage on either code path.
 #[test]
 fn test_nib_start_leaves_a_kilobyte_frame_room() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let bin = Path::new(env!("CARGO_BIN_EXE_llrm-nib")).parent().unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let dir = scratch.path();
@@ -691,7 +690,6 @@ fn test_the_zed_extension_names_a_library_that_exists_and_passes_the_projects_ta
 /// the same one.
 #[test]
 fn test_both_targets_declare_the_same_file_call_result() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let results = |target: &str| -> Vec<String> {
         let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib"))
             .args([&mode(target), "--os-layer", "module"])

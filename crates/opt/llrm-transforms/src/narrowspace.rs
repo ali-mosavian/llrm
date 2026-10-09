@@ -181,7 +181,7 @@ fn narrow(
         function.ty
     };
     for &(caller, call) in calls {
-        let Module { context, globals, .. } = &mut *module;
+        let Module { globals, .. } = &mut *module;
         let GlobalKind::Function(function) = &mut globals[caller.0 as usize].kind else { unreachable!("a caller") };
         // A recursive call that passed the parameter on already passes the near
         // one.

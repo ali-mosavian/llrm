@@ -1498,7 +1498,6 @@ fn test_a_near_raw_pointer_to_a_module_struct_is_its_offset() {
     assert!(between(&text, "GIVE proc far", "GIVE endp").contains("push offset"), "{text}");
 }
 
-#[test]
 /// Any integer converts to a float: a parameter, a temporary, a constant, of
 /// any width or sign. Only one already in memory in an x87 format did;
 /// `f64(high)` of an i16 parameter was "integer-to-float conversion needs a

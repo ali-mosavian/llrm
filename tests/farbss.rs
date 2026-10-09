@@ -6,7 +6,7 @@
 //! here runs under `tools/dosbatch/dirty.asm`, which fills free memory with
 //! 0A5h first.
 
-mod common;
+pub mod common;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

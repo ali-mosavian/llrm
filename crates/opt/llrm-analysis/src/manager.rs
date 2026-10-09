@@ -26,7 +26,7 @@ use crate::floatfacts;
 use crate::globalsaa::{self, Globals, ProgramGlobals};
 use crate::induction;
 use crate::memory::{Identity, MemRef, MemoryKind, MemoryObject, ObjectInterner, Slice, Unit};
-use crate::ranges::{self, Interval};
+use crate::ranges;
 
 impl<'a> Unit<'a> {
     /// `function` as the manager's analyses see it: its module and target

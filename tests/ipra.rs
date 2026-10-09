@@ -5,7 +5,7 @@
 
 use std::process::Command;
 
-mod common;
+pub mod common;
 
 /// The listing of C `source` and the facts the compiler found
 /// (`LLRM_DEBUG=facts`), under `flags`.

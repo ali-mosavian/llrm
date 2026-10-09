@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use llrm_mir::callgraph::{direct_calls, direct_only};
 use llrm_mir::context::GlobalId;
 use llrm_mir::memory;
-use llrm_mir::module::{GlobalKind, InstId, Module, Operand};
+use llrm_mir::module::{GlobalKind, InstId, Module};
 use llrm_mir::opcode::Opcode;
 
 /// The functions of `module` that lost a parameter, and the functions that call
