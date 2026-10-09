@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 use iced_x86::{Code, Instruction};
 use llrm_support::hash::HashMap;
 
+pub mod effects;
 pub mod parse;
 
 pub use parse::{Form, Operand, Side, CONDITIONS};
@@ -68,19 +69,15 @@ mod tests {
 
     #[test]
     fn a_malformed_line_is_refused_with_its_line() {
-        let error = parse::parse("add binary rm/^0,rmx 16 alu_rr - Add_rm{w}_r{w}").unwrap_err();
+        let error = parse::parse("add binary rm/^0,rmx 16 alu_rr - - - Add_rm{w}_r{w}").unwrap_err();
         assert_eq!(error, "x86.instr:1: operand `rmx` is not made of the kinds r m i a s");
     }
 
-    /// Splitting `x86.instr` into the family's rows and m16's must lose and
-    /// repeat none of the 70 it had.
+    /// The joined description is the family's rows and the target's, none lost or repeated.
     #[test]
-    fn the_family_and_real_mode_rows_are_the_70_there_were_and_the_string_operations() {
+    fn the_family_and_real_mode_rows_are_all_of_the_description() {
         let rows = |text: &str| text.lines().filter(|line| !line.starts_with('#') && !line.trim().is_empty()).count();
-        // 70 there were; the 3 `stos` rows are m16's now (their selector operands), and
-        // its string operations are the 3 + 3 + 3 + 3 of lowering's shapes.
-        assert_eq!(rows(&TEXT), 70 - 3 + 12);
-        assert_eq!(rows(llrm_x86::instructions::FAMILY) + rows(OWN), 70 - 3 + 12);
+        assert_eq!(rows(&TEXT), rows(llrm_x86::instructions::FAMILY) + rows(OWN));
         assert!(forms("les").next().is_some() && forms("call").next().is_some());
     }
 }
