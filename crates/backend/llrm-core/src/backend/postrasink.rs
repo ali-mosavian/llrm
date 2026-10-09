@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::support::hash::IndexMap;
 
-use crate::backend::liveness::{_backwards, _universe};
+use crate::backend::liveness::{_before, _effects, _universe};
 use crate::backend::peephole::{id, Lanes, _lanes};
 use crate::backend::copysink::{copy_of, touches};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
@@ -19,12 +19,14 @@ use crate::model::lir::{self, Insn, LirBlock, LirBody};
 fn live_in(body: &LirBody) -> IndexMap<i64, Lanes> {
     let universe = _universe();
     let mut into: IndexMap<i64, Lanes> = body.blocks.iter().map(|block| (block.at, Lanes::new())).collect();
+    // Decoded once: the fixed point reads each block several times.
+    let decoded: IndexMap<i64, _> = body.blocks.iter().map(|block| (block.at, _effects(body.bits, block))).collect();
     let mut changing = true;
     while changing {
         changing = false;
         for block in body.blocks.iter().rev() {
             let after: Lanes = block.succ.iter().filter_map(|to| into.get(to)).flat_map(|lanes| lanes.iter().copied()).collect();
-            let before = _backwards(body.bits, block, after, &universe);
+            let before = _before(&decoded[&block.at], after, &universe);
             if before != into[&block.at] {
                 into.insert(block.at, before);
                 changing = true;
@@ -34,21 +36,28 @@ fn live_in(body: &LirBody) -> IndexMap<i64, Lanes> {
     into
 }
 
-/// `body` with each copy moved into the one successor that reads it.
+/// `body` with each copy moved into the one successor that reads it. A copy that reached a block that itself branches may go on,
+/// so the blocks that received one are asked again; liveness is the pass's whole cost, and is worked out only for a body that has a
+/// copy in a block to ask.
 pub fn sunk(body: &LirBody) -> LirBody {
     let mut body = body.clone();
-    // Each round moves the copies it finds; what that leaves bare (a copy that read one just moved) goes the next.
+    let mut asked: Option<Vec<i64>> = None;
     for _ in 0..8 {
-        match round(&body) {
-            Some(next) => body = next,
+        match round(&body, asked.as_deref()) {
+            Some((next, received)) => {
+                body = next;
+                asked = Some(received);
+            }
             None => break,
         }
     }
     body
 }
 
-fn round(body: &LirBody) -> Option<LirBody> {
-    if body.blocks.iter().all(|block| block.succ.len() < 2) {
+fn round(body: &LirBody, asked: Option<&[i64]>) -> Option<(LirBody, Vec<i64>)> {
+    let ask = |block: &LirBlock| block.succ.len() > 1 && asked.is_none_or(|asked| asked.contains(&block.at));
+    // Liveness is the cost: ask for it only where a block that branches ends in a copy-able prefix.
+    if !body.blocks.iter().any(|block| ask(block) && block.insns.iter().any(|one| copy_of(one).is_some())) {
         return None;
     }
     let live = live_in(body);
@@ -62,7 +71,7 @@ fn round(body: &LirBody) -> Option<LirBody> {
     let mut moved: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut removed: crate::support::hash::HashSet<usize> = crate::support::hash::HashSet::default();
     for block in &body.blocks {
-        if block.succ.len() < 2 {
+        if !ask(block) {
             continue;
         }
         for (index, one) in block.insns.iter().enumerate().rev() {
@@ -102,7 +111,7 @@ fn round(body: &LirBody) -> Option<LirBody> {
             block.with_insns(insns)
         })
         .collect();
-    Some(body.with_blocks(blocks))
+    Some((body.with_blocks(blocks), moved.keys().copied().collect()))
 }
 
 #[cfg(test)]
