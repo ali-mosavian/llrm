@@ -6,7 +6,7 @@
 //! of a body that does has the kept result. `LLRM_CHECK_FACTS` works every kept result out again and compares.
 
 use std::any::{Any, TypeId};
-use std::collections::HashMap;
+use crate::support::hash::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::model::lir::LirBody;
