@@ -60,6 +60,12 @@ impl FunctionPass for Lsr {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// `total` asked and `total_of` worked out, for the test that a set is priced once.
+    pub static TOTALS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
 /// What the target says a loop's choice may cost.
 struct Target<'a> {
     machine: &'a dyn Machine,
@@ -258,6 +264,8 @@ struct Problem<'a> {
     fixed: BTreeMap<i64, Vec<spill::Site>>,
     /// The spill traffic of what `fixed` keeps.
     traffic: BTreeMap<ValueId, Traffic>,
+    /// `total` of each set asked: the search asks the same set again from the other start and from each step's neighbours.
+    totals: std::cell::RefCell<llrm_support::hash::HashMap<BTreeSet<usize>, Option<i64>>>,
     /// Where each site's value is live, at the points of `fixed`.
     alive: Vec<BTreeMap<i64, Vec<bool>>>,
     latch: i64,
@@ -377,6 +385,7 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target, pres
         keys,
         fixed,
         traffic,
+        totals: Default::default(),
         alive,
         latch: frequency(cfg::block(latch)),
         header: frequency(cfg::block(loop_.header)),
@@ -1151,7 +1160,16 @@ impl Problem<'_> {
 
     /// The cost of `set`, where every use has a fit in it.
     fn total(&self, set: &BTreeSet<usize>) -> Option<i64> {
-        self.total_of(set, false)
+        #[cfg(test)]
+        TOTALS.with(|counts| counts.set((counts.get().0 + 1, counts.get().1)));
+        if let Some(&known) = self.totals.borrow().get(set) {
+            return known;
+        }
+        #[cfg(test)]
+        TOTALS.with(|counts| counts.set((counts.get().0, counts.get().1 + 1)));
+        let total = self.total_of(set, false);
+        self.totals.borrow_mut().insert(set.clone(), total);
+        total
     }
 
     /// What site `index` costs from a counter of `set` that is already

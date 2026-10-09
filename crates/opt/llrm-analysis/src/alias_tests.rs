@@ -957,3 +957,19 @@ fn picking_the_buckets_of_a_write_allocates_once() {
     assert_eq!(counted::made() - before, 1, "the picking allocated more than its answer");
     drop(reached);
 }
+
+/// A callee was looked up among every global by name at every call of every visit (`_summary`: 12.7 G of host.c's 94 G instructions
+/// in `summaries visit`, a quarter of it that scan). The procedure knows once which of its callees another definition may replace.
+#[test]
+fn a_procedure_knows_which_callees_a_definition_elsewhere_may_replace() {
+    let text = |linkage: &str| CALLEE_WRITES_ITS_PARAMETER.replace("define void @callee", &format!("define {linkage}void @callee"));
+    for (linkage, replaceable) in [("", false), ("weak ", true), ("linkonce_odr ", true), ("internal ", false)] {
+        let parsed = Parsed::new(&text(linkage));
+        let procedure = Procedure::of(parsed.unit_of("f"));
+        assert_eq!(procedure.replaceable.contains("callee"), replaceable, "linkage [{linkage}]");
+        let procedures = IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
+        let found = summaries(&procedures, None).unwrap();
+        // No summary describes a call that may be replaced: f then writes what an unknown callee may.
+        assert_eq!(found["f"].writes.is_empty(), false, "f writes something, replaceable callee or not");
+    }
+}

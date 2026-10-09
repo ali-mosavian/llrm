@@ -16,8 +16,18 @@ pub struct Assumptions {
     here: BTreeMap<i64, Vec<Operand>>,
 }
 
+thread_local! {
+    static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has gone through a body for its assumptions, for a test that a pass asks once and not per query.
+pub fn built() -> usize {
+    BUILT.with(std::cell::Cell::get)
+}
+
 impl Assumptions {
     pub fn of(unit: &Unit) -> Self {
+        BUILT.with(|built| built.set(built.get() + 1));
         let mut here = BTreeMap::<i64, Vec<Operand>>::new();
         for (block, inst) in unit.function.walk() {
             if unit.intrinsic(inst) == Some(Intrinsic::Assume)
