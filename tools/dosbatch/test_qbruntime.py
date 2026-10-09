@@ -41,7 +41,7 @@ class InventoryTests(unittest.TestCase):
 
     def test_linker_inventory_deduplicates_only_the_reported_b_symbols(self):
         """A broad symbol scan recorded private names that LINK did not require and hid a missing entry."""
-        log = "Unresolved external B$SASS in module P\nUnresolved external _main in module P\nUnresolved external B$SASS in module Q\nUnresolved external B$FLEN in module P\n"
+        log = "I000.OBJ(p.bas) : error L2029 : 'B$SASS' : unresolved external\nUnresolved external _main in module P\nI001.OBJ(q.bas) : error L2029 : 'B$SASS' : unresolved external\nI000.OBJ(p.bas) : error L2029 : 'B$FLEN' : unresolved external\n"
         self.assertEqual(qbruntime.undefined_symbols(log), ["B$FLEN", "B$SASS"])
 
 

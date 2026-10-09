@@ -1,4 +1,4 @@
-"""Build and inspect the m16 QB runtime archive.
+"""Build and inspect the real-mode QB runtime archive.
 
 The frontend owns the object ABI.  This module owns only the archive selected
 at LINK time and the evidence collected while replacing BCOM45.
@@ -20,7 +20,6 @@ import dosbatch
 
 
 RUNTIME = dosbatch.ROOT / "runtime" / "qb"
-PLATFORM = dosbatch.ROOT / "platform" / "qb" / "dos" / "m16"
 ARCHIVE_NAME = "LLRMQB.LIB"
 DEMO_NAMES = ("NIBBLES.BAS", "GORILLA.BAS")
 MILESTONE_ONE = (
@@ -89,7 +88,9 @@ def source_groups() -> dict[str, list[Path]]:
 
 
 def _compile_c(source: Path, obj: Path, include: Path) -> None:
-    dosbatch._host([str(dosbatch.BIN / "llrm-c"), str(source), "-m16", "-O2", "-I", str(include), "-o", str(obj)])
+    dosbatch._host(
+        [str(dosbatch.BIN / "llrm-c"), str(source), dosbatch.m_flag(dosbatch.REAL_MODE), "-O2", "-I", str(include), "-o", str(obj)]
+    )
 
 
 def archive(objects: list[Path], output: Path, work: Path) -> None:
