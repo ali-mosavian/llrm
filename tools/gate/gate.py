@@ -168,6 +168,8 @@ def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
 # The build every step runs after, and every measurement is taken with: `cargo build --bins` alone produces a different llrm-c (the
 # test build unifies features differently), whose compile costs differ by up to 6% a step. tools/measure.py builds a base with it too.
 BUILD = "cargo build --release -q --bins && cargo test --release -q --workspace --no-run"
+# The shipped build (Cargo.toml `[profile.dist]`): what the creep run on main measures. Not a gate step: three minutes cold.
+DIST_BUILD = "cargo build --profile dist -q --bins"
 
 
 # Commands. Each runs under bash in the repo root with CARGO_TARGET_DIR set.
@@ -338,7 +340,9 @@ def watch_main(force: bool, every: int = 5, hours: float = 2.0) -> int:
         full = plan(["Cargo.toml"], "full")
         execute(restricted(full, ["measure"], set(commands(full, load(), packages())) | set(load()["exclusive"])))
     # And against the main commit 50 merges or a week back: a branch may add up to the tolerance, ten of them may not.
-    creep = subprocess.run([sys.executable, "tools/measure.py", "creep", "HEAD"], cwd=ROOT, env={**os.environ, "LLRM_BIN": os.environ.get("LLRM_BIN", f"{target}/release")})
+    # Both ends of the creep are built as the shipped llrm-c is (`dist`): the slow drift is the user's, not the gate's build's.
+    subprocess.run(["bash", "-c", DIST_BUILD], cwd=ROOT, env=os.environ, check=True)
+    creep = subprocess.run([sys.executable, "tools/measure.py", "creep", "HEAD"], cwd=ROOT, env={**os.environ, "LLRM_BIN": f"{target}/dist", "LLRM_MEASURE_PROFILE": "dist"})
     if creep.returncode == 1:
         return 1
     merges = len(git("rev-list", "--first-parent", f"{green}..{head}").split()) if green else every

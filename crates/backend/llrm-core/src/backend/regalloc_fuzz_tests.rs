@@ -846,6 +846,18 @@ fn test_intervals_from_occurrences_are_those_of_the_walk() {
     assert!(compared > 0, "premise: some value was live");
 }
 
+/// Reading the intervals of a body copied every interval of it (`_existing_colors` asked for the body's own and added the homes':
+/// 0.14 G of d_faces, 616 calls of 8000 segments), though a read needs the remembered answer itself.
+#[test]
+fn test_reading_the_intervals_of_a_body_asked_of_twice_copies_none() {
+    use crate::analysis::intervals as ranges;
+    let (plain, _) = body(3, &Shape { pool: 9, ops: 8 });
+    let first = ranges::intervals_shared(&plain, None);
+    let again = ranges::intervals_shared(&plain, None);
+    assert!(std::rc::Rc::ptr_eq(&first, &again), "the second ask copied the answer");
+    assert!(*first == ranges::intervals(&plain, None));
+}
+
 /// The no-split allocation of a body the base allocation split nothing in is the base allocation again, and was made for every
 /// body with a spill (10% of the trials over QCport, the bench and the 66 programs, none of them won).
 #[test]

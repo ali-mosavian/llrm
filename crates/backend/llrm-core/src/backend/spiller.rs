@@ -959,7 +959,7 @@ fn _copied_with(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Vec<Res
 /// Python numbers each home's pseudo-value below every held value, which is
 /// negative; `u32` cannot say that, so they are numbered in the same order
 /// at the top of the range instead. Nothing compares them with a real value.
-fn _existing_colors(body: &LirBody, frame: &mut Frame) -> (Vec<(i64, u32, Vec<Interval>)>, IndexMap<u32, Interval>) {
+fn _existing_colors(body: &LirBody, frame: &mut Frame) -> (Vec<(i64, u32, Vec<Interval>)>, Lives) {
     let found = _existing_colors_by(body, frame, false);
     if std::env::var_os("LLRM_CHECK_COLORS").is_some() {
         let whole = _existing_colors_by(body, frame, true);
@@ -982,6 +982,35 @@ fn _same_colors(one: &[(i64, u32, Vec<Interval>)], other: &[(i64, u32, Vec<Inter
 
 /// `_existing_colors`, with the intervals of the homes' pseudo-values found among themselves and the body's
 /// own remembered, or, `whole`, as the body with the homes in it is worked out at once.
+thread_local! {
+    static MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many instructions this thread has made again with the homes among their values, for a test that the usual ask does not.
+pub fn made_for_homes() -> usize {
+    MADE.with(std::cell::Cell::get)
+}
+
+/// The intervals `_existing_colors` reads: the body's own, as remembered and shared, and the homes' beside them.
+struct Lives {
+    shared: Option<std::rc::Rc<IndexMap<u32, Interval>>>,
+    own: IndexMap<u32, Interval>,
+}
+
+impl Lives {
+    fn get(&self, value: &u32) -> Option<&Interval> {
+        self.own.get(value).or_else(|| self.shared.as_ref().and_then(|shared| shared.get(value)))
+    }
+
+    fn len(&self) -> usize {
+        self.own.len() + self.shared.as_ref().map_or(0, |shared| shared.len())
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&u32, &Interval)> + '_ {
+        self.own.iter().chain(self.shared.iter().flat_map(|shared| shared.iter()))
+    }
+}
+
 /// The intervals of the homes' pseudo-values (`first..`) walked in a body of the instructions that name them alone (whole parallel
 /// copies, which share a point), at the slots they have in the body: what `homes_by_occurrences` is held to under
 /// `LLRM_CHECK_OCCURRENCES`.
@@ -1034,25 +1063,22 @@ fn homes_by_sparse_body(body: &LirBody, index: &ranges::Indexes, changed: &[(usi
 }
 
 /// The same from where the homes occur: the instructions `changed` name them, so the walk need not look at the others.
-fn homes_by_occurrences(body: &LirBody, index: &ranges::Indexes, changed: &[(usize, usize, Arc<Insn>)], first: u32, count: usize) -> IndexMap<u32, Interval> {
+fn homes_by_occurrences(body: &LirBody, index: &ranges::Indexes, named: &[(usize, usize, BTreeSet<u32>, BTreeSet<u32>)], first: u32, count: usize) -> IndexMap<u32, Interval> {
     let mut places: IndexMap<u32, Vec<ranges::Occurrence>> = IndexMap::default();
-    for (block_index, at, one) in changed {
-        let mut named: Vec<u32> = one.defines.iter().chain(&one.uses).copied().filter(|value| *value >= first).collect();
-        named.sort_unstable();
-        named.dedup();
-        for value in named {
-            places.entry(value).or_default().push(((*block_index, *at), one.defines.contains(&value), one.uses.contains(&value)));
+    for (block_index, at, defined, used) in named {
+        for value in defined.union(used) {
+            places.entry(*value).or_default().push(((*block_index, *at), defined.contains(value), used.contains(value)));
         }
     }
     let values: Vec<u32> = (first..first + count as u32).collect();
     ranges::intervals_by_occurrences(body, index, &values, &places)
 }
 
-fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(i64, u32, Vec<Interval>)>, IndexMap<u32, Interval>) {
+fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(i64, u32, Vec<Interval>)>, Lives) {
     let mut homes: Vec<i64> = frame.slots.values().copied().collect::<BTreeSet<i64>>().into_iter().collect();
     homes.sort_unstable();
     if homes.is_empty() {
-        return (Vec::new(), ranges::intervals(body, None));
+        return (Vec::new(), Lives { shared: Some(ranges::intervals_shared(body, None)), own: IndexMap::default() });
     }
     let first = u32::MAX - homes.len() as u32;
     let pseudo: IndexMap<i64, u32> =
@@ -1088,7 +1114,8 @@ fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(
     // Only an instruction that names a home is made again with it among its values; the others are the body's.
     // Only those with a frame cell among their operands can, which the occurrences hold by block.
     let mut flipped = false;
-    let mut changed: Vec<(usize, usize, Arc<Insn>)> = Vec::new();
+    // The instructions that name a home, and which: made again with them among their values only where the whole body is walked.
+    let mut named: Vec<(usize, usize, BTreeSet<u32>, BTreeSet<u32>)> = Vec::new();
     postings::following(body, |postings| {
         for (block_index, block) in body.blocks.iter().enumerate() {
             for &at in postings.frames(block_index) {
@@ -1099,49 +1126,60 @@ fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(
                 if defined.is_empty() && used.is_empty() && !whole {
                     continue;
                 }
-                let made = _with(one, |made| {
-                    made.defines = one.defines.iter().copied().chain(defined).collect::<IndexSet<u32>>().into_iter().collect();
-                    made.uses = one.uses.iter().copied().chain(used).collect::<IndexSet<u32>>().into_iter().collect();
-                });
-                // A value changes whether an instruction is a mark, and with it the slots after it.
-                flipped |= made.is_meta() != one.is_meta();
-                changed.push((block_index, at as usize, made));
+                // A value changes whether an instruction is a mark, and with it the slots after it: it is one made of nothing.
+                flipped |= (!defined.is_empty() || !used.is_empty()) && one.is_meta();
+                named.push((block_index, at as usize, defined, used));
             }
         }
     });
+    let changed_insns = || -> Vec<(usize, usize, Arc<Insn>)> {
+        MADE.with(|count| count.set(count.get() + named.len()));
+        named
+            .iter()
+            .map(|(block_index, at, defined, used)| {
+                let one = &body.blocks[*block_index].insns[*at];
+                let made = _with(one, |made| {
+                    made.defines = one.defines.iter().copied().chain(defined.iter().copied()).collect::<IndexSet<u32>>().into_iter().collect();
+                    made.uses = one.uses.iter().copied().chain(used.iter().copied()).collect::<IndexSet<u32>>().into_iter().collect();
+                });
+                (*block_index, *at, made)
+            })
+            .collect()
+    };
     let shared;
     let owned;
     let index: &ranges::Indexes;
     let live;
     if whole || flipped || std::env::var_os("LLRM_CHECK_RANGES").is_some() {
         let mut tracked = body.clone();
-        for (block_index, at, made) in changed {
+        for (block_index, at, made) in changed_insns() {
             tracked.blocks[block_index].insns[at] = made;
         }
         owned = ranges::indexed(&tracked);
         index = &owned;
         let busy = crate::analysis::frequency::Frequency::of(&tracked);
-        live = if whole || flipped {
-            ranges::intervals_over(&tracked, Some(index), &busy)
-        } else {
-            let mut live = ranges::intervals(body, None);
-            // The homes' pseudo-values are the `first..` ids.
-            live.extend(ranges::intervals_where(&tracked, index, &busy, &|value| value >= first));
-            live
+        live = Lives {
+            shared: None,
+            own: if whole || flipped {
+                ranges::intervals_over(&tracked, Some(index), &busy)
+            } else {
+                let mut live = ranges::intervals(body, None);
+                // The homes' pseudo-values are the `first..` ids.
+                live.extend(ranges::intervals_where(&tracked, index, &busy, &|value| value >= first));
+                live
+            },
         };
     } else {
         // The slots are the body's own, remembered; the homes' pseudo-values are walked in a body of the instructions
         // that name them alone (whole parallel copies, which share a point), at the slots they have in the body.
         shared = ranges::indexed_shared(body);
         index = &*shared;
-        let mut all = ranges::intervals(body, None);
-        let homes_found = llrm_support::debug::timed("intervals by occurrences", || homes_by_occurrences(body, index, &changed, first, homes.len()));
+        let homes_found = llrm_support::debug::timed("intervals by occurrences", || homes_by_occurrences(body, index, &named, first, homes.len()));
         if std::env::var_os("LLRM_CHECK_OCCURRENCES").is_some() {
-            let walked = homes_by_sparse_body(body, index, &changed, first);
+            let walked = homes_by_sparse_body(body, index, &changed_insns(), first);
             assert!(homes_found == walked, "{}: the homes' intervals by occurrences differ from the walk of the body of their instructions", body.name);
         }
-        all.extend(homes_found);
-        live = all;
+        live = Lives { shared: Some(ranges::intervals_shared(body, None)), own: homes_found };
     }
     let end = index.span.values().map(|(_first, last)| *last).max().unwrap_or(1);
     let mut colors = Vec::new();
@@ -4413,6 +4451,17 @@ mod tests {
 
     /// Each spill scanned the body for the values it spills (copies, constants, addresses, extensions, widths):
     /// 8% of compiling d_alias (#559). The occurrences follow the body, redoing only the blocks a rewrite changed.
+    #[test]
+    fn test_the_homes_are_not_made_into_instructions_unless_the_whole_body_is_walked() {
+        let body = _three_blocks();
+        let (spilt, _) = spilled(&body, &set(&[1]), Some(&mut Frame::new(0)), &crate::backend::classes::RegisterClasses::m16()).expect("spills");
+        let mut frame = Frame::new(0);
+        let (again, _) = spilled(&spilt, &set(&[2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::m16()).expect("spills");
+        let before = super::made_for_homes();
+        _color_slots(&again, &set(&[3]), &IndexMap::from_iter([(3, 2)]), &mut frame).expect("colours");
+        assert_eq!(super::made_for_homes() - before, 0, "an instruction was made again for each that names a home");
+    }
+
     #[test]
     fn test_a_spill_redoes_the_occurrences_of_the_blocks_it_changed_only() {
         let body = _three_blocks();
