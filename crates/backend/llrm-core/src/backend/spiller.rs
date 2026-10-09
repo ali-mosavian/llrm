@@ -5763,14 +5763,14 @@ mod tests {
             ))
         };
         let chain = |extra_at_30: bool| {
-            let blocks: Vec<LirBlock> = (0..400i64)
+            let blocks: Vec<LirBlock> = (0..1600i64)
                 .map(|at| {
                     let insns = if at == 30 && extra_at_30 {
                         vec![nop(0x1000), nop(0x1001 + at), nop(0x2000 + at)]
                     } else {
                         vec![nop(0x1001 + at), nop(0x2000 + at)]
                     };
-                    LirBlock { succ: if at < 399 { vec![at + 1] } else { vec![] }, ..LirBlock::new(at, insns) }
+                    LirBlock { succ: if at < 1599 { vec![at + 1] } else { vec![] }, ..LirBlock::new(at, insns) }
                 })
                 .collect();
             LirBody::new("chain", 0, blocks, IndexMap::default(), IndexMap::default())
@@ -5779,14 +5779,25 @@ mod tests {
         let first = 1000u32;
         let names = |extra: bool| {
             let one = |home: usize| first + home as u32;
-            vec![
+            // A run of its own for each short life, enough of them to be worth
+            // keeping.
+            let short = (0..600usize).flat_map(|pair| {
+                let (block, home) = (400 + 2 * pair, pair % 3);
+                [
+                    (block, 0, BTreeSet::from([one(home)]), BTreeSet::new()),
+                    (block + 1, 0, BTreeSet::new(), BTreeSet::from([one(home)])),
+                ]
+            });
+            let mut named = vec![
                 (5, 0, BTreeSet::from([one(0)]), BTreeSet::new()),
                 (350, 1, BTreeSet::new(), BTreeSet::from([one(0)])),
                 (10, 0, BTreeSet::from([one(1)]), BTreeSet::new()),
                 (300, 1, BTreeSet::new(), BTreeSet::from([one(1)])),
                 (30, usize::from(extra), BTreeSet::from([one(2)]), BTreeSet::new()),
                 (380, 1, BTreeSet::new(), BTreeSet::from([one(2)])),
-            ]
+            ];
+            named.extend(short);
+            named
         };
         let sorted = |mut named: Vec<(usize, usize, BTreeSet<u32>, BTreeSet<u32>)>| {
             named.sort_by_key(|(block, at, _, _)| (*block, *at));

@@ -1305,13 +1305,15 @@ pub(crate) fn _ranges_reference(
     pieces.into_iter().map(|(value, runs)| (value, Interval::new(value, _merged(runs)))).collect()
 }
 
-/// Join overlapping segments, retaining touching definition boundaries.
+/// Join overlapping segments and segments that touch at a block top, where the
+/// value simply goes on being live (one run, as LLVM's `LiveRange`); a
+/// definition starts at an odd slot (`DEF`) and leaves a gap.
 pub fn _merged(mut runs: Vec<Segment>) -> Vec<Segment> {
     runs.sort_by_key(|x| (x.start, x.end));
     let mut out: Vec<Segment> = Vec::new();
     for one in runs {
         if let Some(last) = out.last_mut() {
-            if one.start < last.end {
+            if one.start < last.end || (one.start == last.end && one.start % PER_INSN == 0) {
                 *last = Segment { start: last.start, end: last.end.max(one.end) };
                 continue;
             }

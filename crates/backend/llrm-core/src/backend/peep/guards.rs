@@ -97,6 +97,21 @@ pub fn dead(
     lanes.is_subset(&cx.dead_after(one))
 }
 
+/// Nothing after this instruction reads an arithmetic flag.
+pub fn flags_dead(
+    cx: &Cx,
+    one: &Arc<Insn>,
+) -> bool {
+    use iced_x86::RflagsBits;
+    dead(
+        cx,
+        one,
+        Lanes::flags(
+            RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::AF | RflagsBits::CF | RflagsBits::PF,
+        ),
+    )
+}
+
 /// Nothing after the block may read these flags.
 pub fn flags_dead_out(
     cx: &Cx,
@@ -195,6 +210,24 @@ pub fn joins_no_larger(
     low: &Imm,
 ) -> bool {
     !cx.cpu().size || !split_push_smaller(cx.bits(), ((high.value & 0xFFFF) << 16) | (low.value & 0xFFFF))
+}
+
+/// The target prices clearing a register and loading its low byte below
+/// `movzx` from the byte.
+pub fn clears_before_byte_load(cx: &Cx) -> bool {
+    cx.cpu().clears_before_byte_load().unwrap_or(false)
+}
+
+/// `d` has a byte view and the address of `src` reads none of its register.
+pub fn byte_loadable(
+    _: &Cx,
+    d: Reg,
+    src: &Mem,
+) -> bool {
+    let root = ir::root(d.register);
+    d.width == 4
+        && target::named(d.register, 1) != d.register
+        && [src.through, src.index_through].iter().all(|one| ir::root(*one) != root)
 }
 
 /// The target prices `add r,r` below `shl r,1`.
