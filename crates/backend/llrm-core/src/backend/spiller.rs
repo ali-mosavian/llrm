@@ -1065,14 +1065,8 @@ fn homes_by_sparse_body(body: &LirBody, index: &ranges::Indexes, changed: &[(usi
 
 /// The same from where the homes occur: the instructions `changed` name them, so the walk need not look at the others.
 fn homes_by_occurrences(body: &LirBody, index: &ranges::Indexes, named: &[(usize, usize, BTreeSet<u32>, BTreeSet<u32>)], first: u32, count: usize) -> IndexMap<u32, Interval> {
-    let mut places: IndexMap<u32, Vec<ranges::Occurrence>> = IndexMap::default();
-    for (block_index, at, defined, used) in named {
-        for value in defined.union(used) {
-            places.entry(*value).or_default().push(((*block_index, *at), defined.contains(value), used.contains(value)));
-        }
-    }
     let values: Vec<u32> = (first..first + count as u32).collect();
-    ranges::intervals_by_occurrences(body, index, &values, &places)
+    crate::analysis::occurrences::Occurrences::planned(named).ranges(body, index, &values)
 }
 
 fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(i64, u32, Vec<Interval>)>, Lives) {
