@@ -240,3 +240,30 @@ b1:
 ",
     );
 }
+
+/// Merging two blocks put what the first said (`#dbg_value` before its jump)
+/// after the second's code: a debugger stopped in that code read the value
+/// from before the assignment (observed.c's `v` read {0,0,0,0} at -O3).
+#[test]
+fn a_merge_keeps_what_the_first_block_said_before_the_second_blocks_code() {
+    let text = "define i16 @f(i16 %x) {
+b0:
+  %v = add i16 %x, 7
+  #dbg_value(i16 %v, !0)
+  br label %b1
+
+b1:
+  %w = mul i16 %v, 3
+  %z = add i16 %w, 1
+  ret i16 %z
+}
+
+!0 = !{!\"f\", !\"s\", !1, i64 0}
+!1 = !{!\"int\"}
+";
+    let printed = merged_text(text, &[&[2]]);
+    let lines: Vec<&str> = printed.lines().map(str::trim).collect();
+    let said = lines.iter().position(|line| line.starts_with("#dbg_value")).expect("kept");
+    let code = lines.iter().position(|line| line.starts_with("%w = mul")).expect("merged");
+    assert!(said < code, "{printed}");
+}
