@@ -50,12 +50,12 @@ use crate::cfg;
 use crate::consts::Known;
 use crate::globalsaa;
 use crate::induction;
-use crate::memory::{self, Addr, Identity, MemRef, MemoryKind, MemoryObject, ObjectRef, Provenance, Slice, Unit, object_of, unmodeled_write, wrapped};
+use crate::memory::{self, Addr, Identity, MemRef, MemoryKind, Key, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit, object_of, unmodeled_write, wrapped};
 use crate::ranges;
 use crate::regions::{self, ByteRange};
 
-pub static UNKNOWN: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(MemoryObject::new(MemoryKind::Unknown)));
-pub static NONLOCAL: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(MemoryObject::new(MemoryKind::Nonlocal)));
+pub static UNKNOWN: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::UNKNOWN));
+pub static NONLOCAL: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::NONLOCAL));
 pub const EMPTY: Provenance = Provenance { slices: BTreeSet::new(), restrict: BTreeSet::new() };
 
 /// One actual argument of a call: a provenance, a `(pointer value,
@@ -192,7 +192,7 @@ pub fn seeds(unit: &Unit) -> IndexMap<ValueId, Provenance> {
         .enumerate()
         .filter(|(_, value)| is_pointer(unit, Operand::Value(**value)))
         .map(|(at, value)| {
-            let object = MemoryObject { identity: Some(Identity::Int(at as i64)), ..MemoryObject::new(MemoryKind::Parameter) };
+            let object = ObjectInterner::of(unit.context).intern(MemoryObject { identity: Some(Identity::Int(at as i64)), ..MemoryObject::new(MemoryKind::Parameter) });
             let restrict = if Facts::param(function, at).no_alias() { BTreeSet::from([Identity::Int(at as i64)]) } else { BTreeSet::new() };
             (*value, Provenance::one_with_slice(object, 0, 1, 1, 1, restrict).expect("one byte is a slice"))
         })
@@ -272,13 +272,13 @@ impl Summary {
                     out.insert(item.clone());
                     continue;
                 }
-                let Some(Identity::Int(index)) = &item.object.identity else {
+                let Key::Int(index) = item.object.key else {
                     continue;
                 };
-                if !(0 <= *index && *index < arguments.len() as i64) {
+                if !(0 <= index && index < arguments.len() as i64) {
                     continue;
                 }
-                for actual in &arguments[*index as usize].slices {
+                for actual in &arguments[index as usize].slices {
                     out.insert(
                         Slice::new(actual.object.clone(), actual.low + item.low, actual.high + item.high - 1, memory::gcd(actual.stride, item.stride), item.width)
                             .expect("two valid slices sum to a valid slice"),
@@ -640,7 +640,7 @@ pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
         }
     }
     let captures =
-        facts.escaped.iter().filter(|one| one.kind == MemoryKind::Parameter && matches!(one.identity, Some(Identity::Int(_)))).map(|one| one.identity.clone()).collect();
+        facts.escaped.iter().filter(|one| one.kind == MemoryKind::Parameter).filter_map(|one| match one.key { Key::Int(number) => Some(Some(Identity::Int(number))), _ => None }).collect();
     Ok(Summary { reads, writes, captures, unknown_read, unknown_write, unknown_write_types: types })
 }
 
@@ -920,7 +920,7 @@ fn _summarized(
     let (mut reads, mut writes) = (direct.reads.clone(), direct.writes.clone());
     reads.extend(visit.unknown.0.iter().cloned());
     writes.extend(visit.unknown.1.iter().cloned());
-    let captures = facts.escaped.iter().filter(|one| one.kind == MemoryKind::Parameter && matches!(one.identity, Some(Identity::Int(_)))).map(|one| one.identity.clone()).collect();
+    let captures = facts.escaped.iter().filter(|one| one.kind == MemoryKind::Parameter).filter_map(|one| match one.key { Key::Int(number) => Some(Some(Identity::Int(number))), _ => None }).collect();
     let (mut unknown_read, mut unknown_write) = (direct.unknown_read, direct.unknown_write);
     let mut types = direct.unknown_write_types.clone();
     for at in call_sites(&procedure.unit) {
@@ -1087,8 +1087,8 @@ fn _common(one: &Ranges, other: &Ranges) -> Ranges {
 
 /// The parameter a slice lies in.
 fn _parameter(one: &Slice) -> Option<usize> {
-    match (&one.object.kind, &one.object.identity) {
-        (MemoryKind::Parameter, Some(Identity::Int(index))) => usize::try_from(*index).ok(),
+    match (one.object.kind, one.object.key) {
+        (MemoryKind::Parameter, Key::Int(index)) => usize::try_from(index).ok(),
         _ => None,
     }
 }
@@ -1124,8 +1124,8 @@ pub fn initialized(procedure: &Procedure, known: &IndexMap<String, Summary>) -> 
     // A read of another object that may be the parameter's reads all of it.
     let read = |state: &mut State, one: &Slice| {
         for (index, ranges) in state.iter_mut().enumerate() {
-            let parameter = MemoryObject { identity: Some(Identity::Int(index as i64)), ..MemoryObject::new(MemoryKind::Parameter) };
-            let bytes = if *one.object == parameter {
+            let parameter = ObjectInterner::of(unit.context).intern(MemoryObject { identity: Some(Identity::Int(index as i64)), ..MemoryObject::new(MemoryKind::Parameter) });
+            let bytes = if one.object == parameter {
                 _bytes(one)
             } else if memory::objects_may_alias(&one.object, &parameter) {
                 None
@@ -1263,7 +1263,7 @@ fn _direct(unit: &Unit, inst: InstId, values: &IndexMap<ValueId, Provenance>) ->
         // A callee whose result is `noalias` returns a pointer to an object nothing else
         // points to: its own, apart from every other.
         Opcode::Call(_) | Opcode::Invoke(_) if returns_unique(unit, inst) => {
-            let object = MemoryObject { identity: Some(Identity::Value(result.0)), addressed: true, captured: true, ..MemoryObject::new(MemoryKind::Allocation) };
+            let object = ObjectInterner::of(unit.context).intern(MemoryObject { identity: Some(Identity::Value(result.0)), addressed: true, captured: true, ..MemoryObject::new(MemoryKind::Allocation) });
             Provenance::one_with_slice(object, 0, 1, 1, 1, BTreeSet::new()).map(Some).map_err(|error| error.to_string())
         }
         // A segment is no pointer to a program object: `segment:0` is a
@@ -1551,8 +1551,8 @@ pub fn points_to(
         while at < reached.len() {
             let object = objects.borrow()[reached[at]].clone();
             at += 1;
-            let Some(Identity::Global(global)) = object.identity.as_ref().filter(|_| object.kind == MemoryKind::Global) else { continue };
-            let Some(llrm_mir::module::GlobalKind::Variable(variable)) = unit.globals.get(*global as usize).map(|one| &one.kind) else { continue };
+            let (MemoryKind::Global, Key::Global(global)) = (object.kind, object.key) else { continue };
+            let Some(llrm_mir::module::GlobalKind::Variable(variable)) = unit.globals.get(global as usize).map(|one| &one.kind) else { continue };
             let mut held = BTreeSet::new();
             variable.initializer.iter().for_each(|&one| globalsaa::embedded(unit.context, one, &mut held));
             for one in held.into_iter().filter_map(|one| memory::global_object(unit, one)) {

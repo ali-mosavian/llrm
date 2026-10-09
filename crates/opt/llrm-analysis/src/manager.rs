@@ -24,7 +24,7 @@ use crate::consts::{self, Calls, Known};
 use crate::globalsaa::{self, Globals, ProgramGlobals};
 use crate::floatfacts;
 use crate::induction;
-use crate::memory::{Identity, MemRef, MemoryKind, MemoryObject, Slice, Unit};
+use crate::memory::{Identity, MemRef, MemoryKind, MemoryObject, ObjectInterner, Slice, Unit};
 use crate::ranges::{self, Interval};
 
 impl<'a> Unit<'a> {
@@ -227,17 +227,20 @@ fn moved(summary: &Summary, from: &Module, to: &Module) -> Summary {
 }
 
 fn carried(slices: &BTreeSet<Slice>, from: &Module, to: &Module, unknown: &mut bool) -> BTreeSet<Slice> {
+    // The objects are numbered by their module's interner: each is named again in the other's.
+    let (source, target) = (ObjectInterner::of(&from.context), ObjectInterner::of(&to.context));
     let mut out = BTreeSet::new();
     for one in slices {
-        let (MemoryKind::Global, Some(Identity::Global(id))) = (one.object.kind, &one.object.identity) else {
-            out.insert(one.clone());
+        let object = source.object(one.object);
+        let (MemoryKind::Global, Some(Identity::Global(id))) = (object.kind, &object.identity) else {
+            out.insert(Slice { object: target.intern(object), ..*one });
             continue;
         };
         let global = from.global(GlobalId(*id));
         let there = global.name.as_deref().filter(|_| !matches!(global.linkage, Linkage::Internal | Linkage::Private)).and_then(|name| to.named(name));
         match there {
             Some(there) => {
-                out.insert(Slice { object: MemoryObject { identity: Some(Identity::Global(there.0)), ..(*one.object).clone() }.into(), ..*one });
+                out.insert(Slice { object: target.intern(MemoryObject { identity: Some(Identity::Global(there.0)), ..object }), ..*one });
             }
             None => *unknown |= one.object.captured,
         }

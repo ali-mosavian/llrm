@@ -67,8 +67,8 @@ pub enum RegionError {
 
 /// Memory addressed linearly, which no program object occupies. Its slice
 /// offsets are linear addresses, so one object covers every selector.
-fn linear() -> MemoryObject {
-    MemoryObject { identity: Some(Identity::Str("linear".to_owned())), ..MemoryObject::new(MemoryKind::Absolute) }
+fn linear() -> ObjectRef {
+    ObjectRef::LINEAR
 }
 
 /// What an access through a fixed-address pointer names: linear memory, wholly.

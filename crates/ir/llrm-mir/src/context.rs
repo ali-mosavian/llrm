@@ -48,11 +48,30 @@ pub struct Context {
     pub types: Types,
     constants: Vec<Constant>,
     interned: HashMap<Constant, ConstantId>,
+    extensions: Extensions,
+}
+
+/// What a layer above MIR keeps in the context, one value per type, dropped with it: LLVMContext's uniqued tables (an
+/// analysis's interned objects live and die with the module, not in a global).
+#[derive(Clone, Default)]
+struct Extensions(std::cell::RefCell<std::collections::HashMap<std::any::TypeId, std::rc::Rc<dyn std::any::Any>>>);
+
+impl std::fmt::Debug for Extensions {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "Extensions({})", self.0.borrow().len())
+    }
 }
 
 impl Context {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// This context's `T`, made by `Default` on the first ask. A clone of the context shares it.
+    pub fn extension<T: std::any::Any + Default>(&self) -> std::rc::Rc<T> {
+        let mut held = self.extensions.0.borrow_mut();
+        let found = held.entry(std::any::TypeId::of::<T>()).or_insert_with(|| std::rc::Rc::new(T::default()));
+        std::rc::Rc::clone(found).downcast::<T>().unwrap_or_else(|_| unreachable!("keyed by its type"))
     }
 
     pub fn constant(&mut self, constant: Constant) -> ConstantId {

@@ -165,64 +165,57 @@ impl Ord for MemoryObject {
     }
 }
 
-/// A `MemoryObject` from the process's one interner: a small id compared, hashed and ordered as an integer, and the object
-/// read through a reference that is never freed. Interned by every field, the facts too, so two spellings that differ in a
-/// fact are two objects here and a set keeps both (none was seen to differ, in 1,700 programs and QCport). The order is the
-/// order of first interning, not `MemoryObject`'s: nothing may depend on the order of a set of slices.
-#[derive(Clone, Copy)]
+/// A `MemoryObject` as its module's interner numbered it: a small id compared, hashed and ordered as an integer, with the
+/// fields the passes ask of every slice beside it, so a slice is `Copy` and asking costs nothing. The rest (the identity, the
+/// generation) is `ObjectInterner::object`. Interned by every field, the facts too, so two spellings that differ in a fact are
+/// two objects here and a set keeps both (none was seen to differ in 1,700 programs and QCport). The order is the order of
+/// first interning in the module, which the same module always makes the same way; nothing may depend on it being
+/// `MemoryObject`'s.
+#[derive(Clone, Copy, Debug)]
 pub struct ObjectRef {
     id: u32,
-    object: &'static MemoryObject,
+    pub kind: MemoryKind,
+    pub addressed: bool,
+    pub captured: bool,
+    pub constant: bool,
+    pub extent: Option<i64>,
+    /// The identity where it is a number, which is all the passes make: a name or a tuple (a test's, the linear region's) is
+    /// `Other`, and `ObjectInterner::object` has it whole.
+    pub key: Key,
 }
 
-struct Exact(MemoryObject);
+/// `Identity`, small enough to be copied beside the id.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Key {
+    None,
+    Int(i64),
+    Global(u32),
+    Value(u32),
+    Other,
+}
 
-impl PartialEq for Exact {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0 && self.0.addressed == other.0.addressed && self.0.captured == other.0.captured && self.0.constant == other.0.constant
+impl Key {
+    fn of(identity: &Option<Identity>) -> Self {
+        match identity {
+            None => Self::None,
+            Some(Identity::Int(number)) => Self::Int(*number),
+            Some(Identity::Global(number)) => Self::Global(*number),
+            Some(Identity::Value(number)) => Self::Value(*number),
+            Some(Identity::Str(_) | Identity::Tuple(_)) => Self::Other,
+        }
     }
 }
-
-impl Eq for Exact {}
-
-impl std::hash::Hash for Exact {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
-        (self.0.addressed, self.0.captured, self.0.constant).hash(state);
-    }
-}
-
-static INTERNED: std::sync::Mutex<Option<llrm_support::hash::HashMap<Exact, ObjectRef>>> = std::sync::Mutex::new(None);
 
 impl ObjectRef {
-    pub fn new(object: MemoryObject) -> Self {
-        let mut held = INTERNED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let table = held.get_or_insert_with(Default::default);
-        let key = Exact(object);
-        if let Some(&found) = table.get(&key) {
-            return found;
-        }
-        let made = Self { id: table.len() as u32, object: Box::leak(Box::new(key.0.clone())) };
-        table.insert(key, made);
-        made
-    }
+    /// Every interner starts with these three, so they are the same in all modules and in the statics.
+    pub const UNKNOWN: Self = Self { id: 0, kind: MemoryKind::Unknown, addressed: true, captured: true, constant: false, extent: None, key: Key::None };
+    /// Memory addressed linearly, which no program object occupies (`regions`).
+    pub const LINEAR: Self = Self { id: 2, kind: MemoryKind::Absolute, addressed: true, captured: true, constant: false, extent: None, key: Key::Other };
+    pub const NONLOCAL: Self = Self { id: 1, kind: MemoryKind::Nonlocal, addressed: true, captured: true, constant: false, extent: None, key: Key::None };
 
     /// The number this object was given: the order it was first interned in.
     pub fn id(self) -> u32 {
         self.id
-    }
-}
-
-impl From<MemoryObject> for ObjectRef {
-    fn from(object: MemoryObject) -> Self {
-        Self::new(object)
-    }
-}
-
-impl std::ops::Deref for ObjectRef {
-    type Target = MemoryObject;
-    fn deref(&self) -> &MemoryObject {
-        self.object
     }
 }
 
@@ -252,9 +245,78 @@ impl Ord for ObjectRef {
     }
 }
 
-impl fmt::Debug for ObjectRef {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.object.fmt(formatter)
+struct Exact(MemoryObject);
+
+impl PartialEq for Exact {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0 && self.0.addressed == other.0.addressed && self.0.captured == other.0.captured && self.0.constant == other.0.constant
+    }
+}
+
+impl Eq for Exact {}
+
+impl std::hash::Hash for Exact {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+        (self.0.addressed, self.0.captured, self.0.constant).hash(state);
+    }
+}
+
+/// A module's memory objects, numbered densely in the order they are first asked for. It lives in the module's `Context`
+/// (`ObjectInterner::of`) and is dropped with it, as LLVMContext's uniqued constants are.
+pub struct ObjectInterner {
+    held: std::cell::RefCell<(Vec<MemoryObject>, llrm_support::hash::HashMap<Exact, u32>)>,
+}
+
+impl Default for ObjectInterner {
+    fn default() -> Self {
+        let interner = Self { held: Default::default() };
+        assert_eq!(interner.intern(MemoryObject::new(MemoryKind::Unknown)), ObjectRef::UNKNOWN);
+        assert_eq!(interner.intern(MemoryObject::new(MemoryKind::Nonlocal)), ObjectRef::NONLOCAL);
+        assert_eq!(interner.intern(MemoryObject { identity: Some(Identity::Str("linear".to_owned())), ..MemoryObject::new(MemoryKind::Absolute) }), ObjectRef::LINEAR);
+        interner
+    }
+}
+
+impl ObjectInterner {
+    /// The interner of `context`'s module.
+    pub fn of(context: &Context) -> std::rc::Rc<Self> {
+        context.extension::<Self>()
+    }
+
+    pub fn intern(&self, object: MemoryObject) -> ObjectRef {
+        let mut held = self.held.borrow_mut();
+        let (objects, ids) = &mut *held;
+        let key = Exact(object);
+        let id = match ids.get(&key) {
+            Some(&id) => id,
+            None => {
+                let id = objects.len() as u32;
+                objects.push(key.0.clone());
+                ids.insert(key, id);
+                id
+            }
+        };
+        let one = &objects[id as usize];
+        ObjectRef { id, kind: one.kind, addressed: one.addressed, captured: one.captured, constant: one.constant, extent: one.extent, key: Key::of(&one.identity) }
+    }
+
+    /// The object `one` stands for.
+    pub fn object(&self, one: ObjectRef) -> MemoryObject {
+        self.held.borrow().0[one.id as usize].clone()
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The interner `ObjectRef::from` uses in tests that have no module.
+    static TEST_OBJECTS: ObjectInterner = ObjectInterner::default();
+}
+
+#[cfg(test)]
+impl From<MemoryObject> for ObjectRef {
+    fn from(object: MemoryObject) -> Self {
+        TEST_OBJECTS.with(|interner| interner.intern(object))
     }
 }
 
@@ -447,18 +509,36 @@ thread_local! {
     pub static OBJECT_ALIASES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-pub fn alias_class(one: &MemoryObject) -> AliasClass {
-    AliasClass { addressed: one.addressed, kind: one.kind, captured: one.captured }
+/// What `objects_may_alias` asks of an object: a `MemoryObject` or its interned `ObjectRef`.
+pub trait Aliasable: PartialEq {
+    fn class(&self) -> AliasClass;
 }
 
-pub fn objects_may_alias(one: &MemoryObject, other: &MemoryObject) -> bool {
+impl Aliasable for MemoryObject {
+    fn class(&self) -> AliasClass {
+        AliasClass { addressed: self.addressed, kind: self.kind, captured: self.captured }
+    }
+}
+
+impl Aliasable for ObjectRef {
+    fn class(&self) -> AliasClass {
+        AliasClass { addressed: self.addressed, kind: self.kind, captured: self.captured }
+    }
+}
+
+pub fn alias_class(one: &impl Aliasable) -> AliasClass {
+    one.class()
+}
+
+pub fn objects_may_alias<T: Aliasable>(one: &T, other: &T) -> bool {
     #[cfg(test)]
     OBJECT_ALIASES.with(|asked| asked.set(asked.get() + 1));
     if one == other {
         return true;
     }
     // classes_may_alias's first rule, asked before building either class.
-    one.addressed && other.addressed && classes_may_alias(alias_class(one), alias_class(other))
+    let (one, other) = (one.class(), other.class());
+    one.addressed && other.addressed && classes_may_alias(one, other)
 }
 
 /// Whether two distinct objects of these classes may alias.
@@ -767,7 +847,7 @@ pub fn object_of(unit: &Unit, root: Operand) -> Option<ObjectRef> {
                 Some(found) => found.contains(&value),
                 None => crate::frameescape::exposes(unit.function, value, |inst| is_lifetime_marker(unit, inst)),
             };
-            Some(ObjectRef::new(MemoryObject {
+            Some(ObjectInterner::of(unit.context).intern(MemoryObject {
                 identity: Some(Identity::Value(value.0)),
                 extent: count.map(|count| size * count),
                 addressed: exposed,
@@ -791,7 +871,7 @@ pub fn global_object(unit: &Unit, global: GlobalId) -> Option<ObjectRef> {
     };
     let captured = !unit.globals_aa.is_some_and(|aa| aa.tracked(global));
     let constant = matches!(&unit.globals.get(global.0 as usize)?.kind, GlobalKind::Variable(variable) if variable.constant);
-    Some(ObjectRef::new(MemoryObject { identity: Some(Identity::Global(global.0)), extent, captured, constant, ..MemoryObject::new(MemoryKind::Global) }))
+    Some(ObjectInterner::of(unit.context).intern(MemoryObject { identity: Some(Identity::Global(global.0)), extent, captured, constant, ..MemoryObject::new(MemoryKind::Global) }))
 }
 
 /// An access as the alias queries read it: LLVM's `MemoryLocation`, its
@@ -1247,11 +1327,41 @@ mod tests {
     #[test]
     fn an_object_is_interned_by_every_field_once() {
         let global = MemoryObject { identity: Some(Identity::Global(9)), ..object(MemoryKind::Global) };
-        let (one, again) = (super::ObjectRef::new(global.clone()), super::ObjectRef::new(global.clone()));
+        let (one, again) = (super::ObjectRef::from(global.clone()), super::ObjectRef::from(global.clone()));
         assert_eq!(one, again);
         assert_eq!(one.id(), again.id());
-        let private = super::ObjectRef::new(MemoryObject { captured: false, ..global });
+        let private = super::ObjectRef::from(MemoryObject { captured: false, ..global });
         assert_ne!(one, private);
+    }
+
+    /// A process-wide interner numbered objects by everything interned before them in the process: a test thread, a compile
+    /// before this one, the LSP server's last hour. A module's ids are the module's: the same objects asked in the same order
+    /// get the same ids whichever module was done first.
+    #[test]
+    fn the_ids_of_a_module_do_not_depend_on_another_module_interned_before() {
+        use llrm_mir::context::Context;
+        let global = |number| MemoryObject { identity: Some(Identity::Global(number)), ..object(MemoryKind::Global) };
+        let ids = |context: &Context, numbers: &[u32]| -> Vec<u32> { numbers.iter().map(|&number| super::ObjectInterner::of(context).intern(global(number)).id()).collect() };
+        let (first, second) = (Context::new(), Context::new());
+        let (a, b) = (ids(&first, &[7, 8]), ids(&second, &[8, 7]));
+        let (other_second, other_first) = (Context::new(), Context::new());
+        let (b_again, a_again) = (ids(&other_second, &[8, 7]), ids(&other_first, &[7, 8]));
+        assert_eq!((a, b), (a_again, b_again));
+        assert_eq!(ids(&Context::new(), &[7]), [3], "dense from the objects every module starts with");
+    }
+
+    /// The interner lives in the module's context and dies with it: a server compiling a file again and again held every
+    /// object of every compile before.
+    #[test]
+    fn the_interner_is_dropped_with_its_module() {
+        use llrm_mir::context::Context;
+        let context = Context::new();
+        let interner = super::ObjectInterner::of(&context);
+        let weak = std::rc::Rc::downgrade(&interner);
+        drop(interner);
+        assert!(weak.upgrade().is_some(), "held by the context");
+        drop(context);
+        assert!(weak.upgrade().is_none(), "kept after its module");
     }
 
     #[test]
