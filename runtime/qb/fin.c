@@ -147,7 +147,8 @@ static unsigned long long divide_scaled(int *scale, int *inexact)
     unsigned long long quotient = 0;
     unsigned at;
 
-    *scale = QUOTIENT_BITS + (int)big_bits(&divisor) - (int)big_bits(&numerator);
+    *scale = QUOTIENT_BITS + (int)big_bits(&divisor);
+    *scale -= (int)big_bits(&numerator);
     if (*scale < 0)
         *scale = 0;
     big_shl(&numerator, (unsigned)*scale);

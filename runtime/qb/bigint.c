@@ -145,7 +145,8 @@ void big_sub(Big *a, const Big *b)
     unsigned at;
 
     for (at = 0; at < a->used; at++) {
-        long diff = (long)a->limb[at] - (at < b->used ? b->limb[at] : 0) - borrow;
+        long other = at < b->used ? b->limb[at] : 0;
+        long diff = (long)a->limb[at] - other - borrow;
 
         borrow = diff < 0;
         a->limb[at] = (u16)(diff + (borrow ? 0x10000L : 0));
