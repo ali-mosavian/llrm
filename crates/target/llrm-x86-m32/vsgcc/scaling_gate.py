@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Growth of llrm-c's cost with size: the cost at 2N over the cost at N, on generated programs, as one ratio per axis and level and as
-one per step of the compile.
+"""Growth of llrm-c's cost with size: the cost at N/2, N and 2N on generated programs, per axis and level and per step of the compile.
 
-    python3 scaling_gate.py [--jobs N]        print the ratios as JSON (tools/measure.py compares them with the merge-base's)
+    python3 scaling_gate.py [--jobs N]        print the costs as JSON (tools/measure.py compares them with the merge-base's)
 
 Cost is user-space instructions (`perf stat`), less what llrm-c spends on an empty file: work done, so the ratio is the same on a
-loaded host. Linear work reads 2.0, a pass that goes quadratic pulls an axis to 3 and over. Per step, llrm-c's LLRM_DEBUG=time
+loaded host. tools/measure.py gates D = c(2N) - 3c(N) + 2c(N/2) = 1.5kN^2 of c = a + bN + kN^2: nil for fixed and linear work, so a
+saving of either does not move it and a pass that goes quadratic does. Per step, llrm-c's LLRM_DEBUG=time
 [instr] rows give each step's own instructions; a step with LOW or more of the work is read. Exit 77 without a counter.
 The generated programs are scaling.py's AXES; SIZES holds the N per axis.
 """
@@ -36,6 +36,20 @@ LEVELS = ("O1", "O2", "Os")
 # axis as far up as it allows. A step whose ratio is a small-N artifact (branches' recolor reads 2.75 at 32->64, 1.9-2.2 at 64->256:
 # the pairwise scan fills up to its 48-holder limit) is recorded as it reads; its budget says so, not that it is superlinear.
 SIZES = {"functions": 64, "straight": 512, "branches": 32, "live": 64, "callers": 32, "chain": 32, "mulconst": 512}
+# The axes that cross calls, again at -m16: another register file and calling convention, where a hang once hid (chain at N=7 never
+# finished) while every -m32 axis passed.
+SIZES |= {"chain-m16": 32, "callers-m16": 32}
+
+
+def generated(axis: str, n: int) -> str:
+    return scaling.AXES[axis.removesuffix("-m16")](n)
+
+
+def commanded(axis: str, command):
+    """`command`, for `axis`: -m16's axes compile with -m16."""
+    if axis.endswith("-m16") and command is levels_time.command:
+        return lambda compiler, level, source: levels_time.command(compiler, level, source, 16)
+    return command
 
 
 class NoCounter(Exception):
@@ -53,24 +67,24 @@ def count(command: list[str]) -> int:
     return got
 
 
-def costs(axis: str, level: str, work: Path, command=levels_time.command, compiler: str = "llrm") -> tuple[int, int]:
-    """(cost at N, cost at 2N), each less the empty file's, for one axis and level."""
+def costs(axis: str, level: str, work: Path, command=levels_time.command, compiler: str = "llrm") -> tuple[int, int, int]:
+    """(cost at N/2, at N, at 2N), each less the empty file's, for one axis and level."""
     n = SIZES[axis]
     cost = {}
-    for label, text in (("empty", ""), (n, scaling.AXES[axis](n)), (2 * n, scaling.AXES[axis](2 * n))):
+    for label, text in (("empty", ""), (n // 2, generated(axis, n // 2)), (n, generated(axis, n)), (2 * n, generated(axis, 2 * n))):
         source = work / f"{axis}_{level}_{label}.c"
         source.write_text(text)
-        cost[label] = count(command(compiler, level, source))
-    return cost[n] - cost["empty"], cost[2 * n] - cost["empty"]
+        cost[label] = count(commanded(axis, command)(compiler, level, source))
+    return cost[n // 2] - cost["empty"], cost[n] - cost["empty"], cost[2 * n] - cost["empty"]
 
 
 def ratio(axis: str, level: str, work: Path, command=levels_time.command, compiler: str = "llrm") -> float:
     """cost at 2N over cost at N, for one axis and level."""
-    small, big = costs(axis, level, work, command, compiler)
+    _, small, big = costs(axis, level, work, command, compiler)
     return big / small
 
 
-def measure(jobs: int, axes=tuple(SIZES), levels=LEVELS) -> dict[str, tuple[int, int]]:
+def measure(jobs: int, axes=tuple(SIZES), levels=LEVELS) -> dict[str, tuple[int, int, int]]:
     with tempfile.TemporaryDirectory(dir=scaling.os.environ.get("CARGO_TARGET_DIR")) as tmp:
         todo = [(a, l) for a in axes for l in levels]
         with ThreadPoolExecutor(jobs) as pool:
@@ -89,30 +103,30 @@ def own_work(command: list[str]) -> dict[str, float]:
     return {name: float(own) for own, _, name in rows}
 
 
-def pass_costs(axis: str, level: str, work: Path, command=levels_time.command, compiler: str = "llrm") -> dict[str, tuple[float, float, float]]:
-    """Per step with LOW or more of the work: (own Minstr at N, at 2N, and all steps' at 2N), each less the empty file's."""
+def pass_costs(axis: str, level: str, work: Path, command=levels_time.command, compiler: str = "llrm") -> dict[str, tuple[float, float, float, float]]:
+    """Per step with LOW or more of the work: (own Minstr at N/2, at N, at 2N, and all steps' at 2N), each less the empty file's."""
     n = SIZES[axis]
     own = {}
-    for label, text in (("empty", ""), (n, scaling.AXES[axis](n)), (2 * n, scaling.AXES[axis](2 * n))):
+    for label, text in (("empty", ""), (n // 2, generated(axis, n // 2)), (n, generated(axis, n)), (2 * n, generated(axis, 2 * n))):
         source = work / f"{axis}_{level}_{label}_p.c"
         source.write_text(text)
-        own[label] = own_work(command(compiler, level, source))
+        own[label] = own_work(commanded(axis, command)(compiler, level, source))
     net = {name: big - own["empty"].get(name, 0.0) for name, big in own[2 * n].items()}
     whole = sum(v for v in net.values() if v > 0)
     out = {}
     for name, big in net.items():
         small = own[n].get(name, 0.0) - own["empty"].get(name, 0.0)
         if big >= LOW * whole and small > 0:
-            out[f"{axis} {level} {name}"] = (small, big, whole)
+            out[f"{axis} {level} {name}"] = (own[n // 2].get(name, 0.0) - own["empty"].get(name, 0.0), small, big, whole)
     return out
 
 
 def pass_ratios(axis: str, level: str, work: Path, command=levels_time.command, compiler: str = "llrm") -> dict[str, tuple[float, float]]:
     """Per step: (its cost at 2N over its cost at N, its share of the work at 2N)."""
-    return {k: (big / small, big / whole) for k, (small, big, whole) in pass_costs(axis, level, work, command, compiler).items()}
+    return {k: (big / small, big / whole) for k, (_, small, big, whole) in pass_costs(axis, level, work, command, compiler).items()}
 
 
-def measure_passes(jobs: int, axes=tuple(SIZES), levels=LEVELS) -> dict[str, tuple[float, float, float]]:
+def measure_passes(jobs: int, axes=tuple(SIZES), levels=LEVELS) -> dict[str, tuple[float, float, float, float]]:
     with tempfile.TemporaryDirectory(dir=scaling.os.environ.get("CARGO_TARGET_DIR")) as tmp:
         todo = [(a, l) for a in axes for l in levels]
         with ThreadPoolExecutor(jobs) as pool:

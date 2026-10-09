@@ -93,8 +93,8 @@ build-script-reruns = "build_script_reruns"
 [measure]
 geomean = 1.003      # per level, over QCport's files or the programs
 worst = 1.02         # one file
-excess = 0.01        # an axis' superlinear work (cost at 2N - twice the cost at N) may rise by this much of the base's cost at 2N
-step_excess = 0.005  # a step's, of the compile's cost at 2N
+excess = 0.01        # an axis' superlinear work (the second difference c(2N) - 3c(N) + 2c(N/2)) may rise by this much of the base's cost at 2N
+step_excess = 0.005  # a step's, of the compile's cost at 2N; the same build measured 3 times spreads D by 0.0005 of it (axes 0.0009 of theirs, 2026-10-09), so 10x above noise
 pass_slack = 1.05    # a step's cost at 2N
 linear = 2.1         # where the base read no such step: what gcc's passes reach
 high = 0.025         # a step needs this share of the compile's work to fail (the scaling_gate reads steps down to 1.5%)

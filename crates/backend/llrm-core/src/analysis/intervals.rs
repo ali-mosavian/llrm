@@ -117,8 +117,9 @@ impl Indexes {
 
 /// Number every point a value can start or stop being live.
 pub fn indexed(body: &LirBody) -> Indexes {
-    let mut at = IndexMap::default();
-    let mut span = IndexMap::default();
+    // Sized for what it holds: growing a table of a function's instructions by doubling rehashed it six times over.
+    let mut at = IndexMap::with_capacity_and_hasher(body.blocks.iter().map(|block| block.insns.len()).sum(), Default::default());
+    let mut span = IndexMap::with_capacity_and_hasher(body.blocks.len(), Default::default());
     let mut next_slot = 0;
     for block in &body.blocks {
         let first = next_slot;
@@ -183,14 +184,14 @@ struct Remembered {
 }
 
 impl Remembered {
-    fn of(body: &LirBody, answer: &IndexMap<u32, Interval>, index: &Indexes, totals: IndexMap<u32, f64>) -> Self {
+    fn of(body: &LirBody, answer: &Rc<IndexMap<u32, Interval>>, index: &Indexes, totals: IndexMap<u32, f64>) -> Self {
         Self {
             entry: body.entry,
             blocks: body.blocks.iter().map(|block| (block.at, block.succ.clone(), block.phis.clone(), block.insns.len())).collect(),
             insns: body.blocks.iter().flat_map(|block| block.insns.iter().cloned()).collect(),
             odds: body.odds.clone(),
             trips: body.loop_trip_counts.clone(),
-            answer: Rc::new(answer.clone()),
+            answer: Rc::clone(answer),
             index: Rc::new(index.clone()),
             totals: Rc::new(totals),
         }
@@ -244,6 +245,17 @@ pub fn intervals(body: &LirBody, index: Option<&Indexes>) -> IndexMap<u32, Inter
 /// (58% of the asks of compiling `d_faces` were of a body already asked, #559). `index` is
 /// `indexed(body)` of this body, as every caller makes it, or none.
 pub fn intervals_over(body: &LirBody, index: Option<&Indexes>, busy: &Frequency) -> IndexMap<u32, Interval> {
+    let shared = intervals_shared_over(body, index, busy);
+    llrm_support::debug::timed("intervals cloned", || (*shared).clone())
+}
+
+/// `intervals`, the remembered answer itself: for a caller that only reads it, which would copy every interval of the body to do so.
+pub fn intervals_shared(body: &LirBody, index: Option<&Indexes>) -> Rc<IndexMap<u32, Interval>> {
+    intervals_shared_over(body, index, &Frequency::of(body))
+}
+
+/// `intervals_over` without the copy.
+pub fn intervals_shared_over(body: &LirBody, index: Option<&Indexes>, busy: &Frequency) -> Rc<IndexMap<u32, Interval>> {
     if let Some(found) = RECENT.with(|recent| {
         let mut recent = recent.borrow_mut();
         let at = recent.iter().position(|held| held.is_of(body))?;
@@ -257,7 +269,7 @@ pub fn intervals_over(body: &LirBody, index: Option<&Indexes>, busy: &Frequency)
             assert!(*found == worked_out(body, index, busy), "{}: a remembered answer differs from working it out", body.name);
         }
         llrm_support::debug::counted("intervals remembered", true);
-        return llrm_support::debug::timed("intervals cloned", || (*found).clone());
+        return found;
     }
     llrm_support::debug::counted("intervals remembered", false);
     let owned;
@@ -298,6 +310,7 @@ pub fn intervals_over(body: &LirBody, index: Option<&Indexes>, busy: &Frequency)
             llrm_support::debug::timed("intervals worked out", || worked_out_with_totals(body, index, busy, &|_| true))
         }
     };
+    let answer = Rc::new(answer);
     RECENT.with(|recent| {
         let mut recent = recent.borrow_mut();
         recent.insert(0, Remembered::of(body, &answer, index, totals));
@@ -522,6 +535,139 @@ pub(crate) fn _walked(body: &LirBody, index: &Indexes, keep: &impl Fn(u32) -> bo
 
 /// The values `keep` says of a body of which only the instructions that name them are given, each block's
 /// with the slot each has in the whole body: the body's numbering, blocks and all else are `index`'s.
+/// Where an instruction is in a body: its block's number and its own in the block.
+pub type Place = (usize, usize);
+
+/// An instruction that names a value: where it is, and whether it defines and whether it reads the value.
+pub type Occurrence = (Place, bool, bool);
+
+/// The intervals of `values` (ascending), worked out from where they occur rather than by walking the body: what the walk
+/// finds of a value is decided in the blocks it occurs in and those it is live through, and the rest of the body adds
+/// nothing. `places[value]` are the instructions that name it, by block then position, once each, and whether each defines
+/// and reads it (not what the body's own says, where a caller adds values to it). The answer holds
+/// what `intervals_sparse` does, in another order of values; it costs the occurrences and the blocks the values are live
+/// in, where the walk costs every value live in every block, hashed.
+pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32], places: &IndexMap<u32, Vec<Occurrence>>) -> IndexMap<u32, Interval> {
+    if values.is_empty() {
+        return IndexMap::default();
+    }
+    let count = body.blocks.len();
+    let position: crate::support::hash::HashMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
+    let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for (at, block) in body.blocks.iter().enumerate() {
+        for to in &block.succ {
+            if let Some(&to) = position.get(to) {
+                predecessors[to].push(at);
+            }
+        }
+    }
+    let spans: Vec<(i64, i64)> = body.blocks.iter().map(|block| index.span[&block.at]).collect();
+    // Marks by block, a mark current when it equals the value's turn: no table is cleared between values.
+    let (mut in_mark, mut out_mark, mut written_mark, mut run_mark) = (vec![0u32; count], vec![0u32; count], vec![0u32; count], vec![0u32; count]);
+    let mut run_of: Vec<usize> = vec![0; count];
+    let mut out: IndexMap<u32, Interval> = IndexMap::default();
+    let mut turn = 0u32;
+    for &value in values {
+        let Some(found) = places.get(&value).filter(|found| !found.is_empty()) else { continue };
+        turn += 1;
+        // By block: the parallel-copy runs it occurs in, as (last position of the run, defined there, read there), ascending.
+        let mut by_block: Vec<Vec<(usize, bool, bool)>> = Vec::new();
+        let mut work: Vec<usize> = Vec::new();
+        for &((block_index, at), defined, used) in found {
+            let block = &body.blocks[block_index];
+            let end = _group_end(block, at);
+            if run_mark[block_index] != turn {
+                run_mark[block_index] = turn;
+                run_of[block_index] = by_block.len();
+                by_block.push(Vec::new());
+            }
+            let runs = &mut by_block[run_of[block_index]];
+            match runs.last_mut() {
+                Some((run, was_defined, was_used)) if *run == end => {
+                    *was_defined |= defined;
+                    *was_used |= used;
+                }
+                _ => runs.push((end, defined, used)),
+            }
+        }
+        // Live in a block, and out of it, by the occurrences: read before it is written there, and so up its predecessors until
+        // a block writes it. The first run that names it decides: a read, even with a write beside it (the walk takes the
+        // group's writes first).
+        for block_index in 0..count {
+            if run_mark[block_index] != turn {
+                continue;
+            }
+            let runs = &by_block[run_of[block_index]];
+            if runs.iter().any(|(_, defined, _)| *defined) {
+                written_mark[block_index] = turn;
+            }
+            if runs.first().is_some_and(|(_, _, used)| *used) {
+                in_mark[block_index] = turn;
+                work.push(block_index);
+            }
+        }
+        while let Some(block_index) = work.pop() {
+            for &before in &predecessors[block_index] {
+                if out_mark[before] != turn {
+                    out_mark[before] = turn;
+                    if written_mark[before] != turn && in_mark[before] != turn {
+                        in_mark[before] = turn;
+                        work.push(before);
+                    }
+                }
+            }
+        }
+        let mut segments: Vec<Segment> = Vec::new();
+        let mut here: Vec<Segment> = Vec::new();
+        for block_index in 0..count {
+            let occurs = run_mark[block_index] == turn;
+            let live_out = out_mark[block_index] == turn;
+            let live_in = in_mark[block_index] == turn;
+            if !(occurs || live_out || live_in) {
+                continue;
+            }
+            let block = &body.blocks[block_index];
+            let (first, last) = spans[block_index];
+            let mut alive: Option<i64> = live_out.then_some(last);
+            let mut wrote = false;
+            here.clear();
+            if occurs {
+                for &(end, defined, used) in by_block[run_of[block_index]].iter().rev() {
+                    let boundary = index.slot(block, end) + DEF;
+                    if defined {
+                        wrote = true;
+                        here.push(Segment { start: boundary, end: alive.take().unwrap_or(boundary + 1) });
+                    }
+                    if used && alive.is_none() {
+                        alive = Some(boundary);
+                    }
+                }
+            }
+            if let Some(end) = alive {
+                if end > first {
+                    here.push(Segment { start: first, end });
+                }
+            } else if live_in && !wrote {
+                here.push(Segment { start: first, end: last });
+            }
+            // The block's pieces were found last to first.
+            segments.extend(here.iter().rev().copied());
+        }
+        out.insert(value, Interval::new(value, _merged(segments)));
+    }
+    out
+}
+
+/// The position of the last instruction of the parallel-copy run `position` is in.
+fn _group_end(block: &LirBlock, position: usize) -> usize {
+    let Some(group) = block.insns[position].group else { return position };
+    let mut end = position;
+    while end + 1 < block.insns.len() && block.insns[end + 1].group == Some(group) {
+        end += 1;
+    }
+    end
+}
+
 pub fn intervals_sparse(sparse: &LirBody, index: &Indexes, starts: &[Vec<i64>], keep: &impl Fn(u32) -> bool) -> IndexMap<u32, Interval> {
     _walked_at(sparse, index, keep, Some(starts))
 }

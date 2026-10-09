@@ -1,4 +1,4 @@
-reason = "guards prove more (a phi tested on every edge into its block): shellsort nib m16 loses a bounds check (-1.0% instructions) and the CFG it leaves loads values[at - gap] twice (4 loads in the pipeline's MIR, 3 before): memory operands +17%"
+reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
 blessed = "2026-10-09"
 
 [c.O2]

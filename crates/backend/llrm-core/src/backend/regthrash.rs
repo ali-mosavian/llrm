@@ -20,6 +20,7 @@ use iced_x86::Register;
 use crate::backend::liveness;
 use crate::backend::peephole::{DeadAfter, Lanes, _lanes, _register_effects, _register_operand, id};
 use crate::backend::select;
+use crate::support::hash::IndexMap;
 use crate::model::ir::{Loc, Operation, Reg, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
@@ -30,101 +31,121 @@ use crate::model::passes::LIRTransform;
 pub const ROUNDS: usize = 8;
 
 pub fn thrashed(body: LirBody) -> LirBody {
-    let mut body = body;
-    for _round in 0..ROUNDS {
-        // `after is body`: `_once` answers None where it returned `body` itself.
-        match _once(&body) {
-            None => return body,
-            Some(after) => body = after,
-        }
-    }
-    body
-}
-
-/// `body` with one copy thrashed in each block that has one, or None.
-///
-/// A rename leaves its block's live-in as it was, so every block is judged
-/// against the same exit liveness.
-fn _once(body: &LirBody) -> Option<LirBody> {
-    let exits = liveness::dead_at_exit(body);
-    let mut blocks = body.blocks.clone();
+    // A rename leaves its block's live-in as it was, so what is dead at every block's exit is the same whatever is renamed, and the
+    // blocks do not depend on one another: each is renamed to a fixed point of its own.
+    let exits = liveness::dead_at_exit(&body);
     let mut changed = false;
-    for block in &mut blocks {
-        if let Some(done) = _block(body.bits, block, exits[&block.at].clone()) {
-            *block = done;
-            changed = true;
-        }
-    }
-    changed.then(|| body.with_blocks(blocks))
+    let blocks: Vec<LirBlock> = body
+        .blocks
+        .iter()
+        .map(|block| match _thrash_block(body.bits, block, exits[&block.at]) {
+            Some(done) => {
+                changed = true;
+                done
+            }
+            None => block.clone(),
+        })
+        .collect();
+    // `after is body`: the same body where nothing was renamed.
+    if changed { body.with_blocks(blocks) } else { body }
 }
 
 /// Per instruction, the register lanes dead once it has run.
 pub fn _dead_after(bits: u32, block: &LirBlock, dead: Lanes) -> DeadAfter {
+    let by_position = _dead_after_by(bits, &block.insns, dead);
+    block.insns.iter().zip(by_position).map(|(one, dead)| (id(one), dead)).collect()
+}
+
+/// `_dead_after` by position.
+fn _dead_after_by(bits: u32, insns: &[Arc<Insn>], dead: Lanes) -> Vec<Lanes> {
     let mut dead = dead;
-    let mut out = DeadAfter::default();
-    for one in block.insns.iter().rev() {
-        out.insert(id(one), dead);
-        dead = liveness::effect(bits, one).map_or_else(Lanes::new, |effect| effect.dead_before(&dead));
+    let mut out = vec![Lanes::new(); insns.len()];
+    for (position, one) in insns.iter().enumerate().rev() {
+        out[position] = dead;
+        dead = liveness::with_effect(bits, one, |effect| effect.map_or_else(Lanes::new, |effect| effect.dead_before(&dead)));
     }
     out
 }
 
-/// This block with one copy thrashed away, or None where none can be.
-fn _block(bits: u32, block: &LirBlock, dead: Lanes) -> Option<LirBlock> {
-    let after = _dead_after(bits, block, dead);
-    for (position, one) in block.insns.iter().enumerate() {
-        let Some((into, out_of)) = _plain_copy(one) else {
+/// One rename found: the copy at `position` of what the instruction at `at` made, which is `rewritten` writing the copy's register.
+struct Rename {
+    position: usize,
+    at: usize,
+    tied: bool,
+    rewritten: Arc<Insn>,
+}
+
+/// This block with copies thrashed away, at most ROUNDS of them, or None where none can be.
+///
+/// Each rename is the first the block now offers, and changes the liveness between the producer and the copy, and before the
+/// producer as far back as it moves; after the copy nothing moved. So what is dead after each instruction is worked out again
+/// for that stretch alone, and the next copy to try is no earlier than the first instruction whose liveness moved: an earlier
+/// one saw the same instructions and the same liveness, and failed.
+fn _thrash_block(bits: u32, block: &LirBlock, dead: Lanes) -> Option<LirBlock> {
+    let mut insns: Vec<Arc<Insn>> = block.insns.clone();
+    let exit = dead;
+    let mut after = _dead_after_by(bits, &insns, exit);
+    let (mut from, mut renamed) = (0, 0);
+    while renamed < ROUNDS {
+        let Some(Rename { position, at, tied, rewritten }) = _first_rename(bits, &insns, &after, from) else { break };
+        if !tied {
+            // The producer never read Y, so writing Z instead is the whole
+            // physical operation. Keep the copy's virtual definition as an
+            // anchor: later opaque operands can still name that SSA value.
+            insns[at] = rewritten;
+            insns[position] = lir::anchor(Arc::clone(&insns[position]));
+        } else {
+            // Two-address: the producer reads Y as well as writing it, so the
+            // renamed form reads Z and Z has to arrive first. Watcom's
+            // `PrefixIns` -- the copy is relocated, not removed, and what it
+            // buys is Y's range ending here instead of at the old move.
+            let copy = insns.remove(position);
+            insns.insert(at, copy);
+            insns[at + 1] = rewritten;
+        }
+        let mut dead = after[position];
+        for index in (at..=position).rev() {
+            after[index] = dead;
+            dead = liveness::with_effect(bits, &insns[index], |effect| effect.map_or_else(Lanes::new, |effect| effect.dead_before(&dead)));
+        }
+        // Before the producer, what is dead moves only where the producer read less of Y than the copy does (a shift by a byte
+        // reads half of it): the liveness is worked out backwards until it is what it was.
+        from = at;
+        for index in (0..at).rev() {
+            if after[index] == dead {
+                break;
+            }
+            after[index] = dead;
+            from = index;
+            dead = liveness::with_effect(bits, &insns[index], |effect| effect.map_or_else(Lanes::new, |effect| effect.dead_before(&dead)));
+        }
+        if cfg!(test) || std::env::var_os("LLRM_CHECK_THRASH").is_some() {
+            assert!(after == _dead_after_by(bits, &insns, exit), "a rename changed what is dead beyond what was worked out again");
+        }
+        renamed += 1;
+    }
+    (renamed > 0).then(|| block.with_insns(insns))
+}
+
+/// The first copy at or after `from` that can be renamed.
+fn _first_rename(bits: u32, insns: &[Arc<Insn>], after: &[Lanes], from: usize) -> Option<Rename> {
+    for position in from..insns.len() {
+        let Some((into, out_of)) = _plain_copy(&insns[position]) else {
             continue;
         };
         // Y has to die at the move. That is the whole licence for the
         // rename: if anything later reads Y, its definition still has to
         // land in Y and there is nothing to rewrite.
-        if !_lanes(out_of.register).is_subset(&after[&id(one)]) {
+        if !_lanes(out_of.register).is_subset(&after[position]) {
             continue;
         }
-        let Some((at, tied)) = _producer(bits, block, position, &out_of, &into, &after) else {
-            continue;
-        };
-        let Some(rewritten) = _renamed(bits, &block.insns[at], out_of.register, into.register, !tied) else {
+        let Some((at, tied)) = _producer(bits, insns, position, &out_of, &into, after) else {
             continue;
         };
-        if !tied {
-            // The producer never read Y, so writing Z instead is the whole
-            // physical operation. Keep the copy's virtual definition as an
-            // anchor: later opaque operands can still name that SSA value.
-            let insns = block
-                .insns
-                .iter()
-                .enumerate()
-                .map(|(index, insn)| {
-                    if index == at {
-                        Arc::clone(&rewritten)
-                    } else if index == position {
-                        lir::anchor(Arc::clone(insn))
-                    } else {
-                        Arc::clone(insn)
-                    }
-                })
-                .collect();
-            return Some(block.with_insns(insns));
-        }
-        // Two-address: the producer reads Y as well as writing it, so the
-        // renamed form reads Z and Z has to arrive first. Watcom's
-        // `PrefixIns` -- the copy is relocated, not removed, and what it
-        // buys is Y's range ending here instead of at the old move.
-        let mut insns = Vec::new();
-        for (one, insn) in block.insns.iter().enumerate() {
-            if one == position {
-                continue;
-            }
-            if one == at {
-                insns.push(Arc::clone(&block.insns[position]));
-                insns.push(Arc::clone(&rewritten));
-            } else {
-                insns.push(Arc::clone(insn));
-            }
-        }
-        return Some(block.with_insns(insns));
+        let Some(rewritten) = _renamed(bits, &insns[at], out_of.register, into.register, !tied) else {
+            continue;
+        };
+        return Some(Rename { position, at, tied, rewritten });
     }
     None
 }
@@ -155,10 +176,10 @@ fn _plain_copy(one: &Insn) -> Option<(Reg, Reg)> {
 /// otherwise the definition found is not the one the move reads -- and has
 /// to leave Z dead, or renaming into it destroys a value something else
 /// still wants.
-fn _producer(bits: u32, block: &LirBlock, position: usize, out_of: &Reg, into: &Reg, after: &DeadAfter) -> Option<(usize, bool)> {
+fn _producer(bits: u32, insns: &[Arc<Insn>], position: usize, out_of: &Reg, into: &Reg, after: &[Lanes]) -> Option<(usize, bool)> {
     let (mine, theirs) = (_lanes(out_of.register), _lanes(into.register));
     for at in (0..position).rev() {
-        let one = &block.insns[at];
+        let one = &insns[at];
         let what = one.what.as_ref()?;
         if !one.clobbers.is_empty() || one.symbol == Some(true) || one.group.is_some() {
             return None;
@@ -168,7 +189,7 @@ fn _producer(bits: u32, block: &LirBlock, position: usize, out_of: &Reg, into: &
         }
         let (reads, writes) = _register_effects(bits, one, false, true)?;
         // Z dead here, or the rename overwrites a live value.
-        if !theirs.is_subset(&after[&id(one)]) {
+        if !theirs.is_subset(&after[at]) {
             return None;
         }
         if what.op == Operation::Move && one.spill_store {
@@ -446,5 +467,43 @@ mod tests {
         assert!(verify::verify(&result, false).is_empty());
         let anchor = result.blocks[0].insns.iter().find(|one| one.defines == [2]).unwrap();
         assert!(anchor.what.as_ref().unwrap().op == Operation::Nothing && anchor.uses == [1]);
+    }
+
+    /// The rename of a copy asks what is dead after each instruction of its block every round, and each ask worked out the
+    /// instruction's effect again: a straight run of 1600 statements spent 250 Minstr of 340 in the rounds, and the cost of a
+    /// body grew faster than its size while the rounds did. An instruction's effect is worked out once: those of the instructions a round changed are new ones.
+    #[test]
+    fn test_an_instructions_effect_is_worked_out_once_however_many_rounds_ask() {
+        let mut insns = Vec::new();
+        for at in 0..6_i64 {
+            insns.push(_insn(at * 3, "mov", Operation::Move, vec![_reg(Register::EAX)], vec![Loc::Imm(Imm { value: at, width: 4, address: None })]));
+            insns.push(_insn(at * 3 + 1, "mov", Operation::Move, vec![_reg(Register::EDX)], vec![_reg(Register::EAX)]));
+            insns.push(_insn(at * 3 + 2, "add", Operation::Binary, vec![_reg(Register::EBX)], vec![_reg(Register::EBX), _reg(Register::EDX)]));
+        }
+        let body = _body(insns, Register::EBX);
+        let size = body.insns().len();
+        let before = crate::backend::liveness::effects_worked_out();
+        let after = thrashed(body.clone());
+        let worked = crate::backend::liveness::effects_worked_out() - before;
+        let changed = after.insns().iter().zip(body.insns()).filter(|(new, old)| !Arc::ptr_eq(new, old)).count();
+        assert!(changed >= 4, "premise: several rounds rename ({changed} instructions changed)");
+        assert!(worked <= size + changed + 2, "{worked} effects worked out for {size} instructions and {changed} changed");
+    }
+
+    /// Moving a copy ahead of a producer that reads half of what it copies makes the other half live before it: `shr cx, 8`
+    /// reads CX's high byte alone, `mov ax, cx` reads both. What is dead after the instruction before the producer is not what
+    /// it was, and the rename that worked it out for the window between producer and copy alone left the old answer there.
+    #[test]
+    fn test_a_copy_moved_ahead_of_a_shift_by_a_byte_changes_what_is_dead_before_it() {
+        let word = |register| Loc::Reg(Reg { register, width: 2 });
+        let insns = vec![
+            _insn(0, "mov", Operation::Move, vec![word(Register::CX)], vec![Loc::Imm(Imm { value: 0x1234, width: 2, address: None })]),
+            _insn(1, "shr", Operation::Binary, vec![word(Register::CX)], vec![word(Register::CX), Loc::Imm(Imm { value: 8, width: 1, address: None })]),
+            _insn(2, "mov", Operation::Move, vec![word(Register::AX)], vec![word(Register::CX)]),
+        ];
+        let body = _body(insns, Register::EAX);
+        let after = thrashed(body.clone());
+        // Whether or not it renamed, `thrashed` checked the liveness it kept against working it out whole; a rename is the premise.
+        assert!(after.insns().iter().zip(body.insns().iter()).any(|(new, old)| !Arc::ptr_eq(new, &old)), "premise: the copy was renamed");
     }
 }

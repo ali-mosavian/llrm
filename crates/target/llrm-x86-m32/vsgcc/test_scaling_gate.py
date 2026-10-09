@@ -1,5 +1,6 @@
 """scaling_gate.py: a pass gone quadratic reads as 2N/N = 4, a linear one as 2, and neither direction of change passes unseen."""
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -60,12 +61,31 @@ def test_cpu_time_instead_of_instruction_counts_is_no_counter(tmp_path):
     assert gate.own_work(steps_compiler()("llrm", "O2", source))["linear step"] == pytest.approx(0.01)
 
 
-def test_costs_are_kept_so_a_linear_saving_does_not_move_the_excess(tmp_path):
-    """The ratio 2N/N rose when linear work got cheaper, and the gate failed a change that slowed nothing: it compares 2N - 2*N."""
-    dear = gate.costs("straight", "O2", tmp_path, stand_in("60000 * n + 5000000"), "l")
-    cheap = gate.costs("straight", "O2", tmp_path, stand_in("30000 * n + 5000000"), "c")
-    quad = gate.costs("straight", "O2", tmp_path, stand_in("60000 * n + 300 * n * n + 5000000"), "q")
-    excess = lambda c: c[1] - 2 * c[0]
-    assert abs(excess(dear)) < 0.03 * dear[1] and abs(excess(cheap)) < 0.03 * cheap[1]
-    assert cheap[1] / cheap[0] == pytest.approx(2.0, abs=0.1)
-    assert excess(quad) > 0.1 * quad[1]
+def test_the_costs_read_back_give_a_second_difference_of_fixed_and_linear_work_nil_and_of_quadratic_not(tmp_path):
+    """The ratio 2N/N rose when linear work got cheaper, and c(2N) - 2c(N) when a fixed cost went: the gate compares
+    c(2N) - 3c(N) + 2c(N/2), which cancels both."""
+    second = lambda c: c[2] - 3 * c[1] + 2 * c[0]
+    fixed_and_linear = gate.costs("straight", "O2", tmp_path, stand_in("60000 * n + 5000000"), "l")
+    cheaper = gate.costs("straight", "O2", tmp_path, stand_in("30000 * n + 1000000"), "c")
+    quadratic = gate.costs("straight", "O2", tmp_path, stand_in("60000 * n + 300 * n * n + 5000000"), "q")
+    assert abs(second(fixed_and_linear)) < 0.03 * fixed_and_linear[2] and abs(second(cheaper)) < 0.03 * cheaper[2]
+    assert second(quadratic) > 0.1 * quadratic[2]
+
+
+def test_the_16_bit_axes_compile_with_m16_and_the_others_with_m32():
+    """Every axis ran -m32 only, and `chain` at N=7 with -m16 never finished unseen. The interprocedural axes run at both."""
+    import levels_time
+    sixteen = gate.commanded("chain-m16", levels_time.command)("llrm", "O2", Path("x.c"))
+    assert "-m16" in sixteen and "-m32" not in sixteen
+    assert "-m32" in gate.commanded("chain", levels_time.command)("llrm", "O2", Path("x.c"))
+    assert {"chain-m16", "callers-m16"} <= set(gate.SIZES)
+    assert scaling.AXES["chain"](3) == gate.generated("chain-m16", 3)
+
+
+def test_a_count_does_not_inherit_the_callers_llrm_variables(monkeypatch):
+    """A caller's LLRM_CHECK_* or LLRM_VERIFY reached the compiler under measurement and added work to the step it checks: regparm16's
+    branch read 4.5 Minstr over in 'lir peephole' at every size, which failed measure on a flat constant."""
+    monkeypatch.setenv("LLRM_CHECK_FOO", "1")
+    monkeypatch.setenv("LLRM_BIN", "/kept")
+    seen = scaling.sample([sys.executable, "-I", "-c", "import os, sys; print(sorted(k for k in os.environ if k.startswith('LLRM_')), file=sys.stderr)"], {"LLRM_DEBUG": "time"})[2]
+    assert "LLRM_CHECK_FOO" not in seen and "LLRM_BIN" in seen and "LLRM_DEBUG" in seen, seen

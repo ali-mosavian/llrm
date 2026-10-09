@@ -1,4 +1,4 @@
-reason = "guards prove more (a phi tested on every edge into its block): shellsort nib m16 loses a bounds check (-1.0% instructions) and the CFG it leaves loads values[at - gap] twice (4 loads in the pipeline's MIR, 3 before): memory operands +17%"
+reason = "a route that ties or has no byte price is decided by the other measure; lea of a register and its scaled copy is priced: mandel nib -Os instructions -1.3%, code -2 bytes"
 blessed = "2026-10-09"
 
 [bas.O2]
@@ -39,9 +39,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 175037
-memory_operands = 20866
-code_bytes = 172
+instructions = 172712
+memory_operands = 20125
+code_bytes = 170
 data_bytes = 0
 bss_bytes = 0
 

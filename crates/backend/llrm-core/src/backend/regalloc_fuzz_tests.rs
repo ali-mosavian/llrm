@@ -812,6 +812,74 @@ fn test_a_search_that_is_not_exhaustive_makes_at_most_two_more_allocations() {
     assert!(most_all > 2, "premise: some body has more than two shapes to try (most: {most_all})");
 }
 
+/// The walk found a value's intervals by every value live in every block, hashed (the homes of d_faces: 56 values, 240 blocks, 4.4M
+/// instructions a call, 616 calls). From where the values occur and the blocks they are live through it finds the same.
+#[test]
+fn test_intervals_from_occurrences_are_those_of_the_walk() {
+    use crate::analysis::intervals as ranges;
+    use crate::backend::postings::Postings;
+    let mut compared = 0;
+    for seed in 0..120_u64 {
+        let shape = Shape { pool: 6 + (seed % 9) as usize, ops: 5 + (seed % 11) as usize };
+        let (plain, _) = body(seed, &shape);
+        let index = ranges::indexed(&plain);
+        let postings = Postings::of(&plain);
+        let every: Vec<u32> = plain.insns().iter().flat_map(|one| one.defines.iter().chain(&one.uses).copied()).collect::<std::collections::BTreeSet<u32>>().into_iter().collect();
+        for step in [1_usize, 2, 3] {
+            let values: Vec<u32> = every.iter().copied().enumerate().filter(|(at, _)| at % step == (seed as usize) % step).map(|(_, value)| value).collect();
+            let whole = ranges::_ranges_reference(&plain, &index, &|value| values.contains(&value));
+            let mut places: IndexMap<u32, Vec<ranges::Occurrence>> = IndexMap::default();
+            for &value in &values {
+                let mut at: Vec<ranges::Place> = postings.defs(value).iter().chain(postings.uses(value)).map(|(block, position)| (*block as usize, *position as usize)).collect();
+                at.sort_unstable();
+                at.dedup();
+                places.insert(value, at.into_iter().map(|(block, position)| {
+                    let one = &plain.blocks[block].insns[position];
+                    ((block, position), one.defines.contains(&value), one.uses.contains(&value))
+                }).collect());
+            }
+            let found = ranges::intervals_by_occurrences(&plain, &index, &values, &places);
+            assert!(found == whole, "seed {seed}, every {step}th value: the intervals from occurrences differ from the walk");
+            compared += whole.len();
+        }
+    }
+    assert!(compared > 0, "premise: some value was live");
+}
+
+/// Reading the intervals of a body copied every interval of it (`_existing_colors` asked for the body's own and added the homes':
+/// 0.14 G of d_faces, 616 calls of 8000 segments), though a read needs the remembered answer itself.
+#[test]
+fn test_reading_the_intervals_of_a_body_asked_of_twice_copies_none() {
+    use crate::analysis::intervals as ranges;
+    let (plain, _) = body(3, &Shape { pool: 9, ops: 8 });
+    let first = ranges::intervals_shared(&plain, None);
+    let again = ranges::intervals_shared(&plain, None);
+    assert!(std::rc::Rc::ptr_eq(&first, &again), "the second ask copied the answer");
+    assert!(*first == ranges::intervals(&plain, None));
+}
+
+/// The no-split allocation of a body the base allocation split nothing in is the base allocation again, and was made for every
+/// body with a spill (10% of the trials over QCport, the bench and the 66 programs, none of them won).
+#[test]
+fn test_a_body_the_base_allocation_split_nothing_in_is_not_allocated_again_without_splitting() {
+    use crate::backend::allocate::{base_splits, trials};
+    let mut unsplit = 0;
+    for seed in 0..240_u64 {
+        let shape = Shape { pool: 7 + (seed % 8) as usize, ops: 4 + (seed % 9) as usize };
+        let (body, _) = body(seed, &shape);
+        let cpu = crate::backend::cpu::tuned_exhaustive(&llrm_x86_m16::M16, "386", false, false).expect("a profile");
+        let mut phase = RegAlloc::new(None, None, ProfileOrName::Profile(cpu), &*target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("a phase");
+        let before = trials();
+        phase.transform(body).expect("allocated");
+        let made = trials() - before;
+        if made > 0 && base_splits() == 0 {
+            unsplit += 1;
+            assert!(made <= 1, "seed {seed}: {made} more allocations of a body nothing was split in");
+        }
+    }
+    assert!(unsplit > 0, "premise: some body with a spill was split nowhere");
+}
+
 /// `allocate::live` was built from per-block sorted sets and converted to bit rows for the fixed point:
 /// 24% of compiling QCport's `d_faces` (#559). Dense rows all the way give the same sets.
 #[test]
