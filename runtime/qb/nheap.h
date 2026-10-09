@@ -33,6 +33,8 @@ void *lh_alloc(word bytes, enum LhType type, void *owner, byte file);
 void lh_free(void *data);
 void lh_compact(void);
 LhEntry *lh_entry(void *data);
+/* The data of the file entry for `channel`, or of any file's with 0. */
+void *lh_file(byte channel);
 void *lh_data(LhEntry *entry);
 
 /* The two heaps trade room (nhstutil.c is the other side): the free tail of

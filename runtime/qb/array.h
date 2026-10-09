@@ -4,10 +4,10 @@
 
 #include "ad.h"
 
-/* The stack block of B$DDIM and B$RDIM as the frontend pushed it, last
-   argument first: the descriptor, the rank (low byte) with the features (high),
-   the element size, then each dimension's upper and lower bound, the one
-   nearest the front being the first stored. */
+/* The stack block of B$DDIM and B$RDIM as the frontend pushed it, last argument
+   first: the descriptor, the rank (low byte) with the features (high), the
+   element size, then each dimension's upper and lower bound, the one nearest
+   the front being the first stored. */
 typedef struct DimCall {
     AD *ad;
     word rank_and_features;

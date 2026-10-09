@@ -191,6 +191,16 @@ void *lh_alloc(word bytes, enum LhType type, void *owner, byte file)
     return data;
 }
 
+void *lh_file(byte channel)
+{
+    LhEntry *entry;
+
+    for (entry = lowest(); !at_top(entry); entry = next(entry))
+        if (entry->type == LH_FILE && (!channel || entry->file == channel))
+            return lh_data(entry);
+    return NULL;
+}
+
 void lh_free(void *data)
 {
     lh_entry(data)->type = LH_FREE;
