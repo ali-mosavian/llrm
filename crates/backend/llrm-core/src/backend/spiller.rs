@@ -1369,6 +1369,12 @@ pub fn homes_redone(body: &LirBody) -> usize {
     body.facts.0.counted("homes-redone")
 }
 
+/// An earlier body's homes are shifted only while the instructions that changed
+/// are fewer than those that name a home: past that, looking at them costs more
+/// than finding the homes again (cells N=448: 895 Minstr kept, 316 never kept;
+/// d_faces the other way).
+const FACTOR: usize = 1;
+
 /// Whether the homes' intervals of a body are worth keeping for the next:
 /// keeping them costs a fixed `FIXED` instructions a call (the state, the
 /// lookups) and `KEEP` for each block of the body, and saves, for each segment
@@ -1377,6 +1383,7 @@ pub fn homes_redone(body: &LirBody) -> usize {
 /// G (390 each) and shifted 6.1 M in 0.83 G (136 each); x_transpose, 23 calls
 /// of 41 intervals, lost 1.4 M kept (60 000 a call); a block of state is about
 /// 40.
+
 fn worth_keeping(
     blocks: usize,
     segments: usize,
@@ -1468,15 +1475,23 @@ fn homes_kept(
             state.structure.blocks.iter().zip(&state.insns).map(|((at, _, _), insns)| (*at, insns)).collect();
         let differing = ranges::differing_blocks(&blocks, body);
         let mut touched: BTreeSet<i64> = BTreeSet::new();
-        let changed = ranges::changed_runs(&blocks, &state.index, body, index, &differing, &mut |run| {
-            for one in run {
-                let key = ranges::key(one);
-                touched.extend(
-                    state.names.get(&key).into_iter().flatten().chain(now.get(&key).into_iter().flatten()).copied(),
-                );
-            }
-        });
-        if changed * 4 <= state.count + 16 {
+        let changed = ranges::changed_runs(
+            &blocks,
+            &state.index,
+            body,
+            index,
+            &differing,
+            ((state.count + 16) / 4).min((named.len() + 16) / FACTOR),
+            &mut |run| {
+                for one in run {
+                    let key = ranges::key(one);
+                    touched.extend(
+                        state.names.get(&key).into_iter().flatten().chain(now.get(&key).into_iter().flatten()).copied(),
+                    );
+                }
+            },
+        );
+        if changed * 4 <= state.count + 16 && changed * FACTOR <= named.len() + 16 {
             let shift = ranges::Shift::between(&blocks, &state.index, body, index, &differing);
             let redone: Vec<usize> = homes
                 .iter()

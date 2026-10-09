@@ -543,8 +543,8 @@ pub fn required_added(
     let mut out: IndexMap<u32, Register> = IndexMap::default();
     for at in positions {
         let (old, new) = (&before.blocks[*at].insns, &body.blocks[*at].insns);
-        let added: Vec<usize> = match crate::analysis::intervals::aligned(old, new) {
-            Some(found) => found.added,
+        let added: Vec<usize> = match crate::analysis::intervals::aligned_insns(old, new) {
+            Some(found) => found.added.clone(),
             None => (0..new.len()).collect(),
         };
         for one in added.iter().map(|q| &new[*q]) {
