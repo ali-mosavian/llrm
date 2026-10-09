@@ -1788,6 +1788,34 @@ pub fn scoped(unit: &Unit) -> Result<Facts, String> {
     Ok(result)
 }
 
+/// `scoped`'s intervals at one block: the bounds of the counted loops holding
+/// it, narrowed by the edges that dominate it, without the other blocks' (which
+/// `scoped` copies). Over the manager's bounds and edges where the unit carries
+/// them.
+pub fn scope_at(
+    unit: &Unit,
+    at: i64,
+) -> Result<Intervals, String> {
+    let held = bounds(unit)?;
+    // The manager's where the unit carries its edges, else worked out here.
+    let edges: IndexMap<i64, Scope> = match unit.edges {
+        Some(states) => states.shared(unit.function),
+        None => dominated_edges(unit)?.into_iter().map(|(at, scope)| (at, Rc::new(scope))).collect(),
+    };
+    let mut known = held.at(at).cloned().unwrap_or_default();
+    for (value, interval) in edges.get(&at).into_iter().flat_map(|scope| scope.iter()) {
+        match known.get(value) {
+            Some(previous) if previous.width == interval.width => {
+                narrow(&mut known, *value, interval.clone());
+            }
+            _ => {
+                known.insert(*value, interval.clone());
+            }
+        }
+    }
+    Ok(known)
+}
+
 /// The values that index accesses whose offset every wider sum names exactly.
 ///
 /// An index added to its object's own address is summed at the pointer's

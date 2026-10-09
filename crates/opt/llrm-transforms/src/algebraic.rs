@@ -23,7 +23,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::consts::{self, Known};
-use llrm_analysis::manager::Registers;
+use llrm_analysis::manager::{Ranges, Registers};
 use llrm_analysis::memory::Unit;
 use llrm_analysis::{cfg, induction, ranges};
 use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context, mask};
@@ -133,9 +133,9 @@ pub fn simplified(
     let mut changed = false;
     loop {
         let mut round = _whole_fixed(context, layout, function, &outer);
-        round |= _unsigned_divisions(context, layout, function, &outer, &facts, size);
+        round |= _unsigned_divisions(context, layout, function, &outer, analyses, changed || round, &facts, size);
         round |= _divisions(context, layout, function, &outer, &facts);
-        round |= _redundant_masks(context, layout, function, &outer);
+        round |= _redundant_masks(context, layout, function, &outer, analyses, changed || round);
         let recurrences = _recurrences(context, layout, function, &outer);
         for (_, inst) in function.walk().collect::<Vec<_>>() {
             if !function.is_erased(inst) {
@@ -1432,6 +1432,8 @@ fn _redundant_masks(
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
+    analyses: &mut Analyses,
+    edited: bool,
 ) -> bool {
     let candidates: Vec<(llrm_mir::module::BlockId, InstId, Operand, u128, u32)> = function
         .walk()
@@ -1444,18 +1446,20 @@ fn _redundant_masks(
     if candidates.is_empty() {
         return false;
     }
-    let shape = cfg::Shape::of(function);
-    let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
-    // The body is as the rounds before left it: found once, for its ranges and
-    // for the proofs beside them.
-    let registers = consts::known(&unit, None, None, None);
-    let unit = unit.with_registers(&registers);
-    let scoped = ranges::scoped(&unit).unwrap_or_default();
+    // The body is as the rounds before left it: the manager's ranges of it,
+    // brought up to date by what they changed, not worked out afresh for
+    // each round.
+    if edited {
+        analyses.invalidate(&PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+    }
+    let held = Ranges::of(context, layout, function, analyses, true);
+    let registers = held.registers();
+    let unit = held.unit(context, layout, function, outer);
     let made: Vec<(InstId, Operand)> = candidates
         .into_iter()
         .filter_map(|(block, inst, value, mask, width)| {
-            let scope = scoped.get(&cfg::id(block)).cloned().unwrap_or_default();
-            let interval = ranges::_operand(&unit, value, &scope, &registers)
+            let scope = ranges::scope_at(&unit, cfg::id(block)).unwrap_or_default();
+            let interval = ranges::_operand(&unit, value, &scope, registers)
                 .filter(|interval| interval.width == width && interval.low.sign() != num_bigint::Sign::Minus)?;
             let top = u128::try_from(interval.high).ok()?;
             let reach = if top == 0 { 0 } else { u128::MAX >> (top.leading_zeros()) };
@@ -1484,6 +1488,8 @@ fn _unsigned_divisions(
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
+    analyses: &mut Analyses,
+    edited: bool,
     facts: &IndexMap<ValueId, Known>,
     size: bool,
 ) -> bool {
@@ -1502,13 +1508,15 @@ fn _unsigned_divisions(
     if candidates.is_empty() {
         return false;
     }
-    let shape = cfg::Shape::of(function);
-    let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
-    // The body is as the rounds before left it: found once, for its ranges and
-    // for the proofs beside them.
-    let registers = consts::known(&unit, None, None, None);
-    let unit = unit.with_registers(&registers);
-    let scoped = ranges::scoped(&unit).unwrap_or_default();
+    // The body is as the rounds before left it: the manager's ranges of it,
+    // brought up to date by what they changed, not worked out afresh for
+    // each round.
+    if edited {
+        analyses.invalidate(&PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+    }
+    let held = Ranges::of(context, layout, function, analyses, true);
+    let registers = held.registers();
+    let unit = held.unit(context, layout, function, outer);
     let made: Vec<(InstId, BinaryOp)> = candidates
         .into_iter()
         .filter_map(|(block, inst, width)| {
@@ -1528,8 +1536,8 @@ fn _unsigned_divisions(
                 && divisor > BigInt::from(1u8)
                 && divisor < BigInt::from(1u8) << (width - 1)
                 && (power || (!size && width == 32 && layout.pointer(0).bits == 32));
-            let scope = scoped.get(&cfg::id(block)).cloned().unwrap_or_default();
-            let proved = ranges::_operand(&unit, operands[0], &scope, &registers)
+            let scope = ranges::scope_at(&unit, cfg::id(block)).unwrap_or_default();
+            let proved = ranges::_operand(&unit, operands[0], &scope, registers)
                 .filter(|interval| interval.width == width)
                 .is_some_and(|interval| interval.low.sign() != num_bigint::Sign::Minus)
                 || llrm_mir::valuetracking::known_zero(context, function, operands[0]) >> (width - 1) & 1 == 1;
