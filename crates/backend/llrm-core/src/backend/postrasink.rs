@@ -11,9 +11,9 @@ use std::sync::Arc;
 use crate::support::hash::IndexMap;
 
 use crate::backend::liveness::{_before, _effects, _universe};
-use crate::backend::peephole::{id, Lanes, _lanes};
+use crate::backend::peephole::{Lanes, _lanes};
 use crate::backend::copysink::{copy_of, touches};
-use crate::model::lir::{self, Insn, LirBlock, LirBody};
+use crate::model::lir::{Insn, LirBlock, LirBody};
 
 /// The lanes live on entry to each block.
 fn live_in(body: &LirBody) -> IndexMap<i64, Lanes> {
@@ -36,82 +36,84 @@ fn live_in(body: &LirBody) -> IndexMap<i64, Lanes> {
     into
 }
 
-/// `body` with each copy moved into the one successor that reads it. A copy that reached a block that itself branches may go on,
-/// so the blocks that received one are asked again; liveness is the pass's whole cost, and is worked out only for a body that has a
-/// copy in a block to ask.
-pub fn sunk(body: &LirBody) -> LirBody {
-    let mut body = body.clone();
-    let mut asked: Option<Vec<i64>> = None;
-    for _ in 0..8 {
-        match round(&body, asked.as_deref()) {
-            Some((next, received)) => {
-                body = next;
-                asked = Some(received);
+/// Blocks reachable from the entry, each before the successors it does not come back to (reverse post-order).
+fn reverse_post_order(body: &LirBody) -> Vec<i64> {
+    let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &block.succ)).collect();
+    let mut seen = crate::support::hash::HashSet::default();
+    let mut order = Vec::new();
+    let mut stack = vec![(body.entry, 0usize)];
+    seen.insert(body.entry);
+    while let Some((at, next)) = stack.pop() {
+        match succ.get(&at).and_then(|to| to.get(next)) {
+            Some(&to) => {
+                stack.push((at, next + 1));
+                if seen.insert(to) {
+                    stack.push((to, 0));
+                }
             }
-            None => break,
+            None => order.push(at),
         }
     }
-    body
+    order.reverse();
+    order
 }
 
-fn round(body: &LirBody, asked: Option<&[i64]>) -> Option<(LirBody, Vec<i64>)> {
-    let ask = |block: &LirBlock| block.succ.len() > 1 && asked.is_none_or(|asked| asked.contains(&block.at));
-    // Liveness is the cost: ask for it only where a block that branches ends in a copy-able prefix.
-    if !body.blocks.iter().any(|block| ask(block) && block.insns.iter().any(|one| copy_of(one).is_some())) {
-        return None;
+/// `body` with each copy moved into the one successor that reads it. One pass over the blocks, as LLVM makes: a copy that lands in a block
+/// is seen when that block's turn comes, and reverse post-order puts it after the block it came from. Liveness is worked out once; a
+/// copy moved into a block changes what is live into that block, not what is live into its successors, which is what the next step asks.
+pub fn sunk(body: &LirBody) -> LirBody {
+    if !body.blocks.iter().any(|block| block.succ.len() > 1 && block.insns.iter().any(|one| copy_of(one).is_some())) {
+        return body.clone();
     }
     let live = live_in(body);
-    let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut preds: IndexMap<i64, usize> = IndexMap::default();
     for block in &body.blocks {
         for to in &block.succ {
             *preds.entry(*to).or_insert(0) += 1;
         }
     }
-    let mut moved: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
-    let mut removed: crate::support::hash::HashSet<usize> = crate::support::hash::HashSet::default();
-    for block in &body.blocks {
-        if !ask(block) {
+    let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &block.succ)).collect();
+    let mut insns: IndexMap<i64, Vec<Arc<Insn>>> = body.blocks.iter().map(|block| (block.at, block.insns.clone())).collect();
+    let mut changed = false;
+    for at in reverse_post_order(body) {
+        let to = succ[&at];
+        if to.len() < 2 {
             continue;
         }
-        for (index, one) in block.insns.iter().enumerate().rev() {
-            let Some((dest, source)) = copy_of(one) else { continue };
+        for index in (0..insns[&at].len()).rev() {
+            let one = Arc::clone(&insns[&at][index]);
+            let Some((dest, source)) = copy_of(&one) else { continue };
             let (written, read) = (_lanes(dest.register), _lanes(source.register));
             if written.is_empty() || read.is_empty() || !written.is_disjoint(&read) {
                 continue;
             }
-            let readers: Vec<i64> = block.succ.iter().copied().filter(|to| live.get(to).is_some_and(|lanes| !written.is_disjoint(lanes))).collect();
+            let readers: Vec<i64> = to.iter().copied().filter(|next| live.get(next).is_some_and(|lanes| !written.is_disjoint(lanes))).collect();
             let [target] = readers[..] else { continue };
-            if target == block.at || !at_of.contains_key(&target) || preds.get(&target) != Some(&1) || block.succ.iter().filter(|to| **to == target).count() != 1 {
+            if target == at || !insns.contains_key(&target) || preds.get(&target) != Some(&1) || to.iter().filter(|next| **next == target).count() != 1 {
                 continue;
             }
             let both = written.or(&read);
-            if block.insns[index + 1..].iter().any(|other| !removed.contains(&id(other)) && (touches(body.bits, other, &both, false) || touches(body.bits, other, &written, true))) {
+            if insns[&at][index + 1..].iter().any(|other| touches(body.bits, other, &both, false) || touches(body.bits, other, &written, true)) {
                 continue;
             }
-            removed.insert(id(one));
+            insns.get_mut(&at).expect("a block").remove(index);
             // Bottom-up, so each earlier copy lands ahead of the later ones already there.
-            moved.entry(target).or_default().insert(0, Arc::clone(one));
+            insns.get_mut(&target).expect("a block").insert(0, one);
+            changed = true;
         }
     }
-    if removed.is_empty() {
-        return None;
+    if !changed {
+        return body.clone();
     }
     let blocks: Vec<LirBlock> = body
         .blocks
         .iter()
         .map(|block| {
-            let mut insns = block.insns.clone();
-            if insns.iter().any(|one| removed.contains(&id(one))) {
-                insns = lir::without(&insns, |one| removed.contains(&id(one)), None::<fn(&Arc<Insn>) -> Arc<Insn>>);
-            }
-            if let Some(moved) = moved.get(&block.at) {
-                insns = moved.iter().cloned().chain(insns).collect();
-            }
-            block.with_insns(insns)
+            let now = &insns[&block.at];
+            if now.len() == block.insns.len() && now.iter().zip(&block.insns).all(|(left, right)| Arc::ptr_eq(left, right)) { block.clone() } else { block.with_insns(now.clone()) }
         })
         .collect();
-    Some((body.with_blocks(blocks), moved.keys().copied().collect()))
+    body.with_blocks(blocks)
 }
 
 #[cfg(test)]
@@ -181,5 +183,28 @@ mod tests {
     fn test_a_copy_does_not_move_into_a_block_with_another_predecessor() {
         let after = sunk(&shape(false, true));
         assert_eq!((copies_in(&after, 1), copies_in(&after, 9)), (1, 0));
+    }
+
+    /// One pass sinks a chain: the block a copy lands in is visited after the one it left (rectwo c -15% needed it; a repeat bought
+    /// the same at 0.3% of compile time).
+    #[test]
+    fn test_a_copy_goes_on_through_a_second_branch_in_one_pass() {
+        let cmp = |at| insn(at, Operation::Compare, "cmp", vec![], vec![r(AX), r(BX)], None);
+        let branch = |at, target| insn(at, Operation::Branch, "jl", vec![], vec![], Some(target));
+        let ret = Arc::new(Insn { reads_complete: true, ..Arc::unwrap_or_clone(insn(5, Operation::Return, "ret", vec![], vec![], None)) });
+        let body = LirBody::new(
+            "f",
+            1,
+            vec![
+                block(9, vec![insn(9, Operation::Binary, "add", vec![r(AX)], vec![r(AX), r(DI)], None), insn(10, Operation::Jump, "jmp", vec![], vec![], Some(5))], vec![5]),
+                block(7, vec![cmp(7), branch(8, 9)], vec![9, 5]),
+                block(1, vec![copy(1, DI, DX), cmp(2), branch(3, 7)], vec![7, 5]),
+                block(5, vec![ret], vec![]),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let after = sunk(&body);
+        assert_eq!((copies_in(&after, 1), copies_in(&after, 7), copies_in(&after, 9)), (0, 0, 1));
     }
 }

@@ -184,7 +184,7 @@ pub fn typed_apart(one: &MemRef, other: &MemRef) -> bool {
     let (Some(one_root), Some(other_root)) = (one.lineage.last(), other.lineage.last()) else {
         return false;
     };
-    let related = one.lineage.contains(other_type) || other.lineage.contains(one_type);
+    let related = one.lineage.iter().any(|name| name.as_str() == &**other_type) || other.lineage.iter().any(|name| name.as_str() == &**one_type);
     one_root == other_root && one_type != other_type && !related && !same_typed_start(one, other)
 }
 
@@ -449,30 +449,36 @@ pub fn overlap_buckets(reference: &MemRef, parts: &OverlapParts) -> Option<Vec<O
     let provenance = reference.provenance.as_ref()?;
     #[cfg(test)]
     PICKED.with(|picked| picked.set((picked.get().0 + 1, picked.get().1 + parts.classes.len())));
-    let mut reached = parts.objectless.iter().cloned().collect::<Vec<_>>();
+    let mut reached = Vec::with_capacity(16);
+    reached.extend(parts.objectless.iter().cloned());
     if let Some(frame) = _frame(reference) {
         if let Some(buckets) = parts.frames.get(&Some(frame)) {
             reached.extend(buckets.iter().cloned());
         }
     }
-    // A write names one or two objects: a list is cheaper than a set.
-    let mut kinds = Vec::with_capacity(provenance.slices.len());
-    let mut written = Vec::<&ObjectRef>::with_capacity(provenance.slices.len());
+    // A write names one or two objects, and a set of slices keeps one object's together (it orders by object first): the
+    // classes seen sit in a few inline slots, and a spill only past them.
+    let mut few = [None::<AliasClass>; 6];
+    let mut spill = Vec::new();
+    let mut last = None;
     for one in &provenance.slices {
-        if written.contains(&&one.object) {
+        if last == Some(one.object) {
             continue;
         }
-        written.push(&one.object);
+        last = Some(one.object);
         if let Some(buckets) = parts.objects.get(&one.object) {
             reached.extend(buckets.iter().cloned());
         }
         let kind = alias_class(&one.object);
-        if !kinds.contains(&kind) {
-            kinds.push(kind);
+        if !few.contains(&Some(kind)) && !spill.contains(&kind) {
+            match few.iter_mut().find(|slot| slot.is_none()) {
+                Some(slot) => *slot = Some(kind),
+                None => spill.push(kind),
+            }
         }
     }
     for (kind, buckets) in &parts.classes {
-        if kind.is_some_and(|kind| kinds.iter().any(|one| classes_may_alias(*one, kind))) {
+        if kind.is_some_and(|kind| few.iter().flatten().chain(&spill).any(|one| classes_may_alias(*one, kind))) {
             reached.extend(buckets.iter().cloned());
         }
     }
