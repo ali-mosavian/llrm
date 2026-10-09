@@ -314,3 +314,17 @@ def test_a_new_row_on_an_axis_whose_superlinear_work_rose_still_fails():
         passes={"callers O2 analysis call-effects": quad(0.02), "callers O2 analysis pointer-values": quad(0.04)},
     )
     assert measure.rises(base, grown, TOL)[1] != []
+
+
+def test_a_new_row_of_seven_tenths_of_the_compile_on_an_axis_that_rose_still_fails():
+    """The axis rule reads 1% of the base's 2N cost, the step rule 0.5% of the compile: a new row between them on an axis that rose
+    (and so did not move work out of other rows) passed both. The axis judges a new row only when its second difference did not rise."""
+    whole = 1000.0
+    quad = lambda k: [*cost(0, 0, k), whole]
+    base = made(axes={"callers O2": cost(0, 100, 0.02)}, passes={"callers O2 analysis call-effects": quad(0.02)})
+    grown = made(
+        axes={"callers O2": cost(0, 100, 0.020467)},
+        passes={"callers O2 analysis call-effects": quad(0.02), "callers O2 analysis pointer-values": quad(0.000467)},
+    )
+    bad = measure.rises(base, grown, TOL)[1]
+    assert any("pointer-values" in line for line in bad), bad
