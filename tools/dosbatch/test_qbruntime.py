@@ -120,3 +120,20 @@ class RuntimeBintreeTests(unittest.TestCase):
         self.assertEqual(result.reference.status, "ok")
         self.assertEqual(result.candidate.status, "ok")
         self.assertEqual(result.difference, "")
+
+
+@unittest.skipUnless(qbruntime.dosbatch.QB45.is_dir(), "QB45_DIR is unavailable")
+class RuntimeSieveTests(unittest.TestCase):
+    def test_sieve_matches_bcom45_byte_for_byte(self):
+        """A near payload made sieve jump through an array segment with a nonzero offset."""
+        source = next(source for source in qbruntime.milestone_sources() if source.stem == "sieve")
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            object_ = work / "sieve.obj"
+            error = run_tests.compile_one(run_tests.Program(source, ["-O2"], None, "qb45"), object_)
+            self.assertIsNone(error)
+            archive, _ = qbruntime.build(work / "archive")
+            result = qbruntime.differential(object_, archive, work / "differential", "sieve")
+        self.assertEqual(result.reference.status, "ok")
+        self.assertEqual(result.candidate.status, "ok")
+        self.assertEqual(result.difference, "")

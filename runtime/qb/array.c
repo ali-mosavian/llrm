@@ -25,6 +25,7 @@ typedef struct {
 typedef struct Block {
     word next;
     word bytes;
+    word data;
 } Block;
 
 extern byte *qb_array_more(word bytes);
@@ -40,44 +41,28 @@ static Block *blockAt(word address) {
     return (Block *)address;
 }
 
-static byte *allocate(word bytes) {
-    Block *previous = (Block *)0;
+static Block *allocate(word bytes) {
     Block *block = blockAt(freeBlocks);
-    Block *following;
-    byte *data;
-    word remaining;
 
     while (block != (Block *)0) {
         if (block->bytes >= bytes) {
-            data = (byte *)(block + 1);
-            remaining = block->bytes - bytes;
-            if (remaining >= sizeof(Block) + 2) {
-                following = (Block *)(data + bytes);
-                following->next = block->next;
-                following->bytes = remaining - sizeof(Block);
-                if (previous == (Block *)0) {
-                    freeBlocks = addressOf(following);
-                } else {
-                    previous->next = addressOf(following);
-                }
-            } else if (previous == (Block *)0) {
-                freeBlocks = block->next;
-            } else {
-                previous->next = block->next;
-            }
-            return data;
+            freeBlocks = block->next;
+            return block;
         }
-        previous = block;
         block = blockAt(block->next);
     }
 
-    block = (Block *)qb_array_more(bytes + sizeof(Block));
+    if (bytes > 65535U - sizeof(Block) - 15U) {
+        return (Block *)0;
+    }
+    block = (Block *)qb_array_more(bytes + sizeof(Block) + 15U);
     if (block == (Block *)0) {
-        return (byte *)0;
+        return (Block *)0;
     }
     block->next = 0;
     block->bytes = bytes;
-    return (byte *)(block + 1);
+    block->data = (addressOf(block + 1) + 15U) & (word)~15U;
+    return block;
 }
 
 static void clear(Array *array) {
@@ -102,6 +87,7 @@ word qb_array_dim(word arrayAddress, word typeAndDimensions, word elementBytes) 
     sword adjustment = 0;
     dword total = 1;
     dword byteCount;
+    Block *block;
     byte *data;
 
     clear(array);
@@ -133,13 +119,15 @@ word qb_array_dim(word arrayAddress, word typeAndDimensions, word elementBytes) 
         return 0;
     }
 
-    data = allocate((word)byteCount);
-    if (data == (byte *)0) {
+    block = allocate((word)byteCount);
+    if (block == (Block *)0) {
         clear(array);
         return 0;
     }
+    data = (byte *)block->data;
 
     array->data = addressOf(data);
+    array->next = addressOf(block);
     array->bytes = (word)byteCount;
     array->dimensions = (byte)dimensions;
     array->features = (byte)(typeAndDimensions >> 8);
@@ -157,7 +145,7 @@ void qb_array_erase(word arrayAddress) {
         return;
     }
 
-    block = ((Block *)array->data) - 1;
+    block = blockAt(array->next);
     block->next = freeBlocks;
     freeBlocks = addressOf(block);
     clear(array);

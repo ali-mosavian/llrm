@@ -29,8 +29,14 @@ B$DDIM proc far
     or ax, ax
     jz short cleanup
     mov di, word ptr [bp+6]
-    push ds
-    pop word ptr [di+2]
+    mov bx, word ptr [di]
+    sub word ptr [di+10], bx
+    mov word ptr [di], 0
+    mov ax, bx
+    shr ax, 4
+    mov cx, ds
+    add ax, cx
+    mov word ptr [di+2], ax
 cleanup:
     mov cx, word ptr [bp+8]
     and cx, 255
