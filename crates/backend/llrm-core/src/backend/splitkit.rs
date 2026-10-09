@@ -264,6 +264,8 @@ pub fn crossings(body: &LirBody, value: u32, region: &Region, live: &dyn allocat
         })
     });
     let mut out = Vec::new();
+    // The phis a block's successor arrives with, found by the successor's address: a scan of every block for each edge was the square of the blocks.
+    let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     for block in &body.blocks {
         if let Some(ranges) = region.spans.get(&block.at) {
             let before = _live_before(block, value, live.live_out(block.at, value));
@@ -280,7 +282,7 @@ pub fn crossings(body: &LirBody, value: u32, region: &Region, live: &dyn allocat
         for next in &block.succ {
             let entering = region.enters(*next);
             let across = live.live_in(*next, value)
-                || body.blocks.iter().filter(|one| one.at == *next).flat_map(|one| &one.phis).any(|phi| phi.incoming.contains(&(block.at, value)));
+                || by_at.get(next).is_some_and(|one| one.phis.iter().any(|phi| phi.incoming.contains(&(block.at, value))));
             if leaving != entering && across && (entering || written) {
                 out.push((Crossing::Edge { from: block.at, to: *next }, entering));
             }
@@ -1077,6 +1079,20 @@ mod tests {
         let cut = carved(&body, 3, 9, 2, &region(&body, &[0x10])).expect("cut");
         assert_eq!(crate::backend::allocate::live_rows_walks(&body), before, "the body was walked for the rows of the carved value");
         assert_eq!(super::live_blocks(&cut, 9, &*crate::analysis::occurrences::live_among(&cut, &BTreeSet::from([9]))), super::live_blocks(&cut, 9, &crate::backend::allocate::live_rows_by(&cut, |one| one == 9)));
+    }
+
+    /// An edge into a block whose phi takes the value from the edge's source carries the value across it, whether or not the value is
+    /// live into the block: `crossings` finds the successor's phis by its address. (It found them by a scan of every block, per edge:
+    /// the square of the blocks, 0.7 G of compiling d_faces.)
+    #[test]
+    fn test_an_edge_into_a_phi_that_takes_the_value_is_a_crossing() {
+        use crate::model::lir::Phi;
+        let mut join = block(0x20, vec![_insn(0x20, sem(Operation::Return, "ret", vec![], vec![], None), &[], &[])], &[]);
+        join.phis = vec![Phi { result: 7, incoming: vec![(0x10, 3), (0x0, 4)] }];
+        let body = body("phi", vec![block(0, vec![move_imm(0, 3, 1), jump(1, 0x10)], &[0x10]), block(0x10, vec![move_imm(0x10, 3, 2), jump(0x11, 0x20)], &[0x20]), join]);
+        // The region of block 0x10 writes the value and leaves for 0x20, whose phi reads it on that edge and nowhere else.
+        let found = super::crossings(&body, 3, &region(&body, &[0x10]), &crate::backend::allocate::live_rows_by(&body, |one| one == 3));
+        assert!(found.iter().any(|(at, _)| *at == super::Crossing::Edge { from: 0x10, to: 0x20 }), "no crossing on the edge whose phi takes the value: {found:?}");
     }
 
     fn region(body: &LirBody, blocks: &[i64]) -> Region {
