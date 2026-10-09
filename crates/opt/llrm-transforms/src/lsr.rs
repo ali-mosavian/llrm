@@ -888,7 +888,7 @@ fn _alive(
 ) -> Vec<BTreeMap<i64, Vec<bool>>> {
     // What is live before each instruction of a block is the block's, not the site's: worked out once, not once a site
     // (22 sites of a loop took a fifth of lsr on d_faces).
-    let live: Vec<(i64, Vec<BTreeSet<ValueId>>)> = loop_
+    let live: Vec<_> = loop_
         .body
         .iter()
         .map(|&at| {
