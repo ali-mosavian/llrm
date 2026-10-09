@@ -207,6 +207,9 @@ pub fn admitted(
     // GCC's `estimated_unrolled_size` takes two thirds of the copies' size, for
     // what later passes still remove from them.
     let estimate = (unrolled.size * 2 / 3).max(1);
+    // LLVM's `UnrolledCost` has no discount, and is what a level that asks for
+    // a share of the loop's clocks is held to.
+    let counted = if limits.saved_percent > 0 { unrolled.size } else { estimate };
     // GCC's reasons, in its order.
     let refusal = if asked || estimate <= size {
         None
@@ -220,7 +223,7 @@ pub fn admitted(
         Some("a call that touches memory")
     } else if unrolled.branches > MAX_PEEL_BRANCHES {
         Some("max-peel-branches")
-    } else if estimate > budget.saturating_mul(boost) / 100 {
+    } else if counted > budget.saturating_mul(boost) / 100 {
         Some("max-completely-peeled-insns")
     } else {
         None
