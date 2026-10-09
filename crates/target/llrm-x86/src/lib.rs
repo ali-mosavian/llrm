@@ -104,6 +104,12 @@ pub mod registers {
 
     /// The general registers a value or an address is held in, the frame
     /// pointer's included, the stack pointer's not.
+    /// Whether the register is a position in a stack: an x87 register.
+    #[inline]
+    pub fn positional(register: Register) -> bool {
+        register.is_st()
+    }
+
     pub const ROOTS: [Register; 7] =
         [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI, Register::EBP];
     /// The word view of a dword register, where it has one.
@@ -309,5 +315,22 @@ mod platform_tests {
     #[test]
     fn the_text_screen_is_at_its_physical_address() {
         assert_eq!(super::physical_addresses(), [("text_screen".to_owned(), 0xB8000)]);
+    }
+
+    /// The passes ask `registers::positional`; each target's description says
+    /// the same of every register it lists.
+    #[test]
+    fn the_family_predicate_agrees_with_both_descriptions() {
+        for text in [
+            include_str!("../../llrm-x86-m16/src/registers.regs"),
+            include_str!("../../llrm-x86-m32/src/registers.regs"),
+        ] {
+            for one in llrm_target::registers::parse(text).unwrap() {
+                let register = iced_x86::Register::values()
+                    .find(|register| format!("{register:?}").eq_ignore_ascii_case(&one.name))
+                    .expect("an iced register");
+                assert_eq!(crate::registers::positional(register), one.is("positional"), "{}", one.name);
+            }
+        }
     }
 }

@@ -8,7 +8,7 @@ use llrm_analysis::peelsize::Limits;
 use llrm_mir::module::Module;
 use llrm_mir::opcode::{BinaryOp, Opcode};
 
-use super::Unroll;
+use super::{PRICED, Unroll};
 use crate::testing::{f, managed, parsed, printed, results};
 
 /// `%acc * %n + %i` for `bound` trips, across a bridge to the latch; the
@@ -204,4 +204,31 @@ fn a_loop_the_language_permits_is_copied_past_the_budget_and_the_cap() {
     // overrides.
     assert!(!through(&summing("40", ""), Unroll::default()).0);
     assert!(through(&hinted("40", "!\"llvm.loop.unroll.count\", i32 40"), Unroll::default()).0);
+}
+
+/// Three loops one after another, the first too long to copy, `bounds` trips
+/// each, the previous one's accumulator the next one's start.
+fn chained(bounds: [i16; 3]) -> String {
+    let mut text = String::from("define i16 @f(i16 %x, i16 %n) {\nb0:\n  br label %h0\n\n");
+    for (at, bound) in bounds.iter().enumerate() {
+        let (from, next) = (if at == 0 { "b0".to_owned() } else { format!("e{}", at - 1) }, at + 1);
+        let start = if at == 0 { "%x".to_owned() } else { format!("%r{}", at - 1) };
+        text += &format!(
+            "h{at}:\n  %i{at} = phi i16 [ 0, %{from} ], [ %next{at}, %l{at} ]\n  %acc{at} = phi i16 [ {start}, %{from} ], [ %s{at}, %l{at} ]\n  %go{at} = icmp slt i16 %i{at}, {bound}\n  br i1 %go{at}, label %l{at}, label %e{at}\n\nl{at}:\n  %m{at} = mul i16 %acc{at}, %n\n  %s{at} = add i16 %m{at}, %i{at}\n  %next{at} = add i16 %i{at}, 1\n  br label %h{at}\n\ne{at}:\n  %r{at} = add i16 %acc{at}, 0\n  br label %{}\n\n",
+            if next < 3 { format!("h{next}") } else { "done".to_owned() }
+        );
+    }
+    text + "done:\n  ret i16 %r2\n}\n"
+}
+
+/// A refused loop was priced again in every round that expanded another: the
+/// first of three, too long to copy, five times for three loops. It is priced
+/// once.
+#[test]
+fn a_loop_priced_out_is_not_priced_again_after_another_is_expanded() {
+    PRICED.with(|one| one.set(0));
+    let (changed, mut module) = through(&chained([1000, 4, 4]), Unroll::default());
+    assert!(changed);
+    assert_eq!(loops_of(&mut module), 1);
+    assert_eq!(PRICED.with(|one| one.get()), 3);
 }

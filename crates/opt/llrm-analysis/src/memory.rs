@@ -754,6 +754,9 @@ pub struct Unit<'a> {
     /// The pointer value solve of this body, the manager's `PointerValues`;
     /// without it each `points_to` makes its own.
     pub point_values: Option<&'a crate::alias::PointValues>,
+    /// What calling back into the module does, the module's `Callbacks`;
+    /// without it each `calls_annotated` adds up every entry's summary.
+    pub callbacks: Option<&'a Option<crate::alias::Summary>>,
 }
 
 impl<'a> Unit<'a> {
@@ -805,6 +808,7 @@ impl<'a> Unit<'a> {
             bounds: None,
             exposed: None,
             point_values: None,
+            callbacks: None,
         }
     }
 
@@ -813,6 +817,13 @@ impl<'a> Unit<'a> {
         spaces: llrm_mir::spaces::Spaces,
     ) -> Self {
         Self { spaces, ..self }
+    }
+
+    pub fn with_callbacks(
+        self,
+        callbacks: &'a Option<crate::alias::Summary>,
+    ) -> Self {
+        Self { callbacks: Some(callbacks), ..self }
     }
 
     pub fn with_point_values(

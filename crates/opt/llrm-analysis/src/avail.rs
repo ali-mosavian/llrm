@@ -2,11 +2,12 @@
 //! them through MemoryDependence: llrm-core's `analysis/avail.rs`, adapted
 //! to the rich MIR.
 //!
-//! A forward dataflow whose fact is `MemRef -> Operand`: "these bytes are
-//! this value". Keyed on the access, which carries the SSA values its
-//! address is reached through. It intersects at joins; `loadjoins` forms a
-//! phi where predecessors differ, from MemorySSA's per-edge proof. A value
-//! serves a read only of its own type.
+//! A load is served by the value a MemorySSA walk finds in its bytes
+//! (`forwardable_walk`); `loadjoins` forms a phi where predecessors differ,
+//! from MemorySSA's per-edge proof. A value serves a read only of its own
+//! type. The forward availability map this once solved (`MemRef -> Operand`
+//! at each block) was deleted after the walk served every load it served
+//! (45216 of 45216 over the QCport -O2 compile) and cost more.
 //!
 //! Dropped, with no rich MIR counterpart: `Holder` (what a store wrote is
 //! an operand, a constant or a global's address included), `_addressing`,
@@ -14,129 +15,27 @@
 //! pointer), `_crosses_edges` and every stack exclusion (no push area),
 //! the runtime names in `calls` (what a call touches is `Accesses`'), float
 //! exceptions, `sealed` and `handles_errors` (a handler in this function is
-//! reached along an `invoke`'s unwind edge, which the solve walks),
+//! reached along an `invoke`'s unwind edge, which the walk follows),
 //! `bounds` (the region lattice's
 //! landmarks), `Forward::op` (`at` names the instruction) and the
 //! `DEAD_OVERLAPS` counter.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
-use std::ops::Deref;
-use std::rc::Rc;
+use std::collections::BTreeSet;
 
-use llrm_mir::dense::{IdMap, IdSet};
+use llrm_mir::dense::IdSet;
 use llrm_mir::module::{InstId, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_support::bits::Bits;
-use llrm_support::hash::HashSet;
 use llrm_support::hash::{HashMap, IndexMap};
 
 use crate::alias::EscapedBefore;
 use crate::cellmap::CellMap;
 use crate::cfg;
-use crate::graph::loops;
 use crate::memory::{MemRef, Unit};
-use crate::memoryssa::{self, Accesses, changes, covered, covers, may_clobber, placed, same_bytes};
-use crate::ranges::{self, Interval};
-use crate::regions::{OverlapBucket, OverlapBuckets, displaced_buckets, overlap_bucket, overlap_buckets, overlap_span};
-
-/// What each cell holds, indexed by the object and the bytes each cell names: a
-/// write asks only the cells it can reach, not every cell held, as `consts`'
-/// cell lattice does.
-#[derive(Clone)]
-pub struct Holders {
-    cells: CellMap<MemRef, Operand, OverlapBucket>,
-    buckets: Rc<RefCell<OverlapBuckets>>,
-}
-
-impl Default for Holders {
-    fn default() -> Self {
-        Self::of(IndexMap::default(), Rc::default())
-    }
-}
-
-impl Holders {
-    fn of(
-        items: IndexMap<MemRef, Operand>,
-        buckets: Rc<RefCell<OverlapBuckets>>,
-    ) -> Self {
-        let cells = CellMap::new(items, |cell| (overlap_bucket(&mut buckets.borrow_mut(), cell), overlap_span(cell)));
-        Self { cells, buckets }
-    }
-
-    /// The first cell held, in the order they are held, that names `cell`'s
-    /// bytes and whose holder `serves`: what a scan of every cell finds,
-    /// asked only of the cells a write to `cell` can reach (a cell naming the
-    /// same bytes is one).
-    fn naming(
-        &self,
-        unit: &Unit,
-        cell: &MemRef,
-        serves: impl Fn(&Operand) -> bool,
-    ) -> Option<(&MemRef, &Operand)> {
-        let reached = overlap_buckets(cell, &self.cells.parts);
-        let displaced = displaced_buckets(cell, &self.cells.parts);
-        let found = self
-            .cells
-            .asked(reached, displaced)
-            .into_iter()
-            .filter(|one| same_bytes(unit, one, cell) && self.get(*one).is_some_and(&serves))
-            .min_by_key(|one| self.get_index_of(*one))
-            .and_then(|one| self.get_key_value(one));
-        if llrm_support::env_set("LLRM_CHECK_HOLDERS") {
-            let whole = self.iter().find(|(one, who)| same_bytes(unit, one, cell) && serves(who));
-            assert!(
-                found == whole,
-                "the cell naming these bytes, found through the index, is not the one a scan of every cell finds"
-            );
-        }
-        found
-    }
-
-    fn insert(
-        &mut self,
-        cell: MemRef,
-        value: Operand,
-    ) {
-        let buckets = Rc::clone(&self.buckets);
-        self.cells.insert(cell, value, |cell| (overlap_bucket(&mut buckets.borrow_mut(), cell), overlap_span(cell)));
-    }
-}
-
-impl Deref for Holders {
-    type Target = IndexMap<MemRef, Operand>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.cells
-    }
-}
-
-impl PartialEq for Holders {
-    fn eq(
-        &self,
-        other: &Self,
-    ) -> bool {
-        **self == **other
-    }
-}
-
-impl std::fmt::Debug for Holders {
-    fn fmt(
-        &self,
-        formatter: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
-        formatter.debug_map().entries(self.iter()).finish()
-    }
-}
-
-/// The map on entry to and exit from each block.
-#[derive(Clone, Debug)]
-pub struct Held {
-    pub into: IndexMap<i64, Holders>,
-    pub outof: IndexMap<i64, Holders>,
-    // Each value's constant, so an index is placed by its number.
-    pub known: BTreeMap<ValueId, Interval>,
-}
+use crate::memoryssa::{self, Accesses, covered, covers, may_clobber, placed, same_bytes};
+use crate::ranges;
+use crate::regions::{OverlapBucket, OverlapBuckets, overlap_bucket, overlap_buckets};
 
 /// The cell `inst` purely loads, and the value it lands in.
 pub fn loaded_into(
@@ -178,92 +77,7 @@ pub fn stored_cell(
     })
 }
 
-/// Whether `holder` can stand for `value`: it has its type.
-fn serves(
-    unit: &Unit,
-    holder: Operand,
-    value: ValueId,
-) -> bool {
-    unit.operand_type(holder) == Some(unit.function.value(value).ty)
-}
-
-/// The map across one instruction.
-fn after(
-    unit: &Unit,
-    accesses: &Accesses,
-    inst: InstId,
-    mut holders: Holders,
-    known: Option<&BTreeMap<ValueId, Interval>>,
-) -> Holders {
-    let writes = accesses.writes(inst);
-    // What every cell is asked of every write, for the check below.
-    let expected = llrm_support::env_set("LLRM_CHECK_HOLDERS").then(|| {
-        let mut every: IndexMap<MemRef, Operand> = (*holders).clone();
-        every.retain(|one, _| !changes(one, false, writes, |store| may_clobber(unit, known, one, store)));
-        every
-    });
-    match writes {
-        // A write nothing is known of reaches every cell that can be written.
-        None => holders.cells.kill(None, |one| !one.unwritable(), None),
-        Some(stores) => {
-            for store in stores {
-                let reached = overlap_buckets(store, &holders.cells.parts);
-                let displaced = displaced_buckets(store, &holders.cells.parts);
-                holders
-                    .cells
-                    .kill(
-                        reached,
-                        |one| {
-                            CLOBBER_ASKS.with(|asks| asks.set(asks.get() + 1));
-                            !one.unwritable() && may_clobber(unit, known, one, store)
-                        },
-                        displaced,
-                    );
-            }
-        }
-    }
-    if let Some(expected) = expected {
-        assert!(
-            holders.iter().eq(expected.iter()),
-            "the cells a write reaches, found through the index, are not those it reaches among all"
-        );
-    }
-    if writes.is_none() {
-        return holders;
-    }
-    let found = stored_from(unit, accesses, inst)
-        .or_else(|| loaded_into(unit, accesses, inst).map(|(cell, value)| (cell, Operand::Value(value))));
-    if let Some((cell, value)) = found {
-        holders.insert(cell, value);
-    }
-    holders
-}
-
-/// Only what every predecessor agrees on, value and all.
-fn meet(maps: &[&Holders]) -> Holders {
-    let Some(first) = maps.first() else {
-        return Holders::default();
-    };
-    let mut out = (*first).clone();
-    for other in &maps[1..] {
-        let kept: IndexMap<MemRef, Operand> = out
-            .iter()
-            .filter(|(one, who)| other.get(*one) == Some(*who))
-            .map(|(one, who)| (one.clone(), *who))
-            .collect();
-        if kept.len() != out.len() {
-            out = Holders::of(kept, Rc::clone(&out.buckets));
-        }
-    }
-    out
-}
-
-thread_local! {
-    static CLOBBER_ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// Loads in `want` that a known value can serve, by the MemorySSA walk alone:
-/// no availability map is solved.
+/// Loads in `want` that a known value can serve, by the MemorySSA walk.
 pub fn forwardable_walk(
     unit: &Unit,
     accesses: &Accesses,
@@ -280,57 +94,6 @@ pub fn forwardable_walk(
     if missing.is_empty() { Vec::new() } else { memory_providers(unit, accesses, &missing) }
 }
 
-/// How the loads the availability map serves and those the walk serves compare.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Comparison {
-    /// Served by both, with the same value.
-    pub same: usize,
-    /// Served by both, with different values.
-    pub different: usize,
-    /// Served by the map only, and of those, invariant loads.
-    pub map_only: usize,
-    pub map_only_invariant: usize,
-    pub walk_only: usize,
-}
-
-/// `forwardable_by`'s loads against `forwardable_walk`'s.
-pub fn compared(
-    unit: &Unit,
-    map: &[Forward],
-    walk: &[Forward],
-) -> Comparison {
-    // A served load's own value is replaced by its provider, so a provider that
-    // is itself a served load stands for what serves that: both sides are
-    // compared at the end of their chains.
-    let root = |forwards: &[Forward], mut value: Operand| {
-        let served: HashMap<ValueId, Operand> =
-            forwards.iter().filter_map(|one| Some((unit.function.instruction(one.at).result?, one.value))).collect();
-        for _ in 0..forwards.len() + 1 {
-            match value {
-                Operand::Value(at) if served.contains_key(&at) => value = served[&at],
-                _ => break,
-            }
-        }
-        value
-    };
-    let by_walk: IdMap<InstId, Operand> = walk.iter().map(|one| (one.at, root(walk, one.value))).collect();
-    let by_map: IdMap<InstId, Operand> = map.iter().map(|one| (one.at, root(map, one.value))).collect();
-    let mut out = Comparison::default();
-    for one in map {
-        match by_walk.get(&one.at) {
-            Some(value) if *value == by_map[&one.at] => out.same += 1,
-            Some(_) => out.different += 1,
-            None => {
-                out.map_only += 1;
-                out.map_only_invariant +=
-                    usize::from(llrm_mir::memory::invariant_load(unit.context, unit.layout, unit.function, one.at));
-            }
-        }
-    }
-    out.walk_only = walk.iter().filter(|one| !by_map.contains_key(&one.at)).count();
-    out
-}
-
 thread_local! {
     static WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -339,80 +102,6 @@ thread_local! {
 /// function numbered twice walks once.
 pub fn walked() -> usize {
     WALKED.with(std::cell::Cell::get)
-}
-
-/// How many times this thread has asked whether a write clobbers a held cell,
-/// for a test that a store does not ask of every cell held.
-pub fn clobber_asks() -> usize {
-    CLOBBER_ASKS.with(std::cell::Cell::get)
-}
-
-/// Which value each cell holds, at every block's entry and exit.
-pub fn holders(
-    unit: &Unit,
-    accesses: &Accesses,
-) -> Held {
-    SOLVED.with(|solved| solved.set(solved.get() + 1));
-    // Register facts only: a memory-aware solve per query costs more than it
-    // finds.
-    let known: BTreeMap<ValueId, Interval> = ranges::constants(unit).into_iter().collect();
-    let graph = cfg::graph(unit.function);
-    let entry = unit.function.entry().map(cfg::id);
-    let preds = loops::predecessors(&graph);
-    let mut into: IndexMap<i64, Holders> = graph.iter().map(|block| (block.at, Holders::default())).collect();
-    let mut outof = into.clone();
-
-    // A block whose parents' exits are unchanged would recompute its own.
-    let mut stale: HashSet<i64> = graph.iter().map(|block| block.at).collect();
-    let mut changing = true;
-    while changing {
-        changing = false;
-        for block in &graph {
-            if !stale.remove(&block.at) {
-                continue;
-            }
-            let arriving = if Some(block.at) == entry {
-                Holders::default()
-            } else {
-                meet(&preds[&block.at].iter().map(|one| &outof[one]).collect::<Vec<_>>())
-            };
-            let mut leaving = arriving.clone();
-            for &inst in unit.function.block(cfg::block(block.at)).instructions() {
-                leaving = after(unit, accesses, inst, leaving, Some(&known));
-            }
-            if leaving != outof[&block.at] {
-                stale.extend(&block.succ);
-            }
-            if arriving != into[&block.at] || leaving != outof[&block.at] {
-                into.insert(block.at, arriving);
-                outof.insert(block.at, leaving);
-                changing = true;
-            }
-        }
-    }
-
-    Held { into, outof, known }
-}
-
-/// What holds `reference`'s bytes just before `at`.
-///
-/// A new use extends its lifetime; this says nothing about its allocation.
-pub fn provider(
-    unit: &Unit,
-    accesses: &Accesses,
-    at: InstId,
-    reference: &MemRef,
-) -> Option<Operand> {
-    let found = holders(unit, accesses);
-    let block = unit.function.parent(at)?;
-    let mut current = found.into[&cfg::id(block)].clone();
-    for &inst in unit.function.block(block).instructions() {
-        if inst == at {
-            return current.naming(unit, reference, |_| true).map(|(_, who)| *who);
-        }
-        current = after(unit, accesses, inst, current, Some(&found.known));
-    }
-    None
 }
 
 /// A load whose bytes equal a known value.
@@ -753,64 +442,23 @@ fn aborts(
         .is_some_and(|last| unit.function.instruction(last).opcode == Opcode::Unreachable)
 }
 
-/// Loads in `want` that a known value can serve instead of memory.
-///
-/// The caller replaces the load, extending the provider's lifetime.
-pub fn forwardable(
-    unit: &Unit,
-    accesses: &Accesses,
-    want: &IdSet<InstId>,
-) -> Vec<Forward> {
-    forwardable_by(unit, accesses, want, &holders(unit, accesses))
-}
-
-/// `forwardable`, from the cells `held` says each block holds (`holders` of a
-/// function with the same instructions, which a caller that asks of the
-/// function twice, the second time as the first left it, works out once).
-pub fn forwardable_by(
-    unit: &Unit,
-    accesses: &Accesses,
-    want: &IdSet<InstId>,
-    held: &Held,
-) -> Vec<Forward> {
-    let mut found = Vec::new();
-    let mut missing = Vec::new();
-
-    for &at in unit.function.layout() {
-        let mut current = held.into[&cfg::id(at)].clone();
-        for &inst in unit.function.block(at).instructions() {
-            if want.contains(&inst)
-                && let Some((cell, result)) = loaded_into(unit, accesses, inst)
-            {
-                match current.naming(unit, &cell, |who| serves(unit, *who, result)) {
-                    Some((_, who)) => found.push(Forward { at: inst, value: *who }),
-                    None => missing.push(inst),
-                }
-            }
-            current = after(unit, accesses, inst, current, Some(&held.known));
-        }
-    }
-    if !missing.is_empty() {
-        found.extend(memory_providers(unit, accesses, &missing));
-    }
-    found
-}
-
 thread_local! {
-    static SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static SAMES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many times this thread has solved what each block holds (`holders`), for
-/// a test that a pass asking twice of one function solves it once.
-pub fn solved() -> usize {
-    SOLVED.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has compared a load's bytes with a missing one's
 /// in `memory_providers`.
 pub fn same_runs() -> usize {
     SAMES.with(std::cell::Cell::get)
+}
+
+/// Whether `holder` can stand for `value`: it has its type.
+fn serves(
+    unit: &Unit,
+    holder: Operand,
+    value: ValueId,
+) -> bool {
+    unit.operand_type(holder) == Some(unit.function.value(value).ty)
 }
 
 /// Recover dominating memory values the forward lattice lost at loops.

@@ -118,3 +118,23 @@ def test_the_cells_axis_reads_n_distinct_cells_after_the_stores_to_every_cell_be
     stored = {line.split("]")[0].split("[")[1] for line in text.splitlines() if line.strip().startswith("cell[") and "=" in line}
     assert stored == {str(k) for k in range(10)}, stored
     assert gate.SIZES["cells"] == 112
+
+
+def test_the_steps_that_scanned_every_function_per_function_stay_linear_in_the_functions(tmp_path):
+    """4,096 small functions at -O2 cost 385 G instructions: call-effects and summaries callbacks added up every entry's summary
+    for each body and for each entry that changed (126 G and 89 G, 2N/N = 3.9 each), and trivialunswitch copied the callees map for
+    each function (9 G, 3.9). The front end read every fact stated so far to say one more, scanned every wccq node for each parameter's
+    facts (frontend translate 26 G, 1.9) and rebuilt the function's value and place maps and searched all its calls' ABIs for each call
+    instruction (hir to mir 12 G, 1.9). A step 2N/N above 2.2 (slope 1.1) on the `functions` axis fails; a few Minstr of start-up are allowed."""
+    n = 128
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"functions_{label}.c"
+        source.write_text("" if size == 0 else scaling.functions(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    grown = {}
+    for step in ("analysis call-effects", "summaries callbacks", "mir trivialunswitch", "frontend translate", "hir to mir"):
+        small, big = (own[label].get(step, 0.0) - own["empty"].get(step, 0.0) for label in ("n", "2n"))
+        if big > 2.2 * small + 5.0:
+            grown[step] = f"{small:.1f} -> {big:.1f} Minstr"
+    assert not grown, grown

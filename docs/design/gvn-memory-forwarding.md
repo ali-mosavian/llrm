@@ -167,3 +167,7 @@ rewrite would still need. Step 3 converges on sccvn's reference table.
   starts every block empty and loses them at a loop header).
 - Several stores covering one load: served by neither mechanism today (both
   need `same_bytes`); sccvn combines partial defs. Out of scope.
+
+## Status
+
+Steps 1-5 are done: the walk serves every load, and the availability map, `LLRM_CHECK_GVN`, `LLRM_CHECK_HOLDERS` and `-fgvn-dataflow` are deleted.

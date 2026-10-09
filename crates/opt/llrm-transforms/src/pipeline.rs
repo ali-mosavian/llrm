@@ -25,7 +25,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use llrm_analysis::cfg;
-use llrm_analysis::manager::{GlobalsAA, ProgramSummaries, Summaries};
+use llrm_analysis::manager::{Callbacks, GlobalsAA, ProgramSummaries, Summaries};
 use llrm_analysis::peelsize::Limits;
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module, UnnamedAddr};
@@ -59,9 +59,6 @@ pub struct Options {
     pub hoist: bool,
     pub forward: bool,
     pub drop_loads: bool,
-    /// gvn forwards loads from each block's available cells as well as by the
-    /// MemorySSA walk (`-fgvn-dataflow`); off, by the walk alone.
-    pub gvn_dataflow: bool,
     pub drop_stores: bool,
     pub promote: bool,
     pub strength: bool,
@@ -100,7 +97,6 @@ impl Default for Options {
             ipa_ranges: true,
             forward: true,
             drop_loads: true,
-            gvn_dataflow: false,
             drop_stores: true,
             promote: true,
             strength: true,
@@ -286,7 +282,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // one.
         Box::new(inferspace::InferAddressSpaces),
         Box::new(dse::Dse),
-        Box::new(gvn::Gvn { dataflow: applied.options.gvn_dataflow }),
+        Box::new(gvn::Gvn),
         // Ordinary scalar write-through promotion remains after memory GVN.
         Box::new(promote::Promote),
         Box::new(indvars::IndVars),
@@ -349,6 +345,7 @@ pub fn recorded(
     // As LLVM's O2 requires GlobalsAA before the function pipeline.
     manager.require::<GlobalsAA>();
     manager.require::<Summaries>();
+    manager.require::<Callbacks>();
     manager.require_program::<ProgramSummaries>();
     // As LLVM's O2 runs GlobalOpt before the function pipeline.
     manager.add_module(globalopt::GlobalOpt);
