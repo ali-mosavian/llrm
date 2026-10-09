@@ -108,6 +108,12 @@ def raw_output(work: Path, stem: str) -> bytes:
     return b""
 
 
+def exe_size(work: Path, stem: str) -> int:
+    """The bytes of the EXE a job linked, or 0."""
+    exe = work / f"{stem}.EXE"
+    return exe.stat().st_size if exe.is_file() else 0
+
+
 def dos_stem(stem: str) -> str:
     """The one 8.3 basename used by a differential job and its artifacts."""
     if not stem or any(not (character.isascii() and (character.isalnum() or character == "_")) for character in stem):
@@ -123,6 +129,8 @@ class Differential:
     candidate: dosbatch.Result
     difference: str
     screen_difference: str
+    # The linked EXEs, BCOM45's and LLRMQB's, in bytes.
+    sizes: tuple[int, int] = (0, 0)
 
 
 def differential_batch(
@@ -140,7 +148,7 @@ def differential_batch(
     def session(pairs: list[tuple[str, dosbatch.Job]]):
         results = dosbatch.run([job for _, job in pairs], run)
         return {
-            name: (results[job.stem], raw_output(run, job.stem), screen_changes(run, at))
+            name: (results[job.stem], raw_output(run, job.stem), screen_changes(run, at), exe_size(run, job.stem))
             for at, (name, job) in enumerate(pairs)
         }
 
@@ -153,22 +161,50 @@ def differential_batch(
     )
     found = {}
     for name in objects:
-        (want, want_bytes, want_screen), (got, got_bytes, got_screen) = reference[name], candidate[name]
+        (want, want_bytes, want_screen, want_size), (got, got_bytes, got_screen, got_size) = (
+            reference[name],
+            candidate[name],
+        )
+        sizes = (want_size, got_size)
         if want.status != "ok" or got.status != "ok":
-            found[name] = Differential(want, got, "a differential side did not complete", "")
+            found[name] = Differential(want, got, "a differential side did not complete", "", sizes)
         elif want_screen is None or got_screen is None:
-            found[name] = Differential(want, got, first_byte_difference(want_bytes, got_bytes), "screen capture unavailable")
+            found[name] = Differential(
+                want, got, first_byte_difference(want_bytes, got_bytes), "screen capture unavailable", sizes
+            )
         else:
             found[name] = Differential(
-                want, got, first_byte_difference(want_bytes, got_bytes), first_screen_difference(want_screen, got_screen)
+                want,
+                got,
+                first_byte_difference(want_bytes, got_bytes),
+                first_screen_difference(want_screen, got_screen),
+                sizes,
             )
     return found
+
+
+def frontend_flags(source: Path) -> list[str]:
+    """The llrm-qb options a source's `' flags:` line asks for (the rest are for other compilers)."""
+    for line in source.read_text().splitlines()[:5]:
+        if line.startswith("' flags:"):
+            return [word for word in line.split()[2:] if word == "--huge-arrays"]
+    return []
 
 
 def compile_basic(source: Path, obj: Path, runtime: str) -> str | None:
     """`source` as llrm-qb compiles it for `runtime` (qb45 or llrm); the reason it did not, or None."""
     done = subprocess.run(
-        [str(dosbatch.BIN / "llrm-qb"), str(source), "--dialect", "qb45", f"-fqb-runtime={runtime}", "-O2", "-o", str(obj)],
+        [
+            str(dosbatch.BIN / "llrm-qb"),
+            str(source),
+            "--dialect",
+            "qb45",
+            f"-fqb-runtime={runtime}",
+            "-O2",
+            *frontend_flags(source),
+            "-o",
+            str(obj),
+        ],
         capture_output=True,
         text=True,
         timeout=300,
