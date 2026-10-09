@@ -289,3 +289,28 @@ def test_a_flagged_step_names_the_steps_of_its_axis_that_rose():
     now = made(passes={"live O1 lir peephole": [5.0, 10.0, 22.0, whole], "live O1 regalloc engine": [5.0, 10.0, 17.0, whole], "live O1 isel": [5.0, 10.0, 21.0, whole]})
     bad = measure.rises(base, now, TOL)[1]
     assert any("lir peephole" in line and "regalloc engine" not in line.split(";")[0] and "isel +1.0 Minstr" in line for line in bad), bad
+
+
+def test_work_moved_into_a_new_row_is_judged_by_the_axis_not_by_the_row():
+    """A value solve moved out of call-effects and points-to into an analysis of its own ('callers O2 analysis pointer-values'): the
+    base has no such row, so the step rule took it to have had no superlinear work and failed the PR, though the axis total fell and
+    the compile got cheaper. A row absent from the base has no step baseline: only the axis it belongs to can judge it."""
+    whole = 1000.0
+    quad = lambda k, share=1.0: [*cost(0, 0, k), whole]
+    base = made(axes={"callers O2": cost(0, 100, 0.02)}, passes={"callers O2 analysis call-effects": quad(0.02)})
+    moved = made(
+        axes={"callers O2": cost(0, 100, 0.0199)},
+        passes={"callers O2 analysis call-effects": quad(0.0001), "callers O2 analysis pointer-values": quad(0.0198)},
+    )
+    assert measure.rises(base, moved, TOL)[1] == []
+
+
+def test_a_new_row_on_an_axis_whose_superlinear_work_rose_still_fails():
+    whole = 1000.0
+    quad = lambda k: [*cost(0, 0, k), whole]
+    base = made(axes={"callers O2": cost(0, 100, 0.02)}, passes={"callers O2 analysis call-effects": quad(0.02)})
+    grown = made(
+        axes={"callers O2": cost(0, 100, 0.06)},
+        passes={"callers O2 analysis call-effects": quad(0.02), "callers O2 analysis pointer-values": quad(0.04)},
+    )
+    assert measure.rises(base, grown, TOL)[1] != []

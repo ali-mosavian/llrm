@@ -142,3 +142,35 @@ b3:
     let after = sunk(text, &[&[1, 1], &[2, -1]]);
     assert_eq!((after.matches("getelementptr").count(), after.matches("sub i16").count()), (1, 1), "{after}");
 }
+
+/// A test GVN'd with its copy ahead of a loop was one `i1` that the branch at
+/// the loop's bottom read, held across the whole body (hanoi with its header
+/// copied: `sete cl`, a store of the byte, `cmp cl, 0`, `jne` at each of eight
+/// levels). It is made again in the block that reads it, as CodeGenPrepare's
+/// `sinkCmpExpression` does, and the original stays for the block that made it.
+#[test]
+fn test_a_comparison_a_branch_in_another_block_reads_is_made_again_there() {
+    let text = "define i16 @f(i16 %n) {
+b0:
+  %c = icmp eq i16 %n, 0
+  br i1 %c, label %b3, label %b1
+
+b1:
+  %m = mul i16 %n, 3
+  br label %b2
+
+b2:
+  br i1 %c, label %b3, label %b4
+
+b3:
+  ret i16 %n
+
+b4:
+  ret i16 %m
+}
+";
+    let after = sunk(text, &[&[0], &[1], &[5]]);
+    assert_eq!(after.matches("icmp eq").count(), 2, "{after}");
+    let b2 = after.split("b2:").nth(1).expect("a block b2");
+    assert!(b2.contains("icmp eq") && !b2.contains("br i1 %c"), "{after}");
+}

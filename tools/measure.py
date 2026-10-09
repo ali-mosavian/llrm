@@ -245,13 +245,18 @@ def axis_rises(base: dict[str, list[int]], now: dict[str, list[int]], tol: dict)
     return lines, bad
 
 
-def step_rises(base: dict[str, list[float]], now: dict[str, list[float]], tol: dict) -> tuple[list[str], list[str]]:
+def step_rises(
+    base: dict[str, list[float]], now: dict[str, list[float]], tol: dict, judged: frozenset[str] = frozenset()
+) -> tuple[list[str], list[str]]:
     """A step of `high` share or more whose second difference rose by `step_excess` of the compile's cost at 2N, or whose cost at 2N rose
     by `pass_slack`, fails. A step the base did not read is taken to have had none; one below `high`, or on the edge of the share floor,
-    does not fail either way."""
+    does not fail either way. A new step on an axis both measurements carry (`judged`) has no step baseline, since work moved into an
+    analysis of its own was in other steps' spans before: the axis rule judges it."""
     lines, bad = [], []
     for key, (half, small, big, whole) in sorted(now.items()):
         if big < tol["high"] * whole:
+            continue
+        if key not in base and " ".join(key.split(" ")[:2]) in judged:
             continue
         was_half, was_small, was_big, _ = base.get(key, [half, small, big, whole])
         more = superlinear(half, small, big) - (superlinear(was_half, was_small, was_big) if key in base else 0.0)
@@ -277,7 +282,8 @@ def risen_elsewhere(key: str, base: dict[str, list[float]], now: dict[str, list[
 def rises(base: dict, now: dict, tol: dict | None = None) -> tuple[list[str], list[str]]:
     tol = tol or tolerances()
     lines, bad = [], []
-    for part, check in (("compile", compile_rises), ("axes", axis_rises), ("passes", step_rises)):
+    judged = frozenset(base["axes"].keys() & now["axes"].keys())
+    for part, check in (("compile", compile_rises), ("axes", axis_rises), ("passes", lambda b, n, t: step_rises(b, n, t, judged))):
         got = check(base[part], now[part], tol)
         lines += got[0]
         bad += got[1]
