@@ -1371,7 +1371,7 @@ mod tests {
     #[test]
     fn test_a_carve_finds_the_definitions_of_its_value_from_the_postings() {
         let body = _pointer_across_a_loop();
-        let made = spiller::recomputed(&body, 3).expect("v3 is a constant made once");
+        let made = crate::backend::spiller::recomputed(&body, 3).expect("v3 is a constant made once");
         assert_eq!(made.defines, [3]);
         assert_eq!(body.facts.0.counted("recomputed-definitions"), 1, "the one definition, from the postings");
     }
