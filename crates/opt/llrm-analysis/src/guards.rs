@@ -25,8 +25,21 @@ pub struct Guard {
     pub right: Scev,
 }
 
+#[cfg(test)]
+thread_local! {
+    static FOUND: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has found the guards of a block, for a test that a block asked of again is not found again.
+#[cfg(test)]
+pub(crate) fn found() -> usize {
+    FOUND.with(std::cell::Cell::get)
+}
+
 /// The compares proven on entry to block `at`.
 pub fn guards(unit: &Unit, at: i64) -> Vec<Guard> {
+    #[cfg(test)]
+    FOUND.with(|found| found.set(found.get() + 1));
     let function = unit.function;
     let shape = unit.shape();
     let assumed = unit.assumptions();
