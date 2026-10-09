@@ -258,8 +258,20 @@ def step_rises(base: dict[str, list[float]], now: dict[str, list[float]], tol: d
         if more > tol["step_excess"] * whole or (key in base and big > was_big * tol["pass_slack"]):
             shown = f"{half}/{small}/{big} against {was_half}/{was_small}/{was_big}"
             lines.append(f"{key}: second difference {second(half, small, big):.1f} Minstr (base {second(was_half, was_small, was_big) if key in base else 0.0:.1f}), 2N x{big / was_big:.3f} ({shown})")
-            bad.append(f"{key}: superlinear work {second(half, small, big):.1f} Minstr rose by {more / whole:.4f} of the compile (> {tol['step_excess']}), or 2N x{big / was_big:.3f} ({shown})")
+            bad.append(f"{key}: superlinear work {second(half, small, big):.1f} Minstr rose by {more / whole:.4f} of the compile (> {tol['step_excess']}), or 2N x{big / was_big:.3f} ({shown}){risen_elsewhere(key, base, now)}")
     return lines, bad
+
+
+def risen_elsewhere(key: str, base: dict[str, list[float]], now: dict[str, list[float]]) -> str:
+    """The other steps of `key`'s axis and level whose cost at 2N rose most: work moved into an engine that runs inside another step's span
+    flags that step, though the total falls, and the callee is where the rise is."""
+    prefix = key.rsplit(" ", 1)[0].split(" ")[:2]
+    rows = []
+    for other, (_, _, big, _) in now.items():
+        if other != key and other.split(" ")[:2] == prefix and other in base and big > base[other][2]:
+            rows.append((big - base[other][2], other))
+    rows.sort(reverse=True)
+    return "; steps of the same axis and level that rose: " + ", ".join(f"{name.split(' ', 2)[2]} +{rise:.1f} Minstr" for rise, name in rows[:3]) if rows else ""
 
 
 def rises(base: dict, now: dict, tol: dict | None = None) -> tuple[list[str], list[str]]:

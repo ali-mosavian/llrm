@@ -66,6 +66,13 @@ measured in each, as -% of the compile instructions of the file named (2026-10-0
 Same sign and size, except where one step shrinks a share the faster build has already made smaller (#1032's -17.3% is -13.8% on `dist`:
 the peel it removed was a larger part of a slower compile).
 
+### Reading a flagged step
+
+Work done by a shared engine is timed under the engine's own span, and a step's row is only its own code. Moving a step's work into an
+engine that runs inside another step's span (a cleanup, an allocator route, a solver) raises that step's row even where the total falls;
+the fix is to give the engine its own span, not to move the tolerance. A flagged step row names the steps of its axis and level whose
+cost at 2N rose most: the callee that took the work is among them.
+
 ## What belongs in the suite
 
 Tests assert program behavior, representation invariants, or a named regression.
