@@ -213,7 +213,10 @@ pub fn trips(proof: &CountedLoop, computed: &mut Computed<'_>) -> Option<AffineO
         let solved = if *bits < width { computed(BinaryOp::And, vec![solved, AffineOperand::constant((BigInt::from(1) << *bits) - 1, width)]) } else { solved };
         return Some(if proof.posttested { computed(BinaryOp::Add, vec![solved, AffineOperand::constant(1, width)]) } else { solved });
     }
-    if proof.posttested && !(proof.entry_guarded && matches!(proof.reach, Reach::Ceil { .. })) {
+    // Tested after its trips, the loop makes the trips a pre-tested one would where its entry is guarded or its count is known:
+    // by unit steps and a stepped test the trips from `start` to `bound` are the same (`entered`, which sets `entry_guarded`).
+    let guarded_unit = proof.entry_guarded && proof.stepped && matches!(proof.reach, Reach::Distance);
+    if proof.posttested && proof.count.is_none() && !(proof.entry_guarded && matches!(proof.reach, Reach::Ceil { .. })) && !guarded_unit {
         return None;
     }
     if let Some(count) = &proof.count {
