@@ -227,3 +227,34 @@ b3:
     let flat = Peel { limits: Limits { grows: false, ..Limits::default() }, ..Peel::default() };
     assert!(through(sum, flat).0);
 }
+
+/// `loops` sequential loops of eight trips, each with a body of forty multiplies except the last, which has one: all the loops
+/// but the last are over the budget of a peel.
+fn sequence(loops: usize) -> String {
+    let mut text = String::from("define i16 @f(i16 %x) {\nb0:\n  br label %h0\n\n");
+    for k in 0..loops {
+        let next = if k + 1 == loops { "end".to_owned() } else { format!("h{}", k + 1) };
+        let (seed, before) = if k == 0 { ("%x".to_owned(), "b0".to_owned()) } else { (format!("%a{}", k - 1), format!("x{}", k - 1)) };
+        let muls = if k + 1 == loops { 1 } else { 40 };
+        let body: String = (0..muls).map(|j| format!("  %m{k}_{j} = mul i16 {}, 3\n", if j == 0 { format!("%a{k}") } else { format!("%m{k}_{}", j - 1) })).collect();
+        text += &format!(
+            "h{k}:\n  %i{k} = phi i16 [ 0, %{before} ], [ %n{k}, %y{k} ]\n  %a{k} = phi i16 [ {seed}, %{before} ], [ %m{k}_{last}, %y{k} ]\n  %go{k} = icmp slt i16 %i{k}, 8\n  br i1 %go{k}, label %y{k}, label %x{k}\n\ny{k}:\n{body}  %n{k} = add i16 %i{k}, 1\n  br label %h{k}\n\nx{k}:\n  br label %{next}\n\n",
+            last = muls - 1
+        );
+    }
+    text + &format!("end:\n  ret i16 %a{}\n}}\n", loops - 1)
+}
+
+/// A function's frequencies, as the loops ask for them, were worked out once per loop looked at that was counted and not peeled: k loops
+/// over budget and one peeled cost 2k estimates of the whole function (`nbody_single -Omax`: `peel` 22% of the compile,
+/// 17 points of it in `branchprob::estimated`). They are worked out once for each version of the function.
+#[test]
+fn a_functions_frequencies_are_worked_out_once_for_all_the_loops_asking() {
+    let loops = 6;
+    let before = super::profit::frequencies_worked();
+    let tight = Peel { limits: Limits { max_unrolled_operations: 100, target_percent: 0, ..Limits::default() }, ..Peel::default() };
+    let (changed, _) = through(&sequence(loops), tight);
+    let worked = super::profit::frequencies_worked() - before;
+    assert!(changed);
+    assert!(worked <= 2, "{worked} estimates for {loops} loops");
+}
