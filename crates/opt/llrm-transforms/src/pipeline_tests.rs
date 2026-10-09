@@ -620,3 +620,85 @@ b:
     assert!(ranged(pipeline::Options::standard()), "premise: -O2 states the range");
     assert!(!ranged(pipeline::Options::basic()), "-O1 stated a range from the callers' arguments");
 }
+
+thread_local! {
+    static BURNED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// An analysis that costs a lot.
+struct Costly;
+
+impl llrm_mir::passes::Analysis for Costly {
+    type Result = u64;
+    const NAME: &'static str = "costly";
+    fn run(
+        _: &llrm_mir::context::Context,
+        _: &llrm_mir::datalayout::DataLayout,
+        _: &llrm_mir::module::Function,
+        _: &mut llrm_mir::passes::Analyses,
+    ) -> u64 {
+        let mut sum = 0u64;
+        for at in 0..2_000_000u64 {
+            sum = std::hint::black_box(sum.wrapping_add(at));
+        }
+        BURNED.with(|burned| burned.set(sum));
+        sum
+    }
+}
+
+/// Finds nothing to do, having asked for `Costly`.
+struct Asks;
+
+impl llrm_mir::passes::FunctionPass for Asks {
+    fn name(&self) -> &'static str {
+        "asks"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        analyses.get::<Costly>(unit.context, unit.layout, unit.function);
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// `LLRM_DEBUG=runs` billed a pass with the analyses it computed first: 63% of
+/// the pipeline's work read as idle (floatloop 5.7 G, sroa 5.0 G) when the
+/// passes' own work was 3% and the analyses were reused by the next pass to
+/// ask. A step now says how much of its work was its own.
+#[test]
+fn test_a_steps_own_work_leaves_out_the_analyses_it_computed() {
+    use llrm_mir::module::{GlobalKind, Module};
+    use llrm_mir::passes::{Analyses, Declared, Outer, Unit};
+    llrm_mir::passes::observe(llrm_mir::passes::Observer {
+        span: |kind, _, run| if kind == "analysis" { llrm_support::debug::analysed(run) } else { run() },
+        function: |_, run| run(),
+        count: |_, _| {},
+    });
+    let mut module: Module = crate::testing::parsed("define i16 @f() {\nb:\n  ret i16 0\n}\n");
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let mut analyses = Analyses::new(std::rc::Rc::new(Outer::of(&module, None)));
+    let mut declared = Declared::of(&module);
+    let Module { context, globals, metadata, .. } = &mut module;
+    let GlobalKind::Function(function) = &mut globals[0].kind else { panic!("a function") };
+    let mut unit = Unit { context, layout: &layout, function, id: None, metadata, declared: &mut declared };
+    let mut run = super::Run {
+        version: 0,
+        promotes: true,
+        dump: None,
+        rounds: 0,
+        steps: 0,
+        skipped: 0,
+        fixed: 0,
+        billing: true,
+        idle: 0,
+        useful: 0,
+        idle_with_analyses: 0,
+        useful_with_analyses: 0,
+    };
+    run.step(&mut Asks, "asks", &mut unit, &mut analyses);
+    assert!(run.idle_with_analyses > 1_000_000, "premise: the analysis cost {} ", run.idle_with_analyses);
+    assert!(run.idle * 10 < run.idle_with_analyses, "own {} of {} with the analysis", run.idle, run.idle_with_analyses);
+}
