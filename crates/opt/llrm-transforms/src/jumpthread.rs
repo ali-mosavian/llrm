@@ -54,6 +54,9 @@ const MAX_COPIED: usize = 400;
 /// `size`: code size outranks speed, and a path is never copied.
 pub struct JumpThread {
     pub size: bool,
+    /// A branch the way into its block settles is threaded to its arm there:
+    /// the guards a header copy leaves.
+    pub correlated: bool,
 }
 
 impl FunctionPass for JumpThread {
@@ -71,7 +74,7 @@ impl FunctionPass for JumpThread {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        if !threaded(unit.context, unit.layout, unit.function, &outer, self.size) {
+        if !threaded(unit.context, unit.layout, unit.function, &outer, self.size, self.correlated) {
             return PreservedAnalyses::all();
         }
         // What the copies know of their state: a product by a constant, a
@@ -105,6 +108,7 @@ pub fn threaded(
     function: &mut Function,
     outer: &Outer,
     size: bool,
+    correlate: bool,
 ) -> bool {
     // The common function has nothing to thread: no analysis is made for it.
     let unit = memory::Unit::within(context, layout, function, outer);
@@ -119,7 +123,17 @@ pub fn threaded(
                     )
                 }),
         );
-    if !any {
+    // Or a branch on a compare, at a join of ways that may each settle it.
+    let joined = !size
+        && correlate
+        && function.walk().any(|(block, inst)| {
+            let op = function.instruction(inst);
+            op.opcode == Opcode::Br && op.operands.len() == 3 && function.predecessors(block).len() > 1 && matches!(
+                op.operands[0],
+                Operand::Value(c) if matches!(function.value(c).def, ValueDef::Instruction(made) if matches!(function.instruction(made).opcode, Opcode::ICmp(_)) && compared_again(function, block, c))
+            )
+        });
+    if !any && !joined {
         return false;
     }
     let mut copied = 0;
@@ -128,7 +142,7 @@ pub fn threaded(
     // the copies made is not threaded again, or a loop would be peeled one
     // trip at a time. GCC registers its threads once and applies them together.
     let mut rounds = 0;
-    while let Some(paths) = found(context, layout, function, outer, copied, size, rounds == 0) {
+    while let Some(paths) = found(context, layout, function, outer, copied, size, rounds == 0, correlate) {
         rounds += 1;
         llrm_support::debug!("jumpthread", "{} paths, {} instructions copied so far", paths.len(), copied);
         // A path of phis and a branch copies no instruction and still spends
@@ -152,6 +166,7 @@ fn found(
     copied: usize,
     size: bool,
     branches: bool,
+    correlate: bool,
 ) -> Option<Vec<Path>> {
     let shape = cfg::Shape::of(function);
     let unit = memory::Unit::within(context, layout, function, outer).with_shape(&shape);
@@ -166,6 +181,59 @@ fn found(
         // the state's phi stays within.
         let loop_ =
             shape.loops.iter().filter(|one| one.body.contains(&cfg::id(block))).min_by_key(|one| one.body.len());
+        // A branch on a compare that the way into the block settles, from the
+        // branches above that way: threaded to its arm there.
+        if branches && correlate && size == false && function.instruction(last).opcode == Opcode::Br {
+            let ways = match function.instruction(last).operands.first() {
+                Some(&Operand::Value(condition)) if compared_again(function, block, condition) => {
+                    correlated(function, &unit, block, last)
+                }
+                _ => Vec::new(),
+            };
+            let mut paths = Vec::new();
+            let mut spent = copied;
+            for (source, target) in ways {
+                if source == block
+                    || !copyable(function, block)
+                    || shape.loops.iter().any(|l| l.header == cfg::id(block) && !l.body.contains(&cfg::id(source)))
+                {
+                    continue;
+                }
+                let killed_here = matches!(
+                    function.instruction(last).operands.first(),
+                    Some(&Operand::Value(c)) if matches!(function.value(c).def, ValueDef::Instruction(made) if function.parent(made) == Some(block) && matches!(function.instruction(made).opcode, Opcode::ICmp(_)))
+                );
+                let copies = function
+                    .block(block)
+                    .instructions()
+                    .iter()
+                    .filter(|&&inst| {
+                        function.instruction(inst).opcode != Opcode::Phi
+                            && !function.instruction(inst).opcode.is_terminator()
+                    })
+                    .count()
+                    .saturating_sub(usize::from(killed_here));
+                let phis = if function.predecessors(block).len() > 1 && function.successors(block).len() > 1 {
+                    function
+                        .block(block)
+                        .instructions()
+                        .iter()
+                        .filter(|&&inst| function.instruction(inst).opcode == Opcode::Phi)
+                        .count()
+                } else {
+                    0
+                };
+                let copies = copies + phis;
+                if copies > (BRANCH_PATH - 1) / PATH_SCALE || spent + copies > MAX_COPIED {
+                    continue;
+                }
+                spent += copies.max(1);
+                paths.push(Path { from: source, blocks: vec![block], target });
+            }
+            if !paths.is_empty() {
+                return Some(paths);
+            }
+        }
         // A switch is the state machine of a loop; a branch on a constant a
         // path decides is threaded wherever it is.
         let Some((state, decide)) = decided(function, &unit, last) else { continue };
@@ -270,6 +338,92 @@ fn found(
         }
     }
     None
+}
+
+/// Whether the branch `at` on the compare `condition` has a branch above it, on
+/// a compare of one of its operands: a branch the way in settles is one that
+/// some branch on the way compared too. The compares of the operand are the
+/// only ones asked, and each of their blocks must reach `at`.
+fn compared_again(
+    function: &Function,
+    at: BlockId,
+    condition: llrm_mir::module::ValueId,
+) -> bool {
+    let ValueDef::Instruction(made) = function.value(condition).def else { return false };
+    let mut above = Vec::new();
+    for operand in &function.instruction(made).operands {
+        let Operand::Value(value) = operand else { continue };
+        for one in function.users(*value) {
+            if one.user == made || !matches!(function.instruction(one.user).opcode, Opcode::ICmp(_)) {
+                continue;
+            }
+            let Some(result) = function.instruction(one.user).result else { continue };
+            for branch in function.users(result) {
+                if function.instruction(branch.user).opcode == Opcode::Br
+                    && let Some(there) = function.parent(branch.user)
+                    && there != at
+                {
+                    above.push(there);
+                }
+            }
+        }
+    }
+    if above.is_empty() {
+        return false;
+    }
+    // Reached from one of them by going back from `at`.
+    let mut seen = std::collections::BTreeSet::new();
+    let mut stack = function.predecessors(at);
+    while let Some(block) = stack.pop() {
+        if !seen.insert(block) {
+            continue;
+        }
+        if above.contains(&block) {
+            return true;
+        }
+        stack.extend(function.predecessors(block));
+    }
+    false
+}
+
+/// The predecessors of `block` from which the branch `last` goes one way for
+/// certain, each with its arm: where the compare it branches on is settled by
+/// what is known of the way in (`guards::on_edge`). A predecessor reaching it
+/// by two edges is not one way.
+fn correlated(
+    function: &Function,
+    unit: &memory::Unit,
+    block: BlockId,
+    last: InstId,
+) -> Vec<(BlockId, BlockId)> {
+    let operands = &function.instruction(last).operands;
+    let [Operand::Value(condition), Operand::Block(yes), Operand::Block(no)] = operands[..] else { return Vec::new() };
+    if yes == no || function.predecessors(block).len() < 2 {
+        return Vec::new();
+    }
+    // The compare it branches on was made above the way in, not by the block
+    // itself: a compare the block makes is made again on each
+    // trip, and what the way in knows of it is what the last trip's made.
+    let ValueDef::Instruction(made) = function.value(condition).def else { return Vec::new() };
+    let Some(home) = function.parent(made) else { return Vec::new() };
+    if home == block {
+        return Vec::new();
+    }
+    let shape = unit.shape();
+    let mut ways = Vec::new();
+    for source in function.predecessors(block) {
+        if function.terminator(source).is_some_and(|end| {
+            function.instruction(end).operands.iter().filter(|one| **one == Operand::Block(block)).count() != 1
+        }) || !shape.dominance.dominates(cfg::id(home), cfg::id(source))
+        {
+            continue;
+        }
+        let facts = llrm_analysis::guards::on_edge(unit, source, block);
+        if let Some(answer) = llrm_analysis::guards::decides(unit, &facts, condition) {
+            ways.push((source, if answer { yes } else { no }));
+        }
+    }
+    ways
 }
 
 /// What the terminator `last` decides from a phi: the phi's value, and where
