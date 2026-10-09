@@ -14,6 +14,7 @@ use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
 pub use crate::backend::lanes::{Lane, Lanes};
+use crate::backend::needs::{self, gated};
 use crate::backend::peep::{self, walk::Facts};
 use crate::backend::{
     affine, copyprop, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, sharedstores,
@@ -204,9 +205,10 @@ impl Peephole {
         // Before the rest: a thrashed copy is one fewer instruction for
         // everything below to reason about, and it is the only pass here
         // that can remove a copy the coalescer refused on colourability.
-        let body = regthrash::thrashed(phielim::unsplit(&body));
+        let mut seen = needs::Contents::default();
+        let body = gated(&mut seen, needs::COPY, phielim::unsplit(&body), |body| Ok(regthrash::thrashed(body)))?;
         let body = frame_copies(&body, &self.cpu, &self.classes)?;
-        let body = copyprop::forwarded(&body);
+        let body = gated(&mut seen, needs::COPY, body, |body| Ok(copyprop::forwarded(&body)))?;
         let body = extensions(self.rules, &body);
         let body = copysink::sunk(&body);
         let body = crate::backend::postrasink::sunk(&body);
@@ -232,16 +234,19 @@ impl Peephole {
                 )),
             ),
         );
-        let body = crate::backend::exactaddress::exact_addresses(&body, &self.cpu)?;
+        let body = gated(&mut seen, needs::EXACT_CELL, body, |body| {
+            crate::backend::exactaddress::exact_addresses(&body, &self.cpu)
+        })?;
         let body = addresses(&body, &self.cpu)?;
-        let body = secondary_bases(&body, &self.cpu)?;
+        let body = gated(&mut seen, needs::INSERTED | needs::BASED, body, |body| secondary_bases(&body, &self.cpu))?;
         let body = borrows(self.rules, &increments(self.rules, &body));
         let body = doubled(self.rules, &body, &self.cpu)?;
         let body = narrowed_arithmetic(self.rules, &body);
         // A zero upper half proven by the first is what the second reads, and
         // the copies it makes are forwarded.
         let body = if self.rules.zero_extensions.is_some() {
-            copyprop::forwarded(&zero_extensions(self.rules, &widened_moves(self.rules, &body)))
+            let body = zero_extensions(self.rules, &widened_moves(self.rules, &body));
+            gated(&mut seen, needs::COPY, body, |body| Ok(copyprop::forwarded(&body)))?
         } else {
             body
         };
@@ -254,7 +259,10 @@ impl Peephole {
         // one reads whole registers.
         let body = self._frame(body);
         let native = self.cpu.dword_address_form().is_some_and(|form| !form.secondary);
-        Ok(if native { body } else { crate::backend::upperzero::established(&body) })
+        if native {
+            return Ok(body);
+        }
+        gated(&mut seen, needs::UNHELD, body, |body| Ok(crate::backend::upperzero::established(&body)))
     }
 }
 
