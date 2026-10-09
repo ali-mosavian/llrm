@@ -1,4 +1,4 @@
-reason = "header copy behind -ftree-ch (off); guard predicted entered; preheader in front of a turned loop; entry proven from the enclosing counter: bintree c -0.5%, quicksort nib -1.2% instructions and -26 bytes; queens bas -O2 +0.6%, quicksort nib -Os +0.8% instructions"
+reason = "a spill store ahead of a branch is made on the path that reads the slot, off the other (bintree -2.5% instructions, quicksort c -0.8%, queens -0.1%); bintree nib -Os +1 byte (the store's edge block)"
 blessed = "2026-10-09"
 
 [bas.O2]
@@ -17,9 +17,9 @@ bss_bytes = 0
 kernel_ms = 1.9135
 
 [c.O2]
-instructions = 57264
+instructions = 57563
 memory_operands = 11227
-code_bytes = 281
+code_bytes = 283
 data_bytes = 0
 bss_bytes = 0
 

@@ -1,4 +1,4 @@
-reason = "header copy behind -ftree-ch (off); guard predicted entered; preheader in front of a turned loop; entry proven from the enclosing counter: bintree c -0.5%, quicksort nib -1.2% instructions and -26 bytes; queens bas -O2 +0.6%, quicksort nib -Os +0.8% instructions"
+reason = "the preheader of a turned loop is laid in front of it: queens bas -O2 +0.6% instructions"
 blessed = "2026-10-09"
 
 [bas.O2]
