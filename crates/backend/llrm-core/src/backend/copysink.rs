@@ -17,6 +17,7 @@ use std::sync::Arc;
 use crate::support::hash::IndexMap;
 
 use crate::analysis::loops as loopy;
+use crate::analysis::dataflow::{self, Direction};
 use crate::backend::liveness::{_backwards, _declared, _terminator, _universe};
 use crate::backend::peephole::{Lanes, _lanes, _register_effects, id};
 use crate::model::ir::{Loc, Operation, Reg};
@@ -106,25 +107,15 @@ fn _between(at_of: &IndexMap<i64, &LirBlock>, inside: &BTreeSet<i64>, copy_at: i
 /// The exit is left out: a lane only the exit reads is what the sunk copy is
 /// for, and a lane a nested loop reads again is not.
 fn _round(bits: u32, at_of: &IndexMap<i64, &LirBlock>, inside: &BTreeSet<i64>, universe: &Lanes) -> IndexMap<i64, Lanes> {
-    let mut into: IndexMap<i64, Lanes> = inside.iter().map(|at| (*at, Lanes::new())).collect();
-    let mut changing = true;
-    while changing {
-        changing = false;
-        for at in inside {
-            let after: Lanes = at_of[at]
-                .succ
-                .iter()
-                .filter(|to| inside.contains(to))
-                .flat_map(|to| into[to].iter().copied())
-                .collect();
-            let before = _backwards(bits, at_of[at], after, universe);
-            if before != into[at] {
-                into.insert(*at, before);
-                changing = true;
-            }
-        }
-    }
-    into
+    let nodes: Vec<&LirBlock> = inside.iter().map(|at| at_of[at]).collect();
+    dataflow::solve(
+        &nodes,
+        Direction::Backward,
+        |_| Lanes::new(),
+        |at, into| at_of[&at].succ.iter().filter(|to| inside.contains(to)).flat_map(|to| into[to].iter().copied()).collect(),
+        |at, after| _backwards(bits, at_of[&at], after.clone(), universe),
+    )
+    .output
 }
 
 /// `body` with each such copy moved from inside its loop to the exit.

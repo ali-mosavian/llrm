@@ -3,6 +3,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use crate::analysis::dataflow::{self, Direction};
 use crate::support::hash::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
@@ -2193,29 +2194,24 @@ pub fn _flags_live_out(body: &LirBody) -> HashMap<i64, Lanes> {
         .iter()
         .map(|block| (block.at, block.insns.iter().map(|one| effects(one)).collect()))
         .collect();
-    let mut live_in: HashMap<i64, Lanes> = body.blocks.iter().map(|block| (block.at, Lanes::new())).collect();
-    let mut out: HashMap<i64, Lanes> = HashMap::default();
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for block in body.blocks.iter().rev() {
-            let after: Lanes = if block.succ.is_empty() {
+    let nodes: Vec<&LirBlock> = body.blocks.iter().collect();
+    let blocks: HashMap<i64, &LirBlock> = nodes.iter().map(|block| (block.at, *block)).collect();
+    // The solution's output is what is live on entry; what a block's last instruction leaves is its input.
+    let solved = dataflow::solve(
+        &nodes,
+        Direction::Backward,
+        |_| Lanes::new(),
+        |at, live_in| {
+            let block = blocks[&at];
+            if block.succ.is_empty() {
                 exits.clone()
             } else {
                 block.succ.iter().flat_map(|at| live_in.get(at).unwrap_or(&exits).iter().copied()).collect()
-            };
-            out.insert(block.at, after.clone());
-            let mut live = after;
-            for (reads, writes) in steps[&block.at].iter().rev() {
-                live = live.minus(writes).or(reads);
             }
-            if live != live_in[&block.at] {
-                live_in.insert(block.at, live);
-                changed = true;
-            }
-        }
-    }
-    out
+        },
+        |at, after| steps[&at].iter().rev().fold(after.clone(), |live, (reads, writes)| live.minus(writes).or(reads)),
+    );
+    solved.input.into_iter().collect()
 }
 
 /// Use XOR for zero only when later integer work replaces every arithmetic flag.

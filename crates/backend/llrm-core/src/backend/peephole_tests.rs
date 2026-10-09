@@ -3421,3 +3421,21 @@ fn test_the_dead_lanes_of_a_body_no_pass_changed_are_worked_out_once() {
     liveness::dead_at_exit(&changed);
     assert_eq!(liveness::exits_computed() - before, 2, "a changed body was given the last answer");
 }
+
+/// The flag liveness, upper-half zeroes and post-RA sink liveness each iterated every block to a fixed point: a backward chain of 30
+/// blocks took 30 rounds of 30. All go through `dataflow::solve`, which works a block again only when an input changed.
+#[test]
+fn test_flag_liveness_over_a_loop_is_not_worked_by_rounds() {
+    let blocks = 30;
+    let mut list = Vec::new();
+    for at in 1..=blocks {
+        let next = if at == blocks { vec![1, blocks + 1] } else { vec![at + 1] };
+        list.push(block(at, vec![], next));
+    }
+    list.push(block(blocks + 1, vec![], vec![]));
+    let input = body("loop", 1, list);
+    crate::analysis::dataflow::WORKED.with(|count| count.set(0));
+    super::_flags_live_out(&input);
+    let worked = crate::analysis::dataflow::WORKED.with(std::cell::Cell::get);
+    assert!(worked <= 4 * blocks as usize, "{worked} blocks worked for a loop of {blocks}");
+}
