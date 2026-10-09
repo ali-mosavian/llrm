@@ -38,7 +38,8 @@ use llrm_mir::edit::Position;
 use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
-use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
+use llrm_analysis::manager::{AssumptionCache, Bounded, Counted, DominatedEdges, Registers};
+use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
 use llrm_support::hash::{HashMap, IndexMap};
 use num_bigint::BigInt;
 
@@ -56,11 +57,23 @@ impl FunctionPass for LoopMotion {
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
         match sunk_stores(unit.context, unit.layout, outer.callees(), unit.function, analyses) {
-            Ok(true) => PreservedAnalyses::none(),
+            Ok(true) => kept_when_stores_move(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("loopmotion: {error}"),
         }
     }
+}
+
+/// What a store moved from a loop to its exit leaves: the blocks, the values and the facts about them, not the memory.
+fn kept_when_stores_move() -> PreservedAnalyses {
+    PreservedAnalyses::none()
+        .preserve::<Dominators>()
+        .preserve::<Loops>()
+        .preserve::<Registers>()
+        .preserve::<AssumptionCache>()
+        .preserve::<Counted>()
+        .preserve::<DominatedEdges>()
+        .preserve::<Bounded>()
 }
 
 /// Each loop's unobserved stores moved to the front of its one exit;
@@ -116,8 +129,8 @@ pub fn sunk_stores(context: &mut Context, layout: &DataLayout, callees: &Callees
             function.set_operand(store, 0, value);
             function.move_to(store, Position::Before(anchor))?;
         }
-        // What alias said of the old placement no longer holds.
-        analyses.invalidate(&PreservedAnalyses::none());
+        // What alias said of the old placement no longer holds; no value, block or edge changed, so what is said of them does.
+        analyses.invalidate(&kept_when_stores_move());
         changed = true;
     }
     Ok(changed)
