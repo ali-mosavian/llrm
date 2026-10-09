@@ -206,6 +206,16 @@ pub struct WebRows {
     numbered: usize,
 }
 
+impl LiveAt for WebRows {
+    fn live_in(&self, block: i64, value: u32) -> bool {
+        self.position.get(&block).is_some_and(|at| self.into[*at].binary_search(&value).is_ok())
+    }
+
+    fn live_out(&self, block: i64, value: u32) -> bool {
+        self.position.get(&block).is_some_and(|at| self.out[*at].binary_search(&value).is_ok())
+    }
+}
+
 impl WebRows {
     pub fn numbered(&self) -> usize {
         self.numbered
@@ -1218,8 +1228,8 @@ fn _allocated(
                 // live blocks strictly shrink, so splitting ends.
                 drop(_carving);
                 // Only the pieces made are asked of.
-                let after = llrm_support::debug::timed("split after liveness", || live_rows_by(&cut, |one| made.contains(&one)));
-                pieces.extend(made.iter().copied().filter(|one| splitkit::live_blocks(&cut, *one, &after) >= spread));
+                let after = llrm_support::debug::timed("split after liveness", || crate::analysis::occurrences::live_among(&cut, &made.iter().copied().collect()));
+                pieces.extend(made.iter().copied().filter(|one| splitkit::live_blocks(&cut, *one, &*after) >= spread));
                 pieces.insert(value);
                 body = cut;
                 for one in &made {

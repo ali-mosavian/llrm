@@ -340,8 +340,8 @@ pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region:
         return None;
     }
     // Only `value` is asked of: its liveness alone.
-    let live = allocate::live_rows_by(body, |one| one == value);
-    let found = crossings(body, value, &region, &live);
+    let live = crate::analysis::occurrences::live_among(body, &BTreeSet::from([value]));
+    let found = crossings(body, value, &region, &*live);
     let mut predecessors: IndexMap<i64, Vec<i64>> = IndexMap::default();
     for block in &body.blocks {
         for next in &block.succ {
@@ -1066,6 +1066,17 @@ mod tests {
         for value in &values {
             assert_eq!(all[value], super::_references(&body, *value), "references of value {value}");
         }
+    }
+
+    /// Carving a value out of a region walked every instruction of the body for liveness rows of that one value (and so did the pieces
+    /// a split made, to count their blocks): from where the value occurs it is the same rows, and the body is not walked.
+    #[test]
+    fn test_a_carve_finds_the_liveness_of_its_value_without_walking_the_body() {
+        let body = _pointer_across_a_loop();
+        let before = crate::backend::allocate::live_rows_walks(&body);
+        let cut = carved(&body, 3, 9, 2, &region(&body, &[0x10])).expect("cut");
+        assert_eq!(crate::backend::allocate::live_rows_walks(&body), before, "the body was walked for the rows of the carved value");
+        assert_eq!(super::live_blocks(&cut, 9, &*crate::analysis::occurrences::live_among(&cut, &BTreeSet::from([9]))), super::live_blocks(&cut, 9, &crate::backend::allocate::live_rows_by(&cut, |one| one == 9)));
     }
 
     fn region(body: &LirBody, blocks: &[i64]) -> Region {
