@@ -138,3 +138,91 @@ def test_the_steps_that_scanned_every_function_per_function_stay_linear_in_the_f
         if big > 2.2 * small + 5.0:
             grown[step] = f"{small:.1f} -> {big:.1f} Minstr"
     assert not grown, grown
+
+
+def test_the_steps_that_ran_for_every_inline_trial_stay_linear_in_the_callers(tmp_path):
+    """The inliner tried each call site of the caller of N callees by splicing it and putting the whole body through the pipeline
+    (N=64: 63 runs of the one big body), so call-effects, through-memory, points-to, annotated, float-facts and pointer-values read
+    2N/N = 3.9 each on the `callers` axis (190 G instructions at N=512; 10.8 G since). The sites the estimates refuse are tried
+    together, once. A step above 2.2 per doubling fails."""
+    n = 128
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"callers_{label}.c"
+        source.write_text("" if size == 0 else scaling.callers(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    grown = {}
+    for step in ("analysis call-effects", "analysis through-memory", "analysis points-to", "analysis annotated", "analysis float-facts", "analysis pointer-values"):
+        small, big = (own[label].get(step, 0.0) - own["empty"].get(step, 0.0) for label in ("n", "2n"))
+        if big > 2.2 * small + 5.0:
+            grown[step] = f"{small:.1f} -> {big:.1f} Minstr"
+    assert not grown, grown
+
+
+def test_loopmotion_and_the_cells_it_asks_stay_linear_in_the_loops_of_one_function(tmp_path):
+    """branches(512) at -O2: loopmotion's own work was 6.3 G and the memory cells it derived afresh for each loop it sank a store
+    from 5.5 G (2N/N = 3.7 and 4.0, 10.9 G inclusive), a dominator set for every block (quadratic in a chain of diamonds), the trips
+    of each loop proved again and the accesses built again. A step 2N/N above 2.6 (slope 1.4) on the `branches` axis fails; a few
+    Minstr of start-up are allowed."""
+    n = 128
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"branches_{label}.c"
+        source.write_text("" if size == 0 else scaling.branches(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    grown = {}
+    for step in ("mir loopmotion", "analysis memory-cells"):
+        small, big = (own[label].get(step, 0.0) - own["empty"].get(step, 0.0) for label in ("n", "2n"))
+        if big > 2.6 * small + 5.0:
+            grown[step] = f"{small:.1f} -> {big:.1f} Minstr"
+    assert not grown, grown
+
+
+def test_sroa_stays_linear_in_the_accesses_of_a_few_locals(tmp_path):
+    """`mir sroa` compared each pair of accesses of one object for overlap: on `straight`, four locals read and written by every
+    statement, it read 2N/N = 3.4, 3.6, 3.8 (345 Minstr of 6.9 G at N=2048) and does nothing with accesses that are one leaf. A leaf is
+    now compared once. A step above 2.6 (slope 1.4) fails; a few Minstr of start-up are allowed."""
+    n = 256
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"straight_{label}.c"
+        source.write_text("" if size == 0 else scaling.AXES["straight"](size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("mir sroa", 0.0) - own["empty"].get("mir sroa", 0.0) for label in ("n", "2n"))
+    assert big <= 2.6 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
+def test_gvn_stays_below_quadratic_in_the_live_values_and_the_cells(tmp_path):
+    """Pricing copied the live set at every instruction and the MemorySSA walk compared each load with every write it passed by the
+    full alias rules: `mir gvn` at -O2 read 2N/N = 3.4 on `live` and on `cells` at N=128 (146 -> 494 and 122 -> 417 Minstr; 6.8 G
+    and 5.8 G at N=1024). Since #1234 it reads 2.4 and 2.7; a step above 3.2 (slope 1.7) fails; a few Minstr of start-up are allowed."""
+    grown = {}
+    for axis, n in (("live", 128), ("cells", 128)):
+        own = {}
+        for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+            source = tmp_path / f"{axis}_{label}.c"
+            source.write_text("" if size == 0 else scaling.AXES[axis](size))
+            own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+        small, big = (own[label].get("mir gvn", 0.0) - own["empty"].get("mir gvn", 0.0) for label in ("n", "2n"))
+        if big > 3.2 * small + 5.0:
+            grown[axis] = f"{small:.1f} -> {big:.1f} Minstr"
+    assert not grown, grown
+
+
+def test_hoist_and_loopmotion_stay_quadratic_at_worst_in_the_depth_of_a_loop_nest(tmp_path):
+    """nest(64) at -O2 (#1110): each load asked every instruction of the loop whether it writes it, and each store every access
+    of the loop whether it reaches it, per loop: hoist read 2N/N = 5.5, 6.5, 7.1 (7.1 G at N=128) and loopmotion 6.0, 7.0 (N^3).
+    Every block lies in as many loops as it is deep, so N^2 is the least; they now read 3.6 to 4.0, gcc's slope here being 2.1
+    (4.3). A step above 4.8 (slope 2.26) fails; a few Minstr of start-up are allowed."""
+    n = 32
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"nest_{label}.c"
+        source.write_text("" if size == 0 else scaling.nest(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    grown = {}
+    for step in ("mir hoist", "mir loopmotion"):
+        small, big = (own[label].get(step, 0.0) - own["empty"].get(step, 0.0) for label in ("n", "2n"))
+        if big > 4.8 * small + 5.0:
+            grown[step] = f"{small:.1f} -> {big:.1f} Minstr"
+    assert not grown, grown

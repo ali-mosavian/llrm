@@ -163,6 +163,43 @@ pub fn live_points(
     points
 }
 
+/// What changes in the live set across each instruction of `block` but its
+/// phis, in order, and what is live before the first: `live_points` without a
+/// set copied for every instruction. An instruction's `read` values are those
+/// live before it that were not live across it; `made` is its result where
+/// that is live after it. The live set before an instruction is the one
+/// after the one before it, less what it made, plus what it read.
+pub struct Steps {
+    pub first: Vec<ValueId>,
+    pub steps: Vec<Step>,
+}
+
+pub struct Step {
+    pub inst: InstId,
+    pub read: Vec<ValueId>,
+    pub made: Option<ValueId>,
+}
+
+pub fn live_steps(
+    function: &Function,
+    found: &Liveness,
+    block: BlockId,
+) -> Steps {
+    let mut alive = found.live_out[&id(block)].clone();
+    let mut steps = Vec::new();
+    for &inst in function.block(block).instructions().iter().rev() {
+        let op = function.instruction(inst);
+        if is_phi(op) {
+            continue;
+        }
+        let made = op.result.filter(|one| alive.remove(one));
+        let read = reads(op).filter(|one| alive.insert(*one)).collect();
+        steps.push(Step { inst, read, made });
+    }
+    steps.reverse();
+    Steps { first: alive.into_iter().collect(), steps }
+}
+
 /// How many values `counted` says are live before each instruction of
 /// `block` but its phis, in order.
 pub fn pressure_points(
@@ -220,8 +257,14 @@ pub fn solves() -> usize {
     SOLVES.with(std::cell::Cell::get)
 }
 
-/// Run on bit sets over dense value indices; the sets, and the order they
-/// are updated in, are Python's.
+// Rounds of the liveness fixed point, for a test that a chain of blocks settles
+// in a few.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Run on bit sets over dense value indices; the sets are Python's.
 pub fn live(function: &Function) -> Liveness {
     SOLVES.with(|solves| solves.set(solves.get() + 1));
     let layout = function.layout();
@@ -289,7 +332,12 @@ pub fn live(function: &Function) -> Liveness {
     let mut changing = true;
     while changing {
         changing = false;
-        for position in 0..layout.len() {
+        #[cfg(test)]
+        ROUNDS.with(|rounds| rounds.set(rounds.get() + 1));
+        // Last block first: what a block makes live comes from the blocks
+        // after it, so a chain settles in one round and a check, not in one
+        // round per block.
+        for position in (0..layout.len()).rev() {
             let mut out = empty.clone();
             for (successor, arms) in &successors[position] {
                 out.union_with(&live_in[*successor]);
@@ -569,5 +617,24 @@ top:
         );
         let f = function(&module, "f");
         assert_eq!(entry_values(f), BTreeSet::from([value(f, "read")]));
+    }
+
+    /// A chain of N blocks took N+1 rounds, each visiting every block first to
+    /// last: what is live comes from later blocks, so a fact from the last
+    /// one moved one block a round. `branches` at N=1024 spent 82.7 G in gvn,
+    /// 39% of it in liveness (4.3x, 5.2x, 5.7x per doubling).
+    #[test]
+    fn test_a_chain_of_blocks_settles_in_a_few_rounds() {
+        let blocks = 60;
+        let mut text = String::from("define i16 @f(i16 %x) {\nb0:\n  %v = add i16 %x, 1\n  br label %b1\n\n");
+        for at in 1..blocks {
+            text += &format!("b{at}:\n  %y{at} = add i16 {at}, {at}\n  br label %b{}\n\n", at + 1);
+        }
+        text += &format!("b{blocks}:\n  ret i16 %v\n}}\n");
+        let module = parsed(&text);
+        ROUNDS.with(|rounds| rounds.set(0));
+        live(function(&module, "f"));
+        let rounds = ROUNDS.with(|rounds| rounds.get());
+        assert!(rounds <= 3, "{rounds} rounds for {blocks} blocks in a chain");
     }
 }

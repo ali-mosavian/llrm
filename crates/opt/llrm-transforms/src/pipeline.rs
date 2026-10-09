@@ -385,6 +385,25 @@ pub fn recorded(
             TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             done
         }),
+        specialise: {
+            let mut alone = Fixed::new(&Applied { dump: None, ..applied.clone() });
+            Box::new(move |module, analyses, mut function| {
+                let layout = analyses.program().layout.clone();
+                let outer = analyses.outer(module);
+                let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
+                let Module { context, metadata, .. } = &mut *module;
+                let mut unit = Unit {
+                    context,
+                    layout: &layout,
+                    function: &mut function,
+                    id: None,
+                    metadata,
+                    declared: &mut declared,
+                };
+                alone.run(&mut unit, &mut Analyses::new(std::rc::Rc::clone(&outer)));
+                function
+            })
+        },
         proved: None,
         inline: applied.options.inline,
         ranges: applied.options.ipa_ranges,

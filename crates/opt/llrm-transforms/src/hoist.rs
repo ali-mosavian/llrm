@@ -39,7 +39,6 @@ use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, Outer, P
 use llrm_mir::types::Type;
 
 use crate::profit::{self, OperationCosts};
-use crate::transform::_undisturbed;
 
 /// `size`: price a run in bytes, every block once (-Os), not in executed work.
 pub struct Hoist {
@@ -382,11 +381,13 @@ pub fn _invariant_run(
     // it has moved: asked of each once, not once a round.
     let mut movable: llrm_mir::dense::IdMap<InstId, bool> = llrm_mir::dense::IdMap::new();
     let mut made: BTreeSet<ValueId> = BTreeSet::new();
+    let writers = llrm_analysis::memoryssa::Writers::of(accesses, &insts);
     loop {
         let mut grew = false;
         for &inst in &insts {
             if taken.contains(&inst)
-                || !*movable.get_or_insert_with(inst, || _movable(unit, inst, &insts, accesses, Some(outer.program())))
+                || !*movable
+                    .get_or_insert_with(inst, || _movable(unit, inst, &writers, accesses, Some(outer.program())))
             {
                 continue;
             }
@@ -426,7 +427,7 @@ pub fn _invariant_run(
 fn _movable(
     unit: &passes::Unit,
     inst: InstId,
-    insts: &[InstId],
+    writers: &llrm_analysis::memoryssa::Writers,
     accesses: &Accesses,
     program: Option<&llrm_mir::program::ProgramProxy>,
 ) -> bool {
@@ -445,7 +446,7 @@ fn _movable(
         // slice's length, read past a store through its data pointer.
         Opcode::Load { volatile: false, .. } => {
             llrm_mir::memory::invariant_load(unit.context, unit.layout, unit.function, inst)
-                || _undisturbed(inst, insts, accesses, program)
+                || accesses.references.get(&inst).is_some_and(|read| writers.spare(accesses, program, read))
         }
         _ => false,
     }

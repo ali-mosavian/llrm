@@ -729,8 +729,8 @@ impl Selector<'_, '_, '_> {
             (remainder.1, Register::ECX),
         ];
         out.push(Arc::new(Insn {
-            clobbers: call_clobbers(&contract, self.segments),
-            clobbers_high: call_clobbered_high(&contract, self.segments),
+            clobbers: call_clobbers(&contract, self.segments, &self.cpu.general),
+            clobbers_high: call_clobbered_high(&contract, self.segments, &self.cpu.general),
             uses: requires.iter().map(|(held, _)| held.value).collect(),
             requires,
             defines: delivers.iter().map(|(held, _)| held.value).collect(),

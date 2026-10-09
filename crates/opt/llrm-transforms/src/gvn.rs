@@ -28,7 +28,7 @@
 //! The old module had no tests of its own; `subexpressions`' are in
 //! `transform` and these in `gvn_tests.rs`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use llrm_analysis::alias::PointsTo;
 use llrm_analysis::graph::loops::{self, Loop};
@@ -332,12 +332,12 @@ fn _insertion(
     parent: BlockId,
     join: BlockId,
     definitions: &IndexMap<ValueId, (i64, i64)>,
-    dominators: &BTreeMap<i64, BTreeSet<i64>>,
+    dominance: &cfg::Dominance,
     natural_loops: &[Loop],
 ) -> Option<InstId> {
     let (parent_at, join_at) = (cfg::id(parent), cfg::id(join));
     if function.successors(parent) != [join]
-        || dominators[&parent_at].contains(&join_at)
+        || dominance.dominates(join_at, parent_at)
         || natural_loops.iter().any(|loop_| loop_.body.contains(&parent_at) != loop_.body.contains(&join_at))
         || op.operands.iter().any(|operand| !matches!(operand, Operand::Value(_) | Operand::Constant(_)))
     {
@@ -353,7 +353,7 @@ fn _insertion(
             continue;
         };
         let (at, index) = *definitions.get(value)?;
-        if !dominators[&parent_at].contains(&at) || (at == parent_at && index >= cut_index) {
+        if !dominance.dominates(at, parent_at) || (at == parent_at && index >= cut_index) {
             return None;
         }
     }
@@ -379,7 +379,8 @@ pub fn joined(
         return Ok(false);
     };
     let shape = cfg::Shape::of(function);
-    let dominators = shape.dominance.dominators(function);
+    let dominance = &shape.dominance;
+    let depths = dominance.depths(function);
     let natural_loops = shape.loops;
 
     let key = |op: &Instruction| {
@@ -444,8 +445,8 @@ pub fn joined(
                         .flatten()
                         .filter(|(provider, _, _)| {
                             *provider != at
-                                && dominators[&cfg::id(parent)].contains(provider)
-                                && !dominators[provider].contains(&at)
+                                && dominance.dominates(*provider, cfg::id(parent))
+                                && !dominance.dominates(at, *provider)
                                 && natural_loops
                                     .iter()
                                     .all(|loop_| !loop_.body.contains(provider) || loop_.body.contains(&at))
@@ -456,15 +457,9 @@ pub fn joined(
                             break;
                         }
                         let cut = match (&edge_expression, &translated) {
-                            (Some(_), Some(translated)) => _insertion(
-                                function,
-                                translated,
-                                parent,
-                                block,
-                                &definitions,
-                                &dominators,
-                                &natural_loops,
-                            ),
+                            (Some(_), Some(translated)) => {
+                                _insertion(function, translated, parent, block, &definitions, dominance, &natural_loops)
+                            }
                             _ => None,
                         };
                         let Some(cut) = cut else {
@@ -476,7 +471,7 @@ pub fn joined(
                     // Python's `max` keeps the first of equal keys.
                     let mut best = candidates[0];
                     for item in &candidates[1..] {
-                        if (dominators[&item.0].len(), item.1) > (dominators[&best.0].len(), best.1) {
+                        if (depths[&item.0], item.1) > (depths[&best.0], best.1) {
                             best = item;
                         }
                     }

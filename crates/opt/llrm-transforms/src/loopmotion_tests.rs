@@ -454,3 +454,54 @@ fn moving_a_store_keeps_the_exposed_frames_and_the_references_held() {
     assert!(analyses.cached::<ExposedFrames>().is_some(), "exposed frames thrown away by a store moving");
     assert!(analyses.cached::<Annotated>().is_some(), "the references thrown away by a store moving");
 }
+
+/// A store moved made the next ask build the accesses of the whole body again,
+/// to what it had (95 builds in branches(512) at -O2, each one over every
+/// instruction). What an instruction touches is its own, wherever it sits.
+#[test]
+fn moving_a_store_keeps_the_accesses_it_had() {
+    use llrm_analysis::memoryssa::Accesses;
+    let mut module = parsed(&format!("{DOS}{}", hotlop("")));
+    let (layout, outer) = (layout(&module), Rc::new(Outer::of(&module, None)));
+    let callees = llrm_mir::memory::callees(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    let before = Accesses::managed(context, &layout, function, &mut analyses).unwrap();
+    assert!(sunk_stores(context, &layout, &callees, function, &mut analyses).unwrap(), "premise: a store moved");
+    let after = Accesses::managed(context, &layout, function, &mut analyses).unwrap();
+    assert!(Rc::ptr_eq(&before, &after), "the accesses were built again after a store moved");
+}
+
+/// `sunk_stores` found the body's dominance and loops itself (a set of every
+/// block's dominators, quadratic in a chain of diamonds: 309 M of loopmotion's
+/// 1.6 G in branches(512)) though the manager held them. It asks the manager.
+#[test]
+fn sinking_stores_asks_the_manager_for_the_shape_of_the_body() {
+    use llrm_analysis::cfg::{Shape, shapes_derived};
+    let mut module = parsed(&format!("{DOS}{}", hotlop("")));
+    let (layout, outer) = (layout(&module), Rc::new(Outer::of(&module, None)));
+    let callees = llrm_mir::memory::callees(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    analyses.get::<Shape>(context, &layout, function);
+    let before = shapes_derived();
+    assert!(sunk_stores(context, &layout, &callees, function, &mut analyses).unwrap(), "premise: a store moved");
+    assert_eq!(shapes_derived(), before, "the shape of the body was derived again");
+}
+
+/// Each loop's trips were proved again for the question whether it runs at
+/// all, though the manager held every loop's proofs (169 M of loopmotion's
+/// 321 M in branches(512)).
+#[test]
+fn sinking_stores_reads_the_trips_the_manager_proved() {
+    use llrm_analysis::manager::Counted;
+    let mut module = parsed(&format!("{DOS}{}", accumulator("  store i16 5, ptr @acc\n")));
+    let (layout, outer) = (layout(&module), Rc::new(Outer::of(&module, None)));
+    let callees = llrm_mir::memory::callees(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    analyses.get::<Counted>(context, &layout, function);
+    let before = llrm_analysis::induction::proved();
+    assert!(sunk_stores(context, &layout, &callees, function, &mut analyses).unwrap(), "premise: a store moved");
+    assert_eq!(llrm_analysis::induction::proved(), before, "a loop's trips were proved again");
+}

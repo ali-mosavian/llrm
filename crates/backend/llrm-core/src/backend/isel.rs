@@ -5060,7 +5060,8 @@ impl Selector<'_, '_, '_> {
             let names = entry.clobbers(&placement.used, result);
             // The selectors the description names no more than a contract does
             // (FS, GS) are as much the callee's to use.
-            let unnamed = crate::backend::callregs::unnamed_selectors_clobbered(&contract, self.segments);
+            let unnamed =
+                crate::backend::callregs::unnamed_selectors_clobbered(&contract, self.segments, &self.cpu.general);
             Ok::<_, Unselected>(
                 names
                     .iter()
@@ -5193,7 +5194,7 @@ impl Selector<'_, '_, '_> {
         let effects = llrm_mir::memory::of(&self.module.context, &self.callees, function, inst);
         out.push(Arc::new(Insn {
             call: Some(self.listed(effects, disturbs)),
-            clobbers: changed.clone().unwrap_or_else(|| call_clobbers(&contract, self.segments)),
+            clobbers: changed.clone().unwrap_or_else(|| call_clobbers(&contract, self.segments, &self.cpu.general)),
             clobbers_high: match &placed {
                 _ if known.is_some() => known.clone().unwrap_or_default(),
                 // What the convention keeps only the pushed part of (a 16-bit
@@ -5203,7 +5204,7 @@ impl Selector<'_, '_, '_> {
                     .filter(|(full, pushed)| full != pushed)
                     .map(|(full, _)| full)
                     .collect(),
-                None => call_clobbered_high_keeping(&contract, self.segments, &whole),
+                None => call_clobbered_high_keeping(&contract, self.segments, &self.cpu.general, &whole),
             },
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
             delivers,

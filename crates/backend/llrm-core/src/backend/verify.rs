@@ -54,10 +54,7 @@ fn _flat(body: &LirBody) -> Vec<String> {
                         Some(format!("the segment register {:?}", reg.register))
                     }
                     Loc::Mem(cell) if cell.selector.is_some() => Some("a cell with a selector".to_owned()),
-                    Loc::Mem(cell) if cell.addr.is_some_and(|addr| other(addr.segment)) => {
-                        Some("a segment override".to_owned())
-                    }
-                    Loc::Address(cell) if cell.addr.is_some_and(|addr| other(addr.segment)) => {
+                    _ if place.address().and_then(|one| one.addr).is_some_and(|addr| other(addr.segment)) => {
                         Some("a segment override".to_owned())
                     }
                     _ => None,
@@ -97,11 +94,7 @@ fn _slots(body: &LirBody) -> Vec<String> {
         for one in &block.insns {
             let Some(what) = &one.what else { continue };
             for place in what.dests.iter().chain(&what.sources) {
-                let addr = match place {
-                    Loc::Mem(cell) => cell.addr,
-                    Loc::Address(cell) => cell.addr,
-                    _ => None,
-                };
+                let addr = place.address().and_then(|one| one.addr);
                 if let Some(addr) = addr.filter(|addr| addr.space == ir::Space::Frame && addr.slot_home().is_none()) {
                     out.push(format!("{:#06x}: a frame cell at {} names no slot", one.at, addr.disp));
                 }

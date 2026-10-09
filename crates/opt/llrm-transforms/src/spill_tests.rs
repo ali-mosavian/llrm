@@ -730,3 +730,92 @@ fn pressure_answers_what_is_counted_and_addressed_by_bit() {
     assert!(counted.len() > 0, "an integer value is counted");
     assert!(addressed.len() <= counted.len() + function.value_count());
 }
+
+/// N values read before a call and used after it, so all N are live across it.
+fn across_a_call(n: usize) -> String {
+    let loads: String =
+        (0..n).map(|at| format!("  %v{at} = load i16, ptr getelementptr (i16, ptr @cells, i16 {at})\n")).collect();
+    let sums: String = (0..n)
+        .map(|at| {
+            format!("  %s{at} = add i16 {}, %v{at}\n", if at == 0 { "0".to_owned() } else { format!("%s{}", at - 1) })
+        })
+        .collect();
+    format!(
+        "@cells = global [{n} x i16] zeroinitializer\ndeclare void @g()\n\ndefine i16 @f() {{\nb0:\n{loads}  call void @g()\n{sums}  ret i16 %s{}\n}}\n",
+        n - 1
+    )
+}
+
+fn forecast_of(
+    text: &str,
+    room: Room,
+    swept: bool,
+) -> (i64, Vec<ValueId>, i64) {
+    let module = module(text);
+    let function = self::function(&module);
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).expect("a layout");
+    let across = |_: InstId| room.across_call;
+    let costs = OperationCosts { load: 3, store: 5, ..OperationCosts::default() };
+    let frequency = function.layout().iter().map(|&block| (cfg::id(block), 256)).collect();
+    let view = View::of(&module.context, &layout, function, room, &across);
+    let found = if swept { view.forecast(&costs, &frequency) } else { view.forecast_by_points(&costs, &frequency) };
+    (found.cost, found.spilled.iter().collect(), found.peak)
+}
+
+/// The sweep over the live set must give what the points of every site give:
+/// the same spills, cost and peak, at every room.
+#[test]
+fn test_the_swept_forecast_is_what_the_points_give() {
+    for text in [COUNTED.to_owned(), across_a_call(12), across_a_call(40)] {
+        for registers in [0, 1, 2, 4, 6, 12] {
+            let room = Room { registers, across_call: registers.min(3), ..Room::default() };
+            assert_eq!(
+                forecast_of(&text, room, true),
+                forecast_of(&text, room, false),
+                "{registers} registers\n{text}"
+            );
+        }
+    }
+}
+
+/// A forecast copied the live set at every instruction: with N values live
+/// across a call, N^2 cells (x_fir-like kernels were fine, `live` at N=1024
+/// spent 1.9 s of a 2.7 s compile in gvn pricing). The cells handled grow with
+/// what changes at an instruction.
+#[test]
+fn test_the_forecast_handles_cells_in_proportion_to_what_changes() {
+    let handled = |n: usize| {
+        super::TOUCHED.with(|touched| touched.set(0));
+        let room = Room { registers: 6, across_call: 3, ..Room::default() };
+        forecast_of(&across_a_call(n), room, true);
+        super::TOUCHED.with(|touched| touched.get())
+    };
+    let (small, large) = (handled(100), handled(200));
+    assert!(large < 3 * small, "{small} cells handled for 100 values live across a call, {large} for 200");
+}
+
+/// `gepoffset` makes the instructions of a split to price them and erases them
+/// when it does not pay, reporting no change: the pressure the manager held
+/// then differed from a fresh one (`LLRM_CHECK_PRESERVED`, qcport/weapons -Os,
+/// #1226) because it counted the ids of values nothing defines any more.
+#[test]
+fn pressure_is_the_same_after_an_instruction_is_made_and_erased() {
+    use llrm_mir::edit::Position;
+    use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
+    let mut module = module(COUNTED);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let before = Pressure::of(context, function, 0);
+    let ret =
+        function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).opcode == Opcode::Ret).unwrap();
+    let ty = context.types.int(16);
+    let made = function.create_instruction(
+        Opcode::Binary(BinaryOp::Add),
+        ty,
+        vec![function.instruction(ret).operands[0]; 2],
+        Flags::default(),
+        None,
+    );
+    function.insert(made, Position::Before(ret)).expect("a position");
+    function.erase(made).expect("nothing reads it");
+    assert_eq!(Pressure::of(context, function, 0), before, "a value made and erased changed the pressure");
+}

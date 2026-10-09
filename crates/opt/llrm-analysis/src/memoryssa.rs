@@ -16,7 +16,7 @@ use std::rc::Rc;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::memory::stated;
-use llrm_mir::module::{Function, GlobalValue, InstId, ValueId};
+use llrm_mir::module::{Change, Function, GlobalValue, InstId, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, Analysis};
 use llrm_support::hash::IndexMap;
@@ -84,6 +84,9 @@ pub struct Accesses {
     touched: IndexMap<InstId, Footprint>,
     /// Of each call, the bytes it writes before reading any.
     fills: IndexMap<InstId, Vec<MemRef>>,
+    /// What the manager's accesses were made from: the references annotated
+    /// and the calls' effects.
+    source: Option<(Rc<<Annotated as Analysis>::Result>, Rc<<CallEffects as Analysis>::Result>)>,
 }
 
 /// The objects an instruction's writes can reach, for ruling a cell out before
@@ -133,6 +136,7 @@ impl Reach {
 impl Analysis for Accesses {
     type Result = Result<Rc<Accesses>, String>;
     const NAME: &'static str = "accesses";
+    const INCREMENTAL: bool = true;
 
     fn run(
         context: &Context,
@@ -140,17 +144,52 @@ impl Analysis for Accesses {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Self::Result {
-        let references = analyses.get::<Annotated>(context, layout, function);
-        let effects = analyses.get::<CallEffects>(context, layout, function);
-        let references = Result::as_ref(&*references).map_err(String::clone)?;
-        let effects = Result::as_ref(&*effects).map_err(String::clone)?;
+        let annotated = analyses.get::<Annotated>(context, layout, function);
+        let calls = analyses.get::<CallEffects>(context, layout, function);
+        let references = Result::as_ref(&*annotated).map_err(String::clone)?;
+        let effects = Result::as_ref(&*calls).map_err(String::clone)?;
         let shape = analyses.get::<crate::cfg::Shape>(context, layout, function);
         let exposed = analyses.get::<crate::manager::ExposedFrames>(context, layout, function);
-        Ok(Rc::new(Self::of(
+        let made = Self::of(
             &Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed),
             references.clone(),
             effects,
-        )))
+        );
+        Ok(Rc::new(Self { source: Some((annotated, calls)), ..made }))
+    }
+
+    /// What an instruction touches is its own: a store or call moved to
+    /// another place touches what it did, so these are the ones they were made
+    /// from, as long as the references annotated and the calls' effects are
+    /// (the same results, or equal ones). Any change that is not a move or a
+    /// store given another value derives them afresh.
+    fn update(
+        previous: &Self::Result,
+        changes: &[Change],
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Option<Self::Result> {
+        let held = previous.as_ref().ok()?;
+        let (was_annotated, was_calls) = held.source.as_ref()?;
+        let only_moves = changes
+            .iter()
+            .all(
+                |change| match *change {
+                    Change::Moved { .. } => true,
+                    Change::Rewritten(inst) => matches!(function.instruction(inst).opcode, Opcode::Store { .. }),
+                    _ => false,
+                },
+            );
+        if !only_moves {
+            return None;
+        }
+        let annotated = analyses.get::<Annotated>(context, layout, function);
+        let calls = analyses.get::<CallEffects>(context, layout, function);
+        let unchanged = (Rc::ptr_eq(&annotated, was_annotated) || *annotated == **was_annotated)
+            && (Rc::ptr_eq(&calls, was_calls) || *calls == **was_calls);
+        unchanged.then(|| previous.clone())
     }
 }
 
@@ -239,7 +278,7 @@ impl Accesses {
             };
             touched.insert(inst, found);
         }
-        Self { references, touched, fills: IndexMap::default() }
+        Self { references, touched, fills: IndexMap::default(), source: None }
     }
 
     /// What `inst` writes; `None` where it may write anything.
@@ -315,13 +354,38 @@ pub fn may_clobber(
     cell: &MemRef,
     store: &MemRef,
 ) -> bool {
+    // Two references of one frame at fixed displacements, their bytes apart:
+    // what `regions::overlapping` settles first of everything it does, and
+    // most of the writes a walk passes.
+    if let (Some((frame, low, high)), Some((other_frame, other_low, other_high))) =
+        (crate::regions::displaced_span(cell), crate::regions::displaced_span(store))
+        && frame == other_frame
+        && !(low < other_high && other_low < high)
+    {
+        assert!(
+            !check_clobbers() || !may_clobber_slowly(unit, known, cell, store),
+            "LLRM_CHECK_CLOBBERS: bytes apart in one frame were found to overlap"
+        );
+        return false;
+    }
+    may_clobber_slowly(unit, known, cell, store)
+}
+
+fn may_clobber_slowly(
+    unit: &Unit,
+    known: Option<&BTreeMap<ValueId, Interval>>,
+    cell: &MemRef,
+    store: &MemRef,
+) -> bool {
+    #[cfg(test)]
+    SLOW_CLOBBERS.with(|asked| asked.set(asked.get() + 1));
     let offsets = pointerfacts::offsets(unit.context, unit.layout, unit.function);
     let apart = matches!(
         (located(cell), located(store)),
         (Some(one), Some(other)) if offsets.disjoint(one, other)
     );
     // An answer Rust cannot represent is taken to overlap.
-    overlapping(cell, store, known, known, unit.program).unwrap_or(true) && !apart
+    !apart && overlapping(cell, store, known, known, unit.program).unwrap_or(true)
 }
 
 /// Whether `outer` certainly holds every byte of `inner`: both at fixed
@@ -463,6 +527,7 @@ thread_local! {
     /// Writes asked of `may_clobber` by the walks: the alias reasoning the
     /// object summary spares.
     pub(crate) static MAY_CLOBBERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static SLOW_CLOBBERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -505,6 +570,8 @@ pub struct MemorySSA<'a> {
     /// `defining` links make, by access number: one is behind another when
     /// its interval holds the other's.
     span: Vec<(u32, u32)>,
+    /// Per access, the walk that last visited it, and the walks made.
+    stamps: std::cell::RefCell<(Vec<u32>, u32)>,
 }
 
 impl MemorySSA<'_> {
@@ -703,7 +770,13 @@ impl MemorySSA<'_> {
         let invariant =
             honor && llrm_mir::memory::invariant_load(self.unit.context, self.unit.layout, self.unit.function, site);
         let mut pending = vec![self.at(site).defining];
-        let mut seen = BTreeSet::new();
+        // Visited accesses by stamp: a set built per walk was most of its cost.
+        let mut stamps = self.stamps.borrow_mut();
+        if stamps.0.len() < self.span.len() {
+            stamps.0.resize(self.span.len(), 0);
+        }
+        stamps.1 += 1;
+        let epoch = stamps.1;
         let mut found = BTreeSet::new();
         // Where no edge chooses, the chain of uses and untouching defs back
         // from an access is the same for every load of the cell: its
@@ -749,7 +822,7 @@ impl MemorySSA<'_> {
                 }
                 continue;
             }
-            if !seen.insert(current) {
+            if std::mem::replace(&mut stamps.0[current], epoch) == epoch {
                 chain.clear();
                 continue;
             }
@@ -948,9 +1021,48 @@ pub fn built<'a>(
         slots: Default::default(),
         jumps: Default::default(),
         span,
+        stamps: Default::default(),
     }
 }
 
 #[cfg(test)]
 #[path = "memoryssa_tests.rs"]
 mod tests;
+
+/// What some instructions write, indexed by object: whether they spare a
+/// read is asked of the writers that may reach it (`regions::Index`), not of
+/// every one.
+pub struct Writers<'a> {
+    index: crate::regions::Index<'a, InstId>,
+    /// One of them writes anything.
+    anywhere: bool,
+}
+
+impl<'a> Writers<'a> {
+    pub fn of(
+        accesses: &'a Accesses,
+        insts: &[InstId],
+    ) -> Self {
+        let mut index = crate::regions::Index::default();
+        let mut anywhere = false;
+        for &inst in insts {
+            match accesses.writes(inst) {
+                None => anywhere = true,
+                Some(writes) => writes.iter().for_each(|write| index.push(inst, write)),
+            }
+        }
+        Self { index, anywhere }
+    }
+
+    /// `spares` of every one of them.
+    pub fn spare(
+        &self,
+        accesses: &Accesses,
+        program: Option<&llrm_mir::program::ProgramProxy>,
+        read: &MemRef,
+    ) -> bool {
+        read.unwritable()
+            || (!self.anywhere
+                && self.index.near(read).into_iter().all(|(writer, _)| spares(accesses, program, read, writer)))
+    }
+}

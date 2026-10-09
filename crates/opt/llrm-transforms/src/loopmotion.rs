@@ -99,10 +99,10 @@ pub fn sunk_stores(
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let successors = graph.iter().map(|block| (block.at, block.succ.clone())).collect::<BTreeMap<_, _>>();
-    let shape = cfg::Shape::of(function);
-    let dominators = shape.dominance.dominators(function);
+    // Blocks and edges stay as they are while stores move.
+    let shape = analyses.get::<llrm_analysis::cfg::Shape>(context, layout, function);
     let mut changed = false;
-    for loop_ in shape.loops {
+    for loop_ in &shape.loops {
         let mut exits = Vec::new();
         for &at in &loop_.body {
             for &to in &successors[&at] {
@@ -132,11 +132,14 @@ pub fn sunk_stores(
         }
         let accesses = Accesses::managed(context, layout, function, analyses)?;
         let registers = analyses.get::<llrm_analysis::manager::Registers>(context, layout, function);
-        let shape = analyses.get::<llrm_analysis::cfg::Shape>(context, layout, function);
         let outer = std::rc::Rc::clone(analyses.outer());
-        let unit = Unit::within(context, layout, function, &outer).with_registers(&registers).with_shape(&shape);
+        let counted = analyses.get::<Counted>(context, layout, function);
+        let unit = Unit::within(context, layout, function, &outer)
+            .with_registers(&registers)
+            .with_shape(&shape)
+            .with_counted(&counted);
         let moved =
-            _moved(&unit, analyses, &accesses, &loop_, &inside, &predecessors, &successors, &dominators, source)?;
+            _moved(&unit, analyses, &accesses, loop_, &inside, &predecessors, &successors, &shape.dominance, source)?;
         if moved.is_empty() {
             continue;
         }
@@ -181,28 +184,32 @@ fn _moved(
     operations: &[InstId],
     predecessors: &BTreeMap<i64, BTreeSet<i64>>,
     successors: &BTreeMap<i64, Vec<i64>>,
-    dominators: &BTreeMap<i64, BTreeSet<i64>>,
+    dominators: &llrm_analysis::cfg::Dominance,
     source: i64,
 ) -> Result<Vec<(InstId, Option<Stored>)>, String> {
     let function = unit.function;
     let references = &accesses.references;
-    let empty = BTreeSet::new();
-    let header_dominators = dominators.get(&loop_.header).unwrap_or(&empty);
     let defined_in = |value: ValueId| match function.value(value).def {
         ValueDef::Instruction(inst) => function.parent(inst).map(cfg::id),
         ValueDef::Argument(_) => None,
     };
     let address_values = |value: ValueId| {
-        defined_in(value).is_none_or(|at| !loop_.body.contains(&at) && header_dominators.contains(&at))
+        defined_in(value).is_none_or(|at| !loop_.body.contains(&at) && dominators.dominates(at, loop_.header))
     };
     // What a moved store reads must reach the exit, whose one way in is
     // `source`.
     let reaches = |operand: Operand| match operand {
-        Operand::Value(value) => defined_in(value)
-            .is_none_or(|at| dominators.get(&source).is_some_and(|dominating| dominating.contains(&at))),
+        Operand::Value(value) => defined_in(value).is_none_or(|at| dominators.dominates(at, source)),
         _ => true,
     };
-    let unobserved = |inst: InstId| _unobserved(unit, inst, operations, references, &address_values);
+    // What the loop's accesses reach, found by object: asked of each store.
+    let mut index = llrm_analysis::regions::Index::default();
+    for &inst in operations {
+        if let Some(reference) = references.get(&inst) {
+            index.push(inst, reference);
+        }
+    }
+    let unobserved = |inst: InstId| _unobserved(unit, inst, &index, references, &address_values);
     let mut moved = Vec::new();
     for &inst in function.block(cfg::block(source)).instructions() {
         if unobserved(inst) && function.instruction(inst).operands.iter().all(|&one| reaches(one)) {
@@ -429,7 +436,7 @@ impl _Exit<'_> {
         let unit = self.unit;
         let calls = Calls::default();
         let cells = self.analyses.get::<MemoryCells>(unit.context, unit.layout, unit.function);
-        let before = cells.held.get(&inst).map(|here| (**here).clone()).unwrap_or_default();
+        let before = cells.at(unit.function, inst).map(|here| (**here).clone()).unwrap_or_default();
         let nothing = IndexMap::default();
         let mut queries = consts::memory_queries(*unit, &nothing);
         let after = consts::_kills(before, inst, &nothing, &calls, None, None, false, &mut queries);
@@ -461,7 +468,7 @@ fn _same_cell(
 fn _unobserved(
     unit: &Unit,
     inst: InstId,
-    operations: &[InstId],
+    near: &llrm_analysis::regions::Index<InstId>,
     references: &IndexMap<InstId, MemRef>,
     address_values: &dyn Fn(ValueId) -> bool,
 ) -> bool {
@@ -481,11 +488,10 @@ fn _unobserved(
     ) {
         return false;
     }
-    operations
-        .iter()
-        .filter(|&&one| one != inst)
-        .filter_map(|one| references.get(one))
-        .all(|other| !regions::overlapping(reference, other, None, None, unit.program).unwrap_or(true))
+    near.near(reference)
+        .into_iter()
+        .filter(|&(one, _)| one != inst)
+        .all(|(_, other)| !regions::overlapping(reference, other, None, None, unit.program).unwrap_or(true))
 }
 
 #[cfg(test)]

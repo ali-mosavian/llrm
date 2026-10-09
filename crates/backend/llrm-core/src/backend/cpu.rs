@@ -22,6 +22,9 @@ pub struct Profile {
     pub prefix_cost: i64,
     pub partial_register_stall: i64,
     pub register_capacity: i64,
+    /// The registers a value may be placed in, from the description's `gpr`
+    /// class.
+    pub general: Vec<iced_x86::Register>,
     /// The target's address spaces by role.
     pub spaces: llrm_mir::spaces::Spaces,
     /// The convention its description gives a function nothing outside the
@@ -183,6 +186,7 @@ impl Profile {
             prefix_cost,
             partial_register_stall,
             register_capacity: arch.register_capacity(),
+            general: general_registers(arch),
             spaces: arch.layout().spaces.roles,
             private: private_convention(arch),
             calling: Some(llrm_target::calling::Stated(arch.calling())),
@@ -392,6 +396,19 @@ pub fn tuned_routing(
     }));
     made.insert(key, one);
     Ok(one)
+}
+
+/// The registers a value may be placed in: the description's `gpr` class.
+fn general_registers(arch: &dyn Target) -> Vec<iced_x86::Register> {
+    let file = llrm_target::registers::parse(&arch.registers_text()).expect("the target's registers parse");
+    llrm_target::registers::of_class(&file, "gpr")
+        .into_iter()
+        .map(|name| {
+            iced_x86::Register::values()
+                .find(|one| format!("{one:?}").eq_ignore_ascii_case(name))
+                .unwrap_or_else(|| panic!("no register {name}"))
+        })
+        .collect()
 }
 
 /// `name`'s profile on 16-bit x86, tuned for size where `size`.

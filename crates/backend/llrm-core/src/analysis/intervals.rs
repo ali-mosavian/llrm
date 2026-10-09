@@ -10,6 +10,7 @@ use std::sync::Arc;
 use crate::analysis::frequency::Frequency;
 use crate::analysis::loops as loopy;
 use crate::backend::allocate;
+use crate::model::ir;
 use crate::model::lir::{Insn, Insns, LirBlock, LirBody};
 use crate::support::hash::{IndexMap, IndexSet};
 
@@ -283,12 +284,192 @@ pub struct Shift {
 }
 
 /// The blocks of `body` that are not the same instructions as `held`'s (by
-/// position).
+/// position); of each long one, how it differs, found by pointer.
+pub struct Differing {
+    pub blocks: Vec<usize>,
+    aligned: Vec<Option<Aligned>>,
+}
+
+/// Lists this short are compared by looking each instruction up in the other
+/// body's numbering (which is there already, and costs no allocation); longer
+/// ones by pointer.
+const SHORT: usize = 48;
+
 pub fn differing_blocks(
     held: &[(i64, &Insns)],
     body: &LirBody,
-) -> Vec<usize> {
-    (0..body.blocks.len()).filter(|at| !held[*at].1.same_insns(&body.blocks[*at].insns)).collect()
+) -> Differing {
+    let blocks: Vec<usize> =
+        (0..body.blocks.len()).filter(|at| !held[*at].1.same_insns(&body.blocks[*at].insns)).collect();
+    let aligned = blocks
+        .iter()
+        .map(|at| {
+            let (old, new) = (&held[*at].1[..], &body.blocks[*at].insns[..]);
+            (old.len().max(new.len()) > SHORT).then(|| aligned(old, new)).flatten()
+        })
+        .collect();
+    Differing { blocks, aligned }
+}
+
+/// Every value an instruction names: as it defines or reads it, as an operand,
+/// or in a constraint.
+pub fn names(one: &Insn) -> impl Iterator<Item = u32> + '_ {
+    one.defines
+        .iter()
+        .chain(&one.uses)
+        .copied()
+        .chain(
+            one.what
+                .iter()
+                .flat_map(|what| what.dests.iter().chain(&what.sources))
+                .flat_map(ir::values)
+                .map(|held| held.value),
+        )
+        .chain(one.requires.iter().chain(&one.delivers).map(|(held, _)| held.value))
+        .chain(one.widths.iter().map(|(value, _)| *value))
+}
+
+/// What a rewrite changed in a body: the instructions in only the body before
+/// (a block made over is all of them) or only the body after, and the values
+/// they name, which are the ones whose facts can differ.
+pub struct Changes {
+    pub gone: Vec<Arc<Insn>>,
+    pub added: Vec<Arc<Insn>>,
+    pub touched: crate::support::hash::HashSet<u32>,
+}
+
+/// The changes from `before` to `after`; None where they are not the same
+/// shape.
+pub fn changes(
+    before: &LirBody,
+    after: &LirBody,
+) -> Option<Changes> {
+    if before.blocks.len() != after.blocks.len()
+        || before.blocks.iter().zip(&after.blocks).any(|(one, two)| one.at != two.at)
+    {
+        return None;
+    }
+    let mut found = Changes { gone: Vec::new(), added: Vec::new(), touched: Default::default() };
+    for (one, two) in before.blocks.iter().zip(&after.blocks) {
+        if one.insns.same_insns(&two.insns) {
+            continue;
+        }
+        match aligned(&one.insns, &two.insns) {
+            Some(alike) => {
+                found.gone.extend(alike.gone.iter().map(|at| Arc::clone(&one.insns[*at])));
+                found.added.extend(alike.added.iter().map(|at| Arc::clone(&two.insns[*at])));
+            }
+            None => {
+                found.gone.extend(one.insns.iter().cloned());
+                found.added.extend(two.insns.iter().cloned());
+            }
+        }
+    }
+    found.touched = found.gone.iter().chain(&found.added).flat_map(|insn| names(insn)).collect();
+    Some(found)
+}
+
+/// What `aligned` finds: the runs both hold, as (position in `old`, position in
+/// `new`, length), in order of `old`, and the positions of what only one holds.
+pub struct Aligned {
+    /// How many instructions `old` held.
+    pub len_old: usize,
+    pub runs: Vec<(usize, usize, usize)>,
+    pub gone: Vec<usize>,
+    pub added: Vec<usize>,
+}
+
+/// The instructions two lists share and the positions of what only one holds.
+/// The instructions a rewrite kept are the same allocations, so they are found
+/// by comparing pointers, not by looking each up in a hash; one it moved is a
+/// run of one.
+pub fn aligned(
+    old: &[Arc<Insn>],
+    new: &[Arc<Insn>],
+) -> Option<Aligned> {
+    // How far ahead a rewrite's insertions and removals are looked for before
+    // the rest of `new` is searched by a map.
+    const NEAR: usize = 4;
+    let same = |i: usize, j: usize| i < old.len() && j < new.len() && Arc::ptr_eq(&old[i], &new[j]);
+    let mut runs = Vec::new();
+    let mut later: Option<crate::support::hash::HashMap<usize, usize>> = None;
+    let (mut i, mut j) = (0, 0);
+    // A list the rewrite made over (little of it is the same) is not worth
+    // aligning: whoever asks looks each instruction up.
+    let mut lost = 0;
+    while i < old.len() && j < new.len() {
+        if same(i, j) {
+            let (from_old, from_new) = (i, j);
+            while same(i, j) {
+                i += 1;
+                j += 1;
+            }
+            runs.push((from_old, from_new, i - from_old));
+            continue;
+        }
+        let mut near = None;
+        'search: for d in 1..=2 * NEAR {
+            for di in d.saturating_sub(NEAR)..=d.min(NEAR) {
+                if same(i + di, j + d - di) {
+                    near = Some((di, d - di));
+                    break 'search;
+                }
+            }
+        }
+        if let Some((di, dj)) = near {
+            (i, j) = (i + di, j + dj);
+            continue;
+        }
+        lost += 1;
+        if lost > 2 + old.len() / 32 {
+            return None;
+        }
+        // What is left of a short list is looked at whole; of a long one, by a
+        // map.
+        let next = if old.len() - i <= 16 && new.len() - j <= 16 {
+            (i..old.len()).find_map(|p| (j..new.len()).find(|q| same(p, *q)).map(|q| (p, q)))
+        } else {
+            let at = later.get_or_insert_with(|| {
+                new.iter().enumerate().map(|(at, one)| (Arc::as_ptr(one) as usize, at)).collect()
+            });
+            (i..old.len()).find_map(|p| at.get(&(Arc::as_ptr(&old[p]) as usize)).filter(|q| **q >= j).map(|q| (p, *q)))
+        };
+        match next {
+            Some((p, q)) => (i, j) = (p, q),
+            None => break,
+        }
+    }
+    let (mut gone, mut added) = (Vec::new(), Vec::new());
+    let (mut at_old, mut at_new) = (0, 0);
+    for (i, j, n) in &runs {
+        gone.extend(at_old..*i);
+        added.extend(at_new..*j);
+        (at_old, at_new) = (i + n, j + n);
+    }
+    gone.extend(at_old..old.len());
+    added.extend(at_new..new.len());
+    // What a rewrite moved is among what each list leaves out.
+    if !gone.is_empty() && !added.is_empty() {
+        let mut moved = Vec::new();
+        if gone.len() * added.len() <= 64 {
+            for &p in &gone {
+                if let Some(&q) = added.iter().find(|q| Arc::ptr_eq(&old[p], &new[**q])) {
+                    moved.push((p, q, 1));
+                }
+            }
+        } else {
+            let to: crate::support::hash::HashMap<usize, usize> =
+                added.iter().map(|at| (Arc::as_ptr(&new[*at]) as usize, *at)).collect();
+            moved.extend(gone.iter().filter_map(|p| to.get(&(Arc::as_ptr(&old[*p]) as usize)).map(|q| (*p, *q, 1))));
+        }
+        if !moved.is_empty() {
+            gone.retain(|p| moved.binary_search_by_key(p, |m| m.0).is_err());
+            added.retain(|q| !moved.iter().any(|m| m.1 == *q));
+            runs.extend(moved);
+            runs.sort_by_key(|run| run.0);
+        }
+    }
+    Some(Aligned { len_old: old.len(), runs, gone, added })
 }
 
 /// The runs of instructions in only one of the two bodies, and of the parallel
@@ -300,11 +481,21 @@ pub fn changed_runs(
     held_index: &Indexes,
     body: &LirBody,
     index: &Indexes,
-    differing: &[usize],
+    differing: &Differing,
     visit: &mut dyn FnMut(&[&Arc<Insn>]),
 ) -> usize {
     let mut changed = 0;
-    let mut runs = |run: &[&Arc<Insn>], gone: &dyn Fn(&Arc<Insn>) -> bool| {
+    let mut report = |run: &[&Arc<Insn>], hits: usize| {
+        changed += hits;
+        visit(run);
+    };
+    // The groups of `run` that hold an instruction `gone` says is in only one
+    // body.
+    fn runs(
+        run: &[&Arc<Insn>],
+        gone: &dyn Fn(&Arc<Insn>) -> bool,
+        report: &mut dyn FnMut(&[&Arc<Insn>], usize),
+    ) {
         let mut start = 0;
         while start < run.len() {
             let mut end = start + 1;
@@ -315,17 +506,50 @@ pub fn changed_runs(
             }
             let hit = run[start..end].iter().filter(|one| gone(one)).count();
             if hit > 0 {
-                changed += hit;
-                visit(&run[start..end]);
+                report(&run[start..end], hit);
             }
             start = end;
         }
-    };
-    for at in differing {
-        let run: Vec<&Arc<Insn>> = held[*at].1.iter().collect();
-        runs(&run, &|one| !index.at.contains_key(&key(one)));
-        let run: Vec<&Arc<Insn>> = body.blocks[*at].insns.iter().collect();
-        runs(&run, &|one| !held_index.at.contains_key(&key(one)));
+    }
+    // The same where the positions in `insns` of what is in only one body are
+    // known.
+    fn side(
+        insns: &[Arc<Insn>],
+        only: &[usize],
+        report: &mut dyn FnMut(&[&Arc<Insn>], usize),
+    ) {
+        let mut done = 0;
+        for &at in only {
+            if at < done {
+                continue;
+            }
+            let (mut first, mut last) = (at, at + 1);
+            if insns[at].group.is_some() {
+                while first > 0 && insns[first - 1].group == insns[at].group {
+                    first -= 1;
+                }
+                while last < insns.len() && insns[last].group == insns[at].group {
+                    last += 1;
+                }
+            }
+            let run: Vec<&Arc<Insn>> = insns[first..last].iter().collect();
+            report(&run, only.partition_point(|p| *p < last) - only.partition_point(|p| *p < first));
+            done = last;
+        }
+    }
+    for (position, at) in differing.blocks.iter().enumerate() {
+        match &differing.aligned[position] {
+            Some(found) => {
+                side(&held[*at].1[..], &found.gone, &mut report);
+                side(&body.blocks[*at].insns[..], &found.added, &mut report);
+            }
+            None => {
+                let (old, new): (Vec<&Arc<Insn>>, Vec<&Arc<Insn>>) =
+                    (held[*at].1.iter().collect(), body.blocks[*at].insns.iter().collect());
+                runs(&old, &|one| !index.at.contains_key(&key(one)), &mut report);
+                runs(&new, &|one| !held_index.at.contains_key(&key(one)), &mut report);
+            }
+        }
     }
     changed
 }
@@ -336,7 +560,7 @@ impl Shift {
         held_index: &Indexes,
         body: &LirBody,
         index: &Indexes,
-        differing: &[usize],
+        differing: &Differing,
     ) -> Self {
         let (mut old, mut new): (Vec<i64>, Vec<i64>) = (Vec::new(), Vec::new());
         let mut tops: crate::support::hash::HashMap<i64, i64> = Default::default();
@@ -346,11 +570,23 @@ impl Shift {
             new.push(now.0);
             tops.insert(before.0, now.0);
             tops.insert(before.1, now.1);
-            if differing.binary_search(&position).is_ok() {
-                for one in insns.iter() {
-                    if let Some(slot) = index.at.get(&key(one)) {
-                        old.push(held_index.at[&key(one)]);
-                        new.push(*slot);
+            if let Ok(found) = differing.blocks.binary_search(&position) {
+                match &differing.aligned[found] {
+                    // A run of instructions kept together is at one offset from
+                    // where it was: its first is a point for all of it.
+                    Some(found) => {
+                        for (i, j, _) in &found.runs {
+                            old.push(held_index.at[&key(&insns[*i])]);
+                            new.push(index.at[&key(&block.insns[*j])]);
+                        }
+                    }
+                    None => {
+                        for one in insns.iter() {
+                            if let Some(slot) = index.at.get(&key(one)) {
+                                old.push(held_index.at[&key(one)]);
+                                new.push(*slot);
+                            }
+                        }
                     }
                 }
             }
