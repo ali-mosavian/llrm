@@ -1781,7 +1781,9 @@ fn _named_among(
         wanted
             .iter()
             .copied()
-            .filter(|value| arrives.contains(value) || !postings.defs(*value).is_empty() || !postings.uses(*value).is_empty())
+            .filter(|value| {
+                arrives.contains(value) || !postings.defs(*value).is_empty() || !postings.uses(*value).is_empty()
+            })
             .collect()
     });
     body.facts.0.bump_by("named-among", wanted.len());
