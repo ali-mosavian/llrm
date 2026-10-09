@@ -1,4 +1,4 @@
-reason = "PostRAMachineSinking: a copy only one successor reads moves into it: instructions fall (rectwo c -15%, hanoi nib -24%, hanoi c -7%, fib nib -22%, fib c -3.8%, bintree -3%), code bytes equal or smaller"
+reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
 blessed = "2026-10-09"
 
 [bas.O2]
@@ -30,9 +30,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 162253
+instructions = 159525
 memory_operands = 59388
-code_bytes = 414
+code_bytes = 413
 data_bytes = 0
 bss_bytes = 0
 
