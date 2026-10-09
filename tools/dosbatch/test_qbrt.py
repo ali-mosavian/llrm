@@ -12,7 +12,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 import qbruntime  # noqa: E402
 
 PROBES = sorted((qbruntime.dosbatch.ROOT / "tests" / "qbrt").glob("*.bas"))
-SOURCES = {path.stem: path for path in [*PROBES, *qbruntime.milestone_sources()]}
+EXAMPLES = sorted((qbruntime.dosbatch.ROOT / "examples" / "basic").glob("*.bas"))
+SOURCES = {path.stem: path for path in [*PROBES, *qbruntime.milestone_sources(), *EXAMPLES]}
 
 
 @pytest.fixture(scope="module")
@@ -27,7 +28,7 @@ def results(tmp_path_factory):
         for runtime, obj in zip(("qb45", "llrm"), pair):
             error = qbruntime.compile_basic(source, obj, runtime)
             assert error is None, error
-        objects[name] = pair
+        objects[name] = (*pair, *qbruntime.linked_objects(source, work))
     archive, _ = qbruntime.build(work / "archive")
     return qbruntime.differential_batch(objects, archive, work / "differential")
 

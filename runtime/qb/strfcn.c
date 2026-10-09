@@ -46,6 +46,12 @@ SD *B_SPAC(int n)
     return result;
 }
 
+/* B$SCPY: a copy of a string in a temporary. */
+SD *B_SCPY(SD *sd)
+{
+    return str_tmp_copy(sd, 0, sd->len);
+}
+
 /* B$FLEN: LEN of a string; a temporary is consumed. */
 int B_FLEN(SD *sd)
 {
@@ -58,3 +64,4 @@ int B_FLEN(SD *sd)
 #pragma aux B_RTRM "B$RTRM"
 #pragma aux B_SPAC "B$SPAC"
 #pragma aux B_FLEN "B$FLEN"
+#pragma aux B_SCPY "B$SCPY"

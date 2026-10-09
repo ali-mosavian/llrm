@@ -134,10 +134,11 @@ class Differential:
 
 
 def differential_batch(
-    objects: dict[str, tuple[Path, Path]], archive: Path, work: Path
+    objects: dict[str, tuple[Path, ...]], archive: Path, work: Path
 ) -> dict[str, Differential]:
     """Each program as two objects of one source: BCOM45's (`qb45`) linked with BCOM45, and llrm's
-    (`-fqb-runtime=llrm`) linked with LLRMQB.  Raw bytes and screens are compared.
+    (`-fqb-runtime=llrm`) linked with LLRMQB.  A third and later item are objects both link besides.
+    Raw bytes and screens are compared.
 
     Both sessions run in `work/run`, so the mount lines on the DOS screen are the same text.  Jobs are
     named J000, J001, ...: a source name is not always an 8.3 basename, or unique in 8 characters.
@@ -152,10 +153,10 @@ def differential_batch(
             for at, (name, job) in enumerate(pairs)
         }
 
-    reference = session([(n, dosbatch.Job(names[n], "obj", pair[0])) for n, pair in objects.items()])
+    reference = session([(n, dosbatch.Job(names[n], "obj", pair[0], objects=pair[2:])) for n, pair in objects.items()])
     candidate = session(
         [
-            (n, dosbatch.Job(names[n], "obj", pair[1], runtime="llrmqb", runtime_file=archive))
+            (n, dosbatch.Job(names[n], "obj", pair[1], runtime="llrmqb", runtime_file=archive, objects=pair[2:]))
             for n, pair in objects.items()
         ]
     )
@@ -189,6 +190,24 @@ def frontend_flags(source: Path) -> list[str]:
         if line.startswith("' flags:"):
             return [word for word in line.split()[2:] if word == "--huge-arrays"]
     return []
+
+
+def linked_objects(source: Path, work: Path) -> tuple[Path, ...]:
+    """The objects a source's `' link:` line names, built here: a .nib library by llrm-nib."""
+    made = []
+    for line in source.read_text().splitlines()[:5]:
+        if not line.startswith("' link:"):
+            continue
+        for name in line.split()[2:]:
+            library = source.parent / name
+            obj = work / f"{library.stem}.obj"
+            done = subprocess.run(
+                [str(dosbatch.BIN / "llrm-nib"), str(library), "-o", str(obj), "-O2"], capture_output=True, text=True
+            )
+            if done.returncode != 0:
+                raise dosbatch.BuildError(f"{name}: {(done.stderr or done.stdout).strip()[-600:]}")
+            made.append(obj)
+    return tuple(made)
 
 
 def compile_basic(source: Path, obj: Path, runtime: str) -> str | None:
