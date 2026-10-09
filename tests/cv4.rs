@@ -7,7 +7,7 @@
 //! `~/scratch/toolchains/tcpp30`) and the DOSBox-X this crate builds.
 //! `LLRM_REQUIRE_CODEVIEW` makes a missing tool a failure.
 
-mod common;
+pub mod common;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

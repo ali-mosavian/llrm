@@ -4,7 +4,6 @@
 use llrm_core::abi::nib as rt;
 
 use super::*;
-use crate::syntax::Pattern;
 
 impl TypeRegistry {
     pub(super) fn vector(

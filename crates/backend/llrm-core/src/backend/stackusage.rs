@@ -210,9 +210,6 @@ impl Usage {
                 (Bound::Bytes(one), Bound::Bytes(other)) => Bound::Bytes(one.max(other)),
                 (Bound::Bytes(one) | Bound::AtLeast(one, _), Bound::AtLeast(other, named))
                 | (Bound::AtLeast(one, named), Bound::Bytes(other)) => Bound::AtLeast(one.max(other), named),
-                (Bound::AtLeast(one, first), Bound::AtLeast(other, second)) => {
-                    Bound::AtLeast(one.max(other), first.union(&second).cloned().collect())
-                }
             };
         }
         if let Some(named) = self.outside.get(&index) {

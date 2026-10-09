@@ -58,7 +58,7 @@ fn expand(
     let (zero, limit) = (constant(0.0), constant(9_223_372_036_854_775_808.0));
     let integer = |context: &mut Context, value: i128| Operand::Constant(context.int(wide, value));
     let (none, top) = (integer(context, 0), integer(context, i128::from(i64::MIN)));
-    let mut before = |function: &mut Function, opcode, ty, operands: Vec<Operand>| -> Result<Operand, String> {
+    let before = |function: &mut Function, opcode, ty, operands: Vec<Operand>| -> Result<Operand, String> {
         let made = function.create_instruction(opcode, ty, operands, Flags::default(), None);
         function.insert(made, Position::Before(inst))?;
         Ok(Operand::Value(function.instruction(made).result.expect("a value")))

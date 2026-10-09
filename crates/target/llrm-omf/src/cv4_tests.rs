@@ -3,9 +3,6 @@ use llrm_object::{Arch, Binding, Definition, Object, Role, Section, Symbol};
 
 use super::sections;
 
-const SYMBOLS: usize = 0;
-const TYPES: usize = 1;
-
 fn int() -> T {
     T::Scalar(S::Int { bytes: 2, signed: false })
 }

@@ -288,19 +288,18 @@ fn positive_reciprocal<'a>(
     if !remainder {
         return Ok(Some(parts));
     }
-    let mut product = quotient;
-    if let Some(chain) = chained {
-        product = chain_product(&mut parts, chain, quotient, fresh);
+    let product = if let Some(chain) = chained {
+        chain_product(&mut parts, chain, quotient, fresh)
     } else {
-        product = emit(
+        emit(
             &mut parts,
             fresh,
             ir::Operation::Multiply,
             "imul",
             vec![ir::Loc::Held(quotient), imm(divisor, width)],
             None,
-        );
-    }
+        )
+    };
     emit(
         &mut parts,
         fresh,
@@ -416,12 +415,12 @@ pub fn unsigned_reciprocal<'a>(
     }
     let mut parts = Vec::new();
     let imm = |value: i64, width: u32| ir::Loc::Imm(ir::Imm { value, width, address: None });
-    let mut emit = |parts: &mut Vec<ir::Semantics>,
-                    operation: ir::Operation,
-                    name: &str,
-                    sources: Vec<ir::Loc>,
-                    into: Option<ir::Held>,
-                    fresh: &mut dyn FnMut() -> u32|
+    let emit = |parts: &mut Vec<ir::Semantics>,
+                operation: ir::Operation,
+                name: &str,
+                sources: Vec<ir::Loc>,
+                into: Option<ir::Held>,
+                fresh: &mut dyn FnMut() -> u32|
      -> ir::Held {
         let into = into.unwrap_or_else(|| ir::Held { value: fresh(), width });
         parts.push(ir::Semantics {
@@ -483,19 +482,18 @@ pub fn unsigned_reciprocal<'a>(
     if !remainder {
         return Ok(Some(parts));
     }
-    let mut product = quotient;
-    if let Some(chain) = chained {
-        product = chain_product(&mut parts, chain, quotient, fresh);
+    let product = if let Some(chain) = chained {
+        chain_product(&mut parts, chain, quotient, fresh)
     } else {
-        product = emit(
+        emit(
             &mut parts,
             ir::Operation::Multiply,
             "imul",
             vec![ir::Loc::Held(quotient), imm(divisor, width)],
             None,
             fresh,
-        );
-    }
+        )
+    };
     emit(
         &mut parts,
         ir::Operation::Binary,

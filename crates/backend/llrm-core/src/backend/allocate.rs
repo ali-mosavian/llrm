@@ -746,7 +746,6 @@ pub enum Stage {
 }
 
 use crate::backend::classes::RegisterClasses;
-use crate::backend::regclass::_SEGMENT_OPERANDS;
 use crate::backend::regclass::{Classes, classes};
 
 /// A plain move into one value; whether anything reads it is the caller's.

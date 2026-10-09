@@ -2,8 +2,6 @@
 //! cases of `tests/test_unroll_budget.py`, each body now MIR text. A body
 //! of one block has nothing live out.
 
-use std::collections::{BTreeMap, BTreeSet};
-
 use llrm_analysis::cfg;
 use llrm_support::hash::IndexMap;
 

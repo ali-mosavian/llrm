@@ -946,7 +946,6 @@ fn stack_addressed(
         );
         return None;
     }
-    let slot = registers.slot;
     let items = match built(procedure, number, true) {
         Ok(items) => items,
         Err(error) => {

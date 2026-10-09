@@ -1103,7 +1103,7 @@ b:
     let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
     let runs = std::cell::Cell::new(0);
     let mut refused = BTreeSet::new();
-    let mut again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused: &mut BTreeSet<_>| {
+    let again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused: &mut BTreeSet<_>| {
         tried_sites::<String>(
             module,
             analyses,

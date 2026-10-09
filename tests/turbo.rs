@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-mod common;
+pub mod common;
 
 use common::dosbox::{self, Session};
 
@@ -91,7 +91,7 @@ fn module(dump: &str) -> (Vec<String>, Vec<String>, BTreeSet<u32>) {
 /// Turbo C++'s (which also numbers each `{` and `}`).
 #[test]
 fn tlink_builds_turbo_debuggers_table_from_an_llrm_object_as_from_turbo_cs() {
-    let Some((borland, dosbox)) = toolchain() else {
+    let Some((borland, _)) = toolchain() else {
         skipped("needs Turbo C++ 3.0 (TCPP30_DIR) and DOSBox-X");
         return;
     };
@@ -152,7 +152,7 @@ fn tlink_builds_turbo_debuggers_table_from_an_llrm_object_as_from_turbo_cs() {
 /// `function far C`.
 #[test]
 fn tdump_names_the_type_of_a_function_pointer_as_turbo_cs_does() {
-    let Some((borland, dosbox)) = toolchain() else {
+    let Some((borland, _)) = toolchain() else {
         skipped("needs Turbo C++ 3.0 (TCPP30_DIR) and DOSBox-X");
         return;
     };
@@ -313,7 +313,7 @@ impl Dosbox {
 /// line table, the scopes and the types.
 #[test]
 fn turbo_debugger_shows_the_same_values_for_an_llrm_program_as_for_turbo_cs() {
-    let Some((borland, dosbox)) = toolchain() else {
+    let Some((borland, _)) = toolchain() else {
         skipped("needs Turbo C++ 3.0 (TCPP30_DIR) and DOSBox-X");
         return;
     };
@@ -368,7 +368,7 @@ fn turbo_debugger_shows_the_same_values_for_an_llrm_program_as_for_turbo_cs() {
 /// `regvar.c`, built optimised, is in TLINK's table as a `register`.
 #[test]
 fn tdump_names_a_variable_the_allocator_keeps_in_a_register_as_a_register() {
-    let Some((borland, dosbox)) = toolchain() else {
+    let Some((borland, _)) = toolchain() else {
         skipped("needs Turbo C++ 3.0 (TCPP30_DIR) and DOSBox-X");
         return;
     };

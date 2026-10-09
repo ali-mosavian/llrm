@@ -396,8 +396,8 @@ pub(crate) enum How {
 enum Byte {
     Operand(Operand),
     Number(u128),
-    /// A cell of this many bytes, which no one byte repeats: `memset.pattern`.
-    Pattern(Operand, u32),
+    /// A cell whose bytes do not repeat: `memset.pattern`.
+    Pattern(Operand),
 }
 
 /// The fill `loop_` is, if it is one.
@@ -705,7 +705,7 @@ fn _filled(
     let (callee, function_type, mut operands, direction) = match &found.stored {
         Stored::Fill(byte) => {
             let (callee, function_type) = match byte {
-                Byte::Pattern(value, _) => {
+                Byte::Pattern(value) => {
                     let cell = seeds.function.operand_type(seeds.context, *value).expect("a typed cell");
                     _pattern(seeds.context, declared, found.memset.0, cell, found.memset.1)
                 }
@@ -714,7 +714,7 @@ fn _filled(
             let byte = match *byte {
                 Byte::Operand(byte) => byte,
                 Byte::Number(byte) => counting::constant(seeds.context, &BigInt::from(byte), 8),
-                Byte::Pattern(value, _) => value,
+                Byte::Pattern(value) => value,
             };
             (callee, function_type, vec![found.pointer, byte, count], None)
         }
@@ -865,7 +865,7 @@ fn _stored(
     }
     // LLVM's memset_pattern16: the cell is a word or dword; the stored value
     // need not be a constant.
-    matches!(width, 16 | 32).then_some((pointer, Byte::Pattern(value, width / 8), bytes))
+    matches!(width, 16 | 32).then_some((pointer, Byte::Pattern(value), bytes))
 }
 
 /// The store and load of `one` and `other`, where the store writes the loaded

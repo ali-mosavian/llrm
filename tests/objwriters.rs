@@ -386,30 +386,3 @@ fn a_pdb_holds_the_functions_of_an_llrm_object_and_a_clang_cl_object() {
         assert!(text.contains(wanted), "no {wanted}:\n{text}");
     }
 }
-
-/// Whether some instruction between a backward branch's target and the branch
-/// writes the frame cell at `offset` from ebp, in `listing` (llvm-objdump's): a
-/// loop that keeps its variable in a register and stores it after the loop
-/// leaves the debugger's cell stale in every iteration.
-fn stores_in_a_loop(
-    listing: &str,
-    offset: i64,
-) -> bool {
-    let lines: Vec<(u64, &str)> = listing
-        .lines()
-        .filter_map(|line| {
-            let (address, instruction) = line.trim().split_once(':')?;
-            Some((u64::from_str_radix(address, 16).ok()?, instruction.trim()))
-        })
-        .collect();
-    let cell = if offset < 0 { format!("-0x{:x}(%ebp)", -offset) } else { format!("0x{offset:x}(%ebp)") };
-    lines.iter().any(|&(at, instruction)| {
-        let Some(target) = instruction
-            .strip_prefix('j')
-            .and_then(|jump| u64::from_str_radix(jump.split("0x").nth(1)?.split_whitespace().next()?, 16).ok())
-        else {
-            return false;
-        };
-        target < at && lines.iter().any(|&(inside, one)| (target..=at).contains(&inside) && one.ends_with(&cell))
-    })
-}

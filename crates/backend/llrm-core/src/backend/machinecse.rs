@@ -15,7 +15,6 @@ use crate::backend::peephole::{_lanes, Lane, Lanes, id};
 use crate::backend::target;
 use crate::model::ir::{Addr, Loc, Operation, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
-use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet};
 use crate::support::pyrepr::Repr;
 

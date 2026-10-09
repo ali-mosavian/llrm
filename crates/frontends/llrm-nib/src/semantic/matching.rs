@@ -359,11 +359,6 @@ impl FunctionCompiler<'_> {
             ElementType::Scalar(type_name) => BindingType::Scalar(type_name),
             ElementType::Struct(id) => BindingType::Struct(id),
         };
-        let all = |pairs: Vec<(&Pattern, ElementType)>| -> Option<Vec<(String, BindingType)>> {
-            let parts: Option<Vec<_>> =
-                pairs.into_iter().map(|(one, element)| self.pattern_bindings(one, element)).collect();
-            Some(parts?.concat())
-        };
         match pattern {
             Pattern::Wildcard(_) | Pattern::Literal(_) => Some(Vec::new()),
             Pattern::Binding(name, _) => Some(vec![(name.clone(), binding(item))]),
