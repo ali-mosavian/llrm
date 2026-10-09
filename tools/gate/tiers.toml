@@ -78,6 +78,36 @@ step = "identity"
 bin = "toolchain"
 filter = "test_the_identity_gate_passes"
 
+# Source scans: tests that read the tree's source text (a ratchet: no file may gain a pattern). They guard every crate whichever crate
+# holds the test, so a diff to any source selects them in the fast tier, not only a diff to the crate that owns the test (#1057 and #1071
+# skipped llrm-mir's dense-key ratchet and main's full run went red on it). A test that reads sources and is not listed here fails
+# test_gate. `step = "integration"`: a root test binary the integration step runs on every code change anyway.
+[scan_inputs]
+paths = ["**/*.rs", "crates/ir/llrm-mir/dense-keys.txt", "tests/target_facts.baseline"]
+
+[[scan]]
+file = "crates/ir/llrm-mir/src/tests.rs"
+package = "llrm-mir"
+lib = "no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id"
+
+[[scan]]
+file = "crates/opt/llrm-transforms/tests/no_hand_solved_bounds.rs"
+package = "llrm-transforms"
+test = "no_hand_solved_bounds"
+
+[[scan]]
+file = "crates/support/llrm-support/tests/no_uncached_env_checks.rs"
+package = "llrm-support"
+test = "no_uncached_env_checks"
+
+[[scan]]
+file = "tests/seeded_maps.rs"
+step = "integration"
+
+[[scan]]
+file = "tests/target_facts.rs"
+step = "integration"
+
 # Whole binaries that are heavy: every test in them is slow.
 [whole]
 cv4 = "cv4"
