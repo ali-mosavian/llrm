@@ -626,3 +626,29 @@ fn a_dead_store_solve_picks_no_buckets_where_nothing_is_overwritten_yet() {
     assert_eq!(removed, vec![]);
     assert_eq!(picked, 0, "{picked} bucket picks for 12 loads after which nothing is overwritten");
 }
+
+/// `memory_providers` compared each missing load's cell with every group of
+/// loads (`same_bytes`, two `covered` calls each): quadratic in the distinct
+/// cells a function reads, 0.4% of host.c's compile and what the `cells` axis
+/// grows. Groups are found by what a group naming the same bytes shares.
+#[test]
+fn a_load_is_compared_with_the_groups_that_share_its_bytes_not_with_every_group() {
+    let loads: String = (0..40)
+        .map(|k| format!("  %a{k} = load i16, ptr getelementptr (i8, ptr @g, i16 {})\n  %b{k} = load i16, ptr getelementptr (i8, ptr @g, i16 {})\n", 2 * k, 2 * k))
+        .collect();
+    let parsed = Parsed::new(&format!("define i16 @f() {{\nb0:\n{loads}  ret i16 %a0\n}}\n"));
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &Calls::default());
+    let missing: Vec<InstId> = unit
+        .function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| matches!(unit.function.instruction(inst).opcode, Opcode::Load { .. }))
+        .collect();
+    assert_eq!(missing.len(), 80);
+    let before = same_runs();
+    let found = memory_providers(&unit, &accesses, &missing);
+    let compared = same_runs() - before;
+    assert_eq!(found.len(), 40, "each second load of a cell takes the first");
+    assert!(compared <= 3 * 80, "{compared} group comparisons for 80 loads of 40 cells");
+}

@@ -764,7 +764,8 @@ fn memory_providers(
 
     let mut groups: Vec<(&MemRef, Vec<usize>)> = Vec::new();
     let mut group_of: HashMap<&MemRef, usize> = HashMap::default();
-    // The groups by what a group naming the same bytes shares, so a load compares itself with those and not with all.
+    // The groups by what a group naming the same bytes shares, so a load
+    // compares itself with those and not with all.
     let mut by_frame: HashMap<(crate::regions::Frame, i128, i128), Vec<usize>> = HashMap::default();
     let mut by_pointer: HashMap<(Operand, i64, u64), Vec<usize>> = HashMap::default();
     for (at, (_, (loaded, _))) in loads.iter().enumerate() {
