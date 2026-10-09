@@ -377,3 +377,17 @@ def test_a_row_the_user_accepted_a_rise_on_passes_up_to_its_ceiling_and_fails_ab
     steeper = made(now["compile"], {"nest O2": [2 * c for c in cost(100, 1000, 40)]}, now["passes"])
     assert any("nest O2" in line for line in measure.rises(base, steeper, every)[1])
     assert measure.row_tolerance(TOL, "nest O2 mir lsr") is TOL  # a row nothing names keeps the general limits
+
+
+def test_a_new_row_of_seven_tenths_of_the_compile_on_an_axis_that_rose_still_fails():
+    """The axis rule reads 1% of the base's 2N cost, the step rule 0.5% of the compile: a new row between them on an axis that rose
+    (and so did not move work out of other rows) passed both. The axis judges a new row only when its second difference did not rise."""
+    whole = 1000.0
+    quad = lambda k: [*cost(0, 0, k), whole]
+    base = made(axes={"callers O2": cost(0, 100, 0.02)}, passes={"callers O2 analysis call-effects": quad(0.02)})
+    grown = made(
+        axes={"callers O2": cost(0, 100, 0.020467)},
+        passes={"callers O2 analysis call-effects": quad(0.02), "callers O2 analysis pointer-values": quad(0.000467)},
+    )
+    bad = measure.rises(base, grown, TOL)[1]
+    assert any("pointer-values" in line for line in bad), bad
