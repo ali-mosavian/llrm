@@ -41,6 +41,8 @@ tool not in the repository (Turbo C++, CodeView, QCport's Borland C, QuickBASIC)
 run language or test binary that needs one is `[dropped]` by name; this happens only with `GATE_ALLOW_MISSING=1`,
 which only the workflow sets. Your own gate and the full run on main still run them.
 
+Hosted runners have no instruction counters, so CI always SKIPS `measure` and the perf-reading tests; the local gate is where compile cost is checked.
+
 
 ### Compile cost and its growth
 
