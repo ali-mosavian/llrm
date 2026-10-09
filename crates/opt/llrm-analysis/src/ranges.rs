@@ -519,7 +519,10 @@ pub fn dominated_edges_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Re
     Ok(edges_solved(unit, facts, None)?.blocks(unit.function))
 }
 
-type Scope = Rc<IndexMap<ValueId, Interval>>;
+/// What is known of each value at a point: an interval of it.
+pub type Intervals = IndexMap<ValueId, Interval>;
+
+type Scope = Rc<Intervals>;
 
 /// `dominated_edges`' state at each block, as the solve left it: what the block's operations leave (`own`) and what
 /// holds below it once its assumes are taken (`below`), which is what its successors start from. A block that did not
@@ -682,13 +685,13 @@ fn fresh_known() -> u64 {
 
 /// The edges inside a loop, one after another, each node the state `known` is narrowed to by the path of edges to it.
 struct Prefix {
-    state: Rc<IndexMap<ValueId, Interval>>,
+    state: Rc<Intervals>,
     next: HashMap<(usize, usize, i64), usize>,
     /// The node of the prefix one edge shorter, and the values this edge changed of its state.
     parent: Option<usize>,
     delta: Vec<ValueId>,
     /// `state` swept: found from the parent's, and the values this edge changed.
-    settled: Option<Rc<IndexMap<ValueId, Interval>>>,
+    settled: Option<Rc<Intervals>>,
 }
 
 /// The states after every prefix of the edge chains met so far, for the `known` they were worked from.
@@ -935,7 +938,7 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
             }
         };
         // Each operation of the loop in `scoped`'s terms, once: it narrows its result by what its operands give, until none changes.
-        let apply = |scoped: &mut IndexMap<ValueId, Interval>, inst: InstId| -> Option<(ValueId, Option<Interval>)> {
+        let apply = |scoped: &mut Intervals, inst: InstId| -> Option<(ValueId, Option<Interval>)> {
             #[cfg(test)]
             OPS_APPLIED.with(|count| count.set(count.get() + 1));
             let mut interval = _computed(unit, inst, scoped, facts)?;
@@ -950,7 +953,7 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
             Some((result, scoped.insert(result, interval)))
         };
         // Every operation, swept in order until a sweep changes nothing.
-        let sweep = |mut scoped: IndexMap<ValueId, Interval>| {
+        let sweep = |mut scoped: Intervals| {
             loop {
                 // What each value set in this sweep held before it.
                 let mut before = IndexMap::<ValueId, Option<Interval>>::default();
@@ -965,13 +968,13 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
             }
         };
         // Which operations read or define each value, by place in `operations`.
-        let touching: std::cell::OnceCell<HashMap<ValueId, Vec<usize>>> = std::cell::OnceCell::new();
+        let touching: std::cell::OnceCell<llrm_mir::dense::IdMap<ValueId, Vec<usize>>> = std::cell::OnceCell::new();
         let touching_of = || touching.get_or_init(|| {
-            let mut touching = HashMap::<ValueId, Vec<usize>>::default();
+            let mut touching = llrm_mir::dense::IdMap::<ValueId, Vec<usize>>::new();
             for (place, &inst) in operations.iter().enumerate() {
                 let op = function.instruction(inst);
                 for value in op.operands.iter().filter_map(|one| if let Operand::Value(value) = one { Some(*value) } else { None }).chain(op.result) {
-                    let places = touching.entry(value).or_default();
+                    let places = touching.get_or_insert_with(value, Vec::new);
                     if places.last() != Some(&place) {
                         places.push(place);
                     }
@@ -980,9 +983,9 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
             touching
         });
         // The operations `changed` values reach, and what those reach in turn, worked again in `scoped`.
-        let propagate = |scoped: &mut IndexMap<ValueId, Interval>, changed: &mut dyn Iterator<Item = &ValueId>| {
+        let propagate = |scoped: &mut Intervals, changed: &mut dyn Iterator<Item = ValueId>| {
             let touching = touching_of();
-            let mut queue: BTreeSet<usize> = changed.flat_map(|value| touching.get(value).into_iter().flatten().copied()).collect();
+            let mut queue: BTreeSet<usize> = changed.flat_map(|value| touching.get(&value).into_iter().flatten().copied().collect::<Vec<_>>()).collect();
             while let Some(place) = queue.pop_first() {
                 if let Some((result, previous)) = apply(scoped, operations[place])
                     && previous.as_ref() != scoped.get(&result)
@@ -992,11 +995,11 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
             }
         };
         // `known` swept: what holds of the loop before any block's edges narrow it. Every block asks of the same one.
-        let swept: RefCell<Option<(u64, Rc<IndexMap<ValueId, Interval>>)>> = RefCell::new(None);
+        let swept: RefCell<Option<(u64, Rc<Intervals>)>> = RefCell::new(None);
         // `scoped` (`known` narrowed by a block's edges) swept, found from `known` swept: a sweep leaves an operation whose operands
         // and result are as they were in `known` as it found it there, so only those the narrowing reaches, and what they reach
         // in turn, are worked again from `known swept` with the narrowed values put over it.
-        let settle = |mut scoped: IndexMap<ValueId, Interval>, known: &IndexMap<ValueId, Interval>, id: u64| -> IndexMap<ValueId, Interval> {
+        let settle = |mut scoped: Intervals, known: &Intervals, id: u64| -> Intervals {
             // The cheaper of the two by the work each counts: a sweep evaluates every operation and then once more to see nothing
             // change (2 x operations); settling finds what the block's edges narrowed and puts the swept facts over the rest (one
             // pass over `scoped`'s facts), then evaluates only what that reaches.
@@ -1012,7 +1015,7 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
                     base
                 })
             };
-            let narrowed: BTreeSet<ValueId> = scoped.iter().filter(|(value, interval)| known.get(*value) != Some(*interval)).map(|(value, _)| *value).collect();
+            let narrowed: llrm_mir::dense::IdSet<ValueId> = scoped.iter().filter(|(value, interval)| known.get(*value) != Some(*interval)).map(|(value, _)| *value).collect();
             for (value, interval) in base.iter() {
                 if !narrowed.contains(value) {
                     scoped.insert(*value, interval.clone());
@@ -1041,7 +1044,7 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
             .unwrap_or(0)
         };
         // Everything the branch edges above `at` and the assumes narrow `known` to there.
-        let scope_at = |at: i64, known: &IndexMap<ValueId, Interval>, id: u64, every_block: bool| -> Result<Rc<IndexMap<ValueId, Interval>>, String> {
+        let scope_at = |at: i64, known: &Intervals, id: u64, every_block: bool| -> Result<Rc<Intervals>, String> {
             let mut scoped = known.clone();
             // The edges into a block with no other way in, from a block that dominates `at`: those of
             // the dominator chain of `at`, in the order of the blocks' layout, each narrowing in place.
@@ -1135,7 +1138,7 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
                                 for value in &held.nodes[one].delta {
                                     narrow(&mut y, *value, held.nodes[one].state[value].clone());
                                 }
-                                propagate(&mut y, &mut held.nodes[one].delta.iter());
+                                propagate(&mut y, &mut held.nodes[one].delta.iter().copied());
                                 y
                             }
                         };
@@ -1238,7 +1241,7 @@ fn inductive_boxes(
     known: &IndexMap<ValueId, Interval>,
     at_entry: &dyn Fn(i64) -> IndexMap<ValueId, Interval>,
     closed: &dyn Fn(IndexMap<ValueId, Interval>) -> IndexMap<ValueId, Interval>,
-    scope_at: &dyn Fn(i64, &IndexMap<ValueId, Interval>, u64, bool) -> Result<Rc<IndexMap<ValueId, Interval>>, String>,
+    scope_at: &dyn Fn(i64, &Intervals, u64, bool) -> Result<Rc<Intervals>, String>,
 ) -> Result<IndexMap<ValueId, Interval>, String> {
     const PHIS: usize = 8;
     const ROUNDS: usize = 8;
@@ -1338,12 +1341,12 @@ fn power_box(interval: &Interval, width: u32) -> Option<Interval> {
 
 /// `interval` for `value` in `known`, met with what it already held at that width; whether the two have nothing in common, which
 /// no execution reaching the block can show (the block is unreachable under the facts that gave them), and `known` keeps the first.
-fn narrow(known: &mut IndexMap<ValueId, Interval>, value: ValueId, interval: Interval) -> bool {
+fn narrow(known: &mut Intervals, value: ValueId, interval: Interval) -> bool {
     narrow_to(known, value, &interval)
 }
 
 /// `narrow`, of an interval kept by its owner: an end is copied only where it is the tighter.
-fn narrow_to(known: &mut IndexMap<ValueId, Interval>, value: ValueId, interval: &Interval) -> bool {
+fn narrow_to(known: &mut Intervals, value: ValueId, interval: &Interval) -> bool {
     match known.get_mut(&value) {
         None => {
             known.insert(value, interval.clone());
