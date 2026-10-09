@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
-use iced_x86::{Decoder, DecoderOptions, FlowControl, Mnemonic, OpAccess, OpKind, Register, RflagsBits};
+use iced_x86::{FlowControl, Register, RflagsBits};
 use llrm_x86_m16::instructions;
 
 use crate::analysis::dataflow::{self, Direction};
@@ -19,7 +19,6 @@ use crate::backend::{
     affine, copyprop, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, sharedstores,
     spillforward, storecombine, target,
 };
-use crate::frontends::bc::declen;
 use crate::model::ir::{self, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
@@ -925,49 +924,6 @@ pub fn _register_operand(
     }
 }
 
-thread_local! {
-    static DECODED: std::cell::RefCell<crate::support::hash::HashMap<(u32, usize), (Semantics, Option<Vec<iced_x86::Instruction>>)>> = std::cell::RefCell::new(Default::default());
-    static DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many times this thread has assembled and decoded an instruction, for a
-/// test that asking again of one does not.
-pub fn decodes() -> usize {
-    DECODES.with(std::cell::Cell::get)
-}
-
-/// The machine instructions `what` encodes to.
-///
-/// Every pass of the peephole asks of the instructions of the body, which a
-/// pass leaves as they were (the same `Semantics`, at the same address), and
-/// the answer costs the assembly of its text and a decode: remembered
-/// by address, and kept only where the instruction is the one it was made of.
-fn _decoded(
-    bits: u32,
-    what: &Semantics,
-) -> Option<Vec<iced_x86::Instruction>> {
-    let key = (bits, what as *const Semantics as usize);
-    let found =
-        DECODED.with(|held| held.borrow().get(&key).filter(|(was, _)| was == what).map(|(_, decoded)| decoded.clone()));
-    if let Some(found) = found {
-        return found;
-    }
-    DECODES.with(|count| count.set(count.get() + 1));
-    let decoded = emit(bits, what).map(|encoded| {
-        let mut decoder = Decoder::new(bits, &encoded.code, DecoderOptions::NONE);
-        (&mut decoder).into_iter().collect::<Vec<_>>()
-    });
-    DECODED.with(|held| {
-        let mut held = held.borrow_mut();
-        // A function's instructions, not the run's.
-        if held.len() > 100_000 {
-            held.clear();
-        }
-        held.insert(key, (what.clone(), decoded.clone()));
-    });
-    decoded
-}
-
 /// The bytes a constant register shift carries, as `(written, source)`, and
 /// the lanes of its shifted operands.
 ///
@@ -979,34 +935,12 @@ pub fn _moved_lanes(
     one: &Insn,
 ) -> Option<(Vec<(Lane, Lane)>, Lanes)> {
     let _ = bits;
-    moved_by(one.what.as_ref().and_then(constant_shift)?)
-}
-
-/// `_moved_lanes` as the encoder's bytes decode.
-pub fn _moved_lanes_by_decoding(
-    bits: u32,
-    one: &Insn,
-) -> Option<(Vec<(Lane, Lane)>, Lanes)> {
-    let instructions = one.what.as_ref().and_then(|what| _decoded(bits, what))?;
-    let [insn] = instructions.as_slice() else {
-        return None;
-    };
-    let register = |index: u32| (insn.op_kind(index) == OpKind::Register).then(|| insn.op_register(index));
-    let shift = match insn.mnemonic() {
-        Mnemonic::Shl | Mnemonic::Shr if insn.op_count() == 2 && insn.op1_kind() == OpKind::Immediate8 => {
-            (insn.mnemonic() == Mnemonic::Shl, register(0), None, insn.immediate8())
-        }
-        Mnemonic::Shld | Mnemonic::Shrd if insn.op_count() == 3 && insn.op2_kind() == OpKind::Immediate8 => {
-            (insn.mnemonic() == Mnemonic::Shld, register(0), register(1), insn.immediate8())
-        }
-        _ => return None,
-    };
-    moved_by(shift)
+    _moved_by(one.what.as_ref().and_then(constant_shift)?)
 }
 
 /// A shift by a constant: whether it is left, its destination, the register
 /// shifted in, and the count.
-type Shift = (bool, Option<Register>, Option<Register>, u8);
+pub type Shift = (bool, Option<Register>, Option<Register>, u8);
 
 /// `what` as a shift by a constant, from its operands.
 fn constant_shift(what: &Semantics) -> Option<Shift> {
@@ -1022,7 +956,7 @@ fn constant_shift(what: &Semantics) -> Option<Shift> {
     }
 }
 
-fn moved_by((left, destination, source, count): Shift) -> Option<(Vec<(Lane, Lane)>, Lanes)> {
+pub fn _moved_by((left, destination, source, count): Shift) -> Option<(Vec<(Lane, Lane)>, Lanes)> {
     let destination = destination.filter(|one| matches!(one.size(), 2 | 4) && !_lanes(*one).is_empty())?;
     if source.is_some_and(|one| one.size() != destination.size() || _lanes(one).is_empty()) {
         return None;
@@ -1212,17 +1146,8 @@ pub fn effects_computed() -> usize {
     EFFECTS_COMPUTED.with(std::cell::Cell::get)
 }
 
-thread_local! {
-    static SERVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static FALLBACKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many effects this thread has taken from `x86.instr`, and how many it had
-/// to decode, for a test that the table answers.
-pub fn served_and_decoded() -> (usize, usize) {
-    (SERVED.with(std::cell::Cell::get), FALLBACKS.with(std::cell::Cell::get))
-}
-
+/// What `x86.instr` says of `what`; None where it has no row, which is not
+/// knowing.
 fn _register_effects_of(
     bits: u32,
     one: &Insn,
@@ -1230,27 +1155,7 @@ fn _register_effects_of(
     may_write: bool,
     flags: bool,
 ) -> Effects {
-    let Some(served) = _effects_by_table(bits, one, what, may_write, flags) else {
-        FALLBACKS.with(|count| count.set(count.get() + 1));
-        if llrm_support::env_set("LLRM_CHECK_EFFECTS") {
-            eprintln!("effects: decoded {:?} {:?}", what.op, what.name);
-        }
-        return _effects_by_decoding(bits, one, what, may_write, flags);
-    };
-    SERVED.with(|count| count.set(count.get() + 1));
-    if llrm_support::env_set("LLRM_CHECK_EFFECTS") {
-        let decoded = _effects_by_decoding(bits, one, what, may_write, flags);
-        // An instruction the encoder refuses has no bytes to decode; the table
-        // still says what it would do.
-        if decoded.is_none() && served.is_some() {
-            eprintln!("effects: the encoder refuses {what:?}");
-        }
-        assert!(
-            decoded.is_none() || served == decoded,
-            "x86.instr and the decoder differ on {what:?}: {served:?} against {decoded:?}"
-        );
-    }
-    served
+    _effects_by_table(bits, one, what, may_write, flags).flatten()
 }
 
 /// `_register_effects_of` as `x86.instr` states it: None where it has no row.
@@ -1291,71 +1196,6 @@ pub fn _effects_by_table(
         }
     }
     Some(Some((reads, writes)))
-}
-
-/// `_register_effects_of` as the encoder's bytes decode.
-pub fn _effects_by_decoding(
-    bits: u32,
-    one: &Insn,
-    what: &Semantics,
-    may_write: bool,
-    flags: bool,
-) -> Effects {
-    let instructions = _decoded(bits, what)?;
-    // A fixed-register ABI names the conventional register (AX, BX, ...)
-    // separately from the value it carries.  The Held width is authoritative:
-    // a dword in the BX slot occupies EBX, including its upper lanes.
-    let mut reads: Lanes = one
-        .requires
-        .iter()
-        .flat_map(|(held, register)| _lanes(target::named(*register, i64::from(held.width))))
-        .collect();
-    let mut writes: Lanes = one
-        .delivers
-        .iter()
-        .flat_map(|(held, register)| _lanes(target::named(*register, i64::from(held.width))))
-        .collect();
-    let mut info = declen::instruction_info_factory();
-    for insn in &instructions {
-        if insn.is_invalid() || insn.flow_control() != FlowControl::Next {
-            return None;
-        }
-        if flags {
-            let read: Lanes = _flag_lanes(insn.rflags_read()).minus(&writes);
-            reads.extend(read);
-            // An undefined flag is no more the incoming flag than a defined
-            // result is. LLVM models both as physical-register definitions;
-            // omitting Iced's undefined mask made TEST appear to preserve AF
-            // and shifts appear to preserve every flag.
-            writes.extend(_flag_lanes(insn.rflags_modified()));
-        }
-        let used: Vec<(Register, OpAccess)> =
-            info.info(insn).used_registers().iter().map(|access| (access.register(), access.access())).collect();
-        for (register, access) in &used {
-            let lanes = _lanes(*register);
-            if declen::READS.contains(access) {
-                let read: Lanes = lanes.minus(&writes);
-                reads.extend(read);
-            }
-        }
-        for (register, access) in &used {
-            if [OpAccess::Write, OpAccess::ReadWrite].contains(access)
-                || may_write && [OpAccess::CondWrite, OpAccess::ReadCondWrite].contains(access)
-            {
-                writes.extend(_lanes(*register));
-            }
-        }
-        // `rep` counts its register down to where it stops, which Iced calls a
-        // conditional write: a hoisted `mov cx, n` was run once, not per trip.
-        // The register is the one the address size names, CX in 16-bit
-        // code: its upper half is not touched.
-        if insn.has_rep_prefix() || insn.has_repe_prefix() || insn.has_repne_prefix() {
-            for (register, _) in used.iter().filter(|(register, _)| ir::root(*register) == Register::ECX) {
-                writes.extend(_lanes(*register));
-            }
-        }
-    }
-    Some((reads, writes))
 }
 
 pub fn _flag_lanes(mask: u32) -> Lanes {

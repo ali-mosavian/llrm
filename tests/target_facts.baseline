@@ -27,7 +27,7 @@
 1 crates/backend/llrm-core/src/backend/parcopy.rs
 9 crates/backend/llrm-core/src/backend/peep/guards.rs
 4 crates/backend/llrm-core/src/backend/peep/make.rs
-32 crates/backend/llrm-core/src/backend/peephole.rs
+31 crates/backend/llrm-core/src/backend/peephole.rs
 1 crates/backend/llrm-core/src/backend/pointers.rs
 1 crates/backend/llrm-core/src/backend/prologue.rs
 3 crates/backend/llrm-core/src/backend/regalloc_input.rs
