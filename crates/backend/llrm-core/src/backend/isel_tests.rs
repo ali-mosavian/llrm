@@ -5164,3 +5164,32 @@ fn test_an_i64_add_sub_and_or_xor_are_chain_patterns_not_the_wide_binary_hook() 
     let hooked = crate::backend::isel::HOOKED.with(|hooked| hooked.borrow().clone());
     assert_eq!(hooked, [BinaryOp::Shl]);
 }
+
+/// An i64 load and store were two dword moves at +0 and +4 whatever the
+/// target's native width: on one whose widest integer is 16 bits that is a
+/// wrong program, not a refusal. Their halves are `expand_wide`'s now.
+#[test]
+fn test_an_i64_load_and_store_follow_the_native_width_not_a_dword() {
+    let text = "define i64 @f(ptr %p) addrspace(1) {
+  %v = load i64, ptr %p
+  store i64 %v, ptr %p
+  ret i64 %v
+}
+";
+    let narrow = LAYOUT.replace("n8:16:32", "n8:16");
+    let module = llrm_mir::parse::module(&format!("{narrow}{text}")).expect("parses");
+    let refused = isel::selected(
+        &module,
+        "f",
+        &qb(),
+        &mut Pool::new(0),
+        crate::backend::cpu::profile("486").expect("a target"),
+        &crate::backend::target::BASIC,
+        isel::m16(),
+        &llrm_x86_m16::M16,
+        false,
+        0,
+    )
+    .err();
+    assert!(format!("{refused:?}").contains("not half its width"), "{refused:?}");
+}
