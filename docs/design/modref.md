@@ -48,16 +48,23 @@ What each consumer asks of a call (read from the code):
 
 Most consumers ask a yes/no about one reference or one flag. Enumeration is needed by four (`_killed`, `avail::after`, `dead_stores`, `Stored::new`) and each of them walks every call of every block, so a lazy API saves only the calls nothing enumerates.
 
-## Proposal
+## Measured since the review
 
-Three slices, each deleting what it replaces.
+Every `points_to` solve of the QCport -O1 compile, 34,762 of them, is 16.6% of the compile (spans included): 11.0% in the value solve and 5.7% in the escape phase. `arguments` and `captures` are read only by the escape phase (alias.rs lines 2122-2125); the value solve (1851-2013) never reads them, so the value solve of the plain, arguments-only and arguments-plus-captures configurations is the same computation. The solves are asked of 6,209 distinct body states and 17,144 distinct (state, unit configuration) pairs: a value solve made once per pair would be 56% fewer, once per state 84% fewer.
 
-1. **The callbacks once.** `_callbacks` is a function of the module's GlobalsAA entries and the module's summaries; the unit only supplies `globals_aa`. It is computed for every body of every `calls_annotated`. Compute it once per (GlobalsAA, Summaries) result, held beside them. Exact; the per-call copy of `_callbacks` goes. Prediction: ~0.7% of the compile.
-2. **One points-to with call knowledge per body state.** `calls_annotated` solves points-to with the actuals and the callees' captures; `initialized` solves it twice more (plain, and with actuals), and `Pointers`, the manager's analysis, once more without. Once `Summaries` is held, the captures are known and the actuals are the body's: the manager's `Pointers` can be that one solve (arguments and captures supplied from the held `Summaries` through `Outer`), read by call-effects, by `initialized` and by the plain consumers. Its invalidation is the `Depends` declaration of #1128 plus the `Outer` identity, as for every analysis that reads `Summaries`. Prediction: 2-2.7% (the argument-aware solve of call-effects) and ~1% (two of `initialized`'s three), together ~3% of the compile. This slice changes what the plain consumers see (a call to a callee known not to capture no longer lets its actuals escape), so objects can change; that is the slice that needs the explained-diffs oracle.
-3. **No lists for the callers that ask yes/no.** `CallSummary` per call site: the callee's `Summary` (an `Rc`), the actuals' provenance, the call-site attributes. Methods: `writes_anything()`, `reads_anything()`, `may_write(&MemRef)`, `may_read(&MemRef)`, `objects_written()`, `for_each_write(f)`, `for_each_read(f)`, `fills()`. `may_write` instantiates only the slices that can meet the reference's object. `for_each_*` instantiates once and keeps the list in the call summary (today's `made` sharing by slice set), so the enumerating consumers pay what they pay now and the others pay nothing. `Calls` equality becomes a version of the `Writes` result. Prediction: ~1% (the part of the 34% for calls nothing enumerates).
-4. **`initialized` from the shared solve and the call summaries**: slice 2 and 3 applied to `stamped_all`. Prediction: ~0.5% beyond what slice 2 gives.
+## Proposal (after the review)
 
-Total prediction 4-5% of the -O1 compile. Stop rule: a slice that buys under 0.5% is not merged.
+Slices in the order the review gave, each deleting what it replaces.
+
+1. **The value solve once per body state.** Split `points_to` into the value solve and the escape phase `(arguments, captures)`. The value solve's result (the values, and what the escape phase takes from it: the cells in and out of each block, the fields, the unbounded objects) is held per body state, keyed by the function's mark and the identity of the declarations the unit reads (a callee's attributes enter it); the escape phase reads it. Every configuration, `Pointers`, GlobalsAA's contribution, `_direct_summary`, `initialized`'s two and `calls_annotated`'s, asks the held solve. Exact by construction, since the value solve does not see what differs; a check mode solves again and compares. Upper bound 6-9% of the compile (56-84% of 11.0%); the memo and the hits that miss because a key differs lower it.
+2. **`initialized` from `calls_annotated`'s solve.** Its `facts` and `actuals` are read only through `values` and `reference()`, so they come from the one solve `calls_annotated` makes for the same body: two of its three solves gone, exact. About 1%.
+3. **The callbacks once, and what goes with them.** `_callbacks` is a function of the GlobalsAA entries and the held summaries only (the body does not enter), made for every body: once per `Outer` (it is replaced when either result is), not as a module analysis (module analyses have no dependency between them). `_tracked(unit)` is module level and made per call: hoist it. `_summarized` dedupes by (callee, bits escaped before); `calls_annotated` does not: port it. About 0.7-1%.
+4. **`stamped` caches the shared solve by declarations as well as state**, since it writes callees' `memory`, `nocapture` and `initializes` attributes bottom-up mid-loop, which changes callers' `_allowed`, `unmodeled_write` and fills.
+5. **A `CallSummary` queried per reference** only if the measurement justifies it: count the `CallEffects` computations in a body state that no `Writes` reader follows, and the lists no enumerating consumer walks. The census above says enumeration is needed by more than four (`Writes` copies every `stores` list into `Calls` for through-memory, float-facts, fold and floatloop, and `Accesses::resolved` and `Accesses::plain` are further builders), and the overlap predicates differ per caller (`regions::overlapping` with the program, `may_clobber` with pointer-fact offsets, `queries.may_overlap`), so a single `may_write` is not one predicate. Expected under the 0.5% stop rule; likely cut.
+
+Dropped from the first version: making `Pointers` take captures from the held `Summaries`. The summaries fixed point takes its captures from its own partial result, and GlobalsAA feeds Summaries, so neither can read a `Pointers` that depends on `Summaries`; and an argument-aware solve moves `escaped` and `escaped_before` both ways (a non-capturing actual's pointees escape as lent, and `passing` adds objects), so the plain consumers (dse, `observers`) would lose transforms as well as gain them.
+
+Total prediction: 6-8% of the -O1 compile, mostly slice 1. Stop rule: a slice that buys under 0.5% is not merged.
 
 ## Invalidation
 
@@ -65,12 +72,11 @@ A summary is keyed by function name and parameter index; the call summary holds 
 
 ## Oracle
 
-- Objects byte-identical on the 272 programs (bench, vsgcc kernels, QCport at -O1/-O2/-Os) and the 66 vsgcc programs, for slices 1, 3 and 4, with the `LLRM_CHECK_*` switch of each slice recomputing the old path and comparing (lists against queries, for every reference a consumer asked).
-- Slice 2 may differ, by construction, wherever a call to a non-capturing callee kept an actual from escaping. Each differing file is explained (which call, which fact), and the quality is measured (clocks, instructions, bytes) before it merges.
+- Objects byte-identical on the 272 programs (bench, vsgcc kernels, QCport at -O1/-O2/-Os) and the 66 vsgcc programs, for every slice (none is meant to change what a consumer sees), with the `LLRM_CHECK_*` switch of each recomputing the old path and comparing.
 - Each slice deletes the path it replaces; the deletion in the diff is the evidence that no consumer was left on the old one.
 
 ## Risks
 
-- Slice 2 moves the plain `Pointers` consumers to a solve that depends on `Summaries`; before the first `Summaries` exists (the early stretches) they need the plain solve, so `Pointers` has two configurations, and the invalidation must follow which was used.
-- `may_write` re-instantiates per question; a loop of questions about one call (promote asks per cell) needs the cache the list gave for free. The call summary keeps the instantiated slices after the first question.
-- The `Calls` equality comparisons in fold, floatfold and floatloop need an identity: a version number of the `Writes` result.
+- The memo key must name everything the value solve reads: the function's mark, the declarations (callee attributes), the context (object numbering) and the layout. The check mode that solves again and compares is how a missed input is found, on the 272 programs and the 66.
+- Held solves are memory: one per body state kept while the manager keeps the body; they are dropped with it.
+- `Calls` equality in fold, floatfold and floatloop is by content; keep content equality with a pointer fast path, not a version number (a per-manager counter collides after a manager is dropped).
