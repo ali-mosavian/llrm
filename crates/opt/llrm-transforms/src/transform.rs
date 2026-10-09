@@ -550,7 +550,7 @@ impl<'f> Crossings<'f> {
         if source.0 == destination.0 {
             return source.1 >= destination.1 || stores_in(source.0, source.1 + 1, destination.1);
         }
-        let reaching = self.reaching.to(destination.0);
+        let reaching = self.reaching.to(function, destination.0);
         if !reaching.contains(&source.0) {
             return true;
         }
@@ -1373,7 +1373,7 @@ b4:
 ",
         );
         let function = f(&mut module);
-        let reaching = llrm_analysis::cfg::Reaching::of(function);
+        let reaching = llrm_analysis::cfg::Reaching::default();
         let crossings = Crossings::of(function, &reaching);
         let values: Vec<_> = function.walk().filter_map(|(_, inst)| function.instruction(inst).result).collect();
         let loads: Vec<_> = function

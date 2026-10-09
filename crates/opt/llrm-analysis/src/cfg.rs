@@ -242,45 +242,52 @@ pub struct Shape {
 
 /// Which blocks have a path to a given block, found for a block when asked and
 /// kept: a pass that asks of few blocks pays for few, and one that asks of
-/// every block for a closure over the graph once, in bits.
-#[derive(Clone, Debug)]
+/// every block for a closure over the graph once, in bits. The graph is read
+/// from the function at the first ask, so a shape nobody asks of pays nothing.
+#[derive(Clone, Debug, Default)]
 pub struct Reaching {
-    predecessors: Rc<IdMap<BlockId, Vec<BlockId>>>,
+    predecessors: std::cell::OnceCell<Rc<IdMap<BlockId, Vec<BlockId>>>>,
     found: Rc<RefCell<IdMap<BlockId, Rc<IdSet<BlockId>>>>>,
 }
 
-/// The graph decides equality: what has been asked is only a cache of it.
+/// What it holds is a cache of its function's graph, which the rest of the
+/// shape already says: two shapes of one function are equal whatever was asked.
 impl PartialEq for Reaching {
     fn eq(
         &self,
-        other: &Self,
+        _: &Self,
     ) -> bool {
-        self.predecessors == other.predecessors
+        true
     }
 }
 
 impl Reaching {
-    pub fn of(function: &Function) -> Self {
-        let mut predecessors = IdMap::<BlockId, Vec<BlockId>>::new();
-        for &block in function.layout() {
-            predecessors.insert(block, function.predecessors(block));
-        }
-        Self { predecessors: Rc::new(predecessors), found: Rc::default() }
-    }
-
-    /// The blocks with a path to `to`, itself included.
+    /// The blocks of `function` with a path to `to`, itself included;
+    /// `function` is the one this shape is of.
     pub fn to(
         &self,
+        function: &Function,
         to: BlockId,
     ) -> Rc<IdSet<BlockId>> {
         if let Some(found) = self.found.borrow().get(&to) {
             return Rc::clone(found);
         }
+        let predecessors = self
+            .predecessors
+            .get_or_init(
+                || {
+                    let mut predecessors = IdMap::<BlockId, Vec<BlockId>>::new();
+                    for &block in function.layout() {
+                        predecessors.insert(block, function.predecessors(block));
+                    }
+                    Rc::new(predecessors)
+                },
+            );
         let mut reaching = IdSet::new();
         reaching.insert(to);
         let mut work = vec![to];
         while let Some(at) = work.pop() {
-            for &parent in self.predecessors.get(&at).into_iter().flatten() {
+            for &parent in predecessors.get(&at).into_iter().flatten() {
                 if reaching.insert(parent) {
                     work.push(parent);
                 }
@@ -308,7 +315,7 @@ impl Shape {
         DERIVED.with(|count| count.set(count.get() + 1));
         let dominance = Dominance::of(function);
         let loops = natural(function, &LoopInfo::new(function, dominance.tree()));
-        Self { dominance, loops, reaching: Reaching::of(function) }
+        Self { dominance, loops, reaching: Reaching::default() }
     }
 }
 
@@ -325,7 +332,7 @@ impl Analysis for Shape {
         DERIVED.with(|count| count.set(count.get() + 1));
         let dominance = Dominance::new(analyses.get::<Dominators>(context, layout, function));
         let loops = natural(function, &analyses.get::<Loops>(context, layout, function));
-        Shape { dominance, loops, reaching: Reaching::of(function) }
+        Shape { dominance, loops, reaching: Reaching::default() }
     }
 
     const READS_OUTER: bool = false;
@@ -542,11 +549,11 @@ dead:
                 .map(|&b| function.block(b).name.clone().unwrap())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(names(&shape.reaching.to(at("b1"))), ["b0", "b1"]);
-        assert_eq!(names(&shape.reaching.to(at("b3"))), ["b0", "b1", "b2", "b3"]);
-        assert_eq!(names(&shape.reaching.to(at("b4"))), ["b0", "b1", "b2", "b3", "b4", "dead"]);
+        assert_eq!(names(&shape.reaching.to(function, at("b1"))), ["b0", "b1"]);
+        assert_eq!(names(&shape.reaching.to(function, at("b3"))), ["b0", "b1", "b2", "b3"]);
+        assert_eq!(names(&shape.reaching.to(function, at("b4"))), ["b0", "b1", "b2", "b3", "b4", "dead"]);
         assert!(
-            std::rc::Rc::ptr_eq(&shape.reaching.to(at("b3")), &shape.reaching.to(at("b3"))),
+            std::rc::Rc::ptr_eq(&shape.reaching.to(function, at("b3")), &shape.reaching.to(function, at("b3"))),
             "asked twice, found once"
         );
     }
