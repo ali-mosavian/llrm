@@ -176,6 +176,15 @@ impl Occurrences {
     }
 }
 
+/// Where each of `values` is live, as `live_rows_by` finds it, from one pass for their occurrences and the blocks they are live in: what
+/// a caller that asks of a few values at a time reads (`LiveAt`).
+pub fn live_among(body: &LirBody, values: &BTreeSet<u32>) -> Box<dyn allocate::LiveAt> {
+    match Occurrences::scan(body, &|value| values.contains(&value)).rows(body) {
+        Some(rows) => Box::new(rows),
+        None => Box::new(allocate::live_rows_by(body, |value| values.contains(&value))),
+    }
+}
+
 /// The widest each wanted value is named by `insns`.
 pub fn widths_of<'a>(insns: impl Iterator<Item = &'a Arc<Insn>>, wanted: &dyn Fn(u32) -> bool) -> IndexMap<u32, u32> {
     let mut widths: IndexMap<u32, u32> = IndexMap::default();
