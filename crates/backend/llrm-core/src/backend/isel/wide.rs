@@ -11,12 +11,24 @@ use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::sign_bits;
 use llrm_mir::{BinaryOp, CastOp, IntPredicate};
 
+use super::expand::{Kind, expand_wide};
 use super::{Selector, Test, Unselected, condition_code, insn, refuse, semantics, swapped};
 use crate::backend::callregs::{call_clobbered_high, call_clobbers};
 use crate::model::ir::{Held, Imm, Loc, Operation};
 use crate::model::lir::{Insn, LirBlock};
 
 type Pair = (Held, Held);
+
+/// The operation's mnemonic in the family's spelling.
+fn op_name(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Add => "add",
+        Kind::Sub => "sub",
+        Kind::And => "and",
+        Kind::Or => "or",
+        Kind::Xor => "xor",
+    }
+}
 
 impl Selector<'_, '_, '_> {
     pub(super) fn is_wide(
@@ -251,21 +263,46 @@ impl Selector<'_, '_, '_> {
         let result = instruction.result.expect("a result");
         let pair = match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor => {
-                let (names, a, b) = (
-                    match op {
-                        BinaryOp::Add => ["add", "adc"],
-                        BinaryOp::Sub => ["sub", "sbb"],
-                        BinaryOp::And => ["and", "and"],
-                        BinaryOp::Or => ["or", "or"],
-                        _ => ["xor", "xor"],
-                    },
-                    self.wide(left, at, out)?,
-                    self.wide(right, at, out)?,
-                );
+                let kind = match op {
+                    BinaryOp::Add => Kind::Add,
+                    BinaryOp::Sub => Kind::Sub,
+                    BinaryOp::And => Kind::And,
+                    BinaryOp::Or => Kind::Or,
+                    _ => Kind::Xor,
+                };
+                let halves = expand_wide(kind, 64, self.layout.largest_legal_integer());
+                let [_, _] = halves[..] else {
+                    return refuse("an i64 on a target whose native integer is not 32 bits");
+                };
+                // A constant operand is an immediate in each half, as the
+                // target's forms take one: the first of a
+                // commutative operation is taken second.
+                let commutes = !matches!(kind, Kind::Sub);
+                let (left, right) =
+                    if commutes && self.constant(left, 8).is_some() { (right, left) } else { (left, right) };
+                let a = self.wide(left, at, out)?;
+                let b = match self.constant(right, 8) {
+                    Some(bits) => [Self::dword(bits as u32 as i64), Self::dword((bits >> 32) as u32 as i64)],
+                    None => {
+                        let pair = self.wide(right, at, out)?;
+                        [Loc::Held(pair.0), Loc::Held(pair.1)]
+                    }
+                };
                 // The carry runs from the low half's instruction to the high's.
-                let low = self.made(Operation::Binary, names[0], vec![Loc::Held(a.0), Loc::Held(b.0)], at, out);
-                let high = self.made(Operation::Binary, names[1], vec![Loc::Held(a.1), Loc::Held(b.1)], at, out);
-                (low, high)
+                let mut made = Vec::new();
+                for half in &halves {
+                    let first = op_name(kind);
+                    let name = if half.carried { llrm_x86::wide::carried(first) } else { first };
+                    let from = if half.index == 0 { a.0 } else { a.1 };
+                    made.push(self.made(
+                        Operation::Binary,
+                        name,
+                        vec![Loc::Held(from), b[half.index].clone()],
+                        at,
+                        out,
+                    ));
+                }
+                (made[0], made[1])
             }
             BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr => {
                 let (low, high) = self.wide(left, at, out)?;
