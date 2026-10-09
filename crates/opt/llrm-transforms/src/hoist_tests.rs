@@ -490,6 +490,27 @@ fn test_a_float_load_is_hoisted_where_the_loop_pays_for_its_release() {
     assert_eq!(float_hoist(false, 2), 1);
 }
 
+/// A chain of loads each reading through the one before: one more of them is ready each round of `_invariant_run`, and a load that was
+/// not ready was asked again, round after round, whether any write in the loop reaches it (x_life, d_alias: hoist's alias queries
+/// `memoryssa::spares` -> `regions::overlapping`, 1.3 of its 3.4 points). A load is asked once.
+#[test]
+fn test_a_load_that_waits_for_the_one_before_is_asked_whether_the_loop_writes_it_once() {
+    let globals = "@a = global ptr @b\n@b = global ptr @c\n@c = global ptr @d\n@d = global ptr @e\n@e = global i16 7\n@w = global i16 0\n\n";
+    let text = looped(
+        globals,
+        "",
+        "",
+        "",
+        "%n",
+        "  store i16 %i, ptr @w\n  %p1 = load ptr, ptr @a\n  %p2 = load ptr, ptr %p1\n  %p3 = load ptr, ptr %p2\n  %p4 = load ptr, ptr %p3\n  %v = load i16, ptr %p4\n",
+    );
+    let asked = crate::transform::undisturbed_asked();
+    let out = checked(&text, &trips());
+    let asks = crate::transform::undisturbed_asked() - asked;
+    assert!(out.matches("load").count() >= 5);
+    assert!(asks <= 5, "{asks} asks for 5 loads");
+}
+
 /// A motion's price is its work and one spill forecast; hoist found the forecast twice (once for the price, again for the spilled
 /// set), 41% of its time on a 16-deep loop nest.
 #[test]

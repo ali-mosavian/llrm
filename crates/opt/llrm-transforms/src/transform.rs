@@ -324,6 +324,15 @@ pub fn _reaches(
     doms.get(&cfg::id(block)).is_some_and(|dominating| dominating.contains(&cfg::id(layout[at])))
 }
 
+thread_local! {
+    static UNDISTURBED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has asked whether a load is undisturbed by a set of writes, for a test that a pass asks it once.
+pub fn undisturbed_asked() -> usize {
+    UNDISTURBED.with(std::cell::Cell::get)
+}
+
 /// Whether the load `one` still reads what the load before it read, with
 /// `between` run in between: nothing there may write its bytes.
 ///
@@ -331,6 +340,7 @@ pub fn _reaches(
 /// `regions::overlapping` decides against each write, on `program`, and an
 /// answer it cannot give overlaps.
 pub fn _undisturbed(one: InstId, between: &[InstId], accesses: &Accesses, program: Option<&ProgramProxy>) -> bool {
+    UNDISTURBED.with(|asked| asked.set(asked.get() + 1));
     let Some(read) = accesses.references.get(&one) else {
         return false;
     };

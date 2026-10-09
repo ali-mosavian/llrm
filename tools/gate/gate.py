@@ -127,6 +127,8 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
     if cargo or p.tier == "full":
         steps += ["build", "lib", "doc", "integration", "crate-tests", "bench", "torture"]
     steps += ["pytest"]
+    if cargo and p.tier != "full" and any(matches(f, cfg["scan_inputs"]["paths"]) for f in live):
+        steps.append("scans")
     if not cargo and p.tier != "full" and any(f.startswith("tools/torture/") for f in live):
         steps += ["torture"]
     heavy = {}
@@ -192,6 +194,10 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict]) -> dict[str, str]:
         "doc": f"{cargo} {scope} --doc",
         "integration": f"{cargo} {cheap_bins} -- {skips} --skip test_every_program_under_tests_run_prints_its_out",
         "crate-tests": f"{cargo} {ct}" if ct else "true",
+        # Every scan runs, and any failing fails the step: the first red must not hide the others.
+        "scans": "rc=0; "
+        + "; ".join(f"{cargo} -p {one['package']} " + (f"--lib -- {one['lib']}" if "lib" in one else f"--test {one['test']}") + " || rc=1" for one in cfg["scan"] if "package" in one)
+        + "; exit $rc",
         "bench": bench,
         "torture": "timeout 600 uv run -q --project tools python tools/torture/torture.py --gate --work $CARGO_TARGET_DIR/torture-work",
         "pytest": "uv run -q --project tools python -m pytest tools crates tests/*.py -q -p no:cacheprovider --ignore=tests/test_programs_compile.py --ignore=tests/test_loops.py",
@@ -231,6 +237,7 @@ def expected(p: Plan, cfg: dict, pkgs: dict[str, dict]) -> dict[str, tuple[int |
         "doc": (None, False),
         "integration": (sum(1 for t in root_tests() if t != "timing" and t not in whole), False),
         "run": (1, True),
+        "scans": (None, True),
     }
     ct = sum(1 for n, _ in crate_tests(pkgs) if n in selected)
     if ct:
