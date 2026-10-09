@@ -525,13 +525,16 @@ pub(crate) fn _walked(body: &LirBody, index: &Indexes, keep: &impl Fn(u32) -> bo
 /// Where an instruction is in a body: its block's number and its own in the block.
 pub type Place = (usize, usize);
 
+/// An instruction that names a value: where it is, and whether it defines and whether it reads the value.
+pub type Occurrence = (Place, bool, bool);
+
 /// The intervals of `values` (ascending), worked out from where they occur rather than by walking the body: what the walk
 /// finds of a value is decided in the blocks it occurs in and those it is live through, and the rest of the body adds
-/// nothing. `places(value)` are the instructions that name it, by block then position, once each; `named(block, position)`
-/// is the instruction there as it names the values (not the body's own, where a caller adds values to it). The answer holds
+/// nothing. `places[value]` are the instructions that name it, by block then position, once each, and whether each defines
+/// and reads it (not what the body's own says, where a caller adds values to it). The answer holds
 /// what `intervals_sparse` does, in another order of values; it costs the occurrences and the blocks the values are live
 /// in, where the walk costs every value live in every block, hashed.
-pub fn intervals_by_occurrences<'x>(body: &'x LirBody, index: &Indexes, values: &[u32], places: &dyn Fn(u32) -> Vec<Place>, named: &dyn Fn(usize, usize) -> &'x Insn) -> IndexMap<u32, Interval> {
+pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32], places: &IndexMap<u32, Vec<Occurrence>>) -> IndexMap<u32, Interval> {
     if values.is_empty() {
         return IndexMap::default();
     }
@@ -552,24 +555,14 @@ pub fn intervals_by_occurrences<'x>(body: &'x LirBody, index: &Indexes, values: 
     let mut out: IndexMap<u32, Interval> = IndexMap::default();
     let mut turn = 0u32;
     for &value in values {
-        let found = places(value);
-        if found.is_empty() {
-            continue;
-        }
+        let Some(found) = places.get(&value).filter(|found| !found.is_empty()) else { continue };
         turn += 1;
         // By block: the parallel-copy runs it occurs in, as (last position of the run, defined there, read there), ascending.
         let mut by_block: Vec<Vec<(usize, bool, bool)>> = Vec::new();
         let mut work: Vec<usize> = Vec::new();
-        for (block_index, at) in found {
+        for &((block_index, at), defined, used) in found {
             let block = &body.blocks[block_index];
             let end = _group_end(block, at);
-            let start = _group_start(block, end);
-            let (mut defined, mut used) = (false, false);
-            for position in start..=end {
-                let one = named(block_index, position);
-                defined |= one.defines.contains(&value);
-                used |= one.uses.contains(&value);
-            }
             if run_mark[block_index] != turn {
                 run_mark[block_index] = turn;
                 run_of[block_index] = by_block.len();

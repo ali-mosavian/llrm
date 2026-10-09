@@ -828,13 +828,17 @@ fn test_intervals_from_occurrences_are_those_of_the_walk() {
         for step in [1_usize, 2, 3] {
             let values: Vec<u32> = every.iter().copied().enumerate().filter(|(at, _)| at % step == (seed as usize) % step).map(|(_, value)| value).collect();
             let whole = ranges::_ranges_reference(&plain, &index, &|value| values.contains(&value));
-            let places = |value: u32| -> Vec<ranges::Place> {
+            let mut places: IndexMap<u32, Vec<ranges::Occurrence>> = IndexMap::default();
+            for &value in &values {
                 let mut at: Vec<ranges::Place> = postings.defs(value).iter().chain(postings.uses(value)).map(|(block, position)| (*block as usize, *position as usize)).collect();
                 at.sort_unstable();
                 at.dedup();
-                at
-            };
-            let found = ranges::intervals_by_occurrences(&plain, &index, &values, &places, &|block, position| &*plain.blocks[block].insns[position]);
+                places.insert(value, at.into_iter().map(|(block, position)| {
+                    let one = &plain.blocks[block].insns[position];
+                    ((block, position), one.defines.contains(&value), one.uses.contains(&value))
+                }).collect());
+            }
+            let found = ranges::intervals_by_occurrences(&plain, &index, &values, &places);
             assert!(found == whole, "seed {seed}, every {step}th value: the intervals from occurrences differ from the walk");
             compared += whole.len();
         }

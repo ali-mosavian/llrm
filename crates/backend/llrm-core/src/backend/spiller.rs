@@ -1035,21 +1035,17 @@ fn homes_by_sparse_body(body: &LirBody, index: &ranges::Indexes, changed: &[(usi
 
 /// The same from where the homes occur: the instructions `changed` name them, so the walk need not look at the others.
 fn homes_by_occurrences(body: &LirBody, index: &ranges::Indexes, changed: &[(usize, usize, Arc<Insn>)], first: u32, count: usize) -> IndexMap<u32, Interval> {
-    let mut places: IndexMap<u32, Vec<ranges::Place>> = IndexMap::default();
-    let mut made: crate::support::hash::HashMap<ranges::Place, Arc<Insn>> = Default::default();
+    let mut places: IndexMap<u32, Vec<ranges::Occurrence>> = IndexMap::default();
     for (block_index, at, one) in changed {
-        made.insert((*block_index, *at), Arc::clone(one));
         let mut named: Vec<u32> = one.defines.iter().chain(&one.uses).copied().filter(|value| *value >= first).collect();
         named.sort_unstable();
         named.dedup();
         for value in named {
-            places.entry(value).or_default().push((*block_index, *at));
+            places.entry(value).or_default().push(((*block_index, *at), one.defines.contains(&value), one.uses.contains(&value)));
         }
     }
     let values: Vec<u32> = (first..first + count as u32).collect();
-    ranges::intervals_by_occurrences(body, index, &values, &|value| places.get(&value).cloned().unwrap_or_default(), &|block, position| {
-        made.get(&(block, position)).map_or(&*body.blocks[block].insns[position], |one| &**one)
-    })
+    ranges::intervals_by_occurrences(body, index, &values, &places)
 }
 
 fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(i64, u32, Vec<Interval>)>, IndexMap<u32, Interval>) {
@@ -1139,7 +1135,7 @@ fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(
         shared = ranges::indexed_shared(body);
         index = &*shared;
         let mut all = ranges::intervals(body, None);
-        let homes_found = homes_by_occurrences(body, index, &changed, first, homes.len());
+        let homes_found = llrm_support::debug::timed("intervals by occurrences", || homes_by_occurrences(body, index, &changed, first, homes.len()));
         if std::env::var_os("LLRM_CHECK_OCCURRENCES").is_some() {
             let walked = homes_by_sparse_body(body, index, &changed, first);
             assert!(homes_found == walked, "{}: the homes' intervals by occurrences differ from the walk of the body of their instructions", body.name);
