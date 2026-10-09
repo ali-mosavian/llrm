@@ -192,7 +192,7 @@ pub fn _floating(opcode: &Opcode) -> bool {
 /// whether any went.
 ///
 /// `avoid_store_crossing` keeps a load from being served across a store.
-pub fn subexpressions(function: &mut Function, accesses: &Accesses, avoid_store_crossing: bool, program: Option<&ProgramProxy>) -> Result<bool, String> {
+pub fn subexpressions(function: &mut Function, accesses: &Accesses, avoid_store_crossing: bool, program: Option<&ProgramProxy>, crossed: &std::cell::Cell<bool>) -> Result<bool, String> {
     let doms = cfg::Dominance::of(function).dominators(function);
     let order: IndexMap<BlockId, usize> = function.layout().iter().enumerate().map(|(index, &block)| (block, index)).collect();
 
@@ -223,12 +223,14 @@ pub fn subexpressions(function: &mut Function, accesses: &Accesses, avoid_store_
                 candidates.push((here, index, inst));
                 continue;
             }
-            if loads
-                && avoid_store_crossing
-                && instructions[where_ + 1..index].iter().any(|&crossed| matches!(function.instruction(crossed).opcode, Opcode::Store { .. }))
-            {
-                candidates.push((here, index, inst));
-                continue;
+            if loads && instructions[where_ + 1..index].iter().any(|&between| matches!(function.instruction(between).opcode, Opcode::Store { .. })) {
+                // The one place `avoid_store_crossing` changes what is numbered: told, so a caller that runs this both ways can see
+                // when the second way is the first.
+                crossed.set(true);
+                if avoid_store_crossing {
+                    candidates.push((here, index, inst));
+                    continue;
+                }
             }
             let (Some(mine), Some(theirs)) = (op.result, function.instruction(earlier).result) else {
                 continue;
@@ -338,9 +340,12 @@ pub fn _undisturbed(one: InstId, between: &[InstId], accesses: &Accesses, progra
 /// Store-to-load forwarding: each load a known value serves becomes that
 /// value; whether any did. `accesses` are `function`'s as it stands.
 ///
+/// `crossed` is set when a value serves a load across a store, the one thing `avoid_store_crossing` changes: where it is not set the
+/// run is the same either way.
+///
 /// `avoid_store_crossing` keeps a value from serving a load when a store
 /// lies on a path from its definition to the load.
-pub fn forwarded(context: &Context, layout: &DataLayout, function: &mut Function, outer: &Outer, accesses: &Accesses, registers: &IndexMap<ValueId, llrm_analysis::consts::Known>, shape: &llrm_analysis::cfg::Shape, avoid_store_crossing: bool, held: &std::cell::OnceCell<avail::Held>) -> Result<bool, String> {
+pub fn forwarded(context: &Context, layout: &DataLayout, function: &mut Function, outer: &Outer, accesses: &Accesses, registers: &IndexMap<ValueId, llrm_analysis::consts::Known>, shape: &llrm_analysis::cfg::Shape, avoid_store_crossing: bool, held: &std::cell::OnceCell<avail::Held>, crossed: &std::cell::Cell<bool>) -> Result<bool, String> {
     let want = function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Load { .. })).collect::<BTreeSet<_>>();
     if want.is_empty() {
         return Ok(false);
@@ -349,7 +354,11 @@ pub fn forwarded(context: &Context, layout: &DataLayout, function: &mut Function
     // What each block holds is a fact of the instructions `function` has now, which a caller that runs this twice on one function works out once.
     let served = avail::forwardable_by(&unit, accesses, &want, held.get_or_init(|| avail::holders(&unit, accesses)))
         .into_iter()
-        .filter(|one| !avoid_store_crossing || !_crosses_store(function, one.value, one.at))
+        .filter(|one| {
+            let crosses = _crosses_store(function, one.value, one.at);
+            crossed.set(crossed.get() || crosses);
+            !avoid_store_crossing || !crosses
+        })
         .collect::<Vec<_>>();
     if served.is_empty() {
         return Ok(false);
@@ -440,7 +449,7 @@ mod tests {
         let layout = DataLayout::default();
         let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
         let accesses = Accesses::resolved(&llrm_analysis::testing::with_registers(Unit::of(module, &layout, function)), &IndexMap::default()).unwrap();
-        subexpressions(f(module), &accesses, false, None).unwrap()
+        subexpressions(f(module), &accesses, false, None, &std::cell::Cell::new(false)).unwrap()
     }
 
     /// `text` numbered: its printed form, and whether anything went. What
@@ -491,7 +500,7 @@ b0:
             let program = dos.then_some(&*program);
             let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
             let accesses = Accesses::resolved(&Unit { program, ..llrm_analysis::testing::with_registers(Unit::of(&module, &layout, function)) }, &IndexMap::default()).unwrap();
-            subexpressions(f(&mut module), &accesses, false, program).unwrap()
+            subexpressions(f(&mut module), &accesses, false, program, &std::cell::Cell::new(false)).unwrap()
         };
         assert!(reused(true) && !reused(false));
     }
@@ -509,7 +518,7 @@ b0:
         let (context, function) = module.function_mut("f").expect("@f");
         let registers = llrm_analysis::consts::known(&llrm_analysis::testing::with_registers(Unit::within(context, &layout, function, &outer)), None, None, None);
         let shape = llrm_analysis::cfg::Shape::of(function);
-        let changed = forwarded(context, &layout, function, &outer, &accesses, &registers, &shape, avoid_store_crossing, &std::cell::OnceCell::new()).unwrap();
+        let changed = forwarded(context, &layout, function, &outer, &accesses, &registers, &shape, avoid_store_crossing, &std::cell::OnceCell::new(), &std::cell::Cell::new(false)).unwrap();
         let text = printed(&module);
         assert_eq!(changed, text != printed(&before), "{text}");
         assert_eq!(results(&module, XY), results(&before, XY), "{text}");
