@@ -159,7 +159,8 @@ b3:
 
 const INDICES: &[&[i128]] = &[&[0, 4, 6], &[1, 4, 6], &[1, 4, 4], &[0, 6, 4]];
 
-/// ARRPHI still reloaded both elements after sharing their addresses across branches.
+/// ARRPHI still reloaded both elements after sharing their addresses across
+/// branches.
 #[test]
 fn test_pointer_phi_selects_the_matching_store_on_each_edge() {
     let body = POINTERS.replace("LEFT", "%a").replace("RIGHT", "%b").replace("JOIN", "");

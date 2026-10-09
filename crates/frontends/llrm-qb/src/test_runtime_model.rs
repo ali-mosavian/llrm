@@ -177,9 +177,9 @@ fn a_print_item_before_else_prints_the_right_branch() {
     );
 }
 
-/// ON n outside 0..255 is ERROR 5 raised by the ON itself (tests/run/qb/onrange.bas
-/// pins that RESUME then retries the ON, as BC does): the selector is the range
-/// check, so no statement of its own follows it.
+/// ON n outside 0..255 is ERROR 5 raised by the ON itself
+/// (tests/run/qb/onrange.bas pins that RESUME then retries the ON, as BC does):
+/// the selector is the range check, so no statement of its own follows it.
 #[test]
 fn on_goto_out_of_range_raises_error_5() {
     let source = "DEFINT A-Z\nx = 300\nON x GOTO a, b\nPRINT \"fell\"\nEND\na: PRINT \"a\"\nb: PRINT \"b\"\n";

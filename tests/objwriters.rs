@@ -1,5 +1,5 @@
-//! The object writers: what `-fobject-format=` picks, and what readelf and objdump make of the
-//! objects it writes for every bench C program.
+//! The object writers: what `-fobject-format=` picks, and what readelf and
+//! objdump make of the objects it writes for every bench C program.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -34,7 +34,8 @@ fn bench_programs() -> Vec<PathBuf> {
     found
 }
 
-/// readelf and objdump accept the ELF object of every bench C program, at both sizes.
+/// readelf and objdump accept the ELF object of every bench C program, at both
+/// sizes.
 #[test]
 fn readelf_and_objdump_accept_every_bench_objects() {
     if !have("readelf") || !have("objdump") {
@@ -73,8 +74,8 @@ fn llvm(tool: &str) -> Option<PathBuf> {
     dirs.iter().map(|dir| dir.join(tool)).find(|path| path.exists())
 }
 
-/// llvm-readobj and llvm-objdump accept the COFF object of every bench C program, at both ends of
-/// the optimiser.
+/// llvm-readobj and llvm-objdump accept the COFF object of every bench C
+/// program, at both ends of the optimiser.
 #[test]
 fn llvm_accepts_every_bench_coff_object() {
     let (Some(readobj), Some(objdump)) = (llvm("llvm-readobj"), llvm("llvm-objdump")) else {
@@ -105,8 +106,9 @@ fn llvm_accepts_every_bench_coff_object() {
     }
 }
 
-/// `-g`: llvm-readobj reads the C13 of every bench C program's COFF object and llvm-objdump its
-/// code, at both ends of the optimiser. Each object names its functions.
+/// `-g`: llvm-readobj reads the C13 of every bench C program's COFF object and
+/// llvm-objdump its code, at both ends of the optimiser. Each object names its
+/// functions.
 #[test]
 fn llvm_reads_the_codeview_of_every_bench_coff_object() {
     let (Some(readobj), Some(objdump)) = (llvm("llvm-readobj"), llvm("llvm-objdump")) else {
@@ -141,10 +143,11 @@ fn llvm_reads_the_codeview_of_every_bench_coff_object() {
     }
 }
 
-/// `-g` through the whole path: lld-link links the C program's object with /debug, and the PDB holds
-/// its function with both parameters, its struct, its global and its lines. The same program
-/// as OMF CodeView names the same function, parameters and struct. `__cdecl` is the `_name` the
-/// entry asks for; the default convention spells it `name_`.
+/// `-g` through the whole path: lld-link links the C program's object with
+/// /debug, and the PDB holds its function with both parameters, its struct, its
+/// global and its lines. The same program as OMF CodeView names the same
+/// function, parameters and struct. `__cdecl` is the `_name` the entry asks
+/// for; the default convention spells it `name_`.
 #[test]
 fn lld_link_makes_a_pdb_of_a_c_program() {
     let (Some(link), Some(pdbutil)) = (llvm("lld-link"), llvm("llvm-pdbutil")) else {
@@ -201,9 +204,11 @@ fn lld_link_makes_a_pdb_of_a_c_program() {
     }
 }
 
-/// An llrm COFF object and a clang-cl one link into one image, each calling the other with the
-/// cdecl both use (llrm's default is Open Watcom's registers, so the functions say `__cdecl`): lld-link resolves
-/// `_start` and `_clang_add`, and every call in the image lands on the address the link map gives its callee.
+/// An llrm COFF object and a clang-cl one link into one image, each calling the
+/// other with the cdecl both use (llrm's default is Open Watcom's registers, so
+/// the functions say `__cdecl`): lld-link resolves `_start` and `_clang_add`,
+/// and every call in the image lands on the address the link map gives its
+/// callee.
 #[test]
 fn an_llrm_coff_object_links_with_a_clang_cl_object() {
     let (Some(clang), Some(link), Some(objdump)) = (llvm("clang-cl"), llvm("lld-link"), llvm("llvm-objdump")) else {
@@ -285,8 +290,9 @@ fn without_a_format_the_target_writes_its_default() {
     }
 }
 
-/// COFF's i386 machine number opens the file, and its symbols carry the `coff` decoration of the convention the
-/// function has: the default's, Open Watcom's, is a trailing underscore (what `wcc386 -eoc` writes).
+/// COFF's i386 machine number opens the file, and its symbols carry the `coff`
+/// decoration of the convention the function has: the default's, Open Watcom's,
+/// is a trailing underscore (what `wcc386 -eoc` writes).
 #[test]
 fn coff_is_a_coff_object_for_a_target_that_lists_it() {
     let scratch = tempfile::tempdir().unwrap();
@@ -307,8 +313,8 @@ fn elf_is_an_elf_object_for_a_target_that_lists_it() {
     assert_eq!(&std::fs::read(&object).unwrap()[..4], b"\x7fELF");
 }
 
-/// A format a target cannot write was never refused: the request fell through to its default or to a
-/// wrong file. It names what the target writes.
+/// A format a target cannot write was never refused: the request fell through
+/// to its default or to a wrong file. It names what the target writes.
 #[test]
 fn a_format_the_target_does_not_write_is_refused() {
     let scratch = tempfile::tempdir().unwrap();
@@ -329,8 +335,8 @@ fn a_format_the_target_does_not_write_is_refused() {
     assert!(unwritten.contains("cannot write macho"), "{unwritten}");
 }
 
-/// With debug information on both sides: lld-link merges llrm's C13 and clang-cl's into one PDB,
-/// which names the function of each module.
+/// With debug information on both sides: lld-link merges llrm's C13 and
+/// clang-cl's into one PDB, which names the function of each module.
 #[test]
 fn a_pdb_holds_the_functions_of_an_llrm_object_and_a_clang_cl_object() {
     let (Some(clang), Some(link), Some(pdbutil)) = (llvm("clang-cl"), llvm("lld-link"), llvm("llvm-pdbutil")) else {
@@ -381,9 +387,10 @@ fn a_pdb_holds_the_functions_of_an_llrm_object_and_a_clang_cl_object() {
     }
 }
 
-/// Whether some instruction between a backward branch's target and the branch writes the frame
-/// cell at `offset` from ebp, in `listing` (llvm-objdump's): a loop that keeps its variable in a
-/// register and stores it after the loop leaves the debugger's cell stale in every iteration.
+/// Whether some instruction between a backward branch's target and the branch
+/// writes the frame cell at `offset` from ebp, in `listing` (llvm-objdump's): a
+/// loop that keeps its variable in a register and stores it after the loop
+/// leaves the debugger's cell stale in every iteration.
 fn stores_in_a_loop(
     listing: &str,
     offset: i64,

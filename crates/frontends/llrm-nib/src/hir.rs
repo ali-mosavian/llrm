@@ -58,7 +58,8 @@ pub enum Operand {
         indices: Vec<Operand>,
         offset: u32,
         type_id: u32,
-        /// The member of an aggregate type this is: the type and the member's offset in it.
+        /// The member of an aggregate type this is: the type and the member's
+        /// offset in it.
         member: Option<(u32, u32)>,
     },
     IndirectPlace {
@@ -67,7 +68,8 @@ pub enum Operand {
         type_id: u32,
         // An array element: the language promises it stays inside its array.
         inbounds: bool,
-        /// The member of an aggregate type this is: the type and the member's offset in it.
+        /// The member of an aggregate type this is: the type and the member's
+        /// offset in it.
         member: Option<(u32, u32)>,
     },
     DescriptorPlace {
@@ -179,7 +181,8 @@ pub struct ProcedureAbi {
 impl ProcedureAbi {
     /// A function of `abi`, taking `argument_bytes`, when it differs from a
     /// native one: it removes its arguments, or it returns with `iret`.
-    /// An unexported one states no distance (`any`): only its own module calls it.
+    /// An unexported one states no distance (`any`): only its own module calls
+    /// it.
     pub fn of(
         abi: Abi,
         argument_bytes: u32,
@@ -246,8 +249,8 @@ pub struct Program {
     pub data: Vec<DataObject>,
     /// `-g`: what a debugger names and how it reads it.
     pub debug: Option<llrm_core::hir::model::Debug>,
-    /// The bytes of each word of a buffer's or view's descriptor: the target's near pointer, which the
-    /// descriptor places' field type is.
+    /// The bytes of each word of a buffer's or view's descriptor: the target's
+    /// near pointer, which the descriptor places' field type is.
     pub descriptor_word: u32,
 }
 
@@ -303,7 +306,8 @@ impl Program {
         let mut stated = llrm_core::hir::facts::Builder::new("nib");
         for function in &self.functions {
             stated.extend(function.facts.iter().cloned());
-            // A reference's place stays inside what it refers to, where the language checked it.
+            // A reference's place stays inside what it refers to, where the
+            // language checked it.
             for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
                 // A bool is 0 or 1, whoever stored it.
                 let loaded = instruction.op == "load"
@@ -382,7 +386,8 @@ impl Program {
             write!(out, ",\"width\":{}}}", type_.width).unwrap();
         }
         write!(out, "]}}],\"runtime\":\"freestanding\"").unwrap();
-        // Only when the target's word is not real mode's: programs read as they always have.
+        // Only when the target's word is not real mode's: programs read as they
+        // always have.
         if self.descriptor_word != 2 {
             write!(out, ",\"descriptor_word\":{}", self.descriptor_word).unwrap();
         }

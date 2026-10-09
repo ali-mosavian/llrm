@@ -1,5 +1,6 @@
-//! An [`Object`] as an ELF64 relocatable file for x86-64, RELA relocations (the addend is in the
-//! entry), as GNU ld and lld take them. The container is `llrm-elf`'s.
+//! An [`Object`] as an ELF64 relocatable file for x86-64, RELA relocations (the
+//! addend is in the entry), as GNU ld and lld take them. The container is
+//! `llrm-elf`'s.
 
 use llrm_elf::{Machine, Relocation};
 use llrm_object::{Arch, Kind, Object, Unsupported};
@@ -25,7 +26,8 @@ impl Machine for X8664 {
     fn relocation(kind: Kind) -> Result<Relocation, Unsupported> {
         let (kind, width, from) = match kind {
             Kind::Abs { width: 8 } => (R_X86_64_64, 8, 0),
-            // Zero-extended: a signed 32-bit absolute address has its own type, which no encoder asks for yet.
+            // Zero-extended: a signed 32-bit absolute address has its own type,
+            // which no encoder asks for yet.
             Kind::Abs { width: 4 } => (R_X86_64_32, 4, 0),
             Kind::Abs { width: 2 } => (R_X86_64_16, 2, 0),
             Kind::Abs { width: 1 } => (R_X86_64_8, 1, 0),
@@ -81,8 +83,9 @@ mod tests {
         u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap())
     }
 
-    /// `_start` loads a pointer from `.data` rip-relative (R_X86_64_PC32 against a local symbol) and
-    /// writes what it points at (R_X86_64_64 with an addend), then exits: GNU ld links it, and it runs.
+    /// `_start` loads a pointer from `.data` rip-relative (R_X86_64_PC32
+    /// against a local symbol) and writes what it points at (R_X86_64_64
+    /// with an addend), then exits: GNU ld links it, and it runs.
     fn hello() -> Object {
         let load = Reloc { at: 3, kind: Kind::PcRel { width: 4, from: 4 }, target: Target::Symbol(2), addend: 0 };
         let text = [
@@ -115,8 +118,9 @@ mod tests {
         }
     }
 
-    /// RELA keeps the addend in the entry and leaves the field zero: the entry is 24 bytes, its
-    /// addend minus 4 for a pc-relative field, and `.rela.text` links the symbol table.
+    /// RELA keeps the addend in the entry and leaves the field zero: the entry
+    /// is 24 bytes, its addend minus 4 for a pc-relative field, and
+    /// `.rela.text` links the symbol table.
     #[test]
     fn a_rela_entry_carries_the_addend_and_the_field_stays_zero() {
         let bytes = write(&hello()).unwrap();
@@ -151,7 +155,8 @@ mod tests {
         word(bytes, header(named(name).unwrap()) + 24) as usize
     }
 
-    /// The object, linked by GNU ld, runs and writes what the data's pointer plus its addend names.
+    /// The object, linked by GNU ld, runs and writes what the data's pointer
+    /// plus its addend names.
     #[test]
     fn ld_links_it_and_it_runs() {
         if cfg!(not(all(target_os = "linux", target_arch = "x86_64")))
@@ -182,8 +187,9 @@ mod tests {
         assert!(write(&made).is_err());
     }
 
-    /// An object that asks for CodeView or Turbo Debugger information is refused by name: the
-    /// information of another format is never written in its place.
+    /// An object that asks for CodeView or Turbo Debugger information is
+    /// refused by name: the information of another format is never written
+    /// in its place.
     #[test]
     fn a_debug_format_this_object_cannot_carry_is_refused() {
         for (format, name) in [

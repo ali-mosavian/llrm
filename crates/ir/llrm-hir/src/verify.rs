@@ -212,7 +212,8 @@ fn _facts(module: &model::Module) -> Result<(), InvalidHIR> {
             Subject::Operand { function: id, instruction, operand } => {
                 index.instruction(id, instruction).is_some_and(|i| {
                     (0..i.operands.len() as i64).contains(&operand)
-                    // What a callee does with a pointer is stated of a call's argument.
+                    // What a callee does with a pointer is stated of a call's
+                    // argument.
                     && (i.op == model::Op::Call || matches!(fact, llrm_mir::facts::Fact::InBounds))
                 })
             }
@@ -285,7 +286,8 @@ pub fn verify(program: &model::Program) -> Result<(), InvalidHIR> {
             invalid!("duplicate module {}", module.id);
         }
         module_ids.insert(module.id);
-        // A debug member is a bit field with both its first bit and width, or neither.
+        // A debug member is a bit field with both its first bit and width, or
+        // neither.
         for member in module.debug.iter().flat_map(|one| &one.types).flat_map(|one| &one.members) {
             if member.bit_start.is_some() != member.bit_width.is_some() {
                 invalid!("{}: debug member {} has a bit field's start or width alone", module.name, member.name);
@@ -440,7 +442,8 @@ fn _function(
         let Some(callable) = callable else {
             invalid!("{prefix}: call {} names an unknown callable", site.instruction);
         };
-        // A value passes in its parameter's representation: a near pointer is not a far one.
+        // A value passes in its parameter's representation: a near pointer is
+        // not a far one.
         if callable.parameter_types.len() == instruction.operands.len() {
             for (index, (operand, parameter)) in instruction.operands.iter().zip(&callable.parameter_types).enumerate()
             {
@@ -494,7 +497,8 @@ fn _function(
             if let Some(expected) = expected.filter(|expected| instruction.results.len() != *expected) {
                 invalid!("{prefix}: {} has {} results, expected {expected}", instruction.op, instruction.results.len());
             }
-            // A call names its callee, or calls through the pointer its first operand is.
+            // A call names its callee, or calls through the pointer its first
+            // operand is.
             let through_pointer = instruction.callee.is_none()
                 && instruction.operands.first().is_some_and(|first| {
                     matches!(
@@ -646,8 +650,10 @@ fn _function(
                 if asm.inputs.len() != operand_types.len() || asm.outputs.len() != result_types.len() {
                     invalid!("{prefix}: asm {} names a register for each operand and result", instruction.id);
                 }
-                // A register is a whole of 16 bits (real mode) or 32 (a flat target's e-register), which the code
-                // generator checks against the register it names; a frontend narrows or widens a part.
+                // A register is a whole of 16 bits (real mode) or 32 (a flat
+                // target's e-register), which the code
+                // generator checks against the register it names; a frontend
+                // narrows or widens a part.
                 let word = |one: &i64| matches!(types[one].width, 2 | 4) && types[one].kind == model::TypeKind::Integer;
                 let near = |one: &i64| matches!(types[one].width, 2 | 4) && types[one].kind == model::TypeKind::Pointer;
                 if !operand_types.iter().all(|one| word(one) || near(one)) || !result_types.iter().all(word) {
@@ -756,8 +762,9 @@ fn _function(
                 } else {
                     result_types.iter().chain(operand_types.iter()).copied().collect()
                 };
-                // An ordered compare also orders pointers, as LLVM's `icmp ult ptr`: how
-                // a space's pointers order is the lowering's, not a conversion's.
+                // An ordered compare also orders pointers, as LLVM's `icmp ult
+                // ptr`: how a space's pointers order is the
+                // lowering's, not a conversion's.
                 let ordered_pointers = _COMPARE.contains(&instruction.op);
                 let unsigned = involved
                     .iter()
@@ -847,7 +854,8 @@ fn _function(
                     {
                         invalid!("{prefix}: indirect place disagrees with pointer type");
                     }
-                    // An opaque pointer, as C's, states no pointee to stay inside.
+                    // An opaque pointer, as C's, states no pointee to stay
+                    // inside.
                     if let Some(element) = pointer.element {
                         if operand.offset + types[&operand.r#type].width > types[&element].width {
                             invalid!("{prefix}: indirect place exceeds its pointee");

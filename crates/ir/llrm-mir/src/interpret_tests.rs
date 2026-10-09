@@ -365,7 +365,8 @@ fn small(bits: u128) -> Val {
 }
 
 /// A value outside the `range` stated of a parameter, of the result, or of a
-/// load (`!range`) is a broken promise; a value inside, or an unchecked run, is not.
+/// load (`!range`) is a broken promise; a value inside, or an unchecked run, is
+/// not.
 #[test]
 fn a_value_outside_its_stated_range_is_reported() {
     let parameter = "define i16 @g(i16 range(i16 0, 2) %p) {\nentry:\n  ret i16 %p\n}\n";

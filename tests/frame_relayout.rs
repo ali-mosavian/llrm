@@ -1,12 +1,14 @@
-//! A function whose frame reaches past `[bp-128]` is laid out a second time, with a hole above its allocas for the
-//! spill slots, and the layout with fewer far operands is kept. That second layout used to be a second run of the whole
-//! backend (a quarter to a third of the backend's time on QCport); it is made from the first run's frame now
-//! (docs/optimizations/second-frame.md).
+//! A function whose frame reaches past `[bp-128]` is laid out a second time,
+//! with a hole above its allocas for the spill slots, and the layout with fewer
+//! far operands is kept. That second layout used to be a second run of the
+//! whole backend (a quarter to a third of the backend's time on QCport); it is
+//! made from the first run's frame now (docs/optimizations/second-frame.md).
 
 use std::process::Command;
 
 /// (program, flags) whose frames reach past one-byte displacements and spill.
-// shellsort -m32 left the list: with EBP a value register (no frame pointer) it no longer spills.
+// shellsort -m32 left the list: with EBP a value register (no frame pointer) it
+// no longer spills.
 const FAR: [(&str, &[&str]); 4] =
     [("matmul", &["-m32", "-march=i486"]), ("matmul", &[]), ("nbody", &[]), ("sieve", &["-m32", "-march=i486"])];
 
@@ -33,8 +35,8 @@ fn compiled(
     (std::fs::read(scratch.path().join("a.obj")).unwrap(), String::from_utf8_lossy(&output.stderr).into_owned())
 }
 
-/// The backend ran twice for these functions, once more for the frame: 4 runs of isel in matmul at -O2, 2 candidates
-/// each.
+/// The backend ran twice for these functions, once more for the frame: 4 runs
+/// of isel in matmul at -O2, 2 candidates each.
 #[test]
 fn test_a_far_frame_is_laid_out_again_not_run_again() {
     for (program, flags) in FAR {
@@ -47,8 +49,9 @@ fn test_a_far_frame_is_laid_out_again_not_run_again() {
     }
 }
 
-/// `LLRM_CHECK_FRAME=1` runs the backend again beside and fails on any difference, the displacements, the debug homes,
-/// the reserve and the inline code included: the same objects either way.
+/// `LLRM_CHECK_FRAME=1` runs the backend again beside and fails on any
+/// difference, the displacements, the debug homes, the reserve and the inline
+/// code included: the same objects either way.
 #[test]
 fn test_the_frame_laid_again_is_what_running_the_backend_again_made() {
     for (program, flags) in FAR {

@@ -39,42 +39,52 @@ pub use parser::parse;
 /// What a build asks of the frontend beyond the source.
 #[derive(Clone, Debug)]
 pub struct Frontend {
-    /// The data layout and address spaces of the target the program is for: how many bytes a
-    /// near and a far pointer are, which the language's `*near` and `*far` mean there.
+    /// The data layout and address spaces of the target the program is for: how
+    /// many bytes a near and a far pointer are, which the language's
+    /// `*near` and `*far` mean there.
     pub layout: llrm_target::layout::Layout,
-    /// The bytes an argument takes on the stack at least: the target's stack slot.
+    /// The bytes an argument takes on the stack at least: the target's stack
+    /// slot.
     pub slot: u32,
-    /// The bits of the target's code (its `object.toml`): what inline assembly is assembled for.
+    /// The bits of the target's code (its `object.toml`): what inline assembly
+    /// is assembled for.
     pub bits: u32,
-    /// The target's register file (`registers.regs`): which registers an inline block may name.
+    /// The target's register file (`registers.regs`): which registers an inline
+    /// block may name.
     pub registers: Vec<llrm_target::registers::Register>,
-    /// The machine's physical addresses the target names (`PHYSICAL_TEXT_SCREEN`...), which every module
-    /// may use as constants.
+    /// The machine's physical addresses the target names
+    /// (`PHYSICAL_TEXT_SCREEN`...), which every module may use as
+    /// constants.
     pub physical: Vec<(String, u64)>,
     /// The calling conventions the target defines, the first its programs' own.
     pub conventions: Vec<String>,
-    /// How each convention spells a symbol in the object format asked for (`*` is the name), where the target's
-    /// description says: `symbols_for`. A convention it does not name spells it as `Abi::symbol` does.
+    /// How each convention spells a symbol in the object format asked for (`*`
+    /// is the name), where the target's description says: `symbols_for`. A
+    /// convention it does not name spells it as `Abi::symbol` does.
     pub symbols: std::collections::BTreeMap<String, String>,
-    /// The convention the language's own functions have, by its name in `calling.toml`: the `-mabi=` family's, else
-    /// the default's.
+    /// The convention the language's own functions have, by its name in
+    /// `calling.toml`: the `-mabi=` family's, else the default's.
     pub native_name: String,
     /// The target's OS layer under Nib's runtime.
     pub os: Os,
-    /// Index and slice bounds go unchecked, as in `unsafe`: `--unchecked-bounds`.
+    /// Index and slice bounds go unchecked, as in `unsafe`:
+    /// `--unchecked-bounds`.
     pub unchecked_bounds: bool,
     /// `-g`: source lines and debug information.
     pub debug: bool,
-    /// Each function compares SP with the runtime's limit on entry: `-fsanitize=stack`.
+    /// Each function compares SP with the runtime's limit on entry:
+    /// `-fsanitize=stack`.
     pub checked_stack: bool,
-    /// Warn where the source meets the target's widths: `far` or `huge` written where far is near, a
-    /// `usize` narrowed implicitly (`-Wno-target-width` turns both off, for the runtime, which writes
+    /// Warn where the source meets the target's widths: `far` or `huge` written
+    /// where far is near, a `usize` narrowed implicitly
+    /// (`-Wno-target-width` turns both off, for the runtime, which writes
     /// `*far` for the targets that have one and counts in words).
     pub warn_target_width: bool,
     /// What the last compile warned of, by the module each span is in.
     pub warnings: std::rc::Rc<std::cell::RefCell<Vec<Diagnostic>>>,
-    /// What `compile_file` reports of it: each warning with the file it is in, and none of the
-    /// compiler's own modules (`std.*`, `abi.*`), which write for the targets that have what they name.
+    /// What `compile_file` reports of it: each warning with the file it is in,
+    /// and none of the compiler's own modules (`std.*`, `abi.*`), which
+    /// write for the targets that have what they name.
     pub reported: std::rc::Rc<std::cell::RefCell<Vec<(std::path::PathBuf, Diagnostic)>>>,
 }
 
@@ -94,31 +104,36 @@ pub fn compile(
     compile_module(parse(tokens)?, module_name, &real_mode())
 }
 
-/// What a target's OS layer and Nib's runtime description (`runtime/nib/<target>/nib.toml`) say.
+/// What a target's OS layer and Nib's runtime description
+/// (`runtime/nib/<target>/nib.toml`) say.
 #[derive(Clone, Debug)]
 pub struct Os {
-    /// `std.os` and `os`: the module the runtime's routines call the operating system through,
-    /// rendered from the OS layer's interface.
+    /// `std.os` and `os`: the module the runtime's routines call the operating
+    /// system through, rendered from the OS layer's interface.
     pub module: String,
     /// What `-fsanitize=stack` compares and calls.
     pub stack: llrm_core::hir::model::StackCheck,
     /// The stack the start-up reserves; the object's own adds to it.
     pub stack_base: i64,
-    /// What the runtime's routines, DOS and an interrupt use below the deepest chain of frames: the OS layer's.
+    /// What the runtime's routines, DOS and an interrupt use below the deepest
+    /// chain of frames: the OS layer's.
     pub stack_reserve: i64,
     /// Whether the start-up zeroes the far uninitialised data.
     pub far_bss: bool,
-    /// What the assembler is told of the description (`assembler_defines`): each symbol and the
-    /// value of the field it stands for, so the files that name no constant of their own.
+    /// What the assembler is told of the description (`assembler_defines`):
+    /// each symbol and the value of the field it stands for, so the files
+    /// that name no constant of their own.
     pub defines: Vec<(String, String)>,
-    /// The directory the description is in, and the assembly files it names there.
+    /// The directory the description is in, and the assembly files it names
+    /// there.
     pub directory: String,
     pub start: String,
     pub implementation: String,
 }
 
 impl Frontend {
-    /// The target's physical addresses as the constants `PHYSICAL_<NAME>` a module may name.
+    /// The target's physical addresses as the constants `PHYSICAL_<NAME>` a
+    /// module may name.
     pub fn physical_constants(&self) -> std::collections::BTreeMap<String, syntax::Expr> {
         self.physical
             .iter()
@@ -131,7 +146,8 @@ impl Frontend {
             .collect()
     }
 
-    /// The frontend for `target`: its layout, slot, code bits, conventions and OS layer.
+    /// The frontend for `target`: its layout, slot, code bits, conventions and
+    /// OS layer.
     pub fn for_target(target: &dyn llrm_target::Target) -> Result<Self, String> {
         Ok(Self {
             layout: target.layout(),
@@ -154,7 +170,8 @@ impl Frontend {
 }
 
 impl Os {
-    /// What the target's OS layer and Nib's runtime description say; a target without either is refused.
+    /// What the target's OS layer and Nib's runtime description say; a target
+    /// without either is refused.
     pub fn for_target(target: &dyn llrm_target::Target) -> Result<Self, String> {
         Self::of(
             target.runtime("nib").ok_or_else(|| format!("target {} has no Nib runtime", target.name()))?,
@@ -201,17 +218,19 @@ impl Os {
 pub struct Sizes {
     pub near: u32,
     pub far: u32,
-    /// Whether the near and the far pointer reach different spaces: a near one reaches only the
-    /// data group.
+    /// Whether the near and the far pointer reach different spaces: a near one
+    /// reaches only the data group.
     pub segmented: bool,
     /// A stack slot's bytes.
     pub slot: u32,
-    /// The most bytes an object near addresses reach: the segment's, or the address space's.
+    /// The most bytes an object near addresses reach: the segment's, or the
+    /// address space's.
     pub max_object: u64,
 }
 
 impl Frontend {
-    /// `target`'s symbol decorations in object format `format` (`omf`, `elf`, `macho`): each convention's pattern.
+    /// `target`'s symbol decorations in object format `format` (`omf`, `elf`,
+    /// `macho`): each convention's pattern.
     pub fn symbols_for(
         target: &dyn llrm_target::Target,
         format: &str,
@@ -224,12 +243,14 @@ impl Frontend {
             .collect()
     }
 
-    /// The convention the language's own functions have: the `-mabi=` family's, else the target's default.
+    /// The convention the language's own functions have: the `-mabi=` family's,
+    /// else the target's default.
     pub fn native(&self) -> syntax::Abi {
         syntax::Abi::named(&self.native_name).expect("a target defines a calling convention the language names")
     }
 
-    /// The pointers' sizes: what the datalayout says of the near and the far space.
+    /// The pointers' sizes: what the datalayout says of the near and the far
+    /// space.
     pub fn sizes(&self) -> Sizes {
         let layout =
             llrm_mir::datalayout::DataLayout::parse(&self.layout.datalayout).expect("a target's datalayout parses");
@@ -378,7 +399,8 @@ pub fn check(
     read: &mut dyn FnMut(&str) -> Result<String, String>,
     frontend: &Frontend,
 ) -> Checked {
-    // An editor checks for its project's target: `std.os` is that target's OS layer.
+    // An editor checks for its project's target: `std.os` is that target's OS
+    // layer.
     let mut read = |name: &str| if name == "std.os" { Ok(frontend.os.module.clone()) } else { read(name) };
     let loaded = match modules::read_all_for(source, &mut read, frontend.sizes().near, &frontend.physical_constants()) {
         Ok(loaded) => loaded,
@@ -406,7 +428,8 @@ fn prepared(
 ) -> Result<syntax::Module, Diagnostic> {
     let prelude = parser::parse_for(lex(include_str!("prelude.nib"))?, near_bytes)?;
     module.enums.extend(prelude.enums);
-    // A module's own function or protocol of a prelude name is the one it names.
+    // A module's own function or protocol of a prelude name is the one it
+    // names.
     let own: std::collections::BTreeSet<String> = module.functions.iter().map(|one| one.name.clone()).collect();
     module.functions.extend(prelude.functions.into_iter().filter(|one| !own.contains(&one.name)));
     let own: std::collections::BTreeSet<String> = module.protocols.iter().map(|one| one.name.clone()).collect();

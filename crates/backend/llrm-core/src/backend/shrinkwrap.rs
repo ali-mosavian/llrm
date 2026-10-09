@@ -1,11 +1,14 @@
-//! LLVM's ShrinkWrap: the registers a procedure keeps for its caller (SI and DI), and its frame (the
-//! stack reserve and the frame register), set up where they are first needed instead of at every entry,
-//! and taken back only on the returns that path reaches.
+//! LLVM's ShrinkWrap: the registers a procedure keeps for its caller (SI and
+//! DI), and its frame (the stack reserve and the frame register), set up where
+//! they are first needed instead of at every entry, and taken back only on the
+//! returns that path reaches.
 //!
-//! A procedure that leaves early (`if row == 7 { return 1 }`) before any of its loop touches SI paid a
-//! push and a pop for it on every call. The save goes to the block that dominates every use, and the
-//! restore to each return that block dominates; where a return can be reached both through that block
-//! and around it, or the save would sit in a loop, nothing is wrapped and the entry saves as before.
+//! A procedure that leaves early (`if row == 7 { return 1 }`) before any of its
+//! loop touches SI paid a push and a pop for it on every call. The save goes to
+//! the block that dominates every use, and the restore to each return that
+//! block dominates; where a return can be reached both through that block
+//! and around it, or the save would sit in a loop, nothing is wrapped and the
+//! entry saves as before.
 
 use std::collections::BTreeSet;
 
@@ -15,17 +18,19 @@ use crate::analysis::loops::{dominance, immediate_dominators, loops};
 use crate::model::ir::{self, Loc};
 use crate::model::lir::{Insn, LirBody};
 
-/// Where a procedure saves what it keeps: at the top of block `at`, and restored before the returns
-/// of `restored` blocks.
+/// Where a procedure saves what it keeps: at the top of block `at`, and
+/// restored before the returns of `restored` blocks.
 pub struct Wrap {
     pub at: i64,
     pub restored: BTreeSet<i64>,
-    /// The frame's setup is at `at` too, and the returns outside `restored` take none back: nothing
-    /// outside the blocks `at` dominates touches the frame or the stack.
+    /// The frame's setup is at `at` too, and the returns outside `restored`
+    /// take none back: nothing outside the blocks `at` dominates touches
+    /// the frame or the stack.
     pub frame: bool,
 }
 
-/// The registers `one` names, and those the call it is disturbs by its convention.
+/// The registers `one` names, and those the call it is disturbs by its
+/// convention.
 pub fn named(one: &Insn) -> BTreeSet<Register> {
     let mut found: BTreeSet<Register> =
         one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(ir::root)).collect();
@@ -44,8 +49,8 @@ pub fn named(one: &Insn) -> BTreeSet<Register> {
     found
 }
 
-/// Whether `one` reads or writes the frame or the stack pointer: a frame cell or argument, a push or pop,
-/// or an instruction the printer cannot read.
+/// Whether `one` reads or writes the frame or the stack pointer: a frame cell
+/// or argument, a push or pop, or an instruction the printer cannot read.
 fn touches_frame(one: &Insn) -> bool {
     let Some(what) = &one.what else { return false };
     if matches!(
@@ -69,8 +74,9 @@ fn touches_frame(one: &Insn) -> bool {
         )
 }
 
-/// The wrap of `body` for the registers `kept`, and for the frame where `frame` names the frame register and the stack
-/// pointer, if one is worth having. A frame that cannot be wrapped leaves the registers to be.
+/// The wrap of `body` for the registers `kept`, and for the frame where `frame`
+/// names the frame register and the stack pointer, if one is worth having. A
+/// frame that cannot be wrapped leaves the registers to be.
 pub fn wrapped(
     body: &LirBody,
     kept: &BTreeSet<Register>,
@@ -91,7 +97,8 @@ fn placed(
     kept.extend(frame.iter().flat_map(|(pointer, stack)| [ir::root(*pointer), ir::root(*stack)]));
     let entry = Some(body.entry);
     let from_entry = dominance(&body.blocks, entry);
-    // Every block must be reached from the entry: a block only the runtime enters has no dominator.
+    // Every block must be reached from the entry: a block only the runtime
+    // enters has no dominator.
     if body.blocks.iter().any(|block| !from_entry.reachable(block.at)) {
         return None;
     }
@@ -114,7 +121,8 @@ fn placed(
         }
         chain
     };
-    // The nearest block above every use: the first of one's ancestors every other use is below.
+    // The nearest block above every use: the first of one's ancestors every
+    // other use is below.
     let mut home = first;
     for &other in &uses[1..] {
         home = above(home)
@@ -132,8 +140,8 @@ fn placed(
     }
     let from_home = dominance(&body.blocks, Some(home));
     let mut restored = BTreeSet::new();
-    // The frame is set up at `home`, so a block it reaches that something else also reaches would be entered at two
-    // depths.
+    // The frame is set up at `home`, so a block it reaches that something else
+    // also reaches would be entered at two depths.
     if frame.is_some()
         && body.blocks.iter().any(|block| from_home.reachable(block.at) && !from_entry.dominates(home, block.at))
     {
@@ -145,7 +153,8 @@ fn placed(
         if !returns || !from_home.reachable(block.at) {
             continue;
         }
-        // Reached around the home as well: a restore there would pop what was never pushed.
+        // Reached around the home as well: a restore there would pop what was
+        // never pushed.
         if !from_entry.dominates(home, block.at) {
             return None;
         }

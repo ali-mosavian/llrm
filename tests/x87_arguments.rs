@@ -1,5 +1,5 @@
-//! A float or double argument goes to the stack as the space made for it and a store into it, not through a frame cell
-//! pushed in dwords.
+//! A float or double argument goes to the stack as the space made for it and a
+//! store into it, not through a frame cell pushed in dwords.
 
 use std::process::Command;
 
@@ -8,8 +8,9 @@ extern double f(double a, float b, int n);
 double g(double x, float y) { return f(x * 0.5 + 1.0, y + 1.0f, 3); }
 ";
 
-/// Each double was `fstp qword ptr [esp+16]` into a cell and two `push dword ptr [esp+20]` (three instructions and a
-/// cell); gcc makes the space and stores into it.
+/// Each double was `fstp qword ptr [esp+16]` into a cell and two `push dword
+/// ptr [esp+20]` (three instructions and a cell); gcc makes the space and
+/// stores into it.
 #[test]
 fn test_a_float_argument_is_stored_into_the_space_made_for_it() {
     let scratch = tempfile::tempdir().unwrap();

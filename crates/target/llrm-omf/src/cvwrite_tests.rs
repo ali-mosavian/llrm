@@ -190,9 +190,10 @@ fn a_pointer_and_an_array_in_place_read_back() {
     }
 }
 
-/// `struct node { struct node *next; int v; }`: a structure that holds a pointer to itself. Made as
-/// the pointer's target, it asked for its own record while that record was being made, and the
-/// writer recursed until the stack ended; with the cycle cut, the pointer names the structure by its
+/// `struct node { struct node *next; int v; }`: a structure that holds a
+/// pointer to itself. Made as the pointer's target, it asked for its own record
+/// while that record was being made, and the writer recursed until the stack
+/// ended; with the cycle cut, the pointer names the structure by its
 /// name and size, and the member is kept, where the frontend used to drop it.
 #[test]
 fn a_structure_with_a_pointer_to_itself_keeps_that_field() {

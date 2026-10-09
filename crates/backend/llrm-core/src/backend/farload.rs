@@ -229,7 +229,8 @@ mod tests {
         assert_eq!(source.width, 4);
         assert_eq!(selected[0].defines, vec![1, 2]);
         assert_eq!(selected[1].what.as_ref().unwrap().op, Operation::Nothing);
-        // Adjacent words whose high one is a number, not a selector, stay two loads.
+        // Adjacent words whose high one is a number, not a selector, stay two
+        // loads.
         assert_eq!(super::selected(&original, &BTreeSet::new()), original);
     }
 

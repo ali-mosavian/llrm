@@ -310,7 +310,8 @@ fn carried(
 /// A module's code, decoded, with a contract for every call.
 pub struct Facts<'m> {
     pub found: &'m Module,
-    /// The address spaces of the target the objects are recompiled for: the machine's layout's.
+    /// The address spaces of the target the objects are recompiled for: the
+    /// machine's layout's.
     pub spaces: llrm_mir::spaces::Spaces,
     pub bodies: Vec<BodyFacts>,
     pub contracts: IndexMap<i64, Contract>,
@@ -375,7 +376,8 @@ impl<'m> Facts<'m> {
                 interface,
             ));
         }
-        // Without CodeView, a procedure answers in what its callers read after it.
+        // Without CodeView, a procedure answers in what its callers read after
+        // it.
         let mut read: BTreeMap<String, Words> = BTreeMap::new();
         for (body, _) in &bodies {
             let after = body.live_after(&contracts);
@@ -469,13 +471,15 @@ fn polls(
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Answer {
     None,
-    /// Registers, in slot order: one is `i16`, AX and DX an `i32`, more a struct.
+    /// Registers, in slot order: one is `i16`, AX and DX an `i32`, more a
+    /// struct.
     Registers(Vec<Register>),
     /// The flags, as `cmp result, 0` leaves them.
     Flags,
 }
 
-/// A procedure's own interface: the bytes of arguments it pops, and what it answers.
+/// A procedure's own interface: the bytes of arguments it pops, and what it
+/// answers.
 #[derive(Clone, Debug)]
 pub struct Interface {
     pub popped: i64,

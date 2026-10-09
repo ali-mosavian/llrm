@@ -15,7 +15,8 @@ use crate::backend::{liveness, masm, regthrash, select, target};
 use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, LirBody};
 
-/// The cell and literal of a plain store of an immediate that no relocation moves.
+/// The cell and literal of a plain store of an immediate that no relocation
+/// moves.
 fn literal(one: &Insn) -> Option<(u32, i64)> {
     let what = one.what.as_ref()?;
     if what.op != Operation::Move
@@ -40,7 +41,8 @@ fn bytes(
     select::priced_in(bits, what, 0, None, false, false, None).map(|code| code.code.len())
 }
 
-/// `body` with each run of equal literal stores that a dead register makes shorter shared.
+/// `body` with each run of equal literal stores that a dead register makes
+/// shorter shared.
 pub fn shared(
     body: &LirBody,
     cpu: &Profile,
@@ -50,8 +52,9 @@ pub fn shared(
     if !cpu.size {
         return body.clone();
     }
-    // What the epilogue saves is what its convention preserves of the registers the body names
-    // (`masm::_frame_parts`): one it does not name would be pushed and popped for the run.
+    // What the epilogue saves is what its convention preserves of the registers
+    // the body names (`masm::_frame_parts`): one it does not name would be
+    // pushed and popped for the run.
     let used = masm::_roots(body);
     let scratch: Vec<Register> =
         classes.available.iter().copied().filter(|one| !saved.contains(one) || used.contains(one)).collect();

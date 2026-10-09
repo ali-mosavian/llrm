@@ -1,14 +1,17 @@
-//! `-g` as DWARF in an ELF object: llvm-dwarfdump accepts every bench C program's, and gdb, driven
-//! by a script, stops where it is told in a linked and running program and reads its values.
+//! `-g` as DWARF in an ELF object: llvm-dwarfdump accepts every bench C
+//! program's, and gdb, driven by a script, stops where it is told in a linked
+//! and running program and reads its values.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// A test that cannot run says so on stderr, and fails where `LLRM_REQUIRE_DWARF` is set, so a gate that
-/// has the tools cannot pass by skipping.
+/// A test that cannot run says so on stderr, and fails where
+/// `LLRM_REQUIRE_DWARF` is set, so a gate that has the tools cannot pass by
+/// skipping.
 fn skipped(reason: &str) {
-    // Written to the stderr itself, which the harness does not capture: seen when the test passes.
+    // Written to the stderr itself, which the harness does not capture: seen
+    // when the test passes.
     let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("SKIPPED: {reason}\n").as_bytes());
     assert!(std::env::var_os("LLRM_REQUIRE_DWARF").is_none(), "LLRM_REQUIRE_DWARF is set, and: {reason}");
 }
@@ -50,8 +53,9 @@ fn bench_programs() -> Vec<PathBuf> {
     found
 }
 
-/// llvm-dwarfdump --verify finds no error and no warning in the DWARF 4 and 5 of every bench C
-/// program at -O0 and -O2, and the unit has code, functions and lines: a verifier passes an empty one.
+/// llvm-dwarfdump --verify finds no error and no warning in the DWARF 4 and 5
+/// of every bench C program at -O0 and -O2, and the unit has code, functions
+/// and lines: a verifier passes an empty one.
 #[test]
 fn dwarfdump_verifies_every_bench_program_at_both_ends_of_the_optimiser() {
     let Some(dump) = dwarfdump() else {
@@ -87,7 +91,8 @@ fn dwarfdump_verifies_every_bench_program_at_both_ends_of_the_optimiser() {
                     "{} {level} {flag}: an empty unit",
                     source.display()
                 );
-                // Every function has call frame information: one the code could not be followed through has none.
+                // Every function has call frame information: one the code could
+                // not be followed through has none.
                 let frames = Command::new(&dump).arg("--debug-frame").arg(&object).output().unwrap();
                 let (fdes, functions) = (
                     String::from_utf8_lossy(&frames.stdout).matches(" FDE ").count(),
@@ -99,9 +104,10 @@ fn dwarfdump_verifies_every_bench_program_at_both_ends_of_the_optimiser() {
     }
 }
 
-/// gdb on a -m32 ELF program linked by ld and run under Linux: it stops after the prologue of a
-/// function at the line the body starts on, and prints a parameter, a local, a struct field through a
-/// pointer, the function's type and the value it returns.
+/// gdb on a -m32 ELF program linked by ld and run under Linux: it stops after
+/// the prologue of a function at the line the body starts on, and prints a
+/// parameter, a local, a struct field through a pointer, the function's type
+/// and the value it returns.
 #[test]
 fn gdb_stops_at_a_line_and_reads_a_parameter_a_local_a_struct_field_and_the_return_type() {
     let (Some(gdb), Some(ld), Some(assembler)) = (tool("gdb"), tool("ld"), tool("as")) else {
@@ -159,8 +165,8 @@ fn gdb_stops_at_a_line_and_reads_a_parameter_a_local_a_struct_field_and_the_retu
     }
 }
 
-/// `-g` takes the object format's own debug format; a flavor the format cannot carry is an error
-/// that says so, never an object with another flavor in it.
+/// `-g` takes the object format's own debug format; a flavor the format cannot
+/// carry is an error that says so, never an object with another flavor in it.
 #[test]
 fn the_flavor_asked_for_is_the_formats_or_an_error() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/gdb.c");
@@ -202,7 +208,8 @@ fn the_flavor_asked_for_is_the_formats_or_an_error() {
     );
 }
 
-/// The values gdb reads of a program's variables at a line it stops on, as `-O0` and `-O2` leave them.
+/// The values gdb reads of a program's variables at a line it stops on, as
+/// `-O0` and `-O2` leave them.
 fn stopped_at(
     gdb: &Path,
     program: &Path,
@@ -239,11 +246,14 @@ fn stopped_at(
     Some((at, values))
 }
 
-/// What gdb reads of a program's variables at -O2 is never what -O0 does not: where -O2 says a value it is the value
-/// -O0 has at that line or at the next one it stops at (a line's first instruction may come after its first assignment
-/// at -O2), and where it says none (`<optimized out>`) it says no wrong one. Before `-g` described values over the
-/// code, a store to a declared variable stayed where the source wrote it for gdb to read the cell, and -g changed the
-/// code at -O2 by every one of those stores; a value the optimiser keeps nowhere is now said to be nowhere.
+/// What gdb reads of a program's variables at -O2 is never what -O0 does not:
+/// where -O2 says a value it is the value -O0 has at that line or at the next
+/// one it stops at (a line's first instruction may come after its first
+/// assignment at -O2), and where it says none (`<optimized out>`) it says no
+/// wrong one. Before `-g` described values over the code, a store to a declared
+/// variable stayed where the source wrote it for gdb to read the cell, and -g
+/// changed the code at -O2 by every one of those stores; a value the optimiser
+/// keeps nowhere is now said to be nowhere.
 #[test]
 fn a_variable_reads_the_same_at_o2_as_at_o0_on_every_line_both_stop_at() {
     let (Some(gdb), Some(ld), Some(assembler)) = (tool("gdb"), tool("ld"), tool("as")) else {
@@ -280,7 +290,8 @@ fn a_variable_reads_the_same_at_o2_as_at_o0_on_every_line_both_stop_at() {
         else {
             continue;
         };
-        // A line with no code stops at the next one that has some: compare where both stopped alike.
+        // A line with no code stops at the next one that has some: compare
+        // where both stopped alike.
         if slow.0 == fast.0 {
             slow_stops.push(slow);
             fast_stops.push(fast);
@@ -308,12 +319,14 @@ fn a_variable_reads_the_same_at_o2_as_at_o0_on_every_line_both_stop_at() {
     assert!(compared >= COMPARED_FLOOR, "only {compared} values were compared: -O2 says more of them than that");
 }
 
-/// How many (line, variable) values of `observed.c` -O2 says, and -O0 has: raised as the optimiser keeps more of them.
+/// How many (line, variable) values of `observed.c` -O2 says, and -O0 has:
+/// raised as the optimiser keeps more of them.
 const COMPARED_FLOOR: usize = 30;
 
-/// `struct node { struct node *next; int v; }`: a struct that holds a pointer to itself kept only `v`
-/// in the debug information, whichever format wrote it: asked for while it was being built, it
-/// answered "none" and the member naming it was dropped. gdb follows the list; CodeView keeps the field.
+/// `struct node { struct node *next; int v; }`: a struct that holds a pointer
+/// to itself kept only `v` in the debug information, whichever format wrote it:
+/// asked for while it was being built, it answered "none" and the member naming
+/// it was dropped. gdb follows the list; CodeView keeps the field.
 #[test]
 fn a_struct_that_names_itself_keeps_the_member_that_does_in_both_formats() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
@@ -369,15 +382,17 @@ fn a_struct_that_names_itself_keeps_the_member_that_does_in_both_formats() {
     assert!(text.contains("$2 = 7") && text.contains("$3 = {next = 0x0, v = 7}"), "{text}");
 }
 
-/// A 64-bit integer was no type of the debug model (CodeView 4 had none) and every variable of one was dropped
-/// before any format saw it: `sum`'s `a`, `t` and `u` and the global `total` were in no DWARF. They are types
-/// now; gdb reads their values past 32 bits, and CodeView, which has no record for one, still writes the object
-/// and what is beside them.
+/// A 64-bit integer was no type of the debug model (CodeView 4 had none) and
+/// every variable of one was dropped before any format saw it: `sum`'s `a`, `t`
+/// and `u` and the global `total` were in no DWARF. They are types
+/// now; gdb reads their values past 32 bits, and CodeView, which has no record
+/// for one, still writes the object and what is beside them.
 #[test]
 fn a_64_bit_variable_is_in_dwarf_with_its_value_and_codeview_still_writes() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
     let scratch = tempfile::tempdir().unwrap();
-    // CodeView: the object is written, and `b`, an int, is in it beside what is left out.
+    // CodeView: the object is written, and `b`, an int, is in it beside what is
+    // left out.
     let object = scratch.path().join("wide.obj");
     let made = compile(&fixtures.join("wide.c"), &["-m32", "-g"], &object);
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
@@ -437,10 +452,11 @@ fn a_64_bit_variable_is_in_dwarf_with_its_value_and_codeview_still_writes() {
     }
 }
 
-/// A function with no variable has no frame register, and its stack pointer moves with each argument it pushes;
-/// the callee that pops them (`ret 8`) moves it back with no instruction to say so. gdb walks out of the callee
-/// and through that function to `main` only with call frame information: without it the backtrace stopped at
-/// `middle`, one frame short.
+/// A function with no variable has no frame register, and its stack pointer
+/// moves with each argument it pushes; the callee that pops them (`ret 8`)
+/// moves it back with no instruction to say so. gdb walks out of the callee and
+/// through that function to `main` only with call frame information: without it
+/// the backtrace stopped at `middle`, one frame short.
 #[test]
 fn gdb_backtraces_through_a_function_with_no_frame_register_at_o2() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
@@ -471,7 +487,8 @@ fn gdb_backtraces_through_a_function_with_no_frame_register_at_o2() {
         .unwrap();
     let text = String::from_utf8_lossy(&said.stdout).into_owned();
     let frames: Vec<&str> = text.lines().filter(|line| line.starts_with('#')).collect();
-    // The second call is entered after the first one popped its arguments: its frame rule depends on that.
+    // The second call is entered after the first one popped its arguments: its
+    // frame rule depends on that.
     assert!(
         frames.len() == 6
             && frames[0].contains("leaf (a=1, b=2, c=3, d=4, e=5, f=6)")
@@ -483,10 +500,11 @@ fn gdb_backtraces_through_a_function_with_no_frame_register_at_o2() {
     }
 }
 
-/// A parameter arrives in a register and the function stores it into its frame cell a few instructions in; until
-/// then the cell holds nothing and the frame register is the caller's. gdb stopped at the first instruction of
-/// `add` read `a` from the cell (garbage) where it is in `eax`: the location is the register until the store and the
-/// cell after it.
+/// A parameter arrives in a register and the function stores it into its frame
+/// cell a few instructions in; until then the cell holds nothing and the frame
+/// register is the caller's. gdb stopped at the first instruction of `add` read
+/// `a` from the cell (garbage) where it is in `eax`: the location is the
+/// register until the store and the cell after it.
 #[test]
 fn gdb_reads_a_parameter_at_the_first_instruction_from_the_register_it_arrived_in() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
@@ -543,9 +561,10 @@ fn gdb_reads_a_parameter_at_the_first_instruction_from_the_register_it_arrived_i
     assert!(text.contains("$3 = 1"), "after the store, from the cell:\n{text}");
 }
 
-/// `-g` kept the frame register for every function with a variable: `push ebp; mov ebp, esp` and every cell through
-/// `ebp`, where the same build without `-g` addressed them through `esp`. DWARF finds a cell from the canonical frame
-/// address, so the code is the code.
+/// `-g` kept the frame register for every function with a variable: `push ebp;
+/// mov ebp, esp` and every cell through `ebp`, where the same build without
+/// `-g` addressed them through `esp`. DWARF finds a cell from the canonical
+/// frame address, so the code is the code.
 #[test]
 fn an_elf_function_with_variables_has_the_code_it_has_without_g() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -558,15 +577,17 @@ fn an_elf_function_with_variables_has_the_code_it_has_without_g() {
     };
     let gdb = root.join("tests/fixtures/dwarf/gdb.c");
     assert!(!assembly(&gdb, &[]).contains("ebp"), "the instrument: without -g the function keeps no frame register");
-    // `crc` bumps a local in place (`add dword ptr [ebp-n], 1`), which `-g` split into a load, an add and a store while
-    // it marked the store volatile for the optimiser, which -O0 does not run.
+    // `crc` bumps a local in place (`add dword ptr [ebp-n], 1`), which `-g`
+    // split into a load, an add and a store while it marked the store
+    // volatile for the optimiser, which -O0 does not run.
     for source in [gdb, root.join("bench/crc/crc.c")] {
         assert_eq!(assembly(&source, &[]), assembly(&source, &["-g"]), "{}", source.display());
     }
 }
 
-/// The targets and levels whose bench programs' code `-g` must leave alone, all of them: DWARF on ELF at every level,
-/// and the other formats (CodeView on COFF and OMF, 16-bit OMF) at the two ends of the optimiser.
+/// The targets and levels whose bench programs' code `-g` must leave alone, all
+/// of them: DWARF on ELF at every level, and the other formats (CodeView on
+/// COFF and OMF, 16-bit OMF) at the two ends of the optimiser.
 const IDENTICAL: &[(&str, &str, &[&str])] = &[
     ("-m32", "elf", &["-O0", "-O1", "-O2", "-Os"]),
     ("-m32", "coff", &["-O0", "-O2"]),
@@ -574,8 +595,10 @@ const IDENTICAL: &[(&str, &str, &[&str])] = &[
     ("-m16", "omf", &["-O0", "-O2"]),
 ];
 
-/// `-g` changed the code of every bench program: a frame register kept for its variables, a volatile on their stores,
-/// an entry store for a register parameter, a global kept. No bench program's assembly differs with and without `-g`.
+/// `-g` changed the code of every bench program: a frame register kept for its
+/// variables, a volatile on their stores, an entry store for a register
+/// parameter, a global kept. No bench program's assembly differs with and
+/// without `-g`.
 #[test]
 fn g_leaves_the_code_of_the_bench_programs_alone() {
     let scratch = tempfile::tempdir().unwrap();
@@ -603,9 +626,10 @@ fn g_leaves_the_code_of_the_bench_programs_alone() {
     }
 }
 
-/// A global nothing reads was kept in the data when `-g` described it, "for a debugger to read at any time", where the
-/// build without `-g` drops it: the object differed by the global, and its neighbours in the layout by the room it
-/// took. A debugger is told of what the program keeps, and of nothing else.
+/// A global nothing reads was kept in the data when `-g` described it, "for a
+/// debugger to read at any time", where the build without `-g` drops it: the
+/// object differed by the global, and its neighbours in the layout by the room
+/// it took. A debugger is told of what the program keeps, and of nothing else.
 #[test]
 fn a_global_the_optimiser_drops_is_dropped_with_g_too() {
     let scratch = tempfile::tempdir().unwrap();
@@ -628,7 +652,8 @@ fn a_global_the_optimiser_drops_is_dropped_with_g_too() {
     assert_eq!(plain, assembly(true));
 }
 
-/// The same for the BASIC and Nib bench programs, whose compilers share the backend.
+/// The same for the BASIC and Nib bench programs, whose compilers share the
+/// backend.
 #[test]
 fn g_leaves_the_code_of_the_basic_and_nib_bench_programs_alone() {
     let scratch = tempfile::tempdir().unwrap();
@@ -659,9 +684,11 @@ fn g_leaves_the_code_of_the_basic_and_nib_bench_programs_alone() {
     assert!(differing.is_empty(), "-g changed the code of {differing:?}");
 }
 
-/// The front end lists, for `-g`, every extern a header declares, used or not; each was an `extern` in the object (a
-/// symbol it asks the linker for), so a program built with `-g` differed from one built without by the symbols it asked
-/// for. gcc's undefined symbols are the ones the code names, whatever `-g` describes.
+/// The front end lists, for `-g`, every extern a header declares, used or not;
+/// each was an `extern` in the object (a symbol it asks the linker for), so a
+/// program built with `-g` differed from one built without by the symbols it
+/// asked for. gcc's undefined symbols are the ones the code names, whatever
+/// `-g` describes.
 #[test]
 fn an_extern_nothing_names_is_asked_of_no_linker_with_g_or_without() {
     let scratch = tempfile::tempdir().unwrap();

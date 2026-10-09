@@ -291,9 +291,10 @@ fn summaries_read_each_bodys_shape_from_its_manager() {
     assert!(analyses.cached_function::<Shape>(module.named("f").unwrap()).is_some());
 }
 
-/// A body that calls something unknown may call back into any entry, so its summary reads each
-/// entry's. Solved callees-first, `@p` was visited before `@entry` had @h's store from its callee,
-/// and never again: QCport's `dl` and `savegame` came out other than before (#394).
+/// A body that calls something unknown may call back into any entry, so its
+/// summary reads each entry's. Solved callees-first, `@p` was visited before
+/// `@entry` had @h's store from its callee, and never again: QCport's `dl` and
+/// `savegame` came out other than before (#394).
 #[test]
 fn a_body_calling_the_unknown_is_summarized_again_when_an_entry_changes() {
     let module = parsed(
@@ -331,9 +332,10 @@ entry:
     assert!(reaches_g("p"), "@p's unknown call may call back into @entry");
 }
 
-/// Each access asked of its own alloca's uses whether the address is exposed, and the answer was never
-/// kept: `mir decide` and `gvn` grew with slope 2.5–2.9 in a function's blocks, `exposes` 21% of the
-/// compile of 300 (#557). The manager finds a function's exposed frames once.
+/// Each access asked of its own alloca's uses whether the address is exposed,
+/// and the answer was never kept: `mir decide` and `gvn` grew with slope
+/// 2.5–2.9 in a function's blocks, `exposes` 21% of the compile of 300 (#557).
+/// The manager finds a function's exposed frames once.
 #[test]
 fn test_a_functions_exposed_frames_are_found_once_not_per_access() {
     let accesses: String =
@@ -352,8 +354,9 @@ fn test_a_functions_exposed_frames_are_found_once_not_per_access() {
     assert_eq!(names.len(), 1, "only @hidden's address is handed out: {names:?}");
 }
 
-/// The observers analysis (dse) built its unit without the exposure table, so every access it resolved scanned its
-/// alloca's uses: slope 2 in a function's accesses, 4% of compiling 2,000 stores at -O2 (#924).
+/// The observers analysis (dse) built its unit without the exposure table, so
+/// every access it resolved scanned its alloca's uses: slope 2 in a function's
+/// accesses, 4% of compiling 2,000 stores at -O2 (#924).
 #[test]
 fn test_the_published_objects_analysis_asks_the_exposed_frames_once() {
     let accesses: String =
@@ -374,8 +377,9 @@ fn test_the_published_objects_analysis_asks_the_exposed_frames_once() {
     assert_eq!(crate::frameescape::scans() - before, 0, "an access scanned its alloca's uses");
 }
 
-/// GlobalsAA ran points-to over every body without the exposure table, so each access scanned its alloca's
-/// uses: 34% of compiling a function of 1600 statements (#560). The table is made once per body.
+/// GlobalsAA ran points-to over every body without the exposure table, so each
+/// access scanned its alloca's uses: 34% of compiling a function of 1600
+/// statements (#560). The table is made once per body.
 #[test]
 fn test_globals_aa_asks_each_bodys_exposed_frames_once() {
     let accesses: String =
@@ -423,8 +427,9 @@ end:
 }
 ";
 
-/// A change made to what a loop's bound comes from, outside the loop, is not seen in the loop's blocks: its trips were
-/// kept stale. Only the loop it reaches is proved again.
+/// A change made to what a loop's bound comes from, outside the loop, is not
+/// seen in the loop's blocks: its trips were kept stale. Only the loop it
+/// reaches is proved again.
 #[test]
 fn a_change_outside_a_loop_reaches_the_loop_that_reads_it() {
     let mut module = parsed(&format!("{DOS}{LIMITED}"));
@@ -465,8 +470,9 @@ fn a_change_outside_a_loop_reaches_the_loop_that_reads_it() {
     );
 }
 
-/// A branch's bound changed outside the blocks it narrows: the edge facts of the blocks past it were kept stale. Only
-/// the blocks the change reaches are worked again, and what comes out is what working them all gives.
+/// A branch's bound changed outside the blocks it narrows: the edge facts of
+/// the blocks past it were kept stale. Only the blocks the change reaches are
+/// worked again, and what comes out is what working them all gives.
 #[test]
 fn a_change_to_a_branch_bound_reworks_the_blocks_past_it() {
     let mut module = parsed(&format!("{DOS}{LIMITED}"));
@@ -510,8 +516,8 @@ fn a_change_to_a_branch_bound_reworks_the_blocks_past_it() {
     assert_eq!(after, states(&mut fresh, &module), "what was brought up to date is what working every block gives");
 }
 
-/// The second loop starts straight from the first's header, below no block of its own, and carries what the first
-/// knows of values it never reads.
+/// The second loop starts straight from the first's header, below no block of
+/// its own, and carries what the first knows of values it never reads.
 const DIRECT: &str = "define i16 @f() {
 b0:
   %nine = add i16 4, 5
@@ -543,8 +549,9 @@ end:
 }
 ";
 
-/// What a loop knows is read from the loop its header's dominator is in, as well as from the blocks above: a change in
-/// the first of two such loops to a value the second never reads left the second's facts, which carry it, stale.
+/// What a loop knows is read from the loop its header's dominator is in, as
+/// well as from the blocks above: a change in the first of two such loops to a
+/// value the second never reads left the second's facts, which carry it, stale.
 #[test]
 fn a_change_to_a_loop_reworks_the_loop_that_starts_from_it() {
     let mut module = parsed(&format!("{DOS}{DIRECT}"));
@@ -580,8 +587,10 @@ fn a_change_to_a_loop_reworks_the_loop_that_starts_from_it() {
     );
 }
 
-/// A loop carries what is known of the values made above it, whether it reads them or not: an instruction erased there,
-/// which no loop's blocks held, was still in the loop's facts. Seven bench programs and four pipeline tests found it.
+/// A loop carries what is known of the values made above it, whether it reads
+/// them or not: an instruction erased there, which no loop's blocks held, was
+/// still in the loop's facts. Seven bench programs and four pipeline tests
+/// found it.
 #[test]
 fn an_instruction_erased_above_a_loop_leaves_the_loops_facts() {
     let mut module = parsed(&format!("{DOS}{LIMITED}"));
@@ -623,8 +632,9 @@ fn an_instruction_erased_above_a_loop_leaves_the_loops_facts() {
     );
 }
 
-/// Every pass that said it changed something dropped the pointer analyses, though five in six of them (twelve
-/// call-effects runs a function in QCport) were true after it: the change was to integers.
+/// Every pass that said it changed something dropped the pointer analyses,
+/// though five in six of them (twelve call-effects runs a function in QCport)
+/// were true after it: the change was to integers.
 #[test]
 fn an_integer_edit_leaves_the_pointer_analyses_as_they_were_and_a_pointer_edit_does_not() {
     let mut module = parsed(
@@ -658,9 +668,10 @@ fn an_integer_edit_leaves_the_pointer_analyses_as_they_were_and_a_pointer_edit_d
     );
 }
 
-/// Every edit found every body's calls, actuals and exposed frames again (`Procedure::of` and `exposed_frames` per body
-/// per run, O(module) for an edit to one: 190 M instructions of excess work at chain-32). A body not edited since keeps
-/// them.
+/// Every edit found every body's calls, actuals and exposed frames again
+/// (`Procedure::of` and `exposed_frames` per body per run, O(module) for an
+/// edit to one: 190 M instructions of excess work at chain-32). A body not
+/// edited since keeps them.
 #[test]
 fn an_edit_to_one_body_finds_that_bodys_calls_alone() {
     let mut module = parsed(&format!(
@@ -698,8 +709,9 @@ b0:
     assert!(!Rc::ptr_eq(&before.0, memo.facts[&f].calls.as_ref().unwrap()), "an edited body's calls were kept");
 }
 
-/// The calls kept were found as a plain unit sees them, which knows less than the unit a body is summarized in (its
-/// globals' facts): screen.c's summaries came out broader and the compile cost 4.6% more. What is kept is what the
+/// The calls kept were found as a plain unit sees them, which knows less than
+/// the unit a body is summarized in (its globals' facts): screen.c's summaries
+/// came out broader and the compile cost 4.6% more. What is kept is what the
 /// summarized unit finds.
 #[test]
 fn the_calls_kept_are_those_the_summarized_unit_finds() {
@@ -735,10 +747,11 @@ b0:
     assert_eq!(kept, format!("{:?}", crate::alias::CallFacts::of(&unit)));
 }
 
-/// Call facts found under one unit were served to a body summarized under another (screen.c: +4.6% compile cost, found
-/// by the gate's worst-file rule). What the memo kept was found under the globals' facts of the run before: when those
-/// are other facts the entry is dropped and found again under the unit of this run, and the answer is a fresh
-/// computation under its own unit.
+/// Call facts found under one unit were served to a body summarized under
+/// another (screen.c: +4.6% compile cost, found by the gate's worst-file rule).
+/// What the memo kept was found under the globals' facts of the run before:
+/// when those are other facts the entry is dropped and found again under the
+/// unit of this run, and the answer is a fresh computation under its own unit.
 #[test]
 fn call_facts_found_under_other_globals_facts_are_found_again() {
     let module = parsed(&format!(

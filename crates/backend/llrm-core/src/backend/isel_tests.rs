@@ -44,7 +44,8 @@ fn assembled(text: &str) -> String {
     assembled_on("486", text)
 }
 
-/// Borland C's medium model: a call keeps all but ax, bx, cx, dx, es and the flags.
+/// Borland C's medium model: a call keeps all but ax, bx, cx, dx, es and the
+/// flags.
 fn borland() -> HirAbi {
     use crate::abi::runtime::{EVERY, Reg};
     let clobbered = [Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Es, Reg::Flags];
@@ -139,8 +140,8 @@ done:
 }
 ";
     let got = listing(text, "sum");
-    // The comparison stays flags beside its branch; the phis' zeros are made in the entry,
-    // which runs a copy of the test rather than jump to it.
+    // The comparison stays flags beside its branch; the phis' zeros are made in
+    // the entry, which runs a copy of the test rather than jump to it.
     assert_eq!(
         got,
         [
@@ -445,7 +446,8 @@ other:
 }
 ";
     let got = listing(text, "f");
-    // 7 goes to the default anyway; `one` is entered from two blocks of the chain.
+    // 7 goes to the default anyway; `one` is entered from two blocks of the
+    // chain.
     assert_eq!(
         got,
         [
@@ -554,7 +556,8 @@ define i32 @f(i16 %a) addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    // BASIC's far callee pops `a`, then the byte widened; C's near one is popped by its caller.
+    // BASIC's far callee pops `a`, then the byte widened; C's near one is
+    // popped by its caller.
     assert_eq!(
         got,
         [
@@ -1745,7 +1748,8 @@ fn inner(text: &str) -> Vec<String> {
     inner_on("486", text)
 }
 
-/// The instructions between a procedure's label and its epilogue, as `cpu` prices them.
+/// The instructions between a procedure's label and its epilogue, as `cpu`
+/// prices them.
 fn inner_on(
     cpu: &str,
     text: &str,
@@ -1763,7 +1767,8 @@ fn inner_on(
 /// as the old route's rmw selects: nbody kept each field in a temporary.
 #[test]
 fn test_an_update_stored_back_to_its_cell_is_one_instruction() {
-    // The address and the operand are loaded in either order: it is the update that is one instruction.
+    // The address and the operand are loaded in either order: it is the update
+    // that is one instruction.
     let sorted = |mut lines: Vec<String>| {
         lines.sort();
         lines
@@ -2067,7 +2072,8 @@ join:
   ret i16 %v
 }
 ";
-    // The byte test reads its cell where it runs: the load crosses the address arithmetic.
+    // The byte test reads its cell where it runs: the load crosses the address
+    // arithmetic.
     assert_eq!(
         listing(text, "f")[3..7],
         ["mov bx, word ptr [bp+6]", "add bx, bx", "add bx, offset a", "cmp byte ptr [bp+8], 0"]
@@ -2090,10 +2096,12 @@ fn test_a_dword_divided_by_a_constant_is_multiplied_where_cheaper() {
     assert_eq!((divides("P5"), divides("386")), (0, 1));
 }
 
-/// A word divided by a constant stays a division: the reciprocal is for dwords. An unsigned dword is a multiply
-/// where the CPU prices it cheaper: a Pentium's `mul` is 10 clocks against `div`'s 41, and the 386's and 486's, which
-/// ends early on the dividend in its r/m operand, is 13 to 42 against 40 and priced at the middle where the dividend's
-/// length is not known. The dividend is that operand, the magic number in the accumulator.
+/// A word divided by a constant stays a division: the reciprocal is for dwords.
+/// An unsigned dword is a multiply where the CPU prices it cheaper: a Pentium's
+/// `mul` is 10 clocks against `div`'s 41, and the 386's and 486's, which
+/// ends early on the dividend in its r/m operand, is 13 to 42 against 40 and
+/// priced at the middle where the dividend's length is not known. The dividend
+/// is that operand, the magic number in the accumulator.
 #[test]
 fn test_a_word_divides_and_an_unsigned_dword_is_multiplied_where_cheaper() {
     let word = "define i16 @f(i16 %x) addrspace(1) {\n  %q = sdiv i16 %x, 10\n  ret i16 %q\n}\n";
@@ -2128,9 +2136,10 @@ fn test_a_multiply_by_a_constant_is_shifts_and_adds() {
     assert_eq!(inner(variable), ["mov ax, word ptr [bp+6]", "imul ax, word ptr [bp+8]"]);
 }
 
-/// Tuned for size, a multiply by a constant is the imul unless the shifts and adds are fewer
-/// bytes: both selectors priced in clocks, so x * 446 was a 20-byte chain where `imul r, r, imm`
-/// is 7, and -Os grew examples/mandel.nib by 7 bytes.
+/// Tuned for size, a multiply by a constant is the imul unless the shifts and
+/// adds are fewer bytes: both selectors priced in clocks, so x * 446 was a
+/// 20-byte chain where `imul r, r, imm` is 7, and -Os grew examples/mandel.nib
+/// by 7 bytes.
 #[test]
 fn test_a_multiply_by_a_constant_tuned_for_size_is_the_smaller_form() {
     let text = "define i32 @f(i32 %x) addrspace(1) {\n  %q = mul i32 %x, 446\n  ret i32 %q\n}\n";
@@ -2150,9 +2159,10 @@ fn test_a_multiply_by_a_constant_tuned_for_size_is_the_smaller_form() {
     assert!(on(false).contains("shl eax") && !on(false).contains("imul"), "{}", on(false));
 }
 
-/// Tuned for size, a dword constant argument is the two word pushes where they are fewer
-/// bytes: `pushd 7340144` is 6, `push 112; push 112` 4. QCport -Os had some 800 of them (the
-/// fixed-point and float arguments), and `dword_push` joined any two word pushes.
+/// Tuned for size, a dword constant argument is the two word pushes where they
+/// are fewer bytes: `pushd 7340144` is 6, `push 112; push 112` 4. QCport -Os
+/// had some 800 of them (the fixed-point and float arguments), and `dword_push`
+/// joined any two word pushes.
 #[test]
 fn test_a_dword_constant_argument_tuned_for_size_is_the_fewer_bytes_of_one_push_or_two() {
     let text = "declare void @use(i32, float, i32, i32)
@@ -2176,14 +2186,16 @@ define void @f() addrspace(1) {
     let pushes = |listing: String| {
         listing.lines().map(str::trim).filter(|line| line.starts_with("push")).map(str::to_owned).collect::<Vec<_>>()
     };
-    // Last argument first: -3 and 7 are byte-immediate dword pushes; 1.0 is two words (5 bytes);
-    // 7340144 is two (4), the first's zero low word joining the next word as `pushd 112` (3 for 4).
+    // Last argument first: -3 and 7 are byte-immediate dword pushes; 1.0 is two
+    // words (5 bytes); 7340144 is two (4), the first's zero low word
+    // joining the next word as `pushd 112` (3 for 4).
     assert_eq!(pushes(on(true)), ["pushd -3", "pushd 7", "pushw 16256", "pushd 112", "pushw 112"], "{}", on(true));
     assert_eq!(pushes(on(false)), ["pushd -3", "pushd 7", "pushd 1065353216", "pushd 7340144"], "{}", on(false));
 }
 
-/// A dword compared for equality with a constant xors only the halves the constant sets: QCport
-/// -Os had `xor dx,0` (3 bytes, no effect) in 71 `got != 73`-style compares.
+/// A dword compared for equality with a constant xors only the halves the
+/// constant sets: QCport -Os had `xor dx,0` (3 bytes, no effect) in 71 `got !=
+/// 73`-style compares.
 #[test]
 fn test_a_dword_equality_xors_only_the_constant_halves_that_are_not_zero() {
     let text = |constant: i64| {
@@ -2206,8 +2218,9 @@ define i16 @f() addrspace(1) {{
     assert_eq!(xors(0x20005), ["xor ax, 5", "xor dx, 2"]);
 }
 
-/// An internal function given `fastcc` pops its own arguments: `ret 6`, and its caller's
-/// cleanup is the callee's, not an `add sp,6` too (QCport -Os: some 720 of those).
+/// An internal function given `fastcc` pops its own arguments: `ret 6`, and its
+/// caller's cleanup is the callee's, not an `add sp,6` too (QCport -Os: some
+/// 720 of those).
 #[test]
 fn test_a_fastcc_function_pops_its_arguments_and_its_caller_does_not() {
     let text = "define internal fastcc i16 @work(i16 %a, i16 %b, i16 %c) {
@@ -2280,8 +2293,9 @@ fn test_an_and_only_compared_with_zero_is_test() {
         tested("%m", "0")[..4],
         ["mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "test ax, bx", "je L0_3"]
     );
-    // Read again, the AND is computed; a constant mask is the instruction's immediate (`test ax, 12`), not a copy
-    // `and`ed: collatz's `n & 1` was `mov edi, esi; and edi, 1; jne`.
+    // Read again, the AND is computed; a constant mask is the instruction's
+    // immediate (`test ax, 12`), not a copy `and`ed: collatz's `n & 1` was
+    // `mov edi, esi; and edi, 1; jne`.
     assert!(tested("%m", "%a").iter().any(|one| one.starts_with("and ")), "{:?}", tested("%m", "%a"));
     let masked = tested("12", "0");
     assert!(
@@ -2457,7 +2471,8 @@ no:
         )
     };
     let got = listing_on("386", &text("sge"), "f");
-    // Both operands are zero-extended where they are read, whichever is made first.
+    // Both operands are zero-extended where they are read, whichever is made
+    // first.
     assert!(
         got.iter().any(|line| line.starts_with("movzx eax, word ptr ["))
             && got.iter().any(|line| line.starts_with("movzx ebx, word ptr [")),
@@ -2620,7 +2635,8 @@ fn test_an_i64_to_a_float_is_filds_qword() {
 ";
     let got = inner(text);
     let fild = got.iter().position(|line| line.starts_with("fild qword ptr [bp-8]")).expect("fild qword");
-    // The pair is stored low then high, the value and a zero, wherever each is made.
+    // The pair is stored low then high, the value and a zero, wherever each is
+    // made.
     let stored: Vec<&String> = got[..fild].iter().filter(|line| line.starts_with("mov dword ptr [bp-")).collect();
     assert!(
         stored.len() == 2
@@ -2977,7 +2993,8 @@ fn test_parameters_passed_in_the_frame_are_refused() {
     }
 }
 
-/// A `byval` parameter is selected: its bytes are the stack's, and the parameter is their address.
+/// A `byval` parameter is selected: its bytes are the stack's, and the
+/// parameter is their address.
 #[test]
 fn test_a_byval_parameter_is_the_address_of_its_bytes_in_the_frame() {
     let text = "define i16 @f(ptr byval([8 x i8]) %p) addrspace(1) {\n  %at = getelementptr i8, ptr %p, i16 6\n  %v = load i16, ptr %at\n  ret i16 %v\n}\n";
@@ -3259,8 +3276,9 @@ no:
 }
 
 /// A 32-bit counter proven small indexes every frame array at its own
-/// scale, `[ebp+esi*4-disp]` with one register, and EBP's upper half zeroed once before the
-/// loop: truncated, each array took a shift and a register of its own.
+/// scale, `[ebp+esi*4-disp]` with one register, and EBP's upper half zeroed
+/// once before the loop: truncated, each array took a shift and a register of
+/// its own.
 #[test]
 fn test_a_wide_counter_indexes_frame_arrays_at_each_scale() {
     let text = "define i32 @f() addrspace(1) {
@@ -3766,7 +3784,8 @@ fn test_dbg_lines_become_linnum() {
         .filter(|one| one.r#type == llrm_omf::omf::LINNUM)
         .flat_map(|one| llrm_omf::omf::lines(one).1)
         .collect();
-    // push bp; mov bp, sp (3 bytes) is line 7's; mov ax, [bp+6]; sub ax, [bp+8] (6 bytes) too.
+    // push bp; mov bp, sp (3 bytes) is line 7's; mov ax, [bp+6]; sub ax, [bp+8]
+    // (6 bytes) too.
     assert_eq!(lines, [(7, 0), (8, 9)]);
     let marker = records.iter().any(|one| one.r#type == llrm_omf::omf::COMENT && one.body.get(1) == Some(&0xA1));
     assert!(marker, "the CodeView marker");
@@ -4299,8 +4318,9 @@ define i16 @f(i16 %a, i16 %c) addrspace(1) {{
     assert_eq!(listing(&text(true), "f"), listing(&text(false), "f"));
 }
 
-/// Two 16-byte locals, `x` and `y`: in the two arms of an `if`, or, `overlapping`, both
-/// live across the same stores; with lifetime markers when `markers`.
+/// Two 16-byte locals, `x` and `y`: in the two arms of an `if`, or,
+/// `overlapping`, both live across the same stores; with lifetime markers when
+/// `markers`.
 fn scopes(
     markers: bool,
     overlapping: bool,
@@ -4368,8 +4388,8 @@ fn frame_bytes(text: &str) -> i64 {
     listing.iter().find_map(|line| line.strip_prefix("sub sp, ")?.parse().ok()).unwrap_or(0)
 }
 
-/// Block locals nothing keeps live together share a slot; each had its own, so a function
-/// of sibling scopes reserved the sum of them.
+/// Block locals nothing keeps live together share a slot; each had its own, so
+/// a function of sibling scopes reserved the sum of them.
 #[test]
 fn test_block_locals_with_disjoint_lifetimes_share_a_frame_slot() {
     assert_eq!(frame_bytes(&scopes(false, false)), 32);
@@ -4382,8 +4402,8 @@ fn test_block_locals_live_together_keep_their_own_slots() {
     assert_eq!(frame_bytes(&scopes(true, true)), 32);
 }
 
-/// A local read after its lifetime ended is not one the markers can speak for: it keeps
-/// its own slot, whatever shares around it.
+/// A local read after its lifetime ended is not one the markers can speak for:
+/// it keeps its own slot, whatever shares around it.
 #[test]
 fn test_a_local_used_outside_its_lifetime_shares_no_slot() {
     let text =
@@ -4391,9 +4411,9 @@ fn test_a_local_used_outside_its_lifetime_shares_no_slot() {
     assert_eq!(frame_bytes(&text), 32);
 }
 
-/// After a second return from `setjmp` a slot another local used holds that local's value:
-/// in a function that calls a routine returning twice, no slot is shared, whatever the
-/// markers say.
+/// After a second return from `setjmp` a slot another local used holds that
+/// local's value: in a function that calls a routine returning twice, no slot
+/// is shared, whatever the markers say.
 #[test]
 fn test_no_slot_is_shared_in_a_function_that_calls_setjmp() {
     let text = scopes(true, false)
@@ -4405,7 +4425,8 @@ fn test_no_slot_is_shared_in_a_function_that_calls_setjmp() {
     assert_eq!(frame_bytes(&text), 32);
 }
 
-/// The flag reaches the allocator: the assembled procedure's body still says it calls `setjmp`.
+/// The flag reaches the allocator: the assembled procedure's body still says it
+/// calls `setjmp`.
 #[test]
 fn test_a_body_that_calls_setjmp_says_so_to_the_allocator() {
     let text = "declare i16 @setjmp(i16) returns_twice
@@ -4425,7 +4446,8 @@ define i16 @g(i16 %a) addrspace(1) {
     assert_eq!((says("f"), says("g")), (Some(true), Some(false)));
 }
 
-/// The encoded object of `fixture` at -Os when `machined` tries only `candidates`.
+/// The encoded object of `fixture` at -Os when `machined` tries only
+/// `candidates`.
 fn sized_with(
     candidates: assemble::Candidates,
     text: &str,
@@ -4446,9 +4468,10 @@ fn sized_with(
     })
 }
 
-/// The spiller decides on the general registers alone; where the allocator's pressure is elsewhere
-/// its spill code came on top of the allocator's own (QCport d_alias at -Os: 15723 bytes, 16811
-/// with it, +7%). The function costs what the cheaper route costs.
+/// The spiller decides on the general registers alone; where the allocator's
+/// pressure is elsewhere its spill code came on top of the allocator's own
+/// (QCport d_alias at -Os: 15723 bytes, 16811 with it, +7%). The function costs
+/// what the cheaper route costs.
 #[test]
 fn test_a_function_the_spiller_makes_larger_is_built_without_it() {
     let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/matmul.ll")).unwrap();
@@ -4458,8 +4481,9 @@ fn test_a_function_the_spiller_makes_larger_is_built_without_it() {
     assert_eq!(sized_with(assemble::Candidates::Both, &text), allocator);
 }
 
-/// A function that called one whose registers are known was made twice, the second time without that, and the cheaper
-/// kept: the facts won in 4% of 947 such functions (0.3% of their cost). Only -Omax makes it twice.
+/// A function that called one whose registers are known was made twice, the
+/// second time without that, and the cheaper kept: the facts won in 4% of 947
+/// such functions (0.3% of their cost). Only -Omax makes it twice.
 #[test]
 fn test_a_caller_is_made_without_its_callee_facts_only_with_an_exhaustive_search() {
     let text = "
@@ -4492,10 +4516,11 @@ define i16 @g(i16 %a) addrspace(1) {
     assert_eq!(all - directed, 1);
 }
 
-/// A function ran the spiller's route and the allocator's alone, and the cheaper was kept, whatever the allocator left:
-/// for the 77% of 4422 functions with frame or spill traffic the spiller could remove, and none else, that is one route
-/// fewer, and the bytes of the 66 programs and QCport were the same. Below -Omax the allocator alone is the only route
-/// where it left no traffic.
+/// A function ran the spiller's route and the allocator's alone, and the
+/// cheaper was kept, whatever the allocator left: for the 77% of 4422 functions
+/// with frame or spill traffic the spiller could remove, and none else, that is
+/// one route fewer, and the bytes of the 66 programs and QCport were the same.
+/// Below -Omax the allocator alone is the only route where it left no traffic.
 #[test]
 fn test_the_spiller_route_is_run_only_where_the_allocator_left_frame_traffic() {
     let dir = concat!(env!("LLRM_ROOT"), "/tests/check/mir");
@@ -4538,9 +4563,11 @@ fn test_the_spiller_route_is_run_only_where_the_allocator_left_frame_traffic() {
     assert!(directed < all, "{directed} routes against {all}");
 }
 
-/// -O0 ran the allocator's trials and both routes (the allocator alone and the spiller's) on every function: half of a
-/// -O0 compile (QCport d_faces 3.64 G, d_alias 4.32 G), for code the same size within 0.02%. gcc's IRA at -O0 builds no
-/// conflicts and allocates once. Without the search a function is made through one route.
+/// -O0 ran the allocator's trials and both routes (the allocator alone and the
+/// spiller's) on every function: half of a -O0 compile (QCport d_faces 3.64 G,
+/// d_alias 4.32 G), for code the same size within 0.02%. gcc's IRA at -O0
+/// builds no conflicts and allocates once. Without the search a function is
+/// made through one route.
 #[test]
 fn test_without_the_allocation_search_a_function_takes_one_route() {
     let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/matmul.ll")).unwrap();
@@ -4567,9 +4594,10 @@ fn test_without_the_allocation_search_a_function_takes_one_route() {
     assert_eq!(routes_not, functions, "{routes_not} routes for {functions} functions without the search");
 }
 
-/// Each route through the machine phases selected the function's instructions again, though the selector's output is
-/// the same for all of them: the routes of one function share one selection (4-5% of a file's compile time on the files
-/// the probe ran twice).
+/// Each route through the machine phases selected the function's instructions
+/// again, though the selector's output is the same for all of them: the routes
+/// of one function share one selection (4-5% of a file's compile time on the
+/// files the probe ran twice).
 #[test]
 fn test_the_routes_of_a_function_share_one_selection() {
     let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/matmul.ll")).unwrap();
@@ -4629,9 +4657,9 @@ define i16 @f(i16 %n) addrspace(1) {{
     assert_eq!(dynamic.iter().filter(|one| one.starts_with("rep movs")).count(), 2, "{dynamic:?}");
 }
 
-/// A near destination's selector was made ahead of the count's shift and mask, so
-/// it was live across them and took a general register: QCport's console.c grew
-/// a spill. It is made just before the first move.
+/// A near destination's selector was made ahead of the count's shift and mask,
+/// so it was live across them and took a general register: QCport's console.c
+/// grew a spill. It is made just before the first move.
 #[test]
 fn test_a_near_selector_is_made_after_the_count_is_prepared() {
     let text = "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
@@ -4680,7 +4708,8 @@ fn far_branch_body() -> String {
     )
 }
 
-/// The code segment of `text`'s object, decoded, with the offsets its fixups patch.
+/// The code segment of `text`'s object, decoded, with the offsets its fixups
+/// patch.
 fn decoded_object(text: &str) -> (Vec<iced_x86::Instruction>, Vec<usize>, Vec<usize>) {
     use llrm_omf::omf;
     let module =
@@ -4736,7 +4765,8 @@ fn test_a_branch_past_a_short_reach_grows_and_lands_on_its_target() {
 
 /// Every relocated field is patched where its instruction landed, after the
 /// branch before it grew. Replaces layout_tests'
-/// `test_a_moved_operation_keeps_its_fixup`, which checked it through BC's raise.
+/// `test_a_moved_operation_keeps_its_fixup`, which checked it through BC's
+/// raise.
 #[test]
 fn test_every_relocated_field_moves_with_its_instruction() {
     let (_, fields, fixed) = decoded_object(&far_branch_body());
@@ -4785,8 +4815,8 @@ fn test_a_volatile_load_is_not_folded_past_another_volatile_access() {
     }
 }
 
-/// A pointer into the stack segment is a word read and written through `ss:`, whatever DS holds:
-/// the segment is the space's, not DGROUP's.
+/// A pointer into the stack segment is a word read and written through `ss:`,
+/// whatever DS holds: the segment is the space's, not DGROUP's.
 #[test]
 fn a_near_stack_pointer_is_read_and_written_through_ss() {
     let body = listing(
@@ -4819,8 +4849,10 @@ b0:
     assert!(body.iter().any(|line| line.contains(", ss")), "{body:?}");
 }
 
-/// catalog.nib's `find` at -Os: a loop with one phi too many for the registers. Against a register phi stored once at
-/// the top, a memory phi stores on both in-edges: the object grew by 6 bytes (#491). The price keeps the register phi.
+/// catalog.nib's `find` at -Os: a loop with one phi too many for the registers.
+/// Against a register phi stored once at the top, a memory phi stores on both
+/// in-edges: the object grew by 6 bytes (#491). The price keeps the register
+/// phi.
 #[test]
 fn test_a_phi_stored_on_more_edges_than_its_block_runs_stays_in_a_register() {
     let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/findloop.ll")).unwrap();
@@ -4882,8 +4914,9 @@ fn test_a_selector_is_found_by_its_targets_name() {
 }
 
 /// A type's class, its register width and its size in memory are read off one
-/// classification: the patterns' `ptr`/`far`, the register a pointer takes and the bytes
-/// it stores can not disagree about whether a pointer is one value or two.
+/// classification: the patterns' `ptr`/`far`, the register a pointer takes and
+/// the bytes it stores can not disagree about whether a pointer is one value or
+/// two.
 #[test]
 fn test_one_class_of_a_type_says_its_name_register_and_size() {
     let params = "i1 %a, i8 %b, i16 %c, i32 %d, i64 %e, ptr %p, ptr addrspace(1) %q, float %x, double %y, x86_fp80 %z";
@@ -4933,10 +4966,11 @@ fn test_one_class_of_a_type_says_its_name_register_and_size() {
     );
 }
 
-/// A pointer of 32 bits reaches `[base+index*4]` as it is, with no proof and no widening:
-/// the sum is as wide as the pointer, and its base a dword already. Selected for the
-/// 16-bit target's profile it was `shl index,2` and an access through `[base+index]`: the
-/// fold wanted a word range for the index and a word base to widen.
+/// A pointer of 32 bits reaches `[base+index*4]` as it is, with no proof and no
+/// widening: the sum is as wide as the pointer, and its base a dword already.
+/// Selected for the 16-bit target's profile it was `shl index,2` and an access
+/// through `[base+index]`: the fold wanted a word range for the index and a
+/// word base to widen.
 #[test]
 fn test_a_dword_pointer_scales_its_index_in_the_access() {
     let text = "target datalayout = \"e-p:32:32-i32:32-i64:32\"\ndefine i32 @f(ptr %p, i32 %i) {\nentry:\n  %e = getelementptr inbounds i32, ptr %p, i32 %i\n  %v = load i32, ptr %e\n  ret i32 %v\n}\n";
@@ -4975,8 +5009,10 @@ fn test_a_dword_pointer_scales_its_index_in_the_access() {
     assert!(scaled, "{insns:?}");
 }
 
-/// A load made just before its reader moved past a store to the very global it read, which `_may_write` (the frame's
-/// question) did not see: `N$PEND`, `x = g; g = 0; return x`, returned the zero and every Nib program's output looped.
+/// A load made just before its reader moved past a store to the very global it
+/// read, which `_may_write` (the frame's question) did not see: `N$PEND`, `x =
+/// g; g = 0; return x`, returned the zero and every Nib program's output
+/// looped.
 #[test]
 fn test_a_load_does_not_move_past_a_store_to_the_global_it_read() {
     let text = "@g = internal global i16 5
@@ -4994,9 +5030,11 @@ define i16 @f() addrspace(1) {
     assert!(load.is_some() && store.is_some() && load < store, "{got:?}");
 }
 
-/// `-g`'s parameters of a function, by where its convention passes each: in a cell, in one register, in two
-/// (left out: no one register holds it), and one the function no longer has, which the optimiser took out.
-/// A register parameter was dropped with the rest of what had no cell, and a debugger had none to show.
+/// `-g`'s parameters of a function, by where its convention passes each: in a
+/// cell, in one register, in two (left out: no one register holds it), and one
+/// the function no longer has, which the optimiser took out. A register
+/// parameter was dropped with the rest of what had no cell, and a debugger had
+/// none to show.
 #[test]
 fn a_parameter_is_a_cell_a_register_or_gone() {
     use iced_x86::Register;
@@ -5050,8 +5088,9 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
     );
 }
 
-/// Whether an alloca's address is exposed was asked of its uses once per alloca by every query that named it, and by
-/// isel once more per alloca: a function of n locals read its whole body n times over, quadratic in n (#924: a
+/// Whether an alloca's address is exposed was asked of its uses once per alloca
+/// by every query that named it, and by isel once more per alloca: a function
+/// of n locals read its whole body n times over, quadratic in n (#924: a
 /// 2,048-word local was seconds). It is found for all allocas in one pass.
 #[test]
 fn test_selecting_a_function_scans_for_exposed_allocas_once_not_once_per_alloca() {
@@ -5070,12 +5109,14 @@ fn test_selecting_a_function_scans_for_exposed_allocas_once_not_once_per_alloca(
     }
 }
 
-/// Selecting a function asked for what every function of the module does to memory by scanning the module: n functions
-/// made n scans of n functions (a quarter of the compile of 1024 functions). The module is scanned once, for every
-/// function.
+/// Selecting a function asked for what every function of the module does to
+/// memory by scanning the module: n functions made n scans of n functions (a
+/// quarter of the compile of 1024 functions). The module is scanned once, for
+/// every function.
 #[test]
 fn test_the_callees_of_a_module_are_scanned_once_for_all_its_functions_not_for_each() {
-    // The tests of this crate run side by side in one process: each counts the scans its own thread makes.
+    // The tests of this crate run side by side in one process: each counts the
+    // scans its own thread makes.
     thread_local! {
         static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     }

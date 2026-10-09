@@ -353,7 +353,8 @@ fn _basic_segment_classes(
     Ok(rewritten.iter().flat_map(omf::Record::emit).collect())
 }
 
-/// Remove the native shell when the runtime's entry and B$EXSA own the whole frame.
+/// Remove the native shell when the runtime's entry and B$EXSA own the whole
+/// frame.
 ///
 /// The shared MASM model supplies a C-shaped BP shell whenever a body
 /// addresses BP or calls anything. B$ENRA itself saves BP, SI and DI, and
@@ -363,7 +364,8 @@ pub fn _basic_listing(
     number: usize,
 ) -> Result<Vec<masm::Item>, String> {
     let listing = masm::listing(procedure, number).map_err(|error| error.0)?;
-    // Whichever entry the runtime states: B$ENRA, or the checking B$ENRD, which builds the same frame.
+    // Whichever entry the runtime states: B$ENRA, or the checking B$ENRD, which
+    // builds the same frame.
     let runtime_frame = procedure.entry != 0;
     let module_body = procedure.name == "$QB$MAIN";
     if !runtime_frame && !module_body {
@@ -608,7 +610,8 @@ pub struct Object {
     pub frames: BTreeMap<String, Frame>,
     /// Each source line's BASIC line number, for the statement table.
     pub line_numbers: BTreeMap<i64, i64>,
-    /// The runtime's stack limit and overflow handler, where the program checks its stack.
+    /// The runtime's stack limit and overflow handler, where the program checks
+    /// its stack.
     pub stack_check: Option<model::StackCheck>,
 }
 
@@ -754,7 +757,8 @@ pub fn assembled(
 ) -> Result<masm::Module, String> {
     let abi = object_abi(object, runtime);
     let mut names = globals::names(module, &|name| abi.linked(name))?;
-    // A symbol the frontend states stands as it is, BASIC's type suffix and all.
+    // A symbol the frontend states stands as it is, BASIC's type suffix and
+    // all.
     for (at, global) in module.globals.iter().enumerate() {
         let id = GlobalId(at as u32);
         if let Some(symbol) = global.name.as_ref().and_then(|name| object.symbols.get(name)) {
@@ -946,8 +950,8 @@ fn procedure(
     let mut reserve = 0;
     let mut entry = 0;
     let mut statics = 0;
-    // The runtime's checking entry where it frames a checked procedure; the procedure's own check where it frames
-    // itself.
+    // The runtime's checking entry where it frames a checked procedure; the
+    // procedure's own check where it frames itself.
     let check = global
         .function()
         .is_some_and(|one| one.attrs.iter().any(|attr| Fact::of_attribute(attr) == Some(Fact::StackCheck)))
@@ -1056,7 +1060,8 @@ fn laid_out(
                             [vec![masm::Datum::Bytes(vec![0; padding as usize])], datums].concat()
                         }
                     }
-                    // One the frontend placed nowhere in particular goes with its global.
+                    // One the frontend placed nowhere in particular goes with
+                    // its global.
                     (None, None) => continue,
                     (None, Some(_)) => return Err(format!("{name} holds @{global}, which the module lacks")),
                 }

@@ -111,7 +111,8 @@ impl TypeRegistry {
             .or_else(|| self.dictionary_parts(type_name).map(|(_, _, entry)| ElementType::Struct(entry)))
     }
 
-    /// What `x[i]` of a value of this type reads: an element, or a dict's value.
+    /// What `x[i]` of a value of this type reads: an element, or a dict's
+    /// value.
     pub(super) fn indexed(
         &self,
         type_name: TypeName,

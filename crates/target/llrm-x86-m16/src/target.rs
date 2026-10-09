@@ -28,7 +28,8 @@ pub fn word_bases() -> Vec<Register> {
 /// Those a C callee keeps, as their word halves.
 pub const PRESERVED: [(Register, Register); 2] = [(Register::ESI, Register::SI), (Register::EDI, Register::DI)];
 
-/// How real-mode operations are priced from the instruction forms: `opcosts.txt`.
+/// How real-mode operations are priced from the instruction forms:
+/// `opcosts.txt`.
 pub static DESCRIPTION: std::sync::LazyLock<llrm_target::opcosts::Description> = std::sync::LazyLock::new(|| {
     llrm_target::opcosts::Description::parse(include_str!("opcosts.txt")).expect("opcosts.txt parses")
 });
@@ -42,14 +43,17 @@ pub struct Dos {
     pub address_forms: Vec<AddressForm>,
     /// Registers a far access takes for its selector.
     pub far_access: i64,
-    /// What the description gives a function nothing outside the program reaches.
+    /// What the description gives a function nothing outside the program
+    /// reaches.
     pub private: Option<llrm_mir::target::PrivateConvention>,
-    /// The conventions as the description states them: where arguments go and who removes them.
+    /// The conventions as the description states them: where arguments go and
+    /// who removes them.
     pub calling: Option<&'static llrm_target::calling::Calling>,
 }
 
 /// The segment registers a selector is held in: ES, FS and GS, and DS where
-/// no data is addressed through it, as the allocator takes it once those run out.
+/// no data is addressed through it, as the allocator takes it once those run
+/// out.
 pub const SEGMENT_REGISTERS: i64 = 4;
 
 /// A far access sets a segment register from its selector, through a
@@ -236,7 +240,8 @@ pub fn costs(arch: &str) -> OperationCosts {
     DESCRIPTION.operations(&|kind| timings::COST[kind][at], timings::PREFIX[at])
 }
 
-/// Bytes of `op r, r` on `width`-byte registers; a dword runs under the 66h prefix.
+/// Bytes of `op r, r` on `width`-byte registers; a dword runs under the 66h
+/// prefix.
 pub fn register_bytes(width: i64) -> i64 {
     llrm_x86::encoding::register_bytes(width, 2)
 }
@@ -290,10 +295,12 @@ mod tests {
 mod encoding_tests {
     use super::{imul_immediate_bytes, register_bytes, shift_bytes};
 
-    /// The coarse table and the exact helpers agree on a word, so `size_costs` read what isel's -Os pricing reads.
+    /// The coarse table and the exact helpers agree on a word, so `size_costs`
+    /// read what isel's -Os pricing reads.
     #[test]
     fn the_size_table_and_the_encodings_agree_on_a_word() {
-        // Twice the instruction: an operation is the instruction and what goes around it.
+        // Twice the instruction: an operation is the instruction and what goes
+        // around it.
         let doubled = |kind: &str| super::DESCRIPTION.bytes(kind).expect("opcosts.txt has the bytes");
         assert_eq!(
             (doubled("alu_rr"), doubled("mov_rr"), doubled("shift_ri")),
@@ -301,10 +308,12 @@ mod encoding_tests {
         );
     }
 
-    /// The byte prices MIR decides inlining and the calling convention by: a call is its 5 bytes
-    /// and each argument word 2 more (push and cleanup), a cleanup by pop is 1 a word against
-    /// `add sp` 3, and `ret N` 2 over `ret`; any other operation is its instruction's bytes
-    /// twice, the instructions an operation becomes. In clocks an argument is its store and load.
+    /// The byte prices MIR decides inlining and the calling convention by: a
+    /// call is its 5 bytes and each argument word 2 more (push and
+    /// cleanup), a cleanup by pop is 1 a word against `add sp` 3, and `ret
+    /// N` 2 over `ret`; any other operation is its instruction's bytes
+    /// twice, the instructions an operation becomes. In clocks an argument is
+    /// its store and load.
     #[test]
     fn the_size_costs_are_the_bytes_of_the_code_an_operation_becomes() {
         use llrm_mir::target::Machine;
@@ -320,7 +329,8 @@ mod encoding_tests {
         assert_eq!(clocks.argument, clocks.load + clocks.store);
     }
 
-    /// A dword takes 66h, a shift by one is D1, and `imul` takes a byte immediate only where it fits.
+    /// A dword takes 66h, a shift by one is D1, and `imul` takes a byte
+    /// immediate only where it fits.
     #[test]
     fn a_dword_form_has_the_operand_size_prefix() {
         assert_eq!((register_bytes(2), register_bytes(4)), (2, 3));

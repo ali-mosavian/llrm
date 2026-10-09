@@ -632,10 +632,10 @@ impl Body<'_, '_, '_> {
         Ok(answered)
     }
 
-    /// A division the processor traps on, a zero divisor: where errors land, BC's runtime finds the
-    /// statement from the trap's address. Here the trap is code, as ERROR is:
-    /// an invoke that names the statement and the pad, so RESUME and the
-    /// optimizer both see the edge.
+    /// A division the processor traps on, a zero divisor: where errors land,
+    /// BC's runtime finds the statement from the trap's address. Here the
+    /// trap is code, as ERROR is: an invoke that names the statement and
+    /// the pad, so RESUME and the optimizer both see the edge.
     pub(super) fn trapping(
         &mut self,
         instruction: i64,

@@ -53,7 +53,8 @@ impl Seeds<'_> {
         AffineOperand::Value(self.function.instruction(inst).result.expect("an integer result"), self.width)
     }
 
-    /// `term`, unsigned, `to` bits wide where it is narrower: a trip count in an index's width.
+    /// `term`, unsigned, `to` bits wide where it is narrower: a trip count in
+    /// an index's width.
     pub fn widened(
         &mut self,
         term: &AffineOperand,

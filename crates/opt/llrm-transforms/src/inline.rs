@@ -64,14 +64,17 @@ pub struct Threshold {
     pub limit: i64,
     pub hint: (i64, i64),
     pub hot: (i64, i64),
-    /// Where code size outranks speed: a call also removes its arguments' pushes and cleanup.
+    /// Where code size outranks speed: a call also removes its arguments'
+    /// pushes and cleanup.
     pub single: bool,
-    /// The last call of a function nothing else reaches inlines at any size: its body moves, nothing is
-    /// copied: LLVM's last-call-to-static bonus and GCC's `-finline-functions-called-once`, which
-    /// `-fno-inline-functions` leaves on as GCC's does; `-fno-inline-functions-called-once` turns it off.
+    /// The last call of a function nothing else reaches inlines at any size:
+    /// its body moves, nothing is copied: LLVM's last-call-to-static bonus
+    /// and GCC's `-finline-functions-called-once`, which
+    /// `-fno-inline-functions` leaves on as GCC's does;
+    /// `-fno-inline-functions-called-once` turns it off.
     pub last: bool,
-    /// `-fipa-cp-clone` (-O3): a function is copied for the constants its callers pass though the unit grows
-    /// (`ipacp`).
+    /// `-fipa-cp-clone` (-O3): a function is copied for the constants its
+    /// callers pass though the unit grows (`ipacp`).
     pub cp_clone: bool,
 }
 
@@ -120,34 +123,45 @@ fn stated(body: &Function) -> Option<Inlining> {
 /// function they add up per level.  LLVM bounds the same way.
 const FRAME_LIMIT: u64 = 256;
 
-/// Where the register allocator's cost leaves linear. gcc bounds a caller's growth at `large-function-insns` (2700)
-/// and `large-function-growth` (100%, ipa-inline.cc `caller_growth_limits`) and LLVM moves a once-called body up to the
-/// last-call bonus (15000 over 5 a instruction, about 3000): both for allocators near linear in function size. Ours
-/// rebuilds its intervals and facts over the whole body at each spill and split, so a body merged past the knee costs
-/// several times what its parts did. Measured (compile-time's curve, QCport -O2, 732 functions, instrument commit
-/// 646b62f0 on perf/walk, data in ~/scratch/ctime-out/curve): backend milliseconds per LIR instruction 0.20 up to about
-/// 200 instructions, 0.45 at 200-400, 0.96 at 400-800, 1.8 above 1600; the log-log slope of time against size 1.25
-/// below 300 instructions and 2.2 above. The knee is in LIR instructions and this counts MIR operations, which are 1.86
-/// LIR instructions each at the median (QCport's 108 functions of 60 operations or more at -O2, 16-bit; 1.66 over 15 on
-/// the 32-bit target), so 250 / 1.8. Counted as the same number, sb_build's 38-operation callee went into a caller of
-/// 190 and left 667 instructions where its parts were 175 and 465: backend 0.36 s -> 2.4 s. Called-once inlining (#769)
-/// merged part_frame from 435 to 1647 instructions: backend 271 ms -> 11,385 ms.
-// Re-measure when the allocator's slot numbering lands: https://github.com/ali-mosavian/llrm/issues/794. Measured 2026-10-07.
+/// Where the register allocator's cost leaves linear. gcc bounds a caller's
+/// growth at `large-function-insns` (2700) and `large-function-growth` (100%,
+/// ipa-inline.cc `caller_growth_limits`) and LLVM moves a once-called body up
+/// to the last-call bonus (15000 over 5 a instruction, about 3000): both for
+/// allocators near linear in function size. Ours rebuilds its intervals and
+/// facts over the whole body at each spill and split, so a body merged past the
+/// knee costs several times what its parts did. Measured (compile-time's curve,
+/// QCport -O2, 732 functions, instrument commit 646b62f0 on perf/walk, data in
+/// ~/scratch/ctime-out/curve): backend milliseconds per LIR instruction 0.20 up
+/// to about 200 instructions, 0.45 at 200-400, 0.96 at 400-800, 1.8 above 1600;
+/// the log-log slope of time against size 1.25 below 300 instructions and 2.2
+/// above. The knee is in LIR instructions and this counts MIR operations, which
+/// are 1.86 LIR instructions each at the median (QCport's 108 functions of 60
+/// operations or more at -O2, 16-bit; 1.66 over 15 on the 32-bit target), so
+/// 250 / 1.8. Counted as the same number, sb_build's 38-operation callee went
+/// into a caller of 190 and left 667 instructions where its parts were 175 and
+/// 465: backend 0.36 s -> 2.4 s. Called-once inlining (#769) merged part_frame
+/// from 435 to 1647 instructions: backend 271 ms -> 11,385 ms.
+// Re-measure when the allocator's slot numbering lands:
+// https://github.com/ali-mosavian/llrm/issues/794. Measured 2026-10-07.
 const KNEE_INSTRUCTIONS: i64 = 250;
-/// LIR instructions a MIR operation comes to, in percent: the median over QCport's 108 functions of 60 operations or
-/// more at -O2 (186) and 15 on the 32-bit target (166), taken as 180.
+/// LIR instructions a MIR operation comes to, in percent: the median over
+/// QCport's 108 functions of 60 operations or more at -O2 (186) and 15 on the
+/// 32-bit target (166), taken as 180.
 const INSTRUCTIONS_PER_OPERATION: i64 = 180;
 /// The knee in the unit this counts, MIR operations.
 const ALLOCATION_KNEE: i64 = KNEE_INSTRUCTIONS * 100 / INSTRUCTIONS_PER_OPERATION;
 
-/// gcc's rule of `caller_growth_limits` with the knee for `large-function-insns`: an inline that leaves its caller over
-/// `ALLOCATION_KNEE` operations and over the larger of the caller's own size (before any inlining) and the callee's
-/// grown by `LARGE_GROWTH` percent is refused, the last call of a function included.
+/// gcc's rule of `caller_growth_limits` with the knee for
+/// `large-function-insns`: an inline that leaves its caller over
+/// `ALLOCATION_KNEE` operations and over the larger of the caller's own size
+/// (before any inlining) and the callee's grown by `LARGE_GROWTH` percent is
+/// refused, the last call of a function included.
 const LARGE_FUNCTION: i64 = ALLOCATION_KNEE;
 const LARGE_GROWTH: i64 = 100;
 
-/// A body that is moved into its one caller is at most the knee: gcc's limits above let a large callee into a small
-/// caller whole, which is the merge that costs.
+/// A body that is moved into its one caller is at most the knee: gcc's limits
+/// above let a large callee into a small caller whole, which is the merge that
+/// costs.
 const LAST_CALL_OPERATIONS: i64 = ALLOCATION_KNEE;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -155,8 +169,8 @@ pub struct Candidate {
     pub body: Rc<Function>,
     /// Bytes of stack the body allocates.
     pub frame: u64,
-    /// Admitted only as the last call of a body nothing else reaches, which it moves whatever its price: not a copy
-    /// the price allows.
+    /// Admitted only as the last call of a body nothing else reaches, which it
+    /// moves whatever its price: not a copy the price allows.
     pub moved: bool,
 }
 
@@ -164,8 +178,9 @@ pub struct Candidate {
 pub struct Caller<'a> {
     pub layout: &'a DataLayout,
     pub recursive: bool,
-    /// The caller's operations before anything was inlined into it, 0 where that is not known: the growth
-    /// its inlines may come to is measured against it (`LARGE_FUNCTION`).
+    /// The caller's operations before anything was inlined into it, 0 where
+    /// that is not known: the growth its inlines may come to is measured
+    /// against it (`LARGE_FUNCTION`).
     pub base: i64,
 }
 
@@ -182,7 +197,8 @@ fn semantic(
     }
 }
 
-/// How many operations `body` does: gcc's size in insns, which its growth limits count.
+/// How many operations `body` does: gcc's size in insns, which its growth
+/// limits count.
 pub fn operations(body: &Function) -> i64 {
     semantic_count(body)
 }
@@ -218,10 +234,12 @@ fn byval_types(callee: &Function) -> Vec<(usize, llrm_mir::types::TypeId)> {
         .collect()
 }
 
-/// A `byval` parameter is the callee's own copy: the pointer the call passes is the caller's object, which the callee
-/// may write. LLVM's InlineFunction (HandleByValArgument) passes the pointer on when the callee only reads memory, and
-/// otherwise copies the object into a new alloca on the caller's entry and passes that: the same, here, with `memcpy`
-/// declared as the module needs it.
+/// A `byval` parameter is the callee's own copy: the pointer the call passes is
+/// the caller's object, which the callee may write. LLVM's InlineFunction
+/// (HandleByValArgument) passes the pointer on when the callee only reads
+/// memory, and otherwise copies the object into a new alloca on the caller's
+/// entry and passes that: the same, here, with `memcpy` declared as the module
+/// needs it.
 fn copy_byval_arguments(
     context: &mut Context,
     function: &mut Function,
@@ -306,7 +324,8 @@ fn frame(
         .sum()
 }
 
-/// The stack a copy of `body` adds to a caller: its allocas, and a copy of each `byval` object it may write.
+/// The stack a copy of `body` adds to a caller: its allocas, and a copy of each
+/// `byval` object it may write.
 fn grown(
     context: &Context,
     layout: &DataLayout,
@@ -337,8 +356,9 @@ pub(crate) fn cloneable(
     !recursive.contains(&id) && copyable(module, body)
 }
 
-/// Whether `body` may be copied as a function of its own (a recursive one included): it returns, `splice` carries it,
-/// and it is not to be inlined or `setjmp`-like.
+/// Whether `body` may be copied as a function of its own (a recursive one
+/// included): it returns, `splice` carries it, and it is not to be inlined or
+/// `setjmp`-like.
 pub(crate) fn copyable(
     module: &Module,
     body: &Function,
@@ -367,7 +387,8 @@ fn work(
         .sum()
 }
 
-/// What `function` comes to, priced by `costs`: its work, and each call's arguments.
+/// What `function` comes to, priced by `costs`: its work, and each call's
+/// arguments.
 pub fn size(
     module: &Module,
     callees: &Callees,
@@ -380,14 +401,16 @@ pub fn size(
         .filter(|&(_, inst)| matches!(body.instruction(inst).opcode, Opcode::Call(_)))
         .map(|(_, inst)| (body.instruction(inst).operands.len() as i64 - 1).max(0) * costs.argument)
         .sum();
-    // What a call keeps live across it is stored to the frame and read back: the callee may
-    // use every register but two, which a body with no call has for itself.
+    // What a call keeps live across it is stored to the frame and read back:
+    // the callee may use every register but two, which a body with no call
+    // has for itself.
     let found = llrm_analysis::liveness::live(body);
     let kept: i64 = body
         .layout()
         .iter()
         .flat_map(|&block| llrm_analysis::liveness::live_points(body, &found, block))
-        // An intrinsic, an inline block, is code in line: it keeps every register but those it names.
+        // An intrinsic, an inline block, is code in line: it keeps every
+        // register but those it names.
         .filter(|(inst, _, _)| {
             matches!(body.instruction(*inst).opcode, Opcode::Call(_))
                 && !callee(&module.context, body, *inst).is_some_and(|id| {
@@ -479,12 +502,14 @@ pub fn candidates(
             continue;
         }
         let always = stated(body) == Some(Inlining::Always);
-        // A hint is worth a larger body, and a larger duplication, by LLVM's ratio.
+        // A hint is worth a larger body, and a larger duplication, by LLVM's
+        // ratio.
         let scale =
             |n: i64| if stated(body) == Some(Inlining::Hint) { n * threshold.hint.0 / threshold.hint.1 } else { n };
-        // What a call removes: it, and where code size is what counts, its arguments' pushes and cleanup.
-        // A `byval` argument's copy goes too, as LLVM counts it (InlineCost: the bytes copied): a push's price per
-        // word.
+        // What a call removes: it, and where code size is what counts, its
+        // arguments' pushes and cleanup. A `byval` argument's copy goes
+        // too, as LLVM counts it (InlineCost: the bytes copied): a push's price
+        // per word.
         let copied: i64 = body
             .parameter_attrs
             .iter()
@@ -500,19 +525,22 @@ pub fn candidates(
             + copied * costs.argument
             + if threshold.single { module.signature(body.ty).1.len() as i64 * costs.argument } else { 0 };
         let copies = if private.contains(&name) && !addressed.contains(&name) { count - 1 } else { count };
-        // The last call of a function nothing else reaches moves its body: no copy, and the call,
-        // its arguments and the return gone (LLVM's last-call-to-static bonus).
+        // The last call of a function nothing else reaches moves its body: no
+        // copy, and the call, its arguments and the return gone (LLVM's
+        // last-call-to-static bonus).
         let admitted = || {
             budget.is_some_and(|budget| semantic_count(body) <= scale(budget))
                 && (copies == 0
                     || work(module, body, callees, costs).is_some_and(|work| work * copies < scale(count * saved)))
         };
-        // Only once nothing else is: a body that a call in it is about to be inlined into would
-        // be copied with that call still in it, and the call's callee counted once too many.
+        // Only once nothing else is: a body that a call in it is about to be
+        // inlined into would be copied with that call still in it, and
+        // the call's callee counted once too many.
         let last =
             threshold.last && copies == 0 && semantic_count(body) <= LAST_CALL_OPERATIONS && !always && !admitted();
-        // A body held only to inline from (`available_externally`) is priced by the trial of what
-        // it leaves, not by its size: any size is a candidate there, never in the plain round.
+        // A body held only to inline from (`available_externally`) is priced by
+        // the trial of what it leaves, not by its size: any size is a
+        // candidate there, never in the plain round.
         let verdict = always || admitted() || module.global(name).linkage == Linkage::AvailableExternally;
         llrm_support::debug!(
             "inline",
@@ -574,20 +602,23 @@ pub fn constant_sites(
         let Some(body) = body(module, name) else { continue };
         let semantic = semantic_count(body);
         // What stays of the copy, in clocks, against the call it replaces.
-        // Where code size is what counts, a body of arithmetic every actual of which is known is
-        // taken to fold whole: `folded` follows no branch past a decided one, so a loop on known
-        // bounds looked all kept.
+        // Where code size is what counts, a body of arithmetic every actual of
+        // which is known is taken to fold whole: `folded` follows no
+        // branch past a decided one, so a loop on known bounds looked
+        // all kept.
         let folds = threshold.single
             && known.iter().all(Option::is_some)
             && callees.get(&name).is_some_and(|summary| summary.effects == Effects::NONE);
         let saved = if folds { None } else { Some(folded(module, layout, body, known, callees, costs)) };
         let kept = if folds { Some(0) } else { work(module, body, callees, costs).map(|all| all - saved.unwrap_or(0)) };
-        // A call in a loop saves its overhead on every trip, which LLVM's hot-site threshold weighs.
+        // A call in a loop saves its overhead on every trip, which LLVM's
+        // hot-site threshold weighs.
         let hot = frequency.get(&cfg::id(block)).is_some_and(|&one| one > profit::UNIT);
         let overhead = call_overhead(costs, known.len()) * if hot { threshold.hot.0 } else { 1 }
             / if hot { threshold.hot.1 } else { 1 };
-        // A copy that folds nothing buys the call's overhead once, which `candidates` prices by its copies,
-        // unless the site is in a loop and buys it every trip.
+        // A copy that folds nothing buys the call's overhead once, which
+        // `candidates` prices by its copies, unless the site is in a
+        // loop and buys it every trip.
         let verdict = (folds || hot || saved.is_some_and(|saved| saved > 0))
             && kept.is_some_and(|kept| kept <= overhead)
             && semantic <= budget
@@ -681,8 +712,8 @@ fn fits(
         })
 }
 
-/// gcc's `caller_growth_limits`: the size after the inline, against the function limits. A caller whose size
-/// before is not known is its own base.
+/// gcc's `caller_growth_limits`: the size after the inline, against the
+/// function limits. A caller whose size before is not known is its own base.
 fn grows_within_limits(
     function: &Function,
     caller: &Caller,
@@ -693,16 +724,18 @@ fn grows_within_limits(
     let base = if caller.base > 0 { caller.base } else { own };
     let limit = base.max(callee_size) * (100 + LARGE_GROWTH) / 100;
     let after = own + callee_size;
-    // A body moved into a caller already past the knee is the merge that costs most: that caller does not grow by one.
+    // A body moved into a caller already past the knee is the merge that costs
+    // most: that caller does not grow by one.
     if moved && after >= callee_size && after > ALLOCATION_KNEE && own > ALLOCATION_KNEE {
         return false;
     }
     !(after >= callee_size && after > LARGE_FUNCTION && after > limit)
 }
 
-/// Whether `operand` is an object the program owns: a variable, a frame object, or a parameter, which
-/// the language passes owned. What a call returns, loads or joins may be a runtime temporary, which
-/// the runtime frees where a routine that `releases` it is called.
+/// Whether `operand` is an object the program owns: a variable, a frame object,
+/// or a parameter, which the language passes owned. What a call returns, loads
+/// or joins may be a runtime temporary, which the runtime frees where a routine
+/// that `releases` it is called.
 fn owned(
     context: &Context,
     function: &Function,
@@ -731,17 +764,21 @@ mod tests;
 
 /// GCC's `max-inline-recursive-depth-auto` (params.opt:573).
 const RECURSIVE_DEPTH: u32 = 8;
-/// GCC's `max-inline-insns-recursive-auto` (params.opt:553): what a function may grow to by inlining itself.
+/// GCC's `max-inline-insns-recursive-auto` (params.opt:553): what a function
+/// may grow to by inlining itself.
 const RECURSIVE_SIZE: i64 = 450;
-/// GCC's `min-inline-recursive-probability` (params.opt:769), percent: a recursive call is inlined into the function
-/// only if it runs more often than this per call of it.
+/// GCC's `min-inline-recursive-probability` (params.opt:769), percent: a
+/// recursive call is inlined into the function only if it runs more often than
+/// this per call of it.
 const RECURSIVE_PROBABILITY: i64 = 10;
 
-/// GCC's `recursive_inlining` (ipa-inline.cc): `function`, the body of `id`, with calls to itself replaced by copies of
-/// `original`, its body as it was, breadth first and each copy's own calls in turn, while a call is likelier than
-/// `RECURSIVE_PROBABILITY` percent of the function's calls, is no deeper than `RECURSIVE_DEPTH`, and the function stays
-/// under `RECURSIVE_SIZE`; the copies made. A function that allocates stack is left alone: each level would add its
-/// frame.
+/// GCC's `recursive_inlining` (ipa-inline.cc): `function`, the body of `id`,
+/// with calls to itself replaced by copies of `original`, its body as it was,
+/// breadth first and each copy's own calls in turn, while a call is likelier
+/// than `RECURSIVE_PROBABILITY` percent of the function's calls, is no deeper
+/// than `RECURSIVE_DEPTH`, and the function stays under `RECURSIVE_SIZE`; the
+/// copies made. A function that allocates stack is left alone: each level would
+/// add its frame.
 pub fn inlined_into_itself(
     id: GlobalId,
     function: &mut Function,
@@ -753,7 +790,8 @@ pub fn inlined_into_itself(
     let own = |function: &Function, context: &Context| -> Vec<InstId> {
         function.walk().map(|(_, inst)| inst).filter(|&inst| callee(context, function, inst) == Some(id)).collect()
     };
-    // Only a body the ordinary inline threshold admits (`want_inline_small_function_p` is asked of the recursive edge
+    // Only a body the ordinary inline threshold admits
+    // (`want_inline_small_function_p` is asked of the recursive edge
     // too), by its growth: the body less the call it replaces.
     if semantic_count(original) - 1 > budget
         || original.walk().any(|(_, inst)| matches!(original.instruction(inst).opcode, Opcode::Alloca { .. }))

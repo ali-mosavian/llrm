@@ -46,7 +46,8 @@ pub struct Port {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Machine {
     pub addressing: Addressing,
-    /// The segment registers the program model reserves; none on a flat machine.
+    /// The segment registers the program model reserves; none on a flat
+    /// machine.
     pub segments: Option<Segments>,
     /// Linear [low, high) ranges no program data occupies.
     pub foreign: Vec<(i64, i64)>,
@@ -59,17 +60,20 @@ pub struct Machine {
     /// Under protected addressing, the selector stride a huge pointer takes
     /// per 64K, as a shift: the system's, so the description states it.
     pub protected_huge_shift: Option<u32>,
-    /// The program's start-up zeroes the far uninitialised data (class FAR_BSS), as DOS leaves
-    /// memory past the image as it found it. Where it does not, zero far data is stored.
+    /// The program's start-up zeroes the far uninitialised data (class
+    /// FAR_BSS), as DOS leaves memory past the image as it found it. Where
+    /// it does not, zero far data is stored.
     pub far_bss: bool,
-    /// The data layout and address spaces of the target this machine is the platform of: a recompiler of
-    /// objects (BC's) reads them from the machine it is handed, not from a target it names.
+    /// The data layout and address spaces of the target this machine is the
+    /// platform of: a recompiler of objects (BC's) reads them from the
+    /// machine it is handed, not from a target it names.
     pub layout: Option<crate::layout::Layout>,
 }
 
 impl Machine {
-    /// This machine with the stack in the data group (SS is DS): the runtime of a language that keeps its stack in
-    /// DGROUP says so; the flag `-mstack-is-data` says it of a program.
+    /// This machine with the stack in the data group (SS is DS): the runtime of
+    /// a language that keeps its stack in DGROUP says so; the flag
+    /// `-mstack-is-data` says it of a program.
     pub fn with_stack_in_data(self) -> Self {
         Self { segments: self.segments.map(|segments| Segments { stack_is_data: true, ..segments }), ..self }
     }
@@ -87,8 +91,9 @@ impl Machine {
         self.layout.as_ref().expect("a machine of a target states its layout")
     }
 
-    /// The machine `text` describes, priced for `cpu`: the target's `default_cpu`,
-    /// stated once in its `timings.times`, not by the machine.
+    /// The machine `text` describes, priced for `cpu`: the target's
+    /// `default_cpu`, stated once in its `timings.times`, not by the
+    /// machine.
     pub fn parse(
         text: &str,
         cpu: &str,
@@ -294,8 +299,10 @@ mod tests {
         assert_eq!(flat.port_memory((0x300, 0x300)), PortMemory::Any);
     }
 
-    /// BASIC's machine was a second static beside the built-in one (`BASIC`), made by hand from it: the runtime that
-    /// keeps its stack in the data group asks for it of any machine, and a flat one has no segments to change.
+    /// BASIC's machine was a second static beside the built-in one (`BASIC`),
+    /// made by hand from it: the runtime that keeps its stack in the data
+    /// group asks for it of any machine, and a flat one has no segments to
+    /// change.
     #[test]
     fn test_a_machine_keeps_its_stack_in_the_data_group_when_asked() {
         let real = "addressing = \"real\"\nsegment_end_faults = true\n[segments]\ndata = \"ds\"\nstack = \"ss\"\ncode = \"cs\"\nstack_is_data = false\n";
@@ -311,9 +318,10 @@ mod tests {
         assert_eq!(Machine::parse(text, "486"), Err("segments is not a table".to_owned()));
     }
 
-    /// dos.toml said `cpu = "486"` while timings.times said `default_cpu 386`: two
-    /// defaults, so Nib and BASIC compiled for one CPU and C for another. A machine
-    /// that states a CPU is refused; the target's timings.times is the one place.
+    /// dos.toml said `cpu = "486"` while timings.times said `default_cpu 386`:
+    /// two defaults, so Nib and BASIC compiled for one CPU and C for
+    /// another. A machine that states a CPU is refused; the target's
+    /// timings.times is the one place.
     #[test]
     fn test_a_machine_states_no_cpu() {
         let text = format!("{FLAT}cpu = \"486\"\n");

@@ -57,7 +57,8 @@ pub enum WalkKind {
     Window,
     /// Consecutive instructions in place; a match moves on `advance`.
     Slide,
-    /// The first instruction, any run the gap guard lets through, then the rest, in place.
+    /// The first instruction, any run the gap guard lets through, then the
+    /// rest, in place.
     Gap,
 }
 

@@ -91,16 +91,20 @@ impl Block {
     }
 }
 
-/// What a debugger is told of a source variable, from a point of the code on: where it lives in memory, what it is, or
-/// that nothing says. Not an instruction: no pass counts it, and a use of a value in one keeps nothing alive.
+/// What a debugger is told of a source variable, from a point of the code on:
+/// where it lives in memory, what it is, or that nothing says. Not an
+/// instruction: no pass counts it, and a use of a value in one keeps nothing
+/// alive.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DebugWhat {
-    /// The variable is in the memory this address names, from here on (`llvm.dbg.declare`).
+    /// The variable is in the memory this address names, from here on
+    /// (`llvm.dbg.declare`).
     Declare(Operand),
-    /// The variable is this value, from here until the next record of the variable (`llvm.dbg.value`).
+    /// The variable is this value, from here until the next record of the
+    /// variable (`llvm.dbg.value`).
     Value(Operand),
-    /// `bytes` of the variable from byte `offset` are this value, from here on (`DW_OP_piece`): an aggregate the
-    /// optimiser split.
+    /// `bytes` of the variable from byte `offset` are this value, from here on
+    /// (`DW_OP_piece`): an aggregate the optimiser split.
     Piece { value: Operand, offset: u32, bytes: u32 },
     /// Nothing says where those bytes are: their value was deleted.
     GonePiece { offset: u32, bytes: u32 },
@@ -108,8 +112,8 @@ pub enum DebugWhat {
     Gone,
 }
 
-/// One such statement, standing before the instruction it names. The variable is a node of
-/// [`debuginfo`](crate::debuginfo).
+/// One such statement, standing before the instruction it names. The variable
+/// is a node of [`debuginfo`](crate::debuginfo).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DebugRecord {
     pub before: InstId,
@@ -138,10 +142,11 @@ pub enum Change {
     BlockErased(BlockId),
 }
 
-/// A function's log of changes. A copy is another function (`Lineage`), whose edits from then on are its own: it starts
-/// with an empty log, as a copy that carried the original's (up to 64k changes, cloned for each numbering of a body)
-/// cost 16% of compiling a program with a hundred inlines. The log is no part of what a function is, so two functions
-/// are equal whatever they logged.
+/// A function's log of changes. A copy is another function (`Lineage`), whose
+/// edits from then on are its own: it starts with an empty log, as a copy that
+/// carried the original's (up to 64k changes, cloned for each numbering of a
+/// body) cost 16% of compiling a program with a hundred inlines. The log is no
+/// part of what a function is, so two functions are equal whatever they logged.
 #[derive(Debug, Default)]
 pub(crate) struct ChangeLog(pub(crate) Vec<Change>);
 
@@ -162,8 +167,9 @@ impl PartialEq for ChangeLog {
 
 static NEXT_LINEAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-/// Which function a log of changes belongs to, and how many changes it has held: `take_changes` drains the log
-/// and leaves the count. A copy of a function is another one, as its edits from then on are its own.
+/// Which function a log of changes belongs to, and how many changes it has
+/// held: `take_changes` drains the log and leaves the count. A copy of a
+/// function is another one, as its edits from then on are its own.
 #[derive(Debug)]
 pub(crate) struct Lineage {
     uid: u64,
@@ -226,16 +232,17 @@ pub struct Function {
     pub(crate) value_uses: Vec<Vec<Use>>,
     pub(crate) block_uses: Vec<Vec<Use>>,
     pub(crate) changes: ChangeLog,
-    /// How many changes `take_changes` has handed out: the log keeps them, so an analysis computed before can still be
-    /// brought up to date.
+    /// How many changes `take_changes` has handed out: the log keeps them, so
+    /// an analysis computed before can still be brought up to date.
     pub(crate) taken: usize,
-    /// What `-g` says of its variables, kept true by the edits that move, replace or erase what it names.
+    /// What `-g` says of its variables, kept true by the edits that move,
+    /// replace or erase what it names.
     pub(crate) debug_records: Vec<DebugRecord>,
-    /// The variables a record of which went with the code it stood in (a block erased): what is said of them is not
-    /// all that was.
+    /// The variables a record of which went with the code it stood in (a block
+    /// erased): what is said of them is not all that was.
     pub(crate) debug_dropped: Vec<MetadataId>,
-    /// The position each parameter had when the function was made, once one was removed or added; empty while none
-    /// moved.
+    /// The position each parameter had when the function was made, once one was
+    /// removed or added; empty while none moved.
     pub(crate) parameter_origins: Vec<Option<usize>>,
     pub(crate) lineage: Lineage,
 }
@@ -303,7 +310,8 @@ impl Function {
         out
     }
 
-    /// Whether `declared` is this function's `declaration()`, found without making one.
+    /// Whether `declared` is this function's `declaration()`, found without
+    /// making one.
     pub fn declares(
         &self,
         declared: &Function,
@@ -325,8 +333,8 @@ impl Function {
         &self.parameters
     }
 
-    /// The position parameter `at` had when the function was made, none for one the passes added: what `-g` names a
-    /// parameter by.
+    /// The position parameter `at` had when the function was made, none for one
+    /// the passes added: what `-g` names a parameter by.
     pub fn parameter_origin(
         &self,
         at: usize,
@@ -343,7 +351,8 @@ impl Function {
 
     /// How many instructions were ever made, erased ones too: the next is
     /// `InstId(count)`.
-    /// How many values the function has made, parameters and results, the ids a table of them spans.
+    /// How many values the function has made, parameters and results, the ids a
+    /// table of them spans.
     pub fn value_count(&self) -> usize {
         self.values.len()
     }
@@ -352,7 +361,8 @@ impl Function {
         self.instructions.len()
     }
 
-    /// Each instruction's index in its block, by id; erased and unplaced ones are zero.
+    /// Each instruction's index in its block, by id; erased and unplaced ones
+    /// are zero.
     pub fn positions(&self) -> Vec<u32> {
         let mut positions = vec![0; self.instructions.len()];
         for &block in self.layout() {
@@ -461,8 +471,8 @@ impl Function {
         self.layout.iter().flat_map(move |&block| self.block(block).instructions.iter().map(move |&one| (block, one)))
     }
 
-    /// The log of changes since the last `take_changes`. They stay in the log, to `changes_since`, until it holds more
-    /// than `LOG` of them.
+    /// The log of changes since the last `take_changes`. They stay in the log,
+    /// to `changes_since`, until it holds more than `LOG` of them.
     pub fn take_changes(&mut self) -> Vec<Change> {
         const LOG: usize = 1 << 16;
         let kept_from = self.lineage.logged - self.changes.0.len();
@@ -488,8 +498,8 @@ impl Function {
         Mark { uid: self.lineage.uid, at: self.lineage.logged }
     }
 
-    /// What changed since `mark`, in order; none where `mark` is of another function or what followed it has been
-    /// taken.
+    /// What changed since `mark`, in order; none where `mark` is of another
+    /// function or what followed it has been taken.
     pub fn changes_since(
         &self,
         mark: Mark,
@@ -573,8 +583,8 @@ impl GlobalValue {
         }
     }
 
-    /// Whether `declared` is this global's `declaration()`, found without making one: what `Declarations` holds of it
-    /// still stands.
+    /// Whether `declared` is this global's `declaration()`, found without
+    /// making one: what `Declarations` holds of it still stands.
     pub fn declares(
         &self,
         declared: &GlobalValue,

@@ -1,8 +1,9 @@
-//! Every compiler binary takes gcc's `-m16`/`-m32`/`-m64`, `-march=` and `-mtune=` from the one
-//! parser, and none takes the spellings they replaced (`--target`, `--cpu`).
+//! Every compiler binary takes gcc's `-m16`/`-m32`/`-m64`, `-march=` and
+//! `-mtune=` from the one parser, and none takes the spellings they replaced
+//! (`--target`, `--cpu`).
 //!
-//! The binaries are enumerated from `src/bin`: one nobody classified fails, so a new frontend cannot
-//! ship with a parser of its own.
+//! The binaries are enumerated from `src/bin`: one nobody classified fails, so
+//! a new frontend cannot ship with a parser of its own.
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -11,8 +12,8 @@ const C: &str = "int main(void) { return 0; }\n";
 const NIB: &str = "fn main() -> i16:\n    return 0\n";
 const BASIC: &str = "PRINT 1\n";
 
-/// How a binary meets `-m32`: `Builds` compiles for it; `Refuses` takes the flag and says it builds
-/// for another target only (BASIC and BC are m16's).
+/// How a binary meets `-m32`: `Builds` compiles for it; `Refuses` takes the
+/// flag and says it builds for another target only (BASIC and BC are m16's).
 enum Meets {
     Builds,
     Refuses,
@@ -104,7 +105,8 @@ fn every_binary_is_classified() {
             binaries.push(entry.path().file_stem().unwrap().to_string_lossy().into_owned());
         }
     }
-    // `nibfront` and `qbparse-stages` only read; the first takes `-m` for what it declares.
+    // `nibfront` and `qbparse-stages` only read; the first takes `-m` for what
+    // it declares.
     let unclassified: Vec<&String> =
         binaries.iter().filter(|name| !known.contains(&name.as_str()) && name.as_str() != "qbparse-stages").collect();
     assert!(unclassified.is_empty(), "name how these take the target flags, or why not: {unclassified:?}");
@@ -125,7 +127,8 @@ fn every_compiler_takes_m32_from_the_one_parser() {
     }
 }
 
-/// `--target NAME` and `--cpu CPU` were spellings of their own; they are refused, not aliased.
+/// `--target NAME` and `--cpu CPU` were spellings of their own; they are
+/// refused, not aliased.
 #[test]
 fn the_old_spellings_are_refused_everywhere() {
     for tool in tools() {
@@ -137,7 +140,8 @@ fn the_old_spellings_are_refused_everywhere() {
     }
 }
 
-/// A mode no target declares is a clear refusal, not a fall back to the default.
+/// A mode no target declares is a clear refusal, not a fall back to the
+/// default.
 #[test]
 fn m64_is_refused_where_no_target_declares_it() {
     for tool in tools().iter().filter(|one| !matches!(one.name, "llrm-omf" | "llrm-qb")) {

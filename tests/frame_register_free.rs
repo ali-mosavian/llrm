@@ -1,9 +1,11 @@
-//! A function that needs no frame pointer holds a value in it (LLVM's `hasFP`, decided before allocation), and
-//! addresses its frame through the stack pointer at the depth every way into a block agrees on.
+//! A function that needs no frame pointer holds a value in it (LLVM's `hasFP`,
+//! decided before allocation), and addresses its frame through the stack
+//! pointer at the depth every way into a block agrees on.
 
 use std::process::Command;
 
-/// A loop entered at its test, so its body's label is reached only by a branch that comes after it.
+/// A loop entered at its test, so its body's label is reached only by a branch
+/// that comes after it.
 const KERNEL: &str = "
 static int values[64];
 static long chop(int lo, int hi)
@@ -32,8 +34,8 @@ fn listing(flags: &[&str]) -> String {
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }
 
-/// A block reached only by a later branch was addressed at depth 0: `add dword ptr [esp-8], ebp` wrote below the stack
-/// (recchop wrong at -O2).
+/// A block reached only by a later branch was addressed at depth 0: `add dword
+/// ptr [esp-8], ebp` wrote below the stack (recchop wrong at -O2).
 #[test]
 fn test_a_block_reached_by_a_later_branch_addresses_its_cells_at_the_depth_it_is_entered() {
     let text = listing(&["-m32", "-march=i486", "-O2"]);
@@ -42,8 +44,9 @@ fn test_a_block_reached_by_a_later_branch_addresses_its_cells_at_the_depth_it_is
     assert!(!text.contains("mov ebp, esp"), "{text}");
 }
 
-/// A spill reloaded by `pop` into a frame cell made the frame register's release fail the compile ("cannot be addressed
-/// through the stack pointer", x_life at -O2): the cell is addressed with the stack already taken back.
+/// A spill reloaded by `pop` into a frame cell made the frame register's
+/// release fail the compile ("cannot be addressed through the stack pointer",
+/// x_life at -O2): the cell is addressed with the stack already taken back.
 #[test]
 fn test_a_pop_into_a_frame_cell_is_addressed_after_the_stack_is_taken_back() {
     let kernel = std::fs::read_to_string(concat!(
@@ -61,9 +64,10 @@ fn test_a_pop_into_a_frame_cell_is_addressed_after_the_stack_is_taken_back() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
 }
 
-/// An array on the stack indexed by a register is `[bp+index+disp]`, SS-based, with no base value: it kept the frame
-/// register's name once that held a value, and read through whatever EBP held (nib/idioms at -O2 -m32, a checksum of
-/// 104000 for 9692800).
+/// An array on the stack indexed by a register is `[bp+index+disp]`, SS-based,
+/// with no base value: it kept the frame register's name once that held a
+/// value, and read through whatever EBP held (nib/idioms at -O2 -m32, a
+/// checksum of 104000 for 9692800).
 #[test]
 fn test_a_stack_array_indexed_by_a_register_is_addressed_through_the_stack_pointer() {
     let scratch = tempfile::tempdir().unwrap();
@@ -80,8 +84,9 @@ fn test_a_stack_array_indexed_by_a_register_is_addressed_through_the_stack_point
     assert!(!read_through_ebp || text.contains("mov ebp,"), "a frame cell read through an EBP nothing set: {text}");
 }
 
-/// A function that only read a stack argument pushed and popped the frame register it never used (`push ebp` in
-/// bench/hanoi's kernel, 1.4x the clocks of the framed one): a frame cell names the register as an address, not as a
+/// A function that only read a stack argument pushed and popped the frame
+/// register it never used (`push ebp` in bench/hanoi's kernel, 1.4x the clocks
+/// of the framed one): a frame cell names the register as an address, not as a
 /// use.
 #[test]
 fn test_a_function_that_only_reads_a_stack_argument_does_not_save_the_frame_register() {
@@ -97,9 +102,11 @@ fn test_a_function_that_only_reads_a_stack_argument_does_not_save_the_frame_regi
     assert!(!text.contains("ebp"), "{text}");
 }
 
-/// At -Os `masm::frame_omitted` took the framed body when it was shorter, though a value already lived in the freed
-/// frame register: "the frame register was given to a value and the frame cannot be addressed through the stack
-/// pointer" (c/fill_nest, c/stack_arrays_copy, nib/idioms, torture 990513-1 at -Os).
+/// At -Os `masm::frame_omitted` took the framed body when it was shorter,
+/// though a value already lived in the freed frame register: "the frame
+/// register was given to a value and the frame cannot be addressed through the
+/// stack pointer" (c/fill_nest, c/stack_arrays_copy, nib/idioms, torture
+/// 990513-1 at -Os).
 #[test]
 fn test_size_keeps_the_stack_addressed_frame_where_a_value_holds_the_frame_register() {
     for program in ["fill_nest", "stack_arrays_copy"] {
@@ -114,9 +121,10 @@ fn test_size_keeps_the_stack_addressed_frame_where_a_value_holds_the_frame_regis
     }
 }
 
-/// A spill swap `xchg edi, [cell]` was refused by `masm::stack_addressed`, which allowed an exchange of registers only:
-/// with a value in the freed frame register the compile failed (vsgcc x_hanoi2 at -O2 and -Os, "the frame register was
-/// given to a value ...").
+/// A spill swap `xchg edi, [cell]` was refused by `masm::stack_addressed`,
+/// which allowed an exchange of registers only: with a value in the freed frame
+/// register the compile failed (vsgcc x_hanoi2 at -O2 and -Os, "the frame
+/// register was given to a value ...").
 #[test]
 fn test_an_exchange_with_a_frame_cell_is_addressed_through_the_stack_pointer() {
     let source = "

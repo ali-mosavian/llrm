@@ -1,4 +1,5 @@
-//! Python's `set[tuple[Register_, int]]` of register and flag lanes, as a bitmask.
+//! Python's `set[tuple[Register_, int]]` of register and flag lanes, as a
+//! bitmask.
 //!
 //! Every lane a body can name is a byte of a general register root, a byte of
 //! a segment register, or a flag bit against `Register::None`: 72 in all. Bit
@@ -58,7 +59,8 @@ impl Lanes {
         Self(0)
     }
 
-    /// The flag lanes of an rflags mask. `Register::None` sorts first, so flag bit `i` is lane bit `i`.
+    /// The flag lanes of an rflags mask. `Register::None` sorts first, so flag
+    /// bit `i` is lane bit `i`.
     pub fn flags(mask: u32) -> Self {
         Self(u128::from(mask))
     }

@@ -1,12 +1,14 @@
-//! What a function nothing outside the program reaches leaves different is told to its callers
-//! (`backend/calleefacts.rs`): a caller keeps a value in any register the callee did not write, and a function that is
-//! not private tells nothing.
+//! What a function nothing outside the program reaches leaves different is told
+//! to its callers (`backend/calleefacts.rs`): a caller keeps a value in any
+//! register the callee did not write, and a function that is not private tells
+//! nothing.
 
 use std::process::Command;
 
 mod common;
 
-/// The listing of C `source` and the facts the compiler found (`LLRM_DEBUG=facts`), under `flags`.
+/// The listing of C `source` and the facts the compiler found
+/// (`LLRM_DEBUG=facts`), under `flags`.
 fn compiled(
     flags: &[&str],
     source: &str,
@@ -43,8 +45,9 @@ fn procedure(
 
 const SYSV: &[&str] = &["-m32", "-mabi=sysv"];
 
-/// `twice` writes AX alone, and cdecl16 says a call loses AX, BX, CX, DX and ES; `g` kept `k` in SI across the call,
-/// which pushed and popped SI for its caller: with the fact it keeps `k` in BX, which `twice` leaves, and saves
+/// `twice` writes AX alone, and cdecl16 says a call loses AX, BX, CX, DX and
+/// ES; `g` kept `k` in SI across the call, which pushed and popped SI for its
+/// caller: with the fact it keeps `k` in BX, which `twice` leaves, and saves
 /// nothing.
 #[test]
 fn a_caller_keeps_a_value_in_a_register_a_private_callee_does_not_write() {
@@ -57,8 +60,8 @@ fn a_caller_keeps_a_value_in_a_register_a_private_callee_does_not_write() {
     assert!(!lines.iter().any(|one| one == "push si" || one == "pop si"), "{lines:?}");
 }
 
-/// A callee that saves a register and restores it has not written it for its caller: `step` uses ESI and EDI and pushes
-/// them.
+/// A callee that saves a register and restores it has not written it for its
+/// caller: `step` uses ESI and EDI and pushes them.
 #[test]
 fn what_a_prologue_saves_and_an_epilogue_restores_is_not_written() {
     let (_, facts) = compiled(
@@ -69,8 +72,8 @@ fn what_a_prologue_saves_and_an_epilogue_restores_is_not_written() {
     assert!(line.contains("EAX") && !line.contains("ESI") && !line.contains("EDI"), "{line}");
 }
 
-/// An exported function, one whose address is taken and one that calls itself tell nothing: their callers keep the
-/// convention.
+/// An exported function, one whose address is taken and one that calls itself
+/// tell nothing: their callers keep the convention.
 #[test]
 fn a_function_that_may_be_reached_another_way_tells_nothing() {
     let (_, facts) = compiled(
@@ -82,8 +85,8 @@ fn a_function_that_may_be_reached_another_way_tells_nothing() {
     }
 }
 
-/// A callee that loads a far pointer writes ES, which its caller must not hold a value in; one that reads near memory
-/// leaves ES.
+/// A callee that loads a far pointer writes ES, which its caller must not hold
+/// a value in; one that reads near memory leaves ES.
 #[test]
 fn a_segment_register_is_written_where_the_callee_loads_it() {
     let (_, facts) = compiled(
@@ -101,8 +104,9 @@ fn a_segment_register_is_written_where_the_callee_loads_it() {
     assert!(far.contains("ES") && !near.contains("ES"), "{far} / {near}");
 }
 
-/// A far pointer's selector held in ES across a call survives it where the callee does not write ES: `h` loaded it
-/// again after the call (`mov es, [bp+8]`), the convention saying ES is lost.
+/// A far pointer's selector held in ES across a call survives it where the
+/// callee does not write ES: `h` loaded it again after the call (`mov es,
+/// [bp+8]`), the convention saying ES is lost.
 #[test]
 fn a_caller_keeps_es_across_a_call_that_does_not_write_it() {
     let (text, _) = compiled(

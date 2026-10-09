@@ -1,7 +1,7 @@
 //! The bodies a runtime's description gives its routines: each routine a
-//! module declares and the description states is defined `available_externally`,
-//! for the inliner to price against the call. A copy never reaches the
-//! object; a call it does not replace is the runtime's own.
+//! module declares and the description states is defined
+//! `available_externally`, for the inliner to price against the call. A copy
+//! never reaches the object; a call it does not replace is the runtime's own.
 
 use llrm_mir::BinaryOp;
 use llrm_mir::build::Builder;
@@ -50,7 +50,8 @@ fn declares(
     )
 }
 
-/// The runtime's error routine, `B$SERR(number)`, as the module calls it, declared where it is not.
+/// The runtime's error routine, `B$SERR(number)`, as the module calls it,
+/// declared where it is not.
 fn raiser(
     module: &mut Module,
     spaces: &llrm_target::layout::AddressSpaces,

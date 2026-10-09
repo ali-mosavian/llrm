@@ -1,10 +1,12 @@
-//! Intel-syntax inline assembly to machine code for a target's bitness: 16 (real mode) or 32 (flat).
+//! Intel-syntax inline assembly to machine code for a target's bitness: 16
+//! (real mode) or 32 (flat).
 //!
 //! `MNEMONICS` says what a block may use; iced's opcode tables say which
-//! forms each mnemonic has and which operands each form takes (iced is the encoder every x86 target
-//! encodes with, so a bitness is a filter on its forms and not a second table), so a new
-//! instruction is one row. Of the forms that take the operands written, the
-//! shortest is kept, and iced's block encoder sizes the jumps.
+//! forms each mnemonic has and which operands each form takes (iced is the
+//! encoder every x86 target encodes with, so a bitness is a filter on its forms
+//! and not a second table), so a new instruction is one row. Of the forms that
+//! take the operands written, the shortest is kept, and iced's block encoder
+//! sizes the jumps.
 
 use std::sync::LazyLock;
 
@@ -102,15 +104,17 @@ const ALIASES: &[(&str, &str)] = &[
     ("sal", "shl"),
 ];
 
-/// What a block is assembled for: facts of the target's description, not of this assembler.
+/// What a block is assembled for: facts of the target's description, not of
+/// this assembler.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Mode {
     /// The code's bits (`object.toml`): the encoder's mode.
     pub bits: u32,
-    /// Whether the target has segments (`Layout`'s far space is not its near space): segment registers
-    /// and overrides are only there.
+    /// Whether the target has segments (`Layout`'s far space is not its near
+    /// space): segment registers and overrides are only there.
     pub segmented: bool,
-    /// The bytes of an address (the near pointer): 2 takes `[bx|bp + si|di + n]`, 4 `[reg + reg*s + n]`.
+    /// The bytes of an address (the near pointer): 2 takes `[bx|bp + si|di +
+    /// n]`, 4 `[reg + reg*s + n]`.
     pub address_bytes: u32,
 }
 
@@ -172,7 +176,8 @@ fn forms_of(bits: u32) -> HashMap<Mnemonic, Vec<Code>> {
     let mut forms: HashMap<Mnemonic, Vec<Code>> = HashMap::default();
     for code in Code::values() {
         let info = code.op_code();
-        // A 32-bit block takes the 16-bit operand forms too (a 66h prefix), but only 32-bit addresses.
+        // A 32-bit block takes the 16-bit operand forms too (a 66h prefix), but
+        // only 32-bit addresses.
         let mode = if bits == 32 {
             info.mode32() && matches!(info.operand_size(), 0 | 16 | 32) && matches!(info.address_size(), 0 | 32)
         } else {
@@ -294,7 +299,8 @@ fn memory(
             continue;
         }
         if mode.address_bytes == 4 {
-            // `reg`, or `reg*scale`: any 32-bit register is a base, any but esp an index.
+            // `reg`, or `reg*scale`: any 32-bit register is a base, any but esp
+            // an index.
             let (name, scale) = match term.split_once('*') {
                 Some((name, scale)) => (name.trim(), number(scale.trim())),
                 None => (term, None),
@@ -596,8 +602,8 @@ fn instruction(
     Ok((chosen, target))
 }
 
-/// The machine code of `lines`, one statement each, for code of `bits` bits; `;` starts a comment.
-/// Real mode (16) and flat (32) code are assembled.
+/// The machine code of `lines`, one statement each, for code of `bits` bits;
+/// `;` starts a comment. Real mode (16) and flat (32) code are assembled.
 pub fn assembled(
     lines: &[&str],
     mode: Mode,
@@ -607,7 +613,8 @@ pub fn assembled(
         return refusal(0, format!("inline assembly is for 16-bit and 32-bit code: this target's code is {bits}-bit"));
     }
     let mut instructions: Vec<(Instruction, Option<String>, usize)> = Vec::new();
-    // Each label's instruction, by index; the end of the block is one past the last.
+    // Each label's instruction, by index; the end of the block is one past the
+    // last.
     let mut labels: HashMap<String, usize> = HashMap::default();
     for (line, text) in lines.iter().enumerate() {
         let mut text = text.split(';').next().unwrap_or("").trim();
@@ -627,7 +634,8 @@ pub fn assembled(
         let (made, target) = instruction(text, line, mode)?;
         instructions.push((made, target, line));
     }
-    // An instruction's IP names it: a branch targets the IP of the one after its label.
+    // An instruction's IP names it: a branch targets the IP of the one after
+    // its label.
     let ip = |index: usize| 0x10 * (index as u64 + 1);
     let end = instructions.len();
     let mut block = Vec::with_capacity(end + 1);
@@ -736,8 +744,9 @@ mod tests {
         assembled(lines, FLAT).expect_err("refused").message
     }
 
-    /// A flat block was refused whole ("16-bit only"): ports, interrupts and flags, which examples/speaker
-    /// is made of, and the 32-bit registers and addresses m32 has, encode as 32-bit code does.
+    /// A flat block was refused whole ("16-bit only"): ports, interrupts and
+    /// flags, which examples/speaker is made of, and the 32-bit registers
+    /// and addresses m32 has, encode as 32-bit code does.
     #[test]
     fn a_flat_block_takes_32_bit_registers_and_addresses_and_the_same_ports_and_interrupts() {
         assert_eq!(

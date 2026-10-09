@@ -1,6 +1,8 @@
-//! Maps and sets keyed by dense ids (`ValueId`, `InstId`, `BlockId`): a vector indexed by the id, as gcc's sbitmap and
-//! LLVM's IndexedMap / SparseBitVector are. No hashing, no tree nodes, one allocation that grows by doubling. Iteration
-//! is ascending by id, which is the order a `BTreeMap` of the same keys has.
+//! Maps and sets keyed by dense ids (`ValueId`, `InstId`, `BlockId`): a vector
+//! indexed by the id, as gcc's sbitmap and LLVM's IndexedMap / SparseBitVector
+//! are. No hashing, no tree nodes, one allocation that grows by doubling.
+//! Iteration is ascending by id, which is the order a `BTreeMap` of the same
+//! keys has.
 
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
@@ -344,8 +346,8 @@ mod tests {
 
     use super::*;
 
-    /// A set agrees with a `BTreeSet` of the same inserts and removes: membership, count, ascending order, what each
-    /// call returns.
+    /// A set agrees with a `BTreeSet` of the same inserts and removes:
+    /// membership, count, ascending order, what each call returns.
     #[test]
     fn a_set_does_what_a_btreeset_does() {
         let (mut ours, mut theirs) = (IdSet::<u32>::new(), BTreeSet::new());
@@ -365,7 +367,8 @@ mod tests {
         assert_eq!(ours.clone(), ours);
     }
 
-    /// A map agrees with a `BTreeMap`: what insert returns, lookups, the count after removals, ascending pairs.
+    /// A map agrees with a `BTreeMap`: what insert returns, lookups, the count
+    /// after removals, ascending pairs.
     #[test]
     fn a_map_does_what_a_btreemap_does() {
         let (mut ours, mut theirs) = (IdMap::<u32, u64>::new(), BTreeMap::new());

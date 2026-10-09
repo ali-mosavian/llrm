@@ -6,12 +6,13 @@
 //! tests to port, and these are new.
 //!
 //! What changed with the IR:
-//! - The copy is a `llvm.memcpy` of a constant length between two exact pointers into frame objects, not an adjacent
-//!   load and store of one aggregate.
-//! - The leaves are the destination's loads. A byte nothing reads is not copied: the destination is private, so no one
-//!   else can read it.
-//! - A destination the copy chain reads again is split once the later copy has been, so a copy of a copy is the loads
-//!   of the first source.
+//! - The copy is a `llvm.memcpy` of a constant length between two exact
+//!   pointers into frame objects, not an adjacent load and store of one
+//!   aggregate.
+//! - The leaves are the destination's loads. A byte nothing reads is not
+//!   copied: the destination is private, so no one else can read it.
+//! - A destination the copy chain reads again is split once the later copy has
+//!   been, so a copy of a copy is the loads of the first source.
 //!
 //! Left whole: a destination that is passed, stored, compared or read by
 //! another memcpy; a volatile copy; loads that overlap in part.
@@ -136,7 +137,8 @@ fn leaves(
                 Opcode::Store { volatile: false, .. } if one.index == 1 => {}
                 Opcode::Call(_) => match unit.intrinsic(one.user) {
                     Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd) => {}
-                    // The destination of a copy writes; its source reads bytes no one has named.
+                    // The destination of a copy writes; its source reads bytes
+                    // no one has named.
                     Some(Intrinsic::MemCpy) if one.index == 0 || one.user == copy => {}
                     _ => return None,
                 },

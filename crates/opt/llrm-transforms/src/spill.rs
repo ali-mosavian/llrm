@@ -29,7 +29,8 @@ use llrm_mir::types::Type;
 pub struct Room {
     pub registers: i64,
     pub across_call: i64,
-    /// What an access through a far pointer takes besides its address: its selector.
+    /// What an access through a far pointer takes besides its address: its
+    /// selector.
     pub far_access: i64,
     /// The segment registers a far pointer's selector is held in.
     pub segments: i64,
@@ -39,7 +40,8 @@ pub struct Room {
     pub two_address: bool,
     /// The target's address spaces by role.
     pub spaces: llrm_mir::spaces::Spaces,
-    /// The scales (bit `k` for `2^k`) an address takes beside any registers: `[ebp+esi*8+d]` folds `i * 8`.
+    /// The scales (bit `k` for `2^k`) an address takes beside any registers:
+    /// `[ebp+esi*8+d]` folds `i * 8`.
     pub index_scales: u8,
 }
 
@@ -62,8 +64,9 @@ impl Room {
     }
 }
 
-/// The scales the native form takes, where any register may be its base and its index (the others cost a
-/// prefix and bytes), as `Room::index_scales` has them.
+/// The scales the native form takes, where any register may be its base and its
+/// index (the others cost a prefix and bytes), as `Room::index_scales` has
+/// them.
 fn index_scales(forms: &[llrm_mir::target::AddressForm]) -> u8 {
     forms
         .iter()
@@ -183,7 +186,8 @@ pub fn spilled_in<K: Ord + Copy, S: Spilled<K>>(
     fitted::<K, S>(points, price).cost
 }
 
-/// `spilled`, and which cells it spills and how far past its registers the pressure goes.
+/// `spilled`, and which cells it spills and how far past its registers the
+/// pressure goes.
 pub fn forecast<K: Ord + Dense>(
     points: impl IntoIterator<Item = Point<K>>,
     price: impl Fn(K) -> i64,
@@ -198,8 +202,8 @@ fn fitted<K: Ord + Copy, S: Spilled<K>>(
     let mut spilled = S::default();
     let (mut cost, mut peak) = (0, 0);
     for point in points {
-        // Sorted and without repeats, as a set would hold them: a set built per point was most of lsr's work on a loop
-        // of many uses.
+        // Sorted and without repeats, as a set would hold them: a set built per
+        // point was most of lsr's work on a loop of many uses.
         let mut resident = point.residents.into_iter().filter(|one| !spilled.has(one)).collect::<Vec<_>>();
         resident.sort_unstable();
         resident.dedup();
@@ -208,7 +212,8 @@ fn fitted<K: Ord + Copy, S: Spilled<K>>(
         if excess <= 0 {
             continue;
         }
-        // The `excess` cheapest, dearer ties to the larger resident: a partial sort picks the same ones.
+        // The `excess` cheapest, dearer ties to the larger resident: a partial
+        // sort picks the same ones.
         let take = excess as usize;
         let mut cheapest = resident.into_iter().map(|one| (price(one), one)).collect::<Vec<_>>();
         if take < cheapest.len() {
@@ -272,12 +277,13 @@ pub fn transient(
         + if words(context, layout, function, *pointer) > 1 { room.far_access } else { 0 }
 }
 
-/// The register a result takes besides those live before it: where it is made in
-/// its first operand's, an operand that stays live must first be copied, and the
-/// copy lives with the second operand, which the operation reads. `sub cx, di`
-/// after `mov cx, dx` holds both `dx` and `cx`: a 7th value where six registers
-/// held six. A commutative operation takes either operand's; one of them dying
-/// is enough. A shift is two-address too: `sar r, imm` makes its result in the first operand's register.
+/// The register a result takes besides those live before it: where it is made
+/// in its first operand's, an operand that stays live must first be copied, and
+/// the copy lives with the second operand, which the operation reads. `sub cx,
+/// di` after `mov cx, dx` holds both `dx` and `cx`: a 7th value where six
+/// registers held six. A commutative operation takes either operand's; one of
+/// them dying is enough. A shift is two-address too: `sar r, imm` makes its
+/// result in the first operand's register.
 pub fn copied(
     function: &Function,
     inst: InstId,
@@ -326,8 +332,9 @@ fn addressed_by(
     is_folded: &mut dyn FnMut(ValueId) -> bool,
 ) -> BTreeSet<ValueId> {
     let mut found = BTreeSet::new();
-    // Whether a pointer is folded depends on all its users, and a frame slot has one user for each access
-    // to it: asked once for each pointer, not once for each access.
+    // Whether a pointer is folded depends on all its users, and a frame slot
+    // has one user for each access to it: asked once for each pointer, not
+    // once for each access.
     let mut memo: llrm_support::hash::HashMap<ValueId, bool> = llrm_support::hash::HashMap::default();
     for &block in function.layout() {
         for &inst in function.block(block).instructions() {
@@ -369,8 +376,8 @@ pub fn address_values_in(
     address_values_by(function, pointer, &mut |value| folded_in(context, function, value, scales))
 }
 
-/// `address_values`, asking `folded` of each value through `is_folded`, which a caller that asks of many
-/// pointers can answer from what it has found.
+/// `address_values`, asking `folded` of each value through `is_folded`, which a
+/// caller that asks of many pointers can answer from what it has found.
 fn address_values_by(
     function: &Function,
     pointer: ValueId,
@@ -500,8 +507,8 @@ thread_local! {
     static FOLDED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has asked whether a value is folded, for a test that `addressed` asks of each
-/// pointer once.
+/// How many times this thread has asked whether a value is folded, for a test
+/// that `addressed` asks of each pointer once.
 pub fn folded_runs() -> usize {
     FOLDED.with(std::cell::Cell::get)
 }
@@ -516,8 +523,9 @@ pub fn folded(
     folded_with(None, function, value, 0)
 }
 
-/// `folded` where an address takes `scales` (`Room::index_scales`): a frame object indexed by a scaled
-/// integer is `[ebp+esi*8+disp]` wherever it is read, as it is where its offset is a constant.
+/// `folded` where an address takes `scales` (`Room::index_scales`): a frame
+/// object indexed by a scaled integer is `[ebp+esi*8+disp]` wherever it is
+/// read, as it is where its offset is a constant.
 pub fn folded_in(
     context: &Context,
     function: &Function,
@@ -537,11 +545,13 @@ fn folded_with(
     let ValueDef::Instruction(def) = function.value(value).def else { return false };
     let block = function.parent(def);
     let users = function.users(value);
-    // A constant offset into a frame object is a displacement wherever it is read.
+    // A constant offset into a frame object is a displacement wherever it is
+    // read.
     let displacement = _frame_object(function, value)
         || _frame_offset(function, value)
         || context.is_some_and(|context| scales != 0 && _frame_indexed(context, function, value, scales));
-    // The stack space's view of one is made where it is read, by whatever reads it.
+    // The stack space's view of one is made where it is read, by whatever reads
+    // it.
     if displacement && matches!(
         function.instruction(def).opcode,
         Opcode::Cast(CastOp::AddrSpaceCast)
@@ -573,7 +583,8 @@ fn folded_with(
         })
 }
 
-/// Whether `value` is a frame object's address: a displacement from BP in each access.
+/// Whether `value` is a frame object's address: a displacement from BP in each
+/// access.
 fn _frame_object(
     function: &Function,
     value: ValueId,
@@ -608,8 +619,8 @@ fn _frame_offset(
         }
 }
 
-/// Whether `value` is a frame object's address plus one index scaled by what an address takes (`x * 8`, a
-/// `mul` or a `shl`), and constants.
+/// Whether `value` is a frame object's address plus one index scaled by what an
+/// address takes (`x * 8`, a `mul` or a `shl`), and constants.
 fn _frame_indexed(
     context: &Context,
     function: &Function,
@@ -828,9 +839,11 @@ pub struct Site {
     pub inst: InstId,
     pub before: Point<ValueId>,
     pub across: Option<Point<ValueId>>,
-    /// The values live before it that the segment registers hold, against theirs.
+    /// The values live before it that the segment registers hold, against
+    /// theirs.
     pub segments: Point<ValueId>,
-    /// The values live before it that an address takes, against the registers one may be held in.
+    /// The values live before it that an address takes, against the registers
+    /// one may be held in.
     pub addresses: Point<ValueId>,
 }
 
@@ -902,9 +915,10 @@ impl Site {
     }
 }
 
-/// What the model knows of one function whatever room asks: liveness, the cell each value is spilled to,
-/// which values take a register where they are live (`integer_in`, asked once of each), and which are
-/// addressed. A manager analysis, so each version of a function has it once.
+/// What the model knows of one function whatever room asks: liveness, the cell
+/// each value is spilled to, which values take a register where they are live
+/// (`integer_in`, asked once of each), and which are addressed. A manager
+/// analysis, so each version of a function has it once.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pressure {
     found: Liveness,
@@ -938,7 +952,8 @@ impl Pressure {
         &self.found
     }
 
-    /// The cell each value is spilled to: itself, or the one it shares a cell with.
+    /// The cell each value is spilled to: itself, or the one it shares a cell
+    /// with.
     pub fn cells(&self) -> &BTreeMap<ValueId, ValueId> {
         &self.cells
     }
@@ -957,8 +972,9 @@ impl llrm_mir::passes::Analysis for Pressure {
     }
 }
 
-/// `Pressure` under a room and the registers a call keeps: what every pass that asks the model gets, a pass
-/// that is deciding between candidates `hide`ing the values its candidates replace.
+/// `Pressure` under a room and the registers a call keeps: what every pass that
+/// asks the model gets, a pass that is deciding between candidates `hide`ing
+/// the values its candidates replace.
 pub struct View<'a> {
     context: &'a Context,
     layout: &'a DataLayout,

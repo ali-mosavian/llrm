@@ -1,7 +1,8 @@
 //! Whether a loop is worth copying out completely, decided before anything
 //! is cloned: llrm-core's `analysis/peelsize.rs`, the port of
 //! `qbopt/analysis/peelsize.py`, adapted to the rich MIR.
-//! LLVM: LoopUnrollPass's full-unroll cost model, `analyzeLoopUnrollCost` and `shouldFullUnroll`.
+//! LLVM: LoopUnrollPass's full-unroll cost model, `analyzeLoopUnrollCost` and
+//! `shouldFullUnroll`.
 //!
 //! The decision is GCC's `try_unroll_loop_completely`
 //! (gcc/tree-ssa-loop-ivcanon.cc). The size it is given is LLVM's: each
@@ -29,11 +30,13 @@ use crate::graph::loops::Loop;
 use crate::induction::{self, AffineOperand};
 use crate::memory::{self, Unit};
 
-/// GCC's `--param max-peel-branches`: undecided branches a copied sequence may hold.
+/// GCC's `--param max-peel-branches`: undecided branches a copied sequence may
+/// hold.
 const MAX_PEEL_BRANCHES: i64 = 32;
 
-/// GCC's `optimize_loop_nest_for_speed_p`: a loop entered less often than this, in percent of its
-/// function's entries, is cold, and no copy of it grows the code.
+/// GCC's `optimize_loop_nest_for_speed_p`: a loop entered less often than this,
+/// in percent of its function's entries, is cold, and no copy of it grows the
+/// code.
 const COLD_PERCENT: i64 = 5;
 
 /// What one entry of a function weighs in `entries`: `profit::UNIT`.
@@ -54,27 +57,32 @@ impl Default for Site {
     }
 }
 
-/// LLVM's `-unroll-threshold` for a loop the language marks (`#pragma unroll`): operations a
-/// copy the language asked for may hold, past the size budget.
+/// LLVM's `-unroll-threshold` for a loop the language marks (`#pragma unroll`):
+/// operations a copy the language asked for may hold, past the size budget.
 const HINTED_OPERATIONS: i64 = 16384;
 
-/// LLVM's `-unroll-max-percent-threshold-boost`: how far saved work may raise the budget.
+/// LLVM's `-unroll-max-percent-threshold-boost`: how far saved work may raise
+/// the budget.
 const MAX_PERCENT_THRESHOLD_BOOST: i64 = 400;
 
 /// GCC's copy budgets, independent of the CPU. `grows: false` is -Os's
 /// `UL_NO_GROWTH`: a copy is taken only when it is no larger.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Limits {
-    /// GCC's `max-completely-peel-times` (16; LLVM's `-unroll-max-iteration-count-to-analyze` is 10); 0 is unbounded.
+    /// GCC's `max-completely-peel-times` (16; LLVM's
+    /// `-unroll-max-iteration-count-to-analyze` is 10); 0 is unbounded.
     pub max_unroll_iterations: i64,
-    /// `--param max-completely-peeled-insns`; 0 is unbounded. Where `target_percent` is set, the target's own
+    /// `--param max-completely-peeled-insns`; 0 is unbounded. Where
+    /// `target_percent` is set, the target's own
     /// (`OperationCosts::unroll_budget`) in that percent replaces it.
     pub max_unrolled_operations: i64,
-    /// What share of the target's `unroll_budget` the budget is, in percent: 100, and -O3's 200 (LLVM's 300 over 150).
+    /// What share of the target's `unroll_budget` the budget is, in percent:
+    /// 100, and -O3's 200 (LLVM's 300 over 150).
     /// 0: `max_unrolled_operations` as it stands.
     pub target_percent: i64,
     pub grows: bool,
-    /// Clocks an inline that grows the code must save for each byte it adds: `--clocks-per-byte`.
+    /// Clocks an inline that grows the code must save for each byte it adds:
+    /// `--clocks-per-byte`.
     pub milliclocks_per_byte: i64,
 }
 
@@ -104,23 +112,24 @@ impl Default for Limits {
     }
 }
 
-/// Whether copying `loop_` out `count` times pays: GCC's `try_unroll_loop_completely`.
+/// Whether copying `loop_` out `count` times pays: GCC's
+/// `try_unroll_loop_completely`.
 ///
-/// Past `max-completely-peel-times` iterations nothing is copied, however small the
-/// copy would settle: building it is the cost. A copy no larger than the loop always
-/// pays. Otherwise GCC refuses growth under -Os, past `max-peel-branches` undecided
-/// branches, and past
+/// Past `max-completely-peel-times` iterations nothing is copied, however small
+/// the copy would settle: building it is the cost. A copy no larger than the
+/// loop always pays. Otherwise GCC refuses growth under -Os, past
+/// `max-peel-branches` undecided branches, and past
 /// `max-completely-peeled-insns` instructions -- a budget raised, as LLVM's
-/// `shouldFullUnroll` raises it, by the share of the rolled work the copy no longer
-/// does (`getFullUnrollBoostingFactor`). A loop holding another is copied only when
-/// that shrinks it, as GCC does for outer loops.
+/// `shouldFullUnroll` raises it, by the share of the rolled work the copy no
+/// longer does (`getFullUnrollBoostingFactor`). A loop holding another is
+/// copied only when that shrinks it, as GCC does for outer loops.
 ///
-/// `site` is where the loop stands: GCC refuses a growing copy of a loop with a call that touches memory,
-/// too, as little is left to fold.
+/// `site` is where the loop stands: GCC refuses a growing copy of a loop with a
+/// call that touches memory, too, as little is left to fold.
 ///
 /// GCC also refuses a call on the path, guessing little is left to fold; the
-/// simulation measures what folds, so a call is priced as LLVM's cost model prices
-/// one instead.
+/// simulation measures what folds, so a call is priced as LLVM's cost model
+/// prices one instead.
 pub fn admitted(
     unit: &Unit,
     loop_: &Loop,
@@ -129,9 +138,10 @@ pub fn admitted(
     limits: &Limits,
     site: Site,
 ) -> bool {
-    // What the language says of copying this loop: never, or as many as it permits, which
-    // at least the trip count is asked, and is then copied past the budget. Fewer than the
-    // trip count is no partial unrolling, which does not exist here: it is a refusal.
+    // What the language says of copying this loop: never, or as many as it
+    // permits, which at least the trip count is asked, and is then copied
+    // past the budget. Fewer than the trip count is no partial unrolling,
+    // which does not exist here: it is a refusal.
     let stated = loop_
         .latches
         .iter()
@@ -187,8 +197,8 @@ pub fn admitted(
         return false;
     };
     let boost = _boost(&unrolled);
-    // GCC's `estimated_unrolled_size` takes two thirds of the copies' size, for what later passes still remove from
-    // them.
+    // GCC's `estimated_unrolled_size` takes two thirds of the copies' size, for
+    // what later passes still remove from them.
     let estimate = (unrolled.size * 2 / 3).max(1);
     // GCC's reasons, in its order.
     let refusal = if asked || estimate <= size {
@@ -218,8 +228,8 @@ pub fn admitted(
     refusal.is_none()
 }
 
-/// LLVM's `getFullUnrollBoostingFactor`: the rolled work per unrolled operation, in
-/// percent, capped.
+/// LLVM's `getFullUnrollBoostingFactor`: the rolled work per unrolled
+/// operation, in percent, capped.
 fn _boost(unrolled: &Unrolled) -> i64 {
     if unrolled.size == 0 {
         return MAX_PERCENT_THRESHOLD_BOOST;
@@ -233,7 +243,8 @@ struct Unrolled {
     size: i64,
     /// Conditional branches no iteration decides, over every iteration.
     branches: i64,
-    /// Instructions the rolled loop executes over every iteration: LLVM's `RolledDynamicCost`.
+    /// Instructions the rolled loop executes over every iteration: LLVM's
+    /// `RolledDynamicCost`.
     rolled: i64,
 }
 
@@ -245,10 +256,10 @@ fn _incoming(
     phi.operands.chunks(2).find(|arm| matches!(arm[1], Operand::Block(block) if from(cfg::id(block)))).map(|arm| arm[0])
 }
 
-/// LLVM's `analyzeLoopUnrollCost`: run each of `count` iterations over the values it
-/// knows and the memory it has written, count what does not fold, and follow only the
-/// successors a folded branch leaves. `None` once more than `limit` instructions
-/// remain, where LLVM bails out too.
+/// LLVM's `analyzeLoopUnrollCost`: run each of `count` iterations over the
+/// values it knows and the memory it has written, count what does not fold, and
+/// follow only the successors a folded branch leaves. `None` once more than
+/// `limit` instructions remain, where LLVM bails out too.
 fn unrolled(
     unit: &Unit,
     blocks: &BTreeMap<i64, &cfg::Block>,
@@ -277,7 +288,8 @@ fn unrolled(
                 if op.opcode != Opcode::Phi {
                     continue;
                 }
-                // The header's value comes from before the loop, then from the last iteration.
+                // The header's value comes from before the loop, then from the
+                // last iteration.
                 let incoming = if at == loop_.header {
                     let source = if iteration == 0 {
                         _incoming(op, |pred| !loop_.body.contains(&pred))
@@ -362,8 +374,8 @@ fn unrolled(
     Some(out)
 }
 
-/// The loop's blocks, each after every block reaching it inside one iteration; `None`
-/// when the loop holds another.
+/// The loop's blocks, each after every block reaching it inside one iteration;
+/// `None` when the loop holds another.
 fn _ordered(
     blocks: &BTreeMap<i64, &cfg::Block>,
     header: i64,
@@ -390,7 +402,8 @@ fn _ordered(
     (order.len() == blocks.len()).then_some(order)
 }
 
-/// The loop's instructions, and how many of them fold once the iteration is fixed.
+/// The loop's instructions, and how many of them fold once the iteration is
+/// fixed.
 fn _sizes(
     unit: &Unit,
     loop_: &Loop,

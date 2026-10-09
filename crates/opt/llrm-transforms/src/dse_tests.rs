@@ -431,9 +431,9 @@ declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) no
     assert!(!after.contains("call void @llvm.memset") && after.matches("store i16").count() == 2, "{after}");
 }
 
-/// A local's lifetime ending is the end of what its bytes hold: the store before it,
-/// which promotion left once it replaced the load, is dead. The markers read the cell
-/// (`memory(argmem: readwrite)`), so it stayed.
+/// A local's lifetime ending is the end of what its bytes hold: the store
+/// before it, which promotion left once it replaced the load, is dead. The
+/// markers read the cell (`memory(argmem: readwrite)`), so it stayed.
 #[test]
 fn test_a_store_before_the_lifetime_end_is_dead() {
     let after = promoted(
@@ -453,9 +453,11 @@ b0:
     assert!(!after.contains("store "), "{after}");
 }
 
-/// A store whose value is also read back whole is still read where a narrower load at an offset reaches it: `store i32`
-/// into a cell, the high word read through `getelementptr` and the whole word read as well. Dropped as dead, the
-/// narrower load read bytes nothing had written (`((int *)&b)[1]` of an i64 parameter, #677).
+/// A store whose value is also read back whole is still read where a narrower
+/// load at an offset reaches it: `store i32` into a cell, the high word read
+/// through `getelementptr` and the whole word read as well. Dropped as dead,
+/// the narrower load read bytes nothing had written (`((int *)&b)[1]` of an i64
+/// parameter, #677).
 #[test]
 fn test_dse_keeps_a_store_a_narrower_load_at_an_offset_reads() {
     let after = promoted(
@@ -475,10 +477,12 @@ b0:
     assert!(after.contains("store i32"), "{after}");
 }
 
-/// The same with an i64 and the types C gives them: a `long long` stored and an `int` read at offset 4 of it.
-/// Type-based alias analysis may rule two accesses out where the address analysis cannot tell, not where it has them in
-/// one object at overlapping bytes (LLVM asks it only of MayAlias): the store went as dead and the read took the cell's
-/// bytes unwritten (`((int *)&b)[1]`, #677).
+/// The same with an i64 and the types C gives them: a `long long` stored and an
+/// `int` read at offset 4 of it. Type-based alias analysis may rule two
+/// accesses out where the address analysis cannot tell, not where it has them
+/// in one object at overlapping bytes (LLVM asks it only of MayAlias): the
+/// store went as dead and the read took the cell's bytes unwritten (`((int
+/// *)&b)[1]`, #677).
 #[test]
 fn test_dse_keeps_an_i64_store_its_high_dword_load_reads() {
     let after = dropped(

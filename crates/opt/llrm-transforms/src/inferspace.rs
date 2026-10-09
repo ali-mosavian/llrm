@@ -1,6 +1,7 @@
-//! LLVM's InferAddressSpaces: a far pointer made from a near one by `addrspacecast` addresses what
-//! the near one does, so what only reads or writes through it, or steps it, can use the near one
-//! and drop the selector: no `les`, no segment register held across a loop.
+//! LLVM's InferAddressSpaces: a far pointer made from a near one by
+//! `addrspacecast` addresses what the near one does, so what only reads or
+//! writes through it, or steps it, can use the near one and drop the selector:
+//! no `les`, no segment register held across a loop.
 //!
 //! ```text
 //! %w = addrspacecast ptr %p to ptr addrspace(1)      %q = gep i8, ptr %p, 4
@@ -8,12 +9,14 @@
 //! load i16, ptr addrspace(1) %g
 //! ```
 //!
-//! The near space a pointer narrows to follows where it points: DGROUP's for a global, the stack
-//! segment's (the target's stack space) for a stack object, whose far pointer is SS:offset and which a DGROUP
-//! pointer, read through DS, would not reach unless SS were DS. No such assumption is made; a target
-//! that states it could let the two spaces meet. Phis and selects of such pointers follow, where every value
-//! they join is one, and nothing else reads them: a far copy kept beside the near one for a call would
-//! cost a register. A cast back to the near space, which the narrowing of a parameter leaves at each
+//! The near space a pointer narrows to follows where it points: DGROUP's for a
+//! global, the stack segment's (the target's stack space) for a stack object,
+//! whose far pointer is SS:offset and which a DGROUP pointer, read through DS,
+//! would not reach unless SS were DS. No such assumption is made; a target that
+//! states it could let the two spaces meet. Phis and selects of such pointers
+//! follow, where every value they join is one, and nothing else reads them: a
+//! far copy kept beside the near one for a call would cost a register. A cast
+//! back to the near space, which the narrowing of a parameter leaves at each
 //! call, is the near pointer itself.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -49,7 +52,8 @@ impl FunctionPass for InferAddressSpaces {
     }
 }
 
-/// Whether `operand` is a stack object or steps from one: its far pointer addresses SS, not DS.
+/// Whether `operand` is a stack object or steps from one: its far pointer
+/// addresses SS, not DS.
 pub fn on_stack(
     context: &Context,
     layout: &DataLayout,
@@ -90,7 +94,8 @@ fn near(
 /// Where `v`'s value goes: how each of its users reads it.
 #[derive(PartialEq)]
 enum Reads {
-    /// The pointer of a load or store, or the base of a step: it can read the near one.
+    /// The pointer of a load or store, or the base of a step: it can read the
+    /// near one.
     Narrows,
     /// A cast back to the near space.
     Drops,
@@ -126,7 +131,8 @@ fn inferred(
     spaces: Spaces,
 ) -> bool {
     let walk: Vec<(llrm_mir::module::BlockId, InstId)> = function.walk().collect();
-    // The far pointers that are a near one cast: value -> the near pointer, the space it narrows to.
+    // The far pointers that are a near one cast: value -> the near pointer, the
+    // space it narrows to.
     let mut seeds: BTreeMap<ValueId, (Operand, u32)> = BTreeMap::new();
     for &(_, inst) in &walk {
         let instruction = function.instruction(inst);
@@ -194,7 +200,8 @@ fn inferred(
             _ => Reads::Needs,
         }
     };
-    // A phi or select another far value or a call reads too would need both copies: not followed.
+    // A phi or select another far value or a call reads too would need both
+    // copies: not followed.
     let mut refused: BTreeSet<ValueId> = BTreeSet::new();
     for (&value, &inst) in &chain {
         if matches!(
@@ -206,7 +213,8 @@ fn inferred(
             refused.insert(value);
         }
     }
-    // Optimistic: a value has the space its operands share until one differs; a cycle of phis settles on its seeds.
+    // Optimistic: a value has the space its operands share until one differs; a
+    // cycle of phis settles on its seeds.
     let mut state: BTreeMap<ValueId, Space> =
         chain.keys().map(|&one| (one, if refused.contains(&one) { Space::Neither } else { Space::Unknown })).collect();
     loop {
@@ -241,8 +249,9 @@ fn inferred(
         .collect();
     let space_of =
         |value: ValueId| seeds.get(&value).map(|&(_, space)| space).or_else(|| followed.get(&value).copied());
-    // Only what something reads through memory, or casts back, is worth a near copy, with the values
-    // it is made of: a step only a compare reads would be made, found dead and made again.
+    // Only what something reads through memory, or casts back, is worth a near
+    // copy, with the values it is made of: a step only a compare reads
+    // would be made, found dead and made again.
     let mut needed: Vec<ValueId> = followed
         .keys()
         .chain(seeds.keys())
@@ -283,7 +292,8 @@ fn inferred(
         .filter(|(value, _)| followed.contains_key(*value) && wanted.contains(*value))
         .map(|(&value, &inst)| (value, inst))
         .collect();
-    // The near counterpart of each far value: a seed's is its source, a stack object's made a stack pointer.
+    // The near counterpart of each far value: a seed's is its source, a stack
+    // object's made a stack pointer.
     let mut narrow: BTreeMap<ValueId, Operand> = BTreeMap::new();
     for (&value, &(source, space)) in &seeds {
         if !wanted.contains(&value) {
@@ -293,7 +303,8 @@ fn inferred(
         if from == Some(space) {
             narrow.insert(value, source);
         } else {
-            // A stack object's address is a space-0 value until it is said to be the stack's.
+            // A stack object's address is a space-0 value until it is said to
+            // be the stack's.
             let ValueDef::Instruction(def) = function.value(value).def else { continue };
             let made = function.create_instruction(
                 Opcode::Cast(CastOp::AddrSpaceCast),
@@ -322,7 +333,8 @@ fn inferred(
             shells.push((inst, made));
         }
     }
-    // Steps and selects in program order: an operand's near value is made before its user's.
+    // Steps and selects in program order: an operand's near value is made
+    // before its user's.
     let mut remaining: Vec<(ValueId, InstId)> =
         inferred.iter().copied().filter(|&(_, inst)| function.instruction(inst).opcode != Opcode::Phi).collect();
     while !remaining.is_empty() {
@@ -378,7 +390,8 @@ fn inferred(
             .collect();
         function.set_operands(made, operands);
     }
-    // What reads a far value through memory, or casts it back, reads the near one.
+    // What reads a far value through memory, or casts it back, reads the near
+    // one.
     let mut changed = false;
     let values: Vec<ValueId> = narrow.keys().copied().collect();
     for value in values {
@@ -395,7 +408,8 @@ fn inferred(
                     }
                 }
                 Reads::Drops => {
-                    // Only to the space it is: a cast to the other near space has no business here.
+                    // Only to the space it is: a cast to the other near space
+                    // has no business here.
                     if near(context, spaces, function.instruction(one.user).ty) != space_of(value) {
                         continue;
                     }

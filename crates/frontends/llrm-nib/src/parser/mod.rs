@@ -52,7 +52,8 @@ pub fn parse(tokens: Vec<Token>) -> Result<Module, Diagnostic> {
     parse_for(tokens, 2)
 }
 
-/// `parse` for a target whose near pointer is `near_bytes` wide: what `usize` is.
+/// `parse` for a target whose near pointer is `near_bytes` wide: what `usize`
+/// is.
 pub fn parse_for(
     tokens: Vec<Token>,
     near_bytes: u32,
@@ -63,8 +64,9 @@ pub fn parse_for(
 /// The module, its fixed-point types numbered after the `fixed_before`
 /// other modules of its program declare, since a fixed-point type is its
 /// declaration. `imported` holds the public constants of the modules it
-/// imports, folded, each by its path here: `alias.NAME`. The target's near pointer is `near_bytes`
-/// wide: `usize` and `isize` are the integers that wide, and `NEAR_BYTES` the constant.
+/// imports, folded, each by its path here: `alias.NAME`. The target's near
+/// pointer is `near_bytes` wide: `usize` and `isize` are the integers that
+/// wide, and `NEAR_BYTES` the constant.
 pub fn parse_after(
     tokens: Vec<Token>,
     fixed_before: u16,
@@ -77,7 +79,8 @@ pub fn parse_after(
     parser.fixed_types.insert("usize".to_owned(), TypeName::usize(near_bytes));
     parser.fixed_types.insert("isize".to_owned(), TypeName::Word { bytes: near_bytes as u8, signed: true });
     let mut imported = imported.clone();
-    // What the target says of the machine: its physical addresses, as constants.
+    // What the target says of the machine: its physical addresses, as
+    // constants.
     imported.extend(seeded.iter().map(|(name, value)| (name.clone(), value.clone())));
     imported.insert("NEAR_BYTES".to_owned(), Expr::Integer(i64::from(near_bytes), Span::new(1, 1, 1)));
     parser.module_constants(&imported)?;
@@ -115,7 +118,8 @@ struct Parser {
     at: usize,
     fixed_types: BTreeMap<String, TypeName>,
     fixed_before: u16,
-    /// Entries of `fixed_types` that are the target's, not declarations: `usize`.
+    /// Entries of `fixed_types` that are the target's, not declarations:
+    /// `usize`.
     seeded: usize,
     /// Each constant declared so far, as the literal it stands for.
     consts: BTreeMap<String, Expr>,
@@ -151,7 +155,8 @@ impl Parser {
             }
             let attributes = self.attributes()?;
             let foreign = foreign(&attributes)?;
-            // `@repr` takes a struct, `@extern` a function header and `@export` a function.
+            // `@repr` takes a struct, `@extern` a function header and `@export`
+            // a function.
             let next = if matches!(self.peek().kind, TokenKind::Pub) {
                 self.tokens.get(self.at + 1)
             } else {
@@ -299,7 +304,8 @@ impl Parser {
         found
     }
 
-    /// `const NAME[: T] = value`, the `const` next: its name, annotation, value and span.
+    /// `const NAME[: T] = value`, the `const` next: its name, annotation, value
+    /// and span.
     fn constant_parts(&mut self) -> Result<(String, Option<TypeAnnotation>, Expr, Span), Diagnostic> {
         let span = self.bump().span;
         let (name, _) = self.identifier("expected a constant name")?;
@@ -716,8 +722,8 @@ impl Parser {
         }
     }
 
-    /// `asm(reg=value, ..., out=(reg=place | let [mut] name, ...), clobbers=[reg, ...]):`
-    /// and its lines.
+    /// `asm(reg=value, ..., out=(reg=place | let [mut] name, ...),
+    /// clobbers=[reg, ...]):` and its lines.
     fn asm(&mut self) -> Result<Statement, Diagnostic> {
         let span = self.bump().span;
         let mut asm = Asm { inputs: Vec::new(), outputs: Vec::new(), clobbers: Vec::new(), lines: Vec::new(), span };
@@ -783,7 +789,8 @@ impl Parser {
 
     fn binding(&mut self) -> Result<Statement, Diagnostic> {
         let token = self.bump().clone();
-        // `let [mut] name[: T] = value` binds a name; anything else is a pattern.
+        // `let [mut] name[: T] = value` binds a name; anything else is a
+        // pattern.
         let named = matches!(self.peek().kind, TokenKind::Mut)
             || (matches!(&self.peek().kind, TokenKind::Identifier(name) if name != "_")
                 && matches!(
@@ -800,7 +807,8 @@ impl Parser {
                 self.line_end()?;
                 None
             };
-            // `let _ = value` binds nothing: the value is a statement's temporary.
+            // `let _ = value` binds nothing: the value is a statement's
+            // temporary.
             if let (Pattern::Wildcard(_), None) = (&pattern, &otherwise) {
                 return Ok(Statement::Expr(value));
             }
@@ -893,7 +901,8 @@ impl Parser {
         Ok(Clause::For { pattern, refutable, mode, iterable, end, span })
     }
 
-    /// The clauses after a comprehension's value: a `for`, then any `for`s and `if`s.
+    /// The clauses after a comprehension's value: a `for`, then any `for`s and
+    /// `if`s.
     fn comprehension_clauses(&mut self) -> Result<Vec<Clause>, Diagnostic> {
         let mut clauses = vec![self.for_clause()?];
         loop {
@@ -1408,7 +1417,8 @@ impl Parser {
     /// What follows `&` or `&mut`: `[T]`, `[T, rank]`, `T[d0, ...]`, or `T`.
     fn borrowed_annotation(&mut self) -> Result<TypeAnnotation, Diagnostic> {
         if self.take(|kind| matches!(kind, TokenKind::LeftBracket)).is_none() {
-            // A borrowed fixed array keeps its dimensions: a far pointer (section 13).
+            // A borrowed fixed array keeps its dimensions: a far pointer
+            // (section 13).
             return self.type_annotation();
         }
         let element = self.type_spec()?;
@@ -1518,7 +1528,8 @@ impl Parser {
         }
     }
 
-    /// The names from `at` joined by dots, `alias.NAME`, and how many tokens spell it.
+    /// The names from `at` joined by dots, `alias.NAME`, and how many tokens
+    /// spell it.
     fn path_at(
         &self,
         at: usize,
@@ -1780,7 +1791,8 @@ pub(crate) fn primitive(kind: &TokenKind) -> Option<TypeName> {
     })
 }
 
-/// Binding powers, loosest first; a binary operator's right side binds one tighter.
+/// Binding powers, loosest first; a binary operator's right side binds one
+/// tighter.
 const OR: u8 = 2;
 const AND: u8 = 4;
 const NOT: u8 = 6;
@@ -1959,8 +1971,9 @@ fn abi_named(
     })
 }
 
-/// What `@extern("abi", name="symbol")` or `@export("abi", name="symbol")` gives, if either is there.
-/// `@export` may leave out the ABI: Nib code calls the function by its own convention.
+/// What `@extern("abi", name="symbol")` or `@export("abi", name="symbol")`
+/// gives, if either is there. `@export` may leave out the ABI: Nib code calls
+/// the function by its own convention.
 fn foreign(attributes: &[Attribute]) -> Result<Option<Foreign>, Diagnostic> {
     let mut found = None;
     for attribute in attributes.iter().filter(|one| one.name == "extern" || one.name == "export") {
@@ -1989,11 +2002,13 @@ fn foreign(attributes: &[Attribute]) -> Result<Option<Foreign>, Diagnostic> {
     Ok(found)
 }
 
-/// What `@repr("c")` without `pack=` stands for: the most the target's C aligns a field to.
+/// What `@repr("c")` without `pack=` stands for: the most the target's C aligns
+/// a field to.
 pub const TARGET_PACK: u32 = 0;
 
-/// The field alignment `@repr("c16", pack=N)` or `@repr("c", pack=N)` sets, if the attributes give
-/// one: `c16` is real mode's layout, `c` the target's own, whose default pack is `TARGET_PACK`.
+/// The field alignment `@repr("c16", pack=N)` or `@repr("c", pack=N)` sets, if
+/// the attributes give one: `c16` is real mode's layout, `c` the target's own,
+/// whose default pack is `TARGET_PACK`.
 fn repr_pack(attributes: &[Attribute]) -> Result<Option<u32>, Diagnostic> {
     let Some(repr) = attributes.iter().find(|one| one.name == "repr") else {
         return Ok(None);

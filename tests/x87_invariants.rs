@@ -1,11 +1,14 @@
-//! A float loop's carried values are read back from the cells the program stores them to.
+//! A float loop's carried values are read back from the cells the program
+//! stores them to.
 
 use std::process::Command;
 
-/// nbody's pair loop: `x[i]` and `y[i]` are invariant in the inner loop, five more floats live through the nest.
-/// The spill victim was the read furthest ahead in block order, which ignores the back edge: an invariant read
-/// again on the next trip looked never read again, was spilled at its definition, and every outer trip paid an
-/// `fld; fstp` per invariant (nbody 61477 against 60677 instructions once the hoist worked).
+/// nbody's pair loop: `x[i]` and `y[i]` are invariant in the inner loop, five
+/// more floats live through the nest. The spill victim was the read furthest
+/// ahead in block order, which ignores the back edge: an invariant read
+/// again on the next trip looked never read again, was spilled at its
+/// definition, and every outer trip paid an `fld; fstp` per invariant (nbody
+/// 61477 against 60677 instructions once the hoist worked).
 const KERNEL: &str = "
 extern void report(long value);
 long bench(unsigned short steps)
@@ -30,10 +33,12 @@ long bench(unsigned short steps)
 }
 ";
 
-/// The running values `x[0..3]`, `y[0..3]` are phis of the step loop, the program stores each to its
-/// array cell on every trip, and nine floats crowd the x87 stack under the inner loop. Each was spilled to a cell
-/// of its own besides, 14 stores more than the 12 the program makes (nbody 61880 against 59081 instructions).
-/// -O3: gcc's -O2 copies a loop out only where the code does not grow, so the nest stays rolled there (6 stores).
+/// The running values `x[0..3]`, `y[0..3]` are phis of the step loop, the
+/// program stores each to its array cell on every trip, and nine floats crowd
+/// the x87 stack under the inner loop. Each was spilled to a cell of its own
+/// besides, 14 stores more than the 12 the program makes (nbody 61880 against
+/// 59081 instructions). -O3: gcc's -O2 copies a loop out only where the code
+/// does not grow, so the nest stays rolled there (6 stores).
 #[test]
 fn test_a_stored_loop_carried_float_is_spilled_to_the_cell_the_program_stores_it_in() {
     let scratch = tempfile::tempdir().unwrap();
@@ -55,8 +60,9 @@ fn test_a_stored_loop_carried_float_is_spilled_to_the_cell_the_program_stores_it
     assert_eq!(stores, 12, "{listing}");
 }
 
-/// -Os hoisted `x[i]` and `y[i]` out of the inner loop of 1.5 trips: two `fld` before it and two `fstp st(0)` after,
-/// 4 B and 800 instructions more than not hoisting (x86-m32 priced -Os in clocks, and nothing priced the release).
+/// -Os hoisted `x[i]` and `y[i]` out of the inner loop of 1.5 trips: two `fld`
+/// before it and two `fstp st(0)` after, 4 B and 800 instructions more than not
+/// hoisting (x86-m32 priced -Os in clocks, and nothing priced the release).
 #[test]
 fn test_os_does_not_hold_floats_across_a_loop_for_the_release_they_cost() {
     let scratch = tempfile::tempdir().unwrap();
@@ -72,8 +78,9 @@ fn test_os_does_not_hold_floats_across_a_loop_for_the_release_they_cost() {
     assert_eq!(listing.matches("fstp st(0)").count(), 0, "{listing}");
 }
 
-/// A phi's input read back from its cell leaves its constant unread: `fld1; fstp st(0)`, eleven pairs in nbody's
-/// prologue, 40 B of code and 22 instructions that do nothing.
+/// A phi's input read back from its cell leaves its constant unread: `fld1;
+/// fstp st(0)`, eleven pairs in nbody's prologue, 40 B of code and 22
+/// instructions that do nothing.
 #[test]
 fn test_a_constant_nothing_reads_is_not_loaded_and_popped() {
     let scratch = tempfile::tempdir().unwrap();

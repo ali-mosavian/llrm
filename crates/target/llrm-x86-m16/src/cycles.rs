@@ -1,9 +1,9 @@
 //! Port of `qbopt/cycles/cycles.py`.
 //!
-//! Vendored from the runtime pass (`~/work/badlogic/mgl, tools/cycles/cycles.py`,
-//! taken 2026-08-29). Published latencies rather than measurements: a ranking.
-//! DOSBox charges per instruction and models no latency, which is why this
-//! exists alongside it.
+//! Vendored from the runtime pass (`~/work/badlogic/mgl,
+//! tools/cycles/cycles.py`, taken 2026-08-29). Published latencies rather than
+//! measurements: a ranking. DOSBox charges per instruction and models no
+//! latency, which is why this exists alongside it.
 //!
 //! `CASES`' `mgl: *` entries price mgl's own injected helpers, not what
 //! `legacy/calls` emits; the `*: qbopt absorbed, *` entries are this project's
@@ -430,7 +430,8 @@ pub static CASES: LazyLock<IndexMap<&'static str, String>> = LazyLock::new(|| {
         // ---- c = ((a AND b) + a) XOR b
         ("chain: BC halves", "A15A008B165C00230656002316580003065600131658003306560033165800A35E0089166000".to_owned()),
         ("chain: widened", "66A15A0066230656006603065600663306560066A35E00".to_owned()),
-        // ---- a long multiply: B$MUI4 when both high words are zero, and when not
+        // ---- a long multiply: B$MUI4 when both high words are zero, and when
+        // not
         ("mul: stock fast", call4("558BEC8B46088B4E0C0BC88B4E0A75098B4606F7E15DCA0800")),
         (
             "mul: stock full",

@@ -100,8 +100,8 @@ fn _reused(body: &LirBody) -> LirBody {
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
         let out = &leaving[&block.at];
-        // Where each value is read and written in the block, in order: what the scans below ask, in a log of the
-        // block's length.
+        // Where each value is read and written in the block, in order: what the
+        // scans below ask, in a log of the block's length.
         let mut reads: IndexMap<u32, BTreeSet<usize>> = IndexMap::default();
         let mut writes: IndexMap<u32, BTreeSet<usize>> = IndexMap::default();
         let index = |reads: &mut IndexMap<u32, BTreeSet<usize>>,
@@ -150,7 +150,8 @@ fn _reused(body: &LirBody) -> LirBody {
             if reads.get(&first.value).unwrap_or(&none).range(at + 1..).next().is_some() {
                 continue;
             }
-            // Only `first := into` reads it: the copy back of an update in place.
+            // Only `first := into` reads it: the copy back of an update in
+            // place.
             let readers: Vec<usize> = reads.get(&into.value).unwrap_or(&none).range(at + 1..).copied().collect();
             let [last] = readers[..] else { continue };
             let back = insns[last]
@@ -202,7 +203,8 @@ fn _copy_destinations(body: &LirBody) -> IndexMap<u32, BTreeSet<u32>> {
     adjacent
 }
 
-/// How many copies apart two values are; infinite where none joins them within `limit`.
+/// How many copies apart two values are; infinite where none joins them within
+/// `limit`.
 fn _distance(
     copies: &IndexMap<u32, BTreeSet<u32>>,
     start: u32,
@@ -320,7 +322,8 @@ fn _move(
     }
 }
 
-/// Whether `what` writes the register of its first source: x86's two-address form.
+/// Whether `what` writes the register of its first source: x86's two-address
+/// form.
 pub fn ties(what: &Semantics) -> bool {
     !what.dests.is_empty()
         && !what.sources.is_empty()
@@ -464,7 +467,8 @@ mod tests {
         pairs.iter().map(|(value, others)| (*value, others.iter().copied().collect())).collect()
     }
 
-    /// LNGMXX copied its accumulator out and back each iteration to preserve the invariant addend.
+    /// LNGMXX copied its accumulator out and back each iteration to preserve
+    /// the invariant addend.
     #[test]
     fn test_commutative_instruction_reuses_the_dying_operand() {
         for name in ["add", "and", "or", "xor"] {
@@ -483,7 +487,8 @@ mod tests {
         }
     }
 
-    /// Matmul tied ``imul`` to its live, spilled factor and reloaded it eight times.
+    /// Matmul tied ``imul`` to its live, spilled factor and reloaded it eight
+    /// times.
     #[test]
     fn test_multiply_reuses_the_dying_operand() {
         let mut one = addition("imul");
@@ -630,7 +635,8 @@ mod tests {
         assert!(_commuted(&grouped, &BTreeSet::from([1, 3]), None, None).is_none());
     }
 
-    /// LOCALP's backedge copy favors its accumulator only when its old value can be overwritten.
+    /// LOCALP's backedge copy favors its accumulator only when its old value
+    /// can be overwritten.
     #[test]
     fn test_result_copy_affinity_does_not_override_liveness() {
         for (alive, swapped) in [(vec![3], true), (vec![2, 3], false), (vec![1, 2, 3], false)] {
@@ -642,7 +648,8 @@ mod tests {
         }
     }
 
-    /// CRC32 tied XOR to its shifted temporary, then copied the result around the backedge.
+    /// CRC32 tied XOR to its shifted temporary, then copied the result around
+    /// the backedge.
     #[test]
     fn test_crc32_ties_the_operand_that_can_join_its_loop_phi() {
         let one = addition("xor");
@@ -685,7 +692,8 @@ mod tests {
         assert_eq!(sources(&fixed[1]), [result, source]);
     }
 
-    /// Experimental matrix setup emitted 20 * 20 for 0 * 20 without a destination copy.
+    /// Experimental matrix setup emitted 20 * 20 for 0 * 20 without a
+    /// destination copy.
     #[test]
     fn test_two_address_multiply_preserves_its_first_factor() {
         let (result, first, second) = (held(900, 2), held(901, 2), held(902, 2));

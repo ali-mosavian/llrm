@@ -1,4 +1,5 @@
-//! A static function called from one place goes with that call, whatever its size.
+//! A static function called from one place goes with that call, whatever its
+//! size.
 
 use std::process::Command;
 
@@ -42,9 +43,11 @@ fn listing(flags: &[&str]) -> String {
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }
 
-/// Only a body under 24 operations was inlined into its one call, and `-fno-inline-functions` inlined nothing:
-/// queens' `safe` stayed a call (and `place` held its values in the frame) where gcc, whose `-fno-inline-functions`
-/// leaves called-once inlining on, ran 30% fewer clocks.
+/// Only a body under 24 operations was inlined into its one call, and
+/// `-fno-inline-functions` inlined nothing: queens' `safe` stayed a call (and
+/// `place` held its values in the frame) where gcc, whose
+/// `-fno-inline-functions` leaves called-once inlining on, ran 30% fewer
+/// clocks.
 #[test]
 fn test_a_static_function_called_once_is_inlined_at_any_size() {
     for flags in [&["-O2"][..], &["-O2", "-fno-inline-functions"], &["-Os"]] {
@@ -56,8 +59,9 @@ fn test_a_static_function_called_once_is_inlined_at_any_size() {
     assert!(listing(&["-O2", "-fno-inline-functions", "-fno-inline-functions-called-once"]).contains("sum_ proc"));
 }
 
-/// What "nothing else reaches it" excludes: each of these is called from one place and stays defined, because
-/// something besides that call can still enter it.
+/// What "nothing else reaches it" excludes: each of these is called from one
+/// place and stays defined, because something besides that call can still enter
+/// it.
 fn survives(
     source: &str,
     name: &str,

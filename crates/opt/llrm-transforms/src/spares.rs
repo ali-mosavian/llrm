@@ -1,7 +1,8 @@
-//! What the optimizer proved of a fixed-cell load, kept for selection: each write that leaves its bytes as
-//! they were, as `!llrm.spares` on the load. LLVM's `MachineMemOperand` keeps the IR value for the same use,
-//! alias queries at the machine level (`MachineInstr::mayAlias`). Last, so the instruction ids it names are the
-//! ones selection sees.
+//! What the optimizer proved of a fixed-cell load, kept for selection: each
+//! write that leaves its bytes as they were, as `!llrm.spares` on the load.
+//! LLVM's `MachineMemOperand` keeps the IR value for the same use,
+//! alias queries at the machine level (`MachineInstr::mayAlias`). Last, so the
+//! instruction ids it names are the ones selection sees.
 
 use std::collections::BTreeMap;
 
@@ -12,7 +13,8 @@ use llrm_mir::module::{GlobalKind, InstId, MetadataId, MetadataNode, MetadataOpe
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{ModuleAnalyses, ModulePass};
 
-/// The metadata kind: operands are the ids of the writes that leave the load's cell alone.
+/// The metadata kind: operands are the ids of the writes that leave the load's
+/// cell alone.
 pub const KIND: &str = "llrm.spares";
 
 pub struct Spares;
@@ -49,7 +51,8 @@ impl ModulePass for Spares {
                 else {
                     continue;
                 };
-                // An object's own bytes at a constant offset: the same cell on every trip.
+                // An object's own bytes at a constant offset: the same cell on
+                // every trip.
                 if !read.object || read.base.is_some() {
                     continue;
                 }

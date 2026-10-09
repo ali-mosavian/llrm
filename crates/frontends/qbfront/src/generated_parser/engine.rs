@@ -83,7 +83,8 @@ pub(crate) struct ParseState {
     pub at: usize,
     /// QuickrBASIC's conditional, IN and chained-comparison expressions.
     pub python_expressions: bool,
-    /// The declarations written `ID AS VOLATILE TYPE`, by their identifier's line and start.
+    /// The declarations written `ID AS VOLATILE TYPE`, by their identifier's
+    /// line and start.
     pub volatile_at: std::collections::BTreeSet<(usize, usize)>,
     /// A slice was parsed: the program needs the QuickrBASIC prelude.
     pub slices: bool,

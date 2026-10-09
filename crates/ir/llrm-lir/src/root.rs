@@ -1,9 +1,11 @@
-//! `root` from `qbopt/model/ir.py`: the 32-bit register a general register is a view of.
+//! `root` from `qbopt/model/ir.py`: the 32-bit register a general register is a
+//! view of.
 
 use iced_x86::Register;
 
-/// The 32-bit root of a byte, word or dword general register of the eight legacy families, which iced states
-/// from the register itself; any other register (segment, x87, the extended ones) is its own.
+/// The 32-bit root of a byte, word or dword general register of the eight
+/// legacy families, which iced states from the register itself; any other
+/// register (segment, x87, the extended ones) is its own.
 pub fn root(register: Register) -> Register {
     let full = register.full_register32();
     let extended_byte = matches!(
@@ -34,8 +36,9 @@ pub fn root(register: Register) -> Register {
 mod tests {
     use super::*;
 
-    /// Every view of each legacy family roots to its dword; anything else passes through. The 24 views the
-    /// pass ever reasons about were a table here, which iced's own answer replaces.
+    /// Every view of each legacy family roots to its dword; anything else
+    /// passes through. The 24 views the pass ever reasons about were a
+    /// table here, which iced's own answer replaces.
     #[test]
     fn roots_every_family_and_passes_others_through() {
         let families = [

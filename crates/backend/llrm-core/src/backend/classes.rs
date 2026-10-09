@@ -18,29 +18,33 @@ type Key = (String, &'static str, usize, usize);
 
 #[derive(Clone)]
 pub struct RegisterClasses {
-    /// Each form's pins, by the mnemonic, the operation and the operand counts that
-    /// pick it out.
-    /// By mnemonic first: asked of every instruction of a body, over and over, so no key is made of it.
+    /// Each form's pins, by the mnemonic, the operation and the operand counts
+    /// that pick it out.
+    /// By mnemonic first: asked of every instruction of a body, over and over,
+    /// so no key is made of it.
     pins: crate::support::hash::HashMap<String, Vec<(&'static str, usize, usize, Vec<(Side, usize, Register)>)>>,
     /// The registers a value may be placed in, whole, in allocation order.
     pub available: Vec<Register>,
-    /// The word registers an address is made of (`[bx+si]`): the bases, the indexes and the frame.
+    /// The word registers an address is made of (`[bx+si]`): the bases, the
+    /// indexes and the frame.
     pub word_bases: BTreeSet<Register>,
     pub word_indexes: BTreeSet<Register>,
     pub frame: Register,
-    /// Every register an address may be made of, the frame's included: `[bx+si]`, `[bp+di]`.
+    /// Every register an address may be made of, the frame's included:
+    /// `[bx+si]`, `[bp+di]`.
     pub addressing: BTreeSet<Register>,
     /// The bases the encoding permits, the frame's included.
     pub encodable_bases: BTreeSet<Register>,
 }
 
 impl RegisterClasses {
-    /// The target's: from the `fixed` column of its instruction forms. A pin that tells
-    /// the members of a family apart (`les`, `lds`, `lfs` and `lgs` take the same operands
-    /// and differ in the selector register) is a choice the allocator makes, not a
-    /// requirement, and is left out.
+    /// The target's: from the `fixed` column of its instruction forms. A pin
+    /// that tells the members of a family apart (`les`, `lds`, `lfs` and
+    /// `lgs` take the same operands and differ in the selector register) is
+    /// a choice the allocator makes, not a requirement, and is left out.
     pub fn of(arch: &dyn Target) -> Self {
-        // A form that pins nothing has no requirement to give, and the description is read at every compile.
+        // A form that pins nothing has no requirement to give, and the
+        // description is read at every compile.
         let forms = instructions::parse::pinned(&arch.forms_text()).expect("the target's forms parse");
         let operations: HashMap<&str, &'static str> =
             Operation::ALL.iter().map(|op| (op.as_str(), op.as_str())).collect();
@@ -105,8 +109,9 @@ impl RegisterClasses {
         }
     }
 
-    /// These classes for a function with no frame register (LLVM's `hasFP` false): the frame register is one more
-    /// general register, the last to be given out, and an address may be made of its word.
+    /// These classes for a function with no frame register (LLVM's `hasFP`
+    /// false): the frame register is one more general register, the last to
+    /// be given out, and an address may be made of its word.
     pub fn with_frame_free(&self) -> Self {
         let whole = self.frame;
         let mut free = self.clone();
@@ -128,11 +133,12 @@ impl RegisterClasses {
 
     /// Every operand this instruction requires in one particular register.
     ///
-    /// The one place those are written down: the `fixed` column of the form that takes this
-    /// instruction's operands; `reads` and `writes` read it too. An operand that is an
-    /// immediate is no register: a shift's count or an `in`'s port written as one pins
-    /// nothing, and a segment register is pinned only while it is a held value, a placed
-    /// one being where it is.
+    /// The one place those are written down: the `fixed` column of the form
+    /// that takes this instruction's operands; `reads` and `writes` read it
+    /// too. An operand that is an immediate is no register: a shift's count
+    /// or an `in`'s port written as one pins nothing, and a segment
+    /// register is pinned only while it is a held value, a placed one being
+    /// where it is.
     pub fn requirements(
         &self,
         what: &Semantics,
@@ -203,7 +209,8 @@ fn iced(name: &str) -> Register {
 mod tests {
     use super::*;
 
-    /// What `registers.regs` says of m16 is what the allocator's statics and `llrm_x86_m16`'s constants say.
+    /// What `registers.regs` says of m16 is what the allocator's statics and
+    /// `llrm_x86_m16`'s constants say.
     #[test]
     fn m16_registers_are_its_description() {
         let classes = RegisterClasses::of(&llrm_x86_m16::M16);

@@ -54,7 +54,8 @@ impl<'a> FunctionCompiler<'a> {
         Ok((left, right))
     }
 
-    /// An operand next to one of type `other`: a literal takes that type when it fits.
+    /// An operand next to one of type `other`: a literal takes that type when
+    /// it fits.
     pub(super) fn beside(
         &mut self,
         expression: &Expr,
@@ -79,7 +80,8 @@ impl<'a> FunctionCompiler<'a> {
         self.expression(expression, None)
     }
 
-    /// A value for a destination of type `target`, converted as an assignment converts it.
+    /// A value for a destination of type `target`, converted as an assignment
+    /// converts it.
     pub(super) fn coerced(
         &mut self,
         expression: &Expr,
@@ -125,7 +127,8 @@ impl<'a> FunctionCompiler<'a> {
         if value.type_name == target {
             return Ok(value);
         }
-        // A word and its plain twin are one type to the code generator: no conversion is emitted.
+        // A word and its plain twin are one type to the code generator: no
+        // conversion is emitted.
         if value.type_name.plain() == target.plain() {
             return Ok(TypedOperand { type_name: target, ..value });
         }
@@ -137,7 +140,8 @@ impl<'a> FunctionCompiler<'a> {
         if !conversions::implicit(value.type_name) || !conversions::implicit(target) {
             return Err(type_mismatch(span, target, value.type_name));
         }
-        // A word is the target's own width: a narrower integer cuts it, which is said once.
+        // A word is the target's own width: a narrower integer cuts it, which
+        // is said once.
         if let TypeName::Word { bytes, signed } = value.type_name
             && is_integer(target)
             && scalar_width(target) < u32::from(bytes)
@@ -152,7 +156,8 @@ impl<'a> FunctionCompiler<'a> {
         self.converted(value, target, span)
     }
 
-    /// `and` and `or` evaluate their right operand only when it decides the result.
+    /// `and` and `or` evaluate their right operand only when it decides the
+    /// result.
     pub(super) fn logical(
         &mut self,
         operation: BinaryOp,
@@ -186,7 +191,8 @@ impl<'a> FunctionCompiler<'a> {
         Ok(TypedOperand { operand: Some(hir::Operand::Value(value)), type_name: TypeName::Bool })
     }
 
-    /// `a < b < c`: `(a < b) && (b < c)`, each operand evaluated once, in order.
+    /// `a < b < c`: `(a < b) && (b < c)`, each operand evaluated once, in
+    /// order.
     pub(super) fn chain(
         &mut self,
         operands: &[Expr],
@@ -261,7 +267,8 @@ impl<'a> FunctionCompiler<'a> {
         if expected.is_some_and(|one| one != target) {
             return Err(type_mismatch(span, expected.expect("checked"), target));
         }
-        // A number literal takes the target type, so `u8(300)` is rejected rather than wrapped.
+        // A number literal takes the target type, so `u8(300)` is rejected
+        // rather than wrapped.
         let typed = ((is_integer_literal(value) || is_float_literal(value)) && is_fixed(target))
             || (is_integer_literal(value) && conversions::implicit(target))
             || (is_float_literal(value) && is_float(target));
@@ -370,7 +377,8 @@ impl<'a> FunctionCompiler<'a> {
         Ok(TypedOperand { operand: Some(hir::Operand::Value(result)), type_name: target })
     }
 
-    /// A fixed-point value as its storage integer and fraction; an integer as itself.
+    /// A fixed-point value as its storage integer and fraction; an integer as
+    /// itself.
     pub(super) fn fixed_storage(
         &mut self,
         value: TypedOperand,
@@ -405,7 +413,8 @@ impl<'a> FunctionCompiler<'a> {
         Ok(TypedOperand { operand: Some(hir::Operand::Value(result)), type_name: value.type_name })
     }
 
-    /// `value >> count`, rounded toward zero: a negative value is first biased by `2^count - 1`.
+    /// `value >> count`, rounded toward zero: a negative value is first biased
+    /// by `2^count - 1`.
     pub(super) fn toward_zero(
         &mut self,
         value: TypedOperand,
@@ -430,7 +439,8 @@ impl<'a> FunctionCompiler<'a> {
         self.shifted("sar", TypedOperand { operand: Some(hir::Operand::Value(biased)), type_name }, count, span)
     }
 
-    /// Both operands evaluated: the usual arithmetic conversions, then the operation.
+    /// Both operands evaluated: the usual arithmetic conversions, then the
+    /// operation.
     pub(super) fn arithmetic(
         &mut self,
         operation: BinaryOp,

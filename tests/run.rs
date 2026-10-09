@@ -11,8 +11,9 @@ fn untracked(root: &Path) -> Option<String> {
     done.status.success().then(|| String::from_utf8_lossy(&done.stdout).into_owned())
 }
 
-/// Running the examples on the host wrote LEVEL.DAT, LOG.TXT and SCRATCH.TXT into the
-/// repo root, and they were committed. A run must leave the tree as it found it.
+/// Running the examples on the host wrote LEVEL.DAT, LOG.TXT and SCRATCH.TXT
+/// into the repo root, and they were committed. A run must leave the tree as it
+/// found it.
 #[test]
 fn test_every_program_under_tests_run_prints_its_out() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -20,7 +21,8 @@ fn test_every_program_under_tests_run_prints_its_out() {
     let bin = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap();
     let done = Command::new("python3")
         .arg(root.join("tools/dosbatch/run_tests.py"))
-        // The gate's fast tier names the languages a diff can affect; unset, every program runs.
+        // The gate's fast tier names the languages a diff can affect; unset,
+        // every program runs.
         .args(std::env::var("LLRM_RUN_ONLY").unwrap_or_default().split_whitespace())
         .env("LLRM_BIN", bin)
         .current_dir(root)
@@ -32,10 +34,11 @@ fn test_every_program_under_tests_run_prints_its_out() {
     assert_eq!(untracked(root), before, "the run left files in the tree");
 }
 
-/// A benchmark that exists in one language is a language gap, not a benchmark: every one has
-/// all three variants, its `.out` and its `bench.toml`. A variant may be missing, or use an idiom
-/// instead of the real thing, only when bench.toml's `[gaps]` names the language with the issue
-/// that tracks the gap (`nib = "#362 no array over 64K"`).
+/// A benchmark that exists in one language is a language gap, not a benchmark:
+/// every one has all three variants, its `.out` and its `bench.toml`. A variant
+/// may be missing, or use an idiom instead of the real thing, only when
+/// bench.toml's `[gaps]` names the language with the issue that tracks the gap
+/// (`nib = "#362 no array over 64K"`).
 #[test]
 fn test_every_benchmark_exists_in_basic_c_and_nib() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("bench");

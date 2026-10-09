@@ -7,16 +7,17 @@
 //! than cheap.
 //!
 //! The machine's facts come in as parameters: each operation's price
-//! (`OperationCosts`, from the target: `costs`), how many integer values fit in registers
-//! (`capacity`), and that floating values do not take that room -- the old
-//! MIR's x87 width, here a floating type.
+//! (`OperationCosts`, from the target: `costs`), how many integer values fit in
+//! registers (`capacity`), and that floating values do not take that room --
+//! the old MIR's x87 width, here a floating type.
 //!
 //! What changed with the IR: only a load or store touches memory, so no
 //! operation carries a folded memory operand and `memory_update` prices
 //! nothing; `llvm.memset` is the old fill, its bytes the cells; `select`,
 //! `frem` and `landingpad` had no old kind and stay unpriced. `spill_risk`
-//! is the spill model's (`spill`) over the whole body. `trips` is induction's proven counts
-//! (`proven_trips`); a loop it does not name gets the conventional ten.
+//! is the spill model's (`spill`) over the whole body. `trips` is induction's
+//! proven counts (`proven_trips`); a loop it does not name gets the
+//! conventional ten.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -132,7 +133,8 @@ pub fn operation(
         Opcode::Call(_) | Opcode::Invoke(_) => costs.call,
         Opcode::Ret | Opcode::Resume | Opcode::Unreachable => costs.return_,
         Opcode::Br => costs.branch,
-        // Lowered as a compare and a jump for each case, then the jump for the rest.
+        // Lowered as a compare and a jump for each case, then the jump for the
+        // rest.
         Opcode::Switch => costs.branch + (instruction.operands.len() as i64 - 2) / 2 * (costs.add + costs.branch),
         _ => return None,
     };
@@ -166,11 +168,13 @@ pub fn r#static(
     function.layout().iter().map(|&block| _block(context, layout, function, callees, cfg::id(block), costs)).sum()
 }
 
-/// Where `loop_` stands in the unit's function: how often it is entered for each entry of the function, in
-/// `UNIT`ths (what its outside predecessors weigh), and whether it calls a function that may touch memory.
+/// Where `loop_` stands in the unit's function: how often it is entered for
+/// each entry of the function, in `UNIT`ths (what its outside predecessors
+/// weigh), and whether it calls a function that may touch memory.
 ///
-/// The frequencies are those of the whole function: `frequencies` holds them for as many loops as ask, which a caller
-/// makes once per version of the function.
+/// The frequencies are those of the whole function: `frequencies` holds them
+/// for as many loops as ask, which a caller makes once per version of the
+/// function.
 pub fn site(
     unit: &memory::Unit,
     outer: &Outer,
@@ -216,7 +220,8 @@ pub fn site(
     llrm_analysis::peelsize::Site { entries, writes }
 }
 
-/// A function's block frequencies, worked out when the first loop asks (`site`) and kept for the rest.
+/// A function's block frequencies, worked out when the first loop asks (`site`)
+/// and kept for the rest.
 #[derive(Default)]
 pub struct Frequencies(std::cell::OnceCell<Option<BTreeMap<i64, i64>>>);
 
@@ -224,7 +229,8 @@ thread_local! {
     static FREQUENCIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has worked out a function's frequencies for `site`.
+/// How many times this thread has worked out a function's frequencies for
+/// `site`.
 pub fn frequencies_worked() -> usize {
     FREQUENCIES.with(std::cell::Cell::get)
 }
@@ -297,9 +303,10 @@ pub fn _frequencies(
     )
 }
 
-/// Block frequencies as a product of the trips of each loop around a block, ten where none is
-/// proven: the model lsr's and gvn's prices were tuned on (#203, #202), until they are retuned on `_frequencies`.
-/// `None` for conflicting proofs.
+/// Block frequencies as a product of the trips of each loop around a block, ten
+/// where none is proven: the model lsr's and gvn's prices were tuned on (#203,
+/// #202), until they are retuned on `_frequencies`. `None` for conflicting
+/// proofs.
 pub fn _loop_products(
     function: &Function,
     trips: Option<&IndexMap<i64, i64>>,
@@ -430,7 +437,8 @@ pub fn motion_price(
 
 #[cfg(test)]
 thread_local! {
-    /// (`weighted`, `spill_forecast`) calls, for a test that a price is the work and one forecast.
+    /// (`weighted`, `spill_forecast`) calls, for a test that a price is the
+    /// work and one forecast.
     pub(crate) static PRICED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 

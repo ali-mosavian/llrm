@@ -38,7 +38,8 @@ impl FunctionPass for Ports {
     }
 }
 
-/// The port calls, not yet narrowed, whose ports the target says reach no memory.
+/// The port calls, not yet narrowed, whose ports the target says reach no
+/// memory.
 fn silent(
     unit: &passes::Unit,
     analyses: &mut Analyses,
@@ -71,7 +72,8 @@ fn silent(
             let ports = match memory.int_constant(port) {
                 Some(bits) => Some(((bits & 0xFFFF) as i64, (bits & 0xFFFF) as i64)),
                 None => {
-                    // What the counted loops bound is the manager's, asked when first needed.
+                    // What the counted loops bound is the manager's, asked when
+                    // first needed.
                     let facts = bounded.get_or_insert_with(|| {
                         analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function)
                     });

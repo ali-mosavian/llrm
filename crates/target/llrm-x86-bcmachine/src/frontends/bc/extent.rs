@@ -135,7 +135,8 @@ impl Repr for Partition {
     }
 }
 
-/// A table block's real successors, not Block.succ's own safe over-approximation.
+/// A table block's real successors, not Block.succ's own safe
+/// over-approximation.
 ///
 /// Only an INLINE_TABLE call (B$OGTA) is a real jump table with entries worth
 /// following; anything else `_table_at` matches -- the /X RESUME map -- is
@@ -177,7 +178,8 @@ pub fn _successors(
     _table_targets(module, table, module.calls.get(&(block.insns.last().unwrap().at as i64)).map(String::as_str))
 }
 
-/// Every block this seed's own control flow reaches, refusing to cross into another body's.
+/// Every block this seed's own control flow reaches, refusing to cross into
+/// another body's.
 pub fn _reachable(
     seed: usize,
     others: &BTreeSet<usize>,
@@ -229,7 +231,8 @@ pub fn _ranges(
     _merge(&spans)
 }
 
-/// The module's code, cut into its main body, its procedures, and whatever neither accounts for.
+/// The module's code, cut into its main body, its procedures, and whatever
+/// neither accounts for.
 pub fn partition(module: &Module) -> Result<Partition, String> {
     let basic = has_header(module);
     let native = !basic && module.name.ends_with("_TEXT") && omf::code_segment(&module.records).is_some();

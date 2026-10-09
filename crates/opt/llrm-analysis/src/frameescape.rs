@@ -13,8 +13,9 @@
 //! named its slot directly.
 //!
 //! Skipped: `test_opaque_address_is_not_an_empty_escape_proof` (MIR has no
-//! opaque address); `test_renderer_exposes_temporary_string_not_counter_address`
-//! reads a BC fixture and stays behind.
+//! opaque address);
+//! `test_renderer_exposes_temporary_string_not_counter_address` reads a BC
+//! fixture and stays behind.
 
 use std::collections::BTreeSet;
 
@@ -131,15 +132,16 @@ thread_local! {
     static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has asked `exposes` of one alloca, for a test that a function's
-/// answers are found once.
+/// How many times this thread has asked `exposes` of one alloca, for a test
+/// that a function's answers are found once.
 pub fn scans() -> usize {
     SCANS.with(std::cell::Cell::get)
 }
 
-/// Every alloca of `function` whose address is exposed, as `exposes` says of each, in one pass: a value
-/// is exposing where a use of it is neither a move, an access through it, nor a marker, and an
-/// address that reaches an exposing value through moves is exposed too.
+/// Every alloca of `function` whose address is exposed, as `exposes` says of
+/// each, in one pass: a value is exposing where a use of it is neither a move,
+/// an access through it, nor a marker, and an address that reaches an exposing
+/// value through moves is exposed too.
 pub fn exposed_allocas(
     function: &Function,
     marker: impl Fn(InstId) -> bool,
@@ -236,7 +238,8 @@ pub fn framed(function: &Function) -> IndexMap<ValueId, BTreeSet<ValueId>> {
     let phis: Vec<InstId> =
         instructions.iter().copied().filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect();
     let mut moving: IndexMap<ValueId, InstId> = IndexMap::default();
-    // A parameter is defined by nothing here: the old incoming value no op defines.
+    // A parameter is defined by nothing here: the old incoming value no op
+    // defines.
     let mut refuted: BTreeSet<ValueId> = function.parameters().iter().copied().collect();
     for &inst in &instructions {
         let instruction = function.instruction(inst);
@@ -269,7 +272,8 @@ pub fn framed(function: &Function) -> IndexMap<ValueId, BTreeSet<ValueId>> {
             Operand::Value(_) => Side::Unknown,
             _ => Side::Number,
         };
-    // The allocas `inst` leaves its result in, None where it cannot, `...` while unknown.
+    // The allocas `inst` leaves its result in, None where it cannot, `...`
+    // while unknown.
     let moved = |inst: InstId, state: &IndexMap<ValueId, BTreeSet<ValueId>>, refuted: &BTreeSet<ValueId>| -> Moved {
         let instruction = function.instruction(inst);
         if let (Opcode::Alloca { .. }, Some(value)) = (&instruction.opcode, instruction.result) {
@@ -332,7 +336,8 @@ pub fn framed(function: &Function) -> IndexMap<ValueId, BTreeSet<ValueId>> {
                 }
             }
         }
-        // Optimism settles cycles; anything still unproven is refuted and the rest looked at again.
+        // Optimism settles cycles; anything still unproven is refuted and the
+        // rest looked at again.
         let unproven: BTreeSet<ValueId> = moving
             .keys()
             .copied()
@@ -574,8 +579,9 @@ b:
         assert!(framed(f).is_empty());
     }
 
-    /// A scope's lifetime markers name a local; they hand its address to no one. As a call
-    /// they exposed every local with a scope, and its bytes were never private.
+    /// A scope's lifetime markers name a local; they hand its address to no
+    /// one. As a call they exposed every local with a scope, and its bytes
+    /// were never private.
     #[test]
     fn test_a_lifetime_marker_does_not_expose_the_local() {
         let module = parsed(

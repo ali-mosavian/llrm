@@ -33,9 +33,11 @@ fn toolchain() {
         println!("cargo:rerun-if-changed={input}");
     }
     println!("cargo:rerun-if-env-changed=OWROOT");
-    // One front end for each Open Watcom tree the targets' C runtime descriptions name.
+    // One front end for each Open Watcom tree the targets' C runtime
+    // descriptions name.
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("owshim");
-    // What each tree is asked to be: the sizes its target's description states, by the CPU the target names.
+    // What each tree is asked to be: the sizes its target's description states,
+    // by the CPU the target names.
     let mut trees: std::collections::BTreeMap<String, [String; 4]> = std::collections::BTreeMap::new();
     for entry in std::fs::read_dir("../../../runtime/c").expect("runtime/c").flatten() {
         let Ok(text) = std::fs::read_to_string(entry.path().join("c.toml")) else { continue };

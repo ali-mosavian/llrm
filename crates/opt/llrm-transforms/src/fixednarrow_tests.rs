@@ -44,8 +44,8 @@ fn body(
     text[start..].split("\n}\n").next().unwrap().to_owned()
 }
 
-/// Every product went through the one-operand `imul` and `shrd`, EAX and EDX held, though
-/// the operands' product fits 32 bits.
+/// Every product went through the one-operand `imul` and `shrd`, EAX and EDX
+/// held, though the operands' product fits 32 bits.
 #[test]
 fn a_fixed_product_the_operands_keep_in_32_bits_is_a_mul_and_a_shift() {
     let module = narrowed(PRODUCTS);
@@ -53,7 +53,8 @@ fn a_fixed_product_the_operands_keep_in_32_bits_is_a_mul_and_a_shift() {
     assert!(small.contains("mul i32 %a, %b") && small.contains("ashr i32") && !small.contains("smul.fix"), "{small}");
 }
 
-/// `smul.fix(65536, 65536, 16)` is 65536, which fits; its product is 2^32, which does not.
+/// `smul.fix(65536, 65536, 16)` is 65536, which fits; its product is 2^32,
+/// which does not.
 #[test]
 fn a_product_that_overflows_32_bits_keeps_its_wide_form_though_the_result_fits() {
     let module = narrowed(PRODUCTS);
@@ -96,7 +97,8 @@ b0:
 }
 ";
 
-/// `x * 2 * y` in Q8 cost an `add` and a `sar` by 8 where one `sar` by 7 is the same value.
+/// `x * 2 * y` in Q8 cost an `add` and a `sar` by 8 where one `sar` by 7 is the
+/// same value.
 #[test]
 fn a_doubled_factor_leaves_the_product_for_the_scale() {
     let module = narrowed(SHIFTED);
@@ -115,8 +117,8 @@ fn a_doubled_factor_leaves_the_product_for_the_scale() {
     }
 }
 
-/// A fixed-point integer made by `<< 8` and scaled back by 24/256 was an `imul`, `shrd` and
-/// the shift; it is `a * 24`.
+/// A fixed-point integer made by `<< 8` and scaled back by 24/256 was an
+/// `imul`, `shrd` and the shift; it is `a * 24`.
 #[test]
 fn a_shift_by_the_scale_makes_the_product_whole() {
     let module = narrowed(SHIFTED);
@@ -124,7 +126,8 @@ fn a_shift_by_the_scale_makes_the_product_whole() {
     assert!(whole.contains("mul i32 %a, 24") && !whole.contains("ashr") && !whole.contains("smul.fix"), "{whole}");
 }
 
-/// `a + a` wraps for `a` near 2^30: the factor stays, the product keeps its wide form.
+/// `a + a` wraps for `a` near 2^30: the factor stays, the product keeps its
+/// wide form.
 #[test]
 fn a_doubling_that_may_wrap_is_not_taken_out() {
     let module = narrowed(SHIFTED);

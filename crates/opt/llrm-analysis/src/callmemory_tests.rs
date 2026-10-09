@@ -81,9 +81,10 @@ fn a_pointer_a_callee_keeps_no_copy_of_stays_local() {
     assert_eq!(kept(declared, "%a", "call void @use(ptr %a)\n  call void @other()"), None);
 }
 
-/// Each call to an unsummarized function listed its own copy of every global it may write (a one-slice provenance set
-/// apiece): 17% of host.c's compile, 1.2 G of its 6.8 G call-effects instructions. Calls reaching the same bytes share
-/// the one list.
+/// Each call to an unsummarized function listed its own copy of every global it
+/// may write (a one-slice provenance set apiece): 17% of host.c's compile, 1.2
+/// G of its 6.8 G call-effects instructions. Calls reaching the same bytes
+/// share the one list.
 #[test]
 fn calls_that_reach_the_same_bytes_share_one_list_of_references() {
     let module = parsed(&format!(
@@ -111,8 +112,9 @@ b0:
     assert!(std::rc::Rc::ptr_eq(&effects[0].loads, &effects[1].loads));
 }
 
-/// Every call resolved each reference of its list again: hashing all of a shared list at every call site (12% of
-/// host.c's through-memory). Calls sharing a list resolve it once.
+/// Every call resolved each reference of its list again: hashing all of a
+/// shared list at every call site (12% of host.c's through-memory). Calls
+/// sharing a list resolve it once.
 #[test]
 fn calls_sharing_a_list_resolve_it_once() {
     let calls = |count: usize| {

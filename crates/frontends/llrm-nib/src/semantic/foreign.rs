@@ -59,7 +59,8 @@ pub(super) fn check_foreign(
     if let Some(basic) = basic {
         return basic_result(types, signature, basic, name, span);
     }
-    // A represented struct of 4 bytes or less comes back in registers, as C's does.
+    // A represented struct of 4 bytes or less comes back in registers, as C's
+    // does.
     let result_crosses = match signature.slot {
         Some(struct_id) => signature.in_registers(types).is_some() && types.represented.contains(&struct_id),
         None => signature.view.is_none() && crosses(types, signature.result),
@@ -140,7 +141,8 @@ pub(super) fn check_adapters(
     Ok(())
 }
 
-/// The signature an `extern` function is called by: its object symbol, defined elsewhere.
+/// The signature an `extern` function is called by: its object symbol, defined
+/// elsewhere.
 pub(super) fn foreign_signature(
     types: &mut TypeRegistry,
     declared: &Extern,
@@ -178,7 +180,8 @@ fn interrupt_shape(
 }
 
 impl TypeRegistry {
-    /// The object symbol of `name` under `abi`: its convention's pattern in the object format, else `Abi::symbol`'s.
+    /// The object symbol of `name` under `abi`: its convention's pattern in the
+    /// object format, else `Abi::symbol`'s.
     pub(super) fn symbol(
         &self,
         abi: Abi,

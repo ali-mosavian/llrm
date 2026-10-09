@@ -250,7 +250,8 @@ pub fn classify(insn: &Insn) -> Option<Decoded> {
     classify_with(insn, &literal_only)
 }
 
-/// What one instruction is in long terms under an OMF field resolver, or `None`.
+/// What one instruction is in long terms under an OMF field resolver, or
+/// `None`.
 ///
 /// Production module decoding must call this explicit-resolver form rather
 /// than treating a fixup-backed field as a literal.

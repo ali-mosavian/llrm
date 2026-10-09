@@ -314,13 +314,16 @@ fn test_every_counted_loop_runs_its_proved_trips() {
     }
 }
 
-/// `i = 0; while i <= 32767` was proved to run 32768 trips: `i + 1` wraps and it never ends.
+/// `i = 0; while i <= 32767` was proved to run 32768 trips: `i + 1` wraps and
+/// it never ends.
 #[test]
 fn test_an_inclusive_test_at_its_types_maximum_is_not_counted() {
     let cases: [(i64, i64, IntPredicate, Option<i64>); 5] = [
-        (0, 0x7FFF, IntPredicate::Sle, None), // signed <= its maximum never fails
+        // signed <= its maximum never fails
+        (0, 0x7FFF, IntPredicate::Sle, None),
         (0, 0x7FFE, IntPredicate::Sle, Some(0x7FFF)),
-        (0, 0xFFFF, IntPredicate::Ule, None), // unsigned <= its maximum never fails
+        // unsigned <= its maximum never fails
+        (0, 0xFFFF, IntPredicate::Ule, None),
         (1, 0xFFFE, IntPredicate::Ule, Some(0xFFFE)),
         (-3, 2, IntPredicate::Slt, Some(5)),
     ];
@@ -614,7 +617,8 @@ b0:
     assert_eq!(distance(&parsed.unit(), &at("start1"), &at("n"), 16), None);
 }
 
-/// `counted` reached `derived` for a memory bound, whose quotient rule asked `counted`: unbounded recursion.
+/// `counted` reached `derived` for a memory bound, whose quotient rule asked
+/// `counted`: unbounded recursion.
 #[test]
 fn test_a_loop_dividing_its_counter_is_counted_without_asking_itself() {
     let parsed = Parsed::new(
@@ -642,7 +646,8 @@ b3:
     assert_eq!(proof.count, None);
 }
 
-/// IVARM lost its ten-trip proof when IndVarSimplify changed `<= 10` to `!= 37`.
+/// IVARM lost its ten-trip proof when IndVarSimplify changed `<= 10` to `!=
+/// 37`.
 #[test]
 fn test_a_not_equal_loop_knows_its_last_trip_only_without_wrapping() {
     let cases: [(i64, i64, i64, Option<i64>); 8] = [
@@ -667,7 +672,8 @@ fn test_a_not_equal_loop_knows_its_last_trip_only_without_wrapping() {
     }
 }
 
-/// `for i = 0 to n: load a[i]` over an unknown `n`: only the access can bound its trips.
+/// `for i = 0 to n: load a[i]` over an unknown `n`: only the access can bound
+/// its trips.
 fn indexing(inbounds: &str) -> Parsed {
     Parsed::new(&format!(
         "@a = global [100 x i8] zeroinitializer
@@ -696,7 +702,8 @@ b3:
     ))
 }
 
-/// Raised BC's `a[i]` may wrap its 16-bit offset, yet it bounded `i <= n` as if it could not.
+/// Raised BC's `a[i]` may wrap its 16-bit offset, yet it bounded `i <= n` as if
+/// it could not.
 #[test]
 fn test_only_a_promised_access_bounds_an_inclusive_loop() {
     for (inbounds, maximum) in [("inbounds", Some(0x10000)), ("", None)] {
@@ -1049,7 +1056,8 @@ fn test_advances_are_each_values_change_per_trip() {
     assert_eq!(found, IndexMap::from_iter(expected));
 }
 
-/// A pre-tested two-block loop testing `%i` by `compare`, which `read` may read too.
+/// A pre-tested two-block loop testing `%i` by `compare`, which `read` may read
+/// too.
 fn replaceable(
     read: &str,
     compare: &str,
@@ -1115,7 +1123,8 @@ fn test_a_candidate_ends_control_only_within_its_period() {
     }
 }
 
-/// Every count the corpus proves, against stepping its counter through its test.
+/// Every count the corpus proves, against stepping its counter through its
+/// test.
 ///
 /// The test is run by hand, not by `_ordered_after` or `_equal_after`.
 #[test]
@@ -1650,7 +1659,8 @@ fn test_form_obeys_the_ring_laws() {
     assert!(products > 0);
 }
 
-/// `%i` from `%x` by 1, and `body`, which `%v` names: the loop and its recurrence.
+/// `%i` from `%x` by 1, and `body`, which `%v` names: the loop and its
+/// recurrence.
 fn symbolic_product(body: &str) -> (Parsed, Option<Recurrence>) {
     let parsed = Parsed::new(&format!(
         "define void @f(i16 %x, i16 %k, i16 %m, i16 %w, i16 %a, i16 %b, i1 %c) {{
@@ -1797,7 +1807,8 @@ b2:
     Parsed::new(&format!("define i8 @f(i8 %a, i8 %b) {{\nb0:\n{lead}  br label %b1\n\n{body}}}\n"))
 }
 
-/// `trips` of `proof` at `a` and `b`, evaluated: the instructions it would place, run on numbers.
+/// `trips` of `proof` at `a` and `b`, evaluated: the instructions it would
+/// place, run on numbers.
 fn evaluated_trips(
     parsed: &Parsed,
     proof: &CountedLoop,
@@ -1838,11 +1849,12 @@ fn evaluated_trips(
     }
 }
 
-/// A loop ended by `!=` against an invariant, with a symbolic start or bound, any step,
-/// and any shape was uncounted: after lsr every `for x in xs` is `iv.next != 0` from
-/// `-2 * len`. Its count is where `start + k * step` first meets the bound,
-/// solved modulo the width and proved by what the low bits of the distance are, and
-/// it is what the loop makes for every input the loop ends on.
+/// A loop ended by `!=` against an invariant, with a symbolic start or bound,
+/// any step, and any shape was uncounted: after lsr every `for x in xs` is
+/// `iv.next != 0` from `-2 * len`. Its count is where `start + k * step` first
+/// meets the bound, solved modulo the width and proved by what the low bits of
+/// the distance are, and it is what the loop makes for every input the loop
+/// ends on.
 #[test]
 fn test_a_loop_tested_for_equality_is_counted_by_solving_for_the_bound() {
     let mut checked = 0;
@@ -1943,7 +1955,8 @@ b5:
 
 /// Every loop of the optimized corpus in `LOOPS_CORPUS` (a directory of
 /// `optimized/*.ll`), sorted by how far its trips are known: the table the
-/// counting is measured by. `cargo test -- --ignored loop_count_table --nocapture`.
+/// counting is measured by. `cargo test -- --ignored loop_count_table
+/// --nocapture`.
 #[test]
 #[ignore = "a measurement, not a check: it reads a corpus directory"]
 fn loop_count_table() {
@@ -1995,8 +2008,9 @@ fn loop_count_table() {
     );
 }
 
-/// An 8-bit counter from `%a` by `step` while `%i test %b`, its step promised not
-/// to wrap, tested `shape` (pre or post-stepped behind a guard on the entry); it returns its trips.
+/// An 8-bit counter from `%a` by `step` while `%i test %b`, its step promised
+/// not to wrap, tested `shape` (pre or post-stepped behind a guard on the
+/// entry); it returns its trips.
 fn tested_for_order(
     shape: &str,
     test: IntPredicate,
@@ -2064,9 +2078,10 @@ b9:
     Parsed::new(&text)
 }
 
-/// A loop ordered against an invariant by a step of more than one, promised not to wrap,
-/// was uncounted unless the bound was a number: its count is the distance to the bound
-/// divided by the step and rounded up, on every input the loop is entered with.
+/// A loop ordered against an invariant by a step of more than one, promised not
+/// to wrap, was uncounted unless the bound was a number: its count is the
+/// distance to the bound divided by the step and rounded up, on every input the
+/// loop is entered with.
 #[test]
 fn test_an_ordered_loop_by_a_longer_step_is_counted_by_dividing_the_distance() {
     let mut checked = 0;
@@ -2090,7 +2105,8 @@ fn test_an_ordered_loop_by_a_longer_step_is_counted_by_dividing_the_distance() {
                     .unwrap_or_else(|| panic!("{shape} {test:?} step {step}: no proof"));
                 for a in (0..256).step_by(3) {
                     for b in (0..256).step_by(5) {
-                        // An input the loop is not entered with has no count to check; one that wraps is poison.
+                        // An input the loop is not entered with has no count to
+                        // check; one that wraps is poison.
                         let Some(actual) = parsed.run(&[(a, 8), (b, 8)], 3_000).filter(|&actual| actual != 0) else {
                             continue;
                         };
@@ -2183,9 +2199,10 @@ b3:
 }
 
 /// A counter that starts at or above zero and climbs without a signed wrap
-/// cannot wrap unsigned either, whatever it is compared with: a signed FOR counter from 0
-/// by 1 is `nuw`, and an unsigned `<=` against it counts. Without the inference an inclusive
-/// unsigned test of a counter that may wrap past the maximum may never end, so no count.
+/// cannot wrap unsigned either, whatever it is compared with: a signed FOR
+/// counter from 0 by 1 is `nuw`, and an unsigned `<=` against it counts.
+/// Without the inference an inclusive unsigned test of a counter that may wrap
+/// past the maximum may never end, so no count.
 #[test]
 fn test_a_signed_counter_from_zero_climbing_is_also_unsigned_nowrap() {
     assert_eq!(climbing("0", "nsw").counted(false).len(), 1, "nsw from 0");
@@ -2278,9 +2295,10 @@ fn test_a_follower_that_may_pass_its_counter_proves_nothing() {
     assert!(followers(&fast.unit(), &fast.only_loop()).is_empty(), "i + 2 may pass j + 1");
 }
 
-/// A loop tested after its trips, entered behind `a < b` through a block of its own, makes `b - a` trips: the count a
-/// pre-tested one would, materialised (`trips` gave none for a posttested loop whose step is one, so a copied loop test
-/// lost its symbolic count).
+/// A loop tested after its trips, entered behind `a < b` through a block of its
+/// own, makes `b - a` trips: the count a pre-tested one would, materialised
+/// (`trips` gave none for a posttested loop whose step is one, so a copied loop
+/// test lost its symbolic count).
 #[test]
 fn test_a_guarded_posttested_loop_of_unit_steps_has_its_trips() {
     let parsed = Parsed::new(

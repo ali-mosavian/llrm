@@ -1,10 +1,13 @@
-//! What each register holds, by where: LLVM's `LiveIntervalUnion` and the `LiveRegMatrix` over it.
+//! What each register holds, by where: LLVM's `LiveIntervalUnion` and the
+//! `LiveRegMatrix` over it.
 //!
-//! A register's holders do not overlap one another, so a query for what meets an interval is a walk over the segments
-//! that start before it ends, back to the first that ends before it starts: logarithmic and the overlaps found, not the
-//! holders there are. A segment that does meet one already kept (a rewrite moves every interval, and leaves the clashes
-//! for the allocator to find) is kept apart and looked at one by one, so the answers are the pairwise ones in every
-//! case.
+//! A register's holders do not overlap one another, so a query for what meets
+//! an interval is a walk over the segments that start before it ends, back to
+//! the first that ends before it starts: logarithmic and the overlaps found,
+//! not the holders there are. A segment that does meet one already kept (a
+//! rewrite moves every interval, and leaves the clashes for the allocator to
+//! find) is kept apart and looked at one by one, so the answers are the
+//! pairwise ones in every case.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,15 +17,17 @@ use iced_x86::Register;
 use crate::analysis::intervals::{Interval, Segment};
 use crate::support::hash::IndexMap;
 
-/// How many holders a register has before it is worth an index: fewer are looked at one by one, as cheaply.
+/// How many holders a register has before it is worth an index: fewer are
+/// looked at one by one, as cheaply.
 const BIG: usize = 48;
-/// How many questions since the intervals last moved make an index worth building: it costs about what a few dozen cost
-/// without.
+/// How many questions since the intervals last moved make an index worth
+/// building: it costs about what a few dozen cost without.
 const ASKED: u32 = 16;
 
-/// What a register's holders are, by where they are live: segments that meet none other kept (start to (end, holder)),
-/// points (a segment of no length still meets another it lies inside), and every segment that meets one kept, looked at
-/// one by one.
+/// What a register's holders are, by where they are live: segments that meet
+/// none other kept (start to (end, holder)), points (a segment of no length
+/// still meets another it lies inside), and every segment that meets one kept,
+/// looked at one by one.
 #[derive(Clone, Debug, Default)]
 struct Index {
     /// Taking order to value, and back.
@@ -137,7 +142,8 @@ impl Index {
     }
 }
 
-/// One register's holders in the order they took it, and an index of where they are live once there are many.
+/// One register's holders in the order they took it, and an index of where they
+/// are live once there are many.
 #[derive(Clone, Debug, Default)]
 struct Held {
     holders: Vec<u32>,
@@ -158,7 +164,8 @@ impl LiveUnion {
         Self::default()
     }
 
-    /// `holders` as they stand (a test's, or a state to start from), where `live` has them.
+    /// `holders` as they stand (a test's, or a state to start from), where
+    /// `live` has them.
     pub fn of(
         holders: impl IntoIterator<Item = (Register, Vec<u32>)>,
         live: &IndexMap<u32, Interval>,
@@ -188,7 +195,8 @@ impl LiveUnion {
         }
     }
 
-    /// `value` gives up `register`: where it is live must be what it was when it took it.
+    /// `value` gives up `register`: where it is live must be what it was when
+    /// it took it.
     pub fn remove(
         &mut self,
         register: Register,
@@ -202,7 +210,8 @@ impl LiveUnion {
         }
     }
 
-    /// Every interval moved: the holders stay, and are asked about where `live` now has them.
+    /// Every interval moved: the holders stay, and are asked about where `live`
+    /// now has them.
     pub fn refresh(&mut self) {
         for held in self.registers.values_mut() {
             *held.index.get_mut() = None;
@@ -223,7 +232,8 @@ impl LiveUnion {
         self.registers.iter().map(|(register, held)| (*register, held.holders.clone()))
     }
 
-    /// `held`'s index, built once enough is asked of a register with many holders.
+    /// `held`'s index, built once enough is asked of a register with many
+    /// holders.
     fn indexed<'a>(
         &self,
         held: &'a Held,
@@ -243,7 +253,8 @@ impl LiveUnion {
         Some(std::cell::Ref::map(held.index.borrow(), |index| index.as_ref().expect("built")))
     }
 
-    /// The holders of `register` that are live where `one` is, in the order they took it.
+    /// The holders of `register` that are live where `one` is, in the order
+    /// they took it.
     pub fn meeting(
         &self,
         register: &Register,
@@ -281,8 +292,9 @@ impl LiveUnion {
     }
 }
 
-/// Segments to be asked which meet an interval, none added or taken away: a tree over the segments sorted by start,
-/// each node holding the furthest end below it.
+/// Segments to be asked which meet an interval, none added or taken away: a
+/// tree over the segments sorted by start, each node holding the furthest end
+/// below it.
 pub struct Overlaps {
     segments: Vec<(i64, i64, u32)>,
     furthest: Vec<i64>,
@@ -321,7 +333,8 @@ impl Overlaps {
         most
     }
 
-    /// `each` of the values with a segment that meets `[start, end)`, once per segment that does.
+    /// `each` of the values with a segment that meets `[start, end)`, once per
+    /// segment that does.
     pub fn meeting(
         &self,
         start: i64,
@@ -381,7 +394,8 @@ mod tests {
         holders.iter().copied().filter(|other| live.get(other).is_some_and(|found| found.overlaps(one))).collect()
     }
 
-    /// Enough questions of a register with enough holders to have it indexed: the answers are the pairwise ones.
+    /// Enough questions of a register with enough holders to have it indexed:
+    /// the answers are the pairwise ones.
     fn asked_of_many(
         live: &IndexMap<u32, Interval>,
         taking: &[u32],
@@ -439,7 +453,8 @@ mod tests {
 
     #[test]
     fn test_a_register_with_many_holders_is_indexed_and_answers_as_the_pairwise_look_does() {
-        // 100 holders, some clashing (the intervals of a rewrite), points among them.
+        // 100 holders, some clashing (the intervals of a rewrite), points among
+        // them.
         let mut all: Vec<(u32, Vec<(i64, i64)>)> = Vec::new();
         for value in 0..100u32 {
             let start = i64::from(value) * 10;

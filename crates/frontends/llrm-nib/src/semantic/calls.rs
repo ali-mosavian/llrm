@@ -237,7 +237,8 @@ impl<'a> FunctionCompiler<'a> {
         pointer_type: u32,
     ) -> Result<(hir::Operand, String), Diagnostic> {
         let Expr::Borrow { mutable, operand, span } = argument else {
-            // The parameter says it borrows, so the call site may write the argument alone.
+            // The parameter says it borrows, so the call site may write the
+            // argument alone.
             let borrow =
                 Expr::Borrow { mutable: required_mutable, operand: Box::new(argument.clone()), span: argument.span() };
             return self.borrow_argument(&borrow, required_mutable, target, pointer_type);

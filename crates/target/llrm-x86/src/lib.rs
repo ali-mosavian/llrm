@@ -3,7 +3,8 @@
 
 pub mod select;
 
-/// A calling convention's registers as the x86 family names them: the architecture's, the same in every x86 target.
+/// A calling convention's registers as the x86 family names them: the
+/// architecture's, the same in every x86 target.
 pub mod calling {
     use iced_x86::Register;
     use llrm_target::calling::Convention;
@@ -17,7 +18,8 @@ pub mod calling {
         *NAMES.get(name).unwrap_or_else(|| panic!("calling.toml names no x86 register {name}"))
     }
 
-    /// The most bytes `ret imm16` (and `retf imm16`) removes: the immediate is a word.
+    /// The most bytes `ret imm16` (and `retf imm16`) removes: the immediate is
+    /// a word.
     pub const RET_POPS_MOST: i64 = 0xFFFF;
 
     /// The register a frame's cells are addressed through.
@@ -29,7 +31,8 @@ pub mod calling {
         register(&convention.stack)
     }
 
-    /// Each register kept for the caller that a value may be held in: its full register and the one pushed.
+    /// Each register kept for the caller that a value may be held in: its full
+    /// register and the one pushed.
     pub fn callee_saved(convention: &Convention) -> Vec<(Register, Register)> {
         convention.callee_saved().into_iter().map(|kept| (register(&kept.full), register(&kept.pushed))).collect()
     }
@@ -47,8 +50,9 @@ pub mod calling {
             .collect()
     }
 
-    /// The return address a call leaves: the convention's, and a far call's extra bytes (the far first argument
-    /// is that much further from the frame register).
+    /// The return address a call leaves: the convention's, and a far call's
+    /// extra bytes (the far first argument is that much further from the
+    /// frame register).
     pub fn return_address_bytes(
         convention: &Convention,
         far: bool,
@@ -57,8 +61,9 @@ pub mod calling {
             + if far { first_argument_offset(convention, true) - convention.first_argument_offset } else { 0 }
     }
 
-    /// Where register `name`'s low word is in an interrupt handler's frame, from its pointer: a 16-bit name (`ax`) is
-    /// the low word of its 32-bit slot (`eax`).
+    /// Where register `name`'s low word is in an interrupt handler's frame,
+    /// from its pointer: a 16-bit name (`ax`) is the low word of its 32-bit
+    /// slot (`eax`).
     pub fn interrupt_slot(
         convention: &Convention,
         name: &str,
@@ -88,12 +93,13 @@ pub mod calling {
     }
 }
 
-/// The x86 general register file's views, in the order iced and the manuals list them: the architecture's, the
-/// same in every x86 target.
+/// The x86 general register file's views, in the order iced and the manuals
+/// list them: the architecture's, the same in every x86 target.
 pub mod registers {
     use iced_x86::Register;
 
-    /// The general registers a value or an address is held in, the frame pointer's included, the stack pointer's not.
+    /// The general registers a value or an address is held in, the frame
+    /// pointer's included, the stack pointer's not.
     pub const ROOTS: [Register; 7] =
         [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI, Register::EBP];
     /// The word view of a dword register, where it has one.
@@ -137,7 +143,8 @@ pub mod registers {
         Register::BH,
     ];
 
-    /// A row by register number, as the tables built from it have always been walked.
+    /// A row by register number, as the tables built from it have always been
+    /// walked.
     fn in_order(row: &[Register; 8]) -> Vec<Register> {
         let mut sorted = row.to_vec();
         sorted.sort_by_key(|one| *one as u32);
@@ -156,8 +163,9 @@ pub mod registers {
             widths
         });
 
-    /// Each register file entry at each width, by its root: the first view of that width where several share it
-    /// (AL and AH both root to EAX: the later one resolved a width-1 value to AH).
+    /// Each register file entry at each width, by its root: the first view of
+    /// that width where several share it (AL and AH both root to EAX: the
+    /// later one resolved a width-1 value to AH).
     pub static AT_WIDTH: std::sync::LazyLock<
         llrm_support::hash::IndexMap<Register, llrm_support::hash::IndexMap<i64, Register>>,
     > = std::sync::LazyLock::new(|| {
@@ -175,7 +183,8 @@ pub mod registers {
     mod tests {
         use super::*;
 
-        /// Each word is the low half of the dword at its place, and each byte a half of one of the first four.
+        /// Each word is the low half of the dword at its place, and each byte a
+        /// half of one of the first four.
         #[test]
         fn the_views_are_the_register_file_iced_knows() {
             for (word, dword) in WORDS.iter().zip(&DWORDS) {
@@ -192,8 +201,9 @@ pub mod registers {
     }
 }
 
-/// What 16-bit x86 addressing (the ModRM byte without an address-size prefix) is made of: `[base+index+disp]`
-/// with a base from BX or BP and an index from SI or DI. The architecture's, the same in every 16-bit target.
+/// What 16-bit x86 addressing (the ModRM byte without an address-size prefix)
+/// is made of: `[base+index+disp]` with a base from BX or BP and an index from
+/// SI or DI. The architecture's, the same in every 16-bit target.
 pub mod asm;
 
 pub mod addressing16 {
@@ -203,8 +213,8 @@ pub mod addressing16 {
     pub const INDEXES: [Register; 2] = [Register::SI, Register::DI];
 }
 
-/// The bytes of the encodings the selector prices for size, where an operand of other than
-/// the target's default size (`operand`) takes the 66h prefix.
+/// The bytes of the encodings the selector prices for size, where an operand of
+/// other than the target's default size (`operand`) takes the 66h prefix.
 pub mod encoding {
     fn prefix_bytes(
         width: i64,
@@ -221,7 +231,8 @@ pub mod encoding {
         prefix_bytes(width, operand) + 2
     }
 
-    /// Bytes of a shift of a `width`-byte register by `count`: `D1` for one, `C1` with a byte count otherwise.
+    /// Bytes of a shift of a `width`-byte register by `count`: `D1` for one,
+    /// `C1` with a byte count otherwise.
     pub fn shift_bytes(
         count: i64,
         width: i64,
@@ -230,8 +241,8 @@ pub mod encoding {
         prefix_bytes(width, operand) + if count == 1 { 2 } else { 3 }
     }
 
-    /// Bytes of `imul r, r, number` on `width`-byte registers: a byte immediate where `number` fits one, else the
-    /// operand's width.
+    /// Bytes of `imul r, r, number` on `width`-byte registers: a byte immediate
+    /// where `number` fits one, else the operand's width.
     pub fn imul_immediate_bytes(
         number: i64,
         width: i64,
@@ -244,7 +255,8 @@ pub mod encoding {
     mod tests {
         use super::*;
 
-        /// The prefix is for the size that is not the default: a dword in real mode, a word when flat.
+        /// The prefix is for the size that is not the default: a dword in real
+        /// mode, a word when flat.
         #[test]
         fn the_operand_size_prefix_is_for_the_size_that_is_not_the_default() {
             assert_eq!(
@@ -260,13 +272,15 @@ pub mod instructions {
     /// The forms every x86 target has, `x86.instr`.
     pub const FAMILY: &str = include_str!("instructions/x86.instr");
 
-    /// The family's forms, then `own`: a target's description is the two joined.
+    /// The family's forms, then `own`: a target's description is the two
+    /// joined.
     pub fn joined(own: &str) -> String {
         format!("{FAMILY}\n{own}")
     }
 }
 
-/// What DOS gives a program (function numbers, the extender's calls), shared by the targets that run under it.
+/// What DOS gives a program (function numbers, the extender's calls), shared by
+/// the targets that run under it.
 pub const DOS_FACTS: &str = include_str!("../../../../runtime/shared/dos/facts.toml");
 
 /// The physical addresses `platform.toml` names, each by its name.

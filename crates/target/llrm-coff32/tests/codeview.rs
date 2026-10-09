@@ -1,4 +1,5 @@
-//! `.debug$S` and `.debug$T`: what LLVM's CodeView reader makes of the C13 an i386 object carries.
+//! `.debug$S` and `.debug$T`: what LLVM's CodeView reader makes of the C13 an
+//! i386 object carries.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -44,8 +45,8 @@ fn variable(
     Variable { name: name.into(), r#type, kind, location }
 }
 
-/// `int f(int x, struct S *p) { int y; ... }` in 16 bytes of code on lines 3 to 5, a global `g`, a
-/// struct, an array, an enum and a recursive struct.
+/// `int f(int x, struct S *p) { int y; ... }` in 16 bytes of code on lines 3 to
+/// 5, a global `g`, a struct, an array, an enum and a recursive struct.
 fn object() -> Object {
     let text = Section {
         name: "_TEXT".into(),
@@ -79,7 +80,8 @@ fn object() -> Object {
             union: false,
         }, // 2
         Type::Pointer { target: 2, bytes: 4, reach: Reach::Near }, // 3
-        Type::Procedure { result: Some(0), parameters: vec![0, 3], convention: None }, // 4
+        // 4
+        Type::Procedure { result: Some(0), parameters: vec![0, 3], convention: None },
         Type::Array { element: 0, bytes: Some(40) }, // 5
         Type::Enum {
             name: "E".into(),
@@ -170,10 +172,11 @@ fn written() -> Vec<u8> {
     llrm_coff32::write(&object()).unwrap()
 }
 
-/// Every record of both sections reads, and says what the model said: the function and its
-/// parameters and locals with their frame cells and register, the block's own range, the types
-/// (a struct reached from its own field is a forward reference first), the global and the lines.
-/// A `contains("S_LOCAL")` passed with every offset wrong; these are the values.
+/// Every record of both sections reads, and says what the model said: the
+/// function and its parameters and locals with their frame cells and register,
+/// the block's own range, the types (a struct reached from its own field is a
+/// forward reference first), the global and the lines. A `contains("S_LOCAL")`
+/// passed with every offset wrong; these are the values.
 #[test]
 fn llvm_reads_the_functions_variables_types_and_lines() {
     let Some(text) = dump("llvm-readobj", &["--codeview"], &written()) else {
@@ -208,8 +211,9 @@ fn llvm_reads_the_functions_variables_types_and_lines() {
     assert_eq!(text.matches("IsParameter (0x1)").count(), 2, "{text}");
 }
 
-/// lld-link links it with /debug and the PDB holds the function, its two parameters, its locals'
-/// types, the block and the three lines at the right addresses.
+/// lld-link links it with /debug and the PDB holds the function, its two
+/// parameters, its locals' types, the block and the three lines at the right
+/// addresses.
 #[test]
 fn lld_link_makes_a_pdb_with_the_functions_parameters_types_and_lines() {
     let (Some(link), Some(pdbutil)) = (llvm("lld-link"), llvm("llvm-pdbutil")) else {
@@ -265,8 +269,9 @@ fn refusal(change: impl FnOnce(&mut Object)) -> String {
     llrm_coff32::write(&made).unwrap_err().0
 }
 
-/// What C13 as written cannot say is refused by name, never written as something near: a register
-/// the target gives no CodeView number, a far function, BASIC's types, a function in two pieces.
+/// What C13 as written cannot say is refused by name, never written as
+/// something near: a register the target gives no CodeView number, a far
+/// function, BASIC's types, a function in two pieces.
 #[test]
 fn what_the_writer_cannot_say_is_refused_by_name() {
     assert!(
@@ -311,9 +316,10 @@ fn what_the_writer_cannot_say_is_refused_by_name() {
     assert!(refusal(|made| made.debug.as_mut().unwrap().types[3] = Type::Pointer { target: 2, bytes: 4, reach: Reach::Far }).contains("far or huge"));
 }
 
-/// A range's length is 16 bits: a variable live over 130000 bytes is three defranges, each
-/// within 0xF000, which add up to the function. One record with a truncated length gave a debugger
-/// a variable that ended at byte 0x1F000 % 0x10000.
+/// A range's length is 16 bits: a variable live over 130000 bytes is three
+/// defranges, each within 0xF000, which add up to the function. One record with
+/// a truncated length gave a debugger a variable that ended at byte 0x1F000 %
+/// 0x10000.
 #[test]
 fn a_variable_over_a_long_function_is_written_in_pieces() {
     let mut made = object();
@@ -337,9 +343,9 @@ fn a_variable_over_a_long_function_is_written_in_pieces() {
     assert_eq!(lengths.iter().sum::<usize>(), 130_000 * 6, "{lengths:?}");
 }
 
-/// A record's length is 16 bits, a line's 31 and a column's 16: what overflows is refused, not
-/// written with a wrapped length that makes every later record unreadable. A struct of 5000 fields
-/// is a field list over 64 KiB.
+/// A record's length is 16 bits, a line's 31 and a column's 16: what overflows
+/// is refused, not written with a wrapped length that makes every later record
+/// unreadable. A struct of 5000 fields is a field list over 64 KiB.
 #[test]
 fn what_overflows_a_field_is_refused_not_wrapped() {
     let huge = |made: &mut Object| {

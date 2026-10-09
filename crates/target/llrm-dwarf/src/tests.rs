@@ -7,7 +7,8 @@ fn int() -> Type {
     Type::Scalar(Scalar::Int { bytes: 4, signed: true })
 }
 
-/// `f(x) { y }` in 16 bytes of code with the body at 4..12, x and y in the frame, lines 3 and 4.
+/// `f(x) { y }` in 16 bytes of code with the body at 4..12, x and y in the
+/// frame, lines 3 and 4.
 fn object(
     variables: Vec<Variable>,
     mut types: Vec<Type>,
@@ -106,9 +107,10 @@ fn leb128_is_the_specifications() {
     assert_eq!(sleb(64), [0xC0, 0x00]);
 }
 
-/// A unit's length counts what follows it, its abbreviation offset is a reference to the
-/// abbreviation section (the linker places it, so one object's offset is not another's), and the
-/// header is the version's: 5 puts the unit type and the address size before the offset.
+/// A unit's length counts what follows it, its abbreviation offset is a
+/// reference to the abbreviation section (the linker places it, so one object's
+/// offset is not another's), and the header is the version's: 5 puts the unit
+/// type and the address size before the offset.
 #[test]
 fn a_unit_header_says_its_length_its_version_and_where_its_abbreviations_are() {
     for (version, offset_at, size_at) in [(5u16, 8usize, 7usize), (4, 6, 10)] {
@@ -131,33 +133,38 @@ fn a_unit_header_says_its_length_its_version_and_where_its_abbreviations_are() {
     }
 }
 
-/// Each string, each address and each reference between sections is a relocation, not a number
-/// that holds only for the first object a linker places.
+/// Each string, each address and each reference between sections is a
+/// relocation, not a number that holds only for the first object a linker
+/// places.
 #[test]
 fn addresses_and_cross_section_offsets_are_relocations() {
     let made = written(vec![frame("x", 8)], vec![int()], Format::Default).unwrap();
     let (_, info) = named(&made, ".debug_info");
     let to_symbol = info.relocs.iter().filter(|one| matches!(one.target, Target::Symbol(0))).count();
     let to_section = info.relocs.iter().filter(|one| matches!(one.target, Target::Section(_))).count();
-    // The unit's low_pc and the function's; the abbreviations, the line table and each string.
+    // The unit's low_pc and the function's; the abbreviations, the line table
+    // and each string.
     assert_eq!(to_symbol, 2, "{:?}", info.relocs);
     assert!(to_section >= 5, "{:?}", info.relocs);
     let (_, line) = named(&made, ".debug_line");
     assert!(line.relocs.iter().any(|one| matches!(one.target, Target::Symbol(0))), "the sequence's address");
 }
 
-/// A function's body start is a row marked prologue_end, and its end epilogue_begin, even where
-/// no source line begins there: gdb stops a breakpoint on a function after the prologue by it.
+/// A function's body start is a row marked prologue_end, and its end
+/// epilogue_begin, even where no source line begins there: gdb stops a
+/// breakpoint on a function after the prologue by it.
 #[test]
 fn a_bodys_start_and_end_are_marked_in_the_line_table() {
     let made = written(vec![frame("x", 8)], vec![int()], Format::Default).unwrap();
     let (_, line) = named(&made, ".debug_line");
-    // After the header, the program: set_address, then rows. DW_LNS_set_prologue_end is 10, epilogue_begin 11.
+    // After the header, the program: set_address, then rows.
+    // DW_LNS_set_prologue_end is 10, epilogue_begin 11.
     let program = &line.image[line.image.len() - 40..];
     assert!(program.contains(&10) && program.contains(&11), "{program:?}");
 }
 
-/// A far pointer has no DWARF type: it is refused where a variable uses it, and only there.
+/// A far pointer has no DWARF type: it is refused where a variable uses it, and
+/// only there.
 #[test]
 fn an_unwritable_type_is_refused_where_it_is_used_and_nowhere_else() {
     let far = Type::Pointer { target: 0, bytes: 6, reach: Reach::Far };
@@ -169,8 +176,8 @@ fn an_unwritable_type_is_refused_where_it_is_used_and_nowhere_else() {
     assert!(written(vec![frame("x", 8)], vec![int(), far], Format::Default).is_ok());
 }
 
-/// BASIC's array (its bounds are a descriptor's) and a register with no DWARF number are refused
-/// by name, not written as something else.
+/// BASIC's array (its bounds are a descriptor's) and a register with no DWARF
+/// number are refused by name, not written as something else.
 #[test]
 fn what_dwarf_cannot_say_is_refused_by_name() {
     let array = Type::Array { element: 0, bytes: None };
@@ -181,7 +188,8 @@ fn what_dwarf_cannot_say_is_refused_by_name() {
     assert!(
         written(vec![high], vec![int()], Format::Default).unwrap_err().0.contains("register ah has no DWARF number")
     );
-    // A list of one that holds neither a frame cell nor a register (a static, say) has no expression here.
+    // A list of one that holds neither a frame cell nor a register (a static,
+    // say) has no expression here.
     let range = Range { section: 0, offset: 0, length: 4 };
     let moved = Variable {
         name: "m".into(),
@@ -192,8 +200,8 @@ fn what_dwarf_cannot_say_is_refused_by_name() {
     assert!(written(vec![moved], vec![int()], Format::Default).unwrap_err().0.contains("holds frame cells, registers"));
 }
 
-/// A format this writer does not write is refused with which: an object cannot carry the
-/// information of another format.
+/// A format this writer does not write is refused with which: an object cannot
+/// carry the information of another format.
 #[test]
 fn a_format_that_is_not_dwarf_is_refused() {
     assert!(written(Vec::new(), vec![int()], Format::CodeView).unwrap_err().0.contains("CodeView"));
@@ -214,10 +222,12 @@ fn a_registers_location_is_its_dwarf_number() {
     assert!(info.image.windows(2).any(|pair| pair == [1, 0x50]), "a one-byte expression, DW_OP_reg0");
 }
 
-/// A test that cannot run says so on stderr, and fails where `LLRM_REQUIRE_DWARF` is set, so a gate that
-/// has the tools cannot pass by skipping.
+/// A test that cannot run says so on stderr, and fails where
+/// `LLRM_REQUIRE_DWARF` is set, so a gate that has the tools cannot pass by
+/// skipping.
 fn skipped(reason: &str) {
-    // Written to the stderr itself, which the harness does not capture: seen when the test passes.
+    // Written to the stderr itself, which the harness does not capture: seen
+    // when the test passes.
     let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("SKIPPED: {reason}\n").as_bytes());
     assert!(std::env::var_os("LLRM_REQUIRE_DWARF").is_none(), "LLRM_REQUIRE_DWARF is set, and: {reason}");
 }
@@ -229,8 +239,9 @@ fn dwarfdump() -> Option<std::path::PathBuf> {
     dirs.iter().flat_map(|dir| [dir.join("llvm-dwarfdump"), dir.join("llvm-dwarfdump-20")]).find(|path| path.exists())
 }
 
-/// llvm-dwarfdump verifies the unit in an ELF32, an ELF64 and a Mach-O object, whose addresses are 4, 8 and 8
-/// bytes, for DWARF 4 and 5, with a struct, an array, a pointer, a static and a register variable.
+/// llvm-dwarfdump verifies the unit in an ELF32, an ELF64 and a Mach-O object,
+/// whose addresses are 4, 8 and 8 bytes, for DWARF 4 and 5, with a struct, an
+/// array, a pointer, a static and a register variable.
 #[test]
 fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
     let Some(dump) = dwarfdump() else {
@@ -276,7 +287,8 @@ fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
                         kind: Kind::Local,
                         location: Location::Static { symbol: 0, disp: 4 },
                     },
-                    // In eax over the first seven bytes, then in its frame cell: a list of two.
+                    // In eax over the first seven bytes, then in its frame
+                    // cell: a list of two.
                     Variable {
                         name: "q".into(),
                         r#type: 0,
@@ -312,7 +324,8 @@ fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
             {
                 assert!(shown.contains(expected), "{bits} DWARF {version}: no {expected} in\n{shown}");
             }
-            // The list: register 0 over [0, 7) and fbreg -4 over [7, 16), in the section of lists its version has.
+            // The list: register 0 over [0, 7) and fbreg -4 over [7, 16), in
+            // the section of lists its version has.
             let lists = std::process::Command::new(&dump)
                 .arg(if version >= 5 { "--debug-loclists" } else { "--debug-loc" })
                 .arg(&path)
@@ -327,8 +340,9 @@ fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
     }
 }
 
-/// A variable the optimiser removed (a list of no entry) is a DIE with a name and a type and no location, which
-/// a debugger shows as optimized out; one with a location has it.
+/// A variable the optimiser removed (a list of no entry) is a DIE with a name
+/// and a type and no location, which a debugger shows as optimized out; one
+/// with a location has it.
 #[test]
 fn a_removed_variable_has_no_location_and_the_others_have_theirs() {
     let Some(dump) = dwarfdump() else {
@@ -356,9 +370,10 @@ fn a_removed_variable_has_no_location_and_the_others_have_theirs() {
     assert!(local.contains("DW_OP_fbreg +8"), "{local}");
 }
 
-/// A function the code gives no frame register is found from the canonical frame address: `-g` kept `ebp` for every
-/// function with a variable, which cost the code a `push ebp` a build without `-g` does not have. A cell the register
-/// would have addressed at `disp` is `disp - bias` from the address.
+/// A function the code gives no frame register is found from the canonical
+/// frame address: `-g` kept `ebp` for every function with a variable, which
+/// cost the code a `push ebp` a build without `-g` does not have. A cell the
+/// register would have addressed at `disp` is `disp - bias` from the address.
 #[test]
 fn a_frame_cell_is_found_from_the_canonical_frame_address_where_the_code_keeps_no_register() {
     let Some(dump) = dwarfdump() else {
@@ -377,9 +392,11 @@ fn a_frame_cell_is_found_from_the_canonical_frame_address_where_the_code_keeps_n
     assert!(shown.contains("DW_OP_fbreg -12"), "{shown}");
 }
 
-/// `.debug_frame`: the CIE says the frame address is `esp+4` and the return address is DWARF column 8 just below
-/// it; the function's FDE says each change by the shortest instruction: an offset change alone, a register
-/// change alone, both, a register saved (`DW_CFA_offset`, the offset in units of -4) and restored.
+/// `.debug_frame`: the CIE says the frame address is `esp+4` and the return
+/// address is DWARF column 8 just below it; the function's FDE says each change
+/// by the shortest instruction: an offset change alone, a register
+/// change alone, both, a register saved (`DW_CFA_offset`, the offset in units
+/// of -4) and restored.
 #[test]
 fn a_functions_frame_rows_are_the_cfa_instructions_the_dwarf_standard_gives() {
     use llrm_object::debug::FrameRow;
@@ -411,8 +428,9 @@ fn a_functions_frame_rows_are_the_cfa_instructions_the_dwarf_standard_gives() {
     assert!(fde[expected.len()..].iter().all(|&one| one == 0), "padded with DW_CFA_nop");
 }
 
-/// A base type is named as the source spells it: `int` and `unsigned long` where the frontend said so, and
-/// `uint32_t` where it did not. Every base type was `int32_t`/`uint32_t`, which is what gdb printed for a C `int`.
+/// A base type is named as the source spells it: `int` and `unsigned long`
+/// where the frontend said so, and `uint32_t` where it did not. Every base type
+/// was `int32_t`/`uint32_t`, which is what gdb printed for a C `int`.
 #[test]
 fn a_base_type_is_named_as_the_source_spells_it() {
     let strings = |types: Vec<Type>| {

@@ -93,7 +93,8 @@ pub fn after(
     (zero & !disturbed(bits, one)) | zeroed
 }
 
-/// `zero` after `xchg a, b` of two whole registers: each now holds the other's upper half.
+/// `zero` after `xchg a, b` of two whole registers: each now holds the other's
+/// upper half.
 fn exchanged(
     one: &Insn,
     zero: Roots,
@@ -111,7 +112,8 @@ fn exchanged(
     Some(rest | if had_right { left } else { 0 } | if had_left { right } else { 0 })
 }
 
-/// The root a whole-register copy writes, where the root it copies from has a zero upper half.
+/// The root a whole-register copy writes, where the root it copies from has a
+/// zero upper half.
 fn copied(
     one: &Insn,
     zero: Roots,
@@ -396,8 +398,9 @@ mod tests {
         }
     }
 
-    /// `xchg esi, ecx` lost both registers' zero upper halves, so a counter that began as `mov ecx, 2` was copied by
-    /// `movzx` before it indexed (bench/sieve with EBP free: one more instruction a trip).
+    /// `xchg esi, ecx` lost both registers' zero upper halves, so a counter
+    /// that began as `mov ecx, 2` was copied by `movzx` before it indexed
+    /// (bench/sieve with EBP free: one more instruction a trip).
     #[test]
     fn test_an_exchange_swaps_the_zero_upper_halves() {
         let (ecx, esi) =

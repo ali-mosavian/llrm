@@ -1,15 +1,20 @@
-//! Where the value a variable has is, over the code as it was emitted: LLVM's instruction-referencing LiveDebugValues
-//! (`InstrRefBasedLDV`), after the allocator and every pass that follows it.
+//! Where the value a variable has is, over the code as it was emitted: LLVM's
+//! instruction-referencing LiveDebugValues (`InstrRefBasedLDV`), after the
+//! allocator and every pass that follows it.
 //!
-//! Instruction selection tells which instructions define a value `-g` names, and masm marks where each landed
-//! (`Mark::Def`: the register or frame cell the instruction before the mark wrote) and where a variable takes a value
-//! (`Mark::Note`). Nothing else of the allocator is read. The code is decoded and followed from its entry along every
-//! path, with what each register and frame cell holds: a move copies it, any other write loses it, a call loses what
-//! the callee clobbers, and where paths join only what all of them agree on is kept. A variable is where its value is:
-//! a register if one holds it, else a cell.
+//! Instruction selection tells which instructions define a value `-g` names,
+//! and masm marks where each landed (`Mark::Def`: the register or frame cell
+//! the instruction before the mark wrote) and where a variable takes a value
+//! (`Mark::Note`). Nothing else of the allocator is read. The code is decoded
+//! and followed from its entry along every path, with what each register and
+//! frame cell holds: a move copies it, any other write loses it, a call loses
+//! what the callee clobbers, and where paths join only what all of them agree
+//! on is kept. A variable is where its value is: a register if one holds it,
+//! else a cell.
 //!
-//! No value is the answer wherever the code cannot be followed or the value is in no register or cell. An optimizer
-//! that wrote the value somewhere unrecorded costs the variable its location there, never a wrong one.
+//! No value is the answer wherever the code cannot be followed or the value is
+//! in no register or cell. An optimizer that wrote the value somewhere
+//! unrecorded costs the variable its location there, never a wrong one.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -33,8 +38,9 @@ struct State {
     has: BTreeMap<(u32, Option<(u32, u32)>), NoteValue>,
 }
 
-/// The target's registers as the tracking needs them, from its description: which register each view belongs to, which
-/// two address cells, and which hold values (the roots of class `gpr`).
+/// The target's registers as the tracking needs them, from its description:
+/// which register each view belongs to, which two address cells, and which hold
+/// values (the roots of class `gpr`).
 pub struct Regs {
     frame: String,
     stack: String,
@@ -58,7 +64,8 @@ impl Regs {
         Self { frame: named(frame), stack: named(stack), general, roots }
     }
 
-    /// The register `register` is a view of; any register the description does not know is itself.
+    /// The register `register` is a view of; any register the description does
+    /// not know is itself.
     fn root(
         &self,
         register: Register,
@@ -67,8 +74,8 @@ impl Regs {
         self.roots.get(&name).cloned().unwrap_or(name)
     }
 
-    /// The registers a call that says nothing of what it clobbers may: every general one but the two that address
-    /// cells.
+    /// The registers a call that says nothing of what it clobbers may: every
+    /// general one but the two that address cells.
     fn volatile(&self) -> impl Iterator<Item = &String> {
         self.general.iter().filter(|one| **one != self.frame && **one != self.stack)
     }
@@ -140,8 +147,9 @@ impl State {
     }
 }
 
-/// A frame cell, as the frame register would address it, of a memory operand of `one`, if it names one: through the
-/// stack pointer or the frame register alone, which `rows` says how far from the canonical frame address at `at`.
+/// A frame cell, as the frame register would address it, of a memory operand of
+/// `one`, if it names one: through the stack pointer or the frame register
+/// alone, which `rows` says how far from the canonical frame address at `at`.
 fn cell(
     one: &Instruction,
     rows: &[FrameRow],
@@ -162,8 +170,8 @@ fn cell(
     Some(Held::Cell { disp: disp - row.cfa_offset + bias, bytes })
 }
 
-/// What `one` does to `state`: a move of a whole register or cell copies what it holds; any other write loses what it
-/// writes.
+/// What `one` does to `state`: a move of a whole register or cell copies what
+/// it holds; any other write loses what it writes.
 fn step(
     state: &mut State,
     one: &Instruction,
@@ -195,7 +203,8 @@ fn step(
         match (target, source) {
             (Some(target), Some(value)) if to == from => state.set(target, value, regs),
             (Some(target), _) => state.lose(&target, regs),
-            // A write through a pointer may write a frame cell whose address the function let out.
+            // A write through a pointer may write a frame cell whose address
+            // the function let out.
             (None, _) => {
                 if exposed && one.op0_kind() == OpKind::Memory {
                     state.lose_cells();
@@ -225,7 +234,8 @@ fn step(
             }
         }
     }
-    // The stack pointer's own pushes are cells the code names by no operand: a push loses what it covers.
+    // The stack pointer's own pushes are cells the code names by no operand: a
+    // push loses what it covers.
     if matches!(
         one.mnemonic(),
         Mnemonic::Push | Mnemonic::Pushad | Mnemonic::Pushfd | Mnemonic::Pushf
@@ -258,8 +268,9 @@ pub enum Where {
     Constant(i64),
 }
 
-/// `state` after the variable `note` names takes its value: the whole variable replaces every piece of it, and a piece
-/// replaces the whole and the pieces it overlaps.
+/// `state` after the variable `note` names takes its value: the whole variable
+/// replaces every piece of it, and a piece replaces the whole and the pieces it
+/// overlaps.
 fn noted(
     state: &mut State,
     note: &DebugNote,
@@ -282,8 +293,8 @@ fn noted(
     }
 }
 
-/// Every place the value of `variable`'s `piece` is in at a point where `state` holds it, registers first; a constant
-/// is the only one it has.
+/// Every place the value of `variable`'s `piece` is in at a point where `state`
+/// holds it, registers first; a constant is the only one it has.
 fn holders(
     state: &State,
     variable: u32,
@@ -301,10 +312,11 @@ fn holders(
     }
 }
 
-/// Each variable the notes name, with the ranges of `code` (start, end) it is in a place over. `marks` are the
-/// procedure's, by the offset into `code` they stand at, in the order masm wrote them; `rows` its frame rows; `bias`
-/// how far below the canonical frame address the frame register would sit (a cell `Place::Cell { disp }` is `disp -
-/// bias` from it).
+/// Each variable the notes name, with the ranges of `code` (start, end) it is
+/// in a place over. `marks` are the procedure's, by the offset into `code` they
+/// stand at, in the order masm wrote them; `rows` its frame rows; `bias`
+/// how far below the canonical frame address the frame register would sit (a
+/// cell `Place::Cell { disp }` is `disp - bias` from it).
 pub fn tracked(
     code: &[u8],
     bits: u32,
@@ -321,8 +333,9 @@ pub fn tracked(
         let one = decoder.decode();
         (!one.is_invalid()).then_some(one)
     };
-    // What the marks at each offset say: the values the instruction ending there made, the notes before the one
-    // starting there, and what the call ending there clobbered.
+    // What the marks at each offset say: the values the instruction ending
+    // there made, the notes before the one starting there, and what the
+    // call ending there clobbered.
     let mut defs: BTreeMap<usize, Vec<(u32, Place)>> = BTreeMap::new();
     let mut before: BTreeMap<usize, Vec<u32>> = BTreeMap::new();
     let mut clobbers: BTreeMap<usize, Vec<Register>> = BTreeMap::new();
@@ -335,8 +348,9 @@ pub fn tracked(
         }
     }
     let mut info = InstructionInfoFactory::new();
-    // Whether the function lets the address of a frame cell out: then a call, or a write through a pointer, may write
-    // any of them (which one, only the allocator's frame layout says, and the code is read after it).
+    // Whether the function lets the address of a frame cell out: then a call,
+    // or a write through a pointer, may write any of them (which one, only
+    // the allocator's frame layout says, and the code is read after it).
     let exposed = {
         let mut scan = Decoder::with_ip(bits, code, 0, DecoderOptions::NONE);
         let mut found = false;
@@ -350,7 +364,8 @@ pub fn tracked(
         found
     };
     let mut seen: BTreeMap<usize, (Instruction, State)> = BTreeMap::new();
-    // What is said before the first instruction (the arguments, in the registers they arrive in) holds from the entry.
+    // What is said before the first instruction (the arguments, in the
+    // registers they arrive in) holds from the entry.
     let mut first = State { holds: BTreeMap::new(), has: BTreeMap::new() };
     for &(tag, place) in defs.get(&0).into_iter().flatten() {
         first.set(place, tag, regs);
@@ -366,7 +381,8 @@ pub fn tracked(
         }
         let Some(one) = seen.get(&at).map(|(one, _)| *one).or_else(|| decode(at)) else { continue };
         seen.insert(at, (one, state.clone()));
-        // The variables take their values before the instruction; they are what a debugger at it reads.
+        // The variables take their values before the instruction; they are what
+        // a debugger at it reads.
         for &note in before.get(&at).into_iter().flatten() {
             noted(&mut state, &notes[note as usize]);
         }
@@ -397,7 +413,8 @@ pub fn tracked(
             }
         }
     }
-    // The variable's place before each instruction, with the notes of that point taken.
+    // The variable's place before each instruction, with the notes of that
+    // point taken.
     let variables: BTreeSet<(u32, Option<(u32, u32)>)> = notes.iter().map(|note| (note.variable, note.piece)).collect();
     let mut out: BTreeMap<(u32, Option<(u32, u32)>), Vec<(usize, usize, Vec<Where>)>> =
         variables.iter().map(|&key| (key, Vec::new())).collect();

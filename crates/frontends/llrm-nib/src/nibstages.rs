@@ -74,7 +74,8 @@ mod tests {
 
     #[test]
     fn test_nbody_stage_dumps_cover_every_implemented_boundary() {
-        // nbody used to expose HIR and MIR only through separate ad-hoc commands.
+        // nbody used to expose HIR and MIR only through separate ad-hoc
+        // commands.
         let directory = tempfile::tempdir().expect("a directory");
         let nbody = fixture("nbody.nib");
         let output =

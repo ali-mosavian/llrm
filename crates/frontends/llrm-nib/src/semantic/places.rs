@@ -199,8 +199,8 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    /// The aggregate type whose members `view` reaches: the struct it views, or, in a fixed
-    /// array's view, the array's element struct.
+    /// The aggregate type whose members `view` reaches: the struct it views,
+    /// or, in a fixed array's view, the array's element struct.
     fn owner_of(
         &self,
         view: &StructView,
@@ -212,9 +212,10 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    /// `projected_place` of the member of the viewed aggregate at `member_offset`: the access
-    /// says which member it is, so a fact stated once of the member reaches it. For a field,
-    /// a tag or a payload, not for a piece of a copy.
+    /// `projected_place` of the member of the viewed aggregate at
+    /// `member_offset`: the access says which member it is, so a fact
+    /// stated once of the member reaches it. For a field, a tag or a
+    /// payload, not for a piece of a copy.
     pub(super) fn field_place(
         &self,
         view: &StructView,
@@ -238,7 +239,8 @@ impl<'a> FunctionCompiler<'a> {
         if let Some(call) = self.method_as_call(expression) {
             return self.struct_expression_type(&call, span);
         }
-        // `v.len` of a view a field keeps is a property, not a field of its descriptor.
+        // `v.len` of a view a field keeps is a property, not a field of its
+        // descriptor.
         if self.sequence_property(expression).is_some() {
             return Ok(None);
         }
@@ -328,7 +330,8 @@ impl<'a> FunctionCompiler<'a> {
                 let field = self.types.bit_field(packed, field, span)?;
                 Ok(match self.assignment_target(&outer, span)? {
                     AssignmentPlace::Scalar(place, packed) => AssignmentPlace::Bits { place, packed, field },
-                    // A field of a nested bits struct is a narrower range of the outer one.
+                    // A field of a nested bits struct is a narrower range of
+                    // the outer one.
                     AssignmentPlace::Bits { place, packed, field: parent } => AssignmentPlace::Bits {
                         place,
                         packed,
@@ -588,7 +591,8 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    /// An aggregate that lives until the statement ends, then drops what it owns.
+    /// An aggregate that lives until the statement ends, then drops what it
+    /// owns.
     pub(super) fn statement_temporary(
         &mut self,
         view: StructView,

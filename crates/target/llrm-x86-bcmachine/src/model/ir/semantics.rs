@@ -1,4 +1,5 @@
-//! Port of `qbopt/model/ir.py`: `instruction_effects`, `instruction_semantics` and their helpers.
+//! Port of `qbopt/model/ir.py`: `instruction_effects`, `instruction_semantics`
+//! and their helpers.
 //!
 //! The module docstring and every table's rationale are Python's.
 
@@ -222,7 +223,8 @@ pub fn _move(
     Some(shaped(op, name, vec![dest], vec![source]))
 }
 
-/// `xchg`: both operands read AND written, each receiving the other's old value.
+/// `xchg`: both operands read AND written, each receiving the other's old
+/// value.
 pub fn _exchange(
     insn: &Insn,
     resolve: &Resolver,

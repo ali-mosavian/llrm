@@ -47,7 +47,8 @@ impl<'a> FunctionCompiler<'a> {
                 if expected.is_some_and(|one| one != TypeName::String) {
                     return Err(type_mismatch(*span, expected.expect("checked"), TypeName::String));
                 }
-                // The formatters write into a new string instead of the console.
+                // The formatters write into a new string instead of the
+                // console.
                 let parts = self.settled_parts(parts, false)?;
                 self.emit_builtin(rt::PRINT_BEGIN, Vec::new());
                 self.print_parts(&parts, *span)?;
@@ -172,7 +173,8 @@ impl<'a> FunctionCompiler<'a> {
             }
             Expr::Member { base, field, span } => {
                 let (place, type_name, _, _) = self.member_place(base, field, *span)?;
-                // A reference read where no reference is expected reads what it refers to.
+                // A reference read where no reference is expected reads what it
+                // refers to.
                 if let (Some(ElementType::Scalar(target)), false) =
                     (self.types.referent(type_name), expected == Some(type_name))
                 {
@@ -214,7 +216,8 @@ impl<'a> FunctionCompiler<'a> {
                         return self.integer(-*value, expected, *span);
                     }
                 }
-                // Only a literal takes its type from context; anything else has its own.
+                // Only a literal takes its type from context; anything else has
+                // its own.
                 let wanted = match op {
                     UnaryOp::Not => Some(TypeName::Bool),
                     _ if is_literal(operand) => expected,

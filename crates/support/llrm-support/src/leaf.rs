@@ -5,8 +5,8 @@ pub fn pad(left: usize) -> u8 {
     0xF0 | left as u8
 }
 
-/// A number the way a leaf holds one: itself under 0x8000, else a tagged integer of the smallest
-/// width that holds it.
+/// A number the way a leaf holds one: itself under 0x8000, else a tagged
+/// integer of the smallest width that holds it.
 pub fn numeric(
     out: &mut Vec<u8>,
     value: i64,
@@ -49,8 +49,8 @@ pub fn numeric(
 mod tests {
     use super::*;
 
-    /// 0x8000 and over, and every negative number, are tagged: reading `0x8000` as a number below it
-    /// put a struct's size 32768 bytes short.
+    /// 0x8000 and over, and every negative number, are tagged: reading `0x8000`
+    /// as a number below it put a struct's size 32768 bytes short.
     #[test]
     fn a_number_is_tagged_from_0x8000_and_by_the_smallest_width() {
         let of = |value| {

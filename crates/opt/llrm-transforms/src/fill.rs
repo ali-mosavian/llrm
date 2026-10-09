@@ -6,17 +6,23 @@
 //! every trip stored; its counters leave with their exit values.
 //!
 //! What changed with the IR:
-//! - The fill is `llvm.memset`, of bytes and a byte count: a wider store fills only where each of its bytes is one
-//!   number. A word fill of any other value, `rep stosw`, is isel's shape; the rich MIR has none.
-//! - Where each trip stores is induction's `derived` address, a GEP off an invariant pointer; its bytes per trip must
-//!   be the element's. The old `_offset` walked adds of a register base, and `_stepping` compared the counter's step
-//!   itself.
-//! - The fill's address is the store's own pointer, which the one trip left computes from the counters' starts. The old
-//!   one rebuilt it from the cell's base, displacement, segment and storage class.
-//! - Its count in bytes must not wrap the index: a byte's trips never do, and wider cells need `inbounds` GEPs or the
-//!   proof's `maximum`. The counter must be the index's width.
-//! - The memset is declared where the module has none, through the pass manager's `Declared`.
-//! - `pure` is `memory::only_value` less loads and allocas, and less divisions, which trap.
+//! - The fill is `llvm.memset`, of bytes and a byte count: a wider store fills
+//!   only where each of its bytes is one number. A word fill of any other
+//!   value, `rep stosw`, is isel's shape; the rich MIR has none.
+//! - Where each trip stores is induction's `derived` address, a GEP off an
+//!   invariant pointer; its bytes per trip must be the element's. The old
+//!   `_offset` walked adds of a register base, and `_stepping` compared the
+//!   counter's step itself.
+//! - The fill's address is the store's own pointer, which the one trip left
+//!   computes from the counters' starts. The old one rebuilt it from the cell's
+//!   base, displacement, segment and storage class.
+//! - Its count in bytes must not wrap the index: a byte's trips never do, and
+//!   wider cells need `inbounds` GEPs or the proof's `maximum`. The counter
+//!   must be the index's width.
+//! - The memset is declared where the module has none, through the pass
+//!   manager's `Declared`.
+//! - `pure` is `memory::only_value` less loads and allocas, and less divisions,
+//!   which trap.
 //!
 //! llrm-mir has no idiom pass.
 //!
@@ -306,8 +312,8 @@ pub fn filled(
     )
 }
 
-/// `filled`, what is known of the body without memory given as `standing` says: derived once for each state of the
-/// body, not once for each loop.
+/// `filled`, what is known of the body without memory given as `standing` says:
+/// derived once for each state of the body, not once for each loop.
 #[allow(clippy::too_many_arguments)]
 pub fn filled_with(
     context: &mut Context,
@@ -408,12 +414,14 @@ fn _fill(
     if loop_.latches.len() != 1 || successors.len() != 2 {
         return None;
     }
-    // The body is one straight line back to the header, in whatever order its blocks lie.
+    // The body is one straight line back to the header, in whatever order its
+    // blocks lie.
     let chain = _chain(function, header, loop_)?;
     let latch = *chain.last().expect("a chain has blocks");
     let exit = *successors.iter().find(|to| !loop_.body.contains(&cfg::id(**to)))?;
 
-    // How many trips is `induction`'s to prove, whatever the counter's step or test.
+    // How many trips is `induction`'s to prove, whatever the counter's step or
+    // test.
     let tested = operations(function, header);
     let plain = |inst: InstId| memory::speculatable(unit.context, callees, function, inst);
     let proof = induction::counted(unit, loop_, None, true)
@@ -456,7 +464,8 @@ fn _fill(
     let walk = induction::recurrences(unit, loop_, &counters);
     let formula = walk.values.get(&address).filter(|one| one.pointer.is_some())?;
     let width = formula.width();
-    // A huge pointer carries into its selector: `rep stos` through es:di wraps at 64K.
+    // A huge pointer carries into its selector: `rep stos` through es:di wraps
+    // at 64K.
     if unit.layout.carries(unit.space(pointer)?) {
         return None;
     }
@@ -486,7 +495,8 @@ fn _fill(
         }
         copy.how = _overlap(unit, copy.load, effect, from, to, &proof, &bytes, descending)?;
     }
-    // A pattern is `rep stosw` or `stosd`: priced, as a short loop beats its setup.
+    // A pattern is `rep stosw` or `stosd`: priced, as a short loop beats its
+    // setup.
     let moved = match &stored {
         Stored::Copy(copy) => Some((bytes.to_i64()?, copy.descending && copy.how == How::Overlapping)),
         Stored::Fill(_) => None,
@@ -501,7 +511,8 @@ fn _fill(
         return None;
     }
 
-    // Nothing after the loop may read what it computed, but a counter the exit's phis take from the header.
+    // Nothing after the loop may read what it computed, but a counter the
+    // exit's phis take from the header.
     let mut left = Vec::new();
     for &at in &loop_.body {
         for &inst in function.block(cfg::block(at)).instructions() {
@@ -547,8 +558,8 @@ fn _pays(
     let each: i64 = std::iter::once(&header)
         .chain(chain)
         .flat_map(|&block| operations(function, block))
-        // In bytes the loop's counter work is the step and its branch: the phi is a register, the address an operand,
-        // the test the step's flags.
+        // In bytes the loop's counter work is the step and its branch: the phi
+        // is a register, the address an operand, the test the step's flags.
         .filter(|&inst| {
             !size
                 || !matches!(
@@ -575,8 +586,8 @@ fn _cheaper(
     moved: Option<(i64, bool)>,
 ) -> bool {
     let trips = if size { 1 } else { known.unwrap_or_else(|| most.unwrap_or(i64::MAX).min(profit::UNKNOWN_TRIPS)) };
-    // Isel expands a few cells, whatever the target is tuned for, to stores, and a few bytes of a copy to loads and
-    // stores.
+    // Isel expands a few cells, whatever the target is tuned for, to stores,
+    // and a few bytes of a copy to loads and stores.
     let Some((bytes, backward)) = moved else {
         let string = costs.fill + trips * costs.fill_cell;
         let fill = match known {
@@ -661,7 +672,8 @@ fn _filled(
     let mut seeds = Seeds { context, function, at: found.effect, width: counter };
     let trips =
         induction::trips(&found.proof, &mut |kind, args| seeds.computed(kind, args)).expect("a pre-tested proof");
-    // The bytes are counted in the pointer's index: a narrower counter's trips, never wrapped, widen.
+    // The bytes are counted in the pointer's index: a narrower counter's trips,
+    // never wrapped, widen.
     let width = found.memset.1;
     let counted = trips.clone();
     let trips = seeds.widened(&trips, width);
@@ -709,7 +721,8 @@ fn _filled(
         Stored::Copy(copy) => {
             let (callee, function_type) =
                 _copy(seeds.context, declared, copy.how, found.memset.0, copy.space, found.memset.1);
-            // A loop that runs down starts at its last cell: the copy starts at its first.
+            // A loop that runs down starts at its last cell: the copy starts at
+            // its first.
             let (to, from) = if copy.descending {
                 let last = seeds.computed(BinaryOp::Sub, vec![trips.clone(), AffineOperand::constant(1, width)]);
                 let back =
@@ -790,7 +803,8 @@ fn _filled(
         function.set_operands(phi, Vec::new());
         function.erase(phi).expect("its uses were replaced");
     }
-    // A proven positive count means the header's test passes on entry: it guards nothing.
+    // A proven positive count means the header's test passes on entry: it
+    // guards nothing.
     if found.proof.count.as_ref().is_some_and(|count| *count != BigInt::from(0)) {
         let test = function.terminator(found.header).expect("a header branch");
         function.set_operands(test, vec![Operand::Block(found.first)]);
@@ -801,7 +815,8 @@ fn _filled(
     }
 }
 
-/// The loop's blocks after its header, when each has one way in and one out and the last goes back.
+/// The loop's blocks after its header, when each has one way in and one out and
+/// the last goes back.
 fn _chain(
     function: &Function,
     header: BlockId,
@@ -848,12 +863,14 @@ fn _stored(
     if let Some(byte) = _repeated(unit, value, width) {
         return Some((pointer, Byte::Number(byte), bytes));
     }
-    // LLVM's memset_pattern16: the cell is a word or dword; the stored value need not be a constant.
+    // LLVM's memset_pattern16: the cell is a word or dword; the stored value
+    // need not be a constant.
     matches!(width, 16 | 32).then_some((pointer, Byte::Pattern(value, width / 8), bytes))
 }
 
 /// The store and load of `one` and `other`, where the store writes the loaded
-/// cell and the load has no other user: its pointer, the copy, and the bytes of a cell.
+/// cell and the load has no other user: its pointer, the copy, and the bytes of
+/// a cell.
 fn _copied(
     unit: &Unit,
     one: InstId,

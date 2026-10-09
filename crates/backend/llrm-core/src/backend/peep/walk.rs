@@ -291,7 +291,8 @@ pub struct Facts<'a> {
     flags_out: OnceCell<HashMap<i64, Lanes>>,
     users: OnceCell<Counter>,
     zero: OnceCell<HashMap<usize, upperzero::Roots>>,
-    /// The mode the code runs in: how an instruction encodes, and what it touches.
+    /// The mode the code runs in: how an instruction encodes, and what it
+    /// touches.
     bits: u32,
 }
 
@@ -392,7 +393,8 @@ impl<'a> Cx<'a> {
         self.block.expect("a group reading liveness walks a block")
     }
 
-    /// The register and flag lanes dead after `one`, an instruction of the block as found.
+    /// The register and flag lanes dead after `one`, an instruction of the
+    /// block as found.
     pub fn dead_after(
         &self,
         one: &Arc<Insn>,
@@ -539,7 +541,8 @@ fn windows(
                         }
                         Out::Retire(one) => {
                             // A rule matches a held value's nearest definition;
-                            // dropping it is the whole value only when it is the only one.
+                            // dropping it is the whole value only when it is
+                            // the only one.
                             for value in &one.defines {
                                 let definers = insns.iter().filter(|other| other.defines.contains(value)).count();
                                 assert_eq!(
@@ -623,10 +626,13 @@ pub fn gap(
         let work: Vec<usize> = (0..original.len()).filter(|at| !skip.skips(&original[*at])).collect();
         let mut at = 0;
         while at < work.len() {
-            // A slot an earlier match rewrote or consumed starts no match: the original it held is the instruction that
-            // match took away, and writing it back wrote a read of a value the match had made unread (`mov
-            // al,[m]; movsx ax,al; movsx eax,ax`: the load and the first movsx fused, then the two movsx
-            // matched on the original first and read the load's value that no longer had a definition).
+            // A slot an earlier match rewrote or consumed starts no match: the
+            // original it held is the instruction that match took
+            // away, and writing it back wrote a read of a value the match had
+            // made unread (`mov al,[m]; movsx ax,al; movsx eax,ax`:
+            // the load and the first movsx fused, then the two movsx
+            // matched on the original first and read the load's value that no
+            // longer had a definition).
             if first_original && !Arc::ptr_eq(&original[work[at]], &insns[work[at]]) {
                 at += 1;
                 continue;

@@ -17,7 +17,8 @@ use regex::Regex;
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 const BASELINE: &str = "tests/target_facts.baseline";
-/// Shared code: everything but the target crates, the tests and the build products.
+/// Shared code: everything but the target crates, the tests and the build
+/// products.
 const SHARED: [&str; 8] =
     ["crates/backend", "crates/ir", "crates/opt", "crates/support", "crates/bc", "crates/frontends", "src", "tools"];
 
@@ -34,7 +35,8 @@ fn facts() -> Regex {
         let name = target.name();
         parts.push(regex::escape(name));
         parts.push(regex::escape(&name.replace('-', "_")));
-        // The type (`M16`), what is named after the mode (`m16_options`, `m16()`); not `-m16`, the flag.
+        // The type (`M16`), what is named after the mode (`m16_options`,
+        // `m16()`); not `-m16`, the flag.
         if let Some(variant) = name.rsplit('-').next() {
             let mut type_name = variant.to_owned();
             type_name[..1].make_ascii_uppercase();
@@ -66,11 +68,13 @@ fn facts() -> Regex {
     Regex::new(&format!("(?i)(?:{})", parts.join("|"))).expect("the facts pattern")
 }
 
-/// The one place that names the targets built in, which is its job (docs/targets.md, the first principle).
+/// The one place that names the targets built in, which is its job
+/// (docs/targets.md, the first principle).
 const REGISTRY: &str = "crates/backend/llrm-driver/src/lib.rs";
 
 fn is_test_file(path: &Path) -> bool {
-    // `path` is relative to the root: the root itself may sit under a `target/`.
+    // `path` is relative to the root: the root itself may sit under a
+    // `target/`.
     let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
     let text = path.to_string_lossy();
     name == "tests.rs"
@@ -85,7 +89,8 @@ fn is_test_file(path: &Path) -> bool {
         || text.contains("/.venv/")
 }
 
-/// The shared code git tracks: not a virtualenv, a build or an editor's leavings beside it.
+/// The shared code git tracks: not a virtualenv, a build or an editor's
+/// leavings beside it.
 fn files(
     root: &Path,
     directory: &str,
@@ -114,15 +119,17 @@ fn files(
     }
 }
 
-/// The lines of code of `path`: no comment lines, and nothing of an item `#[cfg(test)]` attributes.
+/// The lines of code of `path`: no comment lines, and nothing of an item
+/// `#[cfg(test)]` attributes.
 fn code(path: &Path) -> Vec<String> {
     let text = fs::read_to_string(path).unwrap_or_default();
     let comment = if path.extension().is_some_and(|ext| ext == "rs") { "//" } else { "#" };
     code_of(&text, comment)
 }
 
-/// `code`, of the text. A `#[cfg(test)]` takes the item after it (a module, a static, a function: to the end of its
-/// brackets or its `;`), not the rest of the file: a test static once hid a target's spelling further down.
+/// `code`, of the text. A `#[cfg(test)]` takes the item after it (a module, a
+/// static, a function: to the end of its brackets or its `;`), not the rest of
+/// the file: a test static once hid a target's spelling further down.
 fn code_of(
     text: &str,
     comment: &str,
@@ -133,8 +140,8 @@ fn code_of(
     let mut started = false;
     for line in text.lines() {
         if skipping {
-            // Attributes and doc lines between the cfg and the item are part of it; so is everything to the end of the
-            // item.
+            // Attributes and doc lines between the cfg and the item are part of
+            // it; so is everything to the end of the item.
             let code = line.split("//").next().unwrap_or("");
             for c in code.chars() {
                 match c {
@@ -181,8 +188,9 @@ fn counts(root: &Path) -> BTreeMap<String, usize> {
     found
 }
 
-/// The files the baseline text lists more than once: what a union merge of two branches that lowered the same file's
-/// count leaves (`.gitattributes` merges this file by union, so a merge never stops on it).
+/// The files the baseline text lists more than once: what a union merge of two
+/// branches that lowered the same file's count leaves (`.gitattributes` merges
+/// this file by union, so a merge never stops on it).
 fn listed_twice(text: &str) -> Vec<String> {
     let mut seen = std::collections::BTreeSet::new();
     text.lines()
@@ -245,7 +253,8 @@ fn shared_code_holds_no_copy_of_a_target_fact() {
     assert!(wrong.is_empty(), "read the target's description instead of copying it:\n{}", wrong.join("\n"));
 }
 
-/// A tree of one shared file holding `source`, under the build's scratch directory.
+/// A tree of one shared file holding `source`, under the build's scratch
+/// directory.
 fn tree(
     name: &str,
     source: &str,
@@ -322,8 +331,9 @@ fn the_search_is_built_from_the_descriptions() {
     }
 }
 
-/// A virtualenv or a build beside the checkout held what the guard counts, so a clean checkout and a
-/// working tree disagreed: only what git tracks is counted.
+/// A virtualenv or a build beside the checkout held what the guard counts, so a
+/// clean checkout and a working tree disagreed: only what git tracks is
+/// counted.
 #[test]
 fn an_untracked_copy_is_not_counted() {
     let root = tree("untracked", "fn f() {}\n");
@@ -332,16 +342,18 @@ fn an_untracked_copy_is_not_counted() {
     assert!(problems(&root, &BTreeMap::new()).is_empty());
 }
 
-/// A merge kept both sides' lines for one file and the guard took the later: a count nobody blessed. It is refused.
+/// A merge kept both sides' lines for one file and the guard took the later: a
+/// count nobody blessed. It is refused.
 #[test]
 fn a_file_listed_twice_is_found() {
     assert_eq!(listed_twice("# header\n3 a.rs\n2 b.rs\n1 a.rs\n"), ["a.rs"]);
     assert!(listed_twice("3 a.rs\n2 b.rs\n").is_empty());
 }
 
-/// `#[cfg(test)]` once ended the file's code: a test static in #1091 hid copyprop's ESP spelling below it, and the
-/// ceiling was blessed down by mistake. It takes the item it attributes, a module or a static or a function, and no
-/// more.
+/// `#[cfg(test)]` once ended the file's code: a test static in #1091 hid
+/// copyprop's ESP spelling below it, and the ceiling was blessed down by
+/// mistake. It takes the item it attributes, a module or a static or a
+/// function, and no more.
 #[test]
 fn test_cfg_test_hides_its_item_and_not_the_rest_of_the_file() {
     let text = r#"fn a() { "shared"; }

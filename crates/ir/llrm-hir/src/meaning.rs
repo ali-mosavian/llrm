@@ -52,7 +52,8 @@ pub enum Expr {
     Data(usize),
     /// The byte at an address.
     Byte(Box<Expr>),
-    /// The address of a byte in the caller's frame holding the low byte of the value.
+    /// The address of a byte in the caller's frame holding the low byte of the
+    /// value.
     Slot(Box<Expr>),
     Binary(Arithmetic, Box<Expr>, Box<Expr>),
 }

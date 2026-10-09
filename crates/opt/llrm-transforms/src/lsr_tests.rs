@@ -1994,7 +1994,8 @@ d:
 
 /// A pointer steps with an add, not an address: pricing its step as `lea`
 /// (#183) made a dear `lea` swap every pointer walk for integer offsets,
-/// one more register in the loop (x_tripdata_usescale7 in C: the bound spilled).
+/// one more register in the loop (x_tripdata_usescale7 in C: the bound
+/// spilled).
 #[test]
 fn test_a_pointer_steps_at_the_price_of_an_add_whatever_an_address_costs() {
     let run = |address| {
@@ -2075,7 +2076,8 @@ b20:
     assert_eq!(wide(&after), wide(text), "{after}");
 }
 
-/// A counted loop that reads `i + k` on the side of a branch only: a value the counter makes in one add.
+/// A counted loop that reads `i + k` on the side of a branch only: a value the
+/// counter makes in one add.
 fn offset_read() -> String {
     "define i16 @f(i16 %n, i16 %k, i16 %m) {
 b0:
@@ -2113,10 +2115,11 @@ b6:
     .to_owned()
 }
 
-/// A value made from the counter in one arm, `i + k`, costs an add where an add makes it in place
-/// and `mov; add` on a two-address target whose forms have no `lea` of any register (`[bx+si]`
-/// only): the price omitted the copy (#705), so the arm's use and its half of a trip never paid for
-/// a counter of its own. A target whose forms take any register makes it in one `lea`.
+/// A value made from the counter in one arm, `i + k`, costs an add where an add
+/// makes it in place and `mov; add` on a two-address target whose forms have no
+/// `lea` of any register (`[bx+si]` only): the price omitted the copy (#705),
+/// so the arm's use and its half of a trip never paid for a counter of its own.
+/// A target whose forms take any register makes it in one `lea`.
 #[test]
 fn test_a_value_made_from_the_counter_is_priced_with_its_copy() {
     let ivs = |two_address: bool, flat: bool| {
@@ -2133,9 +2136,10 @@ fn test_a_value_made_from_the_counter_is_priced_with_its_copy() {
     assert_eq!(ivs(true, true), 1, "`lea` makes it in one");
 }
 
-/// `c - r` was priced as a negation, a copy and an add (3) with a product temp beside the value it made;
-/// the code is `mov x,c; sub x,r` (2, the copy the use's own). Queens' Nib -Os loop read 34% in the model
-/// where the code was a tie (#721). A negation alone, and a scale, are as they were.
+/// `c - r` was priced as a negation, a copy and an add (3) with a product temp
+/// beside the value it made; the code is `mov x,c; sub x,r` (2, the copy the
+/// use's own). Queens' Nib -Os loop read 34% in the model where the code was a
+/// tie (#721). A negation alone, and a scale, are as they were.
 #[test]
 fn test_a_difference_is_one_sub_from_a_copy_of_the_minuend() {
     use num_bigint::BigInt;
@@ -2171,8 +2175,9 @@ fn test_a_difference_is_one_sub_from_a_copy_of_the_minuend() {
     assert_eq!(super::_scaled(&target, &BigInt::from(1), true), (0, false));
 }
 
-/// `d += n; while (n--) *--d = 0;`, every backward clear: the counter's step is made in the header before the test, and
-/// lsr's rotation behind its guard made it read its own result. `after lsr: sub in %b4 uses a value whose definition
+/// `d += n; while (n--) *--d = 0;`, every backward clear: the counter's step is
+/// made in the header before the test, and lsr's rotation behind its guard made
+/// it read its own result. `after lsr: sub in %b4 uses a value whose definition
 /// does not dominate it` at -O1 and -O2 (gcc.c-torture, #811).
 #[test]
 fn test_a_counter_stepped_in_the_header_is_not_rotated_to_read_itself() {
@@ -2201,7 +2206,8 @@ b3:
     reduced(text);
 }
 
-/// A loop with an early way out that returns: `n` trips, or fewer where the sum meets `k`.
+/// A loop with an early way out that returns: `n` trips, or fewer where the sum
+/// meets `k`.
 fn leaving(
     count: &str,
     start: i64,
@@ -2240,8 +2246,9 @@ b5:
     )
 }
 
-/// Queens' inner loop went the whole way round with `inc; add; cmp; jle` where gcc's stops at `inc; je`: a loop with
-/// another way out had no counted exit, so its test was never rewritten. A symbolic count with a way out counts to
+/// Queens' inner loop went the whole way round with `inc; add; cmp; jle` where
+/// gcc's stops at `inc; je`: a loop with another way out had no counted exit,
+/// so its test was never rewritten. A symbolic count with a way out counts to
 /// zero.
 #[test]
 fn test_a_loop_with_another_way_out_counts_to_zero_at_its_own_exit() {
@@ -2249,8 +2256,9 @@ fn test_a_loop_with_another_way_out_counts_to_zero_at_its_own_exit() {
     assert!(printed.lines().any(|line| line.contains("icmp ne i16") && line.ends_with(", 0")), "{printed}");
 }
 
-/// The same with a count of 32 that the other way out leaves early: the head test is not fused with the step by
-/// rotation, so a zero test saves nothing and the counter read at the way out costs an add there. mandel's
+/// The same with a count of 32 that the other way out leaves early: the head
+/// test is not fused with the step by rotation, so a zero test saves nothing
+/// and the counter read at the way out costs an add there. mandel's
 /// `cmp bx, 32` became `or bx, bx` and two fix-ups, 960 more instructions.
 #[test]
 fn test_a_constant_count_with_another_way_out_keeps_its_counter() {
@@ -2258,9 +2266,10 @@ fn test_a_constant_count_with_another_way_out_keeps_its_counter() {
     assert!(!printed.lines().any(|line| line.contains("icmp ne i16") && line.ends_with(", 0")), "{printed}");
 }
 
-/// The search priced a set of counters from nothing every time it met it: from each of its two starts, in each step's
-/// neighbours, and again to rank the two answers. A set is priced once (the dot product asked 423 times and priced 146
-/// sets).
+/// The search priced a set of counters from nothing every time it met it: from
+/// each of its two starts, in each step's neighbours, and again to rank the two
+/// answers. A set is priced once (the dot product asked 423 times and priced
+/// 146 sets).
 #[test]
 fn test_a_set_of_counters_is_priced_once_however_often_the_search_meets_it() {
     let text = program(&[("a", "i16", 2), ("b", "i16", 2)], "i32", DOT)
@@ -2291,8 +2300,9 @@ fn dot() -> String {
         .replace("%l2.back ]", "%l2 ]")
 }
 
-/// gcc leaves a loop of more groups of uses than `iv-max-considered-uses` as it is (it gives up before choosing). Past
-/// the bound lsr rewrote it all the same: 200 uses took 40 G instructions to choose counters for.
+/// gcc leaves a loop of more groups of uses than `iv-max-considered-uses` as it
+/// is (it gives up before choosing). Past the bound lsr rewrote it all the
+/// same: 200 uses took 40 G instructions to choose counters for.
 #[test]
 fn test_a_loop_of_more_groups_than_the_bound_is_left_as_it_is() {
     let text = dot();
@@ -2304,8 +2314,9 @@ fn test_a_loop_of_more_groups_than_the_bound_is_left_as_it_is() {
     );
 }
 
-/// Past the candidate bound the search replaces a candidate once, only where no one added or removed lowers the cost,
-/// and never one serving more uses than `iv-always-prune-cand-set-bound`: it priced every swap of every step before.
+/// Past the candidate bound the search replaces a candidate once, only where no
+/// one added or removed lowers the cost, and never one serving more uses than
+/// `iv-always-prune-cand-set-bound`: it priced every swap of every step before.
 #[test]
 fn test_past_the_candidate_bound_the_search_prices_fewer_sets() {
     let text = dot();
@@ -2318,8 +2329,9 @@ fn test_past_the_candidate_bound_the_search_prices_fewer_sets() {
     assert!(within < whole, "{within} sets priced of {whole}");
 }
 
-/// Each state of the function lsr looked at had every loop's trip count worked out again for its frequencies, whichever
-/// loops the last change reached: the proofs are the manager's, renewed for the loops a change reached.
+/// Each state of the function lsr looked at had every loop's trip count worked
+/// out again for its frequencies, whichever loops the last change reached: the
+/// proofs are the manager's, renewed for the loops a change reached.
 #[test]
 fn test_the_trips_lsr_prices_with_are_proved_once_for_a_loop_no_change_reached() {
     let depth = 4;
@@ -2348,9 +2360,10 @@ fn test_the_trips_lsr_prices_with_are_proved_once_for_a_loop_no_change_reached()
     assert!(proved <= 2 * depth, "{proved} loop counts proved for {depth} loops");
 }
 
-/// `_live_anyway` solved the function's liveness for every loop it planned, when `Pressure`, which the same call holds,
-/// has it: a nest of d loops solved it d times more (16 loops: 1.6 of lsr's 5.8 points on the nest axis). It asks the
-/// one it holds.
+/// `_live_anyway` solved the function's liveness for every loop it planned,
+/// when `Pressure`, which the same call holds, has it: a nest of d loops solved
+/// it d times more (16 loops: 1.6 of lsr's 5.8 points on the nest axis). It
+/// asks the one it holds.
 #[test]
 fn test_a_loop_is_planned_with_the_liveness_the_pressure_holds() {
     let text = program(&[("a", "i16", 2), ("b", "i16", 2)], "i32", DOT)
@@ -2362,8 +2375,9 @@ fn test_a_loop_is_planned_with_the_liveness_the_pressure_holds() {
     assert!(solved <= 3, "{solved} solves of liveness for one loop");
 }
 
-/// `_alive` walked a loop's blocks for liveness once a use: a loop of 12 uses walked each block 12 times over (a fifth
-/// of lsr on d_faces' -O1). What is live before each instruction is the block's, so each block is walked once.
+/// `_alive` walked a loop's blocks for liveness once a use: a loop of 12 uses
+/// walked each block 12 times over (a fifth of lsr on d_faces' -O1). What is
+/// live before each instruction is the block's, so each block is walked once.
 #[test]
 fn test_a_loops_blocks_are_walked_for_liveness_once_not_once_a_use() {
     let uses = 12;

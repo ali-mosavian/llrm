@@ -167,7 +167,8 @@ impl PartialOrd for MemoryObject {
 
 #[cfg(test)]
 thread_local! {
-    /// Structural comparisons of objects, for the test that sets of slices make none.
+    /// Structural comparisons of objects, for the test that sets of slices make
+    /// none.
     pub static OBJECT_COMPARES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -182,12 +183,15 @@ impl Ord for MemoryObject {
     }
 }
 
-/// A `MemoryObject` as its module's interner numbered it: a small id compared, hashed and ordered as an integer, with
-/// the fields the passes ask of every slice beside it, so a slice is `Copy` and asking costs nothing. The rest (the
-/// identity, the generation) is `ObjectInterner::object`. Interned by every field, the facts too, so two spellings that
-/// differ in a fact are two objects here and a set keeps both (none was seen to differ in 1,700 programs and QCport).
-/// The order is the order of first interning in the module, which the same module always makes the same way; nothing
-/// may depend on it being `MemoryObject`'s.
+/// A `MemoryObject` as its module's interner numbered it: a small id compared,
+/// hashed and ordered as an integer, with the fields the passes ask of every
+/// slice beside it, so a slice is `Copy` and asking costs nothing. The rest
+/// (the identity, the generation) is `ObjectInterner::object`. Interned by
+/// every field, the facts too, so two spellings that differ in a fact are two
+/// objects here and a set keeps both (none was seen to differ in 1,700 programs
+/// and QCport). The order is the order of first interning in the module, which
+/// the same module always makes the same way; nothing may depend on it being
+/// `MemoryObject`'s.
 #[derive(Clone, Copy, Debug)]
 pub struct ObjectRef {
     id: u32,
@@ -196,8 +200,9 @@ pub struct ObjectRef {
     pub captured: bool,
     pub constant: bool,
     pub extent: Option<i64>,
-    /// The identity where it is a number, which is all the passes make: a name or a tuple (a test's, the linear
-    /// region's) is `Other`, and `ObjectInterner::object` has it whole.
+    /// The identity where it is a number, which is all the passes make: a name
+    /// or a tuple (a test's, the linear region's) is `Other`, and
+    /// `ObjectInterner::object` has it whole.
     pub key: Key,
 }
 
@@ -224,7 +229,8 @@ impl Key {
 }
 
 impl ObjectRef {
-    /// Every interner starts with these three, so they are the same in all modules and in the statics.
+    /// Every interner starts with these three, so they are the same in all
+    /// modules and in the statics.
     pub const UNKNOWN: Self = Self {
         id: 0,
         kind: MemoryKind::Unknown,
@@ -324,8 +330,9 @@ impl std::hash::Hash for Exact {
     }
 }
 
-/// A module's memory objects, numbered densely in the order they are first asked for. It lives in the module's
-/// `Context` (`ObjectInterner::of`) and is dropped with it, as LLVMContext's uniqued constants are.
+/// A module's memory objects, numbered densely in the order they are first
+/// asked for. It lives in the module's `Context` (`ObjectInterner::of`) and is
+/// dropped with it, as LLVMContext's uniqued constants are.
 pub struct ObjectInterner {
     held: std::cell::RefCell<(Vec<MemoryObject>, llrm_support::hash::HashMap<Exact, u32>)>,
     lookups: std::cell::Cell<u64>,
@@ -382,7 +389,8 @@ impl ObjectInterner {
         }
     }
 
-    /// How many times `intern` was asked: a cost counter, for tests that a hot loop does not ask per step.
+    /// How many times `intern` was asked: a cost counter, for tests that a hot
+    /// loop does not ask per step.
     pub fn lookups(&self) -> u64 {
         self.lookups.get()
     }
@@ -625,7 +633,8 @@ thread_local! {
     pub static OBJECT_ALIASES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// What `objects_may_alias` asks of an object: a `MemoryObject` or its interned `ObjectRef`.
+/// What `objects_may_alias` asks of an object: a `MemoryObject` or its interned
+/// `ObjectRef`.
 pub trait Aliasable: PartialEq {
     fn class(&self) -> AliasClass;
 }
@@ -730,14 +739,17 @@ pub struct Unit<'a> {
     pub annotated: Option<&'a Result<IndexMap<InstId, MemRef>, String>>,
     /// What each block assumes; without it each ask finds it.
     pub assumptions: Option<&'a Assumptions>,
-    /// Each loop's counted proofs under `registers`, the manager's `Counted`; without them each ask proves them.
+    /// Each loop's counted proofs under `registers`, the manager's `Counted`;
+    /// without them each ask proves them.
     pub counted: Option<&'a crate::induction::Counted>,
-    /// What the unavoidable branch edges bound at each block, under `registers`: the manager's `DominatedEdges`.
+    /// What the unavoidable branch edges bound at each block, under
+    /// `registers`: the manager's `DominatedEdges`.
     pub edges: Option<&'a crate::ranges::EdgeStates>,
-    /// What each counted loop bounds at each block, under `registers`: the manager's `Bounded`.
+    /// What each counted loop bounds at each block, under `registers`: the
+    /// manager's `Bounded`.
     pub bounds: Option<&'a crate::ranges::Bounds>,
-    /// The allocas whose address is exposed, the manager's `ExposedFrames`; without it each ask scans
-    /// the alloca's uses.
+    /// The allocas whose address is exposed, the manager's `ExposedFrames`;
+    /// without it each ask scans the alloca's uses.
     pub exposed: Option<&'a BTreeSet<ValueId>>,
 }
 
@@ -888,9 +900,10 @@ impl<'a> Unit<'a> {
     /// What consts knows without memory: the manager's where the unit
     /// carries it.
     ///
-    /// A unit that carries none was made without the manager, and deriving them here would be a second derivation of
-    /// a fact the manager holds (or a stale copy of it): asking is a bug. A caller over a body the manager has not
-    /// seen states what it computes with `with_registers`.
+    /// A unit that carries none was made without the manager, and deriving them
+    /// here would be a second derivation of a fact the manager holds (or a
+    /// stale copy of it): asking is a bug. A caller over a body the manager has
+    /// not seen states what it computes with `with_registers`.
     pub fn registers(&self) -> Cow<'a, IndexMap<ValueId, Known>> {
         match self.registers {
             Some(registers) => {
@@ -977,7 +990,8 @@ impl<'a> Unit<'a> {
         }
     }
 
-    /// The address spaces by role: the program's target's, or one flat space where none is named.
+    /// The address spaces by role: the program's target's, or one flat space
+    /// where none is named.
     pub fn spaces(&self) -> llrm_mir::spaces::Spaces {
         self.program.map_or(self.spaces, |program| program.target.spaces())
     }
@@ -1006,7 +1020,8 @@ impl<'a> Unit<'a> {
     }
 }
 
-/// Whether `inst` marks an object's lifetime, which names it without handing out its address.
+/// Whether `inst` marks an object's lifetime, which names it without handing
+/// out its address.
 pub fn is_lifetime_marker(
     unit: &Unit,
     inst: InstId,
@@ -1020,12 +1035,14 @@ pub fn is_lifetime_marker(
 /// What is known of each value without memory (`consts::known`).
 pub type Knowns = llrm_support::hash::SparseIdMap<ValueId, Known>;
 
-/// What is known of a body without memory (`consts::known`), for a caller that changes the body as it goes: the
-/// manager's where the body is as the manager saw it, derived again, once for each state, once it is not. The one
+/// What is known of a body without memory (`consts::known`), for a caller that
+/// changes the body as it goes: the manager's where the body is as the manager
+/// saw it, derived again, once for each state, once it is not. The one
 /// place a unit's registers are derived outside the manager.
 pub struct Standing<'h> {
     held: Option<&'h Knowns>,
-    /// What the counted loops bound, held for the same body as `held`, where the caller has it.
+    /// What the counted loops bound, held for the same body as `held`, where
+    /// the caller has it.
     bounds: Option<&'h crate::ranges::Bounds>,
     derived: Option<Knowns>,
 }
@@ -1056,7 +1073,8 @@ impl<'h> Standing<'h> {
         self.derived = None;
     }
 
-    /// `of`, and the manager's bounds of the body where it is still as they were found of it.
+    /// `of`, and the manager's bounds of the body where it is still as they
+    /// were found of it.
     pub fn of_with_bounds(
         &mut self,
         unit: &Unit,
@@ -1065,7 +1083,8 @@ impl<'h> Standing<'h> {
         (self.of(unit), bounds)
     }
 
-    /// What is known of `unit`'s body as it stands, which it must be the one these were asked of.
+    /// What is known of `unit`'s body as it stands, which it must be the one
+    /// these were asked of.
     pub fn of(
         &mut self,
         unit: &Unit,
@@ -1077,8 +1096,8 @@ impl<'h> Standing<'h> {
     }
 }
 
-/// The allocas of `unit`'s function whose address is exposed, in one pass: what `object_of` reads of
-/// `Unit::exposed` instead of asking each alloca's uses.
+/// The allocas of `unit`'s function whose address is exposed, in one pass: what
+/// `object_of` reads of `Unit::exposed` instead of asking each alloca's uses.
 pub fn exposed_frames(unit: &Unit) -> BTreeSet<ValueId> {
     crate::frameescape::exposed_allocas(unit.function, |inst| is_lifetime_marker(unit, inst))
 }
@@ -1573,7 +1592,8 @@ pub fn typed(
 ) -> Option<std::rc::Rc<str>> {
     let (_, tag) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa")?;
     if let Some(tree) = unit.tbaa {
-        // A type's name read through the tree is the type node's first operand, which is the name below.
+        // A type's name read through the tree is the type node's first operand,
+        // which is the name below.
         return tree.name_of_tag(unit.metadata, *tag);
     }
     let MetadataOperand::Node(ty) = unit.metadata.get(tag.0 as usize)?.operands.first()? else { return None };
@@ -1660,9 +1680,10 @@ mod tests {
         MemoryObject::new(kind)
     }
 
-    /// Isel's unit named no program, so the spaces became one flat space: a QB program's
-    /// fixed-address pokes (`DEF SEG`) were no longer apart from every object and demo-qbdemo
-    /// grew 6 bytes. A unit asks the spaces it was given when no program names the target.
+    /// Isel's unit named no program, so the spaces became one flat space: a QB
+    /// program's fixed-address pokes (`DEF SEG`) were no longer apart from
+    /// every object and demo-qbdemo grew 6 bytes. A unit asks the spaces it
+    /// was given when no program names the target.
     #[test]
     fn a_unit_with_no_program_asks_the_spaces_it_was_given() {
         let module = parsed(&format!("{DOS}define void @f() {{\nb0:\n  ret void\n}}\n"));
@@ -1674,10 +1695,11 @@ mod tests {
         assert!(Unit::of(&module, &layout, f).with_spaces(dos).spaces().is_fixed(4));
     }
 
-    /// A set of slices compared the objects' identities (strings, tuples) tree against tree at every step of every
-    /// insert, and cloned them: `BTreeSet<Slice>` was 10% of host.c's compile, `MemoryObject::cmp` 8%, malloc 10%.
-    /// An object is a number once interned: building, probing and cloning sets of slices compares none
-    /// structurally.
+    /// A set of slices compared the objects' identities (strings, tuples) tree
+    /// against tree at every step of every insert, and cloned them:
+    /// `BTreeSet<Slice>` was 10% of host.c's compile, `MemoryObject::cmp` 8%,
+    /// malloc 10%. An object is a number once interned: building, probing
+    /// and cloning sets of slices compares none structurally.
     #[test]
     fn a_set_of_slices_compares_no_object_structurally() {
         let slices: Vec<Slice> = (0..200)
@@ -1700,8 +1722,8 @@ mod tests {
         assert_eq!(super::OBJECT_COMPARES.with(std::cell::Cell::get) - before, 0, "objects compared tree against tree");
     }
 
-    /// Two spellings of an object that differ in a fact are two objects here, and one spelling is one object however
-    /// often it is interned.
+    /// Two spellings of an object that differ in a fact are two objects here,
+    /// and one spelling is one object however often it is interned.
     #[test]
     fn an_object_is_interned_by_every_field_once() {
         let global = MemoryObject { identity: Some(Identity::Global(9)), ..object(MemoryKind::Global) };
@@ -1712,9 +1734,11 @@ mod tests {
         assert_ne!(one, private);
     }
 
-    /// A process-wide interner numbered objects by everything interned before them in the process: a test thread, a
-    /// compile before this one, the LSP server's last hour. A module's ids are the module's: the same objects asked
-    /// in the same order get the same ids whichever module was done first.
+    /// A process-wide interner numbered objects by everything interned before
+    /// them in the process: a test thread, a compile before this one, the
+    /// LSP server's last hour. A module's ids are the module's: the same
+    /// objects asked in the same order get the same ids whichever module
+    /// was done first.
     #[test]
     fn the_ids_of_a_module_do_not_depend_on_another_module_interned_before() {
         use llrm_mir::context::Context;
@@ -1730,8 +1754,9 @@ mod tests {
         assert_eq!(ids(&Context::new(), &[7]), [3], "dense from the objects every module starts with");
     }
 
-    /// The interner lives in the module's context and dies with it: a server compiling a file again and again held
-    /// every object of every compile before.
+    /// The interner lives in the module's context and dies with it: a server
+    /// compiling a file again and again held every object of every compile
+    /// before.
     #[test]
     fn the_interner_is_dropped_with_its_module() {
         use llrm_mir::context::Context;
@@ -1747,7 +1772,8 @@ mod tests {
     #[test]
     fn object_kind_rules_keep_stack_and_global_separate() {
         assert!(!super::objects_may_alias(&object(MemoryKind::Stack), &object(MemoryKind::Global)));
-        // Python since 8780f59b: the push area and the frame are distinct objects.
+        // Python since 8780f59b: the push area and the frame are distinct
+        // objects.
         assert!(!super::objects_may_alias(&object(MemoryKind::Stack), &object(MemoryKind::Frame)));
     }
 
