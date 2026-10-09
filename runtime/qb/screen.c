@@ -43,7 +43,7 @@ void screen_locate(const int *block)
     int value[LOCATE_ARGUMENTS];
 
     arguments(block, value, LOCATE_ARGUMENTS);
-    cn_locate(value[0], value[1]);
+    cn_locate(value[0], value[1], value[2]);
 }
 
 /* B$CSCN's block: SCREEN mode, colorswitch, active page, visible page.  Text

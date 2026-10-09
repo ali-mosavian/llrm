@@ -1,4 +1,4 @@
-/* STR$ and string deletion (QB rt/string.asm, rt/stringfp.asm). */
+/* STR$ of an integer and string deletion (QB rt/string.asm). */
 #include "fout.h"
 #include "nhstutil.h"
 
@@ -19,13 +19,6 @@ static SD *integer_text(long v)
     return temporary_of(text, fout_i4(v, text));
 }
 
-static SD *real_text(double v, int is_double)
-{
-    char text[FOUT_MAX];
-
-    return temporary_of(text, fout_real(v, is_double, text));
-}
-
 SD *B_STI2(int v)
 {
     return integer_text(v);
@@ -36,16 +29,6 @@ SD *B_STI4(long v)
     return integer_text(v);
 }
 
-SD *B_STR4(float v)
-{
-    return real_text(v, 0);
-}
-
-SD *B_STR8(double v)
-{
-    return real_text(v, 1);
-}
-
 /* B$STDL: deallocate a string, leaving its descriptor empty. */
 void B_STDL(SD *sd)
 {
@@ -54,6 +37,4 @@ void B_STDL(SD *sd)
 }
 #pragma aux B_STI2 "B$STI2"
 #pragma aux B_STI4 "B$STI4"
-#pragma aux B_STR4 "B$STR4"
-#pragma aux B_STR8 "B$STR8"
 #pragma aux B_STDL "B$STDL"

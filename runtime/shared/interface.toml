@@ -134,6 +134,13 @@ returns = "usize"
 
 [[op]]
 group = "screen"
+name = "screen_cursor_show"
+doc = "Shows the hardware cursor as it was when the program began, or hides it."
+args = [["visible", "u8"]]
+returns = "void"
+
+[[op]]
+group = "screen"
 name = "screen_move"
 doc = "Puts the hardware cursor at `row`, `column`."
 args = [["row", "u8"], ["column", "u8"]]

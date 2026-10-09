@@ -10,63 +10,65 @@
 unsigned b_errnum;
 unsigned b_inonerr;
 
-/* The text of each error (inc/messages.inc). */
-static const struct Message {
-    unsigned number;
-    const char *text;
-} messages[] = {
-    {BE_SYNTAX, "Syntax error"},
-    {BE_RETURN, "RETURN without GOSUB"},
-    {BE_NODATA, "Out of DATA"},
-    {BE_ILLFUN, "Illegal function call"},
-    {BE_OVERFLOW, "Overflow"},
-    {BE_MEMORY, "Out of memory"},
-    {BE_SUBSCRIP, "Subscript out of range"},
-    {BE_REDIM, "Duplicate definition"},
-    {BE_DIVIDE0, "Division by zero"},
-    {BE_TYPE, "Type mismatch"},
-    {BE_STRINGSP, "Out of string space"},
-    {BE_STRINGFO, "String formula too complex"},
-    {BE_NORESUME, "No RESUME"},
-    {BE_RESUME, "RESUME without error"},
-    {24, "Device timeout"},
-    {25, "Device fault"},
-    {27, "Out of paper"},
-    {50, "FIELD overflow"},
-    {51, "Internal error"},
-    {BE_FILENUM, "Bad file name or number"},
-    {BE_NOFILE, "File not found"},
-    {BE_FILEMODE, "Bad file mode"},
-    {BE_FILEOPEN, "File already open"},
-    {56, "FIELD statement active"},
-    {BE_DEVICEIO, "Device I/O error"},
-    {BE_EXISTS, "File already exists"},
-    {59, "Bad record length"},
-    {BE_DISKFULL, "Disk full"},
-    {BE_PASTEND, "Input past end of file"},
-    {BE_BADREC, "Bad record number"},
-    {BE_BADNAME, "Bad file name"},
-    {BE_TOOMANY, "Too many files"},
-    {68, "Device unavailable"},
-    {69, "Communication-buffer overflow"},
-    {BE_HANDSOFF, "Permission denied"},
-    {71, "Disk not ready"},
-    {72, "Disk-media error"},
-    {73, "Advanced feature unavailable"},
-    {74, "Rename across disks"},
-    {75, "Path/File access error"},
-    {BE_NOTFOUND, "Path not found"},
-    {FE_CORRUPT, "String space corrupt"},
-    {FE_NOSTACK, "Out of stack space"}
-};
+/* The text of each error (inc/messages.inc), packed: a code byte (the number,
+   or 200 + the low byte of a fatal one), the text and a NUL. */
+static const char messages[] =
+    "\x02" "Syntax error\0"
+    "\x03" "RETURN without GOSUB\0"
+    "\x04" "Out of DATA\0"
+    "\x05" "Illegal function call\0"
+    "\x06" "Overflow\0"
+    "\x07" "Out of memory\0"
+    "\x09" "Subscript out of range\0"
+    "\x0a" "Duplicate definition\0"
+    "\x0b" "Division by zero\0"
+    "\x0d" "Type mismatch\0"
+    "\x0e" "Out of string space\0"
+    "\x10" "String formula too complex\0"
+    "\x13" "No RESUME\0"
+    "\x14" "RESUME without error\0"
+    "\x18" "Device timeout\0"
+    "\x19" "Device fault\0"
+    "\x1b" "Out of paper\0"
+    "\x32" "FIELD overflow\0"
+    "\x33" "Internal error\0"
+    "\x34" "Bad file name or number\0"
+    "\x35" "File not found\0"
+    "\x36" "Bad file mode\0"
+    "\x37" "File already open\0"
+    "\x38" "FIELD statement active\0"
+    "\x39" "Device I/O error\0"
+    "\x3a" "File already exists\0"
+    "\x3b" "Bad record length\0"
+    "\x3d" "Disk full\0"
+    "\x3e" "Input past end of file\0"
+    "\x3f" "Bad record number\0"
+    "\x40" "Bad file name\0"
+    "\x43" "Too many files\0"
+    "\x44" "Device unavailable\0"
+    "\x45" "Communication-buffer overflow\0"
+    "\x46" "Permission denied\0"
+    "\x47" "Disk not ready\0"
+    "\x48" "Disk-media error\0"
+    "\x49" "Advanced feature unavailable\0"
+    "\x4a" "Rename across disks\0"
+    "\x4b" "Path/File access error\0"
+    "\x4c" "Path not found\0"
+    "\xc8" "String space corrupt\0"
+    "\xcf" "Out of stack space\0";
 
 const char *qb_error_text(unsigned n)
 {
-    unsigned at;
+    const char *at = messages;
+    byte want = n < 200 ? (byte)n : (byte)(200 + (n & 0xFF));
 
-    for (at = 0; at < sizeof messages / sizeof messages[0]; at++)
-        if (messages[at].number == n)
-            return messages[at].text;
+    while (at < messages + sizeof messages - 1) {
+        if ((byte)*at == want)
+            return at + 1;
+        while (*++at)
+            ;
+        at++;
+    }
     return "Unprintable error";
 }
 
@@ -104,6 +106,7 @@ static void fatal(unsigned n)
     write_text(":0000");
     cn_crlf();
     cn_sync();
+    cn_waiting(1);
     llrm_os_exit(255);
 }
 

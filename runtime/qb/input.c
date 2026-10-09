@@ -40,6 +40,7 @@ static void read_line(void)
     unsigned used = 0;
     byte key;
 
+    cn_waiting(1);
     for (;;) {
         cn_sync();
         key = llrm_os_console_read_key();
@@ -60,6 +61,7 @@ static void read_line(void)
         }
     }
     line[used] = '\0';
+    cn_waiting(0);
 }
 
 /* Whether the line holds exactly the values the types call for. */

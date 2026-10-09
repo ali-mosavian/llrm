@@ -12,6 +12,7 @@ static void finish(void)
         qb_dispatch(V_END);
     qb_dispatch(V_TERM);
     cn_sync();
+    cn_waiting(1);
     llrm_os_exit(0);
 }
 

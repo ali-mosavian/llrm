@@ -20,14 +20,18 @@ void cn_putc(char c);
 void cn_crlf(void);
 /* Puts the screen's cursor where the console has it. */
 void cn_sync(void);
+/* The screen's cursor is shown while a program waits for typing and hidden
+   while it runs, unless LOCATE asked for it; this is the wait. */
+void cn_waiting(int waiting);
 /* Erases the character before the cursor, which is on the same line. */
 void cn_erase(void);
 
 /* COLOR: a foreground 0-31 (16 and up blink) and a background 0-15 (8 and up
    are the colours 0 to 7), either -1 to leave it. */
 void cn_color(int foreground, int background);
-/* LOCATE: a 1-based row and column, either -1 to leave it. */
-void cn_locate(int row, int column);
+/* LOCATE: a 1-based row and column, either -1 to leave it, and whether the
+   cursor is shown (-1 to leave it). */
+void cn_locate(int row, int column, int cursor);
 /* CLS: the PRINT window is cleared and the cursor goes to its top. */
 void cn_cls(void);
 /* VIEW PRINT: the 1-based rows of the PRINT window, or -1 and -1 for every

@@ -19,6 +19,7 @@ ioctl = 0x44
 video_int = 0x10
 video_set_cursor = 0x02
 video_get_cursor = 0x03
+video_set_cursor_shape = 0x01
 video_scroll_up = 0x06
 video_get_mode = 0x0F
 timer_clock = 1193182

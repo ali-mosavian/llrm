@@ -16,6 +16,7 @@ public _llrm_os_speaker_tone
 public _llrm_os_screen_is_console
 public _llrm_os_screen_size
 public _llrm_os_screen_cursor
+public _llrm_os_screen_cursor_show
 public _llrm_os_screen_move
 public _llrm_os_screen_put
 public _llrm_os_screen_write
@@ -396,6 +397,39 @@ _llrm_os_screen_cursor proc far
     pop bx
     retf
 _llrm_os_screen_cursor endp
+
+; _llrm_os_screen_cursor_show(visible: u8): the cursor's shape as the program found it, or none.
+; The first call keeps the shape from the BIOS data area (0040h:0060h).
+BIOS_CURSOR_SHAPE equ 0060h
+CURSOR_OFF equ 2000h               ; start line with bit 5 set: no cursor
+
+.data
+cursor_shape dw 0
+.code
+_llrm_os_screen_cursor_show proc far
+    push bp
+    mov bp, sp
+    push ds
+    mov ax, BIOS_DATA
+    mov ds, ax
+    mov cx, ds:[BIOS_CURSOR_SHAPE]
+    pop ds
+    cmp cursor_shape, 0
+    jne short have_shape
+    test cx, CURSOR_OFF
+    jnz short have_shape
+    mov cursor_shape, cx
+have_shape:
+    cmp byte ptr [bp+6], 0
+    mov cx, cursor_shape
+    jne short shape_set
+    mov cx, CURSOR_OFF
+shape_set:
+    mov ah, DOS_VIDEO_SET_CURSOR_SHAPE
+    int DOS_VIDEO_INT
+    pop bp
+    retf
+_llrm_os_screen_cursor_show endp
 
 ; _llrm_os_screen_move(row: u8, column: u8): the hardware cursor.
 _llrm_os_screen_move proc far
