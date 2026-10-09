@@ -107,11 +107,7 @@ pub fn optimized(
     // Merging nothing leaves the candidate the baseline was threaded from.
     let again = if candidate == settled { baseline.clone() } else { threaded(&candidate) };
     let placed = preferred(&baseline, &again).clone();
-    Ok(inverted(&if size {
-        placed
-    } else {
-        rotated(&duplicated(&duplicated_tails(&placed), true), &Frequency::of(&placed))?
-    }))
+    Ok(inverted(&if size { placed } else { rotated(&duplicated(&duplicated_tails(&placed), true))? }))
 }
 
 /// A conditional branch taken to the block laid out next, followed by a jump:
@@ -427,10 +423,7 @@ const ROTATION_BLOCKS: usize = 24;
 /// a loop whose body is a diamond took two jumps, one into an arm or over it
 /// and one back to the header; it takes one. Counted by the edges that are not
 /// to the next block, each as often as the estimate runs it.
-fn rotated(
-    body: &LirBody,
-    frequency: &Frequency,
-) -> Result<LirBody, masm::Unprintable> {
+fn rotated(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
     if body.source_order {
         return Ok(body.clone());
     }
@@ -453,6 +446,8 @@ fn rotated(
         return Ok(body.clone());
     }
     let mut entered: Option<IndexMap<i64, Vec<usize>>> = None;
+    // Of the body as it is laid out: the copies of tails made its entries.
+    let mut estimate: Option<Arc<Frequency>> = None;
     let mut changed = false;
     let runs: Vec<(usize, usize)> = latest.iter().map(|(&header, &last)| (header, last + 1)).collect();
     for &(start, end) in &runs {
@@ -480,8 +475,21 @@ fn rotated(
         }) {
             continue;
         }
+        let frequency = estimate.get_or_insert_with(|| Frequency::of(body));
         // The jumps a run of blocks takes, `after` being what follows it and
         // `before` what leads into it.
+        // A block with a branch in its middle leaves by its last jump alone:
+        // the others are no fall-through whatever block comes next.
+        let falls_into = |block: &LirBlock, to: i64| -> bool {
+            let real = _real(block);
+            let branches =
+                real.iter().filter(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Branch)).count();
+            branches <= 1
+                || real
+                    .last()
+                    .and_then(|one| one.what.as_ref())
+                    .is_some_and(|what| what.op == Operation::Jump && what.target == Some(to))
+        };
         let jumps = |run: &[LirBlock], before: Option<&LirBlock>, after: Option<i64>| -> f64 {
             let sequence: Vec<&LirBlock> = before.into_iter().chain(run.iter()).collect();
             let mut total = 0.0;
@@ -493,7 +501,7 @@ fn rotated(
                     .copied()
                     .collect::<BTreeSet<_>>()
                     .into_iter()
-                    .filter(|to| Some(*to) != next)
+                    .filter(|to| Some(*to) != next || !falls_into(block, *to))
                     .map(|to| frequency.edge(block.at, to))
                     .collect();
                 total += away.iter().sum::<f64>();

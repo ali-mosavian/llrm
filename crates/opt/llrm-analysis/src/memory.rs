@@ -1585,6 +1585,16 @@ fn pair_constant(
     Some((word(offset), word(0)))
 }
 
+/// The names of `!tbaa` type nodes read off metadata without the module's tree,
+/// once for each node: a reference was given the name and every ancestor's as
+/// new strings (7% of the compile's allocations, QCport). Per module, in its
+/// context, and keyed by the metadata it was read from.
+#[derive(Default)]
+struct TypeNames {
+    lineages: std::cell::RefCell<llrm_support::hash::HashMap<(usize, usize, u32), std::rc::Rc<[String]>>>,
+    names: std::cell::RefCell<llrm_support::hash::HashMap<(usize, usize, u32), Option<std::rc::Rc<str>>>>,
+}
+
 /// The name of the `!tbaa` access type `inst` carries.
 pub fn typed(
     unit: &Unit,
@@ -1596,11 +1606,20 @@ pub fn typed(
         // which is the name below.
         return tree.name_of_tag(unit.metadata, *tag);
     }
-    let MetadataOperand::Node(ty) = unit.metadata.get(tag.0 as usize)?.operands.first()? else { return None };
-    match unit.metadata.get(ty.0 as usize)?.operands.first()? {
-        MetadataOperand::String(name) => Some(std::rc::Rc::from(name.as_str())),
-        _ => None,
+    let key = (unit.metadata.as_ptr() as usize, unit.metadata.len(), tag.0);
+    let held = unit.context.extension::<TypeNames>();
+    if let Some(found) = held.names.borrow().get(&key) {
+        return found.clone();
     }
+    let name = match unit.metadata.get(tag.0 as usize)?.operands.first()? {
+        MetadataOperand::Node(ty) => match unit.metadata.get(ty.0 as usize)?.operands.first()? {
+            MetadataOperand::String(name) => Some(std::rc::Rc::from(name.as_str())),
+            _ => None,
+        },
+        _ => None,
+    };
+    held.names.borrow_mut().insert(key, name.clone());
+    name
 }
 
 /// The names of the ancestors of the `!tbaa` access type `inst` carries,
@@ -1613,10 +1632,17 @@ pub fn lineage(
     let Some((_, tag)) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa") else {
         return no_lineage();
     };
-    match unit.tbaa {
-        Some(tree) => tree.shared_of_tag(unit.metadata, *tag),
-        None => std::rc::Rc::from(llrm_mir::tbaa::Tbaa::chain(unit.metadata, *tag)),
+    if let Some(tree) = unit.tbaa {
+        return tree.shared_of_tag(unit.metadata, *tag);
     }
+    let key = (unit.metadata.as_ptr() as usize, unit.metadata.len(), tag.0);
+    let held = unit.context.extension::<TypeNames>();
+    if let Some(found) = held.lineages.borrow().get(&key) {
+        return std::rc::Rc::clone(found);
+    }
+    let made: std::rc::Rc<[String]> = std::rc::Rc::from(llrm_mir::tbaa::Tbaa::chain(unit.metadata, *tag));
+    held.lineages.borrow_mut().insert(key, std::rc::Rc::clone(&made));
+    made
 }
 
 /// A lineage of no names, shared: an access with no type is the common one.

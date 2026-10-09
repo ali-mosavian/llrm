@@ -1,10 +1,10 @@
-reason = "a diamond-bodied loop's latch falls into the header (x_collatz -15.7% clocks); costs one jmp per loop entry: quicksort bas +2.1% instructions"
+reason = "rotation prices a latch with a second branch as the jump it is: quicksort bas no longer turns a loop for one jmp an entry (-2.0% instructions)"
 blessed = "2026-10-09"
 
 [bas.O2]
-instructions = 229608
+instructions = 224965
 memory_operands = 113692
-code_bytes = 560
+code_bytes = 556
 data_bytes = 17
 bss_bytes = 0
 
