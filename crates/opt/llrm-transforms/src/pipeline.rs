@@ -261,7 +261,7 @@ pub struct Applied {
 /// runs is what this returns.
 pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     let limits = || applied.options.limits.clone();
-    let mut every: Vec<Box<dyn FunctionPass>> = vec![
+    let every: Vec<Box<dyn FunctionPass>> = vec![
         // Aggregate/object leaves become ordinary SSA before any scalar or
         // CFG pass asks what is constant, redundant, or loop invariant.
         Box::new(promote::Sroa),
