@@ -1199,6 +1199,7 @@ fn _allocated(
     // Every value this allocation has known: a new one is numbered above them.
     let mut floor = splitkit::_next_value(&body);
     let mut fixed: IndexMap<u32, Register> = pinned.cloned().unwrap_or_default();
+    let mut required_seen: Option<crate::analysis::facts::Stamp> = None;
     // Values a split made or left behind, never split again: LLVM's `RS_Split2`
     // and `RS_Spill`.
     let mut pieces: BTreeSet<u32> = BTreeSet::new();
@@ -1594,10 +1595,33 @@ fn _allocated(
         // values it disturbs, the queue.
         let _after = llrm_support::debug::span("regalloc after rewrite");
         placing = None;
+        // `fixed` keeps the first answer of every body this run has seen, so
+        // the blocks the rewrite left as they were add nothing to it: a
+        // value met in one is already there.
         llrm_support::debug::timed("after required", || {
-            for (one, register) in constrain::required(&body, classes) {
+            let changed = required_seen.as_ref().and_then(|seen| seen.differing(&body));
+            let found = match &changed {
+                Some(blocks) => {
+                    REQUIRED_SKIPPED.with(|n| n.set(n.get() + body.blocks.len() - blocks.len()));
+                    constrain::required_in(&body, classes, blocks)
+                }
+                None => constrain::required(&body, classes),
+            };
+            if changed.is_some() && llrm_support::env_set("LLRM_CHECK_REQUIRED") {
+                let mut whole = fixed.clone();
+                for (one, register) in constrain::required(&body, classes) {
+                    whole.entry(one).or_insert(register);
+                }
+                let mut here = fixed.clone();
+                for (one, register) in &found {
+                    here.entry(*one).or_insert(*register);
+                }
+                assert!(whole == here, "{}: pins from the changed blocks differ from the whole body's", body.name);
+            }
+            for (one, register) in found {
                 fixed.entry(one).or_insert(register);
             }
+            required_seen = Some(crate::analysis::facts::Stamp::of(&body));
         });
         wanted = llrm_support::debug::timed("after wanted", || _wanted(&facts.hints, &fixed));
         claims = Claims::default();
@@ -1666,6 +1690,7 @@ pub fn base_splits() -> usize {
 thread_local! {
     /// The last allocation's (splits made, pieces, pieces spilled, values
     /// spilled), for the trial log.
+    static REQUIRED_SKIPPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static LAST_STATS: std::cell::Cell<(usize, usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0, 0)) };
 }
 
@@ -2148,6 +2173,12 @@ thread_local! {
 
 /// How many allocations this thread has made to try another shape of a body
 /// than the one it was given.
+/// Blocks the pins were not worked out of again after a rewrite, on this
+/// thread.
+pub fn required_skipped() -> usize {
+    REQUIRED_SKIPPED.with(std::cell::Cell::get)
+}
+
 pub fn trials() -> usize {
     TRIALS.with(std::cell::Cell::get)
 }
