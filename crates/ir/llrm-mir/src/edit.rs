@@ -309,6 +309,28 @@ impl Function {
         Ok(())
     }
 
+    /// Moves the placed instructions `run`, in order, to the end of `block`,
+    /// and what the records say stands where it did: a record before an
+    /// instruction of the run moves with it. (Moving them one by one with
+    /// `move_to` would leave each record behind, before the next one, and carry
+    /// it on to the last: a block's records would end up after its code.)
+    pub fn move_run(
+        &mut self,
+        run: &[InstId],
+        block: BlockId,
+    ) -> Result<(), String> {
+        for &inst in run {
+            let block_from = self.parent(inst).ok_or_else(|| format!("instruction {} is not placed", inst.0))?;
+            let list = &mut self.blocks[block_from.0 as usize].instructions;
+            let at = list.iter().position(|one| *one == inst).expect("an instruction is in its parent");
+            list.remove(at);
+            self.parent[inst.0 as usize] = None;
+            let (to, next) = self.attach(inst, Position::End(block))?;
+            self.log(Change::Moved { inst, block: to, next, from: block_from });
+        }
+        Ok(())
+    }
+
     pub fn set_operand(
         &mut self,
         inst: InstId,

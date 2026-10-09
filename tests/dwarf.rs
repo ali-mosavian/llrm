@@ -209,30 +209,31 @@ fn the_flavor_asked_for_is_the_formats_or_an_error() {
 }
 
 /// The values gdb reads of a program's variables at a line it stops on, as
-/// `-O0` and `-O2` leave them.
+/// `-O0` and `-O2` leave them; with `hits` over one, at each of the first
+/// that many times it stops there (an unrolled loop's first stop on its line
+/// may be any iteration's).
 fn stopped_at(
     gdb: &Path,
     program: &Path,
     line: u32,
     fixtures: &Path,
+    hits: usize,
 ) -> Option<(u32, Vec<String>)> {
-    let said = Command::new(gdb)
-        .args([
-            "-batch",
-            "-nx",
-            "-ex",
-            &format!("tbreak observed.c:{line}"),
-            "-ex",
-            "run",
-            "-ex",
-            "info locals",
-            "-ex",
-            "info args",
-        ])
-        .arg(program)
-        .current_dir(fixtures)
-        .output()
-        .unwrap();
+    let mut args = vec![
+        "-batch".to_owned(),
+        "-nx".to_owned(),
+        "-ex".to_owned(),
+        format!("{} observed.c:{line}", if hits > 1 { "break" } else { "tbreak" }),
+        "-ex".to_owned(),
+        "run".to_owned(),
+    ];
+    for hit in 0..hits {
+        if hit > 0 {
+            args.extend(["-ex".to_owned(), "continue".to_owned()]);
+        }
+        args.extend(["-ex".to_owned(), "info locals".to_owned(), "-ex".to_owned(), "info args".to_owned()]);
+    }
+    let said = Command::new(gdb).args(args).arg(program).current_dir(fixtures).output().unwrap();
     let text = String::from_utf8_lossy(&said.stdout).into_owned();
     let at =
         text.split("observed.c:").nth(1)?.chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()?;
@@ -256,6 +257,18 @@ fn stopped_at(
 /// keeps nowhere is now said to be nowhere.
 #[test]
 fn a_variable_reads_the_same_at_o2_as_at_o0_on_every_line_both_stop_at() {
+    reads_the_same_as_at_o0("-O2");
+}
+
+/// -O3 unrolls the loops of `observed.c` whole: the pieces of `v` the stores
+/// said stood after the code that reads them once the blocks were merged, and
+/// gdb read {0, 0, 0, 0} where -O0 has {0, 3, 6, 9} on line 30.
+#[test]
+fn a_variable_reads_the_same_at_o3_as_at_o0_on_every_line_both_stop_at() {
+    reads_the_same_as_at_o0("-O3");
+}
+
+fn reads_the_same_as_at_o0(optimised: &str) {
     let (Some(gdb), Some(ld), Some(assembler)) = (tool("gdb"), tool("ld"), tool("as")) else {
         skipped("needs gdb, GNU ld and as");
         return;
@@ -267,7 +280,7 @@ fn a_variable_reads_the_same_at_o2_as_at_o0_on_every_line_both_stop_at() {
         Command::new(assembler).arg("--32").arg("-o").arg(&start).arg(fixtures.join("start.s")).output().unwrap();
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     let mut programs = Vec::new();
-    for level in ["-O0", "-O2"] {
+    for level in ["-O0", optimised] {
         let (object, program) =
             (scratch.path().join(format!("observed{level}.o")), scratch.path().join(format!("observed{level}")));
         let made = compile(&fixtures.join("observed.c"), &["-m32", level, "-fobject-format=elf", "-g"], &object);
@@ -281,12 +294,16 @@ fn a_variable_reads_the_same_at_o2_as_at_o0_on_every_line_both_stop_at() {
         skipped("this host does not run i386 programs");
         return;
     }
-    assert_eq!(Command::new(&programs[1]).output().unwrap().status.code(), Some(73), "-O2 computes what -O0 does");
+    assert_eq!(
+        Command::new(&programs[1]).output().unwrap().status.code(),
+        Some(73),
+        "{optimised} computes what -O0 does"
+    );
     let mut slow_stops = Vec::new();
     let mut fast_stops = Vec::new();
     for line in 10..=48 {
         let (Some(slow), Some(fast)) =
-            (stopped_at(&gdb, &programs[0], line, &fixtures), stopped_at(&gdb, &programs[1], line, &fixtures))
+            (stopped_at(&gdb, &programs[0], line, &fixtures, 6), stopped_at(&gdb, &programs[1], line, &fixtures, 1))
         else {
             continue;
         };
@@ -297,8 +314,8 @@ fn a_variable_reads_the_same_at_o2_as_at_o0_on_every_line_both_stop_at() {
             fast_stops.push(fast);
         }
     }
-    let value = |stop: &(u32, Vec<String>), name: &str| {
-        stop.1.iter().find_map(|one| one.strip_prefix(&format!("{name} = ")).map(str::to_owned))
+    let value = |stop: &(u32, Vec<String>), name: &str| -> Vec<String> {
+        stop.1.iter().filter_map(|one| one.strip_prefix(&format!("{name} = ")).map(str::to_owned)).collect()
     };
     let (mut compared, mut wrong) = (0, Vec::new());
     for (at, fast) in fast_stops.iter().enumerate() {
@@ -307,11 +324,14 @@ fn a_variable_reads_the_same_at_o2_as_at_o0_on_every_line_both_stop_at() {
             if said.contains("<optimized out>") {
                 continue;
             }
-            let allowed = [value(&slow_stops[at], name), slow_stops.get(at + 1).and_then(|next| value(next, name))];
+            let allowed = [
+                value(&slow_stops[at], name),
+                slow_stops.get(at + 1).map(|next| value(next, name)).unwrap_or_default(),
+            ];
             if allowed.iter().flatten().any(|slow| slow == said) {
                 compared += 1;
             } else {
-                wrong.push(format!("line {}: {name} is {said} at -O2, and {allowed:?} at -O0", fast.0));
+                wrong.push(format!("line {}: {name} is {said} at {optimised}, and {allowed:?} at -O0", fast.0));
             }
         }
     }
