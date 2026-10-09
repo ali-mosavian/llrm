@@ -67,6 +67,9 @@ pub struct Options {
     pub fill: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
+    /// Loops not proven to run are entered behind a copy of their test, before
+    /// the loop passes (gcc's `-ftree-ch`; not at -Os).
+    pub copy_headers: bool,
     /// Code size outranks speed where they conflict: -Os and -Oz. (Whether a
     /// complete copy of a loop may grow the code is `limits.grows`, which
     /// gcc lets only -O3 do.)
@@ -105,6 +108,7 @@ impl Default for Options {
             fill: true,
             sibcalls: true,
             unswitch: false,
+            copy_headers: false,
             for_size: false,
             search: true,
             routes: true,
@@ -257,7 +261,7 @@ pub struct Applied {
 /// runs is what this returns.
 pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     let limits = || applied.options.limits.clone();
-    let every: Vec<Box<dyn FunctionPass>> = vec![
+    let mut every: Vec<Box<dyn FunctionPass>> = vec![
         // Aggregate/object leaves become ordinary SSA before any scalar or
         // CFG pass asks what is constant, redundant, or loop invariant.
         Box::new(promote::Sroa),
@@ -293,6 +297,20 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(fill::Fill { size: applied.options.prefers_size() }),
         Box::new(fill::Merge),
     ];
+    // gcc's `pass_ch` runs before the loop optimizers: the loops it guards are
+    // re-simplified for the passes that follow. Not at -Os
+    // (`optimize_loop_for_size_p`): there only a loop proven to run is entered
+    // at its body, which `Rotate` does last.
+    if applied.options.copy_headers && !applied.options.prefers_size() {
+        if let Some(at) = every.iter().position(|one| one.name() == "lcssa") {
+            let copied: Vec<Box<dyn FunctionPass>> = vec![
+                Box::new(rotate::Rotate { proven: false, copy: true }),
+                Box::new(loopsimplify::LoopSimplify),
+                Box::new(lcssa::LoopClosedSSA),
+            ];
+            every.splice(at + 1..at + 1, copied);
+        }
+    }
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
 }
 
@@ -367,6 +385,25 @@ pub fn recorded(
             TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             done
         }),
+        specialise: {
+            let mut alone = Fixed::new(&Applied { dump: None, ..applied.clone() });
+            Box::new(move |module, analyses, mut function| {
+                let layout = analyses.program().layout.clone();
+                let outer = analyses.outer(module);
+                let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
+                let Module { context, metadata, .. } = &mut *module;
+                let mut unit = Unit {
+                    context,
+                    layout: &layout,
+                    function: &mut function,
+                    id: None,
+                    metadata,
+                    declared: &mut declared,
+                };
+                alone.run(&mut unit, &mut Analyses::new(std::rc::Rc::clone(&outer)));
+                function
+            })
+        },
         proved: None,
         inline: applied.options.inline,
         ranges: applied.options.ipa_ranges,
@@ -410,11 +447,14 @@ pub fn recorded(
     }
     // Last, as the old drivers rotated in lowering: unroll and peel refuse
     // a rotated loop.
-    manager.add(rotate::Rotate);
+    manager.add(rotate::Rotate { proven: true, copy: false });
     // After the loop passes: the cycles it makes between the cases are no
     // natural loop. LLVM's DFAJumpThreading, gcc's FSM threader.
     if applied.options.wanted("jumpthread") {
-        manager.add(jumpthread::JumpThread { size: applied.options.prefers_size() });
+        manager.add(jumpthread::JumpThread {
+            size: applied.options.prefers_size(),
+            correlated: applied.options.copy_headers,
+        });
     }
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.

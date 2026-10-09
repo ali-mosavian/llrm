@@ -109,6 +109,308 @@ pub fn confining_uses(
     uses
 }
 
+/// Which of the sets of registers an operand confines a value to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum Kind {
+    WordIndexes,
+    Addressing,
+    WordBases,
+    Bytes,
+}
+
+impl Kind {
+    const ALL: [Kind; 4] = [Kind::WordIndexes, Kind::Addressing, Kind::WordBases, Kind::Bytes];
+
+    fn registers<'a>(
+        self,
+        registers: &'a RegisterClasses,
+    ) -> &'a BTreeSet<Register> {
+        static BYTES: std::sync::OnceLock<BTreeSet<Register>> = std::sync::OnceLock::new();
+        match self {
+            Kind::WordIndexes => &registers.word_indexes,
+            Kind::Addressing => &registers.addressing,
+            Kind::WordBases => &registers.word_bases,
+            Kind::Bytes => {
+                BYTES.get_or_init(|| BTreeSet::from([Register::AX, Register::BX, Register::CX, Register::DX]))
+            }
+        }
+    }
+}
+
+/// What one instruction says of the values it names, apart from the others.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Item {
+    Restrict {
+        value: u32,
+        kind: Kind,
+        role: Role,
+        defining: bool,
+    },
+    /// Read as a number, not as a segment selector.
+    Numeric(u32),
+    /// Read as a segment selector.
+    Selecting(u32),
+    /// A base and an index that may be either way round.
+    Pair(u32, u32),
+    /// The selector of a far load.
+    Far(u32),
+}
+
+/// The items of `one`, appended.
+pub fn contribution(
+    one: &crate::model::lir::Insn,
+    items: &mut Vec<Item>,
+) {
+    let Some(what) = &one.what else {
+        return;
+    };
+    // A string op's segment operands are selectors, as a far access's are.
+    let segments: &[Loc] = match (what.op, what.sources.len()) {
+        (Operation::Copy, 4 | 5) => &what.sources[what.sources.len() - 2..],
+        (Operation::Fill, 3 | 4) => &what.sources[what.sources.len() - 1..],
+        _ => &[],
+    };
+    for place in segments {
+        if let Loc::Held(held) = place {
+            items.push(Item::Selecting(held.value));
+        }
+    }
+    for place in what.dests.iter().chain(&what.sources) {
+        if let Loc::Mem(cell) = place {
+            if let Some(selector) = cell.selector {
+                items.push(Item::Selecting(selector.value));
+            }
+            if let Some(base) = cell.base {
+                items.push(Item::Numeric(base.value));
+            }
+        }
+        if let Loc::Held(held) = place {
+            if (held.width != 2 || !_SEGMENT_OPERANDS.contains(&what.op))
+                && !segments.iter().any(|one| matches!(one, Loc::Held(other) if other.value == held.value))
+            {
+                items.push(Item::Numeric(held.value));
+            }
+        }
+        if let Loc::Mem(cell) = place {
+            if let (Some(base), None) = (cell.base, cell.index) {
+                if base.width == 2 {
+                    let kind = if cell.addr.is_some_and(|addr| addr.space == Space::Frame) {
+                        Kind::WordIndexes
+                    } else {
+                        Kind::Addressing
+                    };
+                    items.push(Item::Restrict { value: base.value, kind, role: Role::Base, defining: false });
+                }
+            }
+            if let Some(index) = cell.index {
+                items.push(Item::Numeric(index.value));
+                if index.width == 2 {
+                    if cell.base.is_some_and(|base| base.width == 2) && cell.scale == 1 {
+                        items.push(Item::Pair(cell.base.expect("checked").value, index.value));
+                    } else {
+                        items.push(Item::Restrict {
+                            value: index.value,
+                            kind: Kind::WordIndexes,
+                            role: Role::Index,
+                            defining: false,
+                        });
+                        if let Some(base) = cell.base {
+                            items.push(Item::Restrict {
+                                value: base.value,
+                                kind: Kind::WordBases,
+                                role: Role::Base,
+                                defining: false,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        if let Loc::Held(held) = place {
+            if held.width == 1 {
+                items.push(Item::Restrict {
+                    value: held.value,
+                    kind: Kind::Bytes,
+                    role: Role::Byte,
+                    defining: what.dests.contains(place),
+                });
+            }
+        }
+    }
+    if target::far_load(what) {
+        if let Loc::Held(held) = &what.dests[1] {
+            items.push(Item::Far(held.value));
+        }
+    }
+}
+
+/// What the instructions of a body say of its values, counted, so that a body
+/// made from another by a rewrite takes the counts of the instructions it
+/// lost and gained and works out the class of the values they name only.
+#[derive(Clone, Default)]
+pub struct Scan {
+    counts: crate::support::hash::HashMap<u32, Counts>,
+    pairs: crate::support::hash::HashMap<(u32, u32), u32>,
+    /// Each value's class from its counts, before the roles of word addresses
+    /// and the webs.
+    pre: Classes,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Counts {
+    kinds: [u32; 4],
+    selecting: u32,
+    numeric: u32,
+    far: u32,
+}
+
+impl Counts {
+    fn is_empty(&self) -> bool {
+        self.kinds == [0; 4] && self.selecting == 0 && self.numeric == 0 && self.far == 0
+    }
+}
+
+impl Scan {
+    /// The counts of `body`'s instructions.
+    pub fn of(
+        body: &LirBody,
+        registers: &RegisterClasses,
+        segments: &Segments,
+    ) -> Self {
+        let mut scan = Scan::default();
+        let mut touched = Vec::new();
+        for one in body.blocks.iter().flat_map(|block| &block.insns) {
+            scan.count(one, true, &mut touched);
+        }
+        scan.classify(touched, registers, segments);
+        scan
+    }
+
+    /// These counts with the instructions in `gone` taken out and those in
+    /// `added` put in.
+    pub fn after(
+        &self,
+        gone: &[std::sync::Arc<crate::model::lir::Insn>],
+        added: &[std::sync::Arc<crate::model::lir::Insn>],
+        registers: &RegisterClasses,
+        segments: &Segments,
+    ) -> Self {
+        let mut scan = self.clone();
+        let mut touched = Vec::new();
+        for one in gone {
+            scan.count(one, false, &mut touched);
+        }
+        for one in added {
+            scan.count(one, true, &mut touched);
+        }
+        scan.classify(touched, registers, segments);
+        scan
+    }
+
+    fn count(
+        &mut self,
+        one: &crate::model::lir::Insn,
+        put: bool,
+        touched: &mut Vec<u32>,
+    ) {
+        let mut items = Vec::new();
+        contribution(one, &mut items);
+        for item in items {
+            let (value, slot): (u32, fn(&mut Counts) -> &mut u32) = match item {
+                Item::Restrict { value, kind, .. } => (
+                    value,
+                    match kind {
+                        Kind::WordIndexes => |c| &mut c.kinds[0],
+                        Kind::Addressing => |c| &mut c.kinds[1],
+                        Kind::WordBases => |c| &mut c.kinds[2],
+                        Kind::Bytes => |c| &mut c.kinds[3],
+                    },
+                ),
+                Item::Numeric(value) => (value, |c| &mut c.numeric),
+                Item::Selecting(value) => (value, |c| &mut c.selecting),
+                Item::Far(value) => (value, |c| &mut c.far),
+                Item::Pair(base, index) => {
+                    let count = self.pairs.entry((base, index)).or_insert(0);
+                    if put {
+                        *count += 1;
+                    } else {
+                        *count -= 1;
+                        if *count == 0 {
+                            self.pairs.remove(&(base, index));
+                        }
+                    }
+                    continue;
+                }
+            };
+            let counts = self.counts.entry(value).or_default();
+            if put {
+                *slot(counts) += 1;
+            } else {
+                *slot(counts) -= 1;
+            }
+            touched.push(value);
+        }
+    }
+
+    fn classify(
+        &mut self,
+        mut touched: Vec<u32>,
+        registers: &RegisterClasses,
+        segments: &Segments,
+    ) {
+        touched.sort_unstable();
+        touched.dedup();
+        let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
+        for value in touched {
+            let counts = self.counts[&value];
+            if counts.is_empty() {
+                self.counts.remove(&value);
+            }
+            let mut sets: Vec<&BTreeSet<Register>> = Kind::ALL
+                .iter()
+                .zip(counts.kinds)
+                .filter(|(_, n)| *n > 0)
+                .map(|(kind, _)| kind.registers(registers))
+                .collect();
+            if (counts.selecting > 0 && counts.numeric == 0) || counts.far > 0 {
+                sets.push(&selectors);
+            }
+            match sets.split_first() {
+                None => {
+                    self.pre.swap_remove(&value);
+                }
+                Some((first, rest)) => {
+                    let class: BTreeSet<Register> =
+                        first.iter().copied().filter(|one| rest.iter().all(|set| set.contains(one))).collect();
+                    self.pre.insert(value, class);
+                }
+            }
+        }
+    }
+
+    /// `classes_given` of the body these counts are of.
+    pub fn classes(
+        &self,
+        body: &LirBody,
+        prefer_indexes: &BTreeSet<u32>,
+        segments: &Segments,
+        registers: &RegisterClasses,
+        found: &Found,
+    ) -> Classes {
+        let mut out = self.pre.clone();
+        let mut pairs: Vec<(u32, u32)> = self.pairs.keys().copied().collect();
+        pairs.sort_unstable();
+        _word_address_roles(&pairs, &mut out, body, prefer_indexes, segments, registers, Some(found));
+        let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
+        let (selecting, numeric) = (
+            |value: u32| self.counts.get(&value).is_some_and(|c| c.selecting > 0),
+            |value: u32| self.counts.get(&value).is_some_and(|c| c.numeric > 0),
+        );
+        _through_webs(body, &selecting, &numeric, &selectors, false, &mut out);
+        out
+    }
+}
+
 fn collected(
     body: &LirBody,
     prefer_indexes: &BTreeSet<u32>,
@@ -122,79 +424,31 @@ fn collected(
     let mut selecting: BTreeSet<u32> = BTreeSet::new();
     let mut numeric: BTreeSet<u32> = BTreeSet::new();
     let mut word_pairs: Vec<(u32, u32)> = Vec::new();
-    let bytes: BTreeSet<Register> = BTreeSet::from([Register::AX, Register::BX, Register::CX, Register::DX]);
-
     let _scan = llrm_support::debug::span("classes scan");
+    let mut items = Vec::new();
     for (at, block) in body.blocks.iter().enumerate() {
         for (position, one) in block.insns.iter().enumerate() {
-            let Some(what) = &one.what else {
-                continue;
-            };
-            let mut restrict =
-                |out: &mut Classes, value: u32, choices: &BTreeSet<Register>, role: Role, defining: bool| {
-                    // The reads are kept only for a caller that asks for them.
-                    if let Some(uses) = uses.as_deref_mut() {
-                        uses.push(Use { block: at, insn: position, value, class: choices.clone(), role, defining });
-                    }
-                    _restrict(out, value, choices);
-                };
-            // A string op's segment operands are selectors, as a far access's
-            // are.
-            let segments: &[Loc] = match (what.op, what.sources.len()) {
-                (Operation::Copy, 4 | 5) => &what.sources[what.sources.len() - 2..],
-                (Operation::Fill, 3 | 4) => &what.sources[what.sources.len() - 1..],
-                _ => &[],
-            };
-            for place in segments {
-                if let Loc::Held(held) = place {
-                    selecting.insert(held.value);
-                }
-            }
-            for place in what.dests.iter().chain(&what.sources) {
-                if let Loc::Mem(cell) = place {
-                    if let Some(selector) = cell.selector {
-                        selecting.insert(selector.value);
-                    }
-                    if let Some(base) = cell.base {
-                        numeric.insert(base.value);
-                    }
-                }
-                if let Loc::Held(held) = place {
-                    if (held.width != 2 || !_SEGMENT_OPERANDS.contains(&what.op))
-                        && !segments.iter().any(|one| matches!(one, Loc::Held(other) if other.value == held.value))
-                    {
-                        numeric.insert(held.value);
-                    }
-                }
-                if let Loc::Mem(cell) = place {
-                    if let (Some(base), None) = (cell.base, cell.index) {
-                        if base.width == 2 {
-                            let registers = if cell.addr.is_some_and(|addr| addr.space == Space::Frame) {
-                                &registers.word_indexes
-                            } else {
-                                &registers.addressing
-                            };
-                            restrict(&mut out, base.value, registers, Role::Base, false);
+            items.clear();
+            contribution(one, &mut items);
+            for item in &items {
+                match *item {
+                    Item::Restrict { value, kind, role, defining } => {
+                        let choices = kind.registers(registers);
+                        // The reads are kept only for a caller that asks for
+                        // them.
+                        if let Some(uses) = uses.as_deref_mut() {
+                            uses.push(Use { block: at, insn: position, value, class: choices.clone(), role, defining });
                         }
+                        _restrict(&mut out, value, choices);
                     }
-                    if let Some(index) = cell.index {
-                        numeric.insert(index.value);
-                        if index.width == 2 {
-                            if cell.base.is_some_and(|base| base.width == 2) && cell.scale == 1 {
-                                word_pairs.push((cell.base.expect("checked").value, index.value));
-                            } else {
-                                restrict(&mut out, index.value, &registers.word_indexes, Role::Index, false);
-                                if let Some(base) = cell.base {
-                                    restrict(&mut out, base.value, &registers.word_bases, Role::Base, false);
-                                }
-                            }
-                        }
+                    Item::Numeric(value) => {
+                        numeric.insert(value);
                     }
-                }
-                if let Loc::Held(held) = place {
-                    if held.width == 1 {
-                        restrict(&mut out, held.value, &bytes, Role::Byte, what.dests.contains(place));
+                    Item::Selecting(value) => {
+                        selecting.insert(value);
                     }
+                    Item::Pair(base, index) => word_pairs.push((base, index)),
+                    Item::Far(_) => {}
                 }
             }
         }
@@ -217,7 +471,14 @@ fn collected(
         _word_address_roles(&word_pairs, &mut out, body, prefer_indexes, segments, registers, found)
     });
     llrm_support::debug::timed("classes webs", || {
-        _through_webs(body, &selecting, &numeric, &selectors, optimistic, &mut out)
+        _through_webs(
+            body,
+            &|value| selecting.contains(&value),
+            &|value| numeric.contains(&value),
+            &selectors,
+            optimistic,
+            &mut out,
+        )
     });
     out
 }
@@ -228,8 +489,8 @@ fn collected(
 /// through its header phi is, has no class of its own.
 fn _through_webs(
     body: &LirBody,
-    selecting: &BTreeSet<u32>,
-    numeric: &BTreeSet<u32>,
+    selecting: &dyn Fn(u32) -> bool,
+    numeric: &dyn Fn(u32) -> bool,
     selectors: &BTreeSet<Register>,
     optimistic: bool,
     out: &mut Classes,
@@ -281,8 +542,8 @@ fn _through_webs(
         }
         if agree
             && agreed.is_none()
-            && list.iter().any(|value| selecting.contains(value))
-            && !list.iter().any(|value| numeric.contains(value))
+            && list.iter().any(|value| selecting(*value))
+            && !list.iter().any(|value| numeric(*value))
         {
             agreed = Some(selectors.clone());
         }

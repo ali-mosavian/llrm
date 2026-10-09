@@ -855,23 +855,62 @@ pub fn explicit_selectors(
     body.with_blocks(blocks)
 }
 
+/// The values an instruction is a plain same-width copy between, if it is.
+fn _copy_pair(one: &Insn) -> Option<(u32, u32)> {
+    let what = one.what.as_ref()?;
+    if what.op == Operation::Move && what.name.as_deref() == Some("mov") {
+        if let ([Loc::Held(dest)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice()) {
+            if dest.width == source.width && dest.value != source.value {
+                return Some((dest.value, source.value));
+            }
+        }
+    }
+    None
+}
+
 fn _copy_hints(body: &LirBody) -> IndexMap<u32, Vec<u32>> {
     let mut hints: IndexMap<u32, Vec<u32>> = IndexMap::default();
     for block in &body.blocks {
         for one in &block.insns {
-            if let Some(what) = &one.what {
-                if what.op == Operation::Move && what.name.as_deref() == Some("mov") {
-                    if let ([Loc::Held(dest)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice()) {
-                        if dest.width == source.width && dest.value != source.value {
-                            hints.entry(dest.value).or_default().push(source.value);
-                            hints.entry(source.value).or_default().push(dest.value);
-                        }
-                    }
-                }
+            if let Some((dest, source)) = _copy_pair(one) {
+                hints.entry(dest).or_default().push(source);
+                hints.entry(source).or_default().push(dest);
             }
         }
     }
     hints
+}
+
+/// `_copy_hints` of the body made from one whose hints are `held`, where only
+/// the values in `touched` are named by an instruction that is in one body
+/// alone: a copy between two values names both, so theirs are the only lists
+/// that can differ, and are worked out again from where they occur.
+fn _copy_hints_after(
+    held: &IndexMap<u32, Vec<u32>>,
+    body: &LirBody,
+    touched: &crate::support::hash::HashSet<u32>,
+) -> IndexMap<u32, Vec<u32>> {
+    let mut out = held.clone();
+    for value in touched {
+        out.swap_remove(value);
+    }
+    crate::backend::postings::following(body, |postings| {
+        for value in touched {
+            let mut at: Vec<crate::backend::postings::At> =
+                postings.defs(*value).iter().chain(postings.uses(*value)).copied().collect();
+            at.sort_unstable();
+            at.dedup();
+            let partners: Vec<u32> = at
+                .iter()
+                .filter_map(|one| _copy_pair(&body.blocks[one.0 as usize].insns[one.1 as usize]))
+                .map(|(dest, source)| if dest == *value { source } else { dest })
+                .collect();
+            if !partners.is_empty() {
+                out.insert(*value, partners);
+            }
+        }
+    });
+    out
 }
 
 /// A heap entry: `(value not in fixed, -priority, value)`.
@@ -1042,6 +1081,10 @@ struct Facts {
     widths: IndexMap<u32, u32>,
     confined: Classes,
     hints: IndexMap<u32, Vec<u32>>,
+    /// What the instructions say of the values, counted: `confined` is made
+    /// from it.
+    scan: crate::backend::regclass::Scan,
+    siblings: Siblings,
 }
 
 impl Facts {
@@ -1053,11 +1096,26 @@ impl Facts {
         unspillable: &BTreeSet<u32>,
         protected: &BTreeSet<u32>,
         busy: &Frequency,
+        prior: Option<(&Facts, &ranges::Changes)>,
     ) -> Self {
         let _span = llrm_support::debug::span("regalloc facts");
         let index = llrm_support::debug::timed("facts slots", || ranges::indexed(body));
         let base = llrm_support::debug::timed("facts intervals", || ranges::intervals_over(body, Some(&index), busy));
-        let base = llrm_support::debug::timed("facts sibling prices", || _sibling_priced(body, base, busy));
+        let (base, siblings) = llrm_support::debug::timed("facts sibling prices", || match prior {
+            Some((before, changes)) => {
+                let whole = llrm_support::env_set("LLRM_CHECK_FACTS").then(|| base.clone());
+                let (found, siblings) = _sibling_priced_after(&before.siblings, body, base, busy, changes);
+                if let Some(whole) = whole {
+                    assert!(
+                        found == _sibling_priced(body, whole, busy).0,
+                        "{}: the sibling prices kept from the body before differ",
+                        body.name
+                    );
+                }
+                (found, siblings)
+            }
+            None => _sibling_priced(body, base, busy),
+        });
         let mut live = llrm_support::debug::timed("facts fold prices", || _fold_priced(body, base, profile, busy));
         // A spiller product lives for one use: a spill gains nothing.
         for one in unspillable {
@@ -1071,21 +1129,42 @@ impl Facts {
             }
         }
         let masks = llrm_support::debug::timed("facts masks", || _masks(body, &index, segments));
-        let widths = llrm_support::debug::timed("facts widths", || _widest(body));
-        let confined = llrm_support::debug::timed("facts classes", || {
-            let given = crate::backend::regclass::Found { live: &live, masks: &masks };
-            let found = crate::backend::regclass::classes_given(body, protected, segments, registers, &given);
-            if llrm_support::env_set("LLRM_CHECK_CLASSES") {
-                assert!(
-                    found.iter().eq(classes(body, protected, segments, registers).iter()),
-                    "{}: classes from the given intervals differ from working them out",
-                    body.name
-                );
+        let widths = llrm_support::debug::timed("facts widths", || match prior {
+            Some((before, changes)) => {
+                let found = _widest_after(&before.widths, body, &changes.touched);
+                if llrm_support::env_set("LLRM_CHECK_FACTS") {
+                    assert!(found == _widest(body), "{}: the widths kept from the body before differ", body.name);
+                }
+                found
             }
-            found
+            None => _widest(body),
         });
-        let hints = llrm_support::debug::timed("facts hints", || _copy_hints(body));
-        Self { index, live, masks, widths, confined, hints }
+        let (scan, confined) = llrm_support::debug::timed("facts classes", || {
+            let given = crate::backend::regclass::Found { live: &live, masks: &masks };
+            let scan = llrm_support::debug::timed("classes scan", || match prior {
+                Some((before, changes)) => before.scan.after(&changes.gone, &changes.added, registers, segments),
+                None => crate::backend::regclass::Scan::of(body, registers, segments),
+            });
+            let found = scan.classes(body, protected, segments, registers, &given);
+            if llrm_support::env_set("LLRM_CHECK_CLASSES")
+                || (prior.is_some() && llrm_support::env_set("LLRM_CHECK_FACTS"))
+            {
+                let whole = crate::backend::regclass::classes_given(body, protected, segments, registers, &given);
+                assert!(found == whole, "{}: classes from the counts kept from the body before differ", body.name);
+            }
+            (scan, found)
+        });
+        let hints = llrm_support::debug::timed("facts hints", || match prior {
+            Some((before, changes)) => {
+                let found = _copy_hints_after(&before.hints, body, &changes.touched);
+                if llrm_support::env_set("LLRM_CHECK_FACTS") {
+                    assert!(found == _copy_hints(body), "{}: the hints kept from the body before differ", body.name);
+                }
+                found
+            }
+            None => _copy_hints(body),
+        });
+        Self { index, live, masks, widths, confined, hints, scan, siblings }
     }
 }
 
@@ -1191,7 +1270,7 @@ fn _allocated(
     // The values merging updates made: spilled in their turn they are not
     // merged again, which would make the value spilled again, without end.
     let mut plain: BTreeSet<u32> = BTreeSet::new();
-    let mut facts = Facts::of(&body, profile, segments, classes, &unspillable, protected, &Frequency::of(&body));
+    let mut facts = Facts::of(&body, profile, segments, classes, &unspillable, protected, &Frequency::of(&body), None);
     if let Some(why) = unallocatable(&facts, pinned.unwrap_or(&IndexMap::default()), &unspillable, segments, classes) {
         return Err(Unplaced(why).into());
     }
@@ -1375,6 +1454,8 @@ fn _allocated(
         let bound = fixed.contains_key(&value) || mine.weight == INF;
         // `trySplit`, carved at once: the pieces and the rest compete again.
         let mut rewritten: Option<Vec<u32>> = None;
+        // The body as it was before this round rewrote it.
+        let mut before: Option<LirBody> = None;
         if splitting && at == Stage::Split && !pieces.contains(&value) && !bound {
             let _split = llrm_support::debug::span("regalloc split");
             let bundles = spillplacement::edge_bundles(&body);
@@ -1451,6 +1532,7 @@ fn _allocated(
                 });
                 pieces.extend(made.iter().copied().filter(|one| splitkit::live_blocks(&cut, *one, &*after) >= spread));
                 pieces.insert(value);
+                before.get_or_insert_with(|| body.clone());
                 body = cut;
                 for one in &made {
                     stage.insert(*one, Stage::Assign);
@@ -1563,6 +1645,7 @@ fn _allocated(
                     let (spilt, mut made, merged) =
                         spiller::spilled_apart(&body, &chosen, frame, floor, classes, &plain)?;
                     plain.extend(merged.iter().copied());
+                    before.get_or_insert_with(|| body.clone());
                     body = spilt;
                     // A value the spiller keeps (a load from its own home
                     // cell) is now as short as a reload, and is placed as one.
@@ -1585,6 +1668,7 @@ fn _allocated(
         // the change left sharing a register competes again.
         let Some(made) = rewritten else { continue };
         floor = floor.max(splitkit::_next_value_following(&body));
+        let changes = before.as_ref().and_then(|before| ranges::changes(before, &body));
         facts = Facts::of(
             &body,
             profile,
@@ -1593,6 +1677,7 @@ fn _allocated(
             &unspillable,
             protected,
             &llrm_support::debug::timed("regalloc frequency", || Frequency::of(&body)),
+            changes.as_ref().map(|changes| (&facts, changes)),
         );
         // What is done of the rewrite besides its facts: the pins, the placed
         // values it disturbs, the queue.
@@ -1606,7 +1691,12 @@ fn _allocated(
             let found = match &changed {
                 Some(blocks) => {
                     REQUIRED_SKIPPED.with(|n| n.set(n.get() + body.blocks.len() - blocks.len()));
-                    constrain::required_in(&body, classes, blocks)
+                    match &before {
+                        Some(before) if before.blocks.len() == body.blocks.len() => {
+                            constrain::required_added(&body, before, classes, blocks)
+                        }
+                        _ => constrain::required_in(&body, classes, blocks),
+                    }
                 }
                 None => constrain::required(&body, classes),
             };
@@ -1866,22 +1956,58 @@ pub fn _widest(body: &LirBody) -> IndexMap<u32, u32> {
     let mut out: IndexMap<u32, u32> = IndexMap::default();
     for block in &body.blocks {
         for one in &block.insns {
-            let named = one
-                .what
-                .iter()
-                .flat_map(|what| what.dests.iter().chain(&what.sources))
-                .flat_map(ir::values)
-                .chain(one.requires.iter().chain(&one.delivers).map(|(place, _register)| *place));
-            for place in named {
-                let widest = out.entry(place.value).or_insert(0);
-                *widest = (*widest).max(place.width);
-            }
-            for (value, width) in &one.widths {
-                let widest = out.entry(*value).or_insert(0);
-                *widest = (*widest).max(*width);
+            for (value, width) in _named_widths(one) {
+                let widest = out.entry(value).or_insert(0);
+                *widest = (*widest).max(width);
             }
         }
     }
+    out
+}
+
+/// Each (value, width) an instruction names.
+fn _named_widths(one: &Insn) -> impl Iterator<Item = (u32, u32)> + '_ {
+    one.what
+        .iter()
+        .flat_map(|what| what.dests.iter().chain(&what.sources))
+        .flat_map(ir::values)
+        .chain(one.requires.iter().chain(&one.delivers).map(|(place, _register)| *place))
+        .map(|place| (place.value, place.width))
+        .chain(one.widths.iter().copied())
+}
+
+/// `_widest` of the body made from one whose widths are `held`, where only the
+/// values in `touched` are named by an instruction that is in one body alone:
+/// theirs are worked out again from where they occur.
+fn _widest_after(
+    held: &IndexMap<u32, u32>,
+    body: &LirBody,
+    touched: &crate::support::hash::HashSet<u32>,
+) -> IndexMap<u32, u32> {
+    let mut out = held.clone();
+    for value in touched {
+        out.swap_remove(value);
+    }
+    crate::backend::postings::following(body, |postings| {
+        for value in touched {
+            let mut at: Vec<crate::backend::postings::At> = postings
+                .defs(*value)
+                .iter()
+                .chain(postings.uses(*value))
+                .chain(postings.needs(*value))
+                .copied()
+                .collect();
+            at.sort_unstable();
+            at.dedup();
+            for one in at {
+                let one = &body.blocks[one.0 as usize].insns[one.1 as usize];
+                for (named, width) in _named_widths(one).filter(|(named, _)| named == value) {
+                    let widest = out.entry(named).or_insert(0);
+                    *widest = (*widest).max(width);
+                }
+            }
+        }
+    });
     out
 }
 
@@ -2773,68 +2899,160 @@ fn _min(
     if second < first { second } else { first }
 }
 
+/// What the pricing of siblings (below) keeps of a body, for the body a rewrite
+/// makes of it: how many instructions each value is impure in (named by one
+/// that is not a plain move, other than as an in-place update), and what its
+/// copies to a value it could share a slot with cost nothing are worth.
+#[derive(Clone, Default)]
+struct Siblings {
+    impure: crate::support::hash::HashMap<u32, u32>,
+    free: IndexMap<u32, f64>,
+}
+
+/// The values an instruction makes impure.
+fn _impure_names(one: &Insn) -> Vec<u32> {
+    if spiller::_plain_move(one).is_some() {
+        return Vec::new();
+    }
+    let in_place = one
+        .what
+        .as_ref()
+        .is_some_and(
+            |what| matches!(what.op, Operation::Binary | Operation::Unary)
+                && one.requires.is_empty()
+                && one.delivers.is_empty()
+                && !what.dests.iter().chain(&what.sources).any(|x| matches!(x, Loc::Mem(_))),
+        );
+    one.defines
+        .iter()
+        .chain(&one.uses)
+        .copied()
+        .filter(|value| !(in_place && one.defines.contains(value) && one.uses.contains(value)))
+        .collect()
+}
+
+/// What the copy `into` <- `out_of` in a block of frequency `each` frees: for
+/// both, if neither is impure and their intervals do not overlap.
+fn _freed(
+    siblings: &Siblings,
+    live: &IndexMap<u32, Interval>,
+    (into, out_of): (u32, u32),
+) -> bool {
+    !(siblings.impure.contains_key(&into)
+        || siblings.impure.contains_key(&out_of)
+        || live.get(&into).zip(live.get(&out_of)).is_some_and(|(one, other)| one.overlaps(other)))
+}
+
+fn _price_free(
+    live: &mut IndexMap<u32, Interval>,
+    free: &IndexMap<u32, f64>,
+) {
+    for (value, found) in free {
+        if let Some(one) = live.get_mut(value) {
+            one.weight = _max(0.0, one.weight - found / one.spill_size() as f64);
+        }
+    }
+}
+
 /// Intervals whose copies to a value they could share a slot with cost nothing.
 fn _sibling_priced(
     body: &LirBody,
     live: IndexMap<u32, Interval>,
     busy: &Frequency,
-) -> IndexMap<u32, Interval> {
-    let moves: Vec<(i64, (u32, u32))> = body
-        .blocks
-        .iter()
-        .flat_map(|block| {
-            block
-                .insns
-                .iter()
-                .filter_map(|one| spiller::_plain_move(one).filter(|pair| pair.0 != pair.1))
-                .map(move |pair| (block.at, pair))
-        })
-        .collect();
-    if moves.is_empty() {
-        return live;
-    }
-    let mut impure: BTreeSet<u32> = BTreeSet::new();
-    for one in body.blocks.iter().flat_map(|block| &block.insns) {
-        if spiller::_plain_move(one).is_some() {
-            continue;
+) -> (IndexMap<u32, Interval>, Siblings) {
+    let mut siblings = Siblings::default();
+    let mut moves: Vec<(i64, (u32, u32))> = Vec::new();
+    for block in &body.blocks {
+        for one in &block.insns {
+            match spiller::_plain_move(one) {
+                Some(pair) => {
+                    if pair.0 != pair.1 {
+                        moves.push((block.at, pair));
+                    }
+                }
+                None => {
+                    for value in _impure_names(one) {
+                        *siblings.impure.entry(value).or_insert(0) += 1;
+                    }
+                }
+            }
         }
-        let in_place = one
-            .what
-            .as_ref()
-            .is_some_and(
-                |what| matches!(what.op, Operation::Binary | Operation::Unary)
-                    && one.requires.is_empty()
-                    && one.delivers.is_empty()
-                    && !what.dests.iter().chain(&what.sources).any(|x| matches!(x, Loc::Mem(_))),
-            );
-        impure.extend(
-            one.defines
-                .iter()
-                .chain(&one.uses)
-                .copied()
-                .filter(|value| !(in_place && one.defines.contains(value) && one.uses.contains(value))),
-        );
     }
-    let mut free: IndexMap<u32, f64> = IndexMap::default();
-    for (at, (into, out_of)) in moves {
-        if impure.contains(&into)
-            || impure.contains(&out_of)
-            || live.get(&into).zip(live.get(&out_of)).is_some_and(|(one, other)| one.overlaps(other))
-        {
-            continue;
-        }
-        let each = busy.block(at);
-        for value in [into, out_of] {
-            *free.entry(value).or_insert(0.0) += each;
+    for (at, pair) in moves {
+        if _freed(&siblings, &live, pair) {
+            let each = busy.block(at);
+            for value in [pair.0, pair.1] {
+                *siblings.free.entry(value).or_insert(0.0) += each;
+            }
         }
     }
     let mut live = live;
-    for (value, found) in &free {
-        if let Some(one) = live.get_mut(value) {
-            one.weight = _max(0.0, one.weight - found / one.spill_size() as f64);
+    _price_free(&mut live, &siblings.free);
+    (live, siblings)
+}
+
+/// `_sibling_priced` of the body a rewrite made from one whose siblings were
+/// `held`: the values the changed instructions name, and the other sides of
+/// their copies, are priced again from where they occur; the rest stand.
+fn _sibling_priced_after(
+    held: &Siblings,
+    body: &LirBody,
+    live: IndexMap<u32, Interval>,
+    busy: &Frequency,
+    changes: &ranges::Changes,
+) -> (IndexMap<u32, Interval>, Siblings) {
+    let mut siblings = held.clone();
+    let mut affected: crate::support::hash::HashSet<u32> = changes.touched.clone();
+    for (one, put) in changes.gone.iter().map(|one| (one, false)).chain(changes.added.iter().map(|one| (one, true))) {
+        for value in _impure_names(one) {
+            let count = siblings.impure.entry(value).or_insert(0);
+            if put {
+                *count += 1;
+            } else {
+                *count -= 1;
+                if *count == 0 {
+                    siblings.impure.remove(&value);
+                }
+            }
         }
     }
-    live
+    let partners: Vec<u32> = crate::backend::postings::following(body, |postings| {
+        let mut partners = Vec::new();
+        for value in &changes.touched {
+            for at in postings.defs(*value).iter().chain(postings.uses(*value)) {
+                let one = &body.blocks[at.0 as usize].insns[at.1 as usize];
+                if let Some((into, out_of)) = spiller::_plain_move(one).filter(|pair| pair.0 != pair.1) {
+                    partners.push(if into == *value { out_of } else { into });
+                }
+            }
+        }
+        partners
+    });
+    affected.extend(partners);
+    for value in &affected {
+        siblings.free.swap_remove(value);
+    }
+    crate::backend::postings::following(body, |postings| {
+        for value in &affected {
+            let mut at: Vec<crate::backend::postings::At> =
+                postings.defs(*value).iter().chain(postings.uses(*value)).copied().collect();
+            at.sort_unstable();
+            at.dedup();
+            for at in at {
+                let block = &body.blocks[at.0 as usize];
+                let Some(pair) = spiller::_plain_move(&block.insns[at.1 as usize]).filter(|pair| pair.0 != pair.1)
+                else {
+                    continue;
+                };
+                if _freed(&siblings, &live, pair) {
+                    *siblings.free.entry(*value).or_insert(0.0) += busy.block(block.at);
+                }
+            }
+        }
+    });
+    let mut live = live;
+    _price_free(&mut live, &siblings.free);
+    (live, siblings)
 }
 
 /// Frame traffic inside loops by cause, weighted by loop depth: the spiller's
@@ -4190,6 +4408,7 @@ mod tests {
             &BTreeSet::new(),
             &BTreeSet::new(),
             &Frequency::of(&body),
+            None,
         );
         let union = LiveUnion::of([(_whole(Register::AX), vec![1])], &facts.live);
         let placed = IndexMap::from_iter([(1, Register::AX)]);

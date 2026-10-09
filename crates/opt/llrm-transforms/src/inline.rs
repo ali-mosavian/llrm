@@ -394,7 +394,17 @@ pub fn size(
     function: GlobalId,
     costs: &OperationCosts,
 ) -> Option<i64> {
-    let body = module.global(function).function()?;
+    size_of(module, callees, module.global(function).function()?, costs)
+}
+
+/// `size` of a body that need not be in the module: a copy specialised for
+/// the constants a site passes (`interprocedural::Specialisations`).
+pub fn size_of(
+    module: &Module,
+    callees: &Callees,
+    body: &Function,
+    costs: &OperationCosts,
+) -> Option<i64> {
     let calls: i64 = body
         .walk()
         .filter(|&(_, inst)| matches!(body.instruction(inst).opcode, Opcode::Call(_)))

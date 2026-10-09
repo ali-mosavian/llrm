@@ -1,6 +1,7 @@
-//! Enter a loop proven to run at least once at its body, not at its test:
-//! llrm-core's `optimize/rotate.rs`, the port of `qbopt/optimize/rotate.py`,
-//! adapted to the rich MIR.
+//! Enter a loop proven to run at least once at its body, not at its test; and a
+//! loop that is not proven, behind a copy of its test (gcc's `-ftree-ch`,
+//! `tree-ssa-loop-ch.cc`): llrm-core's `optimize/rotate.rs`, the port of
+//! `qbopt/optimize/rotate.py`, adapted to the rich MIR.
 //! LLVM: LoopRotate, entering at the body where the first test is proven to
 //! pass.
 //!
@@ -34,7 +35,15 @@ use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 
 use crate::lcssa::{arms, from_arms};
 
-pub struct Rotate;
+/// `copy`: the loops not proven to run are entered behind a copy of their test
+/// too. gcc does this at -O1 and above and not at -Os, where it adds code
+/// (`optimize_loop_for_size_p`): there only the proven loops are entered at
+/// their body.
+pub struct Rotate {
+    /// Loops proven to run are entered at their body.
+    pub proven: bool,
+    pub copy: bool,
+}
 
 impl FunctionPass for Rotate {
     fn name(&self) -> &'static str {
@@ -50,7 +59,10 @@ impl FunctionPass for Rotate {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        match entered(unit.context, unit.layout, unit.function, analyses) {
+        if self.proven && llrm_support::debug::enabled("census") {
+            census(unit.context, unit.layout, unit.function, unit.id, analyses);
+        }
+        match entered(unit.context, unit.layout, unit.function, analyses, self.proven, self.copy) {
             Ok(true) => PreservedAnalyses::none(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("rotate: {error}"),
@@ -65,9 +77,12 @@ pub fn entered(
     layout: &DataLayout,
     function: &mut Function,
     analyses: &Analyses,
+    proven: bool,
+    copy: bool,
 ) -> Result<bool, String> {
-    let mut done = BTreeSet::new();
-    while rotated(context, layout, function, analyses, &mut done)? {}
+    let mut done: llrm_mir::dense::IdSet<BlockId> = llrm_mir::dense::IdSet::new();
+    while proven && rotated(context, layout, function, analyses, &mut done)? {}
+    while copy && copied(context, layout, function, analyses, &mut done)? {}
     if done.is_empty() {
         return Ok(false);
     }
@@ -196,15 +211,16 @@ pub(crate) fn _shape(
 }
 
 /// `shape`'s loop entered at `first`, or, with `guard`, entered there only
-/// where the guard is false and skipped to the exit where it is true.
+/// where the guard sends it to `first` and skipped to the exit otherwise
+/// (`true`: the guard is true on the way out).
 pub(crate) fn _rotate(
     context: &mut Context,
     function: &mut Function,
     shape: &Shape,
-    guard: Option<Operand>,
+    guard: Option<(Operand, bool)>,
 ) -> Result<(), String> {
     let entering = function.terminator(shape.preheader).expect("a terminated preheader");
-    if let Some(guard) = guard {
+    if let Some((guard, exits_on_true)) = guard {
         // The exit is now also reached before the loop: each of its phis reads
         // there what it read from the header, which the updater below makes
         // the value from before the loop.
@@ -217,7 +233,8 @@ pub(crate) fn _rotate(
             incoming.push((value, shape.preheader));
             function.set_operands(phi, from_arms(&incoming));
         }
-        function.set_operands(entering, vec![guard, Operand::Block(shape.exit), Operand::Block(shape.first)]);
+        let (taken, other) = if exits_on_true { (shape.exit, shape.first) } else { (shape.first, shape.exit) };
+        function.set_operands(entering, vec![guard, Operand::Block(taken), Operand::Block(other)]);
     } else {
         function.set_operands(entering, vec![Operand::Block(shape.first)]);
     }
@@ -289,7 +306,7 @@ pub fn rotated(
     layout: &DataLayout,
     function: &mut Function,
     analyses: &Analyses,
-    done: &mut BTreeSet<BlockId>,
+    done: &mut llrm_mir::dense::IdSet<BlockId>,
 ) -> Result<bool, String> {
     let mut fresh = analyses.fresh();
     let facts = fresh.get::<Registers>(context, layout, function);
@@ -310,6 +327,133 @@ pub fn rotated(
         return Ok(true);
     }
     Ok(false)
+}
+
+/// `LLRM_DEBUG=census`: per loop, what the trip-count analyses prove of it, as
+/// the last loop pass finds it. Comparing a build with and without `-ftree-ch`
+/// shows a loop whose symbolic count the copy lost.
+fn census(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    id: Option<llrm_mir::context::GlobalId>,
+    analyses: &Analyses,
+) {
+    let mut fresh = analyses.fresh();
+    let facts = fresh.get::<Registers>(context, layout, function);
+    let found = fresh.get::<cfg::Shape>(context, layout, function);
+    let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&found);
+    let name = format!("{id:?}");
+    let (mut proofs, mut constant, mut symbolic) = (0, 0, 0);
+    for loop_ in found.loops.clone() {
+        let found = induction::counted(&unit, &loop_, Some(&facts), false);
+        proofs += usize::from(!found.is_empty());
+        constant += usize::from(induction::trip_count(&unit, &loop_, &facts).is_some());
+        symbolic += usize::from(found.iter().any(|proof| {
+            induction::trips(proof, &mut |_, _| induction::AffineOperand::constant(0, proof.width())).is_some()
+        }));
+    }
+    llrm_support::debug!(
+        "census",
+        "{name}: loops {} proved {proofs} constant {constant} symbolic {symbolic}",
+        found.loops.len()
+    );
+}
+
+/// gcc's `param_max_loop_header_insns`: the statements a copied header may
+/// have.
+const MAX_HEADER_INSNS: usize = 20;
+
+/// The first loop not in `done` whose test is copied before it, entered at its
+/// body behind the copy; whether one was (`copy_headers`,
+/// `should_duplicate_loop_header_p`: a header that ends in the exit test,
+/// within the limit, calling nothing).
+pub fn copied(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    analyses: &Analyses,
+    done: &mut llrm_mir::dense::IdSet<BlockId>,
+) -> Result<bool, String> {
+    let mut fresh = analyses.fresh();
+    let found = fresh.get::<cfg::Shape>(context, layout, function);
+    for loop_ in found.loops.clone() {
+        if done.contains(&cfg::block(loop_.header)) {
+            continue;
+        }
+        let Some(shape) = _shape(function, &loop_) else {
+            continue;
+        };
+        // A loop proven to run needs no guard: it is entered at its body once
+        // the loop passes are done (`rotated`, which unroll, peel and
+        // fill wait for), as gcc's value propagation leaves it after its copy.
+        let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&found);
+        let facts = fresh.get::<Registers>(context, layout, function);
+        if induction::trip_count(&unit, &loop_, &facts).is_some() {
+            continue;
+        }
+        let insns = function
+            .block(shape.header)
+            .instructions()
+            .iter()
+            .filter(|&&inst| function.instruction(inst).opcode != Opcode::Phi)
+            .count();
+        if insns > MAX_HEADER_INSNS {
+            continue;
+        }
+        let Some(guard) = _copy_test(function, &shape) else {
+            continue;
+        };
+        _rotate(context, function, &shape, Some(guard))?;
+        done.insert(shape.first);
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// The header's test computed in the preheader, on what the header's phis read
+/// from it: the guard, and whether it is true on the way out. The header keeps
+/// its own for the trips that come round.
+fn _copy_test(
+    function: &mut Function,
+    shape: &Shape,
+) -> Option<(Operand, bool)> {
+    let branch = function.terminator(shape.header).expect("a terminated header");
+    let [Operand::Value(cond), Operand::Block(taken), _] = function.instruction(branch).operands[..] else {
+        return None;
+    };
+    let mut known: Vec<(llrm_mir::module::ValueId, Operand)> = Vec::new();
+    for phi in _phis(function, shape.header) {
+        let value = function.instruction(phi).result.expect("a phi's value");
+        let start = arms(function, phi).into_iter().find(|&(_, from)| from == shape.preheader)?.0;
+        known.push((value, start));
+    }
+    let entering = function.terminator(shape.preheader).expect("a terminated preheader");
+    let work: Vec<InstId> = function
+        .block(shape.header)
+        .instructions()
+        .iter()
+        .copied()
+        .filter(|&inst| {
+            function.instruction(inst).opcode != Opcode::Phi && !function.instruction(inst).opcode.is_terminator()
+        })
+        .collect();
+    for inst in work {
+        let copy = function.clone_instruction(inst);
+        for index in 0..function.instruction(copy).operands.len() {
+            if let Operand::Value(value) = function.instruction(copy).operands[index] {
+                if let Some((_, now)) = known.iter().find(|(old, _)| *old == value) {
+                    function.set_operand(copy, index, *now);
+                }
+            }
+        }
+        function.insert(copy, Position::Before(entering)).expect("a placed preheader");
+        if let (Some(old), Some(new)) = (function.instruction(inst).result, function.instruction(copy).result) {
+            known.push((old, Operand::Value(new)));
+        }
+    }
+    let guard = known.iter().find(|(old, _)| *old == cond)?.1;
+    Some((guard, taken == shape.exit))
 }
 
 #[cfg(test)]
