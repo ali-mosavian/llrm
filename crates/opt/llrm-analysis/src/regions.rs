@@ -90,6 +90,16 @@ fn scaled(
     if one <= other { (one, other) } else { (other, one) }
 }
 
+/// The size of a flat target's address space, in bytes: an offset is the
+/// linear address and wraps modulo this. None where it does not fit an i64
+/// (a 64-bit target), whose ranges are then not modelled.
+fn flat_word(
+    layout: &llrm_mir::datalayout::DataLayout,
+    spaces: &llrm_mir::spaces::Spaces,
+) -> Option<i64> {
+    1i64.checked_shl(layout.offset_bits(spaces.near)).filter(|word| *word > 0)
+}
+
 /// The linear bytes `reference` reaches, when its selector's range lands it
 /// wholly in memory the machine keeps no program data in.
 fn foreign(
@@ -109,7 +119,7 @@ fn foreign(
     }
     let segment = match spaces.segment_bytes {
         Some(bytes) => i64::try_from(bytes).ok()?,
-        None if flat => 1 << 32,
+        None if flat => flat_word(&program?.layout, &spaces)?,
         None => return None,
     };
     // A selector or offset is an unsigned word; ranges may carry it signed,
@@ -662,6 +672,7 @@ pub(crate) mod tests {
 
     use llrm_mir::datalayout::DataLayout;
     use llrm_mir::module::{Module, Operand};
+    use llrm_mir::spaces::Spaces;
     pub use llrm_x86_m16::Dos;
 
     use super::{RegionError, may_alias, overlapping, typed_apart};
@@ -1294,5 +1305,16 @@ b0:
         assert_eq!(text.selector, Some(0xB800));
         assert_eq!(text.root, Some(Operand::Value(value(function(&module, "f"), "far"))));
         assert!(!overlapping(near, text, None, None, Some(&dos(&module))).unwrap());
+    }
+
+    /// A flat address wrapped modulo 2^32 whatever the target's pointer: on a
+    /// 64-bit one the video buffer's range was taken for 0x1_000B_8000, which
+    /// a program's data may occupy. The word is the pointer's.
+    #[test]
+    fn a_flat_words_size_is_the_pointer_not_32_bits() {
+        let word = |layout: &str| super::flat_word(&DataLayout::parse(layout).unwrap(), &Spaces::FLAT);
+        assert_eq!(word("e-p:16:16-n8:16"), Some(1 << 16));
+        assert_eq!(word("e-p:32:32-n8:16:32"), Some(1 << 32));
+        assert_eq!(word("e-p:64:64-n8:16:32:64"), None);
     }
 }
