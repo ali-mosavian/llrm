@@ -122,7 +122,17 @@ def nest(n: int) -> str:
     return "".join(out)
 
 
-AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain, "nest": nest}
+def cells(n: int) -> str:
+    """One function reading and writing N distinct memory cells (elements of one static array), each read after the stores to every
+    cell before it: the loads that memory forwarding looks up meet N different cells, so a pass that scans every cell held per load
+    (or per store) is quadratic here and not on `straight`, whose memory is none."""
+    body = "".join(
+        f"    cell[{k}] = cell[{(k * 7 + 3) % n}] + a;\n    a ^= cell[{(k * 5 + 1) % n}] >> {k % 7 + 1};\n" for k in range(n)
+    )
+    return PRELUDE_C + f"static unsigned cell[{n}];\nunsigned fn(unsigned a) {{\n" + body + "    return a;\n}\n" + _main("cells", "    return (long)fn(3u);\n")
+
+
+AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain, "nest": nest, "cells": cells}
 
 
 # --- measuring -------------------------------------------------------------------------------------------------------
