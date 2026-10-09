@@ -29,6 +29,9 @@ pub struct RegisterClasses {
     /// indexes and the frame.
     pub word_bases: BTreeSet<Register>,
     pub word_indexes: BTreeSet<Register>,
+    /// A joint operand constraint over a register pair (an address of two registers): one from the first class and the other from the
+    /// second, either way round. The target declares it; none, where it has no such form.
+    pub pair: Option<(BTreeSet<Register>, BTreeSet<Register>)>,
     pub frame: Register,
     /// Every register an address may be made of, the frame's included:
     /// `[bx+si]`, `[bp+di]`.
@@ -98,11 +101,14 @@ impl RegisterClasses {
             |class: &str| llrm_target::registers::of_class(&file, class).into_iter().map(word).collect::<BTreeSet<_>>();
         let (encodable_bases, indexes) = (every("base"), every("index"));
         let addressing = encodable_bases.union(&indexes).copied().collect();
+        let (word_bases, word_indexes): (BTreeSet<Register>, BTreeSet<Register>) = (words("base"), words("index"));
+        let pair = (!word_bases.is_empty() && !word_indexes.is_empty()).then(|| (word_bases.clone(), word_indexes.clone()));
         Self {
             pins,
             available: held("gpr"),
-            word_bases: words("base"),
-            word_indexes: words("index"),
+            word_bases,
+            word_indexes,
+            pair,
             frame: arch.frame_register(),
             addressing,
             encodable_bases,
@@ -121,6 +127,10 @@ impl RegisterClasses {
         if let Some(word) = llrm_x86::registers::word_of(whole) {
             free.word_bases.insert(word);
             free.word_indexes.insert(word);
+            if let Some((first, second)) = free.pair.as_mut() {
+                first.insert(word);
+                second.insert(word);
+            }
         }
         free
     }
@@ -129,6 +139,14 @@ impl RegisterClasses {
     #[cfg(test)]
     pub fn m16() -> std::rc::Rc<Self> {
         std::rc::Rc::new(Self::of(&llrm_x86_m16::M16))
+    }
+
+    /// Whether the two registers of a pair operand are a legal pair: one of each class.
+    pub fn pair_legal(&self, one: Register, other: Register) -> bool {
+        let Some((first, second)) = &self.pair else { return true };
+        let (one, other) = (crate::backend::allocate::_whole(one), crate::backend::allocate::_whole(other));
+        let has = |class: &BTreeSet<Register>, register: Register| class.iter().any(|member| crate::backend::allocate::_whole(*member) == register);
+        (has(first, one) && has(second, other)) || (has(second, one) && has(first, other))
     }
 
     /// Every operand this instruction requires in one particular register.

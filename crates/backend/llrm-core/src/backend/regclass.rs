@@ -214,7 +214,16 @@ fn collected(
         }
     }
     llrm_support::debug::timed("classes word roles", || {
-        _word_address_roles(&word_pairs, &mut out, body, prefer_indexes, segments, registers, found)
+        if let (Some((first, second)), true) = (&registers.pair, llrm_support::env_set("LLRM_PAIRS")) {
+            // The roles stay open: both take either class, and the allocator resolves the pair as it places them.
+            let both: BTreeSet<Register> = first.union(second).copied().collect();
+            for (one, other) in &word_pairs {
+                _restrict(&mut out, *one, &both);
+                _restrict(&mut out, *other, &both);
+            }
+        } else {
+            _word_address_roles(&word_pairs, &mut out, body, prefer_indexes, segments, registers, found)
+        }
     });
     llrm_support::debug::timed("classes webs", || {
         _through_webs(body, &selecting, &numeric, &selectors, optimistic, &mut out)
@@ -675,4 +684,22 @@ mod tests {
         assert_eq!(webs.get(&entry_segment), webs.get(&segment));
         assert!(webs.get(&entry_segment).is_some());
     }
+}
+
+/// The pairs of values an address of two registers is made of (`[a+b]`): the operands the target's pair rule governs.
+pub fn word_pairs(body: &LirBody) -> Vec<(u32, u32)> {
+    let mut pairs = Vec::new();
+    for one in body.blocks.iter().flat_map(|block| &block.insns) {
+        let Some(what) = &one.what else { continue };
+        for place in what.dests.iter().chain(&what.sources) {
+            if let Loc::Mem(cell) = place {
+                if let (Some(base), Some(index)) = (cell.base, cell.index) {
+                    if base.width == 2 && index.width == 2 && cell.scale == 1 {
+                        pairs.push((base.value, index.value));
+                    }
+                }
+            }
+        }
+    }
+    pairs
 }

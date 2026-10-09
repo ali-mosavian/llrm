@@ -1043,6 +1043,8 @@ struct Facts {
     widths: IndexMap<u32, u32>,
     confined: Classes,
     hints: IndexMap<u32, Vec<u32>>,
+    /// The values each value shares an address of two registers with, where the target's pair rule governs them.
+    pairs: IndexMap<u32, Vec<u32>>,
 }
 
 impl Facts {
@@ -1086,7 +1088,16 @@ impl Facts {
             found
         });
         let hints = llrm_support::debug::timed("facts hints", || _copy_hints(body));
-        Self { index, live, masks, widths, confined, hints }
+        let mut pairs: IndexMap<u32, Vec<u32>> = IndexMap::default();
+        if registers.pair.is_some() && llrm_support::env_set("LLRM_PAIRS") {
+            for (one, other) in crate::backend::regclass::word_pairs(body) {
+                if one != other {
+                    pairs.entry(one).or_default().push(other);
+                    pairs.entry(other).or_default().push(one);
+                }
+            }
+        }
+        Self { index, live, masks, widths, confined, hints, pairs }
     }
 }
 
@@ -1193,6 +1204,10 @@ fn _allocated(
     // merged again, which would make the value spilled again, without end.
     let mut plain: BTreeSet<u32> = BTreeSet::new();
     let mut facts = Facts::of(&body, profile, segments, classes, &unspillable, protected, &Frequency::of(&body));
+    if llrm_support::env_set("LLRM_DUMP_CLASS") {
+        eprintln!("CLASSES {}: {}", body.name, facts.confined.iter().filter(|(_, c)| c.len() <= 3).map(|(v, c)| format!("v{v}:{:?}", c.iter().map(|r| r.repr()).collect::<Vec<_>>())).collect::<Vec<_>>().join(" "));
+        eprintln!("PAIRS {}: {:?}", body.name, facts.pairs);
+    }
     if let Some(why) = unallocatable(&facts, pinned.unwrap_or(&IndexMap::default()), &unspillable, segments, classes) {
         return Err(Unplaced(why).into());
     }
@@ -1264,6 +1279,39 @@ fn _allocated(
         if !data_free {
             order.retain(|one| _whole(*one) != segments.data);
         }
+        let pair_ok = |value: u32, register: Register, held: &IndexMap<u32, Register>| -> bool {
+            facts
+                .pairs
+                .get(&value)
+                .into_iter()
+                .flatten()
+                .filter_map(|partner| fixed.get(partner).or_else(|| held.get(partner)))
+                .all(|partner| classes.pair_legal(register, *partner))
+        };
+        if !facts.pairs.is_empty() {
+            order.retain(|register| pair_ok(value, *register, &r#where));
+        }
+        if llrm_support::env_set("LLRM_PAIRS") && !facts.pairs.is_empty() && facts.pairs.contains_key(&value) && order.len() > 1 {
+            // Prefer the register that fewest unplaced, overlapping values have no other choice but: the demand it would meet.
+            let demand = |register: &Register| -> usize {
+                facts
+                    .live
+                    .iter()
+                    .filter(|(other, interval)| **other != value && !r#where.contains_key(*other) && !spilled.contains(*other) && interval.overlaps(&mine))
+                    .filter(|(other, _)| {
+                        let choices: Vec<Register> = target::order(facts.confined.get(*other), segments, classes)
+                            .into_iter()
+                            .filter(|one| data_free || _whole(*one) != segments.data)
+                            .filter(|one| pair_ok(**other, *one, &r#where))
+                            .collect();
+                        choices.len() == 1 && _whole(choices[0]) == _whole(*register)
+                    })
+                    .count()
+            };
+            let mut keyed: Vec<(usize, usize, Register)> = order.iter().enumerate().map(|(at, register)| (demand(register), at, *register)).collect();
+            keyed.sort();
+            order = keyed.into_iter().map(|(_, _, register)| register).collect();
+        }
         if protected.contains(&value) && _reserves_word_base(&body, value, &facts.confined, classes) {
             let word: BTreeSet<Register> = classes.word_bases.iter().map(|one| _whole(*one)).collect();
             order = order
@@ -1304,6 +1352,9 @@ fn _allocated(
         // a value there costs a restore and a prefix on every data access.
         order.sort_by_key(|one| _whole(*one) == segments.data);
         let width = facts.widths.get(&value).copied().unwrap_or(4);
+        if llrm_support::env_set("LLRM_DUMP_CLASS") && facts.pairs.contains_key(&value) {
+            eprintln!("PLACE {}: value#{value} w {:.3} size {} order {:?} partners {:?}", body.name, mine.weight, mine.size(), order.iter().map(|r| r.repr()).collect::<Vec<_>>(), facts.pairs.get(&value).map(|p| p.iter().map(|x| (*x, r#where.get(x).map(|r| r.repr()))).collect::<Vec<_>>()));
+        }
         if let Some(got) = _free(&mine, &order, &union, &facts.live, &facts.masks, width) {
             r#where.insert(value, got);
             union.add(_whole(got), value, &facts.live);
@@ -1321,6 +1372,7 @@ fn _allocated(
                     .into_iter()
                     .filter(|one| _whole(*one) != _whole(register))
                     .filter(|one| data_free || _whole(*one) != segments.data)
+                    .filter(|one| facts.pairs.is_empty() || pair_ok(other, *one, &r#where))
                     .collect();
                 _free(
                     &facts.live[&other],
@@ -1363,6 +1415,14 @@ fn _allocated(
                 union.add(_whole(got), value, &facts.live);
                 stage.insert(value, Stage::Done);
                 continue;
+            }
+            if llrm_support::env_set("LLRM_DUMP_EVICT") {
+                eprintln!("EVICT-FAIL {}: value#{value} stage {:?} weight {} size {} cascade {:?} order {:?} class {:?} partners {:?}", body.name, at, mine.weight, mine.size(), cascades.get(&value), order.iter().map(|r| r.repr()).collect::<Vec<_>>(), facts.confined.get(&value).map(|c| c.iter().map(|r| r.repr()).collect::<Vec<_>>()), facts.pairs.get(&value).map(|p| p.iter().map(|x| (*x, r#where.get(x).map(|r| r.repr()))).collect::<Vec<_>>()));
+                for register in &order {
+                    for other in union.meeting(&_whole(*register), &mine, &facts.live) {
+                        eprintln!("   holder v{other} w {:.3} size {} cascade {:?} movable {} class {:?}", facts.live[&other].weight, facts.live[&other].size(), cascades.get(&other), movable(other, *register), facts.confined.get(&other).map(|c| c.iter().map(|r| r.repr()).collect::<Vec<_>>()));
+                    }
+                }
             }
             if at == Stage::Assign {
                 stage.insert(value, Stage::Split);
@@ -1478,6 +1538,7 @@ fn _allocated(
                 fenced: &fenced,
                 budget: Coloring::BUDGET,
                 stack: Vec::new(),
+                legal: &pair_ok,
             };
             if llrm_support::debug::timed("regalloc recolor", || coloring.recolor(value, 0, &mut BTreeSet::new())) {
                 stage.insert(value, Stage::Done);
@@ -2138,6 +2199,8 @@ pub struct Coloring<'a> {
     pub budget: usize,
     /// Each moved value and the register it held: LLVM's `RecolorStack`.
     pub stack: Vec<(u32, Register)>,
+    /// Whether a value may take a register given where the others are (a joint operand constraint).
+    pub legal: &'a dyn Fn(u32, Register, &IndexMap<u32, Register>) -> bool,
 }
 
 impl Coloring<'_> {
@@ -2190,7 +2253,7 @@ impl Coloring<'_> {
                 break;
             }
             self.budget -= 1;
-            if _clobbered(mine, register, self.masks, width) {
+            if _clobbered(mine, register, self.masks, width) || !(self.legal)(value, register, self.r#where) {
                 continue;
             }
             let mut holders: Vec<u32> = self.union.meeting(&_whole(register), mine, self.live);
@@ -2213,7 +2276,7 @@ impl Coloring<'_> {
                 .all(
                     |other| match _free(
                         &self.live[other],
-                        &(self.order)(*other),
+                        &(self.order)(*other).into_iter().filter(|one| (self.legal)(*other, *one, self.r#where)).collect::<Vec<Register>>(),
                         self.union,
                         self.live,
                         self.masks,
@@ -4025,6 +4088,7 @@ mod tests {
             fenced: &BTreeSet::new(),
             budget: Coloring::BUDGET,
             stack: Vec::new(),
+            legal: &|_, _, _| true,
         };
         assert!(coloring.recolor(3, 0, &mut BTreeSet::new()));
         assert_eq!(placed.get(&3), Some(&Register::AX));
@@ -4060,6 +4124,7 @@ mod tests {
             fenced: &BTreeSet::new(),
             budget: Coloring::BUDGET,
             stack: Vec::new(),
+            legal: &|_, _, _| true,
         };
         assert!(!coloring.recolor(0, 0, &mut BTreeSet::new()));
         assert!(Coloring::BUDGET - coloring.budget <= 256, "{} tries", Coloring::BUDGET - coloring.budget);
@@ -4131,6 +4196,7 @@ mod tests {
             fenced: &BTreeSet::new(),
             budget: Coloring::BUDGET,
             stack: Vec::new(),
+            legal: &|_, _, _| true,
         };
         assert!(!coloring.recolor(3, 0, &mut BTreeSet::new()));
         assert_eq!(placed, IndexMap::from_iter([(1, Register::AX), (2, Register::BX)]));
