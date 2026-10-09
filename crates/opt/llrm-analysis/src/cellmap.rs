@@ -170,6 +170,21 @@ impl<K: Clone + Eq + Hash, V, B: Bucket> CellMap<K, V, B> {
         self.items.retain(|key, _| !gone.contains(key));
     }
 
+    /// The cells `kill` would ask of a write that reaches `reached` (every bucket when None) and, where `displaced` says so, meets its span:
+    /// every cell that can overlap the write, and none it cannot.
+    pub fn asked(&self, reached: Option<Vec<B>>, displaced: Option<(HashSet<B>, ByteRange)>) -> Vec<&K> {
+        let mut asked = Vec::new();
+        let mut take = |bucket: &B| match self._spanned(bucket, displaced.as_ref()) {
+            Some((spans, span)) => asked.extend(spans.meeting(span)),
+            None => asked.extend(self.buckets.get(bucket).into_iter().flat_map(IndexMap::keys)),
+        };
+        match &reached {
+            None => self.buckets.keys().for_each(&mut take),
+            Some(reached) => reached.iter().for_each(&mut take),
+        }
+        asked
+    }
+
     /// Python `_asked`'s first case: `bucket`'s spans, where `displaced` asks
     /// only the cells meeting its span.
     fn _spanned<'a>(
