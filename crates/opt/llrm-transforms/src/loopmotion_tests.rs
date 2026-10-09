@@ -314,3 +314,19 @@ fn test_sinking_a_loops_store_proves_only_that_loop_again() {
     assert!(worked <= 4 * loops, "{worked} loops worked for the bounds of {loops} loops sunk one after another");
         assert!(solved <= 200, "{solved} blocks worked for the edges of a body of {} blocks, {loops} sunk one after another", 2 * loops + loops);
 }
+
+/// A store moved to the loop's exit threw away every analysis held, so each of a nest's loops with a store to move worked its
+/// ranges out again (nest 32 deep: 55 `bounded` runs, 9.5 G of a 35 G compile). No value, block or edge moves, so what is held of
+/// them stays.
+#[test]
+fn test_moving_a_store_keeps_the_ranges_held() {
+    use llrm_analysis::manager::Bounded;
+    let mut module = parsed(&format!("{DOS}{}", hotlop("")));
+    let (layout, outer) = (layout(&module), Rc::new(Outer::of(&module, None)));
+    let callees = llrm_mir::memory::callees(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    analyses.get::<Bounded>(context, &layout, function);
+    assert!(sunk_stores(context, &layout, &callees, function, &mut analyses).unwrap(), "premise: a store moved");
+    assert!(analyses.cached::<Bounded>().is_some(), "the ranges were thrown away by a store moving");
+}
