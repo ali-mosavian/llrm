@@ -60,8 +60,7 @@ fn _root(register: Register) -> Register {
 /// `ir` models `fdivp` as a DIVIDE, and the widening rule claimed it reads
 /// dx:ax.
 pub fn _on_the_stack(what: &Semantics) -> bool {
-    what.dests.iter().chain(&what.sources).any(|one| one.st_index().is_some())
-        || what.name.as_deref().unwrap_or("").starts_with('f')
+    what.dests.iter().chain(&what.sources).any(positional_place) || what.name.as_deref().unwrap_or("").starts_with('f')
 }
 
 /// Whether `xchg` takes these two operands: a general register or a memory
@@ -101,7 +100,7 @@ pub fn popped_width(place: &Loc) -> Option<u32> {
 /// follows it, so nothing may live in AX across it.
 pub fn status_through_ax(what: &Semantics) -> bool {
     what.op == Operation::Compare
-        && what.sources.iter().any(|one| one.st_index().is_some() || matches!(one, Loc::Held(held) if held.width == 10))
+        && what.sources.iter().any(|one| positional_place(one) || matches!(one, Loc::Held(held) if held.width == 10))
 }
 
 /// The register a two-address instruction reads and writes as one.
@@ -323,6 +322,18 @@ pub fn far_load(what: &Semantics) -> bool {
     what.op == Operation::Move
         && what.name.as_deref().is_some_and(|name| FAR_LOADS.values().any(|one| *one == name))
         && what.dests.len() == 2
+}
+
+/// Whether the register is a position in a stack, where an exchange is an
+/// effect and no pass may rename or drop it. The descriptions state the same
+/// set (`positional` in registers.regs); a test holds the two together.
+pub fn positional(register: Register) -> bool {
+    llrm_x86::registers::positional(register)
+}
+
+/// Whether the operand is a positional register.
+pub fn positional_place(place: &Loc) -> bool {
+    matches!(place, Loc::Reg(one) if positional(one.register))
 }
 
 /// Whether this is a register this target describes at all.

@@ -48,11 +48,11 @@ fn _stateful_destination(where_: &Loc) -> bool {
     )
 }
 
-/// A general register, an immediate or an address: not the x87 stack, whose
+/// A register, an immediate or an address: not a positional register, whose
 /// exchanges and loads change it through no register a liveness walk sees.
 fn _general(where_: &Loc) -> bool {
     match where_ {
-        Loc::Reg(one) => one.st_index().is_none(),
+        Loc::Reg(one) => !crate::backend::target::positional(one.register),
         Loc::Imm(_) | Loc::Address(_) => true,
         _ => false,
     }
