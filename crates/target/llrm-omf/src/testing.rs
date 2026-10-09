@@ -4,9 +4,10 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use llrm_support::hash::IndexMap;
+
 use crate::module::{Group, Module, of};
 use crate::omf;
-use llrm_support::hash::IndexMap;
 
 /// conftest's `tests/inputs`.
 pub fn fixtures() -> PathBuf {
@@ -32,7 +33,12 @@ pub fn loaded(path: impl AsRef<Path>) -> Option<Module> {
 }
 
 /// `Module(records, seg, name, code, start, end)` with every other field defaulted.
-pub fn bare(found: &Module, code: Vec<u8>, start: i64, end: i64) -> Module {
+pub fn bare(
+    found: &Module,
+    code: Vec<u8>,
+    start: i64,
+    end: i64,
+) -> Module {
     Module {
         records: found.records.clone(),
         seg: found.seg,

@@ -11,10 +11,10 @@
 use std::collections::BTreeMap;
 
 use iced_x86::{Code, FlowControl, Mnemonic, Register, RflagsBits};
+use llrm_mir::BinaryOp;
 use llrm_x86_bcmachine::frontends::bc::blocks::Block;
 use llrm_x86_bcmachine::frontends::bc::declen::Insn;
 use llrm_x86_bcmachine::model::ir::nodes::{Node, span};
-use llrm_mir::BinaryOp;
 
 use crate::emit::{Emit, Emitter};
 use crate::machine::BodyFacts;
@@ -23,7 +23,11 @@ use crate::sites::Recognizer;
 pub struct Copies;
 
 impl Recognizer for Copies {
-    fn node(&self, e: &mut Emitter, node: &Node) -> Option<Emit<()>> {
+    fn node(
+        &self,
+        e: &mut Emitter,
+        node: &Node,
+    ) -> Option<Emit<()>> {
         let Node::Opaque(one) = node else { return None };
         let raw = &one.insn.insn;
         let width = match raw.code() {
@@ -34,7 +38,11 @@ impl Recognizer for Copies {
         if raw.has_rep_prefix() || raw.has_repne_prefix() || raw.memory_segment() != Register::DS {
             return None;
         }
-        let State { direction: Some(direction), same: true } = before(e.body(), span(node).0, e.unit.objects.names_data(Register::SS))? else { return None };
+        let State { direction: Some(direction), same: true } =
+            before(e.body(), span(node).0, e.unit.objects.names_data(Register::SS))?
+        else {
+            return None;
+        };
         let step = direction * width;
         Some((|| {
             let (source, dest) = (e.register(Register::SI)?, e.register(Register::DI)?);
@@ -55,7 +63,11 @@ impl Recognizer for Copies {
 pub struct Fills;
 
 impl Recognizer for Fills {
-    fn node(&self, e: &mut Emitter, node: &Node) -> Option<Emit<()>> {
+    fn node(
+        &self,
+        e: &mut Emitter,
+        node: &Node,
+    ) -> Option<Emit<()>> {
         let Node::Opaque(one) = node else { return None };
         let raw = &one.insn.insn;
         let width = match raw.code() {
@@ -106,7 +118,11 @@ struct State {
 }
 
 /// The state before the node at `at`; `stack` whether SS is DS.
-fn before(body: &BodyFacts, at: usize, stack: bool) -> Option<State> {
+fn before(
+    body: &BodyFacts,
+    at: usize,
+    stack: bool,
+) -> Option<State> {
     let seed = body.blocks.first()?.at;
     let mut predecessors: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for block in &body.blocks {
@@ -117,7 +133,8 @@ fn before(body: &BodyFacts, at: usize, stack: bool) -> Option<State> {
     // Each block's state on exit, absent while unreached.
     let mut exits: BTreeMap<usize, State> = BTreeMap::new();
     let entry = |exits: &BTreeMap<usize, State>, block: usize| -> Option<State> {
-        let mut incoming: Vec<State> = predecessors.get(&block).into_iter().flatten().filter_map(|one| exits.get(one).copied()).collect();
+        let mut incoming: Vec<State> =
+            predecessors.get(&block).into_iter().flatten().filter_map(|one| exits.get(one).copied()).collect();
         if block == seed {
             incoming.push(State { direction: Some(1), same: false });
         }
@@ -153,7 +170,12 @@ fn before(body: &BodyFacts, at: usize, stack: bool) -> Option<State> {
 }
 
 /// The state after `node`, `previous` the node before it.
-fn after(node: &Node, previous: Option<&Node>, state: State, stack: bool) -> State {
+fn after(
+    node: &Node,
+    previous: Option<&Node>,
+    state: State,
+    stack: bool,
+) -> State {
     let Some(insn) = instruction(node) else { return state };
     let raw = &insn.insn;
     let direction = match raw.mnemonic() {
@@ -163,11 +185,18 @@ fn after(node: &Node, previous: Option<&Node>, state: State, stack: bool) -> Sta
         _ if raw.rflags_modified() & RflagsBits::DF != 0 => None,
         _ => state.direction,
     };
-    let pushed = previous.and_then(instruction).is_some_and(|one| one.insn.code() == Code::Pushw_DS || stack && one.insn.code() == Code::Pushw_SS);
+    let pushed = previous
+        .and_then(instruction)
+        .is_some_and(|one| one.insn.code() == Code::Pushw_DS || stack && one.insn.code() == Code::Pushw_SS);
     let same = if raw.code() == Code::Popw_ES {
         pushed
     } else {
-        state.same && node.effects().defs.as_ref().is_some_and(|defs| !defs.contains(&Register::DS) && !defs.contains(&Register::ES))
+        state.same
+            && node
+                .effects()
+                .defs
+                .as_ref()
+                .is_some_and(|defs| !defs.contains(&Register::DS) && !defs.contains(&Register::ES))
     };
     State { direction, same }
 }

@@ -9,21 +9,20 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-    pub fn new(span: Span, message: impl Into<String>) -> Self {
-        Self {
-            span,
-            message: message.into(),
-        }
+    pub fn new(
+        span: Span,
+        message: impl Into<String>,
+    ) -> Self {
+        Self { span, message: message.into() }
     }
 }
 
 impl fmt::Display for Diagnostic {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "{}:{}: {}",
-            self.span.line, self.span.column, self.message
-        )
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
+        write!(formatter, "{}:{}: {}", self.span.line, self.span.column, self.message)
     }
 }
 

@@ -53,24 +53,42 @@ impl Program {
         Self { root }
     }
 
-    fn uri(&self, module: &str) -> String {
+    fn uri(
+        &self,
+        module: &str,
+    ) -> String {
         documents::uri(&crate::modules::file(self.root.path(), module))
     }
 
-    fn opened(&self, module: &str, text: &str) -> Value {
+    fn opened(
+        &self,
+        module: &str,
+        text: &str,
+    ) -> Value {
         notification("textDocument/didOpen", json!({"textDocument": {"uri": self.uri(module), "text": text}}))
     }
 
-    fn at(&self, line: u32, character: u32) -> Value {
+    fn at(
+        &self,
+        line: u32,
+        character: u32,
+    ) -> Value {
         json!({"textDocument": {"uri": self.uri("main")}, "position": {"line": line, "character": character}})
     }
 }
 
-fn request(id: u32, method: &str, params: Value) -> Value {
+fn request(
+    id: u32,
+    method: &str,
+    params: Value,
+) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
 }
 
-fn notification(method: &str, params: Value) -> Value {
+fn notification(
+    method: &str,
+    params: Value,
+) -> Value {
     json!({"jsonrpc": "2.0", "method": method, "params": params})
 }
 
@@ -80,7 +98,10 @@ fn session(messages: &[Value]) -> Vec<Value> {
 }
 
 /// `session`, the editor's `initialize` carrying `params`.
-fn session_with(params: Value, messages: &[Value]) -> Vec<Value> {
+fn session_with(
+    params: Value,
+    messages: &[Value],
+) -> Vec<Value> {
     let mut input = Vec::new();
     for one in [&[request(0, "initialize", params)], messages].concat() {
         transport::write(&mut input, &one).expect("framed");
@@ -91,12 +112,18 @@ fn session_with(params: Value, messages: &[Value]) -> Vec<Value> {
     std::iter::from_fn(|| transport::read(&mut output).expect("framed")).collect()
 }
 
-fn result(sent: &[Value], id: u32) -> &Value {
+fn result(
+    sent: &[Value],
+    id: u32,
+) -> &Value {
     &sent.iter().find(|one| one["id"] == id).expect("a reply")["result"]
 }
 
 /// The diagnostics last published for `uri`.
-fn published<'s>(sent: &'s [Value], uri: &str) -> &'s Vec<Value> {
+fn published<'s>(
+    sent: &'s [Value],
+    uri: &str,
+) -> &'s Vec<Value> {
     let last = sent.iter().rev().find(|one| one["params"]["uri"] == uri).expect("published");
     last["params"]["diagnostics"].as_array().expect("diagnostics")
 }
@@ -135,11 +162,17 @@ fn an_imported_module_error_is_on_its_file_and_on_the_import() {
 #[test]
 fn symbols_are_the_declarations_with_their_members() {
     let program = Program::new();
-    let sent = session(&[program.opened("geo", GEO), request(1, "textDocument/documentSymbol", json!({"textDocument": {"uri": program.uri("geo")}}))]);
+    let sent = session(&[
+        program.opened("geo", GEO),
+        request(1, "textDocument/documentSymbol", json!({"textDocument": {"uri": program.uri("geo")}})),
+    ]);
     let symbols = result(&sent, 1).as_array().expect("symbols");
     let names: Vec<&str> = symbols.iter().map(|one| one["name"].as_str().expect("named")).collect();
     assert_eq!(names, ["Point", "Point.length2", "origin", "secret"]);
-    assert_eq!(symbols[0]["children"].as_array().expect("fields").iter().map(|one| &one["name"]).collect::<Vec<_>>(), ["x", "y"]);
+    assert_eq!(
+        symbols[0]["children"].as_array().expect("fields").iter().map(|one| &one["name"]).collect::<Vec<_>>(),
+        ["x", "y"]
+    );
     assert_eq!(symbols[0]["selectionRange"]["start"], json!({"line": 1, "character": 11}));
 }
 
@@ -147,7 +180,10 @@ fn symbols_are_the_declarations_with_their_members() {
 fn definition_finds_locals_members_imports_and_std() {
     let program = Program::new();
     let positions = [(9, 23), (9, 25), (12, 14), (8, 16), (9, 17), (10, 18), (1, 12)];
-    let requests = positions.iter().enumerate().map(|(id, &(line, character))| request(id as u32 + 1, "textDocument/definition", program.at(line, character)));
+    let requests = positions
+        .iter()
+        .enumerate()
+        .map(|(id, &(line, character))| request(id as u32 + 1, "textDocument/definition", program.at(line, character)));
     let sent = session(&[vec![program.opened("main", MAIN)], requests.collect()].concat());
     let found = |id| {
         let one = result(&sent, id);
@@ -190,7 +226,14 @@ fn completion_offers_keywords_own_names_and_a_modules_public_ones() {
         notification("textDocument/didChange", changed),
         request(2, "textDocument/completion", program.at(12, 8)),
     ]);
-    let labels = |id| result(&sent, id).as_array().expect("items").iter().map(|one| one["label"].as_str().expect("a label").to_owned()).collect::<Vec<_>>();
+    let labels = |id| {
+        result(&sent, id)
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|one| one["label"].as_str().expect("a label").to_owned())
+            .collect::<Vec<_>>()
+    };
     let anywhere = labels(1);
     for expected in ["let", "fn", "double", "main", "geo"] {
         assert!(anywhere.iter().any(|one| one == expected), "{expected} in {anywhere:?}");
@@ -203,7 +246,10 @@ fn completion_offers_keywords_own_names_and_a_modules_public_ones() {
 fn completion_after_a_value_offers_its_types_fields_and_methods() {
     let program = Program::new();
     let typing = |member: &str| {
-        let text = MAIN.replace("    print(total)\n", &format!("    print(total)\n    let ps: geo.Point[2] = [p, p]\n    {member}\n"));
+        let text = MAIN.replace(
+            "    print(total)\n",
+            &format!("    print(total)\n    let ps: geo.Point[2] = [p, p]\n    {member}\n"),
+        );
         json!({"textDocument": {"uri": program.uri("main")}, "contentChanges": [{"text": text}]})
     };
     let sent = session(&[
@@ -213,7 +259,14 @@ fn completion_after_a_value_offers_its_types_fields_and_methods() {
         notification("textDocument/didChange", typing("ps[1].le")),
         request(2, "textDocument/completion", program.at(13, 12)),
     ]);
-    let labels = |id| result(&sent, id).as_array().expect("items").iter().map(|one| one["label"].as_str().expect("a label").to_owned()).collect::<Vec<_>>();
+    let labels = |id| {
+        result(&sent, id)
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|one| one["label"].as_str().expect("a label").to_owned())
+            .collect::<Vec<_>>()
+    };
     assert_eq!(labels(1), ["x", "y", "length2"]);
     assert_eq!(labels(2), ["x", "y", "length2"]);
 }
@@ -224,8 +277,17 @@ fn completion_offers_the_locals_in_scope_at_the_cursor() {
     let program = Program::new();
     let typing = MAIN.replace("    let mode = io.READ\n", "    to\n    let mode = io.READ\n");
     let changed = json!({"textDocument": {"uri": program.uri("main")}, "contentChanges": [{"text": typing}]});
-    let sent = session(&[program.opened("main", MAIN), notification("textDocument/didChange", changed), request(1, "textDocument/completion", program.at(10, 6))]);
-    let labels: Vec<String> = result(&sent, 1).as_array().expect("items").iter().map(|one| one["label"].as_str().expect("a label").to_owned()).collect();
+    let sent = session(&[
+        program.opened("main", MAIN),
+        notification("textDocument/didChange", changed),
+        request(1, "textDocument/completion", program.at(10, 6)),
+    ]);
+    let labels: Vec<String> = result(&sent, 1)
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|one| one["label"].as_str().expect("a label").to_owned())
+        .collect();
     for expected in ["total", "p"] {
         assert!(labels.iter().any(|one| one == expected), "{expected} in {labels:?}");
     }

@@ -1,11 +1,14 @@
 //! A program's block locals through the whole pipeline: HIR with lifetime markers to the
 //! frame it reserves.
 
-use llrm_hir::model::{Block, Dialect, Function, Instruction, Module, Op, Operand, Place, Program, RuntimeProfile, Storage, Terminator, TerminatorKind, Type, TypeKind, Value};
+use llrm_hir::model::{
+    Block, Dialect, Function, Instruction, Module, Op, Operand, Place, Program, RuntimeProfile, Storage, Terminator,
+    TerminatorKind, Type, TypeKind, Value,
+};
+use llrm_x86_m16::machine::BUILT_IN;
 
 use super::{Options, compiled};
 use crate::abi::machine::Machine;
-use llrm_x86_m16::machine::BUILT_IN;
 use crate::backend::masm;
 
 /// `F%(a)`: two arms, each with a local of its own, held in memory (volatile) so promotion
@@ -19,26 +22,50 @@ fn program(markers: bool) -> Program {
     let arm = |id: i64, place: i64, load: i64, results: i64| {
         let mut instructions = Vec::new();
         if markers {
-            instructions.push(Instruction::new(id * 10 + 1, Op::LifetimeStart, vec![], vec![Operand::place_ref(place)]));
+            instructions.push(Instruction::new(
+                id * 10 + 1,
+                Op::LifetimeStart,
+                vec![],
+                vec![Operand::place_ref(place)],
+            ));
         }
-        instructions.push(Instruction::new(id * 10 + 2, Op::Store, vec![], vec![Operand::place_ref(place), Operand::value_ref(1)]));
+        instructions.push(Instruction::new(
+            id * 10 + 2,
+            Op::Store,
+            vec![],
+            vec![Operand::place_ref(place), Operand::value_ref(1)],
+        ));
         instructions.push(Instruction::new(id * 10 + 3, Op::Load, vec![load], vec![Operand::place_ref(place)]));
         if markers {
             instructions.push(Instruction::new(id * 10 + 4, Op::LifetimeEnd, vec![], vec![Operand::place_ref(place)]));
         }
-        Block::new(id, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(results)], Vec::new()))
+        Block::new(
+            id,
+            instructions,
+            Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(results)], Vec::new()),
+        )
     };
     let test = Instruction::new(1, Op::Ne, vec![2], vec![Operand::value_ref(1), Operand::constant(1, 0)]);
-    let entry = Block::new(1, vec![test], Terminator::new(TerminatorKind::Branch, vec![Operand::value_ref(2)], vec![2, 3]));
+    let entry =
+        Block::new(1, vec![test], Terminator::new(TerminatorKind::Branch, vec![Operand::value_ref(2)], vec![2, 3]));
     let place = |id: i64, name: &str, offset: i64| {
         let mut place = Place::new(id, name, 1, Storage::Local, offset);
         place.volatile = true;
         place.extent = Some(2);
         place
     };
-    let mut function = Function::new(1, "f", 1, values, vec![place(1, "X", -2), place(2, "Y", -4)], vec![entry, arm(2, 1, 3, 3), arm(3, 2, 4, 4)], 1);
+    let mut function = Function::new(
+        1,
+        "f",
+        1,
+        values,
+        vec![place(1, "X", -2), place(2, "Y", -4)],
+        vec![entry, arm(2, 1, 3, 3), arm(3, 2, 4, 4)],
+        1,
+    );
     function.parameters = vec![1];
-    let mut program = Program::new(Dialect::Qb45, RuntimeProfile::Qb45, vec![Module::new(1, "m", types, vec![function])]);
+    let mut program =
+        Program::new(Dialect::Qb45, RuntimeProfile::Qb45, vec![Module::new(1, "m", types, vec![function])]);
     // A frame zeroed at entry writes every local outside its scope: no slot is then free to share.
     program.zeroed_locals = false;
     program

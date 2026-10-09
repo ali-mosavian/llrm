@@ -2,8 +2,8 @@
 //!
 //! `buildprs` splits `NonTerminals:` entries into two tables:
 //! - Internal NTs (no `EXTERNAL` production) get `tIntNtDisp[id]` byte offsets into `tState`.
-//! - External NTs get `tExtNtDisp[id]` function-pointer symbols (`Nt{Name}`) and parallel
-//!   `tExtNtHelp[id]` message ids (`MSG_*` or `0`).
+//! - External NTs get `tExtNtDisp[id]` function-pointer symbols (`Nt{Name}`) and parallel `tExtNtHelp[id]` message ids
+//!   (`MSG_*` or `0`).
 //!
 //! Ordering follows grammar declaration order within each partition. Numeric internal offsets
 //! are produced later by state lowering; this module only derives names, help hints, and counts.
@@ -57,10 +57,7 @@ pub fn derive_nonterminal_dispatch_order(grammar: &GrammarFile) -> NonterminalDi
         if nt.external {
             external.push(external_entry(nt));
         } else {
-            internal.push(InternalNonterminalEntry {
-                name: nt.name.clone(),
-                state_offset: None,
-            });
+            internal.push(InternalNonterminalEntry { name: nt.name.clone(), state_offset: None });
         }
     }
 
@@ -95,25 +92,30 @@ pub fn parse_golden_dispatch_tables(prsstate: &str) -> GoldenDispatchTables {
     }
 }
 
-fn parse_commented_dw_names(text: &str, label: &str) -> Vec<String> {
+fn parse_commented_dw_names(
+    text: &str,
+    label: &str,
+) -> Vec<String> {
     dispatch_section_lines(text, label)
         .into_iter()
-        .filter_map(|line| {
-            line.comment_after_semicolon()
-                .map(str::trim)
-                .map(str::to_string)
-        })
+        .filter_map(|line| line.comment_after_semicolon().map(str::trim).map(str::to_string))
         .collect()
 }
 
-fn parse_dw_number_operands(text: &str, label: &str) -> Vec<u16> {
+fn parse_dw_number_operands(
+    text: &str,
+    label: &str,
+) -> Vec<u16> {
     dispatch_section_lines(text, label)
         .into_iter()
         .filter_map(|line| line.first_dw_operand().and_then(parse_u16_literal))
         .collect()
 }
 
-fn parse_dw_symbol_operands(text: &str, label: &str) -> Vec<String> {
+fn parse_dw_symbol_operands(
+    text: &str,
+    label: &str,
+) -> Vec<String> {
     dispatch_section_lines(text, label)
         .into_iter()
         .filter_map(|line| line.first_dw_operand().map(str::trim).map(str::to_string))
@@ -122,16 +124,16 @@ fn parse_dw_symbol_operands(text: &str, label: &str) -> Vec<String> {
 
 fn parse_u16_literal(operand: &str) -> Option<u16> {
     let literal = operand.trim();
-    if let Some(stem) = literal
-        .strip_suffix('H')
-        .or_else(|| literal.strip_suffix('h'))
-    {
+    if let Some(stem) = literal.strip_suffix('H').or_else(|| literal.strip_suffix('h')) {
         return u16::from_str_radix(stem, 16).ok();
     }
     literal.parse::<u16>().ok()
 }
 
-fn dispatch_section_lines<'a>(text: &'a str, label: &str) -> Vec<DispatchLine<'a>> {
+fn dispatch_section_lines<'a>(
+    text: &'a str,
+    label: &str,
+) -> Vec<DispatchLine<'a>> {
     let mut in_section = false;
     let mut lines = Vec::new();
 
@@ -180,19 +182,15 @@ impl<'a> DispatchLine<'a> {
     }
 
     fn first_dw_operand(&self) -> Option<&'a str> {
-        let data = self
-            .operands
-            .split_once(';')
-            .map(|(before, _)| before)
-            .unwrap_or(self.operands);
-        data.split(',')
-            .next()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
+        let data = self.operands.split_once(';').map(|(before, _)| before).unwrap_or(self.operands);
+        data.split(',').next().map(str::trim).filter(|s| !s.is_empty())
     }
 }
 
-fn label_declares(line: &str, label: &str) -> bool {
+fn label_declares(
+    line: &str,
+    label: &str,
+) -> bool {
     let mut fields = line.split_whitespace();
     matches!(
         (fields.next(), fields.next()),
@@ -203,7 +201,10 @@ fn label_declares(line: &str, label: &str) -> bool {
 
 fn is_label_declaration(line: &str) -> bool {
     let mut fields = line.split_whitespace();
-    matches!(fields.nth(1), Some(keyword) if keyword.eq_ignore_ascii_case("label"))
+    matches!(
+        fields.nth(1),
+        Some(keyword) if keyword.eq_ignore_ascii_case("label")
+    )
 }
 
 #[cfg(test)]
@@ -290,30 +291,15 @@ Exp:
         let golden = parse_golden_dispatch_tables(golden_prsstate());
 
         assert_eq!(derived.internal.len(), golden.internal_names.len());
-        assert_eq!(
-            derived.external.len(),
-            golden.external_dispatch_symbols.len()
-        );
+        assert_eq!(derived.external.len(), golden.external_dispatch_symbols.len());
 
-        let derived_internal_names: Vec<_> = derived
-            .internal
-            .iter()
-            .map(|entry| entry.name.as_str())
-            .collect();
+        let derived_internal_names: Vec<_> = derived.internal.iter().map(|entry| entry.name.as_str()).collect();
         assert_eq!(derived_internal_names, golden.internal_names);
 
-        let derived_dispatch: Vec<_> = derived
-            .external
-            .iter()
-            .map(|entry| entry.dispatch_symbol.as_str())
-            .collect();
+        let derived_dispatch: Vec<_> = derived.external.iter().map(|entry| entry.dispatch_symbol.as_str()).collect();
         assert_eq!(derived_dispatch, golden.external_dispatch_symbols);
 
-        let derived_help: Vec<_> = derived
-            .external
-            .iter()
-            .map(|entry| entry.help_symbol.as_str())
-            .collect();
+        let derived_help: Vec<_> = derived.external.iter().map(|entry| entry.help_symbol.as_str()).collect();
         assert_eq!(derived_help, golden.external_help_symbols);
     }
 
@@ -324,9 +310,6 @@ Exp:
 
         assert_eq!(derived.internal.len(), 29);
         assert_eq!(derived.external.len(), 49);
-        assert_eq!(
-            grammar.nonterminals.len(),
-            derived.internal.len() + derived.external.len()
-        );
+        assert_eq!(grammar.nonterminals.len(), derived.internal.len() + derived.external.len());
     }
 }

@@ -6,9 +6,10 @@
 
 mod common;
 
-use llrm_target::Target;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use llrm_target::Target;
 
 const PROGRAM: &str = "extern void report(long v);
 static char far zfar[40000];
@@ -42,16 +43,33 @@ impl Lab {
         Self { bin, root, dir: tempfile::tempdir().unwrap() }
     }
 
-    fn path(&self, name: &str) -> PathBuf {
+    fn path(
+        &self,
+        name: &str,
+    ) -> PathBuf {
         self.dir.path().join(name)
     }
 
-    fn run(&self, program: &str, args: &[&str]) {
+    fn run(
+        &self,
+        program: &str,
+        args: &[&str],
+    ) {
         let done = Command::new(self.bin.join(program)).args(args).current_dir(self.dir.path()).output().unwrap();
-        assert!(done.status.success(), "{program} {args:?}: {}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+        assert!(
+            done.status.success(),
+            "{program} {args:?}: {}{}",
+            String::from_utf8_lossy(&done.stdout),
+            String::from_utf8_lossy(&done.stderr)
+        );
     }
 
-    fn assemble(&self, source: &Path, object: &str, define: &[&str]) {
+    fn assemble(
+        &self,
+        source: &Path,
+        object: &str,
+        define: &[&str],
+    ) {
         let out = format!("-Fo{}", self.path(object).display());
         let mut args = vec!["-q", "-c", "-Cp", "-Zg", common::assembler(), out.as_str()];
         args.extend(define);
@@ -65,37 +83,87 @@ impl Lab {
     fn defines(nozero: bool) -> Vec<String> {
         let target = llrm_x86_m16::M16;
         let (layer, c) = (target.os_layer().unwrap(), target.runtime("c").unwrap());
-        let mut defines: Vec<String> = layer.defines().unwrap().into_iter().chain(c.defines().unwrap()).map(|(symbol, value)| format!("-D{symbol}={value}")).collect();
+        let mut defines: Vec<String> = layer
+            .defines()
+            .unwrap()
+            .into_iter()
+            .chain(c.defines().unwrap())
+            .map(|(symbol, value)| format!("-D{symbol}={value}"))
+            .collect();
         defines.extend(nozero.then(|| "-DNOZERO".to_owned()));
         defines
     }
 
     /// `PROGRAM` at the flag, linked with the OS layer's start-up (`nozero`: one that does not zero).
-    fn exe(&self, name: &str, flag: &str, nozero: bool) -> PathBuf {
+    fn exe(
+        &self,
+        name: &str,
+        flag: &str,
+        nozero: bool,
+    ) -> PathBuf {
         let target = llrm_x86_m16::M16;
         let (layer, c) = (target.os_layer().unwrap(), target.runtime("c").unwrap());
         let defines = Self::defines(nozero);
         let defines: Vec<&str> = defines.iter().map(String::as_str).collect();
-        self.assemble(&Path::new(layer.directory).join(layer.string("start").unwrap()), &format!("{name}-start.obj"), &defines);
-        self.assemble(&Path::new(c.directory).join(c.string("init_file").unwrap()), &format!("{name}-init.obj"), &defines);
+        self.assemble(
+            &Path::new(layer.directory).join(layer.string("start").unwrap()),
+            &format!("{name}-start.obj"),
+            &defines,
+        );
+        self.assemble(
+            &Path::new(c.directory).join(c.string("init_file").unwrap()),
+            &format!("{name}-init.obj"),
+            &defines,
+        );
         std::fs::write(self.path("t.c"), PROGRAM).unwrap();
         self.run("llrm-c", &["-Os", flag, "-march=i486", "t.c", "-o", &format!("{name}.obj")]);
         let exe = self.path(&format!("{name}.exe"));
         let (start, init, program) = (format!("{name}-start.obj"), format!("{name}-init.obj"), format!("{name}.obj"));
-        self.run("jwlink", &common::jwlink(&["option", "quiet", "name", exe.to_str().unwrap(), "file", &start, "file", &init, "file", &program, "file", "ext.obj", "file", "os.obj"]));
+        self.run(
+            "jwlink",
+            &common::jwlink(&[
+                "option",
+                "quiet",
+                "name",
+                exe.to_str().unwrap(),
+                "file",
+                &start,
+                "file",
+                &init,
+                "file",
+                &program,
+                "file",
+                "ext.obj",
+                "file",
+                "os.obj",
+            ]),
+        );
         exe
     }
 
     /// Each of `exes` run under DIRTY.COM, what each printed.
-    fn dirty(&self, exes: &[&PathBuf]) -> Vec<String> {
-        let mut conf = String::from("[sdl]\nautolock=false\n[dosbox]\nmemsize=16\nstartbanner=false\n[autoexec]\n@echo off\nmount c .\nc:\n");
+    fn dirty(
+        &self,
+        exes: &[&PathBuf],
+    ) -> Vec<String> {
+        let mut conf = String::from(
+            "[sdl]\nautolock=false\n[dosbox]\nmemsize=16\nstartbanner=false\n[autoexec]\n@echo off\nmount c .\nc:\n",
+        );
         for (at, exe) in exes.iter().enumerate() {
             conf += &format!("dirty.com {} > OUT{at}.TXT\n", exe.file_name().unwrap().to_str().unwrap());
         }
         conf += "exit\n";
         std::fs::write(self.path("dosbox.conf"), conf).unwrap();
         self.run("dosbox-x", &["-nolog", "-exit", "-conf", "dosbox.conf"]);
-        (0..exes.len()).map(|at| std::fs::read_to_string(self.path(&format!("OUT{at}.TXT"))).unwrap_or_default().replace("\r\n", " ").trim().to_owned()).collect()
+        (0..exes.len())
+            .map(|at| {
+                std::fs::read_to_string(self.path(&format!("OUT{at}.TXT")))
+                    .unwrap_or_default()
+                    .replace("\r\n", " ")
+                    .trim()
+                    .to_owned()
+            })
+            .collect()
     }
 
     fn runtime(&self) {
@@ -141,7 +209,10 @@ fn test_far_zero_data_moves_only_where_the_startup_zeroes_it() {
         std::fs::read_to_string(lab.path("t.s")).unwrap()
     };
     let far = listing("-mfar-bss");
-    assert!(far.contains("'FAR_BSS'") && far.contains("db 40000 dup (?)") && !far.contains("000h,000h,000h,000h"), "{far}");
+    assert!(
+        far.contains("'FAR_BSS'") && far.contains("db 40000 dup (?)") && !far.contains("000h,000h,000h,000h"),
+        "{far}"
+    );
     let plain = listing("-mno-far-bss");
     assert!(!plain.contains("FAR_BSS") && plain.contains("000h,000h,000h,000h"));
 }
@@ -175,7 +246,12 @@ fn main() -> i16:
         .env("LLRM_BIN", &lab.bin)
         .output()
         .unwrap();
-    assert!(done.status.success(), "{}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+    assert!(
+        done.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&done.stdout),
+        String::from_utf8_lossy(&done.stderr)
+    );
     assert!(std::fs::metadata(&exe).unwrap().len() < 10_000, "the 80,400 zero bytes were stored");
     assert_eq!(lab.dirty(&[&exe]), ["0"]);
 }

@@ -4,7 +4,7 @@
 
 use llrm_support::hash::IndexMap;
 
-use crate::cvinfo::{self, Kind, Tag, BASE_TYPE_INDEX};
+use crate::cvinfo::{self, BASE_TYPE_INDEX, Kind, Tag};
 
 /// A type, by its index in [`Module::types`].
 pub type TypeId = usize;
@@ -25,7 +25,9 @@ pub enum Scalar {
     Float80,
     Currency,
     /// BASIC's variable-length STRING: a near or a far descriptor.
-    String { far: bool },
+    String {
+        far: bool,
+    },
 }
 
 impl Scalar {
@@ -76,13 +78,26 @@ pub enum Type {
     /// BASIC's array: its element only, the bounds are its descriptor's.
     Array(TypeId),
     /// An array of `bytes` in place, as C lays one out.
-    Sized { element: TypeId, bytes: u32 },
-    Struct { name: String, bytes: u32, fields: Vec<Field> },
-    Pointer { target: TypeId, reach: Reach },
+    Sized {
+        element: TypeId,
+        bytes: u32,
+    },
+    Struct {
+        name: String,
+        bytes: u32,
+        fields: Vec<Field>,
+    },
+    Pointer {
+        target: TypeId,
+        reach: Reach,
+    },
     /// A parameter passed by reference.
     Reference(TypeId),
     /// `result` None returns nothing: void.
-    Procedure { result: Option<TypeId>, parameters: Vec<TypeId> },
+    Procedure {
+        result: Option<TypeId>,
+        parameters: Vec<TypeId>,
+    },
 }
 
 /// A parameter or local at `bp` from the frame pointer.
@@ -155,13 +170,19 @@ pub struct Written {
 
 type Made<T> = Result<T, String>;
 
-fn narrow<T: TryFrom<usize>>(value: usize, what: &str) -> Made<T> {
+fn narrow<T: TryFrom<usize>>(
+    value: usize,
+    what: &str,
+) -> Made<T> {
     T::try_from(value).map_err(|_| format!("{what} {value} does not fit its field"))
 }
 
 /// A length-prefixed name, in the latin-1 BC writes.
 fn pascal(name: &str) -> Made<Vec<u8>> {
-    let bytes = name.chars().map(|one| u8::try_from(u32::from(one)).map_err(|_| format!("{name:?} is not latin-1"))).collect::<Made<Vec<u8>>>()?;
+    let bytes = name
+        .chars()
+        .map(|one| u8::try_from(u32::from(one)).map_err(|_| format!("{name:?} is not latin-1")))
+        .collect::<Made<Vec<u8>>>()?;
     Ok([&[narrow::<u8>(bytes.len(), "a name's length")?][..], &bytes].concat())
 }
 
@@ -184,7 +205,10 @@ struct Table<'m> {
 
 impl Table<'_> {
     /// The index of the record `leaf` is, made if new.
-    fn record(&mut self, leaf: Vec<u8>) -> Made<u16> {
+    fn record(
+        &mut self,
+        leaf: Vec<u8>,
+    ) -> Made<u16> {
         if let Some(&index) = self.indices.get(&leaf) {
             return Ok(index);
         }
@@ -197,14 +221,24 @@ impl Table<'_> {
     }
 
     /// A field's type: its own, or a bit field's record of it.
-    fn field_type(&mut self, field: &Field) -> Made<u16> {
+    fn field_type(
+        &mut self,
+        field: &Field,
+    ) -> Made<u16> {
         let Some((start, width)) = field.bits else { return self.index(field.r#type) };
-        let unsigned = matches!(self.module.types[field.r#type], Type::Scalar(Scalar::UInt8 | Scalar::UInt16 | Scalar::UInt32));
+        let unsigned =
+            matches!(
+                self.module.types[field.r#type],
+                Type::Scalar(Scalar::UInt8 | Scalar::UInt16 | Scalar::UInt32)
+            );
         let base = if unsigned { cvinfo::BITFIELD_UNSIGNED } else { cvinfo::BITFIELD_SIGNED };
         self.record(vec![Tag::Bitfield as u8, width, base, start])
     }
 
-    fn list(&mut self, indices: &[u16]) -> Made<u16> {
+    fn list(
+        &mut self,
+        indices: &[u16],
+    ) -> Made<u16> {
         if indices.is_empty() {
             return Ok(BASE_TYPE_INDEX as u16);
         }
@@ -212,14 +246,22 @@ impl Table<'_> {
     }
 
     /// An array in place: `bits` of `element`s.
-    fn sized(&mut self, element: u16, bits: u32) -> Made<u16> {
+    fn sized(
+        &mut self,
+        element: u16,
+        bits: u32,
+    ) -> Made<u16> {
         let mut leaf = vec![Tag::FixedStringQb45 as u8, cvinfo::U32];
         leaf.extend(bits.to_le_bytes());
         leaf.extend(reference(element));
         self.record(leaf)
     }
 
-    fn pointer(&mut self, target: u16, reach: Reach) -> Made<u16> {
+    fn pointer(
+        &mut self,
+        target: u16,
+        reach: Reach,
+    ) -> Made<u16> {
         let reach = match reach {
             Reach::Near => cvinfo::NEAR,
             Reach::Far => cvinfo::FAR,
@@ -233,7 +275,12 @@ impl Table<'_> {
     }
 
     /// A structure's record, its fields' types made first.
-    fn structure(&mut self, name: &str, bytes: u32, fields: &[Field]) -> Made<u16> {
+    fn structure(
+        &mut self,
+        name: &str,
+        bytes: u32,
+        fields: &[Field],
+    ) -> Made<u16> {
         let types = fields.iter().map(|field| self.field_type(field)).collect::<Made<Vec<u16>>>()?;
         let types = self.list(&types)?;
         let mut names = vec![Tag::List as u8];
@@ -257,7 +304,10 @@ impl Table<'_> {
     }
 
     /// `id`'s index: a scalar's code, or its record's, dependencies first.
-    fn index(&mut self, id: TypeId) -> Made<u16> {
+    fn index(
+        &mut self,
+        id: TypeId,
+    ) -> Made<u16> {
         if let Some(&index) = self.of.get(&id) {
             return Ok(index);
         }
@@ -292,7 +342,9 @@ impl Table<'_> {
                 self.pointer(target, reach)?
             }
             &Type::Reference(target) => match self.module.types[target] {
-                Type::Scalar(scalar) if self.flavor.qb45 => narrow::<u16>(usize::from(scalar.code()?) + cvinfo::QB45_BYREF as usize, "a reference code")?,
+                Type::Scalar(scalar) if self.flavor.qb45 => {
+                    narrow::<u16>(usize::from(scalar.code()?) + cvinfo::QB45_BYREF as usize, "a reference code")?
+                }
                 _ if self.flavor.qb45 => {
                     let target = self.index(target)?;
                     self.pointer(target, Reach::Near)?
@@ -311,7 +363,10 @@ impl Table<'_> {
                 let parameters = parameters.iter().map(|&one| self.index(one)).collect::<Made<Vec<u16>>>()?;
                 let list = self.list(&parameters)?;
                 // The count is a numeric leaf's value itself: under 0x80.
-                let count = u8::try_from(parameters.len()).ok().filter(|&count| count < 0x80).ok_or("a procedure of 128 parameters or more")?;
+                let count = u8::try_from(parameters.len())
+                    .ok()
+                    .filter(|&count| count < 0x80)
+                    .ok_or("a procedure of 128 parameters or more")?;
                 let mut leaf = vec![Tag::Signature as u8, cvinfo::NIL];
                 leaf.extend(reference(result));
                 leaf.extend([cvinfo::BASIC_CALL, count]);
@@ -332,7 +387,12 @@ struct Symbols {
 }
 
 impl Symbols {
-    fn record(&mut self, kind: Kind, data: &[u8], relocation: Option<(bool, &str, u16)>) -> Made<()> {
+    fn record(
+        &mut self,
+        kind: Kind,
+        data: &[u8],
+        relocation: Option<(bool, &str, u16)>,
+    ) -> Made<()> {
         self.bytes.push(narrow::<u8>(1 + data.len(), "a symbol record's length")?);
         self.bytes.push(kind as u8);
         if let Some((far, symbol, displacement)) = relocation {
@@ -342,7 +402,11 @@ impl Symbols {
         Ok(())
     }
 
-    fn data(&mut self, table: &mut Table, one: &Data) -> Made<()> {
+    fn data(
+        &mut self,
+        table: &mut Table,
+        one: &Data,
+    ) -> Made<()> {
         let mut data = vec![0; 4];
         data.extend(table.index(one.r#type)?.to_le_bytes());
         data.extend(pascal(&one.name)?);
@@ -351,8 +415,18 @@ impl Symbols {
 }
 
 /// `module`'s $$SYMBOLS and $$TYPES.
-pub fn written(module: &Module, flavor: Flavor) -> Made<Written> {
-    let mut table = Table { module, flavor, bytes: Vec::new(), indices: IndexMap::default(), of: IndexMap::default(), building: Vec::new() };
+pub fn written(
+    module: &Module,
+    flavor: Flavor,
+) -> Made<Written> {
+    let mut table = Table {
+        module,
+        flavor,
+        bytes: Vec::new(),
+        indices: IndexMap::default(),
+        of: IndexMap::default(),
+        building: Vec::new(),
+    };
     table.record(vec![cvinfo::NIL])?;
     let mut symbols = Symbols::default();
     let mut head = vec![0, 0];

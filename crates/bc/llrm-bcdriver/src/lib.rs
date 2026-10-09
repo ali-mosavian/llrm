@@ -48,11 +48,20 @@ pub fn program(program: &Program) -> Result<Vec<Vec<u8>>, String> {
         parsed.push((name, records, found));
     }
     let segments = llrm_x86_bc::segments(program.machine, parsed.iter().map(|(_, _, found)| found));
-    parsed.iter().map(|(name, records, found)| recompiled(records, found, &segments, program.machine, name).map_err(|why| format!("{name}: {why}"))).collect()
+    parsed
+        .iter()
+        .map(|(name, records, found)| {
+            recompiled(records, found, &segments, program.machine, name).map_err(|why| format!("{name}: {why}"))
+        })
+        .collect()
 }
 
 /// `data`, a program of one BC object, compiled again for `cpu`.
-pub fn compiled(data: &[u8], cpu: &str, name: &str) -> Result<Vec<u8>, String> {
+pub fn compiled(
+    data: &[u8],
+    cpu: &str,
+    name: &str,
+) -> Result<Vec<u8>, String> {
     let machine = on(cpu);
     let mut written = program(&Program { modules: vec![(name.to_owned(), data)], machine: &machine })?;
     Ok(written.remove(0))
@@ -64,10 +73,17 @@ fn on(cpu: &str) -> Machine {
 }
 
 /// One module of a program whose segments `layout` lays out, compiled again.
-fn recompiled(records: &[Rc<Record>], found: &found_module::Module, layout: &SegmentLayout, machine: &Machine, name: &str) -> Result<Vec<u8>, String> {
+fn recompiled(
+    records: &[Rc<Record>],
+    found: &found_module::Module,
+    layout: &SegmentLayout,
+    machine: &Machine,
+    name: &str,
+) -> Result<Vec<u8>, String> {
     let segments = omf::segments(records);
     let records = records.to_vec();
-    let llrm_x86_bc::Raised { module, runtime, placement, .. } = llrm_x86_bc::raise_in(found, machine, layout).map_err(|refusal| refusal.to_string())?;
+    let llrm_x86_bc::Raised { module, runtime, placement, .. } =
+        llrm_x86_bc::raise_in(found, machine, layout).map_err(|refusal| refusal.to_string())?;
     let (code_segment, code, _) = omf::code_segment(&records).ok_or("the module has no code segment")?;
     let named = |id: GlobalId| module.global(id).name.clone().ok_or("an unnamed global");
     let mut symbols = BTreeMap::new();
@@ -78,7 +94,12 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, layout: &Seg
         symbols.insert(named(global)?, basic::HEADER.to_owned());
     }
     let data = data_segments(&placement, &segments, code_segment, &named)?;
-    let private = data.iter().map(|one| &one.name).filter(|name| name.as_str() == "FDATA" || name.as_str() == "FSL_CONST").cloned().collect();
+    let private = data
+        .iter()
+        .map(|one| &one.name)
+        .filter(|name| name.as_str() == "FDATA" || name.as_str() == "FSL_CONST")
+        .cloned()
+        .collect();
     let object = basic::Object {
         code,
         header: header(found, &records, code_segment, &segments)?,
@@ -133,12 +154,22 @@ fn data_segments(
 /// The module header, MODULE_CODE: BC's own bytes, but for the words
 /// `written_basic` writes afresh. Refuses a header relocated other than as
 /// BASIC relocates it.
-fn header(found: &found_module::Module, records: &[Rc<omf::Record>], code_segment: i64, segments: &[Option<(String, i64)>]) -> Result<Vec<u8>, String> {
+fn header(
+    found: &found_module::Module,
+    records: &[Rc<omf::Record>],
+    code_segment: i64,
+    segments: &[Option<(String, i64)>],
+) -> Result<Vec<u8>, String> {
     let mut bytes = found.code.get(..HEADER_BYTES).ok_or("no module header")?.to_vec();
-    for fixup in omf::fixups(records).into_iter().filter(|one| one.seg == Some(code_segment) && (one.offset as usize) < HEADER_BYTES) {
+    for fixup in omf::fixups(records)
+        .into_iter()
+        .filter(|one| one.seg == Some(code_segment) && (one.offset as usize) < HEADER_BYTES)
+    {
         let at = fixup.offset as usize;
         let named = segments.get(fixup.index as usize).and_then(Option::as_ref).map(|(name, _)| name.as_str());
-        let expected = basic::NAMED.iter().any(|&(word, segment, _)| word == at && fixup.target == "segment" && named == Some(segment));
+        let expected = basic::NAMED
+            .iter()
+            .any(|&(word, segment, _)| word == at && fixup.target == "segment" && named == Some(segment));
         let statements = at == STATEMENTS && fixup.target == "segment" && fixup.index == code_segment;
         if !expected && !statements {
             return Err(format!("the module header's word at {at:#x} is relocated as BASIC does not"));
@@ -191,7 +222,8 @@ pub fn main(argv: &[String]) -> i32 {
         eprintln!("llrm-omf --rich: OBJ... [LIB...] -o OUT [--manifest M] [-march=CPU]");
         return 2;
     };
-    let machine = llrm_driver::target(&flags, Some(&["x86-m16"])).and_then(|bound| flags.machine(&*bound.target, bound.target.machine().with_stack_in_data()));
+    let machine = llrm_driver::target(&flags, Some(&["x86-m16"]))
+        .and_then(|bound| flags.machine(&*bound.target, bound.target.machine().with_stack_in_data()));
     let machine = match machine {
         Ok(machine) => machine,
         Err(why) => {
@@ -207,7 +239,10 @@ pub fn main(argv: &[String]) -> i32 {
         })
         .collect();
     let written = read.and_then(|read| {
-        let written = program(&Program { modules: read.iter().map(|(name, data)| (name.clone(), data.as_slice())).collect(), machine: &machine })?;
+        let written = program(&Program {
+            modules: read.iter().map(|(name, data)| (name.clone(), data.as_slice())).collect(),
+            machine: &machine,
+        })?;
         Ok(read.into_iter().map(|(name, _)| name).zip(written).collect::<Vec<_>>())
     });
     let written = match written {

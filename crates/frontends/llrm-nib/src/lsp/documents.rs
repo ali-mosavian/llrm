@@ -26,13 +26,21 @@ pub struct Documents {
 impl Default for Documents {
     /// Checking for the driver's default target until the editor names the project's.
     fn default() -> Self {
-        let bound = llrm_driver::target(&llrm_core::driver::flags::Flags::default(), None).expect("the default target is built in");
-        Self { open: BTreeMap::new(), frontend: crate::Frontend::for_target(&*bound.target).expect("the default target has a Nib runtime") }
+        let bound = llrm_driver::target(&llrm_core::driver::flags::Flags::default(), None)
+            .expect("the default target is built in");
+        Self {
+            open: BTreeMap::new(),
+            frontend: crate::Frontend::for_target(&*bound.target).expect("the default target has a Nib runtime"),
+        }
     }
 }
 
 impl Documents {
-    pub fn open(&mut self, path: PathBuf, text: String) {
+    pub fn open(
+        &mut self,
+        path: PathBuf,
+        text: String,
+    ) {
         match self.open.get_mut(&path) {
             Some(document) => document.text = text,
             None => {
@@ -41,7 +49,10 @@ impl Documents {
         }
     }
 
-    pub fn close(&mut self, path: &Path) {
+    pub fn close(
+        &mut self,
+        path: &Path,
+    ) {
         self.open.remove(path);
     }
 
@@ -49,16 +60,25 @@ impl Documents {
         self.open.keys().cloned().collect()
     }
 
-    pub fn get(&self, path: &Path) -> Option<&Document> {
+    pub fn get(
+        &self,
+        path: &Path,
+    ) -> Option<&Document> {
         self.open.get(path)
     }
 
-    pub fn get_mut(&mut self, path: &Path) -> Option<&mut Document> {
+    pub fn get_mut(
+        &mut self,
+        path: &Path,
+    ) -> Option<&mut Document> {
         self.open.get_mut(path)
     }
 
     /// The text at `path`: the editor's, when it has it open, else the file's.
-    pub fn text(&self, path: &Path) -> Result<String, String> {
+    pub fn text(
+        &self,
+        path: &Path,
+    ) -> Result<String, String> {
         match self.open.get(path) {
             Some(document) => Ok(document.text.clone()),
             None => std::fs::read_to_string(path).map_err(|error| error.to_string()),
@@ -66,7 +86,11 @@ impl Documents {
     }
 
     /// The source of module `name` of the program whose main module is at `main`.
-    pub fn source(&self, main: &Path, name: &str) -> Option<String> {
+    pub fn source(
+        &self,
+        main: &Path,
+        name: &str,
+    ) -> Option<String> {
         match standard::source_for(&self.frontend.os.module, name) {
             Some(source) => Some(source),
             None => self.text(&module_path(main, name)).ok(),
@@ -74,7 +98,10 @@ impl Documents {
     }
 
     /// The document's own module: as its last check parsed it, else its text alone.
-    pub fn module(&self, path: &Path) -> Option<Module> {
+    pub fn module(
+        &self,
+        path: &Path,
+    ) -> Option<Module> {
         let document = self.open.get(path)?;
         match &document.loaded {
             Some(loaded) => loaded.modules.get("").cloned(),
@@ -85,7 +112,11 @@ impl Documents {
 
 /// The file module `name` of the program at `main` is in. One the compiler
 /// supplies is copied under the temporary directory, for an editor to open.
-pub fn module_file(main: &Path, name: &str, os: &str) -> PathBuf {
+pub fn module_file(
+    main: &Path,
+    name: &str,
+    os: &str,
+) -> PathBuf {
     let Some(source) = standard::source_for(os, name) else {
         return module_path(main, name);
     };

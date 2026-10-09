@@ -4,9 +4,9 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use iced_x86::{Code, Register};
+use llrm_x86_m16::machine::BUILT_IN;
 
 use super::*;
-use llrm_x86_m16::machine::BUILT_IN;
 use crate::frontends::bc::blocks::Ends;
 use crate::frontends::bc::declen::decode;
 use crate::frontends::bc::extent::BodyKind;
@@ -28,7 +28,10 @@ fn _decode(source: &PathBuf) -> (Module, Vec<BodyIR>) {
     (found, result)
 }
 
-fn original(found: &Module, body: &Body) -> Vec<u8> {
+fn original(
+    found: &Module,
+    body: &Body,
+) -> Vec<u8> {
     body.ranges.iter().flat_map(|&(lo, hi)| found.code[lo..hi].iter().copied()).collect()
 }
 
@@ -207,7 +210,14 @@ fn test_restore_idiom_is_recognised_not_split_into_opaques() {
         leaders: BTreeSet::from([0]),
         ..CodeMap::default()
     };
-    let body = Body { kind: BodyKind::Main, seed: 0, name: None, ranges: vec![(0, code.len())], entries: Vec::new(), entry_ranges: Vec::new() };
+    let body = Body {
+        kind: BodyKind::Main,
+        seed: 0,
+        name: None,
+        ranges: vec![(0, code.len())],
+        entries: Vec::new(),
+        entry_ranges: Vec::new(),
+    };
 
     let nodes = decode_body(&found, &mapped, &[block], &body, &BUILT_IN);
     let kinds: Vec<&str> = nodes
@@ -273,7 +283,9 @@ fn test_the_corpus_is_modelled_except_for_exactly_the_refused_encodings() {
         for body_ir in &result {
             for node in &body_ir.nodes {
                 let insn = match node.as_ref() {
-                    Node::Opaque(Opaque { insn, .. }) | Node::Long(Long { insn, .. }) | Node::Call(Call { insn, .. }) => insn,
+                    Node::Opaque(Opaque { insn, .. })
+                    | Node::Long(Long { insn, .. })
+                    | Node::Call(Call { insn, .. }) => insn,
                     _ => continue,
                 };
                 if !modelled(node.semantics()) {
@@ -295,11 +307,8 @@ fn test_every_body_of_every_kind_is_fully_modelled() {
             continue;
         };
         for body_ir in &result {
-            let counted = if body_ir.nodes.iter().all(|node| modelled(node.semantics())) {
-                &mut liftable
-            } else {
-                &mut refused
-            };
+            let counted =
+                if body_ir.nodes.iter().all(|node| modelled(node.semantics())) { &mut liftable } else { &mut refused };
             *counted.entry(body_ir.body.kind).or_default() += 1;
         }
     }
@@ -316,7 +325,14 @@ fn test_a_barrier_is_carried_rather_than_refusing_the_body_it_sits_in() {
     let block = Block { at: 0, end: code.len(), insns: insns.clone(), ends: Ends::Return, succ: Vec::new() };
     let found = hand_built(&code);
     let mapped = CodeMap { starts: insns.iter().map(|insn| insn.at).collect(), ..CodeMap::default() };
-    let body = Body { kind: BodyKind::Main, seed: 0, name: None, ranges: vec![(0, code.len())], entries: Vec::new(), entry_ranges: Vec::new() };
+    let body = Body {
+        kind: BodyKind::Main,
+        seed: 0,
+        name: None,
+        ranges: vec![(0, code.len())],
+        entries: Vec::new(),
+        entry_ranges: Vec::new(),
+    };
     let nodes = decode_body(&found, &mapped, &[block], &body, &BUILT_IN);
 
     let port = &nodes[1];
@@ -338,7 +354,14 @@ fn test_a_port_is_silent_only_where_the_machine_says() {
     let block = Block { at: 0, end: code.len(), insns: insns.clone(), ends: Ends::Return, succ: Vec::new() };
     let found = hand_built(&code);
     let mapped = CodeMap { starts: insns.iter().map(|insn| insn.at).collect(), ..CodeMap::default() };
-    let body = Body { kind: BodyKind::Main, seed: 0, name: None, ranges: vec![(0, code.len())], entries: Vec::new(), entry_ranges: Vec::new() };
+    let body = Body {
+        kind: BodyKind::Main,
+        seed: 0,
+        name: None,
+        ranges: vec![(0, code.len())],
+        entries: Vec::new(),
+        entry_ranges: Vec::new(),
+    };
     let stores = |machine| decode_body(&found, &mapped, &[block.clone()], &body, machine)[1].effects().stores.clone();
 
     assert!(stores(&BUILT_IN).is_empty());

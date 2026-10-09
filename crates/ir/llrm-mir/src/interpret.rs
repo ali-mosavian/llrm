@@ -5,19 +5,21 @@
 //! datalayout; every address space maps onto it, so `addrspacecast` keeps
 //! the address. Each byte also records whether it holds poison.
 
-use crate::hash::HashMap;
-
 use crate::context::{ConstantExpr, ConstantId, ConstantKind, GlobalId, mask, signed};
 use crate::datalayout::{DataLayout, float_bits};
 use crate::facts::Facts;
+use crate::hash::HashMap;
 use crate::intrinsics::Intrinsic;
 use crate::module::{BlockId, Function, GlobalKind, MetadataOperand, Module, Operand, ValueDef, ValueId};
-use crate::opcode::{Attribute, BinaryOp, CastOp, FloatPredicate, Flags, IntPredicate, Opcode};
+use crate::opcode::{Attribute, BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate, Opcode};
 use crate::types::{FloatKind, Type, TypeId};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Val {
-    Int { bits: u128, width: u32 },
+    Int {
+        bits: u128,
+        width: u32,
+    },
     /// IEEE bits: a `float`'s in the low 32.
     Float(FloatKind, u64),
     Ptr(u64),
@@ -45,7 +47,12 @@ fn unsupported<T>(why: impl Into<String>) -> Run<T> {
 }
 
 /// Runs `@name` on `arguments` with at most `fuel` instructions.
-pub fn run(module: &Module, name: &str, arguments: Vec<Val>, fuel: u64) -> Run<Val> {
+pub fn run(
+    module: &Module,
+    name: &str,
+    arguments: Vec<Val>,
+    fuel: u64,
+) -> Run<Val> {
     let mut machine = Machine::new(module, fuel)?;
     let id = module.named(name).ok_or_else(|| Trap::Unsupported(format!("no @{name}")))?;
     machine.call(id, arguments)
@@ -60,7 +67,12 @@ pub fn run(module: &Module, name: &str, arguments: Vec<Val>, fuel: u64) -> Run<V
 /// Only accesses the function makes itself, through a pointer it can trace
 /// to a parameter, a slot or a global (also through a stack slot written
 /// once), are compared.
-pub fn run_checked(module: &Module, name: &str, arguments: Vec<Val>, fuel: u64) -> Run<Val> {
+pub fn run_checked(
+    module: &Module,
+    name: &str,
+    arguments: Vec<Val>,
+    fuel: u64,
+) -> Run<Val> {
     let mut machine = Machine::new(module, fuel)?;
     machine.checked = true;
     let id = module.named(name).ok_or_else(|| Trap::Unsupported(format!("no @{name}")))?;
@@ -100,19 +112,34 @@ struct Touch {
 const NEAR_END: u64 = 0x1_0000;
 
 impl<'m> Machine<'m> {
-    fn new(module: &'m Module, fuel: u64) -> Run<Self> {
+    fn new(
+        module: &'m Module,
+        fuel: u64,
+    ) -> Run<Self> {
         let layout = match &module.datalayout {
             Some(text) => DataLayout::parse(text).map_err(Trap::Unsupported)?,
             None => DataLayout::default(),
         };
         // Address 0 is null; nothing is allocated there.
         let end = NEAR_END as usize;
-        let mut machine = Self { module, layout, memory: vec![0; end], poison: vec![false; end], addresses: HashMap::default(), fuel, near_top: 16, checked: false };
+        let mut machine = Self {
+            module,
+            layout,
+            memory: vec![0; end],
+            poison: vec![false; end],
+            addresses: HashMap::default(),
+            fuel,
+            near_top: 16,
+            checked: false,
+        };
         for (at, global) in module.globals.iter().enumerate() {
             let (size, align) = match &global.kind {
                 GlobalKind::Variable(variable) => {
                     let types = &module.context.types;
-                    (machine.layout.alloc_size(types, variable.ty).max(1), variable.align.unwrap_or(1).max(machine.layout.align(types, variable.ty)))
+                    (
+                        machine.layout.alloc_size(types, variable.ty).max(1),
+                        variable.align.unwrap_or(1).max(machine.layout.align(types, variable.ty)),
+                    )
                 }
                 GlobalKind::Function(_) => (1, 1),
             };
@@ -136,7 +163,11 @@ impl<'m> Machine<'m> {
         Ok(machine)
     }
 
-    fn allocate_near(&mut self, size: u64, align: u64) -> Run<u64> {
+    fn allocate_near(
+        &mut self,
+        size: u64,
+        align: u64,
+    ) -> Run<u64> {
         let start = self.near_top.next_multiple_of(align.max(1));
         if start + size > NEAR_END {
             return unsupported("near objects past 64K");
@@ -148,7 +179,10 @@ impl<'m> Machine<'m> {
     }
 
     /// An address past everything, for what is never read: a function.
-    fn append(&mut self, size: u64) -> u64 {
+    fn append(
+        &mut self,
+        size: u64,
+    ) -> u64 {
         let start = self.memory.len() as u64;
         self.memory.resize((start + size) as usize, 0);
         self.poison.resize((start + size) as usize, false);
@@ -156,7 +190,11 @@ impl<'m> Machine<'m> {
     }
 
     /// A far object, at the start of a 64K segment of its own.
-    fn allocate(&mut self, size: u64, align: u64) -> u64 {
+    fn allocate(
+        &mut self,
+        size: u64,
+        align: u64,
+    ) -> u64 {
         let start = (self.memory.len() as u64).next_multiple_of(align.max(NEAR_END));
         self.memory.resize((start + size) as usize, 0);
         self.poison.resize((start + size) as usize, false);
@@ -169,7 +207,10 @@ impl<'m> Machine<'m> {
 
     // ---- values and memory
 
-    fn zero(&self, ty: TypeId) -> Val {
+    fn zero(
+        &self,
+        ty: TypeId,
+    ) -> Val {
         let types = self.types();
         match types.get(ty) {
             Type::Int(width) => Val::Int { bits: 0, width: *width },
@@ -181,11 +222,16 @@ impl<'m> Machine<'m> {
         }
     }
 
-    fn constant(&self, id: ConstantId) -> Run<Val> {
+    fn constant(
+        &self,
+        id: ConstantId,
+    ) -> Run<Val> {
         let constant = self.module.context.get(id);
         let types = self.types();
         Ok(match &constant.kind {
-            ConstantKind::Int(bits) => Val::Int { bits: *bits, width: types.int_bits(constant.ty).expect("an integer") },
+            ConstantKind::Int(bits) => {
+                Val::Int { bits: *bits, width: types.int_bits(constant.ty).expect("an integer") }
+            }
             ConstantKind::Float(bits) => match types.get(constant.ty) {
                 Type::Float(kind) => Val::Float(*kind, *bits),
                 _ => unreachable!("a floating constant"),
@@ -193,8 +239,12 @@ impl<'m> Machine<'m> {
             ConstantKind::Null => Val::Ptr(0),
             ConstantKind::Poison => Val::Poison,
             ConstantKind::Zero => self.zero(constant.ty),
-            ConstantKind::Aggregate(members) => Val::Aggregate(members.iter().map(|&one| self.constant(one)).collect::<Run<_>>()?),
-            ConstantKind::Bytes(bytes) => Val::Aggregate(bytes.iter().map(|&b| Val::Int { bits: u128::from(b), width: 8 }).collect()),
+            ConstantKind::Aggregate(members) => {
+                Val::Aggregate(members.iter().map(|&one| self.constant(one)).collect::<Run<_>>()?)
+            }
+            ConstantKind::Bytes(bytes) => {
+                Val::Aggregate(bytes.iter().map(|&b| Val::Int { bits: u128::from(b), width: 8 }).collect())
+            }
             ConstantKind::Global(global) => Val::Ptr(self.addresses[global]),
             ConstantKind::Expr(ConstantExpr::Cast { op, value }) => {
                 let from = self.module.context.get(*value).ty;
@@ -207,7 +257,12 @@ impl<'m> Machine<'m> {
         })
     }
 
-    fn store(&mut self, value: &Val, ty: TypeId, address: u64) -> Run<()> {
+    fn store(
+        &mut self,
+        value: &Val,
+        ty: TypeId,
+        address: u64,
+    ) -> Run<()> {
         let types = self.types();
         match (types.get(ty), value) {
             (Type::Array { element, .. } | Type::Vector { element, .. }, Val::Aggregate(members)) => {
@@ -245,7 +300,11 @@ impl<'m> Machine<'m> {
         }
     }
 
-    fn load(&self, ty: TypeId, address: u64) -> Run<Val> {
+    fn load(
+        &self,
+        ty: TypeId,
+        address: u64,
+    ) -> Run<Val> {
         let types = self.types();
         match types.get(ty) {
             Type::Array { element, count } => {
@@ -254,12 +313,20 @@ impl<'m> Machine<'m> {
             }
             Type::Vector { element, count } => {
                 let step = self.layout.alloc_size(types, *element);
-                (0..u64::from(*count)).map(|at| self.load(*element, address + step * at)).collect::<Run<_>>().map(Val::Aggregate)
+                (0..u64::from(*count))
+                    .map(|at| self.load(*element, address + step * at))
+                    .collect::<Run<_>>()
+                    .map(Val::Aggregate)
             }
             Type::Struct { .. } | Type::Named(_) => {
                 let (_, offsets) = self.layout.struct_layout(types, ty);
                 let fields = types.fields(ty).unwrap_or_default();
-                fields.iter().zip(offsets).map(|(&field, offset)| self.load(field, address + offset)).collect::<Run<_>>().map(Val::Aggregate)
+                fields
+                    .iter()
+                    .zip(offsets)
+                    .map(|(&field, offset)| self.load(field, address + offset))
+                    .collect::<Run<_>>()
+                    .map(Val::Aggregate)
             }
             _ => {
                 let size = self.layout.store_size(types, ty);
@@ -282,7 +349,11 @@ impl<'m> Machine<'m> {
         }
     }
 
-    fn check_bounds(&self, address: u64, size: u64) -> Run<()> {
+    fn check_bounds(
+        &self,
+        address: u64,
+        size: u64,
+    ) -> Run<()> {
         if address < 16 || address + size > self.memory.len() as u64 {
             return undefined(format!("an access of {size} bytes at {address:#x}, outside every object"));
         }
@@ -291,10 +362,16 @@ impl<'m> Machine<'m> {
 
     // ---- functions
 
-    fn call(&mut self, id: GlobalId, arguments: Vec<Val>) -> Run<Val> {
+    fn call(
+        &mut self,
+        id: GlobalId,
+        arguments: Vec<Val>,
+    ) -> Run<Val> {
         let global = self.module.global(id);
         let name = global.name.clone().unwrap_or_default();
-        let GlobalKind::Function(function) = &global.kind else { return undefined(format!("a call to the variable @{name}")) };
+        let GlobalKind::Function(function) = &global.kind else {
+            return undefined(format!("a call to the variable @{name}"));
+        };
         if function.is_declaration() {
             return match Intrinsic::named(&name) {
                 Some(intrinsic) => self.intrinsic(intrinsic, self.module.signature(function.ty).0, arguments),
@@ -308,7 +385,12 @@ impl<'m> Machine<'m> {
     }
 
     /// An intrinsic, in terms of the instructions that define it.
-    fn intrinsic(&mut self, intrinsic: Intrinsic, returns: TypeId, arguments: Vec<Val>) -> Run<Val> {
+    fn intrinsic(
+        &mut self,
+        intrinsic: Intrinsic,
+        returns: TypeId,
+        arguments: Vec<Val>,
+    ) -> Run<Val> {
         let void = Val::Aggregate(Vec::new());
         let argument = |at: usize| arguments[at].clone();
         Ok(match intrinsic {
@@ -335,9 +417,15 @@ impl<'m> Machine<'m> {
                 }
             }
             Intrinsic::Fixed { divide } => {
-                let (Val::Int { bits: a, width }, Val::Int { bits: b, .. }, Val::Int { bits: scale, .. }) = (argument(0), argument(1), argument(2)) else { return Ok(Val::Poison) };
+                let (Val::Int { bits: a, width }, Val::Int { bits: b, .. }, Val::Int { bits: scale, .. }) =
+                    (argument(0), argument(1), argument(2))
+                else {
+                    return Ok(Val::Poison);
+                };
                 let signed = |bits: u128| ((bits << (128 - width)) as i128) >> (128 - width);
-                let Some(value) = Intrinsic::fixed(divide, width, signed(a), signed(b), scale as u32) else { return undefined("a fixed-point division by zero") };
+                let Some(value) = Intrinsic::fixed(divide, width, signed(a), signed(b), scale as u32) else {
+                    return undefined("a fixed-point division by zero");
+                };
                 Val::Int { bits: value as u128 & mask(width), width }
             }
             // Fused or not is the machine's choice, as the LangRef allows.
@@ -347,8 +435,13 @@ impl<'m> Machine<'m> {
             }
             // In the argument's own precision.
             Intrinsic::Unary(function) => match argument(0) {
-                Val::Float(FloatKind::Float, bits) => Val::Float(FloatKind::Float, u64::from((function.apply(f64::from(f32::from_bits(bits as u32))) as f32).to_bits())),
-                Val::Float(kind @ (FloatKind::Double | FloatKind::X86Fp80), bits) => Val::Float(kind, function.apply(f64::from_bits(bits)).to_bits()),
+                Val::Float(FloatKind::Float, bits) => Val::Float(
+                    FloatKind::Float,
+                    u64::from((function.apply(f64::from(f32::from_bits(bits as u32))) as f32).to_bits()),
+                ),
+                Val::Float(kind @ (FloatKind::Double | FloatKind::X86Fp80), bits) => {
+                    Val::Float(kind, function.apply(f64::from_bits(bits)).to_bits())
+                }
                 _ => Val::Poison,
             },
             Intrinsic::LRint => {
@@ -366,7 +459,9 @@ impl<'m> Machine<'m> {
                 Val::Int { bits: (x as i128 as u128) & mask(width), width }
             }
             Intrinsic::MemSet => {
-                let (Val::Ptr(address), Val::Int { bits: length, .. }) = (argument(0), argument(2)) else { return undefined("a memset of a poison address or length") };
+                let (Val::Ptr(address), Val::Int { bits: length, .. }) = (argument(0), argument(2)) else {
+                    return undefined("a memset of a poison address or length");
+                };
                 let length = length as u64;
                 if length > 0 {
                     self.check_bounds(address, length)?;
@@ -381,7 +476,9 @@ impl<'m> Machine<'m> {
                 void
             }
             Intrinsic::MemSetPattern => {
-                let (Val::Ptr(address), Val::Int { bits: count, .. }) = (argument(0), argument(2)) else { return undefined("a pattern fill of a poison address or count") };
+                let (Val::Ptr(address), Val::Int { bits: count, .. }) = (argument(0), argument(2)) else {
+                    return undefined("a pattern fill of a poison address or count");
+                };
                 let Val::Int { bits, width } = argument(1) else { return undefined("a pattern fill of a poison cell") };
                 let bytes = u64::from(width / 8);
                 let length = count as u64 * bytes;
@@ -396,14 +493,19 @@ impl<'m> Machine<'m> {
                 void
             }
             Intrinsic::MemCpy | Intrinsic::MemMove => {
-                let (Val::Ptr(to), Val::Ptr(from), Val::Int { bits: length, .. }) = (argument(0), argument(1), argument(2)) else { return undefined("a memcpy of a poison address or length") };
+                let (Val::Ptr(to), Val::Ptr(from), Val::Int { bits: length, .. }) =
+                    (argument(0), argument(1), argument(2))
+                else {
+                    return undefined("a memcpy of a poison address or length");
+                };
                 let length = length as u64;
                 if length > 0 {
                     self.check_bounds(to, length)?;
                     self.check_bounds(from, length)?;
                 }
                 let (to, from, length) = (to as usize, from as usize, length as usize);
-                let (bytes, poison) = (self.memory[from..from + length].to_vec(), self.poison[from..from + length].to_vec());
+                let (bytes, poison) =
+                    (self.memory[from..from + length].to_vec(), self.poison[from..from + length].to_vec());
                 self.memory[to..to + length].copy_from_slice(&bytes);
                 self.poison[to..to + length].copy_from_slice(&poison);
                 void
@@ -411,7 +513,9 @@ impl<'m> Machine<'m> {
             Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd | Intrinsic::Assume => void,
             // Flat memory: the address difference, wrapped to the result.
             Intrinsic::PtrDiff => match (argument(0), argument(1), self.types().int_bits(returns)) {
-                (Val::Ptr(a), Val::Ptr(b), Some(width)) => Val::Int { bits: u128::from(a.wrapping_sub(b)) & mask(width), width },
+                (Val::Ptr(a), Val::Ptr(b), Some(width)) => {
+                    Val::Int { bits: u128::from(a.wrapping_sub(b)) & mask(width), width }
+                }
                 _ => Val::Poison,
             },
             // Flat memory: the same address.
@@ -426,24 +530,46 @@ impl<'m> Machine<'m> {
     /// What `pointer` is traced to: a parameter, a slot or a global, through
     /// GEPs and casts, and through a stack slot written once with a pointer
     /// that traces to one (an unoptimized body keeps its parameters there).
-    fn root_of(&self, function: &Function, pointer: Operand, depth: u32) -> Option<Root> {
+    fn root_of(
+        &self,
+        function: &Function,
+        pointer: Operand,
+        depth: u32,
+    ) -> Option<Root> {
         let (base, _) = crate::valuetracking::underlying(&self.module.context, &self.layout, function, pointer);
         match base {
             Operand::Value(value) => match function.value(value).def {
                 ValueDef::Argument(at) => Some(Root::Param(at)),
-                ValueDef::Instruction(inst) if matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }) => Some(Root::Object(base)),
+                ValueDef::Instruction(inst) if matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }) => {
+                    Some(Root::Object(base))
+                }
                 ValueDef::Instruction(inst) => {
                     let load = function.instruction(inst);
                     let Opcode::Load { .. } = load.opcode else { return None };
-                    let (slot, _) = crate::valuetracking::underlying(&self.module.context, &self.layout, function, load.operands[0]);
+                    let (slot, _) = crate::valuetracking::underlying(
+                        &self.module.context,
+                        &self.layout,
+                        function,
+                        load.operands[0],
+                    );
                     let Operand::Value(slot_value) = slot else { return None };
                     let ValueDef::Instruction(slot_inst) = function.value(slot_value).def else { return None };
                     if depth == 0 || !matches!(function.instruction(slot_inst).opcode, Opcode::Alloca { .. }) {
                         return None;
                     }
-                    let mut stored = function.walk().map(|(_, one)| function.instruction(one)).filter(|one| matches!(one.opcode, Opcode::Store { .. })).filter(|one| {
-                        crate::valuetracking::underlying(&self.module.context, &self.layout, function, one.operands[1]).0 == slot
-                    });
+                    let mut stored = function
+                        .walk()
+                        .map(|(_, one)| function.instruction(one))
+                        .filter(|one| matches!(one.opcode, Opcode::Store { .. }))
+                        .filter(|one| {
+                            crate::valuetracking::underlying(
+                                &self.module.context,
+                                &self.layout,
+                                function,
+                                one.operands[1],
+                            )
+                            .0 == slot
+                        });
                     let (Some(only), None) = (stored.next(), stored.next()) else { return None };
                     self.root_of(function, only.operands[0], depth - 1)
                 }
@@ -455,19 +581,41 @@ impl<'m> Machine<'m> {
 
     /// Notes an access of `size` bytes at `address` through `pointer`, and
     /// traps where it breaks a `noalias` parameter's promise with one before.
-    fn touch(&self, function: &Function, touched: &mut Vec<Touch>, pointer: Operand, address: u64, size: u64, write: bool) -> Run<()> {
+    fn touch(
+        &self,
+        function: &Function,
+        touched: &mut Vec<Touch>,
+        pointer: Operand,
+        address: u64,
+        size: u64,
+        write: bool,
+    ) -> Run<()> {
         let Some(root) = self.root_of(function, pointer, 4) else { return Ok(()) };
         if let (Root::Param(at), true) = (root, write)
             && Facts::param(function, at as usize).read_only()
         {
-            return undefined(format!("a readonly parameter's bytes {}..{} are written through it", address, address + size));
+            return undefined(format!(
+                "a readonly parameter's bytes {}..{} are written through it",
+                address,
+                address + size
+            ));
         }
-        let restrict = |root: Root| matches!(root, Root::Param(at) if Facts::param(function, at as usize).no_alias());
+        let restrict = |root: Root| {
+            matches!(
+                root,
+                Root::Param(at) if Facts::param(function, at as usize).no_alias()
+            )
+        };
         let new = Touch { root, start: address, end: address + size, write };
         for old in touched.iter() {
             let overlap = new.start < old.end && old.start < new.end;
-            if overlap && (new.write || old.write) && new.root != old.root && (restrict(new.root) || restrict(old.root)) {
-                return undefined(format!("a noalias parameter's bytes {}..{} are reached another way", new.start.max(old.start), new.end.min(old.end)));
+            if overlap && (new.write || old.write) && new.root != old.root && (restrict(new.root) || restrict(old.root))
+            {
+                return undefined(format!(
+                    "a noalias parameter's bytes {}..{} are reached another way",
+                    new.start.max(old.start),
+                    new.end.min(old.end)
+                ));
             }
         }
         touched.push(new);
@@ -476,7 +624,11 @@ impl<'m> Machine<'m> {
 
     /// Traps where the checked run finds `value` outside a `range(lower, upper)` of `attrs`:
     /// half-open and modulo the width, as LLVM reads it; equal bounds say nothing.
-    fn within(value: &Val, attrs: &[Attribute], what: &str) -> Run<()> {
+    fn within(
+        value: &Val,
+        attrs: &[Attribute],
+        what: &str,
+    ) -> Run<()> {
         let Val::Int { bits, width } = value else { return Ok(()) };
         for attribute in attrs {
             if let Attribute::Range { lower, upper, .. } = attribute
@@ -488,14 +640,23 @@ impl<'m> Machine<'m> {
         Ok(())
     }
 
-    fn outside(bits: u128, width: u32, lower: u128, upper: u128) -> bool {
+    fn outside(
+        bits: u128,
+        width: u32,
+        lower: u128,
+        upper: u128,
+    ) -> bool {
         let all = mask(width);
         let (lower, upper) = (lower & all, upper & all);
         lower != upper && (bits.wrapping_sub(lower) & all) >= (upper.wrapping_sub(lower) & all)
     }
 
     /// The `!range` an instruction carries, checked of the value it made.
-    fn in_metadata_range(&self, instruction: &crate::module::Instruction, value: &Val) -> Run<()> {
+    fn in_metadata_range(
+        &self,
+        instruction: &crate::module::Instruction,
+        value: &Val,
+    ) -> Run<()> {
         if !self.checked {
             return Ok(());
         }
@@ -513,7 +674,8 @@ impl<'m> Machine<'m> {
                 _ => None,
             };
             // A list of pairs: the value is outside the promise only if outside every one.
-            let pairs: Vec<(u128, u128)> = (0..operands.len() / 2).filter_map(|one| Some((bound(2 * one)?, bound(2 * one + 1)?))).collect();
+            let pairs: Vec<(u128, u128)> =
+                (0..operands.len() / 2).filter_map(|one| Some((bound(2 * one)?, bound(2 * one + 1)?))).collect();
             if !pairs.is_empty() && pairs.iter().all(|&(lower, upper)| Self::outside(*bits, *width, lower, upper)) {
                 return undefined(format!("a value {bits} outside its stated !range {pairs:?}"));
             }
@@ -521,7 +683,11 @@ impl<'m> Machine<'m> {
         Ok(())
     }
 
-    fn execute(&mut self, function: &'m Function, arguments: Vec<Val>) -> Run<Val> {
+    fn execute(
+        &mut self,
+        function: &'m Function,
+        arguments: Vec<Val>,
+    ) -> Run<Val> {
         let mut touched: Vec<Touch> = Vec::new();
         if self.checked {
             for (at, argument) in arguments.iter().enumerate() {
@@ -543,7 +709,11 @@ impl<'m> Machine<'m> {
             for &inst in list.iter().take_while(|&&one| function.instruction(one).opcode == Opcode::Phi) {
                 let instruction = function.instruction(inst);
                 let from = came_from.expect("the entry has no phis");
-                let pair = instruction.operands.chunks(2).find(|pair| pair[1] == Operand::Block(from)).expect("verified phis cover their edges");
+                let pair = instruction
+                    .operands
+                    .chunks(2)
+                    .find(|pair| pair[1] == Operand::Block(from))
+                    .expect("verified phis cover their edges");
                 chosen.push((instruction.result.expect("a phi has a result"), self.operand(&values, pair[0])?));
             }
             values.extend(chosen);
@@ -627,7 +797,15 @@ impl<'m> Machine<'m> {
                     }),
                     Opcode::Cast(op) => {
                         let from = function.operand_type(&self.module.context, ops[0]).expect("a value");
-                        Some(cast(self.types(), &self.layout, *op, value(self, 0)?, from, instruction.ty, instruction.flags)?)
+                        Some(cast(
+                            self.types(),
+                            &self.layout,
+                            *op,
+                            value(self, 0)?,
+                            from,
+                            instruction.ty,
+                            instruction.flags,
+                        )?)
                     }
                     Opcode::ICmp(predicate) => Some(icmp(*predicate, value(self, 0)?, value(self, 1)?)),
                     Opcode::FCmp(predicate) => Some(fcmp(*predicate, value(self, 0)?, value(self, 1)?)),
@@ -708,9 +886,16 @@ impl<'m> Machine<'m> {
         }
     }
 
-    fn operand(&self, values: &HashMap<ValueId, Val>, operand: Operand) -> Run<Val> {
+    fn operand(
+        &self,
+        values: &HashMap<ValueId, Val>,
+        operand: Operand,
+    ) -> Run<Val> {
         match operand {
-            Operand::Value(id) => values.get(&id).cloned().ok_or_else(|| Trap::Unsupported(format!("value {} is read before it is set", id.0))),
+            Operand::Value(id) => values
+                .get(&id)
+                .cloned()
+                .ok_or_else(|| Trap::Unsupported(format!("value {} is read before it is set", id.0))),
             Operand::Constant(id) => self.constant(id),
             Operand::Block(_) => unreachable!("a block is not a value"),
         }
@@ -719,7 +904,12 @@ impl<'m> Machine<'m> {
     // ---- operations
 
     /// The address `operands[0] + indices`, stepping through `source`.
-    fn gep(&self, source: TypeId, result: TypeId, operands: &[Val]) -> Run<Val> {
+    fn gep(
+        &self,
+        source: TypeId,
+        result: TypeId,
+        operands: &[Val],
+    ) -> Run<Val> {
         let types = self.types();
         let Val::Ptr(base) = operands[0] else { return Ok(Val::Poison) };
         let Type::Pointer(space) = types.get(result) else { unreachable!("a pointer") };
@@ -740,12 +930,20 @@ impl<'m> Machine<'m> {
 
 /// An integer or float operation on two values, as LLVM defines it: the
 /// interpreter's and constant folding's one answer.
-pub fn binary(op: BinaryOp, flags: Flags, a: Val, b: Val) -> Run<Val> {
+pub fn binary(
+    op: BinaryOp,
+    flags: Flags,
+    a: Val,
+    b: Val,
+) -> Run<Val> {
     if let (Val::Float(kind, x), Val::Float(_, y)) = (&a, &b) {
         return Ok(float_binary(op, *kind, *x, *y));
     }
     let (Val::Int { bits: x, width }, Val::Int { bits: y, .. }) = (&a, &b) else {
-        if matches!(op, BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) && b == Val::Poison {
+        if matches!(
+            op,
+            BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem
+        ) && b == Val::Poison {
             return undefined("a division by poison");
         }
         return Ok(Val::Poison);
@@ -758,7 +956,9 @@ pub fn binary(op: BinaryOp, flags: Flags, a: Val, b: Val) -> Run<Val> {
     let signed_fits = |value: i128| width >= 128 || value == signed(value as u128 & m, width);
     Ok(match op {
         BinaryOp::Add => {
-            if poison(Flags::NUW, x.checked_add(y).is_none_or(|sum| sum > m)) || poison(Flags::NSW, sx.checked_add(sy).is_none_or(|sum| !signed_fits(sum))) {
+            if poison(Flags::NUW, x.checked_add(y).is_none_or(|sum| sum > m))
+                || poison(Flags::NSW, sx.checked_add(sy).is_none_or(|sum| !signed_fits(sum)))
+            {
                 return Ok(Val::Poison);
             }
             int(x.wrapping_add(y))
@@ -770,14 +970,18 @@ pub fn binary(op: BinaryOp, flags: Flags, a: Val, b: Val) -> Run<Val> {
             int(x.wrapping_sub(y))
         }
         BinaryOp::Mul => {
-            if poison(Flags::NUW, x.checked_mul(y).is_none_or(|one| one > m)) || poison(Flags::NSW, sx.checked_mul(sy).is_none_or(|one| !signed_fits(one))) {
+            if poison(Flags::NUW, x.checked_mul(y).is_none_or(|one| one > m))
+                || poison(Flags::NSW, sx.checked_mul(sy).is_none_or(|one| !signed_fits(one)))
+            {
                 return Ok(Val::Poison);
             }
             int(x.wrapping_mul(y))
         }
         BinaryOp::UDiv | BinaryOp::URem if y == 0 => return undefined("a division by zero"),
         BinaryOp::SDiv | BinaryOp::SRem if y == 0 => return undefined("a division by zero"),
-        BinaryOp::SDiv | BinaryOp::SRem if sy == -1 && sx == signed(1u128 << (width - 1), width) && width > 1 => return undefined("a signed division overflows"),
+        BinaryOp::SDiv | BinaryOp::SRem if sy == -1 && sx == signed(1u128 << (width - 1), width) && width > 1 => {
+            return undefined("a signed division overflows");
+        }
         BinaryOp::UDiv => {
             if poison(Flags::EXACT, x % y != 0) {
                 return Ok(Val::Poison);
@@ -824,8 +1028,11 @@ pub fn binary(op: BinaryOp, flags: Flags, a: Val, b: Val) -> Run<Val> {
     })
 }
 
-
-pub(crate) fn icmp(predicate: IntPredicate, a: Val, b: Val) -> Val {
+pub(crate) fn icmp(
+    predicate: IntPredicate,
+    a: Val,
+    b: Val,
+) -> Val {
     let bits = |value: &Val| match value {
         Val::Int { bits, width } => Some((*bits, *width)),
         Val::Ptr(address) => Some((u128::from(*address), 64)),
@@ -848,8 +1055,15 @@ pub(crate) fn icmp(predicate: IntPredicate, a: Val, b: Val) -> Val {
     Val::Int { bits: u128::from(truth), width: 1 }
 }
 
-
-pub(crate) fn cast(types: &crate::types::Types, layout: &DataLayout, op: CastOp, value: Val, from: TypeId, to: TypeId, flags: Flags) -> Run<Val> {
+pub(crate) fn cast(
+    types: &crate::types::Types,
+    layout: &DataLayout,
+    op: CastOp,
+    value: Val,
+    from: TypeId,
+    to: TypeId,
+    flags: Flags,
+) -> Run<Val> {
     if value == Val::Poison {
         return Ok(Val::Poison);
     }
@@ -862,7 +1076,9 @@ pub(crate) fn cast(types: &crate::types::Types, layout: &DataLayout, op: CastOp,
     Ok(match (op, value) {
         (CastOp::Trunc, Val::Int { bits, width: from_width }) => {
             let kept = bits & mask(width);
-            if flags.contains(Flags::NUW) && kept != bits || flags.contains(Flags::NSW) && signed(kept, width) != signed(bits, from_width) {
+            if flags.contains(Flags::NUW) && kept != bits
+                || flags.contains(Flags::NSW) && signed(kept, width) != signed(bits, from_width)
+            {
                 return Ok(Val::Poison);
             }
             Val::Int { bits: kept, width }
@@ -873,7 +1089,9 @@ pub(crate) fn cast(types: &crate::types::Types, layout: &DataLayout, op: CastOp,
             }
             Val::Int { bits, width }
         }
-        (CastOp::SExt, Val::Int { bits, width: from_width }) => Val::Int { bits: signed(bits, from_width) as u128 & mask(width), width },
+        (CastOp::SExt, Val::Int { bits, width: from_width }) => {
+            Val::Int { bits: signed(bits, from_width) as u128 & mask(width), width }
+        }
         (CastOp::FPTrunc | CastOp::FPExt, Val::Float(kind, bits)) => {
             let value = to_f64(kind, bits);
             let Type::Float(target) = types.get(to) else { unreachable!("a floating type") };
@@ -912,8 +1130,11 @@ pub(crate) fn cast(types: &crate::types::Types, layout: &DataLayout, op: CastOp,
     })
 }
 
-
-fn insert(aggregate: Val, indices: &[u32], value: Val) -> Val {
+fn insert(
+    aggregate: Val,
+    indices: &[u32],
+    value: Val,
+) -> Val {
     let Some((&first, rest)) = indices.split_first() else { return value };
     match aggregate {
         Val::Aggregate(mut members) => {
@@ -925,14 +1146,20 @@ fn insert(aggregate: Val, indices: &[u32], value: Val) -> Val {
     }
 }
 
-fn to_f64(kind: FloatKind, bits: u64) -> f64 {
+fn to_f64(
+    kind: FloatKind,
+    bits: u64,
+) -> f64 {
     match kind {
         FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
         FloatKind::Double | FloatKind::X86Fp80 => f64::from_bits(bits),
     }
 }
 
-fn from_f64(kind: FloatKind, value: f64) -> Val {
+fn from_f64(
+    kind: FloatKind,
+    value: f64,
+) -> Val {
     match kind {
         FloatKind::Float => Val::Float(kind, u64::from((value as f32).to_bits())),
         FloatKind::Double | FloatKind::X86Fp80 => Val::Float(kind, value.to_bits()),
@@ -940,7 +1167,12 @@ fn from_f64(kind: FloatKind, value: f64) -> Val {
 }
 
 /// Floating arithmetic in the operands' own format.
-fn float_binary(op: BinaryOp, kind: FloatKind, x: u64, y: u64) -> Val {
+fn float_binary(
+    op: BinaryOp,
+    kind: FloatKind,
+    x: u64,
+    y: u64,
+) -> Val {
     match kind {
         FloatKind::Float => {
             let (a, b) = (f32::from_bits(x as u32), f32::from_bits(y as u32));
@@ -967,7 +1199,11 @@ fn float_binary(op: BinaryOp, kind: FloatKind, x: u64, y: u64) -> Val {
     }
 }
 
-fn fcmp(predicate: FloatPredicate, a: Val, b: Val) -> Val {
+fn fcmp(
+    predicate: FloatPredicate,
+    a: Val,
+    b: Val,
+) -> Val {
     let (Val::Float(kind, x), Val::Float(_, y)) = (a, b) else { return Val::Poison };
     let (x, y) = (to_f64(kind, x), to_f64(kind, y));
     let unordered = x.is_nan() || y.is_nan();

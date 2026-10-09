@@ -4,10 +4,9 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::support::hash::{IndexMap, IndexSet};
-
 use crate::model::ir::{self, Loc, Operation, Semantics};
 use crate::model::lir::{self, Insn};
+use crate::support::hash::{IndexMap, IndexSet};
 
 /// Make selected word definitions usable as dword address components.
 ///
@@ -35,14 +34,8 @@ pub fn promote(
         }
     }
     if definitions.keys().copied().collect::<BTreeSet<u32>>() != *values {
-        let missing = values
-            .iter()
-            .copied()
-            .filter(|value| !definitions.contains_key(value))
-            .collect::<Vec<u32>>();
-        return Err(format!(
-            "secondary address values have no definition: {missing:?}"
-        ));
+        let missing = values.iter().copied().filter(|value| !definitions.contains_key(value)).collect::<Vec<u32>>();
+        return Err(format!("secondary address values have no definition: {missing:?}"));
     }
     let mut out: IndexMap<i64, Vec<Arc<Insn>>> = blocks.clone();
     // Work backwards within each block so inserting a follower cannot move a
@@ -52,14 +45,17 @@ pub fn promote(
     for (value, (at, index)) in ordered {
         let one = Arc::clone(&out[&at][index]);
         let Some(what) = &one.what else {
-            return Err(format!(
-                "value#{value} has no selected definition to promote"
-            ));
+            return Err(format!("value#{value} has no selected definition to promote"));
         };
         let mut destinations = what.dests.clone();
-        let position = destinations.iter().position(
-            |destination| matches!(destination, Loc::Held(destination) if destination.value == value && destination.width == 2),
-        );
+        let position = destinations
+            .iter()
+            .position(
+                |destination| matches!(
+                    destination,
+                    Loc::Held(destination) if destination.value == value && destination.width == 2
+                ),
+            );
         let Some(position) = position else {
             return Err(format!("value#{value} has no word destination to promote"));
         };
@@ -81,21 +77,12 @@ pub fn promote(
                 dests: destinations,
                 ..what.clone()
             });
-            changed.widths = one
-                .widths
-                .iter()
-                .copied()
-                .chain([(value, 4)])
-                .collect::<IndexSet<_>>()
-                .into_iter()
-                .collect();
+            changed.widths =
+                one.widths.iter().copied().chain([(value, 4)]).collect::<IndexSet<_>>().into_iter().collect();
             out[&at][index] = Arc::new(changed);
             continue;
         }
-        if what.op != Operation::Move
-            || !matches!(what.name.as_deref(), Some("les" | "lfs" | "lgs"))
-            || position != 0
-        {
+        if what.op != Operation::Move || !matches!(what.name.as_deref(), Some("les" | "lfs" | "lgs")) || position != 0 {
             let spelled = match what.name.as_deref() {
                 Some(name) if !name.is_empty() => name.to_owned(),
                 _ => what.op.to_string(),
@@ -103,33 +90,17 @@ pub fn promote(
             return Err(format!("value#{value} cannot be promoted from {spelled}"));
         }
         let temporary = fresh();
-        destinations[0] = Loc::Held(ir::Held {
-            value: temporary,
-            width: 2,
-        });
+        destinations[0] = Loc::Held(ir::Held { value: temporary, width: 2 });
         let mut leader = (*one).clone();
-        leader.what = Some(Semantics {
-            dests: destinations,
-            ..what.clone()
-        });
-        leader.defines = one
-            .defines
-            .iter()
-            .map(|&found| if found == value { temporary } else { found })
-            .collect();
-        leader.widths = one
-            .widths
-            .iter()
-            .map(|&(found, width)| (if found == value { temporary } else { found }, width))
-            .collect();
+        leader.what = Some(Semantics { dests: destinations, ..what.clone() });
+        leader.defines = one.defines.iter().map(|&found| if found == value { temporary } else { found }).collect();
+        leader.widths =
+            one.widths.iter().map(|&(found, width)| (if found == value { temporary } else { found }, width)).collect();
         let mut follower = (*lir::anchor(Arc::clone(&one))).clone();
         follower.what = Some(Semantics {
             name: Some("movzx".to_owned()),
             dests: vec![Loc::Held(ir::Held { value, width: 4 })],
-            sources: vec![Loc::Held(ir::Held {
-                value: temporary,
-                width: 2,
-            })],
+            sources: vec![Loc::Held(ir::Held { value: temporary, width: 2 })],
             ..Semantics::new(Operation::Extend)
         });
         follower.defines = vec![value];

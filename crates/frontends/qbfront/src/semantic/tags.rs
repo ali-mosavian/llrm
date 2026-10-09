@@ -118,10 +118,14 @@ mod tests {
         tagged_checked(source, false)
     }
 
-    fn tagged_checked(source: &str, checked: bool) -> Vec<(String, Vec<Instruction>)> {
+    fn tagged_checked(
+        source: &str,
+        checked: bool,
+    ) -> Vec<(String, Vec<Instruction>)> {
         let module = parse(source, Dialect::VbDos).expect("parses");
-        let compiler = built(&module, "T", Dialect::VbDos, "vbdos", &Options { checked_arrays: checked, ..Options::default() })
-            .unwrap_or_else(|error| panic!("{}", error.message));
+        let compiler =
+            built(&module, "T", Dialect::VbDos, "vbdos", &Options { checked_arrays: checked, ..Options::default() })
+                .unwrap_or_else(|error| panic!("{}", error.message));
         compiler
             .functions
             .into_iter()
@@ -137,7 +141,10 @@ mod tests {
             .collect()
     }
 
-    fn procedure<'a>(all: &'a [(String, Vec<Instruction>)], name: &str) -> Vec<&'a Instruction> {
+    fn procedure<'a>(
+        all: &'a [(String, Vec<Instruction>)],
+        name: &str,
+    ) -> Vec<&'a Instruction> {
         all.iter().find(|(named, _)| named.eq_ignore_ascii_case(name)).expect(name).1.iter().collect()
     }
 
@@ -160,13 +167,12 @@ mod tests {
             })
             .collect();
         assert_eq!(shapes.len(), 1);
-        assert_eq!(shapes[0].records.iter().map(|(low, high)| (integer(low), integer(high))).collect::<Vec<_>>(), [
-            (Some(0), Some(320))
-        ]);
-        let offset = insns
-            .iter()
-            .find(|one| matches!(one.tag, Some(Tag::ElementOffset { .. })))
-            .expect("an element offset");
+        assert_eq!(
+            shapes[0].records.iter().map(|(low, high)| (integer(low), integer(high))).collect::<Vec<_>>(),
+            [(Some(0), Some(320))]
+        );
+        let offset =
+            insns.iter().find(|one| matches!(one.tag, Some(Tag::ElementOffset { .. }))).expect("an element offset");
         let Operand::Value(origin) = offset.operands[0] else { panic!("origin is a value") };
         let origin = insns.iter().find(|one| one.results.contains(&origin)).expect("the origin is loaded");
         assert!(matches!(origin.tag, Some(Tag::DescriptorField { field: Slot::Origin, .. })));
@@ -174,7 +180,11 @@ mod tests {
     }
 
     /// The constants each call to `callee` pushes, first pushed first.
-    fn pushed(source: &str, row_major: bool, callee: &str) -> Vec<Vec<Option<i64>>> {
+    fn pushed(
+        source: &str,
+        row_major: bool,
+        callee: &str,
+    ) -> Vec<Vec<Option<i64>>> {
         let module = parse(source, Dialect::VbDos).expect("parses");
         let compiler = built(&module, "T", Dialect::VbDos, "vbdos", &Options { row_major, ..Options::default() })
             .unwrap_or_else(|error| panic!("{}", error.message));
@@ -263,10 +273,13 @@ mod tests {
                 _ => None,
             })
             .expect("the call is tagged");
-        assert!(matches!(
-            passing.as_slice(),
-            [Passing::Variable(_), Passing::Array(_), Passing::Copied(_), Passing::Temporary, Passing::Element(_)]
-        ), "{passing:?}");
+        assert!(
+            matches!(
+                passing.as_slice(),
+                [Passing::Variable(_), Passing::Array(_), Passing::Copied(_), Passing::Temporary, Passing::Element(_)]
+            ),
+            "{passing:?}"
+        );
     }
 
     /// A local array's release at exit was untagged, breaking the promise

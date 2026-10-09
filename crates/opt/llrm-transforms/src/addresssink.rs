@@ -25,9 +25,17 @@ impl FunctionPass for AddressSink {
         "addresssink"
     }
 
-    fn run(&mut self, unit: &mut passes::Unit, _: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
         // Blocks and edges are as they were.
-        if sunk(unit.function) { PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>() } else { PreservedAnalyses::all() }
+        if sunk(unit.function) {
+            PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
+        } else {
+            PreservedAnalyses::all()
+        }
     }
 }
 
@@ -40,15 +48,24 @@ enum Merged {
 
 fn sunk(function: &mut Function) -> bool {
     let mut changed = false;
-    for (block, phi) in function.walk().filter(|&(_, inst)| function.instruction(inst).opcode == Opcode::Phi).collect::<Vec<_>>() {
+    for (block, phi) in
+        function.walk().filter(|&(_, inst)| function.instruction(inst).opcode == Opcode::Phi).collect::<Vec<_>>()
+    {
         let Some(result) = function.instruction(phi).result else { continue };
         let arms = function.instruction(phi).operands.chunks(2).map(|pair| pair[0]).collect::<Vec<_>>();
-        if arms.len() < 2 || arms.iter().all(|one| *one == arms[0]) || !crate::spill::address_only(function, result, 3) {
+        if arms.len() < 2 || arms.iter().all(|one| *one == arms[0]) || !crate::spill::address_only(function, result, 3)
+        {
             continue;
         }
         let shape = cfg::Shape::of(function);
         let Some(plan) = merged(function, &shape, block, &arms, 3) else { continue };
-        let at = function.block(block).instructions().iter().copied().find(|&one| function.instruction(one).opcode != Opcode::Phi).expect("a terminated block");
+        let at = function
+            .block(block)
+            .instructions()
+            .iter()
+            .copied()
+            .find(|&one| function.instruction(one).opcode != Opcode::Phi)
+            .expect("a terminated block");
         let made = built(function, &plan, at);
         function.replace_all_uses_with(result, made);
         function.erase(phi).expect("its uses were replaced");
@@ -58,7 +75,23 @@ fn sunk(function: &mut Function) -> bool {
             let Operand::Value(value) = operand else { continue };
             let ValueDef::Instruction(def) = function.value(value).def else { continue };
             let op = function.instruction(def);
-            if !function.users(value).is_empty() || !matches!(op.opcode, Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::ZExt | CastOp::SExt | CastOp::Trunc) | Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor)) || function.is_erased(def) {
+            if !function.users(value).is_empty()
+                || !matches!(
+                    op.opcode,
+                    Opcode::GetElementPtr { .. }
+                        | Opcode::Cast(CastOp::ZExt | CastOp::SExt | CastOp::Trunc)
+                        | Opcode::Binary(
+                            BinaryOp::Add
+                                | BinaryOp::Sub
+                                | BinaryOp::Mul
+                                | BinaryOp::Shl
+                                | BinaryOp::And
+                                | BinaryOp::Or
+                                | BinaryOp::Xor
+                        )
+                )
+                || function.is_erased(def)
+            {
                 continue;
             }
             orphans.extend(op.operands.clone());
@@ -70,10 +103,18 @@ fn sunk(function: &mut Function) -> bool {
 }
 
 /// The arms as one `Merged`, if they are one computation over values that reach `join`.
-fn merged(function: &Function, shape: &cfg::Shape, join: BlockId, arms: &[Operand], depth: u32) -> Option<Merged> {
+fn merged(
+    function: &Function,
+    shape: &cfg::Shape,
+    join: BlockId,
+    arms: &[Operand],
+    depth: u32,
+) -> Option<Merged> {
     let reaches = |operand: Operand| match operand {
         Operand::Value(value) => match function.value(value).def {
-            ValueDef::Instruction(def) => function.parent(def).is_some_and(|block| shape.dominance.dominates(cfg::id(block), cfg::id(join))),
+            ValueDef::Instruction(def) => {
+                function.parent(def).is_some_and(|block| shape.dominance.dominates(cfg::id(block), cfg::id(join)))
+            }
             ValueDef::Argument(_) => true,
         },
         _ => true,
@@ -92,25 +133,50 @@ fn merged(function: &Function, shape: &cfg::Shape, join: BlockId, arms: &[Operan
     let first = function.instruction(made[0]);
     let pure = matches!(
         first.opcode,
-        Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::ZExt | CastOp::SExt | CastOp::Trunc) | Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor)
+        Opcode::GetElementPtr { .. }
+            | Opcode::Cast(CastOp::ZExt | CastOp::SExt | CastOp::Trunc)
+            | Opcode::Binary(
+                BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::Shl
+                    | BinaryOp::And
+                    | BinaryOp::Or
+                    | BinaryOp::Xor
+            )
     );
     if depth == 0
         || !pure
         || made.iter().any(|&one| {
             let other = function.instruction(one);
-            other.opcode != first.opcode || other.ty != first.ty || other.flags != first.flags || other.operands.len() != first.operands.len()
+            other.opcode != first.opcode
+                || other.ty != first.ty
+                || other.flags != first.flags
+                || other.operands.len() != first.operands.len()
         })
     {
         return None;
     }
     let operands = (0..first.operands.len())
-        .map(|at| merged(function, shape, join, &made.iter().map(|&one| function.instruction(one).operands[at]).collect::<Vec<_>>(), depth - 1))
+        .map(|at| {
+            merged(
+                function,
+                shape,
+                join,
+                &made.iter().map(|&one| function.instruction(one).operands[at]).collect::<Vec<_>>(),
+                depth - 1,
+            )
+        })
         .collect::<Option<Vec<_>>>()?;
     Some(Merged::Made(first.opcode.clone(), first.ty, first.flags, operands))
 }
 
 /// `plan` made before `at`.
-fn built(function: &mut Function, plan: &Merged, at: InstId) -> Operand {
+fn built(
+    function: &mut Function,
+    plan: &Merged,
+    at: InstId,
+) -> Operand {
     match plan {
         Merged::Shared(operand) => *operand,
         Merged::Made(opcode, ty, flags, operands) => {

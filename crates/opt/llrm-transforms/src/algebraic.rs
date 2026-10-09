@@ -7,18 +7,14 @@
 //! reassociated sum may overflow where the original did not.
 //!
 //! Gone with the old MIR:
-//! - `wholephis`, `wholestores`, `_halved`, `_halves`, `_takes_halves`,
-//!   `_extracted`, `_recombined` and a `Concat` of constants: a long split
-//!   into word halves. Every value is whole here.
-//! - `_forwarded_zero_tests`: `or x, x` for its x86 flags; `icmp` reads the
-//!   value.
+//! - `wholephis`, `wholestores`, `_halved`, `_halves`, `_takes_halves`, `_extracted`, `_recombined` and a `Concat` of
+//!   constants: a long split into word halves. Every value is whole here.
+//! - `_forwarded_zero_tests`: `or x, x` for its x86 flags; `icmp` reads the value.
 //! - `_product`: a widening multiply's unused high half; `mul` has one result.
-//! - `_zero_difference` and `_copied_zero`: `sub 0, x` is the negation here,
-//!   and nothing is a copy.
+//! - `_zero_difference` and `_copied_zero`: `sub 0, x` is the negation here, and nothing is a copy.
 //! - `wanted` and `wide`: which flags and which halves were read.
-//! - `_distributing`'s and `_mask_scaled`'s pairing: the old rules read a
-//!   snapshot and rewrote one op each, so both ops of a pair had to agree to
-//!   change. Here a rewrite replaces both at once, on the current function.
+//! - `_distributing`'s and `_mask_scaled`'s pairing: the old rules read a snapshot and rewrote one op each, so both ops
+//!   of a pair had to agree to change. Here a rewrite replaces both at once, on the current function.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -32,11 +28,11 @@ use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses};
+use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use crate::counting;
-use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses};
-use llrm_support::hash::IndexMap;
 
 /// `size`: code size outranks speed, and a division by a constant that is not a power of two stays signed.
 #[derive(Default)]
@@ -49,7 +45,11 @@ impl FunctionPass for Algebraic {
         "algebraic"
     }
 
-    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         // Blocks and edges are as they were.
         if simplified(unit.context, unit.layout, unit.function, analyses, self.size) {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
@@ -59,8 +59,8 @@ impl FunctionPass for Algebraic {
     }
 }
 
-/// What a counter rebased by a use leaves behind: `x - (x + y)` is `-y`. LLVM's LSR cleans with InstSimplify, not InstCombine's
-/// whole set, which would fold the scales LSR just chose back into one another.
+/// What a counter rebased by a use leaves behind: `x - (x + y)` is `-y`. LLVM's LSR cleans with InstSimplify, not
+/// InstCombine's whole set, which would fold the scales LSR just chose back into one another.
 pub struct Differences;
 
 impl FunctionPass for Differences {
@@ -68,13 +68,18 @@ impl FunctionPass for Differences {
         "differences"
     }
 
-    fn run(&mut self, unit: &mut passes::Unit, _analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        _analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         let mut changed = false;
         loop {
             let mut round = false;
             for (_, inst) in unit.function.walk().collect::<Vec<_>>() {
                 if !unit.function.is_erased(inst) {
-                    round |= _difference_from_sum(unit.context, unit.function, inst) || _negated_difference(unit.context, unit.function, inst);
+                    round |= _difference_from_sum(unit.context, unit.function, inst)
+                        || _negated_difference(unit.context, unit.function, inst);
                 }
             }
             if !round {
@@ -91,14 +96,29 @@ impl FunctionPass for Differences {
 }
 
 /// Every rule, to a fixed point; whether anything changed.
-pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses, size: bool) -> bool {
+pub fn simplified(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    analyses: &mut Analyses,
+    size: bool,
+) -> bool {
     // A number proved before stays proved: every rewrite keeps each
     // surviving value's meaning, and none divides by a value.
-    let divided_by_values = function.walk().any(|(_, inst)| {
-        let instruction = function.instruction(inst);
-        matches!(instruction.opcode, Opcode::Binary(BinaryOp::SDiv | BinaryOp::SRem)) && matches!(instruction.operands[1], Operand::Value(_))
-    });
-    let facts = if divided_by_values { analyses.get::<Registers>(context, layout, function) } else { Default::default() };
+    let divided_by_values = function
+        .walk()
+        .any(
+            |(_, inst)| {
+                let instruction = function.instruction(inst);
+                matches!(
+                    instruction.opcode,
+                    Opcode::Binary(BinaryOp::SDiv | BinaryOp::SRem)
+                )
+                    && matches!(instruction.operands[1], Operand::Value(_))
+            },
+        );
+    let facts =
+        if divided_by_values { analyses.get::<Registers>(context, layout, function) } else { Default::default() };
     let outer = std::rc::Rc::clone(analyses.outer());
     let mut changed = false;
     loop {
@@ -122,7 +142,13 @@ pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Fun
 }
 
 /// The first rule that rewrites `inst`.
-fn _rewritten(context: &mut Context, layout: &DataLayout, function: &mut Function, recurrences: &BTreeSet<ValueId>, inst: InstId) -> bool {
+fn _rewritten(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    recurrences: &BTreeSet<ValueId>,
+    inst: InstId,
+) -> bool {
     _mask_scaled(context, function, recurrences, inst)
         || _constant_address(context, function, inst)
         || _offset_scaled(context, function, inst)
@@ -151,7 +177,10 @@ fn _rewritten(context: &mut Context, layout: &DataLayout, function: &mut Functio
 
 /// The `i1` `operand` extends, read through `sext` or `zext`, and whether
 /// the extension makes a true all ones.
-fn _extended_boolean(function: &Function, operand: Operand) -> Option<(Operand, bool)> {
+fn _extended_boolean(
+    function: &Function,
+    operand: Operand,
+) -> Option<(Operand, bool)> {
     let made = _definition(function, operand)?;
     let instruction = function.instruction(made);
     match instruction.opcode {
@@ -162,7 +191,11 @@ fn _extended_boolean(function: &Function, operand: Operand) -> Option<(Operand, 
 
 /// `icmp ne (sext i1 x), 0` is `x`, and `icmp eq` of it `!x`: Nib's booleans
 /// are eight-bit 0 and -1, tested against zero.
-fn _extended_boolean_tested(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+fn _extended_boolean_tested(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     let instruction = function.instruction(inst);
     let Opcode::ICmp(predicate @ (IntPredicate::Ne | IntPredicate::Eq)) = instruction.opcode else { return false };
     let [extended, zero] = instruction.operands[..] else { return false };
@@ -178,7 +211,13 @@ fn _extended_boolean_tested(context: &mut Context, function: &mut Function, inst
     } else {
         let truth = counting::constant(context, &BigInt::from(1), 1);
         let bit = context.types.int(1);
-        let flipped = function.create_instruction(Opcode::Binary(BinaryOp::Xor), bit, vec![boolean, truth], Flags::default(), None);
+        let flipped = function.create_instruction(
+            Opcode::Binary(BinaryOp::Xor),
+            bit,
+            vec![boolean, truth],
+            Flags::default(),
+            None,
+        );
         function.insert(flipped, Position::Before(inst)).expect("a placed compare");
         let value = Operand::Value(function.instruction(flipped).result.expect("a value"));
         _forward(function, inst, value);
@@ -188,12 +227,21 @@ fn _extended_boolean_tested(context: &mut Context, function: &mut Function, inst
 
 /// `xor (sext i1 x), -1` is `sext (xor i1 x, true)`, and `xor (zext x), 1`
 /// the same zero-extended.
-fn _extended_boolean_negated(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+fn _extended_boolean_negated(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     let Some((BinaryOp::Xor, left, right, width)) = _binary(context, function, inst) else { return false };
     if width == 1 {
         return false;
     }
-    let Some(((boolean, sign), number)) = [(left, right), (right, left)].into_iter().find_map(|(one, other)| Some((_extended_boolean(function, one)?, _integer(context, other)?))) else { return false };
+    let Some(((boolean, sign), number)) = [(left, right), (right, left)]
+        .into_iter()
+        .find_map(|(one, other)| Some((_extended_boolean(function, one)?, _integer(context, other)?)))
+    else {
+        return false;
+    };
     if number != if sign { mask(width) } else { 1 }
         || function.operand_type(context, boolean).and_then(|ty| context.types.int_bits(ty)) != Some(1)
     {
@@ -201,7 +249,8 @@ fn _extended_boolean_negated(context: &mut Context, function: &mut Function, ins
     }
     let truth = counting::constant(context, &BigInt::from(1), 1);
     let bit = context.types.int(1);
-    let flipped = function.create_instruction(Opcode::Binary(BinaryOp::Xor), bit, vec![boolean, truth], Flags::default(), None);
+    let flipped =
+        function.create_instruction(Opcode::Binary(BinaryOp::Xor), bit, vec![boolean, truth], Flags::default(), None);
     function.insert(flipped, Position::Before(inst)).expect("a placed xor");
     let negated = Operand::Value(function.instruction(flipped).result.expect("a value"));
     let ty = function.instruction(inst).ty;
@@ -216,9 +265,17 @@ fn _extended_boolean_negated(context: &mut Context, function: &mut Function, ins
 /// `xor (icmp P a b), true` is `icmp !P a b` where nothing else reads the
 /// compare: Nib's `if !(i < n): break` branched on the negation, which
 /// hid the exit from every counting pass and cost `setl; neg; xor`.
-fn _inverted_compare(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+fn _inverted_compare(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     let Some((BinaryOp::Xor, left, right, 1)) = _binary(context, function, inst) else { return false };
-    let Some((compare, _)) = [(left, right), (right, left)].into_iter().find(|&(_, other)| _integer(context, other) == Some(1)) else { return false };
+    let Some((compare, _)) =
+        [(left, right), (right, left)].into_iter().find(|&(_, other)| _integer(context, other) == Some(1))
+    else {
+        return false;
+    };
     let Some(made) = _definition(function, compare).filter(|_| _single_use(function, compare)) else { return false };
     let Opcode::ICmp(predicate) = function.instruction(made).opcode else { return false };
     let operands = function.instruction(made).operands.clone();
@@ -234,7 +291,11 @@ fn _inverted_compare(context: &mut Context, function: &mut Function, inst: InstI
 /// compare narrows only for a loop-carried `a`, whose trip count is proven at
 /// its own width: narrowed elsewhere it moves the value to a byte-addressable
 /// register for nothing (grep grew 24 bytes).
-fn _narrow_compare(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+fn _narrow_compare(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     let instruction = function.instruction(inst);
     let Opcode::ICmp(predicate) = instruction.opcode else { return false };
     let (left, right) = (instruction.operands[0], instruction.operands[1]);
@@ -246,7 +307,8 @@ fn _narrow_compare(context: &mut Context, function: &mut Function, inst: InstId)
     let Some((kind, a)) = extension(function, left) else { return false };
     let Some(narrow) = function.operand_type(context, a) else { return false };
     let Some(n) = context.types.int_bits(narrow) else { return false };
-    let wide = context.types.int_bits(function.operand_type(context, left).expect("a typed operand")).expect("an integer");
+    let wide =
+        context.types.int_bits(function.operand_type(context, left).expect("a typed operand")).expect("an integer");
     let signed = kind == CastOp::SExt;
     let unsigned_form = |predicate| match predicate {
         IntPredicate::Sgt => IntPredicate::Ugt,
@@ -258,7 +320,9 @@ fn _narrow_compare(context: &mut Context, function: &mut Function, inst: InstId)
     if let Some((other, b)) = extension(function, right)
         && other == kind
         && function.operand_type(context, b) == Some(narrow)
-        && (_loop_carried(function, a) || _loop_carried(function, b) || _single_use(function, left) && _single_use(function, right))
+        && (_loop_carried(function, a)
+            || _loop_carried(function, b)
+            || _single_use(function, left) && _single_use(function, right))
     {
         let predicate = if signed { predicate } else { unsigned_form(predicate) };
         _replace(function, inst, Opcode::ICmp(predicate), vec![a, b]);
@@ -270,7 +334,11 @@ fn _narrow_compare(context: &mut Context, function: &mut Function, inst: InstId)
     }
     // `a`'s range and C, as numbers.
     let (low, high) = if signed { (-(1_i128 << (n - 1)), (1_i128 << (n - 1)) - 1) } else { (0, (1_i128 << n) - 1) };
-    let compared_signed = matches!(predicate, IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle);
+    let compared_signed =
+        matches!(
+            predicate,
+            IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
+        );
     if signed && !compared_signed && !matches!(predicate, IntPredicate::Eq | IntPredicate::Ne) {
         return false;
     }
@@ -304,7 +372,11 @@ fn _narrow_compare(context: &mut Context, function: &mut Function, inst: InstId)
 /// sum is computed in `int` and cut back, and cut first it is one narrow
 /// operation. `ext a` must be `a` at the result's width, so a conversion
 /// goes; the other operand's cut is loop-invariant where it is.
-fn _narrowed_binary(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+fn _narrowed_binary(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     let instruction = function.instruction(inst);
     if instruction.opcode != Opcode::Cast(CastOp::Trunc) || !_single_use(function, instruction.operands[0]) {
         return false;
@@ -312,7 +384,12 @@ fn _narrowed_binary(context: &mut Context, function: &mut Function, inst: InstId
     let narrow = instruction.ty;
     let Some(made) = _definition(function, instruction.operands[0]) else { return false };
     let Some((op, left, right, wide)) = _binary(context, function, made) else { return false };
-    if !matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) || wide > 128 {
+    if !matches!(
+        op,
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor
+    )
+        || wide > 128
+    {
         return false;
     }
     let source = |function: &Function, operand: Operand| {
@@ -327,7 +404,9 @@ fn _narrowed_binary(context: &mut Context, function: &mut Function, inst: InstId
     }
     let mut cut = |function: &mut Function, known: Option<Operand>, operand: Operand| match (known, operand) {
         (Some(from), _) => from,
-        (None, Operand::Constant(_)) => _integer(context, operand).map_or(operand, |bits| Operand::Constant(context.int(narrow, bits as i128))),
+        (None, Operand::Constant(_)) => {
+            _integer(context, operand).map_or(operand, |bits| Operand::Constant(context.int(narrow, bits as i128)))
+        }
         _ => _before(function, inst, Opcode::Cast(CastOp::Trunc), vec![operand]),
     };
     let (left, right) = (cut(function, a, left), cut(function, b, right));
@@ -336,11 +415,17 @@ fn _narrowed_binary(context: &mut Context, function: &mut Function, inst: InstId
 }
 
 /// `operand` is a phi: carried round a loop, or merged.
-fn _loop_carried(function: &Function, operand: Operand) -> bool {
+fn _loop_carried(
+    function: &Function,
+    operand: Operand,
+) -> bool {
     _definition(function, operand).is_some_and(|made| function.instruction(made).opcode == Opcode::Phi)
 }
 
-fn _definition(function: &Function, operand: Operand) -> Option<InstId> {
+fn _definition(
+    function: &Function,
+    operand: Operand,
+) -> Option<InstId> {
     let Operand::Value(value) = operand else { return None };
     match function.value(value).def {
         ValueDef::Instruction(inst) => Some(inst),
@@ -349,11 +434,20 @@ fn _definition(function: &Function, operand: Operand) -> Option<InstId> {
 }
 
 /// `operand` is a value read in one operand slot.
-fn _single_use(function: &Function, operand: Operand) -> bool {
-    matches!(operand, Operand::Value(value) if function.users(value).len() == 1)
+fn _single_use(
+    function: &Function,
+    operand: Operand,
+) -> bool {
+    matches!(
+        operand,
+        Operand::Value(value) if function.users(value).len() == 1
+    )
 }
 
-fn _integer(context: &Context, operand: Operand) -> Option<u128> {
+fn _integer(
+    context: &Context,
+    operand: Operand,
+) -> Option<u128> {
     let Operand::Constant(id) = operand else { return None };
     match context.get(id).kind {
         ConstantKind::Int(bits) => Some(bits),
@@ -362,20 +456,36 @@ fn _integer(context: &Context, operand: Operand) -> Option<u128> {
 }
 
 /// `inst`'s integer width.
-fn _width(context: &Context, function: &Function, inst: InstId) -> Option<u32> {
+fn _width(
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+) -> Option<u32> {
     context.types.int_bits(function.instruction(inst).ty)
 }
 
 /// `inst`'s integer operation and operands.
-fn _binary(context: &Context, function: &Function, inst: InstId) -> Option<(BinaryOp, Operand, Operand, u32)> {
+fn _binary(
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+) -> Option<(BinaryOp, Operand, Operand, u32)> {
     let instruction = function.instruction(inst);
     let Opcode::Binary(op) = instruction.opcode else { return None };
     Some((op, instruction.operands[0], instruction.operands[1], _width(context, function, inst)?))
 }
 
 /// A value and a constant, in either order where `op` commutes.
-fn _value_and_constant(context: &Context, op: BinaryOp, left: Operand, right: Operand) -> Option<(Operand, u128)> {
-    let commutes = matches!(op, BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor);
+fn _value_and_constant(
+    context: &Context,
+    op: BinaryOp,
+    left: Operand,
+    right: Operand,
+) -> Option<(Operand, u128)> {
+    let commutes = matches!(
+        op,
+        BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor
+    );
     match (left, _integer(context, right), _integer(context, left)) {
         (Operand::Value(_), Some(constant), _) => Some((left, constant)),
         (_, None, Some(constant)) if commutes && matches!(right, Operand::Value(_)) => Some((right, constant)),
@@ -385,39 +495,67 @@ fn _value_and_constant(context: &Context, op: BinaryOp, left: Operand, right: Op
 
 /// `inst` rebuilt as `opcode` over `operands` where it was, flags cleared,
 /// and what that orphaned, gone.
-fn _replace(function: &mut Function, inst: InstId, opcode: Opcode, operands: Vec<Operand>) {
+fn _replace(
+    function: &mut Function,
+    inst: InstId,
+    opcode: Opcode,
+    operands: Vec<Operand>,
+) {
     let value = _before(function, inst, opcode, operands);
     _forward(function, inst, value);
 }
 
 /// Every use of `inst` now reads `with`, and `inst` and what it alone read, gone.
-fn _forward(function: &mut Function, inst: InstId, with: Operand) {
+fn _forward(
+    function: &mut Function,
+    inst: InstId,
+    with: Operand,
+) {
     let result = function.instruction(inst).result.expect("a value");
     function.replace_value(result, with);
     _erase(function, inst);
 }
 
-fn _erase(function: &mut Function, inst: InstId) {
+fn _erase(
+    function: &mut Function,
+    inst: InstId,
+) {
     let operands = function.instruction(inst).operands.clone();
     function.erase(inst).expect("its uses were replaced");
     for operand in operands {
         let Some(made) = _definition(function, operand) else { continue };
-        let orphan = matches!(function.instruction(made).opcode, Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_));
-        if orphan && !function.is_erased(made) && function.users(function.instruction(made).result.expect("a value")).is_empty() {
+        let orphan = matches!(
+            function.instruction(made).opcode,
+            Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_)
+        );
+        if orphan
+            && !function.is_erased(made)
+            && function.users(function.instruction(made).result.expect("a value")).is_empty()
+        {
             _erase(function, made);
         }
     }
 }
 
 /// A new instruction before `at`, of `at`'s type; its value.
-fn _before(function: &mut Function, at: InstId, opcode: Opcode, operands: Vec<Operand>) -> Operand {
+fn _before(
+    function: &mut Function,
+    at: InstId,
+    opcode: Opcode,
+    operands: Vec<Operand>,
+) -> Operand {
     let ty = function.instruction(at).ty;
     let new = function.create_instruction(opcode, ty, operands, Flags::default(), None);
     function.insert(new, Position::Before(at)).expect("a placed instruction");
     Operand::Value(function.instruction(new).result.expect("a value"))
 }
 
-fn _constant(context: &mut Context, function: &Function, inst: InstId, bits: u128) -> Operand {
+fn _constant(
+    context: &mut Context,
+    function: &Function,
+    inst: InstId,
+    bits: u128,
+) -> Operand {
     Operand::Constant(context.int(function.instruction(inst).ty, bits as i128))
 }
 
@@ -429,7 +567,11 @@ struct Scale {
     constant: Operand,
 }
 
-fn _scale(context: &Context, function: &Function, inst: InstId) -> Option<Scale> {
+fn _scale(
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+) -> Option<Scale> {
     let (op, left, right, width) = _binary(context, function, inst)?;
     let (source, constant) = _value_and_constant(context, op, left, right)?;
     let factor = match op {
@@ -442,7 +584,11 @@ fn _scale(context: &Context, function: &Function, inst: InstId) -> Option<Scale>
 }
 
 /// `x + amount`: an `add`, or a `sub` of a constant.
-fn _offset(context: &Context, function: &Function, inst: InstId) -> Option<(Operand, u128)> {
+fn _offset(
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+) -> Option<(Operand, u128)> {
     let (op, left, right, width) = _binary(context, function, inst)?;
     let (source, amount) = _value_and_constant(context, op, left, right)?;
     match op {
@@ -453,7 +599,11 @@ fn _offset(context: &Context, function: &Function, inst: InstId) -> Option<(Oper
 }
 
 /// `x op constant` for an associative bitwise `op`.
-fn _bitwise(context: &Context, function: &Function, inst: InstId) -> Option<(BinaryOp, Operand, u128)> {
+fn _bitwise(
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+) -> Option<(BinaryOp, Operand, u128)> {
     let (op, left, right, _) = _binary(context, function, inst)?;
     if !matches!(op, BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) {
         return None;
@@ -464,10 +614,19 @@ fn _bitwise(context: &Context, function: &Function, inst: InstId) -> Option<(Bin
 
 /// Values advancing by a constant each trip of some loop, where a mask
 /// feeds a scale, as `_mask_scaled` asks.
-fn _recurrences(context: &Context, layout: &DataLayout, function: &Function, outer: &Outer) -> BTreeSet<ValueId> {
-    let masked_scale = function.walk().any(|(_, inst)| {
-        _scale(context, function, inst).and_then(|scale| _definition(function, scale.source)).is_some_and(|mask| _bitwise(context, function, mask).is_some_and(|(op, ..)| op == BinaryOp::And))
-    });
+fn _recurrences(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    outer: &Outer,
+) -> BTreeSet<ValueId> {
+    let masked_scale = function
+        .walk()
+        .any(
+            |(_, inst)| _scale(context, function, inst)
+                .and_then(|scale| _definition(function, scale.source))
+                .is_some_and(|mask| _bitwise(context, function, mask).is_some_and(|(op, ..)| op == BinaryOp::And)),
+        );
     if !masked_scale {
         return BTreeSet::new();
     }
@@ -483,7 +642,12 @@ fn _recurrences(context: &Context, layout: &DataLayout, function: &Function, out
 /// mask is read only by the scale. Only where `x` advances with a loop,
 /// whose step then takes the scale for nothing; elsewhere the scale is as
 /// free in an address as it would be in the mask.
-fn _mask_scaled(context: &mut Context, function: &mut Function, recurrences: &BTreeSet<ValueId>, inst: InstId) -> bool {
+fn _mask_scaled(
+    context: &mut Context,
+    function: &mut Function,
+    recurrences: &BTreeSet<ValueId>,
+    inst: InstId,
+) -> bool {
     let Some(scale) = _scale(context, function, inst) else { return false };
     if !scale.factor.is_power_of_two() || !_single_use(function, scale.source) {
         return false;
@@ -502,16 +666,25 @@ fn _mask_scaled(context: &mut Context, function: &mut Function, recurrences: &BT
 
 /// `(x + a) * k + b` is `x * k + (a * k + b)` at every width, each op read
 /// only by the next: the inner offset dies.
-fn _offset_scaled(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+fn _offset_scaled(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     let Some((middle, outer)) = _offset(context, function, inst) else { return false };
     if !_single_use(function, middle) {
         return false;
     }
-    let Some(scale) = _definition(function, middle).and_then(|made| _scale(context, function, made)) else { return false };
+    let Some(scale) = _definition(function, middle).and_then(|made| _scale(context, function, made)) else {
+        return false;
+    };
     if !_single_use(function, scale.source) {
         return false;
     }
-    let Some((source, inner)) = _definition(function, scale.source).and_then(|made| _offset(context, function, made)) else { return false };
+    let Some((source, inner)) = _definition(function, scale.source).and_then(|made| _offset(context, function, made))
+    else {
+        return false;
+    };
     let width = _width(context, function, inst).expect("an integer");
     let amount = _constant(context, function, inst, inner.wrapping_mul(scale.factor).wrapping_add(outer) & mask(width));
     let scaled = _before(function, inst, Opcode::Binary(scale.op), vec![source, scale.constant]);
@@ -521,13 +694,21 @@ fn _offset_scaled(context: &mut Context, function: &mut Function, inst: InstId) 
 
 /// `sext x` where `x`'s sign bit is known zero is `zext x`, as InstCombine's
 /// `visitSExt`: `zext` has the cheaper selection and folds with masks.
-fn _nonnegative_sext(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+fn _nonnegative_sext(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     let instruction = function.instruction(inst);
     if instruction.opcode != Opcode::Cast(CastOp::SExt) {
         return false;
     }
     let source = instruction.operands[0];
-    let Some(width) = function.operand_type(context, source).and_then(|ty| context.types.int_bits(ty)).filter(|&width| width <= 128) else { return false };
+    let Some(width) =
+        function.operand_type(context, source).and_then(|ty| context.types.int_bits(ty)).filter(|&width| width <= 128)
+    else {
+        return false;
+    };
     if llrm_mir::valuetracking::known_zero(context, function, source) >> (width - 1) & 1 == 0 {
         return false;
     }
@@ -538,7 +719,12 @@ fn _nonnegative_sext(context: &mut Context, function: &mut Function, inst: InstI
 /// `zext(and x, 2^k-1)`, the mask read by nothing else and `k` a native
 /// integer width, is `zext(trunc x)`: a native narrow value is a register's
 /// low part, where the `and` copies the register and masks it.
-fn _masked_extension(context: &mut Context, layout: &DataLayout, function: &mut Function, inst: InstId) -> bool {
+fn _masked_extension(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     let instruction = function.instruction(inst);
     if instruction.opcode != Opcode::Cast(CastOp::ZExt) || !_single_use(function, instruction.operands[0]) {
         return false;
@@ -562,16 +748,24 @@ fn _masked_extension(context: &mut Context, layout: &DataLayout, function: &mut 
 /// narrower `trunc x` or a narrower `ext x`; `trunc(trunc x)` is one
 /// `trunc`; an extension of a like extension, or `sext` of a `zext`, whose
 /// sign bit is clear, is one extension. `ext(trunc(ext x))` is two steps.
-fn _cast_pair(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+fn _cast_pair(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     if _address_round_trip(context, function, inst) {
         return true;
     }
     let cast = |function: &Function, inst: InstId| match function.instruction(inst).opcode {
-        Opcode::Cast(op @ (CastOp::Trunc | CastOp::ZExt | CastOp::SExt)) => Some((op, function.instruction(inst).operands[0])),
+        Opcode::Cast(op @ (CastOp::Trunc | CastOp::ZExt | CastOp::SExt)) => {
+            Some((op, function.instruction(inst).operands[0]))
+        }
         _ => None,
     };
     let Some((outer, middle)) = cast(function, inst) else { return false };
-    let Some((inner, source)) = _definition(function, middle).and_then(|made| cast(function, made)) else { return false };
+    let Some((inner, source)) = _definition(function, middle).and_then(|made| cast(function, made)) else {
+        return false;
+    };
     let bits = |operand: Operand| function.operand_type(context, operand).and_then(|ty| context.types.int_bits(ty));
     let result = Operand::Value(function.instruction(inst).result.expect("a value"));
     let (Some(from), Some(to)) = (bits(source), bits(result)) else { return false };
@@ -583,7 +777,12 @@ fn _cast_pair(context: &mut Context, function: &mut Function, inst: InstId) -> b
             if to == from {
                 _forward(function, inst, source);
             } else {
-                _replace(function, inst, Opcode::Cast(if to > from { CastOp::ZExt } else { CastOp::Trunc }), vec![source]);
+                _replace(
+                    function,
+                    inst,
+                    Opcode::Cast(if to > from { CastOp::ZExt } else { CastOp::Trunc }),
+                    vec![source],
+                );
             }
             return true;
         }
@@ -594,7 +793,9 @@ fn _cast_pair(context: &mut Context, function: &mut Function, inst: InstId) -> b
             return true;
         }
         (CastOp::ZExt | CastOp::SExt, CastOp::Trunc) if to < from => CastOp::Trunc,
-        (CastOp::ZExt | CastOp::SExt, CastOp::Trunc) | (CastOp::ZExt, CastOp::ZExt | CastOp::SExt) | (CastOp::SExt, CastOp::SExt) => inner,
+        (CastOp::ZExt | CastOp::SExt, CastOp::Trunc)
+        | (CastOp::ZExt, CastOp::ZExt | CastOp::SExt)
+        | (CastOp::SExt, CastOp::SExt) => inner,
         (CastOp::Trunc, CastOp::Trunc) => CastOp::Trunc,
         _ => return false,
     };
@@ -605,15 +806,26 @@ fn _cast_pair(context: &mut Context, function: &mut Function, inst: InstId) -> b
 /// A byte offset from a constant near address is the constant address,
 /// `inttoptr`, as InstCombine's constant folder makes it: `gep i8, ptr null,
 /// -4` is `inttoptr (i16 -4 to ptr)`. Isel has one form for such an address.
-fn _constant_address(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+fn _constant_address(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     let instruction = function.instruction(inst);
     // `inttoptr` of a constant is the constant expression.
-    if let (&Opcode::Cast(CastOp::IntToPtr), [Operand::Constant(number)], Some(result)) = (&instruction.opcode, &instruction.operands[..], instruction.result)
-        && matches!(context.types.get(instruction.ty), llrm_mir::types::Type::Pointer(0))
+    if let (&Opcode::Cast(CastOp::IntToPtr), [Operand::Constant(number)], Some(result)) =
+        (&instruction.opcode, &instruction.operands[..], instruction.result)
+        && matches!(
+            context.types.get(instruction.ty),
+            llrm_mir::types::Type::Pointer(0)
+        )
         && matches!(context.get(*number).kind, ConstantKind::Int(_))
         && context.types.int_bits(context.get(*number).ty) == Some(16)
     {
-        let address = context.constant(Constant { ty: instruction.ty, kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value: *number }) });
+        let address = context.constant(Constant {
+            ty: instruction.ty,
+            kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value: *number }),
+        });
         function.replace_value(result, Operand::Constant(address));
         _erase(function, inst);
         return true;
@@ -622,7 +834,9 @@ fn _constant_address(context: &mut Context, function: &mut Function, inst: InstI
     let [Operand::Constant(base), Operand::Constant(index)] = instruction.operands[..] else { return false };
     let (Some(result), pointer) = (instruction.result, instruction.ty) else { return false };
     let near = matches!(context.types.get(pointer), llrm_mir::types::Type::Pointer(0));
-    let (Some(step), Some(8)) = (_integer(context, Operand::Constant(index)), context.types.int_bits(source)) else { return false };
+    let (Some(step), Some(8)) = (_integer(context, Operand::Constant(index)), context.types.int_bits(source)) else {
+        return false;
+    };
     let index_ty = context.get(index).ty;
     let Some(width) = context.types.int_bits(index_ty).filter(|&width| near && width == 16) else { return false };
     let start = match context.get(base).kind.clone() {
@@ -634,7 +848,10 @@ fn _constant_address(context: &mut Context, function: &mut Function, inst: InstI
         _ => return false,
     };
     let at = context.int(index_ty, (start.wrapping_add(step) & mask(width)) as i128);
-    let address = context.constant(Constant { ty: pointer, kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value: at }) });
+    let address = context.constant(Constant {
+        ty: pointer,
+        kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value: at }),
+    });
     function.replace_value(result, Operand::Constant(address));
     _erase(function, inst);
     true
@@ -642,7 +859,11 @@ fn _constant_address(context: &mut Context, function: &mut Function, inst: InstI
 
 /// `ptrtoint(inttoptr x)` to x's own width is `x`, as InstCombine folds it:
 /// a far null compared as an integer is the constant 0 again.
-fn _address_round_trip(context: &Context, function: &mut Function, inst: InstId) -> bool {
+fn _address_round_trip(
+    context: &Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     if function.instruction(inst).opcode != Opcode::Cast(CastOp::PtrToInt) {
         return false;
     }
@@ -662,8 +883,15 @@ fn _address_round_trip(context: &Context, function: &mut Function, inst: InstId)
 /// Logic of two like extensions from one type is that extension of the
 /// logic at the narrow type, as InstCombine's `foldCastedBitwiseLogic`:
 /// two frontend truths `and`ed, then tested, become one `i1` `and`.
-fn _casted_logic(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
-    let Some((op @ (BinaryOp::And | BinaryOp::Or | BinaryOp::Xor), left, right, _)) = _binary(context, function, inst) else { return false };
+fn _casted_logic(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
+    let Some((op @ (BinaryOp::And | BinaryOp::Or | BinaryOp::Xor), left, right, _)) = _binary(context, function, inst)
+    else {
+        return false;
+    };
     let extended = |operand: Operand| {
         let made = _definition(function, operand)?;
         match function.instruction(made).opcode {
@@ -673,10 +901,15 @@ fn _casted_logic(context: &mut Context, function: &mut Function, inst: InstId) -
     };
     let (Some((kind, one)), Some((other, two))) = (extended(left), extended(right)) else { return false };
     let narrow = function.operand_type(context, one);
-    if kind != other || narrow.is_none() || narrow != function.operand_type(context, two) || !(_single_use(function, left) || _single_use(function, right)) {
+    if kind != other
+        || narrow.is_none()
+        || narrow != function.operand_type(context, two)
+        || !(_single_use(function, left) || _single_use(function, right))
+    {
         return false;
     }
-    let logic = function.create_instruction(Opcode::Binary(op), narrow.expect("typed"), vec![one, two], Flags::default(), None);
+    let logic =
+        function.create_instruction(Opcode::Binary(op), narrow.expect("typed"), vec![one, two], Flags::default(), None);
     function.insert(logic, Position::Before(inst)).expect("a placed instruction");
     let logic = Operand::Value(function.instruction(logic).result.expect("a value"));
     _replace(function, inst, Opcode::Cast(kind), vec![logic]);
@@ -687,7 +920,11 @@ fn _casted_logic(context: &mut Context, function: &mut Function, inst: InstId) -
 /// extension of a phi of their sources, as InstCombine's
 /// `foldPHIArgOpIntoPHI`: an `&&`'s truths as frontend bytes, then tested,
 /// become one `i1` phi a branch reads.
-fn _phi_of_casts(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+fn _phi_of_casts(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     if function.instruction(inst).opcode != Opcode::Phi {
         return false;
     }
@@ -696,22 +933,46 @@ fn _phi_of_casts(context: &mut Context, function: &mut Function, inst: InstId) -
         let made = _definition(function, operand)?;
         let op = function.instruction(made);
         match op.opcode {
-            Opcode::Cast(kind @ (CastOp::ZExt | CastOp::SExt)) if _single_use(function, operand) => Some((kind, op.operands[0])),
+            Opcode::Cast(kind @ (CastOp::ZExt | CastOp::SExt)) if _single_use(function, operand) => {
+                Some((kind, op.operands[0]))
+            }
             _ => None,
         }
     };
-    let Some(sources) = incoming.iter().map(|&(value, _)| extended(value)).collect::<Option<Vec<_>>>() else { return false };
+    let Some(sources) = incoming.iter().map(|&(value, _)| extended(value)).collect::<Option<Vec<_>>>() else {
+        return false;
+    };
     let Some(&(kind, first)) = sources.first() else { return false };
     let narrow = function.operand_type(context, first);
-    if narrow.is_none() || sources.iter().any(|&(other, source)| other != kind || function.operand_type(context, source) != narrow) {
+    if narrow.is_none()
+        || sources.iter().any(|&(other, source)| other != kind || function.operand_type(context, source) != narrow)
+    {
         return false;
     }
     let arms = sources.iter().zip(&incoming).map(|(&(_, source), &(_, from))| (source, from)).collect::<Vec<_>>();
-    let phi = function.create_instruction(Opcode::Phi, narrow.expect("typed"), crate::lcssa::from_arms(&arms), Flags::default(), None);
+    let phi = function.create_instruction(
+        Opcode::Phi,
+        narrow.expect("typed"),
+        crate::lcssa::from_arms(&arms),
+        Flags::default(),
+        None,
+    );
     function.insert(phi, Position::Before(inst)).expect("a placed phi");
     let block = function.parent(inst).expect("a placed phi");
-    let first = function.block(block).instructions().iter().copied().find(|&one| function.instruction(one).opcode != Opcode::Phi).expect("a terminated block");
-    let cast = function.create_instruction(Opcode::Cast(kind), function.instruction(inst).ty, vec![Operand::Value(function.instruction(phi).result.expect("a value"))], Flags::default(), None);
+    let first = function
+        .block(block)
+        .instructions()
+        .iter()
+        .copied()
+        .find(|&one| function.instruction(one).opcode != Opcode::Phi)
+        .expect("a terminated block");
+    let cast = function.create_instruction(
+        Opcode::Cast(kind),
+        function.instruction(inst).ty,
+        vec![Operand::Value(function.instruction(phi).result.expect("a value"))],
+        Flags::default(),
+        None,
+    );
     function.insert(cast, Position::Before(first)).expect("a placed instruction");
     _forward(function, inst, Operand::Value(function.instruction(cast).result.expect("a value")));
     true
@@ -721,7 +982,10 @@ fn _phi_of_casts(context: &mut Context, function: &mut Function, inst: InstId) -
 /// predecessors, is that phi: SimplifyCFG's `EliminateDuplicatePHINodes`.
 /// gvn's partial redundancy elimination made two where one stood, and the
 /// loop carried both in registers (SPHEREMAPLASMA, #386).
-fn _duplicate_phi(function: &mut Function, inst: InstId) -> bool {
+fn _duplicate_phi(
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     if function.instruction(inst).opcode != Opcode::Phi {
         return false;
     }
@@ -729,10 +993,21 @@ fn _duplicate_phi(function: &mut Function, inst: InstId) -> bool {
     let mine = &function.instruction(inst).operands;
     let ty = function.instruction(inst).ty;
     // One arm per predecessor: the same count, and each arm of this one among the other's.
-    let earlier = function.block(block).instructions().iter().copied().take_while(|&one| one != inst).find(|&one| {
-        let other = function.instruction(one);
-        other.opcode == Opcode::Phi && other.ty == ty && other.operands.len() == mine.len() && mine.chunks(2).all(|arm| other.operands.chunks(2).any(|theirs| theirs == arm))
-    });
+    let earlier = function
+        .block(block)
+        .instructions()
+        .iter()
+        .copied()
+        .take_while(|&one| one != inst)
+        .find(
+            |&one| {
+                let other = function.instruction(one);
+                other.opcode == Opcode::Phi
+                    && other.ty == ty
+                    && other.operands.len() == mine.len()
+                    && mine.chunks(2).all(|arm| other.operands.chunks(2).any(|theirs| theirs == arm))
+            },
+        );
     let Some(earlier) = earlier else { return false };
     let with = Operand::Value(function.instruction(earlier).result.expect("a phi's value"));
     _forward(function, inst, with);
@@ -740,7 +1015,11 @@ fn _duplicate_phi(function: &mut Function, inst: InstId) -> bool {
 }
 
 /// Negating a single-use modular difference reverses its operands.
-fn _negated_difference(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+fn _negated_difference(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     let Some((BinaryOp::Sub, zero, difference, _)) = _binary(context, function, inst) else { return false };
     if _integer(context, zero) != Some(0) || !_single_use(function, difference) {
         return false;
@@ -751,14 +1030,21 @@ fn _negated_difference(context: &mut Context, function: &mut Function, inst: Ins
     true
 }
 
-/// `x - (x + y)` and `(x - y) - x` are `-y`, modulo the width: InstCombine's `visitSub`. A counter rebased by what a use
-/// subtracts it from (`row - (c + row)` where `c = r - row`) leaves the sum behind it.
-fn _difference_from_sum(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+/// `x - (x + y)` and `(x - y) - x` are `-y`, modulo the width: InstCombine's `visitSub`. A counter rebased by what a
+/// use subtracts it from (`row - (c + row)` where `c = r - row`) leaves the sum behind it.
+fn _difference_from_sum(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     let Some((BinaryOp::Sub, left, right, _)) = _binary(context, function, inst) else { return false };
     if _integer(context, left) == Some(0) {
         return false;
     }
-    let other = match (_definition(function, right).and_then(|made| _binary(context, function, made)), _definition(function, left).and_then(|made| _binary(context, function, made))) {
+    let other = match (
+        _definition(function, right).and_then(|made| _binary(context, function, made)),
+        _definition(function, left).and_then(|made| _binary(context, function, made)),
+    ) {
         (Some((BinaryOp::Add, first, second, _)), _) if first == left => Some(second),
         (Some((BinaryOp::Add, first, second, _)), _) if second == left => Some(first),
         (_, Some((BinaryOp::Sub, minuend, subtrahend, _))) if minuend == right => Some(subtrahend),
@@ -771,14 +1057,26 @@ fn _difference_from_sum(context: &mut Context, function: &mut Function, inst: In
 }
 
 /// `(x << a) << b` is `x << (a + b)` while that is short of the width.
-fn _shift_chain(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
-    let Some((BinaryOp::Shl, middle, Operand::Constant(_), width)) = _binary(context, function, inst) else { return false };
+fn _shift_chain(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
+    let Some((BinaryOp::Shl, middle, Operand::Constant(_), width)) = _binary(context, function, inst) else {
+        return false;
+    };
     if !_single_use(function, middle) {
         return false;
     }
     let Some(previous) = _definition(function, middle) else { return false };
-    let Some((BinaryOp::Shl, source, first @ Operand::Constant(_), _)) = _binary(context, function, previous) else { return false };
-    let (Some(first), Some(last)) = (_integer(context, first), _integer(context, function.instruction(inst).operands[1])) else { return false };
+    let Some((BinaryOp::Shl, source, first @ Operand::Constant(_), _)) = _binary(context, function, previous) else {
+        return false;
+    };
+    let (Some(first), Some(last)) =
+        (_integer(context, first), _integer(context, function.instruction(inst).operands[1]))
+    else {
+        return false;
+    };
     let total = first.saturating_add(last);
     if first.min(last) == 0 || total >= u128::from(width) {
         return false;
@@ -789,12 +1087,18 @@ fn _shift_chain(context: &mut Context, function: &mut Function, inst: InstId) ->
 }
 
 /// Two single-use scales are one `mul` at an unchanged modular width.
-fn _scaled_chain(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+fn _scaled_chain(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     let Some(last) = _scale(context, function, inst) else { return false };
     if !_single_use(function, last.source) {
         return false;
     }
-    let Some(first) = _definition(function, last.source).and_then(|made| _scale(context, function, made)) else { return false };
+    let Some(first) = _definition(function, last.source).and_then(|made| _scale(context, function, made)) else {
+        return false;
+    };
     let width = _width(context, function, inst).expect("an integer");
     let factor = _constant(context, function, inst, first.factor.wrapping_mul(last.factor) & mask(width));
     _replace(function, inst, Opcode::Binary(BinaryOp::Mul), vec![first.source, factor]);
@@ -802,12 +1106,18 @@ fn _scaled_chain(context: &mut Context, function: &mut Function, inst: InstId) -
 }
 
 /// Two single-use offsets are one `add` at an unchanged modular width.
-fn _offset_chain(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+fn _offset_chain(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     let Some((middle, last)) = _offset(context, function, inst) else { return false };
     if !_single_use(function, middle) {
         return false;
     }
-    let Some((source, first)) = _definition(function, middle).and_then(|made| _offset(context, function, made)) else { return false };
+    let Some((source, first)) = _definition(function, middle).and_then(|made| _offset(context, function, made)) else {
+        return false;
+    };
     let width = _width(context, function, inst).expect("an integer");
     let amount = _constant(context, function, inst, first.wrapping_add(last) & mask(width));
     _replace(function, inst, Opcode::Binary(BinaryOp::Add), vec![source, amount]);
@@ -815,12 +1125,20 @@ fn _offset_chain(context: &mut Context, function: &mut Function, inst: InstId) -
 }
 
 /// Two single-use `and`s, `or`s or `xor`s of constants are one.
-fn _bitwise_chain(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+fn _bitwise_chain(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     let Some((op, middle, last)) = _bitwise(context, function, inst) else { return false };
     if !_single_use(function, middle) {
         return false;
     }
-    let Some((first_op, source, first)) = _definition(function, middle).and_then(|made| _bitwise(context, function, made)) else { return false };
+    let Some((first_op, source, first)) =
+        _definition(function, middle).and_then(|made| _bitwise(context, function, made))
+    else {
+        return false;
+    };
     if first_op != op {
         return false;
     }
@@ -834,7 +1152,11 @@ fn _bitwise_chain(context: &mut Context, function: &mut Function, inst: InstId) 
     true
 }
 
-fn _identity(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+fn _identity(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     let Some(answer) = identity(context, function, inst) else { return false };
     _forward(function, inst, answer);
     true
@@ -843,34 +1165,64 @@ fn _identity(context: &mut Context, function: &mut Function, inst: InstId) -> bo
 /// The operand `inst` equals by an identity: `x + 0`, `x - 0`, `x | 0`,
 /// `x ^ 0`, a shift by 0, `x * 1`, `x / 1` and `x & -1` are `x`; `x * 0` and `x & 0`
 /// are 0, and `x | -1` is -1.
-pub fn identity(context: &Context, function: &Function, inst: InstId) -> Option<Operand> {
+pub fn identity(
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+) -> Option<Operand> {
     let (op, left, right, width) = _binary(context, function, inst)?;
-    let commutes = matches!(op, BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor);
+    let commutes = matches!(
+        op,
+        BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor
+    );
     let pairs = [(left, right), (right, left)];
-    pairs[..1 + usize::from(commutes)].iter().find_map(|&(kept, other)| {
-        let number = _integer(context, other)?;
-        let all = mask(width);
-        match op {
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Or | BinaryOp::Xor | BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr if number == 0 => Some(kept),
-            BinaryOp::Mul | BinaryOp::UDiv | BinaryOp::SDiv if number == 1 => Some(kept),
-            BinaryOp::And if number == all => Some(kept),
-            BinaryOp::Mul | BinaryOp::And if number == 0 => Some(other),
-            BinaryOp::Or if number == all => Some(other),
-            _ => None,
-        }
-    })
+    pairs[..1 + usize::from(commutes)]
+        .iter()
+        .find_map(
+            |&(kept, other)| {
+                let number = _integer(context, other)?;
+                let all = mask(width);
+                match op {
+                    BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Or
+                    | BinaryOp::Xor
+                    | BinaryOp::Shl
+                    | BinaryOp::LShr
+                    | BinaryOp::AShr
+                        if number == 0 =>
+                    {
+                        Some(kept)
+                    }
+                    BinaryOp::Mul | BinaryOp::UDiv | BinaryOp::SDiv if number == 1 => Some(kept),
+                    BinaryOp::And if number == all => Some(kept),
+                    BinaryOp::Mul | BinaryOp::And if number == 0 => Some(other),
+                    BinaryOp::Or if number == all => Some(other),
+                    _ => None,
+                }
+            },
+        )
 }
 
 /// `x % 1` is 0, a comparison of a value with itself is decided by its predicate,
 /// and `x >= 0` or `x < 0` unsigned is true or false.
-fn _decided(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+fn _decided(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     let instruction = function.instruction(inst);
     let answer = match instruction.opcode {
-        Opcode::Binary(BinaryOp::URem | BinaryOp::SRem) if _integer(context, instruction.operands[1]) == Some(1) => Some(0),
+        Opcode::Binary(BinaryOp::URem | BinaryOp::SRem) if _integer(context, instruction.operands[1]) == Some(1) => {
+            Some(0)
+        }
         Opcode::ICmp(predicate) => {
             let (left, right) = (instruction.operands[0], instruction.operands[1]);
             if left == right && matches!(left, Operand::Value(_)) {
-                Some(u128::from(matches!(predicate, IntPredicate::Eq | IntPredicate::Uge | IntPredicate::Ule | IntPredicate::Sge | IntPredicate::Sle)))
+                Some(u128::from(matches!(
+                    predicate,
+                    IntPredicate::Eq | IntPredicate::Uge | IntPredicate::Ule | IntPredicate::Sge | IntPredicate::Sle
+                )))
             } else {
                 match predicate {
                     IntPredicate::Uge if _integer(context, right) == Some(0) => Some(1),
@@ -888,7 +1240,11 @@ fn _decided(context: &mut Context, function: &mut Function, inst: InstId) -> boo
 }
 
 /// A `select` on a constant condition is the arm it chooses.
-fn _selected(context: &Context, function: &mut Function, inst: InstId) -> bool {
+fn _selected(
+    context: &Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
     let instruction = function.instruction(inst);
     if instruction.opcode != Opcode::Select {
         return false;
@@ -924,15 +1280,22 @@ fn _reassociated_recurrences(function: &mut Function) -> bool {
     let mut changed = false;
     for (value, recurrence) in updates {
         let ValueDef::Instruction(outer) = function.value(value).def else { continue };
-        let plain = |function: &Function, inst: InstId| function.instruction(inst).opcode == Opcode::Binary(BinaryOp::Add);
+        let plain =
+            |function: &Function, inst: InstId| function.instruction(inst).opcode == Opcode::Binary(BinaryOp::Add);
         let recurrence = Operand::Value(recurrence);
-        if function.is_erased(outer) || !plain(function, outer) || function.instruction(outer).operands.contains(&recurrence) {
+        if function.is_erased(outer)
+            || !plain(function, outer)
+            || function.instruction(outer).operands.contains(&recurrence)
+        {
             continue;
         }
         for position in 0..2 {
             let candidate = function.instruction(outer).operands[position];
             let Some(inner) = _definition(function, candidate) else { continue };
-            if !plain(function, inner) || function.parent(inner) != function.parent(outer) || !_single_use(function, candidate) {
+            if !plain(function, inner)
+                || function.parent(inner) != function.parent(outer)
+                || !_single_use(function, candidate)
+            {
                 continue;
             }
             let operands = function.instruction(inner).operands.clone();
@@ -956,12 +1319,17 @@ fn _reassociated_recurrences(function: &mut Function) -> bool {
 
 /// Reuse a smaller shift of the same value, read elsewhere, in the same
 /// block: `x << 3` after a used `t = x << 1` is `t << 2`.
-fn _shared_shifts(context: &mut Context, function: &mut Function) -> bool {
+fn _shared_shifts(
+    context: &mut Context,
+    function: &mut Function,
+) -> bool {
     let mut changed = false;
     for block in function.layout().to_vec() {
         let mut available = IndexMap::<Operand, BTreeMap<u128, ValueId>>::default();
         for inst in function.block(block).instructions().to_vec() {
-            let Some(Scale { source, op: BinaryOp::Shl, constant, .. }) = _scale(context, function, inst) else { continue };
+            let Some(Scale { source, op: BinaryOp::Shl, constant, .. }) = _scale(context, function, inst) else {
+                continue;
+            };
             let count = _integer(context, constant).expect("a constant count");
             let candidates = available.entry(source).or_default();
             if let Some((&amount, &previous)) = candidates.range(..count).next_back() {
@@ -983,7 +1351,12 @@ fn _shared_shifts(context: &mut Context, function: &mut Function) -> bool {
 /// bits all clear: the scale cancels, leaving `x * k` or `x / k`. A
 /// quotient by -1 stays, where the least value wraps and `sdiv` would be
 /// undefined.
-fn _whole_fixed(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> bool {
+fn _whole_fixed(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &Outer,
+) -> bool {
     let unit = Unit::within(context, layout, function, outer);
     let whole: Vec<(InstId, BinaryOp, i128)> = function
         .walk()
@@ -995,7 +1368,11 @@ fn _whole_fixed(context: &mut Context, layout: &DataLayout, function: &mut Funct
             let signed = ((factor << (128 - width)) as i128) >> (128 - width);
             let whole = signed >> scale;
             let clear = scale < u128::from(width) && factor & ((1 << scale) - 1) == 0 && whole != 0;
-            (clear && !(divide && whole == -1)).then_some((inst, if divide { BinaryOp::SDiv } else { BinaryOp::Mul }, whole))
+            (clear && !(divide && whole == -1)).then_some((
+                inst,
+                if divide { BinaryOp::SDiv } else { BinaryOp::Mul },
+                whole,
+            ))
         })
         .collect();
     for &(inst, op, whole) in &whole {
@@ -1007,9 +1384,19 @@ fn _whole_fixed(context: &mut Context, layout: &DataLayout, function: &mut Funct
 }
 
 /// `udiv` and `urem` by a power of two: a logical shift and a mask, which the division unit has no part in.
-fn _unsigned_power_of_two(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
-    let Some((op @ (BinaryOp::UDiv | BinaryOp::URem), left, right, width)) = _binary(context, function, inst) else { return false };
-    let Some(divisor) = _integer(context, right).filter(|&divisor| divisor.is_power_of_two() && divisor > 1 && width <= 128 && divisor < 1 << (width - 1).min(127)) else { return false };
+fn _unsigned_power_of_two(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
+    let Some((op @ (BinaryOp::UDiv | BinaryOp::URem), left, right, width)) = _binary(context, function, inst) else {
+        return false;
+    };
+    let Some(divisor) = _integer(context, right).filter(|&divisor| {
+        divisor.is_power_of_two() && divisor > 1 && width <= 128 && divisor < 1 << (width - 1).min(127)
+    }) else {
+        return false;
+    };
     if op == BinaryOp::UDiv {
         let count = _constant(context, function, inst, u128::from(divisor.trailing_zeros()));
         _replace(function, inst, Opcode::Binary(BinaryOp::LShr), vec![left, count]);
@@ -1024,7 +1411,12 @@ fn _unsigned_power_of_two(context: &mut Context, function: &mut Function, inst: 
 /// `processAnd`, over `computeKnownBits`. The bits `x` may set are those a non-negative range's top
 /// reaches, less the ones structure clears (`valuetracking::known_zero`: a scale's low bits). A loop
 /// counter's range makes tile's `(x + 7) & 63` of `x < 40` a plain `x + 7`.
-fn _redundant_masks(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> bool {
+fn _redundant_masks(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &Outer,
+) -> bool {
     let candidates: Vec<(llrm_mir::module::BlockId, InstId, Operand, u128, u32)> = function
         .walk()
         .filter_map(|(block, inst)| {
@@ -1046,7 +1438,8 @@ fn _redundant_masks(context: &mut Context, layout: &DataLayout, function: &mut F
         .into_iter()
         .filter_map(|(block, inst, value, mask, width)| {
             let scope = scoped.get(&cfg::id(block)).cloned().unwrap_or_default();
-            let interval = ranges::_operand(&unit, value, &scope, &registers).filter(|interval| interval.width == width && interval.low.sign() != num_bigint::Sign::Minus)?;
+            let interval = ranges::_operand(&unit, value, &scope, &registers)
+                .filter(|interval| interval.width == width && interval.low.sign() != num_bigint::Sign::Minus)?;
             let top = u128::try_from(interval.high).ok()?;
             let reach = if top == 0 { 0 } else { u128::MAX >> (top.leading_zeros()) };
             let all = if width == 128 { u128::MAX } else { (1u128 << width) - 1 };
@@ -1067,11 +1460,25 @@ fn _redundant_masks(context: &mut Context, layout: &DataLayout, function: &mut F
 /// division is a `div` for an `idiv` (three clocks on a 486) and a byte more (`xor edx,edx` for `cdq`), which is
 /// selection's to weigh, not a rewrite's. The proof is `ranges`' (a loop's `rest > 0`, a sum of squares) or the
 /// dividend's clear sign bit.
-fn _unsigned_divisions(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, facts: &IndexMap<ValueId, Known>, size: bool) -> bool {
+fn _unsigned_divisions(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &Outer,
+    facts: &IndexMap<ValueId, Known>,
+    size: bool,
+) -> bool {
     let candidates: Vec<(llrm_mir::module::BlockId, InstId, u32)> = function
         .walk()
-        .filter(|&(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Binary(BinaryOp::SDiv | BinaryOp::SRem)))
-        .filter_map(|(block, inst)| Some((block, inst, _width(context, function, inst).filter(|&width| layout.legal_integer(width))?)))
+        .filter(|&(_, inst)| {
+            matches!(
+                function.instruction(inst).opcode,
+                Opcode::Binary(BinaryOp::SDiv | BinaryOp::SRem)
+            )
+        })
+        .filter_map(|(block, inst)| {
+            Some((block, inst, _width(context, function, inst).filter(|&width| layout.legal_integer(width))?))
+        })
         .collect();
     if candidates.is_empty() {
         return false;
@@ -1088,15 +1495,26 @@ fn _unsigned_divisions(context: &mut Context, layout: &DataLayout, function: &mu
             let operands = &function.instruction(inst).operands;
             let fact = consts::_operand(&unit, operands[1], facts, None)?;
             let divisor = BigInt::from(consts::masked(&fact.n, width));
-            // A power of two is shifts either way. Any other constant is a multiply by its reciprocal, which has no sign to
-            // correct where the dividend is never negative; selection prices it (a dword's, in a 32-bit segment: a 16-bit one runs the dword through prefixes and a longer multiply), and where it declines `div` and
-            // `idiv` are alike but a byte (`xor edx, edx` for `cdq`), which size does not pay.
+            // A power of two is shifts either way. Any other constant is a multiply by its reciprocal, which has no
+            // sign to correct where the dividend is never negative; selection prices it (a dword's, in a
+            // 32-bit segment: a 16-bit one runs the dword through prefixes and a longer multiply), and where it
+            // declines `div` and `idiv` are alike but a byte (`xor edx, edx` for `cdq`), which size does
+            // not pay.
             let power = (&divisor & (&divisor - 1u8)) == BigInt::from(0u8);
-            let positive = fact.width >= width && divisor > BigInt::from(1u8) && divisor < BigInt::from(1u8) << (width - 1) && (power || (!size && width == 32 && layout.pointer(0).bits == 32));
+            let positive = fact.width >= width
+                && divisor > BigInt::from(1u8)
+                && divisor < BigInt::from(1u8) << (width - 1)
+                && (power || (!size && width == 32 && layout.pointer(0).bits == 32));
             let scope = scoped.get(&cfg::id(block)).cloned().unwrap_or_default();
-            let proved = ranges::_operand(&unit, operands[0], &scope, &registers).filter(|interval| interval.width == width).is_some_and(|interval| interval.low.sign() != num_bigint::Sign::Minus)
+            let proved = ranges::_operand(&unit, operands[0], &scope, &registers)
+                .filter(|interval| interval.width == width)
+                .is_some_and(|interval| interval.low.sign() != num_bigint::Sign::Minus)
                 || llrm_mir::valuetracking::known_zero(context, function, operands[0]) >> (width - 1) & 1 == 1;
-            let op = if function.instruction(inst).opcode == Opcode::Binary(BinaryOp::SDiv) { BinaryOp::UDiv } else { BinaryOp::URem };
+            let op = if function.instruction(inst).opcode == Opcode::Binary(BinaryOp::SDiv) {
+                BinaryOp::UDiv
+            } else {
+                BinaryOp::URem
+            };
             (positive && proved).then_some((inst, op))
         })
         .collect();
@@ -1110,18 +1528,28 @@ fn _unsigned_divisions(context: &mut Context, layout: &DataLayout, function: &mu
 /// Divide by a positive power of two, biasing a negative dividend to
 /// truncate toward zero: `sdiv` and `srem` by a divisor consts proves, at
 /// a legal integer width, where the shifts cost less than the division.
-fn _divisions(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, facts: &IndexMap<ValueId, Known>) -> bool {
+fn _divisions(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &Outer,
+    facts: &IndexMap<ValueId, Known>,
+) -> bool {
     let shape = cfg::Shape::of(function);
     let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
     let divisors: Vec<(InstId, u32)> = function
         .walk()
         .map(|(_, inst)| inst)
-        .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Binary(BinaryOp::SDiv | BinaryOp::SRem)))
+        .filter(|&inst| matches!(
+            function.instruction(inst).opcode,
+            Opcode::Binary(BinaryOp::SDiv | BinaryOp::SRem)
+        ))
         .filter_map(|inst| {
             let width = _width(context, function, inst).filter(|&width| layout.legal_integer(width))?;
             let fact = consts::_operand(&unit, function.instruction(inst).operands[1], facts, None)?;
             let divisor = u128::try_from(consts::masked(&fact.n, width)).ok().filter(|_| fact.width >= width)?;
-            (divisor.is_power_of_two() && divisor > 1 && divisor < 1 << (width - 1)).then(|| (inst, divisor.trailing_zeros()))
+            (divisor.is_power_of_two() && divisor > 1 && divisor < 1 << (width - 1))
+                .then(|| (inst, divisor.trailing_zeros()))
         })
         .collect();
     for &(inst, shift) in &divisors {

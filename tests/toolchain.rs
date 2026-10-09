@@ -13,13 +13,19 @@ fn test_jwasm_and_jwlink_are_built_beside_llrm() {
     let scratch = tempfile::tempdir().unwrap();
     os_layer_objects(bin, scratch.path());
     assert!(scratch.path().join("start.obj").exists());
-    let linker = Command::new(bin.join("jwlink")).stdin(std::process::Stdio::null()).output().expect("jwlink is in target/<profile>");
+    let linker = Command::new(bin.join("jwlink"))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("jwlink is in target/<profile>");
     assert!(String::from_utf8_lossy(&linker.stdout).contains("JWlink"));
 }
 
 /// The real-mode OS layer assembled in `dir` as start.obj and os.obj, and Nib's start-up hook as init.obj, told
 /// their descriptions' defines.
-fn os_layer_objects(bin: &Path, dir: &Path) {
+fn os_layer_objects(
+    bin: &Path,
+    dir: &Path,
+) {
     let layer = |field: &str| {
         let done = Command::new(bin.join("llrm-nib")).args(["--os-layer", field]).output().unwrap();
         assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
@@ -29,7 +35,14 @@ fn os_layer_objects(bin: &Path, dir: &Path) {
     let defines: Vec<String> = layer("defines").split_whitespace().map(|one| format!("-D{one}")).collect();
     for (field, object) in [("start", "start.obj"), ("implementation", "os.obj"), ("language_file", "init.obj")] {
         let source = if field == "language_file" { layer(field) } else { format!("{directory}/{}", layer(field)) };
-        let done = Command::new(bin.join("jwasm")).args(["-q", "-c", "-Cp", "-Zg", common::assembler()]).args(&defines).arg(format!("-Fo{object}")).arg(source).current_dir(dir).status().unwrap();
+        let done = Command::new(bin.join("jwasm"))
+            .args(["-q", "-c", "-Cp", "-Zg", common::assembler()])
+            .args(&defines)
+            .arg(format!("-Fo{object}"))
+            .arg(source)
+            .current_dir(dir)
+            .status()
+            .unwrap();
         assert!(done.success(), "{field}");
     }
 }
@@ -97,11 +110,36 @@ fn test_nib_start_puts_the_stack_in_dgroup() {
     };
     os_layer_objects(&bin, dir);
     // The divide fault's handler, which runtime.nib otherwise supplies.
-    std::fs::write(dir.join("fault.asm"), format!("{}.code\npublic N$EDIV\nN$EDIV proc far\nmov ax, 4c63h\nint 21h\nN$EDIV endp\nend\n", common::header())).unwrap();
+    std::fs::write(
+        dir.join("fault.asm"),
+        format!(
+            "{}.code\npublic N$EDIV\nN$EDIV proc far\nmov ax, 4c63h\nint 21h\nN$EDIV endp\nend\n",
+            common::header()
+        ),
+    )
+    .unwrap();
     run(&bin.join("jwasm"), &["-q", "-c", "-Cp", common::assembler(), "-Fofault.obj", "fault.asm"]);
     let slice = root.join("tests/fixtures/nib/port/c7e7588fa1/slice.nib");
     run(&bin.join("llrm-nib"), &[slice.to_str().unwrap(), "-o", "slice.obj"]);
-    run(&bin.join("jwlink"), &common::jwlink(&["name", "SLICE.EXE", "file", "start.obj", "file", "init.obj", "file", "slice.obj", "file", "os.obj", "file", "fault.obj", "op", "quiet"]));
+    run(
+        &bin.join("jwlink"),
+        &common::jwlink(&[
+            "name",
+            "SLICE.EXE",
+            "file",
+            "start.obj",
+            "file",
+            "init.obj",
+            "file",
+            "slice.obj",
+            "file",
+            "os.obj",
+            "file",
+            "fault.obj",
+            "op",
+            "quiet",
+        ]),
+    );
     let conf = format!(
         "[autoexec]\nmount c {}\nc:\nSLICE\nif errorlevel 6 goto other\nif errorlevel 5 goto five\n:other\necho other > OUT.TXT\ngoto end\n:five\necho 5 > OUT.TXT\n:end\nexit\n",
         dir.display()
@@ -124,7 +162,14 @@ fn test_nib_start_leaves_a_kilobyte_frame_room() {
         assert!(Command::new(program).args(args).current_dir(dir).status().unwrap().success(), "{}", program.display());
     };
     os_layer_objects(&bin, dir);
-    std::fs::write(dir.join("fault.asm"), format!("{}.code\npublic N$EDIV\nN$EDIV proc far\nmov ax, 4c63h\nint 21h\nN$EDIV endp\nend\n", common::header())).unwrap();
+    std::fs::write(
+        dir.join("fault.asm"),
+        format!(
+            "{}.code\npublic N$EDIV\nN$EDIV proc far\nmov ax, 4c63h\nint 21h\nN$EDIV endp\nend\n",
+            common::header()
+        ),
+    )
+    .unwrap();
     run(&bin.join("jwasm"), &["-q", "-c", "-Cp", common::assembler(), "-Fofault.obj", "fault.asm"]);
     std::fs::write(
         dir.join("frame.nib"),
@@ -133,7 +178,25 @@ fn test_nib_start_leaves_a_kilobyte_frame_room() {
     )
     .unwrap();
     run(&bin.join("llrm-nib"), &["frame.nib", "-o", "frame.obj"]);
-    run(&bin.join("jwlink"), &common::jwlink(&["name", "FRAME.EXE", "file", "start.obj", "file", "init.obj", "file", "frame.obj", "file", "os.obj", "file", "fault.obj", "op", "quiet"]));
+    run(
+        &bin.join("jwlink"),
+        &common::jwlink(&[
+            "name",
+            "FRAME.EXE",
+            "file",
+            "start.obj",
+            "file",
+            "init.obj",
+            "file",
+            "frame.obj",
+            "file",
+            "os.obj",
+            "file",
+            "fault.obj",
+            "op",
+            "quiet",
+        ]),
+    );
     let conf = format!(
         "[autoexec]\nmount c {}\nc:\nFRAME\nif errorlevel 6 goto other\nif errorlevel 5 goto five\n:other\necho other > OUT.TXT\ngoto end\n:five\necho 5 > OUT.TXT\n:end\nexit\n",
         dir.display()
@@ -155,7 +218,8 @@ fn test_c_parity_fixtures_compute_their_expected_values() {
         assert!(done.status.success(), "{program} {args:?}: {}", String::from_utf8_lossy(&done.stderr));
     };
     let parity = root.join("tests/fixtures/c/parity");
-    let expected: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("bench/parity/expected.json")).unwrap()).unwrap();
+    let expected: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join("bench/parity/expected.json")).unwrap()).unwrap();
     let mut names: Vec<String> = std::fs::read_dir(&parity)
         .unwrap()
         .filter_map(|one| Some(one.unwrap().path().to_str()?.strip_suffix(".cgs")?.rsplit('/').next()?.to_owned()))
@@ -163,10 +227,24 @@ fn test_c_parity_fixtures_compute_their_expected_values() {
     names.sort();
     // The C start-up is the OS layer's: its start, C's hook, and its operations, which `main` below calls.
     let target = llrm_x86_m16::M16;
-    let (layer, c) = (llrm_target::Target::os_layer(&target).unwrap(), llrm_target::Target::runtime(&target, "c").unwrap());
-    let defines: Vec<String> = layer.defines().unwrap().into_iter().chain(c.defines().unwrap()).map(|(symbol, value)| format!("-D{symbol}={value}")).collect();
+    let (layer, c) =
+        (llrm_target::Target::os_layer(&target).unwrap(), llrm_target::Target::runtime(&target, "c").unwrap());
+    let defines: Vec<String> = layer
+        .defines()
+        .unwrap()
+        .into_iter()
+        .chain(c.defines().unwrap())
+        .map(|(symbol, value)| format!("-D{symbol}={value}"))
+        .collect();
     let assemble = |source: String, object: &str| {
-        let mut args = vec!["-q".to_owned(), "-c".into(), "-Cp".into(), "-Zg".into(), common::assembler().into(), format!("-Fo{object}")];
+        let mut args = vec![
+            "-q".to_owned(),
+            "-c".into(),
+            "-Cp".into(),
+            "-Zg".into(),
+            common::assembler().into(),
+            format!("-Fo{object}"),
+        ];
         args.extend(defines.iter().cloned());
         args.push(source);
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -176,21 +254,61 @@ fn test_c_parity_fixtures_compute_their_expected_values() {
     assemble(format!("{}/{}", layer.directory, layer.string("implementation").unwrap()), "layer_os.obj");
     assemble(format!("{}/{}", c.directory, c.string("init_file").unwrap()), "c_init.obj");
     std::fs::write(dir.join("os.h"), layer.c_header().unwrap()).unwrap();
-    // Each fixture's entry, run by a C `main` that writes its value to VALUE.BIN and ends by the layer's exit. The fixtures are streams
-    // Open Watcom recorded with every function cdecl, so the entry is declared as it is.
-    let entries = [("algebra", "parity_algebra_demo"), ("branch", "parity_branch_demo"), ("control", "parity_control_demo"), ("loop", "parity_loop_demo"), ("memory", "parity_memory_demo"), ("parity", "parity_kernel"), ("qbsp", "quake_bsp_demo"), ("qlight", "quake_light_demo"), ("qmove", "quake_move_demo"), ("scalar", "parity_scalar")];
+    // Each fixture's entry, run by a C `main` that writes its value to VALUE.BIN and ends by the layer's exit. The
+    // fixtures are streams Open Watcom recorded with every function cdecl, so the entry is declared as it is.
+    let entries = [
+        ("algebra", "parity_algebra_demo"),
+        ("branch", "parity_branch_demo"),
+        ("control", "parity_control_demo"),
+        ("loop", "parity_loop_demo"),
+        ("memory", "parity_memory_demo"),
+        ("parity", "parity_kernel"),
+        ("qbsp", "quake_bsp_demo"),
+        ("qlight", "quake_light_demo"),
+        ("qmove", "quake_move_demo"),
+        ("scalar", "parity_scalar"),
+    ];
     assert_eq!(entries.len(), names.len(), "premise: every fixture has an entry: {names:?}");
     let mut autoexec = format!("[autoexec]\nmount c {}\nc:\n", dir.display());
     let mut runs = Vec::new();
     for (number, name) in names.iter().enumerate() {
         let entry = entries.iter().find(|(one, _)| one == name).unwrap_or_else(|| panic!("no entry for {name}")).1;
-        let main = format!("#include \"os.h\"\nextern long __cdecl {entry}(void);\nint main(void)\n{{\n    long value = {entry}();\n    short handle = llrm_os_create(\"VALUE.BIN\");\n    if (handle < 0 || llrm_os_write_file(handle, (const unsigned char *)&value, 4) != 4) return 1;\n    llrm_os_close(handle);\n    return 0;\n}}\n");
+        let main = format!(
+            "#include \"os.h\"\nextern long __cdecl {entry}(void);\nint main(void)\n{{\n    long value = {entry}();\n    short handle = llrm_os_create(\"VALUE.BIN\");\n    if (handle < 0 || llrm_os_write_file(handle, (const unsigned char *)&value, 4) != 4) return 1;\n    llrm_os_close(handle);\n    return 0;\n}}\n"
+        );
         std::fs::write(dir.join(format!("{name}_main.c")), main).unwrap();
-        run("llrm-c", &[dir.join(format!("{name}_main.c")).to_str().unwrap(), "-I", dir.to_str().unwrap(), "-o", &format!("{name}_m.obj")]);
+        run(
+            "llrm-c",
+            &[
+                dir.join(format!("{name}_main.c")).to_str().unwrap(),
+                "-I",
+                dir.to_str().unwrap(),
+                "-o",
+                &format!("{name}_m.obj"),
+            ],
+        );
         let program = format!("P{number}");
         let source = parity.join(format!("{name}.cgs"));
         run("llrm-c", &[source.to_str().unwrap(), "-o", &format!("{program}.obj")]);
-        run("jwlink", &common::jwlink(&["name", &format!("{program}.EXE"), "file", "layer_start.obj", "file", "c_init.obj", "file", &format!("{name}_m.obj"), "file", &format!("{program}.obj"), "file", "layer_os.obj", "op", "quiet"]));
+        run(
+            "jwlink",
+            &common::jwlink(&[
+                "name",
+                &format!("{program}.EXE"),
+                "file",
+                "layer_start.obj",
+                "file",
+                "c_init.obj",
+                "file",
+                &format!("{name}_m.obj"),
+                "file",
+                &format!("{program}.obj"),
+                "file",
+                "layer_os.obj",
+                "op",
+                "quiet",
+            ]),
+        );
         autoexec += &format!("del VALUE.BIN\n{program}\ncopy VALUE.BIN {program}.BIN\n");
         runs.push((name.clone(), program));
     }
@@ -205,7 +323,10 @@ fn test_c_parity_fixtures_compute_their_expected_values() {
 
 /// `fixture`.cgs through llrm-c and jwlink with a start-up object that names
 /// `entry`; the linker's complaint if it refuses.
-fn linked_fixture(fixture: &str, entry: &str) -> Result<(), String> {
+fn linked_fixture(
+    fixture: &str,
+    entry: &str,
+) -> Result<(), String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap();
     let scratch = tempfile::tempdir().unwrap();
@@ -213,7 +334,15 @@ fn linked_fixture(fixture: &str, entry: &str) -> Result<(), String> {
     std::fs::write(dir.join("START.ASM"), format!("{header}.stack 256\nextrn {entry}:far\n.code\nstart: call far ptr {entry}\nmov ax, 4C00h\nint 21h\nend start\n", header = common::header())).unwrap();
     let run = |program: &str, args: &[&str]| {
         let done = Command::new(bin.join(program)).args(args).current_dir(dir).output().unwrap();
-        if done.status.success() { Ok(()) } else { Err(format!("{program}: {}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr))) }
+        if done.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "{program}: {}{}",
+                String::from_utf8_lossy(&done.stdout),
+                String::from_utf8_lossy(&done.stderr)
+            ))
+        }
     };
     run("jwasm", &["-q", common::assembler(), "-FoSTART.OBJ", "START.ASM"])?;
     let source = root.join(format!("tests/fixtures/c/{fixture}.cgs"));
@@ -250,7 +379,11 @@ fn test_loops_over_many_arrays_build_on_a_p5() {
     let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c"));
     for (name, cpu) in [("ninearrays", "P5"), ("tenarrays", "P5"), ("elevenarrays", "Core")] {
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/c/{name}.c"));
-        let done = Command::new(bin).args([source.to_str().unwrap(), &march(cpu), "-O2", "-o", &format!("{name}.obj")]).current_dir(scratch.path()).output().unwrap();
+        let done = Command::new(bin)
+            .args([source.to_str().unwrap(), &march(cpu), "-O2", "-o", &format!("{name}.obj")])
+            .current_dir(scratch.path())
+            .output()
+            .unwrap();
         assert!(done.status.success(), "{name}: {}", String::from_utf8_lossy(&done.stderr));
     }
 }
@@ -282,7 +415,10 @@ fn test_a_loop_over_many_arrays_keeps_no_product_in_a_frame_cell() {
     let scratch = tempfile::tempdir().unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c/tenstreams.c");
     let listing = scratch.path().join("tenstreams.asm");
-    let done = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-c"))).args([source.to_str().unwrap(), "-march=i386", "-O2", "-S", "-o", listing.to_str().unwrap()]).output().unwrap();
+    let done = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-c")))
+        .args([source.to_str().unwrap(), "-march=i386", "-O2", "-S", "-o", listing.to_str().unwrap()])
+        .output()
+        .unwrap();
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
     let asm = std::fs::read_to_string(listing).unwrap();
     assert!(!asm.contains("shl dword ptr [bp"), "{asm}");
@@ -298,20 +434,41 @@ fn test_a_huge_array_past_64k_reads_and_writes_the_right_elements_on_dos() {
     let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let dir = scratch.path();
-    let routines = [("_hfill", 59_998), ("_hsumidx", 599_990_000), ("_hsumptr", 599_990_000), ("_hdiff", 19_989), ("_hmid", 51_001)];
+    let routines = [
+        ("_hfill", 59_998),
+        ("_hsumidx", 599_990_000),
+        ("_hsumptr", 599_990_000),
+        ("_hdiff", 19_989),
+        ("_hmid", 51_001),
+    ];
     let mut start = common::header();
     for (name, _) in routines {
         start += &format!("extrn {name}:far\n");
     }
-    start += &format!(".data\nvalues dd {} dup (?)\nfilename db 'VALUES.BIN', 0\nstack_space db 1024 dup (?)\nstack_top label byte\n.code\nstart:\n    mov ax, @data\n    mov ds, ax\n    cli\n    mov ss, ax\n    mov sp, offset stack_top\n    sti\n    fninit\n", routines.len());
+    start += &format!(
+        ".data\nvalues dd {} dup (?)\nfilename db 'VALUES.BIN', 0\nstack_space db 1024 dup (?)\nstack_top label byte\n.code\nstart:\n    mov ax, @data\n    mov ds, ax\n    cli\n    mov ss, ax\n    mov sp, offset stack_top\n    sti\n    fninit\n",
+        routines.len()
+    );
     for (at, (name, _)) in routines.iter().enumerate() {
-        start += &format!("    call far ptr {name}\n    mov word ptr values+{}, ax\n    mov word ptr values+{}, dx\n", at * 4, at * 4 + 2);
+        start += &format!(
+            "    call far ptr {name}\n    mov word ptr values+{}, ax\n    mov word ptr values+{}, dx\n",
+            at * 4,
+            at * 4 + 2
+        );
     }
-    start += &format!("    mov ah, 3ch\n    xor cx, cx\n    lea dx, filename\n    int 21h\n    mov bx, ax\n    mov ah, 40h\n    mov cx, {}\n    lea dx, values\n    int 21h\n    mov ax, 4c00h\n    int 21h\nend start\n", routines.len() * 4);
+    start += &format!(
+        "    mov ah, 3ch\n    xor cx, cx\n    lea dx, filename\n    int 21h\n    mov bx, ax\n    mov ah, 40h\n    mov cx, {}\n    lea dx, values\n    int 21h\n    mov ax, 4c00h\n    int 21h\nend start\n",
+        routines.len() * 4
+    );
     std::fs::write(dir.join("START.ASM"), start).unwrap();
     let run = |program: &str, args: &[&str]| {
         let done = Command::new(bin.join(program)).args(args).current_dir(dir).output().unwrap();
-        assert!(done.status.success(), "{program}: {}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+        assert!(
+            done.status.success(),
+            "{program}: {}{}",
+            String::from_utf8_lossy(&done.stdout),
+            String::from_utf8_lossy(&done.stderr)
+        );
     };
     run("jwasm", &["-q", "-c", "-Cp", "-Zg", common::assembler(), "-FoSTART.OBJ", "START.ASM"]);
     let source = root.join("tests/fixtures/c/hugearray.cgs");
@@ -320,7 +477,8 @@ fn test_a_huge_array_past_64k_reads_and_writes_the_right_elements_on_dos() {
     std::fs::write(dir.join("dosbox.conf"), format!("[autoexec]\nmount c {}\nc:\nP\nexit\n", dir.display())).unwrap();
     run("dosbox-x", &["-nolog", "-exit", "-conf", dir.join("dosbox.conf").to_str().unwrap()]);
     let bytes = std::fs::read(dir.join("VALUES.BIN")).unwrap_or_default();
-    let got: Vec<i64> = bytes.chunks_exact(4).map(|word| i64::from(i32::from_le_bytes(word.try_into().unwrap()))).collect();
+    let got: Vec<i64> =
+        bytes.chunks_exact(4).map(|word| i64::from(i32::from_le_bytes(word.try_into().unwrap()))).collect();
     let want: Vec<i64> = routines.iter().map(|(_, value)| *value).collect();
     assert_eq!(got, want, "{:?}", routines.map(|(name, _)| name));
 }
@@ -334,13 +492,21 @@ fn test_far_and_huge_are_near_with_a_warning_on_m32() {
     let scratch = tempfile::tempdir().unwrap();
     let object = scratch.path().join("p.obj");
     let stderr = |source: &str, extra: &[&str]| {
-        let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).arg(root.join(source)).args(extra).args(["-O2", "-o", object.to_str().unwrap()]).output().unwrap();
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib"))
+            .arg(root.join(source))
+            .args(extra)
+            .args(["-O2", "-o", object.to_str().unwrap()])
+            .output()
+            .unwrap();
         assert!(done.status.success(), "{source}: {}", String::from_utf8_lossy(&done.stderr));
         String::from_utf8_lossy(&done.stderr).into_owned()
     };
     let flat = ["-m32"];
     let warned = stderr("tests/run/nib/far_near.nib", &flat);
-    assert!(warned.contains("far_near.nib:5:6: warning: 'huge' is near") && warned.contains("warning: 'far' is near"), "{warned}");
+    assert!(
+        warned.contains("far_near.nib:5:6: warning: 'huge' is near") && warned.contains("warning: 'far' is near"),
+        "{warned}"
+    );
     assert_eq!(stderr("tests/run/nib/far_near.nib", &[]), "");
     assert_eq!(stderr("tests/run/nib/far_near.nib", &["-m32", "-Wno-target-width"]), "");
     assert_eq!(stderr("tests/run/nib/flat_arith.nib", &flat), "");
@@ -353,10 +519,21 @@ fn test_c_far_and_huge_are_near_with_a_warning_on_m32() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
     let object = scratch.path().join("p.obj");
-    let compile = |extra: &[&str]| Command::new(env!("CARGO_BIN_EXE_llrm-c")).arg(root.join("tests/run/c/huge_array.c")).args(extra).args(["-O2", "-o", object.to_str().unwrap()]).output().unwrap();
+    let compile = |extra: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+            .arg(root.join("tests/run/c/huge_array.c"))
+            .args(extra)
+            .args(["-O2", "-o", object.to_str().unwrap()])
+            .output()
+            .unwrap()
+    };
     let flat = compile(&["-m32"]);
     assert!(flat.status.success(), "{}", String::from_utf8_lossy(&flat.stderr));
-    assert!(String::from_utf8_lossy(&flat.stderr).contains("warning: __far and __huge pointers are near on this target"), "{}", String::from_utf8_lossy(&flat.stderr));
+    assert!(
+        String::from_utf8_lossy(&flat.stderr).contains("warning: __far and __huge pointers are near on this target"),
+        "{}",
+        String::from_utf8_lossy(&flat.stderr)
+    );
     let real = compile(&[]);
     assert!(real.status.success() && real.stderr.is_empty(), "{}", String::from_utf8_lossy(&real.stderr));
     let large = compile(&["-ml"]);
@@ -369,7 +546,12 @@ fn test_c_far_and_huge_are_near_with_a_warning_on_m32() {
 fn test_the_generated_header_is_far_only_where_far_code_is() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let header = |extra: &[&str]| {
-        let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).arg(root.join("examples/interop/main.nib")).args(["--declare", "h"]).args(extra).output().unwrap();
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib"))
+            .arg(root.join("examples/interop/main.nib"))
+            .args(["--declare", "h"])
+            .args(extra)
+            .output()
+            .unwrap();
         assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
         String::from_utf8_lossy(&done.stdout).into_owned()
     };
@@ -390,13 +572,21 @@ fn test_m32_block_operations_are_rep_string_instructions_without_segments() {
     std::fs::write(&source, "char a[300], b[300];\nvoid clear(void) { unsigned i; for (i = 0; i < 300; i++) a[i] = 0; }\nvoid copy(void) { int i; for (i = 0; i < 300; i++) b[i] = a[i]; }\nint main(void) { clear(); copy(); return b[5]; }\n").unwrap();
     let listing = |target: &str| {
         let out = scratch.path().join(format!("{target}.asm"));
-        let done = Command::new(env!("CARGO_BIN_EXE_llrm-c")).arg(&source).args([&mode(target), "-O2", "-S", "-o", out.to_str().unwrap()]).output().unwrap();
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+            .arg(&source)
+            .args([&mode(target), "-O2", "-S", "-o", out.to_str().unwrap()])
+            .output()
+            .unwrap();
         assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
         std::fs::read_to_string(out).unwrap()
     };
     let flat = listing("x86-m32");
     assert!(flat.contains("rep stosd") && flat.contains("rep movsd"), "{flat}");
-    assert!(!flat.contains("DGROUP") && flat.lines().all(|line| !matches!(line.trim(), "pop es" | "push es") && !line.trim().ends_with(", es")), "{flat}");
+    assert!(
+        !flat.contains("DGROUP")
+            && flat.lines().all(|line| !matches!(line.trim(), "pop es" | "push es") && !line.trim().ends_with(", es")),
+        "{flat}"
+    );
     let real = listing("x86-m16");
     assert!(real.contains("rep stosd") && real.lines().any(|line| line.trim() == "pop es"), "{real}");
 }
@@ -430,14 +620,31 @@ fn test_the_examples_and_benchmarks_compile_without_warnings() {
             let (warned, object) = (&warned, scratch.path().join(format!("p{at}.obj")));
             scope.spawn(move || {
                 let text = std::fs::read_to_string(file).unwrap();
-                let header = text.lines().take_while(|line| line.starts_with('#')).find_map(|line| line.trim_start_matches('#').trim().strip_prefix("targets:"));
-                let targets: Vec<&str> = header.map_or(vec!["x86-m16", "x86-m32"], |list| list.split_whitespace().take(1).collect());
+                let header = text
+                    .lines()
+                    .take_while(|line| line.starts_with('#'))
+                    .find_map(|line| line.trim_start_matches('#').trim().strip_prefix("targets:"));
+                let targets: Vec<&str> =
+                    header.map_or(vec!["x86-m16", "x86-m32"], |list| list.split_whitespace().take(1).collect());
                 for target in targets {
-                    let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).arg(file).args([&mode(target), "-O2", "-o", object.to_str().unwrap()]).output().unwrap();
+                    let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib"))
+                        .arg(file)
+                        .args([&mode(target), "-O2", "-o", object.to_str().unwrap()])
+                        .output()
+                        .unwrap();
                     let stderr = String::from_utf8_lossy(&done.stderr);
                     // A program that needs a library (link:) or refuses on a target is not this test's business.
                     if done.status.success() && stderr.contains("warning") {
-                        warned.lock().unwrap().push(format!("{} [{target}]: {}", file.strip_prefix(root).unwrap().display(), stderr.lines().next().unwrap_or("")));
+                        warned
+                            .lock()
+                            .unwrap()
+                            .push(
+                                format!(
+                                    "{} [{target}]: {}",
+                                    file.strip_prefix(root).unwrap().display(),
+                                    stderr.lines().next().unwrap_or("")
+                                ),
+                            );
                     }
                 }
             });
@@ -454,9 +661,17 @@ fn test_the_examples_and_benchmarks_compile_without_warnings() {
 fn test_the_zed_extension_names_a_library_that_exists_and_passes_the_projects_target() {
     let zed = Path::new(env!("CARGO_MANIFEST_DIR")).join("editors/zed");
     let manifest = std::fs::read_to_string(zed.join("Cargo.toml")).unwrap();
-    let library = manifest.lines().find_map(|line| line.trim().strip_prefix("path = \"")).and_then(|rest| rest.strip_suffix('"')).expect("a library path");
-    let source = std::fs::read_to_string(zed.join(library)).unwrap_or_else(|_| panic!("{library} is not in editors/zed"));
-    assert!(source.contains("fn language_server_initialization_options") && source.contains("settings.initialization_options"));
+    let library = manifest
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("path = \""))
+        .and_then(|rest| rest.strip_suffix('"'))
+        .expect("a library path");
+    let source =
+        std::fs::read_to_string(zed.join(library)).unwrap_or_else(|_| panic!("{library} is not in editors/zed"));
+    assert!(
+        source.contains("fn language_server_initialization_options")
+            && source.contains("settings.initialization_options")
+    );
 }
 
 /// The file calls' result was an `i32` on m16 and an `isize` on m32, so a program naming the type
@@ -465,10 +680,22 @@ fn test_the_zed_extension_names_a_library_that_exists_and_passes_the_projects_ta
 fn test_both_targets_declare_the_same_file_call_result() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let results = |target: &str| -> Vec<String> {
-        let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).args([&mode(target), "--os-layer", "module"]).output().unwrap();
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib"))
+            .args([&mode(target), "--os-layer", "module"])
+            .output()
+            .unwrap();
         assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
         let text = String::from_utf8_lossy(&done.stdout).into_owned();
-        ["pub fn read(", "pub fn write_file("].iter().map(|head| text.lines().find(|line| line.starts_with(head)).and_then(|line| line.rsplit_once("-> ")).map(|(_, result)| result.trim().to_owned()).expect("declared")).collect()
+        ["pub fn read(", "pub fn write_file("]
+            .iter()
+            .map(|head| {
+                text.lines()
+                    .find(|line| line.starts_with(head))
+                    .and_then(|line| line.rsplit_once("-> "))
+                    .map(|(_, result)| result.trim().to_owned())
+                    .expect("declared")
+            })
+            .collect()
     };
     assert_eq!(results("x86-m16"), ["i32", "i32"]);
     assert_eq!(results("x86-m32"), results("x86-m16"));
@@ -479,7 +706,10 @@ fn test_both_targets_declare_the_same_file_call_result() {
 #[test]
 fn test_the_assembler_is_told_the_runtime_descriptions_fields() {
     let defines = |target: &str| {
-        let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).args([&mode(target), "--os-layer", "defines"]).output().unwrap();
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib"))
+            .args([&mode(target), "--os-layer", "defines"])
+            .output()
+            .unwrap();
         assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
         String::from_utf8_lossy(&done.stdout).split_whitespace().map(str::to_owned).collect::<Vec<_>>()
     };
@@ -488,7 +718,10 @@ fn test_the_assembler_is_told_the_runtime_descriptions_fields() {
         assert!(flat.contains(&told.to_owned()), "{told} in {flat:?}");
     }
     let real = defines("x86-m16");
-    assert!(real.contains(&"DOS_OPEN=61".to_owned()) && !real.iter().any(|one| one.starts_with("HEAP_BYTES")), "{real:?}");
+    assert!(
+        real.contains(&"DOS_OPEN=61".to_owned()) && !real.iter().any(|one| one.starts_with("HEAP_BYTES")),
+        "{real:?}"
+    );
 }
 
 /// The identity gate is an instrument: a build compared with itself must say SAME of every
@@ -502,7 +735,13 @@ fn test_the_identity_gate_passes_a_build_against_itself_and_fails_a_different_on
     let different = scratch.path().join("llrm-c-os");
     std::fs::write(&different, format!("#!/bin/sh\nexec {compiler} \"$@\" -Os\n")).unwrap();
     std::fs::set_permissions(&different, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let gate = |new: &Path| Command::new(root.join("tools/identity.sh")).args(["c", compiler, new.to_str().unwrap()]).env("TMPDIR", scratch.path()).output().unwrap();
+    let gate = |new: &Path| {
+        Command::new(root.join("tools/identity.sh"))
+            .args(["c", compiler, new.to_str().unwrap()])
+            .env("TMPDIR", scratch.path())
+            .output()
+            .unwrap()
+    };
     let same = gate(Path::new(compiler));
     let same_text = String::from_utf8_lossy(&same.stdout);
     assert!(same.status.success() && same_text.contains("SAME") && !same_text.contains("DIFF"), "{same_text}");

@@ -20,17 +20,26 @@ fn records(image: &[u8]) -> Vec<(u16, &[u8])> {
     out
 }
 
-fn u16_at(data: &[u8], at: usize) -> u16 {
+fn u16_at(
+    data: &[u8],
+    at: usize,
+) -> u16 {
     u16::from_le_bytes([data[at], data[at + 1]])
 }
 
-fn pascal(data: &[u8], at: usize) -> (String, usize) {
+fn pascal(
+    data: &[u8],
+    at: usize,
+) -> (String, usize) {
     let length = usize::from(data[at]);
     (data[at + 1..at + 1 + length].iter().map(|&one| one as char).collect(), at + 1 + length)
 }
 
 /// A leaf's number: itself under 0x8000, else the tagged integer that follows.
-fn numeric(data: &[u8], at: usize) -> (i64, usize) {
+fn numeric(
+    data: &[u8],
+    at: usize,
+) -> (i64, usize) {
     let tag = u16_at(data, at);
     if tag < 0x8000 {
         return (i64::from(tag), at + 2);
@@ -54,7 +63,10 @@ pub struct Types<'a> {
 }
 
 impl Types<'_> {
-    fn record(&self, index: u16) -> Option<(u16, &[u8])> {
+    fn record(
+        &self,
+        index: u16,
+    ) -> Option<(u16, &[u8])> {
         self.records.get(usize::from(index).checked_sub(0x1000)?).copied()
     }
 
@@ -92,11 +104,18 @@ impl Types<'_> {
     }
 
     /// A type's text; a struct met again inside itself is its name alone.
-    pub fn name(&self, index: u16) -> String {
+    pub fn name(
+        &self,
+        index: u16,
+    ) -> String {
         self.describe(index, &mut Vec::new())
     }
 
-    fn describe(&self, index: u16, open: &mut Vec<u16>) -> String {
+    fn describe(
+        &self,
+        index: u16,
+        open: &mut Vec<u16>,
+    ) -> String {
         if index < 0x1000 {
             return Self::primitive(index);
         }
@@ -104,7 +123,12 @@ impl Types<'_> {
         match leaf {
             0x0001 => {
                 let attr = u16_at(data, 0);
-                format!("{}{}{}", if attr & 1 != 0 { "const " } else { "" }, if attr & 2 != 0 { "volatile " } else { "" }, self.describe(u16_at(data, 2), open))
+                format!(
+                    "{}{}{}",
+                    if attr & 1 != 0 { "const " } else { "" },
+                    if attr & 2 != 0 { "volatile " } else { "" },
+                    self.describe(u16_at(data, 2), open)
+                )
             }
             0x0002 => {
                 let kind = u16_at(data, 0) & 0x1F;
@@ -148,12 +172,27 @@ impl Types<'_> {
         }
     }
 
-    fn procedure(&self, data: &[u8], open: &mut Vec<u16>) -> String {
-        let parameters = self.record(u16_at(data, 6)).map(|(_, list)| (0..usize::from(u16_at(list, 0))).map(|one| self.describe(u16_at(list, 2 + 2 * one), open)).collect::<Vec<_>>()).unwrap_or_default();
+    fn procedure(
+        &self,
+        data: &[u8],
+        open: &mut Vec<u16>,
+    ) -> String {
+        let parameters = self
+            .record(u16_at(data, 6))
+            .map(|(_, list)| {
+                (0..usize::from(u16_at(list, 0)))
+                    .map(|one| self.describe(u16_at(list, 2 + 2 * one), open))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         format!("({}) -> {}", parameters.join(", "), self.describe(u16_at(data, 0), open))
     }
 
-    fn members(&self, field: u16, open: &mut Vec<u16>) -> Vec<String> {
+    fn members(
+        &self,
+        field: u16,
+        open: &mut Vec<u16>,
+    ) -> Vec<String> {
         let Some((_, list)) = self.record(field) else { return Vec::new() };
         let mut out = Vec::new();
         let mut at = 0;
@@ -214,14 +253,30 @@ pub fn procedures(records_of_object: &[Rc<Record>]) -> Vec<Procedure> {
         let wide = code >= 0x0200;
         match code {
             0x0104 | 0x0105 | 0x0204 | 0x0205 => {
-                let at = |field: usize| -> u32 { if wide { u32::from_le_bytes(data[12 + 4 * field..16 + 4 * field].try_into().unwrap()) } else { u32::from(u16_at(&data, 12 + 2 * field)) } };
+                let at = |field: usize| -> u32 {
+                    if wide {
+                        u32::from_le_bytes(data[12 + 4 * field..16 + 4 * field].try_into().unwrap())
+                    } else {
+                        u32::from(u16_at(&data, 12 + 2 * field))
+                    }
+                };
                 let (lengths, address) = if wide { (12, 6) } else { (6, 4) };
                 let (name, _) = pascal(&data, 12 + lengths + address + 3);
-                out.push(Procedure { name, length: at(0), debug_start: at(1), debug_end: at(2), variables: Vec::new() });
+                out.push(Procedure {
+                    name,
+                    length: at(0),
+                    debug_start: at(1),
+                    debug_end: at(2),
+                    variables: Vec::new(),
+                });
             }
             0x0100 | 0x0200 => {
                 let width = if wide { 4 } else { 2 };
-                let disp = if wide { i64::from(i32::from_le_bytes(data[..4].try_into().unwrap())) } else { i64::from(i16::from_le_bytes([data[0], data[1]])) };
+                let disp = if wide {
+                    i64::from(i32::from_le_bytes(data[..4].try_into().unwrap()))
+                } else {
+                    i64::from(i16::from_le_bytes([data[0], data[1]]))
+                };
                 let (name, _) = pascal(&data, width + 2);
                 if let Some(last) = out.last_mut() {
                     last.variables.push((name, disp));
@@ -251,19 +306,36 @@ pub fn shape(records_of_object: &[Rc<Record>]) -> Vec<String> {
                 let r#type = u16_at(data, at);
                 let flags = data[at + 2];
                 let (name, _) = pascal(data, at + 3);
-                let signature = types.record(r#type).map_or_else(|| "no signature".to_owned(), |(_, procedure)| types.procedure(procedure, &mut Vec::new()));
+                let signature = types
+                    .record(r#type)
+                    .map_or_else(
+                        || "no signature".to_owned(),
+                        |(_, procedure)| types.procedure(procedure, &mut Vec::new()),
+                    );
                 out.push(format!("PROC {name} {} {signature}", if flags & 4 != 0 { "far" } else { "near" }));
                 procedure = name;
             }
             0x0100 | 0x0200 => {
                 let width = if wide(code) { 4 } else { 2 };
-                let disp = if wide(code) { i64::from(i32::from_le_bytes(data[..4].try_into().unwrap())) } else { i64::from(i16::from_le_bytes([data[0], data[1]])) };
+                let disp = if wide(code) {
+                    i64::from(i32::from_le_bytes(data[..4].try_into().unwrap()))
+                } else {
+                    i64::from(i16::from_le_bytes([data[0], data[1]]))
+                };
                 let (name, _) = pascal(data, width + 2);
-                out.push(format!("{} {procedure}.{name}: {}", if disp > 0 { "PARAM" } else { "LOCAL" }, types.name(u16_at(data, width))));
+                out.push(format!(
+                    "{} {procedure}.{name}: {}",
+                    if disp > 0 { "PARAM" } else { "LOCAL" },
+                    types.name(u16_at(data, width))
+                ));
             }
             0x0002 => {
                 let (name, _) = pascal(data, 4);
-                out.push(format!("REGISTER {procedure}.{name}: {} in register {}", types.name(u16_at(data, 0)), u16_at(data, 2)));
+                out.push(format!(
+                    "REGISTER {procedure}.{name}: {} in register {}",
+                    types.name(u16_at(data, 0)),
+                    u16_at(data, 2)
+                ));
             }
             0x0101 | 0x0102 | 0x0201 | 0x0202 => {
                 let at = if wide(code) { 6 } else { 4 };
@@ -312,7 +384,16 @@ mod tests {
             assert!(p1.contains(&expected), "no {expected:?} in {p1:#?}");
         }
         let p3 = shape_of("p3.obj");
-        for expected in ["DATA v1: NEAR UNSIGNED SHORT *", "DATA v2: FAR UNSIGNED CHAR *", "DATA v4: REAL32", "DATA v5: REAL64", "DATA v7: CHAR", "DATA v8: LONG", "DATA v6: INT8", "UDT pw: NEAR UNSIGNED SHORT *"] {
+        for expected in [
+            "DATA v1: NEAR UNSIGNED SHORT *",
+            "DATA v2: FAR UNSIGNED CHAR *",
+            "DATA v4: REAL32",
+            "DATA v5: REAL64",
+            "DATA v7: CHAR",
+            "DATA v8: LONG",
+            "DATA v6: INT8",
+            "UDT pw: NEAR UNSIGNED SHORT *",
+        ] {
             assert!(p3.iter().any(|one| one == expected), "no {expected:?} in {p3:#?}");
         }
         // Flat 32-bit: a four-byte member is at 4, and a pointer to a dword is NEAR32.

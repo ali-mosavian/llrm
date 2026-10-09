@@ -1,8 +1,7 @@
 //! Where a module's data goes: the segments its frontend put each object
 //! in, the rest in the default data segment.
 
-use std::collections::{BTreeSet};
-use crate::support::hash::HashMap;
+use std::collections::BTreeSet;
 
 use llrm_mir::{GlobalId, GlobalKind, Linkage, Module};
 use llrm_support::hash::IndexMap;
@@ -10,6 +9,7 @@ use llrm_support::hash::IndexMap;
 use crate::backend::{globals, masm};
 use crate::hir::model;
 use crate::objectfile::module::Space;
+use crate::support::hash::HashMap;
 
 /// A module's data objects by segment, in the order they come, each by its
 /// global's name, which the pipeline keeps where it keeps the global; and
@@ -21,16 +21,28 @@ pub struct Placed {
 
 impl Placed {
     /// `hir`'s placement, `data` its objects' globals in `module`.
-    pub fn of(module: &Module, hir: &model::Module, data: &HashMap<i64, GlobalId>) -> Self {
+    pub fn of(
+        module: &Module,
+        hir: &model::Module,
+        data: &HashMap<i64, GlobalId>,
+    ) -> Self {
         let mut segments: Vec<(String, Vec<String>)> = Vec::new();
         for object in &hir.data {
-            let (Some(segment), Some(name)) = (&object.segment, data.get(&object.id).and_then(|&id| module.global(id).name.clone())) else { continue };
+            let (Some(segment), Some(name)) =
+                (&object.segment, data.get(&object.id).and_then(|&id| module.global(id).name.clone()))
+            else {
+                continue;
+            };
             match segments.iter_mut().find(|(one, _)| one == segment) {
                 Some((_, names)) => names.push(name),
                 None => segments.push((segment.clone(), vec![name])),
             }
         }
-        let far = hir.data.iter().filter(|one| matches!(one.address, model::AddressKind::Far | model::AddressKind::Huge));
+        let far =
+            hir.data.iter().filter(|one| matches!(
+                one.address,
+                model::AddressKind::Far | model::AddressKind::Huge
+            ));
         Self { segments, private: far.filter_map(|one| one.segment.clone()).collect() }
     }
 
@@ -38,10 +50,21 @@ impl Placed {
     /// one; the compiler's constants in `constants`, else the default. Each
     /// variable aligned as stated, public where external; each declared one
     /// an extern, near where it is in `data_space`.
-    pub fn lay_out(&self, built: &mut masm::Module, module: &Module, data_space: u32, constants: Option<&str>, far_bss: bool, segment_bytes: Option<usize>) -> Result<(), String> {
+    pub fn lay_out(
+        &self,
+        built: &mut masm::Module,
+        module: &Module,
+        data_space: u32,
+        constants: Option<&str>,
+        far_bss: bool,
+        segment_bytes: Option<usize>,
+    ) -> Result<(), String> {
         let (default, items) = built.data.pop().ok_or("an assembled module without its data segment")?;
         // What assembly adds after the globals' data: its constant pool.
-        let pool: Vec<masm::Datum> = items.into_iter().skip_while(|one| !matches!(one, masm::Datum::Label(label) if label.name.starts_with("$K"))).collect();
+        let pool: Vec<masm::Datum> = items
+            .into_iter()
+            .skip_while(|one| !matches!(one, masm::Datum::Label(label) if label.name.starts_with("$K")))
+            .collect();
         let placed: BTreeSet<&str> = self.segments.iter().flat_map(|(_, names)| names).map(String::as_str).collect();
         let mut unplaced = Vec::new();
         for (at, global) in module.globals.iter().enumerate() {
@@ -78,7 +101,9 @@ impl Placed {
                 }
                 for datum in globals::datums(module, global, &built.names)? {
                     items.push(match datum {
-                        masm::Datum::Bytes(bytes) if uninitialized(&segment) => masm::Datum::Fill(masm::Fill { size: bytes.len() as i64, byte: None }),
+                        masm::Datum::Bytes(bytes) if uninitialized(&segment) => {
+                            masm::Datum::Fill(masm::Fill { size: bytes.len() as i64, byte: None })
+                        }
                         datum => datum,
                     });
                 }
@@ -108,11 +133,16 @@ impl Placed {
                 {
                     items.push(masm::Datum::Align(masm::Align { to: to as i64 }));
                 }
-                let size = globals::datums(module, global, &built.names)?.iter().map(|one| match one {
-                    masm::Datum::Bytes(bytes) => bytes.len(),
-                    _ => 0,
-                }).sum::<usize>();
-                items.push(masm::Datum::Label(masm::Label { name: built.names[&(Space::Segment, i64::from(global.0))].clone() }));
+                let size = globals::datums(module, global, &built.names)?
+                    .iter()
+                    .map(|one| match one {
+                        masm::Datum::Bytes(bytes) => bytes.len(),
+                        _ => 0,
+                    })
+                    .sum::<usize>();
+                items.push(masm::Datum::Label(masm::Label {
+                    name: built.names[&(Space::Segment, i64::from(global.0))].clone(),
+                }));
                 items.push(masm::Datum::Fill(masm::Fill { size: size as i64, byte: None }));
                 if module.global(global).linkage == Linkage::External {
                     built.publics.push(built.names[&(globals::space(module, global), i64::from(global.0))].clone());
@@ -138,7 +168,11 @@ impl Placed {
 /// `items` cut into segments of at most `limit` bytes (64K where segments are), each but the last full. Only
 /// the one object a huge segment holds may be cut: it is alone, so its
 /// bytes start at offset 0.
-fn split(items: Vec<masm::Datum>, segment: &str, limit: Option<usize>) -> Result<Vec<Vec<masm::Datum>>, String> {
+fn split(
+    items: Vec<masm::Datum>,
+    segment: &str,
+    limit: Option<usize>,
+) -> Result<Vec<Vec<masm::Datum>>, String> {
     use masm::Datum;
     let limit = limit.unwrap_or(usize::MAX / 2);
     let mut parts: Vec<Vec<Datum>> = vec![Vec::new()];
@@ -155,7 +189,9 @@ fn split(items: Vec<masm::Datum>, segment: &str, limit: Option<usize>) -> Result
                 let whole = bytes.clone();
                 (bytes.len(), Box::new(move |from, to| Datum::Bytes(whole[from..to].to_vec())))
             }
-            Datum::Fill(masm::Fill { size, byte }) => (size as usize, Box::new(move |from, to| Datum::Fill(masm::Fill { size: (to - from) as i64, byte }))),
+            Datum::Fill(masm::Fill { size, byte }) => {
+                (size as usize, Box::new(move |from, to| Datum::Fill(masm::Fill { size: (to - from) as i64, byte })))
+            }
             Datum::Align(masm::Align { to }) => {
                 let pad = (-(total as i64)).rem_euclid(to) as usize;
                 // Kept as asked where it fits, for the segment to be aligned
@@ -210,12 +246,25 @@ fn split(items: Vec<masm::Datum>, segment: &str, limit: Option<usize>) -> Result
 
 /// Whether `global`'s data is all zeros, with no address in it: what an image need not store. The one
 /// decision that zero data is uninitialised data, whatever shape its initializer has.
-fn stored_zero(module: &Module, global: GlobalId, names: &IndexMap<(Space, i64), String>) -> bool {
+fn stored_zero(
+    module: &Module,
+    global: GlobalId,
+    names: &IndexMap<(Space, i64), String>,
+) -> bool {
     if !matches!(module.global(global).kind, GlobalKind::Variable(_)) {
         return false;
     }
-    globals::datums(module, global, names)
-        .is_ok_and(|datums| datums.iter().all(|one| matches!(one, masm::Datum::Label(_)) || matches!(one, masm::Datum::Bytes(bytes) if bytes.iter().all(|byte| *byte == 0))))
+    globals::datums(module, global, names).is_ok_and(|datums| {
+        datums
+            .iter()
+            .all(
+                |one| matches!(one, masm::Datum::Label(_))
+                    || matches!(
+                        one,
+                        masm::Datum::Bytes(bytes) if bytes.iter().all(|byte| *byte == 0)
+                    ),
+            )
+    })
 }
 
 /// Whether the object format keeps no bytes for `segment`.
@@ -225,8 +274,9 @@ fn uninitialized(segment: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use masm::{Datum, Fill, Label, Pointer};
+
+    use super::*;
 
     fn size(part: &[Datum]) -> usize {
         part.iter()
@@ -282,7 +332,12 @@ mod tests {
     /// saw it, so the segment never learned its widest request.
     #[test]
     fn test_an_align_request_survives_for_the_segment_to_keep() {
-        let parts = split(vec![label(), Datum::Bytes(vec![1]), Datum::Align(masm::Align { to: 4 }), Datum::Bytes(vec![2])], "S", Some(0x1_0000)).unwrap();
+        let parts = split(
+            vec![label(), Datum::Bytes(vec![1]), Datum::Align(masm::Align { to: 4 }), Datum::Bytes(vec![2])],
+            "S",
+            Some(0x1_0000),
+        )
+        .unwrap();
         assert!(parts[0].iter().any(|one| matches!(one, Datum::Align(masm::Align { to: 4 }))), "{:?}", parts[0]);
     }
 }

@@ -162,7 +162,10 @@ pub struct Object {
 pub struct Unsupported(pub String);
 
 impl std::fmt::Display for Unsupported {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         formatter.write_str(&self.0)
     }
 }

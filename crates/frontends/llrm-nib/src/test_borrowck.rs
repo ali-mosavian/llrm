@@ -26,7 +26,10 @@ fn main() -> i16:
     print(pick(one, false))
     return 0
 ";
-    assert_eq!(refused_at(source), "4: a returned borrow of \"x\" would dangle; only a borrowed parameter's can be returned");
+    assert_eq!(
+        refused_at(source),
+        "4: a returned borrow of \"x\" would dangle; only a borrowed parameter's can be returned"
+    );
     assert_eq!(output(&source.replace("let x: i16 = 5", "let y: i16 = 5")), "1\n");
 }
 
@@ -42,7 +45,10 @@ fn main() -> i16:
     print(first(v))
     return 0
 ";
-    assert_eq!(refused_at(&source.replace("let v: vec[i16] = [1, 2, 3]\n    print(first(v))", "print(first([1, 2, 3]))")), "2: a returned borrow of \"v\" would dangle; only a borrowed parameter's can be returned");
+    assert_eq!(
+        refused_at(&source.replace("let v: vec[i16] = [1, 2, 3]\n    print(first(v))", "print(first([1, 2, 3]))")),
+        "2: a returned borrow of \"v\" would dangle; only a borrowed parameter's can be returned"
+    );
     assert_eq!(output(&source.replace("(v: vec[i16])", "(v: &[i16])")), "1\n");
 }
 
@@ -76,7 +82,13 @@ fn main() -> i16:
     return 0
 ";
     assert_eq!(refused_at(lent), "8: \"keep\" would outlive \"inner\", which it borrows");
-    assert_eq!(output(&lent.replace("    if true:\n        let inner: i16 = 7\n        stash(keep, inner)", "    let inner: i16 = 7\n    stash(keep, inner)")), "1\n");
+    assert_eq!(
+        output(&lent.replace(
+            "    if true:\n        let inner: i16 = 7\n        stash(keep, inner)",
+            "    let inner: i16 = 7\n    stash(keep, inner)"
+        )),
+        "1\n"
+    );
 }
 
 #[test]
@@ -103,7 +115,10 @@ fn main() -> i16:
     return 0
 ";
     assert_eq!(refused_at(element), "4: cannot write through \"v[...]\", a '&' reference");
-    let exclusive = field.replace("mut r: &i16", "mut r: &mut i16").replace("let x: i16", "let mut x: i16").replace("H(r=x)", "H(r=&mut x)");
+    let exclusive = field
+        .replace("mut r: &i16", "mut r: &mut i16")
+        .replace("let x: i16", "let mut x: i16")
+        .replace("H(r=x)", "H(r=&mut x)");
     assert_eq!(output(&exclusive), "7\n");
 }
 
@@ -170,11 +185,12 @@ fn main() -> i16:
     return 0
 ";
     assert_eq!(refused_at(shared), "14: \"g\" is lent to \"f\", which may write it");
-    let exclusive = shared.replace("fn f(p: &P) -> i16:\n    poke()", "fn f(p: &mut P) -> i16:\n    p.n = 5\n    peek()").replace("fn poke() -> void:\n    g.n = 99", "fn peek() -> i16:\n    return g.n");
+    let exclusive = shared
+        .replace("fn f(p: &P) -> i16:\n    poke()", "fn f(p: &mut P) -> i16:\n    p.n = 5\n    peek()")
+        .replace("fn poke() -> void:\n    g.n = 99", "fn peek() -> i16:\n    return g.n");
     assert_eq!(refused_at(&exclusive), "15: \"g\" is lent to \"f\", which may read it");
     assert_eq!(output(&shared.replace("    poke()\n", "")), "1\n");
 }
-
 
 #[test]
 fn one_call_is_never_lent_an_owner_twice_when_one_lend_writes() {
@@ -236,7 +252,9 @@ fn main() -> i16:
     assert_eq!(refused_at(source), "accepted");
     let called_back = source.replace("fn main", "@export(\"cdecl16\")\nfn reset() -> void:\n    a[0] = 0\n\nfn main");
     assert_eq!(refused_at(&called_back), "19: \"a\" is lent to \"total\", which may write it");
-    let interrupted = source.replace("fn main", "@export(\"interrupt16\")\nfn tick() -> void:\n    a[0] = 0\n\nfn main").replace("        unsafe:\n            touch()\n", "");
+    let interrupted = source
+        .replace("fn main", "@export(\"interrupt16\")\nfn tick() -> void:\n    a[0] = 0\n\nfn main")
+        .replace("        unsafe:\n            touch()\n", "");
     assert_eq!(refused_at(&interrupted), "17: \"a\" is lent to \"total\", which may write it");
 }
 
@@ -307,7 +325,9 @@ fn main() -> i16:
 ";
     assert_eq!(refused_at(looped), "7: \"v\" is borrowed here, so it cannot be changed");
     // A borrow made anew each turn ends with its turn.
-    let fresh = looped.replace("    let r = &v[0]\n", "").replace("        print(r)\n", "        let r = &v[0]\n        print(r)\n");
+    let fresh = looped
+        .replace("    let r = &v[0]\n", "")
+        .replace("        print(r)\n", "        let r = &v[0]\n        print(r)\n");
     assert_eq!(output(&fresh), "1\n1\n1\n");
 }
 
@@ -355,8 +375,14 @@ fn main() -> i16:
     assert_eq!(output(walked), "3\n");
     // The same field, a walked sequence, or a borrow a call returned from
     // somewhere in `p`, still conflict.
-    assert_eq!(refused_at(&fields.replace("let b = &mut p.y", "let b = &mut p.x")), "12: \"p\" is borrowed here, so it cannot be changed");
-    assert_eq!(refused_at(&walked.replace("self.count += x", "self.items.push(x)")), "7: \"self\" is borrowed here, so it cannot be changed");
+    assert_eq!(
+        refused_at(&fields.replace("let b = &mut p.y", "let b = &mut p.x")),
+        "12: \"p\" is borrowed here, so it cannot be changed"
+    );
+    assert_eq!(
+        refused_at(&walked.replace("self.count += x", "self.items.push(x)")),
+        "7: \"self\" is borrowed here, so it cannot be changed"
+    );
     let returned = "\
 struct P:
     mut x: i16
@@ -685,11 +711,19 @@ fn main() -> i16:
 ";
     assert_eq!(crate::test_language::output_without_leaks(source), "x\ny\n");
     // What moved cannot be used, nor the whole it was part of.
-    assert_eq!(refused_at(&source.replace("    print(p.b)\n", "    print(p.a)\n")), "11: \"p.a\" was moved; copy it with .copy() to keep using it");
-    let whole = source.replace("fn main", "fn keep(p: P) -> void:\n    print(p.b)\n\nfn main").replace("    print(p.b)\n    return 0", "    keep(p)\n    return 0");
+    assert_eq!(
+        refused_at(&source.replace("    print(p.b)\n", "    print(p.a)\n")),
+        "11: \"p.a\" was moved; copy it with .copy() to keep using it"
+    );
+    let whole = source
+        .replace("fn main", "fn keep(p: P) -> void:\n    print(p.b)\n\nfn main")
+        .replace("    print(p.b)\n    return 0", "    keep(p)\n    return 0");
     assert_eq!(refused_at(&whole), "14: \"p\" was partly moved: \"p.a\"");
     // Given a value again, it is whole again.
-    let again = source.replace("    a: string", "    mut a: string").replace("let p = ", "let mut p = ").replace("    print(p.b)\n", "    p.a = \"z\".copy()\n    print(p.a)\n");
+    let again = source
+        .replace("    a: string", "    mut a: string")
+        .replace("let p = ", "let mut p = ")
+        .replace("    print(p.b)\n", "    p.a = \"z\".copy()\n    print(p.a)\n");
     assert_eq!(crate::test_language::output_without_leaks(&again), "x\nz\n");
     // A struct with a drop is dropped whole: nothing moves out of it.
     let dropped = source.replace("fn take", "fn P.drop(self: &mut P) -> void:\n    print(\"bye\")\n\nfn take");
@@ -713,7 +747,10 @@ fn main() -> i16:
     return 0
 ";
     assert_eq!(crate::test_language::output_without_leaks(nested), "x\ny\n");
-    assert_eq!(refused_at(&nested.replace("    print(p.t)\n", "    print(p.q.s)\n")), "14: \"p.q\" was moved; copy it with .copy() to keep using it");
+    assert_eq!(
+        refused_at(&nested.replace("    print(p.t)\n", "    print(p.q.s)\n")),
+        "14: \"p.q\" was moved; copy it with .copy() to keep using it"
+    );
 }
 
 #[test]
@@ -799,7 +836,13 @@ fn main() -> i16:
 ";
     let text = super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message));
     let hir: serde_json::Value = serde_json::from_str(&text).expect("JSON");
-    let ranges: Vec<(i64, i64)> = hir["modules"][0]["facts"].as_array().unwrap().iter().filter(|one| one["fact"] == "range" && one["subject"] == "field").map(|one| (one["value"].as_i64().unwrap(), one["second"].as_i64().unwrap())).collect();
+    let ranges: Vec<(i64, i64)> = hir["modules"][0]["facts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|one| one["fact"] == "range" && one["subject"] == "field")
+        .map(|one| (one["value"].as_i64().unwrap(), one["second"].as_i64().unwrap()))
+        .collect();
     // Stated once, of the tag member of the enum; each arm's test loads it as that member.
     assert_eq!(ranges, [(0, 2)]);
     assert!(text.matches("\"member\"").count() >= 2, "{text}");
@@ -808,9 +851,20 @@ fn main() -> i16:
 /// The `nocapture` facts the program states, as `function.ordinal` of each
 /// parameter, by the parameter's index in the function's HIR.
 fn uncaptured(source: &str) -> Vec<String> {
-    let hir: serde_json::Value = serde_json::from_str(&super::compile(source, "t").unwrap_or_else(|error| panic!("{}: {}", error.span.line, error.message))).expect("JSON");
+    let hir: serde_json::Value = serde_json::from_str(
+        &super::compile(source, "t").unwrap_or_else(|error| panic!("{}: {}", error.span.line, error.message)),
+    )
+    .expect("JSON");
     let facts = hir["modules"][0]["facts"].as_array().cloned().unwrap_or_default();
-    let name = |id: i64| hir["modules"][0]["callables"].as_array().unwrap().iter().find(|one| one["id"].as_i64() == Some(id)).map(|one| one["name"].as_str().unwrap().to_owned()).unwrap();
+    let name = |id: i64| {
+        hir["modules"][0]["callables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|one| one["id"].as_i64() == Some(id))
+            .map(|one| one["name"].as_str().unwrap().to_owned())
+            .unwrap()
+    };
     let mut found: Vec<String> = facts
         .iter()
         .filter(|one| one["fact"] == "nocapture" && one["subject"] == "param")
@@ -912,9 +966,20 @@ fn main() -> i16:
     print(take(a, b))
     return 0
 ";
-    let hir: serde_json::Value = serde_json::from_str(&super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message))).expect("JSON");
-    let take = hir["modules"][0]["callables"].as_array().unwrap().iter().find(|one| one["name"] == "take").unwrap()["id"].as_i64().unwrap();
-    let noalias: Vec<i64> = hir["modules"][0]["facts"].as_array().unwrap().iter().filter(|one| one["fact"] == "noalias" && one["function"].as_i64() == Some(take)).map(|one| one["id"].as_i64().unwrap()).collect();
+    let hir: serde_json::Value =
+        serde_json::from_str(&super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message)))
+            .expect("JSON");
+    let take =
+        hir["modules"][0]["callables"].as_array().unwrap().iter().find(|one| one["name"] == "take").unwrap()["id"]
+            .as_i64()
+            .unwrap();
+    let noalias: Vec<i64> = hir["modules"][0]["facts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|one| one["fact"] == "noalias" && one["function"].as_i64() == Some(take))
+        .map(|one| one["id"].as_i64().unwrap())
+        .collect();
     assert_eq!(noalias, [0, 1]);
 }
 
@@ -947,13 +1012,26 @@ fn main() -> i16:
     let program = llrm_hir::codec::decode(&text).expect("HIR");
     let module = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).remove(0).module;
     let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).expect("a layout");
-    let function = module.functions().find(|(_, global, _)| global.name.as_deref().is_some_and(|name| name.contains("area"))).expect("area").2;
+    let function = module
+        .functions()
+        .find(|(_, global, _)| global.name.as_deref().is_some_and(|name| name.contains("area")))
+        .expect("area")
+        .2;
     let unit = llrm_analysis::memory::Unit::of(&module, &layout, function);
     let registers = llrm_analysis::consts::known(&unit, None, None, None);
     let shape = llrm_analysis::cfg::Shape::of(function);
     let unit = unit.with_registers(&registers).with_shape(&shape);
     let known = llrm_analysis::ranges::scoped(&unit).expect("ranges");
-    let tag_loads: Vec<_> = function.walk().filter(|&(_, inst)| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Load { .. }) && function.instruction(inst).metadata.iter().any(|(kind, _)| kind == "range")).collect();
+    let tag_loads: Vec<_> = function
+        .walk()
+        .filter(|&(_, inst)| {
+            matches!(
+                function.instruction(inst).opcode,
+                llrm_mir::opcode::Opcode::Load { .. }
+            )
+                && function.instruction(inst).metadata.iter().any(|(kind, _)| kind == "range")
+        })
+        .collect();
     assert!(!tag_loads.is_empty(), "the tag loads carry !range");
     for (block, inst) in tag_loads {
         let result = function.instruction(inst).result.expect("a tag");
@@ -965,7 +1043,8 @@ fn main() -> i16:
 
 #[test]
 fn a_borrow_is_refused_wherever_it_could_outlive_or_overlap_a_change() {
-    let longer = "fn longer(a: &string, b: &string) -> &string:\n    if a.len >= b.len:\n        return a\n    return b\n\n";
+    let longer =
+        "fn longer(a: &string, b: &string) -> &string:\n    if a.len >= b.len:\n        return a\n    return b\n\n";
     let cases = [
         // A view of the buffer that `push` may move.
         ("fn main() -> i16:\n    let mut v: vec[i16] = [1, 2, 3]\n    let w = &v[1:3]\n    v.push(9)\n    print(w[0])\n    return 0\n".to_owned(), "4: \"v\" is borrowed here, so it cannot be changed"),
@@ -1009,7 +1088,11 @@ fn main() -> i16:
     assert_eq!(refused_at(source), message);
     assert_eq!(refused_at(&source.replace("for x in make():", "let it = make()\n    for x in it:")), message);
     // What the caller lent outlives the returned generator.
-    let lent = source.replace("fn make() -> iter[i16]:\n    let local: vec[i16] = [1, 2, 3, 4]\n    return evens(local)", "fn make(local: &vec[i16]) -> iter[i16]:\n    return evens(local)")
+    let lent = source
+        .replace(
+            "fn make() -> iter[i16]:\n    let local: vec[i16] = [1, 2, 3, 4]\n    return evens(local)",
+            "fn make(local: &vec[i16]) -> iter[i16]:\n    return evens(local)",
+        )
         .replace("for x in make():", "let local: vec[i16] = [1, 2, 3, 4]\n    for x in make(local):");
     assert_eq!(output(&lent), "2\n4\n");
     // A generator expression over the local is the same state.
@@ -1041,9 +1124,15 @@ fn main() -> i16:
         .replace("-> &P:", "-> Option[&P]:")
         .replace("return p", "return .some(p)")
         .replace("return v[0]", "return .none")
-        .replace("print(hit(v, 2).n)", "match hit(v, 2):\n        .some(p):\n            print(p.n)\n        .none:\n            print(0)");
+        .replace(
+            "print(hit(v, 2).n)",
+            "match hit(v, 2):\n        .some(p):\n            print(p.n)\n        .none:\n            print(0)",
+        );
     assert_eq!(output_without_leaks(&optional), "2\n");
-    assert_eq!(output_without_leaks(&source.replace("v: &[P]", "v: &vec[P]").replace("for p in v", "for p in &v")), "2\n");
+    assert_eq!(
+        output_without_leaks(&source.replace("v: &[P]", "v: &vec[P]").replace("for p in v", "for p in &v")),
+        "2\n"
+    );
     // The element of a local's loop is the local's: it dangles.
     let local = "\
 struct P:
@@ -1059,7 +1148,10 @@ fn main() -> i16:
     print(first().n)
     return 0
 ";
-    assert_eq!(refused_at(local), "7: a returned borrow of \"v\" would dangle; only a borrowed parameter's can be returned");
+    assert_eq!(
+        refused_at(local),
+        "7: a returned borrow of \"v\" would dangle; only a borrowed parameter's can be returned"
+    );
 }
 
 #[test]
@@ -1077,8 +1169,14 @@ fn main() -> i16:
     return 0
 ";
     assert_eq!(output_without_leaks(source), "abc\nabc\n");
-    let local = source.replace("fn longer(a: &string, b: &string) -> &string:\n    return a.len >= b.len ? a : b", "fn longer(a: &string, b: &string) -> &string:\n    let c = \"zz\"\n    return a.len >= b.len ? a : c");
-    assert_eq!(refused_at(&local), "3: a returned borrow of \"c\" would dangle; only a borrowed parameter's can be returned");
+    let local = source.replace(
+        "fn longer(a: &string, b: &string) -> &string:\n    return a.len >= b.len ? a : b",
+        "fn longer(a: &string, b: &string) -> &string:\n    let c = \"zz\"\n    return a.len >= b.len ? a : c",
+    );
+    assert_eq!(
+        refused_at(&local),
+        "3: a returned borrow of \"c\" would dangle; only a borrowed parameter's can be returned"
+    );
 }
 
 #[test]
@@ -1126,7 +1224,10 @@ fn main() -> i16:
     print(bad())
     return 0
 ";
-    assert_eq!(refused_at(leak), "5: a returned borrow of \"v\" would dangle; only a borrowed parameter's can be returned");
+    assert_eq!(
+        refused_at(leak),
+        "5: a returned borrow of \"v\" would dangle; only a borrowed parameter's can be returned"
+    );
 }
 
 #[test]
@@ -1165,7 +1266,10 @@ fn main() -> i16:
 ";
     assert_eq!(output_without_leaks(looped), "a\nb\nb\nb\n");
     // A loop that pushes without reseating reads the stale borrow (E0502).
-    assert_eq!(refused_at(&looped.replace("        last = &words[i + 1]\n", "")), "6: \"words\" is borrowed here, so it cannot be changed");
+    assert_eq!(
+        refused_at(&looped.replace("        last = &words[i + 1]\n", "")),
+        "6: \"words\" is borrowed here, so it cannot be changed"
+    );
     // A branch that may leave the old borrow in place keeps it.
     let branch = "\
 fn main() -> i16:
@@ -1307,7 +1411,10 @@ fn main() -> i16:
     print(s.src)
     return 0
 ";
-    assert_eq!(refused_at(local), "7: a returned borrow of \"line\" would dangle; only a borrowed parameter's can be returned");
+    assert_eq!(
+        refused_at(local),
+        "7: a returned borrow of \"line\" would dangle; only a borrowed parameter's can be returned"
+    );
     // ...and an owner changed while a slice of it is held is refused (E0506).
     let changed = "\
 struct Scanner:

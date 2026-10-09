@@ -78,7 +78,8 @@ pub fn declarations(module: &Module) -> Vec<Declaration> {
         members,
     };
     let member = |owner: &str, name: &str, kind, span| declared(&format!("{owner}.{name}"), kind, span, Vec::new());
-    let mut all: Vec<Declaration> = module.fixed_types.iter().map(|one| declared(&one.name, Kind::Type, one.span, Vec::new())).collect();
+    let mut all: Vec<Declaration> =
+        module.fixed_types.iter().map(|one| declared(&one.name, Kind::Type, one.span, Vec::new())).collect();
     all.extend(module.consts.iter().map(|one| declared(&one.name, Kind::Const, one.span, Vec::new())));
     all.extend(module.statics.iter().map(|one| declared(&one.name, Kind::Var, one.span, Vec::new())));
     all.extend(module.structs.iter().map(|one| {
@@ -86,11 +87,13 @@ pub fn declarations(module: &Module) -> Vec<Declaration> {
         declared(&one.name, Kind::Struct, one.span, fields)
     }));
     all.extend(module.enums.iter().map(|one| {
-        let variants = one.variants.iter().map(|variant| member(&one.name, &variant.name, Kind::Variant, variant.span)).collect();
+        let variants =
+            one.variants.iter().map(|variant| member(&one.name, &variant.name, Kind::Variant, variant.span)).collect();
         declared(&one.name, Kind::Enum, one.span, variants)
     }));
     all.extend(module.protocols.iter().map(|one| {
-        let methods = one.methods.iter().map(|method| member(&one.name, &method.name, Kind::Method, method.span)).collect();
+        let methods =
+            one.methods.iter().map(|method| member(&one.name, &method.name, Kind::Method, method.span)).collect();
         declared(&one.name, Kind::Protocol, one.span, methods)
     }));
     let functions = module.functions.iter().chain(module.externs.iter().map(|one| &one.function));
@@ -103,7 +106,10 @@ pub fn declarations(module: &Module) -> Vec<Declaration> {
 }
 
 /// The declaration `module` has of `name`, top-level or a member.
-pub fn find(module: &Module, name: &str) -> Option<Declaration> {
+pub fn find(
+    module: &Module,
+    name: &str,
+) -> Option<Declaration> {
     declarations(module)
         .into_iter()
         .flat_map(|one| std::iter::once(one.clone()).chain(one.members))

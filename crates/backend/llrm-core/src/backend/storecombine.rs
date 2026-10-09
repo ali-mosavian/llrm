@@ -51,10 +51,7 @@ fn _literal(one: &Insn) -> Option<(Mem, i64)> {
 #[must_use]
 pub fn combined(body: &LirBody) -> LirBody {
     let mut out = body.clone();
-    let nothing = Semantics {
-        name: Some(String::new()),
-        ..Semantics::new(Operation::Nothing)
-    };
+    let nothing = Semantics { name: Some(String::new()), ..Semantics::new(Operation::Nothing) };
     for block in &mut out.blocks {
         let mut insns = block.insns.to_vec();
         let mut pending: Option<(usize, (Mem, i64))> = None;
@@ -99,21 +96,33 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use crate::support::hash::IndexMap;
 
     use super::combined;
     use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::support::hash::IndexMap;
 
-    fn what(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Option<Semantics> {
+    fn what(
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+    ) -> Option<Semantics> {
         Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
     }
 
-    fn imm(value: i64, width: u32, address: Option<Addr>) -> Loc {
+    fn imm(
+        value: i64,
+        width: u32,
+        address: Option<Addr>,
+    ) -> Loc {
         Loc::Imm(Imm { value, width, address })
     }
 
-    fn with_dest(one: &Insn, dest: Mem) -> Insn {
+    fn with_dest(
+        one: &Insn,
+        dest: Mem,
+    ) -> Insn {
         let mut out = one.clone();
         out.what.as_mut().unwrap().dests = vec![Loc::Mem(dest)];
         out
@@ -137,7 +146,13 @@ mod tests {
         for guard in guards {
             let cell = Mem { disp_width: 2, ..Mem::new(Some(Addr { index: 5, ..Addr::new(Space::Segment, 14) }), 2) };
             let cell_addr = cell.addr.clone().unwrap();
-            let mut low = Insn::new(0, Some((0, 6)), what(Operation::Move, "mov", vec![Loc::Mem(cell.clone())], vec![imm(-1, 2, None)]), vec![], vec![]);
+            let mut low = Insn::new(
+                0,
+                Some((0, 6)),
+                what(Operation::Move, "mov", vec![Loc::Mem(cell.clone())], vec![imm(-1, 2, None)]),
+                vec![],
+                vec![],
+            );
             let high_cell = Mem { addr: Some(cell_addr.plus(2)), ..cell.clone() };
             let mut high = low.clone();
             high.at = 8;
@@ -147,11 +162,17 @@ mod tests {
             match guard {
                 Some("gap") => high = with_dest(&high, Mem { addr: Some(cell_addr.plus(4)), ..high_cell.clone() }),
                 Some("segment") => {
-                    high = with_dest(&high, Mem { addr: Some(Addr { index: 6, ..high_cell.addr.clone().unwrap() }), ..high_cell.clone() });
+                    high = with_dest(
+                        &high,
+                        Mem { addr: Some(Addr { index: 6, ..high_cell.addr.clone().unwrap() }), ..high_cell.clone() },
+                    );
                 }
                 Some("indexed") => low = with_dest(&low, Mem { through: Register::BX, ..cell.clone() }),
                 Some("external") => {
-                    low = with_dest(&low, Mem { addr: Some(Addr { space: Space::External, ..cell_addr.clone() }), ..cell.clone() });
+                    low = with_dest(
+                        &low,
+                        Mem { addr: Some(Addr { space: Space::External, ..cell_addr.clone() }), ..cell.clone() },
+                    );
                 }
                 Some("symbol") => high.what.as_mut().unwrap().sources = vec![imm(2, 2, Some(cell_addr.clone()))],
                 Some("call") => marker.what = what(Operation::Call, "call", vec![], vec![]),
@@ -168,10 +189,7 @@ mod tests {
             }
             let (low, marker, high) = (Arc::new(low), Arc::new(marker), Arc::new(high));
             let blocks = if guard == Some("block") {
-                vec![
-                    LirBlock { succ: vec![8], ..LirBlock::new(0, vec![low, marker]) },
-                    LirBlock::new(8, vec![high]),
-                ]
+                vec![LirBlock { succ: vec![8], ..LirBlock::new(0, vec![low, marker]) }, LirBlock::new(8, vec![high])]
             } else {
                 vec![LirBlock::new(0, vec![low, marker, high])]
             };

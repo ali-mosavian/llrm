@@ -11,13 +11,13 @@ pub enum TreeComparison {
     CompatibleMark,
 }
 
-pub fn compare_trees(graph: &StateGraph, a: Option<NodeId>, b: Option<NodeId>) -> TreeComparison {
+pub fn compare_trees(
+    graph: &StateGraph,
+    a: Option<NodeId>,
+    b: Option<NodeId>,
+) -> TreeComparison {
     let (Some(a), Some(b)) = (a, b) else {
-        return if a == b {
-            TreeComparison::Equal
-        } else {
-            TreeComparison::Different
-        };
+        return if a == b { TreeComparison::Equal } else { TreeComparison::Different };
     };
     let left = graph.node(a);
     let right = graph.node(b);
@@ -72,29 +72,11 @@ fn can_merge_states_inner(
     graph.node_mut(candidate).scratch_word = depth;
     graph.node_mut(query).scratch_word = depth;
 
-    if !can_merge_leg(
-        graph,
-        depth,
-        query,
-        candidate,
-        Edge::True,
-        StateFlags::TRUE_SHARED,
-        depth + 1,
-        seen,
-    ) {
+    if !can_merge_leg(graph, depth, query, candidate, Edge::True, StateFlags::TRUE_SHARED, depth + 1, seen) {
         return false;
     }
 
-    can_merge_leg(
-        graph,
-        depth,
-        query,
-        candidate,
-        Edge::False,
-        StateFlags::FALSE_SHARED,
-        depth + 2,
-        seen,
-    )
+    can_merge_leg(graph, depth, query, candidate, Edge::False, StateFlags::FALSE_SHARED, depth + 2, seen)
 }
 
 pub fn compare_states(
@@ -124,25 +106,14 @@ fn compare_states_inner(
         return None;
     }
 
-    if !graph
-        .node(candidate)
-        .flags
-        .contains(StateFlags::TRUE_SHARED)
-    {
-        if let Some(hit) = compare_states_inner(graph, graph.node(candidate).true_link, query, seen)
-        {
+    if !graph.node(candidate).flags.contains(StateFlags::TRUE_SHARED) {
+        if let Some(hit) = compare_states_inner(graph, graph.node(candidate).true_link, query, seen) {
             return Some(hit);
         }
     }
 
-    if !graph
-        .node(candidate)
-        .flags
-        .contains(StateFlags::FALSE_SHARED)
-    {
-        if let Some(hit) =
-            compare_states_inner(graph, graph.node(candidate).false_link, query, seen)
-        {
+    if !graph.node(candidate).flags.contains(StateFlags::FALSE_SHARED) {
+        if let Some(hit) = compare_states_inner(graph, graph.node(candidate).false_link, query, seen) {
             return Some(hit);
         }
     }
@@ -150,7 +121,10 @@ fn compare_states_inner(
     None
 }
 
-pub fn find_state(graph: &mut StateGraph, query: Option<NodeId>) -> Option<NodeId> {
+pub fn find_state(
+    graph: &mut StateGraph,
+    query: Option<NodeId>,
+) -> Option<NodeId> {
     for root in graph.global_roots() {
         if let Some(hit) = compare_states(graph, Some(root), query) {
             return Some(hit);
@@ -191,7 +165,11 @@ fn can_merge_leg(
     can_merge_states_inner(graph, next_depth, query_child, candidate_child, seen)
 }
 
-fn child(graph: &StateGraph, id: NodeId, edge: Edge) -> Option<NodeId> {
+fn child(
+    graph: &StateGraph,
+    id: NodeId,
+    edge: Edge,
+) -> Option<NodeId> {
     match edge {
         Edge::True => graph.node(id).true_link,
         Edge::False => graph.node(id).false_link,
@@ -200,9 +178,8 @@ fn child(graph: &StateGraph, id: NodeId, edge: Edge) -> Option<NodeId> {
 
 #[cfg(test)]
 mod tests {
-    use crate::buildprs_graph::StateNode;
-
     use super::*;
+    use crate::buildprs_graph::StateNode;
 
     #[test]
     fn equivalent_branch_trees_merge_by_payload_and_success_shape() {

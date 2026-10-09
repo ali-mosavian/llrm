@@ -3,16 +3,16 @@
 //! `test_qglsurf_shares_all_three_zero_result_tails` waits for
 //! `cfront --opt` (phase 3).
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use iced_x86::Register;
-use crate::support::hash::IndexMap;
 
 use super::*;
-use std::cell::RefCell;
-use std::rc::Rc;
 use crate::backend::frame::Frame;
 use crate::model::ir::{Imm, Loc, Reg};
+use crate::support::hash::IndexMap;
 
 fn ax() -> Loc {
     Loc::Reg(Reg { register: Register::AX, width: 2 })
@@ -30,7 +30,14 @@ fn imm(value: i64) -> Loc {
     Loc::Imm(Imm { value, width: 2, address: None })
 }
 
-fn _insn(at: i64, op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>, target: Option<i64>) -> Arc<Insn> {
+fn _insn(
+    at: i64,
+    op: Operation,
+    name: &str,
+    dests: Vec<Loc>,
+    sources: Vec<Loc>,
+    target: Option<i64>,
+) -> Arc<Insn> {
     let what = Semantics { name: Some(name.to_owned()), dests, sources, target, ..Semantics::new(op) };
     Arc::new(Insn::new(at, Some((at, 1)), Some(what), Vec::new(), Vec::new()))
 }
@@ -39,15 +46,25 @@ fn _compare(at: i64) -> Arc<Insn> {
     _insn(at, Operation::Compare, "cmp", vec![], vec![ax(), bx()], None)
 }
 
-fn _branch(at: i64, name: &str, target: i64) -> Arc<Insn> {
+fn _branch(
+    at: i64,
+    name: &str,
+    target: i64,
+) -> Arc<Insn> {
     _insn(at, Operation::Branch, name, vec![], vec![], Some(target))
 }
 
-fn _jump(at: i64, target: i64) -> Arc<Insn> {
+fn _jump(
+    at: i64,
+    target: i64,
+) -> Arc<Insn> {
     _insn(at, Operation::Jump, "jmp", vec![], vec![], Some(target))
 }
 
-fn _move(at: i64, source: Loc) -> Arc<Insn> {
+fn _move(
+    at: i64,
+    source: Loc,
+) -> Arc<Insn> {
     _insn(at, Operation::Move, "mov", vec![ax()], vec![source], None)
 }
 
@@ -59,15 +76,26 @@ fn _inserted(one: Arc<Insn>) -> Arc<Insn> {
     Arc::new(Insn { covers: Some((one.at, one.at)), ..(*one).clone() })
 }
 
-fn block(at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>) -> LirBlock {
+fn block(
+    at: i64,
+    insns: Vec<Arc<Insn>>,
+    succ: Vec<i64>,
+) -> LirBlock {
     LirBlock { succ, ..LirBlock::new(at, insns) }
 }
 
-fn body(name: &str, entry: i64, blocks: Vec<LirBlock>) -> LirBody {
+fn body(
+    name: &str,
+    entry: i64,
+    blocks: Vec<LirBlock>,
+) -> LirBody {
     LirBody::new(name, entry, blocks, IndexMap::default(), IndexMap::default())
 }
 
-fn listed(body: LirBody, name: &str) -> Vec<String> {
+fn listed(
+    body: LirBody,
+    name: &str,
+) -> Vec<String> {
     let procedure = masm::Procedure {
         name: name.to_owned(),
         public: true,
@@ -81,11 +109,7 @@ fn listed(body: LirBody, name: &str) -> Vec<String> {
         stack_check: None,
         registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
     };
-    masm::_procedure(&procedure, &IndexMap::default(), 0)
-        .unwrap()
-        .iter()
-        .map(|line| line.trim().to_owned())
-        .collect()
+    masm::_procedure(&procedure, &IndexMap::default(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
 }
 
 fn _printed(blocks: Vec<LirBlock>) -> Vec<String> {
@@ -179,11 +203,21 @@ fn test_shared_machine_pipeline_threads_the_final_branch_pair() {
         ],
     );
 
-    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), None, Some(&IndexMap::default()), false, "386", &crate::backend::target::BUILT_IN, false)
-        .unwrap()
-        .pop()
-        .unwrap()
-        .transform(source).unwrap();
+    let result = crate::flow::machine(
+        &IndexMap::default(),
+        Some(Rc::new(RefCell::new(Frame::new(0)))),
+        None,
+        Some(&IndexMap::default()),
+        false,
+        "386",
+        &crate::backend::target::BUILT_IN,
+        false,
+    )
+    .unwrap()
+    .pop()
+    .unwrap()
+    .transform(source)
+    .unwrap();
 
     let real: Vec<(Operation, Option<String>, Option<i64>)> = result.blocks[0]
         .insns
@@ -225,10 +259,7 @@ fn test_loop_placement_ignores_non_emitting_instruction_markers() {
 #[test]
 fn test_jump_to_the_next_block_is_dropped() {
     assert_eq!(
-        _printed(vec![
-            block(1, vec![_move(1, bx()), _jump(2, 4)], vec![4]),
-            block(4, vec![_return(4)], vec![]),
-        ]),
+        _printed(vec![block(1, vec![_move(1, bx()), _jump(2, 4)], vec![4]), block(4, vec![_return(4)], vec![]),]),
         ["L0_1:", "mov ax, bx", "L0_4:", "ret"]
     );
 }
@@ -261,7 +292,10 @@ fn test_jump_over_a_block_nothing_reaches_is_dropped() {
     );
 }
 
-fn nothing(at: i64, covers: Option<(i64, i64)>) -> Arc<Insn> {
+fn nothing(
+    at: i64,
+    covers: Option<(i64, i64)>,
+) -> Arc<Insn> {
     let what = Semantics { name: Some(String::new()), ..Semantics::new(Operation::Nothing) };
     Arc::new(Insn::new(at, covers, Some(what), Vec::new(), Vec::new()))
 }
@@ -416,7 +450,8 @@ fn test_identical_result_tails_are_merged() {
 #[test]
 fn test_merged_tails_share_their_values() {
     let named = |one: Arc<Insn>, value: u32| Arc::new(Insn { defines: vec![value], ..(*_inserted(one)).clone() });
-    let push = Arc::new(Insn { uses: vec![2], ..(*_insn(30, Operation::Push, "push", vec![], vec![ax()], None)).clone() });
+    let push =
+        Arc::new(Insn { uses: vec![2], ..(*_insn(30, Operation::Push, "push", vec![], vec![ax()], None)).clone() });
     let source = body(
         "f",
         1,
@@ -430,8 +465,10 @@ fn test_merged_tails_share_their_values() {
     let result = merged(&placed(&source).unwrap()).unwrap();
 
     assert_eq!(result.blocks.len(), 3, "the tails were not merged");
-    let undefined: Vec<String> =
-        crate::backend::verify::verify(&result, false).into_iter().filter(|said| said.contains("never defined")).collect();
+    let undefined: Vec<String> = crate::backend::verify::verify(&result, false)
+        .into_iter()
+        .filter(|said| said.contains("never defined"))
+        .collect();
     assert_eq!(undefined, Vec::<String>::new());
 }
 
@@ -452,11 +489,21 @@ fn test_identical_source_owned_tails_keep_their_distinct_anchors() {
 /// Fresh frontends inherited C's two identical failure-result tails.
 #[test]
 fn test_shared_machine_pipeline_merges_fresh_identical_tails() {
-    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), None, Some(&IndexMap::default()), false, "386", &crate::backend::target::BUILT_IN, false)
-        .unwrap()
-        .pop()
-        .unwrap()
-        .transform(two_zero_tails(true)).unwrap();
+    let result = crate::flow::machine(
+        &IndexMap::default(),
+        Some(Rc::new(RefCell::new(Frame::new(0)))),
+        None,
+        Some(&IndexMap::default()),
+        false,
+        "386",
+        &crate::backend::target::BUILT_IN,
+        false,
+    )
+    .unwrap()
+    .pop()
+    .unwrap()
+    .transform(two_zero_tails(true))
+    .unwrap();
     let physical = physical(&result);
 
     assert_eq!(physical.iter().filter(|what| what.op == Operation::Move).count(), 1);
@@ -691,7 +738,13 @@ fn test_for_size_a_diamonds_likelier_arm_goes_second_where_size_allows() {
     let order = |body: LirBody| _placed(&body, true).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
     // The premise: both arms are a few bytes, so either order uses short jumps.
     let small = weighted_diamond(0.7);
-    assert!(small.blocks.iter().filter(|one| [10, 20].contains(&one.at)).all(|one| _arm_bytes(16, one).is_some_and(|bytes| bytes < 16)));
+    assert!(
+        small
+            .blocks
+            .iter()
+            .filter(|one| [10, 20].contains(&one.at))
+            .all(|one| _arm_bytes(16, one).is_some_and(|bytes| bytes < 16))
+    );
     assert_eq!(order(small), vec![1, 20, 10, 30]);
     // Arm 10 past a short jump's reach: the order stays the source's.
     let mut large = weighted_diamond(0.7);
@@ -704,7 +757,10 @@ fn test_for_size_a_diamonds_likelier_arm_goes_second_where_size_allows() {
 }
 
 /// A loop entered at its test, its body ending `jmp test`.
-fn entered_at_its_test(body_ends: Vec<Arc<Insn>>, body_succ: Vec<i64>) -> LirBody {
+fn entered_at_its_test(
+    body_ends: Vec<Arc<Insn>>,
+    body_succ: Vec<i64>,
+) -> LirBody {
     let mut made = body(
         "f",
         1,
@@ -786,7 +842,10 @@ fn test_a_copy_never_makes_a_second_entry_into_a_loop() {
     before.odds.taken.insert((30, 10), fixed(31.0 / 32.0));
     before.odds.taken.insert((30, 40), fixed(1.0 / 32.0));
     assert!(crate::backend::executed::executed(&before).is_some(), "premise: reducible");
-    assert!(crate::backend::executed::executed(&duplicated_tails(&before)).is_some(), "the copy made the loop irreducible");
+    assert!(
+        crate::backend::executed::executed(&duplicated_tails(&before)).is_some(),
+        "the copy made the loop irreducible"
+    );
 }
 
 /// SPHEREMAPLASMA's block 390: a loop that leaves by an edge with no
@@ -813,10 +872,19 @@ fn test_a_copy_from_an_implied_edge_keeps_every_blocks_frequency() {
     before.odds.taken.insert((187, 428), fixed(0.625));
     assert!(!before.odds.taken.contains_key(&(390, 187)), "premise: the loop's exit is implied");
     let after = duplicated_tails(&before);
-    assert!(after.blocks.iter().find(|one| one.at == 390).is_some_and(|one| one.succ.contains(&190)), "premise: the test was copied");
-    let (old, new) = (crate::analysis::frequency::Frequency::of(&before), crate::analysis::frequency::Frequency::of(&after));
+    assert!(
+        after.blocks.iter().find(|one| one.at == 390).is_some_and(|one| one.succ.contains(&190)),
+        "premise: the test was copied"
+    );
+    let (old, new) =
+        (crate::analysis::frequency::Frequency::of(&before), crate::analysis::frequency::Frequency::of(&after));
     for one in [1, 390, 190, 428] {
-        assert!((old.block(one) - new.block(one)).abs() < 1e-6, "block {one}: {} -> {}", old.block(one), new.block(one));
+        assert!(
+            (old.block(one) - new.block(one)).abs() < 1e-6,
+            "block {one}: {} -> {}",
+            old.block(one),
+            new.block(one)
+        );
     }
 }
 
@@ -841,7 +909,10 @@ fn test_threading_a_split_loop_back_keeps_its_odds() {
     split.odds.taken.insert((42, 42), fixed(31.0 / 32.0));
     split.odds.taken.insert((42, 50), fixed(31.0 / 32.0));
     let back = threaded(&split);
-    assert!(back.blocks.iter().find(|one| one.at == 42).is_some_and(|one| one.succ.contains(&42)), "premise: threaded back to itself");
+    assert!(
+        back.blocks.iter().find(|one| one.at == 42).is_some_and(|one| one.succ.contains(&42)),
+        "premise: threaded back to itself"
+    );
     let runs = crate::analysis::frequency::Frequency::of(&back).block(42);
     assert!((runs - 32.0).abs() < 1e-3, "{runs}");
 }
@@ -851,33 +922,45 @@ fn test_threading_a_split_loop_back_keeps_its_odds() {
 /// same code.
 #[test]
 fn test_a_loops_proven_test_is_not_copied_into_a_loop_inside_it() {
-    use crate::backend::regalloc_input::{before_phase, Calls};
-    let work = |body: &LirBody| crate::backend::executed::executed(body).map(|done| done.instructions + done.memory).expect("finite");
+    use crate::backend::regalloc_input::{Calls, before_phase};
+    let work = |body: &LirBody| {
+        crate::backend::executed::executed(body).map(|done| done.instructions + done.memory).expect("finite")
+    };
     let (body, mut phases) = before_phase(Calls::Everything, "sievejumps.ll", "bench_sieve", "486", "ControlFlow");
     let before = work(&body);
     let after = work(&phases[0].transform(body).expect("places"));
     assert!(after >= 0.75 * before, "{before} before ControlFlow, {after} after");
 }
 
-/// Each change threading made copied every block, twice, and went back to the first: a body of n jumps to the next block was n
-/// copies of n blocks, 2.1 s of compiling 800 blocks (#560). A change edits in place. Measured as the work, not the time (a
-/// loaded machine failed the old wall-clock bound, #913): the blocks cloned grow with n, not with n squared.
+/// Each change threading made copied every block, twice, and went back to the first: a body of n jumps to the next
+/// block was n copies of n blocks, 2.1 s of compiling 800 blocks (#560). A change edits in place. Measured as the work,
+/// not the time (a loaded machine failed the old wall-clock bound, #913): the blocks cloned grow with n, not with n
+/// squared.
 #[test]
 fn test_threading_a_long_run_of_jumps_does_not_copy_the_body_for_each() {
     let cloned = |n: i64| {
-        let blocks: Vec<LirBlock> = (0..n).map(|at| block(at, vec![_move(at * 2, imm(at)), _jump(at * 2 + 1, at + 1)], vec![at + 1])).chain([block(n, vec![_return(n * 2)], vec![])]).collect();
+        let blocks: Vec<LirBlock> = (0..n)
+            .map(|at| block(at, vec![_move(at * 2, imm(at)), _jump(at * 2 + 1, at + 1)], vec![at + 1]))
+            .chain([block(n, vec![_return(n * 2)], vec![])])
+            .collect();
         let body = body("f", 0, blocks);
         let before = crate::model::lir::BLOCK_CLONES.with(std::cell::Cell::get);
         let threaded = threaded(&body);
         let copies = crate::model::lir::BLOCK_CLONES.with(std::cell::Cell::get) - before;
-        assert!(threaded.blocks.iter().take(n as usize).all(|one| _real(one).iter().all(|insn| insn.what.as_ref().is_none_or(|what| what.op != Operation::Jump))), "a fall-through jump is left");
+        assert!(
+            threaded.blocks.iter().take(n as usize).all(|one| _real(one)
+                .iter()
+                .all(|insn| insn.what.as_ref().is_none_or(|what| what.op != Operation::Jump))),
+            "a fall-through jump is left"
+        );
         copies
     };
     let (small, large) = (cloned(500), cloned(1000));
     assert!(large <= 3 * small, "{small} block copies for 500 blocks, {large} for 1,000: more than linear");
 }
 
-/// The copy limit is eight jumps of the target's own encoding, not a guess in the pass: 3 bytes in real mode, 5 in flat.
+/// The copy limit is eight jumps of the target's own encoding, not a guess in the pass: 3 bytes in real mode, 5 in
+/// flat.
 #[test]
 fn test_the_copy_limit_is_priced_from_the_targets_jump() {
     assert_eq!(uncond_jump_bytes(16), 3);
@@ -885,8 +968,8 @@ fn test_the_copy_limit_is_priced_from_the_targets_jump() {
     assert_eq!(copy_limit(32), 40);
 }
 
-/// `jne next; jmp elsewhere; next:` ran a jump on the path that falls to `next` (hanoi: 3601 `jmp` in 99200 instructions, 72 sites in 34
-/// of the 66 programs): one `je elsewhere` falls into `next` instead.
+/// `jne next; jmp elsewhere; next:` ran a jump on the path that falls to `next` (hanoi: 3601 `jmp` in 99200
+/// instructions, 72 sites in 34 of the 66 programs): one `je elsewhere` falls into `next` instead.
 #[test]
 fn test_a_branch_taken_to_the_next_block_then_a_jump_is_one_opposite_branch() {
     let body = LirBody::new(
@@ -901,19 +984,27 @@ fn test_a_branch_taken_to_the_next_block_then_a_jump_is_one_opposite_branch() {
         IndexMap::default(),
     );
     let got = inverted(&body);
-    let names: Vec<(String, Option<i64>)> = got.blocks[0].insns.iter().map(|one| one.what.as_ref().unwrap()).map(|what| (what.name.clone().unwrap(), what.target)).collect();
+    let names: Vec<(String, Option<i64>)> = got.blocks[0]
+        .insns
+        .iter()
+        .map(|one| one.what.as_ref().unwrap())
+        .map(|what| (what.name.clone().unwrap(), what.target))
+        .collect();
     assert_eq!(names, vec![("cmp".to_owned(), None), ("je".to_owned(), Some(3))]);
 }
 
-/// A block with two branches and a jump (a three-way split) has three successors; flipping its second branch would leave two of them
-/// with no instruction choosing (queens nib: "block 0 leaves for (13, 20, 14)").
+/// A block with two branches and a jump (a three-way split) has three successors; flipping its second branch would
+/// leave two of them with no instruction choosing (queens nib: "block 0 leaves for (13, 20, 14)").
 #[test]
 fn test_a_three_way_block_keeps_its_jump() {
     let body = LirBody::new(
         "f",
         1,
         vec![
-            LirBlock { succ: vec![4, 2, 3], ..LirBlock::new(1, vec![_compare(1), _branch(2, "je", 4), _branch(3, "jne", 2), _jump(4, 3)]) },
+            LirBlock {
+                succ: vec![4, 2, 3],
+                ..LirBlock::new(1, vec![_compare(1), _branch(2, "je", 4), _branch(3, "jne", 2), _jump(4, 3)])
+            },
             LirBlock { succ: vec![], ..LirBlock::new(2, vec![_return(5)]) },
             LirBlock { succ: vec![], ..LirBlock::new(3, vec![_return(6)]) },
             LirBlock { succ: vec![], ..LirBlock::new(4, vec![_return(7)]) },

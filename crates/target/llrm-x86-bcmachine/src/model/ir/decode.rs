@@ -5,11 +5,11 @@ use std::sync::Arc;
 
 use iced_x86::{Mnemonic, OpKind, Register};
 use llrm_qbruntime::INLINE_TABLE;
+use llrm_target::machine::{Machine, PortMemory};
 
 use super::nodes::{Call, Data, Long, Node, Opaque, RESTORE_EFFECTS, Restore, TableKind, span};
 use super::semantics::{instruction_effects, instruction_semantics};
 use super::{Imm, Loc, NO_EFFECT, Operation, Reg, Semantics};
-use llrm_target::machine::{Machine, PortMemory};
 use crate::frontends::bc::blocks::{Block, CodeMap, code_map, partition as block_partition};
 use crate::frontends::bc::declen::Insn;
 use crate::frontends::bc::extent::{Body, Partition, partition as body_partition};
@@ -19,7 +19,10 @@ use crate::support::hash::IndexMap;
 
 /// A node list's own bytes, verbatim -- sliced from the original code by each
 /// node's own span.
-pub fn emit(module: &Module, nodes: &[Arc<Node>]) -> Vec<u8> {
+pub fn emit(
+    module: &Module,
+    nodes: &[Arc<Node>],
+) -> Vec<u8> {
     nodes
         .iter()
         .flat_map(|node| {
@@ -30,7 +33,12 @@ pub fn emit(module: &Module, nodes: &[Arc<Node>]) -> Vec<u8> {
 }
 
 /// A restore idiom starting exactly at `at`, or `None`.
-pub fn _restore_at(module: &Module, insns_by_at: &IndexMap<usize, &Insn>, at: usize, hi: usize) -> Option<Restore> {
+pub fn _restore_at(
+    module: &Module,
+    insns_by_at: &IndexMap<usize, &Insn>,
+    at: usize,
+    hi: usize,
+) -> Option<Restore> {
     if at + 4 > hi {
         return None;
     }
@@ -50,7 +58,12 @@ pub fn _restore_at(module: &Module, insns_by_at: &IndexMap<usize, &Insn>, at: us
     None
 }
 
-pub fn _table_node(module: &Module, last: Option<&Node>, lo: usize, hi: usize) -> Data {
+pub fn _table_node(
+    module: &Module,
+    last: Option<&Node>,
+    lo: usize,
+    hi: usize,
+) -> Data {
     let mut kind = TableKind::Map;
     if let Some(Node::Call(last)) = last {
         if last.insn.end() == lo && INLINE_TABLE.contains(last.name.as_str()) {
@@ -63,7 +76,10 @@ pub fn _table_node(module: &Module, last: Option<&Node>, lo: usize, hi: usize) -
     Data::new(lo, hi, kind, entries, NO_EFFECT.clone())
 }
 
-pub fn _instruction_node(module: &Module, insn: &Insn) -> Node {
+pub fn _instruction_node(
+    module: &Module,
+    insn: &Insn,
+) -> Node {
     let resolve = |field_offset: i64, literal: i64| module.resolve(field_offset, literal);
     let effects = instruction_effects(insn, &resolve);
     let semantics = instruction_semantics(insn, &resolve);
@@ -77,7 +93,13 @@ pub fn _instruction_node(module: &Module, insn: &Insn) -> Node {
 }
 
 /// Every byte of `body`'s own ranges, as ordered Nodes.
-pub fn decode_body(module: &Module, mapped: &CodeMap, blocks: &[Block], body: &Body, machine: &Machine) -> Vec<Arc<Node>> {
+pub fn decode_body(
+    module: &Module,
+    mapped: &CodeMap,
+    blocks: &[Block],
+    body: &Body,
+    machine: &Machine,
+) -> Vec<Arc<Node>> {
     let insns_by_at: IndexMap<usize, &Insn> =
         blocks.iter().flat_map(|block| block.insns.iter()).map(|insn| (insn.at, insn)).collect();
     let tables_by_start: IndexMap<usize, usize> = mapped.tables.iter().copied().collect();
@@ -104,7 +126,11 @@ pub fn decode_body(module: &Module, mapped: &CodeMap, blocks: &[Block], body: &B
 }
 
 /// Each `in` and `out` whose port is a literal, at its device's memory reach.
-pub fn _at_devices(nodes: &[Arc<Node>], starts: &BTreeSet<usize>, machine: &Machine) -> Vec<Arc<Node>> {
+pub fn _at_devices(
+    nodes: &[Arc<Node>],
+    starts: &BTreeSet<usize>,
+    machine: &Machine,
+) -> Vec<Arc<Node>> {
     let mut out: Vec<Arc<Node>> = nodes.to_vec();
     for (index, node) in nodes.iter().enumerate() {
         let Node::Opaque(opaque) = node.as_ref() else {
@@ -134,7 +160,11 @@ pub fn _at_devices(nodes: &[Arc<Node>], starts: &BTreeSet<usize>, machine: &Mach
 }
 
 /// The literal dx holds before `nodes[index]`, where its block says so.
-pub fn _literal_dx(nodes: &[Arc<Node>], mut index: usize, starts: &BTreeSet<usize>) -> Option<i64> {
+pub fn _literal_dx(
+    nodes: &[Arc<Node>],
+    mut index: usize,
+    starts: &BTreeSet<usize>,
+) -> Option<i64> {
     while index > 0 && !starts.contains(&span(&nodes[index]).0) {
         let previous = &nodes[index - 1];
         let defs = previous.effects().defs.as_ref();
@@ -164,7 +194,10 @@ pub struct BodyIR {
 }
 
 /// Every body of `module`, total-decoded -- or why it could not be.
-pub fn decode_module(module: &Module, machine: &Machine) -> Result<Vec<BodyIR>, String> {
+pub fn decode_module(
+    module: &Module,
+    machine: &Machine,
+) -> Result<Vec<BodyIR>, String> {
     let mapped = code_map(module)?;
     let found = body_partition(module)?;
     if !found.complete() {

@@ -14,14 +14,25 @@ use crate::syntax::{Expr, Function, Module, Span};
 
 pub enum Target {
     /// A declaration of module `module`; `""` is the one being edited.
-    Declaration { module: String, declaration: Declaration },
+    Declaration {
+        module: String,
+        declaration: Declaration,
+    },
     /// A local or parameter, where it is bound, and its type when the checker knows it.
-    Local { name: String, bound: Span, type_: Option<String> },
+    Local {
+        name: String,
+        bound: Span,
+        type_: Option<String>,
+    },
     Module(String),
 }
 
 /// What the name at `position` of the open document at `path` is.
-pub fn resolve(documents: &Documents, path: &Path, position: Position) -> Option<Target> {
+pub fn resolve(
+    documents: &Documents,
+    path: &Path,
+    position: Position,
+) -> Option<Target> {
     let document = documents.get(path)?;
     let loaded = document.loaded.as_ref()?;
     let text = document.text.as_str();
@@ -48,19 +59,34 @@ pub fn resolve(documents: &Documents, path: &Path, position: Position) -> Option
 }
 
 /// The local named at the cursor, or bound there.
-fn local(main: &Module, text: &str, facts: &[Fact], line: usize, column: usize) -> Option<Target> {
+fn local(
+    main: &Module,
+    text: &str,
+    facts: &[Fact],
+    line: usize,
+    column: usize,
+) -> Option<Target> {
     for function in &main.functions {
         let (uses, bound) = locals(function);
         let at = uses.iter().find(|(span, _)| text::contains(*span, line, column)).map(|(_, local)| local);
-        let Some((name, span)) = at.or_else(|| bound.iter().find(|(name, span)| text::contains(text::named(text, *span, name), line, column))) else {
+        let Some((name, span)) = at
+            .or_else(|| bound.iter().find(|(name, span)| text::contains(text::named(text, *span, name), line, column)))
+        else {
             continue;
         };
-        let type_ = uses.iter().filter(|(_, local)| local == &(name.clone(), *span)).find_map(|(used, _)| {
-            facts.iter().find_map(|fact| match &fact.known {
-                Known::Local(type_) if fact.span == *used && &fact.name == name => Some(type_.clone()),
-                _ => None,
-            })
-        });
+        let type_ = uses
+            .iter()
+            .filter(|(_, local)| local == &(name.clone(), *span))
+            .find_map(
+                |(used, _)| facts
+                    .iter()
+                    .find_map(
+                        |fact| match &fact.known {
+                            Known::Local(type_) if fact.span == *used && &fact.name == name => Some(type_.clone()),
+                            _ => None,
+                        },
+                    ),
+            );
         return Some(Target::Local { name: name.clone(), bound: *span, type_ });
     }
     None
@@ -72,7 +98,12 @@ fn locals(function: &Function) -> (Vec<(Span, (String, Span))>, Vec<(String, Spa
     let mut bound: Vec<(String, Span)> = function.parameters.iter().map(|one| (one.name.clone(), one.span)).collect();
     let mut locals = bound.clone();
     let mut uses = Vec::new();
-    let Ok(()) = scopes::walk_mut(&mut function.body.clone(), &mut locals, &mut |expression, locals: &[(String, Span)]| -> Result<(), std::convert::Infallible> {
+    let Ok(()) = scopes::walk_mut(&mut function.body.clone(), &mut locals, &mut |expression,
+                                                                                 locals: &[(String, Span)]|
+     -> Result<
+        (),
+        std::convert::Infallible,
+    > {
         for local in locals {
             if !bound.contains(local) {
                 bound.push(local.clone());
@@ -89,13 +120,27 @@ fn locals(function: &Function) -> (Vec<(Span, (String, Span))>, Vec<(String, Spa
 }
 
 /// The field or method at the cursor, of the type the checker found its value has.
-fn member(loaded: &Loaded, text: &str, facts: &[Fact], line: usize, column: usize) -> Option<Target> {
-    let (owner, name) = facts.iter().find_map(|fact| match &fact.known {
-        Known::Member(owner) if fact.span.module == 0 && text::contains(fact.span, line, column) && text::spells(text, fact.span, &fact.name) => {
-            Some((owner, &fact.name))
-        }
-        _ => None,
-    })?;
+fn member(
+    loaded: &Loaded,
+    text: &str,
+    facts: &[Fact],
+    line: usize,
+    column: usize,
+) -> Option<Target> {
+    let (owner, name) = facts
+        .iter()
+        .find_map(
+            |fact| match &fact.known {
+                Known::Member(owner)
+                    if fact.span.module == 0
+                        && text::contains(fact.span, line, column)
+                        && text::spells(text, fact.span, &fact.name) =>
+                {
+                    Some((owner, &fact.name))
+                }
+                _ => None,
+            },
+        )?;
     let (module, owner) = declaring(loaded, owner);
     let declaration = index::find(&loaded.modules[&module], &format!("{owner}.{name}"))?;
     Some(Target::Declaration { module, declaration })
@@ -103,7 +148,10 @@ fn member(loaded: &Loaded, text: &str, facts: &[Fact], line: usize, column: usiz
 
 /// The module declaring the type the checker names `owner`, and its name there:
 /// a linked name is qualified by its module's.
-pub fn declaring<'o>(loaded: &Loaded, owner: &'o str) -> (String, &'o str) {
+pub fn declaring<'o>(
+    loaded: &Loaded,
+    owner: &'o str,
+) -> (String, &'o str) {
     let module = loaded
         .modules
         .keys()
@@ -116,12 +164,25 @@ pub fn declaring<'o>(loaded: &Loaded, owner: &'o str) -> (String, &'o str) {
 }
 
 /// The locals a name at `line` and `column` of `module` sees, innermost first.
-pub fn visible(module: &Module, line: usize, column: usize) -> Vec<String> {
+pub fn visible(
+    module: &Module,
+    line: usize,
+    column: usize,
+) -> Vec<String> {
     for function in &module.functions {
-        let mut locals: Vec<(String, Span)> = function.parameters.iter().map(|one| (one.name.clone(), one.span)).collect();
+        let mut locals: Vec<(String, Span)> =
+            function.parameters.iter().map(|one| (one.name.clone(), one.span)).collect();
         let mut seen = None;
-        let Ok(()) = scopes::walk_mut(&mut function.body.clone(), &mut locals, &mut |expression, locals: &[(String, Span)]| -> Result<(), std::convert::Infallible> {
-            if matches!(expression, Expr::Name(_, span) if text::contains(*span, line, column)) {
+        let Ok(()) = scopes::walk_mut(&mut function.body.clone(), &mut locals, &mut |expression,
+                                                                                     locals: &[(String, Span)]|
+         -> Result<
+            (),
+            std::convert::Infallible,
+        > {
+            if matches!(
+                expression,
+                Expr::Name(_, span) if text::contains(*span, line, column)
+            ) {
                 seen = Some(locals.to_vec());
             }
             Ok(())

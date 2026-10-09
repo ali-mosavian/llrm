@@ -91,15 +91,16 @@ impl Block {
     }
 }
 
-/// What a debugger is told of a source variable, from a point of the code on: where it lives in memory, what it is, or that
-/// nothing says. Not an instruction: no pass counts it, and a use of a value in one keeps nothing alive.
+/// What a debugger is told of a source variable, from a point of the code on: where it lives in memory, what it is, or
+/// that nothing says. Not an instruction: no pass counts it, and a use of a value in one keeps nothing alive.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DebugWhat {
     /// The variable is in the memory this address names, from here on (`llvm.dbg.declare`).
     Declare(Operand),
     /// The variable is this value, from here until the next record of the variable (`llvm.dbg.value`).
     Value(Operand),
-    /// `bytes` of the variable from byte `offset` are this value, from here on (`DW_OP_piece`): an aggregate the optimiser split.
+    /// `bytes` of the variable from byte `offset` are this value, from here on (`DW_OP_piece`): an aggregate the
+    /// optimiser split.
     Piece { value: Operand, offset: u32, bytes: u32 },
     /// Nothing says where those bytes are: their value was deleted.
     GonePiece { offset: u32, bytes: u32 },
@@ -137,10 +138,10 @@ pub enum Change {
     BlockErased(BlockId),
 }
 
-/// A function's log of changes. A copy is another function (`Lineage`), whose edits from then on are its own: it starts with an
-/// empty log, as a copy that carried the original's (up to 64k changes, cloned for each numbering of a body) cost 16% of
-/// compiling a program with a hundred inlines. The log is no part of what a function is, so two functions are equal whatever
-/// they logged.
+/// A function's log of changes. A copy is another function (`Lineage`), whose edits from then on are its own: it starts
+/// with an empty log, as a copy that carried the original's (up to 64k changes, cloned for each numbering of a body)
+/// cost 16% of compiling a program with a hundred inlines. The log is no part of what a function is, so two functions
+/// are equal whatever they logged.
 #[derive(Debug, Default)]
 pub(crate) struct ChangeLog(pub(crate) Vec<Change>);
 
@@ -151,7 +152,10 @@ impl Clone for ChangeLog {
 }
 
 impl PartialEq for ChangeLog {
-    fn eq(&self, _: &Self) -> bool {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
         true
     }
 }
@@ -180,7 +184,10 @@ impl Clone for Lineage {
 
 /// Equal whatever the history: two functions with the same body are equal.
 impl PartialEq for Lineage {
-    fn eq(&self, _: &Self) -> bool {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
         true
     }
 }
@@ -224,15 +231,20 @@ pub struct Function {
     pub(crate) taken: usize,
     /// What `-g` says of its variables, kept true by the edits that move, replace or erase what it names.
     pub(crate) debug_records: Vec<DebugRecord>,
-    /// The variables a record of which went with the code it stood in (a block erased): what is said of them is not all that was.
+    /// The variables a record of which went with the code it stood in (a block erased): what is said of them is not
+    /// all that was.
     pub(crate) debug_dropped: Vec<MetadataId>,
-    /// The position each parameter had when the function was made, once one was removed or added; empty while none moved.
+    /// The position each parameter had when the function was made, once one was removed or added; empty while none
+    /// moved.
     pub(crate) parameter_origins: Vec<Option<usize>>,
     pub(crate) lineage: Lineage,
 }
 
 impl Function {
-    pub(crate) fn new(ty: TypeId, void: TypeId) -> Self {
+    pub(crate) fn new(
+        ty: TypeId,
+        void: TypeId,
+    ) -> Self {
         Self {
             ty,
             parameter_attrs: Vec::new(),
@@ -260,7 +272,11 @@ impl Function {
     }
 
     /// An operand's type; a block has none.
-    pub fn operand_type(&self, context: &Context, operand: Operand) -> Option<TypeId> {
+    pub fn operand_type(
+        &self,
+        context: &Context,
+        operand: Operand,
+    ) -> Option<TypeId> {
         match operand {
             Operand::Value(id) => Some(self.value(id).ty),
             Operand::Constant(id) => Some(context.get(id).ty),
@@ -288,7 +304,10 @@ impl Function {
     }
 
     /// Whether `declared` is this function's `declaration()`, found without making one.
-    pub fn declares(&self, declared: &Function) -> bool {
+    pub fn declares(
+        &self,
+        declared: &Function,
+    ) -> bool {
         self.ty == declared.ty
             && self.void == declared.void
             && self.calling_convention == declared.calling_convention
@@ -308,11 +327,17 @@ impl Function {
 
     /// The position parameter `at` had when the function was made, none for one the passes added: what `-g` names a
     /// parameter by.
-    pub fn parameter_origin(&self, at: usize) -> Option<usize> {
+    pub fn parameter_origin(
+        &self,
+        at: usize,
+    ) -> Option<usize> {
         if self.parameter_origins.is_empty() { Some(at) } else { self.parameter_origins.get(at).copied().flatten() }
     }
 
-    pub fn value(&self, id: ValueId) -> &ValueData {
+    pub fn value(
+        &self,
+        id: ValueId,
+    ) -> &ValueData {
         &self.values[id.0 as usize]
     }
 
@@ -338,11 +363,17 @@ impl Function {
         positions
     }
 
-    pub fn instruction(&self, id: InstId) -> &Instruction {
+    pub fn instruction(
+        &self,
+        id: InstId,
+    ) -> &Instruction {
         &self.instructions[id.0 as usize]
     }
 
-    pub fn block(&self, id: BlockId) -> &Block {
+    pub fn block(
+        &self,
+        id: BlockId,
+    ) -> &Block {
         &self.blocks[id.0 as usize]
     }
 
@@ -355,29 +386,47 @@ impl Function {
     }
 
     /// The block holding `inst`, while it is placed.
-    pub fn parent(&self, inst: InstId) -> Option<BlockId> {
+    pub fn parent(
+        &self,
+        inst: InstId,
+    ) -> Option<BlockId> {
         self.parent[inst.0 as usize]
     }
 
-    pub fn is_erased(&self, inst: InstId) -> bool {
+    pub fn is_erased(
+        &self,
+        inst: InstId,
+    ) -> bool {
         self.erased[inst.0 as usize]
     }
 
-    pub fn users(&self, value: ValueId) -> &[Use] {
+    pub fn users(
+        &self,
+        value: ValueId,
+    ) -> &[Use] {
         &self.value_uses[value.0 as usize]
     }
 
     /// The operand slots naming `block`: terminators' and phis'.
-    pub fn block_users(&self, block: BlockId) -> &[Use] {
+    pub fn block_users(
+        &self,
+        block: BlockId,
+    ) -> &[Use] {
         &self.block_uses[block.0 as usize]
     }
 
-    pub fn terminator(&self, block: BlockId) -> Option<InstId> {
+    pub fn terminator(
+        &self,
+        block: BlockId,
+    ) -> Option<InstId> {
         self.block(block).instructions.last().copied().filter(|&last| self.instruction(last).opcode.is_terminator())
     }
 
     /// The blocks `block`'s terminator names, in operand order, once each.
-    pub fn successors(&self, block: BlockId) -> Vec<BlockId> {
+    pub fn successors(
+        &self,
+        block: BlockId,
+    ) -> Vec<BlockId> {
         let mut out = Vec::new();
         for operand in self.terminator(block).map(|one| self.instruction(one).operands.as_slice()).unwrap_or_default() {
             if let Operand::Block(target) = operand
@@ -390,7 +439,10 @@ impl Function {
     }
 
     /// The blocks whose terminators name `block`, once each.
-    pub fn predecessors(&self, block: BlockId) -> Vec<BlockId> {
+    pub fn predecessors(
+        &self,
+        block: BlockId,
+    ) -> Vec<BlockId> {
         let mut out = Vec::new();
         for one in self.block_users(block) {
             let user = one.user;
@@ -423,7 +475,10 @@ impl Function {
         out
     }
 
-    pub(crate) fn log(&mut self, change: Change) {
+    pub(crate) fn log(
+        &mut self,
+        change: Change,
+    ) {
         self.lineage.logged += 1;
         self.changes.0.push(change);
     }
@@ -435,9 +490,13 @@ impl Function {
 
     /// What changed since `mark`, in order; none where `mark` is of another function or what followed it has been
     /// taken.
-    pub fn changes_since(&self, mark: Mark) -> Option<&[Change]> {
+    pub fn changes_since(
+        &self,
+        mark: Mark,
+    ) -> Option<&[Change]> {
         let kept_from = self.lineage.logged - self.changes.0.len();
-        (mark.uid == self.lineage.uid && (kept_from..=self.lineage.logged).contains(&mark.at)).then(|| &self.changes.0[mark.at - kept_from..])
+        (mark.uid == self.lineage.uid && (kept_from..=self.lineage.logged).contains(&mark.at))
+            .then(|| &self.changes.0[mark.at - kept_from..])
     }
 }
 
@@ -514,9 +573,12 @@ impl GlobalValue {
         }
     }
 
-    /// Whether `declared` is this global's `declaration()`, found without making one: what `Declarations` holds of it still
-    /// stands.
-    pub fn declares(&self, declared: &GlobalValue) -> bool {
+    /// Whether `declared` is this global's `declaration()`, found without making one: what `Declarations` holds of it
+    /// still stands.
+    pub fn declares(
+        &self,
+        declared: &GlobalValue,
+    ) -> bool {
         self.name == declared.name
             && self.linkage == declared.linkage
             && self.unnamed_addr == declared.unnamed_addr
@@ -561,7 +623,10 @@ pub struct Module {
 }
 
 impl Module {
-    pub fn global(&self, id: GlobalId) -> &GlobalValue {
+    pub fn global(
+        &self,
+        id: GlobalId,
+    ) -> &GlobalValue {
         &self.globals[id.0 as usize]
     }
 
@@ -570,7 +635,10 @@ impl Module {
         self.globals.iter().map(GlobalValue::declaration).collect()
     }
 
-    pub fn named(&self, name: &str) -> Option<GlobalId> {
+    pub fn named(
+        &self,
+        name: &str,
+    ) -> Option<GlobalId> {
         self.globals.iter().position(|one| one.name.as_deref() == Some(name)).map(|at| GlobalId(at as u32))
     }
 
@@ -582,7 +650,10 @@ impl Module {
     }
 
     /// The function named `name`, with the context its types live in.
-    pub fn function_mut(&mut self, name: &str) -> Option<(&mut Context, &mut Function)> {
+    pub fn function_mut(
+        &mut self,
+        name: &str,
+    ) -> Option<(&mut Context, &mut Function)> {
         let global = self.globals.iter_mut().find(|one| one.name.as_deref() == Some(name))?;
         match &mut global.kind {
             GlobalKind::Function(function) => Some((&mut self.context, function)),
@@ -592,7 +663,10 @@ impl Module {
 
     /// The module without the globals `keep` refuses, the rest renumbered
     /// in their order; a constant naming one gone becomes poison.
-    pub fn retain_globals(&mut self, keep: &dyn Fn(GlobalId) -> bool) {
+    pub fn retain_globals(
+        &mut self,
+        keep: &dyn Fn(GlobalId) -> bool,
+    ) {
         let mut renumbered = Vec::with_capacity(self.globals.len());
         let mut next = 0;
         for at in 0..self.globals.len() as u32 {
@@ -610,7 +684,10 @@ impl Module {
     }
 
     /// A function type's return type and parameters.
-    pub fn signature(&self, function_type: TypeId) -> (TypeId, &[TypeId], bool) {
+    pub fn signature(
+        &self,
+        function_type: TypeId,
+    ) -> (TypeId, &[TypeId], bool) {
         match self.context.types.get(function_type) {
             Type::Function { returns, parameters, variadic } => (*returns, parameters, *variadic),
             other => panic!("{other:?} is not a function type"),

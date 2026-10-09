@@ -9,12 +9,12 @@ use std::fmt;
 use std::sync::Arc;
 
 use iced_x86::Register;
-use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::backend::target;
 use crate::model::ir::{self, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{self, Insn, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
+use crate::support::hash::{IndexMap, IndexSet};
 use crate::support::pyrepr::Repr;
 
 /// Something in a copy group that is not a move of one place to another.
@@ -22,7 +22,10 @@ use crate::support::pyrepr::Repr;
 pub struct Malformed(pub String);
 
 impl fmt::Display for Malformed {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
@@ -40,22 +43,29 @@ impl LIRTransform for ParallelCopy {
         "parcopy"
     }
 
-    fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
         scheduled(&body).map_err(|refused| refused.to_string())
     }
 
-    fn transform_raising(&mut self, body: LirBody) -> Result<LirBody, Exception> {
-        scheduled(&body).map_err(|malformed| Exception::defined_in("qbopt.backend.parcopy", "Malformed", malformed.to_string()))
+    fn transform_raising(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, Exception> {
+        scheduled(&body)
+            .map_err(|malformed| Exception::defined_in("qbopt.backend.parcopy", "Malformed", malformed.to_string()))
     }
 }
 
-fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {
-    Semantics {
-        name: Some(name.to_owned()),
-        dests,
-        sources,
-        ..Semantics::new(op)
-    }
+fn semantics(
+    op: Operation,
+    name: &str,
+    dests: Vec<Loc>,
+    sources: Vec<Loc>,
+) -> Semantics {
+    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
 }
 
 fn _width(one: &Loc) -> u32 {
@@ -69,7 +79,10 @@ fn _width(one: &Loc) -> u32 {
 }
 
 /// Python `list.remove`: drop the first element equal to `one`.
-fn remove(left: &mut Vec<Arc<Insn>>, one: &Arc<Insn>) {
+fn remove(
+    left: &mut Vec<Arc<Insn>>,
+    one: &Arc<Insn>,
+) {
     let index = left.iter().position(|each| **each == **one).expect("list.remove(x): x not in list");
     left.remove(index);
 }
@@ -162,7 +175,10 @@ fn _ordered(moves: &[Arc<Insn>]) -> Result<Vec<Arc<Insn>>, Malformed> {
     while !left.is_empty() {
         let reads = left.iter().map(|one| Ok(vec![_outof(one)?])).collect::<Result<Vec<_>, Malformed>>()?;
         let writes = left.iter().map(|one| Ok(vec![_into(one)?])).collect::<Result<Vec<_>, Malformed>>()?;
-        let ready: Vec<Arc<Insn>> = ready(&reads, &writes, &(0..left.len()).collect::<Vec<_>>()).into_iter().map(|at| Arc::clone(&left[at])).collect();
+        let ready: Vec<Arc<Insn>> = ready(&reads, &writes, &(0..left.len()).collect::<Vec<_>>())
+            .into_iter()
+            .map(|at| Arc::clone(&left[at]))
+            .collect();
         if ready.is_empty() {
             let (made, used) = _rotated(&left)?;
             out.extend(made);
@@ -181,17 +197,33 @@ fn _ordered(moves: &[Arc<Insn>]) -> Result<Vec<Arc<Insn>>, Malformed> {
 
 /// Of the copies `left` (indices into `reads` and `writes`, the places each reads and writes),
 /// those that may go: nothing else still to come reads a place they write.
-pub(crate) fn ready<K: Eq + std::hash::Hash>(reads: &[Vec<K>], writes: &[Vec<K>], left: &[usize]) -> Vec<usize> {
-    left.iter().copied().filter(|one| {
-        let others: IndexSet<&K> = left.iter().filter(|other| *other != one).flat_map(|other| &reads[*other]).collect();
-        !writes[*one].iter().any(|place| others.contains(place))
-    }).collect()
+pub(crate) fn ready<K: Eq + std::hash::Hash>(
+    reads: &[Vec<K>],
+    writes: &[Vec<K>],
+    left: &[usize],
+) -> Vec<usize> {
+    left.iter()
+        .copied()
+        .filter(|one| {
+            let others: IndexSet<&K> =
+                left.iter().filter(|other| *other != one).flat_map(|other| &reads[*other]).collect();
+            !writes[*one].iter().any(|place| others.contains(place))
+        })
+        .collect()
 }
 
 /// One copy of a cycle `ready` is stuck on, when none of `left` may go: following who is waited for
 /// until a copy comes round again. Taking that copy's sources first breaks the cycle.
-pub(crate) fn in_cycle<K: Eq + std::hash::Hash>(reads: &[Vec<K>], writes: &[Vec<K>], left: &[usize]) -> Option<usize> {
-    let waiting_for = |one: usize| left.iter().copied().find(|other| *other != one && reads[*other].iter().any(|place| writes[one].contains(place)));
+pub(crate) fn in_cycle<K: Eq + std::hash::Hash>(
+    reads: &[Vec<K>],
+    writes: &[Vec<K>],
+    left: &[usize],
+) -> Option<usize> {
+    let waiting_for = |one: usize| {
+        left.iter()
+            .copied()
+            .find(|other| *other != one && reads[*other].iter().any(|place| writes[one].contains(place)))
+    };
     let mut seen = Vec::new();
     let mut one = *left.first()?;
     while !seen.contains(&one) {
@@ -222,7 +254,10 @@ fn _rotated(left: &[Arc<Insn>]) -> Result<Rotation, Malformed> {
     while place != _into(start)? {
         let one = writes.get(&place).copied().filter(|one| !cycle.iter().any(|each| **each == ***one));
         let Some(one) = one else {
-            return Err(Malformed(format!("{:#06x} is in a copy group that is not a permutation of its places", start.at)));
+            return Err(Malformed(format!(
+                "{:#06x} is in a copy group that is not a permutation of its places",
+                start.at
+            )));
         };
         cycle.push(Arc::clone(one));
         place = _outof(one)?;
@@ -263,7 +298,9 @@ fn _rotated(left: &[Arc<Insn>]) -> Result<Rotation, Malformed> {
     let closing = cycle
         .iter()
         .rposition(|one| target::pushed_width(&source(one)).is_some() && target::popped_width(&dest(one)).is_some())
-        .ok_or_else(|| Malformed(format!("{:#06x} is in a copy cycle no move of which the stack can carry", start.at)))?;
+        .ok_or_else(|| {
+            Malformed(format!("{:#06x} is in a copy cycle no move of which the stack can carry", start.at))
+        })?;
     let count = cycle.len();
     cycle.rotate_left((closing + 1) % count);
     let (first, last) = (&cycle[0], &cycle[count - 1]);
@@ -281,7 +318,10 @@ fn _stacked(place: Loc) -> Loc {
     }
 }
 
-fn push_of(start: &Insn, saved: Loc) -> Arc<Insn> {
+fn push_of(
+    start: &Insn,
+    saved: Loc,
+) -> Arc<Insn> {
     let mut push = start.clone();
     push.what = Some(semantics(Operation::Push, "push", vec![], vec![_stacked(saved)]));
     push.group = None;
@@ -290,7 +330,10 @@ fn push_of(start: &Insn, saved: Loc) -> Arc<Insn> {
     Arc::new(push)
 }
 
-fn pop_into(last: &Insn, into: Loc) -> Arc<Insn> {
+fn pop_into(
+    last: &Insn,
+    into: Loc,
+) -> Arc<Insn> {
     let mut pop = last.clone();
     pop.what = Some(semantics(Operation::Pop, "pop", vec![_stacked(into)], vec![]));
     pop.group = None;
@@ -306,7 +349,10 @@ pub fn _outof(one: &Insn) -> Result<String, Malformed> {
 }
 
 /// The location an operand names, as one comparable thing.
-fn _place(one: &Insn, where_: &[Loc]) -> Result<String, Malformed> {
+fn _place(
+    one: &Insn,
+    where_: &[Loc],
+) -> Result<String, Malformed> {
     let what = one.what.as_ref();
     if what.is_none_or(|what| what.op != Operation::Move || what.dests.len() != 1 || what.sources.len() != 1) {
         return Err(Malformed(format!("{:#06x} is in a copy group and is not a move", one.at)));
@@ -320,12 +366,7 @@ fn _place(one: &Insn, where_: &[Loc]) -> Result<String, Malformed> {
 pub fn _named(one: &Loc) -> Result<String, Malformed> {
     match one {
         Loc::Reg(reg) => Ok(format!("r{}", ir::root(reg.register) as u32)),
-        Loc::Mem(memory) => Ok(format!(
-            "m{}:{}:{}",
-            memory.addr.repr(),
-            memory.through as u32,
-            memory.offset
-        )),
+        Loc::Mem(memory) => Ok(format!("m{}:{}:{}", memory.addr.repr(), memory.through as u32, memory.offset)),
         Loc::Imm(imm) => Ok(format!("i{}", imm.value)),
         _ => Err(Malformed(format!("a copy group names {}, which is not a place", one.repr()))),
     }
@@ -337,24 +378,39 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use crate::support::hash::IndexMap;
 
     use super::{_into, _named, _outof, Malformed, scheduled};
     use crate::backend::verify;
     use crate::model::ir::{Addr, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::support::hash::IndexMap;
 
-    fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Option<Semantics> {
+    fn semantics(
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+    ) -> Option<Semantics> {
         Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
     }
 
-    fn _move(into: Loc, out_of: Loc, group: Option<i64>, at: i64) -> Insn {
-        let mut one = Insn::new(at, Some((at, at)), semantics(Operation::Move, "mov", vec![into], vec![out_of]), vec![], vec![]);
+    fn _move(
+        into: Loc,
+        out_of: Loc,
+        group: Option<i64>,
+        at: i64,
+    ) -> Insn {
+        let mut one =
+            Insn::new(at, Some((at, at)), semantics(Operation::Move, "mov", vec![into], vec![out_of]), vec![], vec![]);
         one.group = group;
         one
     }
 
-    fn grouped(into: Loc, out_of: Loc, group: i64) -> Insn {
+    fn grouped(
+        into: Loc,
+        out_of: Loc,
+        group: i64,
+    ) -> Insn {
         _move(into, out_of, Some(group), 0x100)
     }
 
@@ -362,7 +418,10 @@ mod tests {
         Loc::Reg(Reg { register: one, width: 2 })
     }
 
-    fn reg(one: Register, width: u32) -> Loc {
+    fn reg(
+        one: Register,
+        width: u32,
+    ) -> Loc {
         Loc::Reg(Reg { register: one, width })
     }
 
@@ -378,7 +437,13 @@ mod tests {
     }
 
     fn _other(at: i64) -> Insn {
-        Insn::new(at, Some((at, at + 1)), semantics(Operation::Push, "push", vec![], vec![_reg(Register::AX)]), vec![], vec![])
+        Insn::new(
+            at,
+            Some((at, at + 1)),
+            semantics(Operation::Push, "push", vec![], vec![_reg(Register::AX)]),
+            vec![],
+            vec![],
+        )
     }
 
     fn _body(insns: Vec<Insn>) -> LirBody {
@@ -471,7 +536,8 @@ mod tests {
 
     #[test]
     fn test_what_is_not_in_a_group_keeps_its_place() {
-        let got = _order(&_body(vec![_other(0x100), grouped(_reg(Register::AX), _reg(Register::CX), 1), _other(0x300)]));
+        let got =
+            _order(&_body(vec![_other(0x100), grouped(_reg(Register::AX), _reg(Register::CX), 1), _other(0x300)]));
         let moved = format!("{}<-{}", named(&_reg(Register::AX)), named(&_reg(Register::CX)));
         assert_eq!(got, ["push".to_owned(), moved, "push".to_owned()]);
     }
@@ -505,11 +571,10 @@ mod tests {
             .collect();
         assert_eq!(machine, ["xchg"]);
         assert_eq!(swapped[swapped.len() - 1].what.as_ref().unwrap().op, Operation::Nothing);
-        let spilled = scheduled(&_body(vec![grouped(_slot(4), _slot(8), 1), grouped(_slot(8), _slot(4), 1)]))
-            .unwrap()
-            .blocks[0]
-            .insns
-            .clone();
+        let spilled =
+            scheduled(&_body(vec![grouped(_slot(4), _slot(8), 1), grouped(_slot(8), _slot(4), 1)])).unwrap().blocks[0]
+                .insns
+                .clone();
         assert_eq!(names(&spilled), ["push", "push", "pop", "pop"]);
         assert_eq!(spilled[0].what.as_ref().unwrap().sources, vec![_slot(4)]);
         assert_eq!(spilled[spilled.len() - 1].what.as_ref().unwrap().dests, vec![_slot(8)]);
@@ -524,7 +589,13 @@ mod tests {
         let mut closing = grouped(_reg(Register::CX), _reg(Register::AX), 1);
         closing.defines = vec![12];
         closing.uses = vec![2];
-        let consumer = Insn::new(0x102, Some((0x102, 0x102)), semantics(Operation::Push, "push", vec![], vec![_reg(Register::CX)]), vec![], vec![12]);
+        let consumer = Insn::new(
+            0x102,
+            Some((0x102, 0x102)),
+            semantics(Operation::Push, "push", vec![], vec![_reg(Register::CX)]),
+            vec![],
+            vec![12],
+        );
         let mut body = _body(vec![first, closing, consumer]);
         body.inputs = BTreeSet::from([1, 2]);
 
@@ -558,7 +629,13 @@ mod tests {
     /// no exchange takes, since the places are read at two widths.
     #[test]
     fn test_a_slot_written_as_a_dword_and_read_as_a_word_cycles_through_the_stack() {
-        let dword_slot = Loc::Mem(Mem { width: 4, ..match _slot(32) { Loc::Mem(cell) => cell, _ => unreachable!() } });
+        let dword_slot = Loc::Mem(Mem {
+            width: 4,
+            ..match _slot(32) {
+                Loc::Mem(cell) => cell,
+                _ => unreachable!(),
+            }
+        });
         let body = _body(vec![
             grouped(dword_slot.clone(), reg(Register::EDX, 4), 1),
             grouped(reg(Register::DX, 2), _slot(32), 1),
@@ -597,7 +674,10 @@ mod tests {
     #[test]
     fn test_a_mixed_width_cycle_closing_on_a_byte_saves_a_word() {
         // rcflip's AX <- CX, CL <- AL was refused: its temporary was `push al`.
-        let body = _body(vec![grouped(reg(Register::AX, 2), reg(Register::CX, 2), 1), grouped(reg(Register::CL, 1), reg(Register::AL, 1), 1)]);
+        let body = _body(vec![
+            grouped(reg(Register::AX, 2), reg(Register::CX, 2), 1),
+            grouped(reg(Register::CL, 1), reg(Register::AL, 1), 1),
+        ]);
 
         let got = scheduled(&body).unwrap().blocks[0].insns.clone();
 

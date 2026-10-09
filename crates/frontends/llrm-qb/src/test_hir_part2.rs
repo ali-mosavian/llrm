@@ -3,27 +3,28 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use llrm_core::support::hash::IndexMap;
-
-use super::driver as qb_driver;
-use super::test_hir::*;
 use llrm_core::hir::model::Operand;
 use llrm_core::hir::{self};
 use llrm_core::objectfile::module::CALL_FAR;
 use llrm_core::objectfile::omf;
+use llrm_core::support::hash::IndexMap;
+
+use super::driver as qb_driver;
+use super::test_hir::*;
 
 type Records = Vec<Rc<omf::Record>>;
 
 fn hex(text: &str) -> Vec<u8> {
     let digits: Vec<u8> = text.bytes().filter(|byte| !byte.is_ascii_whitespace()).collect();
-    digits
-        .chunks(2)
-        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
-        .collect()
+    digits.chunks(2).map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap()).collect()
 }
 
 /// `haystack.find(needle, start)`.
-fn find(haystack: &[u8], needle: &[u8], start: usize) -> Option<usize> {
+fn find(
+    haystack: &[u8],
+    needle: &[u8],
+    start: usize,
+) -> Option<usize> {
     (start..=haystack.len().saturating_sub(needle.len())).find(|&at| haystack[at..].starts_with(needle))
 }
 
@@ -39,11 +40,17 @@ fn callees(function: &hir::Function) -> Vec<String> {
         .collect()
 }
 
-fn named<'f>(module: &'f hir::Module, name: &str) -> &'f hir::Function {
+fn named<'f>(
+    module: &'f hir::Module,
+    name: &str,
+) -> &'f hir::Function {
     module.functions.iter().find(|one| one.name == name).unwrap_or_else(|| panic!("no {name}"))
 }
 
-fn place<'f>(function: &'f hir::Function, name: &str) -> &'f hir::Place {
+fn place<'f>(
+    function: &'f hir::Function,
+    name: &str,
+) -> &'f hir::Place {
     function.places.iter().find(|one| one.name == name).unwrap_or_else(|| panic!("no {name}"))
 }
 
@@ -51,7 +58,11 @@ fn relocations(data: &hir::DataObject) -> Vec<(i64, i64, i64, &'static str)> {
     data.relocations.iter().map(|one| (one.at, one.target, one.addend, one.address.value())).collect()
 }
 
-fn data_bytes(data: &hir::DataObject, low: usize, high: usize) -> Vec<u8> {
+fn data_bytes(
+    data: &hir::DataObject,
+    low: usize,
+    high: usize,
+) -> Vec<u8> {
     data.bytes[low..high].iter().map(|&byte| byte as u8).collect()
 }
 
@@ -83,7 +94,10 @@ fn by_name(records: &Records) -> IndexMap<String, (i64, i64)> {
         .collect()
 }
 
-fn fixup_rows(records: &Records, seg: i64) -> Vec<(i64, i64, String, i64)> {
+fn fixup_rows(
+    records: &Records,
+    seg: i64,
+) -> Vec<(i64, i64, String, i64)> {
     omf::fixups(records)
         .into_iter()
         .filter(|one| one.seg == Some(seg))
@@ -91,7 +105,12 @@ fn fixup_rows(records: &Records, seg: i64) -> Vec<(i64, i64, String, i64)> {
         .collect()
 }
 
-fn row(offset: i64, loc: i64, target: &str, index: i64) -> (i64, i64, String, i64) {
+fn row(
+    offset: i64,
+    loc: i64,
+    target: &str,
+    index: i64,
+) -> (i64, i64, String, i64) {
     (offset, loc, target.to_owned(), index)
 }
 
@@ -239,9 +258,12 @@ fn test_fresh_basic_object_does_not_predeclare_the_c_data_class() {
 #[test]
 fn test_pds_alternate_math_module_header_records_the_measured_switch() {
     let path = root().join("tests/differential/conformance/pds71/pdfpa.bas");
-    let source =
-        qb_driver::parsed(&path, &qb_driver::Frontend { alternate_math: true, ..qb_driver::Frontend::new("pds71", "pds71") }, None)
-            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    let source = qb_driver::parsed(
+        &path,
+        &qb_driver::Frontend { alternate_math: true, ..qb_driver::Frontend::new("pds71", "pds71") },
+        None,
+    )
+    .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     let records = records(&source, "PDFPA.BAS");
     let code = code(&records);
 
@@ -254,7 +276,11 @@ fn test_pds_alternate_math_module_header_records_the_measured_switch() {
 #[test]
 fn test_command_line_is_resolved_as_the_zero_argument_runtime_intrinsic() {
     let mir = emitted_mir(&parsed(&fixture("command-line.bas")));
-    let calls: Vec<&str> = mir.lines().filter_map(|line| line.split_once("@llrm.qb.")).map(|(_, call)| call.split('(').next().unwrap()).collect();
+    let calls: Vec<&str> = mir
+        .lines()
+        .filter_map(|line| line.split_once("@llrm.qb."))
+        .map(|(_, call)| call.split('(').next().unwrap())
+        .collect();
 
     assert_eq!(calls[..3], ["B$FCMD", "B$LTRM", "B$RTRM"]);
 }
@@ -328,7 +354,8 @@ fn test_qb_runtime_frame_establishes_and_zero_initializes_managed_locals() {
     let source = parsed(&fixture("managed-locals.bas"));
     let records = records(&source, "managed-locals.bas");
     let (code_segment, start) = omf::public_definitions(&records).expect("pubdefs")["SHOWCOMMAND"];
-    let calls: Vec<String> = far_calls(&records).into_iter().filter(|(at, _)| *at >= start).map(|(_, name)| name).collect();
+    let calls: Vec<String> =
+        far_calls(&records).into_iter().filter(|(at, _)| *at >= start).map(|(_, name)| name).collect();
 
     assert_eq!(calls[..3], ["B$ENRA", "B$DDIM", "B$FCMD"]);
     assert_eq!(calls.last().map(String::as_str), Some("B$EXSA"));
@@ -347,7 +374,11 @@ fn test_vbdos_managed_locals_begin_below_the_runtime_frame_header() {
 
     // B$ENRA's header is the 20 bytes below BP; CX more are the locals.
     assert!(procedure.contains("mov cx, 22\n    mov bx, 1\n    call far ptr B$ENRA"), "{procedure}");
-    let offsets: Vec<i64> = regex::Regex::new(r"\[bp-(\d+)\]").unwrap().captures_iter(procedure).map(|one| one[1].parse().unwrap()).collect();
+    let offsets: Vec<i64> = regex::Regex::new(r"\[bp-(\d+)\]")
+        .unwrap()
+        .captures_iter(procedure)
+        .map(|one| one[1].parse().unwrap())
+        .collect();
     assert!(!offsets.is_empty() && offsets.iter().all(|offset| (21..=42).contains(offset)), "{procedure}");
     assert!(offsets.contains(&42), "{procedure}");
 }
@@ -401,9 +432,11 @@ fn test_far_array_field_byref_uses_a_near_copy_in_copy_out_slot() {
     };
 
     assert_eq!(values[&argument.value].name, "near*integer");
-    assert!(instructions[at + 1..]
-        .iter()
-        .any(|one| one.op == hir::Op::Store && matches!(one.operands[0], Operand::IndirectPlace(_))));
+    assert!(
+        instructions[at + 1..]
+            .iter()
+            .any(|one| one.op == hir::Op::Store && matches!(one.operands[0], Operand::IndirectPlace(_)))
+    );
 }
 
 /// Fresh SYS loaded argv() as a huge pointer and DIR$ raised BASIC error 64.
@@ -541,8 +574,12 @@ fn test_rank_two_descriptor_matches_qb_dimension_order_and_adjusted_offset() {
 #[test]
 fn test_row_major_rank_two_descriptor_matches_bc_r() {
     let path = root().join("tests/differential/conformance/qb45/q45a05.bas");
-    let source = qb_driver::parsed(&path, &qb_driver::Frontend { array_order: "row-major".into(), ..qb_driver::Frontend::new("qb45", "qb45") }, None)
-        .expect("parses");
+    let source = qb_driver::parsed(
+        &path,
+        &qb_driver::Frontend { array_order: "row-major".into(), ..qb_driver::Frontend::new("qb45", "qb45") },
+        None,
+    )
+    .expect("parses");
     let module = &source.modules[0];
     let values = place(&module.functions[0], "VALUES");
     let descriptor = module.data.iter().find(|one| one.name == "VALUES$descriptor").expect("descriptor");
@@ -610,9 +647,11 @@ fn test_dynamic_string_array_formal_uses_adjusted_near_descriptor_base() {
     assert!(!payloads.is_empty() && payloads.iter().all(|one| one.address == hir::AddressKind::Far));
     let records = records(&source, "string-array-parameter.bas");
     let fsl = by_name(&records)["FSL_CONST"].0;
-    assert!(omf::fixups(&records)
-        .iter()
-        .any(|fixup| fixup.seg == Some(1) && fixup.target == "segment" && fixup.index == fsl));
+    assert!(
+        omf::fixups(&records)
+            .iter()
+            .any(|fixup| fixup.seg == Some(1) && fixup.target == "segment" && fixup.index == fsl)
+    );
 }
 
 /// D_SURF applied a one-based array's lower bound twice and hung before its first frame.
@@ -770,17 +809,23 @@ fn test_qb_and_pds_literals_use_their_measured_near_descriptor() {
 fn test_on_error_emits_a_relocated_runtime_registration() {
     // The division can raise, so the handler is registered.
     let directory = tempfile::TempDir::new().unwrap();
-    let basic = written(&directory, "ONERR.BAS", b"on error goto handler\r\nprint 1 / x%\r\nend\r\nhandler:\r\nend\r\n");
+    let basic =
+        written(&directory, "ONERR.BAS", b"on error goto handler\r\nprint 1 / x%\r\nend\r\nhandler:\r\nend\r\n");
     let source = parsed(&basic);
     let listing = listing(&source);
-    assert!(listing.contains("pushw seg $QB$LANDING\n    push offset $QB$LANDING\n    call far ptr B$OEGA"), "{listing}");
+    assert!(
+        listing.contains("pushw seg $QB$LANDING\n    push offset $QB$LANDING\n    call far ptr B$OEGA"),
+        "{listing}"
+    );
 
     let records = records(&source, "ONERR.BAS");
     let externals = omf::externals(&records);
     let fixups = omf::fixups(&records);
-    assert!(fixups
-        .iter()
-        .any(|one| one.seg == Some(1) && one.target == "external" && externals[one.index as usize] == "B$OEGA"));
+    assert!(
+        fixups
+            .iter()
+            .any(|one| one.seg == Some(1) && one.target == "external" && externals[one.index as usize] == "B$OEGA")
+    );
     // The handler's address is relocated: its offset and its segment.
     assert!(fixups.iter().filter(|one| one.seg == Some(1) && one.target == "segment" && one.index == 1).count() >= 2);
 }
@@ -805,7 +850,8 @@ fn test_on_error_registrations_follow_source_order() {
     let listing = listing(&parsed_as(&basic, "qb45", "qb45"));
     let main = between(&listing, "$QB$MAIN proc far", "$QB$MAIN endp");
     let before = main.split("call far ptr B$SERR").next().expect("ERROR 11");
-    let active: Vec<&str> = before.lines().filter_map(|line| line.trim().strip_prefix("mov word ptr $QB$ACTIVE, ")).collect();
+    let active: Vec<&str> =
+        before.lines().filter_map(|line| line.trim().strip_prefix("mov word ptr $QB$ACTIVE, ")).collect();
 
     // first, second, then none: ERROR 11 runs with no handler.
     assert_eq!(active, ["1", "2", "0"], "{main}");
@@ -824,18 +870,20 @@ fn test_resume_next_retains_runtime_statement_entries() {
     let body = between(&listing, "$QB$MAIN proc far", "$QB$MAIN endp");
     // RESUME NEXT returns to the statement after ERROR 11.
     let lines: Vec<&str> = body.lines().collect();
-    let after = lines.iter().position(|line| line.contains("mov word ptr RESUMED%, 1")).expect("the statement after ERROR");
+    let after =
+        lines.iter().position(|line| line.contains("mov word ptr RESUMED%, 1")).expect("the statement after ERROR");
     let labels: Vec<&str> = lines[..after].iter().rev().map_while(|line| line.strip_suffix(':')).collect();
-    assert!(labels.iter().any(|label| body.contains(&format!("jmp {label}\n")) || body.contains(&format!("je {label}\n"))), "{body}");
+    assert!(
+        labels.iter().any(|label| body.contains(&format!("jmp {label}\n")) || body.contains(&format!("je {label}\n"))),
+        "{body}"
+    );
     // ERL of ERROR 11 is its line number, 100.
     assert!(between(&listing, "$QB$ERL$__main label byte", "\n\n").contains("064h,000h"), "{listing}");
 
     let records = records(&source, "Q45R35.BAS");
     let code = code(&records);
-    let header_fixup = omf::fixups(&records)
-        .into_iter()
-        .find(|one| one.seg == Some(1) && one.offset == 10)
-        .expect("the header fixup");
+    let header_fixup =
+        omf::fixups(&records).into_iter().find(|one| one.seg == Some(1) && one.offset == 10).expect("the header fixup");
     let statement_at = (i64::from(u16::from_le_bytes([code[10], code[11]])) + header_fixup.disp) as usize;
     assert_eq!(code[statement_at - 3..statement_at], hex("55 8b ec"));
 }

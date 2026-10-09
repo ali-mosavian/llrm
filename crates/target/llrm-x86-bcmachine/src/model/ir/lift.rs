@@ -10,9 +10,8 @@ use std::sync::LazyLock;
 
 use iced_x86::{Code, Register};
 
-use crate::objectfile::module::{Addr, Space, far_pointer, frame_relative, literal_only};
-
 use crate::frontends::bc::declen::Insn;
+use crate::objectfile::module::{Addr, Space, far_pointer, frame_relative, literal_only};
 
 /// The seven single-half forms `lift.classify()` recognises.
 ///
@@ -44,19 +43,28 @@ impl Kind {
 }
 
 impl fmt::Display for Kind {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(self.as_str())
     }
 }
 
 impl Ord for Kind {
-    fn cmp(&self, other: &Self) -> Ordering {
+    fn cmp(
+        &self,
+        other: &Self,
+    ) -> Ordering {
         self.as_str().cmp(other.as_str())
     }
 }
 
 impl PartialOrd for Kind {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    fn partial_cmp(
+        &self,
+        other: &Self,
+    ) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
@@ -80,28 +88,21 @@ pub struct Decoded {
 
 impl Decoded {
     #[must_use]
-    pub const fn new(kind: Kind, pair: usize, half: usize, length: usize) -> Self {
-        Self {
-            kind,
-            pair,
-            half,
-            length,
-            src_pair: 0,
-            alu: None,
-            mem: None,
-            dlen: 0,
-            disp_at: None,
-            imm: None,
-        }
+    pub const fn new(
+        kind: Kind,
+        pair: usize,
+        half: usize,
+        length: usize,
+    ) -> Self {
+        Self { kind, pair, half, length, src_pair: 0, alu: None, mem: None, dlen: 0, disp_at: None, imm: None }
     }
 }
 
 /// The byte-identical restore sequences emitted after a widened operation.
 ///
 /// Direct port of `qbopt.legacy.lift.py:FIXUP`.
-pub static FIXUP: LazyLock<BTreeMap<usize, [u8; 4]>> = LazyLock::new(|| {
-    BTreeMap::from([(0, [0x66, 0x50, 0x58, 0x5A]), (1, [0x66, 0x51, 0x59, 0x5B])])
-});
+pub static FIXUP: LazyLock<BTreeMap<usize, [u8; 4]>> =
+    LazyLock::new(|| BTreeMap::from([(0, [0x66, 0x50, 0x58, 0x5A]), (1, [0x66, 0x51, 0x59, 0x5B])]));
 
 /// The five operations, low half -> (high half, widened mnemonic).
 ///
@@ -117,8 +118,7 @@ pub static PAIRED: LazyLock<BTreeMap<Code, (Code, &'static str)>> = LazyLock::ne
 });
 
 /// Direct port of `qbopt.legacy.lift.py:HIGH_HALVES`.
-pub static HIGH_HALVES: LazyLock<BTreeSet<Code>> =
-    LazyLock::new(|| PAIRED.values().map(|(high, _)| *high).collect());
+pub static HIGH_HALVES: LazyLock<BTreeSet<Code>> = LazyLock::new(|| PAIRED.values().map(|(high, _)| *high).collect());
 
 /// The immediate encodings of the low-half ALU operations.
 ///
@@ -146,47 +146,15 @@ pub static IMM_FAMILY: LazyLock<BTreeMap<Code, &'static str>> = LazyLock::new(||
 /// The immediate encodings that can supply an ALU high half.
 ///
 /// Direct port of `qbopt.legacy.lift.py:IMM_HIGH_FAMILY`.
-pub static IMM_HIGH_FAMILY: LazyLock<BTreeMap<&'static str, BTreeSet<Code>>> =
-    LazyLock::new(|| {
-        BTreeMap::from([
-            (
-                "add",
-                BTreeSet::from([
-                    Code::Adc_AX_imm16,
-                    Code::Adc_rm16_imm16,
-                    Code::Adc_rm16_imm8,
-                ]),
-            ),
-            (
-                "sub",
-                BTreeSet::from([
-                    Code::Sbb_AX_imm16,
-                    Code::Sbb_rm16_imm16,
-                    Code::Sbb_rm16_imm8,
-                ]),
-            ),
-            (
-                "and",
-                BTreeSet::from([
-                    Code::And_AX_imm16,
-                    Code::And_rm16_imm16,
-                    Code::And_rm16_imm8,
-                ]),
-            ),
-            (
-                "or",
-                BTreeSet::from([Code::Or_AX_imm16, Code::Or_rm16_imm16, Code::Or_rm16_imm8]),
-            ),
-            (
-                "xor",
-                BTreeSet::from([
-                    Code::Xor_AX_imm16,
-                    Code::Xor_rm16_imm16,
-                    Code::Xor_rm16_imm8,
-                ]),
-            ),
-        ])
-    });
+pub static IMM_HIGH_FAMILY: LazyLock<BTreeMap<&'static str, BTreeSet<Code>>> = LazyLock::new(|| {
+    BTreeMap::from([
+        ("add", BTreeSet::from([Code::Adc_AX_imm16, Code::Adc_rm16_imm16, Code::Adc_rm16_imm8])),
+        ("sub", BTreeSet::from([Code::Sbb_AX_imm16, Code::Sbb_rm16_imm16, Code::Sbb_rm16_imm8])),
+        ("and", BTreeSet::from([Code::And_AX_imm16, Code::And_rm16_imm16, Code::And_rm16_imm8])),
+        ("or", BTreeSet::from([Code::Or_AX_imm16, Code::Or_rm16_imm16, Code::Or_rm16_imm8])),
+        ("xor", BTreeSet::from([Code::Xor_AX_imm16, Code::Xor_rm16_imm16, Code::Xor_rm16_imm8])),
+    ])
+});
 
 /// Direct port of `qbopt.legacy.lift.py:IMM_HIGH_HALVES`.
 pub static IMM_HIGH_HALVES: LazyLock<BTreeSet<Code>> =
@@ -202,12 +170,7 @@ pub static STORES: LazyLock<BTreeSet<Code>> =
 
 /// Register -> (pair, half), direct port of `qbopt.legacy.lift.py:HALF_OF`.
 pub static HALF_OF: LazyLock<BTreeMap<Register, (usize, usize)>> = LazyLock::new(|| {
-    BTreeMap::from([
-        (Register::AX, (0, 0)),
-        (Register::DX, (0, 1)),
-        (Register::CX, (1, 0)),
-        (Register::BX, (1, 1)),
-    ])
+    BTreeMap::from([(Register::AX, (0, 0)), (Register::DX, (0, 1)), (Register::CX, (1, 0)), (Register::BX, (1, 1))])
 });
 
 /// Direct port of `qbopt.legacy.lift.py:REDUNDANT_DS`.
@@ -224,7 +187,10 @@ pub type Resolver<'a> = dyn Fn(i64, i64) -> Addr + 'a;
 ///
 /// Direct port of `qbopt.legacy.lift.py:operand`.
 #[must_use]
-pub fn operand(insn: &Insn, resolve: &Resolver) -> Option<Addr> {
+pub fn operand(
+    insn: &Insn,
+    resolve: &Resolver,
+) -> Option<Addr> {
     let base = insn.memory_base();
     if insn.memory_index() != Register::None {
         return None;
@@ -245,11 +211,7 @@ pub fn operand(insn: &Insn, resolve: &Resolver) -> Option<Addr> {
                 return Some(resolved);
             }
         }
-        return Some(far_pointer(
-            insn.displacement(),
-            base,
-            override_,
-        ));
+        return Some(far_pointer(insn.displacement(), base, override_));
     }
     if override_ == Register::DS && !REDUNDANT_DS.contains(&base) {
         return None;
@@ -293,7 +255,10 @@ pub fn classify(insn: &Insn) -> Option<Decoded> {
 /// Production module decoding must call this explicit-resolver form rather
 /// than treating a fixup-backed field as a literal.
 #[must_use]
-pub fn classify_with(insn: &Insn, resolve: &Resolver) -> Option<Decoded> {
+pub fn classify_with(
+    insn: &Insn,
+    resolve: &Resolver,
+) -> Option<Decoded> {
     let code = insn.code();
     if LOADS.contains(&code) || STORES.contains(&code) {
         let loading = LOADS.contains(&code);
@@ -370,15 +335,7 @@ mod tests {
 
     #[test]
     fn omf_source_nodes_kind_spelling_and_order_are_python_strenum_order() {
-        let mut kinds = vec![
-            Kind::Load,
-            Kind::Store,
-            Kind::Alu,
-            Kind::Move,
-            Kind::RegAlu,
-            Kind::Not,
-            Kind::AluImm,
-        ];
+        let mut kinds = vec![Kind::Load, Kind::Store, Kind::Alu, Kind::Move, Kind::RegAlu, Kind::Not, Kind::AluImm];
         kinds.sort();
         assert_eq!(
             kinds.into_iter().map(Kind::as_str).collect::<Vec<_>>(),
@@ -414,10 +371,7 @@ mod tests {
     #[test]
     fn omf_lift_classify_operand_resolves_the_same_field_without_the_override() {
         let decoded = insn(&[0x8B, 0x06, 0x34, 0x12]);
-        assert_eq!(
-            operand(&decoded, &literal_only),
-            Some(Addr::new(Space::Literal, 0x1234))
-        );
+        assert_eq!(operand(&decoded, &literal_only), Some(Addr::new(Space::Literal, 0x1234)));
     }
 
     #[test]
@@ -432,13 +386,9 @@ mod tests {
         assert_eq!(operand(&based, &resolver), Some(based_wanted));
 
         let frame = insn(&[0x8B, 0x46, 0xE8]);
-        let no_resolver = |_field_offset: i64, _literal: i64| -> Addr {
-            panic!("bp-relative displacement is not a relocation")
-        };
-        assert_eq!(
-            operand(&frame, &no_resolver),
-            Some(Addr::new(Space::Frame, -24))
-        );
+        let no_resolver =
+            |_field_offset: i64, _literal: i64| -> Addr { panic!("bp-relative displacement is not a relocation") };
+        assert_eq!(operand(&frame, &no_resolver), Some(Addr::new(Space::Frame, -24)));
     }
 
     #[test]
@@ -448,15 +398,11 @@ mod tests {
             assert_eq!((field_offset, literal), (3, 0x1234));
             Addr::new(Space::Literal, literal as i64)
         };
-        assert_eq!(
-            operand(&direct, &direct_resolver),
-            Some(Addr::new(Space::Literal, 0x1234))
-        );
+        assert_eq!(operand(&direct, &direct_resolver), Some(Addr::new(Space::Literal, 0x1234)));
 
-        for (bytes, base) in [
-            (&[0x3E, 0x8B, 0x04][..], iced_x86::Register::SI),
-            (&[0x3E, 0x8B, 0x05][..], iced_x86::Register::DI),
-        ] {
+        for (bytes, base) in
+            [(&[0x3E, 0x8B, 0x04][..], iced_x86::Register::SI), (&[0x3E, 0x8B, 0x05][..], iced_x86::Register::DI)]
+        {
             let decoded = insn(bytes);
             let no_resolver = |_field_offset: i64, _literal: i64| -> Addr {
                 panic!("an absent displacement cannot have a relocation")
@@ -467,9 +413,8 @@ mod tests {
         }
 
         let bp = insn(&[0x3E, 0x8B, 0x46, 0xE8]);
-        let no_resolver = |_field_offset: i64, _literal: i64| -> Addr {
-            panic!("ds:[bp+disp] is refused before resolution")
-        };
+        let no_resolver =
+            |_field_offset: i64, _literal: i64| -> Addr { panic!("ds:[bp+disp] is refused before resolution") };
         assert_eq!(operand(&bp, &no_resolver), None);
     }
 
@@ -491,11 +436,7 @@ mod tests {
         let decoded = insn(&[0x26, 0x8B, 0x07]);
         assert_eq!(
             operand(&decoded, &literal_only),
-            Some(far_pointer(
-                0,
-                iced_x86::Register::BX,
-                iced_x86::Register::ES,
-            ))
+            Some(far_pointer(0, iced_x86::Register::BX, iced_x86::Register::ES,))
         );
     }
 
@@ -505,23 +446,11 @@ mod tests {
             let decoded = insn(&[0x26, 0x8B, 0x87, 0x34, 0x12]);
             let resolver = move |field_offset: i64, literal: i64| {
                 assert_eq!((field_offset, literal), (3, 0x1234));
-                Addr {
-                    space,
-                    disp: 0x40,
-                    index,
-                    base: iced_x86::Register::None,
-                    segment: iced_x86::Register::None,
-                }
+                Addr { space, disp: 0x40, index, base: iced_x86::Register::None, segment: iced_x86::Register::None }
             };
             assert_eq!(
                 operand(&decoded, &resolver),
-                Some(Addr {
-                    space,
-                    disp: 0x40,
-                    index,
-                    base: iced_x86::Register::BX,
-                    segment: iced_x86::Register::ES,
-                })
+                Some(Addr { space, disp: 0x40, index, base: iced_x86::Register::BX, segment: iced_x86::Register::ES })
             );
         }
     }
@@ -544,8 +473,7 @@ mod tests {
                     } else {
                         bytes.extend([0x5E, 0x00]);
                     }
-                    let decoded =
-                        classified(&bytes).unwrap_or_else(|| panic!("{name} base {base:02x}"));
+                    let decoded = classified(&bytes).unwrap_or_else(|| panic!("{name} base {base:02x}"));
                     assert_eq!(decoded.kind, kind);
                     assert_eq!((decoded.pair, decoded.half), (pair, half));
                     assert_eq!(decoded.dlen, dlen);
@@ -561,8 +489,7 @@ mod tests {
             for half in [0, 1] {
                 for (register, _, _) in registers {
                     let opcode = if half == 0 { low } else { high };
-                    let decoded =
-                        classified(&[opcode, 0x06 | (register << 3), 0x5E, 0x00]).unwrap();
+                    let decoded = classified(&[opcode, 0x06 | (register << 3), 0x5E, 0x00]).unwrap();
                     assert_eq!(decoded.kind, Kind::Alu);
                     assert!(decoded.alu.is_some());
                 }
@@ -572,22 +499,15 @@ mod tests {
 
     #[test]
     fn omf_lift_classify_register_to_register_requires_matching_halves() {
-        let registers = [
-            (0_u8, 0_usize, 0_usize),
-            (1_u8, 1_usize, 0_usize),
-            (2_u8, 0_usize, 1_usize),
-            (3_u8, 1_usize, 1_usize),
-        ];
+        let registers =
+            [(0_u8, 0_usize, 0_usize), (1_u8, 1_usize, 0_usize), (2_u8, 0_usize, 1_usize), (3_u8, 1_usize, 1_usize)];
         for (destination, destination_pair, destination_half) in registers {
             for (source, source_pair, source_half) in registers {
                 let decoded = classified(&[0x8B, 0xC0 | (destination << 3) | source]);
                 if destination_half == source_half {
                     let decoded = decoded.unwrap();
                     assert_eq!(decoded.kind, Kind::Move);
-                    assert_eq!(
-                        (decoded.pair, decoded.src_pair),
-                        (destination_pair, source_pair)
-                    );
+                    assert_eq!((decoded.pair, decoded.src_pair), (destination_pair, source_pair));
                 } else {
                     assert_eq!(decoded, None);
                 }

@@ -41,14 +41,21 @@ pub struct Generated {
     pub automaton: Automaton,
 }
 
-fn refused<T>(pattern: &Pattern, what: impl std::fmt::Display) -> Result<T, String> {
+fn refused<T>(
+    pattern: &Pattern,
+    what: impl std::fmt::Display,
+) -> Result<T, String> {
     Err(format!("patterns.isel:{}: pattern `{}`: {what}", pattern.line, pattern.name))
 }
 
 /// Where each operand a pattern binds is, as Rust: a root operand, or an
 /// operand of the instruction defining one.
 fn bindings(pattern: &Pattern) -> Vec<(String, String)> {
-    fn walk(operands: &[OperandPattern], at: &dyn Fn(usize) -> String, out: &mut Vec<(String, String)>) {
+    fn walk(
+        operands: &[OperandPattern],
+        at: &dyn Fn(usize) -> String,
+        out: &mut Vec<(String, String)>,
+    ) {
         for (index, one) in operands.iter().enumerate() {
             let rust = at(index);
             if let Some(name) = &one.binding {
@@ -70,7 +77,12 @@ fn names(list: &Option<Vec<String>>) -> String {
 
 /// What the automaton does not test of a pattern's operands: those past
 /// its reach, literals, and nested instructions.
-fn structure(operands: &[OperandPattern], at: &dyn Fn(usize) -> String, root: bool, terms: &mut Vec<String>) {
+fn structure(
+    operands: &[OperandPattern],
+    at: &dyn Fn(usize) -> String,
+    root: bool,
+    terms: &mut Vec<String>,
+) {
     for (index, one) in operands.iter().enumerate() {
         let rust = at(index);
         if !root || index >= parse::OPERANDS {
@@ -80,7 +92,12 @@ fn structure(operands: &[OperandPattern], at: &dyn Fn(usize) -> String, root: bo
             terms.push(format!("self.literal({rust}) == Some({literal})"));
         }
         if let Some(nested) = &one.nested {
-            terms.push(format!("self.defines({rust}, &{:?}, {}, {})", nested.opcodes, names(&nested.result), nested.operands.len()));
+            terms.push(format!(
+                "self.defines({rust}, &{:?}, {}, {})",
+                nested.opcodes,
+                names(&nested.result),
+                nested.operands.len()
+            ));
             structure(&nested.operands, &|inner| format!("self.inner({rust}, {inner})"), false, terms);
         }
     }
@@ -95,7 +112,10 @@ struct Checker<'a> {
 
 impl Checker<'_> {
     /// A MIR operand argument of a predicate, hook or cost.
-    fn argument(&self, expr: &Expr) -> Result<String, String> {
+    fn argument(
+        &self,
+        expr: &Expr,
+    ) -> Result<String, String> {
         match expr {
             Expr::Name(name) => match self.bound.iter().find(|(one, _)| one == name) {
                 Some((_, rust)) => Ok(rust.clone()),
@@ -106,7 +126,11 @@ impl Checker<'_> {
         }
     }
 
-    fn call(&self, prefix: &str, call: &Call) -> Result<String, String> {
+    fn call(
+        &self,
+        prefix: &str,
+        call: &Call,
+    ) -> Result<String, String> {
         let args: Vec<String> = call.args.iter().map(|one| self.argument(one)).collect::<Result<_, _>>()?;
         let lead = if prefix == "hook" { "m, out" } else { "m" };
         let args = std::iter::once(lead.to_owned()).chain(args).collect::<Vec<_>>().join(", ");
@@ -114,19 +138,27 @@ impl Checker<'_> {
     }
 
     /// A LIR operand: its Rust and the kinds it may be.
-    fn operand(&self, expr: &Expr) -> Result<(String, String), String> {
+    fn operand(
+        &self,
+        expr: &Expr,
+    ) -> Result<(String, String), String> {
         let (name, args) = match expr {
             Expr::Name(name) => {
                 if let Some((_, kinds)) = self.lets.iter().find(|(one, _)| one == name) {
                     return Ok((format!("{name}.clone()"), kinds.clone()));
                 }
                 if self.bound.iter().any(|(one, _)| one == name) {
-                    return refused(self.pattern, format!("`{name}` is a MIR operand; say held({name}) or source({name})"));
+                    return refused(
+                        self.pattern,
+                        format!("`{name}` is a MIR operand; say held({name}) or source({name})"),
+                    );
                 }
                 (name.as_str(), &[][..])
             }
             Expr::Call(name, args) => (name.as_str(), &args[..]),
-            Expr::Int(value) => return refused(self.pattern, format!("`{value}` is no LIR operand; say imm({value}, width)")),
+            Expr::Int(value) => {
+                return refused(self.pattern, format!("`{value}` is no LIR operand; say imm({value}, width)"));
+            }
         };
         let Some(&(_, kinds, arity)) = CONSTRUCTORS.iter().find(|(one, _, _)| *one == name) else {
             return refused(self.pattern, format!("no operand constructor `{name}`"));
@@ -140,7 +172,12 @@ impl Checker<'_> {
     }
 
     /// The forms of `name` whose operands take `dests` and `sources`.
-    fn form(&self, name: &str, dests: &[String], sources: &[String]) -> Result<&description::Form, String> {
+    fn form(
+        &self,
+        name: &str,
+        dests: &[String],
+        sources: &[String],
+    ) -> Result<&description::Form, String> {
         let forms: Vec<&description::Form> = self.forms.iter().filter(|one| one.name == name).collect();
         if forms.is_empty() {
             return refused(self.pattern, format!("x86.instr has no `{name}`"));
@@ -158,13 +195,19 @@ impl Checker<'_> {
                     && form.dests.iter().zip(dests).all(|(operand, kinds)| fits(operand, kinds))
                     && form.sources.iter().zip(sources).all(|(operand, kinds)| fits(operand, kinds))
             })
-            .map_or_else(|| refused(self.pattern, format!("x86.instr has no `{name}` taking {dests:?} <- {sources:?}")), Ok)
+            .map_or_else(
+                || refused(self.pattern, format!("x86.instr has no `{name}` taking {dests:?} <- {sources:?}")),
+                Ok,
+            )
     }
 }
 
 /// Whether the pattern holds: its structure, then its predicates -- or,
 /// for a pattern that covers, that the cover phase chose it here.
-fn condition(checker: &Checker, covering: bool) -> Result<String, String> {
+fn condition(
+    checker: &Checker,
+    covering: bool,
+) -> Result<String, String> {
     let pattern = checker.pattern;
     let mut terms = Vec::new();
     structure(&pattern.operands, &|index| format!("m.ops[{index}]"), true, &mut terms);
@@ -204,13 +247,19 @@ fn body(checker: &mut Checker) -> Result<String, String> {
                     }
                 }
                 let form = checker.form(name, &kinds.0, &kinds.1)?;
-                let operation = format!("{:?}", llrm_lir::Operation::named(&form.operation).expect("x86.instr's operations are checked"));
+                let operation = format!(
+                    "{:?}",
+                    llrm_lir::Operation::named(&form.operation).expect("x86.instr's operations are checked")
+                );
                 let (d, s) = locals.split_at(dests.len());
                 writeln!(code, "                out.push(self.emitted(m, Operation::{operation}, {name:?}, vec![{}], vec![{}], {volatile}));", d.join(", "), s.join(", ")).unwrap();
             }
             Step::Hook(call) => writeln!(code, "                {}?;", checker.call("hook", call)?).unwrap(),
             Step::Refuse(Some(message)) => writeln!(code, "                return refuse({message:?});").unwrap(),
-            Step::Refuse(None) => writeln!(code, "                return refuse(self.function.instruction(m.inst).opcode.mnemonic());").unwrap(),
+            Step::Refuse(None) => {
+                writeln!(code, "                return refuse(self.function.instruction(m.inst).opcode.mnemonic());")
+                    .unwrap()
+            }
             Step::Nothing => {}
         }
     }
@@ -219,7 +268,11 @@ fn body(checker: &mut Checker) -> Result<String, String> {
 
 /// The selector of the target `name` (`x86-m16`): its tables and a `SELECTOR`
 /// that holds them with the methods the patterns became, those named for it.
-pub fn generate(forms_text: &str, patterns_text: &str, name: &str) -> Result<Generated, String> {
+pub fn generate(
+    forms_text: &str,
+    patterns_text: &str,
+    name: &str,
+) -> Result<Generated, String> {
     let ident = name.replace('-', "_");
     let forms = description::parse(forms_text)?;
     let patterns = parse::parse(patterns_text)?;
@@ -230,13 +283,20 @@ pub fn generate(forms_text: &str, patterns_text: &str, name: &str) -> Result<Gen
     writeln!(code, "pub(super) const OPCODES: [&str; {}] = {:?};", parse::OPCODES.len(), parse::OPCODES).unwrap();
     writeln!(code, "pub(super) const TYPES: [&str; {}] = {:?};", parse::TYPES.len(), parse::TYPES).unwrap();
     writeln!(code, "pub(super) const KINDS: [&str; {}] = {:?};", parse::KINDS.len(), parse::KINDS).unwrap();
-        writeln!(code, "pub(super) const COMMUTATIVE: [&str; {}] = {:?};", patterns.commutative.len(), patterns.commutative).unwrap();
+    writeln!(
+        code,
+        "pub(super) const COMMUTATIVE: [&str; {}] = {:?};",
+        patterns.commutative.len(),
+        patterns.commutative
+    )
+    .unwrap();
     writeln!(code, "pub(super) const ROOT: Option<usize> = {:?};", automaton.root).unwrap();
     writeln!(code, "pub(super) static STATES: [State; {}] = [", automaton.states.len()).unwrap();
     for state in &automaton.states {
         match state {
             State::Test { feature, edges, default } => {
-                writeln!(code, "    State::Test {{ feature: {feature}, edges: &{edges:?}, default: {default:?} }},").unwrap();
+                writeln!(code, "    State::Test {{ feature: {feature}, edges: &{edges:?}, default: {default:?} }},")
+                    .unwrap();
             }
             State::Leaf(patterns) => writeln!(code, "    State::Leaf(&{patterns:?}),").unwrap(),
         }
@@ -248,12 +308,16 @@ pub fn generate(forms_text: &str, patterns_text: &str, name: &str) -> Result<Gen
             .patterns
             .iter()
             .map(|one| {
-                one.group.as_deref().map(|group| {
-                    if !seen.contains(&group) {
-                        seen.push(group);
-                    }
-                    seen.iter().position(|&known| known == group).expect("seen")
-                })
+                one.group
+                    .as_deref()
+                    .map(
+                        |group| {
+                            if !seen.contains(&group) {
+                                seen.push(group);
+                            }
+                            seen.iter().position(|&known| known == group).expect("seen")
+                        },
+                    )
             })
             .collect()
     };
@@ -265,7 +329,13 @@ pub fn generate(forms_text: &str, patterns_text: &str, name: &str) -> Result<Gen
         let mut checker = Checker { pattern, forms: &forms, bound: bindings(pattern), lets: Vec::new() };
         writeln!(holds, "            {index} => {},", condition(&checker, false)?).unwrap();
         if !pattern.covers.is_empty() {
-            let marks: Vec<String> = pattern.covers.iter().map(|name| checker.argument(&Expr::Name(name.clone())).map(|rust| format!("self.cover({rust}, m.inst);"))).collect::<Result<_, _>>()?;
+            let marks: Vec<String> = pattern
+                .covers
+                .iter()
+                .map(|name| {
+                    checker.argument(&Expr::Name(name.clone())).map(|rust| format!("self.cover({rust}, m.inst);"))
+                })
+                .collect::<Result<_, _>>()?;
             writeln!(covers, "            {index} => {{\n                if !({}) {{\n                    return false;\n                }}\n                {}\n            }}", condition(&checker, true)?, marks.join(" ")).unwrap();
         }
         let emit = body(&mut checker)?;
@@ -334,7 +404,8 @@ mod tests {
     use super::automaton::State;
     use super::generate;
 
-    const FORMS: &str = "add binary rm/^0,rmi 16 alu_rr - - - Add_rm{w}_r{w}\nneg unary rm/^0 16 alu_rr - - - Neg_rm{w}\n";
+    const FORMS: &str =
+        "add binary rm/^0,rmi 16 alu_rr - - - Add_rm{w}_r{w}\nneg unary rm/^0 16 alu_rr - - - Neg_rm{w}\n";
 
     fn refused(patterns: &str) -> String {
         generate(FORMS, patterns, "test").err().expect("refused")
@@ -351,7 +422,10 @@ mod tests {
         assert_eq!(refused("pattern p\n  match plus(a, b)\n  nothing\nend\n"), "patterns.isel:2: no MIR opcode `plus`");
         let cover = "pattern p\n  match add(a, b)\n  cover a\n  nothing\nend\n";
         assert_eq!(refused(cover), "patterns.isel:1: pattern `p` covers `a`, which is no instruction its match nests");
-        assert_eq!(refused("pattern p\n  match add(a, b)\nend\n"), "patterns.isel:1: pattern `p` selects nothing; say `nothing` if it means to");
+        assert_eq!(
+            refused("pattern p\n  match add(a, b)\nend\n"),
+            "patterns.isel:1: pattern `p` selects nothing; say `nothing` if it means to"
+        );
     }
 
     /// Patterns that share an opcode and a type test them once: one state
@@ -361,7 +435,9 @@ mod tests {
         let patterns = "pattern any\n  match add.i16(a, b)\n  nothing\nend\npattern zero\n  match add.i16(a, #0)\n  nothing\nend\n";
         let generated = generate(FORMS, patterns, "test").expect("generates");
         let states = &generated.automaton.states;
-        let testing = |feature: usize| states.iter().filter(|one| matches!(one, State::Test { feature: f, .. } if *f == feature)).count();
+        let testing = |feature: usize| {
+            states.iter().filter(|one| matches!(one, State::Test { feature: f, .. } if *f == feature)).count()
+        };
         assert_eq!((testing(0), testing(1)), (1, 1));
         assert_eq!(states.len(), 6, "{states:?}");
         assert!(states.contains(&State::Leaf(vec![0, 1])) && states.contains(&State::Leaf(vec![0])));
@@ -372,7 +448,8 @@ mod tests {
     #[test]
     fn each_targets_selector_has_methods_named_for_it() {
         let patterns = "pattern any\n  match add.i16(a, b)\n  nothing\nend\n";
-        let (first, second) = (generate(FORMS, patterns, "x86-m16").unwrap().code, generate(FORMS, patterns, "x86-m32").unwrap().code);
+        let (first, second) =
+            (generate(FORMS, patterns, "x86-m16").unwrap().code, generate(FORMS, patterns, "x86-m32").unwrap().code);
         assert!(first.contains("fn x86_m16_holds(") && !first.contains("x86_m32"));
         assert!(second.contains("fn x86_m32_holds(") && second.contains("name: \"x86-m32\""));
     }

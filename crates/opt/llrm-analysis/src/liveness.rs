@@ -27,10 +27,15 @@ pub struct Liveness {
 
 /// The local values an instruction reads.
 fn reads(instruction: &Instruction) -> impl Iterator<Item = ValueId> + '_ {
-    instruction.operands.iter().filter_map(|operand| match operand {
-        Operand::Value(value) => Some(*value),
-        _ => None,
-    })
+    instruction
+        .operands
+        .iter()
+        .filter_map(
+            |operand| match operand {
+                Operand::Value(value) => Some(*value),
+                _ => None,
+            },
+        )
 }
 
 fn is_phi(instruction: &Instruction) -> bool {
@@ -38,24 +43,41 @@ fn is_phi(instruction: &Instruction) -> bool {
 }
 
 /// A block's instructions: its phis, then its ordinary operations.
-fn split(function: &Function, block: BlockId) -> (Vec<&Instruction>, Vec<&Instruction>) {
+fn split(
+    function: &Function,
+    block: BlockId,
+) -> (Vec<&Instruction>, Vec<&Instruction>) {
     function.block(block).instructions().iter().map(|&one| function.instruction(one)).partition(|one| is_phi(one))
 }
 
 /// A phi's value on the edge from `predecessor`, when it is a local value.
-fn arm(phi: &Instruction, predecessor: BlockId) -> Option<ValueId> {
-    phi.operands.chunks(2).find(|pair| pair[1] == Operand::Block(predecessor)).and_then(|pair| match pair[0] {
-        Operand::Value(value) => Some(value),
-        _ => None,
-    })
+fn arm(
+    phi: &Instruction,
+    predecessor: BlockId,
+) -> Option<ValueId> {
+    phi.operands
+        .chunks(2)
+        .find(|pair| pair[1] == Operand::Block(predecessor))
+        .and_then(
+            |pair| match pair[0] {
+                Operand::Value(value) => Some(value),
+                _ => None,
+            },
+        )
 }
 
-fn _defines(function: &Function, block: BlockId) -> BTreeSet<ValueId> {
+fn _defines(
+    function: &Function,
+    block: BlockId,
+) -> BTreeSet<ValueId> {
     function.block(block).instructions().iter().filter_map(|&one| function.instruction(one).result).collect()
 }
 
 /// Values the ordinary operations read before writing.
-fn _exposed(function: &Function, block: BlockId) -> BTreeSet<ValueId> {
+fn _exposed(
+    function: &Function,
+    block: BlockId,
+) -> BTreeSet<ValueId> {
     let mut live = BTreeSet::new();
     for op in split(function, block).1.into_iter().rev() {
         if let Some(one) = op.result {
@@ -74,12 +96,21 @@ pub fn entry_values(function: &Function) -> BTreeSet<ValueId> {
 }
 
 /// The most values live at once -- anywhere, or in `inside`.
-pub fn pressure(function: &Function, found: Option<&Liveness>, inside: Option<&BTreeSet<i64>>) -> usize {
+pub fn pressure(
+    function: &Function,
+    found: Option<&Liveness>,
+    inside: Option<&BTreeSet<i64>>,
+) -> usize {
     pressure_of(function, found, inside, &|_| true)
 }
 
 /// `pressure`, counting only the values `counted` says.
-pub fn pressure_of(function: &Function, found: Option<&Liveness>, inside: Option<&BTreeSet<i64>>, counted: &dyn Fn(ValueId) -> bool) -> usize {
+pub fn pressure_of(
+    function: &Function,
+    found: Option<&Liveness>,
+    inside: Option<&BTreeSet<i64>>,
+    counted: &dyn Fn(ValueId) -> bool,
+) -> usize {
     let owned;
     let found = match found {
         Some(found) => found,
@@ -109,7 +140,11 @@ pub fn pressure_of(function: &Function, found: Option<&Liveness>, inside: Option
 
 /// The values live before each instruction of `block` but its phis, and
 /// those live across it, in order.
-pub fn live_points(function: &Function, found: &Liveness, block: BlockId) -> Vec<(InstId, BTreeSet<ValueId>, BTreeSet<ValueId>)> {
+pub fn live_points(
+    function: &Function,
+    found: &Liveness,
+    block: BlockId,
+) -> Vec<(InstId, BTreeSet<ValueId>, BTreeSet<ValueId>)> {
     let mut alive = found.live_out[&id(block)].clone();
     let mut points = Vec::new();
     for &inst in function.block(block).instructions().iter().rev() {
@@ -130,12 +165,23 @@ pub fn live_points(function: &Function, found: &Liveness, block: BlockId) -> Vec
 
 /// How many values `counted` says are live before each instruction of
 /// `block` but its phis, in order.
-pub fn pressure_points(function: &Function, found: &Liveness, block: BlockId, counted: &dyn Fn(ValueId) -> bool) -> Vec<(InstId, usize)> {
-    live_points(function, found, block).into_iter().map(|(inst, before, _)| (inst, before.iter().filter(|&&one| counted(one)).count())).collect()
+pub fn pressure_points(
+    function: &Function,
+    found: &Liveness,
+    block: BlockId,
+    counted: &dyn Fn(ValueId) -> bool,
+) -> Vec<(InstId, usize)> {
+    live_points(function, found, block)
+        .into_iter()
+        .map(|(inst, before, _)| (inst, before.iter().filter(|&&one| counted(one)).count()))
+        .collect()
 }
 
 /// The edge operands of phis whose results are actually live.
-pub fn phi_inputs(function: &Function, found: Option<&Liveness>) -> BTreeSet<ValueId> {
+pub fn phi_inputs(
+    function: &Function,
+    found: Option<&Liveness>,
+) -> BTreeSet<ValueId> {
     let owned;
     let found = match found {
         Some(found) => found,
@@ -164,7 +210,6 @@ pub fn phi_inputs(function: &Function, found: Option<&Liveness>) -> BTreeSet<Val
 }
 
 /// What is live at each block's entry and exit, to a fixed point.
-///
 thread_local! {
     static SOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -184,10 +229,14 @@ pub fn live(function: &Function) -> Liveness {
     for (_, one) in function.walk() {
         let instruction = function.instruction(one);
         for value in instruction.result.into_iter().chain(reads(instruction)) {
-            index.entry(value).or_insert_with(|| {
-                values.push(value);
-                values.len() - 1
-            });
+            index
+                .entry(value)
+                .or_insert_with(
+                    || {
+                        values.push(value);
+                        values.len() - 1
+                    },
+                );
         }
     }
     let bits = |ones: &mut dyn Iterator<Item = ValueId>| {
@@ -197,11 +246,15 @@ pub fn live(function: &Function) -> Liveness {
         }
         set
     };
-    let at_index: HashMap<BlockId, usize> = layout.iter().enumerate().map(|(position, &block)| (block, position)).collect();
-    let blocks: Vec<(Vec<&Instruction>, Vec<&Instruction>)> = layout.iter().map(|&block| split(function, block)).collect();
+    let at_index: HashMap<BlockId, usize> =
+        layout.iter().enumerate().map(|(position, &block)| (block, position)).collect();
+    let blocks: Vec<(Vec<&Instruction>, Vec<&Instruction>)> =
+        layout.iter().map(|&block| split(function, block)).collect();
 
-    let mut op_defines: Vec<Bits> = blocks.iter().map(|(_, ops)| bits(&mut ops.iter().filter_map(|op| op.result))).collect();
-    let phi_defines: Vec<Bits> = blocks.iter().map(|(phis, _)| bits(&mut phis.iter().filter_map(|phi| phi.result))).collect();
+    let mut op_defines: Vec<Bits> =
+        blocks.iter().map(|(_, ops)| bits(&mut ops.iter().filter_map(|op| op.result))).collect();
+    let phi_defines: Vec<Bits> =
+        blocks.iter().map(|(phis, _)| bits(&mut phis.iter().filter_map(|phi| phi.result))).collect();
     let mut exposed: Vec<Bits> = layout.iter().map(|&block| bits(&mut _exposed(function, block).into_iter())).collect();
     if !layout.is_empty() {
         let arriving = bits(&mut entry_values(function).into_iter());
@@ -261,10 +314,7 @@ pub fn live(function: &Function) -> Liveness {
     let sets = |found: &[Bits]| -> BTreeMap<i64, BTreeSet<ValueId>> {
         layout.iter().zip(found).map(|(&block, set)| (id(block), set.iter().map(|one| values[one]).collect())).collect()
     };
-    Liveness {
-        live_in: sets(&live_in),
-        live_out: sets(&live_out),
-    }
+    Liveness { live_in: sets(&live_in), live_out: sets(&live_out) }
 }
 
 #[cfg(test)]
@@ -275,7 +325,8 @@ mod tests {
     /// PARITYCONTROL's dead join-flag phis kept ADD/ADC live as word operations.
     #[test]
     fn test_a_dead_phi_does_not_keep_its_edge_operand_live() {
-        let module = parsed("define void @f(i16 %x) {
+        let module = parsed(
+            "define void @f(i16 %x) {
 b0:
   %incoming = add i16 %x, 1
   br label %b1
@@ -284,12 +335,14 @@ b1:
   %merged = phi i16 [ %incoming, %b0 ]
   ret void
 }
-");
+",
+        );
         let function = function(&module, "f");
         let found = live(function);
         assert!(!found.live_out[&id(block(function, "b0"))].contains(&value(function, "incoming")));
 
-        let module = parsed("define i16 @f(i16 %x) {
+        let module = parsed(
+            "define i16 @f(i16 %x) {
 b0:
   %incoming = add i16 %x, 1
   br label %b1
@@ -298,10 +351,14 @@ b1:
   %merged = phi i16 [ %incoming, %b0 ]
   ret i16 %merged
 }
-");
+",
+        );
         let function = crate::testing::function(&module, "f");
         let found = live(function);
-        assert!(found.live_out[&id(block(function, "b0"))].contains(&value(function, "incoming")), "a live phi keeps it");
+        assert!(
+            found.live_out[&id(block(function, "b0"))].contains(&value(function, "incoming")),
+            "a live phi keeps it"
+        );
     }
 
     /// `@f` and its liveness.
@@ -311,12 +368,22 @@ b1:
         (module, found)
     }
 
-    fn live_in(module: &llrm_mir::module::Module, found: &Liveness, at: &str, name: &str) -> bool {
+    fn live_in(
+        module: &llrm_mir::module::Module,
+        found: &Liveness,
+        at: &str,
+        name: &str,
+    ) -> bool {
         let f = function(module, "f");
         found.live_in[&id(block(f, at))].contains(&value(f, name))
     }
 
-    fn live_out(module: &llrm_mir::module::Module, found: &Liveness, at: &str, name: &str) -> bool {
+    fn live_out(
+        module: &llrm_mir::module::Module,
+        found: &Liveness,
+        at: &str,
+        name: &str,
+    ) -> bool {
         let f = function(module, "f");
         found.live_out[&id(block(f, at))].contains(&value(f, name))
     }
@@ -389,7 +456,8 @@ out:
 
     #[test]
     fn a_value_read_on_one_arm_of_a_diamond_is_live_only_into_that_arm() {
-        let (module, found) = facts("define i16 @f(i1 %c, i16 %x) {
+        let (module, found) = facts(
+            "define i16 @f(i1 %c, i16 %x) {
 top:
   %y = add i16 %x, 1
   br i1 %c, label %left, label %right
@@ -405,7 +473,8 @@ join:
   %r = phi i16 [ 0, %left ], [ %z, %right ]
   ret i16 %r
 }
-");
+",
+        );
         assert!(live_in(&module, &found, "right", "y"));
         assert!(!live_in(&module, &found, "left", "y"));
         assert!(!live_in(&module, &found, "join", "y"));
@@ -415,7 +484,8 @@ join:
 
     #[test]
     fn a_use_in_an_unreachable_block_keeps_nothing_live_in_the_reachable_ones() {
-        let (module, found) = facts("define i16 @f(i16 %x) {
+        let (module, found) = facts(
+            "define i16 @f(i16 %x) {
 top:
   %y = add i16 %x, 1
   ret i16 %x
@@ -423,13 +493,15 @@ top:
 dead:
   ret i16 %y
 }
-");
+",
+        );
         assert!(!live_out(&module, &found, "top", "y"));
     }
 
     #[test]
     fn a_phi_with_a_repeated_predecessor_keeps_its_input_live_on_that_edge() {
-        let (module, found) = facts("define i16 @f(i16 %s, i16 %x) {
+        let (module, found) = facts(
+            "define i16 @f(i16 %s, i16 %x) {
 top:
   %y = add i16 %x, 1
   switch i16 %s, label %join [ i16 1, label %join ]
@@ -438,7 +510,8 @@ join:
   %r = phi i16 [ %y, %top ], [ %y, %top ]
   ret i16 %r
 }
-");
+",
+        );
         assert!(live_out(&module, &found, "top", "y"));
     }
 
@@ -463,7 +536,8 @@ join:
 
     #[test]
     fn phi_inputs_are_the_edge_operands_of_live_phis_only() {
-        let module = parsed("define i16 @f(i1 %c, i16 %a, i16 %b) {
+        let module = parsed(
+            "define i16 @f(i1 %c, i16 %a, i16 %b) {
 top:
   br i1 %c, label %left, label %join
 
@@ -475,19 +549,22 @@ join:
   %unused = phi i16 [ %b, %top ], [ %b, %left ]
   ret i16 %used
 }
-");
+",
+        );
         let f = function(&module, "f");
         assert_eq!(phi_inputs(f, None), BTreeSet::from([value(f, "a")]));
     }
 
     #[test]
     fn entry_values_are_the_parameters_the_body_reads() {
-        let module = parsed("define i16 @f(i16 %read, i16 %ignored) {
+        let module = parsed(
+            "define i16 @f(i16 %read, i16 %ignored) {
 top:
   %y = add i16 %read, 1
   ret i16 %y
 }
-");
+",
+        );
         let f = function(&module, "f");
         assert_eq!(entry_values(f), BTreeSet::from([value(f, "read")]));
     }

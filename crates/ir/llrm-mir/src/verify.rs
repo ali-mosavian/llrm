@@ -2,10 +2,9 @@
 //! function, and the block or instruction at fault. `opt -passes=verify`
 //! is its oracle: `tools/mir-oracle.sh` holds the two to the same verdicts.
 
-use crate::hash::{HashMap, HashSet};
-
 use crate::context::{ConstantKind, Context};
 use crate::dominators::DominatorTree;
+use crate::hash::{HashMap, HashSet};
 use crate::intrinsics::{self, Intrinsic};
 use crate::module::{BlockId, Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef};
 use crate::opcode::{Attribute, BinaryOp, CastOp, Opcode};
@@ -33,7 +32,13 @@ pub fn verify(module: &Module) -> Vec<String> {
                     out.push(format!("@{name}: {problem}"));
                 }
             }
-            let mut checker = Checker { module, context: &module.context, function, positions: function.positions(), errors: Vec::new() };
+            let mut checker = Checker {
+                module,
+                context: &module.context,
+                function,
+                positions: function.positions(),
+                errors: Vec::new(),
+            };
             checker.function();
             out.extend(checker.errors.into_iter().map(|one| format!("@{name}: {one}")));
         }
@@ -51,24 +56,39 @@ struct Checker<'a> {
 }
 
 impl Checker<'_> {
-    fn fail(&mut self, message: String) {
+    fn fail(
+        &mut self,
+        message: String,
+    ) {
         self.errors.push(message);
     }
 
-    fn ty(&self, ty: TypeId) -> &Type {
+    fn ty(
+        &self,
+        ty: TypeId,
+    ) -> &Type {
         self.context.types.get(ty)
     }
 
-    fn show(&self, ty: TypeId) -> String {
+    fn show(
+        &self,
+        ty: TypeId,
+    ) -> String {
         self.context.types.display(ty)
     }
 
-    fn operand_type(&self, operand: Operand) -> Option<TypeId> {
+    fn operand_type(
+        &self,
+        operand: Operand,
+    ) -> Option<TypeId> {
         self.function.operand_type(self.context, operand)
     }
 
     /// The type of the intrinsic `operand` names, if it names one.
-    fn intrinsic(&self, operand: Operand) -> Option<TypeId> {
+    fn intrinsic(
+        &self,
+        operand: Operand,
+    ) -> Option<TypeId> {
         let Operand::Constant(id) = operand else { return None };
         let ConstantKind::Global(global) = self.context.get(id).kind else { return None };
         let global = self.module.global(global);
@@ -76,13 +96,19 @@ impl Checker<'_> {
         global.name.as_deref().is_some_and(intrinsics::is_reserved).then_some(function.ty)
     }
 
-    fn at(&self, inst: InstId) -> String {
+    fn at(
+        &self,
+        inst: InstId,
+    ) -> String {
         let block = self.function.parent(inst).map_or("?".to_owned(), |block| self.block_name(block));
         let mnemonic = self.function.instruction(inst).opcode.mnemonic();
         format!("{mnemonic} in {block}")
     }
 
-    fn block_name(&self, block: BlockId) -> String {
+    fn block_name(
+        &self,
+        block: BlockId,
+    ) -> String {
         self.function.block(block).name.clone().map_or_else(|| format!("block {}", block.0), |name| format!("%{name}"))
     }
 
@@ -101,7 +127,8 @@ impl Checker<'_> {
                 if ranges.is_empty() {
                     self.fail("Attribute 'initializes' does not support empty list".to_owned());
                 }
-                let ordered = ranges.iter().all(|(lower, upper)| lower < upper) && ranges.windows(2).all(|pair| pair[0].1 < pair[1].0);
+                let ordered = ranges.iter().all(|(lower, upper)| lower < upper)
+                    && ranges.windows(2).all(|pair| pair[0].1 < pair[1].0);
                 if !ordered {
                     self.fail("Attribute 'initializes' does not support unordered ranges".to_owned());
                 }
@@ -109,13 +136,21 @@ impl Checker<'_> {
         }
         for record in function.debug_records() {
             if function.is_erased(record.before) || function.parent(record.before).is_none() {
-                self.fail(format!("a debug record of !{} stands before instruction {}, which is no longer in the function", record.variable.0, record.before.0));
+                self.fail(format!(
+                    "a debug record of !{} stands before instruction {}, which is no longer in the function",
+                    record.variable.0, record.before.0
+                ));
             }
-            if let crate::module::DebugWhat::Declare(Operand::Value(value)) | crate::module::DebugWhat::Value(Operand::Value(value)) | crate::module::DebugWhat::Piece { value: Operand::Value(value), .. } = record.what
+            if let crate::module::DebugWhat::Declare(Operand::Value(value))
+            | crate::module::DebugWhat::Value(Operand::Value(value))
+            | crate::module::DebugWhat::Piece { value: Operand::Value(value), .. } = record.what
                 && let ValueDef::Instruction(defining) = function.value(value).def
                 && function.is_erased(defining)
             {
-                self.fail(format!("a debug record of !{} names a value of erased instruction {}", record.variable.0, defining.0));
+                self.fail(format!(
+                    "a debug record of !{} names a value of erased instruction {}",
+                    record.variable.0, defining.0
+                ));
             }
         }
         if function.is_declaration() {
@@ -138,12 +173,18 @@ impl Checker<'_> {
         }
     }
 
-    fn block(&mut self, block: BlockId, entry: bool) {
+    fn block(
+        &mut self,
+        block: BlockId,
+        entry: bool,
+    ) {
         let list = self.function.block(block).instructions();
         let name = self.block_name(block);
         match list.last() {
             None => return self.fail(format!("{name} is empty")),
-            Some(&last) if !self.function.instruction(last).opcode.is_terminator() => self.fail(format!("{name} does not end in a terminator")),
+            Some(&last) if !self.function.instruction(last).opcode.is_terminator() => {
+                self.fail(format!("{name} does not end in a terminator"))
+            }
             _ => {}
         }
         let mut phis_over = false;
@@ -156,7 +197,9 @@ impl Checker<'_> {
                 Opcode::Phi if phis_over => self.fail(format!("{name} has a phi after its first other instruction")),
                 Opcode::Phi if entry => self.fail("the entry block has a phi".to_owned()),
                 Opcode::Phi => {}
-                Opcode::LandingPad { .. } if phis_over => self.fail(format!("{name}'s landingpad is not its first instruction after phis")),
+                Opcode::LandingPad { .. } if phis_over => {
+                    self.fail(format!("{name}'s landingpad is not its first instruction after phis"))
+                }
                 _ => phis_over = true,
             }
             if let Opcode::LandingPad { .. } = opcode {
@@ -168,7 +211,10 @@ impl Checker<'_> {
 
     /// Each phi has one input per edge into its block, and inputs from one
     /// block agree, as LLVM requires.
-    fn phi_inputs(&mut self, block: BlockId) {
+    fn phi_inputs(
+        &mut self,
+        block: BlockId,
+    ) {
         let mut edges: HashMap<BlockId, usize> = HashMap::default();
         for one in self.function.block_users(block) {
             let user = self.function.instruction(one.user);
@@ -192,9 +238,17 @@ impl Checker<'_> {
             let name = self.block_name(block);
             for (from, values) in &inputs {
                 if !edges.contains_key(from) {
-                    self.fail(format!("a phi in {name} has an input from {}, which does not branch there", self.block_name(*from)));
+                    self.fail(format!(
+                        "a phi in {name} has an input from {}, which does not branch there",
+                        self.block_name(*from)
+                    ));
                 } else if values.len() != edges[from] {
-                    self.fail(format!("a phi in {name} has {} inputs from {} for {} edges", values.len(), self.block_name(*from), edges[from]));
+                    self.fail(format!(
+                        "a phi in {name} has {} inputs from {} for {} edges",
+                        values.len(),
+                        self.block_name(*from),
+                        edges[from]
+                    ));
                 } else if values.iter().any(|one| *one != values[0]) {
                     self.fail(format!("a phi in {name} has different inputs from {}", self.block_name(*from)));
                 }
@@ -207,7 +261,11 @@ impl Checker<'_> {
         }
     }
 
-    fn dominance(&mut self, tree: &DominatorTree, inst: InstId) {
+    fn dominance(
+        &mut self,
+        tree: &DominatorTree,
+        inst: InstId,
+    ) {
         let instruction = self.function.instruction(inst);
         let is_phi = instruction.opcode == Opcode::Phi;
         for (index, operand) in instruction.operands.iter().enumerate() {
@@ -222,7 +280,8 @@ impl Checker<'_> {
                 let Some(Operand::Block(from)) = instruction.operands.get(index + 1) else { continue };
                 self.function.parent(def).is_some_and(|block| tree.dominates(block, *from))
             } else {
-                def != inst && tree.instruction_dominates_at(self.function, def, inst, &self.positions) || !self.function.parent(inst).is_some_and(|one| tree.is_reachable(one))
+                def != inst && tree.instruction_dominates_at(self.function, def, inst, &self.positions)
+                    || !self.function.parent(inst).is_some_and(|one| tree.is_reachable(one))
             };
             if !dominated {
                 self.fail(format!("{} uses a value whose definition does not dominate it", self.at(inst)));
@@ -230,7 +289,11 @@ impl Checker<'_> {
         }
     }
 
-    fn instruction(&mut self, inst: InstId, returns: TypeId) {
+    fn instruction(
+        &mut self,
+        inst: InstId,
+        returns: TypeId,
+    ) {
         let function = self.function;
         let instruction = function.instruction(inst);
         let types: Vec<Option<TypeId>> = instruction.operands.iter().map(|one| self.operand_type(*one)).collect();
@@ -243,8 +306,20 @@ impl Checker<'_> {
                 self.fail(format!("{at}: Cannot take the address of an intrinsic!"));
             }
         }
-        let is_int = |checker: &Self, ty: TypeId| matches!(checker.ty(ty), Type::Int(_)) || matches!(checker.ty(ty), Type::Vector { element, .. } if matches!(checker.ty(*element), Type::Int(_)));
-        let is_float = |checker: &Self, ty: TypeId| matches!(checker.ty(ty), Type::Float(_)) || matches!(checker.ty(ty), Type::Vector { element, .. } if matches!(checker.ty(*element), Type::Float(_)));
+        let is_int = |checker: &Self, ty: TypeId| {
+            matches!(checker.ty(ty), Type::Int(_))
+                || matches!(
+                    checker.ty(ty),
+                    Type::Vector { element, .. } if matches!(checker.ty(*element), Type::Int(_))
+                )
+        };
+        let is_float = |checker: &Self, ty: TypeId| {
+            matches!(checker.ty(ty), Type::Float(_))
+                || matches!(
+                    checker.ty(ty),
+                    Type::Vector { element, .. } if matches!(checker.ty(*element), Type::Float(_))
+                )
+        };
         let is_pointer = |checker: &Self, ty: TypeId| matches!(checker.ty(ty), Type::Pointer(_));
         match &instruction.opcode {
             Opcode::Ret => match (instruction.operands.first(), self.context.types.is_void(returns)) {
@@ -256,16 +331,25 @@ impl Checker<'_> {
                 if ty(0) != ty(1) || ty(0) != result {
                     self.fail(format!("{at} mixes types"));
                 } else {
-                    let floating = matches!(op, BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv | BinaryOp::FRem);
+                    let floating = matches!(
+                        op,
+                        BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv | BinaryOp::FRem
+                    );
                     if floating && !is_float(self, result) || !floating && !is_int(self, result) {
                         self.fail(format!("{at} on {}", self.show(result)));
                     }
                 }
             }
             Opcode::FNeg if !is_float(self, ty(0)) => self.fail(format!("{at} on {}", self.show(ty(0)))),
-            Opcode::ICmp(_) if ty(0) != ty(1) || !(is_int(self, ty(0)) || is_pointer(self, ty(0))) => self.fail(format!("{at} compares {} with {}", self.show(ty(0)), self.show(ty(1)))),
-            Opcode::FCmp(_) if ty(0) != ty(1) || !is_float(self, ty(0)) => self.fail(format!("{at} compares {} with {}", self.show(ty(0)), self.show(ty(1)))),
-            Opcode::Select if ty(1) != ty(2) || ty(1) != result || !matches!(self.ty(ty(0)), Type::Int(1)) => self.fail(format!("{at} is ill-typed")),
+            Opcode::ICmp(_) if ty(0) != ty(1) || !(is_int(self, ty(0)) || is_pointer(self, ty(0))) => {
+                self.fail(format!("{at} compares {} with {}", self.show(ty(0)), self.show(ty(1))))
+            }
+            Opcode::FCmp(_) if ty(0) != ty(1) || !is_float(self, ty(0)) => {
+                self.fail(format!("{at} compares {} with {}", self.show(ty(0)), self.show(ty(1))))
+            }
+            Opcode::Select if ty(1) != ty(2) || ty(1) != result || !matches!(self.ty(ty(0)), Type::Int(1)) => {
+                self.fail(format!("{at} is ill-typed"))
+            }
             Opcode::Cast(op) => {
                 if let Err(why) = self.cast(*op, ty(0), result) {
                     self.fail(format!("{at}: {why}"));
@@ -275,7 +359,9 @@ impl Checker<'_> {
                 let mut seen = HashSet::default();
                 for pair in instruction.operands[2..].chunks(2) {
                     if let Operand::Constant(case) = pair[0] {
-                        if self.context.get(case).ty != ty(0) || !matches!(self.context.get(case).kind, ConstantKind::Int(_)) {
+                        if self.context.get(case).ty != ty(0)
+                            || !matches!(self.context.get(case).kind, ConstantKind::Int(_))
+                        {
                             self.fail(format!("{at} has a case of another type"));
                         }
                         if !seen.insert(case) {
@@ -291,11 +377,16 @@ impl Checker<'_> {
                 if !is_pointer(self, ty(0)) {
                     self.fail(format!("{at} loads through {}", self.show(ty(0))));
                 }
-                if matches!(self.ty(result), Type::Void | Type::Label | Type::Function { .. } | Type::Metadata | Type::Token) {
+                if matches!(
+                    self.ty(result),
+                    Type::Void | Type::Label | Type::Function { .. } | Type::Metadata | Type::Token
+                ) {
                     self.fail(format!("{at} loads a {}", self.show(result)));
                 }
             }
-            Opcode::Store { .. } if !is_pointer(self, ty(1)) => self.fail(format!("{at} stores through {}", self.show(ty(1)))),
+            Opcode::Store { .. } if !is_pointer(self, ty(1)) => {
+                self.fail(format!("{at} stores through {}", self.show(ty(1))))
+            }
             Opcode::Alloca { address_space, .. } => {
                 if let Some(count) = types.first().copied().flatten()
                     && !is_int(self, count)
@@ -321,7 +412,11 @@ impl Checker<'_> {
                 }
                 for (index, parameter) in parameters.iter().enumerate().take(arguments) {
                     if ty(index) != *parameter {
-                        self.fail(format!("{at} passes {} as parameter {index}, a {}", self.show(ty(index)), self.show(*parameter)));
+                        self.fail(format!(
+                            "{at} passes {} as parameter {index}, a {}",
+                            self.show(ty(index)),
+                            self.show(*parameter)
+                        ));
                     }
                 }
                 if let Some(declared) = self.intrinsic(callee)
@@ -330,18 +425,29 @@ impl Checker<'_> {
                     self.fail(format!("{at}: Intrinsic called with incompatible signature"));
                 }
                 if call_returns != result {
-                    self.fail(format!("{at} returns {}, not its type's {}", self.show(result), self.show(call_returns)));
+                    self.fail(format!(
+                        "{at} returns {}, not its type's {}",
+                        self.show(result),
+                        self.show(call_returns)
+                    ));
                 }
                 if invoke {
                     self.invoke(inst, &at);
                 }
             }
-            Opcode::LandingPad { .. } if self.function.personality.is_none() => self.fail(format!("{at} in a function without a personality")),
+            Opcode::LandingPad { .. } if self.function.personality.is_none() => {
+                self.fail(format!("{at} in a function without a personality"))
+            }
             _ => {}
         }
     }
 
-    fn cast(&self, op: CastOp, from: TypeId, to: TypeId) -> Result<(), String> {
+    fn cast(
+        &self,
+        op: CastOp,
+        from: TypeId,
+        to: TypeId,
+    ) -> Result<(), String> {
         let (a, b) = (self.ty(from), self.ty(to));
         let ok = match (op, a, b) {
             (CastOp::Trunc, Type::Int(x), Type::Int(y)) => y < x,
@@ -354,9 +460,8 @@ impl Checker<'_> {
             (CastOp::IntToPtr, Type::Int(_), Type::Pointer(_)) => true,
             (CastOp::AddrSpaceCast, Type::Pointer(x), Type::Pointer(y)) => x != y,
             (CastOp::BitCast, Type::Pointer(x), Type::Pointer(y)) => x == y,
-            (CastOp::BitCast, Type::Int(bits), Type::Float(kind)) | (CastOp::BitCast, Type::Float(kind), Type::Int(bits)) => {
-                *bits == crate::datalayout::float_bits(*kind)
-            }
+            (CastOp::BitCast, Type::Int(bits), Type::Float(kind))
+            | (CastOp::BitCast, Type::Float(kind), Type::Int(bits)) => *bits == crate::datalayout::float_bits(*kind),
             (CastOp::BitCast, x, y) => x == y && matches!(x, Type::Int(_) | Type::Float(_)),
             _ => false,
         };
@@ -364,7 +469,12 @@ impl Checker<'_> {
     }
 
     /// Struct indices are constant `i32`s, and each index steps into its type.
-    fn gep(&mut self, inst: InstId, source: TypeId, at: &str) {
+    fn gep(
+        &mut self,
+        inst: InstId,
+        source: TypeId,
+        at: &str,
+    ) {
         let instruction = self.function.instruction(inst);
         let base = self.operand_type(instruction.operands[0]).expect("a value");
         let Type::Pointer(space) = *self.ty(base) else { return self.fail(format!("{at} steps from a non-pointer")) };
@@ -384,10 +494,14 @@ impl Checker<'_> {
                 Type::Array { element, .. } | Type::Vector { element, .. } => element,
                 Type::Struct { .. } | Type::Named(_) => {
                     let constant = match index {
-                        Operand::Constant(id) if *self.ty(index_ty) == Type::Int(32) => self.context.get(id).kind.clone(),
+                        Operand::Constant(id) if *self.ty(index_ty) == Type::Int(32) => {
+                            self.context.get(id).kind.clone()
+                        }
                         _ => return self.fail(format!("{at} indexes a struct with other than a constant i32")),
                     };
-                    let ConstantKind::Int(field) = constant else { return self.fail(format!("{at} indexes a struct with a non-integer")) };
+                    let ConstantKind::Int(field) = constant else {
+                        return self.fail(format!("{at} indexes a struct with a non-integer"));
+                    };
                     match self.context.types.member(current, field as u64) {
                         Some(member) => member,
                         None => return self.fail(format!("{at} indexes past its struct")),
@@ -399,11 +513,23 @@ impl Checker<'_> {
     }
 
     /// The unwind destination begins with a landingpad, after its phis.
-    fn invoke(&mut self, inst: InstId, at: &str) {
+    fn invoke(
+        &mut self,
+        inst: InstId,
+        at: &str,
+    ) {
         let operands = &self.function.instruction(inst).operands;
         let Operand::Block(unwind) = operands[operands.len() - 2] else { return };
-        let first = self.function.block(unwind).instructions().iter().find(|&&one| self.function.instruction(one).opcode != Opcode::Phi);
-        if !first.is_some_and(|&one| matches!(self.function.instruction(one).opcode, Opcode::LandingPad { .. })) {
+        let first = self
+            .function
+            .block(unwind)
+            .instructions()
+            .iter()
+            .find(|&&one| self.function.instruction(one).opcode != Opcode::Phi);
+        if !first.is_some_and(|&one| matches!(
+            self.function.instruction(one).opcode,
+            Opcode::LandingPad { .. }
+        )) {
             self.fail(format!("{at} unwinds to {}, which does not begin with a landingpad", self.block_name(unwind)));
         }
         if self.function.personality.is_none() {

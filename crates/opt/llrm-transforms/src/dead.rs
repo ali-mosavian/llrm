@@ -3,13 +3,11 @@
 //! `_removable`).
 //!
 //! What changed with the IR:
-//! - What stays whatever reads it (`_kept`: the old observed kinds, stores
-//!   and barriers) is what `llrm_mir::memory::only_value` says is more than
-//!   a value. A call with no effect that returns goes; the old MIR kept
-//!   every call.
+//! - What stays whatever reads it (`_kept`: the old observed kinds, stores and barriers) is what
+//!   `llrm_mir::memory::only_value` says is more than a value. A call with no effect that returns goes; the old MIR
+//!   kept every call.
 //! - A removed operation left an empty byte-owning marker; here it goes.
-//! - Phis go after the operations, so a phi only dead work read goes in the
-//!   same run rather than the next.
+//! - Phis go after the operations, so a phi only dead work read goes in the same run rather than the next.
 //!
 //! Dropped, no rich MIR analogue: `_overwritten_locally` and the limited
 //! mode it served (an opaque or barrier operation reading registers its
@@ -38,7 +36,11 @@ impl FunctionPass for Dead {
         "dead"
     }
 
-    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         if dead(unit.context, analyses.outer().callees(), unit.function) {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
@@ -49,7 +51,11 @@ impl FunctionPass for Dead {
 
 /// Instructions whose results nothing that stays reads, removed. Whether
 /// any went.
-pub fn dead(context: &mut Context, callees: &Callees, function: &mut Function) -> bool {
+pub fn dead(
+    context: &mut Context,
+    callees: &Callees,
+    function: &mut Function,
+) -> bool {
     let markers = _unneeded_markers(context, callees, function);
     for &marker in &markers {
         function.erase(marker).expect("a call with no result");
@@ -58,7 +64,9 @@ pub fn dead(context: &mut Context, callees: &Callees, function: &mut Function) -
     let gone = function
         .walk()
         .map(|(_, inst)| inst)
-        .filter(|&inst| function.instruction(inst).opcode != Opcode::Phi && _removable(context, callees, function, inst, &alive))
+        .filter(|&inst| {
+            function.instruction(inst).opcode != Opcode::Phi && _removable(context, callees, function, inst, &alive)
+        })
         .collect::<Vec<_>>();
     // Only the dead read the dead, and phis `pruned_phis` drops next.
     for &inst in &gone {
@@ -76,24 +84,45 @@ pub fn dead(context: &mut Context, callees: &Callees, function: &mut Function) -
 
 /// The lifetime markers of an object nothing else that stays reads: only
 /// the markers kept it, and they say nothing of a thing nobody uses.
-fn _unneeded_markers(context: &Context, callees: &Callees, function: &Function) -> Vec<InstId> {
+fn _unneeded_markers(
+    context: &Context,
+    callees: &Callees,
+    function: &Function,
+) -> Vec<InstId> {
     let marker = |inst: InstId| memory::lifetime(context, callees, function, inst).is_some();
     let alive = crate::transform::live_except(context, callees, function, marker);
     function
         .walk()
         .map(|(_, inst)| inst)
-        .filter(|&inst| matches!(memory::lifetime(context, callees, function, inst), Some(Operand::Value(object)) if !alive.contains(&object)))
+        .filter(|&inst| {
+            matches!(
+                memory::lifetime(context, callees, function, inst),
+                Some(Operand::Value(object)) if !alive.contains(&object)
+            )
+        })
         .collect()
 }
 
 /// Whether `inst` stays whatever reads it.
-pub fn _kept(context: &Context, callees: &Callees, function: &Function, inst: InstId) -> bool {
+pub fn _kept(
+    context: &Context,
+    callees: &Callees,
+    function: &Function,
+    inst: InstId,
+) -> bool {
     !memory::only_value(context, callees, function, inst)
 }
 
 /// Whether anything at all would notice `inst` going.
-pub fn _removable(context: &Context, callees: &Callees, function: &Function, inst: InstId, alive: &BTreeSet<ValueId>) -> bool {
-    !_kept(context, callees, function, inst) && function.instruction(inst).result.is_none_or(|result| !alive.contains(&result))
+pub fn _removable(
+    context: &Context,
+    callees: &Callees,
+    function: &Function,
+    inst: InstId,
+    alive: &BTreeSet<ValueId>,
+) -> bool {
+    !_kept(context, callees, function, inst)
+        && function.instruction(inst).result.is_none_or(|result| !alive.contains(&result))
 }
 
 #[cfg(test)]
@@ -108,7 +137,10 @@ pub fn assumptions_dropped(module: &mut llrm_mir::Module) {
         .globals
         .iter()
         .enumerate()
-        .filter(|(_, global)| global.name.as_deref().and_then(llrm_mir::intrinsics::Intrinsic::named) == Some(llrm_mir::intrinsics::Intrinsic::Assume))
+        .filter(|(_, global)| {
+            global.name.as_deref().and_then(llrm_mir::intrinsics::Intrinsic::named)
+                == Some(llrm_mir::intrinsics::Intrinsic::Assume)
+        })
         .map(|(at, _)| llrm_mir::GlobalId(at as u32))
         .collect::<BTreeSet<_>>();
     if assumes.is_empty() {
@@ -118,7 +150,13 @@ pub fn assumptions_dropped(module: &mut llrm_mir::Module) {
     let llrm_mir::Module { context, globals, .. } = module;
     for global in globals.iter_mut() {
         let llrm_mir::GlobalKind::Function(function) = &mut global.kind else { continue };
-        let calls = function.walk().map(|(_, inst)| inst).filter(|&inst| llrm_mir::memory::callee(context, function, inst).is_some_and(|callee| assumes.contains(&callee))).collect::<Vec<_>>();
+        let calls = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .filter(|&inst| {
+                llrm_mir::memory::callee(context, function, inst).is_some_and(|callee| assumes.contains(&callee))
+            })
+            .collect::<Vec<_>>();
         for inst in calls {
             function.erase(inst).expect("a call of void is read by nothing");
         }

@@ -9,13 +9,22 @@ use crate::analysis::intervals::Interval;
 pub type Color = (i64, u32, Vec<Interval>);
 
 /// Whether `color` can also hold something of `capacity` bytes live over `interval`.
-pub fn fits(color: &Color, interval: &Interval, capacity: u32) -> bool {
+pub fn fits(
+    color: &Color,
+    interval: &Interval,
+    capacity: u32,
+) -> bool {
     color.1 >= capacity && color.2.iter().all(|other| !interval.overlaps(other))
 }
 
 /// The slot to put something in: one of the homes `partners` names that fits,
 /// else the first that does; none where a new slot is needed.
-pub fn choose(colors: &[Color], interval: &Interval, capacity: u32, partners: &[i64]) -> Option<usize> {
+pub fn choose(
+    colors: &[Color],
+    interval: &Interval,
+    capacity: u32,
+    partners: &[i64],
+) -> Option<usize> {
     partners
         .iter()
         .find_map(|home| colors.iter().position(|one| one.0 == *home && fits(one, interval, capacity)))

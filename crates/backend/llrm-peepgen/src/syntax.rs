@@ -211,10 +211,16 @@ pub struct File {
     pub groups: Vec<Group>,
 }
 
-const PUNCT: [&str; 23] =
-    ["...", "..", "@", "$", "#", ":", ",", ";", "(", ")", "[", "]", "{", "}", "|", "&", "-", "=", "/", "*", ".", "!", "?"];
+const PUNCT: [&str; 23] = [
+    "...", "..", "@", "$", "#", ":", ",", ";", "(", ")", "[", "]", "{", "}", "|", "&", "-", "=", "/", "*", ".", "!",
+    "?",
+];
 
-fn lex(text: &str, line: usize, file: &str) -> Result<Vec<Tok>, String> {
+fn lex(
+    text: &str,
+    line: usize,
+    file: &str,
+) -> Result<Vec<Tok>, String> {
     let mut out = Vec::new();
     let mut rest = text;
     while let Some(first) = rest.chars().next() {
@@ -256,7 +262,10 @@ struct Parser<'a> {
 }
 
 impl Parser<'_> {
-    fn error<T>(&self, message: impl std::fmt::Display) -> Result<T, String> {
+    fn error<T>(
+        &self,
+        message: impl std::fmt::Display,
+    ) -> Result<T, String> {
         Err(format!("{}:{}: {message}", self.file, self.line))
     }
 
@@ -264,15 +273,24 @@ impl Parser<'_> {
         self.toks.get(self.at)
     }
 
-    fn peek_at(&self, ahead: usize) -> Option<&Tok> {
+    fn peek_at(
+        &self,
+        ahead: usize,
+    ) -> Option<&Tok> {
         self.toks.get(self.at + ahead)
     }
 
-    fn is(&self, punct: &str) -> bool {
+    fn is(
+        &self,
+        punct: &str,
+    ) -> bool {
         matches!(self.peek(), Some(Tok::Punct(one)) if *one == punct)
     }
 
-    fn eat(&mut self, punct: &str) -> bool {
+    fn eat(
+        &mut self,
+        punct: &str,
+    ) -> bool {
         let found = self.is(punct);
         if found {
             self.at += 1;
@@ -280,7 +298,10 @@ impl Parser<'_> {
         found
     }
 
-    fn expect(&mut self, punct: &str) -> Result<(), String> {
+    fn expect(
+        &mut self,
+        punct: &str,
+    ) -> Result<(), String> {
         if self.eat(punct) { Ok(()) } else { self.error(format!("expected '{punct}', found {}", self.describe())) }
     }
 
@@ -305,7 +326,10 @@ impl Parser<'_> {
         }
     }
 
-    fn keyword(&mut self, word: &str) -> bool {
+    fn keyword(
+        &mut self,
+        word: &str,
+    ) -> bool {
         let found = matches!(self.peek(), Some(Tok::Ident(one)) if one == word);
         if found {
             self.at += 1;
@@ -324,7 +348,10 @@ impl Parser<'_> {
         }
     }
 
-    fn slot(&mut self, sigil: &str) -> Result<usize, String> {
+    fn slot(
+        &mut self,
+        sigil: &str,
+    ) -> Result<usize, String> {
         self.expect(sigil)?;
         usize::try_from(self.int()?).or_else(|_| self.error("a position is not negative"))
     }
@@ -629,7 +656,10 @@ struct Clause {
     toks: Vec<Tok>,
 }
 
-pub fn parse(source: &str, file: &str) -> Result<File, String> {
+pub fn parse(
+    source: &str,
+    file: &str,
+) -> Result<File, String> {
     // Stanzas: (header line, header tokens, clauses).
     let mut stanzas: Vec<(usize, Vec<Tok>, Vec<Clause>)> = Vec::new();
     for (index, raw) in source.lines().enumerate() {
@@ -708,7 +738,9 @@ pub fn parse(source: &str, file: &str) -> Result<File, String> {
                     match clause(keyword).as_slice() {
                         [] => Ok(None),
                         [one] => Ok(Some(*one)),
-                        [_, second, ..] => Err(format!("{file}:{}: rule {name} has two {keyword} clauses", second.line)),
+                        [_, second, ..] => {
+                            Err(format!("{file}:{}: rule {name} has two {keyword} clauses", second.line))
+                        }
                     }
                 };
                 let Some(matched) = single("match")? else {
@@ -773,7 +805,9 @@ fn walk(p: &mut Parser) -> Result<Walk, String> {
                     other => return p.error(format!("unknown skip {other}; meta, inert or nothing")),
                 };
             }
-            "advance" if kind == WalkKind::Slide => made.advance = usize::try_from(p.int()?).or_else(|_| p.error("advance"))?,
+            "advance" if kind == WalkKind::Slide => {
+                made.advance = usize::try_from(p.int()?).or_else(|_| p.error("advance"))?
+            }
             "first" if kind == WalkKind::Gap => {
                 if !p.keyword("original") {
                     return p.error("expected 'first original'");

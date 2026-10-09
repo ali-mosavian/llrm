@@ -18,7 +18,11 @@ fn fold(module: &mut Module) -> bool {
 
 /// `body` folded, and then its dead work gone when `clean`: its text, and
 /// that it computes what it did.
-fn folded_text(body: &str, inputs: &[&[i128]], clean: bool) -> String {
+fn folded_text(
+    body: &str,
+    inputs: &[&[i128]],
+    clean: bool,
+) -> String {
     let mut module = parsed(&format!("{DOS}{body}"));
     let before = results(&module, inputs);
     fold(&mut module);
@@ -63,8 +67,15 @@ b0:
             false,
         );
         match expected {
-            Some(constant) => assert!(text.contains(&format!("store {ty} {constant}, ptr @g")) && text.contains(&format!("ret {ty} {constant}")), "{text}"),
-            None => assert!(text.contains(&format!("store {ty} %y, ptr @g")) && text.contains(&format!("ret {ty} %r")), "{text}"),
+            Some(constant) => assert!(
+                text.contains(&format!("store {ty} {constant}, ptr @g"))
+                    && text.contains(&format!("ret {ty} {constant}")),
+                "{text}"
+            ),
+            None => assert!(
+                text.contains(&format!("store {ty} %y, ptr @g")) && text.contains(&format!("ret {ty} %r")),
+                "{text}"
+            ),
         }
     }
 }
@@ -233,7 +244,10 @@ b0:
 ";
 
 /// `module` through `pass`, `Summaries` required, printed.
-pub(crate) fn summarized(module: &mut Module, pass: impl llrm_mir::passes::FunctionPass + 'static) -> String {
+pub(crate) fn summarized(
+    module: &mut Module,
+    pass: impl llrm_mir::passes::FunctionPass + 'static,
+) -> String {
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.require::<llrm_analysis::manager::Summaries>();
     manager.add(pass);
@@ -254,7 +268,9 @@ fn test_a_float_cell_is_kept_across_a_call_that_cannot_write_it() {
 /// inlined away.
 fn through_the_pipeline(body: &str) -> String {
     use llrm_mir::program::Program;
-    let text = format!("{DOS}define internal double @f(double %x) {{\nb1:\n{body}\n}}\n\ndefine double @main(double %x) {{\nb0:\n  %r = call double @f(double %x)\n  ret double %r\n}}\n");
+    let text = format!(
+        "{DOS}define internal double @f(double %x) {{\nb1:\n{body}\n}}\n\ndefine double @main(double %x) {{\nb0:\n  %r = call double @f(double %x)\n  ret double %r\n}}\n"
+    );
     let mut module = parsed(&text);
     Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
         program.exports.entries.insert("main".to_owned());
@@ -280,12 +296,21 @@ fn test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation()
     };
     // arcp
     let arcp = said("  %r = fdiv arcp double %x, 3.0\n  ret double %r");
-    assert!(arcp.contains("fmul arcp double %0, 0x3FD5555555555555") || arcp.contains("fmul arcp double %x, 0x3FD5555555555555"), "{arcp}");
+    assert!(
+        arcp.contains("fmul arcp double %0, 0x3FD5555555555555")
+            || arcp.contains("fmul arcp double %x, 0x3FD5555555555555"),
+        "{arcp}"
+    );
     stays("  %r = fdiv double %x, 3.0\n  ret double %r", "fdiv double");
     // reassoc, both operations
-    let chain = |first: &str, second: &str| format!("  %a = fadd {first} double %x, 1.0\n  %r = fadd {second} double %a, 2.0\n  ret double %r");
+    let chain = |first: &str, second: &str| {
+        format!("  %a = fadd {first} double %x, 1.0\n  %r = fadd {second} double %a, 2.0\n  ret double %r")
+    };
     let both = said(&chain("reassoc", "reassoc"));
-    assert!(both.contains("fadd reassoc double") && both.contains("3.000000e+00") && both.matches("fadd").count() == 1, "{both}");
+    assert!(
+        both.contains("fadd reassoc double") && both.contains("3.000000e+00") && both.matches("fadd").count() == 1,
+        "{both}"
+    );
     assert_eq!(said(&chain("reassoc", "")).matches("fadd").count(), 2);
     assert_eq!(said(&chain("", "reassoc")).matches("fadd").count(), 2);
     // nsz

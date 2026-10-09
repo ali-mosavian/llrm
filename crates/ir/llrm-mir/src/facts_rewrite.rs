@@ -46,7 +46,10 @@ impl Fact {
     /// The fact that holds of the one instruction two stated instructions
     /// are folded into, where `self` was stated of one and `other` of the
     /// other. `None` where nothing is promised of both.
-    pub fn merged(self, other: Fact) -> Option<Fact> {
+    pub fn merged(
+        self,
+        other: Fact,
+    ) -> Option<Fact> {
         match (self, other) {
             (Fact::Dereferenceable(a), Fact::Dereferenceable(b)) => Some(Fact::Dereferenceable(a.min(b))),
             (Fact::Align(a), Fact::Align(b)) => Some(Fact::Align(a.min(b))),
@@ -61,7 +64,10 @@ impl Fact {
     }
 
     /// The weaker of two memory effects: what either may do, if that is one of them.
-    fn effects(a: Effect, b: Effect) -> Option<Effect> {
+    fn effects(
+        a: Effect,
+        b: Effect,
+    ) -> Option<Effect> {
         match (a, b) {
             (a, b) if a == b => Some(a),
             (Effect::None, other) | (other, Effect::None) => Some(other),
@@ -112,7 +118,10 @@ impl Fact {
 
 impl Facts {
     /// What two stated sets both promise, at the weaker value of each.
-    pub fn merged(&self, other: &Facts) -> Facts {
+    pub fn merged(
+        &self,
+        other: &Facts,
+    ) -> Facts {
         let mut kept = Vec::new();
         for fact in self.iter() {
             let shared = other.iter().filter_map(|one| fact.merged(one)).next();
@@ -139,15 +148,21 @@ mod tests {
     /// `add nsw` with a plain `add` is a plain `add`.
     #[test]
     fn a_merge_keeps_only_what_both_promised_at_the_weaker_value() {
-        let both = facts(&[Fact::NoSignedWrap, Fact::NoUnsignedWrap, Fact::Dereferenceable(8), Fact::Memory(Effect::None)]);
+        let both =
+            facts(&[Fact::NoSignedWrap, Fact::NoUnsignedWrap, Fact::Dereferenceable(8), Fact::Memory(Effect::None)]);
         let other = facts(&[Fact::NoSignedWrap, Fact::Dereferenceable(4), Fact::Memory(Effect::Read)]);
         let merged = both.merged(&other);
         assert!(merged.no_signed_wrap() && !merged.no_unsigned_wrap());
         assert_eq!(merged.dereferenceable(), Some(4));
         assert_eq!(merged.memory(), Some(Effect::Read));
-        assert_eq!(facts(&[Fact::NoSignedWrap]).merged(&facts(&[])).iter().count(), 0, "one side's promise alone is not kept");
+        assert_eq!(
+            facts(&[Fact::NoSignedWrap]).merged(&facts(&[])).iter().count(),
+            0,
+            "one side's promise alone is not kept"
+        );
         assert_eq!(facts(&[Fact::Memory(Effect::Read)]).merged(&facts(&[Fact::Memory(Effect::Write)])).memory(), None);
-        let hull = facts(&[Fact::Range(Bounds { lo: 0, hi: 3 })]).merged(&facts(&[Fact::Range(Bounds { lo: 2, hi: 9 })]));
+        let hull =
+            facts(&[Fact::Range(Bounds { lo: 0, hi: 3 })]).merged(&facts(&[Fact::Range(Bounds { lo: 2, hi: 9 })]));
         assert_eq!(hull.range(), Some(Bounds { lo: 0, hi: 9 }), "a merged range is the hull");
     }
 
@@ -164,9 +179,11 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 7] = ["induction.rs", "memory.rs", "gepoffset.rs", "isel.rs", "interpret.rs", "mir.rs", "pointerfacts.rs"];
+        const CHECKED: [&str; 7] =
+            ["induction.rs", "memory.rs", "gepoffset.rs", "isel.rs", "interpret.rs", "mir.rs", "pointerfacts.rs"];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let reads = ["no_signed_wrap()", "no_unsigned_wrap()", "in_bounds()", "Flags::NSW", "Flags::NUW", "Flags::INBOUNDS"];
+        let reads =
+            ["no_signed_wrap()", "no_unsigned_wrap()", "in_bounds()", "Flags::NSW", "Flags::NUW", "Flags::INBOUNDS"];
         let mut found = Vec::new();
         let mut directories = vec![root];
         while let Some(directory) = directories.pop() {
@@ -177,7 +194,14 @@ mod tests {
                     if !matches!(name.as_str(), "target" | "tests" | "fixtures") {
                         directories.push(path);
                     }
-                } else if name.ends_with(".rs") && !name.contains("test") && !CHECKED.contains(&name.as_str()) && !matches!(name.as_str(), "facts.rs" | "facts_rewrite.rs" | "parse.rs" | "print.rs" | "opcode.rs" | "edit.rs") {
+                } else if name.ends_with(".rs")
+                    && !name.contains("test")
+                    && !CHECKED.contains(&name.as_str())
+                    && !matches!(
+                        name.as_str(),
+                        "facts.rs" | "facts_rewrite.rs" | "parse.rs" | "print.rs" | "opcode.rs" | "edit.rs"
+                    )
+                {
                     let text = std::fs::read_to_string(&path).expect("source");
                     let source = text.split("#[cfg(test)]").next().unwrap_or_default();
                     if reads.iter().any(|read| source.contains(read)) {

@@ -10,7 +10,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use iced_x86::Register;
-use crate::support::hash::IndexMap;
 
 use crate::analysis::intervals::{self as ranges, Indexes, Segment};
 use crate::analysis::loops;
@@ -18,10 +17,14 @@ use crate::backend::spillplacement::{self, Border, Constraint};
 use crate::backend::{allocate, spiller};
 use crate::model::ir::{self, Held, Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::support::hash::IndexMap;
 
 /// Carve spilled address operands -- base, index, selector -- into the
 /// natural loops that reuse them.
-pub fn loop_bases(body: &LirBody, values: &BTreeSet<u32>) -> (LirBody, BTreeSet<u32>) {
+pub fn loop_bases(
+    body: &LirBody,
+    values: &BTreeSet<u32>,
+) -> (LirBody, BTreeSet<u32>) {
     if values.is_empty() {
         return (body.clone(), BTreeSet::new());
     }
@@ -43,10 +46,10 @@ pub fn loop_bases(body: &LirBody, values: &BTreeSet<u32>) -> (LirBody, BTreeSet<
                         .filter_map(|one| one.what.as_ref())
                         .flat_map(|what| what.dests.iter().chain(&what.sources))
                         .any(|place| {
-                            matches!(place, Loc::Mem(cell) if [cell.base, cell.index, cell.selector]
-                                .iter()
-                                .flatten()
-                                .any(|operand| operand.value == **value))
+                            matches!(
+                                place,
+                                Loc::Mem(cell) if [cell.base, cell.index, cell.selector] .iter() .flatten() .any(|operand| operand.value == **value)
+                            )
                         })
             })
             .map(|(value, _found)| *value)
@@ -68,12 +71,18 @@ pub fn loop_bases(body: &LirBody, values: &BTreeSet<u32>) -> (LirBody, BTreeSet<
     (result, kept)
 }
 
-/// `_references` of each of `values`, found in one pass over the body: the scan for each of d values over a body of d levels was d squared a loop.
-fn _references_of(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, IndexMap<i64, Vec<usize>>> {
-    let mut out: IndexMap<u32, IndexMap<i64, Vec<usize>>> = values.iter().map(|value| (*value, IndexMap::default())).collect();
+/// `_references` of each of `values`, found in one pass over the body: the scan for each of d values over a body of d
+/// levels was d squared a loop.
+fn _references_of(
+    body: &LirBody,
+    values: &BTreeSet<u32>,
+) -> IndexMap<u32, IndexMap<i64, Vec<usize>>> {
+    let mut out: IndexMap<u32, IndexMap<i64, Vec<usize>>> =
+        values.iter().map(|value| (*value, IndexMap::default())).collect();
     for block in &body.blocks {
         for (position, one) in block.insns.iter().enumerate() {
-            let mut named = one.defines.iter().chain(&one.uses).filter(|value| values.contains(value)).collect::<Vec<_>>();
+            let mut named =
+                one.defines.iter().chain(&one.uses).filter(|value| values.contains(value)).collect::<Vec<_>>();
             named.sort_unstable();
             named.dedup();
             for value in named {
@@ -92,7 +101,10 @@ fn _references_of(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Index
 
 /// Per block, the positions in it that name this value: what `_references_of` is held to.
 #[cfg(test)]
-fn _references(body: &LirBody, value: u32) -> IndexMap<i64, Vec<usize>> {
+fn _references(
+    body: &LirBody,
+    value: u32,
+) -> IndexMap<i64, Vec<usize>> {
     let mut out = IndexMap::default();
     for block in &body.blocks {
         let found: Vec<usize> = block
@@ -119,7 +131,10 @@ pub struct Region {
 
 impl Region {
     /// These blocks, whole.
-    pub fn blocks(body: &LirBody, blocks: impl IntoIterator<Item = i64>) -> Self {
+    pub fn blocks(
+        body: &LirBody,
+        blocks: impl IntoIterator<Item = i64>,
+    ) -> Self {
         let length: IndexMap<i64, usize> = body.blocks.iter().map(|block| (block.at, block.insns.len())).collect();
         let mut out = Self::default();
         for at in blocks {
@@ -128,7 +143,12 @@ impl Region {
         out
     }
 
-    pub fn add(&mut self, block: i64, from: usize, to: usize) {
+    pub fn add(
+        &mut self,
+        block: i64,
+        from: usize,
+        to: usize,
+    ) {
         let ranges = self.spans.entry(block).or_default();
         ranges.push((from, to));
         ranges.sort_unstable();
@@ -147,21 +167,35 @@ impl Region {
     }
 
     /// Whether the piece holds the value as control enters `block`.
-    pub fn enters(&self, block: i64) -> bool {
+    pub fn enters(
+        &self,
+        block: i64,
+    ) -> bool {
         self.spans.get(&block).is_some_and(|ranges| ranges.first().is_some_and(|one| one.0 == 0))
     }
 
     /// Whether the piece holds the value as control leaves `block`.
-    pub fn leaves(&self, block: &LirBlock) -> bool {
+    pub fn leaves(
+        &self,
+        block: &LirBlock,
+    ) -> bool {
         self.spans.get(&block.at).is_some_and(|ranges| ranges.last().is_some_and(|one| one.1 == block.insns.len()))
     }
 
-    fn covers(&self, block: i64, position: usize) -> bool {
+    fn covers(
+        &self,
+        block: i64,
+        position: usize,
+    ) -> bool {
         self.spans.get(&block).is_some_and(|ranges| ranges.iter().any(|(from, to)| *from <= position && position < *to))
     }
 
     /// The slots the piece spans, as `intervals::indexed` numbers them.
-    pub fn segments(&self, body: &LirBody, index: &Indexes) -> Vec<Segment> {
+    pub fn segments(
+        &self,
+        body: &LirBody,
+        index: &Indexes,
+    ) -> Vec<Segment> {
         let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
         let mut out = Vec::new();
         for (at, ranges) in &self.spans {
@@ -176,7 +210,10 @@ impl Region {
     }
 
     /// This region in a body `carved_moving` changed.
-    pub fn moved(&self, moved: &Moved) -> Self {
+    pub fn moved(
+        &self,
+        moved: &Moved,
+    ) -> Self {
         let mut out = Self::default();
         for (at, ranges) in &self.spans {
             for (from, to) in ranges {
@@ -192,20 +229,33 @@ impl Region {
     /// Ranges that start where control only enters from outside begin at
     /// their first reference; ranges that end where it only leaves stop
     /// after their last. The copies are the same; the piece is shorter.
-    pub fn trimmed(&self, body: &LirBody, value: u32) -> Self {
+    pub fn trimmed(
+        &self,
+        body: &LirBody,
+        value: u32,
+    ) -> Self {
         let graph = crate::analysis::graph::Graph::of(body);
         let mut out = Self::default();
         for block in &body.blocks {
             let Some(ranges) = self.spans.get(&block.at) else { continue };
-            let named: Vec<usize> =
-                (0..block.insns.len()).filter(|at| block.insns[*at].defines.contains(&value) || block.insns[*at].uses.contains(&value)).collect();
+            let named: Vec<usize> = (0..block.insns.len())
+                .filter(|at| block.insns[*at].defines.contains(&value) || block.insns[*at].uses.contains(&value))
+                .collect();
             let outside_in = block.at != body.entry
-                && graph.position.get(&block.at).is_none_or(|at| graph.parents[*at].iter().all(|parent| !self.leaves(&body.blocks[*parent])));
+                && graph
+                    .position
+                    .get(&block.at)
+                    .is_none_or(|at| graph.parents[*at].iter().all(|parent| !self.leaves(&body.blocks[*parent])));
             let outside_out = block.succ.iter().all(|next| !self.enters(*next));
             for (index, (from, to)) in ranges.iter().copied().enumerate() {
                 let inner: Vec<usize> = named.iter().copied().filter(|at| from <= *at && *at < to).collect();
-                let from = if index == 0 && from == 0 && outside_in { inner.first().copied().unwrap_or(to) } else { from };
-                let to = if index == ranges.len() - 1 && to == block.insns.len() && outside_out { inner.last().map_or(from, |last| last + 1) } else { to };
+                let from =
+                    if index == 0 && from == 0 && outside_in { inner.first().copied().unwrap_or(to) } else { from };
+                let to = if index == ranges.len() - 1 && to == block.insns.len() && outside_out {
+                    inner.last().map_or(from, |last| last + 1)
+                } else {
+                    to
+                };
                 if from < to {
                     out.add(block.at, from, to);
                 }
@@ -215,7 +265,10 @@ impl Region {
     }
 
     /// Ranges widened to whole parallel groups: a copy never lands inside one.
-    fn snapped(&self, body: &LirBody) -> Self {
+    fn snapped(
+        &self,
+        body: &LirBody,
+    ) -> Self {
         let mut out = Self::default();
         for block in &body.blocks {
             let Some(ranges) = self.spans.get(&block.at) else { continue };
@@ -252,14 +305,23 @@ pub enum Crossing {
 /// it enters (a copy into the piece) or leaves (a copy back). A piece that
 /// never writes the value still equals it, so leaving needs no copy.
 /// `carved` places these copies and `_benefit` prices them: one fact.
-pub fn crossings(body: &LirBody, value: u32, region: &Region, live: &dyn allocate::LiveAt) -> Vec<(Crossing, bool)> {
-    let written = body.blocks.iter().any(|block| {
-        region.spans.get(&block.at).is_some_and(|ranges| {
-            ranges.iter().any(|(from, to)| block.insns[*from..*to].iter().any(|one| one.defines.contains(&value)))
-        })
-    });
+pub fn crossings(
+    body: &LirBody,
+    value: u32,
+    region: &Region,
+    live: &dyn allocate::LiveAt,
+) -> Vec<(Crossing, bool)> {
+    let written = body
+        .blocks
+        .iter()
+        .any(
+            |block| region.spans.get(&block.at).is_some_and(|ranges| {
+                ranges.iter().any(|(from, to)| block.insns[*from..*to].iter().any(|one| one.defines.contains(&value)))
+            }),
+        );
     let mut out = Vec::new();
-    // The phis a block's successor arrives with, found by the successor's address: a scan of every block for each edge was the square of the blocks.
+    // The phis a block's successor arrives with, found by the successor's address: a scan of every block for each edge
+    // was the square of the blocks.
     let graph = crate::analysis::graph::Graph::of(body);
     for block in &body.blocks {
         if let Some(ranges) = region.spans.get(&block.at) {
@@ -277,21 +339,29 @@ pub fn crossings(body: &LirBody, value: u32, region: &Region, live: &dyn allocat
         for next in &block.succ {
             let entering = region.enters(*next);
             let across = live.live_in(*next, value)
-                || graph.position.get(next).is_some_and(|at| body.blocks[*at].phis.iter().any(|phi| phi.incoming.contains(&(block.at, value))));
+                || graph.position.get(next).is_some_and(|at| {
+                    body.blocks[*at].phis.iter().any(|phi| phi.incoming.contains(&(block.at, value)))
+                });
             if leaving != entering && across && (entering || written) {
                 out.push((Crossing::Edge { from: block.at, to: *next }, entering));
             }
         }
     }
     let entry = body.blocks.iter().find(|block| block.at == body.entry);
-    if region.enters(body.entry) && entry.is_some_and(|block| live.live_in(block.at, value) && !block.arrives().contains(&value)) {
+    if region.enters(body.entry)
+        && entry.is_some_and(|block| live.live_in(block.at, value) && !block.arrives().contains(&value))
+    {
         out.push((Crossing::Inside { block: body.entry, position: 0 }, true));
     }
     out
 }
 
 /// Whether `value` is live just before each position of `block`, and at its end.
-fn _live_before(block: &LirBlock, value: u32, out: bool) -> Vec<bool> {
+fn _live_before(
+    block: &LirBlock,
+    value: u32,
+    out: bool,
+) -> Vec<bool> {
     let mut before = vec![out; block.insns.len() + 1];
     let mut live = out;
     let mut index = block.insns.len();
@@ -316,7 +386,13 @@ fn _live_before(block: &LirBlock, value: u32, out: bool) -> Vec<bool> {
 /// at the end of a source with one successor, else at the start of a target
 /// every predecessor of which needs the same copy, else in a new block on
 /// the edge.
-pub fn carved(body: &LirBody, value: u32, fresh: u32, width: u32, region: &Region) -> Option<LirBody> {
+pub fn carved(
+    body: &LirBody,
+    value: u32,
+    fresh: u32,
+    width: u32,
+    region: &Region,
+) -> Option<LirBody> {
     carved_moving(body, value, fresh, width, region).map(|(cut, _moved)| cut)
 }
 
@@ -325,14 +401,25 @@ pub type Moved = IndexMap<i64, Vec<usize>>;
 
 /// `carved`, and where it moved every instruction, for regions planned
 /// on `body` still to be carved.
-pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region: &Region) -> Option<(LirBody, Moved)> {
+pub fn carved_moving(
+    body: &LirBody,
+    value: u32,
+    fresh: u32,
+    width: u32,
+    region: &Region,
+) -> Option<(LirBody, Moved)> {
     // Trimming to the references can end a range inside a parallel group; snap last.
     let region = region.trimmed(body, value).snapped(body);
-    let referenced = body.blocks.iter().any(|block| {
-        region.spans.get(&block.at).is_some_and(|ranges| {
-            ranges.iter().any(|(from, to)| block.insns[*from..*to].iter().any(|one| one.defines.contains(&value) || one.uses.contains(&value)))
-        })
-    });
+    let referenced = body
+        .blocks
+        .iter()
+        .any(
+            |block| region.spans.get(&block.at).is_some_and(|ranges| {
+                ranges.iter().any(|(from, to)| {
+                    block.insns[*from..*to].iter().any(|one| one.defines.contains(&value) || one.uses.contains(&value))
+                })
+            }),
+        );
     if !referenced {
         return None;
     }
@@ -344,8 +431,12 @@ pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region:
     // (block, position) -> copies before it; usize::MAX is before the terminator.
     let mut inserted: BTreeMap<(i64, usize), Vec<bool>> = BTreeMap::new();
     let mut bridges: Vec<(i64, i64, bool)> = Vec::new();
-    let edges: Vec<(i64, i64, bool)> =
-        found.iter().filter_map(|(at, entering)| if let Crossing::Edge { from, to } = at { Some((*from, *to, *entering)) } else { None }).collect();
+    let edges: Vec<(i64, i64, bool)> = found
+        .iter()
+        .filter_map(
+            |(at, entering)| if let Crossing::Edge { from, to } = at { Some((*from, *to, *entering)) } else { None },
+        )
+        .collect();
     for (at, entering) in &found {
         if let Crossing::Inside { block, position } = at {
             inserted.entry((*block, *position)).or_default().push(*entering);
@@ -416,8 +507,10 @@ pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region:
             }
         }
         moved.insert(block.at, shift);
-        // A block nothing was put in and no instruction of which changed is the block it was: the facts held of it stand.
-        let same = insns.len() == block.insns.len() && insns.iter().zip(block.insns.iter()).all(|(made, was)| Arc::ptr_eq(made, was));
+        // A block nothing was put in and no instruction of which changed is the block it was: the facts held of it
+        // stand.
+        let same = insns.len() == block.insns.len()
+            && insns.iter().zip(block.insns.iter()).all(|(made, was)| Arc::ptr_eq(made, was));
         blocks.push(if same { block.clone() } else { block.with_insns(insns) });
     }
     let mut by_at: IndexMap<i64, LirBlock> = blocks.iter().map(|block| (block.at, block.clone())).collect();
@@ -444,7 +537,10 @@ pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region:
             .collect();
         by_at.insert(
             source,
-            LirBlock { succ: original.succ.iter().map(|one| if *one == outside { bridge } else { *one }).collect(), ..original.with_insns(rewritten) },
+            LirBlock {
+                succ: original.succ.iter().map(|one| if *one == outside { bridge } else { *one }).collect(),
+                ..original.with_insns(rewritten)
+            },
         );
         let mut jump = Insn::new(
             beside.at,
@@ -454,7 +550,10 @@ pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region:
             Vec::new(),
         );
         jump.call = beside.call.clone();
-        made.push(LirBlock { succ: vec![outside], ..LirBlock::new(bridge, vec![copy(&beside, entering), Arc::new(jump)]) });
+        made.push(LirBlock {
+            succ: vec![outside],
+            ..LirBlock::new(bridge, vec![copy(&beside, entering), Arc::new(jump)])
+        });
         // A phi in the target now arrives from the bridge.
         if let Some(target) = by_at.get_mut(&outside) {
             for phi in &mut target.phis {
@@ -481,7 +580,12 @@ fn _terminates(one: &Insn) -> bool {
 }
 
 /// A move that claims none of the original bytes.
-fn _copy(beside: &Insn, into: u32, out_of: u32, width: u32) -> Arc<Insn> {
+fn _copy(
+    beside: &Insn,
+    into: u32,
+    out_of: u32,
+    width: u32,
+) -> Arc<Insn> {
     let at = beside.covers.map_or(beside.at, |covers| covers.0);
     let mut made = Insn::new(
         beside.at,
@@ -524,7 +628,10 @@ fn _widths(body: &LirBody) -> IndexMap<u32, u32> {
     out
 }
 
-fn _renamed(one: &Arc<Insn>, rename: &IndexMap<u32, u32>) -> Arc<Insn> {
+fn _renamed(
+    one: &Arc<Insn>,
+    rename: &IndexMap<u32, u32>,
+) -> Arc<Insn> {
     if rename.is_empty() { Arc::clone(one) } else { spiller::_renamed(one, rename) }
 }
 
@@ -559,12 +666,20 @@ struct Analysis {
 }
 
 /// LLVM's `countLiveBlocks`: the blocks `value` is named in or lives through.
-pub fn live_blocks(body: &LirBody, value: u32, live: &dyn allocate::LiveAt) -> usize {
+pub fn live_blocks(
+    body: &LirBody,
+    value: u32,
+    live: &dyn allocate::LiveAt,
+) -> usize {
     let analysis = analysed(body, value, live);
     analysis.uses.len() + analysis.through.len()
 }
 
-fn analysed(body: &LirBody, value: u32, live: &dyn allocate::LiveAt) -> Analysis {
+fn analysed(
+    body: &LirBody,
+    value: u32,
+    live: &dyn allocate::LiveAt,
+) -> Analysis {
     let mut uses = Vec::new();
     let mut through = Vec::new();
     for block in &body.blocks {
@@ -598,7 +713,12 @@ pub struct Occupied<'a> {
 impl Occupied<'_> {
     /// The first and last slot inside `span` at which anything holds or
     /// destroys `register`.
-    fn interference(&self, register: Register, width: u32, span: (i64, i64)) -> Option<(i64, i64)> {
+    fn interference(
+        &self,
+        register: Register,
+        width: u32,
+        span: (i64, i64),
+    ) -> Option<(i64, i64)> {
         let whole = allocate::_whole(register);
         let inside = Segment { start: span.0, end: span.1 };
         let held = self
@@ -614,7 +734,9 @@ impl Occupied<'_> {
             .filter(|mask| {
                 span.0 <= mask.slot
                     && mask.slot < span.1
-                    && (mask.during.contains(&whole) || mask.before.contains(&whole) || (width > 2 && mask.high.contains(&whole)))
+                    && (mask.during.contains(&whole)
+                        || mask.before.contains(&whole)
+                        || (width > 2 && mask.high.contains(&whole)))
             })
             .map(|mask| (mask.slot, mask.slot));
         held.chain(destroyed).reduce(|one, other| (one.0.min(other.0), one.1.max(other.1)))
@@ -626,7 +748,11 @@ impl Occupied<'_> {
 type Blocked<'a> = &'a dyn Fn(i64) -> Option<(i64, i64)>;
 
 /// A block's interference slots as instruction positions.
-fn _positions(index: &Indexes, block: &LirBlock, slots: (i64, i64)) -> (i64, i64) {
+fn _positions(
+    index: &Indexes,
+    block: &LirBlock,
+    slots: (i64, i64),
+) -> (i64, i64) {
     (index.position(block, slots.0), index.position(block, slots.1))
 }
 
@@ -645,7 +771,12 @@ pub fn _tail(block: &LirBlock) -> usize {
 /// interference between the border and the nearest use prefers to; any
 /// other is split around inside the block. None when no bundle wants a
 /// register.
-fn _use_constraints(placement: &mut spillplacement::Placement, body: &LirBody, analysis: &Analysis, blocked: Blocked) -> Option<()> {
+fn _use_constraints(
+    placement: &mut spillplacement::Placement,
+    body: &LirBody,
+    analysis: &Analysis,
+    blocked: Blocked,
+) -> Option<()> {
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut constraints = Vec::new();
     for one in &analysis.uses {
@@ -653,11 +784,23 @@ fn _use_constraints(placement: &mut spillplacement::Placement, body: &LirBody, a
         let mut exit = if one.live_out { Border::PrefReg } else { Border::DontCare };
         if let Some((low, high)) = blocked(one.block) {
             if one.live_in {
-                entry = if low < 0 { Border::MustSpill } else if low <= one.first as i64 { Border::PrefSpill } else { entry };
+                entry = if low < 0 {
+                    Border::MustSpill
+                } else if low <= one.first as i64 {
+                    Border::PrefSpill
+                } else {
+                    entry
+                };
             }
             if one.live_out {
                 let last = _last_split(at_of[&one.block]);
-                exit = if high >= last { Border::MustSpill } else if high >= one.last as i64 { Border::PrefSpill } else { exit };
+                exit = if high >= last {
+                    Border::MustSpill
+                } else if high >= one.last as i64 {
+                    Border::PrefSpill
+                } else {
+                    exit
+                };
             }
         }
         // What a register saves here is a memory operand per reference: the
@@ -673,7 +816,12 @@ fn _use_constraints(placement: &mut spillplacement::Placement, body: &LirBody, a
 /// its bundles; one with it prefers the stack at each border, or must spill
 /// where the interference reaches the border. With no register (`blocked`
 /// is None) every through block prefers the stack, strongly.
-fn _grown(placement: &mut spillplacement::Placement, body: &LirBody, analysis: &Analysis, blocked: Option<Blocked>) -> Vec<i64> {
+fn _grown(
+    placement: &mut spillplacement::Placement,
+    body: &LirBody,
+    analysis: &Analysis,
+    blocked: Option<Blocked>,
+) -> Vec<i64> {
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut todo: BTreeSet<i64> = analysis.through.iter().copied().collect();
     let mut active: Vec<i64> = Vec::new();
@@ -719,25 +867,29 @@ fn _grown(placement: &mut spillplacement::Placement, body: &LirBody, analysis: &
 /// the interference: entering in a register, the piece holds the value
 /// until the interference or its last use; leaving in one, from the
 /// interference or its first use.
-fn _ranges_in(length: usize, entry: bool, exit: bool, named: Option<(usize, usize)>, interference: Option<(i64, i64)>) -> Vec<(usize, usize)> {
+fn _ranges_in(
+    length: usize,
+    entry: bool,
+    exit: bool,
+    named: Option<(usize, usize)>,
+    interference: Option<(i64, i64)>,
+) -> Vec<(usize, usize)> {
     let length = length as i64;
     let mut out = Vec::new();
     match interference {
         None if entry && exit => out.push((0, length)),
-        None => {
-            match named {
-                Some((first, last)) => {
-                    if entry {
-                        out.push((0, last as i64 + 1));
-                    }
-                    if exit {
-                        out.push((first as i64, length));
-                    }
+        None => match named {
+            Some((first, last)) => {
+                if entry {
+                    out.push((0, last as i64 + 1));
                 }
-                None if entry || exit => out.push((0, length)),
-                None => {}
+                if exit {
+                    out.push((first as i64, length));
+                }
             }
-        }
+            None if entry || exit => out.push((0, length)),
+            None => {}
+        },
         Some((low, high)) => {
             if entry {
                 let end = match named {
@@ -759,7 +911,14 @@ fn _ranges_in(length: usize, entry: bool, exit: bool, named: Option<(usize, usiz
 }
 
 /// What a candidate's register bundles hold, block by block.
-fn _held(placement: &spillplacement::Placement, body: &LirBody, analysis: &Analysis, through: &[i64], live: &BTreeSet<usize>, blocked: Blocked) -> Region {
+fn _held(
+    placement: &spillplacement::Placement,
+    body: &LirBody,
+    analysis: &Analysis,
+    through: &[i64],
+    live: &BTreeSet<usize>,
+    blocked: Blocked,
+) -> Region {
     let length: IndexMap<i64, usize> = body.blocks.iter().map(|block| (block.at, block.insns.len())).collect();
     let borders = |block: i64, live_in: bool, live_out: bool| {
         let (entry, exit) = placement.bundles.of[&block];
@@ -783,7 +942,13 @@ fn _held(placement: &spillplacement::Placement, body: &LirBody, analysis: &Analy
 
 /// What holding `region` in a register saves: a memory operand per
 /// reference inside it, less every copy `crossings` says carving it adds.
-fn _benefit(body: &LirBody, value: u32, region: &Region, frequency: &IndexMap<i64, f64>, live: &dyn allocate::LiveAt) -> f64 {
+fn _benefit(
+    body: &LirBody,
+    value: u32,
+    region: &Region,
+    frequency: &IndexMap<i64, f64>,
+    live: &dyn allocate::LiveAt,
+) -> f64 {
     let saved: f64 = body
         .blocks
         .iter()
@@ -807,18 +972,33 @@ fn _benefit(body: &LirBody, value: u32, region: &Region, frequency: &IndexMap<i6
 
 /// Whether holding `region` in a register saves more than its copies cost,
 /// weighing each block by its loop depth.
-pub fn pays(body: &LirBody, value: u32, region: &Region, live: &dyn allocate::LiveAt) -> bool {
-    let frequency: IndexMap<i64, f64> = ranges::depths(body).into_iter().map(|(at, depth)| (at, ranges::level(depth))).collect();
+pub fn pays(
+    body: &LirBody,
+    value: u32,
+    region: &Region,
+    live: &dyn allocate::LiveAt,
+) -> bool {
+    let frequency: IndexMap<i64, f64> =
+        ranges::depths(body).into_iter().map(|(at, depth)| (at, ranges::level(depth))).collect();
     _benefit(body, value, region, &frequency, live) > 0.0
 }
 
 /// Whether `region` holds all of `value`'s range.
-fn _whole_range(body: &LirBody, value: u32, region: &Region, live: &dyn allocate::LiveAt) -> bool {
-    body.blocks.iter().all(|block| {
-        let named = block.insns.iter().any(|one| one.defines.contains(&value) || one.uses.contains(&value));
-        let across = live.live_in(block.at, value) || live.live_out(block.at, value);
-        !(named || across) || region.spans.get(&block.at) == Some(&vec![(0, block.insns.len())])
-    })
+fn _whole_range(
+    body: &LirBody,
+    value: u32,
+    region: &Region,
+    live: &dyn allocate::LiveAt,
+) -> bool {
+    body.blocks
+        .iter()
+        .all(
+            |block| {
+                let named = block.insns.iter().any(|one| one.defines.contains(&value) || one.uses.contains(&value));
+                let across = live.live_in(block.at, value) || live.live_out(block.at, value);
+                !(named || across) || region.spans.get(&block.at) == Some(&vec![(0, block.insns.len())])
+            },
+        )
 }
 
 /// `tryRegionSplit` and `doRegionSplit`: the regions of `value` to hold in
@@ -865,7 +1045,11 @@ pub fn placed(
         if !tried.insert(allocate::_whole(*register)) {
             continue;
         }
-        let blocked = |block: i64| occupied.interference(*register, width, index.span[&block]).map(|slots| _positions(index, blocks[&block], slots));
+        let blocked = |block: i64| {
+            occupied
+                .interference(*register, width, index.span[&block])
+                .map(|slots| _positions(index, blocks[&block], slots))
+        };
         placement.prepare();
         if _use_constraints(&mut placement, body, &analysis, &blocked).is_none() {
             continue;
@@ -892,7 +1076,15 @@ pub fn placed(
 /// `tryLocalSplit`, for a value live in one block: the longest run of its
 /// references some candidate register is free across, when that is at
 /// least two and not all of them.
-pub fn local(body: &LirBody, value: u32, index: &Indexes, live: &dyn allocate::LiveAt, candidates: &[Register], occupied: &Occupied, width: u32) -> Option<Region> {
+pub fn local(
+    body: &LirBody,
+    value: u32,
+    index: &Indexes,
+    live: &dyn allocate::LiveAt,
+    candidates: &[Register],
+    occupied: &Occupied,
+    width: u32,
+) -> Option<Region> {
     let analysis = analysed(body, value, live);
     let [one] = analysis.uses.as_slice() else { return None };
     if one.live_in || one.live_out || !analysis.through.is_empty() {
@@ -912,12 +1104,19 @@ pub fn local(body: &LirBody, value: u32, index: &Indexes, live: &dyn allocate::L
         let mut start = 0;
         while start < named.len() {
             let mut end = start;
-            while end + 1 < named.len() && occupied.interference(*register, width, (slot(named[start]), index.window_end(block, named[end + 1]))).is_none() {
+            while end + 1 < named.len()
+                && occupied
+                    .interference(*register, width, (slot(named[start]), index.window_end(block, named[end + 1])))
+                    .is_none()
+            {
                 end += 1;
             }
             let count = end - start + 1;
             let span = named[end] - named[start];
-            if count >= 2 && count < named.len() && best.is_none_or(|(had, wide, _, _)| (count, Reverse(span)) > (had, Reverse(wide))) {
+            if count >= 2
+                && count < named.len()
+                && best.is_none_or(|(had, wide, _, _)| (count, Reverse(span)) > (had, Reverse(wide)))
+            {
                 best = Some((count, span, named[start], named[end] + 1));
             }
             start = end + 1;
@@ -931,7 +1130,11 @@ pub fn local(body: &LirBody, value: u32, index: &Indexes, live: &dyn allocate::L
 
 /// `tryBlockSplit`: each block naming the value at least twice holds it
 /// from its first reference to its last; the rest spills.
-pub fn per_block(body: &LirBody, value: u32, live: &dyn allocate::LiveAt) -> Vec<Region> {
+pub fn per_block(
+    body: &LirBody,
+    value: u32,
+    live: &dyn allocate::LiveAt,
+) -> Vec<Region> {
     let analysis = analysed(body, value, live);
     if analysis.uses.len() + analysis.through.len() < 2 {
         return Vec::new();
@@ -953,19 +1156,22 @@ mod tests {
     //! Port of `tests/test_splitkit.py`.
 
     use std::collections::BTreeSet;
-    use crate::support::hash::HashMap;
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use crate::support::hash::IndexMap;
 
-    use super::{carved, loop_bases, Region};
+    use super::{Region, carved, loop_bases};
+    use crate::analysis::frequency::Frequency;
     use crate::analysis::intervals::{self};
     use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
-    use crate::analysis::frequency::Frequency;
     use crate::model::lir::{BlockOdds, Insn, LirBlock, LirBody};
+    use crate::support::hash::HashMap;
+    use crate::support::hash::IndexMap;
 
-    fn held(value: u32, width: u32) -> Loc {
+    fn held(
+        value: u32,
+        width: u32,
+    ) -> Loc {
         Loc::Held(Held { value, width })
     }
 
@@ -973,36 +1179,67 @@ mod tests {
         Loc::Imm(Imm { value, width: 2, address: None })
     }
 
-    fn sem(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>, target: Option<i64>) -> Semantics {
+    fn sem(
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+        target: Option<i64>,
+    ) -> Semantics {
         Semantics { name: Some(name.to_owned()), dests, sources, target, ..Semantics::new(op) }
     }
 
-    fn _insn(at: i64, what: Semantics, defines: &[u32], uses: &[u32]) -> Arc<Insn> {
+    fn _insn(
+        at: i64,
+        what: Semantics,
+        defines: &[u32],
+        uses: &[u32],
+    ) -> Arc<Insn> {
         Arc::new(Insn::new(at, Some((at, at + 2)), Some(what), defines.to_vec(), uses.to_vec()))
     }
 
-    fn jump(at: i64, to: i64) -> Arc<Insn> {
+    fn jump(
+        at: i64,
+        to: i64,
+    ) -> Arc<Insn> {
         _insn(at, sem(Operation::Jump, "jmp", vec![], vec![], Some(to)), &[], &[])
     }
 
-    fn move_imm(at: i64, into: u32, value: i64) -> Arc<Insn> {
+    fn move_imm(
+        at: i64,
+        into: u32,
+        value: i64,
+    ) -> Arc<Insn> {
         _insn(at, sem(Operation::Move, "mov", vec![held(into, 2)], vec![imm(value)], None), &[into], &[])
     }
 
-    fn push(at: i64, value: u32) -> Arc<Insn> {
+    fn push(
+        at: i64,
+        value: u32,
+    ) -> Arc<Insn> {
         _insn(at, sem(Operation::Push, "push", vec![], vec![held(value, 2)], None), &[], &[value])
     }
 
-    fn add(at: i64, value: u32) -> Arc<Insn> {
+    fn add(
+        at: i64,
+        value: u32,
+    ) -> Arc<Insn> {
         let what = sem(Operation::Binary, "add", vec![held(value, 2)], vec![held(value, 2), imm(1)], None);
         _insn(at, what, &[value], &[value])
     }
 
-    fn block(at: i64, insns: Vec<Arc<Insn>>, succ: &[i64]) -> LirBlock {
+    fn block(
+        at: i64,
+        insns: Vec<Arc<Insn>>,
+        succ: &[i64],
+    ) -> LirBlock {
         LirBlock { succ: succ.to_vec(), ..LirBlock::new(at, insns) }
     }
 
-    fn body(name: &str, blocks: Vec<LirBlock>) -> LirBody {
+    fn body(
+        name: &str,
+        blocks: Vec<LirBlock>,
+    ) -> LirBody {
         LirBody::new(name, 0, blocks, IndexMap::default(), IndexMap::default())
     }
 
@@ -1027,7 +1264,12 @@ mod tests {
                     0x10,
                     vec![
                         add(0x10, 4),
-                        _insn(0x11, sem(Operation::Move, "mov", vec![held(6, 2)], vec![cell.clone()], None), &[6], &[3]),
+                        _insn(
+                            0x11,
+                            sem(Operation::Move, "mov", vec![held(6, 2)], vec![cell.clone()], None),
+                            &[6],
+                            &[3],
+                        ),
                         _insn(0x12, sem(Operation::Branch, "jne", vec![], vec![], Some(0x10)), &[], &[]),
                     ],
                     &[0x10, 0x20],
@@ -1044,9 +1286,10 @@ mod tests {
         )
     }
 
-    /// Carving a value out of a loop rebuilt every block of the body, so no fact held of a block outside the loop survived the carve (a
-    /// 16-deep nest's `regalloc candidates` 88 M, 21% of it this), and the references of the spilled values were each found by a pass
-    /// over the body. The blocks it did not touch are the blocks they were, and the references of all are found in one pass.
+    /// Carving a value out of a loop rebuilt every block of the body, so no fact held of a block outside the loop
+    /// survived the carve (a 16-deep nest's `regalloc candidates` 88 M, 21% of it this), and the references of the
+    /// spilled values were each found by a pass over the body. The blocks it did not touch are the blocks they
+    /// were, and the references of all are found in one pass.
     #[test]
     fn test_a_carve_leaves_the_blocks_it_did_not_touch_as_they_were_and_references_are_found_in_one_pass() {
         let body = _pointer_across_a_loop();
@@ -1060,37 +1303,76 @@ mod tests {
         }
     }
 
-    /// Carving a value out of a region walked every instruction of the body for liveness rows of that one value (and so did the pieces
-    /// a split made, to count their blocks): from where the value occurs it is the same rows, and the body is not walked.
+    /// Carving a value out of a region walked every instruction of the body for liveness rows of that one value (and so
+    /// did the pieces a split made, to count their blocks): from where the value occurs it is the same rows, and
+    /// the body is not walked.
     #[test]
     fn test_a_carve_finds_the_liveness_of_its_value_without_walking_the_body() {
         let body = _pointer_across_a_loop();
         let before = crate::backend::allocate::live_rows_walks(&body);
         let cut = carved(&body, 3, 9, 2, &region(&body, &[0x10])).expect("cut");
-        assert_eq!(crate::backend::allocate::live_rows_walks(&body), before, "the body was walked for the rows of the carved value");
-        assert_eq!(super::live_blocks(&cut, 9, &*crate::analysis::occurrences::live_among(&cut, &BTreeSet::from([9]))), super::live_blocks(&cut, 9, &crate::backend::allocate::live_rows_by(&cut, |one| one == 9)));
+        assert_eq!(
+            crate::backend::allocate::live_rows_walks(&body),
+            before,
+            "the body was walked for the rows of the carved value"
+        );
+        assert_eq!(
+            super::live_blocks(&cut, 9, &*crate::analysis::occurrences::live_among(&cut, &BTreeSet::from([9]))),
+            super::live_blocks(&cut, 9, &crate::backend::allocate::live_rows_by(&cut, |one| one == 9))
+        );
     }
 
-    /// An edge into a block whose phi takes the value from the edge's source carries the value across it, whether or not the value is
-    /// live into the block: `crossings` finds the successor's phis by its address. (It found them by a scan of every block, per edge:
-    /// the square of the blocks, 0.7 G of compiling d_faces.)
+    /// An edge into a block whose phi takes the value from the edge's source carries the value across it, whether or
+    /// not the value is live into the block: `crossings` finds the successor's phis by its address. (It found them
+    /// by a scan of every block, per edge: the square of the blocks, 0.7 G of compiling d_faces.)
     #[test]
     fn test_an_edge_into_a_phi_that_takes_the_value_is_a_crossing() {
         use crate::model::lir::Phi;
-        let mut join = block(0x20, vec![_insn(0x20, sem(Operation::Return, "ret", vec![], vec![], None), &[], &[])], &[]);
+        let mut join =
+            block(0x20, vec![_insn(0x20, sem(Operation::Return, "ret", vec![], vec![], None), &[], &[])], &[]);
         join.phis = vec![Phi { result: 7, incoming: vec![(0x10, 3), (0x0, 4)] }];
-        let body = body("phi", vec![block(0, vec![move_imm(0, 3, 1), jump(1, 0x10)], &[0x10]), block(0x10, vec![move_imm(0x10, 3, 2), jump(0x11, 0x20)], &[0x20]), join]);
-        // The region of block 0x10 writes the value and leaves for 0x20, whose phi reads it on that edge and nowhere else.
-        let found = super::crossings(&body, 3, &region(&body, &[0x10]), &crate::backend::allocate::live_rows_by(&body, |one| one == 3));
-        assert!(found.iter().any(|(at, _)| *at == super::Crossing::Edge { from: 0x10, to: 0x20 }), "no crossing on the edge whose phi takes the value: {found:?}");
+        let body = body(
+            "phi",
+            vec![
+                block(0, vec![move_imm(0, 3, 1), jump(1, 0x10)], &[0x10]),
+                block(0x10, vec![move_imm(0x10, 3, 2), jump(0x11, 0x20)], &[0x20]),
+                join,
+            ],
+        );
+        // The region of block 0x10 writes the value and leaves for 0x20, whose phi reads it on that edge and nowhere
+        // else.
+        let found = super::crossings(
+            &body,
+            3,
+            &region(&body, &[0x10]),
+            &crate::backend::allocate::live_rows_by(&body, |one| one == 3),
+        );
+        assert!(
+            found.iter().any(|(at, _)| *at == super::Crossing::Edge { from: 0x10, to: 0x20 }),
+            "no crossing on the edge whose phi takes the value: {found:?}"
+        );
     }
 
-    fn region(body: &LirBody, blocks: &[i64]) -> Region {
+    fn region(
+        body: &LirBody,
+        blocks: &[i64],
+    ) -> Region {
         Region::blocks(body, blocks.iter().copied())
     }
 
-    fn copy_in_group(at: i64, into: u32, from: u32, group: i64) -> Arc<Insn> {
-        let mut one = Insn::new(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", vec![held(into, 2)], vec![held(from, 2)], None)), vec![into], vec![from]);
+    fn copy_in_group(
+        at: i64,
+        into: u32,
+        from: u32,
+        group: i64,
+    ) -> Arc<Insn> {
+        let mut one = Insn::new(
+            at,
+            Some((at, at + 2)),
+            Some(sem(Operation::Move, "mov", vec![held(into, 2)], vec![held(from, 2)], None)),
+            vec![into],
+            vec![from],
+        );
         one.group = Some(group);
         Arc::new(one)
     }
@@ -1166,7 +1448,10 @@ mod tests {
         }
     }
 
-    fn read(values: &HashMap<u32, i64>, operand: &Loc) -> i64 {
+    fn read(
+        values: &HashMap<u32, i64>,
+        operand: &Loc,
+    ) -> i64 {
         match operand {
             Loc::Imm(one) => one.value,
             Loc::Held(one) => values[&one.value],
@@ -1182,7 +1467,10 @@ mod tests {
     }
 
     /// What the pushes along `path` write, running moves, adds and pushes.
-    fn _pushed(body: &LirBody, path: &[i64]) -> Vec<i64> {
+    fn _pushed(
+        body: &LirBody,
+        path: &[i64],
+    ) -> Vec<i64> {
         let mut values: HashMap<u32, i64> = HashMap::default();
         let mut pushed = Vec::new();
         let blocks: HashMap<i64, &LirBlock> = body.blocks.iter().map(|one| (one.at, one)).collect();
@@ -1303,20 +1591,20 @@ mod tests {
             for block in &mut moved.blocks {
                 let mut insns = block.insns.to_vec();
                 for insn in &mut insns {
-                let mut changed = (**insn).clone();
-                if let Some(what) = changed.what.as_mut() {
-                    for place in what.dests.iter_mut().chain(what.sources.iter_mut()) {
-                        if let Loc::Mem(cell) = place {
-                            let operand = cell.base.take();
-                            if role == "index" {
-                                cell.index = operand;
-                            } else {
-                                cell.selector = operand;
+                    let mut changed = (**insn).clone();
+                    if let Some(what) = changed.what.as_mut() {
+                        for place in what.dests.iter_mut().chain(what.sources.iter_mut()) {
+                            if let Loc::Mem(cell) = place {
+                                let operand = cell.base.take();
+                                if role == "index" {
+                                    cell.index = operand;
+                                } else {
+                                    cell.selector = operand;
+                                }
                             }
                         }
                     }
-                }
-                *insn = std::sync::Arc::new(changed);
+                    *insn = std::sync::Arc::new(changed);
                 }
                 block.insns = insns.into();
             }
@@ -1336,14 +1624,18 @@ mod tests {
         let mut piece = Region::default();
         piece.add(0, 2, 3);
         let third = index.at[&intervals::key(&body.blocks[0].insns[2])];
-        assert_eq!(piece.segments(&body, &index), vec![intervals::Segment { start: third, end: third + intervals::PER_INSN }]);
+        assert_eq!(
+            piece.segments(&body, &index),
+            vec![intervals::Segment { start: third, end: third + intervals::PER_INSN }]
+        );
         assert_eq!(index.position(&body.blocks[0], third + 1), 2);
     }
 
-    /// What the allocator reads of the numbering besides the order of slots: where an instruction's window ends is where the
-    /// next one's begins, a block's end is where the next block's begins, a region's end is where the next region's start
-    /// is, and a join treats segments that touch as one. A segment ending where the next instruction begins touches
-    /// one that starts there; a numbering that left a gap between windows would split them.
+    /// What the allocator reads of the numbering besides the order of slots: where an instruction's window ends is
+    /// where the next one's begins, a block's end is where the next block's begins, a region's end is where the
+    /// next region's start is, and a join treats segments that touch as one. A segment ending where the next
+    /// instruction begins touches one that starts there; a numbering that left a gap between windows would split
+    /// them.
     #[test]
     fn test_what_ends_where_the_next_begins_touches_it() {
         let marker = Arc::new(Insn::new(2, Some((2, 3)), Some(crate::model::lir::inert()), Vec::new(), Vec::new()));
@@ -1355,7 +1647,12 @@ mod tests {
         for one in &body.blocks {
             for position in 0..one.insns.len() {
                 if !one.insns[position].is_meta() {
-                    assert_eq!(index.window_end(one, position), index.slot(one, position + 1), "block {} position {position}", one.at);
+                    assert_eq!(
+                        index.window_end(one, position),
+                        index.slot(one, position + 1),
+                        "block {} position {position}",
+                        one.at
+                    );
                 }
             }
         }
@@ -1407,7 +1704,11 @@ mod tests {
     fn test_a_local_split_holds_the_references_before_the_interference() {
         let body = body(
             "one",
-            vec![block(0, vec![move_imm(0, 3, 1), add(2, 3), add(4, 3), move_imm(6, 7, 2), push(8, 3), push(10, 7)], &[])],
+            vec![block(
+                0,
+                vec![move_imm(0, 3, 1), add(2, 3), add(4, 3), move_imm(6, 7, 2), push(8, 3), push(10, 7)],
+                &[],
+            )],
         );
         let index = intervals::indexed(&body);
         let live = crate::backend::allocate::live(&body);
@@ -1533,14 +1834,21 @@ mod tests {
                 block(3, vec![ret(3)], &[]),
             ],
         );
-        for (from, to, probability) in [(0, 1, 0.5), (0, 2, 0.25), (0, 3, 0.25), (1, 2, 0.5), (1, 3, 0.5), (2, 1, 0.5), (2, 3, 0.5)] {
+        for (from, to, probability) in
+            [(0, 1, 0.5), (0, 2, 0.25), (0, 3, 0.25), (1, 2, 0.5), (1, 3, 0.5), (2, 1, 0.5), (2, 3, 0.5)]
+        {
             loopy.odds.taken.insert((from, to), (probability * BlockOdds::CERTAIN).round() as u32);
         }
         let cut = carved(&loopy, 4, 9, 2, &region(&loopy, &[1, 2])).expect("cut");
         assert!(cut.blocks.len() > loopy.blocks.len() + 1, "both edges from block 0 got a bridge");
         let (before, after) = (Frequency::of(&loopy), Frequency::of(&cut));
         for at in [1, 2, 3] {
-            assert!((before.block(at) - after.block(at)).abs() < 1e-6, "block {at}: {} bridged into {}", before.block(at), after.block(at));
+            assert!(
+                (before.block(at) - after.block(at)).abs() < 1e-6,
+                "block {at}: {} bridged into {}",
+                before.block(at),
+                after.block(at)
+            );
         }
     }
 }

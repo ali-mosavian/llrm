@@ -3,7 +3,10 @@
 
 use std::collections::BTreeSet;
 
-use crate::module::{Block, BlockId, Change, DebugRecord, DebugWhat, Function, InstId, Instruction, MetadataId, Operand, Use, ValueData, ValueDef, ValueId};
+use crate::module::{
+    Block, BlockId, Change, DebugRecord, DebugWhat, Function, InstId, Instruction, MetadataId, Operand, Use, ValueData,
+    ValueDef, ValueId,
+};
 use crate::opcode::{Flags, Opcode};
 use crate::types::{Type, TypeId};
 
@@ -34,7 +37,10 @@ impl Function {
         }
     }
 
-    fn uses_of(&mut self, operand: Operand) -> Option<&mut Vec<Use>> {
+    fn uses_of(
+        &mut self,
+        operand: Operand,
+    ) -> Option<&mut Vec<Use>> {
         match operand {
             Operand::Value(value) => Some(&mut self.value_uses[value.0 as usize]),
             Operand::Block(block) => Some(&mut self.block_uses[block.0 as usize]),
@@ -42,13 +48,21 @@ impl Function {
         }
     }
 
-    fn add_use(&mut self, operand: Operand, at: Use) {
+    fn add_use(
+        &mut self,
+        operand: Operand,
+        at: Use,
+    ) {
         if let Some(uses) = self.uses_of(operand) {
             uses.push(at);
         }
     }
 
-    fn remove_use(&mut self, operand: Operand, at: Use) {
+    fn remove_use(
+        &mut self,
+        operand: Operand,
+        at: Use,
+    ) {
         if let Some(uses) = self.uses_of(operand) {
             uses.retain(|one| *one != at);
         }
@@ -90,7 +104,10 @@ impl Function {
 
     /// `name`, or `name` with the least number appended that no live value
     /// or block of the function holds, as LLVM's symbol table makes names.
-    fn unique_name(&self, name: &str) -> String {
+    fn unique_name(
+        &self,
+        name: &str,
+    ) -> String {
         let taken = |candidate: &str| {
             self.values.iter().any(|one| one.name.as_deref() == Some(candidate))
                 || self.blocks.iter().any(|one| !one.erased && one.name.as_deref() == Some(candidate))
@@ -103,7 +120,14 @@ impl Function {
 
     /// A new instruction, placed nowhere yet; its result, if its type is not
     /// `void`, is named `name` or numbered.
-    pub fn create_instruction(&mut self, opcode: Opcode, ty: TypeId, operands: Vec<Operand>, flags: Flags, name: Option<&str>) -> InstId {
+    pub fn create_instruction(
+        &mut self,
+        opcode: Opcode,
+        ty: TypeId,
+        operands: Vec<Operand>,
+        flags: Flags,
+        name: Option<&str>,
+    ) -> InstId {
         let id = InstId(self.instructions.len() as u32);
         let result = (ty != self.void).then(|| {
             let value = ValueId(self.values.len() as u32);
@@ -121,66 +145,97 @@ impl Function {
         id
     }
 
-    fn slot(&self, position: Position) -> Result<(BlockId, usize), String> {
+    fn slot(
+        &self,
+        position: Position,
+    ) -> Result<(BlockId, usize), String> {
         match position {
             Position::End(block) => Ok((block, self.block(block).instructions.len())),
             Position::Before(next) => {
                 let block = self.parent(next).ok_or_else(|| format!("instruction {} is not placed", next.0))?;
-                let at = self.block(block).instructions.iter().position(|one| *one == next).expect("a parent holds its instruction");
+                let at = self
+                    .block(block)
+                    .instructions
+                    .iter()
+                    .position(|one| *one == next)
+                    .expect("a parent holds its instruction");
                 Ok((block, at))
             }
         }
     }
 
     /// Whatever follows `inst` in its block.
-    fn next_of(&self, block: BlockId, inst: InstId) -> Option<InstId> {
+    fn next_of(
+        &self,
+        block: BlockId,
+        inst: InstId,
+    ) -> Option<InstId> {
         let list = &self.block(block).instructions;
         list.iter().position(|one| *one == inst).and_then(|at| list.get(at + 1).copied())
     }
 
-    /// What stood before `from` now stands before `to`, ahead of what stood there: it was said earlier in the program, and where
-    /// two records of a variable stand together the last one is what the variable is.
-    fn reanchor_records(&mut self, from: InstId, to: InstId) {
-        let (moved, mut kept): (Vec<DebugRecord>, Vec<DebugRecord>) = std::mem::take(&mut self.debug_records).into_iter().partition(|one| one.before == from);
+    /// What stood before `from` now stands before `to`, ahead of what stood there: it was said earlier in the program,
+    /// and where two records of a variable stand together the last one is what the variable is.
+    fn reanchor_records(
+        &mut self,
+        from: InstId,
+        to: InstId,
+    ) {
+        let (moved, mut kept): (Vec<DebugRecord>, Vec<DebugRecord>) =
+            std::mem::take(&mut self.debug_records).into_iter().partition(|one| one.before == from);
         let at = kept.iter().position(|one| one.before == to).unwrap_or(kept.len());
         kept.splice(at..at, moved.into_iter().map(|one| DebugRecord { before: to, ..one }));
         self.debug_records = kept;
     }
 
     /// The first instruction after the phis of the block that the unconditional branch `inst` alone enters.
-    fn sole_successor_start(&self, inst: InstId) -> Option<InstId> {
+    fn sole_successor_start(
+        &self,
+        inst: InstId,
+    ) -> Option<InstId> {
         if self.instruction(inst).opcode != Opcode::Br {
             return None;
         }
         let [Operand::Block(target)] = self.instruction(inst).operands[..] else { return None };
         // A phi that names the block as where its value comes from is a use of it too, but no way in.
         // (An erase has already taken its own use of the block away.)
-        let entries: Vec<InstId> = self.block_users(target).iter().map(|one| one.user).filter(|&one| self.instruction(one).opcode != Opcode::Phi).collect();
+        let entries: Vec<InstId> = self
+            .block_users(target)
+            .iter()
+            .map(|one| one.user)
+            .filter(|&one| self.instruction(one).opcode != Opcode::Phi)
+            .collect();
         if !entries.is_empty() && entries != [inst] {
             return None;
         }
         self.block(target).instructions().iter().copied().find(|&one| self.instruction(one).opcode != Opcode::Phi)
     }
 
-    /// Takes `inst` out of its block. What was said before it is said before what followed it; with none after it, it goes with the
-    /// instruction where that is moved (`moving`: a block moved whole takes its last instruction along), else with the code, when
-    /// it is erased.
-    fn detach(&mut self, inst: InstId, moving: bool) -> Option<(BlockId, Option<InstId>)> {
+    /// Takes `inst` out of its block. What was said before it is said before what followed it; with none after it, it
+    /// goes with the instruction where that is moved (`moving`: a block moved whole takes its last instruction
+    /// along), else with the code, when it is erased.
+    fn detach(
+        &mut self,
+        inst: InstId,
+        moving: bool,
+    ) -> Option<(BlockId, Option<InstId>)> {
         let block = self.parent(inst)?;
         let next = self.next_of(block, inst);
-        // What stood before it stays where the source says it was: before what followed it. A last instruction has none to
-        // hand them to (a block is erased with its terminator): they go with it.
+        // What stood before it stays where the source says it was: before what followed it. A last instruction has none
+        // to hand them to (a block is erased with its terminator): they go with it.
         match next {
             Some(next) => self.reanchor_records(inst, next),
-            // An unconditional branch to a block nothing else enters is the end of one block and the start of the other: what was said
-            // before it is said before what the other block starts with, once the two are one.
+            // An unconditional branch to a block nothing else enters is the end of one block and the start of the
+            // other: what was said before it is said before what the other block starts with, once the two
+            // are one.
             None if moving => {}
             None if self.sole_successor_start(inst).is_some() => {
                 let start = self.sole_successor_start(inst).expect("checked");
                 self.reanchor_records(inst, start);
             }
             None => {
-                let (gone, kept): (Vec<DebugRecord>, Vec<DebugRecord>) = std::mem::take(&mut self.debug_records).into_iter().partition(|one| one.before == inst);
+                let (gone, kept): (Vec<DebugRecord>, Vec<DebugRecord>) =
+                    std::mem::take(&mut self.debug_records).into_iter().partition(|one| one.before == inst);
                 self.debug_records = kept;
                 for one in gone {
                     if !self.debug_dropped.contains(&one.variable) {
@@ -194,7 +249,11 @@ impl Function {
         Some((block, next))
     }
 
-    fn attach(&mut self, inst: InstId, position: Position) -> Result<(BlockId, Option<InstId>), String> {
+    fn attach(
+        &mut self,
+        inst: InstId,
+        position: Position,
+    ) -> Result<(BlockId, Option<InstId>), String> {
         let (block, at) = self.slot(position)?;
         if self.block(block).erased {
             return Err(format!("block {} is erased", block.0));
@@ -210,7 +269,11 @@ impl Function {
     }
 
     /// Places an instruction placed nowhere yet.
-    pub fn insert(&mut self, inst: InstId, position: Position) -> Result<(), String> {
+    pub fn insert(
+        &mut self,
+        inst: InstId,
+        position: Position,
+    ) -> Result<(), String> {
         if self.is_erased(inst) || self.parent(inst).is_some() {
             return Err(format!("instruction {} is already placed or erased", inst.0));
         }
@@ -220,7 +283,11 @@ impl Function {
     }
 
     /// Moves a placed instruction.
-    pub fn move_to(&mut self, inst: InstId, position: Position) -> Result<(), String> {
+    pub fn move_to(
+        &mut self,
+        inst: InstId,
+        position: Position,
+    ) -> Result<(), String> {
         if position == Position::Before(inst) {
             return Ok(());
         }
@@ -230,7 +297,12 @@ impl Function {
         Ok(())
     }
 
-    pub fn set_operand(&mut self, inst: InstId, index: usize, operand: Operand) {
+    pub fn set_operand(
+        &mut self,
+        inst: InstId,
+        index: usize,
+        operand: Operand,
+    ) {
         let at = Use { user: inst, index: index as u32 };
         let old = std::mem::replace(&mut self.instructions[inst.0 as usize].operands[index], operand);
         self.remove_use(old, at);
@@ -240,7 +312,11 @@ impl Function {
 
     /// Replaces all of an instruction's operands, as LLVM's
     /// `removeIncomingValue` and `addIncoming` change a phi's.
-    pub fn set_operands(&mut self, inst: InstId, operands: Vec<Operand>) {
+    pub fn set_operands(
+        &mut self,
+        inst: InstId,
+        operands: Vec<Operand>,
+    ) {
         let old = std::mem::take(&mut self.instructions[inst.0 as usize].operands);
         for (index, operand) in old.into_iter().enumerate() {
             self.remove_use(operand, Use { user: inst, index: index as u32 });
@@ -253,7 +329,10 @@ impl Function {
     }
 
     /// Makes the store `inst` not volatile.
-    pub fn make_store_plain(&mut self, inst: InstId) {
+    pub fn make_store_plain(
+        &mut self,
+        inst: InstId,
+    ) {
         if let Opcode::Store { volatile, .. } = &mut self.instructions[inst.0 as usize].opcode
             && *volatile
         {
@@ -263,7 +342,10 @@ impl Function {
     }
 
     /// Makes the store `inst` volatile.
-    pub fn make_store_volatile(&mut self, inst: InstId) {
+    pub fn make_store_volatile(
+        &mut self,
+        inst: InstId,
+    ) {
         if let Opcode::Store { volatile, .. } = &mut self.instructions[inst.0 as usize].opcode
             && !*volatile
         {
@@ -273,28 +355,45 @@ impl Function {
     }
 
     /// Replaces an instruction's flags.
-    pub fn set_flags(&mut self, inst: InstId, flags: Flags) {
+    pub fn set_flags(
+        &mut self,
+        inst: InstId,
+        flags: Flags,
+    ) {
         self.instructions[inst.0 as usize].flags = flags;
         self.log(Change::Rewritten(inst));
     }
 
-    fn replace_uses(&mut self, uses: Vec<Use>, with: Operand) {
+    fn replace_uses(
+        &mut self,
+        uses: Vec<Use>,
+        with: Operand,
+    ) {
         for one in uses {
             self.set_operand(one.user, one.index as usize, with);
         }
     }
 
-    /// Every use of `value` now reads `with`. A record that names `value` still does: a pass that rewrites the uses of a value (to
-    /// rebuild a loop around it, say) is not saying that the variable it was made of is another value, and a record is no use.
-    pub fn replace_all_uses_with(&mut self, value: ValueId, with: Operand) {
+    /// Every use of `value` now reads `with`. A record that names `value` still does: a pass that rewrites the uses of
+    /// a value (to rebuild a loop around it, say) is not saying that the variable it was made of is another value,
+    /// and a record is no use.
+    pub fn replace_all_uses_with(
+        &mut self,
+        value: ValueId,
+        with: Operand,
+    ) {
         if with != Operand::Value(value) {
             self.replace_uses(self.users(value).to_vec(), with);
         }
     }
 
-    /// As [`replace_all_uses_with`](Self::replace_all_uses_with) where `with` is `value` itself, found again (common subexpression,
-    /// a load's stored value, a constant folded to): the records that named `value` name `with`.
-    pub fn replace_value(&mut self, value: ValueId, with: Operand) {
+    /// As [`replace_all_uses_with`](Self::replace_all_uses_with) where `with` is `value` itself, found again (common
+    /// subexpression, a load's stored value, a constant folded to): the records that named `value` name `with`.
+    pub fn replace_value(
+        &mut self,
+        value: ValueId,
+        with: Operand,
+    ) {
         if with != Operand::Value(value) {
             self.retarget_debug_records(value, with);
             self.replace_uses(self.users(value).to_vec(), with);
@@ -311,21 +410,36 @@ impl Function {
         &self.debug_records
     }
 
-    /// As [`add_debug_record`](Self::add_debug_record), ahead of the records already standing before `before`: a pass that says what
-    /// the instruction before `before` made says it earlier than what the code was already told to say there.
-    pub fn add_debug_record_first(&mut self, before: InstId, variable: MetadataId, what: DebugWhat) {
+    /// As [`add_debug_record`](Self::add_debug_record), ahead of the records already standing before `before`: a pass
+    /// that says what the instruction before `before` made says it earlier than what the code was already told to
+    /// say there.
+    pub fn add_debug_record_first(
+        &mut self,
+        before: InstId,
+        variable: MetadataId,
+        what: DebugWhat,
+    ) {
         let at = self.debug_records.iter().position(|one| one.before == before).unwrap_or(self.debug_records.len());
         self.debug_records.insert(at, DebugRecord { before, variable, what });
     }
 
-    /// Says what `variable` is from just before `before` on, after the records already standing there. Nothing but the debug writers
-    /// read it.
-    pub fn add_debug_record(&mut self, before: InstId, variable: MetadataId, what: DebugWhat) {
+    /// Says what `variable` is from just before `before` on, after the records already standing there. Nothing but the
+    /// debug writers read it.
+    pub fn add_debug_record(
+        &mut self,
+        before: InstId,
+        variable: MetadataId,
+        what: DebugWhat,
+    ) {
         self.debug_records.push(DebugRecord { before, variable, what });
     }
 
     /// The records of what `value` was now say `with`.
-    fn retarget_debug_records(&mut self, value: ValueId, with: Operand) {
+    fn retarget_debug_records(
+        &mut self,
+        value: ValueId,
+        with: Operand,
+    ) {
         for record in &mut self.debug_records {
             if let DebugWhat::Declare(at) | DebugWhat::Value(at) | DebugWhat::Piece { value: at, .. } = &mut record.what
                 && *at == Operand::Value(value)
@@ -336,20 +450,35 @@ impl Function {
     }
 
     /// What named `value` says nothing now (a use of it in a record is no use, so it can go while the records stand).
-    fn forget_debug_value(&mut self, value: ValueId) {
-        // The memory a variable lived in is gone, and nothing is said of what it was: only what the variable was set to says that.
-        self.debug_records.retain(|one| !matches!(one.what, DebugWhat::Declare(at) if at == Operand::Value(value)));
+    fn forget_debug_value(
+        &mut self,
+        value: ValueId,
+    ) {
+        // The memory a variable lived in is gone, and nothing is said of what it was: only what the variable was set to
+        // says that.
+        self.debug_records.retain(|one| {
+            !matches!(
+                one.what,
+                DebugWhat::Declare(at) if at == Operand::Value(value)
+            )
+        });
         for record in &mut self.debug_records {
             match record.what {
                 DebugWhat::Value(at) if at == Operand::Value(value) => record.what = DebugWhat::Gone,
-                DebugWhat::Piece { value: at, offset, bytes } if at == Operand::Value(value) => record.what = DebugWhat::GonePiece { offset, bytes },
+                DebugWhat::Piece { value: at, offset, bytes } if at == Operand::Value(value) => {
+                    record.what = DebugWhat::GonePiece { offset, bytes }
+                }
                 _ => {}
             }
         }
     }
 
     /// Every terminator and phi naming `block` now names `with`.
-    pub fn replace_block_uses_with(&mut self, block: BlockId, with: BlockId) {
+    pub fn replace_block_uses_with(
+        &mut self,
+        block: BlockId,
+        with: BlockId,
+    ) {
         if with != block {
             self.replace_uses(self.block_users(block).to_vec(), Operand::Block(with));
         }
@@ -357,7 +486,10 @@ impl Function {
 
     /// Removes an instruction whose result nothing uses, as LLVM's
     /// `eraseFromParent` requires.
-    pub fn erase(&mut self, inst: InstId) -> Result<(), String> {
+    pub fn erase(
+        &mut self,
+        inst: InstId,
+    ) -> Result<(), String> {
         if self.is_erased(inst) {
             return Err(format!("instruction {} is already erased", inst.0));
         }
@@ -382,29 +514,53 @@ impl Function {
 
     /// Adds `attr` to the call `inst`'s argument `index`, as LLVM's
     /// `CallBase::addParamAttr`.
-    pub fn add_argument_attr(&mut self, inst: InstId, index: usize, attr: crate::opcode::Attribute) {
-        let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else { panic!("a call") };
+    pub fn add_argument_attr(
+        &mut self,
+        inst: InstId,
+        index: usize,
+        attr: crate::opcode::Attribute,
+    ) {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else {
+            panic!("a call")
+        };
         info.argument_attrs[index].push(attr);
         self.log(Change::Rewritten(inst));
     }
 
     /// Adds `attr` to the call `inst` itself, as LLVM's `CallBase::addFnAttr`.
-    pub fn add_call_attr(&mut self, inst: InstId, attr: crate::opcode::Attribute) {
-        let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else { panic!("a call") };
+    pub fn add_call_attr(
+        &mut self,
+        inst: InstId,
+        attr: crate::opcode::Attribute,
+    ) {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else {
+            panic!("a call")
+        };
         info.attrs.push(attr);
         self.log(Change::Rewritten(inst));
     }
 
     /// Gives the call `inst` calling convention `convention`.
-    pub fn set_call_convention(&mut self, inst: InstId, convention: u32) {
-        let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else { panic!("a call") };
+    pub fn set_call_convention(
+        &mut self,
+        inst: InstId,
+        convention: u32,
+    ) {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else {
+            panic!("a call")
+        };
         info.calling_convention = convention;
         self.log(Change::Rewritten(inst));
     }
 
     /// New parameters of `types` stand before parameter `at`, bare of attributes; the function's
     /// type follows.
-    pub fn insert_parameters(&mut self, context: &mut crate::context::Context, at: usize, types: &[TypeId]) -> Vec<ValueId> {
+    pub fn insert_parameters(
+        &mut self,
+        context: &mut crate::context::Context,
+        at: usize,
+        types: &[TypeId],
+    ) -> Vec<ValueId> {
         let made: Vec<ValueId> = types
             .iter()
             .map(|&ty| {
@@ -425,7 +581,11 @@ impl Function {
     }
 
     /// Parameter `at`, which nothing uses, is gone; the function's type follows.
-    pub fn remove_parameter(&mut self, context: &mut crate::context::Context, at: usize) {
+    pub fn remove_parameter(
+        &mut self,
+        context: &mut crate::context::Context,
+        at: usize,
+    ) {
         assert!(self.users(self.parameters[at]).is_empty(), "a parameter removed is unused");
         self.forget_debug_value(self.parameters[at]);
         self.track_parameters();
@@ -444,24 +604,39 @@ impl Function {
         }
     }
 
-    fn parameters_changed(&mut self, context: &mut crate::context::Context) {
+    fn parameters_changed(
+        &mut self,
+        context: &mut crate::context::Context,
+    ) {
         for (index, &parameter) in self.parameters.clone().iter().enumerate() {
             self.values[parameter.0 as usize].def = ValueDef::Argument(index as u32);
         }
-        let Type::Function { returns, variadic, .. } = context.types.get(self.ty).clone() else { panic!("a function type") };
+        let Type::Function { returns, variadic, .. } = context.types.get(self.ty).clone() else {
+            panic!("a function type")
+        };
         let parameters = self.parameters.iter().map(|&one| self.values[one.0 as usize].ty).collect();
         self.ty = context.types.intern(Type::Function { returns, parameters, variadic });
     }
 
     /// The call `inst` is made under `function_type`.
-    pub fn set_call_type(&mut self, inst: InstId, function_type: TypeId) {
+    pub fn set_call_type(
+        &mut self,
+        inst: InstId,
+        function_type: TypeId,
+    ) {
         let Opcode::Call(info) = &mut self.instructions[inst.0 as usize].opcode else { panic!("a call") };
         info.function_type = function_type;
         self.log(Change::Rewritten(inst));
     }
 
     /// The call `inst`'s argument `at` becomes `with`, as the callee's parameter did, under `function_type`.
-    pub fn replace_argument(&mut self, inst: InstId, at: usize, with: &[Operand], function_type: TypeId) {
+    pub fn replace_argument(
+        &mut self,
+        inst: InstId,
+        at: usize,
+        with: &[Operand],
+        function_type: TypeId,
+    ) {
         let mut operands = self.instructions[inst.0 as usize].operands.clone();
         operands.splice(at..=at, with.iter().copied());
         self.set_operands(inst, operands);
@@ -474,20 +649,36 @@ impl Function {
     }
 
     /// Says the access `inst` is aligned to `align` bytes; any other instruction is left as it is.
-    pub fn set_access_align(&mut self, inst: InstId, bytes: u64) {
-        let (Opcode::Load { align, .. } | Opcode::Store { align, .. }) = &mut self.instructions[inst.0 as usize].opcode else { return };
+    pub fn set_access_align(
+        &mut self,
+        inst: InstId,
+        bytes: u64,
+    ) {
+        let (Opcode::Load { align, .. } | Opcode::Store { align, .. }) = &mut self.instructions[inst.0 as usize].opcode
+        else {
+            return;
+        };
         *align = Some(bytes);
         self.log(Change::Rewritten(inst));
     }
 
     /// Attaches `node` to `inst` as metadata of `kind`.
-    pub fn annotate(&mut self, inst: InstId, kind: &str, node: MetadataId) {
+    pub fn annotate(
+        &mut self,
+        inst: InstId,
+        kind: &str,
+        node: MetadataId,
+    ) {
         self.instructions[inst.0 as usize].metadata.push((kind.to_owned(), node));
     }
 
-    /// Every metadata node the function names (on an instruction, or in a debug record) is the one `map` says it is: nodes made last
-    /// are numbered last, and the code that named them before they were made named them by a number it chose.
-    pub fn renumber_metadata(&mut self, map: &dyn Fn(MetadataId) -> MetadataId) {
+    /// Every metadata node the function names (on an instruction, or in a debug record) is the one `map` says it is:
+    /// nodes made last are numbered last, and the code that named them before they were made named them by a number
+    /// it chose.
+    pub fn renumber_metadata(
+        &mut self,
+        map: &dyn Fn(MetadataId) -> MetadataId,
+    ) {
         for inst in &mut self.instructions {
             for (_, node) in &mut inst.metadata {
                 *node = map(*node);
@@ -502,17 +693,24 @@ impl Function {
     }
 
     /// Takes the metadata of `kind` off `inst`.
-    pub fn unannotate(&mut self, inst: InstId, kind: &str) {
+    pub fn unannotate(
+        &mut self,
+        inst: InstId,
+        kind: &str,
+    ) {
         self.instructions[inst.0 as usize].metadata.retain(|(one, _)| one != kind);
     }
 
     /// A copy of `inst`, placed nowhere, its result unnamed.
-    pub fn clone_instruction(&mut self, inst: InstId) -> InstId {
+    pub fn clone_instruction(
+        &mut self,
+        inst: InstId,
+    ) -> InstId {
         let original = self.instruction(inst).clone();
         let copy = self.create_instruction(original.opcode, original.ty, original.operands, original.flags, None);
-        // What was said before the original is said before the copy, but of the copy's own values, which are not the original's: the
-        // copy is on a path of its own, where the variable has what the copy computes, not what the original did. A constant, or
-        // an argument, is the same on every path.
+        // What was said before the original is said before the copy, but of the copy's own values, which are not the
+        // original's: the copy is on a path of its own, where the variable has what the copy computes, not what
+        // the original did. A constant, or an argument, is the same on every path.
         let said: Vec<DebugRecord> = self.debug_records.iter().filter(|one| one.before == inst).copied().collect();
         let same_everywhere = |this: &Self, operand: Operand| match operand {
             Operand::Value(value) => matches!(this.value(value).def, ValueDef::Argument(_)),
@@ -521,7 +719,9 @@ impl Function {
         for one in said {
             let what = match one.what {
                 DebugWhat::Value(operand) if !same_everywhere(self, operand) => DebugWhat::Gone,
-                DebugWhat::Piece { value, offset, bytes } if !same_everywhere(self, value) => DebugWhat::GonePiece { offset, bytes },
+                DebugWhat::Piece { value, offset, bytes } if !same_everywhere(self, value) => {
+                    DebugWhat::GonePiece { offset, bytes }
+                }
                 other => other,
             };
             self.debug_records.push(DebugRecord { before: copy, variable: one.variable, what });
@@ -532,7 +732,10 @@ impl Function {
     }
 
     /// A new, empty block, in the layout nowhere yet.
-    pub fn create_block(&mut self, name: Option<&str>) -> BlockId {
+    pub fn create_block(
+        &mut self,
+        name: Option<&str>,
+    ) -> BlockId {
         let id = BlockId(self.blocks.len() as u32);
         let name = name.map(|one| self.unique_name(one));
         self.blocks.push(Block { name, instructions: Vec::new(), erased: false });
@@ -542,13 +745,23 @@ impl Function {
     }
 
     /// Puts `block` in the layout after `after`, or last.
-    pub fn insert_block(&mut self, block: BlockId, after: Option<BlockId>) -> Result<(), String> {
+    pub fn insert_block(
+        &mut self,
+        block: BlockId,
+        after: Option<BlockId>,
+    ) -> Result<(), String> {
         if self.layout.contains(&block) || self.block(block).erased {
             return Err(format!("block {} is already placed or erased", block.0));
         }
         let at = match after {
             None => self.layout.len(),
-            Some(after) => self.layout.iter().position(|one| *one == after).ok_or_else(|| format!("block {} is not placed", after.0))? + 1,
+            Some(after) => {
+                self.layout
+                    .iter()
+                    .position(|one| *one == after)
+                    .ok_or_else(|| format!("block {} is not placed", after.0))?
+                    + 1
+            }
         };
         self.layout.insert(at, block);
         Ok(())
@@ -573,7 +786,10 @@ impl Function {
     }
 
     /// Removes an empty block nothing names.
-    pub fn erase_block(&mut self, block: BlockId) -> Result<(), String> {
+    pub fn erase_block(
+        &mut self,
+        block: BlockId,
+    ) -> Result<(), String> {
         if !self.block(block).instructions.is_empty() {
             return Err(format!("block {} still holds instructions", block.0));
         }

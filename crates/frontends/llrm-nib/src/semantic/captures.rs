@@ -5,8 +5,9 @@
 //! `nocapture`, and a caller's objects stay reachable only by the borrows
 //! it still holds.
 
-use super::*;
 use borrows::{BorrowKey, Root};
+
+use super::*;
 
 /// Where a borrowed parameter, by its ordinal among the parameters, may go.
 #[derive(Clone, Debug)]
@@ -19,18 +20,28 @@ pub(super) enum Escape {
 
 impl FunctionCompiler<'_> {
     /// The ordinals of the borrowed parameters `roots` borrow from.
-    fn lent_ordinals(&self, roots: &BTreeSet<Root>) -> Vec<usize> {
+    fn lent_ordinals(
+        &self,
+        roots: &BTreeSet<Root>,
+    ) -> Vec<usize> {
         roots.iter().filter_map(|root| self.borrowed_ordinals.get(&root.owner).copied()).collect()
     }
 
     /// Notes that what `roots` borrow from is kept: of each parameter among them.
-    pub(super) fn keep_lent(&mut self, roots: &BTreeSet<Root>) {
+    pub(super) fn keep_lent(
+        &mut self,
+        roots: &BTreeSet<Root>,
+    ) {
         let kept: Vec<Escape> = self.lent_ordinals(roots).into_iter().map(Escape::Kept).collect();
         self.escapes.extend(kept);
     }
 
     /// Notes what a call of `callee` is lent, argument by argument.
-    pub(super) fn lend_to_call(&mut self, callee: &str, lent: &[borrows::Lent]) {
+    pub(super) fn lend_to_call(
+        &mut self,
+        callee: &str,
+        lent: &[borrows::Lent],
+    ) {
         let mut lends = Vec::new();
         for (argument, one) in lent.iter().enumerate() {
             for ordinal in self.lent_ordinals(&one.roots) {
@@ -41,7 +52,11 @@ impl FunctionCompiler<'_> {
     }
 
     /// The identity of each borrowed parameter's binding, to its ordinal.
-    pub(super) fn note_borrowed_parameter(&mut self, key: BorrowKey, ordinal: usize) {
+    pub(super) fn note_borrowed_parameter(
+        &mut self,
+        key: BorrowKey,
+        ordinal: usize,
+    ) {
         self.borrowed_ordinals.insert(key, ordinal);
     }
 }

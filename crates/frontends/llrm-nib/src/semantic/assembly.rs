@@ -4,17 +4,28 @@
 //! unpacked here, so the machine side sees only wholes. Which registers a block may name is the
 //! target's register file's (`registers.regs`).
 
-use super::*;
-use crate::syntax::{Asm, AsmTarget};
 use llrm_core::abi::runtime::Reg;
 use llrm_core::backend::inline_asm::{self, Part};
 
+use super::*;
+use crate::syntax::{Asm, AsmTarget};
+
 impl FunctionCompiler<'_> {
-    pub(super) fn asm_statement(&mut self, asm: &Asm) -> Result<(), Diagnostic> {
+    pub(super) fn asm_statement(
+        &mut self,
+        asm: &Asm,
+    ) -> Result<(), Diagnostic> {
         self.require_unsafe("inline assembly", asm.span)?;
         let lines: Vec<&str> = asm.lines.iter().map(|(text, _)| text.as_str()).collect();
-        let code = inline_asm::assembled(&lines, inline_asm::Mode { bits: self.types.code_bits, segmented: self.types.sizes.segmented, address_bytes: self.types.sizes.near })
-            .map_err(|refused| Diagnostic::new(asm.lines[refused.line].1, refused.message))?;
+        let code = inline_asm::assembled(
+            &lines,
+            inline_asm::Mode {
+                bits: self.types.code_bits,
+                segmented: self.types.sizes.segmented,
+                address_bytes: self.types.sizes.near,
+            },
+        )
+        .map_err(|refused| Diagnostic::new(asm.lines[refused.line].1, refused.message))?;
 
         // Each register's input: whole, or its bytes.
         let mut words: Vec<(Reg, u32, [Option<hir::Operand>; 3])> = Vec::new();
@@ -22,7 +33,9 @@ impl FunctionCompiler<'_> {
             let (register, part, bits) = self.operand(name, *span)?;
             let value = self.register_value(value, part, bits, name, *span)?;
             let at = match words.iter().position(|(one, ..)| *one == register) {
-                Some(at) if words[at].1 != bits => return Err(Diagnostic::new(*span, format!("{name} overlaps another input"))),
+                Some(at) if words[at].1 != bits => {
+                    return Err(Diagnostic::new(*span, format!("{name} overlaps another input")));
+                }
                 Some(at) => at,
                 None => {
                     words.push((register, bits, [None, None, None]));
@@ -62,7 +75,9 @@ impl FunctionCompiler<'_> {
                 return Err(Diagnostic::new(*span, format!("{name} is an output twice")));
             }
             match outputs.iter().find(|(one, _)| *one == register) {
-                Some((_, taken)) if *taken != bits => return Err(Diagnostic::new(*span, format!("{name} overlaps another output"))),
+                Some((_, taken)) if *taken != bits => {
+                    return Err(Diagnostic::new(*span, format!("{name} overlaps another output")));
+                }
                 Some(_) => {}
                 None => outputs.push((register, bits)),
             }
@@ -97,7 +112,8 @@ impl FunctionCompiler<'_> {
         // Each output is a hidden binding, then assigned or bound as source would be.
         for (name, target, span) in &asm.outputs {
             let (register, part, bits) = self.operand(name, *span)?;
-            let word = hir::Operand::Value(results[outputs.iter().position(|(one, _)| *one == register).expect("an output")]);
+            let word =
+                hir::Operand::Value(results[outputs.iter().position(|(one, _)| *one == register).expect("an output")]);
             let whole = whole_type(bits);
             let (value, type_name) = match part {
                 Part::Word => (word, whole),
@@ -110,16 +126,21 @@ impl FunctionCompiler<'_> {
             let hidden = self.hidden("asm");
             let place = self.place(&hidden, type_name, false);
             self.emit("store", Vec::new(), vec![hir::Operand::Place(place), value], None);
-            self.scopes.last_mut().expect("scope").insert(
-                hidden.clone(),
-                Binding { type_: BindingType::Scalar(type_name), mutable: false, storage: Storage::Place(place) },
-            );
+            self.scopes
+                .last_mut()
+                .expect("scope")
+                .insert(
+                    hidden.clone(),
+                    Binding { type_: BindingType::Scalar(type_name), mutable: false, storage: Storage::Place(place) },
+                );
             let value = Expr::Name(hidden, *span);
             let statement = match target {
                 AsmTarget::Bind { mutable, name } => {
                     Statement::Bind { mutable: *mutable, name: name.clone(), annotation: None, value, span: *span }
                 }
-                AsmTarget::Place(target) => Statement::Assign { target: target.clone(), operation: None, value, span: *span },
+                AsmTarget::Place(target) => {
+                    Statement::Assign { target: target.clone(), operation: None, value, span: *span }
+                }
             };
             self.statement(&statement)?;
         }
@@ -128,8 +149,19 @@ impl FunctionCompiler<'_> {
 
     /// The register `name` an input or output names, by the target's register file: its root, the part
     /// of it and the bits of the whole it is in (16, or 32 where the target has an e-register named).
-    fn operand(&self, name: &str, span: Span) -> Result<(Reg, Part, u32), Diagnostic> {
-        let refused = || Diagnostic::new(span, format!("{name} is not a register an input or output may name: ax..di or their bytes, and the target's wider registers"));
+    fn operand(
+        &self,
+        name: &str,
+        span: Span,
+    ) -> Result<(Reg, Part, u32), Diagnostic> {
+        let refused = || {
+            Diagnostic::new(
+                span,
+                format!(
+                    "{name} is not a register an input or output may name: ax..di or their bytes, and the target's wider registers"
+                ),
+            )
+        };
         let file = |one: &str| self.types.registers.iter().find(|register| register.name.eq_ignore_ascii_case(one));
         // The register must be in the target's file, general, and within the target's code.
         let register = file(name).ok_or_else(refused)?;
@@ -148,7 +180,14 @@ impl FunctionCompiler<'_> {
 
     /// `value` as the register `name` holds it: a 16-bit or 8-bit integer (32 for an e-register),
     /// or a near pointer, whose object the block may then reach.
-    fn register_value(&mut self, value: &Expr, part: Part, bits: u32, name: &str, span: Span) -> Result<hir::Operand, Diagnostic> {
+    fn register_value(
+        &mut self,
+        value: &Expr,
+        part: Part,
+        bits: u32,
+        name: &str,
+        span: Span,
+    ) -> Result<hir::Operand, Diagnostic> {
         let target = if part == Part::Word { whole_type(bits) } else { TypeName::U8 };
         let typed = if is_integer_literal(value) || matches!(value, Expr::Character(..)) {
             self.coerced(value, target)?
@@ -156,15 +195,23 @@ impl FunctionCompiler<'_> {
             self.expression(value, None)?
         };
         // A near pointer fills a whole that is as wide as the target's near pointer.
-        if matches!(typed.type_name, TypeName::Pointer { far: false, .. }) && part == Part::Word && width(self.types.sizes, typed.type_name) == width(self.types.sizes, target) {
+        if matches!(typed.type_name, TypeName::Pointer { far: false, .. })
+            && part == Part::Word
+            && width(self.types.sizes, typed.type_name) == width(self.types.sizes, target)
+        {
             return required(typed, span);
         }
-        let fits = (is_integer(typed.type_name) || typed.type_name == TypeName::Char) && width(self.types.sizes, typed.type_name) == width(self.types.sizes, target);
+        let fits = (is_integer(typed.type_name) || typed.type_name == TypeName::Char)
+            && width(self.types.sizes, typed.type_name) == width(self.types.sizes, target);
         if !fits {
             let near = if part == Part::Word { " or a near pointer" } else { "" };
             return Err(Diagnostic::new(
                 span,
-                format!("{name} takes a {}-bit integer{near}, not {}", 8 * width(self.types.sizes, target), type_name_text(typed.type_name)),
+                format!(
+                    "{name} takes a {}-bit integer{near}, not {}",
+                    8 * width(self.types.sizes, target),
+                    type_name_text(typed.type_name)
+                ),
             ));
         }
         let from = typed.type_name;
@@ -178,7 +225,10 @@ fn whole_type(bits: u32) -> TypeName {
 }
 
 /// The name the HIR spells a register of `bits` with: `ax`, or `eax` for its 32-bit view.
-fn register_name(register: Reg, bits: u32) -> String {
+fn register_name(
+    register: Reg,
+    bits: u32,
+) -> String {
     let name = register.name().to_lowercase();
     if bits == 32 { format!("e{name}") } else { name }
 }

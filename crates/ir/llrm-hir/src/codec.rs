@@ -8,11 +8,11 @@
 use std::any::Any;
 
 use llrm_support::hash::IndexMap;
+use llrm_support::pyjson::{self, Json};
+use llrm_support::pyrepr;
 
 use crate::model;
 use crate::verify::{InvalidHIR, verify};
-use llrm_support::pyjson::{self, Json};
-use llrm_support::pyrepr;
 
 pub type JSON = Json;
 
@@ -271,7 +271,10 @@ plain_record!(Terminator, None, kind => "kind", operands => "operands", targets 
 plain_record!(Block, None, id => "id", instructions => "instructions", terminator => "terminator", cold => "cold");
 /// A float result's return is written only when it is not BASIC's, as
 /// before any other existed.
-fn float_return(out: &mut IndexMap<String, JSON>, float_return: model::FloatReturn) {
+fn float_return(
+    out: &mut IndexMap<String, JSON>,
+    float_return: model::FloatReturn,
+) {
     if float_return != model::FloatReturn::Pointer {
         out.insert("float_return".to_owned(), float_return._plain());
     }
@@ -532,7 +535,10 @@ impl _Plain for model::Operand {
     }
 }
 
-pub fn encode(program: &model::Program, indent: Option<usize>) -> Result<String, InvalidHIR> {
+pub fn encode(
+    program: &model::Program,
+    indent: Option<usize>,
+) -> Result<String, InvalidHIR> {
     verify(program)?;
     let separators = if indent.is_some_and(|width| width > 0) { None } else { Some((",", ":")) };
     Ok(pyjson::dumps(&program._plain(), indent, separators, true) + "\n")
@@ -591,7 +597,11 @@ enum _Made {
 
 type _Args = IndexMap<&'static str, _Made>;
 
-fn _make(type_: &_Hint, value: &JSON, where_: &str) -> Result<_Made, InvalidHIR> {
+fn _make(
+    type_: &_Hint,
+    value: &JSON,
+    where_: &str,
+) -> Result<_Made, InvalidHIR> {
     match type_ {
         _Hint::Operand => {
             let record = match value {
@@ -666,7 +676,12 @@ fn _make(type_: &_Hint, value: &JSON, where_: &str) -> Result<_Made, InvalidHIR>
     }
 }
 
-fn _record(type_: &_Record, value: &JSON, where_: &str, tagged: bool) -> Result<_Made, InvalidHIR> {
+fn _record(
+    type_: &_Record,
+    value: &JSON,
+    where_: &str,
+    tagged: bool,
+) -> Result<_Made, InvalidHIR> {
     let Json::Dict(value) = value else {
         return Err(InvalidHIR(format!("{where_}: expected object")));
     };
@@ -926,12 +941,19 @@ impl _FromMade for model::Operand {
 }
 
 /// A required argument.
-fn _required<T: _FromMade>(args: &mut _Args, name: &str) -> Result<T, InvalidHIR> {
+fn _required<T: _FromMade>(
+    args: &mut _Args,
+    name: &str,
+) -> Result<T, InvalidHIR> {
     T::from_made(args.shift_remove(name).expect("required fields were checked"))
 }
 
 /// An argument with its dataclass default.
-fn _default<T: _FromMade>(args: &mut _Args, name: &str, default: T) -> Result<T, InvalidHIR> {
+fn _default<T: _FromMade>(
+    args: &mut _Args,
+    name: &str,
+    default: T,
+) -> Result<T, InvalidHIR> {
     match args.shift_remove(name) {
         Some(one) => T::from_made(one),
         None => Ok(default),
@@ -1434,7 +1456,13 @@ static DEBUG_TYPE: _Record = _Record {
 
 static DEBUG_MEMBER: _Record = _Record {
     name: "DebugMember",
-    fields: &[("name", _Hint::Str, true), ("type", _Hint::Int, true), ("offset", _Hint::Int, true), ("bit_start", OPTIONAL_INT, false), ("bit_width", OPTIONAL_INT, false)],
+    fields: &[
+        ("name", _Hint::Str, true),
+        ("type", _Hint::Int, true),
+        ("offset", _Hint::Int, true),
+        ("bit_start", OPTIONAL_INT, false),
+        ("bit_width", OPTIONAL_INT, false),
+    ],
     build: |args| {
         _object(model::DebugMember {
             name: _required(args, "name")?,
@@ -1449,14 +1477,32 @@ static DEBUG_MEMBER: _Record = _Record {
 static DEBUG_PARAMETER: _Record = _Record {
     name: "DebugParameter",
     fields: &[("argument", _Hint::Int, true), ("name", _Hint::Str, true), ("type", _Hint::Int, true)],
-    build: |args| _object(model::DebugParameter { argument: _required(args, "argument")?, name: _required(args, "name")?, r#type: _required(args, "type")? }),
+    build: |args| {
+        _object(model::DebugParameter {
+            argument: _required(args, "argument")?,
+            name: _required(args, "name")?,
+            r#type: _required(args, "type")?,
+        })
+    },
 };
 
 static DEBUG_VARIABLE: _Record = _Record {
     name: "DebugVariable",
-    fields: &[("place", _Hint::Int, true), ("name", _Hint::Str, true), ("type", _Hint::Int, true), ("parameter", _Hint::Bool, false), ("argument", OPTIONAL_INT, false)],
+    fields: &[
+        ("place", _Hint::Int, true),
+        ("name", _Hint::Str, true),
+        ("type", _Hint::Int, true),
+        ("parameter", _Hint::Bool, false),
+        ("argument", OPTIONAL_INT, false),
+    ],
     build: |args| {
-        _object(model::DebugVariable { place: _required(args, "place")?, name: _required(args, "name")?, r#type: _required(args, "type")?, parameter: _default(args, "parameter", false)?, argument: _default(args, "argument", None)? })
+        _object(model::DebugVariable {
+            place: _required(args, "place")?,
+            name: _required(args, "name")?,
+            r#type: _required(args, "type")?,
+            parameter: _default(args, "parameter", false)?,
+            argument: _default(args, "argument", None)?,
+        })
     },
 };
 
@@ -1484,7 +1530,13 @@ static DEBUG_FUNCTION: _Record = _Record {
 
 static DEBUG_GLOBAL: _Record = _Record {
     name: "DebugGlobal",
-    fields: &[("function", OPTIONAL_INT, false), ("object", _Hint::Int, true), ("offset", _Hint::Int, true), ("name", _Hint::Str, true), ("type", _Hint::Int, true)],
+    fields: &[
+        ("function", OPTIONAL_INT, false),
+        ("object", _Hint::Int, true),
+        ("offset", _Hint::Int, true),
+        ("name", _Hint::Str, true),
+        ("type", _Hint::Int, true),
+    ],
     build: |args| {
         _object(model::DebugGlobal {
             function: _default(args, "function", None)?,
@@ -1506,7 +1558,13 @@ static DEBUG: _Record = _Record {
         ("globals", _Hint::Tuple(&_Hint::Record(&DEBUG_GLOBAL)), true),
     ],
     build: |args| {
-        _object(model::Debug { language: _default(args, "language", None)?, dialect: _default(args, "dialect", None)?, types: _required(args, "types")?, functions: _required(args, "functions")?, globals: _required(args, "globals")? })
+        _object(model::Debug {
+            language: _default(args, "language", None)?,
+            dialect: _default(args, "dialect", None)?,
+            types: _required(args, "types")?,
+            functions: _required(args, "functions")?,
+            globals: _required(args, "globals")?,
+        })
     },
 };
 
@@ -1525,28 +1583,45 @@ static STATED_FACT: _Record = _Record {
     build: |args| {
         let key: String = _required(args, "subject")?;
         let name: String = _required(args, "fact")?;
-        let kind = crate::facts::Subject::kind_named(&key).ok_or_else(|| InvalidHIR(format!("unknown fact subject {key:?}")))?;
-        let subject = crate::facts::Subject::of(kind, _default(args, "function", None)?, _default(args, "id", None)?, _default(args, "part", None)?)
-            .ok_or_else(|| InvalidHIR(format!("a {key} fact needs its function and id")))?;
+        let kind = crate::facts::Subject::kind_named(&key)
+            .ok_or_else(|| InvalidHIR(format!("unknown fact subject {key:?}")))?;
+        let subject = crate::facts::Subject::of(
+            kind,
+            _default(args, "function", None)?,
+            _default(args, "id", None)?,
+            _default(args, "part", None)?,
+        )
+        .ok_or_else(|| InvalidHIR(format!("a {key} fact needs its function and id")))?;
         let value: Option<i64> = _default(args, "value", None)?;
         let second: Option<i64> = _default(args, "second", None)?;
-        let fact = llrm_mir::facts::Fact::from_wire(&name, value, second).ok_or_else(|| InvalidHIR(format!("{name:?} with values {value:?} {second:?} is not a fact")))?;
+        let fact = llrm_mir::facts::Fact::from_wire(&name, value, second)
+            .ok_or_else(|| InvalidHIR(format!("{name:?} with values {value:?} {second:?} is not a fact")))?;
         _object(crate::facts::Stated { subject, fact, source: _default(args, "source", None)? })
     },
 };
 
 static ALIAS_CLASS: _Record = _Record {
     name: "AliasClass",
-    fields: &[("name", _Hint::Str, true), ("parent", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), true), ("types", INTS, true)],
+    fields: &[
+        ("name", _Hint::Str, true),
+        ("parent", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), true),
+        ("types", INTS, true),
+    ],
     build: |args| {
-        _object(model::AliasClass { name: _required(args, "name")?, parent: _required(args, "parent")?, types: _required(args, "types")? })
+        _object(model::AliasClass {
+            name: _required(args, "name")?,
+            parent: _required(args, "parent")?,
+            types: _required(args, "types")?,
+        })
     },
 };
 
 static CELL_WRITERS: _Record = _Record {
     name: "CellWriters",
     fields: &[("cell", _Hint::Str, true), ("routines", _Hint::Tuple(&_Hint::Str), true)],
-    build: |args| _object(model::CellWriters { cell: _required(args, "cell")?, routines: _required(args, "routines")? }),
+    build: |args| {
+        _object(model::CellWriters { cell: _required(args, "cell")?, routines: _required(args, "routines")? })
+    },
 };
 
 static RUNTIME_PROMISES: _Record = _Record {

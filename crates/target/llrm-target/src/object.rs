@@ -25,7 +25,12 @@ impl Format {
     }
 
     pub fn parse(name: &str) -> Result<Self, String> {
-        Self::ALL.into_iter().find(|one| one.name() == name).ok_or_else(|| format!("{name:?} is not one of {}", Self::ALL.map(|one| format!("{:?}", one.name())).join(", ")))
+        Self::ALL
+            .into_iter()
+            .find(|one| one.name() == name)
+            .ok_or_else(
+                || format!("{name:?} is not one of {}", Self::ALL.map(|one| format!("{:?}", one.name())).join(", ")),
+            )
     }
 }
 
@@ -50,13 +55,23 @@ impl ObjectFormat {
             .and_then(|one| one.as_array())
             .ok_or("formats is not a list")?
             .iter()
-            .map(|one| Format::parse(one.as_str().ok_or("a format is not a string")?).map_err(|error| format!("formats: {error}")))
+            .map(|one| {
+                Format::parse(one.as_str().ok_or("a format is not a string")?)
+                    .map_err(|error| format!("formats: {error}"))
+            })
             .collect::<Result<Vec<_>, _>>()?;
-        let default = Format::parse(value.get("default").and_then(|one| one.as_str()).ok_or("default is not a string")?).map_err(|error| format!("default: {error}"))?;
+        let default =
+            Format::parse(value.get("default").and_then(|one| one.as_str()).ok_or("default is not a string")?)
+                .map_err(|error| format!("default: {error}"))?;
         if !formats.contains(&default) {
             return Err(format!("default {:?} is not one of formats", default.name()));
         }
-        let bitness = value.get("bitness").and_then(|one| one.as_integer()).and_then(|one| u32::try_from(one).ok()).filter(|one| matches!(one, 16 | 32)).ok_or("bitness is not 16 or 32")?;
+        let bitness = value
+            .get("bitness")
+            .and_then(|one| one.as_integer())
+            .and_then(|one| u32::try_from(one).ok())
+            .filter(|one| matches!(one, 16 | 32))
+            .ok_or("bitness is not 16 or 32")?;
         let header = value
             .get("header")
             .and_then(|one| one.as_array())
@@ -68,11 +83,19 @@ impl ObjectFormat {
     }
 
     /// The format written when `asked` is the one `-fobject-format=` named, if any.
-    pub fn choose(&self, target: &str, asked: Option<Format>) -> Result<Format, String> {
+    pub fn choose(
+        &self,
+        target: &str,
+        asked: Option<Format>,
+    ) -> Result<Format, String> {
         match asked {
             None => Ok(self.default),
             Some(one) if self.formats.contains(&one) => Ok(one),
-            Some(one) => Err(format!("{target} cannot write {}; it writes {}", one.name(), self.formats.iter().map(|one| one.name()).collect::<Vec<_>>().join(", "))),
+            Some(one) => Err(format!(
+                "{target} cannot write {}; it writes {}",
+                one.name(),
+                self.formats.iter().map(|one| one.name()).collect::<Vec<_>>().join(", ")
+            )),
         }
     }
 }
@@ -83,13 +106,24 @@ mod tests {
 
     #[test]
     fn an_object_format_names_its_formats_its_default_its_mode_and_its_header() {
-        let flat = ObjectFormat::parse("formats = [\"omf\", \"elf\"]\ndefault = \"omf\"\nbitness = 32\nheader = [\".386\", \".model flat\"]\n").unwrap();
-        assert_eq!((flat.formats.as_slice(), flat.default, flat.bitness, flat.header.len()), (&[Format::Omf, Format::Elf][..], Format::Omf, 32, 2));
+        let flat = ObjectFormat::parse(
+            "formats = [\"omf\", \"elf\"]\ndefault = \"omf\"\nbitness = 32\nheader = [\".386\", \".model flat\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            (flat.formats.as_slice(), flat.default, flat.bitness, flat.header.len()),
+            (&[Format::Omf, Format::Elf][..], Format::Omf, 32, 2)
+        );
     }
 
     #[test]
     fn a_bad_object_format_is_refused_with_what_is_wrong() {
-        let parse = |formats: &str, default: &str, bitness: u32| ObjectFormat::parse(&format!("formats = {formats}\ndefault = \"{default}\"\nbitness = {bitness}\nheader = []\n")).unwrap_err();
+        let parse = |formats: &str, default: &str, bitness: u32| {
+            ObjectFormat::parse(&format!(
+                "formats = {formats}\ndefault = \"{default}\"\nbitness = {bitness}\nheader = []\n"
+            ))
+            .unwrap_err()
+        };
         assert_eq!(parse("[\"pe\"]", "omf", 32), "formats: \"pe\" is not one of \"omf\", \"elf\", \"macho\", \"coff\"");
         assert_eq!(parse("[\"omf\"]", "elf", 32), "default \"elf\" is not one of formats");
         assert_eq!(parse("[\"omf\"]", "omf", 24), "bitness is not 16 or 32");

@@ -18,10 +18,8 @@ pub mod buildprs_prstab;
 pub mod buildprs_tokens;
 
 pub use buildprs_artifacts::{
-    parse_db_bytes, parse_dw_offsets, parse_equates, parse_irw_equates, ArtifactSet,
-    ValidatedArtifacts,
+    parse_db_bytes, parse_dw_offsets, parse_equates, parse_irw_equates, ArtifactSet, ValidatedArtifacts,
 };
 pub use buildprs_prstab::{
-    compare_to_prstab_h, compare_to_prstab_inc, generate_prstab_constants, PrstabConstants,
-    StiOffsetInput,
+    compare_to_prstab_h, compare_to_prstab_inc, generate_prstab_constants, PrstabConstants, StiOffsetInput,
 };

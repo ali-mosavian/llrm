@@ -111,11 +111,17 @@ impl Timings {
     }
 
     /// The CPU `-march=name` names.
-    pub fn march(&self, name: &str) -> Option<&str> {
+    pub fn march(
+        &self,
+        name: &str,
+    ) -> Option<&str> {
         self.marches.iter().position(|one| one == name).map(|at| self.cpus[at].as_str())
     }
 
-    pub fn cpu(&self, name: &str) -> Option<&CpuTable> {
+    pub fn cpu(
+        &self,
+        name: &str,
+    ) -> Option<&CpuTable> {
         self.cpus.iter().position(|one| one == name).map(|at| &self.tables[at])
     }
 }
@@ -129,7 +135,10 @@ mod tests {
     #[test]
     fn a_cpu_has_the_name_gccs_march_gives_it() {
         let timings = Timings::parse("cpus a b\nmarch x86a pent\nissue 1 2\n").unwrap();
-        assert_eq!((timings.march("pent"), timings.march("a"), timings.marches()), (Some("b"), None, vec!["x86a", "pent"]));
+        assert_eq!(
+            (timings.march("pent"), timings.march("a"), timings.marches()),
+            (Some("b"), None, vec!["x86a", "pent"])
+        );
         assert!(Timings::parse("cpus a b\nmarch one\n").unwrap_err().contains("1 values for 2 CPUs"));
         assert!(Timings::parse("cpus a b\nmarch same same\n").unwrap_err().contains("share a march name"));
     }

@@ -31,12 +31,7 @@ impl FunctionCompiler<'_> {
             // An owning result owns whichever arm it took.
             all_static &= self.is_static(&value);
             self.consume(&value, arm.span())?;
-            self.emit(
-                "store",
-                Vec::new(),
-                vec![hir::Operand::Place(result), required(value, arm.span())?],
-                None,
-            );
+            self.emit("store", Vec::new(), vec![hir::Operand::Place(result), required(value, arm.span())?], None);
             self.terminate(jump(join));
         }
         self.current = join;
@@ -48,10 +43,7 @@ impl FunctionCompiler<'_> {
         } else {
             self.temporary_owned(hir::Operand::Value(value), type_name)
         };
-        Ok(TypedOperand {
-            operand: Some(operand),
-            type_name,
-        })
+        Ok(TypedOperand { operand: Some(operand), type_name })
     }
 
     /// `condition ? then : otherwise` of struct or enum `struct_id`: each arm
@@ -83,11 +75,12 @@ impl FunctionCompiler<'_> {
     }
 
     /// The common type of both arms, as a binary operator would pick it.
-    pub(super) fn conditional_type_hint(&self, then: &Expr, otherwise: &Expr) -> Option<TypeName> {
-        match (
-            self.expression_type_hint(then),
-            self.expression_type_hint(otherwise),
-        ) {
+    pub(super) fn conditional_type_hint(
+        &self,
+        then: &Expr,
+        otherwise: &Expr,
+    ) -> Option<TypeName> {
+        match (self.expression_type_hint(then), self.expression_type_hint(otherwise)) {
             (Some(left), Some(right)) if left == right => Some(left),
             (Some(left), Some(right)) => self.rules.common(left, right),
             (Some(one), None) | (None, Some(one)) => Some(one),
@@ -101,14 +94,13 @@ impl FunctionCompiler<'_> {
     }
 
     /// The type an integer literal takes where nothing expects one.
-    fn literal_type(&self, expression: &Expr) -> Option<TypeName> {
+    fn literal_type(
+        &self,
+        expression: &Expr,
+    ) -> Option<TypeName> {
         let value = match expression {
             Expr::Integer(value, _) => *value,
-            Expr::Unary {
-                op: UnaryOp::Negative,
-                operand,
-                ..
-            } => match operand.as_ref() {
+            Expr::Unary { op: UnaryOp::Negative, operand, .. } => match operand.as_ref() {
                 Expr::Integer(value, _) => -value,
                 _ => return None,
             },

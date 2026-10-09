@@ -110,13 +110,7 @@ impl<A: Repr, B: Repr, C: Repr> Repr for (A, B, C) {
 
 impl<A: Repr, B: Repr, C: Repr, D: Repr> Repr for (A, B, C, D) {
     fn repr(&self) -> String {
-        format!(
-            "({}, {}, {}, {})",
-            self.0.repr(),
-            self.1.repr(),
-            self.2.repr(),
-            self.3.repr()
-        )
+        format!("({}, {}, {}, {})", self.0.repr(), self.1.repr(), self.2.repr(), self.3.repr())
     }
 }
 
@@ -139,7 +133,13 @@ pub fn float32(value: f32) -> String {
 }
 
 /// Python's repr from a float's shortest exponent and positional forms.
-fn repr(nan: bool, infinite: bool, positive: bool, shortest: &str, positional: &str) -> String {
+fn repr(
+    nan: bool,
+    infinite: bool,
+    positive: bool,
+    shortest: &str,
+    positional: &str,
+) -> String {
     if nan {
         return "nan".to_owned();
     }
@@ -167,10 +167,7 @@ impl<T: Repr> Repr for Tuple<T> {
 
 impl<K: Repr, V: Repr> Repr for IndexMap<K, V> {
     fn repr(&self) -> String {
-        let items: Vec<String> = self
-            .iter()
-            .map(|(key, value)| format!("{}: {}", key.repr(), value.repr()))
-            .collect();
+        let items: Vec<String> = self.iter().map(|(key, value)| format!("{}: {}", key.repr(), value.repr())).collect();
         format!("{{{}}}", items.join(", "))
     }
 }
@@ -203,26 +200,26 @@ pub fn frozenset<T: Repr>(items: &[T]) -> String {
 }
 
 /// The generated `__repr__` of a dataclass: `Name(field=repr, ...)`.
-pub fn dataclass(name: &str, fields: &[(&str, String)]) -> String {
-    let fields: Vec<String> = fields
-        .iter()
-        .map(|(key, value)| format!("{key}={value}"))
-        .collect();
+pub fn dataclass(
+    name: &str,
+    fields: &[(&str, String)],
+) -> String {
+    let fields: Vec<String> = fields.iter().map(|(key, value)| format!("{key}={value}")).collect();
     format!("{name}({})", fields.join(", "))
 }
 
 /// `repr` of a `StrEnum` member: `<Class.MEMBER: 'value'>`.
-pub fn str_enum(class: &str, member: &str, value: &str) -> String {
+pub fn str_enum(
+    class: &str,
+    member: &str,
+    value: &str,
+) -> String {
     format!("<{class}.{member}: {}>", string(value))
 }
 
 /// `repr(str)`.
 pub fn string(value: &str) -> String {
-    let quote = if value.contains('\'') && !value.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
+    let quote = if value.contains('\'') && !value.contains('"') { '"' } else { '\'' };
     let mut out = String::new();
     out.push(quote);
     for character in value.chars() {
@@ -254,11 +251,7 @@ pub fn string(value: &str) -> String {
 
 /// `repr(bytes)`.
 pub fn bytes(value: &[u8]) -> String {
-    let quote = if value.contains(&b'\'') && !value.contains(&b'"') {
-        b'"'
-    } else {
-        b'\''
-    };
+    let quote = if value.contains(&b'\'') && !value.contains(&b'"') { b'"' } else { b'\'' };
     let mut out = String::from("b");
     out.push(quote as char);
     for &byte in value {

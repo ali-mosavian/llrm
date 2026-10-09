@@ -7,19 +7,15 @@
 //! each body it changes, then `Rotate`.
 //!
 //! What changed with the IR:
-//! - A pass reports a change by preserving less than every analysis; the
-//!   old compared bodies. Arenas never shrink, so the repeated-state check
-//!   compares printed bodies instead.
-//! - The stage records are the manager's change log (`recorded`); `watch`
-//!   is `Applied::dump`, a file per changed step of each body.
-//! - `Where`'s segment, BC blocks and object file went with the BC
-//!   frontend. The machine's facts are the program's target's.
-//! - PointerProvenance, SplitPointers and Place have no rich-MIR meaning.
-//!   Hoist's store sinking is loopmotion's pass.
-//! - `flow::optimized`'s rule that an irreducible body is not promoted is
-//!   here: promotion needs dominators.
-//! - The old `_Transaction` verified nothing; `applied`'s manager verifies
-//!   the module after the pipeline.
+//! - A pass reports a change by preserving less than every analysis; the old compared bodies. Arenas never shrink, so
+//!   the repeated-state check compares printed bodies instead.
+//! - The stage records are the manager's change log (`recorded`); `watch` is `Applied::dump`, a file per changed step
+//!   of each body.
+//! - `Where`'s segment, BC blocks and object file went with the BC frontend. The machine's facts are the program's
+//!   target's.
+//! - PointerProvenance, SplitPointers and Place have no rich-MIR meaning. Hoist's store sinking is loopmotion's pass.
+//! - `flow::optimized`'s rule that an irreducible body is not promoted is here: promotion needs dominators.
+//! - The old `_Transaction` verified nothing; `applied`'s manager verifies the module after the pipeline.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -29,14 +25,15 @@ use llrm_analysis::manager::{GlobalsAA, ProgramSummaries, Summaries};
 use llrm_analysis::peelsize::Limits;
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module, UnnamedAddr};
-use llrm_mir::print;
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, ModuleAnalyses, PassManager, PreservedAnalyses, Stage, Unit};
+use llrm_mir::print;
 use llrm_mir::program::Program;
 
 use crate::interprocedural::Interprocedural;
-use crate::{jumpthread, 
-    addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
-    promote, rotate, tailrec, trivialunswitch, unroll, unswitch, window,
+use crate::{
+    addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
+    gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopmotion,
+    loopsimplify, lsr, peel, ports, promote, rotate, tailrec, trivialunswitch, unroll, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -68,7 +65,8 @@ pub struct Options {
     pub for_size: bool,
     /// The allocator tries other shapes of a body and keeps the cheapest (`-fallocation-search`).
     pub search: bool,
-    /// Both routes through the machine phases are made and the cheaper kept (`-fallocation-routes`); else the allocator alone.
+    /// Both routes through the machine phases are made and the cheaper kept (`-fallocation-routes`); else the
+    /// allocator alone.
     pub routes: bool,
     /// With `search`, every shape rather than the one the spills suggest (`-fallocation-search-all`; -Omax).
     pub exhaustive: bool,
@@ -110,9 +108,9 @@ impl Options {
         Self { optimize: false, search: false, routes: false, ..Self::default() }
     }
 
-    /// -O1: gcc's: the scalar passes and `-finline-functions-called-once`; a loop is copied out completely only where the
-    /// code does not grow; nothing is inlined that `early-inlining-insns` (6) over `max-inline-insns-auto` (15) of the -O2
-    /// threshold does not admit, and no gcse, sibling calls, pattern fill, peeling or unswitching.
+    /// -O1: gcc's: the scalar passes and `-finline-functions-called-once`; a loop is copied out completely only where
+    /// the code does not grow; nothing is inlined that `early-inlining-insns` (6) over `max-inline-insns-auto` (15)
+    /// of the -O2 threshold does not admit, and no gcse, sibling calls, pattern fill, peeling or unswitching.
     pub fn basic() -> Self {
         Self {
             limits: Limits { grows: false, ..Self::default().limits },
@@ -127,20 +125,35 @@ impl Options {
         }
     }
 
-    /// -O2: gcc's: -O1 with inlining, gcse, sibling calls and pattern fill; a complete copy of a loop still must not grow
-    /// the code (`flag_cunroll_grow_size` is on at -O3, `-funroll-loops` and `-fpeel-loops` only).
+    /// -O2: gcc's: -O1 with inlining, gcse, sibling calls and pattern fill; a complete copy of a loop still must not
+    /// grow the code (`flag_cunroll_grow_size` is on at -O3, `-funroll-loops` and `-fpeel-loops` only).
     pub fn standard() -> Self {
-        Self { limits: Limits { grows: false, ..Self::default().limits }, peel: false, unswitch: false, ..Self::default() }
+        Self {
+            limits: Limits { grows: false, ..Self::default().limits },
+            peel: false,
+            unswitch: false,
+            ..Self::default()
+        }
     }
 
     /// -O3: gcc's: -O2 with peeling, unswitching, complete copies that grow the code, and the larger inline threshold.
     pub fn speed() -> Self {
-        Self { inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) }, unswitch: true, ..Self::default() }
+        Self {
+            inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
+            unswitch: true,
+            ..Self::default()
+        }
     }
 
-    /// -Omax: every pass the default has on, LLVM's -O3 budgets, twice the target's unroll budget and a 250 inline threshold.
+    /// -Omax: every pass the default has on, LLVM's -O3 budgets, twice the target's unroll budget and a 250 inline
+    /// threshold.
     pub fn aggressive() -> Self {
-        Self { limits: Limits { target_percent: 200, ..Limits::default() }, inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) }, exhaustive: true, ..Self::default() }
+        Self {
+            limits: Limits { target_percent: 200, ..Limits::default() },
+            inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
+            exhaustive: true,
+            ..Self::default()
+        }
     }
 
     /// -Os: no copy grows the code. Inlining keeps -O2's threshold: the
@@ -149,7 +162,12 @@ impl Options {
     /// shrinks the code here. A lower one would also refuse a constant-site
     /// clone that folds away.
     pub fn size() -> Self {
-        Self { limits: Limits { grows: false, target_percent: 100, ..Limits::default() }, inline: inline::Threshold::default().for_size(), for_size: true, ..Self::default() }
+        Self {
+            limits: Limits { grows: false, target_percent: 100, ..Limits::default() },
+            inline: inline::Threshold::default().for_size(),
+            for_size: true,
+            ..Self::default()
+        }
     }
 
     /// Whether the allocator tries other shapes of a body and keeps the cheapest.
@@ -179,7 +197,10 @@ impl Options {
 
     /// Whether pass `name` is on. Every pass can be turned off, which is
     /// how a miscompile is bisected.
-    fn wanted(&self, name: &str) -> bool {
+    fn wanted(
+        &self,
+        name: &str,
+    ) -> bool {
         match name {
             "lcssa" => self.lcssa,
             "floatloop" => self.floatloop,
@@ -210,7 +231,6 @@ pub struct Applied {
     /// Nth body run; the manager writes the module after it there.
     pub dump: Option<PathBuf>,
 }
-
 
 /// The passes, in order, that `applied` leaves on.
 ///
@@ -273,12 +293,18 @@ pub fn timed() {
 }
 
 /// `program` through the pipeline.
-pub fn applied(program: &mut Program, applied: &Applied) -> Result<(), String> {
+pub fn applied(
+    program: &mut Program,
+    applied: &Applied,
+) -> Result<(), String> {
     recorded(program, applied).map(|_| ())
 }
 
 /// `applied`, with what the pipeline did to each function.
-pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, String> {
+pub fn recorded(
+    program: &mut Program,
+    applied: &Applied,
+) -> Result<Vec<Stage>, String> {
     timed();
     let mut manager = PassManager::default();
     manager.verify_each = llrm_support::debug::verifying();
@@ -302,7 +328,8 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     manager.add(Fixed::new(applied));
     // Once every body has reached its own fixed point, as the old Nib
     // driver's whole-module step: a body it changes goes back through.
-    let mut again = Fixed::new(&Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() });
+    let mut again =
+        Fixed::new(&Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() });
     manager.add_program(Interprocedural {
         pipeline: Box::new(move |module, analyses, id, stage| {
             TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
@@ -318,7 +345,8 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     // GlobalDCE after inlining.
     manager.add_program(globaldce::GlobalDce);
     manager.add_program(availableexternally::EliminateAvailableExternally);
-    // Once the callers that remain are the ones that stay: an internal function they all call directly pops its own arguments.
+    // Once the callers that remain are the ones that stay: an internal function they all call directly pops its own
+    // arguments.
     if applied.options.wanted("calleepop") {
         manager.add_module(calleepop::CalleePop { size: applied.options.prefers_size() });
     }
@@ -328,8 +356,12 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     }
     // Each loop's counters chosen once, on the loop the passes above leave.
     if applied.options.wanted("lsr") {
-        manager.add(lsr::Lsr { size: applied.options.prefers_size(), bounds: if applied.options.searches_all() { lsr::Bounds::NONE } else { lsr::Bounds::GCC } });
-        // What the counters it chose leave behind (a bound subtracted from a counter rebased by it), as LLVM's LSR cleans with SimplifyInstructions.
+        manager.add(lsr::Lsr {
+            size: applied.options.prefers_size(),
+            bounds: if applied.options.searches_all() { lsr::Bounds::NONE } else { lsr::Bounds::GCC },
+        });
+        // What the counters it chose leave behind (a bound subtracted from a counter rebased by it), as LLVM's LSR
+        // cleans with SimplifyInstructions.
         manager.add(algebraic::Differences);
     }
     // On the pointers LSR chose: a huge one a loop keeps in one window is far there.
@@ -339,7 +371,8 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     // Last, as the old drivers rotated in lowering: unroll and peel refuse
     // a rotated loop.
     manager.add(rotate::Rotate);
-    // After the loop passes: the cycles it makes between the cases are no natural loop. LLVM's DFAJumpThreading, gcc's FSM threader.
+    // After the loop passes: the cycles it makes between the cases are no natural loop. LLVM's DFAJumpThreading, gcc's
+    // FSM threader.
     if applied.options.wanted("jumpthread") {
         manager.add(jumpthread::JumpThread { size: applied.options.prefers_size() });
     }
@@ -369,7 +402,12 @@ thread_local! {
 
 /// `fixed` over body `id` alone, as the manager runs a function pass, its
 /// module's analyses those `analyses` holds.
-fn rerun(module: &mut Module, analyses: &mut ModuleAnalyses, id: GlobalId, fixed: &mut Fixed) -> Result<(), String> {
+fn rerun(
+    module: &mut Module,
+    analyses: &mut ModuleAnalyses,
+    id: GlobalId,
+    fixed: &mut Fixed,
+) -> Result<(), String> {
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
     let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
@@ -420,15 +458,35 @@ impl Fixed {
         let (peelers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "peel");
         let (last, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "merge");
         // A candidate is judged after the whole pipeline, unswitching off.
-        let unswitch = applied.options.unswitch.then(|| {
-            let options = Options { unswitch: false, ..applied.options.clone() };
-            let reoptimize = Applied { options, only: None, dump: None, ..applied.clone() };
-            unswitch::Unswitch { passes: vec![Box::new(Fixed::new(&reoptimize))] }
-        });
-        Self { boundary, passes, unrollers, peelers, last, unswitch, only: only.is_some(), dump: applied.dump.clone(), runs: 0 }
+        let unswitch = applied
+            .options
+            .unswitch
+            .then(
+                || {
+                    let options = Options { unswitch: false, ..applied.options.clone() };
+                    let reoptimize = Applied { options, only: None, dump: None, ..applied.clone() };
+                    unswitch::Unswitch { passes: vec![Box::new(Fixed::new(&reoptimize))] }
+                },
+            );
+        Self {
+            boundary,
+            passes,
+            unrollers,
+            peelers,
+            last,
+            unswitch,
+            only: only.is_some(),
+            dump: applied.dump.clone(),
+            runs: 0,
+        }
     }
 
-    fn transacted(&mut self, unit: &mut Unit, analyses: &mut Analyses, run: &mut Run) -> Result<(), String> {
+    fn transacted(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+        run: &mut Run,
+    ) -> Result<(), String> {
         self.scalarized(unit, analyses, run, "r01");
         if self.only && !self.boundary.is_empty() {
             return Ok(run.settled(unit, analyses));
@@ -466,14 +524,26 @@ impl Fixed {
         Ok(run.settled(unit, analyses))
     }
 
-    fn scalarized(&mut self, unit: &mut Unit, analyses: &mut Analyses, run: &mut Run, stage: &str) {
+    fn scalarized(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+        run: &mut Run,
+        stage: &str,
+    ) {
         for one in &mut self.boundary {
             let stage = format!("{stage}-{}", one.name());
             run.step(&mut **one, &stage, unit, analyses);
         }
     }
 
-    fn fixed(&mut self, unit: &mut Unit, analyses: &mut Analyses, run: &mut Run, prefix: &str) -> Result<(), String> {
+    fn fixed(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+        run: &mut Run,
+        prefix: &str,
+    ) -> Result<(), String> {
         // A monotone chain may expose one simplification per operation.
         let size = unit.function.layout().len() + unit.function.walk().count();
         let limit = std::cmp::max(16, size + 1);
@@ -526,11 +596,30 @@ impl FunctionPass for Fixed {
         "pipeline"
     }
 
-    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         self.runs += 1;
-        let promotes = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function).dominance.irreducible(unit.function).is_empty();
+        let promotes = analyses
+            .get::<cfg::Shape>(unit.context, unit.layout, unit.function)
+            .dominance
+            .irreducible(unit.function)
+            .is_empty();
         let dump = self.dump.as_ref().map(|directory| directory.join(format!("{:02}", self.runs)));
-        let mut run = Run { version: 0, promotes, dump, rounds: 0, steps: 0, skipped: 0, fixed: 0, billing: llrm_support::debug::enabled("runs"), idle: 0, useful: 0 };
+        let mut run = Run {
+            version: 0,
+            promotes,
+            dump,
+            rounds: 0,
+            steps: 0,
+            skipped: 0,
+            fixed: 0,
+            billing: llrm_support::debug::enabled("runs"),
+            idle: 0,
+            useful: 0,
+        };
         self.transacted(unit, analyses, &mut run).unwrap_or_else(|error| panic!("pipeline: {error}"));
         llrm_support::debug!(
             "runs",
@@ -569,18 +658,29 @@ struct Run {
 
 impl Run {
     /// `pass` over the body; whether it changed it.
-    fn step(&mut self, pass: &mut dyn FunctionPass, stage: &str, unit: &mut Unit, analyses: &mut Analyses) -> bool {
+    fn step(
+        &mut self,
+        pass: &mut dyn FunctionPass,
+        stage: &str,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> bool {
         if !self.promotes && matches!(pass.name(), "sroa" | "promote") {
             return false;
         }
         self.steps += 1;
         let before = unit.function.mark();
         let billed = self.billing.then(llrm_support::debug::work);
-        let preserved = llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses)).unless_unchanged(unit.function, before);
+        let preserved =
+            llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses)).unless_unchanged(unit.function, before);
         if let Some(billed) = billed {
             let spent = llrm_support::debug::work() - billed;
             *(if preserved.are_all_preserved() { &mut self.idle } else { &mut self.useful }) += spent;
-            llrm_support::debug!("runs", "step {stage} {} {spent}", if preserved.are_all_preserved() { "idle" } else { "changed" });
+            llrm_support::debug!(
+                "runs",
+                "step {stage} {} {spent}",
+                if preserved.are_all_preserved() { "idle" } else { "changed" }
+            );
         }
         if preserved.are_all_preserved() {
             return false;
@@ -592,14 +692,23 @@ impl Run {
     }
 
     /// The body a pipeline hands out, with its unreachable blocks settled.
-    fn settled(&mut self, unit: &mut Unit, analyses: &mut Analyses) {
+    fn settled(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) {
         if cfg::_unreachable(unit.context, unit.function) {
             analyses.invalidate(&PreservedAnalyses::none());
             self.changed("unreachable", unit, analyses);
         }
     }
 
-    fn changed(&mut self, stage: &str, unit: &Unit, analyses: &Analyses) {
+    fn changed(
+        &mut self,
+        stage: &str,
+        unit: &Unit,
+        analyses: &Analyses,
+    ) {
         self.version += 1;
         let Some(directory) = &self.dump else { return };
         // The body beside every global's declaration, which is what it names.
@@ -611,7 +720,13 @@ impl Run {
             address_space: 0,
             kind: GlobalKind::Function(Box::new(unit.function.clone())),
         });
-        let module = Module { context: unit.context.clone(), datalayout: None, globals, metadata: unit.metadata.to_vec(), named_metadata: Vec::new() };
+        let module = Module {
+            context: unit.context.clone(),
+            datalayout: None,
+            globals,
+            metadata: unit.metadata.to_vec(),
+            named_metadata: Vec::new(),
+        };
         let file = directory.join(format!("{:03}-{stage}.ll", self.version));
         std::fs::create_dir_all(directory)
             .and_then(|()| std::fs::write(&file, llrm_mir::print::module(&module)))

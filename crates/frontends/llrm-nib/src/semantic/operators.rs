@@ -1,6 +1,7 @@
 //! Operators and conversions (section 3).
 
 use llrm_core::abi::nib as rt;
+
 use super::*;
 
 impl<'a> FunctionCompiler<'a> {
@@ -20,11 +21,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         if let Some(result) = self.view_comparison(operation, left, right, span)? {
             if expected.is_some_and(|one| one != TypeName::Bool) {
-                return Err(type_mismatch(
-                    span,
-                    expected.expect("checked"),
-                    TypeName::Bool,
-                ));
+                return Err(type_mismatch(span, expected.expect("checked"), TypeName::Bool));
             }
             return Ok(result);
         }
@@ -36,11 +33,7 @@ impl<'a> FunctionCompiler<'a> {
         };
         let result = self.arithmetic(operation, left, right, span)?;
         if expected.is_some_and(|one| one != result.type_name) {
-            return Err(type_mismatch(
-                span,
-                expected.expect("checked"),
-                result.type_name,
-            ));
+            return Err(type_mismatch(span, expected.expect("checked"), result.type_name));
         }
         Ok(result)
     }
@@ -62,7 +55,11 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// An operand next to one of type `other`: a literal takes that type when it fits.
-    pub(super) fn beside(&mut self, expression: &Expr, other: TypeName) -> Result<TypedOperand, Diagnostic> {
+    pub(super) fn beside(
+        &mut self,
+        expression: &Expr,
+        other: TypeName,
+    ) -> Result<TypedOperand, Diagnostic> {
         if !is_literal(expression) {
             return self.expression(expression, None);
         }
@@ -73,22 +70,25 @@ impl<'a> FunctionCompiler<'a> {
             return self.expression(expression, None);
         }
         // `0` is also the null pointer of any type.
-        if is_float(other) || is_fixed(other) || (is_integer_literal(expression) && self.types.raw_target(other).is_some()) {
+        if is_float(other)
+            || is_fixed(other)
+            || (is_integer_literal(expression) && self.types.raw_target(other).is_some())
+        {
             return self.coerced(expression, other);
         }
         self.expression(expression, None)
     }
 
     /// A value for a destination of type `target`, converted as an assignment converts it.
-    pub(super) fn coerced(&mut self, expression: &Expr, target: TypeName) -> Result<TypedOperand, Diagnostic> {
+    pub(super) fn coerced(
+        &mut self,
+        expression: &Expr,
+        target: TypeName,
+    ) -> Result<TypedOperand, Diagnostic> {
         if is_float(target) {
             let spelled = match expression {
                 Expr::Integer(value, span) => Some((value.to_string(), *span)),
-                Expr::Unary {
-                    op: UnaryOp::Negative,
-                    operand,
-                    span,
-                } => match operand.as_ref() {
+                Expr::Unary { op: UnaryOp::Negative, operand, span } => match operand.as_ref() {
                     Expr::Integer(value, _) => Some((format!("-{value}"), *span)),
                     _ => None,
                 },
@@ -102,7 +102,10 @@ impl<'a> FunctionCompiler<'a> {
         if is_literal(expression)
             || matches!(expression, Expr::Variant { .. } | Expr::Conditional { .. })
             || vectors::builds_vector(expression)
-            || matches!(expression, Expr::Borrow { .. } | Expr::Dict(..) | Expr::DictComprehension { .. })
+            || matches!(
+                expression,
+                Expr::Borrow { .. } | Expr::Dict(..) | Expr::DictComprehension { .. }
+            )
             || self.types.referent(target).is_some()
             || matches!(target, TypeName::Function { .. })
         {
@@ -141,7 +144,10 @@ impl<'a> FunctionCompiler<'a> {
         {
             let name = type_name_text(target);
             let word = if signed { "isize" } else { "usize" };
-            self.types.warn(span, format!("warning: {word} is {bytes} bytes and {name} holds fewer: write {name}(...) to cut it"));
+            self.types.warn(
+                span,
+                format!("warning: {word} is {bytes} bytes and {name} holds fewer: write {name}(...) to cut it"),
+            );
         }
         self.converted(value, target, span)
     }
@@ -156,49 +162,28 @@ impl<'a> FunctionCompiler<'a> {
         span: Span,
     ) -> Result<TypedOperand, Diagnostic> {
         if expected.is_some_and(|one| one != TypeName::Bool) {
-            return Err(type_mismatch(
-                span,
-                expected.expect("checked"),
-                TypeName::Bool,
-            ));
+            return Err(type_mismatch(span, expected.expect("checked"), TypeName::Bool));
         }
         let name = format!("$logical{}", self.next_place);
         let result = self.place(&name, TypeName::Bool, true);
         let left = self.expression(left, Some(TypeName::Bool))?;
         let left = required(left, span)?;
-        self.emit(
-            "store",
-            Vec::new(),
-            vec![hir::Operand::Place(result), left.clone()],
-            None,
-        );
+        self.emit("store", Vec::new(), vec![hir::Operand::Place(result), left.clone()], None);
         let decide = self.block();
         let join = self.block();
         self.terminate(hir::Terminator {
             kind: "branch",
             operands: vec![left],
-            targets: if operation == BinaryOp::And {
-                vec![decide, join]
-            } else {
-                vec![join, decide]
-            },
+            targets: if operation == BinaryOp::And { vec![decide, join] } else { vec![join, decide] },
         });
         self.current = decide;
         let right = self.expression(right, Some(TypeName::Bool))?;
-        self.emit(
-            "store",
-            Vec::new(),
-            vec![hir::Operand::Place(result), required(right, span)?],
-            None,
-        );
+        self.emit("store", Vec::new(), vec![hir::Operand::Place(result), required(right, span)?], None);
         self.terminate(jump(join));
         self.current = join;
         let value = self.value(TypeName::Bool);
         self.emit("load", vec![value], vec![hir::Operand::Place(result)], None);
-        Ok(TypedOperand {
-            operand: Some(hir::Operand::Value(value)),
-            type_name: TypeName::Bool,
-        })
+        Ok(TypedOperand { operand: Some(hir::Operand::Value(value)), type_name: TypeName::Bool })
     }
 
     /// `a < b < c`: `(a < b) && (b < c)`, each operand evaluated once, in order.
@@ -210,11 +195,7 @@ impl<'a> FunctionCompiler<'a> {
         span: Span,
     ) -> Result<TypedOperand, Diagnostic> {
         if expected.is_some_and(|one| one != TypeName::Bool) {
-            return Err(type_mismatch(
-                span,
-                expected.expect("checked"),
-                TypeName::Bool,
-            ));
+            return Err(type_mismatch(span, expected.expect("checked"), TypeName::Bool));
         }
         let name = self.hidden("chain");
         let result = self.place(&name, TypeName::Bool, true);
@@ -225,12 +206,7 @@ impl<'a> FunctionCompiler<'a> {
                 let right = this.evaluated_once(&operands[index + 1])?;
                 let holds = this.binary(*operation, &left, &right, Some(TypeName::Bool), span)?;
                 let holds = required(holds, span)?;
-                this.emit(
-                    "store",
-                    Vec::new(),
-                    vec![hir::Operand::Place(result), holds.clone()],
-                    None,
-                );
+                this.emit("store", Vec::new(), vec![hir::Operand::Place(result), holds.clone()], None);
                 if index + 1 < operations.len() {
                     let next = this.block();
                     this.terminate(hir::Terminator {
@@ -248,16 +224,16 @@ impl<'a> FunctionCompiler<'a> {
         self.current = join;
         let value = self.value(TypeName::Bool);
         self.emit("load", vec![value], vec![hir::Operand::Place(result)], None);
-        Ok(TypedOperand {
-            operand: Some(hir::Operand::Value(value)),
-            type_name: TypeName::Bool,
-        })
+        Ok(TypedOperand { operand: Some(hir::Operand::Value(value)), type_name: TypeName::Bool })
     }
 
     /// `operand`, evaluated now, as an expression that reads it again without
     /// evaluating it again. A literal stays one, typed by what it meets, and a
     /// struct stays the place it names.
-    fn evaluated_once(&mut self, operand: &Expr) -> Result<Expr, Diagnostic> {
+    fn evaluated_once(
+        &mut self,
+        operand: &Expr,
+    ) -> Result<Expr, Diagnostic> {
         let span = operand.span();
         if is_literal(operand) || self.struct_type_hint(operand, span).is_some() {
             return Ok(operand.clone());
@@ -289,11 +265,7 @@ impl<'a> FunctionCompiler<'a> {
         let typed = ((is_integer_literal(value) || is_float_literal(value)) && is_fixed(target))
             || (is_integer_literal(value) && conversions::implicit(target))
             || (is_float_literal(value) && is_float(target));
-        let value = if typed {
-            self.coerced(value, target)?
-        } else {
-            self.expression(value, None)?
-        };
+        let value = if typed { self.coerced(value, target)? } else { self.expression(value, None)? };
         self.converted(value, target, span)
     }
 
@@ -326,21 +298,14 @@ impl<'a> FunctionCompiler<'a> {
             _ => {
                 return Err(Diagnostic::new(
                     span,
-                    format!(
-                        "no conversion from {} to {}",
-                        type_name_text(source),
-                        type_name_text(target)
-                    ),
+                    format!("no conversion from {} to {}", type_name_text(source), type_name_text(target)),
                 ));
             }
         };
         if let Some(hir::Operand::Constant(_, constant)) = value.operand {
             if is_integer(source) && is_integer(target) {
                 return Ok(TypedOperand {
-                    operand: Some(hir::Operand::Constant(
-                        type_id(target),
-                        wrapped(constant, target),
-                    )),
+                    operand: Some(hir::Operand::Constant(type_id(target), wrapped(constant, target))),
                     type_name: target,
                 });
             }
@@ -352,26 +317,17 @@ impl<'a> FunctionCompiler<'a> {
         let result = self.value(target);
         self.emit(op, vec![result], vec![operand], None);
         if source != TypeName::Bool {
-            return Ok(TypedOperand {
-                operand: Some(hir::Operand::Value(result)),
-                type_name: target,
-            });
+            return Ok(TypedOperand { operand: Some(hir::Operand::Value(result)), type_name: target });
         }
         // `true` is all ones.
         let bit = self.value(target);
         self.emit(
             "and",
             vec![bit],
-            vec![
-                hir::Operand::Value(result),
-                hir::Operand::Constant(type_id(target), 1),
-            ],
+            vec![hir::Operand::Value(result), hir::Operand::Constant(type_id(target), 1)],
             None,
         );
-        Ok(TypedOperand {
-            operand: Some(hir::Operand::Value(bit)),
-            type_name: target,
-        })
+        Ok(TypedOperand { operand: Some(hir::Operand::Value(bit)), type_name: target })
     }
 
     /// A conversion to or from a fixed-point type, done on its storage integer.
@@ -385,18 +341,12 @@ impl<'a> FunctionCompiler<'a> {
         if !(is_integer(source) || is_fixed(source)) || !(is_integer(target) || is_fixed(target)) {
             return Err(Diagnostic::new(
                 span,
-                format!(
-                    "no conversion from {} to {}",
-                    type_name_text(source),
-                    type_name_text(target)
-                ),
+                format!("no conversion from {} to {}", type_name_text(source), type_name_text(target)),
             ));
         }
         let (stored, from) = self.fixed_storage(value);
         let (to_storage, to) = match target {
-            TypeName::Fixed {
-                storage, fraction, ..
-            } => (storage_type(storage), fraction),
+            TypeName::Fixed { storage, fraction, .. } => (storage_type(storage), fraction),
             integer => (integer, 0),
         };
         // Scale in the wider storage, so rescaling up loses nothing it keeps.
@@ -416,37 +366,23 @@ impl<'a> FunctionCompiler<'a> {
             return Ok(narrowed);
         }
         let result = self.value(target);
-        self.emit(
-            "convert",
-            vec![result],
-            vec![required(narrowed, span)?],
-            None,
-        );
-        Ok(TypedOperand {
-            operand: Some(hir::Operand::Value(result)),
-            type_name: target,
-        })
+        self.emit("convert", vec![result], vec![required(narrowed, span)?], None);
+        Ok(TypedOperand { operand: Some(hir::Operand::Value(result)), type_name: target })
     }
 
     /// A fixed-point value as its storage integer and fraction; an integer as itself.
-    pub(super) fn fixed_storage(&mut self, value: TypedOperand) -> (TypedOperand, u8) {
-        let TypeName::Fixed {
-            storage, fraction, ..
-        } = value.type_name
-        else {
+    pub(super) fn fixed_storage(
+        &mut self,
+        value: TypedOperand,
+    ) -> (TypedOperand, u8) {
+        let TypeName::Fixed { storage, fraction, .. } = value.type_name else {
             return (value, 0);
         };
         let storage = storage_type(storage);
         let result = self.value(storage);
         let operand = value.operand.expect("a fixed-point value has an operand");
         self.emit("convert", vec![result], vec![operand], None);
-        (
-            TypedOperand {
-                operand: Some(hir::Operand::Value(result)),
-                type_name: storage,
-            },
-            fraction,
-        )
+        (TypedOperand { operand: Some(hir::Operand::Value(result)), type_name: storage }, fraction)
     }
 
     pub(super) fn shifted(
@@ -463,16 +399,10 @@ impl<'a> FunctionCompiler<'a> {
         self.emit(
             op,
             vec![result],
-            vec![
-                required(value.clone(), span)?,
-                hir::Operand::Constant(U8, i64::from(count)),
-            ],
+            vec![required(value.clone(), span)?, hir::Operand::Constant(U8, i64::from(count))],
             None,
         );
-        Ok(TypedOperand {
-            operand: Some(hir::Operand::Value(result)),
-            type_name: value.type_name,
-        })
+        Ok(TypedOperand { operand: Some(hir::Operand::Value(result)), type_name: value.type_name })
     }
 
     /// `value >> count`, rounded toward zero: a negative value is first biased by `2^count - 1`.
@@ -492,28 +422,12 @@ impl<'a> FunctionCompiler<'a> {
         self.emit(
             "and",
             vec![bias],
-            vec![
-                required(sign, span)?,
-                hir::Operand::Constant(type_id(type_name), (1_i64 << count) - 1),
-            ],
+            vec![required(sign, span)?, hir::Operand::Constant(type_id(type_name), (1_i64 << count) - 1)],
             None,
         );
         let biased = self.value(type_name);
-        self.emit(
-            "add",
-            vec![biased],
-            vec![required(value, span)?, hir::Operand::Value(bias)],
-            None,
-        );
-        self.shifted(
-            "sar",
-            TypedOperand {
-                operand: Some(hir::Operand::Value(biased)),
-                type_name,
-            },
-            count,
-            span,
-        )
+        self.emit("add", vec![biased], vec![required(value, span)?, hir::Operand::Value(bias)], None);
+        self.shifted("sar", TypedOperand { operand: Some(hir::Operand::Value(biased)), type_name }, count, span)
     }
 
     /// Both operands evaluated: the usual arithmetic conversions, then the operation.
@@ -528,10 +442,7 @@ impl<'a> FunctionCompiler<'a> {
             operation,
             BinaryOp::Is | BinaryOp::IsNot | BinaryOp::And | BinaryOp::Or
         ) {
-            return Err(Diagnostic::new(
-                span,
-                "this operator has no compound assignment",
-            ));
+            return Err(Diagnostic::new(span, "this operator has no compound assignment"));
         }
         if left.type_name == TypeName::String {
             return self.string_binary(operation, left, right, span);
@@ -547,23 +458,14 @@ impl<'a> FunctionCompiler<'a> {
             let bits = 8 * width(self.types.sizes, self.rules.promoted(left.type_name));
             if let Some(hir::Operand::Constant(_, count)) = right.operand {
                 if !(0..i64::from(bits)).contains(&count) {
-                    return Err(Diagnostic::new(
-                        span,
-                        format!("shift count {count} is outside 0..{bits}"),
-                    ));
+                    return Err(Diagnostic::new(span, format!("shift count {count} is outside 0..{bits}")));
                 }
             } else {
                 let count = required(right.clone(), span)?;
                 self.check_below(&count, hir::Operand::Constant(U16, i64::from(bits)), rt::ERROR_SHIFT, span)?;
             }
-            let (left_type, right_type) = (
-                self.rules.promoted(left.type_name),
-                self.rules.promoted(right.type_name),
-            );
-            (
-                self.implicit(left, left_type, span)?,
-                self.implicit(right, right_type, span)?,
-            )
+            let (left_type, right_type) = (self.rules.promoted(left.type_name), self.rules.promoted(right.type_name));
+            (self.implicit(left, left_type, span)?, self.implicit(right, right_type, span)?)
         } else {
             let Some(common) = self.rules.common(left.type_name, right.type_name) else {
                 let (left, right) = (left.type_name, right.type_name);
@@ -580,33 +482,22 @@ impl<'a> FunctionCompiler<'a> {
                 return Err(type_mismatch(span, left, right));
             };
             operand_rule(operation, common, span)?;
-            (
-                self.implicit(left, common, span)?,
-                self.implicit(right, common, span)?,
-            )
+            (self.implicit(left, common, span)?, self.implicit(right, common, span)?)
         };
-        if is_fixed(left.type_name)
-            && matches!(
-                operation,
-                BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Remainder
-            )
+        if is_fixed(left.type_name) && matches!(
+            operation,
+            BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Remainder
+        )
         {
             return self.fixed_binary(operation, left, right, span);
         }
         if operation == BinaryOp::Divide && is_integer(left.type_name) {
-            return Err(Diagnostic::new(
-                span,
-                "'/' is not defined for integers; use '//'",
-            ));
+            return Err(Diagnostic::new(span, "'/' is not defined for integers; use '//'"));
         }
         if operation == BinaryOp::FloorDivide {
             return self.floor_divide(left, right, span);
         }
-        let result_type = if comparison {
-            TypeName::Bool
-        } else {
-            left.type_name
-        };
+        let result_type = if comparison { TypeName::Bool } else { left.type_name };
         let result = self.value(result_type);
         let op = match operation {
             BinaryOp::Add if is_float(left.type_name) => "fadd",
@@ -642,22 +533,11 @@ impl<'a> FunctionCompiler<'a> {
             BinaryOp::Is | BinaryOp::IsNot => unreachable!("identity handled above"),
             BinaryOp::FloorDivide => unreachable!("floor division handled above"),
             BinaryOp::And | BinaryOp::Or => {
-                return Err(Diagnostic::new(
-                    span,
-                    "'and' and 'or' have no compound assignment",
-                ));
+                return Err(Diagnostic::new(span, "'and' and 'or' have no compound assignment"));
             }
         };
-        self.emit(
-            op,
-            vec![result],
-            vec![required(left, span)?, required(right, span)?],
-            None,
-        );
-        Ok(TypedOperand {
-            operand: Some(hir::Operand::Value(result)),
-            type_name: result_type,
-        })
+        self.emit(op, vec![result], vec![required(left, span)?, required(right, span)?], None);
+        Ok(TypedOperand { operand: Some(hir::Operand::Value(result)), type_name: result_type })
     }
 
     pub(super) fn fixed_binary(
@@ -668,17 +548,11 @@ impl<'a> FunctionCompiler<'a> {
         span: Span,
     ) -> Result<TypedOperand, Diagnostic> {
         let fixed_type = left.type_name;
-        let TypeName::Fixed {
-            storage, fraction, ..
-        } = fixed_type
-        else {
+        let TypeName::Fixed { storage, fraction, .. } = fixed_type else {
             unreachable!("fixed arithmetic requires a fixed type")
         };
         if operation == BinaryOp::Remainder {
-            return Err(Diagnostic::new(
-                span,
-                "'%' is not defined for fixed-point values",
-            ));
+            return Err(Diagnostic::new(span, "'%' is not defined for fixed-point values"));
         }
         // Keep fixed i32 arithmetic intact through HIR.  Its widened
         // intermediate is a machine operand pair, not a first-class i64:
@@ -696,17 +570,10 @@ impl<'a> FunctionCompiler<'a> {
             self.emit(
                 operation,
                 vec![result],
-                vec![
-                    required(left, span)?,
-                    required(right, span)?,
-                    hir::Operand::Constant(U8, i64::from(fraction)),
-                ],
+                vec![required(left, span)?, required(right, span)?, hir::Operand::Constant(U8, i64::from(fraction))],
                 None,
             );
-            return Ok(TypedOperand {
-                operand: Some(hir::Operand::Value(result)),
-                type_name: fixed_type,
-            });
+            return Ok(TypedOperand { operand: Some(hir::Operand::Value(result)), type_name: fixed_type });
         }
         let wide_type = match storage {
             FixedStorage::I16 => TypeName::I32,
@@ -724,35 +591,19 @@ impl<'a> FunctionCompiler<'a> {
                 self.emit(
                     "sar",
                     vec![adjusted],
-                    vec![
-                        hir::Operand::Value(product),
-                        hir::Operand::Constant(U8, i64::from(fraction)),
-                    ],
+                    vec![hir::Operand::Value(product), hir::Operand::Constant(U8, i64::from(fraction))],
                     None,
                 );
             }
             BinaryOp::Divide => {
                 let numerator = self.value(wide_type);
-                self.emit(
-                    "shl",
-                    vec![numerator],
-                    vec![left, hir::Operand::Constant(U8, i64::from(fraction))],
-                    None,
-                );
-                self.emit(
-                    "div",
-                    vec![adjusted],
-                    vec![hir::Operand::Value(numerator), right],
-                    None,
-                );
+                self.emit("shl", vec![numerator], vec![left, hir::Operand::Constant(U8, i64::from(fraction))], None);
+                self.emit("div", vec![adjusted], vec![hir::Operand::Value(numerator), right], None);
             }
             _ => unreachable!("only scaling fixed operations reach this helper"),
         }
         self.convert_value(
-            TypedOperand {
-                operand: Some(hir::Operand::Value(adjusted)),
-                type_name: wide_type,
-            },
+            TypedOperand { operand: Some(hir::Operand::Value(adjusted)), type_name: wide_type },
             fixed_type,
             span,
         )
@@ -766,10 +617,7 @@ impl<'a> FunctionCompiler<'a> {
     ) -> Result<TypedOperand, Diagnostic> {
         let result = self.value(target);
         self.emit("convert", vec![result], vec![required(value, span)?], None);
-        Ok(TypedOperand {
-            operand: Some(hir::Operand::Value(result)),
-            type_name: target,
-        })
+        Ok(TypedOperand { operand: Some(hir::Operand::Value(result)), type_name: target })
     }
 
     pub(super) fn identity<'e>(
@@ -781,11 +629,7 @@ impl<'a> FunctionCompiler<'a> {
         span: Span,
     ) -> Result<TypedOperand, Diagnostic> {
         if expected.is_some_and(|one| one != TypeName::Bool) {
-            return Err(type_mismatch(
-                span,
-                expected.expect("checked"),
-                TypeName::Bool,
-            ));
+            return Err(type_mismatch(span, expected.expect("checked"), TypeName::Bool));
         }
         let unborrowed = |expression: &'e Expr| match expression {
             Expr::Borrow { operand, .. } => operand.as_ref(),
@@ -799,41 +643,37 @@ impl<'a> FunctionCompiler<'a> {
         }
         let (left_index, right_index, distinct) = match (self.view_identity(left), self.view_identity(right)) {
             // Two elements of arrays a loop views: the same array, and index.
-            (Some((left_place, left_index)), Some((right_place, right_index))) => (left_index, right_index, left_place != right_place),
+            (Some((left_place, left_index)), Some((right_place, right_index))) => {
+                (left_index, right_index, left_place != right_place)
+            }
             _ => {
                 let (left_view, right_view) = (self.struct_view(left, span)?, self.struct_view(right, span)?);
-                let distinct = left_view.pointer.is_none() && right_view.pointer.is_none() && left_view.place != right_view.place;
+                let distinct =
+                    left_view.pointer.is_none() && right_view.pointer.is_none() && left_view.place != right_view.place;
                 (self.address_of(&left_view), self.address_of(&right_view), distinct)
             }
         };
         if distinct {
             return Ok(TypedOperand {
-                operand: Some(hir::Operand::Constant(
-                    BOOL,
-                    if operation == BinaryOp::IsNot { -1 } else { 0 },
-                )),
+                operand: Some(hir::Operand::Constant(BOOL, if operation == BinaryOp::IsNot { -1 } else { 0 })),
                 type_name: TypeName::Bool,
             });
         }
         let result = self.value(TypeName::Bool);
         self.emit(
-            if operation == BinaryOp::Is {
-                "eq"
-            } else {
-                "ne"
-            },
+            if operation == BinaryOp::Is { "eq" } else { "ne" },
             vec![result],
             vec![left_index, right_index],
             None,
         );
-        Ok(TypedOperand {
-            operand: Some(hir::Operand::Value(result)),
-            type_name: TypeName::Bool,
-        })
+        Ok(TypedOperand { operand: Some(hir::Operand::Value(result)), type_name: TypeName::Bool })
     }
 
     /// A loop's view of an array element: the array's place and the index.
-    fn view_identity(&self, expression: &Expr) -> Option<(u32, hir::Operand)> {
+    fn view_identity(
+        &self,
+        expression: &Expr,
+    ) -> Option<(u32, hir::Operand)> {
         let Expr::Name(name, _) = expression else {
             return None;
         };

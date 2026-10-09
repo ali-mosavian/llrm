@@ -56,7 +56,10 @@ struct Rule<'a> {
 }
 
 impl Rule<'_> {
-    fn arg(&self, arg: &Arg) -> String {
+    fn arg(
+        &self,
+        arg: &Arg,
+    ) -> String {
         match arg {
             Arg::Slot(slot) => format!("w.slot({slot})"),
             Arg::Built(k) => format!("&n{k}"),
@@ -80,7 +83,11 @@ impl Rule<'_> {
         }
     }
 
-    fn call(&self, module: &str, call: &Call) -> String {
+    fn call(
+        &self,
+        module: &str,
+        call: &Call,
+    ) -> String {
         let args: Vec<String> = call.args.iter().map(|arg| self.arg(arg)).collect();
         if module == "guards" {
             format!("guards::{}(cx{}{})", call.name, if args.is_empty() { "" } else { ", " }, args.join(", "))
@@ -89,7 +96,10 @@ impl Rule<'_> {
         }
     }
 
-    fn loc(&self, name: &str) -> String {
+    fn loc(
+        &self,
+        name: &str,
+    ) -> String {
         match self.rule.vars[name].ty {
             Ty::Reg => format!("Loc::Reg(v_{name})"),
             Ty::Mem => format!("Loc::Mem(v_{name}.clone())"),
@@ -99,7 +109,10 @@ impl Rule<'_> {
         }
     }
 
-    fn operand(&self, one: &OpExpr) -> String {
+    fn operand(
+        &self,
+        one: &OpExpr,
+    ) -> String {
         match one {
             OpExpr::Var(name) => self.loc(name),
             OpExpr::Call(call) => self.call("make", call),
@@ -107,7 +120,12 @@ impl Rule<'_> {
         }
     }
 
-    fn semantics(&self, head: &NewHead, operands: &Operands, dests: usize) -> Result<String, String> {
+    fn semantics(
+        &self,
+        head: &NewHead,
+        operands: &Operands,
+        dests: usize,
+    ) -> Result<String, String> {
         let split = |dests: usize| -> Result<(String, String), String> {
             let Operands::List(list, _) = operands else { unreachable!("checked: a map needs a copy") };
             let code: Vec<String> = list.iter().map(|one| self.operand(one)).collect();
@@ -133,7 +151,11 @@ impl Rule<'_> {
                     Operands::Map(call) => {
                         let args: Vec<String> = call.args.iter().map(|arg| self.arg(arg)).collect();
                         let map = |list: &str| {
-                            format!("{list}: s.{list}.iter().map(|o| make::{}(o, {})).collect()", call.name, args.join(", "))
+                            format!(
+                                "{list}: s.{list}.iter().map(|o| make::{}(o, {})).collect()",
+                                call.name,
+                                args.join(", ")
+                            )
                         };
                         format!("{}, {}", map("dests"), map("sources"))
                     }
@@ -147,7 +169,10 @@ impl Rule<'_> {
         }
     }
 
-    fn overrides(&self, over: &[crate::syntax::Override]) -> String {
+    fn overrides(
+        &self,
+        over: &[crate::syntax::Override],
+    ) -> String {
         let mut out = String::new();
         for one in over {
             let value = match &one.value {
@@ -181,7 +206,8 @@ impl Rule<'_> {
                     Ty::Held => "held",
                     Ty::Loc => "loc",
                 };
-                let _ = writeln!(out, "    let v_{name} = w.{accessor}({}, {}, {})?;", var.slot, side(var.side), var.index);
+                let _ =
+                    writeln!(out, "    let v_{name} = w.{accessor}({}, {}, {})?;", var.slot, side(var.side), var.index);
             }
         };
         bind(&mut out, 0..len);
@@ -191,10 +217,16 @@ impl Rule<'_> {
             let insn = &rule.insns[slot];
             let _ = writeln!(out, "    let w = w.defined(v_{value}.value)?;");
             let heads: Vec<String> = match &insn.names {
-                Some(names) => names.iter().map(|(name, op)| format!("(Some(Operation::{op}), Some({name:?}))")).collect(),
+                Some(names) => {
+                    names.iter().map(|(name, op)| format!("(Some(Operation::{op}), Some({name:?}))")).collect()
+                }
                 None => insn.ops.iter().map(|op| format!("(Some(Operation::{op}), _)")).collect(),
             };
-            let _ = writeln!(out, "    if !matches!((w.op({slot}), w.name({slot})), {}) {{ return None; }}", heads.join(" | "));
+            let _ = writeln!(
+                out,
+                "    if !matches!((w.op({slot}), w.name({slot})), {}) {{ return None; }}",
+                heads.join(" | ")
+            );
             for (key, values) in crate::automaton::operand_tests(insn, slot, &rule.vars) {
                 let pats: Vec<String> = values.iter().map(val_pat).collect();
                 let _ = writeln!(out, "    if !matches!({}, {}) {{ return None; }}", key_expr(key), pats.join(" | "));
@@ -270,14 +302,22 @@ impl Rule<'_> {
                 Ty::Held => "held",
                 Ty::Loc => "loc",
             };
-            let _ = writeln!(out, "    let Some(v_{name}) = w.{accessor}(0, {}, {}) else {{ return false }};", side(var.side), var.index);
+            let _ = writeln!(
+                out,
+                "    let Some(v_{name}) = w.{accessor}(0, {}, {}) else {{ return false }};",
+                side(var.side),
+                var.index
+            );
         }
         let _ = writeln!(out, "    {}", self.call("guards", gap));
         out
     }
 }
 
-fn collect(call: &Call, out: &mut Vec<String>) {
+fn collect(
+    call: &Call,
+    out: &mut Vec<String>,
+) {
     for arg in &call.args {
         match arg {
             Arg::Ident(name) if !out.contains(name) => out.push(name.clone()),
@@ -287,7 +327,12 @@ fn collect(call: &Call, out: &mut Vec<String>) {
     }
 }
 
-fn reachable(automaton: &Automaton, from: NodeId, head: bool, out: &mut Vec<NodeId>) {
+fn reachable(
+    automaton: &Automaton,
+    from: NodeId,
+    head: bool,
+    out: &mut Vec<NodeId>,
+) {
     if from == 0 || out.contains(&from) || automaton.boundary(from) == head {
         return;
     }
@@ -300,7 +345,12 @@ fn reachable(automaton: &Automaton, from: NodeId, head: bool, out: &mut Vec<Node
     }
 }
 
-fn emit_group(program: &Program, table: &Table, group: &RGroup, automaton: &Automaton) -> Result<String, String> {
+fn emit_group(
+    program: &Program,
+    table: &Table,
+    group: &RGroup,
+    automaton: &Automaton,
+) -> Result<String, String> {
     let mut out = String::new();
     let name = &group.name;
     let gap = group.walk.kind == WalkKind::Gap;
@@ -314,9 +364,8 @@ fn emit_group(program: &Program, table: &Table, group: &RGroup, automaton: &Auto
     );
 
     // The first instruction's states, returning the state they reach.
-    let state = |id: NodeId| -> String {
-        if id == 0 || automaton.boundary(id) { id.to_string() } else { format!("h{id}(w)") }
-    };
+    let state =
+        |id: NodeId| -> String { if id == 0 || automaton.boundary(id) { id.to_string() } else { format!("h{id}(w)") } };
     let _ = writeln!(out, "    fn head(w: &Window) -> u32 {{\n        {}\n    }}\n", state(automaton.root));
     let mut heads = Vec::new();
     reachable(automaton, automaton.root, true, &mut heads);
@@ -368,7 +417,8 @@ fn emit_group(program: &Program, table: &Table, group: &RGroup, automaton: &Auto
         match &automaton.nodes[*id] {
             Node::Fail => unreachable!("failure is no function"),
             Node::Accept(rules) => {
-                let calls: Vec<String> = rules.iter().map(|rule| format!("r_{}(cx, w)", group.rules[*rule].name)).collect();
+                let calls: Vec<String> =
+                    rules.iter().map(|rule| format!("r_{}(cx, w)", group.rules[*rule].name)).collect();
                 let _ = write!(out, "{}", calls[0]);
                 for call in &calls[1..] {
                     let _ = write!(out, ".or_else(|| {call})");
@@ -389,13 +439,20 @@ fn emit_group(program: &Program, table: &Table, group: &RGroup, automaton: &Auto
     for rule in &group.rules {
         let emitter = Rule { rule, program, table };
         let body = emitter.body().map_err(|one| format!("group {name}: {one}"))?;
-        let _ = writeln!(out, "    /// Line {}.\n    fn r_{}(cx: &Cx, w: &Window) -> Option<Rewrite> {{\n{body}    }}\n", rule.line, rule.name);
+        let _ = writeln!(
+            out,
+            "    /// Line {}.\n    fn r_{}(cx: &Cx, w: &Window) -> Option<Rewrite> {{\n{body}    }}\n",
+            rule.line, rule.name
+        );
     }
 
     if gap {
         // Every rule of a gap group has the same gap, so the first a state
         // can still accept says whether an instruction may be crossed.
-        let _ = writeln!(out, "    fn cross(cx: &Cx, w: &Window, x: &Arc<Insn>, state: u32) -> bool {{\n        match state {{");
+        let _ = writeln!(
+            out,
+            "    fn cross(cx: &Cx, w: &Window, x: &Arc<Insn>, state: u32) -> bool {{\n        match state {{"
+        );
         let mut crossing = BTreeSet::new();
         for id in &boundaries {
             if let Some(first) = automaton.reachable(*id).into_iter().next() {
@@ -406,7 +463,12 @@ fn emit_group(program: &Program, table: &Table, group: &RGroup, automaton: &Auto
         let _ = writeln!(out, "            _ => false,\n        }}\n    }}\n");
         for rule in crossing.into_iter().map(|at| &group.rules[at]) {
             let emitter = Rule { rule, program, table };
-            let _ = writeln!(out, "    fn c_{}(cx: &Cx, w: &Window, x: &Arc<Insn>) -> bool {{\n{}    }}\n", rule.name, emitter.crossing());
+            let _ = writeln!(
+                out,
+                "    fn c_{}(cx: &Cx, w: &Window, x: &Arc<Insn>) -> bool {{\n{}    }}\n",
+                rule.name,
+                emitter.crossing()
+            );
         }
     }
     let _ = writeln!(out, "}}");
@@ -440,7 +502,12 @@ fn emit_group(program: &Program, table: &Table, group: &RGroup, automaton: &Auto
     Ok(out)
 }
 
-pub fn rules(program: &Program, table: &Table, automata: &[Automaton], source: &str) -> Result<String, String> {
+pub fn rules(
+    program: &Program,
+    table: &Table,
+    automata: &[Automaton],
+    source: &str,
+) -> Result<String, String> {
     let mut out = String::new();
     let _ = writeln!(out, "// Generated by llrm-peepgen from {source}. Do not edit.\n");
     for (name, fields) in &program.metas {

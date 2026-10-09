@@ -1,6 +1,7 @@
 //! print and f-string formatting.
 
 use llrm_core::abi::nib as rt;
+
 use super::*;
 
 impl<'a> FunctionCompiler<'a> {
@@ -11,18 +12,16 @@ impl<'a> FunctionCompiler<'a> {
         span: Span,
     ) -> Result<TypedOperand, Diagnostic> {
         if expected.is_some_and(|one| one != TypeName::Void) {
-            return Err(type_mismatch(
-                span,
-                expected.expect("checked"),
-                TypeName::Void,
-            ));
+            return Err(type_mismatch(span, expected.expect("checked"), TypeName::Void));
         }
         let last_call = arguments.iter().rposition(|one| calls(one));
         let mut settled = Vec::new();
         for (index, argument) in arguments.iter().enumerate() {
             let before_call = last_call.is_some_and(|last| index < last);
             settled.push(match argument {
-                Expr::FString { parts, span } => Expr::FString { parts: self.settled_parts(parts, before_call)?, span: *span },
+                Expr::FString { parts, span } => {
+                    Expr::FString { parts: self.settled_parts(parts, before_call)?, span: *span }
+                }
                 _ => self.settled(argument, before_call)?,
             });
         }
@@ -35,13 +34,14 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
         self.emit_builtin(rt::PRINT_NEWLINE, Vec::new());
-        Ok(TypedOperand {
-            operand: None,
-            type_name: TypeName::Void,
-        })
+        Ok(TypedOperand { operand: None, type_name: TypeName::Void })
     }
 
-    pub(super) fn print_parts(&mut self, parts: &[FStringPart], span: Span) -> Result<(), Diagnostic> {
+    pub(super) fn print_parts(
+        &mut self,
+        parts: &[FStringPart],
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         for part in parts {
             match part {
                 FStringPart::Text(bytes) if !bytes.is_empty() => {
@@ -57,7 +57,11 @@ impl<'a> FunctionCompiler<'a> {
 
     /// `parts` with each value computed first, as `settled` leaves it;
     /// `before_call` when a call follows them all.
-    pub(super) fn settled_parts(&mut self, parts: &[FStringPart], before_call: bool) -> Result<Vec<FStringPart>, Diagnostic> {
+    pub(super) fn settled_parts(
+        &mut self,
+        parts: &[FStringPart],
+        before_call: bool,
+    ) -> Result<Vec<FStringPart>, Diagnostic> {
         let value = |part: &FStringPart| match part {
             FStringPart::Value(expression, _) => Some(expression.clone()),
             FStringPart::Text(_) => None,
@@ -82,7 +86,11 @@ impl<'a> FunctionCompiler<'a> {
     /// f-string, or change what an earlier value reads. So a value that
     /// calls, or precedes one that does (`early`), is bound to a hidden
     /// local first: a copy of a scalar, a borrow of any other place.
-    fn settled(&mut self, expression: &Expr, early: bool) -> Result<Expr, Diagnostic> {
+    fn settled(
+        &mut self,
+        expression: &Expr,
+        early: bool,
+    ) -> Result<Expr, Diagnostic> {
         let span = expression.span();
         let shown = Expr::MethodCall {
             receiver: Box::new(expression.clone()),
@@ -95,21 +103,25 @@ impl<'a> FunctionCompiler<'a> {
         if !(early || calls(&shown)) || is_literal(&shown) {
             return Ok(shown);
         }
-        let place = matches!(shown, Expr::Name(..) | Expr::Member { .. } | Expr::Index { .. } | Expr::Slice { .. });
+        let place = matches!(
+            shown,
+            Expr::Name(..) | Expr::Member { .. } | Expr::Index { .. } | Expr::Slice { .. }
+        );
         let owning = self.expression_type_hint(&shown).is_some_and(ownership::needs_drop)
             || matches!(self.struct_expression_type(&shown, span), Ok(Some(_)));
-        let value = if place && owning {
-            Expr::Borrow { mutable: false, operand: Box::new(shown), span }
-        } else {
-            shown
-        };
+        let value =
+            if place && owning { Expr::Borrow { mutable: false, operand: Box::new(shown), span } } else { shown };
         let name = self.hidden("shown");
         self.statement(&Statement::Bind { mutable: false, name: name.clone(), annotation: None, value, span })?;
         Ok(Expr::Name(name, span))
     }
 
     /// Formats one value into `format`'s field.
-    pub(super) fn print_value(&mut self, expression: &Expr, format: Format) -> Result<(), Diagnostic> {
+    pub(super) fn print_value(
+        &mut self,
+        expression: &Expr,
+        format: Format,
+    ) -> Result<(), Diagnostic> {
         if let Some((descriptor, element, rank)) = self.view_of(expression)? {
             if (element, rank) != (ElementType::Scalar(TypeName::Char), 1) {
                 return Err(Diagnostic::new(expression.span(), "only a &string view prints"));
@@ -129,15 +141,17 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// Sets the field the next formatted value fills, unless it is the default.
-    pub(super) fn field(&mut self, format: Format, type_name: TypeName, span: Span) -> Result<(), Diagnostic> {
+    pub(super) fn field(
+        &mut self,
+        format: Format,
+        type_name: TypeName,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         if format == Format::default() {
             return Ok(());
         }
         if format.radix != 10 && !is_integer(type_name) {
-            return Err(Diagnostic::new(
-                span,
-                format!("only an integer is formatted in base {}", format.radix),
-            ));
+            return Err(Diagnostic::new(span, format!("only an integer is formatted in base {}", format.radix)));
         }
         let fill = if format.zero { b'0' } else { b' ' };
         let operands = [format.width, format.radix, fill, u8::from(format.left)]
@@ -146,11 +160,12 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    pub(super) fn emit_print(&mut self, type_name: TypeName, operand: hir::Operand) {
-        if let TypeName::Fixed {
-            storage, fraction, ..
-        } = type_name
-        {
+    pub(super) fn emit_print(
+        &mut self,
+        type_name: TypeName,
+        operand: hir::Operand,
+    ) {
+        if let TypeName::Fixed { storage, fraction, .. } = type_name {
             let storage_type = match storage {
                 FixedStorage::I16 => TypeName::I16,
                 FixedStorage::I32 => TypeName::I32,
@@ -159,19 +174,12 @@ impl<'a> FunctionCompiler<'a> {
             self.emit("convert", vec![raw], vec![operand], None);
             self.emit_builtin(
                 print_name(type_name),
-                vec![
-                    hir::Operand::Value(raw),
-                    hir::Operand::Constant(U8, i64::from(fraction)),
-                ],
+                vec![hir::Operand::Value(raw), hir::Operand::Constant(U8, i64::from(fraction))],
             );
             return;
         }
         if let TypeName::Enum { width, .. } = type_name {
-            let tag = if width == 1 {
-                TypeName::U8
-            } else {
-                TypeName::U16
-            };
+            let tag = if width == 1 { TypeName::U8 } else { TypeName::U16 };
             let raw = self.value(tag);
             self.emit("convert", vec![raw], vec![operand], None);
             self.emit_builtin(print_name(tag), vec![hir::Operand::Value(raw)]);
@@ -184,9 +192,13 @@ impl<'a> FunctionCompiler<'a> {
 /// Whether evaluating `expression` calls a function.
 fn calls(expression: &Expr) -> bool {
     let mut found = false;
-    let Ok(()) = expression.clone().walk_mut(&mut |one| -> Result<(), std::convert::Infallible> {
-        found |= matches!(one, Expr::Call { .. } | Expr::MethodCall { .. });
-        Ok(())
-    });
+    let Ok(()) = expression
+        .clone()
+        .walk_mut(
+            &mut |one| -> Result<(), std::convert::Infallible> {
+                found |= matches!(one, Expr::Call { .. } | Expr::MethodCall { .. });
+                Ok(())
+            },
+        );
     found
 }

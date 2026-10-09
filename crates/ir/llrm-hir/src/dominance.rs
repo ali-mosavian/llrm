@@ -25,7 +25,10 @@ impl Node for Edges {
 
 /// The values `operand` reads: the value itself, a place's base or origin,
 /// the values of its indices.
-fn values(operand: &Operand, out: &mut Vec<i64>) {
+fn values(
+    operand: &Operand,
+    out: &mut Vec<i64>,
+) {
     match operand {
         Operand::ValueRef(one) => out.push(one.value),
         Operand::Constant(_) | Operand::PlaceRef(_) => {}
@@ -47,7 +50,8 @@ fn values(operand: &Operand, out: &mut Vec<i64>) {
 pub fn check(function: &Function) -> Result<(), String> {
     let root = function.blocks.iter().map(|one| one.id).min().unwrap_or(0) - 1;
     let entries = std::iter::once(function.entry).chain(function.external_entries.iter().copied());
-    let mut edges: Vec<Edges> = function.blocks.iter().map(|one| Edges { id: one.id, to: one.terminator.targets.clone() }).collect();
+    let mut edges: Vec<Edges> =
+        function.blocks.iter().map(|one| Edges { id: one.id, to: one.terminator.targets.clone() }).collect();
     edges.push(Edges { id: root, to: entries.collect() });
     let dominance = dominance(&edges, Some(root));
     // Where each value is defined: block, and position in it.
@@ -60,8 +64,16 @@ pub fn check(function: &Function) -> Result<(), String> {
         }
     }
     for block in function.blocks.iter().filter(|one| dominance.reachable(one.id)) {
-        let uses = block.instructions.iter().enumerate().map(|(at, one)| (at, format!("instruction {}", one.id), one.operands.as_slice()));
-        let end = std::iter::once((block.instructions.len(), format!("the terminator of block {}", block.id), block.terminator.operands.as_slice()));
+        let uses = block
+            .instructions
+            .iter()
+            .enumerate()
+            .map(|(at, one)| (at, format!("instruction {}", one.id), one.operands.as_slice()));
+        let end = std::iter::once((
+            block.instructions.len(),
+            format!("the terminator of block {}", block.id),
+            block.terminator.operands.as_slice(),
+        ));
         for (at, whose, operands) in uses.chain(end) {
             let mut used = Vec::new();
             operands.iter().for_each(|one| values(one, &mut used));
@@ -70,7 +82,9 @@ pub fn check(function: &Function) -> Result<(), String> {
                 let Some(&(home, position)) = defined.get(&value) else { continue };
                 let reaches = if home == block.id { position < at } else { dominance.dominates(home, block.id) };
                 if !reaches {
-                    return Err(format!("{whose} uses value {value}, defined in block {home}, which does not dominate it"));
+                    return Err(format!(
+                        "{whose} uses value {value}, defined in block {home}, which does not dominate it"
+                    ));
                 }
             }
         }
@@ -83,7 +97,11 @@ mod tests {
     use super::check;
     use crate::model::{Block, Function, Instruction, Op, Operand, Terminator, TerminatorKind, Value};
 
-    fn add(id: i64, result: i64, of: i64) -> Instruction {
+    fn add(
+        id: i64,
+        result: i64,
+        of: i64,
+    ) -> Instruction {
         Instruction::new(id, Op::Add, vec![result], vec![Operand::value_ref(of), Operand::value_ref(of)])
     }
 
@@ -96,7 +114,10 @@ mod tests {
     }
 
     /// Block 1 branches to 2 and 3, which join in 4. The value 5 is defined in 2.
-    fn diamond(join: Terminator, left: Vec<Instruction>) -> Function {
+    fn diamond(
+        join: Terminator,
+        left: Vec<Instruction>,
+    ) -> Function {
         let values = (1..=6).map(|id| Value { id, r#type: 1 }).collect();
         let branch = Terminator::new(TerminatorKind::Branch, vec![Operand::value_ref(1)], vec![2, 3]);
         let blocks = vec![
@@ -135,10 +156,7 @@ mod tests {
     #[test]
     fn a_definition_reaching_only_one_of_two_entries_is_refused() {
         let values = (1..=4).map(|id| Value { id, r#type: 1 }).collect();
-        let blocks = vec![
-            Block::new(1, vec![add(1, 2, 1)], jump(2)),
-            Block::new(2, vec![add(2, 3, 2)], returns(3)),
-        ];
+        let blocks = vec![Block::new(1, vec![add(1, 2, 1)], jump(2)), Block::new(2, vec![add(2, 3, 2)], returns(3))];
         let mut function = Function::new(1, "f", 1, values, Vec::new(), blocks, 1);
         function.parameters = vec![1];
         assert_eq!(check(&function), Ok(()));

@@ -3,11 +3,24 @@ use llrm_object::debug::FrameRow;
 
 use super::rows;
 
-fn row(offset: usize, register: &str, cfa: i64, saved: &[(&str, i64)]) -> FrameRow {
-    FrameRow { offset, cfa_register: register.into(), cfa_offset: cfa, saved: saved.iter().map(|&(name, at)| (name.to_owned(), at)).collect() }
+fn row(
+    offset: usize,
+    register: &str,
+    cfa: i64,
+    saved: &[(&str, i64)],
+) -> FrameRow {
+    FrameRow {
+        offset,
+        cfa_register: register.into(),
+        cfa_offset: cfa,
+        saved: saved.iter().map(|&(name, at)| (name.to_owned(), at)).collect(),
+    }
 }
 
-fn of(code: &[u8], pops: &[(usize, i64)]) -> Result<Vec<FrameRow>, String> {
+fn of(
+    code: &[u8],
+    pops: &[(usize, i64)],
+) -> Result<Vec<FrameRow>, String> {
     rows(code, 32, EBP, ESP, 4, pops)
 }
 
@@ -17,7 +30,15 @@ fn of(code: &[u8], pops: &[(usize, i64)]) -> Result<Vec<FrameRow>, String> {
 #[test]
 fn a_frame_register_function_is_the_stack_pointer_then_the_frame_register_then_the_stack_pointer() {
     let code = [0x55, 0x89, 0xE5, 0x83, 0xEC, 0x08, 0x90, 0xC9, 0xC3];
-    assert_eq!(of(&code, &[]).unwrap(), [row(0, "esp", 4, &[]), row(1, "esp", 8, &[("ebp", -8)]), row(3, "ebp", 8, &[("ebp", -8)]), row(8, "esp", 4, &[])]);
+    assert_eq!(
+        of(&code, &[]).unwrap(),
+        [
+            row(0, "esp", 4, &[]),
+            row(1, "esp", 8, &[("ebp", -8)]),
+            row(3, "ebp", 8, &[("ebp", -8)]),
+            row(8, "esp", 4, &[])
+        ]
+    );
 }
 
 /// A function with no frame register: each argument pushed moves the frame address from the stack pointer, and
@@ -27,7 +48,10 @@ fn a_frame_register_function_is_the_stack_pointer_then_the_frame_register_then_t
 fn each_push_and_pop_moves_the_frame_address_from_the_stack_pointer() {
     // push 2; push 1; call f; add esp, 8; ret
     let code = [0x6A, 0x02, 0x6A, 0x01, 0xE8, 0, 0, 0, 0, 0x83, 0xC4, 0x08, 0xC3];
-    assert_eq!(of(&code, &[]).unwrap(), [row(0, "esp", 4, &[]), row(2, "esp", 8, &[]), row(4, "esp", 12, &[]), row(12, "esp", 4, &[])]);
+    assert_eq!(
+        of(&code, &[]).unwrap(),
+        [row(0, "esp", 4, &[]), row(2, "esp", 8, &[]), row(4, "esp", 12, &[]), row(12, "esp", 4, &[])]
+    );
 }
 
 /// A callee that pops its arguments leaves the stack higher after the call with no instruction to say so: the
@@ -35,7 +59,10 @@ fn each_push_and_pop_moves_the_frame_address_from_the_stack_pointer() {
 #[test]
 fn a_call_whose_callee_pops_its_arguments_moves_the_frame_address_by_what_it_pops() {
     let code = [0x6A, 0x02, 0x6A, 0x01, 0xE8, 0, 0, 0, 0, 0xC3];
-    assert_eq!(of(&code, &[(9, 8)]).unwrap(), [row(0, "esp", 4, &[]), row(2, "esp", 8, &[]), row(4, "esp", 12, &[]), row(9, "esp", 4, &[])]);
+    assert_eq!(
+        of(&code, &[(9, 8)]).unwrap(),
+        [row(0, "esp", 4, &[]), row(2, "esp", 8, &[]), row(4, "esp", 12, &[]), row(9, "esp", 4, &[])]
+    );
 }
 
 /// A register saved where it is first needed and restored before each return: a rule from its push to its pop on
@@ -46,7 +73,13 @@ fn a_saved_register_is_saved_from_its_push_to_each_pop_on_every_path() {
     let code = [0x56, 0x85, 0xC0, 0x74, 0x02, 0x5E, 0xC3, 0x5E, 0xC3];
     assert_eq!(
         of(&code, &[]).unwrap(),
-        [row(0, "esp", 4, &[]), row(1, "esp", 8, &[("esi", -8)]), row(6, "esp", 4, &[]), row(7, "esp", 8, &[("esi", -8)]), row(8, "esp", 4, &[])]
+        [
+            row(0, "esp", 4, &[]),
+            row(1, "esp", 8, &[("esi", -8)]),
+            row(6, "esp", 4, &[]),
+            row(7, "esp", 8, &[("esi", -8)]),
+            row(8, "esp", 4, &[])
+        ]
     );
     let _ = ESI;
 }
@@ -67,4 +100,3 @@ fn a_push_of_a_register_written_since_entry_is_no_save() {
     let code = [0xBE, 1, 0, 0, 0, 0x56, 0x83, 0xC4, 0x04, 0xC3];
     assert!(of(&code, &[]).unwrap().iter().all(|one| one.saved.is_empty()));
 }
-

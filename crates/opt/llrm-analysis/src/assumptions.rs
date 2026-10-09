@@ -20,7 +20,8 @@ thread_local! {
     static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has gone through a body for its assumptions, for a test that a pass asks once and not per query.
+/// How many times this thread has gone through a body for its assumptions, for a test that a pass asks once and not per
+/// query.
 pub fn built() -> usize {
     BUILT.with(std::cell::Cell::get)
 }
@@ -44,12 +45,19 @@ impl Assumptions {
     }
 
     /// What block `at` assumes.
-    pub fn here(&self, at: i64) -> &[Operand] {
+    pub fn here(
+        &self,
+        at: i64,
+    ) -> &[Operand] {
         self.here.get(&at).map_or(&[], Vec::as_slice)
     }
 
     /// What the blocks strictly above `at` assume, nearest first.
-    pub fn above(&self, shape: &Shape, at: i64) -> Vec<Operand> {
+    pub fn above(
+        &self,
+        shape: &Shape,
+        at: i64,
+    ) -> Vec<Operand> {
         let mut found = Vec::new();
         let mut reached = at;
         while !self.is_empty()

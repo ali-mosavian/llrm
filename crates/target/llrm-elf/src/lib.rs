@@ -55,7 +55,10 @@ impl Strings {
         Strings(vec![0])
     }
 
-    fn add(&mut self, text: &str) -> u32 {
+    fn add(
+        &mut self,
+        text: &str,
+    ) -> u32 {
         let at = self.0.len() as u32;
         self.0.extend(text.as_bytes());
         self.0.push(0);
@@ -75,16 +78,25 @@ struct Header {
     entry: u64,
 }
 
-fn put16(out: &mut Vec<u8>, value: u16) {
+fn put16(
+    out: &mut Vec<u8>,
+    value: u16,
+) {
     out.extend(value.to_le_bytes());
 }
 
-fn put32(out: &mut Vec<u8>, value: u32) {
+fn put32(
+    out: &mut Vec<u8>,
+    value: u32,
+) {
     out.extend(value.to_le_bytes());
 }
 
 /// An address-sized field: 4 bytes in a 32-bit file, 8 in a 64-bit one.
-fn put_word<M: Machine>(out: &mut Vec<u8>, value: u64) {
+fn put_word<M: Machine>(
+    out: &mut Vec<u8>,
+    value: u64,
+) {
     if M::WIDE {
         out.extend(value.to_le_bytes());
     } else {
@@ -95,7 +107,10 @@ fn put_word<M: Machine>(out: &mut Vec<u8>, value: u64) {
 /// The ELF name, type and flags of `section`.
 fn spelling(section: &Section) -> Result<(&'static str, u32, u64), Unsupported> {
     if !section.near {
-        return Err(unsupported(format!("{}: a segment addressed by its own selector has no ELF section", section.name)));
+        return Err(unsupported(format!(
+            "{}: a segment addressed by its own selector has no ELF section",
+            section.name
+        )));
     }
     Ok(match section.role {
         Role::Text => (".text", SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR),
@@ -108,14 +123,21 @@ fn spelling(section: &Section) -> Result<(&'static str, u32, u64), Unsupported> 
     })
 }
 
-fn align(bytes: &mut Vec<u8>, to: usize) {
+fn align(
+    bytes: &mut Vec<u8>,
+    to: usize,
+) {
     while bytes.len() % to != 0 {
         bytes.push(0);
     }
 }
 
 /// Whether `addend` is a value of a field of `width` bytes: signed where pc-relative.
-fn fits(addend: i64, width: usize, pcrel: bool) -> bool {
+fn fits(
+    addend: i64,
+    width: usize,
+    pcrel: bool,
+) -> bool {
     match (width, pcrel) {
         (8, _) => true,
         (4, true) => i32::try_from(addend).is_ok(),
@@ -152,7 +174,13 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     let mut section_names: Vec<String> = Vec::new();
     for (index, section) in object.sections.iter().enumerate() {
         let taken = section.role != Role::Debug && spelled[..index].iter().any(|one| one.0 == spelled[index].0);
-        section_names.push(if section.role == Role::Debug { section.name.clone() } else if taken { format!("{}.{}", spelled[index].0, section.name) } else { spelled[index].0.to_owned() });
+        section_names.push(if section.role == Role::Debug {
+            section.name.clone()
+        } else if taken {
+            format!("{}.{}", spelled[index].0, section.name)
+        } else {
+            spelled[index].0.to_owned()
+        });
     }
 
     // Symbols: null, the source's file, one section symbol per section, then the globals.
@@ -185,7 +213,10 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     let mut elf_symbol: Vec<Option<u32>> = vec![None; object.symbols.len()];
     let mut next = first_global as u32;
     for (index, one) in object.symbols.iter().enumerate() {
-        if matches!((one.definition, one.binding), (Definition::Defined { .. }, Binding::Local)) {
+        if matches!(
+            (one.definition, one.binding),
+            (Definition::Defined { .. }, Binding::Local)
+        ) {
             continue;
         }
         let name = strings.add(&one.name);
@@ -222,7 +253,10 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
             // S + A - P, where the model's value is S + addend - (at + from).
             let addend = one.addend + own - from as i64;
             if !fits(addend, width, one.kind.relative()) {
-                return Err(unsupported(format!("{}: an addend of {addend} does not fit its {width}-byte field", section.name)));
+                return Err(unsupported(format!(
+                    "{}: an addend of {addend} does not fit its {width}-byte field",
+                    section.name
+                )));
             }
             put_word::<M>(&mut entries, one.at as u64);
             if M::WIDE {
@@ -244,7 +278,8 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     let header_size = if M::WIDE { 64 } else { 52 };
     let word = if M::WIDE { 8 } else { 4 };
     let mut out = vec![0u8; header_size];
-    let mut headers = vec![Header { name: 0, kind: 0, flags: 0, offset: 0, size: 0, link: 0, info: 0, align: 0, entry: 0 }];
+    let mut headers =
+        vec![Header { name: 0, kind: 0, flags: 0, offset: 0, size: 0, link: 0, info: 0, align: 0, entry: 0 }];
     for (index, section) in object.sections.iter().enumerate() {
         let (_, kind, flags) = spelled[index];
         let alignment = section.align.max(4).next_power_of_two();
@@ -253,31 +288,92 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         if kind == SHT_PROGBITS {
             out.extend(&images[index]);
         }
-        headers.push(Header { name: names.add(&section_names[index]), kind, flags, offset, size: images[index].len() as u64, link: 0, info: 0, align: alignment as u64, entry: 0 });
+        headers.push(Header {
+            name: names.add(&section_names[index]),
+            kind,
+            flags,
+            offset,
+            size: images[index].len() as u64,
+            link: 0,
+            info: 0,
+            align: alignment as u64,
+            entry: 0,
+        });
     }
     let symtab_index = 1 + object.sections.len() + relocs.iter().filter(|one| !one.is_empty()).count() + 1;
-    let (rel_kind, rel_name, rel_entry) = if M::ADDEND { (SHT_RELA, ".rela", 3 * word) } else { (SHT_REL, ".rel", 2 * word) };
+    let (rel_kind, rel_name, rel_entry) =
+        if M::ADDEND { (SHT_RELA, ".rela", 3 * word) } else { (SHT_REL, ".rel", 2 * word) };
     for (index, entries) in relocs.iter().enumerate().filter(|(_, one)| !one.is_empty()) {
         align(&mut out, word);
         let offset = out.len() as u64;
         out.extend(entries);
         let name = names.add(&format!("{rel_name}{}", section_names[index]));
-        headers.push(Header { name, kind: rel_kind, flags: SHF_INFO_LINK, offset, size: entries.len() as u64, link: symtab_index as u32, info: index as u32 + 1, align: word as u64, entry: rel_entry as u64 });
+        headers.push(Header {
+            name,
+            kind: rel_kind,
+            flags: SHF_INFO_LINK,
+            offset,
+            size: entries.len() as u64,
+            link: symtab_index as u32,
+            info: index as u32 + 1,
+            align: word as u64,
+            entry: rel_entry as u64,
+        });
     }
     // An empty .note.GNU-stack: the object does not need an executable stack.
-    headers.push(Header { name: names.add(".note.GNU-stack"), kind: SHT_PROGBITS, flags: 0, offset: out.len() as u64, size: 0, link: 0, info: 0, align: 1, entry: 0 });
+    headers.push(Header {
+        name: names.add(".note.GNU-stack"),
+        kind: SHT_PROGBITS,
+        flags: 0,
+        offset: out.len() as u64,
+        size: 0,
+        link: 0,
+        info: 0,
+        align: 1,
+        entry: 0,
+    });
     align(&mut out, word);
     let offset = out.len() as u64;
     out.extend(&symtab);
     assert_eq!(headers.len(), symtab_index, "the relocations name the symbol table by this index");
-    headers.push(Header { name: names.add(".symtab"), kind: SHT_SYMTAB, flags: 0, offset, size: symtab.len() as u64, link: headers.len() as u32 + 1, info: first_global as u32, align: word as u64, entry: symbol_size as u64 });
+    headers.push(Header {
+        name: names.add(".symtab"),
+        kind: SHT_SYMTAB,
+        flags: 0,
+        offset,
+        size: symtab.len() as u64,
+        link: headers.len() as u32 + 1,
+        info: first_global as u32,
+        align: word as u64,
+        entry: symbol_size as u64,
+    });
     let offset = out.len() as u64;
     out.extend(&strings.0);
-    headers.push(Header { name: names.add(".strtab"), kind: SHT_STRTAB, flags: 0, offset, size: strings.0.len() as u64, link: 0, info: 0, align: 1, entry: 0 });
+    headers.push(Header {
+        name: names.add(".strtab"),
+        kind: SHT_STRTAB,
+        flags: 0,
+        offset,
+        size: strings.0.len() as u64,
+        link: 0,
+        info: 0,
+        align: 1,
+        entry: 0,
+    });
     let name = names.add(".shstrtab");
     let offset = out.len() as u64;
     out.extend(&names.0);
-    headers.push(Header { name, kind: SHT_STRTAB, flags: 0, offset, size: names.0.len() as u64, link: 0, info: 0, align: 1, entry: 0 });
+    headers.push(Header {
+        name,
+        kind: SHT_STRTAB,
+        flags: 0,
+        offset,
+        size: names.0.len() as u64,
+        link: 0,
+        info: 0,
+        align: 1,
+        entry: 0,
+    });
     align(&mut out, word);
     let table = out.len() as u64;
     for one in &headers {

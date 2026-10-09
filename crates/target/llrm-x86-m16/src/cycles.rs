@@ -20,11 +20,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 use iced_x86::{Decoder, DecoderOptions, Formatter, NasmFormatter};
-
-use crate::timings::{
-    ARCHS, COST, INORDER, ISSUE, LATENCY, LCP_STALL, PARTIAL_STALL, PREFIX,
-};
 use llrm_support::hash::IndexMap;
+
+use crate::timings::{ARCHS, COST, INORDER, ISSUE, LATENCY, LCP_STALL, PARTIAL_STALL, PREFIX};
 
 pub const W16: [&str; 8] = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp"];
 pub const W32: [&str; 8] = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp"];
@@ -32,9 +30,7 @@ pub const SEG: [&str; 6] = ["es", "cs", "ss", "ds", "fs", "gs"];
 pub const ALU: [&str; 9] = ["add", "adc", "sub", "sbb", "and", "or", "xor", "cmp", "test"];
 /// Opcodes carrying a full-width immediate, whose length 66h therefore changes:
 /// alu eAX,imm32 and imul/alu/test/mov/push.
-pub const IMM_FULL: [&str; 14] = [
-    "05", "0d", "15", "1d", "25", "2d", "35", "3d", "69", "81", "a9", "c7", "f7", "68",
-];
+pub const IMM_FULL: [&str; 14] = ["05", "0d", "15", "1d", "25", "2d", "35", "3d", "69", "81", "a9", "c7", "f7", "68"];
 
 /// One disassembled instruction: raw hex, mnemonic, operands.
 pub type Row = (String, String, String);
@@ -85,14 +81,14 @@ fn _isdigit(text: &str) -> bool {
 }
 
 fn _operands(ops: &str) -> Vec<&str> {
-    if ops.is_empty() {
-        Vec::new()
-    } else {
-        ops.split(',').map(str::trim).collect()
-    }
+    if ops.is_empty() { Vec::new() } else { ops.split(',').map(str::trim).collect() }
 }
 
-pub fn classify(mnem: &str, ops: &str, raw: &str) -> &'static str {
+pub fn classify(
+    mnem: &str,
+    ops: &str,
+    raw: &str,
+) -> &'static str {
     let a = _operands(ops);
     let dst = a.first().copied().unwrap_or("");
     let src = a.get(1).copied().unwrap_or("");
@@ -224,10 +220,16 @@ pub fn classify(mnem: &str, ops: &str, raw: &str) -> &'static str {
         }
         return "mov_rr";
     }
-    if matches!(mnem, "shl" | "shr" | "sar" | "rol" | "ror" | "rcl" | "rcr" | "sal") && !mem(dst) && src == "1" {
+    if matches!(
+        mnem,
+        "shl" | "shr" | "sar" | "rol" | "ror" | "rcl" | "rcr" | "sal"
+    ) && !mem(dst) && src == "1" {
         return "shift_r1";
     }
-    if matches!(mnem, "shl" | "shr" | "sar" | "rol" | "ror" | "rcl" | "rcr" | "sal" | "shld" | "shrd") {
+    if matches!(
+        mnem,
+        "shl" | "shr" | "sar" | "rol" | "ror" | "rcl" | "rcr" | "sal" | "shld" | "shrd"
+    ) {
         return "shift_ri";
     }
     if ALU.contains(&mnem) {
@@ -252,8 +254,18 @@ pub fn classify(mnem: &str, ops: &str, raw: &str) -> &'static str {
 /// cost column is already an occupancy/throughput ranking, so it is used as
 /// one; for everything else the machine's width is the limit.
 pub const NOTPIPE: [&str; 12] = [
-    "idiv_r32", "idiv_m32", "div_r16", "call_far", "ret_far", "push_m", "pop_m", "pop_seg",
-    "mov_seg_r", "les", "lahf", "sahf",
+    "idiv_r32",
+    "idiv_m32",
+    "div_r16",
+    "call_far",
+    "ret_far",
+    "push_m",
+    "pop_m",
+    "pop_seg",
+    "mov_seg_r",
+    "les",
+    "lahf",
+    "sahf",
 ];
 
 /// The register names an operand list touches, 16 and 32 bit alike.
@@ -268,7 +280,11 @@ pub fn regs_of(ops: &str) -> BTreeSet<String> {
 }
 
 /// `text[lo:hi]`, clamped as Python slices are.
-fn _slice(text: &str, lo: usize, hi: usize) -> &str {
+fn _slice(
+    text: &str,
+    lo: usize,
+    hi: usize,
+) -> &str {
     let hi = hi.min(text.len());
     &text[lo.min(hi)..hi]
 }
@@ -412,10 +428,7 @@ pub static CASES: LazyLock<IndexMap<&'static str, String>> = LazyLock::new(|| {
         ("and: widened", "66A15A00662306560066A35E00668BD066C1EA10".to_owned()),
         ("and: widened, no dx", "66A15A00662306560066A35E00".to_owned()),
         // ---- c = ((a AND b) + a) XOR b
-        (
-            "chain: BC halves",
-            "A15A008B165C00230656002316580003065600131658003306560033165800A35E0089166000".to_owned(),
-        ),
+        ("chain: BC halves", "A15A008B165C00230656002316580003065600131658003306560033165800A35E0089166000".to_owned()),
         ("chain: widened", "66A15A0066230656006603065600663306560066A35E00".to_owned()),
         // ---- a long multiply: B$MUI4 when both high words are zero, and when not
         ("mul: stock fast", call4("558BEC8B46088B4E0C0BC88B4E0A75098B4606F7E15DCA0800")),
@@ -474,7 +487,10 @@ pub static CASES: LazyLock<IndexMap<&'static str, String>> = LazyLock::new(|| {
 /// pass, which a straight line walk cannot price. Scored separately, per pass.
 pub const DVI4_LOOP: &str = "D1EBD1D9D1EAD1D80BDB75F4";
 
-pub fn report(name: &str, hexs: &str) -> (String, usize, Totals, Vec<Detail>) {
+pub fn report(
+    name: &str,
+    hexs: &str,
+) -> (String, usize, Totals, Vec<Detail>) {
     let rows = disasm(hexs);
     let (total, detail) = score(&rows);
     (name.to_owned(), rows.len(), total, detail)
@@ -489,11 +505,7 @@ pub fn _g(x: f64) -> String {
     let (mantissa, exponent) = sci.split_once('e').expect("exponent form");
     let exponent: i32 = exponent.parse().expect("an integer exponent");
     let strip = |text: String| {
-        if text.contains('.') {
-            text.trim_end_matches('0').trim_end_matches('.').to_owned()
-        } else {
-            text
-        }
+        if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.').to_owned() } else { text }
     };
     if (-4..6).contains(&exponent) {
         strip(format!("{x:.*}", (5 - exponent) as usize))
@@ -507,7 +519,11 @@ fn _header() -> String {
     format!("{:24}{:>4}  ", "case", "ins") + &ARCHS.iter().map(|a| format!("{a:>7}")).collect::<String>()
 }
 
-pub fn table(title: &str, which: usize, cases: &IndexMap<&'static str, String>) {
+pub fn table(
+    title: &str,
+    which: usize,
+    cases: &IndexMap<&'static str, String>,
+) {
     println!();
     println!("{title}");
     println!("{}", _header());
@@ -546,4 +562,3 @@ pub fn main(argv: &[String]) -> i32 {
     println!("   above -- which are its short path, not its worst one.");
     0
 }
-

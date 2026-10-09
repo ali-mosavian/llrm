@@ -2,20 +2,22 @@
 //! host (crates/frontends/llrm-nib/src/runtime/buffers.nib and strings.nib). A dropped buffer is marked, so a
 //! second drop or a leak is an execution error, not silent.
 
-use crate::abi::nib as rt;
 use super::model::{DescriptorField, DescriptorPlace};
 use super::*;
+use crate::abi::nib as rt;
 
 const HEAP: u8 = 0x01;
 const READONLY: u8 = 0x08;
 const FREED: u8 = 0x80;
 
 /// The word of `width` bytes at `address` and `delta`.
-fn word(address: &Address, delta: i64, width: usize) -> Outcome<i128> {
+fn word(
+    address: &Address,
+    delta: i64,
+    width: usize,
+) -> Outcome<i128> {
     let cells = address.memory.borrow();
-    let at = usize::try_from(address.offset + delta)
-        .ok()
-        .filter(|one| one + width <= cells.bytes.len());
+    let at = usize::try_from(address.offset + delta).ok().filter(|one| one + width <= cells.bytes.len());
     let Some(at) = at else {
         return fail("descriptor read outside its buffer");
     };
@@ -25,7 +27,10 @@ fn word(address: &Address, delta: i64, width: usize) -> Outcome<i128> {
 }
 
 /// A heap buffer's header: where the field `field` is, relative to its data.
-fn at(field: DescriptorField, width: usize) -> i64 {
+fn at(
+    field: DescriptorField,
+    width: usize,
+) -> i64 {
     DescriptorPlace::heap_offset(field, width as i64)
 }
 
@@ -33,12 +38,12 @@ fn header(width: usize) -> i64 {
     DescriptorPlace::header_bytes(width as i64)
 }
 
-fn flags(address: &Address, width: usize) -> Outcome<u8> {
+fn flags(
+    address: &Address,
+    width: usize,
+) -> Outcome<u8> {
     let cells = address.memory.borrow();
-    match usize::try_from(address.offset - header(width))
-        .ok()
-        .and_then(|at| cells.bytes.get(at))
-    {
+    match usize::try_from(address.offset - header(width)).ok().and_then(|at| cells.bytes.get(at)) {
         Some(flags) if flags & FREED != 0 => fail("use of a dropped buffer"),
         Some(flags) => Ok(*flags),
         None => fail("a string has no descriptor"),
@@ -46,7 +51,10 @@ fn flags(address: &Address, width: usize) -> Outcome<u8> {
 }
 
 /// A string's bytes, by its descriptor's length.
-fn text(address: &Address, width: usize) -> Outcome<Vec<u8>> {
+fn text(
+    address: &Address,
+    width: usize,
+) -> Outcome<Vec<u8>> {
     flags(address, width)?;
     let length = word(address, at(DescriptorField::Length, width), width)? as usize;
     let cells = address.memory.borrow();
@@ -62,28 +70,38 @@ fn size(argument: &Scalar) -> Outcome<usize> {
     Ok(argument.whole()? as usize)
 }
 
-fn set_word(address: &Address, field: DescriptorField, width: usize, value: usize) {
+fn set_word(
+    address: &Address,
+    field: DescriptorField,
+    width: usize,
+    value: usize,
+) {
     let start = (address.offset + at(field, width)) as usize;
     address.memory.borrow_mut().bytes[start..start + width].copy_from_slice(&value.to_le_bytes()[..width]);
 }
 
-fn set_length(address: &Address, width: usize, length: usize) {
+fn set_length(
+    address: &Address,
+    width: usize,
+    length: usize,
+) {
     set_word(address, DescriptorField::Length, width, length);
 }
 
 /// `count` bytes of `from`'s data into `to`'s, with the addresses among them.
-fn copy_data(from: &Address, to: &Address, count: usize) {
+fn copy_data(
+    from: &Address,
+    to: &Address,
+    count: usize,
+) {
     let (start, at) = (from.offset, to.offset);
     let source = from.memory.borrow();
     let mut target = to.memory.borrow_mut();
     let (start_byte, at_byte) = (start as usize, at as usize);
-    target.bytes[at_byte..at_byte + count]
-        .copy_from_slice(&source.bytes[start_byte..start_byte + count]);
+    target.bytes[at_byte..at_byte + count].copy_from_slice(&source.bytes[start_byte..start_byte + count]);
     for ((offset, width), address) in &source.pointers {
         if (start..start + count as i64).contains(offset) {
-            target
-                .pointers
-                .insert((offset - start + at, *width), address.clone());
+            target.pointers.insert((offset - start + at, *width), address.clone());
         }
     }
 }
@@ -98,7 +116,13 @@ fn pointer(argument: &Scalar) -> Outcome<Option<Address>> {
 
 impl Machine<'_> {
     /// A new heap buffer holding `bytes`, with room for `capacity` elements of `size` bytes.
-    fn allocate(&mut self, bytes: &[u8], length: usize, capacity: usize, size: usize) -> Address {
+    fn allocate(
+        &mut self,
+        bytes: &[u8],
+        length: usize,
+        capacity: usize,
+        size: usize,
+    ) -> Address {
         let width = self.word;
         // The flags word: the flags byte, then its pad.
         let mut cells = vec![HEAP];
@@ -107,22 +131,18 @@ impl Machine<'_> {
         cells.extend(&capacity.to_le_bytes()[..width]);
         cells.extend(bytes);
         cells.resize(header(width) as usize + capacity.max(length) * size + 1, 0);
-        let memory = Rc::new(RefCell::new(Cells {
-            bytes: cells,
-            pointers: HashMap::default(),
-                        dead: false,
-        }));
+        let memory = Rc::new(RefCell::new(Cells { bytes: cells, pointers: HashMap::default(), dead: false }));
         self.heap.push(memory.clone());
-        Address {
-            memory,
-            offset: header(width),
-            length: None,
-            capacity: None,
-        }
+        Address { memory, offset: header(width), length: None, capacity: None }
     }
 
     /// `address` on the heap, writable, with room for `wanted` elements.
-    fn reserve(&mut self, address: &Address, wanted: usize, size: usize) -> Outcome<Address> {
+    fn reserve(
+        &mut self,
+        address: &Address,
+        wanted: usize,
+        size: usize,
+    ) -> Outcome<Address> {
         let width = self.word;
         flags(address, width)?;
         let length = word(address, at(DescriptorField::Length, width), width)? as usize;
@@ -139,7 +159,11 @@ impl Machine<'_> {
     }
 
     /// crates/frontends/llrm-nib/src/runtime/dicts.nib's `N$DRES`: room for one more entry.
-    fn dict_reserve(&mut self, table: &Address, size: usize) -> Outcome<Address> {
+    fn dict_reserve(
+        &mut self,
+        table: &Address,
+        size: usize,
+    ) -> Outcome<Address> {
         let width = self.word;
         flags(table, width)?;
         let slots = word(table, at(DescriptorField::Length, width), width)? as usize;
@@ -167,14 +191,21 @@ impl Machine<'_> {
         Ok(copy)
     }
 
-    fn drop_buffer(&mut self, address: &Address) -> Outcome<()> {
+    fn drop_buffer(
+        &mut self,
+        address: &Address,
+    ) -> Outcome<()> {
         if flags(address, self.word)? & HEAP != 0 {
             address.memory.borrow_mut().bytes[(address.offset - header(self.word)) as usize] |= FREED;
         }
         Ok(())
     }
 
-    fn append(&mut self, to: &Address, more: &[u8]) -> Outcome<Address> {
+    fn append(
+        &mut self,
+        to: &Address,
+        more: &[u8],
+    ) -> Outcome<Address> {
         let width = self.word;
         let mut bytes = text(to, width)?;
         let heap = flags(to, width)? & (HEAP | READONLY) == HEAP;
@@ -214,11 +245,9 @@ impl Machine<'_> {
                 let width = self.word;
                 let length = word(&address, at(DescriptorField::Length, width), width)? as usize;
                 match name {
-                    rt::BUFFER_RESERVE => Some(Scalar::Address(self.reserve(
-                        &address,
-                        size(&arguments[1])?,
-                        size(&arguments[2])?,
-                    )?)),
+                    rt::BUFFER_RESERVE => {
+                        Some(Scalar::Address(self.reserve(&address, size(&arguments[1])?, size(&arguments[2])?)?))
+                    }
                     rt::BUFFER_GROW => {
                         let count = size(&arguments[1])?;
                         let grown = self.reserve(&address, length + count, size(&arguments[2])?)?;
@@ -242,8 +271,7 @@ impl Machine<'_> {
                 }
             }
             rt::TEXT_CONCAT | rt::TEXT_APPEND => {
-                let (Some(left), Some(right)) = (pointer(&arguments[0])?, pointer(&arguments[1])?)
-                else {
+                let (Some(left), Some(right)) = (pointer(&arguments[0])?, pointer(&arguments[1])?) else {
                     return fail(format!("{name} of null"));
                 };
                 let more = text(&right, self.word)?;
@@ -266,17 +294,13 @@ impl Machine<'_> {
             rt::ERROR_SHIFT => return self.panic("shift count out of range"),
             rt::ERROR_CONVERT => return self.panic("float outside the integer type"),
             rt::VIEW_COMPARE => {
-                let (left, right) = (descriptor_bytes(&arguments[0], self.word)?, descriptor_bytes(&arguments[1], self.word)?);
+                let (left, right) =
+                    (descriptor_bytes(&arguments[0], self.word)?, descriptor_bytes(&arguments[1], self.word)?);
                 Some(Scalar::Int(left.cmp(&right) as i128))
             }
             rt::VIEW_COPY => {
                 let bytes = descriptor_bytes(&arguments[0], self.word)?;
-                Some(Scalar::Address(self.allocate(
-                    &bytes,
-                    bytes.len(),
-                    bytes.len(),
-                    1,
-                )))
+                Some(Scalar::Address(self.allocate(&bytes, bytes.len(), bytes.len(), 1)))
             }
             rt::PRINT_BEGIN => {
                 let sink = self.allocate(&[], 0, 16, 1);
@@ -287,9 +311,7 @@ impl Machine<'_> {
                 Some(sink) => Some(Scalar::Address(sink)),
                 None => return fail(format!("{} without {}", rt::PRINT_END, rt::PRINT_BEGIN)),
             },
-            symbol if rt::os_operation(symbol).is_some() => {
-                Some(Scalar::Int(i128::from(self.file(name, arguments)?)))
-            }
+            symbol if rt::os_operation(symbol).is_some() => Some(Scalar::Int(i128::from(self.file(name, arguments)?))),
             _ => return Ok(None),
         };
         Ok(Some(result))
@@ -297,7 +319,11 @@ impl Machine<'_> {
 
     /// The DOS file calls on host files: a handle or count, or DOS's error
     /// code negated, as the OS layer's operations return them (runtime/shared/interface.toml).
-    fn file(&mut self, name: &str, arguments: &[Scalar]) -> Outcome<i16> {
+    fn file(
+        &mut self,
+        name: &str,
+        arguments: &[Scalar],
+    ) -> Outcome<i16> {
         use std::io::{Read, Write};
         const FIRST: usize = 5;
         let failed = |error: std::io::Error| -> i16 {
@@ -393,7 +419,10 @@ impl Machine<'_> {
     }
 
     /// Formatted text goes to the console, or while an f-string builds, into it.
-    pub(super) fn emit(&mut self, text: &str) -> Outcome<()> {
+    pub(super) fn emit(
+        &mut self,
+        text: &str,
+    ) -> Outcome<()> {
         match self.sink.take() {
             Some(sink) => {
                 let bytes: Vec<u8> = text.chars().map(|one| one as u8).collect();
@@ -405,22 +434,25 @@ impl Machine<'_> {
     }
 
     /// Ends the program the way the DOS runtime's panics do.
-    pub(super) fn panic<T>(&mut self, message: &str) -> Outcome<T> {
+    pub(super) fn panic<T>(
+        &mut self,
+        message: &str,
+    ) -> Outcome<T> {
         self.panicked = Some(message.to_owned());
         fail(format!("panic: {message}"))
     }
 
     /// Heap buffers never dropped.
     pub(super) fn leaked(&self) -> usize {
-        self.heap
-            .iter()
-            .filter(|one| one.borrow().bytes[0] & FREED == 0)
-            .count()
+        self.heap.iter().filter(|one| one.borrow().bytes[0] & FREED == 0).count()
     }
 }
 
 /// A view's bytes, by its data pointer and length.
-pub(super) fn view_bytes(data: &Scalar, length: &Scalar) -> Outcome<Vec<u8>> {
+pub(super) fn view_bytes(
+    data: &Scalar,
+    length: &Scalar,
+) -> Outcome<Vec<u8>> {
     let (Some(address), length) = (pointer(data)?, size(length)?) else {
         return fail("a view of null");
     };
@@ -435,18 +467,26 @@ pub(super) fn view_bytes(data: &Scalar, length: &Scalar) -> Outcome<Vec<u8>> {
 
 /// A `&string` view's bytes, by the far pointer to its descriptor: the
 /// length at 0 and the far data pointer after its length and capacity words.
-pub(super) fn descriptor_bytes(descriptor: &Scalar, width: usize) -> Outcome<Vec<u8>> {
+pub(super) fn descriptor_bytes(
+    descriptor: &Scalar,
+    width: usize,
+) -> Outcome<Vec<u8>> {
     let Some(at) = pointer(descriptor)? else {
         return fail("a view of null");
     };
     let (length, data) = {
         let cells = at.memory.borrow();
         let start = at.offset as usize;
-        let length = cells.bytes.get(start..start + width).map(|word| {
-            let mut bytes = [0; 8];
-            bytes[..width].copy_from_slice(word);
-            u64::from_le_bytes(bytes)
-        });
+        let length = cells
+            .bytes
+            .get(start..start + width)
+            .map(
+                |word| {
+                    let mut bytes = [0; 8];
+                    bytes[..width].copy_from_slice(word);
+                    u64::from_le_bytes(bytes)
+                },
+            );
         (length, cells.pointers.get(&(at.offset + 2 * width as i64, 4)).cloned())
     };
     match (length, data) {
@@ -456,7 +496,10 @@ pub(super) fn descriptor_bytes(descriptor: &Scalar, width: usize) -> Outcome<Vec
 }
 
 /// `N$PS`'s bytes: a string's, by its descriptor.
-pub(super) fn string_bytes(argument: &Scalar, width: usize) -> Outcome<Vec<u8>> {
+pub(super) fn string_bytes(
+    argument: &Scalar,
+    width: usize,
+) -> Outcome<Vec<u8>> {
     match pointer(argument)? {
         Some(address) => text(&address, width),
         None => fail(format!("{} of null", rt::PRINT_STRING)),

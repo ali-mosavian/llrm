@@ -44,21 +44,36 @@ impl Tbaa {
     }
 
     /// `of_tag`, shared.
-    pub fn shared_of_tag(&self, metadata: &[MetadataNode], tag: MetadataId) -> std::rc::Rc<[String]> {
+    pub fn shared_of_tag(
+        &self,
+        metadata: &[MetadataNode],
+        tag: MetadataId,
+    ) -> std::rc::Rc<[String]> {
         match metadata.get(tag.0 as usize).and_then(|node| node.operands.first()) {
-            Some(MetadataOperand::Node(ty)) => self.shared.get(ty.0 as usize).map_or_else(|| self.empty.clone(), std::rc::Rc::clone),
+            Some(MetadataOperand::Node(ty)) => {
+                self.shared.get(ty.0 as usize).map_or_else(|| self.empty.clone(), std::rc::Rc::clone)
+            }
             _ => self.empty.clone(),
         }
     }
 
     /// The name of the access type `tag` names, shared.
-    pub fn name_of_tag(&self, metadata: &[MetadataNode], tag: MetadataId) -> Option<std::rc::Rc<str>> {
+    pub fn name_of_tag(
+        &self,
+        metadata: &[MetadataNode],
+        tag: MetadataId,
+    ) -> Option<std::rc::Rc<str>> {
         let Some(MetadataOperand::Node(ty)) = metadata.get(tag.0 as usize)?.operands.first() else { return None };
         self.names.get(ty.0 as usize)?.clone()
     }
 
     /// The ancestors of type node `at`, memoized; none past a cycle.
-    fn lineage_of(metadata: &[MetadataNode], at: usize, lineages: &mut Vec<Option<Vec<String>>>, depth: usize) -> Vec<String> {
+    fn lineage_of(
+        metadata: &[MetadataNode],
+        at: usize,
+        lineages: &mut Vec<Option<Vec<String>>>,
+        depth: usize,
+    ) -> Vec<String> {
         if let Some(known) = &lineages[at] {
             return known.clone();
         }
@@ -86,14 +101,25 @@ impl Tbaa {
 
     /// `of_tag` where there is no tree: the ancestors of the type `tag` names, walked up from it, so
     /// that asking costs its depth and not the module's metadata (the tree is built from all of it).
-    pub fn chain(metadata: &[MetadataNode], tag: MetadataId) -> Vec<String> {
-        let Some(MetadataOperand::Node(ty)) = metadata.get(tag.0 as usize).and_then(|node| node.operands.first()) else { return Vec::new() };
+    pub fn chain(
+        metadata: &[MetadataNode],
+        tag: MetadataId,
+    ) -> Vec<String> {
+        let Some(MetadataOperand::Node(ty)) = metadata.get(tag.0 as usize).and_then(|node| node.operands.first())
+        else {
+            return Vec::new();
+        };
         let (mut names, mut at) = (Vec::new(), ty.0 as usize);
         // A type has no more ancestors than the module has nodes.
         while names.len() <= metadata.len() {
-            let Some(MetadataOperand::Node(parent)) = metadata.get(at).and_then(|node| node.operands.get(1)) else { break };
+            let Some(MetadataOperand::Node(parent)) = metadata.get(at).and_then(|node| node.operands.get(1)) else {
+                break;
+            };
             let parent = parent.0 as usize;
-            let Some(MetadataOperand::String(name)) = metadata.get(parent).and_then(|node| node.operands.first()) else { break };
+            let Some(MetadataOperand::String(name)) = metadata.get(parent).and_then(|node| node.operands.first())
+            else {
+                break;
+            };
             names.push(name.clone());
             at = parent;
         }
@@ -101,7 +127,11 @@ impl Tbaa {
     }
 
     /// The ancestors of the access type tag `tag` names, nearest first, the root last.
-    pub fn of_tag(&self, metadata: &[MetadataNode], tag: MetadataId) -> &[String] {
+    pub fn of_tag(
+        &self,
+        metadata: &[MetadataNode],
+        tag: MetadataId,
+    ) -> &[String] {
         match metadata.get(tag.0 as usize).and_then(|node| node.operands.first()) {
             Some(MetadataOperand::Node(ty)) => self.lineages.get(ty.0 as usize).map_or(&[], Vec::as_slice),
             _ => &[],

@@ -11,10 +11,7 @@ impl FunctionCompiler<'_> {
     ) -> Result<TypedOperand, Diagnostic> {
         let type_name = left.type_name;
         if !is_integer(type_name) {
-            return Err(Diagnostic::new(
-                span,
-                "'//' requires integer operands; use '/'",
-            ));
+            return Err(Diagnostic::new(span, "'//' requires integer operands; use '/'"));
         }
         let (left, right) = (required(left, span)?, required(right, span)?);
         let operand = if is_unsigned(type_name) {
@@ -22,10 +19,7 @@ impl FunctionCompiler<'_> {
         } else {
             self.signed_floor_divide(type_name, left, right, span)?
         };
-        Ok(TypedOperand {
-            operand: Some(operand),
-            type_name,
-        })
+        Ok(TypedOperand { operand: Some(operand), type_name })
     }
 
     fn signed_floor_divide(
@@ -44,7 +38,8 @@ impl FunctionCompiler<'_> {
         let signs = self.binary_value("xor", type_name, remainder, right);
         let differ = self.binary_value("lt", TypeName::Bool, signs, zero);
         let both = self.binary_value("and", TypeName::Bool, nonzero, differ);
-        let adjust = self.converted(TypedOperand { operand: Some(both), type_name: TypeName::Bool }, type_name, span)?;
+        let adjust =
+            self.converted(TypedOperand { operand: Some(both), type_name: TypeName::Bool }, type_name, span)?;
         Ok(self.binary_value("sub", type_name, quotient, required(adjust, span)?))
     }
 

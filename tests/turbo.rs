@@ -24,9 +24,15 @@ fn llrm_c() -> PathBuf {
 }
 
 fn toolchain() -> Option<(PathBuf, PathBuf)> {
-    let borland = std::env::var_os("TCPP30_DIR").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join("scratch/toolchains/tcpp30")))?;
+    let borland = std::env::var_os("TCPP30_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join("scratch/toolchains/tcpp30")))?;
     let dosbox = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("dosbox-x");
-    (borland.join("bin/TCC.EXE").exists() && borland.join("bin/TLINK.EXE").exists() && borland.join("bin/TDUMP.EXE").exists() && dosbox.exists()).then_some((borland, dosbox))
+    (borland.join("bin/TCC.EXE").exists()
+        && borland.join("bin/TLINK.EXE").exists()
+        && borland.join("bin/TDUMP.EXE").exists()
+        && dosbox.exists())
+    .then_some((borland, dosbox))
 }
 
 /// What TDUMP's Module Table says of a program: its type definitions and its variables' kinds, names and
@@ -50,7 +56,8 @@ fn module(dump: &str) -> (Vec<String>, Vec<String>, BTreeSet<u32>) {
         }
         line.split_whitespace().collect::<Vec<_>>().join(" ")
     };
-    let mut types: Vec<String> = part("Module Type Definitions:", "Correlation Records:").iter().map(|one| strip(one)).collect();
+    let mut types: Vec<String> =
+        part("Module Type Definitions:", "Correlation Records:").iter().map(|one| strip(one)).collect();
     types.sort();
     let correlation = part("Correlation Records:", "Line Numbers:");
     let mut locals: Vec<String> = correlation
@@ -89,31 +96,53 @@ fn tlink_builds_turbo_debuggers_table_from_an_llrm_object_as_from_turbo_cs() {
     // DOS names are 8.3: each program is a short name.
     for (short, source) in [("obs", "observed.c"), ("lst", "list.c")] {
         std::fs::copy(fixtures.join(source), scratch.path().join(format!("{short}.c"))).unwrap();
-        let made = Command::new(llrm_c()).args(["-m16", "-gtd", "-O0"]).arg(scratch.path().join(format!("{short}.c"))).arg("-o").arg(scratch.path().join(format!("l{short}.obj"))).output().unwrap();
+        let made = Command::new(llrm_c())
+            .args(["-m16", "-gtd", "-O0"])
+            .arg(scratch.path().join(format!("{short}.c")))
+            .arg("-o")
+            .arg(scratch.path().join(format!("l{short}.obj")))
+            .output()
+            .unwrap();
         assert!(made.status.success(), "{short}: {}", String::from_utf8_lossy(&made.stderr));
     }
     let mut commands = Vec::new();
     for short in ["obs", "lst"] {
         commands.push(format!("tcc -v -r- -c -mm {short}.c"));
         for (prefix, object) in [("t", format!("{short}.obj")), ("l", format!("l{short}.obj"))] {
-            commands.push(format!("tlink /v c:\\lib\\c0m {object}, {prefix}{short}.exe,, c:\\lib\\cm > {prefix}{short}.tl"));
+            commands.push(format!(
+                "tlink /v c:\\lib\\c0m {object}, {prefix}{short}.exe,, c:\\lib\\cm > {prefix}{short}.tl"
+            ));
             commands.push(format!("tdump {prefix}{short}.exe > {prefix}{short}.tx"));
         }
     }
     dosbox::run(&[('c', &borland), ('w', scratch.path())], "c:\\bin", &commands);
     for short in ["obs", "lst"] {
-        let read = |prefix: &str| std::fs::read_to_string(scratch.path().join(format!("{}{}.TX", prefix.to_uppercase(), short.to_uppercase()))).unwrap_or_else(|error| panic!("DOS made no {prefix}{short}.tx: {error}"));
+        let read = |prefix: &str| {
+            std::fs::read_to_string(scratch.path().join(format!(
+                "{}{}.TX",
+                prefix.to_uppercase(),
+                short.to_uppercase()
+            )))
+            .unwrap_or_else(|error| panic!("DOS made no {prefix}{short}.tx: {error}"))
+        };
         let (theirs, ours) = (module(&read("t")), module(&read("l")));
-        assert!(!theirs.0.is_empty() && !theirs.1.is_empty(), "{short}: premise, Turbo C++'s own table has types and variables: {theirs:?}");
+        assert!(
+            !theirs.0.is_empty() && !theirs.1.is_empty(),
+            "{short}: premise, Turbo C++'s own table has types and variables: {theirs:?}"
+        );
         assert_eq!(ours.0, theirs.0, "{short}: types");
         assert_eq!(ours.1, theirs.1, "{short}: variables");
-        assert!(!ours.2.is_empty() && ours.2.is_subset(&theirs.2), "{short}: lines {:?} against {:?}", ours.2, theirs.2);
+        assert!(
+            !ours.2.is_empty() && ours.2.is_subset(&theirs.2),
+            "{short}: lines {:?} against {:?}",
+            ours.2,
+            theirs.2
+        );
     }
 }
 
-
-/// A pointer to a function points to a function type called as far as the pointer reaches. TDUMP's symbol table names the
-/// type of each public symbol: for the same C program Turbo C++ says `far pointer function far C` of `fp` and `near
+/// A pointer to a function points to a function type called as far as the pointer reaches. TDUMP's symbol table names
+/// the type of each public symbol: for the same C program Turbo C++ says `far pointer function far C` of `fp` and `near
 /// pointer _CS function near C` of `np`; llrm's near pointer read `function far C`.
 #[test]
 fn tdump_names_the_type_of_a_function_pointer_as_turbo_cs_does() {
@@ -122,9 +151,19 @@ fn tdump_names_the_type_of_a_function_pointer_as_turbo_cs_does() {
         return;
     };
     let scratch = tempfile::tempdir().unwrap();
-    std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/fnptr.c"), scratch.path().join("fnp.c")).unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/fnptr.c"),
+        scratch.path().join("fnp.c"),
+    )
+    .unwrap();
     // Turbo C++'s own convention, whose symbols the table is compared by: cdecl.
-    let made = Command::new(llrm_c()).args(["-m16", "-mabi=cdecl", "-gtd", "-O0"]).arg(scratch.path().join("fnp.c")).arg("-o").arg(scratch.path().join("lfnp.obj")).output().unwrap();
+    let made = Command::new(llrm_c())
+        .args(["-m16", "-mabi=cdecl", "-gtd", "-O0"])
+        .arg(scratch.path().join("fnp.c"))
+        .arg("-o")
+        .arg(scratch.path().join("lfnp.obj"))
+        .output()
+        .unwrap();
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     let mut commands = vec!["tcc -v -r- -c -ml fnp.c".to_owned()];
     for (prefix, object) in [("t", "fnp.obj"), ("l", "lfnp.obj")] {
@@ -133,9 +172,15 @@ fn tdump_names_the_type_of_a_function_pointer_as_turbo_cs_does() {
     }
     dosbox::run(&[('c', &borland), ('w', scratch.path())], "c:\\bin", &commands);
     let types = |prefix: &str| -> Vec<String> {
-        let text = std::fs::read_to_string(scratch.path().join(format!("{}FNP.TX", prefix.to_uppercase()))).unwrap_or_else(|error| panic!("DOS made no {prefix}fnp.tx: {error}"));
+        let text = std::fs::read_to_string(scratch.path().join(format!("{}FNP.TX", prefix.to_uppercase())))
+            .unwrap_or_else(|error| panic!("DOS made no {prefix}fnp.tx: {error}"));
         let wanted = ["_CALLEE ", "_INNER ", "_APPLY ", "_FP ", "_NP "];
-        text.lines().filter(|line| wanted.iter().any(|name| line.contains(name))).filter_map(|line| line.split_once("]").map(|(_, rest)| rest.split_whitespace().collect::<Vec<_>>().join(" "))).collect()
+        text.lines()
+            .filter(|line| wanted.iter().any(|name| line.contains(name)))
+            .filter_map(|line| {
+                line.split_once("]").map(|(_, rest)| rest.split_whitespace().collect::<Vec<_>>().join(" "))
+            })
+            .collect()
     };
     let (theirs, ours) = (types("t"), types("l"));
     assert_eq!(theirs.len(), 5, "premise: Turbo C++'s table names the five: {theirs:?}");
@@ -148,19 +193,34 @@ fn tdump_names_the_type_of_a_function_pointer_as_turbo_cs_does() {
 struct Dosbox(Session);
 
 impl Dosbox {
-    fn start(borland: &Path, debugger: &Path, work: &Path) -> Dosbox {
+    fn start(
+        borland: &Path,
+        debugger: &Path,
+        work: &Path,
+    ) -> Dosbox {
         Dosbox(Session::start(&[('c', borland), ('d', debugger), ('w', work)], "c:\\bin;d:\\"))
     }
 
-    fn command(&self, value: &serde_json::Value) -> serde_json::Value {
+    fn command(
+        &self,
+        value: &serde_json::Value,
+    ) -> serde_json::Value {
         self.0.command(value)
     }
 
     fn screen(&self) -> Vec<String> {
-        self.command(&serde_json::json!({"cmd": "text_screen"}))["text"].as_str().unwrap_or("").lines().map(str::to_owned).collect()
+        self.command(&serde_json::json!({"cmd": "text_screen"}))["text"]
+            .as_str()
+            .unwrap_or("")
+            .lines()
+            .map(str::to_owned)
+            .collect()
     }
 
-    fn key(&self, key: serde_json::Value) {
+    fn key(
+        &self,
+        key: serde_json::Value,
+    ) {
         let mut value = serde_json::json!({"cmd": "key"});
         if let (Some(object), Some(extra)) = (value.as_object_mut(), key.as_object()) {
             object.extend(extra.clone());
@@ -169,7 +229,10 @@ impl Dosbox {
         std::thread::sleep(Duration::from_millis(1500));
     }
 
-    fn named(&self, name: &str) {
+    fn named(
+        &self,
+        name: &str,
+    ) {
         self.key(serde_json::json!({"key": name}));
     }
 
@@ -182,7 +245,11 @@ impl Dosbox {
     }
 
     /// Steps (F8, or F7 where `into`) until the window is at `line`.
-    fn step_to(&self, line: u32, into: bool) {
+    fn step_to(
+        &self,
+        line: u32,
+        into: bool,
+    ) {
         for _ in 0..12 {
             if self.at().is_some_and(|(_, at)| at == line) {
                 return;
@@ -194,7 +261,13 @@ impl Dosbox {
 
     /// Debugs `exe`: to the call of `sum` at `call`, into it and to `line`; then each of `watches`,
     /// the Watches window's lines. A watch is Ctrl-F7 (scan code 0x64) and the text.
-    fn debug(&self, exe: &str, call: u32, line: u32, watches: &[&str]) -> Vec<String> {
+    fn debug(
+        &self,
+        exe: &str,
+        call: u32,
+        line: u32,
+        watches: &[&str],
+    ) -> Vec<String> {
         self.command(&serde_json::json!({"cmd": "dos_cmd", "command": format!("td {exe}")}));
         let started = Instant::now();
         while !self.screen().iter().any(|one| one.contains("Module:")) {
@@ -214,7 +287,12 @@ impl Dosbox {
         }
         let screen = self.screen();
         let from = screen.iter().position(|one| one.contains("Watches")).expect("a Watches window");
-        screen[from + 1..].iter().map(|one| one.trim().to_owned()).take_while(|one| !one.starts_with("F1-Help")).filter(|one| !one.is_empty()).collect()
+        screen[from + 1..]
+            .iter()
+            .map(|one| one.trim().to_owned())
+            .take_while(|one| !one.starts_with("F1-Help"))
+            .filter(|one| !one.is_empty())
+            .collect()
     }
 }
 
@@ -228,7 +306,10 @@ fn turbo_debugger_shows_the_same_values_for_an_llrm_program_as_for_turbo_cs() {
         skipped("needs Turbo C++ 3.0 (TCPP30_DIR) and DOSBox-X");
         return;
     };
-    let debugger = std::env::var_os("TD_DIR").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join("scratch/toolchains/td"))).unwrap();
+    let debugger = std::env::var_os("TD_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join("scratch/toolchains/td")))
+        .unwrap();
     if !debugger.join("Td.exe").exists() {
         skipped("needs Turbo Debugger in TD_DIR");
         return;
@@ -236,7 +317,13 @@ fn turbo_debugger_shows_the_same_values_for_an_llrm_program_as_for_turbo_cs() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
     let scratch = tempfile::tempdir().unwrap();
     std::fs::copy(fixtures.join("list.c"), scratch.path().join("lst.c")).unwrap();
-    let made = Command::new(llrm_c()).args(["-m16", "-gtd", "-O0"]).arg(scratch.path().join("lst.c")).arg("-o").arg(scratch.path().join("llst.obj")).output().unwrap();
+    let made = Command::new(llrm_c())
+        .args(["-m16", "-gtd", "-O0"])
+        .arg(scratch.path().join("lst.c"))
+        .arg("-o")
+        .arg(scratch.path().join("llst.obj"))
+        .output()
+        .unwrap();
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     let commands = [
         "tcc -v -r- -c -mm lst.c".to_owned(),
@@ -252,16 +339,21 @@ fn turbo_debugger_shows_the_same_values_for_an_llrm_program_as_for_turbo_cs() {
     }
     // The value of each watch, sorted: `n->v  int 3 (0x3)` is the same on both.
     let [turbo, llrm] = [&seen[0], &seen[1]].map(|lines| {
-        let mut lines: Vec<String> = lines.iter().map(|one| one.split_whitespace().collect::<Vec<_>>().join(" ")).collect();
+        let mut lines: Vec<String> =
+            lines.iter().map(|one| one.split_whitespace().collect::<Vec<_>>().join(" ")).collect();
         lines.sort();
         lines
     });
-    assert!(turbo.iter().any(|one| one == "n->v int 3 (0x3)") && turbo.iter().any(|one| one.starts_with("n struct node * ds:") && one.ends_with("[_head]")), "premise: Turbo C++'s own values: {turbo:?}");
+    assert!(
+        turbo.iter().any(|one| one == "n->v int 3 (0x3)")
+            && turbo.iter().any(|one| one.starts_with("n struct node * ds:") && one.ends_with("[_head]")),
+        "premise: Turbo C++'s own values: {turbo:?}"
+    );
     assert_eq!(llrm, turbo);
 }
 
-/// A variable the allocator keeps in one register from its first value to the last statement is a register variable to Turbo Debugger
-/// too: `k` of `regvar.c`, built optimised, is in TLINK's table as a `register`.
+/// A variable the allocator keeps in one register from its first value to the last statement is a register variable to
+/// Turbo Debugger too: `k` of `regvar.c`, built optimised, is in TLINK's table as a `register`.
 #[test]
 fn tdump_names_a_variable_the_allocator_keeps_in_a_register_as_a_register() {
     let Some((borland, dosbox)) = toolchain() else {
@@ -269,11 +361,28 @@ fn tdump_names_a_variable_the_allocator_keeps_in_a_register_as_a_register() {
         return;
     };
     let scratch = tempfile::tempdir().unwrap();
-    std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/regvar.c"), scratch.path().join("rv.c")).unwrap();
-    let made = Command::new(llrm_c()).args(["-m16", "-gtd", "-O2", "-fno-inline-functions", "-fno-inline-functions-called-once"]).arg(scratch.path().join("rv.c")).arg("-o").arg(scratch.path().join("lrv.obj")).output().unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/regvar.c"),
+        scratch.path().join("rv.c"),
+    )
+    .unwrap();
+    let made = Command::new(llrm_c())
+        .args(["-m16", "-gtd", "-O2", "-fno-inline-functions", "-fno-inline-functions-called-once"])
+        .arg(scratch.path().join("rv.c"))
+        .arg("-o")
+        .arg(scratch.path().join("lrv.obj"))
+        .output()
+        .unwrap();
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
-    dosbox::run(&[('c', &borland), ('w', scratch.path())], "c:\\bin", &["tlink /v c:\\lib\\c0m lrv.obj, lrv.exe,, c:\\lib\\cm > lrv.tl".into(), "tdump lrv.exe > lrv.tx".into()]);
+    dosbox::run(
+        &[('c', &borland), ('w', scratch.path())],
+        "c:\\bin",
+        &["tlink /v c:\\lib\\c0m lrv.obj, lrv.exe,, c:\\lib\\cm > lrv.tl".into(), "tdump lrv.exe > lrv.tx".into()],
+    );
     let dump = std::fs::read_to_string(scratch.path().join("LRV.TX")).expect("TDUMP's output");
     let (_, locals, _) = module(&dump);
-    assert!(locals.iter().any(|one| one.contains("register") && one.split_whitespace().any(|word| word == "k")), "no register k in {locals:?}");
+    assert!(
+        locals.iter().any(|one| one.contains("register") && one.split_whitespace().any(|word| word == "k")),
+        "no register k in {locals:?}"
+    );
 }

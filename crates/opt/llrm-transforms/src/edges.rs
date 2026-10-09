@@ -12,27 +12,48 @@ use llrm_mir::opcode::{Flags, Opcode};
 
 /// `target` is the edge `block`'s conditional branch takes when its
 /// condition holds: the old branch's own target, not its fall-through.
-pub fn explicit(function: &Function, block: BlockId, target: BlockId) -> bool {
-    conditional(function, block, target) && branch(function, block).is_some_and(|one| function.instruction(one).operands[1] == Operand::Block(target))
+pub fn explicit(
+    function: &Function,
+    block: BlockId,
+    target: BlockId,
+) -> bool {
+    conditional(function, block, target)
+        && branch(function, block).is_some_and(|one| function.instruction(one).operands[1] == Operand::Block(target))
 }
 
 /// `block` ends in a two-way conditional branch, one way to `target`.
-pub fn conditional(function: &Function, block: BlockId, target: BlockId) -> bool {
+pub fn conditional(
+    function: &Function,
+    block: BlockId,
+    target: BlockId,
+) -> bool {
     let successors = function.successors(block);
     successors.len() == 2 && successors.contains(&target) && branch(function, block).is_some()
 }
 
 /// `block`'s terminator, if it is `br i1`.
-fn branch(function: &Function, block: BlockId) -> Option<InstId> {
-    function.terminator(block).filter(|&one| {
-        let instruction = function.instruction(one);
-        instruction.opcode == Opcode::Br && instruction.operands.len() == 3
-    })
+fn branch(
+    function: &Function,
+    block: BlockId,
+) -> Option<InstId> {
+    function
+        .terminator(block)
+        .filter(
+            |&one| {
+                let instruction = function.instruction(one);
+                instruction.opcode == Opcode::Br && instruction.operands.len() == 3
+            },
+        )
 }
 
 /// A new block on the conditional edge `source` to `target`, holding
 /// `instructions` (created, placed nowhere) and a jump on.
-pub fn split(function: &mut Function, source: BlockId, target: BlockId, instructions: Vec<InstId>) -> Result<BlockId, String> {
+pub fn split(
+    function: &mut Function,
+    source: BlockId,
+    target: BlockId,
+    instructions: Vec<InstId>,
+) -> Result<BlockId, String> {
     if !function.layout().contains(&source) || !conditional(function, source, target) {
         return Err("edge split does not identify a conditional edge".into());
     }
@@ -47,14 +68,24 @@ pub fn split(function: &mut Function, source: BlockId, target: BlockId, instruct
     function.insert(jump, Position::End(bridge))?;
     retarget(function, parent, target, bridge);
     for phi in phis(function, target) {
-        let operands = function.instruction(phi).operands.iter().map(|&one| if one == Operand::Block(source) { Operand::Block(bridge) } else { one }).collect();
+        let operands = function
+            .instruction(phi)
+            .operands
+            .iter()
+            .map(|&one| if one == Operand::Block(source) { Operand::Block(bridge) } else { one })
+            .collect();
         function.set_operands(phi, operands);
     }
     Ok(bridge)
 }
 
 /// `terminator`'s edges to `target` now go to `to`.
-pub(crate) fn retarget(function: &mut Function, terminator: InstId, target: BlockId, to: BlockId) {
+pub(crate) fn retarget(
+    function: &mut Function,
+    terminator: InstId,
+    target: BlockId,
+    to: BlockId,
+) {
     for (at, operand) in function.instruction(terminator).operands.clone().into_iter().enumerate() {
         if operand == Operand::Block(target) {
             function.set_operand(terminator, at, Operand::Block(to));
@@ -63,8 +94,17 @@ pub(crate) fn retarget(function: &mut Function, terminator: InstId, target: Bloc
 }
 
 /// `block`'s phis, in order.
-pub(crate) fn phis(function: &Function, block: BlockId) -> Vec<InstId> {
-    function.block(block).instructions().iter().copied().take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect()
+pub(crate) fn phis(
+    function: &Function,
+    block: BlockId,
+) -> Vec<InstId> {
+    function
+        .block(block)
+        .instructions()
+        .iter()
+        .copied()
+        .take_while(|&one| function.instruction(one).opcode == Opcode::Phi)
+        .collect()
 }
 
 #[cfg(test)]
@@ -120,15 +160,29 @@ b3:
         llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"))
     }
 
-    fn named(function: &Function, name: &str) -> BlockId {
-        function.layout().iter().copied().find(|&one| function.block(one).name.as_deref() == Some(name)).expect("a block")
+    fn named(
+        function: &Function,
+        name: &str,
+    ) -> BlockId {
+        function
+            .layout()
+            .iter()
+            .copied()
+            .find(|&one| function.block(one).name.as_deref() == Some(name))
+            .expect("a block")
     }
 
-    fn returned(module: &Module, arguments: Vec<Val>) -> Val {
+    fn returned(
+        module: &Module,
+        arguments: Vec<Val>,
+    ) -> Val {
         run(module, "f", arguments, 10_000).expect("runs")
     }
 
-    fn int(bits: u128, width: u32) -> Val {
+    fn int(
+        bits: u128,
+        width: u32,
+    ) -> Val {
         Val::Int { bits, width }
     }
 
@@ -198,7 +252,8 @@ spare:
 
     #[test]
     fn an_unconditional_jump_or_a_switch_edge_is_not_split() {
-        let mut module = parsed("define void @f(i16 %s) {
+        let mut module = parsed(
+            "define void @f(i16 %s) {
 b1:
   switch i16 %s, label %b2 [ i16 1, label %b3 ]
 
@@ -208,7 +263,8 @@ b2:
 b3:
   ret void
 }
-");
+",
+        );
         let (_, function) = module.function_mut("f").expect("@f");
         let before = function.clone();
         let [b1, b2, b3] = ["b1", "b2", "b3"].map(|name| named(function, name));

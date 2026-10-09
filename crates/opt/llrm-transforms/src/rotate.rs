@@ -19,11 +19,11 @@
 
 use std::collections::BTreeSet;
 
+use llrm_analysis::graph::loops::{self, Loop};
 use llrm_analysis::induction;
 use llrm_analysis::manager::Registers;
 use llrm_analysis::ssa::SsaUpdater;
 use llrm_analysis::{cfg, memory};
-use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -40,7 +40,11 @@ impl FunctionPass for Rotate {
         "rotate"
     }
 
-    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         match entered(unit.context, unit.layout, unit.function, analyses) {
             Ok(true) => PreservedAnalyses::none(),
             Ok(false) => PreservedAnalyses::all(),
@@ -51,7 +55,12 @@ impl FunctionPass for Rotate {
 
 /// Every proven loop entered at its body, and each test merged into its
 /// latch; whether any loop was.
-pub fn entered(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &Analyses) -> Result<bool, String> {
+pub fn entered(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    analyses: &Analyses,
+) -> Result<bool, String> {
     let mut done = BTreeSet::new();
     while rotated(context, layout, function, analyses, &mut done)? {}
     if done.is_empty() {
@@ -75,25 +84,54 @@ pub(crate) struct Shape {
     pub body: BTreeSet<BlockId>,
 }
 
-fn _phis(function: &Function, block: BlockId) -> Vec<InstId> {
-    function.block(block).instructions().iter().copied().filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect()
+fn _phis(
+    function: &Function,
+    block: BlockId,
+) -> Vec<InstId> {
+    function
+        .block(block)
+        .instructions()
+        .iter()
+        .copied()
+        .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+        .collect()
 }
 
 /// Whether an instruction may be skipped on entry: it computes, and nothing
 /// outside `header` reads it.
-fn _test_only(function: &Function, header: BlockId, inst: InstId) -> bool {
+fn _test_only(
+    function: &Function,
+    header: BlockId,
+    inst: InstId,
+) -> bool {
     let op = function.instruction(inst);
     let computes = match op.opcode {
-        Opcode::ICmp(_) | Opcode::FCmp(_) | Opcode::Cast(_) | Opcode::GetElementPtr { .. } | Opcode::Select | Opcode::Freeze => true,
-        Opcode::Binary(kind) => !matches!(kind, BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem),
+        Opcode::ICmp(_)
+        | Opcode::FCmp(_)
+        | Opcode::Cast(_)
+        | Opcode::GetElementPtr { .. }
+        | Opcode::Select
+        | Opcode::Freeze => true,
+        Opcode::Binary(kind) => !matches!(
+            kind,
+            BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem
+        ),
         _ => false,
     };
     // A header phi reading it takes it round the back edge: it is the step of a counter, which must run before the
     // trip it starts, not skip the first.
-    computes && op.result.is_none_or(|value| function.users(value).iter().all(|one| function.parent(one.user) == Some(header) && function.instruction(one.user).opcode != Opcode::Phi))
+    computes
+        && op.result.is_none_or(|value| {
+            function.users(value).iter().all(|one| {
+                function.parent(one.user) == Some(header) && function.instruction(one.user).opcode != Opcode::Phi
+            })
+        })
 }
 
-pub(crate) fn _shape(function: &Function, loop_: &Loop) -> Option<Shape> {
+pub(crate) fn _shape(
+    function: &Function,
+    loop_: &Loop,
+) -> Option<Shape> {
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let succ = |at: i64| graph.iter().find(|block| block.at == at).map(|block| block.succ.clone()).unwrap_or_default();
@@ -105,7 +143,9 @@ pub(crate) fn _shape(function: &Function, loop_: &Loop) -> Option<Shape> {
     };
     let header = cfg::block(loop_.header);
     let terminator = |at: i64| function.terminator(cfg::block(at)).map(|last| function.instruction(last));
-    if succ(preheader) != [loop_.header] || terminator(preheader).is_none_or(|last| last.opcode != Opcode::Br || last.operands.len() != 1) {
+    if succ(preheader) != [loop_.header]
+        || terminator(preheader).is_none_or(|last| last.opcode != Opcode::Br || last.operands.len() != 1)
+    {
         return None;
     }
     if latch == loop_.header || succ(latch) != [loop_.header] {
@@ -115,28 +155,48 @@ pub(crate) fn _shape(function: &Function, loop_: &Loop) -> Option<Shape> {
     if branch.opcode != Opcode::Br || branch.operands.len() != 3 {
         return None;
     }
-    let (inside, outside): (Vec<i64>, Vec<i64>) = succ(loop_.header).into_iter().partition(|at| loop_.body.contains(at));
+    let (inside, outside): (Vec<i64>, Vec<i64>) =
+        succ(loop_.header).into_iter().partition(|at| loop_.body.contains(at));
     let ([first], [exit]) = (&inside[..], &outside[..]) else {
         return None;
     };
     if predecessors[first] != BTreeSet::from([loop_.header]) || !_phis(function, cfg::block(*first)).is_empty() {
         return None;
     }
-    let work = function.block(header).instructions().iter().copied().filter(|&inst| {
-        let op = function.instruction(inst);
-        op.opcode != Opcode::Phi && !op.opcode.is_terminator()
-    });
+    let work = function
+        .block(header)
+        .instructions()
+        .iter()
+        .copied()
+        .filter(
+            |&inst| {
+                let op = function.instruction(inst);
+                op.opcode != Opcode::Phi && !op.opcode.is_terminator()
+            },
+        );
     if !work.into_iter().all(|inst| _test_only(function, header, inst)) {
         return None;
     }
     let block = cfg::block;
     let body = loop_.body.iter().copied().filter(|&at| at != loop_.header).map(block).collect();
-    Some(Shape { preheader: block(preheader), header, first: block(*first), latch: block(latch), exit: block(*exit), body })
+    Some(Shape {
+        preheader: block(preheader),
+        header,
+        first: block(*first),
+        latch: block(latch),
+        exit: block(*exit),
+        body,
+    })
 }
 
 /// `shape`'s loop entered at `first`, or, with `guard`, entered there only
 /// where the guard is false and skipped to the exit where it is true.
-pub(crate) fn _rotate(context: &mut Context, function: &mut Function, shape: &Shape, guard: Option<Operand>) -> Result<(), String> {
+pub(crate) fn _rotate(
+    context: &mut Context,
+    function: &mut Function,
+    shape: &Shape,
+    guard: Option<Operand>,
+) -> Result<(), String> {
     let entering = function.terminator(shape.preheader).expect("a terminated preheader");
     if let Some(guard) = guard {
         // The exit is now also reached before the loop: each of its phis reads
@@ -157,7 +217,9 @@ pub(crate) fn _rotate(context: &mut Context, function: &mut Function, shape: &Sh
     }
     let phis = _phis(function, shape.header);
     let values = phis.iter().map(|&phi| function.instruction(phi).result.expect("a phi's value")).collect::<Vec<_>>();
-    let side = |function: &Function, phi: InstId, from: BlockId| arms(function, phi).into_iter().find(|&(_, source)| source == from).expect("a preheader and a latch arm").0;
+    let side = |function: &Function, phi: InstId, from: BlockId| {
+        arms(function, phi).into_iter().find(|&(_, source)| source == from).expect("a preheader and a latch arm").0
+    };
     let starts = phis.iter().map(|&phi| side(function, phi, shape.preheader)).collect::<Vec<_>>();
     let nexts = phis.iter().map(|&phi| side(function, phi, shape.latch)).collect::<Vec<_>>();
     for &phi in &phis {
@@ -169,7 +231,13 @@ pub(crate) fn _rotate(context: &mut Context, function: &mut Function, shape: &Sh
     let moved = values
         .iter()
         .map(|&value| {
-            let phi = function.create_instruction(Opcode::Phi, function.value(value).ty, Vec::new(), Flags::default(), function.value(value).name.clone().as_deref());
+            let phi = function.create_instruction(
+                Opcode::Phi,
+                function.value(value).ty,
+                Vec::new(),
+                Flags::default(),
+                function.value(value).name.clone().as_deref(),
+            );
             let top = function.block(shape.first).instructions().first().copied();
             function.insert(phi, top.map_or(Position::End(shape.first), Position::Before)).expect("a placed block");
             (phi, Operand::Value(function.instruction(phi).result.expect("a phi's value")))
@@ -180,7 +248,10 @@ pub(crate) fn _rotate(context: &mut Context, function: &mut Function, shape: &Sh
         other => other,
     };
     for (index, &(phi, _)) in moved.iter().enumerate() {
-        function.set_operands(phi, vec![starts[index], Operand::Block(shape.preheader), latest(nexts[index]), Operand::Block(shape.header)]);
+        function.set_operands(
+            phi,
+            vec![starts[index], Operand::Block(shape.preheader), latest(nexts[index]), Operand::Block(shape.header)],
+        );
     }
     // The body reads the moved phi; the header and what follows the loop
     // read `a` as it left the preheader and `b'` as it left the latch.
@@ -207,7 +278,13 @@ pub(crate) fn _rotate(context: &mut Context, function: &mut Function, shape: &Sh
 }
 
 /// The first proven loop not in `done` entered at its body; whether one was.
-pub fn rotated(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &Analyses, done: &mut BTreeSet<BlockId>) -> Result<bool, String> {
+pub fn rotated(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    analyses: &Analyses,
+    done: &mut BTreeSet<BlockId>,
+) -> Result<bool, String> {
     let mut fresh = analyses.fresh();
     let facts = fresh.get::<Registers>(context, layout, function);
     let found = fresh.get::<cfg::Shape>(context, layout, function);

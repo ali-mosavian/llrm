@@ -28,7 +28,10 @@ pub fn widen(one: Reg) -> Loc {
 }
 
 /// Two word immediates, high then low, as the dword they push.
-pub fn dword(high: &Imm, low: &Imm) -> Loc {
+pub fn dword(
+    high: &Imm,
+    low: &Imm,
+) -> Loc {
     Loc::Imm(Imm { value: ((high.value & 0xFFFF) << 16) | (low.value & 0xFFFF), width: 4, address: None })
 }
 
@@ -69,7 +72,11 @@ pub fn low_word(one: impl LowWord) -> Loc {
 }
 
 /// An operand with register `from` renamed to `to`.
-pub fn renamed(one: &Loc, from: Reg, to: Reg) -> Loc {
+pub fn renamed(
+    one: &Loc,
+    from: Reg,
+    to: Reg,
+) -> Loc {
     _register_operand(one, from.register, to.register)
 }
 
@@ -82,21 +89,35 @@ fn deduped(items: impl IntoIterator<Item = u32>) -> Vec<u32> {
     items.into_iter().collect::<IndexSet<u32>>().into_iter().collect()
 }
 
-pub fn joined_defines(first: &Insn, second: &Insn) -> Vec<u32> {
+pub fn joined_defines(
+    first: &Insn,
+    second: &Insn,
+) -> Vec<u32> {
     deduped(first.defines.iter().chain(&second.defines).copied())
 }
 
-pub fn joined_uses_all(first: &Insn, second: &Insn) -> Vec<u32> {
+pub fn joined_uses_all(
+    first: &Insn,
+    second: &Insn,
+) -> Vec<u32> {
     deduped(first.uses.iter().chain(&second.uses).copied())
 }
 
 /// What `first` reads, then what `second` reads that `first` does not define.
-pub fn joined_uses(first: &Insn, second: &Insn) -> Vec<u32> {
-    deduped(first.uses.iter().copied().chain(second.uses.iter().copied().filter(|value| !first.defines.contains(value))))
+pub fn joined_uses(
+    first: &Insn,
+    second: &Insn,
+) -> Vec<u32> {
+    deduped(
+        first.uses.iter().copied().chain(second.uses.iter().copied().filter(|value| !first.defines.contains(value))),
+    )
 }
 
 /// Both instructions' value widths, `second`'s where they name one value.
-pub fn joined_widths(first: &Insn, second: &Insn) -> Vec<(u32, u32)> {
+pub fn joined_widths(
+    first: &Insn,
+    second: &Insn,
+) -> Vec<(u32, u32)> {
     let mut widths: IndexMap<u32, u32> = IndexMap::default();
     for (value, width) in first.widths.iter().chain(&second.widths) {
         widths.insert(*value, *width);

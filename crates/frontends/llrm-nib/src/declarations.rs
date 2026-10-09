@@ -28,20 +28,39 @@ impl Language {
 
 /// The declarations of `module`'s exports and the represented structs they
 /// name, for callers written in `language`.
-pub fn declarations(module: &Module, name: &str, language: Language) -> Result<String, Diagnostic> {
-    declarations_on(module, name, language, crate::Sizes { near: 2, far: 4, segmented: true, slot: 2, max_object: 65535 }, Abi::Cdecl16)
+pub fn declarations(
+    module: &Module,
+    name: &str,
+    language: Language,
+) -> Result<String, Diagnostic> {
+    declarations_on(
+        module,
+        name,
+        language,
+        crate::Sizes { near: 2, far: 4, segmented: true, slot: 2, max_object: 65535 },
+        Abi::Cdecl16,
+    )
 }
 
 /// `declarations`, for a target whose pointers, slot and far code are `sizes`, and whose own convention is `native`.
-pub fn declarations_on(module: &Module, name: &str, language: Language, sizes: crate::Sizes, native: Abi) -> Result<String, Diagnostic> {
+pub fn declarations_on(
+    module: &Module,
+    name: &str,
+    language: Language,
+    sizes: crate::Sizes,
+    native: Abi,
+) -> Result<String, Diagnostic> {
     let (segmented, slot) = (sizes.segmented, sizes.slot);
     let exports: Vec<(&Function, Abi)> = module
         .functions
         .iter()
-        .filter_map(|function| module.exports.get(&function.name).and_then(|export| Some((function, export.abi?.resolved(native)))))
+        .filter_map(|function| {
+            module.exports.get(&function.name).and_then(|export| Some((function, export.abi?.resolved(native))))
+        })
         .collect();
     // The compiler's own modules declare theirs for the compiler.
-    let structs: Vec<&Struct> = module.structs.iter().filter(|one| one.pack.is_some() && !standard::supplied(&one.name)).collect();
+    let structs: Vec<&Struct> =
+        module.structs.iter().filter(|one| one.pack.is_some() && !standard::supplied(&one.name)).collect();
     let mut out = String::new();
     let comment = match language {
         Language::C => "/*",
@@ -70,7 +89,11 @@ pub fn declarations_on(module: &Module, name: &str, language: Language, sizes: c
     Ok(out)
 }
 
-fn structure(one: &Struct, language: Language, sizes: crate::Sizes) -> Result<String, Diagnostic> {
+fn structure(
+    one: &Struct,
+    language: Language,
+    sizes: crate::Sizes,
+) -> Result<String, Diagnostic> {
     let slot = sizes.slot;
     let name = symbol(&one.name);
     let mut out = String::new();
@@ -104,10 +127,21 @@ fn structure(one: &Struct, language: Language, sizes: crate::Sizes) -> Result<St
             for field in &one.fields {
                 let (type_, initial) = match &field.type_spec {
                     TypeSpec::Named(inner) => (symbol(inner), "<>"),
-                    spec => (data_directive(field_width(spec, sizes).ok_or_else(|| unsupported(&field.name, "assembler", field.span))?).to_owned(), "?"),
+                    spec => (
+                        data_directive(
+                            field_width(spec, sizes)
+                                .ok_or_else(|| unsupported(&field.name, "assembler", field.span))?,
+                        )
+                        .to_owned(),
+                        "?",
+                    ),
                 };
                 let count: u32 = field.dims.iter().product();
-                let directive = if field.dims.is_empty() { format!("{type_} {initial}") } else { format!("{type_} {count} dup ({initial})") };
+                let directive = if field.dims.is_empty() {
+                    format!("{type_} {initial}")
+                } else {
+                    format!("{type_} {count} dup ({initial})")
+                };
                 writeln!(out, "    {} {directive}", field.name).unwrap();
             }
             writeln!(out, "{name} ends").unwrap();
@@ -116,7 +150,12 @@ fn structure(one: &Struct, language: Language, sizes: crate::Sizes) -> Result<St
     Ok(out)
 }
 
-fn declaration(function: &Function, abi: Abi, language: Language, segmented: bool) -> Result<String, Diagnostic> {
+fn declaration(
+    function: &Function,
+    abi: Abi,
+    language: Language,
+    segmented: bool,
+) -> Result<String, Diagnostic> {
     let distance = if segmented { "far" } else { "near" };
     // The name its source gives it, not the one it is linked under.
     let name = function.name.rsplit('.').next().expect("a name");
@@ -132,7 +171,9 @@ fn declaration(function: &Function, abi: Abi, language: Language, segmented: boo
     let text = TypeSpec::Primitive(TypeName::String);
     let result = match &function.result {
         TypeAnnotation::Value(result) => result,
-        TypeAnnotation::Slice { element: TypeSpec::Primitive(TypeName::Char), rank: 1 } if abi.basic().is_some() => &text,
+        TypeAnnotation::Slice { element: TypeSpec::Primitive(TypeName::Char), rank: 1 } if abi.basic().is_some() => {
+            &text
+        }
         _ => return Err(unsupported(&function.name, "a foreign ABI", function.span)),
     };
     let span = function.span;
@@ -151,13 +192,16 @@ fn declaration(function: &Function, abi: Abi, language: Language, segmented: boo
                 Abi::Regparm3 => "",
                 Abi::Pascal16 | Abi::Basic(_) => "__pascal",
             };
-            let arguments = parameters
-                .iter()
-                .map(|(name, spec)| c_declarator(spec, name, span))
-                .collect::<Result<Vec<_>, _>>()?;
+            let arguments =
+                parameters.iter().map(|(name, spec)| c_declarator(spec, name, span)).collect::<Result<Vec<_>, _>>()?;
             let arguments = if arguments.is_empty() { "void".to_owned() } else { arguments.join(", ") };
             let far = if segmented { "__far " } else { "" };
-            Ok(format!("extern {} {far}{convention}{}{}({arguments});", c_type(result, span)?, if convention.is_empty() { "" } else { " " }, name))
+            Ok(format!(
+                "extern {} {far}{convention}{}{}({arguments});",
+                c_type(result, span)?,
+                if convention.is_empty() { "" } else { " " },
+                name
+            ))
         }
         // BASIC cannot name a handler's address: there is nothing to declare.
         Language::Basic if abi.interrupt() => Ok(format!("' {name}: an interrupt16 handler")),
@@ -187,14 +231,14 @@ fn declaration(function: &Function, abi: Abi, language: Language, segmented: boo
             Ok(format!("DECLARE {head}{convention}{alias}{arguments}"))
         }
         Language::Assembler => {
-            let words: u32 = parameters.iter().map(|(_, spec)| argument_width(spec)).sum::<u32>() + if hidden { 2 } else { 0 };
-            let signature = parameters
-                .iter()
-                .map(|(name, spec)| format!("{name}: {}", spec.text()))
-                .collect::<Vec<_>>()
-                .join(", ");
+            let words: u32 =
+                parameters.iter().map(|(_, spec)| argument_width(spec)).sum::<u32>() + if hidden { 2 } else { 0 };
+            let signature =
+                parameters.iter().map(|(name, spec)| format!("{name}: {}", spec.text())).collect::<Vec<_>>().join(", ");
             let cleanup = match abi {
-                Abi::C | Abi::Cdecl16 | Abi::Cdecl32 | Abi::Sysv32 | Abi::Ia16 | Abi::Regparm3 => "caller removes the arguments".to_owned(),
+                Abi::C | Abi::Cdecl16 | Abi::Cdecl32 | Abi::Sysv32 | Abi::Ia16 | Abi::Regparm3 => {
+                    "caller removes the arguments".to_owned()
+                }
                 Abi::Interrupt16 => "iret".to_owned(),
                 Abi::Watcall32 | Abi::Watcall16 => "the callee removes the stack arguments".to_owned(),
                 _ => format!("retf {words}"),
@@ -217,7 +261,11 @@ fn argument_width(spec: &TypeSpec) -> u32 {
     width(spec).unwrap_or(2).max(2)
 }
 
-fn unsupported(name: &str, what: &str, span: Span) -> Diagnostic {
+fn unsupported(
+    name: &str,
+    what: &str,
+    span: Span,
+) -> Diagnostic {
     Diagnostic::new(span, format!("{name:?} has no declaration in {what}"))
 }
 
@@ -239,7 +287,10 @@ fn pointer(spec: &TypeSpec) -> Option<(bool, bool, &TypeSpec)> {
 }
 
 /// The bytes a field of `spec` takes in a struct on the target: a pointer is its pointers' width.
-fn field_width(spec: &TypeSpec, sizes: crate::Sizes) -> Option<u32> {
+fn field_width(
+    spec: &TypeSpec,
+    sizes: crate::Sizes,
+) -> Option<u32> {
     match pointer(spec) {
         Some((far, _, _)) => Some(if far { sizes.far } else { sizes.near }),
         None => width(spec),
@@ -268,7 +319,10 @@ fn data_directive(width: u32) -> &'static str {
     }
 }
 
-fn c_type(spec: &TypeSpec, span: Span) -> Result<String, Diagnostic> {
+fn c_type(
+    spec: &TypeSpec,
+    span: Span,
+) -> Result<String, Diagnostic> {
     if let Some((far, mutable, target)) = pointer(spec) {
         let constant = if mutable { "" } else { "const " };
         let distance = if far { "__far" } else { "__near" };
@@ -294,7 +348,11 @@ fn c_type(spec: &TypeSpec, span: Span) -> Result<String, Diagnostic> {
     })
 }
 
-fn c_declarator(spec: &TypeSpec, name: &str, span: Span) -> Result<String, Diagnostic> {
+fn c_declarator(
+    spec: &TypeSpec,
+    name: &str,
+    span: Span,
+) -> Result<String, Diagnostic> {
     let type_ = c_type(spec, span)?;
     Ok(if type_.ends_with('*') { format!("{type_}{name}") } else { format!("{type_} {name}") })
 }
@@ -319,7 +377,10 @@ fn basic_field(spec: &TypeSpec) -> Option<String> {
     }
 }
 
-fn basic_parameter(name: &str, spec: &TypeSpec) -> Option<String> {
+fn basic_parameter(
+    name: &str,
+    spec: &TypeSpec,
+) -> Option<String> {
     // An adapter is BASIC's own by-reference argument.
     if let Some((_, adapter)) = Adapter::of(spec) {
         let element = || match spec {
@@ -349,7 +410,10 @@ fn basic_parameter(name: &str, spec: &TypeSpec) -> Option<String> {
 
 /// The suffix of a BASIC function returning `spec`: a whole `ax` or `dx:ax`,
 /// or under a BASIC ABI a float through its hidden result pointer.
-fn basic_suffix(spec: &TypeSpec, abi: Abi) -> Option<&'static str> {
+fn basic_suffix(
+    spec: &TypeSpec,
+    abi: Abi,
+) -> Option<&'static str> {
     match spec {
         TypeSpec::Primitive(TypeName::I16 | TypeName::U16) => Some("%"),
         TypeSpec::Primitive(TypeName::I32 | TypeName::U32) => Some("&"),

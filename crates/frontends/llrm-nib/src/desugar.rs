@@ -5,28 +5,24 @@ use std::collections::BTreeMap;
 use super::arguments;
 use super::arguments::Formal;
 use super::error::Diagnostic;
+use super::scopes;
 use super::syntax::BinaryOp;
 use super::syntax::Expr;
 use super::syntax::Function;
 use super::syntax::GenericParameter;
 use super::syntax::IterationMode;
+use super::syntax::Module;
 use super::syntax::ParameterType;
+use super::syntax::Statement;
+use super::syntax::Struct;
 use super::syntax::TypeAnnotation;
 use super::syntax::TypeSpec;
 use super::syntax::UnaryOp;
-use super::scopes;
-use super::syntax::Module;
-use super::syntax::Statement;
-use super::syntax::Struct;
 
 pub fn desugar(module: &mut Module) -> Result<(), Diagnostic> {
     let structs = module.structs.clone();
     let enums: Vec<String> = module.enums.iter().map(|one| one.name.clone()).collect();
-    let consts: BTreeMap<&str, &Expr> = module
-        .consts
-        .iter()
-        .map(|one| (one.name.as_str(), &one.value))
-        .collect();
+    let consts: BTreeMap<&str, &Expr> = module.consts.iter().map(|one| (one.name.as_str(), &one.value)).collect();
     for one in &mut module.statics {
         one.value.walk_mut(&mut |expression| {
             constant(expression, &consts, &[]);
@@ -36,7 +32,10 @@ pub fn desugar(module: &mut Module) -> Result<(), Diagnostic> {
     }
     for function in &mut module.functions {
         iterator_parameters(function);
-        if matches!(&function.result, TypeAnnotation::Value(TypeSpec::Applied { name, .. }) if name == "iter") {
+        if matches!(
+            &function.result,
+            TypeAnnotation::Value(TypeSpec::Applied { name, .. }) if name == "iter"
+        ) {
             hand_over_returned(&mut function.body);
         }
         for default in function.parameters.iter_mut().filter_map(|one| one.default.as_mut()) {
@@ -68,7 +67,8 @@ pub fn desugar(module: &mut Module) -> Result<(), Diagnostic> {
 fn iterator_parameters(function: &mut Function) {
     for parameter in &mut function.parameters {
         let spec = match &mut parameter.type_ {
-            ParameterType::Owned(TypeAnnotation::Value(spec)) | ParameterType::Borrowed { target: TypeAnnotation::Value(spec), .. } => spec,
+            ParameterType::Owned(TypeAnnotation::Value(spec))
+            | ParameterType::Borrowed { target: TypeAnnotation::Value(spec), .. } => spec,
             _ => continue,
         };
         if matches!(spec, TypeSpec::Applied { name, .. } if name == "iter") {
@@ -93,7 +93,8 @@ fn hand_over_returned(body: &mut Vec<Statement>) {
             let (iterable, span) = (value.take().expect("matched"), *span);
             let name = format!("$returned{}_{}", span.line, span.column);
             let each = Statement::Yield { value: Expr::Name(name.clone(), span), span };
-            let items = Statement::For { mode: IterationMode::Value, name, iterable, body: vec![each], returned: true, span };
+            let items =
+                Statement::For { mode: IterationMode::Value, name, iterable, body: vec![each], returned: true, span };
             body.insert(at, items);
             at += 1;
         }
@@ -122,7 +123,12 @@ pub fn local_declarations(module: &mut Module) {
     module.functions.extend(hoisted);
 }
 
-fn locals(owner: &str, body: &mut Vec<Statement>, outer: &BTreeMap<String, Local>, hoisted: &mut Vec<Function>) {
+fn locals(
+    owner: &str,
+    body: &mut Vec<Statement>,
+    outer: &BTreeMap<String, Local>,
+    hoisted: &mut Vec<Function>,
+) {
     let mut scope = outer.clone();
     body.retain_mut(|statement| {
         match statement {
@@ -170,7 +176,10 @@ fn locals(owner: &str, body: &mut Vec<Statement>, outer: &BTreeMap<String, Local
 }
 
 /// A local declaration's name, read or called, as what it stands for.
-fn local(expression: &mut Expr, scope: &BTreeMap<String, Local>) {
+fn local(
+    expression: &mut Expr,
+    scope: &BTreeMap<String, Local>,
+) {
     match expression {
         Expr::Name(name, _) => match scope.get(name) {
             Some(Local::Constant(value)) => *expression = value.clone(),
@@ -207,7 +216,11 @@ fn untyped_arithmetic(expression: &mut Expr) {
     }
 }
 
-fn constant(expression: &mut Expr, consts: &BTreeMap<&str, &Expr>, locals: &[String]) {
+fn constant(
+    expression: &mut Expr,
+    consts: &BTreeMap<&str, &Expr>,
+    locals: &[String],
+) {
     if let Expr::Name(name, _) = expression {
         if let Some(value) = consts.get(name.as_str()).filter(|_| !locals.contains(name)) {
             *expression = (*value).clone();
@@ -217,13 +230,7 @@ fn constant(expression: &mut Expr, consts: &BTreeMap<&str, &Expr>, locals: &[Str
 
 /// `[v] * n` gives every element one value; `[[v] * m] * n` is ranked `[n, m]`.
 fn repeat(expression: &mut Expr) {
-    let Expr::Binary {
-        op: BinaryOp::Multiply,
-        left,
-        right,
-        span,
-    } = expression
-    else {
+    let Expr::Binary { op: BinaryOp::Multiply, left, right, span } = expression else {
         return;
     };
     let Expr::Array(items, _) = left.as_mut() else {
@@ -237,22 +244,16 @@ fn repeat(expression: &mut Expr) {
         Expr::Repeat { value, counts, .. } => (value, [vec![count], counts].concat()),
         value => (Box::new(value), vec![count]),
     };
-    *expression = Expr::Repeat {
-        value,
-        counts,
-        span: *span,
-    };
+    *expression = Expr::Repeat { value, counts, span: *span };
 }
 
 /// `Shape.circle(...)` and `Mode.text` name a variant, not a method or field.
-fn qualified_variant(expression: &mut Expr, enums: &[String]) {
+fn qualified_variant(
+    expression: &mut Expr,
+    enums: &[String],
+) {
     let (receiver, name, span) = match expression {
-        Expr::MethodCall {
-            receiver,
-            name,
-            span,
-            ..
-        } => (receiver, name, *span),
+        Expr::MethodCall { receiver, name, span, .. } => (receiver, name, *span),
         Expr::Member { base, field, span } => (base, field, *span),
         _ => return,
     };
@@ -267,23 +268,15 @@ fn qualified_variant(expression: &mut Expr, enums: &[String]) {
         Expr::MethodCall { arguments, .. } => std::mem::take(arguments),
         _ => Vec::new(),
     };
-    *expression = Expr::Variant {
-        enum_name: Some(enum_name),
-        name,
-        arguments,
-        span,
-    };
+    *expression = Expr::Variant { enum_name: Some(enum_name), name, arguments, span };
 }
 
 /// `Point(0, y=1)` calls no function: it builds a `Point`.
-fn constructor(expression: &mut Expr, structs: &[Struct]) -> Result<(), Diagnostic> {
-    let Expr::Call {
-        name,
-        arguments: given,
-        span,
-        ..
-    } = expression
-    else {
+fn constructor(
+    expression: &mut Expr,
+    structs: &[Struct],
+) -> Result<(), Diagnostic> {
+    let Expr::Call { name, arguments: given, span, .. } = expression else {
         return Ok(());
     };
     // A generic struct's instance is chosen where types are known.
@@ -292,18 +285,14 @@ fn constructor(expression: &mut Expr, structs: &[Struct]) -> Result<(), Diagnost
     };
     // `Attr(raw)` reads a bits struct from its backing integer.
     if layout.bits.is_some()
-        && matches!(given.as_slice(), [one] if !matches!(one, Expr::NamedArgument { .. }))
+        && matches!(
+            given.as_slice(),
+            [one] if !matches!(one, Expr::NamedArgument { .. })
+        )
     {
         return Ok(());
     }
-    let formals: Vec<_> = layout
-        .fields
-        .iter()
-        .map(|field| Formal {
-            name: &field.name,
-            default: None,
-        })
-        .collect();
+    let formals: Vec<_> = layout.fields.iter().map(|field| Formal { name: &field.name, default: None }).collect();
     let values = arguments::bind(name, &formals, std::mem::take(given), *span)?;
     *expression = Expr::StructLiteral {
         name: name.clone(),

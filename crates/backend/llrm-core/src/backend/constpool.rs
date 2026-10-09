@@ -19,7 +19,10 @@ impl Pool {
     }
 
     /// The readonly cell holding `bytes`.
-    pub fn cell(&mut self, bytes: Vec<u8>) -> Mem {
+    pub fn cell(
+        &mut self,
+        bytes: Vec<u8>,
+    ) -> Mem {
         let width = bytes.len() as u32;
         let next = self.first + self.entries.len() as i64;
         let id = *self.entries.entry(bytes).or_insert(next);

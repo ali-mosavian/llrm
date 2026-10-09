@@ -65,13 +65,29 @@ pub enum HiddenType {
 }
 
 impl<'a> Lowering<'a> {
-    pub fn new(kept: &'a Kept, span: Span) -> Self {
-        Self { kept, states: vec![Vec::new(), Vec::new()], done: 1, loops: Vec::new(), scopes: Vec::new(), elements: BTreeMap::new(), hidden: Vec::new(), span }
+    pub fn new(
+        kept: &'a Kept,
+        span: Span,
+    ) -> Self {
+        Self {
+            kept,
+            states: vec![Vec::new(), Vec::new()],
+            done: 1,
+            loops: Vec::new(),
+            scopes: Vec::new(),
+            elements: BTreeMap::new(),
+            hidden: Vec::new(),
+            span,
+        }
     }
 
     /// `body`, whose scope opens with `parameters`, as the arms of `match
     /// self.$resume`, the last ending it.
-    pub fn arms(mut self, mut body: Vec<Statement>, parameters: &[String]) -> Result<(Vec<MatchArm>, Vec<(String, HiddenType)>), Diagnostic> {
+    pub fn arms(
+        mut self,
+        mut body: Vec<Statement>,
+        parameters: &[String],
+    ) -> Result<(Vec<MatchArm>, Vec<(String, HiddenType)>), Diagnostic> {
         self.block(&mut body, 0, self.done, parameters)?;
         self.states[self.done] = self.finish();
         let span = self.span;
@@ -96,11 +112,18 @@ impl<'a> Lowering<'a> {
     }
 
     /// `self.field`.
-    fn field(&self, name: &str) -> Expr {
+    fn field(
+        &self,
+        name: &str,
+    ) -> Expr {
         Expr::Member { base: Box::new(self.this()), field: name.into(), span: self.span }
     }
 
-    fn set(&self, name: &str, value: Expr) -> Statement {
+    fn set(
+        &self,
+        name: &str,
+        value: Expr,
+    ) -> Statement {
         Statement::Assign {
             target: AssignTarget::Member { base: self.this(), field: name.into() },
             operation: None,
@@ -110,43 +133,65 @@ impl<'a> Lowering<'a> {
     }
 
     /// Resumes at `state`.
-    fn goto(&self, state: usize) -> Vec<Statement> {
+    fn goto(
+        &self,
+        state: usize,
+    ) -> Vec<Statement> {
         vec![self.set(RESUME, Expr::Integer(state as i64, self.span)), Statement::Continue(self.span)]
     }
 
     /// `.none` from here on: the generator has ended.
     fn finish(&self) -> Vec<Statement> {
         let none = Expr::Variant { enum_name: None, name: "none".into(), arguments: Vec::new(), span: self.span };
-        vec![self.set(RESUME, Expr::Integer(self.done as i64, self.span)), Statement::Return { value: Some(none), span: self.span }]
+        vec![
+            self.set(RESUME, Expr::Integer(self.done as i64, self.span)),
+            Statement::Return { value: Some(none), span: self.span },
+        ]
     }
 
-    fn hidden_field(&mut self, stem: &str, type_: HiddenType) -> String {
+    fn hidden_field(
+        &mut self,
+        stem: &str,
+        type_: HiddenType,
+    ) -> String {
         let name = format!("${stem}{}", self.hidden.len());
         self.hidden.push((name.clone(), type_));
         name
     }
 
     /// Opens a scope holding `names`.
-    fn open(&mut self, names: &[String]) {
+    fn open(
+        &mut self,
+        names: &[String],
+    ) {
         let owning = names.iter().filter(|one| self.kept.owning.contains(*one)).cloned().collect();
         self.scopes.push(owning);
     }
 
     /// `name`, just bound, is in the innermost scope.
-    fn bound(&mut self, name: &str) {
+    fn bound(
+        &mut self,
+        name: &str,
+    ) {
         if self.kept.owning.contains(name) {
             self.scopes.last_mut().expect("a scope").push(name.into());
         }
     }
 
     /// Resets, innermost last binding first, what the scopes from `depth` on hold.
-    fn leave(&self, depth: usize) -> Vec<Statement> {
+    fn leave(
+        &self,
+        depth: usize,
+    ) -> Vec<Statement> {
         let names = self.scopes[depth..].iter().rev().flat_map(|scope| scope.iter().rev());
         names.map(|name| self.set(name, Expr::Zero(self.span))).collect()
     }
 
     /// Closes the innermost scope where `state` ends it, unless it has left.
-    fn close(&mut self, state: usize) {
+    fn close(
+        &mut self,
+        state: usize,
+    ) {
         if !self.left(state) {
             let resets = self.leave(self.scopes.len() - 1);
             self.states[state].extend(resets);
@@ -155,7 +200,10 @@ impl<'a> Lowering<'a> {
     }
 
     /// Whether `state` has already jumped or returned.
-    fn left(&self, state: usize) -> bool {
+    fn left(
+        &self,
+        state: usize,
+    ) -> bool {
         fn leaves(statement: Option<&Statement>) -> bool {
             match statement {
                 Some(Statement::Continue(_) | Statement::Return { .. }) => true,
@@ -168,7 +216,13 @@ impl<'a> Lowering<'a> {
 
     /// Lowers `body`, a scope opening with `names`, from `state`, then
     /// resumes at `then`.
-    fn block(&mut self, body: &mut [Statement], state: usize, then: usize, names: &[String]) -> Result<usize, Diagnostic> {
+    fn block(
+        &mut self,
+        body: &mut [Statement],
+        state: usize,
+        then: usize,
+        names: &[String],
+    ) -> Result<usize, Diagnostic> {
         self.open(names);
         let state = self.inline(body, state)?;
         self.close(state);
@@ -180,14 +234,22 @@ impl<'a> Lowering<'a> {
     }
 
     /// Lowers `body` from `state` in the scope open now; the state it ends in.
-    fn inline(&mut self, body: &mut [Statement], mut state: usize) -> Result<usize, Diagnostic> {
+    fn inline(
+        &mut self,
+        body: &mut [Statement],
+        mut state: usize,
+    ) -> Result<usize, Diagnostic> {
         for statement in body {
             state = self.statement(statement, state)?;
         }
         Ok(state)
     }
 
-    fn statement(&mut self, statement: &mut Statement, state: usize) -> Result<usize, Diagnostic> {
+    fn statement(
+        &mut self,
+        statement: &mut Statement,
+        state: usize,
+    ) -> Result<usize, Diagnostic> {
         let span = statement.span();
         match statement {
             // Every name a split block binds is a field.
@@ -199,7 +261,9 @@ impl<'a> Lowering<'a> {
                 self.bound(name);
                 return Ok(state);
             }
-            Statement::Destructure { pattern, value, otherwise, .. } => return self.destructure(pattern, value, otherwise, state, span),
+            Statement::Destructure { pattern, value, otherwise, .. } => {
+                return self.destructure(pattern, value, otherwise, state, span);
+            }
             _ if !holds_yield(statement) => {
                 let lowered = self.whole(statement.clone(), false)?;
                 self.states[state].extend(lowered);
@@ -222,7 +286,8 @@ impl<'a> Lowering<'a> {
                 let (then, otherwise, after) = (self.reserve(), self.reserve(), self.reserve());
                 let mut condition = condition.clone();
                 self.expression(&mut condition);
-                let branch = Statement::If { condition, then_branch: self.goto(then), else_branch: self.goto(otherwise), span };
+                let branch =
+                    Statement::If { condition, then_branch: self.goto(then), else_branch: self.goto(otherwise), span };
                 self.states[state].push(branch);
                 self.block(then_branch, then, after, &[])?;
                 self.block(else_branch, otherwise, after, &[])?;
@@ -234,7 +299,8 @@ impl<'a> Lowering<'a> {
                 self.states[state].extend(made);
                 let mut condition = condition.clone();
                 self.expression(&mut condition);
-                let made = Statement::If { condition, then_branch: self.goto(inside), else_branch: self.goto(after), span };
+                let made =
+                    Statement::If { condition, then_branch: self.goto(inside), else_branch: self.goto(after), span };
                 self.states[head].push(made);
                 self.looped(body, inside, head, after, head, &[])?;
                 Ok(after)
@@ -248,7 +314,12 @@ impl<'a> Lowering<'a> {
                 self.states[state].push(made);
                 let made = self.set(&bound, end);
                 self.states[state].push(made);
-                let below = Expr::Binary { op: BinaryOp::Less, left: Box::new(self.field(name)), right: Box::new(self.field(&bound)), span };
+                let below = Expr::Binary {
+                    op: BinaryOp::Less,
+                    left: Box::new(self.field(name)),
+                    right: Box::new(self.field(&bound)),
+                    span,
+                };
                 let step = self.stepped(name);
                 self.counted(state, below, None, step, body, name)
             }
@@ -266,7 +337,9 @@ impl<'a> Lowering<'a> {
                     return Ok(after);
                 }
                 if let Expr::Member { base, field, .. } = &iterable {
-                    if matches!(base.as_ref(), Expr::Name(this, _) if this == "self") && self.kept.iterators.contains(field) {
+                    if matches!(base.as_ref(), Expr::Name(this, _) if this == "self")
+                        && self.kept.iterators.contains(field)
+                    {
                         let field = field.clone();
                         return self.stepped_iterator(state, &field, name, body);
                     }
@@ -276,7 +349,12 @@ impl<'a> Lowering<'a> {
                 let made = self.set(&counter, Expr::Integer(0, span));
                 self.states[state].push(made);
                 let length = Expr::Member { base: Box::new(iterable.clone()), field: "len".into(), span };
-                let below = Expr::Binary { op: BinaryOp::Less, left: Box::new(self.field(&counter)), right: Box::new(length), span };
+                let below = Expr::Binary {
+                    op: BinaryOp::Less,
+                    left: Box::new(self.field(&counter)),
+                    right: Box::new(length),
+                    span,
+                };
                 let element = Expr::Index { base: Box::new(iterable), indices: vec![self.field(&counter)], span };
                 self.elements.insert(name.clone(), element);
                 let step = self.stepped(&counter);
@@ -330,7 +408,14 @@ impl<'a> Lowering<'a> {
 
     /// `let pattern = value else: otherwise`: the pattern binds its names
     /// afresh, and each moves to its field.
-    fn destructure(&mut self, pattern: &Pattern, value: &Expr, otherwise: &mut Option<Vec<Statement>>, state: usize, span: Span) -> Result<usize, Diagnostic> {
+    fn destructure(
+        &mut self,
+        pattern: &Pattern,
+        value: &Expr,
+        otherwise: &mut Option<Vec<Statement>>,
+        state: usize,
+        span: Span,
+    ) -> Result<usize, Diagnostic> {
         let mut value = value.clone();
         self.expression(&mut value);
         let (pattern, names) = rename_bindings(pattern);
@@ -359,12 +444,18 @@ impl<'a> Lowering<'a> {
     }
 
     /// Moves each renamed binding of `names` to its field.
-    fn taken(&self, names: &[String]) -> Vec<Statement> {
+    fn taken(
+        &self,
+        names: &[String],
+    ) -> Vec<Statement> {
         names.iter().map(|name| self.set(name, Expr::Name(bound_name(name), self.span))).collect()
     }
 
     /// `name += 1`.
-    fn stepped(&self, name: &str) -> Statement {
+    fn stepped(
+        &self,
+        name: &str,
+    ) -> Statement {
         Statement::Assign {
             target: AssignTarget::Member { base: self.this(), field: name.into() },
             operation: Some(BinaryOp::Add),
@@ -375,17 +466,42 @@ impl<'a> Lowering<'a> {
 
     /// A loop from `state` over the iterator field `iterator`, binding
     /// `name` to each item; the state after it.
-    fn stepped_iterator(&mut self, state: usize, iterator: &str, name: &str, body: &mut [Statement]) -> Result<usize, Diagnostic> {
+    fn stepped_iterator(
+        &mut self,
+        state: usize,
+        iterator: &str,
+        name: &str,
+        body: &mut [Statement],
+    ) -> Result<usize, Diagnostic> {
         let span = self.span;
         let (head, inside, after) = (self.reserve(), self.reserve(), self.reserve());
         let made = self.goto(head);
         self.states[state].extend(made);
-        let next = Expr::MethodCall { receiver: Box::new(self.field(iterator)), name: "next".into(), type_arguments: Vec::new(), arguments: Vec::new(), span };
+        let next = Expr::MethodCall {
+            receiver: Box::new(self.field(iterator)),
+            name: "next".into(),
+            type_arguments: Vec::new(),
+            arguments: Vec::new(),
+            span,
+        };
         let mut taken = self.taken(&[name.to_string()]);
         taken.extend(self.goto(inside));
         let arms = vec![
-            MatchArm { pattern: Pattern::Variant { enum_name: None, name: "some".into(), fields: vec![Pattern::Binding(bound_name(name), span)], span }, body: taken, span },
-            MatchArm { pattern: Pattern::Variant { enum_name: None, name: "none".into(), fields: Vec::new(), span }, body: self.goto(after), span },
+            MatchArm {
+                pattern: Pattern::Variant {
+                    enum_name: None,
+                    name: "some".into(),
+                    fields: vec![Pattern::Binding(bound_name(name), span)],
+                    span,
+                },
+                body: taken,
+                span,
+            },
+            MatchArm {
+                pattern: Pattern::Variant { enum_name: None, name: "none".into(), fields: Vec::new(), span },
+                body: self.goto(after),
+                span,
+            },
         ];
         self.states[head].push(Statement::Match { subject: next, arms, span });
         self.looped(body, inside, head, after, head, &[name.to_string()])?;
@@ -394,13 +510,22 @@ impl<'a> Lowering<'a> {
 
     /// A counted loop from `state`: while `below`, `body` with `name` in
     /// scope, then `step`.
-    fn counted(&mut self, state: usize, below: Expr, take: Option<Statement>, step: Statement, body: &mut [Statement], name: &str) -> Result<usize, Diagnostic> {
+    fn counted(
+        &mut self,
+        state: usize,
+        below: Expr,
+        take: Option<Statement>,
+        step: Statement,
+        body: &mut [Statement],
+        name: &str,
+    ) -> Result<usize, Diagnostic> {
         let (head, inside, next, after) = (self.reserve(), self.reserve(), self.reserve(), self.reserve());
         let made = self.goto(head);
         self.states[state].extend(made);
         let mut entered: Vec<Statement> = take.into_iter().collect();
         entered.extend(self.goto(inside));
-        let made = Statement::If { condition: below, then_branch: entered, else_branch: self.goto(after), span: self.span };
+        let made =
+            Statement::If { condition: below, then_branch: entered, else_branch: self.goto(after), span: self.span };
         self.states[head].push(made);
         self.states[next].push(step);
         let made = self.goto(head);
@@ -411,7 +536,15 @@ impl<'a> Lowering<'a> {
 
     /// A loop's body from `inside`, a scope opening with `names`, its
     /// `continue` going to `next`.
-    fn looped(&mut self, body: &mut [Statement], inside: usize, next: usize, exit: usize, then: usize, names: &[String]) -> Result<(), Diagnostic> {
+    fn looped(
+        &mut self,
+        body: &mut [Statement],
+        inside: usize,
+        next: usize,
+        exit: usize,
+        then: usize,
+        names: &[String],
+    ) -> Result<(), Diagnostic> {
         self.loops.push(Targets { exit, next, depth: self.scopes.len() });
         let result = self.block(body, inside, then, names);
         self.loops.pop();
@@ -422,7 +555,11 @@ impl<'a> Lowering<'a> {
     /// read `self`, and its `break`, `continue` and `return` that leave the
     /// split code end the scopes they leave and jump. Inside a loop it keeps,
     /// `break` and `continue` are that loop's.
-    fn whole(&mut self, mut statement: Statement, in_loop: bool) -> Result<Vec<Statement>, Diagnostic> {
+    fn whole(
+        &mut self,
+        mut statement: Statement,
+        in_loop: bool,
+    ) -> Result<Vec<Statement>, Diagnostic> {
         match &mut statement {
             Statement::Break(_) if !in_loop => {
                 let target = self.loops.last().expect("a split loop");
@@ -457,7 +594,11 @@ impl<'a> Lowering<'a> {
         for expression in statement.own_expressions_mut() {
             self.expression(expression);
         }
-        let inner = in_loop || matches!(statement, Statement::While { .. } | Statement::For { .. } | Statement::ForRange { .. });
+        let inner = in_loop
+            || matches!(
+                statement,
+                Statement::While { .. } | Statement::For { .. } | Statement::ForRange { .. }
+            );
         for block in statement.blocks_mut() {
             let kept = std::mem::take(block);
             for one in kept {
@@ -469,7 +610,10 @@ impl<'a> Lowering<'a> {
 
     /// Each field `expression` names, read through `self`, and each loop
     /// item, its element.
-    fn expression(&self, expression: &mut Expr) {
+    fn expression(
+        &self,
+        expression: &mut Expr,
+    ) {
         let Ok(()) = expression.walk_mut(&mut |one| -> Result<(), std::convert::Infallible> {
             if let Expr::Name(name, _) = one {
                 if let Some(element) = self.elements.get(name) {
@@ -479,7 +623,11 @@ impl<'a> Lowering<'a> {
             }
             if let Expr::Name(name, span) = one {
                 if self.kept.fields.contains(name.as_str()) {
-                    *one = Expr::Member { base: Box::new(Expr::Name("self".into(), *span)), field: name.clone(), span: *span };
+                    *one = Expr::Member {
+                        base: Box::new(Expr::Name("self".into(), *span)),
+                        field: name.clone(),
+                        span: *span,
+                    };
                 }
             }
             Ok(())
@@ -498,7 +646,8 @@ pub fn generator_state(expression: &Expr) -> Option<String> {
 /// Whether `statement` holds a `yield`, at any depth.
 pub fn holds_yield(statement: &Statement) -> bool {
     let mut statement = statement.clone();
-    matches!(statement, Statement::Yield { .. }) || statement.blocks_mut().into_iter().any(|block| block.iter().any(holds_yield))
+    matches!(statement, Statement::Yield { .. })
+        || statement.blocks_mut().into_iter().any(|block| block.iter().any(holds_yield))
 }
 
 /// The names a split `body` binds, in order: its fields besides the parameters.
@@ -508,8 +657,14 @@ pub fn split_bindings(body: &[Statement]) -> Vec<(String, Span)> {
         let split = holds_yield(statement);
         match statement {
             Statement::Bind { name, span, .. } => found.push((name.clone(), *span)),
-            Statement::Destructure { pattern, span, .. } => found.extend(pattern.names().into_iter().map(|name| (name.to_string(), *span))),
-            Statement::For { name, span, .. } | Statement::ForRange { name, span, .. } | Statement::With { name, span, .. } if split => {
+            Statement::Destructure { pattern, span, .. } => {
+                found.extend(pattern.names().into_iter().map(|name| (name.to_string(), *span)))
+            }
+            Statement::For { name, span, .. }
+            | Statement::ForRange { name, span, .. }
+            | Statement::With { name, span, .. }
+                if split =>
+            {
                 found.push((name.clone(), *span));
             }
             Statement::Match { arms, .. } if split => {
@@ -562,7 +717,10 @@ fn pattern_names_mut(pattern: &mut Pattern) -> Vec<&mut String> {
 /// Each name `statement` itself binds, to rename.
 fn binding_names_mut(statement: &mut Statement) -> Vec<&mut String> {
     match statement {
-        Statement::Bind { name, .. } | Statement::For { name, .. } | Statement::ForRange { name, .. } | Statement::With { name, .. } => vec![name],
+        Statement::Bind { name, .. }
+        | Statement::For { name, .. }
+        | Statement::ForRange { name, .. }
+        | Statement::With { name, .. } => vec![name],
         Statement::Destructure { pattern, .. } => pattern_names_mut(pattern),
         Statement::Match { arms, .. } => arms.iter_mut().flat_map(|arm| pattern_names_mut(&mut arm.pattern)).collect(),
         _ => Vec::new(),
@@ -572,7 +730,10 @@ fn binding_names_mut(statement: &mut Statement) -> Vec<&mut String> {
 /// `body` with each binding of a name bound before -- a parameter
 /// included -- given a name of its own, and each use renamed to the binding
 /// it sees. A frame keeps one field per name, so each binding needs one.
-pub fn unique_bindings(body: &mut [Statement], parameters: &[String]) {
+pub fn unique_bindings(
+    body: &mut [Statement],
+    parameters: &[String],
+) {
     let mut seen: BTreeSet<String> = parameters.iter().cloned().collect();
     let mut original: BTreeMap<String, String> = BTreeMap::new();
     for statement in body.iter_mut() {
@@ -586,13 +747,14 @@ pub fn unique_bindings(body: &mut [Statement], parameters: &[String]) {
         });
     }
     let mut locals = parameters.to_vec();
-    let Ok(()) = scopes::walk_mut(body, &mut locals, &mut |expression, locals| -> Result<(), std::convert::Infallible> {
-        if let Expr::Name(name, _) = expression {
-            let sees = locals.iter().rev().find(|local| original.get(*local).unwrap_or(local) == name);
-            if let Some(local) = sees {
-                *name = local.clone();
+    let Ok(()) =
+        scopes::walk_mut(body, &mut locals, &mut |expression, locals| -> Result<(), std::convert::Infallible> {
+            if let Expr::Name(name, _) = expression {
+                let sees = locals.iter().rev().find(|local| original.get(*local).unwrap_or(local) == name);
+                if let Some(local) = sees {
+                    *name = local.clone();
+                }
             }
-        }
-        Ok(())
-    });
+            Ok(())
+        });
 }

@@ -30,7 +30,11 @@ pub type Defined = (usize, GlobalId);
 
 /// What a call of `inst` may reach: the global it names, or the functions
 /// `!callees` lists of an indirect call; `None` where it may reach any.
-fn reached(module: &Module, function: &Function, inst: InstId) -> Option<Vec<GlobalId>> {
+fn reached(
+    module: &Module,
+    function: &Function,
+    inst: InstId,
+) -> Option<Vec<GlobalId>> {
     if let Some(callee) = memory::callee(&module.context, function, inst) {
         return Some(vec![callee]);
     }
@@ -51,8 +55,14 @@ fn reached(module: &Module, function: &Function, inst: InstId) -> Option<Vec<Glo
 }
 
 /// Whether `inst` is a call.
-fn calls(function: &Function, inst: InstId) -> bool {
-    matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))
+fn calls(
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    matches!(
+        function.instruction(inst).opcode,
+        Opcode::Call(_) | Opcode::Invoke(_)
+    )
 }
 
 impl CallGraph {
@@ -80,7 +90,11 @@ impl CallGraph {
     /// calls, and neither it nor what it reaches calls an unbounded pointer or a
     /// declaration that may call back (not `nocallback`, not an intrinsic): LLVM's
     /// `addNoRecurseAttrs`.
-    pub fn cannot_reenter(&self, module: &Module, id: GlobalId) -> bool {
+    pub fn cannot_reenter(
+        &self,
+        module: &Module,
+        id: GlobalId,
+    ) -> bool {
         if self.recursive(id) {
             return false;
         }
@@ -90,7 +104,12 @@ impl CallGraph {
             let global = module.global(at);
             let Some(function) = global.function() else { return true };
             if function.is_declaration() {
-                return Facts::of(&function.attrs).no_callback() || global.name.as_deref().and_then(Intrinsic::named).is_some_and(|one| !matches!(one, Intrinsic::Code | Intrinsic::Asm));
+                return Facts::of(&function.attrs).no_callback()
+                    || global
+                        .name
+                        .as_deref()
+                        .and_then(Intrinsic::named)
+                        .is_some_and(|one| !matches!(one, Intrinsic::Code | Intrinsic::Asm));
             }
             !self.calls_unknown(at)
         })
@@ -107,7 +126,9 @@ impl CallGraph<Defined> {
                 let mut called = BTreeSet::new();
                 for (_, inst) in function.walk().filter(|&(_, inst)| calls(function, inst)) {
                     match reached(module, function, inst) {
-                        Some(found) => called.extend(found.into_iter().map(|callee| program.definition(at, callee).unwrap_or((at, callee)))),
+                        Some(found) => called.extend(
+                            found.into_iter().map(|callee| program.definition(at, callee).unwrap_or((at, callee))),
+                        ),
                         None => {
                             unknown.insert((at, id));
                         }
@@ -122,12 +143,18 @@ impl CallGraph<Defined> {
 
 impl<N: Copy + Ord> CallGraph<N> {
     /// What `function` calls directly.
-    pub fn callees_of(&self, function: N) -> Vec<N> {
+    pub fn callees_of(
+        &self,
+        function: N,
+    ) -> Vec<N> {
         self.callees.get(&function).into_iter().flatten().copied().collect()
     }
 
     /// Every function `from` reaches, through its calls and theirs.
-    pub fn reachable(&self, from: N) -> BTreeSet<N> {
+    pub fn reachable(
+        &self,
+        from: N,
+    ) -> BTreeSet<N> {
         let mut seen = BTreeSet::new();
         let mut work: Vec<N> = self.callees.get(&from).into_iter().flatten().copied().collect();
         while let Some(at) = work.pop() {
@@ -140,7 +167,10 @@ impl<N: Copy + Ord> CallGraph<N> {
 
     /// Whether `function` makes a call that may reach any function: through
     /// a pointer no `!callees` bounds.
-    pub fn calls_unknown(&self, function: N) -> bool {
+    pub fn calls_unknown(
+        &self,
+        function: N,
+    ) -> bool {
         self.unknown.contains(&function)
     }
 
@@ -182,9 +212,11 @@ impl<N: Copy + Ord> CallGraph<N> {
     fn components(&self) -> &BTreeMap<N, (usize, bool)> {
         self.components.get_or_init(|| {
             let (mut index, mut stack, mut next) = (BTreeMap::<N, usize>::new(), Vec::<N>::new(), 0);
-            let (mut low, mut on, mut found) = (BTreeMap::<N, usize>::new(), BTreeSet::<N>::new(), BTreeMap::<N, (usize, bool)>::new());
+            let (mut low, mut on, mut found) =
+                (BTreeMap::<N, usize>::new(), BTreeSet::<N>::new(), BTreeMap::<N, (usize, bool)>::new());
             let mut components = 0;
-            let nodes: BTreeSet<N> = self.callees.iter().flat_map(|(from, to)| std::iter::once(*from).chain(to.iter().copied())).collect();
+            let nodes: BTreeSet<N> =
+                self.callees.iter().flat_map(|(from, to)| std::iter::once(*from).chain(to.iter().copied())).collect();
             for &root in &nodes {
                 if index.contains_key(&root) {
                     continue;
@@ -247,18 +279,32 @@ impl<N: Copy + Ord> CallGraph<N> {
     }
 
     /// Whether `function` can call itself: it is in a cycle of calls.
-    pub fn recursive(&self, function: N) -> bool {
+    pub fn recursive(
+        &self,
+        function: N,
+    ) -> bool {
         self.components().get(&function).is_some_and(|one| one.1)
     }
 
     /// Whether `one` and `other` are in one cycle of calls.
-    pub fn together(&self, one: N, other: N) -> bool {
+    pub fn together(
+        &self,
+        one: N,
+        other: N,
+    ) -> bool {
         let components = self.components();
-        matches!((components.get(&one), components.get(&other)), (Some(a), Some(b)) if a.1 && a.0 == b.0)
+        matches!(
+            (components.get(&one), components.get(&other)),
+            (Some(a), Some(b)) if a.1 && a.0 == b.0
+        )
     }
 
     /// Whether `from` calls `to`, directly or not.
-    pub fn reaches(&self, from: N, to: N) -> bool {
+    pub fn reaches(
+        &self,
+        from: N,
+        to: N,
+    ) -> bool {
         let mut seen = BTreeSet::new();
         let mut work: Vec<N> = self.callees.get(&from).into_iter().flatten().copied().collect();
         while let Some(at) = work.pop() {
@@ -279,7 +325,10 @@ pub struct CallGraphAnalysis;
 impl ModuleAnalysis for CallGraphAnalysis {
     type Result = CallGraph;
     const NAME: &'static str = "call-graph";
-    fn run(module: &Module, _: &mut ModuleAnalyses) -> CallGraph {
+    fn run(
+        module: &Module,
+        _: &mut ModuleAnalyses,
+    ) -> CallGraph {
         CallGraph::new(module)
     }
 }
@@ -290,7 +339,10 @@ pub struct ProgramCallGraph;
 impl ProgramAnalysis for ProgramCallGraph {
     type Result = CallGraph<Defined>;
     const NAME: &'static str = "program-call-graph";
-    fn run(program: &Program, _: &mut ProgramAnalyses) -> CallGraph<Defined> {
+    fn run(
+        program: &Program,
+        _: &mut ProgramAnalyses,
+    ) -> CallGraph<Defined> {
         CallGraph::of(program)
     }
 }
@@ -311,12 +363,22 @@ pub fn addressed(module: &Module) -> BTreeSet<GlobalId> {
             let instruction = function.instruction(inst);
             let skip = usize::from(memory::callee(context, function, inst).is_some());
             let kept = instruction.operands.len() - skip;
-            work.extend(instruction.operands[..kept].iter().filter_map(|&operand| if let Operand::Constant(id) = operand { Some(id) } else { None }));
+            work.extend(
+                instruction.operands[..kept]
+                    .iter()
+                    .filter_map(|&operand| if let Operand::Constant(id) = operand { Some(id) } else { None }),
+            );
         }
     }
-    work.extend(module.globals.iter().filter_map(|global| if let GlobalKind::Variable(variable) = &global.kind { variable.initializer } else { None }));
+    work.extend(module.globals.iter().filter_map(|global| {
+        if let GlobalKind::Variable(variable) = &global.kind { variable.initializer } else { None }
+    }));
     for node in &module.metadata {
-        work.extend(node.operands.iter().filter_map(|operand| if let MetadataOperand::Constant(id) = operand { Some(*id) } else { None }));
+        work.extend(
+            node.operands
+                .iter()
+                .filter_map(|operand| if let MetadataOperand::Constant(id) = operand { Some(*id) } else { None }),
+        );
     }
     while let Some(id) = work.pop() {
         match &context.get(id).kind {
@@ -367,7 +429,10 @@ pub fn direct_calls(module: &Module) -> DirectCalls {
             let instruction = function.instruction(inst);
             let Some(callee) = memory::callee(&module.context, function, inst) else { continue };
             match &instruction.opcode {
-                Opcode::Call(_) if instruction.operands.len() == module.global(callee).function().map_or(0, |one| one.parameters().len()) + 1 => {
+                Opcode::Call(_)
+                    if instruction.operands.len()
+                        == module.global(callee).function().map_or(0, |one| one.parameters().len()) + 1 =>
+                {
                     found.sites.entry(callee).or_default().push((caller, inst));
                 }
                 Opcode::Call(_) | Opcode::Invoke(_) => {

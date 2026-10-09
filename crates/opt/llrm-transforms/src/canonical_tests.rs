@@ -12,7 +12,11 @@ use llrm_mir::opcode::{IntPredicate, Opcode};
 use super::identities;
 
 /// `t = x op constant; if t test 0 return 1 else return 2`, x an argument.
-fn _body(op: &str, constant: i64, test: &str) -> Module {
+fn _body(
+    op: &str,
+    constant: i64,
+    test: &str,
+) -> Module {
     let text = format!(
         "define i16 @f(i16 %x) {{
 b0:
@@ -31,7 +35,10 @@ b2:
     llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}\n{text}"))
 }
 
-fn returned(module: &Module, x: u128) -> Val {
+fn returned(
+    module: &Module,
+    x: u128,
+) -> Val {
     run(module, "f", vec![Val::Int { bits: x, width: 16 }], 1_000).expect("runs")
 }
 
@@ -196,7 +203,10 @@ b0:
         let (before, after) = canonical(&text);
         let shown = printed(&after);
         assert!(!shown.contains("icmp ne i16") && !shown.contains("icmp eq i16"), "{ext} {from} {predicate}:\n{shown}");
-        assert!(shown.contains(left) || shown.contains(&format!("zext i1 {left} to i16")), "{ext} {from} {predicate}:\n{shown}");
+        assert!(
+            shown.contains(left) || shown.contains(&format!("zext i1 {left} to i16")),
+            "{ext} {from} {predicate}:\n{shown}"
+        );
         for x in [0, 1, 2, 0x80, 0xFF, 0x100, 0xFFFF] {
             assert_eq!(returned(&after, x), returned(&before, x), "{ext} {from} {predicate} {x}");
         }

@@ -45,15 +45,17 @@ struct Known {
 impl Known {
     /// Fold in one allocation's per-record bounds and, for a far one, its
     /// adjusted offset.
-    fn merged(&mut self, records: &[(Operand, Operand)], origin: Option<i64>) {
+    fn merged(
+        &mut self,
+        records: &[(Operand, Operand)],
+        origin: Option<i64>,
+    ) {
         let constant = |operand: &Operand| match operand {
             Operand::Constant(_, Number::Integer(value)) => Some(*value),
             _ => None,
         };
-        let counts: Option<Vec<i64>> = records
-            .iter()
-            .map(|(lower, upper)| Some(constant(upper)? - constant(lower)? + 1))
-            .collect();
+        let counts: Option<Vec<i64>> =
+            records.iter().map(|(lower, upper)| Some(constant(upper)? - constant(lower)? + 1)).collect();
         let lowers: Option<Vec<i64>> = records.iter().map(|(lower, _)| constant(lower)).collect();
         if self.allocations == 0 {
             (self.counts, self.lowers, self.rank, self.origin) = (counts, lowers, Some(records.len()), origin);
@@ -90,7 +92,10 @@ impl Known {
 ///
 /// The runtime runs the records in order, `adjustment * count - lower`, then
 /// scales by the element size and keeps the low word.
-fn far_origin(operands: &[Operand], records: &[(Operand, Operand)]) -> Option<i64> {
+fn far_origin(
+    operands: &[Operand],
+    records: &[(Operand, Operand)],
+) -> Option<i64> {
     const FAR: i64 = 1;
     let constant = |operand: &Operand| match operand {
         Operand::Constant(_, Number::Integer(value)) => Some(*value),
@@ -117,7 +122,10 @@ struct Classes {
 }
 
 impl Classes {
-    fn root(&mut self, one: Identity) -> Identity {
+    fn root(
+        &mut self,
+        one: Identity,
+    ) -> Identity {
         let parent = *self.parent.entry(one).or_insert(one);
         if parent == one {
             return one;
@@ -127,7 +135,11 @@ impl Classes {
         root
     }
 
-    fn join(&mut self, one: Identity, other: Identity) {
+    fn join(
+        &mut self,
+        one: Identity,
+        other: Identity,
+    ) {
         let (one, other) = (self.root(one), self.root(other));
         if one != other {
             self.parent.insert(one, other);
@@ -136,7 +148,10 @@ impl Classes {
 }
 
 /// The descriptor `place` of `function` is.
-pub(super) fn identity(function: &Function, place: &Place) -> Identity {
+pub(super) fn identity(
+    function: &Function,
+    place: &Place,
+) -> Identity {
     match place.storage {
         "local" => Identity::Local(function.id, place.id),
         _ => Identity::Global(place.symbol, place.offset),
@@ -181,7 +196,9 @@ fn known(compiler: &Compiler) -> (Classes, BTreeMap<Identity, Known>) {
         .functions
         .iter()
         .flat_map(|function| function.places.iter().map(move |place| (function, place)))
-        .filter_map(|(function, place)| Some((identity(function, place), compiler.static_shapes.get(&place.id)?.as_slice())))
+        .filter_map(|(function, place)| {
+            Some((identity(function, place), compiler.static_shapes.get(&place.id)?.as_slice()))
+        })
         .collect();
     let mut shapes: Vec<(Identity, &[(Operand, Operand)], Option<i64>)> =
         statics.into_iter().map(|(identity, records)| (identity, records, None)).collect();
@@ -199,7 +216,9 @@ fn known(compiler: &Compiler) -> (Classes, BTreeMap<Identity, Known>) {
         for one in function.blocks.iter().flat_map(|block| &block.instructions) {
             match &one.tag {
                 Some(Tag::Allocate(shape) | Tag::Reallocate(shape)) => match pointers.get(&shape.descriptor) {
-                    Some(identity) => shapes.push((*identity, &shape.records, far_origin(&one.operands, &shape.records))),
+                    Some(identity) => {
+                        shapes.push((*identity, &shape.records, far_origin(&one.operands, &shape.records)))
+                    }
                     // An allocation of a descriptor with no identity could be any.
                     None => return (classes, BTreeMap::new()),
                 },
@@ -227,9 +246,10 @@ fn known(compiler: &Compiler) -> (Classes, BTreeMap<Identity, Known>) {
                 _ => {
                     // A descriptor pointer stored or copied escapes this analysis.
                     let escaped = matches!(one.op, "store" | "copy")
-                        && one.operands.iter().any(|operand| {
-                            matches!(operand, Operand::Value(value) if pointers.contains_key(value))
-                        });
+                        && one
+                            .operands
+                            .iter()
+                            .any(|operand| matches!(operand, Operand::Value(value) if pointers.contains_key(value)));
                     if escaped {
                         for operand in &one.operands {
                             if let Operand::Value(value) = operand {
@@ -244,9 +264,11 @@ fn known(compiler: &Compiler) -> (Classes, BTreeMap<Identity, Known>) {
     // A descriptor handed on with no DIM, REDIM or static bounds here has
     // no known shape.
     let allocated: Vec<Identity> = shapes.iter().map(|(identity, ..)| *identity).collect();
-    unknown.extend(handed.into_iter().filter(|identity| {
-        !matches!(identity, Identity::Parameter(..)) && !allocated.contains(identity)
-    }));
+    unknown.extend(
+        handed
+            .into_iter()
+            .filter(|identity| !matches!(identity, Identity::Parameter(..)) && !allocated.contains(identity)),
+    );
     let mut out: BTreeMap<Identity, Known> = BTreeMap::new();
     for (identity, records, origin) in shapes {
         let root = classes.root(identity);
@@ -282,7 +304,10 @@ fn allocated_before(
             }
         }
         Some(Tag::Invoke { arguments }) => {
-            state.retain(|identity| matches!(identity, Identity::Local(..)) || (matches!(identity, Identity::Global(..)) && !shared.contains(identity)));
+            state.retain(|identity| {
+                matches!(identity, Identity::Local(..))
+                    || (matches!(identity, Identity::Global(..)) && !shared.contains(identity))
+            });
             for passing in arguments {
                 if let Passing::Array(value) = passing {
                     state.remove(pointers.get(value).unwrap_or(&Identity::Global(u32::MAX, 0)));
@@ -298,7 +323,8 @@ fn allocated_before(
         }
     }
     // None is "every descriptor": a block no walk has reached yet.
-    let mut out: BTreeMap<u32, Option<BTreeSet<Identity>>> = function.blocks.iter().map(|block| (block.id, None)).collect();
+    let mut out: BTreeMap<u32, Option<BTreeSet<Identity>>> =
+        function.blocks.iter().map(|block| (block.id, None)).collect();
     let before = |block: &super::Block, out: &BTreeMap<u32, Option<BTreeSet<Identity>>>| -> BTreeSet<Identity> {
         if block.id == ENTRY {
             return entry.clone();
@@ -364,7 +390,9 @@ fn entered_allocated(
     let defined: BTreeSet<u32> = compiler
         .functions
         .iter()
-        .filter_map(|function| compiler.signatures.get(super::canonical(&function.name)).map(|signature| signature.symbol))
+        .filter_map(|function| {
+            compiler.signatures.get(super::canonical(&function.name)).map(|signature| signature.symbol)
+        })
         .collect();
     let mut ok: BTreeSet<Identity> = BTreeSet::new();
     for function in &compiler.functions {
@@ -389,7 +417,12 @@ fn entered_allocated(
             let states = allocated_before(function, &pointers, &entry, statics, shared);
             for one in function.blocks.iter().flat_map(|block| &block.instructions) {
                 let Some(Tag::Invoke { arguments }) = &one.tag else { continue };
-                let reaches = function.calls.iter().find(|call| call.instruction == one.id).and_then(|call| call.callee).is_some_and(|symbol| defined.contains(&symbol));
+                let reaches = function
+                    .calls
+                    .iter()
+                    .find(|call| call.instruction == one.id)
+                    .and_then(|call| call.callee)
+                    .is_some_and(|symbol| defined.contains(&symbol));
                 if !reaches {
                     continue;
                 }
@@ -425,7 +458,8 @@ pub(super) fn applied(compiler: &mut Compiler) {
             named.entry(one).or_default().insert(function.id);
         }
     }
-    let shared: BTreeSet<Identity> = named.into_iter().filter(|(_, users)| users.len() > 1).map(|(one, _)| one).collect();
+    let shared: BTreeSet<Identity> =
+        named.into_iter().filter(|(_, users)| users.len() > 1).map(|(one, _)| one).collect();
     let entered = entered_allocated(compiler, &mut classes, &known, &statics, &shared);
     for function in &mut compiler.functions {
         let pointers = pointers(function);
@@ -454,11 +488,15 @@ pub(super) fn applied(compiler: &mut Compiler) {
                         let Some(fact) = fact(descriptor) else { continue };
                         let record = match field {
                             Slot::Count(record) | Slot::Lower(record) => Some(record),
-                            Slot::CountOf(dimension) | Slot::LowerOf(dimension) => fact.rank.and_then(|rank| rank.checked_sub(dimension)),
+                            Slot::CountOf(dimension) | Slot::LowerOf(dimension) => {
+                                fact.rank.and_then(|rank| rank.checked_sub(dimension))
+                            }
                             _ => None,
                         };
-                        let bounds = if matches!(field, Slot::Count(_) | Slot::CountOf(_)) { fact.counts } else { fact.lowers };
-                        let Some(&bound) = bounds.as_ref().zip(record).and_then(|(bounds, record)| bounds.get(record)) else {
+                        let bounds =
+                            if matches!(field, Slot::Count(_) | Slot::CountOf(_)) { fact.counts } else { fact.lowers };
+                        let Some(&bound) = bounds.as_ref().zip(record).and_then(|(bounds, record)| bounds.get(record))
+                        else {
                             continue;
                         };
                         one.op = "copy";
@@ -486,7 +524,8 @@ pub(super) fn applied(compiler: &mut Compiler) {
                         one.operands = vec![Operand::Constant(types[&one.results[0]], Number::Integer(origin))];
                     }
                     Some(Tag::ElementOffset { descriptor, origin }) => {
-                        if let Some(origin) = origin.filter(|_| fact(descriptor).is_some_and(|fact| fact.zero_based())) {
+                        if let Some(origin) = origin.filter(|_| fact(descriptor).is_some_and(|fact| fact.zero_based()))
+                        {
                             function.origins.extend(one.results.iter().map(|result| (*result, origin)));
                         }
                         // An element is in its own array's allocation.
@@ -528,19 +567,28 @@ mod tests {
         applied_in(source, false)
     }
 
-    fn applied_in(source: &str, row_major: bool) -> Compiler {
+    fn applied_in(
+        source: &str,
+        row_major: bool,
+    ) -> Compiler {
         applied_with(source, &Options { row_major, ..Options::default() })
     }
 
-    fn applied_with(source: &str, options: &Options) -> Compiler {
+    fn applied_with(
+        source: &str,
+        options: &Options,
+    ) -> Compiler {
         let module = parse(source, Dialect::VbDos).expect("parses");
-        let mut compiler = built(&module, "T", Dialect::VbDos, "vbdos", options)
-            .unwrap_or_else(|error| panic!("{}", error.message));
+        let mut compiler =
+            built(&module, "T", Dialect::VbDos, "vbdos", options).unwrap_or_else(|error| panic!("{}", error.message));
         applied(&mut compiler);
         compiler
     }
 
-    fn function<'a>(compiler: &'a Compiler, name: &str) -> &'a Function {
+    fn function<'a>(
+        compiler: &'a Compiler,
+        name: &str,
+    ) -> &'a Function {
         compiler.functions.iter().find(|one| one.name.eq_ignore_ascii_case(name)).expect(name)
     }
 
@@ -550,7 +598,10 @@ mod tests {
             .blocks
             .iter()
             .flat_map(|block| &block.instructions)
-            .filter(|one| matches!(one.tag, Some(Tag::DescriptorField { field: Slot::Count(_), .. })))
+            .filter(|one| matches!(
+                one.tag,
+                Some(Tag::DescriptorField { field: Slot::Count(_), .. })
+            ))
             .filter_map(|one| match (one.op, one.operands.as_slice()) {
                 ("copy", [Operand::Constant(_, Number::Integer(count))]) => Some(*count),
                 _ => None,
@@ -564,8 +615,10 @@ mod tests {
         let instructions: Vec<&Instruction> = function.blocks.iter().flat_map(|block| &block.instructions).collect();
         let defining = |value: u32| instructions.iter().find(|one| one.results.contains(&value)).copied();
         let is_count = |operand: &Operand| {
-            matches!(operand, Operand::Value(value) if defining(*value)
-                .is_some_and(|one| matches!(one.tag, Some(Tag::DescriptorField { field: Slot::Count(_), .. }))))
+            matches!(
+                operand,
+                Operand::Value(value) if defining(*value) .is_some_and(|one| matches!(one.tag, Some(Tag::DescriptorField { field: Slot::Count(_), .. })))
+            )
         };
         instructions
             .iter()
@@ -593,7 +646,10 @@ mod tests {
             .flat_map(|block| &block.instructions)
             .flat_map(|one| &one.operands)
             .filter(|operand| {
-                matches!(operand, Operand::Indirect { base, inbounds: true, .. } if function.origins.contains_key(base))
+                matches!(
+                    operand,
+                    Operand::Indirect { base, inbounds: true, .. } if function.origins.contains_key(base)
+                )
             })
             .count()
     }
@@ -636,7 +692,10 @@ mod tests {
             .blocks
             .iter()
             .flat_map(|block| &block.instructions)
-            .filter(|one| matches!(one.tag, Some(Tag::DescriptorField { field: Slot::Origin, .. })))
+            .filter(|one| matches!(
+                one.tag,
+                Some(Tag::DescriptorField { field: Slot::Origin, .. })
+            ))
             .filter_map(|one| match (one.op, one.operands.as_slice()) {
                 ("copy", [Operand::Constant(_, Number::Integer(origin))]) => Some(*origin),
                 _ => None,
@@ -659,9 +718,8 @@ mod tests {
     fn test_a_near_or_disagreeing_arrays_adjusted_offset_is_read() {
         let near = applied_to("DEFINT A-Z\nSUB t\nREDIM a$(-1 TO 3)\nx$ = a$(2)\nEND SUB\n");
         assert!(origins(function(&near, "t")).is_empty());
-        let disagreeing = applied_to(
-            "DEFINT A-Z\nREDIM SHARED a(9)\nSUB s\nREDIM a(5 TO 10)\nEND SUB\nSUB t\nx = a(6)\nEND SUB\n",
-        );
+        let disagreeing =
+            applied_to("DEFINT A-Z\nREDIM SHARED a(9)\nSUB s\nREDIM a(5 TO 10)\nEND SUB\nSUB t\nx = a(6)\nEND SUB\n");
         assert!(origins(function(&disagreeing, "t")).is_empty());
     }
 
@@ -673,9 +731,8 @@ mod tests {
 
     #[test]
     fn test_a_nonzero_lower_bound_anywhere_leaves_no_origin() {
-        let compiler = applied_to(
-            "DEFINT A-Z\nREDIM SHARED a(9)\nSUB s\nREDIM a(5 TO 10)\nEND SUB\nSUB t\nx = a(6)\nEND SUB\n",
-        );
+        let compiler =
+            applied_to("DEFINT A-Z\nREDIM SHARED a(9)\nSUB s\nREDIM a(5 TO 10)\nEND SUB\nSUB t\nx = a(6)\nEND SUB\n");
         assert_eq!(originated(function(&compiler, "t")), 0);
     }
 
@@ -730,12 +787,20 @@ mod tests {
     }
 
     /// The constants each descriptor read of `field`'s kind became.
-    fn folded(function: &Function, kind: fn(&Slot) -> bool) -> Vec<i64> {
+    fn folded(
+        function: &Function,
+        kind: fn(&Slot) -> bool,
+    ) -> Vec<i64> {
         function
             .blocks
             .iter()
             .flat_map(|block| &block.instructions)
-            .filter(|one| matches!(&one.tag, Some(Tag::DescriptorField { field, .. }) if kind(field)))
+            .filter(|one| {
+                matches!(
+                    &one.tag,
+                    Some(Tag::DescriptorField { field, .. }) if kind(field)
+                )
+            })
             .filter_map(|one| match (one.op, one.operands.as_slice()) {
                 ("copy", [Operand::Constant(_, Number::Integer(value))]) => Some(*value),
                 _ => None,
@@ -748,7 +813,8 @@ mod tests {
     /// lower bound.
     #[test]
     fn test_a_parameters_rank_and_bound_are_its_arguments() {
-        let source = "DEFINT A-Z\nDECLARE SUB t (q())\nREDIM a(3 TO n)\nCALL t(a())\nSUB t (q())\nx = LBOUND(q)\nEND SUB\n";
+        let source =
+            "DEFINT A-Z\nDECLARE SUB t (q())\nREDIM a(3 TO n)\nCALL t(a())\nSUB t (q())\nx = LBOUND(q)\nEND SUB\n";
         let compiler = applied_with(source, &Options { whole_program: true, ..Options::default() });
         let t = function(&compiler, "t");
         assert_eq!(folded(t, |field| matches!(field, Slot::Rank)), [1]);
@@ -772,7 +838,8 @@ mod tests {
     /// every caller DIMs the array it passes.
     #[test]
     fn test_a_parameter_every_caller_allocates_is_allocated() {
-        let compiler = applied_with(CHECKED_BOUND, &Options { whole_program: true, checked_arrays: true, ..Options::default() });
+        let compiler =
+            applied_with(CHECKED_BOUND, &Options { whole_program: true, checked_arrays: true, ..Options::default() });
         assert_eq!(proven_allocated(function(&compiler, "u")), 1);
     }
 
@@ -781,7 +848,8 @@ mod tests {
     #[test]
     fn test_a_parameter_a_caller_erased_or_a_public_one_is_not() {
         let erased = CHECKED_BOUND.replace("PRINT u(a())", "ERASE a\nPRINT u(a())");
-        let compiler = applied_with(&erased, &Options { whole_program: true, checked_arrays: true, ..Options::default() });
+        let compiler =
+            applied_with(&erased, &Options { whole_program: true, checked_arrays: true, ..Options::default() });
         assert_eq!(proven_allocated(function(&compiler, "u")), 0);
         let compiler = applied_with(CHECKED_BOUND, &Options { checked_arrays: true, ..Options::default() });
         assert_eq!(proven_allocated(function(&compiler, "u")), 0);
@@ -789,9 +857,8 @@ mod tests {
 
     #[test]
     fn test_an_array_handed_to_an_undefined_procedure_has_no_shape() {
-        let compiler = applied_to(
-            "DEFINT A-Z\nDECLARE SUB u (q())\nSUB t\nDIM a(1, 4)\nCALL u(a())\nx = a(1, 2)\nEND SUB\n",
-        );
+        let compiler =
+            applied_to("DEFINT A-Z\nDECLARE SUB u (q())\nSUB t\nDIM a(1, 4)\nCALL u(a())\nx = a(1, 2)\nEND SUB\n");
         assert!(counts(function(&compiler, "t")).is_empty());
         assert_eq!(originated(function(&compiler, "t")), 0);
     }

@@ -38,8 +38,7 @@ pub struct Laid {
     pub symbols: Vec<(i64, Addr)>,
 }
 
-impl Laid {
-}
+impl Laid {}
 
 /// A run of bytes between the instructions, copied rather than selected.
 ///
@@ -52,8 +51,7 @@ pub struct Table {
     pub discarded: bool,
 }
 
-impl Table {
-}
+impl Table {}
 
 /// An op, which select encodes, or a Table, which is copied.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -62,5 +60,4 @@ pub enum Item {
     Table(Table),
 }
 
-impl Item {
-}
+impl Item {}

@@ -22,11 +22,7 @@ impl<'a> FunctionCompiler<'a> {
         if let Some((element, shape)) = self.types.array_of(destination.struct_id) {
             return self.prepare_array_stores(destination, element, shape, expression, expression.span(), stores);
         }
-        let layout = self
-            .types
-            .structure(destination.struct_id)
-            .cloned()
-            .expect("resolved struct type");
+        let layout = self.types.structure(destination.struct_id).cloned().expect("resolved struct type");
         if let Expr::Zero(_) = expression {
             stores.extend(self.zero_stores(destination, layout.copy));
             return Ok(());
@@ -35,48 +31,27 @@ impl<'a> FunctionCompiler<'a> {
         if let Some((element, rank)) = self.types.kept_views.get(&destination.struct_id).copied() {
             let pointer_type = self.types.slice_pointer(element, rank);
             let writes = self.types.writable_views.contains(&destination.struct_id);
-            let (hir::Operand::Value(source), _) = self.borrow_argument(expression, writes, BindingType::Slice { element, rank }, pointer_type)? else {
+            let (hir::Operand::Value(source), _) =
+                self.borrow_argument(expression, writes, BindingType::Slice { element, rank }, pointer_type)?
+            else {
                 unreachable!("a view is a descriptor pointer")
             };
             let target = self.kept_view_pointer(destination, element, rank);
             self.copy_view(source, target, element, rank);
             return Ok(());
         }
-        if let Expr::Variant {
-            enum_name,
-            name,
-            arguments,
-            span,
-        } = expression
-        {
-            return self.prepare_variant_stores(
-                destination,
-                enum_name.as_deref(),
-                name,
-                arguments,
-                *span,
-                stores,
-            );
+        if let Expr::Variant { enum_name, name, arguments, span } = expression {
+            return self.prepare_variant_stores(destination, enum_name.as_deref(), name, arguments, *span, stores);
         }
         if let Some(call) = self.method_as_call(expression) {
             return self.prepare_struct_stores(destination, &call, stores);
         }
-        if let Expr::Call {
-            name,
-            arguments,
-            span,
-            ..
-        } = expression
-        {
+        if let Expr::Call { name, arguments, span, .. } = expression {
             let source = self.call_into(name, arguments, *span)?;
             return self.prepare_struct_copy(destination, &source, stores);
         }
         if let Expr::Tuple(items, span) = expression {
-            let layout = self
-                .types
-                .structure(destination.struct_id)
-                .expect("resolved struct type")
-                .clone();
+            let layout = self.types.structure(destination.struct_id).expect("resolved struct type").clone();
             let literal = Self::tuple_literal(items, &layout, *span)?;
             return self.prepare_struct_stores(destination, &literal, stores);
         }
@@ -84,76 +59,51 @@ impl<'a> FunctionCompiler<'a> {
             let source = self.try_view(operand, *span)?;
             return self.prepare_struct_copy(destination, &source, stores);
         }
-        if let Expr::Conditional {
-            condition,
-            then,
-            otherwise,
-            span,
-        } = expression
-        {
-            let source =
-                self.conditional_view(condition, then, otherwise, destination.struct_id, *span)?;
+        if let Expr::Conditional { condition, then, otherwise, span } = expression {
+            let source = self.conditional_view(condition, then, otherwise, destination.struct_id, *span)?;
             return self.prepare_struct_copy(destination, &source, stores);
         }
         let Expr::StructLiteral { name, fields, span } = expression else {
             let source = self.struct_view(expression, expression.span())?;
             if source.struct_id != destination.struct_id {
-                let found = &self
-                    .types
-                    .structure(source.struct_id)
-                    .expect("resolved struct type")
-                    .name;
-                return Err(Diagnostic::new(
-                    expression.span(),
-                    format!("expected {}, found {found}", layout.name),
-                ));
+                let found = &self.types.structure(source.struct_id).expect("resolved struct type").name;
+                return Err(Diagnostic::new(expression.span(), format!("expected {}, found {found}", layout.name)));
             }
             self.prepare_struct_copy(destination, &source, stores)?;
             return self.consume_aggregate(expression, &source, expression.span(), stores);
         };
         // A generic literal builds whichever instance is expected.
         if self.types.template_of(name) != self.types.template_of(&layout.name) {
-            return Err(Diagnostic::new(
-                *span,
-                format!("expected {}, found {name}", layout.name),
-            ));
+            return Err(Diagnostic::new(*span, format!("expected {}, found {name}", layout.name)));
         }
         // A generator's frame is lent its fields where it starts, as a call.
         if !self.types.frames.contains_key(&destination.struct_id) {
-            let known: Vec<_> = fields.iter().filter_map(|(name, value, span)| Some((value, layout.fields.get(name)?.type_, *span))).collect();
-            let lent = self.lent_to_fields(&known.iter().map(|one| one.0).collect::<Vec<_>>(), &known.iter().map(|one| one.1).collect::<Vec<_>>());
+            let known: Vec<_> = fields
+                .iter()
+                .filter_map(|(name, value, span)| Some((value, layout.fields.get(name)?.type_, *span)))
+                .collect();
+            let lent = self.lent_to_fields(
+                &known.iter().map(|one| one.0).collect::<Vec<_>>(),
+                &known.iter().map(|one| one.1).collect::<Vec<_>>(),
+            );
             borrows::check_disjoint(&lent, &known.iter().map(|one| one.2).collect::<Vec<_>>())?;
         }
         let mut seen = BTreeMap::new();
         for (name, value, field_span) in fields {
             if seen.insert(name, *field_span).is_some() {
-                return Err(Diagnostic::new(
-                    *field_span,
-                    format!("field {name:?} is initialized more than once"),
-                ));
+                return Err(Diagnostic::new(*field_span, format!("field {name:?} is initialized more than once")));
             }
-            let field = layout.fields.get(name).ok_or_else(|| {
-                Diagnostic::new(
-                    *field_span,
-                    format!("{} has no field {name:?}", layout.name),
-                )
-            })?;
+            let field = layout
+                .fields
+                .get(name)
+                .ok_or_else(|| Diagnostic::new(*field_span, format!("{} has no field {name:?}", layout.name)))?;
             self.prepare_field_store(destination, *field, value, *field_span, stores)?;
         }
-        let missing: Vec<_> = layout
-            .fields
-            .keys()
-            .filter(|name| !seen.contains_key(*name))
-            .cloned()
-            .collect();
+        let missing: Vec<_> = layout.fields.keys().filter(|name| !seen.contains_key(*name)).cloned().collect();
         if !missing.is_empty() {
             return Err(Diagnostic::new(
                 *span,
-                format!(
-                    "{} literal is missing fields: {}",
-                    layout.name,
-                    missing.join(", ")
-                ),
+                format!("{} literal is missing fields: {}", layout.name, missing.join(", ")),
             ));
         }
         Ok(())
@@ -169,17 +119,15 @@ impl<'a> FunctionCompiler<'a> {
     ) -> Result<(), Diagnostic> {
         if let Some(shape) = field.shape {
             let array = self.types.array(field.type_, shape);
-            let nested = StructView { struct_id: array, offset: destination.offset + field.offset, ..destination.clone() };
+            let nested =
+                StructView { struct_id: array, offset: destination.offset + field.offset, ..destination.clone() };
             return self.prepare_array_stores(&nested, field.type_, shape, value, span, stores);
         }
         match field.type_ {
             ElementType::Scalar(type_name) => {
                 let value = self.coerced(value, type_name)?;
                 self.consume(&value, span)?;
-                stores.push(Store::One(
-                    self.field_place(destination, field.offset, type_name),
-                    required(value, span)?,
-                ));
+                stores.push(Store::One(self.field_place(destination, field.offset, type_name), required(value, span)?));
             }
             ElementType::Struct(field_struct) => {
                 let nested = StructView {
@@ -207,9 +155,7 @@ impl<'a> FunctionCompiler<'a> {
             stores.push(Store::Bytes { destination: destination.clone(), source: source.clone(), count });
             return Ok(());
         }
-        let copy = self
-            .types
-            .copy_units(ElementType::Struct(destination.struct_id));
+        let copy = self.types.copy_units(ElementType::Struct(destination.struct_id));
         for (offset, type_name, count) in copy {
             if count > 1 {
                 let at = |view: &StructView| StructView { offset: view.offset + offset, ..view.clone() };
@@ -222,16 +168,8 @@ impl<'a> FunctionCompiler<'a> {
                 continue;
             }
             let value = self.value(type_name);
-            self.emit(
-                "load",
-                vec![value],
-                vec![self.projected_place(source, offset, type_name)],
-                None,
-            );
-            stores.push(Store::One(
-                self.projected_place(destination, offset, type_name),
-                hir::Operand::Value(value),
-            ));
+            self.emit("load", vec![value], vec![self.projected_place(source, offset, type_name)], None);
+            stores.push(Store::One(self.projected_place(destination, offset, type_name), hir::Operand::Value(value)));
         }
         Ok(())
     }
@@ -247,21 +185,26 @@ impl<'a> FunctionCompiler<'a> {
                 base: pointer,
                 offset: view.offset + field_offset,
                 type_id: type_id(type_name),
-                inbounds: false, member: None,
+                inbounds: false,
+                member: None,
             }
         } else {
             hir::Operand::ProjectedPlace {
                 place: view.place,
                 indices: view.indices.clone(),
                 offset: view.offset + field_offset,
-                type_id: type_id(type_name), member: None,
+                type_id: type_id(type_name),
+                member: None,
             }
         }
     }
 
     /// The aggregate type whose members `view` reaches: the struct it views, or, in a fixed
     /// array's view, the array's element struct.
-    fn owner_of(&self, view: &StructView) -> Option<u32> {
+    fn owner_of(
+        &self,
+        view: &StructView,
+    ) -> Option<u32> {
         match self.types.array_types.get(&view.struct_id) {
             Some((ElementType::Struct(element), _)) => Some(*element),
             Some(_) => None,
@@ -272,9 +215,16 @@ impl<'a> FunctionCompiler<'a> {
     /// `projected_place` of the member of the viewed aggregate at `member_offset`: the access
     /// says which member it is, so a fact stated once of the member reaches it. For a field,
     /// a tag or a payload, not for a piece of a copy.
-    pub(super) fn field_place(&self, view: &StructView, member_offset: u32, type_name: TypeName) -> hir::Operand {
+    pub(super) fn field_place(
+        &self,
+        view: &StructView,
+        member_offset: u32,
+        type_name: TypeName,
+    ) -> hir::Operand {
         let mut place = self.projected_place(view, member_offset, type_name);
-        if let (Some(owner), hir::Operand::ProjectedPlace { member, .. } | hir::Operand::IndirectPlace { member, .. }) = (self.owner_of(view), &mut place) {
+        if let (Some(owner), hir::Operand::ProjectedPlace { member, .. } | hir::Operand::IndirectPlace { member, .. }) =
+            (self.owner_of(view), &mut place)
+        {
             *member = Some((owner, member_offset));
         }
         place
@@ -311,30 +261,29 @@ impl<'a> FunctionCompiler<'a> {
                 BindingType::Struct(struct_id) => Some(struct_id),
                 _ => None,
             }),
-            Expr::Call { name, .. } => Ok(self.known_signature(name).and_then(|one| one.slot).filter(|one| self.types.array_of(*one).is_none())),
-            Expr::Unary { op: UnaryOp::Deref, operand, .. } => Ok(match self.expression_type_hint(operand).and_then(|one| self.types.raw_target(one)) {
-                Some(ElementType::Struct(struct_id)) => Some(struct_id),
-                _ => None,
-            }),
-            Expr::MethodCall {
-                receiver,
-                name,
-                arguments,
-                ..
-            } if name == "copy" && arguments.is_empty() => {
+            Expr::Call { name, .. } => Ok(self
+                .known_signature(name)
+                .and_then(|one| one.slot)
+                .filter(|one| self.types.array_of(*one).is_none())),
+            Expr::Unary { op: UnaryOp::Deref, operand, .. } => {
+                Ok(match self.expression_type_hint(operand).and_then(|one| self.types.raw_target(one)) {
+                    Some(ElementType::Struct(struct_id)) => Some(struct_id),
+                    _ => None,
+                })
+            }
+            Expr::MethodCall { receiver, name, arguments, .. } if name == "copy" && arguments.is_empty() => {
                 self.struct_expression_type(receiver, span)
             }
             Expr::Try { operand, .. } => self.try_struct_type(operand, span),
-            Expr::MethodCall { .. } if self.popped_struct_type(expression).is_some() => Ok(self.popped_struct_type(expression)),
-            Expr::Variant {
-                enum_name: Some(enum_name),
-                ..
-            } => Ok(
-                match self.types.enums.get(enum_name).map(|one| one.element) {
+            Expr::MethodCall { .. } if self.popped_struct_type(expression).is_some() => {
+                Ok(self.popped_struct_type(expression))
+            }
+            Expr::Variant { enum_name: Some(enum_name), .. } => {
+                Ok(match self.types.enums.get(enum_name).map(|one| one.element) {
                     Some(ElementType::Struct(struct_id)) => Some(struct_id),
                     _ => None,
-                },
-            ),
+                })
+            }
             Expr::Index { base, .. } => {
                 if let Expr::Name(name, _) = base.as_ref() {
                     self.binding(name, span)?;
@@ -348,13 +297,11 @@ impl<'a> FunctionCompiler<'a> {
                 let Some(struct_id) = self.struct_expression_type(base, span)? else {
                     return Ok(None);
                 };
-                let layout = self
-                    .types
-                    .structure(struct_id)
-                    .expect("resolved struct type");
-                let field = layout.fields.get(field).ok_or_else(|| {
-                    Diagnostic::new(span, format!("{} has no field {field:?}", layout.name))
-                })?;
+                let layout = self.types.structure(struct_id).expect("resolved struct type");
+                let field = layout
+                    .fields
+                    .get(field)
+                    .ok_or_else(|| Diagnostic::new(span, format!("{} has no field {field:?}", layout.name)))?;
                 Ok(match field.type_ {
                     ElementType::Struct(struct_id) if field.shape.is_none() => Some(struct_id),
                     ElementType::Struct(_) | ElementType::Scalar(_) => None,
@@ -376,28 +323,16 @@ impl<'a> FunctionCompiler<'a> {
                 self.assignment_target(&AssignTarget::Name(name), span)
             }
             AssignTarget::Member { base, field } if self.bits_type(base).is_some() => {
-                let outer = AssignTarget::of(base.clone())
-                    .map_err(|message| Diagnostic::new(span, message))?;
+                let outer = AssignTarget::of(base.clone()).map_err(|message| Diagnostic::new(span, message))?;
                 let packed = self.bits_type(base).expect("checked");
                 let field = self.types.bit_field(packed, field, span)?;
                 Ok(match self.assignment_target(&outer, span)? {
-                    AssignmentPlace::Scalar(place, packed) => AssignmentPlace::Bits {
-                        place,
-                        packed,
-                        field,
-                    },
+                    AssignmentPlace::Scalar(place, packed) => AssignmentPlace::Bits { place, packed, field },
                     // A field of a nested bits struct is a narrower range of the outer one.
-                    AssignmentPlace::Bits {
+                    AssignmentPlace::Bits { place, packed, field: parent } => AssignmentPlace::Bits {
                         place,
                         packed,
-                        field: parent,
-                    } => AssignmentPlace::Bits {
-                        place,
-                        packed,
-                        field: bits::BitField {
-                            low: parent.low + field.low,
-                            ..field
-                        },
+                        field: bits::BitField { low: parent.low + field.low, ..field },
                     },
                     AssignmentPlace::Struct(_) | AssignmentPlace::Array(..) => unreachable!("a bits value is a scalar"),
                 })
@@ -408,23 +343,22 @@ impl<'a> FunctionCompiler<'a> {
                     self.moves.projecting.set(Some(owner));
                 }
                 let parent = self.struct_view(base, span)?;
-                let layout = self
-                    .types
-                    .structure(parent.struct_id)
-                    .expect("resolved struct type");
-                let member = layout.fields.get(field).copied().ok_or_else(|| {
-                    Diagnostic::new(span, format!("{} has no field {field:?}", layout.name))
-                })?;
+                let layout = self.types.structure(parent.struct_id).expect("resolved struct type");
+                let member = layout
+                    .fields
+                    .get(field)
+                    .copied()
+                    .ok_or_else(|| Diagnostic::new(span, format!("{} has no field {field:?}", layout.name)))?;
                 if let Some(shape) = member.shape {
                     let array = self.types.array(member.type_, shape);
-                    let view = StructView { struct_id: array, offset: parent.offset + member.offset, mutable: true, ..parent };
+                    let view =
+                        StructView { struct_id: array, offset: parent.offset + member.offset, mutable: true, ..parent };
                     return Ok(AssignmentPlace::Array(view, member.type_, shape));
                 }
                 Ok(match member.type_ {
-                    ElementType::Scalar(type_name) => AssignmentPlace::Scalar(
-                        self.field_place(&parent, member.offset, type_name),
-                        type_name,
-                    ),
+                    ElementType::Scalar(type_name) => {
+                        AssignmentPlace::Scalar(self.field_place(&parent, member.offset, type_name), type_name)
+                    }
                     ElementType::Struct(struct_id) => AssignmentPlace::Struct(StructView {
                         struct_id,
                         place: parent.place,
@@ -442,9 +376,7 @@ impl<'a> FunctionCompiler<'a> {
                     BindingType::Scalar(type_name) => {
                         let destination = match binding.storage {
                             Storage::Place(place) => hir::Operand::Place(place),
-                            Storage::ArrayView { place, index } => {
-                                hir::Operand::ArrayElement(place, vec![index])
-                            }
+                            Storage::ArrayView { place, index } => hir::Operand::ArrayElement(place, vec![index]),
                             Storage::Parameter(_) => {
                                 return Err(Diagnostic::new(span, "parameters are immutable"));
                             }
@@ -452,7 +384,8 @@ impl<'a> FunctionCompiler<'a> {
                                 base: pointer,
                                 offset: 0,
                                 type_id: type_id(type_name),
-                                inbounds: false, member: None,
+                                inbounds: false,
+                                member: None,
                             },
                             Storage::Slice(_) => unreachable!("a scalar binding is not a slice"),
                             Storage::Lambda(_) => {
@@ -461,22 +394,26 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         Ok(AssignmentPlace::Scalar(destination, type_name))
                     }
-                    BindingType::Struct(struct_id) => {
-                        binding_view(struct_id, &binding.storage, true, name)
-                            .map(AssignmentPlace::Struct)
-                            .ok_or_else(|| Diagnostic::new(span, "parameters are immutable"))
-                    }
+                    BindingType::Struct(struct_id) => binding_view(struct_id, &binding.storage, true, name)
+                        .map(AssignmentPlace::Struct)
+                        .ok_or_else(|| Diagnostic::new(span, "parameters are immutable")),
                     BindingType::Array { .. } => {
-                        let (view, element, shape) = self.array_view(&Expr::Name(name.clone(), span), span)?.ok_or_else(|| Diagnostic::new(span, "whole array assignment is not supported"))?;
+                        let (view, element, shape) = self
+                            .array_view(&Expr::Name(name.clone(), span), span)?
+                            .ok_or_else(|| Diagnostic::new(span, "whole array assignment is not supported"))?;
                         Ok(AssignmentPlace::Array(view, element, shape))
                     }
-                    BindingType::Slice { .. } => Err(Diagnostic::new(
-                        span,
-                        "whole array assignment is not supported",
-                    )),
+                    BindingType::Slice { .. } => Err(Diagnostic::new(span, "whole array assignment is not supported")),
                 }
             }
-            AssignTarget::Index { base: Expr::Name(base, _), indices } if self.types.dictionary_parts(self.expression_type_hint(&Expr::Name(base.clone(), span)).unwrap_or(TypeName::Void)).is_some() => {
+            AssignTarget::Index { base: Expr::Name(base, _), indices }
+                if self
+                    .types
+                    .dictionary_parts(
+                        self.expression_type_hint(&Expr::Name(base.clone(), span)).unwrap_or(TypeName::Void),
+                    )
+                    .is_some() =>
+            {
                 let entry = self.dictionary_entry(base, indices, span)?.expect("a dict");
                 let target = AssignTarget::of(entry).map_err(|message| Diagnostic::new(span, message))?;
                 self.assignment_target(&target, span)
@@ -519,39 +456,47 @@ impl<'a> FunctionCompiler<'a> {
     ) -> Result<(hir::Operand, TypeName, bool, String), Diagnostic> {
         self.project(&Expr::Member { base: Box::new(base.clone()), field: field_name.to_owned(), span }, span)?;
         let view = self.struct_view(base, span)?;
-        let layout = self
-            .types
-            .structure(view.struct_id)
-            .expect("resolved struct type");
+        let layout = self.types.structure(view.struct_id).expect("resolved struct type");
         self.learn_member(span, field_name, &layout.name);
-        let field = layout.fields.get(field_name).copied().ok_or_else(|| {
-            Diagnostic::new(span, format!("{} has no field {field_name:?}", layout.name))
-        })?;
+        let field = layout
+            .fields
+            .get(field_name)
+            .copied()
+            .ok_or_else(|| Diagnostic::new(span, format!("{} has no field {field_name:?}", layout.name)))?;
         if field.shape.is_some() {
-            return Err(Diagnostic::new(span, format!("array field {field_name:?} is used through its elements or borrowed")));
-        }
-        let ElementType::Scalar(type_name) = field.type_ else {
             return Err(Diagnostic::new(
                 span,
-                "a nested struct value must be used through one of its fields",
+                format!("array field {field_name:?} is used through its elements or borrowed"),
             ));
+        }
+        let ElementType::Scalar(type_name) = field.type_ else {
+            return Err(Diagnostic::new(span, "a nested struct value must be used through one of its fields"));
         };
-        Ok((
-            self.field_place(&view, field.offset, type_name),
-            type_name,
-            view.mutable,
-            view.owner,
-        ))
+        Ok((self.field_place(&view, field.offset, type_name), type_name, view.mutable, view.owner))
     }
 
-    pub(super) fn struct_view(&mut self, expression: &Expr, span: Span) -> Result<StructView, Diagnostic> {
+    pub(super) fn struct_view(
+        &mut self,
+        expression: &Expr,
+        span: Span,
+    ) -> Result<StructView, Diagnostic> {
         // A reference to a struct, as a call returns one, views its target.
-        if let Some(ElementType::Struct(struct_id)) = self.expression_type_hint(expression).and_then(|one| self.types.referent(one)) {
+        if let Some(ElementType::Struct(struct_id)) =
+            self.expression_type_hint(expression).and_then(|one| self.types.referent(one))
+        {
             if !matches!(expression, Expr::Name(..)) && self.types.array_of(struct_id).is_none() {
                 let value = self.expression(expression, None)?;
                 let pointer_type = self.types.pointer(struct_id, 0);
                 let pointer = self.materialized(required(value, span)?, pointer_type);
-                return Ok(StructView { struct_id, place: 0, pointer: Some(pointer), indices: Vec::new(), offset: 0, mutable: false, owner: format!("$reference{pointer}") });
+                return Ok(StructView {
+                    struct_id,
+                    place: 0,
+                    pointer: Some(pointer),
+                    indices: Vec::new(),
+                    offset: 0,
+                    mutable: false,
+                    owner: format!("$reference{pointer}"),
+                });
             }
         }
         match expression {
@@ -563,10 +508,7 @@ impl<'a> FunctionCompiler<'a> {
                 let binding = self.binding(name, span)?.clone();
                 self.check_whole(name, &binding, span)?;
                 let BindingType::Struct(struct_id) = binding.type_ else {
-                    return Err(Diagnostic::new(
-                        span,
-                        format!("binding {name:?} is not a struct"),
-                    ));
+                    return Err(Diagnostic::new(span, format!("binding {name:?} is not a struct")));
                 };
                 binding_view(struct_id, &binding.storage, binding.mutable, name)
                     .ok_or_else(|| Diagnostic::new(span, "struct has no addressable storage"))
@@ -591,28 +533,16 @@ impl<'a> FunctionCompiler<'a> {
                     owner: name.clone(),
                 })
             }
-            Expr::Member {
-                base,
-                field,
-                span: member_span,
-            } => {
+            Expr::Member { base, field, span: member_span } => {
                 self.project(expression, *member_span)?;
                 let parent = self.struct_view(base, *member_span)?;
-                let layout = self
-                    .types
-                    .structure(parent.struct_id)
-                    .expect("resolved struct type");
-                let field = layout.fields.get(field).copied().ok_or_else(|| {
-                    Diagnostic::new(
-                        *member_span,
-                        format!("{} has no field {field:?}", layout.name),
-                    )
-                })?;
+                let layout = self.types.structure(parent.struct_id).expect("resolved struct type");
+                let field =
+                    layout.fields.get(field).copied().ok_or_else(|| {
+                        Diagnostic::new(*member_span, format!("{} has no field {field:?}", layout.name))
+                    })?;
                 let (ElementType::Struct(field_struct), None) = (field.type_, field.shape) else {
-                    return Err(Diagnostic::new(
-                        *member_span,
-                        "scalar or array field cannot be used as a struct",
-                    ));
+                    return Err(Diagnostic::new(*member_span, "scalar or array field cannot be used as a struct"));
                 };
                 Ok(StructView {
                     struct_id: field_struct,
@@ -624,12 +554,7 @@ impl<'a> FunctionCompiler<'a> {
                     owner: parent.owner,
                 })
             }
-            Expr::Call {
-                name,
-                arguments,
-                span,
-                ..
-            } => {
+            Expr::Call { name, arguments, span, .. } => {
                 let result = self.call_into(name, arguments, *span)?;
                 Ok(self.statement_temporary(result))
             }
@@ -637,14 +562,11 @@ impl<'a> FunctionCompiler<'a> {
                 let call = self.method_as_call(expression).expect("checked");
                 self.struct_view(&call, span)
             }
-            Expr::MethodCall { receiver, .. } if self.popped_struct_type(expression).is_some() => self.popped_struct(receiver, span),
+            Expr::MethodCall { receiver, .. } if self.popped_struct_type(expression).is_some() => {
+                self.popped_struct(receiver, span)
+            }
             // `.copy()`: the bytes, then a copy of each thing they own.
-            Expr::MethodCall {
-                receiver,
-                name,
-                arguments,
-                ..
-            } if name == "copy" && arguments.is_empty() => {
+            Expr::MethodCall { receiver, name, arguments, .. } if name == "copy" && arguments.is_empty() => {
                 let source = self.struct_view(receiver, span)?;
                 self.check_copyable(ElementType::Struct(source.struct_id), span)?;
                 let copy = self.temporary(source.struct_id);
@@ -661,16 +583,16 @@ impl<'a> FunctionCompiler<'a> {
                     self.store_struct_expression(&view, expression)?;
                     Ok(self.statement_temporary(view))
                 }
-                None => Err(Diagnostic::new(
-                    span,
-                    "expression is not an addressable struct",
-                )),
+                None => Err(Diagnostic::new(span, "expression is not an addressable struct")),
             },
         }
     }
 
     /// An aggregate that lives until the statement ends, then drops what it owns.
-    pub(super) fn statement_temporary(&mut self, view: StructView) -> StructView {
+    pub(super) fn statement_temporary(
+        &mut self,
+        view: StructView,
+    ) -> StructView {
         if self.element_needs_drop(ElementType::Struct(view.struct_id)) {
             self.aggregate_temporaries.push(view.clone());
         }

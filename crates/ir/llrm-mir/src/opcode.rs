@@ -179,12 +179,18 @@ pub const FLOAT_PREDICATE: [(FloatPredicate, &str); 16] = [
 ];
 
 /// The spelling of `value` in `table`.
-pub fn spelling<T: PartialEq + Copy>(table: &[(T, &'static str)], value: T) -> &'static str {
+pub fn spelling<T: PartialEq + Copy>(
+    table: &[(T, &'static str)],
+    value: T,
+) -> &'static str {
     table.iter().find(|(one, _)| *one == value).map(|(_, name)| *name).expect("every value is spelled")
 }
 
 /// The value `word` spells in `table`.
-pub fn spelled<T: Copy>(table: &[(T, &'static str)], word: &str) -> Option<T> {
+pub fn spelled<T: Copy>(
+    table: &[(T, &'static str)],
+    word: &str,
+) -> Option<T> {
     table.iter().find(|(_, name)| *name == word).map(|(one, _)| *one)
 }
 
@@ -227,11 +233,17 @@ impl Flags {
         (Flags(1 << 14), "afn"),
     ];
 
-    pub fn contains(self, other: Flags) -> bool {
+    pub fn contains(
+        self,
+        other: Flags,
+    ) -> bool {
         self.0 & other.0 == other.0
     }
 
-    pub fn insert(&mut self, other: Flags) {
+    pub fn insert(
+        &mut self,
+        other: Flags,
+    ) {
         self.0 |= other.0;
     }
 
@@ -240,7 +252,10 @@ impl Flags {
     }
 
     /// The flags both have.
-    pub fn intersect(self, other: Flags) -> Flags {
+    pub fn intersect(
+        self,
+        other: Flags,
+    ) -> Flags {
         Flags(self.0 & other.0)
     }
 
@@ -264,7 +279,11 @@ pub enum Attribute {
     /// `memory(...)`: each location, or none for the default, and its access.
     Memory(Vec<(Option<String>, String)>),
     /// `range(iN lower, upper)`: the half-open range of values, as bits.
-    Range { ty: TypeId, lower: u128, upper: u128 },
+    Range {
+        ty: TypeId,
+        lower: u128,
+        upper: u128,
+    },
     /// `initializes((lower, upper), ...)`: the half-open byte ranges of a
     /// pointer parameter's memory the function writes before reading, on
     /// every path to a return.
@@ -275,10 +294,16 @@ pub enum Attribute {
 impl Attribute {
     /// This attribute of `from`'s types in `types`: none where it names a
     /// type `types` cannot hold.
-    pub fn imported(&self, types: &mut crate::types::Types, from: &crate::types::Types) -> Option<Attribute> {
+    pub fn imported(
+        &self,
+        types: &mut crate::types::Types,
+        from: &crate::types::Types,
+    ) -> Option<Attribute> {
         Some(match self {
             Attribute::Type(name, ty) => Attribute::Type(name.clone(), types.imported(from, *ty)?),
-            Attribute::Range { ty, lower, upper } => Attribute::Range { ty: types.imported(from, *ty)?, lower: *lower, upper: *upper },
+            Attribute::Range { ty, lower, upper } => {
+                Attribute::Range { ty: types.imported(from, *ty)?, lower: *lower, upper: *upper }
+            }
             other => other.clone(),
         })
     }
@@ -354,7 +379,19 @@ pub struct CallInfo {
 }
 
 /// The calling conventions LLVM names, by number; any other is `ccN`.
-pub const CONVENTIONS: [(&str, u32); 11] = [("ccc", 0), ("fastcc", 8), ("coldcc", 9), ("x86_stdcallcc", 64), ("x86_fastcallcc", 65), ("x86_intrcc", 83), ("watcallcc", WATCALL), ("sysvcc", SYSV), ("ia16cc", IA16), ("regparm3cc", REGPARM3), ("regparm3popcc", REGPARM3POP)];
+pub const CONVENTIONS: [(&str, u32); 11] = [
+    ("ccc", 0),
+    ("fastcc", 8),
+    ("coldcc", 9),
+    ("x86_stdcallcc", 64),
+    ("x86_fastcallcc", 65),
+    ("x86_intrcc", 83),
+    ("watcallcc", WATCALL),
+    ("sysvcc", SYSV),
+    ("ia16cc", IA16),
+    ("regparm3cc", REGPARM3),
+    ("regparm3popcc", REGPARM3POP),
+];
 
 /// The calling conventions a target names by the `cc` of its description (calling.toml): `ccc` is the
 /// one stating `cc = "cdecl"`, and each other is asked for as `<cc>cc`.
@@ -366,10 +403,14 @@ pub const RESULT_POINTER: &str = "result-pointer";
 
 /// What `attrs` say of how its argument is passed: `MEMORY` or `RESULT_POINTER`.
 pub fn argument_class(attrs: &[Attribute]) -> Option<&str> {
-    attrs.iter().find_map(|one| match one {
-        Attribute::Str(key, Some(value)) if key == ARGUMENT => Some(value.as_str()),
-        _ => None,
-    })
+    attrs
+        .iter()
+        .find_map(
+            |one| match one {
+                Attribute::Str(key, Some(value)) if key == ARGUMENT => Some(value.as_str()),
+                _ => None,
+            },
+        )
 }
 
 /// `regparm3cc`: gcc's `-mregparm=3`, by the size of the argument.
@@ -434,7 +475,10 @@ pub enum Opcode {
 
 impl Opcode {
     pub fn is_terminator(&self) -> bool {
-        matches!(self, Self::Ret | Self::Br | Self::Switch | Self::Invoke(_) | Self::Resume | Self::Unreachable)
+        matches!(
+            self,
+            Self::Ret | Self::Br | Self::Switch | Self::Invoke(_) | Self::Resume | Self::Unreachable
+        )
     }
 
     pub fn mnemonic(&self) -> &'static str {

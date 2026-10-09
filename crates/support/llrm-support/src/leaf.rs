@@ -7,7 +7,10 @@ pub fn pad(left: usize) -> u8 {
 
 /// A number the way a leaf holds one: itself under 0x8000, else a tagged integer of the smallest
 /// width that holds it.
-pub fn numeric(out: &mut Vec<u8>, value: i64) {
+pub fn numeric(
+    out: &mut Vec<u8>,
+    value: i64,
+) {
     let put16 = |out: &mut Vec<u8>, value: u16| out.extend(value.to_le_bytes());
     if (0..0x8000).contains(&value) {
         put16(out, value as u16);

@@ -47,25 +47,46 @@ mod tests {
 
     use super::*;
 
-    fn text(image: Vec<u8>, relocs: Vec<Reloc>) -> Section {
+    fn text(
+        image: Vec<u8>,
+        relocs: Vec<Reloc>,
+    ) -> Section {
         let spans = vec![[0, image.len()]];
         Section { name: "A_TEXT".into(), role: Role::Text, near: true, align: 16, image, spans, relocs }
     }
 
-    fn object(sections: Vec<Section>, symbols: Vec<Symbol>) -> Object {
+    fn object(
+        sections: Vec<Section>,
+        symbols: Vec<Symbol>,
+    ) -> Object {
         Object { name: "a.c".into(), arch: Arch::X8664, sections, symbols, omf_groups: Vec::new(), debug: None }
     }
 
-    fn defined(name: &str, offset: usize) -> Symbol {
-        Symbol { name: name.into(), binding: Binding::Public, definition: Definition::Defined { section: 0, offset }, group: None }
+    fn defined(
+        name: &str,
+        offset: usize,
+    ) -> Symbol {
+        Symbol {
+            name: name.into(),
+            binding: Binding::Public,
+            definition: Definition::Defined { section: 0, offset },
+            group: None,
+        }
     }
 
     /// (type, field) of the one relocation of `.text`, for a pc-relative field `from` bytes short of the place.
     fn rel(from: usize) -> (u16, i32) {
         let reloc = Reloc { at: 2, kind: Kind::PcRel { width: 4, from }, target: Target::Symbol(0), addend: 0 };
-        let bytes = write(&object(vec![text(vec![0x83, 0x3D, 0, 0, 0, 0, 1], vec![reloc])], vec![defined("v", 0)])).unwrap();
-        let (raw, relocs) = (u32::from_le_bytes(bytes[20 + 20..20 + 24].try_into().unwrap()) as usize, u32::from_le_bytes(bytes[20 + 24..20 + 28].try_into().unwrap()) as usize);
-        (u16::from_le_bytes([bytes[relocs + 8], bytes[relocs + 9]]), i32::from_le_bytes(bytes[raw + 2..raw + 6].try_into().unwrap()))
+        let bytes =
+            write(&object(vec![text(vec![0x83, 0x3D, 0, 0, 0, 0, 1], vec![reloc])], vec![defined("v", 0)])).unwrap();
+        let (raw, relocs) = (
+            u32::from_le_bytes(bytes[20 + 20..20 + 24].try_into().unwrap()) as usize,
+            u32::from_le_bytes(bytes[20 + 24..20 + 28].try_into().unwrap()) as usize,
+        );
+        (
+            u16::from_le_bytes([bytes[relocs + 8], bytes[relocs + 9]]),
+            i32::from_le_bytes(bytes[raw + 2..raw + 6].try_into().unwrap()),
+        )
     }
 
     /// REL32_n is relative to n bytes past the field's end, so an instruction with an immediate
@@ -88,14 +109,38 @@ mod tests {
             return;
         };
         let call = Reloc { at: 1, kind: Kind::Branch { width: 4 }, target: Target::Symbol(1), addend: 0 };
-        let made = object(vec![text(vec![0xE8, 0, 0, 0, 0, 0xC3, 0x90, 0x90, 0xC3], vec![call])], vec![defined("start", 0), defined("f", 8)]);
+        let made = object(
+            vec![text(vec![0xE8, 0, 0, 0, 0, 0xC3, 0x90, 0x90, 0xC3], vec![call])],
+            vec![defined("start", 0), defined("f", 8)],
+        );
         let scratch = tempfile::tempdir().unwrap();
         let (obj, exe) = (scratch.path().join("a.obj"), scratch.path().join("a.exe"));
         std::fs::write(&obj, write(&made).unwrap()).unwrap();
-        let linked = Command::new(link).args(["/machine:x64", "/subsystem:console", "/entry:start", "/nodefaultlib", "/fixed", "/base:0x140000000"]).arg(format!("/out:{}", exe.display())).arg(&obj).output().unwrap();
-        assert!(linked.status.success(), "{}{}", String::from_utf8_lossy(&linked.stdout), String::from_utf8_lossy(&linked.stderr));
+        let linked = Command::new(link)
+            .args([
+                "/machine:x64",
+                "/subsystem:console",
+                "/entry:start",
+                "/nodefaultlib",
+                "/fixed",
+                "/base:0x140000000",
+            ])
+            .arg(format!("/out:{}", exe.display()))
+            .arg(&obj)
+            .output()
+            .unwrap();
+        assert!(
+            linked.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&linked.stdout),
+            String::from_utf8_lossy(&linked.stderr)
+        );
         let said = Command::new(dump).args(["-d", "--no-show-raw-insn"]).arg(&exe).output().unwrap();
-        assert!(String::from_utf8_lossy(&said.stdout).contains("0x140001008"), "{}", String::from_utf8_lossy(&said.stdout));
+        assert!(
+            String::from_utf8_lossy(&said.stdout).contains("0x140001008"),
+            "{}",
+            String::from_utf8_lossy(&said.stdout)
+        );
     }
 
     /// An x86-64 object's C13 names the AMD64 machine and an 8-byte pointer, and RBP (334) is its
@@ -106,9 +151,18 @@ mod tests {
         let Ok(dump) = which("llvm-readobj") else { return eprintln!("skipped: no llvm-readobj") };
         let info = Info {
             frame_register: "rbp".into(),
-            registers: vec![llrm_object::debug::Register { name: "rbp".into(), bits: 64, dwarf: Some(6), codeview: Some(334) }],
+            registers: vec![llrm_object::debug::Register {
+                name: "rbp".into(),
+                bits: 64,
+                dwarf: Some(6),
+                codeview: Some(334),
+            }],
             code: vec![Range { section: 0, offset: 0, length: 4 }],
-            types: vec![Type::Scalar(Scalar::Int { bytes: 4, signed: true }), Type::Pointer { target: 0, bytes: 8, reach: Reach::Near }, Type::Procedure { result: None, parameters: vec![1], convention: None }],
+            types: vec![
+                Type::Scalar(Scalar::Int { bytes: 4, signed: true }),
+                Type::Pointer { target: 0, bytes: 8, reach: Reach::Near },
+                Type::Procedure { result: None, parameters: vec![1], convention: None },
+            ],
             functions: vec![Function {
                 name: "f".into(),
                 symbol: 0,
@@ -117,7 +171,12 @@ mod tests {
                 body: None,
                 far: false,
                 module: false,
-                variables: vec![Variable { name: "p".into(), r#type: 1, kind: K::Parameter, location: Location::Frame { disp: 16 } }],
+                variables: vec![Variable {
+                    name: "p".into(),
+                    r#type: 1,
+                    kind: K::Parameter,
+                    location: Location::Frame { disp: 16 },
+                }],
                 blocks: Vec::new(),
                 frame: Vec::new(),
             }],
@@ -130,15 +189,26 @@ mod tests {
         std::fs::write(&path, write(&made).unwrap()).unwrap();
         let said = Command::new(dump).arg("--codeview").arg(&path).output().unwrap();
         let text = String::from_utf8_lossy(&said.stdout);
-        for wanted in ["Machine: X64 (0xD0)", "PtrType: Near64 (0xC)", "SizeOf: 8", "BaseRegister: RBP (0x14E)", "BasePointerOffset: 16", "ReturnType: void (0x3)"] {
-            assert!(said.status.success() && text.contains(wanted), "no {wanted}:\n{text}{}", String::from_utf8_lossy(&said.stderr));
+        for wanted in [
+            "Machine: X64 (0xD0)",
+            "PtrType: Near64 (0xC)",
+            "SizeOf: 8",
+            "BaseRegister: RBP (0x14E)",
+            "BasePointerOffset: 16",
+            "ReturnType: void (0x3)",
+        ] {
+            assert!(
+                said.status.success() && text.contains(wanted),
+                "no {wanted}:\n{text}{}",
+                String::from_utf8_lossy(&said.stderr)
+            );
         }
     }
 
     fn which(tool: &str) -> Result<std::path::PathBuf, ()> {
-        let mut dirs = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect::<Vec<_>>()).unwrap_or_default();
+        let mut dirs =
+            std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect::<Vec<_>>()).unwrap_or_default();
         dirs.push("/usr/lib/llvm-20/bin".into());
         dirs.iter().map(|dir| dir.join(tool)).find(|path| path.exists()).ok_or(())
     }
-
 }

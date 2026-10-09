@@ -10,7 +10,10 @@ pub mod calling {
 
     /// `name` (`ebx`, `si`, `st0`), as the family spells it.
     pub fn register(name: &str) -> Register {
-        static NAMES: std::sync::LazyLock<llrm_support::hash::HashMap<String, Register>> = std::sync::LazyLock::new(|| Register::values().map(|one| (format!("{one:?}").to_ascii_lowercase(), one)).collect());
+        static NAMES: std::sync::LazyLock<llrm_support::hash::HashMap<String, Register>> =
+            std::sync::LazyLock::new(|| {
+                Register::values().map(|one| (format!("{one:?}").to_ascii_lowercase(), one)).collect()
+            });
         *NAMES.get(name).unwrap_or_else(|| panic!("calling.toml names no x86 register {name}"))
     }
 
@@ -32,23 +35,39 @@ pub mod calling {
     }
 
     /// The registers a result `width` bytes wide leaves in, low part first.
-    pub fn results(convention: &Convention, width: u32) -> Vec<Register> {
-        convention.result_registers(i64::from(width)).expect("calling.toml states a result for every width").iter().map(|name| register(name)).collect()
+    pub fn results(
+        convention: &Convention,
+        width: u32,
+    ) -> Vec<Register> {
+        convention
+            .result_registers(i64::from(width))
+            .expect("calling.toml states a result for every width")
+            .iter()
+            .map(|name| register(name))
+            .collect()
     }
 
     /// The return address a call leaves: the convention's, and a far call's extra bytes (the far first argument
     /// is that much further from the frame register).
-    pub fn return_address_bytes(convention: &Convention, far: bool) -> i64 {
-        convention.return_address_bytes + if far { first_argument_offset(convention, true) - convention.first_argument_offset } else { 0 }
+    pub fn return_address_bytes(
+        convention: &Convention,
+        far: bool,
+    ) -> i64 {
+        convention.return_address_bytes
+            + if far { first_argument_offset(convention, true) - convention.first_argument_offset } else { 0 }
     }
 
-    /// Where register `name`'s low word is in an interrupt handler's frame, from its pointer: a 16-bit name (`ax`) is the
-    /// low word of its 32-bit slot (`eax`).
-    pub fn interrupt_slot(convention: &Convention, name: &str) -> Option<i64> {
+    /// Where register `name`'s low word is in an interrupt handler's frame, from its pointer: a 16-bit name (`ax`) is
+    /// the low word of its 32-bit slot (`eax`).
+    pub fn interrupt_slot(
+        convention: &Convention,
+        name: &str,
+    ) -> Option<i64> {
         let wide = format!("e{name}");
         let mut at = 0;
         for (slot, size) in &convention.interrupt_frame {
-            if slot == name || (*slot == wide && matches!(name, "ax" | "bx" | "cx" | "dx" | "si" | "di" | "bp" | "sp")) {
+            if slot == name || (*slot == wide && matches!(name, "ax" | "bx" | "cx" | "dx" | "si" | "di" | "bp" | "sp"))
+            {
                 return Some(at);
             }
             at += size;
@@ -57,8 +76,15 @@ pub mod calling {
     }
 
     /// Where the first argument lies from the frame register.
-    pub fn first_argument_offset(convention: &Convention, far: bool) -> i64 {
-        if far { convention.first_argument_offset_far.unwrap_or(convention.first_argument_offset) } else { convention.first_argument_offset }
+    pub fn first_argument_offset(
+        convention: &Convention,
+        far: bool,
+    ) -> i64 {
+        if far {
+            convention.first_argument_offset_far.unwrap_or(convention.first_argument_offset)
+        } else {
+            convention.first_argument_offset
+        }
     }
 }
 
@@ -68,19 +94,48 @@ pub mod registers {
     use iced_x86::Register;
 
     /// The general registers a value or an address is held in, the frame pointer's included, the stack pointer's not.
-    pub const ROOTS: [Register; 7] = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI, Register::EBP];
+    pub const ROOTS: [Register; 7] =
+        [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI, Register::EBP];
     /// The word view of a dword register, where it has one.
     pub fn word_of(dword: Register) -> Option<Register> {
         DWORDS.iter().position(|one| *one == dword).map(|at| WORDS[at])
     }
     /// The segment registers.
-    pub const SEGMENTS: [Register; 6] = [Register::ES, Register::CS, Register::SS, Register::DS, Register::FS, Register::GS];
+    pub const SEGMENTS: [Register; 6] =
+        [Register::ES, Register::CS, Register::SS, Register::DS, Register::FS, Register::GS];
     /// The dword registers.
-    pub const DWORDS: [Register; 8] = [Register::EAX, Register::ECX, Register::EDX, Register::EBX, Register::ESI, Register::EDI, Register::EBP, Register::ESP];
+    pub const DWORDS: [Register; 8] = [
+        Register::EAX,
+        Register::ECX,
+        Register::EDX,
+        Register::EBX,
+        Register::ESI,
+        Register::EDI,
+        Register::EBP,
+        Register::ESP,
+    ];
     /// Their low words.
-    pub const WORDS: [Register; 8] = [Register::AX, Register::CX, Register::DX, Register::BX, Register::SI, Register::DI, Register::BP, Register::SP];
+    pub const WORDS: [Register; 8] = [
+        Register::AX,
+        Register::CX,
+        Register::DX,
+        Register::BX,
+        Register::SI,
+        Register::DI,
+        Register::BP,
+        Register::SP,
+    ];
     /// The byte halves of the first four.
-    pub const BYTES: [Register; 8] = [Register::AL, Register::CL, Register::DL, Register::BL, Register::AH, Register::CH, Register::DH, Register::BH];
+    pub const BYTES: [Register; 8] = [
+        Register::AL,
+        Register::CL,
+        Register::DL,
+        Register::BL,
+        Register::AH,
+        Register::CH,
+        Register::DH,
+        Register::BH,
+    ];
 
     /// A row by register number, as the tables built from it have always been walked.
     fn in_order(row: &[Register; 8]) -> Vec<Register> {
@@ -90,20 +145,24 @@ pub mod registers {
     }
 
     /// The width in bytes each register names.
-    pub static WIDTHS: std::sync::LazyLock<llrm_support::hash::IndexMap<Register, i64>> = std::sync::LazyLock::new(|| {
-        let mut widths = llrm_support::hash::IndexMap::default();
-        for (row, size) in [(&DWORDS, 4), (&WORDS, 2), (&BYTES, 1)] {
-            for one in in_order(row) {
-                widths.insert(one, size);
+    pub static WIDTHS: std::sync::LazyLock<llrm_support::hash::IndexMap<Register, i64>> =
+        std::sync::LazyLock::new(|| {
+            let mut widths = llrm_support::hash::IndexMap::default();
+            for (row, size) in [(&DWORDS, 4), (&WORDS, 2), (&BYTES, 1)] {
+                for one in in_order(row) {
+                    widths.insert(one, size);
+                }
             }
-        }
-        widths
-    });
+            widths
+        });
 
     /// Each register file entry at each width, by its root: the first view of that width where several share it
     /// (AL and AH both root to EAX: the later one resolved a width-1 value to AH).
-    pub static AT_WIDTH: std::sync::LazyLock<llrm_support::hash::IndexMap<Register, llrm_support::hash::IndexMap<i64, Register>>> = std::sync::LazyLock::new(|| {
-        let mut at_width: llrm_support::hash::IndexMap<Register, llrm_support::hash::IndexMap<i64, Register>> = llrm_support::hash::IndexMap::default();
+    pub static AT_WIDTH: std::sync::LazyLock<
+        llrm_support::hash::IndexMap<Register, llrm_support::hash::IndexMap<i64, Register>>,
+    > = std::sync::LazyLock::new(|| {
+        let mut at_width: llrm_support::hash::IndexMap<Register, llrm_support::hash::IndexMap<i64, Register>> =
+            llrm_support::hash::IndexMap::default();
         for (row, size) in [(&DWORDS, 4), (&WORDS, 2), (&BYTES, 1)] {
             for one in in_order(row) {
                 at_width.entry(llrm_lir::root(one)).or_default().entry(size).or_insert(one);
@@ -147,22 +206,37 @@ pub mod addressing16 {
 /// The bytes of the encodings the selector prices for size, where an operand of other than
 /// the target's default size (`operand`) takes the 66h prefix.
 pub mod encoding {
-    fn prefix_bytes(width: i64, operand: i64) -> i64 {
+    fn prefix_bytes(
+        width: i64,
+        operand: i64,
+    ) -> i64 {
         i64::from(width != operand)
     }
 
     /// Bytes of `op r, r` on `width`-byte registers: the opcode and ModRM.
-    pub fn register_bytes(width: i64, operand: i64) -> i64 {
+    pub fn register_bytes(
+        width: i64,
+        operand: i64,
+    ) -> i64 {
         prefix_bytes(width, operand) + 2
     }
 
     /// Bytes of a shift of a `width`-byte register by `count`: `D1` for one, `C1` with a byte count otherwise.
-    pub fn shift_bytes(count: i64, width: i64, operand: i64) -> i64 {
+    pub fn shift_bytes(
+        count: i64,
+        width: i64,
+        operand: i64,
+    ) -> i64 {
         prefix_bytes(width, operand) + if count == 1 { 2 } else { 3 }
     }
 
-    /// Bytes of `imul r, r, number` on `width`-byte registers: a byte immediate where `number` fits one, else the operand's width.
-    pub fn imul_immediate_bytes(number: i64, width: i64, operand: i64) -> i64 {
+    /// Bytes of `imul r, r, number` on `width`-byte registers: a byte immediate where `number` fits one, else the
+    /// operand's width.
+    pub fn imul_immediate_bytes(
+        number: i64,
+        width: i64,
+        operand: i64,
+    ) -> i64 {
         prefix_bytes(width, operand) + 2 + if (-128..=127).contains(&number) { 1 } else { width }
     }
 
@@ -173,7 +247,10 @@ pub mod encoding {
         /// The prefix is for the size that is not the default: a dword in real mode, a word when flat.
         #[test]
         fn the_operand_size_prefix_is_for_the_size_that_is_not_the_default() {
-            assert_eq!((register_bytes(2, 2), register_bytes(4, 2), register_bytes(2, 4), register_bytes(4, 4)), (2, 3, 3, 2));
+            assert_eq!(
+                (register_bytes(2, 2), register_bytes(4, 2), register_bytes(2, 4), register_bytes(4, 4)),
+                (2, 3, 3, 2)
+            );
             assert_eq!((shift_bytes(1, 4, 4), shift_bytes(3, 2, 4), imul_immediate_bytes(446, 4, 4)), (2, 4, 6));
         }
     }
@@ -199,7 +276,13 @@ pub fn physical_addresses() -> Vec<(String, u64)> {
         .as_table()
         .expect("[physical] is a table")
         .iter()
-        .map(|(name, address)| (name.clone(), u64::try_from(address.as_integer().expect("an address is an integer")).expect("an address is not negative")))
+        .map(|(name, address)| {
+            (
+                name.clone(),
+                u64::try_from(address.as_integer().expect("an address is an integer"))
+                    .expect("an address is not negative"),
+            )
+        })
         .collect()
 }
 

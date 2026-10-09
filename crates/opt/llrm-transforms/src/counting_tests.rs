@@ -5,10 +5,10 @@
 use std::collections::BTreeSet;
 
 use llrm_analysis::cfg;
+use llrm_analysis::graph::loops;
 use llrm_analysis::induction::{self, control_replacement};
 use llrm_analysis::memory::Unit;
 use llrm_analysis::testing::{DOS, layout};
-use llrm_analysis::graph::loops;
 use llrm_mir::module::{Module, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::Outer;
@@ -18,7 +18,10 @@ use crate::testing::{parsed, printed, results};
 
 /// `i` from `start` while `i < bound`, its exit value returned through the
 /// exit's phi.
-fn counting(start: &str, bound: &str) -> String {
+fn counting(
+    start: &str,
+    bound: &str,
+) -> String {
     format!(
         "{DOS}define i16 @f(i16 %s, i16 %n) {{
 b0:
@@ -48,10 +51,22 @@ fn guarded(module: &mut Module) {
     let (context, function) = module.function_mut("f").expect("@f");
     let found = loops::loops(&cfg::graph(function), None);
     let [loop_] = &found[..] else { panic!("one loop") };
-    let proofs = induction::counted(&llrm_analysis::testing::with_registers(Unit::within(context, &layout, function, &outer)), loop_, None, false);
+    let proofs = induction::counted(
+        &llrm_analysis::testing::with_registers(Unit::within(context, &layout, function, &outer)),
+        loop_,
+        None,
+        false,
+    );
     let [proof] = &proofs[..] else { panic!("one proof") };
-    let replacement = control_replacement(&llrm_analysis::testing::with_registers(Unit::within(context, &layout, function, &outer)), loop_, proof, &BTreeSet::new()).expect("replaceable");
-    let (preheader, header, exit) = (cfg::block(proof.preheader.expect("a preheader")), cfg::block(loop_.header), cfg::block(proof.exit));
+    let replacement = control_replacement(
+        &llrm_analysis::testing::with_registers(Unit::within(context, &layout, function, &outer)),
+        loop_,
+        proof,
+        &BTreeSet::new(),
+    )
+    .expect("replaceable");
+    let (preheader, header, exit) =
+        (cfg::block(proof.preheader.expect("a preheader")), cfg::block(loop_.header), cfg::block(proof.exit));
     let jump = function.terminator(preheader).expect("a branch");
     let mut seeds = Seeds { context, function, at: jump, width: proof.width() };
     let skip = skip_guard(&mut seeds, proof).expect("pre-tested");
@@ -59,7 +74,15 @@ fn guarded(module: &mut Module) {
         seeds.function.set_operands(phi, operands);
     }
     let void = seeds.function.instruction(jump).ty;
-    let branch = seeds.function.create_instruction(Opcode::Br, void, vec![Operand::Value(skip), Operand::Block(exit), Operand::Block(header)], Flags::default(), None);
+    let branch = seeds
+        .function
+        .create_instruction(
+            Opcode::Br,
+            void,
+            vec![Operand::Value(skip), Operand::Block(exit), Operand::Block(header)],
+            Flags::default(),
+            None,
+        );
     seeds.function.insert(branch, llrm_mir::edit::Position::Before(jump)).unwrap();
     seeds.function.erase(jump).unwrap();
 }

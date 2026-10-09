@@ -5,18 +5,21 @@
 //! halves of one value stays two word operations, as the old raise left it.
 
 use iced_x86::Register;
+use llrm_mir::{BinaryOp, CastOp, IntPredicate, Opcode, Operand, ValueDef};
 use llrm_x86_bcmachine::analysis::flags::Flag;
 use llrm_x86_bcmachine::frontends::bc::declen::Insn;
 use llrm_x86_bcmachine::model::ir::nodes::{Node, span};
 use llrm_x86_bcmachine::objectfile::module::{Addr, Space};
-use llrm_mir::{BinaryOp, CastOp, IntPredicate, Opcode, Operand, ValueDef};
 
 use crate::emit::{Bit, Desc, Emit, Emitter, Kind};
 use crate::pairs::{Pair, Shape, Source};
 use crate::sites::Recognizer;
 
 /// The instruction a value is, and its operands.
-fn defined(e: &Emitter, value: Operand) -> Option<(Opcode, Vec<Operand>)> {
+fn defined(
+    e: &Emitter,
+    value: Operand,
+) -> Option<(Opcode, Vec<Operand>)> {
     let Operand::Value(value) = value else { return None };
     let ValueDef::Instruction(inst) = e.b.function.value(value).def else { return None };
     let one = e.b.function.instruction(inst);
@@ -25,7 +28,11 @@ fn defined(e: &Emitter, value: Operand) -> Option<(Opcode, Vec<Operand>)> {
 
 /// The `i32` whose halves `low` and `high` are, where they are known to be
 /// one: the words of one value, a word and its sign, or two constants.
-pub fn whole(e: &mut Emitter, low: Operand, high: Operand) -> Option<Operand> {
+pub fn whole(
+    e: &mut Emitter,
+    low: Operand,
+    high: Operand,
+) -> Option<Operand> {
     if e.bits_of(low) != 16 || e.bits_of(high) != 16 {
         return None;
     }
@@ -43,7 +50,11 @@ pub fn whole(e: &mut Emitter, low: Operand, high: Operand) -> Option<Operand> {
 }
 
 /// The value `low` and `high` were cut from: `trunc w` and `trunc (w >> 16)`.
-fn split(e: &Emitter, low: Operand, high: Operand) -> Option<Operand> {
+fn split(
+    e: &Emitter,
+    low: Operand,
+    high: Operand,
+) -> Option<Operand> {
     let (Opcode::Cast(CastOp::Trunc), lows) = defined(e, low)? else { return None };
     let (Opcode::Cast(CastOp::Trunc), highs) = defined(e, high)? else { return None };
     let (Opcode::Binary(BinaryOp::LShr), shifted) = defined(e, highs[0])? else { return None };
@@ -52,23 +63,41 @@ fn split(e: &Emitter, low: Operand, high: Operand) -> Option<Operand> {
 }
 
 /// Whether `high` is `low`'s sign: `cwd`'s `ashr low, 15`.
-fn signs(e: &Emitter, low: Operand, high: Operand) -> bool {
-    matches!(defined(e, high), Some((Opcode::Binary(BinaryOp::AShr), operands)) if operands[0] == low && e.constant(operands[1]) == Some(15))
+fn signs(
+    e: &Emitter,
+    low: Operand,
+    high: Operand,
+) -> bool {
+    matches!(
+        defined(e, high),
+        Some((Opcode::Binary(BinaryOp::AShr), operands)) if operands[0] == low && e.constant(operands[1]) == Some(15)
+    )
 }
 
 /// Whether `high:low` is `low` sign-extended.
-pub fn extended(e: &Emitter, low: Operand, high: Operand) -> bool {
+pub fn extended(
+    e: &Emitter,
+    low: Operand,
+    high: Operand,
+) -> bool {
     signs(e, low, high)
-        || split(e, low, high).and_then(|long| defined(e, long)).is_some_and(|(opcode, operands)| opcode == Opcode::Cast(CastOp::SExt) && e.bits_of(operands[0]) == 16)
+        || split(e, low, high)
+            .and_then(|long| defined(e, long))
+            .is_some_and(|(opcode, operands)| opcode == Opcode::Cast(CastOp::SExt) && e.bits_of(operands[0]) == 16)
 }
 
 /// A long's pair of word operations as one.
 pub struct Longs;
 
 impl Recognizer for Longs {
-    fn node(&self, e: &mut Emitter, node: &Node) -> Option<Emit<()>> {
+    fn node(
+        &self,
+        e: &mut Emitter,
+        node: &Node,
+    ) -> Option<Emit<()>> {
         let pair = e.body().pairs.get(&(span(node).0 as i64))?;
-        let nodes: Vec<&Node> = (0..pair.nodes.len()).map(|n| if n == 0 { Some(node) } else { e.ahead(n) }).collect::<Option<_>>()?;
+        let nodes: Vec<&Node> =
+            (0..pair.nodes.len()).map(|n| if n == 0 { Some(node) } else { e.ahead(n) }).collect::<Option<_>>()?;
         if nodes.iter().zip(&pair.nodes).any(|(one, &at)| span(one).0 as i64 != at) {
             return None;
         }
@@ -79,8 +108,13 @@ impl Recognizer for Longs {
 }
 
 /// The pair's meaning, or None to leave it to the core.
-fn long(e: &mut Emitter, pair: &Pair, nodes: &[&Node]) -> Option<Emit<()>> {
-    let memory = pair.memory.filter(|&(_, addr)| fits(e, addr)).map(|(index, _)| (insn(nodes[index]), insn(nodes[1 - index])));
+fn long(
+    e: &mut Emitter,
+    pair: &Pair,
+    nodes: &[&Node],
+) -> Option<Emit<()>> {
+    let memory =
+        pair.memory.filter(|&(_, addr)| fits(e, addr)).map(|(index, _)| (insn(nodes[index]), insn(nodes[1 - index])));
     if pair.memory.is_some() && memory.is_none() {
         return None;
     }
@@ -151,7 +185,10 @@ fn long(e: &mut Emitter, pair: &Pair, nodes: &[&Node]) -> Option<Emit<()>> {
 
 /// A long operand, known now, or None if it is in memory; None outer where
 /// its register words are not known halves of one value.
-fn operand(e: &mut Emitter, source: Source) -> Option<Option<Operand>> {
+fn operand(
+    e: &mut Emitter,
+    source: Source,
+) -> Option<Option<Operand>> {
     Some(match source {
         Source::Memory => None,
         Source::Immediate(value) => Some(e.b.int(32, i128::from(value))),
@@ -160,14 +197,25 @@ fn operand(e: &mut Emitter, source: Source) -> Option<Option<Operand>> {
 }
 
 /// The long in `low:high`, where its words are known halves of one value.
-fn known(e: &mut Emitter, low: Register, high: Register) -> Option<Operand> {
+fn known(
+    e: &mut Emitter,
+    low: Register,
+    high: Register,
+) -> Option<Operand> {
     let (low, high) = (e.register(low).ok()?, e.register(high).ok()?);
     whole(e, low, high)
 }
 
 /// `name` of two longs; the flags are the high word's `adc`, `sbb` or logic:
 /// the long's but for ZF, which sees only the high word.
-fn arithmetic(e: &mut Emitter, pair: &Pair, name: &str, value: Operand, operand: Operand, high: &Node) -> Emit<()> {
+fn arithmetic(
+    e: &mut Emitter,
+    pair: &Pair,
+    name: &str,
+    value: Operand,
+    operand: Operand,
+    high: &Node,
+) -> Emit<()> {
     let (op, kind) = match name {
         "add" => (BinaryOp::Add, Kind::Add),
         "sub" => (BinaryOp::Sub, Kind::Sub),
@@ -190,7 +238,11 @@ fn arithmetic(e: &mut Emitter, pair: &Pair, name: &str, value: Operand, operand:
 }
 
 /// The pair's words, from `value`.
-fn set(e: &mut Emitter, pair: &Pair, value: Operand) -> Emit<()> {
+fn set(
+    e: &mut Emitter,
+    pair: &Pair,
+    value: Operand,
+) -> Emit<()> {
     let word = e.b.context.types.int(16);
     let low = e.cast(CastOp::Trunc, value, word);
     let sixteen = e.b.int(32, 16);
@@ -201,15 +253,22 @@ fn set(e: &mut Emitter, pair: &Pair, value: Operand) -> Emit<()> {
 }
 
 /// The low word's address; the high word's is checked as the core would.
-fn address(e: &mut Emitter, memory: Option<(&Insn, &Insn)>) -> Emit<Operand> {
+fn address(
+    e: &mut Emitter,
+    memory: Option<(&Insn, &Insn)>,
+) -> Emit<Operand> {
     let (low, high) = memory.ok_or("a long pair without memory")?;
     e.pointer(high)?;
     e.pointer(low)
 }
 
 /// Whether the long at `addr` is inside one object.
-fn fits(e: &Emitter, addr: Addr) -> bool {
-    addr.space != Space::Segment || e.unit.objects.at(addr.index, addr.disp).is_some_and(|object| addr.disp + 4 <= object.end)
+fn fits(
+    e: &Emitter,
+    addr: Addr,
+) -> bool {
+    addr.space != Space::Segment
+        || e.unit.objects.at(addr.index, addr.disp).is_some_and(|object| addr.disp + 4 <= object.end)
 }
 
 fn insn(node: &Node) -> &Insn {

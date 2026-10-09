@@ -11,8 +11,8 @@ use std::rc::Rc;
 use iced_x86::Register;
 
 use super::*;
-use crate::testing::{fixtures, loaded, objects};
 use crate::omf;
+use crate::testing::{fixtures, loaded, objects};
 
 const OPERATOR_OBJECTS: [&str; 4] = ["pds-g2.obj", "qb45.obj", "vbdos-g2.obj", "vbdos-g3.obj"];
 const WITH_PAIRS: &str = "jumptable.obj";
@@ -96,11 +96,9 @@ fn test_dgroup_is_populated_on_every_object() {
 
 #[test]
 fn test_the_compiler_that_made_an_object_is_read_off_it() {
-    for (name, want) in [
-        ("bools-q-O.obj", Family::Quickbasic),
-        ("fpemu-p-evt.obj", Family::Pds),
-        ("cmpord-v-g3.obj", Family::Vbdos),
-    ] {
+    for (name, want) in
+        [("bools-q-O.obj", Family::Quickbasic), ("fpemu-p-evt.obj", Family::Pds), ("cmpord-v-g3.obj", Family::Vbdos)]
+    {
         let at = fixtures().join(name.to_lowercase());
         assert!(at.exists(), "{name} is checked in and this test needs it");
         let got = family(&omf::parse(&std::fs::read(&at).unwrap()).unwrap());
@@ -108,8 +106,8 @@ fn test_the_compiler_that_made_an_object_is_read_off_it() {
     }
 }
 
-/// A frame cell is the same place whichever slot tags it, and a literal address with a symbol's `index` is not a frame cell:
-/// ignoring the index of those made two globals one place (nbody_fixed read `_pos_y` for `_pos_x`).
+/// A frame cell is the same place whichever slot tags it, and a literal address with a symbol's `index` is not a frame
+/// cell: ignoring the index of those made two globals one place (nbody_fixed read `_pos_y` for `_pos_x`).
 #[test]
 fn test_a_slot_tag_decides_nothing_for_a_frame_cell_and_everything_for_another_address() {
     use llrm_support::hash::HashSet;

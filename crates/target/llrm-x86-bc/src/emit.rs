@@ -17,11 +17,17 @@
 //! the arguments its caller pushed.
 
 use std::collections::{BTreeMap, BTreeSet};
-use llrm_support::hash::HashMap;
 use std::rc::Rc;
 
 use iced_x86::Register;
 use llrm_analysis::ssa::{SsaUpdater, provider};
+use llrm_hir::onerror::Handled;
+use llrm_mir::build::Builder;
+use llrm_mir::{
+    BinaryOp, BlockId, CastOp, Constant, ConstantId, ConstantKind, Flags, FloatKind, InstId, IntPredicate, Opcode,
+    Operand, Position, Type, TypeId, ValueId,
+};
+use llrm_support::hash::HashMap;
 use llrm_x86_bcmachine::analysis::flags::{self as flagged, Flag};
 use llrm_x86_bcmachine::frontends::bc::blocks::{self, Block, Ends};
 use llrm_x86_bcmachine::frontends::bc::declen::Insn;
@@ -30,16 +36,13 @@ use llrm_x86_bcmachine::model::ir::nodes::{Node, span};
 use llrm_x86_bcmachine::model::ir::{Effects, Imm, Loc, Operation, Reg, Semantics};
 use llrm_x86_bcmachine::objectfile::module::{Addr, Space};
 use llrm_x86_bcmachine::support::hash::IndexMap;
-use llrm_mir::build::Builder;
-use llrm_mir::{
-    BinaryOp, BlockId, CastOp, Constant, ConstantId, ConstantKind, FloatKind, Flags, InstId, IntPredicate, Opcode, Operand, Position, Type, TypeId, ValueId,
-};
 
-use crate::machine::{Answer, BodyFacts, FRAME_ENTRY, FRAME_EXIT, Facts, Interface, TRACKED, never_returns, restore_pair, tracked};
+use crate::machine::{
+    Answer, BodyFacts, FRAME_ENTRY, FRAME_EXIT, Facts, Interface, TRACKED, never_returns, restore_pair, tracked,
+};
 use crate::objects::Objects;
 use crate::runtime::Callees;
 use crate::sites;
-use llrm_hir::onerror::Handled;
 
 mod handling;
 pub use handling::owns;
@@ -209,12 +212,20 @@ pub struct Emitter<'b, 'm, 'u> {
     handling: Option<handling::Handling>,
 }
 
-fn poison(b: &mut Builder, ty: TypeId) -> Operand {
+fn poison(
+    b: &mut Builder,
+    ty: TypeId,
+) -> Operand {
     Operand::Constant(b.context.constant(Constant { ty, kind: ConstantKind::Poison }))
 }
 
 /// Emits `body` into the function `b` builds.
-pub fn function(b: &mut Builder, unit: &Unit, body: &BodyFacts, handled: Option<Handled>) -> Emit<()> {
+pub fn function(
+    b: &mut Builder,
+    unit: &Unit,
+    body: &BodyFacts,
+    handled: Option<Handled>,
+) -> Emit<()> {
     match body.body.kind {
         BodyKind::Main | BodyKind::Procedure => {}
         BodyKind::ErrorHandler => return Err("a second ON ERROR GOTO handler: one per module is selected".to_owned()),
@@ -268,7 +279,10 @@ pub fn function(b: &mut Builder, unit: &Unit, body: &BodyFacts, handled: Option<
 }
 
 impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
-    fn run(&mut self, handled: Option<Handled>) -> Emit<()> {
+    fn run(
+        &mut self,
+        handled: Option<Handled>,
+    ) -> Emit<()> {
         let entry = self.block;
         self.prologue()?;
         for block in &self.body.blocks {
@@ -303,7 +317,9 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     /// before it.
     fn order(&self) -> Vec<&'b Block> {
         let by_at: BTreeMap<usize, &'b Block> = self.body.blocks.iter().map(|one| (one.at, one)).collect();
-        let roots = std::iter::once(self.body.blocks[0].at).chain(self.body.body.entries.iter().copied()).chain(self.body.handler.as_ref().map(|one| one.seed));
+        let roots = std::iter::once(self.body.blocks[0].at)
+            .chain(self.body.body.entries.iter().copied())
+            .chain(self.body.handler.as_ref().map(|one| one.seed));
         let mut seen = BTreeSet::new();
         let mut order = Vec::new();
         for root in roots {
@@ -372,7 +388,12 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
                         let slot = self.offset(arguments, offset);
                         self.b.store(value, slot, false);
                     }
-                    self.layout = Some(Layout { low: 0, high: 0, locals: arguments, arguments: Some((6, interface.popped, arguments)) });
+                    self.layout = Some(Layout {
+                        low: 0,
+                        high: 0,
+                        locals: arguments,
+                        arguments: Some((6, interface.popped, arguments)),
+                    });
                 }
             }
             _ => {}
@@ -384,7 +405,12 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     /// out, zeroed where it is set up, as B$ENSA and B$ENRA zero-fill it:
     /// QB 4.5's `runtime/inc/stack.inc` keeps FR_GOSUB "last on the frame to
     /// optimize recursive zero-fill".
-    fn frame_layout(&mut self, low: i64, high: i64, header: i64) -> Emit<Layout> {
+    fn frame_layout(
+        &mut self,
+        low: i64,
+        high: i64,
+        header: i64,
+    ) -> Emit<Layout> {
         if high > -header {
             return Err("locals overlap the runtime's frame header".to_owned());
         }
@@ -398,7 +424,10 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         Ok(Layout { low, high, locals, arguments })
     }
 
-    pub fn var_type(&mut self, var: Var) -> TypeId {
+    pub fn var_type(
+        &mut self,
+        var: Var,
+    ) -> TypeId {
         match var {
             Var::Reg(..) => self.b.context.types.int(16),
             Var::Es => self.b.context.types.ptr(crate::segment(&self.unit.facts.spaces)),
@@ -408,18 +437,29 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// A value that refuses the function if anything still reads it.
-    fn sentinel(&mut self, ty: TypeId, why: String) -> Operand {
+    fn sentinel(
+        &mut self,
+        ty: TypeId,
+        why: String,
+    ) -> Operand {
         let undefined = poison(self.b, ty);
         let inst = self.b.function.create_instruction(Opcode::Freeze, ty, vec![undefined], Flags::default(), None);
         let first = self.b.function.block(self.block).instructions().first().copied();
-        self.b.function.insert(inst, first.map_or(Position::End(self.block), Position::Before)).expect("a placed block");
+        self.b
+            .function
+            .insert(inst, first.map_or(Position::End(self.block), Position::Before))
+            .expect("a placed block");
         let value = self.b.function.instruction(inst).result.expect("a value");
         self.sentinels.insert(value, Sentinel { why });
         Operand::Value(value)
     }
 
     /// Everything a call may change and does not answer.
-    pub fn clobber(&mut self, registers: &[Register], why: &str) {
+    pub fn clobber(
+        &mut self,
+        registers: &[Register],
+        why: &str,
+    ) {
         for &register in registers {
             let Some(index) = tracked(register) else { continue };
             for half in [Half::Low, Half::High] {
@@ -433,7 +473,10 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         }
     }
 
-    fn emit_block(&mut self, block: &'b Block) -> Emit<()> {
+    fn emit_block(
+        &mut self,
+        block: &'b Block,
+    ) -> Emit<()> {
         let id = self.blocks[&block.at];
         self.block = id;
         self.b.position(id);
@@ -486,7 +529,10 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// Computes each flag live out of this block from what wrote it.
-    fn live_out(&mut self, block: &Block) {
+    fn live_out(
+        &mut self,
+        block: &Block,
+    ) {
         let mut out = Flag::NONE;
         for successor in &block.succ {
             out |= self.live_in.get(successor).copied().unwrap_or(Flag::NONE);
@@ -499,7 +545,10 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
                     Ok(value) => BitState::Value(value),
                     Err(why) => BitState::Unknown(why),
                 },
-                Some(BitState::Lazy(_)) => BitState::Unknown(format!("reads a flag its writer's block did not keep {bit:?} {:#x} out {:?} succ {:?}", block.at, out, block.succ)),
+                Some(BitState::Lazy(_)) => BitState::Unknown(format!(
+                    "reads a flag its writer's block did not keep {bit:?} {:#x} out {:?} succ {:?}",
+                    block.at, out, block.succ
+                )),
                 Some(other) => other,
                 None => continue,
             };
@@ -508,11 +557,16 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// Records the state a successor starts in, which every edge into it must agree on.
-    fn enter(&mut self, at: usize) -> Emit<BlockId> {
+    fn enter(
+        &mut self,
+        at: usize,
+    ) -> Emit<BlockId> {
         let target = *self.blocks.get(&at).ok_or_else(|| format!("a jump out of the body, to {at:#06x}"))?;
         let state = Entry { depth: self.depth, frame: self.frame, floats: self.floats };
         match self.entries.get(&at) {
-            Some(known) if *known != state => Err(format!("paths into {at:#06x} disagree on the stack, the x87 stack or the frame")),
+            Some(known) if *known != state => {
+                Err(format!("paths into {at:#06x} disagree on the stack, the x87 stack or the frame"))
+            }
             _ => {
                 self.entries.insert(at, state);
                 Ok(target)
@@ -520,7 +574,12 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         }
     }
 
-    fn terminate(&mut self, block: &Block, last: Option<&Node>, condition: Option<Operand>) -> Emit<()> {
+    fn terminate(
+        &mut self,
+        block: &Block,
+        last: Option<&Node>,
+        condition: Option<Operand>,
+    ) -> Emit<()> {
         let end = (self.current.clone(), self.bits.clone());
         match (block.ends, last) {
             (Ends::Return, Some(node)) => {
@@ -546,7 +605,9 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
                 self.b.position(self.block);
                 self.b.br(target);
             }
-            (Ends::Table, Some(Node::Call(call))) if llrm_qbruntime::INLINE_TABLE.contains(call.name.as_str()) => return self.dispatch(&call.insn, &call.name),
+            (Ends::Table, Some(Node::Call(call))) if llrm_qbruntime::INLINE_TABLE.contains(call.name.as_str()) => {
+                return self.dispatch(&call.insn, &call.name);
+            }
             (Ends::Table, _) => return Err("a jump through a table".to_owned()),
             (Ends::Indirect, _) => return Err("an indirect jump".to_owned()),
             (other, _) => return Err(format!("a block that ends {}", other.value())),
@@ -558,14 +619,22 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     /// ON GOTO: B$OGTA reads a count byte and that many code offsets past
     /// its call, and goes to the BX'th; 0 or past the count goes on past the
     /// table, and past 255 is Illegal function call.
-    fn dispatch(&mut self, insn: &Insn, name: &str) -> Emit<()> {
+    fn dispatch(
+        &mut self,
+        insn: &Insn,
+        name: &str,
+    ) -> Emit<()> {
         let found = self.unit.facts.found;
-        let targets = blocks::dispatch_targets(found, insn).ok_or_else(|| format!("{name}'s table names code outside this segment"))?;
+        let targets = blocks::dispatch_targets(found, insn)
+            .ok_or_else(|| format!("{name}'s table names code outside this segment"))?;
         let (_, past, _) = blocks::inline_table(found, insn).ok_or_else(|| format!("{name} without a table"))?;
         let index = self.register(Register::BX)?;
         let contract = self.unit.facts.contract(insn.at).ok_or_else(|| format!("{name} has no contract"))?.clone();
-        let disturbed: Vec<Register> =
-            llrm_qbruntime::disturbs(&contract).into_iter().filter_map(crate::machine::from_contract).filter(|&one| one != crate::machine::FLAGS).collect();
+        let disturbed: Vec<Register> = llrm_qbruntime::disturbs(&contract)
+            .into_iter()
+            .filter_map(crate::machine::from_contract)
+            .filter(|&one| one != crate::machine::FLAGS)
+            .collect();
         let why = format!("{name} clobbers it");
         self.clobber(&disturbed, &why);
         let error = match self.unit.callees.named.get(crate::runtime::ERROR) {
@@ -597,7 +666,10 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         Ok(())
     }
 
-    fn ret(&mut self, node: &Node) -> Emit<()> {
+    fn ret(
+        &mut self,
+        node: &Node,
+    ) -> Emit<()> {
         if self.body.body.kind != BodyKind::Procedure {
             return Err("a return from the main body".to_owned());
         }
@@ -624,7 +696,10 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// The value registers answer: one word, or DX:AX joined.
-    fn answer_value(&mut self, registers: &[Register]) -> Emit<Operand> {
+    fn answer_value(
+        &mut self,
+        registers: &[Register],
+    ) -> Emit<Operand> {
         match registers {
             [one] => self.register(word(*one)),
             [Register::EAX, Register::EDX] => {
@@ -636,7 +711,11 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// `high:low` as one value twice as wide.
-    pub fn join(&mut self, low: Operand, high: Operand) -> Operand {
+    pub fn join(
+        &mut self,
+        low: Operand,
+        high: Operand,
+    ) -> Operand {
         if let Some(whole) = crate::longs::whole(self, low, high) {
             return whole;
         }
@@ -655,23 +734,35 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// The `n`th node after the one being emitted, in its block.
-    pub fn ahead(&self, n: usize) -> Option<&'b Node> {
+    pub fn ahead(
+        &self,
+        n: usize,
+    ) -> Option<&'b Node> {
         self.run.get(self.cursor + n).copied()
     }
 
     /// Owns the next `n` nodes too: the core raise does not see them.
-    pub fn consume(&mut self, n: usize) {
+    pub fn consume(
+        &mut self,
+        n: usize,
+    ) {
         self.consumed = n;
     }
 
-    pub fn bits_of(&self, value: Operand) -> u32 {
+    pub fn bits_of(
+        &self,
+        value: Operand,
+    ) -> u32 {
         self.b.context.types.int_bits(self.b.type_of(value)).expect("an integer")
     }
 
     // ---------------------------------------------------------------- values
 
     /// A variable's value here, a placeholder where this block has not written it.
-    pub fn get(&mut self, var: Var) -> Operand {
+    pub fn get(
+        &mut self,
+        var: Var,
+    ) -> Operand {
         if let Some(&value) = self.current.get(&var) {
             return value;
         }
@@ -679,19 +770,29 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         let undefined = poison(self.b, ty);
         let inst = self.b.function.create_instruction(Opcode::Freeze, ty, vec![undefined], Flags::default(), None);
         let first = self.b.function.block(self.block).instructions().first().copied();
-        self.b.function.insert(inst, first.map_or(Position::End(self.block), Position::Before)).expect("a placed block");
+        self.b
+            .function
+            .insert(inst, first.map_or(Position::End(self.block), Position::Before))
+            .expect("a placed block");
         let value = self.b.function.instruction(inst).result.expect("a value");
         self.placeholders.push((self.block, var, value));
         self.current.insert(var, Operand::Value(value));
         Operand::Value(value)
     }
 
-    pub fn set(&mut self, var: Var, value: Operand) {
+    pub fn set(
+        &mut self,
+        var: Var,
+        value: Operand,
+    ) {
         self.current.insert(var, value);
     }
 
     /// A general register's value at its own width.
-    pub fn register(&mut self, register: Register) -> Emit<Operand> {
+    pub fn register(
+        &mut self,
+        register: Register,
+    ) -> Emit<Operand> {
         let index = tracked(register).ok_or_else(|| format!("reads {} as a value", name(register)))?;
         let low = self.get(Var::Reg(index, Half::Low));
         match register.size() {
@@ -714,7 +815,11 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// Writes a general register; a byte merges into the rest of its word.
-    pub fn set_register(&mut self, register: Register, value: Operand) -> Emit<()> {
+    pub fn set_register(
+        &mut self,
+        register: Register,
+        value: Operand,
+    ) -> Emit<()> {
         let index = tracked(register).ok_or_else(|| format!("writes {}", name(register)))?;
         let word = self.b.context.types.int(16);
         match register.size() {
@@ -747,21 +852,38 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// Sets a whole 16-bit register from a call's answer.
-    fn set_word(&mut self, root: Register, value: Operand) -> Emit<()> {
+    fn set_word(
+        &mut self,
+        root: Register,
+        value: Operand,
+    ) -> Emit<()> {
         self.set_register(word(root), value)
     }
 
     // ----------------------------------------------------------- instructions
 
-    pub fn binary(&mut self, op: BinaryOp, a: Operand, b: Operand) -> Operand {
+    pub fn binary(
+        &mut self,
+        op: BinaryOp,
+        a: Operand,
+        b: Operand,
+    ) -> Operand {
         let made = self.b.binary(op, a, b, Flags::default(), "");
-        if !matches!(op, BinaryOp::SDiv | BinaryOp::SRem | BinaryOp::UDiv | BinaryOp::URem) {
+        if !matches!(
+            op,
+            BinaryOp::SDiv | BinaryOp::SRem | BinaryOp::UDiv | BinaryOp::URem
+        ) {
             self.note_pure();
         }
         made
     }
 
-    pub fn cast(&mut self, op: CastOp, a: Operand, to: TypeId) -> Operand {
+    pub fn cast(
+        &mut self,
+        op: CastOp,
+        a: Operand,
+        to: TypeId,
+    ) -> Operand {
         if self.b.type_of(a) == to {
             return a;
         }
@@ -770,7 +892,12 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         made
     }
 
-    pub fn icmp(&mut self, predicate: IntPredicate, a: Operand, b: Operand) -> Operand {
+    pub fn icmp(
+        &mut self,
+        predicate: IntPredicate,
+        a: Operand,
+        b: Operand,
+    ) -> Operand {
         let made = self.b.icmp(predicate, a, b, "");
         self.note_pure();
         made
@@ -781,12 +908,19 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         self.pure.push(last);
     }
 
-    fn truth(&mut self, value: bool) -> Operand {
+    fn truth(
+        &mut self,
+        value: bool,
+    ) -> Operand {
         self.b.int(1, i128::from(value))
     }
 
     /// `pointer` advanced by `offset` bytes.
-    pub fn offset(&mut self, pointer: Operand, offset: i64) -> Operand {
+    pub fn offset(
+        &mut self,
+        pointer: Operand,
+        offset: i64,
+    ) -> Operand {
         if offset == 0 {
             return pointer;
         }
@@ -798,14 +932,21 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// `pointer` advanced by the 16-bit value `index`.
-    fn indexed(&mut self, pointer: Operand, index: Operand) -> Operand {
+    fn indexed(
+        &mut self,
+        pointer: Operand,
+        index: Operand,
+    ) -> Operand {
         let byte = self.b.context.types.int(8);
         let made = self.b.gep(byte, pointer, &[index], Flags::default(), "");
         self.note_pure();
         made
     }
 
-    fn node(&mut self, node: &Node) -> Emit<()> {
+    fn node(
+        &mut self,
+        node: &Node,
+    ) -> Emit<()> {
         self.insn = insn_of(node).cloned();
         self.prologue = std::mem::replace(&mut self.making, false);
         if self.unit.facts.event_poll(node) {
@@ -829,7 +970,12 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         }
     }
 
-    fn instruction(&mut self, insn: &Insn, what: &Semantics, effects: &Effects) -> Emit<()> {
+    fn instruction(
+        &mut self,
+        insn: &Insn,
+        what: &Semantics,
+        effects: &Effects,
+    ) -> Emit<()> {
         let name = what.name.as_deref().unwrap_or("");
         if self.frame_step(what, effects)? {
             return Ok(());
@@ -902,20 +1048,32 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
                 let value = self.pop(width)?;
                 self.write(&what.dests[0], value)
             }
-            Operation::Call => Err(if what.indirect || what.target.is_none() { "an indirect call".to_owned() } else { "a near call (GOSUB)".to_owned() }),
+            Operation::Call => Err(if what.indirect || what.target.is_none() {
+                "an indirect call".to_owned()
+            } else {
+                "a near call (GOSUB)".to_owned()
+            }),
             Operation::Escape => Err("a far jump".to_owned()),
 
             Operation::Fill => Err("rep stosw".to_owned()),
-            Operation::FloatLoad | Operation::FloatStore | Operation::FloatArith | Operation::FloatArithPop | Operation::FloatUnary => {
-                Err(format!("x87 {name}"))
+            Operation::FloatLoad
+            | Operation::FloatStore
+            | Operation::FloatArith
+            | Operation::FloatArithPop
+            | Operation::FloatUnary => Err(format!("x87 {name}")),
+            Operation::Barrier => {
+                Err(format!("{} is unmodelled", format!("{:?}", insn.insn.mnemonic()).to_lowercase()))
             }
-            Operation::Barrier => Err(format!("{} is unmodelled", format!("{:?}", insn.insn.mnemonic()).to_lowercase())),
             other => Err(format!("{} in the middle of a block", other.as_str())),
         }
     }
 
     /// `b` at `a`'s width, as the machine sign-extends an immediate.
-    fn fit(&mut self, b: Operand, a: Operand) -> Operand {
+    fn fit(
+        &mut self,
+        b: Operand,
+        a: Operand,
+    ) -> Operand {
         let (want, have) = (self.bits_of(a), self.bits_of(b));
         let ty = self.b.context.types.int(want);
         if have < want {
@@ -927,11 +1085,17 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         }
     }
 
-    fn binary_op(&mut self, name: &str, what: &Semantics, effects: &Effects) -> Emit<()> {
+    fn binary_op(
+        &mut self,
+        name: &str,
+        what: &Semantics,
+        effects: &Effects,
+    ) -> Emit<()> {
         let a = self.read(&what.sources[0])?;
         let bits = self.bits_of(a);
         // `xor r,r` and `sub r,r` read nothing.
-        if matches!(name, "xor" | "sub") && what.sources[0] == what.sources[1] && matches!(what.sources[0], Loc::Reg(_)) {
+        if matches!(name, "xor" | "sub") && what.sources[0] == what.sources[1] && matches!(what.sources[0], Loc::Reg(_))
+        {
             let zero = self.b.int(bits, 0);
             self.write(&what.dests[0], zero)?;
             let kind = if name == "xor" { Kind::Logic } else { Kind::Sub };
@@ -968,7 +1132,14 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     /// A shift: a constant count below the width is LLVM's own; a count in
     /// CL is masked to five bits as the 286 does, and one past the width
     /// fills.
-    fn shift(&mut self, name: &str, a: Operand, count: Operand, what: &Semantics, effects: &Effects) -> Emit<()> {
+    fn shift(
+        &mut self,
+        name: &str,
+        a: Operand,
+        count: Operand,
+        what: &Semantics,
+        effects: &Effects,
+    ) -> Emit<()> {
         let bits = self.bits_of(a);
         let op = match name {
             "shl" => BinaryOp::Shl,
@@ -1022,7 +1193,11 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         Ok(())
     }
 
-    fn multiply(&mut self, what: &Semantics, effects: &Effects) -> Emit<()> {
+    fn multiply(
+        &mut self,
+        what: &Semantics,
+        effects: &Effects,
+    ) -> Emit<()> {
         let (a, b) = (self.read(&what.sources[0])?, self.read(&what.sources[1])?);
         let b = self.fit(b, a);
         let bits = self.bits_of(a);
@@ -1046,8 +1221,13 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
 
     /// `idiv`: DX:AX by the operand. The machine traps where the quotient
     /// does not fit; as C's division, that is left undefined.
-    fn divide(&mut self, what: &Semantics, effects: &Effects) -> Emit<()> {
-        let (high, low, divisor) = (self.read(&what.sources[0])?, self.read(&what.sources[1])?, self.read(&what.sources[2])?);
+    fn divide(
+        &mut self,
+        what: &Semantics,
+        effects: &Effects,
+    ) -> Emit<()> {
+        let (high, low, divisor) =
+            (self.read(&what.sources[0])?, self.read(&what.sources[1])?, self.read(&what.sources[2])?);
         let bits = self.bits_of(divisor);
         if bits != 16 {
             return Err(format!("a {}-bit dividend", bits * 2));
@@ -1068,7 +1248,11 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     // ------------------------------------------------------------------ flags
 
     /// Records what wrote the flags this instruction writes.
-    pub fn flags(&mut self, desc: Option<Desc>, effects: &Effects) {
+    pub fn flags(
+        &mut self,
+        desc: Option<Desc>,
+        effects: &Effects,
+    ) {
         let Some(desc) = desc else {
             return self.unknown_flags(effects, "an instruction");
         };
@@ -1079,7 +1263,9 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             }
             let written = match (&desc.kind, bit) {
                 (Kind::Inc | Kind::Dec, Bit::C) => continue,
-                (Kind::Shl(n) | Kind::Shr(n) | Kind::Sar(n), Bit::O) if *n != 1 => BitState::Unknown("reads OF after a shift by more than one".to_owned()),
+                (Kind::Shl(n) | Kind::Shr(n) | Kind::Sar(n), Bit::O) if *n != 1 => {
+                    BitState::Unknown("reads OF after a shift by more than one".to_owned())
+                }
                 _ => BitState::Lazy(desc.clone()),
             };
             self.bits.insert(bit, written);
@@ -1087,7 +1273,11 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// Records every flag `effects` writes as one nothing may read.
-    pub fn unknown_flags(&mut self, effects: &Effects, what: &str) {
+    pub fn unknown_flags(
+        &mut self,
+        effects: &Effects,
+        what: &str,
+    ) {
         for (bit, flag) in BITS {
             if !(effects.flags_written & flag).is_empty() {
                 self.bits.insert(bit, BitState::Unknown(format!("reads flags {what} leaves undefined")));
@@ -1096,7 +1286,10 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// Sets every flag from one description, as a call answering in the flags does.
-    pub fn set_flags(&mut self, desc: Desc) {
+    pub fn set_flags(
+        &mut self,
+        desc: Desc,
+    ) {
         let desc = Rc::new(desc);
         for (bit, _) in BITS {
             self.bits.insert(bit, BitState::Lazy(desc.clone()));
@@ -1104,12 +1297,19 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// Sets one flag to a computed value.
-    pub fn set_bit(&mut self, bit: Bit, value: Operand) {
+    pub fn set_bit(
+        &mut self,
+        bit: Bit,
+        value: Operand,
+    ) {
         self.bits.insert(bit, BitState::Value(value));
     }
 
     /// A flag's value here.
-    pub fn bit(&mut self, bit: Bit) -> Emit<Operand> {
+    pub fn bit(
+        &mut self,
+        bit: Bit,
+    ) -> Emit<Operand> {
         match self.bits.get(&bit).cloned() {
             Some(BitState::Value(value)) => Ok(value),
             Some(BitState::Lazy(desc)) => {
@@ -1122,7 +1322,12 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         }
     }
 
-    fn overflow_intrinsic(&mut self, name: &str, a: Operand, b: Operand) -> Emit<Operand> {
+    fn overflow_intrinsic(
+        &mut self,
+        name: &str,
+        a: Operand,
+        b: Operand,
+    ) -> Emit<Operand> {
         let bits = self.bits_of(a);
         let full = format!("llvm.{name}.with.overflow.i{bits}");
         let &(callee, ty) = self.unit.intrinsics.get(&full).ok_or_else(|| format!("@{full} undeclared"))?;
@@ -1133,7 +1338,11 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         Ok(flag)
     }
 
-    fn compute(&mut self, desc: &Desc, bit: Bit) -> Emit<Operand> {
+    fn compute(
+        &mut self,
+        desc: &Desc,
+        bit: Bit,
+    ) -> Emit<Operand> {
         let Desc { kind, a, b, r, bits } = desc.clone();
         let zero = self.b.int(bits, 0);
         Ok(match (bit, kind) {
@@ -1190,7 +1399,11 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// Bit `index` of `value`, as an `i1`.
-    fn bit_of(&mut self, value: Operand, index: u32) -> Operand {
+    fn bit_of(
+        &mut self,
+        value: Operand,
+        index: u32,
+    ) -> Operand {
         let bits = self.bits_of(value);
         let by = self.b.int(bits, i128::from(index));
         let shifted = self.binary(BinaryOp::LShr, value, by);
@@ -1199,7 +1412,10 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// What a conditional branch tests.
-    fn condition(&mut self, name: &str) -> Emit<Operand> {
+    fn condition(
+        &mut self,
+        name: &str,
+    ) -> Emit<Operand> {
         if let Some(value) = self.compared(name) {
             return Ok(value);
         }
@@ -1254,7 +1470,10 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
 
     /// A branch on a comparison or logical operation still in this block,
     /// as the `icmp` it is.
-    fn compared(&mut self, name: &str) -> Option<Operand> {
+    fn compared(
+        &mut self,
+        name: &str,
+    ) -> Option<Operand> {
         let states: Vec<Rc<Desc>> = BITS
             .iter()
             .filter_map(|(bit, _)| match self.bits.get(bit) {
@@ -1306,7 +1525,10 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     // ----------------------------------------------------------------- memory
 
     /// The width of a location, and its value.
-    pub fn read(&mut self, loc: &Loc) -> Emit<Operand> {
+    pub fn read(
+        &mut self,
+        loc: &Loc,
+    ) -> Emit<Operand> {
         match loc {
             Loc::Reg(reg) => match reg.register {
                 register if self.unit.objects.names_data(register) => {
@@ -1321,7 +1543,10 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
                 }
                 Register::CS => {
                     let code = self.unit.objects.code().ok_or("reads cs, with no code segment")?;
-                    let (segment, word) = (self.b.context.types.ptr(crate::segment(&self.unit.facts.spaces)), self.b.context.types.int(16));
+                    let (segment, word) = (
+                        self.b.context.types.ptr(crate::segment(&self.unit.facts.spaces)),
+                        self.b.context.types.int(16),
+                    );
                     let selector = self.cast(CastOp::AddrSpaceCast, Operand::Constant(code), segment);
                     Ok(self.cast(CastOp::PtrToInt, selector, word))
                 }
@@ -1329,15 +1554,26 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             },
             Loc::Imm(imm) => match imm.address {
                 None => Ok(self.b.int(imm.width * 8, i128::from(imm.value))),
-                Some(address) if imm.width == 2 && address.space == Space::Segment && !self.unit.objects.in_dgroup(address.index) => {
+                Some(address)
+                    if imm.width == 2
+                        && address.space == Space::Segment
+                        && !self.unit.objects.in_dgroup(address.index) =>
+                {
                     // An offset into a far segment: its far pointer's low word.
-                    let far = self.unit.objects.far_address(self.b.context, address.index, address.disp).ok_or("an address outside DGROUP")?;
+                    let far = self
+                        .unit
+                        .objects
+                        .far_address(self.b.context, address.index, address.disp)
+                        .ok_or("an address outside DGROUP")?;
                     let (long, word) = (self.b.context.types.int(32), self.b.context.types.int(16));
                     let whole = self.cast(CastOp::PtrToInt, Operand::Constant(far), long);
                     Ok(self.cast(CastOp::Trunc, whole, word))
                 }
                 Some(address) if imm.width == 2 => {
-                    if let Some(key) = (address.space == Space::Segment).then(|| self.unit.objects.key(address.index, address.disp)).flatten() {
+                    if let Some(key) = (address.space == Space::Segment)
+                        .then(|| self.unit.objects.key(address.index, address.disp))
+                        .flatten()
+                    {
                         return Ok(self.b.int(16, i128::from(key)));
                     }
                     let pointer = self.symbol(address)?;
@@ -1357,7 +1593,11 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         }
     }
 
-    pub fn write(&mut self, loc: &Loc, value: Operand) -> Emit<()> {
+    pub fn write(
+        &mut self,
+        loc: &Loc,
+        value: Operand,
+    ) -> Emit<()> {
         match loc {
             Loc::Reg(reg) => match reg.register {
                 Register::ES => {
@@ -1381,19 +1621,26 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     /// DGROUP's selector: the segment of any of its objects.
     fn selector(&mut self) -> Emit<Operand> {
         let object = self.unit.objects.any().ok_or("no DGROUP object to name DS by")?;
-        let (far, segment) = (self.b.context.types.ptr(self.unit.facts.spaces.far), self.b.context.types.ptr(crate::segment(&self.unit.facts.spaces)));
+        let (far, segment) = (
+            self.b.context.types.ptr(self.unit.facts.spaces.far),
+            self.b.context.types.ptr(crate::segment(&self.unit.facts.spaces)),
+        );
         let far = self.cast(CastOp::AddrSpaceCast, Operand::Constant(object.reference), far);
         Ok(self.cast(CastOp::AddrSpaceCast, far, segment))
     }
 
     /// Where a relocated address points.
-    fn symbol(&mut self, address: Addr) -> Emit<Operand> {
+    fn symbol(
+        &mut self,
+        address: Addr,
+    ) -> Emit<Operand> {
         match address.space {
             Space::Segment => {
                 if !self.unit.objects.in_dgroup(address.index) {
                     return Err("an address outside DGROUP".to_owned());
                 }
-                let object = self.unit.objects.at(address.index, address.disp).ok_or("an address past its segment")?.clone();
+                let object =
+                    self.unit.objects.at(address.index, address.disp).ok_or("an address past its segment")?.clone();
                 Ok(self.offset(Operand::Constant(object.reference), address.disp - object.start))
             }
             Space::External => {
@@ -1406,7 +1653,10 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// The address of an instruction's memory operand.
-    pub fn pointer(&mut self, insn: &Insn) -> Emit<Operand> {
+    pub fn pointer(
+        &mut self,
+        insn: &Insn,
+    ) -> Emit<Operand> {
         let raw = &insn.insn;
         let (base, index) = (raw.memory_base(), raw.memory_index());
         if base.size() == 4 || index.size() == 4 {
@@ -1418,7 +1668,10 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             one => one,
         };
         let disp = i64::from(raw.memory_displacement32() as u16 as i16);
-        let resolved = insn.disp_at.map(|at| self.unit.facts.found.resolve(at as i64, disp)).filter(|one| one.space != Space::Literal);
+        let resolved = insn
+            .disp_at
+            .map(|at| self.unit.facts.found.resolve(at as i64, disp))
+            .filter(|one| one.space != Space::Literal);
         let mut sum: Option<Operand> = None;
         for register in [base, index] {
             if matches!(register, Register::None | Register::BP) {
@@ -1458,7 +1711,11 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// The address `segment:offset`, the offset a word.
-    pub fn segmented(&mut self, segment: Register, offset: Operand) -> Emit<Operand> {
+    pub fn segmented(
+        &mut self,
+        segment: Register,
+        offset: Operand,
+    ) -> Emit<Operand> {
         match segment {
             segment if self.unit.objects.names_data(segment) => {
                 let ptr = self.b.context.types.ptr(0);
@@ -1475,7 +1732,11 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// `sum + disp` as a word, either part absent.
-    fn plus(&mut self, sum: Option<Operand>, disp: i64) -> Operand {
+    fn plus(
+        &mut self,
+        sum: Option<Operand>,
+        disp: i64,
+    ) -> Operand {
         let constant = self.b.int(16, i128::from(disp));
         match sum {
             Some(sum) if disp == 0 => sum,
@@ -1485,7 +1746,12 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// Where `[bp + disp]` is in the frame, for an access `width` wide.
-    fn frame_pointer(&mut self, disp: i64, width: i64, indexed: bool) -> Emit<Operand> {
+    fn frame_pointer(
+        &mut self,
+        disp: i64,
+        width: i64,
+        indexed: bool,
+    ) -> Emit<Operand> {
         if self.frame != Frame::Active {
             return Err(format!("[bp{disp:+}] outside its frame"));
         }
@@ -1517,7 +1783,11 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     /// `push bp` saves the caller's, `mov bp,sp` points BP at it, `sub
     /// sp,n` reserves the locals under it, and `leave` (or `mov sp,bp`)
     /// and `pop bp` take them down. Whether `what` was one.
-    fn frame_step(&mut self, what: &Semantics, effects: &Effects) -> Emit<bool> {
+    fn frame_step(
+        &mut self,
+        what: &Semantics,
+        effects: &Effects,
+    ) -> Emit<bool> {
         let is = |loc: &Loc, register: Register| matches!(loc, Loc::Reg(Reg { register: one, .. }) if *one == register);
         let (dest, source) = (what.dests.first(), what.sources.first());
         let frame = |this: &Self| this.bp.filter(|_| this.frame == Frame::Active);
@@ -1531,7 +1801,9 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
                 self.depth += 2;
                 self.deepest = self.deepest.max(self.depth);
             }
-            Operation::Move if dest.is_some_and(|one| is(one, Register::BP)) && source.is_some_and(|one| is(one, Register::SP)) => {
+            Operation::Move
+                if dest.is_some_and(|one| is(one, Register::BP)) && source.is_some_and(|one| is(one, Register::SP)) =>
+            {
                 if self.frame != Frame::Before || self.depth != 2 {
                     return Err("points bp at the stack other than to make its frame".to_owned());
                 }
@@ -1540,7 +1812,8 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
                 self.frame = Frame::Active;
             }
             Operation::Binary if dest.is_some_and(|one| is(one, Register::SP)) => {
-                let (Some(at), Some(Loc::Imm(Imm { value, address: None, .. }))) = (frame(self), what.sources.get(1)) else {
+                let (Some(at), Some(Loc::Imm(Imm { value, address: None, .. }))) = (frame(self), what.sources.get(1))
+                else {
                     return Err("moves sp outside its own frame".to_owned());
                 };
                 let bytes = match what.name.as_deref() {
@@ -1557,7 +1830,11 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
                 self.forget_above(self.depth);
                 self.flags(None, effects);
             }
-            Operation::Leave | Operation::Move if what.op == Operation::Leave || dest.is_some_and(|one| is(one, Register::SP)) && source.is_some_and(|one| is(one, Register::BP)) => {
+            Operation::Leave | Operation::Move
+                if what.op == Operation::Leave
+                    || dest.is_some_and(|one| is(one, Register::SP))
+                        && source.is_some_and(|one| is(one, Register::BP)) =>
+            {
                 let at = frame(self).ok_or("takes down a frame it did not make")?;
                 self.depth = at;
                 self.forget_above(at);
@@ -1570,14 +1847,21 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             // stays in SSA, not in the frame, so saving what the caller left
             // reads nothing unless the procedure reads it once restored.
             Operation::Push if self.prologue && frame(self).is_some() => {
-                let Some(Loc::Reg(Reg { register, .. })) = source.filter(|one| loc_width(one) == Some(2)) else { return Ok(false) };
+                let Some(Loc::Reg(Reg { register, .. })) = source.filter(|one| loc_width(one) == Some(2)) else {
+                    return Ok(false);
+                };
                 let Some(index) = tracked(*register) else { return Ok(false) };
                 let value = self.get(Var::Reg(index, Half::Low));
                 self.depth += 2;
                 self.deepest = self.deepest.max(self.depth);
                 self.saved.push((self.depth, *register, value));
             }
-            Operation::Pop if frame(self).is_some() && dest.is_some_and(|one| self.saved.iter().any(|&(at, register, _)| at == self.depth && is(one, register))) => {
+            Operation::Pop
+                if frame(self).is_some()
+                    && dest.is_some_and(|one| {
+                        self.saved.iter().any(|&(at, register, _)| at == self.depth && is(one, register))
+                    }) =>
+            {
                 let &(_, register, value) = self.saved.iter().find(|&&(at, _, _)| at == self.depth).expect("matched");
                 self.depth -= 2;
                 self.set_register(register, value)?;
@@ -1598,7 +1882,10 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// Stores `value` below the pushed bytes.
-    pub fn push(&mut self, value: Operand) -> Emit<()> {
+    pub fn push(
+        &mut self,
+        value: Operand,
+    ) -> Emit<()> {
         let bytes = i64::from(self.bits_of(value) / 8).max(2);
         let value = if self.bits_of(value) == 8 {
             let word = self.b.context.types.int(16);
@@ -1617,13 +1904,24 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// The pushed bytes above `depth` are gone.
-    fn forget_above(&mut self, depth: i64) {
+    fn forget_above(
+        &mut self,
+        depth: i64,
+    ) {
         self.pushes.retain(|&at, _| at <= depth);
     }
 
     /// The `width` bytes at `depth`: those of what a push stored, or a load.
-    fn pushed(&mut self, depth: i64, width: u32) -> Operand {
-        let found = self.pushes.iter().map(|(&at, &(value, bytes))| (at - depth, value, bytes)).find(|&(offset, _, bytes)| offset >= 0 && offset + i64::from(width) <= bytes);
+    fn pushed(
+        &mut self,
+        depth: i64,
+        width: u32,
+    ) -> Operand {
+        let found = self
+            .pushes
+            .iter()
+            .map(|(&at, &(value, bytes))| (at - depth, value, bytes))
+            .find(|&(offset, _, bytes)| offset >= 0 && offset + i64::from(width) <= bytes);
         if let Some((offset, value, bytes)) = found {
             if offset == 0 && bytes == i64::from(width) {
                 return value;
@@ -1631,7 +1929,8 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             if let Some(constant) = self.constant(value) {
                 return self.b.int(width * 8, i128::from(constant >> (8 * offset)));
             }
-            let (by, ty) = (self.b.int(self.bits_of(value), i128::from(8 * offset)), self.b.context.types.int(width * 8));
+            let (by, ty) =
+                (self.b.int(self.bits_of(value), i128::from(8 * offset)), self.b.context.types.int(width * 8));
             let shifted = self.binary(BinaryOp::LShr, value, by);
             return self.cast(CastOp::Trunc, shifted, ty);
         }
@@ -1640,7 +1939,10 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         self.b.load(ty, slot, false, "")
     }
 
-    pub fn pop(&mut self, width: u32) -> Emit<Operand> {
+    pub fn pop(
+        &mut self,
+        width: u32,
+    ) -> Emit<Operand> {
         let bytes = i64::from(width);
         if self.depth < bytes {
             return Err("pops what it did not push".to_owned());
@@ -1652,12 +1954,19 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// The pushed byte `depth` bytes below where the pushes began.
-    fn slot(&mut self, depth: i64) -> Operand {
+    fn slot(
+        &mut self,
+        depth: i64,
+    ) -> Operand {
         self.offset(self.top, -depth)
     }
 
     /// The word at `depth` in the pushed bytes.
-    pub fn stack_word(&mut self, depth: i64, width: u32) -> Emit<Operand> {
+    pub fn stack_word(
+        &mut self,
+        depth: i64,
+        width: u32,
+    ) -> Emit<Operand> {
         if depth > self.depth || depth < i64::from(width) {
             return Err("reads arguments it did not push".to_owned());
         }
@@ -1668,7 +1977,10 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         self.depth
     }
 
-    pub fn popped(&mut self, bytes: i64) -> Emit<()> {
+    pub fn popped(
+        &mut self,
+        bytes: i64,
+    ) -> Emit<()> {
         if self.depth < bytes {
             return Err("a call pops what was not pushed".to_owned());
         }
@@ -1678,7 +1990,10 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// An integer constant's value.
-    pub fn constant(&self, value: Operand) -> Option<i64> {
+    pub fn constant(
+        &self,
+        value: Operand,
+    ) -> Option<i64> {
         let Operand::Constant(id) = value else { return None };
         match self.b.context.get(id).kind {
             ConstantKind::Int(bits) => Some(bits as i64),
@@ -1688,7 +2003,11 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
 
     // ------------------------------------------------------------------ calls
 
-    fn call(&mut self, callee: &str, at: usize) -> Emit<()> {
+    fn call(
+        &mut self,
+        callee: &str,
+        at: usize,
+    ) -> Emit<()> {
         match callee {
             FRAME_ENTRY => return self.enter_frame(),
             FRAME_EXIT => return self.exit_frame(),
@@ -1696,7 +2015,8 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             _ => {}
         }
         if let Some(procedure) = self.unit.procedures.get(callee).cloned() {
-            let (reference, ty, interface) = procedure.map_err(|why| format!("calls {callee}, whose interface is unknown: {why}"))?;
+            let (reference, ty, interface) =
+                procedure.map_err(|why| format!("calls {callee}, whose interface is unknown: {why}"))?;
             let mut arguments = Vec::new();
             let words = interface.popped / 2;
             for index in 0..words {
@@ -1720,14 +2040,20 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
 
     /// A call of runtime routine `callee`, which pops `stack` bytes where
     /// its declaration does not say.
-    pub fn runtime_call(&mut self, callee: &str, at: usize, stack: Option<i64>) -> Emit<()> {
+    pub fn runtime_call(
+        &mut self,
+        callee: &str,
+        at: usize,
+        stack: Option<i64>,
+    ) -> Emit<()> {
         let contract = self.unit.facts.contract(at).ok_or_else(|| format!("{callee} has no contract"))?.clone();
         let spec = match self.unit.callees.named.get(callee) {
             Some(Ok(spec)) => spec.clone(),
             Some(Err(why)) => return Err(why.clone()),
             None => return Err(format!("{callee} is undeclared")),
         };
-        let direct: Vec<Register> = llrm_qbruntime::direct_slots(&contract).into_iter().filter_map(crate::machine::from_contract).collect();
+        let direct: Vec<Register> =
+            llrm_qbruntime::direct_slots(&contract).into_iter().filter_map(crate::machine::from_contract).collect();
         let mut arguments = Vec::new();
         for &root in &spec.inputs {
             arguments.push(if direct.contains(&root) { self.register(word(root))? } else { self.b.int(16, 0) });
@@ -1741,8 +2067,11 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         if spec.pops {
             self.popped(stack)?;
         }
-        let disturbed: Vec<Register> =
-            llrm_qbruntime::disturbs(&contract).into_iter().filter_map(crate::machine::from_contract).filter(|&one| one != crate::machine::FLAGS).collect();
+        let disturbed: Vec<Register> = llrm_qbruntime::disturbs(&contract)
+            .into_iter()
+            .filter_map(crate::machine::from_contract)
+            .filter(|&one| one != crate::machine::FLAGS)
+            .collect();
         let why = format!("{callee} clobbers it");
         self.clobber(&disturbed, &why);
         if contract.clobbers.contains(&llrm_qbruntime::Reg::Es) {
@@ -1762,7 +2091,11 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// Puts a callee's answer in the registers it answers in.
-    fn answered(&mut self, value: Operand, registers: &[Register]) -> Emit<()> {
+    fn answered(
+        &mut self,
+        value: Operand,
+        registers: &[Register],
+    ) -> Emit<()> {
         let word_ty = self.b.context.types.int(16);
         match registers {
             [one] => self.set_word(*one, value),
@@ -1819,7 +2152,10 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             return Err(format!("{FRAME_EXIT} with bytes pushed"));
         }
         self.frame = Frame::After;
-        self.clobber(&[Register::EBX, Register::ECX, Register::ESI, Register::EDI], &format!("{FRAME_EXIT} restores it"));
+        self.clobber(
+            &[Register::EBX, Register::ECX, Register::ESI, Register::EDI],
+            &format!("{FRAME_EXIT} restores it"),
+        );
         Ok(())
     }
 
@@ -1910,7 +2246,16 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             let ty = self.b.context.types.intern(Type::Array { element: byte, count: self.deepest as u64 });
             let stack = self.b.alloca(ty, "stack");
             let index = self.b.int(16, i128::from(self.deepest));
-            let made = self.b.function.create_instruction(Opcode::GetElementPtr { source: byte }, self.b.type_of(stack), vec![stack, index], Flags::default(), Some("pushed"));
+            let made = self
+                .b
+                .function
+                .create_instruction(
+                    Opcode::GetElementPtr { source: byte },
+                    self.b.type_of(stack),
+                    vec![stack, index],
+                    Flags::default(),
+                    Some("pushed"),
+                );
             self.b.function.insert(made, Position::Before(inst)).expect("the entry");
             let value = Operand::Value(self.b.function.instruction(made).result.expect("a pointer"));
             self.b.function.replace_all_uses_with(top, value);
@@ -1942,7 +2287,12 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
 
 /// The bits of `value` anything observes, as LLVM's DemandedBits finds
 /// them, for the few operations a register's partial write is built of.
-fn demanded(function: &llrm_mir::Function, context: &llrm_mir::Context, value: ValueId, memo: &mut HashMap<ValueId, u64>) -> u64 {
+fn demanded(
+    function: &llrm_mir::Function,
+    context: &llrm_mir::Context,
+    value: ValueId,
+    memo: &mut HashMap<ValueId, u64>,
+) -> u64 {
     let width = context.types.int_bits(function.value(value).ty).unwrap_or(64);
     let all = if width >= 64 { u64::MAX } else { (1u64 << width) - 1 };
     if let Some(&known) = memo.get(&value) {
@@ -1960,7 +2310,9 @@ fn demanded(function: &llrm_mir::Function, context: &llrm_mir::Context, value: V
     let mut out = 0u64;
     for one in function.users(value).to_vec() {
         let user = function.instruction(one.user);
-        let result = |memo: &mut HashMap<ValueId, u64>| user.result.map_or(all, |result| demanded(function, context, result, memo));
+        let result = |memo: &mut HashMap<ValueId, u64>| {
+            user.result.map_or(all, |result| demanded(function, context, result, memo))
+        };
         let other = user.operands.get(1 - one.index as usize).filter(|_| one.index < 2);
         out |= match &user.opcode {
             Opcode::Binary(BinaryOp::And) => result(memo) & other.and_then(constant).unwrap_or(u64::MAX),
@@ -1992,7 +2344,10 @@ fn demanded(function: &llrm_mir::Function, context: &llrm_mir::Context, value: V
 
 /// Whether a node ends its block's control: a branch, jump or return.
 fn is_transfer(node: &Node) -> bool {
-    matches!(node.semantics().op, Operation::Jump | Operation::Branch | Operation::Return | Operation::Escape)
+    matches!(
+        node.semantics().op,
+        Operation::Jump | Operation::Branch | Operation::Return | Operation::Escape
+    )
 }
 
 fn insn_of(node: &Node) -> Option<&Insn> {
@@ -2013,7 +2368,10 @@ fn loc_width(loc: &Loc) -> Option<u32> {
 }
 
 fn is_high_byte(register: Register) -> bool {
-    matches!(register, Register::AH | Register::BH | Register::CH | Register::DH)
+    matches!(
+        register,
+        Register::AH | Register::BH | Register::CH | Register::DH
+    )
 }
 
 /// A root's 16-bit register.
@@ -2029,7 +2387,10 @@ fn word(root: Register) -> Register {
     }
 }
 
-fn half_name(index: usize, half: Half) -> String {
+fn half_name(
+    index: usize,
+    half: Half,
+) -> String {
     match half {
         Half::Low => name(word(TRACKED[index])),
         Half::High => format!("the high word of {}", name(TRACKED[index])),

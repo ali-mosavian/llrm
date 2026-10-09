@@ -120,12 +120,21 @@ struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
-    fn error<T>(&self, line: usize, rule: &str, message: impl std::fmt::Display) -> Result<T, String> {
+    fn error<T>(
+        &self,
+        line: usize,
+        rule: &str,
+        message: impl std::fmt::Display,
+    ) -> Result<T, String> {
         Err(format!("{}:{line}: rule {rule}: {message}", self.file))
     }
 }
 
-fn eval_set(table: &Table, sets: &IndexMap<String, RSet>, expr: &SetExpr) -> Result<IndexSet<String>, String> {
+fn eval_set(
+    table: &Table,
+    sets: &IndexMap<String, RSet>,
+    expr: &SetExpr,
+) -> Result<IndexSet<String>, String> {
     let every = || table.mnemonics.keys().cloned();
     Ok(match expr {
         SetExpr::Name(name) => match sets.get(name) {
@@ -139,8 +148,12 @@ fn eval_set(table: &Table, sets: &IndexMap<String, RSet>, expr: &SetExpr) -> Res
             }
             every().filter(|one| table.mnemonics[one].op == *op).collect()
         }
-        SetExpr::Shape(text) => every().filter(|one| table.mnemonics[one].shapes.iter().any(|shape| shape.text == *text)).collect(),
-        SetExpr::Fixed => every().filter(|one| table.mnemonics[one].shapes.iter().any(|shape| !shape.fixed.is_empty())).collect(),
+        SetExpr::Shape(text) => {
+            every().filter(|one| table.mnemonics[one].shapes.iter().any(|shape| shape.text == *text)).collect()
+        }
+        SetExpr::Fixed => {
+            every().filter(|one| table.mnemonics[one].shapes.iter().any(|shape| !shape.fixed.is_empty())).collect()
+        }
         SetExpr::Reads(flags) => {
             let mut mask = 0;
             for flag in flags {
@@ -169,7 +182,11 @@ fn common<T: Clone + PartialEq>(items: impl IntoIterator<Item = T>) -> Option<T>
     items.all(|one| one == first).then_some(first)
 }
 
-pub fn resolve(file: &File, table: &Table, name: &str) -> Result<Program, String> {
+pub fn resolve(
+    file: &File,
+    table: &Table,
+    name: &str,
+) -> Result<Program, String> {
     let mut metas: IndexMap<String, Vec<String>> = IndexMap::new();
     for meta in &file.metas {
         let mut fields = Vec::new();
@@ -179,7 +196,12 @@ pub fn resolve(file: &File, table: &Table, name: &str) -> Result<Program, String
             } else if FIELDS.contains(&field.as_str()) {
                 fields.push(field.clone());
             } else {
-                return Err(format!("{name}:{}: meta {}: unknown field {field}; the fields are {}", meta.line, meta.name, FIELDS.join(", ")));
+                return Err(format!(
+                    "{name}:{}: meta {}: unknown field {field}; the fields are {}",
+                    meta.line,
+                    meta.name,
+                    FIELDS.join(", ")
+                ));
             }
         }
         fields.dedup();
@@ -189,14 +211,18 @@ pub fn resolve(file: &File, table: &Table, name: &str) -> Result<Program, String
     }
     let mut sets: IndexMap<String, RSet> = IndexMap::new();
     for set in &file.sets {
-        let names: Vec<String> =
-            eval_set(table, &sets, &set.expr).map_err(|one| format!("{name}:{}: set {}: {one}", set.line, set.name))?.into_iter().collect();
+        let names: Vec<String> = eval_set(table, &sets, &set.expr)
+            .map_err(|one| format!("{name}:{}: set {}: {one}", set.line, set.name))?
+            .into_iter()
+            .collect();
         if names.is_empty() {
             return Err(format!("{name}:{}: set {} is empty", set.line, set.name));
         }
         let members = || names.iter().map(|one| &table.mnemonics[one]);
         // A family: each member pins one register, which names it.
-        let pinned = |one: &table::Mnem| one.shapes.iter().flat_map(|shape| shape.fixed.iter().cloned()).collect::<IndexSet<String>>();
+        let pinned = |one: &table::Mnem| {
+            one.shapes.iter().flat_map(|shape| shape.fixed.iter().cloned()).collect::<IndexSet<String>>()
+        };
         let fixed = if members().all(|one| pinned(one).len() == 1) {
             names.iter().map(|one| (pinned(&table.mnemonics[one])[0].clone(), one.clone())).collect()
         } else {
@@ -216,7 +242,11 @@ pub fn resolve(file: &File, table: &Table, name: &str) -> Result<Program, String
     Ok(Program { metas, sets, groups })
 }
 
-fn resolve_group(cx: &Ctx, group: &Group, seen: &mut IndexSet<String>) -> Result<RGroup, String> {
+fn resolve_group(
+    cx: &Ctx,
+    group: &Group,
+    seen: &mut IndexSet<String>,
+) -> Result<RGroup, String> {
     let Some(walk) = group.walk.clone() else {
         return Err(format!("{}:{}: group {} has no walk", cx.file, group.line, group.name));
     };
@@ -234,13 +264,21 @@ fn resolve_group(cx: &Ctx, group: &Group, seen: &mut IndexSet<String>) -> Result
         let first = &rules[0];
         for rule in &rules[1..] {
             if rule.gap != first.gap {
-                return cx.error(rule.line, &rule.name, format!("its gap differs from rule {}'s; a gap group has one", first.name));
+                return cx.error(
+                    rule.line,
+                    &rule.name,
+                    format!("its gap differs from rule {}'s; a gap group has one", first.name),
+                );
             }
             if let Some(gap) = &rule.gap {
                 for var in call_idents(gap) {
                     let (Some(a), Some(b)) = (rule.vars.get(&var), first.vars.get(&var)) else { continue };
                     if (a.side, a.index) != (b.side, b.index) {
-                        return cx.error(rule.line, &rule.name, format!("binds {var} elsewhere than rule {} does", first.name));
+                        return cx.error(
+                            rule.line,
+                            &rule.name,
+                            format!("binds {var} elsewhere than rule {} does", first.name),
+                        );
                     }
                 }
             }
@@ -265,9 +303,16 @@ fn call_idents(call: &Call) -> Vec<String> {
 
 /// How many of `listed` operands are destinations, by the forms' shapes:
 /// one count must fit, else `/` has to say.
-fn dests_of<'a>(shapes: impl Iterator<Item = &'a Shape>, listed: usize, rest: bool, what: &str) -> Result<usize, String> {
+fn dests_of<'a>(
+    shapes: impl Iterator<Item = &'a Shape>,
+    listed: usize,
+    rest: bool,
+    what: &str,
+) -> Result<usize, String> {
     let counts: BTreeSet<usize> = shapes
-        .filter(|shape| if rest { shape.dests + shape.sources >= listed } else { shape.dests + shape.sources == listed })
+        .filter(
+            |shape| if rest { shape.dests + shape.sources >= listed } else { shape.dests + shape.sources == listed },
+        )
         .map(|shape| shape.dests.min(listed))
         .collect();
     match counts.len() {
@@ -277,7 +322,11 @@ fn dests_of<'a>(shapes: impl Iterator<Item = &'a Shape>, listed: usize, rest: bo
     }
 }
 
-fn resolve_head<'t>(cx: &Ctx<'t>, rule: &Rule, head: &Head) -> Result<(Vec<String>, Option<Vec<(String, String)>>, Vec<&'t Shape>), String> {
+fn resolve_head<'t>(
+    cx: &Ctx<'t>,
+    rule: &Rule,
+    head: &Head,
+) -> Result<(Vec<String>, Option<Vec<(String, String)>>, Vec<&'t Shape>), String> {
     let t = cx.table;
     let names: Vec<String> = match head {
         Head::Any(ops) => {
@@ -304,12 +353,17 @@ fn resolve_head<'t>(cx: &Ctx<'t>, rule: &Rule, head: &Head) -> Result<(Vec<Strin
         }
     };
     let shapes = names.iter().flat_map(|one| &t.mnemonics[one].shapes).collect();
-    let ops: Vec<String> = names.iter().map(|one| t.mnemonics[one].op.clone()).collect::<IndexSet<_>>().into_iter().collect();
+    let ops: Vec<String> =
+        names.iter().map(|one| t.mnemonics[one].op.clone()).collect::<IndexSet<_>>().into_iter().collect();
     let names = names.iter().map(|one| (one.clone(), t.mnemonics[one].op.clone())).collect();
     Ok((ops, Some(names), shapes))
 }
 
-fn resolve_rule(cx: &Ctx, rule: &Rule, walk: &Walk) -> Result<RRule, String> {
+fn resolve_rule(
+    cx: &Ctx,
+    rule: &Rule,
+    walk: &Walk,
+) -> Result<RRule, String> {
     let fail = |message: String| cx.error(rule.line, &rule.name, message);
     let mut insns = Vec::new();
     let mut gap = None;
@@ -357,7 +411,9 @@ fn resolve_rule(cx: &Ctx, rule: &Rule, walk: &Walk) -> Result<RRule, String> {
         return fail("a gap needs an instruction after it".into());
     }
     match walk.kind {
-        WalkKind::Gap if gap.is_none() => return fail("a gap walk's rules have a gap after the first instruction".into()),
+        WalkKind::Gap if gap.is_none() => {
+            return fail("a gap walk's rules have a gap after the first instruction".into());
+        }
         WalkKind::Gap => {}
         _ if gap.is_some() => return fail("only a gap walk takes a gap".into()),
         WalkKind::Each if insns.len() != 1 || end => return fail("an each walk matches one instruction".into()),
@@ -425,15 +481,32 @@ fn resolve_rule(cx: &Ctx, rule: &Rule, walk: &Walk) -> Result<RRule, String> {
         check_call(cx, rule, &guard.call, &vars, insns.len(), rule.rewrite.len(), true, false)?;
         if reads_built(&guard.call) { post.push(guard.clone()) } else { pre.push(guard.clone()) }
     }
-    Ok(RRule { name: rule.name.clone(), line: rule.line, insns, gap, end, vars, pre, post, items: rule.rewrite.clone(), item_dests, window, defs })
+    Ok(RRule {
+        name: rule.name.clone(),
+        line: rule.line,
+        insns,
+        gap,
+        end,
+        vars,
+        pre,
+        post,
+        items: rule.rewrite.clone(),
+        item_dests,
+        window,
+        defs,
+    })
 }
 
 fn reads_built(call: &Call) -> bool {
-    call.args.iter().any(|arg| match arg {
-        Arg::Built(_) => true,
-        Arg::Call(inner) => reads_built(inner),
-        _ => false,
-    })
+    call.args
+        .iter()
+        .any(
+            |arg| match arg {
+                Arg::Built(_) => true,
+                Arg::Call(inner) => reads_built(inner),
+                _ => false,
+            },
+        )
 }
 
 fn head_text(head: &Head) -> String {
@@ -444,7 +517,13 @@ fn head_text(head: &Head) -> String {
     }
 }
 
-fn resolve_insn(cx: &Ctx, rule: &Rule, pattern: &InsnPat, slot: usize, vars: &mut IndexMap<String, Var>) -> Result<RInsn, String> {
+fn resolve_insn(
+    cx: &Ctx,
+    rule: &Rule,
+    pattern: &InsnPat,
+    slot: usize,
+    vars: &mut IndexMap<String, Var>,
+) -> Result<RInsn, String> {
     let fail = |message: String| cx.error(rule.line, &rule.name, message);
     let (ops, names, shapes) = resolve_head(cx, rule, &pattern.head)?;
     let dests = match pattern.split {
@@ -465,7 +544,9 @@ fn resolve_insn(cx: &Ctx, rule: &Rule, pattern: &InsnPat, slot: usize, vars: &mu
         let (side, index) = if at < dests { (Side::D, at) } else { (Side::S, at - dests) };
         if let OperandPat::Bind { name, kind } = operand {
             match (vars.get(name), kind) {
-                (Some(var), None) if var.ty == Ty::Name => return fail(format!("{name} names a mnemonic, not an operand")),
+                (Some(var), None) if var.ty == Ty::Name => {
+                    return fail(format!("{name} names a mnemonic, not an operand"));
+                }
                 (Some(_), None) => {}
                 (Some(_), Some(_)) => return fail(format!("{name} is bound twice; its later uses take no kind")),
                 (None, None) => return fail(format!("{name} is not bound; give its kind, as {name}:reg")),
@@ -501,7 +582,9 @@ fn check_call(
     let fail = |message: String| cx.error(rule.line, &rule.name, message);
     for arg in &call.args {
         match arg {
-            Arg::Slot(slot) if *slot >= slots => return fail(format!("@{slot} is past the pattern's {slots} instructions")),
+            Arg::Slot(slot) if *slot >= slots => {
+                return fail(format!("@{slot} is past the pattern's {slots} instructions"));
+            }
             Arg::Built(k) if !guard_context || *k >= built => {
                 return fail(format!("${k} is not an earlier item of the rewrite"));
             }
@@ -583,7 +666,9 @@ fn check_new(
                 match one {
                     OpExpr::Var(name) => match vars.get(name) {
                         None => return fail(format!("{name} is not bound")),
-                        Some(var) if var.ty == Ty::Name => return fail(format!("{name} names a mnemonic, not an operand")),
+                        Some(var) if var.ty == Ty::Name => {
+                            return fail(format!("{name} names a mnemonic, not an operand"));
+                        }
                         _ => {}
                     },
                     OpExpr::Call(call) => check_call(cx, rule, call, vars, insns.len(), index, false, false)?,

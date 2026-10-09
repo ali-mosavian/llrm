@@ -4,13 +4,19 @@
 use std::sync::Arc;
 
 use iced_x86::Register;
-use crate::support::hash::IndexMap;
 
 use super::*;
 use crate::backend::cpu;
 use crate::model::ir::{Addr, Address, Mem, Reg, Semantics};
+use crate::support::hash::IndexMap;
 
-fn _insn(at: i64, operation: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Arc<Insn> {
+fn _insn(
+    at: i64,
+    operation: Operation,
+    name: &str,
+    dests: Vec<Loc>,
+    sources: Vec<Loc>,
+) -> Arc<Insn> {
     Arc::new(Insn::new(
         at,
         Some((at, at + 1)),
@@ -24,14 +30,19 @@ fn _body(insns: Vec<Arc<Insn>>) -> LirBody {
     LirBody::new("latency", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default())
 }
 
-fn reg(register: Register, width: u32) -> Loc {
+fn reg(
+    register: Register,
+    width: u32,
+) -> Loc {
     Loc::Reg(Reg { register, width })
 }
 
 /// Python `is`: the same body, every occurrence the same object.
-fn same(result: &LirBody, original: &LirBody) -> bool {
-    result == original
-        && result.insns().iter().zip(original.insns()).all(|(one, other)| Arc::ptr_eq(one, &other))
+fn same(
+    result: &LirBody,
+    original: &LirBody,
+) -> bool {
+    result == original && result.insns().iter().zip(original.insns()).all(|(one, other)| Arc::ptr_eq(one, &other))
 }
 
 fn names(body: &LirBody) -> Vec<String> {
@@ -117,12 +128,8 @@ fn test_pentium_orders_a_prefixed_move_before_its_uv_pair() {
 /// P5 left `lea bx,[bp-4]; mov eax,ecx` unpaired by treating LEA as a load.
 #[test]
 fn test_pentium_pairs_a_frame_lea_after_an_independent_prefixed_move() {
-    let address = Address {
-        through: Register::BP,
-        offset: -4,
-        disp_width: 1,
-        ..Address::new(Some(Addr::new(Space::Frame, -4)))
-    };
+    let address =
+        Address { through: Register::BP, offset: -4, disp_width: 1, ..Address::new(Some(Addr::new(Space::Frame, -4))) };
     let lea = _insn(0, Operation::Address, "lea", vec![reg(Register::BX, 2)], vec![Loc::Address(address)]);
     // The 32-bit move has the operand-size prefix in this 16-bit mode and
     // consequently consumes P5's U pipe. GCC's Pentium model classifies a

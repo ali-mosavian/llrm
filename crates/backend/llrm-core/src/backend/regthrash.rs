@@ -18,12 +18,12 @@ use std::sync::Arc;
 use iced_x86::Register;
 
 use crate::backend::liveness;
-use crate::backend::peephole::{DeadAfter, Lanes, _lanes, _register_effects, _register_operand, id};
+use crate::backend::peephole::{_lanes, _register_effects, _register_operand, DeadAfter, Lanes, id};
 use crate::backend::select;
-use crate::support::hash::IndexMap;
 use crate::model::ir::{Loc, Operation, Reg, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
+use crate::support::hash::IndexMap;
 
 // Enough to settle. Each pass makes at most one rename per block, because a
 // rename changes the liveness every later candidate is judged against, and
@@ -31,8 +31,8 @@ use crate::model::passes::LIRTransform;
 pub const ROUNDS: usize = 8;
 
 pub fn thrashed(body: LirBody) -> LirBody {
-    // A rename leaves its block's live-in as it was, so what is dead at every block's exit is the same whatever is renamed, and the
-    // blocks do not depend on one another: each is renamed to a fixed point of its own.
+    // A rename leaves its block's live-in as it was, so what is dead at every block's exit is the same whatever is
+    // renamed, and the blocks do not depend on one another: each is renamed to a fixed point of its own.
     let exits = liveness::dead_at_exit(&body);
     let mut changed = false;
     let blocks: Vec<LirBlock> = body
@@ -51,23 +51,34 @@ pub fn thrashed(body: LirBody) -> LirBody {
 }
 
 /// Per instruction, the register lanes dead once it has run.
-pub fn _dead_after(bits: u32, block: &LirBlock, dead: Lanes) -> DeadAfter {
+pub fn _dead_after(
+    bits: u32,
+    block: &LirBlock,
+    dead: Lanes,
+) -> DeadAfter {
     let by_position = _dead_after_by(bits, &block.insns, dead);
     block.insns.iter().zip(by_position).map(|(one, dead)| (id(one), dead)).collect()
 }
 
 /// `_dead_after` by position.
-fn _dead_after_by(bits: u32, insns: &[Arc<Insn>], dead: Lanes) -> Vec<Lanes> {
+fn _dead_after_by(
+    bits: u32,
+    insns: &[Arc<Insn>],
+    dead: Lanes,
+) -> Vec<Lanes> {
     let mut dead = dead;
     let mut out = vec![Lanes::new(); insns.len()];
     for (position, one) in insns.iter().enumerate().rev() {
         out[position] = dead;
-        dead = liveness::with_effect(bits, one, |effect| effect.map_or_else(Lanes::new, |effect| effect.dead_before(&dead)));
+        dead = liveness::with_effect(bits, one, |effect| {
+            effect.map_or_else(Lanes::new, |effect| effect.dead_before(&dead))
+        });
     }
     out
 }
 
-/// One rename found: the copy at `position` of what the instruction at `at` made, which is `rewritten` writing the copy's register.
+/// One rename found: the copy at `position` of what the instruction at `at` made, which is `rewritten` writing the
+/// copy's register.
 struct Rename {
     position: usize,
     at: usize,
@@ -77,11 +88,15 @@ struct Rename {
 
 /// This block with copies thrashed away, at most ROUNDS of them, or None where none can be.
 ///
-/// Each rename is the first the block now offers, and changes the liveness between the producer and the copy, and before the
-/// producer as far back as it moves; after the copy nothing moved. So what is dead after each instruction is worked out again
-/// for that stretch alone, and the next copy to try is no earlier than the first instruction whose liveness moved: an earlier
-/// one saw the same instructions and the same liveness, and failed.
-fn _thrash_block(bits: u32, block: &LirBlock, dead: Lanes) -> Option<LirBlock> {
+/// Each rename is the first the block now offers, and changes the liveness between the producer and the copy, and
+/// before the producer as far back as it moves; after the copy nothing moved. So what is dead after each instruction is
+/// worked out again for that stretch alone, and the next copy to try is no earlier than the first instruction whose
+/// liveness moved: an earlier one saw the same instructions and the same liveness, and failed.
+fn _thrash_block(
+    bits: u32,
+    block: &LirBlock,
+    dead: Lanes,
+) -> Option<LirBlock> {
     let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
     let exit = dead;
     let mut after = _dead_after_by(bits, &insns, exit);
@@ -106,10 +121,12 @@ fn _thrash_block(bits: u32, block: &LirBlock, dead: Lanes) -> Option<LirBlock> {
         let mut dead = after[position];
         for index in (at..=position).rev() {
             after[index] = dead;
-            dead = liveness::with_effect(bits, &insns[index], |effect| effect.map_or_else(Lanes::new, |effect| effect.dead_before(&dead)));
+            dead = liveness::with_effect(bits, &insns[index], |effect| {
+                effect.map_or_else(Lanes::new, |effect| effect.dead_before(&dead))
+            });
         }
-        // Before the producer, what is dead moves only where the producer read less of Y than the copy does (a shift by a byte
-        // reads half of it): the liveness is worked out backwards until it is what it was.
+        // Before the producer, what is dead moves only where the producer read less of Y than the copy does (a shift by
+        // a byte reads half of it): the liveness is worked out backwards until it is what it was.
         from = at;
         for index in (0..at).rev() {
             if after[index] == dead {
@@ -117,10 +134,15 @@ fn _thrash_block(bits: u32, block: &LirBlock, dead: Lanes) -> Option<LirBlock> {
             }
             after[index] = dead;
             from = index;
-            dead = liveness::with_effect(bits, &insns[index], |effect| effect.map_or_else(Lanes::new, |effect| effect.dead_before(&dead)));
+            dead = liveness::with_effect(bits, &insns[index], |effect| {
+                effect.map_or_else(Lanes::new, |effect| effect.dead_before(&dead))
+            });
         }
         if cfg!(test) || llrm_support::env_set("LLRM_CHECK_THRASH") {
-            assert!(after == _dead_after_by(bits, &insns, exit), "a rename changed what is dead beyond what was worked out again");
+            assert!(
+                after == _dead_after_by(bits, &insns, exit),
+                "a rename changed what is dead beyond what was worked out again"
+            );
         }
         renamed += 1;
     }
@@ -128,7 +150,12 @@ fn _thrash_block(bits: u32, block: &LirBlock, dead: Lanes) -> Option<LirBlock> {
 }
 
 /// The first copy at or after `from` that can be renamed.
-fn _first_rename(bits: u32, insns: &[Arc<Insn>], after: &[Lanes], from: usize) -> Option<Rename> {
+fn _first_rename(
+    bits: u32,
+    insns: &[Arc<Insn>],
+    after: &[Lanes],
+    from: usize,
+) -> Option<Rename> {
     for position in from..insns.len() {
         let Some((into, out_of)) = _plain_copy(&insns[position]) else {
             continue;
@@ -176,7 +203,14 @@ fn _plain_copy(one: &Insn) -> Option<(Reg, Reg)> {
 /// otherwise the definition found is not the one the move reads -- and has
 /// to leave Z dead, or renaming into it destroys a value something else
 /// still wants.
-fn _producer(bits: u32, insns: &[Arc<Insn>], position: usize, out_of: &Reg, into: &Reg, after: &[Lanes]) -> Option<(usize, bool)> {
+fn _producer(
+    bits: u32,
+    insns: &[Arc<Insn>],
+    position: usize,
+    out_of: &Reg,
+    into: &Reg,
+    after: &[Lanes],
+) -> Option<(usize, bool)> {
     let (mine, theirs) = (_lanes(out_of.register), _lanes(into.register));
     for at in (0..position).rev() {
         let one = &insns[at];
@@ -217,8 +251,18 @@ fn _producer(bits: u32, insns: &[Arc<Insn>], position: usize, out_of: &Reg, into
 }
 
 /// Whether this operation names those lanes as its own destination.
-fn _writes(what: &Semantics, lanes: &Lanes) -> bool {
-    what.dests.iter().any(|dest| matches!(dest, Loc::Reg(dest) if !_lanes(dest.register).is_disjoint(lanes)))
+fn _writes(
+    what: &Semantics,
+    lanes: &Lanes,
+) -> bool {
+    what.dests
+        .iter()
+        .any(
+            |dest| matches!(
+                dest,
+                Loc::Reg(dest) if !_lanes(dest.register).is_disjoint(lanes)
+            ),
+        )
 }
 
 /// `one` computing into `after` instead, or None where it cannot.
@@ -232,7 +276,13 @@ fn _writes(what: &Semantics, lanes: &Lanes) -> bool {
 /// substitution can name an operand the machine has no form for, and
 /// `select.emit` answering None is exactly `FindGenEntry` returning
 /// `G_UNKNOWN` there.
-fn _renamed(bits: u32, one: &Insn, before: Register, after: Register, result_only: bool) -> Option<Arc<Insn>> {
+fn _renamed(
+    bits: u32,
+    one: &Insn,
+    before: Register,
+    after: Register,
+    result_only: bool,
+) -> Option<Arc<Insn>> {
     let what = one.what.as_ref().expect("a producer has semantics");
     let changed = Semantics {
         dests: what.dests.iter().map(|dest| _register_operand(dest, before, after)).collect(),
@@ -256,11 +306,8 @@ fn _renamed(bits: u32, one: &Insn, before: Register, after: Register, result_onl
         return None;
     };
     let (mine, theirs) = (_lanes(before), _lanes(after));
-    let reads: Lanes = if result_only || was.0.is_disjoint(&mine) {
-        was.0.clone()
-    } else {
-        was.0.minus(&mine).or(&theirs)
-    };
+    let reads: Lanes =
+        if result_only || was.0.is_disjoint(&mine) { was.0.clone() } else { was.0.minus(&mine).or(&theirs) };
     let writes: Lanes = was.1.minus(&mine).or(&theirs);
     if now != (reads, writes) {
         return None;
@@ -270,16 +317,16 @@ fn _renamed(bits: u32, one: &Insn, before: Register, after: Register, result_onl
 
 #[cfg(test)]
 mod tests {
-    use crate::support::hash::HashMap;
     use std::sync::Arc;
 
     use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind, Register};
-    use crate::support::hash::IndexMap;
 
-    use super::{_plain_copy, thrashed, ROUNDS};
+    use super::{_plain_copy, ROUNDS, thrashed};
     use crate::backend::{select, verify};
     use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::support::hash::HashMap;
+    use crate::support::hash::IndexMap;
 
     const MASK: u64 = 0xFFFF_FFFF;
 
@@ -287,7 +334,13 @@ mod tests {
         Loc::Reg(Reg { register, width: 4 })
     }
 
-    fn _insn(at: i64, name: &str, operation: Operation, dests: Vec<Loc>, sources: Vec<Loc>) -> Insn {
+    fn _insn(
+        at: i64,
+        name: &str,
+        operation: Operation,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+    ) -> Insn {
         Insn::new(
             at,
             Some((at, at)),
@@ -298,7 +351,10 @@ mod tests {
     }
 
     /// What the emitted bytes of `block` leave in the registers.
-    fn _run(block: &LirBlock, state: &HashMap<Register, u64>) -> HashMap<Register, u64> {
+    fn _run(
+        block: &LirBlock,
+        state: &HashMap<Register, u64>,
+    ) -> HashMap<Register, u64> {
         let mut state = state.clone();
         for one in &block.insns {
             let code = select::emit(one.what.as_ref().unwrap(), 0, None, false, false, None).unwrap().code;
@@ -325,10 +381,8 @@ mod tests {
                         let signed = |value: i128, bits: u32| {
                             if value >> (bits - 1) != 0 { value - (1i128 << bits) } else { value }
                         };
-                        let dividend = signed(
-                            i128::from(state[&Register::EDX]) << 32 | i128::from(state[&Register::EAX]),
-                            64,
-                        );
+                        let dividend =
+                            signed(i128::from(state[&Register::EDX]) << 32 | i128::from(state[&Register::EAX]), 64);
                         let divisor = signed(i128::from(state[&into]), 32);
                         assert!(divisor != 0, "divide by zero");
                         let sign = if (dividend < 0) == (divisor < 0) { 1 } else { -1 };
@@ -344,7 +398,10 @@ mod tests {
     }
 
     /// `insns`, then a block that reads only `read` and overwrites the rest.
-    fn _body(insns: Vec<Insn>, read: Register) -> LirBody {
+    fn _body(
+        insns: Vec<Insn>,
+        read: Register,
+    ) -> LirBody {
         let killed = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI]
             .into_iter()
             .enumerate()
@@ -376,18 +433,22 @@ mod tests {
                 (_reg(Register::EDI), _reg(Register::ESI), _reg(Register::EAX), _reg(Register::EDX));
             let body = _body(
                 vec![
-                    _insn(0, "mov", Operation::Move, vec![_reg(divisor)], vec![Loc::Imm(Imm {
-                        value: 0xFFF1,
-                        width: 4,
-                        address: None,
-                    })]),
+                    _insn(
+                        0,
+                        "mov",
+                        Operation::Move,
+                        vec![_reg(divisor)],
+                        vec![Loc::Imm(Imm { value: 0xFFF1, width: 4, address: None })],
+                    ),
                     _insn(1, "mov", Operation::Move, vec![eax.clone()], vec![edi]),
                     _insn(2, "cdq", Operation::Extend, vec![edx.clone()], vec![eax.clone()]),
-                    _insn(3, "idiv", Operation::Divide, vec![eax.clone(), edx.clone()], vec![
-                        edx.clone(),
-                        eax,
-                        _reg(divisor),
-                    ]),
+                    _insn(
+                        3,
+                        "idiv",
+                        Operation::Divide,
+                        vec![eax.clone(), edx.clone()],
+                        vec![edx.clone(), eax, _reg(divisor)],
+                    ),
                     _insn(4, "mov", Operation::Move, vec![esi], vec![edx]),
                 ],
                 Register::ESI,
@@ -427,14 +488,19 @@ mod tests {
         let mut blocks: Vec<LirBlock> = (0..count)
             .map(|at| {
                 let insns = vec![
-                    Arc::new(_insn(100 * at, "mov", Operation::Move, vec![ecx.clone()], vec![Loc::Imm(Imm {
-                        value: at,
-                        width: 4,
-                        address: None,
-                    })])),
+                    Arc::new(_insn(
+                        100 * at,
+                        "mov",
+                        Operation::Move,
+                        vec![ecx.clone()],
+                        vec![Loc::Imm(Imm { value: at, width: 4, address: None })],
+                    )),
                     Arc::new(_insn(100 * at + 1, "mov", Operation::Move, vec![edx.clone()], vec![ecx.clone()])),
                 ];
-                LirBlock { succ: vec![if at + 1 == count { 1 } else { at + 2 }], ..LirBlock::new(if at == 0 { 0 } else { at + 1 }, insns) }
+                LirBlock {
+                    succ: vec![if at + 1 == count { 1 } else { at + 2 }],
+                    ..LirBlock::new(if at == 0 { 0 } else { at + 1 }, insns)
+                }
             })
             .collect();
         blocks.push(tail);
@@ -442,7 +508,8 @@ mod tests {
 
         let result = thrashed(body);
 
-        let copies = result.blocks.iter().flat_map(|block| &block.insns).filter(|one| _plain_copy(one).is_some()).count();
+        let copies =
+            result.blocks.iter().flat_map(|block| &block.insns).filter(|one| _plain_copy(one).is_some()).count();
         assert_eq!(copies, 0);
     }
 
@@ -453,14 +520,21 @@ mod tests {
         let (ax, di) = (_reg(Register::EAX), _reg(Register::EDI));
         let producer = Insn {
             defines: vec![1],
-            .._insn(0, "mov", Operation::Move, vec![ax.clone()], vec![Loc::Imm(Imm { value: 7, width: 4, address: None })])
+            .._insn(
+                0,
+                "mov",
+                Operation::Move,
+                vec![ax.clone()],
+                vec![Loc::Imm(Imm { value: 7, width: 4, address: None })],
+            )
         };
         let copy = Insn { defines: vec![2], uses: vec![1], .._insn(1, "mov", Operation::Move, vec![di], vec![ax]) };
         let body = _body(vec![producer, copy], Register::EDI);
         let following = body.blocks[1].clone();
         let mut insns = following.insns.to_vec();
         insns[0] = Arc::new(Insn { uses: vec![2], ..(*insns[0]).clone() });
-        let body = LirBody { blocks: vec![body.blocks[0].clone(), LirBlock { insns: insns.into(), ..following }], ..body };
+        let body =
+            LirBody { blocks: vec![body.blocks[0].clone(), LirBlock { insns: insns.into(), ..following }], ..body };
 
         let result = thrashed(body);
 
@@ -469,16 +543,29 @@ mod tests {
         assert!(anchor.what.as_ref().unwrap().op == Operation::Nothing && anchor.uses == [1]);
     }
 
-    /// The rename of a copy asks what is dead after each instruction of its block every round, and each ask worked out the
-    /// instruction's effect again: a straight run of 1600 statements spent 250 Minstr of 340 in the rounds, and the cost of a
-    /// body grew faster than its size while the rounds did. An instruction's effect is worked out once: those of the instructions a round changed are new ones.
+    /// The rename of a copy asks what is dead after each instruction of its block every round, and each ask worked out
+    /// the instruction's effect again: a straight run of 1600 statements spent 250 Minstr of 340 in the rounds, and
+    /// the cost of a body grew faster than its size while the rounds did. An instruction's effect is worked out
+    /// once: those of the instructions a round changed are new ones.
     #[test]
     fn test_an_instructions_effect_is_worked_out_once_however_many_rounds_ask() {
         let mut insns = Vec::new();
         for at in 0..6_i64 {
-            insns.push(_insn(at * 3, "mov", Operation::Move, vec![_reg(Register::EAX)], vec![Loc::Imm(Imm { value: at, width: 4, address: None })]));
+            insns.push(_insn(
+                at * 3,
+                "mov",
+                Operation::Move,
+                vec![_reg(Register::EAX)],
+                vec![Loc::Imm(Imm { value: at, width: 4, address: None })],
+            ));
             insns.push(_insn(at * 3 + 1, "mov", Operation::Move, vec![_reg(Register::EDX)], vec![_reg(Register::EAX)]));
-            insns.push(_insn(at * 3 + 2, "add", Operation::Binary, vec![_reg(Register::EBX)], vec![_reg(Register::EBX), _reg(Register::EDX)]));
+            insns.push(_insn(
+                at * 3 + 2,
+                "add",
+                Operation::Binary,
+                vec![_reg(Register::EBX)],
+                vec![_reg(Register::EBX), _reg(Register::EDX)],
+            ));
         }
         let body = _body(insns, Register::EBX);
         let size = body.insns().len();
@@ -487,23 +574,43 @@ mod tests {
         let worked = crate::backend::liveness::effects_worked_out() - before;
         let changed = after.insns().iter().zip(body.insns()).filter(|(new, old)| !Arc::ptr_eq(new, old)).count();
         assert!(changed >= 4, "premise: several rounds rename ({changed} instructions changed)");
-        assert!(worked <= size + changed + 2, "{worked} effects worked out for {size} instructions and {changed} changed");
+        assert!(
+            worked <= size + changed + 2,
+            "{worked} effects worked out for {size} instructions and {changed} changed"
+        );
     }
 
-    /// Moving a copy ahead of a producer that reads half of what it copies makes the other half live before it: `shr cx, 8`
-    /// reads CX's high byte alone, `mov ax, cx` reads both. What is dead after the instruction before the producer is not what
-    /// it was, and the rename that worked it out for the window between producer and copy alone left the old answer there.
+    /// Moving a copy ahead of a producer that reads half of what it copies makes the other half live before it: `shr
+    /// cx, 8` reads CX's high byte alone, `mov ax, cx` reads both. What is dead after the instruction before the
+    /// producer is not what it was, and the rename that worked it out for the window between producer and copy
+    /// alone left the old answer there.
     #[test]
     fn test_a_copy_moved_ahead_of_a_shift_by_a_byte_changes_what_is_dead_before_it() {
         let word = |register| Loc::Reg(Reg { register, width: 2 });
         let insns = vec![
-            _insn(0, "mov", Operation::Move, vec![word(Register::CX)], vec![Loc::Imm(Imm { value: 0x1234, width: 2, address: None })]),
-            _insn(1, "shr", Operation::Binary, vec![word(Register::CX)], vec![word(Register::CX), Loc::Imm(Imm { value: 8, width: 1, address: None })]),
+            _insn(
+                0,
+                "mov",
+                Operation::Move,
+                vec![word(Register::CX)],
+                vec![Loc::Imm(Imm { value: 0x1234, width: 2, address: None })],
+            ),
+            _insn(
+                1,
+                "shr",
+                Operation::Binary,
+                vec![word(Register::CX)],
+                vec![word(Register::CX), Loc::Imm(Imm { value: 8, width: 1, address: None })],
+            ),
             _insn(2, "mov", Operation::Move, vec![word(Register::AX)], vec![word(Register::CX)]),
         ];
         let body = _body(insns, Register::EAX);
         let after = thrashed(body.clone());
-        // Whether or not it renamed, `thrashed` checked the liveness it kept against working it out whole; a rename is the premise.
-        assert!(after.insns().iter().zip(body.insns().iter()).any(|(new, old)| !Arc::ptr_eq(new, &old)), "premise: the copy was renamed");
+        // Whether or not it renamed, `thrashed` checked the liveness it kept against working it out whole; a rename is
+        // the premise.
+        assert!(
+            after.insns().iter().zip(body.insns().iter()).any(|(new, old)| !Arc::ptr_eq(new, &old)),
+            "premise: the copy was renamed"
+        );
     }
 }

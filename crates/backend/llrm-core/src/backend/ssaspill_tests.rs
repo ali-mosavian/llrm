@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use crate::backend::frame::Frame;
-use crate::backend::regalloc_input::{before_phase, Calls};
+use crate::backend::regalloc_input::{Calls, before_phase};
 use crate::backend::ssaspill::Prices;
 use crate::backend::{ssaspill, target};
 use crate::model::ir::Loc;
@@ -11,13 +11,17 @@ use crate::model::lir::LirBody;
 use crate::support::hash::IndexMap;
 
 /// The widest a value or anything a phi joins it with is read or written, by operands alone.
-fn joined_width(body: &LirBody, value: u32) -> u32 {
+fn joined_width(
+    body: &LirBody,
+    value: u32,
+) -> u32 {
     let mut web: BTreeSet<u32> = BTreeSet::from([value]);
     loop {
         let before = web.len();
         for block in &body.blocks {
             for phi in &block.phis {
-                let members: Vec<u32> = std::iter::once(phi.result).chain(phi.incoming.iter().map(|(_, one)| *one)).collect();
+                let members: Vec<u32> =
+                    std::iter::once(phi.result).chain(phi.incoming.iter().map(|(_, one)| *one)).collect();
                 if members.iter().any(|one| web.contains(one)) {
                     web.extend(members);
                 }
@@ -46,7 +50,14 @@ fn joined_width(body: &LirBody, value: u32) -> u32 {
 fn test_a_value_only_phis_name_is_spilled_at_its_full_width() {
     let (body, _) = before_phase(Calls::C, "phiwidth.ll", "_f", "486", "SsaSpill");
     let mut frame = Frame::new(0);
-    let spilled = ssaspill::spilled(&body, &mut frame, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16(), Prices::clocks()).expect("spills");
+    let spilled = ssaspill::spilled(
+        &body,
+        &mut frame,
+        &target::BUILT_IN,
+        &crate::backend::classes::RegisterClasses::m16(),
+        Prices::clocks(),
+    )
+    .expect("spills");
     let stores: Vec<(u32, u32)> = spilled
         .insns()
         .iter()
@@ -63,19 +74,26 @@ fn test_a_value_only_phis_name_is_spilled_at_its_full_width() {
     }
 }
 
-/// A web of phis was closed by growing every value's set from its members' sets, round after round until none grew: a chain of phis
-/// the other way round from the blocks took a round for each link, each round over every set (56 M of a 16-deep nest's compile).
-/// The webs are the connected values, found once, and a value is as wide as anything in its web, whatever order the phis come in.
+/// A web of phis was closed by growing every value's set from its members' sets, round after round until none grew: a
+/// chain of phis the other way round from the blocks took a round for each link, each round over every set (56 M of a
+/// 16-deep nest's compile). The webs are the connected values, found once, and a value is as wide as anything in its
+/// web, whatever order the phis come in.
 #[test]
 fn test_a_chain_of_phis_is_one_web_whatever_order_its_links_come_in() {
     use crate::model::ir::{Held, Operation, Semantics};
     use crate::model::lir::{Insn, LirBlock, Phi};
     let links = 40;
     let wide = |value: u32, width: u32| {
-        let what = Semantics { name: Some("mov".to_owned()), dests: vec![Loc::Held(Held { value, width })], sources: vec![], ..Semantics::new(Operation::Move) };
+        let what = Semantics {
+            name: Some("mov".to_owned()),
+            dests: vec![Loc::Held(Held { value, width })],
+            sources: vec![],
+            ..Semantics::new(Operation::Move)
+        };
         std::sync::Arc::new(Insn::new(i64::from(value), None, Some(what), vec![value], vec![]))
     };
-    // Block k joins value 100 + links - k - 1 to 100 + links - k: the chain's links come from its far end towards its start.
+    // Block k joins value 100 + links - k - 1 to 100 + links - k: the chain's links come from its far end towards its
+    // start.
     let blocks: Vec<LirBlock> = (0..links)
         .map(|k| {
             let value = 100 + links - k;
@@ -100,7 +118,11 @@ fn test_a_chain_of_phis_is_one_web_whatever_order_its_links_come_in() {
 #[test]
 fn test_spilling_leaves_no_phi_that_names_one_value() {
     let trivial = |body: &LirBody| {
-        body.blocks.iter().flat_map(|block| &block.phis).filter(|phi| phi.incoming.iter().all(|(_, value)| *value == phi.incoming[0].1)).count()
+        body.blocks
+            .iter()
+            .flat_map(|block| &block.phis)
+            .filter(|phi| phi.incoming.iter().all(|(_, value)| *value == phi.incoming[0].1))
+            .count()
     };
     let (body, mut phases) = before_phase(Calls::C, "trivialphi.ll", "_bench_shellsort", "486", "SsaSpill");
     assert!(trivial(&body) > 0, "premise: the input has a phi of one value");
@@ -141,25 +163,31 @@ fn with_empty_edge_blocks(body: &LirBody) -> LirBody {
     for block in &body.blocks {
         let mut succ = Vec::new();
         for to in &block.succ {
-            let at = *landing.entry((block.at, *to)).or_insert_with(|| {
-                next += 1;
-                made.push(LirBlock { succ: vec![*to], ..LirBlock::new(next - 1, Vec::new()) });
-                next - 1
-            });
+            let at = *landing
+                .entry((block.at, *to))
+                .or_insert_with(
+                    || {
+                        next += 1;
+                        made.push(LirBlock { succ: vec![*to], ..LirBlock::new(next - 1, Vec::new()) });
+                        next - 1
+                    },
+                );
             succ.push(at);
         }
         let insns = block
             .insns
             .iter()
             .map(|one| match &one.what {
-                Some(what) if matches!(what.op, Operation::Jump | Operation::Branch) => match what.target.and_then(|to| landing.get(&(block.at, to))) {
-                    Some(at) => {
-                        let mut changed = (**one).clone();
-                        changed.what = Some(Semantics { target: Some(*at), ..what.clone() });
-                        std::sync::Arc::new(changed)
+                Some(what) if matches!(what.op, Operation::Jump | Operation::Branch) => {
+                    match what.target.and_then(|to| landing.get(&(block.at, to))) {
+                        Some(at) => {
+                            let mut changed = (**one).clone();
+                            changed.what = Some(Semantics { target: Some(*at), ..what.clone() });
+                            std::sync::Arc::new(changed)
+                        }
+                        None => std::sync::Arc::clone(one),
                     }
-                    None => std::sync::Arc::clone(one),
-                },
+                }
                 _ => std::sync::Arc::clone(one),
             })
             .collect();
@@ -168,7 +196,9 @@ fn with_empty_edge_blocks(body: &LirBody) -> LirBody {
     for block in &mut blocks {
         for phi in &mut block.phis {
             for (from, _) in &mut phi.incoming {
-                if let Some(at) = landing.iter().find(|((_, to), _)| *to == block.at).and_then(|_| landing.get(&(*from, block.at))) {
+                if let Some(at) =
+                    landing.iter().find(|((_, to), _)| *to == block.at).and_then(|_| landing.get(&(*from, block.at)))
+                {
                     *from = *at;
                 }
             }
@@ -186,14 +216,16 @@ fn reloads_follow_stores(body: &LirBody) -> Result<(), String> {
         let place = if reads { what.sources.first()? } else { what.dests.first()? };
         matches!(place, Loc::Mem(_)).then(|| format!("{place:?}"))
     };
-    let blocks: IndexMap<i64, &crate::model::lir::LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let blocks: IndexMap<i64, &crate::model::lir::LirBlock> =
+        body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut preds: IndexMap<i64, Vec<i64>> = IndexMap::default();
     for block in &body.blocks {
         for to in &block.succ {
             preds.entry(*to).or_default().push(block.at);
         }
     }
-    let all: BTreeSet<String> = body.insns().iter().filter(|one| one.spill_store).filter_map(|one| key(one, false)).collect();
+    let all: BTreeSet<String> =
+        body.insns().iter().filter(|one| one.spill_store).filter_map(|one| key(one, false)).collect();
     let mut out: IndexMap<i64, BTreeSet<String>> = body.blocks.iter().map(|block| (block.at, all.clone())).collect();
     loop {
         let mut changed = false;
@@ -201,7 +233,15 @@ fn reloads_follow_stores(body: &LirBody) -> Result<(), String> {
             let mut stored: BTreeSet<String> = if block.at == body.entry {
                 BTreeSet::new()
             } else {
-                preds.get(&block.at).map_or(BTreeSet::new(), |from| from.iter().map(|at| out[at].clone()).reduce(|a, b| a.intersection(&b).cloned().collect()).unwrap_or_default())
+                preds
+                    .get(&block.at)
+                    .map_or(
+                        BTreeSet::new(),
+                        |from| from.iter()
+                            .map(|at| out[at].clone())
+                            .reduce(|a, b| a.intersection(&b).cloned().collect())
+                            .unwrap_or_default(),
+                    )
             };
             for one in &block.insns {
                 if one.spill_store {
@@ -221,7 +261,15 @@ fn reloads_follow_stores(body: &LirBody) -> Result<(), String> {
         let mut stored: BTreeSet<String> = if *at == body.entry {
             BTreeSet::new()
         } else {
-            preds.get(at).map_or(BTreeSet::new(), |from| from.iter().map(|from| out[from].clone()).reduce(|a, b| a.intersection(&b).cloned().collect()).unwrap_or_default())
+            preds
+                .get(at)
+                .map_or(
+                    BTreeSet::new(),
+                    |from| from.iter()
+                        .map(|from| out[from].clone())
+                        .reduce(|a, b| a.intersection(&b).cloned().collect())
+                        .unwrap_or_default(),
+                )
         };
         for one in &block.insns {
             if one.spill_reload {
@@ -245,10 +293,22 @@ fn reloads_follow_stores(body: &LirBody) -> Result<(), String> {
 #[test]
 fn test_spill_code_survives_empty_blocks() {
     let mut reloads = 0;
-    for (fixture, name) in [("tilesum.ll", "_tile_sum"), ("matmul.ll", "_bench_matmul"), ("hotstore.ll", "_f"), ("trivialphi.ll", "_bench_shellsort")] {
+    for (fixture, name) in [
+        ("tilesum.ll", "_tile_sum"),
+        ("matmul.ll", "_bench_matmul"),
+        ("hotstore.ll", "_f"),
+        ("trivialphi.ll", "_bench_shellsort"),
+    ] {
         let (body, _) = before_phase(Calls::C, fixture, name, "486", "SsaSpill");
         let split = with_empty_edge_blocks(&body);
-        let spilled = ssaspill::spilled(&split, &mut Frame::new(0), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16(), Prices::clocks()).unwrap_or_else(|why| panic!("{fixture}: {why}"));
+        let spilled = ssaspill::spilled(
+            &split,
+            &mut Frame::new(0),
+            &target::BUILT_IN,
+            &crate::backend::classes::RegisterClasses::m16(),
+            Prices::clocks(),
+        )
+        .unwrap_or_else(|why| panic!("{fixture}: {why}"));
         reloads += spilled.insns().iter().filter(|one| one.spill_reload).count();
         reloads_follow_stores(&spilled).unwrap_or_else(|why| panic!("{fixture}: {why}"));
     }
@@ -263,17 +323,33 @@ fn test_a_bridge_keeps_every_blocks_frequency() {
     let (mut body, _) = before_phase(Calls::C, "phiwidth.ll", "_f", "486", "SsaSpill");
     let had: BTreeSet<i64> = body.blocks.iter().map(|block| block.at).collect();
     // Where the bridge goes, then that edge stated as the likely one.
-    let first = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16(), Prices::clocks()).expect("spills");
+    let first = ssaspill::spilled(
+        &body,
+        &mut Frame::new(0),
+        &target::BUILT_IN,
+        &crate::backend::classes::RegisterClasses::m16(),
+        Prices::clocks(),
+    )
+    .expect("spills");
     // phiwidth's loop-closing edge was bridged to reload a remade load; the add takes the load's cell now,
     // and the edge needs no code. Where a body does bridge an edge, the bridge's odds are stated too.
     if let Some(bridge) = first.blocks.iter().find(|block| !had.contains(&block.at)) {
-        let from = first.blocks.iter().find(|block| block.succ.contains(&bridge.at)).expect("a bridge has a predecessor");
+        let from =
+            first.blocks.iter().find(|block| block.succ.contains(&bridge.at)).expect("a bridge has a predecessor");
         assert!(from.succ.len() == 2, "premise: the bridge hangs on a branch");
         let to = bridge.succ[0];
         body.odds.taken.insert((from.at, to), (0.9 * crate::model::lir::BlockOdds::CERTAIN) as u32);
     }
-    let spilled = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16(), Prices::clocks()).expect("spills");
-    let (before, after) = (crate::analysis::frequency::Frequency::of(&body), crate::analysis::frequency::Frequency::of(&spilled));
+    let spilled = ssaspill::spilled(
+        &body,
+        &mut Frame::new(0),
+        &target::BUILT_IN,
+        &crate::backend::classes::RegisterClasses::m16(),
+        Prices::clocks(),
+    )
+    .expect("spills");
+    let (before, after) =
+        (crate::analysis::frequency::Frequency::of(&body), crate::analysis::frequency::Frequency::of(&spilled));
     for at in had {
         let (was, is) = (before.block(at), after.block(at));
         assert!((was - is).abs() <= 1e-6 * was.max(1.0), "block {at:#x} runs {is} times for {was}");
@@ -288,11 +364,23 @@ fn test_a_folded_operand_is_as_wide_as_the_instruction_reads_it() {
     use crate::model::ir::{Held, Loc, Mem, Operation, Semantics};
     use crate::model::lir::Insn;
     let held = |value: u32| Loc::Held(Held { value, width: 2 });
-    let what = Semantics { name: Some("add".to_owned()), dests: vec![held(3)], sources: vec![held(1), held(2)], ..Semantics::new(Operation::Binary) };
+    let what = Semantics {
+        name: Some("add".to_owned()),
+        dests: vec![held(3)],
+        sources: vec![held(1), held(2)],
+        ..Semantics::new(Operation::Binary)
+    };
     let one = Insn::new(0, Some((0, 2)), Some(what), vec![3], vec![1, 2]);
     let slot = Mem::new(Some(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, -4)), 4);
     let folded = ssaspill::folded_into(&one, 2, &slot).expect("an add folds its second source");
-    let widths: Vec<u32> = folded.what.as_ref().unwrap().sources.iter().filter_map(|place| if let Loc::Mem(cell) = place { Some(cell.width) } else { None }).collect();
+    let widths: Vec<u32> = folded
+        .what
+        .as_ref()
+        .unwrap()
+        .sources
+        .iter()
+        .filter_map(|place| if let Loc::Mem(cell) = place { Some(cell.width) } else { None })
+        .collect();
     assert_eq!(widths, vec![2], "the slot is 4 bytes, the add reads 2");
 }
 
@@ -307,7 +395,12 @@ fn test_a_value_is_dead_when_nothing_reads_it_not_when_its_distance_is_unsettled
     let held = |value: u32| Loc::Held(Held { value, width: 2 });
     let number = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
     let make = |name: &str, dest: u32, sources: Vec<Loc>, uses: Vec<u32>| {
-        let what = Semantics { name: Some(name.to_owned()), dests: vec![held(dest)], sources, ..Semantics::new(if name == "mov" { Operation::Move } else { Operation::Binary }) };
+        let what = Semantics {
+            name: Some(name.to_owned()),
+            dests: vec![held(dest)],
+            sources,
+            ..Semantics::new(if name == "mov" { Operation::Move } else { Operation::Binary })
+        };
         std::sync::Arc::new(Insn::new(0, Some((0, 2)), Some(what), vec![dest], uses))
     };
     let last = 70;
@@ -323,8 +416,18 @@ fn test_a_value_is_dead_when_nothing_reads_it_not_when_its_distance_is_unsettled
         .collect();
     blocks.reverse();
     let body = LirBody::new("chain", 0, blocks, IndexMap::default(), IndexMap::default());
-    let spilled = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16(), Prices::clocks()).expect("spills");
-    assert!(spilled.insns().iter().all(|one| !one.spill_store && !one.spill_reload), "one value in a six-register machine was spilled");
+    let spilled = ssaspill::spilled(
+        &body,
+        &mut Frame::new(0),
+        &target::BUILT_IN,
+        &crate::backend::classes::RegisterClasses::m16(),
+        Prices::clocks(),
+    )
+    .expect("spills");
+    assert!(
+        spilled.insns().iter().all(|one| !one.spill_store && !one.spill_reload),
+        "one value in a six-register machine was spilled"
+    );
 }
 
 /// The phase list has the spiller only when asked: `assemble` weighs the
@@ -336,7 +439,16 @@ fn test_the_phase_list_has_the_spiller_only_when_asked() {
     let names = |spilling: bool| -> Vec<&'static str> {
         let frame = Some(Rc::new(RefCell::new(Frame::new(0))));
         let calls = IndexMap::default();
-        let phases = crate::flow::machine(&IndexMap::default(), frame, None, Some(&calls), false, "386", &target::BUILT_IN, spilling);
+        let phases = crate::flow::machine(
+            &IndexMap::default(),
+            frame,
+            None,
+            Some(&calls),
+            false,
+            "386",
+            &target::BUILT_IN,
+            spilling,
+        );
         phases.expect("phases").iter().map(|phase| phase.class_name()).collect()
     };
     assert!(names(true).contains(&"SsaSpill"));
@@ -357,7 +469,10 @@ fn test_an_invariant_load_is_read_in_place_not_remade_each_trip() {
 }
 
 /// The most values of one register file live at once in `body`, where `member` picks the file's values.
-fn most_live(body: &LirBody, member: impl Fn(u32) -> bool) -> usize {
+fn most_live(
+    body: &LirBody,
+    member: impl Fn(u32) -> bool,
+) -> usize {
     let (_, live_out) = crate::backend::allocate::live(body);
     let mut most = 0;
     for block in &body.blocks {
@@ -381,8 +496,15 @@ fn most_live(body: &LirBody, member: impl Fn(u32) -> bool) -> usize {
 fn test_selectors_live_at_once_fit_the_segment_registers() {
     let (body, mut phases) = before_phase(Calls::C, "selectorloop.ll", "_f", "486", "SsaSpill");
     let selectors = |body: &LirBody| {
-        let classes = crate::backend::regclass::classes(body, &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
-        most_live(body, |value| classes.get(&value).is_some_and(|class| class.iter().all(|one| target::BUILT_IN.selectors.contains(one))))
+        let classes = crate::backend::regclass::classes(
+            body,
+            &BTreeSet::new(),
+            &target::BUILT_IN,
+            &crate::backend::classes::RegisterClasses::m16(),
+        );
+        most_live(body, |value| {
+            classes.get(&value).is_some_and(|class| class.iter().all(|one| target::BUILT_IN.selectors.contains(one)))
+        })
     };
     assert!(selectors(&body) > target::BUILT_IN.selectors.len(), "premise: more selectors live than registers");
     let spilled = phases[0].transform(body).expect("spills");
@@ -414,7 +536,14 @@ fn test_a_word_copied_from_a_dword_is_not_made_again_as_the_dword() {
 #[test]
 fn test_a_loop_s_back_edge_reload_does_not_cost_a_jump_per_trip() {
     let (body, _) = before_phase(Calls::C, "selectorloop.ll", "_f", "486", "SsaSpill");
-    let spilled = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16(), Prices::clocks()).expect("spills");
+    let spilled = ssaspill::spilled(
+        &body,
+        &mut Frame::new(0),
+        &target::BUILT_IN,
+        &crate::backend::classes::RegisterClasses::m16(),
+        Prices::clocks(),
+    )
+    .expect("spills");
     let done = crate::backend::executed::executed(&spilled).expect("a reducible body");
     assert!(done.jumps < 8.0, "{} jumps executed", done.jumps);
 }
@@ -424,7 +553,14 @@ fn test_a_loop_s_back_edge_reload_does_not_cost_a_jump_per_trip() {
 #[test]
 fn test_ssaspill_leaves_no_point_the_classes_cannot_hold() {
     let (body, mut phases) = before_phase(Calls::C, "selectorloop.ll", "_f", "486", "SsaSpill");
-    let found = |body: &LirBody| crate::backend::regclass::violations(body, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16(), &ssaspill::untouchable(body));
+    let found = |body: &LirBody| {
+        crate::backend::regclass::violations(
+            body,
+            &target::BUILT_IN,
+            &crate::backend::classes::RegisterClasses::m16(),
+            &ssaspill::untouchable(body),
+        )
+    };
     assert!(!found(&body).is_empty(), "premise: the body asks for more selectors than there are registers");
     let spilled = phases[0].transform(body).expect("spills");
     assert_eq!(found(&spilled), Vec::new());
@@ -436,15 +572,25 @@ fn test_ssaspill_leaves_no_point_the_classes_cannot_hold() {
 fn test_a_copy_group_is_one_point_not_one_per_copy() {
     let (body, _) = before_phase(Calls::C, "phiwide.ll", "_f", "486", "SsaSpill");
     let eliminated = crate::backend::phielim::eliminated(&body).expect("eliminates");
-    let found = |body: &LirBody| crate::backend::regclass::violations(body, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16(), &ssaspill::untouchable(body)).len();
+    let found = |body: &LirBody| {
+        crate::backend::regclass::violations(
+            body,
+            &target::BUILT_IN,
+            &crate::backend::classes::RegisterClasses::m16(),
+            &ssaspill::untouchable(body),
+        )
+        .len()
+    };
     let grouped = found(&eliminated);
     let mut apart = eliminated.clone();
     for block in &mut apart.blocks {
-        block.insns.edit(|insns| {
-            for one in insns.iter_mut().filter(|one| one.group.is_some()) {
-                std::sync::Arc::make_mut(one).group = None;
-            }
-        });
+        block
+            .insns
+            .edit(
+                |insns| for one in insns.iter_mut().filter(|one| one.group.is_some()) {
+                    std::sync::Arc::make_mut(one).group = None;
+                },
+            );
     }
     assert!(grouped < found(&apart), "{grouped} points with the copies grouped, {} apart", found(&apart));
 }
@@ -457,8 +603,23 @@ fn test_phis_that_do_not_fit_live_in_memory() {
     let (body, mut phases) = before_phase(Calls::C, "phiwide.ll", "_f", "486", "SsaSpill");
     let spilled = phases[0].transform(body).expect("spills");
     let eliminated = crate::backend::phielim::eliminated(&spilled).expect("eliminates");
-    let found = crate::backend::regclass::violations(&eliminated, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16(), &ssaspill::untouchable(&eliminated));
-    let most = found.iter().map(|one| if let crate::backend::regclass::Why::Crowded { live, registers } = one.why { live - registers } else { usize::MAX }).max().unwrap_or(0);
+    let found = crate::backend::regclass::violations(
+        &eliminated,
+        &target::BUILT_IN,
+        &crate::backend::classes::RegisterClasses::m16(),
+        &ssaspill::untouchable(&eliminated),
+    );
+    let most = found
+        .iter()
+        .map(|one| {
+            if let crate::backend::regclass::Why::Crowded { live, registers } = one.why {
+                live - registers
+            } else {
+                usize::MAX
+            }
+        })
+        .max()
+        .unwrap_or(0);
     assert!(most <= 1, "{most} values over the registers at the worst point");
 }
 
@@ -469,7 +630,12 @@ fn test_phis_that_do_not_fit_live_in_memory() {
 fn test_memory_phi_arguments_share_their_results_slot() {
     let stores = |share: bool| {
         let (body, mut phases) = before_phase(Calls::C, "phiwide.ll", "_f", "486", "SsaSpill");
-        let spilled = if share { phases[0].transform(body) } else { ssaspill::without_shared_slots(|| phases[0].transform(body)) }.expect("spills");
+        let spilled = if share {
+            phases[0].transform(body)
+        } else {
+            ssaspill::without_shared_slots(|| phases[0].transform(body))
+        }
+        .expect("spills");
         let eliminated = crate::backend::phielim::eliminated(&spilled).expect("eliminates");
         crate::backend::executed::executed(&eliminated).map(|done| done.memory).expect("estimates")
     };
@@ -484,11 +650,25 @@ fn test_memory_phi_arguments_share_their_results_slot() {
 fn test_a_placeholder_between_a_groups_copies_does_not_end_the_group() {
     let (body, _) = before_phase(Calls::C, "phiwide.ll", "_f", "486", "SsaSpill");
     let eliminated = crate::backend::phielim::eliminated(&body).expect("eliminates");
-    let found = |body: &LirBody| crate::backend::regclass::violations(body, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16(), &ssaspill::untouchable(body)).len();
+    let found = |body: &LirBody| {
+        crate::backend::regclass::violations(
+            body,
+            &target::BUILT_IN,
+            &crate::backend::classes::RegisterClasses::m16(),
+            &ssaspill::untouchable(body),
+        )
+        .len()
+    };
     let mut split = eliminated.clone();
     for block in &mut split.blocks {
         let Some(first) = block.insns.iter().position(|one| one.group.is_some()) else { continue };
-        let blank = std::sync::Arc::new(crate::model::lir::Insn::new(block.insns[first].at, Some((block.insns[first].at, block.insns[first].at)), None, Vec::new(), Vec::new()));
+        let blank = std::sync::Arc::new(crate::model::lir::Insn::new(
+            block.insns[first].at,
+            Some((block.insns[first].at, block.insns[first].at)),
+            None,
+            Vec::new(),
+            Vec::new(),
+        ));
         let mut insns = block.insns.to_vec();
         insns.insert(first + 1, blank);
         *block = block.with_insns(insns);

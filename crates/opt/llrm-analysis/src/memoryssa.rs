@@ -13,7 +13,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use crate::graph::loops;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::memory::stated;
@@ -22,9 +21,10 @@ use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, Analysis};
 use llrm_support::hash::IndexMap;
 
-use crate::cfg;
 use crate::alias::{self, Effect, Procedure, Summary};
+use crate::cfg;
 use crate::consts::Calls;
+use crate::graph::loops;
 use crate::manager::{Annotated, CallEffects};
 use crate::memory::{MemRef, Unit, own_bytes, unmodeled_write};
 use crate::pointerfacts::{self, Location};
@@ -51,7 +51,10 @@ pub struct Access {
 }
 
 impl Access {
-    fn new(id: usize, kind: Kind) -> Self {
+    fn new(
+        id: usize,
+        kind: Kind,
+    ) -> Self {
         Self { id, kind, block: None, site: None, defining: None, incoming: Vec::new() }
     }
 }
@@ -86,46 +89,84 @@ impl Analysis for Accesses {
     type Result = Result<Rc<Accesses>, String>;
     const NAME: &'static str = "accesses";
 
-    fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self::Result {
         let references = analyses.get::<Annotated>(context, layout, function);
         let effects = analyses.get::<CallEffects>(context, layout, function);
         let references = Result::as_ref(&*references).map_err(String::clone)?;
         let effects = Result::as_ref(&*effects).map_err(String::clone)?;
         let shape = analyses.get::<crate::cfg::Shape>(context, layout, function);
         let exposed = analyses.get::<crate::manager::ExposedFrames>(context, layout, function);
-        Ok(Rc::new(Self::of(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed), references.clone(), effects)))
+        Ok(Rc::new(Self::of(
+            &Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed),
+            references.clone(),
+            effects,
+        )))
     }
 }
 
 impl Accesses {
     /// `unit`'s accesses as `alias` resolves them: each reference with its
     /// provenance, each call's effect instantiated from `known` callees.
-    pub fn resolved(unit: &Unit, known: &IndexMap<String, Summary>) -> Result<Self, String> {
+    pub fn resolved(
+        unit: &Unit,
+        known: &IndexMap<String, Summary>,
+    ) -> Result<Self, String> {
         Ok(Self::of(unit, unit.annotated()?.into_owned(), &alias::calls_annotated(&Procedure::of(*unit), known)?))
     }
 
     /// `function`'s accesses, the manager's: from its `Annotated` and
     /// `CallEffects`; the pipeline must require `Summaries`.
-    pub fn managed(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Result<Rc<Self>, String> {
+    pub fn managed(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Result<Rc<Self>, String> {
         (*analyses.get::<Accesses>(context, layout, function)).clone()
     }
 
     /// `unit`'s accesses from `references` (`alias::annotated`'s) and each
     /// call's `effects` (`alias::calls_annotated`'s).
-    pub fn of(unit: &Unit, references: IndexMap<InstId, MemRef>, effects: &IndexMap<InstId, Effect>) -> Self {
-        let fills = effects.iter().filter(|(_, effect)| !effect.fills.is_empty()).map(|(&at, effect)| (at, effect.fills.clone())).collect();
-        Self { fills, ..Self::new(unit, references, |inst| effects.get(&inst).map(|effect| (Some(Rc::clone(&effect.loads)), Some(Rc::clone(&effect.stores))))) }
+    pub fn of(
+        unit: &Unit,
+        references: IndexMap<InstId, MemRef>,
+        effects: &IndexMap<InstId, Effect>,
+    ) -> Self {
+        let fills = effects
+            .iter()
+            .filter(|(_, effect)| !effect.fills.is_empty())
+            .map(|(&at, effect)| (at, effect.fills.clone()))
+            .collect();
+        Self {
+            fills,
+            ..Self::new(unit, references, |inst| {
+                effects.get(&inst).map(|effect| (Some(Rc::clone(&effect.loads)), Some(Rc::clone(&effect.stores))))
+            })
+        }
     }
 
     /// `unit`'s accesses unresolved: each reference as the unit has it
     /// (`Unit::reference`), each call writing its footprint in `calls`.
-    pub fn plain(unit: &Unit, calls: &Calls) -> Self {
-        let references = unit.function.walk().filter_map(|(_, inst)| unit.reference(inst).map(|one| (inst, one))).collect();
+    pub fn plain(
+        unit: &Unit,
+        calls: &Calls,
+    ) -> Self {
+        let references =
+            unit.function.walk().filter_map(|(_, inst)| unit.reference(inst).map(|one| (inst, one))).collect();
         Self::new(unit, references, |inst| calls.get(&inst).map(|stores| (None, Some(Rc::clone(stores)))))
     }
 
     /// `footprint` gives a call's reads and writes, where known.
-    fn new(unit: &Unit, references: IndexMap<InstId, MemRef>, footprint: impl Fn(InstId) -> Option<Footprint>) -> Self {
+    fn new(
+        unit: &Unit,
+        references: IndexMap<InstId, MemRef>,
+        footprint: impl Fn(InstId) -> Option<Footprint>,
+    ) -> Self {
         let function = unit.function;
         let mut touched = IndexMap::default();
         for (_, inst) in function.walk() {
@@ -138,10 +179,15 @@ impl Accesses {
                     (touched(own.reads), touched(own.writes))
                 }
                 Opcode::Call(info) | Opcode::Invoke(info) => {
-                    let callee = llrm_mir::memory::callee(unit.context, function, inst).and_then(|one| unit.globals.get(one.0 as usize)).and_then(GlobalValue::function);
+                    let callee = llrm_mir::memory::callee(unit.context, function, inst)
+                        .and_then(|one| unit.globals.get(one.0 as usize))
+                        .and_then(GlobalValue::function);
                     let reading = stated(&info.attrs).reads && callee.is_none_or(|one| stated(&one.attrs).reads);
                     let (reads, writes) = footprint(inst).unwrap_or((None, None));
-                    (if reading { reads } else { Some(none()) }, if unmodeled_write(unit, inst) { writes } else { Some(none()) })
+                    (
+                        if reading { reads } else { Some(none()) },
+                        if unmodeled_write(unit, inst) { writes } else { Some(none()) },
+                    )
                 }
                 _ => continue,
             };
@@ -151,17 +197,26 @@ impl Accesses {
     }
 
     /// What `inst` writes; `None` where it may write anything.
-    pub fn writes(&self, inst: InstId) -> Option<&[MemRef]> {
+    pub fn writes(
+        &self,
+        inst: InstId,
+    ) -> Option<&[MemRef]> {
         self.touched.get(&inst).map_or(Some(&[]), |(_, writes)| writes.as_deref())
     }
 
     /// What the call `inst` writes before reading any: `initializes`.
-    pub fn fills(&self, inst: InstId) -> &[MemRef] {
+    pub fn fills(
+        &self,
+        inst: InstId,
+    ) -> &[MemRef] {
         self.fills.get(&inst).map_or(&[], Vec::as_slice)
     }
 
     /// What `inst` reads; `None` where it may read anything.
-    pub fn reads(&self, inst: InstId) -> Option<&[MemRef]> {
+    pub fn reads(
+        &self,
+        inst: InstId,
+    ) -> Option<&[MemRef]> {
         self.touched.get(&inst).map_or(Some(&[]), |(reads, _)| reads.as_deref())
     }
 }
@@ -174,22 +229,40 @@ fn located(reference: &MemRef) -> Option<Location> {
 /// change a byte of `cell`, each write asked `clobbers`: the one answer to
 /// it, so that the rules hold everywhere. Nothing changes a constant
 /// object, nor what an `invariant` read reads (`memory::invariant_load`).
-pub fn changes(cell: &MemRef, invariant: bool, writes: Option<&[MemRef]>, clobbers: impl Fn(&MemRef) -> bool) -> bool {
+pub fn changes(
+    cell: &MemRef,
+    invariant: bool,
+    writes: Option<&[MemRef]>,
+    clobbers: impl Fn(&MemRef) -> bool,
+) -> bool {
     !invariant && !cell.unwritable() && writes.is_none_or(|stores| stores.iter().any(clobbers))
 }
 
 /// Whether running `write` leaves the bytes `read` reads as they were: it writes none of them, as `accesses` says
 /// and `regions::overlapping` decides on `program`; an answer it cannot give overlaps.
-pub fn spares(accesses: &Accesses, program: Option<&llrm_mir::program::ProgramProxy>, read: &MemRef, write: InstId) -> bool {
+pub fn spares(
+    accesses: &Accesses,
+    program: Option<&llrm_mir::program::ProgramProxy>,
+    read: &MemRef,
+    write: InstId,
+) -> bool {
     let overlaps = |wrote: &MemRef| overlapping(read, wrote, None, None, program).unwrap_or(true);
     !changes(read, false, accesses.writes(write), overlaps)
 }
 
 /// Whether writing `store` may change a byte of `cell`: `regions` leaves
 /// it open and `pointerfacts` cannot place them apart.
-pub fn may_clobber(unit: &Unit, known: Option<&BTreeMap<ValueId, Interval>>, cell: &MemRef, store: &MemRef) -> bool {
+pub fn may_clobber(
+    unit: &Unit,
+    known: Option<&BTreeMap<ValueId, Interval>>,
+    cell: &MemRef,
+    store: &MemRef,
+) -> bool {
     let offsets = pointerfacts::offsets(unit.context, unit.layout, unit.function);
-    let apart = matches!((located(cell), located(store)), (Some(one), Some(other)) if offsets.disjoint(one, other));
+    let apart = matches!(
+        (located(cell), located(store)),
+        (Some(one), Some(other)) if offsets.disjoint(one, other)
+    );
     // An answer Rust cannot represent is taken to overlap.
     overlapping(cell, store, known, known, unit.program).unwrap_or(true) && !apart
 }
@@ -197,13 +270,21 @@ pub fn may_clobber(unit: &Unit, known: Option<&BTreeMap<ValueId, Interval>>, cel
 /// Whether `outer` certainly holds every byte of `inner`: both at fixed
 /// displacements in one frame (`regions`), or at constant offsets from one
 /// pointer (`pointerfacts`).
-pub fn covers(unit: &Unit, outer: &MemRef, inner: &MemRef) -> bool {
+pub fn covers(
+    unit: &Unit,
+    outer: &MemRef,
+    inner: &MemRef,
+) -> bool {
     covered(unit, &[outer], inner)
 }
 
 /// Whether `outers` together certainly hold every byte of `inner`, as
 /// LLVM's DSE merges the intervals later stores overwrite.
-pub fn covered(unit: &Unit, outers: &[&MemRef], inner: &MemRef) -> bool {
+pub fn covered(
+    unit: &Unit,
+    outers: &[&MemRef],
+    inner: &MemRef,
+) -> bool {
     let Some(size) = placed(unit, inner, inner).map(|(low, high)| high - low) else {
         return false;
     };
@@ -222,19 +303,30 @@ pub fn covered(unit: &Unit, outers: &[&MemRef], inner: &MemRef) -> bool {
 /// `outer`'s bytes, counted from `inner`'s first, where both are placed:
 /// at fixed displacements in one frame (`regions`), or at constant offsets
 /// from one pointer (`pointerfacts`).
-pub fn placed(unit: &Unit, outer: &MemRef, inner: &MemRef) -> Option<(i128, i128)> {
-    if let (Some((frame, low, high)), Some((inner_frame, inner_low, _))) = (displaced_span(outer), displaced_span(inner))
+pub fn placed(
+    unit: &Unit,
+    outer: &MemRef,
+    inner: &MemRef,
+) -> Option<(i128, i128)> {
+    if let (Some((frame, low, high)), Some((inner_frame, inner_low, _))) =
+        (displaced_span(outer), displaced_span(inner))
         && frame == inner_frame
     {
         return Some((low - inner_low, high - inner_low));
     }
     let offsets = pointerfacts::offsets(unit.context, unit.layout, unit.function);
     let (one, other) = (located(outer)?, located(inner)?);
-    offsets.comparable(one, other).map(|(low, inner_low)| (i128::from(low - inner_low), i128::from(low - inner_low) + i128::from(one.bytes)))
+    offsets
+        .comparable(one, other)
+        .map(|(low, inner_low)| (i128::from(low - inner_low), i128::from(low - inner_low) + i128::from(one.bytes)))
 }
 
 /// Whether `one` and `other` certainly name the same bytes.
-pub fn same_bytes(unit: &Unit, one: &MemRef, other: &MemRef) -> bool {
+pub fn same_bytes(
+    unit: &Unit,
+    one: &MemRef,
+    other: &MemRef,
+) -> bool {
     covers(unit, one, other) && covers(unit, other, one)
 }
 
@@ -302,21 +394,28 @@ pub struct MemorySSA<'a> {
     /// the same defs again and again.
     clobbers: std::cell::RefCell<llrm_support::hash::HashMap<MemRef, llrm_support::hash::HashMap<InstId, bool>>>,
     /// For a cell and whether the load is invariant: from an access that is a use or a def that leaves the cell
-    /// alone, the access the walk back reaches before a clobber, a join, the live state or a boundary it was stopped at (plus one; 0: not
-    /// known), by access number. A walk takes the jump instead of the steps, unless its own boundary lies between.
+    /// alone, the access the walk back reaches before a clobber, a join, the live state or a boundary it was stopped
+    /// at (plus one; 0: not known), by access number. A walk takes the jump instead of the steps, unless its own
+    /// boundary lies between.
     jumps: std::cell::RefCell<llrm_support::hash::HashMap<(MemRef, bool), Vec<u32>>>,
-    /// Each access's entry and exit in a depth-first order of the tree its `defining` links make, by access number: one is behind another
-    /// when its interval holds the other's.
+    /// Each access's entry and exit in a depth-first order of the tree its `defining` links make, by access number:
+    /// one is behind another when its interval holds the other's.
     span: Vec<(u32, u32)>,
 }
 
 impl MemorySSA<'_> {
-    pub fn at(&self, site: InstId) -> &Access {
+    pub fn at(
+        &self,
+        site: InstId,
+    ) -> &Access {
         &self.sites[&site]
     }
 
     /// The access numbered `id`: `accesses` is sorted by id.
-    pub fn access(&self, id: usize) -> &Access {
+    pub fn access(
+        &self,
+        id: usize,
+    ) -> &Access {
         &self.accesses[self.accesses.binary_search_by_key(&id, |access| access.id).expect("a numbered access")]
     }
 
@@ -327,7 +426,11 @@ impl MemorySSA<'_> {
     /// means no reachable source was found, not a reusable memory value.
     /// This identifies memory states, not a dominating scalar definition;
     /// forwarding consumers must establish value availability separately.
-    pub fn clobbers(&self, site: InstId, memory: &MemRef) -> BTreeSet<usize> {
+    pub fn clobbers(
+        &self,
+        site: InstId,
+        memory: &MemRef,
+    ) -> BTreeSet<usize> {
         self.frontier(site, memory, None, None, None)
     }
 
@@ -336,13 +439,24 @@ impl MemorySSA<'_> {
     /// The caller must establish dominance and equal addresses. Stop at
     /// the earlier memory version, rejecting any possibly aliasing write
     /// on the way, including writes carried by loop backedges.
-    pub fn unchanged(&self, earlier: InstId, later: InstId, memory: &MemRef) -> bool {
+    pub fn unchanged(
+        &self,
+        earlier: InstId,
+        later: InstId,
+        memory: &MemRef,
+    ) -> bool {
         let boundary = self.at(earlier).defining;
-        boundary.is_some_and(|boundary| self.frontier(later, memory, Some(boundary), None, None) == BTreeSet::from([boundary]))
+        boundary.is_some_and(|boundary| {
+            self.frontier(later, memory, Some(boundary), None, None) == BTreeSet::from([boundary])
+        })
     }
 
     /// Whether any write of the def at `site` may change a byte of `cell`, remembered.
-    fn clobbered(&self, cell: &MemRef, site: InstId) -> bool {
+    fn clobbered(
+        &self,
+        cell: &MemRef,
+        site: InstId,
+    ) -> bool {
         if let Some(&known) = self.clobbers.borrow().get(cell).and_then(|sites| sites.get(&site)) {
             if !check_clobbers() {
                 return known;
@@ -360,36 +474,64 @@ impl MemorySSA<'_> {
         found
     }
 
-    fn frontier(&self, site: InstId, memory: &MemRef, boundary: Option<usize>, edge: Option<i64>, edge_memory: Option<&MemRef>) -> BTreeSet<usize> {
+    fn frontier(
+        &self,
+        site: InstId,
+        memory: &MemRef,
+        boundary: Option<usize>,
+        edge: Option<i64>,
+        edge_memory: Option<&MemRef>,
+    ) -> BTreeSet<usize> {
         let found = self.walked(site, memory, boundary, edge, edge_memory, true);
         if check_jumps() {
-            assert_eq!(found, self.walked(site, memory, boundary, edge, edge_memory, false), "LLRM_CHECK_JUMPS: a walk that jumps found other than a walk step by step");
+            assert_eq!(
+                found,
+                self.walked(site, memory, boundary, edge, edge_memory, false),
+                "LLRM_CHECK_JUMPS: a walk that jumps found other than a walk step by step"
+            );
         }
         found
     }
 
     /// Whether `ahead` is `access` or reached from it by `defining` links.
-    fn behind(&self, access: usize, ahead: usize) -> bool {
+    fn behind(
+        &self,
+        access: usize,
+        ahead: usize,
+    ) -> bool {
         let (entered, left) = self.span[ahead];
         let (at, _) = self.span[access];
         entered <= at && at < left
     }
 
     /// `frontier`; `jumping` takes the remembered jumps along chains of accesses that leave the cell alone, or none.
-    fn walked(&self, site: InstId, memory: &MemRef, boundary: Option<usize>, edge: Option<i64>, edge_memory: Option<&MemRef>, jumping: bool) -> BTreeSet<usize> {
+    fn walked(
+        &self,
+        site: InstId,
+        memory: &MemRef,
+        boundary: Option<usize>,
+        edge: Option<i64>,
+        edge_memory: Option<&MemRef>,
+        jumping: bool,
+    ) -> BTreeSet<usize> {
         let block = self.at(site).block;
         // A load of what is written once, then never: no write changes what it reads.
         let invariant = llrm_mir::memory::invariant_load(self.unit.context, self.unit.layout, self.unit.function, site);
         let mut pending = vec![self.at(site).defining];
         let mut seen = BTreeSet::new();
         let mut found = BTreeSet::new();
-        // Where no edge chooses, the chain of uses and untouching defs back from an access is the same for every load of the cell: its
-        // end is found once and jumped to (LLVM's walker caches its clobber the same way).
+        // Where no edge chooses, the chain of uses and untouching defs back from an access is the same for every load
+        // of the cell: its end is found once and jumped to (LLVM's walker caches its clobber the same way).
         let jumpable = jumping && edge.is_none() && edge_memory.is_none();
         let mut jumps = self.jumps.borrow_mut();
         let none = &mut Vec::new();
-        let table = if jumpable { jumps.entry((memory.clone(), invariant)).or_insert_with(|| vec![0; self.span.len()]) } else { none };
-        // Accesses passed that nothing on them touches the cell; a jump to `end + 1` says the ones before `end` are clean.
+        let table = if jumpable {
+            jumps.entry((memory.clone(), invariant)).or_insert_with(|| vec![0; self.span.len()])
+        } else {
+            none
+        };
+        // Accesses passed that nothing on them touches the cell; a jump to `end + 1` says the ones before `end` are
+        // clean.
         let mut chain: Vec<usize> = Vec::new();
         let ended = |table: &mut Vec<u32>, chain: &mut Vec<usize>, end: usize| {
             for &passed in chain.iter() {
@@ -405,7 +547,8 @@ impl MemorySSA<'_> {
             if jumpable && table[current] != 0 {
                 chain.clear();
                 let end = table[current] as usize - 1;
-                // The boundary lies on the chain when it is behind `current` and `end` is behind it: the walk stops there.
+                // The boundary lies on the chain when it is behind `current` and `end` is behind it: the walk stops
+                // there.
                 match boundary {
                     Some(stop) if stop != end && self.behind(current, stop) && self.behind(stop, end) => {
                         found.insert(stop);
@@ -474,10 +617,19 @@ impl MemorySSA<'_> {
     /// other intervening joins still require agreement along every path.
     /// A translated address applies outside the destination; its prefix must
     /// still be checked against the original phi-based address.
-    pub fn available_on_edge(&self, earlier: InstId, later: InstId, predecessor: i64, memory: &MemRef, edge_memory: Option<&MemRef>) -> bool {
+    pub fn available_on_edge(
+        &self,
+        earlier: InstId,
+        later: InstId,
+        predecessor: i64,
+        memory: &MemRef,
+        edge_memory: Option<&MemRef>,
+    ) -> bool {
         let source = self.at(earlier);
         let boundary = if source.kind == Kind::Def { Some(source.id) } else { source.defining };
-        boundary.is_some_and(|boundary| self.frontier(later, memory, Some(boundary), Some(predecessor), edge_memory) == BTreeSet::from([boundary]))
+        boundary.is_some_and(|boundary| {
+            self.frontier(later, memory, Some(boundary), Some(predecessor), edge_memory) == BTreeSet::from([boundary])
+        })
     }
 }
 
@@ -485,7 +637,10 @@ impl MemorySSA<'_> {
 ///
 /// Preallocating entries handles backedges without iterative guesses about
 /// memory versions. A block no edge enters keeps an invocation input.
-pub fn built<'a>(unit: &Unit<'a>, accesses: &Accesses) -> MemorySSA<'a> {
+pub fn built<'a>(
+    unit: &Unit<'a>,
+    accesses: &Accesses,
+) -> MemorySSA<'a> {
     let function = unit.function;
     let graph = cfg::graph(function);
     let entry = function.entry().map(cfg::id);
@@ -504,7 +659,17 @@ pub fn built<'a>(unit: &Unit<'a>, accesses: &Accesses) -> MemorySSA<'a> {
                 continue;
             }
             let kind = if defines { Kind::Def } else { Kind::Use };
-            sites.insert(inst, Access { id: next_id, kind, block: Some(block.at), site: Some(inst), defining: Some(current), incoming: Vec::new() });
+            sites.insert(
+                inst,
+                Access {
+                    id: next_id,
+                    kind,
+                    block: Some(block.at),
+                    site: Some(inst),
+                    defining: Some(current),
+                    incoming: Vec::new(),
+                },
+            );
             if defines {
                 written.insert(inst, writes);
                 current = next_id;
@@ -519,7 +684,8 @@ pub fn built<'a>(unit: &Unit<'a>, accesses: &Accesses) -> MemorySSA<'a> {
         .iter()
         .map(|block| {
             let parents = &predecessors[&block.at];
-            let mut edges: Vec<(Option<i64>, usize)> = parents.iter().map(|pred| (Some(*pred), outgoing[pred])).collect();
+            let mut edges: Vec<(Option<i64>, usize)> =
+                parents.iter().map(|pred| (Some(*pred), outgoing[pred])).collect();
             if Some(block.at) == entry || parents.is_empty() {
                 edges.push((None, live.id));
             }
@@ -542,7 +708,8 @@ pub fn built<'a>(unit: &Unit<'a>, accesses: &Accesses) -> MemorySSA<'a> {
             if replacements.contains_key(entry) {
                 continue;
             }
-            let mut values: BTreeSet<usize> = incoming[block].iter().map(|(_, value)| resolved(&replacements, *value)).collect();
+            let mut values: BTreeSet<usize> =
+                incoming[block].iter().map(|(_, value)| resolved(&replacements, *value)).collect();
             values.remove(entry);
             if values.len() <= 1 {
                 replacements.insert(*entry, values.iter().next().copied().unwrap_or(live.id));
@@ -557,7 +724,8 @@ pub fn built<'a>(unit: &Unit<'a>, accesses: &Accesses) -> MemorySSA<'a> {
         .map(|(block, entry)| {
             let mut access = Access::new(*entry, Kind::Phi);
             access.block = Some(*block);
-            access.incoming = incoming[block].iter().map(|(pred, value)| (*pred, resolved(&replacements, *value))).collect();
+            access.incoming =
+                incoming[block].iter().map(|(pred, value)| (*pred, resolved(&replacements, *value))).collect();
             (*block, access)
         })
         .collect();
@@ -568,10 +736,21 @@ pub fn built<'a>(unit: &Unit<'a>, accesses: &Accesses) -> MemorySSA<'a> {
             (site, Access { defining, ..access })
         })
         .collect();
-    let mut accesses: Vec<Access> = std::iter::once(live.clone()).chain(phis.values().cloned()).chain(sites.values().cloned()).collect();
+    let mut accesses: Vec<Access> =
+        std::iter::once(live.clone()).chain(phis.values().cloned()).chain(sites.values().cloned()).collect();
     accesses.sort_by_key(|access| access.id);
     let span = spans(&accesses);
-    MemorySSA { live, accesses, sites, phis, written, unit: *unit, clobbers: Default::default(), jumps: Default::default(), span }
+    MemorySSA {
+        live,
+        accesses,
+        sites,
+        phis,
+        written,
+        unit: *unit,
+        clobbers: Default::default(),
+        jumps: Default::default(),
+        span,
+    }
 }
 
 #[cfg(test)]

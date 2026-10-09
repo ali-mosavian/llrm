@@ -29,7 +29,10 @@ fn dead(body: &str) -> (Sites, Sites) {
             .into_iter()
             .map(|inst| {
                 let at = unit.function.parent(inst).unwrap();
-                (unit.function.block(at).name.clone().unwrap(), unit.function.block(at).instructions().iter().position(|&one| one == inst).unwrap())
+                (
+                    unit.function.block(at).name.clone().unwrap(),
+                    unit.function.block(at).instructions().iter().position(|&one| one == inst).unwrap(),
+                )
             })
             .collect::<Vec<_>>()
     };
@@ -37,7 +40,10 @@ fn dead(body: &str) -> (Sites, Sites) {
     (placed(dead_stores(&unit, &accesses, Some(&private))), placed(dead_stores(&unit, &accesses, None)))
 }
 
-fn at(name: &str, index: usize) -> Sites {
+fn at(
+    name: &str,
+    index: usize,
+) -> Sites {
     vec![(name.to_owned(), index)]
 }
 
@@ -92,9 +98,14 @@ b2:
 /// Nor can the caller, but for an address that escaped.
 #[test]
 fn test_a_call_cannot_read_a_private_cell() {
-    let body = |call: &str| format!("define ptr @f() {{\nb0:\n  %x = alloca i16\n  store i16 1, ptr %x\n  {call}\n}}\n");
+    let body =
+        |call: &str| format!("define ptr @f() {{\nb0:\n  %x = alloca i16\n  store i16 1, ptr %x\n  {call}\n}}\n");
     assert_eq!(dead(&body("call void @anything()\n  ret ptr null")), (at("b0", 1), vec![]));
-    for escaping in ["call void @h(ptr %x)\n  ret ptr null", "store ptr %x, ptr @g\n  call void @anything()\n  ret ptr null", "ret ptr %x"] {
+    for escaping in [
+        "call void @h(ptr %x)\n  ret ptr null",
+        "store ptr %x, ptr @g\n  call void @anything()\n  ret ptr null",
+        "ret ptr %x",
+    ] {
         assert_eq!(dead(&body(escaping)), (vec![], vec![]), "{escaping}");
     }
 }
@@ -105,7 +116,11 @@ fn test_a_call_cannot_read_a_private_cell() {
 /// data's pointer; the array's earlier store was dead.
 #[test]
 fn test_a_call_reads_what_a_pointer_stored_in_its_argument_points_to() {
-    let body = |call: &str| format!("declare void @reads(ptr nocapture readonly)\ndefine void @f() {{\nb0:\n  %x = alloca i16\n  %holder = alloca ptr\n  store i16 1, ptr %x\n  store ptr %x, ptr %holder\n  {call}\n  ret void\n}}\n");
+    let body = |call: &str| {
+        format!(
+            "declare void @reads(ptr nocapture readonly)\ndefine void @f() {{\nb0:\n  %x = alloca i16\n  %holder = alloca ptr\n  store i16 1, ptr %x\n  store ptr %x, ptr %holder\n  {call}\n  ret void\n}}\n"
+        )
+    };
     assert_eq!(dead(&body("call void @reads(ptr %holder)")), (vec![], vec![]));
     // A call that is given nothing of it reads nothing of it.
     assert_eq!(dead(&body("call void @anything()")), (vec![("b0".to_owned(), 2), ("b0".to_owned(), 3)], vec![]));
@@ -113,7 +128,11 @@ fn test_a_call_reads_what_a_pointer_stored_in_its_argument_points_to() {
 
 #[test]
 fn test_an_unresolved_address_cannot_read_a_private_cell_but_its_name_can() {
-    let body = |read: &str| format!("define i16 @f(ptr %p) {{\nb0:\n  %x = alloca i16\n  store i16 1, ptr %x\n  %v = load i16, ptr {read}\n  ret i16 %v\n}}\n");
+    let body = |read: &str| {
+        format!(
+            "define i16 @f(ptr %p) {{\nb0:\n  %x = alloca i16\n  store i16 1, ptr %x\n  %v = load i16, ptr {read}\n  ret i16 %v\n}}\n"
+        )
+    };
     assert_eq!(dead(&body("%p")), (at("b0", 1), vec![]));
     assert_eq!(dead(&body("%x")), (vec![], vec![]));
 }
@@ -121,5 +140,8 @@ fn test_an_unresolved_address_cannot_read_a_private_cell_but_its_name_can() {
 /// A global outlives the function.
 #[test]
 fn test_a_global_is_never_private() {
-    assert_eq!(dead("define void @f() {\nb0:\n  store i16 1, ptr @g\n  call void @anything()\n  ret void\n}\n"), (vec![], vec![]));
+    assert_eq!(
+        dead("define void @f() {\nb0:\n  store i16 1, ptr @g\n  call void @anything()\n  ret void\n}\n"),
+        (vec![], vec![])
+    );
 }

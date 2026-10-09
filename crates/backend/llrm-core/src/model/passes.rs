@@ -3,7 +3,6 @@
 //! `transform(body) -> body` is the whole contract. Anything a pass needs to
 //! know about the module it is compiling is given when the pass is made.
 
-
 use crate::model::lir::LirBody;
 
 /// A Python exception crossing a boundary: `type(error).__module__`,
@@ -18,18 +17,28 @@ pub struct Exception {
 
 impl Exception {
     /// A builtin: `ValueError`, `OSError`, `Exception`.
-    pub fn new(kind: &'static str, message: impl Into<String>) -> Self {
+    pub fn new(
+        kind: &'static str,
+        message: impl Into<String>,
+    ) -> Self {
         Self::defined_in("builtins", kind, message)
     }
 
     /// A class a qbopt module defines, e.g. `qbopt.backend.masm`'s `Unprintable`.
-    pub fn defined_in(module: &'static str, kind: &'static str, message: impl Into<String>) -> Self {
+    pub fn defined_in(
+        module: &'static str,
+        kind: &'static str,
+        message: impl Into<String>,
+    ) -> Self {
         Exception { module, kind, message: message.into() }
     }
 }
 
 impl std::fmt::Display for Exception {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         formatter.write_str(&self.message)
     }
 }
@@ -47,14 +56,20 @@ pub trait LIRTransform {
         ""
     }
 
-    fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
         let _ = body;
         Err(format!("{} has no transform", self.class_name()))
     }
 
     /// `transform`, with the class of what it raised. A phase whose Python
     /// raises no class of its own says `Exception`, which nothing catches.
-    fn transform_raising(&mut self, body: LirBody) -> Result<LirBody, Exception> {
+    fn transform_raising(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, Exception> {
         self.transform(body).map_err(|message| Exception::new("Exception", message))
     }
 }

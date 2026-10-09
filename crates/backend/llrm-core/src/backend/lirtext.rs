@@ -8,7 +8,10 @@ use crate::model::lir::LirBody;
 use crate::support::pyrepr::Repr;
 
 /// `=== stage`, then each body's instructions and operands, short enough to diff.
-pub fn lir_stage(stage: &str, bodies: &[(String, LirBody)]) -> String {
+pub fn lir_stage(
+    stage: &str,
+    bodies: &[(String, LirBody)],
+) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "=== {stage}");
     for (name, one) in bodies {
@@ -17,13 +20,18 @@ pub fn lir_stage(stage: &str, bodies: &[(String, LirBody)]) -> String {
     out
 }
 
-fn _lir_body(out: &mut String, name: &str, body: &LirBody) {
+fn _lir_body(
+    out: &mut String,
+    name: &str,
+    body: &LirBody,
+) {
     let count: usize = body.blocks.iter().map(|block| block.insns.len()).sum();
     let _ = writeln!(out, "  {name}: {count} instructions");
     for block in &body.blocks {
         let _ = writeln!(out, "    block {}", hex6(block.at));
         for phi in &block.phis {
-            let arms = phi.incoming.iter().map(|(at, value)| format!("{}:v{value}", hex6(*at))).collect::<Vec<_>>().join(" ");
+            let arms =
+                phi.incoming.iter().map(|(at, value)| format!("{}:v{value}", hex6(*at))).collect::<Vec<_>>().join(" ");
             let _ = writeln!(out, "      v{} := phi {arms}", phi.result);
         }
         for one in &block.insns {
@@ -49,11 +57,19 @@ fn _lir_body(out: &mut String, name: &str, body: &LirBody) {
                 notes.push("frame adjust".to_owned());
             }
             if !one.requires.is_empty() {
-                let parts = one.requires.iter().map(|(held, register)| format!("v{}@{}", held.value, _name_of(*register))).collect::<Vec<_>>();
+                let parts = one
+                    .requires
+                    .iter()
+                    .map(|(held, register)| format!("v{}@{}", held.value, _name_of(*register)))
+                    .collect::<Vec<_>>();
                 notes.push(format!("requires {}", parts.join(",")));
             }
             if !one.delivers.is_empty() {
-                let parts = one.delivers.iter().map(|(held, register)| format!("v{}@{}", held.value, _name_of(*register))).collect::<Vec<_>>();
+                let parts = one
+                    .delivers
+                    .iter()
+                    .map(|(held, register)| format!("v{}@{}", held.value, _name_of(*register)))
+                    .collect::<Vec<_>>();
                 notes.push(format!("delivers {}", parts.join(",")));
             }
             if !one.clobbers.is_empty() {
@@ -77,14 +93,22 @@ fn _operand(one: &Loc) -> String {
         Loc::Reg(reg) => _name_of(reg.register),
         Loc::Held(held) => format!("v{}", held.value),
         Loc::Imm(imm) => {
-            if imm.value >= 0 { format!("{:#x}", imm.value) } else { imm.value.to_string() }
+            if imm.value >= 0 {
+                format!("{:#x}", imm.value)
+            } else {
+                imm.value.to_string()
+            }
         }
         Loc::Mem(mem) => {
             let addr = mem.addr.map_or_else(|| "None".to_owned(), |addr| addr.repr());
             match mem.base {
                 None => format!("[{addr}]"),
                 Some(base) => {
-                    let placed = if mem.through == iced_x86::Register::None { "unplaced".to_owned() } else { _name_of(mem.through) };
+                    let placed = if mem.through == iced_x86::Register::None {
+                        "unplaced".to_owned()
+                    } else {
+                        _name_of(mem.through)
+                    };
                     format!("[{addr} v{}@{placed}]", base.value)
                 }
             }

@@ -1,7 +1,9 @@
 use std::cell::RefCell;
-use llrm_core::abi::nib as rt;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+
+pub use facts::{Fact, Known};
+use llrm_core::abi::nib as rt;
 
 use super::arguments;
 use super::arguments::Formal;
@@ -16,6 +18,8 @@ use super::syntax::AssignTarget;
 use super::syntax::BinaryOp;
 use super::syntax::Clause;
 use super::syntax::Expr;
+use super::syntax::FOREIGN;
+use super::syntax::FUNCTION;
 use super::syntax::FixedStorage;
 use super::syntax::FixedType;
 use super::syntax::Function;
@@ -29,66 +33,62 @@ use super::syntax::Statement;
 use super::syntax::Struct;
 use super::syntax::StructField;
 use super::syntax::TUPLE;
-use super::syntax::FUNCTION;
-use super::syntax::FOREIGN;
 use super::syntax::TypeAnnotation;
 use super::syntax::TypeName;
 use super::syntax::TypeSpec;
 use super::syntax::UnaryOp;
 use super::syntax::{FStringPart, Format};
 
-pub use facts::{Fact, Known};
-
 mod array_places;
-mod debug;
-mod basic;
-mod statements;
-mod assembly;
-mod loops;
-mod places;
-mod expressions;
-mod indexing;
-mod operators;
-mod hints;
 mod arrays;
-mod calls;
-mod printing;
-mod emission;
+mod assembly;
+mod basic;
 mod bits;
-mod function_values;
+mod borrows;
+mod calls;
+mod captures;
 mod checks;
 mod conditional;
-mod division;
-mod enums;
-mod exhaustive;
-mod failure;
-mod drops;
-mod foreign;
-mod pointers;
-mod generators;
-mod escaping;
-mod facts;
-mod statics;
-mod generics;
-mod borrows;
+mod debug;
 mod dictionaries;
-mod references;
+mod division;
+mod drops;
+mod emission;
+mod enums;
+mod escaping;
+mod exhaustive;
+mod expressions;
+mod facts;
+mod failure;
+mod foreign;
+mod function_values;
+mod generators;
+mod generics;
+mod hints;
+mod indexing;
 mod instances;
 mod iterators;
-mod views;
-mod captures;
-mod liveness;
-mod modref;
-mod writable;
 mod lambdas;
+mod liveness;
+mod loops;
 mod matching;
 mod methods;
+mod modref;
 mod moves;
+mod operators;
 mod ownership;
+mod places;
+mod pointers;
+mod printing;
+mod references;
 mod runtime;
+mod statements;
+mod statics;
 mod strings;
 mod tuples;
 mod vectors;
+mod views;
+mod writable;
 use ownership::Owned;
 mod properties;
 mod results;
@@ -126,7 +126,11 @@ struct LiteralPool {
 }
 
 impl LiteralPool {
-    fn float(&mut self, type_name: TypeName, bits: u64) -> u32 {
+    fn float(
+        &mut self,
+        type_name: TypeName,
+        bits: u64,
+    ) -> u32 {
         if let Some(symbol) = self.floats.get(&(type_name, bits)) {
             return *symbol;
         }
@@ -145,13 +149,22 @@ impl LiteralPool {
     }
 
     /// Data of its own: a module variable's, huge in `segment` if given.
-    fn object(&mut self, name: &str, bytes: Vec<u8>, readonly: bool, segment: Option<String>) -> u32 {
+    fn object(
+        &mut self,
+        name: &str,
+        bytes: Vec<u8>,
+        readonly: bool,
+        segment: Option<String>,
+    ) -> u32 {
         let id = self.data.len() as u32 + 1;
         self.data.push(hir::DataObject { id, name: name.into(), bytes, readonly, code: None, segment });
         id
     }
 
-    fn string(&mut self, value: &[u8]) -> u32 {
+    fn string(
+        &mut self,
+        value: &[u8],
+    ) -> u32 {
         if let Some(symbol) = self.strings.get(value) {
             return *symbol;
         }
@@ -182,12 +195,23 @@ impl LiteralPool {
 
     /// Data holding the far address of the callable `callable`, whose
     /// symbol is `name`; the linker writes it.
-    fn address(&mut self, callable: u32, name: &str) -> u32 {
+    fn address(
+        &mut self,
+        callable: u32,
+        name: &str,
+    ) -> u32 {
         if let Some(found) = self.data.iter().find(|one| one.code == Some(callable)) {
             return found.id;
         }
         let id = self.data.len() as u32 + 1;
-        self.data.push(hir::DataObject { id, name: format!("$address_{name}"), bytes: vec![0; 4], readonly: true, code: Some(callable), segment: None });
+        self.data.push(hir::DataObject {
+            id,
+            name: format!("$address_{name}"),
+            bytes: vec![0; 4],
+            readonly: true,
+            code: Some(callable),
+            segment: None,
+        });
         id
     }
 }
@@ -296,12 +320,18 @@ impl ElementType {
 
 impl TypeRegistry {
     /// The bytes of a pointer of the language: the target's near or far one.
-    pub(super) fn pointer_width(&self, far: bool) -> u8 {
+    pub(super) fn pointer_width(
+        &self,
+        far: bool,
+    ) -> u8 {
         u8::try_from(if far { self.sizes.far } else { self.sizes.near }).expect("a pointer is under 256 bytes")
     }
 
     /// The field alignment a struct packs to: `@repr("c")` without `pack=` is the target's, its stack slot.
-    fn effective_pack(&self, pack: Option<u32>) -> u32 {
+    fn effective_pack(
+        &self,
+        pack: Option<u32>,
+    ) -> u32 {
         match pack {
             None => 2,
             Some(crate::parser::TARGET_PACK) => self.sizes.slot,
@@ -311,7 +341,12 @@ impl TypeRegistry {
 
     /// The language's types, its pointers `sizes` bytes wide, its own functions in the
     /// convention `native` and the conventions the target defines `conventions`.
-    fn new(sizes: crate::Sizes, native: Abi, conventions: Vec<String>, bits: u32) -> Self {
+    fn new(
+        sizes: crate::Sizes,
+        native: Abi,
+        conventions: Vec<String>,
+        bits: u32,
+    ) -> Self {
         Self {
             sizes,
             code_bits: bits,
@@ -386,12 +421,14 @@ impl TypeRegistry {
         }
     }
 
-    fn register_fixed_types(&mut self, declarations: &[FixedType]) -> Result<(), Diagnostic> {
+    fn register_fixed_types(
+        &mut self,
+        declarations: &[FixedType],
+    ) -> Result<(), Diagnostic> {
         if declarations.is_empty() {
             return Ok(());
         }
-        self.types
-            .push(plain_type(I64, "$i64", "integer", 8, Some(true), "none"));
+        self.types.push(plain_type(I64, "$i64", "integer", 8, Some(true), "none"));
         for declaration in declarations {
             if self.fixed_names.contains_key(&declaration.name) {
                 return Err(Diagnostic::new(
@@ -399,20 +436,12 @@ impl TypeRegistry {
                     format!("type {:?} is declared more than once", declaration.name),
                 ));
             }
-            let TypeName::Fixed {
-                storage,
-                declaration: ordinal,
-                ..
-            } = declaration.type_name
-            else {
+            let TypeName::Fixed { storage, declaration: ordinal, .. } = declaration.type_name else {
                 unreachable!("only fixed types are registered here")
             };
             let id = FIXED_START + u32::from(ordinal);
             if id != self.types.len() as u32 + 1 {
-                return Err(Diagnostic::new(
-                    declaration.span,
-                    "fixed-point declarations are out of order",
-                ));
+                return Err(Diagnostic::new(declaration.span, "fixed-point declarations are out of order"));
             }
             self.types.push(plain_type(
                 id,
@@ -425,13 +454,15 @@ impl TypeRegistry {
                 Some(true),
                 "none",
             ));
-            self.fixed_names
-                .insert(declaration.name.clone(), declaration.type_name);
+            self.fixed_names.insert(declaration.name.clone(), declaration.type_name);
         }
         Ok(())
     }
 
-    pub(super) fn register_struct(&mut self, declaration: &Struct) -> Result<(), Diagnostic> {
+    pub(super) fn register_struct(
+        &mut self,
+        declaration: &Struct,
+    ) -> Result<(), Diagnostic> {
         if self.declared(&declaration.name) {
             return Err(Diagnostic::new(
                 declaration.span,
@@ -447,23 +478,17 @@ impl TypeRegistry {
         let mut alignment = 1;
         for field in &declaration.fields {
             if fields.contains_key(&field.name) {
-                return Err(Diagnostic::new(
-                    field.span,
-                    format!("field {:?} is declared more than once", field.name),
-                ));
+                return Err(Diagnostic::new(field.span, format!("field {:?} is declared more than once", field.name)));
             }
-            let (layout, field_alignment, units) = self.place_field(field, offset, self.effective_pack(declaration.pack))?;
+            let (layout, field_alignment, units) =
+                self.place_field(field, offset, self.effective_pack(declaration.pack))?;
             fields.insert(field.name.clone(), layout);
             copy.extend(units);
             offset = layout.offset + self.field_width(layout);
             alignment = alignment.max(field_alignment);
         }
         let width = align_up(offset, alignment);
-        let order = declaration
-            .fields
-            .iter()
-            .map(|one| one.name.clone())
-            .collect();
+        let order = declaration.fields.iter().map(|one| one.name.clone()).collect();
         let holds_enum = fields.values().any(|field| self.byte_copy(field.type_.id()).is_some());
         let id = self.aggregate(&declaration.name, width, fields, order, copy);
         if holds_enum {
@@ -479,7 +504,12 @@ impl TypeRegistry {
     /// allows, no field aligned to more than `pack`: its layout, its
     /// alignment, and the runs a copy of it moves. An array field is
     /// aligned as its element is.
-    pub(super) fn place_field(&mut self, field: &StructField, offset: u32, pack: u32) -> Result<(FieldLayout, u32, Vec<(u32, TypeName, u32)>), Diagnostic> {
+    pub(super) fn place_field(
+        &mut self,
+        field: &StructField,
+        offset: u32,
+        pack: u32,
+    ) -> Result<(FieldLayout, u32, Vec<(u32, TypeName, u32)>), Diagnostic> {
         let type_ = self.resolve_element(&field.type_spec, field.span)?;
         let shape = (!field.dims.is_empty()).then(|| Shape::new(&field.dims));
         let alignment = self.width(type_.id()).clamp(1, pack);
@@ -496,7 +526,10 @@ impl TypeRegistry {
     }
 
     /// The bytes `field` takes.
-    pub(super) fn field_width(&self, field: FieldLayout) -> u32 {
+    pub(super) fn field_width(
+        &self,
+        field: FieldLayout,
+    ) -> u32 {
         self.width(field.type_.id()) * field.shape.map_or(1, |one| one.len())
     }
 
@@ -522,26 +555,22 @@ impl TypeRegistry {
             bounds: Vec::new(),
             address: "none",
         });
-        self.structs.insert(
-            name.into(),
-            StructLayout {
-                id,
-                name: name.into(),
-                fields,
-                order,
-                copy,
-                bytes: false,
-            },
-        );
+        self.structs.insert(name.into(), StructLayout { id, name: name.into(), fields, order, copy, bytes: false });
         id
     }
 
     /// The bytes a copy of `id` moves whole, if it moves them so.
-    fn byte_copy(&self, id: u32) -> Option<u32> {
+    fn byte_copy(
+        &self,
+        id: u32,
+    ) -> Option<u32> {
         self.structure(id).filter(|layout| layout.bytes).map(|_| self.width(id))
     }
 
-    fn copy_units(&self, element: ElementType) -> Vec<(u32, TypeName, u32)> {
+    fn copy_units(
+        &self,
+        element: ElementType,
+    ) -> Vec<(u32, TypeName, u32)> {
         match element {
             ElementType::Scalar(type_name) => vec![(0, type_name, 1)],
             ElementType::Struct(id) => match self.array_of(id) {
@@ -557,11 +586,17 @@ impl TypeRegistry {
     /// The run of cells a copy of an array of `element` and `shape` moves:
     /// its numbers, or any other element's bytes, as words where they pair,
     /// so the copy is of bits and never of ownership.
-    fn array_run(&self, element: ElementType, shape: Shape) -> (TypeName, u32) {
+    fn array_run(
+        &self,
+        element: ElementType,
+        shape: Shape,
+    ) -> (TypeName, u32) {
         let bytes = self.width(element.id()) * shape.len();
         match element {
             ElementType::Scalar(type_name)
-                if is_integer(type_name) || is_float(type_name) || matches!(type_name, TypeName::Bool | TypeName::Char) =>
+                if is_integer(type_name)
+                    || is_float(type_name)
+                    || matches!(type_name, TypeName::Bool | TypeName::Char) =>
             {
                 (type_name, shape.len())
             }
@@ -570,14 +605,21 @@ impl TypeRegistry {
         }
     }
 
-    fn declared(&self, name: &str) -> bool {
+    fn declared(
+        &self,
+        name: &str,
+    ) -> bool {
         self.structs.contains_key(name)
             || self.enums.contains_key(name)
             || self.bits.contains_key(name)
             || self.fixed_names.contains_key(name)
     }
 
-    fn resolve_element(&mut self, spec: &TypeSpec, span: Span) -> Result<ElementType, Diagnostic> {
+    fn resolve_element(
+        &mut self,
+        spec: &TypeSpec,
+        span: Span,
+    ) -> Result<ElementType, Diagnostic> {
         match spec {
             TypeSpec::Primitive(type_name) => Ok(ElementType::Scalar(*type_name)),
             TypeSpec::Applied { name, args } if name == "vec" => match args.as_slice() {
@@ -599,16 +641,21 @@ impl TypeRegistry {
                     .iter()
                     .map(|arg| match arg {
                         TypeAnnotation::Value(element) => Ok((self.resolve_element(element, span)?, None)),
-                        TypeAnnotation::Array { element, dims } => Ok((self.resolve_element(element, span)?, Some(Shape::new(dims)))),
+                        TypeAnnotation::Array { element, dims } => {
+                            Ok((self.resolve_element(element, span)?, Some(Shape::new(dims))))
+                        }
                         TypeAnnotation::Slice { .. } => Err(Diagnostic::new(span, "a tuple element cannot be a view")),
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(ElementType::Struct(self.tuple(&elements, span)?))
             }
-            TypeSpec::Applied { name, args } if name == FUNCTION => Ok(ElementType::Scalar(self.function_type_spelled(args, span)?)),
+            TypeSpec::Applied { name, args } if name == FUNCTION => {
+                Ok(ElementType::Scalar(self.function_type_spelled(args, span)?))
+            }
             TypeSpec::Applied { name, args } if name.starts_with(FOREIGN) => match args.as_slice() {
                 [TypeAnnotation::Value(TypeSpec::Applied { name: function, args })] if function == FUNCTION => {
-                    let abi = Abi::named(name[FOREIGN.len()..].trim_matches([' ', '"'])).expect("the parser names an ABI");
+                    let abi =
+                        Abi::named(name[FOREIGN.len()..].trim_matches([' ', '"'])).expect("the parser names an ABI");
                     let function = self.function_type_spelled(args, span)?;
                     Ok(ElementType::Scalar(self.foreign_function(abi, function, span)?))
                 }
@@ -652,22 +699,18 @@ impl TypeRegistry {
                 .get(name)
                 .copied()
                 .map(ElementType::Scalar)
-                .or_else(|| {
-                    self.structs
-                        .get(name)
-                        .map(|one| ElementType::Struct(one.id))
-                })
+                .or_else(|| self.structs.get(name).map(|one| ElementType::Struct(one.id)))
                 .or_else(|| self.enums.get(name).map(|one| one.element))
-                .or_else(|| {
-                    self.bits
-                        .get(name)
-                        .map(|one| ElementType::Scalar(one.type_name))
-                })
+                .or_else(|| self.bits.get(name).map(|one| ElementType::Scalar(one.type_name)))
                 .ok_or_else(|| Diagnostic::new(span, format!("unknown type {name:?}"))),
         }
     }
 
-    fn array(&mut self, element: ElementType, shape: Shape) -> u32 {
+    fn array(
+        &mut self,
+        element: ElementType,
+        shape: Shape,
+    ) -> u32 {
         let element_id = element.id();
         if let Some(id) = self.arrays.get(&(element_id, shape)) {
             return *id;
@@ -684,11 +727,7 @@ impl TypeRegistry {
             evaluation: "none",
             element: Some(element_id),
             rank: u32::from(shape.rank),
-            bounds: shape
-                .dims()
-                .iter()
-                .map(|one| (0, i32::try_from(one - 1).expect("array length checked")))
-                .collect(),
+            bounds: shape.dims().iter().map(|one| (0, i32::try_from(one - 1).expect("array length checked"))).collect(),
             address: "near",
         });
         self.arrays.insert((element_id, shape), id);
@@ -698,12 +737,18 @@ impl TypeRegistry {
 
     /// The element and shape of the fixed array type `id`, when it is one.
     /// A view's `struct_id` may name one: an array is an aggregate too.
-    pub(super) fn array_of(&self, id: u32) -> Option<(ElementType, Shape)> {
+    pub(super) fn array_of(
+        &self,
+        id: u32,
+    ) -> Option<(ElementType, Shape)> {
         self.array_types.get(&id).copied()
     }
 
     /// How a value of the aggregate `id` is bound: a struct or a fixed array.
-    pub(super) fn aggregate_binding(&self, id: u32) -> BindingType {
+    pub(super) fn aggregate_binding(
+        &self,
+        id: u32,
+    ) -> BindingType {
         match self.array_of(id) {
             Some((element, shape)) => BindingType::Array { element, shape },
             None => BindingType::Struct(id),
@@ -711,7 +756,11 @@ impl TypeRegistry {
     }
 
     /// How a fixed array type is named: `[u8; 2, 3]`.
-    fn array_name(&self, element: ElementType, shape: Shape) -> String {
+    fn array_name(
+        &self,
+        element: ElementType,
+        shape: Shape,
+    ) -> String {
         let dims: Vec<String> = shape.dims().iter().map(u32::to_string).collect();
         format!("[{}; {}]", self.types[(element.id() - 1) as usize].name, dims.join(", "))
     }
@@ -731,15 +780,27 @@ impl TypeRegistry {
         self.sizes.near
     }
 
-    fn width(&self, id: u32) -> u32 {
+    fn width(
+        &self,
+        id: u32,
+    ) -> u32 {
         self.types[(id - 1) as usize].width
     }
 
     /// The bytes a reference to `target` reaches: all of it, where it is one
     /// value of a known size.
-    fn referent_bytes(&self, target: BindingType) -> Option<u32> {
+    fn referent_bytes(
+        &self,
+        target: BindingType,
+    ) -> Option<u32> {
         match target {
-            BindingType::Scalar(TypeName::String | TypeName::Vector { .. } | TypeName::Dictionary { .. } | TypeName::Function { .. } | TypeName::Void) => None,
+            BindingType::Scalar(
+                TypeName::String
+                | TypeName::Vector { .. }
+                | TypeName::Dictionary { .. }
+                | TypeName::Function { .. }
+                | TypeName::Void,
+            ) => None,
             BindingType::Scalar(type_name) => Some(width(self.sizes, type_name)),
             BindingType::Struct(id) => Some(self.width(id)),
             BindingType::Array { element, shape } => Some(shape.len() * self.width(element.id())),
@@ -747,7 +808,11 @@ impl TypeRegistry {
         }
     }
 
-    fn pointer(&mut self, target: u32, rank: u32) -> u32 {
+    fn pointer(
+        &mut self,
+        target: u32,
+        rank: u32,
+    ) -> u32 {
         if let Some(id) = self.pointers.get(&(target, rank)) {
             return *id;
         }
@@ -758,7 +823,13 @@ impl TypeRegistry {
     }
 
     /// A new pointer type to `target`, far or near.
-    fn pointer_type(&mut self, name: String, target: u32, rank: u32, far: bool) -> u32 {
+    fn pointer_type(
+        &mut self,
+        name: String,
+        target: u32,
+        rank: u32,
+        far: bool,
+    ) -> u32 {
         let id = self.types.len() as u32 + 1;
         self.types.push(hir::Type {
             id,
@@ -775,18 +846,19 @@ impl TypeRegistry {
         id
     }
 
-    fn slice_descriptor(&mut self, element: ElementType, rank: u8) -> u32 {
+    fn slice_descriptor(
+        &mut self,
+        element: ElementType,
+        rank: u8,
+    ) -> u32 {
         let element_id = element.id();
         if let Some(id) = self.slice_descriptors.get(&(element_id, rank)) {
             return *id;
         }
         let id = self.types.len() as u32 + 1;
         let element_name = self.types[(element_id - 1) as usize].name.clone();
-        let name = if rank == 1 {
-            format!("$slice[{element_name}]")
-        } else {
-            format!("$slice[{element_name}, {rank}]")
-        };
+        let name =
+            if rank == 1 { format!("$slice[{element_name}]") } else { format!("$slice[{element_name}, {rank}]") };
         self.types.push(hir::Type {
             id,
             name,
@@ -805,16 +877,30 @@ impl TypeRegistry {
 
     /// A struct laid out as the descriptor of a view of `element` at `rank`:
     /// its dimensions, capacity and far data pointer.
-    pub(super) fn kept_view(&mut self, element: ElementType, rank: u8, mutable: bool, span: Span) -> Result<u32, Diagnostic> {
-        let found = self.kept_views.iter().find(|(id, kept)| **kept == (element, rank) && self.writable_views.contains(*id) == mutable);
+    pub(super) fn kept_view(
+        &mut self,
+        element: ElementType,
+        rank: u8,
+        mutable: bool,
+        span: Span,
+    ) -> Result<u32, Diagnostic> {
+        let found = self
+            .kept_views
+            .iter()
+            .find(|(id, kept)| **kept == (element, rank) && self.writable_views.contains(*id) == mutable);
         if let Some((&id, _)) = found {
             return Ok(id);
         }
         let word = TypeSpec::Primitive(self.word());
         let data = TypeSpec::Applied { name: "&".into(), args: vec![TypeAnnotation::Value(self.spec_of(element))] };
-        let field = |name: String, type_spec: TypeSpec| StructField { name, mutable: false, type_spec, dims: Vec::new(), span };
+        let field =
+            |name: String, type_spec: TypeSpec| StructField { name, mutable: false, type_spec, dims: Vec::new(), span };
         let declared = Struct {
-            name: format!("$view{}[{}, {rank}]", if mutable { "_mut" } else { "" }, self.types[(element.id() - 1) as usize].name),
+            name: format!(
+                "$view{}[{}, {rank}]",
+                if mutable { "_mut" } else { "" },
+                self.types[(element.id() - 1) as usize].name
+            ),
             generics: Vec::new(),
             bits: None,
             pack: None,
@@ -834,7 +920,11 @@ impl TypeRegistry {
         Ok(id)
     }
 
-    fn slice_pointer(&mut self, element: ElementType, rank: u8) -> u32 {
+    fn slice_pointer(
+        &mut self,
+        element: ElementType,
+        rank: u8,
+    ) -> u32 {
         let descriptor = self.slice_descriptor(element, rank);
         self.pointer(descriptor, 1)
     }
@@ -857,13 +947,7 @@ impl TypeRegistry {
             }
             TypeAnnotation::Slice { element, rank } => {
                 let element = self.resolve_element(element, span)?;
-                Ok((
-                    BindingType::Slice {
-                        element,
-                        rank: *rank,
-                    },
-                    element.id(),
-                ))
+                Ok((BindingType::Slice { element, rank: *rank }, element.id()))
             }
             TypeAnnotation::Array { element, dims } => {
                 let element = self.resolve_element(element, span)?;
@@ -874,12 +958,18 @@ impl TypeRegistry {
         }
     }
 
-    fn structure(&self, id: u32) -> Option<&StructLayout> {
+    fn structure(
+        &self,
+        id: u32,
+    ) -> Option<&StructLayout> {
         self.structs.values().find(|one| one.id == id)
     }
 }
 
-fn align_up(value: u32, alignment: u32) -> u32 {
+fn align_up(
+    value: u32,
+    alignment: u32,
+) -> u32 {
     value.div_ceil(alignment) * alignment
 }
 
@@ -907,14 +997,20 @@ fn plain_type(
 
 impl Signature {
     /// The bytes its arguments take on the stack, each at least a word.
-    fn argument_bytes(&self, types: &TypeRegistry) -> u32 {
+    fn argument_bytes(
+        &self,
+        types: &TypeRegistry,
+    ) -> u32 {
         let hidden = self.result_pointer.map_or(0, |one| types.width(type_id(one)));
         self.parameters.iter().map(|one| types.width(one.hir_type()).max(types.sizes.slot)).sum::<u32>() + hidden
     }
 
     /// Whether it takes and gives what `other` does, a value matching a
     /// borrow of it (section 11).
-    fn matches(&self, other: &Signature) -> bool {
+    fn matches(
+        &self,
+        other: &Signature,
+    ) -> bool {
         self.result == other.result
             && self.slot == other.slot
             && self.view == other.view
@@ -922,7 +1018,10 @@ impl Signature {
             && self.parameters.iter().zip(&other.parameters).all(|(one, another)| one.passed() == another.passed())
     }
 
-    fn callable(&self, types: &mut TypeRegistry) -> hir::Callable {
+    fn callable(
+        &self,
+        types: &mut TypeRegistry,
+    ) -> hir::Callable {
         hir::Callable {
             id: self.id,
             name: self.name.clone(),
@@ -1031,13 +1130,12 @@ struct Loop {
 }
 
 impl Loop {
-    fn new(exit: u32, next: u32, depth: usize) -> Self {
-        Self {
-            exit,
-            exit_depth: depth,
-            next,
-            next_depth: depth,
-        }
+    fn new(
+        exit: u32,
+        next: u32,
+        depth: usize,
+    ) -> Self {
+        Self { exit, exit_depth: depth, next, next_depth: depth }
     }
 }
 
@@ -1057,15 +1155,7 @@ fn binding_view(
             unreachable!("a struct binding is a place or a reference")
         }
     };
-    Some(StructView {
-        struct_id,
-        place,
-        pointer,
-        indices,
-        offset: 0,
-        mutable,
-        owner: owner.into(),
-    })
+    Some(StructView { struct_id, place, pointer, indices, offset: 0, mutable, owner: owner.into() })
 }
 
 #[derive(Clone, Debug)]
@@ -1094,7 +1184,11 @@ struct StructView {
 enum Store {
     One(hir::Operand, hir::Operand),
     /// `count` bytes of `source`, copied byte for byte.
-    Bytes { destination: StructView, source: StructView, count: u32 },
+    Bytes {
+        destination: StructView,
+        source: StructView,
+        count: u32,
+    },
     Run {
         destination: StructView,
         element: ElementType,
@@ -1135,15 +1229,15 @@ enum ElementAt {
 }
 
 impl ElementAt {
-    fn operand(self, type_id: u32) -> hir::Operand {
+    fn operand(
+        self,
+        type_id: u32,
+    ) -> hir::Operand {
         match self {
             Self::Element(place, indices) => hir::Operand::ArrayElement(place, indices),
-            Self::Pointer(base) => hir::Operand::IndirectPlace {
-                base,
-                offset: 0,
-                type_id,
-                inbounds: true, member: None,
-            },
+            Self::Pointer(base) => {
+                hir::Operand::IndirectPlace { base, offset: 0, type_id, inbounds: true, member: None }
+            }
         }
     }
 
@@ -1167,10 +1261,7 @@ impl Shape {
     fn new(dims: &[u32]) -> Self {
         let mut all = [1; MAX_RANK];
         all[..dims.len()].copy_from_slice(dims);
-        Self {
-            rank: dims.len() as u8,
-            dims: all,
-        }
+        Self { rank: dims.len() as u8, dims: all }
     }
 
     fn dims(&self) -> &[u32] {
@@ -1184,20 +1275,14 @@ impl Shape {
     /// Each dimension's stride in elements; the last one is 1.
     fn strides(&self) -> Vec<u32> {
         let dims = self.dims();
-        (0..dims.len())
-            .map(|axis| dims[axis + 1..].iter().product())
-            .collect()
+        (0..dims.len()).map(|axis| dims[axis + 1..].iter().product()).collect()
     }
 
     /// The descriptor's words, in order, with their names.
     fn descriptor(&self) -> Vec<(String, u32)> {
         let mut words = Vec::new();
         for (axis, length) in self.dims().iter().enumerate() {
-            let name = if self.rank == 1 {
-                "length".into()
-            } else {
-                format!("dim{axis}")
-            };
+            let name = if self.rank == 1 { "length".into() } else { format!("dim{axis}") };
             words.push((name, *length));
         }
         words.push(("capacity".into(), self.len()));
@@ -1210,16 +1295,25 @@ impl Shape {
 /// row-major and contiguous, so the strides follow from the dimensions.
 mod descriptor {
     /// The descriptor of a program's own arrays and views: each word `word` bytes, the target's usize.
-    pub fn dim(axis: u8, word: u32) -> u32 {
+    pub fn dim(
+        axis: u8,
+        word: u32,
+    ) -> u32 {
         word * u32::from(axis)
     }
 
-    pub fn capacity(rank: u8, word: u32) -> u32 {
+    pub fn capacity(
+        rank: u8,
+        word: u32,
+    ) -> u32 {
         dim(rank, word)
     }
 
     /// The descriptor's size, and so a view's data pointer offset.
-    pub fn size(rank: u8, word: u32) -> u32 {
+    pub fn size(
+        rank: u8,
+        word: u32,
+    ) -> u32 {
         capacity(rank, word) + word
     }
 
@@ -1242,14 +1336,8 @@ mod descriptor {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BindingType {
     Scalar(TypeName),
-    Slice {
-        element: ElementType,
-        rank: u8,
-    },
-    Array {
-        element: ElementType,
-        shape: Shape,
-    },
+    Slice { element: ElementType, rank: u8 },
+    Array { element: ElementType, shape: Shape },
     Struct(u32),
 }
 
@@ -1315,10 +1403,7 @@ fn signature(
         }
         // A default is evaluated at each call site, in the caller's scope.
         if let Some(default) = parameter.default.as_ref().filter(|one| !is_constant(one)) {
-            return Err(Diagnostic::new(
-                default.span(),
-                "a default must be a literal",
-            ));
+            return Err(Diagnostic::new(default.span(), "a default must be a literal"));
         }
     }
     let resolved_parameters = function
@@ -1340,11 +1425,7 @@ fn signature(
         id,
         name: function.name.clone(),
         parameters: resolved_parameters,
-        formals: function
-            .parameters
-            .iter()
-            .map(|one| (one.name.clone(), one.default.clone()))
-            .collect(),
+        formals: function.parameters.iter().map(|one| (one.name.clone(), one.default.clone())).collect(),
         result,
         slot,
         foreign: false,
@@ -1365,49 +1446,43 @@ fn parameter_kind(
         ParameterType::Owned(TypeAnnotation::Value(spec)) if super::syntax::Adapter::of(spec).is_some() => {
             Ok(types.adapter_parameter(spec, parameter.span)?.expect("an adapter"))
         }
-        ParameterType::Owned(annotation) => {
-            match types.parameter_target(annotation, parameter.span)? {
-                (BindingType::Scalar(type_name), _) => Ok(SignatureParameter::Scalar(type_name)),
-                (BindingType::Struct(struct_id), _) => Ok(SignatureParameter::Owned {
-                    struct_id,
-                    pointer: types.pointer(struct_id, 0),
-                }),
-                _ => Err(Diagnostic::new(
-                    parameter.span,
-                    "an array parameter is borrowed: '&T[N]' or '&[T]'",
-                )),
+        ParameterType::Owned(annotation) => match types.parameter_target(annotation, parameter.span)? {
+            (BindingType::Scalar(type_name), _) => Ok(SignatureParameter::Scalar(type_name)),
+            (BindingType::Struct(struct_id), _) => {
+                Ok(SignatureParameter::Owned { struct_id, pointer: types.pointer(struct_id, 0) })
             }
-        }
+            _ => Err(Diagnostic::new(parameter.span, "an array parameter is borrowed: '&T[N]' or '&[T]'")),
+        },
         ParameterType::Borrowed { mutable, target } => {
             let (mut target, target_id) = types.parameter_target(target, parameter.span)?;
             // `&string` is a view, the descriptor `&[char]` is; `&mut string`
             // borrows the owned string, which may grow.
             if target == BindingType::Scalar(TypeName::String) && !mutable {
-                target = BindingType::Slice {
-                    element: ElementType::Scalar(TypeName::Char),
-                    rank: 1,
-                };
+                target = BindingType::Slice { element: ElementType::Scalar(TypeName::Char), rank: 1 };
             }
             let pointer = match target {
                 BindingType::Slice { element, rank } => types.slice_pointer(element, rank),
                 _ => types.pointer(target_id, 0),
             };
-            Ok(SignatureParameter::Borrowed {
-                mutable: *mutable,
-                target,
-                pointer,
-            })
+            Ok(SignatureParameter::Borrowed { mutable: *mutable, target, pointer })
         }
     }
 }
 
-pub fn compile(module: &Module, module_name: &str, frontend: &super::Frontend) -> Result<String, Diagnostic> {
+pub fn compile(
+    module: &Module,
+    module_name: &str,
+    frontend: &super::Frontend,
+) -> Result<String, Diagnostic> {
     Ok(program(module, module_name, None, frontend)?.json())
 }
 
 /// Type-checks `module` as `compile` does: what the checker learned of the
 /// names it spells, and the first error.
-pub fn check(module: &Module, frontend: &super::Frontend) -> (Vec<Fact>, Result<(), Diagnostic>) {
+pub fn check(
+    module: &Module,
+    frontend: &super::Frontend,
+) -> (Vec<Fact>, Result<(), Diagnostic>) {
     let facts = RefCell::new(Vec::new());
     let checked = program(module, "", Some(&facts), frontend).map(drop);
     (facts.into_inner(), checked)
@@ -1429,12 +1504,10 @@ fn program(
     let mut literals = LiteralPool { word: frontend.sizes().near, ..Default::default() };
     types.register_statics(&module.statics, &statics::shared(module), module_name, &mut literals)?;
     let declared: Vec<Function> = module.functions.iter().map(|one| types.with_owner_generics(one)).collect();
-    let (generators, functions): (Vec<&Function>, Vec<&Function>) = declared
-        .iter()
-        .partition(|one| generators::is_generator(one));
-    let (templates, concrete): (Vec<&Function>, Vec<&Function>) = functions
-        .into_iter()
-        .partition(|one| !one.generics.is_empty());
+    let (generators, functions): (Vec<&Function>, Vec<&Function>) =
+        declared.iter().partition(|one| generators::is_generator(one));
+    let (templates, concrete): (Vec<&Function>, Vec<&Function>) =
+        functions.into_iter().partition(|one| !one.generics.is_empty());
     for function in &module.functions {
         let owner = function.name.split_once('.').map(|(owner, _)| owner);
         if owner.and_then(lexer::keyword).as_ref().and_then(parser::primitive).is_some() {
@@ -1460,7 +1533,10 @@ fn program(
                 foreign::check_foreign(&mut types, &mut signature, &function.name, function.span)?;
             }
             signature.exported = true;
-            signature.name = export.symbol.clone().unwrap_or_else(|| abi.map_or_else(|| function.name.clone(), |abi| types.symbol(abi, &function.name)));
+            signature.name = export
+                .symbol
+                .clone()
+                .unwrap_or_else(|| abi.map_or_else(|| function.name.clone(), |abi| types.symbol(abi, &function.name)));
         } else {
             foreign::check_adapters(&signature, &function.name, function.span)?;
         }
@@ -1478,10 +1554,7 @@ fn program(
         signatures.insert(name, foreign::foreign_signature(&mut types, declared, id)?);
     }
 
-    let mut callables: Vec<_> = signatures
-        .values()
-        .map(|signature| signature.callable(&mut types))
-        .collect();
+    let mut callables: Vec<_> = signatures.values().map(|signature| signature.callable(&mut types)).collect();
     let mut builtin_ids = BTreeMap::new();
     let routines: Vec<_> = print_builtins(&mut types)
         .into_iter()
@@ -1573,7 +1646,10 @@ fn program(
         stated.state(subject, fact);
     }
     for layout in types.statics.values().filter(|one| one.align > 1) {
-        stated.state(llrm_core::hir::facts::Subject::Object(i64::from(layout.symbol)), llrm_mir::facts::Fact::Align(u64::from(layout.align)));
+        stated.state(
+            llrm_core::hir::facts::Subject::Object(i64::from(layout.symbol)),
+            llrm_mir::facts::Fact::Align(u64::from(layout.align)),
+        );
     }
     // What the runtime's routines do, which no body shows: one that ends the
     // program touches nothing a caller's loop reads back, and one that prints
@@ -1610,7 +1686,11 @@ fn program(
 /// no other argument reaches what it does (calls.rs), and no callee writes
 /// a module variable lent to it (modref.rs). Other objects call an entry,
 /// exported or with its address taken, unchecked.
-fn checked(compiled: Vec<Compiled>, builtin_ids: &BTreeMap<&'static str, (u32, TypeName)>, literals: &LiteralPool) -> Result<Vec<hir::Function>, Diagnostic> {
+fn checked(
+    compiled: Vec<Compiled>,
+    builtin_ids: &BTreeMap<&'static str, (u32, TypeName)>,
+    literals: &LiteralPool,
+) -> Result<Vec<hir::Function>, Diagnostic> {
     let lends: Vec<modref::Lend> = compiled.iter().flat_map(|one| one.lends.iter().cloned()).collect();
     let addressed: BTreeSet<u32> = literals.data.iter().filter_map(|one| one.code).collect();
     let entry = |function: &hir::Function| function.exported || addressed.contains(&function.id);
@@ -1639,10 +1719,8 @@ fn checked(compiled: Vec<Compiled>, builtin_ids: &BTreeMap<&'static str, (u32, T
 }
 
 fn print_builtins(types: &mut TypeRegistry) -> Vec<(&'static str, Vec<u32>)> {
-    let mut out = vec![
-        (rt::PRINT_NEWLINE, Vec::new()),
-        (print_name(TypeName::String), runtime::scalars(&[TypeName::String])),
-    ];
+    let mut out =
+        vec![(rt::PRINT_NEWLINE, Vec::new()), (print_name(TypeName::String), runtime::scalars(&[TypeName::String]))];
     for type_name in [
         TypeName::Bool,
         TypeName::Char,
@@ -1690,14 +1768,8 @@ fn print_name(type_name: TypeName) -> &'static str {
         TypeName::U32 => rt::PRINT_U4,
         TypeName::F32 => rt::PRINT_R4,
         TypeName::F64 => rt::PRINT_R8,
-        TypeName::Fixed {
-            storage: FixedStorage::I16,
-            ..
-        } => rt::PRINT_Q2,
-        TypeName::Fixed {
-            storage: FixedStorage::I32,
-            ..
-        } => rt::PRINT_Q4,
+        TypeName::Fixed { storage: FixedStorage::I16, .. } => rt::PRINT_Q2,
+        TypeName::Fixed { storage: FixedStorage::I32, .. } => rt::PRINT_Q4,
         TypeName::Void | TypeName::I64 => unreachable!(),
     }
 }
@@ -1848,11 +1920,7 @@ impl<'a> FunctionCompiler<'a> {
             private_methods,
             values: Vec::new(),
             places: Vec::new(),
-            blocks: vec![BlockBuilder {
-                id: 1,
-                instructions: Vec::new(),
-                terminator: None,
-            }],
+            blocks: vec![BlockBuilder { id: 1, instructions: Vec::new(), terminator: None }],
             current: 1,
             parameters: Vec::new(),
             stated: llrm_core::hir::facts::Builder::new("nib"),
@@ -1916,12 +1984,20 @@ impl<'a> FunctionCompiler<'a> {
         if let (Some(struct_id), Some(_)) = (signature.slot, signature.in_registers(compiler.types)) {
             let width = compiler.types.width(struct_id);
             let place = compiler.local_place(RESULT, struct_id, width, true);
-            let binding = Binding { type_: compiler.types.aggregate_binding(struct_id), mutable: true, storage: Storage::Place(place) };
+            let binding = Binding {
+                type_: compiler.types.aggregate_binding(struct_id),
+                mutable: true,
+                storage: Storage::Place(place),
+            };
             compiler.scopes.last_mut().expect("scope").insert(RESULT.into(), binding);
         } else if signature.string_result.is_some() {
             // The view is returned here, in this frame, and copied before the return.
             let view = compiler.view_slot(ElementType::Scalar(TypeName::Char), 1);
-            let binding = Binding { type_: BindingType::Slice { element: ElementType::Scalar(TypeName::Char), rank: 1 }, mutable: true, storage: Storage::Slice(view) };
+            let binding = Binding {
+                type_: BindingType::Slice { element: ElementType::Scalar(TypeName::Char), rank: 1 },
+                mutable: true,
+                storage: Storage::Slice(view),
+            };
             compiler.scopes.last_mut().expect("scope").insert(RESULT.into(), binding);
         } else if let Some(pointer) = signature.slot_pointer(compiler.types) {
             let value = compiler.value_type(pointer);
@@ -1936,7 +2012,10 @@ impl<'a> FunctionCompiler<'a> {
         for (ordinal, (parameter, resolved)) in function.parameters.iter().zip(&signature.parameters).enumerate() {
             let value = compiler.value_type(resolved.hir_type());
             compiler.parameters.push(value);
-            let subject = llrm_core::hir::facts::Subject::Param { function: i64::from(signature.id), index: compiler.parameters.len() as i64 - 1 };
+            let subject = llrm_core::hir::facts::Subject::Param {
+                function: i64::from(signature.id),
+                index: compiler.parameters.len() as i64 - 1,
+            };
             if matches!(resolved, SignatureParameter::Borrowed { .. }) {
                 compiler.borrowed.push((ordinal, subject));
             }
@@ -1945,7 +2024,11 @@ impl<'a> FunctionCompiler<'a> {
                 // a binding writes one: no parameter is reseated.
                 SignatureParameter::Borrowed { target: BindingType::Slice { rank, .. }, .. } => {
                     let view_bytes = descriptor::size(rank, compiler.word_bytes()) + 4;
-                    compiler.stated.state(subject, llrm_mir::facts::Fact::NoAlias).state(subject, llrm_mir::facts::Fact::ReadOnly).state(subject, llrm_mir::facts::Fact::Dereferenceable(u64::from(view_bytes)));
+                    compiler
+                        .stated
+                        .state(subject, llrm_mir::facts::Fact::NoAlias)
+                        .state(subject, llrm_mir::facts::Fact::ReadOnly)
+                        .state(subject, llrm_mir::facts::Fact::Dereferenceable(u64::from(view_bytes)));
                 }
                 // A reference is made from a place, so it is not null and points at
                 // the whole of what it borrows; a shared one cannot write it. Whether
@@ -1956,7 +2039,10 @@ impl<'a> FunctionCompiler<'a> {
                 SignatureParameter::Owned { .. } => compiler.references.push(subject),
                 SignatureParameter::Borrowed { mutable, target, .. } => {
                     if let Some(bytes) = compiler.types.referent_bytes(target) {
-                        compiler.stated.state(subject, llrm_mir::facts::Fact::NonNull).state(subject, llrm_mir::facts::Fact::Dereferenceable(u64::from(bytes)));
+                        compiler
+                            .stated
+                            .state(subject, llrm_mir::facts::Fact::NonNull)
+                            .state(subject, llrm_mir::facts::Fact::Dereferenceable(u64::from(bytes)));
                         if !mutable {
                             compiler.stated.state(subject, llrm_mir::facts::Fact::ReadOnly);
                         }
@@ -1989,7 +2075,10 @@ impl<'a> FunctionCompiler<'a> {
                 };
                 if passed.is_some_and(|one| compiler.holds_reference(one)) {
                     let held = borrows::BorrowKey::Place(compiler.types.lent_root());
-                    let root = borrows::Root { exact: false, ..borrows::Root::new(held, &parameter.name, borrows::Life::Lent) };
+                    let root = borrows::Root {
+                        exact: false,
+                        ..borrows::Root::new(held, &parameter.name, borrows::Life::Lent)
+                    };
                     compiler.held.insert(owner, BTreeSet::from([root]));
                     if matches!(resolved, SignatureParameter::Borrowed { .. }) {
                         compiler.note_borrowed_parameter(held, ordinal);
@@ -2016,19 +2105,13 @@ impl<'a> FunctionCompiler<'a> {
         self.named_parameters.push((value, name.to_owned()));
         let (type_, mutable, storage) = match resolved {
             SignatureParameter::Adapter { .. } => unreachable!("an adapter binds through adapter_binding"),
-            SignatureParameter::Scalar(type_name) => (
-                BindingType::Scalar(*type_name),
-                false,
-                Storage::Parameter(value),
-            ),
-            SignatureParameter::Owned { struct_id, .. } => (
-                BindingType::Struct(*struct_id),
-                false,
-                Storage::Reference(value),
-            ),
-            SignatureParameter::Borrowed {
-                mutable, target, ..
-            } => (
+            SignatureParameter::Scalar(type_name) => {
+                (BindingType::Scalar(*type_name), false, Storage::Parameter(value))
+            }
+            SignatureParameter::Owned { struct_id, .. } => {
+                (BindingType::Struct(*struct_id), false, Storage::Reference(value))
+            }
+            SignatureParameter::Borrowed { mutable, target, .. } => (
                 *target,
                 *mutable,
                 if matches!(target, BindingType::Slice { .. }) {
@@ -2040,16 +2123,9 @@ impl<'a> FunctionCompiler<'a> {
         };
         // An owned string parameter is the callee's to drop: it gets a place to null on a move.
         let storage = match (type_, storage) {
-            (BindingType::Scalar(type_name), Storage::Parameter(value))
-                if ownership::needs_drop(type_name) =>
-            {
+            (BindingType::Scalar(type_name), Storage::Parameter(value)) if ownership::needs_drop(type_name) => {
                 let place = self.place(name, type_name, false);
-                self.emit(
-                    "store",
-                    Vec::new(),
-                    vec![hir::Operand::Place(place), hir::Operand::Value(value)],
-                    None,
-                );
+                self.emit("store", Vec::new(), vec![hir::Operand::Place(place), hir::Operand::Value(value)], None);
                 self.own(place);
                 Storage::Place(place)
             }
@@ -2062,14 +2138,13 @@ impl<'a> FunctionCompiler<'a> {
             }
             (_, storage) => storage,
         };
-        Binding {
-            type_,
-            mutable,
-            storage,
-        }
+        Binding { type_, mutable, storage }
     }
 
-    fn compile(mut self, function: &Function) -> Result<Compiled, Diagnostic> {
+    fn compile(
+        mut self,
+        function: &Function,
+    ) -> Result<Compiled, Diagnostic> {
         self.statements(&function.body)?;
         // After a loop only `break` leaves, the end is reached only if one does.
         if self.open() && self.current != 1 && !self.reached(self.current) {
@@ -2080,18 +2155,11 @@ impl<'a> FunctionCompiler<'a> {
             self.drop_scopes(0);
             self.refuse_runtime(since, function.span)?;
             if self.signature.result == TypeName::Void && self.signature.slot.is_none() {
-                self.terminate(hir::Terminator {
-                    kind: "return",
-                    operands: Vec::new(),
-                    targets: Vec::new(),
-                });
+                self.terminate(hir::Terminator { kind: "return", operands: Vec::new(), targets: Vec::new() });
             } else {
                 return Err(Diagnostic::new(
                     function.span,
-                    format!(
-                        "function {:?} can reach its end without returning",
-                        function.name
-                    ),
+                    format!("function {:?} can reach its end without returning", function.name),
                 ));
             }
         }
@@ -2105,9 +2173,7 @@ impl<'a> FunctionCompiler<'a> {
             .map(|block| hir::Block {
                 id: block.id,
                 instructions: block.instructions,
-                terminator: block
-                    .terminator
-                    .expect("every semantic block is terminated"),
+                terminator: block.terminator.expect("every semantic block is terminated"),
             })
             .collect();
         let lends = std::mem::take(&mut self.lends);
@@ -2126,7 +2192,11 @@ impl<'a> FunctionCompiler<'a> {
             facts: self.stated.finish(),
             calls: self.calls,
             exported: self.signature.exported,
-            abi: hir::ProcedureAbi::of(self.signature.abi, self.signature.argument_bytes(&self.types), self.signature.exported),
+            abi: hir::ProcedureAbi::of(
+                self.signature.abi,
+                self.signature.argument_bytes(&self.types),
+                self.signature.exported,
+            ),
             named_parameters: self.named_parameters,
         };
         Ok(Compiled { function, lends, references, borrowed, escapes })
@@ -2151,10 +2221,12 @@ impl<'a> FunctionCompiler<'a> {
             .iter()
             .flat_map(|block| block.instructions.iter().map(|instruction| instruction.id))
             .collect::<BTreeSet<_>>();
-        self.calls
-            .retain(|call| instructions.contains(&call.instruction));
+        self.calls.retain(|call| instructions.contains(&call.instruction));
         let function = i64::from(self.signature.id);
-        self.stated.retain(|one| !matches!(one.subject, llrm_core::hir::facts::Subject::Instruction { function: owner, id } if owner == function && !instructions.contains(&(id as u32))));
+        self.stated.retain(|one| !matches!(
+            one.subject,
+            llrm_core::hir::facts::Subject::Instruction { function: owner, id } if owner == function && !instructions.contains(&(id as u32))
+        ));
 
         let mut defined = self.parameters.iter().copied().collect::<BTreeSet<_>>();
         defined.extend(
@@ -2167,37 +2239,32 @@ impl<'a> FunctionCompiler<'a> {
     }
 }
 
-fn required(value: TypedOperand, span: Span) -> Result<hir::Operand, Diagnostic> {
-    value
-        .operand
-        .ok_or_else(|| Diagnostic::new(span, "void expression has no value"))
+fn required(
+    value: TypedOperand,
+    span: Span,
+) -> Result<hir::Operand, Diagnostic> {
+    value.operand.ok_or_else(|| Diagnostic::new(span, "void expression has no value"))
 }
 
 fn jump(target: u32) -> hir::Terminator {
-    hir::Terminator {
-        kind: "jump",
-        operands: Vec::new(),
-        targets: vec![target],
-    }
+    hir::Terminator { kind: "jump", operands: Vec::new(), targets: vec![target] }
 }
 
-fn scaled_decimal(spelling: &str, fraction: u8, span: Span) -> Result<i128, Diagnostic> {
-    let (mantissa, exponent) = spelling
-        .find(['e', 'E'])
-        .map(|at| (&spelling[..at], &spelling[at + 1..]))
-        .unwrap_or((spelling, "0"));
-    let exponent = exponent
-        .parse::<i32>()
-        .map_err(|_| Diagnostic::new(span, "invalid fixed-point literal exponent"))?;
-    let (whole, fractional) = mantissa
-        .split_once('.')
-        .map_or((mantissa, ""), |(whole, fractional)| (whole, fractional));
+fn scaled_decimal(
+    spelling: &str,
+    fraction: u8,
+    span: Span,
+) -> Result<i128, Diagnostic> {
+    let (mantissa, exponent) =
+        spelling.find(['e', 'E']).map(|at| (&spelling[..at], &spelling[at + 1..])).unwrap_or((spelling, "0"));
+    let exponent =
+        exponent.parse::<i32>().map_err(|_| Diagnostic::new(span, "invalid fixed-point literal exponent"))?;
+    let (whole, fractional) =
+        mantissa.split_once('.').map_or((mantissa, ""), |(whole, fractional)| (whole, fractional));
     let digits = format!("{whole}{fractional}");
-    let significand = digits
-        .parse::<i128>()
-        .map_err(|_| Diagnostic::new(span, "fixed-point literal is too large"))?;
-    let fractional_digits = i32::try_from(fractional.len())
-        .map_err(|_| Diagnostic::new(span, "fixed-point literal is too long"))?;
+    let significand = digits.parse::<i128>().map_err(|_| Diagnostic::new(span, "fixed-point literal is too large"))?;
+    let fractional_digits =
+        i32::try_from(fractional.len()).map_err(|_| Diagnostic::new(span, "fixed-point literal is too long"))?;
     let decimal_power = exponent
         .checked_sub(fractional_digits)
         .ok_or_else(|| Diagnostic::new(span, "fixed-point literal exponent is too large"))?;
@@ -2218,35 +2285,29 @@ fn scaled_decimal(spelling: &str, fraction: u8, span: Span) -> Result<i128, Diag
     };
     let quotient = numerator / denominator;
     let remainder = numerator % denominator;
-    Ok(if remainder != 0 && remainder >= denominator / 2 {
-        quotient + 1
-    } else {
-        quotient
-    })
+    Ok(if remainder != 0 && remainder >= denominator / 2 { quotient + 1 } else { quotient })
 }
 
-fn checked_power_of_ten(power: u32, span: Span) -> Result<i128, Diagnostic> {
+fn checked_power_of_ten(
+    power: u32,
+    span: Span,
+) -> Result<i128, Diagnostic> {
     (0..power).try_fold(1_i128, |value, _| {
-        value
-            .checked_mul(10)
-            .ok_or_else(|| Diagnostic::new(span, "fixed-point literal exponent is too large"))
+        value.checked_mul(10).ok_or_else(|| Diagnostic::new(span, "fixed-point literal exponent is too large"))
     })
 }
 
-fn fixed_storage_value(value: i128, type_name: TypeName, span: Span) -> Result<i64, Diagnostic> {
-    let TypeName::Fixed { storage, .. } = type_name else {
-        unreachable!("fixed storage check requires a fixed type")
-    };
+fn fixed_storage_value(
+    value: i128,
+    type_name: TypeName,
+    span: Span,
+) -> Result<i64, Diagnostic> {
+    let TypeName::Fixed { storage, .. } = type_name else { unreachable!("fixed storage check requires a fixed type") };
     let value = match storage {
         FixedStorage::I16 => i16::try_from(value).map(i64::from),
         FixedStorage::I32 => i32::try_from(value).map(i64::from),
     }
-    .map_err(|_| {
-        Diagnostic::new(
-            span,
-            format!("literal does not fit {}", type_name_text(type_name)),
-        )
-    })?;
+    .map_err(|_| Diagnostic::new(span, format!("literal does not fit {}", type_name_text(type_name))))?;
     Ok(value)
 }
 
@@ -2292,12 +2353,10 @@ fn repeat_counts(counts: &[Expr]) -> Result<Vec<u32>, Diagnostic> {
     counts
         .iter()
         .map(|count| match super::consts::integer(count) {
-            Some(value) => u32::try_from(value)
-                .map_err(|_| Diagnostic::new(count.span(), "a repeat count must be non-negative")),
-            None => Err(Diagnostic::new(
-                count.span(),
-                "a repeat count must be a compile-time integer",
-            )),
+            Some(value) => {
+                u32::try_from(value).map_err(|_| Diagnostic::new(count.span(), "a repeat count must be non-negative"))
+            }
+            None => Err(Diagnostic::new(count.span(), "a repeat count must be a compile-time integer")),
         })
         .collect()
 }
@@ -2312,18 +2371,11 @@ fn literal_elements<'e>(
         return Ok(vec![(Vec::new(), literal)]);
     };
     let Expr::Array(items, at) = literal else {
-        return Err(Diagnostic::new(
-            literal.span(),
-            format!("expected a nested array literal of {length} elements"),
-        ));
+        return Err(Diagnostic::new(literal.span(), format!("expected a nested array literal of {length} elements")));
     };
     if items.len() != length as usize {
         return Err(Diagnostic::new(
-            if inner.len() + 1 == dims.len() {
-                span
-            } else {
-                *at
-            },
+            if inner.len() + 1 == dims.len() { span } else { *at },
             format!("array expects {length} elements, got {}", items.len()),
         ));
     }
@@ -2338,24 +2390,20 @@ fn literal_elements<'e>(
 }
 
 /// `[v, v, ...]` of one scalar literal as the `[v; dims]` it means, so it fills rather than storing each element.
-fn repeated_literal(literal: &Expr, dims: &[u32]) -> Option<Expr> {
+fn repeated_literal(
+    literal: &Expr,
+    dims: &[u32],
+) -> Option<Expr> {
     let items = literal_elements(literal, dims, literal.span()).ok()?;
     let (_, first) = items.first()?;
     let key = scalar_literal(first)?;
-    if items.len() < 2
-        || items
-            .iter()
-            .any(|(_, item)| scalar_literal(item) != Some(key.clone()))
-    {
+    if items.len() < 2 || items.iter().any(|(_, item)| scalar_literal(item) != Some(key.clone())) {
         return None;
     }
     let span = literal.span();
     Some(Expr::Repeat {
         value: Box::new((*first).clone()),
-        counts: dims
-            .iter()
-            .map(|count| Expr::Integer(i64::from(*count), span))
-            .collect(),
+        counts: dims.iter().map(|count| Expr::Integer(i64::from(*count), span)).collect(),
         span,
     })
 }
@@ -2367,13 +2415,9 @@ fn scalar_literal(expression: &Expr) -> Option<String> {
         Expr::Float(text, _) => Some(format!("f{text}")),
         Expr::Character(value, _) => Some(format!("c{value}")),
         Expr::Boolean(value, _) => Some(format!("b{value}")),
-        Expr::Unary {
-            op: UnaryOp::Negative,
-            operand,
-            ..
-        } => scalar_literal(operand)
-            .filter(|inner| !inner.starts_with(['c', 'b']))
-            .map(|inner| format!("-{inner}")),
+        Expr::Unary { op: UnaryOp::Negative, operand, .. } => {
+            scalar_literal(operand).filter(|inner| !inner.starts_with(['c', 'b'])).map(|inner| format!("-{inner}"))
+        }
         _ => None,
     }
 }
@@ -2406,11 +2450,7 @@ fn storage_type(storage: FixedStorage) -> TypeName {
 fn is_integer_literal(expression: &Expr) -> bool {
     match expression {
         Expr::Integer(..) => true,
-        Expr::Unary {
-            op: UnaryOp::Negative,
-            operand,
-            ..
-        } => matches!(operand.as_ref(), Expr::Integer(..)),
+        Expr::Unary { op: UnaryOp::Negative, operand, .. } => matches!(operand.as_ref(), Expr::Integer(..)),
         _ => false,
     }
 }
@@ -2418,24 +2458,19 @@ fn is_integer_literal(expression: &Expr) -> bool {
 fn is_float_literal(expression: &Expr) -> bool {
     match expression {
         Expr::Float(..) => true,
-        Expr::Unary {
-            op: UnaryOp::Negative,
-            operand,
-            ..
-        } => matches!(operand.as_ref(), Expr::Float(..)),
+        Expr::Unary { op: UnaryOp::Negative, operand, .. } => matches!(operand.as_ref(), Expr::Float(..)),
         _ => false,
     }
 }
 
 /// `value`'s low bits as `target` reads them.
-fn wrapped(value: i64, target: TypeName) -> i64 {
+fn wrapped(
+    value: i64,
+    target: TypeName,
+) -> i64 {
     let bits = 8 * scalar_width(target);
     let low = value & ((1_i64 << bits) - 1);
-    if is_signed(target) && low >> (bits - 1) != 0 {
-        low - (1_i64 << bits)
-    } else {
-        low
-    }
+    if is_signed(target) && low >> (bits - 1) != 0 { low - (1_i64 << bits) } else { low }
 }
 
 fn is_comparison(operation: BinaryOp) -> bool {
@@ -2455,15 +2490,18 @@ fn is_shift(operation: BinaryOp) -> bool {
 }
 
 fn is_bitwise(operation: BinaryOp) -> bool {
-    is_shift(operation)
-        || matches!(
-            operation,
-            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
-        )
+    is_shift(operation) || matches!(
+        operation,
+        BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
+    )
 }
 
 /// What the left operand of a numeric binary operator may be.
-fn operand_rule(operation: BinaryOp, type_name: TypeName, span: Span) -> Result<(), Diagnostic> {
+fn operand_rule(
+    operation: BinaryOp,
+    type_name: TypeName,
+    span: Span,
+) -> Result<(), Diagnostic> {
     if is_comparison(operation) {
         let equality = matches!(operation, BinaryOp::Equal | BinaryOp::NotEqual);
         if (!equality && !is_ordered(type_name)) || type_name == TypeName::Void {
@@ -2478,16 +2516,10 @@ fn operand_rule(operation: BinaryOp, type_name: TypeName, span: Span) -> Result<
         }
     } else if is_bitwise(operation) {
         if !is_integer(type_name) {
-            return Err(Diagnostic::new(
-                span,
-                "bitwise operators require integer operands",
-            ));
+            return Err(Diagnostic::new(span, "bitwise operators require integer operands"));
         }
     } else if !is_numeric(type_name) {
-        return Err(Diagnostic::new(
-            span,
-            "arithmetic requires numeric operands",
-        ));
+        return Err(Diagnostic::new(span, "arithmetic requires numeric operands"));
     }
     Ok(())
 }
@@ -2538,9 +2570,14 @@ fn type_id(type_name: TypeName) -> u32 {
 }
 
 /// What `type_name` takes, a pointer of the target being `sizes` wide.
-pub(crate) fn width(sizes: crate::Sizes, type_name: TypeName) -> u32 {
+pub(crate) fn width(
+    sizes: crate::Sizes,
+    type_name: TypeName,
+) -> u32 {
     match type_name {
-        TypeName::String | TypeName::Vector { .. } | TypeName::Dictionary { .. } | TypeName::Function { .. } => sizes.near,
+        TypeName::String | TypeName::Vector { .. } | TypeName::Dictionary { .. } | TypeName::Function { .. } => {
+            sizes.near
+        }
         TypeName::Addr => sizes.far,
         other => scalar_width(other),
     }
@@ -2556,15 +2593,19 @@ pub(crate) fn scalar_width(type_name: TypeName) -> u32 {
         TypeName::I16 | TypeName::U16 => 2,
         TypeName::I32 | TypeName::U32 | TypeName::F32 => 4,
         TypeName::F64 => 8,
-        TypeName::String | TypeName::Vector { .. } | TypeName::Dictionary { .. } | TypeName::Function { .. } | TypeName::Addr => unreachable!("a pointer's width is the target's"),
+        TypeName::String
+        | TypeName::Vector { .. }
+        | TypeName::Dictionary { .. }
+        | TypeName::Function { .. }
+        | TypeName::Addr => unreachable!("a pointer's width is the target's"),
         TypeName::I64 => 8,
         TypeName::Fixed { storage, .. } => match storage {
             FixedStorage::I16 => 2,
             FixedStorage::I32 => 4,
         },
-        TypeName::Enum { width, .. }
-        | TypeName::Bits { width, .. }
-        | TypeName::Pointer { width, .. } => u32::from(width),
+        TypeName::Enum { width, .. } | TypeName::Bits { width, .. } | TypeName::Pointer { width, .. } => {
+            u32::from(width)
+        }
     }
 }
 
@@ -2585,9 +2626,7 @@ fn type_name_text(type_name: TypeName) -> String {
         TypeName::String => "string".into(),
         TypeName::Addr => "addr".into(),
         TypeName::I64 => "$i64".into(),
-        TypeName::Fixed {
-            storage, fraction, ..
-        } => format!(
+        TypeName::Fixed { storage, fraction, .. } => format!(
             "fixed {}, fraction={fraction}",
             match storage {
                 FixedStorage::I16 => "i16",
@@ -2604,21 +2643,15 @@ fn type_name_text(type_name: TypeName) -> String {
     }
 }
 
-fn type_mismatch(span: Span, expected: TypeName, found: TypeName) -> Diagnostic {
-    if matches!(expected, TypeName::Fixed { .. })
-        && matches!(found, TypeName::Fixed { .. })
-        && expected != found
-    {
+fn type_mismatch(
+    span: Span,
+    expected: TypeName,
+    found: TypeName,
+) -> Diagnostic {
+    if matches!(expected, TypeName::Fixed { .. }) && matches!(found, TypeName::Fixed { .. }) && expected != found {
         return Diagnostic::new(span, "distinct fixed-point types do not match");
     }
-    Diagnostic::new(
-        span,
-        format!(
-            "expected {}, found {}",
-            type_name_text(expected),
-            type_name_text(found)
-        ),
-    )
+    Diagnostic::new(span, format!("expected {}, found {}", type_name_text(expected), type_name_text(found)))
 }
 
 #[cfg(test)]

@@ -5,19 +5,21 @@
 //! the `division` guard (division is C's). The old `critical` guard, an
 //! implicit edge, is a switch edge here: a conditional one is split.
 
+use llrm_analysis::manager::Summaries;
+use llrm_analysis::testing::DOS;
 use llrm_mir::module::Module;
 use llrm_mir::passes::PassManager;
 
 use super::*;
-use llrm_analysis::manager::Summaries;
-use llrm_analysis::testing::DOS;
-
 use crate::testing::{parsed, printed, results};
 
 const CELL: &str = "getelementptr (i8, ptr @g, i16 32)";
 
 /// `module` after the pass, which must leave it verifying.
-fn joined(mut module: Module, insert: bool) -> Module {
+fn joined(
+    mut module: Module,
+    insert: bool,
+) -> Module {
     let mut manager = PassManager::default();
     manager.verify_each = true;
     manager.require::<Summaries>();
@@ -27,12 +29,19 @@ fn joined(mut module: Module, insert: bool) -> Module {
 }
 
 fn module(body: &str) -> Module {
-    parsed(&format!("{DOS}@g = global [64 x i8] zeroinitializer\ndeclare void @anything()\n\n{}", body.replace("CELL", CELL)))
+    parsed(&format!(
+        "{DOS}@g = global [64 x i8] zeroinitializer\ndeclare void @anything()\n\n{}",
+        body.replace("CELL", CELL)
+    ))
 }
 
 /// `@f` of `body` after the pass, printed; the pass again changes nothing,
 /// and the interpreter finds the same results for each of `inputs`.
-fn after(body: &str, insert: bool, inputs: &[&[i128]]) -> String {
+fn after(
+    body: &str,
+    insert: bool,
+    inputs: &[&[i128]],
+) -> String {
     let before = module(body);
     let once = joined(before.clone(), insert);
     let text = printed(&once);
@@ -42,7 +51,10 @@ fn after(body: &str, insert: bool, inputs: &[&[i128]]) -> String {
 }
 
 /// `body` is left as it was.
-fn unchanged(body: &str, insert: bool) {
+fn unchanged(
+    body: &str,
+    insert: bool,
+) {
     assert_eq!(printed(&joined(module(body), insert)), printed(&module(body)));
 }
 
@@ -68,7 +80,10 @@ b3:
 }
 ";
 
-fn diamond(left: &str, join: &str) -> String {
+fn diamond(
+    left: &str,
+    join: &str,
+) -> String {
     DIAMOND.replace("LEFT", left).replace("JOIN", join)
 }
 
@@ -160,7 +175,10 @@ fn test_crossed_pointer_phi_does_not_reuse_the_other_branches_store() {
 #[test]
 fn test_join_prefix_write_through_the_pointer_phi_blocks_reuse() {
     for insert in [false, true] {
-        unchanged(&POINTERS.replace("LEFT", "%a").replace("RIGHT", "%b").replace("JOIN", "store i16 99, ptr %q"), insert);
+        unchanged(
+            &POINTERS.replace("LEFT", "%a").replace("RIGHT", "%b").replace("JOIN", "store i16 99, ptr %q"),
+            insert,
+        );
     }
 }
 
@@ -185,7 +203,9 @@ fn test_a_partial_overwrite_invalidates_the_whole_value() {
 
 #[test]
 fn test_predecessor_loads_can_supply_the_join_without_stores() {
-    let body = diamond("", "").replace("store i16 10, ptr CELL", "%y = load i16, ptr CELL").replace("store i16 20, ptr CELL", "%z = load i16, ptr CELL");
+    let body = diamond("", "")
+        .replace("store i16 10, ptr CELL", "%y = load i16, ptr CELL")
+        .replace("store i16 20, ptr CELL", "%z = load i16, ptr CELL");
     assert!(after(&body, false, BOTH).contains("%x1 = phi i16 [ %y, %b1 ], [ %z, %b2 ]"));
 }
 
@@ -214,7 +234,10 @@ b3:
 
 const PRE_INPUTS: &[&[i128]] = &[&[0, 0, 5, 1], &[1, 0, 5, 1], &[0, 1, 7, 2], &[1, 1, 7, 2]];
 
-fn pre(arm: &str, join: &str) -> String {
+fn pre(
+    arm: &str,
+    join: &str,
+) -> String {
     PRE.replace("ARM", arm).replace("JOIN", join)
 }
 
@@ -278,7 +301,12 @@ b4:
 
 #[test]
 fn test_inserted_address_uses_the_missing_edges_pointer() {
-    let body = POINTERS.replace("LEFT", "%a").replace("RIGHT", "%b").replace("JOIN", "").replace("store i16 10, ptr %a", "%y = load i16, ptr %a").replace("  store i16 20, ptr %b\n", "");
+    let body = POINTERS
+        .replace("LEFT", "%a")
+        .replace("RIGHT", "%b")
+        .replace("JOIN", "")
+        .replace("store i16 10, ptr %a", "%y = load i16, ptr %a")
+        .replace("  store i16 20, ptr %b\n", "");
     let text = after(&body, true, INDICES);
     assert!(text.contains("b2:\n  %0 = load i16, ptr %b\n  br label %b3"), "{text}");
     assert!(text.contains("%x1 = phi i16 [ %y, %b1 ], [ %0, %b2 ]"), "{text}");
@@ -288,7 +316,10 @@ fn test_inserted_address_uses_the_missing_edges_pointer() {
 /// memory: the load goes on the edge, taken or not.
 #[test]
 fn test_missing_conditional_edge_gets_its_own_load_block() {
-    for (branch, split) in [("br i1 %d, label %b3, label %b4", "br i1 %d, label %0, label %b4"), ("br i1 %d, label %b4, label %b3", "br i1 %d, label %b4, label %0")] {
+    for (branch, split) in [
+        ("br i1 %d, label %b3, label %b4", "br i1 %d, label %0, label %b4"),
+        ("br i1 %d, label %b4, label %b3", "br i1 %d, label %b4, label %0"),
+    ] {
         let body = format!(
             "define i16 @f(i1 %c, i1 %d, i16 %v, i16 %s) {{
 b0:
@@ -313,7 +344,10 @@ b4:
         );
         let text = after(&body, true, PRE_INPUTS);
         assert!(text.contains(&format!("b2:\n  {split}\n")), "{text}");
-        assert!(text.contains("\n0:\n  %1 = load i16, ptr getelementptr (i8, ptr @g, i16 32)\n  br label %b3"), "{text}");
+        assert!(
+            text.contains("\n0:\n  %1 = load i16, ptr getelementptr (i8, ptr @g, i16 32)\n  br label %b3"),
+            "{text}"
+        );
         assert!(text.contains("%x1 = phi i16 [ %y, %b1 ], [ %1, %0 ]"), "{text}");
     }
 }
@@ -418,7 +452,9 @@ fn test_every_corpus_module_verifies_after_loadjoins() {
         manager.verify_each = true;
         manager.require::<Summaries>();
         manager.add(LoadJoins { insert: true });
-        let stages = manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let stages = manager
+            .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
         changed += stages.len();
     }
     assert!(changed > 0, "loadjoins changed nothing in the corpus");
@@ -440,8 +476,16 @@ fn a_store_to_another_global_keeps_the_join_value() {
 /// precise. It panicked.
 #[test]
 fn a_bare_pass_manager_takes_every_call_for_unknown() {
-    let module = crate::testing::parsed(&format!("{}{}{}", llrm_analysis::testing::DOS, crate::testing::WRITES_ITS_ARGUMENT, "define i16 @f(i1 %c) {\nb0:\n  br i1 %c, label %b1, label %b2\n\nb1:\n  store i16 10, ptr @g\n  br label %b3\n\nb2:\n  store i16 20, ptr @g\n  br label %b3\n\nb3:\n  call void @h(ptr @k)\n  %x = load i16, ptr @g\n  ret i16 %x\n}\n"));
+    let module = crate::testing::parsed(&format!(
+        "{}{}{}",
+        llrm_analysis::testing::DOS,
+        crate::testing::WRITES_ITS_ARGUMENT,
+        "define i16 @f(i1 %c) {\nb0:\n  br i1 %c, label %b1, label %b2\n\nb1:\n  store i16 10, ptr @g\n  br label %b3\n\nb2:\n  store i16 20, ptr @g\n  br label %b3\n\nb3:\n  call void @h(ptr @k)\n  %x = load i16, ptr @g\n  ret i16 %x\n}\n"
+    ));
     let precise = crate::testing::summarized(&module, LoadJoins { insert: false }, true, &[&[0], &[1]]);
     let bare = crate::testing::summarized(&module, LoadJoins { insert: false }, false, &[&[0], &[1]]);
-    assert!(precise.contains("phi i16 [ 10, %b1 ], [ 20, %b2 ]") && !bare.contains("phi i16 [ 10, %b1 ], [ 20, %b2 ]"), "{precise}\n{bare}");
+    assert!(
+        precise.contains("phi i16 [ 10, %b1 ], [ 20, %b2 ]") && !bare.contains("phi i16 [ 10, %b1 ], [ 20, %b2 ]"),
+        "{precise}\n{bare}"
+    );
 }

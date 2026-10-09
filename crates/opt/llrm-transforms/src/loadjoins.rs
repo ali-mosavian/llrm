@@ -5,17 +5,14 @@
 //! its edge, where that speculates nothing.
 //!
 //! What changed with the IR:
-//! - A provider is a load or a store, what it holds a value or a constant,
-//!   of the load's type; the old width check is the type.
-//! - A missing load goes on either edge of a conditional branch. The old MIR
-//!   could split only the explicit (taken) one.
-//! - The join's prefix may hold what `llrm_mir::memory::only_value` allows,
-//!   loads aside, where the old one allowed moves. Division is C's, so the
-//!   old guard against a trapping one has no MIR meaning.
-//! - An address is translated on an edge when the load's pointer is a phi
-//!   of the join, as when the old pointer reference's base was.
-//! - Dropped: stack slots, x87 operations, `merges`, and the `symbol`,
-//!   `source_backed` and `raised` marks.
+//! - A provider is a load or a store, what it holds a value or a constant, of the load's type; the old width check is
+//!   the type.
+//! - A missing load goes on either edge of a conditional branch. The old MIR could split only the explicit (taken) one.
+//! - The join's prefix may hold what `llrm_mir::memory::only_value` allows, loads aside, where the old one allowed
+//!   moves. Division is C's, so the old guard against a trapping one has no MIR meaning.
+//! - An address is translated on an edge when the load's pointer is a phi of the join, as when the old pointer
+//!   reference's base was.
+//! - Dropped: stack slots, x87 operations, `merges`, and the `symbol`, `source_backed` and `raised` marks.
 //!
 //! A call's footprint is its `CallEffects`: without `Summaries` required,
 //! an unknown callee's. An address translated onto an edge carries
@@ -24,12 +21,12 @@
 use std::collections::BTreeMap;
 
 use llrm_analysis::alias::PointsTo;
-use llrm_analysis::manager::Pointers;
 use llrm_analysis::avail::{loaded_into, stored_from};
+use llrm_analysis::graph::loops::{self, Loop};
+use llrm_analysis::manager::Pointers;
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::memoryssa::{self, Accesses, same_bytes};
 use llrm_analysis::{cfg, ssa};
-use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -51,13 +48,27 @@ impl FunctionPass for LoadJoins {
         "loadjoins"
     }
 
-    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         let (context, layout) = (&*unit.context, unit.layout);
         let pointers = analyses.get::<Pointers>(context, layout, unit.function);
         let changed = Accesses::managed(context, layout, unit.function, analyses).and_then(|accesses| {
             let pointers = Result::as_ref(&*pointers).map_err(String::clone)?;
             let shape = analyses.get::<llrm_analysis::cfg::Shape>(context, layout, unit.function);
-            reused(context, layout, unit.function, analyses.outer(), analyses.outer().callees(), &accesses, pointers, self.insert, &shape)
+            reused(
+                context,
+                layout,
+                unit.function,
+                analyses.outer(),
+                analyses.outer().callees(),
+                &accesses,
+                pointers,
+                self.insert,
+                &shape,
+            )
         });
         match changed {
             Ok(true) => PreservedAnalyses::none(),
@@ -70,8 +81,19 @@ impl FunctionPass for LoadJoins {
 /// `function`'s join loads made phis, as `accesses` (of `function` as it
 /// stands) says what each instruction touches and `pointers` what each
 /// pointer points to; whether any was.
-pub fn reused(context: &Context, layout: &DataLayout, function: &mut Function, outer: &Outer, callees: &Callees, accesses: &Accesses, pointers: &PointsTo, insert: bool, shape: &llrm_analysis::cfg::Shape) -> Result<bool, String> {
-    let joined = planned(&Unit::within(context, layout, function, outer).with_shape(shape), callees, accesses, pointers, insert);
+pub fn reused(
+    context: &Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &Outer,
+    callees: &Callees,
+    accesses: &Accesses,
+    pointers: &PointsTo,
+    insert: bool,
+    shape: &llrm_analysis::cfg::Shape,
+) -> Result<bool, String> {
+    let joined =
+        planned(&Unit::within(context, layout, function, outer).with_shape(shape), callees, accesses, pointers, insert);
     if joined.is_empty() {
         return Ok(false);
     }
@@ -98,12 +120,18 @@ struct Joined {
 
 /// The load's pointer on the edge from `parent`: a phi of the join's input
 /// from there, else the pointer itself.
-fn on_edge(function: &Function, load: InstId, parent: BlockId) -> Option<Operand> {
+fn on_edge(
+    function: &Function,
+    load: InstId,
+    parent: BlockId,
+) -> Option<Operand> {
     let pointer = function.instruction(load).operands[0];
     let join = function.parent(load)?;
     let Operand::Value(value) = pointer else { return Some(pointer) };
     match function.value(value).def {
-        ValueDef::Instruction(phi) if function.parent(phi) == Some(join) && function.instruction(phi).opcode == Opcode::Phi => {
+        ValueDef::Instruction(phi)
+            if function.parent(phi) == Some(join) && function.instruction(phi).opcode == Opcode::Phi =>
+        {
             function.instruction(phi).operands.chunks(2).find(|arm| arm[1] == Operand::Block(parent)).map(|arm| arm[0])
         }
         _ => Some(pointer),
@@ -111,8 +139,13 @@ fn on_edge(function: &Function, load: InstId, parent: BlockId) -> Option<Operand
 }
 
 /// What a load or store at `inst` leaves in its cell.
-fn provided(unit: &Unit, accesses: &Accesses, inst: InstId) -> Option<(MemRef, Operand)> {
-    stored_from(unit, accesses, inst).or_else(|| loaded_into(unit, accesses, inst).map(|(cell, value)| (cell, Operand::Value(value))))
+fn provided(
+    unit: &Unit,
+    accesses: &Accesses,
+    inst: InstId,
+) -> Option<(MemRef, Operand)> {
+    stored_from(unit, accesses, inst)
+        .or_else(|| loaded_into(unit, accesses, inst).map(|(cell, value)| (cell, Operand::Value(value))))
 }
 
 /// The CFG facts a join is judged by.
@@ -126,24 +159,39 @@ struct Shape {
 /// in front of `index` instructions of the join: nothing there touches
 /// memory or can keep the load from running, the edge is no back edge and
 /// crosses no loop boundary, and `pointer` is defined above it.
-fn insertable(unit: &Unit, callees: &Callees, shape: &Shape, parent: BlockId, join: BlockId, index: usize, pointer: Operand) -> bool {
+fn insertable(
+    unit: &Unit,
+    callees: &Callees,
+    shape: &Shape,
+    parent: BlockId,
+    join: BlockId,
+    index: usize,
+    pointer: Operand,
+) -> bool {
     let function = unit.function;
     let (from, to) = (cfg::id(parent), cfg::id(join));
     let branch = function.terminator(parent).is_some_and(|one| function.instruction(one).opcode == Opcode::Br);
     if !branch || (function.successors(parent) != [join] && !edges::conditional(function, parent, join)) {
         return false;
     }
-    if shape.dominance.dominates(to, from) || shape.loops.iter().any(|one| one.body.contains(&from) != one.body.contains(&to)) {
+    if shape.dominance.dominates(to, from)
+        || shape.loops.iter().any(|one| one.body.contains(&from) != one.body.contains(&to))
+    {
         return false;
     }
     let prefix = &function.block(join).instructions()[..index];
-    if prefix.iter().any(|&prior| !only_value(unit.context, callees, function, prior) || matches!(function.instruction(prior).opcode, Opcode::Load { .. })) {
+    if prefix.iter().any(|&prior| {
+        !only_value(unit.context, callees, function, prior)
+            || matches!(function.instruction(prior).opcode, Opcode::Load { .. })
+    }) {
         return false;
     }
     match pointer {
         Operand::Value(value) => match function.value(value).def {
             ValueDef::Argument(_) => true,
-            ValueDef::Instruction(def) => function.parent(def).is_some_and(|block| shape.dominance.dominates(cfg::id(block), from)),
+            ValueDef::Instruction(def) => {
+                function.parent(def).is_some_and(|block| shape.dominance.dominates(cfg::id(block), from))
+            }
         },
         Operand::Constant(_) => true,
         Operand::Block(_) => false,
@@ -151,7 +199,13 @@ fn insertable(unit: &Unit, callees: &Callees, shape: &Shape, parent: BlockId, jo
 }
 
 /// Every join load to replace by a phi, decided on `unit` as it stands.
-fn planned(unit: &Unit, callees: &Callees, accesses: &Accesses, pointers: &PointsTo, insert: bool) -> Vec<Joined> {
+fn planned(
+    unit: &Unit,
+    callees: &Callees,
+    accesses: &Accesses,
+    pointers: &PointsTo,
+    insert: bool,
+) -> Vec<Joined> {
     let function = unit.function;
     let graph = cfg::graph(function);
     let entry = function.entry().map(cfg::id);
@@ -160,11 +214,29 @@ fn planned(unit: &Unit, callees: &Callees, accesses: &Accesses, pointers: &Point
         return Vec::new();
     }
     let memory = memoryssa::built(unit, accesses);
-    let places: HashMap<InstId, (i64, usize)> =
-        function.layout().iter().flat_map(|&block| function.block(block).instructions().iter().enumerate().map(move |(index, &inst)| (inst, (cfg::id(block), index)))).collect();
-    let providers: Vec<(InstId, MemRef, Operand)> = memory.sites.keys().filter_map(|&site| provided(unit, accesses, site).map(|(cell, value)| (site, cell, value))).collect();
+    let places: HashMap<InstId, (i64, usize)> = function
+        .layout()
+        .iter()
+        .flat_map(|&block| {
+            function
+                .block(block)
+                .instructions()
+                .iter()
+                .enumerate()
+                .map(move |(index, &inst)| (inst, (cfg::id(block), index)))
+        })
+        .collect();
+    let providers: Vec<(InstId, MemRef, Operand)> = memory
+        .sites
+        .keys()
+        .filter_map(|&site| provided(unit, accesses, site).map(|(cell, value)| (site, cell, value)))
+        .collect();
     let cfg::Shape { dominance, loops: natural } = unit.shape().into_owned();
-    let shape = Shape { depth: dominance.dominators(function).into_iter().map(|(at, above)| (at, above.len())).collect(), dominance, loops: natural };
+    let shape = Shape {
+        depth: dominance.dominators(function).into_iter().map(|(at, above)| (at, above.len())).collect(),
+        dominance,
+        loops: natural,
+    };
 
     let mut found = Vec::new();
     for block in &graph {
@@ -183,26 +255,38 @@ fn planned(unit: &Unit, callees: &Callees, accesses: &Accesses, pointers: &Point
                 let Some(pointer) = on_edge(function, load, cfg::block(parent)) else {
                     break;
                 };
-                let translated = MemRef { typed: reference.typed.clone(), ..MemRef::at(unit, pointer, reference.width) };
+                let translated =
+                    MemRef { typed: reference.typed.clone(), ..MemRef::at(unit, pointer, reference.width) };
                 let translated = MemRef { provenance: pointers.reference(unit, &translated), ..translated };
-                let candidates = providers.iter().filter(|(source, cell, value)| {
-                    let (at, _) = places[source];
-                    at != block.at
-                        && shape.dominance.dominates(at, parent)
-                        && !shape.dominance.dominates(at, block.at)
-                        && unit.operand_type(*value) == Some(ty)
-                        && same_bytes(unit, cell, &translated)
-                        && shape.loops.iter().all(|one| !one.body.contains(&at) || one.body.contains(&block.at))
-                        && memory.available_on_edge(*source, load, parent, &reference, Some(&translated))
-                });
+                let candidates = providers
+                    .iter()
+                    .filter(
+                        |(source, cell, value)| {
+                            let (at, _) = places[source];
+                            at != block.at
+                                && shape.dominance.dominates(at, parent)
+                                && !shape.dominance.dominates(at, block.at)
+                                && unit.operand_type(*value) == Some(ty)
+                                && same_bytes(unit, cell, &translated)
+                                && shape.loops.iter().all(|one| !one.body.contains(&at) || one.body.contains(&block.at))
+                                && memory.available_on_edge(*source, load, parent, &reference, Some(&translated))
+                        },
+                    );
                 // The deepest source, the latest in its block; the first of equals.
                 let best = candidates.fold(None::<&(InstId, MemRef, Operand)>, |best, one| match best {
-                    Some(best) if (shape.depth[&places[&one.0].0], places[&one.0].1) <= (shape.depth[&places[&best.0].0], places[&best.0].1) => Some(best),
+                    Some(best)
+                        if (shape.depth[&places[&one.0].0], places[&one.0].1)
+                            <= (shape.depth[&places[&best.0].0], places[&best.0].1) =>
+                    {
+                        Some(best)
+                    }
                     _ => Some(one),
                 });
                 match best {
                     Some((_, _, value)) => incoming.push((cfg::block(parent), Incoming::Held(*value))),
-                    None if insert && insertable(unit, callees, &shape, cfg::block(parent), join, index, pointer) => incoming.push((cfg::block(parent), Incoming::Loaded(pointer))),
+                    None if insert && insertable(unit, callees, &shape, cfg::block(parent), join, index, pointer) => {
+                        incoming.push((cfg::block(parent), Incoming::Loaded(pointer)))
+                    }
                     None => break,
                 }
             }
@@ -215,16 +299,23 @@ fn planned(unit: &Unit, callees: &Callees, accesses: &Accesses, pointers: &Point
 }
 
 /// `joined` made: each load a phi of its edges' values.
-fn applied(function: &mut Function, joined: Vec<Joined>) -> Result<(), String> {
+fn applied(
+    function: &mut Function,
+    joined: Vec<Joined>,
+) -> Result<(), String> {
     // A load already replaced names its phi.
     let mut replaced: BTreeMap<ValueId, Operand> = BTreeMap::new();
-    let resolved = |replaced: &BTreeMap<ValueId, Operand>, one: Operand| ssa::provider(one, replaced).expect("a phi replaces a load once");
+    let resolved = |replaced: &BTreeMap<ValueId, Operand>, one: Operand| {
+        ssa::provider(one, replaced).expect("a phi replaces a load once")
+    };
     let mut bridges: HashMap<(BlockId, BlockId), BlockId> = HashMap::default();
     for Joined { load, join, incoming } in joined {
         let mut arms = Vec::new();
         for (parent, one) in incoming {
             let (from, value) = match one {
-                Incoming::Held(value) => (bridges.get(&(parent, join)).copied().unwrap_or(parent), resolved(&replaced, value)),
+                Incoming::Held(value) => {
+                    (bridges.get(&(parent, join)).copied().unwrap_or(parent), resolved(&replaced, value))
+                }
                 Incoming::Loaded(pointer) => {
                     let copy = function.clone_instruction(load);
                     function.set_operand(copy, 0, resolved(&replaced, pointer));

@@ -9,13 +9,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_mir::program::SegmentLayout;
+use llrm_mir::{
+    CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, GlobalId, GlobalVariable, Linkage, Module, Type, TypeId,
+};
 use llrm_x86_bcmachine::model::ir::Loc;
 use llrm_x86_bcmachine::model::ir::nodes::Node;
 use llrm_x86_bcmachine::objectfile::module::{self, Space};
 use llrm_x86_bcmachine::objectfile::{cvinfo, omf};
-use llrm_mir::{CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, GlobalId, GlobalVariable, Linkage, Module, Type, TypeId};
-
-use llrm_mir::program::SegmentLayout;
 
 use crate::machine::Facts;
 
@@ -43,12 +44,20 @@ pub struct Carving {
 impl Carving {
     /// One object's, in the program whose segments `segments` lays out: a
     /// segment is DGROUP's, or COMMON, as the program links it, by name.
-    pub fn of(facts: &Facts, segments: &SegmentLayout) -> Carving {
+    pub fn of(
+        facts: &Facts,
+        segments: &SegmentLayout,
+    ) -> Carving {
         let found = facts.found;
         let code = omf::code_segment(&found.records).map(|(index, _, _)| index);
         let named = omf::segments(&found.records);
         let indexes = |names: &dyn Fn(&str) -> bool| -> BTreeSet<i64> {
-            named.iter().enumerate().filter(|(_, one)| one.as_ref().is_some_and(|(name, _)| names(name))).map(|(at, _)| at as i64).collect()
+            named
+                .iter()
+                .enumerate()
+                .filter(|(_, one)| one.as_ref().is_some_and(|(name, _)| names(name)))
+                .map(|(at, _)| at as i64)
+                .collect()
         };
         let mut carving = Carving {
             dgroup: indexes(&|name| segments.data_group.members.iter().any(|one| one == name)),
@@ -129,14 +138,21 @@ struct Relocation {
 impl Objects {
     /// The object holding byte `disp` of DGROUP segment `segment`, or the
     /// last one where `disp` is its end.
-    pub fn at(&self, segment: i64, disp: i64) -> Option<&Object> {
+    pub fn at(
+        &self,
+        segment: i64,
+        disp: i64,
+    ) -> Option<&Object> {
         let objects = self.segments.get(&segment)?;
         let (_, found) = objects.range(..=disp).next_back()?;
         (disp < found.end || objects.range(disp..).next().is_none() && disp == found.end).then_some(found)
     }
 
     /// The DGROUP segment and object `global` is.
-    pub fn placed(&self, global: GlobalId) -> Option<(i64, &Object)> {
+    pub fn placed(
+        &self,
+        global: GlobalId,
+    ) -> Option<(i64, &Object)> {
         self.segments
             .iter()
             .filter(|(segment, _)| !self.far.contains(segment))
@@ -145,16 +161,25 @@ impl Objects {
     }
 
     /// Whether `segment` is one of DGROUP's.
-    pub fn in_dgroup(&self, segment: i64) -> bool {
+    pub fn in_dgroup(
+        &self,
+        segment: i64,
+    ) -> bool {
         self.dgroup.contains(&segment)
     }
 
     /// Whether segment register `register` names DGROUP.
-    pub fn names_data(&self, register: iced_x86::Register) -> bool {
+    pub fn names_data(
+        &self,
+        register: iced_x86::Register,
+    ) -> bool {
         register == iced_x86::Register::DS || register == iced_x86::Register::SS && self.stack_in_data
     }
 
-    pub fn external(&self, index: i64) -> Option<ConstantId> {
+    pub fn external(
+        &self,
+        index: i64,
+    ) -> Option<ConstantId> {
         self.externals.get(&index).copied()
     }
 
@@ -163,11 +188,18 @@ impl Objects {
     /// it (B$RSTB), or a handler's address; a handler is entered by the
     /// runtime's protocol, which refuses its module, so what is left is a
     /// key, and the original offset keeps both sides equal.
-    pub fn key(&self, segment: i64, disp: i64) -> Option<i64> {
+    pub fn key(
+        &self,
+        segment: i64,
+        disp: i64,
+    ) -> Option<i64> {
         (Some(segment) == self.code).then_some(disp)
     }
 
-    pub fn base(&self, segment: i64) -> Option<ConstantId> {
+    pub fn base(
+        &self,
+        segment: i64,
+    ) -> Option<ConstantId> {
         self.bases.get(&segment).map(|&(_, reference)| reference)
     }
 
@@ -175,7 +207,11 @@ impl Objects {
     /// segment and address order; and the global each segment the objects
     /// point into but the raise does not carve is.
     pub fn placement(&self) -> crate::Placement {
-        let objects = self.segments.iter().flat_map(|(&segment, objects)| objects.values().map(move |one| (segment, one.start, one.global))).collect();
+        let objects = self
+            .segments
+            .iter()
+            .flat_map(|(&segment, objects)| objects.values().map(move |one| (segment, one.start, one.global)))
+            .collect();
         let bases = self.bases.iter().map(|(&segment, &(global, _))| (segment, global)).collect();
         crate::Placement { objects, bases }
     }
@@ -186,7 +222,12 @@ impl Objects {
     }
 
     /// Byte `disp` of a segment outside DGROUP, as a far pointer.
-    pub fn far_address(&self, context: &mut llrm_mir::Context, segment: i64, disp: i64) -> Option<ConstantId> {
+    pub fn far_address(
+        &self,
+        context: &mut llrm_mir::Context,
+        segment: i64,
+        disp: i64,
+    ) -> Option<ConstantId> {
         if self.far.contains(&segment) {
             let object = self.at(segment, disp)?;
             return Some(offset_constant(context, object.reference, disp - object.start));
@@ -196,14 +237,28 @@ impl Objects {
 
     /// Any DGROUP object: what DS names.
     pub fn any(&self) -> Option<&Object> {
-        self.segments.iter().filter(|(segment, _)| !self.far.contains(segment)).flat_map(|(_, objects)| objects.values()).next()
+        self.segments
+            .iter()
+            .filter(|(segment, _)| !self.far.contains(segment))
+            .flat_map(|(_, objects)| objects.values())
+            .next()
     }
 
-    pub fn build(carving: &Carving, found: &module::Module, module: &mut Module, spaces: llrm_mir::spaces::Spaces) -> Result<Objects, String> {
+    pub fn build(
+        carving: &Carving,
+        found: &module::Module,
+        module: &mut Module,
+        spaces: llrm_mir::spaces::Spaces,
+    ) -> Result<Objects, String> {
         let records = &found.records;
         let segments = omf::segments(records);
         let externals = omf::externals(records);
-        let mut objects = Objects { dgroup: carving.dgroup.clone(), stack_in_data: carving.stack_in_data, spaces, ..Objects::default() };
+        let mut objects = Objects {
+            dgroup: carving.dgroup.clone(),
+            stack_in_data: carving.stack_in_data,
+            spaces,
+            ..Objects::default()
+        };
         for (index, name) in externals.iter().enumerate().skip(1) {
             // BC calls a procedure of its own through an EXTDEF of its name.
             if let Some(defined) = module.named(name) {
@@ -212,7 +267,8 @@ impl Objects {
             }
             let byte = module.context.types.int(8);
             let variable = GlobalVariable { ty: byte, constant: false, initializer: None, align: None };
-            let global = add_unique(module, name, |module, one| module.add_variable(one, variable.clone(), Linkage::External));
+            let global =
+                add_unique(module, name, |module, one| module.add_variable(one, variable.clone(), Linkage::External));
             objects.externals.insert(index as i64, module.reference(global));
         }
         // DGROUP, and every far segment its data points into, transitively.
@@ -234,11 +290,15 @@ impl Objects {
         let relocations = relocations(records, &data);
         objects.code = code;
         // The code segment is emitted again, under its own name.
-        if let Some(code) = code.filter(|&code| relocations.values().flatten().any(|one| one.target == "segment" && one.index == code) || carving.code_named) {
+        if let Some(code) = code.filter(|&code| {
+            relocations.values().flatten().any(|one| one.target == "segment" && one.index == code) || carving.code_named
+        }) {
             let Some(Some((name, _))) = segments.get(code as usize) else { return Err("no code segment".to_owned()) };
             let byte = module.context.types.int(8);
             let variable = GlobalVariable { ty: byte, constant: true, initializer: None, align: None };
-            let global = add_unique(module, name, |module, named| module.add_variable(named, variable.clone(), Linkage::External));
+            let global = add_unique(module, name, |module, named| {
+                module.add_variable(named, variable.clone(), Linkage::External)
+            });
             module.globals[global.0 as usize].address_space = spaces.far;
             objects.bases.insert(code, (global, module.reference(global)));
         }
@@ -253,7 +313,8 @@ impl Objects {
             let named = carving.cuts.get(&segment);
             let mut cuts: BTreeSet<i64> = BTreeSet::from([0, size]);
             cuts.extend(named.into_iter().flat_map(BTreeMap::keys).copied());
-            let names: BTreeMap<i64, String> = named.into_iter().flatten().filter_map(|(&at, name)| Some((at, name.clone()?))).collect();
+            let names: BTreeMap<i64, String> =
+                named.into_iter().flatten().filter_map(|(&at, name)| Some((at, name.clone()?))).collect();
             for one in relocations.values().flatten() {
                 if one.target == "segment" && one.index == segment {
                     cuts.insert(one.disp);
@@ -287,19 +348,29 @@ impl Objects {
                 module.globals[global.0 as usize].address_space = spaces.far;
             }
             let reference = module.reference(global);
-            objects.segments.entry(*segment).or_default().insert(*start, Object { start: *start, end: *end, global, reference });
+            objects
+                .segments
+                .entry(*segment)
+                .or_default()
+                .insert(*start, Object { start: *start, end: *end, global, reference });
         }
         for &segment in &data {
             let Some(Some((_, size))) = segments.get(segment as usize) else { continue };
             let image = omf::segment_image(records, segment, *size);
             let mine = relocations.get(&segment).map(Vec::as_slice).unwrap_or_default();
             for object in objects.segments.get(&segment).cloned().unwrap_or_default().values() {
-                let inside: Vec<&Relocation> = mine.iter().filter(|one| object.start <= one.at && one.at < object.end).collect();
+                let inside: Vec<&Relocation> =
+                    mine.iter().filter(|one| object.start <= one.at && one.at < object.end).collect();
                 let (ty, initializer) = objects.initializer(module, object, &image, &inside)?;
-                if carving.shared.contains(&segment) && !matches!(module.context.get(initializer).kind, ConstantKind::Zero) {
+                if carving.shared.contains(&segment)
+                    && !matches!(module.context.get(initializer).kind, ConstantKind::Zero)
+                {
                     return Err("a COMMON block with initial data".to_owned());
                 }
-                let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[object.global.0 as usize].kind else { unreachable!("a variable") };
+                let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[object.global.0 as usize].kind
+                else {
+                    unreachable!("a variable")
+                };
                 variable.ty = ty;
                 variable.initializer = Some(initializer);
             }
@@ -309,7 +380,13 @@ impl Objects {
 
     /// An object's type and initializer: its bytes, a relocated field as the
     /// pointer it holds.
-    fn initializer(&self, module: &mut Module, object: &Object, image: &[u8], relocations: &[&Relocation]) -> Result<(TypeId, ConstantId), String> {
+    fn initializer(
+        &self,
+        module: &mut Module,
+        object: &Object,
+        image: &[u8],
+        relocations: &[&Relocation],
+    ) -> Result<(TypeId, ConstantId), String> {
         let context = &mut module.context;
         let byte = context.types.int(8);
         let bytes = |context: &mut llrm_mir::Context, from: i64, to: i64| {
@@ -329,8 +406,14 @@ impl Objects {
             if relocation.at > at {
                 members.push(bytes(context, at, relocation.at));
             }
-            let addend = i64::from(u16::from_le_bytes([image.get(relocation.at as usize).copied().unwrap_or(0), image.get(relocation.at as usize + 1).copied().unwrap_or(0)]));
-            if let Some(key) = (relocation.loc == omf::LOC_OFF16 && relocation.target == "segment").then(|| self.key(relocation.index, relocation.disp + addend)).flatten() {
+            let addend = i64::from(u16::from_le_bytes([
+                image.get(relocation.at as usize).copied().unwrap_or(0),
+                image.get(relocation.at as usize + 1).copied().unwrap_or(0),
+            ]));
+            if let Some(key) = (relocation.loc == omf::LOC_OFF16 && relocation.target == "segment")
+                .then(|| self.key(relocation.index, relocation.disp + addend))
+                .flatten()
+            {
                 let word = context.types.int(16);
                 members.push(context.constant(Constant { ty: word, kind: ConstantKind::Int(key as u16 as u128) }));
                 at = relocation.at + relocation.width;
@@ -338,7 +421,9 @@ impl Objects {
             }
             let target = match relocation.target.as_str() {
                 "segment" => match (self.at(relocation.index, relocation.disp), self.base(relocation.index)) {
-                    (Some(target), _) => offset_constant(context, target.reference, relocation.disp - target.start + addend),
+                    (Some(target), _) => {
+                        offset_constant(context, target.reference, relocation.disp - target.start + addend)
+                    }
                     (None, Some(base)) => offset_constant(context, base, relocation.disp + addend),
                     _ => return Err(format!("a relocation past the end of segment {}", relocation.index)),
                 },
@@ -353,7 +438,10 @@ impl Objects {
                 // A near offset into a far segment is its far pointer as `i16`.
                 omf::LOC_OFF16 if context.get(target).ty == far => {
                     let word = context.types.int(16);
-                    context.constant(Constant { ty: word, kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::PtrToInt, value: target }) })
+                    context.constant(Constant {
+                        ty: word,
+                        kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::PtrToInt, value: target }),
+                    })
                 }
                 omf::LOC_OFF16 => target,
                 omf::LOC_PTR32 => cast(context, CastOp::AddrSpaceCast, target, self.spaces.far),
@@ -378,17 +466,33 @@ impl Objects {
 }
 
 /// `pointer` advanced by `offset` bytes, as a constant.
-fn offset_constant(context: &mut llrm_mir::Context, pointer: ConstantId, offset: i64) -> ConstantId {
+fn offset_constant(
+    context: &mut llrm_mir::Context,
+    pointer: ConstantId,
+    offset: i64,
+) -> ConstantId {
     if offset == 0 {
         return pointer;
     }
     let (byte, word) = (context.types.int(8), context.types.int(16));
     let index = context.int(word, i128::from(offset));
     let ty = context.get(pointer).ty;
-    context.constant(Constant { ty, kind: ConstantKind::Expr(ConstantExpr::GetElementPtr { source: byte, inbounds: false, operands: vec![pointer, index] }) })
+    context.constant(Constant {
+        ty,
+        kind: ConstantKind::Expr(ConstantExpr::GetElementPtr {
+            source: byte,
+            inbounds: false,
+            operands: vec![pointer, index],
+        }),
+    })
 }
 
-fn cast(context: &mut llrm_mir::Context, op: CastOp, value: ConstantId, space: u32) -> ConstantId {
+fn cast(
+    context: &mut llrm_mir::Context,
+    op: CastOp,
+    value: ConstantId,
+    space: u32,
+) -> ConstantId {
     let ty = context.types.ptr(space);
     if context.get(value).ty == ty {
         return value;
@@ -407,20 +511,35 @@ fn width_of(name: &str) -> Option<i64> {
 }
 
 /// Whether any code reads CS or an address in the code segment.
-fn names_code(facts: &Facts, code: i64) -> bool {
-    facts.bodies.iter().flat_map(|body| body.nodes.values()).any(|node| {
-        let semantics = node.semantics();
-        semantics.sources.iter().chain(&semantics.dests).any(|one| match one {
-            Loc::Reg(reg) => reg.register == iced_x86::Register::CS,
-            Loc::Imm(imm) => imm.address.is_some_and(|address| address.space == Space::Segment && address.index == code),
-            _ => false,
-        })
-    })
+fn names_code(
+    facts: &Facts,
+    code: i64,
+) -> bool {
+    facts
+        .bodies
+        .iter()
+        .flat_map(|body| body.nodes.values())
+        .any(
+            |node| {
+                let semantics = node.semantics();
+                semantics.sources.iter().chain(&semantics.dests).any(|one| match one {
+                    Loc::Reg(reg) => reg.register == iced_x86::Register::CS,
+                    Loc::Imm(imm) => {
+                        imm.address.is_some_and(|address| address.space == Space::Segment && address.index == code)
+                    }
+                    _ => false,
+                })
+            },
+        )
 }
 
 /// Every static access `node` makes to a segment, as `[disp, disp + width)`,
 /// and the displacement of every indexed one.
-fn accesses(node: &Node, spans: &mut BTreeMap<i64, Vec<(i64, i64)>>, indexed: &mut BTreeMap<i64, BTreeSet<i64>>) {
+fn accesses(
+    node: &Node,
+    spans: &mut BTreeMap<i64, Vec<(i64, i64)>>,
+    indexed: &mut BTreeMap<i64, BTreeSet<i64>>,
+) {
     let effects = node.effects();
     for cell in effects.loads.iter().chain(&effects.stores) {
         let Some(addr) = cell.addr else { continue };
@@ -440,14 +559,21 @@ fn accesses(node: &Node, spans: &mut BTreeMap<i64, Vec<(i64, i64)>>, indexed: &m
 /// name starts, or itself names, to the name after it; with no names, the
 /// segment's end. A landmark cannot end it: the array's own elements are
 /// landmarks, and BASE 1's origin is before its first.
-fn indexed_reach(origin: i64, names: &BTreeMap<i64, String>, size: i64) -> (i64, i64) {
+fn indexed_reach(
+    origin: i64,
+    names: &BTreeMap<i64, String>,
+    size: i64,
+) -> (i64, i64) {
     let array = names.range(origin..).next().map(|(&at, _)| at);
     let end = array.and_then(|at| names.range(at + 1..).next().map(|(&after, _)| after));
     (origin, end.unwrap_or(size))
 }
 
 /// The relocated fields of each DGROUP segment.
-fn relocations(records: &[std::rc::Rc<omf::Record>], dgroup: &BTreeSet<i64>) -> BTreeMap<i64, Vec<Relocation>> {
+fn relocations(
+    records: &[std::rc::Rc<omf::Record>],
+    dgroup: &BTreeSet<i64>,
+) -> BTreeMap<i64, Vec<Relocation>> {
     let mut out: BTreeMap<i64, Vec<Relocation>> = BTreeMap::new();
     for fixup in omf::fixups(records) {
         let Some(segment) = fixup.seg.filter(|one| dgroup.contains(one)) else { continue };
@@ -456,12 +582,30 @@ fn relocations(records: &[std::rc::Rc<omf::Record>], dgroup: &BTreeSet<i64>) -> 
             omf::LOC_LOBYTE | omf::LOC_HIBYTE => 1,
             _ => 2,
         };
-        out.entry(segment).or_default().push(Relocation { at: fixup.offset, width, loc: fixup.loc, target: fixup.target.clone(), index: fixup.index, disp: fixup.disp });
+        out.entry(segment)
+            .or_default()
+            .push(
+                Relocation {
+                    at: fixup.offset,
+                    width,
+                    loc: fixup.loc,
+                    target: fixup.target.clone(),
+                    index: fixup.index,
+                    disp: fixup.disp,
+                },
+            );
     }
     out
 }
 
 /// `name`, or `name.N` for the least N free, as LLVM uniques names.
-pub fn add_unique(module: &mut Module, name: &str, mut add: impl FnMut(&mut Module, &str) -> Result<GlobalId, String>) -> GlobalId {
-    std::iter::once(name.to_owned()).chain((1..).map(|n| format!("{name}.{n}"))).find_map(|one| add(module, &one).ok()).expect("some name is free")
+pub fn add_unique(
+    module: &mut Module,
+    name: &str,
+    mut add: impl FnMut(&mut Module, &str) -> Result<GlobalId, String>,
+) -> GlobalId {
+    std::iter::once(name.to_owned())
+        .chain((1..).map(|n| format!("{name}.{n}")))
+        .find_map(|one| add(module, &one).ok())
+        .expect("some name is free")
 }

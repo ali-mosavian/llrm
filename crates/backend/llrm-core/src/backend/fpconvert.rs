@@ -1,20 +1,22 @@
 //! A float converted to an unsigned 64-bit integer, as signed conversions and a select, before instruction selection:
-//! the x87 stores only signed qwords. LLVM's legalizer (`expandFP_TO_UINT`) and GCC's `fixuns` expansion do the same: where
-//! `x < 2^63` the conversion is `fptosi x`; else it is `fptosi (x - 2^63)` with the top bit set. The select is the target's
-//! general one (`selects`: a branch on a 486, which has no conditional move), so there is one answer for select.
+//! the x87 stores only signed qwords. LLVM's legalizer (`expandFP_TO_UINT`) and GCC's `fixuns` expansion do the same:
+//! where `x < 2^63` the conversion is `fptosi x`; else it is `fptosi (x - 2^63)` with the top bit set. The select is
+//! the target's general one (`selects`: a branch on a 486, which has no conditional move), so there is one answer for
+//! select.
 
 use llrm_mir::context::{Constant, ConstantKind, Context};
+use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Module, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, FloatPredicate, Opcode};
 use llrm_mir::types::{FloatKind, Type};
-use llrm_mir::edit::Position;
 
 /// Every `fptoui` to a 64-bit integer in `module` made signed conversions.
 pub fn expanded(module: &mut Module) -> Result<(), String> {
     let context = &mut module.context;
     for global in &mut module.globals {
         let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind else { continue };
-        let found: Vec<InstId> = function.walk().map(|(_, inst)| inst).filter(|&inst| unsigned_wide(context, function, inst)).collect();
+        let found: Vec<InstId> =
+            function.walk().map(|(_, inst)| inst).filter(|&inst| unsigned_wide(context, function, inst)).collect();
         for inst in found {
             expand(context, function, inst)?;
         }
@@ -22,15 +24,24 @@ pub fn expanded(module: &mut Module) -> Result<(), String> {
     Ok(())
 }
 
-fn unsigned_wide(context: &Context, function: &Function, inst: InstId) -> bool {
+fn unsigned_wide(
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+) -> bool {
     let instruction = function.instruction(inst);
     instruction.opcode == Opcode::Cast(CastOp::FPToUI) && context.types.int_bits(instruction.ty) == Some(64)
 }
 
 /// `inst`, `fptoui x to i64`, as `fptosi (x - (x < 2^63 ? 0 : 2^63))` xor `(x < 2^63 ? 0 : 1 << 63)`.
-fn expand(context: &mut Context, function: &mut Function, inst: InstId) -> Result<(), String> {
+fn expand(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> Result<(), String> {
     let instruction = function.instruction(inst).clone();
-    let (x, wide, result) = (instruction.operands[0], instruction.ty, instruction.result.ok_or("a conversion's value")?);
+    let (x, wide, result) =
+        (instruction.operands[0], instruction.ty, instruction.result.ok_or("a conversion's value")?);
     let float = function.operand_type(context, x).ok_or("a typed operand")?;
     let Type::Float(kind) = context.types.get(float).clone() else { return Err("a float operand".into()) };
     let bit = context.types.int(1);
@@ -38,7 +49,9 @@ fn expand(context: &mut Context, function: &mut Function, inst: InstId) -> Resul
         FloatKind::Float => u64::from((value as f32).to_bits()),
         _ => value.to_bits(),
     };
-    let mut constant = |value: f64| Operand::Constant(context.constant(Constant { ty: float, kind: ConstantKind::Float(bits(value)) }));
+    let mut constant = |value: f64| {
+        Operand::Constant(context.constant(Constant { ty: float, kind: ConstantKind::Float(bits(value)) }))
+    };
     let (zero, limit) = (constant(0.0), constant(9_223_372_036_854_775_808.0));
     let integer = |context: &mut Context, value: i128| Operand::Constant(context.int(wide, value));
     let (none, top) = (integer(context, 0), integer(context, i128::from(i64::MIN)));
@@ -75,9 +88,21 @@ entry:
         super::expanded(&mut after).unwrap();
         assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{}", llrm_mir::print::module(&after));
         assert!(!llrm_mir::print::module(&after).contains("fptoui"));
-        for value in [0.0, 1.5, 4294967296.0, 9.223372036854775e18, 9223372036854775808.0, 9223372036854777856.0, 18446744073709549568.0] {
+        for value in [
+            0.0,
+            1.5,
+            4294967296.0,
+            9.223372036854775e18,
+            9223372036854775808.0,
+            9223372036854777856.0,
+            18446744073709549568.0,
+        ] {
             let argument = vec![Val::Float(llrm_mir::types::FloatKind::Double, f64::to_bits(value))];
-            assert_eq!(run(&after, "f", argument.clone(), 100).unwrap(), run(&before, "f", argument, 100).unwrap(), "{value}");
+            assert_eq!(
+                run(&after, "f", argument.clone(), 100).unwrap(),
+                run(&before, "f", argument, 100).unwrap(),
+                "{value}"
+            );
         }
     }
 }

@@ -7,7 +7,10 @@ use llrm_analysis::{cfg, liveness};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, InstId, Module, ValueId};
 
-use super::{Pressure, Room, Site, Traffic, View, addressed, cells, forecast, integer, segment_view, sites, spilled, transient, traffic, words};
+use super::{
+    Pressure, Room, Site, Traffic, View, addressed, cells, forecast, integer, segment_view, sites, spilled, traffic,
+    transient, words,
+};
 use crate::profit::OperationCosts;
 
 fn module(text: &str) -> Module {
@@ -18,8 +21,15 @@ fn function(module: &Module) -> &Function {
     module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f").2
 }
 
-fn named(function: &Function, name: &str) -> ValueId {
-    function.walk().filter_map(|(_, inst)| function.instruction(inst).result).find(|&value| function.value(value).name.as_deref() == Some(name)).expect(name)
+fn named(
+    function: &Function,
+    name: &str,
+) -> ValueId {
+    function
+        .walk()
+        .filter_map(|(_, inst)| function.instruction(inst).result)
+        .find(|&value| function.value(value).name.as_deref() == Some(name))
+        .expect(name)
 }
 
 fn costs() -> OperationCosts {
@@ -28,7 +38,11 @@ fn costs() -> OperationCosts {
 
 /// Every block once, the loop's ten times.
 fn looped(function: &Function) -> BTreeMap<i64, i64> {
-    function.layout().iter().map(|&block| (cfg::id(block), if function.block(block).name.as_deref() == Some("body") { 10 } else { 1 })).collect()
+    function
+        .layout()
+        .iter()
+        .map(|&block| (cfg::id(block), if function.block(block).name.as_deref() == Some("body") { 10 } else { 1 }))
+        .collect()
 }
 
 const COUNTED: &str = "define i16 @f(i16 %n) {
@@ -68,7 +82,8 @@ fn test_a_truth_value_takes_a_register_only_past_its_branch() {
     let counted = module(COUNTED);
     let function = self::function(&counted);
     assert!(!integer(&counted.context, function, named(function, "c")));
-    let kept = module("define i16 @f(i16 %n) {
+    let kept = module(
+        "define i16 @f(i16 %n) {
 entry:
   %c = icmp ult i16 %n, 7
   br i1 %c, label %yes, label %no
@@ -78,7 +93,8 @@ no:
   %r = select i1 %c, i16 1, i16 2
   ret i16 %r
 }
-");
+",
+    );
     let function = self::function(&kept);
     assert!(integer(&kept.context, function, named(function, "c")));
 }
@@ -86,13 +102,15 @@ no:
 /// A far pointer spills as a segment and an offset: two stores.
 #[test]
 fn test_a_far_pointer_is_stored_a_word_at_a_time() {
-    let module = module("define ptr addrspace(1) @f(ptr addrspace(1) %p, ptr %q) {
+    let module = module(
+        "define ptr addrspace(1) @f(ptr addrspace(1) %p, ptr %q) {
 entry:
   %a = getelementptr i8, ptr addrspace(1) %p, i16 2
   %b = getelementptr i8, ptr %q, i16 2
   ret ptr addrspace(1) %a
 }
-");
+",
+    );
     let function = function(&module);
     let layout = DataLayout::parse(module.datalayout.as_deref().expect("a layout")).expect("a layout");
     assert_eq!(words(&module.context, &layout, function, named(function, "a")), 2);
@@ -104,7 +122,8 @@ entry:
 /// would have loaded both at once, and it was priced as free.
 #[test]
 fn test_a_far_view_of_a_frame_is_rebuilt_with_its_segment() {
-    let module = module("define i16 @f() {
+    let module = module(
+        "define i16 @f() {
 entry:
   %a = alloca [8 x i8]
   %far = addrspacecast ptr %a to ptr addrspace(1)
@@ -113,7 +132,8 @@ entry:
   %s = add i16 %v, %w
   ret i16 %s
 }
-");
+",
+    );
     let function = function(&module);
     let found = traffic(function, &looped(function), &cells(function), &costs(), &|_| true, &|_| 1);
     assert_eq!(found[&named(function, "a")].rebuild, Some(1));
@@ -125,7 +145,8 @@ entry:
 /// registers had seemed enough.
 #[test]
 fn test_a_call_leaves_only_its_registers() {
-    let module = module("declare void @g()
+    let module = module(
+        "declare void @g()
 
 define i16 @f(i16 %x, i16 %y) {
 entry:
@@ -135,13 +156,32 @@ entry:
   %s = add i16 %a, %b
   ret i16 %s
 }
-");
+",
+    );
     let function = function(&module);
     let found = liveness::live(function);
     let cells = cells(function);
     let room = Room { registers: 3, across_call: 1, ..Room::default() };
     let integer = |value: ValueId| integer(&module.context, function, value);
-    let points = function.layout().iter().flat_map(|&block| sites(function, &found, block, room, &|_| room.across_call, &|_, _| 0, &cells, &integer, &|_| false, &|_| false)).flat_map(super::Site::points).collect::<Vec<_>>();
+    let points = function
+        .layout()
+        .iter()
+        .flat_map(|&block| {
+            sites(
+                function,
+                &found,
+                block,
+                room,
+                &|_| room.across_call,
+                &|_, _| 0,
+                &cells,
+                &integer,
+                &|_| false,
+                &|_| false,
+            )
+        })
+        .flat_map(super::Site::points)
+        .collect::<Vec<_>>();
     let prices = traffic(function, &looped(function), &cells, &costs(), &|_| true, &|_| 1);
     // Each of `a` and `b` is stored once and loaded once.
     assert_eq!(spilled(points, |one| prices.get(&one).map_or(0, |one| one.price(&costs()))), 2);
@@ -153,22 +193,40 @@ entry:
 /// such loads was planned to fit and could not be allocated.
 #[test]
 fn test_a_far_access_takes_a_register_of_its_own() {
-    let module = module("define i16 @f(ptr addrspace(1) %far, ptr %near) {
+    let module = module(
+        "define i16 @f(ptr addrspace(1) %far, ptr %near) {
 entry:
   %a = load i16, ptr addrspace(1) %far
   %b = load i16, ptr %near
   %s = add i16 %a, %b
   ret i16 %s
 }
-");
+",
+    );
     let function = function(&module);
     let layout = llrm_analysis::testing::layout(&module);
     let room = Room { registers: 6, across_call: 2, far_access: 1, ..Room::default() };
-    let loads = function.layout().iter().flat_map(|&block| function.block(block).instructions().to_vec()).filter(|&inst| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Load { .. })).collect::<Vec<_>>();
-    let taken = loads.iter().map(|&inst| {
-        let live = function.instruction(inst).operands.iter().filter_map(|one| if let llrm_mir::module::Operand::Value(value) = one { Some(*value) } else { None }).collect();
-        super::transient(&module.context, &layout, function, inst, room, &live)
-    }).collect::<Vec<_>>();
+    let loads = function
+        .layout()
+        .iter()
+        .flat_map(|&block| function.block(block).instructions().to_vec())
+        .filter(|&inst| matches!(
+            function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Load { .. }
+        ))
+        .collect::<Vec<_>>();
+    let taken = loads
+        .iter()
+        .map(|&inst| {
+            let live = function
+                .instruction(inst)
+                .operands
+                .iter()
+                .filter_map(|one| if let llrm_mir::module::Operand::Value(value) = one { Some(*value) } else { None })
+                .collect();
+            super::transient(&module.context, &layout, function, inst, room, &live)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(taken, [1, 0]);
 }
 
@@ -178,7 +236,8 @@ entry:
 /// pointer as a register.
 #[test]
 fn test_a_far_view_of_a_segment_is_counted_in_the_segment_registers() {
-    let module = module("define i16 @f(i16 %a, i16 %b) {
+    let module = module(
+        "define i16 @f(i16 %a, i16 %b) {
 entry:
   %sa = inttoptr i16 %a to ptr addrspace(2)
   %fa = addrspacecast ptr addrspace(2) %sa to ptr addrspace(1)
@@ -189,7 +248,8 @@ entry:
   %s = add i16 %x, %y
   ret i16 %s
 }
-");
+",
+    );
     let function = function(&module);
     let layout = llrm_analysis::testing::layout(&module);
     let found = liveness::live(function);
@@ -199,16 +259,28 @@ entry:
     let at = |segments: i64| {
         let room = Room { registers: 6, across_call: 2, segments, ..Room::default() };
         let block = function.layout()[0];
-        sites(function, &found, block, room, &|_| 2, &|_, _| 0, &cells, &integer, &views, &|_| false).into_iter().find(|site| matches!(function.instruction(site.inst).opcode, llrm_mir::opcode::Opcode::Load { .. })).expect("a load")
+        sites(function, &found, block, room, &|_| 2, &|_, _| 0, &cells, &integer, &views, &|_| false)
+            .into_iter()
+            .find(|site| matches!(
+                function.instruction(site.inst).opcode,
+                llrm_mir::opcode::Opcode::Load { .. }
+            ))
+            .expect("a load")
     };
     let held = at(3);
     assert_eq!(held.segments.residents.len(), 2, "both views are in segment registers");
     assert!(held.before.residents.iter().all(|&one| !views(one)));
     let none = at(0);
-    assert!(none.segments.residents.is_empty() && none.before.residents.iter().filter(|&&one| views(one)).count() == 2, "no segment registers: general ones");
+    assert!(
+        none.segments.residents.is_empty() && none.before.residents.iter().filter(|&&one| views(one)).count() == 2,
+        "no segment registers: general ones"
+    );
 }
 
-fn _peak(text: &str, room: Room) -> i64 {
+fn _peak(
+    text: &str,
+    room: Room,
+) -> i64 {
     let module = module(text);
     let function = function(&module);
     let layout = llrm_analysis::testing::layout(&module);
@@ -218,12 +290,30 @@ fn _peak(text: &str, room: Room) -> i64 {
     let views = |value: ValueId| segment_view(&module.context, &layout, llrm_x86_m16::spaces(), function, value);
     let addressed = addressed(function);
     let routed = |value: ValueId| addressed.contains(&value);
-    let points = function.layout().iter().flat_map(|&block| sites(function, &found, block, room, &|_| 2, &|inst, live| transient(&module.context, &layout, function, inst, room, live), &cells, &integer, &views, &routed)).flat_map(Site::points);
+    let points = function
+        .layout()
+        .iter()
+        .flat_map(|&block| {
+            sites(
+                function,
+                &found,
+                block,
+                room,
+                &|_| 2,
+                &|inst, live| transient(&module.context, &layout, function, inst, room, live),
+                &cells,
+                &integer,
+                &views,
+                &routed,
+            )
+        })
+        .flat_map(Site::points);
     forecast(points, |_| 1).peak
 }
 
 fn _walk(registers: i64) -> i64 {
-    _peak("define i16 @f(ptr %p) {
+    _peak(
+        "define i16 @f(ptr %p) {
 entry:
   br label %loop
 loop:
@@ -236,7 +326,9 @@ loop:
 exit:
   ret i16 %n
 }
-", Room { registers, across_call: 2, ..Room::default() })
+",
+        Room { registers, across_call: 2, ..Room::default() },
+    )
 }
 
 /// An address only its own access takes is folded into the access: it is not
@@ -378,7 +470,11 @@ exit:
   ret i16 %n
 }
 ";
-    assert_eq!(_peak(text, Room { registers: 4, across_call: 2, ..Room::default() }), 0, "%n, %i, %v and %u fit four registers; %a, %p and %q are [bp+disp]");
+    assert_eq!(
+        _peak(text, Room { registers: 4, across_call: 2, ..Room::default() }),
+        0,
+        "%n, %i, %v and %u fit four registers; %a, %p and %q are [bp+disp]"
+    );
 }
 
 /// A frame object's address cast to the stack's space is a displacement from
@@ -411,8 +507,12 @@ exit:
 /// pointer is asked once.
 #[test]
 fn test_each_pointer_is_asked_whether_it_is_folded_once_however_many_accesses_use_it() {
-    let accesses: String = (0..40).map(|at| format!("  store i16 {at}, ptr %slot\n  %v{at} = load i16, ptr %slot\n")).collect();
-    let module = crate::testing::parsed(&format!("{}define i16 @f() {{\nentry:\n  %slot = alloca i16\n{accesses}  ret i16 %v39\n}}\n", llrm_analysis::testing::DOS));
+    let accesses: String =
+        (0..40).map(|at| format!("  store i16 {at}, ptr %slot\n  %v{at} = load i16, ptr %slot\n")).collect();
+    let module = crate::testing::parsed(&format!(
+        "{}define i16 @f() {{\nentry:\n  %slot = alloca i16\n{accesses}  ret i16 %v39\n}}\n",
+        llrm_analysis::testing::DOS
+    ));
     let function = llrm_analysis::testing::function(&module, "f");
     let before = super::folded_runs();
     super::addressed(function);
@@ -425,7 +525,8 @@ fn test_each_pointer_is_asked_whether_it_is_folded_once_however_many_accesses_us
 /// to free them (#698: -Os m32 +4 B and two `fstp st(0)`). Where the address takes no such scale it is a value.
 #[test]
 fn test_a_frame_object_indexed_by_a_scaled_integer_is_folded_wherever_it_is_read() {
-    let module = module("define double @f(i32 %n) {
+    let module = module(
+        "define double @f(i32 %n) {
 entry:
   %buf = alloca [32 x double]
   br label %outer
@@ -448,7 +549,8 @@ latch:
 done:
   ret double 0.0
 }
-");
+",
+    );
     let function = self::function(&module);
     let (p, q) = (named(function, "p"), named(function, "q"));
     // The scale of 8 is bit 3.
@@ -464,7 +566,8 @@ done:
 /// registers across the nest, forecast 5389056 clocks of spills and the allocator spilled nothing.
 #[test]
 fn test_a_symbol_plus_a_constant_is_no_register_wherever_it_is_read() {
-    let module = module("@table = global [8 x i32] zeroinitializer
+    let module = module(
+        "@table = global [8 x i32] zeroinitializer
 define i32 @f(i32 %n) {
 entry:
   %p = getelementptr inbounds i8, ptr @table, i32 8
@@ -478,7 +581,8 @@ loop:
 done:
   ret i32 %next
 }
-");
+",
+    );
     let function = self::function(&module);
     assert!(!integer(&module.context, function, named(function, "p")));
 }
@@ -501,12 +605,19 @@ fn test_a_forecast_is_the_same_from_the_managers_pressure_as_from_one_made_for_t
     assert!(one.peak > 0, "the room of one register is crowded");
     assert_eq!((one.cost, &one.spilled, one.peak), (two.cost, &two.spilled, two.peak));
     let hidden = |_: ValueId| true;
-    let residents = |view: &View, hide: &dyn Fn(ValueId) -> bool| function.layout().iter().flat_map(|&block| view.sites(block, hide)).map(|site| site.before.residents.len()).sum::<usize>();
+    let residents = |view: &View, hide: &dyn Fn(ValueId) -> bool| {
+        function
+            .layout()
+            .iter()
+            .flat_map(|&block| view.sites(block, hide))
+            .map(|site| site.before.residents.len())
+            .sum::<usize>()
+    };
     assert!(residents(&kept, &hidden) < residents(&kept, &|_| false));
 }
 
-/// `forecast` as it was written, a set and a full sort per point: the one that picks the cheapest by a partial sort over a
-/// sorted vector must give the same cost, spills and peak, ties included.
+/// `forecast` as it was written, a set and a full sort per point: the one that picks the cheapest by a partial sort
+/// over a sorted vector must give the same cost, spills and peak, ties included.
 #[test]
 fn test_the_forecast_is_what_a_set_and_a_full_sort_give() {
     let mut seed = 12345_u64;
@@ -515,12 +626,21 @@ fn test_the_forecast_is_what_a_set_and_a_full_sort_give() {
         (seed >> 33) % most
     };
     for _ in 0..200 {
-        let points: Vec<super::Point<u32>> = (0..8).map(|_| super::Point { registers: next(5) as i64, residents: (0..next(9)).map(|_| next(10) as u32).collect() }).collect();
+        let points: Vec<super::Point<u32>> = (0..8)
+            .map(|_| super::Point {
+                registers: next(5) as i64,
+                residents: (0..next(9)).map(|_| next(10) as u32).collect(),
+            })
+            .collect();
         let prices: Vec<i64> = (0..10).map(|_| next(4) as i64).collect();
         let mut expected_spilled = std::collections::BTreeSet::new();
         let (mut cost, mut peak) = (0, 0);
         for point in points.clone() {
-            let resident = point.residents.into_iter().filter(|one| !expected_spilled.contains(one)).collect::<std::collections::BTreeSet<_>>();
+            let resident = point
+                .residents
+                .into_iter()
+                .filter(|one| !expected_spilled.contains(one))
+                .collect::<std::collections::BTreeSet<_>>();
             let excess = resident.len() as i64 - point.registers.max(0);
             peak = peak.max(excess);
             if excess <= 0 {
@@ -534,12 +654,15 @@ fn test_the_forecast_is_what_a_set_and_a_full_sort_give() {
             }
         }
         let got = forecast(points, |one| prices[one as usize]);
-        assert_eq!((got.cost, got.spilled.iter().collect::<std::collections::BTreeSet<_>>(), got.peak), (cost, expected_spilled, peak));
+        assert_eq!(
+            (got.cost, got.spilled.iter().collect::<std::collections::BTreeSet<_>>(), got.peak),
+            (cost, expected_spilled, peak)
+        );
     }
 }
 
-/// `spilled` keeps what it has spilled in a hash set (lsr asks it of every resident of every point of every candidate set, on cells that are not
-/// ids); it must price the same as `forecast`, which keeps an id set.
+/// `spilled` keeps what it has spilled in a hash set (lsr asks it of every resident of every point of every candidate
+/// set, on cells that are not ids); it must price the same as `forecast`, which keeps an id set.
 #[test]
 fn test_spilled_prices_what_forecast_does_whichever_set_remembers_the_spilled() {
     let mut seed = 777_u64;
@@ -548,8 +671,12 @@ fn test_spilled_prices_what_forecast_does_whichever_set_remembers_the_spilled() 
         (seed >> 33) % most
     };
     for _ in 0..300 {
-        let points: Vec<super::Point<llrm_mir::module::ValueId>> =
-            (0..10).map(|_| super::Point { registers: next(5) as i64, residents: (0..next(10)).map(|_| llrm_mir::module::ValueId(next(12) as u32)).collect() }).collect();
+        let points: Vec<super::Point<llrm_mir::module::ValueId>> = (0..10)
+            .map(|_| super::Point {
+                registers: next(5) as i64,
+                residents: (0..next(10)).map(|_| llrm_mir::module::ValueId(next(12) as u32)).collect(),
+            })
+            .collect();
         let prices: Vec<i64> = (0..12).map(|_| next(5) as i64).collect();
         let by_forecast = forecast(points.clone(), |one| prices[one.0 as usize]).cost;
         assert_eq!(spilled(points, |one| prices[one.0 as usize]), by_forecast);

@@ -24,7 +24,11 @@ impl FunctionPass for Dse {
         "dse"
     }
 
-    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         match dropped(unit, analyses) {
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
             Ok(false) => PreservedAnalyses::all(),
@@ -34,7 +38,10 @@ impl FunctionPass for Dse {
 }
 
 /// `unit`'s function without its dead stores; whether any went.
-fn dropped(unit: &mut passes::Unit, analyses: &mut Analyses) -> Result<bool, String> {
+fn dropped(
+    unit: &mut passes::Unit,
+    analyses: &mut Analyses,
+) -> Result<bool, String> {
     let (context, layout) = (&*unit.context, unit.layout);
     let accesses = Accesses::managed(context, layout, unit.function, analyses)?;
     let pointers = analyses.get::<Pointers>(context, layout, unit.function);
@@ -43,7 +50,12 @@ fn dropped(unit: &mut passes::Unit, analyses: &mut Analyses) -> Result<bool, Str
     let published = Result::as_ref(&*published).map_err(String::clone)?;
     let shape = analyses.get::<llrm_analysis::cfg::Shape>(context, layout, unit.function);
     let memory = Unit::within(context, layout, unit.function, analyses.outer()).with_shape(&shape);
-    let dead = avail::dead_stores_escaping(&memory, &accesses, Some(&observers::private_of(memory, pointers, published)), Some(&pointers.escaped_before));
+    let dead = avail::dead_stores_escaping(
+        &memory,
+        &accesses,
+        Some(&observers::private_of(memory, pointers, published)),
+        Some(&pointers.escaped_before),
+    );
     for &store in &dead {
         unit.function.erase(store)?;
     }

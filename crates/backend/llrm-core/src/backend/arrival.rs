@@ -7,9 +7,9 @@ fn full(register: Register) -> Register {
     if register.is_gpr() { register.full_register32() } else { register }
 }
 
-/// How a frame cell is reached: through the frame register, or, where the code keeps none, through the stack pointer, the
-/// cell being `disp - bias` from the canonical frame address (`FrameBase::Cfa`) and the stack pointer `entry` bytes below
-/// it when the function starts.
+/// How a frame cell is reached: through the frame register, or, where the code keeps none, through the stack pointer,
+/// the cell being `disp - bias` from the canonical frame address (`FrameBase::Cfa`) and the stack pointer `entry` bytes
+/// below it when the function starts.
 #[derive(Clone, Copy)]
 pub enum Cell {
     Frame { register: Register, disp: i64 },
@@ -19,7 +19,11 @@ pub enum Cell {
 /// The offset after the first instruction that stores `register` into `cell`, found along the straight line from the
 /// entry; None where a branch, a return or a write to `register` comes first (the value is then not the argument any
 /// more), or none stores it.
-pub fn stored(code: &[u8], cell: Cell, register: Register) -> Option<usize> {
+pub fn stored(
+    code: &[u8],
+    cell: Cell,
+    register: Register,
+) -> Option<usize> {
     let mut decoder = Decoder::with_ip(32, code, 0, DecoderOptions::NONE);
     // The stack pointer's distance from the canonical frame address, where the cell is addressed through it.
     let mut depth = match cell {
@@ -45,13 +49,18 @@ pub fn stored(code: &[u8], cell: Cell, register: Register) -> Option<usize> {
         if to_cell {
             return Some(one.ip() as usize + one.len());
         }
-        if one.op0_kind() == OpKind::Register && full(one.op0_register()) == full(register) && one.mnemonic() != Mnemonic::Push {
+        if one.op0_kind() == OpKind::Register
+            && full(one.op0_register()) == full(register)
+            && one.mnemonic() != Mnemonic::Push
+        {
             return None;
         }
         if let Cell::Stack { register: stack, .. } = cell {
             match one.mnemonic() {
                 Mnemonic::Push | Mnemonic::Pop => depth += i64::from(one.stack_pointer_increment()),
-                Mnemonic::Sub | Mnemonic::Add if one.op0_kind() == OpKind::Register && full(one.op0_register()) == full(stack) => {
+                Mnemonic::Sub | Mnemonic::Add
+                    if one.op0_kind() == OpKind::Register && full(one.op0_register()) == full(stack) =>
+                {
                     if one.op1_kind() == OpKind::Register || one.op1_kind() == OpKind::Memory {
                         return None;
                     }
@@ -107,8 +116,8 @@ mod tests {
     fn a_store_through_the_stack_pointer_is_found_where_the_code_keeps_no_frame_register() {
         // push ebx; sub esp, 8; mov [esp+4], eax; mov [esp+0], edx
         let code = [0x53, 0x83, 0xEC, 0x08, 0x89, 0x44, 0x24, 0x04, 0x89, 0x14, 0x24];
-        // Entry: esp is 4 below the canonical frame address. After the push and the sub: 16 below. The cell at bias 8, disp -4
-        // is 12 below; esp+4 is 12 below.
+        // Entry: esp is 4 below the canonical frame address. After the push and the sub: 16 below. The cell at bias 8,
+        // disp -4 is 12 below; esp+4 is 12 below.
         let stack = |from_cfa| Cell::Stack { register: ESP, entry: 4, from_cfa };
         assert_eq!(stored(&code, stack(-12), EAX), Some(8));
         assert_eq!(stored(&code, stack(-16), EDX), Some(11));

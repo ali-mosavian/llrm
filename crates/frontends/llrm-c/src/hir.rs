@@ -5,13 +5,13 @@
 //! and its operands are the handles of the nodes it was built from. Nothing is
 //! lowered here; `raise_hir` does that.
 
-use llrm_core::support::hash::HashSet;
 use std::fmt;
 
+use llrm_core::support::hash::HashSet;
 use llrm_core::support::hash::IndexMap;
+use llrm_core::support::pyrepr::{self, Repr, Tuple};
 
 use super::stream::Record;
-use llrm_core::support::pyrepr::{self, Repr, Tuple};
 
 // fe_attr (bld/cg/h/cg.h)
 pub const FE_PROC: i64 = 0x1;
@@ -43,17 +43,8 @@ pub fn intrinsic_runtime(base: &str) -> Option<&'static str> {
     }
 }
 
-pub const STATEMENTS: [&str; 9] = [
-    "CGDone",
-    "CGTrash",
-    "CGControl",
-    "CGReturn",
-    "CGSelCase",
-    "CGSelRange",
-    "CGSelOther",
-    "CGSelect",
-    "CGBigLabel",
-];
+pub const STATEMENTS: [&str; 9] =
+    ["CGDone", "CGTrash", "CGControl", "CGReturn", "CGSelCase", "CGSelRange", "CGSelOther", "CGSelect", "CGBigLabel"];
 pub const IGNORED: [&str; 13] = [
     "START",
     "STOP",
@@ -75,7 +66,10 @@ pub const IGNORED: [&str; 13] = [
 pub struct Unsupported(pub String);
 
 impl fmt::Display for Unsupported {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
@@ -113,13 +107,7 @@ pub struct Code {
 
 impl Repr for Code {
     fn repr(&self) -> String {
-        pyrepr::dataclass(
-            "Code",
-            &[
-                ("data", pyrepr::bytes(&self.data)),
-                ("fixups", pyrepr::tuple(&self.fixups)),
-            ],
-        )
+        pyrepr::dataclass("Code", &[("data", pyrepr::bytes(&self.data)), ("fixups", pyrepr::tuple(&self.fixups))])
     }
 }
 
@@ -151,7 +139,10 @@ impl Symbol {
 
     /// Whether no pointer reaches it but one its unit makes: under -oa,
     /// what a unit never takes the address of, no other unit does either.
-    pub fn unaddressed(&self, switches: i64) -> bool {
+    pub fn unaddressed(
+        &self,
+        switches: i64,
+    ) -> bool {
         switches & CGSW_GEN_RELAX_ALIAS != 0 && self.attr & FE_ADDR_TAKEN == 0
     }
 
@@ -183,7 +174,10 @@ impl Symbol {
     }
 
     /// The program's entry, `entry` (the routine the runtime's start calls, its C runtime description's).
-    pub fn is_entry(&self, entry: &str) -> bool {
+    pub fn is_entry(
+        &self,
+        entry: &str,
+    ) -> bool {
         self.base == entry && self.exported()
     }
 
@@ -193,18 +187,17 @@ impl Symbol {
         }
 
         let base = intrinsic_runtime(&self.base).unwrap_or(&self.base);
-        if self.pattern.is_empty() {
-            base.to_owned()
-        } else {
-            llrm_target::calling::spell(&self.pattern, base)
-        }
+        if self.pattern.is_empty() { base.to_owned() } else { llrm_target::calling::spell(&self.pattern, base) }
     }
 }
 
 impl Proc {
     /// Its parameters first first. Open Watcom declares a REVERSE_PARMS
     /// procedure's last first (cgen.c's DoFuncDefn, ParmReverse).
-    pub fn parameters<'p>(&'p self, symbol: &Symbol) -> Box<dyn Iterator<Item = &'p (i64, String)> + 'p> {
+    pub fn parameters<'p>(
+        &'p self,
+        symbol: &Symbol,
+    ) -> Box<dyn Iterator<Item = &'p (i64, String)> + 'p> {
         if symbol.in_order() { Box::new(self.parms.iter().rev()) } else { Box::new(self.parms.iter()) }
     }
 }
@@ -266,15 +259,37 @@ pub struct Proc {
 /// is made of.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DebugType {
-    Scalar { name: String, cg: String },
-    Array { hi: i64, base: i64 },
-    Pointer { cg: String, base: i64 },
+    Scalar {
+        name: String,
+        cg: String,
+    },
+    Array {
+        hi: i64,
+        base: i64,
+    },
+    Pointer {
+        cg: String,
+        base: i64,
+    },
     /// Fields: offset, name, type, and a bit field's first bit and width.
-    Struct { name: String, union: bool, size: i64, fields: Vec<(i64, String, i64, Option<(i64, i64)>)> },
-    Enum { cg: String },
-    Proc { result: i64, parameters: Vec<i64> },
+    Struct {
+        name: String,
+        union: bool,
+        size: i64,
+        fields: Vec<(i64, String, i64, Option<(i64, i64)>)>,
+    },
+    Enum {
+        cg: String,
+    },
+    Proc {
+        result: i64,
+        parameters: Vec<i64>,
+    },
     /// A tag or typedef name for the type it names.
-    Name { name: String, target: Option<i64> },
+    Name {
+        name: String,
+        target: Option<i64>,
+    },
 }
 
 /// Under -d2, what the front end describes: each debug type, and each
@@ -306,15 +321,15 @@ pub struct Unit {
     pub procs: Vec<Proc>,
     /// Compiled with -d2.
     pub debug: Option<Debug>,
-    /// The routine the runtime's start calls, and the `cc` of the convention it calls it in (the C runtime description's).
-    /// `-fwrapv`: signed overflow wraps, and C promises nothing of it.
+    /// The routine the runtime's start calls, and the `cc` of the convention it calls it in (the C runtime
+    /// description's). `-fwrapv`: signed overflow wraps, and C promises nothing of it.
     pub wrapv: bool,
     pub entry: String,
     pub entry_cc: String,
     /// What the front end records of a function it passes in its default registers.
     pub default_registers: String,
-    /// The `cc` of the convention a function the front end records as cdecl has, and one it records in its default registers;
-    /// none where that is the C one (`ccc`).
+    /// The `cc` of the convention a function the front end records as cdecl has, and one it records in its default
+    /// registers; none where that is the C one (`ccc`).
     pub cdecl_cc: Option<String>,
     pub registers_cc: Option<String>,
     /// INIT's code-generator switches (`CGSW_GEN_*`).
@@ -329,16 +344,28 @@ impl Unit {
     /// Each symbol's decoration as `calling` states it for `format`: what the front end recorded is OMF's, and a
     /// symbol whose pattern a convention states takes that convention's for `format`. The entry is called by
     /// the runtime's start in the convention the description names, whatever the front end made of it.
-    pub fn decorate(&mut self, calling: &llrm_target::calling::Calling, format: &str) {
+    pub fn decorate(
+        &mut self,
+        calling: &llrm_target::calling::Calling,
+        format: &str,
+    ) {
         let entry = calling.by_cc(&self.entry_cc).and_then(|one| one.symbol.get(format)).cloned();
-        let registers = self.registers_cc.as_deref().and_then(|cc| calling.by_cc(cc)).and_then(|one| one.symbol.get(format)).cloned();
+        let registers = self
+            .registers_cc
+            .as_deref()
+            .and_then(|cc| calling.by_cc(cc))
+            .and_then(|one| one.symbol.get(format))
+            .cloned();
         for symbol in self.symbols.values_mut() {
             if symbol.is_entry(&self.entry) {
                 if let Some(pattern) = &entry {
                     symbol.pattern = pattern.clone();
                 }
-            } else if let Some(pattern) = registers.clone().filter(|_| symbol.register_parms && symbol.register_list == self.default_registers) {
-                // In its default registers: the convention this ABI states for them spells it, whatever Open Watcom's was.
+            } else if let Some(pattern) =
+                registers.clone().filter(|_| symbol.register_parms && symbol.register_list == self.default_registers)
+            {
+                // In its default registers: the convention this ABI states for them spells it, whatever Open Watcom's
+                // was.
                 symbol.pattern = pattern;
             } else if let Some(pattern) = calling.redecorated(&symbol.pattern, format) {
                 symbol.pattern = pattern;
@@ -349,11 +376,16 @@ impl Unit {
     /// Warns that far and huge pointers are near on a target with one address space (the front end
     /// gives both the same type, so it cannot say which was written).
     pub fn warn_near(&self) {
-        self.warnings.borrow_mut().insert("warning: __far and __huge pointers are near on this target: it has one address space".to_owned());
+        self.warnings
+            .borrow_mut()
+            .insert("warning: __far and __huge pointers are near on this target: it has one address space".to_owned());
     }
 
     /// Whether the symbol is in DGROUP, reached through DS.
-    pub fn grouped(&self, symbol: &Symbol) -> bool {
+    pub fn grouped(
+        &self,
+        symbol: &Symbol,
+    ) -> bool {
         if symbol.imported() && symbol.segment < 0 {
             // Open Watcom reports -1 for an explicitly far imported object;
             // its selector is the external itself, never DGROUP.
@@ -365,7 +397,10 @@ impl Unit {
         }
     }
 
-    pub fn canonical_type(&self, type_: &str) -> String {
+    pub fn canonical_type(
+        &self,
+        type_: &str,
+    ) -> String {
         let mut type_ = type_.to_owned();
         let mut seen = HashSet::default();
         while let Some(next) = self.aliases.get(&type_) {
@@ -385,32 +420,29 @@ pub fn handle(token: &str) -> i64 {
 
 /// `int(text)`.
 pub(crate) fn int(text: &str) -> i64 {
-    text.trim()
-        .parse()
-        .unwrap_or_else(|_| panic!("ValueError: invalid literal for int() with base 10: {text:?}"))
+    text.trim().parse().unwrap_or_else(|_| panic!("ValueError: invalid literal for int() with base 10: {text:?}"))
 }
 
 /// `int(text, 16)`.
 pub(crate) fn hex(text: &str) -> i64 {
     let digits = text.trim();
-    let digits = digits
-        .strip_prefix("0x")
-        .or_else(|| digits.strip_prefix("0X"))
-        .unwrap_or(digits);
+    let digits = digits.strip_prefix("0x").or_else(|| digits.strip_prefix("0X")).unwrap_or(digits);
     i64::from_str_radix(digits, 16)
         .unwrap_or_else(|_| panic!("ValueError: invalid literal for int() with base 16: {text:?}"))
 }
 
-fn field<'a>(one: &'a Record, key: &str) -> &'a str {
-    one.fields
-        .get(key)
-        .unwrap_or_else(|| panic!("KeyError: {key:?}"))
+fn field<'a>(
+    one: &'a Record,
+    key: &str,
+) -> &'a str {
+    one.fields.get(key).unwrap_or_else(|| panic!("KeyError: {key:?}"))
 }
 
-fn arg(one: &Record, index: usize) -> &str {
-    one.args
-        .get(index)
-        .unwrap_or_else(|| panic!("IndexError: tuple index out of range"))
+fn arg(
+    one: &Record,
+    index: usize,
+) -> &str {
+    one.args.get(index).unwrap_or_else(|| panic!("IndexError: tuple index out of range"))
 }
 
 /// The current `proc`; Python raises `AttributeError` on `None`.
@@ -428,11 +460,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
         let args = &one.args;
         match one.call.as_str() {
             "UNSUPPORTED" => {
-                return Err(Unsupported(format!(
-                    "stream line {}: the shim refused {}",
-                    one.line,
-                    args.join(" ")
-                )));
+                return Err(Unsupported(format!("stream line {}: the shim refused {}", one.line, args.join(" "))));
             }
             "INIT" => {
                 made.target = hex(field(one, "target"));
@@ -445,12 +473,20 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
             }
             "DBScalar" | "DBArray" | "DBPtr" | "DBStruct" | "DBEnum" | "DBProc" | "DBName" => {
                 let result = handle(one.result.as_deref().expect("a debug type's handle"));
-                let debug = made.debug.as_mut().ok_or_else(|| Unsupported(format!("stream line {}: a debug type without -d2", one.line)))?;
+                let debug = made
+                    .debug
+                    .as_mut()
+                    .ok_or_else(|| Unsupported(format!("stream line {}: a debug type without -d2", one.line)))?;
                 let described = match one.call.as_str() {
                     "DBScalar" => DebugType::Scalar { name: arg(one, 0).to_owned(), cg: arg(one, 1).to_owned() },
                     "DBArray" => DebugType::Array { hi: int(arg(one, 1)), base: handle(arg(one, 2)) },
                     "DBPtr" => DebugType::Pointer { cg: arg(one, 0).to_owned(), base: handle(arg(one, 1)) },
-                    "DBStruct" => DebugType::Struct { name: arg(one, 0).to_owned(), union: arg(one, 1) == "union", size: int(arg(one, 2)), fields: Vec::new() },
+                    "DBStruct" => DebugType::Struct {
+                        name: arg(one, 0).to_owned(),
+                        union: arg(one, 1) == "union",
+                        size: int(arg(one, 2)),
+                        fields: Vec::new(),
+                    },
                     "DBEnum" => DebugType::Enum { cg: arg(one, 0).to_owned() },
                     "DBProc" => DebugType::Proc { result: handle(arg(one, 1)), parameters: Vec::new() },
                     _ => DebugType::Name { name: arg(one, 0).to_owned(), target: None },
@@ -458,16 +494,29 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                 debug.types.insert(result, described);
             }
             "DBField" | "DBBitField" | "DBParm" | "DBEndName" => {
-                let debug = made.debug.as_mut().ok_or_else(|| Unsupported(format!("stream line {}: a debug type without -d2", one.line)))?;
+                let debug = made
+                    .debug
+                    .as_mut()
+                    .ok_or_else(|| Unsupported(format!("stream line {}: a debug type without -d2", one.line)))?;
                 let known = debug.types.get_mut(&handle(arg(one, 0)));
                 match (one.call.as_str(), known) {
-                    ("DBField", Some(DebugType::Struct { fields, .. })) => fields.push((int(arg(one, 1)), arg(one, 2).to_owned(), handle(arg(one, 3)), None)),
-                    ("DBBitField", Some(DebugType::Struct { fields, .. })) => {
-                        fields.push((int(arg(one, 1)), arg(one, 4).to_owned(), handle(arg(one, 5)), Some((int(arg(one, 2)), int(arg(one, 3))))))
+                    ("DBField", Some(DebugType::Struct { fields, .. })) => {
+                        fields.push((int(arg(one, 1)), arg(one, 2).to_owned(), handle(arg(one, 3)), None))
                     }
+                    ("DBBitField", Some(DebugType::Struct { fields, .. })) => fields.push((
+                        int(arg(one, 1)),
+                        arg(one, 4).to_owned(),
+                        handle(arg(one, 5)),
+                        Some((int(arg(one, 2)), int(arg(one, 3)))),
+                    )),
                     ("DBParm", Some(DebugType::Proc { parameters, .. })) => parameters.push(handle(arg(one, 1))),
                     ("DBEndName", Some(DebugType::Name { target, .. })) => *target = Some(handle(arg(one, 1))),
-                    _ => return Err(Unsupported(format!("stream line {}: {} of an unknown debug type", one.line, one.call))),
+                    _ => {
+                        return Err(Unsupported(format!(
+                            "stream line {}: {} of an unknown debug type",
+                            one.line, one.call
+                        )));
+                    }
                 }
             }
             "DBModSym" | "DBLocalSym" => {
@@ -475,7 +524,12 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                 match proc.map(|at| &mut made.procs[at]) {
                     Some(open) if one.call == "DBModSym" && open.symbol == symbol => open.debug_type = Some(described),
                     Some(open) if one.call == "DBLocalSym" => open.debug.push((symbol, described)),
-                    _ => made.debug.as_mut().ok_or_else(|| Unsupported(format!("stream line {}: a debug symbol without -d2", one.line)))?.globals.push((symbol, described)),
+                    _ => made
+                        .debug
+                        .as_mut()
+                        .ok_or_else(|| Unsupported(format!("stream line {}: a debug symbol without -d2", one.line)))?
+                        .globals
+                        .push((symbol, described)),
                 }
             }
             "SEG" => {
@@ -492,12 +546,10 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
             }
             "SETSEG" => segment = Some(int(arg(one, 0))),
             "TYPE" => {
-                made.types
-                    .insert(arg(one, 0).to_owned(), int(field(one, "size")));
+                made.types.insert(arg(one, 0).to_owned(), int(field(one, "size")));
             }
             "ALIAS" => {
-                made.aliases
-                    .insert(arg(one, 0).to_owned(), arg(one, 1).to_owned());
+                made.aliases.insert(arg(one, 0).to_owned(), arg(one, 1).to_owned());
             }
             "SYM" => {
                 let id = handle(arg(one, 0));
@@ -519,10 +571,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                 );
             }
             "CALLCONV" => {
-                let symbol = made
-                    .symbols
-                    .get_mut(&handle(arg(one, 0)))
-                    .expect("KeyError: symbol");
+                let symbol = made.symbols.get_mut(&handle(arg(one, 0))).expect("KeyError: symbol");
                 symbol.call_class = hex(field(one, "class"));
                 symbol.call_target = hex(field(one, "target"));
                 let parms = one.fields.get("parms").map_or("[]", String::as_str);
@@ -538,25 +587,15 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                         let [at, kind, target, offset] = parts[..] else {
                             panic!("ValueError: not enough values to unpack");
                         };
-                        Fixup {
-                            at: int(at),
-                            kind: kind.to_owned(),
-                            symbol: handle(target),
-                            offset: int(offset),
-                        }
+                        Fixup { at: int(at), kind: kind.to_owned(), symbol: handle(target), offset: int(offset) }
                     })
                     .collect();
                 let data = from_hex(field(one, "bytes"));
-                made.symbols
-                    .get_mut(&handle(arg(one, 0)))
-                    .expect("KeyError: symbol")
-                    .code = Some(Code { data, fixups });
+                made.symbols.get_mut(&handle(arg(one, 0))).expect("KeyError: symbol").code =
+                    Some(Code { data, fixups });
             }
             "BENewBack" => {
-                let result = one
-                    .result
-                    .as_deref()
-                    .expect("TypeError: 'NoneType' object is not subscriptable");
+                let result = one.result.as_deref().expect("TypeError: 'NoneType' object is not subscriptable");
                 made.backs.insert(handle(result), handle(arg(one, 0)));
             }
             "CGProcDecl" => {
@@ -600,11 +639,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
             }
             "CGAddParm" => {
                 let parm = (arg(one, 1).to_owned(), arg(one, 2).to_owned());
-                made.calls
-                    .get_mut(&handle(arg(one, 0)))
-                    .expect("KeyError: call")
-                    .parms
-                    .push(parm);
+                made.calls.get_mut(&handle(arg(one, 0))).expect("KeyError: call").parms.push(parm);
             }
             "DBSrcFile" if one.fields.get("main").is_some_and(|one| one == "1") => main_file = one.result.clone(),
             "DBSrcFile" => {}
@@ -613,26 +648,15 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
             "CGSelInit" => {
                 let at = open(proc);
                 let result = one.result.clone().expect("CGSelInit returns a handle");
-                made.procs[at].body.push(Statement {
-                    call: one.call.clone(),
-                    args: vec![result],
-                    line,
-                });
+                made.procs[at].body.push(Statement { call: one.call.clone(), args: vec![result], line });
             }
             call if STATEMENTS.contains(&call) => {
                 let at = open(proc);
-                made.procs[at].body.push(Statement {
-                    call: call.to_owned(),
-                    args: args.clone(),
-                    line,
-                });
+                made.procs[at].body.push(Statement { call: call.to_owned(), args: args.clone(), line });
             }
             call if call.starts_with("DG") => {
                 let Some(segment) = segment else {
-                    return Err(Unsupported(format!(
-                        "stream line {}: data before any segment",
-                        one.line
-                    )));
+                    return Err(Unsupported(format!("stream line {}: data before any segment", one.line)));
                 };
                 made.segments
                     .get_mut(&segment)
@@ -646,25 +670,12 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                 crate::ow_facts::check(&node)?;
                 made.nodes.insert(handle(one.result.as_deref().expect("a fact names its node")), node);
             }
-            _ if one
-                .result
-                .as_deref()
-                .is_some_and(|result| result.starts_with('n')) =>
-            {
+            _ if one.result.as_deref().is_some_and(|result| result.starts_with('n')) => {
                 let result = one.result.as_deref().expect("checked");
-                made.nodes.insert(
-                    handle(result),
-                    Node {
-                        call: one.call.clone(),
-                        args: args.clone(),
-                    },
-                );
+                made.nodes.insert(handle(result), Node { call: one.call.clone(), args: args.clone() });
             }
             _ => {
-                return Err(Unsupported(format!(
-                    "stream line {}: {}",
-                    one.line, one.call
-                )));
+                return Err(Unsupported(format!("stream line {}: {}", one.line, one.call)));
             }
         }
     }
@@ -673,10 +684,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
 
 /// `bytes.fromhex`.
 fn from_hex(text: &str) -> Vec<u8> {
-    let digits: Vec<u8> = text
-        .bytes()
-        .filter(|byte| !byte.is_ascii_whitespace())
-        .collect();
+    let digits: Vec<u8> = text.bytes().filter(|byte| !byte.is_ascii_whitespace()).collect();
     digits
         .chunks(2)
         .map(|pair| {

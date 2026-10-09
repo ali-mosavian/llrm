@@ -1,9 +1,16 @@
-use super::*;
 use automaton::{Key, Node};
+
+use super::*;
 
 /// m16's forms: the family's, then its own.
 fn forms() -> String {
-    let read = |name: &str| std::fs::read_to_string(format!("{}/../../target/{name}/src/instructions/x86.instr", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let read = |name: &str| {
+        std::fs::read_to_string(format!(
+            "{}/../../target/{name}/src/instructions/x86.instr",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap()
+    };
     format!("{}\n{}", read("llrm-x86"), read("llrm-x86-m16"))
 }
 
@@ -17,7 +24,11 @@ fn compiled(rules: &str) -> Result<Vec<automaton::Automaton>, String> {
 
 #[test]
 fn the_rules_llrm_builds_with_compile() {
-    let rules = format!("{}\n{}", include_str!("../../../target/llrm-x86/src/isel/peephole.peep"), include_str!("../../../target/llrm-x86-m16/src/isel/peephole.peep"));
+    let rules = format!(
+        "{}\n{}",
+        include_str!("../../../target/llrm-x86/src/isel/peephole.peep"),
+        include_str!("../../../target/llrm-x86-m16/src/isel/peephole.peep")
+    );
     let made = generate(&forms(), "x86.instr", &rules, "peephole.peep");
     assert!(made.is_ok(), "{}", made.err().unwrap_or_default());
 }
@@ -41,7 +52,9 @@ fn a_malformed_rule_is_refused_with_its_line() {
         "test.peep:3: rule r: unknown mnemonic or set 'addd'"
     );
     assert_eq!(
-        refused("group g\n    walk gap\nrule r\n    match mov t:reg, s:reg ; mov s, t ; ... ok(*) ; mov s, t\n    rewrite @0 ; @1 ; @2\n"),
+        refused(
+            "group g\n    walk gap\nrule r\n    match mov t:reg, s:reg ; mov s, t ; ... ok(*) ; mov s, t\n    rewrite @0 ; @1 ; @2\n"
+        ),
         "test.peep:3: rule r: a gap '...' comes only after the first instruction"
     );
 }
@@ -56,7 +69,9 @@ fn rules_sharing_a_prefix_share_its_states() {
                  rule two\n    match add d:reg, d, #2\n    rewrite @0: dec d, d\n";
     let automata = compiled(rules).unwrap();
     let automaton = &automata[0];
-    let testing = |key: Key| automaton.nodes.iter().filter(|node| matches!(node, Node::Switch { key: one, .. } if *one == key)).count();
+    let testing = |key: Key| {
+        automaton.nodes.iter().filter(|node| matches!(node, Node::Switch { key: one, .. } if *one == key)).count()
+    };
     assert_eq!(testing(Key::Op(0)), 1);
     assert_eq!(testing(Key::Dests(0)), 1);
     assert_eq!(testing(Key::Sources(0)), 1);

@@ -9,25 +9,54 @@ use llrm_mir::module::Module;
 use super::*;
 use crate::testing::{block, function, parsed};
 
-fn names(module: &Module, items: &[&str]) -> BTreeSet<GlobalId> {
+fn names(
+    module: &Module,
+    items: &[&str],
+) -> BTreeSet<GlobalId> {
     items.iter().map(|one| module.named(one).unwrap_or_else(|| panic!("no @{one}"))).collect()
 }
 
 /// Every call in `@name` to `@callee`.
-fn calls_to(module: &Module, name: &str, callee: &str) -> BTreeSet<InstId> {
+fn calls_to(
+    module: &Module,
+    name: &str,
+    callee: &str,
+) -> BTreeSet<InstId> {
     let function = function(module, name);
     let target = module.named(callee).unwrap();
-    function.walk().map(|(_, inst)| inst).filter(|&inst| effects::callee(&module.context, function, inst) == Some(target)).collect()
+    function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| effects::callee(&module.context, function, inst) == Some(target))
+        .collect()
 }
 
 /// Each block's instructions by mnemonic, in layout order.
-fn shape(module: &Module, name: &str) -> Vec<Vec<&'static str>> {
+fn shape(
+    module: &Module,
+    name: &str,
+) -> Vec<Vec<&'static str>> {
     let function = function(module, name);
-    function.layout().iter().map(|&one| function.block(one).instructions().iter().map(|&inst| function.instruction(inst).opcode.mnemonic()).collect()).collect()
+    function
+        .layout()
+        .iter()
+        .map(|&one| {
+            function
+                .block(one)
+                .instructions()
+                .iter()
+                .map(|&inst| function.instruction(inst).opcode.mnemonic())
+                .collect()
+        })
+        .collect()
 }
 
 /// `after_terminal_calls` on `@name` at its calls to `@callee`.
-fn cut(module: &mut Module, name: &str, callee: &str) -> bool {
+fn cut(
+    module: &mut Module,
+    name: &str,
+    callee: &str,
+) -> bool {
     let sites = calls_to(module, name, callee);
     let (context, function) = module.function_mut(name).unwrap();
     let changed = after_terminal_calls(context, function, &sites);
@@ -35,7 +64,11 @@ fn cut(module: &mut Module, name: &str, callee: &str) -> bool {
     changed
 }
 
-fn run(module: &Module, name: &str, arguments: Vec<Val>) -> Result<Val, Trap> {
+fn run(
+    module: &Module,
+    name: &str,
+    arguments: Vec<Val>,
+) -> Result<Val, Trap> {
     interpret::run(module, name, arguments, 1000)
 }
 
@@ -44,7 +77,11 @@ fn bit(value: bool) -> Val {
 }
 
 /// Block ids by name, for the block-level facts.
-fn ats(module: &Module, name: &str, blocks: &[&str]) -> BTreeSet<i64> {
+fn ats(
+    module: &Module,
+    name: &str,
+    blocks: &[&str],
+) -> BTreeSet<i64> {
     blocks.iter().map(|one| id(block(function(module, name), one))).collect()
 }
 
@@ -87,7 +124,10 @@ b:
 ",
     );
     assert_eq!(inferred(&module, &module.declarations(), &names(&module, &["caller"])), BTreeSet::new());
-    assert_eq!(inferred(&module, &module.declarations(), &names(&module, &["caller", "spin"])), names(&module, &["caller", "spin"]));
+    assert_eq!(
+        inferred(&module, &module.declarations(), &names(&module, &["caller", "spin"])),
+        names(&module, &["caller", "spin"])
+    );
 }
 
 #[test]
@@ -116,7 +156,10 @@ r:
 }
 ",
     );
-    assert_eq!(inferred(&module, &module.declarations(), &names(&module, &["stops", "returns"])), names(&module, &["stops"]));
+    assert_eq!(
+        inferred(&module, &module.declarations(), &names(&module, &["stops", "returns"])),
+        names(&module, &["stops"])
+    );
 }
 
 #[test]

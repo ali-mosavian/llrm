@@ -34,24 +34,22 @@
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
+use llrm_analysis::cfg;
+use llrm_analysis::consts;
+use llrm_analysis::memory::Unit;
 use llrm_mir::callgraph::CallGraph;
 use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::edit::Position;
 use llrm_mir::facts::{Facts, Inlining};
 use llrm_mir::memory::{Callees, Effects, callee};
-use llrm_mir::module::{Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef};
-use llrm_mir::edit::Position;
 use llrm_mir::module::MetadataId;
+use llrm_mir::module::{Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef};
 use llrm_mir::opcode::{CallInfo, Flags, Opcode};
 use llrm_mir::passes::Declared;
 use llrm_mir::splice::{carries, splice};
 use llrm_mir::types::Type;
 use llrm_support::hash::IndexMap;
-
-use llrm_analysis::consts;
-use llrm_analysis::memory::Unit;
-
-use llrm_analysis::cfg;
 
 use crate::profit::{self, OperationCosts, operation};
 
@@ -72,7 +70,8 @@ pub struct Threshold {
     /// copied: LLVM's last-call-to-static bonus and GCC's `-finline-functions-called-once`, which
     /// `-fno-inline-functions` leaves on as GCC's does; `-fno-inline-functions-called-once` turns it off.
     pub last: bool,
-    /// `-fipa-cp-clone` (-O3): a function is copied for the constants its callers pass though the unit grows (`ipacp`).
+    /// `-fipa-cp-clone` (-O3): a function is copied for the constants its callers pass though the unit grows
+    /// (`ipacp`).
     pub cp_clone: bool,
 }
 
@@ -100,7 +99,10 @@ impl Default for Threshold {
 
 impl Threshold {
     /// The budget for a call priced `call_cost`; None when nothing inlines.
-    pub(crate) fn budget(self, call_cost: i64) -> Option<i64> {
+    pub(crate) fn budget(
+        self,
+        call_cost: i64,
+    ) -> Option<i64> {
         (self.limit > 0).then(|| 6.max(24.min(call_cost.div_euclid(2))) * self.limit / Self::default().limit)
     }
 }
@@ -123,24 +125,24 @@ const FRAME_LIMIT: u64 = 256;
 /// last-call bonus (15000 over 5 a instruction, about 3000): both for allocators near linear in function size. Ours
 /// rebuilds its intervals and facts over the whole body at each spill and split, so a body merged past the knee costs
 /// several times what its parts did. Measured (compile-time's curve, QCport -O2, 732 functions, instrument commit
-/// 646b62f0 on perf/walk, data in ~/scratch/ctime-out/curve): backend milliseconds per LIR instruction 0.20 up to about 200
-/// instructions, 0.45 at 200-400, 0.96 at 400-800, 1.8 above 1600; the log-log slope of time against size 1.25 below 300
-/// instructions and 2.2 above. The knee is in LIR instructions and this counts MIR operations, which are 1.86 LIR instructions
-/// each at the median (QCport's 108 functions of 60 operations or more at -O2, 16-bit; 1.66 over 15 on the 32-bit target), so
-/// 250 / 1.8. Counted as the same number, sb_build's 38-operation callee went into a caller of 190 and left 667 instructions
-/// where its parts were 175 and 465: backend 0.36 s -> 2.4 s. Called-once inlining (#769) merged part_frame from 435 to 1647
-/// instructions: backend 271 ms -> 11,385 ms.
+/// 646b62f0 on perf/walk, data in ~/scratch/ctime-out/curve): backend milliseconds per LIR instruction 0.20 up to about
+/// 200 instructions, 0.45 at 200-400, 0.96 at 400-800, 1.8 above 1600; the log-log slope of time against size 1.25
+/// below 300 instructions and 2.2 above. The knee is in LIR instructions and this counts MIR operations, which are 1.86
+/// LIR instructions each at the median (QCport's 108 functions of 60 operations or more at -O2, 16-bit; 1.66 over 15 on
+/// the 32-bit target), so 250 / 1.8. Counted as the same number, sb_build's 38-operation callee went into a caller of
+/// 190 and left 667 instructions where its parts were 175 and 465: backend 0.36 s -> 2.4 s. Called-once inlining (#769)
+/// merged part_frame from 435 to 1647 instructions: backend 271 ms -> 11,385 ms.
 // Re-measure when the allocator's slot numbering lands: https://github.com/ali-mosavian/llrm/issues/794. Measured 2026-10-07.
 const KNEE_INSTRUCTIONS: i64 = 250;
-/// LIR instructions a MIR operation comes to, in percent: the median over QCport's 108 functions of 60 operations or more at
-/// -O2 (186) and 15 on the 32-bit target (166), taken as 180.
+/// LIR instructions a MIR operation comes to, in percent: the median over QCport's 108 functions of 60 operations or
+/// more at -O2 (186) and 15 on the 32-bit target (166), taken as 180.
 const INSTRUCTIONS_PER_OPERATION: i64 = 180;
 /// The knee in the unit this counts, MIR operations.
 const ALLOCATION_KNEE: i64 = KNEE_INSTRUCTIONS * 100 / INSTRUCTIONS_PER_OPERATION;
 
 /// gcc's rule of `caller_growth_limits` with the knee for `large-function-insns`: an inline that leaves its caller over
-/// `ALLOCATION_KNEE` operations and over the larger of the caller's own size (before any inlining) and the callee's grown
-/// by `LARGE_GROWTH` percent is refused, the last call of a function included.
+/// `ALLOCATION_KNEE` operations and over the larger of the caller's own size (before any inlining) and the callee's
+/// grown by `LARGE_GROWTH` percent is refused, the last call of a function included.
 const LARGE_FUNCTION: i64 = ALLOCATION_KNEE;
 const LARGE_GROWTH: i64 = 100;
 
@@ -168,7 +170,10 @@ pub struct Caller<'a> {
 }
 
 /// Whether `inst` does semantic work: not a phi, a jump or a return.
-fn semantic(function: &Function, inst: InstId) -> bool {
+fn semantic(
+    function: &Function,
+    inst: InstId,
+) -> bool {
     let instruction = function.instruction(inst);
     match instruction.opcode {
         Opcode::Phi | Opcode::Ret => false,
@@ -187,7 +192,10 @@ fn semantic_count(body: &Function) -> i64 {
 }
 
 /// The defined function `id`.
-fn body(module: &Module, id: GlobalId) -> Option<&Function> {
+fn body(
+    module: &Module,
+    id: GlobalId,
+) -> Option<&Function> {
     module.global(id).function().filter(|function| !function.is_declaration())
 }
 
@@ -197,17 +205,31 @@ fn byval_types(callee: &Function) -> Vec<(usize, llrm_mir::types::TypeId)> {
         .parameter_attrs
         .iter()
         .enumerate()
-        .filter_map(|(at, attrs)| attrs.iter().find_map(|one| match one {
-            llrm_mir::Attribute::Type(name, ty) if name == "byval" => Some((at, *ty)),
-            _ => None,
-        }))
+        .filter_map(|(at, attrs)| {
+            attrs
+                .iter()
+                .find_map(
+                    |one| match one {
+                        llrm_mir::Attribute::Type(name, ty) if name == "byval" => Some((at, *ty)),
+                        _ => None,
+                    },
+                )
+        })
         .collect()
 }
 
-/// A `byval` parameter is the callee's own copy: the pointer the call passes is the caller's object, which the callee may write.
-/// LLVM's InlineFunction (HandleByValArgument) passes the pointer on when the callee only reads memory, and otherwise copies the
-/// object into a new alloca on the caller's entry and passes that: the same, here, with `memcpy` declared as the module needs it.
-fn copy_byval_arguments(context: &mut Context, function: &mut Function, layout: &DataLayout, call: InstId, callee: &Function, declared: &mut Declared) -> Result<(), String> {
+/// A `byval` parameter is the callee's own copy: the pointer the call passes is the caller's object, which the callee
+/// may write. LLVM's InlineFunction (HandleByValArgument) passes the pointer on when the callee only reads memory, and
+/// otherwise copies the object into a new alloca on the caller's entry and passes that: the same, here, with `memcpy`
+/// declared as the module needs it.
+fn copy_byval_arguments(
+    context: &mut Context,
+    function: &mut Function,
+    layout: &DataLayout,
+    call: InstId,
+    callee: &Function,
+    declared: &mut Declared,
+) -> Result<(), String> {
     if !llrm_mir::memory::stated(&callee.attrs).writes {
         return Ok(());
     }
@@ -221,17 +243,43 @@ fn copy_byval_arguments(context: &mut Context, function: &mut Function, layout: 
         let width = layout.pointer(space).index_bits;
         let (pointer, void, flag) = (context.types.ptr(0), context.types.void(), context.types.int(1));
         let entry = function.entry().ok_or("a caller with a body")?;
-        let first = function.block(entry).instructions().iter().copied().find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }));
-        let alloca = function.create_instruction(Opcode::Alloca { allocated: aggregate, align: None, address_space: 0 }, pointer, Vec::new(), Flags::default(), Some("byval"));
+        let first = function
+            .block(entry)
+            .instructions()
+            .iter()
+            .copied()
+            .find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }));
+        let alloca = function.create_instruction(
+            Opcode::Alloca { allocated: aggregate, align: None, address_space: 0 },
+            pointer,
+            Vec::new(),
+            Flags::default(),
+            Some("byval"),
+        );
         function.insert(alloca, first.map_or(Position::End(entry), Position::Before))?;
         let copy = Operand::Value(function.instruction(alloca).result.expect("a pointer"));
         let count_type = context.types.int(width);
         let length = Operand::Constant(context.int(count_type, i128::from(bytes)));
         let (memcpy, memcpy_type) = crate::fill::_copy(context, declared, crate::fill::How::Apart, 0, space, width);
-        let callee_pointer = Operand::Constant(context.constant(llrm_mir::context::Constant { ty: pointer, kind: ConstantKind::Global(memcpy) }));
-        let info = CallInfo { function_type: memcpy_type, calling_convention: 0, return_attrs: Vec::new(), argument_attrs: vec![Vec::new(); 4], attrs: Vec::new(), tail: Default::default() };
+        let callee_pointer = Operand::Constant(
+            context.constant(llrm_mir::context::Constant { ty: pointer, kind: ConstantKind::Global(memcpy) }),
+        );
+        let info = CallInfo {
+            function_type: memcpy_type,
+            calling_convention: 0,
+            return_attrs: Vec::new(),
+            argument_attrs: vec![Vec::new(); 4],
+            attrs: Vec::new(),
+            tail: Default::default(),
+        };
         let off = Operand::Constant(context.int(flag, 0));
-        let made = function.create_instruction(Opcode::Call(Box::new(info)), void, vec![copy, source, length, off, callee_pointer], Flags::default(), None);
+        let made = function.create_instruction(
+            Opcode::Call(Box::new(info)),
+            void,
+            vec![copy, source, length, off, callee_pointer],
+            Flags::default(),
+            None,
+        );
         function.insert(made, Position::Before(call))?;
         let mut operands = function.instruction(call).operands.clone();
         operands[at] = copy;
@@ -241,16 +289,34 @@ fn copy_byval_arguments(context: &mut Context, function: &mut Function, layout: 
 }
 
 /// Bytes of stack `function` allocates.
-fn frame(context: &Context, layout: &DataLayout, function: &Function) -> u64 {
+fn frame(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+) -> u64 {
     function
         .walk()
-        .filter_map(|(_, inst)| if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode { Some(layout.alloc_size(&context.types, allocated)) } else { None })
+        .filter_map(|(_, inst)| {
+            if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
+                Some(layout.alloc_size(&context.types, allocated))
+            } else {
+                None
+            }
+        })
         .sum()
 }
 
 /// The stack a copy of `body` adds to a caller: its allocas, and a copy of each `byval` object it may write.
-fn grown(context: &Context, layout: &DataLayout, body: &Function) -> u64 {
-    let copies: u64 = if llrm_mir::memory::stated(&body.attrs).writes { byval_types(body).iter().map(|&(_, ty)| layout.alloc_size(&context.types, ty)).sum() } else { 0 };
+fn grown(
+    context: &Context,
+    layout: &DataLayout,
+    body: &Function,
+) -> u64 {
+    let copies: u64 = if llrm_mir::memory::stated(&body.attrs).writes {
+        byval_types(body).iter().map(|&(_, ty)| layout.alloc_size(&context.types, ty)).sum()
+    } else {
+        0
+    };
     frame(context, layout, body) + copies
 }
 
@@ -262,13 +328,21 @@ pub fn recursive(module: &Module) -> BTreeSet<GlobalId> {
 
 /// Whether `body` may be cloned into another function: it returns, `splice`
 /// carries it, and it is not recursive, never to be inlined or `setjmp`-like.
-pub(crate) fn cloneable(module: &Module, recursive: &BTreeSet<GlobalId>, id: GlobalId, body: &Function) -> bool {
+pub(crate) fn cloneable(
+    module: &Module,
+    recursive: &BTreeSet<GlobalId>,
+    id: GlobalId,
+    body: &Function,
+) -> bool {
     !recursive.contains(&id) && copyable(module, body)
 }
 
 /// Whether `body` may be copied as a function of its own (a recursive one included): it returns, `splice` carries it,
 /// and it is not to be inlined or `setjmp`-like.
-pub(crate) fn copyable(module: &Module, body: &Function) -> bool {
+pub(crate) fn copyable(
+    module: &Module,
+    body: &Function,
+) -> bool {
     !body.is_declaration()
         && carries(body)
         && stated(body) != Some(Inlining::Never)
@@ -277,15 +351,35 @@ pub(crate) fn copyable(module: &Module, body: &Function) -> bool {
 }
 
 /// The priced work `body` does once, unless something in it is unpriced.
-fn work(module: &Module, body: &Function, callees: &Callees, costs: &OperationCosts) -> Option<i64> {
-    let layout = module.datalayout.as_deref().map_or_else(DataLayout::default, |text| DataLayout::parse(text).unwrap_or_default());
-    body.walk().filter(|&(_, inst)| semantic(body, inst)).map(|(_, inst)| operation(&module.context, &layout, body, callees, inst, costs)).sum()
+fn work(
+    module: &Module,
+    body: &Function,
+    callees: &Callees,
+    costs: &OperationCosts,
+) -> Option<i64> {
+    let layout = module
+        .datalayout
+        .as_deref()
+        .map_or_else(DataLayout::default, |text| DataLayout::parse(text).unwrap_or_default());
+    body.walk()
+        .filter(|&(_, inst)| semantic(body, inst))
+        .map(|(_, inst)| operation(&module.context, &layout, body, callees, inst, costs))
+        .sum()
 }
 
 /// What `function` comes to, priced by `costs`: its work, and each call's arguments.
-pub fn size(module: &Module, callees: &Callees, function: GlobalId, costs: &OperationCosts) -> Option<i64> {
+pub fn size(
+    module: &Module,
+    callees: &Callees,
+    function: GlobalId,
+    costs: &OperationCosts,
+) -> Option<i64> {
     let body = module.global(function).function()?;
-    let calls: i64 = body.walk().filter(|&(_, inst)| matches!(body.instruction(inst).opcode, Opcode::Call(_))).map(|(_, inst)| (body.instruction(inst).operands.len() as i64 - 1).max(0) * costs.argument).sum();
+    let calls: i64 = body
+        .walk()
+        .filter(|&(_, inst)| matches!(body.instruction(inst).opcode, Opcode::Call(_)))
+        .map(|(_, inst)| (body.instruction(inst).operands.len() as i64 - 1).max(0) * costs.argument)
+        .sum();
     // What a call keeps live across it is stored to the frame and read back: the callee may
     // use every register but two, which a body with no call has for itself.
     let found = llrm_analysis::liveness::live(body);
@@ -294,7 +388,16 @@ pub fn size(module: &Module, callees: &Callees, function: GlobalId, costs: &Oper
         .iter()
         .flat_map(|&block| llrm_analysis::liveness::live_points(body, &found, block))
         // An intrinsic, an inline block, is code in line: it keeps every register but those it names.
-        .filter(|(inst, _, _)| matches!(body.instruction(*inst).opcode, Opcode::Call(_)) && !callee(&module.context, body, *inst).is_some_and(|id| module.global(id).name.as_deref().is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm."))))
+        .filter(|(inst, _, _)| {
+            matches!(body.instruction(*inst).opcode, Opcode::Call(_))
+                && !callee(&module.context, body, *inst).is_some_and(|id| {
+                    module
+                        .global(id)
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm."))
+                })
+        })
         .map(|(_, _, across)| across.len() as i64)
         .sum::<i64>()
         * costs.store;
@@ -305,7 +408,14 @@ pub fn size(module: &Module, callees: &Callees, function: GlobalId, costs: &Oper
 /// such a site no longer does. Instructions whose inputs are all known, and
 /// branches they decide; a lower bound, as control flow past a decided branch
 /// is not followed.
-pub(crate) fn folded(module: &Module, layout: &DataLayout, body: &Function, known: &[Option<ConstantId>], callees: &Callees, costs: &OperationCosts) -> i64 {
+pub(crate) fn folded(
+    module: &Module,
+    layout: &DataLayout,
+    body: &Function,
+    known: &[Option<ConstantId>],
+    callees: &Callees,
+    costs: &OperationCosts,
+) -> i64 {
     let unit = Unit::of(module, layout, body);
     let mut values = IndexMap::default();
     for (&parameter, constant) in body.parameters().iter().zip(known) {
@@ -316,7 +426,8 @@ pub(crate) fn folded(module: &Module, layout: &DataLayout, body: &Function, know
     let mut saved = 0;
     for (_, inst) in body.walk().filter(|&(_, inst)| semantic(body, inst)) {
         let instruction = body.instruction(inst);
-        let decided = instruction.opcode == Opcode::Br && consts::_operand(&unit, instruction.operands[0], &values, None).is_some();
+        let decided = instruction.opcode == Opcode::Br
+            && consts::_operand(&unit, instruction.operands[0], &values, None).is_some();
         let result = consts::_result(&unit, inst, &values, None);
         if !decided && result.is_none() {
             continue;
@@ -331,7 +442,10 @@ pub(crate) fn folded(module: &Module, layout: &DataLayout, body: &Function, know
 
 /// What a call costs beyond its own instruction, which inlining saves: the
 /// return, and each argument pushed by the caller and read back by the callee.
-pub fn call_overhead(costs: &OperationCosts, arguments: usize) -> i64 {
+pub fn call_overhead(
+    costs: &OperationCosts,
+    arguments: usize,
+) -> i64 {
     costs.call + costs.return_ + arguments as i64 * costs.argument
 }
 
@@ -344,7 +458,16 @@ pub fn call_overhead(costs: &OperationCosts, arguments: usize) -> i64 {
 /// taken; a private one goes with the last site, so one site costs nothing.
 /// Each copy beyond that duplicates the body's priced work, which has to
 /// stay below the calls removed.
-pub fn candidates(module: &Module, callees: &Callees, layout: &DataLayout, calls: &Counter, private: &BTreeSet<GlobalId>, costs: &OperationCosts, reach: i64, threshold: Threshold) -> IndexMap<GlobalId, Candidate> {
+pub fn candidates(
+    module: &Module,
+    callees: &Callees,
+    layout: &DataLayout,
+    calls: &Counter,
+    private: &BTreeSet<GlobalId>,
+    costs: &OperationCosts,
+    reach: i64,
+    threshold: Threshold,
+) -> IndexMap<GlobalId, Candidate> {
     let call_cost = costs.call;
     let budget = threshold.budget(reach);
     let (recursive, addressed) = (recursive(module), llrm_mir::callgraph::addressed(module));
@@ -357,24 +480,37 @@ pub fn candidates(module: &Module, callees: &Callees, layout: &DataLayout, calls
         }
         let always = stated(body) == Some(Inlining::Always);
         // A hint is worth a larger body, and a larger duplication, by LLVM's ratio.
-        let scale = |n: i64| if stated(body) == Some(Inlining::Hint) { n * threshold.hint.0 / threshold.hint.1 } else { n };
+        let scale =
+            |n: i64| if stated(body) == Some(Inlining::Hint) { n * threshold.hint.0 / threshold.hint.1 } else { n };
         // What a call removes: it, and where code size is what counts, its arguments' pushes and cleanup.
-        // A `byval` argument's copy goes too, as LLVM counts it (InlineCost: the bytes copied): a push's price per word.
-        let copied: i64 = body.parameter_attrs.iter().flatten().filter_map(|one| match one {
-            llrm_mir::Attribute::Type(kind, ty) if kind == "byval" => Some(layout.alloc_size(&module.context.types, *ty) as i64 / 4),
-            _ => None,
-        }).sum();
-        let saved = call_cost + copied * costs.argument + if threshold.single { module.signature(body.ty).1.len() as i64 * costs.argument } else { 0 };
+        // A `byval` argument's copy goes too, as LLVM counts it (InlineCost: the bytes copied): a push's price per
+        // word.
+        let copied: i64 = body
+            .parameter_attrs
+            .iter()
+            .flatten()
+            .filter_map(|one| match one {
+                llrm_mir::Attribute::Type(kind, ty) if kind == "byval" => {
+                    Some(layout.alloc_size(&module.context.types, *ty) as i64 / 4)
+                }
+                _ => None,
+            })
+            .sum();
+        let saved = call_cost
+            + copied * costs.argument
+            + if threshold.single { module.signature(body.ty).1.len() as i64 * costs.argument } else { 0 };
         let copies = if private.contains(&name) && !addressed.contains(&name) { count - 1 } else { count };
         // The last call of a function nothing else reaches moves its body: no copy, and the call,
         // its arguments and the return gone (LLVM's last-call-to-static bonus).
         let admitted = || {
             budget.is_some_and(|budget| semantic_count(body) <= scale(budget))
-                && (copies == 0 || work(module, body, callees, costs).is_some_and(|work| work * copies < scale(count * saved)))
+                && (copies == 0
+                    || work(module, body, callees, costs).is_some_and(|work| work * copies < scale(count * saved)))
         };
         // Only once nothing else is: a body that a call in it is about to be inlined into would
         // be copied with that call still in it, and the call's callee counted once too many.
-        let last = threshold.last && copies == 0 && semantic_count(body) <= LAST_CALL_OPERATIONS && !always && !admitted();
+        let last =
+            threshold.last && copies == 0 && semantic_count(body) <= LAST_CALL_OPERATIONS && !always && !admitted();
         // A body held only to inline from (`available_externally`) is priced by the trial of what
         // it leaves, not by its size: any size is a candidate there, never in the plain round.
         let verdict = always || admitted() || module.global(name).linkage == Linkage::AvailableExternally;
@@ -387,9 +523,15 @@ pub fn candidates(module: &Module, callees: &Callees, layout: &DataLayout, calls
             if verdict { "candidate" } else { "refused" }
         );
         if verdict {
-            out.insert(name, Candidate { body: Rc::new(body.clone()), frame: grown(&module.context, layout, body), moved: false });
+            out.insert(
+                name,
+                Candidate { body: Rc::new(body.clone()), frame: grown(&module.context, layout, body), moved: false },
+            );
         } else if last {
-            lasts.insert(name, Candidate { body: Rc::new(body.clone()), frame: grown(&module.context, layout, body), moved: true });
+            lasts.insert(
+                name,
+                Candidate { body: Rc::new(body.clone()), frame: grown(&module.context, layout, body), moved: true },
+            );
         }
     }
     if out.is_empty() {
@@ -420,7 +562,8 @@ pub fn constant_sites(
 ) -> IndexMap<InstId, Candidate> {
     let call_cost = costs.call;
     let Some(budget) = threshold.budget(reach) else { return IndexMap::default() };
-    let frequency = profit::_frequencies(&module.context, &module.metadata, &module.globals, caller, None).unwrap_or_default();
+    let frequency =
+        profit::_frequencies(&module.context, &module.metadata, &module.globals, caller, None).unwrap_or_default();
     let mut out = IndexMap::default();
     for (block, at) in caller.walk() {
         let Some(name) = callee(&module.context, caller, at) else { continue };
@@ -434,15 +577,21 @@ pub fn constant_sites(
         // Where code size is what counts, a body of arithmetic every actual of which is known is
         // taken to fold whole: `folded` follows no branch past a decided one, so a loop on known
         // bounds looked all kept.
-        let folds = threshold.single && known.iter().all(Option::is_some) && callees.get(&name).is_some_and(|summary| summary.effects == Effects::NONE);
+        let folds = threshold.single
+            && known.iter().all(Option::is_some)
+            && callees.get(&name).is_some_and(|summary| summary.effects == Effects::NONE);
         let saved = if folds { None } else { Some(folded(module, layout, body, known, callees, costs)) };
         let kept = if folds { Some(0) } else { work(module, body, callees, costs).map(|all| all - saved.unwrap_or(0)) };
         // A call in a loop saves its overhead on every trip, which LLVM's hot-site threshold weighs.
         let hot = frequency.get(&cfg::id(block)).is_some_and(|&one| one > profit::UNIT);
-        let overhead = call_overhead(costs, known.len()) * if hot { threshold.hot.0 } else { 1 } / if hot { threshold.hot.1 } else { 1 };
+        let overhead = call_overhead(costs, known.len()) * if hot { threshold.hot.0 } else { 1 }
+            / if hot { threshold.hot.1 } else { 1 };
         // A copy that folds nothing buys the call's overhead once, which `candidates` prices by its copies,
         // unless the site is in a loop and buys it every trip.
-        let verdict = (folds || hot || saved.is_some_and(|saved| saved > 0)) && kept.is_some_and(|kept| kept <= overhead) && semantic <= budget && cloneable(module, recursive, name, body);
+        let verdict = (folds || hot || saved.is_some_and(|saved| saved > 0))
+            && kept.is_some_and(|kept| kept <= overhead)
+            && semantic <= budget
+            && cloneable(module, recursive, name, body);
         llrm_support::debug!(
             "inline",
             "constant site of {}: {semantic} ops, {kept:?} clocks kept, budget {budget}, call {overhead}, {} of {} actuals known: {}",
@@ -452,7 +601,10 @@ pub fn constant_sites(
             if verdict { "candidate" } else { "refused" }
         );
         if verdict {
-            out.insert(at, Candidate { body: Rc::new(body.clone()), frame: grown(&module.context, layout, body), moved: false });
+            out.insert(
+                at,
+                Candidate { body: Rc::new(body.clone()), frame: grown(&module.context, layout, body), moved: false },
+            );
         }
     }
     out
@@ -490,7 +642,8 @@ pub fn expanded(
         if !matches!(function.instruction(call).opcode, Opcode::Call(_)) {
             continue;
         }
-        let candidate = constant.get(&call).or_else(|| callee(context, function, call).and_then(|name| available.get(&name)));
+        let candidate =
+            constant.get(&call).or_else(|| callee(context, function, call).and_then(|name| available.get(&name)));
         let Some(candidate) = candidate else {
             continue;
         };
@@ -505,19 +658,37 @@ pub fn expanded(
 
 /// Whether the call fits its callee, which returns, and the stack the copy
 /// adds stays within `FRAME_LIMIT`, and in a recursive function none.
-fn fits(context: &Context, function: &Function, caller: &Caller, call: InstId, candidate: &Candidate) -> bool {
+fn fits(
+    context: &Context,
+    function: &Function,
+    caller: &Caller,
+    call: InstId,
+    candidate: &Candidate,
+) -> bool {
     let callee = &*candidate.body;
     let Opcode::Call(info) = &function.instruction(call).opcode else { return false };
     info.function_type == callee.ty
-        && !matches!(context.types.get(callee.ty), Type::Function { variadic: true, .. })
-        && (candidate.frame == 0 || (!caller.recursive && frame(context, caller.layout, function) + candidate.frame <= FRAME_LIMIT))
+        && !matches!(
+            context.types.get(callee.ty),
+            Type::Function { variadic: true, .. }
+        )
+        && (candidate.frame == 0
+            || (!caller.recursive && frame(context, caller.layout, function) + candidate.frame <= FRAME_LIMIT))
         && grows_within_limits(function, caller, callee, candidate.moved)
-        && callee.parameters().iter().enumerate().all(|(at, _)| !Facts::of(&callee.parameter_attrs[at]).releases() || owned(context, function, function.instruction(call).operands[at], 0))
+        && callee.parameters().iter().enumerate().all(|(at, _)| {
+            !Facts::of(&callee.parameter_attrs[at]).releases()
+                || owned(context, function, function.instruction(call).operands[at], 0)
+        })
 }
 
 /// gcc's `caller_growth_limits`: the size after the inline, against the function limits. A caller whose size
 /// before is not known is its own base.
-fn grows_within_limits(function: &Function, caller: &Caller, callee: &Function, moved: bool) -> bool {
+fn grows_within_limits(
+    function: &Function,
+    caller: &Caller,
+    callee: &Function,
+    moved: bool,
+) -> bool {
     let (own, callee_size) = (semantic_count(function), semantic_count(callee));
     let base = if caller.base > 0 { caller.base } else { own };
     let limit = base.max(callee_size) * (100 + LARGE_GROWTH) / 100;
@@ -532,14 +703,21 @@ fn grows_within_limits(function: &Function, caller: &Caller, callee: &Function, 
 /// Whether `operand` is an object the program owns: a variable, a frame object, or a parameter, which
 /// the language passes owned. What a call returns, loads or joins may be a runtime temporary, which
 /// the runtime frees where a routine that `releases` it is called.
-fn owned(context: &Context, function: &Function, operand: Operand, depth: usize) -> bool {
+fn owned(
+    context: &Context,
+    function: &Function,
+    operand: Operand,
+    depth: usize,
+) -> bool {
     match operand {
         Operand::Constant(id) => matches!(context.get(id).kind, ConstantKind::Global(_)),
         Operand::Value(value) => match function.value(value).def {
             ValueDef::Argument(_) => true,
             ValueDef::Instruction(inst) => match function.instruction(inst).opcode {
                 Opcode::Alloca { .. } => true,
-                Opcode::GetElementPtr { .. } if depth < 8 => owned(context, function, function.instruction(inst).operands[0], depth + 1),
+                Opcode::GetElementPtr { .. } if depth < 8 => {
+                    owned(context, function, function.instruction(inst).operands[0], depth + 1)
+                }
                 _ => false,
             },
         },
@@ -555,19 +733,32 @@ mod tests;
 const RECURSIVE_DEPTH: u32 = 8;
 /// GCC's `max-inline-insns-recursive-auto` (params.opt:553): what a function may grow to by inlining itself.
 const RECURSIVE_SIZE: i64 = 450;
-/// GCC's `min-inline-recursive-probability` (params.opt:769), percent: a recursive call is inlined into the function only if it runs
-/// more often than this per call of it.
+/// GCC's `min-inline-recursive-probability` (params.opt:769), percent: a recursive call is inlined into the function
+/// only if it runs more often than this per call of it.
 const RECURSIVE_PROBABILITY: i64 = 10;
 
-/// GCC's `recursive_inlining` (ipa-inline.cc): `function`, the body of `id`, with calls to itself replaced by copies of `original`, its
-/// body as it was, breadth first and each copy's own calls in turn, while a call is likelier than `RECURSIVE_PROBABILITY` percent of
-/// the function's calls, is no deeper than `RECURSIVE_DEPTH`, and the function stays under `RECURSIVE_SIZE`; the copies made.
-/// A function that allocates stack is left alone: each level would add its frame.
-pub fn inlined_into_itself(id: GlobalId, function: &mut Function, original: &Function, budget: i64, frequencies: &dyn Fn(&Context, &Function) -> std::collections::BTreeMap<i64, i64>, context: &mut Context) -> usize {
-    let own = |function: &Function, context: &Context| -> Vec<InstId> { function.walk().map(|(_, inst)| inst).filter(|&inst| callee(context, function, inst) == Some(id)).collect() };
-    // Only a body the ordinary inline threshold admits (`want_inline_small_function_p` is asked of the recursive edge too), by its growth:
-    // the body less the call it replaces.
-    if semantic_count(original) - 1 > budget || original.walk().any(|(_, inst)| matches!(original.instruction(inst).opcode, Opcode::Alloca { .. })) || !carries(original) {
+/// GCC's `recursive_inlining` (ipa-inline.cc): `function`, the body of `id`, with calls to itself replaced by copies of
+/// `original`, its body as it was, breadth first and each copy's own calls in turn, while a call is likelier than
+/// `RECURSIVE_PROBABILITY` percent of the function's calls, is no deeper than `RECURSIVE_DEPTH`, and the function stays
+/// under `RECURSIVE_SIZE`; the copies made. A function that allocates stack is left alone: each level would add its
+/// frame.
+pub fn inlined_into_itself(
+    id: GlobalId,
+    function: &mut Function,
+    original: &Function,
+    budget: i64,
+    frequencies: &dyn Fn(&Context, &Function) -> std::collections::BTreeMap<i64, i64>,
+    context: &mut Context,
+) -> usize {
+    let own = |function: &Function, context: &Context| -> Vec<InstId> {
+        function.walk().map(|(_, inst)| inst).filter(|&inst| callee(context, function, inst) == Some(id)).collect()
+    };
+    // Only a body the ordinary inline threshold admits (`want_inline_small_function_p` is asked of the recursive edge
+    // too), by its growth: the body less the call it replaces.
+    if semantic_count(original) - 1 > budget
+        || original.walk().any(|(_, inst)| matches!(original.instruction(inst).opcode, Opcode::Alloca { .. }))
+        || !carries(original)
+    {
         return 0;
     }
     let mut depth: IndexMap<InstId, u32> = own(function, context).into_iter().map(|call| (call, 1)).collect();
@@ -577,7 +768,12 @@ pub fn inlined_into_itself(id: GlobalId, function: &mut Function, original: &Fun
         let next = own(function, context)
             .into_iter()
             .filter(|call| depth.get(call).copied().unwrap_or(1) <= RECURSIVE_DEPTH)
-            .filter(|&call| function.parent(call).and_then(|block| weights.get(&cfg::id(block))).is_some_and(|&weight| weight * 100 > profit::UNIT * RECURSIVE_PROBABILITY))
+            .filter(|&call| {
+                function
+                    .parent(call)
+                    .and_then(|block| weights.get(&cfg::id(block)))
+                    .is_some_and(|&weight| weight * 100 > profit::UNIT * RECURSIVE_PROBABILITY)
+            })
             .min_by_key(|call| depth.get(call).copied().unwrap_or(1));
         let Some(call) = next else { break };
         if semantic_count(function) + semantic_count(original) >= RECURSIVE_SIZE {

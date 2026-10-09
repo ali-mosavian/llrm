@@ -11,10 +11,9 @@ use std::collections::BTreeMap;
 
 use crate::buildprs_artifacts::{parse_equates, symbols_with_prefix, ParseEquatesError};
 use crate::buildprs_dispatch::derive_nonterminal_dispatch_order;
+pub use crate::buildprs_generator::ENCODE1BYTE_QBASIC_11;
 use crate::buildprs_grammar::{GrammarFile, TokenDef};
 use crate::buildprs_tokens::{self, RwfConstants, TokenArtifacts};
-
-pub use crate::buildprs_generator::ENCODE1BYTE_QBASIC_11;
 
 /// `ND_*` directive bytes in generated `prstab.inc`.
 pub const ND_ACCEPT: u8 = 0;
@@ -101,7 +100,10 @@ pub struct PrstabParseError {
 }
 
 impl std::fmt::Display for PrstabParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         write!(f, "{}: {}", self.artifact, self.detail)
     }
 }
@@ -110,10 +112,7 @@ impl std::error::Error for PrstabParseError {}
 
 impl From<ParseEquatesError> for PrstabParseError {
     fn from(error: ParseEquatesError) -> Self {
-        Self {
-            artifact: "prstab.inc",
-            detail: error.to_string(),
-        }
+        Self { artifact: "prstab.inc", detail: error.to_string() }
     }
 }
 
@@ -124,7 +123,10 @@ pub struct PrstabParityMismatch {
 }
 
 impl std::fmt::Display for PrstabParityMismatch {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         write!(f, "{}: {}", self.artifact, self.detail)
     }
 }
@@ -132,7 +134,10 @@ impl std::fmt::Display for PrstabParityMismatch {
 impl std::error::Error for PrstabParityMismatch {}
 
 /// Build `prstab` constants from grammar token/dispatch data and injected `STI_*` offsets.
-pub fn generate_prstab_constants(grammar: &GrammarFile, sti: &StiOffsetInput) -> PrstabConstants {
+pub fn generate_prstab_constants(
+    grammar: &GrammarFile,
+    sti: &StiOffsetInput,
+) -> PrstabConstants {
     let token_artifacts = buildprs_tokens::generate_token_artifacts(&grammar.tokens);
     generate_prstab_constants_from_parts(&token_artifacts, grammar, sti)
 }
@@ -191,10 +196,7 @@ impl PrstabConstants {
             ("NUMNTINT".to_string(), i64::from(self.numntint)),
             ("NUMNTEXT".to_string(), i64::from(self.numntext)),
             ("NUMNT".to_string(), i64::from(self.numnt)),
-            (
-                "IRW_ALPHA_FIRST".to_string(),
-                i64::from(self.irw_alpha_first),
-            ),
+            ("IRW_ALPHA_FIRST".to_string(), i64::from(self.irw_alpha_first)),
             ("CB_RW_MAX".to_string(), i64::from(self.cb_rw_max)),
             ("RWF_OPERATOR".to_string(), i64::from(self.rwf.operator)),
             ("RWF_FUNC".to_string(), i64::from(self.rwf.func)),
@@ -218,10 +220,8 @@ pub fn compare_to_prstab_inc(
     generated: &PrstabConstants,
     prstab_text: &str,
 ) -> Result<(), PrstabParityMismatch> {
-    let golden = parse_equates(prstab_text).map_err(|error| PrstabParityMismatch {
-        artifact: "prstab.inc",
-        detail: format!("parse error: {error}"),
-    })?;
+    let golden = parse_equates(prstab_text)
+        .map_err(|error| PrstabParityMismatch { artifact: "prstab.inc", detail: format!("parse error: {error}") })?;
     compare_equate_maps(generated, "prstab.inc", &golden)
 }
 
@@ -230,10 +230,8 @@ pub fn compare_to_prstab_h(
     generated: &PrstabConstants,
     prstab_h_text: &str,
 ) -> Result<(), PrstabParityMismatch> {
-    let golden = parse_prstab_defines(prstab_h_text).map_err(|error| PrstabParityMismatch {
-        artifact: "prstab.h",
-        detail: error.detail,
-    })?;
+    let golden = parse_prstab_defines(prstab_h_text)
+        .map_err(|error| PrstabParityMismatch { artifact: "prstab.h", detail: error.detail })?;
     compare_equate_maps(generated, "prstab.h", &golden)
 }
 
@@ -254,20 +252,14 @@ fn compare_equate_maps(
                 });
             }
             None => {
-                return Err(PrstabParityMismatch {
-                    artifact,
-                    detail: format!("missing golden symbol {name}"),
-                });
+                return Err(PrstabParityMismatch { artifact, detail: format!("missing golden symbol {name}") });
             }
         }
     }
 
     for name in golden.keys() {
         if name.starts_with("STI_") && !expected.contains_key(name) {
-            return Err(PrstabParityMismatch {
-                artifact,
-                detail: format!("generated constants missing {name}"),
-            });
+            return Err(PrstabParityMismatch { artifact, detail: format!("generated constants missing {name}") });
         }
     }
 
@@ -325,16 +317,10 @@ fn strip_c_comment(line: &str) -> &str {
 
 fn parse_numeric_literal(text: &str) -> Option<i64> {
     let literal = text.trim();
-    if let Some(stem) = literal
-        .strip_prefix("0x")
-        .or_else(|| literal.strip_prefix("0X"))
-    {
+    if let Some(stem) = literal.strip_prefix("0x").or_else(|| literal.strip_prefix("0X")) {
         return i64::from_str_radix(stem, 16).ok();
     }
-    if let Some(stem) = literal
-        .strip_suffix('H')
-        .or_else(|| literal.strip_suffix('h'))
-    {
+    if let Some(stem) = literal.strip_suffix('H').or_else(|| literal.strip_suffix('h')) {
         return i64::from_str_radix(stem, 16).ok();
     }
     literal.parse::<i64>().ok()
@@ -365,15 +351,13 @@ mod tests {
     #[test]
     fn qbasic_11_prstab_constants_match_inc_fixture() {
         let generated = qbasic_11_constants_with_fixture_sti();
-        compare_to_prstab_inc(&generated, &fixture("prstab.inc"))
-            .expect("generated constants should match prstab.inc");
+        compare_to_prstab_inc(&generated, &fixture("prstab.inc")).expect("generated constants should match prstab.inc");
     }
 
     #[test]
     fn qbasic_11_prstab_constants_match_h_fixture() {
         let generated = qbasic_11_constants_with_fixture_sti();
-        compare_to_prstab_h(&generated, &fixture("prstab.h"))
-            .expect("generated constants should match prstab.h");
+        compare_to_prstab_h(&generated, &fixture("prstab.h")).expect("generated constants should match prstab.h");
     }
 
     #[test]
@@ -423,8 +407,7 @@ mod tests {
 
     #[test]
     fn sti_injection_from_prstab_h_matches_inc_fixture() {
-        let from_inc =
-            StiOffsetInput::from_prstab_inc(&fixture("prstab.inc")).expect("prstab.inc STI");
+        let from_inc = StiOffsetInput::from_prstab_inc(&fixture("prstab.inc")).expect("prstab.inc STI");
         let from_h = StiOffsetInput::from_prstab_h(&fixture("prstab.h")).expect("prstab.h STI");
 
         assert_eq!(from_inc, from_h);

@@ -7,7 +7,10 @@ use super::TrivialUnswitch;
 use crate::testing::{managed, parsed, results};
 
 /// `text` through the pass: its printed form, run as before on `inputs`.
-fn unswitched(text: &str, inputs: &[&[i128]]) -> String {
+fn unswitched(
+    text: &str,
+    inputs: &[&[i128]],
+) -> String {
     let before = parsed(&format!("{DOS}{text}"));
     let mut module = before.clone();
     let after = managed(&mut module, TrivialUnswitch);
@@ -57,7 +60,8 @@ fn an_invariant_exit_test_in_the_header_is_made_before_the_loop() {
 /// A condition the loop computes changes with its trips.
 #[test]
 fn a_condition_the_loop_computes_stays_where_it_is() {
-    let text = HEADER.replace("br i1 %z, label %out, label %test", "%z2 = icmp eq i16 %i, 7\n  br i1 %z2, label %out, label %test");
+    let text = HEADER
+        .replace("br i1 %z, label %out, label %test", "%z2 = icmp eq i16 %i, 7\n  br i1 %z2, label %out, label %test");
     let after = unswitched(&text, INPUTS);
     assert!(after.contains("br i1 %z2, label %out, label %test"), "{after}");
 }
@@ -65,7 +69,9 @@ fn a_condition_the_loop_computes_stays_where_it_is() {
 /// Both sides in the loop is an unswitch that copies it (unswitch.rs), not this.
 #[test]
 fn a_branch_that_stays_in_the_loop_on_both_sides_is_not_moved() {
-    let text = HEADER.replace("br i1 %z, label %out, label %test", "br i1 %z, label %body, label %test").replace("[ %acc, %head ], [ %acc, %test ]", "[ %acc, %test ]");
+    let text = HEADER
+        .replace("br i1 %z, label %out, label %test", "br i1 %z, label %body, label %test")
+        .replace("[ %acc, %head ], [ %acc, %test ]", "[ %acc, %test ]");
     // With `n == 0` the loop would never end: only the inputs it ends on.
     let after = unswitched(&text, &[&[1, 0], &[1, 5], &[3, 9]]);
     assert!(after.contains("br i1 %z, label %body, label %test"), "{after}");
@@ -74,7 +80,12 @@ fn a_branch_that_stays_in_the_loop_on_both_sides_is_not_moved() {
 /// What the header does before the branch is skipped where the loop is not entered: a store is not skipped.
 #[test]
 fn a_header_that_stores_before_its_branch_keeps_its_branch() {
-    let text = HEADER.replace("define i16 @f(i16 %n, i16 %m) {", "@g = global i16 0\ndefine i16 @f(i16 %n, i16 %m) {").replace("  br i1 %z, label %out, label %test\n\ntest:", "  store i16 %i, ptr @g\n  br i1 %z, label %out, label %test\n\ntest:");
+    let text = HEADER
+        .replace("define i16 @f(i16 %n, i16 %m) {", "@g = global i16 0\ndefine i16 @f(i16 %n, i16 %m) {")
+        .replace(
+            "  br i1 %z, label %out, label %test\n\ntest:",
+            "  store i16 %i, ptr @g\n  br i1 %z, label %out, label %test\n\ntest:",
+        );
     let after = unswitched(&text, INPUTS);
     assert!(after.contains("br i1 %z, label %out, label %test"), "{after}");
 }
@@ -82,7 +93,12 @@ fn a_header_that_stores_before_its_branch_keeps_its_branch() {
 /// A value the loop computes cannot reach the exit on the new edge: the exit's phi keeps it.
 #[test]
 fn an_exit_value_the_loop_computes_keeps_the_branch() {
-    let text = HEADER.replace("[ %acc, %head ], [ %acc, %test ]", "[ %sum0, %head ], [ %acc, %test ]").replace("  br i1 %z, label %out, label %test", "  %sum0 = add i16 %acc, 100\n  br i1 %z, label %out, label %test");
+    let text = HEADER
+        .replace("[ %acc, %head ], [ %acc, %test ]", "[ %sum0, %head ], [ %acc, %test ]")
+        .replace(
+            "  br i1 %z, label %out, label %test",
+            "  %sum0 = add i16 %acc, 100\n  br i1 %z, label %out, label %test",
+        );
     let after = unswitched(&text, INPUTS);
     assert!(after.contains("br i1 %z, label %out, label %test"), "{after}");
 }

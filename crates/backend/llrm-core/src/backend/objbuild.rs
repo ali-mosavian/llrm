@@ -8,16 +8,14 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use llrm_object::{Arch, Binding, Definition, Kind, Object, OmfGroup, Reloc, Role, Section, Symbol, Target};
-
-use crate::support::hash::IndexMap;
-
 use llrm_target::object::Format;
 
 use crate::backend::masm;
-use crate::objectfile::omf;
 use crate::backend::select;
 use crate::backend::target;
 use crate::model::ir::{self, Loc, Operation, Semantics, Space};
+use crate::objectfile::omf;
+use crate::support::hash::IndexMap;
 use crate::support::pyrepr::{self, Repr};
 
 /// How an address is relocated: a near offset, a segment's selector, a far pointer.
@@ -32,7 +30,10 @@ fn relative(width: usize) -> Kind {
 }
 
 /// The role of a data segment `name` that the object's classes name, and that it is otherwise.
-fn data_role(name: &str, far_bss: bool) -> Role {
+fn data_role(
+    name: &str,
+    far_bss: bool,
+) -> Role {
     match name {
         "_DATA" => Role::Data,
         "_BSS" => Role::Bss,
@@ -47,7 +48,10 @@ fn data_role(name: &str, far_bss: bool) -> Role {
 pub struct Unencodable(pub String);
 
 impl fmt::Display for Unencodable {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
@@ -59,7 +63,10 @@ impl std::error::Error for Unencodable {}
 pub struct Survived(pub String);
 
 impl fmt::Display for Survived {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
@@ -79,7 +86,10 @@ pub enum Error {
 }
 
 impl fmt::Display for Error {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
             Error::Unprintable(one) => one.fmt(formatter),
             Error::Unencodable(one) => one.fmt(formatter),
@@ -133,7 +143,11 @@ pub struct Fixup {
 }
 
 impl Fixup {
-    pub fn new(at: usize, kind: Kind, name: impl Into<String>) -> Self {
+    pub fn new(
+        at: usize,
+        kind: Kind,
+        name: impl Into<String>,
+    ) -> Self {
         Self { at, kind, name: name.into() }
     }
 }
@@ -159,7 +173,10 @@ pub struct Jump {
 }
 
 impl Jump {
-    pub fn new(name: impl Into<String>, label: impl Into<String>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        label: impl Into<String>,
+    ) -> Self {
         Self { name: name.into(), label: label.into(), long: false }
     }
 }
@@ -199,12 +216,29 @@ pub struct Segment {
 }
 
 impl Segment {
-    pub fn new(name: &str, role: Role, near: bool) -> Self {
-        Self { name: name.to_owned(), role, near, image: Vec::new(), spans: Vec::new(), fixups: Vec::new(), lines: Vec::new(), bodies: Vec::new(), align: 1 }
+    pub fn new(
+        name: &str,
+        role: Role,
+        near: bool,
+    ) -> Self {
+        Self {
+            name: name.to_owned(),
+            role,
+            near,
+            image: Vec::new(),
+            spans: Vec::new(),
+            fixups: Vec::new(),
+            lines: Vec::new(),
+            bodies: Vec::new(),
+            align: 1,
+        }
     }
 
     /// `mark` is here.
-    pub fn mark(&mut self, mark: masm::Mark) {
+    pub fn mark(
+        &mut self,
+        mark: masm::Mark,
+    ) {
         match mark {
             masm::Mark::Line { line, .. } => self.line(line),
             bound => self.bodies.push((bound, self.image.len())),
@@ -213,7 +247,10 @@ impl Segment {
 
     /// Code at the current offset is `line`'s: the last line named at an
     /// offset wins, as the one before it has no code.
-    pub fn line(&mut self, line: u32) {
+    pub fn line(
+        &mut self,
+        line: u32,
+    ) {
         let at = self.image.len();
         if self.lines.last().is_some_and(|&(_, last)| last == at) {
             self.lines.pop();
@@ -223,11 +260,13 @@ impl Segment {
         }
     }
 
-    pub fn put(&mut self, code: &[u8], fixups: &[Fixup]) {
+    pub fn put(
+        &mut self,
+        code: &[u8],
+        fixups: &[Fixup],
+    ) {
         let at = self.image.len();
-        self.fixups.extend(
-            fixups.iter().map(|one| Fixup { at: at + one.at, ..one.clone() }),
-        );
+        self.fixups.extend(fixups.iter().map(|one| Fixup { at: at + one.at, ..one.clone() }));
         self.image.extend_from_slice(code);
         match self.spans.last_mut() {
             Some(last) if last[1] == at => last[1] += code.len(),
@@ -236,18 +275,30 @@ impl Segment {
         }
     }
 
-    pub fn skip(&mut self, size: usize) {
+    pub fn skip(
+        &mut self,
+        size: usize,
+    ) {
         self.image.extend(std::iter::repeat_n(0, size));
     }
 }
 
 /// `struct.pack_into("<H", buffer, at, value)` of a value already masked.
-pub fn pack_into(buffer: &mut [u8], at: usize, value: i64) {
+pub fn pack_into(
+    buffer: &mut [u8],
+    at: usize,
+    value: i64,
+) {
     buffer[at..at + 2].copy_from_slice(&(value as u16).to_le_bytes());
 }
 
 /// `value` into the bytes of a relocated field at `at` that hold an offset.
-fn pack_field(buffer: &mut [u8], at: usize, kind: Kind, value: i64) {
+fn pack_field(
+    buffer: &mut [u8],
+    at: usize,
+    kind: Kind,
+    value: i64,
+) {
     if kind.width() == 4 && kind != POINTER {
         buffer[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
     } else {
@@ -256,7 +307,11 @@ fn pack_field(buffer: &mut [u8], at: usize, kind: Kind, value: i64) {
 }
 
 /// What a relocated field holds, sign-extended from the bytes that hold an offset.
-fn field(buffer: &[u8], at: usize, kind: Kind) -> i64 {
+fn field(
+    buffer: &[u8],
+    at: usize,
+    kind: Kind,
+) -> i64 {
     if kind.width() == 4 && kind != POINTER {
         i64::from(i32::from_le_bytes([buffer[at], buffer[at + 1], buffer[at + 2], buffer[at + 3]]))
     } else {
@@ -355,16 +410,28 @@ pub enum CodeLayout {
     PerProcedure,
 }
 
-pub fn written(module: &masm::Module, source: &str) -> Result<Vec<u8>, Error> {
+pub fn written(
+    module: &masm::Module,
+    source: &str,
+) -> Result<Vec<u8>, Error> {
     written_as(module, source, CodeLayout::OneSegment)
 }
 
-pub fn written_as(module: &masm::Module, source: &str, layout: CodeLayout) -> Result<Vec<u8>, Error> {
+pub fn written_as(
+    module: &masm::Module,
+    source: &str,
+    layout: CodeLayout,
+) -> Result<Vec<u8>, Error> {
     written_in(module, source, layout, Format::Omf)
 }
 
 /// `module` as an object file of `format`.
-pub fn written_in(module: &masm::Module, source: &str, layout: CodeLayout, format: Format) -> Result<Vec<u8>, Error> {
+pub fn written_in(
+    module: &masm::Module,
+    source: &str,
+    layout: CodeLayout,
+    format: Format,
+) -> Result<Vec<u8>, Error> {
     llrm_support::debug::timed("object write", || {
         let object = built_inner(module, source, layout)?;
         match format {
@@ -374,17 +441,29 @@ pub fn written_in(module: &masm::Module, source: &str, layout: CodeLayout, forma
             Format::MachO if object.arch == Arch::X8664 => Ok(llrm_macho::write(&object)?),
             Format::Coff if object.arch == Arch::I386 => Ok(llrm_coff32::write(&object)?),
             Format::Coff if object.arch == Arch::X8664 => Ok(llrm_coff64::write(&object)?),
-            Format::Elf | Format::MachO | Format::Coff => Err(Error::Unsupported(llrm_object::Unsupported(format!("no {} writer for {:?} yet", format.name(), object.arch)))),
+            Format::Elf | Format::MachO | Format::Coff => Err(Error::Unsupported(llrm_object::Unsupported(format!(
+                "no {} writer for {:?} yet",
+                format.name(),
+                object.arch
+            )))),
         }
     })
 }
 
 /// `module` laid out as an object.
-pub fn built(module: &masm::Module, source: &str, layout: CodeLayout) -> Result<Object, Error> {
+pub fn built(
+    module: &masm::Module,
+    source: &str,
+    layout: CodeLayout,
+) -> Result<Object, Error> {
     built_inner(module, source, layout)
 }
 
-fn built_inner(module: &masm::Module, source: &str, layout: CodeLayout) -> Result<Object, Error> {
+fn built_inner(
+    module: &masm::Module,
+    source: &str,
+    layout: CodeLayout,
+) -> Result<Object, Error> {
     let module = &live(module)?;
     let groups: Vec<Vec<usize>> = match layout {
         CodeLayout::OneSegment => vec![(0..module.procedures.len()).collect()],
@@ -392,10 +471,14 @@ fn built_inner(module: &masm::Module, source: &str, layout: CodeLayout) -> Resul
     };
     // A flat target has no group: every segment is reached by its own offset.
     let mut segments: Vec<Segment> = groups.iter().map(|_| Segment::new(&module.code, Role::Text, true)).collect();
-    let mut named: IndexMap<String, Segment> = IndexMap::from_iter([("_DATA".to_owned(), Segment::new("_DATA", Role::Data, true))]);
+    let mut named: IndexMap<String, Segment> =
+        IndexMap::from_iter([("_DATA".to_owned(), Segment::new("_DATA", Role::Data, true))]);
     for (name, _items) in &module.data {
         if !named.contains_key(name) {
-            named.insert(name.clone(), Segment::new(name, data_role(name, module.far_bss.contains(name)), !module.selector_addressed(name)));
+            named.insert(
+                name.clone(),
+                Segment::new(name, data_role(name, module.far_bss.contains(name)), !module.selector_addressed(name)),
+            );
         }
     }
     segments.extend(named.into_values());
@@ -415,16 +498,23 @@ fn built_inner(module: &masm::Module, source: &str, layout: CodeLayout) -> Resul
     for (index, group) in groups.iter().enumerate() {
         _code(&mut segments[index], index, module, group, &mut symbols)?;
     }
-    // The BASIC dialect's records name an address by its offset alone, so they need the one code segment the module's code is in;
-    // CodeView 4 as C7 writes it has the segment in each address.
-    if module.debug.as_ref().is_some_and(|debug| debug.dialect == llrm_object::debug::Dialect::Bc) && groups.len() != 1 {
+    // The BASIC dialect's records name an address by its offset alone, so they need the one code segment the module's
+    // code is in; CodeView 4 as C7 writes it has the segment in each address.
+    if module.debug.as_ref().is_some_and(|debug| debug.dialect == llrm_object::debug::Dialect::Bc) && groups.len() != 1
+    {
         return Err(Unencodable("-g of the BASIC dialect with a code segment per procedure".into()).into());
     }
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
     object_of(module, source, segments, &symbols, &externs)
 }
 
-pub fn _data(segment: &mut Segment, index: usize, items: &[masm::Datum], symbols: &mut IndexMap<String, (usize, usize)>, bits: u32) {
+pub fn _data(
+    segment: &mut Segment,
+    index: usize,
+    items: &[masm::Datum],
+    symbols: &mut IndexMap<String, (usize, usize)>,
+    bits: u32,
+) {
     for item in items {
         match item {
             masm::Datum::Label(masm::Label { name }) | masm::Datum::Object(masm::Label { name }) => {
@@ -435,7 +525,13 @@ pub fn _data(segment: &mut Segment, index: usize, items: &[masm::Datum], symbols
             masm::Datum::Pointer(masm::Pointer { name, offset, far, bytes }) => {
                 // A far pointer is an offset and a selector; a near one is the offset alone, as wide as the target's
                 // pointer (a 32-bit object's is a dword).
-                let loc = if *far { POINTER } else if bits == 32 { OFFSET32 } else { OFFSET };
+                let loc = if *far {
+                    POINTER
+                } else if bits == 32 {
+                    OFFSET32
+                } else {
+                    OFFSET
+                };
                 assert_eq!(loc.width(), *bytes as usize, "a {bytes}-byte pointer in a {bits}-bit object");
                 segment.put(&vec![0; loc.width()], &[Fixup::new(0, loc, name.clone())]);
                 let at = segment.image.len() - loc.width();
@@ -460,7 +556,9 @@ pub fn _code(
     group: &[usize],
     symbols: &mut IndexMap<String, (usize, usize)>,
 ) -> Result<(), Error> {
-    _code_by(segment, index, module, group, symbols, |procedure, number| masm::listing(procedure, number).map_err(|error| error.0))
+    _code_by(segment, index, module, group, symbols, |procedure, number| {
+        masm::listing(procedure, number).map_err(|error| error.0)
+    })
 }
 
 /// [`_code`], each procedure's items as `listed` gives them.
@@ -500,15 +598,22 @@ pub fn _code_by(
                 }
             }
             Encoded::Piece(Piece { code, fixups }) => segment.put(code, fixups),
-            Encoded::Jump(Jump { name, label, long }) => segment.put(&_jump(name, labels[label], at, *long, bits)?.code, &[]),
+            Encoded::Jump(Jump { name, label, long }) => {
+                segment.put(&_jump(name, labels[label], at, *long, bits)?.code, &[])
+            }
             Encoded::Near(Near { name }) if labels.contains_key(name) => {
                 let distance = labels[name] - (at as i64 + 1 + i64::from(bits) / 8);
                 let far = || Unencodable(format!("a near call to {name} {distance} bytes away"));
-                let displacement = if bits == 32 { i32::try_from(distance).map_err(|_| far())?.to_le_bytes().to_vec() } else { i16::try_from(distance).map_err(|_| far())?.to_le_bytes().to_vec() };
+                let displacement = if bits == 32 {
+                    i32::try_from(distance).map_err(|_| far())?.to_le_bytes().to_vec()
+                } else {
+                    i16::try_from(distance).map_err(|_| far())?.to_le_bytes().to_vec()
+                };
                 segment.put(&[&[0xE8][..], &displacement].concat(), &[]);
             }
             Encoded::Near(Near { name }) => {
-                segment.put(&vec![0; 1 + bits as usize / 8], &[Fixup::new(1, relative(bits as usize / 8), name.clone())]);
+                segment
+                    .put(&vec![0; 1 + bits as usize / 8], &[Fixup::new(1, relative(bits as usize / 8), name.clone())]);
                 segment.image[at] = 0xE8;
             }
         }
@@ -525,11 +630,17 @@ pub fn _items(
 ) -> Result<Vec<Encoded>, Unencodable> {
     Ok(match item {
         masm::Item::Label(label) => vec![Encoded::Label(label.clone())],
-        masm::Item::Mark(mark @ masm::Mark::Line { index, .. }) => vec![Encoded::Mark(*mark, Some(masm::line_label(number, *index)))],
-        masm::Item::Mark(mark) => vec![Encoded::Mark(*mark, None)],
-        masm::Item::Callee(masm::Callee { code, .. }) if !code.is_empty() => {
-            code.iter().map(|part| _part(part, bits)).collect::<Result<Vec<_>, _>>()?.into_iter().map(Encoded::Piece).collect()
+        masm::Item::Mark(mark @ masm::Mark::Line { index, .. }) => {
+            vec![Encoded::Mark(*mark, Some(masm::line_label(number, *index)))]
         }
+        masm::Item::Mark(mark) => vec![Encoded::Mark(*mark, None)],
+        masm::Item::Callee(masm::Callee { code, .. }) if !code.is_empty() => code
+            .iter()
+            .map(|part| _part(part, bits))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(Encoded::Piece)
+            .collect(),
         masm::Item::Callee(masm::Callee { name, far: true, .. }) if bits == 32 => {
             return Err(Unencodable(format!("a far call to {name} in flat code")));
         }
@@ -549,12 +660,16 @@ pub fn _items(
     })
 }
 
-pub fn _part(part: &masm::InlinePart, bits: u32) -> Result<Piece, Unencodable> {
+pub fn _part(
+    part: &masm::InlinePart,
+    bits: u32,
+) -> Result<Piece, Unencodable> {
     match part {
         masm::InlinePart::Bytes(part) => Ok(Piece::new(part.clone())),
-        masm::InlinePart::Fixup(kind, name, offset) if kind == "offset" && bits == 32 => {
-            Ok(Piece { code: (*offset as u32).to_le_bytes().to_vec(), fixups: vec![Fixup::new(0, OFFSET32, name.clone())] })
-        }
+        masm::InlinePart::Fixup(kind, name, offset) if kind == "offset" && bits == 32 => Ok(Piece {
+            code: (*offset as u32).to_le_bytes().to_vec(),
+            fixups: vec![Fixup::new(0, OFFSET32, name.clone())],
+        }),
         masm::InlinePart::Fixup(kind, name, offset) if kind == "offset" => Ok(Piece {
             code: ((offset & 0xFFFF) as u16).to_le_bytes().to_vec(),
             fixups: vec![Fixup::new(0, OFFSET, name.clone())],
@@ -562,15 +677,17 @@ pub fn _part(part: &masm::InlinePart, bits: u32) -> Result<Piece, Unencodable> {
         masm::InlinePart::Fixup(kind, name, _) if kind == "segment" => {
             Ok(Piece { code: vec![0; 2], fixups: vec![Fixup::new(0, BASE, name.clone())] })
         }
-        masm::InlinePart::Fixup(kind, name, offset) => Err(Unencodable(format!(
-            "inline part ({}, {}, {offset})",
-            pyrepr::string(kind),
-            pyrepr::string(name)
-        ))),
+        masm::InlinePart::Fixup(kind, name, offset) => {
+            Err(Unencodable(format!("inline part ({}, {}, {offset})", pyrepr::string(kind), pyrepr::string(name))))
+        }
     }
 }
 
-pub fn _encoded(what: &Semantics, names: &IndexMap<(Space, i64), String>, bits: u32) -> Result<Piece, Unencodable> {
+pub fn _encoded(
+    what: &Semantics,
+    names: &IndexMap<(Space, i64), String>,
+    bits: u32,
+) -> Result<Piece, Unencodable> {
     let relocated = what.sources.iter().any(|one| matches!(one, Loc::Imm(ir::Imm { address: Some(_), .. })));
     // A near address is the `bits`-bit offset.
     let near = if bits == 32 { OFFSET32 } else { OFFSET };
@@ -587,7 +704,9 @@ pub fn _encoded(what: &Semantics, names: &IndexMap<(Space, i64), String>, bits: 
                 let wide = [through, index_through].into_iter().any(|one| target::width_of(*one) == Some(4));
                 (made.displacement_at, if wide { OFFSET32 } else { near }, addr.disp, addr)
             }
-            Loc::Address(ir::Address { addr: Some(addr), .. }) if matches!(addr.space, Space::Segment | Space::External) => {
+            Loc::Address(ir::Address { addr: Some(addr), .. })
+                if matches!(addr.space, Space::Segment | Space::External) =>
+            {
                 (made.displacement_at, near, addr.disp, addr)
             }
             Loc::Imm(ir::Imm { address: Some(addr), .. }) if addr.space == Space::Group => {
@@ -620,7 +739,10 @@ pub fn short_reaches(displacement: i64) -> bool {
 ///
 /// Short first and lengthened to a fixed point, as jwasm does: lengthening
 /// only moves targets further away, so it ends, and at the smallest layout.
-pub fn _relaxed(items: &mut [Encoded], bits: u32) -> Result<IndexMap<String, i64>, Unencodable> {
+pub fn _relaxed(
+    items: &mut [Encoded],
+    bits: u32,
+) -> Result<IndexMap<String, i64>, Unencodable> {
     loop {
         let (mut labels, mut at) = (IndexMap::default(), 0i64);
         for item in items.iter() {
@@ -657,7 +779,10 @@ pub fn _relaxed(items: &mut [Encoded], bits: u32) -> Result<IndexMap<String, i64
 /// bytes) aimed at a label some `jmp` to it lies within short reach of becomes a short jump to
 /// that `jmp`, which carries on: 2 bytes saved, and the 3 clocks of a taken `jmp` more.
 /// Repeated while the shorter layout brings more within reach; Watcom's `SetBranches`.
-pub fn _trampolined(items: &mut Vec<Encoded>, bits: u32) -> Result<IndexMap<String, i64>, Unencodable> {
+pub fn _trampolined(
+    items: &mut Vec<Encoded>,
+    bits: u32,
+) -> Result<IndexMap<String, i64>, Unencodable> {
     let mut labels = _relaxed(items, bits)?;
     loop {
         let mut starts = Vec::with_capacity(items.len());
@@ -680,7 +805,11 @@ pub fn _trampolined(items: &mut Vec<Encoded>, bits: u32) -> Result<IndexMap<Stri
             if name == "jmp" {
                 continue;
             }
-            let near = jumps.get(label.as_str()).into_iter().flatten().find(|&&jump| short_reaches(starts[jump] - (starts[index] + SHORT_JUMP)));
+            let near = jumps
+                .get(label.as_str())
+                .into_iter()
+                .flatten()
+                .find(|&&jump| short_reaches(starts[jump] - (starts[index] + SHORT_JUMP)));
             if let Some(&jump) = near {
                 retargeted.push((index, jump));
             }
@@ -692,7 +821,15 @@ pub fn _trampolined(items: &mut Vec<Encoded>, bits: u32) -> Result<IndexMap<Stri
         let mut taken: Vec<usize> = retargeted.iter().map(|(_, jump)| *jump).collect();
         taken.sort_unstable();
         taken.dedup();
-        let name = |jump: usize| format!("{}$t{jump}", match &items[jump] { Encoded::Jump(one) => one.label.as_str(), _ => unreachable!("a jump") });
+        let name = |jump: usize| {
+            format!(
+                "{}$t{jump}",
+                match &items[jump] {
+                    Encoded::Jump(one) => one.label.as_str(),
+                    _ => unreachable!("a jump"),
+                }
+            )
+        };
         let named: IndexMap<usize, String> = taken.iter().map(|&jump| (jump, name(jump))).collect();
         for (index, jump) in &retargeted {
             if let Encoded::Jump(item) = &mut items[*index] {
@@ -712,7 +849,10 @@ pub fn _trampolined(items: &mut Vec<Encoded>, bits: u32) -> Result<IndexMap<Stri
 }
 
 /// An item's bytes in `bits`-bit mode: a near displacement is `bits` wide.
-pub fn _length(item: &Encoded, bits: u32) -> usize {
+pub fn _length(
+    item: &Encoded,
+    bits: u32,
+) -> usize {
     match item {
         Encoded::Label(_) | Encoded::Mark(..) => 0,
         Encoded::Piece(Piece { code, .. }) => code.len(),
@@ -729,15 +869,20 @@ pub fn _length(item: &Encoded, bits: u32) -> usize {
     }
 }
 
-pub fn _jump(name: &str, target: i64, at: usize, long: bool, bits: u32) -> Result<select::Emitted, Unencodable> {
+pub fn _jump(
+    name: &str,
+    target: i64,
+    at: usize,
+    long: bool,
+    bits: u32,
+) -> Result<select::Emitted, Unencodable> {
     let at_ip = select::At { ip: at as u64, bits };
-    let made = if name == "jmp" {
-        select::jump(target, at_ip, !long)
-    } else {
-        select::branch(name, target, at_ip, !long)
-    };
+    let made =
+        if name == "jmp" { select::jump(target, at_ip, !long) } else { select::branch(name, target, at_ip, !long) };
     match made {
-        Some(made) if made.code.len() == _length(&Encoded::Jump(Jump { long, ..Jump::new(name, "") }), bits) => Ok(made),
+        Some(made) if made.code.len() == _length(&Encoded::Jump(Jump { long, ..Jump::new(name, "") }), bits) => {
+            Ok(made)
+        }
         _ => Err(Unencodable(format!("{name} from {at:#x} to {target:#x}"))),
     }
 }
@@ -766,21 +911,44 @@ pub fn object_of(
     // masm.text's order, data externals first; LINK searches libraries in EXTDEF order.
     let mut declared: Vec<&String> = externs.keys().collect();
     declared.sort_by_key(|name| externs[*name] != "byte");
-    let order: Vec<&String> = declared.into_iter().filter(|name| used.contains(*name) || module.requests.contains(*name)).collect();
+    let order: Vec<&String> =
+        declared.into_iter().filter(|name| used.contains(*name) || module.requests.contains(*name)).collect();
     // Every segment but the code and the debug sections is addressed in DGROUP, where there is one.
-    let grouped = |segment: &Segment| bits == 16 && segment.near && matches!(segment.role, Role::Data | Role::Bss | Role::ROData | Role::Stack);
-    let members: Vec<usize> = segments.iter().enumerate().filter(|(_, segment)| grouped(segment)).map(|(index, _)| index).collect();
+    let grouped = |segment: &Segment| {
+        bits == 16 && segment.near && matches!(
+            segment.role,
+            Role::Data | Role::Bss | Role::ROData | Role::Stack
+        )
+    };
+    let members: Vec<usize> =
+        segments.iter().enumerate().filter(|(_, segment)| grouped(segment)).map(|(index, _)| index).collect();
     let omf_groups = if members.is_empty() { Vec::new() } else { vec![OmfGroup { name: "DGROUP".into(), members }] };
 
     let mut table: Vec<Symbol> = symbols
         .iter()
-        .map(|(name, &(section, offset))| Symbol { name: name.clone(), binding: if module.publics.contains(name) { Binding::Public } else { Binding::Local }, definition: Definition::Defined { section, offset }, group: None })
+        .map(|(name, &(section, offset))| Symbol {
+            name: name.clone(),
+            binding: if module.publics.contains(name) { Binding::Public } else { Binding::Local },
+            definition: Definition::Defined { section, offset },
+            group: None,
+        })
         .collect();
     // Data an object does not define is addressed in the group as its own data is.
-    table.extend(order.iter().map(|name| Symbol { name: (*name).clone(), binding: Binding::Public, definition: Definition::Undefined, group: (externs[*name] == "byte").then_some(0) }));
-    let index: IndexMap<String, usize> = table.iter().enumerate().map(|(at, symbol)| (symbol.name.clone(), at)).collect();
+    table.extend(order.iter().map(|name| Symbol {
+        name: (*name).clone(),
+        binding: Binding::Public,
+        definition: Definition::Undefined,
+        group: (externs[*name] == "byte").then_some(0),
+    }));
+    let index: IndexMap<String, usize> =
+        table.iter().enumerate().map(|(at, symbol)| (symbol.name.clone(), at)).collect();
 
-    let debug = module.debug.as_ref().map(|debug| super::debuginfo::laid_out(debug, module, source, &segments, symbols, &index)).transpose().map_err(Unencodable)?;
+    let debug = module
+        .debug
+        .as_ref()
+        .map(|debug| super::debuginfo::laid_out(debug, module, source, &segments, symbols, &index))
+        .transpose()
+        .map_err(Unencodable)?;
     let mut sections = Vec::new();
     for segment in segments {
         let Segment { name, role, near, mut image, spans, fixups, align, .. } = segment;
@@ -826,35 +994,75 @@ mod tests {
     use crate::model::ir::Addr;
     use crate::model::lir;
 
-    fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {
+    fn semantics(
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+    ) -> Semantics {
         Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
     }
 
-    fn targeted(op: Operation, name: &str, target: i64) -> Semantics {
+    fn targeted(
+        op: Operation,
+        name: &str,
+        target: i64,
+    ) -> Semantics {
         Semantics { target: Some(target), ..semantics(op, name, vec![], vec![]) }
     }
 
-    fn insn(at: i64, what: Semantics) -> Arc<lir::Insn> {
+    fn insn(
+        at: i64,
+        what: Semantics,
+    ) -> Arc<lir::Insn> {
         Arc::new(lir::Insn::new(at, Some((at, 1)), Some(what), vec![], vec![]))
     }
 
-    fn block(at: i64, insns: Vec<Arc<lir::Insn>>, succ: Vec<i64>) -> lir::LirBlock {
+    fn block(
+        at: i64,
+        insns: Vec<Arc<lir::Insn>>,
+        succ: Vec<i64>,
+    ) -> lir::LirBlock {
         lir::LirBlock { succ, ..lir::LirBlock::new(at, insns) }
     }
 
-    fn body(name: &str, blocks: Vec<lir::LirBlock>) -> lir::LirBody {
+    fn body(
+        name: &str,
+        blocks: Vec<lir::LirBlock>,
+    ) -> lir::LirBody {
         lir::LirBody::new(name, 1, blocks, IndexMap::default(), IndexMap::default())
     }
 
-    fn procedure(name: &str, far: bool, body: lir::LirBody, reserve: i64, callees: Vec<(i64, masm::Callee)>) -> masm::Procedure {
-        masm::Procedure { name: name.into(), public: true, far, body, reserve, callees: callees.into_iter().collect(), interrupt: None, size: false, entry: 0, stack_check: None, registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16) }
+    fn procedure(
+        name: &str,
+        far: bool,
+        body: lir::LirBody,
+        reserve: i64,
+        callees: Vec<(i64, masm::Callee)>,
+    ) -> masm::Procedure {
+        masm::Procedure {
+            name: name.into(),
+            public: true,
+            far,
+            body,
+            reserve,
+            callees: callees.into_iter().collect(),
+            interrupt: None,
+            size: false,
+            entry: 0,
+            stack_check: None,
+            registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
+        }
     }
 
     fn reg(register: Register) -> Loc {
         Loc::Reg(ir::Reg { register, width: 2 })
     }
 
-    fn imm(value: i64, address: Option<Addr>) -> Loc {
+    fn imm(
+        value: i64,
+        address: Option<Addr>,
+    ) -> Loc {
         Loc::Imm(ir::Imm { value, width: 2, address })
     }
 
@@ -866,11 +1074,18 @@ mod tests {
         masm::Datum::Label(masm::Label { name: name.into() })
     }
 
-    fn pointer(name: &str, offset: i64, far: bool) -> masm::Datum {
+    fn pointer(
+        name: &str,
+        offset: i64,
+        far: bool,
+    ) -> masm::Datum {
         masm::Datum::Pointer(masm::Pointer { name: name.into(), offset, far, bytes: if far { 4 } else { 2 } })
     }
 
-    fn fill(size: i64, byte: Option<u8>) -> masm::Datum {
+    fn fill(
+        size: i64,
+        byte: Option<u8>,
+    ) -> masm::Datum {
         masm::Datum::Fill(masm::Fill { size, byte })
     }
 
@@ -889,7 +1104,10 @@ mod tests {
         _data(&mut segment, 0, &items, &mut symbols, 16);
         assert_eq!(segment.image.len(), 4);
         assert_eq!(symbols["_after"], (0, 4));
-        assert_eq!((segment.fixups[1].at, segment.fixups[1].kind, segment.fixups[1].name.as_str()), (2, BASE, "DGROUP"));
+        assert_eq!(
+            (segment.fixups[1].at, segment.fixups[1].kind, segment.fixups[1].name.as_str()),
+            (2, BASE, "DGROUP")
+        );
     }
 
     /// Fresh QB D_SURF retained 83 jumps whose target label was physically next.
@@ -906,8 +1124,11 @@ mod tests {
         let body = body("next", vec![block(1, vec![jump, anchor], vec![2]), block(2, vec![returned], vec![])]);
         let procedure = procedure("_next", false, body, 0, vec![]);
 
-        let lines: Vec<String> =
-            masm::_procedure(&procedure, &IndexMap::default(), 0).unwrap().iter().map(|one| one.trim().to_owned()).collect();
+        let lines: Vec<String> = masm::_procedure(&procedure, &IndexMap::default(), 0)
+            .unwrap()
+            .iter()
+            .map(|one| one.trim().to_owned())
+            .collect();
         assert_eq!(lines, ["_next proc near", "L0_1:", "L0_2:", "ret", "_next endp"]);
     }
 
@@ -1022,7 +1243,7 @@ mod tests {
                 far_bss: BTreeSet::new(),
                 object: llrm_target::Target::object(&llrm_x86_m16::M16),
                 requests: BTreeSet::new(),
-            stack: 0,
+                stack: 0,
                 debug: None,
             };
             let records = omf::parse(&written(&module, "m.c").unwrap()).unwrap();
@@ -1075,8 +1296,15 @@ mod tests {
         ];
         let rich = masm::Module {
             code: "RICH_TEXT".into(),
-            names: IndexMap::from_iter([((Space::Segment, 1), "_table".to_owned()), ((Space::Group, 1), "DGROUP".to_owned())]),
-            externs: vec![("_ext".into(), "far".into()), ("_unused".into(), "near".into()), ("_b".into(), "byte".into())],
+            names: IndexMap::from_iter([
+                ((Space::Segment, 1), "_table".to_owned()),
+                ((Space::Group, 1), "DGROUP".to_owned()),
+            ]),
+            externs: vec![
+                ("_ext".into(), "far".into()),
+                ("_unused".into(), "near".into()),
+                ("_b".into(), "byte".into()),
+            ],
             publics: strings(&["_f", "_table"]),
             data: vec![
                 (
@@ -1095,7 +1323,10 @@ mod tests {
                 ("SHARED".into(), vec![pointer("_far", 1, false)]),
             ],
             procedures: vec![
-                masm::Procedure { public: false, ..procedure("_h", false, body("h", vec![lir::LirBlock::new(1, helper)]), 0, vec![]) },
+                masm::Procedure {
+                    public: false,
+                    ..procedure("_h", false, body("h", vec![lir::LirBlock::new(1, helper)]), 0, vec![])
+                },
                 procedure(
                     "_f",
                     true,
@@ -1152,12 +1383,20 @@ mod tests {
             scale: 2,
             ..ir::Mem::new(None, 2)
         };
-        let what = semantics(Operation::Move, "mov", vec![Loc::Reg(ir::Reg { register: Register::CX, width: 2 })], vec![Loc::Mem(cell)]);
+        let what = semantics(
+            Operation::Move,
+            "mov",
+            vec![Loc::Reg(ir::Reg { register: Register::CX, width: 2 })],
+            vec![Loc::Mem(cell)],
+        );
         let names = IndexMap::from_iter([((Space::Segment, 3), "S%".to_owned())]);
 
         let piece = _encoded(&what, &names, 16).unwrap();
 
         let [fixup] = piece.fixups.as_slice() else { panic!("{:?}", piece.fixups) };
-        assert_eq!((fixup.kind, fixup.at + 4, field(&piece.code, fixup.at, fixup.kind)), (OFFSET32, piece.code.len(), 1280));
+        assert_eq!(
+            (fixup.kind, fixup.at + 4, field(&piece.code, fixup.at, fixup.kind)),
+            (OFFSET32, piece.code.len(), 1280)
+        );
     }
 }

@@ -1,15 +1,15 @@
 use std::collections::BTreeSet;
-use crate::dialect::Dialect;
-use crate::dialect_extensions::{recognize_statement, ExtensionAction};
-use crate::error::ParseError;
-use crate::syntax::{
-    Binary, Bound, CaseItem, Declaration, Expr, Haystack, Literal, Module, Parameter, PrintItem,
-    PrintKind, PrintSeparator, Procedure, ProcedureKind, Span, Statement, TypeName, Unary,
-};
 
 use super::engine::{DeclarationForm, ParseResult, ParseState, ParserEngine, ProcedureHeader};
 use super::lexer::{lex, FormatSegment, Token, TokenKind};
 use super::tables::{self, AstAction, ExternalAction, StatementShape};
+use crate::dialect::Dialect;
+use crate::dialect_extensions::{recognize_statement, ExtensionAction};
+use crate::error::ParseError;
+use crate::syntax::{
+    Binary, Bound, CaseItem, Declaration, Expr, Haystack, Literal, Module, Parameter, PrintItem, PrintKind,
+    PrintSeparator, Procedure, ProcedureKind, Span, Statement, TypeName, Unary,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ParseOutput {
@@ -18,19 +18,22 @@ pub struct ParseOutput {
 }
 
 /// Parse QB-family source into the lossless syntax tree used by semantics.
-pub fn parse(source: &str, dialect: Dialect) -> Result<Module, ParseError> {
+pub fn parse(
+    source: &str,
+    dialect: Dialect,
+) -> Result<Module, ParseError> {
     parse_vertical_slice(source, dialect).map(|output| output.module)
 }
 
 /// Parse the first generated-table vertical slice directly into local syntax.
 ///
 /// Unsupported grammar actions return an explicit symbolic error.
-pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutput, ParseError> {
+pub fn parse_vertical_slice(
+    source: &str,
+    dialect: Dialect,
+) -> Result<ParseOutput, ParseError> {
     let (tokens, volatile_at) = without_volatile(lex(source, dialect).map_err(ParseError::from)?);
-    let (tokens, private_at) = without_private(for_in(augmented(tuple_assignment(
-        returned(tokens, dialect),
-        dialect,
-    ))));
+    let (tokens, private_at) = without_private(for_in(augmented(tuple_assignment(returned(tokens, dialect), dialect))));
     let mut state = ParseState::new(tokens);
     state.volatile_at = volatile_at;
     state.python_expressions = dialect.python_expressions();
@@ -49,91 +52,45 @@ pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutpu
         let extension = recognize_statement(&state.tokens[state.at..]);
         let result = if let Some(found) = extension {
             let keyword_span = state.tokens[state.at].span;
-            let function_span = state
-                .tokens
-                .get(state.at + 1)
-                .map_or(keyword_span, |token| token.span);
+            let function_span = state.tokens.get(state.at + 1).map_or(keyword_span, |token| token.span);
             state.at += found.consumed;
             match found.action {
                 ExtensionAction::OptionExplicit { .. } => {
-                    state
-                        .statements
-                        .push(Statement::OptionExplicit(keyword_span));
+                    state.statements.push(Statement::OptionExplicit(keyword_span));
                     ParseResult::GoodSyntax
                 }
                 ExtensionAction::DefType { type_name, .. } => def_type_list(&mut state, type_name),
                 ExtensionAction::OnLocalError { label, .. } => {
-                    state.statements.push(Statement::OnError {
-                        label,
-                        local: true,
-                        span: keyword_span,
-                    });
+                    state.statements.push(Statement::OnError { label, local: true, span: keyword_span });
                     ParseResult::GoodSyntax
                 }
-                ExtensionAction::CdeclAliasFunction { name, alias, .. } => extension_procedure(
-                    &mut state,
-                    name,
-                    Some(alias),
-                    true,
-                    ProcedureKind::Function,
-                    function_span,
-                ),
-                ExtensionAction::AliasFunction { name, alias, .. } => extension_procedure(
-                    &mut state,
-                    name,
-                    Some(alias),
-                    false,
-                    ProcedureKind::Function,
-                    function_span,
-                ),
-                ExtensionAction::CdeclFunction { name, .. } => extension_procedure(
-                    &mut state,
-                    name,
-                    None,
-                    true,
-                    ProcedureKind::Function,
-                    function_span,
-                ),
-                ExtensionAction::CdeclAliasSub { name, alias, .. } => extension_procedure(
-                    &mut state,
-                    name,
-                    Some(alias),
-                    true,
-                    ProcedureKind::Sub,
-                    function_span,
-                ),
-                ExtensionAction::AliasSub { name, alias, .. } => extension_procedure(
-                    &mut state,
-                    name,
-                    Some(alias),
-                    false,
-                    ProcedureKind::Sub,
-                    function_span,
-                ),
-                ExtensionAction::CdeclSub { name, .. } => extension_procedure(
-                    &mut state,
-                    name,
-                    None,
-                    true,
-                    ProcedureKind::Sub,
-                    function_span,
-                ),
+                ExtensionAction::CdeclAliasFunction { name, alias, .. } => {
+                    extension_procedure(&mut state, name, Some(alias), true, ProcedureKind::Function, function_span)
+                }
+                ExtensionAction::AliasFunction { name, alias, .. } => {
+                    extension_procedure(&mut state, name, Some(alias), false, ProcedureKind::Function, function_span)
+                }
+                ExtensionAction::CdeclFunction { name, .. } => {
+                    extension_procedure(&mut state, name, None, true, ProcedureKind::Function, function_span)
+                }
+                ExtensionAction::CdeclAliasSub { name, alias, .. } => {
+                    extension_procedure(&mut state, name, Some(alias), true, ProcedureKind::Sub, function_span)
+                }
+                ExtensionAction::AliasSub { name, alias, .. } => {
+                    extension_procedure(&mut state, name, Some(alias), false, ProcedureKind::Sub, function_span)
+                }
+                ExtensionAction::CdeclSub { name, .. } => {
+                    extension_procedure(&mut state, name, None, true, ProcedureKind::Sub, function_span)
+                }
             }
         } else {
             statement(&engine, &mut state)
         };
         match result {
             ParseResult::GoodSyntax => {}
-            ParseResult::NotFound => {
-                return error(&state, "statement is outside the generated AST slice")
-            }
+            ParseResult::NotFound => return error(&state, "statement is outside the generated AST slice"),
             ParseResult::BadSyntax => {
-                let external = state
-                    .unsupported_external
-                    .iter()
-                    .copied()
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let external = state.unsupported_external.iter().copied().collect::<Vec<_>>().join(", ");
                 let actions = state.sink.actions[action_before..]
                     .iter()
                     .map(|action| format!("{action:?}"))
@@ -169,18 +126,10 @@ pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutpu
             && state.open_procedure == open_before
             && !body_added
         {
-            let actions = state
-                .sink
-                .actions
-                .iter()
-                .map(|action| format!("{action:?}"))
-                .collect::<Vec<_>>()
-                .join(", ");
+            let actions = state.sink.actions.iter().map(|action| format!("{action:?}")).collect::<Vec<_>>().join(", ");
             return error(
                 &state,
-                &format!(
-                    "generated grammar accepted statement but AST actions are missing: {actions}"
-                ),
+                &format!("generated grammar accepted statement but AST actions are missing: {actions}"),
             );
         }
         if !at_named(&state, "tkNewLine") && !at_named(&state, "tkColon") {
@@ -190,17 +139,9 @@ pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutpu
     if state.open_procedure.is_some() {
         return error(&state, "procedure has no matching END");
     }
-    let prelude = state.slices
-        || state
-            .tokens
-            .iter()
-            .any(|token| matches!(token.kind, TokenKind::FormatString(_)));
+    let prelude = state.slices || state.tokens.iter().any(|token| matches!(token.kind, TokenKind::FormatString(_)));
     Ok(ParseOutput {
-        module: Module {
-            statements: state.statements,
-            procedures: state.procedures,
-            prelude,
-        },
+        module: Module { statements: state.statements, procedures: state.procedures, prelude },
         actions: state.sink.actions,
     })
 }
@@ -221,9 +162,9 @@ fn augmented(tokens: Vec<Token>) -> Vec<Token> {
     while at < tokens.len() {
         let token = &tokens[at];
         let operator = operators.iter().find(|name| is(token, name));
-        let equals = tokens.get(at + 1).filter(|next| {
-            is(next, "tkEQ") && next.span.line == token.span.line && next.span.start == token.span.end
-        });
+        let equals = tokens
+            .get(at + 1)
+            .filter(|next| is(next, "tkEQ") && next.span.line == token.span.line && next.span.start == token.span.end);
         let (Some(operator), Some(equals)) = (operator, equals) else {
             out.push(token.clone());
             at += 1;
@@ -244,7 +185,10 @@ fn augmented(tokens: Vec<Token>) -> Vec<Token> {
 /// QuickrBASIC's `RETURN value` in a FUNCTION, rewritten into QB's own way
 /// to return: `name = value: EXIT FUNCTION`. A bare RETURN still ends a
 /// GOSUB, and QB's `RETURN label` has no place left in a FUNCTION.
-fn returned(tokens: Vec<Token>, dialect: Dialect) -> Vec<Token> {
+fn returned(
+    tokens: Vec<Token>,
+    dialect: Dialect,
+) -> Vec<Token> {
     if !dialect.return_values() {
         return tokens;
     }
@@ -272,18 +216,12 @@ fn returned(tokens: Vec<Token>, dialect: Dialect) -> Vec<Token> {
         match &function {
             Some(name) if is(Some(token), "tkRETURN") && value_end() > at + 1 => {
                 let end = value_end();
-                let reserved = |name: &str| Token {
-                    kind: TokenKind::Reserved(named(name)),
-                    span: token.span,
-                };
+                let reserved = |name: &str| Token { kind: TokenKind::Reserved(named(name)), span: token.span };
                 out.push(Token { span: token.span, ..name.clone() });
                 out.push(reserved("tkEQ"));
                 let value = &tokens[at + 1..end];
                 if depth_zero_comma(value).is_some() {
-                    out.push(Token {
-                        kind: TokenKind::Identifier(TUPLE.into()),
-                        span: token.span,
-                    });
+                    out.push(Token { kind: TokenKind::Identifier(TUPLE.into()), span: token.span });
                     out.push(reserved("tkLParen"));
                     out.extend(value.iter().cloned());
                     out.push(reserved("tkRParen"));
@@ -331,7 +269,10 @@ fn depth_zero_comma(tokens: &[Token]) -> Option<usize> {
 /// with a name and has a comma before its `=` is one. A slice target,
 /// `s(1:3) = v`, which the grammar cannot parse either, becomes a one-target
 /// list: `$TUPLE(s(1:3)) = v`.
-fn tuple_assignment(tokens: Vec<Token>, dialect: Dialect) -> Vec<Token> {
+fn tuple_assignment(
+    tokens: Vec<Token>,
+    dialect: Dialect,
+) -> Vec<Token> {
     if !dialect.tuples() {
         return tokens;
     }
@@ -342,9 +283,11 @@ fn tuple_assignment(tokens: Vec<Token>, dialect: Dialect) -> Vec<Token> {
     let mut at = 0;
     while at < tokens.len() {
         let token = &tokens[at];
-        let starts = out.last().is_none_or(|last: &Token| {
-            ["tkNewLine", "tkColon", "tkTHEN", "tkELSE"].iter().any(|name| is(Some(last), name))
-        });
+        let starts = out
+            .last()
+            .is_none_or(
+                |last: &Token| ["tkNewLine", "tkColon", "tkTHEN", "tkELSE"].iter().any(|name| is(Some(last), name)),
+            );
         let end = if starts && matches!(token.kind, TokenKind::Identifier(_)) {
             token_statement_end(&tokens, at)
         } else {
@@ -388,7 +331,10 @@ fn tuple_assignment(tokens: Vec<Token>, dialect: Dialect) -> Vec<Token> {
 /// Where the statement running from `at` ends: `:`, a new line, or the ELSE
 /// of a one-line IF, outside any parentheses. An ELSE answering an IF inside
 /// the statement belongs to a conditional expression.
-fn token_statement_end(tokens: &[Token], mut at: usize) -> usize {
+fn token_statement_end(
+    tokens: &[Token],
+    mut at: usize,
+) -> usize {
     let is = |token: &Token, name: &str| matches!(token.kind, TokenKind::Reserved(id) if id == named(name));
     let mut depth = 0usize;
     let mut conditionals = 0usize;
@@ -477,11 +423,17 @@ fn for_in(tokens: Vec<Token>) -> Vec<Token> {
 /// stands marks the procedure that statement creates.
 fn without_private(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<usize>) {
     let separator = |token: &Token| {
-        matches!(token.kind, TokenKind::Reserved(id) if id == named("tkNewLine") || id == named("tkColon"))
+        matches!(
+            token.kind,
+            TokenKind::Reserved(id) if id == named("tkNewLine") || id == named("tkColon")
+        )
     };
     let header = |token: Option<&Token>| {
         token.is_some_and(|token| {
-            matches!(token.kind, TokenKind::Reserved(id) if id == named("tkSUB") || id == named("tkFUNCTION"))
+            matches!(
+                token.kind,
+                TokenKind::Reserved(id) if id == named("tkSUB") || id == named("tkFUNCTION")
+            )
         })
     };
     let mut kept = Vec::with_capacity(tokens.len());
@@ -506,16 +458,29 @@ fn without_private(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<usize>) {
 /// by line and start. `BYREF` before a parameter, the default said aloud, goes
 /// too.
 fn without_volatile(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<(usize, usize)>) {
-    let is = |token: Option<&Token>, name: &str| token.is_some_and(|token| matches!(&token.kind, TokenKind::Reserved(id) if *id == named(name)));
+    let is = |token: Option<&Token>, name: &str| {
+        token.is_some_and(|token| matches!(&token.kind, TokenKind::Reserved(id) if *id == named(name)))
+    };
     let mut kept: Vec<Token> = Vec::with_capacity(tokens.len());
     let mut marked = BTreeSet::new();
     for (index, token) in tokens.iter().enumerate() {
         let word = |name: &str| matches!(&token.kind, TokenKind::Identifier(word) if word == name);
-        if word("BYREF") && (is(kept.last(), "tkLParen") || is(kept.last(), "tkComma")) && matches!(tokens.get(index + 1).map(|next| &next.kind), Some(TokenKind::Identifier(_))) {
+        if word("BYREF")
+            && (is(kept.last(), "tkLParen") || is(kept.last(), "tkComma"))
+            && matches!(
+                tokens.get(index + 1).map(|next| &next.kind),
+                Some(TokenKind::Identifier(_))
+            )
+        {
             continue;
         }
         // `AS VOLATILE` and then a type; `AS VOLATILE` alone is a type of that name.
-        let types = |next: Option<&Token>| next.is_some_and(|next| matches!(next.kind, TokenKind::Identifier(_)) || matches!(next.kind, TokenKind::Reserved(id) if id != named("tkNewLine") && id != named("tkColon") && id != named("tkComma") && id != named("tkRParen")));
+        let types = |next: Option<&Token>| {
+            next.is_some_and(|next| matches!(next.kind, TokenKind::Identifier(_)) || matches!(
+                next.kind,
+                TokenKind::Reserved(id) if id != named("tkNewLine") && id != named("tkColon") && id != named("tkComma") && id != named("tkRParen")
+            ))
+        };
         if word("VOLATILE") && is(kept.last(), "tkAS") && types(tokens.get(index + 1)) {
             // The identifier this declares: before the dimensions, if it has them.
             let mut at = kept.len() - 1;
@@ -533,7 +498,9 @@ fn without_volatile(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<(usize, usize)>
                     }
                 }
             }
-            if let Some(Token { kind: TokenKind::Identifier(_), span }) = at.checked_sub(1).and_then(|one| kept.get(one)) {
+            if let Some(Token { kind: TokenKind::Identifier(_), span }) =
+                at.checked_sub(1).and_then(|one| kept.get(one))
+            {
                 marked.insert((span.line, span.start));
                 continue;
             }
@@ -543,27 +510,18 @@ fn without_volatile(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<(usize, usize)>
     (kept, marked)
 }
 
-fn statement(engine: &ParserEngine, state: &mut ParseState) -> ParseResult {
-    if let Some(Token {
-        kind: TokenKind::Integer(value, None),
-        span,
-    }) = state.token().cloned()
-    {
+fn statement(
+    engine: &ParserEngine,
+    state: &mut ParseState,
+) -> ParseResult {
+    if let Some(Token { kind: TokenKind::Integer(value, None), span }) = state.token().cloned() {
         if !(0..=65_529).contains(&value) {
             return ParseResult::BadSyntax;
         }
         state.at += 1;
-        state
-            .statements
-            .push(Statement::Label(value.to_string(), span));
+        state.statements.push(Statement::Label(value.to_string(), span));
         if !at_named(state, "tkNewLine") && !at_named(state, "tkColon") {
-            state.tokens.insert(
-                state.at,
-                Token {
-                    kind: TokenKind::Reserved(named("tkColon")),
-                    span,
-                },
-            );
+            state.tokens.insert(state.at, Token { kind: TokenKind::Reserved(named("tkColon")), span });
         }
         return ParseResult::GoodSyntax;
     }
@@ -605,11 +563,8 @@ fn statement(engine: &ParserEngine, state: &mut ParseState) -> ParseResult {
         state.statements.push(Statement::Comment(keyword_span));
         return ParseResult::GoodSyntax;
     }
-    let mut matches = tables::T_STMT_DISPATCH
-        .iter()
-        .filter(|(irw, _)| *irw == key)
-        .map(|(_, offset)| *offset)
-        .peekable();
+    let mut matches =
+        tables::T_STMT_DISPATCH.iter().filter(|(irw, _)| *irw == key).map(|(_, offset)| *offset).peekable();
     if matches.peek().is_none() {
         return ParseResult::NotFound;
     }
@@ -668,8 +623,7 @@ fn identifier_statement(state: &mut ParseState) -> ParseResult {
     let TokenKind::Identifier(name) = token.kind else {
         return ParseResult::NotFound;
     };
-    let line_start =
-        state.at == 0 || state.tokens[state.at - 1].kind == TokenKind::Reserved(named("tkNewLine"));
+    let line_start = state.at == 0 || state.tokens[state.at - 1].kind == TokenKind::Reserved(named("tkNewLine"));
     state.at += 1;
     // Only a line's first name is a label; after that `name:` is a call.
     if line_start && at_named(state, "tkColon") {
@@ -688,12 +642,7 @@ fn identifier_statement(state: &mut ParseState) -> ParseResult {
             break;
         }
     }
-    state.statements.push(Statement::Call {
-        name,
-        arguments,
-        explicit: false,
-        span: token.span,
-    });
+    state.statements.push(Statement::Call { name, arguments, explicit: false, span: token.span });
     ParseResult::GoodSyntax
 }
 
@@ -733,12 +682,8 @@ pub(crate) fn external_action(
             state.declaration_form = Some(DeclarationForm::Static);
             ParseResult::GoodSyntax
         }
-        ExternalAction::StaticVariableDeclaration => {
-            declaration(state, DeclarationForm::Static, false)
-        }
-        ExternalAction::SharedVariableDeclaration => {
-            declaration(state, DeclarationForm::Shared, false)
-        }
+        ExternalAction::StaticVariableDeclaration => declaration(state, DeclarationForm::Static, false),
+        ExternalAction::SharedVariableDeclaration => declaration(state, DeclarationForm::Shared, false),
         ExternalAction::DimDeclaration => declaration(state, DeclarationForm::Dim, false),
         ExternalAction::RedimDeclaration => declaration(state, DeclarationForm::Redim, true),
         ExternalAction::EndPrint => end_print(state, false),
@@ -747,29 +692,21 @@ pub(crate) fn external_action(
         ExternalAction::LiteralZero => literal_value(state, 0),
         ExternalAction::LiteralOne => literal_value(state, 1),
         ExternalAction::RequireFirstStatement => err_if_not_first(state),
-        ExternalAction::FunctionDeclarationName => {
-            procedure_name(state, ProcedureKind::Function, true, false)
-        }
-        ExternalAction::FunctionDefinitionName => {
-            procedure_name(state, ProcedureKind::Function, false, false)
-        }
-        ExternalAction::SubDeclarationName => {
-            procedure_name(state, ProcedureKind::Sub, true, false)
-        }
-        ExternalAction::SubDefinitionName => {
-            procedure_name(state, ProcedureKind::Sub, false, false)
-        }
+        ExternalAction::FunctionDeclarationName => procedure_name(state, ProcedureKind::Function, true, false),
+        ExternalAction::FunctionDefinitionName => procedure_name(state, ProcedureKind::Function, false, false),
+        ExternalAction::SubDeclarationName => procedure_name(state, ProcedureKind::Sub, true, false),
+        ExternalAction::SubDefinitionName => procedure_name(state, ProcedureKind::Sub, false, false),
         ExternalAction::DefFnName => procedure_name(state, ProcedureKind::Function, false, true),
         ExternalAction::Parameter => parameter(state),
-        ExternalAction::AssignableReference
-        | ExternalAction::ArrayReference
-        | ExternalAction::ForCounter => match assignable(state) {
-            Ok(value) => {
-                state.expressions.push(value);
-                ParseResult::GoodSyntax
+        ExternalAction::AssignableReference | ExternalAction::ArrayReference | ExternalAction::ForCounter => {
+            match assignable(state) {
+                Ok(value) => {
+                    state.expressions.push(value);
+                    ParseResult::GoodSyntax
+                }
+                Err(result) => result,
             }
-            Err(result) => result,
-        },
+        }
         ExternalAction::ProcedureReference => procedure_reference(state),
         ExternalAction::CallArgument => call_argument(state),
         ExternalAction::ArgumentList => argument_list(state),
@@ -787,7 +724,10 @@ pub(crate) fn external_action(
     result
 }
 
-fn keyword_value(state: &mut ParseState, expected: &str) -> ParseResult {
+fn keyword_value(
+    state: &mut ParseState,
+    expected: &str,
+) -> ParseResult {
     let Some(token) = state.token().cloned() else {
         return ParseResult::NotFound;
     };
@@ -843,11 +783,7 @@ fn format_string(
                 }
                 let mut arguments = vec![value];
                 arguments.extend(spec.iter().map(|spec| Expr::Literal(Literal::String(spec.clone()), *span)));
-                Expr::Apply {
-                    name: FORMAT_FIELD.into(),
-                    arguments,
-                    span: *span,
-                }
+                Expr::Apply { name: FORMAT_FIELD.into(), arguments, span: *span }
             }
         });
     }
@@ -861,7 +797,11 @@ fn format_string(
     }))
 }
 
-fn declaration(state: &mut ParseState, form: DeclarationForm, require_array: bool) -> ParseResult {
+fn declaration(
+    state: &mut ParseState,
+    form: DeclarationForm,
+    require_array: bool,
+) -> ParseResult {
     let Some(token) = state.token().cloned() else {
         return ParseResult::NotFound;
     };
@@ -921,21 +861,21 @@ fn declaration(state: &mut ParseState, form: DeclarationForm, require_array: boo
     };
 
     state.declaration_form = Some(form);
-    state.declarations.push(Declaration {
-        name,
-        type_name,
-        array,
-        bounds,
-        fixed_length,
-        shared: state.declaration_shared,
-        dynamic: state.dynamic_arrays,
-        volatile: state.volatile_at.contains(&(token.span.line, token.span.start)),
-        span: Span {
-            line: token.span.line,
-            start: token.span.start,
-            end: previous_end(state),
-        },
-    });
+    state
+        .declarations
+        .push(
+            Declaration {
+                name,
+                type_name,
+                array,
+                bounds,
+                fixed_length,
+                shared: state.declaration_shared,
+                dynamic: state.dynamic_arrays,
+                volatile: state.volatile_at.contains(&(token.span.line, token.span.start)),
+                span: Span { line: token.span.line, start: token.span.start, end: previous_end(state) },
+            },
+        );
     ParseResult::GoodSyntax
 }
 
@@ -953,7 +893,10 @@ fn declaration_type(state: &mut ParseState) -> Option<TypeName> {
     };
     if state.python_expressions
         && at_named(state, "tkLParen")
-        && matches!(state.tokens.get(state.at + 1), Some(Token { kind: TokenKind::Reserved(id), .. }) if *id == named("tkRParen"))
+        && matches!(
+            state.tokens.get(state.at + 1),
+            Some(Token { kind: TokenKind::Reserved(id), .. }) if *id == named("tkRParen")
+        )
     {
         state.at += 2;
         return Some(TypeName::Array(Box::new(element)));
@@ -1012,7 +955,10 @@ fn suffix_type(name: &str) -> Option<TypeName> {
     }
 }
 
-fn end_print(state: &mut ParseState, has_expression: bool) -> ParseResult {
+fn end_print(
+    state: &mut ParseState,
+    has_expression: bool,
+) -> ParseResult {
     if consume_named(state, "tkComma") || consume_named(state, "tkSColon") {
         return ParseResult::GoodSyntax;
     }
@@ -1021,11 +967,7 @@ fn end_print(state: &mut ParseState, has_expression: bool) -> ParseResult {
         || at_named(state, "tkELSE")
         || (has_expression && at_named(state, "tkUSING"))
     {
-        return if has_expression {
-            ParseResult::GoodSyntax
-        } else {
-            ParseResult::NotFound
-        };
+        return if has_expression { ParseResult::GoodSyntax } else { ParseResult::NotFound };
     }
     ParseResult::NotFound
 }
@@ -1091,14 +1033,10 @@ fn argument_list(state: &mut ParseState) -> ParseResult {
             break;
         }
         if at_named(state, "tkNewLine") || at_named(state, "tkColon") {
-            let span = state.tokens.get(state.at.saturating_sub(1)).map_or(
-                Span {
-                    line: 1,
-                    start: 0,
-                    end: 0,
-                },
-                |token| token.span,
-            );
+            let span = state
+                .tokens
+                .get(state.at.saturating_sub(1))
+                .map_or(Span { line: 1, start: 0, end: 0 }, |token| token.span);
             state.expressions.push(Expr::Omitted(span));
             break;
         }
@@ -1150,35 +1088,28 @@ fn const_assignment(state: &mut ParseState) -> ParseResult {
         Ok(value) => value,
         Err(_) => return ParseResult::BadSyntax,
     };
-    state.statements.push(Statement::Const {
-        name,
-        span: Span {
-            line: token.span.line,
-            start: token.span.start,
-            end: value.span().end,
-        },
-        value,
-    });
+    state
+        .statements
+        .push(
+            Statement::Const {
+                name,
+                span: Span { line: token.span.line, start: token.span.start, end: value.span().end },
+                value,
+            },
+        );
     ParseResult::GoodSyntax
 }
 
-fn def_type_list(state: &mut ParseState, type_name: TypeName) -> ParseResult {
-    let span = state.tokens.get(state.at.saturating_sub(1)).map_or(
-        Span {
-            line: 1,
-            start: 0,
-            end: 0,
-        },
-        |token| token.span,
-    );
+fn def_type_list(
+    state: &mut ParseState,
+    type_name: TypeName,
+) -> ParseResult {
+    let span =
+        state.tokens.get(state.at.saturating_sub(1)).map_or(Span { line: 1, start: 0, end: 0 }, |token| token.span);
     let mut ranges = Vec::new();
     loop {
         let Some(first) = default_type_letter(state) else {
-            return if ranges.is_empty() {
-                ParseResult::NotFound
-            } else {
-                ParseResult::BadSyntax
-            };
+            return if ranges.is_empty() { ParseResult::NotFound } else { ParseResult::BadSyntax };
         };
         let last = if consume_named(state, "tkMinus") {
             let Some(last) = default_type_letter(state) else {
@@ -1196,11 +1127,7 @@ fn def_type_list(state: &mut ParseState, type_name: TypeName) -> ParseResult {
             break;
         }
     }
-    state.statements.push(Statement::DefType {
-        type_name,
-        ranges,
-        span,
-    });
+    state.statements.push(Statement::DefType { type_name, ranges, span });
     ParseResult::GoodSyntax
 }
 
@@ -1216,7 +1143,10 @@ fn default_type_letter(state: &mut ParseState) -> Option<char> {
     Some(name.as_bytes()[0].to_ascii_uppercase() as char)
 }
 
-fn literal_value(state: &mut ParseState, wanted: i64) -> ParseResult {
+fn literal_value(
+    state: &mut ParseState,
+    wanted: i64,
+) -> ParseResult {
     let Some(token) = state.token() else {
         return ParseResult::NotFound;
     };
@@ -1231,12 +1161,12 @@ fn literal_value(state: &mut ParseState, wanted: i64) -> ParseResult {
 fn err_if_not_first(state: &ParseState) -> ParseResult {
     let keyword_index = state.at.saturating_sub(1);
     if keyword_index == 0
-        || state
-            .tokens
-            .get(keyword_index.saturating_sub(1))
-            .is_some_and(
-                |token| matches!(token.kind, TokenKind::Reserved(id) if id == named("tkNewLine")),
+        || state.tokens.get(keyword_index.saturating_sub(1)).is_some_and(|token| {
+            matches!(
+                token.kind,
+                TokenKind::Reserved(id) if id == named("tkNewLine")
             )
+        })
     {
         ParseResult::GoodSyntax
     } else {
@@ -1263,19 +1193,10 @@ fn procedure_name(
     if kind == ProcedureKind::Sub && result.is_some() {
         return ParseResult::BadSyntax;
     }
-    let span = state
-        .at
-        .checked_sub(1)
-        .and_then(|index| state.tokens.get(index))
-        .map_or(token.span, |keyword| keyword.span);
+    let span =
+        state.at.checked_sub(1).and_then(|index| state.tokens.get(index)).map_or(token.span, |keyword| keyword.span);
     state.at += 1;
-    state.procedure_headers.push(ProcedureHeader {
-        name,
-        kind,
-        declaration,
-        result,
-        span,
-    });
+    state.procedure_headers.push(ProcedureHeader { name, kind, declaration, result, span });
     ParseResult::GoodSyntax
 }
 
@@ -1310,25 +1231,25 @@ fn parameter(state: &mut ParseState) -> ParseResult {
     } else {
         suffix_type(&name)
     };
-    state.parameters.push(Parameter {
-        declaration: Declaration {
-            name,
-            type_name,
-            array,
-            bounds: Vec::new(),
-            fixed_length: None,
-            shared: false,
-            dynamic: false,
-            volatile: state.volatile_at.contains(&(token.span.line, token.span.start)),
-            span: Span {
-                line: token.span.line,
-                start: token.span.start,
-                end: previous_end(state),
+    state
+        .parameters
+        .push(
+            Parameter {
+                declaration: Declaration {
+                    name,
+                    type_name,
+                    array,
+                    bounds: Vec::new(),
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    volatile: state.volatile_at.contains(&(token.span.line, token.span.start)),
+                    span: Span { line: token.span.line, start: token.span.start, end: previous_end(state) },
+                },
+                by_value,
+                segmented,
             },
-        },
-        by_value,
-        segmented,
-    });
+        );
     ParseResult::GoodSyntax
 }
 
@@ -1364,25 +1285,32 @@ fn extension_procedure(
     };
     let is_static = consume_named(state, "tkSTATIC");
     let parameters = state.parameters.split_off(parameter_base);
-    state.procedures.push(Procedure {
-        name,
-        alias,
-        cdecl,
-        kind,
-        parameters,
-        result,
-        body: Vec::new(),
-        declaration: true,
-        is_static,
-        exported: true,
-        private: false,
-        module_scope: false,
-        span,
-    });
+    state
+        .procedures
+        .push(
+            Procedure {
+                name,
+                alias,
+                cdecl,
+                kind,
+                parameters,
+                result,
+                body: Vec::new(),
+                declaration: true,
+                is_static,
+                exported: true,
+                private: false,
+                module_scope: false,
+                span,
+            },
+        );
     ParseResult::GoodSyntax
 }
 
-fn data_statement(state: &mut ParseState, span: Span) -> ParseResult {
+fn data_statement(
+    state: &mut ParseState,
+    span: Span,
+) -> ParseResult {
     state.at += 1;
     let mut values = Vec::new();
     loop {
@@ -1453,10 +1381,9 @@ fn synthesize_statement(
             };
             header.result = Some(result);
         }
-        let is_static = state.sink.actions[action_base..]
-            .iter()
-            .any(|action| matches!(action, AstAction::Mark { slot: 4, .. }))
-            || consume_named(state, "tkSTATIC");
+        let is_static =
+            state.sink.actions[action_base..].iter().any(|action| matches!(action, AstAction::Mark { slot: 4, .. }))
+                || consume_named(state, "tkSTATIC");
         let inline_def_fn = def_fn && definition.is_some();
         let body = definition
             .map(|value| {
@@ -1502,41 +1429,39 @@ fn synthesize_statement(
     // ON n GOTO|GOSUB: the grammar marks which, as the original code
     // generator read it, and emits no opcode of its own.
     let on_branch = (keyword == named("tkON")).then(|| {
-        actions.iter().find_map(|action| match action {
-            AstAction::Mark { slot: 1, .. } => Some(false),
-            AstAction::Mark { slot: 2, .. } => Some(true),
-            _ => None,
-        })
+        actions
+            .iter()
+            .find_map(
+                |action| match action {
+                    AstAction::Mark { slot: 1, .. } => Some(false),
+                    AstAction::Mark { slot: 2, .. } => Some(true),
+                    _ => None,
+                },
+            )
     });
-    let descriptor = if line_input {
-        Some(StatementShape::LineInput)
-    } else {
-        dispatched.or(emitted)
-    };
+    let descriptor = if line_input { Some(StatementShape::LineInput) } else { dispatched.or(emitted) };
     let arguments = state.expressions.split_off(expression_base);
     let labels = state.labels.split_off(label_base);
     if let Some(Some(gosub)) = on_branch {
         let ([selector], false) = (&arguments[..], labels.is_empty()) else {
             return false;
         };
-        state.statements.push(Statement::Select {
-            selector: Expr::Apply {
-                name: ON_SELECTOR.into(),
-                arguments: vec![selector.clone()],
-                span,
-            },
-            arms: on_branch_arms(gosub, labels, span),
-            otherwise: Vec::new(),
-            span,
-        });
+        state
+            .statements
+            .push(
+                Statement::Select {
+                    selector: Expr::Apply { name: ON_SELECTOR.into(), arguments: vec![selector.clone()], span },
+                    arms: on_branch_arms(gosub, labels, span),
+                    otherwise: Vec::new(),
+                    span,
+                },
+            );
         return true;
     }
     let Some(descriptor) = descriptor else {
         return false;
     };
-    let procedure_references = state
-        .procedure_references
-        .split_off(procedure_reference_base);
+    let procedure_references = state.procedure_references.split_off(procedure_reference_base);
     let type_names = state.type_names.split_off(type_name_base);
     let literal_values = state.literal_values.split_off(literal_base);
     let statement = match descriptor {
@@ -1544,47 +1469,29 @@ fn synthesize_statement(
             if arguments.is_empty() {
                 return false;
             }
-            Statement::Read {
-                destinations: arguments,
-                span,
-            }
+            Statement::Read { destinations: arguments, span }
         }
         StatementShape::LineInput => {
             let channel = actions.contains(&AstAction::LineInputChannel);
-            let has_prompt = actions
-                .iter()
-                .any(|action| matches!(action, AstAction::Mark { slot: 4, .. }));
+            let has_prompt = actions.iter().any(|action| matches!(action, AstAction::Mark { slot: 4, .. }));
             let mut arguments = arguments.into_iter();
             let file = channel.then(|| arguments.next()).flatten();
             let prompt = has_prompt.then(|| arguments.next()).flatten();
             let Some(destination) = arguments.next() else {
                 return false;
             };
-            if arguments.next().is_some()
-                || (channel && file.is_none())
-                || (has_prompt && prompt.is_none())
-            {
+            if arguments.next().is_some() || (channel && file.is_none()) || (has_prompt && prompt.is_none()) {
                 return false;
             }
-            Statement::LineInput {
-                file,
-                prompt,
-                destination,
-                span,
-            }
+            Statement::LineInput { file, prompt, destination, span }
         }
         StatementShape::Input => {
             let mut values = arguments.into_iter();
-            let file = actions
-                .contains(&AstAction::LineInputChannel)
-                .then(|| values.next())
-                .flatten();
+            let file = actions.contains(&AstAction::LineInputChannel).then(|| values.next()).flatten();
             if actions.contains(&AstAction::LineInputChannel) && file.is_none() {
                 return false;
             }
-            let has_prompt = actions
-                .iter()
-                .any(|action| matches!(action, AstAction::Mark { slot: 4, .. }));
+            let has_prompt = actions.iter().any(|action| matches!(action, AstAction::Mark { slot: 4, .. }));
             let prompt = has_prompt.then(|| values.next()).flatten();
             if has_prompt && prompt.is_none() {
                 return false;
@@ -1596,22 +1503,15 @@ fn synthesize_statement(
             Statement::Input {
                 file,
                 prompt,
-                suppress_question_mark: actions
-                    .iter()
-                    .any(|action| matches!(action, AstAction::Mark { slot: 1, .. })),
-                keep_cursor: actions
-                    .iter()
-                    .any(|action| matches!(action, AstAction::Mark { slot: 2, .. })),
+                suppress_question_mark: actions.iter().any(|action| matches!(action, AstAction::Mark { slot: 1, .. })),
+                keep_cursor: actions.iter().any(|action| matches!(action, AstAction::Mark { slot: 2, .. })),
                 destinations,
                 span,
             }
         }
         StatementShape::Print => {
             let mut values = arguments.into_iter();
-            let file = actions
-                .contains(&AstAction::PrintChannel)
-                .then(|| values.next())
-                .flatten();
+            let file = actions.contains(&AstAction::PrintChannel).then(|| values.next()).flatten();
             if actions.contains(&AstAction::PrintChannel) && file.is_none() {
                 return false;
             }
@@ -1624,10 +1524,7 @@ fn synthesize_statement(
                 else {
                     return false;
                 };
-                let Some(index) = values
-                    .iter()
-                    .position(|value| value.span().start >= using_span.end)
-                else {
+                let Some(index) = values.iter().position(|value| value.span().start >= using_span.end) else {
                     return false;
                 };
                 Some(values.remove(index))
@@ -1644,9 +1541,7 @@ fn synthesize_statement(
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            if item_actions.len() > values.len()
-                || (!values.is_empty() && item_actions.len() + 1 < values.len())
-            {
+            if item_actions.len() > values.len() || (!values.is_empty() && item_actions.len() + 1 < values.len()) {
                 return false;
             }
             let items = values
@@ -1654,10 +1549,7 @@ fn synthesize_statement(
                 .enumerate()
                 .map(|(index, value)| {
                     let span = value.span();
-                    let (control, separator) = item_actions
-                        .get(index)
-                        .copied()
-                        .unwrap_or((None, PrintSeparator::End));
+                    let (control, separator) = item_actions.get(index).copied().unwrap_or((None, PrintSeparator::End));
                     let value = control.map_or(value.clone(), |name| Expr::Apply {
                         name: name.into(),
                         arguments: vec![value],
@@ -1671,13 +1563,7 @@ fn synthesize_statement(
                 one if one == named("tkWRITE") => PrintKind::Write,
                 _ => PrintKind::Print,
             };
-            Statement::Print {
-                kind,
-                file,
-                using,
-                items,
-                span,
-            }
+            Statement::Print { kind, file, using, items, span }
         }
         StatementShape::Goto => {
             let [(label, _)]: [(String, Span); 1] = match labels.try_into() {
@@ -1698,11 +1584,7 @@ fn synthesize_statement(
             if !arguments.is_empty() {
                 return false;
             }
-            Statement::OnError {
-                label,
-                local: false,
-                span,
-            }
+            Statement::OnError { label, local: false, span }
         }
         StatementShape::EndProcedure => {
             if !arguments.is_empty() || !labels.is_empty() || !literal_values.is_empty() {
@@ -1711,9 +1593,12 @@ fn synthesize_statement(
             let Some(index) = state.open_procedure else {
                 return false;
             };
-            let ended_kind = if state.tokens.get(state.at.saturating_sub(1)).is_some_and(
-                |token| matches!(token.kind, TokenKind::Reserved(id) if id == named("tkFUNCTION")),
-            ) {
+            let ended_kind = if state.tokens.get(state.at.saturating_sub(1)).is_some_and(|token| {
+                matches!(
+                    token.kind,
+                    TokenKind::Reserved(id) if id == named("tkFUNCTION")
+                )
+            }) {
                 ProcedureKind::Function
             } else {
                 ProcedureKind::Sub
@@ -1735,12 +1620,12 @@ fn synthesize_statement(
                 _ => unreachable!("matched exit statement shape"),
             };
             let target = if target == crate::syntax::ExitTarget::Sub
-                && state.tokens.get(state.at.saturating_sub(1)).is_some_and(
-                    |token| {
-                        matches!(token.kind, TokenKind::Reserved(id) if id == named("tkFUNCTION"))
-                    },
-                )
-            {
+                && state.tokens.get(state.at.saturating_sub(1)).is_some_and(|token| {
+                    matches!(
+                        token.kind,
+                        TokenKind::Reserved(id) if id == named("tkFUNCTION")
+                    )
+                }) {
                 crate::syntax::ExitTarget::Function
             } else {
                 target
@@ -1750,25 +1635,17 @@ fn synthesize_statement(
         StatementShape::Runtime(name) => {
             let mut arguments = arguments;
             if name == "CIRCLE" {
-                arguments.extend(actions.iter().filter_map(|action| {
-                    match action {
-                        AstAction::Mark {
-                            slot: u8::MAX,
-                            token,
-                        } => state
-                            .tokens
-                            .get(*token)
-                            .map(|token| Expr::Omitted(token.span)),
-                        _ => None,
+                arguments.extend(actions.iter().filter_map(|action| match action {
+                    AstAction::Mark { slot: u8::MAX, token } => {
+                        state.tokens.get(*token).map(|token| Expr::Omitted(token.span))
                     }
+                    _ => None,
                 }));
                 arguments.sort_by_key(|argument| {
                     let span = argument.span();
                     (span.line, span.start)
                 });
-                if actions
-                    .iter()
-                    .any(|action| matches!(action, AstAction::Unsupported("opCircleAspect")))
+                if actions.iter().any(|action| matches!(action, AstAction::Unsupported("opCircleAspect")))
                     && arguments.len() == 6
                 {
                     let span = arguments[5].span();
@@ -1777,36 +1654,19 @@ fn synthesize_statement(
             }
             if name == "PUT" {
                 if let Some((mode, mode_span)) =
-                    state.tokens[..state.at]
-                        .iter()
-                        .rev()
-                        .find_map(|token| match token.kind {
-                            TokenKind::Reserved(id) if id == named("tkAND") => {
-                                Some(("AND", token.span))
-                            }
-                            TokenKind::Reserved(id) if id == named("tkOR") => {
-                                Some(("OR", token.span))
-                            }
-                            TokenKind::Reserved(id) if id == named("tkPRESET") => {
-                                Some(("PRESET", token.span))
-                            }
-                            TokenKind::Reserved(id) if id == named("tkPSET") => {
-                                Some(("PSET", token.span))
-                            }
-                            TokenKind::Reserved(id) if id == named("tkXOR") => {
-                                Some(("XOR", token.span))
-                            }
-                            _ => None,
-                        })
+                    state.tokens[..state.at].iter().rev().find_map(|token| match token.kind {
+                        TokenKind::Reserved(id) if id == named("tkAND") => Some(("AND", token.span)),
+                        TokenKind::Reserved(id) if id == named("tkOR") => Some(("OR", token.span)),
+                        TokenKind::Reserved(id) if id == named("tkPRESET") => Some(("PRESET", token.span)),
+                        TokenKind::Reserved(id) if id == named("tkPSET") => Some(("PSET", token.span)),
+                        TokenKind::Reserved(id) if id == named("tkXOR") => Some(("XOR", token.span)),
+                        _ => None,
+                    })
                 {
                     arguments.push(Expr::Name(mode.into(), mode_span));
                 }
             }
-            Statement::Runtime {
-                name: name.into(),
-                arguments,
-                span,
-            }
+            Statement::Runtime { name: name.into(), arguments, span }
         }
         StatementShape::LegacyImplicitCall(name) => {
             let arguments = if name == "GOSUB" {
@@ -1821,18 +1681,11 @@ fn synthesize_statement(
                 }
                 arguments
             };
-            Statement::Call {
-                name: name.into(),
-                arguments,
-                explicit: false,
-                span,
-            }
+            Statement::Call { name: name.into(), arguments, explicit: false, span }
         }
         StatementShape::LegacyImplicitCallWithLabels(name) => {
-            let mut label_arguments = labels
-                .into_iter()
-                .map(|(label, label_span)| Expr::Name(label, label_span))
-                .collect::<Vec<_>>();
+            let mut label_arguments =
+                labels.into_iter().map(|(label, label_span)| Expr::Name(label, label_span)).collect::<Vec<_>>();
             if !arguments.is_empty() {
                 return false;
             }
@@ -1852,10 +1705,7 @@ fn synthesize_statement(
             }
             Statement::Runtime {
                 name: name.into(),
-                arguments: labels
-                    .into_iter()
-                    .map(|(label, label_span)| Expr::Name(label, label_span))
-                    .collect(),
+                arguments: labels.into_iter().map(|(label, label_span)| Expr::Name(label, label_span)).collect(),
                 span,
             }
         }
@@ -1864,21 +1714,13 @@ fn synthesize_statement(
                 Ok(names) => names,
                 Err(_) => return false,
             };
-            Statement::Call {
-                name,
-                arguments,
-                explicit: true,
-                span,
-            }
+            Statement::Call { name, arguments, explicit: true, span }
         }
         StatementShape::OptionBaseZero | StatementShape::OptionBaseOne => {
             if !arguments.is_empty() || !labels.is_empty() {
                 return false;
             }
-            Statement::OptionBase(
-                i64::from(matches!(descriptor, StatementShape::OptionBaseOne)),
-                span,
-            )
+            Statement::OptionBase(i64::from(matches!(descriptor, StatementShape::OptionBaseOne)), span)
         }
         StatementShape::DefSeg => {
             let value = match arguments.as_slice() {
@@ -1895,25 +1737,13 @@ fn synthesize_statement(
             Statement::Erase(arguments)
         }
         StatementShape::Open => {
-            let mode = if actions
-                .iter()
-                .any(|action| matches!(action, AstAction::Mark { slot: 1, .. }))
-            {
+            let mode = if actions.iter().any(|action| matches!(action, AstAction::Mark { slot: 1, .. })) {
                 crate::syntax::FileMode::Append
-            } else if actions
-                .iter()
-                .any(|action| matches!(action, AstAction::Mark { slot: 2, .. }))
-            {
+            } else if actions.iter().any(|action| matches!(action, AstAction::Mark { slot: 2, .. })) {
                 crate::syntax::FileMode::Input
-            } else if actions
-                .iter()
-                .any(|action| matches!(action, AstAction::Mark { slot: 3, .. }))
-            {
+            } else if actions.iter().any(|action| matches!(action, AstAction::Mark { slot: 3, .. })) {
                 crate::syntax::FileMode::Output
-            } else if actions
-                .iter()
-                .any(|action| matches!(action, AstAction::Mark { slot: 5, .. }))
-            {
+            } else if actions.iter().any(|action| matches!(action, AstAction::Mark { slot: 5, .. })) {
                 crate::syntax::FileMode::Binary
             } else {
                 return false;
@@ -1922,22 +1752,11 @@ fn synthesize_statement(
                 Ok(arguments) => arguments,
                 Err(_) => return false,
             };
-            Statement::Open {
-                path,
-                mode,
-                file,
-                span,
-            }
+            Statement::Open { path, mode, file, span }
         }
-        StatementShape::Close => Statement::Close {
-            files: arguments,
-            span,
-        },
+        StatementShape::Close => Statement::Close { files: arguments, span },
         StatementShape::Resume => {
-            let target = if actions
-                .iter()
-                .any(|action| matches!(action, AstAction::Mark { slot: 4, .. }))
-            {
+            let target = if actions.iter().any(|action| matches!(action, AstAction::Mark { slot: 4, .. })) {
                 crate::syntax::ResumeTarget::Next
             } else if let [(label, _)] = labels.as_slice() {
                 crate::syntax::ResumeTarget::Label(label.clone())
@@ -1974,14 +1793,7 @@ fn synthesize_statement(
             let Some(body) = block_until_next(state) else {
                 return false;
             };
-            Statement::For {
-                counter,
-                start,
-                end,
-                step,
-                body,
-                span,
-            }
+            Statement::For { counter, start, end, step, body, span }
         }
         StatementShape::Do | StatementShape::DoWhile | StatementShape::DoUntil => {
             let pre = match descriptor {
@@ -2006,12 +1818,7 @@ fn synthesize_statement(
             if pre.is_some() && post.is_some() {
                 return false;
             }
-            Statement::Do {
-                pre,
-                post,
-                body,
-                span,
-            }
+            Statement::Do { pre, post, body, span }
         }
         StatementShape::While => {
             let [condition]: [Expr; 1] = match arguments.try_into() {
@@ -2021,22 +1828,14 @@ fn synthesize_statement(
             let Some(body) = block_until_wend(state) else {
                 return false;
             };
-            Statement::While {
-                condition,
-                body,
-                span,
-            }
+            Statement::While { condition, body, span }
         }
         StatementShape::Seek => {
             let [file, position]: [Expr; 2] = match arguments.try_into() {
                 Ok(arguments) => arguments,
                 Err(_) => return false,
             };
-            Statement::Seek {
-                file,
-                position,
-                span,
-            }
+            Statement::Seek { file, position, span }
         }
         StatementShape::FileTransferRead | StatementShape::FileTransferWrite => {
             let [file, position, target]: [Expr; 3] = match arguments.try_into() {
@@ -2051,8 +1850,7 @@ fn synthesize_statement(
                 span,
             }
         }
-        StatementShape::FileTransferReadUnpositioned
-        | StatementShape::FileTransferWriteUnpositioned => {
+        StatementShape::FileTransferReadUnpositioned | StatementShape::FileTransferWriteUnpositioned => {
             let [file, target]: [Expr; 2] = match arguments.try_into() {
                 Ok(arguments) => arguments,
                 Err(_) => return false,
@@ -2073,26 +1871,12 @@ fn synthesize_statement(
             let value = arguments.pop().expect("checked MID$ source");
             let right_parenthesis = state.tokens[..state.at]
                 .iter()
-                .rfind(|token| {
-                    matches!(token.kind, TokenKind::Reserved(id) if id == named("tkRParen"))
-                })
+                .rfind(|token| matches!(token.kind, TokenKind::Reserved(id) if id == named("tkRParen")))
                 .map_or(value.span().end, |token| token.span.end);
-            let target_span = Span {
-                line: span.line,
-                start: span.start,
-                end: right_parenthesis,
-            };
+            let target_span = Span { line: span.line, start: span.start, end: right_parenthesis };
             Statement::Assign {
-                target: Expr::Apply {
-                    name: "MID$".into(),
-                    arguments,
-                    span: target_span,
-                },
-                span: Span {
-                    line: span.line,
-                    start: span.start,
-                    end: value.span().end,
-                },
+                target: Expr::Apply { name: "MID$".into(), arguments, span: target_span },
+                span: Span { line: span.line, start: span.start, end: value.span().end },
                 value,
             }
         }
@@ -2101,11 +1885,7 @@ fn synthesize_statement(
                 Ok(arguments) => arguments,
                 Err(_) => return false,
             };
-            let comparison_span = Span {
-                line: left.span().line,
-                start: left.span().start,
-                end: right.span().end,
-            };
+            let comparison_span = Span { line: left.span().line, start: left.span().start, end: right.span().end };
             Statement::Call {
                 name: name.into(),
                 arguments: vec![Expr::Binary {
@@ -2126,12 +1906,7 @@ fn synthesize_statement(
             let Some((arms, otherwise)) = select_case_block(state) else {
                 return false;
             };
-            Statement::Select {
-                selector,
-                arms,
-                otherwise,
-                span,
-            }
+            Statement::Select { selector, arms, otherwise, span }
         }
     };
     state.statements.push(statement);
@@ -2187,10 +1962,7 @@ fn block_until_next(state: &mut ParseState) -> Option<Vec<Statement>> {
             return None;
         }
         body.extend(state.statements.split_off(before));
-        if state.at < state.tokens.len()
-            && !at_named(state, "tkNewLine")
-            && !at_named(state, "tkColon")
-        {
+        if state.at < state.tokens.len() && !at_named(state, "tkNewLine") && !at_named(state, "tkColon") {
             return None;
         }
     }
@@ -2218,10 +1990,7 @@ fn block_until_loop(state: &mut ParseState) -> Option<(Vec<Statement>, Option<(b
             return None;
         }
         body.extend(state.statements.split_off(before));
-        if state.at < state.tokens.len()
-            && !at_named(state, "tkNewLine")
-            && !at_named(state, "tkColon")
-        {
+        if state.at < state.tokens.len() && !at_named(state, "tkNewLine") && !at_named(state, "tkColon") {
             return None;
         }
     }
@@ -2242,10 +2011,7 @@ fn block_until_wend(state: &mut ParseState) -> Option<Vec<Statement>> {
             return None;
         }
         body.extend(state.statements.split_off(before));
-        if state.at < state.tokens.len()
-            && !at_named(state, "tkNewLine")
-            && !at_named(state, "tkColon")
-        {
+        if state.at < state.tokens.len() && !at_named(state, "tkNewLine") && !at_named(state, "tkColon") {
             return None;
         }
     }
@@ -2262,9 +2028,10 @@ fn select_case_block(state: &mut ParseState) -> Option<(SelectArms, Vec<Statemen
     loop {
         while consume_named(state, "tkNewLine") || consume_named(state, "tkColon") {}
         if at_named(state, "tkEND")
-            && state.tokens.get(state.at + 1).is_some_and(
-                |token| matches!(token.kind, TokenKind::Reserved(id) if id == named("tkSELECT")),
-            )
+            && state
+                .tokens
+                .get(state.at + 1)
+                .is_some_and(|token| matches!(token.kind, TokenKind::Reserved(id) if id == named("tkSELECT")))
         {
             state.at += 2;
             return Some((arms, otherwise));
@@ -2301,9 +2068,10 @@ fn select_case_block(state: &mut ParseState) -> Option<(SelectArms, Vec<Statemen
             while consume_named(state, "tkNewLine") || consume_named(state, "tkColon") {}
             if at_named(state, "tkCASE")
                 || at_named(state, "tkEND")
-                    && state.tokens.get(state.at + 1).is_some_and(|token| {
-                        matches!(token.kind, TokenKind::Reserved(id) if id == named("tkSELECT"))
-                    })
+                    && state
+                        .tokens
+                        .get(state.at + 1)
+                        .is_some_and(|token| matches!(token.kind, TokenKind::Reserved(id) if id == named("tkSELECT")))
             {
                 break;
             }
@@ -2312,10 +2080,7 @@ fn select_case_block(state: &mut ParseState) -> Option<(SelectArms, Vec<Statemen
                 return None;
             }
             body.extend(state.statements.split_off(before));
-            if state.at < state.tokens.len()
-                && !at_named(state, "tkNewLine")
-                && !at_named(state, "tkColon")
-            {
+            if state.at < state.tokens.len() && !at_named(state, "tkNewLine") && !at_named(state, "tkColon") {
                 return None;
             }
         }
@@ -2330,9 +2095,7 @@ fn select_case_block(state: &mut ParseState) -> Option<(SelectArms, Vec<Statemen
 fn at_case_relation(state: &ParseState) -> bool {
     match state.token().map(|token| &token.kind) {
         Some(TokenKind::Comparison(_)) => true,
-        Some(TokenKind::Reserved(id)) => {
-            *id == named("tkEQ") || *id == named("tkLT") || *id == named("tkGT")
-        }
+        Some(TokenKind::Reserved(id)) => *id == named("tkEQ") || *id == named("tkLT") || *id == named("tkGT"),
         _ => false,
     }
 }
@@ -2363,15 +2126,15 @@ fn assignment(state: &mut ParseState) -> ParseResult {
         Err(_) => return ParseResult::BadSyntax,
     };
     let begin = start.unwrap_or_else(|| target.span());
-    state.statements.push(Statement::Assign {
-        target,
-        span: Span {
-            line: begin.line,
-            start: begin.start,
-            end: value.span().end,
-        },
-        value,
-    });
+    state
+        .statements
+        .push(
+            Statement::Assign {
+                target,
+                span: Span { line: begin.line, start: begin.start, end: value.span().end },
+                value,
+            },
+        );
     ParseResult::GoodSyntax
 }
 
@@ -2383,9 +2146,10 @@ fn type_declaration_fields(state: &mut ParseState) -> Option<Vec<Declaration>> {
     loop {
         while consume_named(state, "tkNewLine") || consume_named(state, "tkColon") {}
         if at_named(state, "tkEND")
-            && state.tokens.get(state.at + 1).is_some_and(
-                |token| matches!(token.kind, TokenKind::Reserved(id) if id == named("tkTYPE")),
-            )
+            && state
+                .tokens
+                .get(state.at + 1)
+                .is_some_and(|token| matches!(token.kind, TokenKind::Reserved(id) if id == named("tkTYPE")))
         {
             state.at += 2;
             return Some(fields);
@@ -2435,7 +2199,10 @@ fn type_declaration_fields(state: &mut ParseState) -> Option<Vec<Declaration>> {
     }
 }
 
-fn if_statement(_engine: &ParserEngine, state: &mut ParseState) -> ParseResult {
+fn if_statement(
+    _engine: &ParserEngine,
+    state: &mut ParseState,
+) -> ParseResult {
     let Some(condition) = state.expressions.pop() else {
         return ParseResult::BadSyntax;
     };
@@ -2449,7 +2216,11 @@ fn if_statement(_engine: &ParserEngine, state: &mut ParseState) -> ParseResult {
     finish_if_statement(state, condition, keyword_span)
 }
 
-fn finish_if_statement(state: &mut ParseState, condition: Expr, keyword_span: Span) -> ParseResult {
+fn finish_if_statement(
+    state: &mut ParseState,
+    condition: Expr,
+    keyword_span: Span,
+) -> ParseResult {
     if consume_named(state, "tkNewLine") {
         return block_if_statement(state, condition, keyword_span);
     }
@@ -2464,22 +2235,9 @@ fn finish_if_statement(state: &mut ParseState, condition: Expr, keyword_span: Sp
         };
         else_branch = parsed;
     }
-    let end = else_branch
-        .last()
-        .or_else(|| then_branch.last())
-        .map(statement_end)
-        .unwrap_or(condition.span().end);
-    let span = Span {
-        line: condition.span().line,
-        start: keyword_span.start,
-        end,
-    };
-    state.statements.push(Statement::If {
-        condition,
-        then_branch,
-        else_branch,
-        span,
-    });
+    let end = else_branch.last().or_else(|| then_branch.last()).map(statement_end).unwrap_or(condition.span().end);
+    let span = Span { line: condition.span().line, start: keyword_span.start, end };
+    state.statements.push(Statement::If { condition, then_branch, else_branch, span });
     ParseResult::GoodSyntax
 }
 
@@ -2492,7 +2250,11 @@ fn single_line_if_branch(
         let before = state.statements.len();
         // A line number where a branch starts is a GOTO to it, not a label.
         let number = match state.token() {
-            Some(Token { kind: TokenKind::Integer(value, None), span }) if branch.is_empty() && (0..=65_529).contains(value) => Some((value.to_string(), *span)),
+            Some(Token { kind: TokenKind::Integer(value, None), span })
+                if branch.is_empty() && (0..=65_529).contains(value) =>
+            {
+                Some((value.to_string(), *span))
+            }
             _ => None,
         };
         if let Some((label, span)) = number {
@@ -2507,18 +2269,14 @@ fn single_line_if_branch(
         }
         branch.append(&mut parsed);
 
-        if state.at >= state.tokens.len()
-            || at_named(state, "tkNewLine")
-            || (stop_at_else && at_named(state, "tkELSE"))
+        if state.at >= state.tokens.len() || at_named(state, "tkNewLine") || (stop_at_else && at_named(state, "tkELSE"))
         {
             break;
         }
         if !consume_named(state, "tkColon") {
             return Err(ParseResult::BadSyntax);
         }
-        if state.at >= state.tokens.len()
-            || at_named(state, "tkNewLine")
-            || (stop_at_else && at_named(state, "tkELSE"))
+        if state.at >= state.tokens.len() || at_named(state, "tkNewLine") || (stop_at_else && at_named(state, "tkELSE"))
         {
             break;
         }
@@ -2526,7 +2284,11 @@ fn single_line_if_branch(
     Ok(branch)
 }
 
-fn block_if_statement(state: &mut ParseState, condition: Expr, span: Span) -> ParseResult {
+fn block_if_statement(
+    state: &mut ParseState,
+    condition: Expr,
+    span: Span,
+) -> ParseResult {
     let mut then_branch = Vec::new();
     let mut else_branch = Vec::new();
     let mut in_else = false;
@@ -2553,8 +2315,7 @@ fn block_if_statement(state: &mut ParseState, condition: Expr, span: Span) -> Pa
                 return ParseResult::BadSyntax;
             }
             let before = state.statements.len();
-            if finish_if_statement(state, nested_condition, else_if_span) != ParseResult::GoodSyntax
-            {
+            if finish_if_statement(state, nested_condition, else_if_span) != ParseResult::GoodSyntax {
                 return ParseResult::BadSyntax;
             }
             let mut nested = state.statements.split_off(before);
@@ -2562,18 +2323,14 @@ fn block_if_statement(state: &mut ParseState, condition: Expr, span: Span) -> Pa
                 return ParseResult::BadSyntax;
             }
             else_branch.push(nested.remove(0));
-            state.statements.push(Statement::If {
-                condition,
-                then_branch,
-                else_branch,
-                span,
-            });
+            state.statements.push(Statement::If { condition, then_branch, else_branch, span });
             return ParseResult::GoodSyntax;
         }
         if at_named(state, "tkEND")
-            && state.tokens.get(state.at + 1).is_some_and(
-                |token| matches!(token.kind, TokenKind::Reserved(id) if id == named("tkIF")),
-            )
+            && state
+                .tokens
+                .get(state.at + 1)
+                .is_some_and(|token| matches!(token.kind, TokenKind::Reserved(id) if id == named("tkIF")))
         {
             state.at += 2;
             break;
@@ -2594,19 +2351,11 @@ fn block_if_statement(state: &mut ParseState, condition: Expr, span: Span) -> Pa
         } else {
             then_branch.append(&mut parsed);
         }
-        if state.at < state.tokens.len()
-            && !at_named(state, "tkNewLine")
-            && !at_named(state, "tkColon")
-        {
+        if state.at < state.tokens.len() && !at_named(state, "tkNewLine") && !at_named(state, "tkColon") {
             return ParseResult::BadSyntax;
         }
     }
-    state.statements.push(Statement::If {
-        condition,
-        then_branch,
-        else_branch,
-        span,
-    });
+    state.statements.push(Statement::If { condition, then_branch, else_branch, span });
     ParseResult::GoodSyntax
 }
 
@@ -2632,35 +2381,15 @@ fn assignable(state: &mut ParseState) -> Result<Expr, ParseResult> {
                 return Err(ParseResult::BadSyntax);
             };
             state.at += 1;
-            let span = Span {
-                line: value.span().line,
-                start: value.span().start,
-                end: field.span.end,
-            };
-            value = Expr::Field {
-                base: Box::new(value),
-                name,
-                span,
-            };
+            let span = Span { line: value.span().line, start: value.span().start, end: field.span.end };
+            value = Expr::Field { base: Box::new(value), name, span };
         } else if consume_named(state, "tkLParen") {
             let arguments = expression_list(state)?;
             let end = previous_end(state);
-            let span = Span {
-                line: value.span().line,
-                start: value.span().start,
-                end,
-            };
+            let span = Span { line: value.span().line, start: value.span().start, end };
             value = match value {
-                Expr::Name(name, _) => Expr::Apply {
-                    name,
-                    arguments,
-                    span,
-                },
-                base => Expr::Index {
-                    base: Box::new(base),
-                    indices: arguments,
-                    span,
-                },
+                Expr::Name(name, _) => Expr::Apply { name, arguments, span },
+                base => Expr::Index { base: Box::new(base), indices: arguments, span },
             };
         } else {
             break;
@@ -2669,31 +2398,23 @@ fn assignable(state: &mut ParseState) -> Result<Expr, ParseResult> {
     Ok(value)
 }
 
-fn expression(state: &mut ParseState, minimum: u8) -> Result<Expr, ParseResult> {
+fn expression(
+    state: &mut ParseState,
+    minimum: u8,
+) -> Result<Expr, ParseResult> {
     let mut left = if let Some(op) = unary(state) {
         let start = state.tokens[state.at - 1].span;
         let operand = expression(state, 80)?;
-        let span = Span {
-            line: start.line,
-            start: start.start,
-            end: operand.span().end,
-        };
-        Expr::Unary {
-            op,
-            operand: Box::new(operand),
-            span,
-        }
+        let span = Span { line: start.line, start: start.start, end: operand.span().end };
+        Expr::Unary { op, operand: Box::new(operand), span }
     } else {
         primary(state)?
     };
     // Whether this loop built `left` from a comparison, which another
     // comparison then chains rather than compares.
     let mut chained = false;
-    let span_of = |left: &Expr, right: &Expr| Span {
-        line: left.span().line,
-        start: left.span().start,
-        end: right.span().end,
-    };
+    let span_of =
+        |left: &Expr, right: &Expr| Span { line: left.span().line, start: left.span().start, end: right.span().end };
     loop {
         if let Some(negated) = in_operator(state) {
             if COMPARISON_BINDING < minimum {
@@ -2703,12 +2424,7 @@ fn expression(state: &mut ParseState, minimum: u8) -> Result<Expr, ParseResult> 
             let haystack = haystack(state)?;
             let end = previous_end(state);
             let start = left.span();
-            left = Expr::In {
-                needle: Box::new(left),
-                haystack,
-                negated,
-                span: Span { end, ..start },
-            };
+            left = Expr::In { needle: Box::new(left), haystack, negated, span: Span { end, ..start } };
             chained = false;
             continue;
         }
@@ -2723,26 +2439,16 @@ fn expression(state: &mut ParseState, minimum: u8) -> Result<Expr, ParseResult> 
         let span = span_of(&left, &right);
         let comparison = left_binding == COMPARISON_BINDING;
         left = match left {
-            Expr::Binary {
-                op: first_op,
-                left: first,
-                right: middle,
-                ..
-            } if chained && comparison && state.python_expressions => Expr::Chain {
-                first,
-                rest: vec![(first_op, *middle), (op, right)],
-                span,
-            },
+            Expr::Binary { op: first_op, left: first, right: middle, .. }
+                if chained && comparison && state.python_expressions =>
+            {
+                Expr::Chain { first, rest: vec![(first_op, *middle), (op, right)], span }
+            }
             Expr::Chain { first, mut rest, .. } if chained && comparison => {
                 rest.push((op, right));
                 Expr::Chain { first, rest, span }
             }
-            left => Expr::Binary {
-                op,
-                left: Box::new(left),
-                right: Box::new(right),
-                span,
-            },
+            left => Expr::Binary { op, left: Box::new(left), right: Box::new(right), span },
         };
         chained = comparison;
     }
@@ -2802,10 +2508,7 @@ fn haystack(state: &mut ParseState) -> Result<Haystack, ParseResult> {
         }
         state.at = start;
     }
-    Ok(Haystack::Container(Box::new(expression(
-        state,
-        COMPARISON_BINDING + 1,
-    )?)))
+    Ok(Haystack::Container(Box::new(expression(state, COMPARISON_BINDING + 1)?)))
 }
 
 fn primary(state: &mut ParseState) -> Result<Expr, ParseResult> {
@@ -2815,31 +2518,15 @@ fn primary(state: &mut ParseState) -> Result<Expr, ParseResult> {
     state.at += 1;
     match token.kind {
         TokenKind::Integer(value, suffix) => Ok(Expr::Literal(
-            Literal::Integer(
-                value,
-                if suffix == Some('&') {
-                    TypeName::Long
-                } else {
-                    TypeName::Integer
-                },
-            ),
+            Literal::Integer(value, if suffix == Some('&') { TypeName::Long } else { TypeName::Integer }),
             token.span,
         )),
         TokenKind::Real(value, suffix) => Ok(Expr::Literal(
-            Literal::Real(
-                value,
-                if suffix == Some('#') {
-                    TypeName::Double
-                } else {
-                    TypeName::Single
-                },
-            ),
+            Literal::Real(value, if suffix == Some('#') { TypeName::Double } else { TypeName::Single }),
             token.span,
         )),
         TokenKind::String(value) => Ok(Expr::Literal(Literal::String(value), token.span)),
-        TokenKind::FormatString(segments) => {
-            format_string(&segments, token.span, state.python_expressions)
-        }
+        TokenKind::FormatString(segments) => format_string(&segments, token.span, state.python_expressions),
         TokenKind::Identifier(name) => name_or_apply(state, name, token.span),
         TokenKind::Reserved(id) if id == named("tkLParen") => {
             let value = expression(state, 0)?;
@@ -2848,35 +2535,21 @@ fn primary(state: &mut ParseState) -> Result<Expr, ParseResult> {
             }
             // Grouping only changes meaning around a reference.
             Ok(match value {
-                Expr::Name(..) | Expr::Apply { .. } | Expr::Index { .. } | Expr::Field { .. } => {
-                    Expr::Unary {
-                        op: Unary::Grouped,
-                        span: Span {
-                            line: token.span.line,
-                            start: token.span.start,
-                            end: previous_end(state),
-                        },
-                        operand: Box::new(value),
-                    }
-                }
+                Expr::Name(..) | Expr::Apply { .. } | Expr::Index { .. } | Expr::Field { .. } => Expr::Unary {
+                    op: Unary::Grouped,
+                    span: Span { line: token.span.line, start: token.span.start, end: previous_end(state) },
+                    operand: Box::new(value),
+                },
                 value => value,
             })
         }
-        TokenKind::Reserved(id)
-            if tables::T_FUNC_DISPATCH
-                .iter()
-                .any(|(function, _)| *function == id) =>
-        {
-            let name = tables::token_spelling(id)
-                .expect("function token has spelling")
-                .to_ascii_uppercase();
+        TokenKind::Reserved(id) if tables::T_FUNC_DISPATCH.iter().any(|(function, _)| *function == id) => {
+            let name = tables::token_spelling(id).expect("function token has spelling").to_ascii_uppercase();
             name_or_apply(state, name, token.span)
         }
-        TokenKind::Reserved(id) if contextual_reserved_name(id).is_some() => name_or_apply(
-            state,
-            contextual_reserved_name(id).expect("guard checked name"),
-            token.span,
-        ),
+        TokenKind::Reserved(id) if contextual_reserved_name(id).is_some() => {
+            name_or_apply(state, contextual_reserved_name(id).expect("guard checked name"), token.span)
+        }
         _ => {
             state.at -= 1;
             Err(ParseResult::NotFound)
@@ -2884,7 +2557,11 @@ fn primary(state: &mut ParseState) -> Result<Expr, ParseResult> {
     }
 }
 
-fn name_or_apply(state: &mut ParseState, name: String, start: Span) -> Result<Expr, ParseResult> {
+fn name_or_apply(
+    state: &mut ParseState,
+    name: String,
+    start: Span,
+) -> Result<Expr, ParseResult> {
     let mut value = Expr::Name(name, start);
     loop {
         if matches!(
@@ -2899,52 +2576,22 @@ fn name_or_apply(state: &mut ParseState, name: String, start: Span) -> Result<Ex
                 return Err(ParseResult::BadSyntax);
             };
             state.at += 1;
-            let span = Span {
-                line: value.span().line,
-                start: value.span().start,
-                end: field.span.end,
-            };
-            value = Expr::Field {
-                base: Box::new(value),
-                name,
-                span,
-            };
+            let span = Span { line: value.span().line, start: value.span().start, end: field.span.end };
+            value = Expr::Field { base: Box::new(value), name, span };
         } else if consume_named(state, "tkLParen") {
             let arguments = match slice_or_arguments(state)? {
                 Ok(arguments) => arguments,
                 Err((start, end, step)) => {
                     state.slices = true;
-                    let span = Span {
-                        line: value.span().line,
-                        start: value.span().start,
-                        end: previous_end(state),
-                    };
-                    value = Expr::Slice {
-                        base: Box::new(value),
-                        start,
-                        end,
-                        step,
-                        span,
-                    };
+                    let span = Span { line: value.span().line, start: value.span().start, end: previous_end(state) };
+                    value = Expr::Slice { base: Box::new(value), start, end, step, span };
                     continue;
                 }
             };
-            let span = Span {
-                line: value.span().line,
-                start: value.span().start,
-                end: previous_end(state),
-            };
+            let span = Span { line: value.span().line, start: value.span().start, end: previous_end(state) };
             value = match value {
-                Expr::Name(name, _) => Expr::Apply {
-                    name,
-                    arguments,
-                    span,
-                },
-                base => Expr::Index {
-                    base: Box::new(base),
-                    indices: arguments,
-                    span,
-                },
+                Expr::Name(name, _) => Expr::Apply { name, arguments, span },
+                base => Expr::Index { base: Box::new(base), indices: arguments, span },
             };
         } else {
             return Ok(value);
@@ -3067,10 +2714,7 @@ fn contextual_name(kind: &TokenKind) -> Option<String> {
 
 fn contextual_reserved_name(id: u16) -> Option<String> {
     let spelling = tables::token_spelling(id)?.to_ascii_uppercase();
-    if !spelling
-        .as_bytes()
-        .first()
-        .is_some_and(u8::is_ascii_alphabetic)
+    if !spelling.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
         || matches!(
             spelling.as_str(),
             "ALIAS"
@@ -3124,28 +2768,29 @@ fn contextual_reserved_name(id: u16) -> Option<String> {
     }
 }
 
-fn at_named(state: &ParseState, name: &str) -> bool {
+fn at_named(
+    state: &ParseState,
+    name: &str,
+) -> bool {
     state.token_id() == Some(named(name))
 }
 
-fn consume_named(state: &mut ParseState, name: &str) -> bool {
+fn consume_named(
+    state: &mut ParseState,
+    name: &str,
+) -> bool {
     state.consume_id(named(name))
 }
 
 fn previous_end(state: &ParseState) -> usize {
-    state
-        .at
-        .checked_sub(1)
-        .and_then(|index| state.tokens.get(index))
-        .map_or(0, |token| token.span.end)
+    state.at.checked_sub(1).and_then(|index| state.tokens.get(index)).map_or(0, |token| token.span.end)
 }
 
 fn statement_end(statement: &Statement) -> usize {
     match statement {
-        Statement::Dim(items)
-        | Statement::Static(items)
-        | Statement::Shared(items)
-        | Statement::Redim(items) => items.last().map_or(0, |item| item.span.end),
+        Statement::Dim(items) | Statement::Static(items) | Statement::Shared(items) | Statement::Redim(items) => {
+            items.last().map_or(0, |item| item.span.end)
+        }
         Statement::Erase(items) => items.last().map_or(0, |item| item.span().end),
         Statement::DefType { span, .. }
         | Statement::TypeDecl { span, .. }
@@ -3180,19 +2825,12 @@ fn statement_end(statement: &Statement) -> usize {
     }
 }
 
-fn error<T>(state: &ParseState, message: &str) -> Result<T, ParseError> {
-    let span = state.token().map_or(
-        Span {
-            line: 1,
-            start: 0,
-            end: 0,
-        },
-        |token| token.span,
-    );
-    Err(ParseError {
-        span,
-        message: message.into(),
-    })
+fn error<T>(
+    state: &ParseState,
+    message: &str,
+) -> Result<T, ParseError> {
+    let span = state.token().map_or(Span { line: 1, start: 0, end: 0 }, |token| token.span);
+    Err(ParseError { span, message: message.into() })
 }
 
 #[cfg(test)]
@@ -3200,17 +2838,15 @@ mod tests {
     use super::*;
     use crate::syntax::{ExitTarget, FileMode, ResumeTarget};
 
-    fn module(source: &str, dialect: Dialect) -> Module {
+    fn module(
+        source: &str,
+        dialect: Dialect,
+    ) -> Module {
         parse_vertical_slice(source, dialect).unwrap().module
     }
 
     fn all_dialects() -> [Dialect; 4] {
-        [
-            Dialect::QBasic11,
-            Dialect::QuickBasic45,
-            Dialect::Pds71,
-            Dialect::VbDos,
-        ]
+        [Dialect::QBasic11, Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos]
     }
 
     fn name(expression: &Expr) -> &str {
@@ -3236,29 +2872,16 @@ mod tests {
 
     #[test]
     fn generated_let_retains_precedence_target_and_action() {
-        let output =
-            parse_vertical_slice("let total& = 2 + 3 * 4\r\n", Dialect::QuickBasic45).unwrap();
+        let output = parse_vertical_slice("let total& = 2 + 3 * 4\r\n", Dialect::QuickBasic45).unwrap();
         let parsed = output.module;
         assert_eq!(parsed.statements.len(), 1);
         let (target, value) = assignment(&parsed.statements[0]);
         assert_eq!(name(target), "TOTAL&");
-        let Expr::Binary {
-            op: Binary::Add,
-            left,
-            right,
-            ..
-        } = value
-        else {
+        let Expr::Binary { op: Binary::Add, left, right, .. } = value else {
             panic!("expected addition, got {value:#?}");
         };
         assert_eq!(integer(left), 2);
-        let Expr::Binary {
-            op: Binary::Multiply,
-            left,
-            right,
-            ..
-        } = &**right
-        else {
+        let Expr::Binary { op: Binary::Multiply, left, right, .. } = &**right else {
             panic!("expected multiply on add right, got {right:#?}");
         };
         assert_eq!((integer(left), integer(right)), (3, 4));
@@ -3270,29 +2893,13 @@ mod tests {
         let parsed = module("answer# = sin(1#) + cos(2#)\r\n", Dialect::QuickBasic45);
         let (target, value) = assignment(&parsed.statements[0]);
         assert_eq!(name(target), "ANSWER#");
-        let Expr::Binary {
-            op: Binary::Add,
-            left,
-            right,
-            ..
-        } = value
-        else {
+        let Expr::Binary { op: Binary::Add, left, right, .. } = value else {
             panic!("expected intrinsic addition, got {value:#?}");
         };
-        let Expr::Apply {
-            name: left_name,
-            arguments: left_args,
-            ..
-        } = &**left
-        else {
+        let Expr::Apply { name: left_name, arguments: left_args, .. } = &**left else {
             panic!("expected sin application, got {left:#?}");
         };
-        let Expr::Apply {
-            name: right_name,
-            arguments: right_args,
-            ..
-        } = &**right
-        else {
+        let Expr::Apply { name: right_name, arguments: right_args, .. } = &**right else {
             panic!("expected cos application, got {right:#?}");
         };
         assert_eq!((left_name.as_str(), right_name.as_str()), ("SIN", "COS"));
@@ -3306,22 +2913,10 @@ mod tests {
             "if leftValue < rightValue then result = leftValue else result = rightValue\r\n",
             Dialect::QuickBasic45,
         );
-        let Statement::If {
-            condition,
-            then_branch,
-            else_branch,
-            ..
-        } = &parsed.statements[0]
-        else {
+        let Statement::If { condition, then_branch, else_branch, .. } = &parsed.statements[0] else {
             panic!("expected if, got {:#?}", parsed.statements[0]);
         };
-        let Expr::Binary {
-            op: Binary::Less,
-            left,
-            right,
-            ..
-        } = condition
-        else {
+        let Expr::Binary { op: Binary::Less, left, right, .. } = condition else {
             panic!("expected comparison, got {condition:#?}");
         };
         assert_eq!((name(left), name(right)), ("LEFTVALUE", "RIGHTVALUE"));
@@ -3341,12 +2936,7 @@ mod tests {
         );
         let parsed = module(source, Dialect::QuickBasic45);
         assert_eq!(parsed.statements.len(), 2);
-        let Statement::If {
-            then_branch,
-            else_branch,
-            ..
-        } = &parsed.statements[0]
-        else {
+        let Statement::If { then_branch, else_branch, .. } = &parsed.statements[0] else {
             panic!("expected block if, got {:#?}", parsed.statements[0]);
         };
         assert_eq!(name(assignment(&then_branch[0]).1), "LEFTVALUE");
@@ -3380,61 +2970,28 @@ mod tests {
     fn generated_implicit_call_keeps_arguments_and_explicitness() {
         let source = "visit firstValue, secondValue + 1\r\n";
         let parsed = module(source, Dialect::QuickBasic45);
-        let Statement::Call {
-            name: call_name,
-            arguments,
-            explicit,
-            ..
-        } = &parsed.statements[0]
-        else {
+        let Statement::Call { name: call_name, arguments, explicit, .. } = &parsed.statements[0] else {
             panic!("expected implicit call, got {:#?}", parsed.statements[0]);
         };
         assert_eq!(call_name, "VISIT");
         assert!(!explicit);
         assert_eq!(name(&arguments[0]), "FIRSTVALUE");
-        assert!(matches!(
-            &arguments[1],
-            Expr::Binary {
-                op: Binary::Add,
-                ..
-            }
-        ));
+        assert!(matches!(&arguments[1], Expr::Binary { op: Binary::Add, .. }));
     }
 
     #[test]
     fn implicit_call_parentheses_group_the_first_argument() {
         // QGL's ENT module stopped at the closing parenthesis and discarded
         // both the following arithmetic and the second argument.
-        let parsed = module(
-            "qglMousePos (screenWidth - 1) * yaw / 360, screenHeight * pitch\r\n",
-            Dialect::VbDos,
-        );
-        let Statement::Call {
-            name,
-            arguments,
-            explicit,
-            ..
-        } = &parsed.statements[0]
-        else {
+        let parsed = module("qglMousePos (screenWidth - 1) * yaw / 360, screenHeight * pitch\r\n", Dialect::VbDos);
+        let Statement::Call { name, arguments, explicit, .. } = &parsed.statements[0] else {
             panic!("expected implicit call, got {:#?}", parsed.statements[0]);
         };
         assert_eq!(name, "QGLMOUSEPOS");
         assert!(!explicit);
         assert_eq!(arguments.len(), 2);
-        assert!(matches!(
-            arguments[0],
-            Expr::Binary {
-                op: Binary::Divide,
-                ..
-            }
-        ));
-        assert!(matches!(
-            arguments[1],
-            Expr::Binary {
-                op: Binary::Multiply,
-                ..
-            }
-        ));
+        assert!(matches!(arguments[0], Expr::Binary { op: Binary::Divide, .. }));
+        assert!(matches!(arguments[1], Expr::Binary { op: Binary::Multiply, .. }));
     }
 
     #[test]
@@ -3468,13 +3025,20 @@ mod tests {
     #[test]
     fn lprint_and_write_are_prints_of_their_own_kind() {
         let kinds = |source: &str| {
-            module(source, Dialect::QuickBasic45).statements.iter().filter_map(|one| match one {
-                Statement::Print { kind, file, items, .. } => Some((*kind, file.is_some(), items.len())),
-                _ => None,
-            }).collect::<Vec<_>>()
+            module(source, Dialect::QuickBasic45)
+                .statements
+                .iter()
+                .filter_map(|one| match one {
+                    Statement::Print { kind, file, items, .. } => Some((*kind, file.is_some(), items.len())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
         };
         assert_eq!(kinds("lprint \"a\"; 5\r\n"), [(PrintKind::Lprint, false, 2)]);
-        assert_eq!(kinds("write 1, \"b\", x\r\nwrite\r\nwrite #2, y\r\n"), [(PrintKind::Write, false, 3), (PrintKind::Write, false, 0), (PrintKind::Write, true, 1)]);
+        assert_eq!(
+            kinds("write 1, \"b\", x\r\nwrite\r\nwrite #2, y\r\n"),
+            [(PrintKind::Write, false, 3), (PrintKind::Write, false, 0), (PrintKind::Write, true, 1)]
+        );
     }
 
     /// `THEN 100` was a label definition, so `IF a THEN 100` with a line 100
@@ -3494,7 +3058,9 @@ mod tests {
     #[test]
     fn a_second_else_of_a_one_line_if_belongs_to_the_outer_if() {
         let parsed = module("if a then if b then x = 1 else x = 2 else x = 3\r\n", Dialect::QuickBasic45);
-        let Statement::If { then_branch, else_branch, .. } = &parsed.statements[0] else { panic!("{:?}", parsed.statements) };
+        let Statement::If { then_branch, else_branch, .. } = &parsed.statements[0] else {
+            panic!("{:?}", parsed.statements)
+        };
         assert!(matches!(&then_branch[..], [Statement::If { else_branch: inner, .. }] if inner.len() == 1));
         assert_eq!(else_branch.len(), 1);
     }
@@ -3516,7 +3082,9 @@ mod tests {
     fn on_goto_and_on_gosub_select_the_nth_label() {
         for (source, gosub) in [("on k goto one, two, three\r\n", false), ("on k gosub one, two, three\r\n", true)] {
             let parsed = module(source, Dialect::QuickBasic45);
-            let Statement::Select { arms, .. } = &parsed.statements[0] else { panic!("{source}: {:?}", parsed.statements[0]) };
+            let Statement::Select { arms, .. } = &parsed.statements[0] else {
+                panic!("{source}: {:?}", parsed.statements[0])
+            };
             let jumps = arms[..3].iter().map(|(_, body)| &body[0]).collect::<Vec<_>>();
             assert_eq!(arms.len(), 3, "{source}: one arm a label");
             for (one, label) in jumps.iter().zip(["ONE", "TWO", "THREE"]) {
@@ -3555,20 +3123,16 @@ mod tests {
             assert_eq!(procedure.kind, ProcedureKind::Sub);
             assert!(procedure.declaration);
             assert!(procedure.parameters[0].segmented);
-            assert_eq!(
-                procedure.parameters[0].declaration.type_name,
-                Some(TypeName::Named("ANY".into()))
-            );
+            assert_eq!(procedure.parameters[0].declaration.type_name, Some(TypeName::Named("ANY".into())));
         }
     }
 
     #[test]
     fn generated_on_local_error_keeps_the_typed_label_for_every_profile() {
         for dialect in all_dialects() {
-            for (source, label) in [
-                ("on local error goto caughtError\r\n", "CAUGHTERROR"),
-                ("on local error goto 100\r\n", "100"),
-            ] {
+            for (source, label) in
+                [("on local error goto caughtError\r\n", "CAUGHTERROR"), ("on local error goto 100\r\n", "100")]
+            {
                 let parsed = module(source, dialect);
                 assert!(
                     matches!(&parsed.statements[0], Statement::OnError { label: actual, local: true, .. } if actual == label),
@@ -3584,20 +3148,10 @@ mod tests {
             module("def seg = varseg(values(1))\r\n", Dialect::QuickBasic45).statements[0],
             Statement::DefSeg { value: Some(_), .. }
         ));
+        assert!(matches!(module("erase cacheList\r\n", Dialect::QuickBasic45).statements[0], Statement::Erase(_)));
         assert!(matches!(
-            module("erase cacheList\r\n", Dialect::QuickBasic45).statements[0],
-            Statement::Erase(_)
-        ));
-        assert!(matches!(
-            module(
-                "open \"ITEM.DAT\" for output as #fileNumber\r\n",
-                Dialect::QuickBasic45
-            )
-            .statements[0],
-            Statement::Open {
-                mode: FileMode::Output,
-                ..
-            }
+            module("open \"ITEM.DAT\" for output as #fileNumber\r\n", Dialect::QuickBasic45).statements[0],
+            Statement::Open { mode: FileMode::Output, .. }
         ));
         assert!(matches!(
             module("close #fileNumber\r\n", Dialect::QuickBasic45).statements[0],
@@ -3608,10 +3162,7 @@ mod tests {
         );
         assert!(matches!(
             module("resume next\r\n", Dialect::QuickBasic45).statements[0],
-            Statement::Resume {
-                target: ResumeTarget::Next,
-                ..
-            }
+            Statement::Resume { target: ResumeTarget::Next, .. }
         ));
         assert!(
             matches!(module("return finished\r\n", Dialect::QuickBasic45).statements[0], Statement::Call { ref name, explicit: false, .. } if name == "RETURN")
@@ -3627,17 +3178,10 @@ mod tests {
             matches!(module("defint a-c, x-z\r\n", Dialect::QuickBasic45).statements[0], Statement::DefType { ref ranges, .. } if ranges == &vec![('A', 'C'), ('X', 'Z')])
         );
         let parsed = module(
-            concat!(
-                "type Vertex\r\n",
-                "x as integer\r\n",
-                "label as string * 12\r\n",
-                "end type\r\n"
-            ),
+            concat!("type Vertex\r\n", "x as integer\r\n", "label as string * 12\r\n", "end type\r\n"),
             Dialect::QuickBasic45,
         );
-        let Statement::TypeDecl { name, fields, .. } = &parsed.statements[0] else {
-            panic!("expected UDT")
-        };
+        let Statement::TypeDecl { name, fields, .. } = &parsed.statements[0] else { panic!("expected UDT") };
         assert_eq!(name, "VERTEX");
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[1].fixed_length.as_ref().map(integer), Some(12));
@@ -3646,35 +3190,18 @@ mod tests {
     #[test]
     fn generated_loop_blocks_collect_bodies_and_conditions() {
         let parsed = module(
-            concat!(
-                "for index = 1 to 4 step 2\r\n",
-                "total = total + index\r\n",
-                "next index\r\n"
-            ),
+            concat!("for index = 1 to 4 step 2\r\n", "total = total + index\r\n", "next index\r\n"),
             Dialect::QuickBasic45,
         );
         assert!(
             matches!(&parsed.statements[0], Statement::For { counter, start, end, step: Some(step), body, .. } if name(counter) == "INDEX" && integer(start) == 1 && integer(end) == 4 && integer(step) == 2 && body.len() == 1)
         );
-        let pre = module(
-            concat!(
-                "do while index < 4\r\n",
-                "index = index + 1\r\n",
-                "loop\r\n"
-            ),
-            Dialect::QuickBasic45,
-        );
+        let pre = module(concat!("do while index < 4\r\n", "index = index + 1\r\n", "loop\r\n"), Dialect::QuickBasic45);
         assert!(
             matches!(&pre.statements[0], Statement::Do { pre: Some((true, _)), post: None, body, .. } if body.len() == 1)
         );
-        let post = module(
-            concat!(
-                "do\r\n",
-                "index = index + 1\r\n",
-                "loop until index = 4\r\n"
-            ),
-            Dialect::QuickBasic45,
-        );
+        let post =
+            module(concat!("do\r\n", "index = index + 1\r\n", "loop until index = 4\r\n"), Dialect::QuickBasic45);
         assert!(
             matches!(&post.statements[0], Statement::Do { pre: None, post: Some((false, _)), body, .. } if body.len() == 1)
         );
@@ -3682,41 +3209,26 @@ mod tests {
 
     #[test]
     fn generated_specialized_statements_remain_distinct_from_runtime_fallbacks() {
-        let while_block = module(
-            concat!("while index < 4\r\n", "index = index + 1\r\n", "wend\r\n"),
-            Dialect::QuickBasic45,
-        );
-        assert!(
-            matches!(&while_block.statements[0], Statement::While { body, .. } if body.len() == 1)
-        );
+        let while_block =
+            module(concat!("while index < 4\r\n", "index = index + 1\r\n", "wend\r\n"), Dialect::QuickBasic45);
+        assert!(matches!(&while_block.statements[0], Statement::While { body, .. } if body.len() == 1));
         assert!(matches!(
             module("seek #fileNumber, 3\r\n", Dialect::QuickBasic45).statements[0],
             Statement::Seek { .. }
         ));
-        for source in [
-            "put #fileNumber, 1, firstValue\r\n",
-            "get #fileNumber, 3, readValue\r\n",
-        ] {
+        for source in ["put #fileNumber, 1, firstValue\r\n", "get #fileNumber, 3, readValue\r\n"] {
             assert!(
-                matches!(
-                    module(source, Dialect::QuickBasic45).statements[0],
-                    Statement::FileTransfer { .. }
-                ),
+                matches!(module(source, Dialect::QuickBasic45).statements[0], Statement::FileTransfer { .. }),
                 "{source:?}"
             );
         }
         assert!(matches!(
-            module(
-                "mid$(dynamicText, 2, 3) = \"XYZ\"\r\n",
-                Dialect::QuickBasic45
-            )
-            .statements[0],
+            module("mid$(dynamicText, 2, 3) = \"XYZ\"\r\n", Dialect::QuickBasic45).statements[0],
             Statement::Assign { .. }
         ));
-        for (source, expected) in [
-            ("lset leftFixed = sourceText\r\n", "LSET"),
-            ("rset rightFixed = sourceText\r\n", "RSET"),
-        ] {
+        for (source, expected) in
+            [("lset leftFixed = sourceText\r\n", "LSET"), ("rset rightFixed = sourceText\r\n", "RSET")]
+        {
             assert!(
                 matches!(module(source, Dialect::QuickBasic45).statements[0], Statement::Call { ref name, explicit: false, .. } if name == expected),
                 "{source:?}"
@@ -3744,13 +3256,7 @@ mod tests {
             "end select\r\n",
         );
         let parsed = module(source, Dialect::QuickBasic45);
-        let Statement::Select {
-            selector,
-            arms,
-            otherwise,
-            ..
-        } = &parsed.statements[0]
-        else {
+        let Statement::Select { selector, arms, otherwise, .. } = &parsed.statements[0] else {
             panic!("expected select")
         };
         assert_eq!(name(selector), "CHOICE");
@@ -3771,22 +3277,9 @@ mod tests {
             "end if\r\n",
         );
         let parsed = module(source, Dialect::QuickBasic45);
-        let Statement::If {
-            then_branch,
-            else_branch,
-            ..
-        } = &parsed.statements[0]
-        else {
-            panic!("expected if")
-        };
-        assert!(matches!(
-            then_branch[0],
-            Statement::DefSeg { value: None, .. }
-        ));
-        assert!(matches!(
-            else_branch[0],
-            Statement::DefSeg { value: None, .. }
-        ));
+        let Statement::If { then_branch, else_branch, .. } = &parsed.statements[0] else { panic!("expected if") };
+        assert!(matches!(then_branch[0], Statement::DefSeg { value: None, .. }));
+        assert!(matches!(else_branch[0], Statement::DefSeg { value: None, .. }));
     }
 
     #[test]
@@ -3800,22 +3293,15 @@ mod tests {
     fn generated_if_span_includes_a_nested_exit_statement() {
         let source = "if index = 3 then exit for\r\n";
         let parsed = module(source, Dialect::QuickBasic45);
-        let Statement::If { then_branch, .. } = &parsed.statements[0] else {
-            panic!("expected if")
-        };
-        assert!(matches!(
-            then_branch[0],
-            Statement::Exit(ExitTarget::For, _)
-        ));
+        let Statement::If { then_branch, .. } = &parsed.statements[0] else { panic!("expected if") };
+        assert!(matches!(then_branch[0], Statement::Exit(ExitTarget::For, _)));
     }
 
     #[test]
     fn generated_dim_preserves_bounds_types_and_shared_action() {
         let source = "dim shared cells(1 to 7, 3) as long, label as string * 12\r\n";
         let parsed = module(source, Dialect::QuickBasic45);
-        let Statement::Dim(declarations) = &parsed.statements[0] else {
-            panic!("expected dim")
-        };
+        let Statement::Dim(declarations) = &parsed.statements[0] else { panic!("expected dim") };
         assert_eq!(declarations.len(), 2);
         assert!(declarations[0].shared && declarations[0].array);
         assert_eq!(declarations[0].bounds.len(), 2);
@@ -3826,12 +3312,7 @@ mod tests {
     fn generated_print_preserves_file_channel_and_item_separators() {
         let source = "print #fileNumber, \"A\"; value\r\n";
         let parsed = module(source, Dialect::QuickBasic45);
-        let Statement::Print {
-            file: Some(_),
-            items,
-            ..
-        } = &parsed.statements[0]
-        else {
+        let Statement::Print { file: Some(_), items, .. } = &parsed.statements[0] else {
             panic!("expected file print")
         };
         assert_eq!(items.len(), 2);
@@ -3841,37 +3322,26 @@ mod tests {
 
     #[test]
     fn generated_actions_are_scoped_to_the_statement_that_emitted_them() {
-        let output = parse_vertical_slice(
-            "dim prior as integer\r\nrandomize 1\r\n",
-            Dialect::QuickBasic45,
-        )
-        .unwrap();
+        let output = parse_vertical_slice("dim prior as integer\r\nrandomize 1\r\n", Dialect::QuickBasic45).unwrap();
         assert!(
             matches!(&output.module.statements[..], [Statement::Dim(_), Statement::Call { name, explicit: false, .. }] if name == "RANDOMIZE")
         );
         assert!(output.actions.contains(&AstAction::Dim));
-        assert!(output
-            .actions
-            .contains(&AstAction::LegacyImplicitCall("RANDOMIZE")));
+        assert!(output.actions.contains(&AstAction::LegacyImplicitCall("RANDOMIZE")));
     }
 
     #[test]
     fn generated_goto_preserves_symbolic_and_numeric_targets() {
         for (source, label) in [("goto handler\r\n", "HANDLER"), ("goto 32000\r\n", "32000")] {
             let output = parse_vertical_slice(source, Dialect::QuickBasic45).unwrap();
-            assert!(
-                matches!(&output.module.statements[0], Statement::Goto(actual, _) if actual == label)
-            );
+            assert!(matches!(&output.module.statements[0], Statement::Goto(actual, _) if actual == label));
             assert!(output.actions.contains(&AstAction::Goto));
         }
     }
 
     #[test]
     fn generated_on_error_distinguishes_disable_zero_from_a_label() {
-        for (source, label) in [
-            ("on error goto handler\r\n", "HANDLER"),
-            ("on error goto 0\r\n", "0"),
-        ] {
+        for (source, label) in [("on error goto handler\r\n", "HANDLER"), ("on error goto 0\r\n", "0")] {
             let parsed = module(source, Dialect::QuickBasic45);
             assert!(
                 matches!(&parsed.statements[0], Statement::OnError { label: actual, local: false, .. } if actual == label)
@@ -3934,10 +3404,7 @@ mod tests {
         );
         let parsed = module(source, Dialect::VbDos);
         assert_eq!(parsed.procedures.len(), 2);
-        assert!(parsed
-            .procedures
-            .iter()
-            .all(|procedure| procedure.result == Some(TypeName::Long)));
+        assert!(parsed.procedures.iter().all(|procedure| procedure.result == Some(TypeName::Long)));
     }
 
     #[test]
@@ -3957,10 +3424,7 @@ mod tests {
             assert_eq!(procedure.result, Some(TypeName::Long));
             assert_eq!(procedure.parameters.len(), 1);
             assert!(procedure.parameters[0].by_value);
-            assert_eq!(
-                procedure.parameters[0].declaration.type_name,
-                Some(TypeName::Long)
-            );
+            assert_eq!(procedure.parameters[0].declaration.type_name, Some(TypeName::Long));
         }
     }
 }

@@ -45,9 +45,14 @@ pub const DICT_RESERVE: &str = "N$DRES";
 /// The OS layer's operation a runtime symbol implements, by its name in the interface, when it is a
 /// file call (`open`, `create`, `read`, `write_file`, `close`) or a console one.
 pub fn os_operation(symbol: &str) -> Option<&'static str> {
-    static INTERFACE: std::sync::LazyLock<llrm_target::os::Interface> = std::sync::LazyLock::new(llrm_target::os::Interface::shipped);
+    static INTERFACE: std::sync::LazyLock<llrm_target::os::Interface> =
+        std::sync::LazyLock::new(llrm_target::os::Interface::shipped);
     let files = ["open", "create", "read", "write_file", "close"];
-    INTERFACE.ops.iter().find(|op| INTERFACE.symbol(op) == symbol && (op.group == "console" || files.contains(&op.name.as_str()))).map(|op| op.name.as_str())
+    INTERFACE
+        .ops
+        .iter()
+        .find(|op| INTERFACE.symbol(op) == symbol && (op.group == "console" || files.contains(&op.name.as_str())))
+        .map(|op| op.name.as_str())
 }
 
 /// The number of the standard handle `name` (`stdin`, `stdout`, `stderr`): the operating system's fact.
@@ -58,7 +63,8 @@ pub fn standard_handle(name: &str) -> usize {
 
 /// The interface's code of the error condition `name`.
 pub fn error_code(name: &str) -> i16 {
-    static INTERFACE: std::sync::LazyLock<llrm_target::os::Interface> = std::sync::LazyLock::new(llrm_target::os::Interface::shipped);
+    static INTERFACE: std::sync::LazyLock<llrm_target::os::Interface> =
+        std::sync::LazyLock::new(llrm_target::os::Interface::shipped);
     i16::try_from(INTERFACE.errors[name]).expect("an error code is an i16")
 }
 
@@ -75,8 +81,21 @@ pub const TERMINATING: [&str; 5] = [ERROR_BOUNDS, ERROR_CONVERT, ERROR_DIVIDE, E
 /// memory the program cannot name: each print of a number, a bool or a
 /// char, a field's format, a newline, and the start of a print to a string.
 pub const RUNTIME_STATE_ONLY: [&str; 15] = [
-    PRINT_I1, PRINT_U1, PRINT_I2, PRINT_U2, PRINT_I4, PRINT_U4, PRINT_R4, PRINT_R8, PRINT_Q2, PRINT_Q4, PRINT_BOOL, PRINT_CHAR, PRINT_NEWLINE,
-    PRINT_FIELD, PRINT_BEGIN,
+    PRINT_I1,
+    PRINT_U1,
+    PRINT_I2,
+    PRINT_U2,
+    PRINT_I4,
+    PRINT_U4,
+    PRINT_R4,
+    PRINT_R8,
+    PRINT_Q2,
+    PRINT_Q4,
+    PRINT_BOOL,
+    PRINT_CHAR,
+    PRINT_NEWLINE,
+    PRINT_FIELD,
+    PRINT_BEGIN,
 ];
 
 /// The routines that only read the memory their arguments point to.

@@ -9,12 +9,19 @@ use llrm_mir::module::{InstId, Module, ValueId};
 use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;
 
-use super::{exact_offsets_given, scoped, _computed, _recurrence_span, Interval, operations_applied, bounded, covering, edge_deltas, dominated_edges, exact_offsets, on_edge, singletons};
+use super::{
+    _computed, _recurrence_span, Interval, bounded, covering, dominated_edges, edge_deltas, exact_offsets,
+    exact_offsets_given, on_edge, operations_applied, scoped, singletons,
+};
 use crate::cfg;
 use crate::memory::{MemRef, Unit};
 use crate::testing::{DOS, block, function, layout, parsed, value};
 
-fn interval(low: i64, high: i64, width: u32) -> Interval {
+fn interval(
+    low: i64,
+    high: i64,
+    width: u32,
+) -> Interval {
     Interval { low: low.into(), high: high.into(), width }
 }
 
@@ -34,16 +41,25 @@ impl Parsed {
         crate::testing::with_registers(Unit::of(&self.module, &self.layout, function(&self.module, "f")))
     }
 
-    fn value(&self, name: &str) -> ValueId {
+    fn value(
+        &self,
+        name: &str,
+    ) -> ValueId {
         value(function(&self.module, "f"), name)
     }
 
-    fn block(&self, name: &str) -> llrm_mir::module::BlockId {
+    fn block(
+        &self,
+        name: &str,
+    ) -> llrm_mir::module::BlockId {
         block(function(&self.module, "f"), name)
     }
 
     /// The instruction defining `%name`.
-    fn made(&self, name: &str) -> InstId {
+    fn made(
+        &self,
+        name: &str,
+    ) -> InstId {
         let f = function(&self.module, "f");
         let wanted = self.value(name);
         f.walk().map(|(_, inst)| inst).find(|&inst| f.instruction(inst).result == Some(wanted)).expect("defined")
@@ -51,7 +67,11 @@ impl Parsed {
 }
 
 /// `%c = icmp <predicate> i<width> %x, <bound>` branching to `%yes` or `%no`.
-fn compare(predicate: &str, width: u32, bound: i64) -> Parsed {
+fn compare(
+    predicate: &str,
+    width: u32,
+    bound: i64,
+) -> Parsed {
     Parsed::new(&format!(
         "define void @f(i{width} %x) {{
 b0:
@@ -207,13 +227,20 @@ b2:
     assert!(!scoped.contains_key(&cfg::id(parsed.block("b2"))));
 }
 
-fn computed(body: &str, name: &str, known: &[(&str, Interval)]) -> Option<Interval> {
+fn computed(
+    body: &str,
+    name: &str,
+    known: &[(&str, Interval)],
+) -> Option<Interval> {
     let parsed = Parsed::new(body);
     let known = known.iter().map(|(name, one)| (parsed.value(name), one.clone())).collect::<IndexMap<_, _>>();
     _computed(&parsed.unit(), parsed.made(name), &known, &IndexMap::default())
 }
 
-fn unary(operation: &str, width: u32) -> String {
+fn unary(
+    operation: &str,
+    width: u32,
+) -> String {
     format!(
         "define void @f(i16 %x) {{
 b0:
@@ -241,7 +268,10 @@ fn test_unit_steps_require_nonwrapping_intervals() {
 #[test]
 fn test_signed_widening_keeps_the_numeric_range() {
     for (low, high) in [(1, 20), (-32768, -1), (-10, 10)] {
-        assert_eq!(computed(&unary("sext i16 %x to i32", 32), "y", &[("x", interval(low, high, 16))]), Some(interval(low, high, 32)));
+        assert_eq!(
+            computed(&unary("sext i16 %x to i32", 32), "y", &[("x", interval(low, high, 16))]),
+            Some(interval(low, high, 32))
+        );
     }
 }
 
@@ -250,7 +280,10 @@ fn test_signed_widening_keeps_the_numeric_range() {
 #[test]
 fn test_zero_extending_a_non_negative_interval_keeps_the_numeric_range() {
     for (low, high) in [(0, 3), (1, 20), (0, 32767)] {
-        assert_eq!(computed(&unary("zext i16 %x to i32", 32), "y", &[("x", interval(low, high, 16))]), Some(interval(low, high, 32)));
+        assert_eq!(
+            computed(&unary("zext i16 %x to i32", 32), "y", &[("x", interval(low, high, 16))]),
+            Some(interval(low, high, 32))
+        );
     }
 }
 
@@ -293,7 +326,11 @@ fn test_shift_ranges_refuse_wraparound() {
         (0, 5, 32, None),
     ] {
         let operation = format!("shl i16 %x, {count}");
-        assert_eq!(computed(&unary(&operation, 16), "y", &[("x", interval(low, high, 16))]), expected, "{low} {high} {count}");
+        assert_eq!(
+            computed(&unary(&operation, 16), "y", &[("x", interval(low, high, 16))]),
+            expected,
+            "{low} {high} {count}"
+        );
     }
 }
 
@@ -306,7 +343,10 @@ b0:
 }
 ";
     assert_eq!(computed(body, "y", &[("x", interval(0, 20000, 16)), ("z", interval(0, 20000, 16))]), None);
-    assert_eq!(computed(body, "y", &[("x", interval(0, 10, 16)), ("z", interval(-5, 5, 16))]), Some(interval(-5, 15, 16)));
+    assert_eq!(
+        computed(body, "y", &[("x", interval(0, 10, 16)), ("z", interval(-5, 5, 16))]),
+        Some(interval(-5, 15, 16))
+    );
     assert_eq!(computed(body, "y", &[("x", interval(0, 10, 16))]), None);
 }
 
@@ -393,7 +433,10 @@ fn guarded_loop(header: &str) -> Parsed {
     guarded_loop_of(16, header)
 }
 
-fn guarded_loop_of(width: u32, header: &str) -> Parsed {
+fn guarded_loop_of(
+    width: u32,
+    header: &str,
+) -> Parsed {
     Parsed::new(&format!(
         "define void @f() {{
 b0:
@@ -464,7 +507,8 @@ fn a_value_computed_from_an_i8_counter_is_bounded() {
 #[test]
 fn test_a_posttested_header_knows_its_counter() {
     use crate::induction::tests::{Shape, looped, shaped};
-    let rotated = looped(Some(0), Some(9), llrm_mir::opcode::IntPredicate::Slt, 1, Shape { split: true, ..shaped("post", 8) });
+    let rotated =
+        looped(Some(0), Some(9), llrm_mir::opcode::IntPredicate::Slt, 1, Shape { split: true, ..shaped("post", 8) });
     let known = bounded(&rotated.unit()).unwrap();
     let header = cfg::id(block(rotated.function(), "b1"));
     assert_eq!(known.get(&header).and_then(|facts| facts.get(&rotated.value("i"))), Some(&interval(0, 9, 8)));
@@ -473,7 +517,10 @@ fn test_a_posttested_header_knows_its_counter() {
 /// `text` with every fact `facts` states at a block checked where the
 /// block's `;check` line is, if its value is defined there: `@check`
 /// calls `@f` and answers how many checks failed.
-fn checked(text: &str, facts: impl Fn(&Parsed) -> super::Facts) -> (String, usize) {
+fn checked(
+    text: &str,
+    facts: impl Fn(&Parsed) -> super::Facts,
+) -> (String, usize) {
     let parsed = Parsed::new(text);
     let known = facts(&parsed);
     let f = function(&parsed.module, "f");
@@ -492,7 +539,10 @@ fn checked(text: &str, facts: impl Fn(&Parsed) -> super::Facts) -> (String, usiz
         let at = cfg::id(parsed.block(&label));
         for (value, fact) in known.get(&at).into_iter().flatten() {
             let data = f.value(*value);
-            let (Some(name), Some(width)) = (&data.name, parsed.unit().int_bits(llrm_mir::Operand::Value(*value))) else { continue };
+            let (Some(name), Some(width)) = (&data.name, parsed.unit().int_bits(llrm_mir::Operand::Value(*value)))
+            else {
+                continue;
+            };
             let placed = match data.def {
                 llrm_mir::ValueDef::Instruction(inst) => cfg::id(f.parent(inst).unwrap()),
                 llrm_mir::ValueDef::Argument(_) => cfg::id(f.entry().unwrap()),
@@ -519,9 +569,19 @@ fn checked(text: &str, facts: impl Fn(&Parsed) -> super::Facts) -> (String, usiz
 }
 
 /// Runs `@f(n)` of `checked`'s text: how many checks failed.
-fn broken(text: &str, n: i64) -> u128 {
-    let module = parsed(&format!("{DOS}@bad = global i16 0\n\n{text}\ndefine i16 @check(i16 %n) {{\nb0:\n  call void @f(i16 %n)\n  %r = load i16, ptr @bad\n  ret i16 %r\n}}\n"));
-    match llrm_mir::interpret::run(&module, "check", vec![llrm_mir::interpret::Val::Int { bits: n as u128 & 0xFFFF, width: 16 }], 1_000_000) {
+fn broken(
+    text: &str,
+    n: i64,
+) -> u128 {
+    let module = parsed(&format!(
+        "{DOS}@bad = global i16 0\n\n{text}\ndefine i16 @check(i16 %n) {{\nb0:\n  call void @f(i16 %n)\n  %r = load i16, ptr @bad\n  ret i16 %r\n}}\n"
+    ));
+    match llrm_mir::interpret::run(
+        &module,
+        "check",
+        vec![llrm_mir::interpret::Val::Int { bits: n as u128 & 0xFFFF, width: 16 }],
+        1_000_000,
+    ) {
         Ok(llrm_mir::interpret::Val::Int { bits, .. }) => bits,
         other => panic!("{other:?}"),
     }
@@ -672,7 +732,10 @@ b4:
 }
 
 /// An access into a global indexed by `index`, computed as `offset` from counter `%i` (0 ..= 49).
-fn indexed(offset: &str, gep: &str) -> Parsed {
+fn indexed(
+    offset: &str,
+    gep: &str,
+) -> Parsed {
     Parsed::new(&format!(
         "@a = global [100 x i8] zeroinitializer
 
@@ -715,9 +778,9 @@ fn an_offset_is_exact_only_when_every_partial_sum_is_a_nonnegative_index() {
     }
 }
 
-/// Instruction selection solved the scoped bounds twice for a function with dword-indexed accesses: once inside `exact_offsets` and
-/// once for its own use (80% of isel for a 16-deep nest, 160 M). Given the facts, `exact_offsets_given` solves no loop again and
-/// says what `exact_offsets` does.
+/// Instruction selection solved the scoped bounds twice for a function with dword-indexed accesses: once inside
+/// `exact_offsets` and once for its own use (80% of isel for a 16-deep nest, 160 M). Given the facts,
+/// `exact_offsets_given` solves no loop again and says what `exact_offsets` does.
 #[test]
 fn the_exact_offsets_given_the_scoped_facts_solve_nothing_again() {
     let parsed = indexed("mul i16 %i, 2", "getelementptr inbounds i8, ptr @a, i16 %off");
@@ -796,9 +859,17 @@ b2:
     let unit = parsed.unit();
     for scoped in [dominated_edges(&unit).unwrap(), bounded(&unit).unwrap(), super::scoped(&unit).unwrap()] {
         for name in ["b1", "b2"] {
-            assert_eq!(scoped[&cfg::id(parsed.block(name))].get(&parsed.value("x")), Some(&interval(0, 9, 16)), "{name}");
+            assert_eq!(
+                scoped[&cfg::id(parsed.block(name))].get(&parsed.value("x")),
+                Some(&interval(0, 9, 16)),
+                "{name}"
+            );
         }
-        assert_eq!(scoped.get(&cfg::id(parsed.block("b0"))).and_then(|at| at.get(&parsed.value("x"))), None, "not in its own block");
+        assert_eq!(
+            scoped.get(&cfg::id(parsed.block("b0"))).and_then(|at| at.get(&parsed.value("x"))),
+            None,
+            "not in its own block"
+        );
     }
 }
 
@@ -838,7 +909,10 @@ out:
 /// that follows it: HIR through its lowering to the reader, no hand-written MIR.
 #[test]
 fn an_assume_a_frontend_states_bounds_a_value_below_it() {
-    use llrm_hir::model::{Block, Dialect, Function, Instruction, Module as HirModule, Op, Operand as HirOperand, Program, RuntimeProfile, Terminator, TerminatorKind, Type, TypeKind, Value};
+    use llrm_hir::model::{
+        Block, Dialect, Function, Instruction, Module as HirModule, Op, Operand as HirOperand, Program, RuntimeProfile,
+        Terminator, TerminatorKind, Type, TypeKind, Value,
+    };
     let mut integer = Type::new(1, "integer", TypeKind::Integer, 2);
     integer.signed = Some(true);
     let types = vec![Type::new(0, "void", TypeKind::Void, 0), integer];
@@ -847,10 +921,12 @@ fn an_assume_a_frontend_states_bounds_a_value_below_it() {
     let less = Instruction::new(1, Op::Lt, vec![2], vec![HirOperand::value_ref(1), HirOperand::constant(1, 10)]);
     let assume = Instruction::new(2, Op::Assume, vec![], vec![HirOperand::value_ref(2)]);
     let first = Block::new(1, vec![less, assume], Terminator::new(TerminatorKind::Jump, Vec::new(), vec![2]));
-    let second = Block::new(2, Vec::new(), Terminator::new(TerminatorKind::Return, vec![HirOperand::value_ref(1)], Vec::new()));
+    let second =
+        Block::new(2, Vec::new(), Terminator::new(TerminatorKind::Return, vec![HirOperand::value_ref(1)], Vec::new()));
     let mut function = Function::new(1, "F%", 1, values, Vec::new(), vec![first, second], 1);
     function.parameters = vec![1];
-    let program = Program::new(Dialect::Qb45, RuntimeProfile::Qb45, vec![HirModule::new(1, "m", types, vec![function])]);
+    let program =
+        Program::new(Dialect::Qb45, RuntimeProfile::Qb45, vec![HirModule::new(1, "m", types, vec![function])]);
     let emitted = llrm_hir::mir::emit(&program, &llrm_x86_m16::layout()).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     // The assumption is made on the comparison's own `i1`, before any pass.
@@ -903,19 +979,27 @@ b2:
 #[test]
 fn a_range_a_frontend_states_of_an_instruction_bounds_its_result() {
     use llrm_hir::facts::{Builder, Subject};
-    use llrm_hir::model::{Block, Dialect, Function, Instruction, Module as HirModule, Op, Operand as HirOperand, Program, RuntimeProfile, Terminator, TerminatorKind, Type, TypeKind, Value};
+    use llrm_hir::model::{
+        Block, Dialect, Function, Instruction, Module as HirModule, Op, Operand as HirOperand, Program, RuntimeProfile,
+        Terminator, TerminatorKind, Type, TypeKind, Value,
+    };
     let mut integer = Type::new(1, "integer", TypeKind::Integer, 2);
     integer.signed = Some(true);
     let types = vec![Type::new(0, "void", TypeKind::Void, 0), integer];
     let values = vec![Value { id: 1, r#type: 1 }, Value { id: 2, r#type: 1 }];
     let sum = Instruction::new(1, Op::Add, vec![2], vec![HirOperand::value_ref(1), HirOperand::value_ref(1)]);
     let first = Block::new(1, vec![sum], Terminator::new(TerminatorKind::Jump, Vec::new(), vec![2]));
-    let second = Block::new(2, Vec::new(), Terminator::new(TerminatorKind::Return, vec![HirOperand::value_ref(2)], Vec::new()));
+    let second =
+        Block::new(2, Vec::new(), Terminator::new(TerminatorKind::Return, vec![HirOperand::value_ref(2)], Vec::new()));
     let mut function = Function::new(1, "F%", 1, values, Vec::new(), vec![first, second], 1);
     function.parameters = vec![1];
-    let mut program = Program::new(Dialect::Qb45, RuntimeProfile::Qb45, vec![HirModule::new(1, "m", types, vec![function])]);
+    let mut program =
+        Program::new(Dialect::Qb45, RuntimeProfile::Qb45, vec![HirModule::new(1, "m", types, vec![function])]);
     let mut facts = Builder::new("test");
-    facts.state(Subject::Instruction { function: 1, id: 1 }, llrm_hir::facts::Fact::Range(llrm_mir::facts::Bounds { lo: 0, hi: 7 }));
+    facts.state(
+        Subject::Instruction { function: 1, id: 1 },
+        llrm_hir::facts::Fact::Range(llrm_mir::facts::Bounds { lo: 0, hi: 7 }),
+    );
     program.modules[0].facts = facts.finish();
     let emitted = llrm_hir::mir::emit(&program, &llrm_x86_m16::layout()).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
@@ -945,7 +1029,10 @@ b0:
 #[test]
 fn a_fixed_product_of_bounded_operands_is_bounded_with_its_floor() {
     let body = fixed("call i32 @llvm.smul.fix.i32(i32 %x, i32 %z, i32 1)");
-    assert_eq!(computed(&body, "y", &[("x", interval(-3, 2, 32)), ("z", interval(1, 1, 32))]), Some(interval(-2, 1, 32)));
+    assert_eq!(
+        computed(&body, "y", &[("x", interval(-3, 2, 32)), ("z", interval(1, 1, 32))]),
+        Some(interval(-2, 1, 32))
+    );
 }
 
 /// The wide product wraps when stored: 2^20 * 2^20 >> 8 is 2^32.
@@ -986,7 +1073,10 @@ no:
     ))
 }
 
-fn after_no(parsed: &Parsed, known: &[(&str, Interval)]) -> Option<IndexMap<ValueId, Interval>> {
+fn after_no(
+    parsed: &Parsed,
+    known: &[(&str, Interval)],
+) -> Option<IndexMap<ValueId, Interval>> {
     let known = known.iter().map(|(name, one)| (parsed.value(name), one.clone())).collect::<IndexMap<_, _>>();
     on_edge(&parsed.unit(), parsed.block("b0"), parsed.block("no"), &known, None).unwrap()
 }
@@ -1026,7 +1116,10 @@ fn a_square_of_an_unbounded_value_bounds_nothing() {
 
 /// Mandelbrot's escape loop: `x' = xx - yy + cx`, `y' = (2xy >> 8) + cy`, left once `xx + yy > 1024`.
 /// `x_next` is what the latch hands back; `start` what the loop starts from.
-fn escape(x_next: &str, start: &str) -> Parsed {
+fn escape(
+    x_next: &str,
+    start: &str,
+) -> Parsed {
     Parsed::new(&format!(
         "declare i32 @llvm.smul.fix.i32(i32, i32, i32 immarg)
 
@@ -1106,7 +1199,10 @@ fn an_entry_outside_the_box_gets_no_box() {
     let parsed = escape("%xn = add i32 %d, %cx", "1073741824");
     let known = bounded(&parsed.unit()).unwrap();
     let at = known.get(&cfg::id(parsed.block("b2")));
-    assert!(at.is_none_or(|at| at.get(&parsed.value("x")).is_none_or(|x| x.high >= BigInt::from(1_u64 << 30))), "{at:?}");
+    assert!(
+        at.is_none_or(|at| at.get(&parsed.value("x")).is_none_or(|x| x.high >= BigInt::from(1_u64 << 30))),
+        "{at:?}"
+    );
 }
 
 /// A range scope narrowed by each edge above a block copied every interval it knew once per edge
@@ -1156,9 +1252,9 @@ fn test_the_edges_above_a_loop_are_narrowed_once_not_per_block_scoped() {
     assert!(narrowed <= 5_000, "{narrowed} edges narrowed for {loops} sequential loops");
 }
 
-/// Each block of a loop swept every operation of the loop to a fixpoint to give its facts: 40 blocks of one operation each worked
-/// 6,560 out (x_switch: 50 Minstr, 12% of the compile, in `bounded`). A block's facts are found from the loop's own swept ones,
-/// working out only what its edges reach: 3,322.
+/// Each block of a loop swept every operation of the loop to a fixpoint to give its facts: 40 blocks of one operation
+/// each worked 6,560 out (x_switch: 50 Minstr, 12% of the compile, in `bounded`). A block's facts are found from the
+/// loop's own swept ones, working out only what its edges reach: 3,322.
 #[test]
 fn test_a_block_works_out_only_the_operations_its_edges_reach() {
     // The check works every sweep out again to compare, and is counted.
@@ -1167,11 +1263,16 @@ fn test_a_block_works_out_only_the_operations_its_edges_reach() {
     }
     let blocks = 40;
     let params: Vec<String> = (0..blocks).map(|at| format!("i32 %v{at}")).collect();
-    let mut text = format!("define i32 @f(i32 %n, {}) {{\nb0:\n  br label %h\n\nh:\n  %i = phi i32 [ 0, %b0 ], [ %in, %latch ]\n  %c = icmp slt i32 %i, %n\n  br i1 %c, label %s0, label %end\n\n", params.join(", "));
+    let mut text = format!(
+        "define i32 @f(i32 %n, {}) {{\nb0:\n  br label %h\n\nh:\n  %i = phi i32 [ 0, %b0 ], [ %in, %latch ]\n  %c = icmp slt i32 %i, %n\n  br i1 %c, label %s0, label %end\n\n",
+        params.join(", ")
+    );
     for at in 0..blocks {
         let next = if at + 1 == blocks { "latch".to_owned() } else { format!("s{}", at + 1) };
         // Each block's test is of an argument of its own: its edge reaches one operation of the loop's forty.
-        text += &format!("s{at}:\n  %a{at} = add nsw i32 %v{at}, 1\n  %t{at} = icmp slt i32 %v{at}, 100\n  br i1 %t{at}, label %{next}, label %x{at}\n\nx{at}:\n  br label %latch\n\n");
+        text += &format!(
+            "s{at}:\n  %a{at} = add nsw i32 %v{at}, 1\n  %t{at} = icmp slt i32 %v{at}, 100\n  br i1 %t{at}, label %{next}, label %x{at}\n\nx{at}:\n  br label %latch\n\n"
+        );
     }
     text += "latch:\n  %in = add nsw i32 %i, 1\n  br label %h\n\nend:\n  ret i32 %i\n}\n";
     let parsed = Parsed::new(&text);
@@ -1181,9 +1282,9 @@ fn test_a_block_works_out_only_the_operations_its_edges_reach() {
     assert!(worked <= 100 * blocks, "{worked} operations worked out for a loop of {blocks} blocks");
 }
 
-/// A block of a loop worked out every edge on its way from the header: a chain of 40 blocks, each behind the edges of the ones
-/// before, narrowed 820 edges (a nest 16 deep: 1.7 G of a 5.7 G compile in `bounded`). The state after each prefix of the edges
-/// is kept for the blocks that share it, and each block works out only the edge past it.
+/// A block of a loop worked out every edge on its way from the header: a chain of 40 blocks, each behind the edges of
+/// the ones before, narrowed 820 edges (a nest 16 deep: 1.7 G of a 5.7 G compile in `bounded`). The state after each
+/// prefix of the edges is kept for the blocks that share it, and each block works out only the edge past it.
 #[test]
 fn test_a_block_works_out_only_the_edge_past_the_prefix_it_shares() {
     // The check works every edge out again to compare, and is counted.
@@ -1192,10 +1293,15 @@ fn test_a_block_works_out_only_the_edge_past_the_prefix_it_shares() {
     }
     let blocks = 40;
     let params: Vec<String> = (0..blocks).map(|at| format!("i32 %v{at}")).collect();
-    let mut text = format!("define i32 @f(i32 %n, {}) {{\nb0:\n  br label %h\n\nh:\n  %i = phi i32 [ 0, %b0 ], [ %in, %latch ]\n  %c = icmp slt i32 %i, %n\n  br i1 %c, label %s0, label %end\n\n", params.join(", "));
+    let mut text = format!(
+        "define i32 @f(i32 %n, {}) {{\nb0:\n  br label %h\n\nh:\n  %i = phi i32 [ 0, %b0 ], [ %in, %latch ]\n  %c = icmp slt i32 %i, %n\n  br i1 %c, label %s0, label %end\n\n",
+        params.join(", ")
+    );
     for at in 0..blocks {
         let next = if at + 1 == blocks { "latch".to_owned() } else { format!("s{}", at + 1) };
-        text += &format!("s{at}:\n  %a{at} = add nsw i32 %v{at}, 1\n  %t{at} = icmp slt i32 %v{at}, 100\n  br i1 %t{at}, label %{next}, label %x{at}\n\nx{at}:\n  br label %latch\n\n");
+        text += &format!(
+            "s{at}:\n  %a{at} = add nsw i32 %v{at}, 1\n  %t{at} = icmp slt i32 %v{at}, 100\n  br i1 %t{at}, label %{next}, label %x{at}\n\nx{at}:\n  br label %latch\n\n"
+        );
     }
     text += "latch:\n  %in = add nsw i32 %i, 1\n  br label %h\n\nend:\n  ret i32 %i\n}\n";
     let parsed = Parsed::new(&text);

@@ -1,5 +1,5 @@
-//! The crate's hashed collections on a fixed-key hasher: std's `RandomState` reseeds every run, so a pass's work and any
-//! order reaching output would vary (#992). The crate depends on nothing, so this is `DefaultHasher::new()`, not
+//! The crate's hashed collections on a fixed-key hasher: std's `RandomState` reseeds every run, so a pass's work and
+//! any order reaching output would vary (#992). The crate depends on nothing, so this is `DefaultHasher::new()`, not
 //! `llrm_support::hash`'s Fx.
 
 use std::collections::hash_map::DefaultHasher;

@@ -40,13 +40,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use llrm_mir::module::{Operand, ValueId};
+use llrm_support::hash::{HashMap, HashSet};
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
-use llrm_support::hash::{HashMap, HashSet};
-
 use crate::cellmap::Bucket;
-use crate::memory::{AliasClass, Identity, MemRef, MemoryKind, MemoryObject, ObjectRef, Provenance, Slice, SliceError, alias_class, classes_may_alias};
+use crate::memory::{
+    AliasClass, Identity, MemRef, MemoryKind, MemoryObject, ObjectRef, Provenance, Slice, SliceError, alias_class,
+    classes_may_alias,
+};
 use crate::ranges::{Interval, covering};
 
 const FLOOR: i64 = -(1_i64 << 31);
@@ -79,14 +81,22 @@ pub fn fixed_provenance() -> Provenance {
 }
 
 /// The range of `value`'s interval, `disp` plus `scale` times it.
-fn scaled(interval: &Interval, disp: i64, scale: i64) -> (BigInt, BigInt) {
+fn scaled(
+    interval: &Interval,
+    disp: i64,
+    scale: i64,
+) -> (BigInt, BigInt) {
     let (one, other) = (BigInt::from(disp) + &interval.low * scale, BigInt::from(disp) + &interval.high * scale);
     if one <= other { (one, other) } else { (other, one) }
 }
 
 /// The linear bytes `reference` reaches, when its selector's range lands it
 /// wholly in memory the machine keeps no program data in.
-fn foreign(reference: &MemRef, known: Option<&BTreeMap<ValueId, Interval>>, program: Option<&ProgramProxy>) -> Option<Slice> {
+fn foreign(
+    reference: &MemRef,
+    known: Option<&BTreeMap<ValueId, Interval>>,
+    program: Option<&ProgramProxy>,
+) -> Option<Slice> {
     let machine = &*program?.target;
     // A selector or offset is a word of the segment's size: none where the target has no segments.
     let segment = i64::try_from(machine.spaces().segment_bytes?).ok()?;
@@ -124,14 +134,22 @@ fn foreign(reference: &MemRef, known: Option<&BTreeMap<ValueId, Interval>>, prog
 
 /// The linear bytes `reference` names where its selector's range under
 /// `known` lands it wholly in memory the machine keeps no program data in.
-pub fn foreign_provenance(reference: &MemRef, known: &BTreeMap<ValueId, Interval>, program: Option<&ProgramProxy>) -> Option<Provenance> {
+pub fn foreign_provenance(
+    reference: &MemRef,
+    known: &BTreeMap<ValueId, Interval>,
+    program: Option<&ProgramProxy>,
+) -> Option<Provenance> {
     let slice = foreign(reference, Some(known), program)?;
     Some(Provenance { slices: BTreeSet::from([slice]), restrict: BTreeSet::new() })
 }
 
 /// What `reference` may name under `facts`: its linear bytes when its
 /// segment lands it in foreign memory, else its provenance narrowed.
-fn refined(reference: &MemRef, facts: Option<&BTreeMap<ValueId, Interval>>, program: Option<&ProgramProxy>) -> Result<Option<Provenance>, RegionError> {
+fn refined(
+    reference: &MemRef,
+    facts: Option<&BTreeMap<ValueId, Interval>>,
+    program: Option<&ProgramProxy>,
+) -> Result<Option<Provenance>, RegionError> {
     if let Some(slice) = foreign(reference, facts, program) {
         return Ok(Some(Provenance { slices: BTreeSet::from([slice]), restrict: BTreeSet::new() }));
     }
@@ -139,9 +157,15 @@ fn refined(reference: &MemRef, facts: Option<&BTreeMap<ValueId, Interval>>, prog
 }
 
 /// Two accesses at one start, as their roots or their objects say.
-fn same_typed_start(one: &MemRef, other: &MemRef) -> bool {
+fn same_typed_start(
+    one: &MemRef,
+    other: &MemRef,
+) -> bool {
     if one.root.is_some() && one.root == other.root {
-        return one.disp == other.disp && one.base == other.base && one.scale == other.scale && one.segment == other.segment;
+        return one.disp == other.disp
+            && one.base == other.base
+            && one.scale == other.scale
+            && one.segment == other.segment;
     }
     let (Some(one_provenance), Some(other_provenance)) = (&one.provenance, &other.provenance) else {
         return false;
@@ -154,25 +178,38 @@ fn same_typed_start(one: &MemRef, other: &MemRef) -> bool {
     first.object == second.object && first.low == second.low && first.low != FLOOR
 }
 
-/// Whether the address analysis has the two accesses in one object at bytes that overlap: each names one start in a single object,
-/// and their widths reach one another. Type-based alias analysis only tells accesses apart that the address analysis cannot (as LLVM
-/// asks it of MayAlias alone); it does not unsay an overlap that is known.
-fn provably_overlap(one: &MemRef, other: &MemRef) -> bool {
+/// Whether the address analysis has the two accesses in one object at bytes that overlap: each names one start in a
+/// single object, and their widths reach one another. Type-based alias analysis only tells accesses apart that the
+/// address analysis cannot (as LLVM asks it of MayAlias alone); it does not unsay an overlap that is known.
+fn provably_overlap(
+    one: &MemRef,
+    other: &MemRef,
+) -> bool {
     let (Some(one_provenance), Some(other_provenance)) = (&one.provenance, &other.provenance) else {
         return false;
     };
-    let (Some(first), Some(second)) = (one_provenance.slices.iter().next().filter(|_| one_provenance.slices.len() == 1), other_provenance.slices.iter().next().filter(|_| other_provenance.slices.len() == 1)) else {
+    let (Some(first), Some(second)) = (
+        one_provenance.slices.iter().next().filter(|_| one_provenance.slices.len() == 1),
+        other_provenance.slices.iter().next().filter(|_| other_provenance.slices.len() == 1),
+    ) else {
         return false;
     };
     let exact = |slice: &Slice| slice.stride == 1 && slice.high == slice.low + 1 && slice.low != FLOOR;
     let (one_width, other_width) = (i64::from(one.width.max(1)), i64::from(other.width.max(1)));
-    first.object == second.object && exact(first) && exact(second) && first.low < second.low + other_width && second.low < first.low + one_width
+    first.object == second.object
+        && exact(first)
+        && exact(second)
+        && first.low < second.low + other_width
+        && second.low < first.low + one_width
 }
 
 /// Python `typed_apart`: accesses of different `!tbaa` types cannot alias
 /// unless one's type is an ancestor of the other's, or for two views
 /// explicitly computed from the same union start.
-pub fn typed_apart(one: &MemRef, other: &MemRef) -> bool {
+pub fn typed_apart(
+    one: &MemRef,
+    other: &MemRef,
+) -> bool {
     let (Some(one_type), Some(other_type)) = (&one.typed, &other.typed) else {
         return false;
     };
@@ -184,7 +221,8 @@ pub fn typed_apart(one: &MemRef, other: &MemRef) -> bool {
     let (Some(one_root), Some(other_root)) = (one.lineage.last(), other.lineage.last()) else {
         return false;
     };
-    let related = one.lineage.iter().any(|name| name.as_str() == &**other_type) || other.lineage.iter().any(|name| name.as_str() == &**one_type);
+    let related = one.lineage.iter().any(|name| name.as_str() == &**other_type)
+        || other.lineage.iter().any(|name| name.as_str() == &**one_type);
     one_root == other_root && one_type != other_type && !related && !same_typed_start(one, other)
 }
 
@@ -195,7 +233,11 @@ pub fn typed_apart(one: &MemRef, other: &MemRef) -> bool {
 /// so the access width is included exactly once when calculating the final
 /// byte. BigInt retains Python arithmetic until the new `Slice` must be
 /// represented by Rust's bounded endpoints.
-fn narrowed(reference: &MemRef, provenance: &Provenance, facts: Option<&BTreeMap<ValueId, Interval>>) -> Result<Provenance, RegionError> {
+fn narrowed(
+    reference: &MemRef,
+    provenance: &Provenance,
+    facts: Option<&BTreeMap<ValueId, Interval>>,
+) -> Result<Provenance, RegionError> {
     let Some(base) = reference.base.filter(|_| reference.object) else {
         return Ok(provenance.clone());
     };
@@ -236,7 +278,8 @@ fn foreign_apart(
 ) -> bool {
     let Some(program) = program else { return false };
     let grouped = |reference: &MemRef| program.segments.program_data(reference.space);
-    (grouped(one) && foreign(other, other_known, Some(program)).is_some()) || (grouped(other) && foreign(one, known, Some(program)).is_some())
+    (grouped(one) && foreign(other, other_known, Some(program)).is_some())
+        || (grouped(other) && foreign(one, known, Some(program)).is_some())
 }
 
 /// Python `qbopt.analysis.regions:may_alias`.
@@ -304,7 +347,11 @@ pub fn overlapping(
 /// fact follows reaches only what escaped, as `alias::_lost` publishes.
 fn _unescaped(reference: &MemRef) -> bool {
     reference.provenance.as_ref().is_some_and(|provenance| {
-        !provenance.slices.is_empty() && !provenance.slices.iter().any(|one| (one.object.addressed && one.object.captured) || one.object.kind == MemoryKind::Absolute)
+        !provenance.slices.is_empty()
+            && !provenance
+                .slices
+                .iter()
+                .any(|one| (one.object.addressed && one.object.captured) || one.object.kind == MemoryKind::Absolute)
     })
 }
 
@@ -335,7 +382,10 @@ pub struct OverlapBucket {
 }
 
 impl PartialEq for OverlapBucket {
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
         self.id == other.id
     }
 }
@@ -343,19 +393,28 @@ impl PartialEq for OverlapBucket {
 impl Eq for OverlapBucket {}
 
 impl std::hash::Hash for OverlapBucket {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
         self.id.hash(state);
     }
 }
 
 impl PartialOrd for OverlapBucket {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(
+        &self,
+        other: &Self,
+    ) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for OverlapBucket {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(
+        &self,
+        other: &Self,
+    ) -> std::cmp::Ordering {
         self.id.cmp(&other.id)
     }
 }
@@ -368,9 +427,15 @@ pub struct OverlapBuckets {
 }
 
 impl OverlapBuckets {
-    fn interned(&mut self, shape: OverlapShape) -> OverlapBucket {
+    fn interned(
+        &mut self,
+        shape: OverlapShape,
+    ) -> OverlapBucket {
         let next = u32::try_from(self.named.len()).expect("fewer than 2^32 buckets");
-        self.named.entry(shape).or_insert_with_key(|shape| OverlapBucket { id: next, shape: Rc::new(shape.clone()) }).clone()
+        self.named
+            .entry(shape)
+            .or_insert_with_key(|shape| OverlapBucket { id: next, shape: Rc::new(shape.clone()) })
+            .clone()
     }
 }
 
@@ -390,7 +455,10 @@ pub struct OverlapParts {
 impl Bucket for OverlapBucket {
     type Parts = OverlapParts;
 
-    fn held(&self, parts: &mut OverlapParts) {
+    fn held(
+        &self,
+        parts: &mut OverlapParts,
+    ) {
         let shape = &*self.shape;
         match &shape.object {
             Some(object) => parts.objects.entry(*object).or_default().insert(self.clone()),
@@ -400,8 +468,15 @@ impl Bucket for OverlapBucket {
         parts.classes.entry(shape.class).or_default().insert(self.clone());
     }
 
-    fn released(&self, parts: &mut OverlapParts) {
-        fn drop_from<P: Eq + std::hash::Hash>(part: &mut HashMap<P, HashSet<OverlapBucket>>, key: &P, bucket: &OverlapBucket) {
+    fn released(
+        &self,
+        parts: &mut OverlapParts,
+    ) {
+        fn drop_from<P: Eq + std::hash::Hash>(
+            part: &mut HashMap<P, HashSet<OverlapBucket>>,
+            key: &P,
+            bucket: &OverlapBucket,
+        ) {
             let held = part.get_mut(key).expect("a held bucket is indexed");
             held.remove(bucket);
             if held.is_empty() {
@@ -421,7 +496,10 @@ impl Bucket for OverlapBucket {
 }
 
 /// Python `mir.overlap_bucket`.
-pub fn overlap_bucket(buckets: &mut OverlapBuckets, reference: &MemRef) -> OverlapBucket {
+pub fn overlap_bucket(
+    buckets: &mut OverlapBuckets,
+    reference: &MemRef,
+) -> OverlapBucket {
     let one = reference
         .provenance
         .as_ref()
@@ -431,7 +509,11 @@ pub fn overlap_bucket(buckets: &mut OverlapBuckets, reference: &MemRef) -> Overl
 }
 
 /// Python `mir.object_bucket`.
-pub fn object_bucket(buckets: &mut OverlapBuckets, one: Option<ObjectRef>, frame: Option<Frame>) -> OverlapBucket {
+pub fn object_bucket(
+    buckets: &mut OverlapBuckets,
+    one: Option<ObjectRef>,
+    frame: Option<Frame>,
+) -> OverlapBucket {
     let class = one.as_ref().map(|one| alias_class(one));
     buckets.interned(OverlapShape { object: one, frame, class })
 }
@@ -445,7 +527,10 @@ pub fn object_bucket(buckets: &mut OverlapBuckets, one: Option<ObjectRef>, frame
 /// write's own object, and one whose alias class may alias the write's.
 ///
 /// Sorted and without repeats: a set per write, rehashed as it grew, was dearer than the kill.
-pub fn overlap_buckets(reference: &MemRef, parts: &OverlapParts) -> Option<Vec<OverlapBucket>> {
+pub fn overlap_buckets(
+    reference: &MemRef,
+    parts: &OverlapParts,
+) -> Option<Vec<OverlapBucket>> {
     let provenance = reference.provenance.as_ref()?;
     #[cfg(test)]
     PICKED.with(|picked| picked.set((picked.get().0 + 1, picked.get().1 + parts.classes.len())));
@@ -456,8 +541,8 @@ pub fn overlap_buckets(reference: &MemRef, parts: &OverlapParts) -> Option<Vec<O
             reached.extend(buckets.iter().cloned());
         }
     }
-    // A write names one or two objects, and a set of slices keeps one object's together (it orders by object first): the
-    // classes seen sit in a few inline slots, and a spill only past them.
+    // A write names one or two objects, and a set of slices keeps one object's together (it orders by object first):
+    // the classes seen sit in a few inline slots, and a spill only past them.
     let mut few = [None::<AliasClass>; 6];
     let mut spill = Vec::new();
     let mut last = None;
@@ -504,7 +589,10 @@ fn _frame(reference: &MemRef) -> Option<Frame> {
 ///
 /// LLVM's constant-offset GEP compare: a fact about values, so it holds
 /// whatever object either reference names.
-fn _displaced(one: &MemRef, other: &MemRef) -> Option<bool> {
+fn _displaced(
+    one: &MemRef,
+    other: &MemRef,
+) -> Option<bool> {
     let (one, other) = (_span(one)?, _span(other)?);
     if one.0 != other.0 {
         return None;
@@ -541,7 +629,10 @@ pub fn overlap_span(reference: &MemRef) -> Option<ByteRange> {
 /// Python `mir.displaced_buckets`: the buckets held (`parts`) in the frame
 /// of `reference`'s `displaced_span`, and its bytes: a cell there that the
 /// bytes miss is one a write through `reference` cannot reach.
-pub fn displaced_buckets(reference: &MemRef, parts: &OverlapParts) -> Option<(HashSet<OverlapBucket>, ByteRange)> {
+pub fn displaced_buckets(
+    reference: &MemRef,
+    parts: &OverlapParts,
+) -> Option<(HashSet<OverlapBucket>, ByteRange)> {
     let (frame, low, high) = displaced_span(reference)?;
     Some((parts.frames.get(&Some(frame))?.clone(), (low, high)))
 }
@@ -552,13 +643,12 @@ pub(crate) mod tests {
 
     use llrm_mir::datalayout::DataLayout;
     use llrm_mir::module::{Module, Operand};
+    pub use llrm_x86_m16::Dos;
 
     use super::{RegionError, may_alias, overlapping, typed_apart};
     use crate::memory::{Identity, MemRef, MemoryKind, MemoryObject, Provenance, Unit};
     use crate::ranges::Interval;
     use crate::testing::{DOS, function, layout, parsed, value};
-
-    pub use llrm_x86_m16::Dos;
 
     /// `module` alone, a program for real-mode DOS.
     pub fn dos(module: &Module) -> std::rc::Rc<llrm_mir::program::ProgramProxy> {
@@ -566,7 +656,10 @@ pub(crate) mod tests {
     }
 
     /// Every access `@f` of `text` makes, in order.
-    fn accesses(module: &Module, layout: &DataLayout) -> Vec<MemRef> {
+    fn accesses(
+        module: &Module,
+        layout: &DataLayout,
+    ) -> Vec<MemRef> {
         let f = function(module, "f");
         let unit = crate::testing::with_registers(Unit::of(module, layout, f)).with_spaces(llrm_x86_m16::spaces());
         f.walk().filter_map(|(_, inst)| MemRef::of(&unit, inst)).collect()
@@ -576,19 +669,33 @@ pub(crate) mod tests {
         parsed(&format!("{DOS}{body}"))
     }
 
-    fn global(index: u32, extent: Option<i64>) -> MemoryObject {
+    fn global(
+        index: u32,
+        extent: Option<i64>,
+    ) -> MemoryObject {
         MemoryObject { identity: Some(Identity::Global(index)), extent, ..MemoryObject::new(MemoryKind::Global) }
     }
 
-    fn with(reference: &MemRef, provenance: Provenance) -> MemRef {
+    fn with(
+        reference: &MemRef,
+        provenance: Provenance,
+    ) -> MemRef {
         MemRef { provenance: Some(provenance), ..reference.clone() }
     }
 
-    fn one(object: &MemoryObject, low: i64, high: i64) -> Provenance {
+    fn one(
+        object: &MemoryObject,
+        low: i64,
+        high: i64,
+    ) -> Provenance {
         Provenance::one_with_slice(object.clone(), low, high, 1, 1, BTreeSet::new()).unwrap()
     }
 
-    fn interval(low: i64, high: i64, width: u32) -> Interval {
+    fn interval(
+        low: i64,
+        high: i64,
+        width: u32,
+    ) -> Interval {
         Interval { low: low.into(), high: high.into(), width }
     }
 
@@ -625,8 +732,9 @@ b0:
         assert!(!typed_apart(&with(short, one(&object, 0, 1)), &with(elsewhere, one(&object, 0, 1))));
     }
 
-    /// Types tell apart what the address analysis cannot place; two accesses it places in one object at overlapping bytes are not
-    /// told apart by their types (`long long` stored, `int` read at 4 of it, #677), and ones whose bytes do not meet still are.
+    /// Types tell apart what the address analysis cannot place; two accesses it places in one object at overlapping
+    /// bytes are not told apart by their types (`long long` stored, `int` read at 4 of it, #677), and ones whose
+    /// bytes do not meet still are.
     #[test]
     fn a_known_overlap_outranks_the_types() {
         let module = module(&format!(
@@ -689,12 +797,14 @@ b0:
     #[test]
     fn provenance_alias_uses_canonical_subobjects_and_byte_ranges() {
         // Fields of one object, and equal offsets in distinct objects, are disjoint.
-        let module = module("define void @f(ptr %p) {
+        let module = module(
+            "define void @f(ptr %p) {
 b0:
   store i32 0, ptr %p
   ret void
 }
-");
+",
+        );
         let dl = layout(&module);
         let access = &accesses(&module, &dl)[0];
         let (first, second) = (global(1, Some(8)), global(2, Some(8)));
@@ -729,7 +839,15 @@ b0:
 
         let unknown = MemoryObject::new(MemoryKind::Unknown);
         let rooted = |root: i64| {
-            Provenance::one_with_slice(unknown.clone(), super::FLOOR, 1 << 31, 1, 1, BTreeSet::from([Identity::Int(root)])).unwrap()
+            Provenance::one_with_slice(
+                unknown.clone(),
+                super::FLOOR,
+                1 << 31,
+                1,
+                1,
+                BTreeSet::from([Identity::Int(root)]),
+            )
+            .unwrap()
         };
         let left = with(left, rooted(1));
         let right = with(right, rooted(2));
@@ -818,7 +936,10 @@ b0:
         let indexed = with(&accesses(&module, &dl)[0], Provenance::one(global(0, None)));
         let index = value(function(&module, "f"), "i");
         let too_large = BTreeMap::from([(index, interval(i64::MAX, i64::MAX, 16))]);
-        assert_eq!(may_alias(&indexed, &indexed, Some(&too_large), None, None), Err(RegionError::NarrowedSliceUnrepresentable));
+        assert_eq!(
+            may_alias(&indexed, &indexed, Some(&too_large), None, None),
+            Err(RegionError::NarrowedSliceUnrepresentable)
+        );
     }
 
     #[test]
@@ -925,8 +1046,16 @@ b0:
             let base = value(function(&module, "f"), "i");
             let known = BTreeMap::from([(base, interval(low, high, interval_width))]);
 
-            assert_eq!(overlapping(indexed, fixed, Some(&known), None, None), Ok(overlaps), "left facts: {low}..{high}, static {offset}/{width}");
-            assert_eq!(overlapping(fixed, indexed, None, Some(&known), None), Ok(overlaps), "right facts: {low}..{high}, static {offset}/{width}");
+            assert_eq!(
+                overlapping(indexed, fixed, Some(&known), None, None),
+                Ok(overlaps),
+                "left facts: {low}..{high}, static {offset}/{width}"
+            );
+            assert_eq!(
+                overlapping(fixed, indexed, None, Some(&known), None),
+                Ok(overlaps),
+                "right facts: {low}..{high}, static {offset}/{width}"
+            );
             assert!(overlapping(indexed, fixed, None, None, None).unwrap());
         }
     }
@@ -1054,7 +1183,8 @@ b0:
             let dl = layout(&module);
             let f = function(&module, "f");
             let dos = dos(&module);
-            let mut unit = crate::testing::with_registers(Unit::of(&module, &dl, f)).with_spaces(llrm_x86_m16::spaces());
+            let mut unit =
+                crate::testing::with_registers(Unit::of(&module, &dl, f)).with_spaces(llrm_x86_m16::spaces());
             unit.program = Some(&dos);
             let found = crate::alias::annotated(&unit).unwrap();
             let [load, store] = &found.values().cloned().collect::<Vec<_>>()[..] else { panic!("two accesses") };
@@ -1087,7 +1217,8 @@ b0:
             let dl = layout(&module);
             let f = function(&module, "f");
             let dos = dos(&module);
-            let mut unit = crate::testing::with_registers(Unit::of(&module, &dl, f)).with_spaces(llrm_x86_m16::spaces());
+            let mut unit =
+                crate::testing::with_registers(Unit::of(&module, &dl, f)).with_spaces(llrm_x86_m16::spaces());
             unit.program = Some(&dos);
             let found = crate::alias::annotated(&unit).unwrap();
             let [load, store] = &found.values().cloned().collect::<Vec<_>>()[..] else { panic!("two accesses") };

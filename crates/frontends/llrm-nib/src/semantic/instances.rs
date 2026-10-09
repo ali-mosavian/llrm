@@ -27,18 +27,9 @@ impl Templates {
         next_id: u32,
     ) -> Self {
         Self {
-            functions: functions
-                .into_iter()
-                .map(|one| (one.name.clone(), one.clone()))
-                .collect(),
-            generators: generators
-                .into_iter()
-                .map(|one| (one.name.clone(), one.clone()))
-                .collect(),
-            protocols: protocols
-                .iter()
-                .map(|one| (one.name.clone(), one.clone()))
-                .collect(),
+            functions: functions.into_iter().map(|one| (one.name.clone(), one.clone())).collect(),
+            generators: generators.into_iter().map(|one| (one.name.clone(), one.clone())).collect(),
+            protocols: protocols.iter().map(|one| (one.name.clone(), one.clone())).collect(),
             library: library.iter().map(|one| (one.name.clone(), one.clone())).collect(),
             instances: BTreeMap::new(),
             pending: Vec::new(),
@@ -46,20 +37,32 @@ impl Templates {
         }
     }
 
-    pub(super) fn is_template(&self, name: &str) -> bool {
+    pub(super) fn is_template(
+        &self,
+        name: &str,
+    ) -> bool {
         self.functions.contains_key(name)
     }
 
-    pub(super) fn generator(&self, name: &str) -> Option<&Function> {
+    pub(super) fn generator(
+        &self,
+        name: &str,
+    ) -> Option<&Function> {
         self.generators.get(name)
     }
 
     /// A generator the compiler makes, as a generator expression's.
-    pub(super) fn add_generator(&mut self, function: Function) {
+    pub(super) fn add_generator(
+        &mut self,
+        function: Function,
+    ) {
         self.generators.insert(function.name.clone(), function);
     }
 
-    pub(super) fn instance(&self, name: &str) -> Option<Signature> {
+    pub(super) fn instance(
+        &self,
+        name: &str,
+    ) -> Option<Signature> {
         self.instances.get(name).cloned()
     }
 
@@ -72,27 +75,35 @@ impl Templates {
 
     /// A function the compiler made, such as a lifted lambda, to compile
     /// after the module's own.
-    pub(super) fn generated(&mut self, function: Function, types: &mut TypeRegistry) -> Result<(), Diagnostic> {
+    pub(super) fn generated(
+        &mut self,
+        function: Function,
+        types: &mut TypeRegistry,
+    ) -> Result<(), Diagnostic> {
         self.declared(function.clone(), types)?;
         self.pending.push(function);
         Ok(())
     }
 
     /// A function the compiler makes whose body comes later: callable now.
-    pub(super) fn declared(&mut self, header: Function, types: &mut TypeRegistry) -> Result<(), Diagnostic> {
+    pub(super) fn declared(
+        &mut self,
+        header: Function,
+        types: &mut TypeRegistry,
+    ) -> Result<(), Diagnostic> {
         let signature = signature(types, &header, self.next_id)?;
         self.next_id += 1;
         self.instances.insert(header.name.clone(), signature);
         Ok(())
     }
 
-    pub(super) fn callables(&self, types: &mut TypeRegistry) -> Vec<hir::Callable> {
+    pub(super) fn callables(
+        &self,
+        types: &mut TypeRegistry,
+    ) -> Vec<hir::Callable> {
         let mut signatures: Vec<&Signature> = self.instances.values().collect();
         signatures.sort_by_key(|one| one.id);
-        signatures
-            .into_iter()
-            .map(|signature| signature.callable(types))
-            .collect()
+        signatures.into_iter().map(|signature| signature.callable(types)).collect()
     }
 }
 
@@ -126,7 +137,10 @@ impl FunctionCompiler<'_> {
     }
 
     /// The same for one expression; whether it renamed a call.
-    pub(super) fn prepare_expression(&mut self, expression: &mut Expr) -> Result<bool, Diagnostic> {
+    pub(super) fn prepare_expression(
+        &mut self,
+        expression: &mut Expr,
+    ) -> Result<bool, Diagnostic> {
         let mut renamed = false;
         expression.walk_mut(&mut |one| {
             if let Expr::MethodCall { receiver, name, type_arguments, span, .. } = one {
@@ -134,16 +148,25 @@ impl FunctionCompiler<'_> {
                 self.declare_cast(receiver, name, type_arguments, *span)?;
             }
             if let Expr::Index { base, indices, span } = one {
-                if let Some(read) = self.pointer_index(base, indices, *span).or_else(|| self.tuple_element(base, indices, *span)) {
+                if let Some(read) =
+                    self.pointer_index(base, indices, *span).or_else(|| self.tuple_element(base, indices, *span))
+                {
                     *one = read;
                     renamed = true;
                 }
             }
             // `.iter()` of an array, vec or view, which declares none (section 12).
             if let Expr::MethodCall { receiver, name, arguments, span, .. } = one {
-                let declared = self.receiver_type(receiver).is_some_and(|owner| self.known_signature(&format!("{owner}.iter")).is_some());
+                let declared = self
+                    .receiver_type(receiver)
+                    .is_some_and(|owner| self.known_signature(&format!("{owner}.iter")).is_some());
                 if name == "iter" && arguments.is_empty() && !declared && self.iterated_item(receiver).is_some() {
-                    *one = Expr::Call { name: "elements".into(), type_arguments: Vec::new(), arguments: vec![(**receiver).clone()], span: *span };
+                    *one = Expr::Call {
+                        name: "elements".into(),
+                        type_arguments: Vec::new(),
+                        arguments: vec![(**receiver).clone()],
+                        span: *span,
+                    };
                     renamed = true;
                 }
             }
@@ -179,19 +202,8 @@ impl FunctionCompiler<'_> {
                     renamed = true;
                 }
             }
-            if let Expr::Call {
-                name,
-                type_arguments,
-                arguments,
-                span,
-            } = one
-            {
-                if self
-                    .templates
-                    .borrow()
-                    .functions
-                    .contains_key(name.as_str())
-                {
+            if let Expr::Call { name, type_arguments, arguments, span } = one {
+                if self.templates.borrow().functions.contains_key(name.as_str()) {
                     (*name, *arguments) = self.instance_for(name, type_arguments, arguments, *span)?;
                     type_arguments.clear();
                     renamed = true;
@@ -218,7 +230,10 @@ impl FunctionCompiler<'_> {
     }
 
     /// Readies the library method `name`, if it is one, to be called.
-    fn library_method(&mut self, name: &str) -> Result<(), Diagnostic> {
+    fn library_method(
+        &mut self,
+        name: &str,
+    ) -> Result<(), Diagnostic> {
         let mut templates = self.templates.borrow_mut();
         let Some(function) = templates.library.get(name).cloned() else {
             return Ok(());
@@ -244,16 +259,9 @@ impl FunctionCompiler<'_> {
     ) -> Result<(String, Vec<Expr>), Diagnostic> {
         let mut template = self.templates.borrow().functions[name].clone();
         if given.len() > template.generics.len() {
-            return Err(Diagnostic::new(
-                span,
-                format!("{name} takes {} type arguments", template.generics.len()),
-            ));
+            return Err(Diagnostic::new(span, format!("{name} takes {} type arguments", template.generics.len())));
         }
-        let Inferred {
-            mut bound,
-            passed,
-            lambdas,
-        } = self.inferred(&template, arguments, span)?;
+        let Inferred { mut bound, passed, lambdas } = self.inferred(&template, arguments, span)?;
         for (generic, spec) in template.generics.iter().zip(given) {
             bound.insert(generic.name.clone(), spec.clone());
         }
@@ -266,16 +274,18 @@ impl FunctionCompiler<'_> {
                 ));
             }
         }
-        template
-            .parameters
-            .retain(|one| !lambdas.iter().any(|(name, _, _)| name == &one.name));
-        let bindings = lambdas.into_iter().map(|(name, value, _)| Statement::Bind {
-            mutable: false,
-            name,
-            annotation: None,
-            value,
-            span,
-        });
+        template.parameters.retain(|one| !lambdas.iter().any(|(name, _, _)| name == &one.name));
+        let bindings = lambdas
+            .into_iter()
+            .map(
+                |(name, value, _)| Statement::Bind {
+                    mutable: false,
+                    name,
+                    annotation: None,
+                    value,
+                    span,
+                },
+            );
         template.body = bindings.chain(template.body).collect();
         let chosen = self.chosen(&template, &bound, span)?;
         let instance = instance_name(name, &chosen);
@@ -301,40 +311,20 @@ impl FunctionCompiler<'_> {
         arguments: &[Expr],
         span: Span,
     ) -> Result<Inferred, Diagnostic> {
-        let formals: Vec<_> = template
-            .parameters
-            .iter()
-            .map(|one| Formal {
-                name: &one.name,
-                default: one.default.as_ref(),
-            })
-            .collect();
+        let formals: Vec<_> =
+            template.parameters.iter().map(|one| Formal { name: &one.name, default: one.default.as_ref() }).collect();
         let arguments = arguments::bind(&template.name, &formals, arguments.to_vec(), span)?;
-        let generics: Vec<&str> = template
-            .generics
-            .iter()
-            .map(|one| one.name.as_str())
-            .collect();
-        let mut inferred = Inferred {
-            bound: BTreeMap::new(),
-            passed: Vec::new(),
-            lambdas: Vec::new(),
-        };
+        let generics: Vec<&str> = template.generics.iter().map(|one| one.name.as_str()).collect();
+        let mut inferred = Inferred { bound: BTreeMap::new(), passed: Vec::new(), lambdas: Vec::new() };
         let mut literals = Vec::new();
         for (parameter, argument) in template.parameters.iter().zip(arguments) {
-            if let (
-                Some((lambda, scopes)),
-                ParameterType::Owned(TypeAnnotation::Value(TypeSpec::Named(generic))),
-            ) = (self.lambda_argument_expression(&argument), &parameter.type_)
+            if let (Some((lambda, scopes)), ParameterType::Owned(TypeAnnotation::Value(TypeSpec::Named(generic)))) =
+                (self.lambda_argument_expression(&argument), &parameter.type_)
             {
                 let id = self.templates.borrow().next_id;
                 self.templates.borrow_mut().next_id += 1;
-                inferred
-                    .bound
-                    .insert(generic.clone(), TypeSpec::Named(format!("lambda{id}")));
-                inferred
-                    .lambdas
-                    .push((parameter.name.clone(), lambda, scopes));
+                inferred.bound.insert(generic.clone(), TypeSpec::Named(format!("lambda{id}")));
+                inferred.lambdas.push((parameter.name.clone(), lambda, scopes));
                 continue;
             }
             if let Some(found) = self.argument_type(&parameter.type_, &argument) {
@@ -376,10 +366,7 @@ impl FunctionCompiler<'_> {
         };
         match parameter {
             ParameterType::Owned(TypeAnnotation::Value(spec))
-            | ParameterType::Borrowed {
-                target: TypeAnnotation::Value(spec),
-                ..
-            } => {
+            | ParameterType::Borrowed { target: TypeAnnotation::Value(spec), .. } => {
                 let actual = match self.struct_expression_type(argument, argument.span()) {
                     Ok(Some(id)) => ElementType::Struct(id),
                     _ => self.element_hint(argument)?,
@@ -387,8 +374,7 @@ impl FunctionCompiler<'_> {
                 Some((spec.clone(), actual))
             }
             ParameterType::Borrowed {
-                target:
-                    TypeAnnotation::Slice { element, .. } | TypeAnnotation::Array { element, .. },
+                target: TypeAnnotation::Slice { element, .. } | TypeAnnotation::Array { element, .. },
                 ..
             } => {
                 let actual = match binding {
@@ -412,14 +398,10 @@ impl FunctionCompiler<'_> {
     ) {
         match pattern {
             TypeSpec::Named(name) if generics.contains(&name.as_str()) => {
-                bound
-                    .entry(name.clone())
-                    .or_insert_with(|| self.types.spec_of(actual));
+                bound.entry(name.clone()).or_insert_with(|| self.types.spec_of(actual));
             }
             TypeSpec::Applied { name, args } if name == "vec" => {
-                if let (ElementType::Scalar(vector), [TypeAnnotation::Value(inner)]) =
-                    (actual, args.as_slice())
-                {
+                if let (ElementType::Scalar(vector), [TypeAnnotation::Value(inner)]) = (actual, args.as_slice()) {
                     if let Some(element) = self.types.sequence_element(vector) {
                         self.unify(inner, element, generics, bound);
                     }
@@ -455,10 +437,7 @@ impl FunctionCompiler<'_> {
         let mut chosen = Vec::new();
         for generic in &template.generics {
             let spec = bound.get(&generic.name).cloned().ok_or_else(|| {
-                Diagnostic::new(
-                    span,
-                    format!("cannot infer {} of {} from its arguments", generic.name, template.name),
-                )
+                Diagnostic::new(span, format!("cannot infer {} of {} from its arguments", generic.name, template.name))
             })?;
             self.satisfies(generic, &spec, span)?;
             chosen.push(spec);
@@ -513,7 +492,10 @@ impl FunctionCompiler<'_> {
     }
 
     /// The method `name`'s signature: a declared one's, or the library's.
-    fn method_signature(&mut self, name: &str) -> Result<Option<Signature>, Diagnostic> {
+    fn method_signature(
+        &mut self,
+        name: &str,
+    ) -> Result<Option<Signature>, Diagnostic> {
         if let Some(found) = self.known_signature(name) {
             return Ok(Some(found));
         }
@@ -540,10 +522,7 @@ pub(super) fn substituted_function(
     function.generics.clear();
     for parameter in &mut function.parameters {
         match &mut parameter.type_ {
-            ParameterType::Owned(annotation)
-            | ParameterType::Borrowed {
-                target: annotation, ..
-            } => {
+            ParameterType::Owned(annotation) | ParameterType::Borrowed { target: annotation, .. } => {
                 *annotation = substituted_annotation(annotation, bound);
             }
         }
@@ -562,7 +541,12 @@ fn substituted_annotation(
 }
 
 /// Binds the type parameters `pattern` names to the parts of `actual`.
-fn unify_specs(pattern: &TypeSpec, actual: &TypeSpec, generics: &[&str], bound: &mut BTreeMap<String, TypeSpec>) {
+fn unify_specs(
+    pattern: &TypeSpec,
+    actual: &TypeSpec,
+    generics: &[&str],
+    bound: &mut BTreeMap<String, TypeSpec>,
+) {
     match (pattern, actual) {
         (TypeSpec::Named(name), _) if generics.contains(&name.as_str()) => {
             bound.entry(name.clone()).or_insert_with(|| actual.clone());
@@ -579,14 +563,20 @@ fn unify_specs(pattern: &TypeSpec, actual: &TypeSpec, generics: &[&str], bound: 
 }
 
 /// `name[T, ...]`: an instance, or a method its type arguments name.
-fn instance_name(name: &str, types: &[TypeSpec]) -> String {
+fn instance_name(
+    name: &str,
+    types: &[TypeSpec],
+) -> String {
     let types: Vec<String> = types.iter().map(TypeSpec::text).collect();
     format!("{name}[{}]", types.join(", "))
 }
 
 /// The types `body` names: its `let`s' annotations, its calls' type
 /// arguments, and each `T(x)`, a conversion to what `T` is bound to.
-fn substitute_body(body: &mut [Statement], bound: &BTreeMap<String, TypeSpec>) {
+fn substitute_body(
+    body: &mut [Statement],
+    bound: &BTreeMap<String, TypeSpec>,
+) {
     for statement in body {
         statement.each_mut(&mut |one| {
             if let Statement::Bind { annotation: Some(annotation), .. } = one {
@@ -597,7 +587,8 @@ fn substitute_body(body: &mut [Statement], bound: &BTreeMap<String, TypeSpec>) {
             match expression {
                 Expr::Call { name, arguments, span, .. } if arguments.len() == 1 => {
                     if let Some(TypeSpec::Primitive(target)) = bound.get(name.as_str()) {
-                        *expression = Expr::Conversion { target: *target, value: Box::new(arguments[0].clone()), span: *span };
+                        *expression =
+                            Expr::Conversion { target: *target, value: Box::new(arguments[0].clone()), span: *span };
                         return Ok(());
                     }
                 }
@@ -618,11 +609,18 @@ fn substitute_body(body: &mut [Statement], bound: &BTreeMap<String, TypeSpec>) {
 pub(super) fn consumed_generators(statement: &Statement) -> Vec<Span> {
     let mut found = Vec::new();
     let mut statement = statement.clone();
-    if let Statement::For { iterable: Expr::Call { span, .. } | Expr::MethodCall { span, .. } | Expr::Generator { span, .. }, .. } = &statement {
+    if let Statement::For {
+        iterable: Expr::Call { span, .. } | Expr::MethodCall { span, .. } | Expr::Generator { span, .. },
+        ..
+    } = &statement
+    {
         found.push(*span);
     }
     let Ok(()) = statement.walk_mut(&mut |one| -> Result<(), std::convert::Infallible> {
-        if let Expr::Comprehension { clauses, .. } | Expr::Generator { clauses, .. } | Expr::DictComprehension { clauses, .. } = one {
+        if let Expr::Comprehension { clauses, .. }
+        | Expr::Generator { clauses, .. }
+        | Expr::DictComprehension { clauses, .. } = one
+        {
             for clause in clauses {
                 if let Clause::For { iterable: Expr::Call { span, .. } | Expr::Generator { span, .. }, .. } = clause {
                     found.push(*span);

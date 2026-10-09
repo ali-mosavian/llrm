@@ -5,10 +5,10 @@ use std::collections::BTreeSet;
 
 use iced_x86::Register;
 
+use crate::backend::cpu::Profile;
 use crate::backend::target;
 use crate::model::ir::{Address, Imm, Loc, Operation, Reg};
 use crate::model::lir::Insn;
-use crate::backend::cpu::Profile;
 
 /// What one instruction makes of the register it writes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,7 +38,10 @@ pub fn plain(one: &Insn) -> bool {
 
 /// The register `one` writes, how, and what `cpu` charges for it, where the
 /// register stays an affine sum.
-pub fn step(one: &Insn, cpu: &Profile) -> Option<(Reg, Step, i64)> {
+pub fn step(
+    one: &Insn,
+    cpu: &Profile,
+) -> Option<(Reg, Step, i64)> {
     if !plain(one) {
         return None;
     }
@@ -60,12 +63,16 @@ pub fn step(one: &Insn, cpu: &Profile) -> Option<(Reg, Step, i64)> {
         (Operation::Binary, Some(name @ ("add" | "sub")), [_, Loc::Imm(Imm { value, address: None, .. })]) => {
             (Step::Add(if name == "add" { *value } else { -value }), costs.add)
         }
-        (Operation::Unary, Some(name @ ("inc" | "dec")), [_]) => (Step::Add(if name == "inc" { 1 } else { -1 }), costs.add),
+        (Operation::Unary, Some(name @ ("inc" | "dec")), [_]) => {
+            (Step::Add(if name == "inc" { 1 } else { -1 }), costs.add)
+        }
         (Operation::Binary, Some("shl" | "sal"), [_, Loc::Imm(Imm { value: count @ 1..=31, address: None, .. })]) => {
             (Step::Scale(1 << count), costs.shift)
         }
         (Operation::Binary, Some("add"), [_, Loc::Reg(other)]) if other == dest => (Step::Scale(2), costs.add),
-        (Operation::Binary, Some("add"), [_, Loc::Reg(other)]) if register(other) => (Step::AddRegister(*other), costs.add),
+        (Operation::Binary, Some("add"), [_, Loc::Reg(other)]) if register(other) => {
+            (Step::AddRegister(*other), costs.add)
+        }
         _ => return None,
     };
     Some((*dest, step, costs.sized(cost, width, i64::from(cpu.operand_bytes))))
@@ -73,10 +80,19 @@ pub fn step(one: &Insn, cpu: &Profile) -> Option<(Reg, Step, i64)> {
 
 /// The 67h address naming `terms` plus `disp`, if one does.
 /// `scales` are the index scales the target's 32-bit address form takes.
-pub fn form(terms: &[(Register, i64)], disp: i64, scales: &BTreeSet<i64>) -> Option<Address> {
+pub fn form(
+    terms: &[(Register, i64)],
+    disp: i64,
+    scales: &BTreeSet<i64>,
+) -> Option<Address> {
     let at = |through: Register, index: Register, scale: i64| {
-        (index != Register::ESP && scales.contains(&scale))
-            .then_some(Address { through, index, scale, offset: disp, ..Address::new(None) })
+        (index != Register::ESP && scales.contains(&scale)).then_some(Address {
+            through,
+            index,
+            scale,
+            offset: disp,
+            ..Address::new(None)
+        })
     };
     match *terms {
         [(only, 1)] => Some(Address { through: only, offset: disp, ..Address::new(None) }),
@@ -90,17 +106,26 @@ pub fn form(terms: &[(Register, i64)], disp: i64, scales: &BTreeSet<i64>) -> Opt
 
 /// The real-mode address naming `terms` plus `disp`, if one does: a lone base or index
 /// register, or one of BX/BP and one of SI/DI. No prefix, no scale.
-pub fn word_form(terms: &[(Register, i64)], disp: i64) -> Option<Address> {
+pub fn word_form(
+    terms: &[(Register, i64)],
+    disp: i64,
+) -> Option<Address> {
     use llrm_x86::addressing16::{BASES, INDEXES};
-    let word = |one: Register| llrm_x86::registers::word_of(one).filter(|word| BASES.contains(word) || INDEXES.contains(word));
+    let word =
+        |one: Register| llrm_x86::registers::word_of(one).filter(|word| BASES.contains(word) || INDEXES.contains(word));
     let is_base = |one: Register| BASES.contains(&one);
     match *terms {
         [(only, 1)] => Some(Address { through: word(only)?, offset: disp, ..Address::new(None) }),
         [(first, 1), (second, 1)] => {
             let (first, second) = (word(first)?, word(second)?);
             let (base, index) = if is_base(first) { (first, second) } else { (second, first) };
-            (is_base(base) && !is_base(index))
-                .then_some(Address { through: base, index, scale: 1, offset: disp, ..Address::new(None) })
+            (is_base(base) && !is_base(index)).then_some(Address {
+                through: base,
+                index,
+                scale: 1,
+                offset: disp,
+                ..Address::new(None)
+            })
         }
         _ => None,
     }

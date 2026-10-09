@@ -8,9 +8,10 @@
 use std::rc::Rc;
 use std::sync::LazyLock;
 
-use crate::omf::{self, Record};
 use llrm_support::hash::IndexMap;
 use llrm_support::pyrepr::{self, Repr};
+
+use crate::omf::{self, Record};
 
 /// $$SYMBOLS record kinds -- see docs/machine/codeview.md's own table for each one's data.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -26,16 +27,9 @@ pub enum Kind {
 impl Kind {
     /// `Kind(value)` where it is a member.
     pub fn of(value: u8) -> Option<Kind> {
-        [
-            Kind::Block,
-            Kind::Proc,
-            Kind::End,
-            Kind::BpRel,
-            Kind::LData,
-            Kind::Label,
-        ]
-        .into_iter()
-        .find(|kind| *kind as u8 == value)
+        [Kind::Block, Kind::Proc, Kind::End, Kind::BpRel, Kind::LData, Kind::Label]
+            .into_iter()
+            .find(|kind| *kind as u8 == value)
     }
 }
 
@@ -96,15 +90,7 @@ pub static PRIMITIVES: LazyLock<IndexMap<i64, &'static str>> = LazyLock::new(|| 
 /// FUNCTION's return type, read off its own name -- BASIC's own convention,
 /// not something reconstructed from $$TYPES.
 pub static SIGILS: LazyLock<IndexMap<char, &'static str>> = LazyLock::new(|| {
-    [
-        ('%', "INTEGER"),
-        ('&', "LONG"),
-        ('!', "SINGLE"),
-        ('#', "DOUBLE"),
-        ('$', "STRING"),
-    ]
-    .into_iter()
-    .collect()
+    [('%', "INTEGER"), ('&', "LONG"), ('!', "SINGLE"), ('#', "DOUBLE"), ('$', "STRING")].into_iter().collect()
 });
 
 /// QB 4.5's own BYREF-parameter codes. Not a $$TYPES index at all; it never
@@ -215,7 +201,10 @@ impl TagValue {
 }
 
 impl PartialEq for TagValue {
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
         self.value() == other.value()
     }
 }
@@ -338,11 +327,11 @@ pub enum TypeEntry {
 
 impl TypeEntry {
     /// `Unresolved(tag, data)`.
-    fn unresolved(tag: TagValue, data: &[u8]) -> TypeEntry {
-        TypeEntry::Unresolved(Unresolved {
-            tag,
-            raw: data.to_vec(),
-        })
+    fn unresolved(
+        tag: TagValue,
+        data: &[u8],
+    ) -> TypeEntry {
+        TypeEntry::Unresolved(Unresolved { tag, raw: data.to_vec() })
     }
 }
 
@@ -353,21 +342,14 @@ impl Repr for Field {
     fn repr(&self) -> String {
         pyrepr::dataclass(
             "Field",
-            &[
-                ("name", self.name.repr()),
-                ("offset", self.offset.repr()),
-                ("type_index", self.type_index.repr()),
-            ],
+            &[("name", self.name.repr()), ("offset", self.offset.repr()), ("type_index", self.type_index.repr())],
         )
     }
 }
 
 impl Repr for NamedOffset {
     fn repr(&self) -> String {
-        pyrepr::dataclass(
-            "NamedOffset",
-            &[("name", self.name.repr()), ("offset", self.offset.repr())],
-        )
+        pyrepr::dataclass("NamedOffset", &[("name", self.name.repr()), ("offset", self.offset.repr())])
     }
 }
 
@@ -375,10 +357,7 @@ impl Repr for Signature {
     fn repr(&self) -> String {
         pyrepr::dataclass(
             "Signature",
-            &[
-                ("return_type", self.return_type.repr()),
-                ("params", pyrepr::tuple(&self.params)),
-            ],
+            &[("return_type", self.return_type.repr()), ("params", pyrepr::tuple(&self.params))],
         )
     }
 }
@@ -395,59 +374,48 @@ impl Repr for TypeEntry {
                     ("fields", pyrepr::tuple(&one.fields)),
                 ],
             ),
-            TypeEntry::Pointer(one) => {
-                pyrepr::dataclass("Pointer", &[("target", one.target.repr())])
-            }
+            TypeEntry::Pointer(one) => pyrepr::dataclass("Pointer", &[("target", one.target.repr())]),
             TypeEntry::ByRef(one) => pyrepr::dataclass("ByRef", &[("target", one.target.repr())]),
-            TypeEntry::TypeList(one) => {
-                pyrepr::dataclass("TypeList", &[("indices", pyrepr::tuple(&one.indices))])
+            TypeEntry::TypeList(one) => pyrepr::dataclass("TypeList", &[("indices", pyrepr::tuple(&one.indices))]),
+            TypeEntry::NamedOffsetList(one) => {
+                pyrepr::dataclass("NamedOffsetList", &[("entries", pyrepr::tuple(&one.entries))])
             }
-            TypeEntry::NamedOffsetList(one) => pyrepr::dataclass(
-                "NamedOffsetList",
-                &[("entries", pyrepr::tuple(&one.entries))],
-            ),
-            TypeEntry::FixedString(one) => {
-                pyrepr::dataclass("FixedString", &[("length", one.length.repr())])
+            TypeEntry::FixedString(one) => pyrepr::dataclass("FixedString", &[("length", one.length.repr())]),
+            TypeEntry::Sized(one) => {
+                pyrepr::dataclass("Sized", &[("element", one.element.repr()), ("size_bits", one.size_bits.repr())])
             }
-            TypeEntry::Sized(one) => pyrepr::dataclass(
-                "Sized",
-                &[("element", one.element.repr()), ("size_bits", one.size_bits.repr())],
-            ),
             TypeEntry::Bitfield(one) => pyrepr::dataclass(
                 "Bitfield",
                 &[("width", one.width.repr()), ("signed", one.signed.repr()), ("start", one.start.repr())],
             ),
             TypeEntry::Signature(one) => one.repr(),
-            TypeEntry::Unresolved(one) => pyrepr::dataclass(
-                "Unresolved",
-                &[("tag", one.tag.repr()), ("raw", pyrepr::bytes(&one.raw))],
-            ),
+            TypeEntry::Unresolved(one) => {
+                pyrepr::dataclass("Unresolved", &[("tag", one.tag.repr()), ("raw", pyrepr::bytes(&one.raw))])
+            }
         }
     }
 }
 
 /// `b[lo:hi]`.
-fn slice(b: &[u8], lo: usize, hi: usize) -> &[u8] {
+fn slice(
+    b: &[u8],
+    lo: usize,
+    hi: usize,
+) -> &[u8] {
     let hi = hi.min(b.len());
     if lo >= hi { &[] } else { &b[lo..hi] }
 }
 
 /// `int.from_bytes(b, "little")`.
 fn from_le(b: &[u8]) -> i64 {
-    b.iter()
-        .rev()
-        .fold(0i64, |acc, &byte| (acc << 8) | byte as i64)
+    b.iter().rev().fold(0i64, |acc, &byte| (acc << 8) | byte as i64)
 }
 
 /// `int.from_bytes(b, "little", signed=True)`.
 fn from_le_signed(b: &[u8]) -> i64 {
     let value = from_le(b);
     let bits = 8 * b.len() as u32;
-    if bits > 0 && value >> (bits - 1) & 1 == 1 {
-        value - (1i64 << bits)
-    } else {
-        value
-    }
+    if bits > 0 && value >> (bits - 1) & 1 == 1 { value - (1i64 << bits) } else { value }
 }
 
 /// `bytes.decode("latin1")`.
@@ -489,7 +457,10 @@ fn _type_records(buf: &[u8]) -> Vec<(i64, u8, &[u8])> {
     out
 }
 
-fn _type_ref(data: &[u8], at: usize) -> Option<i64> {
+fn _type_ref(
+    data: &[u8],
+    at: usize,
+) -> Option<i64> {
     if at + 3 > data.len() || data[at] != Tag::TypeRef as u8 {
         return None;
     }
@@ -527,19 +498,17 @@ fn _named_offsets(data: &[u8]) -> Option<Vec<NamedOffset>> {
     Some(out)
 }
 
-fn _parse_struct(data: &[u8], table: &Types) -> TypeEntry {
+fn _parse_struct(
+    data: &[u8],
+    table: &Types,
+) -> TypeEntry {
     let refused = || TypeEntry::unresolved(TagValue::Tag(Tag::Struct), data);
-    if data.len() < 17
-        || data[1] != U32
-        || data[6] != Tag::Offset as u8
-        || data[15] != Tag::Name as u8
-    {
+    if data.len() < 17 || data[1] != U32 || data[6] != Tag::Offset as u8 || data[15] != Tag::Name as u8 {
         return refused();
     }
     let field_types_index = _type_ref(data, 9);
     let field_names_index = _type_ref(data, 12);
-    let (Some(field_types_index), Some(field_names_index)) = (field_types_index, field_names_index)
-    else {
+    let (Some(field_types_index), Some(field_names_index)) = (field_types_index, field_names_index) else {
         return refused();
     };
     let size_bits = from_le(slice(data, 2, 6));
@@ -547,13 +516,11 @@ fn _parse_struct(data: &[u8], table: &Types) -> TypeEntry {
     let field_types = table.get(&field_types_index);
     let field_names = table.get(&field_names_index);
     let namelen = data[16] as usize;
-    let valid_lists = matches!(
-        (field_types, field_names),
-        (
-            Some(TypeEntry::TypeList(_)),
-            Some(TypeEntry::NamedOffsetList(_))
-        )
-    );
+    let valid_lists =
+        matches!(
+            (field_types, field_names),
+            (Some(TypeEntry::TypeList(_)), Some(TypeEntry::NamedOffsetList(_)))
+        );
     if data.len() < 17 + namelen || !valid_lists {
         return refused();
     }
@@ -570,20 +537,15 @@ fn _parse_struct(data: &[u8], table: &Types) -> TypeEntry {
         .indices
         .iter()
         .zip(&field_names.entries)
-        .map(|(&ti, no)| Field {
-            name: no.name.clone(),
-            offset: no.offset,
-            type_index: ti,
-        })
+        .map(|(&ti, no)| Field { name: no.name.clone(), offset: no.offset, type_index: ti })
         .collect();
-    TypeEntry::Struct(Struct {
-        name,
-        size_bits,
-        fields,
-    })
+    TypeEntry::Struct(Struct { name, size_bits, fields })
 }
 
-fn _parse_signature(data: &[u8], table: &Types) -> TypeEntry {
+fn _parse_signature(
+    data: &[u8],
+    table: &Types,
+) -> TypeEntry {
     let refused = || TypeEntry::unresolved(TagValue::Tag(Tag::Signature), data);
     if data.len() != 10 || data[1] != NIL || data[5] != BASIC_CALL {
         return refused();
@@ -598,23 +560,21 @@ fn _parse_signature(data: &[u8], table: &Types) -> TypeEntry {
         // A zero-parameter procedure has no TypeList of its own to point at,
         // so its arglist names the segment's own first (always 1-byte, 0x80)
         // entry instead.
-        return TypeEntry::Signature(Signature {
-            return_type,
-            params: Vec::new(),
-        });
+        return TypeEntry::Signature(Signature { return_type, params: Vec::new() });
     }
     match table.get(&arglist_index) {
         Some(TypeEntry::TypeList(arglist)) if arglist.indices.len() == nparms => {
-            TypeEntry::Signature(Signature {
-                return_type,
-                params: arglist.indices.clone(),
-            })
+            TypeEntry::Signature(Signature { return_type, params: arglist.indices.clone() })
         }
         _ => refused(),
     }
 }
 
-fn _parse_type_entry(kind: u8, data: &[u8], table: &Types) -> TypeEntry {
+fn _parse_type_entry(
+    kind: u8,
+    data: &[u8],
+    table: &Types,
+) -> TypeEntry {
     let tag = data.first().copied();
     let Some(tag) = tag.filter(|_| kind == 0x01) else {
         return TypeEntry::unresolved(TagValue::Int(kind as i64), data);
@@ -648,14 +608,14 @@ fn _parse_type_entry(kind: u8, data: &[u8], table: &Types) -> TypeEntry {
         }
         Some(Tag::Struct) => _parse_struct(data, table),
         Some(Tag::Bitfield) if data.len() == 4 && [BITFIELD_SIGNED, BITFIELD_UNSIGNED].contains(&data[2]) => {
-            TypeEntry::Bitfield(Bitfield { width: data[1].into(), signed: data[2] == BITFIELD_SIGNED, start: data[3].into() })
-        }
-        Some(Tag::FixedString)
-            if data.len() >= 5 && data[1] == 0x00 && data[2] == Tag::Offset as u8 =>
-        {
-            TypeEntry::FixedString(FixedString {
-                length: from_le(slice(data, 3, 5)),
+            TypeEntry::Bitfield(Bitfield {
+                width: data[1].into(),
+                signed: data[2] == BITFIELD_SIGNED,
+                start: data[3].into(),
             })
+        }
+        Some(Tag::FixedString) if data.len() >= 5 && data[1] == 0x00 && data[2] == Tag::Offset as u8 => {
+            TypeEntry::FixedString(FixedString { length: from_le(slice(data, 3, 5)) })
         }
         Some(Tag::FixedStringQb45) if data.len() == 9 && data[1] == U32 => {
             let size_bits = from_le(slice(data, 2, 6));
@@ -684,7 +644,10 @@ pub fn type_table(records: &[Rc<Record>]) -> Types {
     table
 }
 
-pub fn type_name(type_index: i64, types: Option<&Types>) -> Option<String> {
+pub fn type_name(
+    type_index: i64,
+    types: Option<&Types>,
+) -> Option<String> {
     if let Some(name) = PRIMITIVES.get(&type_index) {
         return Some((*name).to_owned());
     }
@@ -692,9 +655,7 @@ pub fn type_name(type_index: i64, types: Option<&Types>) -> Option<String> {
         return Some(format!("BYREF {name}"));
     }
     let types = types.filter(|types| !types.is_empty())?;
-    let named = |index: i64| {
-        truthy(type_name(index, Some(types))).unwrap_or_else(|| format!("type {index:#06x}"))
-    };
+    let named = |index: i64| truthy(type_name(index, Some(types))).unwrap_or_else(|| format!("type {index:#06x}"));
     match types.get(&type_index) {
         Some(TypeEntry::Array(Array { element })) => Some(format!("ARRAY OF {}", named(*element))),
         Some(TypeEntry::Struct(Struct { name, .. })) => Some(format!("TYPE {name}")),
@@ -709,7 +670,9 @@ pub fn type_name(type_index: i64, types: Option<&Types>) -> Option<String> {
         // hop. Still BYREF in BASIC's own terms.
         Some(TypeEntry::Pointer(Pointer { target })) => Some(format!("BYREF {}", named(*target))),
         Some(TypeEntry::FixedString(FixedString { length })) => Some(format!("STRING * {length}")),
-        Some(TypeEntry::Sized(Sized { element, size_bits })) => Some(format!("{} BYTES OF {}", size_bits / 8, named(*element))),
+        Some(TypeEntry::Sized(Sized { element, size_bits })) => {
+            Some(format!("{} BYTES OF {}", size_bits / 8, named(*element)))
+        }
         Some(TypeEntry::Bitfield(Bitfield { width, signed, start })) => {
             Some(format!("BITFIELD {width} {} @{start}", if *signed { "SIGNED" } else { "UNSIGNED" }))
         }
@@ -807,10 +770,7 @@ pub struct Label {
 
 impl Repr for Label {
     fn repr(&self) -> String {
-        pyrepr::dataclass(
-            "Label",
-            &[("name", self.name.repr()), ("offset", self.offset.repr())],
-        )
+        pyrepr::dataclass("Label", &[("name", self.name.repr()), ("offset", self.offset.repr())])
     }
 }
 
@@ -840,10 +800,7 @@ impl Procedure {
 
     /// A FUNCTION's return type from its own name's sigil; None for a SUB.
     pub fn return_type(&self) -> Option<&'static str> {
-        self.name
-            .chars()
-            .last()
-            .and_then(|sigil| SIGILS.get(&sigil).copied())
+        self.name.chars().last().and_then(|sigil| SIGILS.get(&sigil).copied())
     }
 
     /// The procedure's own Tag.SIGNATURE record, if proc_type_index resolves
@@ -902,7 +859,10 @@ impl Repr for DebugInfo {
     }
 }
 
-fn _pstr(buf: &[u8], at: usize) -> (String, usize) {
+fn _pstr(
+    buf: &[u8],
+    at: usize,
+) -> (String, usize) {
     let n = buf[at] as usize;
     (decode_latin1(slice(buf, at + 1, at + 1 + n)), at + 1 + n)
 }
@@ -932,9 +892,8 @@ fn _records(buf: &[u8]) -> Vec<(u8, &[u8], usize)> {
 /// BC writes a module variable's offset as zero and leaves a fixup to fill
 /// it in; read without them every DIM comes back at address zero.
 fn _relocated(records: &[Rc<Record>]) -> IndexMap<i64, (i64, i64)> {
-    let index = omf::segments(records)
-        .into_iter()
-        .position(|segment| segment.is_some_and(|(name, _)| name == "$$SYMBOLS"));
+    let index =
+        omf::segments(records).into_iter().position(|segment| segment.is_some_and(|(name, _)| name == "$$SYMBOLS"));
     let Some(index) = index else {
         return IndexMap::default();
     };
@@ -978,14 +937,14 @@ pub fn module_name(records: &[Rc<Record>]) -> Option<String> {
 /// A descriptor's first four bytes are a far pointer to the data and BC
 /// leaves them zero with a ptr16:16 fixup, as it does for the symbol
 /// record's own address.
-fn _elements(records: &[Rc<Record>], variables: Vec<Variable>) -> Vec<Variable> {
+fn _elements(
+    records: &[Rc<Record>],
+    variables: Vec<Variable>,
+) -> Vec<Variable> {
     let mut images: IndexMap<i64, Vec<u8>> = IndexMap::default();
     for (index, segment) in omf::segments(records).into_iter().enumerate() {
         if let Some((_, length)) = segment {
-            images.insert(
-                index as i64,
-                omf::segment_image(records, index as i64, length),
-            );
+            images.insert(index as i64, omf::segment_image(records, index as i64, length));
         }
     }
     let mut r#where: IndexMap<(Option<i64>, i64), (i64, i64)> = IndexMap::default();
@@ -1004,23 +963,14 @@ fn _elements(records: &[Rc<Record>], variables: Vec<Variable>) -> Vec<Variable> 
         let at = one.offset as usize;
         let stride = from_le(slice(image, at + 12, at + 14));
         let count = from_le(slice(image, at + 14, at + 16));
-        out.push(Variable {
-            data: Some(found),
-            stride,
-            count,
-            ..one
-        });
+        out.push(Variable { data: Some(found), stride, count, ..one });
     }
     out
 }
 
 pub fn parse(records: &[Rc<Record>]) -> DebugInfo {
     let buf = symbols(records);
-    let module = if buf.is_empty() {
-        None
-    } else {
-        module_name(records)
-    };
+    let module = if buf.is_empty() { None } else { module_name(records) };
     let types = Rc::new(type_table(records));
     let mut procedures: Vec<Procedure> = Vec::new();
     let mut variables: Vec<Variable> = Vec::new();
@@ -1060,19 +1010,20 @@ pub fn parse(records: &[Rc<Record>]) -> DebugInfo {
                 let bp_offset = from_le_signed(slice(data, 0, 2));
                 let type_index = from_le(slice(data, 2, 4));
                 let (name, _) = _pstr(data, 4);
-                procedures[current.unwrap()].locals.push(Local {
-                    name,
-                    bp_offset,
-                    type_index,
-                    types: Rc::clone(&types),
-                });
+                procedures[current.unwrap()]
+                    .locals
+                    .push(
+                        Local {
+                            name,
+                            bp_offset,
+                            type_index,
+                            types: Rc::clone(&types),
+                        },
+                    );
             }
             Some(Kind::LData) => {
-                let (off, seg, type_index) = (
-                    from_le(slice(data, 0, 2)),
-                    from_le(slice(data, 2, 4)),
-                    from_le(slice(data, 4, 6)),
-                );
+                let (off, seg, type_index) =
+                    (from_le(slice(data, 0, 2)), from_le(slice(data, 2, 4)), from_le(slice(data, 4, 6)));
                 let (name, _) = _pstr(data, 6);
                 // The record's own two bytes are zero; the fixup on them is
                 // the address. Keep whatever is written where there is none.
@@ -1100,23 +1051,22 @@ pub fn parse(records: &[Rc<Record>]) -> DebugInfo {
     let variables = _elements(records, variables);
     let code_segment = omf::code_segment(records);
     let code_length = code_segment.map_or(0, |(_, _, length)| length);
-    DebugInfo {
-        module,
-        procedures,
-        variables,
-        labels,
-        types,
-        code_length,
-    }
+    DebugInfo { module, procedures, variables, labels, types, code_length }
 }
 
 /// `type_index` spelled out, a structure with its fields.
-fn described(type_index: i64, types: &Types) -> String {
+fn described(
+    type_index: i64,
+    types: &Types,
+) -> String {
     let named = _fmt_type(type_index, type_name(type_index, Some(types)));
     match types.get(&type_index) {
         Some(TypeEntry::Struct(entry)) => {
-            let fields: Vec<String> =
-                entry.fields.iter().map(|one| format!("{} +{} {}", one.name, one.offset, described(one.type_index, types))).collect();
+            let fields: Vec<String> = entry
+                .fields
+                .iter()
+                .map(|one| format!("{} +{} {}", one.name, one.offset, described(one.type_index, types)))
+                .collect();
             format!("{named} {{{}}}", fields.join(", "))
         }
         Some(TypeEntry::Array(Array { element })) => format!("ARRAY OF {}", described(*element, types)),
@@ -1132,13 +1082,15 @@ impl DebugInfo {
         let types = self.types.as_ref();
         let mut out = Vec::new();
         for procedure in &self.procedures {
-            let signature = procedure.signature().map_or_else(
-                || "no signature".to_owned(),
-                |one| {
-                    let parameters: Vec<String> = one.params.iter().map(|&index| described(index, types)).collect();
-                    format!("({}) -> {}", parameters.join(", "), described(one.return_type, types))
-                },
-            );
+            let signature = procedure
+                .signature()
+                .map_or_else(
+                    || "no signature".to_owned(),
+                    |one| {
+                        let parameters: Vec<String> = one.params.iter().map(|&index| described(index, types)).collect();
+                        format!("({}) -> {}", parameters.join(", "), described(one.return_type, types))
+                    },
+                );
             out.push(format!("PROC {} flags {} {signature}", procedure.name, procedure.flags));
             for local in &procedure.locals {
                 let kind = if local.is_param() { "PARAM" } else { "LOCAL" };
@@ -1153,12 +1105,19 @@ impl DebugInfo {
     }
 }
 
-fn _fmt_type(type_index: i64, resolved: Option<String>) -> String {
+fn _fmt_type(
+    type_index: i64,
+    resolved: Option<String>,
+) -> String {
     truthy(resolved).unwrap_or_else(|| format!("custom (type {type_index:#06x}, unresolved)"))
 }
 
 /// A struct's own field list, name/type/offset, one line per field.
-fn _fmt_fields(type_index: i64, types: &Types, indent: &str) -> Vec<String> {
+fn _fmt_fields(
+    type_index: i64,
+    types: &Types,
+    indent: &str,
+) -> Vec<String> {
     let Some(TypeEntry::Struct(entry)) = types.get(&type_index) else {
         return Vec::new();
     };
@@ -1180,9 +1139,7 @@ mod tests {
     use super::*;
 
     fn fixture(name: &str) -> DebugInfo {
-        let path = Path::new(env!("LLRM_ROOT"))
-            .join("tests/inputs/omf")
-            .join(name);
+        let path = Path::new(env!("LLRM_ROOT")).join("tests/inputs/omf").join(name);
         parse(&omf::read(path).unwrap())
     }
 
@@ -1192,24 +1149,10 @@ mod tests {
     #[test]
     fn test_a_module_variable_is_where_its_fixup_says() {
         let got = fixture("procs-p-g2-zi.obj");
-        assert!(
-            !got.variables.is_empty(),
-            "the object carries no symbols; it was not built with /Zi"
-        );
-        let r#where: BTreeSet<(i64, i64)> = got
-            .variables
-            .iter()
-            .map(|one| (one.segment, one.offset))
-            .collect();
-        assert!(
-            !r#where.contains(&(0, 0)),
-            "a variable at address zero is an unrelocated field"
-        );
-        assert_eq!(
-            r#where.len(),
-            got.variables.len(),
-            "two variables cannot share one address"
-        );
+        assert!(!got.variables.is_empty(), "the object carries no symbols; it was not built with /Zi");
+        let r#where: BTreeSet<(i64, i64)> = got.variables.iter().map(|one| (one.segment, one.offset)).collect();
+        assert!(!r#where.contains(&(0, 0)), "a variable at address zero is an unrelocated field");
+        assert_eq!(r#where.len(), got.variables.len(), "two variables cannot share one address");
         let names: BTreeSet<&str> = got.variables.iter().map(|one| one.name.as_str()).collect();
         assert_eq!(names, BTreeSet::from(["A&", "B&", "R&"]));
     }
@@ -1219,39 +1162,19 @@ mod tests {
     #[test]
     fn test_a_parameter_is_above_the_frame_pointer_and_a_local_below() {
         let got = fixture("procs-p-g2-zi.obj");
-        let named: IndexMap<&str, &Procedure> = got
-            .procedures
-            .iter()
-            .map(|one| (one.name.as_str(), one))
-            .collect();
-        assert!(
-            named.contains_key("TWICE&") && named.contains_key("REPORT"),
-            "only {:?}",
-            named.keys()
-        );
+        let named: IndexMap<&str, &Procedure> = got.procedures.iter().map(|one| (one.name.as_str(), one)).collect();
+        assert!(named.contains_key("TWICE&") && named.contains_key("REPORT"), "only {:?}", named.keys());
 
         let twice = named["TWICE&"];
-        let params: Vec<(&str, i64)> = twice
-            .locals
-            .iter()
-            .filter(|one| one.bp_offset > 0)
-            .map(|one| (one.name.as_str(), one.bp_offset))
-            .collect();
-        let locals: Vec<(&str, i64)> = twice
-            .locals
-            .iter()
-            .filter(|one| one.bp_offset < 0)
-            .map(|one| (one.name.as_str(), one.bp_offset))
-            .collect();
+        let params: Vec<(&str, i64)> =
+            twice.locals.iter().filter(|one| one.bp_offset > 0).map(|one| (one.name.as_str(), one.bp_offset)).collect();
+        let locals: Vec<(&str, i64)> =
+            twice.locals.iter().filter(|one| one.bp_offset < 0).map(|one| (one.name.as_str(), one.bp_offset)).collect();
         assert_eq!(params, [("N&", 6)]);
         assert_eq!(locals, [("T&", -22)]);
         // Report takes two and declares no local of its own
-        let report: BTreeSet<&str> = named["REPORT"]
-            .locals
-            .iter()
-            .filter(|one| one.bp_offset > 0)
-            .map(|one| one.name.as_str())
-            .collect();
+        let report: BTreeSet<&str> =
+            named["REPORT"].locals.iter().filter(|one| one.bp_offset > 0).map(|one| one.name.as_str()).collect();
         assert_eq!(report, BTreeSet::from(["N&", "TAG$"]));
     }
 
@@ -1264,29 +1187,11 @@ mod tests {
         let got = fixture("arridx-p-g2-zi.obj");
         let is_array = |one: &Variable| one.type_name().unwrap_or_default().contains("ARRAY");
         let arrays: Vec<&Variable> = got.variables.iter().filter(|one| is_array(one)).collect();
-        assert!(
-            !arrays.is_empty(),
-            "the object declares no array, so this proves nothing"
-        );
+        assert!(!arrays.is_empty(), "the object declares no array, so this proves nothing");
         for one in &arrays {
-            assert!(
-                one.data.is_some(),
-                "{}: the descriptor was not followed",
-                one.name
-            );
-            assert_ne!(
-                one.data,
-                Some((one.segment, one.offset)),
-                "{}: named where its descriptor is",
-                one.name
-            );
-            assert!(
-                one.stride != 0 && one.count != 0,
-                "{}: {} x {}",
-                one.name,
-                one.count,
-                one.stride
-            );
+            assert!(one.data.is_some(), "{}: the descriptor was not followed", one.name);
+            assert_ne!(one.data, Some((one.segment, one.offset)), "{}: named where its descriptor is", one.name);
+            assert!(one.stride != 0 && one.count != 0, "{}: {} x {}", one.name, one.count, one.stride);
         }
         // a% is 21 INTEGERs -- `DIM a%(20)`, which BASIC bases at zero
         let a = arrays.iter().find(|one| one.name == "A%").unwrap();
@@ -1302,16 +1207,8 @@ mod tests {
     #[test]
     fn a_refused_record_keeps_python_repr_and_equality() {
         let cases: [(u8, &[u8], &str); 4] = [
-            (
-                1,
-                b"\x79\x00",
-                "Unresolved(tag=<Tag.STRUCT: 121>, raw=b'y\\x00')",
-            ),
-            (
-                1,
-                b"\x75\x80",
-                "Unresolved(tag=<Tag.SIGNATURE: 117>, raw=b'u\\x80')",
-            ),
+            (1, b"\x79\x00", "Unresolved(tag=<Tag.STRUCT: 121>, raw=b'y\\x00')"),
+            (1, b"\x75\x80", "Unresolved(tag=<Tag.SIGNATURE: 117>, raw=b'u\\x80')"),
             (2, b"\x8c", "Unresolved(tag=2, raw=b'\\x8c')"),
             (1, b"\x7a\x00", "Unresolved(tag=122, raw=b'z\\x00')"),
         ];
@@ -1319,22 +1216,19 @@ mod tests {
             let got = _parse_type_entry(kind, data, &Types::default());
             assert_eq!(got.repr(), want);
             let plain = if kind == 1 { data[0] } else { kind };
-            assert_eq!(
-                got,
-                TypeEntry::unresolved(TagValue::Int(plain as i64), data)
-            );
+            assert_eq!(got, TypeEntry::unresolved(TagValue::Int(plain as i64), data));
         }
     }
 
-    fn objects(dir: &Path, out: &mut Vec<String>) {
+    fn objects(
+        dir: &Path,
+        out: &mut Vec<String>,
+    ) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path: PathBuf = entry.unwrap().path();
             if path.is_dir() {
                 objects(&path, out);
-            } else if path
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("obj"))
-            {
+            } else if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("obj")) {
                 out.push(path.to_str().unwrap().to_owned());
             }
         }
@@ -1354,20 +1248,10 @@ mod tests {
         out.push(format!("parse {}", info.repr()));
         for &index in info.types.keys() {
             let (with, without) = (type_name(index, Some(&info.types)), type_name(index, None));
-            out.push(format!(
-                "type_name {index} {} {}",
-                with.repr(),
-                without.repr()
-            ));
+            out.push(format!("type_name {index} {} {}", with.repr(), without.repr()));
             out.extend(_fmt_fields(index, &info.types, "  "));
         }
-        let names = |locals: Vec<&Local>| {
-            locals
-                .iter()
-                .map(|one| one.name.clone())
-                .collect::<Vec<_>>()
-                .repr()
-        };
+        let names = |locals: Vec<&Local>| locals.iter().map(|one| one.name.clone()).collect::<Vec<_>>().repr();
         for proc in &info.procedures {
             out.push(format!(
                 "proc {} params={} own={} ret={} sig={}",
@@ -1379,22 +1263,13 @@ mod tests {
             ));
             for loc in &proc.locals {
                 let fmt = _fmt_type(loc.type_index, loc.type_name());
-                let (name, param, resolved) = (
-                    loc.name.repr(),
-                    loc.is_param().repr(),
-                    loc.type_name().repr(),
-                );
+                let (name, param, resolved) = (loc.name.repr(), loc.is_param().repr(), loc.type_name().repr());
                 out.push(format!("  local {name} {param} {resolved} {fmt}"));
             }
         }
         for v in &info.variables {
             let fmt = _fmt_type(v.type_index, v.type_name());
-            out.push(format!(
-                "var {} {} size={} {fmt}",
-                v.name.repr(),
-                v.type_name().repr(),
-                v.size()
-            ));
+            out.push(format!("var {} {} size={} {fmt}", v.name.repr(), v.type_name().repr(), v.size()));
         }
         out
     }
@@ -1408,10 +1283,7 @@ mod tests {
         let mut paths = Vec::new();
         objects(Path::new(concat!(env!("LLRM_ROOT"), "/tests/inputs")), &mut paths);
         paths.sort();
-        let text: String = paths
-            .iter()
-            .map(|path| block(path).join("\n") + "\n")
-            .collect();
+        let text: String = paths.iter().map(|path| block(path).join("\n") + "\n").collect();
         std::fs::write(std::env::var("CVINFO_DUMP").unwrap(), text).unwrap();
     }
 }

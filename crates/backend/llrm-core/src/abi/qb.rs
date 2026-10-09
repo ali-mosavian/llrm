@@ -8,11 +8,11 @@ use std::fmt;
 use std::sync::LazyLock;
 
 use iced_x86::Register;
-use crate::support::hash::IndexMap;
 
 use crate::abi::runtime::{self, Contract, Control};
 use crate::backend::assemble::Registers;
 use crate::hir::model;
+use crate::support::hash::IndexMap;
 use crate::support::pyrepr::{self};
 
 /// A typed call lacks enough measured ABI information to emit.
@@ -20,7 +20,10 @@ use crate::support::pyrepr::{self};
 pub struct AbiError(pub String);
 
 impl fmt::Display for AbiError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
@@ -34,66 +37,70 @@ impl std::error::Error for AbiError {}
 // 5b1c7a6f..., 873fde67..., and 59ad49b0...; tools/libdump.py records the
 // member, entry offset and RETF for every row.  SCAT is family-specific (the
 // VBDOS far-string entry consumes an extra word), so it is not generalized.
-static _AUDITED_STRING_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| IndexMap::from_iter([
-    ("B$ASSN", 12),
-    ("B$FASC", 2),
-    ("B$FCHR", 2),
-    ("B$FCVD", 2),
-    ("B$FCVI", 2),
-    ("B$FCVL", 2),
-    ("B$FCVS", 2),
-    ("B$FHEX", 4),
-    ("B$FLEN", 2),
-    ("B$FMID", 6),
-    ("B$FMKD", 8),
-    ("B$FMKI", 2),
-    ("B$FMKL", 4),
-    ("B$FMKS", 4),
-    ("B$FMDF", 8),
-    ("B$FMSF", 4),
-    ("B$FOCT", 4),
-    ("B$INS2", 4),
-    ("B$INS3", 6),
-    ("B$LCAS", 2),
-    ("B$LDFS", 6),
-    ("B$LEFT", 4),
-    ("B$LTRM", 2),
-    ("B$MCVD", 2),
-    ("B$MCVS", 2),
-    ("B$RGHT", 4),
-    ("B$RTRM", 2),
-    ("B$SASS", 4),
-    ("B$SCMP", 4),
-    ("B$SCPY", 2),
-    ("B$SPAC", 2),
-    ("B$STRI", 4),
-    ("B$STRS", 4),
-    ("B$UCAS", 2),
-]));
+static _AUDITED_STRING_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| {
+    IndexMap::from_iter([
+        ("B$ASSN", 12),
+        ("B$FASC", 2),
+        ("B$FCHR", 2),
+        ("B$FCVD", 2),
+        ("B$FCVI", 2),
+        ("B$FCVL", 2),
+        ("B$FCVS", 2),
+        ("B$FHEX", 4),
+        ("B$FLEN", 2),
+        ("B$FMID", 6),
+        ("B$FMKD", 8),
+        ("B$FMKI", 2),
+        ("B$FMKL", 4),
+        ("B$FMKS", 4),
+        ("B$FMDF", 8),
+        ("B$FMSF", 4),
+        ("B$FOCT", 4),
+        ("B$INS2", 4),
+        ("B$INS3", 6),
+        ("B$LCAS", 2),
+        ("B$LDFS", 6),
+        ("B$LEFT", 4),
+        ("B$LTRM", 2),
+        ("B$MCVD", 2),
+        ("B$MCVS", 2),
+        ("B$RGHT", 4),
+        ("B$RTRM", 2),
+        ("B$SASS", 4),
+        ("B$SCMP", 4),
+        ("B$SCPY", 2),
+        ("B$SPAC", 2),
+        ("B$STRI", 4),
+        ("B$STRS", 4),
+        ("B$UCAS", 2),
+    ])
+});
 
 // Stack widths read from actual QB 4.5 /A listings for the graphics forms,
 // then checked against their runtime RETF cleanup. Coordinate state is latched
 // by N1/N2 before the drawing call; it is deliberately not hidden in MIR.
-static _AUDITED_GRAPHICS_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| IndexMap::from_iter([
-    ("B$PAL2", 6),
-    ("B$N1I2", 4),
-    ("B$N2I2", 4),
-    ("B$N1R4", 8),
-    ("B$N2R4", 8),
-    ("B$CSTT", 4),
-    ("B$CSTO", 4),
-    ("B$CASP", 4),
-    // circle.asm: parmD Radius, parmW Color.
-    ("B$CIRC", 6),
-    ("B$LINE", 6),
-    ("B$PAIN", 4),
-    ("B$PSTC", 2),
-    ("B$PNI2", 4),
-    ("B$PNR4", 8),
-    ("B$GGET", 6),
-    ("B$GPUT", 8),
-    ("B$FTAB", 2),
-]));
+static _AUDITED_GRAPHICS_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| {
+    IndexMap::from_iter([
+        ("B$PAL2", 6),
+        ("B$N1I2", 4),
+        ("B$N2I2", 4),
+        ("B$N1R4", 8),
+        ("B$N2R4", 8),
+        ("B$CSTT", 4),
+        ("B$CSTO", 4),
+        ("B$CASP", 4),
+        // circle.asm: parmD Radius, parmW Color.
+        ("B$CIRC", 6),
+        ("B$LINE", 6),
+        ("B$PAIN", 4),
+        ("B$PSTC", 2),
+        ("B$PNI2", 4),
+        ("B$PNR4", 8),
+        ("B$GGET", 6),
+        ("B$GPUT", 8),
+        ("B$FTAB", 2),
+    ])
+});
 
 static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| {
     IndexMap::from_iter([
@@ -111,7 +118,9 @@ static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|
 });
 
 /// An inline block as a call: its declared registers are all it reads and changes.
-fn _inline_contract(asm: &model::Asm) -> Result<(Contract, Vec<(runtime::Reg, u32)>, Vec<(runtime::Reg, u32)>), AbiError> {
+fn _inline_contract(
+    asm: &model::Asm
+) -> Result<(Contract, Vec<(runtime::Reg, u32)>, Vec<(runtime::Reg, u32)>), AbiError> {
     let registers = |names: &[String]| {
         names
             .iter()
@@ -168,9 +177,13 @@ pub fn asm_call(name: &str) -> Option<Result<(Contract, Registers), AbiError>> {
             names
                 .into_iter()
                 .map(|(one, bits)| match one {
-                    runtime::Reg::Ax | runtime::Reg::Bx | runtime::Reg::Cx | runtime::Reg::Dx | runtime::Reg::Si | runtime::Reg::Di => {
-                        crate::backend::inline_asm::machine(one, bits).ok_or_else(|| AbiError(format!("inline assembly passes a value in {}", one.name())))
-                    }
+                    runtime::Reg::Ax
+                    | runtime::Reg::Bx
+                    | runtime::Reg::Cx
+                    | runtime::Reg::Dx
+                    | runtime::Reg::Si
+                    | runtime::Reg::Di => crate::backend::inline_asm::machine(one, bits)
+                        .ok_or_else(|| AbiError(format!("inline assembly passes a value in {}", one.name()))),
                     other => Err(AbiError(format!("inline assembly passes a value in {}", other.name()))),
                 })
                 .collect::<Result<Vec<_>, _>>()
@@ -205,14 +218,15 @@ fn _contract_keeping(
     } else {
         name
     };
-    let found = runtime::per_call(&IndexMap::from_iter([(0, physical_name.to_owned())]), family.value(), &BTreeSet::new())
-        .swap_remove(&0)
-        .expect("one call in, one contract out");
+    let found =
+        runtime::per_call(&IndexMap::from_iter([(0, physical_name.to_owned())]), family.value(), &BTreeSet::new())
+            .swap_remove(&0)
+            .expect("one call in, one contract out");
     let evidence = &found.evidence;
     // `replace(found, cleanup=..., control=..., enters_user_code=...,
     // established=True, inputs=frozenset(), i386=True, evidence=...)`.
-    let refined = |found: &Contract, cleanup: i64, control: Control, enters_user_code: bool, evidence: String| {
-        Contract {
+    let refined =
+        |found: &Contract, cleanup: i64, control: Control, enters_user_code: bool, evidence: String| Contract {
             cleanup: Some(cleanup),
             control,
             enters_user_code,
@@ -221,8 +235,7 @@ fn _contract_keeping(
             i386: true,
             evidence,
             ..found.clone()
-        }
-    };
+        };
     let returns = |cleanup: i64, text: String| refined(&found, cleanup, Control::Returns, false, text);
     if _AUDITED_STATEMENT_STACK.get(physical_name) == Some(&pushed) {
         return Ok(returns(
@@ -781,14 +794,22 @@ impl crate::backend::assemble::Abi for HirAbi {
         self.stack_check.as_ref()
     }
 
-    fn registers(&self, callee: &str) -> Option<Registers> {
+    fn registers(
+        &self,
+        callee: &str,
+    ) -> Option<Registers> {
         if let Some(block) = asm_call(callee) {
             return block.ok().map(|(_, registers)| registers);
         }
         registers(callee.strip_prefix(crate::hir::mir::RUNTIME).unwrap_or(callee))
     }
 
-    fn contract(&self, callee: &str, pops: bool, pushed: i64) -> Result<Contract, String> {
+    fn contract(
+        &self,
+        callee: &str,
+        pops: bool,
+        pushed: i64,
+    ) -> Result<Contract, String> {
         if let Some(block) = asm_call(callee) {
             return block.map(|(contract, _)| contract).map_err(|error| error.0);
         }
@@ -797,7 +818,10 @@ impl crate::backend::assemble::Abi for HirAbi {
         _contract_keeping(name, cleanup, pushed, self.runtime, &self.preserved).map_err(|error| error.0)
     }
 
-    fn linked(&self, name: &str) -> String {
+    fn linked(
+        &self,
+        name: &str,
+    ) -> String {
         match name.strip_prefix(crate::hir::mir::RUNTIME) {
             Some(routine) => routine.to_owned(),
             None => self.objects.get(name).cloned().unwrap_or_else(|| name.to_owned()),
@@ -815,7 +839,10 @@ pub struct LoweredTarget {
 }
 
 impl LoweredTarget {
-    pub fn of(cpu: &'static crate::backend::cpu::Profile, abi: HirAbi) -> Self {
+    pub fn of(
+        cpu: &'static crate::backend::cpu::Profile,
+        abi: HirAbi,
+    ) -> Self {
         Self { machine: cpu.target(), abi, cpu }
     }
 }
@@ -825,7 +852,12 @@ impl llrm_mir::target::Machine for LoweredTarget {
         self.machine.spaces()
     }
 
-    fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)> {
+    fn foreign_span(
+        &self,
+        selectors: (i64, i64),
+        offsets: (i64, i64),
+        width: i64,
+    ) -> Option<(i64, i64)> {
         self.machine.foreign_span(selectors, offsets, width)
     }
 
@@ -861,11 +893,18 @@ impl llrm_mir::target::Machine for LoweredTarget {
         self.machine.private_convention()
     }
 
-    fn callee_pop(&self, convention: u32) -> Option<u32> {
+    fn callee_pop(
+        &self,
+        convention: u32,
+    ) -> Option<u32> {
         self.machine.callee_pop(convention)
     }
 
-    fn stack_argument_bytes(&self, convention: u32, arguments: &[llrm_mir::target::Argument]) -> Option<i64> {
+    fn stack_argument_bytes(
+        &self,
+        convention: u32,
+        arguments: &[llrm_mir::target::Argument],
+    ) -> Option<i64> {
         self.machine.stack_argument_bytes(convention, arguments)
     }
 
@@ -873,7 +912,10 @@ impl llrm_mir::target::Machine for LoweredTarget {
         self.machine.address_registers()
     }
 
-    fn kept_across(&self, callee: Option<&str>) -> i64 {
+    fn kept_across(
+        &self,
+        callee: Option<&str>,
+    ) -> i64 {
         use crate::backend::assemble::Abi;
         match callee.map(|name| self.abi.contract(name, false, 0)) {
             Some(Ok(contract)) => crate::backend::callregs::call_keeps(&contract).len() as i64,
@@ -889,20 +931,31 @@ impl llrm_mir::target::Machine for LoweredTarget {
         self.machine.huge_window()
     }
 
-    fn multiply_by(&self, factor: i64) -> i64 {
+    fn multiply_by(
+        &self,
+        factor: i64,
+    ) -> i64 {
         use crate::backend::arithmetic;
-        let multiply = arithmetic::immediate_multiply(self.cpu, factor).unwrap_or_else(|_| self.machine.costs().multiply);
+        let multiply =
+            arithmetic::immediate_multiply(self.cpu, factor).unwrap_or_else(|_| self.machine.costs().multiply);
         match arithmetic::cheapest_chain(factor, self.cpu) {
             Ok(Some((_, clocks))) => clocks.min(multiply),
             _ => multiply,
         }
     }
 
-    fn load_may_trap(&self, width: u64, align: u64) -> bool {
+    fn load_may_trap(
+        &self,
+        width: u64,
+        align: u64,
+    ) -> bool {
         self.machine.load_may_trap(width, align)
     }
 
-    fn port_touches_memory(&self, ports: (i64, i64)) -> bool {
+    fn port_touches_memory(
+        &self,
+        ports: (i64, i64),
+    ) -> bool {
         self.machine.port_touches_memory(ports)
     }
 }

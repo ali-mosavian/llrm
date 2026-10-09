@@ -8,25 +8,12 @@
 use std::collections::BTreeMap;
 
 /// Node-directive constants from generated `prstab.inc`.
-pub const PRSTAB_REQUIRED_EQUATES: &[&str] = &[
-    "ND_ACCEPT",
-    "ND_REJECT",
-    "ND_MARK",
-    "ND_EMIT",
-    "ND_BRANCH",
-    "ENCODE1BYTE",
-    "NUMNTINT",
-    "NUMNTEXT",
-];
+pub const PRSTAB_REQUIRED_EQUATES: &[&str] =
+    &["ND_ACCEPT", "ND_REJECT", "ND_MARK", "ND_EMIT", "ND_BRANCH", "ENCODE1BYTE", "NUMNTINT", "NUMNTEXT"];
 
 /// Reserved-word flag equates (`RWF_*`) that parser consumers reference.
-pub const PRSTAB_REQUIRED_RWF_EQUATES: &[&str] = &[
-    "RWF_OPERATOR",
-    "RWF_NO_DIRECT",
-    "RWF_NSTMTS",
-    "RWF_FUNC",
-    "RWF_STR",
-];
+pub const PRSTAB_REQUIRED_RWF_EQUATES: &[&str] =
+    &["RWF_OPERATOR", "RWF_NO_DIRECT", "RWF_NSTMTS", "RWF_FUNC", "RWF_STR"];
 
 /// Reserved-word token ids that lexer consumers treat as special cases.
 pub const PRSIRW_REQUIRED_EQUATES: &[&str] = &["IRW_NewLine", "IRW_PRINT", "IRW_DATA", "IRW_REM"];
@@ -44,7 +31,10 @@ pub struct ParseEquatesError {
 }
 
 impl std::fmt::Display for ParseEquatesError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         write!(f, "line {}: {}", self.line, self.message)
     }
 }
@@ -58,7 +48,10 @@ pub struct ParseDataError {
 }
 
 impl std::fmt::Display for ParseDataError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         write!(f, "line {}: {}", self.line, self.message)
     }
 }
@@ -67,26 +60,18 @@ impl std::error::Error for ParseDataError {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArtifactValidationError {
-    MissingEquate {
-        artifact: &'static str,
-        symbol: String,
-    },
-    MissingLabel {
-        artifact: &'static str,
-        label: String,
-    },
+    MissingEquate { artifact: &'static str, symbol: String },
+    MissingLabel { artifact: &'static str, label: String },
     InvalidNdDirectives(BTreeMap<String, i64>),
-    NonDenseIrwIds {
-        missing: Vec<i64>,
-    },
-    ParseEquates {
-        artifact: &'static str,
-        error: ParseEquatesError,
-    },
+    NonDenseIrwIds { missing: Vec<i64> },
+    ParseEquates { artifact: &'static str, error: ParseEquatesError },
 }
 
 impl std::fmt::Display for ArtifactValidationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         match self {
             Self::MissingEquate { artifact, symbol } => {
                 write!(f, "{artifact} is missing required equate {symbol}")
@@ -98,10 +83,7 @@ impl std::fmt::Display for ArtifactValidationError {
                 write!(f, "ND_* directives have unexpected values: {values:?}")
             }
             Self::NonDenseIrwIds { missing } => {
-                write!(
-                    f,
-                    "IRW_* ids are not dense 0..N-1; missing values: {missing:?}"
-                )
+                write!(f, "IRW_* ids are not dense 0..N-1; missing values: {missing:?}")
             }
             Self::ParseEquates { artifact, error } => {
                 write!(f, "failed to parse equates in {artifact}: {error}")
@@ -149,26 +131,14 @@ impl ArtifactSet {
         prsstate: impl Into<String>,
         prsrwt: impl Into<String>,
     ) -> Self {
-        Self {
-            prstab: prstab.into(),
-            prsirw: prsirw.into(),
-            prsstate: prsstate.into(),
-            prsrwt: prsrwt.into(),
-        }
+        Self { prstab: prstab.into(), prsirw: prsirw.into(), prsstate: prsstate.into(), prsrwt: prsrwt.into() }
     }
 
     pub fn validate(self) -> Result<ValidatedArtifacts, ArtifactValidationError> {
-        let prstab_equates =
-            parse_equates(&self.prstab).map_err(|error| ArtifactValidationError::ParseEquates {
-                artifact: "prstab.inc",
-                error,
-            })?;
-        let prsirw_equates = parse_irw_equates(&self.prsirw).map_err(|error| {
-            ArtifactValidationError::ParseEquates {
-                artifact: "prsirw.inc",
-                error,
-            }
-        })?;
+        let prstab_equates = parse_equates(&self.prstab)
+            .map_err(|error| ArtifactValidationError::ParseEquates { artifact: "prstab.inc", error })?;
+        let prsirw_equates = parse_irw_equates(&self.prsirw)
+            .map_err(|error| ArtifactValidationError::ParseEquates { artifact: "prsirw.inc", error })?;
 
         for symbol in PRSTAB_REQUIRED_EQUATES {
             if !prstab_equates.contains_key(*symbol) {
@@ -218,12 +188,7 @@ impl ArtifactSet {
             }
         }
 
-        Ok(ValidatedArtifacts {
-            prstab_equates,
-            prsirw_equates,
-            prsstate_labels,
-            prsrwt_labels,
-        })
+        Ok(ValidatedArtifacts { prstab_equates, prsirw_equates, prsstate_labels, prsrwt_labels })
     }
 }
 
@@ -240,10 +205,7 @@ pub fn parse_equates(text: &str) -> Result<BTreeMap<String, i64>, ParseEquatesEr
 
         if let Some((name, expr)) = split_equate_line(trimmed) {
             if raw.insert(name.clone(), expr).is_some() {
-                return Err(ParseEquatesError {
-                    line: line_no,
-                    message: format!("duplicate equate {name}"),
-                });
+                return Err(ParseEquatesError { line: line_no, message: format!("duplicate equate {name}") });
             }
         }
     }
@@ -254,10 +216,7 @@ pub fn parse_equates(text: &str) -> Result<BTreeMap<String, i64>, ParseEquatesEr
 /// Parse `IRW_*` equates from `prsirw.inc` text.
 pub fn parse_irw_equates(text: &str) -> Result<BTreeMap<String, i64>, ParseEquatesError> {
     let all = parse_equates(text)?;
-    Ok(all
-        .into_iter()
-        .filter(|(name, _)| name.starts_with("IRW_"))
-        .collect())
+    Ok(all.into_iter().filter(|(name, _)| name.starts_with("IRW_")).collect())
 }
 
 /// Return `label byte|word|dword` declarations in source order.
@@ -290,10 +249,7 @@ pub fn find_label_declarations(text: &str) -> BTreeMap<String, LabelDeclaration>
         };
 
         if !name.is_empty() {
-            labels.entry(name.to_string()).or_insert(LabelDeclaration {
-                kind,
-                line: line_no,
-            });
+            labels.entry(name.to_string()).or_insert(LabelDeclaration { kind, line: line_no });
         }
     }
 
@@ -319,14 +275,14 @@ pub fn parse_db_bytes(
     equates: &BTreeMap<String, i64>,
 ) -> Result<Vec<u8>, ParseDataError> {
     let values = parse_initializer_values(text, label, "db", equates)?;
-    values
-        .into_iter()
-        .map(|value| i64_to_u8(value).map_err(|message| ParseDataError { line: 0, message }))
-        .collect()
+    values.into_iter().map(|value| i64_to_u8(value).map_err(|message| ParseDataError { line: 0, message })).collect()
 }
 
 /// Parse `dw offset <symbol>` words following a label block.
-pub fn parse_dw_offsets(text: &str, label: &str) -> Result<Vec<String>, ParseDataError> {
+pub fn parse_dw_offsets(
+    text: &str,
+    label: &str,
+) -> Result<Vec<String>, ParseDataError> {
     let mut values = Vec::new();
     let mut in_block = false;
     let mut line_no = 0;
@@ -357,10 +313,8 @@ pub fn parse_dw_offsets(text: &str, label: &str) -> Result<Vec<String>, ParseDat
             });
         }
 
-        let Some(rest) = trimmed
-            .get(..2)
-            .filter(|prefix| prefix.eq_ignore_ascii_case("dw"))
-            .and_then(|_| trimmed.get(2..))
+        let Some(rest) =
+            trimmed.get(..2).filter(|prefix| prefix.eq_ignore_ascii_case("dw")).and_then(|_| trimmed.get(2..))
         else {
             continue;
         };
@@ -371,25 +325,14 @@ pub fn parse_dw_offsets(text: &str, label: &str) -> Result<Vec<String>, ParseDat
     }
 
     if !in_block {
-        return Err(ParseDataError {
-            line: 0,
-            message: format!("label {label} not found"),
-        });
+        return Err(ParseDataError { line: 0, message: format!("label {label} not found") });
     }
 
     Ok(values)
 }
 
-pub fn validate_nd_directives(
-    equates: &BTreeMap<String, i64>,
-) -> Result<(), ArtifactValidationError> {
-    let expected = [
-        ("ND_ACCEPT", 0),
-        ("ND_REJECT", 1),
-        ("ND_MARK", 2),
-        ("ND_EMIT", 3),
-        ("ND_BRANCH", 4),
-    ];
+pub fn validate_nd_directives(equates: &BTreeMap<String, i64>) -> Result<(), ArtifactValidationError> {
+    let expected = [("ND_ACCEPT", 0), ("ND_REJECT", 1), ("ND_MARK", 2), ("ND_EMIT", 3), ("ND_BRANCH", 4)];
     let mut mismatches = BTreeMap::new();
 
     for (name, value) in expected {
@@ -441,10 +384,7 @@ pub fn symbols_with_prefix<'a>(
     equates: &'a BTreeMap<String, i64>,
     prefix: &str,
 ) -> BTreeMap<&'a str, i64> {
-    equates
-        .iter()
-        .filter_map(|(name, value)| name.starts_with(prefix).then_some((name.as_str(), *value)))
-        .collect()
+    equates.iter().filter_map(|(name, value)| name.starts_with(prefix).then_some((name.as_str(), *value))).collect()
 }
 
 fn strip_comment(line: &str) -> &str {
@@ -465,9 +405,7 @@ fn split_equate_line(line: &str) -> Option<(String, String)> {
     Some((name, expr))
 }
 
-fn resolve_equates(
-    raw: BTreeMap<String, String>,
-) -> Result<BTreeMap<String, i64>, ParseEquatesError> {
+fn resolve_equates(raw: BTreeMap<String, String>) -> Result<BTreeMap<String, i64>, ParseEquatesError> {
     let mut resolved: BTreeMap<String, i64> = BTreeMap::new();
     let mut pending: Vec<(String, String)> = raw.into_iter().collect();
 
@@ -483,19 +421,13 @@ fn resolve_equates(
                 }
                 Err(EvalError::Unresolved(_)) => next_pending.push((name, expr)),
                 Err(EvalError::Invalid(message)) => {
-                    return Err(ParseEquatesError {
-                        line: 0,
-                        message: format!("{name} EQU {expr}: {message}"),
-                    });
+                    return Err(ParseEquatesError { line: 0, message: format!("{name} EQU {expr}: {message}") });
                 }
             }
         }
 
         if !progress {
-            let (name, expr) = next_pending
-                .first()
-                .cloned()
-                .unwrap_or_else(|| ("?".to_string(), String::new()));
+            let (name, expr) = next_pending.first().cloned().unwrap_or_else(|| ("?".to_string(), String::new()));
             return Err(ParseEquatesError {
                 line: 0,
                 message: format!("unresolved equate chain starting at {name} EQU {expr}"),
@@ -514,18 +446,15 @@ enum EvalError {
     Invalid(String),
 }
 
-fn eval_expression(expr: &str, env: &BTreeMap<String, i64>) -> Result<i64, EvalError> {
+fn eval_expression(
+    expr: &str,
+    env: &BTreeMap<String, i64>,
+) -> Result<i64, EvalError> {
     let tokens = tokenize_expression(expr)?;
-    let mut parser = ExprParser {
-        tokens: &tokens,
-        pos: 0,
-        env,
-    };
+    let mut parser = ExprParser { tokens: &tokens, pos: 0, env };
     let value = parser.parse_expr()?;
     if parser.pos != tokens.len() {
-        return Err(EvalError::Invalid(
-            "trailing tokens in expression".to_string(),
-        ));
+        return Err(EvalError::Invalid("trailing tokens in expression".to_string()));
     }
     Ok(value)
 }
@@ -583,9 +512,7 @@ fn tokenize_expression(expr: &str) -> Result<Vec<Token>, EvalError> {
             b'\'' => {
                 idx += 1;
                 if idx >= bytes.len() {
-                    return Err(EvalError::Invalid(
-                        "unterminated character literal".to_string(),
-                    ));
+                    return Err(EvalError::Invalid("unterminated character literal".to_string()));
                 }
                 let value = bytes[idx] as i64;
                 idx += 1;
@@ -600,9 +527,8 @@ fn tokenize_expression(expr: &str) -> Result<Vec<Token>, EvalError> {
                 while idx < bytes.len() && bytes[idx].is_ascii_alphanumeric() {
                     idx += 1;
                 }
-                let literal = std::str::from_utf8(&bytes[start..idx]).map_err(|_| {
-                    EvalError::Invalid("invalid utf-8 in numeric literal".to_string())
-                })?;
+                let literal = std::str::from_utf8(&bytes[start..idx])
+                    .map_err(|_| EvalError::Invalid("invalid utf-8 in numeric literal".to_string()))?;
                 tokens.push(Token::Number(parse_numeric_literal(literal)?));
             }
             b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'@' => {
@@ -626,10 +552,7 @@ fn tokenize_expression(expr: &str) -> Result<Vec<Token>, EvalError> {
                 }
             }
             _ => {
-                return Err(EvalError::Invalid(format!(
-                    "unexpected character {:?} in expression",
-                    ch as char
-                )));
+                return Err(EvalError::Invalid(format!("unexpected character {:?} in expression", ch as char)));
             }
         }
     }
@@ -641,18 +564,13 @@ fn parse_numeric_literal(literal: &str) -> Result<i64, EvalError> {
     let lower = literal.to_ascii_lowercase();
     if let Some(stem) = lower.strip_suffix('h') {
         let digits = if stem.is_empty() { "0" } else { stem };
-        i64::from_str_radix(digits, 16)
-            .map_err(|_| EvalError::Invalid(format!("invalid hex literal {literal}")))
+        i64::from_str_radix(digits, 16).map_err(|_| EvalError::Invalid(format!("invalid hex literal {literal}")))
     } else if let Some(stem) = lower.strip_suffix('b') {
-        i64::from_str_radix(stem, 2)
-            .map_err(|_| EvalError::Invalid(format!("invalid binary literal {literal}")))
+        i64::from_str_radix(stem, 2).map_err(|_| EvalError::Invalid(format!("invalid binary literal {literal}")))
     } else if let Some(stem) = lower.strip_suffix('d') {
-        stem.parse::<i64>()
-            .map_err(|_| EvalError::Invalid(format!("invalid decimal literal {literal}")))
+        stem.parse::<i64>().map_err(|_| EvalError::Invalid(format!("invalid decimal literal {literal}")))
     } else {
-        literal
-            .parse::<i64>()
-            .map_err(|_| EvalError::Invalid(format!("invalid numeric literal {literal}")))
+        literal.parse::<i64>().map_err(|_| EvalError::Invalid(format!("invalid numeric literal {literal}")))
     }
 }
 
@@ -719,11 +637,8 @@ impl<'a> ExprParser<'a> {
     }
 
     fn parse_primary(&mut self) -> Result<i64, EvalError> {
-        let token = self
-            .tokens
-            .get(self.pos)
-            .cloned()
-            .ok_or_else(|| EvalError::Invalid("empty expression".to_string()))?;
+        let token =
+            self.tokens.get(self.pos).cloned().ok_or_else(|| EvalError::Invalid("empty expression".to_string()))?;
         self.pos += 1;
 
         match token {
@@ -740,9 +655,9 @@ impl<'a> ExprParser<'a> {
             }
             Token::Offset => self.parse_offset_operand(),
             Token::Ident(name) => env_lookup(self.env, &name),
-            Token::Plus | Token::Minus | Token::Star | Token::Slash | Token::RParen => Err(
-                EvalError::Invalid("unexpected token in expression".to_string()),
-            ),
+            Token::Plus | Token::Minus | Token::Star | Token::Slash | Token::RParen => {
+                Err(EvalError::Invalid("unexpected token in expression".to_string()))
+            }
         }
     }
 
@@ -753,9 +668,7 @@ impl<'a> ExprParser<'a> {
             .cloned()
             .ok_or_else(|| EvalError::Invalid("expected symbol after OFFSET".to_string()))?
         else {
-            return Err(EvalError::Invalid(
-                "expected symbol after OFFSET".to_string(),
-            ));
+            return Err(EvalError::Invalid("expected symbol after OFFSET".to_string()));
         };
         self.pos += 1;
         env_lookup(self.env, &name)
@@ -766,7 +679,10 @@ impl<'a> ExprParser<'a> {
     }
 }
 
-fn env_lookup(env: &BTreeMap<String, i64>, name: &str) -> Result<i64, EvalError> {
+fn env_lookup(
+    env: &BTreeMap<String, i64>,
+    name: &str,
+) -> Result<i64, EvalError> {
     if let Some(value) = env.get(name) {
         return Ok(*value);
     }
@@ -780,7 +696,10 @@ fn env_lookup(env: &BTreeMap<String, i64>, name: &str) -> Result<i64, EvalError>
     Err(EvalError::Unresolved(name.to_string()))
 }
 
-fn label_declares(line: &str, label: &str) -> bool {
+fn label_declares(
+    line: &str,
+    label: &str,
+) -> bool {
     let mut parts = line.split_whitespace();
     let Some(name) = parts.next() else {
         return false;
@@ -839,20 +758,14 @@ fn parse_initializer_values(
     }
 
     if !in_block {
-        return Err(ParseDataError {
-            line: 0,
-            message: format!("label {label} not found"),
-        });
+        return Err(ParseDataError { line: 0, message: format!("label {label} not found") });
     }
 
     Ok(values)
 }
 
 fn split_data_items(rest: &str) -> Vec<&str> {
-    rest.split(',')
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
-        .collect()
+    rest.split(',').map(str::trim).filter(|item| !item.is_empty()).collect()
 }
 
 fn parse_data_operand(
@@ -861,10 +774,10 @@ fn parse_data_operand(
     line_no: usize,
 ) -> Result<i64, ParseDataError> {
     if item.starts_with('\'') {
-        let ch = item.chars().nth(1).ok_or_else(|| ParseDataError {
-            line: line_no,
-            message: format!("invalid character literal {item}"),
-        })?;
+        let ch = item
+            .chars()
+            .nth(1)
+            .ok_or_else(|| ParseDataError { line: line_no, message: format!("invalid character literal {item}") })?;
         return Ok(ch as i64);
     }
 
@@ -872,27 +785,29 @@ fn parse_data_operand(
         return Ok(value);
     }
 
-    eval_expression(item, equates).map_err(|error| ParseDataError {
-        line: line_no,
-        message: format!("{item}: {error:?}"),
-    })
+    eval_expression(item, equates)
+        .map_err(|error| ParseDataError { line: line_no, message: format!("{item}: {error:?}") })
 }
 
-fn parse_offset_operand(item: &str, line_no: usize) -> Result<String, ParseDataError> {
+fn parse_offset_operand(
+    item: &str,
+    line_no: usize,
+) -> Result<String, ParseDataError> {
     let mut parts = item.split_whitespace();
     let first = parts
         .next()
-        .ok_or_else(|| ParseDataError {
-            line: line_no,
-            message: "empty dw operand".to_string(),
-        })?
+        .ok_or_else(|| ParseDataError { line: line_no, message: "empty dw operand".to_string() })?
         .to_string();
 
     if first.eq_ignore_ascii_case("offset") {
-        let symbol = parts.next().ok_or_else(|| ParseDataError {
-            line: line_no,
-            message: format!("missing symbol after OFFSET in {item}"),
-        })?;
+        let symbol = parts
+            .next()
+            .ok_or_else(
+                || ParseDataError {
+                    line: line_no,
+                    message: format!("missing symbol after OFFSET in {item}"),
+                },
+            )?;
         return Ok(symbol.to_string());
     }
 
@@ -1005,13 +920,9 @@ mpIRWtoChar label byte
         assert_eq!(bytes, vec![0, 1, 2]);
 
         let offsets = parse_dw_offsets(PRSSTATE_FIXTURE, "tIntNtDisp").expect("tIntNtDisp offsets");
-        assert_eq!(
-            offsets,
-            vec!["StNtStatement".to_string(), "StExp".to_string()]
-        );
+        assert_eq!(offsets, vec!["StNtStatement".to_string(), "StExp".to_string()]);
 
-        let rw_bytes = parse_db_bytes(PRSRWT_FIXTURE, "mpIRWtoChar", &BTreeMap::new())
-            .expect("mpIRWtoChar bytes");
+        let rw_bytes = parse_db_bytes(PRSRWT_FIXTURE, "mpIRWtoChar", &BTreeMap::new()).expect("mpIRWtoChar bytes");
         assert_eq!(rw_bytes, vec![b'!', b'+', 0]);
     }
 
@@ -1031,14 +942,12 @@ mpIRWtoChar label byte
 
     #[test]
     fn artifact_set_validation_reports_missing_required_symbols() {
-        let error = ArtifactSet::new("ND_ACCEPT EQU 0", "", "", "")
-            .validate()
-            .expect_err("incomplete artifacts should fail");
+        let error =
+            ArtifactSet::new("ND_ACCEPT EQU 0", "", "", "").validate().expect_err("incomplete artifacts should fail");
 
         assert!(matches!(
             error,
-            ArtifactValidationError::MissingEquate { .. }
-                | ArtifactValidationError::ParseEquates { .. }
+            ArtifactValidationError::MissingEquate { .. } | ArtifactValidationError::ParseEquates { .. }
         ));
     }
 

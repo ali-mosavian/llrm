@@ -28,20 +28,9 @@ pub(super) enum Class {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Layout {
     /// `QUICKR_TEXT$`: a string, cut to `precision` (-1 for none).
-    Text {
-        fill: char,
-        align: char,
-        width: u16,
-        precision: i32,
-    },
+    Text { fill: char, align: char, width: u16, precision: i32 },
     /// `QUICKR_NUMERIC$`: a float's plain text without a type or precision.
-    Plain {
-        sign: char,
-        fill: char,
-        align: char,
-        width: u16,
-        separator: String,
-    },
+    Plain { sign: char, fill: char, align: char, width: u16, separator: String },
     /// `QUICKR_FORMAT$`: a number under a presentation type; `kind` "" is
     /// a float's bare precision.
     Format {
@@ -57,7 +46,10 @@ pub(super) enum Layout {
     },
 }
 
-fn number(text: &str, at: &mut usize) -> Option<u16> {
+fn number(
+    text: &str,
+    at: &mut usize,
+) -> Option<u16> {
     let digits = text[*at..].bytes().take_while(u8::is_ascii_digit).count();
     if digits == 0 {
         return None;
@@ -127,7 +119,10 @@ pub(super) fn parse(text: &str) -> Result<Spec, String> {
 }
 
 /// `spec` for a value of `class`, or Python's complaint about the pair.
-pub(super) fn layout(spec: &Spec, class: Class) -> Result<Layout, String> {
+pub(super) fn layout(
+    spec: &Spec,
+    class: Class,
+) -> Result<Layout, String> {
     let type_name = match class {
         Class::Text => "str",
         Class::Integer => "int",
@@ -165,12 +160,7 @@ pub(super) fn layout(spec: &Spec, class: Class) -> Result<Layout, String> {
         if let Some(grouping) = spec.grouping {
             return Err(format!("Cannot specify '{grouping}' with 's'."));
         }
-        return Ok(Layout::Text {
-            fill,
-            align,
-            width: spec.width,
-            precision: spec.precision.map_or(-1, i32::from),
-        });
+        return Ok(Layout::Text { fill, align, width: spec.width, precision: spec.precision.map_or(-1, i32::from) });
     }
     let integral = matches!(kind, Some('b' | 'c' | 'd' | 'o' | 'x' | 'X'))
         || (kind.is_none() || kind == Some('n')) && class == Class::Integer;
@@ -200,13 +190,7 @@ pub(super) fn layout(spec: &Spec, class: Class) -> Result<Layout, String> {
     let kind = match kind {
         None | Some('n') if class == Class::Integer => "d".to_owned(),
         None if spec.precision.is_none() => {
-            return Ok(Layout::Plain {
-                sign,
-                fill,
-                align,
-                width: spec.width,
-                separator,
-            });
+            return Ok(Layout::Plain { sign, fill, align, width: spec.width, separator });
         }
         None => String::new(),
         Some('n') => "g".to_owned(),

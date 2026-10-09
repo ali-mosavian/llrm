@@ -20,7 +20,10 @@ use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::IndexMap;
 
 /// Whether `one` brings back a value `redefined` names.
-fn reloads(one: &Insn, redefined: &BTreeSet<u32>) -> Option<u32> {
+fn reloads(
+    one: &Insn,
+    redefined: &BTreeSet<u32>,
+) -> Option<u32> {
     match one.defines.as_slice() {
         [value] if (one.spill_reload || one.rematerialized) && redefined.contains(value) => Some(*value),
         _ => None,
@@ -28,7 +31,11 @@ fn reloads(one: &Insn, redefined: &BTreeSet<u32>) -> Option<u32> {
 }
 
 /// `body` in SSA again: every value in `redefined` has one definition per name.
-pub fn repaired(body: &LirBody, redefined: &BTreeSet<u32>, held: &IndexMap<i64, BTreeSet<u32>>) -> LirBody {
+pub fn repaired(
+    body: &LirBody,
+    redefined: &BTreeSet<u32>,
+    held: &IndexMap<i64, BTreeSet<u32>>,
+) -> LirBody {
     let (live_in, _) = allocate::live(body);
     let graph = &body.blocks;
     let doms = loops::dominators(&graph, Some(body.entry));
@@ -79,7 +86,13 @@ pub fn repaired(body: &LirBody, redefined: &BTreeSet<u32>, held: &IndexMap<i64, 
                 if has.insert(*next) {
                     // A block that does not take the value into a register reloads it before every use: no phi.
                     let registered = held.get(next).is_none_or(|set| set.contains(value));
-                    if registered && live_in[next].contains(value) && !body.blocks.iter().any(|block| block.at == *next && block.phis.iter().any(|phi| phi.result == *value)) {
+                    if registered
+                        && live_in[next].contains(value)
+                        && !body
+                            .blocks
+                            .iter()
+                            .any(|block| block.at == *next && block.phis.iter().any(|phi| phi.result == *value))
+                    {
                         placed.entry(*next).or_default().push(*value);
                     }
                     if !blocks.contains(next) {
@@ -167,8 +180,12 @@ pub fn repaired(body: &LirBody, redefined: &BTreeSet<u32>, held: &IndexMap<i64, 
         // The operands this block hands to the phis of its successors.
         for to in &block.succ {
             for value in placed.get(to).into_iter().flatten() {
-                if let (Some(top), Some(name)) = (stacks.get(value).and_then(|stack| stack.last()), made.get(&(*to, *value))) {
-                    if let Some(phi) = phis_of.get_mut(to).and_then(|phis| phis.iter_mut().find(|phi| phi.result == *name)) {
+                if let (Some(top), Some(name)) =
+                    (stacks.get(value).and_then(|stack| stack.last()), made.get(&(*to, *value)))
+                {
+                    if let Some(phi) =
+                        phis_of.get_mut(to).and_then(|phis| phis.iter_mut().find(|phi| phi.result == *name))
+                    {
                         phi.incoming.push((at, *top));
                     }
                 }
@@ -240,12 +257,29 @@ pub fn simplified(body: &LirBody) -> Option<LirBody> {
             .blocks
             .iter()
             .map(|block| {
-                let insns = block.insns.iter().map(|one| if one.uses.iter().any(|value| ends.contains_key(value)) { spiller::_renamed(one, &ends) } else { Arc::clone(one) }).collect();
+                let insns = block
+                    .insns
+                    .iter()
+                    .map(|one| {
+                        if one.uses.iter().any(|value| ends.contains_key(value)) {
+                            spiller::_renamed(one, &ends)
+                        } else {
+                            Arc::clone(one)
+                        }
+                    })
+                    .collect();
                 let phis = block
                     .phis
                     .iter()
                     .filter(|phi| !ends.contains_key(&phi.result))
-                    .map(|phi| Phi { result: phi.result, incoming: phi.incoming.iter().map(|(from, value)| (*from, ends.get(value).copied().unwrap_or(*value))).collect() })
+                    .map(|phi| Phi {
+                        result: phi.result,
+                        incoming: phi
+                            .incoming
+                            .iter()
+                            .map(|(from, value)| (*from, ends.get(value).copied().unwrap_or(*value)))
+                            .collect(),
+                    })
                     .collect();
                 LirBlock { phis, ..block.with_insns(insns) }
             })

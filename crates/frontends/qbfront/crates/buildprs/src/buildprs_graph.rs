@@ -59,15 +59,24 @@ impl StateFlags {
         self.0
     }
 
-    pub const fn contains(self, flag: Self) -> bool {
+    pub const fn contains(
+        self,
+        flag: Self,
+    ) -> bool {
         self.0 & flag.0 == flag.0
     }
 
-    pub fn insert(&mut self, flag: Self) {
+    pub fn insert(
+        &mut self,
+        flag: Self,
+    ) {
         self.0 |= flag.0;
     }
 
-    pub fn remove(&mut self, flag: Self) {
+    pub fn remove(
+        &mut self,
+        flag: Self,
+    ) {
         self.0 &= !flag.0;
     }
 }
@@ -75,7 +84,10 @@ impl StateFlags {
 impl std::ops::BitOr for StateFlags {
     type Output = Self;
 
-    fn bitor(self, rhs: Self) -> Self::Output {
+    fn bitor(
+        self,
+        rhs: Self,
+    ) -> Self::Output {
         Self(self.0 | rhs.0)
     }
 }
@@ -123,46 +135,23 @@ impl Default for StateNode {
 
 impl StateNode {
     pub fn branch_node(node_id: u16) -> Self {
-        Self {
-            kind: StateKind::Branch,
-            payload: node_id,
-            encoded_size: 2,
-            ..Self::default()
-        }
+        Self { kind: StateKind::Branch, payload: node_id, encoded_size: 2, ..Self::default() }
     }
 
     pub fn mark(mark: u8) -> Self {
-        Self {
-            kind: StateKind::Mark,
-            payload: u16::from(mark),
-            encoded_size: 2,
-            ..Self::default()
-        }
+        Self { kind: StateKind::Mark, payload: u16::from(mark), encoded_size: 2, ..Self::default() }
     }
 
     pub fn emit(opcode: u16) -> Self {
-        Self {
-            kind: StateKind::Emit,
-            payload: opcode,
-            encoded_size: 3,
-            ..Self::default()
-        }
+        Self { kind: StateKind::Emit, payload: opcode, encoded_size: 3, ..Self::default() }
     }
 
     pub fn accept() -> Self {
-        Self {
-            kind: StateKind::Accept,
-            encoded_size: 1,
-            ..Self::default()
-        }
+        Self { kind: StateKind::Accept, encoded_size: 1, ..Self::default() }
     }
 
     pub fn reject() -> Self {
-        Self {
-            kind: StateKind::Reject,
-            encoded_size: 1,
-            ..Self::default()
-        }
+        Self { kind: StateKind::Reject, encoded_size: 1, ..Self::default() }
     }
 }
 
@@ -174,7 +163,10 @@ pub enum GraphEncodeError {
 }
 
 impl std::fmt::Display for GraphEncodeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         match self {
             Self::BranchOffsetOutOfRange { offset } => {
                 write!(f, "branch target offset {offset} cannot be encoded")
@@ -207,17 +199,26 @@ impl StateGraph {
         self.add_node(StateNode::default())
     }
 
-    pub fn add_node(&mut self, node: StateNode) -> NodeId {
+    pub fn add_node(
+        &mut self,
+        node: StateNode,
+    ) -> NodeId {
         let id = NodeId(self.nodes.len());
         self.nodes.push(node);
         id
     }
 
-    pub fn node(&self, id: NodeId) -> &StateNode {
+    pub fn node(
+        &self,
+        id: NodeId,
+    ) -> &StateNode {
         &self.nodes[id.0]
     }
 
-    pub fn node_mut(&mut self, id: NodeId) -> &mut StateNode {
+    pub fn node_mut(
+        &mut self,
+        id: NodeId,
+    ) -> &mut StateNode {
         &mut self.nodes[id.0]
     }
 
@@ -233,29 +234,49 @@ impl StateGraph {
         (0..self.nodes.len()).map(NodeId)
     }
 
-    pub fn add_true_link(&mut self, parent: NodeId, child: NodeId) {
+    pub fn add_true_link(
+        &mut self,
+        parent: NodeId,
+        child: NodeId,
+    ) {
         self.change_true_link(parent, Some(child));
     }
 
-    pub fn add_false_link(&mut self, parent: NodeId, child: NodeId) {
+    pub fn add_false_link(
+        &mut self,
+        parent: NodeId,
+        child: NodeId,
+    ) {
         self.change_false_link(parent, Some(child));
     }
 
-    pub fn change_true_link(&mut self, parent: NodeId, child: Option<NodeId>) {
+    pub fn change_true_link(
+        &mut self,
+        parent: NodeId,
+        child: Option<NodeId>,
+    ) {
         self.bump_refcount(child);
         let old = self.node(parent).true_link;
         self.node_mut(parent).true_link = child;
         self.release_refcount(old);
     }
 
-    pub fn change_false_link(&mut self, parent: NodeId, child: Option<NodeId>) {
+    pub fn change_false_link(
+        &mut self,
+        parent: NodeId,
+        child: Option<NodeId>,
+    ) {
         self.bump_refcount(child);
         let old = self.node(parent).false_link;
         self.node_mut(parent).false_link = child;
         self.release_refcount(old);
     }
 
-    pub fn replace_link_target(&mut self, old: NodeId, new: NodeId) {
+    pub fn replace_link_target(
+        &mut self,
+        old: NodeId,
+        new: NodeId,
+    ) {
         let ids = self.ids().collect::<Vec<_>>();
         for id in ids {
             if self.node(id).true_link == Some(old) {
@@ -267,7 +288,10 @@ impl StateGraph {
         }
     }
 
-    pub fn prepend_global(&mut self, id: NodeId) {
+    pub fn prepend_global(
+        &mut self,
+        id: NodeId,
+    ) {
         let old = self.global_head;
         self.node_mut(id).next_global = old;
         self.global_head = Some(id);
@@ -283,7 +307,10 @@ impl StateGraph {
         roots
     }
 
-    pub fn prepend_work(&mut self, id: NodeId) {
+    pub fn prepend_work(
+        &mut self,
+        id: NodeId,
+    ) {
         let old = self.work_head;
         self.node_mut(id).next_work = old;
         self.work_head = Some(id);
@@ -299,7 +326,10 @@ impl StateGraph {
         items
     }
 
-    pub fn encode_node(&self, id: NodeId) -> Result<Vec<u8>, GraphEncodeError> {
+    pub fn encode_node(
+        &self,
+        id: NodeId,
+    ) -> Result<Vec<u8>, GraphEncodeError> {
         let node = self.node(id);
         match node.kind {
             StateKind::Accept => Ok(vec![0x00]),
@@ -317,15 +347,17 @@ impl StateGraph {
         }
     }
 
-    fn encode_branch_operand(&self, id: NodeId) -> Result<Vec<u8>, GraphEncodeError> {
+    fn encode_branch_operand(
+        &self,
+        id: NodeId,
+    ) -> Result<Vec<u8>, GraphEncodeError> {
         let node = self.node(id);
         let Some(target) = node.true_link else {
             return Ok(vec![0xFF]);
         };
 
         let target_node = self.node(target);
-        let delta =
-            target_node.sort_index as isize - node.sort_index as isize - node.encoded_size as isize;
+        let delta = target_node.sort_index as isize - node.sort_index as isize - node.encoded_size as isize;
 
         if (-RELATIVE_DELTA_LIMIT + 1..RELATIVE_DELTA_LIMIT).contains(&delta) {
             if delta < 0 {
@@ -337,23 +369,23 @@ impl StateGraph {
         encode_absolute_branch_operand(target_node.sort_index)
     }
 
-    fn bump_refcount(&mut self, id: Option<NodeId>) {
+    fn bump_refcount(
+        &mut self,
+        id: Option<NodeId>,
+    ) {
         if let Some(id) = id {
             let node = self.node_mut(id);
-            node.refcount = node
-                .refcount
-                .checked_add(1)
-                .expect("too many pointers to state");
+            node.refcount = node.refcount.checked_add(1).expect("too many pointers to state");
         }
     }
 
-    fn release_refcount(&mut self, id: Option<NodeId>) {
+    fn release_refcount(
+        &mut self,
+        id: Option<NodeId>,
+    ) {
         if let Some(id) = id {
             let node = self.node_mut(id);
-            node.refcount = node
-                .refcount
-                .checked_sub(1)
-                .expect("state refcount underflow");
+            node.refcount = node.refcount.checked_sub(1).expect("state refcount underflow");
         }
     }
 }
@@ -449,14 +481,8 @@ mod tests {
         graph.add_true_link(absolute_branch, absolute_target);
 
         assert_eq!(graph.encode_node(accept_branch).unwrap(), vec![0x04, 0xFF]);
-        assert_eq!(
-            graph.encode_node(relative_branch).unwrap(),
-            vec![0x05, 0x08]
-        );
-        assert_eq!(
-            graph.encode_node(absolute_branch).unwrap(),
-            vec![0x06, 0xDF, 0xE8]
-        );
+        assert_eq!(graph.encode_node(relative_branch).unwrap(), vec![0x05, 0x08]);
+        assert_eq!(graph.encode_node(absolute_branch).unwrap(), vec![0x06, 0xDF, 0xE8]);
     }
 
     #[test]

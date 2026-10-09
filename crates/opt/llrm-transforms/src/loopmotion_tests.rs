@@ -19,7 +19,10 @@ use crate::testing::{parsed, printed, results};
 
 /// `text`'s @f with its stores sunk: its printed form, and whether any
 /// moved. @f computes what it did on `inputs`.
-fn sunk(text: &str, inputs: &[&[i128]]) -> (String, bool) {
+fn sunk(
+    text: &str,
+    inputs: &[&[i128]],
+) -> (String, bool) {
     let before = parsed(&format!("{DOS}{text}"));
     let mut module = before.clone();
     let (layout, outer) = (layout(&module), Rc::new(Outer::of(&module, None)));
@@ -31,7 +34,10 @@ fn sunk(text: &str, inputs: &[&[i128]]) -> (String, bool) {
     (after, changed)
 }
 
-fn kept(text: &str, inputs: &[&[i128]]) {
+fn kept(
+    text: &str,
+    inputs: &[&[i128]],
+) {
     let (after, changed) = sunk(text, inputs);
     assert!(!changed, "{after}");
     assert_eq!(after, printed(&parsed(&format!("{DOS}{text}"))));
@@ -84,14 +90,20 @@ fn test_counter_is_written_once_at_the_exit_not_every_iteration() {
 
 #[test]
 fn test_an_observer_in_the_loop_keeps_the_store() {
-    for observer in ["  %o = load i16, ptr @n\n", "  store i16 3, ptr @n\n", "  call void @touch()\n", "  %o = load volatile i16, ptr @m\n"] {
+    for observer in [
+        "  %o = load i16, ptr @n\n",
+        "  store i16 3, ptr @n\n",
+        "  call void @touch()\n",
+        "  %o = load volatile i16, ptr @m\n",
+    ] {
         kept(&hotlop(observer), TRIPS);
     }
 }
 
 #[test]
 fn test_an_exit_reachable_without_the_store_gets_no_new_write() {
-    let text = hotlop("").replace("b0:\n  br label %b1", "b0:\n  %e = icmp eq i16 %k, 7\n  br i1 %e, label %b3, label %b1");
+    let text =
+        hotlop("").replace("b0:\n  br label %b1", "b0:\n  %e = icmp eq i16 %k, 7\n  br i1 %e, label %b3, label %b1");
     kept(&text, &[&[0], &[1], &[7], &[50]]);
 }
 
@@ -130,7 +142,10 @@ b3:
 fn test_an_accumulator_stores_its_phi_once_after_the_loop() {
     let (text, changed) = sunk(&accumulator("  store i16 5, ptr @acc\n"), TRIPS);
     assert!(changed);
-    assert!(text.contains("b2:\n  %s1 = add i16 %s, %i\n  %next") && text.contains("b3:\n  store i16 %s, ptr @acc\n"), "{text}");
+    assert!(
+        text.contains("b2:\n  %s1 = add i16 %s, %i\n  %next") && text.contains("b3:\n  store i16 %s, ptr @acc\n"),
+        "{text}"
+    );
 }
 
 /// SUMTHREE: a call between the seed and the loop that writes only
@@ -140,7 +155,12 @@ fn test_an_accumulator_stores_its_phi_once_after_the_loop() {
 fn a_call_writing_another_cell_leaves_the_seed() {
     let seeded = accumulator("  store i16 5, ptr @acc\n  call void @w(ptr @m)\n");
     let text = format!("@m = global i16 0\n\ndeclare void @w(ptr) memory(argmem: write)\n\n{seeded}");
-    let (text, changed) = sunk(&text.replace("declare", "define").replace("memory(argmem: write)", "memory(argmem: write) {\nb:\n  store i16 1, ptr %0\n  ret void\n}"), TRIPS);
+    let (text, changed) = sunk(
+        &text
+            .replace("declare", "define")
+            .replace("memory(argmem: write)", "memory(argmem: write) {\nb:\n  store i16 1, ptr %0\n  ret void\n}"),
+        TRIPS,
+    );
     assert!(changed && text.contains("b3:\n  store i16 %s, ptr @acc\n"), "{text}");
 }
 
@@ -150,7 +170,10 @@ fn test_an_accumulator_without_zero_trip_initialization_stays_in_the_loop() {
 }
 
 /// The latch stores `value` to @g on each of `bound` trips.
-fn latch_store(value: &str, bound: &str) -> String {
+fn latch_store(
+    value: &str,
+    bound: &str,
+) -> String {
     format!(
         "@g = global i16 0
 
@@ -247,7 +270,10 @@ fn test_a_store_apart_from_every_load_sinks() {
 fn test_an_address_the_latch_computes_keeps_its_store() {
     let text = latch_store("%x", "10")
         .replace("@g = global i16 0", "@a = global [4 x i16] zeroinitializer")
-        .replace("  store i16 %x, ptr @g\n", "  %p = getelementptr [4 x i16], ptr @a, i16 0, i16 2\n  store i16 %x, ptr %p\n")
+        .replace(
+            "  store i16 %x, ptr @g\n",
+            "  %p = getelementptr [4 x i16], ptr @a, i16 0, i16 2\n  store i16 %x, ptr %p\n",
+        )
         .replace("load i16, ptr @g", "load i16, ptr getelementptr ([4 x i16], ptr @a, i16 0, i16 2)");
     kept(&text, VALUES);
 }
@@ -257,7 +283,10 @@ fn test_an_address_the_latch_computes_keeps_its_store() {
 /// past a bound's runtime call.
 #[test]
 fn test_a_call_writing_elsewhere_keeps_the_seed() {
-    let text = accumulator("  store i16 5, ptr @acc\n  call void @touch()\n").replace("define i16 @f", "@m = global i16 0\n\ndefine void @touch() {\nb:\n  store i16 1, ptr @m\n  ret void\n}\n\ndefine i16 @f");
+    let text = accumulator("  store i16 5, ptr @acc\n  call void @touch()\n").replace(
+        "define i16 @f",
+        "@m = global i16 0\n\ndefine void @touch() {\nb:\n  store i16 1, ptr @m\n  ret void\n}\n\ndefine i16 @f",
+    );
     let module = parsed(&format!("{DOS}{text}"));
     let after = crate::testing::summarized(&module, super::LoopMotion, true, TRIPS);
     assert!(after.contains("b3:\n  store i16 %s, ptr @acc\n"), "{after}");
@@ -274,7 +303,10 @@ fn test_the_entry_value_is_asked_once_per_block_not_per_path() {
             format!("{join}:\n  br i1 %p, label %t{at}, label %e{at}\n\nt{at}:\n  br i1 %p, label %t{at}, label %j{at}\n\ne{at}:\n  br label %j{at}\n\n")
         })
         .collect();
-    let text = accumulator("  %p = icmp eq i16 %k, 3\n").replace("b0:\n  %p = icmp eq i16 %k, 3\n  br label %b1\n", &format!("{diamonds}j39:\n  br label %b1\n")).replace("[ 0, %b0 ]", "[ 0, %j39 ]").replace("[ 5, %b0 ]", "[ 5, %j39 ]");
+    let text = accumulator("  %p = icmp eq i16 %k, 3\n")
+        .replace("b0:\n  %p = icmp eq i16 %k, 3\n  br label %b1\n", &format!("{diamonds}j39:\n  br label %b1\n"))
+        .replace("[ 0, %b0 ]", "[ 0, %j39 ]")
+        .replace("[ 5, %b0 ]", "[ 5, %j39 ]");
     let text = text.replace("b0:\n  br i1 %p", "b0:\n  store i16 5, ptr @acc\n  %p = icmp eq i16 %k, 3\n  br i1 %p");
     let (done, finished) = std::sync::mpsc::channel();
     std::thread::spawn(move || done.send(sunk(&text, TRIPS)).unwrap());
@@ -282,8 +314,8 @@ fn test_the_entry_value_is_asked_once_per_block_not_per_path() {
 }
 
 /// Each loop sunk made the next ask of Annotated prove every loop's trips again, and work the edges' facts of every
-/// block again: 20 loops proved 420 times, 1,220 blocks and 400 loops worked: 59, 118 and 39 now. A change reaches the loops and blocks
-/// that read what it touched, so the others keep what they had.
+/// block again: 20 loops proved 420 times, 1,220 blocks and 400 loops worked: 59, 118 and 39 now. A change reaches the
+/// loops and blocks that read what it touched, so the others keep what they had.
 #[test]
 fn test_sinking_a_loops_store_proves_only_that_loop_again() {
     // The check derives them afresh to compare, and is counted.
@@ -296,7 +328,9 @@ fn test_sinking_a_loops_store_proves_only_that_loop_again() {
         let from = if at == 0 { "b0".to_owned() } else { format!("p{at}") };
         let exit = if at + 1 == loops { "end".to_owned() } else { format!("p{}", at + 1) };
         text += &format!("@n{at} = global i16 0\n");
-        text += &format!("h{at}:\n  %i{at} = phi i16 [ 0, %{from} ], [ %x{at}, %l{at} ]\n  store i16 %i{at}, ptr @n{at}\n  %c{at} = icmp slt i16 %i{at}, 9\n  br i1 %c{at}, label %l{at}, label %{exit}\n\nl{at}:\n  %x{at} = add i16 %i{at}, 1\n  br label %h{at}\n\n");
+        text += &format!(
+            "h{at}:\n  %i{at} = phi i16 [ 0, %{from} ], [ %x{at}, %l{at} ]\n  store i16 %i{at}, ptr @n{at}\n  %c{at} = icmp slt i16 %i{at}, 9\n  br i1 %c{at}, label %l{at}, label %{exit}\n\nl{at}:\n  %x{at} = add i16 %i{at}, 1\n  br label %h{at}\n\n"
+        );
         if at + 1 < loops {
             text += &format!("p{}:\n  br label %h{}\n\n", at + 1, at + 1);
         }
@@ -304,7 +338,11 @@ fn test_sinking_a_loops_store_proves_only_that_loop_again() {
     text += "end:\n  ret i16 %k\n}\n";
     let globals: String = (0..loops).map(|at| format!("@n{at} = global i16 0\n")).collect();
     let text = text.lines().filter(|line| !line.starts_with('@')).collect::<Vec<_>>().join("\n");
-    let before = (llrm_analysis::induction::proved(), llrm_analysis::ranges::blocks_solved(), llrm_analysis::ranges::loops_solved());
+    let before = (
+        llrm_analysis::induction::proved(),
+        llrm_analysis::ranges::blocks_solved(),
+        llrm_analysis::ranges::loops_solved(),
+    );
     let (after, changed) = sunk(&format!("{globals}{text}\n"), TRIPS);
     assert!(changed, "{after}");
     let proved = llrm_analysis::induction::proved() - before.0;
@@ -312,12 +350,16 @@ fn test_sinking_a_loops_store_proves_only_that_loop_again() {
     let worked = llrm_analysis::ranges::loops_solved() - before.2;
     assert!(proved <= 4 * loops, "{proved} loops proved for {loops} loops sunk one after another");
     assert!(worked <= 4 * loops, "{worked} loops worked for the bounds of {loops} loops sunk one after another");
-        assert!(solved <= 200, "{solved} blocks worked for the edges of a body of {} blocks, {loops} sunk one after another", 2 * loops + loops);
+    assert!(
+        solved <= 200,
+        "{solved} blocks worked for the edges of a body of {} blocks, {loops} sunk one after another",
+        2 * loops + loops
+    );
 }
 
-/// A store moved to the loop's exit threw away every analysis held, so each of a nest's loops with a store to move worked its
-/// ranges out again (nest 32 deep: 55 `bounded` runs, 9.5 G of a 35 G compile). No value, block or edge moves, so what is held of
-/// them stays.
+/// A store moved to the loop's exit threw away every analysis held, so each of a nest's loops with a store to move
+/// worked its ranges out again (nest 32 deep: 55 `bounded` runs, 9.5 G of a 35 G compile). No value, block or edge
+/// moves, so what is held of them stays.
 #[test]
 fn test_moving_a_store_keeps_the_ranges_held() {
     use llrm_analysis::manager::Bounded;

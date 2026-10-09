@@ -11,12 +11,19 @@ struct Counting;
 static ALLOCATED: AtomicUsize = AtomicUsize::new(0);
 
 unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+    unsafe fn alloc(
+        &self,
+        layout: Layout,
+    ) -> *mut u8 {
         ALLOCATED.fetch_add(1, Ordering::Relaxed);
         unsafe { System.alloc(layout) }
     }
 
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+    unsafe fn dealloc(
+        &self,
+        pointer: *mut u8,
+        layout: Layout,
+    ) {
         unsafe { System.dealloc(pointer, layout) }
     }
 }
@@ -27,7 +34,12 @@ static COUNTING: Counting = Counting;
 #[test]
 fn test_asking_what_an_operand_names_allocates_nothing() {
     let held = Held { value: 7, width: 2 };
-    let cell = Mem { base: Some(Held { value: 1, width: 2 }), index: Some(Held { value: 2, width: 2 }), selector: Some(Held { value: 3, width: 2 }), ..Mem::new(None, 2) };
+    let cell = Mem {
+        base: Some(Held { value: 1, width: 2 }),
+        index: Some(Held { value: 2, width: 2 }),
+        selector: Some(Held { value: 3, width: 2 }),
+        ..Mem::new(None, 2)
+    };
     let operands = [Loc::Held(held), Loc::Mem(cell)];
     let before = ALLOCATED.load(Ordering::Relaxed);
     let mut named = 0;

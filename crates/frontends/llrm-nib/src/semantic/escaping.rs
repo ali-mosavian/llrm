@@ -12,7 +12,7 @@
 
 use super::*;
 use crate::resumable::{self, HiddenType, Kept, Lowering, RESUME, STATE};
-use crate::syntax::{Clause, MatchArm, Pattern, StructField, Struct};
+use crate::syntax::{Clause, MatchArm, Pattern, Struct, StructField};
 
 /// A generator instance's state type, the fields it starts zero, and the
 /// live flags of its parameters, which it starts holding.
@@ -50,7 +50,12 @@ impl TypeRegistry {
 
 impl FunctionCompiler<'_> {
     /// `callee(arguments)` that no `for` consumes: its state, at the start.
-    pub(super) fn escaping_generator(&mut self, callee: &str, arguments: &[Expr], span: Span) -> Result<Expr, Diagnostic> {
+    pub(super) fn escaping_generator(
+        &mut self,
+        callee: &str,
+        arguments: &[Expr],
+        span: Span,
+    ) -> Result<Expr, Diagnostic> {
         let template = self.templates.borrow().generator(callee).cloned().expect("a generator");
         let inferred = self.inferred(&template, arguments, span)?;
         if !inferred.lambdas.is_empty() {
@@ -70,7 +75,8 @@ impl FunctionCompiler<'_> {
         };
         // Its frame keeps what it is lent, and may store any of it in what
         // a `&mut` argument holds, as a call may.
-        let kinds = function.parameters.iter().map(|one| parameter_kind(self.types, one)).collect::<Result<Vec<_>, _>>()?;
+        let kinds =
+            function.parameters.iter().map(|one| parameter_kind(self.types, one)).collect::<Result<Vec<_>, _>>()?;
         let lent = self.lent(&inferred.passed, &kinds);
         borrows::check_disjoint(&lent, &inferred.passed.iter().map(Expr::span).collect::<Vec<_>>())?;
         // A frame outlives the call that starts it.
@@ -78,7 +84,13 @@ impl FunctionCompiler<'_> {
         self.keep_lent(&lent_all);
         self.store_call_borrows(&inferred.passed, &kinds, &lent, span)?;
         let mut fields = vec![(RESUME.to_string(), Expr::Integer(0, span), span)];
-        fields.extend(function.parameters.iter().zip(inferred.passed).map(|(parameter, argument)| (parameter.name.clone(), argument, span)));
+        fields.extend(
+            function
+                .parameters
+                .iter()
+                .zip(inferred.passed)
+                .map(|(parameter, argument)| (parameter.name.clone(), argument, span)),
+        );
         fields.extend(state.zeroed.into_iter().map(|name| (name, Expr::Zero(span), span)));
         fields.extend(state.live.into_iter().map(|name| (name, Expr::Boolean(true, span), span)));
         Ok(Expr::StructLiteral { name: state.name, fields, span })
@@ -89,10 +101,22 @@ impl FunctionCompiler<'_> {
     /// compile is the one check of a generator body's moves and borrows; the
     /// state machine's control flow, a loop around every state, cannot say
     /// which of its moves precede which use.
-    fn check_in_place(&mut self, callee: &str, function: &Function, span: Span) -> Result<(), Diagnostic> {
+    fn check_in_place(
+        &mut self,
+        callee: &str,
+        function: &Function,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         let arguments = function.parameters.iter().map(|one| Expr::Name(one.name.clone(), span)).collect();
         let iterable = Expr::Call { name: callee.into(), type_arguments: Vec::new(), arguments, span };
-        let consume = Statement::For { mode: IterationMode::Value, name: "$checked".into(), iterable, body: Vec::new(), returned: false, span };
+        let consume = Statement::For {
+            mode: IterationMode::Value,
+            name: "$checked".into(),
+            iterable,
+            body: Vec::new(),
+            returned: false,
+            span,
+        };
         let check = Function {
             name: format!("$check_{callee}"),
             generics: Vec::new(),
@@ -102,14 +126,31 @@ impl FunctionCompiler<'_> {
             span,
         };
         let signature = signature(self.types, &check, 0)?;
-        let compiler = FunctionCompiler::new(&check, &signature, self.signatures, self.templates, self.builtin_ids, self.private_methods, self.literals, self.types, self.facts, self.unchecked_bounds, false)?;
+        let compiler = FunctionCompiler::new(
+            &check,
+            &signature,
+            self.signatures,
+            self.templates,
+            self.builtin_ids,
+            self.private_methods,
+            self.literals,
+            self.types,
+            self.facts,
+            self.unchecked_bounds,
+            false,
+        )?;
         compiler.compile(&check).map(|_| ())
     }
 
     /// `(element for ... in ...)` that no `for` consumes: a generator of its
     /// own, taking each name it reads from here -- a scalar by value,
     /// anything else borrowed -- started with them.
-    pub(super) fn escaping_generator_expression(&mut self, element: &Expr, clauses: &[Clause], span: Span) -> Result<Expr, Diagnostic> {
+    pub(super) fn escaping_generator_expression(
+        &mut self,
+        element: &Expr,
+        clauses: &[Clause],
+        span: Span,
+    ) -> Result<Expr, Diagnostic> {
         let depth = self.scopes.len();
         let item = self.clause_scopes(clauses).and_then(|()| self.value_element(element, span));
         self.scopes.truncate(depth);
@@ -125,7 +166,9 @@ impl FunctionCompiler<'_> {
         let mut read = element.names();
         for clause in clauses {
             match clause {
-                Clause::For { iterable, end, .. } => read.extend(iterable.names().into_iter().chain(end.iter().flat_map(Expr::names))),
+                Clause::For { iterable, end, .. } => {
+                    read.extend(iterable.names().into_iter().chain(end.iter().flat_map(Expr::names)))
+                }
                 Clause::If(condition) => read.extend(condition.names()),
             }
         }
@@ -141,11 +184,19 @@ impl FunctionCompiler<'_> {
                 let binding = self.binding(name, span)?.clone();
                 let borrowed = |target| ParameterType::Borrowed { mutable: false, target };
                 let type_ = match binding.type_ {
-                    BindingType::Scalar(type_name) if !ownership::needs_drop(type_name) => ParameterType::Owned(TypeAnnotation::Value(TypeSpec::Primitive(type_name))),
+                    BindingType::Scalar(type_name) if !ownership::needs_drop(type_name) => {
+                        ParameterType::Owned(TypeAnnotation::Value(TypeSpec::Primitive(type_name)))
+                    }
                     BindingType::Scalar(type_name) => borrowed(TypeAnnotation::Value(TypeSpec::Primitive(type_name))),
-                    BindingType::Struct(id) => borrowed(TypeAnnotation::Value(self.types.spec_of(ElementType::Struct(id)))),
-                    BindingType::Array { element, shape } => borrowed(TypeAnnotation::Slice { element: self.types.spec_of(element), rank: shape.rank }),
-                    BindingType::Slice { element, rank } => borrowed(TypeAnnotation::Slice { element: self.types.spec_of(element), rank }),
+                    BindingType::Struct(id) => {
+                        borrowed(TypeAnnotation::Value(self.types.spec_of(ElementType::Struct(id))))
+                    }
+                    BindingType::Array { element, shape } => {
+                        borrowed(TypeAnnotation::Slice { element: self.types.spec_of(element), rank: shape.rank })
+                    }
+                    BindingType::Slice { element, rank } => {
+                        borrowed(TypeAnnotation::Slice { element: self.types.spec_of(element), rank })
+                    }
                 };
                 Ok(Parameter { name: name.clone(), type_, default: None, span })
             })
@@ -153,18 +204,39 @@ impl FunctionCompiler<'_> {
         // Named per state: a generic body's expression is one per instance.
         let name = format!("$generator{}", self.types.generator_states.len());
         let body = Clause::loops(clauses, vec![Statement::Yield { value: element.clone(), span }]);
-        let result = TypeAnnotation::Value(TypeSpec::Applied { name: "iter".into(), args: vec![TypeAnnotation::Value(self.types.spec_of(item))] });
-        self.templates.borrow_mut().add_generator(Function { name: name.clone(), generics: Vec::new(), parameters, result, body, span });
+        let result = TypeAnnotation::Value(TypeSpec::Applied {
+            name: "iter".into(),
+            args: vec![TypeAnnotation::Value(self.types.spec_of(item))],
+        });
+        self.templates
+            .borrow_mut()
+            .add_generator(
+                Function {
+                    name: name.clone(),
+                    generics: Vec::new(),
+                    parameters,
+                    result,
+                    body,
+                    span,
+                },
+            );
         let arguments: Vec<Expr> = captured.into_iter().map(|one| Expr::Name(one, span)).collect();
         self.escaping_generator(&name, &arguments, span)
     }
 
     /// Declares `function`'s state type and its `next`.
-    fn generator_state(&mut self, mut function: Function, span: Span) -> Result<GeneratorState, Diagnostic> {
+    fn generator_state(
+        &mut self,
+        mut function: Function,
+        span: Span,
+    ) -> Result<GeneratorState, Diagnostic> {
         let (mut fields, mut borrowed) = self.kept_parameters(&function, span)?;
         let parameters = fields.len();
         self.hold_computed_iterables(&mut function.body);
-        resumable::unique_bindings(&mut function.body, &fields.iter().map(|field| field.name.clone()).collect::<Vec<_>>());
+        resumable::unique_bindings(
+            &mut function.body,
+            &fields.iter().map(|field| field.name.clone()).collect::<Vec<_>>(),
+        );
         let names: BTreeSet<String> = function
             .parameters
             .iter()
@@ -196,8 +268,16 @@ impl FunctionCompiler<'_> {
         self.held = caller_held;
         let lowered = typed.and_then(|()| {
             let kept = Kept {
-                owning: fields.iter().filter(|field| names.contains(&field.name) && self.element_needs_drop(field.element)).map(|field| field.name.clone()).collect(),
-                iterators: fields.iter().filter(|field| self.frame_of(field.element).is_some()).map(|field| field.name.clone()).collect(),
+                owning: fields
+                    .iter()
+                    .filter(|field| names.contains(&field.name) && self.element_needs_drop(field.element))
+                    .map(|field| field.name.clone())
+                    .collect(),
+                iterators: fields
+                    .iter()
+                    .filter(|field| self.frame_of(field.element).is_some())
+                    .map(|field| field.name.clone())
+                    .collect(),
                 fields: names.iter().filter(|name| !borrowed.iter().any(|(view, _)| view == *name)).cloned().collect(),
                 views: borrowed.iter().map(|(view, _)| view.clone()).filter(|view| names.contains(view)).collect(),
             };
@@ -222,21 +302,31 @@ impl FunctionCompiler<'_> {
             .filter(|field| matches!(field.element, ElementType::Struct(_)) && self.holds_user_drop(field.element))
             .map(|field| (field.name.clone(), format!("$live{}", field.name)))
             .collect();
-        let live: Vec<String> = fields[..parameters].iter().filter_map(|field| flags.get(&field.name).cloned()).collect();
-        fields.extend(flags.values().map(|flag| Field { name: flag.clone(), element: ElementType::Scalar(TypeName::Bool), shape: None }));
+        let live: Vec<String> =
+            fields[..parameters].iter().filter_map(|field| flags.get(&field.name).cloned()).collect();
+        fields.extend(flags.values().map(|flag| Field {
+            name: flag.clone(),
+            element: ElementType::Scalar(TypeName::Bool),
+            shape: None,
+        }));
         let name = self.declare_frame(&fields, span)?;
         let id = self.types.structs[&name].id;
         let lent = fields.iter().map(|field| (field.name.clone(), self.types.lent_root())).collect();
         self.types.frames.insert(id, Frame { item, flags, lent });
         let next = self.next_method(&name, &fields, &borrowed, arms, args.clone(), span);
         self.templates.borrow_mut().generated(next, self.types)?;
-        let zeroed = fields[parameters..].iter().map(|field| field.name.clone()).filter(|field| !live.contains(field)).collect();
+        let zeroed =
+            fields[parameters..].iter().map(|field| field.name.clone()).filter(|field| !live.contains(field)).collect();
         Ok(GeneratorState { name, zeroed, live })
     }
 
     /// `function`'s parameters as fields, and those borrowed: each kept as
     /// its view or reference, and read in `next` by its name.
-    fn kept_parameters(&mut self, function: &Function, span: Span) -> Result<(Vec<Field>, Vec<(String, Binding)>), Diagnostic> {
+    fn kept_parameters(
+        &mut self,
+        function: &Function,
+        span: Span,
+    ) -> Result<(Vec<Field>, Vec<(String, Binding)>), Diagnostic> {
         let mut fields = Vec::new();
         let mut borrowed = Vec::new();
         for parameter in &function.parameters {
@@ -246,7 +336,11 @@ impl FunctionCompiler<'_> {
                 SignatureParameter::Borrowed { mutable, target, .. } => match target.ranked() {
                     Some((element, rank, _)) => {
                         let kept = self.types.kept_view(element, rank, mutable, span)?;
-                        let view = Binding { type_: BindingType::Slice { element, rank }, mutable, storage: Storage::Slice(self.lent_id()) };
+                        let view = Binding {
+                            type_: BindingType::Slice { element, rank },
+                            mutable,
+                            storage: Storage::Slice(self.lent_id()),
+                        };
                         (ElementType::Struct(kept), Some(view))
                     }
                     None => {
@@ -255,12 +349,19 @@ impl FunctionCompiler<'_> {
                             BindingType::Struct(id) => ElementType::Struct(id),
                             _ => unreachable!("an array is ranked"),
                         };
-                        let reference = Binding { mutable, storage: Storage::Reference(self.lent_id()), ..self.placeholder(target, None) };
+                        let reference = Binding {
+                            mutable,
+                            storage: Storage::Reference(self.lent_id()),
+                            ..self.placeholder(target, None)
+                        };
                         (ElementType::Scalar(self.types.reference(target, mutable)), Some(reference))
                     }
                 },
                 SignatureParameter::Adapter { .. } => {
-                    return Err(Diagnostic::new(span, format!("a generator cannot take the BASIC parameter {:?}", parameter.name)));
+                    return Err(Diagnostic::new(
+                        span,
+                        format!("a generator cannot take the BASIC parameter {:?}", parameter.name),
+                    ));
                 }
             };
             if let Some(binding) = binding {
@@ -272,9 +373,19 @@ impl FunctionCompiler<'_> {
     }
 
     /// Registers the state struct of `fields`, after the resume point; its name.
-    fn declare_frame(&mut self, fields: &[Field], span: Span) -> Result<String, Diagnostic> {
+    fn declare_frame(
+        &mut self,
+        fields: &[Field],
+        span: Span,
+    ) -> Result<String, Diagnostic> {
         let name = format!("{STATE}{}", self.types.generator_states.len());
-        let resume = StructField { name: RESUME.into(), mutable: true, type_spec: TypeSpec::Primitive(TypeName::U16), dims: Vec::new(), span };
+        let resume = StructField {
+            name: RESUME.into(),
+            mutable: true,
+            type_spec: TypeSpec::Primitive(TypeName::U16),
+            dims: Vec::new(),
+            span,
+        };
         let declared = Struct {
             name: name.clone(),
             generics: Vec::new(),
@@ -282,9 +393,18 @@ impl FunctionCompiler<'_> {
             pack: None,
             fields: std::iter::once(resume)
                 .chain(fields.iter().map(|field| {
-                    let kept = matches!(field.element, ElementType::Struct(id) if self.types.kept_views.contains_key(&id));
+                    let kept = matches!(
+                        field.element,
+                        ElementType::Struct(id) if self.types.kept_views.contains_key(&id)
+                    );
                     let dims = field.shape.map(|shape| shape.dims().to_vec()).unwrap_or_default();
-                    StructField { name: field.name.clone(), mutable: !kept, type_spec: self.types.spec_of(field.element), dims, span }
+                    StructField {
+                        name: field.name.clone(),
+                        mutable: !kept,
+                        type_spec: self.types.spec_of(field.element),
+                        dims,
+                        span,
+                    }
                 }))
                 .collect(),
             span,
@@ -295,27 +415,46 @@ impl FunctionCompiler<'_> {
 
     /// The state `name`'s `next`: each borrowed name bound, then one loop
     /// over a `match` of the resume point, whose arms are `arms`.
-    fn next_method(&self, name: &str, fields: &[Field], borrowed: &[(String, Binding)], arms: Vec<MatchArm>, item: Vec<TypeAnnotation>, span: Span) -> Function {
+    fn next_method(
+        &self,
+        name: &str,
+        fields: &[Field],
+        borrowed: &[(String, Binding)],
+        arms: Vec<MatchArm>,
+        item: Vec<TypeAnnotation>,
+        span: Span,
+    ) -> Function {
         let this = || Expr::Name("self".into(), span);
         let resume = Expr::Member { base: Box::new(this()), field: RESUME.into(), span };
         // A reference is bound as itself, a view as another name for the kept one.
-        let bound = borrowed.iter().map(|(kept, binding)| Statement::Bind {
-            mutable: false,
-            name: kept.clone(),
-            annotation: matches!(binding.storage, Storage::Reference(_)).then(|| {
-                let field = fields.iter().find(|one| &one.name == kept).expect("a field");
-                TypeAnnotation::Value(self.types.spec_of(field.element))
-            }),
-            value: Expr::Member { base: Box::new(this()), field: kept.clone(), span },
+        let bound = borrowed
+            .iter()
+            .map(
+                |(kept, binding)| Statement::Bind {
+                    mutable: false,
+                    name: kept.clone(),
+                    annotation: matches!(binding.storage, Storage::Reference(_)).then(|| {
+                        let field = fields.iter().find(|one| &one.name == kept).expect("a field");
+                        TypeAnnotation::Value(self.types.spec_of(field.element))
+                    }),
+                    value: Expr::Member { base: Box::new(this()), field: kept.clone(), span },
+                    span,
+                },
+            );
+        let resumed = Statement::While {
+            condition: Expr::Boolean(true, span),
+            body: vec![Statement::Match { subject: resume, arms, span }],
             span,
-        });
-        let resumed = Statement::While { condition: Expr::Boolean(true, span), body: vec![Statement::Match { subject: resume, arms, span }], span };
+        };
         Function {
             name: format!("{name}.next"),
             generics: Vec::new(),
             parameters: vec![Parameter {
                 name: "self".into(),
-                type_: ParameterType::Borrowed { mutable: true, target: TypeAnnotation::Value(TypeSpec::Named(name.into())) },
+                type_: ParameterType::Borrowed {
+                    mutable: true,
+                    target: TypeAnnotation::Value(TypeSpec::Named(name.into())),
+                },
                 default: None,
                 span,
             }],
@@ -328,7 +467,12 @@ impl FunctionCompiler<'_> {
     /// The type of each name a split block of `body` binds, in order, each
     /// seen by those after it; a generator a split block starts is its state.
     /// A view kept is `borrowed`: read by its name, as a borrowed parameter is.
-    fn typed_locals(&mut self, body: &mut [Statement], fields: &mut Vec<Field>, borrowed: &mut Vec<(String, Binding)>) -> Result<(), Diagnostic> {
+    fn typed_locals(
+        &mut self,
+        body: &mut [Statement],
+        fields: &mut Vec<Field>,
+        borrowed: &mut Vec<(String, Binding)>,
+    ) -> Result<(), Diagnostic> {
         for statement in body {
             let split = resumable::holds_yield(statement);
             match statement {
@@ -340,8 +484,12 @@ impl FunctionCompiler<'_> {
                     self.started_generators(value)?;
                     let (element, shape) = match annotation {
                         Some(TypeAnnotation::Value(spec)) => (self.types.resolve_element(spec, *span)?, None),
-                        Some(TypeAnnotation::Array { element, dims }) => (self.types.resolve_element(element, *span)?, Some(Shape::new(dims))),
-                        Some(TypeAnnotation::Slice { .. }) => return Err(Diagnostic::new(*span, "an owned array needs a fixed length: 'T[N]'")),
+                        Some(TypeAnnotation::Array { element, dims }) => {
+                            (self.types.resolve_element(element, *span)?, Some(Shape::new(dims)))
+                        }
+                        Some(TypeAnnotation::Slice { .. }) => {
+                            return Err(Diagnostic::new(*span, "an owned array needs a fixed length: 'T[N]'"));
+                        }
                         None => (self.local_type(name, value, *span)?, None),
                     };
                     self.check_lent(name, element, value, *span)?;
@@ -358,7 +506,10 @@ impl FunctionCompiler<'_> {
                     self.keep_pattern(pattern, value, *span, fields, borrowed)?;
                 }
                 Statement::ForRange { name, start, end, span, .. } if split => {
-                    let element = self.range_hint(start, end).map(ElementType::Scalar).ok_or_else(|| Diagnostic::new(*span, "range bounds must be integers with a common type"))?;
+                    let element = self
+                        .range_hint(start, end)
+                        .map(ElementType::Scalar)
+                        .ok_or_else(|| Diagnostic::new(*span, "range bounds must be integers with a common type"))?;
                     self.keep(name, element, None, fields);
                 }
                 Statement::For { name, iterable, span, .. } if split => {
@@ -368,7 +519,9 @@ impl FunctionCompiler<'_> {
                         self.check_lent(name, frame.item, iterable, *span)?;
                         self.keep(name, frame.item, None, fields);
                     } else {
-                        let element = self.iterated_item(iterable).ok_or_else(|| Diagnostic::new(*span, "a generator that escapes iterates an iterator or a sequence"))?;
+                        let element = self.iterated_item(iterable).ok_or_else(|| {
+                            Diagnostic::new(*span, "a generator that escapes iterates an iterator or a sequence")
+                        })?;
                         let binding = self.placeholder(element, None);
                         self.scopes.last_mut().expect("scope").insert(name.clone(), binding);
                     }
@@ -391,7 +544,10 @@ impl FunctionCompiler<'_> {
 
     /// Evaluates once each value a split `for` computes to iterate: `for x in
     /// f(): ...` is `with $iterable = f(): for x in $iterable: ...`.
-    fn hold_computed_iterables(&self, body: &mut [Statement]) {
+    fn hold_computed_iterables(
+        &self,
+        body: &mut [Statement],
+    ) {
         for statement in body.iter_mut().filter(|one| resumable::holds_yield(one)) {
             for block in statement.blocks_mut() {
                 self.hold_computed_iterables(block);
@@ -400,7 +556,9 @@ impl FunctionCompiler<'_> {
                 continue;
             };
             let computed = match iterable {
-                Expr::Call { name, .. } => !self.is_generator_call(name) && self.known_signature(name).is_some_and(|one| one.view.is_none()),
+                Expr::Call { name, .. } => {
+                    !self.is_generator_call(name) && self.known_signature(name).is_some_and(|one| one.view.is_none())
+                }
                 Expr::Array(..) | Expr::Repeat { .. } | Expr::Comprehension { .. } | Expr::FString { .. } => true,
                 _ => false,
             };
@@ -415,7 +573,10 @@ impl FunctionCompiler<'_> {
 
     /// `expression` readied as a statement's is, so each generator it starts
     /// that no `for` consumes is its state.
-    fn started_generators(&mut self, expression: &mut Expr) -> Result<(), Diagnostic> {
+    fn started_generators(
+        &mut self,
+        expression: &mut Expr,
+    ) -> Result<(), Diagnostic> {
         let consumed = instances::consumed_generators(&Statement::Expr(expression.clone()));
         let outer = std::mem::replace(&mut self.consumed, consumed);
         let prepared = self.prepare_expression(expression);
@@ -425,11 +586,22 @@ impl FunctionCompiler<'_> {
 
     /// Keeps each name `pattern` binds in `subject`: a sequence pattern's
     /// starred name views it.
-    fn keep_pattern(&mut self, pattern: &Pattern, subject: &Expr, span: Span, fields: &mut Vec<Field>, borrowed: &mut Vec<(String, Binding)>) -> Result<(), Diagnostic> {
+    fn keep_pattern(
+        &mut self,
+        pattern: &Pattern,
+        subject: &Expr,
+        span: Span,
+        fields: &mut Vec<Field>,
+        borrowed: &mut Vec<(String, Binding)>,
+    ) -> Result<(), Diagnostic> {
         let unknown = || Diagnostic::new(span, "the pattern's names must have known types");
         let bound = match pattern {
             Pattern::Sequence { before, rest, after, .. } => {
-                let element = self.view_value(subject).map(|(element, _, _)| element).or_else(|| self.iterated_item(subject)).ok_or_else(unknown)?;
+                let element = self
+                    .view_value(subject)
+                    .map(|(element, _, _)| element)
+                    .or_else(|| self.iterated_item(subject))
+                    .ok_or_else(unknown)?;
                 let mut bound = Vec::new();
                 for one in before.iter().chain(after) {
                     bound.extend(self.pattern_bindings(one, element).ok_or_else(unknown)?);
@@ -466,20 +638,42 @@ impl FunctionCompiler<'_> {
     /// place may (`Life::may_hold`) -- through its borrowed parameters,
     /// views and references it keeps, or the generators it holds, which keep
     /// only the same.
-    fn check_lent(&self, name: &str, element: ElementType, source: &Expr, span: Span) -> Result<(), Diagnostic> {
-        if !self.holds_reference(element) && !matches!(element, ElementType::Struct(id) if self.types.kept_views.contains_key(&id)) {
+    fn check_lent(
+        &self,
+        name: &str,
+        element: ElementType,
+        source: &Expr,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        if !self.holds_reference(element)
+            && !matches!(
+                element,
+                ElementType::Struct(id) if self.types.kept_views.contains_key(&id)
+            )
+        {
             return Ok(());
         }
         match self.roots(source).into_iter().find(|root| !borrows::Life::Lent.may_hold(root)) {
-            Some(root) => Err(Diagnostic::new(span, format!("a generator that escapes keeps only borrows of what its caller lent it; {name:?} borrows its own {:?}", root.name))),
+            Some(root) => Err(Diagnostic::new(
+                span,
+                format!(
+                    "a generator that escapes keeps only borrows of what its caller lent it; {name:?} borrows its own {:?}",
+                    root.name
+                ),
+            )),
             None => Ok(()),
         }
     }
 
     /// The view `value` makes: its element, rank, and whether it writes.
-    fn view_value(&self, value: &Expr) -> Option<(ElementType, u8, bool)> {
+    fn view_value(
+        &self,
+        value: &Expr,
+    ) -> Option<(ElementType, u8, bool)> {
         match value {
-            Expr::Borrow { mutable, operand, .. } => self.borrowed_view_type(operand, *mutable).map(|(element, rank)| (element, rank, *mutable)),
+            Expr::Borrow { mutable, operand, .. } => {
+                self.borrowed_view_type(operand, *mutable).map(|(element, rank)| (element, rank, *mutable))
+            }
             Expr::Slice { base, .. } => self.indexed_hint(base).map(|element| (element, 1, false)),
             _ => self.view_type_of(value).map(|(element, rank)| (element, rank, false)),
         }
@@ -488,11 +682,22 @@ impl FunctionCompiler<'_> {
     /// Keeps `name`, a view of what `source` borrows. The frame moves between
     /// resumptions, so the view may borrow only what the caller lent.
     #[allow(clippy::too_many_arguments)]
-    fn keep_view(&mut self, name: &str, element: ElementType, rank: u8, mutable: bool, source: &Expr, span: Span, fields: &mut Vec<Field>, borrowed: &mut Vec<(String, Binding)>) -> Result<(), Diagnostic> {
+    fn keep_view(
+        &mut self,
+        name: &str,
+        element: ElementType,
+        rank: u8,
+        mutable: bool,
+        source: &Expr,
+        span: Span,
+        fields: &mut Vec<Field>,
+        borrowed: &mut Vec<(String, Binding)>,
+    ) -> Result<(), Diagnostic> {
         let kept = ElementType::Struct(self.types.kept_view(element, rank, mutable, span)?);
         self.check_lent(name, kept, source, span)?;
         fields.push(Field { name: name.into(), element: kept, shape: None });
-        let view = Binding { type_: BindingType::Slice { element, rank }, mutable, storage: Storage::Slice(self.lent_id()) };
+        let view =
+            Binding { type_: BindingType::Slice { element, rank }, mutable, storage: Storage::Slice(self.lent_id()) };
         self.scopes.last_mut().expect("scope").insert(name.into(), view.clone());
         borrowed.push((name.into(), view));
         Ok(())
@@ -502,13 +707,22 @@ impl FunctionCompiler<'_> {
     /// storage, which no HIR names, keeps it apart from every other binding.
     /// A field that holds borrows or generators holds only what the caller
     /// lent.
-    fn placeholder(&mut self, element: ElementType, shape: Option<Shape>) -> Binding {
+    fn placeholder(
+        &mut self,
+        element: ElementType,
+        shape: Option<Shape>,
+    ) -> Binding {
         let type_ = match (element, shape) {
             (element, Some(shape)) => BindingType::Array { element, shape },
             (ElementType::Scalar(type_name), None) => BindingType::Scalar(type_name),
             (ElementType::Struct(id), None) => BindingType::Struct(id),
         };
-        let lent = self.frame_of(element).is_some() || self.holds_reference(element) || matches!(element, ElementType::Struct(id) if self.types.kept_views.contains_key(&id));
+        let lent = self.frame_of(element).is_some()
+            || self.holds_reference(element)
+            || matches!(
+                element,
+                ElementType::Struct(id) if self.types.kept_views.contains_key(&id)
+            );
         let id = if lent { self.lent_id() } else { self.unbound() };
         Binding { type_, mutable: true, storage: Storage::Place(id) }
     }
@@ -528,7 +742,13 @@ impl FunctionCompiler<'_> {
     }
 
     /// `name` as a field, and in scope for the names after it.
-    fn keep(&mut self, name: &str, element: ElementType, shape: Option<Shape>, fields: &mut Vec<Field>) {
+    fn keep(
+        &mut self,
+        name: &str,
+        element: ElementType,
+        shape: Option<Shape>,
+        fields: &mut Vec<Field>,
+    ) {
         fields.push(Field { name: name.into(), element, shape });
         let binding = self.placeholder(element, shape);
         self.scopes.last_mut().expect("scope").insert(name.into(), binding);
@@ -536,18 +756,33 @@ impl FunctionCompiler<'_> {
 
     /// The type of a local bound to `value` with none written: a borrow of a
     /// place is a reference to it, and any other value has its own type.
-    fn local_type(&mut self, name: &str, value: &Expr, span: Span) -> Result<ElementType, Diagnostic> {
+    fn local_type(
+        &mut self,
+        name: &str,
+        value: &Expr,
+        span: Span,
+    ) -> Result<ElementType, Diagnostic> {
         if let Expr::Borrow { mutable, operand, .. } = value {
             if let Some(target) = self.value_element(operand, span) {
                 return Ok(ElementType::Scalar(self.types.reference(target, *mutable)));
             }
         }
-        self.value_element(value, span)
-            .ok_or_else(|| Diagnostic::new(span, format!("the type of {name:?} is not evident from its value, and the generator's state keeps it: write it")))
+        self.value_element(value, span).ok_or_else(|| {
+            Diagnostic::new(
+                span,
+                format!(
+                    "the type of {name:?} is not evident from its value, and the generator's state keeps it: write it"
+                ),
+            )
+        })
     }
 
     /// The type of the value `expression` gives, when it is known.
-    fn value_element(&mut self, expression: &Expr, span: Span) -> Option<ElementType> {
+    fn value_element(
+        &mut self,
+        expression: &Expr,
+        span: Span,
+    ) -> Option<ElementType> {
         match self.struct_expression_type(expression, span) {
             Ok(Some(id)) => Some(ElementType::Struct(id)),
             _ => self.element_hint(expression),
@@ -555,21 +790,32 @@ impl FunctionCompiler<'_> {
     }
 
     /// The frame a value of `element` is, when it is one.
-    pub(super) fn frame_of(&self, element: ElementType) -> Option<&Frame> {
+    pub(super) fn frame_of(
+        &self,
+        element: ElementType,
+    ) -> Option<&Frame> {
         match element {
             ElementType::Struct(id) => self.types.frames.get(&id),
             ElementType::Scalar(_) => None,
         }
     }
 
-    fn frame_of_expression(&self, expression: &Expr) -> Option<Frame> {
+    fn frame_of_expression(
+        &self,
+        expression: &Expr,
+    ) -> Option<Frame> {
         let id = self.struct_expression_type(expression, expression.span()).ok()??;
         self.frame_of(ElementType::Struct(id)).cloned()
     }
 
     /// Whether `base.field` is a field of a frame, named as `next` names its
     /// own, and if so its live flag's place.
-    pub(super) fn frame_field(&mut self, base: &Expr, field: &str, span: Span) -> Result<Option<Option<hir::Operand>>, Diagnostic> {
+    pub(super) fn frame_field(
+        &mut self,
+        base: &Expr,
+        field: &str,
+        span: Span,
+    ) -> Result<Option<Option<hir::Operand>>, Diagnostic> {
         let (Expr::Name(..), Some(id)) = (base, self.struct_expression_type(base, span)?) else {
             return Ok(None);
         };
@@ -581,7 +827,11 @@ impl FunctionCompiler<'_> {
     }
 
     /// The live flag of `field` of the frame `parent` views, if it has one.
-    pub(super) fn frame_flag(&self, parent: &StructView, field: &str) -> Option<hir::Operand> {
+    pub(super) fn frame_flag(
+        &self,
+        parent: &StructView,
+        field: &str,
+    ) -> Option<hir::Operand> {
         let flag = self.types.frames.get(&parent.struct_id)?.flags.get(field)?;
         let offset = self.types.structure(parent.struct_id)?.fields[flag].offset;
         Some(self.projected_place(parent, offset, TypeName::Bool))

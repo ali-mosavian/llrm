@@ -35,7 +35,10 @@ const ROUTINES: [(&str, Known); 10] = [
     ("vfork", ReturnsTwice),
 ];
 
-fn known(name: &str, fact: Known) -> bool {
+fn known(
+    name: &str,
+    fact: Known,
+) -> bool {
     let name = name.strip_prefix('_').unwrap_or(name);
     ROUTINES.contains(&(name, fact))
 }
@@ -67,7 +70,12 @@ mod tests {
     /// `setjmp` returns twice by its name, with or without the C decoration.
     #[test]
     fn setjmp_is_known_to_return_twice() {
-        assert!(super::returns_twice("_setjmp") && super::returns_twice("setjmp") && super::returns_twice("_sigsetjmp") && super::returns_twice("vfork"));
+        assert!(
+            super::returns_twice("_setjmp")
+                && super::returns_twice("setjmp")
+                && super::returns_twice("_sigsetjmp")
+                && super::returns_twice("vfork")
+        );
         assert!(!super::returns_twice("_longjmp") && !super::returns_twice("_setjmp2"));
     }
 }

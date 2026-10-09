@@ -10,6 +10,7 @@
 //! their order in the file.
 
 use std::collections::{BTreeMap, BTreeSet};
+
 use llrm_support::hash::HashMap;
 
 use crate::resolve::{RGroup, RInsn, Side, Ty, Var};
@@ -72,7 +73,11 @@ pub enum Node {
     Fail,
     /// The rules left, in priority order.
     Accept(Vec<usize>),
-    Switch { key: Key, arms: Vec<(Val, NodeId)>, default: NodeId },
+    Switch {
+        key: Key,
+        arms: Vec<(Val, NodeId)>,
+        default: NodeId,
+    },
 }
 
 #[derive(Debug)]
@@ -89,7 +94,10 @@ impl Automaton {
     }
 
     /// The states the automaton is in once the first instruction is tested.
-    pub fn boundary(&self, id: NodeId) -> bool {
+    pub fn boundary(
+        &self,
+        id: NodeId,
+    ) -> bool {
         match &self.nodes[id] {
             Node::Fail => false,
             Node::Accept(_) => true,
@@ -98,7 +106,10 @@ impl Automaton {
     }
 
     /// The rules any path from `id` accepts, in priority order.
-    pub fn reachable(&self, id: NodeId) -> BTreeSet<usize> {
+    pub fn reachable(
+        &self,
+        id: NodeId,
+    ) -> BTreeSet<usize> {
         match &self.nodes[id] {
             Node::Fail => BTreeSet::new(),
             Node::Accept(rules) => rules.iter().copied().collect(),
@@ -137,7 +148,10 @@ fn ty_kind(ty: Ty) -> Option<&'static str> {
 
 /// The tests one rule's pattern makes: one set per operation its heads
 /// allow, so that a mnemonic is only ever tested under its own operation.
-pub fn tests(insns: &[RInsn], vars: &indexmap::IndexMap<String, Var>) -> Vec<Tests> {
+pub fn tests(
+    insns: &[RInsn],
+    vars: &indexmap::IndexMap<String, Var>,
+) -> Vec<Tests> {
     let mut out = Tests::new();
     for (slot, insn) in insns.iter().enumerate() {
         out.extend(operand_tests(insn, slot, vars));
@@ -163,7 +177,11 @@ pub fn tests(insns: &[RInsn], vars: &indexmap::IndexMap<String, Var>) -> Vec<Tes
 }
 
 /// The tests on one instruction's operand counts and operands.
-pub fn operand_tests(insn: &RInsn, slot: usize, vars: &indexmap::IndexMap<String, Var>) -> Tests {
+pub fn operand_tests(
+    insn: &RInsn,
+    slot: usize,
+    vars: &indexmap::IndexMap<String, Var>,
+) -> Tests {
     let mut out = Tests::new();
     let mut one = |key: Key, value: Val| {
         out.insert(key, BTreeSet::from([value]));
@@ -213,7 +231,10 @@ struct Builder {
 }
 
 impl Builder {
-    fn add(&mut self, node: Node) -> NodeId {
+    fn add(
+        &mut self,
+        node: Node,
+    ) -> NodeId {
         if let Some(id) = self.shared.get(&node) {
             return *id;
         }
@@ -228,13 +249,18 @@ impl Builder {
         id
     }
 
-    fn build(&mut self, rows: Vec<(usize, Tests)>) -> NodeId {
+    fn build(
+        &mut self,
+        rows: Vec<(usize, Tests)>,
+    ) -> NodeId {
         if rows.is_empty() {
             return 0;
         }
         let signature: Vec<(usize, Vec<(Key, Vec<Val>)>)> = rows
             .iter()
-            .map(|(rule, tests)| (*rule, tests.iter().map(|(key, values)| (*key, values.iter().cloned().collect())).collect()))
+            .map(|(rule, tests)| {
+                (*rule, tests.iter().map(|(key, values)| (*key, values.iter().cloned().collect())).collect())
+            })
             .collect();
         if let Some(id) = self.memo.get(&signature) {
             return *id;
@@ -247,7 +273,8 @@ impl Builder {
                 self.add(Node::Accept(rules))
             }
             Some(key) => {
-                let values: BTreeSet<Val> = rows.iter().filter_map(|(_, tests)| tests.get(&key)).flatten().cloned().collect();
+                let values: BTreeSet<Val> =
+                    rows.iter().filter_map(|(_, tests)| tests.get(&key)).flatten().cloned().collect();
                 let taken = |value: Option<&Val>| -> Vec<(usize, Tests)> {
                     rows.iter()
                         .filter(|(_, tests)| match (tests.get(&key), value) {

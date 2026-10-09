@@ -7,15 +7,12 @@
 //!
 //! What changed with the IR:
 //! - A function argument is defined at the entry, ahead of everything.
-//! - An inserted expression goes before its predecessor's unconditional
-//!   `br`; a block leaves only by its terminator, so the old refusal of a
-//!   predecessor holding a branch, return or escape is that terminator.
-//! - The flags checks are gone: no value is the machine's flags. `Convert`
-//!   (the register-pair extension) and `Copy` have no instruction, so what
-//!   `joined` refuses of `_PURE` is the divisions, which may trap on a path
-//!   that did not divide.
-//! - `_on_edge` translates an instruction's operands; a phi's input may be
-//!   a constant.
+//! - An inserted expression goes before its predecessor's unconditional `br`; a block leaves only by its terminator, so
+//!   the old refusal of a predecessor holding a branch, return or escape is that terminator.
+//! - The flags checks are gone: no value is the machine's flags. `Convert` (the register-pair extension) and `Copy`
+//!   have no instruction, so what `joined` refuses of `_PURE` is the divisions, which may trap on a path that did not
+//!   divide.
+//! - `_on_edge` translates an instruction's operands; a phi's input may be a constant.
 //!
 //! `floatfold::checks` has no counterpart: the rich MIR observes no FP
 //! exception.
@@ -31,11 +28,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::alias::PointsTo;
+use llrm_analysis::graph::loops::{self, Loop};
 use llrm_analysis::manager::{Pointers, Registers};
 use llrm_analysis::memory;
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, ssa};
-use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
@@ -57,7 +54,11 @@ impl FunctionPass for Gvn {
         "gvn"
     }
 
-    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         let accesses = Accesses::managed(unit.context, unit.layout, unit.function, analyses);
         let pointers = analyses.get::<Pointers>(unit.context, unit.layout, unit.function);
         // Only `loadjoins` changes the CFG, and only by splitting an edge.
@@ -70,9 +71,17 @@ impl FunctionPass for Gvn {
             IndexMap::default()
         } else {
             let counted = analyses.get::<llrm_analysis::manager::Counted>(unit.context, unit.layout, unit.function);
-            profit::proven_trips(&memory::Unit::within(unit.context, unit.layout, unit.function, analyses.outer()).with_registers(&registers).with_shape(&shape).with_counted(&counted), &registers)
+            profit::proven_trips(
+                &memory::Unit::within(unit.context, unit.layout, unit.function, analyses.outer())
+                    .with_registers(&registers)
+                    .with_shape(&shape)
+                    .with_counted(&counted),
+                &registers,
+            )
         };
-        match accesses.and_then(|accesses| optimized(unit, analyses.outer(), &accesses, pointers?, &trips, &registers, &shape)) {
+        match accesses
+            .and_then(|accesses| optimized(unit, analyses.outer(), &accesses, pointers?, &trips, &registers, &shape))
+        {
             Ok(true) if unit.function.layout().len() != blocks => PreservedAnalyses::none(),
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
             Ok(false) => PreservedAnalyses::all(),
@@ -89,17 +98,31 @@ impl FunctionPass for Gvn {
 ///
 /// Every edit replaces a value with an equal one and adds no memory
 /// access before `loadjoins`, so `accesses` stays true throughout.
-pub fn optimized(unit: &mut Unit, outer: &Outer, accesses: &Accesses, pointers: &PointsTo, trips: &IndexMap<i64, i64>, registers: &IndexMap<ValueId, llrm_analysis::consts::Known>, shape: &cfg::Shape) -> Result<bool, String> {
+pub fn optimized(
+    unit: &mut Unit,
+    outer: &Outer,
+    accesses: &Accesses,
+    pointers: &PointsTo,
+    trips: &IndexMap<i64, i64>,
+    registers: &IndexMap<ValueId, llrm_analysis::consts::Known>,
+    shape: &cfg::Shape,
+) -> Result<bool, String> {
     let equal = propagated(unit);
     // What is known of the body the manager saw, unless propagating a branch's condition changed it.
     let fresh;
     let registers = if equal {
-        fresh = llrm_analysis::consts::known(&memory::Unit::within(unit.context, unit.layout, unit.function, outer), None, None, None);
+        fresh = llrm_analysis::consts::known(
+            &memory::Unit::within(unit.context, unit.layout, unit.function, outer),
+            None,
+            None,
+            None,
+        );
         &fresh
     } else {
         registers
     };
-    let (numbered, subexpressed) = _numbered(unit, outer, accesses, &profit::costs(outer), profit::registers(outer), trips, registers, shape)?;
+    let (numbered, subexpressed) =
+        _numbered(unit, outer, accesses, &profit::costs(outer), profit::registers(outer), trips, registers, shape)?;
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(unit.function, !subexpressed)?;
@@ -111,7 +134,17 @@ pub fn optimized(unit: &mut Unit, outer: &Outer, accesses: &Accesses, pointers: 
     } else {
         shape
     };
-    let loaded = loadjoins::reused(unit.context, unit.layout, unit.function, outer, outer.callees(), accesses, pointers, !combined, shape)?;
+    let loaded = loadjoins::reused(
+        unit.context,
+        unit.layout,
+        unit.function,
+        outer,
+        outer.callees(),
+        accesses,
+        pointers,
+        !combined,
+        shape,
+    )?;
     Ok(equal || numbered || combined || loaded)
 }
 
@@ -124,7 +157,9 @@ fn propagated(unit: &mut Unit) -> bool {
     for &block in unit.function.layout() {
         let Some(last) = unit.function.terminator(block) else { continue };
         let branch = unit.function.instruction(last);
-        let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else { continue };
+        let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else {
+            continue;
+        };
         if branch.opcode != Opcode::Br || taken == other {
             continue;
         }
@@ -164,8 +199,8 @@ thread_local! {
     static NUMBERINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has numbered a function (once, or twice where a load could be served across a store), for a test
-/// that a function with no such load is numbered once.
+/// How many times this thread has numbered a function (once, or twice where a load could be served across a store), for
+/// a test that a function with no such load is numbered once.
 pub fn numberings() -> usize {
     NUMBERINGS.with(std::cell::Cell::get)
 }
@@ -173,7 +208,16 @@ pub fn numberings() -> usize {
 /// Local numbering, crossing stores only where the whole function prices
 /// lower for it: a provider held across a store saves loads but may spill.
 /// Whether it changed anything, and whether `subexpressions` did.
-fn _numbered(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &OperationCosts, room: crate::spill::Room, trips: &IndexMap<i64, i64>, registers: &IndexMap<ValueId, llrm_analysis::consts::Known>, shape: &cfg::Shape) -> Result<(bool, bool), String> {
+fn _numbered(
+    unit: &mut Unit,
+    outer: &Outer,
+    accesses: &Accesses,
+    costs: &OperationCosts,
+    room: crate::spill::Room,
+    trips: &IndexMap<i64, i64>,
+    registers: &IndexMap<ValueId, llrm_analysis::consts::Known>,
+    shape: &cfg::Shape,
+) -> Result<(bool, bool), String> {
     // The availability of the function as it comes in: the same for both runs below, each of which changes a copy.
     let held = std::cell::OnceCell::new();
     // Whether some load was served across a store: the one thing the second numbering does differently from the first.
@@ -181,8 +225,20 @@ fn _numbered(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &Operat
     let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, (bool, bool)), String> {
         NUMBERINGS.with(|runs| runs.set(runs.get() + 1));
         let mut function = function.clone();
-        let forwarded = transform::forwarded(unit.context, unit.layout, &mut function, outer, accesses, registers, shape, avoid_store_crossing, &held, &crossed)?;
-        let subexpressed = transform::subexpressions(&mut function, accesses, avoid_store_crossing, Some(outer.program()), &crossed)?;
+        let forwarded = transform::forwarded(
+            unit.context,
+            unit.layout,
+            &mut function,
+            outer,
+            accesses,
+            registers,
+            shape,
+            avoid_store_crossing,
+            &held,
+            &crossed,
+        )?;
+        let subexpressed =
+            transform::subexpressions(&mut function, accesses, avoid_store_crossing, Some(outer.program()), &crossed)?;
         Ok((function, (forwarded || subexpressed, subexpressed)))
     };
     let crossing = numbered(unit.function, false)?;
@@ -204,7 +260,12 @@ fn _numbered(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &Operat
 }
 
 /// Translate simultaneously: an incoming phi value belongs to the prior edge.
-fn _on_edge(function: &Function, op: &Instruction, phis: &[InstId], predecessor: BlockId) -> Option<Instruction> {
+fn _on_edge(
+    function: &Function,
+    op: &Instruction,
+    phis: &[InstId],
+    predecessor: BlockId,
+) -> Option<Instruction> {
     let incoming = phis
         .iter()
         .map(|&phi| {
@@ -264,7 +325,10 @@ fn _insertion(
 /// A phi combines independently dominating providers. Missing providers may
 /// be inserted on unconditional incoming edges, but only when another edge
 /// already supplies the result. Memory and floating expressions stay out.
-pub fn joined(function: &mut Function, insert: bool) -> Result<bool, String> {
+pub fn joined(
+    function: &mut Function,
+    insert: bool,
+) -> Result<bool, String> {
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     if !predecessors.values().any(|parents| parents.len() > 1) {
@@ -279,8 +343,10 @@ pub fn joined(function: &mut Function, insert: bool) -> Result<bool, String> {
 
     let key = |op: &Instruction| {
         op.result?;
-        if matches!(op.opcode, Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) | Opcode::Load { .. })
-            || transform::_floating(&op.opcode)
+        if matches!(
+            op.opcode,
+            Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) | Opcode::Load { .. }
+        ) || transform::_floating(&op.opcode)
         {
             return None;
         }
@@ -324,7 +390,10 @@ pub fn joined(function: &mut Function, insert: bool) -> Result<bool, String> {
             if expression.is_some() {
                 for &parent in parents {
                     let parent = cfg::block(parent);
-                    let substituted = Instruction { operands: ssa::substituted(&op, &replacements).map_err(|error| error.to_string())?, ..op.clone() };
+                    let substituted = Instruction {
+                        operands: ssa::substituted(&op, &replacements).map_err(|error| error.to_string())?,
+                        ..op.clone()
+                    };
                     let translated = _on_edge(function, &substituted, &edges::phis(function, block), parent);
                     let edge_expression = translated.as_ref().and_then(key);
                     let candidates = edge_expression
@@ -336,7 +405,9 @@ pub fn joined(function: &mut Function, insert: bool) -> Result<bool, String> {
                             *provider != at
                                 && dominators[&cfg::id(parent)].contains(provider)
                                 && !dominators[provider].contains(&at)
-                                && natural_loops.iter().all(|loop_| !loop_.body.contains(provider) || loop_.body.contains(&at))
+                                && natural_loops
+                                    .iter()
+                                    .all(|loop_| !loop_.body.contains(provider) || loop_.body.contains(&at))
                         })
                         .collect::<Vec<_>>();
                     if candidates.is_empty() {
@@ -344,7 +415,15 @@ pub fn joined(function: &mut Function, insert: bool) -> Result<bool, String> {
                             break;
                         }
                         let cut = match (&edge_expression, &translated) {
-                            (Some(_), Some(translated)) => _insertion(function, translated, parent, block, &definitions, &dominators, &natural_loops),
+                            (Some(_), Some(translated)) => _insertion(
+                                function,
+                                translated,
+                                parent,
+                                block,
+                                &definitions,
+                                &dominators,
+                                &natural_loops,
+                            ),
                             _ => None,
                         };
                         let Some(cut) = cut else {
@@ -377,9 +456,16 @@ pub fn joined(function: &mut Function, insert: bool) -> Result<bool, String> {
                     name.as_ref().map(|name| format!("{name}.pre")).as_deref(),
                 );
                 function.insert(made, Position::Before(cut))?;
-                incoming.push((Operand::Value(function.instruction(made).result.expect("an expression's value")), parent));
+                incoming
+                    .push((Operand::Value(function.instruction(made).result.expect("an expression's value")), parent));
             }
-            let phi = function.create_instruction(Opcode::Phi, op.ty, from_arms(&incoming), Default::default(), name.as_ref().map(|name| format!("{name}.pre-phi")).as_deref());
+            let phi = function.create_instruction(
+                Opcode::Phi,
+                op.ty,
+                from_arms(&incoming),
+                Default::default(),
+                name.as_ref().map(|name| format!("{name}.pre-phi")).as_deref(),
+            );
             place_phi(function, block, phi)?;
             replacements.insert(result, Operand::Value(function.instruction(phi).result.expect("a phi's value")));
             erased.push(inst);

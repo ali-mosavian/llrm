@@ -34,8 +34,12 @@ fn the_crate_depends_on_nothing() {
     // MIR may name no decoder, object file or target; the dependency graph enforces it.
     let manifest = include_str!("../Cargo.toml");
     let dependencies = manifest.split("[dependencies]").nth(1).expect("a [dependencies] table");
-    let entries: Vec<&str> =
-        dependencies.lines().map(str::trim).take_while(|line| !line.starts_with('[')).filter(|line| !line.is_empty() && !line.starts_with('#')).collect();
+    let entries: Vec<&str> = dependencies
+        .lines()
+        .map(str::trim)
+        .take_while(|line| !line.starts_with('['))
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
     assert!(entries.is_empty(), "{entries:?}");
 }
 
@@ -95,7 +99,10 @@ fn attribute_groups_may_follow_their_use() {
 fn floating_constants_print_as_llvm_does() {
     // As LLVM 20's llvm-dis writes them.
     let text = "@a = global double 1.5\n@b = global double 0.1\n@c = global double 0x3FD5555555555555\n@d = global float 0x3FB99999A0000000\n";
-    assert_eq!(round(text), "@a = global double 1.500000e+00\n@b = global double 1.000000e-01\n@c = global double 0x3FD5555555555555\n@d = global float 0x3FB99999A0000000\n");
+    assert_eq!(
+        round(text),
+        "@a = global double 1.500000e+00\n@b = global double 1.000000e-01\n@c = global double 0x3FD5555555555555\n@d = global float 0x3FB99999A0000000\n"
+    );
     assert_eq!(refusal("@d = global float 0.1\n"), "line 1: 0.1 is not exactly a float");
 }
 
@@ -109,7 +116,10 @@ fn integer_constants_hold_their_bits_and_print_signed() {
 fn globals_keep_their_definition_order_whatever_uses_them_first() {
     let text = "@first = global ptr @second\n@second = global i16 7\n";
     assert_eq!(round(text), text);
-    assert_eq!(refusal("@first = global ptr addrspace(1) @second\n@second = global i16 7\n"), "line 1: a global in address space 0 used as ptr addrspace(1)");
+    assert_eq!(
+        refusal("@first = global ptr addrspace(1) @second\n@second = global i16 7\n"),
+        "line 1: a global in address space 0 used as ptr addrspace(1)"
+    );
 }
 
 #[test]
@@ -146,8 +156,12 @@ fn every_invalid_fixture_is_refused_for_its_reason() {
 /// not, and a missing `memory(none)` would hide that the call is pure.
 #[test]
 fn an_intrinsic_declaration_takes_llvms_attributes() {
-    let module = parse::module("declare i16 @llvm.smax.i16(i16 noundef, i16) cold\n").unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(print::module(&module), "declare i16 @llvm.smax.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)\n");
+    let module =
+        parse::module("declare i16 @llvm.smax.i16(i16 noundef, i16) cold\n").unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        print::module(&module),
+        "declare i16 @llvm.smax.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)\n"
+    );
 }
 
 /// Inline assembly's registers are in its callee's name; the declaration
@@ -157,12 +171,24 @@ fn an_intrinsic_declaration_takes_llvms_attributes() {
 fn an_inline_assembly_declaration_is_checked_against_its_name() {
     let name = "llrm.ia16.asm.cd1a.ax.cx_dx.flags.n";
     let block = crate::intrinsics::asm(name).expect("parses");
-    assert_eq!((block.code, block.inputs, block.outputs, block.clobbers, block.memory), (vec![0xcd, 0x1a], vec!["ax".to_owned()], vec!["cx".to_owned(), "dx".to_owned()], vec!["flags".to_owned()], false));
+    assert_eq!(
+        (block.code, block.inputs, block.outputs, block.clobbers, block.memory),
+        (
+            vec![0xcd, 0x1a],
+            vec!["ax".to_owned()],
+            vec!["cx".to_owned(), "dx".to_owned()],
+            vec!["flags".to_owned()],
+            false
+        )
+    );
     assert_eq!(crate::intrinsics::asm_name(&crate::intrinsics::asm(name).unwrap()), name);
     let problems = |text: &str| crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}")));
     let right = format!("declare {{i16, i16}} @{name}(i16)\n");
     assert_eq!(problems(&right), Vec::<String>::new());
-    assert_eq!(print::module(&parse::module(&right).unwrap()), format!("declare {{ i16, i16 }} @{name}(i16) nounwind memory(inaccessiblemem: readwrite)\n"));
+    assert_eq!(
+        print::module(&parse::module(&right).unwrap()),
+        format!("declare {{ i16, i16 }} @{name}(i16) nounwind memory(inaccessiblemem: readwrite)\n")
+    );
     assert!(problems(&format!("declare i16 @{name}(i16)\n"))[0].contains("incorrect return type"));
     assert!(problems(&format!("declare {{i16, i16}} @{name}(i16, i16)\n"))[0].contains("incorrect argument type"));
 }
@@ -198,15 +224,28 @@ b0:
     .expect("a module");
     let callees = crate::memory::callees(&module);
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
-    let calls = function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, crate::opcode::Opcode::Call(_))).collect::<Vec<_>>();
+    let calls = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| matches!(
+            function.instruction(inst).opcode,
+            crate::opcode::Opcode::Call(_)
+        ))
+        .collect::<Vec<_>>();
     let stop = crate::memory::accessible(&module.context, &callees, function, calls[0]);
     let any = crate::memory::accessible(&module.context, &callees, function, calls[1]);
     assert_eq!((stop, any), (crate::memory::Effects::NONE, crate::memory::Effects::ANY));
-    assert!(crate::memory::of(&module.context, &callees, function, calls[0]).writes, "it still writes what it can reach");
+    assert!(
+        crate::memory::of(&module.context, &callees, function, calls[0]).writes,
+        "it still writes what it can reach"
+    );
 }
 
 fn dominance_problems(text: &str) -> Vec<String> {
-    crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}"))).into_iter().filter(|one| one.contains("dominate")).collect()
+    crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}")))
+        .into_iter()
+        .filter(|one| one.contains("dominate"))
+        .collect()
 }
 
 /// A value used in a branch arm that does not contain its definition, in
@@ -231,9 +270,20 @@ j:
         )
     };
     assert_eq!(dominance_problems(&diamond("  ret i16 %x")), Vec::<String>::new());
-    assert_eq!(dominance_problems(&diamond("  ret i16 %a")).len(), 1, "a definition in one arm does not reach the join");
-    assert_eq!(dominance_problems(&diamond("  %p = phi i16 [ %a, %l ], [ %x, %r ]\n  ret i16 %p")), Vec::<String>::new());
-    assert_eq!(dominance_problems(&diamond("  %p = phi i16 [ %x, %l ], [ %a, %r ]\n  ret i16 %p")).len(), 1, "a phi input must dominate its own edge");
+    assert_eq!(
+        dominance_problems(&diamond("  ret i16 %a")).len(),
+        1,
+        "a definition in one arm does not reach the join"
+    );
+    assert_eq!(
+        dominance_problems(&diamond("  %p = phi i16 [ %a, %l ], [ %x, %r ]\n  ret i16 %p")),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        dominance_problems(&diamond("  %p = phi i16 [ %x, %l ], [ %a, %r ]\n  ret i16 %p")).len(),
+        1,
+        "a phi input must dominate its own edge"
+    );
 }
 
 /// Within a block a use before the definition, and a use of the value
@@ -271,7 +321,11 @@ b0:
             "idle"
         }
 
-        fn run(&mut self, _: &mut crate::passes::Unit, _: &mut crate::passes::Analyses) -> crate::passes::PreservedAnalyses {
+        fn run(
+            &mut self,
+            _: &mut crate::passes::Unit,
+            _: &mut crate::passes::Analyses,
+        ) -> crate::passes::PreservedAnalyses {
             crate::passes::PreservedAnalyses::all()
         }
     }
@@ -324,13 +378,18 @@ d:
     )
     .expect("a module");
     let counted = |name: &str| {
-        let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).expect("a function");
+        let (_, _, function) =
+            module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).expect("a function");
         let tree = crate::dominators::DominatorTree::new(function);
         let loops = crate::loops::LoopInfo::new(function, &tree);
         let evolution = crate::scalarevolution::Evolution::new(&module.context, function, &loops);
         evolution.counted(&module.context, function, &loops, loops.loops[0].header)
     };
-    assert_eq!((counted("f"), counted("g")), (2, 1), "a counter and a walked pointer, then a counter and a pointer that stays");
+    assert_eq!(
+        (counted("f"), counted("g")),
+        (2, 1),
+        "a counter and a walked pointer, then a counter and a pointer that stays"
+    );
 }
 
 /// `releases` read and written back, stated of a parameter: a copy of a routine that frees its
@@ -346,9 +405,15 @@ fn releases_is_a_parameter_attribute_that_round_trips() {
 /// argument; before it existed the parser refused the attribute.
 #[test]
 fn noretain_is_a_parameter_attribute_that_round_trips() {
-    let text = format!("{DATALAYOUT}\ndeclare void @erase(ptr nocapture noretain)\n\ndefine void @f(ptr %p) {{\nb0:\n  call void @erase(ptr noretain %p)\n  ret void\n}}\n");
+    let text = format!(
+        "{DATALAYOUT}\ndeclare void @erase(ptr nocapture noretain)\n\ndefine void @f(ptr %p) {{\nb0:\n  call void @erase(ptr noretain %p)\n  ret void\n}}\n"
+    );
     let once = round(&text);
-    assert!(once.contains("declare void @erase(ptr nocapture noretain)") && once.contains("call void @erase(ptr noretain %p)"), "{once}");
+    assert!(
+        once.contains("declare void @erase(ptr nocapture noretain)")
+            && once.contains("call void @erase(ptr noretain %p)"),
+        "{once}"
+    );
     assert_eq!(round(&once), once);
 }
 
@@ -367,17 +432,20 @@ fn test_verifying_a_block_does_not_scan_it_for_each_use() {
 /// A use before its definition in one block is still refused, by position.
 #[test]
 fn test_a_use_before_its_definition_in_one_block_is_refused() {
-    let text = format!("{DATALAYOUT}define i16 @f(i16 %a) {{\nentry:\n  %y = add i16 %x, 1\n  %x = add i16 %a, 1\n  ret i16 %y\n}}\n");
+    let text = format!(
+        "{DATALAYOUT}define i16 @f(i16 %a) {{\nentry:\n  %y = add i16 %x, 1\n  %x = add i16 %a, 1\n  ret i16 %y\n}}\n"
+    );
     let problems = crate::verify::verify(&parse::module(&text).unwrap_or_else(|error| panic!("{error}")));
     assert!(problems.iter().any(|one| one.contains("does not dominate")), "{problems:?}");
 }
 
-/// `Declared::over` the module's declarations answers as `of` the module does: a name the module has is its id, a new one
-/// the next, and `place` says how many it added (the caller's held declarations are then stale).
+/// `Declared::over` the module's declarations answers as `of` the module does: a name the module has is its id, a new
+/// one the next, and `place` says how many it added (the caller's held declarations are then stale).
 #[test]
 fn test_declared_over_the_declarations_answers_as_declared_of_the_module() {
     use crate::passes::{Declarations, Declared, ModuleAnalyses};
-    let mut module = parse::module(&format!("{DATALAYOUT}declare void @known()\n")).unwrap_or_else(|error| panic!("{error}"));
+    let mut module =
+        parse::module(&format!("{DATALAYOUT}declare void @known()\n")).unwrap_or_else(|error| panic!("{error}"));
     let ty = module.global(module.named("known").unwrap()).function().unwrap().ty;
     let held = ModuleAnalyses::of(&module, std::rc::Rc::new(crate::target::Neutral)).get::<Declarations>(&module);
     let (mut over, mut of) = (Declared::over(held, module.metadata.len()), Declared::of(&module));
@@ -390,73 +458,141 @@ fn test_declared_over_the_declarations_answers_as_declared_of_the_module() {
     assert_eq!(Declared::over(Default::default(), 0).place(&mut module).unwrap(), 0);
 }
 
-/// Hash and tree maps keyed by a dense id cost 12% of a compile in hashing and 7% in tree nodes where gcc uses bitmaps and
-/// vectors: new keyed maps and sets use `dense::IdMap` / `IdSet`. A file may not gain one; the ceilings in `dense-keys.txt` fall as
-/// files convert (clippy's `disallowed-types` cannot tell a `HashMap<ValueId, _>` from any other).
+/// Hash and tree maps keyed by a dense id cost 12% of a compile in hashing and 7% in tree nodes where gcc uses bitmaps
+/// and vectors: new keyed maps and sets use `dense::IdMap` / `IdSet`. A file may not gain one; the ceilings in
+/// `dense-keys.txt` fall as files convert (clippy's `disallowed-types` cannot tell a `HashMap<ValueId, _>` from any
+/// other).
 ///
-/// A type alias hides its key from the text (`pub type Intervals = IndexMap<ValueId, Interval>`): the alias is resolved and each use of its
-/// name counts as one keyed map, the alias's own line as none.
+/// A type alias hides its key from the text (`pub type Intervals = IndexMap<ValueId, Interval>`): the alias is resolved
+/// and each use of its name counts as one keyed map, the alias's own line as none.
 fn dense_key_counts(sources: &[(String, String)]) -> std::collections::BTreeMap<String, usize> {
     let kinds = ["HashMap<", "HashSet<", "BTreeMap<", "BTreeSet<", "IndexMap<", "IndexSet<"];
-    let ids = ["ValueId", "InstId", "BlockId", "module::ValueId", "module::InstId", "module::BlockId"].map(String::from).into_iter().flat_map(|id| ["".to_owned(), "crate::".to_owned(), "llrm_mir::".to_owned()].into_iter().map(move |prefix| prefix + &id)).collect::<Vec<_>>();
+    let ids = ["ValueId", "InstId", "BlockId", "module::ValueId", "module::InstId", "module::BlockId"]
+        .map(String::from)
+        .into_iter()
+        .flat_map(|id| {
+            ["".to_owned(), "crate::".to_owned(), "llrm_mir::".to_owned()].into_iter().map(move |prefix| prefix + &id)
+        })
+        .collect::<Vec<_>>();
     let keyed = |text: &str| -> usize {
-        kinds.iter().map(|kind| text.match_indices(kind).filter(|(at, _)| ids.iter().any(|id| text[at + kind.len()..].trim_start().starts_with(id) && !text[at + kind.len()..].trim_start()[id.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_'))).count()).sum()
+        kinds
+            .iter()
+            .map(|kind| {
+                text.match_indices(kind)
+                    .filter(|(at, _)| {
+                        ids.iter().any(|id| {
+                            text[at + kind.len()..].trim_start().starts_with(id)
+                                && !text[at + kind.len()..].trim_start()[id.len()..]
+                                    .starts_with(|c: char| c.is_alphanumeric() || c == '_')
+                        })
+                    })
+                    .count()
+            })
+            .sum()
     };
-    // An alias is a `type` at the start of a line (an associated type in an impl is indented), its right side a keyed map.
-    let is_alias = |line: &str| (line.starts_with("type ") || line.starts_with("pub type ") || line.starts_with("pub(crate) type ")) && line.contains(" = ") && keyed(line) > 0;
+    // An alias is a `type` at the start of a line (an associated type in an impl is indented), its right side a keyed
+    // map.
+    let is_alias = |line: &str| {
+        (line.starts_with("type ") || line.starts_with("pub type ") || line.starts_with("pub(crate) type "))
+            && line.contains(" = ")
+            && keyed(line) > 0
+    };
     // (the file defining it, the name)
     let aliases: Vec<(&str, String)> = sources
         .iter()
         .flat_map(|(file, text)| text.lines().filter(|line| is_alias(line)).map(move |line| (file.as_str(), line)))
-        .filter_map(|(file, line)| line.split_once("type ").and_then(|(_, rest)| rest.split(|c: char| !(c.is_alphanumeric() || c == '_')).next()).map(|name| (file, name.to_owned())))
+        .filter_map(|(file, line)| {
+            line.split_once("type ")
+                .and_then(|(_, rest)| rest.split(|c: char| !(c.is_alphanumeric() || c == '_')).next())
+                .map(|name| (file, name.to_owned()))
+        })
         .collect();
-    // A generic alias (`type Sparse<K, V> = IndexMap<K, V>`) names no id on its own line: it is a keyed map wherever it is applied to an id.
-    // SparseIdMap and SparseIdSet are the sanctioned ones (a few of many ids: llrm_support::hash), by name and no other.
+    // A generic alias (`type Sparse<K, V> = IndexMap<K, V>`) names no id on its own line: it is a keyed map wherever it
+    // is applied to an id. SparseIdMap and SparseIdSet are the sanctioned ones (a few of many ids:
+    // llrm_support::hash), by name and no other.
     const SANCTIONED: [&str; 2] = ["SparseIdMap", "SparseIdSet"];
     let generic_aliases: Vec<(&str, String)> = sources
         .iter()
         .flat_map(|(file, text)| text.lines().map(move |line| (file.as_str(), line)))
-        .filter(|(_, line)| line.starts_with("type ") || line.starts_with("pub type ") || line.starts_with("pub(crate) type "))
+        .filter(|(_, line)| {
+            line.starts_with("type ") || line.starts_with("pub type ") || line.starts_with("pub(crate) type ")
+        })
         .filter_map(|(file, line)| {
             let (head, right) = line.split_once(" = ")?;
             let after = head.split_once("type ")?.1;
             let (name, params) = after.split_once('<')?;
             let first = params.split([',', '>']).next()?.trim();
-            let key_of_map = kinds.iter().any(|kind| right.find(kind).is_some_and(|at| right[at + kind.len()..].trim_start().starts_with(first)));
-            (!first.is_empty() && key_of_map && !SANCTIONED.contains(&name) && !kinds.contains(&format!("{name}<").as_str())).then(|| (file, name.to_owned()))
+            let key_of_map = kinds
+                .iter()
+                .any(
+                    |kind| right.find(kind).is_some_and(|at| right[at + kind.len()..].trim_start().starts_with(first)),
+                );
+            (!first.is_empty()
+                && key_of_map
+                && !SANCTIONED.contains(&name)
+                && !kinds.contains(&format!("{name}<").as_str()))
+            .then(|| (file, name.to_owned()))
         })
         .collect();
-    let whole_word = |text: &str, at: usize, word: &str| !text[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_') && !text[at + word.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_');
+    let whole_word = |text: &str, at: usize, word: &str| {
+        !text[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_')
+            && !text[at + word.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_')
+    };
     let mut counts = std::collections::BTreeMap::new();
     for (name, text) in sources {
         let body: String = text.lines().filter(|line| !is_alias(line)).collect::<Vec<_>>().join("\n");
         let mut found = keyed(&body);
         for (home, alias) in &aliases {
-            // A name some other file also uses for something else (`Facts`, `Calls`) is the alias only where the file defines it, imports it, or
-            // writes it as a path.
+            // A name some other file also uses for something else (`Facts`, `Calls`) is the alias only where the file
+            // defines it, imports it, or writes it as a path.
             let module = std::path::Path::new(home).file_stem().and_then(|stem| stem.to_str()).unwrap_or("");
-            let imported = body.lines().any(|line| {
-                line.trim_start().starts_with("use ") && line.contains(module) && line.match_indices(alias.as_str()).any(|(at, _)| whole_word(line, at, alias))
-            });
+            let imported = body
+                .lines()
+                .any(
+                    |line| line.trim_start().starts_with("use ")
+                        && line.contains(module)
+                        && line.match_indices(alias.as_str()).any(|(at, _)| whole_word(line, at, alias)),
+                );
             let qualified = body.contains(&format!("{module}::{alias}"));
             if name != home && !imported && !qualified {
                 continue;
             }
-            let uses: String = body.lines().filter(|line| !line.trim_start().starts_with("use ")).collect::<Vec<_>>().join("\n");
+            let uses: String =
+                body.lines().filter(|line| !line.trim_start().starts_with("use ")).collect::<Vec<_>>().join("\n");
             found += uses.match_indices(alias.as_str()).filter(|(at, _)| whole_word(&uses, *at, alias)).count();
         }
         // Where a generic alias is applied to an id.
         for (home, alias) in &generic_aliases {
             let module = std::path::Path::new(home).file_stem().and_then(|stem| stem.to_str()).unwrap_or("");
-            let imported = body.lines().any(|line| line.trim_start().starts_with("use ") && line.contains(module) && line.match_indices(alias.as_str()).any(|(at, _)| whole_word(line, at, alias)));
+            let imported = body
+                .lines()
+                .any(
+                    |line| line.trim_start().starts_with("use ")
+                        && line.contains(module)
+                        && line.match_indices(alias.as_str()).any(|(at, _)| whole_word(line, at, alias)),
+                );
             if name != home && !imported && !body.contains(&format!("{module}::{alias}")) {
                 continue;
             }
-            let uses: String = body.lines().filter(|line| !line.trim_start().starts_with("use ") && !line.starts_with("type ") && !line.starts_with("pub type ")).collect::<Vec<_>>().join("\n");
+            let uses: String = body
+                .lines()
+                .filter(|line| {
+                    !line.trim_start().starts_with("use ")
+                        && !line.starts_with("type ")
+                        && !line.starts_with("pub type ")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
             found += uses
                 .match_indices(&format!("{alias}<"))
                 .filter(|(at, _)| whole_word(&uses, *at, &format!("{alias}<")[..alias.len()]))
-                .filter(|(at, _)| ids.iter().any(|id| uses[at + alias.len() + 1..].trim_start().starts_with(id.as_str()) && !uses[at + alias.len() + 1..].trim_start()[id.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_')))
+                .filter(|(at, _)| {
+                    ids.iter().any(|id| {
+                        uses[at + alias.len() + 1..].trim_start().starts_with(id.as_str())
+                            && !uses[at + alias.len() + 1..].trim_start()[id.len()..]
+                                .starts_with(|c: char| c.is_alphanumeric() || c == '_')
+                    })
+                })
                 .count();
         }
         counts.insert(name.clone(), found);
@@ -464,14 +600,17 @@ fn dense_key_counts(sources: &[(String, String)]) -> std::collections::BTreeMap<
     counts
 }
 
-/// SparseIdMap is the sanctioned container for a few of many ids; any other alias of a keyed map, generic or not, counts where it is applied
-/// to an id: a new alias is no loophole.
+/// SparseIdMap is the sanctioned container for a few of many ids; any other alias of a keyed map, generic or not,
+/// counts where it is applied to an id: a new alias is no loophole.
 #[test]
 fn the_sparse_containers_are_sanctioned_by_name_and_a_generic_alias_is_not() {
     let source = |name: &str, text: &str| (name.to_owned(), text.to_owned());
     let counts = dense_key_counts(&[
         source("hash.rs", "pub type SparseIdMap<K, V> = IndexMap<K, V>;\npub type Sparse<K, V> = IndexMap<K, V>;\n"),
-        source("a.rs", "use llrm_support::hash::SparseIdMap;\nfn f(x: SparseIdMap<ValueId, u8>, y: SparseIdMap<InstId, u8>) {}\n"),
+        source(
+            "a.rs",
+            "use llrm_support::hash::SparseIdMap;\nfn f(x: SparseIdMap<ValueId, u8>, y: SparseIdMap<InstId, u8>) {}\n",
+        ),
         source("b.rs", "use llrm_support::hash::Sparse;\nfn f(x: Sparse<ValueId, u8>, y: Sparse<String, u8>) {}\n"),
     ]);
     assert_eq!(counts["a.rs"], 0, "SparseIdMap is sanctioned");
@@ -482,8 +621,12 @@ fn the_sparse_containers_are_sanctioned_by_name_and_a_generic_alias_is_not() {
 #[test]
 fn no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let ceilings: std::collections::BTreeMap<&str, usize> =
-        include_str!("../dense-keys.txt").lines().filter(|line| !line.starts_with('#')).filter_map(|line| line.split_once('\t')).map(|(file, count)| (file, count.parse().expect("a count"))).collect();
+    let ceilings: std::collections::BTreeMap<&str, usize> = include_str!("../dense-keys.txt")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(file, count)| (file, count.parse().expect("a count")))
+        .collect();
     let mut sources = Vec::new();
     let mut stack = vec![root.join("crates")];
     while let Some(dir) = stack.pop() {
@@ -494,7 +637,11 @@ fn no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id() {
                 continue;
             }
             let name = path.strip_prefix(&root).expect("under the root").to_string_lossy().into_owned();
-            if !name.ends_with(".rs") || name.ends_with("_tests.rs") || name.ends_with("/tests.rs") || name.contains("/tests/") {
+            if !name.ends_with(".rs")
+                || name.ends_with("_tests.rs")
+                || name.ends_with("/tests.rs")
+                || name.contains("/tests/")
+            {
                 continue;
             }
             sources.push((name, std::fs::read_to_string(&path).expect("a source reads")));
@@ -508,7 +655,8 @@ fn no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id() {
     assert!(over.is_empty(), "use llrm_mir::dense::{{IdMap, IdSet}} for ids: {over:?}");
 }
 
-/// `pub type Intervals = IndexMap<ValueId, Interval>` once let two files hold keyed maps the text scan could not see; each use of the alias is one.
+/// `pub type Intervals = IndexMap<ValueId, Interval>` once let two files hold keyed maps the text scan could not see;
+/// each use of the alias is one.
 #[test]
 fn an_alias_of_a_keyed_map_and_three_uses_of_it_count_as_three() {
     let source = |name: &str, text: &str| (name.to_owned(), text.to_owned());
@@ -520,5 +668,8 @@ fn an_alias_of_a_keyed_map_and_three_uses_of_it_count_as_three() {
     assert_eq!(counts["defines.rs"], 1);
     assert_eq!(counts["uses.rs"], 2);
     assert_eq!(counts["defines.rs"] + counts["uses.rs"], 3);
-    assert_eq!(counts["other.rs"], 1, "a file that neither imports nor defines the alias is no user of it (a name like Facts is another file's own); an indented associated type is no alias, but a keyed set itself");
+    assert_eq!(
+        counts["other.rs"], 1,
+        "a file that neither imports nor defines the alias is no user of it (a name like Facts is another file's own); an indented associated type is no alias, but a keyed set itself"
+    );
 }

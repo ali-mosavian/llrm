@@ -31,7 +31,11 @@ b0:
     );
     let mut module = parsed(&text);
     let before = results(&module, &[&[0]]);
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        pipeline::applied(program, &Applied::default())
+    })
+    .and_then(|done| done)
+    .unwrap();
     let after = printed(&module);
     assert_eq!(results(&module, &[&[0]]), before, "{after}");
     // @c, folded into its one load, is dead and gone.

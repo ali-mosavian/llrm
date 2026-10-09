@@ -3,8 +3,8 @@
 //! fixtures that stay behind.
 
 use llrm_analysis::cfg;
-use llrm_analysis::peelsize::Limits;
 use llrm_analysis::graph::loops;
+use llrm_analysis::peelsize::Limits;
 use llrm_mir::module::{Module, Operand};
 use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::PassManager;
@@ -59,7 +59,10 @@ fn multiplies(module: &mut Module) -> usize {
 }
 
 /// `text` through `pass`: whether it changed, and it computes what it did.
-fn through(text: &str, pass: Peel) -> (bool, Module) {
+fn through(
+    text: &str,
+    pass: Peel,
+) -> (bool, Module) {
     let mut module = parsed(text);
     let before = (printed(&module), results(&module, INPUTS));
     let after = managed(&mut module, pass);
@@ -84,7 +87,12 @@ fn every_trip_is_peeled_ahead_of_the_residual_loop() {
         let entry = function.entry().unwrap();
         let first = function.successors(entry)[0];
         assert_ne!(function.block(first).name.as_deref(), Some("b1"), "{trips}");
-        let phis = function.block(first).instructions().iter().filter(|&&inst| function.instruction(inst).opcode == Opcode::Phi).collect::<Vec<_>>();
+        let phis = function
+            .block(first)
+            .instructions()
+            .iter()
+            .filter(|&&inst| function.instruction(inst).opcode == Opcode::Phi)
+            .collect::<Vec<_>>();
         assert_eq!(phis.len(), 2);
         for &&phi in &phis {
             assert_eq!(function.instruction(phi).operands[1..], [Operand::Block(entry)], "{trips}");
@@ -184,7 +192,9 @@ b3:
     let tight = || Peel { limits: Limits { max_unrolled_operations: 1, ..Limits::default() }, ..Peel::default() };
     assert!(!through(text, tight()).0);
     assert!(!through(text, Peel::default()).0, "@tick writes @count");
-    let pure = text.replace("define void @tick() {", "define void @tick() memory(none) {").replace("  %c = load i16, ptr @count\n  %d = add i16 %c, 1\n  store i16 %d, ptr @count\n", "");
+    let pure = text
+        .replace("define void @tick() {", "define void @tick() memory(none) {")
+        .replace("  %c = load i16, ptr @count\n  %d = add i16 %c, 1\n  store i16 %d, ptr @count\n", "");
     assert!(!through(&pure, tight()).0);
     assert!(through(&pure, Peel::default()).0);
 }
@@ -192,12 +202,16 @@ b3:
 /// A `frem` has no target price, so nothing in its function is copied.
 #[test]
 fn an_unpriced_function_is_left_alone() {
-    let text = diamond("4").replace("  %m = mul i16 %acc, 3\n", "  %f = sitofp i16 %acc to double\n  %g = frem double %f, 3.000000e+00\n  %m = fptosi double %g to i16\n");
+    let text = diamond("4").replace(
+        "  %m = mul i16 %acc, 3\n",
+        "  %f = sitofp i16 %acc to double\n  %g = frem double %f, 3.000000e+00\n  %m = fptosi double %g to i16\n",
+    );
     assert!(!through(&text, Peel::default()).0);
 }
 
-/// Where code may not grow GCC still copies a loop whose copies come to two thirds of it or less (`estimated_unrolled_size`): the
-/// three trips of x_life's neighbour sum were a rolled loop at -O2 (11 operations, 15 copied) and 1.9x gcc's clocks.
+/// Where code may not grow GCC still copies a loop whose copies come to two thirds of it or less
+/// (`estimated_unrolled_size`): the three trips of x_life's neighbour sum were a rolled loop at -O2 (11 operations, 15
+/// copied) and 1.9x gcc's clocks.
 #[test]
 fn a_copy_of_two_thirds_the_size_is_peeled_where_code_may_not_grow() {
     let sum = "define i16 @f(i16 %x, i16 %n) {
@@ -228,15 +242,23 @@ b3:
     assert!(through(sum, flat).0);
 }
 
-/// `loops` sequential loops of eight trips, each with a body of forty multiplies except the last, which has one: all the loops
-/// but the last are over the budget of a peel.
+/// `loops` sequential loops of eight trips, each with a body of forty multiplies except the last, which has one: all
+/// the loops but the last are over the budget of a peel.
 fn sequence(loops: usize) -> String {
     let mut text = String::from("define i16 @f(i16 %x) {\nb0:\n  br label %h0\n\n");
     for k in 0..loops {
         let next = if k + 1 == loops { "end".to_owned() } else { format!("h{}", k + 1) };
-        let (seed, before) = if k == 0 { ("%x".to_owned(), "b0".to_owned()) } else { (format!("%a{}", k - 1), format!("x{}", k - 1)) };
+        let (seed, before) =
+            if k == 0 { ("%x".to_owned(), "b0".to_owned()) } else { (format!("%a{}", k - 1), format!("x{}", k - 1)) };
         let muls = if k + 1 == loops { 1 } else { 40 };
-        let body: String = (0..muls).map(|j| format!("  %m{k}_{j} = mul i16 {}, 3\n", if j == 0 { format!("%a{k}") } else { format!("%m{k}_{}", j - 1) })).collect();
+        let body: String = (0..muls)
+            .map(|j| {
+                format!(
+                    "  %m{k}_{j} = mul i16 {}, 3\n",
+                    if j == 0 { format!("%a{k}") } else { format!("%m{k}_{}", j - 1) }
+                )
+            })
+            .collect();
         text += &format!(
             "h{k}:\n  %i{k} = phi i16 [ 0, %{before} ], [ %n{k}, %y{k} ]\n  %a{k} = phi i16 [ {seed}, %{before} ], [ %m{k}_{last}, %y{k} ]\n  %go{k} = icmp slt i16 %i{k}, 8\n  br i1 %go{k}, label %y{k}, label %x{k}\n\ny{k}:\n{body}  %n{k} = add i16 %i{k}, 1\n  br label %h{k}\n\nx{k}:\n  br label %{next}\n\n",
             last = muls - 1
@@ -245,14 +267,18 @@ fn sequence(loops: usize) -> String {
     text + &format!("end:\n  ret i16 %a{}\n}}\n", loops - 1)
 }
 
-/// A function's frequencies, as the loops ask for them, were worked out once per loop looked at that was counted and not peeled: k loops
-/// over budget and one peeled cost 2k estimates of the whole function (`nbody_single -Omax`: `peel` 22% of the compile,
-/// 17 points of it in `branchprob::estimated`). They are worked out once for each version of the function.
+/// A function's frequencies, as the loops ask for them, were worked out once per loop looked at that was counted and
+/// not peeled: k loops over budget and one peeled cost 2k estimates of the whole function (`nbody_single -Omax`: `peel`
+/// 22% of the compile, 17 points of it in `branchprob::estimated`). They are worked out once for each version of the
+/// function.
 #[test]
 fn a_functions_frequencies_are_worked_out_once_for_all_the_loops_asking() {
     let loops = 6;
     let before = super::profit::frequencies_worked();
-    let tight = Peel { limits: Limits { max_unrolled_operations: 100, target_percent: 0, ..Limits::default() }, ..Peel::default() };
+    let tight = Peel {
+        limits: Limits { max_unrolled_operations: 100, target_percent: 0, ..Limits::default() },
+        ..Peel::default()
+    };
     let (changed, _) = through(&sequence(loops), tight);
     let worked = super::profit::frequencies_worked() - before;
     assert!(changed);

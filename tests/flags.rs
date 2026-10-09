@@ -29,19 +29,62 @@ struct Tool {
 
 fn tools() -> Vec<Tool> {
     vec![
-        Tool { name: "llrm-c", path: env!("CARGO_BIN_EXE_llrm-c"), input: ("a.c", C), more: &["-S", "-o", "a.s"], meets: Meets::Builds },
-        Tool { name: "llrm-nib", path: env!("CARGO_BIN_EXE_llrm-nib"), input: ("a.nib", NIB), more: &["-S", "-o", "a.s"], meets: Meets::Builds },
-        Tool { name: "llrm-qb", path: env!("CARGO_BIN_EXE_llrm-qb"), input: ("a.bas", BASIC), more: &["--dialect", "qb45", "--runtime", "qb45", "-S", "-o", "a.s"], meets: Meets::Refuses },
-        Tool { name: "llrm-omf", path: env!("CARGO_BIN_EXE_llrm-omf"), input: ("a.obj", "x"), more: &["--rich", "-o", "out.obj"], meets: Meets::Refuses },
-        Tool { name: "llrm-run", path: env!("CARGO_BIN_EXE_llrm-run"), input: ("a.nib", NIB), more: &[], meets: Meets::Builds },
-        Tool { name: "nibfront", path: env!("CARGO_BIN_EXE_nibfront"), input: ("a.nib", NIB), more: &[], meets: Meets::Builds },
+        Tool {
+            name: "llrm-c",
+            path: env!("CARGO_BIN_EXE_llrm-c"),
+            input: ("a.c", C),
+            more: &["-S", "-o", "a.s"],
+            meets: Meets::Builds,
+        },
+        Tool {
+            name: "llrm-nib",
+            path: env!("CARGO_BIN_EXE_llrm-nib"),
+            input: ("a.nib", NIB),
+            more: &["-S", "-o", "a.s"],
+            meets: Meets::Builds,
+        },
+        Tool {
+            name: "llrm-qb",
+            path: env!("CARGO_BIN_EXE_llrm-qb"),
+            input: ("a.bas", BASIC),
+            more: &["--dialect", "qb45", "--runtime", "qb45", "-S", "-o", "a.s"],
+            meets: Meets::Refuses,
+        },
+        Tool {
+            name: "llrm-omf",
+            path: env!("CARGO_BIN_EXE_llrm-omf"),
+            input: ("a.obj", "x"),
+            more: &["--rich", "-o", "out.obj"],
+            meets: Meets::Refuses,
+        },
+        Tool {
+            name: "llrm-run",
+            path: env!("CARGO_BIN_EXE_llrm-run"),
+            input: ("a.nib", NIB),
+            more: &[],
+            meets: Meets::Builds,
+        },
+        Tool {
+            name: "nibfront",
+            path: env!("CARGO_BIN_EXE_nibfront"),
+            input: ("a.nib", NIB),
+            more: &[],
+            meets: Meets::Builds,
+        },
     ]
 }
 
 /// Binaries that name no target, and why.
-const EXEMPT: [(&str, &str); 2] = [("llrm-mir", "reads MIR, which states its own datalayout"), ("nib-lsp", "takes the target in `initialize` (`mode`), tested with the server")];
+const EXEMPT: [(&str, &str); 2] = [
+    ("llrm-mir", "reads MIR, which states its own datalayout"),
+    ("nib-lsp", "takes the target in `initialize` (`mode`), tested with the server"),
+];
 
-fn run(tool: &Tool, directory: &Path, flags: &[&str]) -> Output {
+fn run(
+    tool: &Tool,
+    directory: &Path,
+    flags: &[&str],
+) -> Output {
     std::fs::write(directory.join(tool.input.0), tool.input.1).unwrap();
     Command::new(tool.path).current_dir(directory).args(flags).arg(tool.input.0).args(tool.more).output().unwrap()
 }
@@ -62,7 +105,8 @@ fn every_binary_is_classified() {
         }
     }
     // `nibfront` and `qbparse-stages` only read; the first takes `-m` for what it declares.
-    let unclassified: Vec<&String> = binaries.iter().filter(|name| !known.contains(&name.as_str()) && name.as_str() != "qbparse-stages").collect();
+    let unclassified: Vec<&String> =
+        binaries.iter().filter(|name| !known.contains(&name.as_str()) && name.as_str() != "qbparse-stages").collect();
     assert!(unclassified.is_empty(), "name how these take the target flags, or why not: {unclassified:?}");
 }
 
@@ -99,6 +143,11 @@ fn m64_is_refused_where_no_target_declares_it() {
     for tool in tools().iter().filter(|one| !matches!(one.name, "llrm-omf" | "llrm-qb")) {
         let directory = tempfile::tempdir().unwrap();
         let done = run(tool, directory.path(), &["-m64"]);
-        assert!(!done.status.success() && text(&done).contains("no target for -m64"), "{} -m64: {}", tool.name, text(&done));
+        assert!(
+            !done.status.success() && text(&done).contains("no target for -m64"),
+            "{} -m64: {}",
+            tool.name,
+            text(&done)
+        );
     }
 }

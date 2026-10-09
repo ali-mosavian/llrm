@@ -19,7 +19,10 @@ fn separated(text: &str) -> (Module, String, String) {
 }
 
 /// `text` split, answering as before on `inputs`; its text before and after.
-fn checked(text: &str, inputs: &[&[i128]]) -> (String, String) {
+fn checked(
+    text: &str,
+    inputs: &[&[i128]],
+) -> (String, String) {
     let original = parsed(&format!("{HEAD}{text}"));
     let (module, before, after) = separated(text);
     assert_eq!(results(&module, inputs), results(&original, inputs), "{before}\n{after}");
@@ -66,18 +69,24 @@ b0:
 ",
         INPUTS,
     );
-    assert!(after.contains("getelementptr i8, ptr @g, i16 16") && after.contains("getelementptr i8, ptr @h, i16 16"), "{after}");
+    assert!(
+        after.contains("getelementptr i8, ptr @g, i16 16") && after.contains("getelementptr i8, ptr @h, i16 16"),
+        "{after}"
+    );
     assert!(!after.contains("add i16 %i, 8"), "{after}");
 }
 
 /// The `i8` inputs on which `x + 3` does not wrap under `flags`: a wrap
 /// there is poison, which nothing is held to.
 fn defined(flags: &str) -> Vec<Vec<i128>> {
-    (0..256).filter(|&x: &i128| match flags {
-        "nsw" => !(125..128).contains(&x),
-        "nuw" => x <= 252,
-        _ => true,
-    }).map(|x| vec![x]).collect()
+    (0..256)
+        .filter(|&x: &i128| match flags {
+            "nsw" => !(125..128).contains(&x),
+            "nuw" => x <= 252,
+            _ => true,
+        })
+        .map(|x| vec![x])
+        .collect()
 }
 
 /// A byte index the `gep` sign-extends, summed without wrapping, and the same
@@ -209,9 +218,17 @@ b0:
 /// `(x + 3) + y` and `(x + 3) - y` in bytes, kept from wrapping by the flags
 /// their extension needs: the inputs where neither add wraps, with the
 /// ones that made a narrow rest wrap (`x + y` is -129, 127 as a byte).
-fn two_leaves(flag: &str, kind: &str, body: &str) -> (String, String) {
+fn two_leaves(
+    flag: &str,
+    kind: &str,
+    body: &str,
+) -> (String, String) {
     let signed = flag == "nsw";
-    let values: Vec<i128> = if signed { vec![-128, -127, -126, -4, -3, -1, 0, 1, 5, 100, 124, 127] } else { vec![0, 1, 2, 3, 5, 100, 128, 200, 250, 252, 255] };
+    let values: Vec<i128> = if signed {
+        vec![-128, -127, -126, -4, -3, -1, 0, 1, 5, 100, 124, 127]
+    } else {
+        vec![0, 1, 2, 3, 5, 100, 128, 200, 250, 252, 255]
+    };
     let (low, high) = if signed { (-128, 127) } else { (0, 255) };
     let mut inputs = Vec::new();
     for &x in &values {

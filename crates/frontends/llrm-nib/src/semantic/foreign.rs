@@ -11,14 +11,14 @@ use crate::syntax::{Extern, FOREIGN};
 
 /// Whether a value of `type_name` may cross a foreign ABI: a scalar, or a
 /// raw pointer to one or to a represented struct; never a buffer's owner.
-fn crosses(types: &TypeRegistry, type_name: TypeName) -> bool {
+fn crosses(
+    types: &TypeRegistry,
+    type_name: TypeName,
+) -> bool {
     match type_name {
         TypeName::Pointer { type_id, .. } => {
-            let target = types.types[(type_id - 1) as usize]
-                .element
-                .expect("a pointer has a target");
-            types.types[(target - 1) as usize].kind != "opaque"
-                || types.represented.contains(&target)
+            let target = types.types[(type_id - 1) as usize].element.expect("a pointer has a target");
+            types.types[(target - 1) as usize].kind != "opaque" || types.represented.contains(&target)
         }
         TypeName::String | TypeName::Vector { .. } => false,
         other => !ownership::needs_drop(other),
@@ -34,12 +34,18 @@ pub(super) fn check_foreign(
     span: Span,
 ) -> Result<(), Diagnostic> {
     let basic = signature.abi.basic();
-    interrupt_shape(signature.abi, signature.parameters.is_empty() && signature.returned(types) == TypeName::Void, span)?;
+    interrupt_shape(
+        signature.abi,
+        signature.parameters.is_empty() && signature.returned(types) == TypeName::Void,
+        span,
+    )?;
     for (parameter, (formal, _)) in signature.parameters.iter().zip(&signature.formals) {
         match parameter {
             SignatureParameter::Scalar(type_name) if crosses(types, *type_name) => {}
             SignatureParameter::Adapter { basic: own, .. } if Some(*own) == basic => {}
-            SignatureParameter::Adapter { basic: own, adapter, .. } => return Err(misplaced(name, *own, *adapter, span)),
+            SignatureParameter::Adapter { basic: own, adapter, .. } => {
+                return Err(misplaced(name, *own, *adapter, span));
+            }
             _ => {
                 return Err(Diagnostic::new(
                     span,
@@ -77,7 +83,8 @@ fn basic_result(
     name: &str,
     span: Span,
 ) -> Result<(), Diagnostic> {
-    let refused = |what: &str| Diagnostic::new(span, format!("{name}'s result cannot cross to {}: {what}", basic.name()));
+    let refused =
+        |what: &str| Diagnostic::new(span, format!("{name}'s result cannot cross to {}: {what}", basic.name()));
     const RESULTS: &str = "return an INTEGER, LONG, SINGLE, DOUBLE or a &string";
     // A string result is a view BASIC copies before the function returns.
     if signature.view == Some((ElementType::Scalar(TypeName::Char), 1)) && !signature.foreign {
@@ -102,15 +109,29 @@ fn basic_result(
     }
 }
 
-fn misplaced(name: &str, basic: super::super::syntax::Basic, adapter: super::super::syntax::Adapter, span: Span) -> Diagnostic {
+fn misplaced(
+    name: &str,
+    basic: super::super::syntax::Basic,
+    adapter: super::super::syntax::Adapter,
+    span: Span,
+) -> Diagnostic {
     Diagnostic::new(
         span,
-        format!("{name} takes a {}.{}, which only a {} export or extern takes", basic.name(), adapter.name(), basic.name()),
+        format!(
+            "{name} takes a {}.{}, which only a {} export or extern takes",
+            basic.name(),
+            adapter.name(),
+            basic.name()
+        ),
     )
 }
 
 /// Refuses a BASIC adapter in a function no BASIC calls.
-pub(super) fn check_adapters(signature: &Signature, name: &str, span: Span) -> Result<(), Diagnostic> {
+pub(super) fn check_adapters(
+    signature: &Signature,
+    name: &str,
+    span: Span,
+) -> Result<(), Diagnostic> {
     for parameter in &signature.parameters {
         if let SignatureParameter::Adapter { basic, adapter, .. } = parameter {
             return Err(misplaced(name, *basic, *adapter, span));
@@ -129,21 +150,27 @@ pub(super) fn foreign_signature(
     signature.foreign = true;
     let abi = declared.abi.resolved(types.native);
     if !types.conventions.iter().any(|one| one == abi.name()) {
-        return Err(Diagnostic::new(declared.function.span, format!("this target defines no \"{}\" calling convention: it has {}", declared.abi.name(), types.conventions.join(", "))));
+        return Err(Diagnostic::new(
+            declared.function.span,
+            format!(
+                "this target defines no \"{}\" calling convention: it has {}",
+                declared.abi.name(),
+                types.conventions.join(", ")
+            ),
+        ));
     }
     signature.abi = abi;
-    check_foreign(
-        types,
-        &mut signature,
-        &declared.function.name,
-        declared.function.span,
-    )?;
+    check_foreign(types, &mut signature, &declared.function.name, declared.function.span)?;
     signature.name = declared.symbol.clone().unwrap_or_else(|| types.symbol(abi, &declared.function.name));
     Ok(signature)
 }
 
 /// An interrupt passes nothing and takes nothing back.
-fn interrupt_shape(abi: Abi, takes_nothing_returns_void: bool, span: Span) -> Result<(), Diagnostic> {
+fn interrupt_shape(
+    abi: Abi,
+    takes_nothing_returns_void: bool,
+    span: Span,
+) -> Result<(), Diagnostic> {
     if abi.interrupt() && !takes_nothing_returns_void {
         return Err(Diagnostic::new(span, "an interrupt16 function takes nothing and returns void"));
     }
@@ -152,7 +179,11 @@ fn interrupt_shape(abi: Abi, takes_nothing_returns_void: bool, span: Span) -> Re
 
 impl TypeRegistry {
     /// The object symbol of `name` under `abi`: its convention's pattern in the object format, else `Abi::symbol`'s.
-    pub(super) fn symbol(&self, abi: Abi, name: &str) -> String {
+    pub(super) fn symbol(
+        &self,
+        abi: Abi,
+        name: &str,
+    ) -> String {
         match self.symbols.get(abi.name()) {
             Some(pattern) => llrm_target::calling::spell(pattern, name),
             None => abi.symbol(name),
@@ -162,10 +193,22 @@ impl TypeRegistry {
     /// `extern "abi" fn(A) -> R`: the far address of a function of that ABI
     /// whose type is `function`. Nothing reads or calls through it here; a
     /// foreign function does.
-    pub(super) fn foreign_function(&mut self, abi: Abi, function: TypeName, span: Span) -> Result<TypeName, Diagnostic> {
+    pub(super) fn foreign_function(
+        &mut self,
+        abi: Abi,
+        function: TypeName,
+        span: Span,
+    ) -> Result<TypeName, Diagnostic> {
         let abi = abi.resolved(self.native);
         if !self.conventions.iter().any(|one| one == abi.name()) {
-            return Err(Diagnostic::new(span, format!("this target defines no \"{}\" calling convention: it has {}", abi.name(), self.conventions.join(", "))));
+            return Err(Diagnostic::new(
+                span,
+                format!(
+                    "this target defines no \"{}\" calling convention: it has {}",
+                    abi.name(),
+                    self.conventions.join(", ")
+                ),
+            ));
         }
         interrupt_shape(abi, self.types[(type_id(function) - 1) as usize].name == "fn() -> void", span)?;
         if let Some(found) = self.foreign_function_of(abi, function) {
@@ -178,12 +221,20 @@ impl TypeRegistry {
     }
 
     /// `extern "abi" fn(A) -> R`, when it is registered.
-    pub(super) fn foreign_function_of(&self, abi: Abi, function: TypeName) -> Option<TypeName> {
+    pub(super) fn foreign_function_of(
+        &self,
+        abi: Abi,
+        function: TypeName,
+    ) -> Option<TypeName> {
         let type_id = *self.foreign_functions.get(&self.foreign_name(abi, function))?;
         Some(TypeName::Pointer { type_id, far: true, width: self.pointer_width(true), mutable: false })
     }
 
-    fn foreign_name(&self, abi: Abi, function: TypeName) -> String {
+    fn foreign_name(
+        &self,
+        abi: Abi,
+        function: TypeName,
+    ) -> String {
         format!("{FOREIGN} \"{}\" {}", abi.name(), self.types[(type_id(function) - 1) as usize].name)
     }
 }
@@ -191,7 +242,12 @@ impl TypeRegistry {
 impl FunctionCompiler<'_> {
     /// The far address of `signature`'s function, typed by its ABI: data
     /// the linker writes, since only it knows where the code lands.
-    pub(super) fn foreign_address(&mut self, signature: &Signature, expected: Option<TypeName>, span: Span) -> Result<TypedOperand, Diagnostic> {
+    pub(super) fn foreign_address(
+        &mut self,
+        signature: &Signature,
+        expected: Option<TypeName>,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
         let function = self.types.function_type(signature);
         let type_name = self.types.foreign_function(signature.abi, function, span)?;
         if let Some(wanted) = expected.filter(|one| *one != type_name) {
@@ -217,19 +273,23 @@ impl FunctionCompiler<'_> {
     }
 
     /// `unsafe: body`.
-    pub(super) fn unsafe_block(&mut self, body: &[Statement]) -> Result<(), Diagnostic> {
+    pub(super) fn unsafe_block(
+        &mut self,
+        body: &[Statement],
+    ) -> Result<(), Diagnostic> {
         self.unsafe_depth += 1;
         let result = self.scoped(body);
         self.unsafe_depth -= 1;
         result
     }
 
-    pub(super) fn require_unsafe(&self, what: &str, span: Span) -> Result<(), Diagnostic> {
+    pub(super) fn require_unsafe(
+        &self,
+        what: &str,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         if self.unsafe_depth == 0 {
-            return Err(Diagnostic::new(
-                span,
-                format!("{what} is unsafe: put it in an 'unsafe:' block"),
-            ));
+            return Err(Diagnostic::new(span, format!("{what} is unsafe: put it in an 'unsafe:' block")));
         }
         Ok(())
     }

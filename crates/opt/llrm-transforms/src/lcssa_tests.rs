@@ -162,7 +162,10 @@ fn test_exit_phi_cannot_read_a_value_missing_on_one_edge() {
 /// Not SSA either: `%carried` does not reach the exit from `%b0`.
 #[test]
 fn test_exit_shared_with_a_bypass_still_requires_canonicalization() {
-    untouched(&LOOP_WITH_EXIT_USE.replace("b0:\n  br label %b1", "b0:\n  %c = icmp eq i16 %n, 0\n  br i1 %c, label %b1, label %b3"));
+    untouched(
+        &LOOP_WITH_EXIT_USE
+            .replace("b0:\n  br label %b1", "b0:\n  %c = icmp eq i16 %n, 0\n  br i1 %c, label %b1, label %b3"),
+    );
 }
 
 /// matmul8: peeling left the outer counter's step behind `phi(x, x)`, and

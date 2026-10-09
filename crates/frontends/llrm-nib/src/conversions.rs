@@ -16,17 +16,19 @@ pub struct Rules {
 pub const I386_REAL_MODE: Rules = Rules { int: TypeName::I16 };
 
 impl Rules {
-    pub fn promoted(&self, type_name: TypeName) -> TypeName {
-        if is_integer(type_name) && scalar_width(type_name) < scalar_width(self.int) {
-            self.int
-        } else {
-            type_name
-        }
+    pub fn promoted(
+        &self,
+        type_name: TypeName,
+    ) -> TypeName {
+        if is_integer(type_name) && scalar_width(type_name) < scalar_width(self.int) { self.int } else { type_name }
     }
 
     /// An integer literal's own type: `int`, else `i32`, else `u32`, as C
     /// types a hex constant; `None` past all three.
-    pub fn literal(&self, value: i64) -> Option<TypeName> {
+    pub fn literal(
+        &self,
+        value: i64,
+    ) -> Option<TypeName> {
         [self.int, TypeName::I32, TypeName::U32].into_iter().find(|one| fits(value, *one))
     }
 
@@ -35,13 +37,26 @@ impl Rules {
     /// Where C would convert a signed operand to an unsigned type of the same
     /// width, there is none, unless that operand was promoted from an unsigned
     /// type and so cannot be negative.
-    pub fn common(&self, left: TypeName, right: TypeName) -> Option<TypeName> {
+    pub fn common(
+        &self,
+        left: TypeName,
+        right: TypeName,
+    ) -> Option<TypeName> {
         let common = self.common_plain(left, right)?;
         // Where a word and its plain twin meet, the word is the type: usize stays usize.
-        Some([left, right].into_iter().find(|one| matches!(one, TypeName::Word { .. }) && one.plain() == common.plain()).unwrap_or(common))
+        Some(
+            [left, right]
+                .into_iter()
+                .find(|one| matches!(one, TypeName::Word { .. }) && one.plain() == common.plain())
+                .unwrap_or(common),
+        )
     }
 
-    fn common_plain(&self, left: TypeName, right: TypeName) -> Option<TypeName> {
+    fn common_plain(
+        &self,
+        left: TypeName,
+        right: TypeName,
+    ) -> Option<TypeName> {
         if !implicit(left) || !implicit(right) {
             return (left == right).then_some(left);
         }
@@ -55,11 +70,8 @@ impl Rules {
             Ordering::Less => promoted_right,
             Ordering::Equal if is_signed(promoted_left) == is_signed(promoted_right) => promoted_left,
             Ordering::Equal => {
-                let (signed, unsigned) = if is_signed(promoted_left) {
-                    (left, promoted_right)
-                } else {
-                    (right, promoted_left)
-                };
+                let (signed, unsigned) =
+                    if is_signed(promoted_left) { (left, promoted_right) } else { (right, promoted_left) };
                 if is_signed(signed) {
                     return None;
                 }
@@ -70,7 +82,10 @@ impl Rules {
 }
 
 /// Whether `value` is one of `type_name`'s values.
-pub fn fits(value: i64, type_name: TypeName) -> bool {
+pub fn fits(
+    value: i64,
+    type_name: TypeName,
+) -> bool {
     match type_name.plain() {
         TypeName::Char | TypeName::U8 => u8::try_from(value).is_ok(),
         TypeName::I8 => i8::try_from(value).is_ok(),

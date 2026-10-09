@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::{stack_to_add, Bound, Usage};
+use super::{Bound, Usage, stack_to_add};
 
 const RESERVE: i64 = 512;
 const DOS: llrm_x86_m16::M16 = llrm_x86_m16::M16;
@@ -9,8 +9,19 @@ use crate::model::ir::{self, Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::support::hash::IndexMap;
 
-fn insn(at: i64, op: Operation, name: &str, sources: Vec<Loc>) -> Arc<Insn> {
-    Arc::new(Insn::new(at, Some((at, at)), Some(Semantics { name: Some(name.to_owned()), sources, ..Semantics::new(op) }), vec![], vec![]))
+fn insn(
+    at: i64,
+    op: Operation,
+    name: &str,
+    sources: Vec<Loc>,
+) -> Arc<Insn> {
+    Arc::new(Insn::new(
+        at,
+        Some((at, at)),
+        Some(Semantics { name: Some(name.to_owned()), sources, ..Semantics::new(op) }),
+        vec![],
+        vec![],
+    ))
 }
 
 fn push(at: i64) -> Arc<Insn> {
@@ -18,17 +29,47 @@ fn push(at: i64) -> Arc<Insn> {
 }
 
 /// A far procedure: `pushes` words pushed for a call, `reserve` bytes of locals, and its callees.
-fn procedure(name: &str, reserve: i64, pushes: usize, callees: &[&str]) -> Procedure {
+fn procedure(
+    name: &str,
+    reserve: i64,
+    pushes: usize,
+    callees: &[&str],
+) -> Procedure {
     let mut insns = (0..pushes as i64).map(push).collect::<Vec<_>>();
     insns.push(insn(100, Operation::Call, "call", vec![]));
     insns.push(insn(101, Operation::Return, "ret", vec![]));
     let body = LirBody::new(name, 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
     let callees = callees.iter().enumerate().map(|(at, one)| (100 + at as i64, Callee::new(*one, true))).collect();
-    Procedure { name: name.to_owned(), public: true, far: true, body, reserve, callees, interrupt: None, size: false, entry: 0, stack_check: None, registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16) }
+    Procedure {
+        name: name.to_owned(),
+        public: true,
+        far: true,
+        body,
+        reserve,
+        callees,
+        interrupt: None,
+        size: false,
+        entry: 0,
+        stack_check: None,
+        registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
+    }
 }
 
 fn module(procedures: Vec<Procedure>) -> Module {
-    Module { object: llrm_target::Target::object(&llrm_x86_m16::M16), code: String::new(), names: IndexMap::default(), externs: Vec::new(), publics: Vec::new(), data: Vec::new(), procedures, private: Default::default(), far_bss: Default::default(), requests: Default::default(), debug: None, stack: 0 }
+    Module {
+        object: llrm_target::Target::object(&llrm_x86_m16::M16),
+        code: String::new(),
+        names: IndexMap::default(),
+        externs: Vec::new(),
+        publics: Vec::new(),
+        data: Vec::new(),
+        procedures,
+        private: Default::default(),
+        far_bss: Default::default(),
+        requests: Default::default(),
+        debug: None,
+        stack: 0,
+    }
 }
 
 /// What a program can use of the stack was nowhere stated: a deep chain of
@@ -36,7 +77,10 @@ fn module(procedures: Vec<Procedure>) -> Module {
 /// return address, BP and locals, and what a call has pushed.
 #[test]
 fn test_the_stack_a_chain_of_calls_can_reach_is_the_sum_of_its_frames() {
-    let usage = Usage::of(&[module(vec![procedure("main", 10, 3, &["f"]), procedure("f", 20, 0, &["g"]), procedure("g", 0, 0, &[])])], &DOS);
+    let usage = Usage::of(
+        &[module(vec![procedure("main", 10, 3, &["f"]), procedure("f", 20, 0, &["g"]), procedure("g", 0, 0, &[])])],
+        &DOS,
+    );
     // far return 4 + push bp 2 + locals 10 + 3 words pushed: 22; f: 4 + 2 + 20; g: 4.
     assert_eq!(usage.bound("g"), Bound::Bytes(4));
     assert_eq!(usage.bound("f"), Bound::Bytes(26 + 4));
@@ -50,9 +94,20 @@ fn test_the_stack_a_chain_of_calls_can_reach_is_the_sum_of_its_frames() {
 /// nothing here can know: the bound is a floor.
 #[test]
 fn test_a_cycle_is_unbounded_and_an_undefined_callee_makes_the_bound_a_floor() {
-    let usage = Usage::of(&[module(vec![procedure("ping", 0, 0, &["pong"]), procedure("pong", 0, 0, &["ping"]), procedure("shell", 0, 0, &["B$PRINT"])])], &DOS);
+    let usage = Usage::of(
+        &[module(vec![
+            procedure("ping", 0, 0, &["pong"]),
+            procedure("pong", 0, 0, &["ping"]),
+            procedure("shell", 0, 0, &["B$PRINT"]),
+        ])],
+        &DOS,
+    );
     assert_eq!(usage.bound("ping"), Bound::Recursive);
-    assert!(matches!(usage.bound("shell"), Bound::AtLeast(4, ref named) if named.contains("B$PRINT")), "{:?}", usage.bound("shell"));
+    assert!(
+        matches!(usage.bound("shell"), Bound::AtLeast(4, ref named) if named.contains("B$PRINT")),
+        "{:?}",
+        usage.bound("shell")
+    );
     assert!(usage.report().contains("unbounded (recursion)") && usage.report().contains(">= 4 (and B$PRINT)"));
 }
 
@@ -79,11 +134,11 @@ fn test_a_chain_of_diamonds_thirty_deep_is_settled_at_once() {
 /// bound must not lose them (a frame read only `push` and `sub` and counted none).
 #[test]
 fn test_a_frame_opened_with_enter_counts_its_bp_and_locals() {
-    let usage = |enter: bool| Usage::of(&[module(vec![Procedure { size: enter, ..procedure("main", 10, 3, &[]) }])], &DOS);
+    let usage =
+        |enter: bool| Usage::of(&[module(vec![Procedure { size: enter, ..procedure("main", 10, 3, &[]) }])], &DOS);
     assert_eq!(usage(true).bound("main"), usage(false).bound("main"));
     assert_eq!(usage(true).bound("main"), Bound::Bytes(4 + 2 + 10 + 6));
 }
-
 
 /// #396: a SUB's locals live in the runtime's frame (`mov cx,N` / `call B$ENSA`), which no
 /// instruction of it shows; its bound was the return address alone, so a 6000-byte frame sized
@@ -114,20 +169,41 @@ fn test_the_stack_to_add_is_what_the_chain_needs_beyond_the_base() {
     assert_eq!(stack_to_add(&one(70000), 0x800, RESERVE, None, &DOS), Ok(4 + 70000 + RESERVE - 0x800));
 }
 
-fn checked(mut one: Procedure, red_zone: i64) -> Procedure {
+fn checked(
+    mut one: Procedure,
+    red_zone: i64,
+) -> Procedure {
     one.public = false;
-    one.stack_check = Some(crate::backend::masm::StackCheck { limit: "LIM".into(), handler: "HAND".into(), far: true, red_zone, entry: None });
+    one.stack_check = Some(crate::backend::masm::StackCheck {
+        limit: "LIM".into(),
+        handler: "HAND".into(),
+        far: true,
+        red_zone,
+        entry: None,
+    });
     one
 }
 
 /// A leaf that calls nothing.
-fn leaf(name: &str, reserve: i64) -> Procedure {
-    let body = LirBody::new(name, 0, vec![LirBlock::new(0, vec![insn(0, Operation::Return, "ret", vec![])])], IndexMap::default(), IndexMap::default());
+fn leaf(
+    name: &str,
+    reserve: i64,
+) -> Procedure {
+    let body = LirBody::new(
+        name,
+        0,
+        vec![LirBlock::new(0, vec![insn(0, Operation::Return, "ret", vec![])])],
+        IndexMap::default(),
+        IndexMap::default(),
+    );
     Procedure { body, ..procedure(name, reserve, 0, &[]) }
 }
 
 /// What `elide_checks` leaves checked, by name, of procedures all entered directly.
-fn kept(mut procedures: Vec<Procedure>, direct: bool) -> Vec<String> {
+fn kept(
+    mut procedures: Vec<Procedure>,
+    direct: bool,
+) -> Vec<String> {
     super::elide_checks(&mut procedures, &|_| direct, &DOS);
     procedures.into_iter().filter(|one| one.stack_check.is_some()).map(|one| one.name).collect()
 }
@@ -142,9 +218,16 @@ fn test_a_small_leaf_the_callers_check_covers_goes_unchecked() {
     assert_eq!(kept(vec![main(), checked(leaf("small", 8), 32)], true), ["main"]);
     assert_eq!(kept(vec![main(), checked(leaf("small", 8), 32)], false), ["main", "small"], "its address is taken");
     assert_eq!(kept(vec![main(), checked(leaf("big", 40), 32)], true), ["main", "big"], "past the red zone");
-    assert_eq!(kept(vec![main(), checked(leaf("small", 8), 19)], true), ["main", "small"], "with the caller's push, 1 byte past");
+    assert_eq!(
+        kept(vec![main(), checked(leaf("small", 8), 19)], true),
+        ["main", "small"],
+        "with the caller's push, 1 byte past"
+    );
     assert_eq!(kept(vec![main(), checked(leaf("small", 8), 0)], true), ["main", "small"], "no red zone stated");
     let published = Procedure { public: true, ..checked(leaf("small", 8), 32) };
     assert_eq!(kept(vec![main(), published], true), ["main", "small"], "called from outside");
-    assert_eq!(kept(vec![checked(procedure("outer", 0, 0, &["small"]), 32), checked(leaf("small", 8), 32)], true), ["outer"]);
+    assert_eq!(
+        kept(vec![checked(procedure("outer", 0, 0, &["small"]), 32), checked(leaf("small", 8), 32)], true),
+        ["outer"]
+    );
 }

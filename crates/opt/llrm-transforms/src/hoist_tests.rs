@@ -20,12 +20,17 @@ fn hoisted(text: &str) -> (Module, Module) {
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.require::<Summaries>();
     passes.add(super::Hoist { size: false });
-    passes.run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    passes
+        .run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral))
+        .unwrap_or_else(|error| panic!("{error}\n{text}"));
     (before, after)
 }
 
 /// `text` hoisted, answering as before on `inputs`; its text.
-fn checked(text: &str, inputs: &[Vec<i128>]) -> String {
+fn checked(
+    text: &str,
+    inputs: &[Vec<i128>],
+) -> String {
     let (before, after) = hoisted(text);
     let inputs: Vec<&[i128]> = inputs.iter().map(Vec::as_slice).collect();
     assert_eq!(results(&after, &inputs), results(&before, &inputs), "{}", printed(&after));
@@ -33,11 +38,18 @@ fn checked(text: &str, inputs: &[Vec<i128>]) -> String {
 }
 
 /// The instructions of @f's block `name`, in `text`.
-fn block(text: &str, name: &str) -> Vec<String> {
+fn block(
+    text: &str,
+    name: &str,
+) -> Vec<String> {
     block_of(text, "f", name)
 }
 
-fn block_of(text: &str, function: &str, name: &str) -> Vec<String> {
+fn block_of(
+    text: &str,
+    function: &str,
+    name: &str,
+) -> Vec<String> {
     let f = &text[text.find(&format!("define i16 @{function}(")).expect("the function")..];
     let start = f.find(&format!("\n{name}:\n")).unwrap_or_else(|| panic!("no {name} in\n{text}")) + name.len() + 3;
     f[start..].lines().take_while(|line| line.starts_with("  ")).map(|line| line.trim().to_owned()).collect()
@@ -45,7 +57,14 @@ fn block_of(text: &str, function: &str, name: &str) -> Vec<String> {
 
 /// `s += v` over `i < bound`, `v` computed by `body` in the loop; `pre`
 /// goes before it and `head` into its header.
-fn looped(declared: &str, parameters: &str, pre: &str, head: &str, bound: &str, body: &str) -> String {
+fn looped(
+    declared: &str,
+    parameters: &str,
+    pre: &str,
+    head: &str,
+    bound: &str,
+    body: &str,
+) -> String {
     format!(
         "{declared}define i16 @f(i16 %n{parameters}) {{
 b0:
@@ -90,7 +109,14 @@ fn test_invariant_arithmetic_leaves_its_loop_in_order() {
 /// A load and the multiply behind it leave together.
 #[test]
 fn test_an_operand_nothing_writes_down_may_leave_with_its_run() {
-    let text = looped(GLOBALS, ", i16 %a", "", "", "%n", "  %l = load i16, ptr @g\n  %v = mul i16 %l, %a\n  store i16 %i, ptr @h\n");
+    let text = looped(
+        GLOBALS,
+        ", i16 %a",
+        "",
+        "",
+        "%n",
+        "  %l = load i16, ptr @g\n  %v = mul i16 %l, %a\n  store i16 %i, ptr @h\n",
+    );
     let done = checked(&text, &trips_and(&[0, 3, -1]));
     assert_eq!(block(&done, "b0"), ["%l = load i16, ptr @g", "%v = mul i16 %l, %a", "br label %b1"]);
 }
@@ -109,7 +135,14 @@ fn test_a_load_the_loop_may_write_stays() {
 /// volatile access itself never moves.
 #[test]
 fn test_a_precise_volatile_access_does_not_block_disjoint_invariant_work() {
-    let text = looped(GLOBALS, "", "", "", "%n", "  %v = load i16, ptr @g\n  store volatile i16 %i, ptr @h\n  %w = load volatile i16, ptr @h\n");
+    let text = looped(
+        GLOBALS,
+        "",
+        "",
+        "",
+        "%n",
+        "  %v = load i16, ptr @g\n  store volatile i16 %i, ptr @h\n  %w = load volatile i16, ptr @h\n",
+    );
     let done = checked(&text, &trips());
     assert_eq!(block(&done, "b0"), ["%v = load i16, ptr @g", "br label %b1"]);
     assert!(block(&done, "b2").contains(&"%w = load volatile i16, ptr @h".to_owned()), "{done}");
@@ -121,10 +154,15 @@ fn test_a_precise_volatile_access_does_not_block_disjoint_invariant_work() {
 fn test_a_call_keeps_what_it_may_write() {
     let callees = "define void @writes() {\nb0:\n  store i16 9, ptr @g\n  ret void\n}\n\ndefine void @elsewhere() {\nb0:\n  store i16 9, ptr @h\n  ret void\n}\n\n";
     for (callee, moves) in [("writes", false), ("elsewhere", true)] {
-        let body = format!("  %k = mul i16 %a, 3\n  call void @{callee}()\n  %l = load i16, ptr @g\n  %v = add i16 %k, %l\n");
+        let body =
+            format!("  %k = mul i16 %a, 3\n  call void @{callee}()\n  %l = load i16, ptr @g\n  %v = add i16 %k, %l\n");
         let text = looped(&format!("{GLOBALS}{callees}"), ", i16 %a", "", "", "%n", &body);
         let done = checked(&text, &trips_and(&[0, 2]));
-        let expected: &[&str] = if moves { &["%k = mul i16 %a, 3", "%l = load i16, ptr @g", "%v = add i16 %k, %l", "br label %b1"] } else { &["%k = mul i16 %a, 3", "br label %b1"] };
+        let expected: &[&str] = if moves {
+            &["%k = mul i16 %a, 3", "%l = load i16, ptr @g", "%v = add i16 %k, %l", "br label %b1"]
+        } else {
+            &["%k = mul i16 %a, 3", "br label %b1"]
+        };
         assert_eq!(block(&done, "b0"), expected, "{callee}");
     }
 }
@@ -184,7 +222,10 @@ b0:
     };
     let entered = checked(&text("br label %b1", "ret i16 %s"), &trips());
     assert_eq!(block_of(&entered, "loop", "b0"), ["%v = load i16, ptr %p", "br label %b1"]);
-    let guarded = text("%g = icmp sgt i16 %n, 0\n  br i1 %g, label %b1, label %b3", "%r = phi i16 [ 0, %b0 ], [ %s, %b1 ]\n  ret i16 %r");
+    let guarded = text(
+        "%g = icmp sgt i16 %n, 0\n  br i1 %g, label %b1, label %b3",
+        "%r = phi i16 [ 0, %b0 ], [ %s, %b1 ]\n  ret i16 %r",
+    );
     let (before, after) = hoisted(&guarded);
     assert_eq!(printed(&after), printed(&before));
 }
@@ -324,16 +365,27 @@ b3:
 ";
     let (_, after) = hoisted(text);
     let body = block_of(&printed(&after), "f", "b2");
-    assert!(body.iter().all(|line| !line.contains("load i16, ptr %d") && !line.contains("load ptr, ptr %data")), "{body:?}");
+    assert!(
+        body.iter().all(|line| !line.contains("load i16, ptr %d") && !line.contains("load ptr, ptr %data")),
+        "{body:?}"
+    );
 }
 
 /// The language says a load reads what is written once and never again: a store the loop
 /// cannot rule out as that cell (any pointer) does not keep it in the loop.
 #[test]
 fn test_a_load_the_language_says_is_invariant_leaves_past_a_store() {
-    let with = |load: &str| format!("{}\n!0 = !{{}}\n", looped(GLOBALS, ", ptr %p", "", "", "%n", &format!("  %v = {load}\n  store i16 %i, ptr %p\n")));
+    let with = |load: &str| {
+        format!(
+            "{}\n!0 = !{{}}\n",
+            looped(GLOBALS, ", ptr %p", "", "", "%n", &format!("  %v = {load}\n  store i16 %i, ptr %p\n"))
+        )
+    };
     let (_, plain) = hoisted(&with("load i16, ptr @g"));
-    assert!(block_of(&printed(&plain), "f", "b2").iter().any(|line| line.contains("load i16, ptr @g")), "a plain load stays");
+    assert!(
+        block_of(&printed(&plain), "f", "b2").iter().any(|line| line.contains("load i16, ptr @g")),
+        "a plain load stays"
+    );
     let (_, stated) = hoisted(&with("load i16, ptr @g, !invariant.load !0"));
     let printed = printed(&stated);
     assert!(block_of(&printed, "f", "b2").iter().all(|line| !line.contains("load i16, ptr @g")), "{printed}");
@@ -342,7 +394,9 @@ fn test_a_load_the_language_says_is_invariant_leaves_past_a_store() {
 
 /// The function of the test below: two loops inside one, each with three invariant loads past six registers.
 fn two_inner_loops() -> String {
-    let loads = |names: [&str; 3]| names.map(|name| format!("  %{name} = load i16, ptr @{name}\n  %w{name} = shl i16 %{name}, 1\n")).concat();
+    let loads = |names: [&str; 3]| {
+        names.map(|name| format!("  %{name} = load i16, ptr @{name}\n  %w{name} = shl i16 %{name}, 1\n")).concat()
+    };
     let inner = |at: &str, names: [&str; 3], next: &str| {
         format!(
             "{at}:\n  %i{at} = phi i16 [ 0, %{pre} ], [ %n{at}, %{at} ]\n  %s{at} = phi i16 [ %t, %{pre} ], [ %r{at}, %{at} ]\n{loads}  %u{at} = add i16 %w{a}, %w{b}\n  %v{at} = add i16 %u{at}, %w{c}\n  %r{at} = add i16 %s{at}, %v{at}\n  %n{at} = add i16 %i{at}, 1\n  %k{at} = icmp slt i16 %n{at}, %n\n  br i1 %k{at}, label %{at}, label %{next}\n\n",
@@ -398,7 +452,9 @@ fn test_invariants_past_the_registers_stay_in_the_inner_preheader() {
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.require::<Summaries>();
     passes.add(super::Hoist { size: true });
-    passes.run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() })).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    passes
+        .run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
+        .unwrap_or_else(|error| panic!("{error}\n{text}"));
     let printed = printed(&after);
     let hoisted = block(&printed, "b0").iter().filter(|line| line.contains("load")).count();
     assert!(hoisted < 6, "{hoisted} of 6 loads left both inner loops\n{printed}");
@@ -435,7 +491,12 @@ b2:
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.require::<Summaries>();
     passes.add(super::Hoist { size: true });
-    passes.run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 3, call_registers: 1, ..Default::default() })).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    passes
+        .run_module(
+            &mut after,
+            std::rc::Rc::new(crate::testing::Tuned { registers: 3, call_registers: 1, ..Default::default() }),
+        )
+        .unwrap_or_else(|error| panic!("{error}\n{text}"));
     let printed = printed(&after);
     let hoisted = block(&printed, "b0").iter().filter(|line| line.contains("getelementptr")).count();
     assert_eq!(hoisted, 6, "{printed}");
@@ -444,7 +505,10 @@ b2:
 /// A loop's invariant `double` load, hoisted: a value on a stack machine is held across the loop and released
 /// after it. x86-m32's -Os grew 4 B per float hoisted (nbody: two `fld` and two `fstp st(0)` out of an inner loop
 /// of 1.5 trips) because the price counted a move and no release.
-fn float_hoist(size: bool, release: i64) -> usize {
+fn float_hoist(
+    size: bool,
+    release: i64,
+) -> usize {
     let text = "@g = global double 1.0
 
 define i16 @f(i16 %n) {
@@ -490,9 +554,10 @@ fn test_a_float_load_is_hoisted_where_the_loop_pays_for_its_release() {
     assert_eq!(float_hoist(false, 2), 1);
 }
 
-/// A chain of loads each reading through the one before: one more of them is ready each round of `_invariant_run`, and a load that was
-/// not ready was asked again, round after round, whether any write in the loop reaches it (x_life, d_alias: hoist's alias queries
-/// `memoryssa::spares` -> `regions::overlapping`, 1.3 of its 3.4 points). A load is asked once.
+/// A chain of loads each reading through the one before: one more of them is ready each round of `_invariant_run`, and
+/// a load that was not ready was asked again, round after round, whether any write in the loop reaches it (x_life,
+/// d_alias: hoist's alias queries `memoryssa::spares` -> `regions::overlapping`, 1.3 of its 3.4 points). A load is
+/// asked once.
 #[test]
 fn test_a_load_that_waits_for_the_one_before_is_asked_whether_the_loop_writes_it_once() {
     let globals = "@a = global ptr @b\n@b = global ptr @c\n@c = global ptr @d\n@d = global ptr @e\n@e = global i16 7\n@w = global i16 0\n\n";
@@ -511,8 +576,8 @@ fn test_a_load_that_waits_for_the_one_before_is_asked_whether_the_loop_writes_it
     assert!(asks <= 5, "{asks} asks for 5 loads");
 }
 
-/// A motion's price is its work and one spill forecast; hoist found the forecast twice (once for the price, again for the spilled
-/// set), 41% of its time on a 16-deep loop nest.
+/// A motion's price is its work and one spill forecast; hoist found the forecast twice (once for the price, again for
+/// the spilled set), 41% of its time on a 16-deep loop nest.
 #[test]
 fn test_a_motion_is_priced_by_one_forecast() {
     let text = two_inner_loops();
@@ -521,7 +586,9 @@ fn test_a_motion_is_priced_by_one_forecast() {
     passes.require::<Summaries>();
     passes.add(super::Hoist { size: true });
     crate::profit::PRICED.with(|count| count.set((0, 0)));
-    passes.run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() })).unwrap();
+    passes
+        .run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
+        .unwrap();
     let (priced, forecast) = crate::profit::PRICED.with(std::cell::Cell::get);
     assert!(priced > 0, "nothing was priced");
     assert_eq!(forecast, priced, "a price and its forecast were found separately");

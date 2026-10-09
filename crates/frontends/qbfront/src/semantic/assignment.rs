@@ -33,8 +33,7 @@ pub(super) fn unassigned_reads(
         }
     }
     // `None` is "everything assigned", the top of the intersection lattice.
-    let mut exits: BTreeMap<u32, Option<BTreeSet<u32>>> =
-        blocks.iter().map(|block| (block.id, None)).collect();
+    let mut exits: BTreeMap<u32, Option<BTreeSet<u32>>> = blocks.iter().map(|block| (block.id, None)).collect();
     let entry_state = |this: &BTreeMap<u32, Option<BTreeSet<u32>>>, id: u32| {
         if id == entry {
             return Some(BTreeSet::new());

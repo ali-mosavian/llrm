@@ -1,9 +1,10 @@
 //! Guards proven by the branches over a block.
 
-use super::{Given, found, guards, holds};
-use crate::induction::{AffineOperand, Scev};
-use crate::induction::tests::Parsed;
 use llrm_mir::opcode::IntPredicate;
+
+use super::{Given, found, guards, holds};
+use crate::induction::tests::Parsed;
+use crate::induction::{AffineOperand, Scev};
 
 const GUARDED: &str = "define i16 @f(i16 %n, i16 %len) {
 entry:
@@ -22,7 +23,10 @@ done:
 fn test_a_branch_proves_its_compare_where_its_edge_alone_leads() {
     let parsed = Parsed::new(GUARDED);
     let unit = parsed.unit();
-    let (n, len) = (Scev::of(&AffineOperand::Value(parsed.value("n"), 16), 16), Scev::of(&AffineOperand::Value(parsed.value("len"), 16), 16));
+    let (n, len) = (
+        Scev::of(&AffineOperand::Value(parsed.value("n"), 16), 16),
+        Scev::of(&AffineOperand::Value(parsed.value("len"), 16), 16),
+    );
     let at = |name: &str| block_named(&parsed, name);
     assert!(holds(&unit, at("loop"), IntPredicate::Ult, &n, &len));
     assert!(holds(&unit, at("loop"), IntPredicate::Ule, &n, &len));
@@ -31,9 +35,19 @@ fn test_a_branch_proves_its_compare_where_its_edge_alone_leads() {
     assert!(guards(&unit, at("done")).is_empty());
 }
 
-fn block_named(parsed: &Parsed, name: &str) -> i64 {
+fn block_named(
+    parsed: &Parsed,
+    name: &str,
+) -> i64 {
     let function = parsed.function();
-    crate::cfg::id(function.layout().iter().copied().find(|&block| function.block(block).name.as_deref() == Some(name)).expect(name))
+    crate::cfg::id(
+        function
+            .layout()
+            .iter()
+            .copied()
+            .find(|&block| function.block(block).name.as_deref() == Some(name))
+            .expect(name),
+    )
 }
 
 /// What a block assumes holds in every block it dominates, as an edge's
@@ -56,11 +70,17 @@ done:
 ",
     );
     let unit = parsed.unit();
-    let (n, len) = (Scev::of(&AffineOperand::Value(parsed.value("n"), 16), 16), Scev::of(&AffineOperand::Value(parsed.value("len"), 16), 16));
+    let (n, len) = (
+        Scev::of(&AffineOperand::Value(parsed.value("n"), 16), 16),
+        Scev::of(&AffineOperand::Value(parsed.value("len"), 16), 16),
+    );
     for name in ["loop", "done"] {
         assert!(holds(&unit, block_named(&parsed, name), IntPredicate::Ult, &n, &len), "{name}");
     }
-    assert!(guards(&unit, block_named(&parsed, "entry")).is_empty(), "not in its own block: earlier code is not covered");
+    assert!(
+        guards(&unit, block_named(&parsed, "entry")).is_empty(),
+        "not in its own block: earlier code is not covered"
+    );
 }
 
 /// `n != 0` proves `0 < n`, `n > 0` and `n >= 1`: the guard a copied loop test leaves for a counter that starts at zero
@@ -89,8 +109,9 @@ done:
     assert!(!holds(&unit, block_named(&parsed, "done"), IntPredicate::Ult, &zero, &n));
 }
 
-/// A guard in the narrow type proves the same unsigned compare of its zero extension: `gap < 64` in i16 is `zext gap < 64` in i32, which is
-/// what a widened counter starting at `gap` tests (bench/shellsort with `-ftree-ch`: the inner loop's symbolic count was lost).
+/// A guard in the narrow type proves the same unsigned compare of its zero extension: `gap < 64` in i16 is `zext gap <
+/// 64` in i32, which is what a widened counter starting at `gap` tests (bench/shellsort with `-ftree-ch`: the inner
+/// loop's symbolic count was lost).
 #[test]
 fn test_a_guard_on_a_narrow_value_proves_the_compare_of_its_zero_extension() {
     let parsed = Parsed::new(
@@ -114,8 +135,9 @@ done:
     assert!(!holds(&unit, block_named(&parsed, "done"), IntPredicate::Ult, &wide, &Scev::constant(64, 32)));
 }
 
-/// A phi of the loop entry is tested on each edge into it: `lo < hi` where the loop is first entered and `next < hi` on the edge back.
-/// Both prove `phi < hi` in the body, though no branch dominates it (the tail-recursion loop of quicksort's `sort` with `-ftree-ch`).
+/// A phi of the loop entry is tested on each edge into it: `lo < hi` where the loop is first entered and `next < hi` on
+/// the edge back. Both prove `phi < hi` in the body, though no branch dominates it (the tail-recursion loop of
+/// quicksort's `sort` with `-ftree-ch`).
 #[test]
 fn test_a_phi_tested_on_every_edge_into_its_block_is_proven_below_it() {
     let text = |back_edge_tested: bool| {
@@ -141,18 +163,28 @@ done:
     for (tested, expected) in [(true, true), (false, false)] {
         let parsed = Parsed::new(&text(tested));
         let unit = parsed.unit();
-        let (p, hi) = (Scev::of(&AffineOperand::Value(parsed.value("p"), 32), 32), Scev::of(&AffineOperand::Value(parsed.value("hi"), 32), 32));
-        assert_eq!(holds(&unit, block_named(&parsed, "body"), IntPredicate::Slt, &p, &hi), expected, "back edge tested against hi: {tested}");
+        let (p, hi) = (
+            Scev::of(&AffineOperand::Value(parsed.value("p"), 32), 32),
+            Scev::of(&AffineOperand::Value(parsed.value("hi"), 32), 32),
+        );
+        assert_eq!(
+            holds(&unit, block_named(&parsed, "body"), IntPredicate::Slt, &p, &hi),
+            expected,
+            "back edge tested against hi: {tested}"
+        );
     }
 }
 
-/// `decide` asked `holds_given` of a branch's compare and its inverse, and each found the block's guards twice: four times, half
-/// of its time on QCport's sc. The block's guards are found once for any number of questions of it.
+/// `decide` asked `holds_given` of a branch's compare and its inverse, and each found the block's guards twice: four
+/// times, half of its time on QCport's sc. The block's guards are found once for any number of questions of it.
 #[test]
 fn test_the_guards_of_a_block_are_found_once_for_all_asked_of_it() {
     let parsed = Parsed::new(GUARDED);
     let unit = parsed.unit();
-    let (n, len) = (Scev::of(&AffineOperand::Value(parsed.value("n"), 16), 16), Scev::of(&AffineOperand::Value(parsed.value("len"), 16), 16));
+    let (n, len) = (
+        Scev::of(&AffineOperand::Value(parsed.value("n"), 16), 16),
+        Scev::of(&AffineOperand::Value(parsed.value("len"), 16), 16),
+    );
     let before = found();
     let given = Given::at(&unit, block_named(&parsed, "done"), &[]);
     for predicate in [IntPredicate::Ult, IntPredicate::Uge, IntPredicate::Eq, IntPredicate::Ne] {

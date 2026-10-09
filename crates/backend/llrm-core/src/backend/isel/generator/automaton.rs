@@ -4,7 +4,7 @@
 
 use llrm_support::hash::HashMap;
 
-use super::parse::{Pattern, KINDS, OPCODES, OPERANDS, TYPES};
+use super::parse::{KINDS, OPCODES, OPERANDS, Pattern, TYPES};
 
 /// Opcode, result type, then each operand's kind and type.
 pub const FEATURES: usize = 2 + 2 * OPERANDS;
@@ -23,8 +23,12 @@ pub struct Automaton {
     pub root: Option<usize>,
 }
 
-fn ids(domain: &[&str], names: &[String]) -> Vec<u16> {
-    let mut out: Vec<u16> = names.iter().map(|name| domain.iter().position(|one| one == name).expect("a checked name") as u16).collect();
+fn ids(
+    domain: &[&str],
+    names: &[String],
+) -> Vec<u16> {
+    let mut out: Vec<u16> =
+        names.iter().map(|name| domain.iter().position(|one| one == name).expect("a checked name") as u16).collect();
     out.sort_unstable();
     out.dedup();
     out
@@ -32,7 +36,10 @@ fn ids(domain: &[&str], names: &[String]) -> Vec<u16> {
 
 /// The values `pattern` accepts at each feature; None accepts any.
 pub fn constraints(pattern: &Pattern) -> Vec<Option<Vec<u16>>> {
-    let mut out = vec![pattern.opcodes.as_ref().map(|one| ids(&OPCODES, one)), pattern.result.as_ref().map(|one| ids(&TYPES, one))];
+    let mut out = vec![
+        pattern.opcodes.as_ref().map(|one| ids(&OPCODES, one)),
+        pattern.result.as_ref().map(|one| ids(&TYPES, one)),
+    ];
     // An operand a pattern lists is there.
     let present: Vec<String> = KINDS.iter().filter(|&&one| one != "none").map(|one| one.to_string()).collect();
     for index in 0..OPERANDS {
@@ -50,7 +57,10 @@ struct Builder<'a> {
 }
 
 impl Builder<'_> {
-    fn intern(&mut self, state: State) -> usize {
+    fn intern(
+        &mut self,
+        state: State,
+    ) -> usize {
         if let Some(&index) = self.made.get(&state) {
             return index;
         }
@@ -59,14 +69,19 @@ impl Builder<'_> {
         self.states.len() - 1
     }
 
-    fn node(&mut self, standing: Vec<usize>, feature: usize) -> Option<usize> {
+    fn node(
+        &mut self,
+        standing: Vec<usize>,
+        feature: usize,
+    ) -> Option<usize> {
         if standing.is_empty() {
             return None;
         }
         if feature == FEATURES {
             return Some(self.intern(State::Leaf(standing)));
         }
-        let mut values: Vec<u16> = standing.iter().filter_map(|&one| self.constraints[one][feature].clone()).flatten().collect();
+        let mut values: Vec<u16> =
+            standing.iter().filter_map(|&one| self.constraints[one][feature].clone()).flatten().collect();
         if values.is_empty() {
             return self.node(standing, feature + 1);
         }
@@ -77,7 +92,10 @@ impl Builder<'_> {
             (Some(set), Some(value)) => set.contains(&value),
             (Some(_), None) => false,
         };
-        let children: Vec<(u16, Vec<usize>)> = values.iter().map(|&value| (value, standing.iter().copied().filter(|&one| accepts(one, Some(value))).collect())).collect();
+        let children: Vec<(u16, Vec<usize>)> = values
+            .iter()
+            .map(|&value| (value, standing.iter().copied().filter(|&one| accepts(one, Some(value))).collect()))
+            .collect();
         let others: Vec<usize> = standing.iter().copied().filter(|&one| accepts(one, None)).collect();
         let mut edges = Vec::new();
         for (value, child) in children {

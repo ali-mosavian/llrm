@@ -5,18 +5,18 @@
 //! referred to before they appear. A function's values and blocks may be
 //! used before their definition; the definition must agree with the use.
 
-use crate::hash::{HashMap, HashSet};
-
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, GlobalId, mask};
+use crate::hash::{HashMap, HashSet};
 use crate::intrinsics;
 use crate::lexer::{Name, ParseError, Token, lex};
 use crate::module::{
-    Block, BlockId, DebugRecord, DebugWhat, Function, GlobalKind, GlobalValue, GlobalVariable, InstId, Instruction, LINKAGE, Linkage, MetadataId, MetadataNode,
-    MetadataOperand, Module, Operand, UnnamedAddr, ValueData, ValueDef, ValueId,
+    Block, BlockId, DebugRecord, DebugWhat, Function, GlobalKind, GlobalValue, GlobalVariable, InstId, Instruction,
+    LINKAGE, Linkage, MetadataId, MetadataNode, MetadataOperand, Module, Operand, UnnamedAddr, ValueData, ValueDef,
+    ValueId,
 };
 use crate::opcode::{
-    Attribute, BINARY, BinaryOp, CAST, CallInfo, CastOp, Clause, FLAG_ATTRIBUTES, FLOAT_PREDICATE, Flags, INT_ATTRIBUTES, INT_PREDICATE, Opcode,
-    TYPE_ATTRIBUTES, Tail, spelled,
+    Attribute, BINARY, BinaryOp, CAST, CallInfo, CastOp, Clause, FLAG_ATTRIBUTES, FLOAT_PREDICATE, Flags,
+    INT_ATTRIBUTES, INT_PREDICATE, Opcode, TYPE_ATTRIBUTES, Tail, spelled,
 };
 use crate::types::{FloatKind, StructBody, Type, TypeId};
 
@@ -30,7 +30,8 @@ pub fn module(text: &str) -> Parsed<Module> {
 }
 
 /// Constructs llrm has no producer for, named so the refusal says why.
-const OUTSIDE_SUBSET: [&str; 9] = ["undef", "fp128", "ppc_fp128", "half", "bfloat", "blockaddress", "indirectbr", "dso_local", "triple"];
+const OUTSIDE_SUBSET: [&str; 9] =
+    ["undef", "fp128", "ppc_fp128", "half", "bfloat", "blockaddress", "indirectbr", "dso_local", "triple"];
 
 struct Parser {
     tokens: Vec<(Token, usize)>,
@@ -81,7 +82,10 @@ impl Parser {
         &self.tokens[self.at].0
     }
 
-    fn peek_at(&self, ahead: usize) -> &Token {
+    fn peek_at(
+        &self,
+        ahead: usize,
+    ) -> &Token {
         &self.tokens[(self.at + ahead).min(self.tokens.len() - 1)].0
     }
 
@@ -97,19 +101,32 @@ impl Parser {
         token
     }
 
-    fn fail<T>(&self, message: impl Into<String>) -> Parsed<T> {
+    fn fail<T>(
+        &self,
+        message: impl Into<String>,
+    ) -> Parsed<T> {
         self.fail_on(self.line(), message)
     }
 
-    fn fail_on<T>(&self, line: usize, message: impl Into<String>) -> Parsed<T> {
+    fn fail_on<T>(
+        &self,
+        line: usize,
+        message: impl Into<String>,
+    ) -> Parsed<T> {
         Err(ParseError { line, message: message.into() })
     }
 
-    fn is_word(&self, word: &str) -> bool {
+    fn is_word(
+        &self,
+        word: &str,
+    ) -> bool {
         matches!(self.peek(), Token::Word(one) if one == word)
     }
 
-    fn eat_word(&mut self, word: &str) -> bool {
+    fn eat_word(
+        &mut self,
+        word: &str,
+    ) -> bool {
         let found = self.is_word(word);
         if found {
             self.next();
@@ -117,15 +134,24 @@ impl Parser {
         found
     }
 
-    fn expect_word(&mut self, word: &str) -> Parsed<()> {
+    fn expect_word(
+        &mut self,
+        word: &str,
+    ) -> Parsed<()> {
         if self.eat_word(word) { Ok(()) } else { self.fail(format!("expected `{word}`, found {}", self.describe())) }
     }
 
-    fn is_punct(&self, c: char) -> bool {
+    fn is_punct(
+        &self,
+        c: char,
+    ) -> bool {
         *self.peek() == Token::Punct(c)
     }
 
-    fn eat_punct(&mut self, c: char) -> bool {
+    fn eat_punct(
+        &mut self,
+        c: char,
+    ) -> bool {
         let found = self.is_punct(c);
         if found {
             self.next();
@@ -133,7 +159,10 @@ impl Parser {
         found
     }
 
-    fn expect_punct(&mut self, c: char) -> Parsed<()> {
+    fn expect_punct(
+        &mut self,
+        c: char,
+    ) -> Parsed<()> {
         if self.eat_punct(c) { Ok(()) } else { self.fail(format!("expected `{c}`, found {}", self.describe())) }
     }
 
@@ -206,7 +235,10 @@ impl Parser {
         while at < self.tokens.len() {
             match &self.tokens[at].0 {
                 Token::Word(word) if word == "define" || word == "declare" => awaiting_function = true,
-                Token::Word(word) if word == "attributes" && matches!(self.tokens.get(at + 1), Some((Token::AttributeGroup(_), _))) => {
+                Token::Word(word)
+                    if word == "attributes"
+                        && matches!(self.tokens.get(at + 1), Some((Token::AttributeGroup(_), _))) =>
+                {
                     let Token::AttributeGroup(group) = self.tokens[at + 1].0 else { unreachable!() };
                     self.at = at + 2;
                     self.expect_punct('=')?;
@@ -219,7 +251,8 @@ impl Parser {
                     continue;
                 }
                 Token::Global(name) => {
-                    let defines = awaiting_function || self.tokens.get(at + 1).is_some_and(|(next, _)| *next == Token::Punct('='));
+                    let defines = awaiting_function
+                        || self.tokens.get(at + 1).is_some_and(|(next, _)| *next == Token::Punct('='));
                     if defines {
                         if self.globals.contains_key(name) {
                             let line = self.tokens[at].1;
@@ -227,16 +260,25 @@ impl Parser {
                         }
                         let id = GlobalId(self.module.globals.len() as u32);
                         let void = self.module.context.types.void();
-                        self.module.globals.push(GlobalValue {
-                            name: match name {
-                                Name::Named(one) => Some(one.clone()),
-                                Name::Numbered(_) => None,
-                            },
-                            linkage: Linkage::External,
-                            unnamed_addr: UnnamedAddr::None,
-                            address_space: 0,
-                            kind: GlobalKind::Variable(GlobalVariable { ty: void, constant: false, initializer: None, align: None }),
-                        });
+                        self.module
+                            .globals
+                            .push(
+                                GlobalValue {
+                                    name: match name {
+                                        Name::Named(one) => Some(one.clone()),
+                                        Name::Numbered(_) => None,
+                                    },
+                                    linkage: Linkage::External,
+                                    unnamed_addr: UnnamedAddr::None,
+                                    address_space: 0,
+                                    kind: GlobalKind::Variable(GlobalVariable {
+                                        ty: void,
+                                        constant: false,
+                                        initializer: None,
+                                        align: None,
+                                    }),
+                                },
+                            );
                         self.globals.insert(name.clone(), id);
                     }
                     awaiting_function = false;
@@ -318,7 +360,8 @@ impl Parser {
             new[old.0 as usize] = MetadataId(at as u32);
         }
         let map = |id: &mut MetadataId| *id = new[id.0 as usize];
-        let mut nodes: Vec<MetadataNode> = order.iter().map(|old| self.module.metadata[old.0 as usize].clone()).collect();
+        let mut nodes: Vec<MetadataNode> =
+            order.iter().map(|old| self.module.metadata[old.0 as usize].clone()).collect();
         for node in &mut nodes {
             for operand in &mut node.operands {
                 if let MetadataOperand::Node(id) = operand {
@@ -342,7 +385,10 @@ impl Parser {
         }
     }
 
-    fn named_type(&mut self, name: String) -> Parsed<()> {
+    fn named_type(
+        &mut self,
+        name: String,
+    ) -> Parsed<()> {
         self.next();
         self.expect_punct('=')?;
         self.expect_word("type")?;
@@ -415,7 +461,10 @@ impl Parser {
         Ok(space)
     }
 
-    fn global_variable(&mut self, name: Name) -> Parsed<()> {
+    fn global_variable(
+        &mut self,
+        name: Name,
+    ) -> Parsed<()> {
         self.next();
         self.expect_punct('=')?;
         let id = self.globals[&name];
@@ -463,13 +512,17 @@ impl Parser {
             }
             Token::Punct('[' | '{' | '<') => true,
             Token::Word(word) => {
-                ["true", "false", "null", "poison", "zeroinitializer", "getelementptr"].contains(&word.as_str()) || spelled(&CAST, word).is_some()
+                ["true", "false", "null", "poison", "zeroinitializer", "getelementptr"].contains(&word.as_str())
+                    || spelled(&CAST, word).is_some()
             }
             _ => false,
         }
     }
 
-    fn function(&mut self, define: bool) -> Parsed<()> {
+    fn function(
+        &mut self,
+        define: bool,
+    ) -> Parsed<()> {
         self.next();
         let linkage = self.linkage();
         let calling_convention = self.calling_convention()?;
@@ -553,13 +606,18 @@ impl Parser {
     // ---- attributes
 
     /// Attributes until none follow; `groups` admits `#N` references.
-    fn attributes(&mut self, groups: bool) -> Parsed<Vec<Attribute>> {
+    fn attributes(
+        &mut self,
+        groups: bool,
+    ) -> Parsed<Vec<Attribute>> {
         let mut out = Vec::new();
         loop {
             match self.peek().clone() {
                 Token::AttributeGroup(group) if groups => {
                     self.next();
-                    let Some(attrs) = self.groups.get(&group) else { return self.fail(format!("#{group} is never defined")) };
+                    let Some(attrs) = self.groups.get(&group) else {
+                        return self.fail(format!("#{group} is never defined"));
+                    };
                     out.extend(attrs.iter().cloned());
                 }
                 Token::Str(_) => {
@@ -591,7 +649,9 @@ impl Parser {
                     self.next();
                     self.expect_punct('(')?;
                     let ty = self.ty()?;
-                    let Some(bits) = self.module.context.types.int_bits(ty) else { return self.fail("a range is of an integer type") };
+                    let Some(bits) = self.module.context.types.int_bits(ty) else {
+                        return self.fail("a range is of an integer type");
+                    };
                     let lower = self.bound(bits)?;
                     self.expect_punct(',')?;
                     let upper = self.bound(bits)?;
@@ -642,13 +702,17 @@ impl Parser {
     }
 
     /// A range's bound: an integer that fits `bits`, as bits.
-    fn bound(&mut self, bits: u32) -> Parsed<u128> {
+    fn bound(
+        &mut self,
+        bits: u32,
+    ) -> Parsed<u128> {
         let line = self.line();
         match self.next() {
             Token::Int { negative, magnitude } => {
                 let fits = if negative { magnitude <= 1u128 << (bits - 1).min(127) } else { magnitude <= mask(bits) };
                 if !fits {
-                    return self.fail_on(line, format!("{}{magnitude} does not fit i{bits}", if negative { "-" } else { "" }));
+                    return self
+                        .fail_on(line, format!("{}{magnitude} does not fit i{bits}", if negative { "-" } else { "" }));
                 }
                 Ok(if negative { magnitude.wrapping_neg() } else { magnitude } & mask(bits))
             }
@@ -738,7 +802,10 @@ impl Parser {
     }
 
     /// Types separated by commas, up to and including `close`.
-    fn type_list(&mut self, close: char) -> Parsed<Vec<TypeId>> {
+    fn type_list(
+        &mut self,
+        close: char,
+    ) -> Parsed<Vec<TypeId>> {
         let mut out = Vec::new();
         while !self.eat_punct(close) {
             if !out.is_empty() {
@@ -751,8 +818,15 @@ impl Parser {
 
     // ---- constants
 
-    fn global_ref(&mut self, name: &Name, ty: TypeId, line: usize) -> Parsed<ConstantId> {
-        let Some(&id) = self.globals.get(name) else { return self.fail_on(line, format!("@{} is never defined", display(name))) };
+    fn global_ref(
+        &mut self,
+        name: &Name,
+        ty: TypeId,
+        line: usize,
+    ) -> Parsed<ConstantId> {
+        let Some(&id) = self.globals.get(name) else {
+            return self.fail_on(line, format!("@{} is never defined", display(name)));
+        };
         if !matches!(self.module.context.types.get(ty), Type::Pointer(_)) {
             return self.fail_on(line, format!("@{} is a pointer", display(name)));
         }
@@ -760,16 +834,23 @@ impl Parser {
         Ok(self.module.context.constant(Constant { ty, kind: ConstantKind::Global(id) }))
     }
 
-    fn constant(&mut self, ty: TypeId) -> Parsed<ConstantId> {
+    fn constant(
+        &mut self,
+        ty: TypeId,
+    ) -> Parsed<ConstantId> {
         self.refuse_subset()?;
         let line = self.line();
         let shape = self.module.context.types.get(ty).clone();
         let kind = match self.next() {
             Token::Int { negative, magnitude } => {
-                let Type::Int(bits) = shape else { return self.fail_on(line, format!("an integer given as {}", self.module.context.types.display(ty))) };
+                let Type::Int(bits) = shape else {
+                    return self
+                        .fail_on(line, format!("an integer given as {}", self.module.context.types.display(ty)));
+                };
                 let fits = if negative { magnitude <= 1u128 << (bits - 1).min(127) } else { magnitude <= mask(bits) };
                 if !fits {
-                    return self.fail_on(line, format!("{}{magnitude} does not fit i{bits}", if negative { "-" } else { "" }));
+                    return self
+                        .fail_on(line, format!("{}{magnitude} does not fit i{bits}", if negative { "-" } else { "" }));
                 }
                 let value = if negative { magnitude.wrapping_neg() } else { magnitude };
                 ConstantKind::Int(value & mask(bits))
@@ -794,7 +875,10 @@ impl Parser {
             Token::Bytes(bytes) => {
                 let byte = self.module.context.types.int(8);
                 if shape != (Type::Array { element: byte, count: bytes.len() as u64 }) {
-                    return self.fail_on(line, format!("c\"...\" of {} bytes given as {}", bytes.len(), self.module.context.types.display(ty)));
+                    return self.fail_on(
+                        line,
+                        format!("c\"...\" of {} bytes given as {}", bytes.len(), self.module.context.types.display(ty)),
+                    );
                 }
                 ConstantKind::Bytes(bytes)
             }
@@ -813,7 +897,15 @@ impl Parser {
                     let member_ty = self.ty()?;
                     let expected = self.module.context.types.member(ty, members.len() as u64);
                     if expected != Some(member_ty) {
-                        return self.fail_on(line, format!("member {} of {} is not a {}", members.len(), self.module.context.types.display(ty), self.module.context.types.display(member_ty)));
+                        return self.fail_on(
+                            line,
+                            format!(
+                                "member {} of {} is not a {}",
+                                members.len(),
+                                self.module.context.types.display(ty),
+                                self.module.context.types.display(member_ty)
+                            ),
+                        );
                     }
                     members.push(self.constant(member_ty)?);
                 }
@@ -826,7 +918,10 @@ impl Parser {
                     _ => self.module.context.types.fields(ty).map_or(0, <[TypeId]>::len),
                 };
                 if members.len() != count {
-                    return self.fail_on(line, format!("{} members for {}", members.len(), self.module.context.types.display(ty)));
+                    return self.fail_on(
+                        line,
+                        format!("{} members for {}", members.len(), self.module.context.types.display(ty)),
+                    );
                 }
                 ConstantKind::Aggregate(members)
             }
@@ -841,7 +936,11 @@ impl Parser {
                     operands.push(self.constant(operand_ty)?);
                 }
                 self.expect_punct(')')?;
-                ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds: flags.contains(Flags::INBOUNDS), operands })
+                ConstantKind::Expr(ConstantExpr::GetElementPtr {
+                    source,
+                    inbounds: flags.contains(Flags::INBOUNDS),
+                    operands,
+                })
             }
             Token::Word(word) if spelled(&CAST, &word).is_some() => {
                 let op = spelled(&CAST, &word).expect("a cast");
@@ -864,7 +963,12 @@ impl Parser {
         Ok(self.module.context.constant(Constant { ty, kind }))
     }
 
-    fn float(&self, shape: &Type, value: f64, line: usize) -> Parsed<ConstantKind> {
+    fn float(
+        &self,
+        shape: &Type,
+        value: f64,
+        line: usize,
+    ) -> Parsed<ConstantKind> {
         match shape {
             Type::Float(FloatKind::Double | FloatKind::X86Fp80) => Ok(ConstantKind::Float(value.to_bits())),
             Type::Float(FloatKind::Float) => {
@@ -880,7 +984,10 @@ impl Parser {
 
     // ---- metadata
 
-    fn metadata_id(&mut self, number: u32) -> MetadataId {
+    fn metadata_id(
+        &mut self,
+        number: u32,
+    ) -> MetadataId {
         if let Some(&id) = self.metadata.get(&number) {
             return id;
         }
@@ -890,7 +997,10 @@ impl Parser {
         id
     }
 
-    fn named_metadata(&mut self, name: String) -> Parsed<()> {
+    fn named_metadata(
+        &mut self,
+        name: String,
+    ) -> Parsed<()> {
         self.next();
         self.expect_punct('=')?;
         if !matches!(self.next(), Token::Exclaim) {
@@ -913,7 +1023,10 @@ impl Parser {
         Ok(())
     }
 
-    fn metadata_definition(&mut self, number: u32) -> Parsed<()> {
+    fn metadata_definition(
+        &mut self,
+        number: u32,
+    ) -> Parsed<()> {
         self.next();
         self.expect_punct('=')?;
         let distinct = self.eat_word("distinct");
@@ -988,7 +1101,13 @@ impl Parser {
 
     // ---- function bodies
 
-    fn name_value(&mut self, local: &mut Local, value: ValueId, name: Option<Name>, line: usize) -> Parsed<()> {
+    fn name_value(
+        &mut self,
+        local: &mut Local,
+        value: ValueId,
+        name: Option<Name>,
+        line: usize,
+    ) -> Parsed<()> {
         match name {
             None | Some(Name::Numbered(_)) => {
                 if let Some(Name::Numbered(number)) = name
@@ -1010,17 +1129,32 @@ impl Parser {
     }
 
     /// `name` now means `value`, which a forward use may already have taken.
-    fn bind(&mut self, local: &mut Local, value: ValueId, name: Name, line: usize) -> Parsed<()> {
+    fn bind(
+        &mut self,
+        local: &mut Local,
+        value: ValueId,
+        name: Name,
+        line: usize,
+    ) -> Parsed<()> {
         match local.values.get(&name).copied() {
             None => {
                 local.values.insert(name, value);
                 Ok(())
             }
             Some(used) if local.pending_values.remove(&used).is_some() => {
-                let (defined, forward) = (local.function.values[value.0 as usize].clone(), local.function.values[used.0 as usize].ty);
+                let (defined, forward) =
+                    (local.function.values[value.0 as usize].clone(), local.function.values[used.0 as usize].ty);
                 if defined.ty != forward {
                     let types = &self.module.context.types;
-                    return self.fail_on(line, format!("%{} is used as {} but defined as {}", display(&name), types.display(forward), types.display(defined.ty)));
+                    return self.fail_on(
+                        line,
+                        format!(
+                            "%{} is used as {} but defined as {}",
+                            display(&name),
+                            types.display(forward),
+                            types.display(defined.ty)
+                        ),
+                    );
                 }
                 // The forward use took the id; the definition moves into it.
                 local.function.values[used.0 as usize] = defined;
@@ -1040,7 +1174,11 @@ impl Parser {
         }
     }
 
-    fn block_id(&mut self, local: &mut Local, name: Name) -> BlockId {
+    fn block_id(
+        &mut self,
+        local: &mut Local,
+        name: Name,
+    ) -> BlockId {
         if let Some(&id) = local.blocks.get(&name) {
             return id;
         }
@@ -1051,7 +1189,11 @@ impl Parser {
         id
     }
 
-    fn start_block(&mut self, local: &mut Local, label: Option<Name>) -> Parsed<BlockId> {
+    fn start_block(
+        &mut self,
+        local: &mut Local,
+        label: Option<Name>,
+    ) -> Parsed<BlockId> {
         let name = match label {
             None | Some(Name::Numbered(_)) => {
                 if let Some(Name::Numbered(number)) = label
@@ -1075,7 +1217,10 @@ impl Parser {
         Ok(id)
     }
 
-    fn body(&mut self, local: &mut Local) -> Parsed<()> {
+    fn body(
+        &mut self,
+        local: &mut Local,
+    ) -> Parsed<()> {
         self.expect_punct('{')?;
         let mut current: Option<BlockId> = None;
         loop {
@@ -1113,41 +1258,61 @@ impl Parser {
             return self.fail("the last block has no terminator");
         }
         if let Some((&block, &line)) = local.pending_blocks.iter().next() {
-            let name = local.blocks.iter().find(|(_, id)| **id == block).map(|(name, _)| display(name)).unwrap_or_default();
+            let name =
+                local.blocks.iter().find(|(_, id)| **id == block).map(|(name, _)| display(name)).unwrap_or_default();
             return Err(ParseError { line, message: format!("block %{name} is used but never defined") });
         }
         if let Some((&value, &line)) = local.pending_values.iter().next() {
-            let name = local.values.iter().find(|(_, id)| **id == value).map(|(name, _)| display(name)).unwrap_or_default();
+            let name =
+                local.values.iter().find(|(_, id)| **id == value).map(|(name, _)| display(name)).unwrap_or_default();
             return Err(ParseError { line, message: format!("%{name} is used but never defined") });
         }
         Ok(())
     }
 
     /// A use of the local `name` as `ty`.
-    fn local_use(&mut self, local: &mut Local, name: Name, ty: TypeId, line: usize) -> Parsed<Operand> {
+    fn local_use(
+        &mut self,
+        local: &mut Local,
+        name: Name,
+        ty: TypeId,
+        line: usize,
+    ) -> Parsed<Operand> {
         if let Some(&id) = local.values.get(&name) {
             let had = local.function.value(id).ty;
             if had != ty {
                 let types = &self.module.context.types;
-                return self.fail_on(line, format!("%{} is {} but used as {}", display(&name), types.display(had), types.display(ty)));
+                return self.fail_on(
+                    line,
+                    format!("%{} is {} but used as {}", display(&name), types.display(had), types.display(ty)),
+                );
             }
             return Ok(Operand::Value(id));
         }
         let id = ValueId(local.function.values.len() as u32);
-        local.function.values.push(ValueData {
-            ty,
-            name: match &name {
-                Name::Named(text) => Some(text.clone()),
-                Name::Numbered(_) => None,
-            },
-            def: ValueDef::Instruction(InstId(u32::MAX)),
-        });
+        local
+            .function
+            .values
+            .push(
+                ValueData {
+                    ty,
+                    name: match &name {
+                        Name::Named(text) => Some(text.clone()),
+                        Name::Numbered(_) => None,
+                    },
+                    def: ValueDef::Instruction(InstId(u32::MAX)),
+                },
+            );
         local.values.insert(name, id);
         local.pending_values.insert(id, line);
         Ok(Operand::Value(id))
     }
 
-    fn value(&mut self, local: &mut Local, ty: TypeId) -> Parsed<Operand> {
+    fn value(
+        &mut self,
+        local: &mut Local,
+        ty: TypeId,
+    ) -> Parsed<Operand> {
         match self.peek().clone() {
             Token::Local(name) => {
                 let line = self.line();
@@ -1158,12 +1323,18 @@ impl Parser {
         }
     }
 
-    fn typed_value(&mut self, local: &mut Local) -> Parsed<(TypeId, Operand)> {
+    fn typed_value(
+        &mut self,
+        local: &mut Local,
+    ) -> Parsed<(TypeId, Operand)> {
         let ty = self.ty()?;
         Ok((ty, self.value(local, ty)?))
     }
 
-    fn label(&mut self, local: &mut Local) -> Parsed<Operand> {
+    fn label(
+        &mut self,
+        local: &mut Local,
+    ) -> Parsed<Operand> {
         self.expect_word("label")?;
         match self.next() {
             Token::Local(name) => Ok(Operand::Block(self.block_id(local, name))),
@@ -1174,7 +1345,10 @@ impl Parser {
         }
     }
 
-    fn gep_flags(&mut self, flags: &mut Flags) {
+    fn gep_flags(
+        &mut self,
+        flags: &mut Flags,
+    ) {
         loop {
             let flag = match self.peek() {
                 Token::Word(word) if word == "inbounds" => Flags::INBOUNDS,
@@ -1188,10 +1362,15 @@ impl Parser {
     }
 
     /// Flags among `allowed`, in any order.
-    fn flags(&mut self, allowed: &[&str]) -> Flags {
+    fn flags(
+        &mut self,
+        allowed: &[&str],
+    ) -> Flags {
         let mut flags = Flags::default();
         while let Token::Word(word) = self.peek() {
-            let Some((flag, _)) = Flags::NAMES.iter().find(|(_, name)| name == word && allowed.contains(name)) else { break };
+            let Some((flag, _)) = Flags::NAMES.iter().find(|(_, name)| name == word && allowed.contains(name)) else {
+                break;
+            };
             flags.insert(*flag);
             self.next();
         }
@@ -1218,7 +1397,10 @@ impl Parser {
 
     /// `#dbg_declare(ptr %x, !5)`, `#dbg_value(i16 %v, !5)` or `#dbg_gone(!5)`: what is said of a variable before the
     /// instruction that follows.
-    fn debug_record(&mut self, local: &mut Local) -> Parsed<()> {
+    fn debug_record(
+        &mut self,
+        local: &mut Local,
+    ) -> Parsed<()> {
         let Token::Word(word) = self.next() else { unreachable!("a record") };
         self.expect_punct('(')?;
         let what = match word.as_str() {
@@ -1257,7 +1439,10 @@ impl Parser {
         Ok(())
     }
 
-    fn instruction(&mut self, local: &mut Local) -> Parsed<InstId> {
+    fn instruction(
+        &mut self,
+        local: &mut Local,
+    ) -> Parsed<InstId> {
         let result_name = match (self.peek().clone(), self.peek_at(1).clone()) {
             (Token::Local(name), Token::Punct('=')) => {
                 self.next();
@@ -1368,15 +1553,23 @@ impl Parser {
                     flags = if word == "icmp" { self.flags(&["samesign"]) } else { self.flags(&fast) };
                     let predicate = self.word()?;
                     let opcode = if word == "icmp" {
-                        Opcode::ICmp(spelled(&INT_PREDICATE, &predicate).ok_or_else(|| self.error(format!("`{predicate}` is not an icmp predicate")))?)
+                        Opcode::ICmp(
+                            spelled(&INT_PREDICATE, &predicate)
+                                .ok_or_else(|| self.error(format!("`{predicate}` is not an icmp predicate")))?,
+                        )
                     } else {
-                        Opcode::FCmp(spelled(&FLOAT_PREDICATE, &predicate).ok_or_else(|| self.error(format!("`{predicate}` is not an fcmp predicate")))?)
+                        Opcode::FCmp(
+                            spelled(&FLOAT_PREDICATE, &predicate)
+                                .ok_or_else(|| self.error(format!("`{predicate}` is not an fcmp predicate")))?,
+                        )
                     };
                     let (ty, left) = self.typed_value(local)?;
                     self.expect_punct(',')?;
                     let right = self.value(local, ty)?;
                     let result = match self.module.context.types.get(ty).clone() {
-                        Type::Vector { count, .. } => self.module.context.types.intern(Type::Vector { element: bool, count }),
+                        Type::Vector { count, .. } => {
+                            self.module.context.types.intern(Type::Vector { element: bool, count })
+                        }
                         _ => bool,
                     };
                     (opcode, result, vec![left, right])
@@ -1429,7 +1622,12 @@ impl Parser {
                     while self.is_punct(',') && matches!(self.peek_at(1), Token::Int { .. }) {
                         self.next();
                         let index = self.unsigned()?;
-                        member = self.module.context.types.member(member, index).ok_or_else(|| self.error(format!("no member {index}")))?;
+                        member = self
+                            .module
+                            .context
+                            .types
+                            .member(member, index)
+                            .ok_or_else(|| self.error(format!("no member {index}")))?;
                         indices.push(u32::try_from(index).or_else(|_| self.fail("an index is too large"))?);
                     }
                     if indices.is_empty() {
@@ -1444,7 +1642,13 @@ impl Parser {
                 "alloca" => {
                     let allocated = self.ty()?;
                     let mut operands = Vec::new();
-                    if self.is_punct(',') && !matches!(self.peek_at(1), Token::Word(word) if word == "align" || word == "addrspace") && !matches!(self.peek_at(1), Token::MetadataName(_)) {
+                    if self.is_punct(',')
+                        && !matches!(
+                            self.peek_at(1),
+                            Token::Word(word) if word == "align" || word == "addrspace"
+                        )
+                        && !matches!(self.peek_at(1), Token::MetadataName(_))
+                    {
                         self.next();
                         operands.push(self.typed_value(local)?.1);
                     }
@@ -1511,10 +1715,21 @@ impl Parser {
                     let attrs = self.attributes(true)?;
                     let function_type = match self.module.context.types.get(written) {
                         Type::Function { .. } => written,
-                        _ => self.module.context.types.intern(Type::Function { returns: written, parameters: argument_types, variadic: false }),
+                        _ => self.module.context.types.intern(Type::Function {
+                            returns: written,
+                            parameters: argument_types,
+                            variadic: false,
+                        }),
                     };
                     let (returns, _, _) = self.module.signature(function_type);
-                    let info = Box::new(CallInfo { function_type, calling_convention, return_attrs, argument_attrs, attrs, tail });
+                    let info = Box::new(CallInfo {
+                        function_type,
+                        calling_convention,
+                        return_attrs,
+                        argument_attrs,
+                        attrs,
+                        tail,
+                    });
                     if word == "call" {
                         operands.push(callee);
                         (Opcode::Call(info), returns, operands)
@@ -1545,7 +1760,12 @@ impl Parser {
                     }
                     (Opcode::LandingPad { cleanup, clauses }, ty, operands)
                 }
-                _ => return Err(ParseError { line, message: format!("`{word}` is not an instruction of MIR's subset") }),
+                _ => {
+                    return Err(ParseError {
+                        line,
+                        message: format!("`{word}` is not an instruction of MIR's subset"),
+                    });
+                }
             }
         };
         let metadata = self.attachments()?;
@@ -1570,7 +1790,10 @@ impl Parser {
         Ok(id)
     }
 
-    fn error(&self, message: String) -> ParseError {
+    fn error(
+        &self,
+        message: String,
+    ) -> ParseError {
         ParseError { line: self.line(), message }
     }
 }

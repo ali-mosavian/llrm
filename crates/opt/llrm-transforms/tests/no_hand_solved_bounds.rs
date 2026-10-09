@@ -1,5 +1,6 @@
-//! What the counted loops bound is the analysis manager's, kept and brought up to date: a pass that solved it by hand (`ranges::bounded`)
-//! solved a function again for each pass that asked, six places and 5-26 Minstr of a -O1 compile (fpbench indvars, x_switch decide).
+//! What the counted loops bound is the analysis manager's, kept and brought up to date: a pass that solved it by hand
+//! (`ranges::bounded`) solved a function again for each pass that asked, six places and 5-26 Minstr of a -O1 compile
+//! (fpbench indvars, x_switch decide).
 
 #[test]
 fn no_pass_solves_what_the_loops_bound_by_hand() {
