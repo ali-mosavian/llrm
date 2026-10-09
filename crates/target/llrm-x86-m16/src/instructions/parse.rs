@@ -53,6 +53,10 @@ pub struct Form {
     /// leaves it alone.
     pub reads: Vec<String>,
     pub writes: Vec<String>,
+    /// The flags it reads, and those it writes or leaves undefined, as bits of
+    /// `RflagsBits`.
+    pub flags_read: u32,
+    pub flags_written: u32,
     /// iced's Code name, `{w}` still to substitute.
     pub iced: Option<String>,
     pub line: usize,
@@ -150,6 +154,58 @@ fn implicit(
         .collect()
 }
 
+/// `RflagsBits`, by name.
+pub const FLAGS: [(&str, u32); 11] = [
+    ("OF", 0x1),
+    ("SF", 0x2),
+    ("ZF", 0x4),
+    ("AF", 0x8),
+    ("CF", 0x10),
+    ("PF", 0x20),
+    ("DF", 0x40),
+    ("C0", 0x400),
+    ("C1", 0x800),
+    ("C2", 0x1000),
+    ("C3", 0x2000),
+];
+
+/// The flags a condition code tests: what makes it that condition.
+pub fn condition_flags(condition: &str) -> u32 {
+    let flag = |name: &str| FLAGS.iter().find(|(one, _)| *one == name).map_or(0, |(_, bit)| *bit);
+    match condition {
+        "o" | "no" => flag("OF"),
+        "b" | "ae" => flag("CF"),
+        "e" | "ne" => flag("ZF"),
+        "be" | "a" => flag("CF") | flag("ZF"),
+        "s" | "ns" => flag("SF"),
+        "p" | "np" => flag("PF"),
+        "l" | "ge" => flag("SF") | flag("OF"),
+        _ => flag("ZF") | flag("SF") | flag("OF"),
+    }
+}
+
+/// `READ/WRITTEN`, each `-` or flag names separated by commas; `cc` as the read
+/// side is the condition's.
+fn flag_masks(
+    text: &str,
+    line: usize,
+) -> Result<(u32, u32, bool), String> {
+    let bad = || format!("x86.instr:{line}: flags `{text}` are not READ/WRITTEN, each `-` or flag names");
+    let (read, written) = text.split_once('/').ok_or_else(bad)?;
+    let mask = |list: &str| -> Result<u32, String> {
+        if list == "-" {
+            return Ok(0);
+        }
+        list.split(',').try_fold(0, |all, name| {
+            FLAGS.iter().find(|(one, _)| *one == name).map(|(_, bit)| all | bit).ok_or_else(bad)
+        })
+    };
+    if read == "cc" {
+        return Ok((0, mask(written)?, true));
+    }
+    Ok((mask(read)?, mask(written)?, false))
+}
+
 /// Every form `text` describes, `{cc}` expanded.
 pub fn parse(text: &str) -> Result<Vec<Form>, String> {
     parse_rows(text, |_| true)
@@ -174,8 +230,8 @@ fn parse_rows(
             continue;
         }
         let columns: Vec<&str> = content.split_whitespace().collect();
-        let [name, operation, shape, widths, cost, pinned, reads, writes, iced] = columns[..] else {
-            return Err(format!("x86.instr:{line}: {} columns, not 9", columns.len()));
+        let [name, operation, shape, widths, cost, pinned, reads, writes, flags, iced] = columns[..] else {
+            return Err(format!("x86.instr:{line}: {} columns, not 10", columns.len()));
         };
         if !keep(pinned) {
             continue;
@@ -202,6 +258,7 @@ fn parse_rows(
                 })
                 .collect::<Result<_, _>>()?
         };
+        let (flags_read, flags_written, by_condition) = flag_masks(flags, line)?;
         let pinned = fixed(pinned, line)?;
         let iced = (iced != "-").then(|| iced.to_owned());
         let form = Form {
@@ -214,6 +271,8 @@ fn parse_rows(
             fixed: pinned,
             reads: implicit(reads, line)?,
             writes: implicit(writes, line)?,
+            flags_read,
+            flags_written,
             iced,
             line,
         };
@@ -222,6 +281,7 @@ fn parse_rows(
                 forms.push(Form {
                     name: name.replace("{cc}", condition),
                     iced: form.iced.as_ref().map(|one| one.replace("{cc}", condition)),
+                    flags_read: if by_condition { condition_flags(condition) } else { form.flags_read },
                     ..form.clone()
                 });
             }

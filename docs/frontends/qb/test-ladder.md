@@ -14,7 +14,7 @@ after each pass, and `-S` the emitted assembly, ABI envelope included.
 
 ## FreeBASIC corpus as a source of cases
 
-FreeBASIC's local checkout at `~/work/personal/fbc/tests/qb` supplies only BASIC
+FreeBASIC's [`tests/qb`](https://github.com/freebasic/fbc/tree/master/tests/qb) supplies only BASIC
 test scenarios and source fragments. Nothing uses FreeBASIC's ABI, runtime,
 lowering, code shape, object format, harness result, or implementation. Cases
 are adapted to legal QB/PDS/VBDOS source and printable output. FreeBASIC-only

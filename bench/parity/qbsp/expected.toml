@@ -1,10 +1,10 @@
-reason = "x87: a float load one arithmetic instruction reads is its memory operand (nbody c -8%/-12.5% Os, fpbench -1.2%, parity/qbsp -6.8%, nbody_single nib -5.3%)"
+reason = "a diamond-bodied loop's latch falls into the header (x_collatz -15.7% clocks); costs one jmp per loop entry: quicksort bas +2.1% instructions"
 blessed = "2026-10-09"
 
 [bas.O2]
 instructions = 1036
 memory_operands = 463
-code_bytes = 732
+code_bytes = 735
 data_bytes = 13
 bss_bytes = 0
 
@@ -16,7 +16,7 @@ data_bytes = 13
 bss_bytes = 0
 
 [c.O2]
-instructions = 274
+instructions = 269
 memory_operands = 80
 code_bytes = 375
 data_bytes = 0

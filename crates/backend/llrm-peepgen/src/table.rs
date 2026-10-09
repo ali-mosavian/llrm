@@ -1,10 +1,9 @@
 //! The instruction description, `x86.instr`, as the rules need it: each
 //! mnemonic's LIR operation, operand shapes and fixed registers, and the
-//! flags iced-x86 says its forms read and write.
+//! flags its forms read and write.
 
-use iced_x86::{Code, Instruction, RflagsBits};
+use iced_x86::RflagsBits;
 use indexmap::IndexMap;
-use llrm_support::hash::HashMap;
 
 #[path = "../../../target/llrm-x86-m16/src/instructions/parse.rs"]
 #[allow(dead_code)]
@@ -72,16 +71,6 @@ pub fn variant(name: &str) -> bool {
     llrm_lir::Operation::ALL.iter().any(|op| format!("{op:?}") == name)
 }
 
-/// As `llrm_x86_m16::instructions::flags`: what iced's Code reads, and
-/// writes, sets, clears or leaves undefined.
-fn flags(code: Code) -> (u32, u32) {
-    let mut one = Instruction::default();
-    one.set_code(code);
-    let written =
-        one.rflags_written() | one.rflags_cleared() | one.rflags_set() | one.rflags_undefined() | one.rflags_modified();
-    (one.rflags_read(), written)
-}
-
 fn operands(list: &[parse::Operand]) -> String {
     if list.is_empty() {
         return "-".into();
@@ -97,17 +86,11 @@ pub fn load(
     file: &str,
 ) -> Result<Table, String> {
     let forms = parse::parse(source).map_err(|error| format!("{file}: {error}"))?;
-    let codes: HashMap<String, Code> = Code::values().map(|code| (format!("{code:?}"), code)).collect();
     let mut mnemonics: IndexMap<String, Mnem> = IndexMap::new();
     for form in forms {
         let op = operation(&form.operation)
             .ok_or_else(|| format!("{file}:{}: no operation {}", form.line, form.operation))?;
-        let (reads, writes) = match form.code_name(None) {
-            Some(name) => {
-                flags(*codes.get(&name).ok_or_else(|| format!("{file}:{}: iced-x86 has no code {name}", form.line))?)
-            }
-            None => (0, 0),
-        };
+        let (reads, writes) = (form.flags_read, form.flags_written);
         let shape = Shape {
             dests: form.dests.len(),
             sources: form.sources.len(),

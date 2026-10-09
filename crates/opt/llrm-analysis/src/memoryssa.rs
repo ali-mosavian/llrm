@@ -206,6 +206,16 @@ impl Accesses {
         self.touched.get(&inst).map_or(Some(&[]), |(_, writes)| writes.as_deref())
     }
 
+    /// `writes`, shared rather than copied; `nothing` for an instruction that
+    /// touches no memory.
+    fn shared_writes(
+        &self,
+        inst: InstId,
+        nothing: &Rc<[MemRef]>,
+    ) -> Option<Rc<[MemRef]>> {
+        self.touched.get(&inst).map_or_else(|| Some(Rc::clone(nothing)), |(_, writes)| writes.clone())
+    }
+
     /// What the call `inst` writes before reading any: `initializes`.
     pub fn fills(
         &self,
@@ -384,6 +394,13 @@ fn check_clobbers() -> bool {
     *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_CLOBBERS"))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Times a cell was looked up by value (hashed whole) rather than by
+    /// number, for a test that a walk does it once.
+    pub(crate) static CELL_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Clone)]
 pub struct MemorySSA<'a> {
     pub live: Access,
@@ -391,17 +408,22 @@ pub struct MemorySSA<'a> {
     pub sites: IndexMap<InstId, Access>,
     pub phis: IndexMap<i64, Access>,
     /// What each def writes, as `Accesses::writes` says.
-    written: IndexMap<InstId, Option<Vec<MemRef>>>,
+    written: IndexMap<InstId, Option<Rc<[MemRef]>>>,
     unit: Unit<'a>,
     /// Whether a def's writes may clobber a cell, once for each pair: the loads
     /// of one address ask it of the same defs again and again.
-    clobbers: std::cell::RefCell<llrm_support::hash::HashMap<MemRef, llrm_support::hash::HashMap<InstId, bool>>>,
+    /// Keyed by the cell's slot (`slot`) and the def's access number: 0 not
+    /// asked, 1 no, 2 yes.
+    clobbers: std::cell::RefCell<Vec<Vec<u8>>>,
+    /// Each cell asked about, numbered in the order it was first asked: a walk
+    /// hashes the cell once, not once a step.
+    slots: std::cell::RefCell<llrm_support::hash::HashMap<MemRef, usize>>,
     /// For a cell and whether the load is invariant: from an access that is a
     /// use or a def that leaves the cell alone, the access the walk back
     /// reaches before a clobber, a join, the live state or a boundary it was
     /// stopped at (plus one; 0: not known), by access number. A walk takes
     /// the jump instead of the steps, unless its own boundary lies between.
-    jumps: std::cell::RefCell<llrm_support::hash::HashMap<(MemRef, bool), Vec<u32>>>,
+    jumps: std::cell::RefCell<Vec<Option<Vec<u32>>>>,
     /// Each access's entry and exit in a depth-first order of the tree its
     /// `defining` links make, by access number: one is behind another when
     /// its interval holds the other's.
@@ -460,24 +482,52 @@ impl MemorySSA<'_> {
     /// remembered.
     fn clobbered(
         &self,
+        slot: usize,
         cell: &MemRef,
+        access: usize,
         site: InstId,
     ) -> bool {
-        if let Some(&known) = self.clobbers.borrow().get(cell).and_then(|sites| sites.get(&site)) {
-            if !check_clobbers() {
-                return known;
-            }
+        let remembered = self.clobbers.borrow().get(slot).and_then(|asked| asked.get(access)).copied().unwrap_or(0);
+        if remembered != 0 && !check_clobbers() {
+            return remembered == 2;
         }
         let stores = self.written[&site].as_deref().unwrap_or(&[]);
         let found = stores.iter().any(|store| may_clobber(&self.unit, None, cell, store));
         RUNS.with(|runs| runs.set(runs.get() + 1));
         let mut memo = self.clobbers.borrow_mut();
-        let sites = memo.entry(cell.clone()).or_default();
-        if let Some(&known) = sites.get(&site) {
-            assert_eq!(known, found, "LLRM_CHECK_CLOBBERS: a remembered answer differs from the one worked out");
+        if memo.len() <= slot {
+            memo.resize(slot + 1, Vec::new());
         }
-        sites.insert(site, found);
+        let asked = &mut memo[slot];
+        if asked.len() <= access {
+            asked.resize(self.span.len().max(access + 1), 0);
+        }
+        if asked[access] != 0 {
+            assert_eq!(
+                asked[access] == 2,
+                found,
+                "LLRM_CHECK_CLOBBERS: a remembered answer differs from the one worked out"
+            );
+        }
+        asked[access] = 1 + u8::from(found);
         found
+    }
+
+    /// `cell`'s number among the cells asked about; the cell is copied only the
+    /// first time.
+    fn slot(
+        &self,
+        cell: &MemRef,
+    ) -> usize {
+        #[cfg(test)]
+        CELL_PROBES.with(|probes| probes.set(probes.get() + 1));
+        let mut slots = self.slots.borrow_mut();
+        if let Some(&slot) = slots.get(cell) {
+            return slot;
+        }
+        let next = slots.len();
+        slots.insert(cell.clone(), next);
+        next
     }
 
     fn frontier(
@@ -533,10 +583,15 @@ impl MemorySSA<'_> {
         // end is found once and jumped to (LLVM's walker caches its clobber the
         // same way).
         let jumpable = jumping && edge.is_none() && edge_memory.is_none();
+        let (slot, edge_slot) = (self.slot(memory), edge_memory.map(|one| self.slot(one)));
         let mut jumps = self.jumps.borrow_mut();
         let none = &mut Vec::new();
         let table = if jumpable {
-            jumps.entry((memory.clone(), invariant)).or_insert_with(|| vec![0; self.span.len()])
+            let at = slot * 2 + usize::from(invariant);
+            if jumps.len() <= at {
+                jumps.resize(at + 1, None);
+            }
+            jumps[at].get_or_insert_with(|| vec![0; self.span.len()])
         } else {
             none
         };
@@ -593,13 +648,15 @@ impl MemorySSA<'_> {
                     )
                 }
                 Kind::Def => {
-                    let queried = match edge_memory {
-                        Some(edge_memory) if access.block != block => edge_memory,
-                        _ => memory,
+                    let (queried, queried_slot) = match (edge_memory, edge_slot) {
+                        (Some(edge_memory), Some(edge_slot)) if access.block != block => (edge_memory, edge_slot),
+                        _ => (memory, slot),
                     };
                     let written = &self.written[&access.site.expect("a def has a site")];
                     let site = access.site.expect("a def has a site");
-                    if changes(queried, invariant, written.as_deref(), |_| self.clobbered(queried, site)) {
+                    if changes(queried, invariant, written.as_deref(), |_| {
+                        self.clobbered(queried_slot, queried, current, site)
+                    }) {
                         ended(table, &mut chain, current);
                         found.insert(current);
                     } else {
@@ -657,13 +714,14 @@ pub fn built<'a>(
     let live = Access::new(0, Kind::Live);
     let entries: IndexMap<i64, usize> = graph.iter().enumerate().map(|(index, block)| (block.at, index + 1)).collect();
     let mut sites: IndexMap<InstId, Access> = IndexMap::default();
-    let mut written: IndexMap<InstId, Option<Vec<MemRef>>> = IndexMap::default();
+    let mut written: IndexMap<InstId, Option<Rc<[MemRef]>>> = IndexMap::default();
+    let nothing: Rc<[MemRef]> = Rc::from(Vec::new());
     let mut outgoing: BTreeMap<i64, usize> = BTreeMap::new();
     let mut next_id = entries.len() + 1;
     for block in &graph {
         let mut current = entries[&block.at];
         for &inst in function.block(cfg::block(block.at)).instructions() {
-            let writes = accesses.writes(inst).map(<[MemRef]>::to_vec);
+            let writes = accesses.shared_writes(inst, &nothing);
             let defines = writes.as_ref().is_none_or(|stores| !stores.is_empty());
             if !defines && accesses.reads(inst).is_some_and(<[MemRef]>::is_empty) {
                 continue;
@@ -758,6 +816,7 @@ pub fn built<'a>(
         written,
         unit: *unit,
         clobbers: Default::default(),
+        slots: Default::default(),
         jumps: Default::default(),
         span,
     }

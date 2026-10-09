@@ -1,10 +1,10 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
+reason = "a diamond-bodied loop's latch falls into the header (x_collatz -15.7% clocks); costs one jmp per loop entry: quicksort bas +2.1% instructions"
 blessed = "2026-10-09"
 
 [bas.O2]
-instructions = 224965
+instructions = 229608
 memory_operands = 113692
-code_bytes = 556
+code_bytes = 560
 data_bytes = 17
 bss_bytes = 0
 

@@ -5,8 +5,8 @@ parser table generator in its default mode, with no `-O` option.
 
 ## Source Inputs
 
-- Grammar: `/Users/alim/work/ms/msdos_60/45/qb5/ir/qbasbnf.prs`
-- Generator: `/Users/alim/work/ms/msdos_60/45/tl/bin/buildprs.exe`
+- Grammar: `qb5/ir/qbasbnf.prs` in the QuickBASIC 4.5 source tree
+- Generator: `tl/bin/buildprs.exe` in the same tree
 
 The artifacts in this directory were generated under DOSBox-X through the
 DOSBox debug MCP on 2026-06-13. Equivalent DOS commands:

@@ -2,8 +2,7 @@
 
 ## Established evidence
 
-QuickBASIC 4.5's source tree at
-`/Users/alim/work/ms/msdos_60/45` contains:
+QuickBASIC 4.5's source tree contains:
 
 - `runtime/crt/fpreset.asm:35–41`: `_fpreset` calls the math vector with
   `BX=1` to reset it, then with `BX=4, AX=1332h` to set the control word.
@@ -40,9 +39,7 @@ LLVM's local source provides the relevant model:
   rejected, as is dynamic rounding. The latter check explicitly protects
   CSE across calls that could change rounding.
 
-These files were inspected in `/Users/alim/work/other/llvm-project` (the
-EarlyCSE file through `git show HEAD:...`, since its working-tree copy is
-absent).
+These files were inspected in [llvm-project](https://github.com/llvm/llvm-project).
 
 ## Consequences for llrm
 
@@ -187,7 +184,7 @@ both programs on three primary compilers and FPEMU under QB event flags.
 The initial missing relocation printed zero instead of -32768; the emitted
 operand regression fails with that defect restored and passes with the fix.
 Disabling helper recognition independently fails all three compiler checks.
-Final stage dump: `/tmp/qbopt-fpicse-relocated-final`. Successful runtime
+Successful runtime
 directories: `qbopt-fild-relocated-etv3ig3s` and `qbopt-fild-events-36wa7wbo`.
 
 ## INTEGER conversion helpers
@@ -224,7 +221,7 @@ code regression on each compiler; the focused bounds/helper tests total 20.
 Objects in `tests/inputs/omf/regressions/fpi2cs-*.obj` came from `tests/run/qb/fpi2cs.bas`
 through e2e/configs in run `qbopt-fil2-final-agr4msen`. The first attempted
 name exceeded the harness's six-character limit once its output prefixes
-were added; that run proved nothing. Stage dumps: `/tmp/qbopt-fil2-final-stages`.
+were added; that run proved nothing.
 
 ## Computed integer inputs
 
@@ -271,5 +268,4 @@ with no new refusals. Focused analysis/allocation tests: 55 pass, including
 FPCALC on three compilers (9 cases), changed FPEMU on PDS/VBDOS (24 cases).
 All 33 pass. Fixtures were compiled from `tests/run/qb/fpcalc.bas` with the named
 e2e/configs configurations in `qbopt-fpcalc-frame-26gr7dl1`; FPEMU validation
-is in `qbopt-fpvalue-runtime-a6t2iz_t`. Stage dump:
-`/tmp/qbopt-fpcalc-frame-stages`.
+is in `qbopt-fpvalue-runtime-a6t2iz_t`.

@@ -5,7 +5,7 @@ object, ABI, or runtime is evidence for any case here.
 
 ## Help extraction
 
-`/Users/alim/work/personal/qb-qrender/tools/hlpextract.py` decoded the three
+The qb-qrender tool [`tools/hlpextract.py`](https://github.com/ali-mosavian/qb-quake/blob/main/tools/hlpextract.py) decoded the three
 installed LN help files. Their SHA-256 values are in `coverage.toml`.
 `VBDOS.HLP` is a concatenation of four LN databases, found by the four `LN\x02\0`
 headers at byte offsets 0, 421532, 700367, and 821723:

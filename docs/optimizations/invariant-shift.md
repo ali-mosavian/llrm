@@ -53,6 +53,6 @@ emission check of all 487 `tests/inputs/omf` objects, disabling only this new
 exception for the baseline, found no changed bytes or emission outcomes.
 
 Full stage dumps, timed outputs and build logs are retained locally at
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-invariant-shift-4c3nvye3`.
+`invariant-shift`.
 The previous stage dumps are at
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-fpbench-hot-wfzhj5au`.
+`fpbench-hot`.

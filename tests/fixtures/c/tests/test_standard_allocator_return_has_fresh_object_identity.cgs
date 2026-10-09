@@ -4,7 +4,7 @@ SEG 2 attr=0x1c name="CONST" align=2
 SEG 3 attr=0xc name="CONST2" align=2
 SEG 4 attr=0x6 name="_DATA" align=2
 START
-f1 DBSrcFile "/private/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/tmpy63yw2dv/unit.c"
+f1 DBSrcFile "unit.c"
 - DBSrcCue f1 2 1
 SYM y1 name="make" base="make" pattern="_*" attr=0x7 seg=1
 CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0

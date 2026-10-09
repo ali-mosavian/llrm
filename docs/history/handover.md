@@ -14,23 +14,9 @@ and from `alim/mgl-peek-poke-inline-dacaee`, which is also the branch of the
 redundant worktree. Drop all three once the rewrite is trusted, from a session
 not running inside that worktree:
 
-    git worktree remove .claude/worktrees/mgl-peek-poke-inline-dacaee
+    git worktree remove <that worktree>
     git branch -D alim/mgl-peek-poke-inline-dacaee
     git tag -d pre-signing-backup
-
-## Transcript
-
-The whole build, from the empty plan to the merge, is one session:
-
-    ~/.claude/projects/-Users-alim-work-personal-qbopt--claude-worktrees-mgl-peek-poke-inline-dacaee/29b55cdf-b54c-4c9d-9dfd-c7d736645029.jsonl
-
-7.2 MB of JSONL, one object per line. It is the record of every measurement
-quoted in `docs/` and of the reasoning behind the refusals in `agents.md`, which
-is worth having when a decision here looks arbitrary. The plan it was built to
-is `~/.claude/plans/make-a-end-to-delightful-goose.md`; all ten phases are done.
-
-Earlier sessions in this repo are under
-`~/.claude/projects/-Users-alim-work-personal-qbopt/`.
 
 ## What the pass does
 
@@ -98,7 +84,7 @@ a fresh `tools/dosbox.sh build vbd` does not link today, because
 the `UGLARR*` family.
 
 **The entry point is not searched for any more, and every module maps.** The
-QuickBASIC 4.5 runtime source in `~/work/ms/msdos_60/45` settles it: `MODULE_CODE`
+QuickBASIC 4.5 runtime source settles it: `MODULE_CODE`
 in `runtime/inc/addr.inc` is 48 bytes with `O_ENT` named as the offset past it,
 `rtinit.asm` says the user's code begins at that fixed offset, and the header's
 first field is a signature word so the layout is checked rather than assumed.

@@ -8,3 +8,5 @@ build/
 __pycache__/
 # Written into the working directory by the bench and test runs.
 /*.err
+*.pyc
+/dosbox-crash.log

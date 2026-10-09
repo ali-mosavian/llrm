@@ -4400,11 +4400,14 @@ fn repeated_fill(
     cx: Register,
     ax: Register,
 ) -> Insn {
+    // Real mode's string store names its segment: the selector it stores
+    // through.
+    let selector = if di == Register::DI { vec![rl(Register::ES, 2)] } else { vec![] };
     let what = sem(
         Operation::Fill,
         name,
         vec![Loc::Mem(Mem::new(None, 0)), rl(di, width), rl(cx, width)],
-        vec![rl(ax, width), rl(cx, width), rl(di, width)],
+        [vec![rl(ax, width), rl(cx, width), rl(di, width)], selector].concat(),
     );
     insn(0, Some((0, 0)), Some(what), vec![], vec![])
 }
@@ -4431,61 +4434,27 @@ fn test_a_rep_in_flat_mode_writes_ecx_whole() {
 }
 
 /// Every effect was worked out by assembling the instruction and decoding the
-/// bytes (`_decoded`, 8% of compiling matmul, #560). An instruction with a row
-/// in `x86.instr` is answered from it; one without still decodes, and is
-/// counted.
+/// bytes (8% of compiling matmul, #560). An instruction with a row in
+/// `x86.instr` is answered from it, and one without is not known, not decoded.
 #[test]
-fn test_an_instruction_with_a_row_is_answered_from_the_table_and_not_decoded() {
+fn test_an_instruction_with_a_row_is_answered_from_the_table_and_one_without_is_unknown() {
     let table =
         sem(Operation::Binary, "add", vec![rl(Register::CX, 2)], vec![rl(Register::CX, 2), rl(Register::DX, 2)]);
-    let (decoded_before, (served_before, fell_before)) = (decodes(), served_and_decoded());
     let (reads, writes) = _register_effects_of_what(16, &table, true, true).expect("the table answers");
     assert!(
         reads.contains(&(Register::ECX, 0))
             && reads.contains(&(Register::EDX, 1))
             && writes.contains(&(Register::ECX, 1))
     );
-    assert_eq!(
-        (decodes() - decoded_before, served_and_decoded()),
-        (0, (served_before + 1, fell_before)),
-        "decoded an instruction with a row"
-    );
-    // `bswap` has no row: it is assembled, decoded and counted.
     let none = sem(Operation::Unary, "bswap", vec![rl(Register::EAX, 4)], vec![rl(Register::EAX, 4)]);
-    let _ = _register_effects_of_what(32, &none, true, true);
-    assert_eq!(served_and_decoded(), (served_before + 1, fell_before + 1));
+    assert_eq!(_register_effects_of_what(32, &none, true, true), None);
 }
 
-/// Each pass of the peephole assembled the text of an instruction and decoded
-/// it, for every instruction of the body, again: `_decoded` was 8% of compiling
-/// matmul (#560). An instruction is decoded once however many passes ask of it,
-/// and another at the same place is not taken for it.
-#[test]
-fn test_an_instruction_the_passes_ask_of_again_is_decoded_once() {
-    let what = sem(Operation::Binary, "add", vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::BX, 2)]);
-    let before = decodes();
-    let first = _decoded(16, &what).expect("encodes");
-    for _ in 0..5 {
-        assert_eq!(_decoded(16, &what).expect("encodes"), first);
-    }
-    assert_eq!(decodes() - before, 1, "decoded again for each ask");
-    // The same instruction in 32-bit code is asked of again, not answered with
-    // the 16-bit code's.
-    let before = decodes();
-    _decoded(32, &what).expect("encodes");
-    assert_eq!(decodes() - before, 1, "a 32-bit ask was answered from the 16-bit one");
-    // Another instruction, even if it came to stand where this one was, is its
-    // own.
-    let other =
-        sem(Operation::Binary, "sub", vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::BX, 2)]);
-    assert_ne!(_decoded(16, &other).expect("encodes"), first);
-}
-
-/// A cache of decoded instructions was given a memory operand equal, when
+/// A cache of an instruction's effects was given a memory operand equal, when
 /// `Mem`'s equality left out its encoding fields, to one spelled through
 /// another register (queens -Os: `mov es,[bx+2]` for `mov es,[si+2]`).
 #[test]
-fn test_two_cells_equal_but_spelled_through_other_registers_are_decoded_apart() {
+fn test_two_cells_equal_but_spelled_through_other_registers_have_their_own_effects() {
     let through = |register| {
         let cell = Mem { through: register, offset: 2, base: Some(Held { value: 1, width: 2 }), ..Mem::new(None, 2) };
         sem(Operation::Move, "mov", vec![rl(Register::ES, 2)], vec![Loc::Mem(cell)])
@@ -4497,11 +4466,11 @@ fn test_two_cells_equal_but_spelled_through_other_registers_are_decoded_apart() 
         place.same_meaning(&through(Register::SI)) && place != through(Register::SI),
         "the same cell, spelled another way, is not equal to it"
     );
-    let first = _decoded(16, &place).expect("encodes");
+    let (first, _) = _register_effects_of_what(16, &place, true, false).expect("the table answers");
     place = through(Register::SI);
-    let second = _decoded(16, &place).expect("encodes");
-    assert_ne!(first, second, "[si+2] decoded as [bx+2]");
-    assert_eq!(second[0].memory_base(), Register::SI);
+    let (second, _) = _register_effects_of_what(16, &place, true, false).expect("the table answers");
+    assert!(first.contains(&(Register::EBX, 0)) && !first.contains(&(Register::ESI, 0)));
+    assert!(second.contains(&(Register::ESI, 0)) && !second.contains(&(Register::EBX, 0)), "[si+2] answered as [bx+2]");
 }
 
 /// The passes asked `_register_effects` of the same instruction again and
@@ -4648,4 +4617,36 @@ fn test_copy_propagation_works_a_block_again_only_when_a_parent_changed() {
     crate::backend::copyprop::forwarded(&input);
     let worked = crate::analysis::dataflow::WORKED.with(std::cell::Cell::get);
     assert!(worked <= 4 * blocks as usize, "{worked} blocks worked for a loop of {blocks}");
+}
+
+/// Every sub-pass walked every function's whole body, `copyprop` and
+/// `regthrash` among them, found no copy in most and changed nothing: two
+/// thirds of the peephole's time went to passes that found nothing. A body with
+/// no copy is not given to copy propagation.
+#[test]
+fn test_a_function_without_a_copy_runs_copy_propagation_zero_times() {
+    let add = |at, into, from| {
+        Arc::new(insn(
+            at,
+            Some((at, at)),
+            Some(sem(Operation::Binary, "add", vec![rl(into, 2)], vec![rl(into, 2), rl(from, 2)])),
+            vec![],
+            vec![],
+        ))
+    };
+    let copy = |at, into, from| {
+        Arc::new(insn(
+            at,
+            Some((at, at)),
+            Some(sem(Operation::Move, "mov", vec![rl(into, 2)], vec![rl(from, 2)])),
+            vec![],
+            vec![],
+        ))
+    };
+    let before = copyprop::runs();
+    transform(one_block(vec![add(0, Register::CX, Register::DX), add(1, Register::BX, Register::CX)]));
+    assert_eq!(copyprop::runs() - before, 0, "copy propagation ran on a body with no copy");
+    let before = copyprop::runs();
+    transform(one_block(vec![copy(0, Register::AX, Register::BX), add(1, Register::CX, Register::AX)]));
+    assert!(copyprop::runs() - before >= 1, "copy propagation did not run on a body with a copy");
 }

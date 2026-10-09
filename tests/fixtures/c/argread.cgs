@@ -6,7 +6,7 @@ SEG 4 attr=0x6 name="_DATA" align=2
 START
 TYPE T25 size=8 align=1
 TYPE T26 size=36 align=1
-f1 DBSrcFile "/home/alim/scratch/qcfix/tests/fixtures/c/argread.c"
+f1 DBSrcFile "tests/fixtures/c/argread.c"
 - DBSrcCue f1 5 1
 SYM y1 name="lchar" base="lchar" pattern="_*" attr=0x43 seg=1
 CALLCONV y1 class=0x80 target=0x712 parms=[] ret=0:0
