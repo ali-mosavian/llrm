@@ -155,6 +155,8 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
             hit = {lang for lang, pats in cfg["run_languages"].items() if matches(f, pats)}
             langs |= hit or set(LANGUAGES)
         p.languages = list(LANGUAGES) if p.tier == "full" else [l for l in LANGUAGES if l in langs]
+    if p.tier == "full":
+        steps += plan(files, "fast").steps  # full is fast's steps and more: whatever fast adds for a diff, full has too
     # Every step but the plain Python tests runs the release binaries: they must be built, and current, first.
     if any(one not in NO_BINARIES for one in steps) and "build" not in steps:
         steps.insert(0, "build")
