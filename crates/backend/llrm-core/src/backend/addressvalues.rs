@@ -116,11 +116,11 @@ mod tests {
             printed,
             [
                 "Semantics(op=<Operation.ADDRESS: 'addr'>, name='lea', dests=(Held(value=9, width=2),), \
-                 sources=(AddressRef(addr=None, through=26, index=27, scale=2, offset=-6, disp_width=1), \
+                 sources=(Address(addr=None, through=26, index=27, scale=2, offset=-6, disp_width=1), \
                  Held(value=4, width=2)), target=None, indirect=False)",
                 "Semantics(op=<Operation.ADDRESS: 'addr'>, name='lea', dests=(Held(value=9, width=2),), \
-                 sources=(AddressRef(addr=[seg:0+bx+0x8], through=24, index=28, scale=1, offset=5, disp_width=2), \
-                 AddressRef(addr=[seg:0+0x8], through=24, index=0, scale=1, offset=5, disp_width=2)), \
+                 sources=(Address(addr=[seg:0+bx+0x8], through=24, index=28, scale=1, offset=5, disp_width=2), \
+                 Address(addr=[seg:0+0x8], through=24, index=0, scale=1, offset=5, disp_width=2)), \
                  target=None, indirect=False)",
                 "Semantics(op=<Operation.MOVE: 'move'>, name='mov', dests=(Held(value=9, width=2),), \
                  sources=(Mem(addr=[seg:0+0x8], width=2, through=24, offset=5, disp_width=2, \
