@@ -22,6 +22,7 @@ pub mod cpu;
 pub mod datagroup;
 pub mod debuginfo;
 pub mod division;
+pub mod effects;
 pub mod ehprepare;
 pub mod exactaddress;
 pub mod executed;

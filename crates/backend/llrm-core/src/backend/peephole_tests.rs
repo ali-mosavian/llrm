@@ -4430,6 +4430,32 @@ fn test_a_rep_in_flat_mode_writes_ecx_whole() {
     assert!((0..4).all(|lane| writes.contains(&(Register::ECX, lane))), "{writes:?}");
 }
 
+/// Every effect was worked out by assembling the instruction and decoding the
+/// bytes (`_decoded`, 8% of compiling matmul, #560). An instruction with a row
+/// in `x86.instr` is answered from it; one without still decodes, and is
+/// counted.
+#[test]
+fn test_an_instruction_with_a_row_is_answered_from_the_table_and_not_decoded() {
+    let table =
+        sem(Operation::Binary, "add", vec![rl(Register::CX, 2)], vec![rl(Register::CX, 2), rl(Register::DX, 2)]);
+    let (decoded_before, (served_before, fell_before)) = (decodes(), served_and_decoded());
+    let (reads, writes) = _register_effects_of_what(16, &table, true, true).expect("the table answers");
+    assert!(
+        reads.contains(&(Register::ECX, 0))
+            && reads.contains(&(Register::EDX, 1))
+            && writes.contains(&(Register::ECX, 1))
+    );
+    assert_eq!(
+        (decodes() - decoded_before, served_and_decoded()),
+        (0, (served_before + 1, fell_before)),
+        "decoded an instruction with a row"
+    );
+    // `bswap` has no row: it is assembled, decoded and counted.
+    let none = sem(Operation::Unary, "bswap", vec![rl(Register::EAX, 4)], vec![rl(Register::EAX, 4)]);
+    let _ = _register_effects_of_what(32, &none, true, true);
+    assert_eq!(served_and_decoded(), (served_before + 1, fell_before + 1));
+}
+
 /// Each pass of the peephole assembled the text of an instruction and decoded
 /// it, for every instruction of the body, again: `_decoded` was 8% of compiling
 /// matmul (#560). An instruction is decoded once however many passes ask of it,

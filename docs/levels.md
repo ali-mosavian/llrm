@@ -37,13 +37,21 @@ Sources read:
 | `inline` / `inline-functions` | `-finline-small-functions`, `-finline-functions` | -O2 (627, 652) | every level above -O0 |
 | `forward`, `drop_loads` / `gcse` | `-fgcse` | -O2 (624) | every level above -O0 |
 | `sibcalls` / `optimize-sibling-calls` | `-foptimize-sibling-calls` | -O2 (636) | same |
-| (`jumpthread`) | `-fthread-jumps` | -O2 and up (`OPT_LEVELS_2_PLUS`) | every level above -O0, -O1 too: switched off at -O1 (as gcc has it) x_switch runs x1.87 the clocks, queens x1.10, geomean of the 66 +1.1% clocks, code -2.2% (2026-10-09) |
+| (`jumpthread`) | `-fthread-jumps` | -O1 and up (`OPT_LEVELS_1_PLUS`, 584); `-ftree-dominator-opts` (591) threads in DOM at -O1 too | every level above -O0. Off at -O1 it costs x_switch x1.87 the clocks, queens x1.10, geomean of the 66 +1.1% clocks, code -2.2% (2026-10-09); gcc has it on there. (This row said -O2 until 2026-10-10: `opts.cc` 584 is `OPT_LEVELS_1_PLUS`.) |
 | `fill` / `tree-loop-distribute-patterns` | `-ftree-loop-distribute-patterns` | -O2 (653) | same |
 | `unroll` / `unroll-loops` | complete unrolling (`cunroll`) is in the loop passes at every level with loop optimisation; it may *grow* the code only with `-O3`, `-funroll-loops` or `-fpeel-loops` (`opts.cc` 1311-1316, `flag_cunroll_grow_size`) | -O1 and up; may grow at -O3 | -O1 and up, may grow at -O3 (`limits.grows`) |
 | `peel` / `peel-loops` | `-fpeel-loops` | -O3 (679) | -O3 |
 | `unswitch` / `unswitch-loops` | `-funswitch-loops` | -O3 (685) | -O3 |
 | `inline.cp_clone` / `ipa-cp-clone` | `-fipa-cp-clone` | -O3 (676) | -O3: `ipacp` copies a function for the constants a hot call passes |
 | (`program_parameters`) | `-fipa-cp` | -O2 (629) | every level above -O0: a constant every call passes is the parameter's value |
+| `ipa_ranges` / `ipa-vrp` | `-fipa-vrp` | -O2 (633) | -O2 and up; off at -O1 since 2026-10-10 (compile -1.0% on bench + QCport, code +0.00% geomean) |
+| (`bounded`, the range analysis) | `-ftree-vrp` | -O2 (649) | every level above -O0, -O1 too: 447 M of d_faces' 34 G at -O1. Not an on/off gate: lsr, indvars, decide and hoist read it, so the plan is to make it demand-driven |
+| (`gvn`) | `-ftree-fre` | -O1 (592) | not at -O1: `gvn` is `forward` and `drop_loads` (`-fgcse`), off there, and there is no value-numbering-only mode (#1106). `-ftree-pre` is -O2 (646), `-fcode-hoisting` -O2 (618) |
+| (`deadargs`, `interprocedural`) | `-fipa-sra` | -O2 (632) | every level above -O0, -O1 too. Kept: off at -O1, hanoi is +27% code, console.c +1.2% |
+| (`lir peephole`) | `-fpeephole2` | -O2 (638) | every level above -O0: the same rounds at -O1 (507 M of d_faces' 34 G) |
+| (`lir scheduler`) | `-fschedule-insns2` | -O2 (642) | every level above -O0: `Scheduler` is a phase of every machine (`flow.rs:122`) |
+| (`lir jumps`, common tails) | `-fcrossjumping` | -O2 (619) | every level above -O0: 438 M at -O1 |
+| (the spiller making a constant or address again where it is read) | `-flra-remat` | -O2 (635) | every level above -O0 (`spiller.rs` `planned_with`) |
 
 ## Limits
 
