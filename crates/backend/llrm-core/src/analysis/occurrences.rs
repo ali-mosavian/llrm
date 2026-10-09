@@ -36,6 +36,7 @@ pub struct Occurrences {
 impl Occurrences {
     /// From one pass over `body`, of the values `only` holds, in the order the body first names them.
     pub fn scan(body: &LirBody, only: &impl Fn(u32) -> bool) -> Self {
+        body.facts.0.bump("occurrence-scans");
         let mut found = Self::default();
         let mut named: Vec<Named> = Vec::new();
         let mut values: Vec<u32> = Vec::new();
@@ -70,6 +71,11 @@ impl Occurrences {
         found
     }
 
+    /// How many times this body's facts have scanned it for occurrences, for a test that a caller that has the postings does not.
+    pub fn scans(body: &LirBody) -> usize {
+        body.facts.0.counted("occurrence-scans")
+    }
+
     /// From the postings of the body, of `values`.
     pub fn of(postings: &Postings, values: &BTreeSet<u32>) -> Self {
         let mut found = Self::default();
@@ -88,6 +94,13 @@ impl Occurrences {
             found.required.extend(postings.needs(*value).iter().map(|&(block, position)| (block as usize, position as usize)));
         }
         found
+    }
+
+    /// What `LLRM_CHECK_OCCURRENCES` holds the postings' occurrences to: the scan's.
+    pub fn check_against_scan(&self, body: &LirBody, only: &impl Fn(u32) -> bool) {
+        let scanned = Self::scan(body, only);
+        let same = |a: &Self, b: &Self| a.by_value.iter().filter(|(_, named)| !named.is_empty()).all(|(value, named)| b.named(*value) == named.as_slice());
+        assert!(same(self, &scanned) && same(&scanned, self) && self.required == scanned.required, "{}: the occurrences from the postings differ from a scan", body.name);
     }
 
     pub fn named(&self, value: u32) -> &[Named] {
