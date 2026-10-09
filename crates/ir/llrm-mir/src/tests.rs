@@ -389,3 +389,36 @@ fn test_declared_over_the_declarations_answers_as_declared_of_the_module() {
     assert_eq!(module.named("fresh"), Some(fresh));
     assert_eq!(Declared::over(Default::default(), 0).place(&mut module).unwrap(), 0);
 }
+
+/// Hash and tree maps keyed by a dense id cost 12% of a compile in hashing and 7% in tree nodes where gcc uses bitmaps and
+/// vectors: new keyed maps and sets use `dense::IdMap` / `IdSet`. A file may not gain one; the ceilings in `dense-keys.txt` fall as
+/// files convert (clippy's `disallowed-types` cannot tell a `HashMap<ValueId, _>` from any other).
+#[test]
+fn no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let ceilings: std::collections::BTreeMap<&str, usize> =
+        include_str!("../dense-keys.txt").lines().filter(|line| !line.starts_with('#')).filter_map(|line| line.split_once('\t')).map(|(file, count)| (file, count.parse().expect("a count"))).collect();
+    let kinds = ["HashMap<", "HashSet<", "BTreeMap<", "BTreeSet<", "IndexMap<", "IndexSet<"];
+    let ids = ["ValueId", "InstId", "BlockId", "module::ValueId", "module::InstId", "module::BlockId"].map(String::from).into_iter().flat_map(|id| ["".to_owned(), "crate::".to_owned(), "llrm_mir::".to_owned()].into_iter().map(move |prefix| prefix + &id)).collect::<Vec<_>>();
+    let mut over = Vec::new();
+    let mut stack = vec![root.join("crates")];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("a directory reads").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let name = path.strip_prefix(&root).expect("under the root").to_string_lossy().into_owned();
+            if !name.ends_with(".rs") || name.ends_with("_tests.rs") || name.ends_with("/tests.rs") || name.contains("/tests/") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("a source reads");
+            let found = kinds.iter().map(|kind| text.match_indices(kind).filter(|(at, _)| ids.iter().any(|id| text[at + kind.len()..].trim_start().starts_with(id) && !text[at + kind.len()..].trim_start()[id.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_'))).count()).sum::<usize>();
+            if found > ceilings.get(name.as_str()).copied().unwrap_or(0) {
+                over.push(format!("{name}: {found} > {}", ceilings.get(name.as_str()).copied().unwrap_or(0)));
+            }
+        }
+    }
+    assert!(over.is_empty(), "use llrm_mir::dense::{{IdMap, IdSet}} for ids: {over:?}");
+}
