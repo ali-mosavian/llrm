@@ -438,3 +438,11 @@ def test_the_unenforced_fmt_step_passes_on_clean_and_on_files_to_format_and_fail
 def test_edits_under_zed_plan_nothing():
     """.zed/settings.json was an unknown path: the full tier for an editor setting."""
     assert gate.plan([".zed/settings.json"]).tier == "none"
+
+
+def test_the_full_tier_has_every_step_the_fast_tier_has_for_the_same_paths():
+    """`scans` was fast-tier only: a diff that picked full skipped the source ratchets that a smaller diff ran."""
+    for files in (["crates/ir/llrm-mir/src/lib.rs"], ["crates/backend/x.rs"], ["tools/torture/a.py"], ["tools/gate/gate.py"], ["tools/gate/gate.py", "crates/ir/llrm-mir/src/lib.rs"], ["tests/target_facts.baseline"]):
+        fast, full = gate.plan(files, "fast"), gate.plan(files, "full")
+        assert set(fast.steps) <= set(full.steps), (files, set(fast.steps) - set(full.steps))
+    assert "scans" in gate.plan(["crates/ir/llrm-mir/src/lib.rs"], "full").steps
