@@ -75,16 +75,6 @@ fn function_named<'p>(
     program.modules[0].functions.iter().enumerate().find(|(_, one)| one.name == name).expect("the function")
 }
 
-fn loc_width(one: &Loc) -> u32 {
-    match one {
-        Loc::Reg(one) => one.width,
-        Loc::Mem(one) => one.width,
-        Loc::Imm(one) => one.width,
-        Loc::Held(one) => one.width,
-        other => panic!("no width: {other:?}"),
-    }
-}
-
 fn returning(
     id: i64,
     instructions: Vec<hir::Instruction>,

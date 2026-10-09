@@ -18,9 +18,7 @@ use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 use crate::hir::{self, Unsupported};
-use crate::raise_hir::{
-    EMITTED, classes, classes_for, far_pointers, is_float, library_routine, pointers, signed, widths, widths_for,
-};
+use crate::raise_hir::{EMITTED, classes_for, far_pointers, is_float, library_routine, pointers, signed, widths_for};
 
 type R<T> = Result<T, Unsupported>;
 
@@ -3142,7 +3140,7 @@ fn indirect(
 mod tests {
     use std::path::Path;
 
-    use llrm_mir::{Attribute, Linkage, Module};
+    use llrm_mir::{Linkage, Module};
 
     use crate::{hir, stream};
 

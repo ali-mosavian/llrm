@@ -50,7 +50,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::memory;
 use llrm_analysis::memoryssa::Accesses;
-use llrm_analysis::{avail, cfg, regions, ssa};
+use llrm_analysis::{avail, cfg, ssa};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::memory::Callees;

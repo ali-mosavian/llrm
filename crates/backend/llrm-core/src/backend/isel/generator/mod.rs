@@ -37,7 +37,6 @@ pub const CONSTRUCTORS: [(&str, &str, usize); 13] = [
 
 pub struct Generated {
     pub code: String,
-    pub patterns: Vec<Pattern>,
     pub automaton: Automaton,
 }
 
@@ -192,8 +191,12 @@ impl Checker<'_> {
             .find(|form| {
                 form.dests.len() == dests.len()
                     && form.sources.len() == sources.len()
-                    && form.dests.iter().zip(dests).all(|(operand, kinds)| fits(operand, kinds))
-                    && form.sources.iter().zip(sources).all(|(operand, kinds)| fits(operand, kinds))
+                    && dests.iter().enumerate().all(|(index, kinds)| {
+                        fits(form.operand(description::Side::Dest, index).expect("a checked destination"), kinds)
+                    })
+                    && sources.iter().enumerate().all(|(index, kinds)| {
+                        fits(form.operand(description::Side::Source, index).expect("a checked source"), kinds)
+                    })
             })
             .map_or_else(
                 || refused(self.pattern, format!("x86.instr has no `{name}` taking {dests:?} <- {sources:?}")),
@@ -275,6 +278,13 @@ pub fn generate(
 ) -> Result<Generated, String> {
     let ident = name.replace('-', "_");
     let forms = description::parse(forms_text)?;
+    let pinned = description::pinned(forms_text)?;
+    if forms.iter().filter(|form| !form.fixed.is_empty()).ne(pinned.iter()) {
+        return Err("the fixed-operand reader disagrees with the instruction description".to_owned());
+    }
+    if forms.iter().filter_map(|form| form.code_name(None)).any(|code| code.contains("{w}")) {
+        return Err("an instruction code name kept its width placeholder".to_owned());
+    }
     let patterns = parse::parse(patterns_text)?;
     let automaton = automaton::build(&patterns.patterns);
     let mut code = String::new();
@@ -396,7 +406,7 @@ pub static SELECTOR: Compiled = Compiled {{
 }};"
     )
     .unwrap();
-    Ok(Generated { code, patterns: patterns.patterns, automaton })
+    Ok(Generated { code, automaton })
 }
 
 #[cfg(test)]

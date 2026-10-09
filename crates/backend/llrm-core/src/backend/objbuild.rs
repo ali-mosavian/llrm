@@ -1270,11 +1270,11 @@ mod tests {
             records.iter().filter(|one| one.r#type & 0xFE == omf::SEGDEF).map(|one| one.body[0]).collect()
         };
         // word, dword and paragraph aligned, as SEGDEF's attribute byte says.
-        let (ACBP, DWORD, PARAGRAPH) = (0x48, 0xA8, 0x68);
-        assert_eq!(acbps(None)[1], ACBP);
-        assert_eq!(acbps(Some(2))[1], ACBP);
-        assert_eq!(acbps(Some(4))[1], DWORD);
-        assert_eq!(acbps(Some(16))[1], PARAGRAPH);
+        let (acbp, dword, paragraph) = (0x48, 0xA8, 0x68);
+        assert_eq!(acbps(None)[1], acbp);
+        assert_eq!(acbps(Some(2))[1], acbp);
+        assert_eq!(acbps(Some(4))[1], dword);
+        assert_eq!(acbps(Some(16))[1], paragraph);
     }
 
     /// Every datum kind, a private and a grouped extra segment, a reserved

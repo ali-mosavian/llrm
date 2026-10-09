@@ -4,7 +4,7 @@
 
 use std::sync::LazyLock;
 
-use iced_x86::Register::{self, EBP, ESP};
+use iced_x86::Register;
 use llrm_mir::target::{AddressForm, OperationCosts};
 use llrm_target::CostModel;
 use llrm_target::machine::Machine;
@@ -229,7 +229,7 @@ impl llrm_target::Target for M32 {
 
 #[cfg(test)]
 mod tests {
-    use iced_x86::Register::{EAX, EBX, ECX, EDI, EDX, ESI};
+    use iced_x86::Register::{EAX, EBP, EBX, ECX, EDI, EDX, ESI, ESP};
     use llrm_target::Target;
 
     use super::*;
@@ -240,7 +240,6 @@ mod tests {
     /// release.
     #[test]
     fn test_m32_prices_code_size_in_bytes() {
-        use llrm_mir::target::Machine;
         let prices = llrm_target::CpuPrices {
             costs: vec![("mov_rm".into(), 1)],
             prefix: 1,

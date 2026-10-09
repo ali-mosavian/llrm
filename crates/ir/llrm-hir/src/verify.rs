@@ -5,7 +5,7 @@ use std::fmt;
 
 use llrm_support::hash::HashSet;
 use llrm_support::hash::IndexMap;
-use llrm_support::pyrepr::{self, Repr};
+use llrm_support::pyrepr;
 
 use crate::model;
 

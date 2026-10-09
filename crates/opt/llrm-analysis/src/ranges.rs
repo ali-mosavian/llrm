@@ -380,7 +380,6 @@ pub fn declared(
                 Opcode::Load { .. } | Opcode::Call(_) | Opcode::Invoke(_)
             )
         }),
-        _ => None,
     }
 }
 
@@ -1302,7 +1301,6 @@ pub fn bounded_solved(
             if 2 * operations.len() <= scoped.len() {
                 return sweep(scoped);
             }
-            let touching = touching_of();
             let base = {
                 let held = swept.borrow().as_ref().filter(|(was, _)| *was == id).map(|(_, base)| Rc::clone(base));
                 held.unwrap_or_else(|| {
