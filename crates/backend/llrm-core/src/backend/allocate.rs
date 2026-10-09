@@ -189,6 +189,12 @@ impl LiveRows {
     }
 }
 
+/// How many times this body's facts have walked every instruction for liveness rows (`live_rows_by`), for a test that a web of a few
+/// values does not.
+pub fn live_rows_walks(body: &LirBody) -> usize {
+    body.facts.0.counted("live-rows-walks")
+}
+
 /// What is live at each block's entry and exit for a few values, found from where they occur: a value is live into a block that reads it
 /// before writing it and out of a block a successor has it live into, up the predecessors until one writes it. The rows of `values`
 /// as `live_rows_by` finds them in a body with no phis, at the cost of the occurrences and the blocks each is live in, not of every
@@ -321,6 +327,7 @@ pub fn live_rows(body: &LirBody) -> LiveRows {
 /// `live_rows` of the values `keep` says only: each is live where it is as in the whole, the others are
 /// not numbered, so a caller that asks of a few values pays for rows of those.
 pub fn live_rows_by(body: &LirBody, keep: impl Fn(u32) -> bool) -> LiveRows {
+    body.facts.0.bump("live-rows-walks");
     // Every value the body names, numbered by order. Ids can be far apart, so the number of a value
     // is found by a table over the ids where they are dense enough, else by search.
     let mut numbered: Vec<u32> = Vec::new();

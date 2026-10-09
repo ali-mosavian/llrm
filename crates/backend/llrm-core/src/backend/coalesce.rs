@@ -586,7 +586,7 @@ pub fn _interference_among(body: &LirBody, only: Option<&BTreeSet<u32>>) -> Grap
         None => Rows::Dense(allocate::live_rows_by(body, wanted)),
     };
     if let (Some(only), Some((web, _))) = (only, &sparse) {
-        if std::env::var_os("LLRM_CHECK_ROWS").is_some() {
+        if llrm_support::env_set("LLRM_CHECK_ROWS") {
             let dense = allocate::live_rows_by(body, wanted);
             for block in &body.blocks {
                 let (a, b): (Vec<u32>, Vec<u32>) = (dense.entering(block.at).filter(|v| only.contains(v)).collect(), web.entering(block.at).collect());
@@ -602,7 +602,7 @@ pub fn _interference_among(body: &LirBody, only: Option<&BTreeSet<u32>>) -> Grap
         None => body.blocks.iter().flat_map(|block| &block.insns).collect(),
     };
     let widths = _widths_among(named.into_iter(), &wanted);
-    if sparse.is_some() && std::env::var_os("LLRM_CHECK_ROWS").is_some() {
+    if sparse.is_some() && llrm_support::env_set("LLRM_CHECK_ROWS") {
         let whole = _widths_among(body.blocks.iter().flat_map(|block| &block.insns), &wanted);
         assert!(widths == whole, "{}: the widths found from the occurrences differ from the walk's", body.name);
     }
