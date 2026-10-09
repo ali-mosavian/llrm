@@ -714,8 +714,36 @@ fn analysed(
 /// What holds a register where: the occupants' segments and the points that
 /// destroy it.
 pub struct Occupied<'a> {
-    pub segments: IndexMap<Register, Vec<Segment>>,
-    pub masks: &'a allocate::Masks,
+    /// Each register's occupants' segments, sorted by start.
+    segments: IndexMap<Register, Vec<Segment>>,
+    /// The furthest end among a register's segments up to each: sorted, so the
+    /// first that reaches a span is found by search. Values of different views
+    /// of one register (`al` and `ah`) overlap, so ends alone are not sorted.
+    reach: IndexMap<Register, Vec<i64>>,
+    masks: &'a allocate::Masks,
+}
+
+impl<'a> Occupied<'a> {
+    pub fn new(
+        mut segments: IndexMap<Register, Vec<Segment>>,
+        masks: &'a allocate::Masks,
+    ) -> Self {
+        let mut reach = IndexMap::default();
+        for (register, all) in &mut segments {
+            all.sort_by_key(|one| (one.start, one.end));
+            let mut furthest = i64::MIN;
+            reach.insert(
+                *register,
+                all.iter()
+                    .map(|one| {
+                        furthest = furthest.max(one.end);
+                        furthest
+                    })
+                    .collect(),
+            );
+        }
+        Self { segments, reach, masks }
+    }
 }
 
 impl Occupied<'_> {
@@ -728,6 +756,37 @@ impl Occupied<'_> {
         span: (i64, i64),
     ) -> Option<(i64, i64)> {
         let whole = allocate::_whole(register);
+        // Sorted by start, those that meet the span lie between the first that
+        // reaches it and the last that starts before its end.
+        let held = self
+            .segments
+            .get(&whole)
+            .map(
+                |all| {
+                    let from = self.reach[&whole].partition_point(|end| *end <= span.0);
+                    let to = from + all[from..].partition_point(|one| one.start < span.1);
+                    all[from..to]
+                        .iter()
+                        .filter(move |one| one.end > span.0)
+                        .map(move |one| (one.start.max(span.0), one.end.min(span.1) - 1))
+                },
+            );
+        let destroyed = self.masks.destroyed_within(whole, width, span.0, span.1);
+        let found =
+            held.into_iter().flatten().chain(destroyed).reduce(|one, other| (one.0.min(other.0), one.1.max(other.1)));
+        if llrm_support::env_set("LLRM_CHECK_OCCUPIED") {
+            assert_eq!(found, self.interference_by_scan(whole, width, span), "interference in span {span:?}");
+        }
+        found
+    }
+
+    /// `interference`, looking at every segment and point.
+    fn interference_by_scan(
+        &self,
+        whole: Register,
+        width: u32,
+        span: (i64, i64),
+    ) -> Option<(i64, i64)> {
         let inside = Segment { start: span.0, end: span.1 };
         let held = self
             .segments
@@ -1710,11 +1769,40 @@ mod tests {
             intervals::Segment { start: slot(0x20, 1), end: index.span[&0x20].1 },
         ];
         let masks = crate::backend::allocate::Masks::default();
-        let occupied = super::Occupied { segments: IndexMap::from_iter([(Register::EAX, taken)]), masks: &masks };
+        let occupied = super::Occupied::new(IndexMap::from_iter([(Register::EAX, taken)]), &masks);
         let regions = super::placed(&body, 3, &index, &(&live.0, &live.1), &bundles, &[Register::AX], &occupied, 2);
         let first = regions.first().expect("a region");
         assert_eq!(first.spans.get(&0x10), Some(&vec![(0, 3)]), "{regions:?}");
         assert_eq!(first.spans.get(&0x20), Some(&vec![(0, 1)]), "{regions:?}");
+    }
+
+    /// A block's interference asked every point that destroys a register in the
+    /// function (and every segment the register held): d_faces -O1 asked 490
+    /// splits x blocks x ~1k points, 2.1 G of 30 G instructions. It asks the
+    /// points and segments in the span only, and finds the same.
+    #[test]
+    fn test_interference_in_a_span_does_not_walk_the_functions_points() {
+        use crate::backend::allocate::{Mask, Masks};
+        let points: Vec<Mask> = (0..1000)
+            .map(|at| Mask {
+                slot: at * 10,
+                during: BTreeSet::from([Register::EAX]),
+                high: BTreeSet::new(),
+                before: BTreeSet::new(),
+            })
+            .collect();
+        let masks = Masks::new(points);
+        // `al` and `ah` values of one register overlap: the long one first.
+        let taken = vec![
+            intervals::Segment { start: 5000, end: 5100 },
+            intervals::Segment { start: 5010, end: 5020 },
+            intervals::Segment { start: 5030, end: 5040 },
+        ];
+        let occupied = super::Occupied::new(IndexMap::from_iter([(Register::EAX, taken)]), &masks);
+        assert_eq!(occupied.interference(Register::AX, 2, (5025, 5026)), Some((5025, 5025)), "the long segment");
+        assert_eq!(occupied.interference(Register::AX, 2, (5101, 5105)), None);
+        assert_eq!(occupied.interference(Register::AX, 2, (0, 1)), Some((0, 0)), "the first point");
+        assert_eq!(masks.walked(), 0, "every point of the function was walked");
     }
 
     /// A range in one block whose register is taken partway spilled whole;
@@ -1734,7 +1822,7 @@ mod tests {
         let slot = |position: i64| index.span[&0].0 + intervals::PER_INSN * (position + 1);
         let taken = vec![intervals::Segment { start: slot(3), end: slot(5) }];
         let masks = crate::backend::allocate::Masks::default();
-        let occupied = super::Occupied { segments: IndexMap::from_iter([(Register::EAX, taken)]), masks: &masks };
+        let occupied = super::Occupied::new(IndexMap::from_iter([(Register::EAX, taken)]), &masks);
         let got = super::local(&body, 3, &index, &(&live.0, &live.1), &[Register::AX], &occupied, 2).expect("a split");
         assert_eq!(got.spans.get(&0), Some(&vec![(0, 3)]));
     }
