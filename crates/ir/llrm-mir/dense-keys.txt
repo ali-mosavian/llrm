@@ -24,12 +24,12 @@ crates/opt/llrm-analysis/src/interprocedural.rs	1
 crates/opt/llrm-analysis/src/liveness.rs	14
 crates/opt/llrm-analysis/src/loopclone.rs	4
 crates/opt/llrm-analysis/src/manager.rs	15
-crates/opt/llrm-analysis/src/memory.rs	12
+crates/opt/llrm-analysis/src/memory.rs	11
 crates/opt/llrm-analysis/src/memoryssa.rs	13
 crates/opt/llrm-analysis/src/noreturn.rs	6
 crates/opt/llrm-analysis/src/parameter_ranges.rs	2
 crates/opt/llrm-analysis/src/peelsize.rs	5
-crates/opt/llrm-analysis/src/ranges.rs	55
+crates/opt/llrm-analysis/src/ranges.rs	54
 crates/opt/llrm-analysis/src/regions.rs	10
 crates/opt/llrm-analysis/src/ssa.rs	13
 crates/opt/llrm-transforms/src/algebraic.rs	5
