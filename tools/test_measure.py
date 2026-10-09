@@ -182,3 +182,39 @@ def test_the_anchor_is_fifty_merges_back_or_a_week_back_whichever_is_nearer(tmp_
     assert measure.git("log", "-1", "--format=%s", measure.anchor_of(quiet, cwd=tmp_path / "quiet"), cwd=tmp_path / "quiet") == "c5"
     short = _repo(tmp_path / "short", [0, 1])  # fewer commits than either: the first
     assert measure.git("log", "-1", "--format=%s", measure.anchor_of(short, cwd=tmp_path / "short"), cwd=tmp_path / "short") == "c0"
+
+
+def test_a_concave_base_made_linear_has_not_got_worse_and_a_real_n_squared_has():
+    """'straight O1/O2 lir peephole' had D = -21.5 on main (its thrash ramp is concave up to a cap) and +8.2 on a branch whose step is
+    nearly linear with a 2N cost 0.90x: the rise of D from -21.5 to +8.2 failed it. Only the superlinear work above nothing counts."""
+    whole = 300.0
+    step = lambda *c: [*c, whole]
+    concave = made(passes={"s O2 x": step(*cost(5, 1.0, -0.0005))}, axes={"s O2": cost(0, 1000, -0.5)})
+    linear = made(passes={"s O2 x": step(*cost(5, 0.9, 0))}, axes={"s O2": cost(0, 900, 0)})
+    assert measure.rises(concave, linear, TOL)[1] == []
+    quadratic = made(passes={"s O2 x": step(*cost(5, 0.9, 0.0004))}, axes={"s O2": cost(0, 900, 1.0)})
+    bad = measure.rises(concave, quadratic, TOL)[1]
+    assert any("s O2 x" in line for line in bad) and any("s O2:" in line for line in bad)
+
+
+def test_a_flagged_row_names_the_numbers_it_compared(capsys):
+    """regparm16 read 'live O1/O2 lir peephole 2N x1.066' from `check` and x1.027 from `show` on what it took to be the same
+    measurements: the line gave a ratio and not the three costs and the base's, so which side was read wrong could not be told."""
+    base = made(passes={"live O1 lir peephole": [52.2, 91.4, 169.6, 6000.0]})
+    now = made(passes={"live O1 lir peephole": [52.5, 93.3, 180.8, 6000.0]})
+    lines, bad = measure.rises(base, now, TOL)
+    assert any("52.5/93.3/180.8 against 52.2/91.4/169.6" in line for line in bad + lines), (lines, bad)
+
+
+def test_compare_reads_two_stored_measurements_and_agrees_with_rises(monkeypatch, capsys):
+    """`check` measures and compares; `compare` only compares what is stored, by the same `rises`, so the two cannot read one pair of
+    measurements differently."""
+    base = made(passes={"live O1 lir peephole": [52.2, 91.4, 169.6, 6000.0]})
+    now = made(passes={"live O1 lir peephole": [52.5, 93.3, 180.8, 6000.0]})
+    store = {"b" * 40: base, "c" * 40: now}
+    monkeypatch.setattr(measure, "git", lambda *a, **k: a[-1] * 40 if len(a[-1]) == 1 else a[-1])
+    monkeypatch.setattr(measure, "method", lambda: "m")
+    monkeypatch.setattr(measure, "stored", lambda sha, which: store.get(sha))
+    assert measure.compare("b", "c") == 1
+    assert "52.5/93.3/180.8 against 52.2/91.4/169.6" in capsys.readouterr().out
+    assert measure.compare("b", "b") == 0

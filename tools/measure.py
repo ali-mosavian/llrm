@@ -192,13 +192,19 @@ def second(half: float, small: float, big: float) -> float:
     return big - 3 * small + 2 * half
 
 
+def superlinear(half: float, small: float, big: float) -> float:
+    """`second` where it is above nothing: a sublinear cost (a ramp that flattens, a cap) has a negative one, which is no credit a later
+    superlinear term may spend. A base that was concave and is now linear has not got worse; one that was linear and grows N^2 has."""
+    return max(0.0, second(half, small, big))
+
+
 def axis_rises(base: dict[str, list[int]], now: dict[str, list[int]], tol: dict) -> tuple[list[str], list[str]]:
     """Per axis and level: the second difference may not rise by more than `excess` of the base's cost at 2N, nor the cost at 2N by `worst`."""
     lines, bad = [], []
     for key in sorted(base.keys() & now.keys()):
         (half, small, big), (was_half, was_small, was_big) = now[key], base[key]
-        more = second(half, small, big) - second(was_half, was_small, was_big)
-        lines.append(f"{key}: second difference {second(half, small, big) / was_big:+.4f} of the base's 2N (base {second(was_half, was_small, was_big) / was_big:+.4f}), 2N x{big / was_big:.4f}")
+        more = superlinear(half, small, big) - superlinear(was_half, was_small, was_big)
+        lines.append(f"{key}: second difference {second(half, small, big) / was_big:+.4f} of the base's 2N (base {second(was_half, was_small, was_big) / was_big:+.4f}), 2N x{big / was_big:.4f} ({half}/{small}/{big} against {was_half}/{was_small}/{was_big})")
         if more > tol["excess"] * was_big:
             bad.append(f"{key}: superlinear work grew by {more / was_big:.4f} of the base's cost at 2N (> {tol['excess']}): a step is superlinear where it was not")
         if big > was_big * tol["worst"]:
@@ -215,10 +221,11 @@ def step_rises(base: dict[str, list[float]], now: dict[str, list[float]], tol: d
         if big < tol["high"] * whole:
             continue
         was_half, was_small, was_big, _ = base.get(key, [half, small, big, whole])
-        more = second(half, small, big) - (second(was_half, was_small, was_big) if key in base else 0.0)
+        more = superlinear(half, small, big) - (superlinear(was_half, was_small, was_big) if key in base else 0.0)
         if more > tol["step_excess"] * whole or (key in base and big > was_big * tol["pass_slack"]):
-            lines.append(f"{key}: second difference {second(half, small, big):.1f} Minstr (base {second(was_half, was_small, was_big) if key in base else 0.0:.1f}), 2N x{big / was_big:.3f}")
-            bad.append(f"{key}: superlinear work {second(half, small, big):.1f} Minstr rose by {more / whole:.4f} of the compile (> {tol['step_excess']}), or 2N x{big / was_big:.3f}")
+            shown = f"{half}/{small}/{big} against {was_half}/{was_small}/{was_big}"
+            lines.append(f"{key}: second difference {second(half, small, big):.1f} Minstr (base {second(was_half, was_small, was_big) if key in base else 0.0:.1f}), 2N x{big / was_big:.3f} ({shown})")
+            bad.append(f"{key}: superlinear work {second(half, small, big):.1f} Minstr rose by {more / whole:.4f} of the compile (> {tol['step_excess']}), or 2N x{big / was_big:.3f} ({shown})")
     return lines, bad
 
 
@@ -306,15 +313,31 @@ def check(jobs: int, ref: str) -> int:
     return 0
 
 
+def compare(base_sha: str, sha: str) -> int:
+    """`check` over two stored measurements of the current method: the same lines and verdict, nothing measured. A reading that
+    disagrees with a fresh `show` is then a disagreement of the measurements, not of the comparison."""
+    which = method()
+    base, now = (stored(git("rev-parse", one), which) for one in (base_sha, sha))
+    if base is None or now is None:
+        print(f"no stored measurement of {base_sha if base is None else sha} by this method ({which})")
+        return 2
+    lines, bad = rises(base, now)
+    print("\n".join(lines))
+    print(*(["COMPILE COST RISE:", *bad] if bad else ["no rise past tolerance"]), sep="\n  ")
+    return 1 if bad else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=["check", "record", "show", "creep"])
-    parser.add_argument("rest", nargs="*", help="record: SHA [BIN]")
+    parser.add_argument("command", choices=["check", "record", "show", "creep", "compare"])
+    parser.add_argument("rest", nargs="*", help="record: SHA [BIN]; compare: BASE_SHA SHA, two stored measurements, nothing measured")
     parser.add_argument("--base", default=os.environ.get("LLRM_MEASURE_REF", "origin/main"), help="check: the branch the merge-base is taken with")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "4")))
     args = parser.parse_args()
     if args.command == "check":
         return check(args.jobs, args.base)
+    if args.command == "compare":
+        return compare(*args.rest)
     if args.command == "creep":
         return creep(args.jobs, args.rest[0] if args.rest else "HEAD")
     if args.command == "record":
