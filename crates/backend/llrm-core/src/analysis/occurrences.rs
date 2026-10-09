@@ -71,6 +71,23 @@ impl Occurrences {
         found
     }
 
+    /// From a plan: the instructions that will name values, as (block, position, values defined, values read), in the order the body
+    /// holds them. For values the body does not hold yet (the spiller's homes), whose intervals are asked of the body with the plan applied.
+    pub fn planned(named: &[(usize, usize, BTreeSet<u32>, BTreeSet<u32>)]) -> Self {
+        let mut found = Self::default();
+        for (block, position, defined, used) in named {
+            for value in defined.union(used) {
+                found.by_value.entry(*value).or_default().push(Named { place: (*block, *position), defined: defined.contains(value), used: used.contains(value), mentions: 1 });
+            }
+        }
+        found
+    }
+
+    /// The intervals of `values` (ascending) found from the occurrences, unweighed.
+    pub fn ranges(&self, body: &LirBody, index: &Indexes, values: &[u32]) -> IndexMap<u32, Interval> {
+        intervals::intervals_by_occurrences(body, index, values, &self.occurrences())
+    }
+
     /// How many times this body's facts have scanned it for occurrences, for a test that a caller that has the postings does not.
     pub fn scans(body: &LirBody) -> usize {
         body.facts.0.counted("occurrence-scans")
