@@ -11,7 +11,7 @@ use llrm_mir::passes::{
 use llrm_mir::target::{Machine, Neutral};
 use llrm_support::hash::IndexMap;
 
-use super::{Annotated, CallEffects, DominatedEdges, Pointers, Registers, Summaries, ThroughMemory};
+use super::{Annotated, CallEffects, DominatedEdges, GlobalsAA, Pointers, Registers, Summaries, ThroughMemory};
 use crate::alias::{self, Procedure};
 use crate::cfg::Shape;
 use crate::consts::{self, Calls};
@@ -746,7 +746,8 @@ b0:
     let shape = crate::cfg::Shape::of(function);
     let exposed = crate::memory::exposed_frames(&Unit::of(&module, &layout, function));
     let program = analyses.program().clone();
-    let unit = super::summarized_in(&module, &program, Result::as_ref(&*globals).unwrap(), &shape, &exposed, function);
+    let unit =
+        super::summarized_in(&module, &program, Result::as_ref(&*globals).unwrap(), &shape, &exposed, None, function);
     assert_eq!(kept, format!("{:?}", crate::alias::CallFacts::of(&unit)));
 }
 
@@ -797,7 +798,8 @@ b0:
     let shape = crate::cfg::Shape::of(function);
     let exposed = crate::memory::exposed_frames(&Unit::of(&module, &layout, function));
     let program = analyses.program().clone();
-    let unit = super::summarized_in(&module, &program, Result::as_ref(&*globals).unwrap(), &shape, &exposed, function);
+    let unit =
+        super::summarized_in(&module, &program, Result::as_ref(&*globals).unwrap(), &shape, &exposed, None, function);
     assert_eq!(format!("{again:?}"), format!("{:?}", crate::alias::CallFacts::of(&unit)));
 }
 
@@ -846,4 +848,20 @@ fn test_pointers_and_call_effects_of_a_body_solve_its_pointer_values_once() {
     analyses.get::<Pointers>(context, &layout, f);
     analyses.get::<CallEffects>(context, &layout, f);
     assert_eq!(crate::alias::value_solves() - before, 1, "the value solve was made again");
+}
+
+/// `Summaries` solved where every pointer points for the direct summary, for
+/// the calls' facts and for each summarized call: 4 to 5 value solves a body
+/// state, 11.0% of QCport's -O1 compile with the rest of the family. One a
+/// body.
+#[test]
+fn summaries_solve_the_pointer_values_of_a_body_once() {
+    let module = parsed(
+        "declare void @g(ptr)\n\ndefine void @f(ptr %a) {\nentry:\n  %p = getelementptr i8, ptr %a, i16 2\n  call void @g(ptr %p)\n  call void @g(ptr %a)\n  ret void\n}\n",
+    );
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    analyses.get::<GlobalsAA>(&module);
+    let before = crate::alias::value_solves();
+    analyses.get::<Summaries>(&module);
+    assert_eq!(crate::alias::value_solves() - before, 1, "Summaries solved a body's pointer values again");
 }

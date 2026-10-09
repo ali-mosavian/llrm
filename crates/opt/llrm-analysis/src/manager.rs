@@ -132,7 +132,7 @@ impl ModuleAnalysis for Summaries {
         // other facts, the calls are found again.
         let mut body_facts = body_facts(module, &program.layout, program.target.spaces(), kept);
         if !memo.globals.as_ref().is_some_and(|then| Rc::ptr_eq(then, &globals_held)) {
-            body_facts.values_mut().for_each(|one| one.calls = None);
+            body_facts.values_mut().for_each(|one| (one.calls, one.values) = (None, None));
         }
         calls_found(module, &program, globals, &shapes, &mut body_facts);
         let procedures = procedures(module, &program, globals, &shapes, &body_facts);
@@ -221,6 +221,10 @@ struct BodyFacts {
     mark: Mark,
     exposed: Rc<BTreeSet<ValueId>>,
     calls: Option<Rc<alias::CallFacts>>,
+    /// Where each pointer points, found once for the direct summary, each
+    /// call's and the calls' facts, which all ask it; under the globals' facts
+    /// as `calls` is.
+    values: Option<Rc<alias::PointValues>>,
 }
 
 /// The exposed frames of each of `module`'s bodies, found once for the
@@ -243,6 +247,7 @@ fn body_facts(
                         &Unit::of(module, layout, function).with_spaces(spaces),
                     )),
                     calls: None,
+                    values: None,
                 },
             };
             (id, facts)
@@ -258,12 +263,17 @@ fn summarized_in<'a>(
     globals: &'a Globals,
     shape: &'a Shape,
     exposed: &'a BTreeSet<ValueId>,
+    values: Option<&'a alias::PointValues>,
     function: &'a llrm_mir::module::Function,
 ) -> Unit<'a> {
-    Unit { program: Some(program), ..Unit::of(module, &program.layout, function) }
+    let unit = Unit { program: Some(program), ..Unit::of(module, &program.layout, function) }
         .with_globals_aa(globals)
         .with_shape(shape)
-        .with_exposed(exposed)
+        .with_exposed(exposed);
+    match values {
+        Some(values) => unit.with_point_values(values),
+        None => unit,
+    }
 }
 
 /// The calls of each body `facts` has none for, as the unit it is summarized in
@@ -277,6 +287,10 @@ fn calls_found(
 ) {
     for (id, function) in bodies(module) {
         let one = facts.get_mut(&id).expect("facts for every body");
+        if one.values.is_none() {
+            let unit = summarized_in(module, program, globals, &shapes[&id], &one.exposed, None, function);
+            one.values = alias::point_values(&unit).ok().map(Rc::new);
+        }
         if one.calls.is_none() {
             one.calls = Some(Rc::new(alias::CallFacts::of(&summarized_in(
                 module,
@@ -284,6 +298,7 @@ fn calls_found(
                 globals,
                 &shapes[&id],
                 &one.exposed,
+                one.values.as_deref(),
                 function,
             ))));
         }
@@ -305,7 +320,15 @@ fn procedures<'a>(
             Some((
                 name,
                 Procedure::with(
-                    summarized_in(module, program, globals, &shapes[&id], &one.exposed, function),
+                    summarized_in(
+                        module,
+                        program,
+                        globals,
+                        &shapes[&id],
+                        &one.exposed,
+                        one.values.as_deref(),
+                        function,
+                    ),
                     Rc::clone(one.calls.as_ref().expect("found before")),
                 ),
             ))
