@@ -1,4 +1,5 @@
-//! Each fixture is rustfmt output (`NAME.in.rs`) and what the pass must make of it (`NAME.out.rs`).
+//! Each fixture is rustfmt output (`NAME.in.rs`) and what the pass must make of
+//! it (`NAME.out.rs`).
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -23,7 +24,7 @@ fn rustfmt(text: &str) -> String {
 
 /// What fmt.sh does to a file.
 fn pipeline(text: &str) -> String {
-    let broken = rfmt_post::matches_only(&rustfmt(text)).unwrap().0;
+    let broken = rfmt_post::pre(&rustfmt(text)).unwrap().0;
     rfmt_post::format(&rustfmt(&broken)).unwrap().0
 }
 
@@ -60,3 +61,6 @@ fixture!(matches_vertical);
 fixture!(matches_closure);
 fixture!(comment_in_operands);
 fixture!(nested);
+fixture!(comment_trailing);
+fixture!(comment_wrap);
+fixture!(comment_exempt);
