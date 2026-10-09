@@ -19,7 +19,7 @@ pub use register::PhysicalRegister;
 /// the environment lock and scans it on every call: the `LLRM_CHECK_*` switches asked in a loop (once for each instruction's liveness
 /// effect) were 2% of a compile of rectwo. The variables are those the process started with; none is set afterwards.
 pub fn env_set(name: &str) -> bool {
-    static NAMES: std::sync::OnceLock<std::collections::HashSet<std::ffi::OsString>> = std::sync::OnceLock::new();
+    static NAMES: std::sync::OnceLock<hash::HashSet<std::ffi::OsString>> = std::sync::OnceLock::new();
     NAMES.get_or_init(|| std::env::vars_os().map(|(name, _)| name).collect()).contains(std::ffi::OsStr::new(name))
 }
 
