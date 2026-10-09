@@ -2088,3 +2088,14 @@ fn test_a_constant_count_with_another_way_out_keeps_its_counter() {
     let printed = same(&leaving("32", 5), &[&[0, 9], &[0, 0], &[0, 3000]]);
     assert!(!printed.lines().any(|line| line.contains("icmp ne i16") && line.ends_with(", 0")), "{printed}");
 }
+
+/// The search priced a set of counters from nothing every time it met it: from each of its two starts, in each step's
+/// neighbours, and again to rank the two answers. A set is priced once (the dot product asked 423 times and priced 146 sets).
+#[test]
+fn test_a_set_of_counters_is_priced_once_however_often_the_search_meets_it() {
+    let text = program(&[("a", "i16", 2), ("b", "i16", 2)], "i32", DOT).replace("br label %l2.back\n\nl2.back:\n  br label %l1", "br label %l1").replace("%l2.back ]", "%l2 ]");
+    super::TOTALS.with(|counts| counts.set((0, 0)));
+    same(&text, TRIPS);
+    let (asked, priced) = super::TOTALS.with(std::cell::Cell::get);
+    assert!(asked > 0 && priced < asked, "asked {asked} sets, priced {priced}");
+}
