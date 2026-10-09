@@ -93,6 +93,14 @@ doc = "Whether `console_read_key` would not wait. What it says at the end of red
 args = []
 returns = "bool"
 
+# The speaker.
+[[op]]
+group = "sound"
+name = "speaker_tone"
+doc = "Sounds a tone of `hertz` until the next call; 0 is silence."
+args = [["hertz", "usize"]]
+returns = "void"
+
 # The time of day.
 [[op]]
 group = "clock"

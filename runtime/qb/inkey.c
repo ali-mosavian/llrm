@@ -1,4 +1,5 @@
 /* INKEY$ (QB rt/gwkey.asm B$INKY): the next key typed, without waiting. */
+#include "console.h"
 #include "error.h"
 #include "llrm_os.h"
 #include "nhstutil.h"
@@ -14,6 +15,7 @@ SD *B_INKY(void)
     SD *key;
     byte code;
 
+    cn_sync();
     if (!llrm_os_console_key_ready())
         return &str_nul;
     code = llrm_os_console_read_key();

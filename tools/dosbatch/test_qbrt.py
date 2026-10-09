@@ -54,6 +54,40 @@ def test_program_matches_bcom45_byte_for_byte(results, name: str):
     assert result.screen_difference == ""
 
 
+@pytest.fixture(scope="module")
+def demos(tmp_path_factory):
+    """The Microsoft demo programs, built and run the same way."""
+    found, reason = qbruntime.demo_sources()
+    if not found or not qbruntime.dosbatch.QB45.is_dir():
+        pytest.skip(reason or "QB45_DIR is unavailable")
+    work = tmp_path_factory.mktemp("demos")
+    objects = {}
+    for filename, source in found.items():
+        name = source.stem.upper()
+        pair = (work / f"{name}.qb45.obj", work / f"{name}.llrm.obj")
+        for runtime, obj in zip(("qb45", "llrm"), pair):
+            error = qbruntime.compile_basic(source, obj, runtime)
+            assert error is None, error
+        objects[name] = (*pair, *qbruntime.linked_objects(source, work))
+    archive, _ = qbruntime.build(work / "archive")
+    return qbruntime.differential_batch(objects, archive, work / "differential")
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "NIBBLES",
+        pytest.param("GORILLA", marks=pytest.mark.xfail(strict=True, reason="graphics, sound and ON ERROR are not here yet")),
+    ],
+)
+def test_demo_introduction_matches_bcom45(demos, name: str):
+    """Both draw the same introduction and wait for a key (NIBBLES's random sparkles aside)."""
+    result = demos[name]
+    assert result.candidate.status in ("ok", "stopped"), result.candidate.detail
+    assert result.reference.status in ("ok", "stopped")
+    assert result.screen_difference == ""
+
+
 def symbols(obj: Path, kind: int) -> set[str]:
     """The names an OMF object defines (PUBDEF, 0x90) or references (EXTDEF, 0x8C)."""
     data, at, found = obj.read_bytes(), 0, set()

@@ -4,6 +4,7 @@
 #include "console.h"
 #include "fout.h"
 #include "input.h"
+#include "using.h"
 #include "nhstutil.h"
 
 enum Terminator { COMMA, SEMI, EOL };
@@ -44,9 +45,24 @@ static void numeral(char *text, unsigned length, enum Terminator end)
     terminate(end);
 }
 
+/* The end of an item of a PRINT USING: a separator adds nothing, and the end of
+   the statement finishes the format. */
+static int using_item_end(enum Terminator end)
+{
+    if (end == EOL)
+        using_end(1);
+    return 1;
+}
+
 static void number(long v, enum Terminator end)
 {
     char text[FOUT_MAX];
+
+    if (using_active()) {
+        using_integer(v);
+        using_item_end(end);
+        return;
+    }
 
     numeral(text, fout_i4(v, text), end);
 }
@@ -55,11 +71,22 @@ static void real(double v, int is_double, enum Terminator end)
 {
     char text[FOUT_MAX];
 
+    if (using_active()) {
+        using_real(v, is_double);
+        using_item_end(end);
+        return;
+    }
+
     numeral(text, fout_real(v, is_double, text), end);
 }
 
 static void string(SD *sd, enum Terminator end)
 {
+    if (using_active()) {
+        using_string(sd);
+        using_item_end(end);
+        return;
+    }
     room(sd->len);
     cn_write(sd->ptr, sd->len);
     str_tmp_free(sd);
@@ -71,6 +98,15 @@ static void string(SD *sd, enum Terminator end)
 void B_PEOS(void)
 {
     input_end();
+    if (using_active())
+        using_end(0);
+}
+
+/* B$USNG: PRINT USING, with the format. */
+void B_USNG(SD *format)
+{
+    using_begin(format);
+    str_tmp_free(format);
 }
 
 void B_PCI2(int v) { number(v, COMMA); }
@@ -89,6 +125,7 @@ void B_PCSD(SD *sd) { string(sd, COMMA); }
 void B_PSSD(SD *sd) { string(sd, SEMI); }
 void B_PESD(SD *sd) { string(sd, EOL); }
 #pragma aux B_PEOS "B$PEOS"
+#pragma aux B_USNG "B$USNG"
 #pragma aux B_PCI2 "B$PCI2"
 #pragma aux B_PSI2 "B$PSI2"
 #pragma aux B_PEI2 "B$PEI2"

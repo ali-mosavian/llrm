@@ -21,6 +21,7 @@ video_set_cursor = 0x02
 video_get_cursor = 0x03
 video_scroll_up = 0x06
 video_get_mode = 0x0F
+timer_clock = 1193182
 dpmi_int = 0x31
 dpmi_alloc = 0x0501
 

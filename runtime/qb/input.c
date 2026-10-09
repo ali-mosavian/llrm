@@ -63,6 +63,7 @@ static void read_line(void)
     byte key;
 
     for (;;) {
+        cn_sync();
         key = llrm_os_console_read_key();
         if (key == END_OF_FILE)
             qb_error(BE_PASTEND);

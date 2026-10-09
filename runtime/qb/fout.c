@@ -101,17 +101,24 @@ static unsigned scientific(
     return length;
 }
 
+/* The digits of `v` rounded to 7 places (SINGLE) or 16 (DOUBLE), and the
+   exponent of the last of them: v = 0.d1d2... * 10^(*exponent + count). */
+void fout_digits(double v, int is_double, Decimal *d, int *exponent)
+{
+    i8_output(v, d);
+    *exponent = d->exponent;
+    if (!(d->count == 1 && d->text[0] == '0'))
+        *exponent -= d->count;
+    round_digits(d, exponent, is_double ? DOUBLE_DIGITS : SINGLE_DIGITS);
+}
+
 unsigned fout_real(double v, int is_double, char *out)
 {
     Decimal d;
     int limit = is_double ? DOUBLE_DIGITS : SINGLE_DIGITS, exponent;
     int magnitude;
 
-    i8_output(v, &d);
-    exponent = d.exponent;
-    if (!(d.count == 1 && d.text[0] == '0'))
-        exponent -= d.count;
-    round_digits(&d, &exponent, limit);
+    fout_digits(v, is_double, &d, &exponent);
     out[0] = d.sign;
     magnitude = exponent < 0 ? -exponent : exponent;
     if (magnitude > limit || exponent + (int)d.count > limit)

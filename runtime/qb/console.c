@@ -145,12 +145,24 @@ static void put(char c)
         put_stream(c);
 }
 
+/* The hardware cursor follows only when something is going to look at it: a key
+   is waited for, or the program ends. */
+static int cursor_stale;
+
 static void finish(void)
 {
     if (on_screen)
-        llrm_os_screen_move(row, column < columns ? column : columns - 1);
+        cursor_stale = 1;
     else
         flush();
+}
+
+void cn_sync(void)
+{
+    if (cursor_stale) {
+        llrm_os_screen_move(row, column < columns ? column : columns - 1);
+        cursor_stale = 0;
+    }
 }
 
 byte cn_pos(void)

@@ -39,8 +39,15 @@ def library(runtime: str, candidate: Path, empty: Path) -> Path | None:
         raise ValueError(f"unknown QB runtime '{runtime}'") from error
 
 
+# A run-time error message names the address of the statement that raised it, which depends on the
+# code each compiler generated: the two are not compared.
+ERROR_ADDRESS = re.compile(rb"(in module \S+ at address )[0-9A-F]{4}:[0-9A-F]{4}")
+
+
 def first_byte_difference(want: bytes, got: bytes) -> str:
-    """The first raw-output difference, including whitespace and line endings."""
+    """The first raw-output difference, including whitespace and line endings, but for the address in a
+    run-time error message."""
+    want, got = ERROR_ADDRESS.sub(rb"\1....:....", want), ERROR_ADDRESS.sub(rb"\1....:....", got)
     for at, (left, right) in enumerate(zip(want, got), 1):
         if left != right:
             return f"byte {at}: want {left} got {right}"
@@ -86,7 +93,9 @@ def screen_changes(work: Path, job: int = -1, whole: bool = False) -> tuple[str,
     after = job + 1 if job >= 0 else len(screens) - 1
     if not 0 < after < len(screens):
         return None
-    return screens[after] if whole else screen_delta(screens[after - 1], screens[after])
+    if not whole:
+        return screen_delta(screens[after - 1], screens[after])
+    return screens[after]
 
 
 def first_screen_difference(want: tuple[str, ...], got: tuple[str, ...]) -> str:
@@ -136,16 +145,36 @@ class Differential:
     sizes: tuple[int, int] = (0, 0)
 
 
+# Cells that hold something different on every run: NIBBLES scatters sparkles over its introduction at
+# random, so its asterisks are not compared.
+RANDOM_CELLS = {"NIBBLES": str.maketrans("*", " ")}
+
+
 def draws_screen(name: str) -> bool:
     """Whether a program draws the screen, and so runs with standard output on it: the probes named screen_*
     and the demos."""
     return name.startswith("screen_") or name.upper() in ("NIBBLES", "GORILLA")
 
 
+# The emulated time a demo is given: it waits for a key once its introduction is drawn.
+DEMO_BUDGET_MS = 6000
+
+
+def budget(name: str) -> int | None:
+    """The time a program is given, where it is not the default."""
+    return DEMO_BUDGET_MS if name.upper() in ("NIBBLES", "GORILLA") else None
+
+
 def typed_input(name: str) -> bytes | None:
     """The keys a program is given: its probe's tests/qbrt/<name>.in, if it has one."""
     path = dosbatch.ROOT / "tests" / "qbrt" / f"{name}.in"
     return path.read_bytes() if path.is_file() else None
+
+
+def masked(name: str, screen: tuple[str, ...] | None) -> tuple[str, ...] | None:
+    """A screen without the cells that differ on every run."""
+    table = RANDOM_CELLS.get(name.upper())
+    return screen if table is None or screen is None else tuple(row.translate(table) for row in screen)
 
 
 def differential_batch(
@@ -164,17 +193,17 @@ def differential_batch(
     def session(pairs: list[tuple[str, dosbatch.Job]]):
         results = dosbatch.run([job for _, job in pairs], run)
         return {
-            name: (results[job.stem], raw_output(run, job.stem), screen_changes(run, at, draws_screen(name)), exe_size(run, job.stem))
+            name: (results[job.stem], raw_output(run, job.stem), masked(name, screen_changes(run, at, draws_screen(name))), exe_size(run, job.stem))
             for at, (name, job) in enumerate(pairs)
         }
 
-    reference = session([(n, dosbatch.Job(names[n], "obj", pair[0], objects=pair[2:], screen=draws_screen(n), stdin=typed_input(n))) for n, pair in objects.items()])
+    reference = session([(n, dosbatch.Job(names[n], "obj", pair[0], objects=pair[2:], screen=draws_screen(n), stdin=typed_input(n), budget_ms=budget(n))) for n, pair in objects.items()])
     candidate = session(
         [
             (
                 n,
                 dosbatch.Job(
-                    names[n], "obj", pair[1], runtime="llrmqb", runtime_file=archive, objects=pair[2:], screen=draws_screen(n), stdin=typed_input(n)
+                    names[n], "obj", pair[1], runtime="llrmqb", runtime_file=archive, objects=pair[2:], screen=draws_screen(n), stdin=typed_input(n), budget_ms=budget(n)
                 ),
             )
             for n, pair in objects.items()
@@ -206,7 +235,7 @@ def differential_batch(
 
 def frontend_flags(source: Path) -> list[str]:
     """The llrm-qb options a source's `' flags:` line asks for (the rest are for other compilers)."""
-    for line in source.read_text().splitlines()[:5]:
+    for line in source.read_text(encoding="latin-1").splitlines()[:5]:
         if line.startswith("' flags:"):
             return [word for word in line.split()[2:] if word == "--huge-arrays"]
     return []
@@ -215,7 +244,7 @@ def frontend_flags(source: Path) -> list[str]:
 def linked_objects(source: Path, work: Path) -> tuple[Path, ...]:
     """The objects a source's `' link:` line names, built here: a .nib library by llrm-nib."""
     made = []
-    for line in source.read_text().splitlines()[:5]:
+    for line in source.read_text(encoding="latin-1").splitlines()[:5]:
         if not line.startswith("' link:"):
             continue
         for name in line.split()[2:]:

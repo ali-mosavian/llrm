@@ -93,20 +93,18 @@ static void write_hex(unsigned value)
 static void fatal(unsigned n)
 {
     char name[MODULE_NAME_LENGTH];
-    unsigned length;
 
     if (cn_pos())
         cn_crlf();
     write_text(qb_error_text(n));
     write_text(" in line No line number in module ");
     module_name(name);
-    for (length = MODULE_NAME_LENGTH; length > 1 && name[length - 1] == ' ';)
-        length--;
-    cn_write(name, length);
+    cn_write(name, MODULE_NAME_LENGTH);
     write_text(" at address ");
     write_hex(module_code_segment());
     write_text(":0000");
     cn_crlf();
+    cn_sync();
     llrm_os_exit(255);
 }
 

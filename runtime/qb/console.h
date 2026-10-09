@@ -18,6 +18,8 @@ byte cn_width(void);
 void cn_write(const char *s, unsigned n);
 void cn_putc(char c);
 void cn_crlf(void);
+/* Puts the screen's cursor where the console has it. */
+void cn_sync(void);
 /* Erases the character before the cursor, which is on the same line. */
 void cn_erase(void);
 

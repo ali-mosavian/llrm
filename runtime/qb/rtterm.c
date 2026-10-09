@@ -1,5 +1,6 @@
 /* Termination (QB rt/rtterm.asm): END and the end of the module run the end
    slots, which close files, then the term slots, then leave the program. */
+#include "console.h"
 #include "rtinit.h"
 #include "error.h"
 #include "llrm_os.h"
@@ -10,6 +11,7 @@ static void finish(void)
     if (qb_rt_inited())
         qb_dispatch(V_END);
     qb_dispatch(V_TERM);
+    cn_sync();
     llrm_os_exit(0);
 }
 

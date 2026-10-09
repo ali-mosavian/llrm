@@ -12,6 +12,7 @@ public _llrm_os_exit
 public _llrm_os_console_read_key
 public _llrm_os_console_key_ready
 public _llrm_os_clock_hundredths
+public _llrm_os_speaker_tone
 public _llrm_os_screen_is_console
 public _llrm_os_screen_size
 public _llrm_os_screen_cursor
@@ -268,6 +269,44 @@ _llrm_os_console_key_ready proc far
     and ax, 1
     retf
 _llrm_os_console_key_ready endp
+
+; The speaker: timer channel 2 square wave, gated by port 61h.
+
+TIMER_COMMAND equ 43h
+TIMER_CHANNEL_2 equ 42h
+SQUARE_WAVE_2 equ 0B6h              ; channel 2, low then high byte, mode 3
+SPEAKER_PORT equ 61h
+SPEAKER_ON equ 03h                  ; gate and speaker bits
+
+; _llrm_os_speaker_tone(hertz: usize): the tone, or silence for 0.
+_llrm_os_speaker_tone proc far
+    push bp
+    mov bp, sp
+    mov cx, [bp+6]
+    in al, SPEAKER_PORT
+    jcxz short silent
+    push ax
+    mov dx, DOS_TIMER_CLOCK / 10000h
+    mov ax, DOS_TIMER_CLOCK mod 10000h
+    div cx
+    mov cx, ax
+    mov al, SQUARE_WAVE_2
+    out TIMER_COMMAND, al
+    mov al, cl
+    out TIMER_CHANNEL_2, al
+    mov al, ch
+    out TIMER_CHANNEL_2, al
+    pop ax
+    or al, SPEAKER_ON
+    out SPEAKER_PORT, al
+    pop bp
+    retf
+silent:
+    and al, not SPEAKER_ON
+    out SPEAKER_PORT, al
+    pop bp
+    retf
+_llrm_os_speaker_tone endp
 
 ; The time of day.
 
