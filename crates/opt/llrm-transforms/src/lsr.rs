@@ -418,7 +418,7 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target, pres
     }
     let candidates = _candidates(view, target, &users, &sites, exit.as_ref());
     let web_values = users.values.keys().copied().collect::<BTreeSet<_>>();
-    let live = _live_anyway(function, loop_, &users, exit.as_ref());
+    let live = _live_anyway(function, pressure.found(), loop_, &users, exit.as_ref());
     let cells = pressure.cells();
     let fixed = _fixed(view, outer, loop_, target.room, pressure, &web_values, &users, exit.as_ref(), &live);
     // The web's reads are the uses the choice replaces; each use adds its own back.
@@ -589,7 +589,7 @@ fn _steps_before_test(function: &Function, proof: &CountedLoop, candidate: &Cand
 
 /// Values read inside the loop by something other than a recurrence or
 /// the counted exit, or live after it.
-fn _live_anyway(function: &Function, loop_: &Loop, users: &Users, exit: Option<&Exit>) -> BTreeSet<ValueId> {
+fn _live_anyway(function: &Function, found: &liveness::Liveness, loop_: &Loop, users: &Users, exit: Option<&Exit>) -> BTreeSet<ValueId> {
     let mut live = BTreeSet::new();
     for &at in &loop_.body {
         for &inst in function.block(cfg::block(at)).instructions() {
@@ -602,7 +602,6 @@ fn _live_anyway(function: &Function, loop_: &Loop, users: &Users, exit: Option<&
             }));
         }
     }
-    let found = liveness::live(function);
     for &at in &loop_.body {
         for succ in function.successors(cfg::block(at)) {
             if !loop_.body.contains(&cfg::id(succ)) {
