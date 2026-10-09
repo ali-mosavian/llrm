@@ -515,15 +515,39 @@ pub fn _interference(body: &LirBody) -> Graph {
 
 /// `_interference`, of the values in `only` alone where it is given: a caller that asks of a few
 /// values pays for the pairs among them, not for every pair live together.
-pub fn _interference_among(body: &LirBody, only: Option<&BTreeSet<u32>>) -> Graph {
-    ASKED.with(|asked| asked.set(only.map(BTreeSet::len)));
-    let wanted = |value: u32| only.is_none_or(|only| only.contains(&value));
-    // Rows of the values asked of alone: a web of a few is not a liveness over every value in the body.
-    let rows = allocate::live_rows_by(body, wanted);
-    NUMBERED.with(|numbered| numbered.set(rows.numbered()));
-    // A copy's widths are read only where both its values are asked of (an edge needs both).
+/// The rows `_interference_among` reads: the walk's, or those found from where the values occur.
+enum Rows<'a> {
+    Dense(allocate::LiveRows),
+    Web(&'a allocate::WebRows),
+}
+
+impl Rows<'_> {
+    fn numbered(&self) -> usize {
+        match self {
+            Rows::Dense(rows) => rows.numbered(),
+            Rows::Web(rows) => rows.numbered(),
+        }
+    }
+
+    fn entering(&self, at: i64) -> Vec<u32> {
+        match self {
+            Rows::Dense(rows) => rows.entering(at).collect(),
+            Rows::Web(rows) => rows.entering(at).collect(),
+        }
+    }
+
+    fn leaving(&self, at: i64) -> Vec<u32> {
+        match self {
+            Rows::Dense(rows) => rows.leaving(at).collect(),
+            Rows::Web(rows) => rows.leaving(at).collect(),
+        }
+    }
+}
+
+/// The widest each wanted value is named by `insns`.
+fn _widths_among<'a>(insns: impl Iterator<Item = &'a Arc<Insn>>, wanted: &dyn Fn(u32) -> bool) -> IndexMap<u32, u32> {
     let mut widths: IndexMap<u32, u32> = IndexMap::default();
-    for one in body.blocks.iter().flat_map(|block| &block.insns) {
+    for one in insns {
         let mut held: Vec<Held> = match &one.what {
             Some(what) => what.dests.iter().chain(&what.sources).flat_map(ir::values).collect(),
             None => Vec::new(),
@@ -541,6 +565,46 @@ pub fn _interference_among(body: &LirBody, only: Option<&BTreeSet<u32>>) -> Grap
                 widths.insert(*value, had.max(*width));
             }
         }
+    }
+    widths
+}
+
+pub fn _interference_among(body: &LirBody, only: Option<&BTreeSet<u32>>) -> Graph {
+    ASKED.with(|asked| asked.set(only.map(BTreeSet::len)));
+    let wanted = |value: u32| only.is_none_or(|only| only.contains(&value));
+    // Rows of the values asked of alone: a web of a few is not a liveness over every value in the body, nor found by walking every
+    // instruction: from where the values occur, in a body with no phis.
+    let sparse = only.filter(|_| body.blocks.iter().all(|block| block.phis.is_empty())).map(|only| {
+        crate::backend::postings::following(body, |postings| {
+            let places = postings.occurrences(only);
+            let values: Vec<u32> = only.iter().copied().collect();
+            (allocate::live_rows_among(body, &values, &places), postings.naming(only))
+        })
+    });
+    let rows = match &sparse {
+        Some((web, _)) => Rows::Web(web),
+        None => Rows::Dense(allocate::live_rows_by(body, wanted)),
+    };
+    if let (Some(only), Some((web, _))) = (only, &sparse) {
+        if std::env::var_os("LLRM_CHECK_ROWS").is_some() {
+            let dense = allocate::live_rows_by(body, wanted);
+            for block in &body.blocks {
+                let (a, b): (Vec<u32>, Vec<u32>) = (dense.entering(block.at).filter(|v| only.contains(v)).collect(), web.entering(block.at).collect());
+                let (c, d): (Vec<u32>, Vec<u32>) = (dense.leaving(block.at).filter(|v| only.contains(v)).collect(), web.leaving(block.at).collect());
+                assert!(a == b && c == d, "{}: the rows found from the occurrences differ from the walk in block {:#x}: in {a:?} / {b:?}, out {c:?} / {d:?}", body.name, block.at);
+            }
+        }
+    }
+    NUMBERED.with(|numbered| numbered.set(rows.numbered()));
+    // A copy's widths are read only where both its values are asked of (an edge needs both).
+    let named: Vec<&Arc<Insn>> = match &sparse {
+        Some((_, at)) => at.iter().map(|(block, position)| &body.blocks[*block as usize].insns[*position as usize]).collect(),
+        None => body.blocks.iter().flat_map(|block| &block.insns).collect(),
+    };
+    let widths = _widths_among(named.into_iter(), &wanted);
+    if sparse.is_some() && std::env::var_os("LLRM_CHECK_ROWS").is_some() {
+        let whole = _widths_among(body.blocks.iter().flat_map(|block| &block.insns), &wanted);
+        assert!(widths == whole, "{}: the widths found from the occurrences differ from the walk's", body.name);
     }
     let mut graph: Graph = IndexMap::default();
 
@@ -568,7 +632,7 @@ pub fn _interference_among(body: &LirBody, only: Option<&BTreeSet<u32>>) -> Grap
         crate::backend::postings::following(body, |postings| only.iter().flat_map(|value| postings.defs(*value).iter().chain(postings.uses(*value))).map(|at| at.0 as usize).collect())
     });
     for (block_index, block) in body.blocks.iter().enumerate() {
-        let mut alive: BTreeSet<u32> = rows.leaving(block.at).filter(|one| wanted(*one)).collect();
+        let mut alive: BTreeSet<u32> = rows.leaving(block.at).into_iter().filter(|one| wanted(*one)).collect();
         if let Some(touched) = &touched {
             let quiet = !touched.contains(&block_index)
                 && !entries.contains(&block.at)
@@ -579,7 +643,7 @@ pub fn _interference_among(body: &LirBody, only: Option<&BTreeSet<u32>>) -> Grap
             }
         }
         if entries.contains(&block.at) {
-            all_pairs(&mut graph, &rows.entering(block.at).filter(|one| wanted(*one)).collect());
+            all_pairs(&mut graph, &rows.entering(block.at).into_iter().filter(|one| wanted(*one)).collect());
         }
         let mut index = block.insns.len() as i64 - 1;
         while index >= 0 {
