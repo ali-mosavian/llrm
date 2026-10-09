@@ -3,7 +3,7 @@
   {"name": "B$CENP", "milestone": "m1", "status": "implemented", "module": "platform/qb/dos/m16/start.asm"},
   {"name": "B$CLOS", "milestone": "m1", "status": "implemented", "module": "platform/qb/dos/m16/file_abi.asm"},
   {"name": "B$DDIM", "milestone": "m1", "status": "implemented", "module": "runtime/qb/array.c"},
-  {"name": "B$DSG0", "milestone": "m1", "status": "planned"},
+  {"name": "B$DSG0", "milestone": "m1", "status": "implemented", "module": "platform/qb/dos/m16/text.asm"},
   {"name": "B$ENRA", "milestone": "m1", "status": "implemented", "module": "platform/qb/dos/m16/frame.asm"},
   {"name": "B$ERAS", "milestone": "m1", "status": "implemented", "module": "runtime/qb/array.c"},
   {"name": "B$EXSA", "milestone": "m1", "status": "implemented", "module": "platform/qb/dos/m16/frame.asm"},
@@ -17,5 +17,5 @@
   {"name": "B$SPAC", "milestone": "m1", "status": "implemented", "module": "runtime/qb/string.c"},
   {"name": "B$STDL", "milestone": "m1", "status": "implemented", "module": "runtime/qb/string.c"},
   {"name": "B$STI4", "milestone": "m1", "status": "implemented", "module": "platform/qb/dos/m16/text.asm"},
-  {"name": "b$seg", "milestone": "m1", "status": "planned", "kind": "data"}
+  {"name": "b$seg", "milestone": "m1", "status": "implemented", "module": "platform/qb/dos/m16/text.asm", "kind": "data"}
 ]

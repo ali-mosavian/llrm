@@ -9,11 +9,14 @@ extrn _llrm_os_write_file:far
 public B$STI4
 public B$LTRM
 public B$PESD
+public B$DSG0
+public b$seg
 
 .data
 qb_temp_descriptor dw 0, offset qb_temp_data
 qb_temp_data db 12 dup (0)
 qb_newline db 13, 10
+b$seg dw 0
 
 RUNTIME_TEXT segment para public 'CODE'
 ; STR$(long): the long is low word then high word.  QB prefixes a positive
@@ -105,6 +108,13 @@ B$PESD proc far
     pop bp
     retf 2
 B$PESD endp
+
+; DEF SEG without an operand restores the runtime's default data segment.
+B$DSG0 proc far
+    mov ax, ds
+    mov b$seg, ax
+    retf
+B$DSG0 endp
 
 RUNTIME_TEXT ends
 end
