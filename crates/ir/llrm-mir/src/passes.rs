@@ -597,6 +597,19 @@ pub struct Outer {
     pub globals: Rc<Vec<GlobalValue>>,
     program: Rc<ProgramProxy>,
     modules: HashMap<TypeId, Rc<dyn Any>>,
+    held: Held,
+}
+
+/// What the module's analyses and its function managers hold together, by
+/// type: a result no one of them owns (`ModuleAnalyses::held`).
+pub type Held = Rc<std::cell::RefCell<HashMap<TypeId, Rc<dyn Any>>>>;
+
+/// The `T` in `held`, made empty the first time.
+fn held_of<T: Default + 'static>(held: &Held) -> Rc<std::cell::RefCell<T>> {
+    let one = Rc::clone(
+        held.borrow_mut().entry(TypeId::of::<T>()).or_insert_with(|| Rc::new(std::cell::RefCell::new(T::default()))),
+    );
+    one.downcast::<std::cell::RefCell<T>>().unwrap_or_else(|_| unreachable!("keyed by its type"))
 }
 
 impl Outer {
@@ -620,6 +633,11 @@ impl Outer {
 
     pub fn program(&self) -> &ProgramProxy {
         &self.program
+    }
+
+    /// The `T` the module's analyses and function managers hold together.
+    pub fn held<T: Default + 'static>(&self) -> Rc<std::cell::RefCell<T>> {
+        held_of(&self.held)
     }
 
     pub fn target(&self) -> &dyn Machine {
@@ -1049,6 +1067,7 @@ pub struct ModuleAnalyses {
     /// What an analysis keeps for its next run, by its type: the working of an
     /// update that reuses the last.
     memos: HashMap<TypeId, Box<dyn Any>>,
+    held: Held,
     /// `LLRM_CHECK_MODULES`: an analysis being run again to check what it
     /// brought up to date works everything out afresh.
     scratch: bool,
@@ -1064,6 +1083,7 @@ impl ModuleAnalyses {
             outer: None,
             functions: HashMap::default(),
             memos: HashMap::default(),
+            held: Held::default(),
             scratch: false,
         }
     }
@@ -1076,6 +1096,12 @@ impl ModuleAnalyses {
     /// date).
     pub fn from_scratch(&self) -> bool {
         self.scratch
+    }
+
+    /// The `T` this module's analyses and its function managers (through
+    /// `Outer::held`) hold together.
+    pub fn held<T: Default + 'static>(&self) -> Rc<std::cell::RefCell<T>> {
+        held_of(&self.held)
     }
 
     pub fn memo<T: Default + 'static>(&mut self) -> &mut T {
@@ -1204,6 +1230,7 @@ impl ModuleAnalyses {
                     globals: Rc::default(),
                     program: Rc::clone(&self.program),
                     modules: HashMap::default(),
+                    held: Rc::clone(&self.held),
                 }),
             };
             self.functions.insert(id, Analyses::new(outer));
@@ -1263,7 +1290,13 @@ impl ModuleAnalyses {
         let globals = Rc::clone(&modules[&TypeId::of::<Declarations>()])
             .downcast::<Vec<GlobalValue>>()
             .expect("keyed by its type");
-        let now = Outer { metadata: module.metadata.clone(), globals, program: Rc::clone(&self.program), modules };
+        let now = Outer {
+            metadata: module.metadata.clone(),
+            globals,
+            program: Rc::clone(&self.program),
+            modules,
+            held: Rc::clone(&self.held),
+        };
         if !self.outer.as_ref().is_some_and(|old| old.same(&now)) {
             self.outer = Some(Rc::new(now));
         }

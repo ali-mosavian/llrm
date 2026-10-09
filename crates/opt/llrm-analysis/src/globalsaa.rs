@@ -283,8 +283,15 @@ pub fn analysis(
     }
     memo.declarations = Some(declarations);
     memo.elsewhere = Some(elsewhere.clone());
-    let found =
-        found_with(module, &program, &elsewhere, &mut |id| analyses.function::<Shape>(module, id), Some(&mut memo.per));
+    let store = analyses.held::<alias::ValueStore>();
+    let found = found_with(
+        module,
+        &program,
+        &elsewhere,
+        &mut |id| analyses.function::<Shape>(module, id),
+        Some(&mut memo.per),
+        Some(&store),
+    );
     *analyses.memo::<Bodies>() = memo;
     found
 }
@@ -297,7 +304,7 @@ pub fn found(
     elsewhere: &Elsewhere,
     shape: &mut dyn FnMut(GlobalId) -> Rc<Shape>,
 ) -> Result<Globals, String> {
-    found_with(module, program, elsewhere, shape, None)
+    found_with(module, program, elsewhere, shape, None, None)
 }
 
 fn found_with(
@@ -306,6 +313,7 @@ fn found_with(
     elsewhere: &Elsewhere,
     shape: &mut dyn FnMut(GlobalId) -> Rc<Shape>,
     mut kept: Option<&mut IndexMap<GlobalId, (Mark, Rc<Contribution>)>>,
+    store: Option<&std::cell::RefCell<alias::ValueStore>>,
 ) -> Result<Globals, String> {
     let layout = &program.layout;
     let (named, writes) = promised(module, &program.runtime);
@@ -342,7 +350,13 @@ fn found_with(
                 // Each access asks whether its frame object's address is
                 // exposed: found once for the body.
                 let exposed = crate::memory::exposed_frames(&unit);
-                let facts = alias::points_to(&unit.with_shape(&shape).with_exposed(&exposed), None, None)?;
+                let unit = unit.with_shape(&shape).with_exposed(&exposed);
+                let values = store.map(|store| alias::ValueStore::values(store, &unit)).transpose()?;
+                let unit = match &values {
+                    Some(values) => unit.with_point_values(values),
+                    None => unit,
+                };
+                let facts = alias::points_to(&unit, None, None)?;
                 let escaped = facts
                     .escaped
                     .iter()

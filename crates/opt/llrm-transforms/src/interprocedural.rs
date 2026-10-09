@@ -1283,12 +1283,12 @@ pub fn stamped(
         let exposed = llrm_analysis::memory::exposed_frames(
             &Unit::of(module, layout, function).with_spaces(program.target.spaces()),
         );
-        let procedure = Procedure::of(
-            Unit { program: Some(&program), ..Unit::of(module, layout, function) }
-                .with_globals_aa(globals)
-                .with_shape(&shape)
-                .with_exposed(&exposed),
-        );
+        let unit = Unit { program: Some(&program), ..Unit::of(module, layout, function) }
+            .with_globals_aa(globals)
+            .with_shape(&shape)
+            .with_exposed(&exposed);
+        let values = alias::ValueStore::values(&analyses.held::<alias::ValueStore>(), &unit)?;
+        let procedure = Procedure::of(unit.with_point_values(&values));
         let initialized = alias::initialized(&procedure, known)?;
         let calls = function
             .walk()

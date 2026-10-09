@@ -134,7 +134,8 @@ impl ModuleAnalysis for Summaries {
         if !memo.globals.as_ref().is_some_and(|then| Rc::ptr_eq(then, &globals_held)) {
             body_facts.values_mut().for_each(|one| (one.calls, one.values) = (None, None));
         }
-        calls_found(module, &program, globals, &shapes, &mut body_facts);
+        let store = analyses.held::<alias::ValueStore>();
+        calls_found(module, &program, globals, &shapes, &mut body_facts, &store);
         let procedures = procedures(module, &program, globals, &shapes, &body_facts);
         // Bodies edited since the last run: those whose history is not where
         // the last run left it. What else the summaries read, the
@@ -284,13 +285,14 @@ fn calls_found(
     globals: &Globals,
     shapes: &IndexMap<GlobalId, Rc<Shape>>,
     facts: &mut IndexMap<GlobalId, BodyFacts>,
+    store: &std::cell::RefCell<alias::ValueStore>,
 ) {
     for (id, function) in bodies(module) {
         let one = facts.get_mut(&id).expect("facts for every body");
         if one.values.is_none() {
             let unit = summarized_in(module, program, globals, &shapes[&id], &one.exposed, None, function);
             one.values =
-                llrm_support::debug::timed("summaries values", || alias::point_values(&unit).ok().map(Rc::new));
+                llrm_support::debug::timed("summaries values", || alias::ValueStore::values(store, &unit).ok());
         }
         if one.calls.is_none() {
             one.calls = Some(Rc::new(alias::CallFacts::of(&summarized_in(
@@ -377,10 +379,11 @@ impl ProgramAnalysis for ProgramSummaries {
         // A body defined elsewhere starts as a call no summary describes,
         // the most any call does: each round only narrows.
         let mut own = vec![IndexMap::default(); count];
+        let store = std::cell::RefCell::new(alias::ValueStore::default());
         loop {
             let mut changed = false;
             for at in 0..count {
-                calls_found(&program.modules[at], &proxies[at], &globals[at], &shapes[at], &mut exposures[at]);
+                calls_found(&program.modules[at], &proxies[at], &globals[at], &shapes[at], &mut exposures[at], &store);
                 let procedures =
                     procedures(&program.modules[at], &proxies[at], &globals[at], &shapes[at], &exposures[at]);
                 let found = alias::summaries(&procedures, Some(&known[at]))?;
@@ -602,7 +605,7 @@ pub struct Pointers;
 pub struct PointerValues;
 
 impl Analysis for PointerValues {
-    type Result = Result<alias::PointValues, String>;
+    type Result = Result<Rc<alias::PointValues>, String>;
     const NAME: &'static str = "pointer-values";
     const SKIPS: bool = true;
     fn depends() -> Option<Depends> {
@@ -616,7 +619,9 @@ impl Analysis for PointerValues {
     ) -> Self::Result {
         let shape = analyses.get::<Shape>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        alias::point_values(
+        let store = analyses.outer().held::<alias::ValueStore>();
+        alias::ValueStore::values(
+            &store,
             &Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed),
         )
     }

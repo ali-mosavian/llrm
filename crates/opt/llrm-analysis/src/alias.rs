@@ -1824,6 +1824,133 @@ pub struct PointValues {
     incoming: IndexMap<i64, IndexMap<CellKey, Provenance>>,
 }
 
+/// The value solves of the bodies in flight, held for every asker: GlobalsAA,
+/// `Summaries`, the pointer analyses of the function manager and `stamped` each
+/// solved a body state the others had just solved. One holder, in the module
+/// analyses' `held`, and the one place that says what a solve read beyond the
+/// body.
+#[derive(Default)]
+pub struct ValueStore {
+    entries: HashMap<(llrm_mir::module::Mark, bool), (Reads, Rc<PointValues>)>,
+}
+
+/// What the value solve of a body reads that is not in its instructions: its
+/// own attributes (a `noalias` parameter seeds a restrict root), the
+/// declaration of every global it names or calls (a `noalias` result, a
+/// `returned` parameter) and whether GlobalsAA tracks each variable (an
+/// object's `captured`). A body that is as it was and reads the same gives the
+/// same solve.
+struct Reads {
+    own: (Vec<Vec<Attribute>>, Vec<Attribute>, Vec<Attribute>),
+    declared: Vec<(GlobalId, llrm_mir::module::GlobalValue)>,
+    tracked: Vec<(GlobalId, bool)>,
+}
+
+fn alike(
+    one: &llrm_mir::module::GlobalValue,
+    other: &llrm_mir::module::GlobalValue,
+) -> bool {
+    use llrm_mir::module::GlobalKind;
+    one.name == other.name
+        && one.linkage == other.linkage
+        && one.unnamed_addr == other.unnamed_addr
+        && one.address_space == other.address_space
+        && match (&one.kind, &other.kind) {
+            (GlobalKind::Function(one), GlobalKind::Function(other)) => {
+                one.ty == other.ty
+                    && one.parameter_attrs == other.parameter_attrs
+                    && one.return_attrs == other.return_attrs
+                    && one.attrs == other.attrs
+                    && one.calling_convention == other.calling_convention
+            }
+            (one, other) => one == other,
+        }
+}
+
+impl Reads {
+    fn of(unit: &Unit) -> Self {
+        let function = unit.function;
+        let mut named = BTreeSet::new();
+        for (_, inst) in function.walk() {
+            for operand in &function.instruction(inst).operands {
+                if let Operand::Constant(constant) = operand {
+                    if let ConstantKind::Global(global) = unit.context.get(*constant).kind {
+                        named.insert(global);
+                    }
+                }
+            }
+            if let Some(callee) = llrm_mir::memory::callee(unit.context, function, inst) {
+                named.insert(callee);
+            }
+        }
+        let declared = named
+            .iter()
+            .filter_map(|&global| unit.globals.get(global.0 as usize).map(|one| (global, one.declaration())))
+            .collect();
+        let tracked = named
+            .iter()
+            .filter(|global| {
+                matches!(
+                    unit.globals.get(global.0 as usize).map(|one| &one.kind),
+                    Some(llrm_mir::module::GlobalKind::Variable(_))
+                )
+            })
+            .map(|&global| (global, unit.globals_aa.is_some_and(|aa| aa.tracked(global))))
+            .collect();
+        Self { own: Self::own(function), declared, tracked }
+    }
+
+    fn own(function: &llrm_mir::module::Function) -> (Vec<Vec<Attribute>>, Vec<Attribute>, Vec<Attribute>) {
+        (function.parameter_attrs.clone(), function.return_attrs.clone(), function.attrs.clone())
+    }
+
+    fn hold(
+        &self,
+        unit: &Unit,
+    ) -> bool {
+        let function = unit.function;
+        self.own.0 == function.parameter_attrs
+            && self.own.1 == function.return_attrs
+            && self.own.2 == function.attrs
+            && self
+                .declared
+                .iter()
+                .all(|(global, then)| unit.globals.get(global.0 as usize).is_some_and(|now| alike(then, now)))
+            && self.tracked.iter().all(|&(global, then)| then == unit.globals_aa.is_some_and(|aa| aa.tracked(global)))
+    }
+}
+
+/// The most states held: past it the store starts over.
+const HELD_STATES: usize = 4096;
+
+impl ValueStore {
+    /// `unit`'s value solve: the one held for this state of the body if what
+    /// it read is as it was, else made and held. `LLRM_CHECK_POINTVALUES`
+    /// solves again at every held use.
+    pub fn values(
+        store: &RefCell<Self>,
+        unit: &Unit,
+    ) -> Result<Rc<PointValues>, String> {
+        let key = (unit.function.mark(), unit.program.is_some());
+        let held =
+            store.borrow().entries.get(&key).filter(|(reads, _)| reads.hold(unit)).map(|(_, values)| Rc::clone(values));
+        if let Some(values) = held {
+            if llrm_support::env_set("LLRM_CHECK_POINTVALUES") {
+                assert!(*values == point_values(unit)?, "the held point values are not what solving again gives");
+            }
+            return Ok(values);
+        }
+        let values = Rc::new(point_values(unit)?);
+        let reads = Reads::of(unit);
+        let mut store = store.borrow_mut();
+        if store.entries.len() >= HELD_STATES {
+            store.entries.clear();
+        }
+        store.entries.insert(key, (reads, Rc::clone(&values)));
+        Ok(values)
+    }
+}
+
 thread_local! {
     static VALUE_SOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
