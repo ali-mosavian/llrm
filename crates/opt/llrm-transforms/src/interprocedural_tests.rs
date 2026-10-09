@@ -398,10 +398,12 @@ b:
         manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
         printed(&module).matches("call i16 @mix").count()
     };
-    // Weighing clocks alone inlines every site; weighing bytes puts them back,
-    // at -Os and at -O2 (QCport -O2 ran 11 KB past BCC's code, and out of
-    // memory), unless the clocks saved pay for the bytes.
-    assert_eq!((calls(None), calls(Some(0)), calls(Some(1))), (0, 3, 0));
+    // Weighing clocks alone inlines every site; weighing bytes leaves them
+    // (QCport -O2 ran 11 KB past BCC's code, and out of memory), and no
+    // trial splices them to price the result: the trials bought nothing
+    // measurable (0 of 230 bench measurements, 261 programs' bytes and
+    // instructions identical) and re-ran the caller's pipeline once a site.
+    assert_eq!((calls(None), calls(Some(0)), calls(Some(1))), (0, 3, 3));
 }
 
 const STAMPED: &str = "@slot = global ptr null
@@ -1004,130 +1006,50 @@ done:
     );
 }
 
-/// A call the byte price refuses and the clocks admit stays inlined where the
-/// callers and the callee that goes come to no more (speaker.nib: `now` at two
-/// sites, the loop then in registers, -30 bytes), and is put back where they do
-/// (the test above).
+/// A caller of many callees was spliced into and put through the pipeline once
+/// a callee, as a "trial" of each (the `callers` axis at N=64: 63 runs of the
+/// big body, each O(its size), 3,404 Minstr of the compile's 3,800; the
+/// objects the same with them off). Its sites are spliced as the rounds
+/// find them, the pipeline run on it a round at a time.
 #[test]
-fn test_what_only_the_clocks_admit_is_kept_where_the_callee_going_pays_for_it() {
-    let text = "define internal i16 @triple(i16 %a) {
-b:
-  %t0 = add i16 %a, %a
-  %t1 = add i16 %t0, %a
-  %t2 = xor i16 %t1, 7
-  ret i16 %t2
-}
-
-define i16 @f(i16 %x, i16 %y) {
-b:
-  %p = call i16 @triple(i16 %x)
-  %q = call i16 @triple(i16 %y)
-  %r = add i16 %p, %q
-  ret i16 %r
-}
-";
-    let calls = |size: bool| {
-        let mut module = parsed(text);
-        let mut manager = PassManager::default();
-        let target = crate::testing::Tuned {
-            costs: OperationCosts { call: 20, ..OperationCosts::default() },
-            sizes: OperationCosts { call: 3, add: 4, ..OperationCosts::default() },
-            ..Default::default()
-        };
-        manager.add_program(Interprocedural {
-            pipeline: Box::new(|_, _, _, _| {}),
-            proved: None,
-            inline: Threshold::default(),
-            rate: size.then_some(0),
-            ranges: true,
-        });
-        manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
-        printed(&module).matches("call i16 @triple").count()
+fn test_a_caller_of_many_callees_is_not_put_through_the_pipeline_once_a_callee() {
+    const CALLEES: usize = 12;
+    let body = |name: String| {
+        format!(
+            "define i16 @{name}(i16 %a, i16 %b) {{\nb:\n  %t0 = xor i16 %a, %b\n  %t1 = shl i16 %a, 3\n  %t2 = add i16 %t0, %t1\n  %t3 = lshr i16 %b, 2\n  %t4 = sub i16 %t2, %t3\n  %t5 = and i16 %t4, 2047\n  %t6 = or i16 %t5, %a\n  %t7 = xor i16 %t6, %b\n  %t8 = add i16 %t7, 5\n  ret i16 %t8\n}}\n\n"
+        )
     };
-    assert_eq!((calls(false), calls(true)), (0, 0));
-}
-
-/// A site put back is not tried again: it is the same call in the same body
-/// every round, and each try re-ran the caller's pipeline (mdl_ai.c: 59 s
-/// against 28 s for the same code).
-#[test]
-fn test_a_site_the_trial_put_back_is_not_tried_again() {
-    let text = "define internal i16 @mix(i16 %a, i16 %b) {
-b:
-  %t0 = xor i16 %a, %b
-  %t1 = shl i16 %a, 3
-  %t2 = add i16 %t0, %t1
-  %t3 = lshr i16 %b, 2
-  %t4 = sub i16 %t2, %t3
-  %t5 = and i16 %t4, 2047
-  %t6 = or i16 %t5, %a
-  %t7 = xor i16 %t6, %b
-  %t8 = add i16 %t7, 5
-  ret i16 %t8
-}
-
-define i16 @f(i16 %x, i16 %y) {
-b:
-  %p = call i16 @mix(i16 %x, i16 %y)
-  %q = call i16 @mix(i16 %y, i16 %x)
-  %r = add i16 %p, %q
-  ret i16 %r
-}
-";
-    let mut module = parsed(text);
-    let layout = llrm_mir::datalayout::DataLayout::default();
+    let mut text: String = (0..CALLEES).map(|at| body(format!("g{at}"))).collect();
+    text.push_str("define i16 @f(i16 %x, i16 %y) {\nb:\n  %c0 = add i16 %x, %y\n");
+    for at in 0..CALLEES {
+        text.push_str(&format!("  %c{} = call i16 @g{at}(i16 %c{at}, i16 %y)\n", at + 1));
+    }
+    text.push_str(&format!("  ret i16 %c{CALLEES}\n}}\n"));
+    let mut program = Program::new(vec![parsed(&text)], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let roots = roots(&program);
+    let mut modules = managers(&program, &mut ProgramAnalyses::default());
     let clocks = OperationCosts { call: 20, ..OperationCosts::default() };
     let bytes = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
-    let (mix, f) = (module.named("mix").unwrap(), module.named("f").unwrap());
-    let counts = inline::call_counts(&module);
-    let candidates = inline::candidates(
-        &module,
-        &llrm_mir::memory::callees(&module),
-        &layout,
-        &counts,
-        &BTreeSet::from([mix]),
-        &clocks,
+    let runs = std::cell::Cell::new(0);
+    optimized::<String>(
+        &mut program,
+        &mut modules,
+        &roots,
+        &bytes,
+        Some(&clocks),
+        1,
         20,
         Threshold::default(),
-    );
-    let calls: Vec<_> = module
-        .global(f)
-        .function()
-        .unwrap()
-        .walk()
-        .map(|(_, inst)| inst)
-        .filter(|&inst| llrm_mir::memory::callee(&module.context, module.global(f).function().unwrap(), inst).is_some())
-        .collect();
-    let sites: llrm_support::hash::IndexMap<_, _> =
-        calls.iter().map(|&call| (call, candidates[&mix].clone())).collect();
-    let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
-    let runs = std::cell::Cell::new(0);
-    let mut refused = BTreeSet::new();
-    let again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused: &mut BTreeSet<_>| {
-        tried_sites::<String>(
-            module,
-            analyses,
-            &layout,
-            &BTreeSet::from([mix]),
-            &BTreeSet::new(),
-            &Default::default(),
-            f,
-            &sites,
-            refused,
-            &bytes,
-            (&OperationCosts::default(), 0),
-            "trial.",
-            &mut |_, _, _, _| {
+        &mut |module, _, id, _| {
+            if module.global(id).name.as_deref() == Some("f") {
                 runs.set(runs.get() + 1);
-                Ok(())
-            },
-        )
-        .unwrap()
-    };
-    assert!(!again(&mut module, &mut analyses, &mut refused), "putting it back stays nothing");
-    let first = runs.get();
-    again(&mut module, &mut analyses, &mut refused);
-    assert_eq!((first > 0, runs.get()), (true, first), "the second round runs no pipeline: {refused:?}");
+            }
+            Ok(())
+        },
+        &mut |_, _, _| Ok(()),
+    )
+    .unwrap();
+    assert!(runs.get() <= 3, "@f went through the pipeline {} times for {CALLEES} callees", runs.get());
 }
 
 /// A body whose address is taken is also called through it, with actuals no
@@ -1329,149 +1251,6 @@ fn test_a_small_recursive_function_is_inlined_into_itself_to_a_depth() {
     assert_eq!(calls(Threshold::none()), 2, "no inlining at all: the two calls it began with");
     assert!(calls(Threshold::default()) > 2, "the body grew by copies of itself");
     assert_eq!(calls(Threshold::default().for_size()), 2, "not for size: the recursive call is cold there");
-}
-
-/// A callee trial that was refused is not made again in the state it was made
-/// in (host.c: three trials, each made in five rounds, 37% of the compile,
-/// objects the same). Each try re-ran the callers' pipelines.
-#[test]
-fn test_a_callee_the_trial_refused_is_not_tried_again_in_the_same_state() {
-    let text = "define internal i16 @mix(i16 %a, i16 %b) {
-b:
-  %t0 = xor i16 %a, %b
-  %t1 = shl i16 %a, 3
-  %t2 = add i16 %t0, %t1
-  %t3 = lshr i16 %b, 2
-  %t4 = sub i16 %t2, %t3
-  %t5 = and i16 %t4, 2047
-  %t6 = or i16 %t5, %a
-  %t7 = xor i16 %t6, %b
-  %t8 = add i16 %t7, 5
-  ret i16 %t8
-}
-
-define i16 @f(i16 %x, i16 %y) {
-b:
-  %p = call i16 @mix(i16 %x, i16 %y)
-  %q = call i16 @mix(i16 %y, i16 %x)
-  %r = add i16 %p, %q
-  ret i16 %r
-}
-";
-    let mut module = parsed(text);
-    let layout = llrm_mir::datalayout::DataLayout::default();
-    let clocks = OperationCosts { call: 20, ..OperationCosts::default() };
-    let bytes = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
-    let mix = module.named("mix").unwrap();
-    let counts = inline::call_counts(&module);
-    let candidates = inline::candidates(
-        &module,
-        &llrm_mir::memory::callees(&module),
-        &layout,
-        &counts,
-        &BTreeSet::from([mix]),
-        &clocks,
-        20,
-        Threshold::default(),
-    );
-    let more: llrm_support::hash::IndexMap<_, _> = candidates.into_iter().filter(|(id, _)| *id == mix).collect();
-    let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
-    let runs = std::cell::Cell::new(0);
-    let mut refused_trials: Vec<RefusedTrial> = Vec::new();
-    let again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused_trials: &mut Vec<RefusedTrial>| {
-        tried_callees::<String>(
-            module,
-            analyses,
-            &layout,
-            &BTreeSet::from([mix]),
-            &BTreeSet::new(),
-            &Default::default(),
-            &more,
-            &bytes,
-            (&OperationCosts::default(), 0),
-            refused_trials,
-            &mut |_, _, _, _| {
-                runs.set(runs.get() + 1);
-                Ok(())
-            },
-        )
-        .unwrap()
-    };
-    assert!(!again(&mut module, &mut analyses, &mut refused_trials), "premise: the trial is refused");
-    let first = runs.get();
-    assert!(first > 0, "premise: the trial ran a pipeline");
-    again(&mut module, &mut analyses, &mut refused_trials);
-    assert_eq!(runs.get(), first, "the second round made the refused trial again");
-}
-
-/// A trial of a callee at several sites splices them all and runs the caller's
-/// pipeline once, the way gcc and LLVM inline: it ran the pipeline after each
-/// site (host.c -6.6%, QCport -2.2%, the code the same).
-#[test]
-fn test_a_trial_of_a_callee_at_several_sites_runs_the_callers_pipeline_once() {
-    let text = "define internal i16 @mix(i16 %a, i16 %b) {
-b:
-  %t0 = xor i16 %a, %b
-  %t1 = shl i16 %a, 3
-  %t2 = add i16 %t0, %t1
-  %t3 = lshr i16 %b, 2
-  %t4 = sub i16 %t2, %t3
-  %t5 = and i16 %t4, 2047
-  %t6 = or i16 %t5, %a
-  %t7 = xor i16 %t6, %b
-  %t8 = add i16 %t7, 5
-  ret i16 %t8
-}
-
-define i16 @f(i16 %x, i16 %y) {
-b:
-  %p = call i16 @mix(i16 %x, i16 %y)
-  %q = call i16 @mix(i16 %y, i16 %x)
-  %r = add i16 %p, %q
-  ret i16 %r
-}
-";
-    let mut module = parsed(text);
-    let layout = llrm_mir::datalayout::DataLayout::default();
-    let clocks = OperationCosts { call: 20, ..OperationCosts::default() };
-    let bytes = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
-    let mix = module.named("mix").unwrap();
-    let counts = inline::call_counts(&module);
-    let candidates = inline::candidates(
-        &module,
-        &llrm_mir::memory::callees(&module),
-        &layout,
-        &counts,
-        &BTreeSet::from([mix]),
-        &clocks,
-        20,
-        Threshold::default(),
-    );
-    let more: llrm_support::hash::IndexMap<_, _> = candidates.into_iter().filter(|(id, _)| *id == mix).collect();
-    let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
-    let runs = std::cell::Cell::new(0);
-    let mut refused_trials: Vec<RefusedTrial> = Vec::new();
-    let again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused_trials: &mut Vec<RefusedTrial>| {
-        tried_callees::<String>(
-            module,
-            analyses,
-            &layout,
-            &BTreeSet::from([mix]),
-            &BTreeSet::new(),
-            &Default::default(),
-            &more,
-            &bytes,
-            (&OperationCosts::default(), 0),
-            refused_trials,
-            &mut |_, _, _, _| {
-                runs.set(runs.get() + 1);
-                Ok(())
-            },
-        )
-        .unwrap()
-    };
-    again(&mut module, &mut analyses, &mut refused_trials);
-    assert_eq!(runs.get(), 1, "the pipeline ran once for each of the callee's two sites");
 }
 
 /// A round assumes a parameter's range before it proves it (`place`'s `row` is
