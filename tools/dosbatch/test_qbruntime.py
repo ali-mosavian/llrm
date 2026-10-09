@@ -93,7 +93,7 @@ def differential_case(name: str):
 
 
 @pytest.mark.skipif(not qbruntime.dosbatch.QB45.is_dir(), reason="QB45_DIR is unavailable")
-@pytest.mark.parametrize("name", ["fib", "crc", "bintree", "sieve", "textfill", "huge", "ring"])
+@pytest.mark.parametrize("name", ["fib", "crc", "bintree", "sieve", "textfill", "huge", "ring", "lru"])
 def test_runtime_program_matches_bcom45_byte_for_byte(name: str):
     """Each named program exposed an earlier runtime boundary defect."""
     result = differential_case(name)
