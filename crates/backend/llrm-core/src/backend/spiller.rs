@@ -993,7 +993,7 @@ pub fn made_for_homes() -> usize {
 
 /// The intervals `_existing_colors` reads: the body's own, as remembered and shared, and the homes' beside them.
 struct Lives {
-    shared: Option<std::rc::Rc<IndexMap<u32, Interval>>>,
+    shared: Option<std::sync::Arc<IndexMap<u32, Interval>>>,
     own: IndexMap<u32, Interval>,
 }
 
