@@ -72,7 +72,7 @@ fn placed(declared: &mut Declared, modules: &mut ModuleAnalyses, module: &mut Mo
 
 fn checking() -> bool {
     static CHECKING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *CHECKING.get_or_init(|| std::env::var_os("LLRM_CHECK_CALLEES").is_some())
+    *CHECKING.get_or_init(|| llrm_support::env_set("LLRM_CHECK_CALLEES"))
 }
 
 /// What the step proved about the program.
@@ -379,7 +379,7 @@ fn trial<E: From<String>>(
     let bodies: Vec<GlobalId> = callers.iter().copied().chain(ids.iter().copied()).collect();
     let outer = modules.outer(module);
     let known = refused_trials.iter().any(|one| one.is_state(module, &ids, &bodies, &counts, &outer));
-    let checking = std::env::var_os("LLRM_CHECK_TRIALS").is_some();
+    let checking = llrm_support::env_set("LLRM_CHECK_TRIALS");
     if known && !checking {
         return Ok(false);
     }
