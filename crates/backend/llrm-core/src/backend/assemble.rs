@@ -852,7 +852,8 @@ fn staged(
         Rc::clone(target.classes)
     };
     let body = if llrm_support::debug::verifying() {
-        timed("lir verify", || flow::verified(body, "isel", true)).map_err(|error| error.0)?
+        timed("lir verify", || flow::verified(body, "isel", true, &target.arch.layout().spaces.roles))
+            .map_err(|error| error.0)?
     } else {
         body
     };
@@ -908,7 +909,7 @@ fn phased_to(
             in_ssa = false;
         }
         let kept = (!body.notes.is_empty()).then(|| body.clone());
-        body = flow::checked(body, phase.as_mut(), in_ssa, classes).map_err(|error| match error {
+        body = flow::checked(body, phase.as_mut(), in_ssa, classes, target.arch).map_err(|error| match error {
             flow::Checked::Refused(raised) => format!("@{name}: {}", raised.message),
             flow::Checked::Malformed(malformed) => format!("@{name}: {}", malformed.0),
         })?;
