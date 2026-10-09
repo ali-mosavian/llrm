@@ -548,7 +548,9 @@ static void using_string(SD *item)
     str_tmp_free(item);
 }
 
-static const UsingOps ops = {using_integer, using_real, using_string, using_end};
+static const UsingOps ops = {
+    using_integer, using_real, using_string, using_end
+};
 
 /* B$USNG: PRINT USING, with the format. */
 void B_USNG(SD *format)
