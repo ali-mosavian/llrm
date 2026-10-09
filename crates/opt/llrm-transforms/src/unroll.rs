@@ -105,7 +105,7 @@ struct Shape {
     path: Vec<BlockId>,
 }
 
-/// Loops `peelsize` was asked about.
+// Loops `peelsize` was asked about.
 #[cfg(test)]
 thread_local! {
     pub(crate) static PRICED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
