@@ -28,7 +28,7 @@ use llrm_mir::context::ConstantKind;
 use llrm_mir::module::{BlockId, InstId, MetadataOperand, Operand, ValueDef, ValueId};
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, IntPredicate, Opcode};
-use llrm_support::hash::IndexMap;
+use llrm_support::hash::{HashMap, IndexMap};
 use num_bigint::BigInt;
 
 use crate::cfg;
@@ -376,6 +376,18 @@ fn singleton(n: &BigInt, width: u32) -> Interval {
     let sign = BigInt::from(1_u8) << (width - 1);
     let number = (number ^ &sign) - sign;
     Interval { low: number.clone(), high: number, width }
+}
+
+/// Whether `_computed` can answer for `inst` whatever is known: it declares a range, or is one of the operations that compute one.
+/// The rest answer None whatever their operands, and a loop's sweeps need not ask them again.
+fn computes(unit: &Unit, inst: InstId) -> bool {
+    let op = unit.function.instruction(inst);
+    let Some(result) = op.result else { return false };
+    let Some(width) = unit.int_bits(Operand::Value(result)) else { return false };
+    let declared = [declared_result(unit, inst), declared_metadata(unit, inst)].into_iter().flatten().filter(|interval| interval.width == width);
+    declared.reduce(|one, other| Interval { low: one.low.max(other.low), high: one.high.min(other.high), width }).is_some_and(|interval| interval.low <= interval.high)
+        || matches!(unit.intrinsic(inst), Some(Intrinsic::Fixed { divide: false }))
+        || matches!(op.opcode, Opcode::Cast(CastOp::SExt | CastOp::ZExt) | Opcode::Binary(BinaryOp::Shl | BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::And))
 }
 
 /// The interval `inst` computes from what is known of its operands.
@@ -838,6 +850,11 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
             .flat_map(|&block| function.block(block).instructions().iter().copied())
             .filter(|&inst| function.instruction(inst).opcode != Opcode::Phi)
             .collect::<Vec<_>>();
+        if check_scopes() {
+            let known = known.clone();
+            assert!(operations.iter().filter(|&&inst| !computes(unit, inst)).all(|&inst| _computed(unit, inst, &known, facts).is_none()), "an operation that does not compute answered");
+        }
+        let operations: Vec<InstId> = operations.into_iter().filter(|&inst| computes(unit, inst)).collect();
         // What each operation computes, from what `known` holds.
         let closed = |mut known: IndexMap<ValueId, Interval>| {
             loop {
@@ -853,6 +870,80 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
                     return known;
                 }
             }
+        };
+        // Each operation of the loop in `scoped`'s terms, once: it narrows its result by what its operands give, until none changes.
+        let apply = |scoped: &mut IndexMap<ValueId, Interval>, inst: InstId| -> Option<(ValueId, Option<Interval>)> {
+            #[cfg(test)]
+            OPS_APPLIED.with(|count| count.set(count.get() + 1));
+            let mut interval = _computed(unit, inst, scoped, facts)?;
+            let result = function.instruction(inst).result.expect("_computed answers a result");
+            if let Some(previous) = scoped.get(&result).filter(|previous| previous.width == interval.width) {
+                let (low, high) = (previous.low.clone().max(interval.low), previous.high.clone().min(interval.high));
+                if low > high {
+                    return None;
+                }
+                interval = Interval { low, high, width: interval.width };
+            }
+            Some((result, scoped.insert(result, interval)))
+        };
+        // Every operation, swept in order until a sweep changes nothing.
+        let sweep = |mut scoped: IndexMap<ValueId, Interval>| {
+            loop {
+                // What each value set in this sweep held before it.
+                let mut before = IndexMap::<ValueId, Option<Interval>>::default();
+                for &inst in &operations {
+                    if let Some((result, previous)) = apply(&mut scoped, inst) {
+                        before.entry(result).or_insert(previous);
+                    }
+                }
+                if before.iter().all(|(value, was)| scoped.get(value) == was.as_ref()) {
+                    return scoped;
+                }
+            }
+        };
+        // Which operations read or define each value, by place in `operations`.
+        let touching: HashMap<ValueId, Vec<usize>> = {
+            let mut touching = HashMap::<ValueId, Vec<usize>>::default();
+            for (place, &inst) in operations.iter().enumerate() {
+                let op = function.instruction(inst);
+                for value in op.operands.iter().filter_map(|one| if let Operand::Value(value) = one { Some(*value) } else { None }).chain(op.result) {
+                    let places = touching.entry(value).or_default();
+                    if places.last() != Some(&place) {
+                        places.push(place);
+                    }
+                }
+            }
+            touching
+        };
+        // `known` swept: what holds of the loop before any block's edges narrow it. Every block asks of the same one.
+        let swept: RefCell<Option<(IndexMap<ValueId, Interval>, Rc<IndexMap<ValueId, Interval>>)>> = RefCell::new(None);
+        // `scoped` (`known` narrowed by a block's edges) swept, found from `known` swept: a sweep leaves an operation whose operands
+        // and result are as they were in `known` as it found it there, so only those the narrowing reaches, and what they reach
+        // in turn, are worked again from `known swept` with the narrowed values put over it.
+        let settle = |mut scoped: IndexMap<ValueId, Interval>, known: &IndexMap<ValueId, Interval>| -> IndexMap<ValueId, Interval> {
+            let base = {
+                let held = swept.borrow().as_ref().filter(|(was, _)| was == known).map(|(_, base)| Rc::clone(base));
+                held.unwrap_or_else(|| {
+                    let base = Rc::new(sweep(known.clone()));
+                    *swept.borrow_mut() = Some((known.clone(), Rc::clone(&base)));
+                    base
+                })
+            };
+            let narrowed: BTreeSet<ValueId> = scoped.iter().filter(|(value, interval)| known.get(*value) != Some(*interval)).map(|(value, _)| *value).collect();
+            for (value, interval) in base.iter() {
+                if !narrowed.contains(value) {
+                    scoped.insert(*value, interval.clone());
+                }
+            }
+            let mut queue: BTreeSet<usize> = narrowed.iter().flat_map(|value| touching.get(value).into_iter().flatten().copied()).collect();
+            while let Some(place) = queue.pop_first() {
+                if let Some((result, previous)) = apply(&mut scoped, operations[place])
+                    && previous.as_ref() != scoped.get(&result)
+                {
+                    queue.extend(touching.get(&result).into_iter().flatten().copied());
+                }
+            }
+            scoped
         };
         let above_loop: RefCell<Option<(Vec<(usize, usize, i64)>, IndexMap<ValueId, Interval>)>> = RefCell::new(None);
         // Everything the branch edges above `at` and the assumes narrow `known` to there.
@@ -915,26 +1006,13 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
                     scoped.extend(delta);
                 }
             }
-            loop {
-                // What each value set in this sweep held before it.
-                let mut before = IndexMap::<ValueId, Option<Interval>>::default();
-                for &inst in &operations {
-                    let Some(mut interval) = _computed(unit, inst, &scoped, &facts) else { continue };
-                    let result = function.instruction(inst).result.expect("_computed answers a result");
-                    if let Some(previous) = scoped.get(&result).filter(|previous| previous.width == interval.width) {
-                        let (low, high) = (previous.low.clone().max(interval.low), previous.high.clone().min(interval.high));
-                        if low > high {
-                            continue;
-                        }
-                        interval = Interval { low, high, width: interval.width };
-                    }
-                    let previous = scoped.insert(result, interval);
-                    before.entry(result).or_insert(previous);
-                }
-                if before.iter().all(|(value, was)| scoped.get(value) == was.as_ref()) {
-                    return Ok(scoped);
-                }
+            if check_scopes() {
+                let whole = sweep(scoped.clone());
+                let quick = settle(scoped, known);
+                assert!(whole.iter().eq(quick.iter()), "the operations a block's edges reach, worked again alone, give what sweeping them all does");
+                return Ok(quick);
             }
+            Ok(settle(scoped, known))
         };
         let boxes = inductive_boxes(unit, loop_, facts, &known, &at_entry, &closed, &scope_at)?;
         if !counted && boxes.is_empty() {
@@ -957,6 +1035,17 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
         result.entry(*at).or_insert_with(|| Rc::clone(known));
     }
     Ok(Bounds { headers, edges: edges_above, within, blocks: result })
+}
+
+#[cfg(test)]
+thread_local! {
+    static OPS_APPLIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has worked an operation of a loop out, for a test that a block does not sweep them all.
+#[cfg(test)]
+pub(crate) fn operations_applied() -> usize {
+    OPS_APPLIED.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]
