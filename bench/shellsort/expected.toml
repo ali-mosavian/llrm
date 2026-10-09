@@ -1,4 +1,4 @@
-reason = "x87: a float load one arithmetic instruction reads is its memory operand (nbody c -8%/-12.5% Os, fpbench -1.2%, parity/qbsp -6.8%, nbody_single nib -5.3%)"
+reason = "guards prove more (a phi tested on every edge into its block): shellsort nib loses a bounds check (-1.0% instructions) and the CFG it leaves loads values[at - gap] twice (4 loads in the pipeline MIR, 3 before): memory operands +17%"
 blessed = "2026-10-09"
 
 [bas.O2]
