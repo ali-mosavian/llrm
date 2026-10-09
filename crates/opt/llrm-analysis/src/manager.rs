@@ -97,8 +97,8 @@ impl ModuleAnalysis for Summaries {
         };
         let declarations = analyses.get::<Declarations>(module);
         let shapes = bodies(module).map(|(id, _)| (id, analyses.function::<Shape>(module, id))).collect();
-        // What a body's calls and exposed frames are depends on the body and the declarations: kept while neither
-        // moved.
+        // What a body's calls and exposed frames are depends on the body and
+        // the declarations: kept while neither moved.
         let scratch = analyses.from_scratch();
         let memo = analyses.memo::<SummariesMemo>();
         let kept = if scratch || !memo.declarations.as_ref().is_some_and(|then| Rc::ptr_eq(then, &declarations)) {
@@ -106,16 +106,18 @@ impl ModuleAnalysis for Summaries {
         } else {
             std::mem::take(&mut memo.facts)
         };
-        // The calls were found under the globals' facts of the run before: other facts, the calls are found again.
+        // The calls were found under the globals' facts of the run before:
+        // other facts, the calls are found again.
         let mut body_facts = body_facts(module, &program.layout, program.target.spaces(), kept);
         if !memo.globals.as_ref().is_some_and(|then| Rc::ptr_eq(then, &globals_held)) {
             body_facts.values_mut().for_each(|one| one.calls = None);
         }
         calls_found(module, &program, globals, &shapes, &mut body_facts);
         let procedures = procedures(module, &program, globals, &shapes, &body_facts);
-        // Bodies edited since the last run: those whose history is not where the last run left it. What else the
-        // summaries read, the globals' facts and the declarations, either is the same result as then or the
-        // whole is worked out again.
+        // Bodies edited since the last run: those whose history is not where
+        // the last run left it. What else the summaries read, the
+        // globals' facts and the declarations, either is the same result as
+        // then or the whole is worked out again.
         let memo = analyses.memo::<SummariesMemo>();
         let marks: IndexMap<GlobalId, Mark> = bodies(module).map(|(id, function)| (id, function.mark())).collect();
         let dirty = memo
@@ -124,8 +126,10 @@ impl ModuleAnalysis for Summaries {
             .zip(memo.declarations.as_ref())
             .filter(|(then, _)| Rc::ptr_eq(then, &globals_held))
             .and_then(|(_, then)| {
-                // A declaration that differs is the function's own to answer for, and its callers' (the closure does
-                // that); a variable that differs, a global added or removed, is the whole's.
+                // A declaration that differs is the function's own to answer
+                // for, and its callers' (the closure does
+                // that); a variable that differs, a global added or removed, is
+                // the whole's.
                 let mut names: BTreeSet<String> = BTreeSet::new();
                 if !Rc::ptr_eq(then, &declarations) {
                     if then.len() != declarations.len() {
@@ -188,8 +192,8 @@ fn bodies(module: &Module) -> impl Iterator<Item = (GlobalId, &Function)> {
     module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(id, _, function)| (id, function))
 }
 
-/// What a body gives `Summaries` that is of the body, the declarations and (for its calls) the globals' facts alone, as
-/// of the body's history then.
+/// What a body gives `Summaries` that is of the body, the declarations and (for
+/// its calls) the globals' facts alone, as of the body's history then.
 #[derive(Clone)]
 struct BodyFacts {
     mark: Mark,
@@ -197,8 +201,9 @@ struct BodyFacts {
     calls: Option<Rc<alias::CallFacts>>,
 }
 
-/// The exposed frames of each of `module`'s bodies, found once for the summaries that ask of every access; those of a
-/// body whose history is where `kept` left it are `kept`'s.
+/// The exposed frames of each of `module`'s bodies, found once for the
+/// summaries that ask of every access; those of a body whose history is where
+/// `kept` left it are `kept`'s.
 fn body_facts(
     module: &Module,
     layout: &DataLayout,
@@ -223,7 +228,8 @@ fn body_facts(
         .collect()
 }
 
-/// `function` as `Summaries` sees it: its program, the globals' facts, its shape and its exposed frames.
+/// `function` as `Summaries` sees it: its program, the globals' facts, its
+/// shape and its exposed frames.
 fn summarized_in<'a>(
     module: &'a Module,
     program: &'a ProgramProxy,
@@ -238,7 +244,8 @@ fn summarized_in<'a>(
         .with_exposed(exposed)
 }
 
-/// The calls of each body `facts` has none for, as the unit it is summarized in sees them.
+/// The calls of each body `facts` has none for, as the unit it is summarized in
+/// sees them.
 fn calls_found(
     module: &Module,
     program: &ProgramProxy,
@@ -395,7 +402,8 @@ fn carried(
     to: &Module,
     unknown: &mut bool,
 ) -> BTreeSet<Slice> {
-    // The objects are numbered by their module's interner: each is named again in the other's.
+    // The objects are numbered by their module's interner: each is named again
+    // in the other's.
     let (source, target) = (ObjectInterner::of(&from.context), ObjectInterner::of(&to.context));
     let mut out = BTreeSet::new();
     for one in slices {
@@ -423,11 +431,13 @@ fn carried(
     out
 }
 
-/// Whether `changes` leave what the pointer analyses derive (`ExposedFrames`, `Pointers`, `CallEffects`, `Writes`) as
-/// it was: no instruction they touched, and none that reads a value a touched one makes (through any chain of users),
-/// is one that can make, move or name a pointer or an aggregate, or is a call. An integer loaded, computed, stored and
-/// compared is nothing to them; one that reaches an address or a call is. Where a result is not so, `LLRM_CHECK_REPLAY`
-/// says.
+/// Whether `changes` leave what the pointer analyses derive (`ExposedFrames`,
+/// `Pointers`, `CallEffects`, `Writes`) as it was: no instruction they touched,
+/// and none that reads a value a touched one makes (through any chain of
+/// users), is one that can make, move or name a pointer or an aggregate, or is
+/// a call. An integer loaded, computed, stored and compared is nothing to them;
+/// one that reaches an address or a call is. Where a result is not so,
+/// `LLRM_CHECK_REPLAY` says.
 pub fn pointers_unaffected(
     changes: &[Change],
     context: &Context,
@@ -485,7 +495,8 @@ pub fn pointers_unaffected(
         }
         if let Some(result) = function.instruction(inst).result {
             for user in function.users(result) {
-                // A scalar a call, a branch, a return or a store takes is nothing to a pointer.
+                // A scalar a call, a branch, a return or a store takes is
+                // nothing to a pointer.
                 if matches!(
                     function.instruction(user.user).opcode,
                     Opcode::Call(_)
@@ -506,8 +517,9 @@ pub fn pointers_unaffected(
     true
 }
 
-/// The allocas whose address is exposed: `frameescape::exposed_allocas`, once for the function where
-/// each access asked of its own alloca's uses (`memory::object_of`).
+/// The allocas whose address is exposed: `frameescape::exposed_allocas`, once
+/// for the function where each access asked of its own alloca's uses
+/// (`memory::object_of`).
 pub struct ExposedFrames;
 
 impl Analysis for ExposedFrames {
@@ -676,8 +688,9 @@ impl Analysis for Registers {
     }
 }
 
-/// What each block assumes, LLVM's AssumptionCache: a unit that carries none found them again, a walk of the whole
-/// body, at every `guards` and `ranges` query.
+/// What each block assumes, LLVM's AssumptionCache: a unit that carries none
+/// found them again, a walk of the whole body, at every `guards` and `ranges`
+/// query.
 pub struct AssumptionCache;
 
 impl Analysis for AssumptionCache {
@@ -720,10 +733,11 @@ impl Analysis for Counted {
         )
     }
 
-    /// A loop's proofs read its own blocks, and the values its operands come from, which `Registers` also derives from
-    /// their operands alone. So they hold until a change to an instruction reaches the loop through the uses of
-    /// the values it makes: a loop none reaches keeps its proofs. A change to the CFG, or to the loops themselves,
-    /// derives them afresh.
+    /// A loop's proofs read its own blocks, and the values its operands come
+    /// from, which `Registers` also derives from their operands alone. So
+    /// they hold until a change to an instruction reaches the loop through the
+    /// uses of the values it makes: a loop none reaches keeps its proofs. A
+    /// change to the CFG, or to the loops themselves, derives them afresh.
     fn update(
         previous: &Self::Result,
         changes: &[Change],
@@ -751,9 +765,11 @@ impl Analysis for Counted {
     }
 }
 
-/// What a change reached: the blocks holding an instruction it touched, or one that reads a value a touched
-/// instruction makes, or one that reads the value such a reader makes, and so on; and of those the blocks whose
-/// branch, or assume, or call, is one that reads a value the change made, which can alter what holds below them.
+/// What a change reached: the blocks holding an instruction it touched, or one
+/// that reads a value a touched instruction makes, or one that reads the value
+/// such a reader makes, and so on; and of those the blocks whose branch, or
+/// assume, or call, is one that reads a value the change made, which can alter
+/// what holds below them.
 pub struct Reach {
     pub blocks: BTreeSet<BlockId>,
     pub conditions: BTreeSet<BlockId>,
@@ -945,8 +961,9 @@ impl Analysis for DominatedEdges {
         Self::solved(context, layout, function, analyses, None)
     }
 
-    /// A block's state is of its operations, the state it starts from and the facts of the values they read; those of
-    /// the blocks a change reaches, and those that start from a state that changed, are worked again.
+    /// A block's state is of its operations, the state it starts from and the
+    /// facts of the values they read; those of the blocks a change reaches,
+    /// and those that start from a state that changed, are worked again.
     fn update(
         previous: &Self::Result,
         changes: &[Change],
@@ -985,7 +1002,8 @@ impl DominatedEdges {
     }
 }
 
-/// The facts each counted loop gives its blocks, and where there is none the edges': `ranges::bounded`.
+/// The facts each counted loop gives its blocks, and where there is none the
+/// edges': `ranges::bounded`.
 pub struct Bounded;
 
 impl Analysis for Bounded {
@@ -1002,8 +1020,10 @@ impl Analysis for Bounded {
         Self::solved(context, layout, function, analyses, None)
     }
 
-    /// A loop's facts read its own blocks, the facts of the values its operations read, the edges' facts above it
-    /// and the facts of the loops it starts from; the loops a change reaches by any of these are worked again.
+    /// A loop's facts read its own blocks, the facts of the values its
+    /// operations read, the edges' facts above it and the facts of the
+    /// loops it starts from; the loops a change reaches by any of these are
+    /// worked again.
     fn update(
         previous: &Self::Result,
         changes: &[Change],
@@ -1090,8 +1110,9 @@ impl Held {
         }
     }
 
-    /// Also what the counted loops bound: for a pass that asks it, so that it is the manager's, kept and brought up to
-    /// date, and not a solve of the pass's own.
+    /// Also what the counted loops bound: for a pass that asks it, so that it
+    /// is the manager's, kept and brought up to date, and not a solve of
+    /// the pass's own.
     pub fn with_bounded(
         mut self,
         context: &Context,

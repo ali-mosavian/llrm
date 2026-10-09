@@ -34,7 +34,8 @@ fn junk(
 ) -> bool {
     match byte {
         Byte::Unknown => true,
-        // A register's value on entry is junk pushed, but an interrupt handler's parameter kept.
+        // A register's value on entry is junk pushed, but an interrupt
+        // handler's parameter kept.
         Byte::Entry(register, _) => stack && !matches!(*register, "ss" | "ds"),
         Byte::Returned(..) => stack,
         Byte::Sign(inner) => junk(inner, stack),
@@ -96,7 +97,8 @@ fn size(global: &str) -> usize {
         ("gh" | "gt" | "gva", "n") | ("gh" | "gt", _) | ("gi", "plain") => 2,
         ("gi", "regs") => 18,
         ("gw" | "ow", _) => 4,
-        // p_mixed's a..h: signed char, long, double, int, float, far pointer, long double.
+        // p_mixed's a..h: signed char, long, double, int, float, far pointer,
+        // long double.
         ("gm", "a") => 1,
         ("gm", "d") => 2,
         ("gm", "b" | "e" | "f") => 4,
@@ -240,7 +242,8 @@ fn agrees(
     reference.len() == llrm.len() && reference.iter().zip(llrm).all(|(want, got)| want == "-" || want == got)
 }
 
-/// `source` recorded and compiled as Borland's compiler has it: the cdecl ABI, which these tests compare llrm with.
+/// `source` recorded and compiled as Borland's compiler has it: the cdecl ABI,
+/// which these tests compare llrm with.
 fn borland(source: &Path) -> Result<llrm_core::backend::masm::Module, String> {
     let profile = crate::compile::Profile::for_abi(&llrm_x86_m16::M16, Some("cdecl"))?;
     let stream = crate::compile::recorded_for(source, &[], false, &[], &profile).map_err(|error| error.0)?;
@@ -259,7 +262,8 @@ fn bcc(file: &str) -> BTreeMap<String, Procedure> {
     boundary::procedures(&std::fs::read_to_string(fixtures().join(format!("bcc/{}.ASM", file.to_uppercase()))).unwrap())
 }
 
-/// The reference, as the table tests/fixtures/callconv/c/reference.txt records it.
+/// The reference, as the table tests/fixtures/callconv/c/reference.txt records
+/// it.
 fn reference_table() -> String {
     let mut out = String::new();
     for convention in CONVENTIONS {
@@ -379,9 +383,11 @@ fn test_a_variadic_byte_is_promoted_by_its_signedness() {
     assert_eq!(stack[2..], [Byte::Global("_s".into(), 0), sign, Byte::Global("_u".into(), 0), Byte::Const(0)]);
 }
 
-/// A variadic function taking a struct parameter's address got the address of the struct's local copy, so STDARG.H's
-/// `va_start` stepped from there into the frame: it was refused. The struct lives in its words' slots now, as a scalar
-/// parameter does, and the address steps into the arguments after it (`tests/run/c/variadic.c` runs it).
+/// A variadic function taking a struct parameter's address got the address of
+/// the struct's local copy, so STDARG.H's `va_start` stepped from there into
+/// the frame: it was refused. The struct lives in its words' slots now, as a
+/// scalar parameter does, and the address steps into the arguments after it
+/// (`tests/run/c/variadic.c` runs it).
 // It records C through wccq, which only the toolchain feature builds.
 #[cfg(feature = "toolchain")]
 #[test]

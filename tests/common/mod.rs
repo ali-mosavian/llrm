@@ -1,5 +1,6 @@
-//! What the tests that assemble and link for the default target read of it: its `object.toml`, the one
-//! place that says the object format, the listing's header and how a C program is linked.
+//! What the tests that assemble and link for the default target read of it: its
+//! `object.toml`, the one place that says the object format, the listing's
+//! header and how a C program is linked.
 
 use std::path::Path;
 
@@ -20,7 +21,8 @@ fn recipe() -> toml::Table {
         .expect("object.toml parses")
 }
 
-/// The flag that makes jwasm write the object format the target writes (jwasm's own spelling of it).
+/// The flag that makes jwasm write the object format the target writes (jwasm's
+/// own spelling of it).
 pub fn assembler() -> &'static str {
     match recipe()["default"].as_str().expect("a default format") {
         "omf" => "-omf",
@@ -28,7 +30,8 @@ pub fn assembler() -> &'static str {
     }
 }
 
-/// `name` as the default target's object spells a function of its default ABI: what a listing and the linker call it.
+/// `name` as the default target's object spells a function of its default ABI:
+/// what a listing and the linker call it.
 pub fn symbol(name: &str) -> String {
     let target = llrm_driver::all()
         .into_iter()
@@ -38,7 +41,8 @@ pub fn symbol(name: &str) -> String {
     target.calling().native().decorated(&format, name).unwrap_or_else(|| name.to_owned())
 }
 
-/// The lines a listing opens with, as the target says: the memory model and the instruction set.
+/// The lines a listing opens with, as the target says: the memory model and the
+/// instruction set.
 pub fn header() -> String {
     recipe()["header"]
         .as_array()

@@ -1,21 +1,27 @@
-//! A call a function makes to itself as the last thing it does is a branch to its own entry with the
-//! arguments rewritten: LLVM's TailRecursionElimination, and gcc's tree-tailcall.
+//! A call a function makes to itself as the last thing it does is a branch to
+//! its own entry with the arguments rewritten: LLVM's TailRecursionElimination,
+//! and gcc's tree-tailcall.
 //!
-//! Where the call's result only feeds an associative, commutative `add`, `mul`, `and`, `or` or `xor`
-//! on its way out (`return f(n - 1) + x`), the call is still one: an accumulator, `acc` in the loop's
-//! header, starts at the operation's identity and takes `x` each trip, and every other way out of the
-//! function returns `acc op value`. gcc's `fib` is `fib(n - 1)` called, `fib(n - 2)` looped;
-//! `hanoi`'s second call is the same.
+//! Where the call's result only feeds an associative, commutative `add`, `mul`,
+//! `and`, `or` or `xor` on its way out (`return f(n - 1) + x`), the call is
+//! still one: an accumulator, `acc` in the loop's header, starts at the
+//! operation's identity and takes `x` each trip, and every other way out of the
+//! function returns `acc op value`. gcc's `fib` is `fib(n - 1)` called, `fib(n
+//! - 2)` looped; `hanoi`'s second call is the same.
 //!
 //! What changed with the IR:
-//! - The call is found in MIR, where the frontend's returns through one join block are a block of phis and a `ret`; a
-//!   block that branches to it takes the value of its arm, as LLVM's `foldReturnAndProcessPred` does by copying the
-//!   `ret` there.
-//! - The function's own id comes from the pass manager (`Unit::id`): LLVM compares the callee with `F`.
-//! - A frame object whose address escapes keeps the call: the callee may read it. The one escape analysis
-//!   (`frameescape`) answers; LLVM's `AllocaDerivedValueTracker` is its own.
+//! - The call is found in MIR, where the frontend's returns through one join
+//!   block are a block of phis and a `ret`; a block that branches to it takes
+//!   the value of its arm, as LLVM's `foldReturnAndProcessPred` does by copying
+//!   the `ret` there.
+//! - The function's own id comes from the pass manager (`Unit::id`): LLVM
+//!   compares the callee with `F`.
+//! - A frame object whose address escapes keeps the call: the callee may read
+//!   it. The one escape analysis (`frameescape`) answers; LLVM's
+//!   `AllocaDerivedValueTracker` is its own.
 //!
-//! The loop is the ordinary loop passes' to improve: the pass names nothing about the machine.
+//! The loop is the ordinary loop passes' to improve: the pass names nothing
+//! about the machine.
 
 use std::collections::BTreeSet;
 
@@ -80,9 +86,10 @@ struct Step {
     op: BinaryOp,
 }
 
-/// `function` with each call to itself that is the last thing it does made a branch to its entry;
-/// whether any was. `private`: no frame object's address is exposed, so a callee cannot read what the
-/// frame holds and the next trip may reuse it.
+/// `function` with each call to itself that is the last thing it does made a
+/// branch to its entry; whether any was. `private`: no frame object's address
+/// is exposed, so a callee cannot read what the frame holds and the next trip
+/// may reuse it.
 pub fn eliminated(
     context: &mut Context,
     callees: &Callees,
@@ -96,7 +103,8 @@ pub fn eliminated(
         return false;
     }
     let mut found = sites(context, callees, function, id);
-    // One accumulating operation per function: a site of another keeps its call.
+    // One accumulating operation per function: a site of another keeps its
+    // call.
     let operation = found.iter().find_map(|site| site.step.as_ref().map(|step| step.op));
     found.retain(|site| site.step.as_ref().is_none_or(|step| Some(step.op) == operation));
     if found.is_empty() || !fits(function, &found, operation, room) {
@@ -106,12 +114,14 @@ pub fn eliminated(
     true
 }
 
-/// Whether the loop's carried values stay in registers. Every parameter the body reads, and the
-/// accumulator, live round the loop; where a call is left in it they must outlast the call, in the
-/// registers the target keeps across one (`across_call`) with one to spare, and else in any register.
-/// Spilled, they cost the stores and reloads the call's argument pushes were: bench's quicksort,
-/// hanoi and fib on a target of six registers and two kept across a call ran up to 25% more memory
-/// operands in a loop than in the recursion.
+/// Whether the loop's carried values stay in registers. Every parameter the
+/// body reads, and the accumulator, live round the loop; where a call is left
+/// in it they must outlast the call, in the registers the target keeps across
+/// one (`across_call`) with one to spare, and else in any register.
+/// Spilled, they cost the stores and reloads the call's argument pushes were:
+/// bench's quicksort, hanoi and fib on a target of six registers and two kept
+/// across a call ran up to 25% more memory operands in a loop than in the
+/// recursion.
 fn fits(
     function: &Function,
     found: &[Site],
@@ -137,7 +147,8 @@ fn fits(
     carried < limit || (!calls && carried <= limit)
 }
 
-/// Whether every `alloca` is in the entry block and of one size: a dynamic one would grow with each trip.
+/// Whether every `alloca` is in the entry block and of one size: a dynamic one
+/// would grow with each trip.
 fn fixed_frame(function: &Function) -> bool {
     let entry = function.entry();
     function
@@ -153,8 +164,9 @@ fn fixed_frame(function: &Function) -> bool {
         )
 }
 
-/// Whether a parameter or an argument is a copy the caller makes in memory (`byval`, `sret`, ...): the next
-/// trip's would be a store to what the first trip's callee wrote through.
+/// Whether a parameter or an argument is a copy the caller makes in memory
+/// (`byval`, `sret`, ...): the next trip's would be a store to what the first
+/// trip's callee wrote through.
 fn by_copy(function: &Function) -> bool {
     let copying = |attrs: &[Attribute]| {
         attrs
@@ -175,8 +187,8 @@ fn by_copy(function: &Function) -> bool {
         })
 }
 
-/// Whether `function` calls a routine that returns twice (`setjmp`): one frame for every trip is not
-/// the frame a second return finds.
+/// Whether `function` calls a routine that returns twice (`setjmp`): one frame
+/// for every trip is not the frame a second return finds.
 fn returns_twice(
     context: &Context,
     globals: &[GlobalValue],
@@ -258,7 +270,8 @@ fn site(
                     return None;
                 };
                 let [left, right] = function.instruction(made).operands[..] else { return None };
-                // Of two calls summed (fib), the later is the tail; the earlier's result is what it adds to.
+                // Of two calls summed (fib), the later is the tail; the
+                // earlier's result is what it adds to.
                 let at = |inst: InstId| work.iter().position(|&one| one == inst);
                 let call = match (defined(left).filter(|&one| is_call(one)), defined(right).filter(|&one| is_call(one)))
                 {
@@ -290,7 +303,8 @@ fn site(
     let at = work.iter().position(|&inst| inst == call)?;
     let after: Vec<InstId> =
         work[at + 1..].iter().copied().filter(|&inst| Some(inst) != step.as_ref().map(|step| step.inst)).collect();
-    // Only work with no effect may stand between the call and the way out, and it moves above the call.
+    // Only work with no effect may stand between the call and the way out, and
+    // it moves above the call.
     if !after.iter().all(|&inst| memory::speculatable(context, callees, function, inst))
         || step.as_ref().is_some_and(|step| !work[at + 1..].contains(&step.inst))
     {
@@ -299,8 +313,8 @@ fn site(
     Some(Site { block, call, join, step, after })
 }
 
-/// What a join block returns to `from`, which branches to it, if the block is only phis and a `ret`:
-/// `Some(None)` for `ret void`.
+/// What a join block returns to `from`, which branches to it, if the block is
+/// only phis and a `ret`: `Some(None)` for `ret void`.
 fn returned_from(
     function: &Function,
     join: BlockId,
@@ -482,8 +496,9 @@ fn rewrite(
             function.set_operand(end, 0, sum);
         }
     }
-    // The next trip's argument is another pointer where the calls change it, which `noalias` does not
-    // cover; where they pass it on as it came, it is the same pointer, and its promise (Nib's `&mut`) stands.
+    // The next trip's argument is another pointer where the calls change it,
+    // which `noalias` does not cover; where they pass it on as it came, it
+    // is the same pointer, and its promise (Nib's `&mut`) stands.
     for (attrs, same) in function.parameter_attrs.iter_mut().zip(&unchanged) {
         if *same {
             continue;

@@ -83,8 +83,9 @@ fn actual(
     ranges::_computed(unit, inst, &known, facts)
 }
 
-/// The numbers `parameter` of the body at `defined` is compared with, one either side of each,
-/// then the type's own bounds: where a growing range stops.
+/// The numbers `parameter` of the body at `defined` is compared with, one
+/// either side of each, then the type's own bounds: where a growing range
+/// stops.
 fn thresholds(
     program: &Program,
     defined: Defined,
@@ -113,7 +114,8 @@ fn thresholds(
     found.into_iter().collect()
 }
 
-/// The `range` attribute stating `interval` of a parameter of type `ty`, where it says something.
+/// The `range` attribute stating `interval` of a parameter of type `ty`, where
+/// it says something.
 fn attribute(
     context: &llrm_mir::Context,
     ty: llrm_mir::types::TypeId,
@@ -128,13 +130,14 @@ fn attribute(
     Fact::Range(Bounds { lo, hi }).typed_attribute(ty, bits)
 }
 
-/// Stamps each `eligible` body's integer parameters with the range its callers pass, where they all are
-/// known; the bodies whose parameters it stamped.
+/// Stamps each `eligible` body's integer parameters with the range its callers
+/// pass, where they all are known; the bodies whose parameters it stamped.
 pub fn stamp(
     program: &mut Program,
     eligible: &BTreeSet<Defined>,
 ) -> BTreeSet<Defined> {
-    // The parameters worth following: an integer one of a body nothing but the program calls.
+    // The parameters worth following: an integer one of a body nothing but the
+    // program calls.
     let mut seen: BTreeMap<(Defined, usize), Seen> = BTreeMap::new();
     for &(at, id) in eligible {
         let module = &program.modules[at];
@@ -161,7 +164,8 @@ pub fn stamp(
         let mut next = seen.clone();
         for (at, module) in program.modules.iter().enumerate() {
             for (own, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
-                // A body none has called yet, or only itself: what it passes is not known, so not counted, until it is.
+                // A body none has called yet, or only itself: what it passes is
+                // not known, so not counted, until it is.
                 let waiting = seen.iter().any(|(&(one, _), now)| one == (at, own) && *now == Seen::Nothing);
                 let calls: Vec<_> = function
                     .walk()
@@ -184,13 +188,16 @@ pub fn stamp(
                 }
                 let shape = cfg::Shape::of(function);
                 let unit = Unit::of(module, &program.layout, function).with_shape(&shape);
-                // Found once, for the body as it is: its ranges and the arguments' proofs ask the same.
+                // Found once, for the body as it is: its ranges and the
+                // arguments' proofs ask the same.
                 let registers = crate::consts::known(&unit, None, None, None);
                 let unit = unit.with_registers(&registers);
                 let scoped = ranges::bounds(&unit).map(std::borrow::Cow::into_owned).unwrap_or_default();
                 for (block, inst, target) in calls {
-                    // A round assumes a range before it proves it: where the loops' facts contradict each other under
-                    // the assumption the block is not reached, and a call in it passes nothing.
+                    // A round assumes a range before it proves it: where the
+                    // loops' facts contradict each other under
+                    // the assumption the block is not reached, and a call in it
+                    // passes nothing.
                     if scoped.unreachable(cfg::id(block)) {
                         continue;
                     }
@@ -213,7 +220,8 @@ pub fn stamp(
                 }
             }
         }
-        // A range still growing after the second round goes to the next number the callee compares it with.
+        // A range still growing after the second round goes to the next number
+        // the callee compares it with.
         if round >= 2 {
             for (&(target, index), now) in next.iter_mut() {
                 let (Seen::Within(new), Some(Seen::Within(old))) = (&*now, seen.get(&(target, index))) else {
@@ -241,10 +249,12 @@ pub fn stamp(
             break;
         }
         seen = next;
-        // What this round found is what the next round reads of each callee's parameters.
+        // What this round found is what the next round reads of each callee's
+        // parameters.
         for (&((at, id), index), now) in &seen {
             let Seen::Within(interval) = now else {
-                // Seen to be anything after all: what an earlier round stamped goes.
+                // Seen to be anything after all: what an earlier round stamped
+                // goes.
                 if let Some(old) = stamped.remove(&((at, id), index))
                     && let GlobalKind::Function(function) = &mut program.modules[at].globals[id.0 as usize].kind
                 {

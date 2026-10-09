@@ -23,11 +23,13 @@ pub enum Byte {
     Address(Box<Base>, i32, u8),
     /// Byte `1` of what call `0` left in a register or in st(0).
     Returned(String, &'static str, u8),
-    /// Byte `2` of what call `0` wrote through a pointer argument, at offset `1`.
+    /// Byte `2` of what call `0` wrote through a pointer argument, at offset
+    /// `1`.
     Written(String, i32),
     /// The byte at offset `1` through the pointer `0`, as it was when read.
     Pointed(Vec<Byte>, i32),
-    /// Byte `2` of the x87 value whose own bytes are `0`, stored `1` bytes wide.
+    /// Byte `2` of the x87 value whose own bytes are `0`, stored `1` bytes
+    /// wide.
     Converted(Vec<Byte>, u8, u8),
     /// The sign of a byte, filling a wider value.
     Sign(Box<Byte>),
@@ -113,7 +115,8 @@ pub struct Procedure {
     pub top: Option<Vec<Byte>>,
     /// Whether it returns with the direction flag clear.
     pub forward: bool,
-    /// A branch ended the run before any return: only what came before it is here.
+    /// A branch ended the run before any return: only what came before it is
+    /// here.
     pub cut: bool,
     /// It returned by `iret`, as an interrupt handler does.
     pub iret: bool,
@@ -179,7 +182,8 @@ fn bc_procedures(listing: &str) -> BTreeMap<String, Procedure> {
     for (row, raw) in listing.lines().enumerate() {
         let raw = raw.trim_end_matches('\r');
         let Some(at) = raw.find(" ** ") else {
-            // A source line: `sub name (...)` or `function name (...)` opens one.
+            // A source line: `sub name (...)` or `function name (...)` opens
+            // one.
             let source = raw.get(16..).unwrap_or("").trim().to_lowercase();
             let mut words = source.split(|one: char| one.is_whitespace() || one == '(');
             if let (Some("sub" | "function"), Some(name)) = (words.next(), words.next()) {
@@ -226,7 +230,8 @@ fn bc_procedures(listing: &str) -> BTreeMap<String, Procedure> {
         if text == "int     3dh" || text.split_whitespace().collect::<Vec<_>>() == ["int", "3dh"] {
             continue;
         }
-        // A segment override on a line of its own belongs to the next instruction.
+        // A segment override on a line of its own belongs to the next
+        // instruction.
         if let Some(segment) = ["es:", "cs:", "ss:", "ds:"].iter().find(|one| text == **one) {
             prefix = register(&segment[..2]);
             continue;
@@ -1006,7 +1011,8 @@ impl Machine<'_> {
             }
             _ => match known(value) {
                 Some(known) => constant(known + amount, value.len()),
-                // A pointer from elsewhere, stepped: the same base, an offset on.
+                // A pointer from elsewhere, stepped: the same base, an offset
+                // on.
                 None if value.len() == 2 && !value.contains(&Byte::Unknown) => {
                     address(Base::Pointer(value.to_vec()), amount as i32, 2)
                 }
@@ -1132,14 +1138,16 @@ impl Machine<'_> {
         line: &Line,
     ) -> Option<i32> {
         let operands = &line.operands;
-        // A pop into a scratch register discards an argument; into BP, SI or DI it is the epilogue.
+        // A pop into a scratch register discards an argument; into BP, SI or DI
+        // it is the epilogue.
         let cleaning = matches!(
             (line.op.as_str(), operands.as_slice()),
             ("add", [Operand::Register("sp"), _])
                 | ("pop", [Operand::Register("ax" | "bx" | "cx" | "dx" | "eax" | "ebx" | "ecx" | "edx")])
         );
         if self.pending.is_some() && !cleaning {
-            // What the callee and the caller popped between them, the call's pushes.
+            // What the callee and the caller popped between them, the call's
+            // pushes.
             self.pending = None;
             let sp = self.base;
             self.set("sp", address(Base::Stack, sp, 2));
@@ -1314,7 +1322,8 @@ impl Machine<'_> {
                 let bp = self.get("bp");
                 self.store(&Place::Stack(-2), bp);
                 self.set("bp", address(Base::Stack, -2, 2));
-                // Below any frame a BASIC procedure has: its locals stay apart from what it pushes.
+                // Below any frame a BASIC procedure has: its locals stay apart
+                // from what it pushes.
                 self.set("sp", address(Base::Stack, -0x800, 2));
                 self.base = self.sp;
             }
@@ -1329,7 +1338,8 @@ impl Machine<'_> {
                 if target == "f_spush@" || target == "n_spush@" {
                     self.struct_push();
                 } else {
-                    // `push cs` then a near call: a far call into the same segment.
+                    // `push cs` then a near call: a far call into the same
+                    // segment.
                     let pushed_cs = far != &Some(true)
                         && self.sp < self.base
                         && self.load(&Place::Stack(self.sp), 2) == self.get("cs");
@@ -1358,7 +1368,8 @@ impl Machine<'_> {
                     let value = match () {
                         _ if line.op.starts_with("fist") => vec![Byte::Unknown; bytes],
                         _ if top.len() == bytes => top,
-                        // A result in st(0) is stored at whatever width the caller keeps.
+                        // A result in st(0) is stored at whatever width the
+                        // caller keeps.
                         _ if returned => top[..bytes.min(top.len())].to_vec(),
                         _ => converted(&top, bytes),
                     };

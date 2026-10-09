@@ -36,7 +36,8 @@ pub fn load(
     read_all(source, read)?.linked()
 }
 
-/// `load` for a target whose near pointer is `near_bytes` wide: `usize` and `NEAR_BYTES` are its.
+/// `load` for a target whose near pointer is `near_bytes` wide: `usize` and
+/// `NEAR_BYTES` are its.
 pub fn load_for(
     source: &str,
     read: &mut dyn FnMut(&str) -> Result<String, String>,
@@ -171,7 +172,8 @@ fn visit(
         if loaded.contains_key(&import.module) {
             continue;
         }
-        // `std.os` is the runtime's OS layer, which the target says: `read` gives it.
+        // `std.os` is the runtime's OS layer, which the target says: `read`
+        // gives it.
         let source = if standard::supplied(&import.module) && import.module != "std.os" {
             standard::source(&import.module)
                 .map(str::to_owned)
@@ -319,7 +321,8 @@ impl Resolver<'_> {
         Ok(None)
     }
 
-    /// Whether `path` names a method, `Type.name`: only a value calls it (section 5).
+    /// Whether `path` names a method, `Type.name`: only a value calls it
+    /// (section 5).
     fn method(
         &self,
         path: &str,
@@ -425,7 +428,8 @@ impl Resolver<'_> {
         result
     }
 
-    /// Refuses a local named as an import: an import alias cannot be shadowed (section 14).
+    /// Refuses a local named as an import: an import alias cannot be shadowed
+    /// (section 14).
     fn unshadowed(
         &self,
         name: &str,
@@ -438,7 +442,8 @@ impl Resolver<'_> {
         Ok(())
     }
 
-    /// A statement's annotation, patterns and the names it binds, not its blocks'.
+    /// A statement's annotation, patterns and the names it binds, not its
+    /// blocks'.
     fn own_parts(
         &self,
         statement: &mut Statement,

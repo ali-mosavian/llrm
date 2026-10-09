@@ -52,7 +52,8 @@ fn normalized(lines: &[&str]) -> Vec<String> {
             if let Some(label) = mnemonic.strip_suffix(':') {
                 return format!("{}:", rename("L", label.to_owned(), &mut names));
             }
-            // A register destination written whole: `mov r, x`, or `sbb r, r` and its kin.
+            // A register destination written whole: `mov r, x`, or `sbb r, r`
+            // and its kin.
             let operands: Vec<&str> = rest.split(',').map(str::trim).collect();
             let idiom = ["sbb", "xor", "sub"].contains(&mnemonic) && operands.len() == 2 && operands[0] == operands[1];
             let written = register(operands[0]).filter(|_| DEFINING.contains(&mnemonic) || idiom);
@@ -161,7 +162,8 @@ fn kernels(
     let of = |asm: &str, name: &str| {
         loops(&procedure(asm, name)).iter().map(|(one, inner)| (normalized(one), *inner)).collect()
     };
-    // C's kernel is spelled as the default ABI spells it; Nib's own procedures are not decorated.
+    // C's kernel is spelled as the default ABI spells it; Nib's own procedures
+    // are not decorated.
     [
         ("bas", of(&bas, basic)),
         ("c", of(&c, &common::symbol(&format!("bench_{stem}")))),
@@ -185,8 +187,10 @@ fn test_huge_array_loops_are_the_same_in_basic_c_and_nib() {
         .flatten()
         .filter_map(|one| {
             let path = one.path();
-            // copyw and fillw are 16-bit words past 64K, which BASIC can only index as two columns (a subscript is at
-            // most 32767): their loops differ by construction. tests/run holds all three and compares their output.
+            // copyw and fillw are 16-bit words past 64K, which BASIC can only
+            // index as two columns (a subscript is at most 32767):
+            // their loops differ by construction. tests/run holds all three and
+            // compares their output.
             let stem = path.file_stem()?.to_string_lossy().into_owned();
             (path.extension()? == "nib" && !["copyw", "fillw"].contains(&stem.as_str())).then_some(stem)
         })

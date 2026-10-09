@@ -3,8 +3,9 @@
 //!
 //! A load or store names its bytes. A call states the rest as LLVM does,
 //! with `memory(...)`, `readnone`, `readonly` or `writeonly` at the call site
-//! and on its callee, as `llrm_mir::memory` reads them, where the old code read the
-//! raise's `memory_complete` mark. A volatile load or store names its bytes too.
+//! and on its callee, as `llrm_mir::memory` reads them, where the old code read
+//! the raise's `memory_complete` mark. A volatile load or store names its bytes
+//! too.
 //!
 //! Division is C's and floating exceptions are the machine's, so the old
 //! list of trapping kinds and the body-wide `handles_errors` have no MIR
@@ -176,7 +177,8 @@ b:
         assert_eq!(reads, [true, false, true, false, false, false, false]);
     }
 
-    /// Per instruction of `@f`: (unmodeled read, unmodeled write, touches memory).
+    /// Per instruction of `@f`: (unmodeled read, unmodeled write, touches
+    /// memory).
     fn answers(text: &str) -> Vec<(bool, bool, bool)> {
         let module = parsed(text);
         let declarations = module.declarations();

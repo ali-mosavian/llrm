@@ -93,9 +93,9 @@ fn a_definition_of_no_held_value_is_refused() {
     assert_eq!(refused, "test.peep:3: rule r: def v: v is not a held value the window binds");
 }
 
-/// The operations x86.instr spells are `llrm_lir::Operation`'s: a list of them kept
-/// here as well lost `copy` when the string operations came (written in three
-/// places, found by the build failing in one of them).
+/// The operations x86.instr spells are `llrm_lir::Operation`'s: a list of them
+/// kept here as well lost `copy` when the string operations came (written in
+/// three places, found by the build failing in one of them).
 #[test]
 fn every_operation_of_llrm_lir_has_a_spelling_and_a_variant() {
     for op in llrm_lir::Operation::ALL {

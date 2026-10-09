@@ -1,10 +1,12 @@
-//! #456: ASC(MID$(s, i, 1)) made a string temporary and two far calls per byte. A routine the runtime
-//! description states is defined in the module, for the inliner to price against its call.
+//! #456: ASC(MID$(s, i, 1)) made a string temporary and two far calls per byte.
+//! A routine the runtime description states is defined in the module, for the
+//! inliner to price against its call.
 
 use super::driver as qb_driver;
 use super::test_hir::{emitted_mir, optimized_mir, written};
 
-/// Five loops over the bytes of a string, as a program reads one, and two reads of runtime temporaries.
+/// Five loops over the bytes of a string, as a program reads one, and two reads
+/// of runtime temporaries.
 const SOURCE: &str = "DEFINT A-Z
 DECLARE FUNCTION A& (s AS STRING)
 DECLARE FUNCTION B& (s AS STRING)
@@ -83,10 +85,11 @@ fn calls(
     text.lines().filter(|line| line.contains("call ") && line.contains(&format!("@llrm.qb.{routine}("))).count()
 }
 
-/// Each loop kept a MID$ temporary and a far call per byte: A&'s loop was `B$FMID` then `B$FASC`
-/// (210 instructions a byte against C's 26 in bench/grep). Where the runtime says how it reads a
-/// string, five sites of each callee leave no call and no descriptor in the loops; the two temporaries
-/// the runtime frees keep their call.
+/// Each loop kept a MID$ temporary and a far call per byte: A&'s loop was
+/// `B$FMID` then `B$FASC` (210 instructions a byte against C's 26 in
+/// bench/grep). Where the runtime says how it reads a string, five sites of
+/// each callee leave no call and no descriptor in the loops; the two
+/// temporaries the runtime frees keep their call.
 #[test]
 fn an_asc_of_mid_loop_has_no_temporary_or_far_call() {
     for dialect in ["qb45", "pds71"] {
@@ -106,8 +109,8 @@ fn an_asc_of_mid_loop_has_no_temporary_or_far_call() {
     }
 }
 
-/// A runtime whose strings are far, the length in the payload rather than at an offset in the
-/// descriptor, states no layout, and keeps every call.
+/// A runtime whose strings are far, the length in the payload rather than at an
+/// offset in the descriptor, states no layout, and keeps every call.
 #[test]
 fn a_runtime_that_states_no_descriptor_keeps_its_calls() {
     let mir = mir("vbdos", false, true);
@@ -116,7 +119,8 @@ fn a_runtime_that_states_no_descriptor_keeps_its_calls() {
     assert!(!mir.contains("available_externally"), "no body of the runtime is defined\n{mir}");
 }
 
-/// At the pass's input the routines are defined, held to inline from; none reaches the output.
+/// At the pass's input the routines are defined, held to inline from; none
+/// reaches the output.
 #[test]
 fn the_routines_are_defined_at_the_input_and_gone_from_the_output() {
     let input = mir("qb45", false, false);
@@ -131,8 +135,9 @@ fn the_routines_are_defined_at_the_input_and_gone_from_the_output() {
     assert!(!output.lines().any(|line| line.starts_with("define available_externally")), "{output}");
 }
 
-/// The checks are `-fsanitize=bounds`'s: without it a copy of ASC is a load and nothing raises; with it
-/// the copy tests for the empty string and raises error 5 in a cold block, as the runtime's does.
+/// The checks are `-fsanitize=bounds`'s: without it a copy of ASC is a load and
+/// nothing raises; with it the copy tests for the empty string and raises error
+/// 5 in a cold block, as the runtime's does.
 #[test]
 fn the_checks_are_emitted_only_where_the_program_asks_for_them() {
     let asc = |mir: &str| -> String { body_of(mir, "B$FASC").to_owned() };
@@ -174,9 +179,10 @@ FUNCTION S& (n AS INTEGER)
 END FUNCTION
 ";
 
-/// CHR$ allocated a runtime string temporary for every byte: each trip was `B$FCHR`, `B$FASC` and
-/// `B$FLEN`. A one-byte view over a frame byte leaves the loop with neither call nor descriptor, and
-/// raises error 5 for a value past a byte only where checks are asked for.
+/// CHR$ allocated a runtime string temporary for every byte: each trip was
+/// `B$FCHR`, `B$FASC` and `B$FLEN`. A one-byte view over a frame byte leaves
+/// the loop with neither call nor descriptor, and raises error 5 for a value
+/// past a byte only where checks are asked for.
 #[test]
 fn a_chr_of_a_byte_has_no_temporary_or_call() {
     for dialect in ["qb45", "pds71"] {

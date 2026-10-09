@@ -1,8 +1,10 @@
-//! Generate and validate `prstab.inc` / `prstab.h` equates from grammar-derived data.
+//! Generate and validate `prstab.inc` / `prstab.h` equates from grammar-derived
+//! data.
 //!
 //! This module consolidates the scalar constants emitted by the original DOS
-//! `buildprs` tool: `NTOKENS`, `NUMNT*`, `RWF_*`, `CB_RW_MAX`, `IRW_ALPHA_FIRST`,
-//! fixed `ND_*` / `ENCODE1BYTE` values, and `STI_*` state entry offsets.
+//! `buildprs` tool: `NTOKENS`, `NUMNT*`, `RWF_*`, `CB_RW_MAX`,
+//! `IRW_ALPHA_FIRST`, fixed `ND_*` / `ENCODE1BYTE` values, and `STI_*` state
+//! entry offsets.
 //!
 //! `STI_*` offsets require byte-accurate state lowering. Until that pass is
 //! complete, inject them from golden artifacts via [`StiOffsetInput`].
@@ -133,7 +135,8 @@ impl std::fmt::Display for PrstabParityMismatch {
 
 impl std::error::Error for PrstabParityMismatch {}
 
-/// Build `prstab` constants from grammar token/dispatch data and injected `STI_*` offsets.
+/// Build `prstab` constants from grammar token/dispatch data and injected
+/// `STI_*` offsets.
 pub fn generate_prstab_constants(
     grammar: &GrammarFile,
     sti: &StiOffsetInput,

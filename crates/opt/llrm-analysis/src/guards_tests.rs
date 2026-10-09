@@ -83,8 +83,9 @@ done:
     );
 }
 
-/// `n != 0` proves `0 < n`, `n > 0` and `n >= 1`: the guard a copied loop test leaves for a counter that starts at zero
-/// (bench/floats with `-ftree-ch`: the symbolic trip count was lost behind `icmp ne i16 %n, 0`).
+/// `n != 0` proves `0 < n`, `n > 0` and `n >= 1`: the guard a copied loop test
+/// leaves for a counter that starts at zero (bench/floats with `-ftree-ch`: the
+/// symbolic trip count was lost behind `icmp ne i16 %n, 0`).
 #[test]
 fn test_a_guard_that_n_is_not_zero_proves_zero_below_n() {
     let parsed = Parsed::new(
@@ -109,9 +110,10 @@ done:
     assert!(!holds(&unit, block_named(&parsed, "done"), IntPredicate::Ult, &zero, &n));
 }
 
-/// A guard in the narrow type proves the same unsigned compare of its zero extension: `gap < 64` in i16 is `zext gap <
-/// 64` in i32, which is what a widened counter starting at `gap` tests (bench/shellsort with `-ftree-ch`: the inner
-/// loop's symbolic count was lost).
+/// A guard in the narrow type proves the same unsigned compare of its zero
+/// extension: `gap < 64` in i16 is `zext gap < 64` in i32, which is what a
+/// widened counter starting at `gap` tests (bench/shellsort with `-ftree-ch`:
+/// the inner loop's symbolic count was lost).
 #[test]
 fn test_a_guard_on_a_narrow_value_proves_the_compare_of_its_zero_extension() {
     let parsed = Parsed::new(
@@ -135,8 +137,9 @@ done:
     assert!(!holds(&unit, block_named(&parsed, "done"), IntPredicate::Ult, &wide, &Scev::constant(64, 32)));
 }
 
-/// A phi of the loop entry is tested on each edge into it: `lo < hi` where the loop is first entered and `next < hi` on
-/// the edge back. Both prove `phi < hi` in the body, though no branch dominates it (the tail-recursion loop of
+/// A phi of the loop entry is tested on each edge into it: `lo < hi` where the
+/// loop is first entered and `next < hi` on the edge back. Both prove `phi <
+/// hi` in the body, though no branch dominates it (the tail-recursion loop of
 /// quicksort's `sort` with `-ftree-ch`).
 #[test]
 fn test_a_phi_tested_on_every_edge_into_its_block_is_proven_below_it() {
@@ -175,8 +178,9 @@ done:
     }
 }
 
-/// `decide` asked `holds_given` of a branch's compare and its inverse, and each found the block's guards twice: four
-/// times, half of its time on QCport's sc. The block's guards are found once for any number of questions of it.
+/// `decide` asked `holds_given` of a branch's compare and its inverse, and each
+/// found the block's guards twice: four times, half of its time on QCport's sc.
+/// The block's guards are found once for any number of questions of it.
 #[test]
 fn test_the_guards_of_a_block_are_found_once_for_all_asked_of_it() {
     let parsed = Parsed::new(GUARDED);

@@ -151,8 +151,9 @@ b3:
     assert!(through(growing, Peel::default()).0);
 }
 
-/// A call that touches memory leaves little to fold: GCC refuses a copy that grows (QCport -O2 ran 4.8 KB
-/// past BCC's code on such copies). A call that touches none is priced, and the loop peeled.
+/// A call that touches memory leaves little to fold: GCC refuses a copy that
+/// grows (QCport -O2 ran 4.8 KB past BCC's code on such copies). A call that
+/// touches none is priced, and the loop peeled.
 #[test]
 fn a_loop_with_a_call_is_peeled_only_where_the_call_touches_no_memory() {
     let text = "@count = global i16 0
@@ -209,8 +210,9 @@ fn an_unpriced_function_is_left_alone() {
     assert!(!through(&text, Peel::default()).0);
 }
 
-/// Where code may not grow GCC still copies a loop whose copies come to two thirds of it or less
-/// (`estimated_unrolled_size`): the three trips of x_life's neighbour sum were a rolled loop at -O2 (11 operations, 15
+/// Where code may not grow GCC still copies a loop whose copies come to two
+/// thirds of it or less (`estimated_unrolled_size`): the three trips of
+/// x_life's neighbour sum were a rolled loop at -O2 (11 operations, 15
 /// copied) and 1.9x gcc's clocks.
 #[test]
 fn a_copy_of_two_thirds_the_size_is_peeled_where_code_may_not_grow() {
@@ -242,8 +244,9 @@ b3:
     assert!(through(sum, flat).0);
 }
 
-/// `loops` sequential loops of eight trips, each with a body of forty multiplies except the last, which has one: all
-/// the loops but the last are over the budget of a peel.
+/// `loops` sequential loops of eight trips, each with a body of forty
+/// multiplies except the last, which has one: all the loops but the last are
+/// over the budget of a peel.
 fn sequence(loops: usize) -> String {
     let mut text = String::from("define i16 @f(i16 %x) {\nb0:\n  br label %h0\n\n");
     for k in 0..loops {
@@ -267,10 +270,11 @@ fn sequence(loops: usize) -> String {
     text + &format!("end:\n  ret i16 %a{}\n}}\n", loops - 1)
 }
 
-/// A function's frequencies, as the loops ask for them, were worked out once per loop looked at that was counted and
-/// not peeled: k loops over budget and one peeled cost 2k estimates of the whole function (`nbody_single -Omax`: `peel`
-/// 22% of the compile, 17 points of it in `branchprob::estimated`). They are worked out once for each version of the
-/// function.
+/// A function's frequencies, as the loops ask for them, were worked out once
+/// per loop looked at that was counted and not peeled: k loops over budget and
+/// one peeled cost 2k estimates of the whole function (`nbody_single -Omax`:
+/// `peel` 22% of the compile, 17 points of it in `branchprob::estimated`). They
+/// are worked out once for each version of the function.
 #[test]
 fn a_functions_frequencies_are_worked_out_once_for_all_the_loops_asking() {
     let loops = 6;

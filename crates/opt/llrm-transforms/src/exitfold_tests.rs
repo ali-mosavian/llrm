@@ -358,8 +358,10 @@ fn test_a_slice_loop_that_stores_before_its_check_keeps_the_branch_in_the_loop()
     assert!(printed.contains("br i1 %0, label %body"), "{printed}");
 }
 
-/// A loop whose exit block reads a value the loop made, with no phi to carry it: the exit tested once in the preheader
-/// left the loop on its first trip, where that value is not made (the torture program 20010224-1 at -Os stored poison).
+/// A loop whose exit block reads a value the loop made, with no phi to carry
+/// it: the exit tested once in the preheader left the loop on its first trip,
+/// where that value is not made (the torture program 20010224-1 at -Os stored
+/// poison).
 #[test]
 fn test_an_exit_whose_block_reads_the_loop_s_values_is_not_tested_before_it() {
     let text = "define i16 @f(i16 %start) {

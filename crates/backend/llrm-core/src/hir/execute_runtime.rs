@@ -1,6 +1,7 @@
 //! Nib's runtime heap and string routines, modelled on the
-//! host (crates/frontends/llrm-nib/src/runtime/buffers.nib and strings.nib). A dropped buffer is marked, so a
-//! second drop or a leak is an execution error, not silent.
+//! host (crates/frontends/llrm-nib/src/runtime/buffers.nib and strings.nib). A
+//! dropped buffer is marked, so a second drop or a leak is an execution error,
+//! not silent.
 
 use super::model::{DescriptorField, DescriptorPlace};
 use super::*;
@@ -115,7 +116,8 @@ fn pointer(argument: &Scalar) -> Outcome<Option<Address>> {
 }
 
 impl Machine<'_> {
-    /// A new heap buffer holding `bytes`, with room for `capacity` elements of `size` bytes.
+    /// A new heap buffer holding `bytes`, with room for `capacity` elements of
+    /// `size` bytes.
     fn allocate(
         &mut self,
         bytes: &[u8],
@@ -158,7 +160,8 @@ impl Machine<'_> {
         Ok(copy)
     }
 
-    /// crates/frontends/llrm-nib/src/runtime/dicts.nib's `N$DRES`: room for one more entry.
+    /// crates/frontends/llrm-nib/src/runtime/dicts.nib's `N$DRES`: room for one
+    /// more entry.
     fn dict_reserve(
         &mut self,
         table: &Address,
@@ -318,7 +321,8 @@ impl Machine<'_> {
     }
 
     /// The DOS file calls on host files: a handle or count, or DOS's error
-    /// code negated, as the OS layer's operations return them (runtime/shared/interface.toml).
+    /// code negated, as the OS layer's operations return them
+    /// (runtime/shared/interface.toml).
     fn file(
         &mut self,
         name: &str,
@@ -418,7 +422,8 @@ impl Machine<'_> {
         })
     }
 
-    /// Formatted text goes to the console, or while an f-string builds, into it.
+    /// Formatted text goes to the console, or while an f-string builds, into
+    /// it.
     pub(super) fn emit(
         &mut self,
         text: &str,

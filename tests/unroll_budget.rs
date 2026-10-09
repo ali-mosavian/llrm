@@ -1,4 +1,5 @@
-//! A completely unrolled loop is bounded by its target's `unroll_budget`, read from the description.
+//! A completely unrolled loop is bounded by its target's `unroll_budget`, read
+//! from the description.
 
 use std::process::Command;
 
@@ -12,8 +13,8 @@ fn kernel(steps: usize) -> String {
     )
 }
 
-/// What the pass says of the eight-trip loop at `flags`: (the size it compares, the budget it names, the boost percent,
-/// admitted).
+/// What the pass says of the eight-trip loop at `flags`: (the size it compares,
+/// the budget it names, the boost percent, admitted).
 fn verdict(
     flags: &[&str],
     steps: usize,
@@ -48,10 +49,11 @@ fn verdict(
     (after("scaled "), after("budget "), after("boost "), line.ends_with("admitted"))
 }
 
-/// Both targets took GCC's 200 under LLVM's 400% boost, a limit over either reference's: x86-m32's matmul
-/// unrolled to 2633 B where clang's is 1789 and gcc's 402. The edge loops come from sweeping the size: each target's
-/// pass names the budget its description states, admits the loops whose (scaled) copies fit it under the boost, and
-/// refuses the next one.
+/// Both targets took GCC's 200 under LLVM's 400% boost, a limit over either
+/// reference's: x86-m32's matmul unrolled to 2633 B where clang's is 1789 and
+/// gcc's 402. The edge loops come from sweeping the size: each target's
+/// pass names the budget its description states, admits the loops whose
+/// (scaled) copies fit it under the boost, and refuses the next one.
 #[test]
 fn test_each_target_unrolls_to_the_budget_its_description_states() {
     for (flags, budget) in

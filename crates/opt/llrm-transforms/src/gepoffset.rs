@@ -202,7 +202,8 @@ impl Splitter<'_> {
             Opcode::Cast(cast @ (CastOp::SExt | CastOp::ZExt)) if self.reads_through(op.operands[0], cast) => {
                 self.extended(op.operands[0], cast, width)
             }
-            // Truncation commutes with add and mul: the low bits of a rest and a constant.
+            // Truncation commutes with add and mul: the low bits of a rest and
+            // a constant.
             Opcode::Cast(CastOp::Trunc) => {
                 let inner = self.split(op.operands[0]);
                 if inner.same {
@@ -232,10 +233,11 @@ impl Splitter<'_> {
         matches!(op.opcode, Opcode::Binary(BinaryOp::Add | BinaryOp::Sub)) && op.flags.contains(flag)
     }
 
-    /// `operand` extended by `cast` to `wide`, as a rest and a constant in `wide`:
-    /// the extension goes down to the leaves, `sext(a + b) = sext a + sext b`
-    /// where the add cannot wrap, and a rest summed narrow would wrap where
-    /// the whole does not (LLVM's `distributeExtsAndCloneChain`).
+    /// `operand` extended by `cast` to `wide`, as a rest and a constant in
+    /// `wide`: the extension goes down to the leaves, `sext(a + b) = sext a
+    /// + sext b` where the add cannot wrap, and a rest summed narrow would
+    /// wrap where the whole does not (LLVM's
+    /// `distributeExtsAndCloneChain`).
     fn extended(
         &mut self,
         operand: Operand,
@@ -269,7 +271,8 @@ impl Splitter<'_> {
     }
 }
 
-/// Every `gep` whose indices carry a constant, split where it pays; whether any was.
+/// Every `gep` whose indices carry a constant, split where it pays; whether any
+/// was.
 pub fn separated(
     unit: &mut passes::Unit,
     analyses: &Analyses,

@@ -184,7 +184,8 @@ pub fn constrained(
                     continue;
                 }
                 pins.insert(fresh, register);
-                // An address reads the value, so a copy that is written never renames it.
+                // An address reads the value, so a copy that is written never
+                // renames it.
                 if places.iter().any(|(side, _)| *side == "source") {
                     swap.insert(value, held.value);
                 } else {
@@ -267,7 +268,8 @@ pub fn constrained(
                     )
                 })
                 .collect();
-            // The copies in front of it, this one's own among them, can displace an older one.
+            // The copies in front of it, this one's own among them, can
+            // displace an older one.
             for one in &insns[start..] {
                 carried.retain(|(value, root), kept| !_disturbs(one, *value, kept, *root, &pins));
             }
@@ -420,7 +422,8 @@ pub fn distinct_classes(
     if peeled.is_empty() {
         return body.clone();
     }
-    // The widest any instruction names a value at: a phi's result has no defining operand.
+    // The widest any instruction names a value at: a phi's result has no
+    // defining operand.
     let mut widest: IndexMap<u32, u32> = IndexMap::default();
     for held in body
         .insns()
@@ -858,7 +861,8 @@ mod tests {
         pairs.iter().copied().collect()
     }
 
-    /// H_BENCH printed ft_n=0 and infinite ft_mean: SI's result was spilled from BX.
+    /// H_BENCH printed ft_n=0 and infinite ft_mean: SI's result was spilled
+    /// from BX.
     #[test]
     fn test_call_result_spill_keeps_its_register_after_input_split() {
         let (argument, result) = (Held { value: 1, width: 2 }, Held { value: 2, width: 2 });
@@ -893,7 +897,8 @@ mod tests {
         assert_eq!(what(store).sources, vec![Loc::Reg(Reg { register: Register::SI, width: 2 })]);
     }
 
-    /// JUMPS refused emission: ON GOTO read old v20 while its required input became v143.
+    /// JUMPS refused emission: ON GOTO read old v20 while its required input
+    /// became v143.
     #[test]
     fn test_runtime_requirement_renames_its_explicit_source() {
         let value = Held { value: 20, width: 2 };
@@ -905,7 +910,8 @@ mod tests {
         assert_eq!(source.value, result.uses[0]);
     }
 
-    /// QGLDIFF hung in heap compaction: ENRA lost BX=0 after CSE joined its CX=0.
+    /// QGLDIFF hung in heap compaction: ENRA lost BX=0 after CSE joined its
+    /// CX=0.
     #[test]
     fn test_shared_zero_is_supplied_to_every_runtime_input() {
         for registers in [vec![Register::BX, Register::CX], vec![Register::AX, Register::BX, Register::CX]] {
@@ -936,7 +942,8 @@ mod tests {
         }
     }
 
-    /// Qrender FIDIV 035c retained unplaced v398 after its SI input became v1036.
+    /// Qrender FIDIV 035c retained unplaced v398 after its SI input became
+    /// v1036.
     #[test]
     fn test_fixed_address_requirement_renames_memory_base() {
         let value = Held { value: 20, width: 2 };
@@ -982,7 +989,8 @@ mod tests {
         _insn(semantics(Operation::Extend, "cwd", vec![held(into, 2)], vec![held(one, 2)]), &[into], &[one], 0x100)
     }
 
-    /// Nbody kept 512 in EDI while copying it into EAX, displacing its accumulator.
+    /// Nbody kept 512 in EDI while copying it into EAX, displacing its
+    /// accumulator.
     #[test]
     fn test_fixed_input_rematerializes_constant_without_retaining_source() {
         let constant = _insn(semantics(Operation::Move, "mov", vec![held(1, 2)], vec![imm(512, 2)]), &[1], &[], 0x100);
@@ -1265,9 +1273,10 @@ mod tests {
         assert!(opened.is_empty());
     }
 
-    /// `a[i] = (char)i` into a frame array: `trunc` reads the low byte of the index in place, so one
-    /// value needed a byte register (ax..dx) and si or di at once, and the allocator refused the body
-    /// ("value may be in no register", #498). The byte read takes a word copy of its own.
+    /// `a[i] = (char)i` into a frame array: `trunc` reads the low byte of the
+    /// index in place, so one value needed a byte register (ax..dx) and si
+    /// or di at once, and the allocator refused the body ("value may be in
+    /// no register", #498). The byte read takes a word copy of its own.
     #[test]
     fn test_a_byte_read_of_a_frame_index_reads_a_copy() {
         let cell = Mem {

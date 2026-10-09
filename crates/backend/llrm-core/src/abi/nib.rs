@@ -42,8 +42,9 @@ pub const VIEW_COMPARE: &str = "N$VCMP";
 
 pub const DICT_RESERVE: &str = "N$DRES";
 
-/// The OS layer's operation a runtime symbol implements, by its name in the interface, when it is a
-/// file call (`open`, `create`, `read`, `write_file`, `close`) or a console one.
+/// The OS layer's operation a runtime symbol implements, by its name in the
+/// interface, when it is a file call (`open`, `create`, `read`, `write_file`,
+/// `close`) or a console one.
 pub fn os_operation(symbol: &str) -> Option<&'static str> {
     static INTERFACE: std::sync::LazyLock<llrm_target::os::Interface> =
         std::sync::LazyLock::new(llrm_target::os::Interface::shipped);
@@ -55,7 +56,8 @@ pub fn os_operation(symbol: &str) -> Option<&'static str> {
         .map(|op| op.name.as_str())
 }
 
-/// The number of the standard handle `name` (`stdin`, `stdout`, `stderr`): the operating system's fact.
+/// The number of the standard handle `name` (`stdin`, `stdout`, `stderr`): the
+/// operating system's fact.
 pub fn standard_handle(name: &str) -> usize {
     let facts: toml::Table = llrm_x86::DOS_FACTS.parse().expect("the OS facts parse");
     usize::try_from(facts[name].as_integer().expect("a standard handle is a number")).expect("a handle is not negative")
@@ -74,7 +76,8 @@ pub const ERROR_CONVERT: &str = "N$ECNV";
 pub const ERROR_KEY: &str = "N$EKEY";
 pub const ERROR_DIVIDE: &str = "N$EDIV";
 
-/// The routines that end the program, touching only memory its caller cannot name.
+/// The routines that end the program, touching only memory its caller cannot
+/// name.
 pub const TERMINATING: [&str; 5] = [ERROR_BOUNDS, ERROR_CONVERT, ERROR_DIVIDE, ERROR_KEY, ERROR_SHIFT];
 
 /// The routines that take values and touch only the runtime's own state,

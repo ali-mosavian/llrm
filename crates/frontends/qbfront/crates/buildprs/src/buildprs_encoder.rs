@@ -1,6 +1,8 @@
-//! Low-level `NtParse` state-table byte encoding (MASM `prsnt.asm` / `prsutil.asm`).
+//! Low-level `NtParse` state-table byte encoding (MASM `prsnt.asm` /
+//! `prsutil.asm`).
 //!
-//! Independent of grammar / `parser_tables`; used by a future `buildprs` host tool.
+//! Independent of grammar / `parser_tables`; used by a future `buildprs` host
+//! tool.
 
 pub const ND_ACCEPT: u8 = 0;
 pub const ND_REJECT: u8 = 1;
@@ -10,7 +12,8 @@ pub const ND_BRANCH: u8 = 4;
 
 pub const DEFAULT_ENCODE1BYTE: u8 = 240;
 
-/// Branch operand decoded from a state-table node (`prsnt.asm:PsOneByteOperand`).
+/// Branch operand decoded from a state-table node
+/// (`prsnt.asm:PsOneByteOperand`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BranchTarget {
     /// Byte `255`: ε-success / accept without consuming a token.
@@ -286,7 +289,8 @@ impl StateEncoder {
         encode_branch_operand(&mut self.buf, cursor_after, target, &self.config)
     }
 
-    /// Write a node id and reserve one byte for a branch operand to patch later.
+    /// Write a node id and reserve one byte for a branch operand to patch
+    /// later.
     pub fn emit_node_deferred_branch(
         &mut self,
         node_id: u16,
@@ -424,7 +428,8 @@ mod tests {
         encode_node_id(&mut enc.buf, 42, &config).unwrap();
         encode_node_id(&mut enc.buf, 500, &config).unwrap();
         assert_eq!(&enc.bytes()[0..1], &[42]);
-        assert_eq!(&enc.bytes()[1..3], &[241, 4]); // 500 + 255*240 = 61700 = 0xF104
+        assert_eq!(&enc.bytes()[1..3], &[241, 4]); // 500 + 255*240 = 61700 =
+                                                   // 0xF104
 
         let mut pc = 0;
         assert_eq!(decode_node_id(enc.bytes(), &mut pc, &config).unwrap(), 42);
@@ -447,7 +452,8 @@ mod tests {
         enc.accept(); // 0: accept
         enc.reject(); // 1: reject
         let forward_target = 4;
-        enc.node(5, BranchTarget::Relative(forward_target)).unwrap(); // 2..=3: node + rel byte
+        // 2..=3: node + rel byte
+        enc.node(5, BranchTarget::Relative(forward_target)).unwrap();
         let back_target = 0;
         enc.node(6, BranchTarget::Relative(back_target)).unwrap();
 
@@ -472,7 +478,8 @@ mod tests {
         let mut enc = StateEncoder::new();
         enc.node(7, BranchTarget::Absolute(1000)).unwrap();
         assert_eq!(&enc.bytes()[0..1], &[7]);
-        assert_eq!(&enc.bytes()[1..3], &[243, 232]); // 1000 + 256*240 = 62440 = 0xF3E8
+        assert_eq!(&enc.bytes()[1..3], &[243, 232]); // 1000 + 256*240 = 62440 =
+                                                     // 0xF3E8
 
         let mut dec = StateDecoder::new(enc.bytes());
         assert_eq!(dec.next().unwrap(), Some(StateEntry::Node { node_id: 7, branch: BranchTarget::Absolute(1000) }));

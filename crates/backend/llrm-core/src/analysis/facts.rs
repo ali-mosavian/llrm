@@ -1,10 +1,12 @@
-//! The derived facts of a `LirBody`, kept while their inputs are: llvm's `MachineFunctionAnalysisManager`, in the shape
-//! of llrm-mir's `Analysis` (`NAME`, `run`, a result that is `PartialEq`).
+//! The derived facts of a `LirBody`, kept while their inputs are: llvm's
+//! `MachineFunctionAnalysisManager`, in the shape of llrm-mir's `Analysis`
+//! (`NAME`, `run`, a result that is `PartialEq`).
 //!
-//! The manager is a field of the body, shared by every body made from it (`with_blocks`, a clone), so it lives as long
-//! as the function's compile and no longer. A fact says what it read (`inputs`) and whether a body still has those
-//! (`held_by`); an ask of a body that does has the kept result. `LLRM_CHECK_FACTS` works every kept result out again
-//! and compares.
+//! The manager is a field of the body, shared by every body made from it
+//! (`with_blocks`, a clone), so it lives as long as the function's compile and
+//! no longer. A fact says what it read (`inputs`) and whether a body still has
+//! those (`held_by`); an ask of a body that does has the kept result.
+//! `LLRM_CHECK_FACTS` works every kept result out again and compares.
 
 use std::any::{Any, TypeId};
 use std::sync::{Arc, Mutex};
@@ -40,7 +42,8 @@ fn check() -> bool {
 }
 
 impl Facts {
-    /// `F` of `body`: the kept result where `body` has its inputs, else worked out.
+    /// `F` of `body`: the kept result where `body` has its inputs, else worked
+    /// out.
     pub fn get<F: Fact>(
         &self,
         body: &LirBody,
@@ -73,8 +76,10 @@ impl Facts {
         result
     }
 
-    /// A value of type `T` the manager holds for its users, made by `Default` on first use: for a fact that keeps
-    /// several states (a ring of answers) where `get`'s one slot is not enough. `change` must not ask the manager.
+    /// A value of type `T` the manager holds for its users, made by `Default`
+    /// on first use: for a fact that keeps several states (a ring of
+    /// answers) where `get`'s one slot is not enough. `change` must not ask the
+    /// manager.
     pub fn stash<T: Default + Send + 'static, R>(
         &self,
         change: impl FnOnce(&mut T) -> R,
@@ -99,7 +104,8 @@ impl Facts {
         self.runs.lock().expect("facts").get(name).copied().unwrap_or(0)
     }
 
-    /// How many times `F` has been worked out, for a test that asking again does not.
+    /// How many times `F` has been worked out, for a test that asking again
+    /// does not.
     pub fn runs<F: Fact>(&self) -> usize {
         self.runs.lock().expect("facts").get(F::NAME).copied().unwrap_or(0)
     }
@@ -135,7 +141,8 @@ mod tests {
     use crate::model::lir::LirBody;
     use crate::support::hash::IndexMap;
 
-    /// A fact that claims its inputs held whatever the body: what a fact that forgot an input does.
+    /// A fact that claims its inputs held whatever the body: what a fact that
+    /// forgot an input does.
     struct Forgetful;
 
     impl Fact for Forgetful {
@@ -154,8 +161,9 @@ mod tests {
         }
     }
 
-    /// A kept result that the body no longer gives went unnoticed (a stale frequency made the allocator's costs wrong
-    /// without a word): the check mode works every kept result out again.
+    /// A kept result that the body no longer gives went unnoticed (a stale
+    /// frequency made the allocator's costs wrong without a word): the
+    /// check mode works every kept result out again.
     #[test]
     fn test_the_check_catches_a_kept_fact_the_body_no_longer_gives() {
         let none = LirBody::new("f", 1, Vec::new(), IndexMap::default(), IndexMap::default());

@@ -1,5 +1,6 @@
-//! The values an operand names are asked of for every operand of every instruction, at every rebuild of the allocator's
-//! facts; each ask made a vector.
+//! The values an operand names are asked of for every operand of every
+//! instruction, at every rebuild of the allocator's facts; each ask made a
+//! vector.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};

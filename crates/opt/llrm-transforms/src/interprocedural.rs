@@ -42,8 +42,9 @@ use llrm_mir::types::Type;
 use crate::inline;
 use crate::profit::OperationCosts;
 
-/// What each function does to memory, from the module's analyses: worked out again only after a body changed, not for
-/// every query. `LLRM_CHECK_CALLEES=1` compares it with a fresh scan each time.
+/// What each function does to memory, from the module's analyses: worked out
+/// again only after a body changed, not for every query. `LLRM_CHECK_CALLEES=1`
+/// compares it with a fresh scan each time.
 fn callees(
     modules: &mut ModuleAnalyses,
     module: &Module,
@@ -58,8 +59,9 @@ fn callees(
     held
 }
 
-/// `module`'s declarations to declare into: the module's own `Declarations`, nothing scanned unless a pass declares.
-/// `LLRM_CHECK_CALLEES=1` compares them with a fresh listing.
+/// `module`'s declarations to declare into: the module's own `Declarations`,
+/// nothing scanned unless a pass declares. `LLRM_CHECK_CALLEES=1` compares them
+/// with a fresh listing.
 fn declared(
     modules: &mut ModuleAnalyses,
     module: &Module,
@@ -74,7 +76,8 @@ fn declared(
     Declared::over(held, module.metadata.len())
 }
 
-/// Places what `declared` made. The module has more functions than its `Declarations` say now.
+/// Places what `declared` made. The module has more functions than its
+/// `Declarations` say now.
 fn placed(
     declared: &mut Declared,
     modules: &mut ModuleAnalyses,
@@ -108,8 +111,9 @@ pub struct Interprocedural {
     /// What the last run proved.
     pub proved: Option<Proved>,
     pub inline: inline::Threshold,
-    /// Inlining weighs code bytes, and what only the clocks admit stays where it comes to no more bytes,
-    /// less what the clocks it saves buy at this many thousandths of a clock a byte; None weighs the clocks alone.
+    /// Inlining weighs code bytes, and what only the clocks admit stays where
+    /// it comes to no more bytes, less what the clocks it saves buy at this
+    /// many thousandths of a clock a byte; None weighs the clocks alone.
     pub rate: Option<i64>,
 }
 
@@ -128,7 +132,8 @@ impl ProgramPass for Interprocedural {
         let clocks = program.target.costs();
         let loose = self.rate.map(|_| &clocks);
         let rate = self.rate.unwrap_or(0);
-        // The op budget stays the clocks': what it bounds is the body, not its price.
+        // The op budget stays the clocks': what it bounds is the body, not its
+        // price.
         let reach = program.target.costs().call;
         let roots = roots(program);
         let mut modules = managers(program, analyses);
@@ -153,9 +158,10 @@ impl ProgramPass for Interprocedural {
     }
 }
 
-/// What each body does to memory, stated on it before any body's pipeline runs, as LLVM's
-/// PostOrderFunctionAttrs runs before the loop passes: a loop that calls a function is judged on what it
-/// does, not on a declaration nothing yet describes.
+/// What each body does to memory, stated on it before any body's pipeline runs,
+/// as LLVM's PostOrderFunctionAttrs runs before the loop passes: a loop that
+/// calls a function is judged on what it does, not on a declaration nothing yet
+/// describes.
 pub struct Stamp;
 
 impl ProgramPass for Stamp {
@@ -186,7 +192,8 @@ pub fn managers(
         .map(|at| {
             let mut one = ModuleAnalyses::new(analyses.proxy(program, at));
             one.require::<Summaries>();
-            // As the first run's: a body sent back through reads what no code outside reaches.
+            // As the first run's: a body sent back through reads what no code
+            // outside reaches.
             one.require::<GlobalsAA>();
             one
         })
@@ -231,9 +238,9 @@ fn unexported(program: &Program) -> BTreeSet<Defined> {
         .collect()
 }
 
-/// The calls to inline: those `costs` admits and, tuned for size, those `loose` (the clocks) does too,
-/// which `grew` then checks against what they leave: a body that folds on known addresses is
-/// nothing the byte price can see.
+/// The calls to inline: those `costs` admits and, tuned for size, those `loose`
+/// (the clocks) does too, which `grew` then checks against what they leave: a
+/// body that folds on known addresses is nothing the byte price can see.
 fn candidates(
     module: &Module,
     callees: &llrm_mir::memory::Callees,
@@ -249,7 +256,8 @@ fn candidates(
     llrm_support::hash::IndexMap<GlobalId, inline::Candidate>,
 ) {
     let mut found = inline::candidates(module, callees, layout, counts, private, costs, reach, threshold);
-    // Held only to inline from, a body's price is what the trial finds, never its size.
+    // Held only to inline from, a body's price is what the trial finds, never
+    // its size.
     found.retain(|id, _| module.global(*id).linkage != Linkage::AvailableExternally);
     let more = loose.map_or_else(Default::default, |loose| {
         inline::candidates(module, callees, layout, counts, private, loose, reach, threshold)
@@ -285,16 +293,18 @@ fn constant_sites(
     (found, more)
 }
 
-/// What of a body's size the byte estimate may be off by: 28% in the median over QCport's 532
-/// functions (calibration of `bytes_in_code`), taken as a quarter. A change in bytes within it of the
-/// body copied is the estimate's noise, and what the clocks admitted stays.
-/// The most sites of a callee that are tried.
+/// What of a body's size the byte estimate may be off by: 28% in the median
+/// over QCport's 532 functions (calibration of `bytes_in_code`), taken as a
+/// quarter. A change in bytes within it of the body copied is the estimate's
+/// noise, and what the clocks admitted stays. The most sites of a callee that
+/// are tried.
 const TRIED_SITES: i64 = 4;
 
 const ESTIMATE_ERROR: (i64, i64) = (1, 4);
 
-/// Whether callers coming to `after` bytes, less `gone` for the callee that goes, come to no more than
-/// `before`, within the estimate's error of the body (`moved` bytes) that was copied.
+/// Whether callers coming to `after` bytes, less `gone` for the callee that
+/// goes, come to no more than `before`, within the estimate's error of the body
+/// (`moved` bytes) that was copied.
 fn stays(
     after: i64,
     gone: i64,
@@ -305,8 +315,9 @@ fn stays(
     after - gone <= before + moved * ESTIMATE_ERROR.0 / ESTIMATE_ERROR.1 + allowance
 }
 
-/// The bytes `sites` calls of `callee` removed may add: what their overhead saves in clocks, at `rate`
-/// clocks a byte (`clocks` prices the calls), where 0 allows none.
+/// The bytes `sites` calls of `callee` removed may add: what their overhead
+/// saves in clocks, at `rate` clocks a byte (`clocks` prices the calls), where
+/// 0 allows none.
 fn allowance(
     module: &Module,
     callee: GlobalId,
@@ -318,8 +329,9 @@ fn allowance(
     if rate <= 0 { 0 } else { 1000 * sites * inline::call_overhead(clocks, arguments) / rate }
 }
 
-/// The constant `sites` of `caller` the clocks admit and the bytes do not, inlined, and put back
-/// where `caller` then comes to more bytes (`grew`). Whether any stayed.
+/// The constant `sites` of `caller` the clocks admit and the bytes do not,
+/// inlined, and put back where `caller` then comes to more bytes (`grew`).
+/// Whether any stayed.
 fn tried_sites<E: From<String>>(
     module: &mut Module,
     modules: &mut ModuleAnalyses,
@@ -336,8 +348,9 @@ fn tried_sites<E: From<String>>(
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
 ) -> Result<bool, E> {
     let mut stayed = false;
-    // One site at a time, and one that was put back is not tried again: it is the same call in the
-    // same body every round (mdl_ai.c re-ran its pipeline some 600 times for 20 sites).
+    // One site at a time, and one that was put back is not tried again: it is
+    // the same call in the same body every round (mdl_ai.c re-ran its
+    // pipeline some 600 times for 20 sites).
     let untried: Vec<_> = sites.iter().filter(|(site, _)| !refused.contains(&(caller, **site))).collect();
     for (&site, candidate) in untried {
         let counts = inline::call_counts(module);
@@ -385,10 +398,11 @@ fn tried_sites<E: From<String>>(
     Ok(stayed)
 }
 
-/// A callee trial that was refused, and the state it was made in: the same trial in the same state is refused again, so
-/// it is not made again (host.c: 3 trials, each made in five rounds, and a trial is 37% of the compile). The state is
-/// the bodies it spliced and grew, the calls of the whole module, and the module analyses the pipeline of a body reads
-/// of the rest.
+/// A callee trial that was refused, and the state it was made in: the same
+/// trial in the same state is refused again, so it is not made again (host.c: 3
+/// trials, each made in five rounds, and a trial is 37% of the compile). The
+/// state is the bodies it spliced and grew, the calls of the whole module, and
+/// the module analyses the pipeline of a body reads of the rest.
 pub struct RefusedTrial {
     callees: Vec<GlobalId>,
     bodies: Vec<(GlobalId, llrm_mir::module::Function)>,
@@ -417,7 +431,8 @@ impl RefusedTrial {
     }
 }
 
-/// Each of `more`, the callees the clocks admit and the bytes do not, tried (`trial`). Whether any stayed.
+/// Each of `more`, the callees the clocks admit and the bytes do not, tried
+/// (`trial`). Whether any stayed.
 fn tried_callees<E: From<String>>(
     module: &mut Module,
     modules: &mut ModuleAnalyses,
@@ -453,8 +468,9 @@ fn tried_callees<E: From<String>>(
             refused.insert(*callee, candidate);
         }
     }
-    // Callees that feed one another (a constructor and what reads its result) pay together, not
-    // alone: each alone leaves the other's call holding what the pair would fold.
+    // Callees that feed one another (a constructor and what reads its result)
+    // pay together, not alone: each alone leaves the other's call holding
+    // what the pair would fold.
     if refused.len() > 1 {
         let together: Vec<_> = refused.iter().map(|(callee, candidate)| (*callee, *candidate)).collect();
         stayed |= trial(
@@ -475,9 +491,10 @@ fn tried_callees<E: From<String>>(
     Ok(stayed)
 }
 
-/// `callees` inlined at every direct call of them in `module`, where the callers and what goes
-/// with them come to fewer bytes than before (priced by `costs`): the callers re-run through the
-/// pipeline, and put back as they were where they do not.
+/// `callees` inlined at every direct call of them in `module`, where the
+/// callers and what goes with them come to fewer bytes than before (priced by
+/// `costs`): the callers re-run through the pipeline, and put back as they were
+/// where they do not.
 fn trial<E: From<String>>(
     module: &mut Module,
     modules: &mut ModuleAnalyses,
@@ -507,17 +524,20 @@ fn trial<E: From<String>>(
         .map(|(id, _, _)| id)
         .filter(|id| callees.iter().all(|(callee, _)| id != callee) && only.is_none_or(|one| one == *id))
         .collect();
-    // Every call re-runs a caller's pipeline: a callee at many sites is not tried (savegame.c's took
-    // 4x the compile time), and an estimate's noise over so many copies is no tolerance.
+    // Every call re-runs a caller's pipeline: a callee at many sites is not
+    // tried (savegame.c's took 4x the compile time), and an estimate's
+    // noise over so many copies is no tolerance.
     let counts = inline::call_counts(module);
     let sites: Vec<i64> = callees.iter().map(|(callee, _)| counts.get(callee).copied().unwrap_or(0)).collect();
-    // Bodies held only to inline from are small and meant to be copied everywhere: every site is
-    // spliced and a caller's pipeline runs once, not after each, so the sites do not cost compile time.
+    // Bodies held only to inline from are small and meant to be copied
+    // everywhere: every site is spliced and a caller's pipeline runs once,
+    // not after each, so the sites do not cost compile time.
     let held = callees.iter().all(|(callee, _)| module.global(*callee).linkage == Linkage::AvailableExternally);
     if !held && sites.iter().any(|&count| count > TRIED_SITES) {
         return Ok(false);
     }
-    // Nothing of such a body goes with its last call, so each caller is judged on its own.
+    // Nothing of such a body goes with its last call, so each caller is judged
+    // on its own.
     if held && only.is_none() {
         let mut stayed = false;
         for &caller in &callers {
@@ -563,7 +583,8 @@ fn trial<E: From<String>>(
     for &id in &callers {
         let by =
             inline::Caller { layout, recursive: recursive.contains(&id), base: bases.get(&id).copied().unwrap_or(0) };
-        // One site a time, as the rounds do, the body through the pipeline after each.
+        // One site a time, as the rounds do, the body through the pipeline
+        // after each.
         let mut spliced = false;
         loop {
             let mut declared = declared(modules, module);
@@ -575,9 +596,10 @@ fn trial<E: From<String>>(
             }
             spliced = true;
         }
-        // Every site spliced, the body through the pipeline once: the way gcc and LLVM inline, and a trial of a callee
-        // at several sites ran the pipeline once for each (host.c -6.6%, QCport -2.2%; the code of every
-        // program measured the same).
+        // Every site spliced, the body through the pipeline once: the way gcc
+        // and LLVM inline, and a trial of a callee at several sites ran
+        // the pipeline once for each (host.c -6.6%, QCport -2.2%; the code of
+        // every program measured the same).
         if spliced {
             modules.changed(id);
             modules.invalidate(&PreservedAnalyses::none());
@@ -646,8 +668,9 @@ fn trial<E: From<String>>(
     Ok(false)
 }
 
-/// Whether `id`, after inlining and the pipeline, comes to more than it did (`before`), less the
-/// callees nothing calls now and nothing outside reaches, which go.
+/// Whether `id`, after inlining and the pipeline, comes to more than it did
+/// (`before`), less the callees nothing calls now and nothing outside reaches,
+/// which go.
 fn grew(
     module: &Module,
     callees: &llrm_mir::memory::Callees,
@@ -727,7 +750,8 @@ pub fn optimized<E: From<String>>(
     // What each body does, stated on it, is what inlining and the dead-call
     // removal below read.
     stamped_all(program, modules).map_err(E::from)?;
-    // How large each body is before anything is inlined into it: what its growth is measured against.
+    // How large each body is before anything is inlined into it: what its
+    // growth is measured against.
     let mut bases: Vec<llrm_support::hash::IndexMap<GlobalId, i64>> = (0..count)
         .map(|at| {
             procedures[at]
@@ -788,7 +812,8 @@ pub fn optimized<E: From<String>>(
                     changed = true;
                     inline_round += 1;
                 }
-                // What only the clocks admit stays only where it comes to no more.
+                // What only the clocks admit stays only where it comes to no
+                // more.
                 if loose.is_some()
                     && tried_sites(
                         module,
@@ -832,8 +857,9 @@ pub fn optimized<E: From<String>>(
         }
     }
 
-    // A pointer a body only reads through is given as the fields it reads, before what its callers pass
-    // is propagated: a length or a segment now crosses the call as a value.
+    // A pointer a body only reads through is given as the fields it reads,
+    // before what its callers pass is propagated: a length or a segment now
+    // crosses the call as a value.
     let (priced, bytes) = match loose {
         Some(clocks) if rate > 0 => (clocks, false),
         _ => (costs, true),
@@ -912,7 +938,8 @@ pub fn optimized<E: From<String>>(
             propagate_constant_returns(&procedures, program, modules, &mut return_round, reoptimised)?;
         }
 
-        // A function called with a constant is copied for it (gcc's ipa-cp), and the calls go to the copy.
+        // A function called with a constant is copied for it (gcc's ipa-cp),
+        // and the calls go to the copy.
         let mut cloned_now = false;
         for at in 0..count {
             let made = crate::ipacp::cloned(
@@ -988,7 +1015,8 @@ pub fn optimized<E: From<String>>(
                     reoptimised(module, &mut modules[at], id, &format!("ipa-inline{argument_round}."))?;
                     inlined = true;
                 }
-                // What only the clocks admit stays only where it comes to no more.
+                // What only the clocks admit stays only where it comes to no
+                // more.
                 if loose.is_some()
                     && tried_sites(
                         module,
@@ -1034,8 +1062,8 @@ pub fn optimized<E: From<String>>(
             break;
         }
     }
-    // What its callers pass bounds each parameter of a body only they call: stated as a range, which
-    // the body's own proofs then read.
+    // What its callers pass bounds each parameter of a body only they call:
+    // stated as a range, which the body's own proofs then read.
     for round in 0..4 {
         let stamped = llrm_analysis::parameter_ranges::stamp(program, &unexported);
         if stamped.is_empty() {
@@ -1050,14 +1078,17 @@ pub fn optimized<E: From<String>>(
     for at in 0..count {
         for id in crate::deadargs::removed(&mut program.modules[at]) {
             edited(&mut modules[at], &[id]);
-            // A body with fewer values to carry is another body to the loop passes and the recursion's.
+            // A body with fewer values to carry is another body to the loop
+            // passes and the recursion's.
             reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-deadargs.")?;
         }
     }
-    // GCC's recursive inlining: a function that calls itself is given copies of itself (`inline::inlined_into_itself`),
-    // as -finline-functions does, so not at -O1's none or -Os (the recursive call is cold there). After the
-    // parameters nothing reads are gone and the tail calls are loops, as GCC's early passes have made them: a body
-    // with two calls would be a tree, not a chain.
+    // GCC's recursive inlining: a function that calls itself is given copies of
+    // itself (`inline::inlined_into_itself`), as -finline-functions does,
+    // so not at -O1's none or -Os (the recursive call is cold there). After the
+    // parameters nothing reads are gone and the tail calls are loops, as GCC's
+    // early passes have made them: a body with two calls would be a tree,
+    // not a chain.
     if let Some(budget) = threshold.budget(reach).filter(|_| !threshold.single) {
         for at in 0..count {
             for &id in &procedures[at] {
@@ -1191,15 +1222,18 @@ fn published(
 /// Each body whose definition is exact stamped with what it is proved to
 /// do, as LLVM's FunctionAttrs states it, callees first so a caller sees
 /// what they state:
-/// - `memory(...)`: alias's summary through the pointer parameters and elsewhere, its own frame aside; volatile
-///   accesses and callees reach inaccessible memory. A stated one only narrows.
-/// - on each pointer parameter it keeps no copy of, `nocapture`, then `readnone`, `readonly` or `writeonly`, and
-///   `initializes`.
-/// - `willreturn` where every path returns without looping and every call states it, or where the language promises
-///   each loop ends (`mustprogress` on the function, `llvm.loop.mustprogress` on each loop) of a function that does
-///   nothing observable;
-/// - `norecurse` where nothing can enter it again while it runs; `nounwind` where every call states it and no access
-///   can fault (`interprocedural::cannot_fault`).
+/// - `memory(...)`: alias's summary through the pointer parameters and
+///   elsewhere, its own frame aside; volatile accesses and callees reach
+///   inaccessible memory. A stated one only narrows.
+/// - on each pointer parameter it keeps no copy of, `nocapture`, then
+///   `readnone`, `readonly` or `writeonly`, and `initializes`.
+/// - `willreturn` where every path returns without looping and every call
+///   states it, or where the language promises each loop ends (`mustprogress`
+///   on the function, `llvm.loop.mustprogress` on each loop) of a function that
+///   does nothing observable;
+/// - `norecurse` where nothing can enter it again while it runs; `nounwind`
+///   where every call states it and no access can fault
+///   (`interprocedural::cannot_fault`).
 ///
 /// Any other attribute already stated stays. The bodies stamped; the
 /// caller drops `analyses` when there are any.
@@ -1256,7 +1290,8 @@ pub fn stamped(
                 ),
             );
         let norecurse = graph.cannot_reenter(module, id);
-        // The language's word that its loops end holds where nothing a loop that never ended could be seen by.
+        // The language's word that its loops end holds where nothing a loop
+        // that never ended could be seen by.
         let unobserved = !volatile
             && calls.iter().all(|&inst| !llrm_mir::memory::of(&module.context, &callees, function, inst).writes);
         let promised = norecurse
@@ -1265,7 +1300,8 @@ pub fn stamped(
             && llrm_mir::loops::ends_by_promise(&module.metadata, function, Facts::of(&function.attrs).must_progress());
         let counted = || {
             let shape = Shape::of(function);
-            // Found once for the function, not for each loop: the proofs of every loop ask the same.
+            // Found once for the function, not for each loop: the proofs of
+            // every loop ask the same.
             let registers = llrm_analysis::consts::known(
                 &unit_of(module, layout, function).with_spaces(program.target.spaces()),
                 None,
@@ -1494,8 +1530,9 @@ mod tests;
 mod stays_tests {
     use super::stays;
 
-    /// Callers of 100 bytes before, a callee of 40 copied and then going (40 gone): after less gone may be 110, a
-    /// quarter of the 40 over, and not 111.
+    /// Callers of 100 bytes before, a callee of 40 copied and then going (40
+    /// gone): after less gone may be 110, a quarter of the 40 over, and not
+    /// 111.
     #[test]
     fn a_change_within_a_quarter_of_the_copied_body_is_the_estimates_noise() {
         assert!(stays(140, 40, 100, 40, 0), "no more");

@@ -1,4 +1,5 @@
-//! A float load that only one arithmetic instruction reads is that instruction's memory operand.
+//! A float load that only one arithmetic instruction reads is that
+//! instruction's memory operand.
 
 use std::process::Command;
 
@@ -7,8 +8,9 @@ double f(double p, double *q) { return p * q[0] + q[1]; }
 float g(float p, float *q) { return q[0] - p * q[1]; }
 ";
 
-/// `fld qword ptr [eax+8]; faddp st(1), st(0)` was two instructions and a register where `fadd qword ptr [eax+8]` is
-/// one (gcc's output has it everywhere; x_horner, nbody).
+/// `fld qword ptr [eax+8]; faddp st(1), st(0)` was two instructions and a
+/// register where `fadd qword ptr [eax+8]` is one (gcc's output has it
+/// everywhere; x_horner, nbody).
 #[test]
 fn test_a_float_load_one_instruction_reads_is_that_instruction_s_memory_operand() {
     let scratch = tempfile::tempdir().unwrap();

@@ -353,9 +353,10 @@ fn test_the_step_runs_as_a_program_pass() {
 
 #[test]
 fn test_a_size_build_weighs_bytes_not_clocks() {
-    // A nine-operation body at three sites: cheaper than three calls in clocks, dearer in bytes
-    // (the callers come to more with the body copied than with three calls, though the body goes).
-    // -Os copied it and grew the code.
+    // A nine-operation body at three sites: cheaper than three calls in clocks,
+    // dearer in bytes (the callers come to more with the body copied than
+    // with three calls, though the body goes). -Os copied it and grew the
+    // code.
     let text = "define i16 @mix(i16 %a, i16 %b) {
 b:
   %t0 = xor i16 %a, %b
@@ -395,8 +396,9 @@ b:
         manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
         printed(&module).matches("call i16 @mix").count()
     };
-    // Weighing clocks alone inlines every site; weighing bytes puts them back, at -Os and at -O2 (QCport
-    // -O2 ran 11 KB past BCC's code, and out of memory), unless the clocks saved pay for the bytes.
+    // Weighing clocks alone inlines every site; weighing bytes puts them back,
+    // at -Os and at -O2 (QCport -O2 ran 11 KB past BCC's code, and out of
+    // memory), unless the clocks saved pay for the bytes.
     assert_eq!((calls(None), calls(Some(0)), calls(Some(1))), (0, 3, 0));
 }
 
@@ -846,9 +848,9 @@ fn stamped_with(
 
 /// A function that nothing can enter while it runs says so: a leaf, one that
 /// calls a `nocallback` declaration or an intrinsic. Not one that calls itself,
-/// its mutual caller, an unbounded pointer, a declaration that may call back, or
-/// anything reaching those. The stamp the compilers run was never given this:
-/// the first inference lived where no compile reaches.
+/// its mutual caller, an unbounded pointer, a declaration that may call back,
+/// or anything reaching those. The stamp the compilers run was never given
+/// this: the first inference lived where no compile reaches.
 #[test]
 fn the_stamp_infers_norecurse_where_nothing_can_reenter() {
     let text = "declare void @quiet() nocallback
@@ -959,9 +961,10 @@ fn the_stamp_takes_the_languages_word_that_a_loop_ends() {
     assert!(!ends(spin("", "load volatile", marked)));
 }
 
-/// `for (;;)` hangs: only a loop whose controlling expression is not constant may
-/// be assumed to end, so a function with one is never `willreturn`, whatever
-/// else is marked, and a loop with no edge out never ends however it is marked.
+/// `for (;;)` hangs: only a loop whose controlling expression is not constant
+/// may be assumed to end, so a function with one is never `willreturn`,
+/// whatever else is marked, and a loop with no edge out never ends however it
+/// is marked.
 #[test]
 fn a_loop_with_no_exit_is_never_taken_to_end() {
     let function = |second: &str| {
@@ -999,9 +1002,10 @@ done:
     );
 }
 
-/// A call the byte price refuses and the clocks admit stays inlined where the callers and the
-/// callee that goes come to no more (speaker.nib: `now` at two sites, the loop then in registers,
-/// -30 bytes), and is put back where they do (the test above).
+/// A call the byte price refuses and the clocks admit stays inlined where the
+/// callers and the callee that goes come to no more (speaker.nib: `now` at two
+/// sites, the loop then in registers, -30 bytes), and is put back where they do
+/// (the test above).
 #[test]
 fn test_what_only_the_clocks_admit_is_kept_where_the_callee_going_pays_for_it() {
     let text = "define internal i16 @triple(i16 %a) {
@@ -1040,8 +1044,9 @@ b:
     assert_eq!((calls(false), calls(true)), (0, 0));
 }
 
-/// A site put back is not tried again: it is the same call in the same body every round, and each try
-/// re-ran the caller's pipeline (mdl_ai.c: 59 s against 28 s for the same code).
+/// A site put back is not tried again: it is the same call in the same body
+/// every round, and each try re-ran the caller's pipeline (mdl_ai.c: 59 s
+/// against 28 s for the same code).
 #[test]
 fn test_a_site_the_trial_put_back_is_not_tried_again() {
     let text = "define internal i16 @mix(i16 %a, i16 %b) {
@@ -1192,8 +1197,8 @@ fn test_another_actual_for_the_parameter_keeps_it_unknown() {
 }
 
 /// queens' `place`: `row` from 0 and from `row + 1` below `n`, the calls
-/// known to be those of the program: `row` is in 0 to 7, which `row <u 12`, the length's
-/// check, then leaves nothing to decide (`decide` reads the stamp).
+/// known to be those of the program: `row` is in 0 to 7, which `row <u 12`, the
+/// length's check, then leaves nothing to decide (`decide` reads the stamp).
 fn bounded_recursion(extra: &str) -> String {
     format!(
         "define internal i16 @place(i16 %row, i16 %n) {{
@@ -1231,7 +1236,8 @@ fn test_what_the_callers_pass_bounds_a_parameter_the_body_checks() {
     assert!(text.contains("range(i16 0, 8) %row"), "{text}");
 }
 
-/// A call from elsewhere with a value of its own, or through a pointer, leaves the parameter unbounded.
+/// A call from elsewhere with a value of its own, or through a pointer, leaves
+/// the parameter unbounded.
 #[test]
 fn test_another_caller_leaves_the_parameter_unbounded() {
     let mut module = parsed(&bounded_recursion("  %y = call i16 @place(i16 %a, i16 7)\n"));
@@ -1240,8 +1246,10 @@ fn test_another_caller_leaves_the_parameter_unbounded() {
     assert!(text.contains("icmp ult i16 %row, 12"), "{text}");
 }
 
-/// A function called with a constant is copied for it at -O3 (gcc's `-fipa-cp-clone`): `g`'s loop runs `%k` trips,
-/// which the copies for 4 and for 5 know. gcc's -O3 queens is eight such copies of its recursive `place`, one a row.
+/// A function called with a constant is copied for it at -O3 (gcc's
+/// `-fipa-cp-clone`): `g`'s loop runs `%k` trips, which the copies for 4 and
+/// for 5 know. gcc's -O3 queens is eight such copies of its recursive `place`,
+/// one a row.
 const TWO_CONTEXTS: &str = "define i16 @g(i16 %k, i16 %x) {
 b0:
   br label %head
@@ -1284,8 +1292,9 @@ fn test_a_function_called_with_two_constants_is_cloned_for_each_at_o3() {
     assert_eq!(cloned(true), (true, true));
 }
 
-/// A small function that calls itself is given copies of itself (gcc's `recursive_inlining`,
-/// `max-inline-recursive-depth-auto` 8 and `-insns-recursive-auto` 450): `hanoi` at -O2 was one call per move, gcc's is
+/// A small function that calls itself is given copies of itself (gcc's
+/// `recursive_inlining`, `max-inline-recursive-depth-auto` 8 and
+/// `-insns-recursive-auto` 450): `hanoi` at -O2 was one call per move, gcc's is
 /// eight levels in one body.
 const COUNT: &str = "define i16 @f(i16 %n) {
 b0:
@@ -1319,8 +1328,9 @@ fn test_a_small_recursive_function_is_inlined_into_itself_to_a_depth() {
     assert_eq!(calls(Threshold::default().for_size()), 2, "not for size: the recursive call is cold there");
 }
 
-/// A callee trial that was refused is not made again in the state it was made in (host.c: three trials, each made in
-/// five rounds, 37% of the compile, objects the same). Each try re-ran the callers' pipelines.
+/// A callee trial that was refused is not made again in the state it was made
+/// in (host.c: three trials, each made in five rounds, 37% of the compile,
+/// objects the same). Each try re-ran the callers' pipelines.
 #[test]
 fn test_a_callee_the_trial_refused_is_not_tried_again_in_the_same_state() {
     let text = "define internal i16 @mix(i16 %a, i16 %b) {
@@ -1391,8 +1401,9 @@ b:
     assert_eq!(runs.get(), first, "the second round made the refused trial again");
 }
 
-/// A trial of a callee at several sites splices them all and runs the caller's pipeline once, the way gcc and LLVM
-/// inline: it ran the pipeline after each site (host.c -6.6%, QCport -2.2%, the code the same).
+/// A trial of a callee at several sites splices them all and runs the caller's
+/// pipeline once, the way gcc and LLVM inline: it ran the pipeline after each
+/// site (host.c -6.6%, QCport -2.2%, the code the same).
 #[test]
 fn test_a_trial_of_a_callee_at_several_sites_runs_the_callers_pipeline_once() {
     let text = "define internal i16 @mix(i16 %a, i16 %b) {
@@ -1460,10 +1471,11 @@ b:
     assert_eq!(runs.get(), 1, "the pipeline ran once for each of the callee's two sites");
 }
 
-/// A round assumes a parameter's range before it proves it (`place`'s `row` is 0 at first), and under it a loop `r <
-/// row` that runs from 0 is never entered: the facts of the loop around it and of its own contradict each other there,
-/// and a call in it passes nothing. Passing what the contradiction left (`r` below 0) made the callee's parameter range
-/// wide for good.
+/// A round assumes a parameter's range before it proves it (`place`'s `row` is
+/// 0 at first), and under it a loop `r < row` that runs from 0 is never
+/// entered: the facts of the loop around it and of its own contradict each
+/// other there, and a call in it passes nothing. Passing what the contradiction
+/// left (`r` below 0) made the callee's parameter range wide for good.
 #[test]
 fn test_a_call_in_a_block_the_assumed_range_makes_unreachable_passes_nothing() {
     let mut module = parsed(

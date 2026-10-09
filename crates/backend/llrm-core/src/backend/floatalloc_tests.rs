@@ -119,7 +119,8 @@ fn arith(
     }
 }
 
-/// Run allocated instructions over `memory`, cells to numbers: the memory after and the stack left.
+/// Run allocated instructions over `memory`, cells to numbers: the memory after
+/// and the stack left.
 fn _x87(
     insns: &[Arc<Insn>],
     memory: &[(&Mem, f64)],
@@ -203,7 +204,8 @@ fn _x87_traced(
     (memory, stack, stores)
 }
 
-/// The instructions run along `path`, through any block allocation put on an edge of it.
+/// The instructions run along `path`, through any block allocation put on an
+/// edge of it.
 fn _along(
     result: &LirBody,
     path: &[i64],
@@ -370,7 +372,8 @@ fn test_a_load_is_not_read_again_after_a_store_that_may_reach_it() {
 
 #[test]
 fn test_a_first_read_moves_past_a_trapping_instruction_only_for_a_quiet_cell() {
-    // `fld m32` raises on a signalling NaN; read after a division, that exception would come second.
+    // `fld m32` raises on a signalling NaN; read after a division, that
+    // exception would come second.
     for proven in [false, true] {
         let cells = _cells([-4, -8, -12, -16, -20, -24, -28], 4);
         let (w, x, y, c, z, out, other) = (&cells[0], &cells[1], &cells[2], &cells[3], &cells[4], &cells[5], &cells[6]);
@@ -403,7 +406,8 @@ fn test_a_first_read_moves_past_a_trapping_instruction_only_for_a_quiet_cell() {
 
 #[test]
 fn test_arithmetic_overwrites_the_operand_that_dies() {
-    // Neither operand on top, the second dying: the first was exchanged up and duplicated where one exchange does.
+    // Neither operand on top, the second dying: the first was exchanged up and
+    // duplicated where one exchange does.
     let cells = _cells([-10, -20, -30, -40, -50, -60], 10);
     let (x, y, z, first, second, third) = (&cells[0], &cells[1], &cells[2], &cells[3], &cells[4], &cells[5]);
     let mut operations = Vec::new();
@@ -450,7 +454,8 @@ fn _sparing_the_frame(body: LirBody) -> LirBody {
 
 #[test]
 fn test_a_float_live_across_a_call_is_read_again_from_its_cell() {
-    // A value loaded before a call and stored after it refused the whole object.
+    // A value loaded before a call and stored after it refused the whole
+    // object.
     for boundary in [Operation::Call, Operation::Barrier] {
         let (source, target) = (frame_cell(-4, 4), frame_cell(-8, 4));
         let body = _sparing_the_frame(_body(vec![
@@ -465,7 +470,8 @@ fn test_a_float_live_across_a_call_is_read_again_from_its_cell() {
             .filter(|one| what(one).op != Operation::Nothing)
             .map(|one| (name(one).to_owned(), what(one).dests.clone(), what(one).sources.clone()))
             .collect();
-        // The source cell is unchanged across it: read again, with nothing spilled.
+        // The source cell is unchanged across it: read again, with nothing
+        // spilled.
         assert_eq!(
             shape,
             vec![
@@ -498,7 +504,8 @@ fn test_a_value_loaded_before_a_barrier_is_not_the_cell_after_it() {
     ]);
     let insns = with_frame(&body, &mut Frame::new(-8)).insns();
     let barrier = insns.iter().position(|one| what(one).op == Operation::Barrier).expect("the barrier");
-    // The value from before it waits in a slot of its own, not the cell the barrier may write.
+    // The value from before it waits in a slot of its own, not the cell the
+    // barrier may write.
     assert!(
         insns[..barrier]
             .iter()
@@ -509,8 +516,9 @@ fn test_a_value_loaded_before_a_barrier_is_not_the_cell_after_it() {
 
 #[test]
 fn test_region_value_reuses_one_reload_until_an_unknown_effect() {
-    // A shared floating result crossing a fork reloaded its owned slot for every store.
-    // It now stays on the stack across the edge; only a call sends it to memory.
+    // A shared floating result crossing a fork reloaded its owned slot for
+    // every store. It now stays on the stack across the edge; only a call
+    // sends it to memory.
     for boundary in [None, Some(Operation::Call), Some(Operation::Barrier)] {
         let cell = frame_cell(-4, 4);
         let mut operations = vec![_load(1, &cell), _store(&cell, 1)];
@@ -552,7 +560,8 @@ fn test_region_value_reuses_one_reload_until_an_unknown_effect() {
 
 #[test]
 fn test_a_load_read_once_by_the_next_arithmetic_is_its_memory_operand() {
-    // `fld [x]` then a popping multiply spent an instruction and a stack slot `fmul [x]` does not.
+    // `fld [x]` then a popping multiply spent an instruction and a stack slot
+    // `fmul [x]` does not.
     for (loaded, op, loaded_first, fused) in
         [("fld", "fmul", false, "fmul"), ("fld", "fsub", true, "fsubr"), ("fild", "fdiv", false, "fidiv")]
     {
@@ -631,7 +640,8 @@ fn test_square_keeps_the_next_used_operand_on_top() {
 
 #[test]
 fn test_runtime_stack_integer_result_uses_memory_without_named_float_values() {
-    // SYS_INIT_TABLES at 08fa refused FISTP EBX after POW4 returned in physical ST0.
+    // SYS_INIT_TABLES at 08fa refused FISTP EBX after POW4 returned in physical
+    // ST0.
     for width in [2, 4] {
         let result = Loc::Held(Held { value: 2, width });
         let cell = frame_cell(-8, width);
@@ -653,7 +663,8 @@ fn test_runtime_stack_integer_result_uses_memory_without_named_float_values() {
 
 #[test]
 fn test_integer_result_waits_before_reading_owned_conversion_storage() {
-    // B$FIST/B$FIS2 wait on both sides of conversion before returning the integer.
+    // B$FIST/B$FIS2 wait on both sides of conversion before returning the
+    // integer.
     for width in [2, 4] {
         let result = Loc::Held(Held { value: 2, width });
         let cell = frame_cell(-8, 8);
@@ -679,7 +690,8 @@ fn test_integer_result_waits_before_reading_owned_conversion_storage() {
 
 #[test]
 fn test_unused_integer_conversion_keeps_checkpoints_without_materializing_result() {
-    // Constant print arguments can leave an unused conversion result; both waits must survive.
+    // Constant print arguments can leave an unused conversion result; both
+    // waits must survive.
     for width in [2, 4] {
         let cell = frame_cell(-8, 8);
         let body = _body(vec![
@@ -731,7 +743,8 @@ fn test_conversion_result_is_kept_for_non_operand_readers() {
 
 #[test]
 fn test_ninth_float_uses_an_owned_spill() {
-    // Nine live FP values previously refused allocation. Machine semantics spill as a double.
+    // Nine live FP values previously refused allocation. Machine semantics
+    // spill as a double.
     let sources = _cells((-40..-4).step_by(4), 4);
     let answers = _cells((-80..-44).step_by(4), 4);
     let mut operations = Vec::new();
@@ -767,8 +780,9 @@ fn test_ninth_float_uses_an_owned_spill() {
 
 #[test]
 fn test_float_survives_fork_join_and_loop_without_rereading_source() {
-    // A dominating extended value was refused at forks, joins and loop boundaries.
-    // It now stays on the stack through all of them, with no memory between.
+    // A dominating extended value was refused at forks, joins and loop
+    // boundaries. It now stays on the stack through all of them, with no
+    // memory between.
     for path in [vec![0, 16, 48], vec![0, 32, 48], vec![0, 16, 16, 48]] {
         let cell = frame_cell(-20, 10);
         let source = frame_cell(-10, 10);
@@ -792,7 +806,8 @@ fn test_float_survives_fork_join_and_loop_without_rereading_source() {
         let insns = _along(&result, &path);
         assert!(insns.iter().all(|one| emits(what(one))));
         assert_eq!(insns.iter().filter(|one| what(one).sources.contains(&m(&source))).count(), 1);
-        // Python used Fraction(1) + 2**-63: any value only moved, never computed.
+        // Python used Fraction(1) + 2**-63: any value only moved, never
+        // computed.
         let precise = 1.25;
         let (_, stack, stores) = _x87_traced(&insns, &[(&source, precise)]);
         assert_eq!(stores, vec![(cell.clone(), precise); path.len() - 1]);
@@ -803,7 +818,8 @@ fn test_float_survives_fork_join_and_loop_without_rereading_source() {
 
 #[test]
 fn test_floating_bridge_never_reads_an_unestablished_slot() {
-    // Cross-block allocation must not turn a missing definition into a frame read.
+    // Cross-block allocation must not turn a missing definition into a frame
+    // read.
     for defect in ["entry", "bypass"] {
         let cell = frame_cell(-10, 10);
         let body = _body(vec![_load(1, &cell), _store(&cell, 1)]);
@@ -825,7 +841,8 @@ fn test_floating_bridge_never_reads_an_unestablished_slot() {
 
 #[test]
 fn test_floating_loop_phis_swap_in_parallel_on_the_critical_backedge() {
-    // Floating loop phis were refused; serial slot copies would turn (1,2) into (2,2).
+    // Floating loop phis were refused; serial slot copies would turn (1,2) into
+    // (2,2).
     for target in [16, 48] {
         let cells: Vec<Mem> = [1, 2, 3].iter().map(|index| frame_cell(-10 * index, 10)).collect();
         let mut body = _body(vec![
@@ -878,8 +895,8 @@ fn test_live_store_uses_nonpopping_encoding_when_available() {
 
 #[test]
 fn test_shared_float_crosses_only_a_unique_straight_line_edge() {
-    // A shared sum was refused at a block edge despite one unchanged stack path.
-    // Only a value no path defines is refused.
+    // A shared sum was refused at a block edge despite one unchanged stack
+    // path. Only a value no path defines is refused.
     for boundary in ["linear", "reversed", "separated", "fork", "join", "entry"] {
         let cell = frame_cell(-4, 4);
         let mut body = _body(vec![
@@ -914,13 +931,15 @@ fn test_shared_float_crosses_only_a_unique_straight_line_edge() {
             body.blocks.iter().map(|block| block.at).collect::<Vec<_>>()
         );
         let by_at: HashMap<i64, &LirBlock> = allocated.blocks.iter().map(|block| (block.at, block)).collect();
-        // Where the other way out reads none, the load is made once the fork is taken's way: the
-        // fork's block 0 no longer loads for an arm half the calls never read.
+        // Where the other way out reads none, the load is made once the fork is
+        // taken's way: the fork's block 0 no longer loads for an arm
+        // half the calls never read.
         let first: &[&str] =
             if boundary == "fork" { &["", "fld", "fmul", "fstp"] } else { &["fld", "fld", "fmul", "fstp"] };
         assert_eq!(by_at[&0].insns.iter().map(|one| name(one)).collect::<Vec<_>>(), first, "{boundary}");
         if boundary == "fork" {
-            // The arm that reads it loads it; the other keeps nothing on the stack to pop.
+            // The arm that reads it loads it; the other keeps nothing on the
+            // stack to pop.
             assert_eq!(by_at[&24].insns.iter().map(|one| name(one)).collect::<Vec<_>>(), ["fld", "fdiv", "fstp"]);
             assert_eq!(by_at[&80].insns.iter().map(|one| name(one)).collect::<Vec<_>>(), Vec::<&str>::new());
         } else {
@@ -937,7 +956,8 @@ fn test_shared_float_crosses_only_a_unique_straight_line_edge() {
 
 #[test]
 fn test_integer_conversion_materializes_a_frame_operand() {
-    // FPCALC's computed integer must reach FILD through an owned, correctly sized slot.
+    // FPCALC's computed integer must reach FILD through an owned, correctly
+    // sized slot.
     for width in [2, 4] {
         let integer = Loc::Held(Held { value: 1, width });
         let output = frame_cell(-8, 8);
@@ -977,7 +997,8 @@ fn test_integer_conversion_into_physical_x87_stack_materializes_memory() {
 
 #[test]
 fn test_buried_float_operand_is_exchanged_not_duplicated() {
-    // A second live value must not prevent using the first, or reverse subtraction.
+    // A second live value must not prevent using the first, or reverse
+    // subtraction.
     for operation in ["fsub", "fchs", "fstp", "fsubp"] {
         let cells = _cells([-4, -8, -12, -16], 4);
         let (first_cell, second_cell, answer, kept) = (&cells[0], &cells[1], &cells[2], &cells[3]);
@@ -1012,7 +1033,8 @@ fn test_buried_float_operand_is_exchanged_not_duplicated() {
                         && what.op == Operation::FloatLoad
             })
             .collect();
-        // Both operands of the popping subtraction die, so the result overwrites one in place.
+        // Both operands of the popping subtraction die, so the result
+        // overwrites one in place.
         assert_eq!(
             moves.iter().map(|one| name(one)).collect::<Vec<_>>(),
             if operation == "fsubp" { vec![] } else { vec!["fxch"] }
@@ -1034,7 +1056,8 @@ fn test_buried_float_operand_is_exchanged_not_duplicated() {
 
 #[test]
 fn test_last_register_operand_is_consumed_without_reversing_arithmetic() {
-    // Forwarded floating memory operands must die without leaking a stack slot or reversing division.
+    // Forwarded floating memory operands must die without leaking a stack slot
+    // or reversing division.
     for (op, popping, expected) in
         [("fadd", "faddp", 9.0), ("fmul", "fmulp", 14.0), ("fsub", "fsubrp", 5.0), ("fdiv", "fdivrp", 3.5)]
     {
@@ -1098,7 +1121,8 @@ fn test_missing_float_is_not_created_by_an_exchange() {
 
 #[test]
 fn test_shared_producer_is_kept_across_two_arithmetic_consumers() {
-    // FPCSE's shared sum needs to survive multiplication before division reads it.
+    // FPCSE's shared sum needs to survive multiplication before division reads
+    // it.
     let cell = frame_cell(-4, 4);
     let body = _body(vec![
         _load(1, &cell),
@@ -1201,7 +1225,8 @@ fn test_profitable_multiuse_float_home_is_retained_for_the_selected_cpu() {
 
 #[test]
 fn test_independent_x87_regions_select_their_own_complete_candidate() {
-    // One bad stack region made the old whole-body choice discard a cheaper sibling.
+    // One bad stack region made the old whole-body choice discard a cheaper
+    // sibling.
     let cells = _cells([-4, -8, -12, -16, -20, -24], 4);
     let (home, left_cell, right_cell, square_out, left_out, right_out) =
         (&cells[0], &cells[1], &cells[2], &cells[3], &cells[4], &cells[5]);
@@ -1420,7 +1445,8 @@ fn test_an_integer_constant_loads_from_the_pool() {
 
 #[test]
 fn test_a_loop_accumulator_stays_on_the_stack_across_the_back_edge() {
-    // Every block edge was a region end: the running sum went through a ten-byte cell each iteration.
+    // Every block edge was a region end: the running sum went through a
+    // ten-byte cell each iteration.
     let (start, step, answer) = (frame_cell(-8, 8), frame_cell(-16, 8), frame_cell(-24, 8));
     let mut body = _body(vec![
         _load(1, &start),
@@ -1479,7 +1505,8 @@ fn spill_traffic(result: &LirBody) -> usize {
 
 #[test]
 fn test_a_copy_between_spilled_values_is_no_instruction() {
-    // Each value had its own cell, so a phi's copy across calls loaded one cell and stored another.
+    // Each value had its own cell, so a phi's copy across calls loaded one cell
+    // and stored another.
     let (source, target) = (frame_cell(-4, 4), frame_cell(-8, 4));
     let call = || sem(Operation::Call, "call", vec![], vec![]);
     let body = _body(vec![
@@ -1569,7 +1596,8 @@ fn test_a_vacated_phi_copy_leaves_its_copy_group() {
 
 #[test]
 fn test_a_value_every_successor_spills_leaves_in_memory() {
-    // The first exit's stack fixed the bundle, so another exit reloaded a value only to store it again.
+    // The first exit's stack fixed the bundle, so another exit reloaded a value
+    // only to store it again.
     let (source, target) = (frame_cell(-4, 4), frame_cell(-8, 4));
     let call = || sem(Operation::Call, "call", vec![], vec![]);
     let mut body = _body(vec![

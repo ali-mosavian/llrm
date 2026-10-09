@@ -1,5 +1,6 @@
-//! `Profile::cost` built a map of the whole table for every instruction form it was asked: fpbench at -O0 spent 8% of
-//! its instructions in that map's inserts.
+//! `Profile::cost` built a map of the whole table for every instruction form it
+//! was asked: fpbench at -O0 spent 8% of its instructions in that map's
+//! inserts.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};

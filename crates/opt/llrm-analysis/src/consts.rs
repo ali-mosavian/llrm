@@ -19,7 +19,8 @@
 //! solve by body address, which a function changed in place no longer
 //! keeps: `manager` caches through the pass manager instead.
 //!
-//! Tests skipped: `test_constant_analysis_scope_reuses_an_unchanged_body_without_sharing_mutation`
+//! Tests skipped:
+//! `test_constant_analysis_scope_reuses_an_unchanged_body_without_sharing_mutation`
 //! (`reusing`); `test_pointer_displacement_constants_preserve_order_and_width`,
 //! `test_constant_subtraction_preserves_operand_order`,
 //! `test_constant_operand_keeps_its_memory_address_dependency`,
@@ -91,8 +92,10 @@ pub type HeldCells = IndexMap<InstId, Rc<Cells>>;
 /// nothing.
 pub type Calls = IndexMap<InstId, std::rc::Rc<[MemRef]>>;
 
-/// A reference as resolved for one epoch's queries, with the number it was given: a stable identity to key answers by,
-/// where its address varied from run to run and so did the work of the passes asking (`mir hoist`, up to 0.9%).
+/// A reference as resolved for one epoch's queries, with the number it was
+/// given: a stable identity to key answers by, where its address varied from
+/// run to run and so did the work of the passes asking (`mir hoist`, up to
+/// 0.9%).
 pub struct Resolved {
     pub id: u32,
     reference: MemRef,
@@ -110,11 +113,13 @@ pub struct _MemoryQueries<'a> {
     pub unit: Unit<'a>,
     pub known: IndexMap<ValueId, Known>,
     pub facts: BTreeMap<ValueId, Interval>,
-    /// Each reference asked, resolved, numbered in the order asked: the number is its identity in `overlaps`.
+    /// Each reference asked, resolved, numbered in the order asked: the number
+    /// is its identity in `overlaps`.
     pub addressed: HashMap<MemRef, Rc<Resolved>>,
-    /// Each call's shared list of references, resolved once: calls with the same effect hold one list, and hashing
-    /// every reference of it again at every call was 12% of through-memory. Keyed by the list's address, which its
-    /// clone here keeps.
+    /// Each call's shared list of references, resolved once: calls with the
+    /// same effect hold one list, and hashing every reference of it again
+    /// at every call was 12% of through-memory. Keyed by the list's address,
+    /// which its clone here keeps.
     listed: HashMap<usize, (Rc<[MemRef]>, Rc<[Rc<Resolved>]>)>,
     pub overlaps: HashMap<((Addr, u32), u32), bool>,
     pub places: HashMap<(Addr, u32), (OverlapBucket, Option<ByteRange>)>,
@@ -697,7 +702,8 @@ pub fn cells(
     let mut found = IndexMap::default();
     for block in &graph {
         let mut here = entering(&outof, block.at).unwrap_or(Here::Plain(Cells::default()));
-        // Instructions between two writes see one map, shared rather than copied per instruction.
+        // Instructions between two writes see one map, shared rather than
+        // copied per instruction.
         let mut shared: Option<Rc<Cells>> = None;
         for &inst in function.block(cfg::block(block.at)).instructions() {
             found.insert(inst, Rc::clone(shared.get_or_insert_with(|| Rc::new(here.cells().clone()))));
@@ -961,11 +967,12 @@ pub fn known(
     } else {
         MEMORY_DERIVATIONS.with(|count| count.set(count.get() + 1));
     }
-    // Each access asks whether its frame object is exposed: found once for the body, if no caller has.
+    // Each access asks whether its frame object is exposed: found once for the
+    // body, if no caller has.
     let exposed = unit.exposed.is_none().then(|| crate::memory::exposed_frames(unit));
     let unit = &exposed.as_ref().map_or(*unit, |table| unit.with_exposed(table));
-    // What alias annotates a store with reads what is known without memory: found here, with the memory's, where the
-    // unit carries none.
+    // What alias annotates a store with reads what is known without memory:
+    // found here, with the memory's, where the unit carries none.
     let registers = (calls.is_some() && unit.registers.is_none()).then(|| known(unit, None, None, None));
     let unit = &registers.as_ref().map_or(*unit, |found| unit.with_registers(found));
     // A store kills the cells alias's provenance leaves it able to reach.
@@ -989,14 +996,15 @@ thread_local! {
     static MEMORY_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has derived what is known of a body through memory, for a test that two passes that ask
-/// of one body share the answer.
+/// How many times this thread has derived what is known of a body through
+/// memory, for a test that two passes that ask of one body share the answer.
 pub fn memory_derivations() -> usize {
     MEMORY_DERIVATIONS.with(std::cell::Cell::get)
 }
 
-/// How many times this thread has derived what is known of a body without memory, for a test that a pass asks of the
-/// manager, or of itself once for each state of the body, and not once for each loop.
+/// How many times this thread has derived what is known of a body without
+/// memory, for a test that a pass asks of the manager, or of itself once for
+/// each state of the body, and not once for each loop.
 pub fn register_derivations() -> usize {
     REGISTER_DERIVATIONS.with(std::cell::Cell::get)
 }

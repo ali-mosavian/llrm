@@ -22,11 +22,15 @@
 //! `_resolved_reference` (nothing attaches one), and `annotated`'s outgoing
 //! stack excludes (no push area).
 //!
-//! Tests skipped: `test_outgoing_argument_stack_does_not_kill_current_frame_values`
-//! (no push area), `test_pointer_fact_does_not_hide_a_conflicting_concrete_operand_object`
-//! (no attached provenance), `test_a_lane_form_slice_names_every_byte_it_covers`
-//! (`named_bytes`). `test_unknown_call_reaches_nonlocals_and_only_its_pointer_actual`
-//! drops its Python `repr` order, and `test_interprocedural_modref_reaches_the_call_operation`
+//! Tests skipped:
+//! `test_outgoing_argument_stack_does_not_kill_current_frame_values`
+//! (no push area),
+//! `test_pointer_fact_does_not_hide_a_conflicting_concrete_operand_object`
+//! (no attached provenance),
+//! `test_a_lane_form_slice_names_every_byte_it_covers` (`named_bytes`).
+//! `test_unknown_call_reaches_nonlocals_and_only_its_pointer_actual`
+//! drops its Python `repr` order, and
+//! `test_interprocedural_modref_reaches_the_call_operation`
 //! its `memory_complete` flag: a call's effect is a side table.
 
 use std::cell::RefCell;
@@ -116,7 +120,8 @@ impl EscapedBefore {
         self.at.get(at).map(|bits| bits.iter().map(|one| self.objects[one].clone()).collect())
     }
 
-    /// What escaped before `at`, unnamed: two instructions with equal bits have the same objects.
+    /// What escaped before `at`, unnamed: two instructions with equal bits have
+    /// the same objects.
     pub fn bits(
         &self,
         at: &InstId,
@@ -319,12 +324,14 @@ pub struct Summary {
     pub unknown_read: bool,
     pub unknown_write: bool,
     /// The `!tbaa` access types of the writes `unknown_write` stands for, where
-    /// every one is a pointer no fact follows and has a type: a store of one type cannot land on a load of a
-    /// type apart from it, however unplaced its pointer. None: some has none.
+    /// every one is a pointer no fact follows and has a type: a store of one
+    /// type cannot land on a load of a type apart from it, however unplaced
+    /// its pointer. None: some has none.
     pub unknown_write_types: Option<BTreeSet<Access>>,
 }
 
-/// An access type: its name and its ancestors', as `MemRef::typed` and `lineage`.
+/// An access type: its name and its ancestors', as `MemRef::typed` and
+/// `lineage`.
 pub type Access = (std::rc::Rc<str>, std::rc::Rc<[String]>);
 
 /// The types of two writes' unplaced stores together.
@@ -385,13 +392,14 @@ impl Summary {
     }
 }
 
-/// What a procedure's calls are, of its body and the declarations alone: kept for the next run while neither has
-/// changed.
+/// What a procedure's calls are, of its body and the declarations alone: kept
+/// for the next run while neither has changed.
 #[derive(Debug, Default)]
 pub struct CallFacts {
     pub calls: IndexMap<InstId, String>,
     pub arguments: IndexMap<InstId, Vec<Actual>>,
-    /// The callees a definition elsewhere may replace: no summary describes a call to one.
+    /// The callees a definition elsewhere may replace: no summary describes a
+    /// call to one.
     pub replaceable: std::collections::BTreeSet<String>,
     /// Every call and invoke, in order.
     pub sites: Vec<InstId>,
@@ -420,7 +428,8 @@ impl<'a> Procedure<'a> {
         Self { unit, facts }
     }
 
-    /// `unit`'s procedure, its calls as `facts` (of this body and these declarations) say.
+    /// `unit`'s procedure, its calls as `facts` (of this body and these
+    /// declarations) say.
     pub fn with(
         unit: Unit<'a>,
         facts: Rc<CallFacts>,
@@ -611,7 +620,8 @@ fn _unknown_visible(
     Ok((reads, writes))
 }
 
-/// What a callee nobody summarized may read and write through each of `actual`, as `allowed` says.
+/// What a callee nobody summarized may read and write through each of `actual`,
+/// as `allowed` says.
 fn _through_arguments(
     allowed: &Allowed,
     actual: &[Provenance],
@@ -645,8 +655,9 @@ fn _unknown_other(
     Ok((reads, writes))
 }
 
-/// `_unknown_other` less what a call back into the module adds, which depends on the callbacks and nothing else a
-/// revisit changes; and whether the call may call back.
+/// `_unknown_other` less what a call back into the module adds, which depends
+/// on the callbacks and nothing else a revisit changes; and whether the call
+/// may call back.
 fn _unknown_base(
     unit: &Unit,
     facts: &PointsTo,
@@ -684,8 +695,9 @@ fn _unknown_base(
     Ok((reads, writes, callee.is_none() || globalsaa::calls_back(unit, at)))
 }
 
-/// What a call back into the module adds to what a call reads and writes: the callbacks' effects, and of the tracked
-/// globals all that the callbacks do not state, or where none are known.
+/// What a call back into the module adds to what a call reads and writes: the
+/// callbacks' effects, and of the tracked globals all that the callbacks do not
+/// state, or where none are known.
 fn _calling_back(
     unit: &Unit,
     callbacks: Option<&Summary>,
@@ -788,19 +800,20 @@ thread_local! {
     static VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has worked out what an unknown call does other than through its
-/// arguments, for a test that calls alike are worked out once.
+/// How many times this thread has worked out what an unknown call does other
+/// than through its arguments, for a test that calls alike are worked out once.
 pub fn other_runs() -> usize {
     OTHER_RUNS.with(std::cell::Cell::get)
 }
 
-/// How many direct summaries this thread has made, for a test that a procedure's is made once.
+/// How many direct summaries this thread has made, for a test that a
+/// procedure's is made once.
 pub fn direct_runs() -> usize {
     DIRECT_RUNS.with(std::cell::Cell::get)
 }
 
-/// How many times this thread has summarized a body against its callees' summaries, for a test
-/// that a body in no cycle of calls is visited once.
+/// How many times this thread has summarized a body against its callees'
+/// summaries, for a test that a body in no cycle of calls is visited once.
 pub fn visits() -> usize {
     VISITS.with(std::cell::Cell::get)
 }
@@ -814,7 +827,8 @@ pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
     for (_, inst) in unit.function.walk() {
         let Some(reference) = MemRef::of(unit, inst) else { continue };
         let read = matches!(unit.function.instruction(inst).opcode, Opcode::Load { .. });
-        // A write nothing places is its type's, not a slice of the unknown object.
+        // A write nothing places is its type's, not a slice of the unknown
+        // object.
         let unplaced = |types: &mut Option<BTreeSet<Access>>| {
             let access = reference.typed.clone().map(|typed| (typed, reference.lineage.clone()));
             match (types.as_mut(), access) {
@@ -829,8 +843,9 @@ pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
                 unknown_read = true;
             } else {
                 unknown_write = true;
-                // An address built from an integer reaches only what escaped, as `Unknown`
-                // does; any other the analysis lost may be a tracked global's too.
+                // An address built from an integer reaches only what escaped,
+                // as `Unknown` does; any other the analysis
+                // lost may be a tracked global's too.
                 if from_integer(unit, inst) {
                     unplaced(&mut types);
                 } else {
@@ -920,8 +935,8 @@ pub fn summaries(
     summaries_updating(procedures, known, &mut SummaryMemo::default(), None)
 }
 
-/// What a run of `summaries` leaves for the next: the summaries, the bodies' own (`direct`) and their last visits, and
-/// what they were made from.
+/// What a run of `summaries` leaves for the next: the summaries, the bodies'
+/// own (`direct`) and their last visits, and what they were made from.
 #[derive(Default)]
 pub struct SummaryMemo {
     result: IndexMap<String, Summary>,
@@ -930,15 +945,18 @@ pub struct SummaryMemo {
     known: Option<IndexMap<String, Summary>>,
 }
 
-/// `summaries`, where only the bodies in `dirty` differ from the run `memo` holds, and nothing else it was made from
-/// does (the caller's to know: the globals' facts, the declarations, `known`).
+/// `summaries`, where only the bodies in `dirty` differ from the run `memo`
+/// holds, and nothing else it was made from does (the caller's to know: the
+/// globals' facts, the declarations, `known`).
 ///
-/// A body's summary reads its own, its callees' and, where it calls something unknown, the entries' (`callbacks`). So
-/// what an edit can change is the dirty bodies and every body that reads them through a chain of calls. That closure
-/// starts again from nothing, as a whole run does, and the rest is as it was: nothing outside the closure reads
-/// anything in it. (The callbacks are an entry's summaries read by every body that calls something unknown, and an
-/// entry among those feeds them: a closure with an entry takes all of them.) `None` for `dirty`, or a memo of other
-/// bodies, is a whole run.
+/// A body's summary reads its own, its callees' and, where it calls something
+/// unknown, the entries' (`callbacks`). So what an edit can change is the dirty
+/// bodies and every body that reads them through a chain of calls. That closure
+/// starts again from nothing, as a whole run does, and the rest is as it was:
+/// nothing outside the closure reads anything in it. (The callbacks are an
+/// entry's summaries read by every body that calls something unknown, and an
+/// entry among those feeds them: a closure with an entry takes all of them.)
+/// `None` for `dirty`, or a memo of other bodies, is a whole run.
 pub fn summaries_updating(
     procedures: &IndexMap<String, Procedure>,
     known: Option<&IndexMap<String, Summary>>,
@@ -959,8 +977,8 @@ pub fn summaries_updating(
     // What a body captures grows from nothing: a call captures what its
     // callee's summary says, so a least fixed point, as a recursive one
     // that captures nothing proves.
-    // What a body does on its own does not change from round to round: made once, and again only for a body that was
-    // edited.
+    // What a body does on its own does not change from round to round: made
+    // once, and again only for a body that was edited.
     llrm_support::debug::timed("summaries direct", || {
         for (name, one) in procedures {
             if whole || dirty_names.contains(name) {
@@ -1003,14 +1021,15 @@ pub fn summaries_updating(
         .map(|found| found.entries().iter().filter_map(|name| procedures.get_index_of(name)).collect())
         .unwrap_or_default();
     let mut readers: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); procedures.len()];
-    // The bodies that call something unknown read the entries' summaries together, as one: what a
-    // call back into the module may do.
+    // The bodies that call something unknown read the entries' summaries
+    // together, as one: what a call back into the module may do.
     let mut callers_of_unknown: BTreeSet<usize> = BTreeSet::new();
     for (at, (_, procedure)) in procedures.iter().enumerate() {
         for target in procedure.calls.values().filter_map(|target| procedures.get_index_of(target)) {
             readers[target].insert(at);
         }
-        // Asked against the summaries as the bodies' own start from them: whether a callee has one does not change.
+        // Asked against the summaries as the bodies' own start from them:
+        // whether a callee has one does not change.
         if procedure
             .sites
             .iter()
@@ -1023,7 +1042,8 @@ pub fn summaries_updating(
     let mut closure = vec![whole; procedures.len()];
     if !whole {
         let mut todo: Vec<usize> = dirty_names.iter().filter_map(|name| procedures.get_index_of(*name)).collect();
-        // A callee defined elsewhere whose declaration was restated: its callers read it.
+        // A callee defined elsewhere whose declaration was restated: its
+        // callers read it.
         todo.extend(
             procedures
                 .iter()
@@ -1033,9 +1053,11 @@ pub fn summaries_updating(
                 })
                 .map(|(at, _)| at),
         );
-        // An entry's summary is what a call back into the module does (`callbacks`), which the bodies that call
-        // something unknown were made against, and an entry among those feeds it: they stand or fall together,
-        // so a closure with an entry in it takes them all (one that kept their old values could keep what only
+        // An entry's summary is what a call back into the module does
+        // (`callbacks`), which the bodies that call something unknown
+        // were made against, and an entry among those feeds it: they stand or
+        // fall together, so a closure with an entry in it takes them
+        // all (one that kept their old values could keep what only
         // the old callbacks held up).
         let mut unknown_added = false;
         while let Some(at) = todo.pop() {
@@ -1058,8 +1080,9 @@ pub fn summaries_updating(
     let called_back =
         |result: &IndexMap<String, Summary>| procedures.values().next().and_then(|one| _callbacks(&one.unit, result));
     let mut callbacks = called_back(&result);
-    // What each body's points-to facts were found from: they change only with the callees' captures,
-    // not with the effects a revisit is for. A visit of an earlier run says what its calls to something unknown did
+    // What each body's points-to facts were found from: they change only with
+    // the callees' captures, not with the effects a revisit is for. A visit
+    // of an earlier run says what its calls to something unknown did
     // for the callbacks it had: that is worked out again.
     // A body that was edited has other facts than its last visit found.
     let mut found: Vec<Option<Visit>> = procedures
@@ -1117,21 +1140,24 @@ pub fn summaries_updating(
     Ok(result)
 }
 
-/// What a body's last visit was made from, and found: its points-to facts, from its callees' captures,
-/// and what its calls to something unknown may do, from those facts and the callbacks of one `version`.
+/// What a body's last visit was made from, and found: its points-to facts, from
+/// its callees' captures, and what its calls to something unknown may do, from
+/// those facts and the callbacks of one `version`.
 #[derive(Clone)]
 struct Visit {
     captured: IndexMap<InstId, Option<BTreeSet<Option<Identity>>>>,
     facts: Rc<PointsTo>,
     version: Option<usize>,
     unknown: (BTreeSet<Slice>, BTreeSet<Slice>),
-    /// What the calls to something unknown may do besides calling back, with whether the reads and the writes of one
-    /// that does are wanted: found once from the facts, where `unknown` is found again for each callbacks.
+    /// What the calls to something unknown may do besides calling back, with
+    /// whether the reads and the writes of one that does are wanted: found
+    /// once from the facts, where `unknown` is found again for each callbacks.
     base: Option<(BTreeSet<Slice>, BTreeSet<Slice>, bool, bool)>,
 }
 
-/// `procedure`'s summary given `result`, the summaries of what it calls so far: what its body does
-/// on its own (`direct`) and what each call does, instantiated at its actuals.
+/// `procedure`'s summary given `result`, the summaries of what it calls so far:
+/// what its body does on its own (`direct`) and what each call does,
+/// instantiated at its actuals.
 fn _summarized(
     me: usize,
     procedure: &Procedure,
@@ -1156,13 +1182,15 @@ fn _summarized(
     }
     let visit = memo.as_mut().expect("made above");
     let facts = Rc::clone(&visit.facts);
-    // What the calls to something unknown may do, all of them together, depends on the facts and on
-    // what a call back into the module may do, and on nothing a revisit changes.
+    // What the calls to something unknown may do, all of them together, depends
+    // on the facts and on what a call back into the module may do, and on
+    // nothing a revisit changes.
     if visit.base.is_none() {
         let unit = &procedure.unit;
         let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
-        // What a call may do other than through its arguments depends on its callee and on what escaped
-        // before it, and a body calls the same few routines again and again: each pair is worked out
+        // What a call may do other than through its arguments depends on its
+        // callee and on what escaped before it, and a body calls the
+        // same few routines again and again: each pair is worked out
         // once, and added to the whole once.
         #[allow(clippy::type_complexity)]
         let mut others: Vec<(
@@ -1265,7 +1293,8 @@ fn _summarized(
 /// What one call reads and writes, as the bytes of the objects it reaches.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Effect {
-    /// Shared by the calls whose effect is the same: most are the unit's tracked globals and what escaped.
+    /// Shared by the calls whose effect is the same: most are the unit's
+    /// tracked globals and what escaped.
     pub loads: Rc<[MemRef]>,
     pub stores: Rc<[MemRef]>,
     /// The bytes it writes before reading any, as `initializes` states.
@@ -1323,14 +1352,16 @@ pub fn calls_annotated(
             effect.reads.extend(NONLOCAL.slices.clone());
             effect.reads.extend(_tracked(&procedure.unit));
         }
-        // What an unplaced write may reach: each of its types' stores, not an untyped one.
+        // What an unplaced write may reach: each of its types' stores, not an
+        // untyped one.
         let mut typed = Vec::new();
         if effect.unknown_write {
             let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
             let mut reached = if visible.is_empty() { UNKNOWN.slices.clone() } else { visible };
             reached.extend(NONLOCAL.slices.clone());
             match &effect.unknown_write_types {
-                // A pointer no fact follows reaches only what escaped, never a tracked global.
+                // A pointer no fact follows reaches only what escaped, never a
+                // tracked global.
                 Some(types) if !types.is_empty() => {
                     for (name, lineage) in types {
                         typed.extend(reached.iter().map(|one| MemRef {
@@ -1638,8 +1669,8 @@ fn _direct(
             let object = object_of(unit, Operand::Value(result)).expect("an alloca is an object");
             Provenance::one_with_slice(object, 0, 1, 1, 1, BTreeSet::new()).map(Some).map_err(|error| error.to_string())
         }
-        // A callee whose result is `noalias` returns a pointer to an object nothing else
-        // points to: its own, apart from every other.
+        // A callee whose result is `noalias` returns a pointer to an object
+        // nothing else points to: its own, apart from every other.
         Opcode::Call(_) | Opcode::Invoke(_) if returns_unique(unit, inst) => {
             let object = ObjectInterner::of(unit.context).intern(MemoryObject {
                 identity: Some(Identity::Value(result.0)),
@@ -1674,7 +1705,8 @@ fn _direct(
                 return Ok(Some(fact.shifted(wrapped(constant, unit.layout.pointer(space).index_bits))));
             }
             // Arithmetic by an unknown integer remains within each known
-            // object, but no longer has a byte offset precise enough to compare.
+            // object, but no longer has a byte offset precise enough to
+            // compare.
             Ok(Some(_widened(&fact)))
         }
         _ => Ok(None),
@@ -1742,7 +1774,8 @@ pub fn points_to(
 
     // A block reads its parents' cells and these values. With neither
     // changed since its last visit it would compute what it already holds,
-    // widening included, as widening an object's whole slice gives the same slice.
+    // widening included, as widening an object's whole slice gives the same
+    // slice.
     let reads = graph
         .iter()
         .map(|block| instructions(block.at).iter().flat_map(|&inst| read_values(unit, inst)).collect::<HashSet<_>>())
@@ -1786,8 +1819,9 @@ pub fn points_to(
                 if !parents.is_empty() {
                     let keys = parents.iter().flat_map(|one| one.keys()).cloned().collect::<IndexSet<_>>();
                     for key in keys {
-                        // A missing fact on one incoming edge is unknown, not an
-                        // invitation to retain the other edge's pointer.
+                        // A missing fact on one incoming edge is unknown, not
+                        // an invitation to retain the
+                        // other edge's pointer.
                         if parents.iter().all(|one| one.contains_key(&key)) {
                             let mut fact =
                                 _union(parents.iter().map(|one| one.get(&key))).expect("every parent holds this key");
@@ -1882,7 +1916,8 @@ pub fn points_to(
                         }
                         if let (Some(source), Some(targets)) = (&source, &keyed.provenance) {
                             for one in &targets.slices {
-                                // Whole objects: stored offsets may shift each trip around a loop.
+                                // Whole objects: stored offsets may shift each
+                                // trip around a loop.
                                 let grown = _widened(
                                     &fields.get(&one.object).map_or_else(|| source.clone(), |held| held.union(source)),
                                 );
@@ -2020,8 +2055,9 @@ pub fn points_to(
             let mut newly = BTreeSet::new();
             // What a call reads a pointer out of, it may keep.
             let mut lent = BTreeSet::new();
-            // What it reads a pointer out of but keeps none of: reachable during
-            // the call, so it may read and write it, but escapes no further.
+            // What it reads a pointer out of but keeps none of: reachable
+            // during the call, so it may read and write it, but
+            // escapes no further.
             let mut passing = BTreeSet::new();
             if calls.contains(&inst) {
                 if let Some(arguments) = arguments {
@@ -2062,7 +2098,8 @@ pub fn points_to(
                 }
             }
             newly.extend(_lost(unit, inst, &values));
-            // Returned, or turned into an integer something reads: found from outside.
+            // Returned, or turned into an integer something reads: found from
+            // outside.
             if op.opcode == Opcode::Ret
                 || (op.opcode == Opcode::Cast(CastOp::PtrToInt)
                     && op.result.is_none_or(|result| _read(function, result, &mut BTreeSet::new())))
@@ -2088,7 +2125,8 @@ pub fn points_to(
                         cells.insert(key, source, _key_place);
                     }
                 }
-                // A call may leave a cell as it was: what it held stays reachable.
+                // A call may leave a cell as it was: what it held stays
+                // reachable.
                 _ if unmodeled_write(unit, inst) => {}
                 _ => {}
             }
@@ -2156,9 +2194,9 @@ pub fn points_to(
     Ok(PointsTo { values, escaped, escaped_before })
 }
 
-/// Whether anything that stays reads `value`: a use that is no pure operation, or a pure
-/// one whose own result is read. The dead-code fact, without the callee summaries a call
-/// would need, so a call reads.
+/// Whether anything that stays reads `value`: a use that is no pure operation,
+/// or a pure one whose own result is read. The dead-code fact, without the
+/// callee summaries a call would need, so a call reads.
 fn _read(
     function: &llrm_mir::module::Function,
     value: ValueId,
@@ -2359,7 +2397,8 @@ pub fn congruences_with(
             else {
                 continue;
             };
-            // A value nothing is known of is a multiple of 1: `x << 1` is a multiple of 2 all the same.
+            // A value nothing is known of is a multiple of 1: `x << 1` is a
+            // multiple of 2 all the same.
             let fact = |one: Operand| match one {
                 Operand::Value(source) => Some(
                     result
@@ -2427,7 +2466,8 @@ pub fn annotated(unit: &Unit) -> Result<IndexMap<InstId, MemRef>, String> {
 
 /// `annotated`, given the points-to facts and what `consts::known` finds
 /// without memory.
-/// `ranges::bounded`'s facts, the manager's where the unit carries them for the registers asked of, else worked out.
+/// `ranges::bounded`'s facts, the manager's where the unit carries them for the
+/// registers asked of, else worked out.
 enum Bounded<'a> {
     Held(&'a ranges::Bounds),
     Worked(ranges::Facts),
@@ -2518,8 +2558,9 @@ pub fn annotated_with(
         }
         // An access the language says is at a fixed address names linear
         // memory, whatever its pointer was made from.
-        // The frontend states it only where the target says the address is outside
-        // the program; where the selector is a constant here, the target is asked again.
+        // The frontend states it only where the target says the address is
+        // outside the program; where the selector is a constant here,
+        // the target is asked again.
         if unit.spaces().is_fixed(reference.space)
             && (reference.selector.is_none()
                 || regions::foreign_provenance(reference, &BTreeMap::new(), unit.program).is_some())

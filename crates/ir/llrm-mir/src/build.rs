@@ -130,7 +130,8 @@ pub struct Builder<'m> {
     /// The module's metadata nodes, for what an instruction is annotated with.
     pub metadata: &'m mut Vec<crate::module::MetadataNode>,
     block: Option<BlockId>,
-    /// What the next instruction emitted is to stand after: said of a variable before there is one to name.
+    /// What the next instruction emitted is to stand after: said of a variable
+    /// before there is one to name.
     pending: Vec<(MetadataId, crate::module::DebugWhat)>,
 }
 
@@ -197,8 +198,9 @@ impl Builder<'_> {
         self.function.instruction(inst).result.map(Operand::Value)
     }
 
-    /// The variable `variable` lives in the memory `address` names, from the next instruction on: `-g`'s
-    /// `llvm.dbg.declare`, which is no instruction.
+    /// The variable `variable` lives in the memory `address` names, from the
+    /// next instruction on: `-g`'s `llvm.dbg.declare`, which is no
+    /// instruction.
     pub fn debug_declare(
         &mut self,
         variable: MetadataId,
@@ -207,8 +209,8 @@ impl Builder<'_> {
         self.pending.push((variable, crate::module::DebugWhat::Declare(address)));
     }
 
-    /// What `-g` says of the variable `variable` from the next instruction on, when it is not a declaration:
-    /// `llvm.dbg.value`.
+    /// What `-g` says of the variable `variable` from the next instruction on,
+    /// when it is not a declaration: `llvm.dbg.value`.
     pub fn debug_say(
         &mut self,
         variable: MetadataId,

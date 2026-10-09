@@ -1,7 +1,9 @@
-//! The macros GCC predefines that programs test and build types from (`__INT_MAX__`, `__SIZE_TYPE__`, `__BYTE_ORDER__`,
-//! ...), which Open Watcom does not. One table: the sizes are the front end's own (`widths_for`), the limits and the
-//! types follow from them, and the byte order is the target's (x86 is little endian). A clang front end would define
-//! them itself; this is the small route until then.
+//! The macros GCC predefines that programs test and build types from
+//! (`__INT_MAX__`, `__SIZE_TYPE__`, `__BYTE_ORDER__`, ...), which Open Watcom
+//! does not. One table: the sizes are the front end's own (`widths_for`), the
+//! limits and the types follow from them, and the byte order is the target's
+//! (x86 is little endian). A clang front end would define them itself; this is
+//! the small route until then.
 
 use crate::raise_hir::widths_for;
 
@@ -31,8 +33,8 @@ pub fn header(flat: bool) -> String {
     define("__INT_MAX__", signed_max(int, ""));
     define("__LONG_MAX__", signed_max(long, "L"));
     define("__LONG_LONG_MAX__", signed_max(long_long, "LL"));
-    // The type each width is spelled with; Open Watcom's size_t and ptrdiff_t are the unsigned and signed int, its
-    // wchar_t an unsigned short.
+    // The type each width is spelled with; Open Watcom's size_t and ptrdiff_t
+    // are the unsigned and signed int, its wchar_t an unsigned short.
     let spelled = |bytes: i64, signed: bool| {
         let base = match bytes {
             1 => "char",
@@ -47,7 +49,8 @@ pub fn header(flat: bool) -> String {
             (base, false) => format!("unsigned {base}"),
         }
     };
-    // A near pointer is an int wide on both trees: the sizes agree, and Open Watcom's size_t is the unsigned int.
+    // A near pointer is an int wide on both trees: the sizes agree, and Open
+    // Watcom's size_t is the unsigned int.
     assert_eq!(pointer, int, "a near pointer is as wide as an int");
     define("__SIZE_TYPE__", "unsigned int".to_owned());
     define("__PTRDIFF_TYPE__", "int".to_owned());
@@ -103,8 +106,9 @@ mod tests {
             .to_owned()
     }
 
-    /// Open Watcom defines none of GCC's: 73 gcc.c-torture programs were refused on `__SIZE_TYPE__` alone and
-    /// widechar-3 took the big-endian branch of an `#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__`, both sides 0.
+    /// Open Watcom defines none of GCC's: 73 gcc.c-torture programs were
+    /// refused on `__SIZE_TYPE__` alone and widechar-3 took the big-endian
+    /// branch of an `#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__`, both sides 0.
     #[test]
     fn test_the_macros_follow_the_targets_sizes() {
         let (flat, segmented) = (header(true), header(false));

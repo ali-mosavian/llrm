@@ -5,17 +5,23 @@
 //! What `gvn` reads -- `_PURE`, `_computation`, `_reaches`, `_undisturbed`
 //! and `subexpressions` -- came with it. Left behind, each of the old
 //! representation:
-//! - `_widths`, `_full`, `_width` and `_copied`: a value was split into word halves and copied between registers; here
-//!   every value is whole and nothing is a copy, so `stands` (what a copy numbered as) is the substitution itself.
-//! - `halves`: which half of a value was read; a value here is whole. `live` is here for Dead.
-//! - `reused_divides`, `divided_twice`: one divide had two answers, one dead. `sdiv` and `srem` are separate here, and
-//!   two equal divides are one expression `subexpressions` finds.
+//! - `_widths`, `_full`, `_width` and `_copied`: a value was split into word
+//!   halves and copied between registers; here every value is whole and nothing
+//!   is a copy, so `stands` (what a copy numbered as) is the substitution
+//!   itself.
+//! - `halves`: which half of a value was read; a value here is whole. `live` is
+//!   here for Dead.
+//! - `reused_divides`, `divided_twice`: one divide had two answers, one dead.
+//!   `sdiv` and `srem` are separate here, and two equal divides are one
+//!   expression `subexpressions` finds.
 //! - `_read` and the `flags` checks: no value is the machine's flags.
-//! - `_reusable_float_path`, `_exact_floating`, `_exact_stored_load`, `_unchanged_float_environment`,
-//!   `_erased_floating`: x87 exceptions, precision and the float environment. Floating arithmetic has no exceptions
-//!   here (see `llrm_analysis::effects`), so it is as pure as integer arithmetic.
-//! - `_phi_reading`, `_reclaimed`, `_empty_operation`: an erased operation's source bytes. `replace_all_uses_with`
-//!   reaches phis too.
+//! - `_reusable_float_path`, `_exact_floating`, `_exact_stored_load`,
+//!   `_unchanged_float_environment`, `_erased_floating`: x87 exceptions,
+//!   precision and the float environment. Floating arithmetic has no exceptions
+//!   here (see `llrm_analysis::effects`), so it is as pure as integer
+//!   arithmetic.
+//! - `_phi_reading`, `_reclaimed`, `_empty_operation`: an erased operation's
+//!   source bytes. `replace_all_uses_with` reaches phis too.
 //!
 //! `_undisturbed` asks `memoryssa::Accesses` what a store or call writes;
 //! the old one refused every call. `forwarded` serves only a load: no
@@ -29,15 +35,16 @@
 //! constant. `test_a_third_equal_divide_reads_the_answer_the_first_computed`
 //! tests `subexpressions`, which serves a divide here. Stay behind:
 //! - test_cse_propagates_a_complete_narrow_copy_to_an_opaque_reader and
-//!   test_cse_refuses_an_operand_that_is_only_half_its_value: halves and copies.
+//!   test_cse_refuses_an_operand_that_is_only_half_its_value: halves and
+//!   copies.
 //! - test_deferred_runtime_float_reuse_respects_environment,
 //!   test_unknown_integer_loads_share_a_value_but_unknown_floats_do_not and
-//!   test_proven_copy_unlocks_strict_floating_cse (ignored there): the x87 environment and exactness, the last two
-//!   reading BC fixtures.
+//!   test_proven_copy_unlocks_strict_floating_cse (ignored there): the x87
+//!   environment and exactness, the last two reading BC fixtures.
 //! - test_both_lngmix_divides_absorb: a BC corpus through `wholeseg`.
 //! - test_value_reuse_is_one_gvn_pre_pass: the pipeline is not ported.
-//! - test_a_served_read_names_the_value_and_not_a_register: a BC corpus, and a load here is replaced by its value
-//!   outright.
+//! - test_a_served_read_names_the_value_and_not_a_register: a BC corpus, and a
+//!   load here is replaced by its value outright.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -275,7 +282,8 @@ pub fn subexpressions(
                     .iter()
                     .any(|&between| matches!(function.instruction(between).opcode, Opcode::Store { .. }))
             {
-                // The one place `avoid_store_crossing` changes what is numbered: told, so a caller that runs this both
+                // The one place `avoid_store_crossing` changes what is
+                // numbered: told, so a caller that runs this both
                 // ways can see when the second way is the first.
                 crossed.set(true);
                 if avoid_store_crossing {
@@ -382,8 +390,8 @@ thread_local! {
     static UNDISTURBED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has asked whether a load is undisturbed by a set of writes, for a test that a pass asks
-/// it once.
+/// How many times this thread has asked whether a load is undisturbed by a set
+/// of writes, for a test that a pass asks it once.
 pub fn undisturbed_asked() -> usize {
     UNDISTURBED.with(std::cell::Cell::get)
 }
@@ -410,8 +418,9 @@ pub fn _undisturbed(
 /// Store-to-load forwarding: each load a known value serves becomes that
 /// value; whether any did. `accesses` are `function`'s as it stands.
 ///
-/// `crossed` is set when a value serves a load across a store, the one thing `avoid_store_crossing` changes: where it
-/// is not set the run is the same either way.
+/// `crossed` is set when a value serves a load across a store, the one thing
+/// `avoid_store_crossing` changes: where it is not set the run is the same
+/// either way.
 ///
 /// `avoid_store_crossing` keeps a value from serving a load when a store
 /// lies on a path from its definition to the load.
@@ -437,8 +446,8 @@ pub fn forwarded(
     }
     let unit = memory::Unit::within(context, layout, function, outer).with_registers(registers).with_shape(shape);
     let crossings = Crossings::of(function);
-    // What each block holds is a fact of the instructions `function` has now, which a caller that runs this twice on
-    // one function works out once.
+    // What each block holds is a fact of the instructions `function` has now,
+    // which a caller that runs this twice on one function works out once.
     let served = avail::forwardable_by(&unit, accesses, &want, held.get_or_init(|| avail::holders(&unit, accesses)))
         .into_iter()
         .filter(|one| {
@@ -464,10 +473,12 @@ pub fn forwarded(
     Ok(true)
 }
 
-/// Whether stores lie on paths between instructions, asked many times of one function: where each instruction is and
-/// how many stores each block holds before each position are found once, and the blocks that reach a block once for
-/// each block asked of. Each ask was a scan of a block for the instruction, twice, and of the function for what reaches
-/// the load: quadratic in a large function.
+/// Whether stores lie on paths between instructions, asked many times of one
+/// function: where each instruction is and how many stores each block holds
+/// before each position are found once, and the blocks that reach a block once
+/// for each block asked of. Each ask was a scan of a block for the instruction,
+/// twice, and of the function for what reaches the load: quadratic in a large
+/// function.
 struct Crossings<'f> {
     function: &'f Function,
     places: BTreeMap<InstId, (BlockId, i64)>,
@@ -512,8 +523,8 @@ impl<'f> Crossings<'f> {
         }))
     }
 
-    /// Whether a store lies on some path from `holder`'s definition to `load`, or `holder` is defined where no path
-    /// from it reaches `load` first.
+    /// Whether a store lies on some path from `holder`'s definition to `load`,
+    /// or `holder` is defined where no path from it reaches `load` first.
     fn crosses(
         &self,
         holder: Operand,
@@ -1253,9 +1264,11 @@ b2:
         let after = printed(&module);
         assert!(after.matches("phi").count() == 1 && after.contains("add i16 %r, %t"), "{after}");
     }
-    /// The scan the pass made for every served load (a block searched for the instruction twice, the function for what
-    /// reaches the load), kept here as the reference: `Crossings` answers the same for every definition and load of
-    /// a function with a diamond, a loop and stores in every block, and finds each position once.
+    /// The scan the pass made for every served load (a block searched for the
+    /// instruction twice, the function for what reaches the load), kept
+    /// here as the reference: `Crossings` answers the same for every definition
+    /// and load of a function with a diamond, a loop and stores in every
+    /// block, and finds each position once.
     fn reference_crosses_store(
         function: &Function,
         holder: Operand,

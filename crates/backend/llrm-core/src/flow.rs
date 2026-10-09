@@ -21,7 +21,8 @@ use crate::support::hash::IndexMap;
 /// Every phase between instruction selection and emission, in order, with the
 /// spiller in front of the allocator or left out.
 #[cfg(test)]
-/// The machine phases for real mode's rules, which the tests of the phases are written for.
+/// The machine phases for real mode's rules, which the tests of the phases are
+/// written for.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn machine<'a>(
@@ -49,7 +50,8 @@ pub fn machine<'a>(
     )
 }
 
-/// `machine`, its peephole made of the rules `rules` holds; the spiller, where `spilling` names a run, reports to it.
+/// `machine`, its peephole made of the rules `rules` holds; the spiller, where
+/// `spilling` names a run, reports to it.
 #[allow(clippy::too_many_arguments)]
 pub fn machine_with<'a>(
     pinned: &IndexMap<u32, Register>,
@@ -88,7 +90,8 @@ pub fn machine_with<'a>(
             segments: segments.clone(),
             classes: Rc::clone(classes),
         }),
-        // A float load only one arithmetic instruction reads is its memory operand.
+        // A float load only one arithmetic instruction reads is its memory
+        // operand.
         Box::new(crate::backend::floatfold::FloatFold),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
@@ -102,7 +105,8 @@ pub fn machine_with<'a>(
             segments,
             classes,
         )?),
-        // After allocation: which moves in a phi's copy conflict is a question about locations.
+        // After allocation: which moves in a phi's copy conflict is a question
+        // about locations.
         Box::new(parcopy::ParallelCopy),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
         Box::new(peephole::Peephole::with_rules(
@@ -116,7 +120,8 @@ pub fn machine_with<'a>(
         Box::new(loopslots::LoopSlots::new(frame.clone(), target, registers.slot as u32, classes)?),
         // Scheduling may only move fully allocated machine occurrences.
         Box::new(schedule::Scheduler::new(target)?),
-        // Last: this physical order decides which explicit edge is now fall-through.
+        // Last: this physical order decides which explicit edge is now
+        // fall-through.
         Box::new(jumps::ControlFlow { cpu: target }),
     ];
     if spilling.is_none() {

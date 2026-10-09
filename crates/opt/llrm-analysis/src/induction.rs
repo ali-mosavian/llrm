@@ -137,8 +137,8 @@ pub struct CountedLoop {
     pub stepped: bool,
     /// Some other exit stops the program; `count` is the trips when it goes on.
     pub stops: bool,
-    /// Another exit goes on, to code that returns (only where `counted_leaving` asked); `count` is then the trips as
-    /// long as it is not taken.
+    /// Another exit goes on, to code that returns (only where `counted_leaving`
+    /// asked); `count` is then the trips as long as it is not taken.
     pub leaves: bool,
     /// A loop tested after its trips whose symbolic trips assume the first
     /// would have continued, which the branches over its preheader prove.
@@ -210,7 +210,8 @@ fn _unsigned(test: IntPredicate) -> bool {
 /// Places one preheader operation and returns its result.
 pub type Computed<'a> = dyn FnMut(BinaryOp, Vec<AffineOperand>) -> AffineOperand + 'a;
 
-/// The preheader comparison, and the test on it, under which the loop runs no trips.
+/// The preheader comparison, and the test on it, under which the loop runs no
+/// trips.
 pub fn skipped(proof: &CountedLoop) -> Option<((AffineOperand, AffineOperand), IntPredicate)> {
     if proof.posttested {
         return None;
@@ -218,15 +219,17 @@ pub fn skipped(proof: &CountedLoop) -> Option<((AffineOperand, AffineOperand), I
     Some(((proof.bound.clone(), proof.start.clone()), proof.test.inverse().swapped()))
 }
 
-/// Trips on the entered path, exact modulo the compare's width, or None where not expressible.
+/// Trips on the entered path, exact modulo the compare's width, or None where
+/// not expressible.
 pub fn trips(
     proof: &CountedLoop,
     computed: &mut Computed<'_>,
 ) -> Option<AffineOperand> {
     let width = proof.width();
     if let Reach::Solved { shift, inverse, bits } = &proof.reach {
-        // The distance left after the first step where it is tested stepped, solved
-        // modulo the period, and the trip a post-tested loop makes before its test.
+        // The distance left after the first step where it is tested stepped,
+        // solved modulo the period, and the trip a post-tested loop
+        // makes before its test.
         let lead = AffineOperand::constant(&proof.step * u8::from(proof.posttested && proof.stepped), width);
         let distance = computed(BinaryOp::Sub, vec![proof.bound.clone(), proof.start.clone()]);
         let remaining = computed(BinaryOp::Sub, vec![distance, lead]);
@@ -251,9 +254,10 @@ pub fn trips(
             solved
         });
     }
-    // Tested after its trips, the loop makes the trips a pre-tested one would where its entry is guarded or its count
-    // is known: by unit steps and a stepped test the trips from `start` to `bound` are the same (`entered`, which
-    // sets `entry_guarded`).
+    // Tested after its trips, the loop makes the trips a pre-tested one would
+    // where its entry is guarded or its count is known: by unit steps and a
+    // stepped test the trips from `start` to `bound` are the same (`entered`,
+    // which sets `entry_guarded`).
     let guarded_unit = proof.entry_guarded && proof.stepped && matches!(proof.reach, Reach::Distance);
     if proof.posttested
         && proof.count.is_none()
@@ -266,8 +270,9 @@ pub fn trips(
         return (count < &(BigInt::from(1) << width)).then(|| AffineOperand::constant(count.clone(), width));
     }
     if let Reach::Ceil { strict } = &proof.reach {
-        // On the entered path the distance is at least one: its predecessor, divided, plus one,
-        // cannot overflow where the distance rounded up could.
+        // On the entered path the distance is at least one: its predecessor,
+        // divided, plus one, cannot overflow where the distance rounded
+        // up could.
         let (ahead, behind) =
             if proof.step > BigInt::from(0) { (&proof.bound, &proof.start) } else { (&proof.start, &proof.bound) };
         let distance = computed(BinaryOp::Sub, vec![ahead.clone(), behind.clone()]);
@@ -282,7 +287,8 @@ pub fn trips(
     Some(computed(BinaryOp::Add, vec![count, AffineOperand::constant(u8::from(proof.inclusive()), width)]))
 }
 
-/// The header's counter as a pre-tested loop that ran a trip leaves: the first value failing its test.
+/// The header's counter as a pre-tested loop that ran a trip leaves: the first
+/// value failing its test.
 pub fn exit_value(
     proof: &CountedLoop,
     computed: &mut Computed<'_>,
@@ -351,7 +357,8 @@ struct _Control {
     after: bool,
 }
 
-/// The block whose conditional branch is the loop's only exit that goes on: its header, or its latch.
+/// The block whose conditional branch is the loop's only exit that goes on: its
+/// header, or its latch.
 fn _control(
     function: &Function,
     loop_: &Loop,
@@ -382,7 +389,8 @@ fn _control(
             _ => None,
         }
     });
-    // The latch jumps back and only the header branches to it: the header holds the trip.
+    // The latch jumps back and only the header branches to it: the header holds
+    // the trip.
     let header_holds_trip = latch.succ.as_slice() == [header.at]
         && function.block(cfg::block(latch.at)).instructions().len() == 1
         && header.succ.len() == 2
@@ -414,13 +422,15 @@ fn _control(
     {
         return None;
     }
-    // Any other way out must stop the program: the count holds whenever it goes on.
+    // Any other way out must stop the program: the count holds whenever it goes
+    // on.
     let elsewhere = inside
         .iter()
         .filter(|at| **at != control.at)
         .flat_map(|at| blocks[at].succ.iter().copied().filter(|to| !inside.contains(to)))
         .collect::<BTreeSet<_>>();
-    // Or, where `leaving`, go on: the count then holds as long as the loop does.
+    // Or, where `leaving`, go on: the count then holds as long as the loop
+    // does.
     let leaves = !elsewhere.is_empty() && !elsewhere.is_subset(&noreturn::stranded(function, header.at));
     if !leaving && leaves {
         return None;
@@ -484,24 +494,28 @@ pub fn counted(
     counted_unless_stopped(unit, loop_, facts, inbounds).into_iter().filter(|proof| !proof.stops).collect()
 }
 
-/// Each loop's `counted_unless_stopped` proofs by header, from what is known without memory.
+/// Each loop's `counted_unless_stopped` proofs by header, from what is known
+/// without memory.
 pub type Counted = IndexMap<i64, Vec<CountedLoop>>;
 
 thread_local! {
     static PROVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many loops this thread has proved the counts of, for a test that a body's are proved once.
+/// How many loops this thread has proved the counts of, for a test that a
+/// body's are proved once.
 pub fn proved() -> usize {
     PROVED.with(std::cell::Cell::get)
 }
 
-/// `counted_unless_stopped` of every loop of `unit`'s shape, under the registers it carries.
+/// `counted_unless_stopped` of every loop of `unit`'s shape, under the
+/// registers it carries.
 pub fn counted_all(unit: &Unit) -> Counted {
     counted_renewed(unit, &Counted::default(), |_| true)
 }
 
-/// `counted_all`, taking `previous`'s proofs of each loop `dirty` does not name.
+/// `counted_all`, taking `previous`'s proofs of each loop `dirty` does not
+/// name.
 pub fn counted_renewed(
     unit: &Unit,
     previous: &Counted,
@@ -551,10 +565,11 @@ pub fn counted_unless_stopped(
     _counted_unless_stopped(unit, loop_, facts, inbounds, false)
 }
 
-/// `counted_unless_stopped`, also for a loop that has other ways out that go on, not only into a block that never
-/// returns: each proof has `stops` set where there is one, and its count is the trips as long as the loop is not left
-/// early. What rewrites the loop's own exit test and the counters it reads (lsr) may use it, where a final value or a
-/// deleted loop may not.
+/// `counted_unless_stopped`, also for a loop that has other ways out that go
+/// on, not only into a block that never returns: each proof has `stops` set
+/// where there is one, and its count is the trips as long as the loop is not
+/// left early. What rewrites the loop's own exit test and the counters it reads
+/// (lsr) may use it, where a final value or a deleted loop may not.
 pub fn counted_leaving(
     unit: &Unit,
     loop_: &Loop,
@@ -644,7 +659,8 @@ fn _proven(
             {
                 continue;
             }
-            // Equal steps differ by a constant: the value is that counter, shifted.
+            // Equal steps differ by a constant: the value is that counter,
+            // shifted.
             let same = |one: &&Affine| {
                 matches!(
                     (&one.start, &one.step),
@@ -705,7 +721,8 @@ fn _proven(
             (begin, count)
         };
         let (mut begin, mut count) = counted_from(&start);
-        // The start as counted: itself, or the entry value it is proven to equal.
+        // The start as counted: itself, or the entry value it is proven to
+        // equal.
         let mut equal = start.clone();
         if count.is_none()
             && let Some((entry, rewinds)) = _carried(unit, loop_, &start, *source, update, width)
@@ -731,7 +748,8 @@ fn _proven(
             (first, last) = _signed_span(&equal, facts, width, count, &step);
             Some(count.clone())
         } else if test == IntPredicate::Ne && (shape.posttested || abs(&step) != BigInt::from(1)) {
-            // Tested for equality, the loop ends where the counter reaches the bound.
+            // Tested for equality, the loop ends where the counter reaches the
+            // bound.
             let Some(solved) = _solved(unit, facts, &start, &bound, &step, width) else { continue };
             let Reach::Solved { bits, .. } = &solved else { unreachable!("_solved solves") };
             let period = BigInt::from(1) << *bits;
@@ -739,7 +757,8 @@ fn _proven(
             Some(period)
         } else if test != IntPredicate::Ne && abs(&step) != BigInt::from(1) {
             // An ordered test by more than one: promised not to wrap past the
-            // bound, the counter reaches it in the distance divided by the step.
+            // bound, the counter reaches it in the distance divided by the
+            // step.
             if !_promised(function, update, &step, _unsigned(test), _signed(&start, facts, width).as_ref())
                 || (shape.posttested && !entered)
             {
@@ -753,7 +772,8 @@ fn _proven(
         } else {
             entry_guarded = shape.posttested;
             let promised = _promised(function, update, &step, _unsigned(test), _signed(&start, facts, width).as_ref());
-            // A bound known only by its range still bounds the trips: by its end the counter walks toward.
+            // A bound known only by its range still bounds the trips: by its
+            // end the counter walks toward.
             let reached = limit.clone().or_else(|| _extent_toward(unit, &bound, facts, step > BigInt::from(0)));
             let found =
                 _unit_maximum(unit, loop_, width, begin.as_ref(), reached.as_ref(), &step, test, inbounds, promised);
@@ -898,8 +918,9 @@ pub fn exits(
             for compare in leaves {
                 let Opcode::ICmp(predicate) = function.instruction(compare).opcode else { return found };
                 let continuing = if stays { predicate } else { predicate.inverse() };
-                // Tested after the trip where it is the latch; in the body, a compare of the
-                // stepped value is tested after the step, one of the header's phi before it.
+                // Tested after the trip where it is the latch; in the body, a
+                // compare of the stepped value is tested after
+                // the step, one of the header's phi before it.
                 let tries: &[bool] = if at == latch { &[true] } else { &[false, true] };
                 let Some(proof) = tries.iter().find_map(|&posttested| {
                     _proven(unit, loop_, facts, inbounds, &shaped(posttested), branch, compare, continuing, true)
@@ -913,7 +934,8 @@ pub fn exits(
                 counts.push(count);
                 found.proofs.push(proof);
             }
-            // Leaving only once every compare fails is counted where they all agree.
+            // Leaving only once every compare fails is counted where they all
+            // agree.
             if !first {
                 counts.dedup();
                 if counts.len() != 1 {
@@ -1065,7 +1087,8 @@ fn _rewind(
     }
 }
 
-/// `(width, bound, mirrored, stepped)` where `icmp` tests a counter value in `tested`.
+/// `(width, bound, mirrored, stepped)` where `icmp` tests a counter value in
+/// `tested`.
 fn _compared(
     unit: &Unit,
     icmp: &Instruction,
@@ -1079,10 +1102,11 @@ fn _compared(
     None
 }
 
-/// Whether the step `update` makes is promised not to wrap as `unsigned` or signed integers.
-/// A counter that starts at or above zero and only goes up without a signed wrap stays in
-/// `0 ..= signed max`, where a signed sum is the unsigned one: `nsw` there is `nuw` too, as
-/// LLVM's SCEV infers it. `start` is the counter's signed start where known.
+/// Whether the step `update` makes is promised not to wrap as `unsigned` or
+/// signed integers. A counter that starts at or above zero and only goes up
+/// without a signed wrap stays in `0 ..= signed max`, where a signed sum is the
+/// unsigned one: `nsw` there is `nuw` too, as LLVM's SCEV infers it. `start` is
+/// the counter's signed start where known.
 fn _promised(
     function: &Function,
     update: ValueId,
@@ -1103,7 +1127,8 @@ fn _promised(
     }
 }
 
-/// `bound - start` modulo the width, when constant: both constant, or `bound = start + c`.
+/// `bound - start` modulo the width, when constant: both constant, or `bound =
+/// start + c`.
 fn _difference(
     unit: &Unit,
     bound: &AffineOperand,
@@ -1172,7 +1197,8 @@ pub fn linear(
     Some(kept)
 }
 
-/// How far `one` lies above `other`, where their terms other than constants agree.
+/// How far `one` lies above `other`, where their terms other than constants
+/// agree.
 ///
 /// Strength reduction starts `a[i].x` at `n + (m + 600)` and `a[i].y` at
 /// `n + (m + 606)`: no single root, but 6 apart.
@@ -1200,7 +1226,8 @@ pub fn distance(
     Some(masked(&apart, width))
 }
 
-/// `term` as a root value plus a constant, through constant adds; a number has no root.
+/// `term` as a root value plus a constant, through constant adds; a number has
+/// no root.
 ///
 /// Two values with one root are a constant apart, which is how a loop from
 /// `x - 32` to `x` is counted and how two counters starting 4 apart share one.
@@ -1288,7 +1315,8 @@ fn _low_bits_zero(
         && mod_floor(&(bound_residue - start_residue), &power) == BigInt::from(0)
 }
 
-/// Trips until `start + k*step`, tested as the loop is shaped, first equals `start + difference`.
+/// Trips until `start + k*step`, tested as the loop is shaped, first equals
+/// `start + difference`.
 fn _equal_after(
     difference: &BigInt,
     step: &BigInt,
@@ -1320,7 +1348,8 @@ fn _extent(
     }
 }
 
-/// Trips of an ordered test with constant ends, or None where a tested value would wrap first.
+/// Trips of an ordered test with constant ends, or None where a tested value
+/// would wrap first.
 fn _ordered_after(
     begin: &BigInt,
     limit: &BigInt,
@@ -1351,7 +1380,8 @@ fn _ordered_after(
     (low <= reached && reached <= high).then(|| BigInt::from(u8::from(posttested)) + tested)
 }
 
-/// The first and last signed header values over `count` trips, where none up to the exit wraps.
+/// The first and last signed header values over `count` trips, where none up to
+/// the exit wraps.
 fn _signed_span(
     start: &AffineOperand,
     facts: &IndexMap<ValueId, Known>,
@@ -1392,7 +1422,8 @@ fn _extent_toward(
         .then(|| if ascending { range.high } else { range.low })
 }
 
-/// Most trips of a symbolic unit-step loop, where proved; None for an inclusive test that may never end.
+/// Most trips of a symbolic unit-step loop, where proved; None for an inclusive
+/// test that may never end.
 #[allow(clippy::too_many_arguments)]
 fn _unit_maximum(
     unit: &Unit,
@@ -1425,12 +1456,14 @@ fn _unit_maximum(
         return None;
     }
     if !endless && inclusive {
-        // Promised: the counter runs between the width's ends whatever it is given.
+        // Promised: the counter runs between the width's ends whatever it is
+        // given.
         target = target.or_else(|| Some(end.clone()));
         origin = origin.or_else(|| Some(if ascending { low.clone() } else { high.clone() }));
     }
     if !inclusive {
-        // An exclusive bound lies inside the width: the counter stops by its end.
+        // An exclusive bound lies inside the width: the counter stops by its
+        // end.
         target = target.or_else(|| Some(end.clone()));
     }
     let ranged = match (&origin, &target) {
@@ -1479,7 +1512,8 @@ pub fn inbounds_backedges(
         .filter(|(_, reference)| reference.inbounds)
         .filter_map(|(at, reference)| {
             let advance = step.get(&reference.base?)? * reference.scale;
-            // The access runs at least once a backedge, and the header once more.
+            // The access runs at least once a backedge, and the header once
+            // more.
             (advance != BigInt::from(0)).then(|| {
                 ((BigInt::from(1) << reference.index_bits) - reference.width) / abs(&advance) + 1
                     - BigInt::from(u8::from(at == loop_.header))
@@ -1523,7 +1557,8 @@ pub fn _signed(
     _constant(term_, facts, width).map(|value| _as_signed(&value, width))
 }
 
-/// The one positive trip count every counter of a loop proves, if they prove one.
+/// The one positive trip count every counter of a loop proves, if they prove
+/// one.
 ///
 /// A loop may carry several counters at once. They are evidence for the
 /// same trip count, not alternatives a transform may pick from; refusing
@@ -1544,8 +1579,8 @@ pub fn trip_count(
     agreed_count(&counted(unit, loop_, Some(facts), false))
 }
 
-/// `trip_count` for a loop that may also leave by another exit: the trips as long as it does not, so at most the trips
-/// it makes.
+/// `trip_count` for a loop that may also leave by another exit: the trips as
+/// long as it does not, so at most the trips it makes.
 pub fn trip_bound(
     unit: &Unit,
     loop_: &Loop,
@@ -1554,7 +1589,8 @@ pub fn trip_bound(
     agreed_count(&counted_leaving(unit, loop_, Some(facts), false))
 }
 
-/// `trip_count` for a loop that may also stop the program: its trips whenever it does not.
+/// `trip_count` for a loop that may also stop the program: its trips whenever
+/// it does not.
 pub fn trips_unless_stopped(
     unit: &Unit,
     loop_: &Loop,
@@ -1882,7 +1918,8 @@ pub fn pointers(
     out
 }
 
-/// `(stepped, step)` where `op` adds `step` to `stepped`: an `add`, or a `sub` of a constant.
+/// `(stepped, step)` where `op` adds `step` to `stepped`: an `add`, or a `sub`
+/// of a constant.
 pub fn stepping(
     unit: &Unit,
     op: &Instruction,
@@ -2288,7 +2325,8 @@ impl Recurrence {
         Self { start: self.start.plus(by), ..self.clone() }
     }
 
-    /// `{a,+,b} * m = {a*m,+,b*m}`, `m` invariant: a product of recurrences is no recurrence of one step.
+    /// `{a,+,b} * m = {a*m,+,b*m}`, `m` invariant: a product of recurrences is
+    /// no recurrence of one step.
     fn scaled(
         &self,
         by: &Scev,
@@ -2507,7 +2545,8 @@ impl Walk<'_> {
         found.values.get(&value).filter(|of| of.pointer.is_none() && of.width() == width)
     }
 
-    /// `operand` as an invariant: a number, or an unknown the loop does not define.
+    /// `operand` as an invariant: a number, or an unknown the loop does not
+    /// define.
     fn invariant(
         &self,
         operand: Operand,
@@ -2561,13 +2600,15 @@ impl Walk<'_> {
                     _ => None,
                 }
             }
-            // Truncation commutes with add and mul: the low bits of a recurrence are one.
+            // Truncation commutes with add and mul: the low bits of a
+            // recurrence are one.
             Opcode::Cast(CastOp::Trunc) if !self.priced => {
                 let width = unit.int_bits(Operand::Value(result))?;
                 let from = unit.int_bits(op.operands[0])?;
                 self.rec(found, op.operands[0], from).filter(|_| from > width).map(|of| of.truncated(width))
             }
-            // The header runs once more than the body, on the trip that leaves: `extended` proves that one too.
+            // The header runs once more than the body, on the trip that
+            // leaves: `extended` proves that one too.
             Opcode::Cast(cast @ (CastOp::SExt | CastOp::ZExt)) => {
                 self.extended(found, op, cast, at == self.loop_.header)
             }
@@ -2608,8 +2649,8 @@ impl Walk<'_> {
         let (initial, stride, low, high) = if cast == CastOp::SExt {
             (_as_signed(&raw_start, width), step, -sign.clone(), sign.clone())
         } else {
-            // Half the modulus has two equally valid directions: choosing either
-            // would invent a wide recurrence.
+            // Half the modulus has two equally valid directions: choosing
+            // either would invent a wide recurrence.
             if raw_step == sign && count > BigInt::from(1) {
                 return None;
             }
@@ -2625,7 +2666,8 @@ impl Walk<'_> {
 
     /// A narrow unit-step counter that a symbolic bound ends with `ult`: its
     /// header values run from the start to the bound, or stay at the start, so
-    /// none passes the width's largest and its zero extension is the wide counter.
+    /// none passes the width's largest and its zero extension is the wide
+    /// counter.
     fn ascending(
         &self,
         start: &BigInt,

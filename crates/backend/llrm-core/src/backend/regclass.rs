@@ -1,8 +1,10 @@
-//! The register class of each value: the one place that states which registers a value may be in.
+//! The register class of each value: the one place that states which registers
+//! a value may be in.
 //!
-//! Owned here, read by the spiller (`ssaspill`) and the allocator (`allocate`), `coalesce` and `constrain`: one answer
-//! (#441). The target's own sets (`target::ADDRESSING`, `target::BYTE`, `Segments::selectors`) are the vocabulary; what
-//! an operand needs of them comes from the instruction.
+//! Owned here, read by the spiller (`ssaspill`) and the allocator (`allocate`),
+//! `coalesce` and `constrain`: one answer (#441). The target's own sets
+//! (`target::ADDRESSING`, `target::BYTE`, `Segments::selectors`) are the
+//! vocabulary; what an operand needs of them comes from the instruction.
 
 use std::collections::BTreeSet;
 
@@ -40,9 +42,10 @@ pub fn classes(
     classes_with(body, prefer_indexes, segments, registers, false)
 }
 
-/// `classes`; `optimistic` is the checker's reading of a body the coalescer has not merged yet: the two sides of a phi
-/// edge's copy also join, and address classes are read through webs. An allocator cannot take that, the two sides being
-/// values of their own, and SsaSpill does not price it yet.
+/// `classes`; `optimistic` is the checker's reading of a body the coalescer has
+/// not merged yet: the two sides of a phi edge's copy also join, and address
+/// classes are read through webs. An allocator cannot take that, the two sides
+/// being values of their own, and SsaSpill does not price it yet.
 pub fn classes_with(
     body: &LirBody,
     prefer_indexes: &BTreeSet<u32>,
@@ -53,8 +56,9 @@ pub fn classes_with(
     collected(body, prefer_indexes, segments, registers, optimistic, None, None)
 }
 
-/// What a caller that has already found the body's intervals and clobber masks gives `classes`, which
-/// reads them for its `[word+word]` roles and would number the body and find both again.
+/// What a caller that has already found the body's intervals and clobber masks
+/// gives `classes`, which reads them for its `[word+word]` roles and would
+/// number the body and find both again.
 pub struct Found<'a> {
     pub live: &'a IndexMap<u32, ranges::Interval>,
     pub masks: &'a crate::backend::allocate::Masks,
@@ -79,7 +83,8 @@ pub enum Role {
     Index,
 }
 
-/// One read of a value that confines it: where it is read, and the registers that read allows.
+/// One read of a value that confines it: where it is read, and the registers
+/// that read allows.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Use {
     pub block: usize,
@@ -91,8 +96,9 @@ pub struct Use {
     pub defining: bool,
 }
 
-/// Every read that confines a value on its own, a byte operand or an address base or index. A value whose uses
-/// share no register is one the classes leave with none.
+/// Every read that confines a value on its own, a byte operand or an address
+/// base or index. A value whose uses share no register is one the classes leave
+/// with none.
 pub fn confining_uses(
     body: &LirBody,
     segments: &Segments,
@@ -132,7 +138,8 @@ fn collected(
                     }
                     _restrict(out, value, choices);
                 };
-            // A string op's segment operands are selectors, as a far access's are.
+            // A string op's segment operands are selectors, as a far access's
+            // are.
             let segments: &[Loc] = match (what.op, what.sources.len()) {
                 (Operation::Copy, 4 | 5) => &what.sources[what.sources.len() - 2..],
                 (Operation::Fill, 3 | 4) => &what.sources[what.sources.len() - 1..],
@@ -215,9 +222,10 @@ fn collected(
     out
 }
 
-/// A phi's result and arguments, and the two sides of a phi edge's copy, are one value once the coalescer has merged
-/// them: each takes the class of the web. A value that only a phi or such a copy reads, as one a loop reads through
-/// its header phi is, has no class of its own.
+/// A phi's result and arguments, and the two sides of a phi edge's copy, are
+/// one value once the coalescer has merged them: each takes the class of the
+/// web. A value that only a phi or such a copy reads, as one a loop reads
+/// through its header phi is, has no class of its own.
 fn _through_webs(
     body: &LirBody,
     selecting: &BTreeSet<u32>,
@@ -257,8 +265,9 @@ fn _through_webs(
         members.entry(top).or_default().push(value);
     }
     for list in members.values().filter(|list| list.len() > 1) {
-        // The web has a class where its members agree; a member that has one of its own keeps it, as the allocator
-        // copies between members of different classes.
+        // The web has a class where its members agree; a member that has one of
+        // its own keeps it, as the allocator copies between members of
+        // different classes.
         let mut agreed: Option<BTreeSet<Register>> = None;
         let mut agree = true;
         for value in list {
@@ -277,8 +286,10 @@ fn _through_webs(
         {
             agreed = Some(selectors.clone());
         }
-        // Address classes are the checker's reading only: SsaSpill holds fewer values where it sees them, which the
-        // allocator's own spills do not make up for (deedlines COPPER -Os: 112k reloads, 140k with them).
+        // Address classes are the checker's reading only: SsaSpill holds fewer
+        // values where it sees them, which the allocator's own spills
+        // do not make up for (deedlines COPPER -Os: 112k reloads, 140k with
+        // them).
         let wanted = optimistic
             || agreed.as_ref().is_some_and(|class| class.iter().all(|register| selectors.contains(register)));
         if let (true, true, Some(class)) = (agree, wanted, agreed) {
@@ -300,8 +311,8 @@ fn _word_address_roles(
     registers: &RegisterClasses,
     found: Option<&Found>,
 ) {
-    // No pair, no component: nothing below would run, and it numbers the body, finds every
-    // interval and builds the masks first.
+    // No pair, no component: nothing below would run, and it numbers the body,
+    // finds every interval and builds the masks first.
     if pairs.is_empty() {
         return;
     }
@@ -418,7 +429,8 @@ fn _word_address_roles(
 
 pub(crate) const _SEGMENT_OPERANDS: [Operation; 3] = [Operation::Move, Operation::Push, Operation::Pop];
 
-/// A point of a body at which the values live cannot all sit in registers their classes allow.
+/// A point of a body at which the values live cannot all sit in registers their
+/// classes allow.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Violation {
     pub block: i64,
@@ -431,11 +443,13 @@ pub struct Violation {
 pub enum Why {
     /// More values live than the file has registers.
     Crowded { live: usize, registers: usize },
-    /// Values an instruction acts on, which no assignment gives distinct registers of their classes.
+    /// Values an instruction acts on, which no assignment gives distinct
+    /// registers of their classes.
     Unmatched(Vec<u32>),
 }
 
-/// Whether every value of `wanted` can take a distinct register of its own set: a bipartite matching.
+/// Whether every value of `wanted` can take a distinct register of its own set:
+/// a bipartite matching.
 fn matched(wanted: &[(u32, BTreeSet<Register>)]) -> bool {
     fn place(
         at: usize,
@@ -459,10 +473,11 @@ fn matched(wanted: &[(u32, BTreeSet<Register>)]) -> bool {
     (0..wanted.len()).all(|at| place(at, wanted, &mut taken, &mut BTreeSet::new()))
 }
 
-/// The points of `body` at which the values live do not fit the registers their classes allow, per register file:
-/// the general registers and the segment registers. A body with none can be coloured, with copies where a value
-/// waits in another class's register; one with some cannot, whatever the allocator does. `skip` names the values
-/// another pass places (x87, pinned, inputs).
+/// The points of `body` at which the values live do not fit the registers their
+/// classes allow, per register file: the general registers and the segment
+/// registers. A body with none can be coloured, with copies where a value waits
+/// in another class's register; one with some cannot, whatever the allocator
+/// does. `skip` names the values another pass places (x87, pinned, inputs).
 pub fn violations(
     body: &LirBody,
     segments: &Segments,
@@ -494,17 +509,19 @@ pub fn violations(
         let mut live: BTreeSet<u32> =
             live_out[&block.at].iter().copied().filter(|value| !skip.contains(value)).collect();
         for (position, one) in block.insns.iter().enumerate().rev() {
-            // Two states per instruction: after it (what is live, its results among them) and before it (what it reads
-            // is live, its results not yet): a result takes the register of an operand that dies.
-            // The copies of one phi edge are one parallel copy: a point at its ends, not between its copies.
+            // Two states per instruction: after it (what is live, its results
+            // among them) and before it (what it reads is live, its
+            // results not yet): a result takes the register of an operand that
+            // dies. The copies of one phi edge are one parallel
+            // copy: a point at its ends, not between its copies.
             if one.defines.is_empty()
                 && one.uses.is_empty()
                 && one.what.as_ref().is_none_or(|what| what.name.as_deref().is_none_or(str::is_empty))
             {
                 continue;
             }
-            // An instruction that does nothing (a placeholder left where a copy was made unnecessary) does not end the
-            // group.
+            // An instruction that does nothing (a placeholder left where a copy
+            // was made unnecessary) does not end the group.
             let real = |other: &&std::sync::Arc<crate::model::lir::Insn>| {
                 !(other.defines.is_empty()
                     && other.uses.is_empty()
@@ -572,9 +589,10 @@ mod tests {
     use crate::model::ir::{Addr, Mem, Semantics};
     use crate::model::lir::{LirBlock, Phi};
 
-    /// A far pointer's segment that a loop reads only through its header phi: FADETOCOLOR's selectors had no class of
-    /// their own after SsaSpill and counted among the general registers (3 over, 63 points after PhiElimination)
-    /// while they sat in selector registers.
+    /// A far pointer's segment that a loop reads only through its header phi:
+    /// FADETOCOLOR's selectors had no class of their own after SsaSpill and
+    /// counted among the general registers (3 over, 63 points after
+    /// PhiElimination) while they sat in selector registers.
     #[test]
     fn test_a_segment_only_a_phi_reads_has_the_class_of_its_web() {
         let (entry_segment, segment, base, loaded) = (1, 2, 3, 4);

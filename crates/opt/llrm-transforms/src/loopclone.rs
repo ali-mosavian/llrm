@@ -9,12 +9,13 @@
 //! The old body's clones were found again by their fresh labels; here
 //! `peeled` returns each iteration's block map. Its callers were peel and
 //! unswitch. Not ported, meaning nothing here:
-//! - `_block_local_floating`, whether cloning can join x87 stack values (a float is an ordinary value); its caller was
-//!   `peeled`.
-//! - Copying the old body's pointer and integer-range side tables and the `cloned` flag: the rewrite ledger records
-//!   each `Cloned` instruction.
+//! - `_block_local_floating`, whether cloning can join x87 stack values (a
+//!   float is an ordinary value); its caller was `peeled`.
+//! - Copying the old body's pointer and integer-range side tables and the
+//!   `cloned` flag: the rewrite ledger records each `Cloned` instruction.
 //!
-//! Tests skipped: `test_peeling_refuses_floating_work_behind_an_internal_branch`
+//! Tests skipped:
+//! `test_peeling_refuses_floating_work_behind_an_internal_branch`
 //! and `test_peeling_accepts_block_local_floating_values_behind_a_branch`
 //! (x87 regions), and the byte-ownership half of
 //! `test_clones_read_their_own_values_and_do_not_duplicate_byte_ownership`.

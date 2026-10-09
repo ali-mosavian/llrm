@@ -39,7 +39,8 @@ fn main() -> i16:
     return p.length2()
 ";
 
-/// `main.nib` and `geo.nib` on disk, and the messages opening `main` in an editor.
+/// `main.nib` and `geo.nib` on disk, and the messages opening `main` in an
+/// editor.
 struct Program {
     root: tempfile::TempDir,
 }
@@ -296,8 +297,9 @@ fn completion_offers_the_locals_in_scope_at_the_cursor() {
     }
 }
 
-/// The editor checked every project as real mode's: `let n: usize = 70000` was an error on m32,
-/// where a word is 32 bits. The project's target comes with `initialize`; one no target declares is refused.
+/// The editor checked every project as real mode's: `let n: usize = 70000` was
+/// an error on m32, where a word is 32 bits. The project's target comes with
+/// `initialize`; one no target declares is refused.
 #[test]
 fn the_projects_target_decides_what_the_editor_checks() {
     let program = Program::new();

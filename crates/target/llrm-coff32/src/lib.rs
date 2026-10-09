@@ -1,5 +1,5 @@
-//! An [`Object`] as a COFF object for i386 (`IMAGE_FILE_MACHINE_I386`). The container is
-//! `llrm-coff`'s.
+//! An [`Object`] as a COFF object for i386 (`IMAGE_FILE_MACHINE_I386`). The
+//! container is `llrm-coff`'s.
 
 use llrm_coff::{Machine, Relocation};
 use llrm_object::{Arch, Kind, Object, Unsupported};
@@ -59,7 +59,8 @@ mod tests {
         u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap())
     }
 
-    /// (name, raw size, raw offset, relocation offset, relocation count, flags) of section `index`.
+    /// (name, raw size, raw offset, relocation offset, relocation count, flags)
+    /// of section `index`.
     fn header(
         bytes: &[u8],
         index: usize,
@@ -134,8 +135,9 @@ mod tests {
         Object { name: "a.c".into(), arch: Arch::I386, sections, symbols, omf_groups: Vec::new(), debug: None }
     }
 
-    /// REL32 is relative to the field's end, so the field holds the addend, not ELF's addend - 4:
-    /// writing -4 here would send every call four bytes short.
+    /// REL32 is relative to the field's end, so the field holds the addend, not
+    /// ELF's addend - 4: writing -4 here would send every call four bytes
+    /// short.
     #[test]
     fn a_call_is_rel32_with_its_addend_in_the_field() {
         let call = Reloc { at: 1, kind: Kind::Branch { width: 4 }, target: Target::Symbol(0), addend: 0 };
@@ -147,15 +149,17 @@ mod tests {
         let (name, size, raw, relocs, count, flags) = header(&bytes, 0);
         assert_eq!((name.as_str(), size, count), (".text", 6, 1));
         assert_eq!(&bytes[raw..raw + 6], [0xE8, 0, 0, 0, 0, 0xC3]);
-        // The entry: offset, symbol index (`.file` and its aux, `@feat.00`, then the section's two), type.
+        // The entry: offset, symbol index (`.file` and its aux, `@feat.00`,
+        // then the section's two), type.
         assert_eq!((le32(&bytes, relocs), le32(&bytes, relocs + 4), le16(&bytes, relocs + 8)), (1, 5, REL32));
         assert_eq!(symbol_at(&bytes, 5), ("_f".into(), 0, 0, 0, 2, 0));
         // 16-byte alignment, code, execute, read.
         assert_eq!(flags, 0x20 | 0x2000_0000 | 0x4000_0000 | 5 << 20);
     }
 
-    /// A pc-relative field not ending the instruction (`cmp [sym], imm8` is 1 past) keeps the
-    /// distance the linker will not take off: the field holds addend + 4 - from.
+    /// A pc-relative field not ending the instruction (`cmp [sym], imm8` is 1
+    /// past) keeps the distance the linker will not take off: the field
+    /// holds addend + 4 - from.
     #[test]
     fn a_pc_relative_field_short_of_the_instruction_end_compensates() {
         let reloc = Reloc { at: 2, kind: Kind::PcRel { width: 4, from: 5 }, target: Target::Symbol(0), addend: 0 };
@@ -168,8 +172,8 @@ mod tests {
         assert_eq!(le32(&bytes, raw + 2) as i32, -1);
     }
 
-    /// A local symbol is a static in the table: DIR32 against it keeps the addend in the field and
-    /// the symbol says where.
+    /// A local symbol is a static in the table: DIR32 against it keeps the
+    /// addend in the field and the symbol says where.
     #[test]
     fn a_local_symbol_is_a_static_and_dir32_keeps_the_addend_in_the_field() {
         let reloc = Reloc { at: 4, kind: Kind::Abs { width: 4 }, target: Target::Symbol(0), addend: 2 };
@@ -185,8 +189,9 @@ mod tests {
         assert_eq!(symbol_at(&bytes, le32(&bytes, relocs + 4) as usize), ("loc".into(), 4, 1, 0, 3, 0));
     }
 
-    /// A name over eight bytes lives in the string table: the section's is `/offset`, the symbol's
-    /// has four zero bytes first. Written inline it truncated both.
+    /// A name over eight bytes lives in the string table: the section's is
+    /// `/offset`, the symbol's has four zero bytes first. Written inline it
+    /// truncated both.
     #[test]
     fn long_names_live_in_the_string_table() {
         let mut second = text(vec![0xC3], vec![]);
@@ -211,8 +216,9 @@ mod tests {
         assert_eq!((name.as_str(), size, raw, flags & 0x80), (".bss", 64, 0, 0x80));
     }
 
-    /// Past 65535 relocations the header says 0xFFFF with LNK_NRELOC_OVFL, and the first entry's
-    /// address is the real count plus one. A bare 16-bit count wrapped and lost relocations.
+    /// Past 65535 relocations the header says 0xFFFF with LNK_NRELOC_OVFL, and
+    /// the first entry's address is the real count plus one. A bare 16-bit
+    /// count wrapped and lost relocations.
     #[test]
     fn more_than_65535_relocations_overflow_into_the_first_entry() {
         let total = 70_000;
@@ -277,16 +283,18 @@ mod tests {
         dirs.iter().map(|dir| dir.join(tool)).find(|path| path.exists())
     }
 
-    /// An i386 object says its handlers are all registered (`@feat.00` = 1): without it lld-link's
-    /// default /safeseh refused the link, "is not compatible with SEH".
+    /// An i386 object says its handlers are all registered (`@feat.00` = 1):
+    /// without it lld-link's default /safeseh refused the link, "is not
+    /// compatible with SEH".
     #[test]
     fn the_object_declares_itself_safe_for_safeseh() {
         let bytes = write(&object(vec![text(vec![0xC3], vec![])], vec![])).unwrap();
         assert_eq!(symbol_at(&bytes, 2), ("@feat.00".into(), 1, -1, 0, 3, 0));
     }
 
-    /// `_start` calls `_f` and stores `_f`'s address in `_slot`: lld-link links it and the call
-    /// and the stored address both name `_f`; llvm-readobj and llvm-objdump read the object clean.
+    /// `_start` calls `_f` and stores `_f`'s address in `_slot`: lld-link links
+    /// it and the call and the stored address both name `_f`; llvm-readobj
+    /// and llvm-objdump read the object clean.
     #[test]
     fn lld_link_links_it_and_the_call_reaches_f() {
         let (Some(link), Some(readobj), Some(objdump)) = (llvm("lld-link"), llvm("llvm-readobj"), llvm("llvm-objdump"))

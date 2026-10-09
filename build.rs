@@ -1,5 +1,5 @@
-//! Builds jwasm and jwlink (toolchain/jwbuild.sh, feature `jw`) and the headless
-//! DOSBox-X (toolchain/dosrunbuild.sh, feature `dosrun`) beside llrm's
+//! Builds jwasm and jwlink (toolchain/jwbuild.sh, feature `jw`) and the
+//! headless DOSBox-X (toolchain/dosrunbuild.sh, feature `dosrun`) beside llrm's
 //! binaries. The scripts need a Unix host.
 
 use std::path::PathBuf;

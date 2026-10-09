@@ -116,8 +116,9 @@ impl<'u> Described<'u> {
                 let (element, bytes) = (self.r#type(base), self.size(handle));
                 element.zip(bytes).map(|(element, bytes)| self.builder.sized(element, bytes))
             }
-            // An aggregate is declared before its members, which may point back to it: the only
-            // place a type reaches itself, so the only one that needs this.
+            // An aggregate is declared before its members, which may point back
+            // to it: the only place a type reaches itself, so the only one that
+            // needs this.
             DebugType::Struct { name, union, size, fields } => {
                 let id = self
                     .builder
@@ -175,7 +176,8 @@ impl<'u> Described<'u> {
         }
     }
 
-    /// A parameter's home, `place`, that holds the function's `argument`th argument once it has stored it.
+    /// A parameter's home, `place`, that holds the function's `argument`th
+    /// argument once it has stored it.
     pub fn parameter_home(
         &mut self,
         place: i64,

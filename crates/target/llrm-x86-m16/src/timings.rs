@@ -71,8 +71,9 @@ pub static LATENCY: LazyLock<IndexMap<&'static str, [i64; 7]>> = LazyLock::new(|
 mod tests {
     use super::*;
 
-    /// Figures spot-checked against the tables they were taken from. The 486's LEA is 1 clock (Intel's 486 table, as in
-    /// HelpPC 2.10's `LEA reg,mem 2+EA 3 2 1`: 286, 386, 486); the column held the 386's 2.
+    /// Figures spot-checked against the tables they were taken from. The 486's
+    /// LEA is 1 clock (Intel's 486 table, as in HelpPC 2.10's `LEA reg,mem
+    /// 2+EA 3 2 1`: 286, 386, 486); the column held the 386's 2.
     #[test]
     fn the_table_has_the_figures_it_was_read_from() {
         assert_eq!(TABLE.cpus(), ["386", "486", "P5", "P6", "K5", "K6", "K7", "Core"]);
@@ -100,7 +101,8 @@ mod tests {
         assert_eq!(COST["alu_rm"], [2, 2, 1, 1, 1, 1, 1]);
     }
 
-    /// The forms and the order they are listed in: the cycles report prints them so.
+    /// The forms and the order they are listed in: the cycles report prints
+    /// them so.
     #[test]
     fn the_cost_and_latency_tables_list_the_forms_they_did() {
         assert_eq!(COST.len(), 55);

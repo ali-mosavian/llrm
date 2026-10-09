@@ -1,9 +1,10 @@
-//! A description nobody reads is a second definition nobody checks. Every description file of
-//! every target is read by shared code (its name is in a source that reads it), and every key of
-//! a TOML description is one a reader names.
+//! A description nobody reads is a second definition nobody checks. Every
+//! description file of every target is read by shared code (its name is in a
+//! source that reads it), and every key of a TOML description is one a reader
+//! names.
 //!
-//! The files and keys are found in `crates/target/*`, not listed: a new description or a new key
-//! with no reader fails here.
+//! The files and keys are found in `crates/target/*`, not listed: a new
+//! description or a new key with no reader fails here.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -11,9 +12,10 @@ use std::path::{Path, PathBuf};
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
-/// What a description names itself rather than the schema: a table keyed by a name or a number.
-/// (file, path from the file's root, with `*` for any one name)
-/// (`ports.*` and `foreign.*` are read through a closure that takes the key: `bound("low")`.)
+/// What a description names itself rather than the schema: a table keyed by a
+/// name or a number. (file, path from the file's root, with `*` for any one
+/// name) (`ports.*` and `foreign.*` are read through a closure that takes the
+/// key: `bound("low")`.)
 const NAMED: &[(&str, &str)] = &[
     ("calling.toml", "*"),
     ("calling.toml", "*.symbol.*"),
@@ -26,17 +28,19 @@ const NAMED: &[(&str, &str)] = &[
     ("dos.toml", "port.*"),
     ("pc-ports.toml", "ports.*"),
     ("dos.toml", "foreign.*"),
-    // Every integer of an OS facts file is defined for the assembler as -DDOS_<KEY>: the mechanism reads them all.
+    // Every integer of an OS facts file is defined for the assembler
+    // as -DDOS_<KEY>: the mechanism reads them all.
     ("facts.toml", "*"),
     ("facts.toml", "errors.*"),
     ("os.toml", "heap_bytes"),
-    // The error codes are a table the interface maps over, whatever their names.
+    // The error codes are a table the interface maps over, whatever their
+    // names.
     ("interface.toml", "errors.*"),
 ];
 
-/// The files git tracks under `directories` of `root`: what the repository holds, not what a build,
-/// a virtualenv or an editor left beside it (a `tools/.venv` held every key's name and let a key
-/// nobody reads pass).
+/// The files git tracks under `directories` of `root`: what the repository
+/// holds, not what a build, a virtualenv or an editor left beside it (a
+/// `tools/.venv` held every key's name and let a key nobody reads pass).
 fn tracked(
     root: &Path,
     directories: &[&str],
@@ -71,8 +75,9 @@ fn descriptions() -> Vec<PathBuf> {
     found
 }
 
-/// The source that reads descriptions: the non-test Rust of the crates (the target layer parses them, the
-/// frontends read their runtime's) and the tools' Python.
+/// The source that reads descriptions: the non-test Rust of the crates (the
+/// target layer parses them, the frontends read their runtime's) and the tools'
+/// Python.
 fn readers() -> String {
     readers_in(Path::new(ROOT))
 }
@@ -95,7 +100,8 @@ fn readers_in(root: &Path) -> String {
             && !name.starts_with("test_")
         {
             let source = fs::read_to_string(&path).unwrap_or_default();
-            // Not the tests of a module (`#[cfg(test)] mod tests`, wherever its file is): they would read anything.
+            // Not the tests of a module (`#[cfg(test)] mod tests`, wherever its
+            // file is): they would read anything.
             let tests = regex::Regex::new(r"\n#\[cfg\(test\)\]\n(?:#\[[^\n]*\n)*(?:pub )?mod \w+ \{").unwrap();
             text += tests.split(&source).next().unwrap_or("");
             text.push('\n');
@@ -136,7 +142,8 @@ fn matches(
     pattern.len() == path.len() && pattern.iter().zip(&path).all(|(one, other)| *one == "*" || one == other)
 }
 
-/// The files: each is named by a reader (`include_str!`, a `#[path]`, a build script).
+/// The files: each is named by a reader (`include_str!`, a `#[path]`, a build
+/// script).
 #[test]
 fn every_description_file_has_a_reader() {
     let mut sources = readers();
@@ -154,7 +161,8 @@ fn every_description_file_has_a_reader() {
     assert!(unread.is_empty(), "no source names these descriptions; read them or delete them: {unread:?}");
 }
 
-/// The keys: each TOML key is one some reader names, bar the names a description gives its own tables.
+/// The keys: each TOML key is one some reader names, bar the names a
+/// description gives its own tables.
 #[test]
 fn every_toml_key_has_a_reader() {
     let sources = readers();
@@ -170,9 +178,11 @@ fn every_toml_key_has_a_reader() {
         keys("", &toml::Value::Table(value), &mut all);
         for (at, key) in all {
             let named = NAMED.iter().any(|(file, pattern)| *file == name && matches(pattern, &at));
-            // A reader that takes the key through a closure or a helper: `name("code")`, `number("fixed")`.
+            // A reader that takes the key through a closure or a helper:
+            // `name("code")`, `number("fixed")`.
             let called = regex::Regex::new(&format!(r#"(?:\w\(|,\s*)"{}"\s*[,)]"#, regex::escape(&key))).unwrap();
-            // `assembler_defines = ["stack_base:STACK_BYTES"]`: a key the description itself names for the assembler.
+            // `assembler_defines = ["stack_base:STACK_BYTES"]`: a key the
+            // description itself names for the assembler.
             let defined = text.contains(&format!("\"{key}:"));
             let read = [
                 format!("get(\"{key}\")"),
@@ -199,7 +209,8 @@ fn every_toml_key_has_a_reader() {
     );
 }
 
-/// The instrument: the walk finds the descriptions, and a key nobody names is reported.
+/// The instrument: the walk finds the descriptions, and a key nobody names is
+/// reported.
 #[test]
 fn the_search_finds_descriptions_and_misses_a_key_nobody_reads() {
     let names: Vec<String> =
@@ -221,8 +232,9 @@ fn the_search_finds_descriptions_and_misses_a_key_nobody_reads() {
     assert!(matches("*.result.*", "cdecl32.result.1") && !matches("*.result.*", "cdecl32.result"));
 }
 
-/// The walk read every file beside the checkout, and a virtualenv under `tools` holding a key's name
-/// let three keys nobody reads pass on one machine and fail on a clean one: only what git tracks counts.
+/// The walk read every file beside the checkout, and a virtualenv under `tools`
+/// holding a key's name let three keys nobody reads pass on one machine and
+/// fail on a clean one: only what git tracks counts.
 #[test]
 fn an_untracked_file_is_not_a_reader() {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("descriptions_tracked");

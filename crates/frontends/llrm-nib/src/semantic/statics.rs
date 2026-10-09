@@ -126,7 +126,8 @@ impl TypeRegistry {
                     ),
                 ));
             }
-            // Where far is near a huge object is in the one space: no segment of its own.
+            // Where far is near a huge object is in the one space: no segment
+            // of its own.
             let huge = declared.huge && self.sizes.segmented;
             if declared.huge {
                 self.warn_target_width("huge", declared.span);

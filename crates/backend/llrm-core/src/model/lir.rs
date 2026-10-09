@@ -39,9 +39,10 @@ pub fn outside(reach: &BTreeSet<(i64, i64)>) -> Vec<(Addr, u32)> {
 pub struct CallMemory {
     pub effects: llrm_mir::memory::Effects,
     pub private: Vec<(Addr, u32)>,
-    /// The registers the callee's convention (the description's) disturbs: a function that keeps one for its caller
-    /// saves it before such a call, as it does before writing it. Empty where the callee's contract is what the
-    /// call went by.
+    /// The registers the callee's convention (the description's) disturbs: a
+    /// function that keeps one for its caller saves it before such a call,
+    /// as it does before writing it. Empty where the callee's contract is what
+    /// the call went by.
     pub disturbs: BTreeSet<iced_x86::Register>,
 }
 
@@ -77,13 +78,14 @@ impl CallMemory {
     }
 }
 
-/// What `-g` says of the values an instruction makes, and where in the source's variables it stands. Equal whatever it
-/// holds: two instructions the code does not tell apart are not told apart by what a debugger is told of them, or `-g`
-/// would change the code wherever a pass compares instructions.
+/// What `-g` says of the values an instruction makes, and where in the source's
+/// variables it stands. Equal whatever it holds: two instructions the code does
+/// not tell apart are not told apart by what a debugger is told of them, or
+/// `-g` would change the code wherever a pass compares instructions.
 #[derive(Clone, Debug, Default)]
 pub struct DebugTags {
-    /// The values (by the number their register had in SSA) this instruction defines, whichever register it ends up
-    /// writing.
+    /// The values (by the number their register had in SSA) this instruction
+    /// defines, whichever register it ends up writing.
     pub defines: Vec<u32>,
     /// The notes (`LirBody::notes`) that stand before it.
     pub before: Vec<u32>,
@@ -103,7 +105,8 @@ impl Eq for DebugTags {}
 /// One machine instruction, as the thing that emits it needs it.
 ///
 /// Direct port of `qbopt.model.lir:Insn`.  `call` is a shared owned reference
-/// so cloned LIR instructions retain it, as Python's frozen dataclass copies do.
+/// so cloned LIR instructions retain it, as Python's frozen dataclass copies
+/// do.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Insn {
     pub at: i64,
@@ -132,16 +135,19 @@ pub struct Insn {
     /// The source line of the MIR instruction it was selected from (`!dbg`).
     pub line: Option<u32>,
     pub debug: DebugTags,
-    /// What it does to the registers (`liveness::effect`), worked out once for everything that asks.
+    /// What it does to the registers (`liveness::effect`), worked out once for
+    /// everything that asks.
     pub effect: Derived<(u32, Option<crate::backend::liveness::Effect>)>,
-    /// Its identity (`Insn::id`): given when first asked, never again to another instruction.
+    /// Its identity (`Insn::id`): given when first asked, never again to
+    /// another instruction.
     pub ident: Derived<u64>,
 }
 
-/// A fact worked out from an instruction's fields, kept on it for every pass that asks. Cloning gives an empty one: a
-/// clone is made to be changed (`Insn { what: x, ..(**one).clone() }`, a hundred places), and the old instruction's
-/// answer is not the new one's. Instructions in a body are shared and not changed, so what is asked of one is asked
-/// once.
+/// A fact worked out from an instruction's fields, kept on it for every pass
+/// that asks. Cloning gives an empty one: a clone is made to be changed (`Insn
+/// { what: x, ..(**one).clone() }`, a hundred places), and the old
+/// instruction's answer is not the new one's. Instructions in a body are shared
+/// and not changed, so what is asked of one is asked once.
 pub struct Derived<T>(std::sync::OnceLock<T>);
 
 impl<T> Derived<T> {
@@ -165,7 +171,8 @@ impl<T> Clone for Derived<T> {
     }
 }
 
-/// Not a part of what an instruction is: two that say the same are equal whatever has been asked of them.
+/// Not a part of what an instruction is: two that say the same are equal
+/// whatever has been asked of them.
 impl<T> PartialEq for Derived<T> {
     fn eq(
         &self,
@@ -187,7 +194,8 @@ impl<T> std::fmt::Debug for Derived<T> {
 }
 
 impl LirBody {
-    /// The values (by the number their register had in SSA) that `-g`'s notes name.
+    /// The values (by the number their register had in SSA) that `-g`'s notes
+    /// name.
     #[must_use]
     pub fn named_values(&self) -> BTreeSet<u32> {
         self.notes
@@ -196,9 +204,11 @@ impl LirBody {
             .collect()
     }
 
-    /// `self`, a pass's result from `old`, with the notes of the instructions the pass removed or replaced standing
-    /// before the next instruction of the block that is still there, or the last: a note says where in the source a
-    /// variable takes a value, and that place has not moved because the instruction it stood before is gone.
+    /// `self`, a pass's result from `old`, with the notes of the instructions
+    /// the pass removed or replaced standing before the next instruction of
+    /// the block that is still there, or the last: a note says where in the
+    /// source a variable takes a value, and that place has not moved
+    /// because the instruction it stood before is gone.
     #[must_use]
     pub fn with_notes_kept(
         &self,
@@ -216,8 +226,8 @@ impl LirBody {
                 let present: BTreeSet<u32> =
                     block.insns.iter().flat_map(|one| one.debug.before.iter().copied()).collect();
                 let alive: BTreeSet<*const Insn> = block.insns.iter().map(Arc::as_ptr).collect();
-                // Where each lost note goes: the index in the new block of the first old instruction after it that
-                // survives.
+                // Where each lost note goes: the index in the new block of the
+                // first old instruction after it that survives.
                 let mut moved: Vec<(usize, u32)> = Vec::new();
                 for (index, one) in before.insns.iter().enumerate() {
                     let lost: Vec<u32> =
@@ -259,9 +269,10 @@ impl LirBody {
         if changed { self.with_blocks(blocks) } else { self.clone() }
     }
 
-    /// `self`, a pass's result from `old`, with the values the instructions the pass replaced defined told of the last
-    /// instruction of the block, made from the same source instruction, that writes the same place: the value is
-    /// complete there.
+    /// `self`, a pass's result from `old`, with the values the instructions the
+    /// pass replaced defined told of the last instruction of the block,
+    /// made from the same source instruction, that writes the same place: the
+    /// value is complete there.
     #[must_use]
     pub fn with_defs_kept(
         &self,
@@ -330,8 +341,9 @@ impl LirBody {
         if changed { self.with_blocks(blocks) } else { self.clone() }
     }
 
-    /// `self` with a copy that defines a value `-g` names told so: the moves that phi elimination makes for a phi's
-    /// result are the only instructions that make it.
+    /// `self` with a copy that defines a value `-g` names told so: the moves
+    /// that phi elimination makes for a phi's result are the only
+    /// instructions that make it.
     #[must_use]
     pub fn with_phi_copies_noted(&self) -> Self {
         let named = self.named_values();
@@ -371,8 +383,9 @@ impl LirBody {
 }
 
 impl Insn {
-    /// The instruction at a function's entry that says which registers its arguments arrive in: it is no
-    /// code, and anything placed at the entry goes after it, or it clobbers an argument.
+    /// The instruction at a function's entry that says which registers its
+    /// arguments arrive in: it is no code, and anything placed at the entry
+    /// goes after it, or it clobbers an argument.
     #[must_use]
     pub fn arrival(&self) -> bool {
         self.call.is_none()
@@ -417,11 +430,14 @@ impl Insn {
         }
     }
 
-    /// The instruction itself, as a number: what a table keeps of an instruction it must find again in a later body
-    /// that shares it. It is given when first asked and shared by every `Arc` of the instruction; a clone, which is
-    /// made to be changed, is another instruction and has its own. Numbers are never reused, where the address of a
-    /// dropped instruction is (a table kept past the instruction it named would answer for whatever was allocated
-    /// there). They name, and no order or iteration of them is ever read.
+    /// The instruction itself, as a number: what a table keeps of an
+    /// instruction it must find again in a later body that shares it. It is
+    /// given when first asked and shared by every `Arc` of the instruction; a
+    /// clone, which is made to be changed, is another instruction and has
+    /// its own. Numbers are never reused, where the address of a
+    /// dropped instruction is (a table kept past the instruction it named would
+    /// answer for whatever was allocated there). They name, and no order or
+    /// iteration of them is ever read.
     #[must_use]
     pub fn id(&self) -> u64 {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -525,19 +541,21 @@ pub struct LirBlock {
     pub insns: Insns,
     pub succ: Vec<i64>,
     pub phis: Vec<Phi>,
-    /// Laid out after the hot code: every path from it ends in `unreachable`, isel finds.
+    /// Laid out after the hot code: every path from it ends in `unreachable`,
+    /// isel finds.
     pub cold: bool,
 }
 
-/// A block's instructions, shared: a copy of the block is the same instructions, and two blocks are the same
-/// instructions when they are the same allocation (`same_as`), which is how the facts of a block are kept for every
-/// body that has it.
+/// A block's instructions, shared: a copy of the block is the same
+/// instructions, and two blocks are the same instructions when they are the
+/// same allocation (`same_as`), which is how the facts of a block are kept for
+/// every body that has it.
 #[derive(Clone, Debug, Default)]
 pub struct Insns(Arc<[Arc<Insn>]>);
 
 impl Insns {
-    /// `change` made to a copy of the instructions, which then are these: the way a test or a one-off edit changes a
-    /// block.
+    /// `change` made to a copy of the instructions, which then are these: the
+    /// way a test or a one-off edit changes a block.
     pub fn edit<R>(
         &mut self,
         change: impl FnOnce(&mut Vec<Arc<Insn>>) -> R,
@@ -555,8 +573,8 @@ impl Insns {
         Arc::ptr_eq(&self.0, &other.0)
     }
 
-    /// The same instructions, whether or not they were put in a list of their own: the allocation, or each instruction
-    /// by identity.
+    /// The same instructions, whether or not they were put in a list of their
+    /// own: the allocation, or each instruction by identity.
     pub fn same_insns(
         &self,
         other: &Self,
@@ -624,7 +642,8 @@ impl<'a> IntoIterator for &'a Insns {
 
 #[cfg(test)]
 thread_local! {
-    /// The blocks this thread has cloned: what a pass that copies the body per change shows (#560, #913).
+    /// The blocks this thread has cloned: what a pass that copies the body per
+    /// change shows (#560, #913).
     pub static BLOCK_CLONES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
@@ -678,8 +697,8 @@ pub struct DebugVariable {
     pub parameter: bool,
     /// Of a parameter's home: the argument it was passed as.
     pub argument: Option<i64>,
-    /// The register that argument arrives in, where one does: it holds the value until the function stores it
-    /// into the home.
+    /// The register that argument arrives in, where one does: it holds the
+    /// value until the function stores it into the home.
     pub arrives: Option<iced_x86::Register>,
 }
 
@@ -688,21 +707,25 @@ pub struct DebugVariable {
 pub enum DebugPlace {
     /// A frame cell, or a place in data.
     At(Addr),
-    /// The register a parameter arrives in, which holds it until the body starts.
+    /// The register a parameter arrives in, which holds it until the body
+    /// starts.
     Register(iced_x86::Register),
     /// A parameter the optimiser removed: there is none to show.
     Gone,
-    /// A variable the code keeps in no one place: where it is over the code is found from the notes (`LirBody::notes`)
-    /// that name it, the variable's metadata node being the number.
+    /// A variable the code keeps in no one place: where it is over the code is
+    /// found from the notes (`LirBody::notes`) that name it, the variable's
+    /// metadata node being the number.
     Tracked(u32),
 }
 
-/// What `-g` says of a variable at a point in the code: the value it has from there on, or that it has none.
+/// What `-g` says of a variable at a point in the code: the value it has from
+/// there on, or that it has none.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DebugNote {
     /// The variable's metadata node.
     pub variable: u32,
-    /// The bytes of the variable the value is, from the byte (`DW_OP_piece`); none where it is all of it.
+    /// The bytes of the variable the value is, from the byte (`DW_OP_piece`);
+    /// none where it is all of it.
     pub piece: Option<(u32, u32)>,
     pub value: NoteValue,
 }
@@ -760,34 +783,44 @@ pub struct LirBody {
     /// Estimated branch probabilities, by edge, as isel found them; an
     /// edge made since has none.
     pub odds: BlockOdds,
-    /// How often each block runs per call, worked out once where the loops are plain (instruction selection) and kept
-    /// through every rewrite: a block made since is derived from its predecessors' (`Frequency::of`), one removed
-    /// drops out. The estimate is a fact about the program, not about the shape of whatever blocks the allocator
-    /// has put on its edges.
+    /// How often each block runs per call, worked out once where the loops are
+    /// plain (instruction selection) and kept through every rewrite: a
+    /// block made since is derived from its predecessors' (`Frequency::of`),
+    /// one removed drops out. The estimate is a fact about the program, not
+    /// about the shape of whatever blocks the allocator has put on its
+    /// edges.
     pub frequencies: Option<Arc<BlockFrequencies>>,
-    /// It calls a routine that returns twice (`setjmp`): no frame slot is shared.
+    /// It calls a routine that returns twice (`setjmp`): no frame slot is
+    /// shared.
     pub returns_twice: bool,
-    /// (load, write) by `at`: the optimizer proved the write leaves the load's cell as it was (`!llrm.spares`).
+    /// (load, write) by `at`: the optimizer proved the write leaves the load's
+    /// cell as it was (`!llrm.spares`).
     pub spares: Arc<BTreeSet<(i64, i64)>>,
     /// How many floating values the target holds on its register stack at once.
     pub float_stack: usize,
-    /// A phi's value, by number, and the fixed cell the program also holds it in wherever it is live (`!llrm.home`).
+    /// A phi's value, by number, and the fixed cell the program also holds it
+    /// in wherever it is live (`!llrm.home`).
     pub homes: Arc<std::collections::BTreeMap<u32, crate::model::ir::Mem>>,
-    /// 16 or 32: the mode the target's code runs in, which decides how an instruction encodes and what it touches.
+    /// 16 or 32: the mode the target's code runs in, which decides how an
+    /// instruction encodes and what it touches.
     pub bits: u32,
-    /// Every frame cell names the slot it lies in (`Addr::slot_home`): set once instruction selection has tagged them,
-    /// and then a rule of the verifier.
+    /// Every frame cell names the slot it lies in (`Addr::slot_home`): set once
+    /// instruction selection has tagged them, and then a rule of the
+    /// verifier.
     pub slotted: bool,
-    /// `-g`'s variables are found from the canonical frame address, so they need no frame register: the debug format
-    /// says where a cell is by its distance from the caller's frame (`FrameBase::Cfa`), whichever register the
-    /// code addresses it by.
+    /// `-g`'s variables are found from the canonical frame address, so they
+    /// need no frame register: the debug format says where a cell is by its
+    /// distance from the caller's frame (`FrameBase::Cfa`), whichever register
+    /// the code addresses it by.
     pub cfa_variables: bool,
-    /// What `-g` says of its variables at points in the code, by the numbers `DebugTags::before` holds.
+    /// What `-g` says of its variables at points in the code, by the numbers
+    /// `DebugTags::before` holds.
     pub notes: Arc<Vec<DebugNote>>,
-    /// The values (by number) that arrive in a cell above the frame, with the cell's displacement and size: arguments
-    /// the caller pushed.
+    /// The values (by number) that arrive in a cell above the frame, with the
+    /// cell's displacement and size: arguments the caller pushed.
     pub arguments_in_cells: Arc<Vec<(u32, i64, u32)>>,
-    /// The facts worked out of this body and the bodies made from it (`analysis::facts`).
+    /// The facts worked out of this body and the bodies made from it
+    /// (`analysis::facts`).
     pub facts: crate::analysis::facts::Kept,
 }
 
@@ -862,8 +895,9 @@ impl BlockOdds {
 }
 
 impl LirBody {
-    /// The edges from a block with more than one successor into a block with more than one predecessor: code
-    /// that must run on one of them has no block of its own to go in until one is made.
+    /// The edges from a block with more than one successor into a block with
+    /// more than one predecessor: code that must run on one of them has no
+    /// block of its own to go in until one is made.
     #[must_use]
     pub fn critical_edges(&self) -> BTreeSet<(i64, i64)> {
         let mut preds: IndexMap<i64, usize> = IndexMap::default();
@@ -922,7 +956,8 @@ impl LirBody {
         }
     }
 
-    /// Python's `replace(body, blocks=blocks)`: the old blocks are never copied.
+    /// Python's `replace(body, blocks=blocks)`: the old blocks are never
+    /// copied.
     #[must_use]
     pub fn with_blocks(
         &self,
@@ -1117,9 +1152,10 @@ where
 #[cfg(test)]
 mod tests {
 
-    /// A table kept past the instruction it named answered for whatever was allocated at its address next: the key of
-    /// an instruction was its address, which a dropped instruction gives back. An instruction is its number, never
-    /// reused; its clone is another instruction.
+    /// A table kept past the instruction it named answered for whatever was
+    /// allocated at its address next: the key of an instruction was its
+    /// address, which a dropped instruction gives back. An instruction is its
+    /// number, never reused; its clone is another instruction.
     #[test]
     fn test_a_dropped_instructions_key_is_not_given_to_the_next_one_made() {
         let mut seen = std::collections::BTreeSet::new();
@@ -1146,9 +1182,10 @@ mod tests {
         );
     }
 
-    /// A copy of a body copied every block's instruction list (a block clone was 2.5% of compiling d_faces), and no
-    /// block could say it was the one a fact had been made of. A copy shares them; a rewritten block is the only
-    /// one that is not the same.
+    /// A copy of a body copied every block's instruction list (a block clone
+    /// was 2.5% of compiling d_faces), and no block could say it was the
+    /// one a fact had been made of. A copy shares them; a rewritten block is
+    /// the only one that is not the same.
     #[test]
     fn test_a_copy_of_a_body_shares_its_blocks_instructions_and_a_rewrite_shares_the_rest() {
         let one = Arc::new(Insn::new(1, None, None, Vec::new(), Vec::new()));
@@ -1185,7 +1222,8 @@ mod tests {
 
     #[test]
     fn direct_lir_model_anchor_keeps_virtual_definitions_and_source_ownership() {
-        // Port of tests/test_peephole.py::test_fusion_preserves_a_virtual_dataflow_anchor:
+        // Port of tests/test_peephole.
+        // py::test_fusion_preserves_a_virtual_dataflow_anchor:
         // folding physical code must retain both virtual definitions.
         let mut source = (*instruction(0x10, Some((0x10, 0x12)))).clone();
         source.defines = vec![2];

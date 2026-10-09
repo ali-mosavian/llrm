@@ -589,8 +589,10 @@ fn erl_is_the_line_bcs_statement_table_gives() {
     }
 }
 
-/// BC matched address spaces 1 (far) and 2 (selector) as constants and held them equal to real mode's by a test: a
-/// machine of a target that numbers them 7 and 8 got its far globals in space 1. The machine's layout says which, once.
+/// BC matched address spaces 1 (far) and 2 (selector) as constants and held
+/// them equal to real mode's by a test: a machine of a target that numbers them
+/// 7 and 8 got its far globals in space 1. The machine's layout says which,
+/// once.
 #[test]
 fn the_far_and_selector_spaces_are_the_machines_layouts() {
     let fixture = std::fs::read_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf"))

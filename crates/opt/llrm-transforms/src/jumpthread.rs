@@ -1,19 +1,26 @@
-//! A switch in a loop that the paths into it decide, entered from the end of each path at the case it decides:
-//! LLVM's `DFAJumpThreading` and GCC's finite-state-machine threader (`tree-ssa-threadbackward.cc`).
+//! A switch in a loop that the paths into it decide, entered from the end of
+//! each path at the case it decides: LLVM's `DFAJumpThreading` and GCC's
+//! finite-state-machine threader (`tree-ssa-threadbackward.cc`).
 //!
-//! `state = step(state); switch (state)` in a loop: the switch reads a phi of the loop's header, and the value that
-//! comes round is a constant on each path into the join that makes it (or constant from the preheader). Each such path
-//! is given its own copy of the blocks from the join down to the switch, and the copy of the switch is a jump to the
-//! case its constant picks: the dispatch is gone from that path. The copies cost code, as LLVM's and GCC's do, so a
-//! path is taken only where its blocks hold `MAX_PATH` instructions or fewer and the whole function `MAX_COPIED`, and
-//! never where the build is tuned for size, except the branch whose copies hold nothing.
+//! `state = step(state); switch (state)` in a loop: the switch reads a phi of
+//! the loop's header, and the value that comes round is a constant on each path
+//! into the join that makes it (or constant from the preheader). Each such path
+//! is given its own copy of the blocks from the join down to the switch, and
+//! the copy of the switch is a jump to the case its constant picks: the
+//! dispatch is gone from that path. The copies cost code, as LLVM's and GCC's
+//! do, so a path is taken only where its blocks hold `MAX_PATH` instructions or
+//! fewer and the whole function `MAX_COPIED`, and never where the build is
+//! tuned for size, except the branch whose copies hold nothing.
 //!
-//! Only what this reads: a `switch` on a phi in a block of a loop (`p` in `H`), `H` reaching the switch's block `S`
-//! through blocks each with the one before as its only predecessor, and `p`'s input from the loop being a constant,
-//! or a phi in its own block `J` (a block ending in a jump to `H`) with a constant from the predecessor `P`.
-//! The copies of `J..S` have `H`'s phis as the values they take on the path; a value made in the originals and read
-//! outside them is made again by the copies, and an updater (`SsaUpdater`) joins the two where the paths meet.
-//! The result is not a natural loop any more where several cases lead back: later loop passes skip it, as after
+//! Only what this reads: a `switch` on a phi in a block of a loop (`p` in `H`),
+//! `H` reaching the switch's block `S` through blocks each with the one before
+//! as its only predecessor, and `p`'s input from the loop being a constant,
+//! or a phi in its own block `J` (a block ending in a jump to `H`) with a
+//! constant from the predecessor `P`. The copies of `J..S` have `H`'s phis as
+//! the values they take on the path; a value made in the originals and read
+//! outside them is made again by the copies, and an updater (`SsaUpdater`)
+//! joins the two where the paths meet. The result is not a natural loop any
+//! more where several cases lead back: later loop passes skip it, as after
 //! LLVM's.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -32,14 +39,16 @@ use crate::lcssa::arms;
 
 /// GCC's `max-fsm-thread-path-insns`: instructions one path's copies may hold.
 const MAX_PATH: usize = 100;
-/// GCC's `max-jump-thread-duplication-stmts` (params.opt:589): instructions a branch's path may copy besides the phis
-/// and the compare the threading kills. Tuned for size, GCC threads only where it kills every statement of the block
+/// GCC's `max-jump-thread-duplication-stmts` (params.opt:589): instructions a
+/// branch's path may copy besides the phis and the compare the threading kills.
+/// Tuned for size, GCC threads only where it kills every statement of the block
 /// (`tree-ssa-threadupdate.cc:2077`): none.
 const BRANCH_PATH: usize = 15;
-/// GCC's `fsm-scale-path-stmts` (params.opt:165): `profitable_path_p` rejects a path of `n` instructions where `n * 2
-/// >= BRANCH_PATH`.
+/// GCC's `fsm-scale-path-stmts` (params.opt:165): `profitable_path_p` rejects a
+/// path of `n` instructions where `n * 2 >= BRANCH_PATH`.
 const PATH_SCALE: usize = 2;
-/// GCC's `max-fsm-thread-paths`, in instructions rather than paths: what one function may copy in all.
+/// GCC's `max-fsm-thread-paths`, in instructions rather than paths: what one
+/// function may copy in all.
 const MAX_COPIED: usize = 400;
 
 /// `size`: code size outranks speed, and a path is never copied.
@@ -61,8 +70,8 @@ impl FunctionPass for JumpThread {
         if !threaded(unit.context, unit.layout, unit.function, &outer, self.size) {
             return PreservedAnalyses::all();
         }
-        // What the copies know of their state: a product by a constant, a compare of one. Only where something was
-        // copied.
+        // What the copies know of their state: a product by a constant, a
+        // compare of one. Only where something was copied.
         for pass in [
             &mut crate::fold::Fold as &mut dyn FunctionPass,
             &mut crate::algebraic::Algebraic { size: false },
@@ -76,14 +85,16 @@ impl FunctionPass for JumpThread {
     }
 }
 
-/// One path found: the block its first edge leaves, the blocks copied, and the case it ends in.
+/// One path found: the block its first edge leaves, the blocks copied, and the
+/// case it ends in.
 struct Path {
     from: BlockId,
     blocks: Vec<BlockId>,
     target: BlockId,
 }
 
-/// Every switch's paths that can be threaded, a switch's all at once within the limits; whether any was.
+/// Every switch's paths that can be threaded, a switch's all at once within the
+/// limits; whether any was.
 pub fn threaded(
     context: &mut Context,
     layout: &DataLayout,
@@ -109,13 +120,15 @@ pub fn threaded(
     }
     let mut copied = 0;
     let mut changed = false;
-    // The paths of the branches are those of the function as it came: a branch the copies made is not threaded again,
-    // or a loop would be peeled one trip at a time. GCC registers its threads once and applies them together.
+    // The paths of the branches are those of the function as it came: a branch
+    // the copies made is not threaded again, or a loop would be peeled one
+    // trip at a time. GCC registers its threads once and applies them together.
     let mut rounds = 0;
     while let Some(paths) = found(context, layout, function, outer, copied, size, rounds == 0) {
         rounds += 1;
         llrm_support::debug!("jumpthread", "{} paths, {} instructions copied so far", paths.len(), copied);
-        // A path of phis and a branch copies no instruction and still spends the budget: or a loop of them never ends.
+        // A path of phis and a branch copies no instruction and still spends
+        // the budget: or a loop of them never ends.
         copied += copy(context, function, &paths).max(paths.len());
         changed = true;
     }
@@ -125,7 +138,8 @@ pub fn threaded(
     changed
 }
 
-/// The paths of the first switch or branch that has any, within what is left of `MAX_COPIED`.
+/// The paths of the first switch or branch that has any, within what is left of
+/// `MAX_COPIED`.
 fn found(
     context: &mut Context,
     layout: &DataLayout,
@@ -144,10 +158,12 @@ fn found(
         .collect();
     for block in blocks {
         let Some(last) = function.terminator(block) else { continue };
-        // The innermost loop holding the block, the one a chain of blocks to the state's phi stays within.
+        // The innermost loop holding the block, the one a chain of blocks to
+        // the state's phi stays within.
         let loop_ =
             shape.loops.iter().filter(|one| one.body.contains(&cfg::id(block))).min_by_key(|one| one.body.len());
-        // A switch is the state machine of a loop; a branch on a constant a path decides is threaded wherever it is.
+        // A switch is the state machine of a loop; a branch on a constant a
+        // path decides is threaded wherever it is.
         let Some((state, decide)) = decided(function, &unit, last) else { continue };
         let is_switch = function.instruction(last).opcode == Opcode::Switch;
         if is_switch && (size || loop_.is_none()) || !is_switch && !branches {
@@ -160,7 +176,8 @@ fn found(
             (false, false) => (BRANCH_PATH - 1) / PATH_SCALE,
             (false, true) => 0,
         };
-        // The compare of the branch is decided by the threading, and is not a copy.
+        // The compare of the branch is decided by the threading, and is not a
+        // copy.
         let killed = match function.instruction(last).operands.first() {
             Some(&Operand::Value(condition)) if !is_switch => match function.value(condition).def {
                 ValueDef::Instruction(made) if matches!(function.instruction(made).opcode, Opcode::ICmp(_)) => {
@@ -173,7 +190,8 @@ fn found(
         let mut paths = Vec::new();
         let mut spent = copied;
         for (value, from) in arms(function, phi) {
-            // The constant on each way in, and the blocks copied ahead of the chain.
+            // The constant on each way in, and the blocks copied ahead of the
+            // chain.
             let ways = resolved(function, &unit, value, from, 4);
             for (source, prefix, number) in ways {
                 let Some(target) = decide(number) else { continue };
@@ -184,9 +202,11 @@ fn found(
                 if !blocks.iter().all(|&one| copyable(function, one)) {
                     continue;
                 }
-                // Into a loop through its header from outside is a rotation, which `Rotate` makes where it pays: GCC
+                // Into a loop through its header from outside is a rotation,
+                // which `Rotate` makes where it pays: GCC
                 // allows it only for the idioms of `thread_through_loop_header`
-                // (tree-ssa-threadupdate.cc:1712), and not before the loop passes are done.
+                // (tree-ssa-threadupdate.cc:1712), and not before the loop
+                // passes are done.
                 if !is_switch
                     && blocks.iter().any(|&one| {
                         shape.loops.iter().any(|l| l.header == cfg::id(one) && !l.body.contains(&cfg::id(source)))
@@ -197,7 +217,8 @@ fn found(
                 let copies: usize = if is_switch {
                     blocks.iter().map(|&one| function.block(one).instructions().len()).sum()
                 } else {
-                    // Besides the phis, the branch and its compare, what the copies hold.
+                    // Besides the phis, the branch and its compare, what the
+                    // copies hold.
                     blocks
                         .iter()
                         .flat_map(|&one| function.block(one).instructions().iter().copied())
@@ -208,9 +229,11 @@ fn found(
                         })
                         .count()
                 };
-                // GCC counts the phis of a block with several predecessors and successors
-                // (`tree-ssa-threadbackward.cc`, possibly_profitable_path_p): each is a phi at the
-                // points where the copies rejoin the originals, and a move there. The state's own phi dies.
+                // GCC counts the phis of a block with several predecessors and
+                // successors (`tree-ssa-threadbackward.cc`,
+                // possibly_profitable_path_p): each is a phi at the
+                // points where the copies rejoin the originals, and a move
+                // there. The state's own phi dies.
                 let phis: usize = if is_switch {
                     0
                 } else {
@@ -232,7 +255,8 @@ fn found(
                 if copies > limit || spent + copies > MAX_COPIED {
                     continue;
                 }
-                // A path of phis and a branch still costs a block, or the budget would never run out.
+                // A path of phis and a branch still costs a block, or the
+                // budget would never run out.
                 spent += copies.max(1);
                 paths.push(Path { from: source, blocks, target });
             }
@@ -244,8 +268,9 @@ fn found(
     None
 }
 
-/// What the terminator `last` decides from a phi: the phi's value, and where control goes for a constant of it. A
-/// switch on the phi; a branch on an `i1` phi; a branch on a compare of the phi with a constant.
+/// What the terminator `last` decides from a phi: the phi's value, and where
+/// control goes for a constant of it. A switch on the phi; a branch on an `i1`
+/// phi; a branch on a compare of the phi with a constant.
 fn decided<'a>(
     function: &'a Function,
     unit: &'a memory::Unit,
@@ -303,8 +328,9 @@ fn holds(
     }
 }
 
-/// Whether `block` may be copied: no call that unwinds to a handler (a second landing pad is another handler), no
-/// landing pad, no stack object (a copy is another frame object), no call that may not be duplicated.
+/// Whether `block` may be copied: no call that unwinds to a handler (a second
+/// landing pad is another handler), no landing pad, no stack object (a copy is
+/// another frame object), no call that may not be duplicated.
 fn copyable(
     function: &Function,
     block: BlockId,
@@ -325,8 +351,9 @@ fn copyable(
         )
 }
 
-/// The ways `value` is a constant where it is read at the end of `from`: each the block its way leaves, the blocks
-/// from there on that make it (phis, one after another), and the constant.
+/// The ways `value` is a constant where it is read at the end of `from`: each
+/// the block its way leaves, the blocks from there on that make it (phis, one
+/// after another), and the constant.
 fn resolved(
     function: &Function,
     unit: &memory::Unit,
@@ -344,7 +371,8 @@ fn resolved(
     }
     let mut out = Vec::new();
     for (input, source) in arms(function, phi) {
-        // Where the way leaves a block by two edges to `from`, it is not one way.
+        // Where the way leaves a block by two edges to `from`, it is not one
+        // way.
         if function.terminator(source).is_some_and(|end| {
             function.instruction(end).operands.iter().filter(|one| **one == Operand::Block(from)).count() != 1
         }) {
@@ -358,8 +386,9 @@ fn resolved(
     out
 }
 
-/// The blocks from the one holding `state` as a phi to `block`, each the only successor-by-predecessor of the one
-/// before; `None` where `state` is no phi of a block of the loop that reaches `block` so.
+/// The blocks from the one holding `state` as a phi to `block`, each the only
+/// successor-by-predecessor of the one before; `None` where `state` is no phi
+/// of a block of the loop that reaches `block` so.
 fn chain_to_phi(
     function: &Function,
     loop_: Option<&Loop>,
@@ -402,14 +431,16 @@ fn destination(
     Some(default)
 }
 
-/// What one path's copies are: its blocks, and the value each original value is in them.
+/// What one path's copies are: its blocks, and the value each original value is
+/// in them.
 struct Copies {
     at: BTreeMap<BlockId, BlockId>,
     map: BTreeMap<ValueId, Operand>,
 }
 
-/// Every path's blocks copied, each path's first copy reached from the block its way in leaves, its last jumping to the
-/// case it ends in; the instructions copied.
+/// Every path's blocks copied, each path's first copy reached from the block
+/// its way in leaves, its last jumping to the case it ends in; the instructions
+/// copied.
 fn copy(
     context: &mut Context,
     function: &mut Function,
@@ -438,13 +469,16 @@ fn copy(
         };
         for (index, &block) in originals.iter().enumerate() {
             let clone = clones[index];
-            // The way in: a phi takes what it takes from the block before on the path.
+            // The way in: a phi takes what it takes from the block before on
+            // the path.
             let before = if index == 0 { path.from } else { originals[index - 1] };
             for inst in function.block(block).instructions().to_vec() {
                 let instruction = function.instruction(inst).clone();
                 if instruction.opcode == Opcode::Phi {
-                    // A phi of the path's one way in: the copy has one input, the block before it on the path. A value
-                    // it names that the originals make is made again on the paths that lead here, and the updater below
+                    // A phi of the path's one way in: the copy has one input,
+                    // the block before it on the path. A value
+                    // it names that the originals make is made again on the
+                    // paths that lead here, and the updater below
                     // reads it where it is read.
                     let taken = arms(function, inst)
                         .into_iter()
@@ -476,7 +510,8 @@ fn copy(
                 }
                 count += 1;
             }
-            // The jump on: along the path, the others as they were; the last is a jump to its target.
+            // The jump on: along the path, the others as they were; the last is
+            // a jump to its target.
             let end = function.terminator(block).expect("a terminated block");
             let terminator = function.instruction(end).clone();
             let void = terminator.ty;
@@ -505,7 +540,8 @@ fn copy(
                 function.insert(jump, Position::End(clone)).expect("a new block");
             }
         }
-        // Each block the copies leave for gets an input from the copy that leaves.
+        // Each block the copies leave for gets an input from the copy that
+        // leaves.
         for (&block, &clone) in &at {
             let leaving: Vec<BlockId> =
                 function.successors(clone).into_iter().filter(|to| !at.values().any(|one| one == to)).collect();
@@ -549,14 +585,15 @@ fn copy(
         }
         made.push(Copies { at, map });
     }
-    // A value made in the originals and read beyond them is made by each copy too, and a copy reads what the originals
-    // made before it, in the iteration before: one updater joins the definitions where the paths meet.
+    // A value made in the originals and read beyond them is made by each copy
+    // too, and a copy reads what the originals made before it, in the
+    // iteration before: one updater joins the definitions where the paths meet.
     let originals: BTreeSet<BlockId> = paths.iter().flat_map(|path| path.blocks.iter().copied()).collect();
     for &block in &originals {
         for inst in function.block(block).instructions().to_vec() {
             let Some(result) = function.instruction(inst).result else { continue };
-            // Read anywhere but its own block: an original block is reached from the copies too, and reads what meets
-            // there.
+            // Read anywhere but its own block: an original block is reached
+            // from the copies too, and reads what meets there.
             let outside: Vec<_> = function
                 .users(result)
                 .iter()

@@ -298,7 +298,8 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         self.b.position(entry);
         self.ends.insert(entry, (self.current.clone(), self.bits.clone()));
         self.b.br(self.blocks[&seed]);
-        // The runtime enters a statement RESUME continues at as it does the seed.
+        // The runtime enters a statement RESUME continues at as it does the
+        // seed.
         let state = Entry { depth: 0, frame: self.frame, floats: 0 };
         for &at in std::iter::once(&seed).chain(&self.body.body.entries) {
             self.entries.insert(at, state);
@@ -556,7 +557,8 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         }
     }
 
-    /// Records the state a successor starts in, which every edge into it must agree on.
+    /// Records the state a successor starts in, which every edge into it must
+    /// agree on.
     fn enter(
         &mut self,
         at: usize,
@@ -758,7 +760,8 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
 
     // ---------------------------------------------------------------- values
 
-    /// A variable's value here, a placeholder where this block has not written it.
+    /// A variable's value here, a placeholder where this block has not written
+    /// it.
     pub fn get(
         &mut self,
         var: Var,
@@ -1285,7 +1288,8 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         }
     }
 
-    /// Sets every flag from one description, as a call answering in the flags does.
+    /// Sets every flag from one description, as a call answering in the flags
+    /// does.
     pub fn set_flags(
         &mut self,
         desc: Desc,

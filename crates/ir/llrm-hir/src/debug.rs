@@ -84,7 +84,8 @@ impl Builder {
         self.intern(DebugKind::Scalar, scalar.value(), None, 0, DebugReach::Near, Vec::new())
     }
 
-    /// `scalar` as the source spells it (`unsigned long`): one type for each spelling, though two share a width.
+    /// `scalar` as the source spells it (`unsigned long`): one type for each
+    /// spelling, though two share a width.
     pub fn spelled_scalar(
         &mut self,
         scalar: DebugScalar,
@@ -139,8 +140,9 @@ impl Builder {
         self.intern(DebugKind::Struct, name, None, bytes, DebugReach::Near, members)
     }
 
-    /// A struct or union `name`, `bytes` long, whose members come with [`define_aggregate`](Self::define_aggregate):
-    /// one a member can point to before it has them. Not shared with another of its name and size: two
+    /// A struct or union `name`, `bytes` long, whose members come with
+    /// [`define_aggregate`](Self::define_aggregate): one a member can point
+    /// to before it has them. Not shared with another of its name and size: two
     /// that read alike are two until each is defined.
     pub fn declare_aggregate(
         &mut self,
@@ -166,7 +168,8 @@ impl Builder {
         id
     }
 
-    /// The members of the aggregate `id` declared: (field, type, offset, bit field's start and width).
+    /// The members of the aggregate `id` declared: (field, type, offset, bit
+    /// field's start and width).
     pub fn define_aggregate(
         &mut self,
         id: i64,
@@ -224,8 +227,9 @@ impl Builder {
         self.variables.push(DebugVariable { place, name: name.to_owned(), r#type, parameter, argument: None });
     }
 
-    /// A parameter's home, which holds the value of the function's `argument`th argument once the function has
-    /// stored it: until then the argument is where the convention passes it.
+    /// A parameter's home, which holds the value of the function's `argument`th
+    /// argument once the function has stored it: until then the argument is
+    /// where the convention passes it.
     pub fn parameter_home(
         &mut self,
         place: i64,
@@ -357,8 +361,9 @@ impl Builder {
 mod tests {
     use super::*;
 
-    /// `int` and `long` are both four bytes and signed on a 32-bit target, but two types: the source's spelling is part
-    /// of a scalar's identity, and is shared by every use of it.
+    /// `int` and `long` are both four bytes and signed on a 32-bit target, but
+    /// two types: the source's spelling is part of a scalar's identity, and
+    /// is shared by every use of it.
     #[test]
     fn scalars_of_one_width_with_two_spellings_are_two_types() {
         let mut builder = Builder::default();
@@ -372,9 +377,9 @@ mod tests {
         assert_ne!(int, builder.scalar(DebugScalar::Int32), "no spelling is its own type");
     }
 
-    /// Two structs of one name and size that are declared are two until each is defined, and one
-    /// that holds a pointer to itself names its own id: `structure` made it after its members, so
-    /// that was never possible.
+    /// Two structs of one name and size that are declared are two until each is
+    /// defined, and one that holds a pointer to itself names its own id:
+    /// `structure` made it after its members, so that was never possible.
     #[test]
     fn a_declared_aggregate_is_not_shared_and_a_member_may_point_to_it() {
         let mut builder = Builder::default();

@@ -8,8 +8,9 @@
 //! Each fact is declared once, in `facts!`: its attribute or flag and the
 //! kinds of subject it can be stated of. What a pass that merges or moves
 //! instructions does with a fact is not declared here until a pass does it
-//! and that is measured to pay. A frontend states facts through `llrm_hir::facts`; a pass reads them
-//! through [`Facts`] and never parses an attribute by name.
+//! and that is measured to pay. A frontend states facts through
+//! `llrm_hir::facts`; a pass reads them through [`Facts`] and never parses an
+//! attribute by name.
 
 use crate::context::{ConstantKind, Context};
 use crate::module::{Function, InstId, MetadataNode, MetadataOperand};
@@ -26,11 +27,14 @@ pub enum Kind {
     /// One operand of an instruction: a call argument, or a place.
     Operand,
     Object,
-    /// The terminator of a block: a loop's back edge carries what the language says of the loop.
+    /// The terminator of a block: a loop's back edge carries what the language
+    /// says of the loop.
     Terminator,
-    /// A place of a function: a variable, every access of which the fact reaches.
+    /// A place of a function: a variable, every access of which the fact
+    /// reaches.
     Place,
-    /// A member of an aggregate type: every access of that member, however reached.
+    /// A member of an aggregate type: every access of that member, however
+    /// reached.
     Field,
 }
 
@@ -98,7 +102,8 @@ macro_rules! facts {
                 }
             }
 
-            /// The fact of a wire name and values; none where either is not one's.
+            /// The fact of a wire name and values; none where either is not
+            /// one's.
             pub fn from_wire(key: &str, value: Option<i64>, second: Option<i64>) -> Option<Fact> {
                 match (key, value, second) {
                     $(($fkey, None, None) => Some(Fact::$flag),)*
@@ -228,20 +233,23 @@ facts! {
         // the first only, so an object whose address sits in that memory (an
         // array behind a descriptor) still escapes through a `nocapture` call.
         NoRetain no_retain "noretain" on [Param, Operand];
-        // Of a string argument: the routine frees it where the runtime allocated it, a temporary, which
-        // a copy of its body cannot. A copy stands in only where the actual is no such object.
+        // Of a string argument: the routine frees it where the runtime
+        // allocated it, a temporary, which a copy of its body cannot. A copy
+        // stands in only where the actual is no such object.
         Releases releases "releases" on [Param];
         WriteOnly write_only "writeonly" on [Operand];
         NoReturn no_return "noreturn" on [Callable];
         // Every loop of it that does nothing observable ends: the language says
-        // so of every loop, as LLVM's function-level `mustprogress`. C's promise is
-        // per loop (C11 6.8.5p6), as `llvm.loop.mustprogress`, not this.
+        // so of every loop, as LLVM's function-level `mustprogress`. C's
+        // promise is per loop (C11 6.8.5p6), as `llvm.loop.mustprogress`, not
+        // this.
         MustProgress must_progress "mustprogress" on [Callable];
-        // Of a routine: it raises nothing, comes back, calls nothing of the module, is rare.
+        // Of a routine: it raises nothing, comes back, calls nothing of the
+        // module, is rare.
         NoUnwind no_unwind "nounwind" on [Callable];
         WillReturn will_return "willreturn" on [Callable];
-        // It is never entered again while it runs: in no cycle of calls, and nothing
-        // it reaches calls what may call back.
+        // It is never entered again while it runs: in no cycle of calls, and
+        // nothing it reaches calls what may call back.
         NoRecurse no_recurse "norecurse" on [Callable];
         NoCallback no_callback "nocallback" on [Callable];
         Cold cold "cold" on [Callable];
@@ -250,14 +258,16 @@ facts! {
         // (LibFunc); here the language states it of the routine.
         ThreeWayCompare three_way_compare "threeway" on [Callable];
         // Of a routine: it compares SP with its runtime's stack limit on entry
-        // (`-fsanitize=stack`). The runtime's description says where the limit is.
+        // (`-fsanitize=stack`). The runtime's description says where the limit
+        // is.
         StackCheck stack_check "stackcheck" on [Callable];
     }
     valued {
         Dereferenceable(u64) dereferenceable "dereferenceable" on [Param];
         Align(u64) align "align" on [Param, Object, Instruction, Place, Field];
         Initializes(u64) initializes "initializes" on [Operand];
-        // Of a loop's back edge: most copies the language lets be made. 0 forbids, `u32::MAX` is all.
+        // Of a loop's back edge: most copies the language lets be made. 0
+        // forbids, `u32::MAX` is all.
         Unroll(u32) unroll "unroll" on [Terminator];
     }
     custom {
@@ -309,8 +319,9 @@ impl Fact {
         }
     }
 
-    /// Whether it is carried as metadata (`!range`, `!llvm.loop`) or by the width of
-    /// what it bounds, where it is neither an attribute nor an instruction flag.
+    /// Whether it is carried as metadata (`!range`, `!llvm.loop`) or by the
+    /// width of what it bounds, where it is neither an attribute nor an
+    /// instruction flag.
     pub fn is_metadata(self) -> bool {
         matches!(self, Fact::Range(_) | Fact::Invariant | Fact::Unroll(_))
     }
@@ -321,7 +332,8 @@ impl Fact {
     }
 
     /// The attribute of an integer of `bits` that carries the fact: as
-    /// `attribute`, and a range as LLVM's half-open `[lo, hi + 1)` modulo 2^bits.
+    /// `attribute`, and a range as LLVM's half-open `[lo, hi + 1)` modulo
+    /// 2^bits.
     pub fn typed_attribute(
         self,
         ty: TypeId,
@@ -337,7 +349,8 @@ impl Fact {
     }
 
     /// The fact a range attribute of an integer of `bits` states. `signed`
-    /// reads its bounds as signed, as a frontend that stated `-1..=1` meant them.
+    /// reads its bounds as signed, as a frontend that stated `-1..=1` meant
+    /// them.
     pub fn of_range(
         lower: u128,
         upper: u128,
@@ -354,7 +367,8 @@ impl Fact {
         (lo <= hi).then(|| Fact::Range(Bounds { lo: lo as i64, hi: hi as i64 }))
     }
 
-    /// The attribute that carries a flag or valued fact; a fact that is carried otherwise has none.
+    /// The attribute that carries a flag or valued fact; a fact that is carried
+    /// otherwise has none.
     pub fn carrier(self) -> Attribute {
         self.attribute().unwrap_or_else(|| panic!("{} has no attribute", self.key()))
     }
@@ -458,8 +472,8 @@ impl Facts {
         Facts(facts)
     }
 
-    /// As `of`, and the ranges too, which need the width of the integer `bits_of` names;
-    /// read as signed where `signed` says.
+    /// As `of`, and the ranges too, which need the width of the integer
+    /// `bits_of` names; read as signed where `signed` says.
     pub fn of_typed(
         attributes: &[Attribute],
         bits_of: impl Fn(TypeId) -> Option<u32>,
@@ -483,7 +497,8 @@ impl Facts {
     }
 
     /// What the metadata of the terminator `branch` states: `Unroll`, from the
-    /// `!llvm.loop` of the loop it closes (`llvm.loop.unroll.{disable,full,count}`).
+    /// `!llvm.loop` of the loop it closes
+    /// (`llvm.loop.unroll.{disable,full,count}`).
     pub fn of_terminator(
         context: &Context,
         metadata: &[MetadataNode],
@@ -669,7 +684,8 @@ mod tests {
         assert_eq!(found, Vec::<String>::new());
     }
 
-    /// Each way to state inlining is its own attribute, reads back, and `Never` outranks.
+    /// Each way to state inlining is its own attribute, reads back, and `Never`
+    /// outranks.
     #[test]
     fn each_inlining_has_its_attribute() {
         for (how, name) in
@@ -685,7 +701,8 @@ mod tests {
         assert!(Inlining::Never < Inlining::Hint && Inlining::Hint < Inlining::Always);
     }
 
-    /// Each spelling of the unroll hint, and of an invariant load, reads back as its fact.
+    /// Each spelling of the unroll hint, and of an invariant load, reads back
+    /// as its fact.
     #[test]
     fn a_loops_unroll_hint_is_read_from_its_metadata() {
         let text = |hint: &str| {
@@ -713,7 +730,8 @@ mod tests {
         assert_eq!(Facts::of_terminator(&module.context, &module.metadata, function, branch).unroll(), None);
     }
 
-    /// A load says it reads what is written once, as `!invariant.load`; a plain one says nothing.
+    /// A load says it reads what is written once, as `!invariant.load`; a plain
+    /// one says nothing.
     #[test]
     fn a_loads_invariance_is_read_from_its_metadata() {
         let module = crate::parse::module("@g = global i16 0\n\ndefine i16 @f() {\nb0:\n  %a = load i16, ptr @g, !invariant.load !0\n  %b = load i16, ptr @g\n  %r = add i16 %a, %b\n  ret i16 %r\n}\n\n!0 = !{}\n").expect("parses");

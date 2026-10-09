@@ -355,7 +355,8 @@ fn test_a_jump_past_a_marker_block_to_the_next_code_is_dropped() {
     assert!(!result.blocks[0].insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Jump)));
 }
 
-/// A carried, non-generated LIR occurrence can have no contiguous `covers` span.
+/// A carried, non-generated LIR occurrence can have no contiguous `covers`
+/// span.
 #[test]
 fn test_unreachable_inert_carrier_without_a_byte_span_does_not_crash_threading() {
     let carrier = nothing(5, None);
@@ -513,7 +514,8 @@ fn test_shared_machine_pipeline_merges_fresh_identical_tails() {
 /// Unpriced tail sharing grew C sieve from 54 to 55 instructions.
 #[test]
 fn test_tail_sharing_rejects_a_static_saving_that_adds_hot_work() {
-    // The loop's exit test stays in 31 times in 32, as isel's heuristic odds say.
+    // The loop's exit test stays in 31 times in 32, as isel's heuristic odds
+    // say.
     let shaped = |entry: Vec<Arc<Insn>>, looped: Vec<Arc<Insn>>| {
         let mut shaped = body(
             "f",
@@ -628,7 +630,8 @@ fn test_loop_not_known_to_run_is_entered_at_its_test_placed_last() {
     );
 }
 
-/// With the test placed after the latch, every pass took `jg out` and then `jmp body`.
+/// With the test placed after the latch, every pass took `jg out` and then `jmp
+/// body`.
 #[test]
 fn test_loop_test_is_followed_by_the_block_it_leaves_for() {
     let source = body(
@@ -725,7 +728,8 @@ fn test_a_diamonds_likelier_arm_falls_into_its_join() {
     assert_eq!(order(0.375), vec![1, 10, 20, 30]);
     // The fall-through arm 10 likelier: 20 first, 10 second.
     assert_eq!(order(0.625), vec![1, 20, 10, 30]);
-    // `LIKELY` and over: the likely arm falls through, the rare one leaves its join.
+    // `LIKELY` and over: the likely arm falls through, the rare one leaves its
+    // join.
     assert_eq!(order(0.1), vec![1, 20, 30, 10]);
 }
 
@@ -822,9 +826,9 @@ fn test_a_copied_test_keeps_its_loops_odds() {
 
 /// A loop test reached from outside the loop by a `jmp` and by a `je`: a
 /// copy at the `jmp` enters the loop at its body while the `je` still
-/// enters at the test. deedlines' `__main` became irreducible that way and its estimate
-/// read "executes an unbounded amount", dropping 777,870 instructions from
-/// the sum.
+/// enters at the test. deedlines' `__main` became irreducible that way and its
+/// estimate read "executes an unbounded amount", dropping 777,870 instructions
+/// from the sum.
 #[test]
 fn test_a_copy_never_makes_a_second_entry_into_a_loop() {
     let mut before = body(
@@ -917,9 +921,10 @@ fn test_threading_a_split_loop_back_keeps_its_odds() {
     assert!((runs - 32.0).abs() < 1e-3, "{runs}");
 }
 
-/// A loop whose trips are proven is tested once a trip. Its test copied into the loop nested in it ran once a visit
-/// and the estimate lost the proven count: sieve's bench_sieve read 45046 before ControlFlow and 5834 after, for the
-/// same code.
+/// A loop whose trips are proven is tested once a trip. Its test copied into
+/// the loop nested in it ran once a visit and the estimate lost the proven
+/// count: sieve's bench_sieve read 45046 before ControlFlow and 5834 after, for
+/// the same code.
 #[test]
 fn test_a_loops_proven_test_is_not_copied_into_a_loop_inside_it() {
     use crate::backend::regalloc_input::{Calls, before_phase};
@@ -932,10 +937,11 @@ fn test_a_loops_proven_test_is_not_copied_into_a_loop_inside_it() {
     assert!(after >= 0.75 * before, "{before} before ControlFlow, {after} after");
 }
 
-/// Each change threading made copied every block, twice, and went back to the first: a body of n jumps to the next
-/// block was n copies of n blocks, 2.1 s of compiling 800 blocks (#560). A change edits in place. Measured as the work,
-/// not the time (a loaded machine failed the old wall-clock bound, #913): the blocks cloned grow with n, not with n
-/// squared.
+/// Each change threading made copied every block, twice, and went back to the
+/// first: a body of n jumps to the next block was n copies of n blocks, 2.1 s
+/// of compiling 800 blocks (#560). A change edits in place. Measured as the
+/// work, not the time (a loaded machine failed the old wall-clock bound, #913):
+/// the blocks cloned grow with n, not with n squared.
 #[test]
 fn test_threading_a_long_run_of_jumps_does_not_copy_the_body_for_each() {
     let cloned = |n: i64| {
@@ -959,8 +965,8 @@ fn test_threading_a_long_run_of_jumps_does_not_copy_the_body_for_each() {
     assert!(large <= 3 * small, "{small} block copies for 500 blocks, {large} for 1,000: more than linear");
 }
 
-/// The copy limit is eight jumps of the target's own encoding, not a guess in the pass: 3 bytes in real mode, 5 in
-/// flat.
+/// The copy limit is eight jumps of the target's own encoding, not a guess in
+/// the pass: 3 bytes in real mode, 5 in flat.
 #[test]
 fn test_the_copy_limit_is_priced_from_the_targets_jump() {
     assert_eq!(uncond_jump_bytes(16), 3);
@@ -968,8 +974,9 @@ fn test_the_copy_limit_is_priced_from_the_targets_jump() {
     assert_eq!(copy_limit(32), 40);
 }
 
-/// `jne next; jmp elsewhere; next:` ran a jump on the path that falls to `next` (hanoi: 3601 `jmp` in 99200
-/// instructions, 72 sites in 34 of the 66 programs): one `je elsewhere` falls into `next` instead.
+/// `jne next; jmp elsewhere; next:` ran a jump on the path that falls to `next`
+/// (hanoi: 3601 `jmp` in 99200 instructions, 72 sites in 34 of the 66
+/// programs): one `je elsewhere` falls into `next` instead.
 #[test]
 fn test_a_branch_taken_to_the_next_block_then_a_jump_is_one_opposite_branch() {
     let body = LirBody::new(
@@ -993,8 +1000,9 @@ fn test_a_branch_taken_to_the_next_block_then_a_jump_is_one_opposite_branch() {
     assert_eq!(names, vec![("cmp".to_owned(), None), ("je".to_owned(), Some(3))]);
 }
 
-/// A block with two branches and a jump (a three-way split) has three successors; flipping its second branch would
-/// leave two of them with no instruction choosing (queens nib: "block 0 leaves for (13, 20, 14)").
+/// A block with two branches and a jump (a three-way split) has three
+/// successors; flipping its second branch would leave two of them with no
+/// instruction choosing (queens nib: "block 0 leaves for (13, 20, 14)").
 #[test]
 fn test_a_three_way_block_keeps_its_jump() {
     let body = LirBody::new(

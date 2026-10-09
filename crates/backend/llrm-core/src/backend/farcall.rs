@@ -58,7 +58,9 @@ pub fn materialized(
                 Some(what)
                     if what.op == Operation::Call
                         && what.indirect
-                        // A far pointer packs selector and offset in four bytes of a 16-bit segment; in a 32-bit one a dword is a near pointer.
+                        // A far pointer packs selector and offset in four bytes
+                        // of a 16-bit segment; in a 32-bit one a dword is a
+                        // near pointer.
                         && body.bits == 16
                         && matches!(what.sources.as_slice(), [Loc::Held(Held { width: 4, .. })]) =>
                 {
@@ -83,7 +85,8 @@ pub fn materialized(
                     insns.push(Arc::new(store));
                     let mut call = (**one).clone();
                     call.what = Some(Semantics { sources: vec![cell], ..what.clone() });
-                    // The target now comes from the cell; what the call still reads (its register arguments) stays
+                    // The target now comes from the cell; what the call still
+                    // reads (its register arguments) stays
                     // read.
                     call.uses.retain(|&value| value != target.value);
                     insns.push(Arc::new(call));
@@ -165,8 +168,10 @@ mod tests {
         assert_eq!(frame.borrow().size(), 4);
     }
 
-    /// A far indirect call that takes a register argument still reads it: the pass emptied the call's uses, so an
-    /// instruction ahead of it was free to write the argument's register (`mov eax, ecx` passed the wrong value).
+    /// A far indirect call that takes a register argument still reads it: the
+    /// pass emptied the call's uses, so an instruction ahead of it was free
+    /// to write the argument's register (`mov eax, ecx` passed the wrong
+    /// value).
     #[test]
     fn a_far_call_keeps_reading_its_register_arguments() {
         let mut call = Insn::new(
@@ -198,7 +203,8 @@ mod tests {
         assert_eq!(called.uses, vec![7]);
     }
 
-    /// In a 32-bit segment a dword target is a near pointer: the call stays as it was.
+    /// In a 32-bit segment a dword target is a near pointer: the call stays as
+    /// it was.
     #[test]
     fn a_dword_target_in_a_32_bit_segment_is_not_a_far_pointer() {
         let call = Arc::new(Insn::new(

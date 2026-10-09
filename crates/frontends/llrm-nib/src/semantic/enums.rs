@@ -10,7 +10,8 @@ pub(super) struct EnumLayout {
     pub(super) name: String,
     /// The tag's storage type: `u8` or `u16`.
     pub(super) tag: TypeName,
-    /// The tag's width in a `bits` struct: declared as `uN`, else its storage's.
+    /// The tag's width in a `bits` struct: declared as `uN`, else its
+    /// storage's.
     pub(super) bits: u32,
     /// What a field or binding of this enum holds.
     pub(super) element: ElementType,
@@ -26,7 +27,8 @@ impl FunctionCompiler<'_> {
         layout: &EnumLayout,
     ) -> u32 {
         let tag = self.value(layout.tag);
-        // The range of the tag is stated once, of the member (see `tag_ranges`).
+        // The range of the tag is stated once, of the member (see
+        // `tag_ranges`).
         let place = self.field_place(view, 0, layout.tag);
         self.emit("load", vec![tag], vec![place], None);
         tag
@@ -34,8 +36,9 @@ impl FunctionCompiler<'_> {
 }
 
 impl TypeRegistry {
-    /// The tag of each enum that carries payloads is within the tags its variants have:
-    /// stated once of the tag member of the enum's struct, for every load of it.
+    /// The tag of each enum that carries payloads is within the tags its
+    /// variants have: stated once of the tag member of the enum's struct,
+    /// for every load of it.
     pub(super) fn tag_ranges(&self) -> Vec<(llrm_core::hir::facts::Subject, llrm_mir::facts::Fact)> {
         self.enums
             .values()

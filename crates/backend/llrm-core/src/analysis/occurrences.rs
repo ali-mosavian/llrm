@@ -1,10 +1,13 @@
-//! Facts of a few values of a body, found from where the values occur: the one mechanism for what would be a pass over
-//! every instruction of the body to ask of a handful of its values (liveness rows, widths, intervals, weights). LLVM's
-//! per-register use-def chains and `LiveRangeEdit` ask the same: a register's own references, not the function's.
+//! Facts of a few values of a body, found from where the values occur: the one
+//! mechanism for what would be a pass over every instruction of the body to ask
+//! of a handful of its values (liveness rows, widths, intervals, weights).
+//! LLVM's per-register use-def chains and `LiveRangeEdit` ask the same: a
+//! register's own references, not the function's.
 //!
-//! The occurrences of a set of values come from the body's postings (kept as the body changes) or from one scan; every
-//! query reads them and the blocks the values are live in, and `LLRM_CHECK_OCCURRENCES` compares each with the walk of
-//! the whole body.
+//! The occurrences of a set of values come from the body's postings (kept as
+//! the body changes) or from one scan; every query reads them and the blocks
+//! the values are live in, and `LLRM_CHECK_OCCURRENCES` compares each with the
+//! walk of the whole body.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -17,8 +20,8 @@ use crate::model::ir::{self, Held};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::IndexMap;
 
-/// An instruction that names a value: where it is, whether it defines and whether it reads it, and how many times it
-/// names it.
+/// An instruction that names a value: where it is, whether it defines and
+/// whether it reads it, and how many times it names it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Named {
     pub place: Place,
@@ -31,12 +34,14 @@ pub struct Named {
 #[derive(Debug, Default)]
 pub struct Occurrences {
     by_value: IndexMap<u32, Vec<Named>>,
-    /// Instructions that `require` one of the values in a register: they name it too, for a width.
+    /// Instructions that `require` one of the values in a register: they name
+    /// it too, for a width.
     required: BTreeSet<Place>,
 }
 
 impl Occurrences {
-    /// From one pass over `body`, of the values `only` holds, in the order the body first names them.
+    /// From one pass over `body`, of the values `only` holds, in the order the
+    /// body first names them.
     pub fn scan(
         body: &LirBody,
         only: &impl Fn(u32) -> bool,
@@ -78,9 +83,10 @@ impl Occurrences {
         found
     }
 
-    /// From a plan: the instructions that will name values, as (block, position, values defined, values read), in the
-    /// order the body holds them. For values the body does not hold yet (the spiller's homes), whose intervals are
-    /// asked of the body with the plan applied.
+    /// From a plan: the instructions that will name values, as (block,
+    /// position, values defined, values read), in the order the body holds
+    /// them. For values the body does not hold yet (the spiller's homes), whose
+    /// intervals are asked of the body with the plan applied.
     pub fn planned(named: &[(usize, usize, BTreeSet<u32>, BTreeSet<u32>)]) -> Self {
         let mut found = Self::default();
         for (block, position, defined, used) in named {
@@ -102,7 +108,8 @@ impl Occurrences {
         found
     }
 
-    /// The intervals of `values` (ascending) found from the occurrences, unweighed.
+    /// The intervals of `values` (ascending) found from the occurrences,
+    /// unweighed.
     pub fn ranges(
         &self,
         body: &LirBody,
@@ -112,8 +119,8 @@ impl Occurrences {
         intervals::intervals_by_occurrences(body, index, values, &self.occurrences())
     }
 
-    /// How many times this body's facts have scanned it for occurrences, for a test that a caller that has the postings
-    /// does not.
+    /// How many times this body's facts have scanned it for occurrences, for a
+    /// test that a caller that has the postings does not.
     pub fn scans(body: &LirBody) -> usize {
         body.facts.0.counted("occurrence-scans")
     }
@@ -143,7 +150,8 @@ impl Occurrences {
         found
     }
 
-    /// What `LLRM_CHECK_OCCURRENCES` holds the postings' occurrences to: the scan's.
+    /// What `LLRM_CHECK_OCCURRENCES` holds the postings' occurrences to: the
+    /// scan's.
     pub fn check_against_scan(
         &self,
         body: &LirBody,
@@ -190,8 +198,8 @@ impl Occurrences {
             .collect()
     }
 
-    /// What is live into and out of each block for these values: `live_rows_by`'s, in a body with no phis (None where
-    /// it has them).
+    /// What is live into and out of each block for these values:
+    /// `live_rows_by`'s, in a body with no phis (None where it has them).
     pub fn rows(
         &self,
         body: &LirBody,
@@ -237,8 +245,9 @@ impl Occurrences {
         widths
     }
 
-    /// The intervals of the values, weighed: `worked_out_with_totals`'s, in a body with no phis, found from the
-    /// occurrences, and the total each value's references weigh before they are divided by its size.
+    /// The intervals of the values, weighed: `worked_out_with_totals`'s, in a
+    /// body with no phis, found from the occurrences, and the total each
+    /// value's references weigh before they are divided by its size.
     pub fn intervals(
         &self,
         body: &LirBody,
@@ -267,8 +276,9 @@ impl Occurrences {
     }
 }
 
-/// Where each of `values` is live, as `live_rows_by` finds it, from one pass for their occurrences and the blocks they
-/// are live in: what a caller that asks of a few values at a time reads (`LiveAt`).
+/// Where each of `values` is live, as `live_rows_by` finds it, from one pass
+/// for their occurrences and the blocks they are live in: what a caller that
+/// asks of a few values at a time reads (`LiveAt`).
 pub fn live_among(
     body: &LirBody,
     values: &BTreeSet<u32>,

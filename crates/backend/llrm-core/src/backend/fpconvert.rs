@@ -1,8 +1,10 @@
-//! A float converted to an unsigned 64-bit integer, as signed conversions and a select, before instruction selection:
-//! the x87 stores only signed qwords. LLVM's legalizer (`expandFP_TO_UINT`) and GCC's `fixuns` expansion do the same:
-//! where `x < 2^63` the conversion is `fptosi x`; else it is `fptosi (x - 2^63)` with the top bit set. The select is
-//! the target's general one (`selects`: a branch on a 486, which has no conditional move), so there is one answer for
-//! select.
+//! A float converted to an unsigned 64-bit integer, as signed conversions and a
+//! select, before instruction selection: the x87 stores only signed qwords.
+//! LLVM's legalizer (`expandFP_TO_UINT`) and GCC's `fixuns` expansion do the
+//! same: where `x < 2^63` the conversion is `fptosi x`; else it is `fptosi (x -
+//! 2^63)` with the top bit set. The select is the target's general one
+//! (`selects`: a branch on a 486, which has no conditional move), so there is
+//! one answer for select.
 
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::edit::Position;
@@ -33,7 +35,8 @@ fn unsigned_wide(
     instruction.opcode == Opcode::Cast(CastOp::FPToUI) && context.types.int_bits(instruction.ty) == Some(64)
 }
 
-/// `inst`, `fptoui x to i64`, as `fptosi (x - (x < 2^63 ? 0 : 2^63))` xor `(x < 2^63 ? 0 : 1 << 63)`.
+/// `inst`, `fptoui x to i64`, as `fptosi (x - (x < 2^63 ? 0 : 2^63))` xor `(x <
+/// 2^63 ? 0 : 1 << 63)`.
 fn expand(
     context: &mut Context,
     function: &mut Function,
@@ -74,7 +77,8 @@ fn expand(
 mod tests {
     use llrm_mir::interpret::{Val, run};
 
-    /// A double to an unsigned qword below, at and past 2^63: the same answers as the program's, and no `fptoui` left.
+    /// A double to an unsigned qword below, at and past 2^63: the same answers
+    /// as the program's, and no `fptoui` left.
     #[test]
     fn test_a_float_to_unsigned_qword_is_signed_conversions_and_a_select() {
         let text = "define i64 @f(double %d) {

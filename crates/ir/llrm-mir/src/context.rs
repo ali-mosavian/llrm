@@ -50,8 +50,9 @@ pub struct Context {
     extensions: Extensions,
 }
 
-/// What a layer above MIR keeps in the context, one value per type, dropped with it: LLVMContext's uniqued tables (an
-/// analysis's interned objects live and die with the module, not in a global).
+/// What a layer above MIR keeps in the context, one value per type, dropped
+/// with it: LLVMContext's uniqued tables (an analysis's interned objects live
+/// and die with the module, not in a global).
 #[derive(Clone, Default)]
 struct Extensions(std::cell::RefCell<crate::hash::HashMap<std::any::TypeId, std::rc::Rc<dyn std::any::Any>>>);
 
@@ -69,7 +70,8 @@ impl Context {
         Self::default()
     }
 
-    /// This context's `T`, made by `Default` on the first ask. A clone of the context shares it.
+    /// This context's `T`, made by `Default` on the first ask. A clone of the
+    /// context shares it.
     pub fn extension<T: std::any::Any + Default>(&self) -> std::rc::Rc<T> {
         let mut held = self.extensions.0.borrow_mut();
         let found = held.entry(std::any::TypeId::of::<T>()).or_insert_with(|| std::rc::Rc::new(T::default()));

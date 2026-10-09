@@ -1,9 +1,10 @@
-//! A conditional branch taken to the block laid out next, followed by a jump, is one opposite branch.
+//! A conditional branch taken to the block laid out next, followed by a jump,
+//! is one opposite branch.
 
 use std::process::Command;
 
-/// bench/hanoi at -O2 had `jne L0_11 / jmp L0_86 / L0_11:` at every inlined level (3601 jumps run of 99200
-/// instructions).
+/// bench/hanoi at -O2 had `jne L0_11 / jmp L0_86 / L0_11:` at every inlined
+/// level (3601 jumps run of 99200 instructions).
 #[test]
 fn test_no_branch_jumps_over_a_jump_to_the_next_block() {
     let source = format!("{}/bench/hanoi/hanoi.c", env!("CARGO_MANIFEST_DIR"));

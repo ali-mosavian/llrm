@@ -21,13 +21,17 @@ use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::support::hash::IndexMap;
 use crate::support::hash::{HashMap, HashSet};
 
-/// Python's `frozenset[tuple[Lane, Lane]]`: the copies that reach a point, by direction.
+/// Python's `frozenset[tuple[Lane, Lane]]`: the copies that reach a point, by
+/// direction.
 pub type Relations = BTreeSet<(Lane, Lane)>;
 
-/// Which byte lanes hold the same value on every path to a point. Equality is an equivalence, so it is the partition of
-/// the lanes, not the set of its pairs (800 for 40 lanes, copied, filtered and intersected for every instruction of
-/// every pass of a fixed point): `class[i]` is the least lane of `i`'s class, so equal partitions compare equal. This
-/// is LLVM's MachineCopyPropagation keeping a map per register unit; an instruction touches the units it writes.
+/// Which byte lanes hold the same value on every path to a point. Equality is
+/// an equivalence, so it is the partition of the lanes, not the set of its
+/// pairs (800 for 40 lanes, copied, filtered and intersected for every
+/// instruction of every pass of a fixed point): `class[i]` is the least lane of
+/// `i`'s class, so equal partitions compare equal. This
+/// is LLVM's MachineCopyPropagation keeping a map per register unit; an
+/// instruction touches the units it writes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Equal {
     class: [u8; LANES],
@@ -84,12 +88,14 @@ impl Equal {
         out
     }
 
-    /// The lanes equal where their `source`s were: after a copy, a lane is what its source was.
+    /// The lanes equal where their `source`s were: after a copy, a lane is what
+    /// its source was.
     pub fn pulled_back(
         &self,
         source: &dyn Fn(usize) -> Source,
     ) -> Self {
-        // A key per lane: the class of its source, or past LANES a lane outside the partition (named once each).
+        // A key per lane: the class of its source, or past LANES a lane outside
+        // the partition (named once each).
         let mut outside: [Option<Lane>; LANES] = [None; LANES];
         let mut least = [u8::MAX; 2 * LANES];
         let mut class = [0; LANES];
@@ -129,15 +135,16 @@ impl Equal {
     }
 }
 
-/// What a lane is after a copy, by where it was: a lane of the partition, or a lane it has no name for.
+/// What a lane is after a copy, by where it was: a lane of the partition, or a
+/// lane it has no name for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Source {
     Lane(usize),
     Outside(Lane),
 }
 
-/// What an instruction does to the lanes: those it writes, the copies it makes, and the same in the partition's lane
-/// numbers.
+/// What an instruction does to the lanes: those it writes, the copies it makes,
+/// and the same in the partition's lane numbers.
 type Recipe = Option<(Lanes, Vec<(Lane, Lane)>, u32, Vec<(usize, Source)>)>;
 
 pub fn forwarded(body: &LirBody) -> LirBody {
@@ -151,7 +158,8 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
     let lanes: Vec<Lane> =
         llrm_x86::registers::ROOTS.into_iter().flat_map(_lanes).collect::<Lanes>().into_iter().collect();
     assert_eq!(lanes.len(), LANES, "the general registers' byte lanes");
-    // A lane's place in the partition, by table: asked of every register a rewrite tries.
+    // A lane's place in the partition, by table: asked of every register a
+    // rewrite tries.
     let mut places = vec![[u8::MAX; 4]; 512];
     for (index, (register, byte)) in lanes.iter().enumerate() {
         places[*register as usize][*byte as usize] = index as u8;
@@ -209,8 +217,8 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
                 }
             }
         }
-        // What `after` needs of it, in lane numbers: the lanes it writes, and where each lane a copy writes had it
-        // from.
+        // What `after` needs of it, in lane numbers: the lanes it writes, and
+        // where each lane a copy writes had it from.
         let written: u32 =
             effects.1.iter().filter_map(|lane| slot.get(&lane).copied()).fold(0, |mask, lane| mask | 1 << lane);
         let moved: Vec<(usize, Source)> = copies
@@ -263,7 +271,8 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
         let Some((writes, copies, ..)) = &recipes[&id(one)] else {
             return Relations::new();
         };
-        // An instruction that copies nothing and writes no lane a relation names leaves the relations as they were.
+        // An instruction that copies nothing and writes no lane a relation
+        // names leaves the relations as they were.
         if copies.is_empty() && !directed.iter().any(|(dest, source)| writes.contains(dest) || writes.contains(source))
         {
             return directed.clone();
@@ -300,7 +309,8 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
         out.into_iter().collect()
     };
 
-    // Use the reaching copy's source in explicit, independently encoded operands.
+    // Use the reaching copy's source in explicit, independently encoded
+    // operands.
     let forward_use = |one: &Arc<Insn>, directed: &Relations, facts: &Equal| -> Arc<Insn> {
         let Some(what) = &one.what else {
             return Arc::clone(one);
@@ -317,17 +327,20 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
         }
         let mapping: HashMap<Lane, Lane> = directed.iter().copied().collect();
         let mut changed: Semantics = what.clone();
-        // `Mem` equality leaves the registers out (a cell is its address), so a rewritten one is told by this.
+        // `Mem` equality leaves the registers out (a cell is its address), so a
+        // rewritten one is told by this.
         let mut touched = false;
-        // One register read, named `register` at `width` bytes: the older copy's, where that encodes and reads
-        // the same lanes. `put` makes the semantics that reads `replacement` there.
+        // One register read, named `register` at `width` bytes: the older
+        // copy's, where that encodes and reads the same lanes. `put`
+        // makes the semantics that reads `replacement` there.
         let substitute = |changed: &Semantics,
                           register: Register,
                           width: i64,
                           put: &dyn Fn(Register) -> Semantics|
          -> Option<Semantics> {
             let source_lanes: Vec<Lane> = _lanes(register).into_iter().collect();
-            // No lane of it is the copy of another: its own register is the only candidate, and that is none.
+            // No lane of it is the copy of another: its own register is the
+            // only candidate, and that is none.
             if !source_lanes.iter().any(|lane| mapping.contains_key(lane)) {
                 return None;
             }
@@ -373,7 +386,8 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
                 changed = proposed;
             }
         }
-        // The registers a cell or an address is made of: a copy's older register addresses the same.
+        // The registers a cell or an address is made of: a copy's older
+        // register addresses the same.
         for (side, count) in [(true, changed.dests.len()), (false, changed.sources.len())] {
             for index in 0..count {
                 for through in [true, false] {
@@ -532,9 +546,11 @@ mod tests {
         left == right || set.contains(&(left.min(right), left.max(right)))
     }
 
-    /// Equal lanes were kept as the set of their pairs: 800 of them for the 40 lanes of a body, copied, filtered and
-    /// intersected for every instruction of every round of a fixed point (x_switch -O2: 6% of its compile once
-    /// `[r+r*s]` stopped flushing them). The partition does what the sets did, in the lanes an instruction writes.
+    /// Equal lanes were kept as the set of their pairs: 800 of them for the 40
+    /// lanes of a body, copied, filtered and intersected for every
+    /// instruction of every round of a fixed point (x_switch -O2: 6% of its
+    /// compile once `[r+r*s]` stopped flushing them). The partition does
+    /// what the sets did, in the lanes an instruction writes.
     #[test]
     fn test_the_partition_of_equal_lanes_does_what_the_set_of_pairs_did() {
         let mut seed = 0x2545_f491_4f6c_dd1d_u64;
@@ -555,7 +571,8 @@ mod tests {
                             .collect();
                     }
                     1 => {
-                        // A copy: each lane named is what another was, the rest what they were.
+                        // A copy: each lane named is what another was, the rest
+                        // what they were.
                         let moved: Vec<(usize, usize)> = (0..1 + next(3)).map(|_| (next(LANES), next(LANES))).collect();
                         let mut map: Vec<usize> = (0..LANES).collect();
                         for (dest, source) in &moved {

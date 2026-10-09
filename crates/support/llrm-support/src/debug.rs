@@ -1,16 +1,18 @@
 //! Debug logging by channel, as LLVM's `DEBUG_TYPE` and `-debug-only` do it.
 //!
-//! `LLRM_DEBUG=unroll,regalloc` writes those channels to stderr, each line led by its
-//! channel; `LLRM_DEBUG=all` writes every one. A channel that is off costs one cached
-//! lookup, and its message is never formatted.
+//! `LLRM_DEBUG=unroll,regalloc` writes those channels to stderr, each line led
+//! by its channel; `LLRM_DEBUG=all` writes every one. A channel that is off
+//! costs one cached lookup, and its message is never formatted.
 
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-/// Whether the compiler checks its own work between passes and phases (`LLRM_VERIFY`, any value but `0`): the module
-/// the frontend made is checked either way, as LLVM's release pipeline checks its input once; what each pass and each
-/// machine phase returned is checked when this is on. Tests, the gate, torture and the QCport run set it, so a phase
-/// that breaks an invariant is caught in every gate run and not in a user's compile.
+/// Whether the compiler checks its own work between passes and phases
+/// (`LLRM_VERIFY`, any value but `0`): the module the frontend made is checked
+/// either way, as LLVM's release pipeline checks its input once; what each pass
+/// and each machine phase returned is checked when this is on. Tests, the gate,
+/// torture and the QCport run set it, so a phase that breaks an invariant is
+/// caught in every gate run and not in a user's compile.
 pub fn verifying() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var("LLRM_VERIFY").is_ok_and(|value| value != "0"))
@@ -27,7 +29,8 @@ pub fn enabled(channel: &str) -> bool {
     !channels.is_empty() && channels.iter().any(|one| one == channel || one == "all")
 }
 
-/// `debug!("channel", "format", args...)`: one line on `channel`, when it is on.
+/// `debug!("channel", "format", args...)`: one line on `channel`, when it is
+/// on.
 #[macro_export]
 macro_rules! debug {
     ($channel:literal, $($arg:tt)*) => {
@@ -47,8 +50,8 @@ struct Stat {
     calls: usize,
     own: Duration,
     total: Duration,
-    /// The same in the thread's user-space instructions (or its CPU nanoseconds where the counter is absent): work
-    /// done, the same on a loaded host.
+    /// The same in the thread's user-space instructions (or its CPU nanoseconds
+    /// where the counter is absent): work done, the same on a loaded host.
     own_work: u64,
     total_work: u64,
 }
@@ -59,13 +62,15 @@ struct Open {
     children: Duration,
     /// The thread's CPU time when it opened, for an outermost step only.
     cpu: Duration,
-    /// The thread's work counter when it opened, and what the steps inside it have taken.
+    /// The thread's work counter when it opened, and what the steps inside it
+    /// have taken.
     work: u64,
     children_work: u64,
 }
 
-/// The thread's user-space instruction counter, opened on first use: `perf_event_open`, this thread, kernel and
-/// hypervisor excluded. -1 where the host will not give one.
+/// The thread's user-space instruction counter, opened on first use:
+/// `perf_event_open`, this thread, kernel and hypervisor excluded. -1 where the
+/// host will not give one.
 fn work_fd() -> i32 {
     thread_local! {
         static FD: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
@@ -74,14 +79,14 @@ fn work_fd() -> i32 {
         if let Some(found) = fd.get() {
             return found;
         }
-        // perf_event_attr: type HARDWARE (0), size 128; config INSTRUCTIONS (1); exclude_kernel (bit 5), exclude_hv
-        // (bit 6).
+        // perf_event_attr: type HARDWARE (0), size 128; config INSTRUCTIONS
+        // (1); exclude_kernel (bit 5), exclude_hv (bit 6).
         let mut attr = [0u64; 16];
         attr[0] = 128 << 32;
         attr[1] = 1;
         attr[5] = (1 << 5) | (1 << 6);
-        // SAFETY: `attr` is a valid, zero-padded perf_event_attr of the size it states; the others are the syscall's
-        // own numbers.
+        // SAFETY: `attr` is a valid, zero-padded perf_event_attr of the size it
+        // states; the others are the syscall's own numbers.
         let opened = unsafe { libc::syscall(libc::SYS_perf_event_open, attr.as_ptr(), 0, -1, -1, 8u64) };
         let found = i32::try_from(opened).unwrap_or(-1);
         fd.set(Some(found));
@@ -94,7 +99,8 @@ fn work_now() -> u64 {
     let fd = work_fd();
     if fd >= 0 {
         let mut count: u64 = 0;
-        // SAFETY: `count` is eight writable bytes, what a counter without a read format returns.
+        // SAFETY: `count` is eight writable bytes, what a counter without a
+        // read format returns.
         let got = unsafe { libc::read(fd, (&mut count as *mut u64).cast(), 8) };
         if got == 8 {
             return count;
@@ -103,8 +109,8 @@ fn work_now() -> u64 {
     u64::try_from(cpu_now().as_nanos()).unwrap_or(u64::MAX)
 }
 
-/// The thread's work so far (instructions, or CPU nanoseconds where there is no counter), for a caller that bills its
-/// own steps.
+/// The thread's work so far (instructions, or CPU nanoseconds where there is no
+/// counter), for a caller that bills its own steps.
 pub fn work() -> u64 {
     work_now()
 }
@@ -113,7 +119,8 @@ fn work_unit() -> &'static str {
     if work_fd() >= 0 { "Minstr" } else { "Mcpu-ns" }
 }
 
-/// The calling thread's CPU time: what a preempted or waiting thread does not spend.
+/// The calling thread's CPU time: what a preempted or waiting thread does not
+/// spend.
 fn cpu_now() -> Duration {
     let mut found = libc::timespec { tv_sec: 0, tv_nsec: 0 };
     // SAFETY: `found` is a valid timespec for the call to fill.
@@ -131,8 +138,9 @@ struct Clock {
     tree: Vec<(Vec<&'static str>, Stat)>,
     /// Time in spans with nothing open around them.
     top: Duration,
-    /// The same on the thread's CPU clock, which a loaded machine does not stretch: the thread's CPU time when the
-    /// clock started, and in the outermost steps.
+    /// The same on the thread's CPU clock, which a loaded machine does not
+    /// stretch: the thread's CPU time when the clock started, and in the
+    /// outermost steps.
     cpu_start: Option<Duration>,
     cpu_top: Duration,
     /// The work counter when the clock started, and in the outermost steps.
@@ -181,8 +189,8 @@ pub fn start() {
 /// A step `span` opened, closed when it is dropped.
 pub struct Span(bool);
 
-/// Opens the step `name`, nested in the one that is open, while the `time` channel is on: for
-/// a stretch of a function that no closure bounds.
+/// Opens the step `name`, nested in the one that is open, while the `time`
+/// channel is on: for a stretch of a function that no closure bounds.
 pub fn span(name: &'static str) -> Span {
     if !enabled("time") {
         return Span(false);
@@ -252,8 +260,9 @@ impl Drop for Span {
     }
 }
 
-/// LLVM's `-time-passes`: `run` timed under `name` while the `time` channel is on, nested
-/// in the span that is open. `name` is a literal, so a span on the hot path costs a check.
+/// LLVM's `-time-passes`: `run` timed under `name` while the `time` channel is
+/// on, nested in the span that is open. `name` is a literal, so a span on the
+/// hot path costs a check.
 pub fn timed<T>(
     name: &'static str,
     run: impl FnOnce() -> T,
@@ -288,7 +297,8 @@ pub fn timed_by<T>(
     timed(name, run)
 }
 
-/// `run` with the steps inside it also charged to `function`, for the `timefunc` channel.
+/// `run` with the steps inside it also charged to `function`, for the
+/// `timefunc` channel.
 pub fn in_function<T>(
     function: &str,
     run: impl FnOnce() -> T,
@@ -302,7 +312,8 @@ pub fn in_function<T>(
     out
 }
 
-/// One lookup of a cached `what`: a hit when it was there, a miss when it was computed.
+/// One lookup of a cached `what`: a hit when it was there, a miss when it was
+/// computed.
 pub fn counted(
     what: &'static str,
     hit: bool,
@@ -331,9 +342,10 @@ fn ms(spent: Duration) -> f64 {
     spent.as_secs_f64() * 1e3
 }
 
-/// The `time` channel's report once the work it timed is done: the steps by own time (the
-/// top `LLRM_TIME_TOP`, 30 by default), the nesting, the lookups, and the wall clock less the
-/// time the outermost steps took, as `untimed`. `timefunc` adds the costliest functions.
+/// The `time` channel's report once the work it timed is done: the steps by own
+/// time (the top `LLRM_TIME_TOP`, 30 by default), the nesting, the lookups, and
+/// the wall clock less the time the outermost steps took, as `untimed`.
+/// `timefunc` adds the costliest functions.
 pub fn report_times() {
     if !enabled("time") {
         return;
@@ -355,8 +367,9 @@ pub fn report_times() {
                 stat.calls
             );
         }
-        // Work done, not time passed: the same on a loaded host, for a gate to read. The unit is the thread's
-        // user-space instructions, or its CPU nanoseconds where the host has no counter.
+        // Work done, not time passed: the same on a loaded host, for a gate to
+        // read. The unit is the thread's user-space instructions, or
+        // its CPU nanoseconds where the host has no counter.
         let unit = work_unit();
         let work = clock.work_start.map(|start| work_now().saturating_sub(start)).unwrap_or_default();
         let mut by_work: Vec<&(&'static str, Stat)> = flat.iter().collect();
@@ -419,8 +432,8 @@ pub fn report_times() {
             ms(wall.saturating_sub(clock.top)),
             100.0 * wall.saturating_sub(clock.top).as_secs_f64() / wall.as_secs_f64().max(1e-9)
         );
-        // The same by the thread's CPU time: a wait between two steps, a thread another process preempted, is not time
-        // in no step.
+        // The same by the thread's CPU time: a wait between two steps, a thread
+        // another process preempted, is not time in no step.
         eprintln!(
             "[time] cpu {:.3} ms, outermost steps cpu {:.3} ms, untimed cpu {:.3} ms ({:.1}%)",
             ms(cpu),
@@ -431,8 +444,9 @@ pub fn report_times() {
     });
 }
 
-/// Runs `main` with the wall clock started, then writes the `time` report: what a binary's
-/// `main` is, so that nothing before or after the timed steps goes unreported.
+/// Runs `main` with the wall clock started, then writes the `time` report: what
+/// a binary's `main` is, so that nothing before or after the timed steps goes
+/// unreported.
 pub fn run_main(main: impl FnOnce() -> i32) -> i32 {
     start();
     let code = main();
@@ -452,13 +466,16 @@ mod tests {
         sum
     }
 
-    /// Wall time and thread CPU time both read a loaded host's weather (the same linear pass read 33 to 89 ms between
-    /// runs): the per-pass column a scaling gate reads is the thread's user-space instructions, which the same work
-    /// repeats to a hair.
+    /// Wall time and thread CPU time both read a loaded host's weather (the
+    /// same linear pass read 33 to 89 ms between runs): the per-pass column
+    /// a scaling gate reads is the thread's user-space instructions, which the
+    /// same work repeats to a hair.
     #[test]
     fn test_the_work_counter_counts_the_same_loop_the_same_and_at_least_its_instructions() {
         if work_fd() < 0 {
-            return; // no counter on this host: the column falls back to CPU nanoseconds, which is not this claim
+            // no counter on this host: the column falls back to CPU
+            // nanoseconds, which is not this claim
+            return;
         }
         let measured = || {
             let before = work_now();

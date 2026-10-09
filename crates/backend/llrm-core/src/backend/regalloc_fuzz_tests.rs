@@ -3,7 +3,8 @@
 //! is total), no longer name a value, and store what the generated body stores.
 //!
 //! `FUZZ_SEEDS=N` runs N seeds (default 40); `FUZZ_SEED=S` replays one and
-//! prints its body; `FUZZ_CPU` names the profile (default: each of 386, 486, Core, P5).
+//! prints its body; `FUZZ_CPU` names the profile (default: each of 386, 486,
+//! Core, P5).
 
 use std::sync::Arc;
 
@@ -340,10 +341,10 @@ fn read_as(
     }
 }
 
-/// The generated body in SSA: the loop's variables become phis at its header, every
-/// definition a fresh name, and the exit reads the names the loop ends with. Values
-/// an instruction defines that are not variables (a quotient, a call's answer) are
-/// already defined once and keep their names.
+/// The generated body in SSA: the loop's variables become phis at its header,
+/// every definition a fresh name, and the exit reads the names the loop ends
+/// with. Values an instruction defines that are not variables (a quotient, a
+/// call's answer) are already defined once and keep their names.
 fn in_ssa(body: &LirBody) -> LirBody {
     let all: Vec<u32> = body.insns().iter().flat_map(|one| one.defines.iter().chain(&one.uses).copied()).collect();
     let mut next = all.iter().copied().max().unwrap_or(0) + 1;
@@ -651,7 +652,8 @@ mod run {
                         Operation::Nothing | Operation::Compare => {}
                         Operation::Move => {
                             if crate::backend::target::far_load(what) {
-                                // A far pointer: its offset, then its segment, a word on.
+                                // A far pointer: its offset, then its segment,
+                                // a word on.
                                 let Loc::Mem(cell) = &what.sources[0] else {
                                     return Err("les from a register".to_owned());
                                 };
@@ -739,7 +741,8 @@ mod run {
                         }
                         Operation::Jump => next = what.target,
                         Operation::Branch => {
-                            // The loop runs three times, whatever the branch is spelt.
+                            // The loop runs three times, whatever the branch is
+                            // spelt.
                             branches = what.target;
                             if self.taken < 3 {
                                 next = what.target;
@@ -832,8 +835,8 @@ fn allocated(
     if bad.is_empty() { Ok(()) } else { Err(format!("{}\n{}", bad.join("\n"), notes.join("\n"))) }
 }
 
-/// The generated body in SSA through the production phases from the spiller on, and the
-/// result must store what the generated body stores.
+/// The generated body in SSA through the production phases from the spiller on,
+/// and the result must store what the generated body stores.
 fn spilled_and_allocated(
     seed: u64,
     shape: &Shape,
@@ -889,9 +892,9 @@ fn spilled_and_allocated(
     if bad.is_empty() { Ok(()) } else { Err(format!("{}\n{}", bad.join("\n"), notes.join("\n"))) }
 }
 
-/// Seeds the lane found wrong results for: the allocator spilled a value whose number
-/// SsaSpill had already slotted and was handed that slot, whose contents were another
-/// live range's (seed 17: value#2 left as 0x69df, not 0x6ffc).
+/// Seeds the lane found wrong results for: the allocator spilled a value whose
+/// number SsaSpill had already slotted and was handed that slot, whose contents
+/// were another live range's (seed 17: value#2 left as 0x69df, not 0x6ffc).
 #[test]
 fn test_the_allocator_is_not_handed_the_spillers_slots() {
     for seed in [17, 28] {
@@ -979,9 +982,11 @@ fn test_a_value_that_cannot_be_spilled_takes_a_register_by_force() {
     assert!(crate::backend::allocate::last_resorts() > before, "premise: the allocation needed the last resort");
 }
 
-/// LLVM and GCC allocate a function once. The allocator here also allocated the body in each other shape its spills
-/// suggested, twice each, and kept the cheapest: 85 allocations of `d_faces`'s big function (#944). A profile that does
-/// not search makes the one allocation, and the same output where no other shape was cheaper.
+/// LLVM and GCC allocate a function once. The allocator here also allocated the
+/// body in each other shape its spills suggested, twice each, and kept the
+/// cheapest: 85 allocations of `d_faces`'s big function (#944). A profile that
+/// does not search makes the one allocation, and the same output where no other
+/// shape was cheaper.
 #[test]
 fn test_an_allocator_that_does_not_search_allocates_a_body_once() {
     use crate::backend::allocate::trials;
@@ -1013,9 +1018,11 @@ fn test_an_allocator_that_does_not_search_allocates_a_body_once() {
     assert!(searched > 0, "premise: some body had a shape to try");
 }
 
-/// The search tried every shape its spills suggested, twice each: up to 12 allocations of one body, and 80% of
-/// compiling `d_faces`. Unless it is exhaustive it allocates the shape the spills suggest and the body without
-/// splitting: at most 2 more, and never a worse output than the first allocation's.
+/// The search tried every shape its spills suggested, twice each: up to 12
+/// allocations of one body, and 80% of compiling `d_faces`. Unless it is
+/// exhaustive it allocates the shape the spills suggest and the body without
+/// splitting: at most 2 more, and never a worse output than the first
+/// allocation's.
 #[test]
 fn test_a_search_that_is_not_exhaustive_makes_at_most_two_more_allocations() {
     use crate::backend::allocate::trials;
@@ -1047,9 +1054,10 @@ fn test_a_search_that_is_not_exhaustive_makes_at_most_two_more_allocations() {
     assert!(most_all > 2, "premise: some body has more than two shapes to try (most: {most_all})");
 }
 
-/// The walk found a value's intervals by every value live in every block, hashed (the homes of d_faces: 56 values, 240
-/// blocks, 4.4M instructions a call, 616 calls). From where the values occur and the blocks they are live through it
-/// finds the same.
+/// The walk found a value's intervals by every value live in every block,
+/// hashed (the homes of d_faces: 56 values, 240 blocks, 4.4M instructions a
+/// call, 616 calls). From where the values occur and the blocks they are live
+/// through it finds the same.
 #[test]
 fn test_intervals_from_occurrences_are_those_of_the_walk() {
     use crate::analysis::intervals as ranges;
@@ -1107,8 +1115,10 @@ fn test_intervals_from_occurrences_are_those_of_the_walk() {
     assert!(compared > 0, "premise: some value was live");
 }
 
-/// Reading the intervals of a body copied every interval of it (`_existing_colors` asked for the body's own and added
-/// the homes': 0.14 G of d_faces, 616 calls of 8000 segments), though a read needs the remembered answer itself.
+/// Reading the intervals of a body copied every interval of it
+/// (`_existing_colors` asked for the body's own and added the homes': 0.14 G of
+/// d_faces, 616 calls of 8000 segments), though a read needs the remembered
+/// answer itself.
 #[test]
 fn test_reading_the_intervals_of_a_body_asked_of_twice_copies_none() {
     use crate::analysis::intervals as ranges;
@@ -1119,10 +1129,12 @@ fn test_reading_the_intervals_of_a_body_asked_of_twice_copies_none() {
     assert!(*first == ranges::intervals(&plain, None));
 }
 
-/// A function's allocator alternates between its base body and a trial's (a spill or a split of it). The facts share
-/// one manager: a trial's asks must not evict the base's, or each switch worked both out again. Over six alternations
-/// the base is numbered and worked out once, the trial is edited from it once, and every later ask is answered from
-/// memory; each answer is the whole walk's.
+/// A function's allocator alternates between its base body and a trial's (a
+/// spill or a split of it). The facts share one manager: a trial's asks must
+/// not evict the base's, or each switch worked both out again. Over six
+/// alternations the base is numbered and worked out once, the trial is edited
+/// from it once, and every later ask is answered from memory; each answer is
+/// the whole walk's.
 #[test]
 fn test_a_base_and_its_trial_asked_in_turn_are_each_worked_out_once() {
     use crate::analysis::intervals::{edited, intervals, intervals_afresh, numbered, worked};
@@ -1150,9 +1162,11 @@ fn test_a_base_and_its_trial_asked_in_turn_are_each_worked_out_once() {
     }
 }
 
-/// An answer edited from an earlier one worked the changed values out by taking the body's liveness whole and walking
-/// every block (`intervals liveness` and `walk`, 1.5 G of compiling d_faces for 882 edits that name a few values each).
-/// It finds them from where they occur; the intervals and weights are the walk's.
+/// An answer edited from an earlier one worked the changed values out by taking
+/// the body's liveness whole and walking every block (`intervals liveness` and
+/// `walk`, 1.5 G of compiling d_faces for 882 edits that name a few values
+/// each). It finds them from where they occur; the intervals and weights are
+/// the walk's.
 #[test]
 fn test_an_edited_answer_works_its_changed_values_out_from_where_they_occur() {
     use crate::analysis::intervals::{by_occurrences, edited, intervals, intervals_afresh};
@@ -1174,9 +1188,10 @@ fn test_an_edited_answer_works_its_changed_values_out_from_where_they_occur() {
     assert_eq!(found, intervals_afresh(&trial));
 }
 
-/// The interference among a web of a few values walked every instruction of the body for liveness rows and again for
-/// the widths, per web (1 G of compiling d_faces, 454 webs). From where the values occur it is the same graph, and the
-/// body is not walked.
+/// The interference among a web of a few values walked every instruction of the
+/// body for liveness rows and again for the widths, per web (1 G of compiling
+/// d_faces, 454 webs). From where the values occur it is the same graph, and
+/// the body is not walked.
 #[test]
 fn test_the_interference_among_a_web_is_found_without_walking_the_body() {
     use crate::analysis::intervals::intervals;
@@ -1201,8 +1216,9 @@ fn test_the_interference_among_a_web_is_found_without_walking_the_body() {
     }
 }
 
-/// The no-split allocation of a body the base allocation split nothing in is the base allocation again, and was made
-/// for every body with a spill (10% of the trials over QCport, the bench and the 66 programs, none of them won).
+/// The no-split allocation of a body the base allocation split nothing in is
+/// the base allocation again, and was made for every body with a spill (10% of
+/// the trials over QCport, the bench and the 66 programs, none of them won).
 #[test]
 fn test_a_body_the_base_allocation_split_nothing_in_is_not_allocated_again_without_splitting() {
     use crate::backend::allocate::{base_splits, trials};
@@ -1230,8 +1246,9 @@ fn test_a_body_the_base_allocation_split_nothing_in_is_not_allocated_again_witho
     assert!(unsplit > 0, "premise: some body with a spill was split nowhere");
 }
 
-/// `allocate::live` was built from per-block sorted sets and converted to bit rows for the fixed point:
-/// 24% of compiling QCport's `d_faces` (#559). Dense rows all the way give the same sets.
+/// `allocate::live` was built from per-block sorted sets and converted to bit
+/// rows for the fixed point: 24% of compiling QCport's `d_faces` (#559). Dense
+/// rows all the way give the same sets.
 #[test]
 fn test_dense_liveness_is_what_the_sorted_sets_gave() {
     for seed in 0..200 {
@@ -1263,9 +1280,11 @@ fn test_dense_liveness_is_what_the_sorted_sets_gave() {
     }
 }
 
-/// Every question of a body's intervals was worked out afresh: a spill was followed by the allocator's
-/// facts of the body it made, the spiller's steps and the class check, each asking the same (58% of the
-/// asks of compiling `d_faces`, #559). The same instructions are answered from memory; others are not.
+/// Every question of a body's intervals was worked out afresh: a spill was
+/// followed by the allocator's facts of the body it made, the spiller's steps
+/// and the class check, each asking the same (58% of the asks of compiling
+/// `d_faces`, #559). The same instructions are answered from memory; others are
+/// not.
 #[test]
 fn test_the_intervals_of_the_same_instructions_are_worked_out_once() {
     use crate::analysis::intervals::{intervals, worked};
@@ -1292,8 +1311,9 @@ fn test_the_intervals_of_the_same_instructions_are_worked_out_once() {
     );
 }
 
-/// A spill made a body of nearly the same instructions, and every fact of it was worked out afresh (the allocator's
-/// 9784 rebuilds of `d_faces`, #944). An answer is the earlier one moved to the new slots, worked out again for the
+/// A spill made a body of nearly the same instructions, and every fact of it
+/// was worked out afresh (the allocator's 9784 rebuilds of `d_faces`, #944). An
+/// answer is the earlier one moved to the new slots, worked out again for the
 /// values the changed instructions name: the same intervals and weights.
 #[test]
 fn test_the_intervals_of_an_edited_body_are_the_ones_worked_out_afresh() {
@@ -1318,8 +1338,8 @@ fn test_the_intervals_of_an_edited_body_are_the_ones_worked_out_afresh() {
                 let Some(&block) = blocks.get(seed as usize % blocks.len().max(1)) else { continue };
                 (block, 1 + seed as usize % (other.blocks[block].insns.len() - 2))
             };
-            // One instruction made afresh, and another of the block's put in again beside it: as a spill's reload would
-            // be.
+            // One instruction made afresh, and another of the block's put in
+            // again beside it: as a spill's reload would be.
             let copy = Arc::new((*other.blocks[block].insns[at]).clone());
             other.blocks[block].insns.edit(|insns| insns[at] = copy);
             let inserted = Arc::new((*other.blocks[block].insns[at - 1]).clone());
@@ -1333,9 +1353,10 @@ fn test_the_intervals_of_an_edited_body_are_the_ones_worked_out_afresh() {
     assert!(made > 50, "premise: bodies were answered by editing ({made})");
 }
 
-/// `spiller::siblings` built the interference of every value live together (13.8% of compiling
-/// `d_faces`, #559) to ask of the pairs among the values a plain move relates. The graph of those
-/// values alone has the edges among them that the whole graph has.
+/// `spiller::siblings` built the interference of every value live together
+/// (13.8% of compiling `d_faces`, #559) to ask of the pairs among the values a
+/// plain move relates. The graph of those values alone has the edges among them
+/// that the whole graph has.
 #[test]
 fn test_interference_among_some_values_is_the_whole_graphs_among_them() {
     use crate::backend::coalesce::{_interference, _interference_among};
@@ -1359,8 +1380,9 @@ fn test_interference_among_some_values_is_the_whole_graphs_among_them() {
     }
 }
 
-/// The class of every value was found with the body numbered, its intervals found and the clobber masks
-/// built for the `[word+word]` roles, in bodies with none: 3.8 s of compiling `d_faces` (#559).
+/// The class of every value was found with the body numbered, its intervals
+/// found and the clobber masks built for the `[word+word]` roles, in bodies
+/// with none: 3.8 s of compiling `d_faces` (#559).
 #[test]
 fn test_a_body_with_no_word_address_pairs_is_not_numbered_to_find_classes() {
     let (generated, _) = body(5, &Shape { pool: 8, ops: 6 });
@@ -1378,8 +1400,9 @@ fn test_a_body_with_no_word_address_pairs_is_not_numbered_to_find_classes() {
     );
 }
 
-/// The interval walk looked each instruction's slot up in a map hashed by its address, built a set per group
-/// and shifted its live map on every removal: 7.6 s of compiling `d_faces` (#559). Slots counted in place, a
+/// The interval walk looked each instruction's slot up in a map hashed by its
+/// address, built a set per group and shifted its live map on every removal:
+/// 7.6 s of compiling `d_faces` (#559). Slots counted in place, a
 /// live list with gaps: the same intervals in the same order.
 #[test]
 fn test_the_interval_walk_is_the_references_in_every_order() {
@@ -1403,8 +1426,9 @@ fn test_the_interval_walk_is_the_references_in_every_order() {
     }
 }
 
-/// Values live into a block come out of its walk in the order they were first read, last read first: two
-/// values read and never made in the block. The order of the intervals is part of what is the same.
+/// Values live into a block come out of its walk in the order they were first
+/// read, last read first: two values read and never made in the block. The
+/// order of the intervals is part of what is the same.
 #[test]
 fn test_values_read_and_never_made_in_a_block_come_out_in_the_order_they_were_first_walked() {
     use crate::analysis::intervals::{_ranges_reference, _walked, indexed};
@@ -1430,10 +1454,11 @@ fn test_values_read_and_never_made_in_a_block_come_out_in_the_order_they_were_fi
     assert!(walked.iter().eq(_ranges_reference(&body, &index, &|_| true).iter()));
 }
 
-/// A spilled read's saving was looked up in the profile by form name, four times, for every instruction, at
-/// every rebuild of the allocator's facts, and each use asked the instruction's pattern afresh (5.6 s of
-/// compiling `d_faces`, #559). The saving is found once per form and the pattern once per instruction: the
-/// same weights.
+/// A spilled read's saving was looked up in the profile by form name, four
+/// times, for every instruction, at every rebuild of the allocator's facts, and
+/// each use asked the instruction's pattern afresh (5.6 s of
+/// compiling `d_faces`, #559). The saving is found once per form and the
+/// pattern once per instruction: the same weights.
 #[test]
 fn test_fold_prices_are_what_the_per_instruction_lookup_gave() {
     use crate::analysis::frequency::Frequency;
@@ -1478,8 +1503,9 @@ fn test_fold_prices_are_what_the_per_instruction_lookup_gave() {
     }
 }
 
-/// The last reads of a body were found from the sets of every block's entry and exit, of which only the
-/// exits are read (5.7% of compiling `d_faces`, #559). The exits as rows give the same reads.
+/// The last reads of a body were found from the sets of every block's entry and
+/// exit, of which only the exits are read (5.7% of compiling `d_faces`, #559).
+/// The exits as rows give the same reads.
 #[test]
 fn test_the_last_reads_are_what_the_sets_of_every_block_gave() {
     use std::collections::BTreeSet;
@@ -1522,9 +1548,10 @@ fn test_the_last_reads_are_what_the_sets_of_every_block_gave() {
     }
 }
 
-/// Splitting a value asked of the liveness of every value in every block as sets, built afresh for each
-/// split and again for the body it made (9.7% of compiling `d_faces`, #559). One value at a time is asked
-/// of, and the rows answer it: whether it is live at a block's entry and exit, as the sets said.
+/// Splitting a value asked of the liveness of every value in every block as
+/// sets, built afresh for each split and again for the body it made (9.7% of
+/// compiling `d_faces`, #559). One value at a time is asked of, and the rows
+/// answer it: whether it is live at a block's entry and exit, as the sets said.
 #[test]
 fn test_one_values_liveness_from_rows_is_what_the_sets_said() {
     use crate::backend::allocate::{LiveAt, live_reference, live_rows, live_rows_by};
@@ -1562,7 +1589,8 @@ fn test_one_values_liveness_from_rows_is_what_the_sets_said() {
     }
 }
 
-/// The next value was found by putting every value the body names in a set (a fifth of a split's carving).
+/// The next value was found by putting every value the body names in a set (a
+/// fifth of a split's carving).
 #[test]
 fn test_the_next_value_is_one_past_the_largest_the_body_names() {
     for seed in 0..150 {
@@ -1585,10 +1613,11 @@ fn test_the_next_value_is_one_past_the_largest_the_body_names() {
     }
 }
 
-/// The classes of every value numbered the body, found every interval and built the clobber masks for the
-/// `[word+word]` roles, all of which the allocator's facts had just found for the same body (2.3 s of
-/// compiling `d_faces`, #559). Given them, the classes are the same, in the same order, and nothing is worked
-/// out again.
+/// The classes of every value numbered the body, found every interval and built
+/// the clobber masks for the `[word+word]` roles, all of which the allocator's
+/// facts had just found for the same body (2.3 s of compiling `d_faces`, #559).
+/// Given them, the classes are the same, in the same order, and nothing is
+/// worked out again.
 #[test]
 fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
     use crate::analysis::intervals::{indexed, intervals, worked};
@@ -1616,7 +1645,8 @@ fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
             assert!(given.iter().eq(alone.iter()), "seed {seed}");
         }
     }
-    // A body with a `[base+index]` access of two words: the roles are chosen from the intervals and masks.
+    // A body with a `[base+index]` access of two words: the roles are chosen
+    // from the intervals and masks.
     let cell = Mem {
         base: Some(Held { value: 1, width: 2 }),
         index: Some(Held { value: 2, width: 2 }),
@@ -1680,7 +1710,8 @@ fn _mask_at(
     }
 }
 
-/// `_clobbered` agrees with the look at every point it replaced, on random points and values.
+/// `_clobbered` agrees with the look at every point it replaced, on random
+/// points and values.
 #[test]
 fn test_clobbered_agrees_with_a_look_at_every_point() {
     use super::allocate::{_clobbered, _clobbered_reference, Masks};
@@ -1729,8 +1760,9 @@ fn test_clobbered_agrees_with_a_look_at_every_point() {
     }
 }
 
-/// Every query looked at every point: `_clobbered` was 5.8% of compiling `d_faces` (#559). 20,000 points and
-/// 20,000 questions took 1.2 s; they are answered by bisection now.
+/// Every query looked at every point: `_clobbered` was 5.8% of compiling
+/// `d_faces` (#559). 20,000 points and 20,000 questions took 1.2 s; they are
+/// answered by bisection now.
 #[test]
 fn test_clobbered_does_not_look_at_every_point() {
     use super::allocate::{_clobbered, Masks};

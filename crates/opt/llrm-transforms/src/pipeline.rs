@@ -7,15 +7,19 @@
 //! each body it changes, then `Rotate`.
 //!
 //! What changed with the IR:
-//! - A pass reports a change by preserving less than every analysis; the old compared bodies. Arenas never shrink, so
-//!   the repeated-state check compares printed bodies instead.
-//! - The stage records are the manager's change log (`recorded`); `watch` is `Applied::dump`, a file per changed step
-//!   of each body.
-//! - `Where`'s segment, BC blocks and object file went with the BC frontend. The machine's facts are the program's
-//!   target's.
-//! - PointerProvenance, SplitPointers and Place have no rich-MIR meaning. Hoist's store sinking is loopmotion's pass.
-//! - `flow::optimized`'s rule that an irreducible body is not promoted is here: promotion needs dominators.
-//! - The old `_Transaction` verified nothing; `applied`'s manager verifies the module after the pipeline.
+//! - A pass reports a change by preserving less than every analysis; the old
+//!   compared bodies. Arenas never shrink, so the repeated-state check compares
+//!   printed bodies instead.
+//! - The stage records are the manager's change log (`recorded`); `watch` is
+//!   `Applied::dump`, a file per changed step of each body.
+//! - `Where`'s segment, BC blocks and object file went with the BC frontend.
+//!   The machine's facts are the program's target's.
+//! - PointerProvenance, SplitPointers and Place have no rich-MIR meaning.
+//!   Hoist's store sinking is loopmotion's pass.
+//! - `flow::optimized`'s rule that an irreducible body is not promoted is here:
+//!   promotion needs dominators.
+//! - The old `_Transaction` verified nothing; `applied`'s manager verifies the
+//!   module after the pipeline.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -60,15 +64,18 @@ pub struct Options {
     pub fill: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
-    /// Code size outranks speed where they conflict: -Os and -Oz. (Whether a complete copy of a loop may grow the
-    /// code is `limits.grows`, which gcc lets only -O3 do.)
+    /// Code size outranks speed where they conflict: -Os and -Oz. (Whether a
+    /// complete copy of a loop may grow the code is `limits.grows`, which
+    /// gcc lets only -O3 do.)
     pub for_size: bool,
-    /// The allocator tries other shapes of a body and keeps the cheapest (`-fallocation-search`).
+    /// The allocator tries other shapes of a body and keeps the cheapest
+    /// (`-fallocation-search`).
     pub search: bool,
-    /// Both routes through the machine phases are made and the cheaper kept (`-fallocation-routes`); else the
-    /// allocator alone.
+    /// Both routes through the machine phases are made and the cheaper kept
+    /// (`-fallocation-routes`); else the allocator alone.
     pub routes: bool,
-    /// With `search`, every shape rather than the one the spills suggest (`-fallocation-search-all`; -Omax).
+    /// With `search`, every shape rather than the one the spills suggest
+    /// (`-fallocation-search-all`; -Omax).
     pub exhaustive: bool,
 }
 
@@ -108,9 +115,11 @@ impl Options {
         Self { optimize: false, search: false, routes: false, ..Self::default() }
     }
 
-    /// -O1: gcc's: the scalar passes and `-finline-functions-called-once`; a loop is copied out completely only where
-    /// the code does not grow; nothing is inlined that `early-inlining-insns` (6) over `max-inline-insns-auto` (15)
-    /// of the -O2 threshold does not admit, and no gcse, sibling calls, pattern fill, peeling or unswitching.
+    /// -O1: gcc's: the scalar passes and `-finline-functions-called-once`; a
+    /// loop is copied out completely only where the code does not grow;
+    /// nothing is inlined that `early-inlining-insns` (6) over
+    /// `max-inline-insns-auto` (15) of the -O2 threshold does not admit,
+    /// and no gcse, sibling calls, pattern fill, peeling or unswitching.
     pub fn basic() -> Self {
         Self {
             limits: Limits { grows: false, ..Self::default().limits },
@@ -125,8 +134,10 @@ impl Options {
         }
     }
 
-    /// -O2: gcc's: -O1 with inlining, gcse, sibling calls and pattern fill; a complete copy of a loop still must not
-    /// grow the code (`flag_cunroll_grow_size` is on at -O3, `-funroll-loops` and `-fpeel-loops` only).
+    /// -O2: gcc's: -O1 with inlining, gcse, sibling calls and pattern fill; a
+    /// complete copy of a loop still must not grow the code
+    /// (`flag_cunroll_grow_size` is on at -O3, `-funroll-loops` and
+    /// `-fpeel-loops` only).
     pub fn standard() -> Self {
         Self {
             limits: Limits { grows: false, ..Self::default().limits },
@@ -136,7 +147,8 @@ impl Options {
         }
     }
 
-    /// -O3: gcc's: -O2 with peeling, unswitching, complete copies that grow the code, and the larger inline threshold.
+    /// -O3: gcc's: -O2 with peeling, unswitching, complete copies that grow the
+    /// code, and the larger inline threshold.
     pub fn speed() -> Self {
         Self {
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
@@ -145,8 +157,8 @@ impl Options {
         }
     }
 
-    /// -Omax: every pass the default has on, LLVM's -O3 budgets, twice the target's unroll budget and a 250 inline
-    /// threshold.
+    /// -Omax: every pass the default has on, LLVM's -O3 budgets, twice the
+    /// target's unroll budget and a 250 inline threshold.
     pub fn aggressive() -> Self {
         Self {
             limits: Limits { target_percent: 200, ..Limits::default() },
@@ -170,7 +182,8 @@ impl Options {
         }
     }
 
-    /// Whether the allocator tries other shapes of a body and keeps the cheapest.
+    /// Whether the allocator tries other shapes of a body and keeps the
+    /// cheapest.
     pub fn searches(&self) -> bool {
         self.search
     }
@@ -246,7 +259,8 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Before anything asks what a port call does to memory.
         Box::new(ports::Ports),
         Box::new(decide::Decide),
-        // Once the arguments are values rather than frame cells; the loop it makes goes to the loop passes below.
+        // Once the arguments are values rather than frame cells; the loop it
+        // makes goes to the loop passes below.
         Box::new(tailrec::TailRecursion),
         Box::new(loopsimplify::LoopSimplify),
         Box::new(lcssa::LoopClosedSSA),
@@ -255,9 +269,11 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(floatloop::FloatLoop),
         Box::new(hoist::Hoist { size: applied.options.prefers_size() }),
         Box::new(loopmotion::LoopMotion),
-        // The loop's exit tests that nothing in it changes are made once, with the loop's entry.
+        // The loop's exit tests that nothing in it changes are made once, with
+        // the loop's entry.
         Box::new(trivialunswitch::TrivialUnswitch),
-        // Before gvn: a far pointer cast from a near one is read as the near one.
+        // Before gvn: a far pointer cast from a near one is read as the near
+        // one.
         Box::new(inferspace::InferAddressSpaces),
         Box::new(dse::Dse),
         Box::new(gvn::Gvn),
@@ -345,12 +361,13 @@ pub fn recorded(
     // GlobalDCE after inlining.
     manager.add_program(globaldce::GlobalDce);
     manager.add_program(availableexternally::EliminateAvailableExternally);
-    // Once the callers that remain are the ones that stay: an internal function they all call directly pops its own
-    // arguments.
+    // Once the callers that remain are the ones that stay: an internal function
+    // they all call directly pops its own arguments.
     if applied.options.wanted("calleepop") {
         manager.add_module(calleepop::CalleePop { size: applied.options.prefers_size() });
     }
-    // Before LSR: a factor of two or a scale the product carries still shows as a shift.
+    // Before LSR: a factor of two or a scale the product carries still shows as
+    // a shift.
     if applied.options.wanted("fixednarrow") {
         manager.add(fixednarrow::FixedNarrow);
     }
@@ -360,19 +377,21 @@ pub fn recorded(
             size: applied.options.prefers_size(),
             bounds: if applied.options.searches_all() { lsr::Bounds::NONE } else { lsr::Bounds::GCC },
         });
-        // What the counters it chose leave behind (a bound subtracted from a counter rebased by it), as LLVM's LSR
-        // cleans with SimplifyInstructions.
+        // What the counters it chose leave behind (a bound subtracted from a
+        // counter rebased by it), as LLVM's LSR cleans with
+        // SimplifyInstructions.
         manager.add(algebraic::Differences);
     }
-    // On the pointers LSR chose: a huge one a loop keeps in one window is far there.
+    // On the pointers LSR chose: a huge one a loop keeps in one window is far
+    // there.
     if applied.options.wanted("window") {
         manager.add(window::Window { size: applied.options.prefers_size() });
     }
     // Last, as the old drivers rotated in lowering: unroll and peel refuse
     // a rotated loop.
     manager.add(rotate::Rotate);
-    // After the loop passes: the cycles it makes between the cases are no natural loop. LLVM's DFAJumpThreading, gcc's
-    // FSM threader.
+    // After the loop passes: the cycles it makes between the cases are no
+    // natural loop. LLVM's DFAJumpThreading, gcc's FSM threader.
     if applied.options.wanted("jumpthread") {
         manager.add(jumpthread::JumpThread { size: applied.options.prefers_size() });
     }
@@ -385,7 +404,8 @@ pub fn recorded(
     if applied.options.wanted("gepoffset") {
         manager.add(gepoffset::GepOffset);
     }
-    // After gvn's last partial redundancy elimination, which makes the phis it sinks.
+    // After gvn's last partial redundancy elimination, which makes the phis it
+    // sinks.
     if applied.options.wanted("addresssink") {
         manager.add(addresssink::AddressSink);
     }
@@ -396,7 +416,8 @@ pub fn recorded(
 }
 
 thread_local! {
-    /// What made the interprocedural step run a body's pipeline again (empty: the first run), for `LLRM_DEBUG=runs`.
+    /// What made the interprocedural step run a body's pipeline again (empty:
+    /// the first run), for `LLRM_DEBUG=runs`.
     static TRIGGER: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
 }
 
@@ -645,12 +666,14 @@ struct Run {
     /// Whether promotion may run: not over an irreducible CFG.
     promotes: bool,
     dump: Option<PathBuf>,
-    /// For `LLRM_DEBUG=runs`: fixed points reached, rounds in them, passes run, passes skipped as settled.
+    /// For `LLRM_DEBUG=runs`: fixed points reached, rounds in them, passes run,
+    /// passes skipped as settled.
     fixed: usize,
     rounds: usize,
     steps: usize,
     skipped: usize,
-    /// The work of passes that changed nothing, and of those that did (only where `runs` is on).
+    /// The work of passes that changed nothing, and of those that did (only
+    /// where `runs` is on).
     billing: bool,
     idle: u64,
     useful: u64,

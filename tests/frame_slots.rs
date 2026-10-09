@@ -1,7 +1,9 @@
-//! Every frame cell names the slot it lies in once instruction selection has tagged them, and the verifier fails a
-//! compile in which a phase makes one without. Each program here made one: the end pointer of a strength-reduced loop
-//! one past an array (matmul), a pointer before an array's start (quicksort), a word slot loopslots promoted (sieve), a
-//! frame address folded into an indexed cell (the spiller; the nib loop test of llrm-nib).
+//! Every frame cell names the slot it lies in once instruction selection has
+//! tagged them, and the verifier fails a compile in which a phase makes one
+//! without. Each program here made one: the end pointer of a strength-reduced
+//! loop one past an array (matmul), a pointer before an array's start
+//! (quicksort), a word slot loopslots promoted (sieve), a frame address folded
+//! into an indexed cell (the spiller; the nib loop test of llrm-nib).
 
 use std::process::Command;
 

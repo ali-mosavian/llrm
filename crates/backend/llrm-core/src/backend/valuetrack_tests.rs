@@ -36,9 +36,10 @@ fn note(
     DebugNote { variable, piece: None, value: value.map_or(NoteValue::Nothing, NoteValue::Value) }
 }
 
-/// A variable is where its value is: in the register the defining instruction wrote it, then, once that is overwritten,
-/// in the frame cell a move copied it to. Reading the register alone lost it at the `add`; reading only the definition
-/// lost it at the move.
+/// A variable is where its value is: in the register the defining instruction
+/// wrote it, then, once that is overwritten, in the frame cell a move copied it
+/// to. Reading the register alone lost it at the `add`; reading only the
+/// definition lost it at the move.
 #[test]
 fn a_variable_follows_its_value_from_the_register_to_the_cell_a_move_copied_it_to() {
     let marks = [(8, Mark::Def { tag: 7, place: Place::Register(EAX) }), (8, Mark::Note(0))];
@@ -49,8 +50,9 @@ fn a_variable_follows_its_value_from_the_register_to_the_cell_a_move_copied_it_t
     );
 }
 
-/// Where another value is written over the register the variable was in, the variable has no place there: a register
-/// that holds something else is no place for it.
+/// Where another value is written over the register the variable was in, the
+/// variable has no place there: a register that holds something else is no
+/// place for it.
 #[test]
 fn a_variable_has_no_place_once_nothing_holds_its_value() {
     // push ebp; mov ebp, esp; mov eax, 5; mov eax, 6; ret
@@ -62,11 +64,13 @@ fn a_variable_has_no_place_once_nothing_holds_its_value() {
     assert_eq!(firsts(&found[&(1, None)]), [(8, 13, Where::Place(Place::Register(EAX)))]);
 }
 
-/// Where two paths join, the variable is where both say: one path moved the value to edx and overwrote eax, the other
-/// left it in eax, so after the join it is in neither.
+/// Where two paths join, the variable is where both say: one path moved the
+/// value to edx and overwrote eax, the other left it in eax, so after the join
+/// it is in neither.
 #[test]
 fn paths_that_join_keep_only_the_place_both_hold() {
-    // 0 mov eax,5; 5 test ecx,ecx; 7 je 14; 9 mov edx,eax; 11 xor eax,eax; 13 nop; 14 ret
+    // 0 mov eax,5; 5 test ecx,ecx; 7 je 14; 9 mov edx,eax; 11 xor eax,eax; 13
+    // nop; 14 ret
     let code = [0xB8, 5, 0, 0, 0, 0x85, 0xC9, 0x74, 0x05, 0x89, 0xC2, 0x31, 0xC0, 0x90, 0xC3];
     let rows = crate::backend::cfi::rows(&code, 32, iced_x86::Register::EBP, iced_x86::Register::ESP, 4, &[])
         .expect("followable");
@@ -98,12 +102,14 @@ fn a_call_loses_the_registers_it_clobbers_and_keeps_the_others() {
     assert_eq!(firsts(&found[&(2, None)]), [(10, 16, Where::Place(Place::Register(ECX)))]);
 }
 
-/// A cell the function lets the address of out (`lea ecx, [ebp-4]`) may be written by the callee it is handed to: the
-/// value a variable had in it is no longer known after the call. Before, `n` was read from `p.x`'s cell after `bump(&p,
-/// ..)` had added to it, and gdb said `n = 23` where it is 3.
+/// A cell the function lets the address of out (`lea ecx, [ebp-4]`) may be
+/// written by the callee it is handed to: the value a variable had in it is no
+/// longer known after the call. Before, `n` was read from `p.x`'s cell after
+/// `bump(&p, ..)` had added to it, and gdb said `n = 23` where it is 3.
 #[test]
 fn a_cell_whose_address_went_out_is_lost_at_the_next_call() {
-    // push ebp; mov ebp,esp; sub esp,8; mov eax,5; mov [ebp-4],eax; lea ecx,[ebp-4]; xor eax,eax; call +0; ret
+    // push ebp; mov ebp,esp; sub esp,8; mov eax,5; mov [ebp-4],eax; lea
+    // ecx,[ebp-4]; xor eax,eax; call +0; ret
     let code = [
         0x55, 0x89, 0xE5, 0x83, 0xEC, 0x08, 0xB8, 5, 0, 0, 0, 0x89, 0x45, 0xFC, 0x8D, 0x4D, 0xFC, 0x31, 0xC0, 0xE8, 0,
         0, 0, 0, 0xC3,
@@ -118,8 +124,9 @@ fn a_cell_whose_address_went_out_is_lost_at_the_next_call() {
     );
 }
 
-/// The places a value is in, all of them: a format with one place for a scope takes one that holds it through every
-/// range, where the first (a register the value was computed in) may not (`k` in `ax`, moved to `bx` for the call that
+/// The places a value is in, all of them: a format with one place for a scope
+/// takes one that holds it through every range, where the first (a register the
+/// value was computed in) may not (`k` in `ax`, moved to `bx` for the call that
 /// clobbers `ax`).
 #[test]
 fn a_value_copied_to_another_register_is_in_both_until_the_first_is_overwritten() {

@@ -1,8 +1,8 @@
 //! Lower typed [`GrammarExpr`] trees into `NtParse` state-table bytes.
 //!
-//! This is the grammar-backed half of reverse `buildprs` generation. The encoder
-//! primitives live in [`crate::buildprs_encoder`]; this module maps AST nodes to
-//! branch/fixup layouts observed in `prsstate.asm`.
+//! This is the grammar-backed half of reverse `buildprs` generation. The
+//! encoder primitives live in [`crate::buildprs_encoder`]; this module maps AST
+//! nodes to branch/fixup layouts observed in `prsstate.asm`.
 
 use std::collections::BTreeMap;
 
@@ -3851,33 +3851,39 @@ impl WholeGrammarLoweringReport {
     }
 }
 
-/// Contiguous `tState` buffer plus offset maps produced by whole-grammar lowering.
+/// Contiguous `tState` buffer plus offset maps produced by whole-grammar
+/// lowering.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WholeGrammarLoweringResult {
     pub state: Vec<u8>,
-    /// Byte offset into [`Self::state`] for each lowered statement anchor (`tk*`).
-    /// Only holds the FIRST offset when multiple statement rules share an anchor.
-    /// Use [`Self::statement_offset_list`] for the full ordered list (multiple per anchor).
+    /// Byte offset into [`Self::state`] for each lowered statement anchor
+    /// (`tk*`). Only holds the FIRST offset when multiple statement rules
+    /// share an anchor. Use [`Self::statement_offset_list`] for the full
+    /// ordered list (multiple per anchor).
     pub statement_offsets: BTreeMap<String, u16>,
-    /// All (anchor, offset) pairs in grammar order, including multiple entries per anchor.
-    /// When two grammar rules share the same keyword (e.g. file GET and graphics GET both
-    /// start with `tkGET`), this list contains two entries for `tkGET`.  The runtime parser
-    /// tries each offset in order and stops at the first successful parse.
+    /// All (anchor, offset) pairs in grammar order, including multiple entries
+    /// per anchor. When two grammar rules share the same keyword (e.g. file
+    /// GET and graphics GET both start with `tkGET`), this list contains
+    /// two entries for `tkGET`.  The runtime parser tries each offset in
+    /// order and stops at the first successful parse.
     pub statement_offset_list: Vec<(String, u16)>,
-    /// Byte offset into [`Self::state`] for each lowered function anchor (`tk*`).
+    /// Byte offset into [`Self::state`] for each lowered function anchor
+    /// (`tk*`).
     pub function_offsets: BTreeMap<String, u16>,
-    /// `tIntNtDisp`-ordered offsets for successfully lowered internal nonterminals.
+    /// `tIntNtDisp`-ordered offsets for successfully lowered internal
+    /// nonterminals.
     pub int_nt_disp: BTreeMap<String, u16>,
-    /// `STI_*` offsets for successfully lowered `<INDEX>` internal nonterminals.
+    /// `STI_*` offsets for successfully lowered `<INDEX>` internal
+    /// nonterminals.
     pub sti_offsets: BTreeMap<String, u16>,
     pub report: WholeGrammarLoweringReport,
 }
 
-/// Lower all statement rules, function rules, and internal nonterminals into one
-/// contiguous `tState` buffer in DOS `buildprs` emission order.
+/// Lower all statement rules, function rules, and internal nonterminals into
+/// one contiguous `tState` buffer in DOS `buildprs` emission order.
 ///
-/// Rules that hit unsupported grammar shapes are skipped in the output buffer but
-/// recorded in [`WholeGrammarLoweringResult::report`].
+/// Rules that hit unsupported grammar shapes are skipped in the output buffer
+/// but recorded in [`WholeGrammarLoweringResult::report`].
 pub fn lower_whole_grammar(
     grammar: &GrammarFile,
     symbols: LoweringSymbols,
@@ -4046,10 +4052,12 @@ fn lower_rule_with_symbols(
                     state.extend(bytes);
                     offset
                 };
-                // Always record in the ordered list (allows multiple entries per anchor).
+                // Always record in the ordered list (allows multiple entries
+                // per anchor).
                 offset_list.push((rule.anchor.clone(), offset));
-                // Only insert the FIRST offset into the BTreeMap so existing callers
-                // that key by anchor name still get a deterministic value.
+                // Only insert the FIRST offset into the BTreeMap so existing
+                // callers that key by anchor name still get a
+                // deterministic value.
                 offsets.entry(rule.anchor.clone()).or_insert(offset);
                 RuleLoweringOutcome::Lowered { anchor: rule.anchor.clone(), offset, byte_len }
             }

@@ -25,8 +25,9 @@ fn piped(text: &str) -> String {
     printed(&module)
 }
 
-/// Nib's locals were stack cells loaded and stored around each use (the isel path ran 1.98 times the old path's
-/// instructions): through the pipeline a loop's counter is a phi and what it sums another.
+/// Nib's locals were stack cells loaded and stored around each use (the isel
+/// path ran 1.98 times the old path's instructions): through the pipeline a
+/// loop's counter is a phi and what it sums another.
 #[test]
 fn a_loop_counter_and_its_sum_are_phis_not_stack_cells() {
     const TEXT: &str = r#"define i16 @sum(i16 %n) {
@@ -62,7 +63,8 @@ b4:
     assert_eq!(header.matches("phi i16").count(), 2, "{out}");
 }
 
-/// A volatile store keeps its cell in memory; the array a GEP reaches is promoted and its value folded.
+/// A volatile store keeps its cell in memory; the array a GEP reaches is
+/// promoted and its value folded.
 #[test]
 fn a_volatile_cell_stays_memory_and_an_array_the_gep_reaches_is_folded() {
     const TEXT: &str = r#"define i16 @f() {
@@ -83,8 +85,8 @@ b1:
     assert!(out.contains("ret i16 3"), "{out}");
 }
 
-/// A condition folded to a constant leaves a branch that goes one way, an unreached block and a chain of blocks that
-/// only jump: one block.
+/// A condition folded to a constant leaves a branch that goes one way, an
+/// unreached block and a chain of blocks that only jump: one block.
 #[test]
 fn a_constant_branch_and_the_chain_after_it_become_one_block() {
     const TEXT: &str = r#"define i16 @f(i16 %x) {
@@ -111,8 +113,9 @@ b5:
     assert!(!out.contains("b2:") && !out.contains("b3:"), "{out}");
 }
 
-/// T048 ran two more instructions per iteration once a loop's exit block was bypassed: whatever the pipeline does to
-/// the two loops, each n gets the answer it had.
+/// T048 ran two more instructions per iteration once a loop's exit block was
+/// bypassed: whatever the pipeline does to the two loops, each n gets the
+/// answer it had.
 #[test]
 fn a_loop_exit_before_phis_keeps_its_answers() {
     const TEXT: &str = r#"define i16 @f(i16 %n) {
@@ -149,8 +152,9 @@ b6:
     assert_eq!(results(&after, &inputs), results(&before, &inputs), "{}", printed(&after));
 }
 
-/// nbody ran 201 more instructions once an inner loop's preheader was bypassed (its counter's start moved to the outer
-/// header): the answer stays, and the counter-only loop is gone.
+/// nbody ran 201 more instructions once an inner loop's preheader was bypassed
+/// (its counter's start moved to the outer header): the answer stays, and the
+/// counter-only loop is gone.
 #[test]
 fn a_loop_preheader_is_not_moved_into_the_outer_loop() {
     const TEXT: &str = r#"define i16 @f(i16 %n, i1 %p) {
@@ -182,8 +186,9 @@ b4:
     assert!(!printed(&after).contains("phi"), "{}", printed(&after));
 }
 
-/// matmul8's inner loop loaded a view's dimension three times an iteration and checked `k < dim` twice: the check and
-/// the reloads go, a load after a store reads the stored value, one after a call that may write stays.
+/// matmul8's inner loop loaded a view's dimension three times an iteration and
+/// checked `k < dim` twice: the check and the reloads go, a load after a store
+/// reads the stored value, one after a call that may write stays.
 #[test]
 fn a_load_and_a_known_condition_are_reused_but_not_across_a_call_that_may_write() {
     const TEXT: &str = r#"declare void @panic()
@@ -226,8 +231,9 @@ b5:
     assert!(!out.contains("@panic()\n  unreachable"), "{out}");
 }
 
-/// matmul8 reloaded each view descriptor's shape and data pointer in its innermost loop: a load that may run anywhere,
-/// of memory the loop cannot write, leaves the loop; one through a plain pointer stays.
+/// matmul8 reloaded each view descriptor's shape and data pointer in its
+/// innermost loop: a load that may run anywhere, of memory the loop cannot
+/// write, leaves the loop; one through a plain pointer stays.
 #[test]
 fn an_invariant_load_leaves_a_loop_from_a_conditional_block() {
     const TEXT: &str = r#"define void @f(ptr noalias readonly dereferenceable(4) %v, ptr %w, i16 %n, ptr %out) {
@@ -263,7 +269,8 @@ b5:
     assert!(body.contains("load i16, ptr %w"), "{out}");
 }
 
-/// A QB view's shape load, which the loop's tagged stores cannot reach, leaves the loop.
+/// A QB view's shape load, which the loop's tagged stores cannot reach, leaves
+/// the loop.
 #[test]
 fn a_load_a_loops_stores_are_tagged_apart_from_leaves_it() {
     const TEXT: &str = r#"declare void @dim(ptr)
@@ -304,7 +311,8 @@ b4:
     assert!(entry.contains("load i16"), "{out}");
 }
 
-/// A static the loop's stores are tagged apart from is loaded once, before the loop.
+/// A static the loop's stores are tagged apart from is loaded once, before the
+/// loop.
 #[test]
 fn a_load_from_a_global_the_loop_does_not_write_leaves_it() {
     const TEXT: &str = r#"@d = global [4 x i8] zeroinitializer
@@ -369,7 +377,8 @@ b4:
     assert_eq!(out.matches("phi i16").count(), 1, "{out}");
 }
 
-/// A fill of a 8x8 array of longs: the loops are gone and each store has its constant offset.
+/// A fill of a 8x8 array of longs: the loops are gone and each store has its
+/// constant offset.
 #[test]
 fn an_address_stepped_by_its_stride_leaves_no_multiply_or_inner_counter_product() {
     const TEXT: &str = r#"define void @fill(ptr %0) {
@@ -491,7 +500,8 @@ b4:
     assert!(out.contains("b1:\n  ret i16 7\n}") && !out.contains("b2:") && !out.contains("phi"), "{out}");
 }
 
-/// `x+0`, `x*1`, `x|0`, `x^0`, `x-0`, `x<<0` and `x/1` are `x`. (llrm-mir's instcombine, #237)
+/// `x+0`, `x*1`, `x|0`, `x^0`, `x-0`, `x<<0` and `x/1` are `x`. (llrm-mir's
+/// instcombine, #237)
 #[test]
 fn identities_with_zero_one_and_all_ones_leave_the_operand() {
     const TEXT: &str = r#"define i16 @f(i16 %x) {
@@ -513,7 +523,8 @@ b1:
     );
 }
 
-/// `x % 1`, `x - x`, `x * 0` and the identities around them leave `x`. (llrm-mir's instcombine, #237)
+/// `x % 1`, `x - x`, `x * 0` and the identities around them leave `x`.
+/// (llrm-mir's instcombine, #237)
 #[test]
 fn a_remainder_by_one_a_difference_with_itself_and_a_product_with_zero_are_zero() {
     const TEXT: &str = r#"define i16 @f(i16 %x) {
@@ -534,7 +545,8 @@ b1:
     assert!(out.contains("ret i16 %x") && !out.contains("urem"), "{out}");
 }
 
-/// `x == x`, `x >=u 0` are true, `x <u 0` is false; `c != false` is `c`. (llrm-mir's instcombine, #237)
+/// `x == x`, `x >=u 0` are true, `x <u 0` is false; `c != false` is `c`.
+/// (llrm-mir's instcombine, #237)
 #[test]
 fn a_comparison_with_itself_or_with_the_extreme_is_decided() {
     const TEXT: &str = r#"define i16 @f(i16 %x, i1 %c) {
@@ -555,8 +567,8 @@ b1:
     assert!(out.contains("select i1 %c, i16 1, i16 3"), "{out}");
 }
 
-/// `(x - 5) * 8 + 3 + 4` is `x * 8 + -33` (the multiply by 8 is the back end's to shift). (llrm-mir's instcombine,
-/// #237)
+/// `(x - 5) * 8 + 3 + 4` is `x * 8 + -33` (the multiply by 8 is the back end's
+/// to shift). (llrm-mir's instcombine, #237)
 #[test]
 fn a_difference_with_a_constant_is_a_sum_and_the_constants_meet() {
     const TEXT: &str = r#"define i16 @f(i16 %x) {
@@ -575,7 +587,8 @@ b1:
     assert_eq!(out.matches("add").count(), 1, "{out}");
 }
 
-/// `icmp ne (zext x), 0` is `icmp ne x, 0` on the narrow type. (llrm-mir's instcombine, #237)
+/// `icmp ne (zext x), 0` is `icmp ne x, 0` on the narrow type. (llrm-mir's
+/// instcombine, #237)
 #[test]
 fn an_extension_keeps_whether_a_value_is_zero() {
     const TEXT: &str = r#"define i16 @f(i8 %x) {
@@ -595,8 +608,8 @@ b1:
     assert!(!out.contains("icmp ne i16") && !out.contains("icmp eq i16"), "{out}");
 }
 
-/// A zero extension of a zero extension, truncated back, and a sign extension truncated back, are the value.
-/// (llrm-mir's instcombine, #237)
+/// A zero extension of a zero extension, truncated back, and a sign extension
+/// truncated back, are the value. (llrm-mir's instcombine, #237)
 #[test]
 fn casts_that_undo_each_other_are_the_value() {
     const TEXT: &str = r#"define i8 @f(i8 %x) {
@@ -636,7 +649,8 @@ b4:
     assert!(!out.contains("phi") && out.contains("add i16 %x, 1"), "{out}");
 }
 
-/// A stack slot only ever written, and the stores into it, are gone. (llrm-mir's instcombine, #237)
+/// A stack slot only ever written, and the stores into it, are gone.
+/// (llrm-mir's instcombine, #237)
 #[test]
 fn a_slot_only_written_goes_with_its_stores() {
     const TEXT: &str = r#"define i16 @f(i16 %x) {
@@ -651,7 +665,8 @@ b1:
     assert!(!out.contains("alloca") && !out.contains("store"), "{out}");
 }
 
-/// Constants fold through arithmetic, a compare and zero and sign extensions of it. (llrm-mir's instcombine, #237)
+/// Constants fold through arithmetic, a compare and zero and sign extensions of
+/// it. (llrm-mir's instcombine, #237)
 #[test]
 fn constants_fold_through_compares_and_extensions() {
     const TEXT: &str = r#"define i16 @f() {
@@ -670,8 +685,9 @@ b1:
     assert!(out.contains("ret i16 20"), "{out}");
 }
 
-/// Nib spells a condition `icmp`, `sext i1` to i8, `icmp ne 0`, and scales an index by `mul 1`: one
-/// compare decides, and the scale and offsets meet (llrm-mir's instcombine, #237).
+/// Nib spells a condition `icmp`, `sext i1` to i8, `icmp ne 0`, and scales an
+/// index by `mul 1`: one compare decides, and the scale and offsets meet
+/// (llrm-mir's instcombine, #237).
 #[test]
 fn the_frontends_booleans_and_scales_come_apart() {
     const TEXT: &str = r#"define i16 @f(i16 %i, i16 %n) {
@@ -701,7 +717,8 @@ b3:
     assert!(out.contains("add i16") && out.contains(", 3"), "{out}");
 }
 
-/// A memset of a slot only written, and a store into it, go with it (llrm-mir's instcombine, #237).
+/// A memset of a slot only written, and a store into it, go with it (llrm-mir's
+/// instcombine, #237).
 #[test]
 fn a_memset_slot_nothing_reads_is_removed() {
     const TEXT: &str = r#"declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) memory(argmem: write)

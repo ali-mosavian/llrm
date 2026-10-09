@@ -1,4 +1,5 @@
-//! Bytes with the relocations laid in them, and DWARF's variable-length integers.
+//! Bytes with the relocations laid in them, and DWARF's variable-length
+//! integers.
 
 use llrm_object::Reloc;
 
@@ -101,7 +102,8 @@ impl Buf {
         self.u32(0);
     }
 
-    /// An address field of `width` bytes: `offset` into the section `symbol` is at `symbol_offset`.
+    /// An address field of `width` bytes: `offset` into the section `symbol` is
+    /// at `symbol_offset`.
     pub fn address(
         &mut self,
         width: usize,

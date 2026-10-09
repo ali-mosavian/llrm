@@ -227,8 +227,8 @@ fn far_bx() -> Addr {
     Addr { base: Register::BX, segment: Register::ES, ..Addr::new(Space::Far, 0) }
 }
 
-/// `found` is `expected`: the same instruction, its memory operands the same cells (`Semantics::same_meaning`), however
-/// the decoder spelled them.
+/// `found` is `expected`: the same instruction, its memory operands the same
+/// cells (`Semantics::same_meaning`), however the decoder spelled them.
 fn assert_modelled(
     found: Semantics,
     expected: Semantics,

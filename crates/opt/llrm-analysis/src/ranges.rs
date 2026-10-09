@@ -10,7 +10,8 @@
 //! only root whose offset is known to start at 0; the old far origin has
 //! no counterpart.
 //!
-//! Skipped, BC object corpora: `test_fpdeep_one_based_index_has_a_bounded_byte_offset`,
+//! Skipped, BC object corpora:
+//! `test_fpdeep_one_based_index_has_a_bounded_byte_offset`,
 //! `test_addrm_long_array_value_keeps_counter_bounds`,
 //! `test_rngarm_writes_its_counter_only_after_the_loop`.
 //! Skipped, `test_non_comparison_flags_do_not_establish_a_bound`: a branch
@@ -112,7 +113,8 @@ fn branch(
     }
 }
 
-/// Signed comparison facts on one CFG edge; `None` means that edge is impossible.
+/// Signed comparison facts on one CFG edge; `None` means that edge is
+/// impossible.
 pub fn on_edge(
     unit: &Unit,
     block: BlockId,
@@ -133,8 +135,9 @@ fn applied(
     result
 }
 
-/// What `on_edge` changes of `known`, and only that: `None` where the edge is impossible. A caller
-/// that holds `known` narrows it in place, without a copy of every value it knows per edge.
+/// What `on_edge` changes of `known`, and only that: `None` where the edge is
+/// impossible. A caller that holds `known` narrows it in place, without a copy
+/// of every value it knows per edge.
 fn edge_delta(
     unit: &Unit,
     block: BlockId,
@@ -171,8 +174,9 @@ fn narrowed(
     narrowed_delta(unit, condition, holds, known, facts).map(|delta| applied(known, delta))
 }
 
-/// What `narrowed` changes of `known`: the intervals it sets, none where it sets none; `None` where
-/// the condition cannot hold. Everything it reads is of `known` as it was.
+/// What `narrowed` changes of `known`: the intervals it sets, none where it
+/// sets none; `None` where the condition cannot hold. Everything it reads is of
+/// `known` as it was.
 fn narrowed_delta(
     unit: &Unit,
     condition: Operand,
@@ -264,10 +268,10 @@ fn narrowed_delta(
     Some(result)
 }
 
-/// What `value` lying in `interval` says of the operands of the instruction that made
-/// it, put in `result`; `None` where they cannot be. Only an instruction that, from
-/// `known`, computes an interval does so without wrapping, so only then do its
-/// operands' bounds follow from the result's.
+/// What `value` lying in `interval` says of the operands of the instruction
+/// that made it, put in `result`; `None` where they cannot be. Only an
+/// instruction that, from `known`, computes an interval does so without
+/// wrapping, so only then do its operands' bounds follow from the result's.
 fn _refine_through(
     unit: &Unit,
     value: ValueId,
@@ -302,7 +306,8 @@ fn _refine_through(
             if interval.high < BigInt::from(0_u8) {
                 return None;
             }
-            // The least square past `high`, floored by the scale, is `high + 1` scaled.
+            // The least square past `high`, floored by the scale, is `high + 1`
+            // scaled.
             let limit: BigInt = ((&interval.high + 1) << scale) - 1;
             let root = limit.sqrt();
             bounds.push((op.operands[0], -root.clone(), root));
@@ -461,8 +466,9 @@ fn singleton(
     Interval { low: number.clone(), high: number, width }
 }
 
-/// Whether `_computed` can answer for `inst` whatever is known: it declares a range, or is one of the operations that
-/// compute one. The rest answer None whatever their operands, and a loop's sweeps need not ask them again.
+/// Whether `_computed` can answer for `inst` whatever is known: it declares a
+/// range, or is one of the operations that compute one. The rest answer None
+/// whatever their operands, and a loop's sweeps need not ask them again.
 fn computes(
     unit: &Unit,
     inst: InstId,
@@ -518,7 +524,8 @@ pub fn _computed(
     };
     let operand = |one: Operand| _operand(unit, one, known, facts);
     if kind == Some(BinaryOp::And) {
-        // A non-negative mask bounds the result whatever the other operand holds.
+        // A non-negative mask bounds the result whatever the other operand
+        // holds.
         let high = op
             .operands
             .iter()
@@ -566,17 +573,18 @@ pub fn _computed(
     if fits(&low, &high, width) {
         return Some(Interval { low, high, width });
     }
-    // A sum, product or shift that does not wrap (`nsw`) of values never negative is never negative, and stays below
-    // the signed maximum whatever its operands' corners say: poison otherwise. Where it may be negative the corners
-    // decide, as before.
+    // A sum, product or shift that does not wrap (`nsw`) of values never
+    // negative is never negative, and stays below the signed maximum
+    // whatever its operands' corners say: poison otherwise. Where it may be
+    // negative the corners decide, as before.
     if op.flags.contains(llrm_mir::opcode::Flags::NSW) && low >= BigInt::from(0_u8) {
         return Some(Interval { low, high: (BigInt::from(1_u8) << (width - 1)) - 1u8, width });
     }
     None
 }
 
-/// The values `a * b` takes, before any wrap. `same` is that both are one value, a square:
-/// never negative, though its corners' products are.
+/// The values `a * b` takes, before any wrap. `same` is that both are one
+/// value, a square: never negative, though its corners' products are.
 pub fn product(
     a: &Interval,
     b: &Interval,
@@ -595,8 +603,8 @@ pub fn product(
     (corners.iter().min().expect("four products").clone(), corners.iter().max().expect("four products").clone())
 }
 
-/// `llvm.smul.fix` of two integers: the wide product floored by the scale, where it
-/// fits the width; one that wraps when stored has no interval.
+/// `llvm.smul.fix` of two integers: the wide product floored by the scale,
+/// where it fits the width; one that wraps when stored has no interval.
 fn _fixed_product(
     unit: &Unit,
     inst: InstId,
@@ -610,7 +618,8 @@ fn _fixed_product(
     let operand = |one: Operand| _operand(unit, one, known, facts).filter(|interval| interval.width == width);
     let (a, b) = (operand(operands[0])?, operand(operands[1])?);
     let (low, high) = product(&a, &b, operands[0] == operands[1]);
-    // `>>` on a BigInt floors, as the arithmetic shift of the wide product does.
+    // `>>` on a BigInt floors, as the arithmetic shift of the wide product
+    // does.
     let (low, high) = (low >> scale, high >> scale);
     let sign = BigInt::from(1_u8) << (width - 1);
     (-&sign <= low && high < sign).then_some(Interval { low, high, width })
@@ -658,9 +667,10 @@ pub type Intervals = llrm_support::hash::SparseIdMap<ValueId, Interval>;
 
 type Scope = Rc<Intervals>;
 
-/// `dominated_edges`' state at each block, as the solve left it: what the block's operations leave (`own`) and what
-/// holds below it once its assumes are taken (`below`), which is what its successors start from. A block that did not
-/// change shares its maps with the solve before.
+/// `dominated_edges`' state at each block, as the solve left it: what the
+/// block's operations leave (`own`) and what holds below it once its assumes
+/// are taken (`below`), which is what its successors start from. A block that
+/// did not change shares its maps with the solve before.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EdgeStates {
     order: Vec<i64>,
@@ -708,15 +718,18 @@ thread_local! {
     static SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many blocks this thread has worked the edges' facts of, for a test that a change reworks the blocks it reaches.
+/// How many blocks this thread has worked the edges' facts of, for a test that
+/// a change reworks the blocks it reaches.
 pub fn blocks_solved() -> usize {
     SOLVED.with(std::cell::Cell::get)
 }
 
-/// `dominated_edges_with`'s solve, over `unit`'s function: all of it, or, given the states of the function before and
-/// the blocks a change reached (`reached`), only the blocks that change can alter. A block is worked again when it
-/// was reached, when it follows a reached block along the one edge whose branch condition it reads, or when the
-/// state it starts from changed; where its own comes out as it was, what follows it is not asked.
+/// `dominated_edges_with`'s solve, over `unit`'s function: all of it, or, given
+/// the states of the function before and the blocks a change reached
+/// (`reached`), only the blocks that change can alter. A block is worked again
+/// when it was reached, when it follows a reached block along the one edge
+/// whose branch condition it reads, or when the state it starts from changed;
+/// where its own comes out as it was, what follows it is not asked.
 pub fn edges_solved(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
@@ -730,7 +743,8 @@ pub fn edges_solved(
     let predecessors = loops::predecessors(&graph);
     let immediate = unit.shape().dominance.immediate_dominators(function);
     let order = loops::reverse_postorder(&graph, cfg::id(entry));
-    // The blocks as they were: none to reuse where the order of blocks is not the same.
+    // The blocks as they were: none to reuse where the order of blocks is not
+    // the same.
     let before = before.filter(|(states, _)| states.order == order);
     let mut known: BTreeMap<i64, Scope> = BTreeMap::new();
     let mut own: BTreeMap<i64, Scope> = BTreeMap::new();
@@ -824,9 +838,11 @@ pub fn bounded(unit: &Unit) -> Result<Facts, String> {
     bounded_with(unit, &unit.registers())
 }
 
-/// `bounded`'s facts at each block without copying them: the manager's where the unit carries its `Bounded` (and works
-/// under the registers it was asked of), else worked out here. A caller that asks of the same body again and again asks
-/// the manager, whose result is kept and brought up to date, not a solve of its own.
+/// `bounded`'s facts at each block without copying them: the manager's where
+/// the unit carries its `Bounded` (and works under the registers it was asked
+/// of), else worked out here. A caller that asks of the same body again and
+/// again asks the manager, whose result is kept and brought up to date, not a
+/// solve of its own.
 pub fn bounds<'u>(unit: &Unit<'u>) -> Result<std::borrow::Cow<'u, Bounds>, String> {
     let registers = unit.registers();
     match (unit.bounds, unit.registers) {
@@ -855,8 +871,8 @@ thread_local! {
     static KNOWNS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// A name for a `known` a loop's blocks are worked from, so that what is kept of it is not compared with it block by
-/// block.
+/// A name for a `known` a loop's blocks are worked from, so that what is kept
+/// of it is not compared with it block by block.
 fn fresh_known() -> u64 {
     KNOWNS.with(|count| {
         count.set(count.get() + 1);
@@ -864,18 +880,22 @@ fn fresh_known() -> u64 {
     })
 }
 
-/// The edges inside a loop, one after another, each node the state `known` is narrowed to by the path of edges to it.
+/// The edges inside a loop, one after another, each node the state `known` is
+/// narrowed to by the path of edges to it.
 struct Prefix {
     state: Rc<Intervals>,
     next: HashMap<(usize, usize, i64), usize>,
-    /// The node of the prefix one edge shorter, and the values this edge changed of its state.
+    /// The node of the prefix one edge shorter, and the values this edge
+    /// changed of its state.
     parent: Option<usize>,
     delta: Vec<ValueId>,
-    /// `state` swept: found from the parent's, and the values this edge changed.
+    /// `state` swept: found from the parent's, and the values this edge
+    /// changed.
     settled: Option<Rc<Intervals>>,
 }
 
-/// The states after every prefix of the edge chains met so far, for the `known` they were worked from.
+/// The states after every prefix of the edge chains met so far, for the `known`
+/// they were worked from.
 #[derive(Default)]
 struct Prefixes {
     /// Which `known` they were worked from (`fresh_known`).
@@ -884,23 +904,28 @@ struct Prefixes {
     nodes: Vec<Prefix>,
 }
 
-/// `bounded`'s facts at each block, as the solve left them: those the counted loops give (`within`), and those with
-/// the edges' facts where a block is in none (`blocks`). A block that did not change shares its map with the solve
+/// `bounded`'s facts at each block, as the solve left them: those the counted
+/// loops give (`within`), and those with the edges' facts where a block is in
+/// none (`blocks`). A block that did not change shares its map with the solve
 /// before.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Bounds {
     headers: Vec<i64>,
-    /// The edges' facts it was worked out under: a loop reads them where it starts from.
+    /// The edges' facts it was worked out under: a loop reads them where it
+    /// starts from.
     edges: IndexMap<i64, Scope>,
     within: IndexMap<i64, Scope>,
     blocks: IndexMap<i64, Scope>,
-    /// The blocks two loops' facts contradict each other at: none executes them.
+    /// The blocks two loops' facts contradict each other at: none executes
+    /// them.
     dead: BTreeSet<i64>,
 }
 
 impl Bounds {
-    /// Whether the facts of the loops holding `at` contradict each other there: the block is unreachable, and a call in
-    /// it passes nothing to its callee (`parameter_ranges` rounds, which assume a range before they prove it).
+    /// Whether the facts of the loops holding `at` contradict each other there:
+    /// the block is unreachable, and a call in it passes nothing to its
+    /// callee (`parameter_ranges` rounds, which assume a range before they
+    /// prove it).
     pub fn unreachable(
         &self,
         at: i64,
@@ -922,11 +947,14 @@ impl Bounds {
     }
 }
 
-/// The headers of the loops whose bounds a change can alter: the loops holding a block it reached, the loops under a
-/// branch (or an assume, or any call) whose condition it reached, the loops that start from a block whose edges' facts
-/// changed (those `bounds` was worked under against `held`, now), and then every loop that starts from what one of
-/// those leaves: the block its header's dominator is in, or a block that enters it. (A loop around a dirty one is
-/// dirty by the first two: they name its blocks, and its header dominates theirs.)
+/// The headers of the loops whose bounds a change can alter: the loops holding
+/// a block it reached, the loops under a branch (or an assume, or any call)
+/// whose condition it reached, the loops that start from a block whose edges'
+/// facts changed (those `bounds` was worked under against `held`, now), and
+/// then every loop that starts from what one of those leaves: the block its
+/// header's dominator is in, or a block that enters it. (A loop around a dirty
+/// one is dirty by the first two: they name its blocks, and its header
+/// dominates theirs.)
 pub fn loops_reached(
     function: &llrm_mir::module::Function,
     shape: &cfg::Shape,
@@ -941,7 +969,8 @@ pub fn loops_reached(
     let graph = cfg::graph(function);
     let entering = loops::predecessors(&graph);
     let now = held.shared(function);
-    // Where each loop starts from: the block its header's dominator is, and the blocks that enter it.
+    // Where each loop starts from: the block its header's dominator is, and the
+    // blocks that enter it.
     let starts = |one: &loops::Loop| -> Vec<i64> {
         shape
             .dominance
@@ -995,13 +1024,15 @@ thread_local! {
     static LOOPS_SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many loops this thread has worked the bounds of, for a test that a change reworks the loops it reaches.
+/// How many loops this thread has worked the bounds of, for a test that a
+/// change reworks the loops it reaches.
 pub fn loops_solved() -> usize {
     LOOPS_SOLVED.with(std::cell::Cell::get)
 }
 
-/// `bounded_with`'s solve: all of it, or, given the bounds of the function before and the headers of the loops a change
-/// can alter (`dirty`), only those loops; the blocks of the rest keep what they had.
+/// `bounded_with`'s solve: all of it, or, given the bounds of the function
+/// before and the headers of the loops a change can alter (`dirty`), only those
+/// loops; the blocks of the rest keep what they had.
 pub fn bounded_solved(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
@@ -1029,11 +1060,13 @@ pub fn bounded_solved(
         _ => dominated_edges_with(unit, facts)?.into_iter().map(|(at, scope)| (at, Rc::new(scope))).collect(),
     };
     let headers: Vec<i64> = shape.loops.iter().map(|one| one.header).collect();
-    // An enclosing loop's facts are in `result` before an inner loop reads them.
+    // An enclosing loop's facts are in `result` before an inner loop reads
+    // them.
     let mut nest: Vec<_> = shape.loops.iter().collect();
     nest.sort_by_key(|loop_| std::cmp::Reverse(loop_.body.len()));
     let mut result: IndexMap<i64, Scope> = match prior.filter(|(held, _)| held.headers == headers) {
-        // The blocks of a loop to be worked again start from nothing: what its loops narrow is put in anew.
+        // The blocks of a loop to be worked again start from nothing: what its
+        // loops narrow is put in anew.
         Some((held, dirty)) => {
             let redone: BTreeSet<i64> = nest
                 .iter()
@@ -1092,9 +1125,10 @@ pub fn bounded_solved(
                 }
             }
         }
-        // A counter that steps by a constant from a known start and never wraps (its update is `nsw`) does not go back
-        // past its start, however many trips: SCEV's range of `{start,+,step}<nsw>`, and enough for what asks a
-        // counter's sign.
+        // A counter that steps by a constant from a known start and never wraps
+        // (its update is `nsw`) does not go back past its start,
+        // however many trips: SCEV's range of `{start,+,step}<nsw>`, and enough
+        // for what asks a counter's sign.
         for counter in induction::basics(unit, &loop_).values() {
             if known.contains_key(&counter.value) {
                 continue;
@@ -1181,8 +1215,8 @@ pub fn bounded_solved(
                 }
             }
         };
-        // Each operation of the loop in `scoped`'s terms, once: it narrows its result by what its operands give, until
-        // none changes.
+        // Each operation of the loop in `scoped`'s terms, once: it narrows its
+        // result by what its operands give, until none changes.
         let apply = |scoped: &mut Intervals, inst: InstId| -> Option<(ValueId, Option<Interval>)> {
             #[cfg(test)]
             OPS_APPLIED.with(|count| count.set(count.get() + 1));
@@ -1234,7 +1268,8 @@ pub fn bounded_solved(
                 touching
             })
         };
-        // The operations `changed` values reach, and what those reach in turn, worked again in `scoped`.
+        // The operations `changed` values reach, and what those reach in turn,
+        // worked again in `scoped`.
         let propagate = |scoped: &mut Intervals, changed: &mut dyn Iterator<Item = ValueId>| {
             let touching = touching_of();
             let mut queue: BTreeSet<usize> = changed
@@ -1248,16 +1283,21 @@ pub fn bounded_solved(
                 }
             }
         };
-        // `known` swept: what holds of the loop before any block's edges narrow it. Every block asks of the same one.
+        // `known` swept: what holds of the loop before any block's edges narrow
+        // it. Every block asks of the same one.
         let swept: RefCell<Option<(u64, Rc<Intervals>)>> = RefCell::new(None);
-        // `scoped` (`known` narrowed by a block's edges) swept, found from `known` swept: a sweep leaves an operation
-        // whose operands and result are as they were in `known` as it found it there, so only those the
-        // narrowing reaches, and what they reach in turn, are worked again from `known swept` with the narrowed
-        // values put over it.
+        // `scoped` (`known` narrowed by a block's edges) swept, found from
+        // `known` swept: a sweep leaves an operation whose operands and
+        // result are as they were in `known` as it found it there, so only
+        // those the narrowing reaches, and what they reach in turn, are
+        // worked again from `known swept` with the narrowed values put
+        // over it.
         let settle = |mut scoped: Intervals, known: &Intervals, id: u64| -> Intervals {
-            // The cheaper of the two by the work each counts: a sweep evaluates every operation and then once more to
-            // see nothing change (2 x operations); settling finds what the block's edges narrowed and puts
-            // the swept facts over the rest (one pass over `scoped`'s facts), then evaluates only what that
+            // The cheaper of the two by the work each counts: a sweep evaluates
+            // every operation and then once more to see nothing
+            // change (2 x operations); settling finds what the block's edges
+            // narrowed and puts the swept facts over the rest (one
+            // pass over `scoped`'s facts), then evaluates only what that
             // reaches.
             if 2 * operations.len() <= scoped.len() {
                 return sweep(scoped);
@@ -1285,7 +1325,8 @@ pub fn bounded_solved(
             scoped
         };
         let prefixes: RefCell<Prefixes> = RefCell::new(Prefixes::default());
-        // How many blocks of the loop each block dominates (itself too): the blocks a prefix ending at it is shared by.
+        // How many blocks of the loop each block dominates (itself too): the
+        // blocks a prefix ending at it is shared by.
         let led = std::cell::OnceCell::<HashMap<i64, usize>>::new();
         let led_to = |block: i64| -> usize {
             led.get_or_init(|| {
@@ -1303,11 +1344,13 @@ pub fn bounded_solved(
             .copied()
             .unwrap_or(0)
         };
-        // Everything the branch edges above `at` and the assumes narrow `known` to there.
+        // Everything the branch edges above `at` and the assumes narrow `known`
+        // to there.
         let scope_at = |at: i64, known: &Intervals, id: u64, every_block: bool| -> Result<Rc<Intervals>, String> {
             let mut scoped = known.clone();
-            // The edges into a block with no other way in, from a block that dominates `at`: those of
-            // the dominator chain of `at`, in the order of the blocks' layout, each narrowing in place.
+            // The edges into a block with no other way in, from a block that
+            // dominates `at`: those of the dominator chain of `at`,
+            // in the order of the blocks' layout, each narrowing in place.
             let mut chain = Vec::new();
             let mut above = Some(at);
             while let Some(one) = above {
@@ -1323,8 +1366,10 @@ pub fn bounded_solved(
                 above = shape.dominance.immediate(one);
             }
             chain.sort_unstable();
-            // The edges from outside the loop read only values made outside it, which `known` holds as it did the
-            // last time: what they narrow is kept, and only the edges inside the loop are worked out again.
+            // The edges from outside the loop read only values made outside it,
+            // which `known` holds as it did the last time: what
+            // they narrow is kept, and only the edges inside the loop are
+            // worked out again.
             let outer = chain.iter().take_while(|(from, _, _)| !loop_.body.contains(&graph[*from].at)).count();
             let separable = chain[outer..].iter().all(|(from, _, _)| loop_.body.contains(&graph[*from].at));
             let narrow_by =
@@ -1338,13 +1383,16 @@ pub fn bounded_solved(
                     }
                     Ok(())
                 };
-            // A prefix of the edges inside the loop is kept where the blocks it leads to are more than the passes over
-            // the state it costs to keep: a copy of the parent's, the edge, a diff against it for what the
-            // edge changed, and a copy of the parent's swept state to put that over. Fewer, and applying
+            // A prefix of the edges inside the loop is kept where the blocks it
+            // leads to are more than the passes over the state it
+            // costs to keep: a copy of the parent's, the edge, a diff against
+            // it for what the edge changed, and a copy of the
+            // parent's swept state to put that over. Fewer, and applying
             // the edges one after another is the cheaper.
             const TRIE_PASSES: usize = 4;
-            // Only a `known` every block of the loop is asked of in turn has prefixes that blocks share: the few
-            // latches a round of boxes asks of would pay for a trie and use none of it.
+            // Only a `known` every block of the loop is asked of in turn has
+            // prefixes that blocks share: the few latches a round
+            // of boxes asks of would pay for a trie and use none of it.
             if separable && every_block {
                 let mut held = prefixes.borrow_mut();
                 if held.known != id {
@@ -1400,9 +1448,11 @@ pub fn bounded_solved(
                 scoped = (*held.nodes[node].state).clone();
                 let rest = &chain[outer + kept..];
                 narrow_by(rest, &mut scoped)?;
-                // A block no assume narrows, all of whose edges are kept, is settled from its parent prefix's, with the
-                // one edge's values put over it: sweeping the narrowed state is that state's fixpoint,
-                // and the fixpoint of a state between this one and its fixpoint is the same.
+                // A block no assume narrows, all of whose edges are kept, is
+                // settled from its parent prefix's, with the
+                // one edge's values put over it: sweeping the narrowed state is
+                // that state's fixpoint, and the fixpoint of a
+                // state between this one and its fixpoint is the same.
                 if rest.is_empty()
                     && kept > 0
                     && 2 * operations.len() > scoped.len()
@@ -1523,7 +1573,8 @@ thread_local! {
     static OPS_APPLIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has worked an operation of a loop out, for a test that a block does not sweep them all.
+/// How many times this thread has worked an operation of a loop out, for a test
+/// that a block does not sweep them all.
 #[cfg(test)]
 pub(crate) fn operations_applied() -> usize {
     OPS_APPLIED.with(std::cell::Cell::get)
@@ -1534,8 +1585,8 @@ thread_local! {
     static EDGE_DELTAS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many edges this thread has narrowed `known` by, for a test that a loop does not work out again the edges above
-/// it.
+/// How many edges this thread has narrowed `known` by, for a test that a loop
+/// does not work out again the edges above it.
 #[cfg(test)]
 pub(crate) fn edge_deltas() -> usize {
     EDGE_DELTAS.with(std::cell::Cell::get)
@@ -1546,11 +1597,12 @@ fn check_scopes() -> bool {
     *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_SCOPES"))
 }
 
-/// Header phis, made by no counted proof, that every entry and every trip round the
-/// loop keeps inside one box `[-2^k, 2^k)`: a value in the box at the header is in it
-/// again at each latch, from the facts the edges and assumes in the loop give, and it
-/// starts there. The box is grown by powers of two, the phis assumed together, until
-/// the latches stay in it; a phi any latch gives no interval for is dropped.
+/// Header phis, made by no counted proof, that every entry and every trip round
+/// the loop keeps inside one box `[-2^k, 2^k)`: a value in the box at the
+/// header is in it again at each latch, from the facts the edges and assumes in
+/// the loop give, and it starts there. The box is grown by powers of two, the
+/// phis assumed together, until the latches stay in it; a phi any latch gives
+/// no interval for is dropped.
 fn inductive_boxes(
     unit: &Unit,
     loop_: &loops::Loop,
@@ -1659,7 +1711,8 @@ fn inductive_boxes(
     Ok(IndexMap::default())
 }
 
-/// The least box `[-2^k, 2^k)` holding `interval`, none where that is the whole width.
+/// The least box `[-2^k, 2^k)` holding `interval`, none where that is the whole
+/// width.
 fn power_box(
     interval: &Interval,
     width: u32,
@@ -1670,9 +1723,10 @@ fn power_box(
         .map(|limit| Interval { low: -limit.clone(), high: limit - 1, width })
 }
 
-/// `interval` for `value` in `known`, met with what it already held at that width; whether the two have nothing in
-/// common, which no execution reaching the block can show (the block is unreachable under the facts that gave them),
-/// and `known` keeps the first.
+/// `interval` for `value` in `known`, met with what it already held at that
+/// width; whether the two have nothing in common, which no execution reaching
+/// the block can show (the block is unreachable under the facts that gave
+/// them), and `known` keeps the first.
 fn narrow(
     known: &mut Intervals,
     value: ValueId,
@@ -1681,7 +1735,8 @@ fn narrow(
     narrow_to(known, value, &interval)
 }
 
-/// `narrow`, of an interval kept by its owner: an end is copied only where it is the tighter.
+/// `narrow`, of an interval kept by its owner: an end is copied only where it
+/// is the tighter.
 fn narrow_to(
     known: &mut Intervals,
     value: ValueId,
@@ -1692,8 +1747,8 @@ fn narrow_to(
             known.insert(value, interval.clone());
         }
         Some(previous) if previous.width == interval.width => {
-            // Compared in place: most asks give what is already known, and a copy of each end of it was most of the
-            // cost.
+            // Compared in place: most asks give what is already known, and a
+            // copy of each end of it was most of the cost.
             let low_wins = interval.low > previous.low;
             let high_wins = interval.high < previous.high;
             let (low, high) = (
@@ -1748,7 +1803,8 @@ pub fn exact_offsets(unit: &Unit) -> Result<BTreeSet<ValueId>, String> {
     exact_offsets_given(unit, &scoped(unit)?)
 }
 
-/// `exact_offsets`, given the `scoped` facts of the unit: a caller that needs them too solves once.
+/// `exact_offsets`, given the `scoped` facts of the unit: a caller that needs
+/// them too solves once.
 pub fn exact_offsets_given(
     unit: &Unit,
     scoped: &Facts,

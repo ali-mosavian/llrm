@@ -5,14 +5,17 @@
 //! its edge, where that speculates nothing.
 //!
 //! What changed with the IR:
-//! - A provider is a load or a store, what it holds a value or a constant, of the load's type; the old width check is
-//!   the type.
-//! - A missing load goes on either edge of a conditional branch. The old MIR could split only the explicit (taken) one.
-//! - The join's prefix may hold what `llrm_mir::memory::only_value` allows, loads aside, where the old one allowed
-//!   moves. Division is C's, so the old guard against a trapping one has no MIR meaning.
-//! - An address is translated on an edge when the load's pointer is a phi of the join, as when the old pointer
-//!   reference's base was.
-//! - Dropped: stack slots, x87 operations, `merges`, and the `symbol`, `source_backed` and `raised` marks.
+//! - A provider is a load or a store, what it holds a value or a constant, of
+//!   the load's type; the old width check is the type.
+//! - A missing load goes on either edge of a conditional branch. The old MIR
+//!   could split only the explicit (taken) one.
+//! - The join's prefix may hold what `llrm_mir::memory::only_value` allows,
+//!   loads aside, where the old one allowed moves. Division is C's, so the old
+//!   guard against a trapping one has no MIR meaning.
+//! - An address is translated on an edge when the load's pointer is a phi of
+//!   the join, as when the old pointer reference's base was.
+//! - Dropped: stack slots, x87 operations, `merges`, and the `symbol`,
+//!   `source_backed` and `raised` marks.
 //!
 //! A call's footprint is its `CallEffects`: without `Summaries` required,
 //! an unknown callee's. An address translated onto an edge carries
@@ -272,7 +275,8 @@ fn planned(
                                 && memory.available_on_edge(*source, load, parent, &reference, Some(&translated))
                         },
                     );
-                // The deepest source, the latest in its block; the first of equals.
+                // The deepest source, the latest in its block; the first of
+                // equals.
                 let best = candidates.fold(None::<&(InstId, MemRef, Operand)>, |best, one| match best {
                     Some(best)
                         if (shape.depth[&places[&one.0].0], places[&one.0].1)

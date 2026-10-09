@@ -1,7 +1,9 @@
-//! `std::env::var_os` takes the environment lock and scans the environment on every call: the `LLRM_CHECK_*` switches
-//! asked once for each instruction's liveness effect were 2% of a compile of rectwo. A switch is asked through
-//! `llrm_support::env_set`, a lookup in a snapshot. (`llrm-mir` depends on nothing, so its switches are asked where
-//! they are cold, and are not scanned.)
+//! `std::env::var_os` takes the environment lock and scans the environment on
+//! every call: the `LLRM_CHECK_*` switches asked once for each instruction's
+//! liveness effect were 2% of a compile of rectwo. A switch is asked through
+//! `llrm_support::env_set`, a lookup in a snapshot. (`llrm-mir` depends on
+//! nothing, so its switches are asked where they are cold, and are not
+//! scanned.)
 
 fn sources(
     dir: &std::path::Path,

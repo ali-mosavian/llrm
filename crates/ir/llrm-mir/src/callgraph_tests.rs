@@ -59,8 +59,8 @@ fn edges(list: &[(u32, u32)]) -> CallGraph<u32> {
     CallGraph::from_edges(callees)
 }
 
-/// One answer to "is it in a cycle": agrees with a walk from each node to itself,
-/// on a self-call, a cycle, a diamond and cycles that touch.
+/// One answer to "is it in a cycle": agrees with a walk from each node to
+/// itself, on a self-call, a cycle, a diamond and cycles that touch.
 #[test]
 fn test_recursive_is_the_components_answer_and_agrees_with_walking() {
     let graphs: [&[(u32, u32)]; 5] = [
@@ -80,9 +80,9 @@ fn test_recursive_is_the_components_answer_and_agrees_with_walking() {
     assert!(ring.together(0, 2) && !ring.together(0, 3) && ring.recursive(3));
 }
 
-/// A function a call's `!callees` lists may be entered by an indirect call, so its address is
-/// taken though every direct call of it names it as a callee: `@leaf` is called by `@direct` and
-/// listed, `@listed` is neither.
+/// A function a call's `!callees` lists may be entered by an indirect call, so
+/// its address is taken though every direct call of it names it as a callee:
+/// `@leaf` is called by `@direct` and listed, `@listed` is neither.
 #[test]
 fn a_function_a_callees_list_names_has_its_address_taken() {
     let module = parse::module(CALLS).expect("parses");
@@ -91,8 +91,9 @@ fn a_function_a_callees_list_names_has_its_address_taken() {
     assert!(!named.contains(&id(&module, "listed")) && !named.contains(&id(&module, "unlisted")));
 }
 
-/// Only an internal function never named but as a callee is reached by direct calls alone: an
-/// external one is called from other modules, an addressed one through its pointer.
+/// Only an internal function never named but as a callee is reached by direct
+/// calls alone: an external one is called from other modules, an addressed one
+/// through its pointer.
 #[test]
 fn direct_only_is_internal_and_never_addressed() {
     let module = parse::module(

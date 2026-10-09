@@ -106,7 +106,8 @@ impl LoopInfo {
     }
 }
 
-/// Whether `one` has an edge out: a loop with none never ends, whatever marks it.
+/// Whether `one` has an edge out: a loop with none never ends, whatever marks
+/// it.
 pub fn exits(
     function: &Function,
     one: &Loop,
