@@ -133,6 +133,7 @@ def _compile_c(source: Path, obj: Path, include: Path) -> None:
             str(dosbatch.BIN / "llrm-c"),
             str(source),
             dosbatch.m_flag(dosbatch.REAL_MODE),
+            "-mabi=regparm3",
             "-O2",
             "-I",
             str(include),
@@ -142,9 +143,17 @@ def _compile_c(source: Path, obj: Path, include: Path) -> None:
     )
 
 
+def remove_existing_archive(work: Path) -> None:
+    """Make LIB construct the archive rather than retaining stale modules."""
+    existing = work / ARCHIVE_NAME
+    if existing.exists():
+        existing.unlink()
+
+
 def archive(objects: list[Path], output: Path, work: Path) -> None:
     """Use QB45's librarian, not a host archive writer, for a LINK-compatible OMF library."""
     work.mkdir(parents=True, exist_ok=True)
+    remove_existing_archive(work)
     copied = []
     for at, object_ in enumerate(objects):
         target = work / f"R{at:03d}.OBJ"

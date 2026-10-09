@@ -1,0 +1,111 @@
+/* QB dynamic strings: stable four-byte descriptors, movable near payloads. */
+
+typedef unsigned char byte;
+typedef unsigned short word;
+
+typedef struct {
+    word length;
+    word data;
+} String;
+
+typedef struct {
+    word owner;
+    word length;
+} Allocation;
+
+#define HEAP_BYTES 8192
+
+static byte heap[HEAP_BYTES];
+static word heapUsed;
+
+static word addressOf(const void *pointer) {
+    return (word)pointer;
+}
+
+static String *descriptor(word address) {
+    return (String *)address;
+}
+
+static void copyBytes(byte *destination, const byte *source, word length) {
+    while (length != 0) {
+        *destination++ = *source++;
+        --length;
+    }
+}
+
+static void compact(void) {
+    byte *read = heap;
+    byte *write = heap;
+    byte *end = heap + heapUsed;
+
+    while (read != end) {
+        Allocation *old = (Allocation *)read;
+        word bytes = old->length;
+        byte *payload = read + sizeof(Allocation);
+        String *owner = descriptor(old->owner);
+
+        if (owner->data == addressOf(payload)) {
+            Allocation *next = (Allocation *)write;
+            byte *nextPayload = write + sizeof(Allocation);
+            if (write != read) {
+                copyBytes(nextPayload, payload, bytes);
+            }
+            next->owner = old->owner;
+            next->length = bytes;
+            owner->data = addressOf(nextPayload);
+            write = nextPayload + bytes;
+        }
+        read = payload + bytes;
+    }
+    heapUsed = (word)(write - heap);
+}
+
+static byte *allocate(word owner, word length) {
+    word header = sizeof(Allocation);
+    Allocation *allocation;
+    byte *payload;
+
+    compact();
+    if (length > HEAP_BYTES - header || heapUsed > HEAP_BYTES - header - length) {
+        return (byte *)0;
+    }
+
+    allocation = (Allocation *)(heap + heapUsed);
+    payload = (byte *)(allocation + 1);
+    allocation->owner = owner;
+    allocation->length = length;
+    heapUsed += header + length;
+    return payload;
+}
+
+void qb_string_delete(word destinationAddress) {
+    String *destination = descriptor(destinationAddress);
+    destination->length = 0;
+    destination->data = 0;
+}
+
+void qb_string_assign(word sourceAddress, word destinationAddress) {
+    String *source = descriptor(sourceAddress);
+    String *destination = descriptor(destinationAddress);
+    word length;
+    byte *payload;
+
+    if (source == destination) {
+        return;
+    }
+
+    length = source->length;
+    qb_string_delete(destinationAddress);
+    if (length == 0) {
+        return;
+    }
+
+    payload = allocate(destinationAddress, length);
+    if (payload == (byte *)0) {
+        return;
+    }
+
+    copyBytes(payload, (const byte *)source->data, length);
+    destination->length = length;
+    destination->data = addressOf(payload);
+}

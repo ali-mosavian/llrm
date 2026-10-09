@@ -1,10 +1,15 @@
 [portable]
-sources = []
+sources = ["string.c"]
 
-exports = ["B$CEND", "B$CENP", "B$LTRM", "B$PESD", "B$STI4"]
+exports = ["B$CEND", "B$CENP", "B$ENRA", "B$EXSA", "B$LTRM", "B$PESD", "B$SASS", "B$STDL", "B$STI4"]
 
 [platform]
-sources = ["platform/qb/dos/m16/start.asm", "platform/qb/dos/m16/text.asm"]
+sources = [
+  "platform/qb/dos/m16/start.asm",
+  "platform/qb/dos/m16/frame.asm",
+  "platform/qb/dos/m16/string_abi.asm",
+  "platform/qb/dos/m16/text.asm",
+]
 
 [shared]
 sources = ["runtime/shared/dos/m16/os.asm"]

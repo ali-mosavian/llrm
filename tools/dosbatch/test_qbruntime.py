@@ -33,6 +33,17 @@ class OutputTests(unittest.TestCase):
         self.assertEqual(qbruntime.first_byte_difference(b"A", b"A "), "byte 2: want <end> got 32")
 
 
+class ArchiveTests(unittest.TestCase):
+    def test_archive_rebuild_removes_the_old_library_first(self):
+        """LIB ignored replacement members, so a changed runtime still linked the old archive."""
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            stale = work / qbruntime.ARCHIVE_NAME
+            stale.write_bytes(b"old archive")
+            qbruntime.remove_existing_archive(work)
+            self.assertFalse(stale.exists())
+
+
 class InventoryTests(unittest.TestCase):
     def test_milestone_one_inventory_names_the_25_basic_benchmarks_once(self):
         """A glob omitted nbody_fixed, so the claimed milestone inventory had 24 links."""
@@ -72,6 +83,23 @@ class RuntimeFibTests(unittest.TestCase):
             self.assertIsNone(error)
             archive, _ = qbruntime.build(work / "archive")
             result = qbruntime.differential(object_, archive, work / "differential", "fib")
+        self.assertEqual(result.reference.status, "ok")
+        self.assertEqual(result.candidate.status, "ok")
+        self.assertEqual(result.difference, "")
+
+
+@unittest.skipUnless(qbruntime.dosbatch.QB45.is_dir(), "QB45_DIR is unavailable")
+class RuntimeCrcTests(unittest.TestCase):
+    def test_crc_matches_bcom45_byte_for_byte(self):
+        """Stack arguments to regparm3 produced -435612498; cleanup then lost the far return."""
+        source = next(source for source in qbruntime.milestone_sources() if source.stem == "crc")
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            object_ = work / "crc.obj"
+            error = run_tests.compile_one(run_tests.Program(source, ["-O2"], None, "qb45"), object_)
+            self.assertIsNone(error)
+            archive, _ = qbruntime.build(work / "archive")
+            result = qbruntime.differential(object_, archive, work / "differential", "crc")
         self.assertEqual(result.reference.status, "ok")
         self.assertEqual(result.candidate.status, "ok")
         self.assertEqual(result.difference, "")
