@@ -150,3 +150,23 @@ fn test_g_matches_python_format() {
     assert_eq!(_g(0.8), "0.8");
     assert_eq!(_g(1234567.0), "1.23457e+06");
 }
+
+/// `lea esi, [ebx+ebx*2]` (a multiply by 3) has two registers and no cell: the encoder named no form for it and priced it as
+/// nothing, so a function with one could not be priced in bytes and its routes compared as unpriced (nbody_fixed -Os).
+#[test]
+fn test_a_lea_of_a_register_and_a_scaled_copy_of_it_has_a_byte_price() {
+    let reg = |register| ir::Loc::Reg(ir::Reg { register, width: 4 });
+    let cell = ir::Mem {
+        addr: None,
+        through: Register::EBX,
+        index_through: Register::EBX,
+        index: Some(ir::Held { value: 1, width: 4 }),
+        base: Some(ir::Held { value: 1, width: 4 }),
+        scale: 2,
+        width: 4,
+        ..ir::Mem::new(None, 0)
+    };
+    let what = ir::Semantics { name: Some("lea".to_owned()), dests: vec![reg(Register::ESI)], sources: vec![ir::Loc::Mem(cell)], ..ir::Semantics::new(ir::Operation::Address) };
+    let code = crate::backend::select::priced_in(32, &what, 0, None, false, false, None).expect("a price");
+    assert_eq!(code.code, [0x8d, 0x34, 0x5b]);
+}

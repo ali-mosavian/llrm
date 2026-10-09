@@ -15,7 +15,7 @@ use iced_x86::Register;
 use crate::support::hash::IndexMap;
 
 use crate::analysis::loops;
-use crate::backend::peephole::{Lane, Lanes, _lanes, _register_effects, id};
+use crate::backend::peephole::{Lane, Lanes, _lanes, _register_effects, _register_effects_of_what, id};
 use crate::backend::{select, target};
 use crate::model::ir::{self, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
@@ -292,6 +292,10 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
         // the same lanes. `put` makes the semantics that reads `replacement` there.
         let substitute = |changed: &Semantics, register: Register, width: i64, put: &dyn Fn(Register) -> Semantics| -> Option<Semantics> {
             let source_lanes: Vec<Lane> = _lanes(register).into_iter().collect();
+            // No lane of it is the copy of another: its own register is the only candidate, and that is none.
+            if !source_lanes.iter().any(|lane| mapping.contains_key(lane)) {
+                return None;
+            }
             let candidate_lanes: Vec<Lane> = source_lanes.iter().map(|lane| mapping.get(lane).copied().unwrap_or(*lane)).collect();
             let mut sorted_lanes = candidate_lanes.clone();
             sorted_lanes.sort();
@@ -302,13 +306,13 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
             if !source_lanes.iter().zip(&candidate_lanes).all(|(left, right)| equal(facts, *left, *right)) {
                 return None;
             }
-            let before_effects = _register_effects(body.bits, &Insn { what: Some(changed.clone()), ..(**one).clone() }, true, false)?;
+            let before_effects = _register_effects_of_what(body.bits, changed, true, false)?;
             if candidate_lanes.iter().any(|lane| before_effects.1.contains(lane)) {
                 return None;
             }
             let proposed = put(candidate);
             select::priced_in(body.bits, &proposed, 0, None, false, false, None)?;
-            let after_effects = _register_effects(body.bits, &Insn { what: Some(proposed.clone()), ..(**one).clone() }, true, false)?;
+            let after_effects = _register_effects_of_what(body.bits, &proposed, true, false)?;
             let expected_reads: Lanes =
                 before_effects.0.iter().filter(|lane| !source_lanes.contains(lane)).copied().chain(candidate_lanes.iter().copied()).collect();
             (after_effects.1 == before_effects.1 && after_effects.0 == expected_reads).then_some(proposed)

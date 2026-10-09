@@ -915,6 +915,7 @@ fn _allocated(
     let mut fixed: IndexMap<u32, Register> = pinned.cloned().unwrap_or_default();
     // Values a split made or left behind, never split again: LLVM's `RS_Split2` and `RS_Spill`.
     let mut pieces: BTreeSet<u32> = BTreeSet::new();
+    let mut splits_made = 0_usize;
     let mut placing: Option<(spillplacement::Bundles, LiveRows)> = None;
     let no_preference = IndexMap::default();
     let preferred = preferred.unwrap_or(&no_preference);
@@ -1123,6 +1124,7 @@ fn _allocated(
                 // The rest may only take a free register or spill.
                 stage.insert(value, Stage::Spill);
                 made.push(value);
+                splits_made += 1;
                 rewritten = Some(made);
             }
         }
@@ -1271,7 +1273,23 @@ fn _allocated(
     _recolored_hints(&mut r#where, &mut union, &settled, |value| {
         fixed.contains_key(&value) || protected.contains(&value) || preferred.contains_key(&value)
     });
+    LAST_STATS.with(|stats| stats.set((splits_made, pieces.len(), pieces.intersection(&spilled).count(), spilled.len())));
     Ok((Assignment { r#where, spilled: if rewrite.is_some() { BTreeSet::new() } else { spilled.clone() }, cost, optimal: false, why: "greedy with eviction".to_owned() }, body, spilled))
+}
+
+thread_local! {
+    /// How many splits the base allocation of the last body that had one made.
+    static BASE_SPLITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many splits the base allocation of the last body this thread allocated made, for a test.
+pub fn base_splits() -> usize {
+    BASE_SPLITS.with(std::cell::Cell::get)
+}
+
+thread_local! {
+    /// The last allocation's (splits made, pieces, pieces spilled, values spilled), for the trial log.
+    static LAST_STATS: std::cell::Cell<(usize, usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0, 0)) };
 }
 
 /// What recoloring reads of a finished assignment.
@@ -1938,6 +1956,8 @@ impl RegAlloc {
         let mut best = run("regalloc base", &body, &reloads, &BTreeSet::new(), true)?;
         llrm_support::debug!("regalloc", "{}: {} insns, {} spilled, cost {}, {} forced", body.name, best.out.insns().len(), best.spilled.len(), best.cost, best.forced);
         let spilled = best.spilled.clone();
+        let base_stats = LAST_STATS.with(std::cell::Cell::get);
+        BASE_SPLITS.with(|splits| splits.set(base_stats.0));
         if !spilled.is_empty() && cpu.search {
             // Other shapes of the same body, which the base allocation's spills
             // suggest: each is kept only if its output is cheaper.
@@ -1976,6 +1996,10 @@ impl RegAlloc {
             for (at, (shape, candidate, unspillable, protected, kept)) in candidates.into_iter().enumerate() {
                 for splitting in [true, false] {
                     if !cpu.exhaustive && !(shape == Shape::Whole && !splitting) && !(Some(at) == picked && splitting != (shape == Shape::Whole)) {
+                        continue;
+                    }
+                    // The base allocation split nothing, so allocating without splitting is that allocation again.
+                    if shape == Shape::Whole && !splitting && base_stats.0 == 0 {
                         continue;
                     }
                     // The base run was this body with splitting.
