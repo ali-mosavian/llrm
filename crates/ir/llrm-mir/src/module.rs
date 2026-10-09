@@ -199,7 +199,7 @@ impl PartialEq for Lineage {
 }
 
 /// A point in one function's history, to ask what changed since.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Mark {
     uid: u64,
     at: usize,
