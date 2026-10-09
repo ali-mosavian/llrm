@@ -66,8 +66,17 @@ impl ModuleAnalysis for Summaries {
         };
         let declarations = analyses.get::<Declarations>(module);
         let shapes = bodies(module).map(|(id, _)| (id, analyses.function::<Shape>(module, id))).collect();
-        let exposures = exposures(module, &program.layout, program.target.spaces());
-        let procedures = procedures(module, &program, globals, &shapes, &exposures);
+        // What a body's calls and exposed frames are depends on the body and the declarations: kept while neither moved.
+        let scratch = analyses.from_scratch();
+        let memo = analyses.memo::<SummariesMemo>();
+        let kept = if scratch || !memo.declarations.as_ref().is_some_and(|then| Rc::ptr_eq(then, &declarations)) { IndexMap::default() } else { std::mem::take(&mut memo.facts) };
+        // The calls were found under the globals' facts of the run before: other facts, the calls are found again.
+        let mut body_facts = body_facts(module, &program.layout, program.target.spaces(), kept);
+        if !memo.globals.as_ref().is_some_and(|then| Rc::ptr_eq(then, &globals_held)) {
+            body_facts.values_mut().for_each(|one| one.calls = None);
+        }
+        calls_found(module, &program, globals, &shapes, &mut body_facts);
+        let procedures = procedures(module, &program, globals, &shapes, &body_facts);
         // Bodies edited since the last run: those whose history is not where the last run left it. What else the summaries read, the
         // globals' facts and the declarations, either is the same result as then or the whole is worked out again.
         let memo = analyses.memo::<SummariesMemo>();
@@ -93,6 +102,7 @@ impl ModuleAnalysis for Summaries {
         counted("summaries updated", dirty.is_some());
         let found = alias::summaries_updating(&procedures, known.as_ref(), &mut memo.summaries, dirty.as_ref());
         memo.marks = marks;
+        memo.facts = body_facts.clone();
         memo.globals = Some(Rc::clone(&globals_held));
         memo.declarations = Some(declarations);
         if std::env::var_os("LLRM_CHECK_MODULES").is_some() {
@@ -117,6 +127,7 @@ struct SummariesMemo {
     marks: IndexMap<GlobalId, Mark>,
     globals: Option<Rc<Result<Globals, String>>>,
     declarations: Option<Rc<Vec<GlobalValue>>>,
+    facts: IndexMap<GlobalId, BodyFacts>,
 }
 
 /// `module`'s defined functions, each with its id.
@@ -124,10 +135,43 @@ fn bodies(module: &Module) -> impl Iterator<Item = (GlobalId, &Function)> {
     module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(id, _, function)| (id, function))
 }
 
-/// The exposed frames of each of `module`'s bodies, found once for the summaries that ask of every
-/// access.
-fn exposures(module: &Module, layout: &DataLayout, spaces: llrm_mir::spaces::Spaces) -> IndexMap<GlobalId, BTreeSet<ValueId>> {
-    bodies(module).map(|(id, function)| (id, crate::memory::exposed_frames(&Unit::of(module, layout, function).with_spaces(spaces)))).collect()
+/// What a body gives `Summaries` that is of the body, the declarations and (for its calls) the globals' facts alone, as of the body's
+/// history then.
+#[derive(Clone)]
+struct BodyFacts {
+    mark: Mark,
+    exposed: Rc<BTreeSet<ValueId>>,
+    calls: Option<Rc<alias::CallFacts>>,
+}
+
+/// The exposed frames of each of `module`'s bodies, found once for the summaries that ask of every access; those of a body whose
+/// history is where `kept` left it are `kept`'s.
+fn body_facts(module: &Module, layout: &DataLayout, spaces: llrm_mir::spaces::Spaces, mut kept: IndexMap<GlobalId, BodyFacts>) -> IndexMap<GlobalId, BodyFacts> {
+    bodies(module)
+        .map(|(id, function)| {
+            let mark = function.mark();
+            let facts = match kept.swap_remove(&id) {
+                Some(then) if then.mark == mark => then,
+                _ => BodyFacts { mark, exposed: Rc::new(crate::memory::exposed_frames(&Unit::of(module, layout, function).with_spaces(spaces))), calls: None },
+            };
+            (id, facts)
+        })
+        .collect()
+}
+
+/// `function` as `Summaries` sees it: its program, the globals' facts, its shape and its exposed frames.
+fn summarized_in<'a>(module: &'a Module, program: &'a ProgramProxy, globals: &'a Globals, shape: &'a Shape, exposed: &'a BTreeSet<ValueId>, function: &'a llrm_mir::module::Function) -> Unit<'a> {
+    Unit { program: Some(program), ..Unit::of(module, &program.layout, function) }.with_globals_aa(globals).with_shape(shape).with_exposed(exposed)
+}
+
+/// The calls of each body `facts` has none for, as the unit it is summarized in sees them.
+fn calls_found(module: &Module, program: &ProgramProxy, globals: &Globals, shapes: &IndexMap<GlobalId, Rc<Shape>>, facts: &mut IndexMap<GlobalId, BodyFacts>) {
+    for (id, function) in bodies(module) {
+        let one = facts.get_mut(&id).expect("facts for every body");
+        if one.calls.is_none() {
+            one.calls = Some(Rc::new(alias::CallFacts::of(&summarized_in(module, program, globals, &shapes[&id], &one.exposed, function))));
+        }
+    }
 }
 
 /// `module`'s named bodies as alias summarizes them.
@@ -136,12 +180,13 @@ fn procedures<'a>(
     program: &'a ProgramProxy,
     globals: &'a Globals,
     shapes: &'a IndexMap<GlobalId, Rc<Shape>>,
-    exposures: &'a IndexMap<GlobalId, BTreeSet<ValueId>>,
+    facts: &'a IndexMap<GlobalId, BodyFacts>,
 ) -> IndexMap<String, Procedure<'a>> {
     bodies(module)
         .filter_map(|(id, function)| {
             let name = module.global(id).name.clone()?;
-            Some((name, Procedure::of(Unit { program: Some(program), ..Unit::of(module, &program.layout, function) }.with_globals_aa(globals).with_shape(&shapes[&id]).with_exposed(&exposures[&id]))))
+            let one = &facts[&id];
+            Some((name, Procedure::with(summarized_in(module, program, globals, &shapes[&id], &one.exposed, function), Rc::clone(one.calls.as_ref().expect("found before")))))
         })
         .collect()
 }
@@ -164,7 +209,7 @@ impl ProgramAnalysis for ProgramSummaries {
         let elsewhere = Result::as_ref(&*elsewhere).map_err(String::clone)?;
         let proxies: Vec<_> = (0..count).map(|at| analyses.proxy(program, at)).collect();
         let shapes: Vec<IndexMap<GlobalId, Rc<Shape>>> = program.modules.iter().map(|module| bodies(module).map(|(id, function)| (id, Rc::new(Shape::of(function)))).collect()).collect();
-        let exposures: Vec<IndexMap<GlobalId, BTreeSet<ValueId>>> = program.modules.iter().map(|module| exposures(module, &program.layout, program.target.spaces())).collect();
+        let mut exposures: Vec<IndexMap<GlobalId, BodyFacts>> = program.modules.iter().map(|module| body_facts(module, &program.layout, program.target.spaces(), IndexMap::default())).collect();
         let globals = (0..count)
             .map(|at| globalsaa::found(&program.modules[at], &proxies[at], &elsewhere[at], &mut |id| Rc::clone(&shapes[at][&id])))
             .collect::<Result<Vec<_>, String>>()?;
@@ -174,6 +219,7 @@ impl ProgramAnalysis for ProgramSummaries {
         loop {
             let mut changed = false;
             for at in 0..count {
+                calls_found(&program.modules[at], &proxies[at], &globals[at], &shapes[at], &mut exposures[at]);
                 let procedures = procedures(&program.modules[at], &proxies[at], &globals[at], &shapes[at], &exposures[at]);
                 let found = alias::summaries(&procedures, Some(&known[at]))?;
                 let mine: IndexMap<String, Summary> = found.into_iter().filter(|(name, _)| procedures.contains_key(name)).collect();
