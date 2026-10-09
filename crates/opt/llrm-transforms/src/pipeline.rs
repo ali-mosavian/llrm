@@ -297,20 +297,6 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(fill::Fill { size: applied.options.prefers_size() }),
         Box::new(fill::Merge),
     ];
-    // gcc's `pass_ch` runs before the loop optimizers: the loops it guards are
-    // re-simplified for the passes that follow. Not at -Os
-    // (`optimize_loop_for_size_p`): there only a loop proven to run is entered
-    // at its body, which `Rotate` does last.
-    if applied.options.copy_headers && !applied.options.prefers_size() {
-        if let Some(at) = every.iter().position(|one| one.name() == "lcssa") {
-            let copied: Vec<Box<dyn FunctionPass>> = vec![
-                Box::new(rotate::Rotate { proven: false, copy: true }),
-                Box::new(loopsimplify::LoopSimplify),
-                Box::new(lcssa::LoopClosedSSA),
-            ];
-            every.splice(at + 1..at + 1, copied);
-        }
-    }
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
 }
 
