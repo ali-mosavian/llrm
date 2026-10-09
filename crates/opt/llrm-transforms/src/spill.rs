@@ -178,6 +178,14 @@ pub fn spilled<K: Ord + std::hash::Hash + Copy>(
     fitted::<K, llrm_support::hash::HashSet<K>>(points, price).cost
 }
 
+/// `spilled`, remembering the spilled in a set of the caller's.
+pub fn spilled_in<K: Ord + Copy, S: Spilled<K>>(
+    points: impl IntoIterator<Item = Point<K>>,
+    price: impl Fn(K) -> i64,
+) -> i64 {
+    fitted::<K, S>(points, price).cost
+}
+
 /// `spilled`, and which cells it spills and how far past its registers the
 /// pressure goes.
 pub fn forecast<K: Ord + Dense>(

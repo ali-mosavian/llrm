@@ -2374,3 +2374,30 @@ fn test_a_loop_is_planned_with_the_liveness_the_pressure_holds() {
     let solved = llrm_analysis::liveness::solves() - before;
     assert!(solved <= 3, "{solved} solves of liveness for one loop");
 }
+
+/// `_alive` walked a loop's blocks for liveness once a use: a loop of 12 uses
+/// walked each block 12 times over (a fifth of lsr on d_faces' -O1). What is
+/// live before each instruction is the block's, so each block is walked once.
+#[test]
+fn test_a_loops_blocks_are_walked_for_liveness_once_not_once_a_use() {
+    let uses = 12;
+    let mut text = format!(
+        "@a = global [{} x i32] zeroinitializer\n\ndefine i32 @f(i32 %n) {{\nb0:\n  br label %h\n\nh:\n  %i = phi i32 [ 0, %b0 ], [ %next, %h ]\n  %s0 = phi i32 [ 0, %b0 ], [ %t{}, %h ]\n",
+        64 * uses,
+        uses - 1
+    );
+    for k in 0..uses {
+        let prev = if k == 0 { "%s0".to_owned() } else { format!("%t{}", k - 1) };
+        text += &format!(
+            "  %m{k} = mul i32 %i, {}\n  %p{k} = getelementptr [{} x i32], ptr @a, i32 0, i32 %m{k}\n  %v{k} = load i32, ptr %p{k}\n  %t{k} = add i32 {prev}, %v{k}\n",
+            k + 2,
+            64 * uses
+        );
+    }
+    text += "  %next = add nsw i32 %i, 1\n  %c = icmp slt i32 %next, 8\n  br i1 %c, label %h, label %end\n\nend:\n  ret i32 %t11\n}\n";
+    super::LIVE_POINTS.with(|count| count.set(0));
+    let (_, printed) = reduced(&text);
+    let walked = super::LIVE_POINTS.with(std::cell::Cell::get);
+    assert!(printed.contains("define"), "{printed}");
+    assert!(walked <= 2, "{walked} block walks for a loop of one block and {uses} uses");
+}
