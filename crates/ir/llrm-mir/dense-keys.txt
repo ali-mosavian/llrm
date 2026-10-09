@@ -43,7 +43,7 @@ crates/opt/llrm-transforms/src/floatfold.rs	4
 crates/opt/llrm-transforms/src/floatloop.rs	3
 crates/opt/llrm-transforms/src/fold.rs	5
 crates/opt/llrm-transforms/src/gvn.rs	3
-crates/opt/llrm-transforms/src/hoist.rs	14
+crates/opt/llrm-transforms/src/hoist.rs	12
 crates/opt/llrm-transforms/src/indvars.rs	1
 crates/opt/llrm-transforms/src/inferspace.rs	7
 crates/opt/llrm-transforms/src/inline.rs	5
