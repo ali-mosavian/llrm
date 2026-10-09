@@ -40,6 +40,48 @@ pub struct Shape {
     blocks: Vec<(i64, Vec<i64>)>,
 }
 
+impl Shape {
+    pub fn of(body: &LirBody) -> Self {
+        Shape { entry: body.entry, blocks: body.blocks.iter().map(|block| (block.at, block.succ.clone())).collect() }
+    }
+
+    /// Whether `body` has this entry, these labels and these successors.
+    pub fn holds(
+        &self,
+        body: &LirBody,
+    ) -> bool {
+        self.entry == body.entry
+            && self.blocks.len() == body.blocks.len()
+            && self.blocks.iter().zip(&body.blocks).all(|((at, succ), block)| *at == block.at && *succ == block.succ)
+    }
+}
+
+/// How many loops contain each block: a fact of the control-flow graph, so the
+/// same for every body that has the blocks' labels and successors (a split adds
+/// instructions, not blocks).
+pub struct LoopDepths;
+
+impl Fact for LoopDepths {
+    type Result = IndexMap<i64, u32>;
+    type Inputs = Shape;
+    const NAME: &'static str = "loop-depths";
+
+    fn run(body: &LirBody) -> IndexMap<i64, u32> {
+        crate::analysis::intervals::depths_afresh(body)
+    }
+
+    fn inputs(body: &LirBody) -> Shape {
+        Shape::of(body)
+    }
+
+    fn held_by(
+        kept: &Shape,
+        body: &LirBody,
+    ) -> bool {
+        kept.holds(body)
+    }
+}
+
 pub struct Edges;
 
 impl Fact for Edges {
@@ -61,16 +103,14 @@ impl Fact for Edges {
     }
 
     fn inputs(body: &LirBody) -> Shape {
-        Shape { entry: body.entry, blocks: body.blocks.iter().map(|block| (block.at, block.succ.clone())).collect() }
+        Shape::of(body)
     }
 
     fn held_by(
         kept: &Shape,
         body: &LirBody,
     ) -> bool {
-        kept.entry == body.entry
-            && kept.blocks.len() == body.blocks.len()
-            && kept.blocks.iter().zip(&body.blocks).all(|((at, succ), block)| *at == block.at && *succ == block.succ)
+        kept.holds(body)
     }
 }
 
@@ -108,5 +148,26 @@ mod tests {
         let moved = body.with_blocks(moved);
         assert_eq!(Graph::of(&moved).parents[2], [0], "an edge that moved");
         assert_eq!(body.facts.0.runs::<Edges>(), 2, "a moved edge was answered from the old graph");
+    }
+
+    /// The edge bundles and the loop depths were worked out again after every
+    /// split (490 splits of d_faces -O1: ~270 M of 27 G instructions), though a
+    /// split adds instructions and never a block. They are the graph's: found
+    /// once for every body that keeps the labels and successors.
+    #[test]
+    fn test_bundles_and_depths_are_found_once_for_bodies_that_keep_the_edges() {
+        let body = diamond();
+        let first = crate::backend::spillplacement::edge_bundles(&body);
+        let depths = crate::analysis::intervals::depths_shared(&body);
+        let rewritten = body.with_blocks(body.blocks.iter().map(|block| block.with_insns(Vec::new())).collect());
+        assert_eq!(*crate::backend::spillplacement::edge_bundles(&rewritten), *first);
+        assert_eq!(*crate::analysis::intervals::depths_shared(&rewritten), *depths);
+        assert_eq!(body.facts.0.runs::<crate::backend::spillplacement::EdgeBundles>(), 1, "bundles asked again");
+        assert_eq!(body.facts.0.runs::<super::LoopDepths>(), 1, "depths asked again");
+        let mut moved = body.blocks.clone();
+        moved[1].succ = vec![];
+        let moved = body.with_blocks(moved);
+        crate::backend::spillplacement::edge_bundles(&moved);
+        assert_eq!(body.facts.0.runs::<crate::backend::spillplacement::EdgeBundles>(), 2, "a moved edge, old bundles");
     }
 }

@@ -1046,7 +1046,7 @@ pub fn pays(
     live: &dyn allocate::LiveAt,
 ) -> bool {
     let frequency: IndexMap<i64, f64> =
-        ranges::depths(body).into_iter().map(|(at, depth)| (at, ranges::level(depth))).collect();
+        ranges::depths_shared(body).iter().map(|(at, depth)| (*at, ranges::level(*depth))).collect();
     _benefit(body, value, region, &frequency, live) > 0.0
 }
 
