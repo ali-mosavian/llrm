@@ -73,3 +73,75 @@ def test_a_rewrite_finds_what_it_changed_by_pointer_not_by_looking_up_every_inst
         run = steps(compiler, source, "-O2")
     spent = run["facts intervals"] + run["intervals homes"]
     assert spent < 520, f"cells N=224 -O2: facts intervals + intervals homes cost {spent} Minstr (520 allowed; 700 before the pointer diff): {run}"
+
+
+def test_a_spill_patches_the_postings_of_the_block_it_changed_instead_of_making_them_again():
+    """`spill cleanup` rebuilt the postings of a long block entry by entry after every spill: 699 Minstr on `cells` at N=224 (one
+    block, ~600 spills) and 4.3x that for twice the size. The kept instructions' entries move to their new positions."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](224))
+        run = steps(compiler, source, "-O2")
+    assert run["spill cleanup"] < 250, f"cells N=224 -O2: spill cleanup cost {run['spill cleanup']} Minstr (250 allowed; 699 before): {run}"
+
+
+def test_a_spill_passes_over_the_instructions_that_name_no_spilled_value():
+    """`spill rewrite` ran its dozen rewrites over every instruction of a block that held one spilled value: 570 Minstr on `cells`
+    at N=224 (one block, ~600 spills), 1.3k instructions of work for each of ~3000 instructions per spill. An instruction that
+    names none of the values is left as it is, found from the postings."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](224))
+        run = steps(compiler, source, "-O2")
+    assert run["spill rewrite"] < 150, f"cells N=224 -O2: spill rewrite cost {run['spill rewrite']} Minstr (150 allowed; 570 before): {run}"
+
+
+def test_a_rewrite_works_out_the_widths_of_the_values_it_changed_only():
+    """`facts widths` walked every operand of every instruction after each spill: 385 Minstr on `cells` at N=224 (one block, ~430
+    rewrites). The widths of the body before stand for the values no changed instruction names."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](224))
+        run = steps(compiler, source, "-O2")
+    assert run["facts widths"] < 100, f"cells N=224 -O2: facts widths cost {run['facts widths']} Minstr (100 allowed; 385 before): {run}"
+
+
+def test_a_rewrite_counts_what_the_instructions_it_changed_say_of_the_register_classes():
+    """`classes scan` read every operand of every instruction after each spill: 371 Minstr on `cells` at N=224 (one block, ~430
+    rewrites). The counts of the body before stand for the instructions the rewrite kept."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](224))
+        run = steps(compiler, source, "-O2")
+    assert run["classes scan"] < 60, f"cells N=224 -O2: classes scan cost {run['classes scan']} Minstr (60 allowed; 371 before): {run}"
+
+
+def test_a_rewrite_prices_the_siblings_of_the_values_it_changed_only():
+    """`facts sibling prices` walked every instruction for plain moves and impure values, and tested every move's intervals for
+    overlap, after each spill: 263 Minstr on `cells` at N=224. The values the changed instructions name, and the other sides of
+    their copies, are priced again; the rest stand."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](224))
+        run = steps(compiler, source, "-O2")
+    assert run["facts sibling prices"] < 70, f"cells N=224 -O2: facts sibling prices cost {run['facts sibling prices']} Minstr (70 allowed; 263 before): {run}"

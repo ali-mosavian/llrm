@@ -202,7 +202,14 @@ fn _moved(
         Operand::Value(value) => defined_in(value).is_none_or(|at| dominators.dominates(at, source)),
         _ => true,
     };
-    let unobserved = |inst: InstId| _unobserved(unit, inst, operations, references, &address_values);
+    // What the loop's accesses reach, found by object: asked of each store.
+    let mut index = llrm_analysis::regions::Index::default();
+    for &inst in operations {
+        if let Some(reference) = references.get(&inst) {
+            index.push(inst, reference);
+        }
+    }
+    let unobserved = |inst: InstId| _unobserved(unit, inst, &index, references, &address_values);
     let mut moved = Vec::new();
     for &inst in function.block(cfg::block(source)).instructions() {
         if unobserved(inst) && function.instruction(inst).operands.iter().all(|&one| reaches(one)) {
@@ -461,7 +468,7 @@ fn _same_cell(
 fn _unobserved(
     unit: &Unit,
     inst: InstId,
-    operations: &[InstId],
+    near: &llrm_analysis::regions::Index<InstId>,
     references: &IndexMap<InstId, MemRef>,
     address_values: &dyn Fn(ValueId) -> bool,
 ) -> bool {
@@ -481,11 +488,10 @@ fn _unobserved(
     ) {
         return false;
     }
-    operations
-        .iter()
-        .filter(|&&one| one != inst)
-        .filter_map(|one| references.get(one))
-        .all(|other| !regions::overlapping(reference, other, None, None, unit.program).unwrap_or(true))
+    near.near(reference)
+        .into_iter()
+        .filter(|&(one, _)| one != inst)
+        .all(|(_, other)| !regions::overlapping(reference, other, None, None, unit.program).unwrap_or(true))
 }
 
 #[cfg(test)]
