@@ -4655,10 +4655,10 @@ mod tests {
         use crate::model::lir::{Insn, LirBlock};
         let nop = |at: i64| Arc::new(Insn::new(at, Some((at, at)), Some(Semantics { name: Some("nop".to_owned()), ..Semantics::new(Operation::Nothing) }), vec![], vec![]));
         let chain = |extra_at_30: bool| {
-            let blocks: Vec<LirBlock> = (0..60i64)
+            let blocks: Vec<LirBlock> = (0..400i64)
                 .map(|at| {
                     let insns = if at == 30 && extra_at_30 { vec![nop(0x1000), nop(0x1001 + at), nop(0x2000 + at)] } else { vec![nop(0x1001 + at), nop(0x2000 + at)] };
-                    LirBlock { succ: if at < 59 { vec![at + 1] } else { vec![] }, ..LirBlock::new(at, insns) }
+                    LirBlock { succ: if at < 399 { vec![at + 1] } else { vec![] }, ..LirBlock::new(at, insns) }
                 })
                 .collect();
             LirBody::new("chain", 0, blocks, IndexMap::default(), IndexMap::default())
@@ -4669,11 +4669,11 @@ mod tests {
             let one = |home: usize| first + home as u32;
             vec![
                 (5, 0, BTreeSet::from([one(0)]), BTreeSet::new()),
-                (50, 1, BTreeSet::new(), BTreeSet::from([one(0)])),
+                (350, 1, BTreeSet::new(), BTreeSet::from([one(0)])),
                 (10, 0, BTreeSet::from([one(1)]), BTreeSet::new()),
-                (20, 1, BTreeSet::new(), BTreeSet::from([one(1)])),
+                (300, 1, BTreeSet::new(), BTreeSet::from([one(1)])),
                 (30, usize::from(extra), BTreeSet::from([one(2)]), BTreeSet::new()),
-                (40, 1, BTreeSet::new(), BTreeSet::from([one(2)])),
+                (380, 1, BTreeSet::new(), BTreeSet::from([one(2)])),
             ]
         };
         let sorted = |mut named: Vec<(usize, usize, BTreeSet<u32>, BTreeSet<u32>)>| {
