@@ -678,6 +678,14 @@ pub struct EdgeStates {
 }
 
 impl EdgeStates {
+    /// What holds on entering `at`, shared; none where nothing is known.
+    pub fn scope_of(
+        &self,
+        at: i64,
+    ) -> Option<&Scope> {
+        self.own.get(&at).filter(|scoped| !scoped.is_empty())
+    }
+
     /// `blocks`, the maps shared.
     pub fn shared(
         &self,
@@ -1797,13 +1805,18 @@ pub fn scope_at(
     at: i64,
 ) -> Result<Intervals, String> {
     let held = bounds(unit)?;
-    // The manager's where the unit carries its edges, else worked out here.
-    let edges: IndexMap<i64, Scope> = match unit.edges {
-        Some(states) => states.shared(unit.function),
-        None => dominated_edges(unit)?.into_iter().map(|(at, scope)| (at, Rc::new(scope))).collect(),
+    // The manager's where the unit carries its edges (one block's, not a map of
+    // them all), else worked out here.
+    let worked;
+    let edges: Option<&Intervals> = match unit.edges {
+        Some(states) => states.scope_of(at).map(|scope| &**scope),
+        None => {
+            worked = dominated_edges(unit)?.shift_remove(&at);
+            worked.as_ref()
+        }
     };
     let mut known = held.at(at).cloned().unwrap_or_default();
-    for (value, interval) in edges.get(&at).into_iter().flat_map(|scope| scope.iter()) {
+    for (value, interval) in edges.into_iter().flat_map(|scope| scope.iter()) {
         match known.get(value) {
             Some(previous) if previous.width == interval.width => {
                 narrow(&mut known, *value, interval.clone());
