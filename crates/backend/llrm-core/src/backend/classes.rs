@@ -40,7 +40,8 @@ impl RegisterClasses {
     /// and differ in the selector register) is a choice the allocator makes, not a
     /// requirement, and is left out.
     pub fn of(arch: &dyn Target) -> Self {
-        let forms = instructions::parse::parse(&arch.forms_text()).expect("the target's forms parse");
+        // A form that pins nothing has no requirement to give, and the description is read at every compile.
+        let forms = instructions::parse::pinned(&arch.forms_text()).expect("the target's forms parse");
         let operations: HashMap<&str, &'static str> = Operation::ALL.iter().map(|op| (op.as_str(), op.as_str())).collect();
         let mut pins: HashMap<Key, Vec<(Side, usize, Register)>> = HashMap::default();
         for form in &forms {

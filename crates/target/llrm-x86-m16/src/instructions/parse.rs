@@ -119,6 +119,16 @@ fn implicit(text: &str, line: usize) -> Result<Vec<String>, String> {
 
 /// Every form `text` describes, `{cc}` expanded.
 pub fn parse(text: &str) -> Result<Vec<Form>, String> {
+    parse_rows(text, |_| true)
+}
+
+/// The forms that pin an operand to a register, for a reader that wants only those: the description is read at every
+/// compile, and a row costs about 5,000 instructions to read.
+pub fn pinned(text: &str) -> Result<Vec<Form>, String> {
+    parse_rows(text, |pinned| pinned != "-")
+}
+
+fn parse_rows(text: &str, keep: impl Fn(&str) -> bool) -> Result<Vec<Form>, String> {
     let mut forms = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let line = index + 1;
@@ -130,6 +140,9 @@ pub fn parse(text: &str) -> Result<Vec<Form>, String> {
         let [name, operation, shape, widths, cost, pinned, reads, writes, iced] = columns[..] else {
             return Err(format!("x86.instr:{line}: {} columns, not 9", columns.len()));
         };
+        if !keep(pinned) {
+            continue;
+        }
         if llrm_lir::Operation::named(operation).is_none() {
             return Err(format!("x86.instr:{line}: no operation `{operation}`"));
         }

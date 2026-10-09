@@ -73,6 +73,17 @@ mod tests {
         assert_eq!(error, "x86.instr:1: operand `rmx` is not made of the kinds r m i a s");
     }
 
+    /// The allocator's classes were built from every row, at about 5,000 instructions a row on each compile; only the rows
+    /// that pin an operand give it anything.
+    #[test]
+    fn reading_the_pinned_forms_is_the_pinned_subset_of_reading_all() {
+        let all = parse::parse(&TEXT).unwrap();
+        let pinned = parse::pinned(&TEXT).unwrap();
+        let wanted: Vec<&Form> = all.iter().filter(|form| !form.fixed.is_empty()).collect();
+        assert_eq!(pinned.iter().collect::<Vec<_>>(), wanted);
+        assert!(pinned.len() * 3 < all.len(), "{} of {} rows pin", pinned.len(), all.len());
+    }
+
     /// The joined description is the family's rows and the target's, none lost or repeated.
     #[test]
     fn the_family_and_real_mode_rows_are_all_of_the_description() {
