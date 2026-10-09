@@ -1811,7 +1811,7 @@ fn joined(op: &llrm_mir::module::Instruction) -> Option<Vec<Operand>> {
 /// context.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PointValues {
-    pub values: IndexMap<ValueId, Provenance>,
+    pub values: llrm_support::hash::SparseIdMap<ValueId, Provenance>,
     incoming: IndexMap<i64, IndexMap<CellKey, Provenance>>,
 }
 
@@ -2055,8 +2055,8 @@ pub fn points_to(
 fn escapes(
     unit: &Unit,
     solved: &PointValues,
-    arguments: Option<&IndexMap<InstId, Vec<Actual>>>,
-    captures: Option<&IndexMap<InstId, Option<BTreeSet<Option<Identity>>>>>,
+    arguments: Option<&llrm_support::hash::SparseIdMap<InstId, Vec<Actual>>>,
+    captures: Option<&llrm_support::hash::SparseIdMap<InstId, Option<BTreeSet<Option<Identity>>>>>,
 ) -> Result<PointsTo, String> {
     let function = unit.function;
     let graph = cfg::graph(function);
