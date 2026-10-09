@@ -219,7 +219,7 @@ pub fn _declared(one: &Insn) -> Option<(Lanes, Lanes)> {
             }
             Loc::Address(source) => {
                 reads.extend(_lanes(source.through));
-                reads.extend(_lanes(source.index));
+                reads.extend(_lanes(source.index_through));
             }
             _ => {}
         }

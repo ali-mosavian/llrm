@@ -147,9 +147,10 @@ impl Frame {
                 Loc::Mem(cell) if framed(cell.addr) => {
                     Loc::Mem(Mem { addr: cell.addr.map(&tag).transpose()?, ..cell.clone() })
                 }
-                Loc::Address(cell) if framed(cell.addr) => {
-                    Loc::Address(crate::model::ir::Address { addr: cell.addr.map(&tag).transpose()?, ..cell.clone() })
-                }
+                Loc::Address(cell) if framed(cell.addr) => Loc::Address(crate::model::ir::AddressRef {
+                    addr: cell.addr.map(&tag).transpose()?,
+                    ..cell.clone()
+                }),
                 other => other.clone(),
             })
         };
@@ -370,7 +371,7 @@ mod tests {
     use iced_x86::Register;
 
     use super::{Refused, of};
-    use crate::model::ir::{Addr, Address, Held, Imm, Loc, Operation, Semantics, Space};
+    use crate::model::ir::{Addr, AddressRef, Held, Imm, Loc, Operation, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
@@ -433,7 +434,7 @@ mod tests {
                 Operation::Move,
                 "lea",
                 vec![Loc::Held(Held { value: 101, width: 2 })],
-                vec![Loc::Address(Address::new(Some(Addr::new(Space::Frame, -32))))],
+                vec![Loc::Address(AddressRef::new(Some(Addr::new(Space::Frame, -32))))],
             ));
             let addressed = body_of(vec![init.clone(), call.clone(), address]);
             assert_eq!(of(&addressed, Some(&calls), "", None).unwrap().slot(200_i64, 2), Ok(-34));

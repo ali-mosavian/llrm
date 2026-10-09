@@ -85,21 +85,21 @@ pub struct Imm {
 /// that made `==` mean "the same address modulo how it is encoded", which is no
 /// answer to the question a caller asks of two operands that will be emitted.)
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct Address {
+pub struct AddressRef {
     pub addr: Option<Addr>,
     pub through: iced_x86::Register,
-    pub index: iced_x86::Register,
+    pub index_through: iced_x86::Register,
     pub scale: i64,
     pub offset: i64,
     pub disp_width: u32,
 }
 
-impl Address {
+impl AddressRef {
     pub const fn new(addr: Option<Addr>) -> Self {
         Self {
             addr,
             through: iced_x86::Register::None,
-            index: iced_x86::Register::None,
+            index_through: iced_x86::Register::None,
             scale: 1,
             offset: 0,
             disp_width: 0,
@@ -107,7 +107,7 @@ impl Address {
     }
 }
 
-impl Address {
+impl AddressRef {
     /// The same address, not necessarily spelled the same way: `==` less its
     /// encoding fields, which are the registers it is reached through, its
     /// scale, and the displacement of one that has an `addr`.
@@ -229,7 +229,7 @@ pub enum Loc {
     Reg(Reg),
     Mem(Mem),
     Imm(Imm),
-    Address(Address),
+    Address(AddressRef),
     Held(Held),
 }
 
@@ -609,7 +609,7 @@ mod tests {
     fn two_addressless_cells_at_different_displacements_are_different_cells() {
         let at = |offset| Mem { base: Some(Held { value: 1, width: 2 }), offset, ..Mem::new(None, 2) };
         assert_ne!(at(0), at(2));
-        let address = |offset| Address { offset, ..Address::new(None) };
+        let address = |offset| AddressRef { offset, ..AddressRef::new(None) };
         assert_ne!(address(0), address(2));
     }
 
@@ -653,7 +653,7 @@ mod tests {
             assert_ne!(left, right);
             assert_ne!(hash(&left), hash(&right));
         }
-        let address = |through| Address { through, ..Address::new(Some(Addr::new(Space::Segment, 4))) };
+        let address = |through| AddressRef { through, ..AddressRef::new(Some(Addr::new(Space::Segment, 4))) };
         assert_ne!(address(iced_x86::Register::BX), address(iced_x86::Register::SI));
         assert_eq!(left, left.clone());
     }
@@ -743,15 +743,15 @@ mod tests {
 
     #[test]
     fn the_same_place_ignores_encoding_details_but_not_the_address() {
-        let left = Address::new(Some(Addr::new(Space::Literal, 12)));
+        let left = AddressRef::new(Some(Addr::new(Space::Literal, 12)));
         let mut right = left.clone();
         right.through = iced_x86::Register::BX;
-        right.index = iced_x86::Register::SI;
+        right.index_through = iced_x86::Register::SI;
         right.scale = 4;
         right.offset = -8;
         right.disp_width = 2;
         assert!(left.same_place(&right) && left != right);
-        let moved = Address::new(Some(Addr::new(Space::Literal, 14)));
+        let moved = AddressRef::new(Some(Addr::new(Space::Literal, 14)));
         assert!(!left.same_place(&moved));
         assert!(Addr::new(Space::Frame, -2).direct());
         assert_eq!(Addr::new(Space::Frame, -2).plus(4).disp, 2);
@@ -835,14 +835,14 @@ impl Repr for Imm {
     }
 }
 
-impl Repr for Address {
+impl Repr for AddressRef {
     fn repr(&self) -> String {
         pyrepr::dataclass(
             "Address",
             &[
                 ("addr", self.addr.repr()),
                 ("through", register_repr(self.through)),
-                ("index", register_repr(self.index)),
+                ("index", register_repr(self.index_through)),
                 ("scale", self.scale.repr()),
                 ("offset", self.offset.repr()),
                 ("disp_width", self.disp_width.repr()),
@@ -913,7 +913,7 @@ mod repr_tests {
              selector=None, index=None, scale=1, index_through=0)"
         );
         assert_eq!(
-            Address::new(None).repr(),
+            AddressRef::new(None).repr(),
             "Address(addr=None, through=0, index=0, scale=1, offset=0, disp_width=0)"
         );
         assert_eq!(Held { value: 3, width: 2 }.repr(), "Held(value=3, width=2)");

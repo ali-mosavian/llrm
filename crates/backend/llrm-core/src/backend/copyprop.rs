@@ -408,7 +408,7 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
                         (Loc::Mem(cell), true) => cell.through,
                         (Loc::Mem(cell), false) => cell.index_through,
                         (Loc::Address(address), true) => address.through,
-                        (Loc::Address(address), false) => address.index,
+                        (Loc::Address(address), false) => address.index_through,
                         _ => continue,
                     };
                     if register == Register::None {
@@ -419,10 +419,10 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
                             Loc::Mem(cell) if through => Loc::Mem(ir::Mem { through: replacement, ..cell.clone() }),
                             Loc::Mem(cell) => Loc::Mem(ir::Mem { index_through: replacement, ..cell.clone() }),
                             Loc::Address(address) if through => {
-                                Loc::Address(ir::Address { through: replacement, ..address.clone() })
+                                Loc::Address(ir::AddressRef { through: replacement, ..address.clone() })
                             }
                             Loc::Address(address) => {
-                                Loc::Address(ir::Address { index: replacement, ..address.clone() })
+                                Loc::Address(ir::AddressRef { index_through: replacement, ..address.clone() })
                             }
                             other => other.clone(),
                         };

@@ -935,7 +935,7 @@ fn test_loaded_scaled_add_uses_67h_lea() {
     assert_eq!(names(&result), ["mov", "lea", "cmp"]);
     let Loc::Address(address) = &result[1].what.as_ref().unwrap().sources[0] else { panic!("not an address") };
     assert_eq!(address.through, Register::EDX);
-    assert_eq!(address.index, Register::EAX);
+    assert_eq!(address.index_through, Register::EAX);
     assert_eq!(address.scale, 2);
 }
 
@@ -1133,7 +1133,7 @@ fn test_loaded_scaled_add_skips_metadata_only_anchors() {
     assert!(result[2].symbol == Some(false) && result[2].defines == shift.defines);
     assert_eq!(result[4].symbol, Some(true));
     let Loc::Address(address) = &result[4].what.as_ref().unwrap().sources[0] else { panic!("not an address") };
-    assert_eq!((address.through, address.index, address.scale), (Register::EAX, Register::EBX, 2));
+    assert_eq!((address.through, address.index_through, address.scale), (Register::EAX, Register::EBX, 2));
     assert!(verify::verify(&transformed, false).is_empty());
 }
 
@@ -1261,7 +1261,7 @@ fn test_affine_address_folds_a_copy_offset_and_shift() {
         panic!("not an address")
     };
     assert_eq!(
-        (address.through, address.index, address.scale, address.offset),
+        (address.through, address.index_through, address.scale, address.offset),
         (Register::EDX, Register::EDX, 1, 1280)
     );
 }
@@ -1418,7 +1418,7 @@ fn test_affine_address_is_a_word_lea_where_the_sum_is_a_real_mode_address() {
 
         assert_eq!(names(&result.blocks[0].insns), expected, "{label}");
         if let Some(Loc::Address(address)) = result.blocks[0].insns[0].what.as_ref().unwrap().sources.first() {
-            assert_eq!((address.through, address.index, address.offset), (through, index, offset), "{label}");
+            assert_eq!((address.through, address.index_through, address.offset), (through, index, offset), "{label}");
         }
     }
 }
@@ -3007,7 +3007,7 @@ fn test_mandel_sum_uses_67h_lea_before_preserving_a_copy() {
         assert_eq!(result[0].uses, [1, 2]);
         assert_eq!(result[0].widths, [(1, width), (2, width), (4, width)]);
         let Loc::Address(address) = &result[0].what.as_ref().unwrap().sources[0] else { panic!("not an address") };
-        let mut pair = [address.through, address.index];
+        let mut pair = [address.through, address.index_through];
         pair.sort();
         assert_eq!(pair, [Register::EDX, Register::ESI]);
         let encoded = code(result[0].what.as_ref().unwrap());
@@ -3156,7 +3156,7 @@ fn test_constant_sum_uses_67h_lea_without_code_growth() {
         assert_eq!(names(&result), ["lea", "mov", "cmp"]);
         assert_eq!(
             result[0].what.as_ref().unwrap().sources,
-            [Loc::Address(Address { through: Register::EAX, offset: displacement, ..Address::new(None) })]
+            [Loc::Address(AddressRef { through: Register::EAX, offset: displacement, ..AddressRef::new(None) })]
         );
         let Loc::Address(address) = &result[0].what.as_ref().unwrap().sources[0] else { unreachable!() };
         // `Address` equality compares only `addr`; Python's does too.

@@ -26,7 +26,7 @@ use crate::backend::cpu::Profile;
 use crate::backend::peep;
 use crate::backend::target::Segments;
 use crate::backend::{addressforms, division};
-use crate::model::ir::{self, Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
+use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{
     BlockOdds, DebugNote, DebugPlace, DebugTags, DebugVariable, Insn, LirBlock, LirBody, NoteValue, Phi,
 };
@@ -2761,10 +2761,10 @@ impl Selector<'_, '_, '_> {
                 unreachable!("a scaled or two-register address is read only by accesses")
             }
             Pointer::Frame { disp, index: None, .. } => {
-                let address = Address {
+                let address = AddressRef {
                     through: Register::BP,
                     disp_width: 2,
-                    ..Address::new(Some(Addr::new(Space::Frame, disp)))
+                    ..AddressRef::new(Some(Addr::new(Space::Frame, disp)))
                 };
                 semantics(Operation::Address, "lea", vec![Loc::Held(held)], vec![Loc::Address(address)])
             }

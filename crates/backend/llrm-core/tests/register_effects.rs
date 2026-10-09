@@ -8,7 +8,7 @@ use llrm_core::backend::lanes::Lanes;
 use llrm_core::backend::peephole::{_effects_by_table, _flag_lanes, _lanes, _moved_by, _moved_lanes};
 use llrm_core::backend::target::named as named_register;
 use llrm_core::model::lir::Insn;
-use llrm_lir::{Addr, Address, Imm, Loc, Mem, Reg, Semantics, Space};
+use llrm_lir::{Addr, AddressRef, Imm, Loc, Mem, Reg, Semantics, Space};
 use llrm_target::Target;
 use llrm_x86::effects::root;
 use llrm_x86_m16::instructions::parse::{self, Form, Side};
@@ -176,11 +176,11 @@ fn operand(
             // A word `lea` in flat code takes a 16-bit address, behind a
             // prefix.
             let (base, index) = if bytes == 2 { (Register::BX, Register::SI) } else { (base, wide_index) };
-            Some(Loc::Address(Address {
+            Some(Loc::Address(AddressRef {
                 through: base,
-                index: if pick % 2 == 0 { Register::None } else { index },
+                index_through: if pick % 2 == 0 { Register::None } else { index },
                 scale: 1,
-                ..Address::new(None)
+                ..AddressRef::new(None)
             }))
         }
         'i' => Some(Loc::Imm(Imm {

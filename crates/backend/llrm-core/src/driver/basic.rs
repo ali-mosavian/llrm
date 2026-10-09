@@ -114,7 +114,7 @@ pub fn _static_frame(
                 through: through(mem.through),
                 ..mem.clone()
             }),
-            Loc::Address(address) if address.in_frame() => Loc::Address(ir::Address {
+            Loc::Address(address) if address.in_frame() => Loc::Address(ir::AddressRef {
                 addr: address.addr.map(|addr| moved(&addr)),
                 through: through(address.through),
                 ..address.clone()
@@ -226,7 +226,7 @@ pub fn _runtime_frame(
                 Loc::Mem(ir::Mem { addr: Some(moved(&mem.addr.unwrap())), ..mem.clone() })
             }
             Loc::Address(address) if address.in_frame() => {
-                Loc::Address(ir::Address { addr: Some(moved(&address.addr.unwrap())), ..address.clone() })
+                Loc::Address(ir::AddressRef { addr: Some(moved(&address.addr.unwrap())), ..address.clone() })
             }
             other => other.clone(),
         }

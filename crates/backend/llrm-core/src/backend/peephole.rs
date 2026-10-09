@@ -20,7 +20,7 @@ use crate::backend::{
     affine, copyprop, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, sharedstores,
     spillforward, storecombine, target,
 };
-use crate::model::ir::{self, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
+use crate::model::ir::{self, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet};
@@ -927,8 +927,12 @@ pub fn _register_operand(
         }
         Loc::Address(one) => {
             let through = if ir::root(one.through) == ir::root(before) { named(one.through) } else { one.through };
-            let index = if ir::root(one.index) == ir::root(before) { named(one.index) } else { one.index };
-            Loc::Address(Address { through, index, ..one.clone() })
+            let index = if ir::root(one.index_through) == ir::root(before) {
+                named(one.index_through)
+            } else {
+                one.index_through
+            };
+            Loc::Address(AddressRef { through, index_through: index, ..one.clone() })
         }
         _ => one.clone(),
     }
@@ -1450,11 +1454,11 @@ fn _loaded_scaled_add<'a>(
         Operation::Address,
         "lea",
         vec![Loc::Reg(total)],
-        vec![Loc::Address(Address {
+        vec![Loc::Address(AddressRef {
             through: full32(total.register),
-            index: full32(temporary.register),
+            index_through: full32(temporary.register),
             scale: 1 << amount,
-            ..Address::new(None)
+            ..AddressRef::new(None)
         })],
     );
     Ok(Some(Arc::new(with_what(addition, what))))
@@ -1929,7 +1933,7 @@ fn _affine_address(
     let bits = i64::from(dest.width) * 8;
     let wrapped = |value: i64| (value + (1 << (bits - 1))).rem_euclid(1 << bits) - (1 << (bits - 1));
     let (mut terms, mut disp): (affine::Terms, i64) = (vec![(full32(source.register), 1)], 0);
-    let mut best: Option<(usize, Address, i64, bool)> = None;
+    let mut best: Option<(usize, AddressRef, i64, bool)> = None;
     for (at, one) in parts.iter().enumerate().skip(1) {
         let Some((written, step, cost)) = affine::step(one, cpu) else {
             break;

@@ -7,7 +7,7 @@ use iced_x86::Register;
 
 use crate::backend::cpu::Profile;
 use crate::backend::target;
-use crate::model::ir::{Address, Imm, Loc, Operation, Reg};
+use crate::model::ir::{AddressRef, Imm, Loc, Operation, Reg};
 use crate::model::lir::Insn;
 
 /// What one instruction makes of the register it writes.
@@ -84,18 +84,18 @@ pub fn form(
     terms: &[(Register, i64)],
     disp: i64,
     scales: &BTreeSet<i64>,
-) -> Option<Address> {
+) -> Option<AddressRef> {
     let at = |through: Register, index: Register, scale: i64| {
-        (index != Register::ESP && scales.contains(&scale)).then_some(Address {
+        (index != Register::ESP && scales.contains(&scale)).then_some(AddressRef {
             through,
-            index,
+            index_through: index,
             scale,
             offset: disp,
-            ..Address::new(None)
+            ..AddressRef::new(None)
         })
     };
     match *terms {
-        [(only, 1)] => Some(Address { through: only, offset: disp, ..Address::new(None) }),
+        [(only, 1)] => Some(AddressRef { through: only, offset: disp, ..AddressRef::new(None) }),
         [(only, scale)] => at(only, only, scale - 1).or_else(|| at(Register::None, only, scale)),
         [(base, 1), (index, scale)] | [(index, scale), (base, 1)] => {
             at(base, index, scale).or_else(|| at(index, base, 1).filter(|_| scale == 1))
@@ -109,22 +109,22 @@ pub fn form(
 pub fn word_form(
     terms: &[(Register, i64)],
     disp: i64,
-) -> Option<Address> {
+) -> Option<AddressRef> {
     use llrm_x86::addressing16::{BASES, INDEXES};
     let word =
         |one: Register| llrm_x86::registers::word_of(one).filter(|word| BASES.contains(word) || INDEXES.contains(word));
     let is_base = |one: Register| BASES.contains(&one);
     match *terms {
-        [(only, 1)] => Some(Address { through: word(only)?, offset: disp, ..Address::new(None) }),
+        [(only, 1)] => Some(AddressRef { through: word(only)?, offset: disp, ..AddressRef::new(None) }),
         [(first, 1), (second, 1)] => {
             let (first, second) = (word(first)?, word(second)?);
             let (base, index) = if is_base(first) { (first, second) } else { (second, first) };
-            (is_base(base) && !is_base(index)).then_some(Address {
+            (is_base(base) && !is_base(index)).then_some(AddressRef {
                 through: base,
-                index,
+                index_through: index,
                 scale: 1,
                 offset: disp,
-                ..Address::new(None)
+                ..AddressRef::new(None)
             })
         }
         _ => None,

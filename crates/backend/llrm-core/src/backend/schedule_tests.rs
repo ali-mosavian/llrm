@@ -7,7 +7,7 @@ use iced_x86::Register;
 
 use super::*;
 use crate::backend::cpu;
-use crate::model::ir::{Addr, Address, Mem, Reg, Semantics};
+use crate::model::ir::{Addr, AddressRef, Mem, Reg, Semantics};
 use crate::model::lir::LirBlock;
 use crate::support::hash::IndexMap;
 
@@ -129,8 +129,12 @@ fn test_pentium_orders_a_prefixed_move_before_its_uv_pair() {
 /// P5 left `lea bx,[bp-4]; mov eax,ecx` unpaired by treating LEA as a load.
 #[test]
 fn test_pentium_pairs_a_frame_lea_after_an_independent_prefixed_move() {
-    let address =
-        Address { through: Register::BP, offset: -4, disp_width: 1, ..Address::new(Some(Addr::new(Space::Frame, -4))) };
+    let address = AddressRef {
+        through: Register::BP,
+        offset: -4,
+        disp_width: 1,
+        ..AddressRef::new(Some(Addr::new(Space::Frame, -4)))
+    };
     let lea = _insn(0, Operation::Address, "lea", vec![reg(Register::BX, 2)], vec![Loc::Address(address)]);
     // The 32-bit move has the operand-size prefix in this 16-bit mode and
     // consequently consumes P5's U pipe. GCC's Pentium model classifies a
@@ -146,11 +150,11 @@ fn test_pentium_pairs_a_frame_lea_after_an_independent_prefixed_move() {
 /// frame address.
 #[test]
 fn test_scheduler_keeps_symbolic_or_nonframe_addresses_out_of_its_window() {
-    let address = Address {
+    let address = AddressRef {
         through: Register::BX,
         offset: 0,
         disp_width: 2,
-        ..Address::new(Some(Addr { index: 1, ..Addr::new(Space::Segment, 0) }))
+        ..AddressRef::new(Some(Addr { index: 1, ..Addr::new(Space::Segment, 0) }))
     };
     let lea = _insn(1, Operation::Address, "lea", vec![reg(Register::DI, 2)], vec![Loc::Address(address)]);
 

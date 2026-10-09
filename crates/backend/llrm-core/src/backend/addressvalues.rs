@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use iced_x86::Register;
 
-use crate::model::ir::{Address, Loc, Operation};
+use crate::model::ir::{AddressRef, Loc, Operation};
 use crate::model::lir::{Insn, LirBody};
 use crate::objectfile::module::{Addr, Space};
 
@@ -24,10 +24,10 @@ pub fn converted(body: &LirBody) -> LirBody {
             };
             let mut addr = source.addr;
             if addr.is_some_and(|addr| addr.space == Space::Frame) && source.base.is_some() {
-                sources.push(Loc::Address(Address {
+                sources.push(Loc::Address(AddressRef {
                     addr: None,
                     through: Register::BP,
-                    index: source.through,
+                    index_through: source.through,
                     scale: source.scale,
                     offset: addr.expect("checked").disp,
                     disp_width: source.disp_width,
@@ -37,10 +37,10 @@ pub fn converted(body: &LirBody) -> LirBody {
             if addr.is_some() && source.base.is_some() && source.through != Register::None {
                 addr = addr.map(|addr| Addr { base: source.through, ..addr });
             }
-            sources.push(Loc::Address(Address {
+            sources.push(Loc::Address(AddressRef {
                 addr,
                 through: source.through,
-                index: source.index_through,
+                index_through: source.index_through,
                 scale: source.scale,
                 offset: source.offset,
                 disp_width: source.disp_width,
@@ -116,11 +116,11 @@ mod tests {
             printed,
             [
                 "Semantics(op=<Operation.ADDRESS: 'addr'>, name='lea', dests=(Held(value=9, width=2),), \
-                 sources=(Address(addr=None, through=26, index=27, scale=2, offset=-6, disp_width=1), \
+                 sources=(AddressRef(addr=None, through=26, index=27, scale=2, offset=-6, disp_width=1), \
                  Held(value=4, width=2)), target=None, indirect=False)",
                 "Semantics(op=<Operation.ADDRESS: 'addr'>, name='lea', dests=(Held(value=9, width=2),), \
-                 sources=(Address(addr=[seg:0+bx+0x8], through=24, index=28, scale=1, offset=5, disp_width=2), \
-                 Address(addr=[seg:0+0x8], through=24, index=0, scale=1, offset=5, disp_width=2)), \
+                 sources=(AddressRef(addr=[seg:0+bx+0x8], through=24, index=28, scale=1, offset=5, disp_width=2), \
+                 AddressRef(addr=[seg:0+0x8], through=24, index=0, scale=1, offset=5, disp_width=2)), \
                  target=None, indirect=False)",
                 "Semantics(op=<Operation.MOVE: 'move'>, name='mov', dests=(Held(value=9, width=2),), \
                  sources=(Mem(addr=[seg:0+0x8], width=2, through=24, offset=5, disp_width=2, \

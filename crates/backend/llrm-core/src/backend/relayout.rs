@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use crate::backend::assemble::Machined;
 use crate::backend::frame::Frame;
-use crate::model::ir::{Addr, Address, Loc, Mem, Semantics, Space};
+use crate::model::ir::{Addr, AddressRef, Loc, Mem, Semantics, Space};
 use crate::model::lir::{CallMemory, DebugPlace, DebugVariable, Insn, LirBlock, WHOLE_FRAME, outside};
 use crate::support::hash::IndexMap;
 
@@ -179,11 +179,11 @@ impl Moves<'_> {
 
     fn address(
         &self,
-        cell: &Address,
-    ) -> Option<Address> {
+        cell: &AddressRef,
+    ) -> Option<AddressRef> {
         let Some(addr) = cell.addr else { return Some(cell.clone()) };
         let (addr, offset) = self.addr(addr, cell.offset, cell.in_frame())?;
-        Some(Address { addr: Some(addr), offset, ..cell.clone() })
+        Some(AddressRef { addr: Some(addr), offset, ..cell.clone() })
     }
 
     fn loc(

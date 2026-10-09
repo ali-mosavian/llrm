@@ -113,7 +113,9 @@ pub fn _safe(
         .collect();
     if what.op == Operation::Address {
         let Loc::Address(address) = &what.sources[0] else { unreachable!("checked above") };
-        registers.extend([address.through, address.index].into_iter().filter(|register| *register != Register::None));
+        registers.extend(
+            [address.through, address.index_through].into_iter().filter(|register| *register != Register::None),
+        );
     }
     if registers.iter().any(|register| !_GENERAL.contains(&register.full_register32())) {
         return None;

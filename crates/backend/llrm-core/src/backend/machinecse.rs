@@ -43,7 +43,7 @@ fn _shape(where_: &Loc) -> Result<Shape, String> {
         Loc::Reg(one) => Ok(Shape::Reg(one.register, one.width)),
         Loc::Imm(one) => Ok(Shape::Imm(one.value, one.width, one.address)),
         Loc::Address(one) => {
-            Ok(Shape::Address(one.addr, one.through, one.index, one.scale, one.offset, one.disp_width))
+            Ok(Shape::Address(one.addr, one.through, one.index_through, one.scale, one.offset, one.disp_width))
         }
         _ => Err(format!("machine CSE source is not independently reproducible: {}", where_.repr())),
     }
@@ -54,7 +54,7 @@ fn _source_lanes(where_: &Loc) -> Option<Lanes> {
     let registers: Vec<Register> = match where_ {
         Loc::Reg(one) => vec![one.register],
         Loc::Address(one) => {
-            [one.through, one.index].into_iter().filter(|register| *register != Register::None).collect()
+            [one.through, one.index_through].into_iter().filter(|register| *register != Register::None).collect()
         }
         Loc::Imm(_) => Vec::new(),
         _ => return None,
@@ -296,7 +296,7 @@ mod tests {
     use iced_x86::Register;
 
     use super::eliminated;
-    use crate::model::ir::{Addr, Address, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
+    use crate::model::ir::{Addr, AddressRef, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
@@ -317,11 +317,11 @@ mod tests {
         value: u32,
         at: i64,
     ) -> Arc<Insn> {
-        let address = Address {
+        let address = AddressRef {
             through: Register::BP,
             offset: -100,
             disp_width: 1,
-            ..Address::new(Some(Addr::new(Space::Frame, -100)))
+            ..AddressRef::new(Some(Addr::new(Space::Frame, -100)))
         };
         Arc::new(Insn::new(
             at,
@@ -498,7 +498,7 @@ mod tests {
                     Operation::Address,
                     "lea",
                     vec![bx()],
-                    vec![Loc::Address(Address { through, index, scale: 2, ..Address::new(None) })],
+                    vec![Loc::Address(AddressRef { through, index_through: index, scale: 2, ..AddressRef::new(None) })],
                 ),
                 vec![defines],
                 vec![],

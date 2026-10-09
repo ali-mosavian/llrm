@@ -57,7 +57,7 @@ pub fn without_frame_register(
                 match place {
                     Loc::Reg(reg) if is_frame(reg.register, pointer) => return false,
                     Loc::Mem(cell) if is_frame(cell.index_through, pointer) => return false,
-                    Loc::Address(address) if is_frame(address.index, pointer) => return false,
+                    Loc::Address(address) if is_frame(address.index_through, pointer) => return false,
                     // A register-based cell is fine; the frame register as a
                     // base is only a frame cell.
                     Loc::Mem(cell) if is_frame(cell.through, pointer) && !cell.in_frame() => return false,
