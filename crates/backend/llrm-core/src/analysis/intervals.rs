@@ -216,6 +216,11 @@ pub fn worked(body: &LirBody) -> usize {
     body.facts.0.counted("intervals-worked")
 }
 
+/// How many edited answers this body's facts have worked the changed values of out from where they occur, not by walking the body.
+pub fn by_occurrences(body: &LirBody) -> usize {
+    body.facts.0.counted("intervals-by-occurrences")
+}
+
 /// How many answers this body's facts have made by editing an earlier one, for a test that a body made of another's instructions is.
 pub fn edited(body: &LirBody) -> usize {
     body.facts.0.counted("intervals-edited")
@@ -262,7 +267,7 @@ pub fn intervals_shared_over(body: &LirBody, index: Option<&Indexes>, busy: &Fre
         recent.0.insert(0, held);
         Some(answer)
     }) {
-        if std::env::var_os("LLRM_CHECK_INTERVALS").is_some() {
+        if llrm_support::env_set("LLRM_CHECK_INTERVALS") {
             assert!(*found == worked_out(body, index, busy), "{}: a remembered answer differs from working it out", body.name);
         }
         llrm_support::debug::counted("intervals remembered", true);
@@ -286,7 +291,7 @@ pub fn intervals_shared_over(body: &LirBody, index: Option<&Indexes>, busy: &Fre
         Some(found) => {
             llrm_support::debug::counted("intervals edited", true);
             body.facts.0.bump("intervals-edited");
-            if std::env::var_os("LLRM_CHECK_INTERVALS").is_some() {
+            if llrm_support::env_set("LLRM_CHECK_INTERVALS") {
                 let whole = worked_out(body, Some(index), busy);
                 if found.0 != whole {
                     let mut shown = 0;
@@ -401,7 +406,7 @@ fn updated(held: &Remembered, body: &LirBody, index: &Indexes, busy: &Frequency)
         let at = old.partition_point(|one| *one < slot) - 1;
         new[at] + (slot - old[at])
     };
-    let again = worked_out_with_totals(body, index, busy, &|value| touched.contains(&value));
+    let again = llrm_support::debug::timed("intervals among", || worked_among(body, index, busy, &touched));
     let mut answer: IndexMap<u32, Interval> = IndexMap::default();
     let mut totals: IndexMap<u32, f64> = IndexMap::default();
     for (value, kept) in held.answer.iter().filter(|(value, _)| !touched.contains(value)) {
@@ -422,6 +427,53 @@ fn updated(held: &Remembered, body: &LirBody, index: &Indexes, busy: &Frequency)
     answer.extend(again.0);
     totals.extend(again.1);
     Some((answer, totals))
+}
+
+/// `worked_out_with_totals` of the values `only` holds, from where they occur: one pass over the instructions finds each value's
+/// occurrences and weights, and the intervals are found from those (`intervals_by_occurrences`) where the walk would take the body's
+/// liveness whole and walk every block. For a body with phis, whose arguments are read in other blocks, the walk.
+fn worked_among(body: &LirBody, index: &Indexes, busy: &Frequency, only: &crate::support::hash::HashSet<u32>) -> (IndexMap<u32, Interval>, IndexMap<u32, f64>) {
+    if body.blocks.iter().any(|block| !block.phis.is_empty()) || llrm_support::env_set("LLRM_WALK_ALL") {
+        return worked_out_with_totals(body, index, busy, &|value| only.contains(&value));
+    }
+    body.facts.0.bump("intervals-by-occurrences");
+    let mut places: IndexMap<u32, Vec<Occurrence>> = IndexMap::default();
+    let mut totals: IndexMap<u32, f64> = IndexMap::default();
+    let mut named: Vec<(u32, bool, bool)> = Vec::new();
+    for (block_index, block) in body.blocks.iter().enumerate() {
+        let each = busy.block(block.at);
+        for (position, one) in block.insns.iter().enumerate() {
+            named.clear();
+            for (value, defined) in one.defines.iter().map(|value| (value, true)).chain(one.uses.iter().map(|value| (value, false))) {
+                if !only.contains(value) {
+                    continue;
+                }
+                *totals.entry(*value).or_insert(0.0) += each;
+                match named.iter_mut().find(|(seen, _, _)| seen == value) {
+                    Some(flags) => {
+                        flags.1 |= defined;
+                        flags.2 |= !defined;
+                    }
+                    None => named.push((*value, defined, !defined)),
+                }
+            }
+            for &(value, defined, used) in &named {
+                places.entry(value).or_default().push(((block_index, position), defined, used));
+            }
+        }
+    }
+    let mut values: Vec<u32> = places.keys().copied().collect();
+    values.sort_unstable();
+    let ranges = intervals_by_occurrences(body, index, &values, &places);
+    let weight = _divided(&totals, &ranges);
+    let answer = ranges
+        .into_iter()
+        .map(|(value, one)| {
+            let weight = weight.get(&value).copied().unwrap_or(0.0);
+            (value, Interval { weight, ..one })
+        })
+        .collect();
+    (answer, totals)
 }
 
 fn worked_out(body: &LirBody, index: Option<&Indexes>, busy: &Frequency) -> IndexMap<u32, Interval> {
@@ -487,7 +539,7 @@ fn _group_start(block: &LirBlock, position: usize) -> usize {
 /// and nothing reads it in order. (The order is kept as it was all the same.)
 fn _ranges(body: &LirBody, index: &Indexes, keep: &impl Fn(u32) -> bool) -> IndexMap<u32, Interval> {
     let found = _walked(body, index, keep);
-    if std::env::var_os("LLRM_CHECK_RANGES").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_RANGES") {
         let reference = _ranges_reference(body, index, keep);
         assert!(found.iter().eq(reference.iter()), "{}: the walk differs from the reference", body.name);
     }
@@ -567,7 +619,7 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
     }
     let spans: Vec<(i64, i64)> = body.blocks.iter().map(|block| index.span[&block.at]).collect();
     // Marks by block, a mark current when it equals the value's turn: no table is cleared between values.
-    let (mut in_mark, mut out_mark, mut written_mark, mut run_mark) = (vec![0u32; count], vec![0u32; count], vec![0u32; count], vec![0u32; count]);
+    let (mut in_mark, mut out_mark, mut written_mark, mut run_mark, mut reach_mark) = (vec![0u32; count], vec![0u32; count], vec![0u32; count], vec![0u32; count], vec![0u32; count]);
     let mut run_of: Vec<usize> = vec![0; count];
     let mut out: IndexMap<u32, Interval> = IndexMap::default();
     let mut turn = 0u32;
@@ -577,6 +629,8 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
         // By block: the parallel-copy runs it occurs in, as (last position of the run, defined there, read there), ascending.
         let mut by_block: Vec<Vec<(usize, bool, bool)>> = Vec::new();
         let mut work: Vec<usize> = Vec::new();
+        // The blocks this value occurs in or is live through: all else is none of its business, so no pass is over every block.
+        let mut reached: Vec<usize> = Vec::new();
         for &((block_index, at), defined, used) in found {
             let block = &body.blocks[block_index];
             let end = _group_end(block, at);
@@ -584,6 +638,10 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
                 run_mark[block_index] = turn;
                 run_of[block_index] = by_block.len();
                 by_block.push(Vec::new());
+                if reach_mark[block_index] != turn {
+                    reach_mark[block_index] = turn;
+                    reached.push(block_index);
+                }
             }
             let runs = &mut by_block[run_of[block_index]];
             match runs.last_mut() {
@@ -597,10 +655,7 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
         // Live in a block, and out of it, by the occurrences: read before it is written there, and so up its predecessors until
         // a block writes it. The first run that names it decides: a read, even with a write beside it (the walk takes the
         // group's writes first).
-        for block_index in 0..count {
-            if run_mark[block_index] != turn {
-                continue;
-            }
+        for &block_index in &reached {
             let runs = &by_block[run_of[block_index]];
             if runs.iter().any(|(_, defined, _)| *defined) {
                 written_mark[block_index] = turn;
@@ -614,6 +669,10 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
             for &before in &predecessors[block_index] {
                 if out_mark[before] != turn {
                     out_mark[before] = turn;
+                    if reach_mark[before] != turn {
+                        reach_mark[before] = turn;
+                        reached.push(before);
+                    }
                     if written_mark[before] != turn && in_mark[before] != turn {
                         in_mark[before] = turn;
                         work.push(before);
@@ -621,9 +680,10 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
                 }
             }
         }
+        reached.sort_unstable();
         let mut segments: Vec<Segment> = Vec::new();
         let mut here: Vec<Segment> = Vec::new();
-        for block_index in 0..count {
+        for &block_index in &reached {
             let occurs = run_mark[block_index] == turn;
             let live_out = out_mark[block_index] == turn;
             let live_in = in_mark[block_index] == turn;

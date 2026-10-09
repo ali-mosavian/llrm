@@ -108,7 +108,7 @@ fn _numbers(context: &mut Context, layout: &DataLayout, function: &mut Function,
         let shared = (edges.is_empty() && *calls == manager::writes(context, layout, function, analyses)).then(|| analyses.get::<manager::ThroughMemory>(context, layout, function));
         let facts = match shared.as_deref() {
             Some(Ok(through)) => {
-                if std::env::var_os("LLRM_CHECK_FACTS").is_some() {
+                if llrm_support::env_set("LLRM_CHECK_FACTS") {
                     assert!(*through == consts::known(&unit, Some(calls), Some(&edges), None), "ThroughMemory's integers are not those fold derives for itself");
                 }
                 through.clone()

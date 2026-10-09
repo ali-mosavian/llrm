@@ -3817,6 +3817,24 @@ fn test_the_spiller_route_is_run_only_where_the_allocator_left_frame_traffic() {
     assert!(directed < all, "{directed} routes against {all}");
 }
 
+/// -O0 ran the allocator's trials and both routes (the allocator alone and the spiller's) on every function: half of a -O0 compile
+/// (QCport d_faces 3.64 G, d_alias 4.32 G), for code the same size within 0.02%. gcc's IRA at -O0 builds no conflicts and allocates
+/// once. Without the search a function is made through one route.
+#[test]
+fn test_without_the_allocation_search_a_function_takes_one_route() {
+    let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/matmul.ll")).unwrap();
+    let routes = |search: bool| {
+        let profile = crate::backend::cpu::tuned_with(&llrm_x86_m16::M16, "486", false, search, false).expect("a profile");
+        let (routes, machinings) = (assemble::routes(), assemble::machinings());
+        assemble::assembled(&parsed(&text), &qb(), "T_TEXT", ProfileOrName::Profile(profile), &crate::backend::target::BASIC).expect("assembles");
+        (assemble::routes() - routes, assemble::machinings() - machinings)
+    };
+    let (routes_searching, functions) = routes(true);
+    assert!(routes_searching > functions, "premise: a function takes more than one route when searching ({routes_searching} routes, {functions} functions)");
+    let (routes_not, functions) = routes(false);
+    assert_eq!(routes_not, functions, "{routes_not} routes for {functions} functions without the search");
+}
+
 /// Each route through the machine phases selected the function's instructions again, though the selector's output is the same
 /// for all of them: the routes of one function share one selection (4-5% of a file's compile time on the files the probe ran
 /// twice).

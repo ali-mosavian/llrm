@@ -523,7 +523,7 @@ enum Pointer {
 /// `LLRM_CHECK_CALLEES=1`: the callees' effects selection was given are what a scan of the module gives.
 fn checking_callees() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_CALLEES").is_some())
+    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_CALLEES"))
 }
 
 /// `hole` bytes below BP are left free, above the allocas, for spill slots.
@@ -550,7 +550,9 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
     let unit = unit.with_exposed(&exposed);
     let registers = llrm_analysis::consts::known(&unit, None, None, None);
     let unit = unit.with_registers(&registers);
-    let exact = ranges::exact_offsets(&unit).map_err(Unselected)?;
+    // One solve of the scoped bounds serves the exact offsets and, below, the dword-indexed accesses.
+    let scoped = ranges::scoped(&unit).map_err(Unselected)?;
+    let exact = ranges::exact_offsets_given(&unit, &scoped).map_err(Unselected)?;
     let wide = cpu.dword_address_form();
     let secondary = wide.filter(|form| form.before_spill(&cpu.operations));
     let dword_indexed = wide.is_some() && function.walk().any(|(_, inst)| dword_indexed(module, function, inst));
@@ -558,7 +560,7 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
         false => (Facts::default(), BTreeSet::new()),
         true => {
             let typed = function.walk().map(|(_, inst)| inst).filter(|&inst| MemRef::of(&unit, inst).is_some_and(|one| one.typed.is_some())).collect();
-            (ranges::scoped(&unit).map_err(Unselected)?, typed)
+            (scoped, typed)
         }
     };
     let mut selector = Selector {

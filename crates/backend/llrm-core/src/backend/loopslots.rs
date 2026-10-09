@@ -132,7 +132,14 @@ impl Touch {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static TOUCHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn touch(m: u32, one: &Insn) -> Touch {
+    #[cfg(test)]
+    TOUCHED.with(|count| count.set(count.get() + 1));
     let mut out = Touch { word: m, ..Touch::default() };
     let Some(what) = one.what.as_ref() else {
         out.other = true;
@@ -373,10 +380,30 @@ fn rewritten(m: u32, one: &Arc<Insn>, homes: &BTreeMap<i64, Loc>) -> Arc<Insn> {
     Arc::new(Insn { what: Some(what), spill_reload: false, spill_store: false, ..(**one).clone() })
 }
 
+/// For each of `slots`, the instructions of `seen` (by position in it) that read or write it, in whole or in part. An instruction
+/// that reaches no slot of the loop is in none of the lists, and is what every question of a slot skips.
+fn reaching_slots(m: u32, slots: &BTreeSet<i64>, seen: &[(usize, usize, &Arc<Insn>, Touch)]) -> BTreeMap<i64, Vec<usize>> {
+    let mut by_slot: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
+    for (i, (_, _, _, touched)) in seen.iter().enumerate() {
+        for at in touched.reads.iter().chain(&touched.writes) {
+            by_slot.entry(*at).or_default().push(i);
+        }
+        for reach in &touched.wide {
+            // `Touch::reaches`: the word at `at` overlaps the bytes `[from, to)`.
+            for at in slots.range(reach.from - i64::from(m) + 1..reach.to) {
+                by_slot.entry(*at).or_default().push(i);
+            }
+        }
+    }
+    for list in by_slot.values_mut() {
+        list.dedup();
+    }
+    by_slot
+}
+
 /// Whether `one` still encodes with slot `at` in a register: an x87 store
 /// or a far-pointer load takes only memory.
-fn registrable(m: u32, bits: u32, home: Register, one: &Arc<Insn>, at: i64) -> bool {
-    let touched = touch(m, one);
+fn registrable(m: u32, bits: u32, home: Register, one: &Arc<Insn>, touched: &Touch, at: i64) -> bool {
     if touched.reaches(at, false) || touched.reaches(at, true) {
         return false;
     }
@@ -389,8 +416,7 @@ fn registrable(m: u32, bits: u32, home: Register, one: &Arc<Insn>, at: i64) -> b
 
 /// What holding a slot in a register saves each trip: a reload whose
 /// register is freed goes, one kept becomes a register move.
-fn saving(m: u32, one: &Insn, at: i64, folded: bool, costs: &OperationCosts) -> i64 {
-    let touched = touch(m, one);
+fn saving(touched: &Touch, one: &Insn, at: i64, folded: bool, costs: &OperationCosts) -> i64 {
     let (reads, writes) = (touched.reads_slot(at), touched.writes_slot(at));
     if !reads && !writes {
         return 0;
@@ -410,46 +436,54 @@ enum Source {
 /// never writes -- a slot, or a constant -- and which nothing reads before
 /// that load. A constant counts: a segment register takes one only as
 /// `push / pop`, which qbdemo's PLASMA ran every pixel.
-fn invariant(m: u32, body: &LirBody, one: &Loop, index: &BTreeMap<i64, usize>, entering: &Lanes, root: Register, spills: &BTreeSet<i64>) -> Option<Source> {
+fn invariant(m: u32, insns: &[(&Arc<Insn>, Lanes)], touches: &std::cell::OnceCell<Vec<Touch>>, entering: &Lanes, root: Register, spills: &BTreeSet<i64>) -> Option<Source> {
     let lanes = _lanes(root);
     if !entering.is_disjoint(&lanes) {
         return None;
     }
     let mut from = None;
+    for (insn, may_write) in insns {
+        if may_write.is_disjoint(&lanes) {
+            continue;
+        }
+        let what = insn.what.as_ref()?;
+        let source = match (what.op, what.dests.as_slice(), what.sources.as_slice()) {
+            (Operation::Move, [Loc::Reg(reg)], [Loc::Mem(mem)]) if ir::root(reg.register) == ir::root(root) && reg.width == m && mem.width == m => {
+                Source::Slot(slot(mem)?)
+            }
+            (Operation::Move, [Loc::Reg(reg)], [Loc::Imm(imm)]) if ir::root(reg.register) == ir::root(root) && reg.width == m => Source::Constant(imm.clone()),
+            _ => return None,
+        };
+        if from.as_ref().is_some_and(|one| *one != source) {
+            return None;
+        }
+        from = Some(source);
+    }
+    let kept = match from.as_ref()? {
+        Source::Slot(at) if spills.contains(at) => {
+            let touches = touches.get_or_init(|| insns.iter().map(|(insn, _)| touch(m, insn)).collect());
+            !touches.iter().any(|touched| touched.writes_slot(*at))
+        }
+        Source::Slot(at) => insns.iter().all(|(insn, _)| spares(m, insn, *at)),
+        Source::Constant(_) => true,
+    };
+    kept.then_some(from?)
+}
+
+/// Each instruction of loop `one`, with the lanes it may write, or none where an instruction's effect is not known (and no register is
+/// invariant): worked out once for the loop, where `invariant` asked it again for every register.
+fn writes_of<'a>(body: &'a LirBody, one: &Loop, index: &BTreeMap<i64, usize>) -> Option<Vec<(&'a Arc<Insn>, Lanes)>> {
+    let mut out = Vec::new();
     for at in &one.body {
         for insn in &body.blocks[index[at]].insns {
             let effect = liveness::effect(body.bits, insn)?;
             // A `rep movs` steps si and di only if it runs: a conditional write, but one
             // that makes the register unfit to hold its value from one trip to the next.
             let may_write = peephole::_register_effects(body.bits, insn, true, false).map_or(effect.writes, |(_, writes)| effect.writes.or(&writes));
-            if may_write.is_disjoint(&lanes) {
-                continue;
-            }
-            let what = insn.what.as_ref()?;
-            let source = match (what.op, what.dests.as_slice(), what.sources.as_slice()) {
-                (Operation::Move, [Loc::Reg(reg)], [Loc::Mem(mem)])
-                    if ir::root(reg.register) == ir::root(root) && reg.width == m && mem.width == m =>
-                {
-                    Source::Slot(slot(mem)?)
-                }
-                (Operation::Move, [Loc::Reg(reg)], [Loc::Imm(imm)]) if ir::root(reg.register) == ir::root(root) && reg.width == m => {
-                    Source::Constant(imm.clone())
-                }
-                _ => return None,
-            };
-            if from.as_ref().is_some_and(|one| *one != source) {
-                return None;
-            }
-            from = Some(source);
+            out.push((insn, may_write));
         }
     }
-    let insns = || one.body.iter().flat_map(|at| body.blocks[index[at]].insns.iter());
-    let kept = match from.as_ref()? {
-        Source::Slot(at) if spills.contains(at) => !insns().any(|insn| touch(m, insn).writes_slot(*at)),
-        Source::Slot(at) => insns().all(|insn| spares(m, insn, *at)),
-        Source::Constant(_) => true,
-    };
-    kept.then_some(from?)
+    Some(out)
 }
 
 /// Whether `one` cannot write the frame cell at `at`: it writes memory only
@@ -492,8 +526,10 @@ pub fn hoisted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSet
             continue;
         }
         let roots = available.iter().chain(target::SEGMENTS.iter().filter(|one| ![Register::CS, Register::SS].contains(one)));
+        let Some(writes) = writes_of(body, one, &index) else { continue };
+        let touches = std::cell::OnceCell::new();
         let moved = roots
-            .filter_map(|root| invariant(m, body, one, &index, &live_into[&one.header], *root, spills).map(|at| (*root, at)))
+            .filter_map(|root| invariant(m, &writes, &touches, &live_into[&one.header], *root, spills).map(|at| (*root, at)))
             .collect::<Vec<_>>();
         if moved.is_empty() {
             continue;
@@ -558,12 +594,19 @@ pub fn promoted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSe
             continue;
         }
         let insns = || one.body.iter().flat_map(|at| body.blocks[index[at]].insns.iter());
+        // How each instruction of the loop reaches the frame, worked out once: each slot asks of the instructions that reach it,
+        // not of all of them (a loop of d nested levels asked d slots of d levels' instructions, d times over).
+        let mut seen: Vec<(usize, usize, &Arc<Insn>, Touch)> = Vec::new();
+        for block in &one.body {
+            for (position, insn) in body.blocks[index[block]].insns.iter().enumerate() {
+                seen.push((index[block], position, insn, touch(m, insn)));
+            }
+        }
         let (mut slots, mut other, mut traps) = (BTreeSet::new(), false, false);
-        for insn in insns() {
-            let touched = touch(m, insn);
+        for (_, _, _, touched) in &seen {
             other |= touched.other;
             traps |= touched.traps;
-            slots.extend(touched.reads.into_iter().chain(touched.writes));
+            slots.extend(touched.reads.iter().chain(&touched.writes).copied());
         }
         if slots.is_empty() || !slots.iter().all(|at| spills.contains(at)) {
             continue;
@@ -588,15 +631,16 @@ pub fn promoted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSe
             .flat_map(|(_, hold)| folds(hold).iter().map(|(block, position, _)| (*block, *position)))
             .collect::<BTreeSet<_>>();
         // Most saved first.
+        let reaching = reaching_slots(m, &slots, &seen);
+        let none = Vec::new();
         let mut ranked = slots
             .iter()
-            .filter(|at| insns().all(|insn| registrable(m, body.bits, *available.last().expect("a register to hold a slot"), insn, **at)))
+            .filter(|at| reaching.get(*at).unwrap_or(&none).iter().all(|i| registrable(m, body.bits, *available.last().expect("a register to hold a slot"), seen[*i].2, &seen[*i].3, **at)))
             .map(|at| {
                 let mut saved = 0;
-                for block in &one.body {
-                    for (position, insn) in body.blocks[index[block]].insns.iter().enumerate() {
-                        saved += saving(m, insn, *at, reloads.contains(&(index[block], position)), costs);
-                    }
+                for i in reaching.get(at).unwrap_or(&none) {
+                    let (block, position, insn, touched) = &seen[*i];
+                    saved += saving(touched, insn, *at, reloads.contains(&(*block, *position)), costs);
                 }
                 (saved, *at)
             })
@@ -606,7 +650,7 @@ pub fn promoted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSe
         // The trips a saving repeats: the header's frequency per entry.
         let entering: f64 = entries.iter().map(|from| busy.edge(*from, one.header)).sum();
         let trips = if entering > 0.0 { busy.block(one.header) / entering } else { 1.0 };
-        let written = |at: i64| insns().any(|insn| touch(m, insn).writes_slot(at));
+        let written = |at: i64| reaching.get(&at).unwrap_or(&none).iter().any(|i| seen[*i].3.writes_slot(at));
         let stored = |at: i64| written(at) && { let live = live_in(m, body, at); exits.iter().any(|to| live.contains(to)) };
         // BP takes the last slot when the rest fill every free register.
         let bp = !other && !traps && ranked.len() == registers.len() + 1 && !stored(ranked.last().expect("a slot").1);
@@ -878,6 +922,33 @@ mod tests {
         let pushes = out.insns().iter().filter(|insn| is_bp(insn, Operation::Push)).count();
         let pops = out.insns().iter().filter(|insn| is_bp(insn, Operation::Pop)).count();
         assert_eq!((pushes, pops), (1, 1), "the slot lives in EBP between a push and a pop");
+    }
+
+    /// Ranking a loop's slots asked every instruction of the loop how it reaches the frame, once for each slot, and each ask
+    /// allocated its sets: a nest of d levels (d loops of d levels' slots and instructions) cost d cubed, 215 M for a 16-deep
+    /// nest of which 169 M was this. Each instruction is asked once and each slot is asked of those that reach it.
+    #[test]
+    fn test_a_loops_slots_are_ranked_without_asking_every_instruction_for_each_slot() {
+        let slot = |at: i64| Loc::Mem(cell(2, at));
+        let mut loop_body: Vec<Arc<Insn>> = (0..12).map(|at| made(0x20 + at, Operation::Binary, "add", vec![reg(Register::AX)], vec![reg(Register::AX), slot(-2 * (at + 1))])).collect();
+        loop_body.push(Arc::new(Insn::new(0x30, Some((0x30, 0x31)), Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }), vec![], vec![])));
+        let count = loop_body.len();
+        let body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![made(0, Operation::Jump, "jmp", vec![], vec![])], vec![0x10]),
+                block(0x10, loop_body, vec![0x10, 0x40]),
+                block(0x40, vec![made(0x40, Operation::Return, "ret", vec![], vec![])], vec![]),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let costs = &crate::backend::cpu::profile("486").unwrap().operations;
+        let before = super::TOUCHED.with(std::cell::Cell::get);
+        promoted(2, &crate::backend::classes::RegisterClasses::m16().available, &body, &(1..=12).map(|at| -2 * at).collect(), costs, 2);
+        let asked = super::TOUCHED.with(std::cell::Cell::get) - before;
+        assert!(asked <= 2 * count, "{asked} asks of how an instruction reaches the frame for a loop of {count} instructions and 12 slots");
     }
 
     /// A loop that reads a far pointer's low word and also loads the pointer with `les` from the same

@@ -654,7 +654,7 @@ pub fn bounds<'u>(unit: &Unit<'u>) -> Result<std::borrow::Cow<'u, Bounds>, Strin
     let registers = unit.registers();
     match (unit.bounds, unit.registers) {
         (Some(held), Some(carried)) if std::ptr::eq(&*registers, carried) => {
-            if std::env::var_os("LLRM_CHECK_REPLAY").is_some() {
+            if llrm_support::env_set("LLRM_CHECK_REPLAY") {
                 assert!(held.facts() == bounded_with(&Unit { bounds: None, ..*unit }, &registers)?, "the bounds a unit carries are not those of the body it stands over: stale");
             }
             Ok(std::borrow::Cow::Borrowed(held))
@@ -668,19 +668,59 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
     Ok(bounded_solved(unit, facts, None)?.facts())
 }
 
+thread_local! {
+    static KNOWNS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// A name for a `known` a loop's blocks are worked from, so that what is kept of it is not compared with it block by block.
+fn fresh_known() -> u64 {
+    KNOWNS.with(|count| {
+        count.set(count.get() + 1);
+        count.get()
+    })
+}
+
+/// The edges inside a loop, one after another, each node the state `known` is narrowed to by the path of edges to it.
+struct Prefix {
+    state: Rc<IndexMap<ValueId, Interval>>,
+    next: HashMap<(usize, usize, i64), usize>,
+    /// The node of the prefix one edge shorter, and the values this edge changed of its state.
+    parent: Option<usize>,
+    delta: Vec<ValueId>,
+    /// `state` swept: found from the parent's, and the values this edge changed.
+    settled: Option<Rc<IndexMap<ValueId, Interval>>>,
+}
+
+/// The states after every prefix of the edge chains met so far, for the `known` they were worked from.
+#[derive(Default)]
+struct Prefixes {
+    /// Which `known` they were worked from (`fresh_known`).
+    known: u64,
+    roots: HashMap<Vec<(usize, usize, i64)>, usize>,
+    nodes: Vec<Prefix>,
+}
+
 /// `bounded`'s facts at each block, as the solve left them: those the counted loops give (`within`), and those with
 /// the edges' facts where a block is in none (`blocks`). A block that did not change shares its map with the solve
 /// before.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Bounds {
     headers: Vec<i64>,
     /// The edges' facts it was worked out under: a loop reads them where it starts from.
     edges: IndexMap<i64, Scope>,
     within: IndexMap<i64, Scope>,
     blocks: IndexMap<i64, Scope>,
+    /// The blocks two loops' facts contradict each other at: none executes them.
+    dead: BTreeSet<i64>,
 }
 
 impl Bounds {
+    /// Whether the facts of the loops holding `at` contradict each other there: the block is unreachable, and a call in it
+    /// passes nothing to its callee (`parameter_ranges` rounds, which assume a range before they prove it).
+    pub fn unreachable(&self, at: i64) -> bool {
+        self.dead.contains(&at)
+    }
+
     /// What is known at `at`.
     pub fn at(&self, at: i64) -> Option<&IndexMap<ValueId, Interval>> {
         self.blocks.get(&at).map(|scope| &**scope)
@@ -769,7 +809,7 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
     let edges_above = match (unit.edges, unit.registers) {
         (Some(states), Some(registers)) if std::ptr::eq(facts, registers) => {
             let held = states.shared(function);
-            if std::env::var_os("LLRM_CHECK_REPLAY").is_some() {
+            if llrm_support::env_set("LLRM_CHECK_REPLAY") {
                 assert!(held.iter().map(|(at, scope)| (*at, (**scope).clone())).collect::<IndexMap<_, _>>() == dominated_edges_with(unit, facts)?, "the edges a unit carries are not those of the body it stands over: stale");
             }
             held
@@ -789,6 +829,13 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
         None => IndexMap::default(),
     };
     let prior = prior.filter(|(held, _)| held.headers == headers);
+    let mut dead: BTreeSet<i64> = match prior {
+        Some((held, dirty)) => {
+            let redone: BTreeSet<i64> = nest.iter().filter(|one| dirty.contains(&one.header)).flat_map(|one| one.body.iter().copied()).collect();
+            held.dead.difference(&redone).copied().collect()
+        }
+        None => BTreeSet::new(),
+    };
     for loop_ in nest {
         if prior.is_some_and(|(_, dirty)| !dirty.contains(&loop_.header)) {
             continue;
@@ -932,12 +979,24 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
             }
             touching
         });
+        // The operations `changed` values reach, and what those reach in turn, worked again in `scoped`.
+        let propagate = |scoped: &mut IndexMap<ValueId, Interval>, changed: &mut dyn Iterator<Item = &ValueId>| {
+            let touching = touching_of();
+            let mut queue: BTreeSet<usize> = changed.flat_map(|value| touching.get(value).into_iter().flatten().copied()).collect();
+            while let Some(place) = queue.pop_first() {
+                if let Some((result, previous)) = apply(scoped, operations[place])
+                    && previous.as_ref() != scoped.get(&result)
+                {
+                    queue.extend(touching.get(&result).into_iter().flatten().copied());
+                }
+            }
+        };
         // `known` swept: what holds of the loop before any block's edges narrow it. Every block asks of the same one.
-        let swept: RefCell<Option<(IndexMap<ValueId, Interval>, Rc<IndexMap<ValueId, Interval>>)>> = RefCell::new(None);
+        let swept: RefCell<Option<(u64, Rc<IndexMap<ValueId, Interval>>)>> = RefCell::new(None);
         // `scoped` (`known` narrowed by a block's edges) swept, found from `known` swept: a sweep leaves an operation whose operands
         // and result are as they were in `known` as it found it there, so only those the narrowing reaches, and what they reach
         // in turn, are worked again from `known swept` with the narrowed values put over it.
-        let settle = |mut scoped: IndexMap<ValueId, Interval>, known: &IndexMap<ValueId, Interval>| -> IndexMap<ValueId, Interval> {
+        let settle = |mut scoped: IndexMap<ValueId, Interval>, known: &IndexMap<ValueId, Interval>, id: u64| -> IndexMap<ValueId, Interval> {
             // The cheaper of the two by the work each counts: a sweep evaluates every operation and then once more to see nothing
             // change (2 x operations); settling finds what the block's edges narrowed and puts the swept facts over the rest (one
             // pass over `scoped`'s facts), then evaluates only what that reaches.
@@ -946,10 +1005,10 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
             }
             let touching = touching_of();
             let base = {
-                let held = swept.borrow().as_ref().filter(|(was, _)| was == known).map(|(_, base)| Rc::clone(base));
+                let held = swept.borrow().as_ref().filter(|(was, _)| *was == id).map(|(_, base)| Rc::clone(base));
                 held.unwrap_or_else(|| {
                     let base = Rc::new(sweep(known.clone()));
-                    *swept.borrow_mut() = Some((known.clone(), Rc::clone(&base)));
+                    *swept.borrow_mut() = Some((id, Rc::clone(&base)));
                     base
                 })
             };
@@ -959,19 +1018,30 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
                     scoped.insert(*value, interval.clone());
                 }
             }
-            let mut queue: BTreeSet<usize> = narrowed.iter().flat_map(|value| touching.get(value).into_iter().flatten().copied()).collect();
-            while let Some(place) = queue.pop_first() {
-                if let Some((result, previous)) = apply(&mut scoped, operations[place])
-                    && previous.as_ref() != scoped.get(&result)
-                {
-                    queue.extend(touching.get(&result).into_iter().flatten().copied());
-                }
-            }
+            propagate(&mut scoped, &mut narrowed.iter());
             scoped
         };
-        let above_loop: RefCell<Option<(Vec<(usize, usize, i64)>, IndexMap<ValueId, Interval>)>> = RefCell::new(None);
+        let prefixes: RefCell<Prefixes> = RefCell::new(Prefixes::default());
+        // How many blocks of the loop each block dominates (itself too): the blocks a prefix ending at it is shared by.
+        let led = std::cell::OnceCell::<HashMap<i64, usize>>::new();
+        let led_to = |block: i64| -> usize {
+            led.get_or_init(|| {
+                let mut counts = HashMap::<i64, usize>::default();
+                for &member in &loop_.body {
+                    let mut above = Some(member);
+                    while let Some(one) = above.filter(|one| loop_.body.contains(one)) {
+                        *counts.entry(one).or_default() += 1;
+                        above = shape.dominance.immediate(one);
+                    }
+                }
+                counts
+            })
+            .get(&block)
+            .copied()
+            .unwrap_or(0)
+        };
         // Everything the branch edges above `at` and the assumes narrow `known` to there.
-        let scope_at = |at: i64, known: &IndexMap<ValueId, Interval>| -> Result<IndexMap<ValueId, Interval>, String> {
+        let scope_at = |at: i64, known: &IndexMap<ValueId, Interval>, id: u64, every_block: bool| -> Result<Rc<IndexMap<ValueId, Interval>>, String> {
             let mut scoped = known.clone();
             // The edges into a block with no other way in, from a block that dominates `at`: those of
             // the dominator chain of `at`, in the order of the blocks' layout, each narrowing in place.
@@ -1002,20 +1072,85 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
                 }
                 Ok(())
             };
-            if separable {
-                let held = above_loop.borrow().as_ref().filter(|(edges, _)| *edges == chain[..outer]).map(|(_, delta)| delta.clone());
-                let delta = match held {
-                    Some(delta) => delta,
+            // A prefix of the edges inside the loop is kept where the blocks it leads to are more than the passes over the state it costs
+            // to keep: a copy of the parent's, the edge, a diff against it for what the edge changed, and a copy of the parent's swept
+            // state to put that over. Fewer, and applying the edges one after another is the cheaper.
+            const TRIE_PASSES: usize = 4;
+            // Only a `known` every block of the loop is asked of in turn has prefixes that blocks share: the few latches a round of
+            // boxes asks of would pay for a trie and use none of it.
+            if separable && every_block {
+                let mut held = prefixes.borrow_mut();
+                if held.known != id {
+                    *held = Prefixes { known: id, ..Prefixes::default() };
+                }
+                let root = match held.roots.get(&chain[..outer]).copied() {
+                    Some(root) => root,
                     None => {
-                        let mut narrowed = scoped.clone();
+                        let mut narrowed = known.clone();
                         narrow_by(&chain[..outer], &mut narrowed)?;
-                        let delta: IndexMap<ValueId, Interval> = narrowed.into_iter().filter(|(value, interval)| scoped.get(value) != Some(interval)).collect();
-                        *above_loop.borrow_mut() = Some((chain[..outer].to_vec(), delta.clone()));
-                        delta
+                        held.nodes.push(Prefix { state: Rc::new(narrowed), next: HashMap::default(), parent: None, delta: Vec::new(), settled: None });
+                        let root = held.nodes.len() - 1;
+                        held.roots.insert(chain[..outer].to_vec(), root);
+                        root
                     }
                 };
-                scoped.extend(delta);
-                narrow_by(&chain[outer..], &mut scoped)?;
+                let mut node = root;
+                let mut kept = 0;
+                for edge in &chain[outer..] {
+                    node = match held.nodes[node].next.get(edge).copied() {
+                        Some(next) => next,
+                        None => {
+                            if led_to(edge.2) < TRIE_PASSES {
+                                break;
+                            }
+                            let mut state = (*held.nodes[node].state).clone();
+                            narrow_by(std::slice::from_ref(edge), &mut state)?;
+                            let delta = state.iter().filter(|(value, interval)| held.nodes[node].state.get(*value) != Some(*interval)).map(|(value, _)| *value).collect();
+                            held.nodes.push(Prefix { state: Rc::new(state), next: HashMap::default(), parent: Some(node), delta, settled: None });
+                            let next = held.nodes.len() - 1;
+                            held.nodes[node].next.insert(*edge, next);
+                            next
+                        }
+                    };
+                    kept += 1;
+                }
+                scoped = (*held.nodes[node].state).clone();
+                let rest = &chain[outer + kept..];
+                narrow_by(rest, &mut scoped)?;
+                // A block no assume narrows, all of whose edges are kept, is settled from its parent prefix's, with the one edge's values
+                // put over it: sweeping the narrowed state is that state's fixpoint, and the fixpoint of a state between this one and its
+                // fixpoint is the same.
+                if rest.is_empty() && kept > 0 && 2 * operations.len() > scoped.len() && assumed.above(&shape, at).is_empty() {
+                    let mut path = Vec::new();
+                    let mut at_node = Some(node);
+                    while let Some(one) = at_node.filter(|one| held.nodes[*one].settled.is_none()) {
+                        path.push(one);
+                        at_node = held.nodes[one].parent;
+                    }
+                    for one in path.into_iter().rev() {
+                        let settled = match held.nodes[one].parent {
+                            None => settle(held.nodes[one].state.as_ref().clone(), known, id),
+                            Some(parent) => {
+                                let mut y = held.nodes[parent].settled.as_ref().expect("the parent is settled first").as_ref().clone();
+                                for value in &held.nodes[one].delta {
+                                    narrow(&mut y, *value, held.nodes[one].state[value].clone());
+                                }
+                                propagate(&mut y, &mut held.nodes[one].delta.iter());
+                                y
+                            }
+                        };
+                        held.nodes[one].settled = Some(Rc::new(settled));
+                    }
+                    let settled = Rc::clone(held.nodes[node].settled.as_ref().expect("settled"));
+                    if check_scopes() {
+                        let whole = sweep(scoped.clone());
+                        if whole != *settled {
+                            let diff: Vec<String> = whole.iter().filter(|(v, i)| settled.get(*v) != Some(*i)).map(|(v, i)| format!("{:?}: sweep [{},{}] vs incremental {:?}", v, i.low, i.high, settled.get(v).map(|x| (x.low.to_string(), x.high.to_string())))).chain(settled.iter().filter(|(v, _)| !whole.contains_key(*v)).map(|(v, i)| format!("{:?}: only incremental [{},{}]", v, i.low, i.high))).collect();
+                            panic!("a block settled from its parent prefix's is not what sweeping its edges' state gives: {} (known {}, state {}, ops {})", diff.join("; "), known.len(), scoped.len(), operations.len());
+                        }
+                    }
+                    return Ok(settled);
+                }
             } else {
                 narrow_by(&chain, &mut scoped)?;
             }
@@ -1032,11 +1167,11 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
             }
             if check_scopes() {
                 let whole = sweep(scoped.clone());
-                let quick = settle(scoped, known);
+                let quick = settle(scoped, known, id);
                 assert!(whole.iter().eq(quick.iter()), "the operations a block's edges reach, worked again alone, give what sweeping them all does");
-                return Ok(quick);
+                return Ok(Rc::new(quick));
             }
-            Ok(settle(scoped, known))
+            Ok(Rc::new(settle(scoped, known, id)))
         };
         let boxes = inductive_boxes(unit, loop_, facts, &known, &at_entry, &closed, &scope_at)?;
         if !counted && boxes.is_empty() {
@@ -1046,11 +1181,14 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
         // The header's values too: seen from inside, they are the trip's,
         // though the header itself also sees the exit value.
         let known = closed(known);
+        let known_id = fresh_known();
         for &at in &inside {
-            let scoped = scope_at(at, &known)?;
+            let scoped = scope_at(at, &known, known_id, true)?;
             let destination = Rc::make_mut(result.entry(at).or_default());
-            for (value, interval) in scoped {
-                narrow(destination, value, interval);
+            for (value, interval) in scoped.iter() {
+                if narrow_to(destination, *value, interval) {
+                    dead.insert(at);
+                }
             }
         }
     }
@@ -1058,7 +1196,7 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
     for (at, known) in &edges_above {
         result.entry(*at).or_insert_with(|| Rc::clone(known));
     }
-    Ok(Bounds { headers, edges: edges_above, within, blocks: result })
+    Ok(Bounds { headers, edges: edges_above, within, blocks: result, dead })
 }
 
 #[cfg(test)]
@@ -1085,7 +1223,7 @@ pub(crate) fn edge_deltas() -> usize {
 
 fn check_scopes() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_SCOPES").is_some())
+    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_SCOPES"))
 }
 
 /// Header phis, made by no counted proof, that every entry and every trip round the
@@ -1100,7 +1238,7 @@ fn inductive_boxes(
     known: &IndexMap<ValueId, Interval>,
     at_entry: &dyn Fn(i64) -> IndexMap<ValueId, Interval>,
     closed: &dyn Fn(IndexMap<ValueId, Interval>) -> IndexMap<ValueId, Interval>,
-    scope_at: &dyn Fn(i64, &IndexMap<ValueId, Interval>) -> Result<IndexMap<ValueId, Interval>, String>,
+    scope_at: &dyn Fn(i64, &IndexMap<ValueId, Interval>, u64, bool) -> Result<Rc<IndexMap<ValueId, Interval>>, String>,
 ) -> Result<IndexMap<ValueId, Interval>, String> {
     const PHIS: usize = 8;
     const ROUNDS: usize = 8;
@@ -1151,6 +1289,7 @@ fn inductive_boxes(
         let mut assumed = known.clone();
         assumed.extend(boxes.iter().map(|(phi, interval)| (*phi, interval.clone())));
         let assumed = closed(assumed);
+        let assumed_id = fresh_known();
         let mut scopes = BTreeMap::new();
         let mut grown = false;
         let mut dropped = Vec::new();
@@ -1160,7 +1299,7 @@ fn inductive_boxes(
             let mut known_all = true;
             for (latch, value) in latches {
                 if !scopes.contains_key(latch) {
-                    scopes.insert(*latch, scope_at(*latch, &assumed)?);
+                    scopes.insert(*latch, scope_at(*latch, &assumed, assumed_id, false)?);
                 }
                 match _operand(unit, *value, &scopes[latch], facts).filter(|interval| interval.width == *width) {
                     Some(interval) => {
@@ -1197,20 +1336,36 @@ fn power_box(interval: &Interval, width: u32) -> Option<Interval> {
     (0..width - 1).map(|bits| BigInt::from(1_u8) << bits).find(|limit| -limit <= interval.low && interval.high < *limit).map(|limit| Interval { low: -limit.clone(), high: limit - 1, width })
 }
 
-/// `interval` for `value` in `known`, met with what it already held at that width.
-fn narrow(known: &mut IndexMap<ValueId, Interval>, value: ValueId, interval: Interval) {
-    match known.get(&value) {
+/// `interval` for `value` in `known`, met with what it already held at that width; whether the two have nothing in common, which
+/// no execution reaching the block can show (the block is unreachable under the facts that gave them), and `known` keeps the first.
+fn narrow(known: &mut IndexMap<ValueId, Interval>, value: ValueId, interval: Interval) -> bool {
+    narrow_to(known, value, &interval)
+}
+
+/// `narrow`, of an interval kept by its owner: an end is copied only where it is the tighter.
+fn narrow_to(known: &mut IndexMap<ValueId, Interval>, value: ValueId, interval: &Interval) -> bool {
+    match known.get_mut(&value) {
         None => {
-            known.insert(value, interval);
+            known.insert(value, interval.clone());
         }
         Some(previous) if previous.width == interval.width => {
-            let (low, high) = (previous.low.clone().max(interval.low), previous.high.clone().min(interval.high));
-            if low <= high {
-                known.insert(value, Interval { low, high, width: interval.width });
+            // Compared in place: most asks give what is already known, and a copy of each end of it was most of the cost.
+            let low_wins = interval.low > previous.low;
+            let high_wins = interval.high < previous.high;
+            let (low, high) = (if low_wins { &interval.low } else { &previous.low }, if high_wins { &interval.high } else { &previous.high });
+            if low > high {
+                return true;
+            }
+            if low_wins {
+                previous.low = interval.low.clone();
+            }
+            if high_wins {
+                previous.high = interval.high.clone();
             }
         }
         Some(_) => {}
     }
+    false
 }
 
 /// Every interval known at each block: a loop's counters and what they
@@ -1221,7 +1376,7 @@ pub fn scoped(unit: &Unit) -> Result<Facts, String> {
         let known = result.entry(at).or_default();
         for (value, interval) in edges {
             match known.get(&value) {
-                Some(previous) if previous.width == interval.width => narrow(known, value, interval),
+                Some(previous) if previous.width == interval.width => { narrow(known, value, interval); }
                 _ => {
                     known.insert(value, interval);
                 }
@@ -1241,7 +1396,11 @@ pub fn scoped(unit: &Unit) -> Result<Facts, String> {
 /// promise that places the start. A value is exact only if every access it
 /// indexes is.
 pub fn exact_offsets(unit: &Unit) -> Result<BTreeSet<ValueId>, String> {
-    let scoped = scoped(unit)?;
+    exact_offsets_given(unit, &scoped(unit)?)
+}
+
+/// `exact_offsets`, given the `scoped` facts of the unit: a caller that needs them too solves once.
+pub fn exact_offsets_given(unit: &Unit, scoped: &Facts) -> Result<BTreeSet<ValueId>, String> {
     let mut verdict = IndexMap::<ValueId, bool>::default();
     for (block, inst) in unit.function.walk() {
         let Some(reference) = MemRef::of(unit, inst) else { continue };
@@ -1251,7 +1410,7 @@ pub fn exact_offsets(unit: &Unit) -> Result<BTreeSet<ValueId>, String> {
         let placed = (reference.inbounds && reference.object) || reference.segment.is_some();
         let exact = placed
             && reference.base_width == bits
-            && _exact_sum(unit, base, cfg::id(block), &scoped, bits, 16).is_some_and(|(low, high)| {
+            && _exact_sum(unit, base, cfg::id(block), scoped, bits, 16).is_some_and(|(low, high)| {
                 let (low, high) = (BigInt::from(reference.disp) + low * reference.scale, BigInt::from(reference.disp) + high * reference.scale);
                 low >= BigInt::from(0) && high < BigInt::from(1) << bits
             });

@@ -29,8 +29,7 @@ pub fn loop_bases(body: &LirBody, values: &BTreeSet<u32>) -> (LirBody, BTreeSet<
     let mut kept: BTreeSet<u32> = BTreeSet::new();
     for found in loops::loops(&result.blocks, Some(result.entry)) {
         let inside = &found.body;
-        let references: IndexMap<u32, IndexMap<i64, Vec<usize>>> =
-            values.iter().map(|value| (*value, _references(&result, *value))).collect();
+        let references = _references_of(&result, values);
         let candidates: BTreeSet<u32> = references
             .iter()
             .filter(|(value, found)| {
@@ -69,7 +68,30 @@ pub fn loop_bases(body: &LirBody, values: &BTreeSet<u32>) -> (LirBody, BTreeSet<
     (result, kept)
 }
 
-/// Per block, the positions in it that name this value.
+/// `_references` of each of `values`, found in one pass over the body: the scan for each of d values over a body of d levels was d squared a loop.
+fn _references_of(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, IndexMap<i64, Vec<usize>>> {
+    let mut out: IndexMap<u32, IndexMap<i64, Vec<usize>>> = values.iter().map(|value| (*value, IndexMap::default())).collect();
+    for block in &body.blocks {
+        for (position, one) in block.insns.iter().enumerate() {
+            let mut named = one.defines.iter().chain(&one.uses).filter(|value| values.contains(value)).collect::<Vec<_>>();
+            named.sort_unstable();
+            named.dedup();
+            for value in named {
+                let by_block = out.get_mut(value).expect("every value is a key");
+                match by_block.get_mut(&block.at) {
+                    Some(found) => found.push(position),
+                    None => {
+                        by_block.insert(block.at, vec![position]);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Per block, the positions in it that name this value: what `_references_of` is held to.
+#[cfg(test)]
 fn _references(body: &LirBody, value: u32) -> IndexMap<i64, Vec<usize>> {
     let mut out = IndexMap::default();
     for block in &body.blocks {
@@ -375,7 +397,14 @@ pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region:
     let rename = IndexMap::from_iter([(value, fresh)]);
     let mut blocks: Vec<LirBlock> = Vec::new();
     let mut moved: Moved = IndexMap::default();
+    let reached: crate::support::hash::HashSet<i64> = inserted.keys().map(|(block, _)| *block).collect();
     for block in &body.blocks {
+        // A block nothing is put in and the region does not cover is as it was, and its positions stay.
+        if !reached.contains(&block.at) && !region.spans.contains_key(&block.at) {
+            moved.insert(block.at, (0..=block.insns.len()).collect());
+            blocks.push(block.clone());
+            continue;
+        }
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         let mut shift: Vec<usize> = Vec::with_capacity(block.insns.len() + 1);
         let end = _tail(block);
@@ -395,7 +424,9 @@ pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region:
             }
         }
         moved.insert(block.at, shift);
-        blocks.push(block.with_insns(insns));
+        // A block nothing was put in and no instruction of which changed is the block it was: the facts held of it stand.
+        let same = insns.len() == block.insns.len() && insns.iter().zip(block.insns.iter()).all(|(made, was)| Arc::ptr_eq(made, was));
+        blocks.push(if same { block.clone() } else { block.with_insns(insns) });
     }
     let mut by_at: IndexMap<i64, LirBlock> = blocks.iter().map(|block| (block.at, block.clone())).collect();
     let mut made: Vec<LirBlock> = Vec::new();
@@ -1019,6 +1050,22 @@ mod tests {
                 ),
             ],
         )
+    }
+
+    /// Carving a value out of a loop rebuilt every block of the body, so no fact held of a block outside the loop survived the carve (a
+    /// 16-deep nest's `regalloc candidates` 88 M, 21% of it this), and the references of the spilled values were each found by a pass
+    /// over the body. The blocks it did not touch are the blocks they were, and the references of all are found in one pass.
+    #[test]
+    fn test_a_carve_leaves_the_blocks_it_did_not_touch_as_they_were_and_references_are_found_in_one_pass() {
+        let body = _pointer_across_a_loop();
+        let cut = carved(&body, 3, 9, 2, &region(&body, &[0x10])).expect("cut");
+        assert!(cut.blocks[2].insns.same_as(&body.blocks[2].insns), "the exit block, nothing put in it, was rebuilt");
+        assert!(!cut.blocks[1].insns.same_as(&body.blocks[1].insns), "premise: the loop block was carved");
+        let values = BTreeSet::from([3, 4, 5, 6]);
+        let all = super::_references_of(&body, &values);
+        for value in &values {
+            assert_eq!(all[value], super::_references(&body, *value), "references of value {value}");
+        }
     }
 
     fn region(body: &LirBody, blocks: &[i64]) -> Region {

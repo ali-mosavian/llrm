@@ -104,7 +104,7 @@ impl Default for Options {
 impl Options {
     /// -O0.
     pub fn none() -> Self {
-        Self { optimize: false, ..Self::default() }
+        Self { optimize: false, search: false, ..Self::default() }
     }
 
     /// -O1: gcc's: the scalar passes and `-finline-functions-called-once`; a loop is copied out completely only where the

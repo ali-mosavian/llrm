@@ -90,3 +90,20 @@ Our own numbers, not read from gcc or LLVM: `COUNTED_TRIPS`, `MOST_TERMS`, `MOST
 ## The inline threshold is ours
 
 `Threshold::budget` is `clamp(call_reach / 2, 6, 24) * limit / 225`, compared with the callee's MIR operations (`semantic_count`). So 225 and 250 are ratios (250/225 is LLVM's -O3 over -O2) and the budget is 6 to 24 operations at -O2, 26 at -O3; LLVM's 225 is cost units of about 5 per instruction plus a call penalty of 25. Calibration, `clang -O2 -Rpass=inline` against `LLRM_DEBUG=inline`, on `x*3+1`, a small loop and a loop over an array: ours 2, 8 and 10 operations; LLVM `cost=-25` (threshold 337), `10` and `10` (threshold 225), each after its bonuses, so no per-instruction scale can be read off them. -O1's 90 is 225 x `early-inlining-insns` 6 / `max-inline-insns-auto` 15 (params.opt:129, 545).
+
+## Register allocation by level: gcc's IRA against ours
+
+gcc's settings (`toplev.cc`, `ira.cc`):
+
+| level | `ira_conflicts_p` | `-fira-region` | `-fcaller-saves` |
+|---|---|---|---|
+| -O0 | off (`fast_allocation`) | one | off |
+| -O1 | on | mixed | off |
+| -O2, -O3 | on | mixed | on |
+| -Os | on | one | on |
+
+We match -O0 only: `Options::none()` has no allocation search, so a function is allocated once, through the allocator alone (compile -51% on QCport `d_faces`, -48% on `d_alias`, bytes +0.02%).
+
+-O1 equals -O2 in gcc's allocator, so there is nothing to match: our -O1 costs more than gcc's because the allocator runs on a larger body, not because of a policy.
+
+-Os does not match. gcc's one region is the allocator without loop-tree regions; the counterpart here is no live-range splitting. Measured on 131 files: compile -35% (`d_faces`) and -20% (`d_alias`), but bytes +0.49% geomean, worst `pl_trace` +5.8%. Splitting earns its bytes in this allocator, so -Os splits.
