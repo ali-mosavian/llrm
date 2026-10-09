@@ -654,6 +654,10 @@ impl<'a> Unit<'a> {
         Self { shape: Some(shape), ..self }
     }
 
+    pub fn with_assumptions(self, assumptions: &'a Assumptions) -> Self {
+        Self { assumptions: Some(assumptions), ..self }
+    }
+
     pub fn with_bounds(self, bounds: &'a crate::ranges::Bounds) -> Self {
         Self { bounds: Some(bounds), ..self }
     }
