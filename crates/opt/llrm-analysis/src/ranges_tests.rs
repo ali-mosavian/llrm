@@ -1165,3 +1165,27 @@ fn test_a_block_works_out_only_the_operations_its_edges_reach() {
     let worked = operations_applied() - before;
     assert!(worked <= 100 * blocks, "{worked} operations worked out for a loop of {blocks} blocks");
 }
+
+/// A block of a loop worked out every edge on its way from the header: a chain of 40 blocks, each behind the edges of the ones
+/// before, narrowed 820 edges (a nest 16 deep: 1.7 G of a 5.7 G compile in `bounded`). The state after each prefix of the edges
+/// is kept for the blocks that share it, and each block works out only the edge past it.
+#[test]
+fn test_a_block_works_out_only_the_edge_past_the_prefix_it_shares() {
+    // The check works every edge out again to compare, and is counted.
+    if std::env::var_os("LLRM_CHECK_SCOPES").is_some() {
+        return;
+    }
+    let blocks = 40;
+    let params: Vec<String> = (0..blocks).map(|at| format!("i32 %v{at}")).collect();
+    let mut text = format!("define i32 @f(i32 %n, {}) {{\nb0:\n  br label %h\n\nh:\n  %i = phi i32 [ 0, %b0 ], [ %in, %latch ]\n  %c = icmp slt i32 %i, %n\n  br i1 %c, label %s0, label %end\n\n", params.join(", "));
+    for at in 0..blocks {
+        let next = if at + 1 == blocks { "latch".to_owned() } else { format!("s{}", at + 1) };
+        text += &format!("s{at}:\n  %a{at} = add nsw i32 %v{at}, 1\n  %t{at} = icmp slt i32 %v{at}, 100\n  br i1 %t{at}, label %{next}, label %x{at}\n\nx{at}:\n  br label %latch\n\n");
+    }
+    text += "latch:\n  %in = add nsw i32 %i, 1\n  br label %h\n\nend:\n  ret i32 %i\n}\n";
+    let parsed = Parsed::new(&text);
+    let before = edge_deltas();
+    bounded(&parsed.unit()).unwrap();
+    let narrowed = edge_deltas() - before;
+    assert!(narrowed <= 10 * blocks, "{narrowed} edges narrowed for a chain of {blocks} blocks");
+}
