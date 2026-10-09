@@ -1,4 +1,4 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
+reason = "a spill store ahead of a branch is made on the path that reads the slot, off the other (bintree -2.5% instructions, quicksort c -0.8%, queens -0.1%); bintree nib -Os +1 byte (the store's edge block)"
 blessed = "2026-10-09"
 
 [c.O2]
@@ -9,8 +9,8 @@ data_bytes = 0
 bss_bytes = 128
 
 [c.Os]
-instructions = 5984
-memory_operands = 953
+instructions = 5920
+memory_operands = 889
 code_bytes = 158
 data_bytes = 0
 bss_bytes = 128
