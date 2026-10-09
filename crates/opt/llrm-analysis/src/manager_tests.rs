@@ -562,7 +562,7 @@ b0:
     let (f, h) = (module.named("f").unwrap(), module.named("h").unwrap());
     let before = {
         let memo = analyses.memo::<super::SummariesMemo>();
-        (Rc::clone(&memo.facts[&f].calls), Rc::clone(&memo.facts[&h].calls))
+        (memo.facts[&f].calls.clone().expect("found"), memo.facts[&h].calls.clone().expect("found"))
     };
     let (_, function) = module.function_mut("f").unwrap();
     let (x, a) = (value(function, "x"), function.parameters()[0]);
@@ -571,6 +571,42 @@ b0:
     analyses.get::<super::GlobalsAA>(&module);
     analyses.get::<super::Summaries>(&module);
     let memo = analyses.memo::<super::SummariesMemo>();
-    assert!(Rc::ptr_eq(&before.1, &memo.facts[&h].calls), "an unedited body's calls were found again");
-    assert!(!Rc::ptr_eq(&before.0, &memo.facts[&f].calls), "an edited body's calls were kept");
+    assert!(Rc::ptr_eq(&before.1, memo.facts[&h].calls.as_ref().unwrap()), "an unedited body's calls were found again");
+    assert!(!Rc::ptr_eq(&before.0, memo.facts[&f].calls.as_ref().unwrap()), "an edited body's calls were kept");
+}
+
+/// The calls kept were found as a plain unit sees them, which knows less than the unit a body is summarized in (its globals' facts):
+/// screen.c's summaries came out broader and the compile cost 4.6% more. What is kept is what the summarized unit finds.
+#[test]
+fn the_calls_kept_are_those_the_summarized_unit_finds() {
+    let module = parsed(&format!(
+        "{DOS}@g = internal global i16 0
+define internal void @take(ptr %p) {{
+b0:
+  store i16 1, ptr %p
+  ret void
+}}
+define void @f() {{
+b0:
+  %q = alloca i16
+  store ptr %q, ptr @g
+  call void @take(ptr getelementptr (i8, ptr @g, i16 1))
+  call void @take(ptr %q)
+  ret void
+}}
+"
+    ));
+    let program = llrm_mir::program::Program::new(vec![module.clone()], Rc::new(Neutral)).unwrap();
+    let mut analyses = ModuleAnalyses::new(llrm_mir::program::ProgramAnalyses::default().proxy(&program, 0));
+    let globals = analyses.get::<super::GlobalsAA>(&module);
+    analyses.get::<super::Summaries>(&module);
+    let f = module.named("f").unwrap();
+    let kept = format!("{:?}", analyses.memo::<super::SummariesMemo>().facts[&f].calls.as_ref().unwrap());
+    let layout = layout(&module);
+    let function = function(&module, "f");
+    let shape = crate::cfg::Shape::of(function);
+    let exposed = crate::memory::exposed_frames(&Unit::of(&module, &layout, function));
+    let program = analyses.program().clone();
+    let unit = super::summarized_in(&module, &program, Result::as_ref(&*globals).unwrap(), &shape, &exposed, function);
+    assert_eq!(kept, format!("{:?}", crate::alias::CallFacts::of(&unit)));
 }
