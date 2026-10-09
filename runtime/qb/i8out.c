@@ -180,8 +180,12 @@ void i8_output(double value, Decimal *out)
     if (((~high) & 0x7FF0) == 0) {
         const char *name = "1#NAN";
 
-        if (!(w0 | w1 | w2))
-            name = (high & 0x0F) == 0 ? "1#INF" : high == 0xFFF8 ? "1#IND" : name;
+        if (!(w0 | w1 | w2)) {
+            if ((high & 0x0F) == 0)
+                name = "1#INF";
+            else if (high == 0xFFF8)
+                name = "1#IND";
+        }
         copy_bytes(out->text, name, 5);
         out->count = 5;
         out->exponent = 1;

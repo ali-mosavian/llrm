@@ -75,7 +75,12 @@ static unsigned plain(char *out, const Decimal *d, int exponent)
 
 /* 1.5E+20, 2D-08: the first digit, a point, the rest, and the exponent of the
    first digit with two places at least. */
-static unsigned scientific(char *out, const Decimal *d, int exponent, int is_double)
+static unsigned scientific(
+    char *out,
+    const Decimal *d,
+    int exponent,
+    int is_double
+)
 {
     unsigned length = 0;
 

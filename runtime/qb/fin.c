@@ -47,7 +47,7 @@ static int digit_value(char c)
 
 /* What the digits of one number came to. */
 typedef struct Parsed {
-    unsigned long long mantissa;   /* the leading significant digits that fit 64 bits */
+    unsigned long long mantissa;   /* the leading digits that fit 64 bits */
     int exponent;                  /* of ten, for the mantissa */
     int negative;
     int whole;                     /* an integer, with nothing left over */
@@ -150,7 +150,8 @@ static double to_real(const Parsed *parsed)
     if (parsed->exponent > MAX_EXPONENT + 20)
         qb_error(BE_OVERFLOW);
     /* a 64-bit mantissa above 2^63 is converted in two halves, exactly */
-    x = (long double)(long long)(mantissa >> 1) * 2 + (long double)(int)(mantissa & 1);
+    x = (long double)(long long)(mantissa >> 1) * 2;
+    x += (long double)(int)(mantissa & 1);
     x = i8_scale(x, parsed->exponent);
     if (x > 1.7976931348623157e308L)
         qb_error(BE_OVERFLOW);
