@@ -682,3 +682,90 @@ fn a_pass_takes_the_trip_counts_the_manager_proved() {
     let proved = llrm_analysis::induction::proved() - before;
     assert!(proved <= loops, "{proved} loops proved for one pass over a body of {loops} loops");
 }
+
+/// Where the machine prices registers, Gvn numbers the function twice (crossing stores, and not) and keeps the cheaper; each run solved
+/// what every block holds again, for the same instructions: 638 solutions for 343 runs compiling `mdl_ai.c`, 12.7% of its compile. It
+/// is solved once for the function as it comes in.
+#[test]
+fn test_availability_is_solved_once_when_a_function_is_numbered_twice() {
+    let text = "@x = global i16 0
+@y = global i16 0
+@z = global i16 0
+
+define i16 @f(i16 %n, i16 %p) {
+b0:
+  %a = load i16, ptr @x
+  store i16 %a, ptr @z
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %b2 ]
+  %more = icmp slt i16 %i, %n
+  br i1 %more, label %b2, label %b3
+
+b2:
+  %t1 = mul i16 %i, 3
+  %t2 = mul i16 %i, 5
+  %t3 = add i16 %t1, %t2
+  store i16 %t3, ptr @y
+  %b = load i16, ptr @x
+  store i16 %b, ptr @z
+  %i.next = add i16 %i, 1
+  br label %b1
+
+b3:
+  %q = mul i16 %p, %p
+  %r = add i16 %q, %p
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    let mut manager = PassManager::default();
+    manager.require::<Summaries>();
+    manager.add(Gvn::default());
+    let before = llrm_analysis::avail::solved();
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() })).unwrap();
+    assert_eq!(llrm_analysis::avail::solved() - before, 1, "availability solved again for the second numbering");
+}
+
+/// A function numbered both ways (crossing stores and not) and priced twice, 4067 times over QCport and the programs at -O2: 72% of
+/// them priced alike and the second won 2.3%. The ways differ only where a load is served across a store; where none is, the second
+/// numbering is the first and is neither made nor priced.
+#[test]
+fn test_a_function_with_no_load_served_across_a_store_is_numbered_once() {
+    let numberings = |text: &str| {
+        let mut module = parsed(text);
+        let mut manager = PassManager::default();
+        manager.require::<Summaries>();
+        manager.add(Gvn::default());
+        let before = super::numberings();
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() })).unwrap();
+        super::numberings() - before
+    };
+    let plain = "@x = global i16 0
+@z = global i16 0
+
+define i16 @f(i16 %p) {
+b0:
+  %a = load i16, ptr @x
+  %b = load i16, ptr @x
+  %r = add i16 %a, %b
+  store i16 %r, ptr @z
+  ret i16 %r
+}
+";
+    let across = "@x = global i16 0
+@y = global i16 0
+
+define i16 @f(i16 %p) {
+b0:
+  %a = load i16, ptr @x
+  store i16 %p, ptr @y
+  %b = load i16, ptr @x
+  %r = add i16 %a, %b
+  ret i16 %r
+}
+";
+    assert_eq!(numberings(plain), 1, "the second numbering is the first");
+    assert_eq!(numberings(across), 2, "a load served across a store is numbered both ways");
+}

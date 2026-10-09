@@ -20,6 +20,7 @@ pub mod comparefold;
 pub mod constrain;
 pub mod copyprop;
 pub mod copysink;
+pub mod postrasink;
 pub mod cpu;
 pub mod datagroup;
 pub mod division;

@@ -910,11 +910,11 @@ pub struct MemRef {
     /// Bytes accessed.
     pub width: u32,
     /// The `!tbaa` access type's name.
-    pub typed: Option<String>,
+    pub typed: Option<std::rc::Rc<str>>,
     /// The names of that type's ancestors, nearest first: an access whose type
     /// is one of them may alias this one's (a parent type covers its children,
     /// as C's `omnipotent char` covers every scalar).
-    pub lineage: Vec<String>,
+    pub lineage: std::rc::Rc<[String]>,
     /// Every GEP on the way from `root` was `inbounds`.
     pub inbounds: bool,
     pub volatile: bool,
@@ -947,7 +947,7 @@ impl MemRef {
             index_bits,
             width,
             typed: None,
-            lineage: Vec::new(),
+            lineage: no_lineage(),
             inbounds: true,
             volatile: false,
             provenance: None,
@@ -1041,7 +1041,7 @@ impl MemRef {
             index_bits: 16,
             width,
             typed: None,
-            lineage: Vec::new(),
+            lineage: no_lineage(),
             inbounds: false,
             volatile: false,
             provenance: Some(provenance),
@@ -1223,11 +1223,15 @@ fn pair_constant(unit: &Unit, root: Operand) -> Option<(i64, i64)> {
 }
 
 /// The name of the `!tbaa` access type `inst` carries.
-pub fn typed(unit: &Unit, inst: InstId) -> Option<String> {
+pub fn typed(unit: &Unit, inst: InstId) -> Option<std::rc::Rc<str>> {
     let (_, tag) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa")?;
+    if let Some(tree) = unit.tbaa {
+        // A type's name read through the tree is the type node's first operand, which is the name below.
+        return tree.name_of_tag(unit.metadata, *tag);
+    }
     let MetadataOperand::Node(ty) = unit.metadata.get(tag.0 as usize)?.operands.first()? else { return None };
     match unit.metadata.get(ty.0 as usize)?.operands.first()? {
-        MetadataOperand::String(name) => Some(name.clone()),
+        MetadataOperand::String(name) => Some(std::rc::Rc::from(name.as_str())),
         _ => None,
     }
 }
@@ -1235,12 +1239,20 @@ pub fn typed(unit: &Unit, inst: InstId) -> Option<String> {
 /// The names of the ancestors of the `!tbaa` access type `inst` carries,
 /// nearest first, the root last: the module's type tree where the unit holds
 /// it, else built here from the metadata.
-pub fn lineage(unit: &Unit, inst: InstId) -> Vec<String> {
-    let Some((_, tag)) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa") else { return Vec::new() };
+pub fn lineage(unit: &Unit, inst: InstId) -> std::rc::Rc<[String]> {
+    let Some((_, tag)) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa") else { return no_lineage() };
     match unit.tbaa {
-        Some(tree) => tree.of_tag(unit.metadata, *tag).to_vec(),
-        None => llrm_mir::tbaa::Tbaa::chain(unit.metadata, *tag),
+        Some(tree) => tree.shared_of_tag(unit.metadata, *tag),
+        None => std::rc::Rc::from(llrm_mir::tbaa::Tbaa::chain(unit.metadata, *tag)),
     }
+}
+
+/// A lineage of no names, shared: an access with no type is the common one.
+pub fn no_lineage() -> std::rc::Rc<[String]> {
+    thread_local! {
+        static NONE: std::rc::Rc<[String]> = std::rc::Rc::from(Vec::new());
+    }
+    NONE.with(std::rc::Rc::clone)
 }
 
 /// What a load or store does to the bytes it addresses, and it touches no

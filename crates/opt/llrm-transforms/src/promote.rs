@@ -59,7 +59,7 @@ pub struct _Leaf {
     pub object: ObjectRef,
     pub low: i64,
     pub high: i64,
-    pub type_class: Option<String>,
+    pub type_class: Option<std::rc::Rc<str>>,
     pub restrict: BTreeSet<Identity>,
 }
 
@@ -72,7 +72,7 @@ pub enum Key {
 }
 
 /// The one explicit type each leaf's bytes are accessed as.
-pub type Canonical = HashMap<(ObjectRef, i64, i64), String>;
+pub type Canonical = HashMap<(ObjectRef, i64, i64), std::rc::Rc<str>>;
 
 fn only_slice(provenance: &Provenance) -> Option<&Slice> {
     if provenance.slices.len() == 1 { provenance.slices.iter().next() } else { None }
@@ -182,7 +182,7 @@ pub fn _aggregate_objects<'a>(leaves: impl IntoIterator<Item = &'a Key>) -> BTre
 /// distinct types keep the union and type-pun rejection.
 pub fn _canonical_leaf_types<'a>(refs: impl IntoIterator<Item = &'a MemRef>) -> Canonical {
     let untyped = Canonical::default();
-    let mut types = HashMap::<(ObjectRef, i64, i64), BTreeSet<String>>::default();
+    let mut types = HashMap::<(ObjectRef, i64, i64), BTreeSet<std::rc::Rc<str>>>::default();
     for reference in refs {
         if let Some(leaf) = _leaf(reference, &untyped)
             && let Some(type_class) = leaf.type_class
@@ -372,7 +372,7 @@ fn plan(unit: &Unit, accesses: &Accesses, aggregate_only: bool) -> Result<Plan, 
         .collect::<HashMap<_, _>>();
     // A cell's `!tbaa` type, where every access of it agrees: what keeps a
     // write of another type from reaching it.
-    let mut typed = IndexMap::<&Key, Option<Option<(String, Vec<String>)>>>::default();
+    let mut typed = IndexMap::<&Key, Option<Option<(std::rc::Rc<str>, std::rc::Rc<[String]>)>>>::default();
     for (inst, key) in keys.iter().filter(|(_, key)| candidates.contains_key(*key)) {
         let one = refs[inst].typed.clone().map(|name| (name, refs[inst].lineage.clone()));
         let agreed = typed.entry(key).or_insert_with(|| Some(one.clone()));
@@ -393,7 +393,7 @@ fn plan(unit: &Unit, accesses: &Accesses, aggregate_only: bool) -> Result<Plan, 
 
 /// Loads a stored value reaches on every path, with no write between that
 /// may reach its cell.
-fn _available(unit: &Unit, accesses: &Accesses, cells: &IndexMap<Key, TypeId>, typed: &[Option<(String, Vec<String>)>], slots: &HashMap<InstId, usize>) -> HashSet<InstId> {
+fn _available(unit: &Unit, accesses: &Accesses, cells: &IndexMap<Key, TypeId>, typed: &[Option<(std::rc::Rc<str>, std::rc::Rc<[String]>)>], slots: &HashMap<InstId, usize>) -> HashSet<InstId> {
     let function = unit.function;
     let Some(entry) = function.entry().map(cfg::id) else { return HashSet::default() };
     let graph = cfg::graph(function);
