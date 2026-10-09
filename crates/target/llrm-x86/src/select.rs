@@ -589,6 +589,36 @@ pub fn _immediate(
 /// `movzx r16,r8`, `movsx ax,al` and `movsx eax,ax` where the source is the low
 /// part of the destination: `mov rh,0`, `cbw` and `cwde`, in 2, 1 and 2 bytes
 /// for 3, 3 and 4. None of them touches a flag.
+/// What `movzx`/`movsx` of the low part of a register into the register is,
+/// instead of the extension.
+pub enum InPlace {
+    /// `mov rh, 0`: the high byte.
+    ZeroHigh(Register),
+    /// `cbw`.
+    Cbw,
+    /// `cwde`.
+    Cwde,
+}
+
+pub fn in_place(
+    name: &str,
+    into: Register,
+    outof: Register,
+) -> Option<InPlace> {
+    match (name, into, outof) {
+        ("movzx", Register::AX, Register::AL) => Some(InPlace::ZeroHigh(Register::AH)),
+        ("movzx", Register::BX, Register::BL) => Some(InPlace::ZeroHigh(Register::BH)),
+        ("movzx", Register::CX, Register::CL) => Some(InPlace::ZeroHigh(Register::CH)),
+        ("movzx", Register::DX, Register::DL) => Some(InPlace::ZeroHigh(Register::DH)),
+        ("movsx", Register::AX, Register::AL) => Some(InPlace::Cbw),
+        ("movsx", Register::EAX, Register::AX) => Some(InPlace::Cwde),
+        _ => None,
+    }
+}
+
+/// `movzx r16,r8`, `movsx ax,al` and `movsx eax,ax` where the source is the low
+/// part of the destination: `mov rh,0`, `cbw` and `cwde`, in 2, 1 and 2 bytes
+/// for 3, 3 and 4. None of them touches a flag.
 fn extended_in_place(
     name: &str,
     into: Register,
@@ -596,13 +626,53 @@ fn extended_in_place(
     at: At,
 ) -> Option<Emitted> {
     let bare = |code: &str| _assemble(&Instruction::with(_code(code)?), at, true);
-    match (name, into, outof) {
-        ("movzx", Register::AX, Register::AL) => load(Register::AH, 0, at),
-        ("movzx", Register::BX, Register::BL) => load(Register::BH, 0, at),
-        ("movzx", Register::CX, Register::CL) => load(Register::CH, 0, at),
-        ("movzx", Register::DX, Register::DL) => load(Register::DH, 0, at),
-        ("movsx", Register::AX, Register::AL) => bare("CBW"),
-        ("movsx", Register::EAX, Register::AX) => bare("CWDE"),
+    match in_place(name, into, outof)? {
+        InPlace::ZeroHigh(high) => load(high, 0, at),
+        InPlace::Cbw => bare("CBW"),
+        InPlace::Cwde => bare("CWDE"),
+    }
+}
+
+/// `what` as the instructions it is encoded as, where they are not the one it
+/// names: the in-place extensions, a segment register loaded through the stack,
+/// and a register restored from its wide copy.
+pub fn lowered(what: &Semantics) -> Option<Vec<Semantics>> {
+    let seg = |place: &Loc| matches!(place, Loc::Reg(one) if SEGMENTS.contains_key(&one.register));
+    let step = |op, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
+        op,
+        name: Some(name.to_owned()),
+        dests,
+        sources,
+        target: None,
+        indirect: false,
+    };
+    let (push, pop) = (
+        |source: &Loc| step(Operation::Push, "push", vec![], vec![source.clone()]),
+        |dest: &Loc| step(Operation::Pop, "pop", vec![dest.clone()], vec![]),
+    );
+    match (what.op, what.dests.as_slice(), what.sources.as_slice()) {
+        (Operation::Move, [into], [outof @ (Loc::Imm(_) | Loc::Reg(_))])
+            if seg(into) && (seg(outof) || matches!(outof, Loc::Imm(_))) =>
+        {
+            Some(vec![push(outof), pop(into)])
+        }
+        (Operation::Restore, [low, high], [wide]) => Some(vec![push(wide), pop(low), pop(high)]),
+        // `mov rh, 0`; and `cbw`, which reads AL and writes AH as `mov ah, al`
+        // does.
+        (Operation::Extend, [Loc::Reg(into)], [Loc::Reg(outof)]) => {
+            let name = what.name.as_deref()?;
+            let (dests, sources) = match in_place(name, into.register, outof.register)? {
+                InPlace::ZeroHigh(high) => (
+                    vec![Loc::Reg(ir::Reg { register: high, width: 1 })],
+                    vec![Loc::Imm(ir::Imm { value: 0, width: 1, address: None })],
+                ),
+                InPlace::Cbw => (vec![Loc::Reg(ir::Reg { register: Register::AH, width: 1 })], what.sources.clone()),
+                // `cwde` is `movsx eax, ax` to the registers it reads and
+                // writes.
+                InPlace::Cwde => return None,
+            };
+            Some(vec![step(Operation::Move, "mov", dests, sources)])
+        }
         _ => None,
     }
 }
