@@ -54,6 +54,9 @@ const MAX_COPIED: usize = 400;
 /// `size`: code size outranks speed, and a path is never copied.
 pub struct JumpThread {
     pub size: bool,
+    /// A branch the way into its block settles is threaded to its arm there:
+    /// the guards a header copy leaves.
+    pub correlated: bool,
 }
 
 impl FunctionPass for JumpThread {
@@ -71,7 +74,7 @@ impl FunctionPass for JumpThread {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        if !threaded(unit.context, unit.layout, unit.function, &outer, self.size) {
+        if !threaded(unit.context, unit.layout, unit.function, &outer, self.size, self.correlated) {
             return PreservedAnalyses::all();
         }
         // What the copies know of their state: a product by a constant, a
@@ -105,6 +108,7 @@ pub fn threaded(
     function: &mut Function,
     outer: &Outer,
     size: bool,
+    correlate: bool,
 ) -> bool {
     // The common function has nothing to thread: no analysis is made for it.
     let unit = memory::Unit::within(context, layout, function, outer);
@@ -121,11 +125,12 @@ pub fn threaded(
         );
     // Or a branch on a compare, at a join of ways that may each settle it.
     let joined = !size
+        && correlate
         && function.walk().any(|(block, inst)| {
             let op = function.instruction(inst);
             op.opcode == Opcode::Br && op.operands.len() == 3 && function.predecessors(block).len() > 1 && matches!(
                 op.operands[0],
-                Operand::Value(c) if matches!(function.value(c).def, ValueDef::Instruction(made) if matches!(function.instruction(made).opcode, Opcode::ICmp(_)))
+                Operand::Value(c) if matches!(function.value(c).def, ValueDef::Instruction(made) if matches!(function.instruction(made).opcode, Opcode::ICmp(_)) && compared_again(function, c))
             )
         });
     if !any && !joined {
@@ -137,7 +142,7 @@ pub fn threaded(
     // the copies made is not threaded again, or a loop would be peeled one
     // trip at a time. GCC registers its threads once and applies them together.
     let mut rounds = 0;
-    while let Some(paths) = found(context, layout, function, outer, copied, size, rounds == 0) {
+    while let Some(paths) = found(context, layout, function, outer, copied, size, rounds == 0, correlate) {
         rounds += 1;
         llrm_support::debug!("jumpthread", "{} paths, {} instructions copied so far", paths.len(), copied);
         // A path of phis and a branch copies no instruction and still spends
@@ -161,6 +166,7 @@ fn found(
     copied: usize,
     size: bool,
     branches: bool,
+    correlate: bool,
 ) -> Option<Vec<Path>> {
     let shape = cfg::Shape::of(function);
     let unit = memory::Unit::within(context, layout, function, outer).with_shape(&shape);
@@ -177,8 +183,13 @@ fn found(
             shape.loops.iter().filter(|one| one.body.contains(&cfg::id(block))).min_by_key(|one| one.body.len());
         // A branch on a compare that the way into the block settles, from the
         // branches above that way: threaded to its arm there.
-        if branches && size == false && function.instruction(last).opcode == Opcode::Br {
-            let ways = correlated(function, &unit, block, last);
+        if branches && correlate && size == false && function.instruction(last).opcode == Opcode::Br {
+            let ways = match function.instruction(last).operands.first() {
+                Some(&Operand::Value(condition)) if compared_again(function, condition) => {
+                    correlated(function, &unit, block, last)
+                }
+                _ => Vec::new(),
+            };
             let mut paths = Vec::new();
             let mut spent = copied;
             for (source, target) in ways {
@@ -327,6 +338,26 @@ fn found(
         }
     }
     None
+}
+
+/// Whether the compare `condition` shares an operand with another compare of
+/// the function: a branch the way in settles is one whose operands some branch
+/// above compared too.
+fn compared_again(
+    function: &Function,
+    condition: llrm_mir::module::ValueId,
+) -> bool {
+    let ValueDef::Instruction(made) = function.value(condition).def else { return false };
+    function
+        .instruction(made)
+        .operands
+        .iter()
+        .any(
+            |operand| matches!(
+                operand,
+                Operand::Value(value) if function.users(*value).iter().any(|one| { one.user != made && matches!(function.instruction(one.user).opcode, Opcode::ICmp(_)) })
+            ),
+        )
 }
 
 /// The predecessors of `block` from which the branch `last` goes one way for

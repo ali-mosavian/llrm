@@ -436,7 +436,10 @@ pub fn recorded(
     // After the loop passes: the cycles it makes between the cases are no
     // natural loop. LLVM's DFAJumpThreading, gcc's FSM threader.
     if applied.options.wanted("jumpthread") {
-        manager.add(jumpthread::JumpThread { size: applied.options.prefers_size() });
+        manager.add(jumpthread::JumpThread {
+            size: applied.options.prefers_size(),
+            correlated: !applied.options.prefers_size(),
+        });
     }
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
