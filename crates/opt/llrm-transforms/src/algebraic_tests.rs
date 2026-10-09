@@ -964,6 +964,43 @@ b0:
     assert!(after.contains("sub i16 0, %y"), "{after}");
 }
 
+/// A loop's test of its step, `x - 2 < 2`, read the counter once more through a
+/// subtraction the update already made: fib's nest (`-ftree-ch`) computed
+/// `n - 1` and `n - 2` and compared the second, 3 more instructions a trip
+/// than gcc's `cmp n, 3` (x_fib 271098 clocks against 248195 with the fold).
+#[test]
+fn test_a_compare_of_a_sum_with_no_wrap_is_a_compare_of_its_addend() {
+    let text = "define i1 @f(i16 %x) {
+b0:
+  %s = sub nsw i16 %x, 2
+  %c = icmp slt i16 %s, 2
+  ret i1 %c
+}
+";
+    let inputs: Vec<Vec<i128>> = (-100..100).map(|x| vec![x]).collect();
+    let after = checked(text, &inputs);
+    assert!(after.contains("icmp slt i16 %x, 4"), "{after}");
+    let unsigned = "define i1 @f(i16 %x) {
+b0:
+  %s = add nuw i16 %x, 3
+  %c = icmp ult i16 %s, 10
+  ret i1 %c
+}
+";
+    let inputs: Vec<Vec<i128>> = (0..100).map(|x| vec![x]).collect();
+    let after = checked(unsigned, &inputs);
+    assert!(after.contains("icmp ult i16 %x, 7"), "{after}");
+    let wrapping = "define i1 @f(i16 %x) {
+b0:
+  %s = sub i16 %x, 2
+  %c = icmp slt i16 %s, 2
+  ret i1 %c
+}
+";
+    let after = checked(wrapping, &inputs);
+    assert!(after.contains("icmp slt i16 %s, 2"), "{after}");
+}
+
 /// A non-negative dividend divided by a constant that is not a power of two is
 /// the unsigned division: its reciprocal has no sign to correct, and the loop
 /// counter `i * 97 % 211` (x_hash) took an `idiv` where gcc multiplies. Tuned

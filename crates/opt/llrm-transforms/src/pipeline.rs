@@ -419,6 +419,11 @@ pub fn recorded(
         manager.add(rotate::Rotate { proven: false, copy: true });
         manager.add(loopsimplify::LoopSimplify);
         manager.add(lcssa::LoopClosedSSA);
+        // What the copy leaves in the latch (a test of the step: `x - 2 < 2`)
+        // is cleaned as gcc's DOM, forwprop and DCE do after `pass_ch`.
+        manager.add(fold::Fold);
+        manager.add(algebraic::Algebraic { size: false });
+        manager.add(dead::Dead);
     }
     // Before LSR: a factor of two or a scale the product carries still shows as
     // a shift.
