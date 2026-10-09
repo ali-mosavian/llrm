@@ -244,6 +244,8 @@ pub fn _loop_products_by_branch(context: &Context, metadata: &[llrm_mir::module:
 /// Profile-free expected work at `frequency`, a block's executions per entry
 /// (`_frequencies`, or the older `_loop_products`).
 pub fn weighted(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, costs: &OperationCosts, frequency: &BTreeMap<i64, i64>) -> Option<i64> {
+    #[cfg(test)]
+    PRICED.with(|count| count.set((count.get().0 + 1, count.get().1)));
     let mut total = 0;
     for &block in function.layout() {
         let priced = _block(context, layout, function, callees, cfg::id(block), costs)?;
@@ -255,6 +257,8 @@ pub fn weighted(context: &Context, layout: &DataLayout, function: &Function, cal
 /// What fitting MIR within `room` spills, a call keeping what `across`
 /// says, as the one spill model (`spill`) forecasts it.
 pub fn spill_forecast(context: &Context, layout: &DataLayout, function: &Function, costs: &OperationCosts, room: Room, across: &dyn Fn(InstId) -> i64, frequency: &BTreeMap<i64, i64>) -> Option<spill::Forecast<llrm_mir::dense::IdSet<ValueId>>> {
+    #[cfg(test)]
+    PRICED.with(|count| count.set((count.get().0, count.get().1 + 1)));
     if !room.priced() {
         return Some(spill::Forecast { cost: 0, spilled: Default::default(), peak: 0 });
     }
@@ -272,6 +276,12 @@ pub fn pressure_adjusted(context: &Context, layout: &DataLayout, function: &Func
 /// price a motion is judged by, with the motion and without it.
 pub fn motion_price(context: &Context, layout: &DataLayout, outer: &Outer, function: &Function, costs: &OperationCosts, room: Room, frequency: &BTreeMap<i64, i64>) -> Option<i64> {
     pressure_adjusted(context, layout, function, outer.callees(), costs, room, &|inst| spill::kept_across(outer, context, function, inst), frequency)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// (`weighted`, `spill_forecast`) calls, for a test that a price is the work and one forecast.
+    pub(crate) static PRICED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 #[cfg(test)]
