@@ -1424,21 +1424,25 @@ fn _allocated(
             for region in &regions {
                 llrm_support::debug!("split", "{}: split {value} at {:?}", body.name, region.spans);
             }
-            let mut cut = body.clone();
+            // Cloned only when a region is carved: most splits carve none.
+            let mut cut: Option<LirBody> = None;
             let mut moves: Vec<splitkit::Moved> = Vec::new();
             let mut made: Vec<u32> = Vec::new();
             let _carving = llrm_support::debug::span("split carving");
             for region in regions {
-                let fresh = splitkit::_next_value(&cut).max(floor);
+                let fresh = splitkit::_next_value(cut.as_ref().unwrap_or(&body)).max(floor);
                 floor = fresh + 1;
                 let moved = moves.iter().fold(region, |region, moved| region.moved(moved));
-                if let Some((next, shifted)) = splitkit::carved_moving(&cut, value, fresh, width, &moved) {
-                    cut = next;
+                if let Some((next, shifted)) =
+                    splitkit::carved_moving(cut.as_ref().unwrap_or(&body), value, fresh, width, &moved)
+                {
+                    cut = Some(next);
                     moves.push(shifted);
                     made.push(fresh);
                 }
             }
             if !made.is_empty() {
+                let cut = cut.expect("a piece was made from a carve");
                 // As LLVM's RS_Split2: a piece splits again only while its
                 // live blocks strictly shrink, so splitting ends.
                 drop(_carving);
