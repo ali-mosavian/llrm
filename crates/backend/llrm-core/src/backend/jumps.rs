@@ -408,7 +408,7 @@ fn _explicit(body: &LirBody) -> Result<Vec<LirBlock>, masm::Unprintable> {
 /// do not conserve flow, and two layouts that take the same jumps differ by a
 /// few percent (a loop without a diamond in it: sieve's marking loop took one
 /// more instruction a pass).
-const ROTATION_GAIN: f64 = 0.75;
+const ROTATION_GAIN: f64 = 0.7;
 
 /// How many times a loop goes round per entry for a turn to pay: the jump into
 /// it is one more instruction a time.
