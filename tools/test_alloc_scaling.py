@@ -116,3 +116,17 @@ def test_a_rewrite_works_out_the_widths_of_the_values_it_changed_only():
         source.write_text(scaling.AXES["cells"](224))
         run = steps(compiler, source, "-O2")
     assert run["facts widths"] < 100, f"cells N=224 -O2: facts widths cost {run['facts widths']} Minstr (100 allowed; 385 before): {run}"
+
+
+def test_a_rewrite_counts_what_the_instructions_it_changed_say_of_the_register_classes():
+    """`classes scan` read every operand of every instruction after each spill: 371 Minstr on `cells` at N=224 (one block, ~430
+    rewrites). The counts of the body before stand for the instructions the rewrite kept."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](224))
+        run = steps(compiler, source, "-O2")
+    assert run["classes scan"] < 60, f"cells N=224 -O2: classes scan cost {run['classes scan']} Minstr (60 allowed; 371 before): {run}"

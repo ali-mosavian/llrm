@@ -1081,6 +1081,9 @@ struct Facts {
     widths: IndexMap<u32, u32>,
     confined: Classes,
     hints: IndexMap<u32, Vec<u32>>,
+    /// What the instructions say of the values, counted: `confined` is made
+    /// from it.
+    scan: crate::backend::regclass::Scan,
 }
 
 impl Facts {
@@ -1092,7 +1095,7 @@ impl Facts {
         unspillable: &BTreeSet<u32>,
         protected: &BTreeSet<u32>,
         busy: &Frequency,
-        prior: Option<(&Facts, &crate::support::hash::HashSet<u32>)>,
+        prior: Option<(&Facts, &ranges::Changes)>,
     ) -> Self {
         let _span = llrm_support::debug::span("regalloc facts");
         let index = llrm_support::debug::timed("facts slots", || ranges::indexed(body));
@@ -1112,8 +1115,8 @@ impl Facts {
         }
         let masks = llrm_support::debug::timed("facts masks", || _masks(body, &index, segments));
         let widths = llrm_support::debug::timed("facts widths", || match prior {
-            Some((before, touched)) => {
-                let found = _widest_after(&before.widths, body, touched);
+            Some((before, changes)) => {
+                let found = _widest_after(&before.widths, body, &changes.touched);
                 if llrm_support::env_set("LLRM_CHECK_FACTS") {
                     assert!(found == _widest(body), "{}: the widths kept from the body before differ", body.name);
                 }
@@ -1121,21 +1124,24 @@ impl Facts {
             }
             None => _widest(body),
         });
-        let confined = llrm_support::debug::timed("facts classes", || {
+        let (scan, confined) = llrm_support::debug::timed("facts classes", || {
             let given = crate::backend::regclass::Found { live: &live, masks: &masks };
-            let found = crate::backend::regclass::classes_given(body, protected, segments, registers, &given);
-            if llrm_support::env_set("LLRM_CHECK_CLASSES") {
-                assert!(
-                    found.iter().eq(classes(body, protected, segments, registers).iter()),
-                    "{}: classes from the given intervals differ from working them out",
-                    body.name
-                );
+            let scan = llrm_support::debug::timed("classes scan", || match prior {
+                Some((before, changes)) => before.scan.after(&changes.gone, &changes.added, registers, segments),
+                None => crate::backend::regclass::Scan::of(body, registers, segments),
+            });
+            let found = scan.classes(body, protected, segments, registers, &given);
+            if llrm_support::env_set("LLRM_CHECK_CLASSES")
+                || (prior.is_some() && llrm_support::env_set("LLRM_CHECK_FACTS"))
+            {
+                let whole = crate::backend::regclass::classes_given(body, protected, segments, registers, &given);
+                assert!(found == whole, "{}: classes from the counts kept from the body before differ", body.name);
             }
-            found
+            (scan, found)
         });
         let hints = llrm_support::debug::timed("facts hints", || match prior {
-            Some((before, touched)) => {
-                let found = _copy_hints_after(&before.hints, body, touched);
+            Some((before, changes)) => {
+                let found = _copy_hints_after(&before.hints, body, &changes.touched);
                 if llrm_support::env_set("LLRM_CHECK_FACTS") {
                     assert!(found == _copy_hints(body), "{}: the hints kept from the body before differ", body.name);
                 }
@@ -1143,7 +1149,7 @@ impl Facts {
             }
             None => _copy_hints(body),
         });
-        Self { index, live, masks, widths, confined, hints }
+        Self { index, live, masks, widths, confined, hints, scan }
     }
 }
 
@@ -1647,7 +1653,7 @@ fn _allocated(
         // the change left sharing a register competes again.
         let Some(made) = rewritten else { continue };
         floor = floor.max(splitkit::_next_value_following(&body));
-        let touched = before.as_ref().and_then(|before| ranges::touched_values(before, &body));
+        let changes = before.as_ref().and_then(|before| ranges::changes(before, &body));
         facts = Facts::of(
             &body,
             profile,
@@ -1656,7 +1662,7 @@ fn _allocated(
             &unspillable,
             protected,
             &llrm_support::debug::timed("regalloc frequency", || Frequency::of(&body)),
-            touched.as_ref().map(|touched| (&facts, touched)),
+            changes.as_ref().map(|changes| (&facts, changes)),
         );
         // What is done of the rewrite besides its facts: the pins, the placed
         // values it disturbs, the queue.
