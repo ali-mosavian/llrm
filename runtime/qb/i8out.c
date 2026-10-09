@@ -20,10 +20,10 @@ enum { DIGITS = 16 };
 
 /* Working numbers: kept off the stack, which is small, and used by one
    conversion at a time. */
-#define number big_w[0]
-#define rest big_w[1]
-#define edge big_w[2]
-#define whole big_w[3]
+#define digits_number big_w[0]
+#define digits_rest big_w[1]
+#define digits_edge big_w[2]
+#define digits_whole big_w[3]
 
 /* The pieces of a finite double: value = mantissa * 2^exponent. */
 typedef struct Parts {
@@ -61,9 +61,6 @@ static int guess_exponent(const Parts *parts)
 /* The magnitude of the value being converted, for the FPU's quick way. */
 static long double magnitude;
 
-/* llrm-c puts a long double local at the wrong place in the frame, so the FPU's
-   working numbers are statics. */
-static long double ten_power, product, integral, threshold, difference;
 
 /* x87's extended numbers hold 64 bits, enough for value * 10^s to be rounded
    only once and a little (relative 2^-64, under 0.0006 of the last digit) when
@@ -74,6 +71,7 @@ static long double ten_power, product, integral, threshold, difference;
 static int quick_digits(int k, unsigned long long *digits, int *up)
 {
     enum { MOST = 27 };
+    long double ten_power, product, integral, threshold, difference;
     int s = DIGITS - k, at;
 
     if (s < 0 || s > MOST)
@@ -104,45 +102,45 @@ static unsigned long long digits_for(const Parts *parts, int k, int *up)
     *up = 0;
     if (quick_digits(k, &quick, up))
         return quick;
-    big_set(&number, parts->mantissa);
+    big_set(&digits_number, parts->mantissa);
     if (s >= 0) {
-        big_mul_pow10(&number, (unsigned)s);
+        big_mul_pow10(&digits_number, (unsigned)s);
         if (parts->exponent >= 0) {
-            big_shl(&number, (unsigned)parts->exponent);
-            return big_low64(&number);
+            big_shl(&digits_number, (unsigned)parts->exponent);
+            return big_low64(&digits_number);
         }
         /* a fraction of 2^-lost: the whole part, and what is left over */
         {
             unsigned lost = (unsigned)-parts->exponent;
 
-            rest = number;
-            big_keep_low(&rest, lost);
-            big_shr(&number, lost);
-            big_shl(&rest, 64);
-            big_set(&edge, ROUND_UP_FROM);
-            big_shl(&edge, lost);
+            digits_rest = digits_number;
+            big_keep_low(&digits_rest, lost);
+            big_shr(&digits_number, lost);
+            big_shl(&digits_rest, 64);
+            big_set(&digits_edge, ROUND_UP_FROM);
+            big_shl(&digits_edge, lost);
         }
     } else {
         /* 10^16 or more is a whole number: cut -s digits off it */
         unsigned cut = (unsigned)-s, at;
 
-        big_shl(&number, (unsigned)parts->exponent);
-        whole = number;
+        big_shl(&digits_number, (unsigned)parts->exponent);
+        digits_whole = digits_number;
         for (at = cut; at >= 4; at -= 4)
-            big_div_small(&whole, 10000);
+            big_div_small(&digits_whole, 10000);
         for (; at; at--)
-            big_div_small(&whole, 10);
-        rest = whole;
-        big_mul_pow10(&rest, cut);
-        big_sub(&number, &rest);
-        rest = number;
-        number = whole;
-        big_shl(&rest, 64);
-        big_set(&edge, ROUND_UP_FROM);
-        big_mul_pow10(&edge, cut);
+            big_div_small(&digits_whole, 10);
+        digits_rest = digits_whole;
+        big_mul_pow10(&digits_rest, cut);
+        big_sub(&digits_number, &digits_rest);
+        digits_rest = digits_number;
+        digits_number = digits_whole;
+        big_shl(&digits_rest, 64);
+        big_set(&digits_edge, ROUND_UP_FROM);
+        big_mul_pow10(&digits_edge, cut);
     }
-    *up = big_cmp(&rest, &edge) >= 0;
-    return big_low64(&number);
+    *up = big_cmp(&digits_rest, &digits_edge) >= 0;
+    return big_low64(&digits_number);
 }
 
 /* Infinities and the not-numbers, which QB writes as text. */

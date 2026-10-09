@@ -316,6 +316,13 @@ def platform_directory() -> Path:
     return RUNTIME / layer.parent.name / layer.name
 
 
+def os_group_bits(source: Path) -> dict[str, int]:
+    """The groups the OS layer's assembly holds a bit each (its G_<GROUP> equates): the archive has an
+    object for each, so a program links what it calls."""
+    found = re.findall(r"^G_(\w+) equ (\d+)", source.read_text(), re.M)
+    return {name.lower(): int(bit) for name, bit in found}
+
+
 def shared_sources() -> list[Path]:
     return [os_directory() / dosbatch.os_layer(dosbatch.REAL_MODE, "implementation", "c")]
 
@@ -402,10 +409,15 @@ def build(directory: Path) -> tuple[Path, Path]:
         if source.suffix == ".c":
             _compile_c(source, obj, include)
         elif source in shared:
-            dosbatch.assemble(source, obj, *dosbatch.os_defines(dosbatch.REAL_MODE, "c"))
+            continue
         else:
             dosbatch.assemble(source, obj)
         objects.append(obj)
+    for source in shared:
+        for group, bit in os_group_bits(source).items():
+            obj = directory / f"{source.stem}_{group}.obj"
+            dosbatch.assemble(source, obj, *dosbatch.os_defines(dosbatch.REAL_MODE, "c"), f"OS_GROUPS={bit}")
+            objects.append(obj)
     output = directory / ARCHIVE_NAME
     archive(objects, output, directory / "lib")
     manifest = directory / "LLRMQB.json"

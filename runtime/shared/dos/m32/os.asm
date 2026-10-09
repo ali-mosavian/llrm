@@ -4,6 +4,20 @@
 .386
 .model flat
 
+; Which groups of the interface this object holds. A library has one object per group, each
+; assembled with -DOS_GROUPS=<its bit>, so a program links only what it calls; assembled with no
+; definition the file holds every group.
+G_CORE equ 1
+G_CONSOLE equ 2
+ifndef OS_GROUPS
+OS_GROUPS equ 3
+endif
+
+; What DOS's device information (IOCTL 44h) says of a handle: bit 7 is a character device.
+DEVICE_BIT equ 80h
+CTRL_Z equ 1Ah
+
+if OS_GROUPS and G_CORE
 public _llrm_os_open
 public _llrm_os_create
 public _llrm_os_read
@@ -11,13 +25,17 @@ public _llrm_os_seek
 public _llrm_os_write_file
 public _llrm_os_close
 public _llrm_os_exit
-public _llrm_os_console_read_key
-public _llrm_os_console_key_ready
 public _llrm_os_more
 public _llrm_os_stack_low
+endif
+if OS_GROUPS and G_CONSOLE
+public _llrm_os_console_read_key
+public _llrm_os_console_key_ready
+endif
 
 ; HEAP_BYTES comes from os.toml, DOS_* from the OS's facts: the assembler is told both.
 
+if OS_GROUPS and G_CORE
 .data
 ; The lowest ESP a checked function may reach (-fsanitize=stack). Start-up sets it.
 _llrm_os_stack_low dd 0
@@ -28,7 +46,9 @@ heap_end dd 0
 ; The request being served and the arena size being tried, which DPMI 0501h's register use leaves in memory.
 heap_ask dd 0
 heap_try dd 0
+endif
 .code
+if OS_GROUPS and G_CORE
 ; _llrm_os_more(bytes: usize) -> *near mut u8: `bytes` more of the heap at its end, or 0 when it runs out.
 ; The heap grows inside an arena taken from the extender (DPMI 0501h, allocate memory block): the first
 ; call takes HEAP_BYTES, or the largest half of it the extender has, down to the request. When the arena
@@ -175,13 +195,47 @@ done:
     ret
 _llrm_os_close endp
 
+endif
+
+if OS_GROUPS and G_CONSOLE
 ; The console's keyboard: standard input, so what DOS redirects it follows.
 
-; _llrm_os_console_read_key() -> u8: DOS's character input without echo (08h).
+; _llrm_os_console_read_key() -> u8: the keyboard's character, no echo (08h). From redirected
+; input it is the next byte read from the handle, or Ctrl-Z once there are none.
 _llrm_os_console_read_key proc
+    push ebx
+    push ecx
+    push edx
+    mov ax, DOS_IOCTL * 256
+    mov ebx, DOS_STDIN
+    int DOS_INT
+    jc short from_handle
+    test dl, DEVICE_BIT
+    jnz short from_device
+from_handle:
+    push eax                       ; the byte lands here
+    mov ah, DOS_READ
+    mov ebx, DOS_STDIN
+    mov ecx, 1
+    mov edx, esp
+    int DOS_INT
+    pop edx
+    jc short end_of_input
+    cmp eax, 1
+    jne short end_of_input
+    movzx eax, dl
+    jmp short key_done
+end_of_input:
+    mov eax, CTRL_Z
+    jmp short key_done
+from_device:
     mov ah, DOS_READ_KEY
     int DOS_INT
     movzx eax, al
+key_done:
+    pop edx
+    pop ecx
+    pop ebx
     ret
 _llrm_os_console_read_key endp
 
@@ -193,12 +247,15 @@ _llrm_os_console_key_ready proc
     and eax, 1
     ret
 _llrm_os_console_key_ready endp
+endif
 
+if OS_GROUPS and G_CORE
 ; _llrm_os_exit(code: u8): ends the program.
 _llrm_os_exit proc
     mov al, byte ptr [esp+4]
     mov ah, DOS_EXIT
     int DOS_INT
 _llrm_os_exit endp
+endif
 
 end

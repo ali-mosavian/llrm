@@ -157,11 +157,11 @@ static const char *decimal(const char *p, Parsed *out)
 }
 
 /* Working numbers for the conversion below, off the small stack. */
-#define numerator big_w[0]
-#define divisor big_w[1]
-#define shifted big_w[2]
+#define parse_numerator big_w[0]
+#define parse_divisor big_w[1]
+#define parse_shifted big_w[2]
 
-/* floor(numerator * 2^scale / divisor), 63 or 64 bits, by long division; the
+/* floor(parse_numerator * 2^scale / parse_divisor), 63 or 64 bits, by long division; the
    scale is chosen to make it so, and *inexact says if there was a remainder. */
 static unsigned long long divide_scaled(int *scale, int *inexact)
 {
@@ -169,26 +169,22 @@ static unsigned long long divide_scaled(int *scale, int *inexact)
     unsigned long long quotient = 0;
     unsigned at;
 
-    *scale = QUOTIENT_BITS + (int)big_bits(&divisor);
-    *scale -= (int)big_bits(&numerator);
+    *scale = QUOTIENT_BITS + (int)big_bits(&parse_divisor);
+    *scale -= (int)big_bits(&parse_numerator);
     if (*scale < 0)
         *scale = 0;
-    big_shl(&numerator, (unsigned)*scale);
+    big_shl(&parse_numerator, (unsigned)*scale);
     for (at = 64; at--;) {
-        shifted = divisor;
-        big_shl(&shifted, at);
-        if (big_cmp(&numerator, &shifted) >= 0) {
-            big_sub(&numerator, &shifted);
+        parse_shifted = parse_divisor;
+        big_shl(&parse_shifted, at);
+        if (big_cmp(&parse_numerator, &parse_shifted) >= 0) {
+            big_sub(&parse_numerator, &parse_shifted);
             quotient |= 1ULL << at;
         }
     }
-    *inexact = !big_is_zero(&numerator);
+    *inexact = !big_is_zero(&parse_numerator);
     return quotient;
 }
-
-/* llrm-c puts a long double local at the wrong place in the frame, so the FPU's
-   working numbers are statics. */
-static long double ten_power, quick;
 
 /* The FPU's way for a mantissa below 2^63 and a power of ten up to 10^27, both
    exact in its 64 bits: one multiplication or division rounds to 64 bits, and
@@ -199,6 +195,7 @@ static long double ten_power, quick;
 static int quick_double(unsigned long long mantissa, int exponent, double *out)
 {
     enum { MOST = 27, HALF_WAY = 0x400 };
+    long double ten_power, quick;
     byte bytes[10];
     unsigned low;
     int at, power = exponent < 0 ? -exponent : exponent;
@@ -234,18 +231,18 @@ static double nearest_double(unsigned long long mantissa, int exponent)
 
     if (quick_double(mantissa, exponent, &result))
         return result;
-    big_set(&numerator, mantissa);
+    big_set(&parse_numerator, mantissa);
     if (exponent >= 0) {
-        big_mul_pow10(&numerator, (unsigned)exponent);
+        big_mul_pow10(&parse_numerator, (unsigned)exponent);
     } else {
-        big_set(&divisor, 1);
-        big_mul_pow10(&divisor, (unsigned)-exponent);
-        big_set(&shifted, divide_scaled(&scale, &inexact));
-        numerator = shifted;
+        big_set(&parse_divisor, 1);
+        big_mul_pow10(&parse_divisor, (unsigned)-exponent);
+        big_set(&parse_shifted, divide_scaled(&scale, &inexact));
+        parse_numerator = parse_shifted;
     }
-    /* the value is numerator * 2^-scale, and a little more if inexact; keep 53
+    /* the value is parse_numerator * 2^-scale, and a little more if inexact; keep 53
        bits of it, or fewer for a denormal */
-    length = big_bits(&numerator);
+    length = big_bits(&parse_numerator);
     lowest = -scale;
     cut = length > PRECISION ? (int)length - PRECISION : 0;
     if (lowest + cut < LOWEST)
@@ -253,20 +250,20 @@ static double nearest_double(unsigned long long mantissa, int exponent)
     if (cut > 0) {
         int roundbit, lost_bits_zero;
 
-        shifted = numerator;
-        lost_bits_zero = big_shr(&shifted, (unsigned)cut - 1);
-        roundbit = (int)(big_low64(&shifted) & 1);
-        kept = big_low64(&shifted) >> 1;
+        parse_shifted = parse_numerator;
+        lost_bits_zero = big_shr(&parse_shifted, (unsigned)cut - 1);
+        roundbit = (int)(big_low64(&parse_shifted) & 1);
+        kept = big_low64(&parse_shifted) >> 1;
         if (roundbit && (!lost_bits_zero || inexact || (kept & 1)))
             kept++;
     } else {
-        /* a short number is shifted up to put its top bit at the hidden one, as
+        /* a short number is parse_shifted up to put its top bit at the hidden one, as
            far as the lowest denormal allows */
         int grow = PRECISION - (int)length;
 
         if (grow > lowest - LOWEST)
             grow = lowest - LOWEST;
-        kept = big_low64(&numerator) << grow;
+        kept = big_low64(&parse_numerator) << grow;
         lowest -= grow;
     }
     lowest += cut > 0 ? cut : 0;

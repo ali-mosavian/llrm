@@ -1,6 +1,19 @@
 .model medium
 .386
 
+; Which groups of the interface this object holds. A library has one object per group, each
+; assembled with -DOS_GROUPS=<its bit>, so a program links only what it calls; assembled with no
+; definition the file holds every group.
+G_CORE equ 1
+G_CONSOLE equ 2
+G_SOUND equ 4
+G_CLOCK equ 8
+G_SCREEN equ 16
+ifndef OS_GROUPS
+OS_GROUPS equ 31
+endif
+
+if OS_GROUPS and G_CORE
 public _llrm_os_open
 public _llrm_os_create
 public _llrm_os_read
@@ -9,10 +22,18 @@ public _llrm_os_block_resize
 public _llrm_os_write_file
 public _llrm_os_close
 public _llrm_os_exit
+endif
+if OS_GROUPS and G_CONSOLE
 public _llrm_os_console_read_key
 public _llrm_os_console_key_ready
+endif
+if OS_GROUPS and G_CLOCK
 public _llrm_os_clock_hundredths
+endif
+if OS_GROUPS and G_SOUND
 public _llrm_os_speaker_tone
+endif
+if OS_GROUPS and G_SCREEN
 public _llrm_os_screen_is_console
 public _llrm_os_screen_size
 public _llrm_os_screen_cursor
@@ -22,6 +43,8 @@ public _llrm_os_screen_put
 public _llrm_os_screen_write
 public _llrm_os_screen_get
 public _llrm_os_screen_scroll
+endif
+if OS_GROUPS and G_CORE
 public _llrm_os_more
 public _llrm_os_vector
 public _llrm_os_set_vector
@@ -32,11 +55,13 @@ public _llrm_os_stack_low
 public _llrm_os_psp
 public BSS_LAST
 public FBSS_LAST
+endif
 
 ; What DOS's device information (IOCTL 44h) says of a handle: bit 7 is a character device.
 DEVICE_BIT equ 80h
 CTRL_Z equ 1Ah
 
+if OS_GROUPS and G_CORE
 ; Where the uninitialised data ends, near and far, which start.asm zeroes: this object is linked last.
 _BSS segment word public 'BSS'
 BSS_LAST label byte
@@ -61,8 +86,11 @@ SAVED equ 16
 saved_count dw 0
 saved_number db SAVED dup (0)
 saved_old dd SAVED dup (0)
+endif
+
 
 .code
+if OS_GROUPS and G_CORE
 ; _llrm_os_more(bytes: u16) -> *near mut u8: `bytes` more of DGROUP at the heap's end, or
 ; 0 when DGROUP's 64 KB or DOS's memory runs out.
 _llrm_os_more proc far
@@ -223,6 +251,9 @@ done:
     retf
 _llrm_os_close endp
 
+endif
+
+if OS_GROUPS and G_CONSOLE
 ; The console's keyboard: standard input, so what DOS redirects it follows.
 
 ; _llrm_os_console_read_key() -> u8: the keyboard's character, no echo (08h). From redirected
@@ -271,7 +302,9 @@ _llrm_os_console_key_ready proc far
     and ax, 1
     retf
 _llrm_os_console_key_ready endp
+endif
 
+if OS_GROUPS and G_SOUND
 ; The speaker: timer channel 2 square wave, gated by port 61h.
 
 TIMER_COMMAND equ 43h
@@ -309,7 +342,9 @@ silent:
     pop bp
     retf
 _llrm_os_speaker_tone endp
+endif
 
+if OS_GROUPS and G_CLOCK
 ; The time of day.
 
 SECONDS_PER_MINUTE equ 60
@@ -336,7 +371,9 @@ _llrm_os_clock_hundredths proc far
     pop cx
     retf
 _llrm_os_clock_hundredths endp
+endif
 
+if OS_GROUPS and G_SCREEN
 ; The screen: the BIOS's text mode. A cell is read and written in video memory, which is how the
 ; cursor stays where it is; the BIOS data area (0040h) says the mode, columns and rows.
 
@@ -558,7 +595,9 @@ _llrm_os_screen_scroll proc far
     pop bp
     retf
 _llrm_os_screen_scroll endp
+endif
 
+if OS_GROUPS and G_CORE
 ; Interrupt vectors, for handlers the program installs. A handler is
 ; entered with interrupts off and leaves by iret.
 
@@ -669,5 +708,6 @@ _llrm_os_exit proc far
     mov ah, DOS_EXIT
     int DOS_INT
 _llrm_os_exit endp
+endif
 
 end
