@@ -36,7 +36,7 @@ use llrm_mir::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramProxy,
 
 use crate::alias;
 use crate::cfg::Shape;
-use crate::memory::{Identity, MemoryKind, Unit};
+use crate::memory::{Identity, Key, MemoryKind, Unit};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Globals {
@@ -272,8 +272,8 @@ fn found_with(
                     .escaped
                     .iter()
                     .filter(|one| one.kind == MemoryKind::Global)
-                    .filter_map(|one| match one.identity {
-                        Some(Identity::Global(global)) => Some(GlobalId(global)),
+                    .filter_map(|one| match one.key {
+                        Key::Global(global) => Some(GlobalId(global)),
                         _ => None,
                     })
                     .collect();
@@ -366,8 +366,8 @@ impl ProgramAnalysis for ProgramGlobals {
                 let unit = Unit { program: Some(&proxy), ..Unit::of(module, &program.layout, function) };
                 let exposed = crate::memory::exposed_frames(&unit);
                 let facts = alias::points_to(&unit.with_shape(&shape).with_exposed(&exposed), None, None)?;
-                ids.extend(facts.escaped.iter().filter(|one| one.kind == MemoryKind::Global).filter_map(|one| match one.identity {
-                    Some(Identity::Global(global)) => Some(GlobalId(global)),
+                ids.extend(facts.escaped.iter().filter(|one| one.kind == MemoryKind::Global).filter_map(|one| match one.key {
+                    Key::Global(global) => Some(GlobalId(global)),
                     _ => None,
                 }));
             }

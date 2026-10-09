@@ -46,7 +46,7 @@ use num_traits::ToPrimitive;
 use llrm_support::hash::{HashMap, HashSet};
 
 use crate::cellmap::Bucket;
-use crate::memory::{AliasClass, Identity, MemRef, MemoryKind, MemoryObject, Provenance, Slice, SliceError, alias_class, classes_may_alias};
+use crate::memory::{AliasClass, Identity, MemRef, MemoryKind, MemoryObject, ObjectRef, Provenance, Slice, SliceError, alias_class, classes_may_alias};
 use crate::ranges::{Interval, covering};
 
 const FLOOR: i64 = -(1_i64 << 31);
@@ -67,8 +67,8 @@ pub enum RegionError {
 
 /// Memory addressed linearly, which no program object occupies. Its slice
 /// offsets are linear addresses, so one object covers every selector.
-fn linear() -> MemoryObject {
-    MemoryObject { identity: Some(Identity::Str("linear".to_owned())), ..MemoryObject::new(MemoryKind::Absolute) }
+fn linear() -> ObjectRef {
+    ObjectRef::LINEAR
 }
 
 /// What an access through a fixed-address pointer names: linear memory, wholly.
@@ -320,7 +320,7 @@ fn _through_pointer(reference: &MemRef) -> bool {
 /// object's alias class.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct OverlapShape {
-    pub object: Option<MemoryObject>,
+    pub object: Option<ObjectRef>,
     pub frame: Option<Frame>,
     pub class: Option<AliasClass>,
 }
@@ -381,7 +381,7 @@ pub type Frame = (Operand, Option<(ValueId, i64)>);
 /// The buckets held, by object, frame and alias class: Python's `parts`.
 #[derive(Clone, Default)]
 pub struct OverlapParts {
-    pub objects: HashMap<MemoryObject, HashSet<OverlapBucket>>,
+    pub objects: HashMap<ObjectRef, HashSet<OverlapBucket>>,
     pub objectless: HashSet<OverlapBucket>,
     pub frames: HashMap<Option<Frame>, HashSet<OverlapBucket>>,
     pub classes: HashMap<Option<AliasClass>, HashSet<OverlapBucket>>,
@@ -393,7 +393,7 @@ impl Bucket for OverlapBucket {
     fn held(&self, parts: &mut OverlapParts) {
         let shape = &*self.shape;
         match &shape.object {
-            Some(object) => parts.objects.entry(object.clone()).or_default().insert(self.clone()),
+            Some(object) => parts.objects.entry(*object).or_default().insert(self.clone()),
             None => parts.objectless.insert(self.clone()),
         };
         parts.frames.entry(shape.frame).or_default().insert(self.clone());
@@ -431,8 +431,8 @@ pub fn overlap_bucket(buckets: &mut OverlapBuckets, reference: &MemRef) -> Overl
 }
 
 /// Python `mir.object_bucket`.
-pub fn object_bucket(buckets: &mut OverlapBuckets, one: Option<MemoryObject>, frame: Option<Frame>) -> OverlapBucket {
-    let class = one.as_ref().map(alias_class);
+pub fn object_bucket(buckets: &mut OverlapBuckets, one: Option<ObjectRef>, frame: Option<Frame>) -> OverlapBucket {
+    let class = one.as_ref().map(|one| alias_class(one));
     buckets.interned(OverlapShape { object: one, frame, class })
 }
 
@@ -457,7 +457,7 @@ pub fn overlap_buckets(reference: &MemRef, parts: &OverlapParts) -> Option<Vec<O
     }
     // A write names one or two objects: a list is cheaper than a set.
     let mut kinds = Vec::with_capacity(provenance.slices.len());
-    let mut written = Vec::<&MemoryObject>::with_capacity(provenance.slices.len());
+    let mut written = Vec::<&ObjectRef>::with_capacity(provenance.slices.len());
     for one in &provenance.slices {
         if written.contains(&&one.object) {
             continue;
