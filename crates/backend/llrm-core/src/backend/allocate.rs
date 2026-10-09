@@ -1567,7 +1567,7 @@ fn _allocated(
                     body = spilt;
                     // A value the spiller keeps (a load from its own home
                     // cell) is now as short as a reload, and is placed as one.
-                    let kept: BTreeSet<u32> = _values(&body).into_iter().filter(|one| chosen.contains(one)).collect();
+                    let kept = _named_among(&body, &chosen);
                     for one in &chosen {
                         if kept.contains(one) {
                             stage.insert(*one, Stage::Assign);
@@ -1770,6 +1770,30 @@ fn _recolored_hints(
 }
 
 /// Every value that wants a register, dead definitions included.
+/// The values of `wanted` the body still names: from the postings the body is
+/// followed with, not a walk of every instruction (a spill asks it of its few).
+fn _named_among(
+    body: &LirBody,
+    wanted: &BTreeSet<u32>,
+) -> BTreeSet<u32> {
+    let arrives: BTreeSet<u32> = body.blocks.iter().flat_map(|block| block.phis.iter().map(|phi| phi.result)).collect();
+    let found: BTreeSet<u32> = crate::backend::postings::following(body, |postings| {
+        wanted
+            .iter()
+            .copied()
+            .filter(|value| {
+                arrives.contains(value) || !postings.defs(*value).is_empty() || !postings.uses(*value).is_empty()
+            })
+            .collect()
+    });
+    body.facts.0.bump_by("named-among", wanted.len());
+    if llrm_support::env_set("LLRM_CHECK_POSTINGS") {
+        let walked: BTreeSet<u32> = _values(body).into_iter().filter(|one| wanted.contains(one)).collect();
+        assert!(found == walked, "{}: the values still named, from the postings, differ from the walk", body.name);
+    }
+    found
+}
+
 fn _values(body: &LirBody) -> Vec<u32> {
     let mut out: BTreeSet<u32> = BTreeSet::new();
     for block in &body.blocks {
@@ -3390,6 +3414,18 @@ mod tests {
         insns: Vec<Insn>,
     ) -> LirBody {
         LirBody::new(name, entry, vec![block(entry, insns)], IndexMap::default(), IndexMap::default())
+    }
+
+    /// A spill walked every instruction of the body to learn which of its few
+    /// values the rewrite left named (d_faces -O1: 634 spills, 272 M of 24.7 G
+    /// instructions). The postings say.
+    #[test]
+    fn test_the_values_a_spill_left_named_come_from_the_postings_not_a_walk() {
+        let at = |at: i64, defines: Vec<u32>, uses: Vec<u32>| Insn::new(at, Some((at, at + 1)), None, defines, uses);
+        let body = body_of("f", 0, vec![at(0, vec![1], vec![]), at(1, vec![2], vec![1]), at(2, vec![], vec![2])]);
+        let found = super::_named_among(&body, &BTreeSet::from([1, 2, 3]));
+        assert_eq!(found, BTreeSet::from([1, 2]), "value 3 is named nowhere");
+        assert_eq!(body.facts.0.counted("named-among"), 3, "asked of the three values, from the postings");
     }
 
     /// lru bas `BENCHLRU&` at -Os: an argument loaded in the entry block and
