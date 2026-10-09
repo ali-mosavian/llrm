@@ -1,5 +1,6 @@
-//! The registers an instruction reads and writes, from its row in `x86.instr`: its operands as `Semantics` has
-//! them, and the row's `reads` and `writes` for the registers it uses without naming. LLVM's `MCInstrDesc` operand
+//! The registers an instruction reads and writes, from its row in `x86.instr`:
+//! its operands as `Semantics` has them, and the row's `reads` and `writes` for
+//! the registers it uses without naming. LLVM's `MCInstrDesc` operand
 //! defs and `ImplicitUses`/`ImplicitDefs`. Flags are not here yet.
 
 use iced_x86::Register;
@@ -46,7 +47,8 @@ pub fn root(
     }
 }
 
-/// The registers `place` reads or writes as an operand: the register itself, or the ones its address is encoded with.
+/// The registers `place` reads or writes as an operand: the register itself, or
+/// the ones its address is encoded with.
 fn used(
     places: &[Loc],
     bits: u32,
@@ -75,7 +77,8 @@ fn used(
             add(reads, operand.base);
             add(reads, operand.index);
             if matches!(place, Loc::Mem(_)) {
-                // The segment it names, else the default: SS behind the stack's registers, DS otherwise.
+                // The segment it names, else the default: SS behind the stack's
+                // registers, DS otherwise.
                 let stack = [Register::BP, Register::EBP, Register::SP, Register::ESP].contains(&operand.base);
                 add(
                     reads,
@@ -107,7 +110,8 @@ fn row<'a>(
     forms: &'a [Form],
     what: &Semantics,
 ) -> Option<&'a Form> {
-    // The machine instruction is the mnemonic's, whatever operation LIR lowered it as; a comparison with none is `cmp`.
+    // The machine instruction is the mnemonic's, whatever operation LIR lowered
+    // it as; a comparison with none is `cmp`.
     let name = match what.name.as_deref() {
         Some(name) if !name.is_empty() => name,
         _ if what.op == Operation::Compare => "cmp",
@@ -118,8 +122,8 @@ fn row<'a>(
     })
 }
 
-/// What `what` reads and writes in `bits`-bit code, or None where its row does not say: a transfer of control, or no
-/// row.
+/// What `what` reads and writes in `bits`-bit code, or None where its row does
+/// not say: a transfer of control, or no row.
 pub fn effects(
     forms: &[Form],
     bits: u32,

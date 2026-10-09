@@ -196,7 +196,8 @@ pub fn segments(recs: &[Rc<Record>]) -> Vec<Option<(String, i64)>> {
             // absolute: frame and offset follow
             i += 3;
         }
-        // SEGDEF32 (the odd record type) has a four-byte length: ML's debug segments are written so.
+        // SEGDEF32 (the odd record type) has a four-byte length: ML's debug
+        // segments are written so.
         let width = if r.r#type & 1 == 1 { 4 } else { 2 };
         let mut ln = if width == 4 {
             i64::from(u32::from_le_bytes(r.body[i..i + 4].try_into().expect("a SEGDEF32 length")))
@@ -486,9 +487,10 @@ pub fn read_thread(
     at += 1;
     let (method, number) = (((lead >> 2) & 7) as i64, (lead & 3) as i64);
     let mut index = 0;
-    // Frame methods 4 and 5 -- the location's segment, and the target's frame --
-    // carry no index. Testing method & 3 says both of them do, and eats a byte
-    // that is not there, which desynchronises the rest of the record.
+    // Frame methods 4 and 5 -- the location's segment, and the target's frame
+    // -- carry no index. Testing method & 3 says both of them do, and eats
+    // a byte that is not there, which desynchronises the rest of the
+    // record.
     if method < 3 {
         (index, at) = _index(body, at);
     }
@@ -558,7 +560,8 @@ pub fn refusals(records: &[Rc<Record>]) -> Vec<String> {
     let kinds: HashSet<u8> = records.iter().map(|record| record.r#type).collect();
     if [LIDATA, LIDATA + 1].iter().any(|kind| kinds.contains(kind)) {
         // fixups() tracks its base from LEDATA only, so a FIXUPP after a LIDATA
-        // is attributed to the previous LEDATA and comes out at the wrong offset
+        // is attributed to the previous LEDATA and comes out at the wrong
+        // offset
         reasons.push("LIDATA: fixup offsets after it would be wrong".to_owned());
     }
     if COMDAT.iter().any(|kind| kinds.contains(kind)) {
@@ -894,7 +897,8 @@ pub fn fixupp_record(subrecords: &[Vec<u8>]) -> Rc<Record> {
     Rc::new(Record::new(FIXUPP, subrecords.concat()))
 }
 
-/// `ledata_record` with a 32-bit offset: LEDATA's 32-bit twin, for a USE32 segment.
+/// `ledata_record` with a 32-bit offset: LEDATA's 32-bit twin, for a USE32
+/// segment.
 pub fn ledata_record32(
     seg: i64,
     offset: i64,
@@ -1219,7 +1223,8 @@ mod tests {
     #[test]
     fn test_a_frame_thread_that_carries_no_index_is_not_read_as_one() {
         let thread = 0x40 | (5 << 2); // frame thread 0, method 5
-        let fixup = [0xC4, 0x10, 0x80, 0x01, 0x34, 0x12]; // offset16 at 0x10, disp 0x1234
+        // offset16 at 0x10, disp 0x1234
+        let fixup = [0xC4, 0x10, 0x80, 0x01, 0x34, 0x12];
         let mut body = vec![thread];
         body.extend_from_slice(&fixup);
         let found = fixups(&[rec(FIXUPP, &body)]);
@@ -1371,7 +1376,8 @@ mod tests {
     #[test]
     fn test_renumbering_a_frame_that_names_an_external_moves_it_too() {
         let mut body = vec![0x80, 0x10];
-        body.push((2 << 4) | 0x04 | 2); // explicit frame method 2, target external
+        // explicit frame method 2, target external
+        body.push((2 << 4) | 0x04 | 2);
         body.extend(_as_index(9));
         body.extend(_as_index(9));
         let made = _with_fixups(&[body]);

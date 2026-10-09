@@ -444,7 +444,8 @@ mod tests {
     }
 
     /// A second target's selector, generated beside the first, defined the same
-    /// methods under the same names: they were `pattern_holds` on one `Selector`.
+    /// methods under the same names: they were `pattern_holds` on one
+    /// `Selector`.
     #[test]
     fn each_targets_selector_has_methods_named_for_it() {
         let patterns = "pattern any\n  match add.i16(a, b)\n  nothing\nend\n";

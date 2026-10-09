@@ -102,7 +102,8 @@ impl<'a> FunctionCompiler<'a> {
         self.indexed_pointer(data, flat, self.types.width(element.id()), span)
     }
 
-    /// `sum(indices[k] * strides[k])` as a u16: a descriptor's u16 counts bound it.
+    /// `sum(indices[k] * strides[k])` as a u16: a descriptor's u16 counts bound
+    /// it.
     pub(super) fn linear(
         &mut self,
         indices: Vec<hir::Operand>,

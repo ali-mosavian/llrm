@@ -70,8 +70,9 @@ fn before(
 }
 
 /// More than eight floats are live where a float compare and its branches,
-/// which share one source position, end a block. The spill victim was looked for at the last
-/// branch, where none is live: qb-qrender's d_faces.c was refused.
+/// which share one source position, end a block. The spill victim was looked
+/// for at the last branch, where none is live: qb-qrender's d_faces.c was
+/// refused.
 #[test]
 fn test_a_compare_crowded_before_its_branches_spills() {
     let (body, mut frame) = before_float_assign();
@@ -97,16 +98,18 @@ fn test_a_compare_crowded_before_its_branches_spills() {
 }
 
 /// Nine floats copy at once into a loop's phis (fpbench, #358). Each spilled
-/// copy was stored after all nine were made, nine registers wide, and FloatAlloc refused the
-/// body with "floating instruction requires too many stack operands".
+/// copy was stored after all nine were made, nine registers wide, and
+/// FloatAlloc refused the body with "floating instruction requires too many
+/// stack operands".
 #[test]
 fn test_spilled_phi_copies_are_not_all_held_at_once() {
     refuses_nothing("x87phis", "_k");
 }
 
-/// Ten floats rotate through a loop: its phi copies are one cycle, each reading what the next
-/// writes. A step of such copies fell back to all-at-once and was refused; the order is one
-/// copy at a time, the cycle broken with one temporary.
+/// Ten floats rotate through a loop: its phi copies are one cycle, each reading
+/// what the next writes. A step of such copies fell back to all-at-once and was
+/// refused; the order is one copy at a time, the cycle broken with one
+/// temporary.
 #[test]
 fn test_a_cycle_of_spilled_phi_copies_is_ordered_not_held_at_once() {
     refuses_nothing("x87rotate", "_rot");

@@ -17,8 +17,8 @@ pub fn form(family: &str) -> Option<Form> {
     }
 }
 
-/// How `family`'s runtime reads a string descriptor; none where its strings are not near, and its
-/// routines keep their calls.
+/// How `family`'s runtime reads a string descriptor; none where its strings are
+/// not near, and its routines keep their calls.
 pub fn descriptor(family: &str) -> Option<Descriptor> {
     if form(family)? != Form::Near {
         return None;
@@ -217,15 +217,16 @@ fn expect(
 mod tests {
     use super::*;
 
-    /// A routine whose row does not parse would silently keep its call; every row loads.
+    /// A routine whose row does not parse would silently keep its call; every
+    /// row loads.
     #[test]
     fn every_described_routine_loads() {
         let names: Vec<_> = routines().into_iter().map(|one| one.routine).collect();
         assert_eq!(names, ["B$FLEN", "B$FASC", "B$FMID", "B$FCHR"]);
     }
 
-    /// QB 4.5 and PDS 7.1 state their descriptor; VBDOS's far strings are not at an offset, so it
-    /// states none and keeps every call.
+    /// QB 4.5 and PDS 7.1 state their descriptor; VBDOS's far strings are not
+    /// at an offset, so it states none and keeps every call.
     #[test]
     fn the_far_runtime_states_no_descriptor() {
         assert_eq!(descriptor("qb45"), Some(Descriptor { length: 0, data: 2, size: 4 }));
@@ -234,8 +235,9 @@ mod tests {
         assert_eq!((form("qb45"), form("pds71"), form("vbdos")), (Some(Form::Near), Some(Form::Near), Some(Form::Far)));
     }
 
-    /// Every BASIC runtime states its limit word and handler; a pass naming `b$pendchk` itself
-    /// would not notice a runtime that keeps it elsewhere.
+    /// Every BASIC runtime states its limit word and handler; a pass naming
+    /// `b$pendchk` itself would not notice a runtime that keeps it
+    /// elsewhere.
     #[test]
     fn each_basic_runtime_states_its_stack_limit() {
         for family in ["qb45", "pds71", "vbdos"] {

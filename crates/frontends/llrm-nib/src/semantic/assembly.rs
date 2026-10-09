@@ -1,8 +1,9 @@
 //! Inline assembly (section 15): one HIR `asm` instruction whose operands
-//! go into registers and whose results come out of them. A register is a whole (16 bits, or 32 where
-//! the target's register file names an e-register) and a byte register is a part of it, packed and
-//! unpacked here, so the machine side sees only wholes. Which registers a block may name is the
-//! target's register file's (`registers.regs`).
+//! go into registers and whose results come out of them. A register is a whole
+//! (16 bits, or 32 where the target's register file names an e-register) and a
+//! byte register is a part of it, packed and unpacked here, so the machine side
+//! sees only wholes. Which registers a block may name is the target's register
+//! file's (`registers.regs`).
 
 use llrm_core::abi::runtime::Reg;
 use llrm_core::backend::inline_asm::{self, Part};
@@ -89,7 +90,8 @@ impl FunctionCompiler<'_> {
                 memory = true;
                 continue;
             }
-            // `es` and `flags` are not in the file as a general register; any other the target's file must have.
+            // `es` and `flags` are not in the file as a general register; any
+            // other the target's file must have.
             let register = match name.to_ascii_lowercase().as_str() {
                 "es" | "flags" => inline_asm::clobbered(name),
                 _ => self.operand(name, *span).ok().map(|(register, ..)| register),
@@ -109,7 +111,8 @@ impl FunctionCompiler<'_> {
             memory,
         });
 
-        // Each output is a hidden binding, then assigned or bound as source would be.
+        // Each output is a hidden binding, then assigned or bound as source
+        // would be.
         for (name, target, span) in &asm.outputs {
             let (register, part, bits) = self.operand(name, *span)?;
             let word =
@@ -147,8 +150,9 @@ impl FunctionCompiler<'_> {
         Ok(())
     }
 
-    /// The register `name` an input or output names, by the target's register file: its root, the part
-    /// of it and the bits of the whole it is in (16, or 32 where the target has an e-register named).
+    /// The register `name` an input or output names, by the target's register
+    /// file: its root, the part of it and the bits of the whole it is in
+    /// (16, or 32 where the target has an e-register named).
     fn operand(
         &self,
         name: &str,
@@ -163,7 +167,8 @@ impl FunctionCompiler<'_> {
             )
         };
         let file = |one: &str| self.types.registers.iter().find(|register| register.name.eq_ignore_ascii_case(one));
-        // The register must be in the target's file, general, and within the target's code.
+        // The register must be in the target's file, general, and within the
+        // target's code.
         let register = file(name).ok_or_else(refused)?;
         let root = file(&register.root).ok_or_else(refused)?;
         if !root.is("gpr") || root.is("reserved") || register.bits > self.types.code_bits {
@@ -178,8 +183,9 @@ impl FunctionCompiler<'_> {
         Ok((root16, part, if register.bits == 32 { 32 } else { bits.min(16) }))
     }
 
-    /// `value` as the register `name` holds it: a 16-bit or 8-bit integer (32 for an e-register),
-    /// or a near pointer, whose object the block may then reach.
+    /// `value` as the register `name` holds it: a 16-bit or 8-bit integer (32
+    /// for an e-register), or a near pointer, whose object the block may
+    /// then reach.
     fn register_value(
         &mut self,
         value: &Expr,
@@ -194,7 +200,8 @@ impl FunctionCompiler<'_> {
         } else {
             self.expression(value, None)?
         };
-        // A near pointer fills a whole that is as wide as the target's near pointer.
+        // A near pointer fills a whole that is as wide as the target's near
+        // pointer.
         if matches!(typed.type_name, TypeName::Pointer { far: false, .. })
             && part == Part::Word
             && width(self.types.sizes, typed.type_name) == width(self.types.sizes, target)
@@ -224,7 +231,8 @@ fn whole_type(bits: u32) -> TypeName {
     if bits == 32 { TypeName::U32 } else { TypeName::U16 }
 }
 
-/// The name the HIR spells a register of `bits` with: `ax`, or `eax` for its 32-bit view.
+/// The name the HIR spells a register of `bits` with: `ax`, or `eax` for its
+/// 32-bit view.
 fn register_name(
     register: Reg,
     bits: u32,

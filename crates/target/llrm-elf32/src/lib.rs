@@ -1,5 +1,6 @@
-//! An [`Object`] as an ELF32 relocatable file for i386, REL relocations (the addend is in the field),
-//! as GNU ld and lld take them. The container is `llrm-elf`'s.
+//! An [`Object`] as an ELF32 relocatable file for i386, REL relocations (the
+//! addend is in the field), as GNU ld and lld take them. The container is
+//! `llrm-elf`'s.
 
 use llrm_elf::{Machine, Relocation};
 use llrm_object::{Arch, Kind, Object, Unsupported};
@@ -114,8 +115,9 @@ mod tests {
         Object { name: "a.c".into(), arch: Arch::I386, sections, symbols, omf_groups: Vec::new(), debug: None }
     }
 
-    /// `call f`: REL puts S + A - P in the field, so the field is -4 where the call's addend is 0,
-    /// and the entry is R_386_PC32 against `f`, the first global.
+    /// `call f`: REL puts S + A - P in the field, so the field is -4 where the
+    /// call's addend is 0, and the entry is R_386_PC32 against `f`, the
+    /// first global.
     #[test]
     fn a_call_is_r_386_pc32_with_minus_four_in_the_field() {
         let call = Reloc { at: 1, kind: Kind::PcRel { width: 4, from: 4 }, target: Target::Symbol(0), addend: 0 };
@@ -132,7 +134,8 @@ mod tests {
         assert_eq!((word(&bytes, rel.2), word(&bytes, rel.2 + 4)), (1, 3 << 8 | R_386_PC32));
     }
 
-    /// A local symbol has no ELF symbol: a reference to it is its section's symbol and its offset.
+    /// A local symbol has no ELF symbol: a reference to it is its section's
+    /// symbol and its offset.
     #[test]
     fn a_local_symbol_is_its_section_and_its_offset() {
         let data = Section {
@@ -194,8 +197,9 @@ mod tests {
         assert!(write(&real).is_err());
     }
 
-    /// An object that asks for CodeView or Turbo Debugger information is refused by name: the
-    /// information of another format is never written in its place.
+    /// An object that asks for CodeView or Turbo Debugger information is
+    /// refused by name: the information of another format is never written
+    /// in its place.
     #[test]
     fn a_debug_format_this_object_cannot_carry_is_refused() {
         for (format, name) in [

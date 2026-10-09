@@ -1,6 +1,6 @@
-//! [`Info`] as CodeView C13: the `.debug$S` and `.debug$T` sections of a COFF object, the format
-//! current MSVC and clang-cl emit. A fact C13 as written here cannot say is refused with what it
-//! was, never dropped.
+//! [`Info`] as CodeView C13: the `.debug$S` and `.debug$T` sections of a COFF
+//! object, the format current MSVC and clang-cl emit. A fact C13 as written
+//! here cannot say is refused with what it was, never dropped.
 
 pub mod symbols;
 mod types;
@@ -11,7 +11,8 @@ use llrm_object::{Arch, Object, Reloc, Unsupported};
 /// `CV_SIGNATURE_C13`: what opens both sections.
 const SIGNATURE: u32 = 4;
 
-/// The register numbers a variable's location can name: the model's own, by the target's name.
+/// The register numbers a variable's location can name: the model's own, by the
+/// target's name.
 pub(crate) struct Registers<'a> {
     info: &'a Info,
 }
@@ -35,7 +36,8 @@ impl Registers<'_> {
     }
 }
 
-/// A section's bytes and the relocations that fill its section and offset fields.
+/// A section's bytes and the relocations that fill its section and offset
+/// fields.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Section {
     pub image: Vec<u8>,
@@ -73,8 +75,9 @@ pub(crate) fn name(
     out.push(0);
 }
 
-/// A record: its length (everything after the field), its kind and its data, the whole padded to
-/// four bytes. `pad` is the filler: zeros in symbols, `LF_PAD` in types.
+/// A record: its length (everything after the field), its kind and its data,
+/// the whole padded to four bytes. `pad` is the filler: zeros in symbols,
+/// `LF_PAD` in types.
 pub(crate) fn record(
     out: &mut Vec<u8>,
     kind: u16,

@@ -7,7 +7,8 @@
 //! reach the cell through an argument or an escape, since an unknown callee
 //! cannot reach an unescaped frame object.
 //!
-//! Skipped: `test_sroa_refines_a_conservative_aggregate_range_from_the_exact_pointer`
+//! Skipped:
+//! `test_sroa_refines_a_conservative_aggregate_range_from_the_exact_pointer`
 //! (no provenance is attached, `annotated` derives it); the complete half of
 //! `test_split_initializer_requires_every_byte` and
 //! `test_packed_capture_keeps_wide_and_narrow_definitions_and_rejects_unknown_overlap`
@@ -771,10 +772,11 @@ b0:
     assert!(across("!2").contains("load i16"), "{}", across("!2"));
 }
 
-/// A declared variable the promotion makes values of is told to the debugger as it goes: the value each store gives it,
-/// from the instruction after the store, and the phi that merges the paths, from the top of the block. Without them the
-/// variable's stores (which dead-store elimination removes) were its only record, and `-g` kept them by making them
-/// volatile.
+/// A declared variable the promotion makes values of is told to the debugger as
+/// it goes: the value each store gives it, from the instruction after the
+/// store, and the phi that merges the paths, from the top of the block. Without
+/// them the variable's stores (which dead-store elimination removes) were its
+/// only record, and `-g` kept them by making them volatile.
 #[test]
 fn a_promoted_variable_is_named_by_the_value_of_each_store_and_the_phi_that_joins_them() {
     let mut module = module(

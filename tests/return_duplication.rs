@@ -1,4 +1,5 @@
-//! gcc's bb-reorder `copy_bb_p`: a branch to a block that only returns gets its own copy of it.
+//! gcc's bb-reorder `copy_bb_p`: a branch to a block that only returns gets its
+//! own copy of it.
 
 use std::process::Command;
 
@@ -24,8 +25,9 @@ fn listing(flags: &[&str]) -> String {
     std::fs::read_to_string(scratch.path().join("a.s")).unwrap()
 }
 
-/// The early exit of the recursion jumped to the one return the loop's end also reached, so the two could not be told
-/// apart (no shrink-wrapping): one `ret` in hanoi, with a `jmp` to it from the entry test.
+/// The early exit of the recursion jumped to the one return the loop's end also
+/// reached, so the two could not be told apart (no shrink-wrapping): one `ret`
+/// in hanoi, with a `jmp` to it from the entry test.
 #[test]
 fn test_the_early_exit_of_a_recursion_returns_in_a_block_of_its_own() {
     let text = listing(&["-m32", "-mabi=sysv", "-march=i486", "-O2", "-fno-inline-functions"]);

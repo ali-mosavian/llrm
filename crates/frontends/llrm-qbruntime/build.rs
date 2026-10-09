@@ -1,5 +1,7 @@
-//! `runtime.toml` as Rust data: every process that asked for a routine's contract parsed the 64 KB table first (8
-//! Minstr, 3% of a C program's compile). The rows keep the file's order; `BY_NAME` is sorted for a binary search.
+//! `runtime.toml` as Rust data: every process that asked for a routine's
+//! contract parsed the 64 KB table first (8 Minstr, 3% of a C program's
+//! compile). The rows keep the file's order; `BY_NAME` is sorted for a binary
+//! search.
 
 use std::fmt::Write;
 

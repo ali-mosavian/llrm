@@ -1,4 +1,5 @@
-//! `-fsanitize=stack`: the limit and the handler are what the runtime's description says.
+//! `-fsanitize=stack`: the limit and the handler are what the runtime's
+//! description says.
 
 use llrm_core::hir::model::{Program, StackCheck};
 
@@ -25,8 +26,9 @@ fn procedure(program: &Program) -> String {
     between(&listing(program), "S proc", "S endp").to_owned()
 }
 
-/// A pass that named `b$pendchk` itself would not follow a runtime that keeps its limit elsewhere:
-/// each runtime's row is what the program carries, and whatever names it states reach the listing.
+/// A pass that named `b$pendchk` itself would not follow a runtime that keeps
+/// its limit elsewhere: each runtime's row is what the program carries, and
+/// whatever names it states reach the listing.
 #[test]
 fn the_limit_and_handler_come_from_the_runtime_description() {
     for runtime in RUNTIMES {
@@ -42,7 +44,8 @@ fn the_limit_and_handler_come_from_the_runtime_description() {
         let own = procedure(&checked);
         assert!(own.contains("cmp sp, word ptr FOO") && own.contains("call far ptr BAR"), "{runtime}: {own}");
         assert!(!own.contains("pendchk") && !own.contains("ERR_OSS"), "{runtime}: {own}");
-        // Framed by the runtime, it enters through the entry the description names.
+        // Framed by the runtime, it enters through the entry the description
+        // names.
         let mut framed = program(runtime, true, STRING);
         framed.stack_check = checked.stack_check.clone();
         let entered = procedure(&framed);
@@ -50,8 +53,9 @@ fn the_limit_and_handler_come_from_the_runtime_description() {
             entered.contains("call far ptr BAZ") && !entered.contains("B$ENRA") && !entered.contains("cmp sp"),
             "{runtime}: {entered}"
         );
-        // Whichever entry it is, it builds the frame: a shell `push bp` before it made the first
-        // argument read as garbage (29281 for 5) under the checking B$ENRD, and a run past it.
+        // Whichever entry it is, it builds the frame: a shell `push bp` before
+        // it made the first argument read as garbage (29281 for 5)
+        // under the checking B$ENRD, and a run past it.
         assert!(!entered.contains("push bp") && !entered.contains("push si"), "{runtime}: {entered}");
     }
 }

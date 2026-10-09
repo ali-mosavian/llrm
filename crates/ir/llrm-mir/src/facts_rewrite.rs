@@ -16,16 +16,16 @@
 //! and LLVM's poison is lazy: it matters only where a user reads it, and the
 //! users of a moved instruction are the ones its original had, which only ran
 //! after the original did. So every fact here survives. A fact that made the
-//! instruction undefined behaviour outright (LLVM's `noundef`, `!dereferenceable`
-//! on a load) would not, and answers `false` below. Checked when this was
-//! written, on the passes `llrm_transforms::pipeline` runs: `hoist`,
-//! `loopmotion`, `lsr` (induction steps), `exitsink` (through `indvars`),
-//! `gvn::joined` (insertion on an edge) and `loadjoins` (a load cloned into
-//! predecessors) move or insert an instruction with its flags, and are sound
-//! by the argument above; `algebraic` reassociation changes operands and
-//! already clears the flags (`set_flags(.., Flags::default())`). The optimiser passes
-//! `llrm-mir` once had were never run by the compile route (#237) and are gone;
-//! a pass added to the route comes under this audit.
+//! instruction undefined behaviour outright (LLVM's `noundef`,
+//! `!dereferenceable` on a load) would not, and answers `false` below. Checked
+//! when this was written, on the passes `llrm_transforms::pipeline` runs:
+//! `hoist`, `loopmotion`, `lsr` (induction steps), `exitsink` (through
+//! `indvars`), `gvn::joined` (insertion on an edge) and `loadjoins` (a load
+//! cloned into predecessors) move or insert an instruction with its flags, and
+//! are sound by the argument above; `algebraic` reassociation changes operands
+//! and already clears the flags (`set_flags(.., Flags::default())`). The
+//! optimiser passes `llrm-mir` once had were never run by the compile route
+//! (#237) and are gone; a pass added to the route comes under this audit.
 //!
 //! The argument needs one more thing: no reader takes a flag or `!range` off
 //! an instruction to conclude something about its operands, or about another
@@ -63,7 +63,8 @@ impl Fact {
         }
     }
 
-    /// The weaker of two memory effects: what either may do, if that is one of them.
+    /// The weaker of two memory effects: what either may do, if that is one of
+    /// them.
     fn effects(
         a: Effect,
         b: Effect,

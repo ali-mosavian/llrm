@@ -10,7 +10,8 @@ use iced_x86::{
     Code, Decoder, DecoderOptions, FlowControl, Instruction, InstructionInfoFactory, OpAccess, OpKind, Register,
 };
 
-/// BC targets an 8086; rewritten instructions use 386 forms in a 16-bit segment.
+/// BC targets an 8086; rewritten instructions use 386 forms in a 16-bit
+/// segment.
 pub const BITNESS: u32 = 16;
 pub const MEMORY: OpKind = OpKind::Memory;
 pub const NO_REGISTER: Register = Register::None;
@@ -51,7 +52,8 @@ pub fn instruction_info_factory() -> InstructionInfoFactory {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Insn {
     pub at: usize,
-    /// Kept independently from `insn.len()`: emulated sites differ from iced's bytes.
+    /// Kept independently from `insn.len()`: emulated sites differ from iced's
+    /// bytes.
     pub length: usize,
     pub insn: Instruction,
     pub disp_at: Option<usize>,
@@ -174,7 +176,8 @@ pub fn stood_in_for(
     }
 }
 
-/// Decodes an x87 instruction wearing the emulator's interrupt as its first byte.
+/// Decodes an x87 instruction wearing the emulator's interrupt as its first
+/// byte.
 #[must_use]
 pub fn emulated(
     code: &[u8],

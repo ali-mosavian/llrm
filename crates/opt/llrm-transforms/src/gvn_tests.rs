@@ -471,8 +471,8 @@ b0:
     assert!(after.matches("inttoptr").count() == 1 && after.contains("load i16, ptr addrspace(1) %f1"), "{after}");
 }
 
-/// A load of what the language says is written once and never again is the value an earlier
-/// load of it read, whatever a call between may write.
+/// A load of what the language says is written once and never again is the
+/// value an earlier load of it read, whatever a call between may write.
 #[test]
 fn a_load_the_language_says_is_invariant_is_reused_across_a_call_that_may_write() {
     let gvn = |second: &str| {
@@ -675,8 +675,9 @@ b0:
     );
 }
 
-/// Each ask of a unit for its shape derived dominance and loops of the body again: 20 sequential loops under gvn took
-/// 17 derivations, 5 now. The pass asks the manager for it once.
+/// Each ask of a unit for its shape derived dominance and loops of the body
+/// again: 20 sequential loops under gvn took 17 derivations, 5 now. The pass
+/// asks the manager for it once.
 #[test]
 fn a_pass_derives_the_shape_of_its_body_once_however_many_loops_it_has() {
     let loops = 20;
@@ -701,8 +702,9 @@ fn a_pass_derives_the_shape_of_its_body_once_however_many_loops_it_has() {
     assert!(derived <= 8, "{derived} shapes derived for one pass over a body of {loops} loops");
 }
 
-/// Gvn priced the loops from trip counts it proved for itself, which `Annotated` had proved already for the same body:
-/// 20 sequential loops were proved 60 times, 20 now. The counts are the manager's, proved once.
+/// Gvn priced the loops from trip counts it proved for itself, which
+/// `Annotated` had proved already for the same body: 20 sequential loops were
+/// proved 60 times, 20 now. The counts are the manager's, proved once.
 #[test]
 fn a_pass_takes_the_trip_counts_the_manager_proved() {
     // The check proves them again to compare, and is counted.
@@ -731,9 +733,11 @@ fn a_pass_takes_the_trip_counts_the_manager_proved() {
     assert!(proved <= loops, "{proved} loops proved for one pass over a body of {loops} loops");
 }
 
-/// Where the machine prices registers, Gvn numbers the function twice (crossing stores, and not) and keeps the cheaper;
-/// each run solved what every block holds again, for the same instructions: 638 solutions for 343 runs compiling
-/// `mdl_ai.c`, 12.7% of its compile. It is solved once for the function as it comes in.
+/// Where the machine prices registers, Gvn numbers the function twice (crossing
+/// stores, and not) and keeps the cheaper; each run solved what every block
+/// holds again, for the same instructions: 638 solutions for 343 runs compiling
+/// `mdl_ai.c`, 12.7% of its compile. It is solved once for the function as it
+/// comes in.
 #[test]
 fn test_availability_is_solved_once_when_a_function_is_numbered_twice() {
     let text = "@x = global i16 0
@@ -778,9 +782,11 @@ b3:
     assert_eq!(llrm_analysis::avail::solved() - before, 1, "availability solved again for the second numbering");
 }
 
-/// A function numbered both ways (crossing stores and not) and priced twice, 4067 times over QCport and the programs at
-/// -O2: 72% of them priced alike and the second won 2.3%. The ways differ only where a load is served across a store;
-/// where none is, the second numbering is the first and is neither made nor priced.
+/// A function numbered both ways (crossing stores and not) and priced twice,
+/// 4067 times over QCport and the programs at -O2: 72% of them priced alike and
+/// the second won 2.3%. The ways differ only where a load is served across a
+/// store; where none is, the second numbering is the first and is neither made
+/// nor priced.
 #[test]
 fn test_a_function_with_no_load_served_across_a_store_is_numbered_once() {
     let numberings = |text: &str| {

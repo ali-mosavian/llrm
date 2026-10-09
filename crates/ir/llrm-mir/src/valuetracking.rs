@@ -134,7 +134,8 @@ fn _known_zero(
             None => 0,
         },
         Opcode::Select => of(operands[1]) & of(operands[2]),
-        // The low bits a product of multiples of 2^a and 2^b leaves clear are a + b; a sum's, the least of a and b.
+        // The low bits a product of multiples of 2^a and 2^b leaves clear are
+        // a + b; a sum's, the least of a and b.
         Opcode::Binary(BinaryOp::Mul) => low(of(operands[0]).trailing_ones() + of(operands[1]).trailing_ones(), width),
         Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) => {
             low(of(operands[0]).trailing_ones().min(of(operands[1]).trailing_ones()), width)

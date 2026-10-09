@@ -60,7 +60,8 @@ impl Access {
 }
 
 /// What an instruction reads and what it writes; `None` for anything.
-/// The list of no references, shared: an empty `Rc<[_]>` still allocates its counts.
+/// The list of no references, shared: an empty `Rc<[_]>` still allocates its
+/// counts.
 fn none() -> Rc<[MemRef]> {
     thread_local! {
         static NONE: Rc<[MemRef]> = Rc::from([]);
@@ -173,7 +174,8 @@ impl Accesses {
             let reference = || references.get(&inst).cloned().into_iter().collect::<Rc<[_]>>();
             let opcode = &function.instruction(inst).opcode;
             let found = match opcode {
-                // Its order against other volatile accesses is the passes', which never move one.
+                // Its order against other volatile accesses is the passes',
+                // which never move one.
                 _ if let Some(own) = own_bytes(opcode) => {
                     let touched = |does: bool| Some(if does { reference() } else { none() });
                     (touched(own.reads), touched(own.writes))
@@ -238,8 +240,9 @@ pub fn changes(
     !invariant && !cell.unwritable() && writes.is_none_or(|stores| stores.iter().any(clobbers))
 }
 
-/// Whether running `write` leaves the bytes `read` reads as they were: it writes none of them, as `accesses` says
-/// and `regions::overlapping` decides on `program`; an answer it cannot give overlaps.
+/// Whether running `write` leaves the bytes `read` reads as they were: it
+/// writes none of them, as `accesses` says and `regions::overlapping` decides
+/// on `program`; an answer it cannot give overlaps.
 pub fn spares(
     accesses: &Accesses,
     program: Option<&llrm_mir::program::ProgramProxy>,
@@ -334,8 +337,8 @@ thread_local! {
     static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has asked whether a def's writes may clobber a cell, rather than been
-/// answered from memory.
+/// How many times this thread has asked whether a def's writes may clobber a
+/// cell, rather than been answered from memory.
 pub fn clobber_runs() -> usize {
     RUNS.with(std::cell::Cell::get)
 }
@@ -390,16 +393,18 @@ pub struct MemorySSA<'a> {
     /// What each def writes, as `Accesses::writes` says.
     written: IndexMap<InstId, Option<Vec<MemRef>>>,
     unit: Unit<'a>,
-    /// Whether a def's writes may clobber a cell, once for each pair: the loads of one address ask it of
-    /// the same defs again and again.
+    /// Whether a def's writes may clobber a cell, once for each pair: the loads
+    /// of one address ask it of the same defs again and again.
     clobbers: std::cell::RefCell<llrm_support::hash::HashMap<MemRef, llrm_support::hash::HashMap<InstId, bool>>>,
-    /// For a cell and whether the load is invariant: from an access that is a use or a def that leaves the cell
-    /// alone, the access the walk back reaches before a clobber, a join, the live state or a boundary it was stopped
-    /// at (plus one; 0: not known), by access number. A walk takes the jump instead of the steps, unless its own
-    /// boundary lies between.
+    /// For a cell and whether the load is invariant: from an access that is a
+    /// use or a def that leaves the cell alone, the access the walk back
+    /// reaches before a clobber, a join, the live state or a boundary it was
+    /// stopped at (plus one; 0: not known), by access number. A walk takes
+    /// the jump instead of the steps, unless its own boundary lies between.
     jumps: std::cell::RefCell<llrm_support::hash::HashMap<(MemRef, bool), Vec<u32>>>,
-    /// Each access's entry and exit in a depth-first order of the tree its `defining` links make, by access number:
-    /// one is behind another when its interval holds the other's.
+    /// Each access's entry and exit in a depth-first order of the tree its
+    /// `defining` links make, by access number: one is behind another when
+    /// its interval holds the other's.
     span: Vec<(u32, u32)>,
 }
 
@@ -451,7 +456,8 @@ impl MemorySSA<'_> {
         })
     }
 
-    /// Whether any write of the def at `site` may change a byte of `cell`, remembered.
+    /// Whether any write of the def at `site` may change a byte of `cell`,
+    /// remembered.
     fn clobbered(
         &self,
         cell: &MemRef,
@@ -504,7 +510,8 @@ impl MemorySSA<'_> {
         entered <= at && at < left
     }
 
-    /// `frontier`; `jumping` takes the remembered jumps along chains of accesses that leave the cell alone, or none.
+    /// `frontier`; `jumping` takes the remembered jumps along chains of
+    /// accesses that leave the cell alone, or none.
     fn walked(
         &self,
         site: InstId,
@@ -515,13 +522,16 @@ impl MemorySSA<'_> {
         jumping: bool,
     ) -> BTreeSet<usize> {
         let block = self.at(site).block;
-        // A load of what is written once, then never: no write changes what it reads.
+        // A load of what is written once, then never: no write changes what it
+        // reads.
         let invariant = llrm_mir::memory::invariant_load(self.unit.context, self.unit.layout, self.unit.function, site);
         let mut pending = vec![self.at(site).defining];
         let mut seen = BTreeSet::new();
         let mut found = BTreeSet::new();
-        // Where no edge chooses, the chain of uses and untouching defs back from an access is the same for every load
-        // of the cell: its end is found once and jumped to (LLVM's walker caches its clobber the same way).
+        // Where no edge chooses, the chain of uses and untouching defs back
+        // from an access is the same for every load of the cell: its
+        // end is found once and jumped to (LLVM's walker caches its clobber the
+        // same way).
         let jumpable = jumping && edge.is_none() && edge_memory.is_none();
         let mut jumps = self.jumps.borrow_mut();
         let none = &mut Vec::new();
@@ -530,8 +540,8 @@ impl MemorySSA<'_> {
         } else {
             none
         };
-        // Accesses passed that nothing on them touches the cell; a jump to `end + 1` says the ones before `end` are
-        // clean.
+        // Accesses passed that nothing on them touches the cell; a jump to `end
+        // + 1` says the ones before `end` are clean.
         let mut chain: Vec<usize> = Vec::new();
         let ended = |table: &mut Vec<u32>, chain: &mut Vec<usize>, end: usize| {
             for &passed in chain.iter() {
@@ -547,8 +557,8 @@ impl MemorySSA<'_> {
             if jumpable && table[current] != 0 {
                 chain.clear();
                 let end = table[current] as usize - 1;
-                // The boundary lies on the chain when it is behind `current` and `end` is behind it: the walk stops
-                // there.
+                // The boundary lies on the chain when it is behind `current`
+                // and `end` is behind it: the walk stops there.
                 match boundary {
                     Some(stop) if stop != end && self.behind(current, stop) && self.behind(stop, end) => {
                         found.insert(stop);

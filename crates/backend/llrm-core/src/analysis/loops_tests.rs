@@ -151,7 +151,8 @@ fn reached(
     seen
 }
 
-/// Dominators by the definition: `d` dominates `a` where `a` is unreachable once `d` is removed.
+/// Dominators by the definition: `d` dominates `a` where `a` is unreachable
+/// once `d` is removed.
 #[test]
 fn test_dominators_are_what_the_definition_says_on_random_graphs() {
     let mut seed = 12345_u64;
@@ -182,9 +183,10 @@ fn test_dominators_are_what_the_definition_says_on_random_graphs() {
     }
 }
 
-/// The dominators were bit sets, iterated to a fixed point in layout order: a body laid out against its
-/// flow was a round of the body for each block. 4,000 blocks took 0.66 s, in `irreducible`, which `lir jumps`
-/// runs for every tail copy it tries (#560).
+/// The dominators were bit sets, iterated to a fixed point in layout order: a
+/// body laid out against its flow was a round of the body for each block. 4,000
+/// blocks took 0.66 s, in `irreducible`, which `lir jumps` runs for every tail
+/// copy it tries (#560).
 #[test]
 fn test_dominance_of_a_body_laid_out_against_its_flow_is_not_quadratic() {
     let n = 4000;

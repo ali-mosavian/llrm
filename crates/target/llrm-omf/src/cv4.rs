@@ -1,7 +1,9 @@
-//! [`Info`] of a C program as CodeView 4 the way Microsoft's C7-era tools write it: $$TYPES numbered from
-//! 0x1000 and $$SYMBOLS of 16-bit (`S_GPROC16`) or 32-bit (`S_GPROC32`) records, in the pre-link layout
-//! LINK /CO hands to CVPACK. Record layouts are Open Watcom's `bld/watcom/h/cv4f.h`; every shape marked
-//! "ML" below was also read from an object ML 6.11 wrote under /Zi (docs/machine/codeview.md).
+//! [`Info`] of a C program as CodeView 4 the way Microsoft's C7-era tools write
+//! it: $$TYPES numbered from 0x1000 and $$SYMBOLS of 16-bit (`S_GPROC16`) or
+//! 32-bit (`S_GPROC32`) records, in the pre-link layout LINK /CO hands to
+//! CVPACK. Record layouts are Open Watcom's `bld/watcom/h/cv4f.h`; every shape
+//! marked "ML" below was also read from an object ML 6.11 wrote under /Zi
+//! (docs/machine/codeview.md).
 //!
 //! BASIC's compilers write a different, older dialect: `cvwrite` is that one.
 
@@ -77,14 +79,16 @@ fn put32(
     out.extend(value.to_le_bytes());
 }
 
-/// A member of a list or a record's end, padded so the next starts on four bytes.
+/// A member of a list or a record's end, padded so the next starts on four
+/// bytes.
 fn align(list: &mut Vec<u8>) {
     while list.len() % 4 != 0 {
         list.push(pad(4 - list.len() % 4));
     }
 }
 
-/// The calling convention's CV_call_e for a near procedure; `far` is the next one.
+/// The calling convention's CV_call_e for a near procedure; `far` is the next
+/// one.
 fn convention(name: Option<&str>) -> Result<u8, Error> {
     Ok(match name {
         None | Some("cdecl") => 0x00,
@@ -97,13 +101,17 @@ fn convention(name: Option<&str>) -> Result<u8, Error> {
 
 struct Types<'a> {
     info: &'a Info,
-    /// 32-bit code: a four-byte integer is an int, a near pointer is four bytes.
+    /// 32-bit code: a four-byte integer is an int, a near pointer is four
+    /// bytes.
     wide: bool,
-    /// Each record's leaf and data, before the length and the padding; empty until made.
+    /// Each record's leaf and data, before the length and the padding; empty
+    /// until made.
     records: Vec<Vec<u8>>,
-    /// By model type; None until made, and a struct's is set before its members are.
+    /// By model type; None until made, and a struct's is set before its members
+    /// are.
     index: Vec<Option<u16>>,
-    /// A procedure type by the model's and whether it is far: far is the function's, not the type's.
+    /// A procedure type by the model's and whether it is far: far is the
+    /// function's, not the type's.
     procedures: Vec<((TypeId, bool), u16)>,
 }
 
@@ -125,8 +133,9 @@ impl Types<'_> {
         self.records[usize::from(at) - FIRST_TYPE] = record;
     }
 
-    /// A finished record's index: that of an identical one if there is, as two model types that read alike (a
-    /// pointer to `int` and one to `long`, both four bytes) are one record.
+    /// A finished record's index: that of an identical one if there is, as two
+    /// model types that read alike (a pointer to `int` and one to `long`,
+    /// both four bytes) are one record.
     fn add(
         &mut self,
         leaf: u16,
@@ -157,7 +166,8 @@ impl Types<'_> {
             Scalar::Int { bytes: 1, signed: false } => 0x20,
             Scalar::Int { bytes: 2, signed: true } => 0x11,
             Scalar::Int { bytes: 2, signed: false } => 0x21,
-            // A 32-bit program's four-byte integer is an int; a 16-bit one's is a long.
+            // A 32-bit program's four-byte integer is an int; a 16-bit one's is
+            // a long.
             Scalar::Int { bytes: 4, signed: true } => {
                 if self.wide {
                     0x74
@@ -181,8 +191,9 @@ impl Types<'_> {
         })
     }
 
-    /// `id`'s index, made with what it names first. A type reached again through a struct that names it (a
-    /// cycle) is already made when its own turn comes: each composite looks again before it adds its record, or
+    /// `id`'s index, made with what it names first. A type reached again
+    /// through a struct that names it (a cycle) is already made when its
+    /// own turn comes: each composite looks again before it adds its record, or
     /// there would be two of it.
     fn of(
         &mut self,
@@ -201,7 +212,8 @@ impl Types<'_> {
             Type::Scalar(scalar) | Type::Basic { scalar, .. } => self.primitive(scalar)?,
             Type::Typedef { target, .. } => self.of(target)?,
             Type::Pointer { target, bytes, reach } => {
-                // A pointer to a procedure that is far to reach is to one that is called far.
+                // A pointer to a procedure that is far to reach is to one that
+                // is called far.
                 let target = match self.procedure_through(target) {
                     Some(procedure) => self.procedure(procedure, reach != Reach::Near)?,
                     None => self.of(target)?,
@@ -282,8 +294,9 @@ impl Types<'_> {
         self.add(leaf, &data)
     }
 
-    /// A pointer of `bytes` to `target`: a primitive pointer where the target is a primitive (what C7 writes),
-    /// else LF_POINTER, whose four bytes after the type ML writes as zeros.
+    /// A pointer of `bytes` to `target`: a primitive pointer where the target
+    /// is a primitive (what C7 writes), else LF_POINTER, whose four bytes
+    /// after the type ML writes as zeros.
     fn pointer(
         &mut self,
         target: u16,
@@ -360,8 +373,9 @@ impl Types<'_> {
         Ok(made)
     }
 
-    /// A struct or union. Its index is taken before its members are made, so one that points back to it (a list's
-    /// `next`) names it, as ML names a record before the field list that follows it.
+    /// A struct or union. Its index is taken before its members are made, so
+    /// one that points back to it (a list's `next`) names it, as ML names a
+    /// record before the field list that follows it.
     fn structure(
         &mut self,
         id: TypeId,
@@ -447,8 +461,9 @@ impl Symbols<'_> {
         Ok(at)
     }
 
-    /// An address field at `at` (offset, then segment: two and two bytes, or four and two) that LINK fills in with
-    /// the place `target` plus `addend` has.
+    /// An address field at `at` (offset, then segment: two and two bytes, or
+    /// four and two) that LINK fills in with the place `target` plus
+    /// `addend` has.
     fn address(
         &mut self,
         at: usize,
@@ -475,7 +490,8 @@ impl Symbols<'_> {
         &self,
         data: &mut Vec<u8>,
     ) {
-        // pParent, pEnd, pNext: LINK and CVPACK fill them in, as ML leaves them.
+        // pParent, pEnd, pNext: LINK and CVPACK fill them in, as ML leaves
+        // them.
         data.extend([0u8; 12]);
     }
 }
@@ -492,7 +508,8 @@ fn register_number(
 }
 
 impl Symbols<'_> {
-    /// The code of a data symbol and its fixed field: a global is `S_GDATA`, a static `S_LDATA`.
+    /// The code of a data symbol and its fixed field: a global is `S_GDATA`, a
+    /// static `S_LDATA`.
     fn data(
         &mut self,
         types: &mut Types,
@@ -516,8 +533,9 @@ impl Symbols<'_> {
         Ok(())
     }
 
-    /// `variable` in the scope that `scope` covers. A value CodeView 4 has no record to place over a range of code
-    /// (its records name one place for the whole scope) is left out: one that is in a register only part of the
+    /// `variable` in the scope that `scope` covers. A value CodeView 4 has no
+    /// record to place over a range of code (its records name one place for
+    /// the whole scope) is left out: one that is in a register only part of the
     /// scope, and one the optimiser removed.
     fn variable(
         &mut self,
@@ -525,8 +543,9 @@ impl Symbols<'_> {
         variable: &model::Variable,
         scope: &[model::Range],
     ) -> Result<(), Error> {
-        // One place for the whole scope: where a value settles. A value that is in a register only part of it (a
-        // register parameter, until the body starts), and one the optimiser removed, have none.
+        // One place for the whole scope: where a value settles. A value that is
+        // in a register only part of it (a register parameter, until
+        // the body starts), and one the optimiser removed, have none.
         let Some(location) = variable.location.settled(scope) else { return Ok(()) };
         match location {
             Location::Static { symbol, disp } => self.data(types, variable, *symbol, *disp),
@@ -535,7 +554,8 @@ impl Symbols<'_> {
             Location::Frame { disp } => {
                 let mut data = Vec::new();
                 let frame = &self.info.frame_register;
-                // The frame register is BP's, or another's, which a register-relative record names.
+                // The frame register is BP's, or another's, which a
+                // register-relative record names.
                 let based = matches!(frame.as_str(), "ebp" | "bp");
                 if based {
                     if self.wide {
@@ -673,8 +693,8 @@ pub fn sections(
     let mut name = SIGNATURE.to_vec();
     pascal(&mut name, &object.name)?;
     symbols.record(S_OBJNAME, &name)?;
-    // The machine (80386: llrm's real-mode code is 386 code too), the language (C), the flags (32-bit mode) and
-    // the producer's name.
+    // The machine (80386: llrm's real-mode code is 386 code too), the language
+    // (C), the flags (32-bit mode) and the producer's name.
     let mut compile = vec![3, 0];
     put16(&mut compile, if wide { 0x0800 } else { 0 });
     pascal(&mut compile, "llrm")?;

@@ -7,12 +7,15 @@
 //!
 //! What changed with the IR:
 //! - A function argument is defined at the entry, ahead of everything.
-//! - An inserted expression goes before its predecessor's unconditional `br`; a block leaves only by its terminator, so
-//!   the old refusal of a predecessor holding a branch, return or escape is that terminator.
-//! - The flags checks are gone: no value is the machine's flags. `Convert` (the register-pair extension) and `Copy`
-//!   have no instruction, so what `joined` refuses of `_PURE` is the divisions, which may trap on a path that did not
+//! - An inserted expression goes before its predecessor's unconditional `br`; a
+//!   block leaves only by its terminator, so the old refusal of a predecessor
+//!   holding a branch, return or escape is that terminator.
+//! - The flags checks are gone: no value is the machine's flags. `Convert` (the
+//!   register-pair extension) and `Copy` have no instruction, so what `joined`
+//!   refuses of `_PURE` is the divisions, which may trap on a path that did not
 //!   divide.
-//! - `_on_edge` translates an instruction's operands; a phi's input may be a constant.
+//! - `_on_edge` translates an instruction's operands; a phi's input may be a
+//!   constant.
 //!
 //! `floatfold::checks` has no counterpart: the rich MIR observes no FP
 //! exception.
@@ -108,7 +111,8 @@ pub fn optimized(
     shape: &cfg::Shape,
 ) -> Result<bool, String> {
     let equal = propagated(unit);
-    // What is known of the body the manager saw, unless propagating a branch's condition changed it.
+    // What is known of the body the manager saw, unless propagating a branch's
+    // condition changed it.
     let fresh;
     let registers = if equal {
         fresh = llrm_analysis::consts::known(
@@ -199,8 +203,9 @@ thread_local! {
     static NUMBERINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has numbered a function (once, or twice where a load could be served across a store), for
-/// a test that a function with no such load is numbered once.
+/// How many times this thread has numbered a function (once, or twice where a
+/// load could be served across a store), for a test that a function with no
+/// such load is numbered once.
 pub fn numberings() -> usize {
     NUMBERINGS.with(std::cell::Cell::get)
 }
@@ -218,9 +223,11 @@ fn _numbered(
     registers: &IndexMap<ValueId, llrm_analysis::consts::Known>,
     shape: &cfg::Shape,
 ) -> Result<(bool, bool), String> {
-    // The availability of the function as it comes in: the same for both runs below, each of which changes a copy.
+    // The availability of the function as it comes in: the same for both runs
+    // below, each of which changes a copy.
     let held = std::cell::OnceCell::new();
-    // Whether some load was served across a store: the one thing the second numbering does differently from the first.
+    // Whether some load was served across a store: the one thing the second
+    // numbering does differently from the first.
     let crossed = std::cell::Cell::new(false);
     let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, (bool, bool)), String> {
         NUMBERINGS.with(|runs| runs.set(runs.get() + 1));
@@ -246,7 +253,8 @@ fn _numbered(
         let frequency = profit::_frequencies(unit.context, unit.metadata, &outer.globals, one, Some(trips))?;
         profit::motion_price(unit.context, unit.layout, outer, one, costs, room, &frequency)
     };
-    // Where no load crossed a store, the second numbering is the first: it is neither made nor priced.
+    // Where no load crossed a store, the second numbering is the first: it is
+    // neither made nor priced.
     let chosen = if !room.priced() || !crossed.get() {
         crossing
     } else if let Some(crossed) = price(&crossing.0) {

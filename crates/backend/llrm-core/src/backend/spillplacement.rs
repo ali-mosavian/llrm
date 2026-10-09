@@ -208,7 +208,8 @@ impl<'a> Placement<'a> {
         }
     }
 
-    /// Blocks that would rather not hold the value at all, twice as much when strong.
+    /// Blocks that would rather not hold the value at all, twice as much when
+    /// strong.
     pub fn add_pref_spill(
         &mut self,
         blocks: &[i64],

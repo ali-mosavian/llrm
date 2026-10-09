@@ -20,8 +20,8 @@ fn test_jwasm_and_jwlink_are_built_beside_llrm() {
     assert!(String::from_utf8_lossy(&linker.stdout).contains("JWlink"));
 }
 
-/// The real-mode OS layer assembled in `dir` as start.obj and os.obj, and Nib's start-up hook as init.obj, told
-/// their descriptions' defines.
+/// The real-mode OS layer assembled in `dir` as start.obj and os.obj, and Nib's
+/// start-up hook as init.obj, told their descriptions' defines.
 fn os_layer_objects(
     bin: &Path,
     dir: &Path,
@@ -225,7 +225,8 @@ fn test_c_parity_fixtures_compute_their_expected_values() {
         .filter_map(|one| Some(one.unwrap().path().to_str()?.strip_suffix(".cgs")?.rsplit('/').next()?.to_owned()))
         .collect();
     names.sort();
-    // The C start-up is the OS layer's: its start, C's hook, and its operations, which `main` below calls.
+    // The C start-up is the OS layer's: its start, C's hook, and its
+    // operations, which `main` below calls.
     let target = llrm_x86_m16::M16;
     let (layer, c) =
         (llrm_target::Target::os_layer(&target).unwrap(), llrm_target::Target::runtime(&target, "c").unwrap());
@@ -254,8 +255,10 @@ fn test_c_parity_fixtures_compute_their_expected_values() {
     assemble(format!("{}/{}", layer.directory, layer.string("implementation").unwrap()), "layer_os.obj");
     assemble(format!("{}/{}", c.directory, c.string("init_file").unwrap()), "c_init.obj");
     std::fs::write(dir.join("os.h"), layer.c_header().unwrap()).unwrap();
-    // Each fixture's entry, run by a C `main` that writes its value to VALUE.BIN and ends by the layer's exit. The
-    // fixtures are streams Open Watcom recorded with every function cdecl, so the entry is declared as it is.
+    // Each fixture's entry, run by a C `main` that writes its value to
+    // VALUE.BIN and ends by the layer's exit. The fixtures are streams Open
+    // Watcom recorded with every function cdecl, so the entry is declared as it
+    // is.
     let entries = [
         ("algebra", "parity_algebra_demo"),
         ("branch", "parity_branch_demo"),
@@ -367,9 +370,9 @@ fn test_a_huge_global_past_64k_compiles_and_links_across_two_segments() {
     assert!(done.is_ok(), "{}", done.unwrap_err());
 }
 
-/// Nine to eleven arrays, near and far, summed over one counter on a P5 or Core: loop
-/// strength reduction kept four products live beside the counter and the
-/// allocator found "value cannot be spilled and no register is free", where
+/// Nine to eleven arrays, near and far, summed over one counter on a P5 or
+/// Core: loop strength reduction kept four products live beside the counter and
+/// the allocator found "value cannot be spilled and no register is free", where
 /// main built them. A far access takes registers the pass did not count:
 /// one still failed the nine, two the eleven on a Core (loop-corpus
 /// `conc9`, `conc10`, `conc11`).
@@ -483,9 +486,10 @@ fn test_a_huge_array_past_64k_reads_and_writes_the_right_elements_on_dos() {
     assert_eq!(got, want, "{:?}", routines.map(|(name, _)| name));
 }
 
-/// Far and huge are near where a target has one address space, and the compiler says so, once for each
-/// place: m16 and a flat program that writes neither stay silent, and `-Wno-target-width` (the runtime's
-/// build, which writes `*far` for the targets that have one) silences it.
+/// Far and huge are near where a target has one address space, and the compiler
+/// says so, once for each place: m16 and a flat program that writes neither
+/// stay silent, and `-Wno-target-width` (the runtime's build, which writes
+/// `*far` for the targets that have one) silences it.
 #[test]
 fn test_far_and_huge_are_near_with_a_warning_on_m32() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -512,8 +516,9 @@ fn test_far_and_huge_are_near_with_a_warning_on_m32() {
     assert_eq!(stderr("tests/run/nib/flat_arith.nib", &flat), "");
 }
 
-/// C's far and huge are near with a warning where the target has one address space, and an unmarked
-/// pointer is near in every model: `-ml` (default data pointers far) is not a switch.
+/// C's far and huge are near with a warning where the target has one address
+/// space, and an unmarked pointer is near in every model: `-ml` (default data
+/// pointers far) is not a switch.
 #[test]
 fn test_c_far_and_huge_are_near_with_a_warning_on_m32() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -540,8 +545,9 @@ fn test_c_far_and_huge_are_near_with_a_warning_on_m32() {
     assert!(!large.status.success() && String::from_utf8_lossy(&large.stderr).contains("unrecognized arguments: -ml"));
 }
 
-/// The C header Nib generates for a program's exports said `__far` on every target: flat C code
-/// including it declared a far function and the flat compiler refused its call.
+/// The C header Nib generates for a program's exports said `__far` on every
+/// target: flat C code including it declared a far function and the flat
+/// compiler refused its call.
 #[test]
 fn test_the_generated_header_is_far_only_where_far_code_is() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -555,16 +561,18 @@ fn test_the_generated_header_is_far_only_where_far_code_is() {
         assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
         String::from_utf8_lossy(&done.stdout).into_owned()
     };
-    // An unmarked declaration is the target's default convention; a named ABI says its own.
+    // An unmarked declaration is the target's default convention; a named ABI
+    // says its own.
     assert!(header(&[]).contains("extern short __far weight(short value);"));
     assert!(header(&["-mabi=cdecl"]).contains("extern short __far __cdecl weight(short value);"));
     let flat = header(&["-m32"]);
     assert!(flat.contains("extern short __watcall weight(short value);") && !flat.contains("__far"), "{flat}");
 }
 
-/// A flat target's block clears and copies are `rep stos`/`rep movs` on dwords through DS=ES, as m16's
-/// are through ES: the lowering took segment operands and 16-bit counts (a departure row), and a constant
-/// fill or copy on m32 was a loop. Neither sets a segment register here.
+/// A flat target's block clears and copies are `rep stos`/`rep movs` on dwords
+/// through DS=ES, as m16's are through ES: the lowering took segment operands
+/// and 16-bit counts (a departure row), and a constant fill or copy on m32 was
+/// a loop. Neither sets a segment register here.
 #[test]
 fn test_m32_block_operations_are_rep_string_instructions_without_segments() {
     let scratch = tempfile::tempdir().unwrap();
@@ -591,10 +599,11 @@ fn test_m32_block_operations_are_rep_string_instructions_without_segments() {
     assert!(real.contains("rep stosd") && real.lines().any(|line| line.trim() == "pop es"), "{real}");
 }
 
-/// A program the repository ships as an example or a benchmark compiles without a warning for each
-/// target it runs on (`# targets:` names the ones it does not): a warning there is a lesson the
-/// example teaches wrongly, and the flat targets' warnings (far and huge are near, usize narrowing)
-/// would otherwise go unseen in a corpus nobody reads the stderr of.
+/// A program the repository ships as an example or a benchmark compiles without
+/// a warning for each target it runs on (`# targets:` names the ones it does
+/// not): a warning there is a lesson the example teaches wrongly, and the flat
+/// targets' warnings (far and huge are near, usize narrowing) would otherwise
+/// go unseen in a corpus nobody reads the stderr of.
 #[test]
 fn test_the_examples_and_benchmarks_compile_without_warnings() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -633,7 +642,8 @@ fn test_the_examples_and_benchmarks_compile_without_warnings() {
                         .output()
                         .unwrap();
                     let stderr = String::from_utf8_lossy(&done.stderr);
-                    // A program that needs a library (link:) or refuses on a target is not this test's business.
+                    // A program that needs a library (link:) or refuses on a
+                    // target is not this test's business.
                     if done.status.success() && stderr.contains("warning") {
                         warned
                             .lock()
@@ -654,9 +664,11 @@ fn test_the_examples_and_benchmarks_compile_without_warnings() {
     assert!(warned.is_empty(), "{}", warned.join("\n"));
 }
 
-/// The Zed extension is built apart from the workspace, so nothing compiled it: a refactor moved its
-/// library path to a file that is not there, and it carries no way to name the project's target to nib-lsp.
-/// Its manifest's library exists, and it passes the `initialization_options` setting to the server.
+/// The Zed extension is built apart from the workspace, so nothing compiled it:
+/// a refactor moved its library path to a file that is not there, and it
+/// carries no way to name the project's target to nib-lsp. Its manifest's
+/// library exists, and it passes the `initialization_options` setting to the
+/// server.
 #[test]
 fn test_the_zed_extension_names_a_library_that_exists_and_passes_the_projects_target() {
     let zed = Path::new(env!("CARGO_MANIFEST_DIR")).join("editors/zed");
@@ -674,8 +686,9 @@ fn test_the_zed_extension_names_a_library_that_exists_and_passes_the_projects_ta
     );
 }
 
-/// The file calls' result was an `i32` on m16 and an `isize` on m32, so a program naming the type
-/// was written for one target; both OS layers declare the same one.
+/// The file calls' result was an `i32` on m16 and an `isize` on m32, so a
+/// program naming the type was written for one target; both OS layers declare
+/// the same one.
 #[test]
 fn test_both_targets_declare_the_same_file_call_result() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -701,8 +714,9 @@ fn test_both_targets_declare_the_same_file_call_result() {
     assert_eq!(results("x86-m32"), results("x86-m16"));
 }
 
-/// start.asm and os.asm each named a constant of their own (the stack, the heap's arena, DOS's function
-/// numbers) beside the descriptions'; the assembler is now told every fact, and a target is told only its own.
+/// start.asm and os.asm each named a constant of their own (the stack, the
+/// heap's arena, DOS's function numbers) beside the descriptions'; the
+/// assembler is now told every fact, and a target is told only its own.
 #[test]
 fn test_the_assembler_is_told_the_runtime_descriptions_fields() {
     let defines = |target: &str| {
@@ -724,9 +738,10 @@ fn test_the_assembler_is_told_the_runtime_descriptions_fields() {
     );
 }
 
-/// The identity gate is an instrument: a build compared with itself must say SAME of every
-/// program, and a build whose output differs must be reported DIFF with a failing exit, or a
-/// change that moved a target's code would pass the gate silently.
+/// The identity gate is an instrument: a build compared with itself must say
+/// SAME of every program, and a build whose output differs must be reported
+/// DIFF with a failing exit, or a change that moved a target's code would pass
+/// the gate silently.
 #[test]
 fn test_the_identity_gate_passes_a_build_against_itself_and_fails_a_different_one() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));

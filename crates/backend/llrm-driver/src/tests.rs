@@ -51,8 +51,9 @@ fn m32_is_a_flat_target_with_its_own_selector() {
 }
 
 /// The profile a target is compiled with is built from that target: the 16-bit
-/// one's dword index is behind the address-size prefix and costs a prefix; the flat
-/// one's is native. Both came from the 16-bit tables, whichever target was named.
+/// one's dword index is behind the address-size prefix and costs a prefix; the
+/// flat one's is native. Both came from the 16-bit tables, whichever target was
+/// named.
 #[test]
 fn a_targets_cpu_profile_has_its_own_address_forms_and_registers() {
     let profile = |arguments: &[&str]| {
@@ -71,8 +72,9 @@ fn a_targets_cpu_profile_has_its_own_address_forms_and_registers() {
     assert_eq!((real.operand_bytes, flat.operand_bytes), (2, 4));
 }
 
-/// A flat target's profile prices its own forms: a near call and return, no 66h on a
-/// dword. It had been priced by the 16-bit tables and mapping, a far call among them.
+/// A flat target's profile prices its own forms: a near call and return, no 66h
+/// on a dword. It had been priced by the 16-bit tables and mapping, a far call
+/// among them.
 #[test]
 fn a_targets_operations_are_priced_from_its_own_timings_and_mapping() {
     let profile = |arguments: &[&str]| {
@@ -87,9 +89,9 @@ fn a_targets_operations_are_priced_from_its_own_timings_and_mapping() {
     assert!(flat.cost("pop_seg").is_err() && real.cost("call_near").is_err());
 }
 
-/// The CPU a compile is priced for with none asked is the target's: llrm-c took the 386 for
-/// every target, so a flat compile with no `-march` died on a CPU its tables do not have.
-/// Asking for another names the target's own.
+/// The CPU a compile is priced for with none asked is the target's: llrm-c took
+/// the 386 for every target, so a flat compile with no `-march` died on a CPU
+/// its tables do not have. Asking for another names the target's own.
 #[test]
 fn a_target_states_its_default_cpu_and_names_its_cpus_when_asked_for_another() {
     for (arguments, default) in [(&[][..], "486"), (&["-m32"][..], "486")] {
@@ -107,9 +109,10 @@ fn a_target_states_its_default_cpu_and_names_its_cpus_when_asked_for_another() {
     );
 }
 
-/// Real-mode DOS said `cpu = "486"` and timings.times said `default_cpu 386`: a target had two
-/// defaults. Nib and BASIC priced for the machine's, C for the timings': one source went
-/// unread. A machine is priced for the one `timings.times` names, whichever target.
+/// Real-mode DOS said `cpu = "486"` and timings.times said `default_cpu 386`: a
+/// target had two defaults. Nib and BASIC priced for the machine's, C for the
+/// timings': one source went unread. A machine is priced for the one
+/// `timings.times` names, whichever target.
 #[test]
 fn a_targets_machine_is_priced_for_its_default_cpu() {
     for target in crate::all() {
@@ -118,8 +121,9 @@ fn a_targets_machine_is_priced_for_its_default_cpu() {
     }
 }
 
-/// The target is found by the `-m` number its own `datalayout.toml` declares: the CLI holds no
-/// table of names to numbers, and a number no target declares is refused.
+/// The target is found by the `-m` number its own `datalayout.toml` declares:
+/// the CLI holds no table of names to numbers, and a number no target declares
+/// is refused.
 #[test]
 fn a_target_is_found_by_the_m_number_its_description_declares() {
     for (flag, name) in [("-m16", "x86-m16"), ("-m32", "x86-m32")] {
@@ -131,17 +135,18 @@ fn a_target_is_found_by_the_m_number_its_description_declares() {
     }
 }
 
-/// The registers an instruction pins come from the selected target's forms. They came from
-/// 16-bit x86's whatever the target, so a flat compile pinned a string store's operands as
-/// real mode has them (its selector among them) and, once flat string ops are written, would
-/// have left its own unpinned.
+/// The registers an instruction pins come from the selected target's forms.
+/// They came from 16-bit x86's whatever the target, so a flat compile pinned a
+/// string store's operands as real mode has them (its selector among them) and,
+/// once flat string ops are written, would have left its own unpinned.
 #[test]
 fn a_targets_pins_come_from_its_own_forms() {
     use llrm_core::backend::classes::RegisterClasses;
     use llrm_core::model::ir::{Held, Loc, Mem, Operation, Semantics};
 
     let held = |value: u32| Loc::Held(Held { value, width: 2 });
-    // `stosd` as real mode lowers it: a placeholder cell and the pointer after; the value, the pointer, the selector.
+    // `stosd` as real mode lowers it: a placeholder cell and the pointer after;
+    // the value, the pointer, the selector.
     let store = Semantics {
         name: Some("stosd".to_owned()),
         dests: vec![Loc::Mem(Mem::new(None, 0)), held(5)],
@@ -154,7 +159,8 @@ fn a_targets_pins_come_from_its_own_forms() {
     assert!(flat.is_empty(), "{flat:?}");
 }
 
-/// A flat target's registers are its own, not real mode's: six values, ebp the frame.
+/// A flat target's registers are its own, not real mode's: six values, ebp the
+/// frame.
 #[test]
 fn a_targets_registers_come_from_its_description() {
     use iced_x86::Register;
@@ -168,8 +174,9 @@ fn a_targets_registers_come_from_its_description() {
     assert_eq!(flat.frame, Register::EBP);
 }
 
-/// -Os prices a shift-and-add multiply by its bytes, and the 66h prefix is for the size that is
-/// not the target's default. A flat dword was priced as real mode's: a prefix on every one.
+/// -Os prices a shift-and-add multiply by its bytes, and the 66h prefix is for
+/// the size that is not the target's default. A flat dword was priced as real
+/// mode's: a prefix on every one.
 #[test]
 fn a_flat_dword_has_no_operand_size_prefix_in_the_size_prices() {
     use llrm_x86::encoding::{register_bytes, shift_bytes};
@@ -177,17 +184,19 @@ fn a_flat_dword_has_no_operand_size_prefix_in_the_size_prices() {
     assert_eq!((register_bytes(4, 2), shift_bytes(3, 4, 2)), (3, 4));
 }
 
-/// A frontend that lists no targets takes every registered one: the list was a second, hand-kept
-/// answer, and arm64 would have edited each frontend to add itself.
+/// A frontend that lists no targets takes every registered one: the list was a
+/// second, hand-kept answer, and arm64 would have edited each frontend to add
+/// itself.
 #[test]
 fn no_list_lets_any_registered_target_through() {
     assert_eq!(target(&flags(&["-m32"]), None).unwrap().target.name(), "x86-m32");
     assert!(target(&flags(&["-m64"]), None).err().unwrap().contains("no target for -m64"));
 }
 
-/// The audited multiply and divide bounds of a CPU are its description's: a flat target prices the CPUs it
-/// has as the real-mode one does, and a CPU a description has no row for has none (they were name matches
-/// in `timing.rs`, which a new CPU or target would have had to edit).
+/// The audited multiply and divide bounds of a CPU are its description's: a
+/// flat target prices the CPUs it has as the real-mode one does, and a CPU a
+/// description has no row for has none (they were name matches in `timing.rs`,
+/// which a new CPU or target would have had to edit).
 #[test]
 fn the_audited_bounds_come_from_the_targets_timings() {
     use llrm_core::backend::timing::{Clocks, signed_divide, signed_multiply};

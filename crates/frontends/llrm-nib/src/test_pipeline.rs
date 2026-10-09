@@ -48,7 +48,8 @@ fn _stack_of(fixture: &str) -> Result<(String, Vec<u8>), String> {
 #[test]
 fn test_a_frame_larger_than_the_start_stack_adds_a_stack_segment() {
     let (listing, object) = _stack_of("bigframe").unwrap();
-    // `print` takes its integer in AX: the chain is a word shorter than with the stack convention (4618).
+    // `print` takes its integer in AX: the chain is a word shorter than with
+    // the stack convention (4618).
     assert!(listing.contains(".stack 4616"), "{listing}");
     assert!(object.windows(5).any(|one| one == b"STACK"));
 }
@@ -68,8 +69,8 @@ fn test_a_frame_no_stack_segment_holds_is_refused() {
     assert!(error.contains("bytes of stack"), "{error}");
 }
 
-/// `stack_base` is the stack `start.asm` links (STACK_BYTES, which the assembler is told): a different one would size
-/// the object's wrongly.
+/// `stack_base` is the stack `start.asm` links (STACK_BYTES, which the
+/// assembler is told): a different one would size the object's wrongly.
 #[test]
 fn test_the_stack_base_is_the_one_start_links() {
     let start =
@@ -116,8 +117,9 @@ fn test_a_partition_loop_has_no_bounds_check_in_it() {
     }
 }
 
-/// `-fsanitize=stack` compares with the word and calls the routine `runtime/stack.toml` names, and
-/// both exist in the runtime: a description naming a symbol start-up never fills would compare with zero.
+/// `-fsanitize=stack` compares with the word and calls the routine
+/// `runtime/stack.toml` names, and both exist in the runtime: a description
+/// naming a symbol start-up never fills would compare with zero.
 #[test]
 fn test_the_stack_check_names_what_the_nib_runtime_defines() {
     use crate::test_nib_frontend as nib;
@@ -136,7 +138,8 @@ fn test_the_stack_check_names_what_the_nib_runtime_defines() {
             && runtime("start.asm").contains(&format!("mov {}, ax", check.limit))
     );
     assert!(runtime("errors.nib").contains(&format!("@export(name=\"{}\")", check.handler)));
-    // The limit sits the reserve `stack_to_add` leaves above the stack's bottom.
+    // The limit sits the reserve `stack_to_add` leaves above the stack's
+    // bottom.
     assert!(runtime("start.asm").contains(&"add ax, STACK_RESERVE".to_owned()));
     let mut program = nib::parsed(&nib::fixture("sum.nib"));
     program.stack_check =
@@ -150,8 +153,10 @@ fn test_the_stack_check_names_what_the_nib_runtime_defines() {
     assert!(!plain.contains("cmp sp"), "{plain}");
 }
 
-/// examples/loader.nib at -Os: a loop whose entry loaded what it reads was admitted on a tie in the bytes the spiller
-/// counts (its trips were fewer), and the object grew by 15 bytes (2517 to 2532). The encoded code decides a tie.
+/// examples/loader.nib at -Os: a loop whose entry loaded what it reads was
+/// admitted on a tie in the bytes the spiller counts (its trips were fewer),
+/// and the object grew by 15 bytes (2517 to 2532). The encoded code decides a
+/// tie.
 #[test]
 fn test_a_loop_admitted_on_a_tie_in_counted_bytes_does_not_grow_the_object() {
     use crate::test_nib_frontend as nib;
@@ -168,12 +173,14 @@ fn test_a_loop_admitted_on_a_tie_in_counted_bytes_does_not_grow_the_object() {
     )
     .expect("an object")
     .len();
-    // 2523 bytes before the loop was admitted on the tie (2517 while -Os opened frames with `enter`); 2538 with it.
+    // 2523 bytes before the loop was admitted on the tie (2517 while -Os opened
+    // frames with `enter`); 2538 with it.
     assert!(object <= 2523, "{object} bytes");
 }
 
-/// A flat target's program naming `cdecl16` compiled as if it were real mode's: the frame it
-/// described had 2-byte slots. A target's conventions are its own, so each is refused on the other.
+/// A flat target's program naming `cdecl16` compiled as if it were real mode's:
+/// the frame it described had 2-byte slots. A target's conventions are its own,
+/// so each is refused on the other.
 #[test]
 fn test_a_convention_the_target_does_not_define_is_refused() {
     let directory = tempfile::tempdir().expect("a directory");
@@ -193,10 +200,12 @@ fn test_a_convention_the_target_does_not_define_is_refused() {
     crate::driver::parsed(&write("c.nib", "cdecl32"), &flat, None).unwrap_or_else(|error| panic!("{}", error.0));
 }
 
-/// Inline assembly on a flat target was assembled as 16-bit code and emitted without a word: its
-/// `mov ax, 0` became bytes a 32-bit decoder reads as `mov eax, imm32`, and a program hung. The block is
-/// assembled in the target's mode now (its bits, segments and address width are the description's): the
-/// same `mov ax, 0` takes the 66h prefix, and a segment register is refused where the target has none.
+/// Inline assembly on a flat target was assembled as 16-bit code and emitted
+/// without a word: its `mov ax, 0` became bytes a 32-bit decoder reads as `mov
+/// eax, imm32`, and a program hung. The block is assembled in the target's mode
+/// now (its bits, segments and address width are the description's): the
+/// same `mov ax, 0` takes the 66h prefix, and a segment register is refused
+/// where the target has none.
 #[test]
 fn test_inline_assembly_is_assembled_in_the_targets_mode() {
     let directory = tempfile::tempdir().expect("a directory");
@@ -226,8 +235,9 @@ fn test_inline_assembly_is_assembled_in_the_targets_mode() {
     assert!(compiled(&program("mov es, ax"), &crate::real_mode()).is_ok(), "real mode has segments");
 }
 
-/// `.near()` of a far pointer was `unsafe` on every target, though where far is near the offset is
-/// the whole pointer: a flat program needed an `unsafe:` block for a copy.
+/// `.near()` of a far pointer was `unsafe` on every target, though where far is
+/// near the offset is the whole pointer: a flat program needed an `unsafe:`
+/// block for a copy.
 #[test]
 fn test_near_of_a_far_pointer_is_a_plain_copy_where_far_is_near() {
     let directory = tempfile::tempdir().expect("a directory");
@@ -255,9 +265,10 @@ fn test_near_of_a_far_pointer_is_a_plain_copy_where_far_is_near() {
     );
 }
 
-/// A target-sized integer: `usize` is the unsigned integer as wide as the target's near pointer and
-/// `NEAR_BYTES` that width as a constant, which a `const` may use (the heap's size classes and header
-/// were u16 and 13 whatever the target).
+/// A target-sized integer: `usize` is the unsigned integer as wide as the
+/// target's near pointer and `NEAR_BYTES` that width as a constant, which a
+/// `const` may use (the heap's size classes and header were u16 and 13 whatever
+/// the target).
 #[test]
 fn test_usize_and_near_bytes_follow_the_targets_near_width() {
     let directory = tempfile::tempdir().expect("a directory");
@@ -279,9 +290,11 @@ fn test_usize_and_near_bytes_follow_the_targets_near_width() {
     assert_eq!(run(&flat), "32\n4\n4294967295\n32768\n");
 }
 
-/// A length is usize, the target's word (and so is `v.len + 1`): on m32 `let n: u16 = v.len` cut it to 16 bits without
-/// a word, and a vector past 64 KB then looked short. It warns, naming the explicit form; `u16(v.len)` and a
-/// word-wide target do not, and m16 (where a word is 16 bits) warns only for a byte.
+/// A length is usize, the target's word (and so is `v.len + 1`): on m32 `let n:
+/// u16 = v.len` cut it to 16 bits without a word, and a vector past 64 KB then
+/// looked short. It warns, naming the explicit form; `u16(v.len)` and a
+/// word-wide target do not, and m16 (where a word is 16 bits) warns only for a
+/// byte.
 #[test]
 fn test_a_length_narrowed_implicitly_warns() {
     let directory = tempfile::tempdir().expect("a directory");
@@ -310,9 +323,10 @@ fn test_a_length_narrowed_implicitly_warns() {
     assert_eq!(warned(crate::real_mode()), ["4:warning: usize is 2 bytes and u8 holds fewer: write u8(...) to cut it"]);
 }
 
-/// The interpreter wrote and read 6-byte, 16-bit buffer headers whatever the program's words were:
-/// strings and vectors compiled for m32 (12-byte header, 4-byte words) ran as garbage or failed.
-/// It reads the word from the program (`descriptor_word`) and the layout from the HIR's one method.
+/// The interpreter wrote and read 6-byte, 16-bit buffer headers whatever the
+/// program's words were: strings and vectors compiled for m32 (12-byte header,
+/// 4-byte words) ran as garbage or failed. It reads the word from the program
+/// (`descriptor_word`) and the layout from the HIR's one method.
 #[test]
 fn test_the_interpreter_runs_strings_and_vectors_of_a_target_with_wide_words() {
     let directory = tempfile::tempdir().expect("a directory");
@@ -334,13 +348,15 @@ fn test_the_interpreter_runs_strings_and_vectors_of_a_target_with_wide_words() {
     };
     assert_eq!(run(&crate::real_mode()), "hello world\n11\n40\n117\n");
     assert_eq!(run(&flat), "hello world\n11\n40\n117\n");
-    // A program that only prints a literal has no descriptor place: the program states its word.
+    // A program that only prints a literal has no descriptor place: the program
+    // states its word.
     std::fs::write(&path, "fn main() -> i16:\n    print(\"literal\")\n    return 0\n").expect("written");
     assert_eq!(run(&flat), "literal\n");
 }
 
-/// The machine's physical addresses are one fact in the platform description; a module names one as
-/// `PHYSICAL_<NAME>` (the text screen's video memory was typed as 0xB8000000 in each program).
+/// The machine's physical addresses are one fact in the platform description; a
+/// module names one as `PHYSICAL_<NAME>` (the text screen's video memory was
+/// typed as 0xB8000000 in each program).
 #[test]
 fn test_a_module_names_the_targets_physical_addresses() {
     let directory = tempfile::tempdir().expect("a directory");
@@ -358,9 +374,10 @@ fn test_a_module_names_the_targets_physical_addresses() {
     assert!(crate::Frontend { physical: Vec::new(), ..crate::real_mode() }.physical_constants().is_empty());
 }
 
-/// The reserve below the deepest chain was `STACK_RESERVE = 512` in the compiler and a `512` in each start-up: the OS
-/// layer states it once (`os.toml`), the compiler reads it and the assembler is told it, and no start-up has a number
-/// of its own.
+/// The reserve below the deepest chain was `STACK_RESERVE = 512` in the
+/// compiler and a `512` in each start-up: the OS layer states it once
+/// (`os.toml`), the compiler reads it and the assembler is told it, and no
+/// start-up has a number of its own.
 #[test]
 fn the_stack_reserve_is_the_os_layers_and_no_startup_names_one() {
     use llrm_target::Target;
@@ -375,8 +392,10 @@ fn the_stack_reserve_is_the_os_layers_and_no_startup_names_one() {
     }
 }
 
-/// A convention spells a symbol as the object format asks: `f_` for OMF's default convention, and `f` for ELF's, where
-/// the description's `symbol` table says `*`. Nib spelled `Abi::symbol`'s pattern whatever format was asked.
+/// A convention spells a symbol as the object format asks: `f_` for OMF's
+/// default convention, and `f` for ELF's, where the description's `symbol`
+/// table says `*`. Nib spelled `Abi::symbol`'s pattern whatever format was
+/// asked.
 #[test]
 fn test_an_exported_symbol_is_spelled_as_the_object_format_asks() {
     let directory = tempfile::tempdir().expect("a directory");

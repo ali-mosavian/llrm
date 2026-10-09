@@ -5,9 +5,9 @@
 //! A routine's interface: its register inputs first, in
 //! `runtime::direct_slots` order, then its stack arguments as words. A
 //! callee that pops them is BASIC's convention, first pushed first; one
-//! that leaves them to the caller is C's, last pushed first. It answers in AX (`i16`), DX:AX
-//! (`i32`), or several registers as a struct in slot order; one whose
-//! result is the flags answers what `cmp result, 0` compares.
+//! that leaves them to the caller is C's, last pushed first. It answers in AX
+//! (`i16`), DX:AX (`i32`), or several registers as a struct in slot order; one
+//! whose result is the flags answers what `cmp result, 0` compares.
 
 use std::collections::BTreeMap;
 

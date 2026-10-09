@@ -155,7 +155,8 @@ impl FunctionCompiler<'_> {
                     renamed = true;
                 }
             }
-            // `.iter()` of an array, vec or view, which declares none (section 12).
+            // `.iter()` of an array, vec or view, which declares none (section
+            // 12).
             if let Expr::MethodCall { receiver, name, arguments, span, .. } = one {
                 let declared = self
                     .receiver_type(receiver)

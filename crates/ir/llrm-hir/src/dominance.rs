@@ -113,7 +113,8 @@ mod tests {
         Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(value)], Vec::new())
     }
 
-    /// Block 1 branches to 2 and 3, which join in 4. The value 5 is defined in 2.
+    /// Block 1 branches to 2 and 3, which join in 4. The value 5 is defined in
+    /// 2.
     fn diamond(
         join: Terminator,
         left: Vec<Instruction>,

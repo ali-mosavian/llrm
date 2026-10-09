@@ -7,7 +7,8 @@ use crate::model::ir::Loc;
 use crate::model::lir::LirBody;
 use crate::support::pyrepr::Repr;
 
-/// `=== stage`, then each body's instructions and operands, short enough to diff.
+/// `=== stage`, then each body's instructions and operands, short enough to
+/// diff.
 pub fn lir_stage(
     stage: &str,
     bodies: &[(String, LirBody)],

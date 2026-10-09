@@ -153,8 +153,9 @@ pub fn may_overlap(
     may_overlap_by_sets(one, one_width, other, other_width)
 }
 
-/// Two fixed frame cells meet when their byte ranges do: the general answer for them, without the sets built to give it
-/// (a body that copies a large struct asks it of every cell against every store).
+/// Two fixed frame cells meet when their byte ranges do: the general answer for
+/// them, without the sets built to give it (a body that copies a large struct
+/// asks it of every cell against every store).
 fn frame_bytes(
     one: Option<Addr>,
     one_width: u32,
@@ -207,8 +208,8 @@ mod tests {
         assert!(may_overlap(None, 2, frame(-2), 2));
     }
 
-    /// The fast answer for two fixed frame cells is the general one, over widths (0 counts as 1) and displacements at
-    /// both ends of the range.
+    /// The fast answer for two fixed frame cells is the general one, over
+    /// widths (0 counts as 1) and displacements at both ends of the range.
     #[test]
     fn frame_cells_meet_as_the_general_answer_says() {
         let edges = [

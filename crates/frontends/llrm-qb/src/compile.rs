@@ -460,7 +460,8 @@ fn rich_assembled(
     let graphics = _graphics_dependencies(module);
     let datum = basic::Item::Datum;
     let label = |name: &str| datum(masm::Datum::Label(masm::Label { name: name.to_owned() }));
-    // The object's pointer cells are the target's: a far pointer's width and a near one's.
+    // The object's pointer cells are the target's: a far pointer's width and a
+    // near one's.
     let (near_bytes, far_bytes) = {
         let layout = codegen.arch.layout();
         let datalayout = llrm_mir::datalayout::DataLayout::parse(&layout.datalayout).map_err(CompileError::from)?;
@@ -544,11 +545,13 @@ fn rich_assembled(
     Ok(compiled)
 }
 
-/// The stack the BASIC runtime's crt0 links (`inc/stack2.inc`, STACK_SIZE), as the
-/// link maps of BC's and llrm-qb's objects both show; the object's own adds to it.
+/// The stack the BASIC runtime's crt0 links (`inc/stack2.inc`, STACK_SIZE), as
+/// the link maps of BC's and llrm-qb's objects both show; the object's own adds
+/// to it.
 pub const STACK_BASE: i64 = 0x800;
 
-/// What the BASIC runtime's routines, DOS and an interrupt use below the deepest chain of frames.
+/// What the BASIC runtime's routines, DOS and an interrupt use below the
+/// deepest chain of frames.
 pub const STACK_RESERVE: i64 = 512;
 
 /// Compile one QB HIR module to the shared assembly model.

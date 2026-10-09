@@ -5,16 +5,19 @@
 //! Each block with more than one successor takes the first heuristic that
 //! applies, in LLVM's order, then GCC's call and return heuristics (from
 //! Ball and Larus; LLVM has neither):
-//! - a successor every path of which ends in `unreachable`, a `noreturn` or a `cold` call (`noreturn::cold`) is all but
-//!   never taken;
+//! - a successor every path of which ends in `unreachable`, a `noreturn` or a
+//!   `cold` call (`noreturn::cold`) is all but never taken;
 //! - in a loop, staying in it is taken 124 times to every 4 exits;
-//! - a branch decided by the counters of the loop around it, which induction proves counts a known number of trips, is
-//!   taken on the share of those trips the compare holds on;
-//! - `p == q` on pointers fails (20:12), as do `x == 0`, `x == -1`, `x < 0` and `x <= 0` on integers but truth values
-//!   and one-bit tests, and `x == y` on floats; `isnan` is all but never;
+//! - a branch decided by the counters of the loop around it, which induction
+//!   proves counts a known number of trips, is taken on the share of those
+//!   trips the compare holds on;
+//! - `p == q` on pointers fails (20:12), as do `x == 0`, `x == -1`, `x < 0` and
+//!   `x <= 0` on integers but truth values and one-bit tests, and `x == y` on
+//!   floats; `isnan` is all but never;
 //! - a successor that calls, where the other does not, is not taken (67%);
-//! - a successor that returns, where the other does not, is not taken (66%): 98% where it returns a negative number,
-//!   71% null, 65% another constant (GCC's `PRED_NEGATIVE_RETURN`, `PRED_NULL_RETURN`, `PRED_CONST_RETURN`).
+//! - a successor that returns, where the other does not, is not taken (66%):
+//!   98% where it returns a negative number, 71% null, 65% another constant
+//!   (GCC's `PRED_NEGATIVE_RETURN`, `PRED_NULL_RETURN`, `PRED_CONST_RETURN`).
 //!
 //! Frequencies are relative to the entry's 1. A loop header runs
 //! 1 / (1 - p) times per entry, `p` the probability of coming back round,
@@ -43,7 +46,8 @@ pub enum Heuristic {
     Invoke,
     Unreachable,
     Loop,
-    /// A compare of an enclosing counted loop's counters: the share of its trips it holds on.
+    /// A compare of an enclosing counted loop's counters: the share of its
+    /// trips it holds on.
     Counted,
     Pointer,
     Zero,
@@ -80,7 +84,8 @@ const OPCODE: (f64, f64) = (20.0, 12.0);
 const ORDERED: (f64, f64) = ((1024 * 1024 - 1) as f64, 1.0);
 const CALL: (f64, f64) = (67.0, 33.0);
 const RETURN: (f64, f64) = (66.0, 34.0);
-// GCC's predict.def: a path that returns a constant, rather than computing a result, is the exception.
+// GCC's predict.def: a path that returns a constant, rather than computing a
+// result, is the exception.
 const NEGATIVE_RETURN: (f64, f64) = (2.0, 98.0);
 const NULL_RETURN: (f64, f64) = (29.0, 71.0);
 const CONST_RETURN: (f64, f64) = (35.0, 65.0);
@@ -176,7 +181,8 @@ fn declared(
     )
 }
 
-/// The first heuristic that tells `block`'s successors apart, and their weights.
+/// The first heuristic that tells `block`'s successors apart, and their
+/// weights.
 fn weighed(
     context: &Context,
     metadata: &[MetadataNode],
@@ -198,7 +204,8 @@ fn weighed(
             last.operands.iter().filter(|one| matches!(one, Operand::Block(_))).copied().collect::<Vec<_>>()[..]
         && successors.len() == 2
     {
-        // LLVM's `calcInvokeHeuristics`: the unwind edge is taken 1 time in 2^20.
+        // LLVM's `calcInvokeHeuristics`: the unwind edge is taken 1 time in
+        // 2^20.
         return (Heuristic::Invoke, vec![INVOKE_NORMAL, 1.0]);
     }
     let split = |favoured: &dyn Fn(i64) -> bool, (yes, no): (f64, f64)| -> Option<Vec<f64>> {
@@ -245,7 +252,8 @@ fn weighed(
     };
     if successors.len() == 2 && successors.iter().filter(|&&at| returns(at)).count() == 1 {
         let (leaving, staying) = if returns(successors[0]) { (0, 1) } else { (1, 0) };
-        // What the returning block returns, when it does nothing else: a constant says it is an error or a flag.
+        // What the returning block returns, when it does nothing else: a
+        // constant says it is an error or a flag.
         let odds = returned(context, function, cfg::block(successors[leaving])).unwrap_or(RETURN.swap());
         let mut weights = vec![0.0; 2];
         weights[leaving] = odds.0;
@@ -293,7 +301,8 @@ fn counted(
                 (evaluated(context, function, values, *left, 6)?, evaluated(context, function, values, *right, 6)?);
             held += i64::from(compared_as(predicate, a, b));
         }
-        // The state after the last trip is stepped to as well: a counter that has no value there leaves the loop unrun.
+        // The state after the last trip is stepped to as well: a counter that
+        // has no value there leaves the loop unrun.
         run.at(context, function, one, count as usize)?;
         Some(held as f64 / count as f64)
     })?;
@@ -304,9 +313,10 @@ fn counted(
     (first != second).then(|| vec![taken, 1.0 - taken])
 }
 
-/// What a loop's counters hold at each of its trips, `counted`'s run of the loop: the same for every branch in the
-/// loop, so the trips are run for the first branch that asks and no further than any asks. `broken` once a counter has
-/// no value, or the loop no start.
+/// What a loop's counters hold at each of its trips, `counted`'s run of the
+/// loop: the same for every branch in the loop, so the trips are run for the
+/// first branch that asks and no further than any asks. `broken` once a counter
+/// has no value, or the loop no start.
 #[derive(Default)]
 struct Run {
     values: Vec<BTreeMap<llrm_mir::module::ValueId, Option<(u128, u32)>>>,
@@ -338,8 +348,8 @@ impl Runs {
 }
 
 impl Run {
-    /// The counters at the start of trip `trip` of `one` (`trip` = its trips is the state after the last), run as far
-    /// as that.
+    /// The counters at the start of trip `trip` of `one` (`trip` = its trips is
+    /// the state after the last), run as far as that.
     fn at(
         &mut self,
         context: &Context,
@@ -489,8 +499,9 @@ fn compared_as(
     }
 }
 
-/// The odds of reaching a block that returns a constant and does nothing else: GCC's `PRED_NEGATIVE_RETURN`,
-/// `PRED_NULL_RETURN` and `PRED_CONST_RETURN`. None where it returns a computed value, or anything but the return.
+/// The odds of reaching a block that returns a constant and does nothing else:
+/// GCC's `PRED_NEGATIVE_RETURN`, `PRED_NULL_RETURN` and `PRED_CONST_RETURN`.
+/// None where it returns a computed value, or anything but the return.
 fn returned(
     context: &Context,
     function: &Function,
@@ -656,9 +667,10 @@ fn three_way(
     Facts::of(&info.attrs).three_way_compare() || declared.is_some_and(|one| Facts::of(&one.attrs).three_way_compare())
 }
 
-/// Whether `operand` is provably 0 or all ones, or 0 or 1: a compare, one widened, bitwise logic of
-/// those, `depth` operations deep, or the result of a call whose `range` says so (a routine that
-/// returns a truth value as an integer, as Nib's bool is a byte).
+/// Whether `operand` is provably 0 or all ones, or 0 or 1: a compare, one
+/// widened, bitwise logic of those, `depth` operations deep, or the result of a
+/// call whose `range` says so (a routine that returns a truth value as an
+/// integer, as Nib's bool is a byte).
 fn truth(
     context: &Context,
     declarations: &Declarations,
@@ -735,9 +747,9 @@ fn frequencies(
 /// postorder, the entry first; `cycles` its natural loops, innermost first;
 /// `edge` each edge's probability. A loop with proven `trips` stays in as
 /// many times as they say: its exit test, where the loop has one exit or
-/// where it is tested at the header or a latch, takes `1 / (trips + 1 - tested)`
-/// out, `tested` being 1 when the test follows a trip and 0 when it precedes
-/// one. Only here, so that MIR and LIR estimates agree.
+/// where it is tested at the header or a latch, takes `1 / (trips + 1 -
+/// tested)` out, `tested` being 1 when the test follows a trip and 0 when it
+/// precedes one. Only here, so that MIR and LIR estimates agree.
 pub fn propagated(
     order: &[i64],
     predecessors: &dyn Fn(i64) -> Vec<i64>,
@@ -756,11 +768,13 @@ pub fn propagated_edges(
     cycles: &[Cycle],
     given: &dyn Fn(i64, i64) -> f64,
 ) -> (BTreeMap<i64, f64>, BTreeMap<(i64, i64), f64>) {
-    // How often a trip of each loop reaches its exiting blocks together, which its exit test runs: more than once where
-    // one is in a loop nested in it, and each visit then takes that much less of the exit, so that the trips stay.
+    // How often a trip of each loop reaches its exiting blocks together, which
+    // its exit test runs: more than once where one is in a loop nested in
+    // it, and each visit then takes that much less of the exit, so that the
+    // trips stay.
     let visits: std::cell::RefCell<BTreeMap<i64, f64>> = std::cell::RefCell::new(BTreeMap::new());
-    // Asked of every edge by every loop's weighing: a block's successors and a loop's exiting blocks do not change
-    // between asks.
+    // Asked of every edge by every loop's weighing: a block's successors and a
+    // loop's exiting blocks do not change between asks.
     let next_of: std::cell::RefCell<BTreeMap<i64, std::rc::Rc<Vec<i64>>>> = std::cell::RefCell::new(BTreeMap::new());
     let successors = |at: i64| -> std::rc::Rc<Vec<i64>> {
         std::rc::Rc::clone(next_of.borrow_mut().entry(at).or_insert_with(|| std::rc::Rc::new(successors(at))))
@@ -769,9 +783,10 @@ pub fn propagated_edges(
         .iter()
         .map(|one| one.body.iter().filter(|&&at| successors(at).iter().any(|to| !one.body.contains(to))).count())
         .collect();
-    // Which loop's trips fix an edge, and its share of its side's mass: what the loops and the odds say, not what
-    // `visits` is by the time the edge is asked about, so it is worked out once (every loop's weighing asks every
-    // edge).
+    // Which loop's trips fix an edge, and its share of its side's mass: what
+    // the loops and the odds say, not what `visits` is by the time the edge
+    // is asked about, so it is worked out once (every loop's weighing asks
+    // every edge).
     struct Counted {
         header: i64,
         trips: f64,
@@ -793,7 +808,8 @@ pub fn propagated_edges(
                 if inside == 0 || outside == 0 {
                     continue;
                 }
-                // A loop without proven trips leaves the edge to the loops around it, which may state them.
+                // A loop without proven trips leaves the edge to the loops
+                // around it, which may state them.
                 let Some(trips) = one.trips else { continue };
                 if exiting_blocks[index] != 1 && from != one.header && !one.latches.contains(&from) {
                     return None;
@@ -827,7 +843,8 @@ pub fn propagated_edges(
     let edge = |from: i64, to: i64| counted(from, to).unwrap_or_else(|| given(from, to));
     // `to` is a loop header and `from` is in its loop.
     let backward = |from: i64, to: i64| cycles.iter().any(|one| one.header == to && one.body.contains(&from));
-    // Innermost first: an inner header's scale is known when its outer loop is weighed.
+    // Innermost first: an inner header's scale is known when its outer loop is
+    // weighed.
     let mut scale: BTreeMap<i64, f64> = BTreeMap::new();
     for found in cycles {
         let weighed = |edge: &dyn Fn(i64, i64) -> f64, scale: &BTreeMap<i64, f64>| -> BTreeMap<i64, f64> {
@@ -865,8 +882,9 @@ pub fn propagated_edges(
             .map(|latch| mass.get(latch).copied().unwrap_or(0.0) * edge(*latch, found.header))
             .sum();
         let mut weighed_scale = (1.0 / (1.0 - back.min(1.0 - 1.0 / LOOP_SCALE))).min(LOOP_SCALE);
-        // The proven trips are the scale, not what the odds around them add up to: a sum within a hair of 1 is
-        // where a leak of a tenth of a percent in a loop nested in this one reads as a sixth of the trips.
+        // The proven trips are the scale, not what the odds around them add up
+        // to: a sum within a hair of 1 is where a leak of a tenth of a
+        // percent in a loop nested in this one reads as a sixth of the trips.
         if let Some(trips) = found.trips {
             let exiting: Vec<i64> = found
                 .body

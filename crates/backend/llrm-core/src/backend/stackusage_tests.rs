@@ -28,7 +28,8 @@ fn push(at: i64) -> Arc<Insn> {
     insn(at, Operation::Push, "push", vec![Loc::Imm(ir::Imm { value: 1, width: 2, address: None })])
 }
 
-/// A far procedure: `pushes` words pushed for a call, `reserve` bytes of locals, and its callees.
+/// A far procedure: `pushes` words pushed for a call, `reserve` bytes of
+/// locals, and its callees.
 fn procedure(
     name: &str,
     reserve: i64,
@@ -81,7 +82,8 @@ fn test_the_stack_a_chain_of_calls_can_reach_is_the_sum_of_its_frames() {
         &[module(vec![procedure("main", 10, 3, &["f"]), procedure("f", 20, 0, &["g"]), procedure("g", 0, 0, &[])])],
         &DOS,
     );
-    // far return 4 + push bp 2 + locals 10 + 3 words pushed: 22; f: 4 + 2 + 20; g: 4.
+    // far return 4 + push bp 2 + locals 10 + 3 words pushed: 22; f: 4 + 2 + 20;
+    // g: 4.
     assert_eq!(usage.bound("g"), Bound::Bytes(4));
     assert_eq!(usage.bound("f"), Bound::Bytes(26 + 4));
     assert_eq!(usage.bound("main"), Bound::Bytes(22 + 26 + 4));
@@ -126,12 +128,14 @@ fn test_a_chain_of_diamonds_thirty_deep_is_settled_at_once() {
     procedures.push(procedure("end", 0, 0, &[]));
     procedures.push(procedure("top", 0, 0, &["l0", "r0"]));
     let usage = Usage::of(&[module(procedures)], &DOS);
-    // Each level: far return 4 + push bp 2 + 2 locals = 8; the end and the top, with no frame, 4.
+    // Each level: far return 4 + push bp 2 + 2 locals = 8; the end and the top,
+    // with no frame, 4.
     assert_eq!(usage.bound("top"), Bound::Bytes(4 + 30 * 8 + 4));
 }
 
-/// `enter N,0` pushes BP and takes the locals as the three instructions it replaces did: the
-/// bound must not lose them (a frame read only `push` and `sub` and counted none).
+/// `enter N,0` pushes BP and takes the locals as the three instructions it
+/// replaces did: the bound must not lose them (a frame read only `push` and
+/// `sub` and counted none).
 #[test]
 fn test_a_frame_opened_with_enter_counts_its_bp_and_locals() {
     let usage =
@@ -140,17 +144,18 @@ fn test_a_frame_opened_with_enter_counts_its_bp_and_locals() {
     assert_eq!(usage(true).bound("main"), Bound::Bytes(4 + 2 + 10 + 6));
 }
 
-/// #396: a SUB's locals live in the runtime's frame (`mov cx,N` / `call B$ENSA`), which no
-/// instruction of it shows; its bound was the return address alone, so a 6000-byte frame sized
-/// no stack and crashed on entry.
+/// #396: a SUB's locals live in the runtime's frame (`mov cx,N` / `call
+/// B$ENSA`), which no instruction of it shows; its bound was the return address
+/// alone, so a 6000-byte frame sized no stack and crashed on entry.
 #[test]
 fn test_a_runtime_frame_counts_the_locals_its_entry_call_takes() {
     let usage = Usage::of(&[module(vec![Procedure { entry: 6010, ..procedure("big", 0, 0, &[]) }])], &DOS);
     assert_eq!(usage.bound("big"), Bound::Bytes(4 + 6010));
 }
 
-/// A near procedure's frame was the return address's 2 bytes whatever the target: on a flat one it is a
-/// dword, and a stack slot is the target's, not two bytes.
+/// A near procedure's frame was the return address's 2 bytes whatever the
+/// target: on a flat one it is a dword, and a stack slot is the target's, not
+/// two bytes.
 #[test]
 fn test_a_frame_is_counted_in_the_targets_words() {
     let near = |name| module(vec![Procedure { far: false, ..procedure(name, 0, 0, &[]) }]);
@@ -158,14 +163,16 @@ fn test_a_frame_is_counted_in_the_targets_words() {
     assert_eq!(Usage::of(&[near("f")], &llrm_x86_m32::M32).bound("f"), Bound::Bytes(4));
 }
 
-/// #396: the stack a chain needs beyond the runtime's own, none for a chain that fits it.
+/// #396: the stack a chain needs beyond the runtime's own, none for a chain
+/// that fits it.
 #[test]
 fn test_the_stack_to_add_is_what_the_chain_needs_beyond_the_base() {
     let one = |entry| module(vec![Procedure { entry, ..procedure("big", 0, 0, &[]) }]);
     assert_eq!(stack_to_add(&one(100), 0x800, RESERVE, Some(0xF000), &DOS), Ok(0));
     assert_eq!(stack_to_add(&one(6010), 0x800, RESERVE, Some(0xF000), &DOS), Ok(4 + 6010 + RESERVE - 0x800));
     assert!(stack_to_add(&one(0xF000), 0x800, RESERVE, Some(0xF000), &DOS).unwrap_err().contains("bytes of stack"));
-    // A target without segments has no such limit: a 70 KB frame was refused on m32.
+    // A target without segments has no such limit: a 70 KB frame was refused on
+    // m32.
     assert_eq!(stack_to_add(&one(70000), 0x800, RESERVE, None, &DOS), Ok(4 + 70000 + RESERVE - 0x800));
 }
 
@@ -199,7 +206,8 @@ fn leaf(
     Procedure { body, ..procedure(name, reserve, 0, &[]) }
 }
 
-/// What `elide_checks` leaves checked, by name, of procedures all entered directly.
+/// What `elide_checks` leaves checked, by name, of procedures all entered
+/// directly.
 fn kept(
     mut procedures: Vec<Procedure>,
     direct: bool,
@@ -208,10 +216,12 @@ fn kept(
     procedures.into_iter().filter(|one| one.stack_check.is_some()).map(|one| one.name).collect()
 }
 
-/// A check costs a compare and a branch at every call; a leaf the caller's check already covers
-/// needs none. Far return 4 + bp 2 + 8 locals = 14, and the caller's widest push is 6: 20 <= 32, not <= 19.
-/// What is not provably covered keeps it: a leaf past the red zone, one whose address is taken, one
-/// the world calls, any caller, and everything where the runtime states no red zone.
+/// A check costs a compare and a branch at every call; a leaf the caller's
+/// check already covers needs none. Far return 4 + bp 2 + 8 locals = 14, and
+/// the caller's widest push is 6: 20 <= 32, not <= 19. What is not provably
+/// covered keeps it: a leaf past the red zone, one whose address is taken, one
+/// the world calls, any caller, and everything where the runtime states no red
+/// zone.
 #[test]
 fn test_a_small_leaf_the_callers_check_covers_goes_unchecked() {
     let main = || checked(procedure("main", 4, 3, &["small"]), 32);

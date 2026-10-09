@@ -1,4 +1,5 @@
-//! Failures of gcc.c-torture/execute that a source program shows: each a C program, its listing read.
+//! Failures of gcc.c-torture/execute that a source program shows: each a C
+//! program, its listing read.
 
 use std::process::Command;
 
@@ -20,8 +21,9 @@ fn listing(
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }
 
-/// A 64-bit remainder by a variable in a 32-bit segment ran the helper's 16-bit-segment bytes, `66` prefixes and all
-/// (920501-2, every level): the listing's inline bytes carry none.
+/// A 64-bit remainder by a variable in a 32-bit segment ran the helper's
+/// 16-bit-segment bytes, `66` prefixes and all (920501-2, every level): the
+/// listing's inline bytes carry none.
 #[test]
 fn a_division_by_a_variable_of_64_bits_carries_no_operand_size_prefix() {
     let text =

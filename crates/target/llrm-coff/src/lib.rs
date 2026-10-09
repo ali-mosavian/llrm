@@ -1,6 +1,6 @@
-//! An [`Object`] as a COFF object file, the format link.exe, lld-link and wlink read. What a
-//! machine adds is its COFF machine number and its relocation types: see [`Machine`].
-//! `llrm-coff32` and `llrm-coff64` are the machines.
+//! An [`Object`] as a COFF object file, the format link.exe, lld-link and wlink
+//! read. What a machine adds is its COFF machine number and its relocation
+//! types: see [`Machine`]. `llrm-coff32` and `llrm-coff64` are the machines.
 
 /// C13 gives each local the ranges its place holds over.
 pub const LOCATION_RANGES: bool = true;
@@ -26,9 +26,9 @@ const SYM_ABSOLUTE: i16 = -1;
 const SYM_DEBUG: i16 = -2;
 const SYMBOL: usize = 18;
 
-/// A relocation type, the bytes of the field it patches, and the distance from the field's start
-/// to the place the linker takes a pc-relative value relative to (`baked`): `REL32` is the
-/// field's end, `REL32_n` is `n` bytes past it.
+/// A relocation type, the bytes of the field it patches, and the distance from
+/// the field's start to the place the linker takes a pc-relative value relative
+/// to (`baked`): `REL32` is the field's end, `REL32_n` is `n` bytes past it.
 pub struct Relocation {
     pub kind: u16,
     pub width: usize,
@@ -41,8 +41,9 @@ pub trait Machine {
     const ARCH: Arch;
     /// `IMAGE_FILE_MACHINE_*`.
     const NUMBER: u16;
-    /// `@feat.00` bit 0: no exception handler is left unregistered. A 32-bit link with /safeseh
-    /// (its default) refuses an object that does not say so; x86-64 has no such table.
+    /// `@feat.00` bit 0: no exception handler is left unregistered. A 32-bit
+    /// link with /safeseh (its default) refuses an object that does not say
+    /// so; x86-64 has no such table.
     const SAFE_SEH: bool = false;
 
     fn relocation(kind: Kind) -> Result<Relocation, Unsupported>;
@@ -52,7 +53,8 @@ fn unsupported(text: impl Into<String>) -> Unsupported {
     Unsupported(text.into())
 }
 
-/// The string table: its length, then NUL-terminated names. An offset counts the length.
+/// The string table: its length, then NUL-terminated names. An offset counts
+/// the length.
 struct Strings(Vec<u8>);
 
 impl Strings {
@@ -81,8 +83,8 @@ fn put32(
     out.extend(value.to_le_bytes());
 }
 
-/// An 8-byte name field: the name itself, or `/offset` into the string table, or for a symbol
-/// four zero bytes and the offset.
+/// An 8-byte name field: the name itself, or `/offset` into the string table,
+/// or for a symbol four zero bytes and the offset.
 fn section_name(
     name: &str,
     strings: &mut Strings,
@@ -131,8 +133,9 @@ fn symbol(
     out.push(entry.aux);
 }
 
-/// The COFF name, flags and alignment of `section`; a role's first section is `.text`, `.data`...
-/// and a further one is `.text$name`, which the linker merges into the first.
+/// The COFF name, flags and alignment of `section`; a role's first section is
+/// `.text`, `.data`... and a further one is `.text$name`, which the linker
+/// merges into the first.
 fn spelling(
     section: &Section,
     taken: bool,
@@ -171,7 +174,8 @@ fn pad(
     }
 }
 
-/// `object` as a COFF object file of machine `M`, its debug information, if any, as C13.
+/// `object` as a COFF object file of machine `M`, its debug information, if
+/// any, as C13.
 pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     let expanded;
     let object = match &object.debug {
@@ -211,7 +215,8 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         spelled.push(spelling(section, taken)?);
     }
 
-    // Symbols: `.file`, one symbol per section, then the object's, each local one as a static.
+    // Symbols: `.file`, one symbol per section, then the object's, each local
+    // one as a static.
     let mut table: Vec<u8> = Vec::new();
     let mut count = 0u32;
     let file = object.name.as_bytes();
@@ -246,7 +251,8 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         for one in &section.relocs {
             let Relocation { kind, width, from, baked } = M::relocation(one.kind)?;
             let Target::Symbol(target) = one.target else { return Err(unsupported("a reference to a group is OMF's")) };
-            // The linker adds S + field (- P - baked, if relative); the model wants S + addend - (at + from).
+            // The linker adds S + field (- P - baked, if relative); the model
+            // wants S + addend - (at + from).
             let field = if one.kind.relative() { one.addend - (from as i64 - baked as i64) } else { one.addend };
             let fits = match width {
                 8 => true,
@@ -299,7 +305,8 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         }
     }
 
-    // The file: header, section headers, then the contents, relocations, symbols and strings.
+    // The file: header, section headers, then the contents, relocations,
+    // symbols and strings.
     let mut body: Vec<u8> = Vec::new();
     let base = 20 + 40 * object.sections.len();
     let mut headers: Vec<u8> = Vec::new();

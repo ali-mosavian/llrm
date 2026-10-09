@@ -21,7 +21,8 @@ impl FunctionCompiler<'_> {
             },
             Expr::Member { base, field, .. } => {
                 if let Some(owner) = self.receiver_type(base) {
-                    // An instance of a generic type is declared by its template.
+                    // An instance of a generic type is declared by its
+                    // template.
                     let declared = owner.split('[').next().unwrap_or(&owner);
                     if self.types.fixed_fields.contains(&(declared.to_owned(), field.clone())) {
                         return Err(Diagnostic::new(span, format!("field {field:?} of {owner} is not declared 'mut'")));

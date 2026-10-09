@@ -4,7 +4,8 @@
 
 use super::syntax::{AsmTarget, AssignTarget, Clause, Expr, Pattern, Span, Statement};
 
-/// A local as a caller of the walk keeps it: its name, or also where it is bound.
+/// A local as a caller of the walk keeps it: its name, or also where it is
+/// bound.
 pub trait Local {
     fn bound(
         name: &str,
@@ -178,7 +179,8 @@ fn expression_mut<E, L: Local>(
             locals.extend(parameters.iter().map(|one| L::bound(&one.name, *span)));
             expression_mut(body, locals, visit)?;
         }
-        // Each clause's names are bound in the clauses after it and in the element.
+        // Each clause's names are bound in the clauses after it and in the
+        // element.
         Expr::Comprehension { element, clauses, .. } | Expr::Generator { element, clauses, .. } => {
             clauses_mut(clauses, locals, visit)?;
             expression_mut(element, locals, visit)?;

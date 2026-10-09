@@ -273,7 +273,8 @@ impl FunctionCompiler<'_> {
                     count,
                     source: RunSource::Cells(source.clone()),
                 });
-                // An array of owned values moves, as a struct holding them does.
+                // An array of owned values moves, as a struct holding them
+                // does.
                 self.consume_aggregate(value, &source, span, stores)?;
             }
         }
@@ -316,7 +317,8 @@ impl FunctionCompiler<'_> {
             owner: name.into(),
         };
         if let Expr::Array(..) = value {
-            // No value reads the new place: each element is stored as it is made.
+            // No value reads the new place: each element is stored as it is
+            // made.
             let slot = FieldLayout { type_: element, offset: 0, shape: None };
             for (index, (_, item)) in literal_elements(value, shape.dims(), span)?.into_iter().enumerate() {
                 let mut stores = Vec::new();

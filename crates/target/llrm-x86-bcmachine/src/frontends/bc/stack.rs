@@ -89,7 +89,8 @@ pub fn frames(
                 take.push(pushed);
             }
             if have != needed * 4 {
-                stack = Vec::new(); // the arity crosses into bytes this block never explained
+                // the arity crosses into bytes this block never explained
+                stack = Vec::new();
                 continue;
             }
             take.reverse();

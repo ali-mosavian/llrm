@@ -6,10 +6,11 @@
 //!
 //! What changed with the IR:
 //! - A rule is floatfacts' (`floatfacts::rule`), a load's reading memory.
-//! - An indexed load's elements are its index's interval times its scale; the old one found an element's stride in a
-//!   `shl` of a byte offset.
+//! - An indexed load's elements are its index's interval times its scale; the
+//!   old one found an element's stride in a `shl` of a byte offset.
 //! - A float phi is bounded by its incomings.
-//! - An exact operation is its instruction, where the old one was its occurrence.
+//! - An exact operation is its instruction, where the old one was its
+//!   occurrence.
 //!
 //! Dropped, no rich MIR analogue: `Extended80` precision; the shadow that
 //! made a barrier or an opaque call write everything (a call writes what
@@ -175,8 +176,8 @@ pub fn exact(
         return Ok(BTreeSet::new());
     }
     let memory = floatfacts::cells(unit, &Calls::default());
-    // What the counted loops bound is the manager's: it is never solved here (no program in the corpus reached a solve
-    // here).
+    // What the counted loops bound is the manager's: it is never solved here
+    // (no program in the corpus reached a solve here).
     let scoped = unit.bounds.ok_or("float bounds without the manager's bounds of the body")?;
     let phis = function
         .walk()

@@ -249,7 +249,8 @@ pub fn find(
 }
 
 /// Every function keyword, as spelled, with the dialects it is one in: QB
-/// 4.5's from its help index (tests/differential/conformance/qb45/coverage.toml), then PDS 7.1's
+/// 4.5's from its help index
+/// (tests/differential/conformance/qb45/coverage.toml), then PDS 7.1's
 /// and VBDOS's own additions. FINANCE.LIB's functions are a library's.
 pub static KEYWORDS: &[(&str, u8)] = &[
     ("ABS", ALL),

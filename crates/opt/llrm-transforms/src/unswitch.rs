@@ -3,19 +3,25 @@
 //! condition, entirely in MIR.
 //!
 //! What changed with the IR:
-//! - The old candidate was re-optimized by `transform::recorded`, the whole pipeline with unswitching off and the
-//!   machine's tuning forwarded. That pipeline is not ported, so the re-optimization is the passes the pass is given;
-//!   its price is `profit::weighted` at the target's costs, each loop weighted by the trips induction proves.
-//! - The old stage records and `watch` hook are the pass manager's dump and change log.
-//! - A condition's purity was checked on the old operations' memory, flag, stack and x87 fields; an `icmp` has none, so
-//!   what is left is that its operands are defined before the loop.
-//! - The guard and dispatch dropped the old operations' byte provenance; a clone's is its `Cloned` change.
+//! - The old candidate was re-optimized by `transform::recorded`, the whole
+//!   pipeline with unswitching off and the machine's tuning forwarded. That
+//!   pipeline is not ported, so the re-optimization is the passes the pass is
+//!   given; its price is `profit::weighted` at the target's costs, each loop
+//!   weighted by the trips induction proves.
+//! - The old stage records and `watch` hook are the pass manager's dump and
+//!   change log.
+//! - A condition's purity was checked on the old operations' memory, flag,
+//!   stack and x87 fields; an `icmp` has none, so what is left is that its
+//!   operands are defined before the loop.
+//! - The guard and dispatch dropped the old operations' byte provenance; a
+//!   clone's is its `Cloned` change.
 //!
 //! Python's `ValueError`s are the `Err` text.
 //!
-//! Tests, in `unswitch_tests.rs`: `test_condition_must_be_pure_and_loop_invariant`
-//! is ported with a written loop. The three monkeypatching tests that
-//! replaced the re-optimization are ported by passing it:
+//! Tests, in `unswitch_tests.rs`:
+//! `test_condition_must_be_pure_and_loop_invariant` is ported with a written
+//! loop. The three monkeypatching tests that replaced the re-optimization are
+//! ported by passing it:
 //! `test_unswitch_rejects_a_candidate_without_loop_removal`,
 //! `test_unswitch_rejects_lower_count_but_higher_target_cost` and
 //! `test_unswitch_rejects_semantic_work_without_a_target_price`;
@@ -89,7 +95,8 @@ pub fn optimized(
         context: &mut *unit.context,
         layout: unit.layout,
         function: &mut candidate,
-        // A specialised copy: its calls to the original are not calls to itself.
+        // A specialised copy: its calls to the original are not calls to
+        // itself.
         id: None,
         metadata: unit.metadata,
         declared: &mut *unit.declared,

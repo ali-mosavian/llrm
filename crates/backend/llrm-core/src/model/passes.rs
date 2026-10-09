@@ -24,7 +24,8 @@ impl Exception {
         Self::defined_in("builtins", kind, message)
     }
 
-    /// A class a qbopt module defines, e.g. `qbopt.backend.masm`'s `Unprintable`.
+    /// A class a qbopt module defines, e.g. `qbopt.backend.masm`'s
+    /// `Unprintable`.
     pub fn defined_in(
         module: &'static str,
         kind: &'static str,

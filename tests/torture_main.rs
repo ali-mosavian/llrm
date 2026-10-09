@@ -1,4 +1,5 @@
-//! Failures of gcc.c-torture/execute that a source program shows: each a C program, its listing read.
+//! Failures of gcc.c-torture/execute that a source program shows: each a C
+//! program, its listing read.
 
 use std::process::Command;
 
@@ -20,8 +21,10 @@ fn listing(
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }
 
-/// `int main(void)` that reaches its closing brace returns 0 (C99 5.1.2.2.3): alias-access-path-1 and kin exited with
-/// whatever the last compare left in eax (2), at -O2 and -Os, because a function with no return value was made void.
+/// `int main(void)` that reaches its closing brace returns 0 (C99 5.1.2.2.3):
+/// alias-access-path-1 and kin exited with whatever the last compare left in
+/// eax (2), at -O2 and -Os, because a function with no return value was made
+/// void.
 #[test]
 fn main_that_falls_off_its_end_returns_zero() {
     for level in ["-O0", "-O2", "-Os"] {

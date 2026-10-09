@@ -156,7 +156,8 @@ pub mod tests {
         values[&3]
     }
 
-    /// NDARR's pointer stride expanded to nine arithmetic operations on every iteration.
+    /// NDARR's pointer stride expanded to nine arithmetic operations on every
+    /// iteration.
     #[test]
     fn test_huge_pointer_advance_does_not_rebuild_both_halves() {
         let parts = parts(&Model::new(HugeShift::Fixed(12)).unwrap());
@@ -164,7 +165,8 @@ pub mod tests {
         assert_eq!(execute(&parts, 0x2000_fffe, 2, &HashMap::default()), 0x3000_0000);
     }
 
-    /// NDARR/HUGELP strides must retain carries and borrows for every supported selector ABI.
+    /// NDARR/HUGELP strides must retain carries and borrows for every supported
+    /// selector ABI.
     #[test]
     fn test_packed_correction_matches_independent_selector_and_offset_arithmetic() {
         for shift in 0..16 {
@@ -187,7 +189,8 @@ pub mod tests {
         }
     }
 
-    /// Byte 65536 uses the runtime selector stride, not a CPU-derived DOS constant.
+    /// Byte 65536 uses the runtime selector stride, not a CPU-derived DOS
+    /// constant.
     #[test]
     fn test_runtime_pointer_abi_controls_crossing() {
         for (shift, expected) in [(12, 0x3000_0000), (3, 0x2008_0000)] {
@@ -199,7 +202,8 @@ pub mod tests {
         }
     }
 
-    /// Huge-loop pointer induction must preserve carries, borrows and wrapped byte offsets.
+    /// Huge-loop pointer induction must preserve carries, borrows and wrapped
+    /// byte offsets.
     #[test]
     fn test_pointer_recurrence_matches_recomputed_offsets() {
         for shift in [0, 3, 12] {

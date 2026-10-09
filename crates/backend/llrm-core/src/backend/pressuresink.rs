@@ -1,11 +1,15 @@
-//! A load made where its one reader is, when that raises the pressure of no register class: LLVM's scheduler works
-//! bottom-up for the same reason, a value defined late is live a short while. Before allocation, where each value's
-//! class is what `regclass` says confines it (a byte register, an address base or index, a selector) or the x87 stack,
-//! and the loads of different classes are told apart by nothing but those sets.
+//! A load made where its one reader is, when that raises the pressure of no
+//! register class: LLVM's scheduler works bottom-up for the same reason, a
+//! value defined late is live a short while. Before allocation, where each
+//! value's class is what `regclass` says confines it (a byte register, an
+//! address base or index, a selector) or the x87 stack, and the loads of
+//! different classes are told apart by nothing but those sets.
 //!
-//! Moving `d = load [a]` down to its reader `u` takes `d` out of its class over the stretch, and keeps each address
-//! operand that died at the load live to `u`. Per class `S` that changes the count of live values confined within `S`
-//! by `-[d in S] + #{operands in S that die at the load}`. The load moves where no class rises and one falls.
+//! Moving `d = load [a]` down to its reader `u` takes `d` out of its class over
+//! the stretch, and keeps each address operand that died at the load live to
+//! `u`. Per class `S` that changes the count of live values confined within `S`
+//! by `-[d in S] + #{operands in S that die at the load}`. The load moves where
+//! no class rises and one falls.
 
 use std::collections::BTreeSet;
 use std::rc::Rc;
@@ -45,7 +49,8 @@ impl LIRTransform for PressureSink {
     }
 }
 
-/// What confines a value: the x87 stack, a set of registers, or any general register.
+/// What confines a value: the x87 stack, a set of registers, or any general
+/// register.
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Class {
     Stack,
@@ -54,7 +59,8 @@ enum Class {
 }
 
 impl Class {
-    /// Whether a value of class `value` is counted in the class `set` stands for.
+    /// Whether a value of class `value` is counted in the class `set` stands
+    /// for.
     fn counts_in(
         &self,
         set: &Class,
@@ -84,7 +90,8 @@ fn plain_load(one: &Insn) -> Option<(u32, &Mem)> {
     .then_some((into.value, cell))
 }
 
-/// `body` with each plain load that can go and should made just before its one reader.
+/// `body` with each plain load that can go and should made just before its one
+/// reader.
 pub fn sunk(
     body: &LirBody,
     segments: &Segments,
@@ -116,13 +123,15 @@ pub fn sunk(
         .iter()
         .map(|block| {
             let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
-            // From the last: a load moved down lands past the positions already looked at, so each is looked at once.
+            // From the last: a load moved down lands past the positions already
+            // looked at, so each is looked at once.
             for position in (0..insns.len()).rev() {
                 let Some(target) = _reader(&insns, position, body, &live_out[&block.at], &defined, &class_of, &stack)
                 else {
                     continue;
                 };
-                // It takes its reader's position: instructions of one block stay in order by it, as a compare and its
+                // It takes its reader's position: instructions of one block
+                // stay in order by it, as a compare and its
                 // branches share one.
                 let mut load = (*insns.remove(position)).clone();
                 load.at = insns[target - 1].at;
@@ -135,7 +144,8 @@ pub fn sunk(
     if changed { body.with_blocks(blocks) } else { body.clone() }
 }
 
-/// Where the load at `at` should go, as the index of its reader, if it should move.
+/// Where the load at `at` should go, as the index of its reader, if it should
+/// move.
 fn _reader(
     insns: &[Arc<Insn>],
     at: usize,
@@ -154,7 +164,8 @@ fn _reader(
     if readers.next().is_some() || insns[reader].group.is_some() || reader <= at + 1 {
         return None;
     }
-    // Operands of one reader made one after another are in no order that matters.
+    // Operands of one reader made one after another are in no order that
+    // matters.
     if insns[at + 1..reader]
         .iter()
         .all(|between| plain_load(between).is_some_and(|(other, _)| insns[reader].uses.contains(&other)))
@@ -173,7 +184,8 @@ fn _reader(
             return None;
         }
     }
-    // Each address operand that dies at the load stays live to the reader: not one read at or after it.
+    // Each address operand that dies at the load stays live to the reader: not
+    // one read at or after it.
     let dying: Vec<u32> = addresses
         .iter()
         .copied()

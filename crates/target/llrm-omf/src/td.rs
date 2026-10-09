@@ -1,7 +1,9 @@
-//! [`llrm_object::debug::Info`] as Borland's debug information in an OMF object: the `COMENT`
-//! records of classes 0xE1-0xE8 and 0xEA that Turbo C++ writes under `-v`, which `TLINK /v` turns
-//! into the table Turbo Debugger reads. docs/machine/turbo-debugger.md has the measurements behind
-//! every byte. 16-bit only. A fact these records cannot say is refused, with what it was.
+//! [`llrm_object::debug::Info`] as Borland's debug information in an OMF
+//! object: the `COMENT` records of classes 0xE1-0xE8 and 0xEA that Turbo C++
+//! writes under `-v`, which `TLINK /v` turns into the table Turbo Debugger
+//! reads. docs/machine/turbo-debugger.md has the measurements behind
+//! every byte. 16-bit only. A fact these records cannot say is refused, with
+//! what it was.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -28,14 +30,16 @@ const TID_STRUCT: u8 = 0x1E;
 const TID_UNION: u8 = 0x1F;
 const TID_FUNCTION: u8 = 0x23;
 
-/// A local's flag: in a frame cell, a parameter; a static; a type's name: a typedef, a tag; a function.
+/// A local's flag: in a frame cell, a parameter; a static; a type's name: a
+/// typedef, a tag; a function.
 const LOCAL: u8 = 0x02;
 const PARAMETER: u8 = 0x0A;
 const STATIC: u8 = 0x00;
 const TYPEDEF: u8 = 0x06;
 const TAG: u8 = 0x07;
 const FUNCTION: u8 = 0x18;
-/// A local or a parameter in a register, and the register's number after the flag.
+/// A local or a parameter in a register, and the register's number after the
+/// flag.
 const REGISTER_LOCAL: u8 = 0x04;
 const REGISTER_PARAMETER: u8 = 0x0C;
 
@@ -62,7 +66,8 @@ fn pascal(name: &str) -> Result<Vec<u8>, Error> {
     Ok([vec![length], bytes].concat())
 }
 
-/// A type index: one byte below 0x80, else the high bits behind 0x80 and the low byte.
+/// A type index: one byte below 0x80, else the high bits behind 0x80 and the
+/// low byte.
 fn index(number: u16) -> Result<Vec<u8>, Error> {
     match number {
         0..=0x7F => Ok(vec![number as u8]),
@@ -71,8 +76,9 @@ fn index(number: u16) -> Result<Vec<u8>, Error> {
     }
 }
 
-/// Borland's number of a 16-bit or 8-bit x86 register (its encoding: AX 0, CX 1, DX 2, BX 3, SP 4, BP 5,
-/// SI 6, DI 7; AL 0 .. BH 7); the records are x86's alone, so the names are too.
+/// Borland's number of a 16-bit or 8-bit x86 register (its encoding: AX 0, CX
+/// 1, DX 2, BX 3, SP 4, BP 5, SI 6, DI 7; AL 0 .. BH 7); the records are x86's
+/// alone, so the names are too.
 fn register_number(
     variable: &str,
     register: &str,
@@ -101,14 +107,17 @@ fn scalar(one: Scalar) -> Result<u16, Error> {
     })
 }
 
-/// The type table: each composite type's record, its index given before its parts' so a cycle closes.
+/// The type table: each composite type's record, its index given before its
+/// parts' so a cycle closes.
 struct Types<'a> {
     info: &'a Info,
     of: Vec<Option<u16>>,
     records: Vec<Rc<Record>>,
-    /// A procedure type called far or near: far is the pointer's, or the function's, not the type's.
+    /// A procedure type called far or near: far is the pointer's, or the
+    /// function's, not the type's.
     procedures: Vec<((usize, bool), u16)>,
-    /// Each record's name, size, kind and tail (its index apart), by the index it has.
+    /// Each record's name, size, kind and tail (its index apart), by the index
+    /// it has.
     shapes: Vec<((String, u16, u8, Vec<u8>), u16)>,
     next: u16,
 }
@@ -125,14 +134,16 @@ impl Types<'_> {
         let info = self.info;
         match &info.types[id] {
             Type::Scalar(one) | Type::Basic { scalar: one, .. } => scalar(*one),
-            // Const and volatile are not in the records; a typedef is a name, set by `names`.
+            // Const and volatile are not in the records; a typedef is a name,
+            // set by `names`.
             Type::Qualified { target, .. } | Type::Typedef { target, .. } => self.code(*target),
             one => {
                 let at = self.next;
                 self.next += 1;
                 self.of[id] = Some(at);
                 let (name, size, tid, tail) = self.composite(one)?;
-                // The same record under another index, with nothing numbered since this one: two model types that
+                // The same record under another index, with nothing numbered
+                // since this one: two model types that
                 // read alike (a pointer to `int` and one to `long`) are one.
                 let key = (name.to_owned(), size, tid, tail.clone());
                 if let Some((_, same)) = self.shapes.iter().find(|(shape, _)| *shape == key) {
@@ -166,7 +177,8 @@ impl Types<'_> {
         }
     }
 
-    /// The record of the procedure type `id` called far or near, made once for each.
+    /// The record of the procedure type `id` called far or near, made once for
+    /// each.
     fn procedure_code(
         &mut self,
         id: usize,
@@ -184,7 +196,8 @@ impl Types<'_> {
             Some(result) => self.code(*result)?,
             None => 0x01,
         };
-        // The call's own flags: far is 4. A Pascal call is the function's own, set where a name is.
+        // The call's own flags: far is 4. A Pascal call is the function's own,
+        // set where a name is.
         let data = [
             index(at)?,
             pascal("")?,
@@ -198,7 +211,8 @@ impl Types<'_> {
         Ok(at)
     }
 
-    /// A composite type's name, size, kind and what follows its kind; its members' records first.
+    /// A composite type's name, size, kind and what follows its kind; its
+    /// members' records first.
     fn composite<'t>(
         &mut self,
         one: &'t Type,
@@ -208,7 +222,8 @@ impl Types<'_> {
         };
         Ok(match one {
             Type::Pointer { target, bytes, reach } => {
-                // What a pointer to a function points to is called as far as the pointer reaches.
+                // What a pointer to a function points to is called as far as
+                // the pointer reaches.
                 let procedure = self.procedure_through(*target);
                 let to = match procedure {
                     Some(procedure) => self.procedure_code(procedure, *reach != model::Reach::Near)?,
@@ -260,7 +275,8 @@ impl Types<'_> {
                     Some(result) => self.code(*result)?,
                     None => 0x01,
                 };
-                // The call's own flags are the function's: `call_flags` sets them where a name is.
+                // The call's own flags are the function's: `call_flags` sets
+                // them where a name is.
                 ("", 0, TID_FUNCTION, [index(ret)?, vec![0x04, 0x00]].concat())
             }
             Type::Enum { name, .. } => return refused(format!("enum {name} is not written yet")),
@@ -300,8 +316,9 @@ struct Builder<'a> {
     types: Types<'a>,
 }
 
-/// `variables` with a frame cell it settles in where it was over ranges: these records name one place for a scope,
-/// and a parameter in its register only until the function stored it is in that cell for the rest.
+/// `variables` with a frame cell it settles in where it was over ranges: these
+/// records name one place for a scope, and a parameter in its register only
+/// until the function stored it is in that cell for the rest.
 fn settled(
     variables: &[model::Variable],
     scope: &[model::Range],
@@ -331,14 +348,16 @@ impl Builder<'_> {
                 data.extend(frame_offset(&variable.name, *disp)?);
             }
             Location::Static { symbol, disp } => return self.placed(&variable.name, to, false, *symbol, *disp),
-            // A register a parameter arrives in and is there until the body starts: an entry of the body's scope,
-            // a register parameter's flag 0xC and the register's number.
+            // A register a parameter arrives in and is there until the body
+            // starts: an entry of the body's scope, a register parameter's flag
+            // 0xC and the register's number.
             Location::List(entries) if matches!(&entries[..], [(_, Location::Register(_))]) => {
                 let Location::Register(register) = &entries[0].1 else { unreachable!("matched") };
                 data.push(if variable.kind == Kind::Parameter { REGISTER_PARAMETER } else { REGISTER_LOCAL });
                 data.push(register_number(&variable.name, register)?);
             }
-            // The optimiser removed it: Turbo Debugger's records have no "optimized out", so it is left out.
+            // The optimiser removed it: Turbo Debugger's records have no
+            // "optimized out", so it is left out.
             Location::List(entries) if entries.is_empty() => return Ok(Vec::new()),
             Location::Register(register) => {
                 return refused(format!("{} is in register {register}, which is not written yet", variable.name));
@@ -346,7 +365,8 @@ impl Builder<'_> {
             Location::List(_) => {
                 return refused(format!("{} has a location list, which is not written yet", variable.name));
             }
-            // Turbo Debugger's records say neither a value in no place nor one in pieces: left out.
+            // Turbo Debugger's records say neither a value in no place nor one
+            // in pieces: left out.
             Location::Constant(_) | Location::Pieces(_) | Location::Relative { .. } => return Ok(Vec::new()),
         }
         Ok(data)
@@ -403,8 +423,8 @@ impl Builder<'_> {
         Ok(())
     }
 
-    /// A function's scopes: its own, with the parameters as passed in, and its body's, with the
-    /// locals.
+    /// A function's scopes: its own, with the parameters as passed in, and its
+    /// body's, with the locals.
     fn function(
         &mut self,
         out: &mut Vec<Rc<Record>>,
@@ -417,7 +437,8 @@ impl Builder<'_> {
         out.push(self.scope(range.section, range.offset)?);
         let parameters: Vec<&model::Variable> =
             function.variables.iter().filter(|one| one.kind == Kind::Parameter).collect();
-        // The ones a frame cell holds are the function's own; one a register holds is the body's.
+        // The ones a frame cell holds are the function's own; one a register
+        // holds is the body's.
         let reversed: Vec<&model::Variable> =
             parameters.iter().rev().copied().filter(|one| !matches!(one.location, Location::List(_))).collect();
         out.extend(self.locals(&reversed)?);
@@ -438,7 +459,8 @@ impl Builder<'_> {
         Ok(())
     }
 
-    /// The function's type and its record, a call of it far or near, C's or Pascal's.
+    /// The function's type and its record, a call of it far or near, C's or
+    /// Pascal's.
     fn function_type(
         &mut self,
         function: &Function,
@@ -471,7 +493,8 @@ impl Builder<'_> {
         Ok((at, comment(TYPE_DEFINITION, data)))
     }
 
-    /// A module-level static: a function (flag 0x18, kind 0) or data (flag 0, kind 1) at its place.
+    /// A module-level static: a function (flag 0x18, kind 0) or data (flag 0,
+    /// kind 1) at its place.
     fn placed(
         &self,
         name: &str,
@@ -557,7 +580,8 @@ pub fn records(
     if !statics.is_empty() {
         module.push(comment(LOCALS, statics));
     }
-    // Names of types: typedefs and tags, as a local scope of the module lists them.
+    // Names of types: typedefs and tags, as a local scope of the module lists
+    // them.
     let mut names = Vec::new();
     for id in 0..info.types.len() {
         let (name, kind, target) = match &info.types[id] {
@@ -565,7 +589,8 @@ pub fn records(
             Type::Typedef { name, target } => (name.as_str(), TYPEDEF, *target),
             _ => continue,
         };
-        // A name of a type this unit cannot write is not written: nothing uses it.
+        // A name of a type this unit cannot write is not written: nothing uses
+        // it.
         let Ok(to) = builder.types.code(target) else { continue };
         names.extend([pascal(name)?, index(to)?, vec![kind]].concat());
     }
@@ -602,7 +627,8 @@ mod tests {
         Variable { name: name.into(), r#type, kind, location }
     }
 
-    /// `int f(int a) { int l; }` at 0..0x20, body at 6..0x1c, `_f` public; a global `_g` in data.
+    /// `int f(int a) { int l; }` at 0..0x20, body at 6..0x1c, `_f` public; a
+    /// global `_g` in data.
     fn object(
         types: Vec<Type>,
         variables: Vec<Variable>,
@@ -684,9 +710,11 @@ mod tests {
         comments(object).into_iter().filter(|(one, _)| *one == class).map(|(_, data)| data).collect()
     }
 
-    /// A function's records as Turbo C++ writes them (measured on its `-v` objects): its scope with the
-    /// parameters, last first, its body's with the locals and then the parameters, and both end where the
-    /// code does; a local is its type, 0x02 and its BP, a parameter's flag is 0x0A.
+    /// A function's records as Turbo C++ writes them (measured on its `-v`
+    /// objects): its scope with the parameters, last first, its body's with
+    /// the locals and then the parameters, and both end where the
+    /// code does; a local is its type, 0x02 and its BP, a parameter's flag is
+    /// 0x0A.
     #[test]
     fn a_function_is_two_scopes_with_its_parameters_and_locals() {
         let made = object(
@@ -714,9 +742,9 @@ mod tests {
         );
     }
 
-    /// A public function's type record follows its PUBDEF with the call's flags (0x04 far, 0x00 near) and
-    /// the return type, and a record of its own type, 0x18 for a function; a public variable's is its
-    /// type and 0.
+    /// A public function's type record follows its PUBDEF with the call's flags
+    /// (0x04 far, 0x00 near) and the return type, and a record of its own
+    /// type, 0x18 for a function; a public variable's is its type and 0.
     #[test]
     fn a_public_symbol_is_followed_by_its_type() {
         let global = variable("g", 0, Kind::Local, Location::Static { symbol: 1, disp: 0 });
@@ -763,9 +791,11 @@ mod tests {
             .collect()
     }
 
-    /// A struct's members, each with its bit width (0 for none), name and type; a member not where the
-    /// last ended is preceded by 0x40 and its offset, and the record ends 0xC0 and the size. The struct
-    /// has index 0x18 before its members' own (a pointer to it, 0x19, names it before its record).
+    /// A struct's members, each with its bit width (0 for none), name and type;
+    /// a member not where the last ended is preceded by 0x40 and its
+    /// offset, and the record ends 0xC0 and the size. The struct
+    /// has index 0x18 before its members' own (a pointer to it, 0x19, names it
+    /// before its record).
     #[test]
     fn a_struct_has_its_members_and_marks_the_padding() {
         let field = |name: &str, r#type, offset| Field { name: name.into(), r#type, offset, bits: None };
@@ -794,8 +824,8 @@ mod tests {
         assert!(types.contains(&vec![0x19, 0x00, 0x02, 0x00, TID_NEAR_POINTER, 0x18, 0x04]), "{types:?}");
     }
 
-    /// A type's index is one byte below 0x80 and past it 0x80 | its high bits and its low byte (Turbo C++
-    /// numbers 150 structs up to 0x80 0xAD).
+    /// A type's index is one byte below 0x80 and past it 0x80 | its high bits
+    /// and its low byte (Turbo C++ numbers 150 structs up to 0x80 0xAD).
     #[test]
     fn an_index_past_0x7f_takes_two_bytes() {
         assert_eq!(index(0x7F).unwrap(), [0x7F]);
@@ -805,8 +835,8 @@ mod tests {
         assert!(index(0x8000).is_err());
     }
 
-    /// What these records cannot say is refused by name: a register location, a bit field, an enum, a
-    /// 32-bit object, a language but C's.
+    /// What these records cannot say is refused by name: a register location, a
+    /// bit field, an enum, a 32-bit object, a language but C's.
     #[test]
     fn what_turbo_debugger_cannot_say_is_refused_by_name() {
         let refused = |made: Object| write::write(&made).unwrap_err().to_string();
@@ -870,9 +900,10 @@ mod tests {
         );
     }
 
-    /// A parameter that arrives in a register is an entry of the body's scope alone (Turbo C++ writes a register
-    /// parameter so, flag 0xC and the register's number: SI is 6, BL is 3), and one the optimiser removed has no
-    /// entry, which these records have no "optimized out" to say.
+    /// A parameter that arrives in a register is an entry of the body's scope
+    /// alone (Turbo C++ writes a register parameter so, flag 0xC and the
+    /// register's number: SI is 6, BL is 3), and one the optimiser removed has
+    /// no entry, which these records have no "optimized out" to say.
     #[test]
     fn a_register_parameter_is_the_bodys_entry_and_a_removed_one_is_left_out() {
         let entry = Range { section: 0, offset: 0, length: 7 };
@@ -893,7 +924,8 @@ mod tests {
             .into_iter()
             .filter(|(class, _)| matches!(*class, BEGIN_SCOPE | LOCALS | END_SCOPE))
             .collect();
-        // The function's scope holds the parameter a cell holds; the body's, the registers' and that one again.
+        // The function's scope holds the parameter a cell holds; the body's,
+        // the registers' and that one again.
         assert_eq!(scopes[1], (LOCALS, vec![1, b'a', 0x04, 0x0A, 0x06, 0x00]));
         assert_eq!(
             scopes[3],
@@ -904,9 +936,11 @@ mod tests {
         assert!(write::write(&wide).unwrap_err().to_string().contains("w is in register eax"));
     }
 
-    /// A pointer to a function points to a function type called as far as the pointer reaches: a near pointer's is a
-    /// near call (call byte 0), a far one's a far call (4). Turbo C++ says `near pointer _CS function near C` and
-    /// `far pointer function far C`; every such type was far, so a near pointer read `function far C`.
+    /// A pointer to a function points to a function type called as far as the
+    /// pointer reaches: a near pointer's is a near call (call byte 0), a
+    /// far one's a far call (4). Turbo C++ says `near pointer _CS function near
+    /// C` and `far pointer function far C`; every such type was far, so a
+    /// near pointer read `function far C`.
     #[test]
     fn a_pointer_to_a_function_points_to_a_function_called_as_far_as_it_reaches() {
         use llrm_object::debug::Reach::{Far, Near};
@@ -925,7 +959,8 @@ mod tests {
                 vec![variable("p", 2, Kind::Local, Location::Frame { disp: -2 })],
                 |_| {},
             );
-            // The function types among the type records: each ends with its call byte and a zero.
+            // The function types among the type records: each ends with its
+            // call byte and a zero.
             let types: Vec<Vec<u8>> = comments(&made)
                 .into_iter()
                 .filter(|(class, data)| *class == TYPE_DEFINITION && data.contains(&TID_FUNCTION) && data.len() > 3)
@@ -935,13 +970,15 @@ mod tests {
         };
         let far: Vec<u8> = call(true).iter().map(|data| data[data.len() - 2]).collect();
         let near: Vec<u8> = call(false).iter().map(|data| data[data.len() - 2]).collect();
-        // The function's own type (near here) and the pointer's target: far for a far pointer, near for a near one.
+        // The function's own type (near here) and the pointer's target: far for
+        // a far pointer, near for a near one.
         assert!(far.contains(&0x04), "a far pointer's function is called far: {far:?}");
         assert!(!near.contains(&0x04), "a near pointer's function is called near: {near:?}");
     }
 
-    /// Two types of the model that read alike, a pointer to `int` and one to `long` (the source spells each, so they
-    /// are two), are one record: Turbo C++ writes one, and a second only moved every later index.
+    /// Two types of the model that read alike, a pointer to `int` and one to
+    /// `long` (the source spells each, so they are two), are one record:
+    /// Turbo C++ writes one, and a second only moved every later index.
     #[test]
     fn pointers_to_scalars_of_two_spellings_are_one_record() {
         let spelled = |name: &str| Type::Basic { name: name.into(), scalar: Scalar::Int { bytes: 2, signed: true } };
@@ -959,8 +996,9 @@ mod tests {
         assert_eq!(definitions, 2);
     }
 
-    /// A parameter in its register until the function stores it into its cell is, for Turbo Debugger, the cell: a
-    /// parameter of the function's own scope, not the body's register parameter.
+    /// A parameter in its register until the function stores it into its cell
+    /// is, for Turbo Debugger, the cell: a parameter of the function's own
+    /// scope, not the body's register parameter.
     #[test]
     fn a_parameter_in_a_register_and_then_its_cell_is_the_functions_parameter_in_the_cell() {
         let list = Location::List(vec![
@@ -972,7 +1010,8 @@ mod tests {
             .into_iter()
             .filter(|(class, _)| matches!(*class, BEGIN_SCOPE | LOCALS | END_SCOPE))
             .collect();
-        // The function's scope holds it, as a frame parameter; the body's holds nothing of it.
+        // The function's scope holds it, as a frame parameter; the body's holds
+        // nothing of it.
         assert_eq!(scopes[1], (LOCALS, vec![1, b'a', 0x04, 0x0A, 0x06, 0x00]));
         assert!(
             !scopes.iter().any(|(class, data)| *class == LOCALS && data.windows(2).any(|pair| pair == [0x04, 0x0C])),

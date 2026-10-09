@@ -569,8 +569,8 @@ fn locals_are_zeroed_and_overlapping_ones_share_an_alloca() {
     assert!(text.contains(entry), "{text}");
 }
 
-/// A block local's scope is its lifetime markers, over the bytes of its place; the markers
-/// are declared once, and verify.
+/// A block local's scope is its lifetime markers, over the bytes of its place;
+/// the markers are declared once, and verify.
 #[test]
 fn a_locals_scope_is_its_lifetime_markers() {
     use crate::model::{Place, Storage};
@@ -594,8 +594,8 @@ fn a_locals_scope_is_its_lifetime_markers() {
     assert_eq!(text.matches("declare void @llvm.lifetime.start.p0").count(), 1, "{text}");
 }
 
-/// A lifetime is a block local's: a marker on anything else is a frontend's mistake, which
-/// a layout reading it would turn into a wrong frame.
+/// A lifetime is a block local's: a marker on anything else is a frontend's
+/// mistake, which a layout reading it would turn into a wrong frame.
 #[test]
 fn a_lifetime_marker_names_one_local() {
     use crate::model::{Place, Storage};
@@ -615,8 +615,9 @@ fn a_lifetime_marker_names_one_local() {
     assert!(error.to_string().contains("names one local place"), "{error}");
 }
 
-/// An aggregate assigned whole is a byte copy: `llvm.memcpy` of the bytes the instruction
-/// names, declared once. As word loads and stores it made an unwritten byte poison.
+/// An aggregate assigned whole is a byte copy: `llvm.memcpy` of the bytes the
+/// instruction names, declared once. As word loads and stores it made an
+/// unwritten byte poison.
 #[test]
 fn a_byte_copy_is_a_memcpy_of_its_bytes() {
     use crate::model::{Place, Storage};
@@ -649,8 +650,8 @@ fn a_byte_copy_is_a_memcpy_of_its_bytes() {
     assert_eq!(text.matches("declare void @llvm.memcpy.p0.p0.i16").count(), 1, "{text}");
 }
 
-/// A byte copy names two places and a positive constant count of bytes; anything else is a
-/// frontend's mistake a backend would copy wrongly.
+/// A byte copy names two places and a positive constant count of bytes;
+/// anything else is a frontend's mistake a backend would copy wrongly.
 #[test]
 fn a_byte_copy_takes_two_places_and_a_byte_count() {
     use crate::model::{Place, Storage};
@@ -1864,7 +1865,8 @@ fn a_fact_of_a_place_reaches_every_access_of_it() {
     );
     let loads: Vec<&str> = text.lines().filter(|one| one.contains("load i16")).collect();
     assert_eq!(loads.len(), 2, "{text}");
-    // The load of the place has both; the load of the projection is another place's access.
+    // The load of the place has both; the load of the projection is another
+    // place's access.
     assert!(loads.iter().any(|one| one.contains("!range") && one.contains("align 2")), "{text}");
     assert_eq!(loads.iter().filter(|one| one.contains("!range")).count(), 1, "{text}");
     assert!(
@@ -1873,8 +1875,9 @@ fn a_fact_of_a_place_reaches_every_access_of_it() {
     );
 }
 
-/// A range stated once of a member of an aggregate type is on every load of that
-/// member, reached through a place or a pointer; an access that is not that member has none.
+/// A range stated once of a member of an aggregate type is on every load of
+/// that member, reached through a place or a pointer; an access that is not
+/// that member has none.
 #[test]
 fn a_fact_of_a_member_reaches_every_access_of_it() {
     use llrm_mir::facts::{Bounds, Fact};
@@ -1914,7 +1917,8 @@ fn a_fact_of_a_place_or_member_the_module_lacks_is_refused() {
     }
 }
 
-/// A member and the subjects cross the wire; an access that names none writes as before.
+/// A member and the subjects cross the wire; an access that names none writes
+/// as before.
 #[test]
 fn members_and_their_facts_survive_the_codec() {
     use llrm_mir::facts::{Bounds, Fact};
@@ -1952,9 +1956,10 @@ fn a_block_only_resume_reaches_follows_its_dominators() {
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
 }
 
-/// A flat target's description lowers a 4-byte pointer to its one address space and
-/// the 32-bit layout, and refuses what it has no space for: it was every 4-byte pointer
-/// far (space 1, a 16-bit offset) under real mode's layout, whatever the target.
+/// A flat target's description lowers a 4-byte pointer to its one address space
+/// and the 32-bit layout, and refuses what it has no space for: it was every
+/// 4-byte pointer far (space 1, a 16-bit offset) under real mode's layout,
+/// whatever the target.
 #[test]
 fn a_flat_target_has_one_space_and_a_32_bit_layout() {
     use crate::model::{AddressKind, CallDistance, FloatReturn, ProcedureAbi, StackCleanup};
@@ -1989,7 +1994,8 @@ fn a_flat_target_has_one_space_and_a_32_bit_layout() {
     assert!(text.contains("define ptr @same(ptr %0) {"), "{text}");
     // Real mode's description makes the same 4-byte pointer a far one.
     assert!(llrm_mir::print::module(&emit(&program).remove(0).module).contains("ptr addrspace(1)"));
-    // A pointer kind the flat target has no space for is refused, not made near.
+    // A pointer kind the flat target has no space for is refused, not made
+    // near.
     let mut huge = program.clone();
     huge.modules[0].types[2].address = AddressKind::Huge;
     let refused = crate::mir::emit(&huge, &flat).remove(0).refused;

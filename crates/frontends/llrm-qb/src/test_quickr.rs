@@ -258,7 +258,8 @@ fn microsoft_profiles_have_no_sized_conversions() {
 
 #[test]
 fn print_and_str_show_sized_integers_by_value() {
-    // Printed as their Microsoft bit patterns these would be -25536, -56 and -294967296.
+    // Printed as their Microsoft bit patterns these would be -25536, -56 and
+    // -294967296.
     let source = "DIM u AS UNSIGNED INTEGER, b AS UNSIGNED BYTE, l AS UNSIGNED LONG, s AS BYTE\n\
         u = 40000: b = 200: l = 2000000000: l = l + l: s = -5\n\
         PRINT u; b; l; s\n\
@@ -477,7 +478,8 @@ fn quickr_program(source: &str) -> llrm_core::hir::model::Program {
     compiled(source).unwrap_or_else(|error| panic!("{error}"))
 }
 
-/// Each local of procedure `name` after the backend's layout: (name, low, high).
+/// Each local of procedure `name` after the backend's layout: (name, low,
+/// high).
 fn frame_after_layout(
     source: &str,
     name: &str,
@@ -621,7 +623,8 @@ fn augmented_assignment_applies_each_operator() {
         n = 7: n += 5: n -= 2: n *= 3: n \\= 4: n MOD= 5: n ^= 2: PRINT n\n\
         d = 1: d /= 4: PRINT d\n\
         f = 12: f AND= 10: f OR= 1: f XOR= 3: PRINT f\n";
-    // (7+5-2)*3 = 30; 30\4 = 7; 7 MOD 5 = 2; 2^2 = 4. 12 AND 10 = 8, OR 1 = 9, XOR 3 = 10.
+    // (7+5-2)*3 = 30; 30\4 = 7; 7 MOD 5 = 2; 2^2 = 4. 12 AND 10 = 8, OR 1 = 9,
+    // XOR 3 = 10.
     assert_eq!(printed(source), " 4 \n .25 \n 10 \n");
 }
 

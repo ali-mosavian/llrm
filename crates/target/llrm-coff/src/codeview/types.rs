@@ -1,5 +1,5 @@
-//! `.debug$T`: the model's types as `LF_*` records, numbered from 0x1000. A scalar is a primitive
-//! index and has no record.
+//! `.debug$T`: the model's types as `LF_*` records, numbered from 0x1000. A
+//! scalar is a primitive index and has no record.
 
 use llrm_object::debug::{Info, Reach, Scalar, Type, TypeId};
 use llrm_object::{Object, Unsupported};
@@ -196,8 +196,9 @@ impl Builder<'_> {
         Ok(made)
     }
 
-    /// A struct that is reached again while its fields are being written (a list's `next`) is its
-    /// forward reference; the whole struct has the same name, which is how a reader joins them.
+    /// A struct that is reached again while its fields are being written (a
+    /// list's `next`) is its forward reference; the whole struct has the
+    /// same name, which is how a reader joins them.
     fn structure(
         &mut self,
         id: TypeId,
@@ -214,7 +215,8 @@ impl Builder<'_> {
             put16(&mut data, 0);
             put16(&mut data, FORWARD_REFERENCE);
             put32(&mut data, 0);
-            // A struct has its derived class and vshape here; a union has neither.
+            // A struct has its derived class and vshape here; a union has
+            // neither.
             if !union {
                 put32(&mut data, 0);
                 put32(&mut data, 0);

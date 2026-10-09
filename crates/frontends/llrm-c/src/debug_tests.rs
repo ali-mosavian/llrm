@@ -40,9 +40,10 @@ fn c_symbols_read_with_their_types() {
             "DATA gu: union mix {b +0 UNSIGNED CHAR, w +0 UNSIGNED SHORT}",
             "DATA gul: UNSIGNED LONG",
             "DATA st: SHORT",
-            // The arguments the caller pushed: each is in its cell above the frame for the whole function. `l` is a
-            // copy of one, so it is in that cell too, and the reader, which tells a parameter by the sign
-            // of the offset, says so.
+            // The arguments the caller pushed: each is in its cell above the
+            // frame for the whole function. `l` is a copy of one, so it is in
+            // that cell too, and the reader, which tells a parameter by the
+            // sign of the offset, says so.
             "PARAM f.a: SHORT",
             "PARAM f.b: NEAR * struct pt {x +0 SHORT, y +2 LONG}",
             "PARAM f.c: RCHAR",
@@ -67,8 +68,8 @@ fn c_lines_are_the_main_files() {
         .flat_map(|one| omf::lines(one).1)
         .map(|(line, _)| line)
         .collect();
-    // A statement whose code the optimiser removed has no line (it had one while `-g` kept the stores); one it copied
-    // has two.
+    // A statement whose code the optimiser removed has no line (it had one
+    // while `-g` kept the stores); one it copied has two.
     assert_eq!(lines, [15, 16, 15, 16, 17]);
 }
 
@@ -135,9 +136,10 @@ fn a_debug_member_with_half_a_bit_field_is_refused() {
     assert!(why.0.contains("start or width alone"), "{why:?}");
 }
 
-/// What the backend hands every writer: `f`'s three parameters come before its local and are told
-/// apart from it, its code is placed, and the lines are the main file's. CodeView alone could not
-/// say a parameter from a local (its reader tells them by the offset's sign), so DWARF would have
+/// What the backend hands every writer: `f`'s three parameters come before its
+/// local and are told apart from it, its code is placed, and the lines are the
+/// main file's. CodeView alone could not say a parameter from a local (its
+/// reader tells them by the offset's sign), so DWARF would have
 /// had no `formal_parameter`.
 #[test]
 fn the_model_tells_parameters_from_locals_and_places_the_code() {
@@ -173,8 +175,8 @@ fn the_model_tells_parameters_from_locals_and_places_the_code() {
     assert_eq!(number("bp"), Some((None, Some(14))));
 }
 
-/// HIR's codec writes a variable's `parameter` key only where it is true, so a program with none
-/// encodes as before, and one with parameters round-trips.
+/// HIR's codec writes a variable's `parameter` key only where it is true, so a
+/// program with none encodes as before, and one with parameters round-trips.
 #[test]
 fn a_parameters_home_round_trips_through_the_codec_and_others_are_unchanged() {
     let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/debug.cgs")).expect("reads");

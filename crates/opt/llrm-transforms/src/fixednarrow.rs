@@ -1,15 +1,17 @@
-//! A fixed-point product whose operands' product fits the width: `llvm.smul.fix(a, b, s)`
-//! is `(a * b) >> s` at the width, as `mul` and `ashr` are, where `ranges` proves the
-//! 64-bit product the intrinsic stands for never exceeds 32 bits. isel lowers the
-//! intrinsic to a one-operand `imul` and `shrd`, which take EAX and EDX; the narrow form
-//! is `imul r, r` and `sar`.
+//! A fixed-point product whose operands' product fits the width:
+//! `llvm.smul.fix(a, b, s)` is `(a * b) >> s` at the width, as `mul` and `ashr`
+//! are, where `ranges` proves the 64-bit product the intrinsic stands for never
+//! exceeds 32 bits. isel lowers the intrinsic to a one-operand `imul` and
+//! `shrd`, which take EAX and EDX; the narrow form is `imul r, r` and `sar`.
 //!
-//! The test is on the operands: `smul.fix(65536, 65536, 16)` is 65536, but its product is 2^32.
+//! The test is on the operands: `smul.fix(65536, 65536, 16)` is 65536, but its
+//! product is 2^32.
 //!
-//! A factor `v << k` or `v + v` of the product, which cannot wrap since its interval fits,
-//! leaves it for the scale: `(v * 2^k * b) >> s` is `(v * b) >> (s - k)`, so `x * 2 * y` in Q8
-//! is one `sar` by 7, and a fixed-point integer made by `<< s` and scaled back costs nothing.
-//! It runs once, before LSR, which would hide such a shift in an induction variable.
+//! A factor `v << k` or `v + v` of the product, which cannot wrap since its
+//! interval fits, leaves it for the scale: `(v * 2^k * b) >> s` is `(v * b) >>
+//! (s - k)`, so `x * 2 * y` in Q8 is one `sar` by 7, and a fixed-point integer
+//! made by `<< s` and scaled back costs nothing. It runs once, before LSR,
+//! which would hide such a shift in an induction variable.
 
 use llrm_analysis::memory::Unit;
 use llrm_analysis::{cfg, ranges};
@@ -65,7 +67,8 @@ struct Narrow {
     scale: u32,
 }
 
-/// The products whose operands, less the shifts they carry, multiply within their width.
+/// The products whose operands, less the shifts they carry, multiply within
+/// their width.
 fn narrowable(
     unit: &passes::Unit,
     analyses: &mut Analyses,
@@ -100,7 +103,8 @@ fn narrowable(
             };
             let limit = BigInt::from(1) << (width - 1);
             let fits = |low: &BigInt, high: &BigInt| -&limit <= *low && *high < limit;
-            // `v << k` or `v + v` where `v`'s interval keeps it from wrapping: `v * 2^k`.
+            // `v << k` or `v + v` where `v`'s interval keeps it from wrapping:
+            // `v * 2^k`.
             let doubled = |one: Operand, scale: u32| -> Option<(Operand, u32)> {
                 let (_, op) = memory.defining(one)?;
                 let (source, bits) = match (&op.opcode, &op.operands[..]) {

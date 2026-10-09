@@ -1,6 +1,7 @@
-//! `-g`: a module's debug information as [`llrm_object::debug::Info`], whichever format a writer
-//! encodes it in. [`described`] reads MIR's metadata (`llrm_mir::debuginfo`); once the code is
-//! laid out, [`laid_out`] adds each procedure's place, variables and lines.
+//! `-g`: a module's debug information as [`llrm_object::debug::Info`],
+//! whichever format a writer encodes it in. [`described`] reads MIR's metadata
+//! (`llrm_mir::debuginfo`); once the code is laid out, [`laid_out`] adds each
+//! procedure's place, variables and lines.
 
 use std::collections::BTreeSet;
 
@@ -39,17 +40,20 @@ pub struct Debug {
     pub dialect: model::Dialect,
     pub producer: model::Producer,
     pub frame_register: String,
-    /// The format finds a frame cell from the canonical frame address (`FrameBase::Cfa`); set where the format is.
+    /// The format finds a frame cell from the canonical frame address
+    /// (`FrameBase::Cfa`); set where the format is.
     pub cfa: bool,
-    /// The format says where a value is over a range of code: a cell reached through the stack pointer is told range
-    /// by range.
+    /// The format says where a value is over a range of code: a cell reached
+    /// through the stack pointer is told range by range.
     pub ranges: bool,
-    /// The target's register file, as described: which registers are views of which, and which hold values.
+    /// The target's register file, as described: which registers are views of
+    /// which, and which hold values.
     pub file: Vec<llrm_target::registers::Register>,
-    /// What the target calls a call's return address in call frame information; empty where it numbers none.
+    /// What the target calls a call's return address in call frame information;
+    /// empty where it numbers none.
     pub return_register: String,
-    /// The frame and stack registers of 32-bit code, and the bytes a call pushes (near, far): what its frame
-    /// rows are read from.
+    /// The frame and stack registers of 32-bit code, and the bytes a call
+    /// pushes (near, far): what its frame rows are read from.
     pub frame: Option<(iced_x86::Register, iced_x86::Register, [i64; 2])>,
     pub registers: Vec<model::Register>,
     pub types: Vec<model::Type>,
@@ -89,7 +93,8 @@ fn scalar(scalar: di::Scalar) -> model::Scalar {
     }
 }
 
-/// `one`, its targets and members already read into `nodes`; `near` the width of an offset.
+/// `one`, its targets and members already read into `nodes`; `near` the width
+/// of an offset.
 fn typed(
     one: &di::Type,
     nodes: &IndexMap<MetadataId, model::TypeId>,
@@ -155,8 +160,8 @@ fn typed(
     })
 }
 
-/// `module`'s debug information for `arch`, each global and function by the symbol `names` gives
-/// it; None without any.
+/// `module`'s debug information for `arch`, each global and function by the
+/// symbol `names` gives it; None without any.
 pub fn described(
     module: &llrm_mir::Module,
     names: &IndexMap<(Space, i64), String>,
@@ -172,7 +177,8 @@ pub fn described(
     let symbol = |name: &str| {
         module.named(name).and_then(|id| names.get(&(globals::space(module, id), i64::from(id.0)))).cloned()
     };
-    // Every type has its place before any is read: a member may name one made after it.
+    // Every type has its place before any is read: a member may name one made
+    // after it.
     let listed = di::types(module);
     let nodes: IndexMap<MetadataId, model::TypeId> = listed.iter().enumerate().map(|(at, &id)| (id, at)).collect();
     let mut types = Vec::new();
@@ -256,8 +262,9 @@ fn located(at: super::valuetrack::Where) -> Location {
     }
 }
 
-/// The one place that holds a value in every range of `ranges`, which must run on from the first without a gap to the
-/// code `until`: the place, and the offset the first range starts at.
+/// The one place that holds a value in every range of `ranges`, which must run
+/// on from the first without a gap to the code `until`: the place, and the
+/// offset the first range starts at.
 fn stable(
     ranges: &[(usize, usize, Vec<super::valuetrack::Where>)],
     until: usize,
@@ -272,8 +279,9 @@ fn stable(
     Some((first.0, place))
 }
 
-/// A variable's parts, each the bytes of it (none for all of it) with where it is over ranges of the code, as the
-/// variable's one location over the code: the whole where there is one, else the pieces there are, in order, a piece
+/// A variable's parts, each the bytes of it (none for all of it) with where it
+/// is over ranges of the code, as the variable's one location over the code:
+/// the whole where there is one, else the pieces there are, in order, a piece
 /// nowhere left a gap.
 fn combined(
     parts: Vec<(Option<(u32, u32)>, Vec<(usize, usize, super::valuetrack::Where)>)>
@@ -324,9 +332,10 @@ fn combined(
     out
 }
 
-/// `module`'s debug information for the object `source`, its code laid out in `segments` (a procedure's
-/// is the one `symbols` puts it in) at `symbols`, each symbol at its index in `ids`; only what a symbol still
-/// defines is named.
+/// `module`'s debug information for the object `source`, its code laid out in
+/// `segments` (a procedure's is the one `symbols` puts it in) at `symbols`,
+/// each symbol at its index in `ids`; only what a symbol still defines is
+/// named.
 pub fn laid_out(
     debug: &Debug,
     module: &masm::Module,
@@ -359,7 +368,8 @@ pub fn laid_out(
         types: debug.types.clone(),
         ..Info::default()
     };
-    // The register the code would address a cell by is the one pushed below the return address: a frame address away.
+    // The register the code would address a cell by is the one pushed below the
+    // return address: a frame address away.
     if let Some((.., entry)) = debug.frame.filter(|_| debug.cfa) {
         info.frame_base = model::FrameBase::Cfa { bias: 2 * entry[0] };
     }
@@ -393,7 +403,8 @@ pub fn laid_out(
             bound(masm::Mark::BodyStart, start..end).unwrap_or(0),
             bound(masm::Mark::BodyEnd, start + 1..end + 1).unwrap_or(end - start),
         );
-        // How to find the caller from each place in the code, where the code can be followed.
+        // How to find the caller from each place in the code, where the code
+        // can be followed.
         let frame = debug
             .frame
             .and_then(
@@ -422,8 +433,10 @@ pub fn laid_out(
             let kind = if one.parameter { Kind::Parameter } else { Kind::Local };
             let addr = match &one.place {
                 DebugPlace::At(addr) => addr,
-                // A parameter that arrives in a register is there until the body starts, and no longer said:
-                // the register is the allocator's from then on. The range takes in the body's first instruction.
+                // A parameter that arrives in a register is there until the
+                // body starts, and no longer said: the register is the
+                // allocator's from then on. The range takes in the body's first
+                // instruction.
                 DebugPlace::Register(register) => {
                     let entry = model::Range { section, offset: start, length: body.0 + 1 };
                     let location =
@@ -433,7 +446,8 @@ pub fn laid_out(
                 }
                 // Found over the code from what the notes say.
                 DebugPlace::Tracked(_) => {
-                    // Where a frame register would sit below the canonical frame address: the return address and the
+                    // Where a frame register would sit below the canonical
+                    // frame address: the return address and the
                     // register saved.
                     let bias = match (info.frame_base, debug.frame) {
                         (model::FrameBase::Cfa { bias }, _) => bias,
@@ -448,9 +462,11 @@ pub fn laid_out(
                         .filter(|&&(_, at)| (start..=end).contains(&at))
                         .map(|&(mark, at)| (at - start, mark))
                         .collect();
-                    // A note a pass lost with the instruction it stood before leaves the variable at whatever the notes
-                    // before it said, which may be a value it no longer has: a variable with one is
-                    // said to be nowhere.
+                    // A note a pass lost with the instruction it stood before
+                    // leaves the variable at whatever the notes
+                    // before it said, which may be a value it no longer has: a
+                    // variable with one is said to be
+                    // nowhere.
                     let emitted: BTreeSet<u32> = marks
                         .iter()
                         .filter_map(|(_, mark)| if let masm::Mark::Note(note) = mark { Some(*note) } else { None })
@@ -483,10 +499,14 @@ pub fn laid_out(
                         .filter(|((variable, _), _)| *variable == node)
                         .map(|((_, piece), ranges)| (piece, ranges))
                         .collect();
-                    // A format that names one place for a scope (CodeView 4, Turbo Debugger) says a variable that is in
-                    // one register, or one cell, from where it first has a value to the last
-                    // statement (past it the epilogue puts the registers back, and no line is there
-                    // to read): the place every range of it has. One that has none, or has a gap, it leaves out.
+                    // A format that names one place for a scope (CodeView 4,
+                    // Turbo Debugger) says a variable that is in
+                    // one register, or one cell, from where it first has a
+                    // value to the last statement (past it
+                    // the epilogue puts the registers back, and no line is
+                    // there to read): the place every range
+                    // of it has. One that has none, or has a gap, it leaves
+                    // out.
                     let single = match &parts[..] {
                         [(None, ranges)] if matches!(info.frame_base, model::FrameBase::Register) => {
                             Some(stable(ranges, body.1))
@@ -536,7 +556,8 @@ pub fn laid_out(
                     });
                     continue;
                 }
-                // The optimiser removed it: no location anywhere is "optimized out".
+                // The optimiser removed it: no location anywhere is "optimized
+                // out".
                 DebugPlace::Gone => {
                     variables.push(Variable {
                         name: one.name.clone(),
@@ -550,7 +571,8 @@ pub fn laid_out(
             match addr.space {
                 Space::Frame => {
                     let home = Location::Frame { disp: addr.disp };
-                    // The argument is in its register until the function stores it into the home.
+                    // The argument is in its register until the function stores
+                    // it into the home.
                     let stored = one
                         .arrives
                         .zip(debug.frame.filter(|_| procedure.body.bits == 32))
@@ -589,8 +611,10 @@ pub fn laid_out(
                 }
             }
         }
-        // A format that finds a cell by the frame register says nothing of one in a function that keeps none (the code
-        // is not changed for `-g` to keep it), nor of a place that is in a cell of a list: it is left out.
+        // A format that finds a cell by the frame register says nothing of one
+        // in a function that keeps none (the code is not changed for
+        // `-g` to keep it), nor of a place that is in a cell of a list: it is
+        // left out.
         if matches!(info.frame_base, model::FrameBase::Register)
             && procedure.body.bits == 32
             && frame.as_ref().is_some_and(|rows| !rows.iter().any(|row| row.cfa_register == debug.frame_register))
@@ -600,9 +624,10 @@ pub fn laid_out(
                 Location::List(entries) => entries.iter().any(|(_, place)| matches!(place, Location::Frame { .. })),
                 _ => false,
             };
-            // Through the stack pointer, a format with ranges says it over each stretch the pointer is as far from the
-            // frame address: the cell is `disp - bias` from the address, and the address is the register
-            // plus the row's offset.
+            // Through the stack pointer, a format with ranges says it over each
+            // stretch the pointer is as far from the frame address:
+            // the cell is `disp - bias` from the address, and the address is
+            // the register plus the row's offset.
             let bias = debug.frame.map(|(.., entry)| entry[usize::from(procedure.far)] + entry[0]);
             let rows = frame.as_deref().filter(|_| debug.ranges);
             variables = variables
@@ -644,7 +669,8 @@ pub fn laid_out(
             frame: frame.unwrap_or_default(),
         });
     }
-    // The code of each segment that has a procedure: from the first to its last byte.
+    // The code of each segment that has a procedure: from the first to its last
+    // byte.
     for section in starts.iter().map(|&(section, _)| section).collect::<std::collections::BTreeSet<_>>() {
         let first = starts.iter().find(|&&(at, _)| at == section).map_or(0, |&(_, one)| one);
         info.code.push(model::Range { section, offset: first, length: segments[section].image.len() - first });
@@ -671,8 +697,9 @@ mod tests {
         Where::Place(Place::Register(register))
     }
 
-    /// A format with one place for a scope takes the place every range has, not the first of the first range: `k` was
-    /// computed in `ax` and copied to `bx` for a call that clobbers `ax`, so `bx` is its place.
+    /// A format with one place for a scope takes the place every range has, not
+    /// the first of the first range: `k` was computed in `ax` and copied to
+    /// `bx` for a call that clobbers `ax`, so `bx` is its place.
     #[test]
     fn the_place_a_scope_is_given_is_one_every_range_holds() {
         use iced_x86::Register::{AX, BX};
@@ -680,7 +707,8 @@ mod tests {
         assert_eq!(stable(&ranges, 11), Some((2, reg(BX))));
     }
 
-    /// A gap, a range that stops short of the last statement, and a place no range shares, each leave the variable out.
+    /// A gap, a range that stops short of the last statement, and a place no
+    /// range shares, each leave the variable out.
     #[test]
     fn a_variable_that_has_a_gap_or_stops_short_or_moves_has_no_place_for_a_scope() {
         use iced_x86::Register::{AX, BX};

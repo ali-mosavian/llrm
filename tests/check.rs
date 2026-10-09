@@ -1,19 +1,22 @@
 //! tests/check: one file in, CHECK lines out, lit and FileCheck style.
 //!
 //! A file's `RUN:` line names a tool and its arguments, `%s` being the file
-//! (`not` first: it must fail). The tool's stdout and stderr are matched against
-//! the file's directives, in a comment (`;`, `'` or `//`):
+//! (`not` first: it must fail). The tool's stdout and stderr are matched
+//! against the file's directives, in a comment (`;`, `'` or `//`):
 //!
 //!   CHECK: text            a later line contains it
 //!   CHECK-LABEL: text      the same, naming where a block starts
 //!   CHECK-NEXT: text       the line right after the last match contains it
-//!   CHECK-NOT: text        no line between the last match and the next one contains it
+//!   CHECK-NOT: text        no line between the last match and the next one
+//! contains it
 //!
-//! `{{regex}}` inside a pattern is a regular expression; runs of blanks match each other.
+//! `{{regex}}` inside a pattern is a regular expression; runs of blanks match
+//! each other.
 //!
-//! A `RUN:` line may name several configurations: each `{a | b | c}` in it is every alternative,
-//! and the product of its groups is run, each against the same directives. Equal groups choose
-//! together (`--dialect {qb45 | pds71} --runtime {qb45 | pds71}` is two runs). A directive may be
+//! A `RUN:` line may name several configurations: each `{a | b | c}` in it is
+//! every alternative, and the product of its groups is run, each against the
+//! same directives. Equal groups choose together (`--dialect {qb45 | pds71}
+//! --runtime {qb45 | pds71}` is two runs). A directive may be
 //! tagged `CHECK[-Os]:` to hold only of the runs whose line contains `-Os`.
 
 use std::path::{Path, PathBuf};
@@ -30,7 +33,8 @@ enum Kind {
 
 #[derive(Debug)]
 struct Directive {
-    /// The text a run's line must contain for this to hold of it; none, of every run.
+    /// The text a run's line must contain for this to hold of it; none, of
+    /// every run.
     only: Option<String>,
     kind: Kind,
     pattern: String,
@@ -73,7 +77,8 @@ fn run_lines(source: &str) -> Vec<String> {
         .collect()
 }
 
-/// `line` once for each choice among its `{a | b}` groups; equal groups choose alike.
+/// `line` once for each choice among its `{a | b}` groups; equal groups choose
+/// alike.
 fn expanded(line: &str) -> Vec<String> {
     let group = Regex::new(r"\{([^{}|]*(?:\|[^{}|]*)+)\}").expect("a regex");
     let mut distinct: Vec<(String, Vec<String>)> = Vec::new();
@@ -92,7 +97,8 @@ fn expanded(line: &str) -> Vec<String> {
     lines
 }
 
-/// The pattern as a regex: literal text escaped, `{{..}}` kept, blanks any run of blanks.
+/// The pattern as a regex: literal text escaped, `{{..}}` kept, blanks any run
+/// of blanks.
 fn matcher(pattern: &str) -> Regex {
     let mut out = String::new();
     let mut rest = pattern;
@@ -275,8 +281,8 @@ fn test_a_run_line_is_each_choice_of_its_groups() {
     );
 }
 
-/// A second configuration that breaks must fail the file, and a directive tagged for
-/// the first must not be asked of it.
+/// A second configuration that breaks must fail the file, and a directive
+/// tagged for the first must not be asked of it.
 #[test]
 fn test_a_second_configuration_that_breaks_fails_the_file() {
     let source = "// RUN: t {-O2 | -Os}\n// CHECK: rep movsd\n// CHECK[-Os]: pop es\n";

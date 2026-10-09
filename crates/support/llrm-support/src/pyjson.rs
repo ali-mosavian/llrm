@@ -77,7 +77,8 @@ pub fn loads(text: &str) -> Result<Json, String> {
     loads_with(text, None)
 }
 
-/// `json.loads(text, object_pairs_hook=hook)`; the hook's error propagates as it is.
+/// `json.loads(text, object_pairs_hook=hook)`; the hook's error propagates as
+/// it is.
 pub fn loads_with(
     text: &str,
     hook: PairsHook,

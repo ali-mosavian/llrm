@@ -182,8 +182,9 @@ done:
     assert!(close(odds.probability(at("entry"), at("early")), 34.0 / 100.0));
 }
 
-/// GCC's `PRED_NEGATIVE_RETURN`, `PRED_NULL_RETURN` and `PRED_CONST_RETURN`: a path that only returns a
-/// constant is the exception, all but never when the constant is negative (an error code).
+/// GCC's `PRED_NEGATIVE_RETURN`, `PRED_NULL_RETURN` and `PRED_CONST_RETURN`: a
+/// path that only returns a constant is the exception, all but never when the
+/// constant is negative (an error code).
 #[test]
 fn test_a_path_that_returns_a_constant_is_unlikely_by_what_it_returns() {
     let shape = |returned: &str, ty: &str| {
@@ -223,8 +224,9 @@ done:
     }
 }
 
-/// Nib's bool is a byte: a call proven to return 0 or 1 is a truth value, as an `i1` is, and `!= 0` of it says
-/// nothing of how often it holds (queens' `if safe(..)` was given 62.5%).
+/// Nib's bool is a byte: a call proven to return 0 or 1 is a truth value, as an
+/// `i1` is, and `!= 0` of it says nothing of how often it holds (queens' `if
+/// safe(..)` was given 62.5%).
 #[test]
 fn test_a_call_ranged_to_a_truth_value_is_no_zero_compare() {
     let text = |range: &str| {
@@ -458,7 +460,8 @@ out:
     assert!(close(odds.frequency.get(&at("out")).copied(), 1.0), "{:?}", odds.frequency);
 }
 
-/// `@f` branching on `compare` of `@callee`'s result, `declared` its declaration.
+/// `@f` branching on `compare` of `@callee`'s result, `declared` its
+/// declaration.
 fn three_way_branch(
     declared: &str,
     callee: &str,
@@ -737,9 +740,11 @@ out:
     );
 }
 
-/// Every branch in a counted loop was decided by running the loop's counters through all its trips again: k branches in
-/// a loop of n trips ran it k times (`nbody_single -Omax`: `peel` 22% of the compile, 17 points in `counted`). The
-/// counters' values at each trip are the loop's, so the loop is run once and each branch reads them.
+/// Every branch in a counted loop was decided by running the loop's counters
+/// through all its trips again: k branches in a loop of n trips ran it k times
+/// (`nbody_single -Omax`: `peel` 22% of the compile, 17 points in `counted`).
+/// The counters' values at each trip are the loop's, so the loop is run once
+/// and each branch reads them.
 #[test]
 fn test_a_counted_loop_is_run_once_for_all_the_branches_in_it() {
     let guards = 6;
@@ -775,9 +780,10 @@ fn test_a_counted_loop_is_run_once_for_all_the_branches_in_it() {
     assert!(close(odds.probability(at("g3"), at("e3")), 0.5), "{:?}", odds.taken);
 }
 
-/// Every loop's weighing asked every edge which loop's trips fix it, and each ask walked the loops around the block and
-/// made a set of its successors: a nest 16 deep read 16 loops x every edge x 16 loops (lir jumps on it: 73 Minstr, a
-/// third of it here). An edge's answer does not change between asks.
+/// Every loop's weighing asked every edge which loop's trips fix it, and each
+/// ask walked the loops around the block and made a set of its successors: a
+/// nest 16 deep read 16 loops x every edge x 16 loops (lir jumps on it: 73
+/// Minstr, a third of it here). An edge's answer does not change between asks.
 #[test]
 fn test_a_nest_of_counted_loops_asks_each_edge_which_trips_fix_it_once() {
     let depth = 16;

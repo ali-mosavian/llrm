@@ -158,7 +158,8 @@ pub fn same_length(
     )
 }
 
-/// A push of `value` as a dword is more bytes than its two word pushes (`select` sizes both).
+/// A push of `value` as a dword is more bytes than its two word pushes
+/// (`select` sizes both).
 pub fn split_push_smaller(
     bits: u32,
     value: i64,
@@ -177,8 +178,8 @@ pub fn split_push_smaller(
     )
 }
 
-/// Tuned for size, the dword push of `i` is more bytes than its two word pushes. Two pushes
-/// are a clock slower than one, so only there.
+/// Tuned for size, the dword push of `i` is more bytes than its two word
+/// pushes. Two pushes are a clock slower than one, so only there.
 pub fn splits_smaller(
     cx: &Cx,
     i: &Imm,
@@ -186,7 +187,8 @@ pub fn splits_smaller(
     cx.cpu().size && i.width == 4 && i.address.is_none() && split_push_smaller(cx.bits(), i.value)
 }
 
-/// Two word pushes join into one dword push unless tuned for size and the dword is longer.
+/// Two word pushes join into one dword push unless tuned for size and the dword
+/// is longer.
 pub fn joins_no_larger(
     cx: &Cx,
     high: &Imm,
@@ -375,8 +377,10 @@ pub fn delays(
     {
         return false;
     }
-    // A write to memory crosses where the cell still holds after it (`spiller::_keeps`: the optimizer's proofs
-    // included); anything else must write registers alone, which the lane check below keeps from the load's.
+    // A write to memory crosses where the cell still holds after it
+    // (`spiller::_keeps`: the optimizer's proofs included); anything else
+    // must write registers alone, which the lane check below keeps from the
+    // load's.
     let writes_memory = crossed_what.dests.iter().any(|dest| matches!(dest, Loc::Mem(_)));
     let load_cell = match load.what.as_ref().map(|what| what.sources.as_slice()) {
         Some([Loc::Mem(cell)]) => Some(cell),

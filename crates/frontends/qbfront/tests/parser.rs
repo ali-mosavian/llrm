@@ -2101,8 +2101,9 @@ fn volatile_goes_after_as_and_byref_is_accepted() {
     );
 }
 
-/// A near runtime's literal was laid out by a table of qbfront's own (length at 0, a data pointer at 2, bytes
-/// from 4) beside the runtime description's: two owners of one fact. The literal follows the description.
+/// A near runtime's literal was laid out by a table of qbfront's own (length at
+/// 0, a data pointer at 2, bytes from 4) beside the runtime description's: two
+/// owners of one fact. The literal follows the description.
 #[test]
 fn a_near_string_literal_is_laid_out_as_the_runtime_description_says() {
     for (dialect, runtime) in [(Dialect::QuickBasic45, "qb45"), (Dialect::Pds71, "pds71")] {
@@ -2121,8 +2122,9 @@ fn a_near_string_literal_is_laid_out_as_the_runtime_description_says() {
     }
 }
 
-/// The near-data budget was a literal 64 KiB: a target whose data segment holds 1 KiB got a 2 KiB array
-/// accepted, and a target with no segments was refused one. The target's description says how much, once.
+/// The near-data budget was a literal 64 KiB: a target whose data segment holds
+/// 1 KiB got a 2 KiB array accepted, and a target with no segments was refused
+/// one. The target's description says how much, once.
 #[test]
 fn the_near_data_budget_is_the_targets_segment() {
     let module = parse("DIM SHARED a(1 TO 1000) AS INTEGER\na(1) = 1\n", Dialect::Pds71).unwrap();

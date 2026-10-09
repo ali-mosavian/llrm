@@ -86,7 +86,8 @@ pub struct Plan {
 
 impl Plan {}
 
-/// `values` of `body` decided: how each is spilled, and the slots of those stored.
+/// `values` of `body` decided: how each is spilled, and the slots of those
+/// stored.
 pub fn planned(
     body: &LirBody,
     values: &BTreeSet<u32>,
@@ -119,7 +120,8 @@ fn planned_with(
         _stable_loads_by(body, values, &IndexMap::default(), postings)
     });
     frame_loads.extend(llrm_support::debug::timed("spill frame loads", || _frame_loads(body, values)));
-    // A phi's value the program also stores to a cell the body has not written since is read from there.
+    // A phi's value the program also stores to a cell the body has not written
+    // since is read from there.
     if !body.homes.is_empty() {
         let widths: IndexMap<u32, u32> = body
             .blocks
@@ -190,12 +192,15 @@ pub fn spilled_from(
     Ok((body, made.union(&merged).copied().collect()))
 }
 
-/// `spilled_from`, with `plain` kept out of the merging of updates into one register value, and what that merging made
-/// told apart from the rest: (the body, the values made to live for one use, the values made to live across several).
+/// `spilled_from`, with `plain` kept out of the merging of updates into one
+/// register value, and what that merging made told apart from the rest: (the
+/// body, the values made to live for one use, the values made to live across
+/// several).
 ///
-/// A merged value that is spilled in its turn is merged again, as long as it is not told to be plain: a spill that
-/// makes what it spills, without end (`chain` at N=7 with -m16 never finished). The caller names each merged value
-/// plain once it is spilled.
+/// A merged value that is spilled in its turn is merged again, as long as it is
+/// not told to be plain: a spill that makes what it spills, without end
+/// (`chain` at N=7 with -m16 never finished). The caller names each merged
+/// value plain once it is spilled.
 pub fn spilled_apart(
     body: &LirBody,
     values: &BTreeSet<u32>,
@@ -245,9 +250,11 @@ pub fn materialized(
     let rebuilt_values: BTreeSet<u32> = rebuilt.keys().copied().collect();
     let mut cells = _Cells::new(rebuilt.clone());
 
-    // The blocks holding an instruction the cleanup after this loop removes or anchors.
+    // The blocks holding an instruction the cleanup after this loop removes or
+    // anchors.
     let mut marked: BTreeSet<usize> = BTreeSet::new();
-    // An instruction that names none of the values below is left as it is, so a block with none is not looked at.
+    // An instruction that names none of the values below is left as it is, so a
+    // block with none is not looked at.
     let relevant: BTreeSet<u32> = stored
         .iter()
         .chain(rebuilt.keys())
@@ -394,7 +401,8 @@ pub fn materialized(
             if let Some((read, loaded)) = _memory_source_read_first(&one, &stored, fresh) {
                 one = loaded;
                 fresh += 1;
-                // The read names the cell's values: the spilled ones come back first.
+                // The read names the cell's values: the spilled ones come back
+                // first.
                 let (reloads, renamed) = _reloaded(&read, &stored, frame, &mut fresh)?;
                 insns.extend(reloads);
                 insns.push(if renamed.is_empty() { read } else { _renamed(&read, &renamed) });
@@ -486,7 +494,8 @@ pub fn materialized(
     Ok((result, made, merged))
 }
 
-/// The reloads of the spilled values `one` reads, and the value each is read as.
+/// The reloads of the spilled values `one` reads, and the value each is read
+/// as.
 fn _reloaded(
     one: &Insn,
     stored: &BTreeSet<u32>,
@@ -516,7 +525,8 @@ fn _sunk_from_copies<'b>(
     reading: &BTreeSet<u32>,
 ) -> Cow<'b, LirBody> {
     let moved = |one: &Insn| _group_source(one).is_some_and(|source| reading.contains(&source.value));
-    // A copy of a value in `reading` reads it, so it is among that value's readers.
+    // A copy of a value in `reading` reads it, so it is among that value's
+    // readers.
     let any = postings::following(body, |postings| {
         reading.iter().any(|value| postings.uses(*value).iter().any(|at| moved(_at(body, *at))))
     });
@@ -572,7 +582,8 @@ fn _short_update_runs<'b>(
     frame: &mut Frame,
     fresh: u32,
 ) -> Result<(Cow<'b, LirBody>, u32), Error> {
-    // A run is a plain move into a stored value followed by something: only a definition of one can start it.
+    // A run is a plain move into a stored value followed by something: only a
+    // definition of one can start it.
     let possible = postings::following(body, |postings| {
         stored
             .iter()
@@ -813,13 +824,15 @@ thread_local! {
     static EXAMINED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many instructions this thread has looked at for the copies of a value, for a test that a spill asks of the web
-/// it is in and not of every move in the body.
+/// How many instructions this thread has looked at for the copies of a value,
+/// for a test that a spill asks of the web it is in and not of every move in
+/// the body.
 pub fn examined() -> usize {
     EXAMINED.with(std::cell::Cell::get)
 }
 
-/// The values a plain move copies to or from `value`, from the instructions that name it alone.
+/// The values a plain move copies to or from `value`, from the instructions
+/// that name it alone.
 fn _copied_by(
     body: &LirBody,
     postings: &Postings,
@@ -844,8 +857,9 @@ fn _copied_by(
         .collect()
 }
 
-/// The plain-move neighbours of the values asked about, worked out as they are asked from the occurrences of each: a
-/// spill asks of one copy web, not of every move in the body.
+/// The plain-move neighbours of the values asked about, worked out as they are
+/// asked from the occurrences of each: a spill asks of one copy web, not of
+/// every move in the body.
 struct Adjacent<'b> {
     body: &'b LirBody,
     postings: &'b Postings,
@@ -881,7 +895,8 @@ fn siblings_over(
         return Ok(BTreeSet::new());
     }
     drop(adjacency);
-    // Only the copy webs that hold a value of `values` are grown from: the others are asked of by no one.
+    // Only the copy webs that hold a value of `values` are grown from: the
+    // others are asked of by no one.
     let wanted: BTreeSet<u32> = {
         let mut web: BTreeSet<u32> = values.iter().copied().filter(|one| adjacent.has(*one)).collect();
         let mut work: Vec<u32> = web.iter().copied().collect();
@@ -894,7 +909,8 @@ fn siblings_over(
         }
         web
     };
-    // A shared slot holds each member at every width it is used, not just moved.
+    // A shared slot holds each member at every width it is used, not just
+    // moved.
     let widths = llrm_support::debug::timed("siblings widths", || _widest_by(body, &wanted, postings));
 
     // Only pairs among the values of those webs are asked of.
@@ -915,7 +931,8 @@ fn siblings_over(
                 body.name
             );
         }
-        // The copies, the web and the widths from the occurrences are those of a walk of the whole body.
+        // The copies, the web and the widths from the occurrences are those of
+        // a walk of the whole body.
         let mut everywhere: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
         for one in body.blocks.iter().flat_map(|block| &block.insns) {
             let Some(pair) = _plain_move(one) else { continue };
@@ -1068,7 +1085,8 @@ fn _color_slots(
     }
     let mut pending: Vec<u32> =
         values.iter().copied().filter(|value| !frame.slots.contains_key(&SlotKey::from(*value))).collect();
-    // After a second return from `setjmp` a slot another value used holds that value: none is shared.
+    // After a second return from `setjmp` a slot another value used holds that
+    // value: none is shared.
     if body.returns_twice {
         for value in pending {
             frame.slot(value, widths[&value])?;
@@ -1109,7 +1127,8 @@ fn _color_slots(
     Ok(())
 }
 
-/// What each of `values` is copied to or from: another value, or a frame cell's home.
+/// What each of `values` is copied to or from: another value, or a frame cell's
+/// home.
 fn _copied_with(
     body: &LirBody,
     values: &BTreeSet<u32>,
@@ -1154,8 +1173,10 @@ fn _existing_colors(
     if llrm_support::env_set("LLRM_CHECK_COLORS") {
         let whole = _existing_colors_by(body, frame, true);
         assert!(_same_colors(&found.0, &whole.0), "{}: the slot colors differ from working them out whole", body.name);
-        // What is asked of a value is where it is live (`slots::fits` overlaps segments). Its weight is not read, and
-        // counts a value an instruction names twice once more than the body made of the homes does.
+        // What is asked of a value is where it is live (`slots::fits` overlaps
+        // segments). Its weight is not read, and counts a value an
+        // instruction names twice once more than the body made of the homes
+        // does.
         assert!(
             found
                 .1
@@ -1173,7 +1194,8 @@ fn _existing_colors(
     found
 }
 
-/// Whether two sets of slot colors are the same where each home is live: the weights of the occupants are not read.
+/// Whether two sets of slot colors are the same where each home is live: the
+/// weights of the occupants are not read.
 fn _same_colors(
     one: &[(i64, u32, Vec<Interval>)],
     other: &[(i64, u32, Vec<Interval>)],
@@ -1187,19 +1209,21 @@ fn _same_colors(
         })
 }
 
-/// `_existing_colors`, with the intervals of the homes' pseudo-values found among themselves and the body's
-/// own remembered, or, `whole`, as the body with the homes in it is worked out at once.
+/// `_existing_colors`, with the intervals of the homes' pseudo-values found
+/// among themselves and the body's own remembered, or, `whole`, as the body
+/// with the homes in it is worked out at once.
 thread_local! {
     static MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many instructions this thread has made again with the homes among their values, for a test that the usual ask
-/// does not.
+/// How many instructions this thread has made again with the homes among their
+/// values, for a test that the usual ask does not.
 pub fn made_for_homes() -> usize {
     MADE.with(std::cell::Cell::get)
 }
 
-/// The intervals `_existing_colors` reads: the body's own, as remembered and shared, and the homes' beside them.
+/// The intervals `_existing_colors` reads: the body's own, as remembered and
+/// shared, and the homes' beside them.
 struct Lives {
     shared: Option<std::sync::Arc<IndexMap<u32, Interval>>>,
     own: IndexMap<u32, Interval>,
@@ -1222,8 +1246,9 @@ impl Lives {
     }
 }
 
-/// The intervals of the homes' pseudo-values (`first..`) walked in a body of the instructions that name them alone
-/// (whole parallel copies, which share a point), at the slots they have in the body: what `homes_by_occurrences` is
+/// The intervals of the homes' pseudo-values (`first..`) walked in a body of
+/// the instructions that name them alone (whole parallel copies, which share a
+/// point), at the slots they have in the body: what `homes_by_occurrences` is
 /// held to under `LLRM_CHECK_OCCURRENCES`.
 fn homes_by_sparse_body(
     body: &LirBody,
@@ -1250,7 +1275,8 @@ fn homes_by_sparse_body(
     }
     for (block_index, mut named) in by_block {
         let original = &body.blocks[block_index].insns;
-        // The runs of a parallel copy a named instruction is in, as the walk takes them together.
+        // The runs of a parallel copy a named instruction is in, as the walk
+        // takes them together.
         let mut wanted: std::collections::BTreeMap<usize, Arc<Insn>> = std::collections::BTreeMap::new();
         for (at, made) in named.drain(..) {
             if let Some(group) = original[at].group {
@@ -1267,12 +1293,14 @@ fn homes_by_sparse_body(
             }
             wanted.insert(at, made);
         }
-        // An instruction's slot, which the body's numbering gives its original; `made` stands where that stood.
+        // An instruction's slot, which the body's numbering gives its original;
+        // `made` stands where that stood.
         let block = &body.blocks[block_index];
         let mut counted = 0;
         let mut before: Option<usize> = None;
         for (position, one) in wanted {
-            // Two instructions of one parallel copy with others between them are not one run here either.
+            // Two instructions of one parallel copy with others between them
+            // are not one run here either.
             if let (Some(earlier), Some(group)) = (before, one.group) {
                 if position > earlier + 1
                     && sparse_insns[block_index].last().is_some_and(|last| last.group == Some(group))
@@ -1293,8 +1321,9 @@ fn homes_by_sparse_body(
     ranges::intervals_sparse(&sparse, index, &starts, &|value| value >= first)
 }
 
-/// The same from where the homes occur: the instructions `changed` name them, so the walk need not look at the others.
-/// What the last bodies the homes were asked of left: their blocks, numbering, the homes' intervals (by the home's
+/// The same from where the homes occur: the instructions `changed` name them,
+/// so the walk need not look at the others. What the last bodies the homes were
+/// asked of left: their blocks, numbering, the homes' intervals (by the home's
 /// frame offset) and which instruction names which homes.
 #[derive(Default)]
 struct HomesHeld(Vec<Arc<HomesState>>);
@@ -1309,17 +1338,20 @@ struct HomesState {
     count: usize,
 }
 
-/// How many homes' intervals this body's facts have found afresh from their occurrences, for a test that an edit finds
-/// those it touched only.
+/// How many homes' intervals this body's facts have found afresh from their
+/// occurrences, for a test that an edit finds those it touched only.
 pub fn homes_redone(body: &LirBody) -> usize {
     body.facts.0.counted("homes-redone")
 }
 
-/// Whether the homes' intervals of a body are worth keeping for the next: keeping them costs a fixed `FIXED`
-/// instructions a call (the state, the lookups) and `KEEP` for each block of the body, and saves, for each segment the
-/// intervals hold, what finding it from the occurrences cost (`WALK`) less shifting it (`SHIFT`). Measured: QCport
-/// d_faces found 5.2 M segments in 2.05 G (390 each) and shifted 6.1 M in 0.83 G (136 each); x_transpose, 23 calls of
-/// 41 intervals, lost 1.4 M kept (60 000 a call); a block of state is about 40.
+/// Whether the homes' intervals of a body are worth keeping for the next:
+/// keeping them costs a fixed `FIXED` instructions a call (the state, the
+/// lookups) and `KEEP` for each block of the body, and saves, for each segment
+/// the intervals hold, what finding it from the occurrences cost (`WALK`) less
+/// shifting it (`SHIFT`). Measured: QCport d_faces found 5.2 M segments in 2.05
+/// G (390 each) and shifted 6.1 M in 0.83 G (136 each); x_transpose, 23 calls
+/// of 41 intervals, lost 1.4 M kept (60 000 a call); a block of state is about
+/// 40.
 fn worth_keeping(
     blocks: usize,
     segments: usize,
@@ -1331,8 +1363,8 @@ fn worth_keeping(
     FIXED + blocks * KEEP < segments * (WALK - SHIFT)
 }
 
-/// What of a body's shape the homes' intervals depend on besides its instructions: shared by the states of bodies that
-/// keep it.
+/// What of a body's shape the homes' intervals depend on besides its
+/// instructions: shared by the states of bodies that keep it.
 #[derive(PartialEq)]
 struct HomesStructure {
     entry: i64,
@@ -1367,10 +1399,11 @@ impl HomesStructure {
     }
 }
 
-/// The homes' intervals: those of the homes the instructions that changed since an earlier body do not name are that
-/// body's, shifted to the new numbering; the others are found from where they occur. A spill changes a few blocks and
-/// names one home or two; the intervals of the rest, across the whole body, were found afresh for each (2.0 G of
-/// compiling d_faces, 616 times).
+/// The homes' intervals: those of the homes the instructions that changed since
+/// an earlier body do not name are that body's, shifted to the new numbering;
+/// the others are found from where they occur. A spill changes a few blocks and
+/// names one home or two; the intervals of the rest, across the whole body,
+/// were found afresh for each (2.0 G of compiling d_faces, 616 times).
 fn homes_kept(
     body: &LirBody,
     index: &Arc<ranges::Indexes>,
@@ -1379,8 +1412,8 @@ fn homes_kept(
     first: u32,
 ) -> IndexMap<u32, Interval> {
     let pseudo = |home: usize| first + home as u32;
-    // Which homes each instruction names: found when it is needed, for a body that is kept or has an earlier one to be
-    // kept from.
+    // Which homes each instruction names: found when it is needed, for a body
+    // that is kept or has an earlier one to be kept from.
     let names_now = || -> crate::support::hash::HashMap<usize, Vec<i64>> {
         let mut now: crate::support::hash::HashMap<usize, Vec<i64>> = Default::default();
         for (block, at, defined, used) in named {
@@ -1545,11 +1578,12 @@ fn _existing_colors_by(
         None
     };
 
-    // Only an instruction that names a home is made again with it among its values; the others are the body's.
-    // Only those with a frame cell among their operands can, which the occurrences hold by block.
+    // Only an instruction that names a home is made again with it among its
+    // values; the others are the body's. Only those with a frame cell among
+    // their operands can, which the occurrences hold by block.
     let mut flipped = false;
-    // The instructions that name a home, and which: made again with them among their values only where the whole body
-    // is walked.
+    // The instructions that name a home, and which: made again with them among
+    // their values only where the whole body is walked.
     let mut named: Vec<(usize, usize, BTreeSet<u32>, BTreeSet<u32>)> = Vec::new();
     postings::following(body, |postings| {
         for (block_index, block) in body.blocks.iter().enumerate() {
@@ -1563,7 +1597,8 @@ fn _existing_colors_by(
                 if defined.is_empty() && used.is_empty() && !whole {
                     continue;
                 }
-                // A value changes whether an instruction is a mark, and with it the slots after it: it is one made of
+                // A value changes whether an instruction is a mark, and with it
+                // the slots after it: it is one made of
                 // nothing.
                 flipped |= (!defined.is_empty() || !used.is_empty()) && one.is_meta();
                 named.push((block_index, at as usize, defined, used));
@@ -1624,8 +1659,10 @@ fn _existing_colors_by(
             },
         };
     } else {
-        // The slots are the body's own, remembered; the homes' pseudo-values are walked in a body of the instructions
-        // that name them alone (whole parallel copies, which share a point), at the slots they have in the body.
+        // The slots are the body's own, remembered; the homes' pseudo-values
+        // are walked in a body of the instructions that name them alone
+        // (whole parallel copies, which share a point), at the slots they have
+        // in the body.
         shared = ranges::indexed_shared(body);
         index = &*shared;
         let homes_found =
@@ -1676,8 +1713,9 @@ pub fn recomputed(
     alone.then(|| Arc::clone(one))
 }
 
-/// Each of `values` that one plain same-width `mov` copies from another value, and that value: made once, so the
-/// copy is made again as its source is (the one answer SsaSpill and the allocator both read).
+/// Each of `values` that one plain same-width `mov` copies from another value,
+/// and that value: made once, so the copy is made again as its source is (the
+/// one answer SsaSpill and the allocator both read).
 pub fn _copies(
     body: &LirBody,
     values: &BTreeSet<u32>,
@@ -1713,7 +1751,8 @@ pub fn _copies(
     out
 }
 
-/// `found` (made for the values and their copies' sources) for `values`: a copy takes its source's.
+/// `found` (made for the values and their copies' sources) for `values`: a copy
+/// takes its source's.
 fn _through_copies<T: Clone>(
     found: IndexMap<u32, T>,
     values: &BTreeSet<u32>,
@@ -1739,10 +1778,12 @@ pub fn folded_read_scans() -> usize {
     FOLDED_READ_SCANS.with(std::cell::Cell::get)
 }
 
-/// Each of `values` that is loaded from a cell holding until its one reader, which runs no more often than the load
-/// (frequencies are products of floats: two blocks that run alike differ in the last digits)
-/// and takes that cell as its memory operand: read there it costs the same one memory operand and no instruction,
-/// and no register is held from the load to it, so holding it never pays.
+/// Each of `values` that is loaded from a cell holding until its one reader,
+/// which runs no more often than the load (frequencies are products of floats:
+/// two blocks that run alike differ in the last digits) and takes that cell as
+/// its memory operand: read there it costs the same one memory operand and no
+/// instruction, and no register is held from the load to it, so holding it
+/// never pays.
 pub fn _folded_reads(
     body: &LirBody,
     values: &BTreeSet<u32>,
@@ -1765,7 +1806,8 @@ pub fn _folded_reads(
             }
         }
     }
-    // A cell the body also writes is a variable: its loads and stores share frame homes and slots with other values.
+    // A cell the body also writes is a variable: its loads and stores share
+    // frame homes and slots with other values.
     let written: Vec<Mem> = body
         .insns()
         .iter()
@@ -1801,14 +1843,16 @@ pub fn _folded_reads(
             {
                 return false;
             }
-            // The forms a reader takes a memory operand in: the spiller's own folds, and the push that peephole folds.
+            // The forms a reader takes a memory operand in: the spiller's own
+            // folds, and the push that peephole folds.
             let only = BTreeSet::from([**value]);
             let pushed = what.op == Operation::Push
                 && what.name.as_deref() == Some("push")
                 && one.defines.is_empty()
                 && one.requires.is_empty()
                 && one.delivers.is_empty();
-            // A copy is the coalescer's: the load it copies is the load it becomes.
+            // A copy is the coalescer's: the load it copies is the load it
+            // becomes.
             pushed
                 || (what.op != Operation::Move
                     && folded_source_in(one, &only, false).is_some_and(|folded| folded.value == **value))
@@ -1825,8 +1869,8 @@ pub fn _stable_loads(
     _stable_loads_through(body, values, &IndexMap::default())
 }
 
-/// `_stable_loads_through` with the postings of the body to hand: where the values occur is read from them, not found
-/// by a scan.
+/// `_stable_loads_through` with the postings of the body to hand: where the
+/// values occur is read from them, not found by a scan.
 pub fn _stable_loads_by(
     body: &LirBody,
     values: &BTreeSet<u32>,
@@ -1836,8 +1880,9 @@ pub fn _stable_loads_by(
     _stable_loads_from(body, values, copies, Some(postings))
 }
 
-/// `_stable_loads`, where a load's copies (`copies`: copy -> source) are made again as it is: the cell must hold until
-/// the last use of any of them, not only of the load.
+/// `_stable_loads`, where a load's copies (`copies`: copy -> source) are made
+/// again as it is: the cell must hold until the last use of any of them, not
+/// only of the load.
 pub fn _stable_loads_through(
     body: &LirBody,
     values: &BTreeSet<u32>,
@@ -1857,7 +1902,8 @@ fn _stable_loads_from(
     }
     let mut definitions: IndexMap<u32, Vec<(Arc<Insn>, Option<Mem>, (usize, usize))>> = IndexMap::default();
     let mut uses: IndexMap<u32, Vec<Arc<Insn>>> = values.iter().map(|value| (*value, Vec::new())).collect();
-    // Where each use and each load is: (block, position), in step with `uses` and `definitions`.
+    // Where each use and each load is: (block, position), in step with `uses`
+    // and `definitions`.
     let mut use_places: IndexMap<u32, Vec<(usize, usize)>> = values.iter().map(|value| (*value, Vec::new())).collect();
     // The load a copy comes from, through copies of copies.
     let root = |value: u32| {
@@ -1867,7 +1913,8 @@ fn _stable_loads_from(
         }
         at
     };
-    // The values that matter are those asked of and their copies; where they occur is all that is read of the body.
+    // The values that matter are those asked of and their copies; where they
+    // occur is all that is read of the body.
     let mut asked: BTreeSet<u32> = values.clone();
     asked.extend(copies.keys().copied().filter(|copy| {
         let owner = root(*copy);
@@ -1880,8 +1927,8 @@ fn _stable_loads_from(
     if postings.is_some() && llrm_support::env_set("LLRM_CHECK_OCCURRENCES") {
         occurrences.check_against_scan(body, &|value| asked.contains(&value));
     }
-    // Each use of an owner by an instruction, once for every distinct value of it the instruction reads (the owner and
-    // its copies).
+    // Each use of an owner by an instruction, once for every distinct value of
+    // it the instruction reads (the owner and its copies).
     let mut reads: std::collections::BTreeMap<(u32, (usize, usize)), usize> = std::collections::BTreeMap::new();
     for value in &asked {
         for made in occurrences.named(*value) {
@@ -1931,7 +1978,8 @@ fn _stable_loads_from(
     }
 
     let mut result: IndexMap<u32, Mem> = IndexMap::default();
-    // What every value asks of the body's blocks alike, found for the first that asks.
+    // What every value asks of the body's blocks alike, found for the first
+    // that asks.
     let flow = std::cell::OnceCell::new();
     let writers = std::cell::OnceCell::new();
     for value in values {
@@ -1950,7 +1998,8 @@ fn _stable_loads_from(
         }
         let flow = flow.get_or_init(|| Flow::of(body));
         let held = if _exact_frame(cell) {
-            // Only what may write the cell is asked of, and the blocks between the load and its uses are gone over.
+            // Only what may write the cell is asked of, and the blocks between
+            // the load and its uses are gone over.
             let writers = writers.get_or_init(|| Writers::of(body));
             let mut events: crate::support::hash::HashMap<usize, Vec<(usize, bool)>> =
                 crate::support::hash::HashMap::default();
@@ -1981,7 +2030,8 @@ fn _stable_loads_from(
     result
 }
 
-// (On one line: tests/target_facts.rs reads what comes before a line that is only the attribute as the code.)
+// (On one line: tests/target_facts.rs reads what comes before a line that is
+// only the attribute as the code.)
 #[cfg(test)]
 thread_local! { static KEEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
@@ -2008,11 +2058,13 @@ impl<'a> Flow<'a> {
     }
 }
 
-/// Where the instructions that may write a frame cell are, found once for a body: the loads asked about are many and an
-/// instruction that writes none of their cells is nearly every instruction.
+/// Where the instructions that may write a frame cell are, found once for a
+/// body: the loads asked about are many and an instruction that writes none of
+/// their cells is nearly every instruction.
 struct Writers {
-    /// (block, position) of what may write memory no exact frame cell names: a call, an unmodeled write, a store to a
-    /// based, indexed or unplaced cell.
+    /// (block, position) of what may write memory no exact frame cell names: a
+    /// call, an unmodeled write, a store to a based, indexed or unplaced
+    /// cell.
     wild: Vec<(usize, usize)>,
     /// The stores to an exact frame cell, by its first byte.
     exact: std::collections::BTreeMap<i64, Vec<(usize, usize)>>,
@@ -2053,8 +2105,9 @@ impl Writers {
         found
     }
 
-    /// The instructions that can fail to keep `cell` (an exact frame cell): any other writes nothing but exact frame
-    /// cells that do not meet it, and keeps it, as `_keeps` finds.
+    /// The instructions that can fail to keep `cell` (an exact frame cell): any
+    /// other writes nothing but exact frame cells that do not meet it, and
+    /// keeps it, as `_keeps` finds.
     fn near(
         &self,
         cell: &Mem,
@@ -2071,9 +2124,11 @@ impl Writers {
     }
 }
 
-/// Whether the cell holds at every one of `uses` (block, position), given where it is made to hold and where it is
-/// written: `events` per block are (position, true for the load, false for a write) in order. The same answer as
-/// `_unchanged`, found over the blocks that lie between the load and the uses and not over the whole body.
+/// Whether the cell holds at every one of `uses` (block, position), given where
+/// it is made to hold and where it is written: `events` per block are
+/// (position, true for the load, false for a write) in order. The same answer
+/// as `_unchanged`, found over the blocks that lie between the load and the
+/// uses and not over the whole body.
 fn _holds_at(
     flow: &Flow,
     events: &crate::support::hash::HashMap<usize, Vec<(usize, bool)>>,
@@ -2090,7 +2145,8 @@ fn _holds_at(
             needed.push(block);
         }
     }
-    // The blocks whose entry state the uses depend on, through blocks that have no event of their own.
+    // The blocks whose entry state the uses depend on, through blocks that have
+    // no event of their own.
     let mut region = needed.clone();
     let mut next = 0;
     while next < region.len() {
@@ -2102,7 +2158,8 @@ fn _holds_at(
             }
         }
     }
-    // Held coming in: not at the entry, and the most held that the blocks leading in allow.
+    // Held coming in: not at the entry, and the most held that the blocks
+    // leading in allow.
     let mut held: HashMap<usize, bool> = region.iter().map(|&block| (block, block != flow.entry)).collect();
     let mut changing = true;
     while changing {
@@ -2127,7 +2184,8 @@ fn _holds_at(
 }
 
 /// Whether `cell` still holds what it held at `define` after `one`.
-/// Whether `cell`, as the load `define` read it, still holds after `one`, given it held before.
+/// Whether `cell`, as the load `define` read it, still holds after `one`, given
+/// it held before.
 pub(crate) fn _keeps(
     one: &Arc<Insn>,
     define: &Insn,
@@ -2142,17 +2200,20 @@ pub(crate) fn _keeps(
     }
     let (sealed, apart) = (body.sealed_arguments, body.spares.contains(&(define.at, one.at)));
     let written = _written(one, cell);
-    // Sealed, an incoming argument cell is reached by the frame's own stores alone.
+    // Sealed, an incoming argument cell is reached by the frame's own stores
+    // alone.
     let meets = |dest: &Mem| {
         if sealed && _incoming_frame(cell) {
             _in_frame(dest) && crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width)
         } else {
-            // The optimizer's proof of the pair answers a write whose address LIR cannot place.
+            // The optimizer's proof of the pair answers a write whose address
+            // LIR cannot place.
             let overlaps = crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width);
             match (apart, cell.addr, dest.addr) {
                 (false, _, _) => dest.addr.is_none() || overlaps,
-                // What it proved is the MIR write's own: a far or unplaced address is its to answer, a place of the
-                // cell's own space is not.
+                // What it proved is the MIR write's own: a far or unplaced
+                // address is its to answer, a place of the cell's own space is
+                // not.
                 (true, Some(own), Some(there)) => own.space == there.space && overlaps,
                 (true, _, _) => false,
             }
@@ -2246,10 +2307,12 @@ fn _predecessors(body: &LirBody) -> IndexMap<i64, Vec<i64>> {
 
 /// Whether every use of the loaded value sees the cell the load saw.
 ///
-/// A block takes the cell in as it leaves its predecessors alike and, one instruction after another, keeps it unless
-/// that instruction may write it: `_keeps(one, ..., holds) = holds && K(one)` for every instruction but the load, which
-/// makes it hold. So a block's answer is that of its instructions after its last load, or of all of them: asked of each
-/// instruction once, not once for each time the blocks are gone over until they settle.
+/// A block takes the cell in as it leaves its predecessors alike and, one
+/// instruction after another, keeps it unless that instruction may write it:
+/// `_keeps(one, ..., holds) = holds && K(one)` for every instruction but the
+/// load, which makes it hold. So a block's answer is that of its instructions
+/// after its last load, or of all of them: asked of each instruction once, not
+/// once for each time the blocks are gone over until they settle.
 fn _unchanged(
     body: &LirBody,
     flow: &Flow,
@@ -2258,7 +2321,8 @@ fn _unchanged(
     uses: &[Arc<Insn>],
 ) -> bool {
     let (predecessors, blocks) = (&flow.predecessors, &flow.blocks);
-    // Per block: whether the cell holds out of it whatever came in, and where it is made to hold from.
+    // Per block: whether the cell holds out of it whatever came in, and where
+    // it is made to hold from.
     let mut gives: IndexMap<i64, (bool, bool)> = IndexMap::default();
     let mut kept: IndexMap<i64, Vec<bool>> = IndexMap::default();
     let wanted: BTreeSet<usize> = uses.iter().map(key).collect();
@@ -2323,7 +2387,8 @@ fn _unchanged(
     true
 }
 
-/// `_unchanged` as it was written: the blocks gone over, each instruction asked of again, until they settle.
+/// `_unchanged` as it was written: the blocks gone over, each instruction asked
+/// of again, until they settle.
 fn _unchanged_reference(
     body: &LirBody,
     define: &Arc<Insn>,
@@ -2456,8 +2521,9 @@ fn _frame_loads(
     result
 }
 
-/// `_remove_abandoned` of a body in which only the blocks in `marked` hold an abandoned instruction: the
-/// others are left as they are, and what is read is asked of the occurrences, not of a scan of the body.
+/// `_remove_abandoned` of a body in which only the blocks in `marked` hold an
+/// abandoned instruction: the others are left as they are, and what is read is
+/// asked of the occurrences, not of a scan of the body.
 fn _remove_abandoned_in(
     body: LirBody,
     abandoned: &BTreeSet<usize>,
@@ -2594,7 +2660,8 @@ pub(crate) fn _final_uses(body: &LirBody) -> BTreeSet<(usize, u32)> {
     use crate::backend::allocate;
     FINALS.with(|runs| runs.set(runs.get() + 1));
 
-    // Only what leaves each block is read: rows, not the sets of every block's entry and exit.
+    // Only what leaves each block is read: rows, not the sets of every block's
+    // entry and exit.
     let rows = allocate::live_rows(body);
     let mut out: BTreeSet<(usize, u32)> = BTreeSet::new();
     for block in &body.blocks {
@@ -2629,20 +2696,20 @@ thread_local! {
     static LOOKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many blocks this thread has rewritten instruction by instruction, for a test that a block naming none of the
-/// values spilled is not looked at.
+/// How many blocks this thread has rewritten instruction by instruction, for a
+/// test that a block naming none of the values spilled is not looked at.
 pub fn blocks_looked_at() -> usize {
     LOOKED.with(std::cell::Cell::get)
 }
 
-/// How many times this thread has worked out the final uses of a body, for a test that a spill nothing folds
-/// does not.
+/// How many times this thread has worked out the final uses of a body, for a
+/// test that a spill nothing folds does not.
 pub fn final_use_runs() -> usize {
     FINALS.with(std::cell::Cell::get)
 }
 
-/// `_final_uses` of a body, worked out when first asked: only an index fold reads it, and it takes the
-/// liveness of the whole body, for each spill.
+/// `_final_uses` of a body, worked out when first asked: only an index fold
+/// reads it, and it takes the liveness of the whole body, for each spill.
 pub(crate) struct FinalUses<'a> {
     body: &'a LirBody,
     found: std::cell::OnceCell<BTreeSet<(usize, u32)>>,
@@ -2878,7 +2945,8 @@ fn _indexed_source(
     Ok(Some((add, rewritten)))
 }
 
-/// The spilled source arithmetic or a comparison reads as its memory operand, needing no reload.
+/// The spilled source arithmetic or a comparison reads as its memory operand,
+/// needing no reload.
 pub fn folded_source(
     one: &Insn,
     values: &BTreeSet<u32>,
@@ -2886,8 +2954,9 @@ pub fn folded_source(
     folded_source_in(one, values, true)
 }
 
-/// `folded_source`, for an instruction that `tied` writes the register of its first source (after
-/// two-address lowering) or, not tied, names its result apart (SSA).
+/// `folded_source`, for an instruction that `tied` writes the register of its
+/// first source (after two-address lowering) or, not tied, names its result
+/// apart (SSA).
 pub fn folded_source_in(
     one: &Insn,
     values: &BTreeSet<u32>,
@@ -2896,8 +2965,8 @@ pub fn folded_source_in(
     folded_source_among(one, &|value| values.contains(&value), tied)
 }
 
-/// `folded_source_in` for the values `among` says are spilled, so that a caller that asks of one value at
-/// a time builds no set to ask with.
+/// `folded_source_in` for the values `among` says are spilled, so that a caller
+/// that asks of one value at a time builds no set to ask with.
 pub fn folded_source_among(
     one: &Insn,
     among: &dyn Fn(u32) -> bool,
@@ -2912,8 +2981,9 @@ pub fn folded_source_among(
     Some(right)
 }
 
-/// The two values `one` could fold the second of into the first's operation, whichever are spilled: what
-/// `folded_source_among` finds before it asks which are. The second is the only value that can fold.
+/// The two values `one` could fold the second of into the first's operation,
+/// whichever are spilled: what `folded_source_among` finds before it asks which
+/// are. The second is the only value that can fold.
 pub fn folded_pair(
     one: &Insn,
     tied: bool,
@@ -3023,7 +3093,8 @@ fn _address_source(
         let displacement = addr.disp + cell.addr.expect("checked").disp;
         changed = true;
         Loc::Mem(Mem {
-            // The folded address's slot: the cell is that frame address plus a constant.
+            // The folded address's slot: the cell is that frame address plus a
+            // constant.
             addr: Some(Addr { index: addr.index, ..Addr::new(Space::Frame, displacement) }),
             through: Register::BP,
             offset: displacement,
@@ -3244,8 +3315,9 @@ fn _widest_by(
     out
 }
 
-/// `_literals` of the values in `values`, from their definitions and those of what they are copies of:
-/// the answer for a value reads its own definition and, for a copy, its source's, and so down the chain.
+/// `_literals` of the values in `values`, from their definitions and those of
+/// what they are copies of: the answer for a value reads its own definition
+/// and, for a copy, its source's, and so down the chain.
 fn _literals_by(
     body: &LirBody,
     values: &BTreeSet<u32>,
@@ -3256,7 +3328,8 @@ fn _literals_by(
         Visiting,
         Is(Option<Imm>),
     }
-    // What a value is made from, where it is one single plain move of a constant or of another value.
+    // What a value is made from, where it is one single plain move of a
+    // constant or of another value.
     let source_of = |value: u32| -> Option<Loc> {
         let defining: Vec<Arc<Insn>> = postings.defs(value).iter().map(|at| Arc::clone(_at(body, *at))).collect();
         if defining.is_empty() || defining.iter().any(|one| one.group.is_some() && (one.defines.contains(&value))) {
@@ -3430,7 +3503,8 @@ pub fn _addresses(
     result
 }
 
-/// The address `value` is made again from, where its definitions are one `lea` of a frame cell or a symbol.
+/// The address `value` is made again from, where its definitions are one `lea`
+/// of a frame cell or a symbol.
 fn _address_of(
     value: u32,
     defining: &[Arc<Insn>],
@@ -3512,8 +3586,9 @@ fn _extensions(
     result
 }
 
-/// The instruction `value` is made again by, where it is the one definition of a zero or sign extension of
-/// a value not spilled with it, read once after it in its block, its source defined at most once before it.
+/// The instruction `value` is made again by, where it is the one definition of
+/// a zero or sign extension of a value not spilled with it, read once after it
+/// in its block, its source defined at most once before it.
 fn _extension_of(
     value: u32,
     one: &Arc<Insn>,
@@ -3692,7 +3767,8 @@ fn _settled(
     ir::mapped(place, |one| Held { value: rename.get(&one.value).copied().unwrap_or(one.value), width: one.width })
 }
 
-/// One move of a parallel copy, with its spilled end read or written where it lives.
+/// One move of a parallel copy, with its spilled end read or written where it
+/// lives.
 fn _in_place(
     one: &Insn,
     values: &BTreeSet<u32>,
@@ -3877,7 +3953,8 @@ fn _encodable(
         if !taken.contains_key(&held.value) {
             let row = rows.get(&held.width).cloned().unwrap_or_default();
             if taken.len() >= row.len() {
-                return operand.clone(); // refuses below, which is the safe answer
+                // refuses below, which is the safe answer
+                return operand.clone();
             }
             taken.insert(held.value, row[taken.len()]);
         }
@@ -4370,7 +4447,8 @@ mod tests {
     }
 
     /// One wide read of a constant made every read of it a reload: COPPER's
-    /// zero, copied once into a 32-bit value, was loaded from its slot in a loop.
+    /// zero, copied once into a 32-bit value, was loaded from its slot in a
+    /// loop.
     #[test]
     fn test_a_constant_read_wider_once_is_remade_at_its_narrow_reads() {
         let wide = insn(4, (4, 4), semantics(Operation::Move, "mov", vec![held(3, 4)], vec![held(1, 4)]), &[3], &[1]);
@@ -4534,8 +4612,9 @@ mod tests {
             assert_eq!(recreated.len(), 1);
             assert_eq!(what(recreated[0]).sources, [Loc::Address(source.clone())]);
             assert!(recreated[0].rematerialized);
-            // The rematerialized spelling is not an unrelocated literal zero: fresh
-            // OMF emission places the original symbol fixup on its new displacement.
+            // The rematerialized spelling is not an unrelocated literal zero:
+            // fresh OMF emission places the original symbol fixup
+            // on its new displacement.
             let lea = semantics(
                 Operation::Address,
                 "lea",
@@ -4711,8 +4790,9 @@ mod tests {
         assert_eq!(frame.slots[&slot(2)], frame.slots[&slot(1)]);
     }
 
-    /// The interference of every value live together was built to ask of the pairs in the copy webs a
-    /// spilled value is in (14.8 s of compiling `d_faces`, #559). Another web is asked of by no one.
+    /// The interference of every value live together was built to ask of the
+    /// pairs in the copy webs a spilled value is in (14.8 s of compiling
+    /// `d_faces`, #559). Another web is asked of by no one.
     #[test]
     fn test_siblings_ask_the_webs_of_the_spilled_values_only() {
         let body = _body(vec![
@@ -4728,10 +4808,11 @@ mod tests {
         assert_eq!(crate::backend::coalesce::last_asked(), Some(3), "the other web's values were asked of");
     }
 
-    /// `siblings` walked every instruction of the body for its plain moves, numbered every value of it for the liveness
-    /// of the graph, and walked it again for the widths and the occurrences: 3.6 + 1.2 + 1.0 G of the 104 G of
-    /// compiling `d_faces` (6%), for a web of three values. It looks at the instructions that name the web's
-    /// values.
+    /// `siblings` walked every instruction of the body for its plain moves,
+    /// numbered every value of it for the liveness of the graph, and walked
+    /// it again for the widths and the occurrences: 3.6 + 1.2 + 1.0 G of the
+    /// 104 G of compiling `d_faces` (6%), for a web of three values. It
+    /// looks at the instructions that name the web's values.
     #[test]
     fn test_siblings_cost_the_size_of_the_web_not_the_size_of_the_body() {
         let mut insns = vec![_move(1, 10, None, 0x10), _move(2, 1, None, 0x12), _add(31, 2, 0x14)];
@@ -4755,9 +4836,11 @@ mod tests {
         );
     }
 
-    /// Every spill made a body of every instruction with the slots in it as values, and numbered it and
-    /// found every interval again to colour the slots: 16 s of compiling `d_faces` (#559). The slots
-    /// are found among themselves and the body's own intervals are remembered; the answers are the same.
+    /// Every spill made a body of every instruction with the slots in it as
+    /// values, and numbered it and found every interval again to colour the
+    /// slots: 16 s of compiling `d_faces` (#559). The slots are found among
+    /// themselves and the body's own intervals are remembered; the answers are
+    /// the same.
     #[test]
     fn test_the_slots_colors_are_the_same_found_among_themselves_as_found_whole() {
         let body = _body(vec![
@@ -4786,8 +4869,9 @@ mod tests {
         );
     }
 
-    /// The homes are walked in a body of the instructions that name them: two of one parallel copy with another
-    /// instruction between them were one run there, which moved the point the first is read at (weapons.c: a home
+    /// The homes are walked in a body of the instructions that name them: two
+    /// of one parallel copy with another instruction between them were one
+    /// run there, which moved the point the first is read at (weapons.c: a home
     /// live from 415, not 411).
     #[test]
     fn test_two_instructions_of_one_copy_apart_are_not_one_run_among_the_homes() {
@@ -4860,8 +4944,9 @@ mod tests {
         assert_eq!(frame.size(), 4);
     }
 
-    /// A body that calls `setjmp` shares no slot: after the second return one a dead value used
-    /// holds that value. Another value's dead slot is otherwise reused, as the test above shows.
+    /// A body that calls `setjmp` shares no slot: after the second return one a
+    /// dead value used holds that value. Another value's dead slot is
+    /// otherwise reused, as the test above shows.
     #[test]
     fn test_no_spill_slot_is_shared_in_a_body_that_calls_setjmp() {
         let shared = |twice: bool| {
@@ -4941,7 +5026,8 @@ mod tests {
         }
     }
 
-    /// `mov v1, [global]` read back into `v2`, which is read once more: v2 is the load made again, not a slot.
+    /// `mov v1, [global]` read back into `v2`, which is read once more: v2 is
+    /// the load made again, not a slot.
     #[test]
     fn test_a_copy_of_a_global_load_is_made_again_not_stored() {
         let cell = crate::model::ir::Mem {
@@ -4958,7 +5044,8 @@ mod tests {
         assert!(!done.insns().iter().any(|one| one.spill_store || one.spill_reload));
     }
 
-    /// A copy of a load is made again as the load only while the cell holds until the copy's last use: the fuzz (seed
+    /// A copy of a load is made again as the load only while the cell holds
+    /// until the copy's last use: the fuzz (seed
     /// 31) stored an address through a copy whose cell had been written since.
     #[test]
     fn test_a_copy_of_a_load_is_not_made_again_after_its_cell_changes() {
@@ -5166,9 +5253,11 @@ mod tests {
         assert!(!reloads.is_empty() && reloads.iter().all(|one| as_held(&what(one).dests[0]).width == 4), "{out:?}");
     }
 
-    /// Whether the cell a load read holds at its uses was found by going over every block, each instruction asked of
-    /// again, until the blocks settled: three passes at least, so a body of 40 blocks asked of its instructions
-    /// well over a hundred times for one load. Each is asked of once, and the load is found stable all the same.
+    /// Whether the cell a load read holds at its uses was found by going over
+    /// every block, each instruction asked of again, until the blocks
+    /// settled: three passes at least, so a body of 40 blocks asked of its
+    /// instructions well over a hundred times for one load. Each is asked
+    /// of once, and the load is found stable all the same.
     #[test]
     fn test_whether_a_loaded_cell_holds_asks_of_each_instruction_once() {
         let cell = Loc::Mem(mem(Addr::new(Space::Frame, 4), 2, Register::BP, 4, 1));
@@ -5203,9 +5292,11 @@ mod tests {
         assert!(asked <= 2 * 43, "{asked} questions of `_keeps` for a body of 43 instructions");
     }
 
-    /// A function with n values loaded from the frame asked of every instruction for each: a by-value struct of 2,048
-    /// words spent 41% of its 6.1 s in `_keeps`, `_may_write` and the walk around them (#924). Only what may write
-    /// a cell is asked about it, and a store that does overlap one cell still makes that one unstable.
+    /// A function with n values loaded from the frame asked of every
+    /// instruction for each: a by-value struct of 2,048 words spent 41% of
+    /// its 6.1 s in `_keeps`, `_may_write` and the walk around them (#924).
+    /// Only what may write a cell is asked about it, and a store that does
+    /// overlap one cell still makes that one unstable.
     #[test]
     fn test_a_loaded_cell_is_asked_about_only_what_may_write_it() {
         let cell = |disp: i64| Loc::Mem(mem(Addr::new(Space::Frame, disp), 2, Register::BP, disp, 1));
@@ -5220,7 +5311,8 @@ mod tests {
                 &[],
             ));
         }
-        // Stores to cells of their own, far from every load's, and one onto the cell of the load numbered 7.
+        // Stores to cells of their own, far from every load's, and one onto the
+        // cell of the load numbered 7.
         for i in 0..n {
             let at = 100 + i;
             insns.push(insn(
@@ -5294,7 +5386,8 @@ mod tests {
         );
     }
 
-    /// snd_mix_frame stored four bytes of a value first seen as a word, over the saved BP.
+    /// snd_mix_frame stored four bytes of a value first seen as a word, over
+    /// the saved BP.
     #[test]
     fn test_slot_is_as_wide_as_the_widest_use_of_its_value() {
         let op = |name: &str, into: u32, width: u32, sources: &[u32]| {
@@ -5356,7 +5449,8 @@ mod tests {
         }
     }
 
-    /// LNGMXX printed 169330 instead of 142900 after a tied spill discarded its loaded accumulator.
+    /// LNGMXX printed 169330 instead of 142900 after a tied spill discarded its
+    /// loaded accumulator.
     #[test]
     fn test_two_spilled_operands_keep_the_accumulator_value() {
         for (name, expected) in
@@ -5400,7 +5494,8 @@ mod tests {
         name(one).expect("a name")
     }
 
-    /// LNGMXX's two spilled operands must retain the accumulator but need only one scratch.
+    /// LNGMXX's two spilled operands must retain the accumulator but need only
+    /// one scratch.
     #[test]
     fn test_two_spilled_operands_do_not_need_two_scratch_registers() {
         let result = _out(&_body(vec![_add(1, 2, 0x100)]), &[1, 2]);
@@ -5469,7 +5564,8 @@ mod tests {
         insn(at, (at, at + 2), what, &[into], &[into, other])
     }
 
-    /// pressx spilled 207, then 212, then 215, at one `add`, two instructions added every round.
+    /// pressx spilled 207, then 212, then 215, at one `add`, two instructions
+    /// added every round.
     #[test]
     fn test_a_tied_value_is_spilled_into_the_operand_itself() {
         let got = _out(&_body(vec![_binary("add", 1, 2, 0x200)]), &[1]);
@@ -5489,7 +5585,8 @@ mod tests {
         assert!(got.len() > 1, "two spilled operands took the in-place path");
     }
 
-    /// `ir.Mem(Addr(Space.FAR, disp, segment=Register.ES), 2, base=ir.Held(5, 2), index=...)`.
+    /// `ir.Mem(Addr(Space.FAR, disp, segment=Register.ES), 2, base=ir.Held(5,
+    /// 2), index=...)`.
     fn _far(
         disp: i64,
         index: Option<u32>,
@@ -5545,8 +5642,9 @@ mod tests {
         assert!(!result.iter().any(|one| one.spill_reload), "{result:?}");
     }
 
-    /// Each spill took the liveness of the whole body for `_final_uses`, which only an index fold reads: 4% of
-    /// compiling d_alias (#559). It is worked out when a fold asks, and once for the body.
+    /// Each spill took the liveness of the whole body for `_final_uses`, which
+    /// only an index fold reads: 4% of compiling d_alias (#559). It is
+    /// worked out when a fold asks, and once for the body.
     #[test]
     fn test_final_uses_are_worked_out_only_for_a_body_with_an_index_to_fold() {
         let before = super::final_use_runs();
@@ -5579,8 +5677,9 @@ mod tests {
         )
     }
 
-    /// Each spill scanned the body for the values it spills (copies, constants, addresses, extensions, widths):
-    /// 8% of compiling d_alias (#559). The occurrences follow the body, redoing only the blocks a rewrite changed.
+    /// Each spill scanned the body for the values it spills (copies, constants,
+    /// addresses, extensions, widths): 8% of compiling d_alias (#559). The
+    /// occurrences follow the body, redoing only the blocks a rewrite changed.
     #[test]
     fn test_the_homes_are_not_made_into_instructions_unless_the_whole_body_is_walked() {
         let body = _three_blocks();
@@ -5605,9 +5704,11 @@ mod tests {
         assert_eq!(Occurrences::scans(&body), before, "the body was scanned for the stable loads of the values");
     }
 
-    /// The homes' intervals were found afresh for every home after every spill, across the whole body (2.0 G of
-    /// compiling d_faces, 616 times), though a spill names one or two of them. An earlier body's are shifted, and
-    /// only the homes the changed instructions name are found again; the answer is the same as finding all of them.
+    /// The homes' intervals were found afresh for every home after every spill,
+    /// across the whole body (2.0 G of compiling d_faces, 616 times),
+    /// though a spill names one or two of them. An earlier body's are shifted,
+    /// and only the homes the changed instructions name are found again;
+    /// the answer is the same as finding all of them.
     #[test]
     fn test_a_spill_finds_the_intervals_of_the_homes_it_names_only() {
         use crate::analysis::intervals as ranges;
@@ -5704,8 +5805,9 @@ mod tests {
         });
     }
 
-    /// Each spill looked at every instruction of the body to rewrite those that name the values spilled: 8% of
-    /// compiling d_alias (#559). A block that names none is left as it is.
+    /// Each spill looked at every instruction of the body to rewrite those that
+    /// name the values spilled: 8% of compiling d_alias (#559). A block
+    /// that names none is left as it is.
     #[test]
     fn test_a_spill_looks_only_at_the_blocks_that_name_its_values() {
         let body = _three_blocks();
@@ -5734,7 +5836,8 @@ mod tests {
         assert!(!result.iter().any(|one| _folded_add(one)), "{result:?}");
     }
 
-    /// A base used later outside a memory operand was omitted from the death proof.
+    /// A base used later outside a memory operand was omitted from the death
+    /// proof.
     #[test]
     fn test_a_spilled_word_index_does_not_mutate_a_base_read_later_as_a_value() {
         let read = _read(0x102, 4, _far(0, Some(1)), &[5, 1]);
@@ -5759,7 +5862,8 @@ mod tests {
         }
     }
 
-    /// UNWHITEFADE's frame counter, coalesced with its initial zero, lost its increment.
+    /// UNWHITEFADE's frame counter, coalesced with its initial zero, lost its
+    /// increment.
     #[test]
     fn test_a_value_defined_twice_keeps_its_increment_in_its_home() {
         let home = mem(Addr::new(Space::Frame, -0x2A), 2, Register::BP, -0x2A, 1);
@@ -5844,7 +5948,8 @@ mod tests {
         assert_eq!(memory[&-0x2A], 2);
     }
 
-    // ------------------------------------------- tests/test_rematerialized_definitions.py
+    // -------------------------------------------
+    // tests/test_rematerialized_definitions.py
 
     fn _remat_constant() -> Insn {
         insn(0, (0, 3), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![imm(64, 2)]), &[1], &[])

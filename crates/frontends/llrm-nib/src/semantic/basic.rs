@@ -99,7 +99,8 @@ impl TypeRegistry {
 }
 
 impl FunctionCompiler<'_> {
-    /// How the callee sees an adapter parameter, passed as the near pointer `value`.
+    /// How the callee sees an adapter parameter, passed as the near pointer
+    /// `value`.
     pub(super) fn adapter_binding(
         &mut self,
         basic: Basic,

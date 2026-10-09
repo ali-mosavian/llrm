@@ -1,5 +1,6 @@
-//! The CodeView 4 `cv4` writes and Microsoft's C7-era tools write, read back from an OMF object: its procedures
-//! with their parameters and locals, its data and its type names, as the text a test compares. The reader is
+//! The CodeView 4 `cv4` writes and Microsoft's C7-era tools write, read back
+//! from an OMF object: its procedures with their parameters and locals, its
+//! data and its type names, as the text a test compares. The reader is
 //! `cvinfo`'s counterpart for the dialect BASIC's compilers do not write.
 
 use std::rc::Rc;
@@ -7,7 +8,8 @@ use std::rc::Rc;
 use crate::cvinfo;
 use crate::omf::Record;
 
-/// A table's records as (code, data), each past its length; the signature skipped.
+/// A table's records as (code, data), each past its length; the signature
+/// skipped.
 fn records(image: &[u8]) -> Vec<(u16, &[u8])> {
     let mut out = Vec::new();
     let mut at = 4;
@@ -70,7 +72,8 @@ impl Types<'_> {
         self.records.get(usize::from(index).checked_sub(0x1000)?).copied()
     }
 
-    /// The name of a primitive: its type's code, its size, and the mode of a pointer to it.
+    /// The name of a primitive: its type's code, its size, and the mode of a
+    /// pointer to it.
     fn primitive(index: u16) -> String {
         let base = match index & 0xFF {
             0x03 => "VOID",
@@ -288,8 +291,9 @@ pub fn procedures(records_of_object: &[Rc<Record>]) -> Vec<Procedure> {
     out
 }
 
-/// What `records`' CodeView 4 says, one line each and sorted: `PROC name far|near (parameters) -> result`,
-/// `PARAM` and `LOCAL name.variable: type`, `REGISTER name.variable: type in register N`, `DATA name: type` and
+/// What `records`' CodeView 4 says, one line each and sorted: `PROC name
+/// far|near (parameters) -> result`, `PARAM` and `LOCAL name.variable: type`,
+/// `REGISTER name.variable: type in register N`, `DATA name: type` and
 /// `UDT name: type`.
 pub fn shape(records_of_object: &[Rc<Record>]) -> Vec<String> {
     let (types, symbols) = (cvinfo::types(records_of_object), cvinfo::symbols(records_of_object));
@@ -300,7 +304,8 @@ pub fn shape(records_of_object: &[Rc<Record>]) -> Vec<String> {
     for (code, data) in if symbols.len() >= 4 { records(&symbols) } else { Vec::new() } {
         match code {
             0x0104 | 0x0105 | 0x0204 | 0x0205 => {
-                // The links, three lengths, the offset and segment, then the type, the flags and the name.
+                // The links, three lengths, the offset and segment, then the
+                // type, the flags and the name.
                 let (lengths, address) = if wide(code) { (12, 6) } else { (6, 4) };
                 let at = 12 + lengths + address;
                 let r#type = u16_at(data, at);
@@ -363,10 +368,12 @@ mod tests {
         shape(&omf::parse(&std::fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))).unwrap())
     }
 
-    /// Objects ML 6.11 wrote under /Zi (tests/inputs/cv4, with their sources) read as the programs they are: a struct
-    /// with its members, a procedure and its arguments, its parameters and local, data of each primitive size and a
-    /// pointer, named by a UDT. ML writes its debug segments as SEGDEF32, whose four-byte length the segment reader
-    /// took for two: it found no $$SYMBOLS and read nothing.
+    /// Objects ML 6.11 wrote under /Zi (tests/inputs/cv4, with their sources)
+    /// read as the programs they are: a struct with its members, a
+    /// procedure and its arguments, its parameters and local, data of each
+    /// primitive size and a pointer, named by a UDT. ML writes its debug
+    /// segments as SEGDEF32, whose four-byte length the segment reader took
+    /// for two: it found no $$SYMBOLS and read nothing.
     #[test]
     fn objects_ml_wrote_read_as_the_programs_they_are() {
         let point = "struct point {px +0 UNSIGNED SHORT, py +2 UNSIGNED SHORT}";
@@ -396,7 +403,8 @@ mod tests {
         ] {
             assert!(p3.iter().any(|one| one == expected), "no {expected:?} in {p3:#?}");
         }
-        // Flat 32-bit: a four-byte member is at 4, and a pointer to a dword is NEAR32.
+        // Flat 32-bit: a four-byte member is at 4, and a pointer to a dword is
+        // NEAR32.
         let p2 = shape_of("p2.obj");
         assert!(p2.contains(&"DATA pt: struct point {px +0 UNSIGNED LONG, py +4 UNSIGNED LONG}".to_owned()), "{p2:#?}");
         assert!(shape_of("p4.obj").contains(&"DATA v1: NEAR32 * UNSIGNED LONG".to_owned()));

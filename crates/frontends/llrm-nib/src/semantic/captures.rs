@@ -27,7 +27,8 @@ impl FunctionCompiler<'_> {
         roots.iter().filter_map(|root| self.borrowed_ordinals.get(&root.owner).copied()).collect()
     }
 
-    /// Notes that what `roots` borrow from is kept: of each parameter among them.
+    /// Notes that what `roots` borrow from is kept: of each parameter among
+    /// them.
     pub(super) fn keep_lent(
         &mut self,
         roots: &BTreeSet<Root>,

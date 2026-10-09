@@ -19,10 +19,12 @@ fn pipeline(arguments: &[&str]) -> Options {
     parsed(arguments).unwrap().pipeline()
 }
 
-/// The allocator tries other shapes of a body at every level but -O0, and `-f[no-]allocation-search` sets it anywhere.
-/// (gcc runs IRA once; turning the search off at -O1 to -Os cuts QCport's compile 26-29% for +0.1% of its bytes and
-/// nothing on the 66 m32 programs, but costs the 16-bit bench kernels 5-20% of their instructions: quicksort -O2 +20%,
-/// where `Scoped` keeps a loop's address base in a register. The default stays; the switch is there.)
+/// The allocator tries other shapes of a body at every level but -O0, and
+/// `-f[no-]allocation-search` sets it anywhere. (gcc runs IRA once; turning the
+/// search off at -O1 to -Os cuts QCport's compile 26-29% for +0.1% of its bytes
+/// and nothing on the 66 m32 programs, but costs the 16-bit bench kernels 5-20%
+/// of their instructions: quicksort -O2 +20%, where `Scoped` keeps a loop's
+/// address base in a register. The default stays; the switch is there.)
 #[test]
 fn test_allocation_search_is_on_at_every_level_but_o0_and_a_flag_sets_it_anywhere() {
     for (level, on) in [("-O0", false), ("-O1", true), ("-O2", true), ("-Os", true), ("-O3", true), ("-Omax", true)] {
@@ -32,9 +34,10 @@ fn test_allocation_search_is_on_at_every_level_but_o0_and_a_flag_sets_it_anywher
     }
 }
 
-/// A function is made by the allocator alone and by the spiller's route and the cheaper kept at every level but -O0:
-/// that choice, not the search of shapes, is what the single allocation lost at x_dct (+15% clocks), x_ll_arith (+17.6%
-/// code) and recmany (+13%) when both were turned off together.
+/// A function is made by the allocator alone and by the spiller's route and the
+/// cheaper kept at every level but -O0: that choice, not the search of shapes,
+/// is what the single allocation lost at x_dct (+15% clocks), x_ll_arith
+/// (+17.6% code) and recmany (+13%) when both were turned off together.
 #[test]
 fn test_the_routes_are_compared_at_every_level_but_o0() {
     for (level, on) in [("-O0", false), ("-O1", true), ("-O2", true), ("-Os", true), ("-O3", true), ("-Omax", true)] {
@@ -49,8 +52,10 @@ fn test_the_routes_are_compared_at_every_level_but_o0() {
     assert!(!pipeline(&["-O2", "-fno-allocation-routes"]).compares_routes());
 }
 
-/// Only -Omax tries every shape of a body; the other levels try the one its spills suggest, as the search over all of
-/// them cost 2.7x the compile time for +0.04% of QCport's bytes. `-f[no-]allocation-search-all` sets it at any level.
+/// Only -Omax tries every shape of a body; the other levels try the one its
+/// spills suggest, as the search over all of them cost 2.7x the compile time
+/// for +0.04% of QCport's bytes. `-f[no-]allocation-search-all` sets it at any
+/// level.
 #[test]
 fn test_only_omax_searches_every_shape() {
     for level in ["-O1", "-O2", "-O3", "-Os"] {
@@ -61,13 +66,16 @@ fn test_only_omax_searches_every_shape() {
     assert!(!pipeline(&["-Omax", "-fno-allocation-search-all"]).searches_all());
 }
 
-/// The passes a level runs are gcc 13.4.0's `default_options_table` (opts.cc 573-694) for the passes this compiler has:
-/// -O1 the scalar ones and the last call inlined, -O2 adds inlining, gcse, sibling calls and pattern fill, -O3 peeling,
-/// unswitching, complete copies of loops that grow the code, and the larger inline threshold. Before, -O1 and -O2
-/// differed by loop copies alone and -O2 let a complete copy grow the code.
+/// The passes a level runs are gcc 13.4.0's `default_options_table` (opts.cc
+/// 573-694) for the passes this compiler has: -O1 the scalar ones and the last
+/// call inlined, -O2 adds inlining, gcse, sibling calls and pattern fill, -O3
+/// peeling, unswitching, complete copies of loops that grow the code, and the
+/// larger inline threshold. Before, -O1 and -O2 differed by loop copies alone
+/// and -O2 let a complete copy grow the code.
 #[test]
 fn each_level_selects_gcc_s_passes() {
-    // (scalar passes, last call inlined, inlines at all, gcse, sibling calls, fill, peel, unswitch, copies may grow)
+    // (scalar passes, last call inlined, inlines at all, gcse, sibling calls,
+    // fill, peel, unswitch, copies may grow)
     let row = |level: &str| {
         let o = pipeline(&[level]);
         (
@@ -118,7 +126,8 @@ fn each_level_selects_gcc_s_passes() {
     assert!(parsed(&["-O4"]).is_err());
 }
 
-/// `-Omax` was no level: "unknown optimization level", so a build that meant "everything on" had to say `-O3`.
+/// `-Omax` was no level: "unknown optimization level", so a build that meant
+/// "everything on" had to say `-O3`.
 #[test]
 fn test_omax_is_every_pass_on_with_the_widest_budgets() {
     assert_eq!(pipeline(&["-Omax"]), Options::aggressive());
@@ -126,8 +135,9 @@ fn test_omax_is_every_pass_on_with_the_widest_budgets() {
     assert!(parsed(&["-Omaximum"]).is_err());
 }
 
-/// `-fno-inline-functions` was no inlining at all, the last call of a function included; gcc's leaves
-/// `-finline-functions-called-once` on and so does this, which is the spelling for none.
+/// `-fno-inline-functions` was no inlining at all, the last call of a function
+/// included; gcc's leaves `-finline-functions-called-once` on and so does this,
+/// which is the spelling for none.
 #[test]
 fn test_no_inline_functions_leaves_called_once_on_as_gcc_does() {
     assert!(pipeline(&["-O2", "-fno-inline-functions"]).inline.last);
@@ -150,7 +160,8 @@ fn a_pass_option_overrides_the_level_wherever_it_stands() {
     assert!(error.contains("-fno-vectorize") && error.contains("-funroll-loops"), "{error}");
 }
 
-/// A target names the CPUs gcc's `-march`/`-mtune` take in its `timings.times`, not the flag parser.
+/// A target names the CPUs gcc's `-march`/`-mtune` take in its `timings.times`,
+/// not the flag parser.
 #[test]
 fn march_and_mtune_name_the_cpu_profiles() {
     use llrm_target::Target;
@@ -201,8 +212,9 @@ fn stack_is_data_only_when_asked() {
     assert!(!machine(&["-mstack-is-data", "-mno-stack-is-data"]));
 }
 
-/// Far zero data is stored unless -mfar-bss says the start-up zeroes it: a start-up that does not
-/// (Borland's, Open Watcom's) would otherwise read whatever DOS left there.
+/// Far zero data is stored unless -mfar-bss says the start-up zeroes it: a
+/// start-up that does not (Borland's, Open Watcom's) would otherwise read
+/// whatever DOS left there.
 #[test]
 fn far_zero_data_is_stored_unless_the_startup_zeroes_it() {
     let machine = |arguments: &[&str]| {
@@ -228,7 +240,8 @@ fn sanitizers_take_gccs_names() {
     assert_eq!(sanitize(&["-fsanitize=undefined", "-fno-sanitize=bounds"]), Sanitize { bounds: false, ..all });
     assert_eq!(sanitize(&["-ftrapv"]), Sanitize { signed_integer_overflow: true, ..Sanitize::default() });
     assert!(parsed(&["-fsanitize=address"]).is_err());
-    // A check that costs code on every call is asked for by name, never by `undefined`.
+    // A check that costs code on every call is asked for by name, never by
+    // `undefined`.
     assert!(
         sanitize(&["-fsanitize=stack"]).stack && !sanitize(&["-fsanitize=undefined"]).stack && !sanitize(&[]).stack
     );
@@ -263,7 +276,8 @@ fn clocks_per_byte_limits_the_growth_an_inline_may_buy() {
     assert!(parsed(&["--clocks-per-byte", "lots"]).is_err());
 }
 
-/// `-m16`, `-m32` and `-m64` name the target as gcc's do; `--target NAME` was a spelling of its own.
+/// `-m16`, `-m32` and `-m64` name the target as gcc's do; `--target NAME` was a
+/// spelling of its own.
 #[test]
 fn a_target_is_named_by_gccs_m_flag() {
     assert_eq!(parsed(&[]).unwrap().mode(), None);

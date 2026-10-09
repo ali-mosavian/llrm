@@ -29,7 +29,8 @@ fn compiled_checking(
         "-o",
         directory.path().join("t.obj").to_str().unwrap(),
     ]);
-    // Every step is listed: under load, the top 30 by own time are not always the same 30.
+    // Every step is listed: under load, the top 30 by own time are not always
+    // the same 30.
     command.env_remove("LLRM_DEBUG").env_remove("LLRM_VERIFY").env("LLRM_TIME_TOP", "1000");
     if let Some(verify) = verify {
         command.env("LLRM_VERIFY", verify);
@@ -42,7 +43,8 @@ fn compiled_checking(
     String::from_utf8_lossy(&done.stderr).into_owned()
 }
 
-/// The number before `ms` in the `[time] <line> ...` line's field called `field`.
+/// The number before `ms` in the `[time] <line> ...` line's field called
+/// `field`.
 fn field(
     report: &str,
     line: &str,
@@ -53,10 +55,11 @@ fn field(
     after.trim().split_whitespace().next().unwrap().parse().unwrap()
 }
 
-/// Before the whole run was timed, about half of a compile was in no timed step (#394): the
-/// outermost steps must add up to the run. By the thread's CPU time, not the wall clock: on a loaded machine the
-/// thread waits for its turn between two steps, which is in no step and in nothing the compiler did (4 of 10 runs
-/// failed with eight busy loops on the test's CPU).
+/// Before the whole run was timed, about half of a compile was in no timed step
+/// (#394): the outermost steps must add up to the run. By the thread's CPU
+/// time, not the wall clock: on a loaded machine the thread waits for its turn
+/// between two steps, which is in no step and in nothing the compiler did (4 of
+/// 10 runs failed with eight busy loops on the test's CPU).
 #[test]
 fn test_the_outermost_steps_add_up_to_the_runs_cpu_time() {
     let report = compiled(Some("time"));
@@ -66,8 +69,8 @@ fn test_the_outermost_steps_add_up_to_the_runs_cpu_time() {
     assert!(untimed <= (cpu * 0.02).max(2.0), "{untimed} ms of {cpu} ms of CPU is in no step:\n{report}");
 }
 
-/// A pass the pass manager ran, and the analyses it asked for, are in the report, under the
-/// pipeline step.
+/// A pass the pass manager ran, and the analyses it asked for, are in the
+/// report, under the pipeline step.
 #[test]
 fn test_a_pass_manager_pass_and_its_analyses_are_in_the_report() {
     let report = compiled(Some("time"));
@@ -93,8 +96,9 @@ fn test_no_time_report_without_the_flag() {
     assert!(!report.contains("[time]"), "{report}");
 }
 
-/// Every pass and every machine phase was verified in a user's compile: 22 LIR verifications and 8 of the MIR a
-/// function, 5% of a small program's compile time. LLVM's release pipeline verifies its input once; the tests, the gate
+/// Every pass and every machine phase was verified in a user's compile: 22 LIR
+/// verifications and 8 of the MIR a function, 5% of a small program's compile
+/// time. LLVM's release pipeline verifies its input once; the tests, the gate
 /// and torture set `LLRM_VERIFY`.
 #[test]
 fn test_each_pass_and_phase_is_verified_only_when_asked() {

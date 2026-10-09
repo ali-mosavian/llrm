@@ -39,7 +39,8 @@ fn token(
     };
     match byte {
         _ if reference && junk => "-".to_owned(),
-        // An address, of the frame, of data or from a pointer: which one is BC's or llrm's to choose.
+        // An address, of the frame, of data or from a pointer: which one is
+        // BC's or llrm's to choose.
         Byte::Address(_, _, part) => format!("&.{part}"),
         Byte::Entry("ss" | "ds", part) => format!("dgroup.{part}"),
         other => named(other),
@@ -111,7 +112,8 @@ fn kept(procedure: &Procedure) -> Vec<String> {
     kept
 }
 
-/// A branch cuts a run short; only what the harness calls straight through is compared.
+/// A branch cuts a run short; only what the harness calls straight through is
+/// compared.
 const PROBE: [&str; 5] = ["TRASH", "ARM", "VERIFY", "ARMX", "VERIFYX"];
 
 /// Each FUNCTION's type suffix, by its plain name, as BC's listing names it.

@@ -519,17 +519,19 @@ fn a_copy_is_priced_against_its_loop() {
     let forward = super::_cheaper(1, Some(40), None, &speed, false, Some((2, false)));
     let backward = super::_cheaper(1, Some(40), None, &speed, false, Some((2, true)));
     assert!(!(backward && !forward), "running down is dearer, never cheaper");
-    // Seven known words under -Os: isel makes four loads and four stores of them, as large as
-    // they are, so a loop of 30 bytes stays. Priced as `rep movs` it grew lru.nib by 39 bytes.
+    // Seven known words under -Os: isel makes four loads and four stores of
+    // them, as large as they are, so a loop of 30 bytes stays. Priced as
+    // `rep movs` it grew lru.nib by 39 bytes.
     let size = llrm_x86_m16::Dos::default().size_costs();
     assert!(!super::_cheaper(30, Some(7), None, &size, true, Some((2, false))));
 }
 
 const FLAT: &str = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-n8:16:32\"\n\n";
 
-/// bench/scroll on -m32: a `short` counter, its cell addressed `2 * sext(i + k)` off an
-/// i8 GEP. The loops were not made `memmove`: the counter's width (16) is not the index's
-/// (32), and scroll ran 1196306 instructions against gcc's 176970.
+/// bench/scroll on -m32: a `short` counter, its cell addressed `2 * sext(i +
+/// k)` off an i8 GEP. The loops were not made `memmove`: the counter's width
+/// (16) is not the index's (32), and scroll ran 1196306 instructions against
+/// gcc's 176970.
 fn scroll(up: bool) -> String {
     let cells = (0..64).map(|at| format!("i16 {}", 100 + at)).collect::<Vec<_>>().join(", ");
     let (start, test, step, from, to) =
@@ -570,7 +572,8 @@ b3:
 
 const SCROLL_INPUTS: &[&[i128]] = &[&[0, 0], &[1, 3], &[20, 0], &[20, 8], &[20, 27], &[30, 40], &[40, 70]];
 
-/// `a[i] = a[i + 8]` on a 16-bit counter over 32-bit pointers is one forward `llvm.memmove`.
+/// `a[i] = a[i + 8]` on a 16-bit counter over 32-bit pointers is one forward
+/// `llvm.memmove`.
 #[test]
 fn a_short_counter_scroll_up_is_one_memmove() {
     let after = managed_fill_on(FLAT, &scroll(true), SCROLL_INPUTS);

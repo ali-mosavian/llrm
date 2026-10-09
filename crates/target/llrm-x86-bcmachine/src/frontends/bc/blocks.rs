@@ -48,8 +48,8 @@ impl Ends {
 }
 
 // What iced calls it, and what it means for a block. The one that matters is
-// that a call is NEXT-like: it comes back, and treating it as an end halved what
-// liveness could see -- 49 of 102 blocks.
+// that a call is NEXT-like: it comes back, and treating it as an end halved
+// what liveness could see -- 49 of 102 blocks.
 fn ends_of(flow: FlowControl) -> Option<Ends> {
     Some(match flow {
         FlowControl::Next | FlowControl::Call | FlowControl::Interrupt | FlowControl::IndirectCall => {
@@ -164,7 +164,8 @@ pub fn event_enabled(module: &Module) -> bool {
         && u16::from_le_bytes([module.code[U_FLAG], module.code[U_FLAG + 1]]) & EVENTS != 0
 }
 
-// CMP word [b$EVTFLG],0 / JNE past / RET / POP AX / PUSH CS / PUSH AX / JMP FAR B$EVK1
+// CMP word [b$EVTFLG],0 / JNE past / RET / POP AX / PUSH CS / PUSH AX / JMP FAR
+// B$EVK1
 pub const EVENT_ADAPTER: [&[Code]; 7] = [
     &[Code::Cmp_rm16_imm8, Code::Cmp_rm16_imm16],
     &[Code::Jne_rel8_16, Code::Jne_rel16],
@@ -389,7 +390,8 @@ pub fn native_gap_entry(
     Some(lo)
 }
 
-/// Ranges that reachability never explained, so nothing may be moved across them.
+/// Ranges that reachability never explained, so nothing may be moved across
+/// them.
 pub fn gaps(
     module: &Module,
     starts: &BTreeSet<usize>,
@@ -553,7 +555,8 @@ pub fn benign(
     (at == hi).then_some(dead)
 }
 
-/// Whether every relocated field sits inside an operand of a reached instruction.
+/// Whether every relocated field sits inside an operand of a reached
+/// instruction.
 ///
 /// The fixups are BC's own map of where operand fields are, so they are
 /// what says the alignment is right.
@@ -568,8 +571,9 @@ pub fn operand_fields(
         return None;
     }
     // A real instruction stream tiles. A decode that started inside the header
-    // drifts into the middle of the first instruction and reports fragments that
-    // overlap it, which is what an entry one or two bytes off looks like.
+    // drifts into the middle of the first instruction and reports fragments
+    // that overlap it, which is what an entry one or two bytes off looks
+    // like.
     if reached.windows(2).any(|pair| pair[0].end() > pair[1].at) {
         return None;
     }
@@ -647,9 +651,10 @@ pub fn code_map(module: &Module) -> Result<CodeMap, String> {
             found.tables.sort();
         }
         // Score by how many relocated fields the decode accounts for. An entry
-        // too early reads header bytes as code; one too late skips real code and
-        // leaves its operands unexplained. The count is what separates them, and
-        // the largest entry breaks the tie, so the least data gets decoded.
+        // too early reads header bytes as code; one too late skips real code
+        // and leaves its operands unexplained. The count is what
+        // separates them, and the largest entry breaks the tie, so the
+        // least data gets decoded.
         let explained = module.sites.iter().filter(|&&site| accounted(site as usize)).count();
         if best.as_ref().is_none_or(|best| (explained, entry) > (best.0, best.1)) {
             best = Some((explained, entry, found));

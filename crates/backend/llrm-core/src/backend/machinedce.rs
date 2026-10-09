@@ -2,11 +2,11 @@
 //! instructions whose complete result is dead.
 //!
 //! MIR dead-code elimination reasons about values before allocation. Lowering,
-//! splitting and physical rewrites can leave a machine computation whose virtual
-//! definition still exists but whose physical register and flag results are all
-//! dead. This pass answers only that machine question. Source memory reads,
-//! control flow, trapping arithmetic, x87 work and relocations are deliberately
-//! outside it.
+//! splitting and physical rewrites can leave a machine computation whose
+//! virtual definition still exists but whose physical register and flag results
+//! are all dead. This pass answers only that machine question. Source memory
+//! reads, control flow, trapping arithmetic, x87 work and relocations are
+//! deliberately outside it.
 
 use std::sync::Arc;
 
@@ -81,7 +81,8 @@ fn _pure(one: &Insn) -> bool {
         && !one.barrier()
 }
 
-/// `body` with one sweep's dead work anchored, or None where Python returns `body` itself.
+/// `body` with one sweep's dead work anchored, or None where Python returns
+/// `body` itself.
 fn _once(body: &LirBody) -> Option<LirBody> {
     let exits = liveness::dead_at_exit(body);
     let mut blocks = Vec::new();
@@ -122,7 +123,8 @@ fn _once(body: &LirBody) -> Option<LirBody> {
 pub fn eliminated(body: LirBody) -> LirBody {
     let mut body = body;
     for _round in 0..std::cmp::max(1, body.insns().len()) {
-        // `after is body`: `_once` answers None where it returned `body` itself.
+        // `after is body`: `_once` answers None where it returned `body`
+        // itself.
         match _once(&body) {
             None => return body,
             Some(after) => body = after,
@@ -271,8 +273,9 @@ mod tests {
         assert_eq!(result.blocks[0].insns[0].what, add.what);
     }
 
-    /// Nib's quicksort left `mov bx, [bp+8]; mov bx, [bp+10]` on the loop exit: reloads of two
-    /// parameters, the second overwriting the first and neither read, two instructions per call.
+    /// Nib's quicksort left `mov bx, [bp+8]; mov bx, [bp+10]` on the loop exit:
+    /// reloads of two parameters, the second overwriting the first and
+    /// neither read, two instructions per call.
     #[test]
     fn test_dead_frame_slot_load_is_eliminated() {
         let load = Arc::new(Insn::new(
@@ -317,7 +320,8 @@ mod tests {
 
     #[test]
     fn test_call_stack_cleanup_is_never_dead_machine_work() {
-        // C calls lost `add sp,N` cleanup when a later compare killed its flags.
+        // C calls lost `add sp,N` cleanup when a later compare killed its
+        // flags.
         let cleanup = Arc::new(Insn::new(
             0,
             Some((0, 3)),

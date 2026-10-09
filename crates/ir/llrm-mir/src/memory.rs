@@ -25,7 +25,8 @@ impl Effects {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Summary {
     pub effects: Effects,
-    /// Those of `effects` on memory the program can name: not `inaccessiblemem`.
+    /// Those of `effects` on memory the program can name: not
+    /// `inaccessiblemem`.
     pub accessible: Effects,
     /// Its effects only reach what its pointer arguments point to.
     pub arguments_only: bool,
@@ -43,13 +44,14 @@ pub struct Summary {
     pub lifetime: bool,
 }
 
-/// Hashed with fixed keys: std's seeds each map afresh, and the work of building one then differs run to run
-/// (`callee-effects` read 97.7 to 98.6 Minstr compiling one program, which put a step at the scaling gate's 2% floor in
-/// and out of its budget).
+/// Hashed with fixed keys: std's seeds each map afresh, and the work of
+/// building one then differs run to run (`callee-effects` read 97.7 to 98.6
+/// Minstr compiling one program, which put a step at the scaling gate's 2%
+/// floor in and out of its budget).
 pub type Callees = HashMap<GlobalId, Summary>;
 
-/// One scan of every function in `module`; counted as `callees` for an observer, which a pass that asks per query
-/// shows.
+/// One scan of every function in `module`; counted as `callees` for an
+/// observer, which a pass that asks per query shows.
 pub fn callees(module: &Module) -> Callees {
     crate::passes::counted("callees", false);
     module
@@ -88,7 +90,8 @@ pub fn summary(function: &Function) -> Summary {
     }
 }
 
-/// A call to `llvm.experimental.memset.pattern`: where, the cell, and how many cells.
+/// A call to `llvm.experimental.memset.pattern`: where, the cell, and how many
+/// cells.
 pub fn pattern(
     context: &Context,
     callees: &Callees,
@@ -124,9 +127,10 @@ pub fn lifetime(
     (summary.lifetime && operands.len() == 3).then(|| operands[1])
 }
 
-/// Whether `function` calls a routine that returns twice (`setjmp`): the call or
-/// its callee says so. In such a function a stack slot another local used before the
-/// first return holds that local's value after the second, so no slot is shared.
+/// Whether `function` calls a routine that returns twice (`setjmp`): the call
+/// or its callee says so. In such a function a stack slot another local used
+/// before the first return holds that local's value after the second, so no
+/// slot is shared.
 pub fn calls_returns_twice(
     module: &Module,
     function: &Function,
@@ -235,8 +239,8 @@ pub fn only_value(
     }
 }
 
-/// Work that stores nothing, reads nothing and cannot trap: `only_value` less loads, allocas, calls
-/// and the divisions, which trap.
+/// Work that stores nothing, reads nothing and cannot trap: `only_value` less
+/// loads, allocas, calls and the divisions, which trap.
 pub fn speculatable(
     context: &Context,
     callees: &Callees,
@@ -255,7 +259,8 @@ pub fn speculatable(
     !traps && !reads && only_value(context, callees, function, inst)
 }
 
-/// Whether `opcode` is an operation, a plain load among them, whose only effect is its value.
+/// Whether `opcode` is an operation, a plain load among them, whose only effect
+/// is its value.
 pub fn pure_operation(opcode: &Opcode) -> bool {
     matches!(
         opcode,
@@ -335,7 +340,8 @@ fn at(
                         .iter()
                         .find(|(one, _)| one.as_deref() == location)
                         .map_or(default, |(_, one)| access(one)),
-                    // Another named location, as `errnomem`, is part of the rest.
+                    // Another named location, as `errnomem`, is part of the
+                    // rest.
                     None => locations
                         .iter()
                         .filter(|(one, _)| one.is_some() && !LOCATIONS.contains(&one.as_deref()))
@@ -435,9 +441,9 @@ pub fn invariant(
     facts.no_alias() && facts.read_only()
 }
 
-/// Whether the load `inst` reads memory nothing writes once it is initialised: the language says
-/// so of the load (`!invariant.load`) or of what it reads (`invariant`). Every pass that asks
-/// what may clobber a load asks this first.
+/// Whether the load `inst` reads memory nothing writes once it is initialised:
+/// the language says so of the load (`!invariant.load`) or of what it reads
+/// (`invariant`). Every pass that asks what may clobber a load asks this first.
 pub fn invariant_load(
     context: &Context,
     layout: &DataLayout,

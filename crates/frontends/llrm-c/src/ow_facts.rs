@@ -37,13 +37,16 @@ pub fn param_fact(term: &str) -> Option<Fact> {
 /// What becomes of one bit of Open Watcom's call class (`cg/h/cgauxcc.h`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Bit {
-    /// States a fact about the routine (`NoReturn`, `Memory`); see `of_call_class`.
+    /// States a fact about the routine (`NoReturn`, `Memory`); see
+    /// `of_call_class`.
     Fact,
     /// Part of how the routine is called; read where the call is made.
     Abi(&'static str),
-    /// Changes what the code after a call means, so no fact: a field of the routine.
+    /// Changes what the code after a call means, so no fact: a field of the
+    /// routine.
     Meaning(&'static str),
-    /// Changes what the program means and has no carrier yet: the compile stops.
+    /// Changes what the program means and has no carrier yet: the compile
+    /// stops.
     Refused(&'static str),
     /// Has no meaning for this target.
     Ignored(&'static str),
@@ -186,7 +189,8 @@ mod tests {
     /// compiled as though it returned once.
     #[test]
     fn a_call_class_bit_with_no_carrier_stops_the_compile() {
-        // A routine that returns twice is a field of the callable, not a refusal.
+        // A routine that returns twice is a field of the callable, not a
+        // refusal.
         assert_eq!(of_call_class(0x40).unwrap(), Vec::<Fact>::new());
         assert!(returns_twice(0x40) && !returns_twice(0x80));
         assert!(of_call_class(0x88).unwrap_err().0.contains("PARMS_BY_ADDRESS"));
