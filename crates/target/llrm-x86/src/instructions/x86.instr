@@ -23,94 +23,97 @@
 #              read when both operands are one register), `self` (no
 #              instruction when they are), `same` (the registers must be one
 #              size), `narrow` (address registers as wide as the destination).
-#   iced       iced-x86's Code, `{w}` the width and `{cc}` the condition; the
-#              flags it reads and writes are iced's (instructions::flags).
+#   flags      READ/WRITTEN: flag names (OF SF ZF AF CF PF DF, the x87 C0-C3)
+#              comma separated or `-`; written includes undefined. `cc/-` reads
+#              the flags the condition tests.
+#   iced       iced-x86's Code, `{w}` the width and `{cc}` the condition; a test
+#              checks the flags column against iced's for the Code.
 #
-# name   operation shape            widths    cost        fixed                  reads writes iced
-mov       move       rm/rmi             8,16,32    mov_rr       -                       self,same  -       Mov_rm{w}_r{w}
-movzx     extend     r/rm               16,32      movzx        -                       -       -       Movzx_r{w}_rm8
-movsx     extend     r/rm               16,32      movzx        -                       -       -       Movsx_r{w}_rm8
-lea       addr       r/a                16,32      lea          -                       -ds,-ss,narrow  -       Lea_r{w}_m
-xchg      xchg       r,rm/^1,^0         8,16,32    alu_rr       -                       -       -       Xchg_rm{w}_r{w}
-add       binary     rm/^0,rmi          8,16,32    alu_rr       -                       same    -       Add_rm{w}_r{w}
-adc       binary     rm/^0,rmi          8,16,32    alu_rr       -                       same    -       Adc_rm{w}_r{w}
-sub       binary     rm/^0,rmi          8,16,32    alu_rr       -                       idiom,same  -       Sub_rm{w}_r{w}
-sbb       binary     rm/^0,rmi          8,16,32    alu_rr       -                       same    -       Sbb_rm{w}_r{w}
-and       binary     rm/^0,rmi          8,16,32    alu_rr       -                       same    -       And_rm{w}_r{w}
-or        binary     rm/^0,rmi          8,16,32    alu_rr       -                       same    -       Or_rm{w}_r{w}
-xor       binary     rm/^0,rmi          8,16,32    alu_rr       -                       idiom,same  -       Xor_rm{w}_r{w}
-shl       binary     rm/^0,ri           8,16,32    shift_ri     s1=cx                   -       count   Shl_rm{w}_CL
-sal       binary     rm/^0,ri           8,16,32    shift_ri     s1=cx                   -       count   Sal_rm{w}_CL
-shr       binary     rm/^0,ri           8,16,32    shift_ri     s1=cx                   -       count   Shr_rm{w}_CL
-sar       binary     rm/^0,ri           8,16,32    shift_ri     s1=cx                   -       count   Sar_rm{w}_CL
-rol       binary     rm/^0,ri           8,16,32    shift_ri     s1=cx                   -       count   Rol_rm{w}_CL
-ror       binary     rm/^0,ri           8,16,32    shift_ri     s1=cx                   -       count   Ror_rm{w}_CL
-rcl       binary     rm/^0,ri           8,16,32    shift_ri     s1=cx                   -       count   Rcl_rm{w}_CL
-rcr       binary     rm/^0,ri           8,16,32    shift_ri     s1=cx                   -       count   Rcr_rm{w}_CL
-shld      funnel     rm/^0,r,ri         16,32      shift_ri     s2=cx                   -       count   Shld_rm{w}_r{w}_CL
-shrd      funnel     rm/^0,r,ri         16,32      shift_ri     s2=cx                   -       count   Shrd_rm{w}_r{w}_CL
-neg       unary      rm/^0              8,16,32    alu_rr       -                       -       -       Neg_rm{w}
-not       unary      rm/^0              8,16,32    alu_rr       -                       -       -       Not_rm{w}
-inc       unary      rm/^0              8,16,32    alu_rr       -                       -       -       Inc_rm{w}
-dec       unary      rm/^0              8,16,32    alu_rr       -                       -       -       Dec_rm{w}
-imul      mul        r/^0,rmi           16,32      imul_r32     -                       -       -       Imul_r{w}_rm{w}
-imul      mul        r/rm,i             16,32      imul_r32     -                       -       -       Imul_r{w}_rm{w}_imm{w}
-imul      mul        r,r/r,rm           8,16,32    mul_r16      d0=ax,d1=dx,s0=ax       -       -       Imul_rm{w}
-mul       mul        r,r/r,rm           8,16,32    mul_r16      d0=ax,d1=dx,s0=ax       -       -       Mul_rm{w}
-idiv      div        r,r/r,r,rm         8,16,32    idiv_r32     d0=ax,d1=dx,s0=dx,s1=ax  -dx@8   -dx@8   Idiv_rm{w}
-div       div        r,r/r,r,rm         8,16,32    div_r16      d0=ax,d1=dx,s0=dx,s1=ax  -dx@8   -dx@8   Div_rm{w}
-cwd       extend     r/r                16         cdq          s0=ax,d0=dx             -       -       Cwd
-cdq       extend     r/r                32         cdq          s0=ax,d0=dx             -       -       Cdq
-cmp       cmp        -/rm,rmi           8,16,32    alu_rr       -                       same    -       Cmp_rm{w}_r{w}
-test      cmp        -/rm,ri            8,16,32    alu_rr       -                       -       -       Test_rm{w}_r{w}
-set{cc}   unary      rm/-               8          alu_rr       -                       -       -       Set{cc}_rm8
-push      push       -/rmi              16,32      push_r       -                       sp,ss   sp      Push_r{w}
-pop       pop        rm/-               16,32      pop_r        -                       sp,ss   sp      Pop_r{w}
-in        barrier    r/ri               8,16       unknown      s0=dx,d0=ax             -       -       In_AL_DX
-out       barrier    -/ri,r             8,16       unknown      s0=dx,s1=ax             -       -       Out_DX_AL
-fld       fload      s/ms               -          x87_load     -                       -       -       Fld_m64fp
-fild      fload      s/m                -          x87_load     -                       -       -       Fild_m32int
-fldz      fload      s/-                -          x87_load     -                       -       -       Fldz
-fld1      fload      s/-                -          x87_load     -                       -       -       Fld1
-fstp      fstore     m/s                -          x87_store    -                       -       -       Fstp_m64fp
-fistp     fstore     m/s                -          x87_convert_store  -                       -       -       Fistp_m32int
-fisttp    fstore     m/s                -          x87_convert_store  -                       -       -       Fisttp_m32int
-fadd      farith     s/s,ms             -          x87_add      -                       -       -       Fadd_m64fp
-fsub      farith     s/s,ms             -          x87_add      -                       -       -       Fsub_m64fp
-fmul      farith     s/s,ms             -          x87_mul      -                       -       -       Fmul_m64fp
-fdiv      farith     s/s,ms             -          x87_div      -                       -       -       Fdiv_m64fp
-fchs      funary     s/s                -          x87_add      -                       -       -       Fchs
-fabs      funary     s/s                -          x87_add      -                       -       -       Fabs
-fsqrt     funary     s/s                -          x87_div      -                       -       -       Fsqrt
-frndint   funary     s/s                -          x87_add      -                       -       -       Frndint
-fsin      funary     s/s                -          x87_div      -                       -       -       Fsin
-fcos      funary     s/s                -          x87_div      -                       -       -       Fcos
-fcom      cmp        -/s,ms             -          x87_add      -                       -       -       Fcom_m64fp
-fxch      xchg       s,s/s,s            -          x87_exchange  -                       -       -       Fxch_st0_sti
-fsubr     farith     s/s,ms             -          x87_add      -                       -       -       Fsubr_m64fp
-fdivr     farith     s/s,ms             -          x87_div      -                       -       -       Fdivr_m64fp
-fiadd     farith     s/s,m              -          x87_add      -                       -       -       Fiadd_m16int
-fisub     farith     s/s,m              -          x87_add      -                       -       -       Fisub_m16int
-fisubr    farith     s/s,m              -          x87_add      -                       -       -       Fisubr_m16int
-fimul     farith     s/s,m              -          x87_mul      -                       -       -       Fimul_m16int
-fidiv     farith     s/s,m              -          x87_div      -                       -       -       Fidiv_m16int
-fidivr    farith     s/s,m              -          x87_div      -                       -       -       Fidivr_m16int
-faddp     farithp    s/s,s              -          x87_add      -                       -       -       Faddp_sti_st0
-fsubp     farithp    s/s,s              -          x87_add      -                       -       -       Fsubp_sti_st0
-fsubrp    farithp    s/s,s              -          x87_add      -                       -       -       Fsubrp_sti_st0
-fmulp     farithp    s/s,s              -          x87_mul      -                       -       -       Fmulp_sti_st0
-fdivp     farithp    s/s,s              -          x87_div      -                       -       -       Fdivp_sti_st0
-fdivrp    farithp    s/s,s              -          x87_div      -                       -       -       Fdivrp_sti_st0
-fcomp     cmp        -/s,ms             -          x87_add      -                       -       -       Fcomp_m64fp
-fcompp    cmp        -/s,s              -          x87_add      -                       -       -       Fcompp
-fst       fstore     m/s                -          x87_store    -                       -       -       Fst_m64fp
-fist      fstore     m/s                -          x87_convert_store  -                       -       -       Fist_m32int
-fnstsw    barrier    r/-                -          unknown      d0=ax                   -       -       Fnstsw_AX
-fnstcw    barrier    m/-                -          unknown      -                       -       -       Fnstcw_m2byte
-fldcw     barrier    -/m                -          unknown      -                       -       -       Fldcw_m2byte
-sahf      nothing    -/-                -          alu_rr       -                       ah      -       Sahf
-wait      nothing    -/-                -          unknown      -                       -       -       Wait
-nop       nothing    -/-                -          unknown      -                       -       -       Nopd
-leave     leave      -/-                -          unknown      -                       bp,ss   bp,sp   Leavew
-cld       nothing    -/-                -          alu_rr       -                       -       -       Cld
-std       nothing    -/-                -          alu_rr       -                       -       -       Std
+# name   operation shape            widths    cost        fixed                  reads writes flags iced
+mov       move       rm/rmi             8,16,32    mov_rr       -                       self,same  -       -/-             Mov_rm{w}_r{w}
+movzx     extend     r/rm               16,32      movzx        -                       -       -       -/-             Movzx_r{w}_rm8
+movsx     extend     r/rm               16,32      movzx        -                       -       -       -/-             Movsx_r{w}_rm8
+lea       addr       r/a                16,32      lea          -                       -ds,-ss,narrow  -       -/-             Lea_r{w}_m
+xchg      xchg       r,rm/^1,^0         8,16,32    alu_rr       -                       -       -       -/-             Xchg_rm{w}_r{w}
+add       binary     rm/^0,rmi          8,16,32    alu_rr       -                       same    -       -/OF,SF,ZF,AF,CF,PF  Add_rm{w}_r{w}
+adc       binary     rm/^0,rmi          8,16,32    alu_rr       -                       same    -       CF/OF,SF,ZF,AF,CF,PF  Adc_rm{w}_r{w}
+sub       binary     rm/^0,rmi          8,16,32    alu_rr       -                       idiom,same  -       -/OF,SF,ZF,AF,CF,PF  Sub_rm{w}_r{w}
+sbb       binary     rm/^0,rmi          8,16,32    alu_rr       -                       same    -       CF/OF,SF,ZF,AF,CF,PF  Sbb_rm{w}_r{w}
+and       binary     rm/^0,rmi          8,16,32    alu_rr       -                       same    -       -/OF,SF,ZF,AF,CF,PF  And_rm{w}_r{w}
+or        binary     rm/^0,rmi          8,16,32    alu_rr       -                       same    -       -/OF,SF,ZF,AF,CF,PF  Or_rm{w}_r{w}
+xor       binary     rm/^0,rmi          8,16,32    alu_rr       -                       idiom,same  -       -/OF,SF,ZF,AF,CF,PF  Xor_rm{w}_r{w}
+shl       binary     rm/^0,ri           8,16,32    shift_ri     s1=cx                   -       count   -/OF,SF,ZF,AF,CF,PF  Shl_rm{w}_CL
+sal       binary     rm/^0,ri           8,16,32    shift_ri     s1=cx                   -       count   -/OF,SF,ZF,AF,CF,PF  Sal_rm{w}_CL
+shr       binary     rm/^0,ri           8,16,32    shift_ri     s1=cx                   -       count   -/OF,SF,ZF,AF,CF,PF  Shr_rm{w}_CL
+sar       binary     rm/^0,ri           8,16,32    shift_ri     s1=cx                   -       count   -/OF,SF,ZF,AF,CF,PF  Sar_rm{w}_CL
+rol       binary     rm/^0,ri           8,16,32    shift_ri     s1=cx                   -       count   -/OF,CF         Rol_rm{w}_CL
+ror       binary     rm/^0,ri           8,16,32    shift_ri     s1=cx                   -       count   -/OF,CF         Ror_rm{w}_CL
+rcl       binary     rm/^0,ri           8,16,32    shift_ri     s1=cx                   -       count   CF/OF,CF        Rcl_rm{w}_CL
+rcr       binary     rm/^0,ri           8,16,32    shift_ri     s1=cx                   -       count   CF/OF,CF        Rcr_rm{w}_CL
+shld      funnel     rm/^0,r,ri         16,32      shift_ri     s2=cx                   -       count   -/OF,SF,ZF,AF,CF,PF  Shld_rm{w}_r{w}_CL
+shrd      funnel     rm/^0,r,ri         16,32      shift_ri     s2=cx                   -       count   -/OF,SF,ZF,AF,CF,PF  Shrd_rm{w}_r{w}_CL
+neg       unary      rm/^0              8,16,32    alu_rr       -                       -       -       -/OF,SF,ZF,AF,CF,PF  Neg_rm{w}
+not       unary      rm/^0              8,16,32    alu_rr       -                       -       -       -/-             Not_rm{w}
+inc       unary      rm/^0              8,16,32    alu_rr       -                       -       -       -/OF,SF,ZF,AF,PF  Inc_rm{w}
+dec       unary      rm/^0              8,16,32    alu_rr       -                       -       -       -/OF,SF,ZF,AF,PF  Dec_rm{w}
+imul      mul        r/^0,rmi           16,32      imul_r32     -                       -       -       -/OF,SF,ZF,AF,CF,PF  Imul_r{w}_rm{w}
+imul      mul        r/rm,i             16,32      imul_r32     -                       -       -       -/OF,SF,ZF,AF,CF,PF  Imul_r{w}_rm{w}_imm{w}
+imul      mul        r,r/r,rm           8,16,32    mul_r16      d0=ax,d1=dx,s0=ax       -       -       -/OF,SF,ZF,AF,CF,PF  Imul_rm{w}
+mul       mul        r,r/r,rm           8,16,32    mul_r16      d0=ax,d1=dx,s0=ax       -       -       -/OF,SF,ZF,AF,CF,PF  Mul_rm{w}
+idiv      div        r,r/r,r,rm         8,16,32    idiv_r32     d0=ax,d1=dx,s0=dx,s1=ax  -dx@8   -dx@8   -/OF,SF,ZF,AF,CF,PF  Idiv_rm{w}
+div       div        r,r/r,r,rm         8,16,32    div_r16      d0=ax,d1=dx,s0=dx,s1=ax  -dx@8   -dx@8   -/OF,SF,ZF,AF,CF,PF  Div_rm{w}
+cwd       extend     r/r                16         cdq          s0=ax,d0=dx             -       -       -/-             Cwd
+cdq       extend     r/r                32         cdq          s0=ax,d0=dx             -       -       -/-             Cdq
+cmp       cmp        -/rm,rmi           8,16,32    alu_rr       -                       same    -       -/OF,SF,ZF,AF,CF,PF  Cmp_rm{w}_r{w}
+test      cmp        -/rm,ri            8,16,32    alu_rr       -                       -       -       -/OF,SF,ZF,AF,CF,PF  Test_rm{w}_r{w}
+set{cc}   unary      rm/-               8          alu_rr       -                       -       -       cc/-            Set{cc}_rm8
+push      push       -/rmi              16,32      push_r       -                       sp,ss   sp      -/-             Push_r{w}
+pop       pop        rm/-               16,32      pop_r        -                       sp,ss   sp      -/-             Pop_r{w}
+in        barrier    r/ri               8,16       unknown      s0=dx,d0=ax             -       -       -/-             In_AL_DX
+out       barrier    -/ri,r             8,16       unknown      s0=dx,s1=ax             -       -       -/-             Out_DX_AL
+fld       fload      s/ms               -          x87_load     -                       -       -       -/C0,C1,C2,C3   Fld_m64fp
+fild      fload      s/m                -          x87_load     -                       -       -       -/C0,C1,C2,C3   Fild_m32int
+fldz      fload      s/-                -          x87_load     -                       -       -       -/C0,C1,C2,C3   Fldz
+fld1      fload      s/-                -          x87_load     -                       -       -       -/C0,C1,C2,C3   Fld1
+fstp      fstore     m/s                -          x87_store    -                       -       -       -/C0,C1,C2,C3   Fstp_m64fp
+fistp     fstore     m/s                -          x87_convert_store  -                       -       -       -/C0,C1,C2,C3   Fistp_m32int
+fisttp    fstore     m/s                -          x87_convert_store  -                       -       -       -/C0,C1,C2,C3   Fisttp_m32int
+fadd      farith     s/s,ms             -          x87_add      -                       -       -       -/C0,C1,C2,C3   Fadd_m64fp
+fsub      farith     s/s,ms             -          x87_add      -                       -       -       -/C0,C1,C2,C3   Fsub_m64fp
+fmul      farith     s/s,ms             -          x87_mul      -                       -       -       -/C0,C1,C2,C3   Fmul_m64fp
+fdiv      farith     s/s,ms             -          x87_div      -                       -       -       -/C0,C1,C2,C3   Fdiv_m64fp
+fchs      funary     s/s                -          x87_add      -                       -       -       -/C0,C1,C2,C3   Fchs
+fabs      funary     s/s                -          x87_add      -                       -       -       -/C0,C1,C2,C3   Fabs
+fsqrt     funary     s/s                -          x87_div      -                       -       -       -/C0,C1,C2,C3   Fsqrt
+frndint   funary     s/s                -          x87_add      -                       -       -       -/C0,C1,C2,C3   Frndint
+fsin      funary     s/s                -          x87_div      -                       -       -       -/C0,C1,C2,C3   Fsin
+fcos      funary     s/s                -          x87_div      -                       -       -       -/C0,C1,C2,C3   Fcos
+fcom      cmp        -/s,ms             -          x87_add      -                       -       -       -/C0,C1,C2,C3   Fcom_m64fp
+fxch      xchg       s,s/s,s            -          x87_exchange  -                       -       -       -/C0,C1,C2,C3   Fxch_st0_sti
+fsubr     farith     s/s,ms             -          x87_add      -                       -       -       -/C0,C1,C2,C3   Fsubr_m64fp
+fdivr     farith     s/s,ms             -          x87_div      -                       -       -       -/C0,C1,C2,C3   Fdivr_m64fp
+fiadd     farith     s/s,m              -          x87_add      -                       -       -       -/C0,C1,C2,C3   Fiadd_m16int
+fisub     farith     s/s,m              -          x87_add      -                       -       -       -/C0,C1,C2,C3   Fisub_m16int
+fisubr    farith     s/s,m              -          x87_add      -                       -       -       -/C0,C1,C2,C3   Fisubr_m16int
+fimul     farith     s/s,m              -          x87_mul      -                       -       -       -/C0,C1,C2,C3   Fimul_m16int
+fidiv     farith     s/s,m              -          x87_div      -                       -       -       -/C0,C1,C2,C3   Fidiv_m16int
+fidivr    farith     s/s,m              -          x87_div      -                       -       -       -/C0,C1,C2,C3   Fidivr_m16int
+faddp     farithp    s/s,s              -          x87_add      -                       -       -       -/C0,C1,C2,C3   Faddp_sti_st0
+fsubp     farithp    s/s,s              -          x87_add      -                       -       -       -/C0,C1,C2,C3   Fsubp_sti_st0
+fsubrp    farithp    s/s,s              -          x87_add      -                       -       -       -/C0,C1,C2,C3   Fsubrp_sti_st0
+fmulp     farithp    s/s,s              -          x87_mul      -                       -       -       -/C0,C1,C2,C3   Fmulp_sti_st0
+fdivp     farithp    s/s,s              -          x87_div      -                       -       -       -/C0,C1,C2,C3   Fdivp_sti_st0
+fdivrp    farithp    s/s,s              -          x87_div      -                       -       -       -/C0,C1,C2,C3   Fdivrp_sti_st0
+fcomp     cmp        -/s,ms             -          x87_add      -                       -       -       -/C0,C1,C2,C3   Fcomp_m64fp
+fcompp    cmp        -/s,s              -          x87_add      -                       -       -       -/C0,C1,C2,C3   Fcompp
+fst       fstore     m/s                -          x87_store    -                       -       -       -/C0,C1,C2,C3   Fst_m64fp
+fist      fstore     m/s                -          x87_convert_store  -                       -       -       -/C0,C1,C2,C3   Fist_m32int
+fnstsw    barrier    r/-                -          unknown      d0=ax                   -       -       C0,C1,C2,C3/C0,C1,C2,C3  Fnstsw_AX
+fnstcw    barrier    m/-                -          unknown      -                       -       -       -/C0,C1,C2,C3   Fnstcw_m2byte
+fldcw     barrier    -/m                -          unknown      -                       -       -       -/C0,C1,C2,C3   Fldcw_m2byte
+sahf      nothing    -/-                -          alu_rr       -                       ah      -       -/SF,ZF,AF,CF,PF  Sahf
+wait      nothing    -/-                -          unknown      -                       -       -       -/-             Wait
+nop       nothing    -/-                -          unknown      -                       -       -       -/-             Nopd
+leave     leave      -/-                -          unknown      -                       bp,ss   bp,sp   -/-             Leavew
+cld       nothing    -/-                -          alu_rr       -                       -       -       -/DF            Cld
+std       nothing    -/-                -          alu_rr       -                       -       -       -/DF            Std
