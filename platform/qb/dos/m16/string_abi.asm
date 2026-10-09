@@ -4,8 +4,10 @@
 
 extrn _qb_string_assign@3:far
 extrn _qb_string_delete@3:far
+extrn _qb_string_space@3:far
 
 public B$SASS
+public B$SPAC
 public B$STDL
 
 QB_TEXT segment para public 'CODE'
@@ -22,6 +24,15 @@ B$SASS proc far
     pop bp
     retf 4
 B$SASS endp
+
+B$SPAC proc far
+    push bp
+    mov bp, sp
+    mov ax, word ptr [bp+6]
+    call far ptr _qb_string_space@3
+    pop bp
+    retf 2
+B$SPAC endp
 
 B$STDL proc far
     push bp

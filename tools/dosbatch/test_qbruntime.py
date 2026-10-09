@@ -152,3 +152,18 @@ class RuntimeSieveTests(unittest.TestCase):
         self.assertEqual(result.reference.status, "ok")
         self.assertEqual(result.candidate.status, "ok")
         self.assertEqual(result.difference, "")
+
+
+@unittest.skipUnless(qbruntime.dosbatch.QB45.is_dir(), "QB45_DIR is unavailable")
+class RuntimeGrepInventoryTests(unittest.TestCase):
+    def test_grep_links_space_before_its_file_entries_exist(self):
+        """Grep left SPAC unresolved before SPACE$ returned a temporary descriptor."""
+        source = next(source for source in qbruntime.milestone_sources() if source.stem == "grep")
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            object_ = work / "grep.obj"
+            error = run_tests.compile_one(run_tests.Program(source, ["-O2"], None, "qb45"), object_)
+            self.assertIsNone(error)
+            archive, _ = qbruntime.build(work / "archive")
+            result = qbruntime.differential(object_, archive, work / "differential", "grep")
+        self.assertNotIn("B$SPAC", qbruntime.undefined_symbols(result.candidate.detail))
