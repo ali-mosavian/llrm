@@ -50,7 +50,23 @@ def test_the_generated_work_is_still_there_after_optimisation(axis, tmp_path):
 
 def test_parse_time_reads_own_ms_and_the_mir_line():
     text = "[mir] functions 3 instructions 180\n[time] by own time:\n[time]      1.500 ms own      2.000 ms total       2x lir peephole\n[time] nesting\n"
-    assert scaling.parse_time(text) == {"steps": {"lir peephole": 1.5}, "functions": 3, "mir": 180}
+    assert scaling.parse_time(text) == {"steps": {"lir peephole": 1.5}, "instr": {}, "functions": 3, "mir": 180}
+
+
+def test_parse_time_reads_each_steps_own_instructions():
+    text = "[instr]     12.500 Minstr own     20.000 Minstr total       3x mir sroa\n[instr]      0.250 Minstr own      0.250 Minstr total       1x frontend translate\n"
+    assert scaling.parse_time(text)["instr"] == {"mir sroa": 12.5, "frontend translate": 0.25}
+
+
+def test_a_step_with_noisy_ms_and_linear_instructions_is_not_ranked_superlinear():
+    """The ms of `frontend translate` on `straight` read 12.9, 68, 35, 238, 593, 1981 at N = 512..16384 on a loaded host (slope 1.87)
+    while its instructions doubled with N (2.00x per doubling): the table ranked work that was not there. Steps are fitted on their
+    own instructions; a step whose ms alone grows is not flagged, one whose instructions grow is."""
+    sizes = [1024, 2048, 4096, 8192, 16384]
+    noisy_ms = [68.2, 35.4, 237.7, 592.6, 1980.7]
+    data = {"passes": {str(n): {"steps": {"linear": ms, "quadratic": 50.0}, "instr": {"linear": 0.145 * n, "quadratic": 0.00002 * n * n}} for n, ms in zip(sizes, noisy_ms)}}
+    table = "\n".join(scaling.pass_table("straight", data))
+    assert "| quadratic |" in table and "| linear |" not in table, table
 
 
 def test_qcport_stubs_catch_the_asserts_with_padding_and_the_asm_blocks(tmp_path):

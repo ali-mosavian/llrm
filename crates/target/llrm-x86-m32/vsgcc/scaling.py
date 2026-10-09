@@ -183,10 +183,12 @@ def exponents(rows: list[dict], base: float, key: str = "ins") -> tuple[float, f
 
 
 def parse_time(stderr: str) -> dict:
-    """llrm's `[time] by own time` rows as {step: ms}, and `[mir] functions F instructions I`."""
+    """llrm's `[time] by own time` rows as {step: ms} and its `[instr]` rows as {step: own Minstr}, and `[mir] functions F instructions I`.
+    ms is time under whatever else the host is doing; the instructions are the work, and what steps are ranked and fitted on."""
     steps = {m.group(2): float(m.group(1)) for m in re.finditer(r"^\[time\]\s+([\d.]+) ms own\s+[\d.]+ ms total\s+\d+x (.+)$", stderr, re.M)}
+    instr = {m.group(2): float(m.group(1)) for m in re.finditer(r"^\[instr\]\s+([\d.]+) Minstr own\s+[\d.]+ Minstr total\s+\d+x (.+)$", stderr, re.M)}
     mir = re.search(r"^\[mir\] functions (\d+) instructions (\d+)", stderr, re.M)
-    return {"steps": steps, "functions": int(mir.group(1)) if mir else None, "mir": int(mir.group(2)) if mir else None}
+    return {"steps": steps, "instr": instr, "functions": int(mir.group(1)) if mir else None, "mir": int(mir.group(2)) if mir else None}
 
 
 def llrm_profile(source: Path, level: str = "O2", extra: list[str] = ()) -> dict:
@@ -322,7 +324,7 @@ def run_programs(qcport: Path, include: Path, runs: int, work: Path, jobs: int =
         row = {"failed": {}}
         try:
             profile = llrm_profile(source, "O2", qcport_flags(work, "llrm"))
-            row["functions"], row["mir"], row["steps"] = profile["functions"], profile["mir"], profile["steps"]
+            row["functions"], row["mir"], row["steps"], row["instr"] = profile["functions"], profile["mir"], profile["steps"], profile["instr"]
         except (RuntimeError, subprocess.TimeoutExpired) as error:
             row["failed"]["llrm O2 profile"] = str(error)[-200:]
         for compiler in COMPILERS:
@@ -368,18 +370,20 @@ def axis_tables(name: str, data: dict) -> list[str]:
     return lines + [""]
 
 
-def pass_table(name: str, data: dict, floor_ms: float = 1.0, steepest: float = 1.15, shown: int = 10) -> list[str]:
-    """Steps of llrm -O2 that grow faster than `steepest`, from the sizes where they take `floor_ms` or more."""
+def pass_table(name: str, data: dict, floor: float = 1.0, steepest: float = 1.15, shown: int = 10) -> list[str]:
+    """Steps of llrm -O2 that grow faster than `steepest`, from the sizes where they take `floor` or more: own Minstr where every size
+    has them, else own ms (a profile taken before the instruction rows)."""
     sizes = sorted(int(n) for n in data["passes"])
     if len(sizes) < 3:
         return []
-    last = data["passes"][str(sizes[-1])]["steps"]
-    lines = [f"Passes of llrm -O2 above exponent {steepest} on {name} (top {TAIL} sizes, own ms; largest N = {sizes[-1]}):", "", "| step | ms @ largest | slope |", "|---|---|---|"]
+    key, unit = ("instr", "Minstr") if all(data["passes"][str(n)].get("instr") for n in sizes) else ("steps", "ms")
+    last = data["passes"][str(sizes[-1])][key]
+    lines = [f"Passes of llrm -O2 above exponent {steepest} on {name} (top {TAIL} sizes, own {unit}; largest N = {sizes[-1]}):", "", f"| step | {unit} @ largest | slope |", "|---|---|---|"]
     found = []
-    for step, ms in sorted(last.items(), key=lambda kv: -kv[1]):
-        pts = [(n, data["passes"][str(n)]["steps"].get(step, 0.0)) for n in sizes[-TAIL:]]
-        if ms >= floor_ms and (s := slope([p[0] for p in pts], [p[1] for p in pts])) > steepest:
-            found.append(f"| {step} | {ms:.1f} | {s:.2f} |")
+    for step, cost in sorted(last.items(), key=lambda kv: -kv[1]):
+        pts = [(n, data["passes"][str(n)][key].get(step, 0.0)) for n in sizes[-TAIL:]]
+        if cost >= floor and (s := slope([p[0] for p in pts], [p[1] for p in pts])) > steepest:
+            found.append(f"| {step} | {cost:.1f} | {s:.2f} |")
     return lines + (found[:shown] or ["| (none) | | |"]) + [""]
 
 
@@ -392,6 +396,8 @@ def chart(name: str, data: dict, out: Path, level: str = "O2") -> None:
     fig, ax = plt.subplots(figsize=(6, 4.2))
     for compiler, colour in zip(COMPILERS, ("#d55e00", "#0072b2", "#009e73")):
         rows = data["series"].get(f"{compiler} {level}", [])
+        if f"{compiler} {level}" not in data["base"]:
+            continue
         base = data["base"][f"{compiler} {level}"]["ins"]
         xs, ys = net(rows, base)
         if len(xs) > 1:
@@ -428,10 +434,11 @@ def program_tables(data: dict) -> list[str]:
     lines += [f"- {what}: {len(files)} files" for what, files in data["stubbed"].items()]
     lines += ["- Borland names declared for gcc/clang only (`-include prelude.h`): _fmemcpy, _fmemset, _fmemmove, _fmemcmp, _fstricmp, _fstrncmp, stricmp, FP_OFF, FP_SEG, __emit__; flags " + " ".join(SIZES + FOREIGN) + " (-Dfar etc. for gcc/clang only; llrm-c has no -D)"]
     biggest = sorted(rows, key=lambda k: -rows[k]["mir"])[:5]
-    lines += ["", "Largest modules, llrm -O2 steps by own ms:", ""]
+    unit = "Minstr" if all(rows[k].get("instr") for k in biggest) else "ms"
+    lines += ["", f"Largest modules, llrm -O2 steps by own {unit}:", ""]
     for k in biggest:
-        steps = sorted(rows[k]["steps"].items(), key=lambda kv: -kv[1])[:6]
-        lines.append(f"- {k} ({rows[k]['mir']} MIR instructions, {rows[k]['functions']} functions): " + ", ".join(f"{s} {ms:.0f}" for s, ms in steps))
+        steps = sorted(rows[k]["instr" if unit == "Minstr" else "steps"].items(), key=lambda kv: -kv[1])[:6]
+        lines.append(f"- {k} ({rows[k]['mir']} MIR instructions, {rows[k]['functions']} functions): " + ", ".join(f"{s} {cost:.0f}" for s, cost in steps))
     return lines + [""]
 
 
@@ -457,6 +464,8 @@ def main() -> None:
     run.add_argument("--runs", type=int, default=3)
     run.add_argument("--limit", type=float, default=10.0, help="seconds: stop an axis for a compiler once a compile takes this long")
     run.add_argument("--jobs", type=int, default=6, help="axes (and QCport modules) measured at once; instructions:u does not care, task-clock does")
+    run.add_argument("--compilers", nargs="*", default=list(COMPILERS), help="the compilers measured; llrm alone is enough to profile its steps")
+    run.add_argument("--levels", nargs="*", default=list(LEVELS))
     run.add_argument("--programs", action="store_true", help="QCport as well")
     run.add_argument("--qcport", default=os.environ.get("QCPORT", str(Path.home() / "scratch/qcport/src")))
     run.add_argument("--inc", default=os.environ.get("QCPORT_INC", str(Path.home() / "scratch/qctc/inc")))
@@ -475,7 +484,7 @@ def main() -> None:
         with tempfile.TemporaryDirectory() as scratch:
             sizes = [2**e for e in range(args.min, args.max + 1)]
             with ThreadPoolExecutor(args.jobs) as pool:
-                futures = {axis: pool.submit(run_axis, axis, sizes, args.runs, args.limit * 1e9, Path(tempfile.mkdtemp(dir=scratch))) for axis in args.axis}
+                futures = {axis: pool.submit(run_axis, axis, sizes, args.runs, args.limit * 1e9, Path(tempfile.mkdtemp(dir=scratch)), compilers=args.compilers, levels=args.levels) for axis in args.axis}
                 for axis, future in futures.items():
                     results.setdefault("axes", {})[axis] = future.result()
                     store.write_text(json.dumps(results))
