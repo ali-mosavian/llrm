@@ -37,6 +37,11 @@ ROOT = HERE.parent
 CACHE = Path(os.environ.get("LLRM_MEASURE_DIR") or Path.home() / ".cache/llrm/measure")
 
 
+# The profile the measured compiler is built with: `release` (the PR gate: two commits built the same way), or `dist` (the shipped build, which
+# the creep run on main measures). A measurement is of one profile, so the profile is part of the method.
+PROFILE = os.environ.get("LLRM_MEASURE_PROFILE") or "release"
+
+
 def build_tree(root: Path = ROOT, env: dict | None = None) -> Path:
     """Where the base is built: `LLRM_MEASURE_BUILD`, else a tree of this repository's own. Two clones share a tree no `git checkout` of
     the other's commit can enter ('unable to read tree'), so each is keyed by the path of its working tree."""
@@ -54,6 +59,8 @@ import scaling_gate  # noqa: E402
 
 sys.path.insert(0, str(HERE / "gate"))
 import gate  # noqa: E402
+
+DIST_BUILD = gate.DIST_BUILD
 
 _spec = importlib.util.spec_from_file_location("compile_cost", HERE / "compile-cost.py")
 compile_cost = importlib.util.module_from_spec(_spec)
@@ -77,6 +84,7 @@ def method() -> str:
     for one in files:
         digest.update(str(one.name).encode() + b"\0" + one.read_bytes())
     digest.update(b"qcport" if qcport else b"-")
+    digest.update(PROFILE.encode())
     return digest.hexdigest()[:12]
 
 
@@ -150,10 +158,10 @@ def built(sha: str) -> Path:
     tree = checked_out(sha, BUILD / "tree")
     env = {**os.environ, "CARGO_TARGET_DIR": str(BUILD / "target")}
     env.pop("LLRM_BIN", None)
-    done = subprocess.run(["bash", "-c", gate.BUILD], cwd=tree, env=env, capture_output=True, text=True)
+    done = subprocess.run(["bash", "-c", DIST_BUILD if PROFILE == "dist" else gate.BUILD], cwd=tree, env=env, capture_output=True, text=True)
     if done.returncode:
         raise SystemExit(f"measure: the base {sha[:9]} does not build:\n{done.stderr[-2000:]}")
-    return BUILD / "target" / "release"
+    return BUILD / "target" / PROFILE
 
 
 @contextlib.contextmanager
@@ -334,7 +342,7 @@ def check(jobs: int, ref: str) -> int:
     if bad:
         print("COMPILE COST RISE:", *bad, sep="\n  ")
         return 1
-    print(f"no rise past tolerance of {base_sha[:9]} ({len(now['compile'])} files, {len(now['axes'])} axes, {len(now['passes'])} steps)")
+    print(f"no rise past tolerance of {base_sha[:9]} ({len(now['compile'])} files, {len(now['axes'])} axes, {len(now['passes'])} steps) of {now['binary']['path']} ({now['binary']['sha']})")
     return 0
 
 
