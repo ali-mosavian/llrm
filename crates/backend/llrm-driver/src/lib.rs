@@ -58,6 +58,17 @@ pub fn target(
     flags: &Flags,
     supported: Option<&[&str]>,
 ) -> Result<Bound, String> {
+    planned(flags, supported, None)
+}
+
+/// `target`, for a frontend that will build for the other targets and does not
+/// yet: it says so, and where the work is tracked (`tracked`), instead of
+/// saying it builds for another only.
+pub fn planned(
+    flags: &Flags,
+    supported: Option<&[&str]>,
+    tracked: Option<&str>,
+) -> Result<Bound, String> {
     let known = all();
     let found = match flags.mode() {
         Some(mode) => known.iter().find(|one| one.layout().mode == mode).ok_or_else(|| {
@@ -70,6 +81,18 @@ pub fn target(
     };
     let name = found.name();
     if let Some(supported) = supported.filter(|list| !list.contains(&name)) {
+        if let Some(tracked) = tracked {
+            let modes: Vec<String> = known
+                .iter()
+                .filter(|one| supported.contains(&one.name()))
+                .map(|one| format!("-m{}", one.layout().mode))
+                .collect();
+            return Err(format!(
+                "this compiler does not build for -m{} yet ({tracked}); it builds for {}",
+                found.layout().mode,
+                modes.join(", ")
+            ));
+        }
         let modes: Vec<String> = known
             .iter()
             .filter(|one| supported.contains(&one.name()))
