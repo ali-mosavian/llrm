@@ -233,16 +233,22 @@ pub trait Analysis: 'static {
     /// are the ones it read).
     const SKIPS: bool = false;
 
+    /// What the result reads of the function: `unaffected` filters the change
+    /// log against it. None, the default, is every change.
+    fn depends() -> Option<crate::depends::Depends> {
+        None
+    }
+
     /// Whether `changes` leave `previous`, true of the function before them,
     /// true of it now. Must never say so wrongly, as `LLRM_CHECK_REPLAY`
-    /// asserts; saying no derives the result afresh.
-    #[allow(unused_variables)]
+    /// asserts; saying no derives the result afresh. By default what `depends`
+    /// declares says.
     fn unaffected(
         changes: &[crate::module::Change],
         context: &Context,
         function: &Function,
     ) -> bool {
-        false
+        Self::depends().is_some_and(|depends| depends.unaffected(changes, context, function))
     }
 
     /// `previous`, which was true of the function before `changes`, made true
@@ -720,7 +726,58 @@ pub struct Analyses {
     cache: HashMap<TypeId, Box<dyn Cached>>,
     /// Results invalidated that `update` may bring up to date.
     kept: HashMap<TypeId, Box<dyn Cached>>,
+    evicted: HashMap<TypeId, Box<dyn Cached>>,
     outer: Rc<Outer>,
+}
+
+thread_local! {
+    static PASS: std::cell::Cell<&'static str> = const { std::cell::Cell::new("") };
+    static TRACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static RECOMPUTED: std::cell::RefCell<std::collections::BTreeMap<(&'static str, &'static str, &'static str), usize>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+
+/// The pass whose invalidation a recomputation is charged to: set where passes
+/// invalidate.
+pub fn note_pass(name: &'static str) {
+    PASS.with(|p| p.set(name));
+}
+
+/// `LLRM_WHY`, or `trace_recomputes`: every analysis computed again says
+/// whether it came to what it was. Off, the manager keeps nothing and compares
+/// nothing.
+fn why() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    TRACE.with(std::cell::Cell::get) || *ON.get_or_init(|| std::env::var_os("LLRM_WHY").is_some())
+}
+
+/// Starts or stops counting recomputations on this thread (the test form of
+/// `LLRM_WHY`).
+pub fn trace_recomputes(on: bool) {
+    TRACE.with(|t| t.set(on));
+    if on {
+        RECOMPUTED.with(|r| r.borrow_mut().clear());
+    }
+}
+
+/// How often each analysis was computed, by the pass that last invalidated it
+/// and how it came out: `first` (nothing was held), `same` (the last result,
+/// worked out again) and `diff`, or for a function analysis kept for update,
+/// `replayed`, `kept-rerun-same` and `kept-rerun-diff`.
+pub fn recomputes() -> Vec<(&'static str, &'static str, &'static str, usize)> {
+    RECOMPUTED.with(|r| r.borrow().iter().map(|(&(name, pass, how), &n)| (name, pass, how, n)).collect())
+}
+
+fn record(
+    level: &str,
+    name: &'static str,
+    how: &'static str,
+) {
+    let pass = PASS.with(|p| p.get());
+    RECOMPUTED.with(|r| *r.borrow_mut().entry((name, pass, how)).or_default() += 1);
+    if std::env::var_os("LLRM_WHY").is_some() {
+        eprintln!("WHY {level} {name} {pass} {how}");
+    }
 }
 
 fn check_replay() -> bool {
@@ -730,7 +787,7 @@ fn check_replay() -> bool {
 
 impl Analyses {
     pub fn new(outer: Rc<Outer>) -> Self {
-        Self { cache: HashMap::default(), kept: HashMap::default(), outer }
+        Self { cache: HashMap::default(), kept: HashMap::default(), evicted: HashMap::default(), outer }
     }
 
     /// An empty cache over the same module and target, for another body.
@@ -763,6 +820,14 @@ impl Analyses {
             return Rc::clone(&entry.result);
         }
         counted(A::NAME, false);
+        let had_kept = self.kept.contains_key(&key);
+        let old_kept = if why() {
+            self.kept
+                .get(&key)
+                .map(|o| Rc::clone(&o.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").result))
+        } else {
+            None
+        };
         let updated = self.kept.remove(&key).and_then(|old| {
             let old = old.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
             let changes = function.changes_since(old.mark)?;
@@ -808,10 +873,26 @@ impl Analyses {
             }
             Some(Rc::new(made))
         });
+        let replayed = updated.is_some();
         let result = match updated {
             Some(made) => made,
             None => Rc::new(spanned_as("analysis", A::NAME, || A::run(context, layout, function, self))),
         };
+        if why() {
+            let class = match self.evicted.remove(&key) {
+                Some(old) => {
+                    let old = old.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
+                    if *old.result == *result { "same" } else { "diff" }
+                }
+                None if replayed => "replayed",
+                None if had_kept => match &old_kept {
+                    Some(old) if **old == *result => "kept-rerun-same",
+                    _ => "kept-rerun-diff",
+                },
+                None => "first",
+            };
+            record("fn", A::NAME, class);
+        }
         self.cache.insert(
             key,
             Box::new(Entry::<A> { result: Rc::clone(&result), outer: Rc::clone(&self.outer), mark: function.mark() }),
@@ -847,6 +928,8 @@ impl Analyses {
             let entry = self.cache.remove(&key).expect("held");
             if entry.incremental() {
                 self.kept.insert(key, entry);
+            } else if why() {
+                self.evicted.insert(key, entry);
             }
         }
     }
@@ -1044,6 +1127,19 @@ impl ModuleAnalyses {
                 "{}: brought up to date, it is not what working it out afresh gives",
                 kind.name
             );
+        }
+        if why() {
+            let class = match self.dropped.get(&kind.id) {
+                Some(old) => {
+                    if (kind.agree)(&**old, &*fresh) {
+                        "same"
+                    } else {
+                        "diff"
+                    }
+                }
+                None => "first",
+            };
+            record("mod", kind.name, class);
         }
         let result = self.dropped.remove(&kind.id).filter(|old| (kind.agree)(&**old, &*fresh)).unwrap_or(fresh);
         self.results.insert(kind.id, (kind, Rc::clone(&result)));
@@ -1393,6 +1489,7 @@ impl PassManager {
         };
         for (number, pass) in self.passes.iter_mut().enumerate().skip(passes.start).take(passes.len()) {
             let name = pass.name();
+            PASS.with(|p| p.set(name));
             // A function's analyses read the outer facts, so a change to
             // them drops every function's.
             let outer = spanned("outer analyses", || analyses.outer(module));
