@@ -1080,11 +1080,6 @@ fn decode_ascii_replace(b: &[u8]) -> String {
     b.iter().map(|&byte| if byte < 0x80 { byte as char } else { '\u{FFFD}' }).collect()
 }
 
-/// `id(record)`.
-fn id(record: &Rc<Record>) -> usize {
-    Rc::as_ptr(record) as usize
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -1093,6 +1088,10 @@ mod tests {
 
     fn fixtures() -> PathBuf {
         Path::new(env!("LLRM_ROOT")).join("tests/inputs/omf")
+    }
+
+    fn id(record: &Rc<Record>) -> usize {
+        Rc::as_ptr(record) as usize
     }
 
     /// The `obj` fixture: every committed OMF object, sorted by name.

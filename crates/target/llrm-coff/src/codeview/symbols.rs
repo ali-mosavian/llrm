@@ -383,7 +383,7 @@ fn lines(
     Ok(Some(out))
 }
 
-pub fn encode(
+pub(super) fn encode(
     object: &Object,
     info: &Info,
     registers: &Registers<'_>,

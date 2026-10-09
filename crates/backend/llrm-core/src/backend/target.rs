@@ -11,7 +11,7 @@ use std::sync::LazyLock;
 
 use iced_x86::Register;
 
-use crate::abi::machine::{self, Machine};
+use crate::abi::machine::Machine;
 use crate::backend::classes::RegisterClasses;
 use crate::model::ir::{self, Loc, Operation, Semantics};
 use crate::support::hash::IndexMap;

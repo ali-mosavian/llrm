@@ -2,7 +2,7 @@
 
 use std::process::Command;
 
-mod common;
+pub mod common;
 
 const KERNEL: &str = "
 static int hanoi(int n, int a, int b, int c)

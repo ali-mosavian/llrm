@@ -90,7 +90,7 @@ fn used(
     reads: &mut Vec<Register>,
     mut writes: Option<&mut Vec<Register>>,
 ) -> bool {
-    let mut add = |into: &mut Vec<Register>, register: Register| {
+    let add = |into: &mut Vec<Register>, register: Register| {
         if register != Register::None && !into.contains(&register) {
             into.push(register);
         }

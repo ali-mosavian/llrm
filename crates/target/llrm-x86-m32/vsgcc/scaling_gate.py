@@ -67,14 +67,14 @@ def count(command: list[str]) -> int:
     return got
 
 
-def costs(axis: str, level: str, work: Path, command=levels_time.command, compiler: str = "llrm") -> tuple[int, int, int]:
+def costs(axis: str, level: str, work: Path, command=levels_time.command, compiler: str = "llrm", counter=count) -> tuple[int, int, int]:
     """(cost at N/2, at N, at 2N), each less the empty file's, for one axis and level."""
     n = SIZES[axis]
     cost = {}
     for label, text in (("empty", ""), (n // 2, generated(axis, n // 2)), (n, generated(axis, n)), (2 * n, generated(axis, 2 * n))):
         source = work / f"{axis}_{level}_{label}.c"
         source.write_text(text)
-        cost[label] = count(commanded(axis, command)(compiler, level, source))
+        cost[label] = counter(commanded(axis, command)(compiler, level, source))
     return cost[n // 2] - cost["empty"], cost[n] - cost["empty"], cost[2 * n] - cost["empty"]
 
 
