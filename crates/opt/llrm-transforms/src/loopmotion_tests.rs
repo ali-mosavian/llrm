@@ -375,3 +375,82 @@ fn test_moving_a_store_keeps_the_ranges_held() {
     assert!(sunk_stores(context, &layout, &callees, function, &mut analyses).unwrap(), "premise: a store moved");
     assert!(analyses.cached::<Bounded>().is_some(), "the ranges were thrown away by a store moving");
 }
+
+/// Each loop asked what its cells hold before the instructions of the body, a
+/// fresh pass over all of it: 40 loops, none moved, 40 derivations
+/// (branches(512) at -O2: 626 ms of loopmotion's 1.6 s). Nothing changed
+/// between the loops, so the manager's one serves them all.
+#[test]
+fn what_the_cells_hold_is_derived_once_for_loops_that_move_nothing() {
+    let loops = 40;
+    let globals: String = (0..loops).map(|at| format!("@a{at} = global i16 0\n")).collect();
+    let mut text =
+        String::from("@t = global i16 0\n\ndefine i16 @f(i16 %k) {\nb0:\n  store i16 5, ptr @t\n  br label %s0\n\n");
+    for at in 0..loops {
+        let exit = if at + 1 == loops { "end".to_owned() } else { format!("s{}", at + 1) };
+        // Seeded 5 through a load, 6 in the phi: asked what the cell holds, not
+        // moved.
+        text += &format!(
+            "s{at}:\n  %x{at} = load i16, ptr @t\n  store i16 %x{at}, ptr @a{at}\n  br label %h{at}\n\nh{at}:\n  %i{at} = phi i16 [ 0, %s{at} ], [ %n{at}, %l{at} ]\n  %v{at} = phi i16 [ 6, %s{at} ], [ %t{at}, %l{at} ]\n  %c{at} = icmp slt i16 %i{at}, %k\n  br i1 %c{at}, label %l{at}, label %{exit}\n\nl{at}:\n  %t{at} = add i16 %v{at}, %i{at}\n  store i16 %t{at}, ptr @a{at}\n  %n{at} = add i16 %i{at}, 1\n  br label %h{at}\n\n"
+        );
+    }
+    text += "end:\n  ret i16 %k\n}\n";
+    let before = llrm_analysis::consts::cell_derivations();
+    let (after, changed) = sunk(&format!("{globals}{text}"), TRIPS);
+    let derived = llrm_analysis::consts::cell_derivations() - before;
+    assert!(!changed, "{after}");
+    assert!(derived <= 1, "{derived} derivations for {loops} loops that move nothing");
+}
+
+/// A store sunk made the next loop derive what the body's cells hold from the
+/// start: 20 loops that sink a store, each followed by one that asks and keeps
+/// its own, 20 derivations over the body (branches(512) at -O2: 5.5 G of a
+/// loopmotion of 10.9 G). Stores moved change the cells of the loop they left
+/// and what it reaches, so only those are worked again: one derivation.
+#[test]
+fn what_the_cells_hold_is_derived_once_for_loops_that_each_sink_a_store() {
+    // The check derives them afresh to compare, and is counted.
+    if std::env::var_os("LLRM_CHECK_REPLAY").is_some() {
+        return;
+    }
+    let pairs = 20;
+    let mut globals = String::from("@t = global i16 0\n");
+    let mut text = String::from("define i16 @f(i16 %k) {\nb0:\n  store i16 5, ptr @t\n  br label %m0\n\n");
+    for at in 0..pairs {
+        globals += &format!("@m{at} = global i16 0\n@a{at} = global i16 0\n");
+        let next = if at + 1 == pairs { "end".to_owned() } else { format!("m{}", at + 1) };
+        // Sinks: the cell holds the phi on every trip, seeded by a constant
+        // store.
+        text += &format!(
+            "m{at}:\n  store i16 5, ptr @m{at}\n  br label %g{at}\n\ng{at}:\n  %i{at} = phi i16 [ 0, %m{at} ], [ %n{at}, %l{at} ]\n  %s{at} = phi i16 [ 5, %m{at} ], [ %u{at}, %l{at} ]\n  %c{at} = icmp slt i16 %i{at}, %k\n  br i1 %c{at}, label %l{at}, label %s{at}x\n\nl{at}:\n  %u{at} = add i16 %s{at}, %i{at}\n  store i16 %u{at}, ptr @m{at}\n  %n{at} = add i16 %i{at}, 1\n  br label %g{at}\n\n"
+        );
+        // Asks and keeps: seeded through a load, the phi seeded otherwise.
+        text += &format!(
+            "s{at}x:\n  %x{at} = load i16, ptr @t\n  store i16 %x{at}, ptr @a{at}\n  br label %h{at}\n\nh{at}:\n  %j{at} = phi i16 [ 0, %s{at}x ], [ %o{at}, %q{at} ]\n  %v{at} = phi i16 [ 6, %s{at}x ], [ %w{at}, %q{at} ]\n  %d{at} = icmp slt i16 %j{at}, %k\n  br i1 %d{at}, label %q{at}, label %{next}\n\nq{at}:\n  %w{at} = add i16 %v{at}, %j{at}\n  store i16 %w{at}, ptr @a{at}\n  %o{at} = add i16 %j{at}, 1\n  br label %h{at}\n\n"
+        );
+    }
+    text += "end:\n  ret i16 %k\n}\n";
+    let before = llrm_analysis::consts::cell_derivations();
+    let (after, changed) = sunk(&format!("{globals}{text}"), TRIPS);
+    let derived = llrm_analysis::consts::cell_derivations() - before;
+    assert!(changed, "{after}");
+    assert!(derived <= 1, "{derived} derivations for {pairs} loops that each sink a store");
+}
+
+/// A store moved threw away which frames are exposed and every reference
+/// annotated, and the next ask worked them out again to the same answer (82
+/// `exposed-frames` runs and 74 `annotated`, all the same, in branches(512) at
+/// -O2). A store moved is the same store.
+#[test]
+fn moving_a_store_keeps_the_exposed_frames_and_the_references_held() {
+    use llrm_analysis::manager::{Annotated, ExposedFrames};
+    let mut module = parsed(&format!("{DOS}{}", hotlop("")));
+    let (layout, outer) = (layout(&module), Rc::new(Outer::of(&module, None)));
+    let callees = llrm_mir::memory::callees(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    analyses.get::<Annotated>(context, &layout, function);
+    assert!(sunk_stores(context, &layout, &callees, function, &mut analyses).unwrap(), "premise: a store moved");
+    assert!(analyses.cached::<ExposedFrames>().is_some(), "exposed frames thrown away by a store moving");
+    assert!(analyses.cached::<Annotated>().is_some(), "the references thrown away by a store moving");
+}

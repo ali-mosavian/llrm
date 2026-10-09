@@ -593,14 +593,27 @@ fn _killed(
     here
 }
 
+/// What `cells_solved` found, and what each block ends with, which a later
+/// solve of the same body with some blocks changed starts from.
+#[derive(Debug, Default, PartialEq)]
+pub struct SolvedCells {
+    pub held: HeldCells,
+    pub outof: IndexMap<i64, Option<Rc<Cells>>>,
+}
+
 /// What each memory cell holds before each instruction, where it is a
 /// number.
 ///
 /// Forward to a fixed point, meeting at a join on agreement. A block none
 /// of whose predecessors have been visited yet is deferred, not treated as
 /// knowing nothing.
+///
+/// With `restart`, the blocks of `previous`' body it names are worked again
+/// from nothing, the rest standing as `previous` left them: the result is the
+/// one a whole solve gives if what enters a block outside them is as it was,
+/// which the caller checks (`cells_restarted`).
 #[allow(clippy::too_many_arguments)]
-pub fn cells(
+pub fn cells_solved(
     unit: &Unit,
     calls: &Calls,
     known: Option<&IndexMap<ValueId, Known>>,
@@ -608,12 +621,16 @@ pub fn cells(
     edges: Option<&IndexMap<(i64, i64), Cells>>,
     mut assume: Option<&mut BTreeSet<ValueId>>,
     allowed: Option<&BTreeSet<ValueId>>,
-) -> HeldCells {
+    restart: Option<(&SolvedCells, &BTreeSet<i64>)>,
+) -> SolvedCells {
+    if restart.is_none() {
+        CELL_DERIVATIONS.with(|count| count.set(count.get() + 1));
+    }
     let exposed = unit.exposed.is_none().then(|| crate::memory::exposed_frames(unit));
     let unit = &exposed.as_ref().map_or(*unit, |table| unit.with_exposed(table));
     let function = unit.function;
     let Some(entry) = function.entry().map(cfg::id) else {
-        return HeldCells::default();
+        return SolvedCells::default();
     };
     let empty = IndexMap::default();
     let known = known.unwrap_or(&empty);
@@ -622,12 +639,14 @@ pub fn cells(
     // Kept indexed: an edge from a lone predecessor hands its map on as it is.
     let graph = cfg::graph(function);
     let mut outof = graph.iter().map(|block| (block.at, None)).collect::<IndexMap<i64, Option<IndexedCells>>>();
-    let preds = graph
-        .iter()
-        .map(|block| {
-            (block.at, graph.iter().filter(|one| one.succ.contains(&block.at)).map(|one| one.at).collect::<Vec<_>>())
-        })
-        .collect::<IndexMap<_, _>>();
+    let mut preds = graph.iter().map(|block| (block.at, Vec::new())).collect::<IndexMap<i64, Vec<i64>>>();
+    for one in &graph {
+        for to in &one.succ {
+            if let Some(from) = preds.get_mut(to).filter(|from| from.last() != Some(&one.at)) {
+                from.push(one.at);
+            }
+        }
+    }
     let no_edges = IndexMap::default();
     let edge_map = edges.unwrap_or(&no_edges);
     let edge_facts = edges.is_some_and(|edges| !edges.is_empty());
@@ -684,7 +703,18 @@ pub fn cells(
     let order = loops_order(&graph, entry);
     let rank = order.iter().enumerate().map(|(rank, at)| (*at, rank)).collect::<HashMap<_, _>>();
     let successors = graph.iter().map(|block| (block.at, block.succ.clone())).collect::<HashMap<_, _>>();
-    let mut waiting = (0..order.len()).collect::<BTreeSet<_>>();
+    // A restart works the blocks it names and holds, as they were, what
+    // enters them from the others.
+    let active = |at: &i64| restart.is_none_or(|(_, reset)| reset.contains(at));
+    if let Some((previous, _)) = restart {
+        for block in graph.iter().filter(|block| active(&block.at)) {
+            for pred in preds[&block.at].iter().filter(|pred| !active(pred)) {
+                let held = previous.outof.get(pred).cloned().flatten();
+                outof[pred] = held.map(|cells| queries.owned(Here::Plain((*cells).clone())));
+            }
+        }
+    }
+    let mut waiting = (0..order.len()).filter(|&next| active(&order[next])).collect::<BTreeSet<_>>();
     while let Some(next) = waiting.pop_first() {
         let at = order[next];
         let Some(mut here) = entering(&outof, at) else {
@@ -695,12 +725,12 @@ pub fn cells(
         }
         if outof[&at].as_deref() != Some(here.cells()) {
             outof.insert(at, Some(queries.owned(here)));
-            waiting.extend(successors[&at].iter().filter_map(|at| rank.get(at).copied()));
+            waiting.extend(successors[&at].iter().filter(|at| active(at)).filter_map(|at| rank.get(at).copied()));
         }
     }
 
-    let mut found = IndexMap::default();
-    for block in &graph {
+    let mut found = restart.map_or_else(IndexMap::default, |(previous, _)| previous.held.clone());
+    for block in graph.iter().filter(|block| active(&block.at)) {
         let mut here = entering(&outof, block.at).unwrap_or(Here::Plain(Cells::default()));
         // Instructions between two writes see one map, shared rather than
         // copied per instruction.
@@ -714,6 +744,119 @@ pub fn cells(
                 shared = None;
             }
             here = _killed(here, inst, known, calls, assume.as_deref_mut(), allowed, edge_facts, &mut queries);
+        }
+    }
+    let ends = graph
+        .iter()
+        .map(|block| {
+            let held = match restart {
+                Some((previous, _)) if !active(&block.at) => previous.outof.get(&block.at).cloned().flatten(),
+                _ => outof[&block.at].as_ref().map(|cells| Rc::new((**cells).clone())),
+            };
+            (block.at, held)
+        })
+        .collect();
+    SolvedCells { held: found, outof: ends }
+}
+
+/// `previous`, what `cells` gave the body of the default question (no callee's
+/// writes, no outside facts) before the blocks `touched` had instructions moved
+/// in or out, made what it gives now, without working the others again.
+///
+/// A block's end is a function of the ends of its predecessors, and a
+/// cycle of them can hold a fact that only the cycle gives itself, so what a
+/// touched block lies in a cycle with is worked again from nothing, whole. So
+/// is what comes after any block whose end changed, until none past the
+/// worked ones does. What is left stands: what enters it is as it was.
+pub fn cells_restarted(
+    unit: &Unit,
+    previous: &SolvedCells,
+    touched: &BTreeSet<i64>,
+) -> Option<SolvedCells> {
+    let function = unit.function;
+    let graph = cfg::graph(function);
+    if previous.outof.len() != graph.len() || graph.iter().any(|block| !previous.outof.contains_key(&block.at)) {
+        return None;
+    }
+    let successors = graph.iter().map(|block| (block.at, block.succ.clone())).collect::<HashMap<_, _>>();
+    let cycles = cycles(&graph);
+    let whole = |blocks: &BTreeSet<i64>| {
+        let mut all = blocks.clone();
+        for at in blocks {
+            all.extend(cycles.get(at).into_iter().flatten().copied());
+        }
+        all
+    };
+    let mut reset = whole(touched);
+    loop {
+        let solved = cells_solved(unit, &Calls::default(), None, None, None, None, None, Some((previous, &reset)));
+        let spread = reset
+            .iter()
+            .filter(|at| solved.outof[*at] != previous.outof[*at])
+            .flat_map(|at| successors[at].iter().copied())
+            .filter(|at| !reset.contains(at))
+            .collect::<BTreeSet<_>>();
+        if spread.is_empty() {
+            return Some(solved);
+        }
+        reset.extend(whole(&spread));
+    }
+}
+
+/// Each block of a cycle in the graph, with the blocks of its cycle (strongly
+/// connected component); a block in none has no entry.
+fn cycles(graph: &[cfg::Block]) -> HashMap<i64, Vec<i64>> {
+    let successors = graph.iter().map(|block| (block.at, block.succ.as_slice())).collect::<HashMap<_, _>>();
+    let (mut index, mut low) = (HashMap::<i64, usize>::default(), HashMap::<i64, usize>::default());
+    let (mut stack, mut on) = (Vec::<i64>::new(), BTreeSet::<i64>::new());
+    let mut found = HashMap::default();
+    let mut counter = 0;
+    for root in graph.iter().map(|block| block.at) {
+        if index.contains_key(&root) {
+            continue;
+        }
+        // (block, next successor to visit)
+        let mut work = vec![(root, 0usize)];
+        while let Some(&mut (at, ref mut next)) = work.last_mut() {
+            if *next == 0 {
+                index.insert(at, counter);
+                low.insert(at, counter);
+                counter += 1;
+                stack.push(at);
+                on.insert(at);
+            }
+            let edges = successors.get(&at).copied().unwrap_or(&[]);
+            if let Some(&to) = edges.get(*next) {
+                *next += 1;
+                if !index.contains_key(&to) {
+                    work.push((to, 0));
+                } else if on.contains(&to) {
+                    let lowest = low[&at].min(index[&to]);
+                    low.insert(at, lowest);
+                }
+                continue;
+            }
+            work.pop();
+            if let Some(&(parent, _)) = work.last() {
+                let lowest = low[&parent].min(low[&at]);
+                low.insert(parent, lowest);
+            }
+            if low[&at] == index[&at] {
+                let mut members = Vec::new();
+                while let Some(member) = stack.pop() {
+                    on.remove(&member);
+                    members.push(member);
+                    if member == at {
+                        break;
+                    }
+                }
+                let cyclic = members.len() > 1 || successors.get(&at).is_some_and(|edges| edges.contains(&at));
+                if cyclic {
+                    for &member in &members {
+                        found.insert(member, members.clone());
+                    }
+                }
+            }
         }
     }
     found
@@ -994,6 +1137,14 @@ pub fn known(
 thread_local! {
     static REGISTER_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static MEMORY_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static CELL_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has worked out what each memory cell holds at
+/// each instruction (`cells`), for a test that a pass asks the manager and not
+/// once for each loop.
+pub fn cell_derivations() -> usize {
+    CELL_DERIVATIONS.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has derived what is known of a body through
@@ -1114,7 +1265,7 @@ fn _solved(
         // feed each other and run to one fixed point together.
         if let Some(calls) = calls {
             if rounds > 1 && (learned || !remembered) {
-                held = cells(unit, calls, Some(&facts), initial, edges, assume.as_mut(), allowed);
+                held = cells_solved(unit, calls, Some(&facts), initial, edges, assume.as_mut(), allowed, None).held;
                 remembered = true;
             }
             learned = false;
