@@ -259,8 +259,9 @@ fn _numbered(
         crossing
     } else {
         match crossing_price(unit, outer, costs, room, trips, &crossing.0) {
-            // The careful numbering forwards no load crossing one forwards, so where crossing spills nothing it can
-            // only be dearer in work: it is not made.
+            // The careful numbering forwards no load crossing one forwards, so
+            // where crossing spills nothing it can only be dearer in work: it
+            // is not made.
             Some((_, true)) | None => crossing,
             Some((crossed, false)) => {
                 let careful = numbered(unit.function, true)?;
@@ -272,8 +273,8 @@ fn _numbered(
     Ok(chosen.1)
 }
 
-/// What `function` costs, as `profit::motion_price` has it, and whether it fits its registers everywhere: the work is
-/// not weighed where it does.
+/// What `function` costs, as `profit::motion_price` has it, and whether it fits
+/// its registers everywhere: the work is not weighed where it does.
 fn crossing_price(
     unit: &Unit,
     outer: &Outer,
