@@ -33,7 +33,7 @@ The positive regression failed before implementation. Guards cover unknown
 values, rounding, an intervening unknown operation and a same-cell write.
 98 focused floating and architecture checks pass. FPEMU, FPCSE and FPDEEP
 PDS /G2 production instruction counts are unchanged. No runtime speedup is
-claimed. Production stage dumps: `/tmp/qbopt-exact-store-stages`.
+claimed.
 
 ## Follow-up: retain live values with a non-popping store
 
@@ -51,8 +51,8 @@ the first stage difference is floating allocation.
 115 focused checks pass, including fail-first non-popping-store cases and
 the extended80 guard. VBDOS /G3 executions of the three programs pass all
 three cases each against their expected answers. No timing claim is made.
-Before/after stage dumps are `/tmp/qbopt-retained-store-before` and
-`/tmp/qbopt-retained-store-after`.
+Before/after stage dumps are `retained-store-before` and
+`retained-store-after`.
 
 ## Arithmetic operands reuse exact stores
 
@@ -88,8 +88,8 @@ relocations are needed. This is value reuse, not a measured timing win.
 FPCSE prints the expected 487.5 on QB /O, PDS /G2 and VBDOS /G3. All three
 compile logs report zero severe errors. 98 focused checks pass; the three
 fixture regressions and four arithmetic-order cases fail with their respective
-changes disabled. Dumps: `/tmp/qbopt-float-arithmetic-False` (before) and
-`/tmp/qbopt-float-arithmetic-final` (after).
+changes disabled. Dumps: `float-arithmetic-False` (before) and
+`float-arithmetic-final` (after).
 
 ### Stack-order selection
 
@@ -105,4 +105,3 @@ protocol intact. All three fixture configurations assert one exchange, not
 two. Eight allocator cases cover both stack orders and all four arithmetic
 operations; the four right-on-top cases failed before this change.
 61 focused checks pass, and VBDOS FPCSE still prints the expected answer.
-Stage dumps: `/tmp/qbopt-float-stack-order`.

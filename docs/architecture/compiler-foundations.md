@@ -140,8 +140,7 @@ exceptions in MIR passes, and no emit/re-raise optimization loop.
 
 Use the existing architectural checks and add semantic invariance checks:
 changing only diagnostic provenance or original register assignments must
-not change a MIR pass's decisions. Study LLVM/GCC mechanisms in
-`~/work/other` where useful, but adapt their principles rather than copying
+not change a MIR pass's decisions. Study the mechanisms of [LLVM](https://github.com/llvm/llvm-project) and [GCC](https://github.com/gcc-mirror/gcc) where useful, but adapt their principles rather than copying
 a machine-optimization tier across llrm's boundary.
 
 For each bounded change: capture before assembly and all stage dumps, locate

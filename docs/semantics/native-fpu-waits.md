@@ -73,13 +73,13 @@ lookup fails the typed-pin refusal regression.
 
 The kernel harness now reserves the actual BP-relative spill extent instead
 of letting spill stores overwrite its control table. The runtime regression
-failed before that correction. Dumps: `/tmp/qbopt-native-licm-after/`.
+failed before that correction.
 With only floating hoisting disabled/enabled in the same worktree, FPCSEX's
 ten-trip modeled cost is 4076 -> 2807 units (31.1% less). These are model
 units, not measured processor cycles or a verified optimal-target ratio.
 
-All 21 renderer objects rebuilt in `/tmp/qbopt-quake-licm.4H3w3p` are
-SHA-256 identical to `/tmp/qbopt-quake-float.dgK0tu`; the link response is
+All 21 renderer objects rebuilt in `quake-licm` are
+SHA-256 identical to `quake-float`; the link response is
 also identical. No redundant renderer run was made. Its last measured
 24.23 FPS remains the prior build's result, not a new LICM measurement.
 
@@ -108,8 +108,7 @@ a check of the strict reference, not a requirement for native exception timing.
 
 The full PDS FPDEEP executable was also relinked against BCL71ENR and run:
 all eleven printed values and `DONE` match the original byte for byte.
-Artifacts: `/tmp/qbopt-native-waits.h3fujr/{BASE,DEEP}.{OBJ,EXE,TXT}`;
-screen evidence: `deep.png` in that directory. The native object shrinks
+Screen evidence: `deep.png` in that directory. The native object shrinks
 1822 to 1650 bytes; FPCSEX shrinks 969 to 968. This validates the complete
 FPDEEP conversion/printing path, not just the isolated FPCSEX kernel.
 
@@ -135,7 +134,7 @@ fstp dword [q]
 
 PDS object: 968 to 952 bytes; code: six bytes smaller. The actual optimized
 kernel passes 144 exact QEMU state comparisons, including rounding modes and
-NaNs (`/tmp/qbopt-native-cse.AW8G8b/QEMU.BIN`). Reinstating the rejection of
+NaNs. Reinstating the rejection of
 non-exact paths makes the emitted-add-count regression fail.
 
 The wider peephole check exposed an existing ADDRM assertion tied to a particular

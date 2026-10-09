@@ -35,14 +35,14 @@ hash-pinned PDS fixture's original OMF data and runtime relocations; it does
 not invoke llrm optimization or instruction selection.
 
 ```sh
-uv run python -m tools.references.fpdeep /tmp/fpdeep-reference --assembler /path/to/jwasm
+uv run python -m tools.references.fpdeep fpdeep-reference --assembler /path/to/jwasm
 ```
 
 The build explicitly selects native FPU (`-FPi87`). It emits BASE.OBJ,
 REF.OBJ, and `fpdeep-p-g2.obj` for raw scoring. The reference has 21 stores,
 21 WAITs and the original output calls: 1317 modeled units. It links and
 prints byte-identical output to BC and qbopt's native build; evidence is in
-`/tmp/qbopt-fpdeep-jwasm.xq6rYz`, including `result.png`. The accepted scope
+`fpdeep-jwasm`, including `result.png`. The accepted scope
 is ordinary PDS without events or resumable errors. See `docs/measurement/targets.md`
 for the derivation; other compiler configurations remain provisional.
 
@@ -52,7 +52,7 @@ for the derivation; other compiler configurations remain provisional.
 denominator. Build its audited PDS object with:
 
 ```sh
-uv run python tools/references/reference.py /tmp/fpcsex-reference --program fpcsex
+uv run python tools/references/reference.py fpcsex-reference --program fpcsex
 ```
 
 It keeps both additions, source-order accumulation, three SINGLE conversions
@@ -71,9 +71,9 @@ rounding modes, three precisions). Inputs include cancellation, subnormals,
 overflow, zero division, signed zero and quiet/signaling NaNs.
 
 ```sh
-uv run python tools/references/fpcsex_check.py /tmp/fpcsex-reference
+uv run python tools/references/fpcsex_check.py fpcsex-reference
 # Run CHECK.COM in the guest, then:
-uv run python tools/references/fpcsex_check.py /tmp/fpcsex-reference --check
+uv run python tools/references/fpcsex_check.py fpcsex-reference --check
 ```
 
 The ARM DOSBox-X run matched all 144 pairs but **failed environment
@@ -94,13 +94,13 @@ The bare-metal transport loads the same kernels and emits their result bytes
 through QEMU's debug port, avoiding DOSBox's floating implementation:
 
 ```sh
-uv run python tools/references/fpcsex_check.py /tmp/fpcsex-reference --qemu
+uv run python tools/references/fpcsex_check.py fpcsex-reference --qemu
 qemu-system-i386 -accel tcg -cpu pentium3 -m 16 \
-  -drive file=/tmp/fpcsex-reference/qemu.img,format=raw,if=floppy -boot a \
+  -drive file=fpcsex-reference/qemu.img,format=raw,if=floppy -boot a \
   -display none -serial none -monitor none \
-  -debugcon file:/tmp/fpcsex-reference/QEMU.BIN -global isa-debugcon.iobase=0xe9 \
+  -debugcon file:fpcsex-reference/QEMU.BIN -global isa-debugcon.iobase=0xe9 \
   -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot
-uv run python tools/references/fpcsex_check.py /tmp/fpcsex-reference --qemu --check
+uv run python tools/references/fpcsex_check.py fpcsex-reference --qemu --check
 ```
 
 QEMU's expected exit code is 33 from the explicit completion port, not zero.
@@ -165,10 +165,10 @@ Generate optimized IR and x87 assembly with an available Clang:
 ```sh
 clang -target i386-unknown-linux-gnu -march=i386 -mno-sse -mno-sse2 \
   -O2 -ffp-model=strict -fno-pic -S -emit-llvm \
-  tools/references/fpcsex.c -o /tmp/qbopt-fpcsex-reference.ll
+  tools/references/fpcsex.c -o fpcsex-reference.ll
 clang -target i386-unknown-linux-gnu -march=i386 -mno-sse -mno-sse2 \
   -O2 -ffp-model=strict -fno-pic -S -masm=intel \
-  tools/references/fpcsex.c -o /tmp/qbopt-fpcsex-reference.s
+  tools/references/fpcsex.c -o fpcsex-reference.s
 ```
 
 Record `clang --version`: the installed compiler need not match the local

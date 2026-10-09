@@ -39,5 +39,3 @@ in the ordinary PDS emission scan. The broader transform test file has nine
 pre-existing failures and two xfails, reproduced with the unchanged HEAD
 dead-code function and unchanged by this patch; no tests were weakened.
 
-Stages and runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-local-dead-me70cclw`.

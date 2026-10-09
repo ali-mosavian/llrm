@@ -12,7 +12,7 @@ fail-first regression. The next refusal is `0x045d: mov has 1 fixups and 0
 fields to put them in`, also in PITSNAP. No runtime speedup is claimed.
 
 All MIR and machine stages for this investigation were dumped to
-`/tmp/qbopt-nbody-timing-stages`. The benchmark source now prints its final
+`nbody-timing-stages`. The benchmark source now prints its final
 positions and velocities, so the older statement in `numbers.md` that it
 prints only ticks no longer describes the current source. Future timings
 must compare those answers and require genuine optimized emission.
@@ -39,8 +39,8 @@ The frontend now raises an unobserved high-byte clear as a word-sized mask
 with an explicit value result and upper-word preservation. This is allowed
 only when its flags are unobserved and overwritten within the block. It
 introduces no machine knowledge into optimization passes. Dumps before and
-after are in `/tmp/qbopt-nbody-external-stages` and
-`/tmp/qbopt-nbody-byte-stages`; the repaired allocated sequence is
+after are in `nbody-external-stages` and
+`nbody-byte-stages`; the repaired allocated sequence is
 `mov al,es:[bx]; and ax,255`. The pinned 100-step run now reports nonzero
 ticks and unchanged simulation results. The dynamic-core discrepancy has
 not been separately rechecked and is not used as timing evidence.
@@ -165,9 +165,8 @@ these rankings as measured execution time.
 
 ## Local GCC cross-check
 
-Inspected revision `9a135e85c2e6543031657ce637e22e1eab004493` in
-`/Users/alim/work/other/gcc`, both `gcc/config/i386/x86-tune-costs.h`
-and its consumer `gcc/config/i386/i386.cc`. The latter's integer `MULT`
+Inspected revision `9a135e85c2e6543031657ce637e22e1eab004493` of [GCC](https://github.com/gcc-mirror/gcc/tree/9a135e85c2e6543031657ce637e22e1eab004493), both [`gcc/config/i386/x86-tune-costs.h`](https://github.com/gcc-mirror/gcc/blob/9a135e85c2e6543031657ce637e22e1eab004493/gcc/config/i386/x86-tune-costs.h)
+and its consumer [`gcc/config/i386/i386.cc`](https://github.com/gcc-mirror/gcc/blob/9a135e85c2e6543031657ce637e22e1eab004493/gcc/config/i386/i386.cc). The latter's integer `MULT`
 case counts **set bits** of a constant, then adds `nbits * mult_bit` to
 `mult_init`; an unknown multiplier uses an explicitly arbitrary seven.
 This is not the 386 manual's logarithmic early-out formula. For example,
