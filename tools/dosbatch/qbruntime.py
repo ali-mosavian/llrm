@@ -23,7 +23,12 @@ RUNTIME = dosbatch.ROOT / "runtime" / "qb"
 PLATFORM = dosbatch.ROOT / "platform" / "qb" / "dos" / "m16"
 ARCHIVE_NAME = "LLRMQB.LIB"
 DEMO_NAMES = ("NIBBLES.BAS", "GORILLA.BAS")
-UNDEFINED = re.compile(r"^\s*Unresolved external(?: symbol)?\s+([^\s:]+)", re.IGNORECASE | re.MULTILINE)
+MILESTONE_ONE = (
+    "bintree", "crc", "fib", "floats", "fpbench", "frames", "grep", "hanoi", "histo", "huge", "lru", "mandel",
+    "matmul", "nbody", "nbody_fixed", "nbody_single", "particle", "queens", "quicksort", "ring", "scroll", "shellsort",
+    "sieve", "textfill", "tile",
+)
+UNDEFINED = re.compile(r"(?:Unresolved external(?: symbol)?\s+|error L2029\s*:\s*')(B\$[^'\s:]+)", re.IGNORECASE)
 
 
 def library(runtime: str, candidate: Path, empty: Path) -> Path | None:
@@ -51,6 +56,15 @@ def first_byte_difference(want: bytes, got: bytes) -> str:
 def undefined_symbols(link_log: str) -> list[str]:
     """The B$ entries Microsoft LINK actually reports for an empty archive."""
     return sorted({match.group(1) for match in UNDEFINED.finditer(link_log) if match.group(1).upper().startswith("B$")})
+
+
+def milestone_sources() -> list[Path]:
+    """The fixed first milestone corpus, refusing a renamed or missing source."""
+    sources = [dosbatch.ROOT / "bench" / name / f"{name}.bas" for name in MILESTONE_ONE]
+    missing = [str(source.relative_to(dosbatch.ROOT)) for source in sources if not source.is_file()]
+    if missing:
+        raise FileNotFoundError("missing milestone-1 BASIC source: " + ", ".join(missing))
+    return sources
 
 
 def demo_sources(directory: Path | None = None) -> tuple[dict[str, Path], str]:

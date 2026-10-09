@@ -33,6 +33,12 @@ class OutputTests(unittest.TestCase):
 
 
 class InventoryTests(unittest.TestCase):
+    def test_milestone_one_inventory_names_the_25_basic_benchmarks_once(self):
+        """A glob omitted nbody_fixed, so the claimed milestone inventory had 24 links."""
+        sources = qbruntime.milestone_sources()
+        self.assertEqual(len(sources), 25)
+        self.assertEqual({source.parent.name for source in sources}, set(qbruntime.MILESTONE_ONE))
+
     def test_linker_inventory_deduplicates_only_the_reported_b_symbols(self):
         """A broad symbol scan recorded private names that LINK did not require and hid a missing entry."""
         log = "Unresolved external B$SASS in module P\nUnresolved external _main in module P\nUnresolved external B$SASS in module Q\nUnresolved external B$FLEN in module P\n"
@@ -46,4 +52,3 @@ class DemoSourceTests(unittest.TestCase):
             found, reason = qbruntime.demo_sources(Path(work))
         self.assertEqual(found, {})
         self.assertEqual(reason, "QB45_DEMOS_DIR is unset or lacks NIBBLES.BAS and GORILLA.BAS")
-
