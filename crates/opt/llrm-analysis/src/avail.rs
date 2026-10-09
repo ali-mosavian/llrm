@@ -820,7 +820,9 @@ fn memory_providers(
     missing: &[InstId],
 ) -> Vec<Forward> {
     let function = unit.function;
-    let graph = memoryssa::built(unit, accesses);
+    // Register facts only, as the availability map reads them: a memory-aware
+    // solve per query costs more than it finds.
+    let graph = memoryssa::built(unit, accesses).with_known(ranges::constants(unit).into_iter().collect());
     let shape = unit.shape();
     let dominance = &shape.dominance;
     let places: HashMap<InstId, (i64, usize)> = function
@@ -840,6 +842,17 @@ fn memory_providers(
     let available = |source: InstId, site: InstId| -> bool {
         let ((source_block, source_index), (block, index)) = (places[&source], places[&site]);
         dominance.dominates(source_block, block) && (source_block != block || source_index < index)
+    };
+
+    // Whether `value` is defined where `site` can read it.
+    let available_value = |value: Operand, site: InstId| -> bool {
+        match value {
+            Operand::Value(one) => match function.value(one).def {
+                llrm_mir::module::ValueDef::Instruction(def) => available(def, site),
+                _ => true,
+            },
+            _ => true,
+        }
     };
 
     let mut groups: Vec<(&MemRef, Vec<usize>)> = Vec::new();
@@ -872,12 +885,24 @@ fn memory_providers(
         let Some((cell, result)) = loaded_into(unit, accesses, site) else {
             continue;
         };
-        let clobbers = graph.clobbers(site, &cell);
+        // A load that is invariant is clobbered by nothing; the store before it
+        // that initialised what it reads is still the value it has.
+        let clobbers = graph.clobbers_ignoring_invariance(site, &cell);
         let single = if clobbers.len() == 1 { clobbers.first().map(|id| graph.access(*id)) } else { None };
         if let Some(source) = single.filter(|access| access.kind == memoryssa::Kind::Def).and_then(|access| access.site)
             && let Some((stored, value)) = stored_from(unit, accesses, source)
             && available(source, site)
             && same_bytes(unit, &stored, &cell)
+            && serves(unit, value, result)
+        {
+            found.push(Forward { at: site, value });
+            continue;
+        }
+        // Several clobbers, each an exact store of the one value, and that
+        // value defined where it reaches the load: the arms of a join
+        // that stored the same thing.
+        if clobbers.len() > 1
+            && let Some(value) = joined_store(unit, accesses, &graph, &clobbers, &cell, site, &available_value)
             && serves(unit, value, result)
         {
             found.push(Forward { at: site, value });
@@ -933,6 +958,30 @@ fn memory_providers(
         }
     }
     found
+}
+
+/// The one value every clobber of a load stores into its exact bytes, when each
+/// clobber is such a store and the value is defined where `site` reads it.
+fn joined_store(
+    unit: &Unit,
+    accesses: &Accesses,
+    graph: &memoryssa::MemorySSA,
+    clobbers: &BTreeSet<usize>,
+    cell: &MemRef,
+    site: InstId,
+    available_value: &dyn Fn(Operand, InstId) -> bool,
+) -> Option<Operand> {
+    let mut one = None;
+    for id in clobbers {
+        let access = graph.access(*id);
+        let source = access.site.filter(|_| access.kind == memoryssa::Kind::Def)?;
+        let (stored, value) = stored_from(unit, accesses, source)?;
+        if !same_bytes(unit, &stored, cell) || one.is_some_and(|before| before != value) {
+            return None;
+        }
+        one = Some(value);
+    }
+    one.filter(|&value| available_value(value, site))
 }
 
 #[cfg(test)]
