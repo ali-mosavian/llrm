@@ -137,7 +137,8 @@ pub fn _before(effects: &[Option<Effect>], live: Lanes, universe: &Lanes) -> Lan
 
 /// The lanes live before `block`, given those live after it.
 pub fn _backwards(bits: u32, block: &LirBlock, live: Lanes, universe: &Lanes) -> Lanes {
-    _before(&_effects(bits, block), live, universe)
+    // Each effect is read where it is kept: a copy of every instruction's, for each round of a fixed point, was a tenth of peephole.
+    block.insns.iter().rev().fold(live, |live, one| with_effect(bits, one, |effect| effect.map_or_else(|| *universe, |effect| effect.live_before(&live))))
 }
 
 /// What a call says it reads and writes, for an instruction no decoder covers.
