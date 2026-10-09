@@ -265,6 +265,22 @@ pub fn transient(
     room: Room,
     live: &BTreeSet<ValueId>,
 ) -> i64 {
+    transient_by(context, layout, function, inst, room, live, &mut |value| {
+        folded_in(context, function, value, room.index_scales)
+    })
+}
+
+/// `transient`, asking `is_folded` whether a pointer is folded, which a caller
+/// that asks of every access can answer from what it has found.
+fn transient_by(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    inst: InstId,
+    room: Room,
+    live: &BTreeSet<ValueId>,
+    is_folded: &mut dyn FnMut(ValueId) -> bool,
+) -> i64 {
     let op = function.instruction(inst);
     let address = match op.opcode {
         Opcode::Load { .. } => op.operands.first(),
@@ -272,7 +288,7 @@ pub fn transient(
         _ => None,
     };
     let Some(Operand::Value(pointer)) = address else { return 0 };
-    let read = address_values_in(context, function, *pointer, room.index_scales);
+    let read = address_values_by(function, *pointer, is_folded);
     read.iter().filter(|value| !live.contains(value)).count() as i64
         + if words(context, layout, function, *pointer) > 1 { room.far_access } else { 0 }
 }
@@ -315,7 +331,7 @@ pub fn copied(
 /// access alone takes the `getelementptr` that makes it, what that is made
 /// of: the pointer it is an offset from and each variable index.
 pub fn addressed(function: &Function) -> BTreeSet<ValueId> {
-    addressed_by(function, &mut |value| folded(function, value))
+    addressed_by(function, &mut |value| folded(function, value)).0
 }
 
 /// `addressed` where an address takes `scales`.
@@ -324,18 +340,26 @@ pub fn addressed_in(
     function: &Function,
     scales: u8,
 ) -> BTreeSet<ValueId> {
-    addressed_by(function, &mut |value| folded_in(context, function, value, scales))
+    addressed_by(function, &mut |value| folded_in(context, function, value, scales)).0
+}
+
+/// What `is_folded` said of each value it was asked about: the asked, and those
+/// it said yes to.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Folds {
+    asked: IdSet<ValueId>,
+    yes: IdSet<ValueId>,
 }
 
 fn addressed_by(
     function: &Function,
     is_folded: &mut dyn FnMut(ValueId) -> bool,
-) -> BTreeSet<ValueId> {
+) -> (BTreeSet<ValueId>, Folds) {
     let mut found = BTreeSet::new();
     // Whether a pointer is folded depends on all its users, and a frame slot
     // has one user for each access to it: asked once for each pointer, not
     // once for each access.
-    let mut memo: llrm_support::hash::HashMap<ValueId, bool> = llrm_support::hash::HashMap::default();
+    let mut memo = llrm_mir::dense::IdMap::<ValueId, bool>::new();
     for &block in function.layout() {
         for &inst in function.block(block).instructions() {
             let op = function.instruction(inst);
@@ -346,12 +370,19 @@ fn addressed_by(
             };
             if let Some(Operand::Value(pointer)) = address {
                 found.extend(address_values_by(function, *pointer, &mut |value| {
-                    *memo.entry(value).or_insert_with(|| is_folded(value))
+                    *memo.get_or_insert_with(value, || is_folded(value))
                 }));
             }
         }
     }
-    found
+    let mut folds = Folds::default();
+    for (value, &yes) in memo.iter() {
+        folds.asked.insert(value);
+        if yes {
+            folds.yes.insert(value);
+        }
+    }
+    (found, folds)
 }
 
 /// What an access through `pointer` reads its address from. Where `pointer`
@@ -925,6 +956,9 @@ pub struct Pressure {
     cells: BTreeMap<ValueId, ValueId>,
     counted: BTreeSet<ValueId>,
     addressed: BTreeSet<ValueId>,
+    /// Whether each pointer an access is made through is folded: asked of the
+    /// function once.
+    folds: Folds,
 }
 
 impl Pressure {
@@ -934,6 +968,7 @@ impl Pressure {
         function: &Function,
         scales: u8,
     ) -> Self {
+        let (addressed, folds) = addressed_by(function, &mut |value| folded_in(context, function, value, scales));
         Self {
             found: liveness::live(function),
             cells: cells(function),
@@ -941,7 +976,8 @@ impl Pressure {
                 .map(ValueId)
                 .filter(|&value| integer_in(context, function, value, scales))
                 .collect(),
-            addressed: addressed_in(context, function, scales),
+            addressed,
+            folds,
         }
     }
 }
@@ -1028,7 +1064,15 @@ impl<'a> View<'a> {
             block,
             room,
             self.across,
-            &|inst, live| transient(context, layout, function, inst, room, live),
+            &|inst, live| {
+                transient_by(context, layout, function, inst, room, live, &mut |value| {
+                    if self.pressure.folds.asked.contains(&value) {
+                        self.pressure.folds.yes.contains(&value)
+                    } else {
+                        folded_in(context, function, value, room.index_scales)
+                    }
+                })
+            },
             &self.pressure.cells,
             &|value| self.pressure.counted.contains(&value) && !hide(value),
             &|value| segment_view(context, layout, room.spaces, function, value),
