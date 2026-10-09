@@ -393,8 +393,7 @@ reload.
 
 ### LLVM and GCC reference points
 
-The local reference sources are `~/work/other/llvm-project` and the GCC tree
-under `~/work/other`. They guide structure and algorithms, not vocabulary above
+The reference sources are [LLVM](https://github.com/llvm/llvm-project) and [GCC](https://github.com/gcc-mirror/gcc). They guide structure and algorithms, not vocabulary above
 the MIR boundary.
 
 | llrm | LLVM analogue | GCC analogue |
@@ -553,11 +552,10 @@ one documented target without materially regressing another.
   validated image. Disabling LoopSimplify only in SCREEN independently
   restores the same result; the fix keeps the pass enabled. Regression:
   `tests/test_loop_exit_layout.py`, fail-first and mutation-checked.
-  Build, screenshots and per-stage evidence: `/tmp/qbopt-quake-launch.X8v5aq`.
   Full rebuild with the repair: all 21 native-FPU modules emit, link and
   have complete reachable-code coverage. E1M1 completes at 23.42 FPS
   (42.692 ms mean across 19 measured intervals; 23 frames total), with
-  byte-identical BENCH.BMP. Evidence: `/tmp/qbopt-quake-fixed.8BnoLI`.
+  byte-identical BENCH.BMP.
   NBODY and FPBENCH's real PITSNAP loops now have one backedge. NBODY's
   native-FPU object shrinks 4082 → 4079 bytes (modeled cost 343576 → 343556)
   because its two retry trampolines become one:
@@ -573,8 +571,7 @@ one documented target without materially regressing another.
   BC and both optimized variants agree on all 24 physics outputs plus DONE
   at ten steps. Observed ticks: BC 3128, before 674, after 674; no timing
   improvement is established, and the prior PIT-instrument warning still
-  applies. Evidence: `/tmp/qbopt-loopsimplify-run.6jnfLx`; full stage dumps:
-  `/tmp/qbopt-loopsimplify-nbody-20260911`. General coverage remains open:
+  applies. General coverage remains open:
   irreducible, entry-header and unsupported-transfer loops are not normalized.
 - [x] Preserve loop-exit SSA explicitly (`LCSSA`). Dedicated exits
   are closed before loop transforms in each fixed-point round; unsupported exit shapes remain
@@ -606,9 +603,7 @@ one documented target without materially regressing another.
   mov [0],eax                     mov [0],eax
   ```
 
-  The final store has the same relocated accumulator address. Compile/link
-  logs, both complete listings, screenshot and every stage:
-  `/tmp/qbopt-lcssa-merge.g9W4To`. The earlier `lcexit-p-g2.obj` witness has
+  The final store has the same relocated accumulator address. The earlier `lcexit-p-g2.obj` witness has
   only memory uses after its exits and does not exercise this SSA merge.
   Exit values reaching a bypass join are rewritten on the incoming edge,
   even when the exit does not dominate the join. This fixes qrender's
@@ -620,8 +615,7 @@ one documented target without materially regressing another.
   becomes 210 outside the loop; observed recurrences remain intact. Isolated
   before/after lowering removes `mov eax,0` plus the loop's `add eax,ecx`,
   replacing the final store's source with `mov ebx,210`. Both objects and BC
-  print `T=210`, `U=210`, `DONE` identically in DOS (2026-09-11); dumps,
-  binaries and screenshot: `/tmp/qbopt-lcssa-exit.ihku8G`.
+  print `T=210`, `U=210`, `DONE` identically in DOS (2026-09-11);
   This removes a pass-order dependency, not an additional full-pipeline
   speedup: the existing ordering already optimizes this fixture.
 - [ ] Canonicalize primary counters and derived recurrences
@@ -663,9 +657,7 @@ one documented target without materially regressing another.
   ```
 
   The frame spill allocation disappears, and the final source counter is
-  stored as constant 5. No FPS or hardware timing claim. Full stage dumps,
-  assembly, link logs and runtime screenshot:
-  `/tmp/qbopt-indvars-arithmetic.1KZ9xE`.
+  stored as constant 5. No FPS or hardware timing claim.
   Affine starts and strides are typed as scalar SSA values or constants,
   matching every constructor; memory operands remain in derived invariant
   terms rather than masquerading as recurrence seeds.

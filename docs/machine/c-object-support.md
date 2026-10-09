@@ -13,7 +13,7 @@ out of scope. Subsequent renderer benchmarks use 300 frames.
 | sb_build | no code segment | no entry explains the relocation fields |
 
 These are fresh Borland objects from qb-qrender main `1c9c30a`, compiled with
-`-Ox`, in `/tmp/qbopt-qrender-main.psUwqM/`. The probe changed segment selection
+`-Ox`, in `qrender-main/`. The probe changed segment selection
 in memory only; no output was used in a game build.
 
 Required frontend/backend work, in order:
@@ -124,7 +124,7 @@ partition order). Previously 0x604 and 0x334 refused their first private call.
 Allocation and x87 call/return integration are not yet verified.
 
 Allocation probe: all five bodies now traverse the machine pipeline with
-native frame plans, dumping each stage in `/tmp/qbopt-c-stages.PCYsD4`.
+native frame plans, dumping each stage in `c-stages`.
 It exposed an ABI defect: unpinned incoming SI/DI saves became PUSH BX/AX,
 and their restores became POP AX/AX. Native frame plans now pin those values
 in the backend. The regression checks physical saves and restores after the
@@ -147,19 +147,18 @@ encoder disabled, and check decoded masks and flag effects. The emitted
 object maps successfully, with private near calls and RET/RETF distinctions
 retained. It is not yet runtime-validated or enabled in production.
 
-Runtime gate failed: isolated `/tmp/qbopt-c-run.C8JLSn` replaces only r_walk.obj
+Runtime gate failed: isolated `c-run` replaces only r_walk.obj
 in the previously rendering all-17-BASIC build. LINK succeeds, but the requested
 300-frame run stops with `String space corrupt in line No line number in module
 D_SURF at address 06E6:1686`. No BENCH.TXT was produced and no FPS is valid.
 Screenshot: `live.png` in that directory. The unchanged comparison build is
-`/tmp/qbopt-300.WRBMTm` (300 frames, 15.72 FPS). Keep C emission disabled;
+`300` (300 frames, 15.72 FPS). Keep C emission disabled;
 localize the first bad transformation in r_walk and add a symptom regression
 before accepting a fix. A mapped object and balanced stack were insufficient.
 
 Isolation run: removing only r_walk's FPU linker patch fixups, with its code
 bytes asserted identical to the original, completes 300 frames and renders
-DM3ISH. Artifact directory:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-c-native-only.hwd6kf0j`.
+DM3ISH.
 `BENCH.TXT` reports 15.60 FPS versus the earlier unchanged-C 15.72 FPS;
 these single runs have different timer calibrations and establish no speed
 change. `benchmark.png` is the final frame; both runs report 258 polygons,
@@ -182,7 +181,7 @@ fld dword [si]               fld dword es:[si]
 fld dword [di]               fld dword es:[di+0Ch]
 ```
 
-This is not the complete runtime fix. `/tmp/qbopt-c-segment.rI1Pdy` links the
+This is not the complete runtime fix. `c-segment` links the
 2,139-byte corrected r_walk probe but still reports the D_SURF string-space
 corruption during the 300-frame attempt. `live.png` records the error; no
 completed benchmark or valid FPS. C production emission remains gated.
@@ -195,9 +194,9 @@ Function isolation (same 300-frame configuration):
 | `0334` recursive worker | Carried original instructions | D_SURF string-space corruption; no valid FPS |
 
 Artifacts are respectively
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-c-native-only.rh4au6pu`
+`c-native-only.rh4au6pu`
 (`BENCH.TXT`, `benchmark.png`) and
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-c-native-only.mdey1wxm`
+`c-native-only.mdey1wxm`
 (`live.png`). These are diagnostic variants, not a production fallback policy.
 The second reproduces without rewriting either leaf helper or the public
 wrapper: focus the next stage comparison on the worker at original `0334`.
@@ -220,13 +219,13 @@ ja target                     ja target
 the fix; mutation confirmed. Native-frame/status tests: 13 pass; related
 opaque-emission/argument tests: 23 pass. The corrected worker-only probe
 still fails with D_SURF corruption: artifacts under
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-c-native-only.gf86h66l`,
+`c-native-only.gf86h66l`,
 including `live.png`. No valid FPS. This fixes a demonstrated instruction
 error, not the remaining whole-program failure.
 
 Worker-only probe with the final peephole pass disabled also fails with
 D_SURF string-space corruption. Artifact directory:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-c-native-only.upuk_r8u`
+`c-native-only.upuk_r8u`
 (`live.png`, no completed benchmark/FPS). This excludes peephole as the
 sole remaining cause. The original `0430..0459` argument pushes and emitted
 counterparts agree, including the dword at context+36h and the 28-byte total.
@@ -257,14 +256,14 @@ focused tests pass across this fix, native status flags, lower arguments,
 and existing dead-result coverage. Corrected worker-only run (peephole off):
 300 frames, 15.5943 FPS, 258 polygons, 809 triangles, visibly rendered.
 Artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-c-native-only.3y380bed`
+`c-native-only.3y380bed`
 (`BENCH.TXT`, `benchmark.png`). No performance improvement is established.
 Next validate all five rewritten bodies together with peephole enabled;
 this isolated pass does not yet justify enabling C production emission.
 
 All-five-body integration with peephole enabled completes 300 frames, but
 fails visual/geometry comparison. Artifact directory:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-c-native-only.p1ankm5f`
+`c-native-only.p1ankm5f`
 (`BENCH.TXT`, `benchmark.png`). Measured 12.8607 FPS, 351 polygons, 1033
 triangles, 479 built surfaces, versus the passing worker-only 15.5943 FPS,
 258 polygons, 809 triangles and the original comparison's 281 surfaces.
@@ -292,7 +291,7 @@ The fail-first return regression also fails with native return annotation
 disabled. All five `r_walk` bodies now rewrite with peephole enabled:
 300 frames, 15.7925 FPS, 258 polygons, 809 triangles, correct visible floor
 and matching camera. Artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-c-native-only.ehfhotub`
+`c-native-only.ehfhotub`
 (`BENCH.TXT`, `benchmark.png`). Object size 2144 bytes; culling and worker
 each reserve two spill bytes. This is a backend correctness run, not a MIR
 optimization run or evidence of a speedup. Production C emission remains
@@ -317,8 +316,7 @@ The other C modules still refuse atomically:
 | sb_build | Frame/cleanup unproved at 0000 |
 | r_span | Unexplained code at 034e–03e2 |
 
-Production probe results and stage dumps:
-`/tmp/qbopt-c-production.RzZfcR`. With MIR optimization enabled, `r_walk`
+With MIR optimization enabled, `r_walk`
 emits 2114 bytes versus 2144 without it. The culling helper reuses its
 argument instead of loading it three times:
 
@@ -333,7 +331,7 @@ add ax,8                      ; add si,8
 
 Optimized production run: 300 frames, 15.9590 FPS, 258 polygons, 809
 triangles, matching camera and visible scene. Artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-c-native-only.2q18iyg7`
+`c-native-only.2q18iyg7`
 (`BENCH.TXT`, `benchmark.png`). The first attempt exited before recording
 results; the retry used the same executable. Against the unoptimized
 15.7925 FPS single run, the small difference does not establish a speedup.
@@ -359,7 +357,7 @@ currently produces 38 opaque memory barriers:
 These counts come from decoded original instructions whose raised operations
 satisfy `effects.unmodeled_write`, after removing native-FPU linker patches.
 The stage dump `r_walk-opt/0000-mir-r01-promote.txt` under
-`/tmp/qbopt-c-production.RzZfcR` retains the memory increment at `02e0`.
+`c-production` retains the memory increment at `02e0`.
 Experimentally adding INCREMENT/DECREMENT to promotion's supported reads
 does not change it: the opaque operations still invalidate availability.
 No production change or performance improvement follows from that experiment.
@@ -445,7 +443,7 @@ and unknown-barrier controls. The rebuilt r_walk object grows from 2114
 to 2140 bytes. The 300-frame renderer run completes at 16.5042 FPS versus
 the preceding 16.5105, with matching 258 polygons / 809 triangles and a
 visually verified scene. No speed improvement is established. Artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-c-native-only.0tmks4y1`
+`c-native-only.0tmks4y1`
 (`BENCH.TXT`, `benchmark.png`). Full commit gates remain outstanding.
 
 Promotion now accepts increment/decrement memory updates, separating their
@@ -526,7 +524,7 @@ The optimized `r_walk.obj` is 2157 bytes, versus the broken 2160 bytes.
 
 The corrected build completed 300 frames at **16.4789 FPS**, with **258
 polygons / 809 triangles** and a verified scene screenshot. Artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-c-native-only.zwctexv3`
+`c-native-only.zwctexv3`
 (`BENCH.TXT`, `benchmark.png`). This restores rendering; it does not establish
 a speedup over the preceding correct 16.5042 FPS run. Counter promotion
 still spills. Full batch/commit gates remain outstanding.
@@ -564,8 +562,7 @@ add dx,14h                      ; accesses use pointer+4 and pointer+8
 add bx,14h                      ;
 ```
 
-No performance change was made or claimed by this audit. Captured dumps:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-pointer-recurrences.as6xpp3q/r_walk-opt`.
+No performance change was made or claimed by this audit.
 
 ### Recurrence-sharing prototype
 
@@ -627,7 +624,7 @@ positive, negative and wrapping displacements. The rebuilt object is
 byte-identical to the one run for 300 frames: **16.3373 FPS**, **258 polygons
 / 809 triangles**, verified scene screenshot. This is below the preceding
 16.4789 FPS single run, so no runtime speedup is established. Artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-c-native-only.jb8zjeld`
+`c-native-only.jb8zjeld`
 (`BENCH.TXT`, `benchmark.png`). Full batch/commit gates remain outstanding.
 
 ### Combined sharing and address selection
@@ -635,7 +632,7 @@ byte-identical to the one run for 300 frames: **16.3373 FPS**, **258 polygons
 A diagnostic run combining the sharing prototype with address selection
 emits 2143 bytes versus 2155 without sharing. It is not runtime-validated
 or enabled by default. Dumps and the emitted object are under
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-shared-addresses.y3hjkcdm`.
+`shared-addresses.y3hjkcdm`.
 
 The second-component load now uses the common pointer:
 
@@ -674,7 +671,7 @@ This changes recognition, not the MIR pass vocabulary or the return contract.
 `test_word_arithmetic_carry.py` failed before the fix and again with the old
 condition restored. The four recurrence/carry tests and six focused
 carry/return/address-state tests pass. The production probe dumps every stage
-under `/tmp/qbopt-c-production.RzZfcR/r_walk-opt`.
+under `c-production/r_walk-opt`.
 
 The emitted object is byte-identical to the last verified 2155-byte build:
 
@@ -725,7 +722,7 @@ pointer increments and counter spill remain, and sharing stays disabled.
 300 frames: **16.4852 FPS**, **258 polygons / 809 triangles**, matching
 scene screenshot. This is within the recent single-run spread, not an
 established performance improvement. Artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-c-native-only.vk18ji3d`
+`c-native-only.vk18ji3d`
 (`BENCH.TXT`, `benchmark.png`). Full integration/commit gate outstanding.
 
 ### Dead values across fully described opaque readers
@@ -756,13 +753,12 @@ add si,14h                      ;
 
 The diagnostic still reconstructs offsets in the header and spills the
 counter. It is not the intended one-pointer loop yet. Sharing remains
-disabled by default; DCE's completeness distinction is enabled. Stage dumps:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-shared-dead.gath8g0z`.
+disabled by default; DCE's completeness distinction is enabled.
 
 300 frames rendered correctly: **16.3310 FPS**, **258 polygons / 809 triangles**,
 verified screenshot. This does not establish a speedup over the preceding
 16.4852 FPS run. Artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-c-native-only.u4re6f7m`
+`c-native-only.u4re6f7m`
 (`BENCH.TXT`, `benchmark.png`). Full integration/commit gate outstanding.
 
 ### Dead address arithmetic after allocation
@@ -883,8 +879,6 @@ wait                           ;
 fmul dword [bp-0B8h]            ; fmul dword [bp-0B8h]
 ```
 
-Probe and stage artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-sb-contracts.sgmj1ww0`.
 Renderer candidate `qbopt-c-native-only.phg3tu5v` incorporates this object
 with the preceding verified BASIC/r_walk/d_faces/pl_trace objects. Runtime
 validation is pending; this is not yet an accepted build or FPS improvement.
@@ -925,7 +919,7 @@ A fully unoptimized baseline was then linked from the original 17 BASIC,
 five C and two assembly objects, using the same library/assets and DOSBox
 settings as the optimized run: 300 frames, 15.5943 FPS, 258 polygons,
 809 triangles, matching camera and visible scene. Artifacts:
-`/tmp/qbopt-render-baseline.YtB79D` (`BENCH.TXT`, `benchmark.png`). Against
+`render-baseline` (`BENCH.TXT`, `benchmark.png`). Against
 15.9590 FPS with 17 BASIC modules and `r_walk` optimized, this single-run
 comparison is +2.34% FPS. Reported mean culling time is 5.629 vs 4.047 ms;
 drawing is 52.101 vs 52.427 ms. RDTSC calibration is nearly equal
@@ -1026,7 +1020,7 @@ With those diagnostic contracts, production reaches emission and refuses
 `mov [bx+0CA0h],eax`; lowered/allocated dumps show a destination with no
 address and a BX base. This is the next emission defect to reproduce and
 fix, not permission to discard the relocation. Stage dumps are in
-`/tmp/qbopt-c-production.RzZfcR/d_faces-opt/038a-*`. Atomic refusal returns
+`c-production/d_faces-opt/038a-*`. Atomic refusal returns
 the original 8536-byte object; no new game run or speedup is claimed.
 
 The address reader omitted displaced BX operands while handling SI/DI.
@@ -1047,7 +1041,7 @@ validated BASIC + `r_walk` + `pl_trace` build completed 300 frames at
 39.39998 FPS, but the image is black and triangles are zero (expected 809).
 Polygon count remains 258 and camera remains 232,-16,184.0313. This is a
 miscompile, not a performance result. Artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-c-native-only.zfrce5cl`
+`c-native-only.zfrce5cl`
 (`BENCH.TXT`, `BENCH.BMP`, `benchmark.png`). The next correctness task is
 to isolate the first incorrect stage; successful emission is insufficient.
 
@@ -1073,7 +1067,7 @@ five focused addend/address tests passed; disabling normalization failed.
 The corrected optimized `d_faces` emits 7910 bytes and renders a visible
 scene: 300 frames, 16.8541 FPS, 261 polygons / 815 triangles. The reference
 is 258 / 809, so this is not accepted as a correct speedup. Artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-c-native-only.r564v4ia`
+`c-native-only.r564v4ia`
 (`BENCH.TXT`, `benchmark.png`). The next control retains normalization but
 disables MIR optimization, keeping all other objects fixed.
 
@@ -1107,8 +1101,7 @@ correctness problem. No full commit gate has run.
 The same fixes with MIR optimization disabled complete 300 frames at
 16.1088 FPS, 258 polygons / 809 triangles, matching the reference counts
 and visible scene. All 28 object files were compared: only `d_faces.obj`
-differs from the reference build. Artifact directory:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-c-native-only.a8xgnxyt`.
+differs from the reference build.
 Thus the remaining 807-triangle result requires the optimized path;
 the corrected non-optimized backend no longer reproduces it. Isolate
 the changed MIR body before another pass-level experiment. The two
@@ -1166,7 +1159,7 @@ fld dword [di+10h]
 
 The corrected optimized run completes 300 frames at 16.5105 FPS,
 258 polygons / 809 triangles, matching reference counts and visible scene.
-Artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-c-native-only.kodssnh4`
+Artifacts: `c-native-only.kodssnh4`
 (`BENCH.TXT`, `benchmark.png`). This is a single run, not a statistically
 established speedup. Full integration/commit gates remain outstanding.
 
@@ -1201,7 +1194,7 @@ fail with their fixes removed. The real Borland fixture and source are
 With optimized `r_walk` and `pl_trace`, the 300-frame run completes at
 16.3181 FPS, 258 polygons, 809 triangles, matching camera and scene.
 Artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-c-native-only.4oklpul9`
+`c-native-only.4oklpul9`
 (`BENCH.TXT`, `benchmark.png`). This is a single-run observation, not an
 established speedup. `d_faces`, `sb_build`, and `r_span` remain unoptimized.
 

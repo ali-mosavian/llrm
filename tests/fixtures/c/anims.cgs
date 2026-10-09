@@ -7,7 +7,7 @@ START
 TYPE T25 size=40 align=1
 TYPE T26 size=8 align=1
 TYPE T27 size=12 align=1
-f1 DBSrcFile "/Users/alim/work/personal/qbopt/.claude/worktrees/watcom-16bit-qbopt-qcport-1d97c8/fixtures/c/anims.c"
+f1 DBSrcFile "tests/fixtures/c/anims.c"
 - DBSrcCue f1 10 1
 SYM y1 name="link_anims" base="link_anims" pattern="_*" attr=0x43 seg=1
 CALLCONV y1 class=0x80 target=0x712 parms=[] ret=0:0

@@ -45,8 +45,8 @@ resets `DEF SEG`. `Q45E14.BAS`
 checks registration and a manually invoked event routine; a separate
 instrumented DOS run must establish asynchronous TIMER dispatch.
 
-The QBasic-port documentation and parser tests at
-`~/work/personal/qbasic-port` were consulted to choose scenarios, but they are
+The QBasic-port documentation and parser tests of
+`qbasic-port` were consulted to choose scenarios, but they are
 not an oracle for acceptance, lowering, ABI, or runtime behavior. Microsoft QB
 4.5 compilation, raw object inspection where ABI matters, and BCOM/BRUN output
 remain the authority. New sources use explicit `AS` declarations where QB45's
@@ -83,7 +83,7 @@ rows are QuickBASIC editor, Advisor, or compiler UI documentation rather than
 BASIC program behavior.
 
 The inventory was extracted with
-`/Users/alim/work/personal/qb-qrender/tools/hlpextract.py`; its QuickHelp
+[`tools/hlpextract.py`](https://github.com/ali-mosavian/qb-quake/blob/main/tools/hlpextract.py) of qb-qrender; its QuickHelp
 decoder is the evidence reader, while QB 4.5's `BC.EXE` and BCOM45 runtime are
 the behavioral authority. The bounded original-compiler probe compiled the
 new deterministic sources with `/O /D` and produced zero severe errors. It

@@ -273,7 +273,7 @@ the first implementation.
 
 ## Parser source and extraction
 
-The starting parser is `~/work/personal/qbasic-port`, a Rust port of the
+The starting parser is `qbasic-port`, a Rust port of the
 QBasic 1.1 parser. It is valuable for its grammar behavior, tokenization,
 backtracking, and name/type rules. Its p-code coupling is not brought into
 this tree.

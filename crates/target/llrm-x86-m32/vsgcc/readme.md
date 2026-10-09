@@ -4,7 +4,7 @@ llrm's m32 output against gcc and clang: executed instructions, memory operands 
 estimate of each `bench/` C kernel in one emulator, and the hottest loop of each. Method, results and
 findings: [docs/vs-gcc.md](../../../../docs/vs-gcc.md).
 
-    crates/target/llrm-x86-m32/vsgcc/run.sh                        # builds, runs, prints the tables; products in $VSGCC_WORK (~/scratch/vsgcc-work)
+    crates/target/llrm-x86-m32/vsgcc/run.sh                        # builds, runs, prints the tables; products in $VSGCC_WORK
     uv run --project tools python crates/target/llrm-x86-m32/vsgcc/harness.py sieve gccO2   # one program, one compiler
     uv run --project tools python crates/target/llrm-x86-m32/vsgcc/loops.py sieve llrm gccO2 clangO2   # its hottest loop, side by side
     uv run --project tools --group dev pytest crates/target/llrm-x86-m32/vsgcc                # after run.sh
