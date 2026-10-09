@@ -3,8 +3,8 @@
 //! pipeline, and the dead-store test is DSE's, of x87 checkpoints.
 
 use llrm_analysis::cfg;
-use llrm_analysis::peelsize::Limits;
 use llrm_analysis::graph::loops;
+use llrm_analysis::peelsize::Limits;
 use llrm_mir::module::Module;
 use llrm_mir::opcode::{BinaryOp, Opcode};
 
@@ -13,7 +13,10 @@ use crate::testing::{f, managed, parsed, printed, results};
 
 /// `%acc * %n + %i` for `bound` trips, across a bridge to the latch; the
 /// exit reads the header's `%i` and `%acc`.
-fn summing(bound: &str, body: &str) -> String {
+fn summing(
+    bound: &str,
+    body: &str,
+) -> String {
     format!(
         "@count = global i16 0
 
@@ -69,7 +72,10 @@ fn multiplies(module: &mut Module) -> usize {
 }
 
 /// `text` through `pass`: whether it changed, and it computes what it did.
-fn through(text: &str, pass: Unroll) -> (bool, Module) {
+fn through(
+    text: &str,
+    pass: Unroll,
+) -> (bool, Module) {
     let mut module = parsed(text);
     let before = (printed(&module), results(&module, INPUTS));
     let after = managed(&mut module, pass);
@@ -167,8 +173,14 @@ fn a_header_that_stores_stays_rolled() {
 }
 
 /// `summing` with `hint` as the `!llvm.loop` of its back edge.
-fn hinted(bound: &str, hint: &str) -> String {
-    let text = summing(bound, "").replace("  %next = add i16 %i, 1\n  br label %b1\n", "  %next = add i16 %i, 1\n  br label %b1, !llvm.loop !0\n");
+fn hinted(
+    bound: &str,
+    hint: &str,
+) -> String {
+    let text = summing(bound, "").replace(
+        "  %next = add i16 %i, 1\n  br label %b1\n",
+        "  %next = add i16 %i, 1\n  br label %b1, !llvm.loop !0\n",
+    );
     format!("{text}\n!0 = distinct !{{!0, !1}}\n!1 = !{{{hint}}}\n")
 }
 

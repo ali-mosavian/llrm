@@ -15,13 +15,16 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::{fail, memory, Address, Cells, Machine, Outcome, Scalar};
+use super::{Address, Cells, Machine, Outcome, Scalar, fail, memory};
 use crate::support::hash::HashMap;
 
 /// PRINT's comma advances to the next zone of this many columns.
 const ZONE: usize = 14;
 
-fn word(cells: &Cells, at: i64) -> Outcome<usize> {
+fn word(
+    cells: &Cells,
+    at: i64,
+) -> Outcome<usize> {
     let at = usize::try_from(at).map_err(|_| super::ExecutionError("negative string address".into()))?;
     match cells.bytes.get(at..at + 2) {
         Some(bytes) => Ok(u16::from_le_bytes([bytes[0], bytes[1]]) as usize),
@@ -29,7 +32,10 @@ fn word(cells: &Cells, at: i64) -> Outcome<usize> {
     }
 }
 
-fn bytes_at(address: &Address, length: usize) -> Outcome<Vec<u8>> {
+fn bytes_at(
+    address: &Address,
+    length: usize,
+) -> Outcome<Vec<u8>> {
     let cells = address.memory.borrow();
     let start = address.offset as usize;
     match cells.bytes.get(start..start + length) {
@@ -65,7 +71,10 @@ fn string(argument: &Scalar) -> Outcome<Vec<u8>> {
 }
 
 /// Writes `bytes` as the string of the descriptor at `address`.
-fn assign(address: &Address, bytes: &[u8]) -> Outcome<()> {
+fn assign(
+    address: &Address,
+    bytes: &[u8],
+) -> Outcome<()> {
     let data = Address {
         memory: Rc::new(RefCell::new(Cells { bytes: bytes.to_vec(), pointers: HashMap::default(), dead: false })),
         offset: 0,
@@ -88,7 +97,10 @@ fn assign(address: &Address, bytes: &[u8]) -> Outcome<()> {
 /// descriptor, which gets fresh zeroed storage in ARRAY.INC's layout: the
 /// data at +0, the rank at +8, the offset adjusted for the lower bounds at
 /// +0Ah, the width at +0Ch and a (count, lower) record per dimension at +0Eh.
-fn dimension(name: &str, arguments: &[Scalar]) -> Outcome<()> {
+fn dimension(
+    name: &str,
+    arguments: &[Scalar],
+) -> Outcome<()> {
     let [pairs @ .., width, flags, Scalar::Address(descriptor)] = arguments else {
         return fail(format!("{name} has no descriptor"));
     };
@@ -160,7 +172,8 @@ fn count(argument: &Scalar) -> Outcome<usize> {
 /// `VAL`: blanks are skipped anywhere, and the number is the longest
 /// prefix that reads as one, `&H` and `&O` included.
 fn value(bytes: &[u8]) -> f64 {
-    let text: String = bytes.iter().filter(|one| !matches!(one, b' ' | b'\t' | b'\n')).map(|one| *one as char).collect();
+    let text: String =
+        bytes.iter().filter(|one| !matches!(one, b' ' | b'\t' | b'\n')).map(|one| *one as char).collect();
     let upper = text.to_ascii_uppercase();
     for (prefix, radix) in [("&H", 16), ("&O", 8), ("&", 8)] {
         if let Some(digits) = upper.strip_prefix(prefix) {
@@ -184,7 +197,11 @@ fn value(bytes: &[u8]) -> f64 {
 
 /// `%.{digits}g` with BASIC's spelling: no zero before the point, and `E`
 /// or `D` exponents with a sign and at least two digits.
-fn float_text(value: f64, digits: usize, exponent: char) -> String {
+fn float_text(
+    value: f64,
+    digits: usize,
+    exponent: char,
+) -> String {
     let text = format!("{:.*e}", digits - 1, value);
     let (mantissa, power) = text.split_once('e').expect("exponent form");
     let power: i32 = power.parse().expect("an exponent");
@@ -205,15 +222,14 @@ fn float_text(value: f64, digits: usize, exponent: char) -> String {
 }
 
 fn trim_fraction(text: &str) -> String {
-    if text.contains('.') {
-        text.trim_end_matches('0').trim_end_matches('.').to_owned()
-    } else {
-        text.to_owned()
-    }
+    if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.').to_owned() } else { text.to_owned() }
 }
 
 /// What `STR$` makes of a number: a sign or a space, then the digits.
-fn number_text(name: &str, value: &Scalar) -> Outcome<String> {
+fn number_text(
+    name: &str,
+    value: &Scalar,
+) -> Outcome<String> {
     Ok(match &name[name.len() - 2..] {
         "I2" | "I4" => {
             let value = value.whole()?;
@@ -227,7 +243,11 @@ fn number_text(name: &str, value: &Scalar) -> Outcome<String> {
 
 impl Machine<'_> {
     /// `Some(result)` when `name` is a modelled QB runtime routine.
-    pub(super) fn qb_runtime(&mut self, name: &str, arguments: &[Scalar]) -> Outcome<Option<Option<Scalar>>> {
+    pub(super) fn qb_runtime(
+        &mut self,
+        name: &str,
+        arguments: &[Scalar],
+    ) -> Outcome<Option<Option<Scalar>>> {
         let text = |index: usize| string(&arguments[index]);
         let result = match name {
             "B$SASS" => {
@@ -354,9 +374,7 @@ impl Machine<'_> {
                 let digits = if name == "B$FHEX" { format!("{value:X}") } else { format!("{value:o}") };
                 Some(temporary(digits.as_bytes())?)
             }
-            "B$STI2" | "B$STI4" | "B$STR4" | "B$STR8" => {
-                Some(temporary(number_text(name, &arguments[0])?.as_bytes())?)
-            }
+            "B$STI2" | "B$STI4" | "B$STR4" | "B$STR8" => Some(temporary(number_text(name, &arguments[0])?.as_bytes())?),
             "B$FVAL" => {
                 let accumulator = memory(8);
                 accumulator.borrow_mut().bytes.copy_from_slice(&value(&text(0)?).to_le_bytes());
@@ -402,11 +420,17 @@ impl Machine<'_> {
     }
 
     /// The string operations' comparison of two descriptors.
-    pub(super) fn qb_string_order(left: &Scalar, right: &Scalar) -> Outcome<std::cmp::Ordering> {
+    pub(super) fn qb_string_order(
+        left: &Scalar,
+        right: &Scalar,
+    ) -> Outcome<std::cmp::Ordering> {
         Ok(string(left)?.cmp(&string(right)?))
     }
 
-    fn qb_print(&mut self, text: &str) {
+    fn qb_print(
+        &mut self,
+        text: &str,
+    ) {
         for character in text.chars() {
             self.column = if character == '\n' { 0 } else { self.column + 1 };
         }

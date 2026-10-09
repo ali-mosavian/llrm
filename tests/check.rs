@@ -53,14 +53,24 @@ fn directives(source: &str) -> Vec<Directive> {
                 Some("-NOT") => Kind::Not,
                 _ => Kind::Check,
             };
-            found.push(Directive { only: parts.get(2).map(|one| one.as_str().to_owned()), kind, pattern: parts[3].trim().to_owned(), at: at + 1 });
+            found.push(Directive {
+                only: parts.get(2).map(|one| one.as_str().to_owned()),
+                kind,
+                pattern: parts[3].trim().to_owned(),
+                at: at + 1,
+            });
         }
     }
     found
 }
 
 fn run_lines(source: &str) -> Vec<String> {
-    source.lines().filter_map(comment).filter_map(|text| text.strip_prefix("RUN:")).flat_map(|rest| expanded(rest.trim())).collect()
+    source
+        .lines()
+        .filter_map(comment)
+        .filter_map(|text| text.strip_prefix("RUN:"))
+        .flat_map(|rest| expanded(rest.trim()))
+        .collect()
 }
 
 /// `line` once for each choice among its `{a | b}` groups; equal groups choose alike.
@@ -74,7 +84,10 @@ fn expanded(line: &str) -> Vec<String> {
     }
     let mut lines = vec![line.to_owned()];
     for (text, choices) in distinct {
-        lines = lines.iter().flat_map(|one| choices.iter().map(|choice| one.replace(&text, choice)).collect::<Vec<_>>()).collect();
+        lines = lines
+            .iter()
+            .flat_map(|one| choices.iter().map(|choice| one.replace(&text, choice)).collect::<Vec<_>>())
+            .collect();
     }
     lines
 }
@@ -102,7 +115,10 @@ fn matcher(pattern: &str) -> Regex {
 }
 
 /// What fails, as a message, or Ok.
-fn filecheck(output: &str, wanted: &[Directive]) -> Result<(), String> {
+fn filecheck(
+    output: &str,
+    wanted: &[Directive],
+) -> Result<(), String> {
     let lines: Vec<&str> = output.lines().collect();
     let mut cursor = 0; // the first line a CHECK may match
     let mut last: Option<usize> = None; // the line of the last match
@@ -119,7 +135,12 @@ fn filecheck(output: &str, wanted: &[Directive]) -> Result<(), String> {
                     (cursor..lines.len()).find(|&at| re.is_match(lines[at]))
                 };
                 let Some(at) = found else {
-                    return Err(format!("line {}: {:?} not found{}", one.at, one.pattern, if one.kind == Kind::Next { " on the next line" } else { "" }));
+                    return Err(format!(
+                        "line {}: {:?} not found{}",
+                        one.at,
+                        one.pattern,
+                        if one.kind == Kind::Next { " on the next line" } else { "" }
+                    ));
                 };
                 for bar in barred.drain(..) {
                     let re = matcher(&bar.pattern);
@@ -141,7 +162,10 @@ fn filecheck(output: &str, wanted: &[Directive]) -> Result<(), String> {
     Ok(())
 }
 
-fn files(dir: &Path, out: &mut Vec<PathBuf>) {
+fn files(
+    dir: &Path,
+    out: &mut Vec<PathBuf>,
+) {
     for entry in std::fs::read_dir(dir).unwrap().flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -171,8 +195,12 @@ fn test_every_file_under_tests_check_satisfies_its_check_lines() {
             if must_fail {
                 words.remove(0);
             }
-            let arguments: Vec<String> = words[1..].iter().map(|word| word.replace("%s", &path.display().to_string())).collect();
-            let done = Command::new(tool(words[0])).args(&arguments).output().unwrap_or_else(|error| panic!("{}: {}: {error}", path.display(), words[0]));
+            let arguments: Vec<String> =
+                words[1..].iter().map(|word| word.replace("%s", &path.display().to_string())).collect();
+            let done = Command::new(tool(words[0]))
+                .args(&arguments)
+                .output()
+                .unwrap_or_else(|error| panic!("{}: {}: {error}", path.display(), words[0]));
             let output = format!("{}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
             let name = path.strip_prefix(&root).unwrap().display();
             if done.status.success() == must_fail {
@@ -189,11 +217,17 @@ fn test_every_file_under_tests_check_satisfies_its_check_lines() {
 }
 
 /// The directives that hold of the run `line`.
-fn for_run(wanted: Vec<Directive>, line: &str) -> Vec<Directive> {
+fn for_run(
+    wanted: Vec<Directive>,
+    line: &str,
+) -> Vec<Directive> {
     wanted.into_iter().filter(|one| one.only.as_ref().is_none_or(|only| line.contains(only.as_str()))).collect()
 }
 
-fn check(output: &str, source: &str) -> Result<(), String> {
+fn check(
+    output: &str,
+    source: &str,
+) -> Result<(), String> {
     filecheck(output, &directives(source))
 }
 
@@ -230,7 +264,15 @@ fn test_patterns_take_regexes_in_braces_and_ignore_blank_runs() {
 fn test_a_run_line_is_each_choice_of_its_groups() {
     assert_eq!(expanded("t %s -O2"), ["t %s -O2"]);
     assert_eq!(expanded("t {-O2 | -Os} %s"), ["t -O2 %s", "t -Os %s"]);
-    assert_eq!(expanded("t --dialect {a | b} --runtime {a | b} {-O2 | -Os}"), ["t --dialect a --runtime a -O2", "t --dialect a --runtime a -Os", "t --dialect b --runtime b -O2", "t --dialect b --runtime b -Os"]);
+    assert_eq!(
+        expanded("t --dialect {a | b} --runtime {a | b} {-O2 | -Os}"),
+        [
+            "t --dialect a --runtime a -O2",
+            "t --dialect a --runtime a -Os",
+            "t --dialect b --runtime b -O2",
+            "t --dialect b --runtime b -Os"
+        ]
+    );
 }
 
 /// A second configuration that breaks must fail the file, and a directive tagged for
@@ -241,7 +283,8 @@ fn test_a_second_configuration_that_breaks_fails_the_file() {
     let runs = run_lines(source);
     assert_eq!(runs.len(), 2);
     let outputs = ["rep movsd\n", "mov ax, 1\n"];
-    let results: Vec<_> = runs.iter().zip(outputs).map(|(line, out)| filecheck(out, &for_run(directives(source), line))).collect();
+    let results: Vec<_> =
+        runs.iter().zip(outputs).map(|(line, out)| filecheck(out, &for_run(directives(source), line))).collect();
     assert!(results[0].is_ok(), "{:?}", results[0]);
     assert!(results[1].is_err(), "the second configuration's output has no rep movsd");
     let tagged = "// CHECK[-Os]: pop es\n";

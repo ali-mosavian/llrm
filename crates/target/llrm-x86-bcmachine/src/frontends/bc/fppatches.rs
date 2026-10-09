@@ -9,7 +9,10 @@ use crate::frontends::bc::declen::decode;
 use crate::objectfile::module::Module;
 use crate::objectfile::omf::{self};
 
-pub fn sites(module: &Module, starts: &BTreeSet<usize>) -> BTreeSet<usize> {
+pub fn sites(
+    module: &Module,
+    starts: &BTreeSet<usize>,
+) -> BTreeSet<usize> {
     let names = omf::externals(&module.records);
     let mut result: BTreeSet<usize> = BTreeSet::new();
     let overrides = |name: &str| match name {
@@ -62,7 +65,11 @@ pub fn sites(module: &Module, starts: &BTreeSet<usize>) -> BTreeSet<usize> {
 }
 
 /// `b[lo:hi]` for non-negative bounds: clamped, and empty where `hi < lo`.
-fn slice(b: &[u8], lo: usize, hi: usize) -> &[u8] {
+fn slice(
+    b: &[u8],
+    lo: usize,
+    hi: usize,
+) -> &[u8] {
     let hi = hi.min(b.len());
     if lo >= hi { &[] } else { &b[lo..hi] }
 }

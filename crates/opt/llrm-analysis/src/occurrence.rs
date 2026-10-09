@@ -9,7 +9,10 @@
 use llrm_mir::module::{BlockId, Function, InstId, Instruction};
 use llrm_mir::opcode::Opcode;
 
-fn instructions(function: &Function, phi: bool) -> impl Iterator<Item = (InstId, BlockId, &Instruction)> {
+fn instructions(
+    function: &Function,
+    phi: bool,
+) -> impl Iterator<Item = (InstId, BlockId, &Instruction)> {
     function
         .walk()
         .map(move |(block, inst)| (inst, block, function.instruction(inst)))
@@ -33,13 +36,15 @@ mod tests {
 
     #[test]
     fn direct_induction_transparent_aliases_distinguishes_equal_operation_occurrences() {
-        let module = parsed("define void @f(ptr %p) {
+        let module = parsed(
+            "define void @f(ptr %p) {
 b0:
   store i16 1, ptr %p
   store i16 1, ptr %p
   ret void
 }
-");
+",
+        );
         let function = function(&module, "f");
         let found = operations(function).map(|(occurrence, _, _)| occurrence).collect::<Vec<_>>();
 
@@ -51,7 +56,8 @@ b0:
 
     #[test]
     fn direct_induction_transparent_aliases_distinguishes_equal_phi_occurrences() {
-        let module = parsed("define void @f(i16 %x) {
+        let module = parsed(
+            "define void @f(i16 %x) {
 b0:
   br label %b1
 
@@ -60,7 +66,8 @@ b1:
   %b = phi i16 [ %x, %b0 ]
   ret void
 }
-");
+",
+        );
         let function = function(&module, "f");
         let found = phis(function).map(|(occurrence, _, _)| occurrence).collect::<Vec<_>>();
 
@@ -71,7 +78,8 @@ b1:
 
     #[test]
     fn operations_and_phis_partition_every_instruction_in_layout_order() {
-        let module = parsed("define i16 @f(i1 %c, i16 %x) {
+        let module = parsed(
+            "define i16 @f(i1 %c, i16 %x) {
 b0:
   br i1 %c, label %b1, label %b2
 
@@ -83,7 +91,8 @@ b2:
   %y = add i16 %p, 1
   ret i16 %y
 }
-");
+",
+        );
         let function = function(&module, "f");
         let everything = function.walk().map(|(_, inst)| inst).collect::<Vec<_>>();
         let ops = operations(function).map(|(inst, _, _)| inst).collect::<Vec<_>>();

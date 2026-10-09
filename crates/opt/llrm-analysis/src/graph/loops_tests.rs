@@ -22,7 +22,10 @@ impl Node for Block {
     }
 }
 
-fn block(at: i64, succ: &[i64]) -> Block {
+fn block(
+    at: i64,
+    succ: &[i64],
+) -> Block {
     Block { at, succ: succ.to_vec() }
 }
 
@@ -163,7 +166,10 @@ fn two_latches_to_one_header_are_one_loop() {
 fn sibling_loops_do_not_contain_each_other() {
     let chain = [block(0, &[1]), block(1, &[1, 2]), block(2, &[3]), block(3, &[3, 4]), block(4, &[])];
     let found = loops(&chain, None);
-    assert_eq!(found.iter().map(|one| (one.header, one.body.clone())).collect::<Vec<_>>(), [(1, set(&[1])), (3, set(&[3]))]);
+    assert_eq!(
+        found.iter().map(|one| (one.header, one.body.clone())).collect::<Vec<_>>(),
+        [(1, set(&[1])), (3, set(&[3]))]
+    );
     assert_eq!(depth(&chain, None), BTreeMap::from([(0, 0), (1, 1), (2, 0), (3, 1), (4, 0)]));
 }
 

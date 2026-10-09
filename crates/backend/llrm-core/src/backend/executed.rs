@@ -32,9 +32,14 @@ pub struct Executed {
 
 impl Executed {
     /// The branches' and jumps' clocks on `cpu`.
-    pub fn jump_cycles(&self, cpu: &Profile) -> Result<f64, String> {
+    pub fn jump_cycles(
+        &self,
+        cpu: &Profile,
+    ) -> Result<f64, String> {
         let cost = |form: &str| cpu.cost(form).map(|one| one as f64);
-        Ok(self.taken * cost("jcc")? + (self.branches - self.taken) * cost("jcc_not_taken")? + self.jumps * cost("jmp_short")?)
+        Ok(self.taken * cost("jcc")?
+            + (self.branches - self.taken) * cost("jcc_not_taken")?
+            + self.jumps * cost("jmp_short")?)
     }
 }
 
@@ -53,13 +58,22 @@ pub struct Predicted {
 static PREDICTED: std::sync::Mutex<Vec<(String, Predicted)>> = std::sync::Mutex::new(Vec::new());
 
 /// Remember `forecast` for the function `name`; the model runs before selection.
-pub fn predict(name: &str, forecast: Predicted) {
+pub fn predict(
+    name: &str,
+    forecast: Predicted,
+) {
     PREDICTED.lock().expect("the forecasts").push((name.to_owned(), forecast));
 }
 
 /// The `pressure` channel's row: the forecast for `body` beside the spill code the allocator left in it.
 pub fn pressure(body: &LirBody) -> Option<String> {
-    let forecast = PREDICTED.lock().expect("the forecasts").iter().rev().find(|(name, _)| *name == body.name).map(|(_, one)| *one)?;
+    let forecast = PREDICTED
+        .lock()
+        .expect("the forecasts")
+        .iter()
+        .rev()
+        .find(|(name, _)| *name == body.name)
+        .map(|(_, one)| *one)?;
     let done = executed(body)?;
     let actual = done.reloads * forecast.load as f64 + done.stores * forecast.store as f64;
     Some(format!(
@@ -69,7 +83,10 @@ pub fn pressure(body: &LirBody) -> Option<String> {
 }
 
 /// `executed` as one line, for the `cost` channel and dump, its jumps priced on `cpu`.
-pub fn summary(body: &LirBody, cpu: &Profile) -> String {
+pub fn summary(
+    body: &LirBody,
+    cpu: &Profile,
+) -> String {
     match executed(body) {
         Some(done) => format!(
             "{} executes {:.0} instructions, {:.0} memory operands; {:.0} reloads, {:.0} spill stores, {:.0} remats; {:.0} branches, {:.0} taken, {:.0} jumps, {:.0} jump cycles",
@@ -114,11 +131,35 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
         })
         .collect();
     let reads_slot = |one: &Insn| {
-        one.what.as_ref().is_some_and(|what| what.sources.iter().any(|at| matches!(at, Loc::Mem(cell) if cell.addr.is_some_and(|addr| slots.contains(&addr)))))
+        one.what
+            .as_ref()
+            .is_some_and(
+                |what| what.sources
+                    .iter()
+                    .any(
+                        |at| matches!(
+                            at,
+                            Loc::Mem(cell) if cell.addr.is_some_and(|addr| slots.contains(&addr))
+                        ),
+                    ),
+            )
     };
     // An argument's incoming home is above the frame: read where it runs more often than the function does,
     // it is a register's one load made again.
-    let incoming = |one: &Insn| one.what.as_ref().is_some_and(|what| what.sources.iter().any(|at| matches!(at, Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0))));
+    let incoming = |one: &Insn| {
+        one.what
+            .as_ref()
+            .is_some_and(
+                |what| what.sources
+                    .iter()
+                    .any(
+                        |at| matches!(
+                            at,
+                            Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0)
+                        ),
+                    ),
+            )
+    };
     let entry = frequency.block(body.entry);
     let mut out = Executed::default();
     for block in &body.blocks {
@@ -131,7 +172,8 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
             match one.what.as_ref().map(|what| (what.op, what.target)) {
                 Some((Operation::Branch, target)) => {
                     let taken = target.map_or(0.0, |to| frequency.edge(block.at, to)).min(reaching);
-                    (out.branches, out.taken, reaching) = (out.branches + reaching, out.taken + taken, reaching - taken);
+                    (out.branches, out.taken, reaching) =
+                        (out.branches + reaching, out.taken + taken, reaching - taken);
                 }
                 Some((Operation::Jump, _)) => out.jumps += reaching,
                 _ => {}
@@ -148,7 +190,8 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
                 *count += runs;
             }
             if let Some(what) = &one.what {
-                out.memory += runs * what.dests.iter().chain(&what.sources).filter(|at| matches!(at, Loc::Mem(_))).count() as f64;
+                out.memory +=
+                    runs * what.dests.iter().chain(&what.sources).filter(|at| matches!(at, Loc::Mem(_))).count() as f64;
             }
         }
     }
@@ -167,7 +210,13 @@ mod tests {
     use crate::model::lir::{BlockOdds, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
-    fn insn(at: i64, op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Arc<Insn> {
+    fn insn(
+        at: i64,
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+    ) -> Arc<Insn> {
         let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, 1)), Some(what), Vec::new(), Vec::new()))
     }
@@ -219,7 +268,11 @@ mod tests {
         let cell = Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, -520)), 4));
         let mut store = (*insn(1, Operation::Move, "mov", vec![cell.clone()], vec![eax.clone()])).clone();
         store.spill_store = true;
-        let insns = vec![Arc::new(store), insn(2, Operation::Multiply, "imul", vec![eax.clone()], vec![eax, cell]), insn(3, Operation::Return, "ret", vec![], vec![])];
+        let insns = vec![
+            Arc::new(store),
+            insn(2, Operation::Multiply, "imul", vec![eax.clone()], vec![eax, cell]),
+            insn(3, Operation::Return, "ret", vec![], vec![]),
+        ];
         let body = LirBody::new("folded", 1, vec![LirBlock::new(1, insns)], IndexMap::default(), IndexMap::default());
         let done = executed(&body).expect("straight-line");
         assert_eq!((done.stores, done.reloads), (1.0, 1.0));
@@ -234,8 +287,22 @@ mod tests {
         let home = Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, 8)), 2));
         let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
         let blocks = vec![
-            block(1, vec![insn(1, Operation::Move, "mov", vec![ax.clone()], vec![home.clone()]), insn(2, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
-            block(2, vec![insn(3, Operation::Multiply, "imul", vec![ax.clone()], vec![ax, home]), insn(4, Operation::Branch, "jne", vec![], vec![])], vec![2, 3]),
+            block(
+                1,
+                vec![
+                    insn(1, Operation::Move, "mov", vec![ax.clone()], vec![home.clone()]),
+                    insn(2, Operation::Jump, "jmp", vec![], vec![]),
+                ],
+                vec![2],
+            ),
+            block(
+                2,
+                vec![
+                    insn(3, Operation::Multiply, "imul", vec![ax.clone()], vec![ax, home]),
+                    insn(4, Operation::Branch, "jne", vec![], vec![]),
+                ],
+                vec![2, 3],
+            ),
             block(3, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]),
         ];
         let mut body = LirBody::new("args", 1, blocks, IndexMap::default(), IndexMap::default());
@@ -256,7 +323,14 @@ mod tests {
         let blocks = vec![
             block(1, vec![insn(1, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
             block(2, vec![insn(2, Operation::Branch, "jne", vec![], vec![])], vec![3, 4]),
-            block(3, vec![insn(3, Operation::Move, "mov", vec![ax], vec![bx]), insn(4, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
+            block(
+                3,
+                vec![
+                    insn(3, Operation::Move, "mov", vec![ax], vec![bx]),
+                    insn(4, Operation::Jump, "jmp", vec![], vec![]),
+                ],
+                vec![2],
+            ),
             block(4, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]),
         ];
         let mut body = LirBody::new("counted", 1, blocks, IndexMap::default(), IndexMap::default());
@@ -298,13 +372,26 @@ mod tests {
         let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
         let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
         let looped = |preheader: bool| {
-            let mut blocks = vec![block(1, vec![insn(1, Operation::Branch, "jne", vec![], vec![])], vec![if preheader { 2 } else { 3 }, 4])];
+            let mut blocks = vec![block(
+                1,
+                vec![insn(1, Operation::Branch, "jne", vec![], vec![])],
+                vec![if preheader { 2 } else { 3 }, 4],
+            )];
             if preheader {
                 blocks.push(block(2, vec![insn(2, Operation::Jump, "jmp", vec![], vec![])], vec![3]));
             }
-            blocks.push(block(3, vec![insn(3, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()]), insn(4, Operation::Branch, "jne", vec![], vec![])], vec![3, 4]));
+            blocks.push(block(
+                3,
+                vec![
+                    insn(3, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()]),
+                    insn(4, Operation::Branch, "jne", vec![], vec![]),
+                ],
+                vec![3, 4],
+            ));
             blocks.push(block(4, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]));
-            executed(&LirBody::new("guarded", 1, blocks, IndexMap::default(), IndexMap::default())).expect("a loop").instructions
+            executed(&LirBody::new("guarded", 1, blocks, IndexMap::default(), IndexMap::default()))
+                .expect("a loop")
+                .instructions
         };
         // The preheader's jump, taken as often as the guard takes it (half, with no odds), is all that differs.
         assert!((looped(true) - 0.5 - looped(false)).abs() < 1e-9, "{} {}", looped(true), looped(false));
@@ -325,17 +412,27 @@ mod tests {
         let run = |blocks: Vec<LirBlock>, edges: &[(i64, i64, f64)]| {
             let mut body = LirBody::new("uncounted", 1, blocks, IndexMap::default(), IndexMap::default());
             for &(from, to, probability) in edges {
-                body.odds.taken.insert((from, to), (probability * crate::model::lir::BlockOdds::CERTAIN).round() as u32);
+                body.odds
+                    .taken
+                    .insert((from, to), (probability * crate::model::lir::BlockOdds::CERTAIN).round() as u32);
             }
             executed(&body).expect("a loop").instructions
         };
         let ret = |at| block(at, vec![insn(at, Operation::Return, "ret", vec![], vec![])], vec![]);
         // The header, a move and a test: 32 times, and the return once.
-        let once = run(vec![block(1, vec![moved(1)], vec![2]), block(2, vec![moved(2), tested(3)], vec![2, 4]), ret(4)], &[(2, 2, stay), (2, 4, 1.0 - stay)]);
+        let once = run(
+            vec![block(1, vec![moved(1)], vec![2]), block(2, vec![moved(2), tested(3)], vec![2, 4]), ret(4)],
+            &[(2, 2, stay), (2, 4, 1.0 - stay)],
+        );
         assert!((once - (1.0 + 32.0 * 2.0 + 1.0)).abs() < 0.01, "{once}");
         // A second exit tested in the same trip.
         let twice = run(
-            vec![block(1, vec![moved(1)], vec![2]), block(2, vec![moved(2), tested(3)], vec![3, 5]), block(3, vec![tested(4)], vec![2, 5]), ret(5)],
+            vec![
+                block(1, vec![moved(1)], vec![2]),
+                block(2, vec![moved(2), tested(3)], vec![3, 5]),
+                block(3, vec![tested(4)], vec![2, 5]),
+                ret(5),
+            ],
             &[(2, 3, stay), (2, 5, 1.0 - stay), (3, 2, stay), (3, 5, 1.0 - stay)],
         );
         let header = 1.0 / (1.0 - stay * stay);
@@ -387,7 +484,9 @@ mod tests {
             let done = executed(&body).expect("a diamond");
             (done.branches, done.taken, done.jumps, done.jump_cycles(cpu::named("486").unwrap()).unwrap())
         };
-        let close = |(a, b, c, d): (f64, f64, f64, f64), want: [f64; 4]| [a, b, c, d].iter().zip(want).all(|(got, want)| (got - want).abs() < 1e-3);
+        let close = |(a, b, c, d): (f64, f64, f64, f64), want: [f64; 4]| {
+            [a, b, c, d].iter().zip(want).all(|(got, want)| (got - want).abs() < 1e-3)
+        };
         let (rare_second, likely_second) = (placed(3), placed(2));
         assert!(close(rare_second, [1.0, 0.25, 0.75, 3.75]), "{rare_second:?}");
         assert!(close(likely_second, [1.0, 0.75, 0.25, 3.25]), "{likely_second:?}");
@@ -408,7 +507,16 @@ mod tests {
             Arc::new(one)
         };
         let blocks = vec![
-            block(1, vec![insn(1, Operation::Compare, "cmp", vec![], vec![ax.clone(), bx.clone()]), targeted(2, Operation::Branch, "jne", 3), insn(3, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()]), targeted(4, Operation::Jump, "jmp", 4)], vec![3, 4]),
+            block(
+                1,
+                vec![
+                    insn(1, Operation::Compare, "cmp", vec![], vec![ax.clone(), bx.clone()]),
+                    targeted(2, Operation::Branch, "jne", 3),
+                    insn(3, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()]),
+                    targeted(4, Operation::Jump, "jmp", 4),
+                ],
+                vec![3, 4],
+            ),
             block(3, vec![insn(5, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()])], vec![4]),
             block(4, vec![insn(6, Operation::Return, "ret", vec![], vec![])], vec![]),
         ];

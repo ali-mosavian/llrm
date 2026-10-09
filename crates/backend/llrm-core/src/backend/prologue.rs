@@ -12,33 +12,35 @@ use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
 use iced_x86::Register;
-use crate::support::hash::IndexMap;
 
 use crate::backend::frame::{self as frames, Frame};
 use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
+use crate::support::hash::IndexMap;
 
 /// The frame cannot be grown safely on this body.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Refused(pub String);
 
 impl fmt::Display for Refused {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
 
 impl std::error::Error for Refused {}
 
-fn _native_anchor(block: &LirBlock, at: i64, role: &str) -> Result<usize, Refused> {
-    let anchors: Vec<usize> = block
-        .insns
-        .iter()
-        .enumerate()
-        .filter(|(_, one)| one.at == at)
-        .map(|(index, _)| index)
-        .collect();
+fn _native_anchor(
+    block: &LirBlock,
+    at: i64,
+    role: &str,
+) -> Result<usize, Refused> {
+    let anchors: Vec<usize> =
+        block.insns.iter().enumerate().filter(|(_, one)| one.at == at).map(|(index, _)| index).collect();
     let covered: Vec<usize> = anchors
         .iter()
         .copied()
@@ -61,11 +63,11 @@ pub struct Prologue {
 
 impl Prologue {
     #[must_use]
-    pub fn new(frame: Rc<RefCell<Frame>>, calls: Option<IndexMap<i64, String>>) -> Self {
-        Self {
-            frame,
-            calls: calls.unwrap_or_default(),
-        }
+    pub fn new(
+        frame: Rc<RefCell<Frame>>,
+        calls: Option<IndexMap<i64, String>>,
+    ) -> Self {
+        Self { frame, calls: calls.unwrap_or_default() }
     }
 }
 
@@ -78,16 +80,26 @@ impl LIRTransform for Prologue {
         "prologue"
     }
 
-    fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
         reserved(&body, &self.frame.borrow(), Some(&self.calls)).map_err(|refused| refused.0)
     }
 
-    fn transform_raising(&mut self, body: LirBody) -> Result<LirBody, Exception> {
-        reserved(&body, &self.frame.borrow(), Some(&self.calls)).map_err(|refused| Exception::defined_in("qbopt.backend.prologue", "Refused", refused.0))
+    fn transform_raising(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, Exception> {
+        reserved(&body, &self.frame.borrow(), Some(&self.calls))
+            .map_err(|refused| Exception::defined_in("qbopt.backend.prologue", "Refused", refused.0))
     }
 }
 
-fn _upper(calls: &IndexMap<i64, String>, at: i64) -> String {
+fn _upper(
+    calls: &IndexMap<i64, String>,
+    at: i64,
+) -> String {
     calls.get(&at).map_or_else(String::new, |name| name.to_uppercase())
 }
 
@@ -111,13 +123,10 @@ pub fn reserved(
     let calls = calls.unwrap_or(&empty);
     let entry = body.blocks.iter().find(|block| block.at == body.entry);
     let Some(entry) = entry.filter(|entry| !entry.insns.is_empty()) else {
-        return Err(Refused(
-            "the entry block has no instruction to put the prologue in front of".to_owned(),
-        ));
+        return Err(Refused("the entry block has no instruction to put the prologue in front of".to_owned()));
     };
     let runtime_entry = entry.insns.iter().position(|one| {
-        _upper(calls, one.at) == frames::ENTER
-            && one.what.as_ref().is_none_or(|what| what.op == Operation::Call)
+        _upper(calls, one.at) == frames::ENTER && one.what.as_ref().is_none_or(|what| what.op == Operation::Call)
     });
     let mut leaves: Vec<(&LirBlock, usize)> = body
         .blocks
@@ -162,24 +171,19 @@ pub fn reserved(
     }
 
     let take = _adjust(&entry.insns[0], -frame.size());
-    let give: IndexMap<(i64, usize), Arc<Insn>> = leaves
-        .iter()
-        .map(|&(block, index)| ((block.at, index), _adjust(&block.insns[index], frame.size())))
-        .collect();
+    let give: IndexMap<(i64, usize), Arc<Insn>> =
+        leaves.iter().map(|&(block, index)| ((block.at, index), _adjust(&block.insns[index], frame.size()))).collect();
     let mut out = body.clone();
     for block in &mut out.blocks {
-        block.insns = _woven(
-            block,
-            if block.at == body.entry { Some(&take) } else { None },
-            &give,
-            entry_index,
-        )
-        .into();
+        block.insns = _woven(block, if block.at == body.entry { Some(&take) } else { None }, &give, entry_index).into();
     }
     Ok(out)
 }
 
-fn _arguments(body: &LirBody, size: i64) -> Result<LirBody, Refused> {
+fn _arguments(
+    body: &LirBody,
+    size: i64,
+) -> Result<LirBody, Refused> {
     let operand = |where_: &Loc| -> Result<Loc, Refused> {
         if let Loc::Mem(memory) = where_ {
             if memory.stack_argument {
@@ -191,10 +195,7 @@ fn _arguments(body: &LirBody, size: i64) -> Result<LirBody, Refused> {
                         ));
                     }
                     let mut memory = memory.clone();
-                    memory.addr = Some(crate::model::ir::Addr {
-                        disp: displacement,
-                        ..addr.clone()
-                    });
+                    memory.addr = Some(crate::model::ir::Addr { disp: displacement, ..addr.clone() });
                     return Ok(Loc::Mem(memory));
                 }
             }
@@ -248,7 +249,10 @@ fn _woven(
 }
 
 /// `sub sp,N` or `add sp,N`, claiming none of the original bytes.
-fn _adjust(beside: &Insn, by: i64) -> Arc<Insn> {
+fn _adjust(
+    beside: &Insn,
+    by: i64,
+) -> Arc<Insn> {
     let at = beside.covers.map_or(beside.at, |covers| covers.0);
     let name = if by > 0 { "add" } else { "sub" };
     let sp = Loc::Reg(Reg { register: Register::SP, width: 2 });
@@ -277,10 +281,11 @@ pub static ENDS: LazyLock<BTreeSet<&'static str>> = LazyLock::new(|| BTreeSet::f
 ///
 /// Asked of the whole body: BC pads a code segment with zeros, and the last
 /// instruction is routinely not a terminator at all.
-fn _ends_the_program(body: &LirBody, calls: &IndexMap<i64, String>) -> bool {
-    body.blocks
-        .iter()
-        .any(|block| block.insns.iter().any(|one| ENDS.contains(_upper(calls, one.at).as_str())))
+fn _ends_the_program(
+    body: &LirBody,
+    calls: &IndexMap<i64, String>,
+) -> bool {
+    body.blocks.iter().any(|block| block.insns.iter().any(|one| ENDS.contains(_upper(calls, one.at).as_str())))
 }
 
 #[cfg(test)]
@@ -288,14 +293,20 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use crate::support::hash::IndexMap;
 
     use super::reserved;
     use crate::backend::frame::{self, Frame};
     use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::support::hash::IndexMap;
 
-    fn instruction(at: i64, op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Insn {
+    fn instruction(
+        at: i64,
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+    ) -> Insn {
         Insn::new(
             at,
             Some((at, at + 1)),
@@ -310,7 +321,13 @@ mod tests {
         let mut entry = instruction(1, Operation::Call, "call", vec![], vec![held.clone()]);
         entry.requires = vec![(Held { value: 1, width: 2 }, Register::CX)];
         let insns = vec![
-            instruction(0, Operation::Move, "mov", vec![held], vec![Loc::Imm(Imm { value: 6, width: 2, address: None })]),
+            instruction(
+                0,
+                Operation::Move,
+                "mov",
+                vec![held],
+                vec![Loc::Imm(Imm { value: 6, width: 2, address: None })],
+            ),
             entry,
             instruction(2, Operation::Call, "call", vec![], vec![]),
             instruction(3, Operation::Return, "retf", vec![], vec![]),
@@ -329,11 +346,8 @@ mod tests {
         let mut slots = Frame::new(-16);
         slots.slot(1_i64, 2).unwrap();
         let result = reserved(&body, &slots, Some(&runtime())).unwrap();
-        let names: Vec<_> = result.blocks[0]
-            .insns
-            .iter()
-            .map(|one| one.what.as_ref().unwrap().name.clone().unwrap())
-            .collect();
+        let names: Vec<_> =
+            result.blocks[0].insns.iter().map(|one| one.what.as_ref().unwrap().name.clone().unwrap()).collect();
         assert_eq!(names, ["mov", "call", "sub", "add", "call", "retf"]);
     }
 

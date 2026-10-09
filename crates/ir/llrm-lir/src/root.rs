@@ -6,9 +6,24 @@ use iced_x86::Register;
 /// from the register itself; any other register (segment, x87, the extended ones) is its own.
 pub fn root(register: Register) -> Register {
     let full = register.full_register32();
-    let extended_byte = matches!(register, Register::SIL | Register::DIL | Register::BPL | Register::SPL);
+    let extended_byte = matches!(
+        register,
+        Register::SIL | Register::DIL | Register::BPL | Register::SPL
+    );
     let legacy = (register.is_gpr8() && !extended_byte) || register.is_gpr16() || register.is_gpr32();
-    if legacy && matches!(full, Register::EAX | Register::EBX | Register::ECX | Register::EDX | Register::ESI | Register::EDI | Register::EBP | Register::ESP) {
+    if legacy
+        && matches!(
+            full,
+            Register::EAX
+                | Register::EBX
+                | Register::ECX
+                | Register::EDX
+                | Register::ESI
+                | Register::EDI
+                | Register::EBP
+                | Register::ESP
+        )
+    {
         full
     } else {
         register

@@ -13,14 +13,25 @@ impl FunctionPass for Folded {
         "exitfold"
     }
 
-    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        if super::folded(unit.context, unit.layout, unit.function, &outer) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if super::folded(unit.context, unit.layout, unit.function, &outer) {
+            PreservedAnalyses::none()
+        } else {
+            PreservedAnalyses::all()
+        }
     }
 }
 
 /// `text` folded, its results on `inputs` checked against the original's.
-fn folded(text: &str, inputs: &[&[i128]]) -> String {
+fn folded(
+    text: &str,
+    inputs: &[&[i128]],
+) -> String {
     let before = parsed(&format!("{DOS}{text}"));
     let mut after = before.clone();
     let printed = managed(&mut after, Folded);
@@ -92,7 +103,10 @@ fn test_an_exit_counted_zero_leaves_at_once() {
 /// Nothing proves which of two lengths is shorter: both stay.
 #[test]
 fn test_exits_nothing_orders_keep_their_tests() {
-    let text = checked("%len").replace("  %fits = icmp ult i16 %n, %len\n  br i1 %fits, label %head, label %done", "  %fits = icmp ult i16 %n, 1000\n  br i1 %fits, label %head, label %done");
+    let text = checked("%len").replace(
+        "  %fits = icmp ult i16 %n, %len\n  br i1 %fits, label %head, label %done",
+        "  %fits = icmp ult i16 %n, 1000\n  br i1 %fits, label %head, label %done",
+    );
     let printed = folded(&text, INPUTS);
     assert!(printed.contains("br i1 %inside"), "{printed}");
 }
@@ -130,14 +144,18 @@ done:
 #[test]
 fn test_an_uncounted_exit_is_tested_once_on_its_start() {
     let printed = folded(UNCOUNTED, &[&[0, 5], &[3, 5], &[5, 5], &[4, 9], &[-2, 3], &[9, 3]]);
-    let check = printed.split("check:").nth(1).expect("the check block").split("\n\n").next().unwrap_or_default().to_owned();
+    let check =
+        printed.split("check:").nth(1).expect("the check block").split("\n\n").next().unwrap_or_default().to_owned();
     assert!(!check.contains("%i"), "{printed}");
 }
 
 /// `i` below `n` and below `len`, the loop reading `@g` and leaving by
 /// either exit with nothing: `store` and `crash` fill the body and the
 /// second exit's block.
-fn scanned(store: &str, crash: &str) -> String {
+fn scanned(
+    store: &str,
+    crash: &str,
+) -> String {
     format!(
         "@g = global [64 x i16] zeroinitializer
 
@@ -187,8 +205,14 @@ fn test_a_read_only_loop_leaves_on_its_first_trip() {
 fn test_a_storing_loop_leaves_first_where_its_exit_crashes() {
     let store = "  %q = getelementptr inbounds i16, ptr @g, i16 %n\n  store i16 %v, ptr %q\n";
     let text = scanned(store, "  call void @stop()\n  unreachable\n")
-        .replace("  %more = icmp ult i16 %i, %n\n  br i1 %more, label %check, label %done", "  %inside = icmp ult i16 %i, %len\n  br i1 %inside, label %check, label %bad")
-        .replace("  %inside = icmp ult i16 %i, %len\n  br i1 %inside, label %body, label %bad", "  %more = icmp ult i16 %i, %n\n  br i1 %more, label %body, label %done");
+        .replace(
+            "  %more = icmp ult i16 %i, %n\n  br i1 %more, label %check, label %done",
+            "  %inside = icmp ult i16 %i, %len\n  br i1 %inside, label %check, label %bad",
+        )
+        .replace(
+            "  %inside = icmp ult i16 %i, %len\n  br i1 %inside, label %body, label %bad",
+            "  %more = icmp ult i16 %i, %n\n  br i1 %more, label %body, label %done",
+        );
     let printed = folded(&text, &[&[0, 5], &[3, 5], &[4, 9]]);
     let tested = printed.split("head:").nth(1).expect("head").split("\n\n").next().unwrap_or_default().to_owned();
     assert!(!tested.contains("%i,"), "{printed}");
@@ -268,7 +292,8 @@ fn test_an_exit_after_a_store_keeps_its_test() {
 /// An exit carrying another value out keeps its test.
 #[test]
 fn test_an_exit_carrying_another_value_keeps_its_test() {
-    let printed = folded(&zipped("").replace("%sb = phi i16 [ %s, %checkb ]", "%sb = phi i16 [ %i, %checkb ]"), LENGTHS);
+    let printed =
+        folded(&zipped("").replace("%sb = phi i16 [ %s, %checkb ]", "%sb = phi i16 [ %i, %checkb ]"), LENGTHS);
     assert!(printed.contains("icmp ult i16 %i, %lb"), "{printed}");
 }
 
@@ -326,7 +351,8 @@ fn test_a_slice_loop_checks_its_start_not_every_trip() {
 /// loop would skip that store on the first trip. Its test is still made once.
 #[test]
 fn test_a_slice_loop_that_stores_before_its_check_keeps_the_branch_in_the_loop() {
-    let text = format!("@seen = global i16 0\n\n{}", SLICE_LOOP.replace("check:\n", "check:\n  store i16 %j, ptr @seen\n"));
+    let text =
+        format!("@seen = global i16 0\n\n{}", SLICE_LOOP.replace("check:\n", "check:\n  store i16 %j, ptr @seen\n"));
     let printed = folded(&text, &[&[0, 5], &[2, 9], &[-1, 4], &[3, 3], &[5, 2]]);
     assert!(!printed.contains("icmp ult i16 %j, %len"), "{printed}");
     assert!(printed.contains("br i1 %0, label %body"), "{printed}");

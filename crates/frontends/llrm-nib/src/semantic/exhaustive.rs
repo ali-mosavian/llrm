@@ -28,9 +28,7 @@ impl FunctionCompiler<'_> {
                 .filter(|row| matches!(row[0], Pattern::Wildcard(_) | Pattern::Binding(..)))
                 .map(|row| row[1..].to_vec())
                 .collect();
-            return self
-                .uncovered(&default, rest)
-                .map(|tail| [vec!["_".to_owned()], tail].concat());
+            return self.uncovered(&default, rest).map(|tail| [vec!["_".to_owned()], tail].concat());
         };
         for constructor in constructors {
             let arity = constructor.fields.len();
@@ -40,23 +38,13 @@ impl FunctionCompiler<'_> {
                     let fields: Vec<&Pattern> = match row[0] {
                         Pattern::Wildcard(_) | Pattern::Binding(..) => vec![&WILDCARD; arity],
                         // A variant written without fields matches any payload.
-                        Pattern::Variant { name, fields, .. }
-                            if format!(".{name}") == constructor.name =>
-                        {
-                            if fields.is_empty() {
-                                vec![&WILDCARD; arity]
-                            } else {
-                                fields.iter().collect()
-                            }
+                        Pattern::Variant { name, fields, .. } if format!(".{name}") == constructor.name => {
+                            if fields.is_empty() { vec![&WILDCARD; arity] } else { fields.iter().collect() }
                         }
-                        Pattern::Literal(Expr::Boolean(value, _))
-                            if value.to_string() == constructor.name =>
-                        {
+                        Pattern::Literal(Expr::Boolean(value, _)) if value.to_string() == constructor.name => {
                             Vec::new()
                         }
-                        Pattern::Struct { fields, .. } | Pattern::Tuple(fields, _) => {
-                            fields.iter().collect()
-                        }
+                        Pattern::Struct { fields, .. } | Pattern::Tuple(fields, _) => fields.iter().collect(),
                         _ => return None,
                     };
                     Some([fields, row[1..].to_vec()].concat())
@@ -65,11 +53,8 @@ impl FunctionCompiler<'_> {
             let columns = [constructor.fields.clone(), rest.to_vec()].concat();
             if let Some(witness) = self.uncovered(&specialized, &columns) {
                 let (inner, tail) = witness.split_at(arity);
-                let head = if arity == 0 {
-                    constructor.name
-                } else {
-                    format!("{}({})", constructor.name, inner.join(", "))
-                };
+                let head =
+                    if arity == 0 { constructor.name } else { format!("{}({})", constructor.name, inner.join(", ")) };
                 return Some([vec![head], tail.to_vec()].concat());
             }
         }
@@ -77,7 +62,10 @@ impl FunctionCompiler<'_> {
     }
 
     /// The shapes of a type with finitely many, or `None`.
-    fn constructors(&self, element: ElementType) -> Option<Vec<Constructor>> {
+    fn constructors(
+        &self,
+        element: ElementType,
+    ) -> Option<Vec<Constructor>> {
         if let Some(layout) = self.types.enum_of(element) {
             return Some(
                 layout
@@ -94,21 +82,14 @@ impl FunctionCompiler<'_> {
             ElementType::Scalar(TypeName::Bool) => Some(
                 ["true", "false"]
                     .into_iter()
-                    .map(|name| Constructor {
-                        name: name.into(),
-                        fields: Vec::new(),
-                    })
+                    .map(|name| Constructor { name: name.into(), fields: Vec::new() })
                     .collect(),
             ),
             ElementType::Struct(id) => {
                 let layout = self.types.structure(id)?;
                 Some(vec![Constructor {
                     name: layout.name.clone(),
-                    fields: layout
-                        .order
-                        .iter()
-                        .map(|field| layout.fields[field].type_)
-                        .collect(),
+                    fields: layout.order.iter().map(|field| layout.fields[field].type_).collect(),
                 }])
             }
             ElementType::Scalar(_) => None,

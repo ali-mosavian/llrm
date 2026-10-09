@@ -15,7 +15,10 @@ pub struct Effects {
 }
 
 /// The register `name` is at the address size `bits`.
-pub fn root(name: &str, bits: u32) -> Register {
+pub fn root(
+    name: &str,
+    bits: u32,
+) -> Register {
     let wide = bits == 32;
     match (name, wide) {
         ("ax", true) => Register::EAX,
@@ -44,7 +47,12 @@ pub fn root(name: &str, bits: u32) -> Register {
 }
 
 /// The registers `place` reads or writes as an operand: the register itself, or the ones its address is encoded with.
-fn used(places: &[Loc], bits: u32, reads: &mut Vec<Register>, mut writes: Option<&mut Vec<Register>>) {
+fn used(
+    places: &[Loc],
+    bits: u32,
+    reads: &mut Vec<Register>,
+    mut writes: Option<&mut Vec<Register>>,
+) {
     let mut add = |into: &mut Vec<Register>, register: Register| {
         if register != Register::None && !into.contains(&register) {
             into.push(register);
@@ -69,7 +77,16 @@ fn used(places: &[Loc], bits: u32, reads: &mut Vec<Register>, mut writes: Option
             if matches!(place, Loc::Mem(_)) {
                 // The segment it names, else the default: SS behind the stack's registers, DS otherwise.
                 let stack = [Register::BP, Register::EBP, Register::SP, Register::ESP].contains(&operand.base);
-                add(reads, if operand.segment_prefix != Register::None { operand.segment_prefix } else if stack { Register::SS } else { Register::DS });
+                add(
+                    reads,
+                    if operand.segment_prefix != Register::None {
+                        operand.segment_prefix
+                    } else if stack {
+                        Register::SS
+                    } else {
+                        Register::DS
+                    },
+                );
             }
         }
     }
@@ -86,7 +103,10 @@ fn bytes_of(place: &Loc) -> Option<u32> {
 }
 
 /// The row of `what`: its mnemonic, operation and operand counts.
-fn row<'a>(forms: &'a [Form], what: &Semantics) -> Option<&'a Form> {
+fn row<'a>(
+    forms: &'a [Form],
+    what: &Semantics,
+) -> Option<&'a Form> {
     // The machine instruction is the mnemonic's, whatever operation LIR lowered it as; a comparison with none is `cmp`.
     let name = match what.name.as_deref() {
         Some(name) if !name.is_empty() => name,
@@ -94,15 +114,22 @@ fn row<'a>(forms: &'a [Form], what: &Semantics) -> Option<&'a Form> {
         _ => return None,
     };
     forms.iter().find(|form| {
-        form.name == name
-            && form.dests.len() == what.dests.len()
-            && form.sources.len() == what.sources.len()
+        form.name == name && form.dests.len() == what.dests.len() && form.sources.len() == what.sources.len()
     })
 }
 
-/// What `what` reads and writes in `bits`-bit code, or None where its row does not say: a transfer of control, or no row.
-pub fn effects(forms: &[Form], bits: u32, what: &Semantics) -> Option<Effects> {
-    if matches!(what.op, Operation::Branch | Operation::Jump | Operation::Call | Operation::Return | Operation::Escape) {
+/// What `what` reads and writes in `bits`-bit code, or None where its row does not say: a transfer of control, or no
+/// row.
+pub fn effects(
+    forms: &[Form],
+    bits: u32,
+    what: &Semantics,
+) -> Option<Effects> {
+    if matches!(
+        what.op,
+        Operation::Branch | Operation::Jump | Operation::Call | Operation::Return | Operation::Escape
+    )
+    {
         return None;
     }
     let form = row(forms, what)?;
@@ -115,7 +142,8 @@ pub fn effects(forms: &[Form], bits: u32, what: &Semantics) -> Option<Effects> {
     for (list, into) in [(&form.reads, &mut found.reads), (&form.writes, &mut found.writes)] {
         for entry in list {
             let (dropped, entry) = entry.strip_prefix('-').map_or((false, entry.as_str()), |rest| (true, rest));
-            let (name, only) = entry.split_once('@').map_or((entry, None), |(name, width)| (name, width.parse::<u32>().ok()));
+            let (name, only) =
+                entry.split_once('@').map_or((entry, None), |(name, width)| (name, width.parse::<u32>().ok()));
             if only.is_some_and(|only| only != width) {
                 continue;
             }

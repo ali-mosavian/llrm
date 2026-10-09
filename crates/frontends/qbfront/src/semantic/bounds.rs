@@ -52,7 +52,11 @@ pub(super) struct Holdings {
 impl Compiler {
     /// The last emitted call (re)allocates `held` with `bounds`, or with none
     /// releases it.
-    pub(super) fn holds(&mut self, held: Held, bounds: Option<Vec<(Operand, Operand)>>) {
+    pub(super) fn holds(
+        &mut self,
+        held: Held,
+        bounds: Option<Vec<(Operand, Operand)>>,
+    ) {
         let call = self.blocks[self.current_block].instructions.last().expect("the call was just emitted").id;
         self.holdings.changes.insert(call, (held, bounds));
     }
@@ -77,7 +81,11 @@ impl Compiler {
     }
 
     /// The locals holding dimension `dimension`'s bounds of `held`, and its rank's.
-    fn holding(&mut self, held: Held, dimension: usize) -> (u32, (u32, u32)) {
+    fn holding(
+        &mut self,
+        held: Held,
+        dimension: usize,
+    ) -> (u32, (u32, u32)) {
         if !self.holdings.held.contains_key(&held) {
             let rank = self.held_local();
             self.holdings.held.insert(held, Holding { rank, bounds: Vec::new() });
@@ -94,7 +102,10 @@ impl Compiler {
     /// have changed unseen: at the entry and `entries`, after a call of a
     /// procedure that can reach the array. An error handler may run on
     /// another procedure's frame, so what it reaches holds nothing.
-    pub(super) fn place_holdings(&mut self, entries: &[u32]) {
+    pub(super) fn place_holdings(
+        &mut self,
+        entries: &[u32],
+    ) {
         let Holdings { held, changes } = std::mem::take(&mut self.holdings);
         if held.is_empty() {
             return;
@@ -113,7 +124,12 @@ impl Compiler {
         let shared: BTreeSet<Held> = held
             .keys()
             .copied()
-            .filter(|one| !matches!(one, Held::Place(place) if storage.get(place) == Some(&"local")))
+            .filter(|one| {
+                !matches!(
+                    one,
+                    Held::Place(place) if storage.get(place) == Some(&"local")
+                )
+            })
             .collect();
         let user_calls: BTreeSet<u32> =
             self.calls.iter().filter(|call| call.callee.is_some()).map(|call| call.instruction).collect();
@@ -140,12 +156,17 @@ impl Compiler {
                 pending.extend(block.and_then(|block| block.terminator.as_ref()).map_or(&[][..], |one| &one.targets));
             }
         }
-        let places: BTreeSet<u32> =
-            held.values().flat_map(|one| std::iter::once(one.rank).chain(one.bounds.iter().flat_map(|&(low, high)| [low, high]))).collect();
+        let places: BTreeSet<u32> = held
+            .values()
+            .flat_map(|one| std::iter::once(one.rank).chain(one.bounds.iter().flat_map(|&(low, high)| [low, high])))
+            .collect();
         for block in &mut self.blocks {
             if handling.contains(&block.id) {
                 for one in &mut block.instructions {
-                    if matches!((one.op, one.operands.as_slice()), ("load", [Operand::Place(place)]) if places.contains(place)) {
+                    if matches!(
+                        (one.op, one.operands.as_slice()),
+                        ("load", [Operand::Place(place)]) if places.contains(place)
+                    ) {
                         one.op = "copy";
                         one.operands = vec![zero()];
                     }
@@ -195,7 +216,12 @@ impl Compiler {
     }
 
     /// LBOUND or UBOUND of `variable`'s dimension `dimension`.
-    pub(super) fn array_bound(&mut self, variable: &Variable, dimension: Operand, upper: bool) -> Result<Operand, SemanticError> {
+    pub(super) fn array_bound(
+        &mut self,
+        variable: &Variable,
+        dimension: Operand,
+        upper: bool,
+    ) -> Result<Operand, SemanticError> {
         let descriptor = self.descriptor_pointer(variable)?;
         let result = self.compiler_temporary("$bound", INTEGER)?;
         let done = self.new_block();
@@ -236,7 +262,11 @@ impl Compiler {
         let call = self.options.checked_arrays.then(|| self.error_block());
         if let Some(call) = call {
             let data = self.descriptor_field(descriptor, 2, INTEGER);
-            let allocated = self.computed("ne", super::BOOLEAN, vec![Operand::Value(data), Operand::Constant(INTEGER, Number::Integer(0))]);
+            let allocated = self.computed(
+                "ne",
+                super::BOOLEAN,
+                vec![Operand::Value(data), Operand::Constant(INTEGER, Number::Integer(0))],
+            );
             self.tag_last(Tag::Allocated { descriptor });
             let read = self.new_block();
             self.terminate("branch", vec![allocated], vec![read, call])?;
@@ -279,13 +309,27 @@ impl Compiler {
             _ => {
                 let entry = self.computed("sub", INTEGER, vec![rank, dimension.clone()]);
                 let bytes = self.computed("mul", INTEGER, vec![entry, Operand::Constant(INTEGER, Number::Integer(4))]);
-                let pointer_type = self.values.iter().find_map(|(id, type_id)| (*id == descriptor).then_some(*type_id)).expect("descriptor value");
+                let pointer_type = self
+                    .values
+                    .iter()
+                    .find_map(|(id, type_id)| (*id == descriptor).then_some(*type_id))
+                    .expect("descriptor value");
                 let offset_type = if self.width(pointer_type) == 4 { LONG } else { INTEGER };
                 let bytes = self.convert(bytes, INTEGER, offset_type)?;
                 let at = self.value(pointer_type);
                 self.emit("ptr_offset", vec![at], vec![Operand::Value(descriptor), bytes]);
                 let mut field = |offset, slot: Option<Slot>| {
-                    let read = self.computed("load", INTEGER, vec![Operand::Indirect { base: at, offset, type_id: INTEGER, volatile: false, inbounds: false }]);
+                    let read = self.computed(
+                        "load",
+                        INTEGER,
+                        vec![Operand::Indirect {
+                            base: at,
+                            offset,
+                            type_id: INTEGER,
+                            volatile: false,
+                            inbounds: false,
+                        }],
+                    );
                     if let Some(field) = slot {
                         self.tag_last(Tag::DescriptorField { descriptor, field });
                     }
@@ -313,7 +357,11 @@ impl Compiler {
         self.bound_done(done, result)
     }
 
-    fn bound_done(&mut self, done: u32, result: u32) -> Result<Operand, SemanticError> {
+    fn bound_done(
+        &mut self,
+        done: u32,
+        result: u32,
+    ) -> Result<Operand, SemanticError> {
         self.select_block(done);
         Ok(self.computed("load", INTEGER, vec![Operand::Place(result)]))
     }

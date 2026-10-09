@@ -1,6 +1,7 @@
 //! Expressions and literals.
 
 use llrm_core::abi::nib as rt;
+
 use super::*;
 
 impl<'a> FunctionCompiler<'a> {
@@ -11,7 +12,8 @@ impl<'a> FunctionCompiler<'a> {
     ) -> Result<TypedOperand, Diagnostic> {
         match expression {
             Expr::Zero(span) => {
-                let type_name = expected.ok_or_else(|| Diagnostic::new(*span, "a zero value has the type expected of it"))?;
+                let type_name =
+                    expected.ok_or_else(|| Diagnostic::new(*span, "a zero value has the type expected of it"))?;
                 Ok(TypedOperand { operand: Some(hir::Operand::Constant(type_id(type_name), 0)), type_name })
             }
             // A place where a reference goes is borrowed; a conditional or a
@@ -26,19 +28,14 @@ impl<'a> FunctionCompiler<'a> {
                 let scopes = self.scopes.clone();
                 self.lifted_lambda(parameters, body, &scopes, expected.expect("matched"), *span)
             }
-            Expr::Lambda { span, .. } => Err(Diagnostic::new(
-                *span,
-                "a lambda is bound or passed, not used as a value",
-            )),
+            Expr::Lambda { span, .. } => {
+                Err(Diagnostic::new(*span, "a lambda is bound or passed, not used as a value"))
+            }
             Expr::Integer(value, span) => self.integer(*value, expected, *span),
             Expr::Float(spelling, span) => self.float(spelling, expected, *span),
             Expr::Character(value, span) => {
                 if expected.is_some_and(|one| one != TypeName::Char) {
-                    return Err(type_mismatch(
-                        *span,
-                        expected.expect("checked"),
-                        TypeName::Char,
-                    ));
+                    return Err(type_mismatch(*span, expected.expect("checked"), TypeName::Char));
                 }
                 Ok(TypedOperand {
                     operand: Some(hir::Operand::Constant(CHAR, i64::from(*value))),
@@ -48,11 +45,7 @@ impl<'a> FunctionCompiler<'a> {
             Expr::String(value, span) => self.string_literal(value, expected, *span),
             Expr::FString { parts, span } => {
                 if expected.is_some_and(|one| one != TypeName::String) {
-                    return Err(type_mismatch(
-                        *span,
-                        expected.expect("checked"),
-                        TypeName::String,
-                    ));
+                    return Err(type_mismatch(*span, expected.expect("checked"), TypeName::String));
                 }
                 // The formatters write into a new string instead of the console.
                 let parts = self.settled_parts(parts, false)?;
@@ -67,43 +60,30 @@ impl<'a> FunctionCompiler<'a> {
             Expr::Array(_, span) | Expr::Repeat { span, .. } | Expr::Comprehension { span, .. } => {
                 self.vector_literal(expression, expected, *span)
             }
-            Expr::Conversion {
-                target,
-                value,
-                span,
-            } => self.conversion(*target, value, expected, *span),
-            Expr::Generator { span, .. } => Err(Diagnostic::new(
-                *span,
-                "a generator is non-escaping and must be consumed by a for loop",
-            )),
-            Expr::Dict(_, span) | Expr::DictComprehension { span, .. } => self.dictionary_literal(expression, expected, *span),
+            Expr::Conversion { target, value, span } => self.conversion(*target, value, expected, *span),
+            Expr::Generator { span, .. } => {
+                Err(Diagnostic::new(*span, "a generator is non-escaping and must be consumed by a for loop"))
+            }
+            Expr::Dict(_, span) | Expr::DictComprehension { span, .. } => {
+                self.dictionary_literal(expression, expected, *span)
+            }
             Expr::StructLiteral { name, fields, span } if self.types.bits.contains_key(name) => {
                 let value = self.bits_literal(name, fields, *span)?;
                 let wanted = expected.unwrap_or(value.type_name);
                 self.implicit(value, wanted, *span)
             }
-            Expr::StructLiteral { span, .. } | Expr::Tuple(_, span) => Err(Diagnostic::new(
-                *span,
-                "a struct literal requires an expected struct type",
-            )),
-            Expr::Borrow {
-                mutable,
-                operand,
-                span,
-            } if matches!(expected, Some(TypeName::Pointer { .. })) => {
+            Expr::StructLiteral { span, .. } | Expr::Tuple(_, span) => {
+                Err(Diagnostic::new(*span, "a struct literal requires an expected struct type"))
+            }
+            Expr::Borrow { mutable, operand, span } if matches!(expected, Some(TypeName::Pointer { .. })) => {
                 self.raw_address(operand, *mutable, expected.expect("matched"), *span)
             }
-            Expr::Borrow { span, .. } => Err(Diagnostic::new(
-                *span,
-                "a borrow is valid only as a borrowed function argument",
-            )),
+            Expr::Borrow { span, .. } => {
+                Err(Diagnostic::new(*span, "a borrow is valid only as a borrowed function argument"))
+            }
             Expr::Boolean(value, span) => {
                 if expected.is_some_and(|one| one != TypeName::Bool) {
-                    return Err(type_mismatch(
-                        *span,
-                        expected.expect("checked"),
-                        TypeName::Bool,
-                    ));
+                    return Err(type_mismatch(*span, expected.expect("checked"), TypeName::Bool));
                 }
                 Ok(TypedOperand {
                     operand: Some(hir::Operand::Constant(BOOL, i64::from(*value))),
@@ -113,14 +93,22 @@ impl<'a> FunctionCompiler<'a> {
             Expr::Name(name, span) if self.visible(name).is_none() && self.signatures.contains_key(name) => {
                 self.function_value(name, expected, *span).expect("a function")
             }
-            Expr::Name(name, span) if matches!((self.lambda_named(name), expected), (Some(_), Some(TypeName::Function { .. }))) => {
+            Expr::Name(name, span)
+                if matches!(
+                    (self.lambda_named(name), expected),
+                    (Some(_), Some(TypeName::Function { .. }))
+                ) =>
+            {
                 let lambda = self.lambdas[self.lambda_named(name).expect("matched") as usize].clone();
                 lambda.lifted(self, expected.expect("matched"), *span)
             }
             Expr::Name(name, span) => {
                 let binding = self.binding(name, *span)?.clone();
                 let BindingType::Scalar(type_name) = binding.type_ else {
-                    let message = if matches!(binding.type_, BindingType::Slice { element: ElementType::Scalar(TypeName::Char), rank: 1 }) {
+                    let message = if matches!(
+                        binding.type_,
+                        BindingType::Slice { element: ElementType::Scalar(TypeName::Char), rank: 1 }
+                    ) {
                         format!("{name:?} is a borrowed view of a string; .copy() it to own it")
                     } else {
                         format!("aggregate {name:?} requires an index or field")
@@ -139,12 +127,7 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     Storage::ArrayView { place, index } => {
                         let value = self.value(type_name);
-                        self.emit(
-                            "load",
-                            vec![value],
-                            vec![hir::Operand::ArrayElement(place, vec![index])],
-                            None,
-                        );
+                        self.emit("load", vec![value], vec![hir::Operand::ArrayElement(place, vec![index])], None);
                         hir::Operand::Value(value)
                     }
                     Storage::Reference(pointer) => {
@@ -156,7 +139,8 @@ impl<'a> FunctionCompiler<'a> {
                                 base: pointer,
                                 offset: 0,
                                 type_id: type_id(type_name),
-                                inbounds: false, member: None,
+                                inbounds: false,
+                                member: None,
                             }],
                             None,
                         );
@@ -164,37 +148,23 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     Storage::Slice(_) => unreachable!("a scalar binding is not a slice"),
                     Storage::Lambda(_) => {
-                        return Err(Diagnostic::new(
-                            *span,
-                            format!("lambda {name:?} is called, not read"),
-                        ));
+                        return Err(Diagnostic::new(*span, format!("lambda {name:?} is called, not read")));
                     }
                 };
                 self.record_origin(&operand, type_name, &binding.storage);
-                Ok(TypedOperand {
-                    operand: Some(operand),
-                    type_name,
-                })
+                Ok(TypedOperand { operand: Some(operand), type_name })
             }
-            Expr::Index { span, .. } | Expr::Member { span, .. }
-                if self.sequence_property(expression).is_some() =>
-            {
-                let (receiver, name, arguments) =
-                    self.sequence_property(expression).expect("checked");
+            Expr::Index { span, .. } | Expr::Member { span, .. } if self.sequence_property(expression).is_some() => {
+                let (receiver, name, arguments) = self.sequence_property(expression).expect("checked");
                 self.array_method(receiver, name, arguments, expected, *span)
             }
-            Expr::MethodCall { name, span, .. } if Self::is_property_method(name) => Err(
-                Diagnostic::new(*span, format!("{name} is a field, not a method")),
-            ),
-            Expr::Index {
-                base,
-                indices,
-                span,
-            } => self.index_expression(base, indices, expected, *span),
-            Expr::Slice { span, .. } => Err(Diagnostic::new(
-                *span,
-                "a slice is a scoped view and cannot be used as a scalar value",
-            )),
+            Expr::MethodCall { name, span, .. } if Self::is_property_method(name) => {
+                Err(Diagnostic::new(*span, format!("{name} is a field, not a method")))
+            }
+            Expr::Index { base, indices, span } => self.index_expression(base, indices, expected, *span),
+            Expr::Slice { span, .. } => {
+                Err(Diagnostic::new(*span, "a slice is a scoped view and cannot be used as a scalar value"))
+            }
             Expr::Member { base, field, span } if self.bits_type(base).is_some() => {
                 let value = self.bits_read(base, field, *span)?;
                 let wanted = expected.unwrap_or(value.type_name);
@@ -203,13 +173,21 @@ impl<'a> FunctionCompiler<'a> {
             Expr::Member { base, field, span } => {
                 let (place, type_name, _, _) = self.member_place(base, field, *span)?;
                 // A reference read where no reference is expected reads what it refers to.
-                if let (Some(ElementType::Scalar(target)), false) = (self.types.referent(type_name), expected == Some(type_name)) {
+                if let (Some(ElementType::Scalar(target)), false) =
+                    (self.types.referent(type_name), expected == Some(type_name))
+                {
                     let pointer = self.value(type_name);
                     self.emit("load", vec![pointer], vec![place], None);
                     if expected.is_some_and(|one| one != target) {
                         return Err(type_mismatch(*span, expected.expect("checked"), target));
                     }
-                    let through = hir::Operand::IndirectPlace { base: pointer, offset: 0, type_id: type_id(target), inbounds: false, member: None };
+                    let through = hir::Operand::IndirectPlace {
+                        base: pointer,
+                        offset: 0,
+                        type_id: type_id(target),
+                        inbounds: false,
+                        member: None,
+                    };
                     let result = self.value(target);
                     self.emit("load", vec![result], vec![through], None);
                     return Ok(TypedOperand { operand: Some(hir::Operand::Value(result)), type_name: target });
@@ -224,10 +202,7 @@ impl<'a> FunctionCompiler<'a> {
                 } else if let Some(moving) = self.field_move(expression).filter(|_| ownership::needs_drop(type_name)) {
                     self.origins.insert(result, ownership::Origin::Field(moving, place));
                 }
-                Ok(TypedOperand {
-                    operand: Some(hir::Operand::Value(result)),
-                    type_name,
-                })
+                Ok(TypedOperand { operand: Some(hir::Operand::Value(result)), type_name })
             }
             Expr::Unary { op: UnaryOp::Deref, operand, span } => {
                 let name = self.dereferenced(operand, *span)?;
@@ -278,43 +253,17 @@ impl<'a> FunctionCompiler<'a> {
                     None,
                 );
                 if expected.is_some_and(|one| one != operand.type_name) {
-                    return Err(type_mismatch(
-                        *span,
-                        expected.expect("checked"),
-                        operand.type_name,
-                    ));
+                    return Err(type_mismatch(*span, expected.expect("checked"), operand.type_name));
                 }
-                Ok(TypedOperand {
-                    operand: Some(hir::Operand::Value(result)),
-                    type_name: operand.type_name,
-                })
+                Ok(TypedOperand { operand: Some(hir::Operand::Value(result)), type_name: operand.type_name })
             }
-            Expr::Binary {
-                op,
-                left,
-                right,
-                span,
-            } => self.binary(*op, left, right, expected, *span),
+            Expr::Binary { op, left, right, span } => self.binary(*op, left, right, expected, *span),
             Expr::Chain { operands, operations, span } => self.chain(operands, operations, expected, *span),
-            Expr::Call {
-                name,
-                type_arguments,
-                arguments,
-                span,
-            } if name == calls::SIZE_OF => self.size_of(type_arguments, arguments, *span),
-            Expr::Call {
-                name,
-                arguments,
-                span,
-                ..
-            } => self.call(name, arguments, expected, *span),
-            Expr::MethodCall {
-                receiver,
-                name,
-                type_arguments,
-                arguments,
-                span,
-            } => {
+            Expr::Call { name, type_arguments, arguments, span } if name == calls::SIZE_OF => {
+                self.size_of(type_arguments, arguments, *span)
+            }
+            Expr::Call { name, arguments, span, .. } => self.call(name, arguments, expected, *span),
+            Expr::MethodCall { receiver, name, type_arguments, arguments, span } => {
                 if let Some(call) = self.method_as_call(expression) {
                     return self.expression(&call, expected);
                 }
@@ -337,22 +286,13 @@ impl<'a> FunctionCompiler<'a> {
                     None => self.array_method(receiver, name, arguments, expected, *span),
                 }
             }
-            Expr::Conditional {
-                condition,
-                then,
-                otherwise,
-                span,
-            } => self.conditional(condition, then, otherwise, expected, *span),
-            Expr::Variant {
-                enum_name,
-                name,
-                arguments,
-                span,
-            } => self.scalar_variant(enum_name.as_deref(), name, arguments, expected, *span),
-            Expr::NamedArgument { span, .. } => Err(Diagnostic::new(
-                *span,
-                "a named argument is valid only in a call",
-            )),
+            Expr::Conditional { condition, then, otherwise, span } => {
+                self.conditional(condition, then, otherwise, expected, *span)
+            }
+            Expr::Variant { enum_name, name, arguments, span } => {
+                self.scalar_variant(enum_name.as_deref(), name, arguments, expected, *span)
+            }
+            Expr::NamedArgument { span, .. } => Err(Diagnostic::new(*span, "a named argument is valid only in a call")),
             Expr::Try { operand, span } => self.try_value(operand, expected, *span),
         }
     }
@@ -366,16 +306,15 @@ impl<'a> FunctionCompiler<'a> {
         if let Some(type_name @ TypeName::Fixed { fraction, .. }) = expected {
             let scaled = i128::from(value) << fraction;
             let value = fixed_storage_value(scaled, type_name, span)?;
-            return Ok(TypedOperand {
-                operand: Some(hir::Operand::Constant(type_id(type_name), value)),
-                type_name,
-            });
+            return Ok(TypedOperand { operand: Some(hir::Operand::Constant(type_id(type_name), value)), type_name });
         }
         // `0` is a raw pointer that points nowhere.
         if let Some(pointer) = expected.filter(|one| value == 0 && self.types.raw_target(*one).is_some()) {
             return Ok(TypedOperand { operand: Some(hir::Operand::Constant(type_id(pointer), 0)), type_name: pointer });
         }
-        if let Some(pointer @ TypeName::Pointer { width, .. }) = expected.filter(|one| self.types.raw_target(*one).is_some()) {
+        if let Some(pointer @ TypeName::Pointer { width, .. }) =
+            expected.filter(|one| self.types.raw_target(*one).is_some())
+        {
             return self.integer_pointer(value, pointer, width, span);
         }
         let own = self.rules.literal(value);
@@ -384,32 +323,45 @@ impl<'a> FunctionCompiler<'a> {
             (Some(other), Some(own)) => return Err(type_mismatch(span, other, own)),
             (_, None) => {
                 let widest = if value < 0 { "i32" } else { "u32" };
-                return Err(Diagnostic::new(span, format!("integer literal {value} is {} bits, wider than {widest}", conversions::literal_bits(value))));
+                return Err(Diagnostic::new(
+                    span,
+                    format!(
+                        "integer literal {value} is {} bits, wider than {widest}",
+                        conversions::literal_bits(value)
+                    ),
+                ));
             }
             (None, Some(own)) => own,
         };
         if !conversions::fits(value, type_name) {
             return Err(Diagnostic::new(
                 span,
-                format!(
-                    "integer literal {value} does not fit {}",
-                    type_name_text(type_name)
-                ),
+                format!("integer literal {value} does not fit {}", type_name_text(type_name)),
             ));
         }
-        Ok(TypedOperand {
-            operand: Some(hir::Operand::Constant(type_id(type_name), value)),
-            type_name,
-        })
+        Ok(TypedOperand { operand: Some(hir::Operand::Constant(type_id(type_name), value)), type_name })
     }
 
     /// A far pointer's segment and offset words, or a near one's offset, as
     /// the literal's bits: C's `(char far *)0xB8000000L`.
-    fn integer_pointer(&mut self, value: i64, pointer: TypeName, width: u8, span: Span) -> Result<TypedOperand, Diagnostic> {
+    fn integer_pointer(
+        &mut self,
+        value: i64,
+        pointer: TypeName,
+        width: u8,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
         self.require_unsafe("an integer as a raw pointer", span)?;
         let words = if width == 2 { TypeName::U16 } else { TypeName::U32 };
         if !conversions::fits(value, words) {
-            return Err(Diagnostic::new(span, format!("integer literal {value} is {} bits, wider than a {}", conversions::literal_bits(value), type_name_text(pointer))));
+            return Err(Diagnostic::new(
+                span,
+                format!(
+                    "integer literal {value} is {} bits, wider than a {}",
+                    conversions::literal_bits(value),
+                    type_name_text(pointer)
+                ),
+            ));
         }
         let bits = TypedOperand { operand: Some(hir::Operand::Constant(type_id(words), value)), type_name: words };
         self.convert_value(bits, pointer, span)
@@ -424,19 +376,14 @@ impl<'a> FunctionCompiler<'a> {
         if let Some(type_name @ TypeName::Fixed { fraction, .. }) = expected {
             let scaled = scaled_decimal(spelling, fraction, span)?;
             let value = fixed_storage_value(scaled, type_name, span)?;
-            return Ok(TypedOperand {
-                operand: Some(hir::Operand::Constant(type_id(type_name), value)),
-                type_name,
-            });
+            return Ok(TypedOperand { operand: Some(hir::Operand::Constant(type_id(type_name), value)), type_name });
         }
         let type_name = match expected {
             Some(type_name) if is_float(type_name) => type_name,
             Some(other) => return Err(type_mismatch(span, other, TypeName::F64)),
             None => TypeName::F64,
         };
-        let parsed = spelling
-            .parse::<f64>()
-            .map_err(|_| Diagnostic::new(span, "invalid floating literal"))?;
+        let parsed = spelling.parse::<f64>().map_err(|_| Diagnostic::new(span, "invalid floating literal"))?;
         let bits = match type_name {
             TypeName::F32 => {
                 let rounded = parsed as f32;
@@ -463,10 +410,7 @@ impl<'a> FunctionCompiler<'a> {
         };
         let result = self.value(type_name);
         self.emit("load", vec![result], vec![hir::Operand::Place(place)], None);
-        Ok(TypedOperand {
-            operand: Some(hir::Operand::Value(result)),
-            type_name,
-        })
+        Ok(TypedOperand { operand: Some(hir::Operand::Value(result)), type_name })
     }
 
     pub(super) fn string_literal(
@@ -476,17 +420,10 @@ impl<'a> FunctionCompiler<'a> {
         span: Span,
     ) -> Result<TypedOperand, Diagnostic> {
         if expected.is_some_and(|one| one != TypeName::String) {
-            return Err(type_mismatch(
-                span,
-                expected.expect("checked"),
-                TypeName::String,
-            ));
+            return Err(type_mismatch(span, expected.expect("checked"), TypeName::String));
         }
         if bytes.len() > u16::MAX as usize {
-            return Err(Diagnostic::new(
-                span,
-                "string literal exceeds the 16-bit descriptor",
-            ));
+            return Err(Diagnostic::new(span, "string literal exceeds the 16-bit descriptor"));
         }
         let symbol = self.literals.string(bytes);
         let place = if let Some(place) = self.constant_places.get(&symbol) {
@@ -497,17 +434,9 @@ impl<'a> FunctionCompiler<'a> {
             place
         };
         let result = self.value(TypeName::String);
-        self.emit(
-            "address",
-            vec![result],
-            vec![hir::Operand::Place(place)],
-            None,
-        );
+        self.emit("address", vec![result], vec![hir::Operand::Place(place)], None);
         self.origins.insert(result, ownership::Origin::Static);
-        Ok(TypedOperand {
-            operand: Some(hir::Operand::Value(result)),
-            type_name: TypeName::String,
-        })
+        Ok(TypedOperand { operand: Some(hir::Operand::Value(result)), type_name: TypeName::String })
     }
 
     pub(super) fn array_index(
@@ -517,18 +446,12 @@ impl<'a> FunctionCompiler<'a> {
     ) -> Result<hir::Operand, Diagnostic> {
         if let (Some(length), Expr::Integer(value, span)) = (length, expression) {
             if *value < 0 || *value >= i64::from(length) {
-                return Err(Diagnostic::new(
-                    *span,
-                    format!("array index {value} is outside 0..{length}"),
-                ));
+                return Err(Diagnostic::new(*span, format!("array index {value} is outside 0..{length}")));
             }
         }
         let index = self.expression(expression, None)?;
         if !is_integer(index.type_name) {
-            return Err(Diagnostic::new(
-                expression.span(),
-                "array index must be an integer",
-            ));
+            return Err(Diagnostic::new(expression.span(), "array index must be an integer"));
         }
         required(index, expression.span())
     }

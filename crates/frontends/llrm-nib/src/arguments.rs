@@ -26,16 +26,11 @@ pub fn bind(
                 let index = formals
                     .iter()
                     .position(|formal| formal.name == name)
-                    .ok_or_else(|| {
-                        Diagnostic::new(span, format!("{callee} has no parameter {name:?}"))
-                    })?;
+                    .ok_or_else(|| Diagnostic::new(span, format!("{callee} has no parameter {name:?}")))?;
                 (index, *value)
             }
             positional if named => {
-                return Err(Diagnostic::new(
-                    positional.span(),
-                    "a positional argument cannot follow a named one",
-                ));
+                return Err(Diagnostic::new(positional.span(), "a positional argument cannot follow a named one"));
             }
             positional if position >= formals.len() => {
                 return Err(Diagnostic::new(
@@ -46,10 +41,7 @@ pub fn bind(
             positional => (position, positional),
         };
         if bound[index].is_some() {
-            return Err(Diagnostic::new(
-                value.span(),
-                format!("{:?} is given more than once", formals[index].name),
-            ));
+            return Err(Diagnostic::new(value.span(), format!("{:?} is given more than once", formals[index].name)));
         }
         bound[index] = Some(value);
     }
@@ -57,9 +49,9 @@ pub fn bind(
         .into_iter()
         .zip(formals)
         .map(|(value, formal)| {
-            value.or_else(|| formal.default.cloned()).ok_or_else(|| {
-                Diagnostic::new(span, format!("{callee} requires {:?}", formal.name))
-            })
+            value
+                .or_else(|| formal.default.cloned())
+                .ok_or_else(|| Diagnostic::new(span, format!("{callee} requires {:?}", formal.name)))
         })
         .collect()
 }

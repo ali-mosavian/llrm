@@ -4,7 +4,10 @@ use super::*;
 
 impl<'a> FunctionCompiler<'a> {
     /// A name no source can write and no other hidden name has: `$stem` and a number.
-    pub(super) fn hidden(&mut self, stem: &str) -> String {
+    pub(super) fn hidden(
+        &mut self,
+        stem: &str,
+    ) -> String {
         self.next_hidden += 1;
         format!("${stem}{}", self.next_hidden)
     }
@@ -16,17 +19,12 @@ impl<'a> FunctionCompiler<'a> {
         operands: Vec<hir::Operand>,
     ) -> Option<hir::Operand> {
         let count = operands.len();
-        let (callee, result) = *self
-            .builtin_ids
-            .get(name)
-            .expect("registered runtime routine");
+        let (callee, result) = *self.builtin_ids.get(name).expect("registered runtime routine");
         // The runtime serves every heap sequence as a string.
         let operands = operands
             .into_iter()
             .map(|operand| match operand {
-                hir::Operand::Value(value)
-                    if self.types.vectors.contains_key(&self.type_of(value)) =>
-                {
+                hir::Operand::Value(value) if self.types.vectors.contains_key(&self.type_of(value)) => {
                     let text = self.value(TypeName::String);
                     self.emit("copy", vec![text], vec![operand], None);
                     hir::Operand::Value(text)
@@ -34,26 +32,28 @@ impl<'a> FunctionCompiler<'a> {
                 other => other,
             })
             .collect::<Vec<_>>();
-        let results: Vec<u32> = (result != TypeName::Void)
-            .then(|| self.value(result))
-            .into_iter()
-            .collect();
+        let results: Vec<u32> = (result != TypeName::Void).then(|| self.value(result)).into_iter().collect();
         let instruction = self.emit("call", results.clone(), operands, Some(name.into()));
         self.calls.push(hir::CallSite::new(instruction, callee, count as u32, self.types.native));
         results.first().map(|one| hir::Operand::Value(*one))
     }
 
-    pub(super) fn binding(&self, name: &str, span: Span) -> Result<&Binding, Diagnostic> {
-        let binding = self
-            .visible(name)
-            .ok_or_else(|| Diagnostic::new(span, format!("unknown name {name:?}")))?;
+    pub(super) fn binding(
+        &self,
+        name: &str,
+        span: Span,
+    ) -> Result<&Binding, Diagnostic> {
+        let binding = self.visible(name).ok_or_else(|| Diagnostic::new(span, format!("unknown name {name:?}")))?;
         self.learn(span, name, || Known::Local(self.spelled(binding.type_)));
         self.check_unmoved(name, binding, span)?;
         Ok(binding)
     }
 
     /// The innermost binding of `name` outside the hidden scopes.
-    pub(super) fn visible(&self, name: &str) -> Option<&Binding> {
+    pub(super) fn visible(
+        &self,
+        name: &str,
+    ) -> Option<&Binding> {
         self.scopes
             .iter()
             .enumerate()
@@ -62,16 +62,19 @@ impl<'a> FunctionCompiler<'a> {
             .find_map(|(_, scope)| scope.get(name))
     }
 
-    pub(super) fn type_of(&self, value: u32) -> u32 {
-        self.values
-            .iter()
-            .find(|one| one.id == value)
-            .expect("a declared value")
-            .type_id
+    pub(super) fn type_of(
+        &self,
+        value: u32,
+    ) -> u32 {
+        self.values.iter().find(|one| one.id == value).expect("a declared value").type_id
     }
 
     /// `operand` as a value: a constant is copied into one.
-    pub(super) fn materialized(&mut self, operand: hir::Operand, type_id: u32) -> u32 {
+    pub(super) fn materialized(
+        &mut self,
+        operand: hir::Operand,
+        type_id: u32,
+    ) -> u32 {
         match operand {
             hir::Operand::Value(value) => value,
             other => {
@@ -82,22 +85,39 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    pub(super) fn value(&mut self, type_name: TypeName) -> u32 {
+    pub(super) fn value(
+        &mut self,
+        type_name: TypeName,
+    ) -> u32 {
         self.value_type(type_id(type_name))
     }
 
-    pub(super) fn value_type(&mut self, type_id: u32) -> u32 {
+    pub(super) fn value_type(
+        &mut self,
+        type_id: u32,
+    ) -> u32 {
         let id = self.next_value;
         self.next_value += 1;
         self.values.push(hir::Value { id, type_id });
         id
     }
 
-    pub(super) fn place(&mut self, name: &str, type_name: TypeName, mutable: bool) -> u32 {
+    pub(super) fn place(
+        &mut self,
+        name: &str,
+        type_name: TypeName,
+        mutable: bool,
+    ) -> u32 {
         self.local_place(name, type_id(type_name), width(self.types.sizes, type_name), mutable)
     }
 
-    pub(super) fn local_place(&mut self, name: &str, type_id: u32, extent: u32, mutable: bool) -> u32 {
+    pub(super) fn local_place(
+        &mut self,
+        name: &str,
+        type_id: u32,
+        extent: u32,
+        mutable: bool,
+    ) -> u32 {
         let id = self.next_place;
         self.next_place += 1;
         self.next_frame_offset -= extent as i32;
@@ -160,10 +180,7 @@ impl<'a> FunctionCompiler<'a> {
             self.emit(
                 "store",
                 Vec::new(),
-                vec![
-                    hir::Operand::Place(place),
-                    hir::Operand::Constant(word_id, i64::from(value)),
-                ],
+                vec![hir::Operand::Place(place), hir::Operand::Constant(word_id, i64::from(value))],
                 None,
             );
         }
@@ -183,7 +200,11 @@ impl<'a> FunctionCompiler<'a> {
         id
     }
 
-    pub(super) fn static_place(&mut self, symbol: u32, type_name: TypeName) -> u32 {
+    pub(super) fn static_place(
+        &mut self,
+        symbol: u32,
+        type_name: TypeName,
+    ) -> u32 {
         let id = self.next_place;
         self.next_place += 1;
         self.places.push(hir::Place {
@@ -200,7 +221,11 @@ impl<'a> FunctionCompiler<'a> {
         id
     }
 
-    pub(super) fn static_string_place(&mut self, symbol: u32, extent: u32) -> u32 {
+    pub(super) fn static_string_place(
+        &mut self,
+        symbol: u32,
+        extent: u32,
+    ) -> u32 {
         let id = self.next_place;
         self.next_place += 1;
         self.places.push(hir::Place {
@@ -239,48 +264,47 @@ impl<'a> FunctionCompiler<'a> {
         self.must_here();
         self.current_block_mut()
             .instructions
-            .push(hir::Instruction {
-                id,
-                op,
-                results,
-                operands,
-                callee,
-                asm: None,
-                line,
-                inbounds: false,
-            });
+            .push(
+                hir::Instruction {
+                    id,
+                    op,
+                    results,
+                    operands,
+                    callee,
+                    asm: None,
+                    line,
+                    inbounds: false,
+                },
+            );
         id
     }
 
     pub(super) fn block(&mut self) -> u32 {
         let id = self.blocks.len() as u32 + 1;
-        self.blocks.push(BlockBuilder {
-            id,
-            instructions: Vec::new(),
-            terminator: None,
-        });
+        self.blocks.push(BlockBuilder { id, instructions: Vec::new(), terminator: None });
         id
     }
 
-    pub(super) fn terminate(&mut self, terminator: hir::Terminator) {
+    pub(super) fn terminate(
+        &mut self,
+        terminator: hir::Terminator,
+    ) {
         self.flow_moves(&terminator.targets);
         let block = self.current_block_mut();
-        assert!(
-            block.terminator.is_none(),
-            "semantic block terminated twice"
-        );
+        assert!(block.terminator.is_none(), "semantic block terminated twice");
         block.terminator = Some(terminator);
     }
 
     /// Whether any block jumps to `block`.
-    pub(super) fn reached(&self, block: u32) -> bool {
+    pub(super) fn reached(
+        &self,
+        block: u32,
+    ) -> bool {
         self.blocks.iter().any(|one| one.terminator.as_ref().is_some_and(|end| end.targets.contains(&block)))
     }
 
     pub(super) fn open(&self) -> bool {
-        self.blocks[(self.current - 1) as usize]
-            .terminator
-            .is_none()
+        self.blocks[(self.current - 1) as usize].terminator.is_none()
     }
 
     pub(super) fn current_block_mut(&mut self) -> &mut BlockBuilder {

@@ -11,9 +11,11 @@ use crate::testing::{parsed, printed, results};
 
 /// `module` through the pipeline the compilers run, for the DOS target.
 fn pipe(module: &mut Module) {
-    Program::lend(module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| pipeline::applied(program, &Applied::default()))
-        .and_then(|done| done)
-        .expect("the pipeline runs");
+    Program::lend(module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+        pipeline::applied(program, &Applied::default())
+    })
+    .and_then(|done| done)
+    .expect("the pipeline runs");
 }
 
 /// `text` through it, printed.
@@ -23,7 +25,8 @@ fn piped(text: &str) -> String {
     printed(&module)
 }
 
-/// Nib's locals were stack cells loaded and stored around each use (the isel path ran 1.98 times the old path's instructions): through the pipeline a loop's counter is a phi and what it sums another.
+/// Nib's locals were stack cells loaded and stored around each use (the isel path ran 1.98 times the old path's
+/// instructions): through the pipeline a loop's counter is a phi and what it sums another.
 #[test]
 fn a_loop_counter_and_its_sum_are_phis_not_stack_cells() {
     const TEXT: &str = r#"define i16 @sum(i16 %n) {
@@ -80,7 +83,8 @@ b1:
     assert!(out.contains("ret i16 3"), "{out}");
 }
 
-/// A condition folded to a constant leaves a branch that goes one way, an unreached block and a chain of blocks that only jump: one block.
+/// A condition folded to a constant leaves a branch that goes one way, an unreached block and a chain of blocks that
+/// only jump: one block.
 #[test]
 fn a_constant_branch_and_the_chain_after_it_become_one_block() {
     const TEXT: &str = r#"define i16 @f(i16 %x) {
@@ -107,7 +111,8 @@ b5:
     assert!(!out.contains("b2:") && !out.contains("b3:"), "{out}");
 }
 
-/// T048 ran two more instructions per iteration once a loop's exit block was bypassed: whatever the pipeline does to the two loops, each n gets the answer it had.
+/// T048 ran two more instructions per iteration once a loop's exit block was bypassed: whatever the pipeline does to
+/// the two loops, each n gets the answer it had.
 #[test]
 fn a_loop_exit_before_phis_keeps_its_answers() {
     const TEXT: &str = r#"define i16 @f(i16 %n) {
@@ -144,7 +149,8 @@ b6:
     assert_eq!(results(&after, &inputs), results(&before, &inputs), "{}", printed(&after));
 }
 
-/// nbody ran 201 more instructions once an inner loop's preheader was bypassed (its counter's start moved to the outer header): the answer stays, and the counter-only loop is gone.
+/// nbody ran 201 more instructions once an inner loop's preheader was bypassed (its counter's start moved to the outer
+/// header): the answer stays, and the counter-only loop is gone.
 #[test]
 fn a_loop_preheader_is_not_moved_into_the_outer_loop() {
     const TEXT: &str = r#"define i16 @f(i16 %n, i1 %p) {
@@ -176,7 +182,8 @@ b4:
     assert!(!printed(&after).contains("phi"), "{}", printed(&after));
 }
 
-/// matmul8's inner loop loaded a view's dimension three times an iteration and checked `k < dim` twice: the check and the reloads go, a load after a store reads the stored value, one after a call that may write stays.
+/// matmul8's inner loop loaded a view's dimension three times an iteration and checked `k < dim` twice: the check and
+/// the reloads go, a load after a store reads the stored value, one after a call that may write stays.
 #[test]
 fn a_load_and_a_known_condition_are_reused_but_not_across_a_call_that_may_write() {
     const TEXT: &str = r#"declare void @panic()
@@ -212,11 +219,15 @@ b5:
     let out = piped(TEXT);
     assert_eq!(out.matches("load i16, ptr %v").count(), 1, "{out}");
     assert_eq!(out.matches("icmp ult").count(), 1, "{out}");
-    assert!(out.contains("store i16 %k, ptr %out\n  call void @write()\n  %2 = load i16, ptr %out\n  %3 = add i16 %k, %2"), "{out}");
+    assert!(
+        out.contains("store i16 %k, ptr %out\n  call void @write()\n  %2 = load i16, ptr %out\n  %3 = add i16 %k, %2"),
+        "{out}"
+    );
     assert!(!out.contains("@panic()\n  unreachable"), "{out}");
 }
 
-/// matmul8 reloaded each view descriptor's shape and data pointer in its innermost loop: a load that may run anywhere, of memory the loop cannot write, leaves the loop; one through a plain pointer stays.
+/// matmul8 reloaded each view descriptor's shape and data pointer in its innermost loop: a load that may run anywhere,
+/// of memory the loop cannot write, leaves the loop; one through a plain pointer stays.
 #[test]
 fn an_invariant_load_leaves_a_loop_from_a_conditional_block() {
     const TEXT: &str = r#"define void @f(ptr noalias readonly dereferenceable(4) %v, ptr %w, i16 %n, ptr %out) {
@@ -496,7 +507,10 @@ b1:
 }
 "#;
     let out = piped(TEXT);
-    assert!(out.contains("ret i16 %x") && !out.contains("udiv") && !out.contains("add") && !out.contains("mul"), "{out}");
+    assert!(
+        out.contains("ret i16 %x") && !out.contains("udiv") && !out.contains("add") && !out.contains("mul"),
+        "{out}"
+    );
 }
 
 /// `x % 1`, `x - x`, `x * 0` and the identities around them leave `x`. (llrm-mir's instcombine, #237)
@@ -541,7 +555,8 @@ b1:
     assert!(out.contains("select i1 %c, i16 1, i16 3"), "{out}");
 }
 
-/// `(x - 5) * 8 + 3 + 4` is `x * 8 + -33` (the multiply by 8 is the back end's to shift). (llrm-mir's instcombine, #237)
+/// `(x - 5) * 8 + 3 + 4` is `x * 8 + -33` (the multiply by 8 is the back end's to shift). (llrm-mir's instcombine,
+/// #237)
 #[test]
 fn a_difference_with_a_constant_is_a_sum_and_the_constants_meet() {
     const TEXT: &str = r#"define i16 @f(i16 %x) {
@@ -580,7 +595,8 @@ b1:
     assert!(!out.contains("icmp ne i16") && !out.contains("icmp eq i16"), "{out}");
 }
 
-/// A zero extension of a zero extension, truncated back, and a sign extension truncated back, are the value. (llrm-mir's instcombine, #237)
+/// A zero extension of a zero extension, truncated back, and a sign extension truncated back, are the value.
+/// (llrm-mir's instcombine, #237)
 #[test]
 fn casts_that_undo_each_other_are_the_value() {
     const TEXT: &str = r#"define i8 @f(i8 %x) {

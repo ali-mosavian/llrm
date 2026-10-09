@@ -38,10 +38,17 @@ enum Seen {
 }
 
 impl Seen {
-    fn joined(&self, other: &Interval) -> Self {
+    fn joined(
+        &self,
+        other: &Interval,
+    ) -> Self {
         match self {
             Seen::Nothing => Seen::Within(other.clone()),
-            Seen::Within(one) if one.width == other.width => Seen::Within(Interval { low: one.low.clone().min(other.low.clone()), high: one.high.clone().max(other.high.clone()), width: one.width }),
+            Seen::Within(one) if one.width == other.width => Seen::Within(Interval {
+                low: one.low.clone().min(other.low.clone()),
+                high: one.high.clone().max(other.high.clone()),
+                width: one.width,
+            }),
             _ => Seen::Anything,
         }
     }
@@ -49,7 +56,13 @@ impl Seen {
 
 /// `operand` in `unit`'s function where `scope` holds: its interval, or one
 /// computed from its operands' a level or two down.
-fn actual(unit: &Unit, scope: &IndexMap<ValueId, Interval>, facts: &IndexMap<ValueId, Known>, operand: Operand, depth: u32) -> Option<Interval> {
+fn actual(
+    unit: &Unit,
+    scope: &IndexMap<ValueId, Interval>,
+    facts: &IndexMap<ValueId, Known>,
+    operand: Operand,
+    depth: u32,
+) -> Option<Interval> {
     if let Some(found) = ranges::_operand(unit, operand, scope, facts) {
         return Some(found);
     }
@@ -72,7 +85,12 @@ fn actual(unit: &Unit, scope: &IndexMap<ValueId, Interval>, facts: &IndexMap<Val
 
 /// The numbers `parameter` of the body at `defined` is compared with, one either side of each,
 /// then the type's own bounds: where a growing range stops.
-fn thresholds(program: &Program, defined: Defined, index: usize, width: u32) -> Vec<BigInt> {
+fn thresholds(
+    program: &Program,
+    defined: Defined,
+    index: usize,
+    width: u32,
+) -> Vec<BigInt> {
     let (at, id) = defined;
     let module = &program.modules[at];
     let function = module.global(id).function().expect("a procedure");
@@ -96,7 +114,11 @@ fn thresholds(program: &Program, defined: Defined, index: usize, width: u32) -> 
 }
 
 /// The `range` attribute stating `interval` of a parameter of type `ty`, where it says something.
-fn attribute(context: &llrm_mir::Context, ty: llrm_mir::types::TypeId, interval: &Interval) -> Option<Attribute> {
+fn attribute(
+    context: &llrm_mir::Context,
+    ty: llrm_mir::types::TypeId,
+    interval: &Interval,
+) -> Option<Attribute> {
     let bits = context.types.int_bits(ty)?;
     let half = BigInt::from(1) << (bits - 1);
     if interval.low <= -half.clone() && interval.high >= half - 1 {
@@ -108,15 +130,24 @@ fn attribute(context: &llrm_mir::Context, ty: llrm_mir::types::TypeId, interval:
 
 /// Stamps each `eligible` body's integer parameters with the range its callers pass, where they all are
 /// known; the bodies whose parameters it stamped.
-pub fn stamp(program: &mut Program, eligible: &BTreeSet<Defined>) -> BTreeSet<Defined> {
+pub fn stamp(
+    program: &mut Program,
+    eligible: &BTreeSet<Defined>,
+) -> BTreeSet<Defined> {
     // The parameters worth following: an integer one of a body nothing but the program calls.
     let mut seen: BTreeMap<(Defined, usize), Seen> = BTreeMap::new();
     for &(at, id) in eligible {
         let module = &program.modules[at];
         let Some(function) = module.global(id).function() else { continue };
         for (index, &parameter) in function.parameters().iter().enumerate() {
-            let declared = function.parameter_attrs.get(index).is_some_and(|one| one.iter().any(|attribute| matches!(attribute, Attribute::Range { .. })));
-            if !declared && !function.users(parameter).is_empty() && module.context.types.int_bits(function.value(parameter).ty).is_some() {
+            let declared = function
+                .parameter_attrs
+                .get(index)
+                .is_some_and(|one| one.iter().any(|attribute| matches!(attribute, Attribute::Range { .. })));
+            if !declared
+                && !function.users(parameter).is_empty()
+                && module.context.types.int_bits(function.value(parameter).ty).is_some()
+            {
                 seen.insert(((at, id), index), Seen::Nothing);
             }
         }
@@ -134,10 +165,18 @@ pub fn stamp(program: &mut Program, eligible: &BTreeSet<Defined>) -> BTreeSet<De
                 let waiting = seen.iter().any(|(&(one, _), now)| one == (at, own) && *now == Seen::Nothing);
                 let calls: Vec<_> = function
                     .walk()
-                    .filter(|&(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)))
+                    .filter(|&(_, inst)| {
+                        matches!(
+                            function.instruction(inst).opcode,
+                            Opcode::Call(_) | Opcode::Invoke(_)
+                        )
+                    })
                     .filter_map(|(block, inst)| {
-                        let target = effects::callee(&module.context, function, inst).and_then(|callee| program.definition(at, callee))?;
-                        (0..function.instruction(inst).operands.len()).any(|index| seen.contains_key(&(target, index))).then_some((block, inst, target))
+                        let target = effects::callee(&module.context, function, inst)
+                            .and_then(|callee| program.definition(at, callee))?;
+                        (0..function.instruction(inst).operands.len())
+                            .any(|index| seen.contains_key(&(target, index)))
+                            .then_some((block, inst, target))
                     })
                     .collect();
                 if calls.is_empty() {
@@ -150,16 +189,21 @@ pub fn stamp(program: &mut Program, eligible: &BTreeSet<Defined>) -> BTreeSet<De
                 let unit = unit.with_registers(&registers);
                 let scoped = ranges::bounds(&unit).map(std::borrow::Cow::into_owned).unwrap_or_default();
                 for (block, inst, target) in calls {
-                    // A round assumes a range before it proves it: where the loops' facts contradict each other under the assumption the
-                    // block is not reached, and a call in it passes nothing.
+                    // A round assumes a range before it proves it: where the loops' facts contradict each other under
+                    // the assumption the block is not reached, and a call in it passes nothing.
                     if scoped.unreachable(cfg::id(block)) {
                         continue;
                     }
                     let scope = scoped.at(cfg::id(block)).cloned().unwrap_or_default();
-                    let parameters = program.modules[target.0].global(target.1).function().expect("a procedure").parameters().len();
+                    let parameters =
+                        program.modules[target.0].global(target.1).function().expect("a procedure").parameters().len();
                     for index in 0..parameters {
                         let Some(entry) = next.get_mut(&(target, index)) else { continue };
-                        let found = function.instruction(inst).operands.get(index).and_then(|&operand| actual(&unit, &scope, &registers, operand, 2));
+                        let found = function
+                            .instruction(inst)
+                            .operands
+                            .get(index)
+                            .and_then(|&operand| actual(&unit, &scope, &registers, operand, 2));
                         *entry = match found {
                             Some(found) => entry.joined(&found),
                             None if waiting => continue,
@@ -172,13 +216,23 @@ pub fn stamp(program: &mut Program, eligible: &BTreeSet<Defined>) -> BTreeSet<De
         // A range still growing after the second round goes to the next number the callee compares it with.
         if round >= 2 {
             for (&(target, index), now) in next.iter_mut() {
-                let (Seen::Within(new), Some(Seen::Within(old))) = (&*now, seen.get(&(target, index))) else { continue };
+                let (Seen::Within(new), Some(Seen::Within(old))) = (&*now, seen.get(&(target, index))) else {
+                    continue;
+                };
                 if new == old {
                     continue;
                 }
                 let steps = thresholds(program, target, index, new.width);
-                let high = if new.high > old.high { steps.iter().find(|one| **one >= new.high).cloned().unwrap_or_else(|| new.high.clone()) } else { new.high.clone() };
-                let low = if new.low < old.low { steps.iter().rev().find(|one| **one <= new.low).cloned().unwrap_or_else(|| new.low.clone()) } else { new.low.clone() };
+                let high = if new.high > old.high {
+                    steps.iter().find(|one| **one >= new.high).cloned().unwrap_or_else(|| new.high.clone())
+                } else {
+                    new.high.clone()
+                };
+                let low = if new.low < old.low {
+                    steps.iter().rev().find(|one| **one <= new.low).cloned().unwrap_or_else(|| new.low.clone())
+                } else {
+                    new.low.clone()
+                };
                 *now = Seen::Within(Interval { low, high, width: new.width });
             }
         }
@@ -199,7 +253,12 @@ pub fn stamp(program: &mut Program, eligible: &BTreeSet<Defined>) -> BTreeSet<De
                 continue;
             };
             let module = &mut program.modules[at];
-            let ty = module.global(id).function().expect("a procedure").value(module.global(id).function().expect("a procedure").parameters()[index]).ty;
+            let ty = module
+                .global(id)
+                .function()
+                .expect("a procedure")
+                .value(module.global(id).function().expect("a procedure").parameters()[index])
+                .ty;
             let Some(stated) = attribute(&module.context, ty, interval) else { continue };
             let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind else { continue };
             if function.parameter_attrs.len() <= index {

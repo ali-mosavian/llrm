@@ -8,7 +8,6 @@
 
 use std::collections::BTreeSet;
 
-use crate::graph::loops::{self, Loop};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::interpret::{Val, run};
 use llrm_mir::module::{Function, InstId, Module, Operand, ValueId};
@@ -20,6 +19,7 @@ use super::*;
 use crate::cfg;
 use crate::consts;
 use crate::consts::Known;
+use crate::graph::loops::{self, Loop};
 use crate::memory::Unit;
 use crate::testing::{DOS, corpus, function, layout, parsed, value};
 
@@ -44,14 +44,24 @@ impl Parsed {
         crate::testing::with_registers(Unit::of(&self.module, &self.layout, self.function()))
     }
 
-    pub fn value(&self, name: &str) -> ValueId {
+    pub fn value(
+        &self,
+        name: &str,
+    ) -> ValueId {
         value(self.function(), name)
     }
 
     /// The instruction defining `%name`.
-    pub fn made(&self, name: &str) -> InstId {
+    pub fn made(
+        &self,
+        name: &str,
+    ) -> InstId {
         let wanted = self.value(name);
-        self.function().walk().map(|(_, inst)| inst).find(|&inst| self.function().instruction(inst).result == Some(wanted)).expect("defined")
+        self.function()
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| self.function().instruction(inst).result == Some(wanted))
+            .expect("defined")
     }
 
     pub fn only_loop(&self) -> Loop {
@@ -60,11 +70,17 @@ impl Parsed {
         one.clone()
     }
 
-    pub fn counted(&self, inbounds: bool) -> Vec<CountedLoop> {
+    pub fn counted(
+        &self,
+        inbounds: bool,
+    ) -> Vec<CountedLoop> {
         counted(&self.unit(), &self.only_loop(), None, inbounds)
     }
 
-    pub fn recurrence(&self, name: &str) -> Option<Recurrence> {
+    pub fn recurrence(
+        &self,
+        name: &str,
+    ) -> Option<Recurrence> {
         recurrences_of(self).remove(&self.value(name))
     }
 
@@ -73,8 +89,15 @@ impl Parsed {
     }
 
     /// `@f(arguments)`'s integer result.
-    pub fn run(&self, arguments: &[(i64, u32)], fuel: u64) -> Option<u128> {
-        let arguments = arguments.iter().map(|&(n, width)| Val::Int { bits: n as u128 & llrm_mir::context::mask(width), width }).collect();
+    pub fn run(
+        &self,
+        arguments: &[(i64, u32)],
+        fuel: u64,
+    ) -> Option<u128> {
+        let arguments = arguments
+            .iter()
+            .map(|&(n, width)| Val::Int { bits: n as u128 & llrm_mir::context::mask(width), width })
+            .collect();
         match run(&self.module, "f", arguments, fuel) {
             Ok(Val::Int { bits, .. }) => Some(bits),
             Ok(other) => panic!("{other:?}"),
@@ -87,11 +110,17 @@ fn spelled(test: IntPredicate) -> &'static str {
     llrm_mir::opcode::spelling(&llrm_mir::opcode::INT_PREDICATE, test)
 }
 
-fn signed(n: i64, width: u32) -> i64 {
+fn signed(
+    n: i64,
+    width: u32,
+) -> i64 {
     llrm_mir::context::signed(n as u128 & llrm_mir::context::mask(width), width) as i64
 }
 
-fn constant(n: i64, width: u32) -> AffineOperand {
+fn constant(
+    n: i64,
+    width: u32,
+) -> AffineOperand {
     AffineOperand::constant(n, width)
 }
 
@@ -106,15 +135,31 @@ pub(crate) struct Shape {
     pub flags: &'static str,
 }
 
-pub(crate) fn shaped(shape: &str, width: u32) -> Shape {
-    Shape { posttested: shape != "pre", stepped: shape == "post-stepped", mirrored: false, split: false, width, flags: "" }
+pub(crate) fn shaped(
+    shape: &str,
+    width: u32,
+) -> Shape {
+    Shape {
+        posttested: shape != "pre",
+        stepped: shape == "post-stepped",
+        mirrored: false,
+        split: false,
+        width,
+        flags: "",
+    }
 }
 
 /// `i = start` stepping by `step` while `i test bound`: a start of None is
 /// `%g`, a bound of None `%n`. It returns `trips << 32 | seen << 16 | left`:
 /// the trips, the last trip's `i` (`start` for none), and the `i` the
 /// loop leaves with (the stepped one for a post-tested loop).
-pub(crate) fn looped(start: Option<i64>, bound: Option<i64>, test: IntPredicate, step: i64, shape: Shape) -> Parsed {
+pub(crate) fn looped(
+    start: Option<i64>,
+    bound: Option<i64>,
+    test: IntPredicate,
+    step: i64,
+    shape: Shape,
+) -> Parsed {
     let w = shape.width;
     let start = start.map_or("%g".to_owned(), |n| signed(n, w).to_string());
     let bound = bound.map_or("%n".to_owned(), |n| signed(n, w).to_string());
@@ -186,7 +231,10 @@ b2:
 }
 
 /// `(trips, seen, left)` of `looped`'s result, `seen` and `left` signed.
-pub(crate) fn decoded(result: u128, width: u32) -> (BigInt, i64, i64) {
+pub(crate) fn decoded(
+    result: u128,
+    width: u32,
+) -> (BigInt, i64, i64) {
     let lane = |shift: u32| signed(((result >> shift) & 0xFFFF) as i64, width);
     (BigInt::from(result >> 32), lane(16), lane(0))
 }
@@ -211,14 +259,22 @@ const ENDS: [i64; 6] = [0, 1, 0x7F, 0x80, 0xFE, 0xFF];
 /// wherever given, and a pre-tested loop leaves with its `exit_value`.
 #[test]
 fn test_every_counted_loop_runs_its_proved_trips() {
-    for (shape, split) in [("pre", false), ("post", false), ("post-stepped", false), ("post", true), ("post-stepped", true)] {
+    for (shape, split) in
+        [("pre", false), ("post", false), ("post-stepped", false), ("post", true), ("post-stepped", true)]
+    {
         for step in [1, -1, 3, -3] {
             let mut proved = BTreeSet::new();
             for test in TESTS {
                 for start in ENDS {
                     for bound in ENDS {
                         for mirrored in [false, true] {
-                            let parsed = looped(Some(start), Some(bound), test, step, Shape { mirrored, split, ..shaped(shape, 8) });
+                            let parsed = looped(
+                                Some(start),
+                                Some(bound),
+                                test,
+                                step,
+                                Shape { mirrored, split, ..shaped(shape, 8) },
+                            );
                             let proofs = parsed.counted(false);
                             let where_ = (shape, split, step, test, start, bound, mirrored);
                             let Some(result) = parsed.run(&[(0, 8), (0, 8)], 4_000) else {
@@ -232,7 +288,11 @@ fn test_every_counted_loop_runs_its_proved_trips() {
                             let (trips, seen, left) = decoded(result, 8);
                             assert!(proof.count.as_ref() == Some(&trips) && proof.test == test, "{where_:?} {trips}");
                             if proof.last.is_some() {
-                                assert_eq!((proof.first.clone(), proof.last.clone()), (Some(signed(start, 8).into()), Some(seen.into())), "{where_:?}");
+                                assert_eq!(
+                                    (proof.first.clone(), proof.last.clone()),
+                                    (Some(signed(start, 8).into()), Some(seen.into())),
+                                    "{where_:?}"
+                                );
                             }
                             if !proof.posttested && trips > BigInt::from(0) {
                                 let exit = exit_value(proof, &mut |_, _| panic!("constant ends place nothing"));
@@ -244,7 +304,11 @@ fn test_every_counted_loop_runs_its_proved_trips() {
                 }
             }
             // Every test whose direction the step can end is proved somewhere.
-            let ending = TESTS.into_iter().filter(|&test| test == IntPredicate::Ne || _ascending(test) == (step > 0)).map(spelled).collect::<BTreeSet<_>>();
+            let ending = TESTS
+                .into_iter()
+                .filter(|&test| test == IntPredicate::Ne || _ascending(test) == (step > 0))
+                .map(spelled)
+                .collect::<BTreeSet<_>>();
             assert_eq!(proved, ending, "{shape} {split} {step}");
         }
     }
@@ -309,7 +373,10 @@ b3:
 }
 
 /// A counter, `%i`, stepped once a trip, and a multiply of `%x`.
-fn stepped(step: &str, multiply: &str) -> Parsed {
+fn stepped(
+    step: &str,
+    multiply: &str,
+) -> Parsed {
     Parsed::new(&format!(
         "define void @f(i16 %x, i1 %c) {{
 b0:
@@ -335,7 +402,10 @@ fn test_a_multiply_of_another_value_is_not_derived() {
     assert_eq!(other.recurrence("m"), None);
     let counter = stepped("add i16 %i, 1", "mul i16 %i, 2");
     let x = Scev::unknown(counter.value("x"), 16);
-    assert_eq!(counter.recurrence("m"), Some(Recurrence { pointer: None, start: x.times(&BigInt::from(2)), step: Scev::constant(2, 16) }));
+    assert_eq!(
+        counter.recurrence("m"),
+        Some(Recurrence { pointer: None, start: x.times(&BigInt::from(2)), step: Scev::constant(2, 16) })
+    );
 }
 
 #[test]
@@ -350,9 +420,9 @@ fn test_a_step_is_an_invariant_or_constant_added_to_the_phi() {
         ("add i16 1, %i", Some(constant(1, 16))),
         ("sub i16 %i, 3", Some(constant(-3, 16))),
         ("add i16 %i, %x", Some(AffineOperand::Value(ValueId(0), 16))),
-        ("add i16 %i, %m", None),     // changes in the loop
-        ("sub i16 %i, %x", None),     // a variable subtracted
-        ("sub i16 3, %i", None),      // the phi negated
+        ("add i16 %i, %m", None), // changes in the loop
+        ("sub i16 %i, %x", None), // a variable subtracted
+        ("sub i16 3, %i", None),  // the phi negated
         ("mul i16 %i, 1", None),
     ] {
         let parsed = stepped(step, "add i16 %x, 5");
@@ -411,7 +481,8 @@ b2:
 "
         ));
         let x = Scev::unknown(parsed.value("x"), 16);
-        let expected = Recurrence { pointer: None, start: x.times(&BigInt::from(expected)), step: Scev::constant(expected, 16) };
+        let expected =
+            Recurrence { pointer: None, start: x.times(&BigInt::from(expected)), step: Scev::constant(expected, 16) };
         assert_eq!(parsed.recurrence("address"), Some(expected), "{factor}");
     }
 }
@@ -439,7 +510,8 @@ b2:
         ));
         let x = Scev::unknown(parsed.value("x"), 16);
         let start = x.times(&BigInt::from(by)).plus(&Scev::constant(6 * offset, 16));
-        let carried = Recurrence { pointer: Some(Operand::Value(parsed.value("base"))), start, step: Scev::constant(by, 16) };
+        let carried =
+            Recurrence { pointer: Some(Operand::Value(parsed.value("base"))), start, step: Scev::constant(by, 16) };
         assert_eq!(parsed.recurrence("p"), Some(carried));
     }
 }
@@ -467,7 +539,11 @@ b2:
 ",
     );
     let (base, x) = (Operand::Value(parsed.value("base")), Scev::unknown(parsed.value("x"), 16));
-    let at = |scale: i64, bytes: i64| Recurrence { pointer: Some(base), start: x.times(&BigInt::from(scale)).plus(&Scev::constant(bytes, 16)), step: Scev::constant(scale, 16) };
+    let at = |scale: i64, bytes: i64| Recurrence {
+        pointer: Some(base),
+        start: x.times(&BigInt::from(scale)).plus(&Scev::constant(bytes, 16)),
+        step: Scev::constant(scale, 16),
+    };
     assert_eq!(parsed.recurrence("p"), Some(at(4, 2)));
     // Off an address of the counter: one recurrence off `%base`.
     assert_eq!(parsed.recurrence("q"), Some(at(6, 2)));
@@ -507,7 +583,9 @@ b2:
 
 #[test]
 fn test_a_shift_recurrence_requires_a_constant_count() {
-    for (shift, expected) in [("shl i16 %i, %x", None), ("shl i16 3, %i", None), ("shl i16 %i, 3", Some(8)), ("shl i16 %i, 16", None)] {
+    for (shift, expected) in
+        [("shl i16 %i, %x", None), ("shl i16 3, %i", None), ("shl i16 %i, 3", Some(8)), ("shl i16 %i, 16", None)]
+    {
         let parsed = stepped("add i16 %i, 1", shift);
         let step = parsed.recurrence("m").map(|of| of.step);
         assert_eq!(step, expected.map(|by| Scev::constant(by, 16)), "{shift}");
@@ -677,7 +755,12 @@ fn test_a_symbolic_count_agrees_with_running_it() {
 }
 
 /// `left test right` on `width`-bit integers.
-fn compared(test: IntPredicate, left: &BigInt, right: &BigInt, width: u32) -> bool {
+fn compared(
+    test: IntPredicate,
+    left: &BigInt,
+    right: &BigInt,
+    width: u32,
+) -> bool {
     let signed = |n: &BigInt| _as_signed(&masked(n, width), width);
     let (ul, ur) = (masked(left, width), masked(right, width));
     let (sl, sr) = (signed(left), signed(right));
@@ -799,7 +882,12 @@ fn test_a_step_promised_not_to_wrap_ends_an_inclusive_symbolic_loop() {
 /// found none for a runtime `n` (the old body read it off `n`'s range).
 #[test]
 fn an_exclusive_test_is_bounded_by_its_widths_end() {
-    for (test, start, maximum) in [(IntPredicate::Ult, 0, Some(0xFFFF)), (IntPredicate::Slt, 0, Some(0x7FFF)), (IntPredicate::Ult, 5, Some(0xFFFA)), (IntPredicate::Ule, 0, None)] {
+    for (test, start, maximum) in [
+        (IntPredicate::Ult, 0, Some(0xFFFF)),
+        (IntPredicate::Slt, 0, Some(0x7FFF)),
+        (IntPredicate::Ult, 5, Some(0xFFFA)),
+        (IntPredicate::Ule, 0, None),
+    ] {
         let parsed = looped(Some(start), None, test, 1, shaped("pre", 16));
         let maxima = parsed.counted(false).into_iter().map(|proof| proof.maximum).collect::<Vec<_>>();
         assert_eq!(maxima, maximum.map(|one| vec![Some(BigInt::from(one))]).unwrap_or_default(), "{test:?} {start}");
@@ -807,7 +895,11 @@ fn an_exclusive_test_is_bounded_by_its_widths_end() {
 }
 
 /// `sext` or `zext` of a counted byte counter, times 3.
-fn extended(cast: &str, start: i64, bound: i64) -> Parsed {
+fn extended(
+    cast: &str,
+    start: i64,
+    bound: i64,
+) -> Parsed {
     Parsed::new(&format!(
         "define void @f() {{
 b0:
@@ -879,7 +971,11 @@ b3:
 }}
 "
         ));
-        assert_eq!(parsed.recurrence("h").map(|of| (of.start, of.step)), fits.then(|| (Scev::constant(start, 16), Scev::constant(1, 16))), "{start} {bound}");
+        assert_eq!(
+            parsed.recurrence("h").map(|of| (of.start, of.step)),
+            fits.then(|| (Scev::constant(start, 16), Scev::constant(1, 16))),
+            "{start} {bound}"
+        );
     }
 }
 
@@ -889,7 +985,9 @@ b3:
 /// not say so.
 #[test]
 fn test_a_symbolic_ult_counter_extends_to_a_wide_recurrence() {
-    for (test, step, cast, wide) in [("ult", 1, "zext", true), ("ult", 2, "zext", false), ("slt", 1, "zext", false), ("ult", 1, "sext", false)] {
+    for (test, step, cast, wide) in
+        [("ult", 1, "zext", true), ("ult", 2, "zext", false), ("slt", 1, "zext", false), ("ult", 1, "sext", false)]
+    {
         let parsed = Parsed::new(&format!(
             "define void @f(i8 %n) {{
 b0:
@@ -952,7 +1050,10 @@ fn test_advances_are_each_values_change_per_trip() {
 }
 
 /// A pre-tested two-block loop testing `%i` by `compare`, which `read` may read too.
-fn replaceable(read: &str, compare: &str) -> Parsed {
+fn replaceable(
+    read: &str,
+    compare: &str,
+) -> Parsed {
     Parsed::new(&format!(
         "define i16 @f(ptr %p, i16 %n) {{
 b0:
@@ -982,7 +1083,15 @@ fn test_a_counter_is_replaceable_only_where_every_other_read_is_covered() {
     let (unit, loop_) = (parsed.unit(), parsed.only_loop());
     let proofs = counted(&unit, &loop_, None, false);
     let [proof] = &proofs[..] else { panic!("one proof") };
-    let store = parsed.function().walk().map(|(_, inst)| inst).find(|&inst| matches!(parsed.function().instruction(inst).opcode, llrm_mir::Opcode::Store { .. })).unwrap();
+    let store = parsed
+        .function()
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(
+            parsed.function().instruction(inst).opcode,
+            llrm_mir::Opcode::Store { .. }
+        ))
+        .unwrap();
     assert_eq!(control_replacement(&unit, &loop_, proof, &BTreeSet::new()), None);
     let replacement = control_replacement(&unit, &loop_, proof, &BTreeSet::from([store])).expect("covered");
     assert_eq!((replacement.update, replacement.exits), (parsed.value("next"), vec![parsed.made("left")]));
@@ -1023,7 +1132,11 @@ fn test_every_corpus_count_is_where_its_test_first_fails() {
             for loop_ in loops::loops(&cfg::graph(function), None) {
                 for proof in counted_unless_stopped(&unit, &loop_, Some(&facts), false) {
                     proofs += 1;
-                    let (Some(count), AffineOperand::Const(start), AffineOperand::Const(bound)) = (&proof.count, &proof.start, &proof.bound) else { continue };
+                    let (Some(count), AffineOperand::Const(start), AffineOperand::Const(bound)) =
+                        (&proof.count, &proof.start, &proof.bound)
+                    else {
+                        continue;
+                    };
                     counts += 1;
                     let width = proof.width();
                     let mut i = start.n.clone();
@@ -1111,7 +1224,8 @@ b5:
 }}
 "
         ));
-        let inner = loops::loops(&cfg::graph(parsed.function()), None).into_iter().min_by_key(|one| one.body.len()).unwrap();
+        let inner =
+            loops::loops(&cfg::graph(parsed.function()), None).into_iter().min_by_key(|one| one.body.len()).unwrap();
         let facts = consts::known(&parsed.unit(), None, None, None);
         assert_eq!(trip_count(&parsed.unit(), &inner, &facts), count.map(BigInt::from), "{rewind}");
         assert_eq!(parsed.run(&[(0, 32)], 1_000), Some(trips), "{rewind}");
@@ -1193,7 +1307,10 @@ fn test_every_exit_is_counted_and_the_loop_takes_the_least() {
     let taken = found.iter().map(|one| one.taken.clone()).collect::<Vec<_>>();
     assert_eq!(
         taken,
-        [Some(vec![Scev::of(&AffineOperand::Value(la, 16), 16)]), Some(vec![Scev::of(&AffineOperand::Value(lb, 16), 16)])],
+        [
+            Some(vec![Scev::of(&AffineOperand::Value(la, 16), 16)]),
+            Some(vec![Scev::of(&AffineOperand::Value(lb, 16), 16)])
+        ],
         "{found:?}"
     );
     assert_eq!(backedges(&found).map(|least| least.len()), Some(2));
@@ -1403,7 +1520,10 @@ fn recurrences_of(parsed: &Parsed) -> std::collections::BTreeMap<ValueId, Recurr
 }
 
 /// `sum` at the values `env` gives its unknowns, modulo its width.
-fn evaluated(sum: &Scev, env: &dyn Fn(ValueId) -> BigInt) -> BigInt {
+fn evaluated(
+    sum: &Scev,
+    env: &dyn Fn(ValueId) -> BigInt,
+) -> BigInt {
     let mut total = sum.constant.clone();
     for (product, factor) in &sum.terms {
         total += product.values().iter().fold(factor.clone(), |so_far, value| so_far * env(*value));
@@ -1459,16 +1579,25 @@ fn test_generated_recurrences_match_the_interpreter() {
     assert!(affine - found <= REFUSED_BASELINE, "refusals grew");
 }
 
-fn random_sum(rng: &mut crate::generated::Rng, width: u32) -> Scev {
+fn random_sum(
+    rng: &mut crate::generated::Rng,
+    width: u32,
+) -> Scev {
     let mut sum = Scev::constant(rng.word(), width);
     for _ in 0..rng.below(4) {
-        sum = sum.plus(&Scev::of(&AffineOperand::Value(ValueId(rng.below(4) as u32), width), width).times(&BigInt::from(rng.word() as i16)));
+        sum = sum.plus(
+            &Scev::of(&AffineOperand::Value(ValueId(rng.below(4) as u32), width), width)
+                .times(&BigInt::from(rng.word() as i16)),
+        );
     }
     sum
 }
 
 /// `one * other`, where the form defines it.
-fn product_of(one: &Scev, other: &Scev) -> Option<Scev> {
+fn product_of(
+    one: &Scev,
+    other: &Scev,
+) -> Option<Scev> {
     one.product(other).into()
 }
 
@@ -1501,7 +1630,9 @@ fn test_form_obeys_the_ring_laws() {
             assert_eq!(a, x.times(&k), "seed {seed}");
         }
         let Some(xy) = product_of(&x, &y) else { continue };
-        let (Some(yx), Some(xz), Some(yz)) = (product_of(&y, &x), product_of(&x, &z), product_of(&y, &z)) else { continue };
+        let (Some(yx), Some(xz), Some(yz)) = (product_of(&y, &x), product_of(&x, &z), product_of(&y, &z)) else {
+            continue;
+        };
         let (Some(xy_z), Some(x_yz)) = (product_of(&xy, &z), product_of(&x, &yz)) else { continue };
         products += 1;
         assert_eq!(xy, yx, "seed {seed}");
@@ -1509,7 +1640,11 @@ fn test_form_obeys_the_ring_laws() {
         assert_eq!(product_of(&x, &y.plus(&z)), Some(xy.plus(&xz)), "seed {seed}");
         assert_eq!(product_of(&x, &one), Some(x.clone()), "seed {seed}");
         assert!(product_of(&x, &zero).is_some_and(|zero| zero.is_zero()), "seed {seed}");
-        assert_eq!(xy.truncated(narrow), product_of(&x.truncated(narrow), &y.truncated(narrow)).unwrap(), "seed {seed}");
+        assert_eq!(
+            xy.truncated(narrow),
+            product_of(&x.truncated(narrow), &y.truncated(narrow)).unwrap(),
+            "seed {seed}"
+        );
     }
     eprintln!("products defined {products} of 400");
     assert!(products > 0);
@@ -1538,7 +1673,10 @@ b2:
     (parsed, of)
 }
 
-fn unknown_of(parsed: &Parsed, name: &str) -> Scev {
+fn unknown_of(
+    parsed: &Parsed,
+    name: &str,
+) -> Scev {
     Scev::unknown(parsed.value(name), 16)
 }
 
@@ -1613,9 +1751,15 @@ fn test_recurrences_built_in_another_order_are_equal() {
 
 /// An 8-bit counter from `start` by `step`, ended by `!=` against `bound`,
 /// tested `shape` (pre, post or post-stepped); the function returns its trips.
-fn tested_for_equality(shape: &str, step: i64, scale: u32) -> Parsed {
-    let (start, bound) = if scale == 0 { ("%a".to_owned(), "%b".to_owned()) } else { ("%s".to_owned(), "%e".to_owned()) };
-    let lead = if scale == 0 { String::new() } else { format!("  %s = shl i8 %a, {scale}\n  %e = shl i8 %b, {scale}\n") };
+fn tested_for_equality(
+    shape: &str,
+    step: i64,
+    scale: u32,
+) -> Parsed {
+    let (start, bound) =
+        if scale == 0 { ("%a".to_owned(), "%b".to_owned()) } else { ("%s".to_owned(), "%e".to_owned()) };
+    let lead =
+        if scale == 0 { String::new() } else { format!("  %s = shl i8 %a, {scale}\n  %e = shl i8 %b, {scale}\n") };
     let body = match shape {
         "pre" => format!(
             "b1:
@@ -1654,7 +1798,13 @@ b2:
 }
 
 /// `trips` of `proof` at `a` and `b`, evaluated: the instructions it would place, run on numbers.
-fn evaluated_trips(parsed: &Parsed, proof: &CountedLoop, a: u128, b: u128, scale: u32) -> Option<u128> {
+fn evaluated_trips(
+    parsed: &Parsed,
+    proof: &CountedLoop,
+    a: u128,
+    b: u128,
+    scale: u32,
+) -> Option<u128> {
     let env = |name: &str| -> u128 {
         match name {
             "a" => a,
@@ -1666,7 +1816,9 @@ fn evaluated_trips(parsed: &Parsed, proof: &CountedLoop, a: u128, b: u128, scale
     };
     let number = |one: &AffineOperand| match one {
         AffineOperand::Const(known) => known.n.clone(),
-        AffineOperand::Value(value, _) => BigInt::from(env(parsed.function().value(*value).name.as_deref().expect("a named value"))),
+        AffineOperand::Value(value, _) => {
+            BigInt::from(env(parsed.function().value(*value).name.as_deref().expect("a named value")))
+        }
     };
     let mut computed = |kind: BinaryOp, args: Vec<AffineOperand>| {
         let (x, y) = (number(&args[0]), number(&args[1]));
@@ -1698,13 +1850,17 @@ fn test_a_loop_tested_for_equality_is_counted_by_solving_for_the_bound() {
         for (step, scale) in [(1, 0), (-1, 0), (3, 0), (-5, 0), (2, 1), (-2, 1), (4, 2), (6, 1), (-12, 2)] {
             let parsed = tested_for_equality(shape, step, scale);
             let proofs = parsed.counted(false);
-            let proof = proofs.iter().find(|one| one.test == IntPredicate::Ne).unwrap_or_else(|| panic!("{shape} step {step} scale {scale}: no proof"));
+            let proof = proofs
+                .iter()
+                .find(|one| one.test == IntPredicate::Ne)
+                .unwrap_or_else(|| panic!("{shape} step {step} scale {scale}: no proof"));
             assert_eq!((proof.posttested, proof.stepped), (shape != "pre", shape == "post-stepped"), "{shape}");
             for a in (0..256).step_by(7) {
                 for b in (0..256).step_by(5) {
                     // Where the loop never ends there is nothing to count.
                     let Some(actual) = parsed.run(&[(a, 8), (b, 8)], 3_000) else { continue };
-                    let counted = evaluated_trips(&parsed, proof, a as u128, b as u128, scale).expect("trips are placed");
+                    let counted =
+                        evaluated_trips(&parsed, proof, a as u128, b as u128, scale).expect("trips are placed");
                     assert_eq!(counted & 0xFF, actual & 0xFF, "{shape} step {step} scale {scale} a {a} b {b}");
                     checked += 1;
                 }
@@ -1760,7 +1916,9 @@ b5:
         let number = |one: &AffineOperand| match one {
             AffineOperand::Const(known) => known.n.clone(),
             AffineOperand::Value(value, _) if *value == len => BigInt::from(n),
-            AffineOperand::Value(value, _) if *value == parsed.value("start") => BigInt::from(masked(&BigInt::from(-2 * n), 16)),
+            AffineOperand::Value(value, _) if *value == parsed.value("start") => {
+                BigInt::from(masked(&BigInt::from(-2 * n), 16))
+            }
             other => panic!("{other:?}"),
         };
         let mut computed = |kind: BinaryOp, args: Vec<AffineOperand>| {
@@ -1790,7 +1948,10 @@ b5:
 #[ignore = "a measurement, not a check: it reads a corpus directory"]
 fn loop_count_table() {
     let Ok(root) = std::env::var("LOOPS_CORPUS") else { return };
-    let mut paths: Vec<_> = std::fs::read_dir(std::path::Path::new(&root).join("optimized")).unwrap().map(|entry| entry.unwrap().path()).collect();
+    let mut paths: Vec<_> = std::fs::read_dir(std::path::Path::new(&root).join("optimized"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
     paths.sort();
     let (mut constant, mut symbolic, mut uncounted, mut no_counter, mut programs) = (0, 0, 0, 0, 0);
     for path in paths {
@@ -1802,7 +1963,9 @@ fn loop_count_table() {
             let unit = crate::testing::with_registers(Unit::of(&module, &layout, function));
             for loop_ in unit.shape().loops.iter() {
                 let proofs = counted_unless_stopped(&unit, loop_, None, false);
-                let placed = |proof: &CountedLoop| proof.count.is_some() || trips(proof, &mut |_, args| args[0].clone()).is_some();
+                let placed = |proof: &CountedLoop| {
+                    proof.count.is_some() || trips(proof, &mut |_, args| args[0].clone()).is_some()
+                };
                 if proofs.iter().any(|proof| proof.count.is_some()) {
                     constant += 1;
                 } else if proofs.iter().any(placed) {
@@ -1810,8 +1973,16 @@ fn loop_count_table() {
                 } else if !basics(&unit, loop_).is_empty() || !pointers(&unit, loop_).is_empty() {
                     uncounted += 1;
                     if std::env::var("LOOPS_SHOW").is_ok() {
-                        let counters = basics(&unit, loop_).values().map(|one| format!("{:?}+{:?}", one.start, one.step)).collect::<Vec<_>>();
-                        eprintln!("uncounted {} {}: {}", path.file_stem().unwrap().to_string_lossy(), gname.as_deref().unwrap_or("?"), counters.join(" "));
+                        let counters = basics(&unit, loop_)
+                            .values()
+                            .map(|one| format!("{:?}+{:?}", one.start, one.step))
+                            .collect::<Vec<_>>();
+                        eprintln!(
+                            "uncounted {} {}: {}",
+                            path.file_stem().unwrap().to_string_lossy(),
+                            gname.as_deref().unwrap_or("?"),
+                            counters.join(" ")
+                        );
                     }
                 } else {
                     no_counter += 1;
@@ -1819,13 +1990,26 @@ fn loop_count_table() {
             }
         }
     }
-    eprintln!("loops in {programs} programs: constant {constant}, symbolic {symbolic}, counter but uncounted {uncounted}, no counter {no_counter}");
+    eprintln!(
+        "loops in {programs} programs: constant {constant}, symbolic {symbolic}, counter but uncounted {uncounted}, no counter {no_counter}"
+    );
 }
 
 /// An 8-bit counter from `%a` by `step` while `%i test %b`, its step promised not
 /// to wrap, tested `shape` (pre or post-stepped behind a guard on the entry); it returns its trips.
-fn tested_for_order(shape: &str, test: IntPredicate, step: i64) -> Parsed {
-    let flag = if matches!(test, IntPredicate::Ult | IntPredicate::Ule | IntPredicate::Ugt | IntPredicate::Uge) { "nuw" } else { "nsw" };
+fn tested_for_order(
+    shape: &str,
+    test: IntPredicate,
+    step: i64,
+) -> Parsed {
+    let flag = if matches!(
+        test,
+        IntPredicate::Ult | IntPredicate::Ule | IntPredicate::Ugt | IntPredicate::Uge
+    ) {
+        "nuw"
+    } else {
+        "nsw"
+    };
     let word = spelled(test);
     let advance = if step > 0 { format!("add {flag} i8 %i, {step}") } else { format!("sub {flag} i8 %i, {}", -step) };
     let text = if shape == "pre" {
@@ -1900,19 +2084,26 @@ fn test_an_ordered_loop_by_a_longer_step_is_counted_by_dividing_the_distance() {
             for step in steps {
                 let parsed = tested_for_order(shape, test, step);
                 let proofs = parsed.counted(false);
-                let proof = proofs.iter().find(|one| one.test == test).unwrap_or_else(|| panic!("{shape} {test:?} step {step}: no proof"));
+                let proof = proofs
+                    .iter()
+                    .find(|one| one.test == test)
+                    .unwrap_or_else(|| panic!("{shape} {test:?} step {step}: no proof"));
                 for a in (0..256).step_by(3) {
                     for b in (0..256).step_by(5) {
                         // An input the loop is not entered with has no count to check; one that wraps is poison.
-                        let Some(actual) = parsed.run(&[(a, 8), (b, 8)], 3_000).filter(|&actual| actual != 0) else { continue };
+                        let Some(actual) = parsed.run(&[(a, 8), (b, 8)], 3_000).filter(|&actual| actual != 0) else {
+                            continue;
+                        };
                         let mut computed = |kind: BinaryOp, args: Vec<AffineOperand>| {
                             let number = |one: &AffineOperand| match one {
                                 AffineOperand::Const(known) => known.n.clone(),
-                                AffineOperand::Value(value, _) => BigInt::from(match parsed.function().value(*value).name.as_deref() {
-                                    Some("a") => a,
-                                    Some("b") => b,
-                                    other => panic!("{other:?}"),
-                                } as u128),
+                                AffineOperand::Value(value, _) => {
+                                    BigInt::from(match parsed.function().value(*value).name.as_deref() {
+                                        Some("a") => a,
+                                        Some("b") => b,
+                                        other => panic!("{other:?}"),
+                                    } as u128)
+                                }
                             };
                             let (x, y) = (number(&args[0]), number(&args[1]));
                             AffineOperand::constant(
@@ -1925,7 +2116,9 @@ fn test_an_ordered_loop_by_a_longer_step_is_counted_by_dividing_the_distance() {
                                 8,
                             )
                         };
-                        let AffineOperand::Const(counted) = trips(proof, &mut computed).expect("placed") else { panic!("a number") };
+                        let AffineOperand::Const(counted) = trips(proof, &mut computed).expect("placed") else {
+                            panic!("a number")
+                        };
                         assert_eq!(counted.n, BigInt::from(actual), "{shape} {test:?} step {step} a {a} b {b}");
                         checked += 1;
                     }
@@ -1964,7 +2157,10 @@ b3:
 }
 
 /// `i = start; while i ule n { i = add FLAGS i, 1 }`, 8 bits.
-fn climbing(start: &str, flags: &str) -> Parsed {
+fn climbing(
+    start: &str,
+    flags: &str,
+) -> Parsed {
     Parsed::new(&format!(
         "define i8 @f(i8 %a, i8 %n) {{
 b0:
@@ -2031,7 +2227,10 @@ b3:
 
 /// quicksort's partition: `i` starts where the counter `j` does and goes
 /// up by one on the ways that swap (`step`), by `by` there.
-fn partition(by: u32, flags: &str) -> Parsed {
+fn partition(
+    by: u32,
+    flags: &str,
+) -> Parsed {
     Parsed::new(&format!(
         "define i16 @f(i16 %lo, i16 %hi, i16 %pivot) {{
 entry:
@@ -2079,8 +2278,9 @@ fn test_a_follower_that_may_pass_its_counter_proves_nothing() {
     assert!(followers(&fast.unit(), &fast.only_loop()).is_empty(), "i + 2 may pass j + 1");
 }
 
-/// A loop tested after its trips, entered behind `a < b` through a block of its own, makes `b - a` trips: the count a pre-tested one would,
-/// materialised (`trips` gave none for a posttested loop whose step is one, so a copied loop test lost its symbolic count).
+/// A loop tested after its trips, entered behind `a < b` through a block of its own, makes `b - a` trips: the count a
+/// pre-tested one would, materialised (`trips` gave none for a posttested loop whose step is one, so a copied loop test
+/// lost its symbolic count).
 #[test]
 fn test_a_guarded_posttested_loop_of_unit_steps_has_its_trips() {
     let parsed = Parsed::new(

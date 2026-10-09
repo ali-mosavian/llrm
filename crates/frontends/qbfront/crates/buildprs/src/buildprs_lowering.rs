@@ -10,8 +10,7 @@ use crate::buildprs_dispatch::derive_nonterminal_dispatch_order;
 use crate::buildprs_encoder::{BranchTarget, EncodeConfig, EncodeError, StateEncoder, ND_BRANCH};
 use crate::buildprs_generator::{parse_opcode_equates_from_peropcod, ENCODE1BYTE_QBASIC_11};
 use crate::buildprs_grammar::{
-    EmitArg, EmitDirective, GrammarExpr, GrammarFile, GrammarProduction, GrammarRule,
-    NonTerminalDef,
+    EmitArg, EmitDirective, GrammarExpr, GrammarFile, GrammarProduction, GrammarRule, NonTerminalDef,
 };
 use crate::buildprs_tokens;
 
@@ -36,11 +35,7 @@ impl Default for LoweringConfig {
 
 impl LoweringConfig {
     pub fn qbasic_11() -> Self {
-        Self {
-            encode1byte: ENCODE1BYTE_QBASIC_11,
-            num_nt_int: NUM_NT_INT_QBASIC_11,
-            num_nt_ext: NUM_NT_EXT_QBASIC_11,
-        }
+        Self { encode1byte: ENCODE1BYTE_QBASIC_11, num_nt_int: NUM_NT_INT_QBASIC_11, num_nt_ext: NUM_NT_EXT_QBASIC_11 }
     }
 
     pub fn encode_config(&self) -> EncodeConfig {
@@ -58,7 +53,10 @@ pub struct LoweringSymbols {
 }
 
 impl LoweringSymbols {
-    pub fn from_qbasic_11_grammar(grammar: &GrammarFile, peropcod: &str) -> Self {
+    pub fn from_qbasic_11_grammar(
+        grammar: &GrammarFile,
+        peropcod: &str,
+    ) -> Self {
         let token_artifacts = buildprs_tokens::generate_token_artifacts(&grammar.tokens);
         let dispatch = derive_nonterminal_dispatch_order(grammar);
 
@@ -126,17 +124,17 @@ impl LoweringSymbols {
             return Ok(NODE_BASE_QBASIC_11 + *index);
         }
         if let Some(index) = self.ext_nt_index.get(name) {
-            let base = if config.num_nt_int == 0 && config.num_nt_ext == 1 {
-                ND_BRANCH as u16
-            } else {
-                NODE_BASE_QBASIC_11
-            };
+            let base =
+                if config.num_nt_int == 0 && config.num_nt_ext == 1 { ND_BRANCH as u16 } else { NODE_BASE_QBASIC_11 };
             return Ok(base + config.num_nt_int + *index);
         }
         Err(LoweringError::UnknownNonTerminal(name.to_string()))
     }
 
-    pub fn resolve_emit_word(&self, args: &[EmitArg]) -> Result<u16, LoweringError> {
+    pub fn resolve_emit_word(
+        &self,
+        args: &[EmitArg],
+    ) -> Result<u16, LoweringError> {
         if args.is_empty() {
             return Err(LoweringError::EmptyEmit);
         }
@@ -147,9 +145,7 @@ impl LoweringSymbols {
         }
 
         let secondary = resolve_emit_arg(&self.opcodes, &args[1])?;
-        Ok(secondary
-            .wrapping_mul(OPCODE_MASK + 1)
-            .wrapping_add(primary))
+        Ok(secondary.wrapping_mul(OPCODE_MASK + 1).wrapping_add(primary))
     }
 }
 
@@ -165,7 +161,10 @@ pub enum LoweringError {
 }
 
 impl std::fmt::Display for LoweringError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         match self {
             Self::EmptyEmit => write!(f, "EMIT directive has no operands"),
             Self::UnknownEmitSymbol(symbol) => write!(f, "unknown EMIT symbol `{symbol}`"),
@@ -213,22 +212,28 @@ pub struct SharedSuffixRegistry {
 
 impl SharedSuffixRegistry {
     pub fn new(offsets: BTreeMap<Vec<String>, usize>) -> Self {
-        Self {
-            offsets,
-            terminal_offsets: BTreeMap::new(),
-        }
+        Self { offsets, terminal_offsets: BTreeMap::new() }
     }
 
-    pub fn with_terminal_offsets(mut self, terminal_offsets: BTreeMap<Vec<String>, usize>) -> Self {
+    pub fn with_terminal_offsets(
+        mut self,
+        terminal_offsets: BTreeMap<Vec<String>, usize>,
+    ) -> Self {
         self.terminal_offsets = terminal_offsets;
         self
     }
 
-    fn offset_for(&self, key: &[String]) -> Option<usize> {
+    fn offset_for(
+        &self,
+        key: &[String],
+    ) -> Option<usize> {
         self.offsets.get(key).copied()
     }
 
-    fn terminal_offset_for(&self, key: &[String]) -> Option<usize> {
+    fn terminal_offset_for(
+        &self,
+        key: &[String],
+    ) -> Option<usize> {
         self.terminal_offsets.get(key).copied()
     }
 }
@@ -264,26 +269,15 @@ fn qbasic_11_shared_suffix_offsets(
         let mut cursor = base_offset;
         for index in 0..items.len() {
             if index > 0 {
-                suffixes
-                    .entry(expr_suffix_key(&items[index..]))
-                    .or_insert(cursor);
+                suffixes.entry(expr_suffix_key(&items[index..])).or_insert(cursor);
             }
             cursor += estimated_qbasic_11_item_len(&items[index], symbols, config);
         }
     }
 
-    suffixes.insert(
-        vec!["nt:EMITFFFF".to_string(), "nt:EMITFFFF".to_string()],
-        983,
-    );
-    suffixes.insert(
-        vec!["nt:EMITFFFF".to_string(), "nt:IdType".to_string()],
-        1676,
-    );
-    suffixes.insert(
-        vec!["nt:optCommaExp".to_string(), "tk:tkRParen".to_string()],
-        2758,
-    );
+    suffixes.insert(vec!["nt:EMITFFFF".to_string(), "nt:EMITFFFF".to_string()], 983);
+    suffixes.insert(vec!["nt:EMITFFFF".to_string(), "nt:IdType".to_string()], 1676);
+    suffixes.insert(vec!["nt:optCommaExp".to_string(), "tk:tkRParen".to_string()], 2758);
     suffixes.insert(vec!["tk:tkEQ".to_string(), "nt:Exp".to_string()], 1487);
     suffixes
 }
@@ -372,7 +366,10 @@ pub struct LoweringBuilder {
 }
 
 impl LoweringBuilder {
-    pub fn new(symbols: LoweringSymbols, config: LoweringConfig) -> Self {
+    pub fn new(
+        symbols: LoweringSymbols,
+        config: LoweringConfig,
+    ) -> Self {
         Self {
             encoder: StateEncoder::with_config(config.encode_config()),
             labels: BTreeMap::new(),
@@ -391,13 +388,13 @@ impl LoweringBuilder {
         config: LoweringConfig,
         shared_suffixes: SharedSuffixRegistry,
     ) -> Self {
-        Self {
-            shared_suffixes,
-            ..Self::new(symbols, config)
-        }
+        Self { shared_suffixes, ..Self::new(symbols, config) }
     }
 
-    pub fn with_base_offset(mut self, base_offset: usize) -> Self {
+    pub fn with_base_offset(
+        mut self,
+        base_offset: usize,
+    ) -> Self {
         self.base_offset = base_offset;
         self
     }
@@ -416,7 +413,10 @@ impl LoweringBuilder {
         label
     }
 
-    pub(crate) fn bind_label(&mut self, label: Label) {
+    pub(crate) fn bind_label(
+        &mut self,
+        label: Label,
+    ) {
         self.labels.insert(label, self.pos());
     }
 
@@ -439,20 +439,22 @@ impl LoweringBuilder {
         Ok(())
     }
 
-    pub fn lower_statement_rule(&mut self, rule: &GrammarRule) -> Result<(), LoweringError> {
+    pub fn lower_statement_rule(
+        &mut self,
+        rule: &GrammarRule,
+    ) -> Result<(), LoweringError> {
         self.lower_production(&rule.production)
     }
 
-    pub fn lower_nonterminal(&mut self, nt: &NonTerminalDef) -> Result<(), LoweringError> {
+    pub fn lower_nonterminal(
+        &mut self,
+        nt: &NonTerminalDef,
+    ) -> Result<(), LoweringError> {
         if nt.external {
             return Err(LoweringError::UnsupportedExpr("EXTERNAL nonterminal"));
         }
 
-        let production = nt
-            .body
-            .productions
-            .first()
-            .ok_or(LoweringError::UnsupportedExpr("empty nonterminal body"))?;
+        let production = nt.body.productions.first().ok_or(LoweringError::UnsupportedExpr("empty nonterminal body"))?;
 
         if nt.has_index {
             match self.lower_indexed_alternative(&production.expr) {
@@ -485,26 +487,26 @@ impl LoweringBuilder {
                     } else if let Some(args) = split_parenthesized_optional_second_arg(items) {
                         self.lower_parenthesized_optional_second_arg(&args, 2812)?;
                     } else {
-                        let lowered_shared_terminal =
-                            if let Some((last, prefix)) = items.split_last() {
-                                if let Some(offset) = self.shared_terminal_offset_for(last) {
-                                    if self.estimated_items_len(prefix).is_some_and(|prefix_len| {
-                                        offset == self.base_offset + prefix_len
-                                    }) {
-                                        self.lower_sequence(prefix)?;
-                                        self.emit_expr_node_to_accept(last)?;
-                                        self.reject();
-                                    } else {
-                                        self.lower_terminal_shared_suffix(prefix, offset)?;
-                                    }
-                                    self.production_terminated = true;
-                                    true
+                        let lowered_shared_terminal = if let Some((last, prefix)) = items.split_last() {
+                            if let Some(offset) = self.shared_terminal_offset_for(last) {
+                                if self
+                                    .estimated_items_len(prefix)
+                                    .is_some_and(|prefix_len| offset == self.base_offset + prefix_len)
+                                {
+                                    self.lower_sequence(prefix)?;
+                                    self.emit_expr_node_to_accept(last)?;
+                                    self.reject();
                                 } else {
-                                    false
+                                    self.lower_terminal_shared_suffix(prefix, offset)?;
                                 }
+                                self.production_terminated = true;
+                                true
                             } else {
                                 false
-                            };
+                            }
+                        } else {
+                            false
+                        };
                         if !lowered_shared_terminal {
                             self.lower_expr(&production.expr)?;
                         }
@@ -532,7 +534,10 @@ impl LoweringBuilder {
         self.encoder.reject();
     }
 
-    pub fn lower_expr(&mut self, expr: &GrammarExpr) -> Result<(), LoweringError> {
+    pub fn lower_expr(
+        &mut self,
+        expr: &GrammarExpr,
+    ) -> Result<(), LoweringError> {
         match expr {
             GrammarExpr::Empty => Ok(()),
             GrammarExpr::Sequence(items) => self.lower_sequence(items),
@@ -557,7 +562,10 @@ impl LoweringBuilder {
         }
     }
 
-    fn lower_sequence(&mut self, items: &[GrammarExpr]) -> Result<(), LoweringError> {
+    fn lower_sequence(
+        &mut self,
+        items: &[GrammarExpr],
+    ) -> Result<(), LoweringError> {
         if let Some((prefix, suffix)) = split_alternative_prefix(items) {
             let suffix_label = self.create_label();
             self.lower_alternative_forward(prefix, suffix_label, false)?;
@@ -609,7 +617,10 @@ impl LoweringBuilder {
         Ok(())
     }
 
-    fn lower_terminal_sequence(&mut self, items: &[GrammarExpr]) -> Result<(), LoweringError> {
+    fn lower_terminal_sequence(
+        &mut self,
+        items: &[GrammarExpr],
+    ) -> Result<(), LoweringError> {
         if let Some(statement) = split_print_list_statement(items) {
             return self.lower_print_list_statement(&statement);
         }
@@ -631,10 +642,7 @@ impl LoweringBuilder {
         }
 
         if let Some(prefix) = split_marked_range_sequence(items) {
-            if let Some(exp_offset) = self
-                .shared_suffixes
-                .terminal_offset_for(&["nt:Exp".to_string()])
-            {
+            if let Some(exp_offset) = self.shared_suffixes.terminal_offset_for(&["nt:Exp".to_string()]) {
                 return self.lower_marked_range_sequence(prefix, exp_offset);
             }
         }
@@ -656,19 +664,13 @@ impl LoweringBuilder {
         }
 
         if let Some(opcodes) = file_record_statement_ops(items) {
-            if let Some(emitffff_offset) = self
-                .shared_suffixes
-                .terminal_offset_for(&["nt:EMITFFFF".to_string()])
-            {
+            if let Some(emitffff_offset) = self.shared_suffixes.terminal_offset_for(&["nt:EMITFFFF".to_string()]) {
                 return self.lower_file_record_statement(&opcodes, emitffff_offset);
             }
         }
 
         if is_put_graphics_statement_sequence(items) {
-            if let Some(emitffff_offset) = self
-                .shared_suffixes
-                .terminal_offset_for(&["nt:EMITFFFF".to_string()])
-            {
+            if let Some(emitffff_offset) = self.shared_suffixes.terminal_offset_for(&["nt:EMITFFFF".to_string()]) {
                 return self.lower_put_graphics_statement(emitffff_offset);
             }
         }
@@ -680,8 +682,7 @@ impl LoweringBuilder {
                         return self.lower_suffix_dispatch_branches(&branches, offset);
                     }
                     if let Some((branches, fallback)) = split_node_arms_with_fallback(prefix) {
-                        return self
-                            .lower_suffix_node_arms_with_fallback(&branches, fallback, offset);
+                        return self.lower_suffix_node_arms_with_fallback(&branches, fallback, offset);
                     }
                 }
             }
@@ -757,13 +758,12 @@ impl LoweringBuilder {
         }
     }
 
-    fn lower_alternative(&mut self, items: &[GrammarExpr]) -> Result<(), LoweringError> {
+    fn lower_alternative(
+        &mut self,
+        items: &[GrammarExpr],
+    ) -> Result<(), LoweringError> {
         if let Some(dispatch) = split_print_item_dispatch(items) {
-            if dispatch.comma_emit.is_none()
-                || self
-                    .shared_terminal_offset_for(dispatch.end_print_exp)
-                    .is_some()
-            {
+            if dispatch.comma_emit.is_none() || self.shared_terminal_offset_for(dispatch.end_print_exp).is_some() {
                 return self.lower_print_item_dispatch(&dispatch);
             }
         }
@@ -809,22 +809,15 @@ impl LoweringBuilder {
         }
 
         if is_on_statement_alternative(items) {
-            let emitffff_offset = self
-                .shared_suffixes
-                .terminal_offset_for(&["nt:EMITFFFF".to_string()]);
-            let labln_offset = self
-                .shared_suffixes
-                .terminal_offset_for(&["nt:LabLn".to_string()]);
+            let emitffff_offset = self.shared_suffixes.terminal_offset_for(&["nt:EMITFFFF".to_string()]);
+            let labln_offset = self.shared_suffixes.terminal_offset_for(&["nt:LabLn".to_string()]);
             if let (Some(emitffff_offset), Some(labln_offset)) = (emitffff_offset, labln_offset) {
                 return self.lower_on_statement(emitffff_offset, labln_offset);
             }
         }
 
         if is_next_statement_alternative(items) {
-            if let Some(emitffff_offset) = self
-                .shared_suffixes
-                .terminal_offset_for(&["nt:EMITFFFF".to_string()])
-            {
+            if let Some(emitffff_offset) = self.shared_suffixes.terminal_offset_for(&["nt:EMITFFFF".to_string()]) {
                 return self.lower_next_statement(emitffff_offset);
             }
         }
@@ -864,9 +857,7 @@ impl LoweringBuilder {
         &mut self,
         branches: &[AlternativeDispatchBranch<'_>],
     ) -> Result<(), LoweringError> {
-        let labels = (0..branches.len())
-            .map(|_| self.create_label())
-            .collect::<Vec<_>>();
+        let labels = (0..branches.len()).map(|_| self.create_label()).collect::<Vec<_>>();
 
         for (branch, label) in branches.iter().zip(labels.iter().copied()) {
             self.emit_expr_node_to_label(branch.node, label)?;
@@ -972,9 +963,7 @@ impl LoweringBuilder {
         branches: &[SuffixDispatchBranch],
         suffix_offset: usize,
     ) -> Result<(), LoweringError> {
-        let labels = (0..branches.len())
-            .map(|_| self.create_label())
-            .collect::<Vec<_>>();
+        let labels = (0..branches.len()).map(|_| self.create_label()).collect::<Vec<_>>();
 
         for (branch, label) in branches.iter().zip(labels.iter().copied()) {
             for node in &branch.nodes {
@@ -1015,9 +1004,7 @@ impl LoweringBuilder {
         fallback: &GrammarExpr,
         suffix_offset: usize,
     ) -> Result<(), LoweringError> {
-        let labels = (0..branches.len())
-            .map(|_| self.create_label())
-            .collect::<Vec<_>>();
+        let labels = (0..branches.len()).map(|_| self.create_label()).collect::<Vec<_>>();
 
         for (branch, label) in branches.iter().zip(labels.iter().copied()) {
             self.emit_expr_node_to_label(branch.node, label)?;
@@ -1245,9 +1232,7 @@ impl LoweringBuilder {
         self.bind_label(after_input);
         self.lower_input_prompt_prefix(prompt_join)?;
         self.bind_label(prompt_join);
-        let id_node = self
-            .symbols
-            .node_id_for_nonterminal("IdAryElemRef", &self.config)?;
+        let id_node = self.symbols.node_id_for_nonterminal("IdAryElemRef", &self.config)?;
         self.emit_node_to_accept(id_node)?;
         self.reject();
 
@@ -1255,7 +1240,10 @@ impl LoweringBuilder {
         Ok(())
     }
 
-    fn lower_input_prompt_prefix(&mut self, prompt_join: Label) -> Result<(), LoweringError> {
+    fn lower_input_prompt_prefix(
+        &mut self,
+        prompt_join: Label,
+    ) -> Result<(), LoweringError> {
         let lbs_prompt = self.create_label();
         let semicolon_prompt = self.create_label();
         let literal_prompt = self.create_label();
@@ -1333,7 +1321,10 @@ impl LoweringBuilder {
         Ok(())
     }
 
-    fn lower_next_statement(&mut self, emitffff_offset: usize) -> Result<(), LoweringError> {
+    fn lower_next_statement(
+        &mut self,
+        emitffff_offset: usize,
+    ) -> Result<(), LoweringError> {
         let id_body = self.create_label();
         let first_operand = self.create_label();
         let repeat_start = self.create_label();
@@ -1343,10 +1334,7 @@ impl LoweringBuilder {
 
         self.emit_nonterminal_to_label("IdFor", id_body)?;
         self.emit_symbol("opStNext")?;
-        self.lower_required_node_to_offset(
-            &GrammarExpr::NonTerminalRef("EMITFFFF".to_string()),
-            emitffff_offset,
-        )?;
+        self.lower_required_node_to_offset(&GrammarExpr::NonTerminalRef("EMITFFFF".to_string()), emitffff_offset)?;
         self.reject();
 
         self.bind_label(id_body);
@@ -1436,9 +1424,7 @@ impl LoweringBuilder {
         &mut self,
         dispatch: &AcceptingNodesEmitSuffixFallback<'_>,
     ) -> Result<(), LoweringError> {
-        let labels = (0..dispatch.branches.len())
-            .map(|_| self.create_label())
-            .collect::<Vec<_>>();
+        let labels = (0..dispatch.branches.len()).map(|_| self.create_label()).collect::<Vec<_>>();
 
         for node in &dispatch.accepting_nodes {
             self.emit_expr_node_to_accept(node)?;
@@ -1513,9 +1499,7 @@ impl LoweringBuilder {
         &mut self,
         dispatch: &PriorityEmitDispatch<'_>,
     ) -> Result<(), LoweringError> {
-        let labels = (0..dispatch.branches.len())
-            .map(|_| self.create_label())
-            .collect::<Vec<_>>();
+        let labels = (0..dispatch.branches.len()).map(|_| self.create_label()).collect::<Vec<_>>();
 
         for (branch, label) in dispatch.branches.iter().zip(labels.iter().copied()) {
             self.emit_expr_node_to_label(branch.node, label)?;
@@ -1556,20 +1540,14 @@ impl LoweringBuilder {
     ) -> Result<(), LoweringError> {
         match body {
             PriorityEmitBody::Sequence(items) => self.lower_sequence_emit_accept(items),
-            PriorityEmitBody::NestedNodeFallback {
-                matched_items,
-                fallback_emit,
-            } => {
+            PriorityEmitBody::NestedNodeFallback { matched_items, fallback_emit } => {
                 let matched_items = flatten_single_group_sequence(matched_items);
-                let (last, prefix) = matched_items
-                    .split_last()
-                    .ok_or(LoweringError::UnsupportedExpr("priority emit body"))?;
+                let (last, prefix) =
+                    matched_items.split_last().ok_or(LoweringError::UnsupportedExpr("priority emit body"))?;
                 let GrammarExpr::Emit(matched_emit) = last else {
                     return Err(LoweringError::UnsupportedExpr("priority emit body"));
                 };
-                let (node, rest) = prefix
-                    .split_first()
-                    .ok_or(LoweringError::UnsupportedExpr("priority emit body"))?;
+                let (node, rest) = prefix.split_first().ok_or(LoweringError::UnsupportedExpr("priority emit body"))?;
                 let matched = self.create_label();
                 self.emit_expr_node_to_label(node, matched)?;
                 self.lower_emit(fallback_emit)?;
@@ -1596,9 +1574,8 @@ impl LoweringBuilder {
         let final_body = self.create_label();
 
         self.emit_expr_node_to_label(first_node, first_body)?;
-        let (second_node, second_rest) = second_prefix
-            .split_first()
-            .ok_or(LoweringError::UnsupportedExpr("priority emit fallback"))?;
+        let (second_node, second_rest) =
+            second_prefix.split_first().ok_or(LoweringError::UnsupportedExpr("priority emit fallback"))?;
         self.emit_expr_node_to_label(second_node, second_body)?;
         self.reject();
 
@@ -1747,19 +1724,18 @@ impl LoweringBuilder {
         items: &[GrammarExpr],
         target: Label,
     ) -> Result<(), LoweringError> {
-        let (last, prefix) = items
-            .split_last()
-            .ok_or(LoweringError::UnsupportedExpr("sequence to label"))?;
+        let (last, prefix) = items.split_last().ok_or(LoweringError::UnsupportedExpr("sequence to label"))?;
         self.lower_sequence(prefix)?;
         self.emit_expr_node_to_label(last, target)?;
         self.reject();
         Ok(())
     }
 
-    fn lower_sequence_emit_accept(&mut self, items: &[GrammarExpr]) -> Result<(), LoweringError> {
-        let (last, prefix) = items
-            .split_last()
-            .ok_or(LoweringError::UnsupportedExpr("priority emit body"))?;
+    fn lower_sequence_emit_accept(
+        &mut self,
+        items: &[GrammarExpr],
+    ) -> Result<(), LoweringError> {
+        let (last, prefix) = items.split_last().ok_or(LoweringError::UnsupportedExpr("priority emit body"))?;
         let GrammarExpr::Emit(emit) = last else {
             return Err(LoweringError::UnsupportedExpr("priority emit body"));
         };
@@ -1774,9 +1750,7 @@ impl LoweringBuilder {
         arms: &[TokenMarkArm<'_>],
         join: Label,
     ) -> Result<(), LoweringError> {
-        let labels = (0..arms.len())
-            .map(|_| self.create_label())
-            .collect::<Vec<_>>();
+        let labels = (0..arms.len()).map(|_| self.create_label()).collect::<Vec<_>>();
 
         for (arm, label) in arms.iter().zip(labels.iter().copied()) {
             self.emit_token_to_label(arm.token, label)?;
@@ -1853,9 +1827,7 @@ impl LoweringBuilder {
         self.bind_label(event_after_gosub);
         self.emit_nonterminal_to_label("Lit0", event_lit0)?;
         self.emit_symbol("opEvGosub")?;
-        let labln_node = self
-            .symbols
-            .node_id_for_nonterminal("LabLn", &self.config)?;
+        let labln_node = self.symbols.node_id_for_nonterminal("LabLn", &self.config)?;
         self.emit_node_to_accept(labln_node)?;
         self.reject();
         self.bind_label(event_lit0);
@@ -1899,26 +1871,11 @@ impl LoweringBuilder {
         self.bind_label(mode_body);
         self.lower_token_mark_dispatch(
             &[
-                TokenMarkArm {
-                    token: "tkAPPEND",
-                    mark: 1,
-                },
-                TokenMarkArm {
-                    token: "tkINPUT",
-                    mark: 2,
-                },
-                TokenMarkArm {
-                    token: "tkOUTPUT",
-                    mark: 3,
-                },
-                TokenMarkArm {
-                    token: "tkRANDOM",
-                    mark: 4,
-                },
-                TokenMarkArm {
-                    token: "tkBINARY",
-                    mark: 5,
-                },
+                TokenMarkArm { token: "tkAPPEND", mark: 1 },
+                TokenMarkArm { token: "tkINPUT", mark: 2 },
+                TokenMarkArm { token: "tkOUTPUT", mark: 3 },
+                TokenMarkArm { token: "tkRANDOM", mark: 4 },
+                TokenMarkArm { token: "tkBINARY", mark: 5 },
             ],
             access_join,
         )?;
@@ -2042,9 +1999,7 @@ impl LoweringBuilder {
         &mut self,
         arms: &[NodeMarkArm<'_>],
     ) -> Result<(), LoweringError> {
-        let labels = (0..arms.len())
-            .map(|_| self.create_label())
-            .collect::<Vec<_>>();
+        let labels = (0..arms.len()).map(|_| self.create_label()).collect::<Vec<_>>();
 
         for (arm, label) in arms.iter().zip(labels.iter().copied()) {
             self.emit_expr_node_to_label(arm.node, label)?;
@@ -2066,9 +2021,7 @@ impl LoweringBuilder {
         branches: &[AlternativeDispatchBranch<'_>],
         fallback: &GrammarExpr,
     ) -> Result<(), LoweringError> {
-        let labels = (0..branches.len())
-            .map(|_| self.create_label())
-            .collect::<Vec<_>>();
+        let labels = (0..branches.len()).map(|_| self.create_label()).collect::<Vec<_>>();
 
         for (branch, label) in branches.iter().zip(labels.iter().copied()) {
             self.emit_expr_node_to_label(branch.node, label)?;
@@ -2076,12 +2029,7 @@ impl LoweringBuilder {
 
         self.lower_terminal_alternative_body(fallback, true, true)?;
 
-        for (index, (branch, label)) in branches
-            .iter()
-            .zip(labels.iter().copied())
-            .enumerate()
-            .rev()
-        {
+        for (index, (branch, label)) in branches.iter().zip(labels.iter().copied()).enumerate().rev() {
             self.bind_label(label);
             self.lower_terminal_items(branch.tail, true, index == 0)?;
         }
@@ -2175,7 +2123,11 @@ impl LoweringBuilder {
         Ok(())
     }
 
-    fn lower_common_prefix(&mut self, shared: bool, suffix: Label) -> Result<(), LoweringError> {
+    fn lower_common_prefix(
+        &mut self,
+        shared: bool,
+        suffix: Label,
+    ) -> Result<(), LoweringError> {
         self.emit_symbol("opStCommon")?;
         let slash_alt = self.create_label();
         self.emit_nonterminal_to_label("EMITFFFF", slash_alt)?;
@@ -2206,19 +2158,25 @@ impl LoweringBuilder {
         Ok(())
     }
 
-    fn emit_symbol(&mut self, symbol: &str) -> Result<(), LoweringError> {
-        self.lower_emit(&EmitDirective {
-            args: vec![EmitArg::Ident(symbol.to_string())],
-        })
+    fn emit_symbol(
+        &mut self,
+        symbol: &str,
+    ) -> Result<(), LoweringError> {
+        self.lower_emit(&EmitDirective { args: vec![EmitArg::Ident(symbol.to_string())] })
     }
 
-    fn emit_number(&mut self, value: u32) -> Result<(), LoweringError> {
-        self.lower_emit(&EmitDirective {
-            args: vec![EmitArg::Number(value)],
-        })
+    fn emit_number(
+        &mut self,
+        value: u32,
+    ) -> Result<(), LoweringError> {
+        self.lower_emit(&EmitDirective { args: vec![EmitArg::Number(value)] })
     }
 
-    fn emit_token_to_label(&mut self, token: &str, target: Label) -> Result<(), LoweringError> {
+    fn emit_token_to_label(
+        &mut self,
+        token: &str,
+        target: Label,
+    ) -> Result<(), LoweringError> {
         let node_id = self.symbols.node_id_for_token(token, &self.config)?;
         self.emit_node_to_label(node_id, target)
     }
@@ -2280,9 +2238,7 @@ impl LoweringBuilder {
         branches: &[AlternativeDispatchBranch<'_>],
         success: Label,
     ) -> Result<(), LoweringError> {
-        let labels = (0..branches.len())
-            .map(|_| self.create_label())
-            .collect::<Vec<_>>();
+        let labels = (0..branches.len()).map(|_| self.create_label()).collect::<Vec<_>>();
 
         for (branch, label) in branches.iter().zip(labels.iter().copied()) {
             self.emit_expr_node_to_label(branch.node, label)?;
@@ -2331,9 +2287,7 @@ impl LoweringBuilder {
     ) -> Result<(), LoweringError> {
         match expr {
             GrammarExpr::Group(inner) => self.lower_alternative_arm(inner, success),
-            GrammarExpr::Sequence(items) if !items.is_empty() => {
-                self.lower_sequence_arm(items, success)
-            }
+            GrammarExpr::Sequence(items) if !items.is_empty() => self.lower_sequence_arm(items, success),
             GrammarExpr::Emit(emit) => {
                 self.lower_emit(emit)?;
                 self.branch_to_label(success)
@@ -2371,10 +2325,12 @@ impl LoweringBuilder {
             if matches!(
                 ungroup_expr(first),
                 GrammarExpr::TokenRef(_) | GrammarExpr::NonTerminalRef(_)
-            ) && matches!(
-                ungroup_expr(second),
-                GrammarExpr::TokenRef(_) | GrammarExpr::NonTerminalRef(_)
-            ) {
+            )
+                && matches!(
+                    ungroup_expr(second),
+                    GrammarExpr::TokenRef(_) | GrammarExpr::NonTerminalRef(_)
+                )
+            {
                 let tail_label = self.create_label();
                 self.emit_expr_node_to_label(first, tail_label)?;
                 self.bind_label(tail_label);
@@ -2385,8 +2341,7 @@ impl LoweringBuilder {
         }
 
         match items {
-            [GrammarExpr::TokenRef(token), tail @ (GrammarExpr::TokenRef(_) | GrammarExpr::NonTerminalRef(_))] =>
-            {
+            [GrammarExpr::TokenRef(token), tail @ (GrammarExpr::TokenRef(_) | GrammarExpr::NonTerminalRef(_))] => {
                 let node_id = self.symbols.node_id_for_token(token, &self.config)?;
                 let tail_label = self.create_label();
                 self.emit_node_to_label(node_id, tail_label)?;
@@ -2395,8 +2350,7 @@ impl LoweringBuilder {
                 self.reject();
                 Ok(())
             }
-            [GrammarExpr::NonTerminalRef(name), tail @ (GrammarExpr::TokenRef(_) | GrammarExpr::NonTerminalRef(_))] =>
-            {
+            [GrammarExpr::NonTerminalRef(name), tail @ (GrammarExpr::TokenRef(_) | GrammarExpr::NonTerminalRef(_))] => {
                 let node_id = self.symbols.node_id_for_nonterminal(name, &self.config)?;
                 let tail_label = self.create_label();
                 self.emit_node_to_label(node_id, tail_label)?;
@@ -2432,7 +2386,10 @@ impl LoweringBuilder {
         }
     }
 
-    fn lower_optional(&mut self, inner: &GrammarExpr) -> Result<(), LoweringError> {
+    fn lower_optional(
+        &mut self,
+        inner: &GrammarExpr,
+    ) -> Result<(), LoweringError> {
         if let Some(arms) = split_node_mark_alternatives(inner) {
             return self.lower_optional_node_mark_alternatives(&arms);
         }
@@ -2465,7 +2422,10 @@ impl LoweringBuilder {
         Ok(())
     }
 
-    fn lower_optional_sequence(&mut self, items: &[GrammarExpr]) -> Result<(), LoweringError> {
+    fn lower_optional_sequence(
+        &mut self,
+        items: &[GrammarExpr],
+    ) -> Result<(), LoweringError> {
         let Some((first, rest)) = items.split_first() else {
             return Ok(());
         };
@@ -2517,7 +2477,10 @@ impl LoweringBuilder {
         self.lower_sequence(rest)
     }
 
-    fn lower_optional_continuing(&mut self, inner: &GrammarExpr) -> Result<(), LoweringError> {
+    fn lower_optional_continuing(
+        &mut self,
+        inner: &GrammarExpr,
+    ) -> Result<(), LoweringError> {
         match ungroup_expr(inner) {
             GrammarExpr::Sequence(items) if !items.is_empty() => {
                 let Some((first, rest)) = items.split_first() else {
@@ -2552,7 +2515,10 @@ impl LoweringBuilder {
         }
     }
 
-    fn lower_required_expr(&mut self, expr: &GrammarExpr) -> Result<(), LoweringError> {
+    fn lower_required_expr(
+        &mut self,
+        expr: &GrammarExpr,
+    ) -> Result<(), LoweringError> {
         match expr {
             GrammarExpr::TokenRef(token) => {
                 let node_id = self.symbols.node_id_for_token(token, &self.config)?;
@@ -2599,7 +2565,10 @@ impl LoweringBuilder {
         Ok(())
     }
 
-    fn lower_repeat_accept_on_empty(&mut self, repeat: &GrammarExpr) -> Result<(), LoweringError> {
+    fn lower_repeat_accept_on_empty(
+        &mut self,
+        repeat: &GrammarExpr,
+    ) -> Result<(), LoweringError> {
         let loop_start = self.create_label();
         let repeat_body = self.create_label();
         self.bind_label(loop_start);
@@ -2644,7 +2613,10 @@ impl LoweringBuilder {
         }
     }
 
-    fn emit_expr_node_to_accept(&mut self, expr: &GrammarExpr) -> Result<(), LoweringError> {
+    fn emit_expr_node_to_accept(
+        &mut self,
+        expr: &GrammarExpr,
+    ) -> Result<(), LoweringError> {
         match expr {
             GrammarExpr::TokenRef(token) => {
                 let node_id = self.symbols.node_id_for_token(token, &self.config)?;
@@ -2659,7 +2631,10 @@ impl LoweringBuilder {
         }
     }
 
-    fn lower_repeat(&mut self, inner: &GrammarExpr) -> Result<(), LoweringError> {
+    fn lower_repeat(
+        &mut self,
+        inner: &GrammarExpr,
+    ) -> Result<(), LoweringError> {
         let loop_start = self.create_label();
         self.bind_label(loop_start);
         match inner {
@@ -2672,9 +2647,7 @@ impl LoweringBuilder {
                 let node_id = self.symbols.node_id_for_nonterminal(name, &self.config)?;
                 self.emit_node_to_label(node_id, loop_start)
             }
-            GrammarExpr::Sequence(items) if !items.is_empty() => {
-                self.lower_repeat_sequence(items, loop_start)
-            }
+            GrammarExpr::Sequence(items) if !items.is_empty() => self.lower_repeat_sequence(items, loop_start),
             _ => Err(LoweringError::UnsupportedExpr("Repeat")),
         }
     }
@@ -2748,7 +2721,10 @@ impl LoweringBuilder {
         Ok(())
     }
 
-    fn lower_indexed_alternative(&mut self, expr: &GrammarExpr) -> Result<(), LoweringError> {
+    fn lower_indexed_alternative(
+        &mut self,
+        expr: &GrammarExpr,
+    ) -> Result<(), LoweringError> {
         let branches = indexed_branches(expr)?;
         let header_size = indexed_header_size(&branches, &self.symbols, &self.config)?;
         let body_size = indexed_body_size(&branches);
@@ -2756,9 +2732,7 @@ impl LoweringBuilder {
 
         for (index, branch) in branches.iter().enumerate() {
             let body_offset = first_body + (branches.len() - 1 - index) * body_size;
-            let node_id = self
-                .symbols
-                .node_id_for_token(&branch.token, &self.config)?;
+            let node_id = self.symbols.node_id_for_token(&branch.token, &self.config)?;
             self.emit_node_to_offset(node_id, body_offset)?;
         }
         self.reject();
@@ -2778,13 +2752,8 @@ impl LoweringBuilder {
         node_id: u16,
         target_offset: usize,
     ) -> Result<(), LoweringError> {
-        let (operand_pos, cursor_after_operand) =
-            self.encoder.emit_node_deferred_branch(node_id)?;
-        self.fixups.push(BranchFixup {
-            operand_pos,
-            cursor_after_operand,
-            target: FixupTarget::Offset(target_offset),
-        });
+        let (operand_pos, cursor_after_operand) = self.encoder.emit_node_deferred_branch(node_id)?;
+        self.fixups.push(BranchFixup { operand_pos, cursor_after_operand, target: FixupTarget::Offset(target_offset) });
         Ok(())
     }
 
@@ -2793,8 +2762,7 @@ impl LoweringBuilder {
         node_id: u16,
         target_offset: usize,
     ) -> Result<(), LoweringError> {
-        let (operand_pos, cursor_after_operand) =
-            self.encoder.emit_node_deferred_branch(node_id)?;
+        let (operand_pos, cursor_after_operand) = self.encoder.emit_node_deferred_branch(node_id)?;
         self.fixups.push(BranchFixup {
             operand_pos,
             cursor_after_operand,
@@ -2803,13 +2771,19 @@ impl LoweringBuilder {
         Ok(())
     }
 
-    fn lower_emit(&mut self, emit: &EmitDirective) -> Result<(), LoweringError> {
+    fn lower_emit(
+        &mut self,
+        emit: &EmitDirective,
+    ) -> Result<(), LoweringError> {
         let word = self.symbols.resolve_emit_word(&emit.args)?;
         self.encoder.emit(word);
         Ok(())
     }
 
-    fn lower_required_node(&mut self, node_id: u16) -> Result<(), LoweringError> {
+    fn lower_required_node(
+        &mut self,
+        node_id: u16,
+    ) -> Result<(), LoweringError> {
         let success = self.create_label();
         self.emit_node_to_label(node_id, success)?;
         self.reject();
@@ -2824,9 +2798,7 @@ impl LoweringBuilder {
     ) -> Result<(), LoweringError> {
         let node_id = match expr {
             GrammarExpr::TokenRef(token) => self.symbols.node_id_for_token(token, &self.config)?,
-            GrammarExpr::NonTerminalRef(name) => {
-                self.symbols.node_id_for_nonterminal(name, &self.config)?
-            }
+            GrammarExpr::NonTerminalRef(name) => self.symbols.node_id_for_nonterminal(name, &self.config)?,
             _ => return Err(LoweringError::UnsupportedExpr("shared suffix prefix")),
         };
         self.emit_node_to_global_offset(node_id, target_offset)
@@ -2850,9 +2822,7 @@ impl LoweringBuilder {
         if key.as_slice() != ["nt:optCommaExp".to_string()] {
             return None;
         }
-        self.shared_suffixes
-            .offset_for(&key)
-            .map(|offset| (&items[0], offset))
+        self.shared_suffixes.offset_for(&key).map(|offset| (&items[0], offset))
     }
 
     fn terminal_shared_suffix_target<'a>(
@@ -2863,9 +2833,7 @@ impl LoweringBuilder {
             if items[index..].len() < 2 {
                 return None;
             }
-            let offset = self
-                .shared_suffixes
-                .offset_for(&expr_suffix_key(&items[index..]))?;
+            let offset = self.shared_suffixes.offset_for(&expr_suffix_key(&items[index..]))?;
             let prefix_len = self.estimated_items_len(&items[..index])?;
             if offset == self.base_offset + prefix_len {
                 return None;
@@ -2874,14 +2842,17 @@ impl LoweringBuilder {
         })
     }
 
-    fn estimated_items_len(&self, items: &[GrammarExpr]) -> Option<usize> {
-        items
-            .iter()
-            .map(|item| self.estimated_expr_len(item))
-            .sum::<Option<usize>>()
+    fn estimated_items_len(
+        &self,
+        items: &[GrammarExpr],
+    ) -> Option<usize> {
+        items.iter().map(|item| self.estimated_expr_len(item)).sum::<Option<usize>>()
     }
 
-    fn estimated_expr_len(&self, expr: &GrammarExpr) -> Option<usize> {
+    fn estimated_expr_len(
+        &self,
+        expr: &GrammarExpr,
+    ) -> Option<usize> {
         match expr {
             GrammarExpr::TokenRef(token) => self
                 .symbols
@@ -2953,36 +2924,26 @@ impl LoweringBuilder {
         &self,
         items: &'a [GrammarExpr],
     ) -> Option<ParenthesizedSharedTail<'a>> {
-        let [open @ GrammarExpr::TokenRef(open_token), first, tail, close @ GrammarExpr::TokenRef(close_token)] =
-            items
+        let [open @ GrammarExpr::TokenRef(open_token), first, tail, close @ GrammarExpr::TokenRef(close_token)] = items
         else {
             return None;
         };
-        if open_token != "tkLParen"
-            || close_token != "tkRParen"
-            || !is_node_expr(first)
-            || !is_node_expr(tail)
-        {
+        if open_token != "tkLParen" || close_token != "tkRParen" || !is_node_expr(first) || !is_node_expr(tail) {
             return None;
         }
-        let tail_offset = self
-            .shared_suffixes
-            .offset_for(&expr_suffix_key(&[tail.clone(), close.clone()]))?;
+        let tail_offset = self.shared_suffixes.offset_for(&expr_suffix_key(&[tail.clone(), close.clone()]))?;
         let prefix_len = self.estimated_items_len(&items[..2])?;
         if tail_offset == self.base_offset + prefix_len {
             return None;
         }
-        Some(ParenthesizedSharedTail {
-            open,
-            first: ungroup_expr(first),
-            tail_offset,
-        })
+        Some(ParenthesizedSharedTail { open, first: ungroup_expr(first), tail_offset })
     }
 
-    fn shared_terminal_offset_for(&self, expr: &GrammarExpr) -> Option<usize> {
-        let offset = self
-            .shared_suffixes
-            .terminal_offset_for(&expr_suffix_key(std::slice::from_ref(expr)))?;
+    fn shared_terminal_offset_for(
+        &self,
+        expr: &GrammarExpr,
+    ) -> Option<usize> {
+        let offset = self.shared_suffixes.terminal_offset_for(&expr_suffix_key(std::slice::from_ref(expr)))?;
         if offset == self.base_offset + self.pos() {
             None
         } else {
@@ -2990,39 +2951,43 @@ impl LoweringBuilder {
         }
     }
 
-    fn emit_node_to_label(&mut self, node_id: u16, target: Label) -> Result<(), LoweringError> {
-        let (operand_pos, cursor_after_operand) =
-            self.encoder.emit_node_deferred_branch(node_id)?;
-        self.fixups.push(BranchFixup {
-            operand_pos,
-            cursor_after_operand,
-            target: FixupTarget::Label(target),
-        });
+    fn emit_node_to_label(
+        &mut self,
+        node_id: u16,
+        target: Label,
+    ) -> Result<(), LoweringError> {
+        let (operand_pos, cursor_after_operand) = self.encoder.emit_node_deferred_branch(node_id)?;
+        self.fixups.push(BranchFixup { operand_pos, cursor_after_operand, target: FixupTarget::Label(target) });
         Ok(())
     }
 
-    fn emit_node_to_accept(&mut self, node_id: u16) -> Result<(), LoweringError> {
-        self.encoder
-            .node(node_id, BranchTarget::Accept)
-            .map_err(LoweringError::from)
+    fn emit_node_to_accept(
+        &mut self,
+        node_id: u16,
+    ) -> Result<(), LoweringError> {
+        self.encoder.node(node_id, BranchTarget::Accept).map_err(LoweringError::from)
     }
 
-    fn emit_unconditional_branch(&mut self, target: Label) -> Result<(), LoweringError> {
-        let (operand_pos, cursor_after_operand) =
-            self.encoder.emit_node_deferred_branch(ND_BRANCH as u16)?;
-        self.fixups.push(BranchFixup {
-            operand_pos,
-            cursor_after_operand,
-            target: FixupTarget::Label(target),
-        });
+    fn emit_unconditional_branch(
+        &mut self,
+        target: Label,
+    ) -> Result<(), LoweringError> {
+        let (operand_pos, cursor_after_operand) = self.encoder.emit_node_deferred_branch(ND_BRANCH as u16)?;
+        self.fixups.push(BranchFixup { operand_pos, cursor_after_operand, target: FixupTarget::Label(target) });
         Ok(())
     }
 
-    fn branch_to_label(&mut self, target: Label) -> Result<(), LoweringError> {
+    fn branch_to_label(
+        &mut self,
+        target: Label,
+    ) -> Result<(), LoweringError> {
         self.emit_unconditional_branch(target)
     }
 
-    fn branch_to_offset(&mut self, target: usize) -> Result<(), LoweringError> {
+    fn branch_to_offset(
+        &mut self,
+        target: usize,
+    ) -> Result<(), LoweringError> {
         self.emit_node_to_global_offset(ND_BRANCH as u16, target)
     }
 
@@ -3061,32 +3026,31 @@ impl LoweringBuilder {
         let cursor_after_operand = fixup.cursor_after_operand + shift_before_operand;
         match fixup.target {
             FixupTarget::Label(label) => {
-                let target_pos = *self.labels.get(&label).ok_or_else(|| {
-                    LoweringError::ArtifactParse(format!("unbound label {:?}", label.0))
-                })?;
+                let target_pos = *self
+                    .labels
+                    .get(&label)
+                    .ok_or_else(|| LoweringError::ArtifactParse(format!("unbound label {:?}", label.0)))?;
                 let shift_before_target = shift_before(target_pos, wide_operand_positions);
-                Ok((
-                    BranchTarget::Relative(target_pos + shift_before_target),
-                    cursor_after_operand,
-                ))
+                Ok((BranchTarget::Relative(target_pos + shift_before_target), cursor_after_operand))
             }
-            FixupTarget::Offset(offset) => {
-                Ok((BranchTarget::Relative(offset), cursor_after_operand))
+            FixupTarget::Offset(offset) => Ok((BranchTarget::Relative(offset), cursor_after_operand)),
+            FixupTarget::GlobalOffset(offset) => {
+                Ok((self.offset_branch_target(offset, cursor_after_operand), cursor_after_operand))
             }
-            FixupTarget::GlobalOffset(offset) => Ok((
-                self.offset_branch_target(offset, cursor_after_operand),
-                cursor_after_operand,
-            )),
         }
     }
 
-    fn offset_branch_target(&self, offset: usize, cursor_after_operand: usize) -> BranchTarget {
+    fn offset_branch_target(
+        &self,
+        offset: usize,
+        cursor_after_operand: usize,
+    ) -> BranchTarget {
         let cursor_global = self.base_offset + cursor_after_operand;
         let rel = offset as i64 - cursor_global as i64;
         let half = self.config.encode1byte as i64 / 2;
         let threshold = self.config.encode1byte as i64;
-        let can_encode_relative = (0..=half).contains(&rel)
-            || (rel < 0 && rel + threshold > half && rel + threshold < threshold);
+        let can_encode_relative =
+            (0..=half).contains(&rel) || (rel < 0 && rel + threshold > half && rel + threshold < threshold);
         if can_encode_relative && offset >= self.base_offset {
             BranchTarget::Relative(offset - self.base_offset)
         } else {
@@ -3095,11 +3059,11 @@ impl LoweringBuilder {
     }
 }
 
-fn shift_before(position: usize, wide_operand_positions: &[usize]) -> usize {
-    wide_operand_positions
-        .iter()
-        .filter(|operand_pos| **operand_pos < position)
-        .count()
+fn shift_before(
+    position: usize,
+    wide_operand_positions: &[usize],
+) -> usize {
+    wide_operand_positions.iter().filter(|operand_pos| **operand_pos < position).count()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3120,11 +3084,9 @@ fn split_alternative_prefix(items: &[GrammarExpr]) -> Option<(&[GrammarExpr], &[
 }
 
 fn split_mid_sequence_alternative_suffix(
-    items: &[GrammarExpr],
+    items: &[GrammarExpr]
 ) -> Option<(&[GrammarExpr], &[GrammarExpr], &[GrammarExpr])> {
-    let index = items
-        .iter()
-        .position(|item| alternative_items(item).is_some())?;
+    let index = items.iter().position(|item| alternative_items(item).is_some())?;
     if index + 1 >= items.len() {
         return None;
     }
@@ -3139,10 +3101,12 @@ fn split_optional_prefix_terminal(items: &[GrammarExpr]) -> Option<(&GrammarExpr
     if !matches!(
         ungroup_expr(optional),
         GrammarExpr::TokenRef(_) | GrammarExpr::NonTerminalRef(_)
-    ) || !matches!(
-        ungroup_expr(terminal),
-        GrammarExpr::TokenRef(_) | GrammarExpr::NonTerminalRef(_)
-    ) {
+    )
+        || !matches!(
+            ungroup_expr(terminal),
+            GrammarExpr::TokenRef(_) | GrammarExpr::NonTerminalRef(_)
+        )
+    {
         return None;
     }
     Some((ungroup_expr(optional), ungroup_expr(terminal)))
@@ -3210,9 +3174,7 @@ struct OptionalMarkedParenList<'a> {
 }
 
 fn split_print_list_statement(items: &[GrammarExpr]) -> Option<PrintListStatement<'_>> {
-    let [GrammarExpr::Emit(statement_emit), GrammarExpr::Optional(optional_prefix), list_alternative] =
-        items
-    else {
+    let [GrammarExpr::Emit(statement_emit), GrammarExpr::Optional(optional_prefix), list_alternative] = items else {
         return None;
     };
     if !is_node_expr(optional_prefix) {
@@ -3227,9 +3189,7 @@ fn split_print_list_statement(items: &[GrammarExpr]) -> Option<PrintListStatemen
     let GrammarExpr::Sequence(item_items) = ungroup_expr(item_arm) else {
         return None;
     };
-    let [item_node, GrammarExpr::Repeat(repeat), GrammarExpr::Emit(item_eos_emit)] =
-        item_items.as_slice()
-    else {
+    let [item_node, GrammarExpr::Repeat(repeat), GrammarExpr::Emit(item_eos_emit)] = item_items.as_slice() else {
         return None;
     };
     if !is_node_expr(item_node) {
@@ -3238,9 +3198,7 @@ fn split_print_list_statement(items: &[GrammarExpr]) -> Option<PrintListStatemen
     let GrammarExpr::Sequence(repeat_items) = ungroup_expr(repeat) else {
         return None;
     };
-    let [separator_alternative, GrammarExpr::Emit(separator_emit), repeated_node] =
-        repeat_items.as_slice()
-    else {
+    let [separator_alternative, GrammarExpr::Emit(separator_emit), repeated_node] = repeat_items.as_slice() else {
         return None;
     };
     if !is_node_expr(repeated_node) || ungroup_expr(repeated_node) != ungroup_expr(item_node) {
@@ -3303,10 +3261,7 @@ fn split_optional_marked_paren_list(expr: &GrammarExpr) -> Option<OptionalMarked
     let [separator, repeated_item] = repeat_items.as_slice() else {
         return None;
     };
-    if !is_node_expr(separator)
-        || !is_node_expr(repeated_item)
-        || ungroup_expr(repeated_item) != ungroup_expr(item)
-    {
+    if !is_node_expr(separator) || !is_node_expr(repeated_item) || ungroup_expr(repeated_item) != ungroup_expr(item) {
         return None;
     }
     Some(OptionalMarkedParenList {
@@ -3320,43 +3275,26 @@ fn split_optional_marked_paren_list(expr: &GrammarExpr) -> Option<OptionalMarked
 }
 
 fn split_parenthesized_two_part_arg(items: &[GrammarExpr]) -> Option<ParenthesizedTwoPartArg<'_>> {
-    let [open @ GrammarExpr::TokenRef(open_token), first, second, GrammarExpr::TokenRef(close_token)] =
-        items
-    else {
+    let [open @ GrammarExpr::TokenRef(open_token), first, second, GrammarExpr::TokenRef(close_token)] = items else {
         return None;
     };
-    if open_token != "tkLParen"
-        || close_token != "tkRParen"
-        || !is_node_expr(first)
-        || !is_node_expr(second)
-    {
+    if open_token != "tkLParen" || close_token != "tkRParen" || !is_node_expr(first) || !is_node_expr(second) {
         return None;
     }
-    Some(ParenthesizedTwoPartArg {
-        open,
-        first: ungroup_expr(first),
-        second: ungroup_expr(second),
-    })
+    Some(ParenthesizedTwoPartArg { open, first: ungroup_expr(first), second: ungroup_expr(second) })
 }
 
 fn split_parenthesized_single_arg(items: &[GrammarExpr]) -> Option<ParenthesizedSingleArg<'_>> {
-    let [open @ GrammarExpr::TokenRef(open_token), argument, GrammarExpr::TokenRef(close_token)] =
-        items
-    else {
+    let [open @ GrammarExpr::TokenRef(open_token), argument, GrammarExpr::TokenRef(close_token)] = items else {
         return None;
     };
     if open_token != "tkLParen" || close_token != "tkRParen" || !is_node_expr(argument) {
         return None;
     }
-    Some(ParenthesizedSingleArg {
-        open,
-        argument: ungroup_expr(argument),
-    })
+    Some(ParenthesizedSingleArg { open, argument: ungroup_expr(argument) })
 }
 
-fn split_parenthesized_optional_second_arg(
-    items: &[GrammarExpr],
-) -> Option<ParenthesizedOptionalSecondArg<'_>> {
+fn split_parenthesized_optional_second_arg(items: &[GrammarExpr]) -> Option<ParenthesizedOptionalSecondArg<'_>> {
     let [open @ GrammarExpr::TokenRef(open_token), first, GrammarExpr::Optional(optional), GrammarExpr::TokenRef(close_token)] =
         items
     else {
@@ -3374,12 +3312,7 @@ fn split_parenthesized_optional_second_arg(
     if comma_token != "tkComma" || !is_node_expr(second) {
         return None;
     }
-    Some(ParenthesizedOptionalSecondArg {
-        open,
-        first: ungroup_expr(first),
-        comma,
-        second: ungroup_expr(second),
-    })
+    Some(ParenthesizedOptionalSecondArg { open, first: ungroup_expr(first), comma, second: ungroup_expr(second) })
 }
 
 fn split_node_mark_alternatives(expr: &GrammarExpr) -> Option<Vec<NodeMarkArm<'_>>> {
@@ -3402,10 +3335,7 @@ fn split_node_mark_alternatives(expr: &GrammarExpr) -> Option<Vec<NodeMarkArm<'_
             ) {
                 return None;
             }
-            Some(NodeMarkArm {
-                node: ungroup_expr(node),
-                mark: mark.slot,
-            })
+            Some(NodeMarkArm { node: ungroup_expr(node), mark: mark.slot })
         })
         .collect()
 }
@@ -3428,12 +3358,8 @@ fn file_record_statement_ops(items: &[GrammarExpr]) -> Option<FileRecordOpcodes>
 
     let mut names = Vec::new();
     collect_emit_idents(alternative, &mut names);
-    let default_record = names
-        .iter()
-        .find(|name| !name.contains("Rec") && name.ends_with('1'))?;
-    let record_without_id = names
-        .iter()
-        .find(|name| !name.contains("Rec") && name.ends_with('2'))?;
+    let default_record = names.iter().find(|name| !name.contains("Rec") && name.ends_with('1'))?;
+    let record_without_id = names.iter().find(|name| !name.contains("Rec") && name.ends_with('2'))?;
     let empty_record_with_id = names.iter().find(|name| name.ends_with("Rec2"))?;
     let record_with_id = names.iter().find(|name| name.ends_with("Rec3"))?;
     Some(FileRecordOpcodes {
@@ -3444,7 +3370,10 @@ fn file_record_statement_ops(items: &[GrammarExpr]) -> Option<FileRecordOpcodes>
     })
 }
 
-fn collect_emit_idents(expr: &GrammarExpr, out: &mut Vec<String>) {
+fn collect_emit_idents(
+    expr: &GrammarExpr,
+    out: &mut Vec<String>,
+) {
     match expr {
         GrammarExpr::Emit(emit) => {
             out.extend(emit.args.iter().filter_map(|arg| match arg {
@@ -3500,16 +3429,16 @@ fn is_line_graphics_statement_sequence(items: &[GrammarExpr]) -> bool {
         return false;
     };
 
-    matches!(ungroup_expr(coord), GrammarExpr::NonTerminalRef(name) if name == "coordStep")
-        && minus == "tkMinus"
+    matches!(
+        ungroup_expr(coord),
+        GrammarExpr::NonTerminalRef(name) if name == "coordStep"
+    ) && minus == "tkMinus"
         && coord2 == "coord2Step"
         && expr_contains_mark_slot(options, 4)
 }
 
 fn is_line_input_prompt_sequence(items: &[GrammarExpr]) -> bool {
-    let [GrammarExpr::TokenRef(input), GrammarExpr::Optional(prompt), GrammarExpr::NonTerminalRef(id)] =
-        items
-    else {
+    let [GrammarExpr::TokenRef(input), GrammarExpr::Optional(prompt), GrammarExpr::NonTerminalRef(id)] = items else {
         return false;
     };
 
@@ -3612,7 +3541,10 @@ fn indexed_branches(expr: &GrammarExpr) -> Result<Vec<IndexedBranch>, LoweringEr
         .collect()
 }
 
-fn node_id_encoded_len(node_id: u16, config: &LoweringConfig) -> usize {
+fn node_id_encoded_len(
+    node_id: u16,
+    config: &LoweringConfig,
+) -> usize {
     if node_id < config.encode1byte as u16 {
         1
     } else {
@@ -3636,17 +3568,11 @@ fn indexed_header_size(
 }
 
 fn indexed_body_size(branches: &[IndexedBranch]) -> usize {
-    let emit_bytes = branches
-        .iter()
-        .map(|branch| branch.emits.len() * 3)
-        .max()
-        .unwrap_or(0);
+    let emit_bytes = branches.iter().map(|branch| branch.emits.len() * 3).max().unwrap_or(0);
     emit_bytes + 1
 }
 
-fn parse_indexed_sequence(
-    items: &[GrammarExpr],
-) -> Result<(String, Vec<EmitDirective>), LoweringError> {
+fn parse_indexed_sequence(items: &[GrammarExpr]) -> Result<(String, Vec<EmitDirective>), LoweringError> {
     let mut iter = items.iter();
     let token = match iter.next() {
         Some(GrammarExpr::TokenRef(token)) => token.clone(),
@@ -3661,7 +3587,10 @@ fn parse_indexed_sequence(
     Ok((token, emits))
 }
 
-fn resolve_emit_arg(opcodes: &BTreeMap<String, u16>, arg: &EmitArg) -> Result<u16, LoweringError> {
+fn resolve_emit_arg(
+    opcodes: &BTreeMap<String, u16>,
+    arg: &EmitArg,
+) -> Result<u16, LoweringError> {
     match arg {
         EmitArg::Number(value) => Ok(*value as u16),
         EmitArg::Ident(name) => {
@@ -3676,12 +3605,13 @@ fn resolve_emit_arg(opcodes: &BTreeMap<String, u16>, arg: &EmitArg) -> Result<u1
     }
 }
 
-fn lookup_opcode<'a>(opcodes: &'a BTreeMap<String, u16>, symbol: &str) -> Option<&'a u16> {
-    opcodes.get(symbol).or_else(|| {
-        opcodes
-            .iter()
-            .find_map(|(name, value)| name.eq_ignore_ascii_case(symbol).then_some(value))
-    })
+fn lookup_opcode<'a>(
+    opcodes: &'a BTreeMap<String, u16>,
+    symbol: &str,
+) -> Option<&'a u16> {
+    opcodes
+        .get(symbol)
+        .or_else(|| opcodes.iter().find_map(|(name, value)| name.eq_ignore_ascii_case(symbol).then_some(value)))
 }
 
 fn known_emit_symbol(symbol: &str) -> Option<u16> {
@@ -3706,15 +3636,10 @@ fn parse_irw_equates(text: &str) -> Result<BTreeMap<String, u16>, LoweringError>
             continue;
         }
         let mut parts = trimmed.split_whitespace();
-        let name = parts
-            .next()
-            .unwrap_or_default()
-            .trim_end_matches(':')
-            .to_string();
+        let name = parts.next().unwrap_or_default().trim_end_matches(':').to_string();
         let _eq = parts.next();
-        let value = parts.next().ok_or_else(|| {
-            LoweringError::ArtifactParse(format!("malformed IRW line `{trimmed}`"))
-        })?;
+        let value =
+            parts.next().ok_or_else(|| LoweringError::ArtifactParse(format!("malformed IRW line `{trimmed}`")))?;
         let parsed = parse_asm_number(value)?;
         out.insert(name.clone(), parsed);
         if name.starts_with("IRW_") {
@@ -3760,7 +3685,10 @@ fn parse_ext_nt_order(text: &str) -> Result<BTreeMap<String, u16>, LoweringError
     Ok(out)
 }
 
-fn parse_named_dw_table(text: &str, label: &str) -> Result<BTreeMap<String, u16>, LoweringError> {
+fn parse_named_dw_table(
+    text: &str,
+    label: &str,
+) -> Result<BTreeMap<String, u16>, LoweringError> {
     let mut out = BTreeMap::new();
     let mut in_section = false;
     let mut index = 0u16;
@@ -3791,7 +3719,10 @@ fn parse_named_dw_table(text: &str, label: &str) -> Result<BTreeMap<String, u16>
     Ok(out)
 }
 
-fn label_declares(line: &str, label: &str) -> bool {
+fn label_declares(
+    line: &str,
+    label: &str,
+) -> bool {
     let mut fields = line.split_whitespace();
     matches!(
         (fields.next(), fields.next()),
@@ -3802,36 +3733,24 @@ fn label_declares(line: &str, label: &str) -> bool {
 
 fn is_label_declaration(line: &str) -> bool {
     let mut fields = line.split_whitespace();
-    matches!(fields.nth(1), Some(keyword) if keyword.eq_ignore_ascii_case("label"))
+    matches!(
+        fields.nth(1),
+        Some(keyword) if keyword.eq_ignore_ascii_case("label")
+    )
 }
 
 /// Outcome of lowering one statement or function rule in a whole-grammar pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuleLoweringOutcome {
-    Lowered {
-        anchor: String,
-        offset: u16,
-        byte_len: usize,
-    },
-    Failed {
-        anchor: String,
-        error: LoweringError,
-    },
+    Lowered { anchor: String, offset: u16, byte_len: usize },
+    Failed { anchor: String, error: LoweringError },
 }
 
 /// Outcome of lowering one internal nonterminal in a whole-grammar pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InternalNtLoweringOutcome {
-    Lowered {
-        name: String,
-        offset: u16,
-        byte_len: usize,
-        indexed: bool,
-    },
-    Failed {
-        name: String,
-        error: LoweringError,
-    },
+    Lowered { name: String, offset: u16, byte_len: usize, indexed: bool },
+    Failed { name: String, error: LoweringError },
 }
 
 /// Aggregate coverage counters for a whole-grammar lowering run.
@@ -3848,8 +3767,7 @@ pub struct LoweringCoverageTotals {
 
 impl LoweringCoverageTotals {
     pub fn statements_failed(&self) -> usize {
-        self.statements_total
-            .saturating_sub(self.statements_lowered)
+        self.statements_total.saturating_sub(self.statements_lowered)
     }
 
     pub fn functions_failed(&self) -> usize {
@@ -3857,8 +3775,7 @@ impl LoweringCoverageTotals {
     }
 
     pub fn internal_nt_failed(&self) -> usize {
-        self.internal_nt_total
-            .saturating_sub(self.internal_nt_lowered)
+        self.internal_nt_total.saturating_sub(self.internal_nt_lowered)
     }
 }
 
@@ -3874,7 +3791,10 @@ pub struct UnsupportedShapeSummary {
 }
 
 impl UnsupportedShapeSummary {
-    pub fn record(&mut self, error: &LoweringError) {
+    pub fn record(
+        &mut self,
+        error: &LoweringError,
+    ) {
         match error {
             LoweringError::UnsupportedExpr(kind) => {
                 *self.unsupported_expr.entry(kind).or_default() += 1;
@@ -3909,17 +3829,25 @@ pub struct WholeGrammarLoweringReport {
 
 impl WholeGrammarLoweringReport {
     pub fn lowered_statement_anchors(&self) -> impl Iterator<Item = &str> {
-        self.statements.iter().filter_map(|outcome| match outcome {
-            RuleLoweringOutcome::Lowered { anchor, .. } => Some(anchor.as_str()),
-            RuleLoweringOutcome::Failed { .. } => None,
-        })
+        self.statements
+            .iter()
+            .filter_map(
+                |outcome| match outcome {
+                    RuleLoweringOutcome::Lowered { anchor, .. } => Some(anchor.as_str()),
+                    RuleLoweringOutcome::Failed { .. } => None,
+                },
+            )
     }
 
     pub fn lowered_function_anchors(&self) -> impl Iterator<Item = &str> {
-        self.functions.iter().filter_map(|outcome| match outcome {
-            RuleLoweringOutcome::Lowered { anchor, .. } => Some(anchor.as_str()),
-            RuleLoweringOutcome::Failed { .. } => None,
-        })
+        self.functions
+            .iter()
+            .filter_map(
+                |outcome| match outcome {
+                    RuleLoweringOutcome::Lowered { anchor, .. } => Some(anchor.as_str()),
+                    RuleLoweringOutcome::Failed { .. } => None,
+                },
+            )
     }
 }
 
@@ -3955,12 +3883,7 @@ pub fn lower_whole_grammar(
     symbols: LoweringSymbols,
     config: LoweringConfig,
 ) -> WholeGrammarLoweringResult {
-    lower_whole_grammar_with_shared_suffixes(
-        grammar,
-        symbols,
-        config,
-        SharedSuffixRegistry::default(),
-    )
+    lower_whole_grammar_with_shared_suffixes(grammar, symbols, config, SharedSuffixRegistry::default())
 }
 
 pub fn lower_whole_grammar_with_shared_suffixes(
@@ -3990,11 +3913,7 @@ pub fn lower_whole_grammar_with_shared_suffixes(
             &symbols,
             config,
             &shared_suffixes,
-            if enable_rule_aliasing {
-                Some(&mut rule_aliases)
-            } else {
-                None
-            },
+            if enable_rule_aliasing { Some(&mut rule_aliases) } else { None },
             |builder| builder.lower_statement_rule(rule),
         );
         if let RuleLoweringOutcome::Failed { error, .. } = &outcome {
@@ -4014,11 +3933,7 @@ pub fn lower_whole_grammar_with_shared_suffixes(
             &symbols,
             config,
             &shared_suffixes,
-            if enable_rule_aliasing {
-                Some(&mut rule_aliases)
-            } else {
-                None
-            },
+            if enable_rule_aliasing { Some(&mut rule_aliases) } else { None },
             |builder| builder.lower_statement_rule(rule),
         );
         if let RuleLoweringOutcome::Failed { error, .. } = &outcome {
@@ -4049,14 +3964,10 @@ pub fn lower_whole_grammar_with_shared_suffixes(
         internal_nonterminals.push(outcome);
     }
 
-    let statements_lowered = statements
-        .iter()
-        .filter(|outcome| matches!(outcome, RuleLoweringOutcome::Lowered { .. }))
-        .count();
-    let functions_lowered = functions
-        .iter()
-        .filter(|outcome| matches!(outcome, RuleLoweringOutcome::Lowered { .. }))
-        .count();
+    let statements_lowered =
+        statements.iter().filter(|outcome| matches!(outcome, RuleLoweringOutcome::Lowered { .. })).count();
+    let functions_lowered =
+        functions.iter().filter(|outcome| matches!(outcome, RuleLoweringOutcome::Lowered { .. })).count();
     let internal_nt_lowered = internal_nonterminals
         .iter()
         .filter(|outcome| matches!(outcome, InternalNtLoweringOutcome::Lowered { .. }))
@@ -4109,9 +4020,8 @@ fn lower_rule_with_symbols(
         }
     };
 
-    let mut builder =
-        LoweringBuilder::with_shared_suffixes(symbols.clone(), config, shared_suffixes.clone())
-            .with_base_offset(offset as usize);
+    let mut builder = LoweringBuilder::with_shared_suffixes(symbols.clone(), config, shared_suffixes.clone())
+        .with_base_offset(offset as usize);
     match lower(&mut builder) {
         Ok(()) => match builder.finish() {
             Ok(bytes) => {
@@ -4141,21 +4051,11 @@ fn lower_rule_with_symbols(
                 // Only insert the FIRST offset into the BTreeMap so existing callers
                 // that key by anchor name still get a deterministic value.
                 offsets.entry(rule.anchor.clone()).or_insert(offset);
-                RuleLoweringOutcome::Lowered {
-                    anchor: rule.anchor.clone(),
-                    offset,
-                    byte_len,
-                }
+                RuleLoweringOutcome::Lowered { anchor: rule.anchor.clone(), offset, byte_len }
             }
-            Err(error) => RuleLoweringOutcome::Failed {
-                anchor: rule.anchor.clone(),
-                error,
-            },
+            Err(error) => RuleLoweringOutcome::Failed { anchor: rule.anchor.clone(), error },
         },
-        Err(error) => RuleLoweringOutcome::Failed {
-            anchor: rule.anchor.clone(),
-            error,
-        },
+        Err(error) => RuleLoweringOutcome::Failed { anchor: rule.anchor.clone(), error },
     }
 }
 
@@ -4186,68 +4086,43 @@ fn lower_internal_nt_into_buffer(
         }
     };
 
-    let mut builder =
-        LoweringBuilder::with_shared_suffixes(symbols.clone(), config, shared_suffixes.clone())
-            .with_base_offset(offset as usize);
+    let mut builder = LoweringBuilder::with_shared_suffixes(symbols.clone(), config, shared_suffixes.clone())
+        .with_base_offset(offset as usize);
     match builder.lower_nonterminal(nt) {
         Ok(()) => match builder.finish() {
             Ok(bytes) => {
                 let mut byte_len = bytes.len();
-                let offset = if let Some(alias_offset) =
-                    internal_shared_body_offset(nt, shared_suffixes, usize::from(offset))
-                {
-                    match lower_internal_nt_bytes(
-                        nt,
-                        symbols.clone(),
-                        config,
-                        shared_suffixes,
-                        alias_offset,
-                    ) {
-                        Ok(alias_bytes) => byte_len = alias_bytes.len(),
-                        Err(error) => {
-                            return InternalNtLoweringOutcome::Failed {
-                                name: nt.name.clone(),
-                                error,
-                            };
+                let offset =
+                    if let Some(alias_offset) = internal_shared_body_offset(nt, shared_suffixes, usize::from(offset)) {
+                        match lower_internal_nt_bytes(nt, symbols.clone(), config, shared_suffixes, alias_offset) {
+                            Ok(alias_bytes) => byte_len = alias_bytes.len(),
+                            Err(error) => {
+                                return InternalNtLoweringOutcome::Failed { name: nt.name.clone(), error };
+                            }
                         }
-                    }
-                    match u16::try_from(alias_offset) {
-                        Ok(alias_offset) => alias_offset,
-                        Err(_) => {
-                            return InternalNtLoweringOutcome::Failed {
-                                name: nt.name.clone(),
-                                error: LoweringError::ArtifactParse(
-                                    "tState buffer exceeds u16".to_string(),
-                                ),
-                            };
+                        match u16::try_from(alias_offset) {
+                            Ok(alias_offset) => alias_offset,
+                            Err(_) => {
+                                return InternalNtLoweringOutcome::Failed {
+                                    name: nt.name.clone(),
+                                    error: LoweringError::ArtifactParse("tState buffer exceeds u16".to_string()),
+                                };
+                            }
                         }
-                    }
-                } else {
-                    byte_len =
-                        logical_internal_byte_len(usize::from(offset), byte_len, int_nt_disp);
-                    state.extend(bytes);
-                    offset
-                };
+                    } else {
+                        byte_len = logical_internal_byte_len(usize::from(offset), byte_len, int_nt_disp);
+                        state.extend(bytes);
+                        offset
+                    };
                 int_nt_disp.insert(nt.name.clone(), offset);
                 if nt.has_index {
                     sti_offsets.insert(nt.name.clone(), offset);
                 }
-                InternalNtLoweringOutcome::Lowered {
-                    name: nt.name.clone(),
-                    offset,
-                    byte_len,
-                    indexed: nt.has_index,
-                }
+                InternalNtLoweringOutcome::Lowered { name: nt.name.clone(), offset, byte_len, indexed: nt.has_index }
             }
-            Err(error) => InternalNtLoweringOutcome::Failed {
-                name: nt.name.clone(),
-                error,
-            },
+            Err(error) => InternalNtLoweringOutcome::Failed { name: nt.name.clone(), error },
         },
-        Err(error) => InternalNtLoweringOutcome::Failed {
-            name: nt.name.clone(),
-            error,
-        },
+        Err(error) => InternalNtLoweringOutcome::Failed { name: nt.name.clone(), error },
     }
 }
 
@@ -4273,8 +4148,7 @@ fn lower_internal_nt_bytes(
     base_offset: usize,
 ) -> Result<Vec<u8>, LoweringError> {
     let mut builder =
-        LoweringBuilder::with_shared_suffixes(symbols, config, shared_suffixes.clone())
-            .with_base_offset(base_offset);
+        LoweringBuilder::with_shared_suffixes(symbols, config, shared_suffixes.clone()).with_base_offset(base_offset);
     builder.lower_nonterminal(nt)?;
     builder.finish()
 }
@@ -4296,12 +4170,9 @@ fn internal_shared_body_offset(
 fn parse_asm_number(token: &str) -> Result<u16, LoweringError> {
     let token = token.trim();
     if let Some(hex) = token.strip_suffix('H').or_else(|| token.strip_suffix('h')) {
-        return u16::from_str_radix(hex, 16)
-            .map_err(|error| LoweringError::ArtifactParse(error.to_string()));
+        return u16::from_str_radix(hex, 16).map_err(|error| LoweringError::ArtifactParse(error.to_string()));
     }
-    token
-        .parse::<u16>()
-        .map_err(|error| LoweringError::ArtifactParse(error.to_string()))
+    token.parse::<u16>().map_err(|error| LoweringError::ArtifactParse(error.to_string()))
 }
 
 #[cfg(test)]

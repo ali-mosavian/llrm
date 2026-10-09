@@ -7,8 +7,7 @@
 use std::ops::{Range, RangeInclusive};
 
 use iced_x86::{
-    Code, Decoder, DecoderOptions, FlowControl, Instruction, InstructionInfoFactory, OpAccess,
-    OpKind, Register,
+    Code, Decoder, DecoderOptions, FlowControl, Instruction, InstructionInfoFactory, OpAccess, OpKind, Register,
 };
 
 /// BC targets an 8086; rewritten instructions use 386 forms in a 16-bit segment.
@@ -33,20 +32,10 @@ pub const INTERRUPT: u8 = 0xCD;
 pub const STANDS_IN: RangeInclusive<u8> = 0x34..=0x3D;
 
 /// Iced accesses that write an operand, matching Python's `WRITES`.
-pub const WRITES: [OpAccess; 4] = [
-    OpAccess::Write,
-    OpAccess::ReadWrite,
-    OpAccess::CondWrite,
-    OpAccess::ReadCondWrite,
-];
+pub const WRITES: [OpAccess; 4] = [OpAccess::Write, OpAccess::ReadWrite, OpAccess::CondWrite, OpAccess::ReadCondWrite];
 
 /// Iced accesses that read an operand, matching Python's `READS`.
-pub const READS: [OpAccess; 4] = [
-    OpAccess::Read,
-    OpAccess::ReadWrite,
-    OpAccess::CondRead,
-    OpAccess::ReadCondWrite,
-];
+pub const READS: [OpAccess; 4] = [OpAccess::Read, OpAccess::ReadWrite, OpAccess::CondRead, OpAccess::ReadCondWrite];
 
 /// Makes the scoped iced access-fact factory used by callers needing it.
 ///
@@ -95,10 +84,7 @@ impl Insn {
     /// Every flag this leaves other than as it found it.
     #[must_use]
     pub fn writes(&self) -> u32 {
-        self.insn.rflags_written()
-            | self.insn.rflags_cleared()
-            | self.insn.rflags_set()
-            | self.insn.rflags_undefined()
+        self.insn.rflags_written() | self.insn.rflags_cleared() | self.insn.rflags_set() | self.insn.rflags_undefined()
     }
 
     /// Where a self-relative branch goes, or `None` if it is not one.
@@ -123,20 +109,15 @@ impl Insn {
     /// The displacement as the instruction means it, sign and all.
     #[must_use]
     pub fn displacement(&self) -> i64 {
-        if self.disp_len == 0 {
-            0
-        } else {
-            to_signed(self.insn.memory_displacement64(), (BITNESS / 8) as usize)
-        }
+        if self.disp_len == 0 { 0 } else { to_signed(self.insn.memory_displacement64(), (BITNESS / 8) as usize) }
     }
 
     #[must_use]
-    pub fn reads_memory(&self, operand: usize) -> bool {
-        (if operand == 0 {
-            self.insn.op0_kind()
-        } else {
-            self.insn.op1_kind()
-        }) == MEMORY
+    pub fn reads_memory(
+        &self,
+        operand: usize,
+    ) -> bool {
+        (if operand == 0 { self.insn.op0_kind() } else { self.insn.op1_kind() }) == MEMORY
     }
 
     #[must_use]
@@ -150,30 +131,31 @@ impl Insn {
     }
 
     #[must_use]
-    pub fn register(&self, operand: usize) -> Register {
-        if operand == 0 {
-            self.insn.op0_register()
-        } else {
-            self.insn.op1_register()
-        }
+    pub fn register(
+        &self,
+        operand: usize,
+    ) -> Register {
+        if operand == 0 { self.insn.op0_register() } else { self.insn.op1_register() }
     }
 }
 
 /// Reads a `width`-byte raw field as two's complement.
 #[must_use]
-pub fn to_signed(raw: u64, width: usize) -> i64 {
+pub fn to_signed(
+    raw: u64,
+    width: usize,
+) -> i64 {
     let bits = width * 8;
     let sign = 1_u64 << (bits - 1);
-    if raw >= sign {
-        (raw as i128 - (1_i128 << bits)) as i64
-    } else {
-        raw as i64
-    }
+    if raw >= sign { (raw as i128 - (1_i128 << bits)) as i64 } else { raw as i64 }
 }
 
 /// Bytes an emulator interrupt means, and how many bytes it hides.
 #[must_use]
-pub fn stood_in_for(code: &[u8], at: usize) -> Option<(Vec<u8>, usize)> {
+pub fn stood_in_for(
+    code: &[u8],
+    at: usize,
+) -> Option<(Vec<u8>, usize)> {
     let escape = *code.get(at + 1)?;
     let tail_end = (at + 2 + 15).min(code.len());
     let tail = &code[at + 2..tail_end];
@@ -184,10 +166,7 @@ pub fn stood_in_for(code: &[u8], at: usize) -> Option<(Vec<u8>, usize)> {
             stood_in.extend_from_slice(tail);
             Some((stood_in, 1))
         }
-        escape
-            if escape == Stands::Segmented as u8
-                && tail.first().is_some_and(|opcode| ESC.contains(opcode)) =>
-        {
+        escape if escape == Stands::Segmented as u8 && tail.first().is_some_and(|opcode| ESC.contains(opcode)) => {
             Some((tail.to_vec(), 0))
         }
         escape if escape == Stands::Fwait as u8 => Some((vec![WAIT], 1)),
@@ -197,7 +176,10 @@ pub fn stood_in_for(code: &[u8], at: usize) -> Option<(Vec<u8>, usize)> {
 
 /// Decodes an x87 instruction wearing the emulator's interrupt as its first byte.
 #[must_use]
-pub fn emulated(code: &[u8], at: usize) -> Option<Insn> {
+pub fn emulated(
+    code: &[u8],
+    at: usize,
+) -> Option<Insn> {
     let (stood_in, hidden) = stood_in_for(code, at)?;
     let mut decoder = Decoder::with_ip(BITNESS, &stood_in, 0, DecoderOptions::NONE);
     if !decoder.can_decode() {
@@ -218,36 +200,23 @@ pub fn emulated(code: &[u8], at: usize) -> Option<Insn> {
         at,
         length,
         insn,
-        disp_at: where_
-            .has_displacement()
-            .then(|| operand + where_.displacement_offset()),
-        disp_len: if where_.has_displacement() {
-            where_.displacement_size()
-        } else {
-            0
-        },
-        imm_at: where_
-            .has_immediate()
-            .then(|| operand + where_.immediate_offset()),
-        imm_len: if where_.has_immediate() {
-            where_.immediate_size()
-        } else {
-            0
-        },
+        disp_at: where_.has_displacement().then(|| operand + where_.displacement_offset()),
+        disp_len: if where_.has_displacement() { where_.displacement_size() } else { 0 },
+        imm_at: where_.has_immediate().then(|| operand + where_.immediate_offset()),
+        imm_len: if where_.has_immediate() { where_.immediate_size() } else { 0 },
     })
 }
 
 /// Decodes the instruction at `at`, if the bytes contain one.
 #[must_use]
-pub fn decode(code: &[u8], at: usize) -> Option<Insn> {
+pub fn decode(
+    code: &[u8],
+    at: usize,
+) -> Option<Insn> {
     if at >= code.len() {
         return None;
     }
-    if code[at] == INTERRUPT
-        && code
-            .get(at + 1)
-            .is_some_and(|stand_in| STANDS_IN.contains(stand_in))
-    {
+    if code[at] == INTERRUPT && code.get(at + 1).is_some_and(|stand_in| STANDS_IN.contains(stand_in)) {
         if let Some(found) = emulated(code, at) {
             return Some(found);
         }
@@ -272,34 +241,29 @@ pub fn decode(code: &[u8], at: usize) -> Option<Insn> {
         at,
         length: insn.len(),
         insn,
-        disp_at: where_
-            .has_displacement()
-            .then(|| at + where_.displacement_offset()),
-        disp_len: if where_.has_displacement() {
-            where_.displacement_size()
-        } else {
-            0
-        },
-        imm_at: where_
-            .has_immediate()
-            .then(|| at + where_.immediate_offset()),
-        imm_len: if where_.has_immediate() {
-            where_.immediate_size()
-        } else {
-            0
-        },
+        disp_at: where_.has_displacement().then(|| at + where_.displacement_offset()),
+        disp_len: if where_.has_displacement() { where_.displacement_size() } else { 0 },
+        imm_at: where_.has_immediate().then(|| at + where_.immediate_offset()),
+        imm_len: if where_.has_immediate() { where_.immediate_size() } else { 0 },
     })
 }
 
 /// The instruction length at `at`, if it decodes.
 #[must_use]
-pub fn length(code: &[u8], at: usize) -> Option<usize> {
+pub fn length(
+    code: &[u8],
+    at: usize,
+) -> Option<usize> {
     decode(code, at).map(|insn| insn.length)
 }
 
 /// Every instruction from `start`, and the offset where decoding gave up.
 #[must_use]
-pub fn run(code: &[u8], start: usize, end: usize) -> (Vec<Insn>, Option<usize>) {
+pub fn run(
+    code: &[u8],
+    start: usize,
+    end: usize,
+) -> (Vec<Insn>, Option<usize>) {
     let mut found = Vec::new();
     let mut at = start;
     while at < end {
@@ -323,14 +287,12 @@ mod tests {
     use iced_x86::{Code, FlowControl, Register};
 
     use super::{
-        BITNESS, EMULATED, ESC, INTERRUPT, MEMORY, NO_REGISTER, READS, STANDS_IN, Stands, WAIT,
-        WRITES, decode, length, run,
+        BITNESS, EMULATED, ESC, INTERRUPT, MEMORY, NO_REGISTER, READS, STANDS_IN, Stands, WAIT, WRITES, decode, length,
+        run,
     };
 
     fn hx(text: &str) -> Vec<u8> {
-        text.split_whitespace()
-            .map(|byte| u8::from_str_radix(byte, 16).unwrap())
-            .collect()
+        text.split_whitespace().map(|byte| u8::from_str_radix(byte, 16).unwrap()).collect()
     }
 
     /// CPython's `random.seed(20260828); random.randrange(256)` stream.
@@ -347,17 +309,15 @@ mod tests {
             let mut state = [0; 624];
             state[0] = 19650218;
             for index in 1..624 {
-                state[index] = 1812433253_u32
-                    .wrapping_mul(state[index - 1] ^ (state[index - 1] >> 30))
-                    .wrapping_add(index as u32);
+                state[index] =
+                    1812433253_u32.wrapping_mul(state[index - 1] ^ (state[index - 1] >> 30)).wrapping_add(index as u32);
             }
             let key = [seed];
             let (mut index, mut key_index) = (1, 0);
             for _ in 0..624.max(key.len()) {
-                state[index] = (state[index]
-                    ^ (state[index - 1] ^ (state[index - 1] >> 30)).wrapping_mul(1664525))
-                .wrapping_add(key[key_index])
-                .wrapping_add(key_index as u32);
+                state[index] = (state[index] ^ (state[index - 1] ^ (state[index - 1] >> 30)).wrapping_mul(1664525))
+                    .wrapping_add(key[key_index])
+                    .wrapping_add(key_index as u32);
                 index += 1;
                 key_index += 1;
                 if index == 624 {
@@ -369,9 +329,8 @@ mod tests {
                 }
             }
             for _ in 0..623 {
-                state[index] = (state[index]
-                    ^ (state[index - 1] ^ (state[index - 1] >> 30)).wrapping_mul(1566083941))
-                .wrapping_sub(index as u32);
+                state[index] = (state[index] ^ (state[index - 1] ^ (state[index - 1] >> 30)).wrapping_mul(1566083941))
+                    .wrapping_sub(index as u32);
                 index += 1;
                 if index == 624 {
                     state[0] = state[623];
@@ -385,11 +344,9 @@ mod tests {
         fn next_u32(&mut self) -> u32 {
             if self.index == 624 {
                 for index in 0..624 {
-                    let y = (self.state[index] & 0x8000_0000)
-                        | (self.state[(index + 1) % 624] & 0x7FFF_FFFF);
-                    self.state[index] = self.state[(index + 397) % 624]
-                        ^ (y >> 1)
-                        ^ if y & 1 == 0 { 0 } else { 0x9908_B0DF };
+                    let y = (self.state[index] & 0x8000_0000) | (self.state[(index + 1) % 624] & 0x7FFF_FFFF);
+                    self.state[index] =
+                        self.state[(index + 397) % 624] ^ (y >> 1) ^ if y & 1 == 0 { 0 } else { 0x9908_B0DF };
                 }
                 self.index = 0;
             }
@@ -459,10 +416,7 @@ mod tests {
             ("8B C1", None, 0, None, 0),
         ] {
             let insn = decode(&hx(enc), 0).unwrap();
-            assert_eq!(
-                (insn.disp_at, insn.disp_len, insn.imm_at, insn.imm_len),
-                (disp_at, disp_len, imm_at, imm_len)
-            );
+            assert_eq!((insn.disp_at, insn.disp_len, insn.imm_at, insn.imm_len), (disp_at, disp_len, imm_at, imm_len));
         }
     }
 
@@ -481,10 +435,7 @@ mod tests {
         }
         let shift = decode(&hx("D3 E0"), 0).unwrap();
         assert_ne!(shift.insn.rflags_undefined(), 0);
-        assert_eq!(
-            shift.writes() & shift.insn.rflags_undefined(),
-            shift.insn.rflags_undefined()
-        );
+        assert_eq!(shift.writes() & shift.insn.rflags_undefined(), shift.insn.rflags_undefined());
     }
 
     #[test]
@@ -525,10 +476,7 @@ mod tests {
         for op in ["8B", "A1", "81", "9A", "0F", "C8", "F7"] {
             for count in 1..=5 {
                 let code = hx(op).repeat(count);
-                assert!(
-                    length(&code, 0).is_none_or(|got| got <= code.len()),
-                    "{op} x {count}"
-                );
+                assert!(length(&code, 0).is_none_or(|got| got <= code.len()), "{op} x {count}");
             }
         }
     }
@@ -578,25 +526,9 @@ mod tests {
     #[test]
     fn emulator_operand_offsets_rebase_to_the_interrupt_source_bytes() {
         let escaped = decode(&hx("CD 35 46 C8"), 0).unwrap();
-        assert_eq!(
-            (
-                escaped.disp_at,
-                escaped.disp_len,
-                escaped.imm_at,
-                escaped.imm_len
-            ),
-            (Some(3), 1, None, 0)
-        );
+        assert_eq!((escaped.disp_at, escaped.disp_len, escaped.imm_at, escaped.imm_len), (Some(3), 1, None, 0));
         let segmented = decode(&hx("CD 3C DF 06 12 00"), 0).unwrap();
-        assert_eq!(
-            (
-                segmented.disp_at,
-                segmented.disp_len,
-                segmented.imm_at,
-                segmented.imm_len
-            ),
-            (Some(4), 2, None, 0)
-        );
+        assert_eq!((segmented.disp_at, segmented.disp_len, segmented.imm_at, segmented.imm_len), (Some(4), 2, None, 0));
     }
 
     #[test]
@@ -624,20 +556,13 @@ mod tests {
         let blob = python_random_bytes();
         assert_eq!(
             &blob[..32],
-            &hx(
-                "BB A8 6A 8C EA 71 0E FC 8B C5 BE 3C 2C 6F 37 DC BF 7D 80 96 54 32 0A F6 A0 9F 0F 2D 59 13 0B 18"
-            )
+            &hx("BB A8 6A 8C EA 71 0E FC 8B C5 BE 3C 2C 6F 37 DC BF 7D 80 96 54 32 0A F6 A0 9F 0F 2D 59 13 0B 18")
         );
         assert_eq!(
             &blob[3968..],
-            &hx(
-                "BE F2 10 EB 4C F4 6C B3 71 BA 8E BA 60 81 8C 48 E7 DE BD 73 DB E6 E6 68 6F 9E E1 BD 32 B2 62 0A"
-            )
+            &hx("BE F2 10 EB 4C F4 6C B3 71 BA 8E BA 60 81 8C 48 E7 DE BD 73 DB E6 E6 68 6F 9E E1 BD 32 B2 62 0A")
         );
-        assert_eq!(
-            blob.iter().map(|byte| usize::from(*byte)).sum::<usize>(),
-            510526
-        );
+        assert_eq!(blob.iter().map(|byte| usize::from(*byte)).sum::<usize>(), 510526);
         child.stdin.as_mut().unwrap().write_all(&blob).unwrap();
         let output = child.wait_with_output().unwrap();
         let marks: Vec<(usize, String)> = String::from_utf8_lossy(&output.stdout)
@@ -649,22 +574,16 @@ mod tests {
             })
             .collect();
         let joined = [
-            "wait", "lock", "rep", "repe", "repne", "repz", "repnz", "cs", "ds", "es", "ss", "fs",
-            "gs", "a16", "a32", "o16", "o32",
+            "wait", "lock", "rep", "repe", "repne", "repz", "repnz", "cs", "ds", "es", "ss", "fs", "gs", "a16", "a32",
+            "o16", "o32",
         ];
         let (mut agree, mut wrong) = (0, Vec::new());
         for pair in marks.windows(2) {
             let (at, text) = (&pair[0].0, &pair[0].1);
-            if text.starts_with("db 0x")
-                || joined.contains(&text.split_whitespace().next().unwrap_or(""))
-            {
+            if text.starts_with("db 0x") || joined.contains(&text.split_whitespace().next().unwrap_or("")) {
                 continue;
             }
-            if blob[*at] == INTERRUPT
-                && blob
-                    .get(*at + 1)
-                    .is_some_and(|byte| EMULATED.contains(byte))
-            {
+            if blob[*at] == INTERRUPT && blob.get(*at + 1).is_some_and(|byte| EMULATED.contains(byte)) {
                 continue;
             }
             let want = pair[1].0 - *at;

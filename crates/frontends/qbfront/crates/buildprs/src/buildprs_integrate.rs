@@ -12,7 +12,10 @@ pub enum IntegrateError {
 }
 
 impl std::fmt::Display for IntegrateError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         match self {
             Self::AmbiguousStateGraph { anchor } => {
                 write!(f, "ambiguous state graph while integrating {anchor}")
@@ -42,11 +45,7 @@ pub fn integrate(
 
     splice_states(graph, Some(state), anchor)?;
 
-    let result = if opt_level.combines_states() {
-        combine_states(graph, Some(state)).unwrap_or(state)
-    } else {
-        state
-    };
+    let result = if opt_level.combines_states() { combine_states(graph, Some(state)).unwrap_or(state) } else { state };
 
     if result == state {
         graph.prepend_global(state);
@@ -55,7 +54,10 @@ pub fn integrate(
     Ok(Some(result))
 }
 
-pub fn normalize_true(graph: &mut StateGraph, state: Option<NodeId>) {
+pub fn normalize_true(
+    graph: &mut StateGraph,
+    state: Option<NodeId>,
+) {
     let mut seen = BTreeSet::new();
     normalize_true_inner(graph, state, &mut seen);
 }
@@ -97,7 +99,10 @@ fn normalize_true_inner(
     }
 }
 
-pub fn normalize_false(graph: &mut StateGraph, state: Option<NodeId>) {
+pub fn normalize_false(
+    graph: &mut StateGraph,
+    state: Option<NodeId>,
+) {
     let mut seen = BTreeSet::new();
     normalize_false_inner(graph, state, &mut seen);
 }
@@ -142,7 +147,10 @@ fn normalize_false_inner(
     }
 }
 
-fn is_glue_branch(graph: &StateGraph, id: NodeId) -> bool {
+fn is_glue_branch(
+    graph: &StateGraph,
+    id: NodeId,
+) -> bool {
     graph.node(id).kind == StateKind::Branch && graph.node(id).payload == 0
 }
 
@@ -190,17 +198,13 @@ fn splice_states_inner(
         if graph.node(state).kind != StateKind::Branch
             && compare_trees(graph, Some(state), Some(next)) != TreeComparison::Different
         {
-            return Err(IntegrateError::AmbiguousStateGraph {
-                anchor: anchor.to_string(),
-            });
+            return Err(IntegrateError::AmbiguousStateGraph { anchor: anchor.to_string() });
         }
 
         cursor = next;
     }
 
-    if !graph.node(state).flags.contains(StateFlags::FALSE_SHARED)
-        && graph.node(state).kind != StateKind::Branch
-    {
+    if !graph.node(state).flags.contains(StateFlags::FALSE_SHARED) && graph.node(state).kind != StateKind::Branch {
         splice_states_inner(graph, graph.node(state).false_link, anchor, seen)?;
     }
 
@@ -220,8 +224,7 @@ mod tests {
         let mut graph = StateGraph::new();
         let root = graph.add_node(StateNode::emit(1));
 
-        let result = integrate(&mut graph, Some(root), "sample", OptLevel::O0)
-            .expect("integrate should succeed");
+        let result = integrate(&mut graph, Some(root), "sample", OptLevel::O0).expect("integrate should succeed");
 
         assert_eq!(result, Some(root));
         assert_eq!(graph.global_roots(), vec![root]);

@@ -27,35 +27,55 @@ impl Parsed {
         crate::testing::with_registers(Unit::of(&self.module, &self.layout, function(&self.module, "f")))
     }
 
-    fn value(&self, name: &str) -> ValueId {
+    fn value(
+        &self,
+        name: &str,
+    ) -> ValueId {
         value(function(&self.module, "f"), name)
     }
 
-    fn made(&self, name: &str) -> InstId {
+    fn made(
+        &self,
+        name: &str,
+    ) -> InstId {
         let f = function(&self.module, "f");
         let wanted = self.value(name);
         f.walk().map(|(_, inst)| inst).find(|&inst| f.instruction(inst).result == Some(wanted)).expect("defined")
     }
 
     /// The instructions of `@f` whose opcode `is` picks.
-    fn all(&self, is: impl Fn(&Opcode) -> bool) -> Vec<InstId> {
+    fn all(
+        &self,
+        is: impl Fn(&Opcode) -> bool,
+    ) -> Vec<InstId> {
         let f = function(&self.module, "f");
         f.walk().map(|(_, inst)| inst).filter(|&inst| is(&f.instruction(inst).opcode)).collect()
     }
 
     /// What `known` says of `%name`, memory solved with `calls`.
-    fn solved(&self, name: &str, calls: &Calls) -> Option<Known> {
+    fn solved(
+        &self,
+        name: &str,
+        calls: &Calls,
+    ) -> Option<Known> {
         known(&self.unit(), Some(calls), None, None).get(&self.value(name)).cloned()
     }
 
     /// What `_result` makes of `%name` given facts about named values.
-    fn result(&self, name: &str, facts: &[(&str, Known)]) -> Option<Known> {
+    fn result(
+        &self,
+        name: &str,
+        facts: &[(&str, Known)],
+    ) -> Option<Known> {
         let facts = facts.iter().map(|(name, fact)| (self.value(name), fact.clone())).collect::<IndexMap<_, _>>();
         _result(&self.unit(), self.made(name), &facts, None)
     }
 }
 
-fn one(operation: &str, source: &str) -> Parsed {
+fn one(
+    operation: &str,
+    source: &str,
+) -> Parsed {
     Parsed::new(&format!(
         "define void @f({source} %x) {{
 b0:
@@ -101,7 +121,11 @@ b0:
 ",
     );
     assert_eq!(parsed.solved("loaded", &Calls::default()), Some(Known::new(9, 16)));
-    assert_eq!(known(&parsed.unit(), None, None, None).get(&parsed.value("loaded")), None, "memory is solved only when asked");
+    assert_eq!(
+        known(&parsed.unit(), None, None, None).get(&parsed.value("loaded")),
+        None,
+        "memory is solved only when asked"
+    );
 }
 
 #[test]
@@ -160,7 +184,9 @@ fn test_equal_integer_operands_are_zero_without_input_facts() {
 /// peelsize decides an unrolled iteration's branch by it.
 #[test]
 fn a_compare_of_known_numbers_folds_to_its_bit() {
-    for (predicate, want) in [("slt", 1), ("ult", 0), ("sgt", 0), ("ugt", 1), ("eq", 0), ("ne", 1), ("sle", 1), ("uge", 1)] {
+    for (predicate, want) in
+        [("slt", 1), ("ult", 0), ("sgt", 0), ("ugt", 1), ("eq", 0), ("ne", 1), ("sle", 1), ("uge", 1)]
+    {
         let parsed = one(&format!("icmp {predicate} i16 %x, 5"), "i16");
         assert_eq!(parsed.result("y", &[("x", Known::new(0xFFFF, 16))]), Some(Known::new(want, 1)), "{predicate}");
         assert_eq!(parsed.result("y", &[]), None, "{predicate}");
@@ -197,8 +223,14 @@ fn test_int64_shift_uses_all_six_count_bits() {
 
 #[test]
 fn an_arithmetic_shift_keeps_the_sign() {
-    assert_eq!(one("ashr i16 %x, 1", "i16").result("y", &[("x", Known::new(0x8000, 16))]), Some(Known::new(0xC000, 16)));
-    assert_eq!(one("ashr i16 %x, 1", "i16").result("y", &[("x", Known::new(0x4000, 16))]), Some(Known::new(0x2000, 16)));
+    assert_eq!(
+        one("ashr i16 %x, 1", "i16").result("y", &[("x", Known::new(0x8000, 16))]),
+        Some(Known::new(0xC000, 16))
+    );
+    assert_eq!(
+        one("ashr i16 %x, 1", "i16").result("y", &[("x", Known::new(0x4000, 16))]),
+        Some(Known::new(0x2000, 16))
+    );
 }
 
 #[test]
@@ -214,7 +246,12 @@ fn test_constant_steps_wrap_at_the_value_width() {
 /// A division is computed where it does not fault, as `division` gives it.
 #[test]
 fn test_division_is_folded_where_it_does_not_fault() {
-    for (kind, answer) in [(BinaryOp::SDiv, Some(-3_i64)), (BinaryOp::UDiv, Some(0x7FFC)), (BinaryOp::SRem, Some(-1)), (BinaryOp::URem, Some(1))] {
+    for (kind, answer) in [
+        (BinaryOp::SDiv, Some(-3_i64)),
+        (BinaryOp::UDiv, Some(0x7FFC)),
+        (BinaryOp::SRem, Some(-1)),
+        (BinaryOp::URem, Some(1)),
+    ] {
         let spelling = llrm_mir::opcode::spelling(&llrm_mir::opcode::BINARY, kind);
         let parsed = one(&format!("{spelling} i16 -7, 2"), "i16");
         assert_eq!(parsed.result("y", &[]), answer.map(|n| Known::new(masked(&BigInt::from(n), 16), 16)), "{spelling}");
@@ -243,10 +280,16 @@ fn division_gives_quotient_and_remainder_but_not_where_it_faults() {
 /// i8 quotient had none.
 #[test]
 fn division_folds_at_every_width() {
-    for (operation, width, expected) in [("sdiv i8 -7, 2", 8, (-3_i64, -1_i64)), ("udiv i8 -7, 2", 8, (0x7C, 1)), ("urem i1 1, 1", 1, (1, 0))] {
+    for (operation, width, expected) in
+        [("sdiv i8 -7, 2", 8, (-3_i64, -1_i64)), ("udiv i8 -7, 2", 8, (0x7C, 1)), ("urem i1 1, 1", 1, (1, 0))]
+    {
         let parsed = one(operation, &format!("i{width}"));
         let got = division(&parsed.unit(), parsed.made("y"), &IndexMap::default());
-        assert_eq!(got, Some((masked(&BigInt::from(expected.0), width), masked(&BigInt::from(expected.1), width))), "{operation}");
+        assert_eq!(
+            got,
+            Some((masked(&BigInt::from(expected.0), width), masked(&BigInt::from(expected.1), width))),
+            "{operation}"
+        );
     }
 }
 
@@ -257,7 +300,10 @@ fn test_a_fact_is_never_wider_than_the_operation_that_made_it() {
 }
 
 /// A call's reach, as `alias::calls_annotated` states it.
-fn reaching(parsed: &Parsed, provenance: Provenance) -> Calls {
+fn reaching(
+    parsed: &Parsed,
+    provenance: Provenance,
+) -> Calls {
     let call = parsed.all(|op| matches!(op, Opcode::Call(_)))[0];
     Calls::from_iter([(call, std::rc::Rc::from(vec![MemRef::reach(0, provenance)]))])
 }
@@ -286,7 +332,9 @@ fn test_a_call_reaching_nonlocal_keeps_an_uncaptured_static_constant() {
 #[test]
 fn a_call_that_may_write_anything_forgets_every_cell() {
     // The cell's address is exposed: an unexposed alloca no call reaches.
-    let parsed = Parsed::new(&AROUND_A_CALL.replace("@g()", "@g(ptr %a)").replace("void @g(ptr %a)\n\ndefine", "void @g(ptr)\n\ndefine"));
+    let parsed = Parsed::new(
+        &AROUND_A_CALL.replace("@g()", "@g(ptr %a)").replace("void @g(ptr %a)\n\ndefine", "void @g(ptr)\n\ndefine"),
+    );
     assert_eq!(parsed.solved("r", &Calls::default()), None);
     let unknown = reaching(&parsed, Provenance::one(MemoryObject::new(MemoryKind::Unknown)));
     assert_eq!(parsed.solved("r", &unknown), None);
@@ -478,10 +526,14 @@ b0:
     );
     let unit = parsed.unit();
     let stores = parsed.all(|op| matches!(op, Opcode::Store { .. }));
-    let high = MemRef::at(&unit, Operand::Constant(match unit.function.instruction(stores[0]).operands[1] {
-        Operand::Constant(one) => one,
-        _ => unreachable!(),
-    }), 2);
+    let high = MemRef::at(
+        &unit,
+        Operand::Constant(match unit.function.instruction(stores[0]).operands[1] {
+            Operand::Constant(one) => one,
+            _ => unreachable!(),
+        }),
+        2,
+    );
     let high = MemRef { disp: 2, ..high };
     assert_eq!(initialized(&unit, stores[0], &high), Some(Known::new(0x1234, 16)));
     assert_eq!(initialized(&unit, stores[1], &high), None);
@@ -647,15 +699,18 @@ b0:
 /// uses: 3.6% of compiling 100 sequential loops (#556). The table is made once for the body.
 #[test]
 fn test_known_asks_each_bodys_exposed_frames_once() {
-    let accesses: String = (0..40).map(|at| format!("  store i16 {at}, ptr %slot\n  %v{at} = load i16, ptr %slot\n")).collect();
-    let parsed = Parsed::new(&format!("define i16 @f() {{\nentry:\n  %slot = alloca i16\n{accesses}  ret i16 %v39\n}}\n"));
+    let accesses: String =
+        (0..40).map(|at| format!("  store i16 {at}, ptr %slot\n  %v{at} = load i16, ptr %slot\n")).collect();
+    let parsed =
+        Parsed::new(&format!("define i16 @f() {{\nentry:\n  %slot = alloca i16\n{accesses}  ret i16 %v39\n}}\n"));
     let before = crate::frameescape::scans();
     known(&parsed.unit(), Some(&Calls::default()), None, None);
     assert_eq!(crate::frameescape::scans() - before, 0, "an access scanned its alloca's uses");
 }
 
-/// `overlaps` was keyed by a resolved reference's address, so which bucket an answer lived in, and the work of finding it, changed
-/// with ASLR: `mir hoist` varied up to 0.9% between identical compiles (#992). The key is the order the references were resolved.
+/// `overlaps` was keyed by a resolved reference's address, so which bucket an answer lived in, and the work of finding
+/// it, changed with ASLR: `mir hoist` varied up to 0.9% between identical compiles (#992). The key is the order the
+/// references were resolved.
 #[test]
 fn test_overlap_answers_are_keyed_by_the_order_resolved_and_not_by_address() {
     let parsed = Parsed::new(

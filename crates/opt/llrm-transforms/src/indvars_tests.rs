@@ -8,8 +8,8 @@
 use std::rc::Rc;
 
 use llrm_analysis::cfg;
-use llrm_analysis::testing::layout;
 use llrm_analysis::graph::loops;
+use llrm_analysis::testing::layout;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, Module, Operand};
@@ -22,7 +22,11 @@ use crate::testing::{f, managed, parsed, printed, results};
 
 /// @f of `text` through `change`: whether it changed, the module, and that
 /// it computes what it did on `inputs`.
-fn through(text: &str, inputs: &[&[i128]], change: impl FnOnce(&mut Context, &DataLayout, &mut Function, &Analyses) -> bool) -> (bool, Module) {
+fn through(
+    text: &str,
+    inputs: &[&[i128]],
+    change: impl FnOnce(&mut Context, &DataLayout, &mut Function, &Analyses) -> bool,
+) -> (bool, Module) {
     let mut module = parsed(text);
     let before = (printed(&module), results(&module, inputs));
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
@@ -91,14 +95,32 @@ fn test_exact_nested_recurrence_rewinds_before_reloading_its_start() {
     let later = OperationCosts { add: 1, r#move: 1, load: 1, store: 1, memory_update: 1, ..OperationCosts::default() };
     let i386 = OperationCosts { add: 2, r#move: 2, load: 4, store: 2, memory_update: 8, ..OperationCosts::default() };
     let inputs: &[&[i128]] = &[&[0], &[-5], &[1000]];
-    let (changed, mut module) = through(&rewinding("add i32 %x, 5"), inputs, |context, layout, function, analyses| rewound(context, layout, function, analyses, 1, &later));
+    let (changed, mut module) = through(&rewinding("add i32 %x, 5"), inputs, |context, layout, function, analyses| {
+        rewound(context, layout, function, analyses, 1, &later)
+    });
     assert!(changed);
     let function = f(&mut module);
-    let inner = function.layout().iter().copied().find(|&one| function.block(one).name.as_deref() == Some("b3")).unwrap();
+    let inner =
+        function.layout().iter().copied().find(|&one| function.block(one).name.as_deref() == Some("b3")).unwrap();
     let phi = function.block(inner).instructions()[0];
-    assert!(!function.instruction(phi).operands.iter().any(|one| matches!(one, Operand::Value(value) if function.value(*value).name.as_deref() == Some("start"))));
-    for (text, costs, registers) in [(rewinding("add i32 %x, 5"), &i386, 1), (rewinding("add i32 %x, 5"), &later, 0), (rewinding("add i32 5, 0"), &later, 1)] {
-        assert!(!through(&text, inputs, |context, layout, function, analyses| rewound(context, layout, function, analyses, registers, costs)).0);
+    assert!(
+        !function
+            .instruction(phi)
+            .operands
+            .iter()
+            .any(|one| matches!(one, Operand::Value(value) if function.value(*value).name.as_deref() == Some("start")))
+    );
+    for (text, costs, registers) in [
+        (rewinding("add i32 %x, 5"), &i386, 1),
+        (rewinding("add i32 %x, 5"), &later, 0),
+        (rewinding("add i32 5, 0"), &later, 1),
+    ] {
+        assert!(
+            !through(&text, inputs, |context, layout, function, analyses| rewound(
+                context, layout, function, analyses, registers, costs
+            ))
+            .0
+        );
     }
 }
 
@@ -109,7 +131,9 @@ fn test_exact_nested_recurrence_rewinds_before_reloading_its_start() {
 fn a_rewound_loop_keeps_its_count_for_rotate() {
     let later = OperationCosts { add: 1, r#move: 1, load: 1, store: 1, memory_update: 1, ..OperationCosts::default() };
     let inputs: &[&[i128]] = &[&[0], &[-5], &[1000]];
-    let (changed, mut module) = through(&rewinding("add i32 %x, 5"), inputs, |context, layout, function, analyses| rewound(context, layout, function, analyses, 1, &later));
+    let (changed, mut module) = through(&rewinding("add i32 %x, 5"), inputs, |context, layout, function, analyses| {
+        rewound(context, layout, function, analyses, 1, &later)
+    });
     assert!(changed);
     let (before, results_before) = (printed(&module), results(&module, inputs));
     let after = managed(&mut module, Rotate { proven: true, copy: false });
@@ -125,7 +149,9 @@ fn a_rewound_loop_keeps_its_count_for_rotate() {
 fn rewinding_the_corpus_loses_no_trip_count() {
     let later = OperationCosts { add: 1, r#move: 1, load: 1, store: 1, memory_update: 1, ..OperationCosts::default() };
     let counts = |context: &Context, layout: &DataLayout, function: &Function, outer: &Outer| {
-        let unit = llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::within(context, layout, function, outer));
+        let unit = llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::within(
+            context, layout, function, outer,
+        ));
         let facts = llrm_analysis::consts::known(&unit, None, None, None);
         loops::loops(&cfg::graph(function), function.entry().map(cfg::id))
             .into_iter()
@@ -139,7 +165,10 @@ fn rewinding_the_corpus_loses_no_trip_count() {
         managed(&mut module, crate::lsr::Lsr::default());
         let (layout, outer) = (layout(&module), Outer::of(&module, None));
         let analyses = Analyses::new(Rc::new(Outer::of(&module, None)));
-        let names = crate::testing::bodies(&module).into_iter().filter_map(|id| module.global(id).name.clone()).collect::<Vec<_>>();
+        let names = crate::testing::bodies(&module)
+            .into_iter()
+            .filter_map(|id| module.global(id).name.clone())
+            .collect::<Vec<_>>();
         for callee in names {
             let (context, function) = module.function_mut(&callee).expect("a body");
             let before = counts(context, &layout, function, &outer);
@@ -191,7 +220,9 @@ b3:
 }
 
 fn widening(text: &str) -> (bool, String) {
-    let (changed, module) = through(text, &[&[0], &[1], &[7], &[64]], |context, layout, function, analyses| super::widened(context, layout, function, analyses.outer()));
+    let (changed, module) = through(text, &[&[0], &[1], &[7], &[64]], |context, layout, function, analyses| {
+        super::widened(context, layout, function, analyses.outer())
+    });
     (changed, printed(&module))
 }
 
@@ -206,7 +237,9 @@ fn a_counter_extended_to_the_index_width_is_that_wide() {
 #[test]
 fn a_counter_extended_past_the_index_width_stays() {
     // 16-bit addresses (a segment's offset): `zext` to 32 is no index.
-    let text = clearing("e-p:16:16-n8:16:32").replace("i32 %w", "i16 %w16").replace("zext i16 %i to i32", "zext i16 %i to i32\n  %w16 = trunc i32 %w to i16");
+    let text = clearing("e-p:16:16-n8:16:32")
+        .replace("i32 %w", "i16 %w16")
+        .replace("zext i16 %i to i32", "zext i16 %i to i32\n  %w16 = trunc i32 %w to i16");
     let (changed, after) = widening(&text);
     assert!(!changed, "{after}");
 }
@@ -217,7 +250,10 @@ fn a_counter_extended_past_the_index_width_stays() {
 /// extended start.
 #[test]
 fn a_counter_from_a_start_the_loop_does_not_define_is_widened() {
-    let text = clearing("e-p:32:32-n8:16:32").replace("define i32 @f(i16 %n) {\nb0:", "define i32 @f(i16 %n) {\nb0:\n  %s = add i16 %n, 1").replace("[ 0, %b0 ]", "[ %s, %b0 ]").replace("icmp ult i16 %i, %n", "icmp ult i16 %i, 4");
+    let text = clearing("e-p:32:32-n8:16:32")
+        .replace("define i32 @f(i16 %n) {\nb0:", "define i32 @f(i16 %n) {\nb0:\n  %s = add i16 %n, 1")
+        .replace("[ 0, %b0 ]", "[ %s, %b0 ]")
+        .replace("icmp ult i16 %i, %n", "icmp ult i16 %i, 4");
     let (changed, after) = widening(&text);
     assert!(changed, "{after}");
     assert!(after.contains("icmp ult i32 %widen.iv") && after.contains("zext i16 %s to i32"), "{after}");
@@ -274,7 +310,11 @@ done:
     let (context, function) = module.function_mut("f").expect("@f");
     let before = llrm_analysis::consts::register_derivations();
     assert!(!super::widened(context, &layout, function, &outer), "nothing to widen");
-    assert!(llrm_analysis::consts::register_derivations() - before <= 1, "{} derivations for three loops", llrm_analysis::consts::register_derivations() - before);
+    assert!(
+        llrm_analysis::consts::register_derivations() - before <= 1,
+        "{} derivations for three loops",
+        llrm_analysis::consts::register_derivations() - before
+    );
 }
 
 /// A pass that asks the manager what the counted loops bound, and changes nothing.
@@ -285,14 +325,18 @@ impl llrm_mir::passes::FunctionPass for AsksBounds {
         "asks-bounds"
     }
 
-    fn run(&mut self, unit: &mut llrm_mir::passes::Unit, analyses: &mut Analyses) -> llrm_mir::passes::PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
         analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function);
         llrm_mir::passes::PreservedAnalyses::all()
     }
 }
 
-/// A `sext` of a counter made indvars solve what the loops bound again, by hand, beside the manager's it could have asked:
-/// fpbench -O1 spent 40 Minstr in indvars, 29 of them in that solve.
+/// A `sext` of a counter made indvars solve what the loops bound again, by hand, beside the manager's it could have
+/// asked: fpbench -O1 spent 40 Minstr in indvars, 29 of them in that solve.
 #[test]
 fn test_indvars_reads_the_managers_bounds_for_a_widened_counter() {
     let mut module = parsed(
@@ -323,5 +367,9 @@ end:
     let before = llrm_analysis::ranges::loops_solved();
     manager.run_module(&mut module, Rc::new(crate::testing::Tuned::default())).unwrap();
     // The pass that asks, and the one indvars's evaluation of the loop leaves the body needing; by hand it was a third.
-    assert_eq!(llrm_analysis::ranges::loops_solved() - before, 2, "the loop's bounds were worked out more than the manager's twice");
+    assert_eq!(
+        llrm_analysis::ranges::loops_solved() - before,
+        2,
+        "the loop's bounds were worked out more than the manager's twice"
+    );
 }

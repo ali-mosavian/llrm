@@ -8,12 +8,17 @@ use crate::testing::{DOS, function, parsed};
 fn estimate(text: &str) -> (Odds, impl Fn(&str) -> i64 + use<>) {
     let module = parsed(&format!("{DOS}{text}"));
     let function = function(&module, "f");
-    let odds = estimated(&module.context, &module.metadata, &module.globals, function, &Shape::of(function), &BTreeMap::new());
-    let names: Vec<(String, i64)> = function.layout().iter().map(|&one| (function.block(one).name.clone().unwrap_or_default(), id(one))).collect();
+    let odds =
+        estimated(&module.context, &module.metadata, &module.globals, function, &Shape::of(function), &BTreeMap::new());
+    let names: Vec<(String, i64)> =
+        function.layout().iter().map(|&one| (function.block(one).name.clone().unwrap_or_default(), id(one))).collect();
     (odds, move |name: &str| names.iter().find(|(one, _)| one == name).unwrap_or_else(|| panic!("no %{name}")).1)
 }
 
-fn close(got: Option<f64>, want: f64) -> bool {
+fn close(
+    got: Option<f64>,
+    want: f64,
+) -> bool {
     got.is_some_and(|got| (got - want).abs() < 1e-9)
 }
 
@@ -84,7 +89,12 @@ some:
 /// `x == 0` fails, `x < 0` fails, `x > -1` holds: 20 in 32.
 #[test]
 fn test_zero_and_negative_compares() {
-    for (compare, likely) in [("icmp eq i16 %x, 0", false), ("icmp slt i16 %x, 0", false), ("icmp sgt i16 %x, -1", true), ("icmp ne i16 0, %x", true)] {
+    for (compare, likely) in [
+        ("icmp eq i16 %x, 0", false),
+        ("icmp slt i16 %x, 0", false),
+        ("icmp sgt i16 %x, -1", true),
+        ("icmp ne i16 0, %x", true),
+    ] {
         let (odds, at) = estimate(&format!(
             "define i16 @f(i16 %x) {{
 entry:
@@ -98,14 +108,21 @@ no:
 "
         ));
         assert_eq!(odds.by.get(&at("entry")), Some(&Heuristic::Zero), "{compare}");
-        assert!(close(odds.probability(at("entry"), at("yes")), if likely { 20.0 / 32.0 } else { 12.0 / 32.0 }), "{compare}");
+        assert!(
+            close(odds.probability(at("entry"), at("yes")), if likely { 20.0 / 32.0 } else { 12.0 / 32.0 }),
+            "{compare}"
+        );
     }
 }
 
 /// Floats are unlikely equal (20:12), and all but never NaN.
 #[test]
 fn test_float_equality_and_nan_compares() {
-    for (compare, want) in [("fcmp oeq float %x, %y", 12.0 / 32.0), ("fcmp une float %x, %y", 20.0 / 32.0), ("fcmp uno float %x, %y", 1.0 / (1 << 20) as f64)] {
+    for (compare, want) in [
+        ("fcmp oeq float %x, %y", 12.0 / 32.0),
+        ("fcmp une float %x, %y", 20.0 / 32.0),
+        ("fcmp uno float %x, %y", 1.0 / (1 << 20) as f64),
+    ] {
         let (odds, at) = estimate(&format!(
             "define i16 @f(float %x, float %y) {{
 entry:
@@ -187,11 +204,22 @@ done:
             if ty == "ptr" { "null" } else { "%z" }
         )
     };
-    for (returned, ty, want) in [("-1", "i16", 2.0 / 100.0), ("7", "i16", 35.0 / 100.0), ("null", "ptr", 29.0 / 100.0)] {
-        let text = if ty == "ptr" { shape(returned, ty).replace("  %z = mul i16 %x, %y\n", "  %z = mul i16 %x, %y\n  %w = inttoptr i16 %z to ptr\n").replace("ret ptr null\n}", "ret ptr %w\n}") } else { shape(returned, ty) };
+    for (returned, ty, want) in [("-1", "i16", 2.0 / 100.0), ("7", "i16", 35.0 / 100.0), ("null", "ptr", 29.0 / 100.0)]
+    {
+        let text = if ty == "ptr" {
+            shape(returned, ty)
+                .replace("  %z = mul i16 %x, %y\n", "  %z = mul i16 %x, %y\n  %w = inttoptr i16 %z to ptr\n")
+                .replace("ret ptr null\n}", "ret ptr %w\n}")
+        } else {
+            shape(returned, ty)
+        };
         let (odds, at) = estimate(&text);
         assert_eq!(odds.by.get(&at("entry")), Some(&Heuristic::Return), "{text}");
-        assert!(close(odds.probability(at("entry"), at("early")), want), "{returned}: {:?}", odds.probability(at("entry"), at("early")));
+        assert!(
+            close(odds.probability(at("entry"), at("early")), want),
+            "{returned}: {:?}",
+            odds.probability(at("entry"), at("early"))
+        );
     }
 }
 
@@ -353,12 +381,24 @@ no:
 }
 
 /// `@f`'s odds with `header` known to run `trips` trips.
-fn estimate_counted(text: &str, header: &str, trips: i64) -> (Odds, impl Fn(&str) -> i64 + use<>) {
+fn estimate_counted(
+    text: &str,
+    header: &str,
+    trips: i64,
+) -> (Odds, impl Fn(&str) -> i64 + use<>) {
     let module = parsed(&format!("{DOS}{text}"));
     let function = function(&module, "f");
-    let names: Vec<(String, i64)> = function.layout().iter().map(|&one| (function.block(one).name.clone().unwrap_or_default(), id(one))).collect();
+    let names: Vec<(String, i64)> =
+        function.layout().iter().map(|&one| (function.block(one).name.clone().unwrap_or_default(), id(one))).collect();
     let at = move |name: &str| names.iter().find(|(one, _)| one == name).unwrap_or_else(|| panic!("no %{name}")).1;
-    let odds = estimated(&module.context, &module.metadata, &module.globals, function, &Shape::of(function), &BTreeMap::from([(at(header), trips)]));
+    let odds = estimated(
+        &module.context,
+        &module.metadata,
+        &module.globals,
+        function,
+        &Shape::of(function),
+        &BTreeMap::from([(at(header), trips)]),
+    );
     (odds, at)
 }
 
@@ -384,7 +424,11 @@ fn test_a_proven_trip_count_replaces_the_loop_heuristic() {
     assert!(close(counted.frequency.get(&at("head")).copied(), 100.0), "{:?}", counted.frequency);
     assert!(close(counted.frequency.get(&at("out")).copied(), 1.0), "{:?}", counted.frequency);
     let (guessed, at) = estimate(COUNTED);
-    assert!(close(guessed.frequency.get(&at("head")).copied(), 32.0), "premise: without a count it is 32: {:?}", guessed.frequency);
+    assert!(
+        close(guessed.frequency.get(&at("head")).copied(), 32.0),
+        "premise: without a count it is 32: {:?}",
+        guessed.frequency
+    );
 }
 
 /// A loop tested at its header, before a trip, runs its header one more time
@@ -415,7 +459,11 @@ out:
 }
 
 /// `@f` branching on `compare` of `@callee`'s result, `declared` its declaration.
-fn three_way_branch(declared: &str, callee: &str, compare: &str) -> (Odds, i64, i64) {
+fn three_way_branch(
+    declared: &str,
+    callee: &str,
+    compare: &str,
+) -> (Odds, i64, i64) {
     let (odds, at) = estimate(&format!(
         "{declared}
 define i16 @f(ptr %a, ptr %b) {{
@@ -535,7 +583,10 @@ fn test_a_counted_loops_exits_share_by_their_odds() {
     assert!(close(frequency.get(&4).copied(), 0.625), "{frequency:?}");
 }
 
-fn weighted_branch(weights: &str, then_cold: bool) -> (Odds, i64, i64) {
+fn weighted_branch(
+    weights: &str,
+    then_cold: bool,
+) -> (Odds, i64, i64) {
     let body = if then_cold { "  call void @abort()\n  unreachable\n" } else { "  ret i16 1\n" };
     let (odds, at) = estimate(&format!(
         "declare void @abort()
@@ -666,33 +717,56 @@ out:
 ";
     let module = parsed(&format!("{DOS}{text}"));
     let function = function(&module, "f");
-    let names: Vec<(String, i64)> = function.layout().iter().map(|&one| (function.block(one).name.clone().unwrap_or_default(), id(one))).collect();
+    let names: Vec<(String, i64)> =
+        function.layout().iter().map(|&one| (function.block(one).name.clone().unwrap_or_default(), id(one))).collect();
     let at = move |name: &str| names.iter().find(|(one, _)| one == name).unwrap_or_else(|| panic!("no %{name}")).1;
-    let odds = estimated(&module.context, &module.metadata, &module.globals, function, &Shape::of(function), &BTreeMap::from([(at("outer"), 4)]));
+    let odds = estimated(
+        &module.context,
+        &module.metadata,
+        &module.globals,
+        function,
+        &Shape::of(function),
+        &BTreeMap::from([(at("outer"), 4)]),
+    );
     assert_eq!(odds.by.get(&at("guard")), Some(&Heuristic::Counted), "{:?}", odds.by);
     assert!(close(odds.probability(at("guard"), at("enter")), 0.75), "{:?}", odds.taken);
     let (guessed, _) = estimate(text);
-    assert!(close(guessed.probability(at("guard"), at("enter")), 0.5), "premise: with no counted loop the guard is even");
+    assert!(
+        close(guessed.probability(at("guard"), at("enter")), 0.5),
+        "premise: with no counted loop the guard is even"
+    );
 }
 
-/// Every branch in a counted loop was decided by running the loop's counters through all its trips again: k branches in a loop of
-/// n trips ran it k times (`nbody_single -Omax`: `peel` 22% of the compile, 17 points in `counted`). The counters' values at each
-/// trip are the loop's, so the loop is run once and each branch reads them.
+/// Every branch in a counted loop was decided by running the loop's counters through all its trips again: k branches in
+/// a loop of n trips ran it k times (`nbody_single -Omax`: `peel` 22% of the compile, 17 points in `counted`). The
+/// counters' values at each trip are the loop's, so the loop is run once and each branch reads them.
 #[test]
 fn test_a_counted_loop_is_run_once_for_all_the_branches_in_it() {
     let guards = 6;
-    let mut text = String::from("define i16 @f(i16 %n) {\nentry:\n  br label %outer\nouter:\n  %i = phi i16 [ 1, %entry ], [ %next, %latch ]\n  %done = icmp ne i16 %i, 5\n  br i1 %done, label %g0, label %out\n");
+    let mut text = String::from(
+        "define i16 @f(i16 %n) {\nentry:\n  br label %outer\nouter:\n  %i = phi i16 [ 1, %entry ], [ %next, %latch ]\n  %done = icmp ne i16 %i, 5\n  br i1 %done, label %g0, label %out\n",
+    );
     for k in 0..guards {
         let after = if k + 1 == guards { "latch".to_owned() } else { format!("g{}", k + 1) };
-        text += &format!("g{k}:\n  %skip{k} = icmp sle i16 {k}, %i\n  br i1 %skip{k}, label %{after}, label %e{k}\ne{k}:\n  %x{k} = add i16 %i, %n\n  br label %{after}\n");
+        text += &format!(
+            "g{k}:\n  %skip{k} = icmp sle i16 {k}, %i\n  br i1 %skip{k}, label %{after}, label %e{k}\ne{k}:\n  %x{k} = add i16 %i, %n\n  br label %{after}\n"
+        );
     }
     text += "latch:\n  %next = add i16 %i, 1\n  br label %outer\nout:\n  ret i16 %n\n}\n";
     let module = parsed(&format!("{DOS}{text}"));
     let function = function(&module, "f");
-    let names: Vec<(String, i64)> = function.layout().iter().map(|&one| (function.block(one).name.clone().unwrap_or_default(), id(one))).collect();
+    let names: Vec<(String, i64)> =
+        function.layout().iter().map(|&one| (function.block(one).name.clone().unwrap_or_default(), id(one))).collect();
     let at = move |name: &str| names.iter().find(|(one, _)| one == name).unwrap_or_else(|| panic!("no %{name}")).1;
     let before = loops_run();
-    let odds = estimated(&module.context, &module.metadata, &module.globals, function, &Shape::of(function), &BTreeMap::from([(at("outer"), 4)]));
+    let odds = estimated(
+        &module.context,
+        &module.metadata,
+        &module.globals,
+        function,
+        &Shape::of(function),
+        &BTreeMap::from([(at("outer"), 4)]),
+    );
     assert_eq!(loops_run() - before, 1, "the loop is run once for {guards} branches");
     for k in 0..guards {
         assert_eq!(odds.by.get(&at(&format!("g{k}"))), Some(&Heuristic::Counted), "g{k}");
@@ -701,9 +775,9 @@ fn test_a_counted_loop_is_run_once_for_all_the_branches_in_it() {
     assert!(close(odds.probability(at("g3"), at("e3")), 0.5), "{:?}", odds.taken);
 }
 
-/// Every loop's weighing asked every edge which loop's trips fix it, and each ask walked the loops around the block and made a set of
-/// its successors: a nest 16 deep read 16 loops x every edge x 16 loops (lir jumps on it: 73 Minstr, a third of it here). An edge's
-/// answer does not change between asks.
+/// Every loop's weighing asked every edge which loop's trips fix it, and each ask walked the loops around the block and
+/// made a set of its successors: a nest 16 deep read 16 loops x every edge x 16 loops (lir jumps on it: 73 Minstr, a
+/// third of it here). An edge's answer does not change between asks.
 #[test]
 fn test_a_nest_of_counted_loops_asks_each_edge_which_trips_fix_it_once() {
     let depth = 16;
@@ -729,9 +803,15 @@ fn test_a_nest_of_counted_loops_asks_each_edge_which_trips_fix_it_once() {
             preds.entry(to).or_default().push(from);
         }
     }
-    let bodies: Vec<(BTreeSet<i64>, BTreeSet<i64>)> =
-        (1..=depth).map(|k| ((k..=depth).flat_map(|j| [header(j), latch(j)]).collect(), BTreeSet::from([latch(k)]))).collect();
-    let cycles: Vec<Cycle> = bodies.iter().enumerate().rev().map(|(k, (body, latches))| Cycle { header: header(k as i64 + 1), latches, body, trips: Some(4) }).collect();
+    let bodies: Vec<(BTreeSet<i64>, BTreeSet<i64>)> = (1..=depth)
+        .map(|k| ((k..=depth).flat_map(|j| [header(j), latch(j)]).collect(), BTreeSet::from([latch(k)])))
+        .collect();
+    let cycles: Vec<Cycle> = bodies
+        .iter()
+        .enumerate()
+        .rev()
+        .map(|(k, (body, latches))| Cycle { header: header(k as i64 + 1), latches, body, trips: Some(4) })
+        .collect();
     let asked = std::cell::Cell::new(0usize);
     let successors = |at: i64| {
         asked.set(asked.get() + 1);

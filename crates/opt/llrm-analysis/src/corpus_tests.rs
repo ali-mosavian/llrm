@@ -3,15 +3,15 @@
 
 use std::collections::BTreeSet;
 
-use crate::graph::loops;
-
 use crate::cfg;
+use crate::graph::loops;
 use crate::testing::corpus;
 
 #[test]
 fn every_corpus_module_parses_and_verifies() {
     let modules = corpus();
-    for prefix in ["emitted/qb-", "emitted/demo-", "emitted/nib-", "optimized/qb-", "optimized/demo-", "optimized/nib-"] {
+    for prefix in ["emitted/qb-", "emitted/demo-", "emitted/nib-", "optimized/qb-", "optimized/demo-", "optimized/nib-"]
+    {
         assert!(modules.iter().any(|(name, _)| name.starts_with(prefix)), "the corpus holds no {prefix}");
     }
     for (name, module) in &modules {
@@ -59,7 +59,8 @@ fn a_loop_body_always_contains_its_own_header_and_latch() {
 /// literal fills with four loops.
 #[test]
 fn nothing_in_the_corpus_nests_past_four_loops() {
-    let deepest = graphs().iter().map(|(_, graph)| loops::depth(graph, None).values().copied().max().unwrap_or(0)).max().unwrap();
+    let deepest =
+        graphs().iter().map(|(_, graph)| loops::depth(graph, None).values().copied().max().unwrap_or(0)).max().unwrap();
     assert_eq!(deepest, 4);
 }
 
@@ -100,7 +101,11 @@ dead:
             let shape = cfg::Shape::of(function);
             assert_eq!(shape.loops, loops::loops(&graph, None), "{name}");
             assert_eq!(shape.dominance.dominators(function), loops::dominators(&graph, None), "{name}");
-            assert_eq!(shape.dominance.immediate_dominators(function), loops::immediate_dominators(&graph, None), "{name}");
+            assert_eq!(
+                shape.dominance.immediate_dominators(function),
+                loops::immediate_dominators(&graph, None),
+                "{name}"
+            );
             assert_eq!(shape.dominance.frontiers(function), loops::frontiers(&graph, None), "{name}");
             assert_eq!(shape.dominance.irreducible(function), loops::irreducible(&graph, None), "{name}");
         }

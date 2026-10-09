@@ -24,6 +24,7 @@ fn toolchain(script: &str) {
     println!("cargo:rerun-if-changed=toolchain/{script}");
     println!("cargo:rerun-if-changed=toolchain/cache.sh");
     let profile = PathBuf::from(std::env::var("OUT_DIR").unwrap()).ancestors().nth(3).unwrap().to_path_buf();
-    let status = Command::new("sh").arg(format!("toolchain/{script}")).arg(&profile).status().expect("could not start sh");
+    let status =
+        Command::new("sh").arg(format!("toolchain/{script}")).arg(&profile).status().expect("could not start sh");
     assert!(status.success(), "toolchain/{script} failed: {status}");
 }

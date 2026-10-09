@@ -31,16 +31,24 @@ pub struct Escapes {
 
 /// The operand an address-preserving instruction moves: the old `Copy` and
 /// `Address`.
-fn source(function: &Function, inst: InstId) -> Option<Operand> {
+fn source(
+    function: &Function,
+    inst: InstId,
+) -> Option<Operand> {
     let instruction = function.instruction(inst);
     match instruction.opcode {
-        Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) | Opcode::Freeze => instruction.operands.first().copied(),
+        Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) | Opcode::Freeze => {
+            instruction.operands.first().copied()
+        }
         _ => None,
     }
 }
 
 /// The operand positions of `inst` that are accesses through an address.
-fn accessed(function: &Function, inst: InstId) -> Option<usize> {
+fn accessed(
+    function: &Function,
+    inst: InstId,
+) -> Option<usize> {
     match function.instruction(inst).opcode {
         Opcode::Load { .. } => Some(0),
         Opcode::Store { .. } => Some(1),
@@ -56,7 +64,9 @@ pub fn analysed(function: &Function) -> Escapes {
     let is = |inst: InstId, phi: bool| (function.instruction(inst).opcode == Opcode::Phi) == phi;
     let phis: Vec<InstId> = instructions.iter().copied().filter(|&inst| is(inst, true)).collect();
     let operations: Vec<InstId> = instructions.iter().copied().filter(|&inst| is(inst, false)).collect();
-    let moving = |inst: InstId| matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }) || source(function, inst).is_some();
+    let moving = |inst: InstId| {
+        matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }) || source(function, inst).is_some()
+    };
 
     let inputs = |inst: InstId, origins: &IndexMap<ValueId, BTreeSet<ValueId>>| -> BTreeSet<ValueId> {
         let instruction = function.instruction(inst);
@@ -112,7 +122,8 @@ pub fn analysed(function: &Function) -> Escapes {
         }
     }
 
-    let exposed: BTreeSet<ValueId> = operations.iter().filter(|&&inst| !moving(inst)).flat_map(|&inst| inputs(inst, &origins)).collect();
+    let exposed: BTreeSet<ValueId> =
+        operations.iter().filter(|&&inst| !moving(inst)).flat_map(|&inst| inputs(inst, &origins)).collect();
     Escapes { origins, exposed }
 }
 
@@ -129,7 +140,10 @@ pub fn scans() -> usize {
 /// Every alloca of `function` whose address is exposed, as `exposes` says of each, in one pass: a value
 /// is exposing where a use of it is neither a move, an access through it, nor a marker, and an
 /// address that reaches an exposing value through moves is exposed too.
-pub fn exposed_allocas(function: &Function, marker: impl Fn(InstId) -> bool) -> BTreeSet<ValueId> {
+pub fn exposed_allocas(
+    function: &Function,
+    marker: impl Fn(InstId) -> bool,
+) -> BTreeSet<ValueId> {
     let mut exposing = vec![false; function.value_count()];
     // The values a value moves into, reversed: who feeds each.
     let mut feeds: Vec<Vec<ValueId>> = vec![Vec::new(); function.value_count()];
@@ -141,7 +155,8 @@ pub fn exposed_allocas(function: &Function, marker: impl Fn(InstId) -> bool) -> 
         }
         for (index, operand) in instruction.operands.iter().enumerate() {
             let Operand::Value(value) = operand else { continue };
-            let moves = instruction.opcode == Opcode::Phi || source(function, inst) == Some(Operand::Value(*value)) && index == 0;
+            let moves = instruction.opcode == Opcode::Phi
+                || source(function, inst) == Some(Operand::Value(*value)) && index == 0;
             if moves {
                 if let Some(result) = instruction.result {
                     feeds[result.0 as usize].push(*value);
@@ -167,14 +182,19 @@ pub fn exposed_allocas(function: &Function, marker: impl Fn(InstId) -> bool) -> 
 /// reaches, through moves and phis, an operand that is not an access's
 /// own pointer. A lifetime marker (`marker` says which instructions are
 /// one) names an object without handing out its address.
-pub fn exposes(function: &Function, alloca: ValueId, marker: impl Fn(InstId) -> bool) -> bool {
+pub fn exposes(
+    function: &Function,
+    alloca: ValueId,
+    marker: impl Fn(InstId) -> bool,
+) -> bool {
     SCANS.with(|scans| scans.set(scans.get() + 1));
     let mut seen = BTreeSet::from([alloca]);
     let mut pending = vec![alloca];
     while let Some(value) = pending.pop() {
         for one in function.users(value) {
             let instruction = function.instruction(one.user);
-            let moves = instruction.opcode == Opcode::Phi || source(function, one.user) == Some(Operand::Value(value)) && one.index == 0;
+            let moves = instruction.opcode == Opcode::Phi
+                || source(function, one.user) == Some(Operand::Value(value)) && one.index == 0;
             if !moves {
                 if accessed(function, one.user) == Some(one.index as usize) || marker(one.user) {
                     continue;
@@ -213,7 +233,8 @@ enum Moved {
 /// of a local, moved by an integer, still reaches only that local's bytes.
 pub fn framed(function: &Function) -> IndexMap<ValueId, BTreeSet<ValueId>> {
     let instructions: Vec<InstId> = function.walk().map(|(_, inst)| inst).collect();
-    let phis: Vec<InstId> = instructions.iter().copied().filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect();
+    let phis: Vec<InstId> =
+        instructions.iter().copied().filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect();
     let mut moving: IndexMap<ValueId, InstId> = IndexMap::default();
     // A parameter is defined by nothing here: the old incoming value no op defines.
     let mut refuted: BTreeSet<ValueId> = function.parameters().iter().copied().collect();
@@ -230,17 +251,24 @@ pub fn framed(function: &Function) -> IndexMap<ValueId, BTreeSet<ValueId>> {
         }
     }
     let incoming = |phi: InstId| -> Vec<Operand> {
-        function.instruction(phi).operands.iter().copied().filter(|operand| !matches!(operand, Operand::Block(_))).collect()
+        function
+            .instruction(phi)
+            .operands
+            .iter()
+            .copied()
+            .filter(|operand| !matches!(operand, Operand::Block(_)))
+            .collect()
     };
     let result = |inst: InstId| function.instruction(inst).result.expect("a phi has a result");
     let mut state: IndexMap<ValueId, BTreeSet<ValueId>> = IndexMap::default();
 
-    let side = |operand: Operand, state: &IndexMap<ValueId, BTreeSet<ValueId>>, refuted: &BTreeSet<ValueId>| match operand {
-        Operand::Value(value) if refuted.contains(&value) => Side::Number,
-        Operand::Value(value) if state.contains_key(&value) => Side::Address,
-        Operand::Value(_) => Side::Unknown,
-        _ => Side::Number,
-    };
+    let side =
+        |operand: Operand, state: &IndexMap<ValueId, BTreeSet<ValueId>>, refuted: &BTreeSet<ValueId>| match operand {
+            Operand::Value(value) if refuted.contains(&value) => Side::Number,
+            Operand::Value(value) if state.contains_key(&value) => Side::Address,
+            Operand::Value(_) => Side::Unknown,
+            _ => Side::Number,
+        };
     // The allocas `inst` leaves its result in, None where it cannot, `...` while unknown.
     let moved = |inst: InstId, state: &IndexMap<ValueId, BTreeSet<ValueId>>, refuted: &BTreeSet<ValueId>| -> Moved {
         let instruction = function.instruction(inst);
@@ -312,12 +340,15 @@ pub fn framed(function: &Function) -> IndexMap<ValueId, BTreeSet<ValueId>> {
             .filter(|value| {
                 !refuted.contains(value)
                     && (!state.contains_key(value)
-                        || moving.get(value).is_some_and(|&inst| !matches!(moved(inst, &state, &refuted), Moved::Extents(_)))
+                        || moving
+                            .get(value)
+                            .is_some_and(|&inst| !matches!(moved(inst, &state, &refuted), Moved::Extents(_)))
                         || (!moving.contains_key(value)
-                            && phis
-                                .iter()
-                                .filter(|&&phi| result(phi) == *value)
-                                .any(|&phi| incoming(phi).iter().any(|one| !matches!(one, Operand::Value(one) if state.contains_key(one))))))
+                            && phis.iter().filter(|&&phi| result(phi) == *value).any(|&phi| {
+                                incoming(phi)
+                                    .iter()
+                                    .any(|one| !matches!(one, Operand::Value(one) if state.contains_key(one)))
+                            })))
             })
             .collect();
         if unproven.is_empty() {
@@ -334,7 +365,12 @@ mod tests {
 
     #[test]
     fn test_frame_origin_reaches_use_through_copy_and_loop_phi() {
-        let sinks = ["call void @sink(ptr %copied)", "store ptr %copied, ptr @g", "%n = ptrtoint ptr %copied to i16", "ret ptr %copied"];
+        let sinks = [
+            "call void @sink(ptr %copied)",
+            "store ptr %copied, ptr @g",
+            "%n = ptrtoint ptr %copied to i16",
+            "ret ptr %copied",
+        ];
         for sink in sinks {
             let tail = if sink.starts_with("ret") { "" } else { "\n  ret ptr null" };
             let text = format!(

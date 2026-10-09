@@ -6,7 +6,8 @@ use std::process::Command;
 
 /// Files git sees in the tree that it does not track or ignore.
 fn untracked(root: &Path) -> Option<String> {
-    let done = Command::new("git").args(["status", "--porcelain", "--untracked-files=all"]).current_dir(root).output().ok()?;
+    let done =
+        Command::new("git").args(["status", "--porcelain", "--untracked-files=all"]).current_dir(root).output().ok()?;
     done.status.success().then(|| String::from_utf8_lossy(&done.stdout).into_owned())
 }
 
@@ -52,7 +53,8 @@ fn test_every_benchmark_exists_in_basic_c_and_nib() {
     let (mut missing, mut unexplained) = (Vec::new(), Vec::new());
     for dir in dirs {
         let name = dir.file_name().unwrap().to_str().unwrap().to_owned();
-        let toml = std::fs::read_to_string(dir.join("bench.toml")).ok().and_then(|text| text.parse::<toml::Table>().ok());
+        let toml =
+            std::fs::read_to_string(dir.join("bench.toml")).ok().and_then(|text| text.parse::<toml::Table>().ok());
         let Some(toml) = toml else {
             missing.push(format!("{name}/bench.toml"));
             continue;

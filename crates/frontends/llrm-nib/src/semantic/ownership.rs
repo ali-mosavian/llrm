@@ -7,6 +7,7 @@
 //! (drops.rs).
 
 use llrm_core::abi::nib as rt;
+
 use super::*;
 
 /// Where a value of an owning type was read from.
@@ -47,7 +48,10 @@ pub(super) enum Owned {
 }
 
 pub(super) fn needs_drop(type_name: TypeName) -> bool {
-    matches!(type_name, TypeName::String | TypeName::Vector { .. } | TypeName::Dictionary { .. })
+    matches!(
+        type_name,
+        TypeName::String | TypeName::Vector { .. } | TypeName::Dictionary { .. }
+    )
 }
 
 impl FunctionCompiler<'_> {
@@ -85,7 +89,10 @@ impl FunctionCompiler<'_> {
 
     /// A binding that owns what it holds and drops it at scope exit.
     /// Whether this binding's storage is dropped at its scope's end.
-    pub(super) fn owns(&self, storage: &Storage) -> bool {
+    pub(super) fn owns(
+        &self,
+        storage: &Storage,
+    ) -> bool {
         match storage {
             Storage::Place(place) => self.owned_places.contains(place),
             Storage::Reference(pointer) => self.owned_references.contains(pointer),
@@ -93,16 +100,29 @@ impl FunctionCompiler<'_> {
         }
     }
 
-    pub(super) fn own(&mut self, place: u32) {
+    pub(super) fn own(
+        &mut self,
+        place: u32,
+    ) {
         self.owned_places.insert(place);
     }
 
-    pub(super) fn is_static(&self, value: &TypedOperand) -> bool {
-        matches!(&value.operand, Some(hir::Operand::Value(id)) if self.origins.get(id) == Some(&Origin::Static))
+    pub(super) fn is_static(
+        &self,
+        value: &TypedOperand,
+    ) -> bool {
+        matches!(
+            &value.operand,
+            Some(hir::Operand::Value(id)) if self.origins.get(id) == Some(&Origin::Static)
+        )
     }
 
     /// Takes ownership of `value` for a new owner.
-    pub(super) fn consume(&mut self, value: &TypedOperand, span: Span) -> Result<(), Diagnostic> {
+    pub(super) fn consume(
+        &mut self,
+        value: &TypedOperand,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         if !needs_drop(value.type_name) {
             return Ok(());
         }
@@ -121,12 +141,7 @@ impl FunctionCompiler<'_> {
             Some(Origin::Local(place)) => {
                 self.check_movable((false, place), span)?;
                 let null = hir::Operand::Constant(type_id(value.type_name), 0);
-                self.emit(
-                    "store",
-                    Vec::new(),
-                    vec![hir::Operand::Place(place), null],
-                    None,
-                );
+                self.emit("store", Vec::new(), vec![hir::Operand::Place(place), null], None);
                 self.mark_moved(((false, place), Vec::new()));
                 Ok(())
             }
@@ -140,10 +155,9 @@ impl FunctionCompiler<'_> {
                 Ok(())
             }
             Some(Origin::Static) => Ok(()),
-            Some(Origin::Borrowed) | None => Err(Diagnostic::new(
-                span,
-                "cannot move out of a borrow, field, or element; use .copy()",
-            )),
+            Some(Origin::Borrowed) | None => {
+                Err(Diagnostic::new(span, "cannot move out of a borrow, field, or element; use .copy()"))
+            }
         }
     }
 
@@ -165,7 +179,10 @@ impl FunctionCompiler<'_> {
     }
 
     /// Drops the owning locals of scopes `depth..`, innermost first.
-    pub(super) fn drop_scopes(&mut self, depth: usize) {
+    pub(super) fn drop_scopes(
+        &mut self,
+        depth: usize,
+    ) {
         let mut owned = Vec::new();
         for scope in self.scopes[depth..].iter().rev() {
             let mut own: Vec<_> = scope
@@ -181,7 +198,8 @@ impl FunctionCompiler<'_> {
         for (name, binding) in owned {
             // A drop frees what the owner holds: a change to it.
             if let Some(owner) = borrows::identity(&binding.storage) {
-                let error = Diagnostic::new(self.statement_span, format!("{name:?} is dropped here while still borrowed"));
+                let error =
+                    Diagnostic::new(self.statement_span, format!("{name:?} is dropped here while still borrowed"));
                 self.drop_borrowed(owner, error);
             }
             match (binding.type_, &binding.storage) {
@@ -191,8 +209,7 @@ impl FunctionCompiler<'_> {
                     self.emit_drop(hir::Operand::Value(value), type_name);
                 }
                 (BindingType::Struct(struct_id), storage) => {
-                    let view = binding_view(struct_id, storage, true, &name)
-                        .expect("an owned aggregate has storage");
+                    let view = binding_view(struct_id, storage, true, &name).expect("an owned aggregate has storage");
                     self.drop_owner(&view);
                 }
                 (BindingType::Array { element, shape }, storage) => {
@@ -205,24 +222,18 @@ impl FunctionCompiler<'_> {
         }
     }
 
-    pub(super) fn emit_drop(&mut self, operand: hir::Operand, type_name: TypeName) {
+    pub(super) fn emit_drop(
+        &mut self,
+        operand: hir::Operand,
+        type_name: TypeName,
+    ) {
         debug_assert!(needs_drop(type_name));
-        let element = self
-            .types
-            .owned_element(type_name)
-            .expect("an owning buffer");
+        let element = self.types.owned_element(type_name).expect("an owning buffer");
         if self.element_needs_drop(element) {
             // A moved-from vec is null and owns no elements.
-            let hir::Operand::Value(vector) = operand else {
-                unreachable!("a vec with owning elements is a value")
-            };
+            let hir::Operand::Value(vector) = operand else { unreachable!("a vec with owning elements is a value") };
             let done = self.block();
-            self.branch_unless(
-                "ne",
-                operand.clone(),
-                hir::Operand::Constant(type_id(type_name), 0),
-                done,
-            );
+            self.branch_unless("ne", operand.clone(), hir::Operand::Constant(type_id(type_name), 0), done);
             self.each_element(vector, element, Owned::Drop);
             self.terminate(jump(done));
             self.current = done;
@@ -233,7 +244,10 @@ impl FunctionCompiler<'_> {
 
 impl FunctionCompiler<'_> {
     /// Whether a value of this type holds something to drop.
-    pub(super) fn element_needs_drop(&self, element: ElementType) -> bool {
+    pub(super) fn element_needs_drop(
+        &self,
+        element: ElementType,
+    ) -> bool {
         match element {
             ElementType::Scalar(type_name) => needs_drop(type_name),
             ElementType::Struct(id) if self.types.array_of(id).is_some() => {
@@ -242,39 +256,35 @@ impl FunctionCompiler<'_> {
             ElementType::Struct(id) => {
                 let layout = self.types.structure(id).expect("registered layout");
                 self.types.dropped.contains_key(&id)
-                    || layout
-                    .fields
-                    .values()
-                    .any(|field| self.element_needs_drop(field.type_))
+                    || layout.fields.values().any(|field| self.element_needs_drop(field.type_))
             }
         }
     }
 
-    pub(super) fn drop_view(&mut self, view: &StructView) {
+    pub(super) fn drop_view(
+        &mut self,
+        view: &StructView,
+    ) {
         self.each_owned(view, Owned::Drop);
     }
 
     /// Applies `action` to what an aggregate owns; an enum, only what its
     /// current variant does.
-    pub(super) fn each_owned(&mut self, view: &StructView, action: Owned) {
+    pub(super) fn each_owned(
+        &mut self,
+        view: &StructView,
+        action: Owned,
+    ) {
         if let Some((element, shape)) = self.types.array_of(view.struct_id) {
             return self.owned_array(view, element, shape, action);
         }
         if let Owned::Drop = action {
             self.call_drop(view);
         }
-        if let Some(layout) = self
-            .types
-            .enum_of(ElementType::Struct(view.struct_id))
-            .cloned()
-        {
+        if let Some(layout) = self.types.enum_of(ElementType::Struct(view.struct_id)).cloned() {
             let tag = self.load_tag(view, &layout);
             for variant in &layout.variants {
-                if !variant
-                    .fields
-                    .iter()
-                    .any(|(_, field)| self.element_needs_drop(field.type_))
-                {
+                if !variant.fields.iter().any(|(_, field)| self.element_needs_drop(field.type_)) {
                     continue;
                 }
                 let expected = hir::Operand::Constant(type_id(layout.tag), variant.tag);
@@ -288,11 +298,7 @@ impl FunctionCompiler<'_> {
             }
             return;
         }
-        let layout = self
-            .types
-            .structure(view.struct_id)
-            .expect("registered layout")
-            .clone();
+        let layout = self.types.structure(view.struct_id).expect("registered layout").clone();
         for (name, field) in &layout.fields {
             let flag = match action {
                 Owned::Drop => self.frame_flag(view, name),
@@ -302,7 +308,12 @@ impl FunctionCompiler<'_> {
         }
     }
 
-    pub(super) fn owned_field(&mut self, view: &StructView, field: FieldLayout, action: Owned) {
+    pub(super) fn owned_field(
+        &mut self,
+        view: &StructView,
+        field: FieldLayout,
+        action: Owned,
+    ) {
         if let Some(shape) = field.shape {
             let struct_id = self.types.array(field.type_, shape);
             let array = StructView { struct_id, offset: view.offset + field.offset, ..view.clone() };
@@ -314,11 +325,7 @@ impl FunctionCompiler<'_> {
                 self.owned_leaf(place, type_name, action);
             }
             ElementType::Struct(struct_id) if self.element_needs_drop(field.type_) => {
-                let inner = StructView {
-                    struct_id,
-                    offset: view.offset + field.offset,
-                    ..view.clone()
-                };
+                let inner = StructView { struct_id, offset: view.offset + field.offset, ..view.clone() };
                 self.each_owned(&inner, action);
             }
             ElementType::Scalar(_) | ElementType::Struct(_) => {}
@@ -327,7 +334,13 @@ impl FunctionCompiler<'_> {
 
     /// Applies `action` to what each element owns of the array of `element`
     /// and `shape` at `array`.
-    pub(super) fn owned_array(&mut self, array: &StructView, element: ElementType, shape: Shape, action: Owned) {
+    pub(super) fn owned_array(
+        &mut self,
+        array: &StructView,
+        element: ElementType,
+        shape: Shape,
+        action: Owned,
+    ) {
         if !self.element_needs_drop(element) {
             return;
         }
@@ -339,7 +352,12 @@ impl FunctionCompiler<'_> {
     }
 
     /// Drops the owning value at `place`, or replaces it with its own copy.
-    pub(super) fn owned_leaf(&mut self, place: hir::Operand, type_name: TypeName, action: Owned) {
+    pub(super) fn owned_leaf(
+        &mut self,
+        place: hir::Operand,
+        type_name: TypeName,
+        action: Owned,
+    ) {
         let value = self.value(type_name);
         self.emit("load", vec![value], vec![place.clone()], None);
         match action {
@@ -395,10 +413,7 @@ impl FunctionCompiler<'_> {
             _ => None,
         };
         let Some(storage) = owned_local else {
-            return Err(Diagnostic::new(
-                span,
-                "cannot move out of a borrow, field, or element; use .copy()",
-            ));
+            return Err(Diagnostic::new(span, "cannot move out of a borrow, field, or element; use .copy()"));
         };
         if let Some(owner) = moves::owner(&storage) {
             self.check_movable(owner, span)?;
@@ -412,7 +427,10 @@ impl FunctionCompiler<'_> {
     /// The move `place` would make, when it is a field of an owner this
     /// function owns: a field of a struct with a `drop` cannot move, as the
     /// `drop` sees the whole.
-    pub(super) fn field_move(&self, place: &Expr) -> Option<FieldMove> {
+    pub(super) fn field_move(
+        &self,
+        place: &Expr,
+    ) -> Option<FieldMove> {
         let (owner, name, path) = self.projected(place)?;
         let binding = self.visible(&name)?;
         if !self.owns(&binding.storage) {
@@ -442,7 +460,11 @@ impl FunctionCompiler<'_> {
     }
 
     /// Moves `moving`'s field out of its owner, which is then partly moved.
-    fn move_field(&mut self, moving: &FieldMove, span: Span) -> Result<(), Diagnostic> {
+    fn move_field(
+        &mut self,
+        moving: &FieldMove,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         if let Some(refusal) = &moving.refusal {
             return Err(Diagnostic::new(span, refusal.clone()));
         }
@@ -461,7 +483,11 @@ impl FunctionCompiler<'_> {
     }
 
     /// Stores of zero to each of `units`, (offset, type, count) runs of cells at `view`.
-    pub(super) fn zero_stores(&self, view: &StructView, units: Vec<(u32, TypeName, u32)>) -> Vec<Store> {
+    pub(super) fn zero_stores(
+        &self,
+        view: &StructView,
+        units: Vec<(u32, TypeName, u32)>,
+    ) -> Vec<Store> {
         // An array's cells are a run even when one: its place is projected by element.
         let array = self.types.array_of(view.struct_id).is_some();
         units

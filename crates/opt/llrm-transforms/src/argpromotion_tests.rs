@@ -15,7 +15,11 @@ fn run(text: &str) -> String {
 /// A slice descriptor: the data pointer at 0, its length at 4. `sum` reads the length and
 /// passes the descriptor on, as Nib's recursive `fn f(a: &[i16], n: i16)` did: every call
 /// pushed the descriptor's far pointer and each callee `les`'d it to read one word.
-fn sum(attrs: &str, linkage: &str, body: &str) -> String {
+fn sum(
+    attrs: &str,
+    linkage: &str,
+    body: &str,
+) -> String {
     format!(
         "define {linkage}i16 @sum(ptr addrspace(1) {attrs} %d, i16 %n) {{
 b0:

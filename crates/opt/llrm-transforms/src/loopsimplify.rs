@@ -26,7 +26,11 @@ impl FunctionPass for LoopSimplify {
         "loopsimplify"
     }
 
-    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         let shape = (*analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function)).clone();
         if _simplified(unit.function, shape) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
@@ -35,7 +39,11 @@ impl FunctionPass for LoopSimplify {
 /// The edges from `sources` into `target` routed through one new block,
 /// which `target`'s phis read; the new block, or `None`, changing nothing,
 /// where a source's terminator or a phi cannot be regrouped.
-pub fn grouped(function: &mut Function, target: i64, sources: &BTreeSet<i64>) -> Option<BlockId> {
+pub fn grouped(
+    function: &mut Function,
+    target: i64,
+    sources: &BTreeSet<i64>,
+) -> Option<BlockId> {
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let entry = cfg::id(function.entry()?);
@@ -61,7 +69,10 @@ pub fn grouped(function: &mut Function, target: i64, sources: &BTreeSet<i64>) ->
         Operand::Block(block) => cfg::id(block),
         _ => unreachable!("a phi's block operand"),
     };
-    if phis.iter().any(|&phi| incoming(function, phi).iter().map(|&(_, block)| at(block)).collect::<BTreeSet<_>>() != *reaching) {
+    if phis
+        .iter()
+        .any(|&phi| incoming(function, phi).iter().map(|&(_, block)| at(block)).collect::<BTreeSet<_>>() != *reaching)
+    {
         return None;
     }
     let bridge = function.create_block(None);
@@ -79,10 +90,16 @@ pub fn grouped(function: &mut Function, target: i64, sources: &BTreeSet<i64>) ->
             function.insert(merged, Position::End(bridge)).expect("a placed block");
             Operand::Value(function.instruction(merged).result.expect("a phi's value"))
         };
-        let operands = kept.into_iter().chain([(result, Operand::Block(bridge))]).flat_map(|(value, block)| [value, block]).collect();
+        let operands = kept
+            .into_iter()
+            .chain([(result, Operand::Block(bridge))])
+            .flat_map(|(value, block)| [value, block])
+            .collect();
         function.set_operands(phi, operands);
     }
-    let void = function.instruction(function.terminator(cfg::block(*sources.first().expect("nonempty"))).expect("checked above")).ty;
+    let void = function
+        .instruction(function.terminator(cfg::block(*sources.first().expect("nonempty"))).expect("checked above"))
+        .ty;
     let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(destination)], Flags::default(), None);
     function.insert(jump, Position::End(bridge)).expect("a placed block");
     for &parent in sources {
@@ -105,11 +122,19 @@ pub fn copies() -> usize {
 /// Whether `loop_` has a block to group in `function`, whose graph and predecessors are given: its entries
 /// from outside are not one block that only enters it, it has more than one latch, or an exit is reached
 /// from outside the loop too. What the rest of `_simplified` finds on a copy, found without one.
-fn _needs_grouping(function: &Function, graph: &[cfg::Block], predecessors: &std::collections::BTreeMap<i64, BTreeSet<i64>>, loop_: &loops::Loop) -> bool {
+fn _needs_grouping(
+    function: &Function,
+    graph: &[cfg::Block],
+    predecessors: &std::collections::BTreeMap<i64, BTreeSet<i64>>,
+    loop_: &loops::Loop,
+) -> bool {
     let Some(entering) = predecessors.get(&loop_.header) else { return false };
     let outside = entering.difference(&loop_.body).copied().collect::<BTreeSet<_>>();
     let Some(&parent) = outside.first() else { return false };
-    if outside.len() != 1 || function.successors(cfg::block(parent)) != [cfg::block(loop_.header)] || loop_.latches.len() != 1 {
+    if outside.len() != 1
+        || function.successors(cfg::block(parent)) != [cfg::block(loop_.header)]
+        || loop_.latches.len() != 1
+    {
         return true;
     }
     let empty = BTreeSet::new();
@@ -128,7 +153,10 @@ pub fn simplified(function: &mut Function) -> bool {
 }
 
 /// `simplified`, `shape` being `function`'s.
-fn _simplified(function: &mut Function, mut shape: cfg::Shape) -> bool {
+fn _simplified(
+    function: &mut Function,
+    mut shape: cfg::Shape,
+) -> bool {
     if function.entry().is_none() || !shape.dominance.irreducible(function).is_empty() {
         return false;
     }
@@ -163,7 +191,11 @@ fn _simplified(function: &mut Function, mut shape: cfg::Shape) -> bool {
         }
         let graph = cfg::graph(&candidate);
         let current = if grouping {
-            cfg::Shape::of(&candidate).loops.into_iter().find(|loop_| loop_.header == original.header).expect("StopIteration")
+            cfg::Shape::of(&candidate)
+                .loops
+                .into_iter()
+                .find(|loop_| loop_.header == original.header)
+                .expect("StopIteration")
         } else {
             original.clone()
         };

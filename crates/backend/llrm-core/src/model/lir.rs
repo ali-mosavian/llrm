@@ -8,9 +8,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::model::ir::{Addr, Held, Operation, Semantics, Space};
-
 use crate::support::hash::IndexMap;
-
 use crate::support::pyrepr::{self, Repr};
 
 /// Every byte a 16-bit frame can address, below and above BP.
@@ -41,8 +39,9 @@ pub fn outside(reach: &BTreeSet<(i64, i64)>) -> Vec<(Addr, u32)> {
 pub struct CallMemory {
     pub effects: llrm_mir::memory::Effects,
     pub private: Vec<(Addr, u32)>,
-    /// The registers the callee's convention (the description's) disturbs: a function that keeps one for its caller saves it
-    /// before such a call, as it does before writing it. Empty where the callee's contract is what the call went by.
+    /// The registers the callee's convention (the description's) disturbs: a function that keeps one for its caller
+    /// saves it before such a call, as it does before writing it. Empty where the callee's contract is what the
+    /// call went by.
     pub disturbs: BTreeSet<iced_x86::Register>,
 }
 
@@ -62,29 +61,39 @@ impl CallMemory {
     /// Whether the frame bytes at `disp`, `width` long, are private to the
     /// caller; with no `disp`, whether the whole frame is.
     #[must_use]
-    pub fn spares(&self, disp: Option<i64>, width: u32) -> bool {
+    pub fn spares(
+        &self,
+        disp: Option<i64>,
+        width: u32,
+    ) -> bool {
         let (whole, size) = WHOLE_FRAME;
         let (low, high) = match disp {
             Some(disp) => (disp, disp + i64::from(width)),
             None => (whole.disp, whole.disp + i64::from(size)),
         };
-        self.private.iter().any(|(start, size)| start.space == Space::Frame && start.disp <= low && high <= start.disp + i64::from(*size))
+        self.private.iter().any(|(start, size)| {
+            start.space == Space::Frame && start.disp <= low && high <= start.disp + i64::from(*size)
+        })
     }
 }
 
-/// What `-g` says of the values an instruction makes, and where in the source's variables it stands. Equal whatever it holds: two
-/// instructions the code does not tell apart are not told apart by what a debugger is told of them, or `-g` would change the code
-/// wherever a pass compares instructions.
+/// What `-g` says of the values an instruction makes, and where in the source's variables it stands. Equal whatever it
+/// holds: two instructions the code does not tell apart are not told apart by what a debugger is told of them, or `-g`
+/// would change the code wherever a pass compares instructions.
 #[derive(Clone, Debug, Default)]
 pub struct DebugTags {
-    /// The values (by the number their register had in SSA) this instruction defines, whichever register it ends up writing.
+    /// The values (by the number their register had in SSA) this instruction defines, whichever register it ends up
+    /// writing.
     pub defines: Vec<u32>,
     /// The notes (`LirBody::notes`) that stand before it.
     pub before: Vec<u32>,
 }
 
 impl PartialEq for DebugTags {
-    fn eq(&self, _: &Self) -> bool {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
         true
     }
 }
@@ -129,13 +138,17 @@ pub struct Insn {
     pub ident: Derived<u64>,
 }
 
-/// A fact worked out from an instruction's fields, kept on it for every pass that asks. Cloning gives an empty one: a clone is
-/// made to be changed (`Insn { what: x, ..(**one).clone() }`, a hundred places), and the old instruction's answer is not the
-/// new one's. Instructions in a body are shared and not changed, so what is asked of one is asked once.
+/// A fact worked out from an instruction's fields, kept on it for every pass that asks. Cloning gives an empty one: a
+/// clone is made to be changed (`Insn { what: x, ..(**one).clone() }`, a hundred places), and the old instruction's
+/// answer is not the new one's. Instructions in a body are shared and not changed, so what is asked of one is asked
+/// once.
 pub struct Derived<T>(std::sync::OnceLock<T>);
 
 impl<T> Derived<T> {
-    pub fn get_or_init(&self, work: impl FnOnce() -> T) -> &T {
+    pub fn get_or_init(
+        &self,
+        work: impl FnOnce() -> T,
+    ) -> &T {
         self.0.get_or_init(work)
     }
 }
@@ -154,7 +167,10 @@ impl<T> Clone for Derived<T> {
 
 /// Not a part of what an instruction is: two that say the same are equal whatever has been asked of them.
 impl<T> PartialEq for Derived<T> {
-    fn eq(&self, _other: &Self) -> bool {
+    fn eq(
+        &self,
+        _other: &Self,
+    ) -> bool {
         true
     }
 }
@@ -162,7 +178,10 @@ impl<T> PartialEq for Derived<T> {
 impl<T> Eq for Derived<T> {}
 
 impl<T> std::fmt::Debug for Derived<T> {
-    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         out.write_str("Derived")
     }
 }
@@ -171,14 +190,20 @@ impl LirBody {
     /// The values (by the number their register had in SSA) that `-g`'s notes name.
     #[must_use]
     pub fn named_values(&self) -> BTreeSet<u32> {
-        self.notes.iter().filter_map(|note| if let NoteValue::Value(value) = note.value { Some(value) } else { None }).collect()
+        self.notes
+            .iter()
+            .filter_map(|note| if let NoteValue::Value(value) = note.value { Some(value) } else { None })
+            .collect()
     }
 
-    /// `self`, a pass's result from `old`, with the notes of the instructions the pass removed or replaced standing before the next
-    /// instruction of the block that is still there, or the last: a note says where in the source a variable takes a value, and
-    /// that place has not moved because the instruction it stood before is gone.
+    /// `self`, a pass's result from `old`, with the notes of the instructions the pass removed or replaced standing
+    /// before the next instruction of the block that is still there, or the last: a note says where in the source a
+    /// variable takes a value, and that place has not moved because the instruction it stood before is gone.
     #[must_use]
-    pub fn with_notes_kept(&self, old: &LirBody) -> LirBody {
+    pub fn with_notes_kept(
+        &self,
+        old: &LirBody,
+    ) -> LirBody {
         if self.notes.is_empty() {
             return self.clone();
         }
@@ -188,16 +213,22 @@ impl LirBody {
             .iter()
             .map(|block| {
                 let Some(before) = old.blocks.iter().find(|one| one.at == block.at) else { return block.clone() };
-                let present: BTreeSet<u32> = block.insns.iter().flat_map(|one| one.debug.before.iter().copied()).collect();
+                let present: BTreeSet<u32> =
+                    block.insns.iter().flat_map(|one| one.debug.before.iter().copied()).collect();
                 let alive: BTreeSet<*const Insn> = block.insns.iter().map(Arc::as_ptr).collect();
-                // Where each lost note goes: the index in the new block of the first old instruction after it that survives.
+                // Where each lost note goes: the index in the new block of the first old instruction after it that
+                // survives.
                 let mut moved: Vec<(usize, u32)> = Vec::new();
                 for (index, one) in before.insns.iter().enumerate() {
-                    let lost: Vec<u32> = one.debug.before.iter().copied().filter(|note| !present.contains(note)).collect();
+                    let lost: Vec<u32> =
+                        one.debug.before.iter().copied().filter(|note| !present.contains(note)).collect();
                     if lost.is_empty() {
                         continue;
                     }
-                    let survivor = before.insns[index..].iter().find(|later| alive.contains(&Arc::as_ptr(later))).and_then(|later| block.insns.iter().position(|now| Arc::ptr_eq(now, later)));
+                    let survivor = before.insns[index..]
+                        .iter()
+                        .find(|later| alive.contains(&Arc::as_ptr(later)))
+                        .and_then(|later| block.insns.iter().position(|now| Arc::ptr_eq(now, later)));
                     let at = survivor.or_else(|| block.insns.len().checked_sub(1));
                     if let Some(at) = at {
                         moved.extend(lost.into_iter().map(|note| (at, note)));
@@ -212,7 +243,8 @@ impl LirBody {
                     .iter()
                     .enumerate()
                     .map(|(index, one)| {
-                        let mut notes: Vec<u32> = moved.iter().filter(|(at, _)| *at == index).map(|&(_, note)| note).collect();
+                        let mut notes: Vec<u32> =
+                            moved.iter().filter(|(at, _)| *at == index).map(|&(_, note)| note).collect();
                         if notes.is_empty() {
                             return Arc::clone(one);
                         }
@@ -227,10 +259,14 @@ impl LirBody {
         if changed { self.with_blocks(blocks) } else { self.clone() }
     }
 
-    /// `self`, a pass's result from `old`, with the values the instructions the pass replaced defined told of the last instruction of
-    /// the block, made from the same source instruction, that writes the same place: the value is complete there.
+    /// `self`, a pass's result from `old`, with the values the instructions the pass replaced defined told of the last
+    /// instruction of the block, made from the same source instruction, that writes the same place: the value is
+    /// complete there.
     #[must_use]
-    pub fn with_defs_kept(&self, old: &LirBody) -> LirBody {
+    pub fn with_defs_kept(
+        &self,
+        old: &LirBody,
+    ) -> LirBody {
         if self.notes.is_empty() {
             return self.clone();
         }
@@ -241,18 +277,25 @@ impl LirBody {
             .map(|block| {
                 let Some(before) = old.blocks.iter().find(|one| one.at == block.at) else { return block.clone() };
                 let alive: BTreeSet<*const Insn> = block.insns.iter().map(Arc::as_ptr).collect();
-                let present: BTreeSet<u32> = block.insns.iter().flat_map(|one| one.debug.defines.iter().copied()).collect();
+                let present: BTreeSet<u32> =
+                    block.insns.iter().flat_map(|one| one.debug.defines.iter().copied()).collect();
                 let mut moved: Vec<(usize, Vec<u32>)> = Vec::new();
                 for one in &before.insns {
                     if one.arrival() || alive.contains(&Arc::as_ptr(one)) {
                         continue;
                     }
-                    let lost: Vec<u32> = one.debug.defines.iter().copied().filter(|tag| !present.contains(tag)).collect();
+                    let lost: Vec<u32> =
+                        one.debug.defines.iter().copied().filter(|tag| !present.contains(tag)).collect();
                     let dest = one.what.as_ref().and_then(|what| what.dests.first());
                     if lost.is_empty() || dest.is_none() {
                         continue;
                     }
-                    let at = block.insns.iter().rposition(|now| now.at == one.at && now.what.as_ref().and_then(|what| what.dests.first()) == dest);
+                    let at = block
+                        .insns
+                        .iter()
+                        .rposition(
+                            |now| now.at == one.at && now.what.as_ref().and_then(|what| what.dests.first()) == dest,
+                        );
                     if let Some(at) = at {
                         moved.push((at, lost));
                     }
@@ -266,7 +309,11 @@ impl LirBody {
                     .iter()
                     .enumerate()
                     .map(|(index, one)| {
-                        let tags: Vec<u32> = moved.iter().filter(|(at, _)| *at == index).flat_map(|(_, tags)| tags.iter().copied()).collect();
+                        let tags: Vec<u32> = moved
+                            .iter()
+                            .filter(|(at, _)| *at == index)
+                            .flat_map(|(_, tags)| tags.iter().copied())
+                            .collect();
                         if tags.is_empty() {
                             return Arc::clone(one);
                         }
@@ -283,8 +330,8 @@ impl LirBody {
         if changed { self.with_blocks(blocks) } else { self.clone() }
     }
 
-    /// `self` with a copy that defines a value `-g` names told so: the moves that phi elimination makes for a phi's result are
-    /// the only instructions that make it.
+    /// `self` with a copy that defines a value `-g` names told so: the moves that phi elimination makes for a phi's
+    /// result are the only instructions that make it.
     #[must_use]
     pub fn with_phi_copies_noted(&self) -> Self {
         let named = self.named_values();
@@ -299,8 +346,19 @@ impl LirBody {
                     .insns
                     .iter()
                     .map(|one| match one.defines.as_slice() {
-                        [value] if named.contains(value) && one.debug.defines.is_empty() && one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Move) && one.uses.len() == 1 => {
-                            Arc::new(Insn { debug: DebugTags { defines: vec![*value], ..one.debug.clone() }, ..(**one).clone() })
+                        [value]
+                            if named.contains(value)
+                                && one.debug.defines.is_empty()
+                                && one
+                                    .what
+                                    .as_ref()
+                                    .is_some_and(|what| what.op == crate::model::ir::Operation::Move)
+                                && one.uses.len() == 1 =>
+                        {
+                            Arc::new(Insn {
+                                debug: DebugTags { defines: vec![*value], ..one.debug.clone() },
+                                ..(**one).clone()
+                            })
                         }
                         _ => Arc::clone(one),
                     })
@@ -317,7 +375,9 @@ impl Insn {
     /// code, and anything placed at the entry goes after it, or it clobbers an argument.
     #[must_use]
     pub fn arrival(&self) -> bool {
-        self.call.is_none() && !self.delivers.is_empty() && self.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Nothing)
+        self.call.is_none()
+            && !self.delivers.is_empty()
+            && self.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Nothing)
     }
     /// Constructs Python's five-required-field `Insn` form with every later
     /// field at its dataclass default.
@@ -357,10 +417,11 @@ impl Insn {
         }
     }
 
-    /// The instruction itself, as a number: what a table keeps of an instruction it must find again in a later body that shares it. It is
-    /// given when first asked and shared by every `Arc` of the instruction; a clone, which is made to be changed, is another instruction
-    /// and has its own. Numbers are never reused, where the address of a dropped instruction is (a table kept past the instruction it
-    /// named would answer for whatever was allocated there). They name, and no order or iteration of them is ever read.
+    /// The instruction itself, as a number: what a table keeps of an instruction it must find again in a later body
+    /// that shares it. It is given when first asked and shared by every `Arc` of the instruction; a clone, which is
+    /// made to be changed, is another instruction and has its own. Numbers are never reused, where the address of a
+    /// dropped instruction is (a table kept past the instruction it named would answer for whatever was allocated
+    /// there). They name, and no order or iteration of them is ever read.
     #[must_use]
     pub fn id(&self) -> u64 {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -395,7 +456,8 @@ impl Insn {
     /// barrier with no `call` to list what it touches.
     #[must_use]
     pub fn unmodeled_write(&self) -> bool {
-        self.call.is_none() && self.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Call | Operation::Barrier))
+        self.call.is_none()
+            && self.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Call | Operation::Barrier))
     }
 
     /// Whether this instruction puts bytes out, which its machine form
@@ -431,9 +493,12 @@ impl Insn {
     /// The source ranges this instruction owns.
     #[must_use]
     pub fn owned(&self) -> Vec<(i64, i64)> {
-        if self.spread.is_empty() { self.covers.into_iter().filter(|(lo, hi)| lo < hi).collect() } else { self.spread.clone() }
+        if self.spread.is_empty() {
+            self.covers.into_iter().filter(|(lo, hi)| lo < hi).collect()
+        } else {
+            self.spread.clone()
+        }
     }
-
 }
 
 /// One value that is two definitions above this block, by id.
@@ -447,10 +512,7 @@ pub struct Phi {
 
 impl Repr for Phi {
     fn repr(&self) -> String {
-        pyrepr::dataclass(
-            "Phi",
-            &[("result", self.result.repr()), ("incoming", pyrepr::tuple(&self.incoming))],
-        )
+        pyrepr::dataclass("Phi", &[("result", self.result.repr()), ("incoming", pyrepr::tuple(&self.incoming))])
     }
 }
 
@@ -467,27 +529,40 @@ pub struct LirBlock {
     pub cold: bool,
 }
 
-/// A block's instructions, shared: a copy of the block is the same instructions, and two blocks are the same instructions when
-/// they are the same allocation (`same_as`), which is how the facts of a block are kept for every body that has it.
+/// A block's instructions, shared: a copy of the block is the same instructions, and two blocks are the same
+/// instructions when they are the same allocation (`same_as`), which is how the facts of a block are kept for every
+/// body that has it.
 #[derive(Clone, Debug, Default)]
 pub struct Insns(Arc<[Arc<Insn>]>);
 
 impl Insns {
-    /// `change` made to a copy of the instructions, which then are these: the way a test or a one-off edit changes a block.
-    pub fn edit<R>(&mut self, change: impl FnOnce(&mut Vec<Arc<Insn>>) -> R) -> R {
+    /// `change` made to a copy of the instructions, which then are these: the way a test or a one-off edit changes a
+    /// block.
+    pub fn edit<R>(
+        &mut self,
+        change: impl FnOnce(&mut Vec<Arc<Insn>>) -> R,
+    ) -> R {
         let mut insns = self.0.to_vec();
         let out = change(&mut insns);
         *self = insns.into();
         out
     }
 
-    pub fn same_as(&self, other: &Self) -> bool {
+    pub fn same_as(
+        &self,
+        other: &Self,
+    ) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
 
-    /// The same instructions, whether or not they were put in a list of their own: the allocation, or each instruction by identity.
-    pub fn same_insns(&self, other: &Self) -> bool {
-        self.same_as(other) || (self.len() == other.len() && self.iter().zip(other.iter()).all(|(one, two)| Arc::ptr_eq(one, two)))
+    /// The same instructions, whether or not they were put in a list of their own: the allocation, or each instruction
+    /// by identity.
+    pub fn same_insns(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.same_as(other)
+            || (self.len() == other.len() && self.iter().zip(other.iter()).all(|(one, two)| Arc::ptr_eq(one, two)))
     }
 }
 
@@ -505,7 +580,10 @@ impl From<Vec<Arc<Insn>>> for Insns {
 }
 
 impl PartialEq for Insns {
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
         self.same_as(other) || *self.0 == *other.0
     }
 }
@@ -513,13 +591,19 @@ impl PartialEq for Insns {
 impl Eq for Insns {}
 
 impl PartialEq<Vec<Arc<Insn>>> for Insns {
-    fn eq(&self, other: &Vec<Arc<Insn>>) -> bool {
+    fn eq(
+        &self,
+        other: &Vec<Arc<Insn>>,
+    ) -> bool {
         *self.0 == **other
     }
 }
 
 impl<const N: usize> PartialEq<[Arc<Insn>; N]> for Insns {
-    fn eq(&self, other: &[Arc<Insn>; N]) -> bool {
+    fn eq(
+        &self,
+        other: &[Arc<Insn>; N],
+    ) -> bool {
         *self.0 == *other
     }
 }
@@ -548,25 +632,31 @@ impl Clone for LirBlock {
     fn clone(&self) -> Self {
         #[cfg(test)]
         BLOCK_CLONES.with(|count| count.set(count.get() + 1));
-        Self { at: self.at, insns: self.insns.clone(), succ: self.succ.clone(), phis: self.phis.clone(), cold: self.cold }
+        Self {
+            at: self.at,
+            insns: self.insns.clone(),
+            succ: self.succ.clone(),
+            phis: self.phis.clone(),
+            cold: self.cold,
+        }
     }
 }
 
 impl LirBlock {
     #[must_use]
-    pub fn new(at: i64, insns: Vec<Arc<Insn>>) -> Self {
-        Self {
-            at,
-            insns: insns.into(),
-            succ: Vec::new(),
-            phis: Vec::new(),
-            cold: false,
-        }
+    pub fn new(
+        at: i64,
+        insns: Vec<Arc<Insn>>,
+    ) -> Self {
+        Self { at, insns: insns.into(), succ: Vec::new(), phis: Vec::new(), cold: false }
     }
 
     /// Python's `replace(block, insns=insns)`: the old insns are never copied.
     #[must_use]
-    pub fn with_insns(&self, insns: Vec<Arc<Insn>>) -> Self {
+    pub fn with_insns(
+        &self,
+        insns: Vec<Arc<Insn>>,
+    ) -> Self {
         Self { at: self.at, insns: insns.into(), succ: self.succ.clone(), phis: self.phis.clone(), cold: self.cold }
     }
 
@@ -602,8 +692,8 @@ pub enum DebugPlace {
     Register(iced_x86::Register),
     /// A parameter the optimiser removed: there is none to show.
     Gone,
-    /// A variable the code keeps in no one place: where it is over the code is found from the notes (`LirBody::notes`) that
-    /// name it, the variable's metadata node being the number.
+    /// A variable the code keeps in no one place: where it is over the code is found from the notes (`LirBody::notes`)
+    /// that name it, the variable's metadata node being the number.
     Tracked(u32),
 }
 
@@ -633,8 +723,12 @@ pub enum NoteValue {
 pub struct BlockFrequencies(pub IndexMap<i64, f64>);
 
 impl PartialEq for BlockFrequencies {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.len() == other.0.len() && self.0.iter().all(|(at, runs)| other.0.get(at).is_some_and(|more| more.to_bits() == runs.to_bits()))
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.0.len() == other.0.len()
+            && self.0.iter().all(|(at, runs)| other.0.get(at).is_some_and(|more| more.to_bits() == runs.to_bits()))
     }
 }
 
@@ -667,8 +761,9 @@ pub struct LirBody {
     /// edge made since has none.
     pub odds: BlockOdds,
     /// How often each block runs per call, worked out once where the loops are plain (instruction selection) and kept
-    /// through every rewrite: a block made since is derived from its predecessors' (`Frequency::of`), one removed drops out.
-    /// The estimate is a fact about the program, not about the shape of whatever blocks the allocator has put on its edges.
+    /// through every rewrite: a block made since is derived from its predecessors' (`Frequency::of`), one removed
+    /// drops out. The estimate is a fact about the program, not about the shape of whatever blocks the allocator
+    /// has put on its edges.
     pub frequencies: Option<Arc<BlockFrequencies>>,
     /// It calls a routine that returns twice (`setjmp`): no frame slot is shared.
     pub returns_twice: bool,
@@ -680,16 +775,17 @@ pub struct LirBody {
     pub homes: Arc<std::collections::BTreeMap<u32, crate::model::ir::Mem>>,
     /// 16 or 32: the mode the target's code runs in, which decides how an instruction encodes and what it touches.
     pub bits: u32,
-    /// Every frame cell names the slot it lies in (`Addr::slot_home`): set once instruction selection has tagged them, and
-    /// then a rule of the verifier.
+    /// Every frame cell names the slot it lies in (`Addr::slot_home`): set once instruction selection has tagged them,
+    /// and then a rule of the verifier.
     pub slotted: bool,
-    /// `-g`'s variables are found from the canonical frame address, so they need no frame register: the debug format says
-    /// where a cell is by its distance from the caller's frame (`FrameBase::Cfa`), whichever register the code addresses it by.
+    /// `-g`'s variables are found from the canonical frame address, so they need no frame register: the debug format
+    /// says where a cell is by its distance from the caller's frame (`FrameBase::Cfa`), whichever register the
+    /// code addresses it by.
     pub cfa_variables: bool,
     /// What `-g` says of its variables at points in the code, by the numbers `DebugTags::before` holds.
     pub notes: Arc<Vec<DebugNote>>,
-    /// The values (by number) that arrive in a cell above the frame, with the cell's displacement and size: arguments the
-    /// caller pushed.
+    /// The values (by number) that arrive in a cell above the frame, with the cell's displacement and size: arguments
+    /// the caller pushed.
     pub arguments_in_cells: Arc<Vec<(u32, i64, u32)>>,
     /// The facts worked out of this body and the bodies made from it (`analysis::facts`).
     pub facts: crate::analysis::facts::Kept,
@@ -705,13 +801,22 @@ impl BlockOdds {
     pub const CERTAIN: f64 = 2147483648.0;
 
     /// `from`'s edge to `to`'s probability, if isel estimated it.
-    pub fn probability(&self, from: i64, to: i64) -> Option<f64> {
+    pub fn probability(
+        &self,
+        from: i64,
+        to: i64,
+    ) -> Option<f64> {
         self.taken.get(&(from, to)).map(|one| f64::from(*one) / Self::CERTAIN)
     }
 
     /// `from`'s edge to `to` among its successors `succ`: as isel stated it,
     /// or an even part of what its stated edges leave the unstated ones.
-    pub fn chance(&self, from: i64, succ: &[i64], to: i64) -> f64 {
+    pub fn chance(
+        &self,
+        from: i64,
+        succ: &[i64],
+        to: i64,
+    ) -> f64 {
         let succ: BTreeSet<i64> = succ.iter().copied().collect();
         if !succ.contains(&to) {
             return 0.0;
@@ -732,7 +837,13 @@ impl BlockOdds {
     /// had is stated first, implicit ones included, so each reads the same
     /// whatever its successors become; the old edge stays recorded so that
     /// undoing a split finds it.
-    pub fn rerouted(&mut self, from: i64, succ: &[i64], old: i64, into: &[(i64, f64)]) {
+    pub fn rerouted(
+        &mut self,
+        from: i64,
+        succ: &[i64],
+        old: i64,
+        into: &[(i64, f64)],
+    ) {
         let before: Vec<(i64, f64)> = succ.iter().map(|to| (*to, self.chance(from, succ, *to))).collect();
         let through = self.chance(from, succ, old);
         let fixed = |probability: f64| (probability * Self::CERTAIN).round().min(f64::from(u32::MAX)) as u32;
@@ -741,7 +852,9 @@ impl BlockOdds {
         }
         // Only a successor's edge adds to what an edge brings: an entry kept
         // for an edge `from` no longer has is no part of it.
-        let had = |to: i64| before.iter().find(|(one, _)| *one == to && to != old).map_or(0.0, |(_, probability)| *probability);
+        let had = |to: i64| {
+            before.iter().find(|(one, _)| *one == to && to != old).map_or(0.0, |(_, probability)| *probability)
+        };
         for (to, share) in into {
             self.taken.insert((from, *to), fixed(had(*to) + through * share));
         }
@@ -762,7 +875,13 @@ impl LirBody {
         self.blocks
             .iter()
             .filter(|block| block.succ.len() > 1)
-            .flat_map(|block| block.succ.iter().filter(|to| preds.get(*to).is_some_and(|count| *count > 1)).map(move |to| (block.at, *to)))
+            .flat_map(|block| {
+                block
+                    .succ
+                    .iter()
+                    .filter(|to| preds.get(*to).is_some_and(|count| *count > 1))
+                    .map(move |to| (block.at, *to))
+            })
             .collect()
     }
 
@@ -805,14 +924,19 @@ impl LirBody {
 
     /// Python's `replace(body, blocks=blocks)`: the old blocks are never copied.
     #[must_use]
-    pub fn with_blocks(&self, blocks: Vec<LirBlock>) -> Self {
+    pub fn with_blocks(
+        &self,
+        blocks: Vec<LirBlock>,
+    ) -> Self {
         let frequencies = self.frequencies.as_ref().map(|kept| {
             // A block removed leaves the table with it.
             let present: BTreeSet<i64> = blocks.iter().map(|one| one.at).collect();
             if kept.0.keys().all(|at| present.contains(at)) {
                 Arc::clone(kept)
             } else {
-                Arc::new(BlockFrequencies(kept.0.iter().filter(|(at, _)| present.contains(at)).map(|(at, runs)| (*at, *runs)).collect()))
+                Arc::new(BlockFrequencies(
+                    kept.0.iter().filter(|(at, _)| present.contains(at)).map(|(at, runs)| (*at, *runs)).collect(),
+                ))
             }
         });
         Self {
@@ -846,10 +970,7 @@ impl LirBody {
     /// Python `LirBody.insns`.
     #[must_use]
     pub fn insns(&self) -> Vec<Arc<Insn>> {
-        self.blocks
-            .iter()
-            .flat_map(|block| block.insns.iter().cloned())
-            .collect()
+        self.blocks.iter().flat_map(|block| block.insns.iter().cloned()).collect()
     }
 
     /// Every source byte an instruction owns, once per owner, in order. A
@@ -899,7 +1020,10 @@ pub fn anchor(one: Arc<Insn>) -> Arc<Insn> {
 /// Only the source bytes `one` owns: no machine work and no dataflow.
 #[must_use]
 pub fn bytes_only(one: &Arc<Insn>) -> Arc<Insn> {
-    let inert = one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing && what.name.as_deref().unwrap_or("").is_empty());
+    let inert = one
+        .what
+        .as_ref()
+        .is_some_and(|what| what.op == Operation::Nothing && what.name.as_deref().unwrap_or("").is_empty());
     if inert && one.defines.is_empty() && one.uses.is_empty() {
         return Arc::clone(one);
     }
@@ -915,7 +1039,11 @@ pub fn bytes_only(one: &Arc<Insn>) -> Arc<Insn> {
 /// rewritten occurrence, while ownership decisions are deliberately made
 /// against the original occurrence, matching Python's two-phase loop.
 #[must_use]
-pub fn without<F, R>(insns: &[Arc<Insn>], drop: F, rewrite: Option<R>) -> Vec<Arc<Insn>>
+pub fn without<F, R>(
+    insns: &[Arc<Insn>],
+    drop: F,
+    rewrite: Option<R>,
+) -> Vec<Arc<Insn>>
 where
     F: Fn(&Arc<Insn>) -> bool,
     R: Fn(&Arc<Insn>) -> Arc<Insn>,
@@ -924,9 +1052,7 @@ where
     // Whether `out` starts with a dropped instruction's anchor.
     let mut first_dropped = false;
     for one in insns {
-        let kept = rewrite
-            .as_ref()
-            .map_or_else(|| Arc::clone(one), |rewrite| rewrite(one));
+        let kept = rewrite.as_ref().map_or_else(|| Arc::clone(one), |rewrite| rewrite(one));
         if !drop(&kept) {
             out.push(kept);
             continue;
@@ -944,20 +1070,17 @@ where
             out.push(anchored);
             continue;
         }
-        let where_ = out.iter().rposition(|previous| {
-            previous
-                .covers
-                .is_some_and(|(previous_start, previous_end)| previous_start != previous_end)
-        });
+        let where_ = out
+            .iter()
+            .rposition(
+                |previous| previous.covers.is_some_and(|(previous_start, previous_end)| previous_start != previous_end),
+            );
         let Some(where_) = where_ else {
             first_dropped |= out.is_empty();
             out.push(anchored);
             continue;
         };
-        if out[where_]
-            .covers
-            .is_none_or(|(_, previous_end)| previous_end != start)
-        {
+        if out[where_].covers.is_none_or(|(_, previous_end)| previous_end != start) {
             out.push(anchored);
             continue;
         }
@@ -966,11 +1089,11 @@ where
         out[where_] = Arc::new(replacement);
     }
     if out.len() > 1 {
-        let following = out.iter().enumerate().skip(1).find_map(|(index, one)| {
-            one.covers
-                .is_some_and(|(start, end)| start < end)
-                .then_some(index)
-        });
+        let following = out
+            .iter()
+            .enumerate()
+            .skip(1)
+            .find_map(|(index, one)| one.covers.is_some_and(|(start, end)| start < end).then_some(index));
         let first = Arc::clone(&out[0]);
         let second = following.map(|index| Arc::clone(&out[index]));
         if first_dropped
@@ -978,7 +1101,8 @@ where
             && second.is_some()
             && first.spread.len() <= 1
             && second.as_ref().is_some_and(|second| second.spread.len() <= 1)
-            && first.covers.map(|covers| covers.1) == second.as_ref().and_then(|second| second.covers).map(|covers| covers.0)
+            && first.covers.map(|covers| covers.1)
+                == second.as_ref().and_then(|second| second.covers).map(|covers| covers.0)
         {
             let following = following.expect("second is not None");
             let mut replacement = (*out[following]).clone();
@@ -993,49 +1117,70 @@ where
 #[cfg(test)]
 mod tests {
 
-    /// A table kept past the instruction it named answered for whatever was allocated at its address next: the key of an instruction was its
-    /// address, which a dropped instruction gives back. An instruction is its number, never reused; its clone is another instruction.
+    /// A table kept past the instruction it named answered for whatever was allocated at its address next: the key of
+    /// an instruction was its address, which a dropped instruction gives back. An instruction is its number, never
+    /// reused; its clone is another instruction.
     #[test]
     fn test_a_dropped_instructions_key_is_not_given_to_the_next_one_made() {
         let mut seen = std::collections::BTreeSet::new();
         for at in 0..200 {
             let made = instruction(at, None);
-            assert!(seen.insert(crate::analysis::intervals::key(&made)), "the key of instruction {at} is one an earlier instruction had");
+            assert!(
+                seen.insert(crate::analysis::intervals::key(&made)),
+                "the key of instruction {at} is one an earlier instruction had"
+            );
             drop(made);
         }
         let one = instruction(0, None);
         let same = Arc::clone(&one);
         let other = Arc::new((*one).clone());
-        assert_eq!(crate::analysis::intervals::key(&one), crate::analysis::intervals::key(&same), "a share is the instruction");
-        assert_ne!(crate::analysis::intervals::key(&one), crate::analysis::intervals::key(&other), "a clone is another instruction");
+        assert_eq!(
+            crate::analysis::intervals::key(&one),
+            crate::analysis::intervals::key(&same),
+            "a share is the instruction"
+        );
+        assert_ne!(
+            crate::analysis::intervals::key(&one),
+            crate::analysis::intervals::key(&other),
+            "a clone is another instruction"
+        );
     }
 
-    /// A copy of a body copied every block's instruction list (a block clone was 2.5% of compiling d_faces), and no block could say it
-    /// was the one a fact had been made of. A copy shares them; a rewritten block is the only one that is not the same.
+    /// A copy of a body copied every block's instruction list (a block clone was 2.5% of compiling d_faces), and no
+    /// block could say it was the one a fact had been made of. A copy shares them; a rewritten block is the only
+    /// one that is not the same.
     #[test]
     fn test_a_copy_of_a_body_shares_its_blocks_instructions_and_a_rewrite_shares_the_rest() {
         let one = Arc::new(Insn::new(1, None, None, Vec::new(), Vec::new()));
-        let body = super::LirBody::new("f", 1, vec![super::LirBlock::new(1, vec![Arc::clone(&one)]), super::LirBlock::new(2, vec![one])], Default::default(), Default::default());
+        let body = super::LirBody::new(
+            "f",
+            1,
+            vec![super::LirBlock::new(1, vec![Arc::clone(&one)]), super::LirBlock::new(2, vec![one])],
+            Default::default(),
+            Default::default(),
+        );
         let copy = body.clone();
-        assert!(body.blocks.iter().zip(&copy.blocks).all(|(a, b)| a.insns.same_as(&b.insns)), "a copy made its own instruction lists");
+        assert!(
+            body.blocks.iter().zip(&copy.blocks).all(|(a, b)| a.insns.same_as(&b.insns)),
+            "a copy made its own instruction lists"
+        );
         let rewritten = body.with_blocks(vec![body.blocks[0].with_insns(Vec::new()), body.blocks[1].clone()]);
-        assert!(!rewritten.blocks[0].insns.same_as(&body.blocks[0].insns) && rewritten.blocks[1].insns.same_as(&body.blocks[1].insns));
+        assert!(
+            !rewritten.blocks[0].insns.same_as(&body.blocks[0].insns)
+                && rewritten.blocks[1].insns.same_as(&body.blocks[1].insns)
+        );
         assert!(body.blocks[0].insns == body.blocks[0].insns.to_vec(), "same instructions compare equal as lists");
     }
     use std::sync::Arc;
 
     use super::{Insn, anchor, without};
-
     use crate::model::ir::{Held, Operation, Semantics};
 
-    fn instruction(at: i64, covers: Option<(i64, i64)>) -> Arc<Insn> {
-        Arc::new(Insn::new(
-            at,
-            covers,
-            Some(Semantics::new(Operation::Move)),
-            Vec::new(),
-            Vec::new(),
-        ))
+    fn instruction(
+        at: i64,
+        covers: Option<(i64, i64)>,
+    ) -> Arc<Insn> {
+        Arc::new(Insn::new(at, covers, Some(Semantics::new(Operation::Move)), Vec::new(), Vec::new()))
     }
 
     #[test]
@@ -1046,10 +1191,7 @@ mod tests {
         source.defines = vec![2];
         source.uses = vec![1];
         source.group = Some(7);
-        source.requires = vec![(
-            Held { value: 1, width: 2 },
-            iced_x86::Register::DL,
-        )];
+        source.requires = vec![(Held { value: 1, width: 2 }, iced_x86::Register::DL)];
         source.spill_reload = true;
         let source = Arc::new(source);
         let anchored = anchor(Arc::clone(&source));
@@ -1070,11 +1212,7 @@ mod tests {
         // its exact contiguous bytes backwards, never to a later entry.
         let prior = instruction(0x10, Some((0x10, 0x12)));
         let removed = instruction(0x12, Some((0x12, 0x14)));
-        let kept = without(
-            &[prior, removed],
-            |one| one.at == 0x12,
-            None::<fn(&Arc<Insn>) -> Arc<Insn>>,
-        );
+        let kept = without(&[prior, removed], |one| one.at == 0x12, None::<fn(&Arc<Insn>) -> Arc<Insn>>);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].covers, Some((0x10, 0x14)));
     }
@@ -1085,11 +1223,7 @@ mod tests {
         // only a block's first source span can safely move forward.
         let removed = instruction(0x10, Some((0x10, 0x12)));
         let following = instruction(0x12, Some((0x12, 0x14)));
-        let kept = without(
-            &[removed, following],
-            |one| one.at == 0x10,
-            None::<fn(&Arc<Insn>) -> Arc<Insn>>,
-        );
+        let kept = without(&[removed, following], |one| one.at == 0x10, None::<fn(&Arc<Insn>) -> Arc<Insn>>);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].covers, Some((0x10, 0x14)));
     }
@@ -1100,11 +1234,7 @@ mod tests {
         // predecessor or multiple disjoint spans means the copy stays.
         let detached = instruction(0x20, Some((0x20, 0x22)));
         let next = instruction(0x30, Some((0x30, 0x32)));
-        let kept = without(
-            &[Arc::clone(&detached), next],
-            |one| one.at == 0x20,
-            None::<fn(&Arc<Insn>) -> Arc<Insn>>,
-        );
+        let kept = without(&[Arc::clone(&detached), next], |one| one.at == 0x20, None::<fn(&Arc<Insn>) -> Arc<Insn>>);
         assert_eq!(kept.len(), 2);
         assert_eq!(kept[0].covers, detached.covers);
 
@@ -1112,11 +1242,7 @@ mod tests {
         let mut spread = (*instruction(0x12, Some((0x12, 0x14)))).clone();
         spread.spread = vec![(0x12, 0x14), (0x20, 0x22)];
         let spread = Arc::new(spread);
-        let kept = without(
-            &[prior, spread],
-            |one| one.at == 0x12,
-            None::<fn(&Arc<Insn>) -> Arc<Insn>>,
-        );
+        let kept = without(&[prior, spread], |one| one.at == 0x12, None::<fn(&Arc<Insn>) -> Arc<Insn>>);
         assert_eq!(kept.len(), 2);
         assert_eq!(kept[1].covers, Some((0x12, 0x14)));
     }
@@ -1153,9 +1279,10 @@ mod tests {
     #[test]
     fn stage_dump_reprs_match_python() {
         // Expected strings printed by compile._lir_text's pieces in Python.
+        use iced_x86::Register;
+
         use crate::model::ir::Loc;
         use crate::support::pyrepr::{self, Repr};
-        use iced_x86::Register;
 
         let phi = |incoming: Vec<(i64, u32)>| super::Phi { result: 3, incoming }.repr();
         assert_eq!(phi(vec![(1, 2), (4, 5)]), "Phi(result=3, incoming=((1, 2), (4, 5)))");
@@ -1174,10 +1301,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
         );
-        one.requires = vec![
-            (Held { value: 1, width: 2 }, Register::CX),
-            (Held { value: 7, width: 4 }, Register::EBX),
-        ];
+        one.requires = vec![(Held { value: 1, width: 2 }, Register::CX), (Held { value: 7, width: 4 }, Register::EBX)];
         one.delivers = vec![(Held { value: 9, width: 1 }, Register::AL)];
         let line = |one: &Insn| {
             format!(

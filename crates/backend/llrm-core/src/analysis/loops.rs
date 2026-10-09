@@ -9,10 +9,9 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use crate::model::lir::LirBlock;
 use crate::support::bits::Bits;
 use crate::support::hash::IndexMap;
-
-use crate::model::lir::LirBlock;
 
 /// All these walks read of a block: where it is and where it goes.
 pub trait Node {
@@ -57,7 +56,10 @@ pub fn predecessors<N: Node>(blocks: &[N]) -> BTreeMap<i64, BTreeSet<i64>> {
 ///
 /// A block unreachable from the entry gets the empty set rather than "every
 /// block".
-pub fn dominators<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeMap<i64, BTreeSet<i64>> {
+pub fn dominators<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> BTreeMap<i64, BTreeSet<i64>> {
     dominance(blocks, entry).named()
 }
 
@@ -90,7 +92,11 @@ fn shaped<N: Node, T: Clone>(
     let same = |one: &Shaped| {
         one.entry == entry
             && one.shape.len() == blocks.len()
-            && one.shape.iter().zip(blocks).all(|((at, succ), block)| *at == block.at() && succ.as_slice() == block.succ())
+            && one
+                .shape
+                .iter()
+                .zip(blocks)
+                .all(|((at, succ), block)| *at == block.at() && succ.as_slice() == block.succ())
     };
     let found = SHAPES.with(|shapes| {
         let mut shapes = shapes.borrow_mut();
@@ -107,12 +113,15 @@ fn shaped<N: Node, T: Clone>(
     SHAPES.with(|shapes| {
         let mut shapes = shapes.borrow_mut();
         if !shapes.first().is_some_and(same) {
-            shapes.insert(0, Shaped {
-                entry,
-                shape: blocks.iter().map(|block| (block.at(), block.succ().to_vec())).collect(),
-                dominance: None,
-                loops: None,
-            });
+            shapes.insert(
+                0,
+                Shaped {
+                    entry,
+                    shape: blocks.iter().map(|block| (block.at(), block.succ().to_vec())).collect(),
+                    dominance: None,
+                    loops: None,
+                },
+            );
             shapes.truncate(REMEMBERED);
         }
         write(&mut shapes[0], computed.clone());
@@ -135,18 +144,32 @@ pub struct Dominance {
 const NONE: u32 = u32::MAX;
 
 impl Dominance {
-    fn slot(&self, at: i64) -> Option<usize> {
+    fn slot(
+        &self,
+        at: i64,
+    ) -> Option<usize> {
         self.ats.binary_search(&at).ok()
     }
 
     /// Whether the entry reaches `at`: only then does anything dominate it.
-    pub fn reachable(&self, at: i64) -> bool {
+    pub fn reachable(
+        &self,
+        at: i64,
+    ) -> bool {
         self.slot(at).is_some_and(|slot| self.enter[slot] != NONE)
     }
 
-    pub fn dominates(&self, dominator: i64, at: i64) -> bool {
+    pub fn dominates(
+        &self,
+        dominator: i64,
+        at: i64,
+    ) -> bool {
         match (self.slot(dominator), self.slot(at)) {
-            (Some(dominator), Some(at)) => self.enter[at] != NONE && self.enter[dominator] <= self.enter[at] && self.enter[at] <= self.last[dominator],
+            (Some(dominator), Some(at)) => {
+                self.enter[at] != NONE
+                    && self.enter[dominator] <= self.enter[at]
+                    && self.enter[at] <= self.last[dominator]
+            }
             _ => false,
         }
     }
@@ -171,7 +194,10 @@ impl Dominance {
     }
 }
 
-pub fn dominance<N: Node>(blocks: &[N], entry: Option<i64>) -> Rc<Dominance> {
+pub fn dominance<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> Rc<Dominance> {
     shaped(
         blocks,
         entry,
@@ -182,7 +208,10 @@ pub fn dominance<N: Node>(blocks: &[N], entry: Option<i64>) -> Rc<Dominance> {
 }
 
 /// Cooper, Harvey and Kennedy's iteration over reverse postorder, on the blocks the entry reaches.
-fn _dominance<N: Node>(blocks: &[N], entry: Option<i64>) -> Dominance {
+fn _dominance<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> Dominance {
     let ats = blocks.iter().map(Node::at).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>();
     let count = ats.len();
     let mut found = Dominance { ats, idom: vec![NONE; count], enter: vec![NONE; count], last: vec![NONE; count] };
@@ -302,7 +331,10 @@ pub struct Loop {
 }
 
 /// (latch, header) for every edge to a block that dominates its source.
-pub fn back_edges<N: Node>(blocks: &[N], dominance: &Dominance) -> Vec<(i64, i64)> {
+pub fn back_edges<N: Node>(
+    blocks: &[N],
+    dominance: &Dominance,
+) -> Vec<(i64, i64)> {
     let known = blocks.iter().map(Node::at).collect::<BTreeSet<_>>();
     let mut found = Vec::new();
     for block in blocks {
@@ -318,7 +350,11 @@ pub fn back_edges<N: Node>(blocks: &[N], dominance: &Dominance) -> Vec<(i64, i64
 /// Everything that reaches the latch without going back through the header.
 ///
 /// The header goes in before the walk starts, which is what stops it.
-pub fn _body(latch: i64, header: i64, preds: &BTreeMap<i64, BTreeSet<i64>>) -> BTreeSet<i64> {
+pub fn _body(
+    latch: i64,
+    header: i64,
+    preds: &BTreeMap<i64, BTreeSet<i64>>,
+) -> BTreeSet<i64> {
     let mut body = BTreeSet::from([header]);
     if latch == header {
         return body;
@@ -340,7 +376,10 @@ pub fn _body(latch: i64, header: i64, preds: &BTreeMap<i64, BTreeSet<i64>>) -> B
 ///
 /// Back edges sharing a header are one loop whose body is the union of
 /// theirs.
-pub fn loops<N: Node>(blocks: &[N], entry: Option<i64>) -> Vec<Loop> {
+pub fn loops<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> Vec<Loop> {
     let found = shaped(
         blocks,
         entry,
@@ -351,7 +390,10 @@ pub fn loops<N: Node>(blocks: &[N], entry: Option<i64>) -> Vec<Loop> {
     Vec::clone(&found)
 }
 
-fn _loops<N: Node>(blocks: &[N], entry: Option<i64>) -> Vec<Loop> {
+fn _loops<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> Vec<Loop> {
     let doms = dominance(blocks, entry);
     let preds = predecessors(&blocks.iter().filter(|block| doms.reachable(block.at())).collect::<Vec<_>>());
 
@@ -374,7 +416,10 @@ fn _loops<N: Node>(blocks: &[N], entry: Option<i64>) -> Vec<Loop> {
 ///
 /// Decided by actually cutting the edges and looking for a remaining cycle,
 /// not by address order.
-pub fn irreducible<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeSet<i64> {
+pub fn irreducible<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> BTreeSet<i64> {
     let doms = dominance(blocks, entry);
     let known = blocks.iter().filter(|block| doms.reachable(block.at())).map(Node::at).collect::<BTreeSet<_>>();
     let cut = back_edges(blocks, &doms).into_iter().collect::<BTreeSet<_>>();
@@ -434,7 +479,10 @@ pub fn irreducible<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeSet<i64> {
 }
 
 /// How many loops each block is inside -- 0 for straight-line code.
-pub fn depth<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeMap<i64, usize> {
+pub fn depth<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> BTreeMap<i64, usize> {
     let mut found = blocks.iter().map(|block| (block.at(), 0_usize)).collect::<BTreeMap<_, _>>();
     for loop_ in loops(blocks, entry) {
         for at in &loop_.body {
@@ -451,7 +499,10 @@ pub fn depth<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeMap<i64, usize> 
 ///
 /// The nearest strict dominator is the one with the most dominators of its
 /// own.
-pub fn immediate_dominators<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeMap<i64, Option<i64>> {
+pub fn immediate_dominators<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> BTreeMap<i64, Option<i64>> {
     let doms = dominators(blocks, entry);
     let mut found = BTreeMap::new();
     for block in blocks {
@@ -469,7 +520,10 @@ pub fn immediate_dominators<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeM
 
 /// Where a definition stops being the only one that reaches -- the blocks
 /// a phi belongs in.
-pub fn frontiers<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeMap<i64, BTreeSet<i64>> {
+pub fn frontiers<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> BTreeMap<i64, BTreeSet<i64>> {
     let doms = dominators(blocks, entry);
     let live = blocks.iter().filter(|block| !doms[&block.at()].is_empty()).collect::<Vec<_>>();
     let idom = immediate_dominators(&live, entry);

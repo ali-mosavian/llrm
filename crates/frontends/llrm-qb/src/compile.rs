@@ -4,26 +4,32 @@
 //! This emission boundary is a procedure module: it emits far Pascal
 //! SUB/FUNCTION bodies and their data inside the BASIC module envelope.
 
-use llrm_core::backend::stackusage::stack_to_add;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 
-use llrm_core::support::hash::IndexMap;
-
-use super::abi::AbiError;
-use llrm_core::driver::{self, basic::{self, written_basic}};
+use llrm_core::backend::stackusage::stack_to_add;
 use llrm_core::backend::{masm, objbuild};
+use llrm_core::driver::{
+    self,
+    basic::{self, written_basic},
+};
 use llrm_core::hir::{self, model};
 use llrm_core::objectfile::module::Space;
+use llrm_core::support::hash::IndexMap;
 use llrm_core::support::pyrepr::{self, Repr};
+
+use super::abi::AbiError;
 
 /// HIR is valid but does not yet have a truthful BASIC object spelling.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EmissionError(pub String);
 
 impl fmt::Display for EmissionError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
@@ -40,7 +46,10 @@ pub enum CompileError {
 }
 
 impl fmt::Display for CompileError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
             Self::Emission(one) => one.fmt(formatter),
             Self::Abi(one) => one.fmt(formatter),
@@ -91,7 +100,11 @@ fn _link_name(callable: &model::Callable) -> String {
 
 /// BC keeps source globals typed; compiler-owned data keeps `$D<n>`, and so
 /// does a global whose name is `taken`: a scalar and an array may share one.
-fn _data_name(module: &model::Module, object_: &model::DataObject, taken: &BTreeSet<String>) -> String {
+fn _data_name(
+    module: &model::Module,
+    object_: &model::DataObject,
+    taken: &BTreeSet<String>,
+) -> String {
     let name = object_.name.to_uppercase();
     if object_.linkage == model::DataLinkage::Internal
         && !object_.name.starts_with('$')
@@ -114,7 +127,10 @@ type Names = IndexMap<(Space, i64), String>;
 /// the DATA stream and statement table the envelope writes.
 fn _placed(module: &model::Module) -> impl Iterator<Item = &model::DataObject> {
     let reserved = [_READ_DATA_OBJECT, _STATEMENT_TABLE_OBJECT];
-    module.data.iter().filter(move |one| one.linkage == model::DataLinkage::Internal && !reserved.contains(&one.name.as_str()))
+    module
+        .data
+        .iter()
+        .filter(move |one| one.linkage == model::DataLinkage::Internal && !reserved.contains(&one.name.as_str()))
 }
 
 /// Each data object's symbol, by its HIR id: its own name where external.
@@ -139,7 +155,10 @@ fn _data_names(module: &model::Module) -> Names {
 /// The BASIC segment a data object goes in: far ones FSL_CONST, read-only
 /// ones BC_CN, the rest BC_DATA.
 fn _segment(object_: &model::DataObject) -> &'static str {
-    if matches!(object_.address, model::AddressKind::Far | model::AddressKind::Huge) {
+    if matches!(
+        object_.address,
+        model::AddressKind::Far | model::AddressKind::Huge
+    ) {
         "FSL_CONST"
     } else if object_.readonly {
         "BC_CN"
@@ -188,12 +207,19 @@ fn _read_data_lines(module: &model::Module) -> Result<Vec<Vec<u8>>, CompileError
 /// B$RSTB takes the first row whose key is at least its argument
 /// (rt/read.asm, RSTB_10), so keys need only ascend. BC's are the code
 /// offsets of labeled NOPs; `_labeled_data_keys` gives those.
-fn _read_data_items(module: &model::Module, keys: Vec<masm::Datum>) -> Result<Vec<masm::Datum>, CompileError> {
+fn _read_data_items(
+    module: &model::Module,
+    keys: Vec<masm::Datum>,
+) -> Result<Vec<masm::Datum>, CompileError> {
     let lines = _read_data_lines(module)?;
     if keys.len() != lines.len() {
         return emission("DATA keys do not match the serialized DATA rows");
     }
-    Ok(keys.into_iter().zip(lines).flat_map(|(key, line)| [key, masm::Datum::Bytes([line, vec![0]].concat())]).collect())
+    Ok(keys
+        .into_iter()
+        .zip(lines)
+        .flat_map(|(key, line)| [key, masm::Datum::Bytes([line, vec![0]].concat())])
+        .collect())
 }
 
 /// `program` with each DATA row keyed by its position in the table rather
@@ -205,12 +231,17 @@ pub(super) fn _positional_data(program: &model::Program) -> Result<model::Progra
         let mut rows = BTreeSet::new();
         for block in &mut function.blocks {
             let before = block.instructions.len();
-            block.instructions.retain(|one| !one.callee.as_deref().is_some_and(|callee| callee.starts_with("$QB$DATA:")));
+            block
+                .instructions
+                .retain(|one| !one.callee.as_deref().is_some_and(|callee| callee.starts_with("$QB$DATA:")));
             if block.instructions.len() != before {
                 rows.insert(block.id);
             }
             for instruction in &mut block.instructions {
-                let Some(callee) = instruction.callee.as_deref().filter(|callee| callee.starts_with("$QB$RSTB:")) else { continue };
+                let Some(callee) = instruction.callee.as_deref().filter(|callee| callee.starts_with("$QB$RSTB:"))
+                else {
+                    continue;
+                };
                 let row = _parsed_target(callee, "$QB$RSTB:", "invalid RESTORE marker")?;
                 let [model::Operand::Constant(key)] = instruction.operands.as_mut_slice() else {
                     return emission("RESTORE label lost its typed placeholder");
@@ -221,14 +252,19 @@ pub(super) fn _positional_data(program: &model::Program) -> Result<model::Progra
         }
         function.external_entries.retain(|entry| !rows.contains(entry));
         // A DATA marker's call goes with it, and so does its ABI.
-        let kept: BTreeSet<i64> = function.blocks.iter().flat_map(|block| &block.instructions).map(|one| one.id).collect();
+        let kept: BTreeSet<i64> =
+            function.blocks.iter().flat_map(|block| &block.instructions).map(|one| one.id).collect();
         function.calls.retain(|call| kept.contains(&call.instruction));
     }
     Ok(program)
 }
 
 /// `struct.pack_into("<H", buffer, at, value)`.
-fn pack_into(buffer: &mut [u8], at: usize, value: i64) {
+fn pack_into(
+    buffer: &mut [u8],
+    at: usize,
+    value: i64,
+) {
     buffer[at..at + 2].copy_from_slice(&(value as u16).to_le_bytes());
 }
 
@@ -281,7 +317,11 @@ fn _header(program: &model::Program) -> Result<Vec<u8>, CompileError> {
 /// Under `Frames::Own` a procedure frames itself where the runtime needs no
 /// frame of its own (`Module::frames_itself`). The runtime's stack check goes
 /// with it.
-pub(super) fn _inline_frame(program: &model::Program, module: &model::Module, function: &model::Function) -> bool {
+pub(super) fn _inline_frame(
+    program: &model::Program,
+    module: &model::Module,
+    function: &model::Function,
+) -> bool {
     module.frames_itself(program.frames, function)
 }
 
@@ -321,7 +361,11 @@ fn _near_procedures(program: &model::Program) -> model::Program {
     program
 }
 
-fn _parsed_target(name: &str, prefix: &str, message: &str) -> Result<i64, CompileError> {
+fn _parsed_target(
+    name: &str,
+    prefix: &str,
+    message: &str,
+) -> Result<i64, CompileError> {
     name.strip_prefix(prefix)
         .unwrap_or(name)
         .trim()
@@ -375,13 +419,22 @@ fn _graphics_dependencies(module: &model::Module) -> BTreeSet<String> {
 /// The rich route: the HIR emitted as MIR, optimized, and assembled by the
 /// driver into the BASIC module object laid out here, each data object as
 /// this names it and lays it down.
-fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result<masm::Module, CompileError> {
+fn rich_assembled(
+    program: &model::Program,
+    codegen: &driver::Options,
+) -> Result<masm::Module, CompileError> {
     let program = &llrm_core::support::debug::timed("hir positional data", || _positional_data(program))?;
     let module = &program.modules[0];
     let functions = module.functions.iter().map(|one| (one.name.clone(), _object_name(&one.name)));
-    let symbols: BTreeMap<String, String> = functions.chain(module.callables.iter().map(|one| (one.name.clone(), _link_name(one)))).collect();
-    let data = _data_names(module).into_iter().filter(|((space, _), _)| matches!(space, Space::Segment | Space::External)).map(|((_, id), name)| (id, name)).collect();
-    let mut placed: IndexMap<&str, Vec<basic::Item>> = ["BC_DATA", "BC_CN", "FSL_CONST"].into_iter().map(|name| (name, Vec::new())).collect();
+    let symbols: BTreeMap<String, String> =
+        functions.chain(module.callables.iter().map(|one| (one.name.clone(), _link_name(one)))).collect();
+    let data = _data_names(module)
+        .into_iter()
+        .filter(|((space, _), _)| matches!(space, Space::Segment | Space::External))
+        .map(|((_, id), name)| (id, name))
+        .collect();
+    let mut placed: IndexMap<&str, Vec<basic::Item>> =
+        ["BC_DATA", "BC_CN", "FSL_CONST"].into_iter().map(|name| (name, Vec::new())).collect();
     for object_ in _placed(module) {
         placed[_segment(object_)].push(basic::Item::Object(object_.id));
     }
@@ -389,7 +442,11 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
         .functions
         .iter()
         .map(|function| {
-            let frame = if _inline_frame(program, module, function) { basic::Frame::Own } else { basic::Frame::Runtime { strings: module.local_strings(function) } };
+            let frame = if _inline_frame(program, module, function) {
+                basic::Frame::Own
+            } else {
+                basic::Frame::Runtime { strings: module.local_strings(function) }
+            };
             (function.name.clone(), frame)
         })
         .collect();
@@ -397,7 +454,8 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
     if !vbdos && !placed["FSL_CONST"].is_empty() {
         return emission(format!("{} cannot place literals in VBDOS FSL_CONST", program.runtime.value()));
     }
-    let rows = (0.._read_data_lines(module)?.len() as u16).map(|row| masm::Datum::Bytes(row.to_le_bytes().to_vec())).collect();
+    let rows =
+        (0.._read_data_lines(module)?.len() as u16).map(|row| masm::Datum::Bytes(row.to_le_bytes().to_vec())).collect();
     let read_data = _read_data_items(module, rows)?;
     let graphics = _graphics_dependencies(module);
     let datum = basic::Item::Datum;
@@ -412,14 +470,28 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
         ("BR_DATA", vec![]),
         ("BR_SKYS", vec![]),
         ("COMMON", vec![]),
-        ("BC_DATA", [vec![datum(masm::Datum::Bytes(vec![0; 6]))], placed.swap_remove("BC_DATA").unwrap_or_default()].concat()),
+        (
+            "BC_DATA",
+            [vec![datum(masm::Datum::Bytes(vec![0; 6]))], placed.swap_remove("BC_DATA").unwrap_or_default()].concat(),
+        ),
         ("NMALLOC", vec![]),
         ("ENMALLOC", vec![]),
         ("BC_FT", vec![]),
         ("BC_CN", placed.swap_remove("BC_CN").unwrap_or_default()),
         ("BC_DS", read_data.into_iter().chain([masm::Datum::Bytes(vec![0xff, 0xff, 0x01])]).map(datum).collect()),
         ("BC_SAB", vec![label("$QB$SAB")]),
-        ("BC_SA", vec![label("$QB$SA"), datum(masm::Datum::Pointer(masm::Pointer { name: basic::HEADER.into(), offset: 0, far: true, bytes: far_bytes }))]),
+        (
+            "BC_SA",
+            vec![
+                label("$QB$SA"),
+                datum(masm::Datum::Pointer(masm::Pointer {
+                    name: basic::HEADER.into(),
+                    offset: 0,
+                    far: true,
+                    bytes: far_bytes,
+                })),
+            ],
+        ),
     ];
     let mut private: BTreeSet<String> = BTreeSet::new();
     if vbdos {
@@ -428,7 +500,20 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
         private.extend(["FDATA".to_owned(), "FSL_CONST".to_owned()]);
     }
     if vbdos && !graphics.is_empty() {
-        segments.push(("QB_LINK", graphics.iter().map(|name| datum(masm::Datum::Pointer(masm::Pointer { name: name.clone(), offset: 0, far: false, bytes: near_bytes }))).collect()));
+        segments.push((
+            "QB_LINK",
+            graphics
+                .iter()
+                .map(|name| {
+                    datum(masm::Datum::Pointer(masm::Pointer {
+                        name: name.clone(),
+                        offset: 0,
+                        far: false,
+                        bytes: near_bytes,
+                    }))
+                })
+                .collect(),
+        ));
         private.insert("QB_LINK".into());
     }
     let object = basic::Object {
@@ -437,7 +522,10 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
         main: "__main".to_owned(),
         symbols,
         data,
-        segments: segments.into_iter().map(|(name, items)| basic::Segment { name: name.to_owned(), items, size: None }).collect(),
+        segments: segments
+            .into_iter()
+            .map(|(name, items)| basic::Segment { name: name.to_owned(), items, size: None })
+            .collect(),
         constants: "BC_CN".to_owned(),
         private,
         requests: graphics,
@@ -446,7 +534,13 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
         stack_check: program.stack_check.clone(),
     };
     let mut compiled = basic::compiled(program, &object, codegen)?;
-    compiled.stack = stack_to_add(&compiled, STACK_BASE, STACK_RESERVE, llrm_core::backend::stackusage::stack_limit(codegen.arch.layout().segment_bytes()), &*codegen.arch)?;
+    compiled.stack = stack_to_add(
+        &compiled,
+        STACK_BASE,
+        STACK_RESERVE,
+        llrm_core::backend::stackusage::stack_limit(codegen.arch.layout().segment_bytes()),
+        &*codegen.arch,
+    )?;
     Ok(compiled)
 }
 
@@ -463,11 +557,14 @@ pub fn assembled(
     observer: Option<&mut HirObserver<'_>>,
     codegen: &driver::Options,
 ) -> Result<masm::Module, CompileError> {
-    llrm_core::support::debug::timed("hir verify", || hir::verify::verify(program)).map_err(|error| CompileError::Value(error.0))?;
+    llrm_core::support::debug::timed("hir verify", || hir::verify::verify(program))
+        .map_err(|error| CompileError::Value(error.0))?;
     if let Some(observe) = observer {
         observe(program)?;
     }
-    let laid_out = llrm_core::support::debug::timed("hir zero fill", || super::zero_fill::laid_out(program, |module, function| !_inline_frame(program, module, function)));
+    let laid_out = llrm_core::support::debug::timed("hir zero fill", || {
+        super::zero_fill::laid_out(program, |module, function| !_inline_frame(program, module, function))
+    });
     let program = &llrm_core::support::debug::timed("hir near procedures", || _near_procedures(&laid_out));
     if program.modules.len() != 1 {
         return emission("one OMF object represents exactly one QB module");

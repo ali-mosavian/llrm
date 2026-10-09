@@ -48,9 +48,7 @@ pub struct EncodeConfig {
 
 impl Default for EncodeConfig {
     fn default() -> Self {
-        Self {
-            encode1byte: DEFAULT_ENCODE1BYTE,
-        }
+        Self { encode1byte: DEFAULT_ENCODE1BYTE }
     }
 }
 
@@ -203,15 +201,20 @@ fn relative_operand_byte(
     }
 }
 
-fn read_byte(state: &[u8], pc: &mut usize) -> Result<u8, DecodeError> {
+fn read_byte(
+    state: &[u8],
+    pc: &mut usize,
+) -> Result<u8, DecodeError> {
     state
         .get(*pc)
         .copied()
         .ok_or(DecodeError::UnexpectedEof)
-        .map(|b| {
-            *pc += 1;
-            b
-        })
+        .map(
+            |b| {
+                *pc += 1;
+                b
+            },
+        )
 }
 
 /// Incrementally build a state-table byte stream.
@@ -227,10 +230,7 @@ impl StateEncoder {
     }
 
     pub fn with_config(config: EncodeConfig) -> Self {
-        Self {
-            buf: Vec::new(),
-            config,
-        }
+        Self { buf: Vec::new(), config }
     }
 
     pub fn config(&self) -> &EncodeConfig {
@@ -253,21 +253,34 @@ impl StateEncoder {
         self.buf.push(ND_REJECT);
     }
 
-    pub fn mark(&mut self, operand: u8) {
+    pub fn mark(
+        &mut self,
+        operand: u8,
+    ) {
         self.buf.push(ND_MARK);
         self.buf.push(operand);
     }
 
-    pub fn emit(&mut self, opcode: u16) {
+    pub fn emit(
+        &mut self,
+        opcode: u16,
+    ) {
         self.buf.push(ND_EMIT);
         self.buf.extend_from_slice(&opcode.to_le_bytes());
     }
 
-    pub fn branch(&mut self, target: BranchTarget) -> Result<(), EncodeError> {
+    pub fn branch(
+        &mut self,
+        target: BranchTarget,
+    ) -> Result<(), EncodeError> {
         self.node(ND_BRANCH as u16, target)
     }
 
-    pub fn node(&mut self, node_id: u16, target: BranchTarget) -> Result<(), EncodeError> {
+    pub fn node(
+        &mut self,
+        node_id: u16,
+        target: BranchTarget,
+    ) -> Result<(), EncodeError> {
         encode_node_id(&mut self.buf, node_id, &self.config)?;
         let cursor_after = self.buf.len() + 1;
         encode_branch_operand(&mut self.buf, cursor_after, target, &self.config)
@@ -297,8 +310,7 @@ impl StateEncoder {
             self.buf[operand_pos] = encoded[0];
             Ok(())
         } else {
-            self.buf
-                .splice(operand_pos..operand_pos + 1, encoded.into_iter());
+            self.buf.splice(operand_pos..operand_pos + 1, encoded.into_iter());
             Ok(())
         }
     }
@@ -314,22 +326,21 @@ pub struct StateDecoder<'a> {
 
 impl<'a> StateDecoder<'a> {
     pub fn new(state: &'a [u8]) -> Self {
-        Self {
-            state,
-            pc: 0,
-            config: EncodeConfig::default(),
-        }
+        Self { state, pc: 0, config: EncodeConfig::default() }
     }
 
-    pub fn with_config(state: &'a [u8], config: EncodeConfig) -> Self {
-        Self {
-            state,
-            pc: 0,
-            config,
-        }
+    pub fn with_config(
+        state: &'a [u8],
+        config: EncodeConfig,
+    ) -> Self {
+        Self { state, pc: 0, config }
     }
 
-    pub fn with_config_at(state: &'a [u8], config: EncodeConfig, pc: usize) -> Self {
+    pub fn with_config_at(
+        state: &'a [u8],
+        config: EncodeConfig,
+        pc: usize,
+    ) -> Self {
         Self { state, pc, config }
     }
 
@@ -400,12 +411,7 @@ mod tests {
 
     #[test]
     fn directives_accept_reject_mark_emit_le() {
-        roundtrip(&[
-            StateEntry::Accept,
-            StateEntry::Reject,
-            StateEntry::Mark(6),
-            StateEntry::Emit(0x3412),
-        ]);
+        roundtrip(&[StateEntry::Accept, StateEntry::Reject, StateEntry::Mark(6), StateEntry::Emit(0x3412)]);
         let mut enc = StateEncoder::new();
         enc.emit(0x7856);
         assert_eq!(&enc.bytes()[1..3], &[0x56, 0x78]);
@@ -432,13 +438,7 @@ mod tests {
         assert_eq!(enc.bytes(), &[10, 255]);
 
         let mut dec = StateDecoder::new(enc.bytes());
-        assert_eq!(
-            dec.next().unwrap(),
-            Some(StateEntry::Node {
-                node_id: 10,
-                branch: BranchTarget::Accept,
-            })
-        );
+        assert_eq!(dec.next().unwrap(), Some(StateEntry::Node { node_id: 10, branch: BranchTarget::Accept }));
     }
 
     #[test]
@@ -463,20 +463,8 @@ mod tests {
         let mut dec = StateDecoder::new(bytes);
         assert_eq!(dec.next().unwrap(), Some(StateEntry::Accept));
         assert_eq!(dec.next().unwrap(), Some(StateEntry::Reject));
-        assert_eq!(
-            dec.next().unwrap(),
-            Some(StateEntry::Node {
-                node_id: 5,
-                branch: BranchTarget::Relative(4),
-            })
-        );
-        assert_eq!(
-            dec.next().unwrap(),
-            Some(StateEntry::Node {
-                node_id: 6,
-                branch: BranchTarget::Relative(0),
-            })
-        );
+        assert_eq!(dec.next().unwrap(), Some(StateEntry::Node { node_id: 5, branch: BranchTarget::Relative(4) }));
+        assert_eq!(dec.next().unwrap(), Some(StateEntry::Node { node_id: 6, branch: BranchTarget::Relative(0) }));
     }
 
     #[test]
@@ -487,13 +475,7 @@ mod tests {
         assert_eq!(&enc.bytes()[1..3], &[243, 232]); // 1000 + 256*240 = 62440 = 0xF3E8
 
         let mut dec = StateDecoder::new(enc.bytes());
-        assert_eq!(
-            dec.next().unwrap(),
-            Some(StateEntry::Node {
-                node_id: 7,
-                branch: BranchTarget::Absolute(1000),
-            })
-        );
+        assert_eq!(dec.next().unwrap(), Some(StateEntry::Node { node_id: 7, branch: BranchTarget::Absolute(1000) }));
     }
 
     #[test]
@@ -531,21 +513,9 @@ mod tests {
         encode_branch_operand(&mut buf, cursor, BranchTarget::Absolute(300), &config).unwrap();
 
         let mut pc = 0;
-        assert_eq!(
-            decode_branch_operand(&buf, &mut pc, &config).unwrap(),
-            BranchTarget::Accept
-        );
-        assert_eq!(
-            decode_branch_operand(&buf, &mut pc, &config).unwrap(),
-            BranchTarget::Relative(5)
-        );
-        assert_eq!(
-            decode_branch_operand(&buf, &mut pc, &config).unwrap(),
-            BranchTarget::Relative(3)
-        );
-        assert_eq!(
-            decode_branch_operand(&buf, &mut pc, &config).unwrap(),
-            BranchTarget::Absolute(300)
-        );
+        assert_eq!(decode_branch_operand(&buf, &mut pc, &config).unwrap(), BranchTarget::Accept);
+        assert_eq!(decode_branch_operand(&buf, &mut pc, &config).unwrap(), BranchTarget::Relative(5));
+        assert_eq!(decode_branch_operand(&buf, &mut pc, &config).unwrap(), BranchTarget::Relative(3));
+        assert_eq!(decode_branch_operand(&buf, &mut pc, &config).unwrap(), BranchTarget::Absolute(300));
     }
 }

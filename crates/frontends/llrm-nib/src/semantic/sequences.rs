@@ -9,7 +9,11 @@ use crate::syntax::Pattern;
 
 impl FunctionCompiler<'_> {
     /// `expression`, borrowed as a one-dimensional view to match against.
-    pub(super) fn sequence_subject(&mut self, expression: &Expr, span: Span) -> Result<Subject, Diagnostic> {
+    pub(super) fn sequence_subject(
+        &mut self,
+        expression: &Expr,
+        span: Span,
+    ) -> Result<Subject, Diagnostic> {
         // A fixed array stays one, so a temporary one can be consumed.
         if let Some((view, element, shape)) = self.array_view(expression, span)? {
             return Ok(Subject::Array(view, element, shape));
@@ -36,9 +40,7 @@ impl FunctionCompiler<'_> {
         subject: &Subject,
         fail: u32,
     ) -> Result<(), Diagnostic> {
-        let Subject::Sequence { length, .. } = subject else {
-            unreachable!("a sequence subject")
-        };
+        let Subject::Sequence { length, .. } = subject else { unreachable!("a sequence subject") };
         let named = hir::Operand::Constant(self.word_id(), (before.len() + after.len()) as i64);
         self.branch_unless(if rest { "ge" } else { "eq" }, length.clone(), named, fail);
         for (pattern, inner) in self.sequence_parts(before, after, subject)? {
@@ -59,16 +61,15 @@ impl FunctionCompiler<'_> {
         let Some(Pattern::Binding(name, span)) = rest else {
             return Ok(());
         };
-        let Subject::Sequence { data, length, element, .. } = subject else {
-            unreachable!("a sequence subject")
-        };
+        let Subject::Sequence { data, length, element, .. } = subject else { unreachable!("a sequence subject") };
         let first = self.nth_element(*data, *element, hir::Operand::Constant(self.word_id(), before.len() as i64))?;
         let count = self.value(self.word());
         let named = hir::Operand::Constant(self.word_id(), (before.len() + after.len()) as i64);
         self.emit("sub", vec![count], vec![length.clone(), named], None);
         let pointer_type = self.types.slice_pointer(*element, 1);
         let count = hir::Operand::Value(count);
-        let hir::Operand::Value(descriptor) = self.view_descriptor(name, pointer_type, vec![count.clone(), count], first)
+        let hir::Operand::Value(descriptor) =
+            self.view_descriptor(name, pointer_type, vec![count.clone(), count], first)
         else {
             unreachable!("a descriptor pointer")
         };
@@ -91,9 +92,7 @@ impl FunctionCompiler<'_> {
         after: &'p [Pattern],
         subject: &Subject,
     ) -> Result<Vec<(&'p Pattern, Subject)>, Diagnostic> {
-        let Subject::Sequence { data, length, element, .. } = subject else {
-            unreachable!("a sequence subject")
-        };
+        let Subject::Sequence { data, length, element, .. } = subject else { unreachable!("a sequence subject") };
         let mut parts = Vec::new();
         for (index, pattern) in before.iter().enumerate() {
             let pointer = self.nth_element(*data, *element, hir::Operand::Constant(self.word_id(), index as i64))?;
@@ -109,17 +108,32 @@ impl FunctionCompiler<'_> {
         Ok(parts)
     }
 
-    fn nth_element(&mut self, data: u32, element: ElementType, index: hir::Operand) -> Result<u32, Diagnostic> {
+    fn nth_element(
+        &mut self,
+        data: u32,
+        element: ElementType,
+        index: hir::Operand,
+    ) -> Result<u32, Diagnostic> {
         let width = self.types.width(element.id());
         self.indexed_pointer(data, index, width, GENERATED)
     }
 
     /// The element `pointer` addresses: a scalar is read, a struct viewed.
-    fn element_subject(&mut self, pointer: u32, element: ElementType) -> Subject {
+    fn element_subject(
+        &mut self,
+        pointer: u32,
+        element: ElementType,
+    ) -> Subject {
         match element {
             ElementType::Scalar(type_name) => {
                 let value = self.value(type_name);
-                let place = hir::Operand::IndirectPlace { base: pointer, offset: 0, type_id: type_id(type_name), inbounds: false, member: None };
+                let place = hir::Operand::IndirectPlace {
+                    base: pointer,
+                    offset: 0,
+                    type_id: type_id(type_name),
+                    inbounds: false,
+                    member: None,
+                };
                 self.emit("load", vec![value], vec![place.clone()], None);
                 Subject::Scalar(hir::Operand::Value(value), type_name, Some(place))
             }

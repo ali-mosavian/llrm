@@ -12,7 +12,12 @@ use crate::spaces::Spaces;
 pub trait Machine {
     /// The linear bytes that `width`-byte accesses at `selectors` and
     /// `offsets` (unsigned words) reach, where foreign memory holds them all.
-    fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)>;
+    fn foreign_span(
+        &self,
+        selectors: (i64, i64),
+        offsets: (i64, i64),
+        width: i64,
+    ) -> Option<(i64, i64)>;
 
     /// The address spaces by role: the numbers the target's description gives them.
     fn spaces(&self) -> Spaces;
@@ -59,7 +64,10 @@ pub trait Machine {
 
     /// Of `registers`, how many survive a call to `callee`, named where the
     /// call is direct: its own contract may keep more than any call does.
-    fn kept_across(&self, _callee: Option<&str>) -> i64 {
+    fn kept_across(
+        &self,
+        _callee: Option<&str>,
+    ) -> i64 {
         self.call_registers()
     }
 
@@ -68,20 +76,31 @@ pub trait Machine {
         None
     }
 
-    /// The convention a function in `convention` takes when its callers' cleanup of the stack arguments moves to the function:
-    /// C's own, `fastcc`, by default; a target whose description states more says which.
-    fn callee_pop(&self, convention: u32) -> Option<u32> {
+    /// The convention a function in `convention` takes when its callers' cleanup of the stack arguments moves to the
+    /// function: C's own, `fastcc`, by default; a target whose description states more says which.
+    fn callee_pop(
+        &self,
+        convention: u32,
+    ) -> Option<u32> {
         (convention == 0).then_some(crate::opcode::FAST)
     }
 
-    /// The bytes of stack the `arguments` take under `convention`, where the target knows; else every argument is on it.
-    fn stack_argument_bytes(&self, _convention: u32, _arguments: &[Argument]) -> Option<i64> {
+    /// The bytes of stack the `arguments` take under `convention`, where the target knows; else every argument is on
+    /// it.
+    fn stack_argument_bytes(
+        &self,
+        _convention: u32,
+        _arguments: &[Argument],
+    ) -> Option<i64> {
         None
     }
 
     /// What multiplying by the constant `factor`, above one, costs: a
     /// multiply, or the shifts and adds the target makes it of.
-    fn multiply_by(&self, _factor: i64) -> i64 {
+    fn multiply_by(
+        &self,
+        _factor: i64,
+    ) -> i64 {
         self.costs().multiply
     }
 
@@ -91,7 +110,11 @@ pub trait Machine {
     /// Whether a `width`-byte load at an address a multiple of `align` may
     /// trap wherever it points. By default any may: only one known
     /// dereferenceable runs where the program would not have run it.
-    fn load_may_trap(&self, _width: u64, _align: u64) -> bool {
+    fn load_may_trap(
+        &self,
+        _width: u64,
+        _align: u64,
+    ) -> bool {
         true
     }
 
@@ -104,7 +127,10 @@ pub trait Machine {
 
     /// Whether an I/O access to a port in the inclusive range `ports` may
     /// read or write memory. By default any may.
-    fn port_touches_memory(&self, _ports: (i64, i64)) -> bool {
+    fn port_touches_memory(
+        &self,
+        _ports: (i64, i64),
+    ) -> bool {
         true
     }
 }
@@ -113,7 +139,12 @@ pub trait Machine {
 /// of its instructions: the offset widened, the displacement added, the
 /// carry copied and shifted down and up by the stride, added to the
 /// selector, and the offset and selector copied out.
-pub const fn carry_cost(extend: i64, add: i64, shift: i64, r#move: i64) -> i64 {
+pub const fn carry_cost(
+    extend: i64,
+    add: i64,
+    shift: i64,
+    r#move: i64,
+) -> i64 {
     extend + 2 * add + 2 * shift + 3 * r#move
 }
 
@@ -177,13 +208,22 @@ pub struct OperationCosts {
 
 impl OperationCosts {
     /// What a caller pays to take `words` words of arguments off the stack.
-    pub fn cleanup(&self, words: i64) -> i64 {
+    pub fn cleanup(
+        &self,
+        words: i64,
+    ) -> i64 {
         (words * self.pop).min(self.adjust)
     }
 
     /// `price` for an operation on `width`-byte values where the code's own operand size is `operand` bytes:
-    /// a word or dword that is not that size runs under the operand-size prefix (a dword in real mode, a word in flat code).
-    pub fn sized(&self, price: i64, width: i64, operand: i64) -> i64 {
+    /// a word or dword that is not that size runs under the operand-size prefix (a dword in real mode, a word in flat
+    /// code).
+    pub fn sized(
+        &self,
+        price: i64,
+        width: i64,
+        operand: i64,
+    ) -> i64 {
         price + if width != operand && width > 1 { self.prefix } else { 0 }
     }
 }
@@ -193,7 +233,14 @@ impl OperationCosts {
 /// index, unscaled, no prefix); any other takes a form that scales, which
 /// costs its address-size prefix, and runs under the operand-size prefix a
 /// dword does.
-pub fn three_operand(costs: &OperationCosts, forms: &[AddressForm], width: i64, operand: i64, scale: i64, word: bool) -> Option<i64> {
+pub fn three_operand(
+    costs: &OperationCosts,
+    forms: &[AddressForm],
+    width: i64,
+    operand: i64,
+    scale: i64,
+    word: bool,
+) -> Option<i64> {
     if word {
         return forms.iter().any(|form| !form.secondary && form.index_width == 2).then_some(costs.address);
     }
@@ -239,7 +286,6 @@ impl Default for OperationCosts {
         }
     }
 }
-
 
 /// One legal indexed-address family and its costs above the native form.
 ///
@@ -304,11 +350,13 @@ impl AddressForm {
     }
 
     /// Whether this form is cheap enough to try before a frame spill.
-    pub fn before_spill(&self, costs: &OperationCosts) -> bool {
+    pub fn before_spill(
+        &self,
+        costs: &OperationCosts,
+    ) -> bool {
         let direct = self.extension_cost + self.use_cost <= costs.load;
         let amortized = self.extension_cost <= costs.r#move
-            && self.extension_cost + self.use_cost
-                <= costs.shift + costs.address + costs.r#move + costs.store;
+            && self.extension_cost + self.use_cost <= costs.shift + costs.address + costs.r#move + costs.store;
         !self.secondary || direct || amortized
     }
 }
@@ -324,8 +372,8 @@ pub struct Argument {
     pub memory: bool,
 }
 
-/// The convention the target gives a private function, and those a function must have for it to take it: a marked function
-/// (Pascal's, an interrupt's) keeps the protocol its marker names.
+/// The convention the target gives a private function, and those a function must have for it to take it: a marked
+/// function (Pascal's, an interrupt's) keeps the protocol its marker names.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct PrivateConvention {
     pub to: u32,
@@ -341,7 +389,12 @@ impl Machine for Neutral {
         Spaces::FLAT
     }
 
-    fn foreign_span(&self, _: (i64, i64), _: (i64, i64), _: i64) -> Option<(i64, i64)> {
+    fn foreign_span(
+        &self,
+        _: (i64, i64),
+        _: (i64, i64),
+        _: i64,
+    ) -> Option<(i64, i64)> {
         None
     }
 
@@ -367,7 +420,11 @@ impl Machine for Neutral {
 mod operand_size_tests {
     use super::*;
 
-    fn form(index_width: i64, secondary: bool, use_cost: i64) -> AddressForm {
+    fn form(
+        index_width: i64,
+        secondary: bool,
+        use_cost: i64,
+    ) -> AddressForm {
         AddressForm::new(index_width, BTreeSet::from([1, 2, 4, 8]), 0, use_cost, 0, secondary, None).expect("a form")
     }
 
@@ -375,7 +432,16 @@ mod operand_size_tests {
     #[test]
     fn the_prefix_is_for_the_size_that_is_not_the_codes_own() {
         let costs = OperationCosts { prefix: 1, ..OperationCosts::default() };
-        assert_eq!((costs.sized(5, 4, 2), costs.sized(5, 2, 2), costs.sized(5, 4, 4), costs.sized(5, 2, 4), costs.sized(5, 1, 4)), (6, 5, 5, 6, 5));
+        assert_eq!(
+            (
+                costs.sized(5, 4, 2),
+                costs.sized(5, 2, 2),
+                costs.sized(5, 4, 4),
+                costs.sized(5, 2, 4),
+                costs.sized(5, 1, 4)
+            ),
+            (6, 5, 5, 6, 5)
+        );
     }
 
     /// A flat target's dword address has no prefix and its price is the `lea`'s; it had none, because only the

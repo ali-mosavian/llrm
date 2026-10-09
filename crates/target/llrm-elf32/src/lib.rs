@@ -49,7 +49,10 @@ mod tests {
 
     use super::*;
 
-    fn word(bytes: &[u8], at: usize) -> u32 {
+    fn word(
+        bytes: &[u8],
+        at: usize,
+    ) -> u32 {
         u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
     }
 
@@ -64,26 +67,50 @@ mod tests {
         (0..count)
             .map(|index| {
                 let at = table + 40 * index;
-                let name = bytes[strings + word(bytes, at) as usize..].iter().take_while(|&&one| one != 0).map(|&one| one as char).collect();
-                (name, word(bytes, at + 4), word(bytes, at + 16) as usize, word(bytes, at + 20) as usize, word(bytes, at + 24), word(bytes, at + 28))
+                let name = bytes[strings + word(bytes, at) as usize..]
+                    .iter()
+                    .take_while(|&&one| one != 0)
+                    .map(|&one| one as char)
+                    .collect();
+                (
+                    name,
+                    word(bytes, at + 4),
+                    word(bytes, at + 16) as usize,
+                    word(bytes, at + 20) as usize,
+                    word(bytes, at + 24),
+                    word(bytes, at + 28),
+                )
             })
             .collect()
     }
 
-    fn named<'a>(found: &'a [(String, u32, usize, usize, u32, u32)], name: &str) -> &'a (String, u32, usize, usize, u32, u32) {
+    fn named<'a>(
+        found: &'a [(String, u32, usize, usize, u32, u32)],
+        name: &str,
+    ) -> &'a (String, u32, usize, usize, u32, u32) {
         found.iter().find(|one| one.0 == name).unwrap_or_else(|| panic!("no section {name}: {found:?}"))
     }
 
-    fn text(image: Vec<u8>, relocs: Vec<Reloc>) -> Section {
+    fn text(
+        image: Vec<u8>,
+        relocs: Vec<Reloc>,
+    ) -> Section {
         let spans = vec![[0, image.len()]];
         Section { name: "A_TEXT".into(), role: Role::Text, near: true, align: 1, image, spans, relocs }
     }
 
-    fn symbol(name: &str, binding: Binding, definition: Definition) -> Symbol {
+    fn symbol(
+        name: &str,
+        binding: Binding,
+        definition: Definition,
+    ) -> Symbol {
         Symbol { name: name.into(), binding, definition, group: None }
     }
 
-    fn object(sections: Vec<Section>, symbols: Vec<Symbol>) -> Object {
+    fn object(
+        sections: Vec<Section>,
+        symbols: Vec<Symbol>,
+    ) -> Object {
         Object { name: "a.c".into(), arch: Arch::I386, sections, symbols, omf_groups: Vec::new(), debug: None }
     }
 
@@ -92,7 +119,10 @@ mod tests {
     #[test]
     fn a_call_is_r_386_pc32_with_minus_four_in_the_field() {
         let call = Reloc { at: 1, kind: Kind::PcRel { width: 4, from: 4 }, target: Target::Symbol(0), addend: 0 };
-        let made = object(vec![text(vec![0xE8, 0, 0, 0, 0, 0xC3], vec![call])], vec![symbol("f", Binding::Public, Definition::Undefined)]);
+        let made = object(
+            vec![text(vec![0xE8, 0, 0, 0, 0, 0xC3], vec![call])],
+            vec![symbol("f", Binding::Public, Definition::Undefined)],
+        );
         let bytes = write(&made).unwrap();
         let found = sections(&bytes);
         let code = named(&found, ".text");
@@ -105,8 +135,17 @@ mod tests {
     /// A local symbol has no ELF symbol: a reference to it is its section's symbol and its offset.
     #[test]
     fn a_local_symbol_is_its_section_and_its_offset() {
-        let data = Section { name: "_DATA".into(), role: Role::Data, near: true, align: 4, image: vec![0; 8], spans: vec![[0, 8]], relocs: vec![Reloc { at: 4, kind: Kind::Abs { width: 4 }, target: Target::Symbol(0), addend: 2 }] };
-        let made = object(vec![data], vec![symbol("loc", Binding::Local, Definition::Defined { section: 0, offset: 4 })]);
+        let data = Section {
+            name: "_DATA".into(),
+            role: Role::Data,
+            near: true,
+            align: 4,
+            image: vec![0; 8],
+            spans: vec![[0, 8]],
+            relocs: vec![Reloc { at: 4, kind: Kind::Abs { width: 4 }, target: Target::Symbol(0), addend: 2 }],
+        };
+        let made =
+            object(vec![data], vec![symbol("loc", Binding::Local, Definition::Defined { section: 0, offset: 4 })]);
         let bytes = write(&made).unwrap();
         let found = sections(&bytes);
         let data = named(&found, ".data");
@@ -119,7 +158,15 @@ mod tests {
     /// Bss stores nothing and a section with no relocations has no REL section.
     #[test]
     fn bss_is_nobits_and_an_unrelocated_section_has_no_rel() {
-        let bss = Section { name: "_BSS".into(), role: Role::Bss, near: true, align: 4, image: vec![0; 64], spans: vec![], relocs: vec![] };
+        let bss = Section {
+            name: "_BSS".into(),
+            role: Role::Bss,
+            near: true,
+            align: 4,
+            image: vec![0; 64],
+            spans: vec![],
+            relocs: vec![],
+        };
         let bytes = write(&object(vec![bss], vec![])).unwrap();
         let found = sections(&bytes);
         assert_eq!((named(&found, ".bss").1, named(&found, ".bss").3), (8, 64));
@@ -131,7 +178,10 @@ mod tests {
     fn what_elf_cannot_say_is_refused() {
         let at = |kind| {
             let reloc = Reloc { at: 0, kind, target: Target::Symbol(0), addend: 0 };
-            write(&object(vec![text(vec![0; 4], vec![reloc])], vec![symbol("f", Binding::Public, Definition::Undefined)]))
+            write(&object(
+                vec![text(vec![0; 4], vec![reloc])],
+                vec![symbol("f", Binding::Public, Definition::Undefined)],
+            ))
         };
         assert!(at(Kind::SegmentBase).is_err());
         assert!(at(Kind::FarPointer).is_err());
@@ -148,7 +198,10 @@ mod tests {
     /// information of another format is never written in its place.
     #[test]
     fn a_debug_format_this_object_cannot_carry_is_refused() {
-        for (format, name) in [(llrm_object::debug::Format::CodeView, "CodeView"), (llrm_object::debug::Format::TurboDebugger, "Turbo Debugger")] {
+        for (format, name) in [
+            (llrm_object::debug::Format::CodeView, "CodeView"),
+            (llrm_object::debug::Format::TurboDebugger, "Turbo Debugger"),
+        ] {
             let mut made = object(vec![text(vec![0], vec![])], vec![]);
             made.debug = Some(llrm_object::debug::Info { format, ..Default::default() });
             let why = write(&made).unwrap_err().0;

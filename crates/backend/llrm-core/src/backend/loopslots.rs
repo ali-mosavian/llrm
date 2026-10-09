@@ -26,14 +26,14 @@ use crate::analysis::loops::{self, Loop};
 use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
-use crate::backend::{liveness, select, spiller};
 use crate::backend::peephole::{self, _lanes, Lanes};
 use crate::backend::target;
-use crate::support::hash::IndexMap;
+use crate::backend::{liveness, select, spiller};
 use crate::model::ir::{self, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::{LIRTransform, OperationCosts};
 use crate::objectfile::module::Addr;
+use crate::support::hash::IndexMap;
 
 pub struct LoopSlots {
     pub frame: Option<Rc<RefCell<Frame>>>,
@@ -44,7 +44,12 @@ pub struct LoopSlots {
 }
 
 impl LoopSlots {
-    pub fn new<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>, word: u32, classes: &Rc<RegisterClasses>) -> Result<Self, String> {
+    pub fn new<'a>(
+        frame: Option<Rc<RefCell<Frame>>>,
+        cpu: impl Into<ProfileOrName<'a>>,
+        word: u32,
+        classes: &Rc<RegisterClasses>,
+    ) -> Result<Self, String> {
         Ok(Self { frame, cpu: targets::profile(cpu)?.clone(), word, classes: Rc::clone(classes) })
     }
 }
@@ -58,15 +63,26 @@ impl LIRTransform for LoopSlots {
         "loopslots"
     }
 
-    fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
         let Some(frame) = &self.frame else {
             return Ok(body);
         };
         let m = self.word;
-        let spills = frame.borrow().capacities.iter().filter(|(_, width)| **width == i64::from(m)).map(|(at, _)| *at).collect();
+        let spills =
+            frame.borrow().capacities.iter().filter(|(_, width)| **width == i64::from(m)).map(|(at, _)| *at).collect();
         let park = self.cpu.cost("push_r")? + self.cpu.cost("pop_r")?;
         llrm_support::debug!("traffic", "{} {:?}", body.name, crate::backend::allocate::traffic_by_cause(&body));
-        Ok(promoted(m, &self.classes.available, &hoisted(m, &self.classes.available, &body, &spills), &spills, &self.cpu.operations, park))
+        Ok(promoted(
+            m,
+            &self.classes.available,
+            &hoisted(m, &self.classes.available, &body, &spills),
+            &spills,
+            &self.cpu.operations,
+            park,
+        ))
     }
 }
 
@@ -87,7 +103,10 @@ fn is_bp(register: Register) -> bool {
 }
 
 /// The word slot `mem` names, when it is exactly one.
-fn word_slot(m: u32, mem: &Mem) -> Option<i64> {
+fn word_slot(
+    m: u32,
+    mem: &Mem,
+) -> Option<i64> {
     slot(mem).filter(|_| mem.width == m)
 }
 
@@ -117,17 +136,29 @@ struct Reach {
 
 impl Touch {
     /// Whether an access that is not exactly word slot `at` reads it, or writes it.
-    fn reaches(&self, at: i64, writing: bool) -> bool {
-        self.wide.iter().any(|one| one.from < at + i64::from(self.word) && at < one.to && if writing { one.written } else { one.read })
+    fn reaches(
+        &self,
+        at: i64,
+        writing: bool,
+    ) -> bool {
+        self.wide.iter().any(|one| {
+            one.from < at + i64::from(self.word) && at < one.to && if writing { one.written } else { one.read }
+        })
     }
 
     /// Whether this reads word slot `at` in whole or in part.
-    fn reads_slot(&self, at: i64) -> bool {
+    fn reads_slot(
+        &self,
+        at: i64,
+    ) -> bool {
         self.reads.contains(&at) || self.reaches(at, false)
     }
 
     /// Whether this writes word slot `at` in whole or in part.
-    fn writes_slot(&self, at: i64) -> bool {
+    fn writes_slot(
+        &self,
+        at: i64,
+    ) -> bool {
         self.writes.contains(&at) || self.reaches(at, true)
     }
 }
@@ -137,7 +168,10 @@ thread_local! {
     static TOUCHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-fn touch(m: u32, one: &Insn) -> Touch {
+fn touch(
+    m: u32,
+    one: &Insn,
+) -> Touch {
     #[cfg(test)]
     TOUCHED.with(|count| count.set(count.get() + 1));
     let mut out = Touch { word: m, ..Touch::default() };
@@ -164,7 +198,8 @@ fn touch(m: u32, one: &Insn) -> Touch {
     ) || what.name.as_deref().is_some_and(|name| ["int", "into", "iret", "enter", "bound"].contains(&name))
         || one.clobbers.iter().chain(&one.clobbers_high).any(|register| is_bp(*register));
     let moves = what.op == Operation::Move;
-    for (place, written) in what.dests.iter().map(|one| (one, true)).chain(what.sources.iter().map(|one| (one, false))) {
+    for (place, written) in what.dests.iter().map(|one| (one, true)).chain(what.sources.iter().map(|one| (one, false)))
+    {
         match place {
             Loc::Reg(reg) if is_bp(reg.register) => out.other = true,
             Loc::Mem(mem) => {
@@ -185,7 +220,12 @@ fn touch(m: u32, one: &Insn) -> Touch {
                         None => {
                             out.other = true;
                             if let Some(at) = slot(mem).filter(|_| what.op != Operation::Address) {
-                                out.wide.push(Reach { from: at, to: at + i64::from(mem.width), read: !written || !moves, written });
+                                out.wide.push(Reach {
+                                    from: at,
+                                    to: at + i64::from(mem.width),
+                                    read: !written || !moves,
+                                    written,
+                                });
                             }
                         }
                     }
@@ -199,23 +239,29 @@ fn touch(m: u32, one: &Insn) -> Touch {
 }
 
 /// Blocks where slot `at` may be read before it is written.
-fn live_in(m: u32, body: &LirBody, at: i64) -> BTreeSet<i64> {
+fn live_in(
+    m: u32,
+    body: &LirBody,
+    at: i64,
+) -> BTreeSet<i64> {
     let first = body
         .blocks
         .iter()
         .map(|block| {
-            let seen = block.insns.iter().find_map(|one| {
-                let touched = touch(m, one);
-                if touched.reads_slot(at) {
-                    Some(true)
-                } else {
-                    touched.writes.contains(&at).then_some(false)
-                }
-            });
+            let seen = block
+                .insns
+                .iter()
+                .find_map(
+                    |one| {
+                        let touched = touch(m, one);
+                        if touched.reads_slot(at) { Some(true) } else { touched.writes.contains(&at).then_some(false) }
+                    },
+                );
             (block.at, seen)
         })
         .collect::<BTreeMap<_, _>>();
-    let mut live = first.iter().filter(|(_, seen)| **seen == Some(true)).map(|(block, _)| *block).collect::<BTreeSet<_>>();
+    let mut live =
+        first.iter().filter(|(_, seen)| **seen == Some(true)).map(|(block, _)| *block).collect::<BTreeSet<_>>();
     loop {
         let before = live.len();
         for block in &body.blocks {
@@ -230,16 +276,30 @@ fn live_in(m: u32, body: &LirBody, at: i64) -> BTreeSet<i64> {
 }
 
 /// The word register `root` names, as a plain operand.
-fn word(m: u32, root: Register) -> Loc {
+fn word(
+    m: u32,
+    root: Register,
+) -> Loc {
     Loc::Reg(Reg { register: target::named(root, i64::from(m)), width: m })
 }
 
-fn plain_word(m: u32, place: &Loc, root: Register) -> bool {
-    matches!(place, Loc::Reg(reg) if reg.width == m && ir::root(reg.register) == ir::root(root))
+fn plain_word(
+    m: u32,
+    place: &Loc,
+    root: Register,
+) -> bool {
+    matches!(
+        place,
+        Loc::Reg(reg) if reg.width == m && ir::root(reg.register) == ir::root(root)
+    )
 }
 
 /// A reload of a slot into `root`: `mov r,[slot]`.
-fn reload_of(m: u32, one: &Insn, root: Register) -> Option<i64> {
+fn reload_of(
+    m: u32,
+    one: &Insn,
+    root: Register,
+) -> Option<i64> {
     let what = one.what.as_ref()?;
     match (what.op, what.dests.as_slice(), what.sources.as_slice()) {
         (Operation::Move, [dest], [Loc::Mem(mem)]) if plain_word(m, dest, root) && mem.width == m => slot(mem),
@@ -248,7 +308,12 @@ fn reload_of(m: u32, one: &Insn, root: Register) -> Option<i64> {
 }
 
 /// Whether `one` reads `root` only as a plain word source and writes none of it.
-fn reads_plainly(m: u32, one: &Insn, root: Register, effect: &liveness::Effect) -> bool {
+fn reads_plainly(
+    m: u32,
+    one: &Insn,
+    root: Register,
+    effect: &liveness::Effect,
+) -> bool {
     let Some(what) = one.what.as_ref() else {
         return false;
     };
@@ -256,7 +321,12 @@ fn reads_plainly(m: u32, one: &Insn, root: Register, effect: &liveness::Effect) 
     let low = _lanes(target::named(root, i64::from(m)));
     effect.writes.is_disjoint(&lanes)
         && effect.reads.iter().filter(|lane| lanes.contains(lane)).all(|lane| low.contains(lane))
-        && !what.dests.iter().any(|place| matches!(place, Loc::Reg(reg) if ir::root(reg.register) == ir::root(root)))
+        && !what.dests.iter().any(|place| {
+            matches!(
+                place,
+                Loc::Reg(reg) if ir::root(reg.register) == ir::root(root)
+            )
+        })
         && what.sources.iter().any(|place| plain_word(m, place, root))
         && what.sources.iter().chain(&what.dests).all(|place| match place {
             Loc::Reg(reg) if ir::root(reg.register) == ir::root(root) => plain_word(m, place, root),
@@ -312,7 +382,10 @@ fn free(
                 }
             }
         }
-        let wide = [one.header].iter().chain(exits).any(|at| !live_into[at].is_disjoint(&lanes.minus(&_lanes(target::named(root, i64::from(m))))));
+        let wide = [one.header]
+            .iter()
+            .chain(exits)
+            .any(|at| !live_into[at].is_disjoint(&lanes.minus(&_lanes(target::named(root, i64::from(m))))));
         out.push((
             root,
             match (through, folded.is_empty()) {
@@ -339,7 +412,10 @@ fn folds(hold: &Hold) -> &[(usize, usize, i64)] {
 }
 
 /// `one` no longer naming the values in `gone`, which dropped reloads defined.
-fn unread(one: &Arc<Insn>, gone: &BTreeSet<u32>) -> Arc<Insn> {
+fn unread(
+    one: &Arc<Insn>,
+    gone: &BTreeSet<u32>,
+) -> Arc<Insn> {
     if !one.uses.iter().chain(one.requires.iter().map(|(held, _)| &held.value)).any(|value| gone.contains(value)) {
         return Arc::clone(one);
     }
@@ -350,18 +426,31 @@ fn unread(one: &Arc<Insn>, gone: &BTreeSet<u32>) -> Arc<Insn> {
     })
 }
 
-fn made(at: i64, op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Arc<Insn> {
+fn made(
+    at: i64,
+    op: Operation,
+    name: &str,
+    dests: Vec<Loc>,
+    sources: Vec<Loc>,
+) -> Arc<Insn> {
     let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
     Arc::new(Insn::new(at, Some((at, at)), Some(what), Vec::new(), Vec::new()))
 }
 
-fn cell(m: u32, at: i64) -> Mem {
+fn cell(
+    m: u32,
+    at: i64,
+) -> Mem {
     // A word the frame handed out as a slot of its own: `at` is its first byte.
     Mem { through: Register::BP, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Frame, at).in_slot(at)), m) }
 }
 
 /// `one` with each slot access made its register.
-fn rewritten(m: u32, one: &Arc<Insn>, homes: &BTreeMap<i64, Loc>) -> Arc<Insn> {
+fn rewritten(
+    m: u32,
+    one: &Arc<Insn>,
+    homes: &BTreeMap<i64, Loc>,
+) -> Arc<Insn> {
     let Some(what) = one.what.as_ref() else {
         return Arc::clone(one);
     };
@@ -369,7 +458,12 @@ fn rewritten(m: u32, one: &Arc<Insn>, homes: &BTreeMap<i64, Loc>) -> Arc<Insn> {
         Loc::Mem(mem) => word_slot(m, mem).and_then(|at| homes.get(&at)).cloned().unwrap_or_else(|| place.clone()),
         other => other.clone(),
     };
-    if !what.dests.iter().chain(&what.sources).any(|place| matches!(place, Loc::Mem(mem) if word_slot(m, mem).is_some_and(|at| homes.contains_key(&at)))) {
+    if !what.dests.iter().chain(&what.sources).any(|place| {
+        matches!(
+            place,
+            Loc::Mem(mem) if word_slot(m, mem).is_some_and(|at| homes.contains_key(&at))
+        )
+    }) {
         return Arc::clone(one);
     }
     let what = Semantics {
@@ -380,9 +474,13 @@ fn rewritten(m: u32, one: &Arc<Insn>, homes: &BTreeMap<i64, Loc>) -> Arc<Insn> {
     Arc::new(Insn { what: Some(what), spill_reload: false, spill_store: false, ..(**one).clone() })
 }
 
-/// For each of `slots`, the instructions of `seen` (by position in it) that read or write it, in whole or in part. An instruction
-/// that reaches no slot of the loop is in none of the lists, and is what every question of a slot skips.
-fn reaching_slots(m: u32, slots: &BTreeSet<i64>, seen: &[(usize, usize, &Arc<Insn>, Touch)]) -> BTreeMap<i64, Vec<usize>> {
+/// For each of `slots`, the instructions of `seen` (by position in it) that read or write it, in whole or in part. An
+/// instruction that reaches no slot of the loop is in none of the lists, and is what every question of a slot skips.
+fn reaching_slots(
+    m: u32,
+    slots: &BTreeSet<i64>,
+    seen: &[(usize, usize, &Arc<Insn>, Touch)],
+) -> BTreeMap<i64, Vec<usize>> {
     let mut by_slot: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
     for (i, (_, _, _, touched)) in seen.iter().enumerate() {
         for at in touched.reads.iter().chain(&touched.writes) {
@@ -403,7 +501,14 @@ fn reaching_slots(m: u32, slots: &BTreeSet<i64>, seen: &[(usize, usize, &Arc<Ins
 
 /// Whether `one` still encodes with slot `at` in a register: an x87 store
 /// or a far-pointer load takes only memory.
-fn registrable(m: u32, bits: u32, home: Register, one: &Arc<Insn>, touched: &Touch, at: i64) -> bool {
+fn registrable(
+    m: u32,
+    bits: u32,
+    home: Register,
+    one: &Arc<Insn>,
+    touched: &Touch,
+    at: i64,
+) -> bool {
     if touched.reaches(at, false) || touched.reaches(at, true) {
         return false;
     }
@@ -411,12 +516,21 @@ fn registrable(m: u32, bits: u32, home: Register, one: &Arc<Insn>, touched: &Tou
         return true;
     }
     let homes = BTreeMap::from([(at, word(m, home))]);
-    rewritten(m, one, &homes).what.as_ref().is_some_and(|what| select::priced_in(bits, what, 0, None, false, false, None).is_some())
+    rewritten(m, one, &homes)
+        .what
+        .as_ref()
+        .is_some_and(|what| select::priced_in(bits, what, 0, None, false, false, None).is_some())
 }
 
 /// What holding a slot in a register saves each trip: a reload whose
 /// register is freed goes, one kept becomes a register move.
-fn saving(touched: &Touch, one: &Insn, at: i64, folded: bool, costs: &OperationCosts) -> i64 {
+fn saving(
+    touched: &Touch,
+    one: &Insn,
+    at: i64,
+    folded: bool,
+    costs: &OperationCosts,
+) -> i64 {
     let (reads, writes) = (touched.reads_slot(at), touched.writes_slot(at));
     if !reads && !writes {
         return 0;
@@ -436,7 +550,14 @@ enum Source {
 /// never writes -- a slot, or a constant -- and which nothing reads before
 /// that load. A constant counts: a segment register takes one only as
 /// `push / pop`, which qbdemo's PLASMA ran every pixel.
-fn invariant(m: u32, insns: &[(&Arc<Insn>, Lanes)], touches: &std::cell::OnceCell<Vec<Touch>>, entering: &Lanes, root: Register, spills: &BTreeSet<i64>) -> Option<Source> {
+fn invariant(
+    m: u32,
+    insns: &[(&Arc<Insn>, Lanes)],
+    touches: &std::cell::OnceCell<Vec<Touch>>,
+    entering: &Lanes,
+    root: Register,
+    spills: &BTreeSet<i64>,
+) -> Option<Source> {
     let lanes = _lanes(root);
     if !entering.is_disjoint(&lanes) {
         return None;
@@ -448,10 +569,16 @@ fn invariant(m: u32, insns: &[(&Arc<Insn>, Lanes)], touches: &std::cell::OnceCel
         }
         let what = insn.what.as_ref()?;
         let source = match (what.op, what.dests.as_slice(), what.sources.as_slice()) {
-            (Operation::Move, [Loc::Reg(reg)], [Loc::Mem(mem)]) if ir::root(reg.register) == ir::root(root) && reg.width == m && mem.width == m => {
+            (Operation::Move, [Loc::Reg(reg)], [Loc::Mem(mem)])
+                if ir::root(reg.register) == ir::root(root) && reg.width == m && mem.width == m =>
+            {
                 Source::Slot(slot(mem)?)
             }
-            (Operation::Move, [Loc::Reg(reg)], [Loc::Imm(imm)]) if ir::root(reg.register) == ir::root(root) && reg.width == m => Source::Constant(imm.clone()),
+            (Operation::Move, [Loc::Reg(reg)], [Loc::Imm(imm)])
+                if ir::root(reg.register) == ir::root(root) && reg.width == m =>
+            {
+                Source::Constant(imm.clone())
+            }
             _ => return None,
         };
         if from.as_ref().is_some_and(|one| *one != source) {
@@ -470,16 +597,21 @@ fn invariant(m: u32, insns: &[(&Arc<Insn>, Lanes)], touches: &std::cell::OnceCel
     kept.then_some(from?)
 }
 
-/// Each instruction of loop `one`, with the lanes it may write, or none where an instruction's effect is not known (and no register is
-/// invariant): worked out once for the loop, where `invariant` asked it again for every register.
-fn writes_of<'a>(body: &'a LirBody, one: &Loop, index: &BTreeMap<i64, usize>) -> Option<Vec<(&'a Arc<Insn>, Lanes)>> {
+/// Each instruction of loop `one`, with the lanes it may write, or none where an instruction's effect is not known (and
+/// no register is invariant): worked out once for the loop, where `invariant` asked it again for every register.
+fn writes_of<'a>(
+    body: &'a LirBody,
+    one: &Loop,
+    index: &BTreeMap<i64, usize>,
+) -> Option<Vec<(&'a Arc<Insn>, Lanes)>> {
     let mut out = Vec::new();
     for at in &one.body {
         for insn in &body.blocks[index[at]].insns {
             let effect = liveness::effect(body.bits, insn)?;
             // A `rep movs` steps si and di only if it runs: a conditional write, but one
             // that makes the register unfit to hold its value from one trip to the next.
-            let may_write = peephole::_register_effects(body.bits, insn, true, false).map_or(effect.writes, |(_, writes)| effect.writes.or(&writes));
+            let may_write = peephole::_register_effects(body.bits, insn, true, false)
+                .map_or(effect.writes, |(_, writes)| effect.writes.or(&writes));
             out.push((insn, may_write));
         }
     }
@@ -488,30 +620,56 @@ fn writes_of<'a>(body: &'a LirBody, one: &Loop, index: &BTreeMap<i64, usize>) ->
 
 /// Whether `one` cannot write the frame cell at `at`: it writes memory only
 /// in far segments, at globals, or at other frame cells.
-fn spares(m: u32, one: &Insn, at: i64) -> bool {
+fn spares(
+    m: u32,
+    one: &Insn,
+    at: i64,
+) -> bool {
     let Some(what) = one.what.as_ref() else {
         return false;
     };
-    if matches!(what.op, Operation::Call | Operation::Barrier | Operation::Escape | Operation::Fill | Operation::Copy | Operation::Restore) {
+    if matches!(
+        what.op,
+        Operation::Call
+            | Operation::Barrier
+            | Operation::Escape
+            | Operation::Fill
+            | Operation::Copy
+            | Operation::Restore
+    ) {
         return false;
     }
-    what.dests.iter().all(|place| match place {
-        Loc::Mem(mem) => match (slot(mem), mem.addr) {
-            (Some(cell), _) => (cell - at).abs() >= i64::from(m) && mem.width <= m,
-            (None, Some(addr)) => {
-                matches!(addr.space, Space::Far | Space::Segment | Space::Group | Space::External) && !is_bp(mem.through)
-            }
-            (None, None) => false,
-        },
-        _ => true,
-    })
+    what.dests
+        .iter()
+        .all(
+            |place| match place {
+                Loc::Mem(mem) => match (slot(mem), mem.addr) {
+                    (Some(cell), _) => (cell - at).abs() >= i64::from(m) && mem.width <= m,
+                    (None, Some(addr)) => {
+                        matches!(
+                            addr.space,
+                            Space::Far | Space::Segment | Space::Group | Space::External
+                        )
+                            && !is_bp(mem.through)
+                    }
+                    (None, None) => false,
+                },
+                _ => true,
+            },
+        )
 }
 
 /// `body` with each loop-invariant reload moved to where its loop is entered.
-pub fn hoisted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSet<i64>) -> LirBody {
+pub fn hoisted(
+    m: u32,
+    available: &[Register],
+    body: &LirBody,
+    spills: &BTreeSet<i64>,
+) -> LirBody {
     let graph = &body.blocks;
     let predecessors = loops::predecessors(&graph);
-    let index = body.blocks.iter().enumerate().map(|(position, block)| (block.at, position)).collect::<BTreeMap<_, _>>();
+    let index =
+        body.blocks.iter().enumerate().map(|(position, block)| (block.at, position)).collect::<BTreeMap<_, _>>();
     let (live_into, _, _) = liveness::live_into(body);
     let mut blocks = body.blocks.clone();
     let mut found = loops::loops(graph, Some(body.entry));
@@ -525,11 +683,14 @@ pub fn hoisted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSet
         if entries.is_empty() || !entries.iter().all(|at| body.blocks[index[at]].succ == [one.header]) {
             continue;
         }
-        let roots = available.iter().chain(target::SEGMENTS.iter().filter(|one| ![Register::CS, Register::SS].contains(one)));
+        let roots =
+            available.iter().chain(target::SEGMENTS.iter().filter(|one| ![Register::CS, Register::SS].contains(one)));
         let Some(writes) = writes_of(body, one, &index) else { continue };
         let touches = std::cell::OnceCell::new();
         let moved = roots
-            .filter_map(|root| invariant(m, &writes, &touches, &live_into[&one.header], *root, spills).map(|at| (*root, at)))
+            .filter_map(|root| {
+                invariant(m, &writes, &touches, &live_into[&one.header], *root, spills).map(|at| (*root, at))
+            })
             .collect::<Vec<_>>();
         if moved.is_empty() {
             continue;
@@ -538,9 +699,15 @@ pub fn hoisted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSet
         let mut first = BTreeMap::<Register, Arc<Insn>>::new();
         let mut rename = IndexMap::<u32, u32>::default();
         let reloads = |insn: &Insn, root: Register| {
-            insn.what.as_ref().is_some_and(|what| {
-                what.op == Operation::Move && matches!(what.dests.as_slice(), [Loc::Reg(reg)] if ir::root(reg.register) == ir::root(root))
-            })
+            insn.what
+                .as_ref()
+                .is_some_and(
+                    |what| what.op == Operation::Move
+                        && matches!(
+                            what.dests.as_slice(),
+                            [Loc::Reg(reg)] if ir::root(reg.register) == ir::root(root)
+                        ),
+                )
         };
         for at in &one.body {
             let block = &blocks[index[at]];
@@ -578,13 +745,21 @@ pub fn hoisted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSet
 }
 
 /// `body` with each loop's spill slots in the registers it leaves free.
-pub fn promoted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, park: i64) -> LirBody {
+pub fn promoted(
+    m: u32,
+    available: &[Register],
+    body: &LirBody,
+    spills: &BTreeSet<i64>,
+    costs: &OperationCosts,
+    park: i64,
+) -> LirBody {
     let graph = &body.blocks;
     let predecessors = loops::predecessors(&graph);
     let mut found = loops::loops(graph, Some(body.entry));
     // Innermost first: it runs most often.
     found.sort_by_key(|one| one.body.len());
-    let index = body.blocks.iter().enumerate().map(|(position, block)| (block.at, position)).collect::<BTreeMap<_, _>>();
+    let index =
+        body.blocks.iter().enumerate().map(|(position, block)| (block.at, position)).collect::<BTreeMap<_, _>>();
     let (live_into, _, _) = liveness::live_into(body);
     let busy = Frequency::of(body);
     let mut blocks = body.blocks.clone();
@@ -594,8 +769,9 @@ pub fn promoted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSe
             continue;
         }
         let insns = || one.body.iter().flat_map(|at| body.blocks[index[at]].insns.iter());
-        // How each instruction of the loop reaches the frame, worked out once: each slot asks of the instructions that reach it,
-        // not of all of them (a loop of d nested levels asked d slots of d levels' instructions, d times over).
+        // How each instruction of the loop reaches the frame, worked out once: each slot asks of the instructions that
+        // reach it, not of all of them (a loop of d nested levels asked d slots of d levels' instructions, d
+        // times over).
         let mut seen: Vec<(usize, usize, &Arc<Insn>, Touch)> = Vec::new();
         for block in &one.body {
             for (position, insn) in body.blocks[index[block]].insns.iter().enumerate() {
@@ -635,7 +811,22 @@ pub fn promoted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSe
         let none = Vec::new();
         let mut ranked = slots
             .iter()
-            .filter(|at| reaching.get(*at).unwrap_or(&none).iter().all(|i| registrable(m, body.bits, *available.last().expect("a register to hold a slot"), seen[*i].2, &seen[*i].3, **at)))
+            .filter(|at| {
+                reaching
+                    .get(*at)
+                    .unwrap_or(&none)
+                    .iter()
+                    .all(
+                        |i| registrable(
+                            m,
+                            body.bits,
+                            *available.last().expect("a register to hold a slot"),
+                            seen[*i].2,
+                            &seen[*i].3,
+                            **at,
+                        ),
+                    )
+            })
             .map(|at| {
                 let mut saved = 0;
                 for i in reaching.get(at).unwrap_or(&none) {
@@ -651,7 +842,12 @@ pub fn promoted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSe
         let entering: f64 = entries.iter().map(|from| busy.edge(*from, one.header)).sum();
         let trips = if entering > 0.0 { busy.block(one.header) / entering } else { 1.0 };
         let written = |at: i64| reaching.get(&at).unwrap_or(&none).iter().any(|i| seen[*i].3.writes_slot(at));
-        let stored = |at: i64| written(at) && { let live = live_in(m, body, at); exits.iter().any(|to| live.contains(to)) };
+        let stored = |at: i64| {
+            written(at) && {
+                let live = live_in(m, body, at);
+                exits.iter().any(|to| live.contains(to))
+            }
+        };
         // BP takes the last slot when the rest fill every free register.
         let bp = !other && !traps && ranked.len() == registers.len() + 1 && !stored(ranked.last().expect("a slot").1);
         let mut homes = BTreeMap::<i64, Loc>::new();
@@ -705,7 +901,9 @@ pub fn promoted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSe
         let parked = hosts
             .values()
             .filter_map(|host| match &registers[*host] {
-                (root, Hold::Parked(width)) => Some(Loc::Reg(Reg { register: target::named(*root, i64::from(*width)), width: *width })),
+                (root, Hold::Parked(width)) => {
+                    Some(Loc::Reg(Reg { register: target::named(*root, i64::from(*width)), width: *width }))
+                }
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -726,7 +924,11 @@ pub fn promoted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSe
                         let what = insn.what.as_ref().expect("a plain reader");
                         let swap = |place: &Loc| if plain_word(m, place, *root) { home.clone() } else { place.clone() };
                         let what = Semantics { sources: what.sources.iter().map(swap).collect(), ..what.clone() };
-                        insns.push(rewritten(m, &unread(&Arc::new(Insn { what: Some(what), ..(**insn).clone() }), &gone), &homes));
+                        insns.push(rewritten(
+                            m,
+                            &unread(&Arc::new(Insn { what: Some(what), ..(**insn).clone() }), &gone),
+                            &homes,
+                        ));
                     }
                     None => insns.push(rewritten(m, &unread(insn, &gone), &homes)),
                 }
@@ -747,7 +949,10 @@ pub fn promoted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSe
                 let load = made(near, Operation::Move, "mov", vec![home.clone()], vec![Loc::Mem(cell(m, *slot))]);
                 if matches!(home, Loc::Reg(reg) if is_bp(reg.register)) {
                     let bp = home.clone();
-                    insns.insert(insns.len() - usize::from(jumps), made(near, Operation::Push, "push", vec![], vec![bp]));
+                    insns.insert(
+                        insns.len() - usize::from(jumps),
+                        made(near, Operation::Push, "push", vec![], vec![bp]),
+                    );
                     insns.insert(insns.len() - usize::from(jumps), load);
                 } else {
                     insns.insert(place, load);
@@ -762,12 +967,24 @@ pub fn promoted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSe
             let near = insns.first().map_or(*to, |insn| insn.at);
             let mut place = 0;
             if with_bp {
-                insns.insert(0, made(near, Operation::Pop, "pop", vec![Loc::Reg(Reg { register: target::named(Register::BP, i64::from(m)), width: m })], vec![]));
+                insns.insert(
+                    0,
+                    made(
+                        near,
+                        Operation::Pop,
+                        "pop",
+                        vec![Loc::Reg(Reg { register: target::named(Register::BP, i64::from(m)), width: m })],
+                        vec![],
+                    ),
+                );
                 place = 1;
             }
             for (slot, home) in &homes {
                 if stored(*slot) {
-                    insns.insert(place, made(near, Operation::Move, "mov", vec![Loc::Mem(cell(m, *slot))], vec![home.clone()]));
+                    insns.insert(
+                        place,
+                        made(near, Operation::Move, "mov", vec![Loc::Mem(cell(m, *slot))], vec![home.clone()]),
+                    );
                     place += 1;
                 }
             }
@@ -798,11 +1015,19 @@ mod tests {
         Loc::Reg(Reg { register, width: 2 })
     }
 
-    fn with(one: Arc<Insn>, defines: Vec<u32>, uses: Vec<u32>) -> Arc<Insn> {
+    fn with(
+        one: Arc<Insn>,
+        defines: Vec<u32>,
+        uses: Vec<u32>,
+    ) -> Arc<Insn> {
         Arc::new(Insn { defines, uses, ..(*one).clone() })
     }
 
-    fn block(at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>) -> LirBlock {
+    fn block(
+        at: i64,
+        insns: Vec<Arc<Insn>>,
+        succ: Vec<i64>,
+    ) -> LirBlock {
         LirBlock { succ, ..LirBlock::new(at, insns) }
     }
 
@@ -813,7 +1038,9 @@ mod tests {
     #[test]
     fn test_a_dropped_reload_leaves_no_reader_of_its_value() {
         let one = Imm { value: 1, width: 2, address: None };
-        let bump = |at: i64, register: Register| made(at, Operation::Binary, "add", vec![reg(register)], vec![reg(register), Loc::Imm(one.clone())]);
+        let bump = |at: i64, register: Register| {
+            made(at, Operation::Binary, "add", vec![reg(register)], vec![reg(register), Loc::Imm(one.clone())])
+        };
         let body = LirBody::new(
             "loop",
             0,
@@ -825,23 +1052,91 @@ mod tests {
                         bump(0x10, Register::BX),
                         bump(0x11, Register::DX),
                         bump(0x12, Register::DI),
-                        with(made(0x13, Operation::Move, "mov", vec![reg(Register::SI)], vec![Loc::Mem(cell(2, -4))]), vec![5], vec![]),
-                        with(Arc::new(Insn::new(0x13, Some((0x13, 0x13)), Some(Semantics { name: Some(String::new()), ..Semantics::new(Operation::Nothing) }), vec![], vec![])), vec![], vec![5]),
-                        with(made(0x14, Operation::Binary, "add", vec![reg(Register::AX)], vec![reg(Register::AX), reg(Register::SI)]), vec![], vec![5]),
-                        with(made(0x15, Operation::Move, "mov", vec![reg(Register::SI)], vec![Loc::Mem(cell(2, -4))]), vec![6], vec![]),
-                        with(made(0x15, Operation::Binary, "add", vec![reg(Register::BX)], vec![reg(Register::BX), reg(Register::SI)]), vec![], vec![6]),
+                        with(
+                            made(0x13, Operation::Move, "mov", vec![reg(Register::SI)], vec![Loc::Mem(cell(2, -4))]),
+                            vec![5],
+                            vec![],
+                        ),
+                        with(
+                            Arc::new(Insn::new(
+                                0x13,
+                                Some((0x13, 0x13)),
+                                Some(Semantics { name: Some(String::new()), ..Semantics::new(Operation::Nothing) }),
+                                vec![],
+                                vec![],
+                            )),
+                            vec![],
+                            vec![5],
+                        ),
+                        with(
+                            made(
+                                0x14,
+                                Operation::Binary,
+                                "add",
+                                vec![reg(Register::AX)],
+                                vec![reg(Register::AX), reg(Register::SI)],
+                            ),
+                            vec![],
+                            vec![5],
+                        ),
+                        with(
+                            made(0x15, Operation::Move, "mov", vec![reg(Register::SI)], vec![Loc::Mem(cell(2, -4))]),
+                            vec![6],
+                            vec![],
+                        ),
+                        with(
+                            made(
+                                0x15,
+                                Operation::Binary,
+                                "add",
+                                vec![reg(Register::BX)],
+                                vec![reg(Register::BX), reg(Register::SI)],
+                            ),
+                            vec![],
+                            vec![6],
+                        ),
                         bump(0x15, Register::CX),
-                        Arc::new(Insn::new(0x16, Some((0x16, 0x17)), Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }), vec![], vec![])),
+                        Arc::new(Insn::new(
+                            0x16,
+                            Some((0x16, 0x17)),
+                            Some(Semantics {
+                                name: Some("jne".to_owned()),
+                                target: Some(0x10),
+                                ..Semantics::new(Operation::Branch)
+                            }),
+                            vec![],
+                            vec![],
+                        )),
                     ],
                     vec![0x10, 0x20],
                 ),
-                block(0x20, vec![made(0x20, Operation::Move, "mov", vec![Loc::Reg(Reg { register: Register::ESI, width: 4 })], vec![Loc::Imm(Imm { width: 4, ..one.clone() })]), made(0x21, Operation::Return, "ret", vec![], vec![])], vec![]),
+                block(
+                    0x20,
+                    vec![
+                        made(
+                            0x20,
+                            Operation::Move,
+                            "mov",
+                            vec![Loc::Reg(Reg { register: Register::ESI, width: 4 })],
+                            vec![Loc::Imm(Imm { width: 4, ..one.clone() })],
+                        ),
+                        made(0x21, Operation::Return, "ret", vec![], vec![]),
+                    ],
+                    vec![],
+                ),
             ],
             IndexMap::default(),
             IndexMap::default(),
         );
         let costs = &crate::backend::cpu::profile("486").unwrap().operations;
-        let out = promoted(2, &crate::backend::classes::RegisterClasses::m16().available, &body, &BTreeSet::from([-4]), costs, 2);
+        let out = promoted(
+            2,
+            &crate::backend::classes::RegisterClasses::m16().available,
+            &body,
+            &BTreeSet::from([-4]),
+            costs,
+            2,
+        );
         let reloads = |body: &LirBody| body.insns().iter().filter(|one| one.defines.contains(&5)).count();
         assert_eq!(reloads(&body), 1);
         assert_eq!(reloads(&out), 0, "the reload stays: the test does not reach the fold");
@@ -857,8 +1152,19 @@ mod tests {
         let word = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
         let copy = Semantics {
             name: Some("movsd".to_owned()),
-            dests: vec![Loc::Mem(crate::model::ir::Mem::new(None, 0)), reg(Register::SI), reg(Register::DI), reg(Register::CX)],
-            sources: vec![reg(Register::CX), reg(Register::SI), reg(Register::DI), reg(Register::DS), reg(Register::ES)],
+            dests: vec![
+                Loc::Mem(crate::model::ir::Mem::new(None, 0)),
+                reg(Register::SI),
+                reg(Register::DI),
+                reg(Register::CX),
+            ],
+            sources: vec![
+                reg(Register::CX),
+                reg(Register::SI),
+                reg(Register::DI),
+                reg(Register::DS),
+                reg(Register::ES),
+            ],
             ..Semantics::new(Operation::Copy)
         };
         let body = LirBody::new(
@@ -874,18 +1180,46 @@ mod tests {
                         made(0x12, Operation::Move, "mov", vec![reg(Register::CX)], vec![word(50)]),
                         made(0x12, Operation::Move, "mov", vec![reg(Register::BX)], vec![word(7)]),
                         Arc::new(Insn::new(0x13, Some((0x13, 0x14)), Some(copy), vec![], vec![])),
-                        Arc::new(Insn::new(0x15, Some((0x15, 0x16)), Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }), vec![], vec![])),
+                        Arc::new(Insn::new(
+                            0x15,
+                            Some((0x15, 0x16)),
+                            Some(Semantics {
+                                name: Some("jne".to_owned()),
+                                target: Some(0x10),
+                                ..Semantics::new(Operation::Branch)
+                            }),
+                            vec![],
+                            vec![],
+                        )),
                     ],
                     vec![0x10, 0x20],
                 ),
-                block(0x20, vec![Arc::new(Insn { reads_complete: true, ..(*made(0x20, Operation::Return, "ret", vec![], vec![])).clone() })], vec![]),
+                block(
+                    0x20,
+                    vec![Arc::new(Insn {
+                        reads_complete: true,
+                        ..(*made(0x20, Operation::Return, "ret", vec![], vec![])).clone()
+                    })],
+                    vec![],
+                ),
             ],
             IndexMap::default(),
             IndexMap::default(),
         );
-        let out = super::hoisted(2, &crate::backend::classes::RegisterClasses::m16().available, &body, &BTreeSet::new());
+        let out =
+            super::hoisted(2, &crate::backend::classes::RegisterClasses::m16().available, &body, &BTreeSet::new());
         let in_loop = out.blocks.iter().find(|one| one.at == 0x10).expect("the loop");
-        let sets = |register: Register| in_loop.insns.iter().any(|one| matches!(one.what.as_ref().map(|what| what.dests.as_slice()), Some([Loc::Reg(reg)]) if reg.register == register));
+        let sets = |register: Register| {
+            in_loop
+                .insns
+                .iter()
+                .any(
+                    |one| matches!(
+                        one.what.as_ref().map(|what| what.dests.as_slice()),
+                        Some([Loc::Reg(reg)]) if reg.register == register
+                    ),
+                )
+        };
         assert!(!sets(Register::BX), "premise: an invariant constant leaves the loop");
         assert!(sets(Register::DI) && sets(Register::SI), "the loop sets si and di");
     }
@@ -897,14 +1231,29 @@ mod tests {
     fn test_a_dword_slot_parked_in_the_frame_register_is_pushed_and_popped() {
         let wide = |register: Register| Loc::Reg(Reg { register, width: 4 });
         let one = Imm { value: 1, width: 4, address: None };
-        let bump = |at: i64, register: Register| made(at, Operation::Binary, "add", vec![wide(register)], vec![wide(register), Loc::Imm(one.clone())]);
+        let bump = |at: i64, register: Register| {
+            made(at, Operation::Binary, "add", vec![wide(register)], vec![wide(register), Loc::Imm(one.clone())])
+        };
         let slot = |at: i64| Loc::Mem(cell(4, at));
         let busy = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
-        let mut loop_body: Vec<Arc<Insn>> = busy.iter().enumerate().map(|(at, register)| bump(0x10 + at as i64, *register)).collect();
+        let mut loop_body: Vec<Arc<Insn>> =
+            busy.iter().enumerate().map(|(at, register)| bump(0x10 + at as i64, *register)).collect();
         for at in 0..8 {
-            loop_body.push(made(0x20 + at, Operation::Binary, "add", vec![wide(Register::EAX)], vec![wide(Register::EAX), slot(-4)]));
+            loop_body.push(made(
+                0x20 + at,
+                Operation::Binary,
+                "add",
+                vec![wide(Register::EAX)],
+                vec![wide(Register::EAX), slot(-4)],
+            ));
         }
-        loop_body.push(Arc::new(Insn::new(0x30, Some((0x30, 0x31)), Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }), vec![], vec![])));
+        loop_body.push(Arc::new(Insn::new(
+            0x30,
+            Some((0x30, 0x31)),
+            Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }),
+            vec![],
+            vec![],
+        )));
         let body = LirBody::new(
             "loop",
             0,
@@ -917,21 +1266,56 @@ mod tests {
             IndexMap::default(),
         );
         let costs = &crate::backend::cpu::profile("486").unwrap().operations;
-        let out = promoted(4, &crate::backend::classes::RegisterClasses::m16().available, &body, &BTreeSet::from([-4]), costs, 2);
-        let is_bp = |insn: &Arc<Insn>, op: Operation| insn.what.as_ref().is_some_and(|what| what.op == op && what.dests.iter().chain(&what.sources).any(|place| matches!(place, Loc::Reg(reg) if super::is_bp(reg.register))));
+        let out = promoted(
+            4,
+            &crate::backend::classes::RegisterClasses::m16().available,
+            &body,
+            &BTreeSet::from([-4]),
+            costs,
+            2,
+        );
+        let is_bp = |insn: &Arc<Insn>, op: Operation| {
+            insn.what
+                .as_ref()
+                .is_some_and(
+                    |what| what.op == op
+                        && what
+                            .dests
+                            .iter()
+                            .chain(&what.sources)
+                            .any(|place| matches!(place, Loc::Reg(reg) if super::is_bp(reg.register))),
+                )
+        };
         let pushes = out.insns().iter().filter(|insn| is_bp(insn, Operation::Push)).count();
         let pops = out.insns().iter().filter(|insn| is_bp(insn, Operation::Pop)).count();
         assert_eq!((pushes, pops), (1, 1), "the slot lives in EBP between a push and a pop");
     }
 
-    /// Ranking a loop's slots asked every instruction of the loop how it reaches the frame, once for each slot, and each ask
-    /// allocated its sets: a nest of d levels (d loops of d levels' slots and instructions) cost d cubed, 215 M for a 16-deep
-    /// nest of which 169 M was this. Each instruction is asked once and each slot is asked of those that reach it.
+    /// Ranking a loop's slots asked every instruction of the loop how it reaches the frame, once for each slot, and
+    /// each ask allocated its sets: a nest of d levels (d loops of d levels' slots and instructions) cost d cubed,
+    /// 215 M for a 16-deep nest of which 169 M was this. Each instruction is asked once and each slot is asked of
+    /// those that reach it.
     #[test]
     fn test_a_loops_slots_are_ranked_without_asking_every_instruction_for_each_slot() {
         let slot = |at: i64| Loc::Mem(cell(2, at));
-        let mut loop_body: Vec<Arc<Insn>> = (0..12).map(|at| made(0x20 + at, Operation::Binary, "add", vec![reg(Register::AX)], vec![reg(Register::AX), slot(-2 * (at + 1))])).collect();
-        loop_body.push(Arc::new(Insn::new(0x30, Some((0x30, 0x31)), Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }), vec![], vec![])));
+        let mut loop_body: Vec<Arc<Insn>> = (0..12)
+            .map(|at| {
+                made(
+                    0x20 + at,
+                    Operation::Binary,
+                    "add",
+                    vec![reg(Register::AX)],
+                    vec![reg(Register::AX), slot(-2 * (at + 1))],
+                )
+            })
+            .collect();
+        loop_body.push(Arc::new(Insn::new(
+            0x30,
+            Some((0x30, 0x31)),
+            Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }),
+            vec![],
+            vec![],
+        )));
         let count = loop_body.len();
         let body = LirBody::new(
             "loop",
@@ -946,9 +1330,19 @@ mod tests {
         );
         let costs = &crate::backend::cpu::profile("486").unwrap().operations;
         let before = super::TOUCHED.with(std::cell::Cell::get);
-        promoted(2, &crate::backend::classes::RegisterClasses::m16().available, &body, &(1..=12).map(|at| -2 * at).collect(), costs, 2);
+        promoted(
+            2,
+            &crate::backend::classes::RegisterClasses::m16().available,
+            &body,
+            &(1..=12).map(|at| -2 * at).collect(),
+            costs,
+            2,
+        );
         let asked = super::TOUCHED.with(std::cell::Cell::get) - before;
-        assert!(asked <= 2 * count, "{asked} asks of how an instruction reaches the frame for a loop of {count} instructions and 12 slots");
+        assert!(
+            asked <= 2 * count,
+            "{asked} asks of how an instruction reaches the frame for a loop of {count} instructions and 12 slots"
+        );
     }
 
     /// A loop that reads a far pointer's low word and also loads the pointer with `les` from the same
@@ -957,8 +1351,11 @@ mod tests {
     #[test]
     fn test_a_far_pointer_load_keeps_its_slot_in_memory_when_a_loop_holds_the_low_word() {
         let one = Imm { value: 1, width: 2, address: None };
-        let bump = |at: i64, register: Register| made(at, Operation::Binary, "add", vec![reg(register)], vec![reg(register), Loc::Imm(one.clone())]);
-        let les = made(0x14, Operation::Move, "les", vec![reg(Register::BX), reg(Register::ES)], vec![Loc::Mem(cell(4, -4))]);
+        let bump = |at: i64, register: Register| {
+            made(at, Operation::Binary, "add", vec![reg(register)], vec![reg(register), Loc::Imm(one.clone())])
+        };
+        let les =
+            made(0x14, Operation::Move, "les", vec![reg(Register::BX), reg(Register::ES)], vec![Loc::Mem(cell(4, -4))]);
         let body = LirBody::new(
             "loop",
             0,
@@ -968,13 +1365,53 @@ mod tests {
                     0x10,
                     vec![
                         bump(0x10, Register::DX),
-                        made(0x13, Operation::Binary, "add", vec![reg(Register::AX)], vec![reg(Register::AX), Loc::Mem(cell(2, -4))]),
+                        made(
+                            0x13,
+                            Operation::Binary,
+                            "add",
+                            vec![reg(Register::AX)],
+                            vec![reg(Register::AX), Loc::Mem(cell(2, -4))],
+                        ),
                         les,
-                        made(0x17, Operation::Binary, "add", vec![reg(Register::AX)], vec![reg(Register::AX), Loc::Mem(cell(2, -4))]),
-                        made(0x17, Operation::Binary, "add", vec![reg(Register::AX)], vec![reg(Register::AX), Loc::Mem(cell(2, -4))]),
-                        made(0x17, Operation::Binary, "add", vec![reg(Register::AX)], vec![reg(Register::AX), Loc::Mem(cell(2, -4))]),
-                        made(0x17, Operation::Binary, "add", vec![reg(Register::AX)], vec![reg(Register::AX), Loc::Mem(cell(2, -4))]),
-                        Arc::new(Insn::new(0x18, Some((0x18, 0x19)), Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }), vec![], vec![])),
+                        made(
+                            0x17,
+                            Operation::Binary,
+                            "add",
+                            vec![reg(Register::AX)],
+                            vec![reg(Register::AX), Loc::Mem(cell(2, -4))],
+                        ),
+                        made(
+                            0x17,
+                            Operation::Binary,
+                            "add",
+                            vec![reg(Register::AX)],
+                            vec![reg(Register::AX), Loc::Mem(cell(2, -4))],
+                        ),
+                        made(
+                            0x17,
+                            Operation::Binary,
+                            "add",
+                            vec![reg(Register::AX)],
+                            vec![reg(Register::AX), Loc::Mem(cell(2, -4))],
+                        ),
+                        made(
+                            0x17,
+                            Operation::Binary,
+                            "add",
+                            vec![reg(Register::AX)],
+                            vec![reg(Register::AX), Loc::Mem(cell(2, -4))],
+                        ),
+                        Arc::new(Insn::new(
+                            0x18,
+                            Some((0x18, 0x19)),
+                            Some(Semantics {
+                                name: Some("jne".to_owned()),
+                                target: Some(0x10),
+                                ..Semantics::new(Operation::Branch)
+                            }),
+                            vec![],
+                            vec![],
+                        )),
                     ],
                     vec![0x10, 0x20],
                 ),
@@ -984,8 +1421,25 @@ mod tests {
             IndexMap::default(),
         );
         let costs = &crate::backend::cpu::profile("486").unwrap().operations;
-        let out = promoted(2, &crate::backend::classes::RegisterClasses::m16().available, &body, &BTreeSet::from([-4]), costs, 2);
-        let reads = |body: &LirBody| body.insns().iter().filter_map(|one| one.what.as_ref()).filter(|what| what.sources.iter().any(|place| matches!(place, Loc::Mem(mem) if mem.width == 2))).count();
-        assert_eq!(reads(&out), reads(&body), "the word reads stay in memory: the les reads the slot there, a register copy would be stale");
+        let out = promoted(
+            2,
+            &crate::backend::classes::RegisterClasses::m16().available,
+            &body,
+            &BTreeSet::from([-4]),
+            costs,
+            2,
+        );
+        let reads = |body: &LirBody| {
+            body.insns()
+                .iter()
+                .filter_map(|one| one.what.as_ref())
+                .filter(|what| what.sources.iter().any(|place| matches!(place, Loc::Mem(mem) if mem.width == 2)))
+                .count()
+        };
+        assert_eq!(
+            reads(&out),
+            reads(&body),
+            "the word reads stay in memory: the les reads the slot there, a register copy would be stale"
+        );
     }
 }

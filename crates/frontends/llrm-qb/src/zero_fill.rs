@@ -7,7 +7,10 @@ use std::collections::BTreeSet;
 use llrm_core::hir::model::{self, Number, Operand, Storage, TypeKind};
 
 /// The local place a leading entry store of zero writes, if it is one.
-fn zeroed_place(instruction: &model::Instruction, places: &[model::Place]) -> Option<i64> {
+fn zeroed_place(
+    instruction: &model::Instruction,
+    places: &[model::Place],
+) -> Option<i64> {
     let [target, Operand::Constant(model::Constant { value: Number::Int(0), .. })] = instruction.operands.as_slice()
     else {
         return None;
@@ -53,7 +56,8 @@ pub(super) fn laid_out(
     }
     let originals: Vec<model::Module> = program.modules.clone();
     for (module, original) in program.modules.iter_mut().zip(&originals) {
-        let types: llrm_support::hash::HashMap<i64, &model::Type> = original.types.iter().map(|one| (one.id, one)).collect();
+        let types: llrm_support::hash::HashMap<i64, &model::Type> =
+            original.types.iter().map(|one| (one.id, one)).collect();
         for (function, source) in module.functions.iter_mut().zip(&original.functions) {
             let (count, zeroed) = entry_zeroing(function);
             if count == 0 {
@@ -82,15 +86,25 @@ struct Span {
 }
 
 impl Span {
-    fn into_place(self, id: i64) -> model::Place {
-        model::Place { extent: Some(-self.low), ..model::Place::new(id, "$zeroed", self.r#type, Storage::Local, self.low) }
+    fn into_place(
+        self,
+        id: i64,
+    ) -> model::Place {
+        model::Place {
+            extent: Some(-self.low),
+            ..model::Place::new(id, "$zeroed", self.r#type, Storage::Local, self.low)
+        }
     }
 }
 
 /// Groups of local places that share bytes move together: zeroed
 /// aggregates first, just below BP, then zeroed scalars, then the rest,
 /// each group word-aligned. The zeroed aggregates' span, where two or more.
-fn relayout(places: &mut [model::Place], zeroed: &BTreeSet<i64>, types: &llrm_support::hash::HashMap<i64, &model::Type>) -> Option<Span> {
+fn relayout(
+    places: &mut [model::Place],
+    zeroed: &BTreeSet<i64>,
+    types: &llrm_support::hash::HashMap<i64, &model::Type>,
+) -> Option<Span> {
     let extent = |one: &model::Place| one.extent.unwrap_or(types[&one.r#type].width);
     let mut locals: Vec<usize> = (0..places.len()).filter(|&index| places[index].storage == Storage::Local).collect();
     locals.sort_by_key(|&index| (places[index].offset, places[index].id));
@@ -109,7 +123,10 @@ fn relayout(places: &mut [model::Place], zeroed: &BTreeSet<i64>, types: &llrm_su
         }
     }
     let scalar = |members: &[usize]| {
-        matches!(members, [one] if matches!(types[&places[*one].r#type].kind, TypeKind::Integer | TypeKind::Float | TypeKind::Pointer | TypeKind::Boolean))
+        matches!(
+            members,
+            [one] if matches!(types[&places[*one].r#type].kind, TypeKind::Integer | TypeKind::Float | TypeKind::Pointer | TypeKind::Boolean)
+        )
     };
     groups.sort_by_key(|group| match (group.3, scalar(&group.2)) {
         (true, false) => 0,

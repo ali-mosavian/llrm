@@ -27,7 +27,11 @@ impl FunctionPass for FixedNarrow {
         "fixednarrow"
     }
 
-    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         let narrow = narrowable(unit, analyses);
         for product in &narrow {
             let ty = unit.function.instruction(product.inst).ty;
@@ -45,7 +49,11 @@ impl FunctionPass for FixedNarrow {
             unit.function.replace_all_uses_with(old, result);
             unit.function.erase(product.inst).expect("its uses were replaced");
         }
-        if narrow.is_empty() { PreservedAnalyses::all() } else { PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>() }
+        if narrow.is_empty() {
+            PreservedAnalyses::all()
+        } else {
+            PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
+        }
     }
 }
 
@@ -58,11 +66,23 @@ struct Narrow {
 }
 
 /// The products whose operands, less the shifts they carry, multiply within their width.
-fn narrowable(unit: &passes::Unit, analyses: &mut Analyses) -> Vec<Narrow> {
+fn narrowable(
+    unit: &passes::Unit,
+    analyses: &mut Analyses,
+) -> Vec<Narrow> {
     let held = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
     let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
-    let memory = Unit::within(unit.context, unit.layout, unit.function, analyses.outer()).with_registers(&held).with_shape(&shape);
-    let calls: Vec<_> = unit.function.walk().filter(|&(_, inst)| matches!(memory.intrinsic(inst), Some(Intrinsic::Fixed { divide: false }))).collect();
+    let memory = Unit::within(unit.context, unit.layout, unit.function, analyses.outer())
+        .with_registers(&held)
+        .with_shape(&shape);
+    let calls: Vec<_> = unit
+        .function
+        .walk()
+        .filter(|&(_, inst)| matches!(
+            memory.intrinsic(inst),
+            Some(Intrinsic::Fixed { divide: false })
+        ))
+        .collect();
     if calls.is_empty() {
         return Vec::new();
     }
@@ -75,14 +95,18 @@ fn narrowable(unit: &passes::Unit, analyses: &mut Analyses) -> Vec<Narrow> {
             let width = memory.int_bits(operands[0]).filter(|&width| width == 32)?;
             let mut scale = u32::try_from(memory.int_constant(operands[2])?).ok().filter(|&scale| scale < width)?;
             let scope = facts.get(&cfg::id(block)).cloned().unwrap_or_default();
-            let interval = |one: Operand| ranges::_operand(&memory, one, &scope, &registers).filter(|interval| interval.width == width);
+            let interval = |one: Operand| {
+                ranges::_operand(&memory, one, &scope, &registers).filter(|interval| interval.width == width)
+            };
             let limit = BigInt::from(1) << (width - 1);
             let fits = |low: &BigInt, high: &BigInt| -&limit <= *low && *high < limit;
             // `v << k` or `v + v` where `v`'s interval keeps it from wrapping: `v * 2^k`.
             let doubled = |one: Operand, scale: u32| -> Option<(Operand, u32)> {
                 let (_, op) = memory.defining(one)?;
                 let (source, bits) = match (&op.opcode, &op.operands[..]) {
-                    (Opcode::Binary(BinaryOp::Shl), &[source, count]) => (source, u32::try_from(memory.int_constant(count)?).ok()?),
+                    (Opcode::Binary(BinaryOp::Shl), &[source, count]) => {
+                        (source, u32::try_from(memory.int_constant(count)?).ok()?)
+                    }
                     (Opcode::Binary(BinaryOp::Add), &[source, other]) if source == other => (source, 1),
                     _ => return None,
                 };

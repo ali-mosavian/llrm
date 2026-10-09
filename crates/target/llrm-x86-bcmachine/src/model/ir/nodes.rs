@@ -10,7 +10,6 @@ use std::fmt;
 use std::sync::LazyLock;
 
 use super::{Effects, RESTORE_IDIOM, Semantics, TABLE_DATA, UNMODELLED, barrier};
-
 use crate::frontends::bc::declen::Insn;
 use crate::model::ir::lift::Decoded;
 
@@ -26,12 +25,11 @@ pub struct Opaque {
 
 impl Opaque {
     #[must_use]
-    pub fn new(insn: Insn, effects: Effects) -> Self {
-        Self {
-            insn,
-            effects,
-            semantics: UNMODELLED.clone(),
-        }
+    pub fn new(
+        insn: Insn,
+        effects: Effects,
+    ) -> Self {
+        Self { insn, effects, semantics: UNMODELLED.clone() }
     }
 }
 
@@ -48,13 +46,12 @@ pub struct Long {
 
 impl Long {
     #[must_use]
-    pub fn new(insn: Insn, decoded: Decoded, effects: Effects) -> Self {
-        Self {
-            insn,
-            decoded,
-            effects,
-            semantics: UNMODELLED.clone(),
-        }
+    pub fn new(
+        insn: Insn,
+        decoded: Decoded,
+        effects: Effects,
+    ) -> Self {
+        Self { insn, decoded, effects, semantics: UNMODELLED.clone() }
     }
 }
 
@@ -71,13 +68,12 @@ pub struct Call {
 
 impl Call {
     #[must_use]
-    pub fn new(insn: Insn, name: String, effects: Effects) -> Self {
-        Self {
-            insn,
-            name,
-            effects,
-            semantics: UNMODELLED.clone(),
-        }
+    pub fn new(
+        insn: Insn,
+        name: String,
+        effects: Effects,
+    ) -> Self {
+        Self { insn, name, effects, semantics: UNMODELLED.clone() }
     }
 }
 
@@ -91,7 +87,10 @@ pub static RESTORE_EFFECTS: LazyLock<BTreeMap<usize, Effects>> = LazyLock::new(|
     ])
 });
 
-fn restore_effects(low: iced_x86::Register, high: iced_x86::Register) -> Effects {
+fn restore_effects(
+    low: iced_x86::Register,
+    high: iced_x86::Register,
+) -> Effects {
     let registers = BTreeSet::from([low, high]);
     Effects {
         defs: Some(registers.clone()),
@@ -119,14 +118,13 @@ pub struct Restore {
 
 impl Restore {
     #[must_use]
-    pub fn new(at: usize, end: usize, pair: usize, effects: Effects) -> Self {
-        Self {
-            at,
-            end,
-            pair,
-            effects,
-            semantics: RESTORE_IDIOM.clone(),
-        }
+    pub fn new(
+        at: usize,
+        end: usize,
+        pair: usize,
+        effects: Effects,
+    ) -> Self {
+        Self { at, end, pair, effects, semantics: RESTORE_IDIOM.clone() }
     }
 }
 
@@ -150,19 +148,28 @@ impl TableKind {
 }
 
 impl fmt::Display for TableKind {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(self.as_str())
     }
 }
 
 impl Ord for TableKind {
-    fn cmp(&self, other: &Self) -> Ordering {
+    fn cmp(
+        &self,
+        other: &Self,
+    ) -> Ordering {
         self.as_str().cmp(other.as_str())
     }
 }
 
 impl PartialOrd for TableKind {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    fn partial_cmp(
+        &self,
+        other: &Self,
+    ) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
@@ -189,14 +196,7 @@ impl Data {
         entries: Vec<usize>,
         effects: Effects,
     ) -> Self {
-        Self {
-            at,
-            end,
-            kind,
-            entries,
-            effects,
-            semantics: TABLE_DATA.clone(),
-        }
+        Self { at, end, kind, entries, effects, semantics: TABLE_DATA.clone() }
     }
 }
 
@@ -267,9 +267,7 @@ pub fn span(node: &Node) -> (usize, usize) {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{
-        Call, Data, Long, Node, Opaque, RESTORE_EFFECTS, Restore, TableKind, pinned, span,
-    };
+    use super::{Call, Data, Long, Node, Opaque, RESTORE_EFFECTS, Restore, TableKind, pinned, span};
     use crate::frontends::bc::declen::decode;
     use crate::model::ir::lift::{Decoded, Kind};
     use crate::model::ir::{Effects, RESTORE_IDIOM, TABLE_DATA, UNMODELLED, barrier};
@@ -288,10 +286,7 @@ mod tests {
     fn omf_source_nodes_table_kind_spelling_and_order_are_python_strenum_order() {
         let mut kinds = vec![TableKind::Jump, TableKind::Map];
         kinds.sort();
-        assert_eq!(
-            kinds.into_iter().map(TableKind::as_str).collect::<Vec<_>>(),
-            ["jump", "map"]
-        );
+        assert_eq!(kinds.into_iter().map(TableKind::as_str).collect::<Vec<_>>(), ["jump", "map"]);
         assert_eq!(TableKind::Jump.to_string(), "jump");
     }
 
@@ -315,21 +310,9 @@ mod tests {
     fn omf_source_nodes_restore_effects_name_both_partial_write_roots_and_nothing_else() {
         let pair_zero = RESTORE_EFFECTS.get(&0).unwrap();
         let pair_one = RESTORE_EFFECTS.get(&1).unwrap();
-        assert_eq!(
-            pair_zero.defs,
-            Some(BTreeSet::from([
-                iced_x86::Register::EAX,
-                iced_x86::Register::EDX
-            ]))
-        );
+        assert_eq!(pair_zero.defs, Some(BTreeSet::from([iced_x86::Register::EAX, iced_x86::Register::EDX])));
         assert_eq!(pair_zero.uses, pair_zero.defs);
-        assert_eq!(
-            pair_one.defs,
-            Some(BTreeSet::from([
-                iced_x86::Register::ECX,
-                iced_x86::Register::EBX
-            ]))
-        );
+        assert_eq!(pair_one.defs, Some(BTreeSet::from([iced_x86::Register::ECX, iced_x86::Register::EBX])));
         assert_eq!(pair_one.uses, pair_one.defs);
         for effects in [pair_zero, pair_one] {
             assert_eq!(effects.flags_written.bits(), 0);
@@ -343,12 +326,7 @@ mod tests {
 
     #[test]
     fn omf_source_nodes_pinned_distinguishes_modelled_known_and_unknown_barriers() {
-        let modelled = Node::Restore(Restore::new(
-            0,
-            4,
-            0,
-            RESTORE_EFFECTS.get(&0).unwrap().clone(),
-        ));
+        let modelled = Node::Restore(Restore::new(0, 4, 0, RESTORE_EFFECTS.get(&0).unwrap().clone()));
         assert_eq!(pinned(&modelled), Some(BTreeSet::new()));
 
         let mut known_effects = effects();
@@ -356,13 +334,7 @@ mod tests {
         known_effects.uses = Some(BTreeSet::from([iced_x86::Register::EDX]));
         let known = Node::Opaque(Opaque::new(insn(4), known_effects));
         assert!(barrier(known.semantics()));
-        assert_eq!(
-            pinned(&known),
-            Some(BTreeSet::from([
-                iced_x86::Register::EAX,
-                iced_x86::Register::EDX
-            ]))
-        );
+        assert_eq!(pinned(&known), Some(BTreeSet::from([iced_x86::Register::EAX, iced_x86::Register::EDX])));
 
         let mut unknown_effects = effects();
         unknown_effects.defs = None;
@@ -374,31 +346,10 @@ mod tests {
     fn omf_source_nodes_span_covers_every_node_variant() {
         let values = [
             (Node::Opaque(Opaque::new(insn(0), effects())), (0, 2)),
-            (
-                Node::Long(Long::new(
-                    insn(2),
-                    Decoded::new(Kind::Load, 0, 0, 2),
-                    effects(),
-                )),
-                (2, 4),
-            ),
-            (
-                Node::Call(Call::new(insn(4), "B$MUI4".to_owned(), effects())),
-                (4, 6),
-            ),
-            (
-                Node::Restore(Restore::new(
-                    6,
-                    10,
-                    0,
-                    RESTORE_EFFECTS.get(&0).unwrap().clone(),
-                )),
-                (6, 10),
-            ),
-            (
-                Node::Data(Data::new(10, 14, TableKind::Map, vec![12], effects())),
-                (10, 14),
-            ),
+            (Node::Long(Long::new(insn(2), Decoded::new(Kind::Load, 0, 0, 2), effects())), (2, 4)),
+            (Node::Call(Call::new(insn(4), "B$MUI4".to_owned(), effects())), (4, 6)),
+            (Node::Restore(Restore::new(6, 10, 0, RESTORE_EFFECTS.get(&0).unwrap().clone())), (6, 10)),
+            (Node::Data(Data::new(10, 14, TableKind::Map, vec![12], effects())), (10, 14)),
         ];
         for (node, wanted) in values {
             assert_eq!(span(&node), wanted);

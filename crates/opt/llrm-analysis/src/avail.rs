@@ -21,19 +21,19 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use llrm_support::hash::HashSet;
 use std::ops::Deref;
 use std::rc::Rc;
 
-use crate::graph::loops;
 use llrm_mir::module::{InstId, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_support::bits::Bits;
+use llrm_support::hash::HashSet;
 use llrm_support::hash::{HashMap, IndexMap};
 
 use crate::alias::EscapedBefore;
 use crate::cellmap::CellMap;
 use crate::cfg;
+use crate::graph::loops;
 use crate::memory::{MemRef, Unit};
 use crate::memoryssa::{self, Accesses, changes, covered, covers, may_clobber, placed, same_bytes};
 use crate::ranges::{self, Interval};
@@ -54,14 +54,23 @@ impl Default for Holders {
 }
 
 impl Holders {
-    fn of(items: IndexMap<MemRef, Operand>, buckets: Rc<RefCell<OverlapBuckets>>) -> Self {
+    fn of(
+        items: IndexMap<MemRef, Operand>,
+        buckets: Rc<RefCell<OverlapBuckets>>,
+    ) -> Self {
         let cells = CellMap::new(items, |cell| (overlap_bucket(&mut buckets.borrow_mut(), cell), overlap_span(cell)));
         Self { cells, buckets }
     }
 
-    /// The first cell held, in the order they are held, that names `cell`'s bytes and whose holder `serves`: what a scan of every cell
-    /// finds, asked only of the cells a write to `cell` can reach (a cell naming the same bytes is one).
-    fn naming(&self, unit: &Unit, cell: &MemRef, serves: impl Fn(&Operand) -> bool) -> Option<(&MemRef, &Operand)> {
+    /// The first cell held, in the order they are held, that names `cell`'s bytes and whose holder `serves`: what a
+    /// scan of every cell finds, asked only of the cells a write to `cell` can reach (a cell naming the same bytes
+    /// is one).
+    fn naming(
+        &self,
+        unit: &Unit,
+        cell: &MemRef,
+        serves: impl Fn(&Operand) -> bool,
+    ) -> Option<(&MemRef, &Operand)> {
         let reached = overlap_buckets(cell, &self.cells.parts);
         let displaced = displaced_buckets(cell, &self.cells.parts);
         let found = self
@@ -73,12 +82,19 @@ impl Holders {
             .and_then(|one| self.get_key_value(one));
         if llrm_support::env_set("LLRM_CHECK_HOLDERS") {
             let whole = self.iter().find(|(one, who)| same_bytes(unit, one, cell) && serves(who));
-            assert!(found == whole, "the cell naming these bytes, found through the index, is not the one a scan of every cell finds");
+            assert!(
+                found == whole,
+                "the cell naming these bytes, found through the index, is not the one a scan of every cell finds"
+            );
         }
         found
     }
 
-    fn insert(&mut self, cell: MemRef, value: Operand) {
+    fn insert(
+        &mut self,
+        cell: MemRef,
+        value: Operand,
+    ) {
         let buckets = Rc::clone(&self.buckets);
         self.cells.insert(cell, value, |cell| (overlap_bucket(&mut buckets.borrow_mut(), cell), overlap_span(cell)));
     }
@@ -93,13 +109,19 @@ impl Deref for Holders {
 }
 
 impl PartialEq for Holders {
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
         **self == **other
     }
 }
 
 impl std::fmt::Debug for Holders {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         formatter.debug_map().entries(self.iter()).finish()
     }
 }
@@ -114,7 +136,11 @@ pub struct Held {
 }
 
 /// The cell `inst` purely loads, and the value it lands in.
-pub fn loaded_into(unit: &Unit, accesses: &Accesses, inst: InstId) -> Option<(MemRef, ValueId)> {
+pub fn loaded_into(
+    unit: &Unit,
+    accesses: &Accesses,
+    inst: InstId,
+) -> Option<(MemRef, ValueId)> {
     let instruction = unit.function.instruction(inst);
     match instruction.opcode {
         Opcode::Load { volatile: false, .. } => Some((accesses.references.get(&inst)?.clone(), instruction.result?)),
@@ -123,29 +149,49 @@ pub fn loaded_into(unit: &Unit, accesses: &Accesses, inst: InstId) -> Option<(Me
 }
 
 /// The cell `inst` purely stores, and what it wrote there.
-pub fn stored_from(unit: &Unit, accesses: &Accesses, inst: InstId) -> Option<(MemRef, Operand)> {
+pub fn stored_from(
+    unit: &Unit,
+    accesses: &Accesses,
+    inst: InstId,
+) -> Option<(MemRef, Operand)> {
     let instruction = unit.function.instruction(inst);
     match instruction.opcode {
-        Opcode::Store { volatile: false, .. } => Some((accesses.references.get(&inst)?.clone(), instruction.operands[0])),
+        Opcode::Store { volatile: false, .. } => {
+            Some((accesses.references.get(&inst)?.clone(), instruction.operands[0]))
+        }
         _ => None,
     }
 }
 
 /// The cell `inst` purely stores to, whatever it put there: a store's, or
 /// the bytes a `memset` fills.
-pub fn stored_cell(unit: &Unit, accesses: &Accesses, inst: InstId) -> Option<MemRef> {
-    stored_from(unit, accesses, inst)
-        .map(|(cell, _)| cell)
-        .or_else(|| MemRef::filled(unit, inst).filter(|one| !one.volatile).and_then(|_| accesses.references.get(&inst).cloned()))
+pub fn stored_cell(
+    unit: &Unit,
+    accesses: &Accesses,
+    inst: InstId,
+) -> Option<MemRef> {
+    stored_from(unit, accesses, inst).map(|(cell, _)| cell).or_else(|| {
+        MemRef::filled(unit, inst).filter(|one| !one.volatile).and_then(|_| accesses.references.get(&inst).cloned())
+    })
 }
 
 /// Whether `holder` can stand for `value`: it has its type.
-fn serves(unit: &Unit, holder: Operand, value: ValueId) -> bool {
+fn serves(
+    unit: &Unit,
+    holder: Operand,
+    value: ValueId,
+) -> bool {
     unit.operand_type(holder) == Some(unit.function.value(value).ty)
 }
 
 /// The map across one instruction.
-fn after(unit: &Unit, accesses: &Accesses, inst: InstId, mut holders: Holders, known: Option<&BTreeMap<ValueId, Interval>>) -> Holders {
+fn after(
+    unit: &Unit,
+    accesses: &Accesses,
+    inst: InstId,
+    mut holders: Holders,
+    known: Option<&BTreeMap<ValueId, Interval>>,
+) -> Holders {
     let writes = accesses.writes(inst);
     // What every cell is asked of every write, for the check below.
     let expected = llrm_support::env_set("LLRM_CHECK_HOLDERS").then(|| {
@@ -160,24 +206,30 @@ fn after(unit: &Unit, accesses: &Accesses, inst: InstId, mut holders: Holders, k
             for store in stores {
                 let reached = overlap_buckets(store, &holders.cells.parts);
                 let displaced = displaced_buckets(store, &holders.cells.parts);
-                holders.cells.kill(
-                    reached,
-                    |one| {
-                        CLOBBER_ASKS.with(|asks| asks.set(asks.get() + 1));
-                        !one.unwritable() && may_clobber(unit, known, one, store)
-                    },
-                    displaced,
-                );
+                holders
+                    .cells
+                    .kill(
+                        reached,
+                        |one| {
+                            CLOBBER_ASKS.with(|asks| asks.set(asks.get() + 1));
+                            !one.unwritable() && may_clobber(unit, known, one, store)
+                        },
+                        displaced,
+                    );
             }
         }
     }
     if let Some(expected) = expected {
-        assert!(holders.iter().eq(expected.iter()), "the cells a write reaches, found through the index, are not those it reaches among all");
+        assert!(
+            holders.iter().eq(expected.iter()),
+            "the cells a write reaches, found through the index, are not those it reaches among all"
+        );
     }
     if writes.is_none() {
         return holders;
     }
-    let found = stored_from(unit, accesses, inst).or_else(|| loaded_into(unit, accesses, inst).map(|(cell, value)| (cell, Operand::Value(value))));
+    let found = stored_from(unit, accesses, inst)
+        .or_else(|| loaded_into(unit, accesses, inst).map(|(cell, value)| (cell, Operand::Value(value))));
     if let Some((cell, value)) = found {
         holders.insert(cell, value);
     }
@@ -191,7 +243,11 @@ fn meet(maps: &[&Holders]) -> Holders {
     };
     let mut out = (*first).clone();
     for other in &maps[1..] {
-        let kept: IndexMap<MemRef, Operand> = out.iter().filter(|(one, who)| other.get(*one) == Some(*who)).map(|(one, who)| (one.clone(), *who)).collect();
+        let kept: IndexMap<MemRef, Operand> = out
+            .iter()
+            .filter(|(one, who)| other.get(*one) == Some(*who))
+            .map(|(one, who)| (one.clone(), *who))
+            .collect();
         if kept.len() != out.len() {
             out = Holders::of(kept, Rc::clone(&out.buckets));
         }
@@ -210,7 +266,10 @@ pub fn clobber_asks() -> usize {
 }
 
 /// Which value each cell holds, at every block's entry and exit.
-pub fn holders(unit: &Unit, accesses: &Accesses) -> Held {
+pub fn holders(
+    unit: &Unit,
+    accesses: &Accesses,
+) -> Held {
     SOLVED.with(|solved| solved.set(solved.get() + 1));
     // Register facts only: a memory-aware solve per query costs more than it finds.
     let known: BTreeMap<ValueId, Interval> = ranges::constants(unit).into_iter().collect();
@@ -229,7 +288,11 @@ pub fn holders(unit: &Unit, accesses: &Accesses) -> Held {
             if !stale.remove(&block.at) {
                 continue;
             }
-            let arriving = if Some(block.at) == entry { Holders::default() } else { meet(&preds[&block.at].iter().map(|one| &outof[one]).collect::<Vec<_>>()) };
+            let arriving = if Some(block.at) == entry {
+                Holders::default()
+            } else {
+                meet(&preds[&block.at].iter().map(|one| &outof[one]).collect::<Vec<_>>())
+            };
             let mut leaving = arriving.clone();
             for &inst in unit.function.block(cfg::block(block.at)).instructions() {
                 leaving = after(unit, accesses, inst, leaving, Some(&known));
@@ -251,7 +314,12 @@ pub fn holders(unit: &Unit, accesses: &Accesses) -> Held {
 /// What holds `reference`'s bytes just before `at`.
 ///
 /// A new use extends its lifetime; this says nothing about its allocation.
-pub fn provider(unit: &Unit, accesses: &Accesses, at: InstId, reference: &MemRef) -> Option<Operand> {
+pub fn provider(
+    unit: &Unit,
+    accesses: &Accesses,
+    at: InstId,
+    reference: &MemRef,
+) -> Option<Operand> {
     let found = holders(unit, accesses);
     let block = unit.function.parent(at)?;
     let mut current = found.into[&cfg::id(block)].clone();
@@ -292,7 +360,11 @@ struct Stored {
 }
 
 impl Stored {
-    fn new(unit: &Unit, accesses: &Accesses, private: Option<&dyn Fn(&MemRef) -> bool>) -> Self {
+    fn new(
+        unit: &Unit,
+        accesses: &Accesses,
+        private: Option<&dyn Fn(&MemRef) -> bool>,
+    ) -> Self {
         let mut number: IndexMap<MemRef, usize> = IndexMap::default();
         for (_, inst) in unit.function.walk() {
             for cell in stored_cell(unit, accesses, inst).into_iter().chain(accesses.fills(inst).iter().cloned()) {
@@ -302,45 +374,80 @@ impl Stored {
         }
         let cells: Vec<MemRef> = number.keys().cloned().collect();
         let mut buckets = OverlapBuckets::default();
-        let index = CellMap::new((0..cells.len()).map(|at| (at, ())).collect(), |at| (overlap_bucket(&mut buckets, &cells[*at]), None));
+        let index = CellMap::new((0..cells.len()).map(|at| (at, ())).collect(), |at| {
+            (overlap_bucket(&mut buckets, &cells[*at]), None)
+        });
         let mut marked = Bits::new(cells.len());
         if let Some(private) = private {
             cells.iter().enumerate().filter(|(_, one)| private(one)).for_each(|(at, _)| marked.insert(at));
         }
         let size = cells.len();
-        Self { cells, number, index, private: marked, covering: RefCell::new(vec![None; size]), alike: RefCell::new(vec![None; size]), pieces: RefCell::new(vec![None; size]) }
+        Self {
+            cells,
+            number,
+            index,
+            private: marked,
+            covering: RefCell::new(vec![None; size]),
+            alike: RefCell::new(vec![None; size]),
+            pieces: RefCell::new(vec![None; size]),
+        }
     }
 
     fn none(&self) -> Bits {
         Bits::new(self.cells.len())
     }
 
-    fn related(&self, memo: &RefCell<Vec<Option<Bits>>>, at: usize, related: impl Fn(&MemRef, &MemRef) -> bool) -> Bits {
+    fn related(
+        &self,
+        memo: &RefCell<Vec<Option<Bits>>>,
+        at: usize,
+        related: impl Fn(&MemRef, &MemRef) -> bool,
+    ) -> Bits {
         if let Some(known) = &memo.borrow()[at] {
             return known.clone();
         }
         let mut found = self.none();
-        self.cells.iter().enumerate().filter(|(_, other)| related(&self.cells[at], other)).for_each(|(one, _)| found.insert(one));
+        self.cells
+            .iter()
+            .enumerate()
+            .filter(|(_, other)| related(&self.cells[at], other))
+            .for_each(|(one, _)| found.insert(one));
         memo.borrow_mut()[at] = Some(found.clone());
         found
     }
 
     /// The cells a store to which writes every byte of cell `at`.
-    fn covering(&self, unit: &Unit, at: usize) -> Bits {
+    fn covering(
+        &self,
+        unit: &Unit,
+        at: usize,
+    ) -> Bits {
         self.related(&self.covering, at, |one, other| covers(unit, other, one))
     }
 
-    fn alike(&self, unit: &Unit, at: usize) -> Bits {
+    fn alike(
+        &self,
+        unit: &Unit,
+        at: usize,
+    ) -> Bits {
         self.related(&self.alike, at, |one, other| same_bytes(unit, one, other))
     }
 
     /// Whether the cells in `overwritten` together write every byte of
     /// cell `at`, no one of them all.
-    fn pieced(&self, unit: &Unit, at: usize, overwritten: &Bits) -> bool {
+    fn pieced(
+        &self,
+        unit: &Unit,
+        at: usize,
+        overwritten: &Bits,
+    ) -> bool {
         let pieces = self.related(&self.pieces, at, |one, other| {
-            placed(unit, other, one).zip(placed(unit, one, one)).is_some_and(|((low, high), (_, size))| low < size && high > 0)
+            placed(unit, other, one)
+                .zip(placed(unit, one, one))
+                .is_some_and(|((low, high), (_, size))| low < size && high > 0)
         });
-        let written: Vec<&MemRef> = pieces.iter().filter(|piece| overwritten.contains(*piece)).map(|piece| &self.cells[piece]).collect();
+        let written: Vec<&MemRef> =
+            pieces.iter().filter(|piece| overwritten.contains(*piece)).map(|piece| &self.cells[piece]).collect();
         written.len() > 1 && covered(unit, &written, &self.cells[at])
     }
 }
@@ -359,7 +466,11 @@ impl Solve<'_, '_> {
     ///
     /// Returns the stores it found dead and what is overwritten on entry, so
     /// the caller can carry the second to the predecessors.
-    fn dead_in(&self, block: i64, overwritten: &Bits) -> (Vec<InstId>, Bits) {
+    fn dead_in(
+        &self,
+        block: i64,
+        overwritten: &Bits,
+    ) -> (Vec<InstId>, Bits) {
         let unit = self.unit;
         let stored = &self.stored;
         let mut found = Vec::new();
@@ -405,24 +516,49 @@ impl Solve<'_, '_> {
 
     /// Whether an access through `reference` at `inst` may touch cell `at`,
     /// for all the index knows; an `unnamed` one cannot reach a private cell.
-    fn within(&self, inst: InstId, reference: &MemRef, at: usize, unnamed: bool) -> bool {
+    fn within(
+        &self,
+        inst: InstId,
+        reference: &MemRef,
+        at: usize,
+        unnamed: bool,
+    ) -> bool {
         let stored = &self.stored;
-        !(unnamed && stored.private.contains(at)) && !self.escaped.is_some_and(|escaped| escaped.apart(inst, reference, &stored.cells[at]))
+        !(unnamed && stored.private.contains(at))
+            && !self.escaped.is_some_and(|escaped| escaped.apart(inst, reference, &stored.cells[at]))
     }
 
     /// Whether an access through `reference` at `inst` may touch cell `at`.
-    fn reaches(&self, inst: InstId, reference: &MemRef, at: usize, unnamed: bool) -> bool {
+    fn reaches(
+        &self,
+        inst: InstId,
+        reference: &MemRef,
+        at: usize,
+        unnamed: bool,
+    ) -> bool {
         self.within(inst, reference, at, unnamed) && may_clobber(self.unit, None, &self.stored.cells[at], reference)
     }
 
     /// Forget the cells an access through `reference` at `inst` may touch;
     /// an `unnamed` one cannot reach a private cell.
-    fn clobber(&self, overwritten: &mut Bits, inst: InstId, reference: &MemRef, unnamed: bool) {
+    fn clobber(
+        &self,
+        overwritten: &mut Bits,
+        inst: InstId,
+        reference: &MemRef,
+        unnamed: bool,
+    ) {
         let stored = &self.stored;
         let live = |at: &usize| overwritten.contains(*at) && self.within(inst, reference, *at, unnamed);
         let reached: Vec<usize> = match overlap_buckets(reference, &stored.index.parts) {
             None => stored.index.buckets.values().flat_map(IndexMap::keys).filter(|at| live(at)).copied().collect(),
-            Some(buckets) => buckets.iter().filter_map(|bucket| stored.index.buckets.get(bucket)).flat_map(IndexMap::keys).filter(|at| live(at)).copied().collect(),
+            Some(buckets) => buckets
+                .iter()
+                .filter_map(|bucket| stored.index.buckets.get(bucket))
+                .flat_map(IndexMap::keys)
+                .filter(|at| live(at))
+                .copied()
+                .collect(),
         };
         for at in reached {
             if may_clobber(self.unit, None, &stored.cells[at], reference) {
@@ -448,13 +584,22 @@ impl Solve<'_, '_> {
 /// cell -- unless `private` says nothing outside the function can, in which
 /// case it starts from every such cell stored here. One ending in
 /// `unreachable` starts from every cell.
-pub fn dead_stores(unit: &Unit, accesses: &Accesses, private: Option<&dyn Fn(&MemRef) -> bool>) -> Vec<InstId> {
+pub fn dead_stores(
+    unit: &Unit,
+    accesses: &Accesses,
+    private: Option<&dyn Fn(&MemRef) -> bool>,
+) -> Vec<InstId> {
     dead_stores_escaping(unit, accesses, private, None)
 }
 
 /// `dead_stores`, an access through a pointer no fact follows sparing a
 /// frame cell whose object had not escaped by then, as `escaped` says.
-pub fn dead_stores_escaping(unit: &Unit, accesses: &Accesses, private: Option<&dyn Fn(&MemRef) -> bool>, escaped: Option<&EscapedBefore>) -> Vec<InstId> {
+pub fn dead_stores_escaping(
+    unit: &Unit,
+    accesses: &Accesses,
+    private: Option<&dyn Fn(&MemRef) -> bool>,
+    escaped: Option<&EscapedBefore>,
+) -> Vec<InstId> {
     let solve = Solve { unit, accesses, private, escaped, stored: Stored::new(unit, accesses, private) };
     let stored = &solve.stored;
     let mut every = stored.none();
@@ -509,20 +654,34 @@ pub fn dead_stores_escaping(unit: &Unit, accesses: &Accesses, private: Option<&d
 }
 
 /// Whether block `at` ends in `unreachable`.
-fn aborts(unit: &Unit, at: i64) -> bool {
-    unit.function.terminator(cfg::block(at)).is_some_and(|last| unit.function.instruction(last).opcode == Opcode::Unreachable)
+fn aborts(
+    unit: &Unit,
+    at: i64,
+) -> bool {
+    unit.function
+        .terminator(cfg::block(at))
+        .is_some_and(|last| unit.function.instruction(last).opcode == Opcode::Unreachable)
 }
 
 /// Loads in `want` that a known value can serve instead of memory.
 ///
 /// The caller replaces the load, extending the provider's lifetime.
-pub fn forwardable(unit: &Unit, accesses: &Accesses, want: &BTreeSet<InstId>) -> Vec<Forward> {
+pub fn forwardable(
+    unit: &Unit,
+    accesses: &Accesses,
+    want: &BTreeSet<InstId>,
+) -> Vec<Forward> {
     forwardable_by(unit, accesses, want, &holders(unit, accesses))
 }
 
-/// `forwardable`, from the cells `held` says each block holds (`holders` of a function with the same instructions, which a caller that
-/// asks of the function twice, the second time as the first left it, works out once).
-pub fn forwardable_by(unit: &Unit, accesses: &Accesses, want: &BTreeSet<InstId>, held: &Held) -> Vec<Forward> {
+/// `forwardable`, from the cells `held` says each block holds (`holders` of a function with the same instructions,
+/// which a caller that asks of the function twice, the second time as the first left it, works out once).
+pub fn forwardable_by(
+    unit: &Unit,
+    accesses: &Accesses,
+    want: &BTreeSet<InstId>,
+    held: &Held,
+) -> Vec<Forward> {
     let mut found = Vec::new();
     let mut missing = Vec::new();
 
@@ -551,8 +710,8 @@ thread_local! {
     static SAMES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has solved what each block holds (`holders`), for a test that a pass asking twice of one function solves
-/// it once.
+/// How many times this thread has solved what each block holds (`holders`), for a test that a pass asking twice of one
+/// function solves it once.
 pub fn solved() -> usize {
     SOLVED.with(std::cell::Cell::get)
 }
@@ -563,14 +722,29 @@ pub fn same_runs() -> usize {
 }
 
 /// Recover dominating memory values the forward lattice lost at loops.
-fn memory_providers(unit: &Unit, accesses: &Accesses, missing: &[InstId]) -> Vec<Forward> {
+fn memory_providers(
+    unit: &Unit,
+    accesses: &Accesses,
+    missing: &[InstId],
+) -> Vec<Forward> {
     let function = unit.function;
     let graph = memoryssa::built(unit, accesses);
     let shape = unit.shape();
     let dominance = &shape.dominance;
-    let places: HashMap<InstId, (i64, usize)> =
-        function.layout().iter().flat_map(|&block| function.block(block).instructions().iter().enumerate().map(move |(index, &inst)| (inst, (cfg::id(block), index)))).collect();
-    let loads: Vec<(InstId, (MemRef, ValueId))> = graph.sites.keys().filter_map(|&site| loaded_into(unit, accesses, site).map(|loaded| (site, loaded))).collect();
+    let places: HashMap<InstId, (i64, usize)> = function
+        .layout()
+        .iter()
+        .flat_map(|&block| {
+            function
+                .block(block)
+                .instructions()
+                .iter()
+                .enumerate()
+                .map(move |(index, &inst)| (inst, (cfg::id(block), index)))
+        })
+        .collect();
+    let loads: Vec<(InstId, (MemRef, ValueId))> =
+        graph.sites.keys().filter_map(|&site| loaded_into(unit, accesses, site).map(|loaded| (site, loaded))).collect();
     let available = |source: InstId, site: InstId| -> bool {
         let ((source_block, source_index), (block, index)) = (places[&source], places[&site]);
         dominance.dominates(source_block, block) && (source_block != block || source_index < index)
@@ -579,10 +753,14 @@ fn memory_providers(unit: &Unit, accesses: &Accesses, missing: &[InstId]) -> Vec
     let mut groups: Vec<(&MemRef, Vec<usize>)> = Vec::new();
     let mut group_of: HashMap<&MemRef, usize> = HashMap::default();
     for (at, (_, (loaded, _))) in loads.iter().enumerate() {
-        let group = *group_of.entry(loaded).or_insert_with(|| {
-            groups.push((loaded, Vec::new()));
-            groups.len() - 1
-        });
+        let group = *group_of
+            .entry(loaded)
+            .or_insert_with(
+                || {
+                    groups.push((loaded, Vec::new()));
+                    groups.len() - 1
+                },
+            );
         groups[group].1.push(at);
     }
 
@@ -604,14 +782,21 @@ fn memory_providers(unit: &Unit, accesses: &Accesses, missing: &[InstId]) -> Vec
         }
         // Loads of one address are one group, whose bytes are compared with `cell` once; the candidates are
         // then taken in load order, as when each was compared.
-        let mut candidates: Vec<usize> = groups.iter().filter(|(loaded, _)| {
-            SAMES.with(|runs| runs.set(runs.get() + 1));
-            same_bytes(unit, loaded, &cell)
-        }).flat_map(|(_, members)| members.iter().copied()).collect();
+        let mut candidates: Vec<usize> = groups
+            .iter()
+            .filter(|(loaded, _)| {
+                SAMES.with(|runs| runs.set(runs.get() + 1));
+                same_bytes(unit, loaded, &cell)
+            })
+            .flat_map(|(_, members)| members.iter().copied())
+            .collect();
         candidates.sort_unstable();
         for at in candidates {
             let (source, (loaded, value)) = &loads[at];
-            if available(*source, site) && serves(unit, Operand::Value(*value), result) && graph.unchanged(*source, site, loaded) {
+            if available(*source, site)
+                && serves(unit, Operand::Value(*value), result)
+                && graph.unchanged(*source, site, loaded)
+            {
                 found.push(Forward { at: site, value: Operand::Value(*value) });
                 break;
             }

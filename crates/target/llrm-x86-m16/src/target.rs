@@ -9,7 +9,8 @@ use llrm_mir::target::{AddressForm, Machine, OperationCosts};
 use crate::timings;
 
 /// The registers a value may be placed in.
-pub const GENERAL: [Register; 6] = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
+pub const GENERAL: [Register; 6] =
+    [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
 
 /// The registers a 16-bit address is encoded with, `[bx+si]`: a base is BX or
 /// BP and an index SI or DI.
@@ -28,8 +29,9 @@ pub fn word_bases() -> Vec<Register> {
 pub const PRESERVED: [(Register, Register); 2] = [(Register::ESI, Register::SI), (Register::EDI, Register::DI)];
 
 /// How real-mode operations are priced from the instruction forms: `opcosts.txt`.
-pub static DESCRIPTION: std::sync::LazyLock<llrm_target::opcosts::Description> =
-    std::sync::LazyLock::new(|| llrm_target::opcosts::Description::parse(include_str!("opcosts.txt")).expect("opcosts.txt parses"));
+pub static DESCRIPTION: std::sync::LazyLock<llrm_target::opcosts::Description> = std::sync::LazyLock::new(|| {
+    llrm_target::opcosts::Description::parse(include_str!("opcosts.txt")).expect("opcosts.txt parses")
+});
 
 /// Real-mode DOS on one CPU: its prices and registers, and the built-in
 /// description's foreign memory.
@@ -59,25 +61,46 @@ impl Default for Dos {
     fn default() -> Self {
         let costs = costs("486");
         let address_forms = address_forms(&costs, 0);
-        Self { costs, registers: GENERAL.len() as i64, call_registers: PRESERVED.len() as i64, address_forms, far_access: FAR_ACCESS, private: None, calling: None }
+        Self {
+            costs,
+            registers: GENERAL.len() as i64,
+            call_registers: PRESERVED.len() as i64,
+            address_forms,
+            far_access: FAR_ACCESS,
+            private: None,
+            calling: None,
+        }
     }
 }
 
 impl Dos {
-    pub fn private(self, private: Option<llrm_mir::target::PrivateConvention>) -> Self {
+    pub fn private(
+        self,
+        private: Option<llrm_mir::target::PrivateConvention>,
+    ) -> Self {
         Self { private, ..self }
     }
 
     /// With the conventions the description states.
-    pub fn calling(self, calling: Option<&'static llrm_target::calling::Calling>) -> Self {
+    pub fn calling(
+        self,
+        calling: Option<&'static llrm_target::calling::Calling>,
+    ) -> Self {
         Self { calling, ..self }
     }
 
     /// On the CPU whose instruction forms cost `table` clocks, with
     /// `prefix` per operand-size prefix and `address_stall` more for an
     /// address-size one.
-    pub fn priced(table: &[(String, i64)], prefix: i64, address_stall: i64, registers: i64, call_registers: i64) -> Self {
-        let cost = |kind: &str| table.iter().find(|(one, _)| one == kind).unwrap_or_else(|| panic!("no price for {kind}")).1;
+    pub fn priced(
+        table: &[(String, i64)],
+        prefix: i64,
+        address_stall: i64,
+        registers: i64,
+        call_registers: i64,
+    ) -> Self {
+        let cost =
+            |kind: &str| table.iter().find(|(one, _)| one == kind).unwrap_or_else(|| panic!("no price for {kind}")).1;
         let costs = DESCRIPTION.operations(&cost, prefix);
         let address_forms = address_forms(&costs, address_stall);
         Self { costs, registers, call_registers, address_forms, far_access: FAR_ACCESS, private: None, calling: None }
@@ -89,14 +112,21 @@ impl Machine for Dos {
         self.private.clone()
     }
 
-    fn callee_pop(&self, convention: u32) -> Option<u32> {
+    fn callee_pop(
+        &self,
+        convention: u32,
+    ) -> Option<u32> {
         match self.calling {
             Some(calling) => calling.callee_pop(convention),
             None => (convention == 0).then_some(llrm_mir::opcode::FAST),
         }
     }
 
-    fn stack_argument_bytes(&self, convention: u32, arguments: &[llrm_mir::target::Argument]) -> Option<i64> {
+    fn stack_argument_bytes(
+        &self,
+        convention: u32,
+        arguments: &[llrm_mir::target::Argument],
+    ) -> Option<i64> {
         let found = self.calling?.by_number(convention)?;
         let kinds: Vec<_> = arguments.iter().map(|one| found.kind(*one, found.slot_bytes)).collect();
         Some(found.place(&kinds).stack_bytes)
@@ -107,7 +137,12 @@ impl Machine for Dos {
     }
 
     /// The description's foreign memory: `dos.toml` states it once.
-    fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)> {
+    fn foreign_span(
+        &self,
+        selectors: (i64, i64),
+        offsets: (i64, i64),
+        width: i64,
+    ) -> Option<(i64, i64)> {
         crate::machine::BUILT_IN.foreign_span(selectors, offsets, width)
     }
 
@@ -148,7 +183,11 @@ impl Machine for Dos {
     }
 
     /// The description's: `dos.toml` states when an access faults.
-    fn load_may_trap(&self, width: u64, align: u64) -> bool {
+    fn load_may_trap(
+        &self,
+        width: u64,
+        align: u64,
+    ) -> bool {
         crate::machine::BUILT_IN.access_may_trap(width, align)
     }
 
@@ -160,7 +199,10 @@ impl Machine for Dos {
     }
 
     /// The description's: `dos.toml` states each device's reach.
-    fn port_touches_memory(&self, ports: (i64, i64)) -> bool {
+    fn port_touches_memory(
+        &self,
+        ports: (i64, i64),
+    ) -> bool {
         crate::machine::BUILT_IN.port_memory(ports) != crate::machine::PortMemory::None
     }
 }
@@ -170,11 +212,20 @@ impl Machine for Dos {
 /// An address-size prefix buys any register as base or index, scaled by
 /// 1, 2, 4 or 8, for `costs.prefix` and `address_stall` more a use and an
 /// extension of the index to a dword.
-pub fn address_forms(costs: &OperationCosts, address_stall: i64) -> Vec<AddressForm> {
+pub fn address_forms(
+    costs: &OperationCosts,
+    address_stall: i64,
+) -> Vec<AddressForm> {
     vec![
         // BX is the base and SI and DI the indices: BP is the frame's.
-        AddressForm { partners: Some(2), bases: Some(1), indices: Some(2), ..AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None).expect("no fallback to disagree") },
-        AddressForm::new(4, BTreeSet::from([1, 2, 4, 8]), 1, costs.prefix + address_stall, costs.extend, true, None).expect("no fallback to disagree"),
+        AddressForm {
+            partners: Some(2),
+            bases: Some(1),
+            indices: Some(2),
+            ..AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None).expect("no fallback to disagree")
+        },
+        AddressForm::new(4, BTreeSet::from([1, 2, 4, 8]), 1, costs.prefix + address_stall, costs.extend, true, None)
+            .expect("no fallback to disagree"),
     ]
 }
 
@@ -191,12 +242,18 @@ pub fn register_bytes(width: i64) -> i64 {
 }
 
 /// Bytes of a shift of a `width`-byte register by `count`.
-pub fn shift_bytes(count: i64, width: i64) -> i64 {
+pub fn shift_bytes(
+    count: i64,
+    width: i64,
+) -> i64 {
     llrm_x86::encoding::shift_bytes(count, width, 2)
 }
 
 /// Bytes of `imul r, r, number` on `width`-byte registers.
-pub fn imul_immediate_bytes(number: i64, width: i64) -> i64 {
+pub fn imul_immediate_bytes(
+    number: i64,
+    width: i64,
+) -> i64 {
     llrm_x86::encoding::imul_immediate_bytes(number, width, 2)
 }
 
@@ -218,7 +275,13 @@ mod tests {
     /// scales any register by 1, 2, 4 or 8 for a clock a use on the 486.
     #[test]
     fn dos_states_its_address_forms() {
-        let forms: Vec<_> = Dos::default().address_forms().iter().map(|one| (one.index_width, one.scales.iter().copied().collect::<Vec<_>>(), one.use_cost, one.address_registers())).collect();
+        let forms: Vec<_> = Dos::default()
+            .address_forms()
+            .iter()
+            .map(|one| {
+                (one.index_width, one.scales.iter().copied().collect::<Vec<_>>(), one.use_cost, one.address_registers())
+            })
+            .collect();
         assert_eq!(forms, [(2, vec![1], 0, Some(3)), (4, vec![1, 2, 4, 8], 1, None)]);
     }
 }
@@ -232,7 +295,10 @@ mod encoding_tests {
     fn the_size_table_and_the_encodings_agree_on_a_word() {
         // Twice the instruction: an operation is the instruction and what goes around it.
         let doubled = |kind: &str| super::DESCRIPTION.bytes(kind).expect("opcosts.txt has the bytes");
-        assert_eq!((doubled("alu_rr"), doubled("mov_rr"), doubled("shift_ri")), (2 * register_bytes(2), 2 * register_bytes(2), 2 * shift_bytes(2, 2)));
+        assert_eq!(
+            (doubled("alu_rr"), doubled("mov_rr"), doubled("shift_ri")),
+            (2 * register_bytes(2), 2 * register_bytes(2), 2 * shift_bytes(2, 2))
+        );
     }
 
     /// The byte prices MIR decides inlining and the calling convention by: a call is its 5 bytes
@@ -246,7 +312,10 @@ mod encoding_tests {
         let sized = dos.size_costs();
         assert_eq!((sized.call, sized.argument, sized.pop, sized.adjust, sized.return_pops), (5, 2, 1, 3, 2));
         let bytes = |kind: &str| super::DESCRIPTION.bytes(kind).expect("opcosts.txt has the bytes");
-        assert_eq!((sized.load, sized.store, sized.add, sized.branch), (bytes("mov_rm"), bytes("mov_mr"), bytes("alu_rr"), bytes("jcc")));
+        assert_eq!(
+            (sized.load, sized.store, sized.add, sized.branch),
+            (bytes("mov_rm"), bytes("mov_mr"), bytes("alu_rr"), bytes("jcc"))
+        );
         let clocks = dos.costs();
         assert_eq!(clocks.argument, clocks.load + clocks.store);
     }

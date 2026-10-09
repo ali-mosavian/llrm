@@ -10,8 +10,8 @@
 //! offset from a far pointer, which MIR's 16-bit far index cannot hold.
 
 use iced_x86::Register;
-use llrm_x86_bcmachine::model::ir::nodes::Node;
 use llrm_mir::CastOp;
+use llrm_x86_bcmachine::model::ir::nodes::Node;
 
 use crate::emit::{Emit, Emitter, Var};
 use crate::sites::Recognizer;
@@ -26,8 +26,15 @@ pub fn declared() -> String {
 /// Declares `B$HARY` where the module calls it: `{bx, es} (...)`. Each call
 /// is typed by its own words, the pushed ones in push order and then the
 /// descriptor in BX, as HIR's emitter passes them.
-pub fn declare(facts: &crate::machine::Facts, module: &mut llrm_mir::Module) -> Option<(llrm_mir::ConstantId, llrm_mir::TypeId)> {
-    let called = facts.bodies.iter().flat_map(|body| body.nodes.values()).any(|node| matches!(&**node, Node::Call(call) if call.name == ADDRESS));
+pub fn declare(
+    facts: &crate::machine::Facts,
+    module: &mut llrm_mir::Module,
+) -> Option<(llrm_mir::ConstantId, llrm_mir::TypeId)> {
+    let called = facts
+        .bodies
+        .iter()
+        .flat_map(|body| body.nodes.values())
+        .any(|node| matches!(&**node, Node::Call(call) if call.name == ADDRESS));
     if !called || facts.bodies.iter().any(|body| body.body.name.as_deref() == Some(ADDRESS)) {
         return None;
     }
@@ -46,7 +53,11 @@ pub fn declare(facts: &crate::machine::Facts, module: &mut llrm_mir::Module) -> 
 pub struct Element;
 
 impl Recognizer for Element {
-    fn node(&self, emitter: &mut Emitter, node: &Node) -> Option<Emit<()>> {
+    fn node(
+        &self,
+        emitter: &mut Emitter,
+        node: &Node,
+    ) -> Option<Emit<()>> {
         let Node::Call(call) = node else { return None };
         if call.name != ADDRESS || emitter.unit.procedures.contains_key(ADDRESS) {
             return None;
@@ -58,13 +69,29 @@ impl Recognizer for Element {
 fn element(emitter: &mut Emitter) -> Emit<()> {
     let depth = emitter.depth();
     let count = emitter.stack_word(depth, 2)?;
-    let rank = emitter.constant(count).filter(|&rank| rank > 0).ok_or_else(|| format!("{ADDRESS}'s subscript count is not a constant"))?;
-    let mut arguments = (0..=rank).map(|index| emitter.stack_word(depth - 2 * (rank - index), 2)).collect::<Emit<Vec<_>>>()?;
+    let rank = emitter
+        .constant(count)
+        .filter(|&rank| rank > 0)
+        .ok_or_else(|| format!("{ADDRESS}'s subscript count is not a constant"))?;
+    let mut arguments =
+        (0..=rank).map(|index| emitter.stack_word(depth - 2 * (rank - index), 2)).collect::<Emit<Vec<_>>>()?;
     arguments.push(emitter.register(Register::BX)?);
     let &(callee, declared) = emitter.unit.intrinsics.get(&declared()).ok_or("B$HARY undeclared")?;
-    let llrm_mir::Type::Function { returns, .. } = *emitter.b.context.types.get(declared) else { unreachable!("a function") };
+    let llrm_mir::Type::Function { returns, .. } = *emitter.b.context.types.get(declared) else {
+        unreachable!("a function")
+    };
     let word = emitter.b.context.types.int(16);
-    let ty = emitter.b.context.types.intern(llrm_mir::Type::Function { returns, parameters: vec![word; arguments.len()], variadic: false });
+    let ty = emitter
+        .b
+        .context
+        .types
+        .intern(
+            llrm_mir::Type::Function {
+                returns,
+                parameters: vec![word; arguments.len()],
+                variadic: false,
+            },
+        );
     let answer = emitter.call_as(llrm_mir::opcode::BASIC, ty, callee, &arguments)?.expect("an answer");
     emitter.popped(2 * (rank + 1))?;
     let (address, selector) = (emitter.b.extract_value(answer, 0, ""), emitter.b.extract_value(answer, 1, ""));

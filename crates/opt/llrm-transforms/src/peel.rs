@@ -42,7 +42,11 @@ impl FunctionPass for Peel {
         "peel"
     }
 
-    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         match optimized(unit, analyses, &self.limits) {
             Ok(true) => PreservedAnalyses::none(),
             Ok(false) => PreservedAnalyses::all(),
@@ -53,14 +57,20 @@ impl FunctionPass for Peel {
 
 /// Every exact loop `peelsize::admitted` prices as worth it peeled, once
 /// each; whether any was.
-pub fn optimized(unit: &mut passes::Unit, analyses: &Analyses, limits: &Limits) -> Result<bool, String> {
+pub fn optimized(
+    unit: &mut passes::Unit,
+    analyses: &Analyses,
+    limits: &Limits,
+) -> Result<bool, String> {
     let costs = &profit::costs(analyses.outer());
     let limits = &limits.on(costs.unroll_budget);
     if !profit::priced(unit.context, unit.layout, unit.function, analyses.outer().callees(), costs) {
         return Ok(false);
     }
     let mut peeled = BTreeSet::<i64>::new();
-    while let Some((candidate, latch)) = _candidate(unit.context, unit.layout, unit.function, analyses, limits, &peeled)? {
+    while let Some((candidate, latch)) =
+        _candidate(unit.context, unit.layout, unit.function, analyses, limits, &peeled)?
+    {
         llrm_support::debug!("peel", "peeled the loop with latch b{latch}");
         peeled.insert(latch);
         *unit.function = candidate;
@@ -70,7 +80,14 @@ pub fn optimized(unit: &mut passes::Unit, analyses: &Analyses, limits: &Limits) 
 
 /// `function` closed and the first bounded exact loop not in `skip` peeled,
 /// with that loop's latch.
-fn _candidate(context: &Context, layout: &DataLayout, function: &Function, analyses: &Analyses, limits: &Limits, skip: &BTreeSet<i64>) -> Result<Option<(Function, i64)>, String> {
+fn _candidate(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    analyses: &Analyses,
+    limits: &Limits,
+    skip: &BTreeSet<i64>,
+) -> Result<Option<(Function, i64)>, String> {
     let mut closed = function.clone();
     lcssa::closed(&mut closed)?;
     let facts = analyses.fresh().get::<Registers>(context, layout, &closed);
@@ -83,11 +100,23 @@ fn _candidate(context: &Context, layout: &DataLayout, function: &Function, analy
         if skip.contains(&latch) {
             continue;
         }
-        let unit = memory::Unit::within(context, layout, &closed, analyses.outer()).with_registers(&facts).with_shape(&shape);
-        let Some(count) = induction::trip_count(&unit, &loop_, &facts).or_else(|| induction::trip_bound(&unit, &loop_, &facts)) else {
+        let unit =
+            memory::Unit::within(context, layout, &closed, analyses.outer()).with_registers(&facts).with_shape(&shape);
+        let Some(count) =
+            induction::trip_count(&unit, &loop_, &facts).or_else(|| induction::trip_bound(&unit, &loop_, &facts))
+        else {
             continue;
         };
-        if count < BigInt::from(2) || !peelsize::admitted(&unit, &loop_, &count, &facts, limits, profit::site(&unit, analyses.outer(), &loop_, &frequencies)) {
+        if count < BigInt::from(2)
+            || !peelsize::admitted(
+                &unit,
+                &loop_,
+                &count,
+                &facts,
+                limits,
+                profit::site(&unit, analyses.outer(), &loop_, &frequencies),
+            )
+        {
             continue;
         }
         let Some(count) = count.to_i64() else {

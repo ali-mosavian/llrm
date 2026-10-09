@@ -6,8 +6,8 @@ pub mod calling;
 pub mod layout;
 pub mod machine;
 pub mod object;
-pub mod os;
 pub mod opcosts;
+pub mod os;
 pub mod registers;
 pub mod runtime;
 pub mod timings;
@@ -48,8 +48,20 @@ pub fn described(prices: &CpuPrices) -> Rc<dyn llrm_mir::target::Machine> {
 }
 
 /// `described`, with what each operation costs in code bytes where the description states them.
-pub fn described_by_size(prices: &CpuPrices, sizes: Option<OperationCosts>) -> Rc<dyn llrm_mir::target::Machine> {
-    Rc::new(Described { registers: prices.registers, call_registers: prices.call_registers, address_forms: prices.address_forms.clone(), operations: prices.operations.clone(), sizes, spaces: prices.spaces, private: prices.private.clone(), calling: prices.calling })
+pub fn described_by_size(
+    prices: &CpuPrices,
+    sizes: Option<OperationCosts>,
+) -> Rc<dyn llrm_mir::target::Machine> {
+    Rc::new(Described {
+        registers: prices.registers,
+        call_registers: prices.call_registers,
+        address_forms: prices.address_forms.clone(),
+        operations: prices.operations.clone(),
+        sizes,
+        spaces: prices.spaces,
+        private: prices.private.clone(),
+        calling: prices.calling,
+    })
 }
 
 struct Described {
@@ -68,14 +80,21 @@ impl llrm_mir::target::Machine for Described {
         self.private.clone()
     }
 
-    fn callee_pop(&self, convention: u32) -> Option<u32> {
+    fn callee_pop(
+        &self,
+        convention: u32,
+    ) -> Option<u32> {
         match self.calling {
             Some(calling) => calling.callee_pop(convention),
             None => (convention == 0).then_some(llrm_mir::opcode::FAST),
         }
     }
 
-    fn stack_argument_bytes(&self, convention: u32, arguments: &[llrm_mir::target::Argument]) -> Option<i64> {
+    fn stack_argument_bytes(
+        &self,
+        convention: u32,
+        arguments: &[llrm_mir::target::Argument],
+    ) -> Option<i64> {
         let found = self.calling?.by_number(convention)?;
         let kinds: Vec<_> = arguments.iter().map(|one| found.kind(*one, found.slot_bytes)).collect();
         Some(found.place(&kinds).stack_bytes)
@@ -86,7 +105,12 @@ impl llrm_mir::target::Machine for Described {
     }
 
     /// Memory without segments is linear: no selector and offset reach foreign memory.
-    fn foreign_span(&self, _: (i64, i64), _: (i64, i64), _: i64) -> Option<(i64, i64)> {
+    fn foreign_span(
+        &self,
+        _: (i64, i64),
+        _: (i64, i64),
+        _: i64,
+    ) -> Option<(i64, i64)> {
         None
     }
 
@@ -128,9 +152,12 @@ pub trait Target {
     /// The platform description a frontend of this target defaults to.
     fn machine(&self) -> Machine;
 
-    /// Whether the machine has no instruction for `operation` (its description's `expand`), so the compiler expands it before
-    /// selection.
-    fn expands(&self, operation: &str) -> bool {
+    /// Whether the machine has no instruction for `operation` (its description's `expand`), so the compiler expands it
+    /// before selection.
+    fn expands(
+        &self,
+        operation: &str,
+    ) -> bool {
         self.layout().expands(operation)
     }
 
@@ -138,7 +165,10 @@ pub trait Target {
     fn cpus(&self) -> &'static [&'static str];
 
     /// The CPU gcc's `-march=NAME` names, from the target's `timings.times`.
-    fn march(&self, name: &str) -> Option<&'static str>;
+    fn march(
+        &self,
+        name: &str,
+    ) -> Option<&'static str>;
 
     /// The names `-march` and `-mtune` take.
     fn marches(&self) -> Vec<&'static str>;
@@ -156,14 +186,23 @@ pub trait Target {
 
     /// Where the first argument lies from the frame register: past the saved
     /// frame register and the return address, which a far call makes longer.
-    fn first_argument_offset(&self, far: bool) -> i64;
+    fn first_argument_offset(
+        &self,
+        far: bool,
+    ) -> i64;
 
     /// What a call leaves on the stack before the callee's frame: the return address, which a far call
     /// makes longer.
-    fn return_address_bytes(&self, far: bool) -> i64;
+    fn return_address_bytes(
+        &self,
+        far: bool,
+    ) -> i64;
 
     /// The registers a result of `width` bytes leaves in, low part first.
-    fn results(&self, width: u32) -> Vec<iced_x86::Register>;
+    fn results(
+        &self,
+        width: u32,
+    ) -> Vec<iced_x86::Register>;
 
     /// The register that holds the stack's top.
     fn stack_pointer(&self) -> iced_x86::Register;
@@ -173,7 +212,10 @@ pub trait Target {
     fn callee_saved(&self) -> Vec<(iced_x86::Register, iced_x86::Register)>;
 
     /// One CPU's timings (a column of the target's `timings.times`), if the target prices it.
-    fn cpu_table(&self, name: &str) -> Option<timings::CpuTable>;
+    fn cpu_table(
+        &self,
+        name: &str,
+    ) -> Option<timings::CpuTable>;
 
     /// The target's register file, in `registers.regs`'s format.
     fn registers_text(&self) -> String;
@@ -189,7 +231,11 @@ pub trait Target {
 
     /// The operations priced by `price` (the CPU's clocks of a form), as the target's
     /// `opcosts.txt` makes them of forms; `prefix` is the CPU's operand-size prefix cost.
-    fn operation_costs(&self, price: &dyn Fn(&str) -> i64, prefix: i64) -> OperationCosts;
+    fn operation_costs(
+        &self,
+        price: &dyn Fn(&str) -> i64,
+        prefix: i64,
+    ) -> OperationCosts;
 
     /// The registers an allocator may hold values in.
     fn register_capacity(&self) -> i64;
@@ -201,7 +247,11 @@ pub trait Target {
 
     /// The indexed addresses a memory access may use, priced by `costs` (its
     /// operand-size prefix in `prefix`) and `address_stall`: native form first.
-    fn address_forms(&self, costs: &OperationCosts, address_stall: i64) -> Vec<AddressForm>;
+    fn address_forms(
+        &self,
+        costs: &OperationCosts,
+        address_stall: i64,
+    ) -> Vec<AddressForm>;
 
     /// How this target's passes are given the prices of a CPU.
     fn cost_model(&self) -> CostModel;
@@ -220,7 +270,10 @@ pub trait Target {
     }
 
     /// The OS layer a language's runtime is built on here, if the target has one for it.
-    fn runtime(&self, _language: &str) -> Option<runtime::Description> {
+    fn runtime(
+        &self,
+        _language: &str,
+    ) -> Option<runtime::Description> {
         None
     }
 
@@ -234,7 +287,15 @@ pub trait Target {
 
     /// What a frame is built of.
     fn frame_registers(&self) -> FrameRegisters {
-        FrameRegisters { pointer: self.frame_register(), stack: self.stack_pointer(), saved: self.callee_saved(), slot: self.stack_slot_bytes(), optional: self.frame_optional(), enter: self.frame_enter(), free: false }
+        FrameRegisters {
+            pointer: self.frame_register(),
+            stack: self.stack_pointer(),
+            saved: self.callee_saved(),
+            slot: self.stack_slot_bytes(),
+            optional: self.frame_optional(),
+            enter: self.frame_enter(),
+            free: false,
+        }
     }
 
     /// Whether a function that needs no frame register may leave it out (`calling.toml`'s `frame_optional`).
@@ -270,7 +331,10 @@ pub struct FrameRegisters {
 impl FrameRegisters {
     /// `register` as this target spells it: the frame register and stack pointer
     /// LIR calls BP and SP.
-    pub fn spelled(&self, register: iced_x86::Register) -> iced_x86::Register {
+    pub fn spelled(
+        &self,
+        register: iced_x86::Register,
+    ) -> iced_x86::Register {
         match register {
             // Where the frame register holds a value, BP is its word view, not the frame token.
             iced_x86::Register::BP if !self.free => self.pointer,

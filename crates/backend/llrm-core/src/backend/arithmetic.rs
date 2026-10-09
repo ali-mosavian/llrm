@@ -6,12 +6,18 @@ use std::collections::BTreeMap;
 use crate::backend::cpu::{self as targets, ProfileOrName};
 use crate::backend::timing;
 
-pub fn cost<'a>(cpu: impl Into<ProfileOrName<'a>>, operation: &str) -> Result<i64, String> {
+pub fn cost<'a>(
+    cpu: impl Into<ProfileOrName<'a>>,
+    operation: &str,
+) -> Result<i64, String> {
     targets::profile(cpu)?.cost(operation)
 }
 
 /// A left shift by `count`, by its cheapest form.
-pub fn shift<'a>(cpu: impl Into<ProfileOrName<'a>>, count: i64) -> Result<i64, String> {
+pub fn shift<'a>(
+    cpu: impl Into<ProfileOrName<'a>>,
+    count: i64,
+) -> Result<i64, String> {
     let profile = targets::profile(cpu)?;
     profile.cost(if count == 1 { profile.doubling()? } else { "shift_ri" })
 }
@@ -21,7 +27,8 @@ fn bit_length(value: i64) -> i64 {
     i64::from(64 - value.unsigned_abs().leading_zeros())
 }
 
-/// Core clocks for audited positive imm8 on a 386, the table's range by the immediate's bits where it has one, else the flat estimate.
+/// Core clocks for audited positive imm8 on a 386, the table's range by the immediate's bits where it has one, else the
+/// flat estimate.
 ///
 /// Intel 80386 Programmer's Reference Manual, IMUL: for positive m,
 /// max(ceil(log2(m)), 3) + 6. Restricted to positive imm8 so the value is
@@ -31,15 +38,10 @@ pub fn immediate_multiply<'a>(
     number: i64,
 ) -> Result<i64, String> {
     if targets::profile(cpu)?.name == "386" && (0..=127).contains(&number) {
-        return Ok((if number != 0 {
-            bit_length(number - 1)
-        } else {
-            0
-        })
-        .max(3)
-            + 6);
+        return Ok((if number != 0 { bit_length(number - 1) } else { 0 }).max(3) + 6);
     }
-    // A CPU whose table gives the multiply a range of clocks prices it by the immediate's bits (`timing::multiply_clocks`).
+    // A CPU whose table gives the multiply a range of clocks prices it by the immediate's bits
+    // (`timing::multiply_clocks`).
     if let Some(clocks) = timing::multiply_clocks_of(cpu, 4, Some(bit_length(number)), number < 0)? {
         return Ok(clocks);
     }
@@ -74,11 +76,15 @@ pub fn cheapest_narrow_chain<'a>(
     chains(number, cpu, false)
 }
 
-/// The chain of `number`: of its magnitude negated, or, as GCC's `synth_mult` has it for a negative `t` (`a * -7` is `a - a*8`), of
-/// `1 - number` shifted and taken from the source.
-fn chains<'a>(number: i64, cpu: impl Into<ProfileOrName<'a>>, with_lea: bool) -> Result<Option<(Chain, i64)>, String> {
-    // Asked again and again for one multiply (is it scalable, what does it cost, what is it): the answer is a function of the number
-    // and of the profile's prices, so the profile remembers it.
+/// The chain of `number`: of its magnitude negated, or, as GCC's `synth_mult` has it for a negative `t` (`a * -7` is `a
+/// - a*8`), of `1 - number` shifted and taken from the source.
+fn chains<'a>(
+    number: i64,
+    cpu: impl Into<ProfileOrName<'a>>,
+    with_lea: bool,
+) -> Result<Option<(Chain, i64)>, String> {
+    // Asked again and again for one multiply (is it scalable, what does it cost, what is it): the answer is a function
+    // of the number and of the profile's prices, so the profile remembers it.
     let target = targets::profile(cpu)?;
     if let Some(known) = target.multiplies.get(number, with_lea) {
         return Ok(known);
@@ -88,7 +94,11 @@ fn chains<'a>(number: i64, cpu: impl Into<ProfileOrName<'a>>, with_lea: bool) ->
     Ok(found)
 }
 
-fn unremembered_chains(number: i64, target: &targets::Profile, with_lea: bool) -> Result<Option<(Chain, i64)>, String> {
+fn unremembered_chains(
+    number: i64,
+    target: &targets::Profile,
+    with_lea: bool,
+) -> Result<Option<(Chain, i64)>, String> {
     if number >= -1 || number == i64::MIN {
         return positive_chains(number, target, with_lea);
     }
@@ -107,7 +117,8 @@ fn unremembered_chains(number: i64, target: &targets::Profile, with_lea: bool) -
     let up = 1 - number;
     let m = i64::from(up.trailing_zeros());
     let q = up >> m;
-    let shifted = if q == 1 { Some((Vec::new(), cost(target, "mov_rr")?)) } else { positive_chains(q, target, with_lea)? };
+    let shifted =
+        if q == 1 { Some((Vec::new(), cost(target, "mov_rr")?)) } else { positive_chains(q, target, with_lea)? };
     if let Some((mut parts, price)) = shifted {
         parts.extend([("shl", m), ("rsub", 0)]);
         consider(parts, price + shift(target, m)? + alu);
@@ -115,7 +126,11 @@ fn unremembered_chains(number: i64, target: &targets::Profile, with_lea: bool) -
     Ok(best)
 }
 
-fn positive_chains<'a>(number: i64, cpu: impl Into<ProfileOrName<'a>>, with_lea: bool) -> Result<Option<(Chain, i64)>, String> {
+fn positive_chains<'a>(
+    number: i64,
+    cpu: impl Into<ProfileOrName<'a>>,
+    with_lea: bool,
+) -> Result<Option<(Chain, i64)>, String> {
     let target = targets::profile(cpu)?;
     if number <= 1 {
         return Ok(None);
@@ -125,15 +140,7 @@ fn positive_chains<'a>(number: i64, cpu: impl Into<ProfileOrName<'a>>, with_lea:
         let mut digits = Vec::new();
         let mut remaining = number;
         while remaining > 1 {
-            let digit = if remaining & 1 != 0 {
-                if signed {
-                    2 - remaining.rem_euclid(4)
-                } else {
-                    1
-                }
-            } else {
-                0
-            };
+            let digit = if remaining & 1 != 0 { if signed { 2 - remaining.rem_euclid(4) } else { 1 } } else { 0 };
             digits.push(digit);
             remaining = (remaining - digit).div_euclid(2);
         }
@@ -152,11 +159,26 @@ fn positive_chains<'a>(number: i64, cpu: impl Into<ProfileOrName<'a>>, with_lea:
         parts
     };
 
-    // `lea r,[a+cur*scale]` where the target has the form: the shift and add it replaces in one non-destructive instruction.
-    // Only a form with no address-size prefix: behind one a dword `lea` carries two prefixes the shift and add do not.
+    // `lea r,[a+cur*scale]` where the target has the form: the shift and add it replaces in one non-destructive
+    // instruction. Only a form with no address-size prefix: behind one a dword `lea` carries two prefixes the shift
+    // and add do not.
     let lea = |scale: i64| {
-        let native = target.address_forms.iter().any(|form| form.index_width == 4 && form.scales.contains(&scale) && !form.secondary);
-        (with_lea && native).then(|| llrm_mir::target::three_operand(&target.operations, &target.address_forms, 4, i64::from(target.operand_bytes), scale, false)).flatten()
+        let native = target
+            .address_forms
+            .iter()
+            .any(|form| form.index_width == 4 && form.scales.contains(&scale) && !form.secondary);
+        (with_lea && native)
+            .then(|| {
+                llrm_mir::target::three_operand(
+                    &target.operations,
+                    &target.address_forms,
+                    4,
+                    i64::from(target.operand_bytes),
+                    scale,
+                    false,
+                )
+            })
+            .flatten()
     };
     let fused = |parts: Vec<(&'static str, i64)>| -> Vec<(&'static str, i64)> {
         let mut out = Vec::new();
@@ -253,14 +275,19 @@ enum Known {
     Impossible(i64),
 }
 
-/// GCC's `synth_mult` (expmed.cc): the chain of `t` costing less than `limit`, and its cost, or none. The search is bounded as GCC's is:
-/// `limit` is what the best chain so far costs (`cost_limit`, passed down less each operation: `new_limit`), a `t` is looked up in `memo`
-/// first (`alg_hash`: what was found, or that nothing is under that limit), and the caller starts from the cost of the `imul` and the
-/// Horner chain (`expand_mult`'s `max_cost`).
-/// Even `t` is a shift of `t >> m`; odd `t` is `t - 1` or `t + 1` (the one a run of ones points to) plus or minus the source, a shift and a
-/// source added to `(t - 1) >> m` or `(t + 1) >> m`, or `q * (2^m +- 1)` for a factor of that form: `q`'s chain, then `cur + cur<<m`
-/// or `cur<<m - cur`. The chain's copy of the source is not counted.
-fn synth(t: i64, limit: i64, memo: &mut BTreeMap<i64, Known>, ops: &Ops) -> Option<(Chain, i64)> {
+/// GCC's `synth_mult` (expmed.cc): the chain of `t` costing less than `limit`, and its cost, or none. The search is
+/// bounded as GCC's is: `limit` is what the best chain so far costs (`cost_limit`, passed down less each operation:
+/// `new_limit`), a `t` is looked up in `memo` first (`alg_hash`: what was found, or that nothing is under that limit),
+/// and the caller starts from the cost of the `imul` and the Horner chain (`expand_mult`'s `max_cost`).
+/// Even `t` is a shift of `t >> m`; odd `t` is `t - 1` or `t + 1` (the one a run of ones points to) plus or minus the
+/// source, a shift and a source added to `(t - 1) >> m` or `(t + 1) >> m`, or `q * (2^m +- 1)` for a factor of that
+/// form: `q`'s chain, then `cur + cur<<m` or `cur<<m - cur`. The chain's copy of the source is not counted.
+fn synth(
+    t: i64,
+    limit: i64,
+    memo: &mut BTreeMap<i64, Known>,
+    ops: &Ops,
+) -> Option<(Chain, i64)> {
     #[cfg(test)]
     SEARCHED.with(|count| count.set(count.get() + 1));
     if limit <= 0 || t < 1 {
@@ -330,10 +357,13 @@ fn synth(t: i64, limit: i64, memo: &mut BTreeMap<i64, Known>, ops: &Ops) -> Opti
         bound = below + cost;
         best = Some((parts, bound));
     }
-    memo.insert(t, match &best {
-        Some((chain, cost)) => Known::Found(chain.clone(), *cost),
-        None => Known::Impossible(limit),
-    });
+    memo.insert(
+        t,
+        match &best {
+            Some((chain, cost)) => Known::Found(chain.clone(), *cost),
+            None => Known::Impossible(limit),
+        },
+    );
     best
 }
 
@@ -350,11 +380,15 @@ mod tests {
             let (chain, _) = cheapest_chain(factor, m32).unwrap().unwrap();
             assert_eq!(chain, [("lea", factor - 1)], "x{factor}");
         }
-        assert!(cheapest_narrow_chain(3, m32).unwrap().unwrap().0.iter().all(|part| part.0 != "lea"), "a word has no lea");
+        assert!(
+            cheapest_narrow_chain(3, m32).unwrap().unwrap().0.iter().all(|part| part.0 != "lea"),
+            "a word has no lea"
+        );
     }
 
-    /// An `imul` by a 31-bit constant took 41 clocks on a 486 (Table 10.1 note 3: 10 + log2 of the multiplier) and was priced as the flat
-    /// 26, so the 29-clock chain lost to it: x_switch's `r * 1103515245` cost 20 clocks a trip over gcc's shifts and adds.
+    /// An `imul` by a 31-bit constant took 41 clocks on a 486 (Table 10.1 note 3: 10 + log2 of the multiplier) and was
+    /// priced as the flat 26, so the 29-clock chain lost to it: x_switch's `r * 1103515245` cost 20 clocks a trip
+    /// over gcc's shifts and adds.
     #[test]
     fn test_a_multiply_by_a_wide_constant_is_priced_by_its_multiplier_on_a_486() {
         let m32 = targets::tuned_for(&llrm_x86_m32::M32, "486", false).unwrap();
@@ -366,8 +400,9 @@ mod tests {
         assert!(scale(1103515245, m32).unwrap().is_some(), "the chain is below the imul");
     }
 
-    /// GCC's `synth_mult` factors `q * (2^m +- 1)` and tries `t - 1` and `t + 1`; the chains here were Horner chains only, 17 operations
-    /// and 29 clocks for x_switch's `r * 1103515245` against gcc's 13. Every chain is the product, in 32 and in 16 bits.
+    /// GCC's `synth_mult` factors `q * (2^m +- 1)` and tries `t - 1` and `t + 1`; the chains here were Horner chains
+    /// only, 17 operations and 29 clocks for x_switch's `r * 1103515245` against gcc's 13. Every chain is the
+    /// product, in 32 and in 16 bits.
     #[test]
     fn test_synthesized_chains_are_the_product_and_shorter_than_horner() {
         let m32 = targets::tuned_for(&llrm_x86_m32::M32, "486", false).unwrap();
@@ -390,9 +425,26 @@ mod tests {
             value
         };
         let mut factors: Vec<i64> = (-2000i64..2000).filter(|n| n.abs() > 1).collect();
-        factors.extend([1103515245, 214013, 69069, 1664525, 22695477, 1000003, 40503, 2654435761, 0x7fff_ffff, 0xffff_fffe, -1103515245, -7, -15, -2147483647]);
+        factors.extend([
+            1103515245,
+            214013,
+            69069,
+            1664525,
+            22695477,
+            1000003,
+            40503,
+            2654435761,
+            0x7fff_ffff,
+            0xffff_fffe,
+            -1103515245,
+            -7,
+            -15,
+            -2147483647,
+        ]);
         for factor in factors {
-            for (name, chain) in [("dword", cheapest_chain(factor, m32).unwrap()), ("word", cheapest_narrow_chain(factor, m32).unwrap())] {
+            for (name, chain) in
+                [("dword", cheapest_chain(factor, m32).unwrap()), ("word", cheapest_narrow_chain(factor, m32).unwrap())]
+            {
                 let Some((chain, _)) = chain else { continue };
                 for source in [0i128, 1, -1, 7, -32768, 32767, -2147483648, 2147483647] {
                     assert_eq!(eval(&chain, source), source * i128::from(factor), "{name} x{factor}: {chain:?}");
@@ -405,9 +457,10 @@ mod tests {
         assert!(clocks < 29, "{chain:?} {clocks}");
     }
 
-    /// `a * 2654448107u` took 75 million instructions in the selector, four of them 337 million, at -O0 as well: the selector asks for a
-    /// multiply's chain three times (is it scalable, what does it cost, what is it) and each time searched every way down from every target.
-    /// GCC's `synth_mult` prunes by the cost so far and keeps what it found (`alg_hash`).
+    /// `a * 2654448107u` took 75 million instructions in the selector, four of them 337 million, at -O0 as well: the
+    /// selector asks for a multiply's chain three times (is it scalable, what does it cost, what is it) and each
+    /// time searched every way down from every target. GCC's `synth_mult` prunes by the cost so far and keeps what
+    /// it found (`alg_hash`).
     #[test]
     fn test_the_search_for_a_wide_odd_constant_is_made_once_and_bounded() {
         let m32 = targets::tuned_for(&llrm_x86_m32::M32, "486", false).unwrap();
@@ -476,15 +529,7 @@ mod tests {
 
     #[test]
     fn test_386_positive_immediate_early_out() {
-        for (number, clocks) in [
-            (0, 9),
-            (1, 9),
-            (8, 9),
-            (9, 10),
-            (20, 11),
-            (85, 13),
-            (127, 13),
-        ] {
+        for (number, clocks) in [(0, 9), (1, 9), (8, 9), (9, 10), (20, 11), (85, 13), (127, 13)] {
             assert_eq!(immediate_multiply("386", number), Ok(clocks), "{number}");
         }
     }

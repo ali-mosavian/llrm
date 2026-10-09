@@ -13,7 +13,6 @@
 //! pointers reached from one base lie in one allocation. The old width and
 //! segment checks were for split pointer halves, which MIR does not have.
 
-
 use llrm_mir::context::signed;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, Operand, ValueDef};
@@ -37,17 +36,27 @@ pub struct Offsets<'a> {
 
 impl Offsets<'_> {
     /// The value `pointer` is a constant byte offset from.
-    pub fn relative(&self, pointer: Operand) -> Option<(Operand, i64)> {
+    pub fn relative(
+        &self,
+        pointer: Operand,
+    ) -> Option<(Operand, i64)> {
         self.stepped(pointer, true)
     }
 
     /// `relative` through steps that need not be `inbounds`: where the address is what matters, not
     /// what the object it stays in is.
-    pub fn fixed(&self, pointer: Operand) -> Option<(Operand, i64)> {
+    pub fn fixed(
+        &self,
+        pointer: Operand,
+    ) -> Option<(Operand, i64)> {
         self.stepped(pointer, false)
     }
 
-    fn stepped(&self, pointer: Operand, inbounds: bool) -> Option<(Operand, i64)> {
+    fn stepped(
+        &self,
+        pointer: Operand,
+        inbounds: bool,
+    ) -> Option<(Operand, i64)> {
         let (mut value, mut offset) = (pointer, 0_i64);
         let mut seen = Visited::default();
         while seen.insert(value) {
@@ -87,7 +96,10 @@ impl Offsets<'_> {
         None
     }
 
-    fn int(&self, operand: Operand) -> Option<i128> {
+    fn int(
+        &self,
+        operand: Operand,
+    ) -> Option<i128> {
         let Operand::Constant(id) = operand else { return None };
         let constant = self.context.get(id);
         match constant.kind {
@@ -96,7 +108,11 @@ impl Offsets<'_> {
         }
     }
 
-    pub fn comparable(&self, one: Location, other: Location) -> Option<(i64, i64)> {
+    pub fn comparable(
+        &self,
+        one: Location,
+        other: Location,
+    ) -> Option<(i64, i64)> {
         let (left, right) = (self.relative(one.pointer)?, self.relative(other.pointer)?);
         if left.0 != right.0 {
             return None;
@@ -104,7 +120,11 @@ impl Offsets<'_> {
         Some((left.1, right.1))
     }
 
-    pub fn disjoint(&self, one: Location, other: Location) -> bool {
+    pub fn disjoint(
+        &self,
+        one: Location,
+        other: Location,
+    ) -> bool {
         let Some((left, right)) = self.comparable(one, other) else {
             return false;
         };
@@ -114,7 +134,11 @@ impl Offsets<'_> {
         left + one.bytes as i64 <= right || right + other.bytes as i64 <= left
     }
 
-    pub fn same_bytes(&self, one: Location, other: Location) -> bool {
+    pub fn same_bytes(
+        &self,
+        one: Location,
+        other: Location,
+    ) -> bool {
         if one == other {
             return true;
         }
@@ -133,7 +157,10 @@ struct Visited {
 
 impl Visited {
     /// Whether `value` is new.
-    fn insert(&mut self, value: Operand) -> bool {
+    fn insert(
+        &mut self,
+        value: Operand,
+    ) -> bool {
         if let Some(more) = &mut self.more {
             return more.insert(value);
         }
@@ -152,7 +179,11 @@ impl Visited {
     }
 }
 
-pub fn offsets<'a>(context: &'a Context, layout: &'a DataLayout, function: &'a Function) -> Offsets<'a> {
+pub fn offsets<'a>(
+    context: &'a Context,
+    layout: &'a DataLayout,
+    function: &'a Function,
+) -> Offsets<'a> {
     Offsets { context, layout, function }
 }
 
@@ -192,7 +223,10 @@ b:
     }
 
     /// `@f`'s module, each `%name`'s relative offset and the checks on locations.
-    fn with_facts(text: &str, check: impl Fn(&Offsets, &dyn Fn(&str, u64) -> Location, &dyn Fn(&str) -> Operand)) {
+    fn with_facts(
+        text: &str,
+        check: impl Fn(&Offsets, &dyn Fn(&str, u64) -> Location, &dyn Fn(&str) -> Operand),
+    ) {
         let module = parsed(text);
         let layout = DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).unwrap();
         let f = function(&module, "f");

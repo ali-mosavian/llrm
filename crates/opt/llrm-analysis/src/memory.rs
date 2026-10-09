@@ -34,12 +34,14 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fmt;
 
-use llrm_mir::program::ProgramProxy;
 use llrm_mir::context::{ConstantExpr, ConstantKind, Context, GlobalId, signed};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::intrinsics::Intrinsic;
-use llrm_mir::module::{Function, GlobalKind, GlobalValue, InstId, MetadataNode, MetadataOperand, Module, Operand, ValueDef, ValueId};
+use llrm_mir::module::{
+    Function, GlobalKind, GlobalValue, InstId, MetadataNode, MetadataOperand, Module, Operand, ValueDef, ValueId,
+};
 use llrm_mir::opcode::{CastOp, Flags, Opcode};
+use llrm_mir::program::ProgramProxy;
 use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::IndexMap;
 
@@ -82,7 +84,10 @@ impl MemoryKind {
 }
 
 impl fmt::Display for MemoryKind {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(self.as_str())
     }
 }
@@ -132,7 +137,10 @@ impl MemoryObject {
 }
 
 impl PartialEq for MemoryObject {
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
         self.key() == other.key()
     }
 }
@@ -140,13 +148,19 @@ impl PartialEq for MemoryObject {
 impl Eq for MemoryObject {}
 
 impl std::hash::Hash for MemoryObject {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
         self.key().hash(state);
     }
 }
 
 impl PartialOrd for MemoryObject {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(
+        &self,
+        other: &Self,
+    ) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
@@ -158,19 +172,22 @@ thread_local! {
 }
 
 impl Ord for MemoryObject {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(
+        &self,
+        other: &Self,
+    ) -> std::cmp::Ordering {
         #[cfg(test)]
         OBJECT_COMPARES.with(|count| count.set(count.get() + 1));
         self.key().cmp(&other.key())
     }
 }
 
-/// A `MemoryObject` as its module's interner numbered it: a small id compared, hashed and ordered as an integer, with the
-/// fields the passes ask of every slice beside it, so a slice is `Copy` and asking costs nothing. The rest (the identity, the
-/// generation) is `ObjectInterner::object`. Interned by every field, the facts too, so two spellings that differ in a fact are
-/// two objects here and a set keeps both (none was seen to differ in 1,700 programs and QCport). The order is the order of
-/// first interning in the module, which the same module always makes the same way; nothing may depend on it being
-/// `MemoryObject`'s.
+/// A `MemoryObject` as its module's interner numbered it: a small id compared, hashed and ordered as an integer, with
+/// the fields the passes ask of every slice beside it, so a slice is `Copy` and asking costs nothing. The rest (the
+/// identity, the generation) is `ObjectInterner::object`. Interned by every field, the facts too, so two spellings that
+/// differ in a fact are two objects here and a set keeps both (none was seen to differ in 1,700 programs and QCport).
+/// The order is the order of first interning in the module, which the same module always makes the same way; nothing
+/// may depend on it being `MemoryObject`'s.
 #[derive(Clone, Copy, Debug)]
 pub struct ObjectRef {
     id: u32,
@@ -179,8 +196,8 @@ pub struct ObjectRef {
     pub captured: bool,
     pub constant: bool,
     pub extent: Option<i64>,
-    /// The identity where it is a number, which is all the passes make: a name or a tuple (a test's, the linear region's) is
-    /// `Other`, and `ObjectInterner::object` has it whole.
+    /// The identity where it is a number, which is all the passes make: a name or a tuple (a test's, the linear
+    /// region's) is `Other`, and `ObjectInterner::object` has it whole.
     pub key: Key,
 }
 
@@ -208,10 +225,34 @@ impl Key {
 
 impl ObjectRef {
     /// Every interner starts with these three, so they are the same in all modules and in the statics.
-    pub const UNKNOWN: Self = Self { id: 0, kind: MemoryKind::Unknown, addressed: true, captured: true, constant: false, extent: None, key: Key::None };
+    pub const UNKNOWN: Self = Self {
+        id: 0,
+        kind: MemoryKind::Unknown,
+        addressed: true,
+        captured: true,
+        constant: false,
+        extent: None,
+        key: Key::None,
+    };
     /// Memory addressed linearly, which no program object occupies (`regions`).
-    pub const LINEAR: Self = Self { id: 2, kind: MemoryKind::Absolute, addressed: true, captured: true, constant: false, extent: None, key: Key::Other };
-    pub const NONLOCAL: Self = Self { id: 1, kind: MemoryKind::Nonlocal, addressed: true, captured: true, constant: false, extent: None, key: Key::None };
+    pub const LINEAR: Self = Self {
+        id: 2,
+        kind: MemoryKind::Absolute,
+        addressed: true,
+        captured: true,
+        constant: false,
+        extent: None,
+        key: Key::Other,
+    };
+    pub const NONLOCAL: Self = Self {
+        id: 1,
+        kind: MemoryKind::Nonlocal,
+        addressed: true,
+        captured: true,
+        constant: false,
+        extent: None,
+        key: Key::None,
+    };
 
     /// The number this object was given: the order it was first interned in.
     pub fn id(self) -> u32 {
@@ -220,7 +261,10 @@ impl ObjectRef {
 }
 
 impl PartialEq for ObjectRef {
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
         self.id == other.id
     }
 }
@@ -228,19 +272,28 @@ impl PartialEq for ObjectRef {
 impl Eq for ObjectRef {}
 
 impl std::hash::Hash for ObjectRef {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
         self.id.hash(state);
     }
 }
 
 impl PartialOrd for ObjectRef {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(
+        &self,
+        other: &Self,
+    ) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for ObjectRef {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(
+        &self,
+        other: &Self,
+    ) -> std::cmp::Ordering {
         self.id.cmp(&other.id)
     }
 }
@@ -248,22 +301,31 @@ impl Ord for ObjectRef {
 struct Exact(MemoryObject);
 
 impl PartialEq for Exact {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0 && self.0.addressed == other.0.addressed && self.0.captured == other.0.captured && self.0.constant == other.0.constant
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.0 == other.0
+            && self.0.addressed == other.0.addressed
+            && self.0.captured == other.0.captured
+            && self.0.constant == other.0.constant
     }
 }
 
 impl Eq for Exact {}
 
 impl std::hash::Hash for Exact {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
         self.0.hash(state);
         (self.0.addressed, self.0.captured, self.0.constant).hash(state);
     }
 }
 
-/// A module's memory objects, numbered densely in the order they are first asked for. It lives in the module's `Context`
-/// (`ObjectInterner::of`) and is dropped with it, as LLVMContext's uniqued constants are.
+/// A module's memory objects, numbered densely in the order they are first asked for. It lives in the module's
+/// `Context` (`ObjectInterner::of`) and is dropped with it, as LLVMContext's uniqued constants are.
 pub struct ObjectInterner {
     held: std::cell::RefCell<(Vec<MemoryObject>, llrm_support::hash::HashMap<Exact, u32>)>,
 }
@@ -273,7 +335,13 @@ impl Default for ObjectInterner {
         let interner = Self { held: Default::default() };
         assert_eq!(interner.intern(MemoryObject::new(MemoryKind::Unknown)), ObjectRef::UNKNOWN);
         assert_eq!(interner.intern(MemoryObject::new(MemoryKind::Nonlocal)), ObjectRef::NONLOCAL);
-        assert_eq!(interner.intern(MemoryObject { identity: Some(Identity::Str("linear".to_owned())), ..MemoryObject::new(MemoryKind::Absolute) }), ObjectRef::LINEAR);
+        assert_eq!(
+            interner.intern(MemoryObject {
+                identity: Some(Identity::Str("linear".to_owned())),
+                ..MemoryObject::new(MemoryKind::Absolute)
+            }),
+            ObjectRef::LINEAR
+        );
         interner
     }
 }
@@ -284,7 +352,10 @@ impl ObjectInterner {
         context.extension::<Self>()
     }
 
-    pub fn intern(&self, object: MemoryObject) -> ObjectRef {
+    pub fn intern(
+        &self,
+        object: MemoryObject,
+    ) -> ObjectRef {
         let mut held = self.held.borrow_mut();
         let (objects, ids) = &mut *held;
         let key = Exact(object);
@@ -298,11 +369,22 @@ impl ObjectInterner {
             }
         };
         let one = &objects[id as usize];
-        ObjectRef { id, kind: one.kind, addressed: one.addressed, captured: one.captured, constant: one.constant, extent: one.extent, key: Key::of(&one.identity) }
+        ObjectRef {
+            id,
+            kind: one.kind,
+            addressed: one.addressed,
+            captured: one.captured,
+            constant: one.constant,
+            extent: one.extent,
+            key: Key::of(&one.identity),
+        }
     }
 
     /// The object `one` stands for.
-    pub fn object(&self, one: ObjectRef) -> MemoryObject {
+    pub fn object(
+        &self,
+        one: ObjectRef,
+    ) -> MemoryObject {
         self.held.borrow().0[one.id as usize].clone()
     }
 }
@@ -342,7 +424,10 @@ pub enum SliceError {
 }
 
 impl fmt::Display for SliceError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(match self {
             Self::Empty => "an alias slice must contain at least one byte",
             Self::NonPositiveStride => "an alias stride must be positive",
@@ -354,7 +439,13 @@ impl fmt::Display for SliceError {
 impl std::error::Error for SliceError {}
 
 impl Slice {
-    pub fn new(object: impl Into<ObjectRef>, low: i64, high: i64, stride: i64, width: i64) -> Result<Self, SliceError> {
+    pub fn new(
+        object: impl Into<ObjectRef>,
+        low: i64,
+        high: i64,
+        stride: i64,
+        width: i64,
+    ) -> Result<Self, SliceError> {
         let object = object.into();
         if high <= low {
             return Err(SliceError::Empty);
@@ -382,12 +473,18 @@ impl Slice {
         }
     }
 
-    pub fn shifted(&self, amount: i64) -> Self {
+    pub fn shifted(
+        &self,
+        amount: i64,
+    ) -> Self {
         Self::new(self.object, self.low + amount, self.high + amount, self.stride, self.width)
             .expect("shifting a valid slice retains its positive shape")
     }
 
-    pub fn intersects(&self, other: &Self) -> bool {
+    pub fn intersects(
+        &self,
+        other: &Self,
+    ) -> bool {
         if !objects_may_alias(&self.object, &other.object) {
             return false;
         }
@@ -433,7 +530,10 @@ impl Slice {
     }
 }
 
-pub fn gcd(mut one: i64, mut other: i64) -> i64 {
+pub fn gcd(
+    mut one: i64,
+    mut other: i64,
+) -> i64 {
     while other != 0 {
         (one, other) = (other, one % other);
     }
@@ -465,7 +565,10 @@ impl Provenance {
         Ok(Self { slices: BTreeSet::from([Slice::new(object, low, high, stride, width)?]), restrict })
     }
 
-    pub fn shifted(&self, amount: i64) -> Self {
+    pub fn shifted(
+        &self,
+        amount: i64,
+    ) -> Self {
         let slices = self
             .slices
             .iter()
@@ -478,14 +581,20 @@ impl Provenance {
         Self { slices, restrict: self.restrict.clone() }
     }
 
-    pub fn union(&self, other: &Self) -> Self {
+    pub fn union(
+        &self,
+        other: &Self,
+    ) -> Self {
         Self {
             slices: self.slices.union(&other.slices).cloned().collect(),
             restrict: self.restrict.union(&other.restrict).cloned().collect(),
         }
     }
 
-    pub fn intersects(&self, other: &Self) -> bool {
+    pub fn intersects(
+        &self,
+        other: &Self,
+    ) -> bool {
         if !self.restrict.is_empty() && !other.restrict.is_empty() && self.restrict.is_disjoint(&other.restrict) {
             return false;
         }
@@ -530,7 +639,10 @@ pub fn alias_class(one: &impl Aliasable) -> AliasClass {
     one.class()
 }
 
-pub fn objects_may_alias<T: Aliasable>(one: &T, other: &T) -> bool {
+pub fn objects_may_alias<T: Aliasable>(
+    one: &T,
+    other: &T,
+) -> bool {
     #[cfg(test)]
     OBJECT_ALIASES.with(|asked| asked.set(asked.get() + 1));
     if one == other {
@@ -542,7 +654,10 @@ pub fn objects_may_alias<T: Aliasable>(one: &T, other: &T) -> bool {
 }
 
 /// Whether two distinct objects of these classes may alias.
-pub fn classes_may_alias(one: AliasClass, other: AliasClass) -> bool {
+pub fn classes_may_alias(
+    one: AliasClass,
+    other: AliasClass,
+) -> bool {
     // Only a reference naming an unaddressed object reaches it.
     if !(one.addressed && other.addressed) {
         return false;
@@ -568,7 +683,9 @@ pub fn classes_may_alias(one: AliasClass, other: AliasClass) -> bool {
             return that.captured && that.kind != MemoryKind::Frame;
         }
     }
-    if matches!(one.kind, MemoryKind::Global | MemoryKind::External) && matches!(other.kind, MemoryKind::Global | MemoryKind::External) {
+    if matches!(one.kind, MemoryKind::Global | MemoryKind::External)
+        && matches!(other.kind, MemoryKind::Global | MemoryKind::External)
+    {
         return one.kind == MemoryKind::External || other.kind == MemoryKind::External;
     }
     false
@@ -619,66 +736,136 @@ pub struct Unit<'a> {
 
 impl<'a> Unit<'a> {
     /// The intrinsic `inst` calls, if it calls one.
-    pub fn intrinsic(&self, inst: InstId) -> Option<llrm_mir::intrinsics::Intrinsic> {
+    pub fn intrinsic(
+        &self,
+        inst: InstId,
+    ) -> Option<llrm_mir::intrinsics::Intrinsic> {
         let callee = llrm_mir::memory::callee(self.context, self.function, inst)?;
         llrm_mir::intrinsics::Intrinsic::named(self.globals.get(callee.0 as usize)?.name.as_deref()?)
     }
 
     /// Whether `inst` calls out: a call no intrinsic's instructions
     /// replace, as LLVM's `isLoweredToCall` says.
-    pub fn calls_out(&self, inst: InstId) -> bool {
-        matches!(self.function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)) && self.intrinsic(inst).is_none()
+    pub fn calls_out(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        matches!(
+            self.function.instruction(inst).opcode,
+            Opcode::Call(_) | Opcode::Invoke(_)
+        )
+            && self.intrinsic(inst).is_none()
     }
 
-    pub fn of(module: &'a Module, layout: &'a DataLayout, function: &'a Function) -> Self {
-        Self { program: None, spaces: llrm_mir::spaces::Spaces::FLAT, context: &module.context, layout, metadata: &module.metadata, tbaa: None, globals: &module.globals, function, globals_aa: None, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None, counted: None, edges: None, bounds: None, exposed: None }
+    pub fn of(
+        module: &'a Module,
+        layout: &'a DataLayout,
+        function: &'a Function,
+    ) -> Self {
+        Self {
+            program: None,
+            spaces: llrm_mir::spaces::Spaces::FLAT,
+            context: &module.context,
+            layout,
+            metadata: &module.metadata,
+            tbaa: None,
+            globals: &module.globals,
+            function,
+            globals_aa: None,
+            references: None,
+            shape: None,
+            registers: None,
+            pointers: None,
+            annotated: None,
+            assumptions: None,
+            counted: None,
+            edges: None,
+            bounds: None,
+            exposed: None,
+        }
     }
 
-    pub fn with_spaces(self, spaces: llrm_mir::spaces::Spaces) -> Self {
+    pub fn with_spaces(
+        self,
+        spaces: llrm_mir::spaces::Spaces,
+    ) -> Self {
         Self { spaces, ..self }
     }
 
-    pub fn with_exposed(self, exposed: &'a BTreeSet<ValueId>) -> Self {
+    pub fn with_exposed(
+        self,
+        exposed: &'a BTreeSet<ValueId>,
+    ) -> Self {
         Self { exposed: Some(exposed), ..self }
     }
 
-    pub fn with_globals_aa(self, globals_aa: &'a Globals) -> Self {
+    pub fn with_globals_aa(
+        self,
+        globals_aa: &'a Globals,
+    ) -> Self {
         Self { globals_aa: Some(globals_aa), ..self }
     }
 
-    pub fn with_references(self, references: &'a IndexMap<InstId, MemRef>) -> Self {
+    pub fn with_references(
+        self,
+        references: &'a IndexMap<InstId, MemRef>,
+    ) -> Self {
         Self { references: Some(references), ..self }
     }
 
-    pub fn with_shape(self, shape: &'a Shape) -> Self {
+    pub fn with_shape(
+        self,
+        shape: &'a Shape,
+    ) -> Self {
         Self { shape: Some(shape), ..self }
     }
 
-    pub fn with_assumptions(self, assumptions: &'a Assumptions) -> Self {
+    pub fn with_assumptions(
+        self,
+        assumptions: &'a Assumptions,
+    ) -> Self {
         Self { assumptions: Some(assumptions), ..self }
     }
 
-    pub fn with_bounds(self, bounds: &'a crate::ranges::Bounds) -> Self {
+    pub fn with_bounds(
+        self,
+        bounds: &'a crate::ranges::Bounds,
+    ) -> Self {
         Self { bounds: Some(bounds), ..self }
     }
 
-    pub fn with_edges(self, edges: &'a crate::ranges::EdgeStates) -> Self {
+    pub fn with_edges(
+        self,
+        edges: &'a crate::ranges::EdgeStates,
+    ) -> Self {
         Self { edges: Some(edges), ..self }
     }
 
-    pub fn with_counted(self, counted: &'a crate::induction::Counted) -> Self {
+    pub fn with_counted(
+        self,
+        counted: &'a crate::induction::Counted,
+    ) -> Self {
         Self { counted: Some(counted), ..self }
     }
 
-    pub fn with_registers(self, registers: &'a IndexMap<ValueId, Known>) -> Self {
+    pub fn with_registers(
+        self,
+        registers: &'a IndexMap<ValueId, Known>,
+    ) -> Self {
         Self { registers: Some(registers), ..self }
     }
 
-    pub fn with_pointers(self, pointers: &'a PointsTo) -> Self {
+    pub fn with_pointers(
+        self,
+        pointers: &'a PointsTo,
+    ) -> Self {
         Self { pointers: Some(pointers), ..self }
     }
 
-    pub fn with_annotated(self, annotated: &'a Result<IndexMap<InstId, MemRef>, String>) -> Self {
+    pub fn with_annotated(
+        self,
+        annotated: &'a Result<IndexMap<InstId, MemRef>, String>,
+    ) -> Self {
         Self { annotated: Some(annotated), ..self }
     }
 
@@ -702,7 +889,10 @@ impl<'a> Unit<'a> {
             Some(registers) => {
                 if llrm_support::env_set("LLRM_CHECK_FACTS") {
                     let fresh = crate::consts::known(&Unit { registers: None, ..*self }, None, None, None);
-                    assert!(*registers == fresh, "the registers a unit carries are not those of the body it stands over: stale");
+                    assert!(
+                        *registers == fresh,
+                        "the registers a unit carries are not those of the body it stands over: stale"
+                    );
                 }
                 Cow::Borrowed(registers)
             }
@@ -732,7 +922,10 @@ impl<'a> Unit<'a> {
         match self.shape {
             Some(shape) => {
                 if llrm_support::env_set("LLRM_CHECK_SHAPE") {
-                    assert!(*shape == Shape::of(self.function), "the shape a unit carries is not that of the body it stands over: stale");
+                    assert!(
+                        *shape == Shape::of(self.function),
+                        "the shape a unit carries is not that of the body it stands over: stale"
+                    );
                 }
                 Cow::Borrowed(shape)
             }
@@ -741,21 +934,33 @@ impl<'a> Unit<'a> {
     }
 
     /// The access `inst` makes: alias's, where the unit has its references.
-    pub fn reference(&self, inst: InstId) -> Option<MemRef> {
+    pub fn reference(
+        &self,
+        inst: InstId,
+    ) -> Option<MemRef> {
         self.references.and_then(|all| all.get(&inst).cloned()).or_else(|| MemRef::of(self, inst))
     }
 
-    pub fn operand_type(&self, operand: Operand) -> Option<TypeId> {
+    pub fn operand_type(
+        &self,
+        operand: Operand,
+    ) -> Option<TypeId> {
         self.function.operand_type(self.context, operand)
     }
 
     /// An integer operand's width in bits.
-    pub fn int_bits(&self, operand: Operand) -> Option<u32> {
+    pub fn int_bits(
+        &self,
+        operand: Operand,
+    ) -> Option<u32> {
         self.operand_type(operand).and_then(|ty| self.context.types.int_bits(ty))
     }
 
     /// An integer constant's bits, if `operand` is one.
-    pub fn int_constant(&self, operand: Operand) -> Option<u128> {
+    pub fn int_constant(
+        &self,
+        operand: Operand,
+    ) -> Option<u128> {
         match operand {
             Operand::Constant(id) => match self.context.get(id).kind {
                 ConstantKind::Int(bits) => Some(bits),
@@ -771,7 +976,10 @@ impl<'a> Unit<'a> {
     }
 
     /// A pointer operand's address space.
-    pub fn space(&self, operand: Operand) -> Option<u32> {
+    pub fn space(
+        &self,
+        operand: Operand,
+    ) -> Option<u32> {
         match self.context.types.get(self.operand_type(operand)?) {
             Type::Pointer(space) => Some(*space),
             _ => None,
@@ -779,7 +987,10 @@ impl<'a> Unit<'a> {
     }
 
     /// The instruction defining `operand`, if a local value defines it.
-    pub fn defining(&self, operand: Operand) -> Option<(InstId, &'a llrm_mir::module::Instruction)> {
+    pub fn defining(
+        &self,
+        operand: Operand,
+    ) -> Option<(InstId, &'a llrm_mir::module::Instruction)> {
         let Operand::Value(value) = operand else { return None };
         match self.function.value(value).def {
             ValueDef::Instruction(inst) => Some((inst, self.function.instruction(inst))),
@@ -789,8 +1000,14 @@ impl<'a> Unit<'a> {
 }
 
 /// Whether `inst` marks an object's lifetime, which names it without handing out its address.
-pub fn is_lifetime_marker(unit: &Unit, inst: InstId) -> bool {
-    matches!(unit.intrinsic(inst), Some(llrm_mir::intrinsics::Intrinsic::LifetimeStart | llrm_mir::intrinsics::Intrinsic::LifetimeEnd))
+pub fn is_lifetime_marker(
+    unit: &Unit,
+    inst: InstId,
+) -> bool {
+    matches!(
+        unit.intrinsic(inst),
+        Some(llrm_mir::intrinsics::Intrinsic::LifetimeStart | llrm_mir::intrinsics::Intrinsic::LifetimeEnd)
+    )
 }
 
 /// What is known of each value without memory (`consts::known`).
@@ -813,7 +1030,10 @@ impl<'h> Standing<'h> {
     }
 
     /// `held`, and the bounds the manager found of the same body.
-    pub fn held_with(registers: &'h Knowns, bounds: &'h crate::ranges::Bounds) -> Self {
+    pub fn held_with(
+        registers: &'h Knowns,
+        bounds: &'h crate::ranges::Bounds,
+    ) -> Self {
         Self { held: Some(registers), bounds: Some(bounds), derived: None }
     }
 
@@ -830,13 +1050,19 @@ impl<'h> Standing<'h> {
     }
 
     /// `of`, and the manager's bounds of the body where it is still as they were found of it.
-    pub fn of_with_bounds(&mut self, unit: &Unit) -> (&Knowns, Option<&'h crate::ranges::Bounds>) {
+    pub fn of_with_bounds(
+        &mut self,
+        unit: &Unit,
+    ) -> (&Knowns, Option<&'h crate::ranges::Bounds>) {
         let bounds = self.bounds;
         (self.of(unit), bounds)
     }
 
     /// What is known of `unit`'s body as it stands, which it must be the one these were asked of.
-    pub fn of(&mut self, unit: &Unit) -> &Knowns {
+    pub fn of(
+        &mut self,
+        unit: &Unit,
+    ) -> &Knowns {
         if let Some(held) = self.held {
             return held;
         }
@@ -852,7 +1078,10 @@ pub fn exposed_frames(unit: &Unit) -> BTreeSet<ValueId> {
 
 /// The object `root` is the address of, where it is an object's own: an
 /// alloca (`Frame`) or a global variable (`Global`).
-pub fn object_of(unit: &Unit, root: Operand) -> Option<ObjectRef> {
+pub fn object_of(
+    unit: &Unit,
+    root: Operand,
+) -> Option<ObjectRef> {
     match root {
         Operand::Value(value) => {
             let (_, instruction) = unit.defining(root)?;
@@ -885,14 +1114,26 @@ pub fn object_of(unit: &Unit, root: Operand) -> Option<ObjectRef> {
 }
 
 /// The object a global variable is.
-pub fn global_object(unit: &Unit, global: GlobalId) -> Option<ObjectRef> {
+pub fn global_object(
+    unit: &Unit,
+    global: GlobalId,
+) -> Option<ObjectRef> {
     let extent = match &unit.globals.get(global.0 as usize)?.kind {
         GlobalKind::Variable(variable) => Some(unit.layout.alloc_size(&unit.context.types, variable.ty) as i64),
         GlobalKind::Function(_) => return None,
     };
     let captured = !unit.globals_aa.is_some_and(|aa| aa.tracked(global));
-    let constant = matches!(&unit.globals.get(global.0 as usize)?.kind, GlobalKind::Variable(variable) if variable.constant);
-    Some(ObjectInterner::of(unit.context).intern(MemoryObject { identity: Some(Identity::Global(global.0)), extent, captured, constant, ..MemoryObject::new(MemoryKind::Global) }))
+    let constant = matches!(
+        &unit.globals.get(global.0 as usize)?.kind,
+        GlobalKind::Variable(variable) if variable.constant
+    );
+    Some(ObjectInterner::of(unit.context).intern(MemoryObject {
+        identity: Some(Identity::Global(global.0)),
+        extent,
+        captured,
+        constant,
+        ..MemoryObject::new(MemoryKind::Global)
+    }))
 }
 
 /// An access as the alias queries read it: LLVM's `MemoryLocation`, its
@@ -946,11 +1187,17 @@ impl MemRef {
     /// Whether every object it may reach is constant, so that no write
     /// changes it.
     pub fn unwritable(&self) -> bool {
-        self.provenance.as_ref().is_some_and(|one| !one.slices.is_empty() && one.slices.iter().all(|slice| slice.object.constant))
+        self.provenance
+            .as_ref()
+            .is_some_and(|one| !one.slices.is_empty() && one.slices.iter().all(|slice| slice.object.constant))
     }
 
     /// `width` bytes at `pointer`.
-    pub fn at(unit: &Unit, pointer: Operand, width: u32) -> Self {
+    pub fn at(
+        unit: &Unit,
+        pointer: Operand,
+        width: u32,
+    ) -> Self {
         let space = unit.space(pointer).unwrap_or(0);
         let index_bits = unit.layout.pointer(space).index_bits;
         let mut made = Self {
@@ -1007,29 +1254,44 @@ impl MemRef {
     }
 
     /// The access instruction `inst` makes: a load's or a store's.
-    pub fn of(unit: &Unit, inst: InstId) -> Option<Self> {
+    pub fn of(
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Self> {
         let instruction = unit.function.instruction(inst);
         let (pointer, ty, volatile) = match instruction.opcode {
             Opcode::Load { volatile, .. } => (instruction.operands[0], instruction.ty, volatile),
-            Opcode::Store { volatile, .. } => (instruction.operands[1], unit.operand_type(instruction.operands[0])?, volatile),
+            Opcode::Store { volatile, .. } => {
+                (instruction.operands[1], unit.operand_type(instruction.operands[0])?, volatile)
+            }
             _ => return None,
         };
         let width = unit.layout.store_size(&unit.context.types, ty) as u32;
-        Some(Self { typed: typed(unit, inst), lineage: lineage(unit, inst), volatile, ..Self::at(unit, pointer, width) })
+        Some(Self {
+            typed: typed(unit, inst),
+            lineage: lineage(unit, inst),
+            volatile,
+            ..Self::at(unit, pointer, width)
+        })
     }
 
     /// Whether the access names its bytes outright rather than reaching
     /// them through a value: a fixed displacement in an object, or canonical
     /// provenance. An unresolved pointer or index does not.
     pub fn named(&self) -> bool {
-        let canonical = self.provenance.as_ref().is_some_and(|provenance| !provenance.slices.is_empty() && provenance.slices.iter().all(|one| one.object.kind != MemoryKind::Unknown));
+        let canonical = self.provenance.as_ref().is_some_and(|provenance| {
+            !provenance.slices.is_empty() && provenance.slices.iter().all(|one| one.object.kind != MemoryKind::Unknown)
+        });
         canonical || (self.object && self.addr().is_some())
     }
 
     /// The bytes a call to `llvm.memset` of a constant length fills, as
     /// LLVM's `MemoryLocation::getForDest` names them: a write like a
     /// store's.
-    pub fn filled(unit: &Unit, inst: InstId) -> Option<Self> {
+    pub fn filled(
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Self> {
         let instruction = unit.function.instruction(inst);
         let Opcode::Call(_) = instruction.opcode else { return None };
         let callee = llrm_mir::memory::callee(unit.context, unit.function, inst)?;
@@ -1039,14 +1301,20 @@ impl MemRef {
             Intrinsic::MemSetPattern => unit.int_bits(instruction.operands[1])? / 8,
             _ => return None,
         };
-        let width = u32::try_from(unit.int_constant(instruction.operands[2])?).ok()?.checked_mul(cell).filter(|&one| one > 0)?;
+        let width = u32::try_from(unit.int_constant(instruction.operands[2])?)
+            .ok()?
+            .checked_mul(cell)
+            .filter(|&one| one > 0)?;
         let volatile = unit.int_constant(instruction.operands[3])? != 0;
         Some(Self { volatile, ..Self::at(unit, instruction.operands[0], width) })
     }
 
     /// `width` bytes of `provenance`'s objects that a call's effect names,
     /// at no pointer: old `MemRef(None, width)`.
-    pub fn reach(width: u32, provenance: Provenance) -> Self {
+    pub fn reach(
+        width: u32,
+        provenance: Provenance,
+    ) -> Self {
         Self {
             pointer: None,
             root: None,
@@ -1079,7 +1347,10 @@ impl MemRef {
 /// The bits `reference` reads from a `constant` global's initializer,
 /// little-endian: LLVM's `ConstantFoldLoadFromConstPtr`. None where the
 /// address is not fixed or a byte is an address only the linker knows.
-pub fn constant_bits(unit: &Unit, reference: &MemRef) -> Option<num_bigint::BigInt> {
+pub fn constant_bits(
+    unit: &Unit,
+    reference: &MemRef,
+) -> Option<num_bigint::BigInt> {
     let addr = reference.addr()?;
     let Operand::Constant(root) = addr.root else { return None };
     let ConstantKind::Global(global) = unit.context.get(root).kind else { return None };
@@ -1090,14 +1361,22 @@ pub fn constant_bits(unit: &Unit, reference: &MemRef) -> Option<num_bigint::BigI
     let bytes = constant_bytes(unit.context, unit.layout, variable.initializer?)?;
     let (low, width) = (usize::try_from(addr.disp).ok()?, reference.width as usize);
     let read = bytes.get(low..low.checked_add(width)?)?;
-    Some(read.iter().rev().fold(num_bigint::BigInt::from(0), |bits, &byte| (bits << 8) | num_bigint::BigInt::from(byte)))
+    Some(
+        read.iter().rev().fold(num_bigint::BigInt::from(0), |bits, &byte| (bits << 8) | num_bigint::BigInt::from(byte)),
+    )
 }
 
 /// The bytes `constant` lays out in memory; None where one is an address.
-pub fn constant_bytes(context: &Context, layout: &DataLayout, constant: llrm_mir::context::ConstantId) -> Option<Vec<u8>> {
+pub fn constant_bytes(
+    context: &Context,
+    layout: &DataLayout,
+    constant: llrm_mir::context::ConstantId,
+) -> Option<Vec<u8>> {
     let one = context.get(constant);
     let size = usize::try_from(layout.alloc_size(&context.types, one.ty)).ok()?;
-    let little = |bits: u128, count: usize| (0..size).map(|at| if at < count.min(16) { (bits >> (8 * at)) as u8 } else { 0 }).collect::<Vec<_>>();
+    let little = |bits: u128, count: usize| {
+        (0..size).map(|at| if at < count.min(16) { (bits >> (8 * at)) as u8 } else { 0 }).collect::<Vec<_>>()
+    };
     match &one.kind {
         ConstantKind::Zero => Some(vec![0; size]),
         ConstantKind::Int(bits) => Some(little(*bits, size)),
@@ -1133,14 +1412,20 @@ pub struct Addr {
 }
 
 impl Addr {
-    pub fn plus(self, bytes: i64) -> Self {
+    pub fn plus(
+        self,
+        bytes: i64,
+    ) -> Self {
         Self { disp: self.disp + bytes, ..self }
     }
 }
 
 /// `value` as a two's-complement number `bits` wide: pointer arithmetic
 /// wraps at the index width.
-pub fn wrapped(value: i128, bits: u32) -> i64 {
+pub fn wrapped(
+    value: i128,
+    bits: u32,
+) -> i64 {
     signed(value as u128 & llrm_mir::context::mask(bits), bits) as i64
 }
 
@@ -1152,7 +1437,10 @@ enum Step {
 }
 
 /// What computed `pointer` from another, if anything did.
-fn step(unit: &Unit, pointer: Operand) -> Option<Step> {
+fn step(
+    unit: &Unit,
+    pointer: Operand,
+) -> Option<Step> {
     let types = &unit.context.types;
     let through = |from: Operand| {
         // A segment's cast to a far pointer is `segment:0`, a new root.
@@ -1164,7 +1452,10 @@ fn step(unit: &Unit, pointer: Operand) -> Option<Step> {
             match &instruction.opcode {
                 Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => through(instruction.operands[0]),
                 Opcode::GetElementPtr { source } => {
-                    let indices = instruction.operands[1..].iter().map(|&one| unit.int_constant(one).map(|bits| bits_signed(unit, one, bits))).collect::<Vec<_>>();
+                    let indices = instruction.operands[1..]
+                        .iter()
+                        .map(|&one| unit.int_constant(one).map(|bits| bits_signed(unit, one, bits)))
+                        .collect::<Vec<_>>();
                     let (constant, variable) = unit.layout.collect_offset(types, *source, &indices);
                     let variable = match variable.as_slice() {
                         [] => None,
@@ -1174,23 +1465,38 @@ fn step(unit: &Unit, pointer: Operand) -> Option<Step> {
                         },
                         _ => return None,
                     };
-                    Some(Step::Offset { pointer: instruction.operands[0], constant, variable, inbounds: instruction.flags.contains(Flags::INBOUNDS) })
+                    Some(Step::Offset {
+                        pointer: instruction.operands[0],
+                        constant,
+                        variable,
+                        inbounds: instruction.flags.contains(Flags::INBOUNDS),
+                    })
                 }
                 _ => None,
             }
         }
         Operand::Constant(id) => match &unit.context.get(id).kind {
-            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value }) => through(Operand::Constant(*value)),
+            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value }) => {
+                through(Operand::Constant(*value))
+            }
             ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, operands }) => {
                 let indices = operands[1..]
                     .iter()
-                    .map(|&one| unit.int_constant(Operand::Constant(one)).map(|bits| bits_signed(unit, Operand::Constant(one), bits)))
+                    .map(|&one| {
+                        unit.int_constant(Operand::Constant(one))
+                            .map(|bits| bits_signed(unit, Operand::Constant(one), bits))
+                    })
                     .collect::<Vec<_>>();
                 if indices.iter().any(Option::is_none) {
                     return None;
                 }
                 let (constant, _) = unit.layout.collect_offset(types, *source, &indices);
-                Some(Step::Offset { pointer: Operand::Constant(operands[0]), constant, variable: None, inbounds: *inbounds })
+                Some(Step::Offset {
+                    pointer: Operand::Constant(operands[0]),
+                    constant,
+                    variable: None,
+                    inbounds: *inbounds,
+                })
             }
             _ => None,
         },
@@ -1198,13 +1504,20 @@ fn step(unit: &Unit, pointer: Operand) -> Option<Step> {
     }
 }
 
-fn bits_signed(unit: &Unit, operand: Operand, bits: u128) -> i128 {
+fn bits_signed(
+    unit: &Unit,
+    operand: Operand,
+    bits: u128,
+) -> i128 {
     signed(bits, unit.int_bits(operand).unwrap_or(128))
 }
 
 /// The selector `root` is `segment:0` of: the integer an `inttoptr` made
 /// the segment from, or the segment itself.
-fn segment(unit: &Unit, root: Operand) -> Option<Operand> {
+fn segment(
+    unit: &Unit,
+    root: Operand,
+) -> Option<Operand> {
     let (_, instruction) = unit.defining(root)?;
     if !matches!(instruction.opcode, Opcode::Cast(CastOp::AddrSpaceCast)) {
         return None;
@@ -1221,7 +1534,10 @@ fn segment(unit: &Unit, root: Operand) -> Option<Operand> {
 
 /// The selector and offset of a pair pointer `root` an integer constant
 /// makes: a pair's integer form is its selector word, then its offset word.
-fn pair_constant(unit: &Unit, root: Operand) -> Option<(i64, i64)> {
+fn pair_constant(
+    unit: &Unit,
+    root: Operand,
+) -> Option<(i64, i64)> {
     let space = unit.space(root)?;
     if !unit.layout.is_pair(space) {
         return None;
@@ -1244,7 +1560,10 @@ fn pair_constant(unit: &Unit, root: Operand) -> Option<(i64, i64)> {
 }
 
 /// The name of the `!tbaa` access type `inst` carries.
-pub fn typed(unit: &Unit, inst: InstId) -> Option<std::rc::Rc<str>> {
+pub fn typed(
+    unit: &Unit,
+    inst: InstId,
+) -> Option<std::rc::Rc<str>> {
     let (_, tag) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa")?;
     if let Some(tree) = unit.tbaa {
         // A type's name read through the tree is the type node's first operand, which is the name below.
@@ -1260,8 +1579,13 @@ pub fn typed(unit: &Unit, inst: InstId) -> Option<std::rc::Rc<str>> {
 /// The names of the ancestors of the `!tbaa` access type `inst` carries,
 /// nearest first, the root last: the module's type tree where the unit holds
 /// it, else built here from the metadata.
-pub fn lineage(unit: &Unit, inst: InstId) -> std::rc::Rc<[String]> {
-    let Some((_, tag)) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa") else { return no_lineage() };
+pub fn lineage(
+    unit: &Unit,
+    inst: InstId,
+) -> std::rc::Rc<[String]> {
+    let Some((_, tag)) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa") else {
+        return no_lineage();
+    };
     match unit.tbaa {
         Some(tree) => tree.shared_of_tag(unit.metadata, *tag),
         None => std::rc::Rc::from(llrm_mir::tbaa::Tbaa::chain(unit.metadata, *tag)),
@@ -1292,7 +1616,10 @@ pub fn own_bytes(opcode: &Opcode) -> Option<llrm_mir::memory::Effects> {
 /// effects.rs's `unmodeled_write`. A call writes what its callee may, as
 /// its attributes and the callee's state it; a load or store only what
 /// it addresses (`own_bytes`).
-pub fn unmodeled_write(unit: &Unit, inst: InstId) -> bool {
+pub fn unmodeled_write(
+    unit: &Unit,
+    inst: InstId,
+) -> bool {
     let instruction = unit.function.instruction(inst);
     if own_bytes(&instruction.opcode).is_some() {
         return false;
@@ -1306,7 +1633,8 @@ pub fn unmodeled_write(unit: &Unit, inst: InstId) -> bool {
                 },
                 _ => None,
             });
-            llrm_mir::memory::stated(&info.attrs).writes && callee.is_none_or(|callee| llrm_mir::memory::stated(&callee.attrs).writes)
+            llrm_mir::memory::stated(&info.attrs).writes
+                && callee.is_none_or(|callee| llrm_mir::memory::stated(&callee.attrs).writes)
         }
         _ => false,
     }
@@ -1316,9 +1644,10 @@ pub fn unmodeled_write(unit: &Unit, inst: InstId) -> bool {
 mod tests {
     use std::collections::BTreeSet;
 
+    use llrm_mir::module::Operand;
+
     use super::{Identity, MemRef, MemoryKind, MemoryObject, Provenance, Slice, SliceError, Unit};
     use crate::testing::{DOS, function, layout, parsed, value};
-    use llrm_mir::module::Operand;
 
     fn object(kind: MemoryKind) -> MemoryObject {
         MemoryObject::new(kind)
@@ -1338,13 +1667,22 @@ mod tests {
         assert!(Unit::of(&module, &layout, f).with_spaces(dos).spaces().is_fixed(4));
     }
 
-    /// A set of slices compared the objects' identities (strings, tuples) tree against tree at every step of every insert, and
-    /// cloned them: `BTreeSet<Slice>` was 10% of host.c's compile, `MemoryObject::cmp` 8%, malloc 10%. An object is a number
-    /// once interned: building, probing and cloning sets of slices compares none structurally.
+    /// A set of slices compared the objects' identities (strings, tuples) tree against tree at every step of every
+    /// insert, and cloned them: `BTreeSet<Slice>` was 10% of host.c's compile, `MemoryObject::cmp` 8%, malloc 10%.
+    /// An object is a number once interned: building, probing and cloning sets of slices compares none
+    /// structurally.
     #[test]
     fn a_set_of_slices_compares_no_object_structurally() {
         let slices: Vec<Slice> = (0..200)
-            .map(|index| Slice::whole(MemoryObject { identity: Some(Identity::Tuple(vec![Identity::Str(format!("object{index}")), Identity::Int(index)])), ..object(MemoryKind::Global) }))
+            .map(|index| {
+                Slice::whole(MemoryObject {
+                    identity: Some(Identity::Tuple(vec![
+                        Identity::Str(format!("object{index}")),
+                        Identity::Int(index),
+                    ])),
+                    ..object(MemoryKind::Global)
+                })
+            })
             .collect();
         let before = super::OBJECT_COMPARES.with(std::cell::Cell::get);
         let set: BTreeSet<Slice> = slices.iter().copied().collect();
@@ -1355,8 +1693,8 @@ mod tests {
         assert_eq!(super::OBJECT_COMPARES.with(std::cell::Cell::get) - before, 0, "objects compared tree against tree");
     }
 
-    /// Two spellings of an object that differ in a fact are two objects here, and one spelling is one object however often it
-    /// is interned.
+    /// Two spellings of an object that differ in a fact are two objects here, and one spelling is one object however
+    /// often it is interned.
     #[test]
     fn an_object_is_interned_by_every_field_once() {
         let global = MemoryObject { identity: Some(Identity::Global(9)), ..object(MemoryKind::Global) };
@@ -1367,14 +1705,16 @@ mod tests {
         assert_ne!(one, private);
     }
 
-    /// A process-wide interner numbered objects by everything interned before them in the process: a test thread, a compile
-    /// before this one, the LSP server's last hour. A module's ids are the module's: the same objects asked in the same order
-    /// get the same ids whichever module was done first.
+    /// A process-wide interner numbered objects by everything interned before them in the process: a test thread, a
+    /// compile before this one, the LSP server's last hour. A module's ids are the module's: the same objects asked
+    /// in the same order get the same ids whichever module was done first.
     #[test]
     fn the_ids_of_a_module_do_not_depend_on_another_module_interned_before() {
         use llrm_mir::context::Context;
         let global = |number| MemoryObject { identity: Some(Identity::Global(number)), ..object(MemoryKind::Global) };
-        let ids = |context: &Context, numbers: &[u32]| -> Vec<u32> { numbers.iter().map(|&number| super::ObjectInterner::of(context).intern(global(number)).id()).collect() };
+        let ids = |context: &Context, numbers: &[u32]| -> Vec<u32> {
+            numbers.iter().map(|&number| super::ObjectInterner::of(context).intern(global(number)).id()).collect()
+        };
         let (first, second) = (Context::new(), Context::new());
         let (a, b) = (ids(&first, &[7, 8]), ids(&second, &[8, 7]));
         let (other_second, other_first) = (Context::new(), Context::new());
@@ -1383,8 +1723,8 @@ mod tests {
         assert_eq!(ids(&Context::new(), &[7]), [3], "dense from the objects every module starts with");
     }
 
-    /// The interner lives in the module's context and dies with it: a server compiling a file again and again held every
-    /// object of every compile before.
+    /// The interner lives in the module's context and dies with it: a server compiling a file again and again held
+    /// every object of every compile before.
     #[test]
     fn the_interner_is_dropped_with_its_module() {
         use llrm_mir::context::Context;
@@ -1412,7 +1752,8 @@ mod tests {
             generation: 0,
             extent: Some(8),
             addressed: true,
-            captured: true, constant: false,
+            captured: true,
+            constant: false,
         };
         let second = MemoryObject { identity: Some(Identity::Value(2)), ..first.clone() };
         let a = Provenance::one_with_slice(first.clone(), 0, 4, 1, 1, BTreeSet::new()).unwrap();
@@ -1421,13 +1762,15 @@ mod tests {
 
         assert!(!a.intersects(&b));
         assert!(!a.intersects(&c));
-        let same = Provenance::one_with_slice(a.slices.first().unwrap().object.clone(), 0, 2, 1, 1, BTreeSet::new()).unwrap();
+        let same =
+            Provenance::one_with_slice(a.slices.first().unwrap().object.clone(), 0, 2, 1, 1, BTreeSet::new()).unwrap();
         assert!(a.intersects(&same));
     }
 
     #[test]
     fn provenance_strided_ranges_prove_interleaved_arrays_disjoint() {
-        let object = MemoryObject { identity: Some(Identity::Global(4)), extent: Some(64), ..object(MemoryKind::Global) };
+        let object =
+            MemoryObject { identity: Some(Identity::Global(4)), extent: Some(64), ..object(MemoryKind::Global) };
         let even = Provenance::one_with_slice(object.clone(), 0, 64, 2, 1, BTreeSet::new()).unwrap();
         let odd = Provenance::one_with_slice(object, 1, 64, 2, 1, BTreeSet::new()).unwrap();
 
@@ -1453,7 +1796,10 @@ mod tests {
         }
 
         let bytes_of = |one: &Slice| {
-            (one.low..one.high).step_by(one.stride as usize).flat_map(|start| (0..one.width).map(move |lane| start + lane)).collect::<BTreeSet<_>>()
+            (one.low..one.high)
+                .step_by(one.stride as usize)
+                .flat_map(|start| (0..one.width).map(move |lane| start + lane))
+                .collect::<BTreeSet<_>>()
         };
         for one in &slices {
             let one_bytes = bytes_of(one);
@@ -1467,8 +1813,24 @@ mod tests {
     #[test]
     fn provenance_restrict_roots_prove_disjoint() {
         let unknown = object(MemoryKind::Unknown);
-        let left = Provenance::one_with_slice(unknown.clone(), super::WHOLE_LOW, super::WHOLE_HIGH, 1, 1, BTreeSet::from([Identity::Int(1)])).unwrap();
-        let right = Provenance::one_with_slice(unknown, super::WHOLE_LOW, super::WHOLE_HIGH, 1, 1, BTreeSet::from([Identity::Int(2)])).unwrap();
+        let left = Provenance::one_with_slice(
+            unknown.clone(),
+            super::WHOLE_LOW,
+            super::WHOLE_HIGH,
+            1,
+            1,
+            BTreeSet::from([Identity::Int(1)]),
+        )
+        .unwrap();
+        let right = Provenance::one_with_slice(
+            unknown,
+            super::WHOLE_LOW,
+            super::WHOLE_HIGH,
+            1,
+            1,
+            BTreeSet::from([Identity::Int(2)]),
+        )
+        .unwrap();
 
         assert!(!left.intersects(&right));
     }
@@ -1534,7 +1896,10 @@ b0:
         let loads = f.walk().map(|(_, inst)| inst).filter_map(|inst| MemRef::of(&unit, inst)).collect::<Vec<_>>();
 
         let far = &loads[0];
-        assert_eq!((far.root, far.disp, far.base, far.scale), (Some(Operand::Value(value(f, "far"))), -2, Some(value(f, "i")), 2));
+        assert_eq!(
+            (far.root, far.disp, far.base, far.scale),
+            (Some(Operand::Value(value(f, "far"))), -2, Some(value(f, "i")), 2)
+        );
         assert_eq!(far.segment, Some(Operand::Value(value(f, "sel"))));
         assert!(!far.object && far.inbounds && far.addr().is_none());
         let fixed = &loads[1];

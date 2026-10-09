@@ -14,7 +14,6 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use iced_x86::Register;
-use crate::support::hash::IndexMap;
 
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::peephole::{_lanes, _register_effects, Lanes};
@@ -22,16 +21,10 @@ use crate::backend::select;
 use crate::model::ir::{Imm, Loc, Operation, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
+use crate::support::hash::IndexMap;
 
-const _GENERAL: [Register; 7] = [
-    Register::EAX,
-    Register::EBX,
-    Register::ECX,
-    Register::EDX,
-    Register::ESI,
-    Register::EDI,
-    Register::EBP,
-];
+const _GENERAL: [Register; 7] =
+    [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI, Register::EBP];
 
 /// Hide measured dependency latency where the complete hardware state is known.
 pub struct Scheduler {
@@ -53,7 +46,10 @@ impl LIRTransform for Scheduler {
         "schedule"
     }
 
-    fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
         scheduled(&body, &self.cpu)
     }
 }
@@ -64,7 +60,10 @@ impl LIRTransform for Scheduler {
 /// x87, and source-map-sensitive allocator artifacts are boundaries.  This
 /// is a proof boundary, not a list of currently inconvenient cases: every
 /// form left inside has only GPR/flag state represented by `_effects`.
-pub fn _safe(bits: u32, one: &Insn) -> Option<(Lanes, Lanes)> {
+pub fn _safe(
+    bits: u32,
+    one: &Insn,
+) -> Option<(Lanes, Lanes)> {
     let what = one.what.as_ref()?;
     if ![
         Operation::Move,
@@ -113,19 +112,14 @@ pub fn _safe(bits: u32, one: &Insn) -> Option<(Lanes, Lanes)> {
         })
         .collect();
     if what.op == Operation::Address {
-        let Loc::Address(address) = &what.sources[0] else {
-            unreachable!("checked above")
-        };
+        let Loc::Address(address) = &what.sources[0] else { unreachable!("checked above") };
         registers.extend([address.through, address.index].into_iter().filter(|register| *register != Register::None));
     }
     if registers.iter().any(|register| !_GENERAL.contains(&register.full_register32())) {
         return None;
     }
     let (reads, writes) = _register_effects(bits, one, false, true)?;
-    if reads
-        .union(&writes)
-        .any(|lane| lane.0 != Register::None && !_lanes(lane.0).contains(lane))
-    {
+    if reads.union(&writes).any(|lane| lane.0 != Register::None && !_lanes(lane.0).contains(lane)) {
         return None;
     }
     Some((reads, writes))
@@ -140,11 +134,17 @@ pub fn _form(one: &Insn) -> &'static str {
     }
     if name == Some("imul") {
         // `_safe` admits only Reg and Imm operands here.
-        let wide = what.dests.iter().chain(&what.sources).any(|r#where| match r#where {
-            Loc::Reg(reg) => reg.width == 4,
-            Loc::Imm(imm) => imm.width == 4,
-            _ => false,
-        });
+        let wide = what
+            .dests
+            .iter()
+            .chain(&what.sources)
+            .any(
+                |r#where| match r#where {
+                    Loc::Reg(reg) => reg.width == 4,
+                    Loc::Imm(imm) => imm.width == 4,
+                    _ => false,
+                },
+            );
         return if wide { "imul_r32" } else { "mul_r16" };
     }
     if matches!(name, Some("mov" | "movsx" | "movzx")) {
@@ -155,7 +155,10 @@ pub fn _form(one: &Insn) -> &'static str {
     }
     if matches!(name, Some("shl" | "sal" | "shr" | "sar" | "rol" | "ror"))
         && matches!(what.dests.as_slice(), [Loc::Reg(_)])
-        && matches!(what.sources.as_slice(), [_, Loc::Imm(Imm { value: 1, address: None, .. })])
+        && matches!(
+            what.sources.as_slice(),
+            [_, Loc::Imm(Imm { value: 1, address: None, .. })]
+        )
     {
         return "shift_r1";
     }
@@ -171,7 +174,10 @@ pub fn _form(one: &Insn) -> &'static str {
     "unknown"
 }
 
-pub fn _latency(one: &Insn, cpu: &Profile) -> i64 {
+pub fn _latency(
+    one: &Insn,
+    cpu: &Profile,
+) -> i64 {
     let form = _form(one);
     match cpu.latency(form) {
         Ok(latency) => 1.max(latency),
@@ -185,7 +191,12 @@ pub fn _latency(one: &Insn, cpu: &Profile) -> i64 {
 /// the later 32-bit read does not need the old upper bytes and has no merge
 /// dependency.  The narrow operand check is intentionally syntactic: this
 /// post-allocation phase knows exact physical roots, not source values.
-pub fn _partial_merge_delay(window: &[Arc<Insn>], producer: usize, consumer: usize, cpu: &Profile) -> i64 {
+pub fn _partial_merge_delay(
+    window: &[Arc<Insn>],
+    producer: usize,
+    consumer: usize,
+    cpu: &Profile,
+) -> i64 {
     if cpu.partial_register_stall == 0 {
         return 0;
     }
@@ -217,7 +228,10 @@ pub fn _partial_merge_delay(window: &[Arc<Insn>], producer: usize, consumer: usi
     for crossed in &window[producer + 1..consumer] {
         if let Some(what) = &crossed.what {
             if what.dests.iter().any(|r#where| {
-                matches!(r#where, Loc::Reg(reg) if reg.width == 4 && wide.contains(&reg.register.full_register32()))
+                matches!(
+                    r#where,
+                    Loc::Reg(reg) if reg.width == 4 && wide.contains(&reg.register.full_register32())
+                )
             }) {
                 return 0;
             }
@@ -229,7 +243,10 @@ pub fn _partial_merge_delay(window: &[Arc<Insn>], producer: usize, consumer: usi
 /// `_graph`'s result: each occurrence's lanes, then its `needs` and `users`.
 pub type Graph = (Vec<(Lanes, Lanes)>, Vec<BTreeSet<usize>>, Vec<BTreeSet<usize>>);
 
-pub fn _graph(bits: u32, window: &[Arc<Insn>]) -> Graph {
+pub fn _graph(
+    bits: u32,
+    window: &[Arc<Insn>],
+) -> Graph {
     let effects: Vec<(Lanes, Lanes)> =
         window.iter().map(|one| _safe(bits, one).expect("every window occurrence is safe")).collect();
     let mut needs: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); window.len()];
@@ -258,7 +275,10 @@ pub fn _graph(bits: u32, window: &[Arc<Insn>]) -> Graph {
 /// and multiply use neither pairing slot, and the remaining register ALU or
 /// move forms can issue in either pipe.  `_safe` has already ruled out memory
 /// and all forms whose category is not complete here.
-pub fn _pair_class(bits: u32, one: &Insn) -> &'static str {
+pub fn _pair_class(
+    bits: u32,
+    one: &Insn,
+) -> &'static str {
     let what = one.what.as_ref().expect("a safe form has semantics");
     let Some(encoded) = select::priced_in(bits, what, 0, None, false, false, None) else {
         return "np";
@@ -274,14 +294,21 @@ pub fn _pair_class(bits: u32, one: &Insn) -> &'static str {
     if what.name.as_deref() == Some("imul") || what.sources.iter().any(|r#where| matches!(r#where, Loc::Imm(_))) {
         return "np";
     }
-    if matches!(what.name.as_deref(), Some("shl" | "shr" | "sar" | "rol" | "ror")) {
+    if matches!(
+        what.name.as_deref(),
+        Some("shl" | "shr" | "sar" | "rol" | "ror")
+    ) {
         return "u";
     }
     "uv"
 }
 
 /// Issue independent audited U/V pairs in an in-order Pentium listing.
-pub fn _pentium_ordered(bits: u32, window: &[Arc<Insn>], cpu: &Profile) -> Vec<Arc<Insn>> {
+pub fn _pentium_ordered(
+    bits: u32,
+    window: &[Arc<Insn>],
+    cpu: &Profile,
+) -> Vec<Arc<Insn>> {
     let (_effects, mut needs, users) = _graph(bits, window);
     let mut ready_at = vec![0_i64; window.len()];
     let mut left: BTreeSet<usize> = (0..window.len()).collect();
@@ -299,7 +326,8 @@ pub fn _pentium_ordered(bits: u32, window: &[Arc<Insn>], cpu: &Profile) -> Vec<A
                 .expect("min() arg is an empty sequence");
             continue;
         }
-        let classes: IndexMap<usize, &str> = ready.iter().map(|index| (*index, _pair_class(bits, &window[*index]))).collect();
+        let classes: IndexMap<usize, &str> =
+            ready.iter().map(|index| (*index, _pair_class(bits, &window[*index]))).collect();
         // A U-only form can pair only as the first instruction, while an
         // ordinary form can be placed in U or V.  Prefer a candidate that
         // actually makes a pair; otherwise preserve source order.
@@ -311,10 +339,8 @@ pub fn _pentium_ordered(bits: u32, window: &[Arc<Insn>], cpu: &Profile) -> Vec<A
                     && ready.iter().any(|other| other != index && classes[other] == "uv")
             })
             .collect();
-        let first = *if pair_starters.is_empty() { &ready } else { &pair_starters }
-            .iter()
-            .min()
-            .expect("ready is not empty");
+        let first =
+            *if pair_starters.is_empty() { &ready } else { &pair_starters }.iter().min().expect("ready is not empty");
         emitted.push(Arc::clone(&window[first]));
         left.remove(&first);
         let done = clock + _latency(&window[first], cpu);
@@ -344,7 +370,11 @@ pub fn _pentium_ordered(bits: u32, window: &[Arc<Insn>], cpu: &Profile) -> Vec<A
 }
 
 /// List-schedule one side-effect-free window by lanes and measured latency.
-pub fn _ordered(bits: u32, window: &[Arc<Insn>], cpu: &Profile) -> Vec<Arc<Insn>> {
+pub fn _ordered(
+    bits: u32,
+    window: &[Arc<Insn>],
+    cpu: &Profile,
+) -> Vec<Arc<Insn>> {
     let (_effects, mut needs, users) = _graph(bits, window);
     let mut ready_at = vec![0_i64; window.len()];
     let mut left: BTreeSet<usize> = (0..window.len()).collect();
@@ -387,7 +417,10 @@ pub fn _ordered(bits: u32, window: &[Arc<Insn>], cpu: &Profile) -> Vec<Arc<Insn>
 ///
 /// Python returns `body` itself when nothing moved; here that is a clone
 /// sharing every `Arc<Insn>`.
-pub fn scheduled<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Result<LirBody, String> {
+pub fn scheduled<'a>(
+    body: &LirBody,
+    cpu: impl Into<ProfileOrName<'a>>,
+) -> Result<LirBody, String> {
     let target = targets::profile(cpu)?;
     // 386/486 are in-order.  P5's U/V pairing is its own audited profile
     // property rather than an inference from issue width.
@@ -402,8 +435,11 @@ pub fn scheduled<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Resul
 
         let flush = |window: &mut Vec<Arc<Insn>>, out: &mut Vec<Arc<Insn>>, changed: &mut bool| {
             if !window.is_empty() {
-                let ordered =
-                    if target.pentium_pairing { _pentium_ordered(body.bits, window, target) } else { _ordered(body.bits, window, target) };
+                let ordered = if target.pentium_pairing {
+                    _pentium_ordered(body.bits, window, target)
+                } else {
+                    _ordered(body.bits, window, target)
+                };
                 *changed |= ordered != *window;
                 out.extend(ordered);
                 window.clear();

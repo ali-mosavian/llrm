@@ -13,7 +13,10 @@ use crate::model::lir::{LirBlock, LirBody};
 pub struct Malformed(pub String);
 
 impl fmt::Display for Malformed {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
@@ -21,7 +24,10 @@ impl fmt::Display for Malformed {
 impl std::error::Error for Malformed {}
 
 /// Everything wrong with this body, as sentences. Empty is well formed.
-pub fn verify(body: &LirBody, in_ssa: bool) -> Vec<String> {
+pub fn verify(
+    body: &LirBody,
+    in_ssa: bool,
+) -> Vec<String> {
     let mut out = _blocks(body);
     out.extend(_spans(body));
     out.extend(_operands(body));
@@ -31,8 +37,8 @@ pub fn verify(body: &LirBody, in_ssa: bool) -> Vec<String> {
     out
 }
 
-/// Once instruction selection has tagged them, every frame cell names the slot it lies in: a phase that makes a cell from a
-/// displacement alone leaves the frame layout unable to move it.
+/// Once instruction selection has tagged them, every frame cell names the slot it lies in: a phase that makes a cell
+/// from a displacement alone leaves the frame layout unable to move it.
 fn _slots(body: &LirBody) -> Vec<String> {
     if !body.slotted {
         return Vec::new();
@@ -92,26 +98,29 @@ fn _ownership_only(block: &LirBlock) -> bool {
     if !block.succ.is_empty() || !block.phis.is_empty() || block.insns.is_empty() {
         return false;
     }
-    block.insns.iter().all(|one| {
-        one.what.as_ref().is_some_and(|what| {
-            what.op == Operation::Nothing
-                && what.name.as_deref().is_none_or(str::is_empty)
-                && what.dests.is_empty()
-                && what.sources.is_empty()
-                && what.target.is_none()
-        }) && one.defines.is_empty()
-            && one.uses.is_empty()
-            && one.clobbers.is_empty()
-            && one.clobbers_high.is_empty()
-            && one.group.is_none()
-            && one.requires.is_empty()
-            && one.delivers.is_empty()
-            && one.widths.is_empty()
-            && one.symbol != Some(true)
-            && !one.spill_reload
-            && !one.spill_store
-            && !one.frame_adjust
-    })
+    block
+        .insns
+        .iter()
+        .all(
+            |one| one.what.as_ref().is_some_and(|what| {
+                what.op == Operation::Nothing
+                    && what.name.as_deref().is_none_or(str::is_empty)
+                    && what.dests.is_empty()
+                    && what.sources.is_empty()
+                    && what.target.is_none()
+            }) && one.defines.is_empty()
+                && one.uses.is_empty()
+                && one.clobbers.is_empty()
+                && one.clobbers_high.is_empty()
+                && one.group.is_none()
+                && one.requires.is_empty()
+                && one.delivers.is_empty()
+                && one.widths.is_empty()
+                && one.symbol != Some(true)
+                && !one.spill_reload
+                && !one.spill_store
+                && !one.frame_adjust,
+        )
 }
 
 /// No two instructions claim the same original byte.
@@ -169,7 +178,10 @@ fn _operands(body: &LirBody) -> Vec<String> {
 }
 
 /// Every value is defined before it is read, and once if this is SSA.
-fn _values(body: &LirBody, in_ssa: bool) -> Vec<String> {
+fn _values(
+    body: &LirBody,
+    in_ssa: bool,
+) -> Vec<String> {
     let mut out = vec![];
     let mut written: BTreeMap<u32, usize> = BTreeMap::new();
     for block in &body.blocks {
@@ -190,8 +202,12 @@ fn _values(body: &LirBody, in_ssa: bool) -> Vec<String> {
         }
     }
     if !in_ssa && body.blocks.iter().any(|block| !block.phis.is_empty()) {
-        let stuck: Vec<String> =
-            body.blocks.iter().filter(|block| !block.phis.is_empty()).map(|block| format!("{:#06x}", block.at)).collect();
+        let stuck: Vec<String> = body
+            .blocks
+            .iter()
+            .filter(|block| !block.phis.is_empty())
+            .map(|block| format!("{:#06x}", block.at))
+            .collect();
         out.push(format!("a phi survives at {} after elimination", stuck.join(", ")));
     }
 
@@ -234,20 +250,30 @@ fn _values(body: &LirBody, in_ssa: bool) -> Vec<String> {
 mod tests {
     use std::sync::Arc;
 
-    use crate::support::hash::IndexMap;
-
     use super::*;
     use crate::model::lir::Insn;
+    use crate::support::hash::IndexMap;
 
-    fn held(value: u32, width: u32) -> Loc {
+    fn held(
+        value: u32,
+        width: u32,
+    ) -> Loc {
         Loc::Held(ir::Held { value, width })
     }
 
-    fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> ir::Semantics {
+    fn semantics(
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+    ) -> ir::Semantics {
         ir::Semantics { name: Some(name.into()), dests, sources, ..ir::Semantics::new(op) }
     }
 
-    fn body(name: &str, blocks: Vec<LirBlock>) -> LirBody {
+    fn body(
+        name: &str,
+        blocks: Vec<LirBlock>,
+    ) -> LirBody {
         LirBody::new(name, 1, blocks, IndexMap::default(), IndexMap::default())
     }
 
@@ -262,13 +288,21 @@ mod tests {
             vec![1],
         );
         let said = verify(&body("undefined", vec![LirBlock::new(1, vec![Arc::new(stale)])]), false);
-        assert!(said.iter().any(|complaint| complaint.contains("value#1 is read but never defined or supplied")), "{said:?}");
+        assert!(
+            said.iter().any(|complaint| complaint.contains("value#1 is read but never defined or supplied")),
+            "{said:?}"
+        );
     }
 
     #[test]
     fn test_an_explicit_body_input_satisfies_the_definition_rule() {
-        let incoming =
-            Insn::new(1, Some((1, 1)), Some(semantics(Operation::Push, "push", vec![], vec![held(1, 2)])), vec![], vec![1]);
+        let incoming = Insn::new(
+            1,
+            Some((1, 1)),
+            Some(semantics(Operation::Push, "push", vec![], vec![held(1, 2)])),
+            vec![],
+            vec![1],
+        );
         let mut body = body("input", vec![LirBlock::new(1, vec![Arc::new(incoming)])]);
         body.inputs = BTreeSet::from([1]);
         assert!(verify(&body, false).is_empty());
@@ -276,27 +310,34 @@ mod tests {
 
     #[test]
     fn test_unreachable_byte_ownership_markers_are_not_executable_blocks() {
-        let marker = Insn::new(2, Some((2, 4)), Some(semantics(Operation::Nothing, "", vec![], vec![])), vec![], vec![]);
-        let body =
-            body("dead-ownership", vec![LirBlock::new(1, vec![]), LirBlock::new(2, vec![Arc::new(marker)])]);
+        let marker =
+            Insn::new(2, Some((2, 4)), Some(semantics(Operation::Nothing, "", vec![], vec![])), vec![], vec![]);
+        let body = body("dead-ownership", vec![LirBlock::new(1, vec![]), LirBlock::new(2, vec![Arc::new(marker)])]);
         assert!(verify(&body, false).is_empty());
     }
 
     #[test]
     fn test_unreachable_executable_work_is_still_malformed() {
-        let push = semantics(Operation::Push, "push", vec![], vec![Loc::Imm(ir::Imm { value: 1, width: 2, address: None })]);
+        let push =
+            semantics(Operation::Push, "push", vec![], vec![Loc::Imm(ir::Imm { value: 1, width: 2, address: None })]);
         let work = Insn::new(2, Some((2, 4)), Some(push), vec![], vec![]);
         let body = body("dead-work", vec![LirBlock::new(1, vec![]), LirBlock::new(2, vec![Arc::new(work)])]);
         assert!(verify(&body, false).iter().any(|complaint| complaint.contains("block 0x0002 is not reachable")));
     }
 
-    /// A phase that made a frame cell from a displacement alone left the frame layout unable to move it: a `slotted` body is
-    /// refused one, and a cell of another space (a global whose `index` is a symbol's) is not a frame cell.
+    /// A phase that made a frame cell from a displacement alone left the frame layout unable to move it: a `slotted`
+    /// body is refused one, and a cell of another space (a global whose `index` is a symbol's) is not a frame cell.
     #[test]
     fn test_a_slotted_body_refuses_a_frame_cell_that_names_no_slot() {
-        let cell = |addr: ir::Addr| Loc::Mem(ir::Mem { through: iced_x86::Register::BP, ..ir::Mem::new(Some(addr), 2) });
+        let cell =
+            |addr: ir::Addr| Loc::Mem(ir::Mem { through: iced_x86::Register::BP, ..ir::Mem::new(Some(addr), 2) });
         let store = |addr| {
-            let what = semantics(Operation::Move, "mov", vec![cell(addr)], vec![Loc::Imm(ir::Imm { value: 1, width: 2, address: None })]);
+            let what = semantics(
+                Operation::Move,
+                "mov",
+                vec![cell(addr)],
+                vec![Loc::Imm(ir::Imm { value: 1, width: 2, address: None })],
+            );
             Insn::new(2, Some((2, 4)), Some(what), vec![], vec![])
         };
         let named = |addr: ir::Addr, slotted: bool| {

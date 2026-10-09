@@ -23,7 +23,10 @@ pub const ARRAY_ORDERS: [&str; 2] = ["column-major", "row-major"];
 pub struct FrontendError(pub String);
 
 impl fmt::Display for FrontendError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
@@ -65,7 +68,10 @@ pub struct Frontend {
 
 impl Frontend {
     /// `dialect` on `runtime`, column-major, every switch off.
-    pub fn new(dialect: &str, runtime: &str) -> Self {
+    pub fn new(
+        dialect: &str,
+        runtime: &str,
+    ) -> Self {
         Self {
             dialect: dialect.into(),
             runtime: runtime.into(),
@@ -88,7 +94,10 @@ impl Frontend {
     }
 }
 
-fn _options(source: &Path, frontend: &Frontend) -> Result<qbfront::driver::Args, FrontendError> {
+fn _options(
+    source: &Path,
+    frontend: &Frontend,
+) -> Result<qbfront::driver::Args, FrontendError> {
     let Frontend { dialect, runtime, array_order, .. } = frontend;
     if !DIALECTS.contains(&dialect.as_str()) {
         return Err(FrontendError(format!("unknown QB dialect '{dialect}'")));
@@ -99,7 +108,8 @@ fn _options(source: &Path, frontend: &Frontend) -> Result<qbfront::driver::Args,
     if !ARRAY_ORDERS.contains(&array_order.as_str()) {
         return Err(FrontendError(format!("unknown QB array order '{array_order}'")));
     }
-    let dialect = qbfront::Dialect::parse(dialect).ok_or_else(|| FrontendError(format!("unknown QB dialect '{dialect}'")))?;
+    let dialect =
+        qbfront::Dialect::parse(dialect).ok_or_else(|| FrontendError(format!("unknown QB dialect '{dialect}'")))?;
     Ok(qbfront::driver::Args {
         dialect,
         runtime: runtime.clone(),
@@ -136,11 +146,18 @@ fn _run(args: qbfront::driver::Args) -> Result<String, FrontendError> {
 }
 
 /// Run only source loading and parsing, independently of semantic HIR support.
-pub fn syntax_checked(source: &Path, frontend: &Frontend) -> Result<(), FrontendError> {
+pub fn syntax_checked(
+    source: &Path,
+    frontend: &Frontend,
+) -> Result<(), FrontendError> {
     _run(qbfront::driver::Args { syntax: true, .._options(source, frontend)? }).map(|_| ())
 }
 
-pub fn parsed(source: &Path, frontend: &Frontend, dump: Option<&Path>) -> Result<model::Program, FrontendError> {
+pub fn parsed(
+    source: &Path,
+    frontend: &Frontend,
+    dump: Option<&Path>,
+) -> Result<model::Program, FrontendError> {
     let stdout = _run(_options(source, frontend)?)?;
     if let Some(dump) = dump {
         if let Some(parent) = dump.parent() {
@@ -151,7 +168,10 @@ pub fn parsed(source: &Path, frontend: &Frontend, dump: Option<&Path>) -> Result
     let mut program = decoded(&stdout, frontend.checked_arrays)?;
     if frontend.checked_stack {
         let family = program.runtime.value();
-        program.stack_check = Some(llrm_core::abi::runtime::semantics::stack(family).ok_or_else(|| FrontendError(format!("the {family} runtime states no stack limit")))?);
+        program.stack_check = Some(
+            llrm_core::abi::runtime::semantics::stack(family)
+                .ok_or_else(|| FrontendError(format!("the {family} runtime states no stack limit")))?,
+        );
     }
     Ok(program)
 }
@@ -159,27 +179,40 @@ pub fn parsed(source: &Path, frontend: &Frontend, dump: Option<&Path>) -> Result
 /// The program qbfront's HIR text `text` states, with what the runtime
 /// adds: its entry, and what its routines promise. `checked` is the
 /// program's `-fsanitize=bounds`.
-pub fn decoded(text: &str, checked: bool) -> Result<model::Program, FrontendError> {
+pub fn decoded(
+    text: &str,
+    checked: bool,
+) -> Result<model::Program, FrontendError> {
     let mut program =
         codec::decode(text).map_err(|error| FrontendError(format!("qbfront produced invalid HIR: {error}")))?;
     let family = program.runtime.value();
     for object_ in program.modules.iter_mut().flat_map(|module| &mut module.data) {
-        if object_.linkage == model::DataLinkage::External && llrm_core::abi::runtime::named_only(&object_.name, family) {
+        if object_.linkage == model::DataLinkage::External && llrm_core::abi::runtime::named_only(&object_.name, family)
+        {
             object_.addressed = false;
         }
     }
     // The runtime enters a module at its body, through the module header.
     program.entries = vec!["__main".to_owned()];
     // Where the program handles errors, any routine may run its handler.
-    let handles = program.modules.iter().flat_map(|module| &module.functions).any(|function| function.error_handler.is_some());
+    let handles =
+        program.modules.iter().flat_map(|module| &module.functions).any(|function| function.error_handler.is_some());
     if !handles {
-        program.promises = model::RuntimePromises::of(llrm_core::abi::runtime::ENTERS_USER_CODE.iter().copied(), llrm_core::abi::runtime::writers(family), []);
+        program.promises = model::RuntimePromises::of(
+            llrm_core::abi::runtime::ENTERS_USER_CODE.iter().copied(),
+            llrm_core::abi::runtime::writers(family),
+            [],
+        );
     }
     // Where an error is handled the routine raises it, as the checks the frontend writes do.
     program.promises.checked = checked || handles;
     program.promises.descriptor = llrm_core::abi::runtime::semantics::descriptor(family);
     program.promises.routines = llrm_core::abi::runtime::semantics::routines();
-    program.promises.nounwind = llrm_core::abi::runtime::CONTRACTS.iter().filter(|(_, contract)| !contract.raises_error).map(|(name, _)| name.clone()).collect();
+    program.promises.nounwind = llrm_core::abi::runtime::CONTRACTS
+        .iter()
+        .filter(|(_, contract)| !contract.raises_error)
+        .map(|(name, _)| name.clone())
+        .collect();
     program.promises.no_retain = llrm_core::abi::runtime::captures_nothing().into_iter().map(str::to_owned).collect();
     program.promises.no_return = llrm_core::abi::runtime::never_returning().into_iter().map(str::to_owned).collect();
     Ok(program)

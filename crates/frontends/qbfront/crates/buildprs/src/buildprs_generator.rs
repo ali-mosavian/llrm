@@ -13,8 +13,7 @@ use crate::buildprs_graph::{NodeId, OptLevel, StateGraph};
 use crate::buildprs_integrate::integrate;
 use crate::buildprs_layout::sort_state_values;
 use crate::buildprs_lowering::{
-    lower_whole_grammar_with_shared_suffixes, qbasic_11_shared_suffix_registry, LoweringConfig,
-    LoweringSymbols,
+    lower_whole_grammar_with_shared_suffixes, qbasic_11_shared_suffix_registry, LoweringConfig, LoweringSymbols,
 };
 use crate::buildprs_tokens::{self, TokenArtifacts};
 
@@ -56,7 +55,10 @@ pub enum GenerateError {
 }
 
 impl std::fmt::Display for GenerateError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         match self {
             Self::ArtifactParse(message) => write!(f, "artifact parse error: {message}"),
             Self::MissingEquate(symbol) => write!(f, "missing required equate {symbol}"),
@@ -86,8 +88,7 @@ pub fn generate_tables_from_grammar(
     let config = lowering_config_for_grammar(grammar);
     let symbols = LoweringSymbols::from_qbasic_11_grammar(grammar, peropcod);
     let shared_suffixes = qbasic_11_shared_suffix_registry(grammar, &symbols, &config);
-    let lowered =
-        lower_whole_grammar_with_shared_suffixes(grammar, symbols, config, shared_suffixes);
+    let lowered = lower_whole_grammar_with_shared_suffixes(grammar, symbols, config, shared_suffixes);
 
     if lowered.report.unsupported_shapes.total_failures() != 0 {
         return Err(GenerateError::ArtifactParse(format!(
@@ -113,16 +114,8 @@ pub fn generate_tables_from_grammar(
         state: lowered.state,
         dispatch: GeneratedDispatchTables {
             int_nt_disp,
-            ext_nt_disp: dispatch_order
-                .external
-                .iter()
-                .map(|entry| entry.dispatch_symbol.clone())
-                .collect(),
-            ext_nt_help: dispatch_order
-                .external
-                .iter()
-                .map(|entry| entry.help_symbol.clone())
-                .collect(),
+            ext_nt_disp: dispatch_order.external.iter().map(|entry| entry.dispatch_symbol.clone()).collect(),
+            ext_nt_help: dispatch_order.external.iter().map(|entry| entry.help_symbol.clone()).collect(),
         },
         statement_offsets: lowered.statement_offsets,
         statement_offset_list: lowered.statement_offset_list,
@@ -211,34 +204,20 @@ pub fn generate_tables_from_graph(
     }
 
     sort_state_values(&mut graph);
-    let state =
-        out_state(&graph).map_err(|error| GenerateError::ArtifactParse(error.to_string()))?;
+    let state = out_state(&graph).map_err(|error| GenerateError::ArtifactParse(error.to_string()))?;
     let dispatch_order = derive_nonterminal_dispatch_order(grammar);
     let int_nt_disp = dispatch_order
         .internal
         .iter()
-        .map(|entry| {
-            internal_roots
-                .get(&entry.name)
-                .map(|root| graph.node(*root).sort_index as u16)
-                .unwrap_or(0)
-        })
+        .map(|entry| internal_roots.get(&entry.name).map(|root| graph.node(*root).sort_index as u16).unwrap_or(0))
         .collect();
 
     Ok(GeneratedParserTables {
         state,
         dispatch: GeneratedDispatchTables {
             int_nt_disp,
-            ext_nt_disp: dispatch_order
-                .external
-                .iter()
-                .map(|entry| entry.dispatch_symbol.clone())
-                .collect(),
-            ext_nt_help: dispatch_order
-                .external
-                .iter()
-                .map(|entry| entry.help_symbol.clone())
-                .collect(),
+            ext_nt_disp: dispatch_order.external.iter().map(|entry| entry.dispatch_symbol.clone()).collect(),
+            ext_nt_help: dispatch_order.external.iter().map(|entry| entry.help_symbol.clone()).collect(),
         },
         statement_offsets: BTreeMap::new(),
         statement_offset_list: Vec::new(),
@@ -255,19 +234,14 @@ fn lowering_config_for_grammar(grammar: &GrammarFile) -> LoweringConfig {
     }
 }
 
-fn statement_expr(
-    rule: &crate::buildprs_grammar::GrammarRule,
-) -> crate::buildprs_grammar::GrammarExpr {
+fn statement_expr(rule: &crate::buildprs_grammar::GrammarRule) -> crate::buildprs_grammar::GrammarExpr {
     normalize_grouped_alternative_tail(&rule.production.expr)
 }
 
 fn normalize_grouped_alternative_tail(expr: &GrammarExpr) -> GrammarExpr {
     match expr {
         GrammarExpr::Alternative(items) => {
-            let normalized_items = items
-                .iter()
-                .map(normalize_grouped_alternative_tail)
-                .collect::<Vec<_>>();
+            let normalized_items = items.iter().map(normalize_grouped_alternative_tail).collect::<Vec<_>>();
             if let Some((last, previous)) = normalized_items.split_last() {
                 if let GrammarExpr::Sequence(sequence) = last {
                     if let Some((GrammarExpr::Group(group), tail)) = sequence.split_first() {
@@ -284,29 +258,18 @@ fn normalize_grouped_alternative_tail(expr: &GrammarExpr) -> GrammarExpr {
             normalize_prefixed_alternative(normalized_items)
         }
         GrammarExpr::Sequence(items) => {
-            let normalized_items = items
-                .iter()
-                .map(normalize_grouped_alternative_tail)
-                .collect::<Vec<_>>();
+            let normalized_items = items.iter().map(normalize_grouped_alternative_tail).collect::<Vec<_>>();
             normalize_prefixed_alternative_sequence(normalized_items)
         }
-        GrammarExpr::Group(inner) => {
-            GrammarExpr::Group(Box::new(normalize_grouped_alternative_tail(inner)))
-        }
-        GrammarExpr::Optional(inner) => {
-            GrammarExpr::Optional(Box::new(normalize_grouped_alternative_tail(inner)))
-        }
-        GrammarExpr::Repeat(inner) => {
-            GrammarExpr::Repeat(Box::new(normalize_grouped_alternative_tail(inner)))
-        }
+        GrammarExpr::Group(inner) => GrammarExpr::Group(Box::new(normalize_grouped_alternative_tail(inner))),
+        GrammarExpr::Optional(inner) => GrammarExpr::Optional(Box::new(normalize_grouped_alternative_tail(inner))),
+        GrammarExpr::Repeat(inner) => GrammarExpr::Repeat(Box::new(normalize_grouped_alternative_tail(inner))),
         other => other.clone(),
     }
 }
 
 fn normalize_prefixed_alternative(alternatives: Vec<GrammarExpr>) -> GrammarExpr {
-    let Some((GrammarExpr::Sequence(first_sequence), other_alternatives)) =
-        alternatives.split_first()
-    else {
+    let Some((GrammarExpr::Sequence(first_sequence), other_alternatives)) = alternatives.split_first() else {
         return GrammarExpr::Alternative(alternatives);
     };
     let Some((prefix, first_tail)) = first_sequence.split_first() else {
@@ -335,9 +298,7 @@ fn normalize_prefixed_alternative_sequence(items: Vec<GrammarExpr>) -> GrammarEx
     let Some((GrammarExpr::Alternative(alternatives), tail)) = items.split_first() else {
         return GrammarExpr::Sequence(items);
     };
-    let Some((GrammarExpr::Sequence(first_sequence), other_alternatives)) =
-        alternatives.split_first()
-    else {
+    let Some((GrammarExpr::Sequence(first_sequence), other_alternatives)) = alternatives.split_first() else {
         return GrammarExpr::Sequence(items);
     };
     let Some((prefix, first_tail)) = first_sequence.split_first() else {
@@ -397,21 +358,9 @@ fn ungroup_expr(expr: &GrammarExpr) -> &GrammarExpr {
 
 fn dispatch_tables_from_order(order: &NonterminalDispatchOrder) -> GeneratedDispatchTables {
     GeneratedDispatchTables {
-        int_nt_disp: order
-            .internal
-            .iter()
-            .map(|entry| entry.state_offset.unwrap_or(0))
-            .collect(),
-        ext_nt_disp: order
-            .external
-            .iter()
-            .map(|entry| entry.dispatch_symbol.clone())
-            .collect(),
-        ext_nt_help: order
-            .external
-            .iter()
-            .map(|entry| entry.help_symbol.clone())
-            .collect(),
+        int_nt_disp: order.internal.iter().map(|entry| entry.state_offset.unwrap_or(0)).collect(),
+        ext_nt_disp: order.external.iter().map(|entry| entry.dispatch_symbol.clone()).collect(),
+        ext_nt_help: order.external.iter().map(|entry| entry.help_symbol.clone()).collect(),
     }
 }
 
@@ -424,11 +373,7 @@ fn token_artifacts_from_generated(artifacts: &TokenArtifacts) -> GeneratedTokenA
     GeneratedTokenArtifacts {
         irw_equates: artifacts.irw_ids.clone(),
         irw_to_char: artifacts.mp_irw_to_char.clone(),
-        irw_to_iop: artifacts
-            .mp_irw_to_iop
-            .iter()
-            .map(|value| iop_symbol_from_byte(*value))
-            .collect(),
+        irw_to_iop: artifacts.mp_irw_to_iop.iter().map(|value| iop_symbol_from_byte(*value)).collect(),
     }
 }
 
@@ -472,11 +417,7 @@ pub fn generate_tables_from_prsstate(
 
     Ok(GeneratedParserTables {
         state,
-        dispatch: GeneratedDispatchTables {
-            int_nt_disp,
-            ext_nt_disp,
-            ext_nt_help,
-        },
+        dispatch: GeneratedDispatchTables { int_nt_disp, ext_nt_disp, ext_nt_help },
         statement_offsets: BTreeMap::new(),
         statement_offset_list: Vec::new(),
         function_offsets: BTreeMap::new(),
@@ -484,12 +425,7 @@ pub fn generate_tables_from_prsstate(
 }
 
 pub fn parse_opcode_equates_from_peropcod(source: &str) -> BTreeMap<String, u16> {
-    source
-        .lines()
-        .filter_map(parse_opcode_line)
-        .enumerate()
-        .map(|(index, opcode)| (opcode, index as u16))
-        .collect()
+    source.lines().filter_map(parse_opcode_line).enumerate().map(|(index, opcode)| (opcode, index as u16)).collect()
 }
 
 fn parse_opcode_line(line: &str) -> Option<String> {
@@ -531,7 +467,10 @@ fn parse_db_dw_state_bytes(
     Ok(bytes)
 }
 
-fn parse_dw_numbers(text: &str, label: &str) -> Result<Vec<u16>, GenerateError> {
+fn parse_dw_numbers(
+    text: &str,
+    label: &str,
+) -> Result<Vec<u16>, GenerateError> {
     data_lines_in_section(text, label)
         .into_iter()
         .filter(|(directive, _)| directive == "dw")
@@ -540,7 +479,10 @@ fn parse_dw_numbers(text: &str, label: &str) -> Result<Vec<u16>, GenerateError> 
         .collect()
 }
 
-fn parse_dw_symbols(text: &str, label: &str) -> Result<Vec<String>, GenerateError> {
+fn parse_dw_symbols(
+    text: &str,
+    label: &str,
+) -> Result<Vec<String>, GenerateError> {
     data_lines_in_section(text, label)
         .into_iter()
         .filter(|(directive, _)| directive == "dw")
@@ -549,7 +491,10 @@ fn parse_dw_symbols(text: &str, label: &str) -> Result<Vec<String>, GenerateErro
         .collect()
 }
 
-fn data_lines_in_section(text: &str, label: &str) -> Vec<(String, Vec<String>)> {
+fn data_lines_in_section(
+    text: &str,
+    label: &str,
+) -> Vec<(String, Vec<String>)> {
     let mut in_section = false;
     let mut lines = Vec::new();
 
@@ -582,7 +527,10 @@ fn data_lines_in_section(text: &str, label: &str) -> Vec<(String, Vec<String>)> 
     lines
 }
 
-fn label_declares(line: &str, label: &str) -> bool {
+fn label_declares(
+    line: &str,
+    label: &str,
+) -> bool {
     let mut fields = line.split_whitespace();
     matches!(
         (fields.next(), fields.next()),
@@ -593,21 +541,18 @@ fn label_declares(line: &str, label: &str) -> bool {
 
 fn is_label_declaration(line: &str) -> bool {
     let mut fields = line.split_whitespace();
-    matches!(fields.nth(1), Some(keyword) if keyword.eq_ignore_ascii_case("label"))
+    matches!(
+        fields.nth(1),
+        Some(keyword) if keyword.eq_ignore_ascii_case("label")
+    )
 }
 
 fn split_data_items(data: &str) -> Vec<String> {
-    data.split(',')
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
+    data.split(',').map(str::trim).filter(|item| !item.is_empty()).map(ToOwned::to_owned).collect()
 }
 
 fn strip_comment(line: &str) -> &str {
-    line.split_once(';')
-        .map(|(source, _)| source)
-        .unwrap_or(line)
+    line.split_once(';').map(|(source, _)| source).unwrap_or(line)
 }
 
 fn parse_byte_operand(
@@ -618,9 +563,7 @@ fn parse_byte_operand(
     if value <= u8::MAX as u16 {
         Ok(value as u8)
     } else {
-        Err(GenerateError::ArtifactParse(format!(
-            "byte operand is out of range: {operand}"
-        )))
+        Err(GenerateError::ArtifactParse(format!("byte operand is out of range: {operand}")))
     }
 }
 
@@ -631,23 +574,16 @@ fn parse_word_operand(
     if let Some(value) = lookup_opcode_equate(opcode_equates, operand.trim()) {
         return Ok(*value);
     }
-    eval_word_expression(operand, opcode_equates).map_err(|error| {
-        GenerateError::ArtifactParse(format!("failed to evaluate `{operand}`: {error}"))
-    })
+    eval_word_expression(operand, opcode_equates)
+        .map_err(|error| GenerateError::ArtifactParse(format!("failed to evaluate `{operand}`: {error}")))
 }
 
 fn parse_word_literal(operand: &str) -> Result<u16, GenerateError> {
     let literal = operand.trim();
-    if let Some(stem) = literal
-        .strip_suffix('H')
-        .or_else(|| literal.strip_suffix('h'))
-    {
-        return u16::from_str_radix(stem, 16)
-            .map_err(|error| GenerateError::ArtifactParse(error.to_string()));
+    if let Some(stem) = literal.strip_suffix('H').or_else(|| literal.strip_suffix('h')) {
+        return u16::from_str_radix(stem, 16).map_err(|error| GenerateError::ArtifactParse(error.to_string()));
     }
-    literal
-        .parse::<u16>()
-        .map_err(|error| GenerateError::ArtifactParse(error.to_string()))
+    literal.parse::<u16>().map_err(|error| GenerateError::ArtifactParse(error.to_string()))
 }
 
 fn eval_word_expression(
@@ -658,9 +594,7 @@ fn eval_word_expression(
     if (0..=u16::MAX as i64).contains(&value) {
         Ok(value as u16)
     } else {
-        Err(GenerateError::ArtifactParse(format!(
-            "word expression is out of range: {expression}"
-        )))
+        Err(GenerateError::ArtifactParse(format!("word expression is out of range: {expression}")))
     }
 }
 
@@ -670,10 +604,7 @@ fn eval_sum(
 ) -> Result<i64, GenerateError> {
     let parts = split_top_level(expression, '+');
     if parts.len() > 1 {
-        return parts
-            .into_iter()
-            .map(|part| eval_product(part.trim(), opcode_equates))
-            .sum();
+        return parts.into_iter().map(|part| eval_product(part.trim(), opcode_equates)).sum();
     }
     eval_product(expression, opcode_equates)
 }
@@ -706,7 +637,10 @@ fn eval_factor(
     parse_word_literal(expression).map(i64::from)
 }
 
-fn known_word_symbol(symbol: &str, opcode_equates: &BTreeMap<String, u16>) -> Option<i64> {
+fn known_word_symbol(
+    symbol: &str,
+    opcode_equates: &BTreeMap<String, u16>,
+) -> Option<i64> {
     match symbol {
         _ if symbol.eq_ignore_ascii_case("OPCODE_MASK") => Some(0x03ff),
         _ if symbol.eq_ignore_ascii_case("UNDEFINED") => Some(0xffff),
@@ -717,9 +651,7 @@ fn known_word_symbol(symbol: &str, opcode_equates: &BTreeMap<String, u16>) -> Op
         _ if symbol.eq_ignore_ascii_case("ET_R8") => Some(4),
         _ if symbol.eq_ignore_ascii_case("ET_SD") => Some(5),
         _ if symbol.eq_ignore_ascii_case("ET_FS") => Some(6),
-        _ => lookup_opcode_equate(opcode_equates, symbol)
-            .copied()
-            .map(i64::from),
+        _ => lookup_opcode_equate(opcode_equates, symbol).copied().map(i64::from),
     }
 }
 
@@ -727,14 +659,15 @@ fn lookup_opcode_equate<'a>(
     opcode_equates: &'a BTreeMap<String, u16>,
     symbol: &str,
 ) -> Option<&'a u16> {
-    opcode_equates.get(symbol).or_else(|| {
-        opcode_equates
-            .iter()
-            .find_map(|(name, value)| name.eq_ignore_ascii_case(symbol).then_some(value))
-    })
+    opcode_equates
+        .get(symbol)
+        .or_else(|| opcode_equates.iter().find_map(|(name, value)| name.eq_ignore_ascii_case(symbol).then_some(value)))
 }
 
-fn split_top_level(expression: &str, separator: char) -> Vec<&str> {
+fn split_top_level(
+    expression: &str,
+    separator: char,
+) -> Vec<&str> {
     let mut depth = 0;
     let mut start = 0;
     let mut parts = Vec::new();
@@ -790,24 +723,18 @@ mod tests {
     }
 
     fn peropcod_source() -> String {
-        std::fs::read_to_string("../../grammar/peropcod.txt")
-            .expect("vendored peropcod.txt should read")
+        std::fs::read_to_string("../../grammar/peropcod.txt").expect("vendored peropcod.txt should read")
     }
 
     #[test]
     fn token_artifacts_match_irw_order_and_special_chars() {
         let tokens = parse_token_decls_file(grammar_path()).expect("qbasbnf tokens should parse");
         let generated = generate_token_artifacts_from_decls(&tokens);
-        let golden = parse_irw_equates(include_str!(
-            "../../../fixtures/buildprs/qbasic-1.1/prsirw.inc"
-        ))
-        .expect("golden prsirw should parse");
+        let golden = parse_irw_equates(include_str!("../../../fixtures/buildprs/qbasic-1.1/prsirw.inc"))
+            .expect("golden prsirw should parse");
 
         assert_eq!(generated.irw_equates.len(), 246);
-        assert_eq!(
-            generated.irw_equates["IRW_PRINT"],
-            golden["IRW_PRINT"] as u16
-        );
+        assert_eq!(generated.irw_equates["IRW_PRINT"], golden["IRW_PRINT"] as u16);
         assert_eq!(generated.irw_equates["IRW_NewLine"], 7);
         assert_eq!(generated.irw_to_char[0], b'%');
         assert_eq!(generated.irw_to_char[7], 0x0A);
@@ -817,11 +744,9 @@ mod tests {
     #[test]
     fn fixture_bridge_decodes_runtime_tables_from_prsstate() {
         let opcodes = parse_opcode_equates_from_peropcod(&peropcod_source());
-        let generated = generate_tables_from_prsstate(
-            include_str!("../../../fixtures/buildprs/qbasic-1.1/prsstate.asm"),
-            &opcodes,
-        )
-        .expect("prsstate bridge should decode");
+        let generated =
+            generate_tables_from_prsstate(include_str!("../../../fixtures/buildprs/qbasic-1.1/prsstate.asm"), &opcodes)
+                .expect("prsstate bridge should decode");
 
         assert_eq!(generated.state.len(), 2941);
         assert_eq!(generated.dispatch.int_nt_disp.len(), 29);
@@ -838,24 +763,16 @@ mod tests {
             &opcodes,
         )
         .expect("default-mode prsstate bridge should decode");
-        let optimized = generate_tables_from_prsstate(
-            include_str!("../../../fixtures/buildprs/qbasic-1.1/prsstate.asm"),
-            &opcodes,
-        )
-        .expect("optimized prsstate bridge should decode");
+        let optimized =
+            generate_tables_from_prsstate(include_str!("../../../fixtures/buildprs/qbasic-1.1/prsstate.asm"), &opcodes)
+                .expect("optimized prsstate bridge should decode");
 
         assert!(default_mode.state.len() > optimized.state.len());
         assert_eq!(default_mode.dispatch.int_nt_disp.len(), 29);
         assert_eq!(default_mode.dispatch.ext_nt_disp.len(), 49);
         assert_eq!(default_mode.dispatch.ext_nt_help.len(), 49);
-        assert_eq!(
-            default_mode.dispatch.ext_nt_disp,
-            optimized.dispatch.ext_nt_disp
-        );
-        assert_eq!(
-            default_mode.dispatch.ext_nt_help,
-            optimized.dispatch.ext_nt_help
-        );
+        assert_eq!(default_mode.dispatch.ext_nt_disp, optimized.dispatch.ext_nt_disp);
+        assert_eq!(default_mode.dispatch.ext_nt_help, optimized.dispatch.ext_nt_help);
     }
 
     #[test]
@@ -958,21 +875,16 @@ Second:
     fn graph_backend_o1_matches_qbasic_11_prsstate_fixture() {
         let grammar = parse_grammar_file(grammar_path()).expect("qbasbnf should parse");
         let opcodes = parse_opcode_equates_from_peropcod(&peropcod_source());
-        let golden = generate_tables_from_prsstate(
-            include_str!("../../../fixtures/buildprs/qbasic-1.1/prsstate.asm"),
-            &opcodes,
-        )
-        .expect("golden prsstate should decode");
+        let golden =
+            generate_tables_from_prsstate(include_str!("../../../fixtures/buildprs/qbasic-1.1/prsstate.asm"), &opcodes)
+                .expect("golden prsstate should decode");
 
         let generated = generate_tables_from_graph(&grammar, &peropcod_source(), OptLevel::O1)
             .expect("graph backend should generate full qbasbnf tables");
 
         assert_eq!(generated.dispatch.ext_nt_disp, golden.dispatch.ext_nt_disp);
         assert_eq!(generated.dispatch.ext_nt_help, golden.dispatch.ext_nt_help);
-        assert_eq!(
-            generated.dispatch.int_nt_disp.len(),
-            golden.dispatch.int_nt_disp.len()
-        );
+        assert_eq!(generated.dispatch.int_nt_disp.len(), golden.dispatch.int_nt_disp.len());
         assert_state_bytes_match(&generated.state, &golden.state);
         assert_eq!(generated.dispatch.int_nt_disp, golden.dispatch.int_nt_disp);
     }
@@ -983,8 +895,7 @@ Second:
         let grammar = parse_grammar_file(grammar_path()).expect("qbasbnf should parse");
         let opcodes = parse_opcode_equates_from_peropcod(&peropcod_source());
         let golden_source = include_str!("../../../fixtures/buildprs/qbasic-1.1/prsstate.asm");
-        let golden = generate_tables_from_prsstate(golden_source, &opcodes)
-            .expect("golden prsstate should decode");
+        let golden = generate_tables_from_prsstate(golden_source, &opcodes).expect("golden prsstate should decode");
         let generated = generate_tables_from_graph(&grammar, &peropcod_source(), OptLevel::O1)
             .expect("graph backend should generate full qbasbnf tables");
         let golden_dispatch = parse_golden_dispatch_tables(golden_source);
@@ -998,8 +909,7 @@ Second:
         let grammar = parse_grammar_file(grammar_path()).expect("qbasbnf should parse");
         let opcodes = parse_opcode_equates_from_peropcod(&peropcod_source());
         let golden_source = include_str!("../../../fixtures/buildprs/qbasic-1.1/prsstate.asm");
-        let golden = generate_tables_from_prsstate(golden_source, &opcodes)
-            .expect("golden prsstate should decode");
+        let golden = generate_tables_from_prsstate(golden_source, &opcodes).expect("golden prsstate should decode");
         let generated = generate_tables_from_graph(&grammar, &peropcod_source(), OptLevel::O2)
             .expect("graph backend should generate full qbasbnf tables");
         let golden_dispatch = parse_golden_dispatch_tables(golden_source);
@@ -1013,8 +923,8 @@ Second:
         let grammar = parse_grammar_file(grammar_path()).expect("qbasbnf should parse");
         let opcodes = parse_opcode_equates_from_peropcod(&peropcod_source());
         let golden_source = include_str!("../../../fixtures/buildprs/qbasic-1.1-o0/prsstate.asm");
-        let golden = generate_tables_from_prsstate(golden_source, &opcodes)
-            .expect("golden default-mode prsstate should decode");
+        let golden =
+            generate_tables_from_prsstate(golden_source, &opcodes).expect("golden default-mode prsstate should decode");
         let generated = generate_tables_from_graph(&grammar, &peropcod_source(), OptLevel::O0)
             .expect("graph backend should generate full qbasbnf tables");
         let golden_dispatch = parse_golden_dispatch_tables(golden_source);
@@ -1034,31 +944,17 @@ Second:
             golden.state.len(),
             generated.state.len() as isize - golden.state.len() as isize
         );
-        println!(
-            "external dispatch symbols match: {}",
-            generated.dispatch.ext_nt_disp == golden.dispatch.ext_nt_disp
-        );
-        println!(
-            "external help symbols match: {}",
-            generated.dispatch.ext_nt_help == golden.dispatch.ext_nt_help
-        );
+        println!("external dispatch symbols match: {}", generated.dispatch.ext_nt_disp == golden.dispatch.ext_nt_disp);
+        println!("external help symbols match: {}", generated.dispatch.ext_nt_help == golden.dispatch.ext_nt_help);
 
         println!("internal dispatch offset diffs:");
         let mut internal_offset_diff_count = 0;
-        for (index, (generated_offset, golden_offset)) in generated
-            .dispatch
-            .int_nt_disp
-            .iter()
-            .zip(&golden.dispatch.int_nt_disp)
-            .enumerate()
+        for (index, (generated_offset, golden_offset)) in
+            generated.dispatch.int_nt_disp.iter().zip(&golden.dispatch.int_nt_disp).enumerate()
         {
             if generated_offset != golden_offset {
                 internal_offset_diff_count += 1;
-                let name = golden_dispatch
-                    .internal_names
-                    .get(index)
-                    .map(String::as_str)
-                    .unwrap_or("<unknown>");
+                let name = golden_dispatch.internal_names.get(index).map(String::as_str).unwrap_or("<unknown>");
                 println!(
                     "  {index:02} {name}: generated={generated_offset}, golden={golden_offset}, delta={}",
                     i32::from(*generated_offset) - i32::from(*golden_offset)
@@ -1128,23 +1024,21 @@ Second:
         let cg_hints = grammar_cg_hint_inventory(&grammar);
         println!("cg_hint inventory (all currently ignored by graph backend):");
         println!("  unique hint kinds: {}", cg_hints.len());
-        println!(
-            "  productions with hints: {}",
-            cg_hints.iter().map(|(_, count)| count).sum::<usize>()
-        );
+        println!("  productions with hints: {}", cg_hints.iter().map(|(_, count)| count).sum::<usize>());
         for (hint, count) in cg_hints {
             println!("  {hint}: {count}");
         }
     }
 
-    fn assert_state_bytes_match(generated: &[u8], golden: &[u8]) {
+    fn assert_state_bytes_match(
+        generated: &[u8],
+        golden: &[u8],
+    ) {
         let first_diff = generated
             .iter()
             .zip(golden)
             .position(|(left, right)| left != right)
-            .or_else(|| {
-                (generated.len() != golden.len()).then_some(generated.len().min(golden.len()))
-            });
+            .or_else(|| (generated.len() != golden.len()).then_some(generated.len().min(golden.len())));
         assert!(
             first_diff.is_none(),
             "state bytes differ: generated_len={}, golden_len={}, first_diff={:?}, generated_window={:?}, golden_window={:?}",
@@ -1156,7 +1050,10 @@ Second:
         );
     }
 
-    fn byte_diff_ranges(generated: &[u8], golden: &[u8]) -> Vec<(usize, usize)> {
+    fn byte_diff_ranges(
+        generated: &[u8],
+        golden: &[u8],
+    ) -> Vec<(usize, usize)> {
         let mut ranges = Vec::new();
         let max_len = generated.len().max(golden.len());
         let mut index = 0;
@@ -1175,7 +1072,11 @@ Second:
         ranges
     }
 
-    fn diff_window(bytes: &[u8], start: usize, end: usize) -> &[u8] {
+    fn diff_window(
+        bytes: &[u8],
+        start: usize,
+        end: usize,
+    ) -> &[u8] {
         let window_start = start.saturating_sub(8);
         let window_end = bytes.len().min(end + 16);
         &bytes[window_start..window_end]
@@ -1195,7 +1096,10 @@ Second:
         entries
     }
 
-    fn decode_state_entry(bytes: &[u8], pc: &mut usize) -> Option<String> {
+    fn decode_state_entry(
+        bytes: &[u8],
+        pc: &mut usize,
+    ) -> Option<String> {
         let first = read_diag_byte(bytes, pc)?;
         match first {
             0 => Some("accept".to_string()),
@@ -1219,13 +1123,19 @@ Second:
         }
     }
 
-    fn read_diag_byte(bytes: &[u8], pc: &mut usize) -> Option<u8> {
+    fn read_diag_byte(
+        bytes: &[u8],
+        pc: &mut usize,
+    ) -> Option<u8> {
         let value = *bytes.get(*pc)?;
         *pc += 1;
         Some(value)
     }
 
-    fn decode_diag_node_id(bytes: &[u8], pc: &mut usize) -> Option<u16> {
+    fn decode_diag_node_id(
+        bytes: &[u8],
+        pc: &mut usize,
+    ) -> Option<u16> {
         let first = read_diag_byte(bytes, pc)?;
         if first < ENCODE1BYTE_QBASIC_11 {
             return Some(u16::from(first));
@@ -1234,7 +1144,10 @@ Second:
         Some(((u16::from(first) << 8) | u16::from(second)) - 255 * u16::from(ENCODE1BYTE_QBASIC_11))
     }
 
-    fn decode_diag_branch(bytes: &[u8], pc: &mut usize) -> Option<String> {
+    fn decode_diag_branch(
+        bytes: &[u8],
+        pc: &mut usize,
+    ) -> Option<String> {
         let first = read_diag_byte(bytes, pc)?;
         if first == 255 {
             return Some("accept".to_string());
@@ -1267,21 +1180,12 @@ Second:
         if entry.starts_with("branch(") {
             return "branch".to_string();
         }
-        entry
-            .split_once(',')
-            .map_or_else(|| entry.to_string(), |(node, _)| format!("{node},branch)"))
+        entry.split_once(',').map_or_else(|| entry.to_string(), |(node, _)| format!("{node},branch)"))
     }
 
-    fn grammar_cg_hint_inventory(
-        grammar: &crate::buildprs_grammar::GrammarFile,
-    ) -> Vec<(String, usize)> {
+    fn grammar_cg_hint_inventory(grammar: &crate::buildprs_grammar::GrammarFile) -> Vec<(String, usize)> {
         let mut hints = BTreeMap::<String, usize>::new();
-        for rule in grammar
-            .statements
-            .rules
-            .iter()
-            .chain(&grammar.functions.rules)
-        {
+        for rule in grammar.statements.rules.iter().chain(&grammar.functions.rules) {
             if let Some(hint) = &rule.production.cg_hint {
                 *hints.entry(cg_hint_name(hint).to_string()).or_default() += 1;
             }
@@ -1297,19 +1201,11 @@ Second:
     fn grammar_derived_dispatch_names_and_help_match_prsstate_fixture() {
         let grammar = parse_grammar_file(grammar_path()).expect("qbasbnf should parse");
         let derived = generate_dispatch_order_from_grammar(&grammar);
-        let golden = parse_golden_dispatch_tables(include_str!(
-            "../../../fixtures/buildprs/qbasic-1.1/prsstate.asm"
-        ));
+        let golden = parse_golden_dispatch_tables(include_str!("../../../fixtures/buildprs/qbasic-1.1/prsstate.asm"));
 
         assert_eq!(derived.int_nt_disp.len(), golden.internal_names.len());
-        assert_eq!(
-            derived.ext_nt_disp.len(),
-            golden.external_dispatch_symbols.len()
-        );
-        assert_eq!(
-            derived.ext_nt_help.len(),
-            golden.external_help_symbols.len()
-        );
+        assert_eq!(derived.ext_nt_disp.len(), golden.external_dispatch_symbols.len());
+        assert_eq!(derived.ext_nt_help.len(), golden.external_help_symbols.len());
         assert_eq!(derived.ext_nt_disp, golden.external_dispatch_symbols);
         assert_eq!(derived.ext_nt_help, golden.external_help_symbols);
         assert_eq!(derived.int_nt_disp.len(), 29);
@@ -1335,8 +1231,7 @@ Second:
         let artifacts = buildprs_tokens::generate_token_artifacts(&tokens);
         let prsrwt = include_str!("../../../fixtures/buildprs/qbasic-1.1/prsrwt.asm");
         let (lowering, codec) =
-            buildprs_tokens::extract_rw_lowering_from_golden(prsrwt, &artifacts)
-                .expect("golden lowering should parse");
+            buildprs_tokens::extract_rw_lowering_from_golden(prsrwt, &artifacts).expect("golden lowering should parse");
         let tables = buildprs_tokens::generate_reserved_word_tables(&artifacts, &lowering, &codec);
 
         buildprs_tokens::validate_rw_tables_against_golden(
@@ -1352,19 +1247,11 @@ Second:
     fn check_irw_to_value() {
         use crate::buildprs_artifacts::parse_irw_equates;
         use crate::buildprs_grammar::parse_token_decls_file;
-        let tokens =
-            parse_token_decls_file("../../grammar/qbasbnf.prs")
-                .unwrap();
+        let tokens = parse_token_decls_file("../../grammar/qbasbnf.prs").unwrap();
         let generated = generate_token_artifacts_from_decls(&tokens);
-        let golden = parse_irw_equates(include_str!(
-            "../../../fixtures/buildprs/qbasic-1.1/prsirw.inc"
-        ))
-        .unwrap();
+        let golden = parse_irw_equates(include_str!("../../../fixtures/buildprs/qbasic-1.1/prsirw.inc")).unwrap();
         let gen_to = generated.irw_equates["IRW_TO"];
         let gold_to = golden["IRW_TO"] as u16;
-        assert_eq!(
-            gen_to, gold_to,
-            "IRW_TO mismatch: generated={gen_to}, golden={gold_to}"
-        );
+        assert_eq!(gen_to, gold_to, "IRW_TO mismatch: generated={gen_to}, golden={gold_to}");
     }
 }

@@ -9,13 +9,13 @@ pub enum EmitGraphError {
 }
 
 impl std::fmt::Display for EmitGraphError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         match self {
             Self::OffsetMismatch { expected, actual } => {
-                write!(
-                    f,
-                    "work-list offset mismatch: expected {expected}, actual {actual}"
-                )
+                write!(f, "work-list offset mismatch: expected {expected}, actual {actual}")
             }
             Self::Encode(error) => write!(f, "{error}"),
         }
@@ -34,10 +34,7 @@ pub fn out_state(graph: &StateGraph) -> Result<Vec<u8>, EmitGraphError> {
     let mut bytes = Vec::new();
     for id in graph.work_items() {
         if graph.node(id).sort_index != bytes.len() {
-            return Err(EmitGraphError::OffsetMismatch {
-                expected: graph.node(id).sort_index,
-                actual: bytes.len(),
-            });
+            return Err(EmitGraphError::OffsetMismatch { expected: graph.node(id).sort_index, actual: bytes.len() });
         }
         bytes.extend(graph.encode_node(id)?);
     }
@@ -46,10 +43,9 @@ pub fn out_state(graph: &StateGraph) -> Result<Vec<u8>, EmitGraphError> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::buildprs_graph::StateNode;
     use crate::buildprs_layout::sort_state_values;
-
-    use super::*;
 
     #[test]
     fn out_state_emits_work_list_bytes_in_layout_order() {
@@ -60,9 +56,6 @@ mod tests {
         graph.prepend_global(root);
         sort_state_values(&mut graph);
 
-        assert_eq!(
-            out_state(&graph).expect("emit should succeed"),
-            vec![5, 0, 0]
-        );
+        assert_eq!(out_state(&graph).expect("emit should succeed"), vec![5, 0, 0]);
     }
 }

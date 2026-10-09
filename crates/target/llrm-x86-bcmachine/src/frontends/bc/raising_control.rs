@@ -2,6 +2,7 @@
 //! control contracts before constructing value SSA.
 
 use llrm_qbruntime::{Contract, Control};
+
 use crate::frontends::bc::blocks::{Block, Ends};
 use crate::support::hash::IndexMap;
 
@@ -9,7 +10,10 @@ use crate::support::hash::IndexMap;
 ///
 /// Interior calls need a separate byte-owning block split; this changes no
 /// instruction spans, and never treats an unestablished contract as proof.
-pub fn terminal_edges(blocks: Vec<Block>, contracts: &IndexMap<i64, Contract>) -> Vec<Block> {
+pub fn terminal_edges(
+    blocks: Vec<Block>,
+    contracts: &IndexMap<i64, Contract>,
+) -> Vec<Block> {
     let mut result = Vec::new();
     for mut block in blocks {
         let contract = block.insns.last().and_then(|last| contracts.get(&(last.at as i64)));

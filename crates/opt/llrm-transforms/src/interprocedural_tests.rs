@@ -9,18 +9,30 @@ use crate::inline::Threshold;
 use crate::promote::Promote;
 use crate::testing::{managed, parsed, printed, results};
 
-fn ids(module: &Module, names: &[&str]) -> BTreeSet<GlobalId> {
+fn ids(
+    module: &Module,
+    names: &[&str],
+) -> BTreeSet<GlobalId> {
     names.iter().map(|name| module.named(name).unwrap_or_else(|| panic!("no @{name}"))).collect()
 }
 
 /// The step over `module` from `roots`, the call priced `call`; each
 /// pipeline run as `(procedure, stage)`.
-fn step(module: &mut Module, roots: &[&str], call: i64) -> (Proved, Vec<(String, String)>) {
+fn step(
+    module: &mut Module,
+    roots: &[&str],
+    call: i64,
+) -> (Proved, Vec<(String, String)>) {
     stepped(module, roots, call, Threshold::default())
 }
 
 /// `step` with inlining's `threshold`.
-fn stepped(module: &mut Module, roots: &[&str], call: i64, threshold: Threshold) -> (Proved, Vec<(String, String)>) {
+fn stepped(
+    module: &mut Module,
+    roots: &[&str],
+    call: i64,
+    threshold: Threshold,
+) -> (Proved, Vec<(String, String)>) {
     let roots = ids(module, roots).into_iter().map(|id| (0, id)).collect();
     let mut stages = Vec::new();
     let costs = OperationCosts { call, ..OperationCosts::default() };
@@ -48,11 +60,18 @@ fn stepped(module: &mut Module, roots: &[&str], call: i64, threshold: Threshold)
 }
 
 /// `ids` in the one module a test's program has.
-fn defined(module: &Module, names: &[&str]) -> BTreeSet<Defined> {
+fn defined(
+    module: &Module,
+    names: &[&str],
+) -> BTreeSet<Defined> {
     ids(module, names).into_iter().map(|id| (0, id)).collect()
 }
 
-fn staged(stages: &[(String, String)], name: &str, stage: &str) -> bool {
+fn staged(
+    stages: &[(String, String)],
+    name: &str,
+    stage: &str,
+) -> bool {
     stages.iter().any(|(one, at)| one == name && at == stage)
 }
 
@@ -157,7 +176,10 @@ fn test_agreed_actuals_specialize_and_a_constant_return_is_carried() {
 
 #[test]
 fn test_disagreeing_actuals_or_a_public_callee_are_not_specialized() {
-    for text in [STORES.replace("call void @set(i16 5)\n  %r", "call void @set(i16 %a)\n  %r"), STORES.replace("define internal void @set", "define void @set")] {
+    for text in [
+        STORES.replace("call void @set(i16 5)\n  %r", "call void @set(i16 %a)\n  %r"),
+        STORES.replace("define internal void @set", "define void @set"),
+    ] {
         let mut module = parsed(&text);
         step(&mut module, &["f"], 40);
         assert!(printed(&module).contains("  store i16 %x, ptr @g\n"), "{text}");
@@ -194,14 +216,33 @@ b:
 #[test]
 fn test_a_terminal_body_in_another_module_cuts_its_callers_tail() {
     let spin = parsed("define void @spin() {\nb:\n  br label %l\n\nl:\n  br label %l\n}\n");
-    let caller = parsed("declare void @spin()\n\ndefine i16 @f(i16 %a) {\nb:\n  call void @spin()\n  %s = add i16 %a, 1\n  ret i16 %s\n}\n");
+    let caller = parsed(
+        "declare void @spin()\n\ndefine i16 @f(i16 %a) {\nb:\n  call void @spin()\n  %s = add i16 %a, 1\n  ret i16 %s\n}\n",
+    );
     let exports = llrm_mir::program::Exports::closed(["f".to_owned()].into());
-    let mut program = Program::new(vec![spin, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap().exporting(exports);
+    let mut program =
+        Program::new(vec![spin, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap().exporting(exports);
     let roots = roots(&program);
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
-    let proved = optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), None, 0, 1, Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
+    let proved = optimized::<String>(
+        &mut program,
+        &mut modules,
+        &roots,
+        &OperationCosts::default(),
+        None,
+        0,
+        1,
+        Threshold::default(),
+        &mut |_, _, _, _| Ok(()),
+        &mut |_, _, _| Ok(()),
+    )
+    .unwrap();
     assert_eq!(proved.noreturn, [(0, program.modules[0].named("spin").unwrap())].into());
-    assert!(printed(&program.modules[1]).contains("  call void @spin()\n  unreachable\n"), "{}", printed(&program.modules[1]));
+    assert!(
+        printed(&program.modules[1]).contains("  call void @spin()\n  unreachable\n"),
+        "{}",
+        printed(&program.modules[1])
+    );
 }
 
 /// Per module, a declaration of another module's body kept no attributes,
@@ -209,11 +250,17 @@ fn test_a_terminal_body_in_another_module_cuts_its_callers_tail() {
 #[test]
 fn test_a_body_s_attributes_are_stated_on_its_declarations() {
     let double = parsed("define i16 @double(i16 %x) {\nb:\n  %y = add i16 %x, %x\n  ret i16 %y\n}\n");
-    let caller = parsed("declare i16 @double(i16)\n\ndefine i16 @f(i16 %a) {\nb:\n  %y = call i16 @double(i16 %a)\n  ret i16 %y\n}\n");
+    let caller = parsed(
+        "declare i16 @double(i16)\n\ndefine i16 @f(i16 %a) {\nb:\n  %y = call i16 @double(i16 %a)\n  ret i16 %y\n}\n",
+    );
     let mut program = Program::new(vec![double, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
     stamped_all(&mut program, &mut modules).unwrap();
-    assert!(printed(&program.modules[1]).contains("declare i16 @double(i16) memory(none) willreturn nounwind norecurse\n"), "{}", printed(&program.modules[1]));
+    assert!(
+        printed(&program.modules[1]).contains("declare i16 @double(i16) memory(none) willreturn nounwind norecurse\n"),
+        "{}",
+        printed(&program.modules[1])
+    );
 }
 
 /// Per module, a call to another module's body that always returns one
@@ -224,7 +271,9 @@ fn test_a_body_s_attributes_are_stated_on_its_declarations() {
 #[test]
 fn test_a_published_attribute_names_its_type_in_the_declaring_module() {
     let small = parsed("define range(i16 0, 8) i16 @small(i16 %x) {\nb:\n  %y = and i16 %x, 7\n  ret i16 %y\n}\n");
-    let caller = parsed("@d = global double 0.0\n@b = global i8 0\n\ndeclare i16 @small(i16)\n\ndefine i16 @f(i16 %a) {\nb:\n  %y = call i16 @small(i16 %a)\n  ret i16 %y\n}\n");
+    let caller = parsed(
+        "@d = global double 0.0\n@b = global i8 0\n\ndeclare i16 @small(i16)\n\ndefine i16 @f(i16 %a) {\nb:\n  %y = call i16 @small(i16 %a)\n  ret i16 %y\n}\n",
+    );
     let mut program = Program::new(vec![small, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
     stamped_all(&mut program, &mut modules).unwrap();
@@ -240,7 +289,19 @@ fn test_a_constant_another_module_returns_reaches_its_callers() {
     let mut program = Program::new(vec![seven, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let roots = roots(&program);
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
-    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), None, 0, 1, Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
+    optimized::<String>(
+        &mut program,
+        &mut modules,
+        &roots,
+        &OperationCosts::default(),
+        None,
+        0,
+        1,
+        Threshold::default(),
+        &mut |_, _, _, _| Ok(()),
+        &mut |_, _, _| Ok(()),
+    )
+    .unwrap();
     assert!(printed(&program.modules[1]).contains("  ret i16 7\n"), "{}", printed(&program.modules[1]));
 }
 
@@ -249,12 +310,26 @@ fn test_a_constant_another_module_returns_reaches_its_callers() {
 #[test]
 fn test_an_entry_keeps_its_parameters_whatever_its_linkage() {
     let body = (1..12).map(|at| format!("  %y{at} = mul i16 %y{}, %x\n", at - 1)).collect::<String>();
-    let text = format!("define internal i16 @entered(i16 %x) {{\nb:\n  %y0 = add i16 %x, 1\n{body}  ret i16 %y11\n}}\n\ndefine i16 @f() {{\nb:\n  %r = call i16 @entered(i16 3)\n  %s = call i16 @entered(i16 3)\n  %t = add i16 %r, %s\n  ret i16 %t\n}}\n");
+    let text = format!(
+        "define internal i16 @entered(i16 %x) {{\nb:\n  %y0 = add i16 %x, 1\n{body}  ret i16 %y11\n}}\n\ndefine i16 @f() {{\nb:\n  %r = call i16 @entered(i16 3)\n  %s = call i16 @entered(i16 3)\n  %t = add i16 %r, %s\n  ret i16 %t\n}}\n"
+    );
     let mut program = Program::new(vec![parsed(&text)], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     program.exports.entries = ["entered".to_owned()].into();
     let roots = roots(&program);
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
-    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), None, 0, 1, Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
+    optimized::<String>(
+        &mut program,
+        &mut modules,
+        &roots,
+        &OperationCosts::default(),
+        None,
+        0,
+        1,
+        Threshold::default(),
+        &mut |_, _, _, _| Ok(()),
+        &mut |_, _, _| Ok(()),
+    )
+    .unwrap();
     assert!(printed(&program.modules[0]).contains("  %y0 = add i16 %x, 1\n"), "{}", printed(&program.modules[0]));
 }
 
@@ -263,8 +338,14 @@ fn test_the_step_runs_as_a_program_pass() {
     let mut module = parsed(HELPERS);
     let mut manager = PassManager::default();
     manager.verify_each = true;
-    let target = crate::testing::Tuned { costs: OperationCosts { call: 4, ..OperationCosts::default() }, ..Default::default() };
-    manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), rate: None });
+    let target =
+        crate::testing::Tuned { costs: OperationCosts { call: 4, ..OperationCosts::default() }, ..Default::default() };
+    manager.add_program(Interprocedural {
+        pipeline: Box::new(|_, _, _, _| {}),
+        proved: None,
+        inline: Threshold::default(),
+        rate: None,
+    });
     let stages = manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
     assert_eq!(stages.iter().map(|stage| stage.function).collect::<BTreeSet<_>>(), ids(&module, &["f"]));
     assert_eq!(results(&module, INPUTS), results(&parsed(HELPERS), INPUTS));
@@ -300,8 +381,17 @@ b:
     let calls = |rate: Option<i64>| {
         let mut module = parsed(text);
         let mut manager = PassManager::default();
-        let target = crate::testing::Tuned { costs: OperationCosts { call: 20, ..OperationCosts::default() }, sizes: OperationCosts { call: 3, ..OperationCosts::default() }, ..Default::default() };
-        manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), rate });
+        let target = crate::testing::Tuned {
+            costs: OperationCosts { call: 20, ..OperationCosts::default() },
+            sizes: OperationCosts { call: 3, ..OperationCosts::default() },
+            ..Default::default()
+        };
+        manager.add_program(Interprocedural {
+            pipeline: Box::new(|_, _, _, _| {}),
+            proved: None,
+            inline: Threshold::default(),
+            rate,
+        });
         manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
         printed(&module).matches("call i16 @mix").count()
     };
@@ -453,7 +543,10 @@ fn dropped(text: &str) -> BTreeSet<String> {
     crate::testing::stamped(&mut module).unwrap();
     let callees = |module: &Module| {
         let uses = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("uses")).expect("@uses").2;
-        uses.walk().filter_map(|(_, inst)| llrm_mir::memory::callee(&module.context, uses, inst)).map(|id| module.global(id).name.clone().unwrap()).collect::<BTreeSet<_>>()
+        uses.walk()
+            .filter_map(|(_, inst)| llrm_mir::memory::callee(&module.context, uses, inst))
+            .map(|id| module.global(id).name.clone().unwrap())
+            .collect::<BTreeSet<_>>()
     };
     let before = callees(&module);
     let declarations = module.declarations();
@@ -711,7 +804,11 @@ fn the_corpus_is_stamped_as_it_was() {
     for (name, mut module) in llrm_analysis::testing::corpus() {
         crate::testing::stamped(&mut module).unwrap();
         let text = printed(&module);
-        lines.extend(text.lines().filter(|line| line.starts_with("define")).map(|line| format!("{name} {}", line.trim_end_matches(" {"))));
+        lines.extend(
+            text.lines()
+                .filter(|line| line.starts_with("define"))
+                .map(|line| format!("{name} {}", line.trim_end_matches(" {"))),
+        );
     }
     let found = lines.join("\n") + "\n";
     // `STAMP_WRITE=1` rewrites the file where a rule changes on purpose.
@@ -720,16 +817,27 @@ fn the_corpus_is_stamped_as_it_was() {
     }
     let expected = include_str!("interprocedural_stamped.txt");
     let changed = found.lines().zip(expected.lines()).find(|(one, other)| one != other);
-    assert!(found == expected, "first difference: {changed:?}; {} lines, expected {}", found.lines().count(), expected.lines().count());
+    assert!(
+        found == expected,
+        "first difference: {changed:?}; {} lines, expected {}",
+        found.lines().count(),
+        expected.lines().count()
+    );
 }
 
 /// Which defined functions of `text` the stamp gives `fact`.
-fn stamped_with(text: &str, fact: &str) -> Vec<String> {
+fn stamped_with(
+    text: &str,
+    fact: &str,
+) -> Vec<String> {
     let mut module = parsed(text);
     crate::testing::stamped(&mut module).unwrap();
     let mut found = printed(&module)
         .lines()
-        .filter(|line| line.starts_with("define") && line.split(" {").next().unwrap_or_default().split_whitespace().any(|word| word == fact))
+        .filter(|line| {
+            line.starts_with("define")
+                && line.split(" {").next().unwrap_or_default().split_whitespace().any(|word| word == fact)
+        })
         .filter_map(|line| line.split('@').nth(1).and_then(|rest| rest.split('(').next()).map(str::to_owned))
         .collect::<Vec<_>>();
     found.sort();
@@ -811,7 +919,11 @@ b0:
     assert_eq!(stamped_with(text, "norecurse"), ["calls_intrinsic", "calls_quiet", "leaf", "listed"]);
 }
 
-fn spin(attrs: &str, load: &str, marks: &str) -> String {
+fn spin(
+    attrs: &str,
+    load: &str,
+    marks: &str,
+) -> String {
     format!(
         "define i16 @spin(ptr %p) {attrs} {{
 b0:
@@ -881,7 +993,10 @@ done:
     let conditional = "  %w = load i16, ptr %p\n  %again = icmp ne i16 %w, 0\n  br i1 %again, label %second, label %done, !llvm.loop !2\n";
     let forever = "  %w = load i16, ptr %p\n  br label %second, !llvm.loop !2\n";
     assert_eq!(stamped_with(&function(conditional), "willreturn"), ["f"], "both loops marked, both leave");
-    assert!(stamped_with(&function(forever), "willreturn").is_empty(), "an unconditional loop, even one something marked");
+    assert!(
+        stamped_with(&function(forever), "willreturn").is_empty(),
+        "an unconditional loop, even one something marked"
+    );
 }
 
 /// A call the byte price refuses and the clocks admit stays inlined where the callers and the
@@ -908,8 +1023,17 @@ b:
     let calls = |size: bool| {
         let mut module = parsed(text);
         let mut manager = PassManager::default();
-        let target = crate::testing::Tuned { costs: OperationCosts { call: 20, ..OperationCosts::default() }, sizes: OperationCosts { call: 3, add: 4, ..OperationCosts::default() }, ..Default::default() };
-        manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), rate: size.then_some(0) });
+        let target = crate::testing::Tuned {
+            costs: OperationCosts { call: 20, ..OperationCosts::default() },
+            sizes: OperationCosts { call: 3, add: 4, ..OperationCosts::default() },
+            ..Default::default()
+        };
+        manager.add_program(Interprocedural {
+            pipeline: Box::new(|_, _, _, _| {}),
+            proved: None,
+            inline: Threshold::default(),
+            rate: size.then_some(0),
+        });
         manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
         printed(&module).matches("call i16 @triple").count()
     };
@@ -948,17 +1072,48 @@ b:
     let bytes = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
     let (mix, f) = (module.named("mix").unwrap(), module.named("f").unwrap());
     let counts = inline::call_counts(&module);
-    let candidates = inline::candidates(&module, &llrm_mir::memory::callees(&module), &layout, &counts, &BTreeSet::from([mix]), &clocks, 20, Threshold::default());
-    let calls: Vec<_> = module.global(f).function().unwrap().walk().map(|(_, inst)| inst).filter(|&inst| llrm_mir::memory::callee(&module.context, module.global(f).function().unwrap(), inst).is_some()).collect();
-    let sites: llrm_support::hash::IndexMap<_, _> = calls.iter().map(|&call| (call, candidates[&mix].clone())).collect();
+    let candidates = inline::candidates(
+        &module,
+        &llrm_mir::memory::callees(&module),
+        &layout,
+        &counts,
+        &BTreeSet::from([mix]),
+        &clocks,
+        20,
+        Threshold::default(),
+    );
+    let calls: Vec<_> = module
+        .global(f)
+        .function()
+        .unwrap()
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| llrm_mir::memory::callee(&module.context, module.global(f).function().unwrap(), inst).is_some())
+        .collect();
+    let sites: llrm_support::hash::IndexMap<_, _> =
+        calls.iter().map(|&call| (call, candidates[&mix].clone())).collect();
     let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
     let runs = std::cell::Cell::new(0);
     let mut refused = BTreeSet::new();
     let mut again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused: &mut BTreeSet<_>| {
-        tried_sites::<String>(module, analyses, &layout, &BTreeSet::from([mix]), &BTreeSet::new(), &Default::default(), f, &sites, refused, &bytes, (&OperationCosts::default(), 0), "trial.", &mut |_, _, _, _| {
-            runs.set(runs.get() + 1);
-            Ok(())
-        })
+        tried_sites::<String>(
+            module,
+            analyses,
+            &layout,
+            &BTreeSet::from([mix]),
+            &BTreeSet::new(),
+            &Default::default(),
+            f,
+            &sites,
+            refused,
+            &bytes,
+            (&OperationCosts::default(), 0),
+            "trial.",
+            &mut |_, _, _, _| {
+                runs.set(runs.get() + 1);
+                Ok(())
+            },
+        )
         .unwrap()
     };
     assert!(!again(&mut module, &mut analyses, &mut refused), "putting it back stays nothing");
@@ -972,7 +1127,12 @@ b:
 /// pointer stored 5 as well.
 #[test]
 fn test_a_body_whose_address_is_taken_keeps_its_parameters() {
-    let text = STORES.replace("@g = global i16 0\n", "@g = global i16 0\n@slot = global ptr @set\n").replace("  call void @set(i16 5)\n  call void @set(i16 5)\n", "  call void @set(i16 5)\n  %p = load ptr, ptr @slot\n  call void %p(i16 %a)\n");
+    let text = STORES
+        .replace("@g = global i16 0\n", "@g = global i16 0\n@slot = global ptr @set\n")
+        .replace(
+            "  call void @set(i16 5)\n  call void @set(i16 5)\n",
+            "  call void @set(i16 5)\n  %p = load ptr, ptr @slot\n  call void %p(i16 %a)\n",
+        );
     let mut module = parsed(&text);
     stepped(&mut module, &["f"], 40, Threshold::none());
     let after = printed(&module);
@@ -982,7 +1142,10 @@ fn test_a_body_whose_address_is_taken_keeps_its_parameters() {
 /// queens' `place(q, row, n)` recurses with `row + 1` and its own `n`: the
 /// one outside call passes 7, so every call does, and `n` is 7 inside.
 /// The recursive call named `%n` as a second value for it, so none was found.
-fn recursive(first: &str, second: &str) -> String {
+fn recursive(
+    first: &str,
+    second: &str,
+) -> String {
     format!(
         "define internal i16 @place(i16 %row, i16 %n) {{
 b:
@@ -1018,7 +1181,9 @@ fn test_a_recursive_call_passing_a_parameter_on_leaves_the_others_actuals_agreed
 /// parameters swapped, keeps `n` unknown.
 #[test]
 fn test_another_actual_for_the_parameter_keeps_it_unknown() {
-    for text in [recursive("i16 %next, i16 %n", "  %y = call i16 @place(i16 0, i16 %a)\n"), recursive("i16 %n, i16 %next", "")] {
+    for text in
+        [recursive("i16 %next, i16 %n", "  %y = call i16 @place(i16 0, i16 %a)\n"), recursive("i16 %n, i16 %next", "")]
+    {
         let mut module = parsed(&text);
         stepped(&mut module, &["f"], 40, Threshold::none());
         let after = printed(&module);
@@ -1075,8 +1240,8 @@ fn test_another_caller_leaves_the_parameter_unbounded() {
     assert!(text.contains("icmp ult i16 %row, 12"), "{text}");
 }
 
-/// A function called with a constant is copied for it at -O3 (gcc's `-fipa-cp-clone`): `g`'s loop runs `%k` trips, which the
-/// copies for 4 and for 5 know. gcc's -O3 queens is eight such copies of its recursive `place`, one a row.
+/// A function called with a constant is copied for it at -O3 (gcc's `-fipa-cp-clone`): `g`'s loop runs `%k` trips,
+/// which the copies for 4 and for 5 know. gcc's -O3 queens is eight such copies of its recursive `place`, one a row.
 const TWO_CONTEXTS: &str = "define i16 @g(i16 %k, i16 %x) {
 b0:
   br label %head
@@ -1119,8 +1284,9 @@ fn test_a_function_called_with_two_constants_is_cloned_for_each_at_o3() {
     assert_eq!(cloned(true), (true, true));
 }
 
-/// A small function that calls itself is given copies of itself (gcc's `recursive_inlining`, `max-inline-recursive-depth-auto` 8 and
-/// `-insns-recursive-auto` 450): `hanoi` at -O2 was one call per move, gcc's is eight levels in one body.
+/// A small function that calls itself is given copies of itself (gcc's `recursive_inlining`,
+/// `max-inline-recursive-depth-auto` 8 and `-insns-recursive-auto` 450): `hanoi` at -O2 was one call per move, gcc's is
+/// eight levels in one body.
 const COUNT: &str = "define i16 @f(i16 %n) {
 b0:
   %z = icmp eq i16 %n, 0
@@ -1153,8 +1319,9 @@ fn test_a_small_recursive_function_is_inlined_into_itself_to_a_depth() {
     assert_eq!(calls(Threshold::default().for_size()), 2, "not for size: the recursive call is cold there");
 }
 
-/// A recursive body that grows by 8 (gcc's rectwo) is inlined into itself: gcc asks the recursive edge `max-inline-insns-auto` (15), and the
-/// pass asked the call-cost budget (6), so rectwo, recchop and every body of more than six operations kept its calls (rectwo 2.6x gcc's clocks).
+/// A recursive body that grows by 8 (gcc's rectwo) is inlined into itself: gcc asks the recursive edge
+/// `max-inline-insns-auto` (15), and the pass asked the call-cost budget (6), so rectwo, recchop and every body of more
+/// than six operations kept its calls (rectwo 2.6x gcc's clocks).
 #[test]
 fn test_a_recursive_body_of_eight_operations_is_inlined_into_itself() {
     let text = "define i16 @f(i16 %n, i16 %k) {
@@ -1187,8 +1354,8 @@ done:
     assert!(calls(Threshold::default()) > 2, "the body grew by copies of itself");
 }
 
-/// A callee trial that was refused is not made again in the state it was made in (host.c: three trials, each made in five rounds, 37%
-/// of the compile, objects the same). Each try re-ran the callers' pipelines.
+/// A callee trial that was refused is not made again in the state it was made in (host.c: three trials, each made in
+/// five rounds, 37% of the compile, objects the same). Each try re-ran the callers' pipelines.
 #[test]
 fn test_a_callee_the_trial_refused_is_not_tried_again_in_the_same_state() {
     let text = "define internal i16 @mix(i16 %a, i16 %b) {
@@ -1219,16 +1386,37 @@ b:
     let bytes = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
     let mix = module.named("mix").unwrap();
     let counts = inline::call_counts(&module);
-    let candidates = inline::candidates(&module, &llrm_mir::memory::callees(&module), &layout, &counts, &BTreeSet::from([mix]), &clocks, 20, Threshold::default());
+    let candidates = inline::candidates(
+        &module,
+        &llrm_mir::memory::callees(&module),
+        &layout,
+        &counts,
+        &BTreeSet::from([mix]),
+        &clocks,
+        20,
+        Threshold::default(),
+    );
     let more: llrm_support::hash::IndexMap<_, _> = candidates.into_iter().filter(|(id, _)| *id == mix).collect();
     let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
     let runs = std::cell::Cell::new(0);
     let mut refused_trials: Vec<RefusedTrial> = Vec::new();
     let again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused_trials: &mut Vec<RefusedTrial>| {
-        tried_callees::<String>(module, analyses, &layout, &BTreeSet::from([mix]), &BTreeSet::new(), &Default::default(), &more, &bytes, (&OperationCosts::default(), 0), refused_trials, &mut |_, _, _, _| {
-            runs.set(runs.get() + 1);
-            Ok(())
-        })
+        tried_callees::<String>(
+            module,
+            analyses,
+            &layout,
+            &BTreeSet::from([mix]),
+            &BTreeSet::new(),
+            &Default::default(),
+            &more,
+            &bytes,
+            (&OperationCosts::default(), 0),
+            refused_trials,
+            &mut |_, _, _, _| {
+                runs.set(runs.get() + 1);
+                Ok(())
+            },
+        )
         .unwrap()
     };
     assert!(!again(&mut module, &mut analyses, &mut refused_trials), "premise: the trial is refused");
@@ -1238,8 +1426,8 @@ b:
     assert_eq!(runs.get(), first, "the second round made the refused trial again");
 }
 
-/// A trial of a callee at several sites splices them all and runs the caller's pipeline once, the way gcc and LLVM inline: it ran the
-/// pipeline after each site (host.c -6.6%, QCport -2.2%, the code the same).
+/// A trial of a callee at several sites splices them all and runs the caller's pipeline once, the way gcc and LLVM
+/// inline: it ran the pipeline after each site (host.c -6.6%, QCport -2.2%, the code the same).
 #[test]
 fn test_a_trial_of_a_callee_at_several_sites_runs_the_callers_pipeline_once() {
     let text = "define internal i16 @mix(i16 %a, i16 %b) {
@@ -1270,25 +1458,47 @@ b:
     let bytes = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
     let mix = module.named("mix").unwrap();
     let counts = inline::call_counts(&module);
-    let candidates = inline::candidates(&module, &llrm_mir::memory::callees(&module), &layout, &counts, &BTreeSet::from([mix]), &clocks, 20, Threshold::default());
+    let candidates = inline::candidates(
+        &module,
+        &llrm_mir::memory::callees(&module),
+        &layout,
+        &counts,
+        &BTreeSet::from([mix]),
+        &clocks,
+        20,
+        Threshold::default(),
+    );
     let more: llrm_support::hash::IndexMap<_, _> = candidates.into_iter().filter(|(id, _)| *id == mix).collect();
     let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
     let runs = std::cell::Cell::new(0);
     let mut refused_trials: Vec<RefusedTrial> = Vec::new();
     let again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused_trials: &mut Vec<RefusedTrial>| {
-        tried_callees::<String>(module, analyses, &layout, &BTreeSet::from([mix]), &BTreeSet::new(), &Default::default(), &more, &bytes, (&OperationCosts::default(), 0), refused_trials, &mut |_, _, _, _| {
-            runs.set(runs.get() + 1);
-            Ok(())
-        })
+        tried_callees::<String>(
+            module,
+            analyses,
+            &layout,
+            &BTreeSet::from([mix]),
+            &BTreeSet::new(),
+            &Default::default(),
+            &more,
+            &bytes,
+            (&OperationCosts::default(), 0),
+            refused_trials,
+            &mut |_, _, _, _| {
+                runs.set(runs.get() + 1);
+                Ok(())
+            },
+        )
         .unwrap()
     };
     again(&mut module, &mut analyses, &mut refused_trials);
     assert_eq!(runs.get(), 1, "the pipeline ran once for each of the callee's two sites");
 }
 
-/// A round assumes a parameter's range before it proves it (`place`'s `row` is 0 at first), and under it a loop `r < row` that runs
-/// from 0 is never entered: the facts of the loop around it and of its own contradict each other there, and a call in it passes
-/// nothing. Passing what the contradiction left (`r` below 0) made the callee's parameter range wide for good.
+/// A round assumes a parameter's range before it proves it (`place`'s `row` is 0 at first), and under it a loop `r <
+/// row` that runs from 0 is never entered: the facts of the loop around it and of its own contradict each other there,
+/// and a call in it passes nothing. Passing what the contradiction left (`r` below 0) made the callee's parameter range
+/// wide for good.
 #[test]
 fn test_a_call_in_a_block_the_assumed_range_makes_unreachable_passes_nothing() {
     let mut module = parsed(

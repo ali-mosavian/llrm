@@ -11,12 +11,24 @@ fn compiled(channels: Option<&str>) -> String {
 }
 
 /// The same with `LLRM_VERIFY` removed, or set to `verify`.
-fn compiled_checking(channels: Option<&str>, verify: Option<&str>) -> String {
+fn compiled_checking(
+    channels: Option<&str>,
+    verify: Option<&str>,
+) -> String {
     let directory = tempfile::tempdir().expect("a directory");
     let source = directory.path().join("t.bas");
     std::fs::write(&source, PROGRAM).expect("writes the source");
     let mut command = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-qb")));
-    command.args([source.to_str().unwrap(), "--dialect", "qb45", "--runtime", "qb45", "-O2", "-o", directory.path().join("t.obj").to_str().unwrap()]);
+    command.args([
+        source.to_str().unwrap(),
+        "--dialect",
+        "qb45",
+        "--runtime",
+        "qb45",
+        "-O2",
+        "-o",
+        directory.path().join("t.obj").to_str().unwrap(),
+    ]);
     // Every step is listed: under load, the top 30 by own time are not always the same 30.
     command.env_remove("LLRM_DEBUG").env_remove("LLRM_VERIFY").env("LLRM_TIME_TOP", "1000");
     if let Some(verify) = verify {
@@ -31,7 +43,11 @@ fn compiled_checking(channels: Option<&str>, verify: Option<&str>) -> String {
 }
 
 /// The number before `ms` in the `[time] <line> ...` line's field called `field`.
-fn field(report: &str, line: &str, field: &str) -> f64 {
+fn field(
+    report: &str,
+    line: &str,
+    field: &str,
+) -> f64 {
     let line = report.lines().find(|one| one.starts_with(line)).unwrap_or_else(|| panic!("a `{line}` line"));
     let after = line.split(field).nth(1).unwrap_or_else(|| panic!("{field} in {line}"));
     after.trim().split_whitespace().next().unwrap().parse().unwrap()
@@ -39,8 +55,8 @@ fn field(report: &str, line: &str, field: &str) -> f64 {
 
 /// Before the whole run was timed, about half of a compile was in no timed step (#394): the
 /// outermost steps must add up to the run. By the thread's CPU time, not the wall clock: on a loaded machine the
-/// thread waits for its turn between two steps, which is in no step and in nothing the compiler did (4 of 10 runs failed
-/// with eight busy loops on the test's CPU).
+/// thread waits for its turn between two steps, which is in no step and in nothing the compiler did (4 of 10 runs
+/// failed with eight busy loops on the test's CPU).
 #[test]
 fn test_the_outermost_steps_add_up_to_the_runs_cpu_time() {
     let report = compiled(Some("time"));
@@ -55,7 +71,9 @@ fn test_the_outermost_steps_add_up_to_the_runs_cpu_time() {
 #[test]
 fn test_a_pass_manager_pass_and_its_analyses_are_in_the_report() {
     let report = compiled(Some("time"));
-    for wanted in ["mir gvn", "mir fold", "analysis ", "mir pipeline", "lir regalloc", "isel", "omf write", "frontend", "hits"] {
+    for wanted in
+        ["mir gvn", "mir fold", "analysis ", "mir pipeline", "lir regalloc", "isel", "omf write", "frontend", "hits"]
+    {
         assert!(report.contains(wanted), "no `{wanted}` in:\n{report}");
     }
 }
@@ -75,8 +93,9 @@ fn test_no_time_report_without_the_flag() {
     assert!(!report.contains("[time]"), "{report}");
 }
 
-/// Every pass and every machine phase was verified in a user's compile: 22 LIR verifications and 8 of the MIR a function, 5% of
-/// a small program's compile time. LLVM's release pipeline verifies its input once; the tests, the gate and torture set `LLRM_VERIFY`.
+/// Every pass and every machine phase was verified in a user's compile: 22 LIR verifications and 8 of the MIR a
+/// function, 5% of a small program's compile time. LLVM's release pipeline verifies its input once; the tests, the gate
+/// and torture set `LLRM_VERIFY`.
 #[test]
 fn test_each_pass_and_phase_is_verified_only_when_asked() {
     let plain = compiled_checking(Some("time"), None);

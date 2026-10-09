@@ -11,7 +11,10 @@ use crate::{check, lex, module_path, parser};
 
 /// Checks the open document at `path`, keeping what the check learned: each
 /// file the error is reported on, and the diagnostic there.
-pub fn checked(documents: &mut Documents, path: &Path) -> Vec<(PathBuf, Diagnostic)> {
+pub fn checked(
+    documents: &mut Documents,
+    path: &Path,
+) -> Vec<(PathBuf, Diagnostic)> {
     let Ok(source) = documents.text(path) else {
         return Vec::new();
     };
@@ -23,7 +26,10 @@ pub fn checked(documents: &mut Documents, path: &Path) -> Vec<(PathBuf, Diagnost
         found.push((file, diagnostic(text::range(&text, error.span), error.message.clone())));
         if !module.is_empty() {
             let line = reaching(documents, path, &source, &module).unwrap_or(1);
-            found.push((path.to_path_buf(), diagnostic(text::line_range(&source, line), format!("{module}: {}", error.message))));
+            found.push((
+                path.to_path_buf(),
+                diagnostic(text::line_range(&source, line), format!("{module}: {}", error.message)),
+            ));
         }
     }
     if let (Some(document), Some(loaded)) = (documents.get_mut(path), checked.loaded) {
@@ -33,27 +39,39 @@ pub fn checked(documents: &mut Documents, path: &Path) -> Vec<(PathBuf, Diagnost
     found
 }
 
-fn diagnostic(range: Range, message: String) -> Diagnostic {
+fn diagnostic(
+    range: Range,
+    message: String,
+) -> Diagnostic {
     Diagnostic { range, severity: ERROR, source: "nib", message }
 }
 
 /// The line of the import in `source` through which module `target` is loaded.
-fn reaching(documents: &Documents, main: &Path, source: &str, target: &str) -> Option<usize> {
+fn reaching(
+    documents: &Documents,
+    main: &Path,
+    source: &str,
+    target: &str,
+) -> Option<usize> {
     let imports = |source: &str| lex(source).ok().and_then(|tokens| parser::imports(&tokens).ok()).unwrap_or_default();
-    imports(source).into_iter().find_map(|import| {
-        let mut pending = vec![import.module.clone()];
-        let mut seen = BTreeSet::new();
-        while let Some(module) = pending.pop() {
-            if module == target {
-                return Some(import.span.line);
-            }
-            if seen.insert(module.clone()) {
-                let source = documents.source(main, &module).unwrap_or_default();
-                pending.extend(imports(&source).into_iter().map(|one| one.module));
-            }
-        }
-        None
-    })
+    imports(source)
+        .into_iter()
+        .find_map(
+            |import| {
+                let mut pending = vec![import.module.clone()];
+                let mut seen = BTreeSet::new();
+                while let Some(module) = pending.pop() {
+                    if module == target {
+                        return Some(import.span.line);
+                    }
+                    if seen.insert(module.clone()) {
+                        let source = documents.source(main, &module).unwrap_or_default();
+                        pending.extend(imports(&source).into_iter().map(|one| one.module));
+                    }
+                }
+                None
+            },
+        )
 }
 
 /// What each check reported on each file: a file shows every one's.
@@ -65,7 +83,11 @@ pub struct Published {
 impl Published {
     /// Replaces what checking `main` reported: each file whose diagnostics
     /// may have changed, and all it now has.
-    pub fn replace(&mut self, main: &Path, found: Vec<(PathBuf, Diagnostic)>) -> Vec<(PathBuf, Vec<Diagnostic>)> {
+    pub fn replace(
+        &mut self,
+        main: &Path,
+        found: Vec<(PathBuf, Diagnostic)>,
+    ) -> Vec<(PathBuf, Vec<Diagnostic>)> {
         let mut changed: BTreeSet<PathBuf> = found.iter().map(|(file, _)| file.clone()).collect();
         for (file, by_check) in &mut self.files {
             if by_check.remove(main).is_some() {

@@ -3,13 +3,13 @@
 use super::*;
 
 impl<'a> FunctionCompiler<'a> {
-    pub(super) fn statements(&mut self, statements: &[Statement]) -> Result<(), Diagnostic> {
+    pub(super) fn statements(
+        &mut self,
+        statements: &[Statement],
+    ) -> Result<(), Diagnostic> {
         for statement in statements {
             if !self.open() {
-                return Err(Diagnostic::new(
-                    statement.span(),
-                    "statement is unreachable",
-                ));
+                return Err(Diagnostic::new(statement.span(), "statement is unreachable"));
             }
             let since = self.calls.len();
             self.statement_span = statement.span();
@@ -27,7 +27,10 @@ impl<'a> FunctionCompiler<'a> {
                 return Err(Diagnostic::new(statement.span(), error.message));
             }
             if std::mem::take(&mut self.huge_address) {
-                return Err(Diagnostic::new(statement.span(), "a 'huge var' is only indexed: no view or pointer reaches past 64K"));
+                return Err(Diagnostic::new(
+                    statement.span(),
+                    "a 'huge var' is only indexed: no view or pointer reaches past 64K",
+                ));
             }
             if self.open() {
                 self.drop_temporaries();
@@ -40,37 +43,30 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    pub(super) fn statement(&mut self, statement: &Statement) -> Result<(), Diagnostic> {
+    pub(super) fn statement(
+        &mut self,
+        statement: &Statement,
+    ) -> Result<(), Diagnostic> {
         // BASIC copies a string result before the frame it may view is gone.
         let copied = self.signature.string_result.is_some();
-        if let (Statement::Return { value: Some(value), span }, true, false) = (statement, self.consumers.is_empty(), copied) {
+        if let (Statement::Return { value: Some(value), span }, true, false) =
+            (statement, self.consumers.is_empty(), copied)
+        {
             self.check_returned_borrows(value, *span)?;
         }
         match statement {
-            Statement::Destructure {
-                pattern,
-                value,
-                otherwise,
-                span,
-            } => self.destructure(pattern, value, otherwise.as_deref(), *span)?,
+            Statement::Destructure { pattern, value, otherwise, span } => {
+                self.destructure(pattern, value, otherwise.as_deref(), *span)?
+            }
             Statement::Yield { value, span } => self.yield_statement(value, *span)?,
             Statement::Unsafe { body, .. } => self.unsafe_block(body)?,
             Statement::Asm(asm) => self.asm_statement(asm)?,
             Statement::Return { value, span } if !self.consumers.is_empty() => {
                 self.generator_return(value.as_ref(), *span)?
             }
-            Statement::Bind {
-                mutable,
-                name,
-                annotation,
-                value,
-                span,
-            } => {
+            Statement::Bind { mutable, name, annotation, value, span } => {
                 if self.scopes.last().expect("scope").contains_key(name) {
-                    return Err(Diagnostic::new(
-                        *span,
-                        format!("binding {name:?} is already declared in this scope"),
-                    ));
+                    return Err(Diagnostic::new(*span, format!("binding {name:?} is already declared in this scope")));
                 }
                 // An annotated lambda is a value of its annotation's type.
                 if let (Expr::Lambda { .. }, None) = (value, annotation) {
@@ -79,16 +75,24 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 // A view a call returns, or another name for one.
                 if annotation.is_none() && self.view_type_of(value).is_some() {
-                    let writes = self.struct_expression_type(value, *span)?.is_some_and(|id| self.types.writable_views.contains(&id));
+                    let writes = self
+                        .struct_expression_type(value, *span)?
+                        .is_some_and(|id| self.types.writable_views.contains(&id));
                     let (descriptor, element, rank) = self.view_of(value)?.expect("a view");
-                    let binding = Binding { type_: BindingType::Slice { element, rank }, mutable: writes, storage: Storage::Slice(descriptor) };
+                    let binding = Binding {
+                        type_: BindingType::Slice { element, rank },
+                        mutable: writes,
+                        storage: Storage::Slice(descriptor),
+                    };
                     self.bind_borrow(name, *mutable, binding, value);
                     return Ok(());
                 }
                 // Another name for a reference borrows what it borrows; a
                 // mutable one is a copy of its own.
                 if let (None, Expr::Name(source, _), false) = (annotation, value, *mutable) {
-                    if let Some(binding @ Binding { storage: Storage::Reference(_), .. }) = self.visible(source).cloned() {
+                    if let Some(binding @ Binding { storage: Storage::Reference(_), .. }) =
+                        self.visible(source).cloned()
+                    {
                         if !self.owns(&binding.storage) {
                             self.bind_borrow(name, false, Binding { mutable: false, ..binding }, value);
                             return Ok(());
@@ -100,12 +104,7 @@ impl<'a> FunctionCompiler<'a> {
                     self.bind_borrow(name, *mutable, binding, value);
                     return Ok(());
                 }
-                if let Expr::Comprehension {
-                    element,
-                    clauses,
-                    span: comprehension_span,
-                } = value
-                {
+                if let Expr::Comprehension { element, clauses, span: comprehension_span } = value {
                     // Annotated as a fixed array, it materializes in place;
                     // otherwise it is a vec (section 12).
                     let simple = Clause::simple(clauses);
@@ -149,10 +148,7 @@ impl<'a> FunctionCompiler<'a> {
                             if counts != shape.dims() {
                                 return Err(Diagnostic::new(
                                     *span,
-                                    format!(
-                                        "array expects dimensions {:?}, got {counts:?}",
-                                        shape.dims()
-                                    ),
+                                    format!("array expects dimensions {:?}, got {counts:?}", shape.dims()),
                                 ));
                             }
                         }
@@ -181,26 +177,15 @@ impl<'a> FunctionCompiler<'a> {
                         storage: Storage::Place(place),
                     };
                     // Filling stores through the name, which a `let` would refuse.
-                    self.scopes
-                        .last_mut()
-                        .expect("scope")
-                        .insert(name.clone(), binding(true));
+                    self.scopes.last_mut().expect("scope").insert(name.clone(), binding(true));
                     self.fill(name, shape, *span)?;
-                    self.scopes
-                        .last_mut()
-                        .expect("scope")
-                        .insert(name.clone(), binding(*mutable));
+                    self.scopes.last_mut().expect("scope").insert(name.clone(), binding(*mutable));
                     return Ok(());
                 }
                 let annotated = match annotation {
-                    Some(TypeAnnotation::Value(spec)) => {
-                        Some(self.types.resolve_element(spec, *span)?)
-                    }
+                    Some(TypeAnnotation::Value(spec)) => Some(self.types.resolve_element(spec, *span)?),
                     Some(TypeAnnotation::Slice { .. }) => {
-                        return Err(Diagnostic::new(
-                            *span,
-                            "an owned array needs a fixed length: 'T[N]'",
-                        ));
+                        return Err(Diagnostic::new(*span, "an owned array needs a fixed length: 'T[N]'"));
                     }
                     Some(TypeAnnotation::Array { .. }) => unreachable!(),
                     None => None,
@@ -211,11 +196,7 @@ impl<'a> FunctionCompiler<'a> {
                     None => self.struct_expression_type(value, *span)?,
                 };
                 if let Some(struct_id) = struct_id {
-                    let type_id = self
-                        .types
-                        .structure(struct_id)
-                        .expect("resolved struct type")
-                        .id;
+                    let type_id = self.types.structure(struct_id).expect("resolved struct type").id;
                     let extent = self.types.width(type_id);
                     let place = self.local_place(name, type_id, extent, *mutable);
                     let destination = StructView {
@@ -232,14 +213,17 @@ impl<'a> FunctionCompiler<'a> {
                         self.own_aggregate(&Storage::Place(place), struct_id);
                     }
                     self.keep_borrows(place, ElementType::Struct(struct_id), value);
-                    self.scopes.last_mut().expect("scope").insert(
-                        name.clone(),
-                        Binding {
-                            type_: BindingType::Struct(struct_id),
-                            mutable: *mutable,
-                            storage: Storage::Place(place),
-                        },
-                    );
+                    self.scopes
+                        .last_mut()
+                        .expect("scope")
+                        .insert(
+                            name.clone(),
+                            Binding {
+                                type_: BindingType::Struct(struct_id),
+                                mutable: *mutable,
+                                storage: Storage::Place(place),
+                            },
+                        );
                     return Ok(());
                 }
                 let expected = match annotated {
@@ -266,29 +250,23 @@ impl<'a> FunctionCompiler<'a> {
                 if ownership::needs_drop(binding_type) {
                     self.own(place);
                 }
-                self.emit(
-                    "store",
-                    Vec::new(),
-                    vec![hir::Operand::Place(place), required(value, *span)?],
-                    None,
-                );
-                self.scopes.last_mut().expect("scope").insert(
-                    name.clone(),
-                    Binding {
-                        type_: BindingType::Scalar(binding_type),
-                        mutable: *mutable,
-                        storage: Storage::Place(place),
-                    },
-                );
+                self.emit("store", Vec::new(), vec![hir::Operand::Place(place), required(value, *span)?], None);
+                self.scopes
+                    .last_mut()
+                    .expect("scope")
+                    .insert(
+                        name.clone(),
+                        Binding {
+                            type_: BindingType::Scalar(binding_type),
+                            mutable: *mutable,
+                            storage: Storage::Place(place),
+                        },
+                    );
             }
-            Statement::Assign {
-                target,
-                operation,
-                value,
-                span,
-            } => {
+            Statement::Assign { target, operation, value, span } => {
                 if let Some(value) = self.settled_failure(value, *span)? {
-                    let settled = Statement::Assign { target: target.clone(), operation: *operation, value, span: *span };
+                    let settled =
+                        Statement::Assign { target: target.clone(), operation: *operation, value, span: *span };
                     return self.statement(&settled);
                 }
                 if let (AssignTarget::Name(name), None) = (target, operation) {
@@ -298,9 +276,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 // A plain assignment gives a moved binding a value again.
                 let reinitialized = match (target, operation) {
-                    (AssignTarget::Name(name), None) => {
-                        self.visible(name).map(|one| one.storage.clone())
-                    }
+                    (AssignTarget::Name(name), None) => self.visible(name).map(|one| one.storage.clone()),
                     _ => None,
                 };
                 // A frame's field with no null is dropped only while live.
@@ -329,10 +305,7 @@ impl<'a> FunctionCompiler<'a> {
                             let right = self.beside(value, element)?;
                             let result = self.arithmetic(
                                 *operation,
-                                TypedOperand {
-                                    operand: Some(hir::Operand::Value(current)),
-                                    type_name: element,
-                                },
+                                TypedOperand { operand: Some(hir::Operand::Value(current)), type_name: element },
                                 right,
                                 *span,
                             )?;
@@ -347,26 +320,14 @@ impl<'a> FunctionCompiler<'a> {
                             self.emit("load", vec![old], vec![destination.clone()], None);
                             self.emit_drop(hir::Operand::Value(old), element);
                         }
-                        self.emit(
-                            "store",
-                            Vec::new(),
-                            vec![destination, required(value, *span)?],
-                            None,
-                        );
+                        self.emit("store", Vec::new(), vec![destination, required(value, *span)?], None);
                     }
-                    AssignmentPlace::Bits {
-                        place,
-                        packed,
-                        field,
-                    } => {
+                    AssignmentPlace::Bits { place, packed, field } => {
                         let backing = self.types.bits_of(packed).expect("a bits type").backing;
                         let current = self.value(packed);
                         self.emit("load", vec![current], vec![place.clone()], None);
                         let current = self.bits_backing(
-                            TypedOperand {
-                                operand: Some(hir::Operand::Value(current)),
-                                type_name: packed,
-                            },
+                            TypedOperand { operand: Some(hir::Operand::Value(current)), type_name: packed },
                             *span,
                         )?;
                         let current = required(current, *span)?;
@@ -378,24 +339,25 @@ impl<'a> FunctionCompiler<'a> {
                         } else {
                             self.coerced(value, field.read)?
                         };
-                        let merged =
-                            self.inserted(current, backing, field, required(value, *span)?, *span)?;
+                        let merged = self.inserted(current, backing, field, required(value, *span)?, *span)?;
                         let merged = self.resized(merged, backing, packed);
                         self.emit("store", Vec::new(), vec![place, merged], None);
                     }
                     AssignmentPlace::Struct(destination) => {
                         if operation.is_some() {
-                            return Err(Diagnostic::new(
-                                *span,
-                                "compound assignment requires a numeric scalar",
-                            ));
+                            return Err(Diagnostic::new(*span, "compound assignment requires a numeric scalar"));
                         }
                         let mut stores = Vec::new();
                         // A run reads its cells as it is stored, after the
                         // batch's earlier stores: a value reading its own
                         // target is built aside first.
-                        let runs = self.types.copy_units(ElementType::Struct(destination.struct_id)).iter().any(|(_, _, count)| *count > 1);
-                        let reads_target = borrows::written_owner(target).is_some_and(|owner| value.names().iter().any(|one| one == owner));
+                        let runs = self
+                            .types
+                            .copy_units(ElementType::Struct(destination.struct_id))
+                            .iter()
+                            .any(|(_, _, count)| *count > 1);
+                        let reads_target = borrows::written_owner(target)
+                            .is_some_and(|owner| value.names().iter().any(|one| one == owner));
                         if runs && reads_target {
                             let staged = self.temporary(destination.struct_id);
                             self.store_struct_expression(&staged, value)?;
@@ -416,10 +378,7 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     AssignmentPlace::Array(destination, element, shape) => {
                         if operation.is_some() {
-                            return Err(Diagnostic::new(
-                                *span,
-                                "compound assignment requires a numeric scalar",
-                            ));
+                            return Err(Diagnostic::new(*span, "compound assignment requires a numeric scalar"));
                         }
                         let mut stores = Vec::new();
                         self.prepare_array_stores(&destination, element, shape, value, *span, &mut stores)?;
@@ -461,10 +420,7 @@ impl<'a> FunctionCompiler<'a> {
                     ));
                 }
             }
-            Statement::Return {
-                value: Some(expression),
-                span,
-            } if self.signature.view.is_some() => {
+            Statement::Return { value: Some(expression), span } if self.signature.view.is_some() => {
                 self.return_view(expression, *span)?;
                 let operands = match self.signature.string_result {
                     Some(_) => vec![self.string_result(*span)?],
@@ -474,10 +430,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.drop_scopes(0);
                 self.terminate(hir::Terminator { kind: "return", operands, targets: Vec::new() });
             }
-            Statement::Return {
-                value: Some(expression),
-                span,
-            } if self.signature.slot.is_some() => {
+            Statement::Return { value: Some(expression), span } if self.signature.slot.is_some() => {
                 let destination = self.result_view(*span)?;
                 self.store_struct_expression(&destination, expression)?;
                 self.drop_temporaries();
@@ -498,10 +451,7 @@ impl<'a> FunctionCompiler<'a> {
                         Vec::new()
                     }
                     (TypeName::Void, Some(_)) => {
-                        return Err(Diagnostic::new(
-                            *span,
-                            "void function cannot return a value",
-                        ));
+                        return Err(Diagnostic::new(*span, "void function cannot return a value"));
                     }
                     (_, None) => return Err(Diagnostic::new(*span, "return value is required")),
                     (result, Some(expression)) => {
@@ -512,55 +462,23 @@ impl<'a> FunctionCompiler<'a> {
                 };
                 self.drop_temporaries();
                 self.drop_scopes(0);
-                self.terminate(hir::Terminator {
-                    kind: "return",
-                    operands,
-                    targets: Vec::new(),
-                });
+                self.terminate(hir::Terminator { kind: "return", operands, targets: Vec::new() });
             }
-            Statement::If {
-                condition,
-                then_branch,
-                else_branch,
-                span,
-            } => self.if_statement(condition, then_branch, else_branch, *span)?,
-            Statement::While {
-                condition,
-                body,
-                span,
-            } => self.while_statement(condition, body, *span)?,
-            Statement::For {
-                mode,
-                name,
-                iterable,
-                body,
-                returned,
-                span,
-            } => {
+            Statement::If { condition, then_branch, else_branch, span } => {
+                self.if_statement(condition, then_branch, else_branch, *span)?
+            }
+            Statement::While { condition, body, span } => self.while_statement(condition, body, *span)?,
+            Statement::For { mode, name, iterable, body, returned, span } => {
                 if *returned {
                     self.check_handed_over(iterable, *span)?;
                 }
                 self.for_statement(*mode, name, iterable, body, *span)?
             }
-            Statement::ForRange {
-                name,
-                start,
-                end,
-                body,
-                span,
-            } => self.range_statement(name, start, end, body, *span)?,
-            Statement::Match {
-                subject,
-                arms,
-                span,
-            } => self.match_statement(subject, arms, *span)?,
-            Statement::With {
-                mutable,
-                name,
-                value,
-                body,
-                span,
-            } => {
+            Statement::ForRange { name, start, end, body, span } => {
+                self.range_statement(name, start, end, body, *span)?
+            }
+            Statement::Match { subject, arms, span } => self.match_statement(subject, arms, *span)?,
+            Statement::With { mutable, name, value, body, span } => {
                 let bind = Statement::Bind {
                     mutable: *mutable,
                     name: name.clone(),
@@ -576,28 +494,15 @@ impl<'a> FunctionCompiler<'a> {
             }
             Statement::Const(_) | Statement::Function(_) => unreachable!("desugaring takes out local declarations"),
             Statement::Break(span) => {
-                let Some(Loop {
-                    exit: target,
-                    exit_depth: depth,
-                    ..
-                }) = self.loops.last().copied()
-                else {
+                let Some(Loop { exit: target, exit_depth: depth, .. }) = self.loops.last().copied() else {
                     return Err(Diagnostic::new(*span, "break is only valid inside a loop"));
                 };
                 self.drop_scopes(depth);
                 self.terminate(jump(target));
             }
             Statement::Continue(span) => {
-                let Some(Loop {
-                    next: target,
-                    next_depth: depth,
-                    ..
-                }) = self.loops.last().copied()
-                else {
-                    return Err(Diagnostic::new(
-                        *span,
-                        "continue is only valid inside a loop",
-                    ));
+                let Some(Loop { next: target, next_depth: depth, .. }) = self.loops.last().copied() else {
+                    return Err(Diagnostic::new(*span, "continue is only valid inside a loop"));
                 };
                 self.drop_scopes(depth);
                 self.terminate(jump(target));
@@ -607,16 +512,16 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// Stores `$name_fill`, bound beforehand, to each of `name`'s `length` elements.
-    pub(super) fn fill(&mut self, name: &str, shape: Shape, span: Span) -> Result<(), Diagnostic> {
+    pub(super) fn fill(
+        &mut self,
+        name: &str,
+        shape: Shape,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         let at = |axis: usize| format!("${name}_at{axis}");
-        let indices = (0..shape.dims().len())
-            .map(|axis| Expr::Name(at(axis), span))
-            .collect();
+        let indices = (0..shape.dims().len()).map(|axis| Expr::Name(at(axis), span)).collect();
         let mut body = vec![Statement::Assign {
-            target: AssignTarget::Index {
-                base: Expr::Name(name.into(), span),
-                indices,
-            },
+            target: AssignTarget::Index { base: Expr::Name(name.into(), span), indices },
             operation: None,
             value: Expr::Name(format!("${name}_fill"), span),
             span,
@@ -668,11 +573,7 @@ impl<'a> FunctionCompiler<'a> {
 
         self.current = join_block;
         if !then_falls && !else_falls {
-            self.terminate(hir::Terminator {
-                kind: "unreachable",
-                operands: Vec::new(),
-                targets: Vec::new(),
-            });
+            self.terminate(hir::Terminator { kind: "unreachable", operands: Vec::new(), targets: Vec::new() });
         }
         Ok(())
     }
@@ -705,8 +606,7 @@ impl<'a> FunctionCompiler<'a> {
         }
 
         self.current = body_block;
-        self.loops
-            .push(Loop::new(exit_block, condition_block, self.scopes.len()));
+        self.loops.push(Loop::new(exit_block, condition_block, self.scopes.len()));
         self.scoped(body)?;
         self.loops.pop();
         if self.open() {

@@ -6,18 +6,26 @@ use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::regions::overlapping;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::interpret::{self, Val};
-use llrm_mir::{CastOp, Constant, ConstantKind, GlobalKind, GlobalVariable, InstId, Linkage, Module, Opcode, Operand, Position, Type};
+use llrm_mir::{
+    CastOp, Constant, ConstantKind, GlobalKind, GlobalVariable, InstId, Linkage, Module, Opcode, Operand, Position,
+    Type,
+};
 
 fn raised(fixture: &str) -> Module {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf").join(fixture);
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
-    let module = llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
+    let module = llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN)
+        .unwrap_or_else(|refusal| panic!("{refusal}"))
+        .module;
     let errors = llrm_mir::verify::verify(&module);
     assert!(errors.is_empty(), "{errors:#?}\n{}", llrm_mir::print::module(&module));
     module
 }
 
-fn global(module: &mut Module, name: &str) -> Operand {
+fn global(
+    module: &mut Module,
+    name: &str,
+) -> Operand {
     let id = module.named(name).unwrap_or_else(|| panic!("no @{name}"));
     Operand::Constant(module.reference(id))
 }
@@ -26,18 +34,35 @@ fn global(module: &mut Module, name: &str) -> Operand {
 /// `B$PEI2` stores its word to the next of `@printed`, and `B$DDIM` points
 /// the descriptor at `@descriptor` to `@heap`, the offset fields 0 and 10
 /// zero. Answers what was printed.
-fn printed(mut module: Module, descriptor: &str, count: usize) -> Vec<i64> {
+fn printed(
+    mut module: Module,
+    descriptor: &str,
+    count: usize,
+) -> Vec<i64> {
     let word = module.context.types.int(16);
     let row = module.context.types.intern(Type::Array { element: word, count: 64 });
     let heap = module.context.types.intern(Type::Array { element: word, count: 1024 });
     for (name, ty) in [("printed", row), ("heap", heap), ("count", word)] {
         let zero = module.context.constant(Constant { ty, kind: ConstantKind::Zero });
-        module.add_variable(name, GlobalVariable { ty, constant: false, initializer: Some(zero), align: None }, Linkage::Internal).expect("free");
+        module
+            .add_variable(
+                name,
+                GlobalVariable { ty, constant: false, initializer: Some(zero), align: None },
+                Linkage::Internal,
+            )
+            .expect("free");
     }
-    let (printed, count_cell, heap, descriptor) = (global(&mut module, "printed"), global(&mut module, "count"), global(&mut module, "heap"), global(&mut module, descriptor));
+    let (printed, count_cell, heap, descriptor) = (
+        global(&mut module, "printed"),
+        global(&mut module, "count"),
+        global(&mut module, "heap"),
+        global(&mut module, descriptor),
+    );
     let routines: Vec<_> = module
         .functions()
-        .filter(|(_, one, function)| function.is_declaration() && one.name.as_deref().is_some_and(|name| name.starts_with(llrm_x86_bc::RUNTIME)))
+        .filter(|(_, one, function)| {
+            function.is_declaration() && one.name.as_deref().is_some_and(|name| name.starts_with(llrm_x86_bc::RUNTIME))
+        })
         .map(|(id, one, _)| (id, one.name.clone().unwrap()))
         .collect();
     for (id, name) in routines {
@@ -71,13 +96,22 @@ fn printed(mut module: Module, descriptor: &str, count: usize) -> Vec<i64> {
             _ => {}
         }
         let void = b.context.types.void();
-        let answer = (returns != void).then(|| Operand::Constant(b.context.constant(Constant { ty: returns, kind: ConstantKind::Zero })));
+        let answer = (returns != void)
+            .then(|| Operand::Constant(b.context.constant(Constant { ty: returns, kind: ConstantKind::Zero })));
         b.ret(answer);
     }
     // The program ends in B$CENP, which does not return.
     let (context, main) = module.function_mut("main").expect("a main");
     let void = context.types.void();
-    let ends: Vec<_> = main.layout().iter().filter_map(|&block| main.terminator(block).filter(|&inst| main.instruction(inst).opcode == Opcode::Unreachable).map(|inst| (block, inst))).collect();
+    let ends: Vec<_> = main
+        .layout()
+        .iter()
+        .filter_map(|&block| {
+            main.terminator(block)
+                .filter(|&inst| main.instruction(inst).opcode == Opcode::Unreachable)
+                .map(|inst| (block, inst))
+        })
+        .collect();
     for (block, inst) in ends {
         main.erase(inst).expect("a terminator");
         let ret = main.create_instruction(Opcode::Ret, void, vec![], Default::default(), None);
@@ -87,11 +121,13 @@ fn printed(mut module: Module, descriptor: &str, count: usize) -> Vec<i64> {
     let long = module.context.types.int(16);
     (0..count)
         .map(|at| {
-            let fn_ty = module.context.types.intern(Type::Function { returns: long, parameters: vec![], variadic: false });
+            let fn_ty =
+                module.context.types.intern(Type::Function { returns: long, parameters: vec![], variadic: false });
             let name = format!("probe{at}");
             let id = module.add_function(&name, fn_ty, Linkage::External).expect("free");
             let main = global(&mut module, "main");
-            let main_ty = module.context.types.intern(Type::Function { returns: void, parameters: vec![], variadic: false });
+            let main_ty =
+                module.context.types.intern(Type::Function { returns: void, parameters: vec![], variadic: false });
             let mut b = module.builder(id);
             let entry = b.block("entry");
             b.position(entry);
@@ -100,7 +136,9 @@ fn printed(mut module: Module, descriptor: &str, count: usize) -> Vec<i64> {
             let slot = b.gep(long, printed, &[index], Default::default(), "");
             let value = b.load(long, slot, false, "");
             b.ret(Some(value));
-            match interpret::run(&module, &name, vec![], 10_000_000).unwrap_or_else(|trap| panic!("{trap:?}\n{}", llrm_mir::print::module(&module))) {
+            match interpret::run(&module, &name, vec![], 10_000_000)
+                .unwrap_or_else(|trap| panic!("{trap:?}\n{}", llrm_mir::print::module(&module)))
+            {
                 Val::Int { bits, .. } => bits as u16 as i16 as i64,
                 other => panic!("{other:?}"),
             }
@@ -136,7 +174,11 @@ fn accesses(module: &Module) -> Vec<(InstId, MemRef)> {
 }
 
 /// An access of `main` to the global `name`, through its GEPs.
-fn access<'a>(module: &Module, all: &'a [(InstId, MemRef)], name: &str) -> &'a MemRef {
+fn access<'a>(
+    module: &Module,
+    all: &'a [(InstId, MemRef)],
+    name: &str,
+) -> &'a MemRef {
     let function = module.global(module.named("main").expect("a main")).function().expect("a function");
     let target = module.named(name).unwrap_or_else(|| panic!("no @{name}"));
     let root = |mut pointer: Operand| loop {
@@ -156,7 +198,10 @@ fn access<'a>(module: &Module, all: &'a [(InstId, MemRef)], name: &str) -> &'a M
                 Opcode::Store { .. } => one.operands[1],
                 _ => return false,
             };
-            matches!(root(pointer), Operand::Constant(id) if module.context.get(id).kind == ConstantKind::Global(target))
+            matches!(
+                root(pointer),
+                Operand::Constant(id) if module.context.get(id).kind == ConstantKind::Global(target)
+            )
         })
         .map(|(_, reference)| reference)
         .unwrap_or_else(|| panic!("no access to @{name}"))
@@ -193,24 +238,36 @@ fn the_heap_element_is_apart_from_every_variable() {
 /// none of it, B$DSG0 does.
 #[test]
 fn def_seg_is_a_store_the_runtime_leaves_alone() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions/qbdemo-fil2.obj");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions/qbdemo-fil2.obj");
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
     let raised = llrm_x86_bc::raise_each(&found, &llrm_x86_m16::machine::BUILT_IN).expect("raises");
     assert!(raised.outcomes.iter().any(|(name, outcome)| name == "RENDER" && outcome.is_ok()));
-    let program = llrm_mir::program::Program::new(vec![raised.module], std::rc::Rc::new(llrm_mir::target::Neutral)).and_then(|one| one.with_runtime(raised.runtime)).expect("links");
+    let program = llrm_mir::program::Program::new(vec![raised.module], std::rc::Rc::new(llrm_mir::target::Neutral))
+        .and_then(|one| one.with_runtime(raised.runtime))
+        .expect("links");
     let module = &program.modules[0];
     let cell = module.named("b$seg").expect("named");
     let render = module.global(module.named("RENDER").expect("raised")).function().expect("a function");
-    let stored = render.walk().any(|(_, inst)| {
-        let one = render.instruction(inst);
-        matches!(one.opcode, Opcode::Store { .. })
-            && matches!(one.operands[..], [Operand::Constant(value), Operand::Constant(pointer)]
-                if module.context.get(value).kind == ConstantKind::Int(0xA000) && module.context.get(pointer).kind == ConstantKind::Global(cell))
-    });
+    let stored = render
+        .walk()
+        .any(
+            |(_, inst)| {
+                let one = render.instruction(inst);
+                matches!(one.opcode, Opcode::Store { .. })
+                    && matches!(
+                        one.operands[..],
+                        [Operand::Constant(value), Operand::Constant(pointer)] if module.context.get(value).kind == ConstantKind::Int(0xA000) && module.context.get(pointer).kind == ConstantKind::Global(cell)
+                    )
+            },
+        );
     assert!(stored, "{}", llrm_mir::print::module(module));
-    let mut analyses = llrm_mir::passes::ModuleAnalyses::new(llrm_mir::program::ProgramAnalyses::default().proxy(&program, 0));
+    let mut analyses =
+        llrm_mir::passes::ModuleAnalyses::new(llrm_mir::program::ProgramAnalyses::default().proxy(&program, 0));
     let globals = llrm_analysis::globalsaa::analysis(module, &mut analyses).expect("analyzes");
     assert!(globals.tracked(cell));
-    let writes = |routine: &str| globals.unsummarized(module.named(&format!("{}{routine}", llrm_x86_bc::RUNTIME))).1.contains(&cell);
+    let writes = |routine: &str| {
+        globals.unsummarized(module.named(&format!("{}{routine}", llrm_x86_bc::RUNTIME))).1.contains(&cell)
+    };
     assert!(!writes("B$ERAS") && writes("B$DSG0"));
 }

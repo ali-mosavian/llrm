@@ -16,7 +16,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::graph::loops::Loop;
 use llrm_mir::facts::Facts;
 use llrm_mir::module::{InstId, Instruction, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
@@ -26,6 +25,7 @@ use num_traits::ToPrimitive;
 
 use crate::cfg;
 use crate::consts::{self, Calls, Cells, Known};
+use crate::graph::loops::Loop;
 use crate::induction::{self, AffineOperand};
 use crate::memory::{self, Unit};
 
@@ -80,14 +80,27 @@ pub struct Limits {
 
 impl Limits {
     /// These limits on a target whose description states `unroll_budget`.
-    pub fn on(&self, unroll_budget: i64) -> Self {
-        if self.target_percent > 0 && unroll_budget > 0 { Self { max_unrolled_operations: unroll_budget * self.target_percent / 100, ..self.clone() } } else { self.clone() }
+    pub fn on(
+        &self,
+        unroll_budget: i64,
+    ) -> Self {
+        if self.target_percent > 0 && unroll_budget > 0 {
+            Self { max_unrolled_operations: unroll_budget * self.target_percent / 100, ..self.clone() }
+        } else {
+            self.clone()
+        }
     }
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_unroll_iterations: 16, max_unrolled_operations: 200, target_percent: 0, grows: true, milliclocks_per_byte: 16_000 }
+        Self {
+            max_unroll_iterations: 16,
+            max_unrolled_operations: 200,
+            target_percent: 0,
+            grows: true,
+            milliclocks_per_byte: 16_000,
+        }
     }
 }
 
@@ -108,18 +121,34 @@ impl Default for Limits {
 /// GCC also refuses a call on the path, guessing little is left to fold; the
 /// simulation measures what folds, so a call is priced as LLVM's cost model prices
 /// one instead.
-pub fn admitted(unit: &Unit, loop_: &Loop, count: &BigInt, facts: &IndexMap<ValueId, Known>, limits: &Limits, site: Site) -> bool {
+pub fn admitted(
+    unit: &Unit,
+    loop_: &Loop,
+    count: &BigInt,
+    facts: &IndexMap<ValueId, Known>,
+    limits: &Limits,
+    site: Site,
+) -> bool {
     // What the language says of copying this loop: never, or as many as it permits, which
     // at least the trip count is asked, and is then copied past the budget. Fewer than the
     // trip count is no partial unrolling, which does not exist here: it is a refusal.
-    let stated = loop_.latches.iter().filter_map(|&latch| unit.function.terminator(cfg::block(latch))).filter_map(|branch| Facts::of_terminator(unit.context, unit.metadata, unit.function, branch).unroll()).min();
+    let stated = loop_
+        .latches
+        .iter()
+        .filter_map(|&latch| unit.function.terminator(cfg::block(latch)))
+        .filter_map(|branch| Facts::of_terminator(unit.context, unit.metadata, unit.function, branch).unroll())
+        .min();
     let asked = match stated {
         Some(0) => {
             llrm_support::debug!("unroll", "loop b{} x{count}: refused: the language says never", loop_.header);
             return false;
         }
         Some(copies) if BigInt::from(copies) < *count => {
-            llrm_support::debug!("unroll", "loop b{} x{count}: refused: the language permits only {copies} copies", loop_.header);
+            llrm_support::debug!(
+                "unroll",
+                "loop b{} x{count}: refused: the language permits only {copies} copies",
+                loop_.header
+            );
             return false;
         }
         Some(_) => true,
@@ -131,20 +160,35 @@ pub fn admitted(unit: &Unit, loop_: &Loop, count: &BigInt, facts: &IndexMap<Valu
     }
     let (size, folded) = _sizes(unit, loop_, facts);
     let graph = cfg::graph(unit.function);
-    let blocks = graph.iter().filter(|block| loop_.body.contains(&block.at)).map(|block| (block.at, block)).collect::<BTreeMap<i64, &cfg::Block>>();
+    let blocks = graph
+        .iter()
+        .filter(|block| loop_.body.contains(&block.at))
+        .map(|block| (block.at, block))
+        .collect::<BTreeMap<i64, &cfg::Block>>();
     let (Some(order), Some(count)) = (_ordered(&blocks, loop_.header), count.to_i64()) else {
         let shrinks = asked || count * BigInt::from(size - folded) <= BigInt::from(size);
-        llrm_support::debug!("unroll", "loop b{} x{count}: holds a loop, {size} ops, {}", loop_.header, if shrinks { "shrinks" } else { "refused: not innermost and code would grow" });
+        llrm_support::debug!(
+            "unroll",
+            "loop b{} x{count}: holds a loop, {size} ops, {}",
+            loop_.header,
+            if shrinks { "shrinks" } else { "refused: not innermost and code would grow" }
+        );
         return shrinks;
     };
     let budget = if limits.max_unrolled_operations == 0 { i64::MAX } else { limits.max_unrolled_operations };
     let limit = if asked { HINTED_OPERATIONS } else { budget.saturating_mul(MAX_PERCENT_THRESHOLD_BOOST) / 100 };
     let Some(unrolled) = unrolled(unit, &blocks, &order, loop_, count, facts, limit.max(size)) else {
-        llrm_support::debug!("unroll", "loop b{} x{count}: {size} ops, refused: over {} ops unrolled", loop_.header, limit.max(size));
+        llrm_support::debug!(
+            "unroll",
+            "loop b{} x{count}: {size} ops, refused: over {} ops unrolled",
+            loop_.header,
+            limit.max(size)
+        );
         return false;
     };
     let boost = _boost(&unrolled);
-    // GCC's `estimated_unrolled_size` takes two thirds of the copies' size, for what later passes still remove from them.
+    // GCC's `estimated_unrolled_size` takes two thirds of the copies' size, for what later passes still remove from
+    // them.
     let estimate = (unrolled.size * 2 / 3).max(1);
     // GCC's reasons, in its order.
     let refusal = if asked || estimate <= size {
@@ -194,7 +238,10 @@ struct Unrolled {
 }
 
 /// The value a phi takes from the block `from`.
-fn _incoming(phi: &Instruction, from: impl Fn(i64) -> bool) -> Option<Operand> {
+fn _incoming(
+    phi: &Instruction,
+    from: impl Fn(i64) -> bool,
+) -> Option<Operand> {
     phi.operands.chunks(2).find(|arm| matches!(arm[1], Operand::Block(block) if from(cfg::id(block)))).map(|arm| arm[0])
 }
 
@@ -202,7 +249,15 @@ fn _incoming(phi: &Instruction, from: impl Fn(i64) -> bool) -> Option<Operand> {
 /// knows and the memory it has written, count what does not fold, and follow only the
 /// successors a folded branch leaves. `None` once more than `limit` instructions
 /// remain, where LLVM bails out too.
-fn unrolled(unit: &Unit, blocks: &BTreeMap<i64, &cfg::Block>, order: &[i64], loop_: &Loop, count: i64, facts: &IndexMap<ValueId, Known>, limit: i64) -> Option<Unrolled> {
+fn unrolled(
+    unit: &Unit,
+    blocks: &BTreeMap<i64, &cfg::Block>,
+    order: &[i64],
+    loop_: &Loop,
+    count: i64,
+    facts: &IndexMap<ValueId, Known>,
+    limit: i64,
+) -> Option<Unrolled> {
     let latch = *loop_.latches.first()?;
     let function = unit.function;
     let calls = Calls::default();
@@ -224,7 +279,11 @@ fn unrolled(unit: &Unit, blocks: &BTreeMap<i64, &cfg::Block>, order: &[i64], loo
                 }
                 // The header's value comes from before the loop, then from the last iteration.
                 let incoming = if at == loop_.header {
-                    let source = if iteration == 0 { _incoming(op, |pred| !loop_.body.contains(&pred)) } else { _incoming(op, |pred| pred == latch) };
+                    let source = if iteration == 0 {
+                        _incoming(op, |pred| !loop_.body.contains(&pred))
+                    } else {
+                        _incoming(op, |pred| pred == latch)
+                    };
                     source.and_then(|operand| consts::_operand(unit, operand, &previous, None))
                 } else if let [pred] = from.as_slice() {
                     _incoming(op, |one| one == *pred).and_then(|operand| consts::_operand(unit, operand, &values, None))
@@ -259,7 +318,12 @@ fn unrolled(unit: &Unit, blocks: &BTreeMap<i64, &cfg::Block>, order: &[i64], loo
                         out.size += _size(unit, inst);
                     }
                 }
-                if matches!(op.opcode, Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)) || memory::unmodeled_write(unit, inst) {
+                if matches!(
+                    op.opcode,
+                    Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)
+                )
+                    || memory::unmodeled_write(unit, inst)
+                {
                     let mut queries = consts::memory_queries(*unit, &values);
                     cells = consts::_kills(cells, inst, &values, &calls, None, None, false, &mut queries);
                 }
@@ -270,11 +334,11 @@ fn unrolled(unit: &Unit, blocks: &BTreeMap<i64, &cfg::Block>, order: &[i64], loo
                 _ => unreachable!("a branch names blocks"),
             };
             let decided = match function.terminator(block).map(|last| function.instruction(last)) {
-                Some(last) if last.opcode == Opcode::Br && last.operands.len() == 3 => {
-                    known(last.operands[0]).map(|bit| vec![target(last.operands[if bit.n != BigInt::from(0) { 1 } else { 2 }])])
-                }
+                Some(last) if last.opcode == Opcode::Br && last.operands.len() == 3 => known(last.operands[0])
+                    .map(|bit| vec![target(last.operands[if bit.n != BigInt::from(0) { 1 } else { 2 }])]),
                 Some(last) if last.opcode == Opcode::Switch => known(last.operands[0]).map(|tested| {
-                    let case = last.operands[2..].chunks(2).find(|arm| known(arm[0]).is_some_and(|one| one.n == tested.n));
+                    let case =
+                        last.operands[2..].chunks(2).find(|arm| known(arm[0]).is_some_and(|one| one.n == tested.n));
                     vec![target(case.map_or(last.operands[1], |arm| arm[1]))]
                 }),
                 _ => Some(blocks[&at].succ.clone()),
@@ -300,7 +364,10 @@ fn unrolled(unit: &Unit, blocks: &BTreeMap<i64, &cfg::Block>, order: &[i64], loo
 
 /// The loop's blocks, each after every block reaching it inside one iteration; `None`
 /// when the loop holds another.
-fn _ordered(blocks: &BTreeMap<i64, &cfg::Block>, header: i64) -> Option<Vec<i64>> {
+fn _ordered(
+    blocks: &BTreeMap<i64, &cfg::Block>,
+    header: i64,
+) -> Option<Vec<i64>> {
     let inner = |at: &i64| *at != header && blocks.contains_key(at);
     let mut waiting = blocks.keys().map(|at| (*at, 0)).collect::<BTreeMap<i64, usize>>();
     for block in blocks.values() {
@@ -324,9 +391,17 @@ fn _ordered(blocks: &BTreeMap<i64, &cfg::Block>, header: i64) -> Option<Vec<i64>
 }
 
 /// The loop's instructions, and how many of them fold once the iteration is fixed.
-fn _sizes(unit: &Unit, loop_: &Loop, facts: &IndexMap<ValueId, Known>) -> (i64, i64) {
+fn _sizes(
+    unit: &Unit,
+    loop_: &Loop,
+    facts: &IndexMap<ValueId, Known>,
+) -> (i64, i64) {
     let function = unit.function;
-    let inside = function.walk().filter(|(block, _)| loop_.body.contains(&cfg::id(*block))).map(|(_, inst)| inst).collect::<Vec<_>>();
+    let inside = function
+        .walk()
+        .filter(|(block, _)| loop_.body.contains(&cfg::id(*block)))
+        .map(|(_, inst)| inst)
+        .collect::<Vec<_>>();
     let size = inside.iter().map(|&inst| _size(unit, inst)).sum();
     let inside = inside.into_iter().map(|inst| function.instruction(inst)).collect::<Vec<_>>();
     let mut known = induction::basics(unit, loop_)
@@ -335,7 +410,8 @@ fn _sizes(unit: &Unit, loop_: &Loop, facts: &IndexMap<ValueId, Known>) -> (i64, 
         .map(|one| one.value)
         .collect::<BTreeSet<ValueId>>();
     known.extend(facts.keys().copied());
-    let (phis, ops): (Vec<&Instruction>, Vec<&Instruction>) = inside.into_iter().partition(|op| op.opcode == Opcode::Phi);
+    let (phis, ops): (Vec<&Instruction>, Vec<&Instruction>) =
+        inside.into_iter().partition(|op| op.opcode == Opcode::Phi);
     let mut folded = BTreeSet::<usize>::new();
     let mut changed = true;
     while changed {
@@ -357,12 +433,18 @@ fn _sizes(unit: &Unit, loop_: &Loop, facts: &IndexMap<ValueId, Known>) -> (i64, 
 
 /// What `inst` adds to a copy: LLVM's `TTI::getInstructionCost`, one for each
 /// instruction, and a call lowered to one its arguments besides.
-fn _size(unit: &Unit, inst: InstId) -> i64 {
+fn _size(
+    unit: &Unit,
+    inst: InstId,
+) -> i64 {
     // A call's operands are its arguments and its callee.
     if unit.calls_out(inst) { unit.function.instruction(inst).operands.len() as i64 } else { 1 }
 }
 
-fn _constant(arg: &AffineOperand, facts: &IndexMap<ValueId, Known>) -> bool {
+fn _constant(
+    arg: &AffineOperand,
+    facts: &IndexMap<ValueId, Known>,
+) -> bool {
     match arg {
         AffineOperand::Const(_) => true,
         AffineOperand::Value(value, _) => facts.contains_key(value),
@@ -373,7 +455,12 @@ fn _constant(arg: &AffineOperand, facts: &IndexMap<ValueId, Known>) -> bool {
 fn _pure(op: &Instruction) -> bool {
     !matches!(
         op.opcode,
-        Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Alloca { .. } | Opcode::LandingPad { .. }
+        Opcode::Load { .. }
+            | Opcode::Store { .. }
+            | Opcode::Call(_)
+            | Opcode::Invoke(_)
+            | Opcode::Alloca { .. }
+            | Opcode::LandingPad { .. }
     )
 }
 

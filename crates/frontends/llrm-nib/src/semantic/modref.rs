@@ -33,17 +33,26 @@ struct Effects {
 const FOREIGN: &str = "$foreign";
 
 impl Effects {
-    fn absorb(&mut self, other: &Effects) {
+    fn absorb(
+        &mut self,
+        other: &Effects,
+    ) {
         self.reads.extend(other.reads.iter().copied());
         self.writes.extend(other.writes.iter().copied());
         self.everything |= other.everything;
     }
 
-    fn reads(&self, symbol: u32) -> bool {
+    fn reads(
+        &self,
+        symbol: u32,
+    ) -> bool {
         self.everything || self.reads.contains(&symbol)
     }
 
-    fn writes(&self, symbol: u32) -> bool {
+    fn writes(
+        &self,
+        symbol: u32,
+    ) -> bool {
         self.everything || self.writes.contains(&symbol)
     }
 }
@@ -52,7 +61,12 @@ impl Effects {
 /// `&mut` lend, read it. `runtime` names the routines the compiler's own
 /// runtime defines, which touch no module variable; `entries` the functions
 /// other objects may call: exported, or with their address taken.
-pub(super) fn check_lends(functions: &[hir::Function], lends: &[Lend], runtime: &BTreeSet<&str>, entries: &BTreeSet<&str>) -> Result<(), Diagnostic> {
+pub(super) fn check_lends(
+    functions: &[hir::Function],
+    lends: &[Lend],
+    runtime: &BTreeSet<&str>,
+    entries: &BTreeSet<&str>,
+) -> Result<(), Diagnostic> {
     if lends.is_empty() {
         return Ok(());
     }
@@ -71,19 +85,29 @@ pub(super) fn check_lends(functions: &[hir::Function], lends: &[Lend], runtime: 
             (false, false) => continue,
         };
         let how = if lend.across { "borrowed across a call to" } else { "lent to" };
-        return Err(Diagnostic::new(lend.span, format!("{:?} is {how} {:?}, which may {touched} it", lend.name, lend.callee)));
+        return Err(Diagnostic::new(
+            lend.span,
+            format!("{:?} is {how} {:?}, which may {touched} it", lend.name, lend.callee),
+        ));
     }
     Ok(())
 }
 
 /// Each function's effects, with those of everything it calls.
-fn summaries<'a>(functions: &'a [hir::Function], runtime: &BTreeSet<&str>, entries: &BTreeSet<&'a str>) -> BTreeMap<&'a str, Effects> {
+fn summaries<'a>(
+    functions: &'a [hir::Function],
+    runtime: &BTreeSet<&str>,
+    entries: &BTreeSet<&'a str>,
+) -> BTreeMap<&'a str, Effects> {
     let defined: BTreeSet<&str> = functions.iter().map(|one| one.name.as_str()).collect();
     let mut callees: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     let mut summaries: BTreeMap<&str, Effects> = BTreeMap::new();
     for function in functions {
         let (effects, called) = direct(function);
-        let called = called.into_iter().filter(|one| !runtime.contains(one)).map(|one| if defined.contains(one) { one } else { FOREIGN });
+        let called = called
+            .into_iter()
+            .filter(|one| !runtime.contains(one))
+            .map(|one| if defined.contains(one) { one } else { FOREIGN });
         callees.insert(&function.name, called.collect());
         summaries.insert(&function.name, effects);
     }
@@ -110,7 +134,8 @@ fn summaries<'a>(functions: &'a [hir::Function], runtime: &BTreeSet<&str>, entri
 /// What `function` itself reads and writes of module variables, and the
 /// functions it calls; a call through a pointer calls foreign code.
 fn direct(function: &hir::Function) -> (Effects, BTreeSet<&str>) {
-    let module: BTreeMap<u32, u32> = function.places.iter().filter(|one| one.storage == "module").map(|one| (one.id, one.symbol)).collect();
+    let module: BTreeMap<u32, u32> =
+        function.places.iter().filter(|one| one.storage == "module").map(|one| (one.id, one.symbol)).collect();
     let mut effects = Effects::default();
     let mut called = BTreeSet::new();
     for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
@@ -150,7 +175,9 @@ fn direct(function: &hir::Function) -> (Effects, BTreeSet<&str>) {
 
 fn place_of(operand: &hir::Operand) -> Option<u32> {
     match operand {
-        hir::Operand::Place(place) | hir::Operand::ArrayElement(place, _) | hir::Operand::ProjectedPlace { place, .. } => Some(*place),
+        hir::Operand::Place(place)
+        | hir::Operand::ArrayElement(place, _)
+        | hir::Operand::ProjectedPlace { place, .. } => Some(*place),
         _ => None,
     }
 }
@@ -158,8 +185,19 @@ fn place_of(operand: &hir::Operand) -> Option<u32> {
 impl FunctionCompiler<'_> {
     /// Records the module variables a call of `callee` is lent, and those
     /// the bindings in scope hold borrowed across it.
-    pub(super) fn record_lends(&mut self, callee: &str, arguments: &[Expr], lent: &[borrows::Lent], span: Span) {
-        let passed = arguments.iter().zip(lent).flat_map(|(argument, one)| one.roots.iter().map(move |root| (root.clone(), one.mutable, argument.span(), None)));
+    pub(super) fn record_lends(
+        &mut self,
+        callee: &str,
+        arguments: &[Expr],
+        lent: &[borrows::Lent],
+        span: Span,
+    ) {
+        let passed = arguments
+            .iter()
+            .zip(lent)
+            .flat_map(
+                |(argument, one)| one.roots.iter().map(move |root| (root.clone(), one.mutable, argument.span(), None)),
+            );
         let held = self.held_borrows().into_iter().map(|(root, mutable, holder)| (root, mutable, span, Some(holder)));
         let lends: Vec<_> = passed.chain(held).filter(|(root, ..)| root.life == borrows::Life::Module).collect();
         for (root, mutable, span, holder) in lends {
@@ -167,7 +205,8 @@ impl FunctionCompiler<'_> {
                 continue;
             };
             let symbol = self.places.iter().find(|one| one.id == place).expect("a module place").symbol;
-            let lend = Lend { callee: callee.to_owned(), symbol, name: root.name, mutable, span, across: holder.is_some() };
+            let lend =
+                Lend { callee: callee.to_owned(), symbol, name: root.name, mutable, span, across: holder.is_some() };
             match holder {
                 Some(holder) => self.hold_across(lend, holder),
                 None => self.lends.push(lend),

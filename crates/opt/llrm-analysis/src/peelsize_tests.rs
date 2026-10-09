@@ -2,7 +2,6 @@
 //! GCC's refusals, and a copy that folds away being taken past them. The
 //! old peelsize had no tests of its own; unroll's covered it.
 
-use crate::graph::loops::{self, Loop};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::Module;
 use num_bigint::BigInt;
@@ -10,6 +9,7 @@ use num_bigint::BigInt;
 use super::{ENTRY, Limits, Site, admitted};
 use crate::cfg;
 use crate::consts;
+use crate::graph::loops::{self, Loop};
 use crate::induction;
 use crate::memory::Unit;
 use crate::testing::{DOS, function, layout, parsed};
@@ -38,12 +38,19 @@ impl Parsed {
     }
 
     /// Whether the outermost loop, at the count induction proves, is admitted.
-    fn admitted(&self, limits: &Limits) -> bool {
+    fn admitted(
+        &self,
+        limits: &Limits,
+    ) -> bool {
         self.entered(limits, ENTRY)
     }
 
     /// `admitted`, the loop entered `entries` 256ths of the times its function is.
-    fn entered(&self, limits: &Limits, entries: i64) -> bool {
+    fn entered(
+        &self,
+        limits: &Limits,
+        entries: i64,
+    ) -> bool {
         let unit = self.unit();
         let facts = consts::known(&unit, None, None, None);
         let loop_ = self.outer();
@@ -53,7 +60,11 @@ impl Parsed {
 }
 
 /// `%acc` summed with `%i` for `trips` trips, and `work` more of the body.
-fn summing(trips: u32, start: &str, work: &str) -> Parsed {
+fn summing(
+    trips: u32,
+    start: &str,
+    work: &str,
+) -> Parsed {
     Parsed::new(&format!(
         "declare void @g()
 declare void @h(i16, i16, i16, i16, i16, i16)
@@ -233,8 +244,8 @@ fn a_cold_loop_is_not_copied_where_the_code_grows() {
 }
 
 /// QCport's 16-trip clear and fill loops (console.c, mdl.c) were copied 16 times, +100 to +400 bytes
-/// each, when the limit was 16; it was 10 (LLVM's `-unroll-max-iteration-count-to-analyze`) until -O2 became gcc's, where
-/// no complete copy grows the code (`grows: false`) and the limit is gcc's `max-completely-peel-times`, 16.
+/// each, when the limit was 16; it was 10 (LLVM's `-unroll-max-iteration-count-to-analyze`) until -O2 became gcc's,
+/// where no complete copy grows the code (`grows: false`) and the limit is gcc's `max-completely-peel-times`, 16.
 #[test]
 fn a_loop_of_sixteen_trips_is_copied_only_where_it_does_not_grow() {
     let kept = Limits { grows: false, ..Limits::default() };

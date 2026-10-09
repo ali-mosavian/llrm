@@ -2,13 +2,13 @@
 //! lowering writes it and a backend reads it, both through here.
 //!
 //! A type is a node `!{!"kind", !"name", i64 size, !"address", target, !{members}}`
-//! and a member `!{!"name", type, i64 offset}`, a bit field's with its `i64 start, i64 width` after. Named metadata [`TYPES`],
-//! [`FUNCTIONS`] and [`GLOBALS`] list the types, each after those it names,
+//! and a member `!{!"name", type, i64 offset}`, a bit field's with its `i64 start, i64 width` after. Named metadata
+//! [`TYPES`], [`FUNCTIONS`] and [`GLOBALS`] list the types, each after those it names,
 //! the procedures and the variables in data; a variable in a frame is an `llvm.dbg.declare` of its storage,
 //! its [`VARIABLE`] attachment naming it.
 
-use crate::module::{MetadataId, MetadataNode, MetadataOperand, Module};
 use crate::context::ConstantKind;
+use crate::module::{MetadataId, MetadataNode, MetadataOperand, Module};
 
 /// An enum of fixed spellings, as metadata and HIR's JSON write it.
 macro_rules! spelled {
@@ -176,8 +176,9 @@ pub struct Variable {
     pub argument: Option<i64>,
 }
 
-/// Kind of the metadata that says a store or a `memcpy` is volatile only so the optimiser leaves it for a debugger to read the
-/// variable it writes (`-g`): a build that does not run the optimiser, or finds the variable another way, lifts it.
+/// Kind of the metadata that says a store or a `memcpy` is volatile only so the optimiser leaves it for a debugger to
+/// read the variable it writes (`-g`): a build that does not run the optimiser, or finds the variable another way,
+/// lifts it.
 pub const OBSERVED: &str = "llrm.observed";
 
 /// The node [`OBSERVED`] attaches.
@@ -185,7 +186,10 @@ pub fn observed_node(module: &mut Module) -> MetadataId {
     node(module, Vec::new())
 }
 
-fn node(module: &mut Module, operands: Vec<MetadataOperand>) -> MetadataId {
+fn node(
+    module: &mut Module,
+    operands: Vec<MetadataOperand>,
+) -> MetadataId {
     module.metadata.push(MetadataNode { distinct: false, operands });
     MetadataId(module.metadata.len() as u32 - 1)
 }
@@ -194,12 +198,19 @@ fn text(value: &str) -> MetadataOperand {
     MetadataOperand::String(value.to_owned())
 }
 
-fn int(module: &mut Module, value: i64) -> MetadataOperand {
+fn int(
+    module: &mut Module,
+    value: i64,
+) -> MetadataOperand {
     let i64 = module.context.types.int(64);
     MetadataOperand::Constant(module.context.int(i64, i128::from(value)))
 }
 
-fn named(module: &mut Module, name: &str, id: MetadataId) {
+fn named(
+    module: &mut Module,
+    name: &str,
+    id: MetadataId,
+) {
     match module.named_metadata.iter_mut().find(|(one, _)| one == name) {
         Some((_, ids)) => ids.push(id),
         None => module.named_metadata.push((name.to_owned(), vec![id])),
@@ -213,18 +224,27 @@ struct Reader<'m> {
 }
 
 impl<'m> Reader<'m> {
-    fn of(module: &'m Module, id: MetadataId) -> Option<Self> {
+    fn of(
+        module: &'m Module,
+        id: MetadataId,
+    ) -> Option<Self> {
         Some(Self { module, operands: &module.metadata.get(id.0 as usize)?.operands })
     }
 
-    fn text(&self, at: usize) -> Option<String> {
+    fn text(
+        &self,
+        at: usize,
+    ) -> Option<String> {
         match self.operands.get(at)? {
             MetadataOperand::String(value) => Some(value.clone()),
             _ => None,
         }
     }
 
-    fn int(&self, at: usize) -> Option<i64> {
+    fn int(
+        &self,
+        at: usize,
+    ) -> Option<i64> {
         match self.operands.get(at)? {
             MetadataOperand::Constant(value) => match self.module.context.get(*value).kind {
                 // Written as i64.
@@ -235,7 +255,10 @@ impl<'m> Reader<'m> {
         }
     }
 
-    fn node(&self, at: usize) -> Option<MetadataId> {
+    fn node(
+        &self,
+        at: usize,
+    ) -> Option<MetadataId> {
         match self.operands.get(at)? {
             MetadataOperand::Node(id) => Some(*id),
             _ => None,
@@ -243,7 +266,11 @@ impl<'m> Reader<'m> {
     }
 
     /// Each operand of the list node at `at`, read by `each`.
-    fn list<T>(&self, at: usize, each: impl Fn(&Reader<'m>) -> Option<T>) -> Option<Vec<T>> {
+    fn list<T>(
+        &self,
+        at: usize,
+        each: impl Fn(&Reader<'m>) -> Option<T>,
+    ) -> Option<Vec<T>> {
         let list = Reader::of(self.module, self.node(at)?)?;
         list.operands
             .iter()
@@ -255,12 +282,18 @@ impl<'m> Reader<'m> {
     }
 }
 
-fn list(module: &mut Module, items: Vec<Vec<MetadataOperand>>) -> MetadataOperand {
+fn list(
+    module: &mut Module,
+    items: Vec<Vec<MetadataOperand>>,
+) -> MetadataOperand {
     let ids: Vec<MetadataOperand> = items.into_iter().map(|one| MetadataOperand::Node(node(module, one))).collect();
     MetadataOperand::Node(node(module, ids))
 }
 
-pub fn add_type(module: &mut Module, one: &Type) -> MetadataId {
+pub fn add_type(
+    module: &mut Module,
+    one: &Type,
+) -> MetadataId {
     let id = reserve_type(module);
     set_type(module, id, one);
     id
@@ -274,7 +307,11 @@ pub fn reserve_type(module: &mut Module) -> MetadataId {
 }
 
 /// The type `id` reserved is `one`.
-pub fn set_type(module: &mut Module, id: MetadataId, one: &Type) {
+pub fn set_type(
+    module: &mut Module,
+    id: MetadataId,
+    one: &Type,
+) {
     let members = one
         .members
         .iter()
@@ -299,7 +336,10 @@ pub fn types(module: &Module) -> Vec<MetadataId> {
     listed(module, TYPES).collect()
 }
 
-pub fn read_type(module: &Module, id: MetadataId) -> Option<Type> {
+pub fn read_type(
+    module: &Module,
+    id: MetadataId,
+) -> Option<Type> {
     let one = Reader::of(module, id)?;
     Some(Type {
         kind: Kind::from_value(&one.text(0)?)?,
@@ -307,28 +347,50 @@ pub fn read_type(module: &Module, id: MetadataId) -> Option<Type> {
         size: one.int(2)?,
         reach: Reach::from_value(&one.text(3)?)?,
         target: one.node(4),
-        members: one.list(5, |member| Some(Member { name: member.text(0)?, r#type: member.node(1)?, offset: member.int(2)?, bits: member.int(3).zip(member.int(4)) }))?,
+        members: one.list(5, |member| {
+            Some(Member {
+                name: member.text(0)?,
+                r#type: member.node(1)?,
+                offset: member.int(2)?,
+                bits: member.int(3).zip(member.int(4)),
+            })
+        })?,
         spelling: one.text(6),
     })
 }
 
-pub fn add_function(module: &mut Module, one: &Function) {
-    let parameters = one.parameters.iter().map(|(index, name, r#type)| vec![int(module, *index), text(name), MetadataOperand::Node(*r#type)]).collect();
+pub fn add_function(
+    module: &mut Module,
+    one: &Function,
+) {
+    let parameters = one
+        .parameters
+        .iter()
+        .map(|(index, name, r#type)| vec![int(module, *index), text(name), MetadataOperand::Node(*r#type)])
+        .collect();
     let parameters = list(module, parameters);
     let flag = int(module, i64::from(one.module));
-    let id = node(module, vec![text(&one.function), text(&one.name), MetadataOperand::Node(one.r#type), parameters, flag]);
+    let id =
+        node(module, vec![text(&one.function), text(&one.name), MetadataOperand::Node(one.r#type), parameters, flag]);
     named(module, FUNCTIONS, id);
 }
 
 /// The module's source language.
-pub fn set_language(module: &mut Module, language: Language, dialect: Dialect) {
+pub fn set_language(
+    module: &mut Module,
+    language: Language,
+    dialect: Dialect,
+) {
     let id = node(module, vec![text(language.value()), text(dialect.value())]);
     named(module, LANGUAGE, id);
 }
 
 /// The form of CodeView 4 the frontend says: the BASIC compilers' where it says none.
 pub fn dialect(module: &Module) -> Dialect {
-    listed(module, LANGUAGE).next().and_then(|id| Dialect::from_value(&Reader::of(module, id)?.text(1)?)).unwrap_or(Dialect::Bc)
+    listed(module, LANGUAGE)
+        .next()
+        .and_then(|id| Dialect::from_value(&Reader::of(module, id)?.text(1)?))
+        .unwrap_or(Dialect::Bc)
 }
 
 pub fn language(module: &Module) -> Option<Language> {
@@ -350,7 +412,10 @@ pub fn functions(module: &Module) -> Vec<Function> {
     listed(module, FUNCTIONS).filter_map(read).collect()
 }
 
-pub fn add_global(module: &mut Module, one: &Global) {
+pub fn add_global(
+    module: &mut Module,
+    one: &Global,
+) {
     let offset = int(module, one.offset);
     let scope = one.scope.as_deref().map_or(MetadataOperand::Null, text);
     let id = node(module, vec![text(&one.global), offset, text(&one.name), MetadataOperand::Node(one.r#type), scope]);
@@ -360,13 +425,22 @@ pub fn add_global(module: &mut Module, one: &Global) {
 pub fn globals(module: &Module) -> Vec<Global> {
     let read = |id: MetadataId| {
         let one = Reader::of(module, id)?;
-        Some(Global { global: one.text(0)?, offset: one.int(1)?, name: one.text(2)?, r#type: one.node(3)?, scope: one.text(4) })
+        Some(Global {
+            global: one.text(0)?,
+            offset: one.int(1)?,
+            name: one.text(2)?,
+            r#type: one.node(3)?,
+            scope: one.text(4),
+        })
     };
     listed(module, GLOBALS).filter_map(read).collect()
 }
 
 /// The node an `llvm.dbg.declare` attaches as [`VARIABLE`].
-pub fn add_variable(module: &mut Module, one: &Variable) -> MetadataId {
+pub fn add_variable(
+    module: &mut Module,
+    one: &Variable,
+) -> MetadataId {
     let offset = int(module, one.offset);
     let mut operands = vec![text(&one.scope), text(&one.name), MetadataOperand::Node(one.r#type), offset];
     // After the offset, only where true: a node without it is no parameter's.
@@ -380,9 +454,13 @@ pub fn add_variable(module: &mut Module, one: &Variable) -> MetadataId {
     node(module, operands)
 }
 
-/// The byte offset in its frame object of the variable node `id` names, read where only the module's metadata and constants are at
-/// hand (a pass).
-pub fn variable_offset(metadata: &[crate::module::MetadataNode], context: &crate::context::Context, id: MetadataId) -> Option<i64> {
+/// The byte offset in its frame object of the variable node `id` names, read where only the module's metadata and
+/// constants are at hand (a pass).
+pub fn variable_offset(
+    metadata: &[crate::module::MetadataNode],
+    context: &crate::context::Context,
+    id: MetadataId,
+) -> Option<i64> {
     match metadata.get(id.0 as usize)?.operands.get(3)? {
         MetadataOperand::Constant(value) => match context.get(*value).kind {
             ConstantKind::Int(value) => Some(value as u64 as i64),
@@ -392,12 +470,25 @@ pub fn variable_offset(metadata: &[crate::module::MetadataNode], context: &crate
     }
 }
 
-pub fn read_variable(module: &Module, id: MetadataId) -> Option<Variable> {
+pub fn read_variable(
+    module: &Module,
+    id: MetadataId,
+) -> Option<Variable> {
     let one = Reader::of(module, id)?;
-    Some(Variable { scope: one.text(0)?, name: one.text(1)?, r#type: one.node(2)?, offset: one.int(3)?, parameter: one.int(4).is_some_and(|flag| flag != 0), argument: one.int(5) })
+    Some(Variable {
+        scope: one.text(0)?,
+        name: one.text(1)?,
+        r#type: one.node(2)?,
+        offset: one.int(3)?,
+        parameter: one.int(4).is_some_and(|flag| flag != 0),
+        argument: one.int(5),
+    })
 }
 
-fn listed<'m>(module: &'m Module, name: &str) -> impl Iterator<Item = MetadataId> + 'm {
+fn listed<'m>(
+    module: &'m Module,
+    name: &str,
+) -> impl Iterator<Item = MetadataId> + 'm {
     let ids = module.named_metadata.iter().find(|(one, _)| one == name).map_or(&[][..], |(_, ids)| ids.as_slice());
     ids.iter().copied()
 }
@@ -412,10 +503,29 @@ mod tests {
     #[test]
     fn a_bit_fields_member_round_trips_and_an_older_member_reads_as_none() {
         let mut module = Module::default();
-        let scalar = Type { kind: Kind::Scalar, name: "int16".into(), size: 0, reach: Reach::Near, target: None, members: Vec::new(), spelling: None };
+        let scalar = Type {
+            kind: Kind::Scalar,
+            name: "int16".into(),
+            size: 0,
+            reach: Reach::Near,
+            target: None,
+            members: Vec::new(),
+            spelling: None,
+        };
         let int16 = add_type(&mut module, &scalar);
-        let members = vec![Member { name: "x".into(), r#type: int16, offset: 0, bits: None }, Member { name: "f".into(), r#type: int16, offset: 2, bits: Some((3, 5)) }];
-        let structure = Type { kind: Kind::Struct, name: "Pt".into(), size: 4, reach: Reach::Near, target: None, members, spelling: None };
+        let members = vec![
+            Member { name: "x".into(), r#type: int16, offset: 0, bits: None },
+            Member { name: "f".into(), r#type: int16, offset: 2, bits: Some((3, 5)) },
+        ];
+        let structure = Type {
+            kind: Kind::Struct,
+            name: "Pt".into(),
+            size: 4,
+            reach: Reach::Near,
+            target: None,
+            members,
+            spelling: None,
+        };
         add_type(&mut module, &structure);
         let reparsed = crate::parse::module(&crate::print::module(&module)).expect("parses");
         let read: Vec<Type> = types(&reparsed).into_iter().filter_map(|id| read_type(&reparsed, id)).collect();
@@ -428,12 +538,46 @@ mod tests {
     #[test]
     fn a_struct_that_points_to_itself_reads_back_whole() {
         let mut module = Module::default();
-        let scalar = Type { kind: Kind::Scalar, name: "int16".into(), size: 0, reach: Reach::Near, target: None, members: Vec::new(), spelling: None };
+        let scalar = Type {
+            kind: Kind::Scalar,
+            name: "int16".into(),
+            size: 0,
+            reach: Reach::Near,
+            target: None,
+            members: Vec::new(),
+            spelling: None,
+        };
         let int16 = add_type(&mut module, &scalar);
         let node = reserve_type(&mut module);
-        let pointer = add_type(&mut module, &Type { kind: Kind::Pointer, name: String::new(), size: 0, reach: Reach::Near, target: Some(node), members: Vec::new(), spelling: None });
-        let members = vec![Member { name: "next".into(), r#type: pointer, offset: 0, bits: None }, Member { name: "v".into(), r#type: int16, offset: 2, bits: None }];
-        set_type(&mut module, node, &Type { kind: Kind::Struct, name: "node".into(), size: 4, reach: Reach::Near, target: None, members, spelling: None });
+        let pointer = add_type(
+            &mut module,
+            &Type {
+                kind: Kind::Pointer,
+                name: String::new(),
+                size: 0,
+                reach: Reach::Near,
+                target: Some(node),
+                members: Vec::new(),
+                spelling: None,
+            },
+        );
+        let members = vec![
+            Member { name: "next".into(), r#type: pointer, offset: 0, bits: None },
+            Member { name: "v".into(), r#type: int16, offset: 2, bits: None },
+        ];
+        set_type(
+            &mut module,
+            node,
+            &Type {
+                kind: Kind::Struct,
+                name: "node".into(),
+                size: 4,
+                reach: Reach::Near,
+                target: None,
+                members,
+                spelling: None,
+            },
+        );
         let reparsed = crate::parse::module(&crate::print::module(&module)).expect("parses");
         let read: Vec<Type> = types(&reparsed).into_iter().filter_map(|id| read_type(&reparsed, id)).collect();
         assert_eq!(read.len(), 3);
@@ -447,9 +591,28 @@ mod tests {
     #[test]
     fn each_record_reads_back() {
         let mut module = Module::default();
-        let scalar = Type { kind: Kind::Scalar, name: "int16".into(), size: 0, reach: Reach::Near, target: None, members: Vec::new(), spelling: None };
+        let scalar = Type {
+            kind: Kind::Scalar,
+            name: "int16".into(),
+            size: 0,
+            reach: Reach::Near,
+            target: None,
+            members: Vec::new(),
+            spelling: None,
+        };
         let int16 = add_type(&mut module, &scalar);
-        let structure = Type { kind: Kind::Struct, name: "Pt".into(), size: 4, reach: Reach::Near, target: None, spelling: None, members: vec![Member { name: "x".into(), r#type: int16, offset: 2, bits: None }, Member { name: "f".into(), r#type: int16, offset: 0, bits: Some((3, 5)) }] };
+        let structure = Type {
+            kind: Kind::Struct,
+            name: "Pt".into(),
+            size: 4,
+            reach: Reach::Near,
+            target: None,
+            spelling: None,
+            members: vec![
+                Member { name: "x".into(), r#type: int16, offset: 2, bits: None },
+                Member { name: "f".into(), r#type: int16, offset: 0, bits: Some((3, 5)) },
+            ],
+        };
         let pt = add_type(&mut module, &structure);
         // A spelling is written only where there is one, and reads back.
         let spelled = Type { spelling: Some("short".into()), ..scalar.clone() };
@@ -458,13 +621,20 @@ mod tests {
         assert_eq!(module.metadata[int16.0 as usize].operands.len(), 6, "a type without one is written as before");
         assert_eq!(read_type(&module, int16), Some(scalar));
         assert_eq!(read_type(&module, pt), Some(structure));
-        let function = Function { function: "f".into(), module: false, name: "F".into(), r#type: pt, parameters: vec![(1, "n".into(), int16)] };
+        let function = Function {
+            function: "f".into(),
+            module: false,
+            name: "F".into(),
+            r#type: pt,
+            parameters: vec![(1, "n".into(), int16)],
+        };
         add_function(&mut module, &function);
         assert_eq!(functions(&module), [function]);
         let global = Global { global: "g".into(), offset: 4, name: "G".into(), r#type: int16, scope: Some("f".into()) };
         add_global(&mut module, &global);
         assert_eq!(globals(&module), [global]);
-        let variable = Variable { scope: "f".into(), name: "v".into(), r#type: pt, offset: -2, parameter: false, argument: None };
+        let variable =
+            Variable { scope: "f".into(), name: "v".into(), r#type: pt, offset: -2, parameter: false, argument: None };
         let id = add_variable(&mut module, &variable);
         assert_eq!(read_variable(&module, id), Some(variable));
     }
@@ -474,9 +644,18 @@ mod tests {
     #[test]
     fn a_parameters_home_reads_back_as_one_and_a_plain_node_as_none() {
         let mut module = Module::default();
-        let scalar = Type { kind: Kind::Scalar, name: "int16".into(), size: 0, reach: Reach::Near, target: None, members: Vec::new(), spelling: None };
+        let scalar = Type {
+            kind: Kind::Scalar,
+            name: "int16".into(),
+            size: 0,
+            reach: Reach::Near,
+            target: None,
+            members: Vec::new(),
+            spelling: None,
+        };
         let int16 = add_type(&mut module, &scalar);
-        let home = Variable { scope: "f".into(), name: "a".into(), r#type: int16, offset: 0, parameter: true, argument: None };
+        let home =
+            Variable { scope: "f".into(), name: "a".into(), r#type: int16, offset: 0, parameter: true, argument: None };
         let local = Variable { parameter: false, name: "l".into(), ..home.clone() };
         let (home_id, local_id) = (add_variable(&mut module, &home), add_variable(&mut module, &local));
         assert_eq!(module.metadata[local_id.0 as usize].operands.len(), 4, "a local's node is what it was");

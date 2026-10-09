@@ -11,12 +11,20 @@ use crate::types::{FloatKind, Type, TypeId, Types};
 pub enum Intrinsic {
     /// `llvm.{s,u}{add,sub,mul}.with.overflow`: the wrapped result, and
     /// whether it overflowed.
-    WithOverflow { op: BinaryOp, signed: bool },
+    WithOverflow {
+        op: BinaryOp,
+        signed: bool,
+    },
     /// `llvm.{s,u}{max,min}`.
-    MinMax { signed: bool, max: bool },
+    MinMax {
+        signed: bool,
+        max: bool,
+    },
     /// `llvm.smul.fix` and `llvm.sdiv.fix`: signed fixed point with as many
     /// fraction bits as the third argument says.
-    Fixed { divide: bool },
+    Fixed {
+        divide: bool,
+    },
     FMulAdd,
     /// `llvm.fabs`, `llvm.sqrt` and their kin: a function of one float.
     Unary(FloatFunction),
@@ -77,9 +85,15 @@ pub const BACKWARD: &str = "llrm.backward";
 const CODE: &str = "llrm.ia16.code.";
 
 /// Inline code's name: `bytes`, and each argument's word offset and addend.
-pub fn code_name(bytes: &[u8], places: &[(usize, i64)]) -> String {
+pub fn code_name(
+    bytes: &[u8],
+    places: &[(usize, i64)],
+) -> String {
     let hex: String = bytes.iter().map(|one| format!("{one:02x}")).collect();
-    let places: String = places.iter().map(|(at, addend)| format!(".{at}{}{}", if *addend < 0 { 'm' } else { 'p' }, addend.unsigned_abs())).collect();
+    let places: String = places
+        .iter()
+        .map(|(at, addend)| format!(".{at}{}{}", if *addend < 0 { 'm' } else { 'p' }, addend.unsigned_abs()))
+        .collect();
     format!("{CODE}{hex}{places}")
 }
 
@@ -90,7 +104,10 @@ pub fn code(name: &str) -> Option<(Vec<u8>, Vec<(usize, i64)>)> {
     if hex.len() % 2 != 0 {
         return None;
     }
-    let bytes = (0..hex.len()).step_by(2).map(|at| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok()).collect::<Option<Vec<u8>>>()?;
+    let bytes = (0..hex.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok())
+        .collect::<Option<Vec<u8>>>()?;
     let places = parts
         .map(|part| {
             let split = part.find(['p', 'm'])?;
@@ -119,15 +136,26 @@ pub struct AsmBlock {
 pub fn asm_name(block: &AsmBlock) -> String {
     let hex: String = block.code.iter().map(|one| format!("{one:02x}")).collect();
     let list = |names: &[String]| if names.is_empty() { "-".to_owned() } else { names.join("_") };
-    format!("{ASM}{hex}.{}.{}.{}.{}", list(&block.inputs), list(&block.outputs), list(&block.clobbers), if block.memory { "m" } else { "n" })
+    format!(
+        "{ASM}{hex}.{}.{}.{}.{}",
+        list(&block.inputs),
+        list(&block.outputs),
+        list(&block.clobbers),
+        if block.memory { "m" } else { "n" }
+    )
 }
 
 pub fn asm(name: &str) -> Option<AsmBlock> {
-    let [hex, inputs, outputs, clobbers, memory] = name.strip_prefix(ASM)?.split('.').collect::<Vec<_>>()[..] else { return None };
+    let [hex, inputs, outputs, clobbers, memory] = name.strip_prefix(ASM)?.split('.').collect::<Vec<_>>()[..] else {
+        return None;
+    };
     if hex.len() % 2 != 0 {
         return None;
     }
-    let code = (0..hex.len()).step_by(2).map(|at| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok()).collect::<Option<Vec<u8>>>()?;
+    let code = (0..hex.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok())
+        .collect::<Option<Vec<u8>>>()?;
     let list = |names: &str| if names == "-" { Vec::new() } else { names.split('_').map(str::to_owned).collect() };
     let memory = match memory {
         "m" => true,
@@ -151,7 +179,10 @@ pub enum FloatFunction {
 }
 
 impl FloatFunction {
-    pub fn apply(self, x: f64) -> f64 {
+    pub fn apply(
+        self,
+        x: f64,
+    ) -> f64 {
         match self {
             Self::Fabs => x.abs(),
             Self::Sqrt => x.sqrt(),
@@ -200,7 +231,13 @@ const PORT_MEMORY: &[(Option<&str>, &str)] = &[(None, "readwrite")];
 const PORT_ATTRS: &[&str] = &["nocallback", "nofree", "nounwind", "willreturn"];
 const INTS: &[(Slot, &[&str])] = &[(Slot::Any(0), &[]), (Slot::Any(0), &[])];
 
-const fn arithmetic(name: &'static str, intrinsic: Intrinsic, returns: Slot, parameters: &'static [(Slot, &'static [&'static str])], kind: Kind) -> Spec {
+const fn arithmetic(
+    name: &'static str,
+    intrinsic: Intrinsic,
+    returns: Slot,
+    parameters: &'static [(Slot, &'static [&'static str])],
+    kind: Kind,
+) -> Spec {
     let overloads: &[Kind] = match kind {
         Kind::Float => &[Kind::Float],
         _ => &[Kind::Int],
@@ -208,17 +245,28 @@ const fn arithmetic(name: &'static str, intrinsic: Intrinsic, returns: Slot, par
     Spec { name, intrinsic, overloads, returns, parameters, attrs: PURE, memory: NO_MEMORY }
 }
 
-const fn overflow(name: &'static str, op: BinaryOp, signed: bool) -> Spec {
+const fn overflow(
+    name: &'static str,
+    op: BinaryOp,
+    signed: bool,
+) -> Spec {
     arithmetic(name, Intrinsic::WithOverflow { op, signed }, Slot::WithFlag(0), INTS, Kind::Int)
 }
 
 const FLOAT: &[(Slot, &[&str])] = &[(Slot::Any(0), &[])];
 
-const fn unary(name: &'static str, function: FloatFunction) -> Spec {
+const fn unary(
+    name: &'static str,
+    function: FloatFunction,
+) -> Spec {
     arithmetic(name, Intrinsic::Unary(function), Slot::Any(0), FLOAT, Kind::Float)
 }
 
-const fn min_max(name: &'static str, signed: bool, max: bool) -> Spec {
+const fn min_max(
+    name: &'static str,
+    signed: bool,
+    max: bool,
+) -> Spec {
     arithmetic(name, Intrinsic::MinMax { signed, max }, Slot::Any(0), INTS, Kind::Int)
 }
 
@@ -249,7 +297,13 @@ const TABLE: [Spec; 34] = [
         attrs: &["nocallback", "nofree", "nosync", "nounwind", "willreturn"],
         memory: NO_MEMORY,
     },
-    arithmetic("llvm.fmuladd", Intrinsic::FMulAdd, Slot::Any(0), &[(Slot::Any(0), &[]), (Slot::Any(0), &[]), (Slot::Any(0), &[])], Kind::Float),
+    arithmetic(
+        "llvm.fmuladd",
+        Intrinsic::FMulAdd,
+        Slot::Any(0),
+        &[(Slot::Any(0), &[]), (Slot::Any(0), &[]), (Slot::Any(0), &[])],
+        Kind::Float,
+    ),
     unary("llvm.fabs", FloatFunction::Fabs),
     unary("llvm.sqrt", FloatFunction::Sqrt),
     unary("llvm.sin", FloatFunction::Sin),
@@ -272,7 +326,12 @@ const TABLE: [Spec; 34] = [
         intrinsic: Intrinsic::MemSet,
         overloads: &[Kind::Pointer, Kind::Int],
         returns: Slot::Void,
-        parameters: &[(Slot::Any(0), &["nocapture", "writeonly"]), (Slot::Int(8), &[]), (Slot::Any(1), &[]), (Slot::Int(1), &["immarg"])],
+        parameters: &[
+            (Slot::Any(0), &["nocapture", "writeonly"]),
+            (Slot::Int(8), &[]),
+            (Slot::Any(1), &[]),
+            (Slot::Int(1), &["immarg"]),
+        ],
         attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
         memory: &[(Some("argmem"), "write")],
     },
@@ -281,7 +340,12 @@ const TABLE: [Spec; 34] = [
         intrinsic: Intrinsic::MemSetPattern,
         overloads: &[Kind::Pointer, Kind::Int, Kind::Int],
         returns: Slot::Void,
-        parameters: &[(Slot::Any(0), &["nocapture", "writeonly"]), (Slot::Any(1), &[]), (Slot::Any(2), &[]), (Slot::Int(1), &["immarg"])],
+        parameters: &[
+            (Slot::Any(0), &["nocapture", "writeonly"]),
+            (Slot::Any(1), &[]),
+            (Slot::Any(2), &[]),
+            (Slot::Int(1), &["immarg"]),
+        ],
         attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
         memory: &[(Some("argmem"), "write")],
     },
@@ -290,7 +354,12 @@ const TABLE: [Spec; 34] = [
         intrinsic: Intrinsic::MemCpy,
         overloads: &[Kind::Pointer, Kind::Pointer, Kind::Int],
         returns: Slot::Void,
-        parameters: &[(Slot::Any(0), &["nocapture", "writeonly"]), (Slot::Any(1), &["nocapture", "readonly"]), (Slot::Any(2), &[]), (Slot::Int(1), &["immarg"])],
+        parameters: &[
+            (Slot::Any(0), &["nocapture", "writeonly"]),
+            (Slot::Any(1), &["nocapture", "readonly"]),
+            (Slot::Any(2), &[]),
+            (Slot::Int(1), &["immarg"]),
+        ],
         attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
         memory: &[(Some("argmem"), "readwrite")],
     },
@@ -299,7 +368,12 @@ const TABLE: [Spec; 34] = [
         intrinsic: Intrinsic::MemMove,
         overloads: &[Kind::Pointer, Kind::Pointer, Kind::Int],
         returns: Slot::Void,
-        parameters: &[(Slot::Any(0), &["nocapture", "writeonly"]), (Slot::Any(1), &["nocapture", "readonly"]), (Slot::Any(2), &[]), (Slot::Int(1), &["immarg"])],
+        parameters: &[
+            (Slot::Any(0), &["nocapture", "writeonly"]),
+            (Slot::Any(1), &["nocapture", "readonly"]),
+            (Slot::Any(2), &[]),
+            (Slot::Int(1), &["immarg"]),
+        ],
         attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
         memory: &[(Some("argmem"), "readwrite")],
     },
@@ -379,7 +453,10 @@ const TABLE: [Spec; 34] = [
 
 /// Gives a function named `name` its intrinsic's attributes, if it names
 /// one; as in LLVM, whatever attributes it had are dropped.
-pub(crate) fn declare(function: &mut Function, name: &str) {
+pub(crate) fn declare(
+    function: &mut Function,
+    name: &str,
+) {
     let Some(intrinsic) = Intrinsic::named(name) else { return };
     let (mut attrs, parameter_attrs) = intrinsic.attributes();
     // Assembly that reaches no memory still has effects, kept in order with
@@ -396,7 +473,11 @@ pub(crate) fn declare(function: &mut Function, name: &str) {
 /// Whether `name` is in LLVM's reserved namespace, or llrm's own for
 /// its target's intrinsics.
 /// `Intrinsic::Window`'s name, from `huge` pointers to `far` ones.
-pub fn window_name(types: &Types, far: TypeId, huge: TypeId) -> String {
+pub fn window_name(
+    types: &Types,
+    far: TypeId,
+    huge: TypeId,
+) -> String {
     format!("llrm.ia16.window.{}.{}", mangle(types, far), mangle(types, huge))
 }
 
@@ -405,7 +486,10 @@ pub fn is_reserved(name: &str) -> bool {
 }
 
 /// The type suffix LLVM mangles an overloaded type into.
-fn mangle(types: &Types, ty: TypeId) -> String {
+fn mangle(
+    types: &Types,
+    ty: TypeId,
+) -> String {
     match types.get(ty) {
         Type::Int(bits) => format!("i{bits}"),
         Type::Float(FloatKind::Float) => "f32".to_owned(),
@@ -422,7 +506,13 @@ impl Intrinsic {
     /// product shifted down (toward negative infinity) or the dividend
     /// shifted up and divided (toward zero), then wrapped. `None` for a
     /// zero divisor, which is undefined.
-    pub fn fixed(divide: bool, width: u32, a: i128, b: i128, scale: u32) -> Option<i128> {
+    pub fn fixed(
+        divide: bool,
+        width: u32,
+        a: i128,
+        b: i128,
+        scale: u32,
+    ) -> Option<i128> {
         let wide = if divide { (a << scale).checked_div(b)? } else { (a * b) >> scale };
         let shift = 128 - width;
         Some((wide << shift) >> shift)
@@ -455,21 +545,37 @@ impl Intrinsic {
         let spec = self.spec();
         let flags = |names: &[&str]| names.iter().map(|one| Attribute::Flag((*one).to_owned())).collect::<Vec<_>>();
         let mut attrs = flags(spec.attrs);
-        attrs.push(Attribute::Memory(spec.memory.iter().map(|&(location, access)| (location.map(str::to_owned), access.to_owned())).collect()));
+        attrs.push(Attribute::Memory(
+            spec.memory.iter().map(|&(location, access)| (location.map(str::to_owned), access.to_owned())).collect(),
+        ));
         (attrs, spec.parameters.iter().map(|(_, one)| flags(one)).collect())
     }
 
     /// Checks that `function_type` is this intrinsic's, overloaded as
     /// `name` mangles it; the error is LLVM's.
-    pub fn check(self, name: &str, types: &Types, function_type: TypeId) -> Result<(), String> {
-        let Type::Function { returns, parameters, variadic } = types.get(function_type) else { unreachable!("a function's type") };
+    pub fn check(
+        self,
+        name: &str,
+        types: &Types,
+        function_type: TypeId,
+    ) -> Result<(), String> {
+        let Type::Function { returns, parameters, variadic } = types.get(function_type) else {
+            unreachable!("a function's type")
+        };
         if self == Intrinsic::Asm {
             let block = asm(name).ok_or("Inline assembly's name does not parse!")?;
-            let word = |ty: &TypeId| matches!(types.int_bits(*ty), Some(16 | 32)) || matches!(types.get(*ty), Type::Pointer(0));
+            let word = |ty: &TypeId| {
+                matches!(types.int_bits(*ty), Some(16 | 32)) || matches!(types.get(*ty), Type::Pointer(0))
+            };
             let answers = match &block.outputs[..] {
                 [] => types.is_void(*returns),
                 [_] => word(returns),
-                outputs => matches!(types.get(*returns), Type::Struct { fields, .. } if fields.len() == outputs.len() && fields.iter().all(word)),
+                outputs => {
+                    matches!(
+                        types.get(*returns),
+                        Type::Struct { fields, .. } if fields.len() == outputs.len() && fields.iter().all(word)
+                    )
+                }
             };
             if !answers {
                 return Err("Intrinsic has incorrect return type!".to_owned());
@@ -484,7 +590,10 @@ impl Intrinsic {
             if types.int_bits(*returns) != Some(32) {
                 return Err("Intrinsic has incorrect return type!".to_owned());
             }
-            if *variadic || parameters.len() != places.len() || !parameters.iter().all(|one| matches!(types.get(*one), Type::Pointer(_))) {
+            if *variadic
+                || parameters.len() != places.len()
+                || !parameters.iter().all(|one| matches!(types.get(*one), Type::Pointer(_)))
+            {
                 return Err("Intrinsic has incorrect argument type!".to_owned());
             }
             return Ok(());
@@ -504,7 +613,12 @@ impl Intrinsic {
             match slot {
                 Slot::Any(at) => overload(at, ty),
                 Slot::WithFlag(at) => match types.get(ty) {
-                    Type::Struct { fields, packed: false } => matches!(fields[..], [value, flag] if types.int_bits(flag) == Some(1) && overload(at, value)),
+                    Type::Struct { fields, packed: false } => {
+                        matches!(
+                            fields[..],
+                            [value, flag] if types.int_bits(flag) == Some(1) && overload(at, value)
+                        )
+                    }
                     _ => false,
                 },
                 Slot::Int(bits) => types.int_bits(ty) == Some(bits),
@@ -514,10 +628,16 @@ impl Intrinsic {
         if !matches(spec.returns, *returns) {
             return Err("Intrinsic has incorrect return type!".to_owned());
         }
-        if *variadic || parameters.len() != spec.parameters.len() || !spec.parameters.iter().zip(parameters).all(|((slot, _), ty)| matches(*slot, *ty)) {
+        if *variadic
+            || parameters.len() != spec.parameters.len()
+            || !spec.parameters.iter().zip(parameters).all(|((slot, _), ty)| matches(*slot, *ty))
+        {
             return Err("Intrinsic has incorrect argument type!".to_owned());
         }
-        let mangled: String = std::iter::once(spec.name.to_owned()).chain(bound.iter().map(|ty| mangle(types, ty.expect("every overload appears")))).collect::<Vec<_>>().join(".");
+        let mangled: String = std::iter::once(spec.name.to_owned())
+            .chain(bound.iter().map(|ty| mangle(types, ty.expect("every overload appears"))))
+            .collect::<Vec<_>>()
+            .join(".");
         if name != mangled {
             return Err(format!("Intrinsic name not mangled correctly for type arguments! Should be: {mangled}"));
         }

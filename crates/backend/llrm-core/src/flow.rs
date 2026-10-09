@@ -3,21 +3,20 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::support::hash::IndexMap;
 use iced_x86::Register;
 
-use crate::backend::cpu::{self as targets, ProfileOrName};
 use crate::backend::constpool::Pool;
+use crate::backend::cpu::{self as targets, ProfileOrName};
 use crate::backend::frame::Frame;
 use crate::backend::target::Segments;
-use crate::backend::{
-    allocate, coalesce, farcall, floatalloc, floatassign, jumps, loopslots, parcopy, peephole, phielim, prologue, schedule, ssaspill, twoaddr,
-};
-
 use crate::backend::verify::{self, Malformed};
+use crate::backend::{
+    allocate, coalesce, farcall, floatalloc, floatassign, jumps, loopslots, parcopy, peephole, phielim, prologue,
+    schedule, ssaspill, twoaddr,
+};
 use crate::model::lir::LirBody;
 use crate::model::passes::LIRTransform;
-
+use crate::support::hash::IndexMap;
 
 /// Every phase between instruction selection and emission, in order, with the
 /// spiller in front of the allocator or left out.
@@ -35,7 +34,19 @@ pub fn machine<'a>(
     segments: &Segments,
     spilling: bool,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
-    machine_with(pinned, frame, pool, calls, basic_semantics, cpu, segments, &crate::backend::classes::RegisterClasses::m16(), spilling.then(Rc::<ssaspill::Run>::default), &crate::backend::peep::targets::x86_m16::RULES, &llrm_target::Target::frame_registers(&llrm_x86_m16::M16))
+    machine_with(
+        pinned,
+        frame,
+        pool,
+        calls,
+        basic_semantics,
+        cpu,
+        segments,
+        &crate::backend::classes::RegisterClasses::m16(),
+        spilling.then(Rc::<ssaspill::Run>::default),
+        &crate::backend::peep::targets::x86_m16::RULES,
+        &llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
+    )
 }
 
 /// `machine`, its peephole made of the rules `rules` holds; the spiller, where `spilling` names a run, reports to it.
@@ -64,10 +75,19 @@ pub fn machine_with<'a>(
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
-        Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone(), classes: Rc::clone(classes), prices: ssaspill::Prices::of(target), run: spilling.clone().unwrap_or_default() }),
+        Box::new(ssaspill::SsaSpill {
+            frame: or_empty(),
+            segments: segments.clone(),
+            classes: Rc::clone(classes),
+            prices: ssaspill::Prices::of(target),
+            run: spilling.clone().unwrap_or_default(),
+        }),
         Box::new(phielim::PhiElimination),
         // Before any value is placed: a load made where its reader is.
-        Box::new(crate::backend::pressuresink::PressureSink { segments: segments.clone(), classes: Rc::clone(classes) }),
+        Box::new(crate::backend::pressuresink::PressureSink {
+            segments: segments.clone(),
+            classes: Rc::clone(classes),
+        }),
         // A float load only one arithmetic instruction reads is its memory operand.
         Box::new(crate::backend::floatfold::FloatFold),
         // After phi elimination: a phi's copies are where the stack shuffles.
@@ -75,11 +95,23 @@ pub fn machine_with<'a>(
         Box::new(floatalloc::FloatAlloc { frame: frame.clone() }),
         Box::new(twoaddr::TwoAddress),
         Box::new(coalesce::Coalescer::new(None, segments, classes)),
-        Box::new(allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments, classes)?),
+        Box::new(allocate::RegAlloc::new(
+            Some(&pinned),
+            frame.clone(),
+            ProfileOrName::Profile(target),
+            segments,
+            classes,
+        )?),
         // After allocation: which moves in a phi's copy conflict is a question about locations.
         Box::new(parcopy::ParallelCopy),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
-        Box::new(peephole::Peephole::with_rules(frame.clone(), target, rules, registers.saved.iter().map(|(whole, _)| *whole).collect(), Rc::clone(classes))?),
+        Box::new(peephole::Peephole::with_rules(
+            frame.clone(),
+            target,
+            rules,
+            registers.saved.iter().map(|(whole, _)| *whole).collect(),
+            Rc::clone(classes),
+        )?),
         // Once spill traffic is final: which slots a loop still reaches.
         Box::new(loopslots::LoopSlots::new(frame.clone(), target, registers.slot as u32, classes)?),
         // Scheduling may only move fully allocated machine occurrences.
@@ -94,7 +126,11 @@ pub fn machine_with<'a>(
 }
 
 /// Return a well-formed body or name the phase boundary that is not.
-pub fn verified(body: LirBody, stage: &str, in_ssa: bool) -> Result<LirBody, Malformed> {
+pub fn verified(
+    body: LirBody,
+    stage: &str,
+    in_ssa: bool,
+) -> Result<LirBody, Malformed> {
     let complaints = verify::verify(&body, in_ssa);
     if let Some(first) = complaints.first() {
         return Err(Malformed(format!("{stage}: {first}")));
@@ -110,21 +146,67 @@ pub enum Checked {
 }
 
 /// Run one machine phase and verify what it returned.
-pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool, classes: &crate::backend::classes::RegisterClasses) -> Result<LirBody, Checked> {
+pub fn checked(
+    body: LirBody,
+    phase: &mut dyn LIRTransform,
+    in_ssa: bool,
+    classes: &crate::backend::classes::RegisterClasses,
+) -> Result<LirBody, Checked> {
     let stage = if phase.name().is_empty() { phase.class_name().to_owned() } else { phase.name().to_owned() };
     // The invariance instrument, LLVM's `-g` rule: stripped of meta
     // instructions, every phase must make the same code.
     let body = if llrm_support::env_set("LLRM_STRIP_META") { without_meta(body) } else { body };
     let verifying = crate::support::debug::verifying();
-    let owned = if verifying { crate::support::debug::timed("lir owned bytes", || body.owned_bytes()) } else { Vec::new() };
-    let transformed =
-        crate::support::debug::timed_by(|| format!("lir {stage}"), || phase.transform_raising(body)).map_err(Checked::Refused)?;
-    let body = if verifying { crate::support::debug::timed("lir verify", || verified(transformed, &stage, in_ssa)).map_err(Checked::Malformed)? } else { transformed };
-    if crate::support::debug::enabled("regclass") && matches!(stage.as_str(), "SsaSpill" | "ssaspill" | "PhiElimination" | "phielim" | "FloatAssign" | "FloatAlloc" | "TwoAddress" | "twoaddr" | "Coalescer" | "coalesce") {
-        let found = crate::backend::regclass::violations(&body, &crate::backend::target::BUILT_IN, classes,  &crate::backend::ssaspill::untouchable(&body));
-        let peak = found.iter().filter_map(|one| if let crate::backend::regclass::Why::Crowded { live, registers } = one.why { Some(live - registers) } else { None }).max().unwrap_or(0);
+    let owned =
+        if verifying { crate::support::debug::timed("lir owned bytes", || body.owned_bytes()) } else { Vec::new() };
+    let transformed = crate::support::debug::timed_by(|| format!("lir {stage}"), || phase.transform_raising(body))
+        .map_err(Checked::Refused)?;
+    let body = if verifying {
+        crate::support::debug::timed("lir verify", || verified(transformed, &stage, in_ssa))
+            .map_err(Checked::Malformed)?
+    } else {
+        transformed
+    };
+    if crate::support::debug::enabled("regclass")
+        && matches!(
+            stage.as_str(),
+            "SsaSpill"
+                | "ssaspill"
+                | "PhiElimination"
+                | "phielim"
+                | "FloatAssign"
+                | "FloatAlloc"
+                | "TwoAddress"
+                | "twoaddr"
+                | "Coalescer"
+                | "coalesce"
+        )
+    {
+        let found = crate::backend::regclass::violations(
+            &body,
+            &crate::backend::target::BUILT_IN,
+            classes,
+            &crate::backend::ssaspill::untouchable(&body),
+        );
+        let peak = found
+            .iter()
+            .filter_map(|one| {
+                if let crate::backend::regclass::Why::Crowded { live, registers } = one.why {
+                    Some(live - registers)
+                } else {
+                    None
+                }
+            })
+            .max()
+            .unwrap_or(0);
         let blocks: std::collections::BTreeSet<i64> = found.iter().map(|one| one.block).collect();
-        llrm_support::debug!("regclass", "{} after {stage}: {} points do not fit, peak {peak} over, {} blocks", body.name, found.len(), blocks.len());
+        llrm_support::debug!(
+            "regclass",
+            "{} after {stage}: {} points do not fit, peak {peak} over, {} blocks",
+            body.name,
+            found.len(),
+            blocks.len()
+        );
     }
     if !verifying {
         return Ok(body);
@@ -133,7 +215,11 @@ pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool, classe
     if now != owned {
         let (lost, gained) = (difference(&owned, &now), difference(&now, &owned));
         let listed = |bytes: Vec<i64>| bytes.iter().map(|one| format!("{one:#x}")).collect::<Vec<_>>().join(" ");
-        return Err(Checked::Malformed(Malformed(format!("{stage}: lost source bytes [{}], gained [{}]", listed(lost), listed(gained)))));
+        return Err(Checked::Malformed(Malformed(format!(
+            "{stage}: lost source bytes [{}], gained [{}]",
+            listed(lost),
+            listed(gained)
+        ))));
     }
     Ok(body)
 }
@@ -158,7 +244,10 @@ fn without_meta(body: LirBody) -> LirBody {
 }
 
 /// What sorted `one` has that sorted `other` lacks, counting repeats.
-fn difference(one: &[i64], other: &[i64]) -> Vec<i64> {
+fn difference(
+    one: &[i64],
+    other: &[i64],
+) -> Vec<i64> {
     let mut other = other.iter().peekable();
     one.iter()
         .filter(|&&byte| {
@@ -174,11 +263,10 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    use crate::support::hash::IndexMap;
-
     use super::*;
     use crate::model::ir::{self, Loc, Operation};
     use crate::model::lir::{Insn, LirBlock};
+    use crate::support::hash::IndexMap;
 
     struct LosesDefinition;
 
@@ -191,7 +279,10 @@ mod tests {
             "loses-definition"
         }
 
-        fn transform(&mut self, mut body: LirBody) -> Result<LirBody, String> {
+        fn transform(
+            &mut self,
+            mut body: LirBody,
+        ) -> Result<LirBody, String> {
             let mut broken = (*body.blocks[0].insns[0]).clone();
             broken.uses = vec![99];
             body.blocks[0].insns = vec![Arc::new(broken)].into();
@@ -206,8 +297,17 @@ mod tests {
             "DropsBytes"
         }
 
-        fn transform(&mut self, mut body: LirBody) -> Result<LirBody, String> {
-            body.blocks[0].insns.edit(|insns| { insns.remove(0); });
+        fn transform(
+            &mut self,
+            mut body: LirBody,
+        ) -> Result<LirBody, String> {
+            body.blocks[0]
+                .insns
+                .edit(
+                    |insns| {
+                        insns.remove(0);
+                    },
+                );
             Ok(body)
         }
     }
@@ -218,9 +318,17 @@ mod tests {
     fn test_a_phase_that_loses_source_bytes_is_malformed() {
         let jump = ir::Semantics { name: Some("jmp".into()), target: Some(1), ..ir::Semantics::new(Operation::Jump) };
         let returned = ir::Semantics { name: Some("ret".into()), ..ir::Semantics::new(Operation::Return) };
-        let block = LirBlock::new(1, vec![Arc::new(Insn::new(1, Some((1, 4)), Some(jump), vec![], vec![])), Arc::new(Insn::new(4, Some((4, 5)), Some(returned), vec![], vec![]))]);
+        let block = LirBlock::new(
+            1,
+            vec![
+                Arc::new(Insn::new(1, Some((1, 4)), Some(jump), vec![], vec![])),
+                Arc::new(Insn::new(4, Some((4, 5)), Some(returned), vec![], vec![])),
+            ],
+        );
         let body = LirBody::new("bytes", 1, vec![block], IndexMap::default(), IndexMap::default());
-        let Err(Checked::Malformed(Malformed(said))) = checked(body, &mut DropsBytes, false, &crate::backend::classes::RegisterClasses::m16()) else {
+        let Err(Checked::Malformed(Malformed(said))) =
+            checked(body, &mut DropsBytes, false, &crate::backend::classes::RegisterClasses::m16())
+        else {
             panic!("the gate let three source bytes go");
         };
         assert_eq!(said, "DropsBytes: lost source bytes [0x1 0x2 0x3], gained []");
@@ -235,10 +343,17 @@ mod tests {
             ..ir::Semantics::new(Operation::Move)
         };
         let source = Insn::new(1, Some((1, 1)), Some(what), vec![2], vec![1]);
-        let mut body =
-            LirBody::new("phase", 1, vec![LirBlock::new(1, vec![Arc::new(source)])], IndexMap::default(), IndexMap::default());
+        let mut body = LirBody::new(
+            "phase",
+            1,
+            vec![LirBlock::new(1, vec![Arc::new(source)])],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
         body.inputs = BTreeSet::from([1]);
-        let Err(Checked::Malformed(Malformed(said))) = checked(body, &mut LosesDefinition, false, &crate::backend::classes::RegisterClasses::m16()) else {
+        let Err(Checked::Malformed(Malformed(said))) =
+            checked(body, &mut LosesDefinition, false, &crate::backend::classes::RegisterClasses::m16())
+        else {
             panic!("the gate let a lost definition through");
         };
         assert!(said.starts_with("loses-definition: value#99 is read"), "{said}");

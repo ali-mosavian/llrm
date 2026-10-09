@@ -7,7 +7,10 @@
 //! single-valued (two paths reach a place with different stack depths) is refused: no information is better
 //! than a wrong one.
 
-use iced_x86::{Code, Decoder, DecoderOptions, FlowControl, Instruction, InstructionInfoFactory, Mnemonic, OpAccess, OpKind, Register};
+use iced_x86::{
+    Code, Decoder, DecoderOptions, FlowControl, Instruction, InstructionInfoFactory, Mnemonic, OpAccess, OpKind,
+    Register,
+};
 use llrm_object::debug::FrameRow;
 
 /// Where the canonical frame address is measured from.
@@ -43,7 +46,14 @@ fn name(register: Register) -> String {
 /// pointer (the return address). `frame` is the register the code keeps its frame in, `stack` the stack pointer;
 /// `pops` the bytes a call popped, by the offset the call ends at. Code no path reaches (the targets of an
 /// indirect jump) is given no row, so it has the rule of the code before it.
-pub fn rows(code: &[u8], bits: u32, frame: Register, stack: Register, entry: i64, pops: &[(usize, i64)]) -> Result<Vec<FrameRow>, String> {
+pub fn rows(
+    code: &[u8],
+    bits: u32,
+    frame: Register,
+    stack: Register,
+    entry: i64,
+    pops: &[(usize, i64)],
+) -> Result<Vec<FrameRow>, String> {
     // Decoded where a path leads, never past a jump table or padding that is not code.
     let mut decoder = Decoder::with_ip(bits, code, 0, DecoderOptions::NONE);
     let mut decode = |at: usize| -> Result<Instruction, String> {
@@ -58,17 +68,31 @@ pub fn rows(code: &[u8], bits: u32, frame: Register, stack: Register, entry: i64
     let mut work = vec![(0usize, first)];
     while let Some((at, state)) = work.pop() {
         match states.get(&at) {
-            Some((_, seen)) if seen.base == state.base && seen.stack == state.stack && seen.frame == state.frame => continue,
-            Some((_, seen)) => return Err(format!("the code reaches {at} with two stack depths ({:?} and {:?})", (seen.base, seen.stack), (state.base, state.stack))),
+            Some((_, seen)) if seen.base == state.base && seen.stack == state.stack && seen.frame == state.frame => {
+                continue;
+            }
+            Some((_, seen)) => {
+                return Err(format!(
+                    "the code reaches {at} with two stack depths ({:?} and {:?})",
+                    (seen.base, seen.stack),
+                    (state.base, state.stack)
+                ));
+            }
             None => {}
         }
         let one = decode(at)?;
         states.insert(at, (one, state.clone()));
         let after = step(&one, state, frame, stack, pops, &mut info)?;
         let next = at + one.len();
-        let jump = (matches!(one.op0_kind(), OpKind::NearBranch32 | OpKind::NearBranch16)).then(|| one.near_branch_target() as usize);
+        let jump = (matches!(one.op0_kind(), OpKind::NearBranch32 | OpKind::NearBranch16))
+            .then(|| one.near_branch_target() as usize);
         let (falls, jumps) = match one.flow_control() {
-            FlowControl::Next | FlowControl::Call | FlowControl::IndirectCall | FlowControl::XbeginXabortXend | FlowControl::Interrupt | FlowControl::Exception => (true, false),
+            FlowControl::Next
+            | FlowControl::Call
+            | FlowControl::IndirectCall
+            | FlowControl::XbeginXabortXend
+            | FlowControl::Interrupt
+            | FlowControl::Exception => (true, false),
             FlowControl::ConditionalBranch => (true, true),
             FlowControl::UnconditionalBranch => (false, true),
             FlowControl::Return | FlowControl::IndirectBranch => (false, false),
@@ -89,7 +113,9 @@ pub fn rows(code: &[u8], bits: u32, frame: Register, stack: Register, entry: i64
             cfa_offset: if state.base == Base::Stack { state.stack } else { state.frame },
             saved: state.saved.iter().map(|&(register, below)| (name(register), -below)).collect(),
         };
-        if out.last().is_none_or(|last| (&last.cfa_register, last.cfa_offset, &last.saved) != (&row.cfa_register, row.cfa_offset, &row.saved)) {
+        if out.last().is_none_or(|last| {
+            (&last.cfa_register, last.cfa_offset, &last.saved) != (&row.cfa_register, row.cfa_offset, &row.saved)
+        }) {
             out.push(row);
         }
     }
@@ -97,11 +123,31 @@ pub fn rows(code: &[u8], bits: u32, frame: Register, stack: Register, entry: i64
 }
 
 /// The state after `one`, from the state before it.
-fn step(one: &Instruction, mut state: State, frame: Register, stack: Register, pops: &[(usize, i64)], info: &mut InstructionInfoFactory) -> Result<State, String> {
-    let written: Vec<Register> = info.info(one).used_registers().iter().filter(|used| matches!(used.access(), OpAccess::Write | OpAccess::CondWrite | OpAccess::ReadWrite | OpAccess::ReadCondWrite)).map(|used| full(used.register())).collect();
+fn step(
+    one: &Instruction,
+    mut state: State,
+    frame: Register,
+    stack: Register,
+    pops: &[(usize, i64)],
+    info: &mut InstructionInfoFactory,
+) -> Result<State, String> {
+    let written: Vec<Register> = info
+        .info(one)
+        .used_registers()
+        .iter()
+        .filter(|used| {
+            matches!(
+                used.access(),
+                OpAccess::Write | OpAccess::CondWrite | OpAccess::ReadWrite | OpAccess::ReadCondWrite
+            )
+        })
+        .map(|used| full(used.register()))
+        .collect();
     let mnemonic = one.mnemonic();
     let end = (one.ip() + one.len() as u64) as usize;
-    let immediate = || (one.op1_kind() != OpKind::Register && one.op1_kind() != OpKind::Memory).then(|| one.immediate(1) as i32 as i64);
+    let immediate = || {
+        (one.op1_kind() != OpKind::Register && one.op1_kind() != OpKind::Memory).then(|| one.immediate(1) as i32 as i64)
+    };
     match mnemonic {
         Mnemonic::Call => {
             // The return address is pushed and popped by the callee; what it pops of the arguments is the stack's.
@@ -109,19 +155,32 @@ fn step(one: &Instruction, mut state: State, frame: Register, stack: Register, p
             return Ok(state);
         }
         Mnemonic::Ret | Mnemonic::Retf | Mnemonic::Iret | Mnemonic::Iretd => return Ok(state),
-        Mnemonic::Push | Mnemonic::Pushad | Mnemonic::Pushfd | Mnemonic::Pushf | Mnemonic::Pop | Mnemonic::Popad | Mnemonic::Popfd | Mnemonic::Popf => {
+        Mnemonic::Push
+        | Mnemonic::Pushad
+        | Mnemonic::Pushfd
+        | Mnemonic::Pushf
+        | Mnemonic::Pop
+        | Mnemonic::Popad
+        | Mnemonic::Popfd
+        | Mnemonic::Popf => {
             let moved = -i64::from(one.stack_pointer_increment());
             state.stack += moved;
             if mnemonic == Mnemonic::Push && one.op0_kind() == OpKind::Register {
                 let register = full(one.op0_register());
-                if register.is_gpr32() && register != stack && !state.changed.contains(&register) && !state.saved.iter().any(|(saved, _)| *saved == register) {
+                if register.is_gpr32()
+                    && register != stack
+                    && !state.changed.contains(&register)
+                    && !state.saved.iter().any(|(saved, _)| *saved == register)
+                {
                     state.saved.push((register, state.stack));
                 }
             }
             if mnemonic == Mnemonic::Pop && one.op0_kind() == OpKind::Register {
                 let register = full(one.op0_register());
                 // Its own slot, popped: it has the entry value again.
-                if let Some(at) = state.saved.iter().position(|&(saved, below)| saved == register && below == state.stack + 4) {
+                if let Some(at) =
+                    state.saved.iter().position(|&(saved, below)| saved == register && below == state.stack + 4)
+                {
                     state.saved.remove(at);
                     state.changed.retain(|one| *one != register);
                 } else if !state.changed.contains(&register) {
@@ -140,7 +199,9 @@ fn step(one: &Instruction, mut state: State, frame: Register, stack: Register, p
             return Ok(state);
         }
         Mnemonic::Sub | Mnemonic::Add if full(one.op0_register()) == stack && one.op0_kind() == OpKind::Register => {
-            let Some(amount) = immediate() else { return Err(format!("{:?} of the stack pointer by a register at {}", mnemonic, one.ip())) };
+            let Some(amount) = immediate() else {
+                return Err(format!("{:?} of the stack pointer by a register at {}", mnemonic, one.ip()));
+            };
             state.stack += if mnemonic == Mnemonic::Sub { amount } else { -amount };
             return Ok(state);
         }

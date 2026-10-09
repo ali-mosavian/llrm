@@ -6,11 +6,10 @@
 //!
 //! Python's `eval` returns one of a dozen types; that union is `Got`.
 
-use llrm_target::calling::Convention;
 use std::collections::BTreeSet;
 
-
 use llrm_core::abi::runtime;
+use llrm_target::calling::Convention;
 
 /// `WIDTHS.get(type_)`.
 pub fn widths(type_: &str) -> Option<u32> {
@@ -18,8 +17,22 @@ pub fn widths(type_: &str) -> Option<u32> {
 }
 
 /// `widths`, where flat code's `int` and pointers are 4 bytes.
-pub fn widths_for(flat: bool, type_: &str) -> Option<u32> {
-    if flat && matches!(type_, "TY_INTEGER" | "TY_UNSIGNED" | "TY_BOOLEAN" | "TY_POINTER" | "TY_NEAR_POINTER" | "TY_CODE_PTR" | "TY_NEAR_CODE_PTR") {
+pub fn widths_for(
+    flat: bool,
+    type_: &str,
+) -> Option<u32> {
+    if flat
+        && matches!(
+            type_,
+            "TY_INTEGER"
+                | "TY_UNSIGNED"
+                | "TY_BOOLEAN"
+                | "TY_POINTER"
+                | "TY_NEAR_POINTER"
+                | "TY_CODE_PTR"
+                | "TY_NEAR_CODE_PTR"
+        )
+    {
         return Some(4);
     }
     Some(match type_ {
@@ -66,7 +79,10 @@ pub(crate) fn library_routine(cg_op: &str) -> Option<&'static str> {
 pub(crate) const EMITTED: [&str; 1] = ["__emit__"];
 
 pub(crate) fn signed(type_: &str) -> bool {
-    matches!(type_, "TY_INT_1" | "TY_INT_2" | "TY_INT_4" | "TY_INT_8" | "TY_INTEGER")
+    matches!(
+        type_,
+        "TY_INT_1" | "TY_INT_2" | "TY_INT_4" | "TY_INT_8" | "TY_INTEGER"
+    )
 }
 
 pub(crate) fn far_pointers(type_: &str) -> bool {
@@ -74,7 +90,10 @@ pub(crate) fn far_pointers(type_: &str) -> bool {
 }
 
 pub(crate) fn pointers(type_: &str) -> bool {
-    matches!(type_, "TY_POINTER" | "TY_NEAR_POINTER" | "TY_LONG_POINTER" | "TY_HUGE_POINTER")
+    matches!(
+        type_,
+        "TY_POINTER" | "TY_NEAR_POINTER" | "TY_LONG_POINTER" | "TY_HUGE_POINTER"
+    )
 }
 
 /// C's aliasing classes.
@@ -83,7 +102,10 @@ pub(crate) fn classes(type_: &str) -> Option<&'static str> {
 }
 
 /// `classes`, where flat code's `int` is a dword and its pointers 4 bytes.
-pub(crate) fn classes_for(flat: bool, type_: &str) -> Option<&'static str> {
+pub(crate) fn classes_for(
+    flat: bool,
+    type_: &str,
+) -> Option<&'static str> {
     if flat && matches!(type_, "TY_INTEGER" | "TY_UNSIGNED") {
         return Some("int4");
     }
@@ -106,7 +128,12 @@ pub(crate) fn classes_for(flat: bool, type_: &str) -> Option<&'static str> {
 /// A call's contract under `convention`, a target's C ABI (`calling.toml`): stack arguments, what it
 /// clobbers, what it keeps, and `pushed` bytes its caller or it pops. `Reg` names the 16-bit
 /// registers; each stands for its family, so `eax` is `ax`, and the x87 stack is not one.
-pub(crate) fn contract(convention: &Convention, name: String, caller_pops: bool, pushed: i64) -> runtime::Contract {
+pub(crate) fn contract(
+    convention: &Convention,
+    name: String,
+    caller_pops: bool,
+    pushed: i64,
+) -> runtime::Contract {
     let family = |register: &str| -> Option<runtime::Reg> {
         let word = if register.len() == 3 && register.starts_with('e') { &register[1..] } else { register };
         runtime::Reg::from_value(word).ok()
@@ -151,8 +178,8 @@ pub use llrm_core::backend::masm::InlinePart;
 mod tests {
     use super::*;
 
-    /// The clobber lists were `medium_model`'s and `cdecl32`'s, written in Rust beside `calling.toml`: a convention that
-    /// clobbers SI and keeps the rest says so, whichever target it is.
+    /// The clobber lists were `medium_model`'s and `cdecl32`'s, written in Rust beside `calling.toml`: a convention
+    /// that clobbers SI and keeps the rest says so, whichever target it is.
     #[test]
     fn a_contract_clobbers_what_the_targets_convention_says() {
         let text = r#"default = "c"
@@ -184,12 +211,21 @@ variadic_float = "double"
         assert!(contract.evidence.starts_with("c: stack arguments"), "{}", contract.evidence);
     }
 
-    /// Both real targets: m16 clobbers AX, BX, CX, DX, ES and the flags; m32 AX, CX, DX and the flags (EBX, ESI, EDI, EBP kept).
+    /// Both real targets: m16 clobbers AX, BX, CX, DX, ES and the flags; m32 AX, CX, DX and the flags (EBX, ESI, EDI,
+    /// EBP kept).
     #[test]
     fn the_real_targets_clobber_what_they_did() {
         use llrm_target::Target;
         use runtime::Reg::*;
-        let clobbers = |target: &dyn Target| contract(target.calling().named(&crate::compile::Profile::of(target).unwrap().convention).unwrap(), String::new(), true, 0).clobbers;
+        let clobbers = |target: &dyn Target| {
+            contract(
+                target.calling().named(&crate::compile::Profile::of(target).unwrap().convention).unwrap(),
+                String::new(),
+                true,
+                0,
+            )
+            .clobbers
+        };
         assert_eq!(clobbers(&llrm_x86_m16::M16), BTreeSet::from([Ax, Bx, Cx, Dx, Es, Flags]));
         assert_eq!(clobbers(&llrm_x86_m32::M32), BTreeSet::from([Ax, Cx, Dx, Flags]));
     }

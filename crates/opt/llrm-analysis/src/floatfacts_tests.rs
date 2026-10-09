@@ -24,12 +24,18 @@ impl Parsed {
         crate::testing::with_registers(Unit::of(&self.module, &self.layout, function(&self.module, "f")))
     }
 
-    fn value(&self, name: &str) -> ValueId {
+    fn value(
+        &self,
+        name: &str,
+    ) -> ValueId {
         value(function(&self.module, "f"), name)
     }
 
     /// What `known` says of `%name`.
-    fn fact(&self, name: &str) -> Option<Finite> {
+    fn fact(
+        &self,
+        name: &str,
+    ) -> Option<Finite> {
         known(&self.unit(), &Calls::default(), None).get(&self.value(name)).cloned()
     }
 }
@@ -254,7 +260,11 @@ b0:
     );
     let unit = parsed.unit();
     let memory = cells(&unit, &Calls::default());
-    let load = function(&parsed.module, "f").walk().map(|(_, inst)| inst).find(|&inst| unit.function.instruction(inst).result == Some(parsed.value("bits"))).unwrap();
+    let load = function(&parsed.module, "f")
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| unit.function.instruction(inst).result == Some(parsed.value("bits")))
+        .unwrap();
     let reference = MemRef::of(&unit, load).unwrap();
     assert_eq!(consts::_cell(&memory[&load], &reference), Some(Known::new(0x40c0_0000, 32)));
     assert_eq!(parsed.fact("back"), Some(integer(6)));

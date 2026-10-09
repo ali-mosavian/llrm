@@ -12,11 +12,20 @@ impl ProgramPass for EliminateAvailableExternally {
         "available-externally"
     }
 
-    fn run(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<(), String> {
+    fn run(
+        &mut self,
+        program: &mut Program,
+        analyses: &mut ProgramAnalyses,
+    ) -> Result<(), String> {
         let mut changed = false;
         for module in &mut program.modules {
             for global in &mut module.globals {
-                if global.linkage == Linkage::AvailableExternally && matches!(&global.kind, GlobalKind::Function(function) if !function.is_declaration()) {
+                if global.linkage == Linkage::AvailableExternally
+                    && matches!(
+                        &global.kind,
+                        GlobalKind::Function(function) if !function.is_declaration()
+                    )
+                {
                     *global = global.declaration();
                     global.linkage = Linkage::External;
                     changed = true;

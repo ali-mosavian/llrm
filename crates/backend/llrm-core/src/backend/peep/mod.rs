@@ -19,11 +19,17 @@ pub struct Set {
 }
 
 impl Set {
-    pub fn contains(&self, name: &str) -> bool {
+    pub fn contains(
+        &self,
+        name: &str,
+    ) -> bool {
         self.names.contains(&name)
     }
 
-    pub fn by_fixed(&self, register: Register) -> Option<&'static str> {
+    pub fn by_fixed(
+        &self,
+        register: Register,
+    ) -> Option<&'static str> {
         self.fixed.iter().find(|(one, _)| *one == register).map(|(_, name)| *name)
     }
 }
@@ -57,12 +63,20 @@ pub type BodyRule = fn(&LirBody, &walk::Facts) -> LirBody;
 pub type InsnRule = fn(&[Arc<Insn>], &walk::Facts) -> Vec<Arc<Insn>>;
 
 /// `body` rewritten by `rule`, unchanged where the target has none.
-pub fn rewritten(rule: Option<BodyRule>, body: &LirBody, facts: &walk::Facts) -> LirBody {
+pub fn rewritten(
+    rule: Option<BodyRule>,
+    body: &LirBody,
+    facts: &walk::Facts,
+) -> LirBody {
     rule.map_or_else(|| body.clone(), |rule| rule(body, facts))
 }
 
 /// `insns` rewritten by `rule`, unchanged where the target has none.
-pub fn rewritten_insns(rule: Option<InsnRule>, insns: &[Arc<Insn>], facts: &walk::Facts) -> Vec<Arc<Insn>> {
+pub fn rewritten_insns(
+    rule: Option<InsnRule>,
+    insns: &[Arc<Insn>],
+    facts: &walk::Facts,
+) -> Vec<Arc<Insn>> {
     rule.map_or_else(|| insns.to_vec(), |rule| rule(insns, facts))
 }
 

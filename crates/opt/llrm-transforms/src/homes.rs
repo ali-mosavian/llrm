@@ -15,7 +15,9 @@ use llrm_analysis::liveness;
 use llrm_analysis::memory::MemRef;
 use llrm_analysis::memoryssa::Accesses;
 use llrm_mir::context::GlobalId;
-use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, MetadataId, MetadataNode, MetadataOperand, Module, Operand};
+use llrm_mir::module::{
+    BlockId, Function, GlobalKind, InstId, MetadataId, MetadataNode, MetadataOperand, Module, Operand,
+};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{ModuleAnalyses, ModulePass};
 
@@ -29,7 +31,11 @@ impl ModulePass for Homes {
         "homes"
     }
 
-    fn run(&mut self, module: &mut Module, analyses: &mut ModuleAnalyses) -> Vec<GlobalId> {
+    fn run(
+        &mut self,
+        module: &mut Module,
+        analyses: &mut ModuleAnalyses,
+    ) -> Vec<GlobalId> {
         let layout = analyses.program().layout.clone();
         let outer = analyses.outer(module);
         let mut found: BTreeMap<GlobalId, Vec<(InstId, InstId)>> = BTreeMap::new();
@@ -62,17 +68,29 @@ fn exact(reference: &MemRef) -> bool {
 }
 
 /// Whether two references name the same bytes.
-fn same(one: &MemRef, other: &MemRef) -> bool {
-    one.root == other.root && one.disp == other.disp && one.width == other.width && one.space == other.space && one.selector == other.selector
+fn same(
+    one: &MemRef,
+    other: &MemRef,
+) -> bool {
+    one.root == other.root
+        && one.disp == other.disp
+        && one.width == other.width
+        && one.space == other.space
+        && one.selector == other.selector
 }
 
 /// Each phi of `function` that is a cell's, with a store of the cell.
-pub fn homed(function: &Function, accesses: &Accesses, program: Option<&llrm_mir::program::ProgramProxy>) -> Vec<(InstId, InstId)> {
+pub fn homed(
+    function: &Function,
+    accesses: &Accesses,
+    program: Option<&llrm_mir::program::ProgramProxy>,
+) -> Vec<(InstId, InstId)> {
     // The stores of an exact cell, by the value stored.
     let mut all: Vec<(Operand, InstId, &MemRef)> = Vec::new();
     for (_, inst) in function.walk() {
         let instruction = function.instruction(inst);
-        if let (Opcode::Store { volatile: false, .. }, Some(reference)) = (&instruction.opcode, accesses.references.get(&inst))
+        if let (Opcode::Store { volatile: false, .. }, Some(reference)) =
+            (&instruction.opcode, accesses.references.get(&inst))
             && exact(reference)
         {
             all.push((instruction.operands[0], inst, reference));
@@ -81,20 +99,37 @@ pub fn homed(function: &Function, accesses: &Accesses, program: Option<&llrm_mir
     if all.is_empty() {
         return Vec::new();
     }
-    let stores = |value: &Operand| -> Vec<(InstId, &MemRef)> { all.iter().filter(|(stored, ..)| stored == value).map(|&(_, inst, reference)| (inst, reference)).collect() };
+    let stores = |value: &Operand| -> Vec<(InstId, &MemRef)> {
+        all.iter().filter(|(stored, ..)| stored == value).map(|&(_, inst, reference)| (inst, reference)).collect()
+    };
     let graph = cfg::graph(function);
     let dominance = cfg::Dominance::of(function);
     let found = liveness::live(function);
-    let overlaps = |cell: &MemRef, inst: InstId| accesses.writes(inst).is_none_or(|writes| writes.iter().any(|wrote| llrm_analysis::regions::overlapping(cell, wrote, None, None, program).unwrap_or(true)));
+    let overlaps = |cell: &MemRef, inst: InstId| {
+        accesses
+            .writes(inst)
+            .is_none_or(
+                |writes| writes
+                    .iter()
+                    .any(|wrote| llrm_analysis::regions::overlapping(cell, wrote, None, None, program).unwrap_or(true)),
+            )
+    };
     let mut homes = Vec::new();
     for &block in function.layout() {
         for &inst in function.block(block).instructions() {
             let phi = function.instruction(inst);
             let (Opcode::Phi, Some(result)) = (&phi.opcode, phi.result) else { continue };
-            let inputs: Vec<(Operand, BlockId)> = phi.operands.chunks(2).filter_map(|pair| if let Operand::Block(from) = pair[1] { Some((pair[0], from)) } else { None }).collect();
+            let inputs: Vec<(Operand, BlockId)> = phi
+                .operands
+                .chunks(2)
+                .filter_map(|pair| if let Operand::Block(from) = pair[1] { Some((pair[0], from)) } else { None })
+                .collect();
             // The cells every input is stored to: the stores of an input that is a value, not a constant, name the
             // candidates, as a constant's may be built from narrower stores.
-            let named_by = inputs.iter().find(|(value, _)| matches!(value, Operand::Value(one) if *one != result)).or_else(|| inputs.iter().find(|(value, _)| *value != Operand::Value(result)));
+            let named_by = inputs
+                .iter()
+                .find(|(value, _)| matches!(value, Operand::Value(one) if *one != result))
+                .or_else(|| inputs.iter().find(|(value, _)| *value != Operand::Value(result)));
             let Some(first) = named_by.map(|(value, _)| stores(value)) else { continue };
             'cells: for &(named, cell) in &first {
                 let mut place = None;
@@ -104,7 +139,10 @@ pub fn homed(function: &Function, accesses: &Accesses, program: Option<&llrm_mir
                     }
                     let each = stores(value);
                     // A store of this cell, whose value no write has changed by the end of `from`.
-                    let held = each.iter().filter(|(_, other)| same(cell, other)).any(|&(store, _)| survives(function, &graph, &dominance, &overlaps, cell, store, *from));
+                    let held = each
+                        .iter()
+                        .filter(|(_, other)| same(cell, other))
+                        .any(|&(store, _)| survives(function, &graph, &dominance, &overlaps, cell, store, *from));
                     if !held {
                         continue 'cells;
                     }
@@ -114,11 +152,18 @@ pub fn homed(function: &Function, accesses: &Accesses, program: Option<&llrm_mir
                     continue;
                 }
                 // Nothing writes the cell while the phi is live, but a store of the phi's own value.
-                let disturbed = function.layout().iter().any(|&other| {
-                    liveness::live_points(function, &found, other).into_iter().any(|(at, _, across)| {
-                        across.contains(&result) && overlaps(cell, at) && !writes_only(function, at, Operand::Value(result))
-                    })
-                });
+                let disturbed = function
+                    .layout()
+                    .iter()
+                    .any(
+                        |&other| liveness::live_points(function, &found, other)
+                            .into_iter()
+                            .any(
+                                |(at, _, across)| across.contains(&result)
+                                    && overlaps(cell, at)
+                                    && !writes_only(function, at, Operand::Value(result)),
+                            ),
+                    );
                 if !disturbed {
                     homes.push((inst, named));
                     break;
@@ -130,13 +175,25 @@ pub fn homed(function: &Function, accesses: &Accesses, program: Option<&llrm_mir
 }
 
 /// Whether `inst` is a store of `value`: it leaves in the cell what the cell holds.
-fn writes_only(function: &Function, inst: InstId, value: Operand) -> bool {
+fn writes_only(
+    function: &Function,
+    inst: InstId,
+    value: Operand,
+) -> bool {
     let instruction = function.instruction(inst);
     matches!(instruction.opcode, Opcode::Store { .. }) && instruction.operands.first() == Some(&value)
 }
 
 /// Whether no instruction that may write `cell` runs between `store` and the end of `at`, on any path.
-fn survives(function: &Function, graph: &[cfg::Block], dominance: &cfg::Dominance, overlaps: &dyn Fn(&MemRef, InstId) -> bool, cell: &MemRef, store: InstId, at: BlockId) -> bool {
+fn survives(
+    function: &Function,
+    graph: &[cfg::Block],
+    dominance: &cfg::Dominance,
+    overlaps: &dyn Fn(&MemRef, InstId) -> bool,
+    cell: &MemRef,
+    store: InstId,
+    at: BlockId,
+) -> bool {
     let home = function.parent(store).expect("a placed store");
     if !dominance.dominates(cfg::id(home), cfg::id(at)) {
         return false;
@@ -166,7 +223,15 @@ fn survives(function: &Function, graph: &[cfg::Block], dominance: &cfg::Dominanc
     // Of those, the ones `at` can be reached from, again without the store's block.
     let mut reaches: BTreeSet<i64> = BTreeSet::from([cfg::id(at)]);
     loop {
-        let joining: Vec<i64> = graph.iter().filter(|block| reached.contains(&block.at) && !reaches.contains(&block.at) && block.succ.iter().any(|next| reaches.contains(next))).map(|block| block.at).collect();
+        let joining: Vec<i64> = graph
+            .iter()
+            .filter(|block| {
+                reached.contains(&block.at)
+                    && !reaches.contains(&block.at)
+                    && block.succ.iter().any(|next| reaches.contains(next))
+            })
+            .map(|block| block.at)
+            .collect();
         if joining.is_empty() {
             break;
         }

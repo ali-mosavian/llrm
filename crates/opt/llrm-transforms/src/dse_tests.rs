@@ -12,7 +12,9 @@ const INPUTS: &[&[i128]] = &[&[0], &[3], &[-7], &[0x7fff]];
 
 /// `text` through Promote then Dse: @f printed; what @f returns stays.
 fn promoted(text: &str) -> String {
-    let before = parsed(&format!("@g = global i16 0\n\ndefine void @h(ptr %s) {{\nb0:\n  store i16 9, ptr %s\n  ret void\n}}\n\n{text}"));
+    let before = parsed(&format!(
+        "@g = global i16 0\n\ndefine void @h(ptr %s) {{\nb0:\n  store i16 9, ptr %s\n  ret void\n}}\n\n{text}"
+    ));
     let mut module = before.clone();
     let mut manager = PassManager::default();
     manager.verify_each = true;
@@ -100,7 +102,10 @@ b3:
 }
 ",
     );
-    assert!(!after.contains("load i16") && !after.contains("store i16") && after.matches("volatile").count() == 4, "{after}");
+    assert!(
+        !after.contains("load i16") && !after.contains("store i16") && after.matches("volatile").count() == 4,
+        "{after}"
+    );
 }
 
 /// A call's `initializes` bytes are written before it reads them, so the
@@ -156,7 +161,12 @@ fn test_dse_keeps_an_observed_store() {
 /// precise. It panicked.
 #[test]
 fn a_bare_pass_manager_takes_every_call_for_unknown() {
-    let module = crate::testing::parsed(&format!("{}{}{}", llrm_analysis::testing::DOS, crate::testing::WRITES_ITS_ARGUMENT, "define i16 @f(i16 %x) {\nb0:\n  store i16 1, ptr @g\n  call void @h(ptr @k)\n  store i16 %x, ptr @g\n  %v = load i16, ptr @g\n  ret i16 %v\n}\n"));
+    let module = crate::testing::parsed(&format!(
+        "{}{}{}",
+        llrm_analysis::testing::DOS,
+        crate::testing::WRITES_ITS_ARGUMENT,
+        "define i16 @f(i16 %x) {\nb0:\n  store i16 1, ptr @g\n  call void @h(ptr @k)\n  store i16 %x, ptr @g\n  %v = load i16, ptr @g\n  ret i16 %v\n}\n"
+    ));
     let precise = crate::testing::summarized(&module, Dse, true, &[&[0], &[5]]);
     let bare = crate::testing::summarized(&module, Dse, false, &[&[0], &[5]]);
     assert!(precise.matches("store").count() == 1 && bare.matches("store").count() == 2, "{precise}\n{bare}");
@@ -388,7 +398,6 @@ declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) no
     assert!(!after.contains("call void @llvm.memset") && after.matches("store i16").count() == 2, "{after}");
 }
 
-
 /// A load through a pointer read from memory, before the slot's address
 /// escapes, cannot read the slot: LLVM's `EarliestEscapeInfo`. The memset
 /// the later stores overwrite goes. T028's `update` read `v[i]` through
@@ -444,9 +453,9 @@ b0:
     assert!(!after.contains("store "), "{after}");
 }
 
-/// A store whose value is also read back whole is still read where a narrower load at an offset reaches it: `store i32` into a cell,
-/// the high word read through `getelementptr` and the whole word read as well. Dropped as dead, the narrower load read bytes nothing
-/// had written (`((int *)&b)[1]` of an i64 parameter, #677).
+/// A store whose value is also read back whole is still read where a narrower load at an offset reaches it: `store i32`
+/// into a cell, the high word read through `getelementptr` and the whole word read as well. Dropped as dead, the
+/// narrower load read bytes nothing had written (`((int *)&b)[1]` of an i64 parameter, #677).
 #[test]
 fn test_dse_keeps_a_store_a_narrower_load_at_an_offset_reads() {
     let after = promoted(
@@ -466,9 +475,10 @@ b0:
     assert!(after.contains("store i32"), "{after}");
 }
 
-/// The same with an i64 and the types C gives them: a `long long` stored and an `int` read at offset 4 of it. Type-based alias
-/// analysis may rule two accesses out where the address analysis cannot tell, not where it has them in one object at overlapping bytes
-/// (LLVM asks it only of MayAlias): the store went as dead and the read took the cell's bytes unwritten (`((int *)&b)[1]`, #677).
+/// The same with an i64 and the types C gives them: a `long long` stored and an `int` read at offset 4 of it.
+/// Type-based alias analysis may rule two accesses out where the address analysis cannot tell, not where it has them in
+/// one object at overlapping bytes (LLVM asks it only of MayAlias): the store went as dead and the read took the cell's
+/// bytes unwritten (`((int *)&b)[1]`, #677).
 #[test]
 fn test_dse_keeps_an_i64_store_its_high_dword_load_reads() {
     let after = dropped(

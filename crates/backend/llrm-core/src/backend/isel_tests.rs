@@ -8,15 +8,34 @@ use crate::backend::masm;
 const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16\"\n";
 
 fn qb() -> HirAbi {
-    HirAbi { runtime: crate::hir::model::RuntimeProfile::Qb45, objects: Default::default(), preserved: Default::default(), stack_check: None }
+    HirAbi {
+        runtime: crate::hir::model::RuntimeProfile::Qb45,
+        objects: Default::default(),
+        preserved: Default::default(),
+        stack_check: None,
+    }
 }
 
 fn parsed(text: &str) -> llrm_mir::Module {
     llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses")
 }
 
-fn selected(text: &str, name: &str) -> Result<isel::Selected, Unselected> {
-    isel::selected(&parsed(text), name, &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::m16(), &llrm_x86_m16::M16, false, 0)
+fn selected(
+    text: &str,
+    name: &str,
+) -> Result<isel::Selected, Unselected> {
+    isel::selected(
+        &parsed(text),
+        name,
+        &qb(),
+        &mut Pool::new(0),
+        crate::backend::cpu::profile("486").expect("a target"),
+        &crate::backend::target::BASIC,
+        isel::m16(),
+        &llrm_x86_m16::M16,
+        false,
+        0,
+    )
 }
 
 /// The module's text, once its object is written: a listing that does not
@@ -29,28 +48,50 @@ fn assembled(text: &str) -> String {
 fn borland() -> HirAbi {
     use crate::abi::runtime::{EVERY, Reg};
     let clobbered = [Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Es, Reg::Flags];
-    HirAbi { runtime: crate::hir::model::RuntimeProfile::Freestanding, objects: Default::default(), preserved: EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect(), stack_check: None }
+    HirAbi {
+        runtime: crate::hir::model::RuntimeProfile::Freestanding,
+        objects: Default::default(),
+        preserved: EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect(),
+        stack_check: None,
+    }
 }
 
 /// The module's text as `cpu` prices it, for BASIC's runtime.
-fn assembled_on(cpu: &str, text: &str) -> String {
+fn assembled_on(
+    cpu: &str,
+    text: &str,
+) -> String {
     assembled_by(&qb(), &crate::backend::target::BASIC, cpu, text)
 }
 
 /// The module's text under `abi` and `segments`, as `cpu` prices it.
-fn assembled_by(abi: &HirAbi, segments: &crate::backend::target::Segments, cpu: &str, text: &str) -> String {
-    let module = assemble::assembled(&parsed(text), abi, "T_TEXT", ProfileOrName::Name(cpu), segments).expect("assembles");
-    crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment).expect("encodes");
+fn assembled_by(
+    abi: &HirAbi,
+    segments: &crate::backend::target::Segments,
+    cpu: &str,
+    text: &str,
+) -> String {
+    let module =
+        assemble::assembled(&parsed(text), abi, "T_TEXT", ProfileOrName::Name(cpu), segments).expect("assembles");
+    crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment)
+        .expect("encodes");
     masm::text(&module).expect("prints")
 }
 
 /// The procedure's instructions, through every machine phase.
-fn listing(text: &str, name: &str) -> Vec<String> {
+fn listing(
+    text: &str,
+    name: &str,
+) -> Vec<String> {
     listing_on("486", text, name)
 }
 
 /// The procedure's instructions as `cpu` prices them.
-fn listing_on(cpu: &str, text: &str, name: &str) -> Vec<String> {
+fn listing_on(
+    cpu: &str,
+    text: &str,
+    name: &str,
+) -> Vec<String> {
     let text = assembled_on(cpu, text);
     let from = text.find(&format!("{name} proc")).expect("the procedure");
     text[from..].lines().skip(1).take_while(|line| !line.ends_with("endp")).map(|line| line.trim().to_owned()).collect()
@@ -60,7 +101,10 @@ fn listing_on(cpu: &str, text: &str, name: &str) -> Vec<String> {
 /// reading every register, it kept bx live and its load unfolded.
 #[test]
 fn test_arithmetic_on_stack_parameters() {
-    let got = listing("define i16 @f(i16 %a, i16 %b) addrspace(1) {\n  %s = sub i16 %a, %b\n  %t = add i16 %s, 3\n  ret i16 %t\n}\n", "f");
+    let got = listing(
+        "define i16 @f(i16 %a, i16 %b) addrspace(1) {\n  %s = sub i16 %a, %b\n  %t = add i16 %s, 3\n  ret i16 %t\n}\n",
+        "f",
+    );
     assert_eq!(
         got,
         [
@@ -277,7 +321,24 @@ fn test_variable_indices_are_scaled_and_added() {
     let got = listing(text, "f");
     assert_eq!(
         got,
-        ["push bp", "mov bp, sp", "sub sp, 8", "push si", "push di", "L0_0:", "mov bx, word ptr [bp+6]", "mov si, word ptr [bp+8]", "lea di, [esi+esi]", "mov word ptr [bp+di-8], 5", "add si, si", "mov ax, word ptr [bx+si+2]", "pop di", "pop si", "leave", "retf"]
+        [
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 8",
+            "push si",
+            "push di",
+            "L0_0:",
+            "mov bx, word ptr [bp+6]",
+            "mov si, word ptr [bp+8]",
+            "lea di, [esi+esi]",
+            "mov word ptr [bp+di-8], 5",
+            "add si, si",
+            "mov ax, word ptr [bx+si+2]",
+            "pop di",
+            "pop si",
+            "leave",
+            "retf"
+        ]
     );
 }
 
@@ -314,7 +375,13 @@ fn test_a_sum_of_two_registers_is_the_base_and_index_of_a_far_address() {
 }
 ";
     let got = listing(text, "f").join("\n");
-    assert!(got.contains("es:[bx+si]") || got.contains("es:[bx+di]") || got.contains("es:[si+bx]") || got.contains("es:[di+bx]"), "{got}");
+    assert!(
+        got.contains("es:[bx+si]")
+            || got.contains("es:[bx+di]")
+            || got.contains("es:[si+bx]")
+            || got.contains("es:[di+bx]"),
+        "{got}"
+    );
     assert!(!got.lines().any(|line| line.starts_with("add ") && !line.contains("sp")), "{got}");
 }
 
@@ -351,7 +418,10 @@ fn test_ordered_compares_of_pointers_are_unsigned_and_lowered_here() {
         .join("\n")
     };
     let huge = below(" addrspace(3)");
-    assert!(huge.contains("sbb") && !huge.contains("jl") && !huge.contains("setl") && !huge.contains("ptrtoint"), "{huge}");
+    assert!(
+        huge.contains("sbb") && !huge.contains("jl") && !huge.contains("setl") && !huge.contains("ptrtoint"),
+        "{huge}"
+    );
     let near = below("");
     assert!(near.contains("cmp") && (near.contains("jb") || near.contains("setb") || near.contains("sbb")), "{near}");
     assert!(!near.contains("jl") && !near.contains("setl"), "{near}");
@@ -525,7 +595,18 @@ define i16 @f(i16 %i) addrspace(1) {
     let got = listing(text, "f");
     assert_eq!(
         got,
-        ["push bp", "mov bp, sp", "L0_0:", "add word ptr count, 1", "mov bx, word ptr [bp+6]", "add bx, bx", "mov ax, word ptr table+4", "add ax, word ptr table[bx]", "pop bp", "retf"]
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "add word ptr count, 1",
+            "mov bx, word ptr [bp+6]",
+            "add bx, bx",
+            "mov ax, word ptr table+4",
+            "add ax, word ptr table[bx]",
+            "pop bp",
+            "retf"
+        ]
     );
 }
 
@@ -541,7 +622,9 @@ fn test_initializers_are_bytes_and_relocations() {
     let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
     let names = crate::backend::globals::names(&module, &|name| qb().linked(name)).expect("names");
     let rec = module.named("rec").expect("@rec");
-    let pointer = |name: &str, offset, far| Datum::Pointer(Pointer { name: name.to_owned(), offset, far, bytes: if far { 4 } else { 2 } });
+    let pointer = |name: &str, offset, far| {
+        Datum::Pointer(Pointer { name: name.to_owned(), offset, far, bytes: if far { 4 } else { 2 } })
+    };
     assert_eq!(
         crate::backend::globals::datums(&module, rec, &names).expect("data"),
         [
@@ -657,7 +740,8 @@ define i16 @f() addrspace(1) {
   ret i16 %v
 }
 ";
-    let moves = listing(text, "f").into_iter().filter(|one| one.starts_with("mov") && one.contains('[')).collect::<Vec<_>>();
+    let moves =
+        listing(text, "f").into_iter().filter(|one| one.starts_with("mov") && one.contains('[')).collect::<Vec<_>>();
     assert!(moves.iter().any(|one| one.contains("dword ptr")), "{moves:?}");
     assert!(moves.iter().any(|one| one.contains("byte ptr")), "{moves:?}");
     assert!(!listing(text, "f").iter().any(|one| one.starts_with("rep")), "{moves:?}");
@@ -684,7 +768,11 @@ define i16 @f() addrspace(1) {{
     let dword = listing(&text(32, 40), "f");
     assert!(dword.contains(&"mov cx, 40".to_owned()) && dword.contains(&"rep stosd".to_owned()), "{dword:?}");
     let few = listing(&text(16, 2), "f");
-    assert!(!few.iter().any(|one| one.starts_with("rep")) && few.iter().filter(|one| one.starts_with("mov word ptr [bp")).count() == 2, "{few:?}");
+    assert!(
+        !few.iter().any(|one| one.starts_with("rep"))
+            && few.iter().filter(|one| one.starts_with("mov word ptr [bp")).count() == 2,
+        "{few:?}"
+    );
 }
 
 /// A memmove whose direction a pass proved is a forward or a backward copy:
@@ -707,15 +795,26 @@ define i16 @f(ptr %a, ptr %b, i16 %n) addrspace(1) {{
     assert!(forward.contains(&"rep movsd".to_owned()) && !forward.contains(&"std".to_owned()), "{forward:?}");
     let backward = listing(&text(", !llrm.backward !0", "%n"), "f");
     let at = |what: &str| backward.iter().position(|one| one == what).unwrap_or_else(|| panic!("{what}: {backward:?}"));
-    assert!(at("std") < at("rep movsb") && at("rep movsb") < at("rep movsd") && at("rep movsd") < at("cld"), "{backward:?}");
+    assert!(
+        at("std") < at("rep movsb") && at("rep movsb") < at("rep movsd") && at("rep movsd") < at("cld"),
+        "{backward:?}"
+    );
     // A few bytes are loads and stores, the highest first.
     let few = listing(&text(", !llrm.backward !0", "18"), "f");
     let first = |what: &str| few.iter().position(|one| one.contains(what)).unwrap_or_else(|| panic!("{what}: {few:?}"));
-    assert!(first("[si+16]") < first("[si+12]") && first("[si+4]") < first("[si]") && !few.contains(&"std".to_owned()), "{few:?}");
+    assert!(
+        first("[si+16]") < first("[si+12]") && first("[si+4]") < first("[si]") && !few.contains(&"std".to_owned()),
+        "{few:?}"
+    );
     // Past them the tail's two bytes, one dword step down, then the dwords.
     let many = listing(&text(", !llrm.backward !0", "70"), "f");
     assert_eq!(many.iter().filter(|one| one.as_str() == "movsb").count(), 2, "{many:?}");
-    assert!(many.contains(&"rep movsd".to_owned()) && many.iter().any(|one| one == "sub si, 3") && many.iter().any(|one| one == "sub di, 3"), "{many:?}");
+    assert!(
+        many.contains(&"rep movsd".to_owned())
+            && many.iter().any(|one| one == "sub si, 3")
+            && many.iter().any(|one| one == "sub di, 3"),
+        "{many:?}"
+    );
     let refused = std::panic::catch_unwind(|| listing(&text("", "%n"), "f"));
     assert!(refused.is_err(), "a memmove of no proved direction was selected");
 }
@@ -736,7 +835,9 @@ define i16 @f() addrspace(1) {
 ";
     let lines = listing(text, "f");
     assert!(lines.contains(&"std".to_owned()), "premise: a backward string move: {lines:?}");
-    let starts = |register: &str| lines.iter().filter(|one| one.starts_with(&format!("mov {register}, offset")) && one.ends_with("+3836")).count();
+    let starts = |register: &str| {
+        lines.iter().filter(|one| one.starts_with(&format!("mov {register}, offset")) && one.ends_with("+3836")).count()
+    };
     assert_eq!((starts("si"), starts("di")), (1, 1), "{lines:?}");
     assert!(!lines.iter().any(|one| one.starts_with("sub si") || one.starts_with("sub di")), "{lines:?}");
 }
@@ -764,11 +865,19 @@ out:
 }
 ";
     let lines = listing(text, "f");
-    let (head, body) = lines.split_at(lines.iter().position(|one| one.starts_with("L0_") && one != "L0_0:").expect("the loop label"));
-    assert_eq!(body.iter().filter(|one| one.starts_with("rep movsd")).count(), 2, "premise: two string moves in the loop: {lines:?}");
+    let (head, body) =
+        lines.split_at(lines.iter().position(|one| one.starts_with("L0_") && one != "L0_0:").expect("the loop label"));
+    assert_eq!(
+        body.iter().filter(|one| one.starts_with("rep movsd")).count(),
+        2,
+        "premise: two string moves in the loop: {lines:?}"
+    );
     assert!(!lines.iter().any(|one| one == "push es" || one == "push ds"), "ES saved: {lines:?}");
     assert!(!body.iter().any(|one| one.contains(" es") || one.contains("DGROUP")), "ES set inside the loop: {lines:?}");
-    assert!(head.iter().any(|one| one == "pop es" || one.starts_with("mov es,")), "ES set ahead of the loop: {lines:?}");
+    assert!(
+        head.iter().any(|one| one == "pop es" || one.starts_with("mov es,")),
+        "ES set ahead of the loop: {lines:?}"
+    );
 }
 
 /// A memset expands as LLVM's getMemset does: up to 16 stores, widest
@@ -929,7 +1038,25 @@ b3:
 ";
     assert_eq!(
         listing(text, "f"),
-        ["push bp", "mov bp, sp", "sub sp, 6", "L0_0:", "fnstcw word ptr [bp-4]", "mov ax, word ptr [bp-4]", "or ax, 3072", "mov word ptr [bp-6], ax", "L0_1:", "fld dword ptr $K1", "fadd dword ptr $K2", "fldcw word ptr [bp-6]", "fistp word ptr [bp-2]", "mov ax, word ptr [bp-2]", "fldcw word ptr [bp-4]", "leave", "retf"]
+        [
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 6",
+            "L0_0:",
+            "fnstcw word ptr [bp-4]",
+            "mov ax, word ptr [bp-4]",
+            "or ax, 3072",
+            "mov word ptr [bp-6], ax",
+            "L0_1:",
+            "fld dword ptr $K1",
+            "fadd dword ptr $K2",
+            "fldcw word ptr [bp-6]",
+            "fistp word ptr [bp-2]",
+            "mov ax, word ptr [bp-2]",
+            "fldcw word ptr [bp-4]",
+            "leave",
+            "retf"
+        ]
     );
 }
 
@@ -967,7 +1094,17 @@ define void @f() addrspace(1) {
     assert_eq!(
         listing(text, "f"),
         [
-            "push bp", "mov bp, sp", "sub sp, 4", "L0_0:", "mov word ptr [bp-4], 0", "mov word ptr [bp-2], 0", "pushd 0", "call take", "add sp, 4", "leave", "retf",
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 4",
+            "L0_0:",
+            "mov word ptr [bp-4], 0",
+            "mov word ptr [bp-2], 0",
+            "pushd 0",
+            "call take",
+            "add sp, 4",
+            "leave",
+            "retf",
         ]
     );
 }
@@ -1049,7 +1186,16 @@ small:
 ";
     assert_eq!(
         listing(text, "scale"),
-        ["push bp", "mov bp, sp", "L0_0:", "fld qword ptr [bp+6]", "fmul qword ptr [bp+14]", "fadd qword ptr k", "pop bp", "retf"]
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "fld qword ptr [bp+6]",
+            "fmul qword ptr [bp+14]",
+            "fadd qword ptr k",
+            "pop bp",
+            "retf"
+        ]
     );
     assert_eq!(
         listing(text, "f"),
@@ -1116,7 +1262,19 @@ define double @f(double %x) addrspace(1) {
 ";
     assert_eq!(
         listing(text, "f"),
-        ["push bp", "mov bp, sp", "L0_0:", "fld qword ptr [bp+6]", "fsqrt", "frndint", "fabs", "fsin", "fcos", "pop bp", "retf"]
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "fld qword ptr [bp+6]",
+            "fsqrt",
+            "frndint",
+            "fabs",
+            "fsin",
+            "fcos",
+            "pop bp",
+            "retf"
+        ]
     );
 }
 
@@ -1132,7 +1290,27 @@ fn test_a_float_to_an_integer_is_stored_toward_zero() {
 ";
     assert_eq!(
         listing(text, "f"),
-        ["push bp", "mov bp, sp", "sub sp, 8", "L0_0:", "fnstcw word ptr [bp-6]", "mov ax, word ptr [bp-6]", "or ax, 3072", "mov word ptr [bp-8], ax", "fld qword ptr [bp+6]", "fld st(0)", "fldcw word ptr [bp-8]", "fistp word ptr [bp-2]", "mov ax, word ptr [bp-2]", "fistp dword ptr [bp-4]", "mov bx, word ptr [bp-4]", "add ax, bx", "fldcw word ptr [bp-6]", "leave", "retf"]
+        [
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 8",
+            "L0_0:",
+            "fnstcw word ptr [bp-6]",
+            "mov ax, word ptr [bp-6]",
+            "or ax, 3072",
+            "mov word ptr [bp-8], ax",
+            "fld qword ptr [bp+6]",
+            "fld st(0)",
+            "fldcw word ptr [bp-8]",
+            "fistp word ptr [bp-2]",
+            "mov ax, word ptr [bp-2]",
+            "fistp dword ptr [bp-4]",
+            "mov bx, word ptr [bp-4]",
+            "add ax, bx",
+            "fldcw word ptr [bp-6]",
+            "leave",
+            "retf"
+        ]
     );
 }
 
@@ -1224,7 +1402,20 @@ done:
 ";
     assert_eq!(
         listing(text, "f"),
-        ["push bp", "mov bp, sp", "L0_0:", "fldz", "cmp word ptr [bp+6], 0", "jle L0_3", "L0_2:", "fstp st(0)", "fld1", "L0_3:", "pop bp", "retf"]
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "fldz",
+            "cmp word ptr [bp+6], 0",
+            "jle L0_3",
+            "L0_2:",
+            "fstp st(0)",
+            "fld1",
+            "L0_3:",
+            "pop bp",
+            "retf"
+        ]
     );
 }
 
@@ -1255,7 +1446,12 @@ define i1 @ne(double %a, double %b) addrspace(1) {
 }
 ";
     let compared = ["push bp", "mov bp, sp", "fld qword ptr [bp+6]", "fcomp qword ptr [bp+14]", "fnstsw ax", "sahf"];
-    let answered = |name: &str| listing(text, name).into_iter().filter(|line| !compared.contains(&line.as_str()) && !line.ends_with(':')).collect::<Vec<_>>();
+    let answered = |name: &str| {
+        listing(text, name)
+            .into_iter()
+            .filter(|line| !compared.contains(&line.as_str()) && !line.ends_with(':'))
+            .collect::<Vec<_>>()
+    };
     assert_eq!(answered("eq"), ["sete al", "setnp bl", "and al, bl", "pop bp", "retf"]);
     assert_eq!(answered("ne"), ["setne al", "setp bl", "or al, bl", "pop bp", "retf"]);
 }
@@ -1275,7 +1471,12 @@ define i1 @uge(double %a, double %b) addrspace(1) {
 }
 ";
     let prologue = ["push bp", "mov bp, sp", "fnstsw ax", "sahf", "pop bp", "retf"];
-    let answered = |name: &str| listing(text, name).into_iter().filter(|line| !prologue.contains(&line.as_str()) && !line.ends_with(':')).collect::<Vec<_>>();
+    let answered = |name: &str| {
+        listing(text, name)
+            .into_iter()
+            .filter(|line| !prologue.contains(&line.as_str()) && !line.ends_with(':'))
+            .collect::<Vec<_>>()
+    };
     assert_eq!(answered("ult"), ["fld qword ptr [bp+6]", "fcomp qword ptr [bp+14]", "setb al"]);
     assert_eq!(answered("uge"), ["fld qword ptr [bp+14]", "fcomp qword ptr [bp+6]", "setbe al"]);
 }
@@ -1294,7 +1495,19 @@ define void @f(i16 %port) addrspace(1) {
 ";
     assert_eq!(
         listing(text, "f"),
-        ["push bp", "mov bp, sp", "L0_0:", "mov bx, word ptr [bp+6]", "in al, 96", "mov dx, 968", "out dx, al", "mov dx, bx", "out dx, al", "pop bp", "retf"]
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "mov bx, word ptr [bp+6]",
+            "in al, 96",
+            "mov dx, 968",
+            "out dx, al",
+            "mov dx, bx",
+            "out dx, al",
+            "pop bp",
+            "retf"
+        ]
     );
 }
 
@@ -1334,7 +1547,14 @@ define double @f(double %x) addrspace(1) {
 }
 ";
     let body = selected(text, "f").expect("selects").body;
-    let names: Vec<String> = body.blocks.iter().flat_map(|block| &block.insns).filter_map(|one| one.what.as_ref()).filter(|what| what.op == crate::model::ir::Operation::FloatUnary).filter_map(|what| what.name.clone()).collect();
+    let names: Vec<String> = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insns)
+        .filter_map(|one| one.what.as_ref())
+        .filter(|what| what.op == crate::model::ir::Operation::FloatUnary)
+        .filter_map(|what| what.name.clone())
+        .collect();
     assert_eq!(names, ["flog2", "fexp2", "fatan"]);
 }
 
@@ -1387,7 +1607,16 @@ fn test_an_integer_load_only_a_conversion_reads_is_the_x87_operand() {
 ";
     assert_eq!(
         listing(text, "f"),
-        ["push bp", "mov bp, sp", "L0_0:", "mov bx, word ptr [bp+14]", "fild word ptr [bx]", "fdivr qword ptr [bp+6]", "pop bp", "retf"]
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "mov bx, word ptr [bp+14]",
+            "fild word ptr [bx]",
+            "fdivr qword ptr [bp+6]",
+            "pop bp",
+            "retf"
+        ]
     );
 }
 
@@ -1404,7 +1633,11 @@ fn test_an_integer_load_read_again_is_converted_from_its_register() {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"mov ax, word ptr [bx]".to_owned()) && got.iter().any(|one| one == "fild word ptr [bp-2]" || one == "fidiv word ptr [bp-2]"), "{got:?}");
+    assert!(
+        got.contains(&"mov ax, word ptr [bx]".to_owned())
+            && got.iter().any(|one| one == "fild word ptr [bp-2]" || one == "fidiv word ptr [bp-2]"),
+        "{got:?}"
+    );
 }
 
 /// A store between the load and its conversion may change the cell: x87
@@ -1420,8 +1653,14 @@ fn test_an_integer_load_before_a_store_is_not_read_after_it() {
 }
 ";
     let got = listing(text, "f");
-    let (load, store) = (got.iter().position(|one| one.starts_with("mov ax, word ptr [")), got.iter().position(|one| one.starts_with("mov word ptr [") && one.ends_with(", 0")));
-    assert!(load < store && got.iter().any(|one| one == "fild word ptr [bp-2]" || one == "fidiv word ptr [bp-2]"), "{got:?}");
+    let (load, store) = (
+        got.iter().position(|one| one.starts_with("mov ax, word ptr [")),
+        got.iter().position(|one| one.starts_with("mov word ptr [") && one.ends_with(", 0")),
+    );
+    assert!(
+        load < store && got.iter().any(|one| one == "fild word ptr [bp-2]" || one == "fidiv word ptr [bp-2]"),
+        "{got:?}"
+    );
 }
 
 /// A volatile load is its own access, not an x87 operand.
@@ -1435,7 +1674,10 @@ fn test_a_volatile_load_is_not_an_x87_operand() {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"mov eax, dword ptr [bx]".to_owned()) && got.contains(&"fimul dword ptr [bp-4]".to_owned()), "{got:?}");
+    assert!(
+        got.contains(&"mov eax, dword ptr [bx]".to_owned()) && got.contains(&"fimul dword ptr [bp-4]".to_owned()),
+        "{got:?}"
+    );
 }
 
 /// A conversion only a store reads is stored by x87 into the store's cell:
@@ -1457,7 +1699,26 @@ define void @f(double %x) addrspace(1) {
 ";
     assert_eq!(
         listing(text, "f"),
-        ["push bp", "mov bp, sp", "sub sp, 4", "L0_0:", "fnstcw word ptr [bp-2]", "mov ax, word ptr [bp-2]", "or ax, 3072", "mov word ptr [bp-4], ax", "fld qword ptr [bp+6]", "fld st(0)", "fldcw word ptr [bp-4]", "fistp word ptr b", "fld st(0)", "fldcw word ptr [bp-2]", "fistp word ptr b", "fstp dword ptr o", "leave", "retf"]
+        [
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 4",
+            "L0_0:",
+            "fnstcw word ptr [bp-2]",
+            "mov ax, word ptr [bp-2]",
+            "or ax, 3072",
+            "mov word ptr [bp-4], ax",
+            "fld qword ptr [bp+6]",
+            "fld st(0)",
+            "fldcw word ptr [bp-4]",
+            "fistp word ptr b",
+            "fld st(0)",
+            "fldcw word ptr [bp-2]",
+            "fistp word ptr b",
+            "fstp dword ptr o",
+            "leave",
+            "retf"
+        ]
     );
 }
 
@@ -1473,7 +1734,10 @@ define i16 @f(double %x) addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"fistp word ptr [bp-2]".to_owned()) && got.contains(&"mov word ptr b, ax".to_owned()), "{got:?}");
+    assert!(
+        got.contains(&"fistp word ptr [bp-2]".to_owned()) && got.contains(&"mov word ptr b, ax".to_owned()),
+        "{got:?}"
+    );
 }
 
 /// The instructions between a procedure's label and its epilogue.
@@ -1482,10 +1746,17 @@ fn inner(text: &str) -> Vec<String> {
 }
 
 /// The instructions between a procedure's label and its epilogue, as `cpu` prices them.
-fn inner_on(cpu: &str, text: &str) -> Vec<String> {
+fn inner_on(
+    cpu: &str,
+    text: &str,
+) -> Vec<String> {
     let got = listing_on(cpu, text, "f");
     let from = got.iter().position(|one| one.ends_with(':')).expect("a label") + 1;
-    got[from..].iter().take_while(|one| !one.starts_with("pop ") && *one != "leave" && *one != "retf").cloned().collect()
+    got[from..]
+        .iter()
+        .take_while(|one| !one.starts_with("pop ") && *one != "leave" && *one != "retf")
+        .cloned()
+        .collect()
 }
 
 /// A load, its update and its store back to the cell are one instruction,
@@ -1502,9 +1773,24 @@ fn test_an_update_stored_back_to_its_cell_is_one_instruction() {
             "define void @f(ptr %p, {ty} %x) addrspace(1) {{\n  %v = load {ty}, ptr %p\n  %s = {operation} {ty} %v, %x\n  store {ty} %s, ptr %p\n  ret void\n}}\n"
         ))
     };
-    assert_eq!(sorted(update("add", "i16")), sorted(["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "add word ptr [bx], ax"].map(str::to_owned).to_vec()));
-    assert_eq!(sorted(update("sub", "i16")), sorted(["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "sub word ptr [bx], ax"].map(str::to_owned).to_vec()));
-    assert_eq!(sorted(update("or", "i8")), sorted(["mov bx, word ptr [bp+6]", "mov al, byte ptr [bp+8]", "or byte ptr [bx], al"].map(str::to_owned).to_vec()));
+    assert_eq!(
+        sorted(update("add", "i16")),
+        sorted(
+            ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "add word ptr [bx], ax"].map(str::to_owned).to_vec()
+        )
+    );
+    assert_eq!(
+        sorted(update("sub", "i16")),
+        sorted(
+            ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "sub word ptr [bx], ax"].map(str::to_owned).to_vec()
+        )
+    );
+    assert_eq!(
+        sorted(update("or", "i8")),
+        sorted(
+            ["mov bx, word ptr [bp+6]", "mov al, byte ptr [bp+8]", "or byte ptr [bx], al"].map(str::to_owned).to_vec()
+        )
+    );
     let global = "@a = internal global i16 0
 define void @f() addrspace(1) {
   %v = load i16, ptr @a
@@ -1526,7 +1812,10 @@ fn test_a_subtraction_from_a_value_does_not_update_the_cell() {
   ret void
 }
 ";
-    assert_eq!(inner(text), ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "sub ax, word ptr [bx]", "mov word ptr [bx], ax"]);
+    assert_eq!(
+        inner(text),
+        ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "sub ax, word ptr [bx]", "mov word ptr [bx], ax"]
+    );
 }
 
 /// No update in memory where the store goes elsewhere, the loaded value is
@@ -1556,7 +1845,10 @@ fn test_an_update_is_not_one_instruction_unless_private_to_its_cell() {
   ret void
 }
 ";
-    assert_eq!(inner(volatile), ["mov bx, word ptr [bp+6]", "mov cx, word ptr [bx]", "add cx, word ptr [bp+8]", "mov word ptr [bx], cx"]);
+    assert_eq!(
+        inner(volatile),
+        ["mov bx, word ptr [bp+6]", "mov cx, word ptr [bx]", "add cx, word ptr [bp+8]", "mov word ptr [bx], cx"]
+    );
 }
 
 /// A load only a comparison reads is its operand, as comparefold selects;
@@ -1569,7 +1861,10 @@ fn test_a_load_only_a_comparison_reads_is_its_operand() {
         ))[..3]
             .to_vec()
     };
-    assert_eq!(compared("%v = load i16, ptr %p", "sgt i16 %v, 5"), ["mov bx, word ptr [bp+6]", "cmp word ptr [bx], 5", "jg L0_3"]);
+    assert_eq!(
+        compared("%v = load i16, ptr %p", "sgt i16 %v, 5"),
+        ["mov bx, word ptr [bp+6]", "cmp word ptr [bx], 5", "jg L0_3"]
+    );
     assert_eq!(
         compared("%v = load i8, ptr %p\n  %w = zext i8 %v to i16", "eq i16 %w, 0"),
         ["mov bx, word ptr [bp+6]", "cmp byte ptr [bx], 0", "je L0_4"]
@@ -1669,7 +1964,14 @@ fn test_an_address_only_accesses_read_is_base_plus_index() {
 ";
     assert_eq!(
         inner(based),
-        ["mov bx, word ptr [bp+6]", "mov si, word ptr [bp+8]", "add si, si", "mov ax, word ptr [bx+si]", "inc ax", "mov word ptr [bx+si+2], ax"]
+        [
+            "mov bx, word ptr [bp+6]",
+            "mov si, word ptr [bp+8]",
+            "add si, si",
+            "mov ax, word ptr [bx+si]",
+            "inc ax",
+            "mov word ptr [bx+si+2], ax"
+        ]
     );
     let local = "define i16 @f(i16 %i) addrspace(1) {
   %a = alloca [8 x i16]
@@ -1679,7 +1981,10 @@ fn test_an_address_only_accesses_read_is_base_plus_index() {
   ret i16 %v
 }
 ";
-    assert_eq!(inner(local), ["mov si, word ptr [bp+6]", "add si, si", "mov word ptr [bp+si-16], 3", "mov ax, word ptr [bp+si-16]"]);
+    assert_eq!(
+        inner(local),
+        ["mov si, word ptr [bp+6]", "add si, si", "mov word ptr [bp+si-16], 3", "mov ax, word ptr [bp+si-16]"]
+    );
 }
 
 /// An array read only past its start by index is still reserved whole:
@@ -1711,7 +2016,16 @@ define void @f(ptr %p, i16 %i) addrspace(1) {
 ";
     assert_eq!(
         inner(text),
-        ["mov ax, word ptr [bp+8]", "add ax, ax", "mov bx, word ptr [bp+6]", "add bx, ax", "mov word ptr [bx], 0", "push bx", "call take", "add sp, 2"]
+        [
+            "mov ax, word ptr [bp+8]",
+            "add ax, ax",
+            "mov bx, word ptr [bp+6]",
+            "add bx, ax",
+            "mov word ptr [bx], 0",
+            "push bx",
+            "call take",
+            "add sp, 2"
+        ]
     );
 }
 
@@ -1754,7 +2068,10 @@ join:
 }
 ";
     // The byte test reads its cell where it runs: the load crosses the address arithmetic.
-    assert_eq!(listing(text, "f")[3..7], ["mov bx, word ptr [bp+6]", "add bx, bx", "add bx, offset a", "cmp byte ptr [bp+8], 0"]);
+    assert_eq!(
+        listing(text, "f")[3..7],
+        ["mov bx, word ptr [bp+6]", "add bx, bx", "add bx, offset a", "cmp byte ptr [bp+8], 0"]
+    );
 }
 
 /// A signed dword divided by a constant is a multiply by its reciprocal
@@ -1782,11 +2099,19 @@ fn test_a_word_divides_and_an_unsigned_dword_is_multiplied_where_cheaper() {
     let word = "define i16 @f(i16 %x) addrspace(1) {\n  %q = sdiv i16 %x, 10\n  ret i16 %q\n}\n";
     let unsigned = "define i32 @f(i32 %x) addrspace(1) {\n  %q = udiv i32 %x, 10\n  ret i32 %q\n}\n";
     assert!(inner_on("P5", word).contains(&"idiv bx".to_owned()), "{:?}", inner_on("P5", word));
-    assert!(inner_on("P5", unsigned).iter().any(|one| one.starts_with("mul ")) && !inner_on("P5", unsigned).iter().any(|one| one.starts_with("div ")), "{:?}", inner_on("P5", unsigned));
+    assert!(
+        inner_on("P5", unsigned).iter().any(|one| one.starts_with("mul "))
+            && !inner_on("P5", unsigned).iter().any(|one| one.starts_with("div ")),
+        "{:?}",
+        inner_on("P5", unsigned)
+    );
     for cpu in ["386", "486"] {
         let listing = inner_on(cpu, unsigned);
         let at = listing.iter().position(|one| one.starts_with("mul ")).unwrap_or_else(|| panic!("{cpu}: {listing:?}"));
-        assert!(listing[at - 1].starts_with("mov eax, ") && !listing.iter().any(|one| one.starts_with("div ")), "{cpu}: {listing:?}");
+        assert!(
+            listing[at - 1].starts_with("mov eax, ") && !listing.iter().any(|one| one.starts_with("div ")),
+            "{cpu}: {listing:?}"
+        );
     }
 }
 
@@ -1794,7 +2119,9 @@ fn test_a_word_divides_and_an_unsigned_dword_is_multiplied_where_cheaper() {
 /// them below imul, as the old route's _scaled selects.
 #[test]
 fn test_a_multiply_by_a_constant_is_shifts_and_adds() {
-    let by = |factor: i16| inner(&format!("define i16 @f(i16 %x) addrspace(1) {{\n  %q = mul i16 %x, {factor}\n  ret i16 %q\n}}\n"));
+    let by = |factor: i16| {
+        inner(&format!("define i16 @f(i16 %x) addrspace(1) {{\n  %q = mul i16 %x, {factor}\n  ret i16 %q\n}}\n"))
+    };
     assert_eq!(by(10), ["mov bx, word ptr [bp+6]", "lea ax, [ebx+ebx*4]", "add ax, ax"]);
     assert_eq!(by(7), ["mov ax, word ptr [bp+6]", "mov bx, ax", "shl bx, 3", "sub bx, ax", "mov ax, bx"]);
     let variable = "define i16 @f(i16 %x, i16 %y) addrspace(1) {\n  %q = mul i16 %x, %y\n  ret i16 %q\n}\n";
@@ -1809,7 +2136,14 @@ fn test_a_multiply_by_a_constant_tuned_for_size_is_the_smaller_form() {
     let text = "define i32 @f(i32 %x) addrspace(1) {\n  %q = mul i32 %x, 446\n  ret i32 %q\n}\n";
     let on = |size: bool| {
         let cpu = crate::backend::cpu::tuned("486", size).expect("a target");
-        let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Profile(cpu), &crate::backend::target::BASIC).expect("assembles");
+        let module = assemble::assembled(
+            &parsed(text),
+            &qb(),
+            "T_TEXT",
+            ProfileOrName::Profile(cpu),
+            &crate::backend::target::BASIC,
+        )
+        .expect("assembles");
         masm::text(&module).expect("prints")
     };
     assert!(on(true).contains("imul eax, eax, 446") && !on(true).contains("shl eax"), "{}", on(true));
@@ -1829,10 +2163,19 @@ define void @f() addrspace(1) {
 ";
     let on = |size: bool| {
         let cpu = crate::backend::cpu::tuned("486", size).expect("a target");
-        let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Profile(cpu), &crate::backend::target::BASIC).expect("assembles");
+        let module = assemble::assembled(
+            &parsed(text),
+            &qb(),
+            "T_TEXT",
+            ProfileOrName::Profile(cpu),
+            &crate::backend::target::BASIC,
+        )
+        .expect("assembles");
         masm::text(&module).expect("prints")
     };
-    let pushes = |listing: String| listing.lines().map(str::trim).filter(|line| line.starts_with("push")).map(str::to_owned).collect::<Vec<_>>();
+    let pushes = |listing: String| {
+        listing.lines().map(str::trim).filter(|line| line.starts_with("push")).map(str::to_owned).collect::<Vec<_>>()
+    };
     // Last argument first: -3 and 7 are byte-immediate dword pushes; 1.0 is two words (5 bytes);
     // 7340144 is two (4), the first's zero low word joining the next word as `pushd 112` (3 for 4).
     assert_eq!(pushes(on(true)), ["pushd -3", "pushd 7", "pushw 16256", "pushd 112", "pushw 112"], "{}", on(true));
@@ -1844,16 +2187,20 @@ define void @f() addrspace(1) {
 #[test]
 fn test_a_dword_equality_xors_only_the_constant_halves_that_are_not_zero() {
     let text = |constant: i64| {
-        format!("declare i32 @rd()
+        format!(
+            "declare i32 @rd()
 define i16 @f() addrspace(1) {{
   %v = call i32 @rd()
   %c = icmp ne i32 %v, {constant}
   %r = zext i1 %c to i16
   ret i16 %r
 }}
-")
+"
+        )
     };
-    let xors = |constant: i64| listing(&text(constant), "f").into_iter().filter(|line| line.starts_with("xor")).collect::<Vec<_>>();
+    let xors = |constant: i64| {
+        listing(&text(constant), "f").into_iter().filter(|line| line.starts_with("xor")).collect::<Vec<_>>()
+    };
     assert_eq!(xors(73), ["xor ax, 73"]);
     assert_eq!(xors(0x20000), ["xor dx, 2"]);
     assert_eq!(xors(0x20005), ["xor ax, 5", "xor dx, 2"]);
@@ -1876,7 +2223,11 @@ define i16 @f(i16 %x) {
     let work = listing(text, "work");
     assert_eq!(work.last().map(String::as_str), Some("ret 6"), "{work:?}");
     let caller = listing(text, "f");
-    assert!(caller.iter().any(|line| line.starts_with("call")) && !caller.iter().any(|line| line.starts_with("add sp") || line == "pop cx"), "{caller:?}");
+    assert!(
+        caller.iter().any(|line| line.starts_with("call"))
+            && !caller.iter().any(|line| line.starts_with("add sp") || line == "pop cx"),
+        "{caller:?}"
+    );
 }
 
 /// A dword load read only as its words is those words loaded, as the old
@@ -1925,12 +2276,18 @@ fn test_an_and_only_compared_with_zero_is_test() {
             "define i16 @f(i16 %x, i16 %m) addrspace(1) {{\n  %a = and i16 %x, {mask}\n  %c = icmp eq i16 %a, 0\n  br i1 %c, label %y, label %n\ny:\n  ret i16 1\nn:\n  ret i16 {ret}\n}}\n"
         ))
     };
-    assert_eq!(tested("%m", "0")[..4], ["mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "test ax, bx", "je L0_3"]);
-    // Read again, the AND is computed; a constant mask is the instruction's immediate (`test ax, 12`), not a copy `and`ed:
-    // collatz's `n & 1` was `mov edi, esi; and edi, 1; jne`.
+    assert_eq!(
+        tested("%m", "0")[..4],
+        ["mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "test ax, bx", "je L0_3"]
+    );
+    // Read again, the AND is computed; a constant mask is the instruction's immediate (`test ax, 12`), not a copy
+    // `and`ed: collatz's `n & 1` was `mov edi, esi; and edi, 1; jne`.
     assert!(tested("%m", "%a").iter().any(|one| one.starts_with("and ")), "{:?}", tested("%m", "%a"));
     let masked = tested("12", "0");
-    assert!(masked.iter().any(|one| one == "test ax, 12") && !masked.iter().any(|one| one.starts_with("and ")), "{masked:?}");
+    assert!(
+        masked.iter().any(|one| one == "test ax, 12") && !masked.iter().any(|one| one.starts_with("and ")),
+        "{masked:?}"
+    );
 }
 
 /// A block every path from which ends in `unreachable` is cold, laid out
@@ -1979,7 +2336,12 @@ fn test_a_quotient_and_remainder_are_one_division() {
   ret i32 %s
 }
 ";
-    assert_eq!(inner_on("P5", reciprocal).iter().filter(|one| one.starts_with("imul")).count(), 1, "{:?}", inner_on("P5", reciprocal));
+    assert_eq!(
+        inner_on("P5", reciprocal).iter().filter(|one| one.starts_with("imul")).count(),
+        1,
+        "{:?}",
+        inner_on("P5", reciprocal)
+    );
     let different = "define i16 @f(i16 %x, i16 %y) addrspace(1) {
   %q = sdiv i16 %x, %y
   %r = srem i16 %y, %x
@@ -2000,9 +2362,16 @@ fn test_a_float_load_compared_second_is_the_comparisons_operand() {
             "define i16 @f(double %x, ptr %p) addrspace(1) {{\n  %w = load double, ptr %p\n  %c = fcmp {test}\n  br i1 %c, label %y, label %n\ny:\n  ret i16 1\nn:\n  ret i16 0\n}}\n"
         ))
     };
-    assert_eq!(compared("ogt double %x, %w")[..3], ["fld qword ptr [bp+6]", "mov bx, word ptr [bp+14]", "fcomp qword ptr [bx]"]);
+    assert_eq!(
+        compared("ogt double %x, %w")[..3],
+        ["fld qword ptr [bp+6]", "mov bx, word ptr [bp+14]", "fcomp qword ptr [bx]"]
+    );
     // Compared first, the cell would have to be st(0): it is loaded.
-    assert!(compared("olt double %x, %w").contains(&"fld qword ptr [bx]".to_owned()), "{:?}", compared("olt double %x, %w"));
+    assert!(
+        compared("olt double %x, %w").contains(&"fld qword ptr [bx]".to_owned()),
+        "{:?}",
+        compared("olt double %x, %w")
+    );
 }
 
 /// A comparison a branch reads is made beside the branch: a store between
@@ -2021,7 +2390,10 @@ n:
 }
 ";
     let got = inner(text);
-    let (load, store) = (got.iter().position(|one| one == "fld qword ptr [bx]"), got.iter().position(|one| one.starts_with("mov dword ptr [bx]")));
+    let (load, store) = (
+        got.iter().position(|one| one == "fld qword ptr [bx]"),
+        got.iter().position(|one| one.starts_with("mov dword ptr [bx]")),
+    );
     assert!(load.is_some() && load < store, "{got:?}");
 }
 
@@ -2086,7 +2458,11 @@ no:
     };
     let got = listing_on("386", &text("sge"), "f");
     // Both operands are zero-extended where they are read, whichever is made first.
-    assert!(got.iter().any(|line| line.starts_with("movzx eax, word ptr [")) && got.iter().any(|line| line.starts_with("movzx ebx, word ptr [")), "{got:?}");
+    assert!(
+        got.iter().any(|line| line.starts_with("movzx eax, word ptr ["))
+            && got.iter().any(|line| line.starts_with("movzx ebx, word ptr [")),
+        "{got:?}"
+    );
     assert!(got.contains(&"mov ax, word ptr [ebx+eax*2]".to_owned()), "{got:?}");
     // A negative index names another byte 32 bits wide; the 486 prices
     // the form above a spill.
@@ -2133,7 +2509,12 @@ fn test_an_i64_halfs_unread_computation_is_not_made() {
 }
 ";
     let body = selected(text, "f").expect("selects").body;
-    let names: Vec<&str> = body.blocks.iter().flat_map(|block| &block.insns).filter_map(|one| one.what.as_ref()?.name.as_deref()).collect();
+    let names: Vec<&str> = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insns)
+        .filter_map(|one| one.what.as_ref()?.name.as_deref())
+        .collect();
     // The quotient's low dword: the bias's add and its carry, and shrd.
     let low = names.iter().position(|name| *name == "shrd").expect("the low dword's shift");
     assert_eq!(names[low - 2..low], ["add", "adc"], "{names:?}");
@@ -2199,17 +2580,32 @@ done:
     let body = got.iter().position(|line| line == "L0_2:").expect("the loop");
     let mut steps = got[body + 3..body + 5].to_vec();
     steps.sort();
-    assert_eq!((&got[body + 1..body + 3], steps, &got[body + 5..body + 7]), (&["mov al, byte ptr es:[si]".to_owned(), "mov byte ptr [bx], al".to_owned()][..], vec!["inc bx".to_owned(), "inc si".to_owned()], &["dec cx".to_owned(), "jne L0_2".to_owned()][..]), "{got:?}");
+    assert_eq!(
+        (&got[body + 1..body + 3], steps, &got[body + 5..body + 7]),
+        (
+            &["mov al, byte ptr es:[si]".to_owned(), "mov byte ptr [bx], al".to_owned()][..],
+            vec!["inc bx".to_owned(), "inc si".to_owned()],
+            &["dec cx".to_owned(), "jne L0_2".to_owned()][..]
+        ),
+        "{got:?}"
+    );
 }
 
 /// An unsigned integer converts as the signed one twice its width it
 /// zero-extends to, which fild reads exactly; isel refused "UIToFP of a float".
 #[test]
 fn test_an_unsigned_integer_to_a_float_is_fild_of_twice_its_width() {
-    let converted = |ty: &str| inner(&format!("define double @f({ty} %x) addrspace(1) {{\n  %f = uitofp {ty} %x to double\n  ret double %f\n}}\n"));
+    let converted = |ty: &str| {
+        inner(&format!(
+            "define double @f({ty} %x) addrspace(1) {{\n  %f = uitofp {ty} %x to double\n  ret double %f\n}}\n"
+        ))
+    };
     assert_eq!(converted("i8"), ["movzx ax, byte ptr [bp+6]", "mov word ptr [bp-2], ax", "fild word ptr [bp-2]"]);
     assert_eq!(converted("i16"), ["movzx eax, word ptr [bp+6]", "mov dword ptr [bp-4], eax", "fild dword ptr [bp-4]"]);
-    assert_eq!(converted("i32"), ["mov eax, dword ptr [bp+6]", "mov dword ptr [bp-8], eax", "mov dword ptr [bp-4], 0", "fild qword ptr [bp-8]"]);
+    assert_eq!(
+        converted("i32"),
+        ["mov eax, dword ptr [bp+6]", "mov dword ptr [bp-8], eax", "mov dword ptr [bp-4], 0", "fild qword ptr [bp-8]"]
+    );
 }
 
 /// An i64 converted to a float is `fild qword` of its pair stored, as the
@@ -2226,7 +2622,13 @@ fn test_an_i64_to_a_float_is_filds_qword() {
     let fild = got.iter().position(|line| line.starts_with("fild qword ptr [bp-8]")).expect("fild qword");
     // The pair is stored low then high, the value and a zero, wherever each is made.
     let stored: Vec<&String> = got[..fild].iter().filter(|line| line.starts_with("mov dword ptr [bp-")).collect();
-    assert!(stored.len() == 2 && stored[0].starts_with("mov dword ptr [bp-8], ") && stored[1].starts_with("mov dword ptr [bp-4], ") && got[..fild].iter().any(|line| line.starts_with("xor e")), "{got:?}");
+    assert!(
+        stored.len() == 2
+            && stored[0].starts_with("mov dword ptr [bp-8], ")
+            && stored[1].starts_with("mov dword ptr [bp-4], ")
+            && got[..fild].iter().any(|line| line.starts_with("xor e")),
+        "{got:?}"
+    );
 }
 
 /// A zeroed 22-byte array descriptor was five `mov dword ptr [bp-n], 0`, 8
@@ -2267,7 +2669,14 @@ define i16 @f() addrspace(1) {{
     };
     let sized = |size: u32| {
         let cpu = crate::backend::cpu::tuned("486", true).expect("a target");
-        let module = assemble::assembled(&parsed(&text(size)), &qb(), "T_TEXT", ProfileOrName::Profile(cpu), &crate::backend::target::BASIC).expect("assembles");
+        let module = assemble::assembled(
+            &parsed(&text(size)),
+            &qb(),
+            "T_TEXT",
+            ProfileOrName::Profile(cpu),
+            &crate::backend::target::BASIC,
+        )
+        .expect("assembles");
         masm::text(&module).expect("prints")
     };
     let filled = sized(22);
@@ -2324,7 +2733,18 @@ define i16 @f(i16 %i) addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    assert_eq!(got[4..10], ["mov bx, word ptr [bp+6]", "add bx, bx", "pushw seg s", "pop es", "mov si, offset s", "mov ax, word ptr es:[bx+si]"], "{got:?}");
+    assert_eq!(
+        got[4..10],
+        [
+            "mov bx, word ptr [bp+6]",
+            "add bx, bx",
+            "pushw seg s",
+            "pop es",
+            "mov si, offset s",
+            "mov ax, word ptr es:[bx+si]"
+        ],
+        "{got:?}"
+    );
 }
 
 /// An i64 is a pair of dwords wherever it goes: a parameter's two cells,
@@ -2376,7 +2796,11 @@ fn test_an_i64_remainders_high_dword_is_its_low_dwords_sign() {
 ";
     let got = listing(text, "f");
     let tail = &got[got.len() - 6..];
-    assert!(tail.windows(2).any(|two| two[0].starts_with("mov edx, e") && two[1] == "sar edx, 31") || tail.contains(&"cdq".to_owned()), "{got:?}");
+    assert!(
+        tail.windows(2).any(|two| two[0].starts_with("mov edx, e") && two[1] == "sar edx, 31")
+            || tail.contains(&"cdq".to_owned()),
+        "{got:?}"
+    );
 }
 
 /// An i64 divided by a variable is the old route's inline helper,
@@ -2516,8 +2940,23 @@ b1:
     assert_eq!(
         listing(text, "scaled"),
         [
-            "push bp", "mov bp, sp", "L0_0:", "mov eax, dword ptr [bp+6]", "mov ebx, dword ptr [bp+10]", "imul ebx", "mov ebx, eax", "shrd ebx, edx, 16",
-            "mov ecx, 196608", "mov eax, ebx", "cdq", "shld edx, ebx, 16", "shl eax, 16", "idiv ecx", "shld edx, eax, 16", "pop bp", "retf",
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "mov eax, dword ptr [bp+6]",
+            "mov ebx, dword ptr [bp+10]",
+            "imul ebx",
+            "mov ebx, eax",
+            "shrd ebx, edx, 16",
+            "mov ecx, 196608",
+            "mov eax, ebx",
+            "cdq",
+            "shld edx, ebx, 16",
+            "shl eax, 16",
+            "idiv ecx",
+            "shld edx, eax, 16",
+            "pop bp",
+            "retf",
         ]
     );
 }
@@ -2528,9 +2967,12 @@ b1:
 #[test]
 fn test_parameters_passed_in_the_frame_are_refused() {
     for attribute in ["inalloca(i32)", "byref(i32)"] {
-        let text = format!("define i16 @f(ptr {attribute} %p) addrspace(1) {{\n  %v = load i16, ptr %p\n  ret i16 %v\n}}\n");
+        let text =
+            format!("define i16 @f(ptr {attribute} %p) addrspace(1) {{\n  %v = load i16, ptr %p\n  ret i16 %v\n}}\n");
         assert!(selected(&text, "f").is_err(), "{attribute}");
-        let text = format!("declare void @g(ptr) addrspace(1)\ndefine void @f(ptr %p) addrspace(1) {{\n  call addrspace(1) void @g(ptr {attribute} %p)\n  ret void\n}}\n");
+        let text = format!(
+            "declare void @g(ptr) addrspace(1)\ndefine void @f(ptr %p) addrspace(1) {{\n  call addrspace(1) void @g(ptr {attribute} %p)\n  ret void\n}}\n"
+        );
         assert!(selected(&text, "f").is_err(), "a call's {attribute}");
     }
 }
@@ -2540,7 +2982,11 @@ fn test_parameters_passed_in_the_frame_are_refused() {
 fn test_a_byval_parameter_is_the_address_of_its_bytes_in_the_frame() {
     let text = "define i16 @f(ptr byval([8 x i8]) %p) addrspace(1) {\n  %at = getelementptr i8, ptr %p, i16 6\n  %v = load i16, ptr %at\n  ret i16 %v\n}\n";
     let convention = selected(text, "f").unwrap().convention;
-    assert!(matches!(convention.parameters[..], [crate::backend::isel::Parameter::Bytes(_)]), "{:?}", convention.parameters);
+    assert!(
+        matches!(convention.parameters[..], [crate::backend::isel::Parameter::Bytes(_)]),
+        "{:?}",
+        convention.parameters
+    );
 }
 
 /// A call writes what its MIR says it may: a double loaded from a cell the
@@ -2575,7 +3021,8 @@ define void @f(double %a) addrspace(1) {
 /// global".
 #[test]
 fn test_a_store_of_poison_stores_nothing() {
-    let text = "@g = internal global i16 0\ndefine void @f() addrspace(1) {\n  store i16 poison, ptr @g\n  ret void\n}\n";
+    let text =
+        "@g = internal global i16 0\ndefine void @f() addrspace(1) {\n  store i16 poison, ptr @g\n  ret void\n}\n";
     assert!(!listing(text, "f").iter().any(|line| line.starts_with("mov")));
 }
 
@@ -2769,7 +3216,10 @@ no:
 ";
     let got = listing_on("386", text, "f");
     assert!(got.iter().any(|line| line.contains("*4]")), "{got:?}");
-    assert!(!got.iter().any(|line| line.starts_with("shl") || line.starts_with("imul") || line.starts_with("lea")), "{got:?}");
+    assert!(
+        !got.iter().any(|line| line.starts_with("shl") || line.starts_with("imul") || line.starts_with("lea")),
+        "{got:?}"
+    );
     let wraps = text.replace("sgt i16 %i, 999", "sgt i16 %i, 9999");
     let got = listing_on("386", &wraps, "f");
     assert!(!got.iter().any(|line| line.contains("*4]")), "{got:?}");
@@ -2798,8 +3248,12 @@ no:
 "
         );
         let got = listing_on("386", &text, "f");
-        assert!(!got.iter().any(|line| line.starts_with("set") || line.starts_with("and") || line.starts_with("or ")), "{join}: {got:?}");
-        let branches: Vec<&String> = got.iter().filter(|line| line.starts_with('j') && !line.starts_with("jmp")).collect();
+        assert!(
+            !got.iter().any(|line| line.starts_with("set") || line.starts_with("and") || line.starts_with("or ")),
+            "{join}: {got:?}"
+        );
+        let branches: Vec<&String> =
+            got.iter().filter(|line| line.starts_with('j') && !line.starts_with("jmp")).collect();
         assert_eq!(branches.len(), 2, "{join}: {got:?}");
     }
 }
@@ -2851,7 +3305,13 @@ done:
     let index = |cell: &str| cell.split_once("[ebp+").map(|(_, rest)| rest[..3].to_owned());
     let shared = index(cells[0]).expect("a frame cell 32 bits wide");
     for cell in &cells {
-        let scale = if cell.contains("dword ptr") { "*4" } else if cell.contains("word ptr") { "*2" } else { "" };
+        let scale = if cell.contains("dword ptr") {
+            "*4"
+        } else if cell.contains("word ptr") {
+            "*2"
+        } else {
+            ""
+        };
         assert!(index(cell).as_ref() == Some(&shared) && cell.contains(&format!("{shared}{scale}")), "{cell}: {got:?}");
     }
     assert!(got[..top].contains(&"movzx ebp, bp".to_owned()), "{got:?}");
@@ -2959,7 +3419,11 @@ done:
 ";
     let got = listing(text, "f");
     assert!(got.iter().any(|line| line.contains("*2")), "{got:?}");
-    let doubled = |line: &&String| line.split_once(' ').is_some_and(|(op, rest)| op == "add" && rest.split(", ").collect::<Vec<_>>().windows(2).any(|pair| pair[0] == pair[1]));
+    let doubled = |line: &&String| {
+        line.split_once(' ').is_some_and(|(op, rest)| {
+            op == "add" && rest.split(", ").collect::<Vec<_>>().windows(2).any(|pair| pair[0] == pair[1])
+        })
+    };
     assert!(!got.iter().any(|line| doubled(&line) || line.starts_with("shl e") || line.starts_with("lea ")), "{got:?}");
 }
 
@@ -2980,7 +3444,8 @@ fn test_a_constant_selector_is_loaded_outside_the_loop_that_uses_it() {
         })
         .collect();
     for (top, bottom) in &loops {
-        let innermost = !loops.iter().any(|(other, below)| (other, below) != (top, bottom) && top <= other && below <= bottom);
+        let innermost =
+            !loops.iter().any(|(other, below)| (other, below) != (top, bottom) && top <= other && below <= bottom);
         assert!(!innermost || !got[*top..*bottom].iter().any(video), "{:#?}", &got[*top..=*bottom]);
     }
 }
@@ -3112,8 +3577,16 @@ b2:
 ";
     let text = assembled_by(&borland(), &crate::backend::target::BUILT_IN, "386", text);
     let from = text.find("f proc").expect("the procedure");
-    let got: Vec<String> = text[from..].lines().skip(1).take_while(|line| !line.ends_with("endp")).map(|line| line.trim().to_owned()).collect();
-    let writes_ax = |one: &str| one.split_once(' ').is_some_and(|(_, rest)| rest.starts_with("ax,") || rest.starts_with("eax,") || rest.starts_with("ah,"));
+    let got: Vec<String> = text[from..]
+        .lines()
+        .skip(1)
+        .take_while(|line| !line.ends_with("endp"))
+        .map(|line| line.trim().to_owned())
+        .collect();
+    let writes_ax = |one: &str| {
+        one.split_once(' ')
+            .is_some_and(|(_, rest)| rest.starts_with("ax,") || rest.starts_with("eax,") || rest.starts_with("ah,"))
+    };
     let mut status = false;
     for one in &got {
         if one == "fnstsw ax" {
@@ -3159,7 +3632,10 @@ define void @f() addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    assert!(!got.iter().any(|one| one.starts_with("movzx") || one.starts_with("shl") || one.starts_with("push e")), "{got:#?}");
+    assert!(
+        !got.iter().any(|one| one.starts_with("movzx") || one.starts_with("shl") || one.starts_with("push e")),
+        "{got:#?}"
+    );
 }
 
 /// A far pointer tested against null, as qcport tests `if ( ent )`: its
@@ -3184,7 +3660,10 @@ done:
 }
 ";
     let got = listing(text, "f");
-    assert!(!got.iter().any(|one| one.starts_with("movzx") || one.starts_with("shl") || one.contains(" e")), "{got:#?}");
+    assert!(
+        !got.iter().any(|one| one.starts_with("movzx") || one.starts_with("shl") || one.contains(" e")),
+        "{got:#?}"
+    );
 }
 
 /// A parameter live across calls and stores through pointers is reloaded
@@ -3219,7 +3698,9 @@ define void @f(i16 %a, i16 %b, i16 %c, i16 %d, ptr %p) addrspace(1) {
 /// push it, a byte more each than BCC's `push [bp-n]`.
 #[test]
 fn test_a_reload_pushed_is_pushed_from_memory() {
-    let mut text = String::from("declare i16 @h(i16) addrspace(1)\ndeclare void @k(i16) addrspace(1)\ndefine void @f() addrspace(1) {\n");
+    let mut text = String::from(
+        "declare i16 @h(i16) addrspace(1)\ndeclare void @k(i16) addrspace(1)\ndefine void @f() addrspace(1) {\n",
+    );
     for n in 0..8 {
         text += &format!("  %x{n} = call addrspace(1) i16 @h(i16 {n})\n");
     }
@@ -3230,9 +3711,13 @@ fn test_a_reload_pushed_is_pushed_from_memory() {
     let got = assembled_by(&borland(), &crate::backend::target::BUILT_IN, "386", &text);
     let from = got.find("f proc").expect("f");
     let body: Vec<&str> = got[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
-    let reloaded_then_pushed = body.windows(2).any(|two| {
-        two[0].starts_with("mov ") && two[0].contains("ptr [bp-") && two[1] == format!("push {}", two[0][4..].split(',').next().unwrap_or(""))
-    });
+    let reloaded_then_pushed = body
+        .windows(2)
+        .any(
+            |two| two[0].starts_with("mov ")
+                && two[0].contains("ptr [bp-")
+                && two[1] == format!("push {}", two[0][4..].split(',').next().unwrap_or("")),
+        );
     assert!(!reloaded_then_pushed, "{body:#?}");
 }
 
@@ -3244,18 +3729,43 @@ fn test_dbg_lines_become_linnum() {
     let module = parsed(text);
     let (_, _, function) = module.functions().next().expect("f");
     let instructions = function.layout().iter().flat_map(|&block| function.block(block).instructions());
-    let attached = instructions.filter(|&&one| function.instruction(one).metadata.iter().any(|(kind, _)| kind == "dbg")).count();
+    let attached =
+        instructions.filter(|&&one| function.instruction(one).metadata.iter().any(|(kind, _)| kind == "dbg")).count();
     assert_eq!(attached, 3, "the fixture carries its lines");
-    let mut assembled = assemble::assembled(&module, &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC).expect("assembles");
+    let mut assembled =
+        assemble::assembled(&module, &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC)
+            .expect("assembles");
     let records = |assembled: &crate::backend::masm::Module| {
-        let object = crate::backend::objbuild::written_as(assembled, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment).expect("encodes");
+        let object =
+            crate::backend::objbuild::written_as(assembled, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment)
+                .expect("encodes");
         llrm_omf::omf::parse(&object).expect("parses")
     };
     // Lines alone are a BASIC statement table's, not -g.
     assert!(!records(&assembled).iter().any(|one| one.r#type == llrm_omf::omf::LINNUM));
-    assembled.debug = Some(crate::backend::debuginfo::Debug { format: Default::default(), language: Default::default(), dialect: Default::default(), return_register: String::new(), frame: None, producer: llrm_object::debug::Producer::Native, frame_register: "ebp".into(), cfa: false, ranges: false, file: Vec::new(), registers: Vec::new(), types: Vec::new(), nodes: Default::default(), procedures: Default::default(), globals: Vec::new() });
+    assembled.debug = Some(crate::backend::debuginfo::Debug {
+        format: Default::default(),
+        language: Default::default(),
+        dialect: Default::default(),
+        return_register: String::new(),
+        frame: None,
+        producer: llrm_object::debug::Producer::Native,
+        frame_register: "ebp".into(),
+        cfa: false,
+        ranges: false,
+        file: Vec::new(),
+        registers: Vec::new(),
+        types: Vec::new(),
+        nodes: Default::default(),
+        procedures: Default::default(),
+        globals: Vec::new(),
+    });
     let records = records(&assembled);
-    let lines: Vec<(u16, u16)> = records.iter().filter(|one| one.r#type == llrm_omf::omf::LINNUM).flat_map(|one| llrm_omf::omf::lines(one).1).collect();
+    let lines: Vec<(u16, u16)> = records
+        .iter()
+        .filter(|one| one.r#type == llrm_omf::omf::LINNUM)
+        .flat_map(|one| llrm_omf::omf::lines(one).1)
+        .collect();
     // push bp; mov bp, sp (3 bytes) is line 7's; mov ax, [bp+6]; sub ax, [bp+8] (6 bytes) too.
     assert_eq!(lines, [(7, 0), (8, 9)]);
     let marker = records.iter().any(|one| one.r#type == llrm_omf::omf::COMENT && one.body.get(1) == Some(&0xA1));
@@ -3325,10 +3835,18 @@ fn test_an_address_of_no_global_is_a_direct_address() {
     let constant = "define i16 @f() addrspace(1) {\n  %p = getelementptr i8, ptr null, i16 -4\n  %v = load i16, ptr %p\n  ret i16 %v\n}\n";
     let number = "define i16 @f() addrspace(1) {\n  %v = load i16, ptr inttoptr (i16 1132 to ptr)\n  ret i16 %v\n}\n";
     let variable = "define i16 @f(i16 %i) addrspace(1) {\n  %p = getelementptr i8, ptr null, i16 %i\n  %v = load i16, ptr %p\n  ret i16 %v\n}\n";
-    assert!(constant.contains("getelementptr i8, ptr null") && number.contains("inttoptr (i16 1132") && variable.contains("ptr null, i16 %i"), "the shape that was refused");
+    assert!(
+        constant.contains("getelementptr i8, ptr null")
+            && number.contains("inttoptr (i16 1132")
+            && variable.contains("ptr null, i16 %i"),
+        "the shape that was refused"
+    );
     assert_eq!(listing(constant, "f"), ["L0_0:", "mov ax, word ptr [65532]", "retf"]);
     assert_eq!(listing(number, "f"), ["L0_0:", "mov ax, word ptr [1132]", "retf"]);
-    assert_eq!(listing(variable, "f"), ["push bp", "mov bp, sp", "L0_0:", "mov bx, word ptr [bp+6]", "mov ax, word ptr [bx]", "pop bp", "retf"]);
+    assert_eq!(
+        listing(variable, "f"),
+        ["push bp", "mov bp, sp", "L0_0:", "mov bx, word ptr [bp+6]", "mov ax, word ptr [bx]", "pop bp", "retf"]
+    );
 }
 
 /// `icmp` of far pointers was refused as "a ptr addrspace(1) value":
@@ -3337,15 +3855,43 @@ fn test_an_address_of_no_global_is_a_direct_address() {
 #[test]
 fn test_far_pointers_compare_by_words() {
     let compare = |predicate: &str, second: &str| {
-        let text = format!("define i16 @f(ptr addrspace(1) %p, ptr addrspace(1) %q) addrspace(1) {{\n  %c = icmp {predicate} ptr addrspace(1) %p, {second}\n  %r = zext i1 %c to i16\n  ret i16 %r\n}}\n");
+        let text = format!(
+            "define i16 @f(ptr addrspace(1) %p, ptr addrspace(1) %q) addrspace(1) {{\n  %c = icmp {predicate} ptr addrspace(1) %p, {second}\n  %r = zext i1 %c to i16\n  ret i16 %r\n}}\n"
+        );
         assert!(text.contains(&format!("icmp {predicate} ptr addrspace(1)")), "the shape that was refused");
         listing(&text, "f")
     };
     assert_eq!(
         compare("eq", "%q"),
-        ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "xor ax, word ptr [bp+10]", "mov bx, word ptr [bp+8]", "xor bx, word ptr [bp+12]", "or ax, bx", "sete al", "movzx ax, al", "pop bp", "retf"]
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "mov ax, word ptr [bp+6]",
+            "xor ax, word ptr [bp+10]",
+            "mov bx, word ptr [bp+8]",
+            "xor bx, word ptr [bp+12]",
+            "or ax, bx",
+            "sete al",
+            "movzx ax, al",
+            "pop bp",
+            "retf"
+        ]
     );
-    assert_eq!(compare("ne", "null"), ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "or ax, word ptr [bp+8]", "setne al", "movzx ax, al", "pop bp", "retf"]);
+    assert_eq!(
+        compare("ne", "null"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "mov ax, word ptr [bp+6]",
+            "or ax, word ptr [bp+8]",
+            "setne al",
+            "movzx ax, al",
+            "pop bp",
+            "retf"
+        ]
+    );
     assert!(compare("ult", "%q").iter().any(|line| line == "setb al"));
 }
 
@@ -3368,7 +3914,21 @@ define i16 @f() addrspace(1) {
 ";
     assert!(text.contains("call {i16, i16} @llrm.ia16.asm."), "the shape that was refused");
     let got = listing(text, "f");
-    assert_eq!(got, ["push bp", "mov bp, sp", "L0_0:", "db 0fah", "xor ax, ax", "db 0cdh,01ah", "mov ax, cx", "add ax, dx", "pop bp", "retf"]);
+    assert_eq!(
+        got,
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "db 0fah",
+            "xor ax, ax",
+            "db 0cdh,01ah",
+            "mov ax, cx",
+            "add ax, dx",
+            "pop bp",
+            "retf"
+        ]
+    );
 }
 
 /// The same address as a phi's input, made in the predecessor before
@@ -3388,7 +3948,22 @@ b:
 ";
     assert!(text.contains("getelementptr i8, ptr null") && text.contains("phi ptr [ %g"), "the shape that was refused");
     let got = listing(text, "f");
-    assert_eq!(got, ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+8]", "cmp byte ptr [bp+6], 0", "je L0_3", "L0_1:", "mov ax, -4", "L0_3:", "pop bp", "retf"]);
+    assert_eq!(
+        got,
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "mov ax, word ptr [bp+8]",
+            "cmp byte ptr [bp+6], 0",
+            "je L0_3",
+            "L0_1:",
+            "mov ax, -4",
+            "L0_3:",
+            "pop bp",
+            "retf"
+        ]
+    );
 }
 
 /// A huge pointer indexes by 32 bits, so a displacement that crosses 64K steps
@@ -3405,7 +3980,22 @@ fn test_a_huge_pointer_displacement_carries_into_its_selector() {
 ";
     assert_eq!(
         listing(text, "f"),
-        ["push bp", "mov bp, sp", "L0_0:", "movzx ebx, word ptr [bp+6]", "add ebx, 80000", "mov eax, ebx", "sar eax, 16", "shl eax, 12", "mov cx, word ptr [bp+8]", "add cx, ax", "mov es, cx", "mov ax, word ptr es:[bx]", "pop bp", "retf"]
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "movzx ebx, word ptr [bp+6]",
+            "add ebx, 80000",
+            "mov eax, ebx",
+            "sar eax, 16",
+            "shl eax, 12",
+            "mov cx, word ptr [bp+8]",
+            "add cx, ax",
+            "mov es, cx",
+            "mov ax, word ptr es:[bx]",
+            "pop bp",
+            "retf"
+        ]
     );
     let far = "define i16 @f(ptr addrspace(1) %p) addrspace(1) {
   %q = getelementptr i32, ptr addrspace(1) %p, i16 5000
@@ -3413,7 +4003,10 @@ fn test_a_huge_pointer_displacement_carries_into_its_selector() {
   ret i16 %v
 }
 ";
-    assert!(!listing(far, "f").iter().any(|line| line.contains("sar")), "a far pointer's displacement wraps in its offset");
+    assert!(
+        !listing(far, "f").iter().any(|line| line.contains("sar")),
+        "a far pointer's displacement wraps in its offset"
+    );
 }
 
 #[test]
@@ -3426,7 +4019,23 @@ fn test_a_variable_index_in_a_huge_pointer_is_scaled_and_carried() {
 ";
     assert_eq!(
         listing(text, "f"),
-        ["push bp", "mov bp, sp", "L0_0:", "movzx ebx, word ptr [bp+6]", "mov eax, dword ptr [bp+10]", "lea ebx, [ebx+eax*2]", "mov eax, ebx", "sar eax, 16", "shl eax, 12", "mov cx, word ptr [bp+8]", "add cx, ax", "mov es, cx", "mov ax, word ptr es:[bx]", "pop bp", "retf"]
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "movzx ebx, word ptr [bp+6]",
+            "mov eax, dword ptr [bp+10]",
+            "lea ebx, [ebx+eax*2]",
+            "mov eax, ebx",
+            "sar eax, 16",
+            "shl eax, 12",
+            "mov cx, word ptr [bp+8]",
+            "add cx, ax",
+            "mov es, cx",
+            "mov ax, word ptr es:[bx]",
+            "pop bp",
+            "retf"
+        ]
     );
 }
 
@@ -3443,7 +4052,20 @@ fn test_huge_pointers_compare_by_selector_then_offset() {
 ";
     assert_eq!(
         listing(huge, "f"),
-        ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "sub ax, word ptr [bp+10]", "mov ax, word ptr [bp+12]", "mov bx, word ptr [bp+8]", "sbb bx, ax", "setb al", "movzx ax, al", "pop bp", "retf"]
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "mov ax, word ptr [bp+6]",
+            "sub ax, word ptr [bp+10]",
+            "mov ax, word ptr [bp+12]",
+            "mov bx, word ptr [bp+8]",
+            "sbb bx, ax",
+            "setb al",
+            "movzx ax, al",
+            "pop bp",
+            "retf"
+        ]
     );
     let far = huge.replace("addrspace(3)", "addrspace(1)");
     assert!(!listing(&far, "f").iter().any(|line| line.starts_with("sbb")));
@@ -3459,7 +4081,23 @@ define i32 @f(ptr addrspace(3) %a, ptr addrspace(3) %b) addrspace(1) {
 ";
     assert_eq!(
         listing(text, "f"),
-        ["push bp", "mov bp, sp", "L0_0:", "movzx eax, word ptr [bp+6]", "movzx ebx, word ptr [bp+10]", "sub eax, ebx", "movzx ebx, word ptr [bp+8]", "movzx ecx, word ptr [bp+12]", "sub ebx, ecx", "sar ebx, 12", "shl ebx, 16", "add eax, ebx", "shld edx, eax, 16", "pop bp", "retf"]
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "movzx eax, word ptr [bp+6]",
+            "movzx ebx, word ptr [bp+10]",
+            "sub eax, ebx",
+            "movzx ebx, word ptr [bp+8]",
+            "movzx ecx, word ptr [bp+12]",
+            "sub ebx, ecx",
+            "sar ebx, 12",
+            "shl ebx, 16",
+            "add eax, ebx",
+            "shld edx, eax, 16",
+            "pop bp",
+            "retf"
+        ]
     );
 }
 
@@ -3477,7 +4115,10 @@ define ptr addrspace(1) @g(ptr addrspace(3) %p) addrspace(1) {
 ";
     let got = listing(text, "f");
     assert!(got.contains(&"add eax, 70000".to_owned()) && got.contains(&"sar ebx, 16".to_owned()), "{got:?}");
-    assert_eq!(listing(text, "g"), ["push bp", "mov bp, sp", "L1_0:", "mov ax, word ptr [bp+6]", "mov dx, word ptr [bp+8]", "pop bp", "retf"]);
+    assert_eq!(
+        listing(text, "g"),
+        ["push bp", "mov bp, sp", "L1_0:", "mov ax, word ptr [bp+6]", "mov dx, word ptr [bp+8]", "pop bp", "retf"]
+    );
 }
 
 /// A loop over a huge array: its pointer carries each trip, and its end
@@ -3567,7 +4208,11 @@ define i32 @f() addrspace(1) {
 ";
     let got = listing(text, "f");
     assert!(got.iter().any(|line| line.starts_with("add ") && line.ends_with(&format!(", {}", (1 << 12)))), "{got:?}");
-    assert!(got.iter().any(|line| line.contains("es:[bx+14460]") || line.contains("es:[bx+0x387c]") || line.contains("+14460]")), "{got:?}");
+    assert!(
+        got.iter()
+            .any(|line| line.contains("es:[bx+14460]") || line.contains("es:[bx+0x387c]") || line.contains("+14460]")),
+        "{got:?}"
+    );
 }
 
 /// `(double)long_double` was rounded through a dword (fstp dword) whatever
@@ -3588,7 +4233,10 @@ fn test_an_extended_float_is_never_fcoms_memory_operand() {
     let text = "@g = global x86_fp80 zeroinitializer\ndefine i16 @f(x86_fp80 %x) addrspace(1) {\n  %y = load x86_fp80, ptr @g\n  %c = fcmp ogt x86_fp80 %x, %y\n  %r = zext i1 %c to i16\n  ret i16 %r\n}\n";
     assert!(text.contains("fcmp ogt x86_fp80"), "the shape that was refused");
     let got = listing(text, "f");
-    assert!(got.iter().any(|line| line.starts_with("fld tbyte")) && got.iter().any(|line| line.starts_with("fcom")), "{got:?}");
+    assert!(
+        got.iter().any(|line| line.starts_with("fld tbyte")) && got.iter().any(|line| line.starts_with("fcom")),
+        "{got:?}"
+    );
     assert!(!got.iter().any(|line| line.starts_with("fcom") && line.contains("tbyte")), "{got:?}");
 }
 
@@ -3597,12 +4245,27 @@ fn test_an_extended_float_is_never_fcoms_memory_operand() {
 #[test]
 fn test_a_fixed_address_pointer_selects_as_a_far_one() {
     let body = |space: u32| {
-        format!("define i16 @f(ptr addrspace({space}) %p, i16 %i) addrspace(1) {{\n  %q = getelementptr i16, ptr addrspace({space}) %p, i16 %i\n  %v = load volatile i16, ptr addrspace({space}) %q\n  ret i16 %v\n}}\n")
+        format!(
+            "define i16 @f(ptr addrspace({space}) %p, i16 %i) addrspace(1) {{\n  %q = getelementptr i16, ptr addrspace({space}) %p, i16 %i\n  %v = load volatile i16, ptr addrspace({space}) %q\n  ret i16 %v\n}}\n"
+        )
     };
-    let layout = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16\"\n";
+    let layout =
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16\"\n";
     let listing = |space| {
         let module = llrm_mir::parse::module(&format!("{layout}{}", body(space))).expect("parses");
-        let chosen = isel::selected(&module, "f", &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::m16(), &llrm_x86_m16::M16, false, 0).expect("selected");
+        let chosen = isel::selected(
+            &module,
+            "f",
+            &qb(),
+            &mut Pool::new(0),
+            crate::backend::cpu::profile("486").expect("a target"),
+            &crate::backend::target::BASIC,
+            isel::m16(),
+            &llrm_x86_m16::M16,
+            false,
+            0,
+        )
+        .expect("selected");
         format!("{chosen:?}")
     };
     assert_eq!(listing(4), listing(1));
@@ -3613,7 +4276,11 @@ fn test_a_fixed_address_pointer_selects_as_a_far_one() {
 #[test]
 fn test_lifetime_markers_are_no_code() {
     let text = |markers: bool| {
-        let (start, end) = if markers { ("call void @llvm.lifetime.start.p0(i64 16, ptr %x)", "call void @llvm.lifetime.end.p0(i64 16, ptr %x)") } else { ("", "") };
+        let (start, end) = if markers {
+            ("call void @llvm.lifetime.start.p0(i64 16, ptr %x)", "call void @llvm.lifetime.end.p0(i64 16, ptr %x)")
+        } else {
+            ("", "")
+        };
         format!(
             "declare void @llvm.lifetime.start.p0(i64, ptr)
 declare void @llvm.lifetime.end.p0(i64, ptr)
@@ -3634,8 +4301,13 @@ define i16 @f(i16 %a, i16 %c) addrspace(1) {{
 
 /// Two 16-byte locals, `x` and `y`: in the two arms of an `if`, or, `overlapping`, both
 /// live across the same stores; with lifetime markers when `markers`.
-fn scopes(markers: bool, overlapping: bool) -> String {
-    let mark = |what: &str, name: &str| if markers { format!("call void @llvm.lifetime.{what}.p0(i64 16, ptr %{name})") } else { String::new() };
+fn scopes(
+    markers: bool,
+    overlapping: bool,
+) -> String {
+    let mark = |what: &str, name: &str| {
+        if markers { format!("call void @llvm.lifetime.{what}.p0(i64 16, ptr %{name})") } else { String::new() }
+    };
     let (start, end, ystart, yend) = (mark("start", "x"), mark("end", "x"), mark("start", "y"), mark("end", "y"));
     if overlapping {
         format!(
@@ -3714,7 +4386,8 @@ fn test_block_locals_live_together_keep_their_own_slots() {
 /// its own slot, whatever shares around it.
 #[test]
 fn test_a_local_used_outside_its_lifetime_shares_no_slot() {
-    let text = scopes(true, false).replace("  ret i16 %v\n", "  %again = load volatile i16, ptr %p\n  ret i16 %again\n");
+    let text =
+        scopes(true, false).replace("  ret i16 %v\n", "  %again = load volatile i16, ptr %p\n  ret i16 %again\n");
     assert_eq!(frame_bytes(&text), 32);
 }
 
@@ -3723,7 +4396,12 @@ fn test_a_local_used_outside_its_lifetime_shares_no_slot() {
 /// markers say.
 #[test]
 fn test_no_slot_is_shared_in_a_function_that_calls_setjmp() {
-    let text = scopes(true, false).replace("define i16 @f(i16 %a, i16 %c) addrspace(1) {", "declare i16 @setjmp(i16) returns_twice\ndefine i16 @f(i16 %a, i16 %c) addrspace(1) {").replace("  %t = icmp sgt i16 %a, 0\n", "  %j = call i16 @setjmp(i16 %a)\n  %t = icmp sgt i16 %a, 0\n");
+    let text = scopes(true, false)
+        .replace(
+            "define i16 @f(i16 %a, i16 %c) addrspace(1) {",
+            "declare i16 @setjmp(i16) returns_twice\ndefine i16 @f(i16 %a, i16 %c) addrspace(1) {",
+        )
+        .replace("  %t = icmp sgt i16 %a, 0\n", "  %j = call i16 @setjmp(i16 %a)\n  %t = icmp sgt i16 %a, 0\n");
     assert_eq!(frame_bytes(&text), 32);
 }
 
@@ -3739,17 +4417,32 @@ define i16 @g(i16 %a) addrspace(1) {
   ret i16 %a
 }
 ";
-    let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC).expect("assembles");
-    let says = |name: &str| module.procedures.iter().find(|one| one.name.contains(name)).map(|one| one.body.returns_twice);
+    let module =
+        assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC)
+            .expect("assembles");
+    let says =
+        |name: &str| module.procedures.iter().find(|one| one.name.contains(name)).map(|one| one.body.returns_twice);
     assert_eq!((says("f"), says("g")), (Some(true), Some(false)));
 }
 
 /// The encoded object of `fixture` at -Os when `machined` tries only `candidates`.
-fn sized_with(candidates: assemble::Candidates, text: &str) -> usize {
+fn sized_with(
+    candidates: assemble::Candidates,
+    text: &str,
+) -> usize {
     assemble::trying(candidates, || {
         let profile = crate::backend::cpu::tuned("486", true).expect("the 486 profile");
-        let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Profile(profile), &crate::backend::target::BASIC).expect("assembles");
-        crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment).expect("encodes").len()
+        let module = assemble::assembled(
+            &parsed(text),
+            &qb(),
+            "T_TEXT",
+            ProfileOrName::Profile(profile),
+            &crate::backend::target::BASIC,
+        )
+        .expect("assembles");
+        crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment)
+            .expect("encodes")
+            .len()
     })
 }
 
@@ -3759,13 +4452,14 @@ fn sized_with(candidates: assemble::Candidates, text: &str) -> usize {
 #[test]
 fn test_a_function_the_spiller_makes_larger_is_built_without_it() {
     let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/matmul.ll")).unwrap();
-    let (spiller, allocator) = (sized_with(assemble::Candidates::SpillerOnly, &text), sized_with(assemble::Candidates::AllocatorOnly, &text));
+    let (spiller, allocator) =
+        (sized_with(assemble::Candidates::SpillerOnly, &text), sized_with(assemble::Candidates::AllocatorOnly, &text));
     assert!(spiller > allocator, "premise: the spiller's route is larger ({spiller} against {allocator})");
     assert_eq!(sized_with(assemble::Candidates::Both, &text), allocator);
 }
 
-/// A function that called one whose registers are known was made twice, the second time without that, and the cheaper kept:
-/// the facts won in 4% of 947 such functions (0.3% of their cost). Only -Omax makes it twice.
+/// A function that called one whose registers are known was made twice, the second time without that, and the cheaper
+/// kept: the facts won in 4% of 947 such functions (0.3% of their cost). Only -Omax makes it twice.
 #[test]
 fn test_a_caller_is_made_without_its_callee_facts_only_with_an_exhaustive_search() {
     let text = "
@@ -3780,9 +4474,17 @@ define i16 @g(i16 %a) addrspace(1) {
 }
 ";
     let made = |exhaustive: bool| {
-        let profile = crate::backend::cpu::tuned_with(&llrm_x86_m16::M16, "486", false, true, exhaustive).expect("a profile");
+        let profile =
+            crate::backend::cpu::tuned_with(&llrm_x86_m16::M16, "486", false, true, exhaustive).expect("a profile");
         let before = assemble::machinings();
-        assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Profile(profile), &crate::backend::target::BASIC).expect("assembles");
+        assemble::assembled(
+            &parsed(text),
+            &qb(),
+            "T_TEXT",
+            ProfileOrName::Profile(profile),
+            &crate::backend::target::BASIC,
+        )
+        .expect("assembles");
         assemble::machinings() - before
     };
     let (directed, all) = (made(false), made(true));
@@ -3790,25 +4492,44 @@ define i16 @g(i16 %a) addrspace(1) {
     assert_eq!(all - directed, 1);
 }
 
-/// A function ran the spiller's route and the allocator's alone, and the cheaper was kept, whatever the allocator left: for
-/// the 77% of 4422 functions with frame or spill traffic the spiller could remove, and none else, that is one route fewer,
-/// and the bytes of the 66 programs and QCport were the same. Below -Omax the allocator alone is the only route where it
-/// left no traffic.
+/// A function ran the spiller's route and the allocator's alone, and the cheaper was kept, whatever the allocator left:
+/// for the 77% of 4422 functions with frame or spill traffic the spiller could remove, and none else, that is one route
+/// fewer, and the bytes of the 66 programs and QCport were the same. Below -Omax the allocator alone is the only route
+/// where it left no traffic.
 #[test]
 fn test_the_spiller_route_is_run_only_where_the_allocator_left_frame_traffic() {
     let dir = concat!(env!("LLRM_ROOT"), "/tests/check/mir");
     let (mut directed, mut both) = (0, 0);
-    for entry in std::fs::read_dir(dir).unwrap().map(|one| one.unwrap().path()).filter(|path| path.extension().is_some_and(|ext| ext == "ll")) {
+    for entry in std::fs::read_dir(dir)
+        .unwrap()
+        .map(|one| one.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "ll"))
+    {
         let text = std::fs::read_to_string(&entry).unwrap();
         let Ok(module) = llrm_mir::parse::module(&format!("{LAYOUT}{text}")) else { continue };
-        let profile = crate::backend::cpu::tuned_with(&llrm_x86_m16::M16, "486", false, true, false).expect("a profile");
+        let profile =
+            crate::backend::cpu::tuned_with(&llrm_x86_m16::M16, "486", false, true, false).expect("a profile");
         let run = |candidates| {
             assemble::trying(candidates, || {
                 let before = assemble::routes();
-                assemble::assembled(&module, &qb(), "T_TEXT", ProfileOrName::Profile(profile), &crate::backend::target::BASIC).ok().map(|_| assemble::routes() - before)
+                assemble::assembled(
+                    &module,
+                    &qb(),
+                    "T_TEXT",
+                    ProfileOrName::Profile(profile),
+                    &crate::backend::target::BASIC,
+                )
+                .ok()
+                .map(|_| assemble::routes() - before)
             })
         };
-        let (Some(each), Some(alone), Some(spiller)) = (run(assemble::Candidates::Both), run(assemble::Candidates::AllocatorOnly), run(assemble::Candidates::SpillerOnly)) else { continue };
+        let (Some(each), Some(alone), Some(spiller)) = (
+            run(assemble::Candidates::Both),
+            run(assemble::Candidates::AllocatorOnly),
+            run(assemble::Candidates::SpillerOnly),
+        ) else {
+            continue;
+        };
         directed += each;
         both += alone + spiller;
     }
@@ -3817,35 +4538,57 @@ fn test_the_spiller_route_is_run_only_where_the_allocator_left_frame_traffic() {
     assert!(directed < all, "{directed} routes against {all}");
 }
 
-/// -O0 ran the allocator's trials and both routes (the allocator alone and the spiller's) on every function: half of a -O0 compile
-/// (QCport d_faces 3.64 G, d_alias 4.32 G), for code the same size within 0.02%. gcc's IRA at -O0 builds no conflicts and allocates
-/// once. Without the search a function is made through one route.
+/// -O0 ran the allocator's trials and both routes (the allocator alone and the spiller's) on every function: half of a
+/// -O0 compile (QCport d_faces 3.64 G, d_alias 4.32 G), for code the same size within 0.02%. gcc's IRA at -O0 builds no
+/// conflicts and allocates once. Without the search a function is made through one route.
 #[test]
 fn test_without_the_allocation_search_a_function_takes_one_route() {
     let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/matmul.ll")).unwrap();
     let routes = |search: bool| {
-        let profile = crate::backend::cpu::tuned_with(&llrm_x86_m16::M16, "486", false, search, false).expect("a profile");
+        let profile =
+            crate::backend::cpu::tuned_with(&llrm_x86_m16::M16, "486", false, search, false).expect("a profile");
         let (routes, machinings) = (assemble::routes(), assemble::machinings());
-        assemble::assembled(&parsed(&text), &qb(), "T_TEXT", ProfileOrName::Profile(profile), &crate::backend::target::BASIC).expect("assembles");
+        assemble::assembled(
+            &parsed(&text),
+            &qb(),
+            "T_TEXT",
+            ProfileOrName::Profile(profile),
+            &crate::backend::target::BASIC,
+        )
+        .expect("assembles");
         (assemble::routes() - routes, assemble::machinings() - machinings)
     };
     let (routes_searching, functions) = routes(true);
-    assert!(routes_searching > functions, "premise: a function takes more than one route when searching ({routes_searching} routes, {functions} functions)");
+    assert!(
+        routes_searching > functions,
+        "premise: a function takes more than one route when searching ({routes_searching} routes, {functions} functions)"
+    );
     let (routes_not, functions) = routes(false);
     assert_eq!(routes_not, functions, "{routes_not} routes for {functions} functions without the search");
 }
 
-/// Each route through the machine phases selected the function's instructions again, though the selector's output is the same
-/// for all of them: the routes of one function share one selection (4-5% of a file's compile time on the files the probe ran
-/// twice).
+/// Each route through the machine phases selected the function's instructions again, though the selector's output is
+/// the same for all of them: the routes of one function share one selection (4-5% of a file's compile time on the files
+/// the probe ran twice).
 #[test]
 fn test_the_routes_of_a_function_share_one_selection() {
     let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/matmul.ll")).unwrap();
     let profile = crate::backend::cpu::tuned("486", true).expect("the 486 profile");
     let (routes, selections, machinings) = (assemble::routes(), assemble::selections(), assemble::machinings());
-    assemble::assembled(&parsed(&text), &qb(), "T_TEXT", ProfileOrName::Profile(profile), &crate::backend::target::BASIC).expect("assembles");
-    let (routes, selections, machinings) = (assemble::routes() - routes, assemble::selections() - selections, assemble::machinings() - machinings);
-    assert!(routes > machinings, "premise: some function ran more than one route ({routes} routes for {machinings} functions)");
+    assemble::assembled(
+        &parsed(&text),
+        &qb(),
+        "T_TEXT",
+        ProfileOrName::Profile(profile),
+        &crate::backend::target::BASIC,
+    )
+    .expect("assembles");
+    let (routes, selections, machinings) =
+        (assemble::routes() - routes, assemble::selections() - selections, assemble::machinings() - machinings);
+    assert!(
+        routes > machinings,
+        "premise: some function ran more than one route ({routes} routes for {machinings} functions)"
+    );
     assert_eq!(selections, machinings, "{selections} selections for {machinings} functions and {routes} routes");
 }
 
@@ -3868,14 +4611,17 @@ define i16 @f(i16 %n) addrspace(1) {{
 "
         )
     };
-    let moves = |size: &str| listing(&text(size), "f").into_iter().filter(|one| one.contains("movs") || one.starts_with("shr") || one.starts_with("and") || one.starts_with("mov cx")).collect::<Vec<_>>();
+    let moves = |size: &str| {
+        listing(&text(size), "f")
+            .into_iter()
+            .filter(|one| {
+                one.contains("movs") || one.starts_with("shr") || one.starts_with("and") || one.starts_with("mov cx")
+            })
+            .collect::<Vec<_>>()
+    };
     assert_eq!(
         moves("70"),
-        [
-            "mov cx, 17",
-            "rep movs dword ptr es:[di], dword ptr ss:[si]",
-            "movs word ptr es:[di], word ptr ss:[si]",
-        ]
+        ["mov cx, 17", "rep movs dword ptr es:[di], dword ptr ss:[si]", "movs word ptr es:[di], word ptr ss:[si]",]
     );
     // A length not constant is the dwords it holds and the bytes it leaves.
     let dynamic = moves("%n");
@@ -3900,7 +4646,8 @@ define i16 @f(i16 %n) addrspace(1) {
 ";
     let lines = listing(text, "f");
     let at = |found: &dyn Fn(&String) -> bool| lines.iter().position(found).unwrap_or_else(|| panic!("{lines:?}"));
-    let (counted, selected, moved) = (at(&|one| one.starts_with("and ")), at(&|one| one.ends_with(", ss")), at(&|one| one.starts_with("rep movs")));
+    let (counted, selected, moved) =
+        (at(&|one| one.starts_with("and ")), at(&|one| one.ends_with(", ss")), at(&|one| one.starts_with("rep movs")));
     assert!(counted < selected && selected < moved, "{lines:?}");
 }
 
@@ -3923,15 +4670,25 @@ define i16 @f(ptr addrspace(1) %p) addrspace(1) {
 /// `@f` of forty volatile stores to `@g` that a branch at its entry may
 /// skip: more than a short branch reaches.
 fn far_branch_body() -> String {
-    let stores: String = (0..40).map(|at| format!("  %p{at} = getelementptr i8, ptr @g, i16 {}\n  store volatile i16 {at}, ptr %p{at}\n", 2 * at)).collect();
-    format!("@g = global [80 x i8] zeroinitializer\ndefine i16 @f(i16 %c) addrspace(1) {{\nentry:\n  %z = icmp eq i16 %c, 0\n  br i1 %z, label %skip, label %body\nbody:\n{stores}  br label %skip\nskip:\n  ret i16 %c\n}}\n")
+    let stores: String = (0..40)
+        .map(|at| {
+            format!("  %p{at} = getelementptr i8, ptr @g, i16 {}\n  store volatile i16 {at}, ptr %p{at}\n", 2 * at)
+        })
+        .collect();
+    format!(
+        "@g = global [80 x i8] zeroinitializer\ndefine i16 @f(i16 %c) addrspace(1) {{\nentry:\n  %z = icmp eq i16 %c, 0\n  br i1 %z, label %skip, label %body\nbody:\n{stores}  br label %skip\nskip:\n  ret i16 %c\n}}\n"
+    )
 }
 
 /// The code segment of `text`'s object, decoded, with the offsets its fixups patch.
 fn decoded_object(text: &str) -> (Vec<iced_x86::Instruction>, Vec<usize>, Vec<usize>) {
     use llrm_omf::omf;
-    let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC).expect("assembles");
-    let bytes = crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment).expect("encodes");
+    let module =
+        assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC)
+            .expect("assembles");
+    let bytes =
+        crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment)
+            .expect("encodes");
     let records = omf::parse(&bytes).expect("parses");
     let (code, _, size) = omf::code_segment(&records).expect("a code segment");
     let image = omf::segment_image(&records, code, size);
@@ -3945,7 +4702,8 @@ fn decoded_object(text: &str) -> (Vec<iced_x86::Instruction>, Vec<usize>, Vec<us
         }
         insns.push(insn);
     }
-    let fixed = omf::fixups(&records).into_iter().filter(|one| one.seg == Some(code)).map(|one| one.offset as usize).collect();
+    let fixed =
+        omf::fixups(&records).into_iter().filter(|one| one.seg == Some(code)).map(|one| one.offset as usize).collect();
     (insns, fields, fixed)
 }
 
@@ -3958,14 +4716,22 @@ fn test_a_branch_past_a_short_reach_grows_and_lands_on_its_target() {
     let (insns, _, _) = decoded_object(&far_branch_body());
     assert!(!insns.iter().any(iced_x86::Instruction::is_invalid));
     let starts: Vec<u64> = insns.iter().map(iced_x86::Instruction::ip).collect();
-    let branch = insns.iter().find(|one| one.flow_control() == iced_x86::FlowControl::ConditionalBranch).expect("the entry's branch");
+    let branch = insns
+        .iter()
+        .find(|one| one.flow_control() == iced_x86::FlowControl::ConditionalBranch)
+        .expect("the entry's branch");
     assert_eq!(branch.op0_kind(), iced_x86::OpKind::NearBranch16);
     assert!(branch.len() > 2, "a short branch cannot reach: {branch}");
     let target = branch.near_branch_target();
     assert!(target - branch.next_ip() > 127, "{branch} skips {} bytes", target - branch.next_ip());
     assert!(starts.contains(&target), "{branch} lands inside an instruction");
     let skipped = insns.iter().filter(|one| one.ip() >= branch.next_ip() && one.ip() < target);
-    assert_eq!(skipped.filter(|one| one.mnemonic() == iced_x86::Mnemonic::Mov && one.op0_kind() == iced_x86::OpKind::Memory).count(), 40);
+    assert_eq!(
+        skipped
+            .filter(|one| one.mnemonic() == iced_x86::Mnemonic::Mov && one.op0_kind() == iced_x86::OpKind::Memory)
+            .count(),
+        40
+    );
 }
 
 /// Every relocated field is patched where its instruction landed, after the
@@ -3984,7 +4750,9 @@ fn test_every_relocated_field_moves_with_its_instruction() {
 #[test]
 fn test_adjacent_volatile_word_stores_stay_two_word_stores() {
     let stores = |volatile: &str| {
-        let text = format!("@g = global [4 x i8] zeroinitializer\ndefine void @f() addrspace(1) {{\n  store {volatile}i16 1, ptr @g\n  %p = getelementptr i8, ptr @g, i16 2\n  store {volatile}i16 2, ptr %p\n  ret void\n}}\n");
+        let text = format!(
+            "@g = global [4 x i8] zeroinitializer\ndefine void @f() addrspace(1) {{\n  store {volatile}i16 1, ptr @g\n  %p = getelementptr i8, ptr @g, i16 2\n  store {volatile}i16 2, ptr %p\n  ret void\n}}\n"
+        );
         listing(&text, "f").into_iter().filter(|line| line.starts_with("mov ")).collect::<Vec<_>>()
     };
     let volatile = stores("volatile ");
@@ -4007,7 +4775,12 @@ fn test_a_volatile_load_is_not_folded_past_another_volatile_access() {
         "define void @f() addrspace(1) {\n  %a = load volatile i16, ptr @g\n  %b = load volatile i16, ptr @h\n  call addrspace(1) void @k(i16 %b, i16 %a)\n  ret void\n}\n",
     ] {
         let lines = listing(&format!("{globals}{body}"), "f");
-        let first = |name: &str| lines.iter().position(|line| line.contains(&format!("word ptr {name}"))).unwrap_or_else(|| panic!("no {name}: {lines:?}"));
+        let first = |name: &str| {
+            lines
+                .iter()
+                .position(|line| line.contains(&format!("word ptr {name}")))
+                .unwrap_or_else(|| panic!("no {name}: {lines:?}"))
+        };
         assert!(first("g") < first("h"), "{lines:?}");
     }
 }
@@ -4052,7 +4825,8 @@ b0:
 fn test_a_phi_stored_on_more_edges_than_its_block_runs_stays_in_a_register() {
     let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/findloop.ll")).unwrap();
     let with = sized_with(assemble::Candidates::SpillerOnly, &text);
-    let without = crate::backend::ssaspill::without_memory_phis(|| sized_with(assemble::Candidates::SpillerOnly, &text));
+    let without =
+        crate::backend::ssaspill::without_memory_phis(|| sized_with(assemble::Candidates::SpillerOnly, &text));
     assert_eq!(with, without);
 }
 
@@ -4065,11 +4839,17 @@ fn test_a_phi_stored_on_more_edges_than_its_block_runs_stays_in_a_register() {
 /// There is no 286 profile yet: when there is, it asserts none of these.
 #[test]
 fn test_m16_emits_386_forms() {
-    let arithmetic = listing("define i32 @f(i32 %a, i32 %b) addrspace(1) {\n  %c = add i32 %a, %b\n  %d = mul i32 %c, 3\n  ret i32 %d\n}\n", "f");
+    let arithmetic = listing(
+        "define i32 @f(i32 %a, i32 %b) addrspace(1) {\n  %c = add i32 %a, %b\n  %d = mul i32 %c, 3\n  ret i32 %d\n}\n",
+        "f",
+    );
     assert!(arithmetic.contains(&"add ebx, dword ptr [bp+10]".to_owned()), "{arithmetic:?}");
     assert!(arithmetic.contains(&"lea eax, [ebx+ebx*2]".to_owned()), "{arithmetic:?}");
 
-    let extends = listing("define i32 @f(i8 %a, i16 %b) addrspace(1) {\n  %x = sext i8 %a to i32\n  %y = zext i16 %b to i32\n  %z = add i32 %x, %y\n  ret i32 %z\n}\n", "f");
+    let extends = listing(
+        "define i32 @f(i8 %a, i16 %b) addrspace(1) {\n  %x = sext i8 %a to i32\n  %y = zext i16 %b to i32\n  %z = add i32 %x, %y\n  ret i32 %z\n}\n",
+        "f",
+    );
     for want in ["movsx eax, byte ptr [bp+6]", "movzx ebx, word ptr [bp+8]", "add eax, ebx"] {
         assert!(extends.contains(&want.to_owned()), "{want}: {extends:?}");
     }
@@ -4108,7 +4888,10 @@ fn test_a_selector_is_found_by_its_targets_name() {
 fn test_one_class_of_a_type_says_its_name_register_and_size() {
     let params = "i1 %a, i8 %b, i16 %c, i32 %d, i64 %e, ptr %p, ptr addrspace(1) %q, float %x, double %y, x86_fp80 %z";
     let check = |layout: &str, want: &[(&str, Result<u32, ()>, Result<u32, ()>)]| {
-        let module = llrm_mir::parse::module(&format!("target datalayout = \"{layout}\"\ndefine void @f({params}) {{\nentry:\n  ret void\n}}\n")).expect("parses");
+        let module = llrm_mir::parse::module(&format!(
+            "target datalayout = \"{layout}\"\ndefine void @f({params}) {{\nentry:\n  ret void\n}}\n"
+        ))
+        .expect("parses");
         let function = module.global(module.named("f").expect("f")).function().expect("a function");
         let layout = llrm_mir::datalayout::DataLayout::parse(layout).expect("a layout");
         for (&parameter, (name, width, size)) in function.parameters().iter().zip(want) {
@@ -4120,11 +4903,33 @@ fn test_one_class_of_a_type_says_its_name_register_and_size() {
     };
     check(
         "e-p:16:16-p1:32:16:16:16-i32:16-i64:16",
-        &[("i1", Ok(1), Ok(1)), ("i8", Ok(1), Ok(1)), ("i16", Ok(2), Ok(2)), ("i32", Ok(4), Ok(4)), ("i64", Err(()), Ok(8)), ("ptr", Ok(2), Ok(2)), ("far", Err(()), Ok(4)), ("float", Ok(10), Ok(4)), ("float", Ok(10), Ok(8)), ("float", Ok(10), Ok(10))],
+        &[
+            ("i1", Ok(1), Ok(1)),
+            ("i8", Ok(1), Ok(1)),
+            ("i16", Ok(2), Ok(2)),
+            ("i32", Ok(4), Ok(4)),
+            ("i64", Err(()), Ok(8)),
+            ("ptr", Ok(2), Ok(2)),
+            ("far", Err(()), Ok(4)),
+            ("float", Ok(10), Ok(4)),
+            ("float", Ok(10), Ok(8)),
+            ("float", Ok(10), Ok(10)),
+        ],
     );
     check(
         "e-p:32:32-p1:32:32-i32:32-i64:32",
-        &[("i1", Ok(1), Ok(1)), ("i8", Ok(1), Ok(1)), ("i16", Ok(2), Ok(2)), ("i32", Ok(4), Ok(4)), ("i64", Err(()), Ok(8)), ("ptr", Ok(4), Ok(4)), ("ptr", Ok(4), Ok(4)), ("float", Ok(10), Ok(4)), ("float", Ok(10), Ok(8)), ("float", Ok(10), Ok(10))],
+        &[
+            ("i1", Ok(1), Ok(1)),
+            ("i8", Ok(1), Ok(1)),
+            ("i16", Ok(2), Ok(2)),
+            ("i32", Ok(4), Ok(4)),
+            ("i64", Err(()), Ok(8)),
+            ("ptr", Ok(4), Ok(4)),
+            ("ptr", Ok(4), Ok(4)),
+            ("float", Ok(10), Ok(4)),
+            ("float", Ok(10), Ok(8)),
+            ("float", Ok(10), Ok(10)),
+        ],
     );
 }
 
@@ -4136,10 +4941,37 @@ fn test_one_class_of_a_type_says_its_name_register_and_size() {
 fn test_a_dword_pointer_scales_its_index_in_the_access() {
     let text = "target datalayout = \"e-p:32:32-i32:32-i64:32\"\ndefine i32 @f(ptr %p, i32 %i) {\nentry:\n  %e = getelementptr inbounds i32, ptr %p, i32 %i\n  %v = load i32, ptr %e\n  ret i32 %v\n}\n";
     let module = llrm_mir::parse::module(text).expect("parses");
-    let selected = isel::selected(&module, "f", &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::m16(), &llrm_x86_m16::M16, false, 0).expect("selects");
-    let insns: Vec<_> = selected.body.blocks.iter().flat_map(|block| block.insns.iter()).filter_map(|insn| insn.what.as_ref()).collect();
+    let selected = isel::selected(
+        &module,
+        "f",
+        &qb(),
+        &mut Pool::new(0),
+        crate::backend::cpu::profile("486").expect("a target"),
+        &crate::backend::target::BASIC,
+        isel::m16(),
+        &llrm_x86_m16::M16,
+        false,
+        0,
+    )
+    .expect("selects");
+    let insns: Vec<_> = selected
+        .body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter_map(|insn| insn.what.as_ref())
+        .collect();
     assert!(!insns.iter().any(|what| what.name.as_deref() == Some("shl")), "{insns:?}");
-    let scaled = insns.iter().any(|what| what.sources.iter().any(|one| matches!(one, crate::model::ir::Loc::Mem(cell) if cell.scale == 4 && cell.base.is_some() && cell.index.is_some())));
+    let scaled = insns
+        .iter()
+        .any(
+            |what| what.sources.iter().any(|one| {
+                matches!(
+                    one,
+                    crate::model::ir::Loc::Mem(cell) if cell.scale == 4 && cell.base.is_some() && cell.index.is_some()
+                )
+            }),
+        );
     assert!(scaled, "{insns:?}");
 }
 
@@ -4155,7 +4987,10 @@ define i16 @f() addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    let (load, store) = (got.iter().position(|one| one.starts_with("mov ax, word ptr g")), got.iter().position(|one| one.starts_with("mov word ptr g, 0")));
+    let (load, store) = (
+        got.iter().position(|one| one.starts_with("mov ax, word ptr g")),
+        got.iter().position(|one| one.starts_with("mov word ptr g, 0")),
+    );
     assert!(load.is_some() && store.is_some() && load < store, "{got:?}");
 }
 
@@ -4164,30 +4999,68 @@ define i16 @f() addrspace(1) {
 /// A register parameter was dropped with the rest of what had no cell, and a debugger had none to show.
 #[test]
 fn a_parameter_is_a_cell_a_register_or_gone() {
-    use crate::backend::isel::{Convention, Parameter};
-    use crate::model::lir::DebugPlace;
     use iced_x86::Register;
     use llrm_mir::debuginfo as di;
-    let mut module = llrm_mir::parse::module("define void @f(i16 %a, i16 %b, i32 %c) {\nentry:\n  ret void\n}\n").expect("parses");
-    let int = di::add_type(&mut module, &di::Type { kind: di::Kind::Scalar, name: "int16".into(), size: 0, reach: di::Reach::Near, target: None, members: Vec::new(), spelling: None });
+
+    use crate::backend::isel::{Convention, Parameter};
+    use crate::model::lir::DebugPlace;
+    let mut module =
+        llrm_mir::parse::module("define void @f(i16 %a, i16 %b, i32 %c) {\nentry:\n  ret void\n}\n").expect("parses");
+    let int = di::add_type(
+        &mut module,
+        &di::Type {
+            kind: di::Kind::Scalar,
+            name: "int16".into(),
+            size: 0,
+            reach: di::Reach::Near,
+            target: None,
+            members: Vec::new(),
+            spelling: None,
+        },
+    );
     let named = ["a", "b", "c", "d"];
     let parameters = named.iter().enumerate().map(|(at, name)| (at as i64, (*name).to_owned(), int)).collect();
-    di::add_function(&mut module, &di::Function { function: "f".into(), module: false, name: "f".into(), r#type: int, parameters });
+    di::add_function(
+        &mut module,
+        &di::Function { function: "f".into(), module: false, name: "f".into(), r#type: int, parameters },
+    );
     // a in a cell, b in AX, c in DX:AX; d is past the three the function has.
-    let convention = Convention { parameters: vec![Parameter::Cell(6), Parameter::Registers(vec![Register::AX]), Parameter::Registers(vec![Register::DX, Register::AX])], returns: Vec::new(), popped: 0, saved: Vec::new() };
-    let found: Vec<(String, DebugPlace)> = isel::parameters(&module, module.functions().next().expect("@f").2, "f", &convention, &Default::default()).into_iter().map(|one| (one.name, one.place)).collect();
-    assert_eq!(found, [("a".to_owned(), DebugPlace::At(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, 6))), ("b".to_owned(), DebugPlace::Register(Register::AX)), ("d".to_owned(), DebugPlace::Gone)]);
+    let convention = Convention {
+        parameters: vec![
+            Parameter::Cell(6),
+            Parameter::Registers(vec![Register::AX]),
+            Parameter::Registers(vec![Register::DX, Register::AX]),
+        ],
+        returns: Vec::new(),
+        popped: 0,
+        saved: Vec::new(),
+    };
+    let found: Vec<(String, DebugPlace)> =
+        isel::parameters(&module, module.functions().next().expect("@f").2, "f", &convention, &Default::default())
+            .into_iter()
+            .map(|one| (one.name, one.place))
+            .collect();
+    assert_eq!(
+        found,
+        [
+            ("a".to_owned(), DebugPlace::At(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, 6))),
+            ("b".to_owned(), DebugPlace::Register(Register::AX)),
+            ("d".to_owned(), DebugPlace::Gone)
+        ]
+    );
 }
 
-/// Whether an alloca's address is exposed was asked of its uses once per alloca by every query that named it, and by isel once more
-/// per alloca: a function of n locals read its whole body n times over, quadratic in n (#924: a 2,048-word local was seconds). It
-/// is found for all allocas in one pass.
+/// Whether an alloca's address is exposed was asked of its uses once per alloca by every query that named it, and by
+/// isel once more per alloca: a function of n locals read its whole body n times over, quadratic in n (#924: a
+/// 2,048-word local was seconds). It is found for all allocas in one pass.
 #[test]
 fn test_selecting_a_function_scans_for_exposed_allocas_once_not_once_per_alloca() {
     for locals in [30, 60] {
         let mut text = String::from("define void @f(i16 %x) addrspace(1) {\n");
         for at in 0..locals {
-            text += &format!("  %a{at} = alloca [4 x i16]\n  %p{at} = getelementptr i16, ptr %a{at}, i16 1\n  store i16 %x, ptr %p{at}\n  %v{at} = load i16, ptr %p{at}\n");
+            text += &format!(
+                "  %a{at} = alloca [4 x i16]\n  %p{at} = getelementptr i16, ptr %a{at}, i16 1\n  store i16 %x, ptr %p{at}\n  %v{at} = load i16, ptr %p{at}\n"
+            );
         }
         text += "  ret void\n}\n";
         let before = llrm_analysis::frameescape::scans();
@@ -4197,8 +5070,9 @@ fn test_selecting_a_function_scans_for_exposed_allocas_once_not_once_per_alloca(
     }
 }
 
-/// Selecting a function asked for what every function of the module does to memory by scanning the module: n functions made
-/// n scans of n functions (a quarter of the compile of 1024 functions). The module is scanned once, for every function.
+/// Selecting a function asked for what every function of the module does to memory by scanning the module: n functions
+/// made n scans of n functions (a quarter of the compile of 1024 functions). The module is scanned once, for every
+/// function.
 #[test]
 fn test_the_callees_of_a_module_are_scanned_once_for_all_its_functions_not_for_each() {
     // The tests of this crate run side by side in one process: each counts the scans its own thread makes.
@@ -4215,7 +5089,9 @@ fn test_the_callees_of_a_module_are_scanned_once_for_all_its_functions_not_for_e
         },
     });
     let scans = |functions: usize| {
-        let text: String = (0..functions).map(|n| format!("define i16 @f{n}(i16 %x) {{\nb:\n  %y = add i16 %x, {n}\n  ret i16 %y\n}}\n\n")).collect();
+        let text: String = (0..functions)
+            .map(|n| format!("define i16 @f{n}(i16 %x) {{\nb:\n  %y = add i16 %x, {n}\n  ret i16 %y\n}}\n\n"))
+            .collect();
         SCANS.with(|scans| scans.set(0));
         assembled_on("486", &text);
         SCANS.with(std::cell::Cell::get)

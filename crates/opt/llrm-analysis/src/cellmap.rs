@@ -20,9 +20,15 @@ use crate::regions::ByteRange;
 pub trait Bucket: Clone + Eq + Hash {
     type Parts: Default + Clone;
     /// Index a bucket that just gained its first cell.
-    fn held(&self, parts: &mut Self::Parts);
+    fn held(
+        &self,
+        parts: &mut Self::Parts,
+    );
     /// Unindex a bucket that just lost its last cell.
-    fn released(&self, parts: &mut Self::Parts);
+    fn released(
+        &self,
+        parts: &mut Self::Parts,
+    );
 }
 
 /// One bucket's cells by the displacement they start at: Python `_Spans`.
@@ -44,19 +50,29 @@ impl<K: Clone + Eq + Hash> Spans<K> {
     }
 
     /// Index `key`, returning where it is held.
-    fn add(&mut self, key: K, (low, high): ByteRange) -> (i128, u64) {
+    fn add(
+        &mut self,
+        key: K,
+        (low, high): ByteRange,
+    ) -> (i128, u64) {
         self.added += 1;
         self.cells.insert((low, self.added), (high, key));
         self.widest = self.widest.max(high - low);
         (low, self.added)
     }
 
-    fn remove(&mut self, at: (i128, u64)) {
+    fn remove(
+        &mut self,
+        at: (i128, u64),
+    ) {
         self.cells.remove(&at).expect("a held cell's start is indexed");
     }
 
     /// The cells whose bytes meet [low, high).
-    fn meeting(&self, (low, high): ByteRange) -> impl Iterator<Item = &K> {
+    fn meeting(
+        &self,
+        (low, high): ByteRange,
+    ) -> impl Iterator<Item = &K> {
         self.cells
             .range((low - self.widest + 1, 0)..(high, 0))
             .filter(move |(_, (end, _))| low < *end)
@@ -80,7 +96,10 @@ pub struct CellMap<K, V, B: Bucket> {
 }
 
 impl<K: Clone + Eq + Hash, V, B: Bucket> CellMap<K, V, B> {
-    pub fn new(items: IndexMap<K, V>, mut placed: impl FnMut(&K) -> (B, Option<ByteRange>)) -> Self {
+    pub fn new(
+        items: IndexMap<K, V>,
+        mut placed: impl FnMut(&K) -> (B, Option<ByteRange>),
+    ) -> Self {
         let mut map = Self {
             items: IndexMap::default(),
             buckets: HashMap::default(),
@@ -95,13 +114,23 @@ impl<K: Clone + Eq + Hash, V, B: Bucket> CellMap<K, V, B> {
 
     /// Python `__setitem__`: `placed`, a cell's bucket and span, is asked
     /// only of a new cell.
-    pub fn insert(&mut self, key: K, value: V, placed: impl FnOnce(&K) -> (B, Option<ByteRange>)) {
+    pub fn insert(
+        &mut self,
+        key: K,
+        value: V,
+        placed: impl FnOnce(&K) -> (B, Option<ByteRange>),
+    ) {
         if !self.items.contains_key(&key) {
             let (bucket, span) = placed(&key);
-            let keys = self.buckets.entry(bucket.clone()).or_insert_with(|| {
-                bucket.held(&mut self.parts);
-                IndexMap::default()
-            });
+            let keys = self
+                .buckets
+                .entry(bucket.clone())
+                .or_insert_with(
+                    || {
+                        bucket.held(&mut self.parts);
+                        IndexMap::default()
+                    },
+                );
             let at = span.map(|span| self.spans.entry(bucket).or_insert_with(Spans::new).add(key.clone(), span));
             keys.insert(key.clone(), at);
         }
@@ -170,9 +199,13 @@ impl<K: Clone + Eq + Hash, V, B: Bucket> CellMap<K, V, B> {
         self.items.retain(|key, _| !gone.contains(key));
     }
 
-    /// The cells `kill` would ask of a write that reaches `reached` (every bucket when None) and, where `displaced` says so, meets its span:
-    /// every cell that can overlap the write, and none it cannot.
-    pub fn asked(&self, reached: Option<Vec<B>>, displaced: Option<(HashSet<B>, ByteRange)>) -> Vec<&K> {
+    /// The cells `kill` would ask of a write that reaches `reached` (every bucket when None) and, where `displaced`
+    /// says so, meets its span: every cell that can overlap the write, and none it cannot.
+    pub fn asked(
+        &self,
+        reached: Option<Vec<B>>,
+        displaced: Option<(HashSet<B>, ByteRange)>,
+    ) -> Vec<&K> {
         let mut asked = Vec::new();
         let mut take = |bucket: &B| match self._spanned(bucket, displaced.as_ref()) {
             Some((spans, span)) => asked.extend(spans.meeting(span)),
@@ -219,4 +252,3 @@ impl<K, V, B: Bucket> Deref for CellMap<K, V, B> {
         &self.items
     }
 }
-

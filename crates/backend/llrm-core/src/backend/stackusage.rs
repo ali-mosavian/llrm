@@ -38,7 +38,10 @@ pub struct Usage {
 }
 
 /// The bytes a push or an `add sp` of `at` moves; a push of what has no width is a stack slot.
-fn moved(what: &crate::model::ir::Semantics, slot: i64) -> i64 {
+fn moved(
+    what: &crate::model::ir::Semantics,
+    slot: i64,
+) -> i64 {
     match what.op {
         Operation::Push => what.sources.first().map_or(slot, |one| match one {
             Loc::Reg(register) => i64::from(register.width),
@@ -50,7 +53,10 @@ fn moved(what: &crate::model::ir::Semantics, slot: i64) -> i64 {
 }
 
 /// Bytes `procedure` has on the stack at its deepest: not counting what it calls.
-pub fn frame(procedure: &masm::Procedure, target: &dyn llrm_target::Target) -> i64 {
+pub fn frame(
+    procedure: &masm::Procedure,
+    target: &dyn llrm_target::Target,
+) -> i64 {
     let slot = target.stack_slot_bytes();
     let (enter, _) = masm::_frame_parts(procedure);
     let entry: i64 = enter
@@ -73,7 +79,10 @@ pub fn frame(procedure: &masm::Procedure, target: &dyn llrm_target::Target) -> i
 }
 
 /// What `procedure`'s call sites have pushed when they call, the deepest.
-pub fn outgoing(procedure: &masm::Procedure, slot: i64) -> i64 {
+pub fn outgoing(
+    procedure: &masm::Procedure,
+    slot: i64,
+) -> i64 {
     let mut peak = 0;
     for block in &procedure.body.blocks {
         let mut held = 0_i64;
@@ -97,17 +106,26 @@ pub fn outgoing(procedure: &masm::Procedure, slot: i64) -> i64 {
 /// runtime's red zone, given every other procedure checks:
 ///
 /// - it is a leaf (no call, no inline code), so nothing below it is checked either way;
-/// - only the module's own direct calls enter it (`entered_directly`: internal, address not
-///   taken), so its caller is a checked procedure, or a leaf that calls nothing;
-/// - its caller held SP at or above the limit after its own frame, then pushed at most the
-///   module's deepest `outgoing` and the return address before this frame, so this frame and
-///   that push stay within `red_zone` bytes below the limit.
-pub fn elide_checks(procedures: &mut [masm::Procedure], entered_directly: &dyn Fn(&str) -> bool, target: &dyn llrm_target::Target) {
+/// - only the module's own direct calls enter it (`entered_directly`: internal, address not taken), so its caller is a
+///   checked procedure, or a leaf that calls nothing;
+/// - its caller held SP at or above the limit after its own frame, then pushed at most the module's deepest `outgoing`
+///   and the return address before this frame, so this frame and that push stay within `red_zone` bytes below the
+///   limit.
+pub fn elide_checks(
+    procedures: &mut [masm::Procedure],
+    entered_directly: &dyn Fn(&str) -> bool,
+    target: &dyn llrm_target::Target,
+) {
     let pushed = procedures.iter().map(|one| outgoing(one, target.stack_slot_bytes())).max().unwrap_or(0);
     for procedure in procedures.iter_mut() {
         let Some(check) = &procedure.stack_check else { continue };
-        let leaf = procedure.callees.is_empty() && procedure.body.insns().iter().all(|one| one.what.as_ref().is_none_or(|what| what.op != Operation::Call));
-        if leaf && !procedure.public && entered_directly(&procedure.name) && frame(procedure, target) + pushed <= check.red_zone {
+        let leaf = procedure.callees.is_empty()
+            && procedure.body.insns().iter().all(|one| one.what.as_ref().is_none_or(|what| what.op != Operation::Call));
+        if leaf
+            && !procedure.public
+            && entered_directly(&procedure.name)
+            && frame(procedure, target) + pushed <= check.red_zone
+        {
             procedure.stack_check = None;
         }
     }
@@ -122,16 +140,27 @@ pub fn stack_limit(segment_bytes: Option<usize>) -> Option<i64> {
 /// The bytes the object's stack segment adds to the `base` the runtime links,
 /// so the deepest chain of frames fits. A chain that cannot fit a segment of `limit` bytes is an
 /// error; none where the target has no segments.
-pub fn stack_to_add(module: &Module, base: i64, reserve: i64, limit: Option<i64>, target: &dyn llrm_target::Target) -> Result<i64, String> {
+pub fn stack_to_add(
+    module: &Module,
+    base: i64,
+    reserve: i64,
+    limit: Option<i64>,
+    target: &dyn llrm_target::Target,
+) -> Result<i64, String> {
     let need = Usage::of(std::slice::from_ref(module), target).deepest() + reserve;
     if let Some(limit) = limit.filter(|limit| need > *limit) {
-        return Err(format!("the deepest chain of calls needs {need} bytes of stack, more than the {limit} a stack segment can hold"));
+        return Err(format!(
+            "the deepest chain of calls needs {need} bytes of stack, more than the {limit} a stack segment can hold"
+        ));
     }
     Ok((need - base).max(0))
 }
 
 impl Usage {
-    pub fn of(modules: &[Module], target: &dyn llrm_target::Target) -> Self {
+    pub fn of(
+        modules: &[Module],
+        target: &dyn llrm_target::Target,
+    ) -> Self {
         let procedures: Vec<&masm::Procedure> = modules.iter().flat_map(|one| &one.procedures).collect();
         let names: Vec<String> = procedures.iter().map(|one| one.name.clone()).collect();
         let at: BTreeMap<&str, usize> = names.iter().enumerate().map(|(index, name)| (name.as_str(), index)).collect();
@@ -161,7 +190,10 @@ impl Usage {
         usage
     }
 
-    fn settle(&self, index: usize) -> Bound {
+    fn settle(
+        &self,
+        index: usize,
+    ) -> Bound {
         if self.graph.recursive(index) {
             return Bound::Recursive;
         }
@@ -170,8 +202,11 @@ impl Usage {
             deepest = match (deepest, self.bounds.get(&next).cloned().unwrap_or(Bound::Recursive)) {
                 (Bound::Recursive, _) | (_, Bound::Recursive) => Bound::Recursive,
                 (Bound::Bytes(one), Bound::Bytes(other)) => Bound::Bytes(one.max(other)),
-                (Bound::Bytes(one) | Bound::AtLeast(one, _), Bound::AtLeast(other, named)) | (Bound::AtLeast(one, named), Bound::Bytes(other)) => Bound::AtLeast(one.max(other), named),
-                (Bound::AtLeast(one, first), Bound::AtLeast(other, second)) => Bound::AtLeast(one.max(other), first.union(&second).cloned().collect()),
+                (Bound::Bytes(one) | Bound::AtLeast(one, _), Bound::AtLeast(other, named))
+                | (Bound::AtLeast(one, named), Bound::Bytes(other)) => Bound::AtLeast(one.max(other), named),
+                (Bound::AtLeast(one, first), Bound::AtLeast(other, second)) => {
+                    Bound::AtLeast(one.max(other), first.union(&second).cloned().collect())
+                }
             };
         }
         if let Some(named) = self.outside.get(&index) {
@@ -189,7 +224,10 @@ impl Usage {
     }
 
     /// What `name` can reach; a routine the program does not define, at least nothing and itself.
-    pub fn bound(&self, name: &str) -> Bound {
+    pub fn bound(
+        &self,
+        name: &str,
+    ) -> Bound {
         match self.names.iter().position(|one| one == name) {
             Some(index) => self.bounds.get(&index).cloned().unwrap_or(Bound::Recursive),
             None => Bound::AtLeast(0, BTreeSet::from([name.to_owned()])),
@@ -225,7 +263,9 @@ impl Usage {
             let (name, frame) = (&self.names[index], self.frames[index]);
             let bound = match self.bound(name) {
                 Bound::Bytes(bytes) => bytes.to_string(),
-                Bound::AtLeast(bytes, named) => format!(">= {bytes} (and {})", named.into_iter().collect::<Vec<_>>().join(", ")),
+                Bound::AtLeast(bytes, named) => {
+                    format!(">= {bytes} (and {})", named.into_iter().collect::<Vec<_>>().join(", "))
+                }
                 Bound::Recursive => "unbounded (recursion)".to_owned(),
             };
             text.push_str(&format!("{name}\t{frame}\t{bound}\n"));
@@ -234,12 +274,19 @@ impl Usage {
     }
 
     /// What `-Wstack-usage=limit` says: each root that can reach more than `limit`.
-    pub fn warnings(&self, limit: i64) -> Vec<String> {
+    pub fn warnings(
+        &self,
+        limit: i64,
+    ) -> Vec<String> {
         self.roots()
             .into_iter()
             .filter_map(|name| match self.bound(name) {
-                Bound::Bytes(bytes) | Bound::AtLeast(bytes, _) if bytes > limit => Some(format!("warning: {name} can use {bytes} bytes of stack, over -Wstack-usage={limit}")),
-                Bound::Recursive => Some(format!("warning: {name} can recurse: its stack use has no bound, over -Wstack-usage={limit}")),
+                Bound::Bytes(bytes) | Bound::AtLeast(bytes, _) if bytes > limit => {
+                    Some(format!("warning: {name} can use {bytes} bytes of stack, over -Wstack-usage={limit}"))
+                }
+                Bound::Recursive => {
+                    Some(format!("warning: {name} can recurse: its stack use has no bound, over -Wstack-usage={limit}"))
+                }
                 _ => None,
             })
             .collect()

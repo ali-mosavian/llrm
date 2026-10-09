@@ -9,11 +9,10 @@
 //! cancellation's zero be +0.
 //!
 //! What changed with the IR:
-//! - A rule is its instruction's (`rule`): the arithmetic, `fneg`,
-//!   `llvm.fabs`, `llvm.sqrt`, the casts, `llvm.lrint`, and a float load
-//!   or store. `fptosi` and `fptoui` truncate, as the rich MIR defines them.
-//! - Memory is consts': a float store's bits reach its cells as a fact
-//!   about the stored value, where the old one shadowed the body.
+//! - A rule is its instruction's (`rule`): the arithmetic, `fneg`, `llvm.fabs`, `llvm.sqrt`, the casts, `llvm.lrint`,
+//!   and a float load or store. `fptosi` and `fptoui` truncate, as the rich MIR defines them.
+//! - Memory is consts': a float store's bits reach its cells as a fact about the stored value, where the old one
+//!   shadowed the body.
 //! - A float phi is known where every incoming agrees, as consts' phis.
 //! - A loop exit's latch ends in its `br` to the header.
 //!
@@ -27,28 +26,31 @@
 //! `test_entry_bytes_are_killed_by_a_store`, consts' own.
 
 use std::cmp::Ordering;
-use llrm_support::hash::HashSet;
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
-use crate::graph::loops;
 use llrm_mir::context::ConstantKind;
+use llrm_mir::context::Context;
 use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
+use llrm_mir::module::Function;
 use llrm_mir::module::{InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::types::{FloatKind, Type, TypeId, Types};
+use llrm_support::hash::HashSet;
 use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use crate::cfg;
-use llrm_mir::context::Context;
-use llrm_mir::module::Function;
-use crate::consts::{self, Calls, Cells, HeldCells, Known, _MemoryQueries};
+use crate::consts::{self, _MemoryQueries, Calls, Cells, HeldCells, Known};
+use crate::graph::loops;
 use crate::induction;
 use crate::memory::{MemRef, Unit};
 use crate::regions;
 
 /// Whether `ty` is, or holds, a floating-point number; an identified struct, whose body this does not read, may.
-fn floating(types: &Types, ty: TypeId) -> bool {
+fn floating(
+    types: &Types,
+    ty: TypeId,
+) -> bool {
     match types.get(ty) {
         Type::Float(_) | Type::Named(_) => true,
         Type::Array { element, .. } | Type::Vector { element, .. } => floating(types, *element),
@@ -57,15 +59,26 @@ fn floating(types: &Types, ty: TypeId) -> bool {
     }
 }
 
-/// Whether `function` has any floating-point value or operand. Every solve of floats starts from one: where there is none, no float
-/// loop, fold or fact exists, and asking for the solve (a whole-function dataflow over memory) is a cost for nothing.
-pub fn touches(context: &Context, function: &Function) -> bool {
+/// Whether `function` has any floating-point value or operand. Every solve of floats starts from one: where there is
+/// none, no float loop, fold or fact exists, and asking for the solve (a whole-function dataflow over memory) is a cost
+/// for nothing.
+pub fn touches(
+    context: &Context,
+    function: &Function,
+) -> bool {
     let types = &context.types;
-    function.walk().any(|(_, inst)| {
-        let instruction = function.instruction(inst);
-        instruction.result.is_some_and(|value| floating(types, function.value(value).ty))
-            || instruction.operands.iter().any(|&operand| function.operand_type(context, operand).is_some_and(|ty| floating(types, ty)))
-    })
+    function
+        .walk()
+        .any(
+            |(_, inst)| {
+                let instruction = function.instruction(inst);
+                instruction.result.is_some_and(|value| floating(types, function.value(value).ty))
+                    || instruction
+                        .operands
+                        .iter()
+                        .any(|&operand| function.operand_type(context, operand).is_some_and(|ty| floating(types, ty)))
+            },
+        )
 }
 
 /// Python's `fractions.Fraction`: always in lowest terms, denominator positive.
@@ -76,7 +89,10 @@ pub struct Fraction {
 }
 
 impl Fraction {
-    pub fn new(numerator: impl Into<BigInt>, denominator: impl Into<BigInt>) -> Self {
+    pub fn new(
+        numerator: impl Into<BigInt>,
+        denominator: impl Into<BigInt>,
+    ) -> Self {
         let (mut numerator, mut denominator) = (numerator.into(), denominator.into());
         assert!(denominator != BigInt::from(0), "Fraction(_, 0)");
         if denominator < BigInt::from(0) {
@@ -107,7 +123,10 @@ impl Fraction {
 
 /// Python's `str(fraction)`: `n` over one, else `n/d`.
 impl std::fmt::Display for Fraction {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         if self.denominator == BigInt::from(1) {
             write!(formatter, "{}", self.numerator)
         } else {
@@ -117,41 +136,62 @@ impl std::fmt::Display for Fraction {
 }
 
 impl Ord for Fraction {
-    fn cmp(&self, other: &Self) -> Ordering {
+    fn cmp(
+        &self,
+        other: &Self,
+    ) -> Ordering {
         (&self.numerator * &other.denominator).cmp(&(&other.numerator * &self.denominator))
     }
 }
 
 impl PartialOrd for Fraction {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    fn partial_cmp(
+        &self,
+        other: &Self,
+    ) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Add for &Fraction {
     type Output = Fraction;
-    fn add(self, other: Self) -> Fraction {
-        Fraction::new(&self.numerator * &other.denominator + &other.numerator * &self.denominator, &self.denominator * &other.denominator)
+    fn add(
+        self,
+        other: Self,
+    ) -> Fraction {
+        Fraction::new(
+            &self.numerator * &other.denominator + &other.numerator * &self.denominator,
+            &self.denominator * &other.denominator,
+        )
     }
 }
 
 impl Sub for &Fraction {
     type Output = Fraction;
-    fn sub(self, other: Self) -> Fraction {
+    fn sub(
+        self,
+        other: Self,
+    ) -> Fraction {
         self + &-other
     }
 }
 
 impl Mul for &Fraction {
     type Output = Fraction;
-    fn mul(self, other: Self) -> Fraction {
+    fn mul(
+        self,
+        other: Self,
+    ) -> Fraction {
         Fraction::new(&self.numerator * &other.numerator, &self.denominator * &other.denominator)
     }
 }
 
 impl Div for &Fraction {
     type Output = Fraction;
-    fn div(self, other: Self) -> Fraction {
+    fn div(
+        self,
+        other: Self,
+    ) -> Fraction {
         Fraction::new(&self.numerator * &other.denominator, &self.denominator * &other.numerator)
     }
 }
@@ -171,7 +211,10 @@ pub struct Finite {
 }
 
 impl Finite {
-    pub fn new(value: Fraction, negative_zero: bool) -> Self {
+    pub fn new(
+        value: Fraction,
+        negative_zero: bool,
+    ) -> Self {
         Self { value, negative_zero }
     }
 
@@ -200,7 +243,10 @@ impl Format {
     }
 
     /// The format of float type `ty`.
-    pub fn of(types: &Types, ty: TypeId) -> Option<Self> {
+    pub fn of(
+        types: &Types,
+        ty: TypeId,
+    ) -> Option<Self> {
         match types.get(ty) {
             Type::Float(FloatKind::Float) => Some(Self::Binary32),
             Type::Float(FloatKind::Double) => Some(Self::Binary64),
@@ -245,18 +291,33 @@ pub struct Rule {
 }
 
 impl Rule {
-    pub fn new(operation: Operation, inputs: &[Format], result: Format) -> Self {
+    pub fn new(
+        operation: Operation,
+        inputs: &[Format],
+        result: Format,
+    ) -> Self {
         Self { operation, inputs: inputs.to_vec(), result, nsz: false }
     }
 }
 
 /// The floating rule of `inst`, if it has one.
-pub fn rule(unit: &Unit, inst: InstId) -> Option<Rule> {
+pub fn rule(
+    unit: &Unit,
+    inst: InstId,
+) -> Option<Rule> {
     let op = unit.function.instruction(inst);
     let float = |at: usize| unit.operand_type(*op.operands.get(at)?).and_then(|ty| Format::of(&unit.context.types, ty));
-    let int = |at: usize, signed: bool| unit.int_bits(*op.operands.get(at)?).map(|width| if signed { Format::Signed(width) } else { Format::Unsigned(width) });
+    let int = |at: usize, signed: bool| {
+        unit.int_bits(*op.operands.get(at)?)
+            .map(|width| if signed { Format::Signed(width) } else { Format::Unsigned(width) })
+    };
     let returned = || Format::of(&unit.context.types, op.ty);
-    let integer = |signed: bool| unit.context.types.int_bits(op.ty).map(|width| if signed { Format::Signed(width) } else { Format::Unsigned(width) });
+    let integer = |signed: bool| {
+        unit.context
+            .types
+            .int_bits(op.ty)
+            .map(|width| if signed { Format::Signed(width) } else { Format::Unsigned(width) })
+    };
     let (operation, inputs, result) = match op.opcode {
         Opcode::Binary(kind @ (BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv)) => {
             let operation = match kind {
@@ -287,7 +348,10 @@ pub fn rule(unit: &Unit, inst: InstId) -> Option<Rule> {
     Some(Rule { operation, inputs, result, nsz: llrm_mir::facts::Facts::of_flags(op.flags).no_signed_zeros() })
 }
 
-pub fn decoded(bits: &BigInt, format: Format) -> Option<Finite> {
+pub fn decoded(
+    bits: &BigInt,
+    format: Format,
+) -> Option<Finite> {
     let zero = BigInt::from(0);
     match format {
         Format::Signed(width) => {
@@ -298,7 +362,8 @@ pub fn decoded(bits: &BigInt, format: Format) -> Option<Finite> {
             return Some(Finite::new(Fraction::from_integer((bits ^ &sign) - &sign), false));
         }
         Format::Unsigned(width) => {
-            return (zero <= *bits && *bits < BigInt::from(1) << width).then(|| Finite::new(Fraction::from_integer(bits.clone()), false));
+            return (zero <= *bits && *bits < BigInt::from(1) << width)
+                .then(|| Finite::new(Fraction::from_integer(bits.clone()), false));
         }
         _ => {}
     }
@@ -307,7 +372,8 @@ pub fn decoded(bits: &BigInt, format: Format) -> Option<Finite> {
         return None;
     }
     let fraction = bits & ((BigInt::from(1) << (precision - 1)) - 1);
-    let exponent = i64::try_from((bits >> (precision - 1)) & ((BigInt::from(1) << exponent_bits) - 1)).expect("an exponent field");
+    let exponent =
+        i64::try_from((bits >> (precision - 1)) & ((BigInt::from(1) << exponent_bits) - 1)).expect("an exponent field");
     let negative = (bits >> (precision + exponent_bits - 1)) != zero;
     if exponent == (1 << exponent_bits) - 1 || (exponent == 0 && fraction != zero) {
         return None;
@@ -324,7 +390,12 @@ pub fn decoded(bits: &BigInt, format: Format) -> Option<Finite> {
     Some(Finite::new(if negative { -&value } else { value }, false))
 }
 
-fn _fits(value: &Fraction, precision: u64, minimum: i64, maximum: i64) -> bool {
+fn _fits(
+    value: &Fraction,
+    precision: u64,
+    minimum: i64,
+    maximum: i64,
+) -> bool {
     if value.is_zero() {
         return true;
     }
@@ -338,14 +409,19 @@ fn _fits(value: &Fraction, precision: u64, minimum: i64, maximum: i64) -> bool {
 }
 
 /// The exact result of `rule` on `inputs`, where there is one in its format.
-pub fn evaluated(rule: &Rule, inputs: &[Finite]) -> Option<Finite> {
+pub fn evaluated(
+    rule: &Rule,
+    inputs: &[Finite],
+) -> Option<Finite> {
     if inputs.len() != rule.inputs.len() {
         return None;
     }
     let result = match (rule.operation, inputs) {
         (Operation::Convert, [value]) => value.clone(),
         (Operation::Truncate, [value]) => Finite::new(Fraction::from_integer(value.value.int()), false),
-        (Operation::Neg, [value]) => Finite::new(-&value.value, if value.value.is_zero() { !value.negative_zero } else { false }),
+        (Operation::Neg, [value]) => {
+            Finite::new(-&value.value, if value.value.is_zero() { !value.negative_zero } else { false })
+        }
         (Operation::Abs, [value]) => Finite::new(value.value.abs(), false),
         (Operation::Sqrt, [value]) => {
             if value.value < Fraction::from_integer(0) {
@@ -353,7 +429,9 @@ pub fn evaluated(rule: &Rule, inputs: &[Finite]) -> Option<Finite> {
             }
             let numerator = value.value.numerator.sqrt();
             let denominator = value.value.denominator.sqrt();
-            if &numerator * &numerator != value.value.numerator || &denominator * &denominator != value.value.denominator {
+            if &numerator * &numerator != value.value.numerator
+                || &denominator * &denominator != value.value.denominator
+            {
                 return None;
             }
             Finite::new(Fraction::new(numerator, denominator), value.negative_zero)
@@ -379,7 +457,8 @@ pub fn evaluated(rule: &Rule, inputs: &[Finite]) -> Option<Finite> {
             if rule.operation == Operation::Div && right.value.is_zero() {
                 return None;
             }
-            let value = if rule.operation == Operation::Mul { &left.value * &right.value } else { &left.value / &right.value };
+            let value =
+                if rule.operation == Operation::Mul { &left.value * &right.value } else { &left.value / &right.value };
             let negative_zero = value.is_zero() && left.negative() != right.negative();
             Finite::new(value, negative_zero)
         }
@@ -388,7 +467,8 @@ pub fn evaluated(rule: &Rule, inputs: &[Finite]) -> Option<Finite> {
     match rule.result {
         Format::Signed(width) => {
             let limit = Fraction::from_integer(BigInt::from(1) << (width - 1));
-            (result.value.denominator == BigInt::from(1) && -&limit <= result.value && result.value < limit).then_some(result)
+            (result.value.denominator == BigInt::from(1) && -&limit <= result.value && result.value < limit)
+                .then_some(result)
         }
         Format::Unsigned(width) => (result.value.denominator == BigInt::from(1)
             && Fraction::from_integer(0) <= result.value
@@ -401,7 +481,10 @@ pub fn evaluated(rule: &Rule, inputs: &[Finite]) -> Option<Finite> {
     }
 }
 
-pub fn encoded(value: &Finite, format: Format) -> Option<BigInt> {
+pub fn encoded(
+    value: &Finite,
+    format: Format,
+) -> Option<BigInt> {
     let (precision, exponent_bits, bias) = format.binary()?;
     if !_fits(&value.value, u64::from(precision), 1 - bias, bias) {
         return None;
@@ -423,7 +506,13 @@ pub fn encoded(value: &Finite, format: Format) -> Option<BigInt> {
 }
 
 /// One operand's exact value, read as `format`.
-pub fn _operand(unit: &Unit, operand: Operand, format: Format, integers: &IndexMap<ValueId, Known>, facts: &IndexMap<ValueId, Finite>) -> Option<Finite> {
+pub fn _operand(
+    unit: &Unit,
+    operand: Operand,
+    format: Format,
+    integers: &IndexMap<ValueId, Known>,
+    facts: &IndexMap<ValueId, Finite>,
+) -> Option<Finite> {
     if let Format::Signed(_) | Format::Unsigned(_) = format {
         return decoded(&consts::_operand(unit, operand, integers, None)?.n, format);
     }
@@ -456,13 +545,22 @@ fn _inputs(
         let bits = consts::_cell(here?, &reference)?;
         return Some(vec![decoded(&bits.n, rule.inputs[0])?]);
     }
-    rule.inputs.iter().zip(&op.operands).map(|(&format, &operand)| _operand(unit, operand, format, integers, facts)).collect()
+    rule.inputs
+        .iter()
+        .zip(&op.operands)
+        .map(|(&format, &operand)| _operand(unit, operand, format, integers, facts))
+        .collect()
 }
 
 /// A result's fact as consts holds a number: the bits of its format.
-fn _bits(fact: &Finite, format: Format) -> Option<Known> {
+fn _bits(
+    fact: &Finite,
+    format: Format,
+) -> Option<Known> {
     match format {
-        Format::Signed(width) | Format::Unsigned(width) => Some(Known::new(consts::masked(&fact.value.int(), width), width)),
+        Format::Signed(width) | Format::Unsigned(width) => {
+            Some(Known::new(consts::masked(&fact.value.int(), width), width))
+        }
         binary => Some(Known::new(encoded(fact, binary)?, binary.bits())),
     }
 }
@@ -482,7 +580,12 @@ pub fn repeated<'a>(
     }
     let function = unit.function;
     let internal = insts.iter().filter_map(|&inst| function.instruction(inst).result).collect::<HashSet<_>>();
-    let invariant = known.into_iter().flatten().filter(|(value, _)| !internal.contains(*value)).map(|(value, fact)| (*value, fact.clone())).collect::<IndexMap<_, _>>();
+    let invariant = known
+        .into_iter()
+        .flatten()
+        .filter(|(value, _)| !internal.contains(*value))
+        .map(|(value, fact)| (*value, fact.clone()))
+        .collect::<IndexMap<_, _>>();
     let mut own;
     let queries = match queries {
         Some(queries) => queries,
@@ -545,20 +648,32 @@ pub struct LoopExit {
 
 /// Proven numeric exits of two-block counted loops whose float state is in
 /// memory.
-pub fn loop_exits(unit: &Unit, calls: &Calls) -> Vec<LoopExit> {
+pub fn loop_exits(
+    unit: &Unit,
+    calls: &Calls,
+) -> Vec<LoopExit> {
     // Solved only once a loop has the shape asked for: most bodies have none.
     let solved = std::cell::OnceCell::new();
     _exits(unit, calls, || solved.get_or_init(|| solved_with(unit, calls, None)))
 }
 
 /// `loop_exits`, given `solved_with(unit, calls, None)`.
-pub fn exits(unit: &Unit, calls: &Calls, solved: &Solved) -> Vec<LoopExit> {
+pub fn exits(
+    unit: &Unit,
+    calls: &Calls,
+    solved: &Solved,
+) -> Vec<LoopExit> {
     _exits(unit, calls, || solved)
 }
 
-fn _exits<'s>(unit: &Unit, calls: &Calls, solve: impl Fn() -> &'s Solved) -> Vec<LoopExit> {
+fn _exits<'s>(
+    unit: &Unit,
+    calls: &Calls,
+    solve: impl Fn() -> &'s Solved,
+) -> Vec<LoopExit> {
     let function = unit.function;
-    let stores = |inst: InstId| matches!(function.instruction(inst).opcode, Opcode::Store { .. }) && rule(unit, inst).is_some();
+    let stores =
+        |inst: InstId| matches!(function.instruction(inst).opcode, Opcode::Store { .. }) && rule(unit, inst).is_some();
     if !function.walk().any(|(_, inst)| stores(inst)) {
         return Vec::new();
     }
@@ -574,7 +689,13 @@ fn _exits<'s>(unit: &Unit, calls: &Calls, solve: impl Fn() -> &'s Solved) -> Vec
             continue;
         }
         let latch = *loop_.latches.first().expect("one latch");
-        let outside = predecessors.get(&loop_.header).into_iter().flatten().filter(|at| !loop_.body.contains(at)).copied().collect::<Vec<_>>();
+        let outside = predecessors
+            .get(&loop_.header)
+            .into_iter()
+            .flatten()
+            .filter(|at| !loop_.body.contains(at))
+            .copied()
+            .collect::<Vec<_>>();
         let [preheader] = outside[..] else {
             continue;
         };
@@ -587,7 +708,9 @@ fn _exits<'s>(unit: &Unit, calls: &Calls, solve: impl Fn() -> &'s Solved) -> Vec
         }
         let references = instructions(latch).iter().filter_map(|&inst| MemRef::of(unit, inst)).collect::<Vec<_>>();
         let mut stored = Vec::<MemRef>::new();
-        for reference in instructions(latch).iter().filter(|&&inst| stores(inst)).filter_map(|&inst| MemRef::of(unit, inst)) {
+        for reference in
+            instructions(latch).iter().filter(|&&inst| stores(inst)).filter_map(|&inst| MemRef::of(unit, inst))
+        {
             if !stored.contains(&reference) {
                 stored.push(reference);
             }
@@ -596,10 +719,20 @@ fn _exits<'s>(unit: &Unit, calls: &Calls, solve: impl Fn() -> &'s Solved) -> Vec
         if stored.is_empty()
             || instructions(loop_.header).iter().any(|&inst| {
                 let op = function.instruction(inst);
-                !matches!(op.opcode, Opcode::Phi | Opcode::ICmp(_) | Opcode::Br | Opcode::Store { volatile: false, .. } | Opcode::Binary(BinaryOp::Sub))
-                    || rule(unit, inst).is_some()
+                !matches!(
+                    op.opcode,
+                    Opcode::Phi
+                        | Opcode::ICmp(_)
+                        | Opcode::Br
+                        | Opcode::Store { volatile: false, .. }
+                        | Opcode::Binary(BinaryOp::Sub)
+                ) || rule(unit, inst).is_some()
                     || Format::of(&unit.context.types, op.ty).is_some()
-                    || MemRef::of(unit, inst).is_some_and(|written| references.iter().any(|read| regions::overlapping(&written, read, None, None, unit.program).unwrap_or(true)))
+                    || MemRef::of(unit, inst).is_some_and(|written| {
+                        references
+                            .iter()
+                            .any(|read| regions::overlapping(&written, read, None, None, unit.program).unwrap_or(true))
+                    })
             })
         {
             continue;
@@ -611,10 +744,14 @@ fn _exits<'s>(unit: &Unit, calls: &Calls, solve: impl Fn() -> &'s Solved) -> Vec
         let mut asked = consts::memory_queries(*unit, integers);
         let last = function.terminator(cfg::block(preheader)).expect("a terminated block");
         let initial = consts::_kills((*memory[&last]).clone(), last, integers, calls, None, None, false, &mut asked);
-        let Some(after) = repeated(unit, instructions(latch), &count, &initial, Some(integers), Some(&mut asked)) else {
+        let Some(after) = repeated(unit, instructions(latch), &count, &initial, Some(integers), Some(&mut asked))
+        else {
             continue;
         };
-        let facts = stored.iter().map(|reference| consts::_cell(&after, &asked.resolve(reference)).map(|fact| (reference.clone(), fact))).collect::<Option<Vec<_>>>();
+        let facts = stored
+            .iter()
+            .map(|reference| consts::_cell(&after, &asked.resolve(reference)).map(|fact| (reference.clone(), fact)))
+            .collect::<Option<Vec<_>>>();
         if let Some(facts) = facts {
             exits.push(LoopExit { header: loop_.header, count, stores: facts });
         }
@@ -623,7 +760,10 @@ fn _exits<'s>(unit: &Unit, calls: &Calls, solve: impl Fn() -> &'s Solved) -> Vec
 }
 
 /// Numeric memory facts on exit edges, never on a header's backedge.
-pub fn exit_cells(unit: &Unit, calls: &Calls) -> IndexMap<(i64, i64), Cells> {
+pub fn exit_cells(
+    unit: &Unit,
+    calls: &Calls,
+) -> IndexMap<(i64, i64), Cells> {
     let proofs = loop_exits(unit, calls);
     if proofs.is_empty() {
         return IndexMap::default();
@@ -635,7 +775,11 @@ pub fn exit_cells(unit: &Unit, calls: &Calls) -> IndexMap<(i64, i64), Cells> {
     let mut queries = consts::memory_queries(*unit, &IndexMap::default());
     let mut edges = IndexMap::default();
     for proof in proofs {
-        let leaving = successors[&proof.header].iter().copied().filter(|at| !regions[&proof.header].contains(at)).collect::<Vec<_>>();
+        let leaving = successors[&proof.header]
+            .iter()
+            .copied()
+            .filter(|at| !regions[&proof.header].contains(at))
+            .collect::<Vec<_>>();
         // A header leaving by two edges is not the shape proven.
         let [destination] = leaving[..] else {
             continue;
@@ -650,12 +794,20 @@ pub fn exit_cells(unit: &Unit, calls: &Calls) -> IndexMap<(i64, i64), Cells> {
 }
 
 /// Numeric facts, optionally given independently established entry cells.
-pub fn known(unit: &Unit, calls: &Calls, initial: Option<&Cells>) -> IndexMap<ValueId, Finite> {
+pub fn known(
+    unit: &Unit,
+    calls: &Calls,
+    initial: Option<&Cells>,
+) -> IndexMap<ValueId, Finite> {
     solved_with(unit, calls, initial).facts
 }
 
 /// Exact integer conversion results.
-pub fn converted(unit: &Unit, calls: &Calls, facts: Option<&IndexMap<ValueId, Finite>>) -> IndexMap<ValueId, Known> {
+pub fn converted(
+    unit: &Unit,
+    calls: &Calls,
+    facts: Option<&IndexMap<ValueId, Finite>>,
+) -> IndexMap<ValueId, Known> {
     let function = unit.function;
     let conversions = function
         .walk()
@@ -688,7 +840,10 @@ pub fn converted(unit: &Unit, calls: &Calls, facts: Option<&IndexMap<ValueId, Fi
 }
 
 /// Memory facts including exact floating stores.
-pub fn cells(unit: &Unit, calls: &Calls) -> HeldCells {
+pub fn cells(
+    unit: &Unit,
+    calls: &Calls,
+) -> HeldCells {
     solved_with(unit, calls, None).cells
 }
 
@@ -701,7 +856,12 @@ pub struct Solved {
 }
 
 /// `integers`, and the bits of each stored value `facts` knows.
-fn _with_stored(unit: &Unit, integers: &IndexMap<ValueId, Known>, facts: &IndexMap<ValueId, Finite>, sources: &HashSet<ValueId>) -> IndexMap<ValueId, Known> {
+fn _with_stored(
+    unit: &Unit,
+    integers: &IndexMap<ValueId, Known>,
+    facts: &IndexMap<ValueId, Finite>,
+    sources: &HashSet<ValueId>,
+) -> IndexMap<ValueId, Known> {
     let mut known = integers.clone();
     for value in sources {
         let format = Format::of(&unit.context.types, unit.function.value(*value).ty);
@@ -713,19 +873,31 @@ fn _with_stored(unit: &Unit, integers: &IndexMap<ValueId, Known>, facts: &IndexM
 }
 
 /// `known` and `cells` in one solve, and the integers under them.
-pub fn solved_with(unit: &Unit, calls: &Calls, initial: Option<&Cells>) -> Solved {
+pub fn solved_with(
+    unit: &Unit,
+    calls: &Calls,
+    initial: Option<&Cells>,
+) -> Solved {
     solved_over(unit, calls, initial, &consts::known(unit, Some(calls), None, initial))
 }
 
 /// `solved_with`, given the integers under it: `consts::known(unit, Some(calls), None, initial)`, which a caller that
 /// asks it of the same body for itself (the manager's `ThroughMemory`, for `initial` none) need not derive again.
-pub fn solved_over(unit: &Unit, calls: &Calls, initial: Option<&Cells>, integers: &IndexMap<ValueId, Known>) -> Solved {
+pub fn solved_over(
+    unit: &Unit,
+    calls: &Calls,
+    initial: Option<&Cells>,
+    integers: &IndexMap<ValueId, Known>,
+) -> Solved {
     let function = unit.function;
     let rules = function.walk().filter_map(|(_, inst)| rule(unit, inst).map(|rule| (inst, rule))).collect::<Vec<_>>();
     let phis = function
         .walk()
         .map(|(_, inst)| inst)
-        .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi && Format::of(&unit.context.types, function.instruction(inst).ty).is_some())
+        .filter(|&inst| {
+            function.instruction(inst).opcode == Opcode::Phi
+                && Format::of(&unit.context.types, function.instruction(inst).ty).is_some()
+        })
         .collect::<Vec<_>>();
     // Memory changes only where a store's source was just learned.
     let sources = rules
@@ -744,7 +916,15 @@ pub fn solved_over(unit: &Unit, calls: &Calls, initial: Option<&Cells>, integers
     while changed {
         changed = false;
         if reshadow {
-            memory = consts::cells(unit, calls, Some(&_with_stored(unit, &integers, &facts, &sources)), initial, None, None, None);
+            memory = consts::cells(
+                unit,
+                calls,
+                Some(&_with_stored(unit, &integers, &facts, &sources)),
+                initial,
+                None,
+                None,
+                None,
+            );
             reshadow = false;
         }
         let mut learned = |value: ValueId, fact: Finite, facts: &mut IndexMap<ValueId, Finite>| {
@@ -759,7 +939,12 @@ pub fn solved_over(unit: &Unit, calls: &Calls, initial: Option<&Cells>, integers
                 continue;
             }
             let format = Format::of(&unit.context.types, op.ty).expect("a float phi");
-            let seen = op.operands.iter().step_by(2).map(|&one| _operand(unit, one, format, &integers, &facts)).collect::<Option<Vec<_>>>();
+            let seen = op
+                .operands
+                .iter()
+                .step_by(2)
+                .map(|&one| _operand(unit, one, format, &integers, &facts))
+                .collect::<Option<Vec<_>>>();
             if let Some(seen) = seen.filter(|seen| !seen.is_empty() && seen.iter().all(|one| *one == seen[0])) {
                 learned(result, seen[0].clone(), &mut facts);
             }
@@ -772,7 +957,9 @@ pub fn solved_over(unit: &Unit, calls: &Calls, initial: Option<&Cells>, integers
             if let Format::Signed(_) | Format::Unsigned(_) = rule.result {
                 continue; // `converted`'s
             }
-            let Some(inputs) = _inputs(unit, *inst, rule, &integers, memory.get(inst).map(|here| &**here), &mut queries, &facts) else {
+            let Some(inputs) =
+                _inputs(unit, *inst, rule, &integers, memory.get(inst).map(|here| &**here), &mut queries, &facts)
+            else {
                 continue;
             };
             if let Some(fact) = evaluated(rule, &inputs) {

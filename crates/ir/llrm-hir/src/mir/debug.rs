@@ -3,12 +3,11 @@
 //! a record that it lives where its frame object is, which [`Body::declare_variables`]
 //! says: `llvm.dbg.declare`, as a [`DebugRecord`](llrm_mir::DebugRecord), no instruction.
 
-use llrm_support::hash::HashMap;
-
 use llrm_mir::debuginfo as di;
 use llrm_mir::{GlobalId, MetadataId, Module};
+use llrm_support::hash::HashMap;
 
-use super::{frame_groups, Body, Emit, Tables};
+use super::{Body, Emit, Tables, frame_groups};
 use crate::model::{self, Storage};
 
 /// Each HIR debug type's node, made on first use.
@@ -18,7 +17,11 @@ struct Types<'h> {
 }
 
 impl Types<'_> {
-    fn node(&mut self, module: &mut Module, id: i64) -> Emit<MetadataId> {
+    fn node(
+        &mut self,
+        module: &mut Module,
+        id: i64,
+    ) -> Emit<MetadataId> {
         if let Some(&made) = self.made.get(&id) {
             return Ok(made);
         }
@@ -32,9 +35,24 @@ impl Types<'_> {
         let members = one
             .members
             .iter()
-            .map(|member| Ok(di::Member { name: member.name.clone(), r#type: self.node(module, member.r#type)?, offset: member.offset, bits: member.bit_start.zip(member.bit_width) }))
+            .map(|member| {
+                Ok(di::Member {
+                    name: member.name.clone(),
+                    r#type: self.node(module, member.r#type)?,
+                    offset: member.offset,
+                    bits: member.bit_start.zip(member.bit_width),
+                })
+            })
             .collect::<Emit<Vec<_>>>()?;
-        let described = di::Type { kind: one.kind, name: one.name.clone(), size: one.size, reach: one.reach, target, members, spelling: one.spelling.clone() };
+        let described = di::Type {
+            kind: one.kind,
+            name: one.name.clone(),
+            size: one.size,
+            reach: one.reach,
+            target,
+            members,
+            spelling: one.spelling.clone(),
+        };
         let made = match reserved {
             Some(reserved) => {
                 di::set_type(module, reserved, &described);
@@ -47,7 +65,10 @@ impl Types<'_> {
     }
 }
 
-fn name(module: &Module, global: GlobalId) -> String {
+fn name(
+    module: &Module,
+    global: GlobalId,
+) -> String {
     module.global(global).name.clone().unwrap_or_default()
 }
 
@@ -77,11 +98,21 @@ pub(super) fn emitted<'h>(
             None => None,
         };
         let r#type = types.node(module, global.r#type)?;
-        let global = di::Global { global: name(module, object), offset: global.offset, name: global.name.clone(), r#type, scope };
+        let global = di::Global {
+            global: name(module, object),
+            offset: global.offset,
+            name: global.name.clone(),
+            r#type,
+            scope,
+        };
         di::add_global(module, &global);
     }
     for procedure in &debug.functions {
-        let (Some(&global), Some(function)) = (functions.get(&procedure.function), hir.functions.iter().find(|one| one.id == procedure.function)) else { continue };
+        let (Some(&global), Some(function)) =
+            (functions.get(&procedure.function), hir.functions.iter().find(|one| one.id == procedure.function))
+        else {
+            continue;
+        };
         let scope = name(module, global);
         let mut parameters = procedure
             .parameters
@@ -90,28 +121,61 @@ pub(super) fn emitted<'h>(
             .collect::<Emit<Vec<_>>>()?;
         let groups = frame_groups(&mut module.context.types, tables, function)?;
         for variable in &procedure.variables {
-            let place = function.places.iter().find(|one| one.id == variable.place).ok_or_else(|| format!("no place {}", variable.place))?;
+            let place = function
+                .places
+                .iter()
+                .find(|one| one.id == variable.place)
+                .ok_or_else(|| format!("no place {}", variable.place))?;
             let r#type = types.node(module, variable.r#type)?;
             match place.storage {
                 Storage::Local => {
-                    let group = groups.iter().find(|group| group.places.iter().any(|one| one.id == place.id)).ok_or("a local outside the frame")?;
-                    let node = di::Variable { scope: scope.clone(), name: variable.name.clone(), r#type, offset: place.offset - group.start, parameter: variable.parameter, argument: variable.argument };
+                    let group = groups
+                        .iter()
+                        .find(|group| group.places.iter().any(|one| one.id == place.id))
+                        .ok_or("a local outside the frame")?;
+                    let node = di::Variable {
+                        scope: scope.clone(),
+                        name: variable.name.clone(),
+                        r#type,
+                        offset: place.offset - group.start,
+                        parameter: variable.parameter,
+                        argument: variable.argument,
+                    };
                     variables.insert((function.id, place.id), di::add_variable(module, &node));
                 }
                 // Where it was passed: its argument's cell.
                 Storage::Parameter => {
-                    let argument = function.parameters.iter().position(|&one| one == place.symbol).ok_or("a parameter's home names no parameter")?;
+                    let argument = function
+                        .parameters
+                        .iter()
+                        .position(|&one| one == place.symbol)
+                        .ok_or("a parameter's home names no parameter")?;
                     parameters.push((argument as i64, variable.name.clone(), r#type));
                 }
                 Storage::Static | Storage::Module | Storage::Common | Storage::External => {
                     let Some(&object) = data.get(&place.symbol) else { continue };
-                    let global = di::Global { global: name(module, object), offset: place.offset, name: variable.name.clone(), r#type, scope: Some(scope.clone()) };
+                    let global = di::Global {
+                        global: name(module, object),
+                        offset: place.offset,
+                        name: variable.name.clone(),
+                        r#type,
+                        scope: Some(scope.clone()),
+                    };
                     di::add_global(module, &global);
                 }
             }
         }
         let r#type = types.node(module, procedure.r#type)?;
-        di::add_function(module, &di::Function { function: scope.clone(), module: procedure.module, name: procedure.name.clone(), r#type, parameters });
+        di::add_function(
+            module,
+            &di::Function {
+                function: scope.clone(),
+                module: procedure.module,
+                name: procedure.name.clone(),
+                r#type,
+                parameters,
+            },
+        );
     }
     Ok(variables)
 }

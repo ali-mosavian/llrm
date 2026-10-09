@@ -13,7 +13,10 @@ pub fn forms(text: &str) -> Result<Vec<AddressForm>, String> {
     let rows = rows.as_array().ok_or("address_form is not an array of tables")?;
     rows.iter()
         .map(|row| {
-            let bits = row.get("address_bits").and_then(toml::Value::as_integer).ok_or("an address_form needs address_bits")?;
+            let bits = row
+                .get("address_bits")
+                .and_then(toml::Value::as_integer)
+                .ok_or("an address_form needs address_bits")?;
             let scales: BTreeSet<i64> = row
                 .get("scales")
                 .and_then(toml::Value::as_array)

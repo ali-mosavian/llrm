@@ -21,22 +21,43 @@ impl<'m> Index<'m> {
         let instructions = module
             .functions
             .iter()
-            .flat_map(|function| function.blocks.iter().flat_map(|block| &block.instructions).map(move |instruction| ((function.id, instruction.id), instruction)))
+            .flat_map(|function| {
+                function
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.instructions)
+                    .map(move |instruction| ((function.id, instruction.id), instruction))
+            })
             .collect();
-        let value_types = module.functions.iter().flat_map(|function| function.values.iter().map(move |value| ((function.id, value.id), value.r#type))).collect();
+        let value_types = module
+            .functions
+            .iter()
+            .flat_map(|function| function.values.iter().map(move |value| ((function.id, value.id), value.r#type)))
+            .collect();
         Self { functions, instructions, value_types }
     }
 
-    pub fn function(&self, id: i64) -> Option<&'m crate::model::Function> {
+    pub fn function(
+        &self,
+        id: i64,
+    ) -> Option<&'m crate::model::Function> {
         self.functions.get(&id).copied()
     }
 
     /// The HIR type of value `id` of `function`.
-    pub fn value_type(&self, function: i64, id: i64) -> Option<i64> {
+    pub fn value_type(
+        &self,
+        function: i64,
+        id: i64,
+    ) -> Option<i64> {
         self.value_types.get(&(function, id)).copied()
     }
 
-    pub fn instruction(&self, function: i64, id: i64) -> Option<&'m crate::model::Instruction> {
+    pub fn instruction(
+        &self,
+        function: i64,
+        id: i64,
+    ) -> Option<&'m crate::model::Instruction> {
         self.instructions.get(&(function, id)).copied()
     }
 }
@@ -46,17 +67,36 @@ impl<'m> Index<'m> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Subject {
     Callable(i64),
-    Param { function: i64, index: i64 },
-    Instruction { function: i64, id: i64 },
+    Param {
+        function: i64,
+        index: i64,
+    },
+    Instruction {
+        function: i64,
+        id: i64,
+    },
     /// Operand `operand` of call `instruction`.
-    Operand { function: i64, instruction: i64, operand: i64 },
+    Operand {
+        function: i64,
+        instruction: i64,
+        operand: i64,
+    },
     Object(i64),
     /// The terminator of block `block`.
-    Terminator { function: i64, block: i64 },
+    Terminator {
+        function: i64,
+        block: i64,
+    },
     /// A place of `function`.
-    Place { function: i64, place: i64 },
+    Place {
+        function: i64,
+        place: i64,
+    },
     /// The member at byte `offset` of aggregate type `owner`.
-    Field { owner: i64, offset: i64 },
+    Field {
+        owner: i64,
+        offset: i64,
+    },
 }
 
 impl Subject {
@@ -88,7 +128,18 @@ impl Subject {
     }
 
     pub fn kind_named(key: &str) -> Option<Kind> {
-        [Kind::Callable, Kind::Param, Kind::Instruction, Kind::Operand, Kind::Object, Kind::Terminator, Kind::Place, Kind::Field].into_iter().find(|&kind| Self::kind_key(kind) == key)
+        [
+            Kind::Callable,
+            Kind::Param,
+            Kind::Instruction,
+            Kind::Operand,
+            Kind::Object,
+            Kind::Terminator,
+            Kind::Place,
+            Kind::Field,
+        ]
+        .into_iter()
+        .find(|&kind| Self::kind_key(kind) == key)
     }
 
     /// The function a subject belongs to, its own id in it, and, for what
@@ -106,7 +157,12 @@ impl Subject {
     }
 
     /// The subject of `kind` with these fields; none where one is missing.
-    pub fn of(kind: Kind, function: Option<i64>, id: Option<i64>, part: Option<i64>) -> Option<Subject> {
+    pub fn of(
+        kind: Kind,
+        function: Option<i64>,
+        id: Option<i64>,
+        part: Option<i64>,
+    ) -> Option<Subject> {
         Some(match kind {
             Kind::Callable => Subject::Callable(id?),
             Kind::Param => Subject::Param { function: function?, index: id? },
@@ -142,16 +198,30 @@ impl Builder {
     }
 
     /// The language promises `fact` of `subject`.
-    pub fn state(&mut self, subject: Subject, fact: Fact) -> &mut Self {
+    pub fn state(
+        &mut self,
+        subject: Subject,
+        fact: Fact,
+    ) -> &mut Self {
         self.say(subject, fact, self.frontend.clone())
     }
 
     /// The same, from source line `line`.
-    pub fn state_at(&mut self, subject: Subject, fact: Fact, line: i64) -> &mut Self {
+    pub fn state_at(
+        &mut self,
+        subject: Subject,
+        fact: Fact,
+        line: i64,
+    ) -> &mut Self {
         self.say(subject, fact, format!("{}:{line}", self.frontend))
     }
 
-    fn say(&mut self, subject: Subject, fact: Fact, source: String) -> &mut Self {
+    fn say(
+        &mut self,
+        subject: Subject,
+        fact: Fact,
+        source: String,
+    ) -> &mut Self {
         if !self.stated.iter().any(|one| one.subject == subject && one.fact == fact) {
             self.stated.push(Stated { subject, fact, source: Some(source) });
         }
@@ -159,7 +229,10 @@ impl Builder {
     }
 
     /// Adds facts stated elsewhere, as they were.
-    pub fn extend(&mut self, stated: impl IntoIterator<Item = Stated>) {
+    pub fn extend(
+        &mut self,
+        stated: impl IntoIterator<Item = Stated>,
+    ) {
         for one in stated {
             if !self.stated.iter().any(|have| have.subject == one.subject && have.fact == one.fact) {
                 self.stated.push(one);
@@ -169,7 +242,10 @@ impl Builder {
 
     /// Keeps the facts `keep` says to: a frontend that drops code drops what
     /// was stated of it.
-    pub fn retain(&mut self, keep: impl Fn(&Stated) -> bool) {
+    pub fn retain(
+        &mut self,
+        keep: impl Fn(&Stated) -> bool,
+    ) {
         self.stated.retain(keep);
     }
 
@@ -196,7 +272,13 @@ mod tests {
     /// A subject's wire fields name it back.
     #[test]
     fn every_subject_round_trips_through_its_fields() {
-        let all = [Subject::Callable(4), Subject::Param { function: 1, index: 2 }, Subject::Instruction { function: 1, id: 5 }, Subject::Operand { function: 1, instruction: 5, operand: 2 }, Subject::Object(7)];
+        let all = [
+            Subject::Callable(4),
+            Subject::Param { function: 1, index: 2 },
+            Subject::Instruction { function: 1, id: 5 },
+            Subject::Operand { function: 1, instruction: 5, operand: 2 },
+            Subject::Object(7),
+        ];
         for subject in all {
             let (function, id, part) = subject.fields();
             assert_eq!(Subject::of(subject.kind(), function, id, part), Some(subject));

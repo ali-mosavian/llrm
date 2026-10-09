@@ -56,7 +56,10 @@ fn unsupported(text: impl Into<String>) -> Unsupported {
 struct Strings(Vec<u8>);
 
 impl Strings {
-    fn add(&mut self, text: &str) -> u32 {
+    fn add(
+        &mut self,
+        text: &str,
+    ) -> u32 {
         let at = (self.0.len() + 4) as u32;
         self.0.extend(text.as_bytes());
         self.0.push(0);
@@ -64,17 +67,26 @@ impl Strings {
     }
 }
 
-fn put16(out: &mut Vec<u8>, value: u16) {
+fn put16(
+    out: &mut Vec<u8>,
+    value: u16,
+) {
     out.extend(value.to_le_bytes());
 }
 
-fn put32(out: &mut Vec<u8>, value: u32) {
+fn put32(
+    out: &mut Vec<u8>,
+    value: u32,
+) {
     out.extend(value.to_le_bytes());
 }
 
 /// An 8-byte name field: the name itself, or `/offset` into the string table, or for a symbol
 /// four zero bytes and the offset.
-fn section_name(name: &str, strings: &mut Strings) -> [u8; 8] {
+fn section_name(
+    name: &str,
+    strings: &mut Strings,
+) -> [u8; 8] {
     let mut field = [0u8; 8];
     if name.len() <= 8 {
         field[..name.len()].copy_from_slice(name.as_bytes());
@@ -85,7 +97,10 @@ fn section_name(name: &str, strings: &mut Strings) -> [u8; 8] {
     field
 }
 
-fn symbol_name(name: &str, strings: &mut Strings) -> [u8; 8] {
+fn symbol_name(
+    name: &str,
+    strings: &mut Strings,
+) -> [u8; 8] {
     let mut field = [0u8; 8];
     if name.len() <= 8 {
         field[..name.len()].copy_from_slice(name.as_bytes());
@@ -104,7 +119,10 @@ struct Entry {
     aux: u8,
 }
 
-fn symbol(out: &mut Vec<u8>, entry: Entry) {
+fn symbol(
+    out: &mut Vec<u8>,
+    entry: Entry,
+) {
     out.extend(entry.name);
     put32(out, entry.value);
     put16(out, entry.section as u16);
@@ -115,9 +133,15 @@ fn symbol(out: &mut Vec<u8>, entry: Entry) {
 
 /// The COFF name, flags and alignment of `section`; a role's first section is `.text`, `.data`...
 /// and a further one is `.text$name`, which the linker merges into the first.
-fn spelling(section: &Section, taken: bool) -> Result<(String, u32), Unsupported> {
+fn spelling(
+    section: &Section,
+    taken: bool,
+) -> Result<(String, u32), Unsupported> {
     if !section.near {
-        return Err(unsupported(format!("{}: a segment addressed by its own selector has no COFF section", section.name)));
+        return Err(unsupported(format!(
+            "{}: a segment addressed by its own selector has no COFF section",
+            section.name
+        )));
     }
     let (base, flags) = match section.role {
         Role::Text => (".text", SCN_CNT_CODE | SCN_MEM_EXECUTE | SCN_MEM_READ),
@@ -128,14 +152,20 @@ fn spelling(section: &Section, taken: bool) -> Result<(String, u32), Unsupported
         Role::Debug => (section.name.as_str(), SCN_CNT_INITIALIZED_DATA | SCN_MEM_READ | SCN_MEM_DISCARDABLE),
     };
     if !section.align.is_power_of_two() || section.align > 8192 {
-        return Err(unsupported(format!("{}: COFF aligns a section to a power of two up to 8192, not {}", section.name, section.align)));
+        return Err(unsupported(format!(
+            "{}: COFF aligns a section to a power of two up to 8192, not {}",
+            section.name, section.align
+        )));
     }
     let align = (section.align.trailing_zeros() + 1) << 20;
     let name = if taken && section.role != Role::Debug { format!("{base}${}", section.name) } else { base.to_owned() };
     Ok((name, flags | align))
 }
 
-fn pad(bytes: &mut Vec<u8>, to: usize) {
+fn pad(
+    bytes: &mut Vec<u8>,
+    to: usize,
+) {
     while bytes.len() % to != 0 {
         bytes.push(0);
     }
@@ -147,7 +177,15 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     let object = match &object.debug {
         Some(info) => {
             let encoded = codeview::encode(object, info)?;
-            let section = |name: &str, one: codeview::Section| Section { name: name.to_owned(), role: Role::Debug, near: true, align: 1, spans: vec![[0, one.image.len()]], image: one.image, relocs: one.relocs };
+            let section = |name: &str, one: codeview::Section| Section {
+                name: name.to_owned(),
+                role: Role::Debug,
+                near: true,
+                align: 1,
+                spans: vec![[0, one.image.len()]],
+                image: one.image,
+                relocs: one.relocs,
+            };
             let mut sections = object.sections.clone();
             sections.push(section(".debug$S", encoded.symbols));
             sections.push(section(".debug$T", encoded.types));
@@ -178,13 +216,19 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     let mut count = 0u32;
     let file = object.name.as_bytes();
     let aux = file.len().div_ceil(SYMBOL).max(1);
-    symbol(&mut table, Entry { name: *b".file\0\0\0", value: 0, section: SYM_DEBUG, kind: 0, class: SYM_CLASS_FILE, aux: aux as u8 });
+    symbol(
+        &mut table,
+        Entry { name: *b".file\0\0\0", value: 0, section: SYM_DEBUG, kind: 0, class: SYM_CLASS_FILE, aux: aux as u8 },
+    );
     let mut name = file.to_vec();
     name.resize(aux * SYMBOL, 0);
     table.extend(name);
     count += 1 + aux as u32;
     if M::SAFE_SEH {
-        symbol(&mut table, Entry { name: *b"@feat.00", value: 1, section: SYM_ABSOLUTE, kind: 0, class: SYM_CLASS_STATIC, aux: 0 });
+        symbol(
+            &mut table,
+            Entry { name: *b"@feat.00", value: 1, section: SYM_ABSOLUTE, kind: 0, class: SYM_CLASS_STATIC, aux: 0 },
+        );
         count += 1;
     }
     count += 2 * object.sections.len() as u32;
@@ -210,7 +254,10 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
                 _ => i16::try_from(field).is_ok() || (!one.kind.relative() && u16::try_from(field).is_ok()),
             };
             if !fits {
-                return Err(unsupported(format!("{}: a value of {field} does not fit its {width}-byte field", section.name)));
+                return Err(unsupported(format!(
+                    "{}: a value of {field} does not fit its {width}-byte field",
+                    section.name
+                )));
             }
             put32(&mut entries, one.at as u32);
             put32(&mut entries, coff_symbol[target]);
@@ -224,7 +271,10 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
 
     for (index, section) in object.sections.iter().enumerate() {
         let name = symbol_name(&spelled[index].0, &mut strings);
-        symbol(&mut table, Entry { name, value: 0, section: index as i16 + 1, kind: 0, class: SYM_CLASS_STATIC, aux: 1 });
+        symbol(
+            &mut table,
+            Entry { name, value: 0, section: index as i16 + 1, kind: 0, class: SYM_CLASS_STATIC, aux: 1 },
+        );
         put32(&mut table, section.image.len() as u32);
         put16(&mut table, reloc_counts[index].min(0xFFFF) as u16);
         put16(&mut table, 0);
@@ -238,9 +288,14 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         match one.definition {
             Definition::Defined { section, offset } => {
                 let kind = if object.sections[section].role == Role::Text { SYM_TYPE_FUNCTION } else { 0 };
-                symbol(&mut table, Entry { name, value: offset as u32, section: section as i16 + 1, kind, class, aux: 0 });
+                symbol(
+                    &mut table,
+                    Entry { name, value: offset as u32, section: section as i16 + 1, kind, class, aux: 0 },
+                );
             }
-            Definition::Undefined => symbol(&mut table, Entry { name, value: 0, section: 0, kind: 0, class: SYM_CLASS_EXTERNAL, aux: 0 }),
+            Definition::Undefined => {
+                symbol(&mut table, Entry { name, value: 0, section: 0, kind: 0, class: SYM_CLASS_EXTERNAL, aux: 0 })
+            }
         }
     }
 

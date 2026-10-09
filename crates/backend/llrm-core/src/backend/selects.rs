@@ -12,7 +12,8 @@ pub fn lowered(module: &mut Module) -> Result<(), String> {
     for global in &mut module.globals {
         let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind else { continue };
         loop {
-            let found = function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).opcode == Opcode::Select);
+            let found =
+                function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).opcode == Opcode::Select);
             let Some(select) = found else { break };
             _branched(function, select)?;
         }
@@ -21,7 +22,10 @@ pub fn lowered(module: &mut Module) -> Result<(), String> {
 }
 
 /// `select` made a branch around an empty block into a phi.
-fn _branched(function: &mut Function, select: InstId) -> Result<(), String> {
+fn _branched(
+    function: &mut Function,
+    select: InstId,
+) -> Result<(), String> {
     let block = function.parent(select).ok_or("a placed select")?;
     let op = function.instruction(select).clone();
     let [condition, yes, no] = op.operands[..] else { return Err("a select of three operands".into()) };
@@ -43,9 +47,21 @@ fn _branched(function: &mut Function, select: InstId) -> Result<(), String> {
     let void = function.instruction(*moved.last().expect("a terminator")).ty;
     let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(join)], Flags::default(), None);
     function.insert(jump, Position::End(taken))?;
-    let branch = function.create_instruction(Opcode::Br, void, vec![condition, Operand::Block(taken), Operand::Block(join)], Flags::default(), None);
+    let branch = function.create_instruction(
+        Opcode::Br,
+        void,
+        vec![condition, Operand::Block(taken), Operand::Block(join)],
+        Flags::default(),
+        None,
+    );
     function.insert(branch, Position::End(block))?;
-    let phi = function.create_instruction(Opcode::Phi, op.ty, vec![yes, Operand::Block(taken), no, Operand::Block(block)], Flags::default(), None);
+    let phi = function.create_instruction(
+        Opcode::Phi,
+        op.ty,
+        vec![yes, Operand::Block(taken), no, Operand::Block(block)],
+        Flags::default(),
+        None,
+    );
     let first = function.block(join).instructions()[0];
     function.insert(phi, Position::Before(first))?;
     function.replace_all_uses_with(result, Operand::Value(function.instruction(phi).result.expect("a phi's value")));
@@ -53,10 +69,26 @@ fn _branched(function: &mut Function, select: InstId) -> Result<(), String> {
 }
 
 /// `next`'s phis name `to` where they named `from`.
-fn _renamed_edges(function: &mut Function, next: BlockId, from: BlockId, to: BlockId) {
-    let phis = function.block(next).instructions().iter().copied().take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect::<Vec<_>>();
+fn _renamed_edges(
+    function: &mut Function,
+    next: BlockId,
+    from: BlockId,
+    to: BlockId,
+) {
+    let phis = function
+        .block(next)
+        .instructions()
+        .iter()
+        .copied()
+        .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+        .collect::<Vec<_>>();
     for phi in phis {
-        let operands = function.instruction(phi).operands.iter().map(|&one| if one == Operand::Block(from) { Operand::Block(to) } else { one }).collect();
+        let operands = function
+            .instruction(phi)
+            .operands
+            .iter()
+            .map(|&one| if one == Operand::Block(from) { Operand::Block(to) } else { one })
+            .collect();
         function.set_operands(phi, operands);
     }
 }
@@ -87,8 +119,13 @@ done:
         assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{}", llrm_mir::print::module(&after));
         assert!(!llrm_mir::print::module(&after).contains("select"));
         for (a, b) in [(3, 5), (9, 2), (4, 4)] {
-            let arguments = |one: i128, other: i128| vec![Val::Int { bits: one as u128, width: 16 }, Val::Int { bits: other as u128, width: 16 }];
-            assert_eq!(run(&after, "f", arguments(a, b), 100).unwrap(), run(&before, "f", arguments(a, b), 100).unwrap());
+            let arguments = |one: i128, other: i128| {
+                vec![Val::Int { bits: one as u128, width: 16 }, Val::Int { bits: other as u128, width: 16 }]
+            };
+            assert_eq!(
+                run(&after, "f", arguments(a, b), 100).unwrap(),
+                run(&before, "f", arguments(a, b), 100).unwrap()
+            );
         }
     }
 }

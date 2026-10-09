@@ -24,14 +24,20 @@ impl Parsed {
     }
 
     /// The instruction defining `%name`.
-    fn made(&self, name: &str) -> InstId {
+    fn made(
+        &self,
+        name: &str,
+    ) -> InstId {
         let f = function(&self.module, "f");
         let wanted = value(f, name);
         f.walk().map(|(_, inst)| inst).find(|&inst| f.instruction(inst).result == Some(wanted)).expect("defined")
     }
 
     /// Whether `exact` proves `%name`'s instruction.
-    fn exact(&self, name: &str) -> bool {
+    fn exact(
+        &self,
+        name: &str,
+    ) -> bool {
         let unit = self.unit();
         // The manager's bounds of the body, as the analysis that asks carries them.
         let bounds = ranges::bounds(&unit).unwrap();
@@ -40,7 +46,10 @@ impl Parsed {
     }
 
     /// `_memory` of the load `%name`, its block's scope as `ranges::bounded` says.
-    fn loaded(&self, name: &str) -> Option<Bounds> {
+    fn loaded(
+        &self,
+        name: &str,
+    ) -> Option<Bounds> {
         let unit = self.unit();
         let load = self.made(name);
         let block = cfg::id(unit.function.parent(load).unwrap());
@@ -50,7 +59,10 @@ impl Parsed {
     }
 }
 
-fn pair(low: i64, high: i64) -> Bounds {
+fn pair(
+    low: i64,
+    high: i64,
+) -> Bounds {
     (BigInt::from(low), BigInt::from(high))
 }
 
@@ -70,7 +82,10 @@ fn test_arithmetic_requires_exactness_at_its_precision() {
         assert_eq!(evaluated(&rule, &inputs), expected.map(|(low, high)| pair(low, high)), "{operation:?} {bounds:?}");
     }
     let wide = Rule::new(Operation::Mul, &[Format::Binary64; 2], Format::Binary64);
-    assert_eq!(evaluated(&wide, &[pair(-32768, 32767), pair(-32768, 32767)]), Some(pair(-32768 * 32767, 32768 * 32768)));
+    assert_eq!(
+        evaluated(&wide, &[pair(-32768, 32767), pair(-32768, 32767)]),
+        Some(pair(-32768 * 32767, 32768 * 32768))
+    );
 }
 
 #[test]
@@ -152,10 +167,16 @@ fn test_finite_array_proof_requires_known_nonwrapping_bytes() {
     // Past the array, no byte is known.
     assert_eq!(array("36.0", "3").loaded("x"), None);
     // Not a store of the element: nothing known.
-    let parsed = Parsed::new(&ARRAY.replace("MIDDLE", "36.0").replace("HIGH", "2").replace("  store float 12.0, ptr @a\n", ""));
+    let parsed =
+        Parsed::new(&ARRAY.replace("MIDDLE", "36.0").replace("HIGH", "2").replace("  store float 12.0, ptr @a\n", ""));
     assert_eq!(parsed.loaded("x"), None);
     // An index no guard bounds.
-    let parsed = Parsed::new(&ARRAY.replace("MIDDLE", "36.0").replace("HIGH", "2").replace("br i1 %high, label %b2, label %b3", "br label %b2"));
+    let parsed = Parsed::new(
+        &ARRAY
+            .replace("MIDDLE", "36.0")
+            .replace("HIGH", "2")
+            .replace("br i1 %high, label %b2, label %b3", "br label %b2"),
+    );
     assert_eq!(parsed.loaded("x"), None);
 }
 

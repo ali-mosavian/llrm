@@ -46,12 +46,18 @@ fn refused<T>(what: impl std::fmt::Display) -> Result<T, Error> {
     Err(Error::Unencodable(format!("Turbo Debugger: {what}")))
 }
 
-fn comment(class: u8, data: Vec<u8>) -> Rc<Record> {
+fn comment(
+    class: u8,
+    data: Vec<u8>,
+) -> Rc<Record> {
     Rc::new(Record::new(omf::COMENT, [&[0x00, class][..], &data].concat()))
 }
 
 fn pascal(name: &str) -> Result<Vec<u8>, Error> {
-    let bytes = name.chars().map(|one| u8::try_from(u32::from(one)).or_else(|_| refused(format!("{name:?} is not latin-1")))).collect::<Result<Vec<u8>, Error>>()?;
+    let bytes = name
+        .chars()
+        .map(|one| u8::try_from(u32::from(one)).or_else(|_| refused(format!("{name:?} is not latin-1"))))
+        .collect::<Result<Vec<u8>, Error>>()?;
     let length = u8::try_from(bytes.len()).or_else(|_| refused(format!("{name:?} is longer than 255 bytes")))?;
     Ok([vec![length], bytes].concat())
 }
@@ -67,7 +73,10 @@ fn index(number: u16) -> Result<Vec<u8>, Error> {
 
 /// Borland's number of a 16-bit or 8-bit x86 register (its encoding: AX 0, CX 1, DX 2, BX 3, SP 4, BP 5,
 /// SI 6, DI 7; AL 0 .. BH 7); the records are x86's alone, so the names are too.
-fn register_number(variable: &str, register: &str) -> Result<u8, Error> {
+fn register_number(
+    variable: &str,
+    register: &str,
+) -> Result<u8, Error> {
     const WORDS: [&str; 8] = ["ax", "cx", "dx", "bx", "sp", "bp", "si", "di"];
     const BYTES: [&str; 8] = ["al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"];
     match WORDS.iter().chain(&BYTES).position(|one| *one == register) {
@@ -106,7 +115,10 @@ struct Types<'a> {
 
 impl Types<'_> {
     /// `id`'s index, its records made if it has none yet.
-    fn code(&mut self, id: usize) -> Result<u16, Error> {
+    fn code(
+        &mut self,
+        id: usize,
+    ) -> Result<u16, Error> {
         if let Some(Some(done)) = self.of.get(id) {
             return Ok(*done);
         }
@@ -141,7 +153,10 @@ impl Types<'_> {
     }
 
     /// The procedure type `id` is, or is a typedef of.
-    fn procedure_through(&self, mut id: usize) -> Option<usize> {
+    fn procedure_through(
+        &self,
+        mut id: usize,
+    ) -> Option<usize> {
         loop {
             match self.info.types.get(id)? {
                 Type::Typedef { target, .. } | Type::Qualified { target, .. } => id = *target,
@@ -152,7 +167,11 @@ impl Types<'_> {
     }
 
     /// The record of the procedure type `id` called far or near, made once for each.
-    fn procedure_code(&mut self, id: usize, far: bool) -> Result<u16, Error> {
+    fn procedure_code(
+        &mut self,
+        id: usize,
+        far: bool,
+    ) -> Result<u16, Error> {
         if let Some(&(_, done)) = self.procedures.iter().find(|(key, _)| *key == (id, far)) {
             return Ok(done);
         }
@@ -166,14 +185,27 @@ impl Types<'_> {
             None => 0x01,
         };
         // The call's own flags: far is 4. A Pascal call is the function's own, set where a name is.
-        let data = [index(at)?, pascal("")?, 0u16.to_le_bytes().to_vec(), vec![TID_FUNCTION], index(ret)?, vec![if far { 0x04 } else { 0x00 }, 0x00]].concat();
+        let data = [
+            index(at)?,
+            pascal("")?,
+            0u16.to_le_bytes().to_vec(),
+            vec![TID_FUNCTION],
+            index(ret)?,
+            vec![if far { 0x04 } else { 0x00 }, 0x00],
+        ]
+        .concat();
         self.records.push(comment(TYPE_DEFINITION, data));
         Ok(at)
     }
 
     /// A composite type's name, size, kind and what follows its kind; its members' records first.
-    fn composite<'t>(&mut self, one: &'t Type) -> Result<(&'t str, u16, u8, Vec<u8>), Error> {
-        let size = |bytes: u32| u16::try_from(bytes).or_else(|_| refused(format!("a type of {bytes} bytes does not fit its size")));
+    fn composite<'t>(
+        &mut self,
+        one: &'t Type,
+    ) -> Result<(&'t str, u16, u8, Vec<u8>), Error> {
+        let size = |bytes: u32| {
+            u16::try_from(bytes).or_else(|_| refused(format!("a type of {bytes} bytes does not fit its size")))
+        };
         Ok(match one {
             Type::Pointer { target, bytes, reach } => {
                 // What a pointer to a function points to is called as far as the pointer reaches.
@@ -210,7 +242,12 @@ impl Types<'_> {
                     members.extend([0x00]);
                     members.extend(pascal(&field.name)?);
                     members.extend(index(to)?);
-                    let width = self.info.size_of(field.r#type).ok_or_else(|| Error::Unencodable(format!("Turbo Debugger: field {} has no size", field.name)))?;
+                    let width = self
+                        .info
+                        .size_of(field.r#type)
+                        .ok_or_else(
+                            || Error::Unencodable(format!("Turbo Debugger: field {} has no size", field.name)),
+                        )?;
                     at = if *union { 0 } else { field.offset + u32::try_from(width).unwrap_or(0) };
                 }
                 members.push(0xC0);
@@ -229,7 +266,9 @@ impl Types<'_> {
             Type::Enum { name, .. } => return refused(format!("enum {name} is not written yet")),
             Type::Reference(_) => return refused("a BASIC reference has no type here"),
             Type::FixedString(_) => return refused("a BASIC STRING * n has no type here"),
-            Type::Scalar(_) | Type::Basic { .. } | Type::Qualified { .. } | Type::Typedef { .. } => unreachable!("handled by `code`"),
+            Type::Scalar(_) | Type::Basic { .. } | Type::Qualified { .. } | Type::Typedef { .. } => {
+                unreachable!("handled by `code`")
+            }
         })
     }
 }
@@ -246,8 +285,12 @@ pub struct Debug {
     pub source: Rc<Record>,
 }
 
-fn frame_offset(name: &str, disp: i64) -> Result<[u8; 2], Error> {
-    let bp = i16::try_from(disp).or_else(|_| refused(format!("{name} is at frame offset {disp}, which does not fit")))?;
+fn frame_offset(
+    name: &str,
+    disp: i64,
+) -> Result<[u8; 2], Error> {
+    let bp =
+        i16::try_from(disp).or_else(|_| refused(format!("{name} is at frame offset {disp}, which does not fit")))?;
     Ok(bp.to_le_bytes())
 }
 
@@ -259,11 +302,16 @@ struct Builder<'a> {
 
 /// `variables` with a frame cell it settles in where it was over ranges: these records name one place for a scope,
 /// and a parameter in its register only until the function stored it is in that cell for the rest.
-fn settled(variables: &[model::Variable], scope: &[model::Range]) -> Vec<model::Variable> {
+fn settled(
+    variables: &[model::Variable],
+    scope: &[model::Range],
+) -> Vec<model::Variable> {
     variables
         .iter()
         .map(|one| match one.location.settled(scope) {
-            Some(cell @ Location::Frame { .. }) if matches!(one.location, Location::List(_)) => model::Variable { location: cell.clone(), ..one.clone() },
+            Some(cell @ Location::Frame { .. }) if matches!(one.location, Location::List(_)) => {
+                model::Variable { location: cell.clone(), ..one.clone() }
+            }
             _ => one.clone(),
         })
         .collect()
@@ -271,7 +319,10 @@ fn settled(variables: &[model::Variable], scope: &[model::Range]) -> Vec<model::
 
 impl Builder<'_> {
     /// One local's entry in an E6 record.
-    fn entry(&mut self, variable: &model::Variable) -> Result<Vec<u8>, Error> {
+    fn entry(
+        &mut self,
+        variable: &model::Variable,
+    ) -> Result<Vec<u8>, Error> {
         let to = self.types.code(variable.r#type)?;
         let mut data = [pascal(&variable.name)?, index(to)?].concat();
         match &variable.location {
@@ -289,15 +340,22 @@ impl Builder<'_> {
             }
             // The optimiser removed it: Turbo Debugger's records have no "optimized out", so it is left out.
             Location::List(entries) if entries.is_empty() => return Ok(Vec::new()),
-            Location::Register(register) => return refused(format!("{} is in register {register}, which is not written yet", variable.name)),
-            Location::List(_) => return refused(format!("{} has a location list, which is not written yet", variable.name)),
+            Location::Register(register) => {
+                return refused(format!("{} is in register {register}, which is not written yet", variable.name));
+            }
+            Location::List(_) => {
+                return refused(format!("{} has a location list, which is not written yet", variable.name));
+            }
             // Turbo Debugger's records say neither a value in no place nor one in pieces: left out.
             Location::Constant(_) | Location::Pieces(_) | Location::Relative { .. } => return Ok(Vec::new()),
         }
         Ok(data)
     }
 
-    fn locals(&mut self, variables: &[&model::Variable]) -> Result<Option<Rc<Record>>, Error> {
+    fn locals(
+        &mut self,
+        variables: &[&model::Variable],
+    ) -> Result<Option<Rc<Record>>, Error> {
         let mut data = Vec::new();
         for variable in variables {
             data.extend(self.entry(variable)?);
@@ -305,17 +363,34 @@ impl Builder<'_> {
         Ok((!data.is_empty()).then(|| comment(LOCALS, data)))
     }
 
-    fn scope(&self, section: usize, offset: usize) -> Result<Rc<Record>, Error> {
+    fn scope(
+        &self,
+        section: usize,
+        offset: usize,
+    ) -> Result<Rc<Record>, Error> {
         let at = u16::try_from(offset).or_else(|_| refused(format!("code at offset {offset} does not fit")))?;
         let segment = u8::try_from(section + 1).or_else(|_| refused("a segment number past 255"))?;
         Ok(comment(BEGIN_SCOPE, [vec![segment], at.to_le_bytes().to_vec()].concat()))
     }
 
-    fn end(&self, offset: usize) -> Result<Rc<Record>, Error> {
-        Ok(comment(END_SCOPE, u16::try_from(offset).or_else(|_| refused(format!("code at offset {offset} does not fit")))?.to_le_bytes().to_vec()))
+    fn end(
+        &self,
+        offset: usize,
+    ) -> Result<Rc<Record>, Error> {
+        Ok(comment(
+            END_SCOPE,
+            u16::try_from(offset)
+                .or_else(|_| refused(format!("code at offset {offset} does not fit")))?
+                .to_le_bytes()
+                .to_vec(),
+        ))
     }
 
-    fn block(&mut self, out: &mut Vec<Rc<Record>>, block: &model::Block) -> Result<(), Error> {
+    fn block(
+        &mut self,
+        out: &mut Vec<Rc<Record>>,
+        block: &model::Block,
+    ) -> Result<(), Error> {
         let [range] = block.ranges[..] else { return refused("a block of several ranges is not written yet") };
         out.push(self.scope(range.section, range.offset)?);
         let own = settled(&block.variables, &block.ranges);
@@ -330,20 +405,33 @@ impl Builder<'_> {
 
     /// A function's scopes: its own, with the parameters as passed in, and its body's, with the
     /// locals.
-    fn function(&mut self, out: &mut Vec<Rc<Record>>, function: &Function) -> Result<(), Error> {
+    fn function(
+        &mut self,
+        out: &mut Vec<Rc<Record>>,
+        function: &Function,
+    ) -> Result<(), Error> {
         let function = &Function { variables: settled(&function.variables, &function.ranges), ..function.clone() };
-        let [range] = function.ranges[..] else { return refused(format!("{} has {} ranges: one is written", function.name, function.ranges.len())) };
+        let [range] = function.ranges[..] else {
+            return refused(format!("{} has {} ranges: one is written", function.name, function.ranges.len()));
+        };
         out.push(self.scope(range.section, range.offset)?);
-        let parameters: Vec<&model::Variable> = function.variables.iter().filter(|one| one.kind == Kind::Parameter).collect();
+        let parameters: Vec<&model::Variable> =
+            function.variables.iter().filter(|one| one.kind == Kind::Parameter).collect();
         // The ones a frame cell holds are the function's own; one a register holds is the body's.
-        let reversed: Vec<&model::Variable> = parameters.iter().rev().copied().filter(|one| !matches!(one.location, Location::List(_))).collect();
+        let reversed: Vec<&model::Variable> =
+            parameters.iter().rev().copied().filter(|one| !matches!(one.location, Location::List(_))).collect();
         out.extend(self.locals(&reversed)?);
         let (start, _) = function.body.unwrap_or((0, range.length));
         out.push(self.scope(range.section, range.offset + start)?);
         for block in &function.blocks {
             self.block(out, block)?;
         }
-        let locals: Vec<&model::Variable> = function.variables.iter().filter(|one| one.kind != Kind::Parameter).chain(parameters.iter().copied()).collect();
+        let locals: Vec<&model::Variable> = function
+            .variables
+            .iter()
+            .filter(|one| one.kind != Kind::Parameter)
+            .chain(parameters.iter().copied())
+            .collect();
         out.extend(self.locals(&locals)?);
         out.push(self.end(range.offset + range.length)?);
         out.push(self.end(range.offset + range.length)?);
@@ -351,8 +439,13 @@ impl Builder<'_> {
     }
 
     /// The function's type and its record, a call of it far or near, C's or Pascal's.
-    fn function_type(&mut self, function: &Function) -> Result<(u16, Rc<Record>), Error> {
-        let Type::Procedure { convention, .. } = &self.info.types[function.r#type] else { return refused(format!("{}'s type is no procedure", function.name)) };
+    fn function_type(
+        &mut self,
+        function: &Function,
+    ) -> Result<(u16, Rc<Record>), Error> {
+        let Type::Procedure { convention, .. } = &self.info.types[function.r#type] else {
+            return refused(format!("{}'s type is no procedure", function.name));
+        };
         let call = match convention.as_deref() {
             None | Some("cdecl") => 0x00,
             Some("pascal") => 0x01,
@@ -366,27 +459,64 @@ impl Builder<'_> {
             None => 0x01,
         };
         let far = if function.far { 0x04 } else { 0x00 };
-        let data = [index(at)?, pascal("")?, 0u16.to_le_bytes().to_vec(), vec![TID_FUNCTION], index(ret)?, vec![far | call, 0x00]].concat();
+        let data = [
+            index(at)?,
+            pascal("")?,
+            0u16.to_le_bytes().to_vec(),
+            vec![TID_FUNCTION],
+            index(ret)?,
+            vec![far | call, 0x00],
+        ]
+        .concat();
         Ok((at, comment(TYPE_DEFINITION, data)))
     }
 
     /// A module-level static: a function (flag 0x18, kind 0) or data (flag 0, kind 1) at its place.
-    fn placed(&self, name: &str, to: u16, function: bool, symbol: usize, disp: i64) -> Result<Vec<u8>, Error> {
-        let Definition::Defined { section, offset } = self.object.symbols[symbol].definition else { return refused(format!("{name} is in a symbol this object does not define")) };
+    fn placed(
+        &self,
+        name: &str,
+        to: u16,
+        function: bool,
+        symbol: usize,
+        disp: i64,
+    ) -> Result<Vec<u8>, Error> {
+        let Definition::Defined { section, offset } = self.object.symbols[symbol].definition else {
+            return refused(format!("{name} is in a symbol this object does not define"));
+        };
         let segment = u8::try_from(section + 1).or_else(|_| refused("a segment number past 255"))?;
         let at = u16::try_from(offset as i64 + disp).or_else(|_| refused(format!("{name} is past a 16-bit offset")))?;
-        Ok([pascal(name)?, index(to)?, vec![if function { FUNCTION } else { STATIC }, u8::from(!function), segment], at.to_le_bytes().to_vec()].concat())
+        Ok([
+            pascal(name)?,
+            index(to)?,
+            vec![if function { FUNCTION } else { STATIC }, u8::from(!function), segment],
+            at.to_le_bytes().to_vec(),
+        ]
+        .concat())
     }
 }
 
-pub fn records(object: &Object, info: &Info) -> Result<Debug, Error> {
+pub fn records(
+    object: &Object,
+    info: &Info,
+) -> Result<Debug, Error> {
     if object.arch.bits() != 16 {
         return refused("its records are 16-bit: Borland's 32-bit information is another format");
     }
     if info.language != model::Language::C {
         return refused(format!("only C's information is written, not {:?}'s", info.language));
     }
-    let mut builder = Builder { object, info, types: Types { info, of: vec![None; info.types.len()], records: Vec::new(), procedures: Vec::new(), shapes: Vec::new(), next: FIRST_INDEX } };
+    let mut builder = Builder {
+        object,
+        info,
+        types: Types {
+            info,
+            of: vec![None; info.types.len()],
+            records: Vec::new(),
+            procedures: Vec::new(),
+            shapes: Vec::new(),
+            next: FIRST_INDEX,
+        },
+    };
     // Each function's records, in the order of its code.
     let mut functions: Vec<&Function> = info.functions.iter().collect();
     functions.sort_by_key(|one| one.ranges.first().map(|range| (range.section, range.offset)));
@@ -414,7 +544,9 @@ pub fn records(object: &Object, info: &Info) -> Result<Debug, Error> {
         }
     }
     for global in &info.globals {
-        let Location::Static { symbol, disp } = &global.location else { return refused(format!("{} is no static", global.name)) };
+        let Location::Static { symbol, disp } = &global.location else {
+            return refused(format!("{} is no static", global.name));
+        };
         let to = builder.types.code(global.r#type)?;
         if object.symbols[*symbol].binding == Binding::Public && *disp == 0 {
             publics.entry(*symbol).or_default().push(comment(PUBLIC_TYPE, [index(to)?, vec![0x00]].concat()));
@@ -461,15 +593,45 @@ mod tests {
         Type::Scalar(Scalar::Int { bytes: 2, signed: true })
     }
 
-    fn variable(name: &str, r#type: usize, kind: Kind, location: Location) -> Variable {
+    fn variable(
+        name: &str,
+        r#type: usize,
+        kind: Kind,
+        location: Location,
+    ) -> Variable {
         Variable { name: name.into(), r#type, kind, location }
     }
 
     /// `int f(int a) { int l; }` at 0..0x20, body at 6..0x1c, `_f` public; a global `_g` in data.
-    fn object(types: Vec<Type>, variables: Vec<Variable>, info: impl FnOnce(&mut Info)) -> Object {
-        let text = Section { name: "T_TEXT".into(), role: llrm_object::Role::Text, near: true, align: 1, image: vec![0x90; 0x20], spans: vec![[0, 0x20]], relocs: Vec::new() };
-        let data = Section { name: "_DATA".into(), role: llrm_object::Role::Data, near: true, align: 2, image: vec![0; 8], spans: vec![[0, 8]], relocs: Vec::new() };
-        let symbol = |name: &str, section, offset, binding| Symbol { name: name.into(), binding, definition: Definition::Defined { section, offset }, group: None };
+    fn object(
+        types: Vec<Type>,
+        variables: Vec<Variable>,
+        info: impl FnOnce(&mut Info),
+    ) -> Object {
+        let text = Section {
+            name: "T_TEXT".into(),
+            role: llrm_object::Role::Text,
+            near: true,
+            align: 1,
+            image: vec![0x90; 0x20],
+            spans: vec![[0, 0x20]],
+            relocs: Vec::new(),
+        };
+        let data = Section {
+            name: "_DATA".into(),
+            role: llrm_object::Role::Data,
+            near: true,
+            align: 2,
+            image: vec![0; 8],
+            spans: vec![[0, 8]],
+            relocs: Vec::new(),
+        };
+        let symbol = |name: &str, section, offset, binding| Symbol {
+            name: name.into(),
+            binding,
+            definition: Definition::Defined { section, offset },
+            group: None,
+        };
         let procedure = types.len();
         let mut types = types;
         types.push(Type::Procedure { result: Some(0), parameters: vec![0], convention: None });
@@ -495,15 +657,30 @@ mod tests {
             ..Info::default()
         };
         info(&mut made);
-        Object { name: "t.c".into(), arch: Arch::I8086, sections: vec![text, data], symbols: vec![symbol("_f", 0, 0, Binding::Public), symbol("_g", 1, 2, Binding::Public)], omf_groups: Vec::new(), debug: Some(made) }
+        Object {
+            name: "t.c".into(),
+            arch: Arch::I8086,
+            sections: vec![text, data],
+            symbols: vec![symbol("_f", 0, 0, Binding::Public), symbol("_g", 1, 2, Binding::Public)],
+            omf_groups: Vec::new(),
+            debug: Some(made),
+        }
     }
 
     /// The (class, data) of each COMENT of an object, in order.
     fn comments(object: &Object) -> Vec<(u8, Vec<u8>)> {
-        omf::parse(&write::write(object).expect("writes")).expect("parses").iter().filter(|one| one.r#type == omf::COMENT).map(|one| (one.body[1], one.body[2..].to_vec())).collect()
+        omf::parse(&write::write(object).expect("writes"))
+            .expect("parses")
+            .iter()
+            .filter(|one| one.r#type == omf::COMENT)
+            .map(|one| (one.body[1], one.body[2..].to_vec()))
+            .collect()
     }
 
-    fn all(object: &Object, class: u8) -> Vec<Vec<u8>> {
+    fn all(
+        object: &Object,
+        class: u8,
+    ) -> Vec<Vec<u8>> {
         comments(object).into_iter().filter(|(one, _)| *one == class).map(|(_, data)| data).collect()
     }
 
@@ -512,8 +689,18 @@ mod tests {
     /// code does; a local is its type, 0x02 and its BP, a parameter's flag is 0x0A.
     #[test]
     fn a_function_is_two_scopes_with_its_parameters_and_locals() {
-        let made = object(vec![int()], vec![variable("a", 0, Kind::Parameter, Location::Frame { disp: 6 }), variable("l", 0, Kind::Local, Location::Frame { disp: -2 })], |_| {});
-        let scopes: Vec<(u8, Vec<u8>)> = comments(&made).into_iter().filter(|(class, _)| matches!(*class, BEGIN_SCOPE | LOCALS | END_SCOPE)).collect();
+        let made = object(
+            vec![int()],
+            vec![
+                variable("a", 0, Kind::Parameter, Location::Frame { disp: 6 }),
+                variable("l", 0, Kind::Local, Location::Frame { disp: -2 }),
+            ],
+            |_| {},
+        );
+        let scopes: Vec<(u8, Vec<u8>)> = comments(&made)
+            .into_iter()
+            .filter(|(class, _)| matches!(*class, BEGIN_SCOPE | LOCALS | END_SCOPE))
+            .collect();
         assert_eq!(
             scopes,
             [
@@ -536,10 +723,23 @@ mod tests {
         let made = object(vec![int()], Vec::new(), |info| info.globals.push(global));
         let records = omf::parse(&write::write(&made).unwrap()).unwrap();
         let after = |name: &[u8]| {
-            let at = records.iter().position(|one| one.r#type == omf::PUBDEF && one.body.windows(name.len()).any(|window| window == name)).expect("a PUBDEF");
-            records[at + 1..].iter().take_while(|one| one.r#type == omf::COMENT).map(|one| (one.body[1], one.body[2..].to_vec())).collect::<Vec<_>>()
+            let at = records
+                .iter()
+                .position(|one| one.r#type == omf::PUBDEF && one.body.windows(name.len()).any(|window| window == name))
+                .expect("a PUBDEF");
+            records[at + 1..]
+                .iter()
+                .take_while(|one| one.r#type == omf::COMENT)
+                .map(|one| (one.body[1], one.body[2..].to_vec()))
+                .collect::<Vec<_>>()
         };
-        assert_eq!(&after(b"_f")[..2], [(TYPE_DEFINITION, vec![0x18, 0x00, 0x00, 0x00, TID_FUNCTION, 0x04, 0x00, 0x00]), (PUBLIC_TYPE, vec![0x18, FUNCTION])]);
+        assert_eq!(
+            &after(b"_f")[..2],
+            [
+                (TYPE_DEFINITION, vec![0x18, 0x00, 0x00, 0x00, TID_FUNCTION, 0x04, 0x00, 0x00]),
+                (PUBLIC_TYPE, vec![0x18, FUNCTION])
+            ]
+        );
         assert_eq!(&after(b"_g")[..1], [(PUBLIC_TYPE, vec![0x04, 0x00])]);
         // A far function's call flag is 0x04.
         let mut far = made.clone();
@@ -547,10 +747,20 @@ mod tests {
         assert_eq!(&after_of(&far, b"_f")[0].1[6..8], [0x04, 0x00]);
     }
 
-    fn after_of(object: &Object, name: &[u8]) -> Vec<(u8, Vec<u8>)> {
+    fn after_of(
+        object: &Object,
+        name: &[u8],
+    ) -> Vec<(u8, Vec<u8>)> {
         let records = omf::parse(&write::write(object).unwrap()).unwrap();
-        let at = records.iter().position(|one| one.r#type == omf::PUBDEF && one.body.windows(name.len()).any(|window| window == name)).expect("a PUBDEF");
-        records[at + 1..].iter().take_while(|one| one.r#type == omf::COMENT).map(|one| (one.body[1], one.body[2..].to_vec())).collect()
+        let at = records
+            .iter()
+            .position(|one| one.r#type == omf::PUBDEF && one.body.windows(name.len()).any(|window| window == name))
+            .expect("a PUBDEF");
+        records[at + 1..]
+            .iter()
+            .take_while(|one| one.r#type == omf::COMENT)
+            .map(|one| (one.body[1], one.body[2..].to_vec()))
+            .collect()
     }
 
     /// A struct's members, each with its bit width (0 for none), name and type; a member not where the
@@ -562,13 +772,23 @@ mod tests {
         let types = vec![
             int(),
             Type::Scalar(Scalar::Int { bytes: 1, signed: true }),
-            Type::Struct { name: "s".into(), bytes: 6, fields: vec![field("c", 1, 0), field("i", 0, 2), field("p", 3, 4)], union: false },
+            Type::Struct {
+                name: "s".into(),
+                bytes: 6,
+                fields: vec![field("c", 1, 0), field("i", 0, 2), field("p", 3, 4)],
+                union: false,
+            },
             Type::Pointer { target: 2, bytes: 2, reach: model::Reach::Near },
         ];
         let made = object(types, vec![variable("v", 2, Kind::Local, Location::Frame { disp: -6 })], |_| {});
         let members = all(&made, STRUCT_MEMBERS);
         // c, then i past a gap of one byte, then p, a pointer to the struct.
-        assert_eq!(members, [vec![0x00, 1, b'c', 0x02, 0x40, 0x02, 0, 0, 0, 0x00, 1, b'i', 0x04, 0x00, 1, b'p', 0x19, 0xC0, 0x06, 0, 0, 0]]);
+        assert_eq!(
+            members,
+            [vec![
+                0x00, 1, b'c', 0x02, 0x40, 0x02, 0, 0, 0, 0x00, 1, b'i', 0x04, 0x00, 1, b'p', 0x19, 0xC0, 0x06, 0, 0, 0
+            ]]
+        );
         let types = all(&made, TYPE_DEFINITION);
         assert!(types.contains(&vec![0x18, 1, b's', 0x06, 0x00, TID_STRUCT]), "{types:?}");
         assert!(types.contains(&vec![0x19, 0x00, 0x02, 0x00, TID_NEAR_POINTER, 0x18, 0x04]), "{types:?}");
@@ -590,12 +810,32 @@ mod tests {
     #[test]
     fn what_turbo_debugger_cannot_say_is_refused_by_name() {
         let refused = |made: Object| write::write(&made).unwrap_err().to_string();
-        let register = object(vec![int()], vec![variable("r", 0, Kind::Local, Location::Register("si".into()))], |_| {});
+        let register =
+            object(vec![int()], vec![variable("r", 0, Kind::Local, Location::Register("si".into()))], |_| {});
         assert!(refused(register).contains("r is in register si"));
-        let bits = Type::Struct { name: "s".into(), bytes: 2, fields: vec![Field { name: "b".into(), r#type: 0, offset: 0, bits: Some((0, 3)) }], union: false };
-        assert!(refused(object(vec![int(), bits], vec![variable("v", 1, Kind::Local, Location::Frame { disp: -2 })], |_| {})).contains("bit field b"));
+        let bits = Type::Struct {
+            name: "s".into(),
+            bytes: 2,
+            fields: vec![Field { name: "b".into(), r#type: 0, offset: 0, bits: Some((0, 3)) }],
+            union: false,
+        };
+        assert!(
+            refused(object(
+                vec![int(), bits],
+                vec![variable("v", 1, Kind::Local, Location::Frame { disp: -2 })],
+                |_| {}
+            ))
+            .contains("bit field b")
+        );
         let enumeration = Type::Enum { name: "e".into(), underlying: 0, enumerators: Vec::new() };
-        assert!(refused(object(vec![int(), enumeration], vec![variable("v", 1, Kind::Local, Location::Frame { disp: -2 })], |_| {})).contains("enum e"));
+        assert!(
+            refused(object(
+                vec![int(), enumeration],
+                vec![variable("v", 1, Kind::Local, Location::Frame { disp: -2 })],
+                |_| {}
+            ))
+            .contains("enum e")
+        );
         let mut wide = object(vec![int()], Vec::new(), |_| {});
         wide.arch = Arch::I386;
         assert!(refused(wide).contains("16-bit"));
@@ -606,10 +846,28 @@ mod tests {
     #[test]
     fn a_block_is_a_scope_inside_the_body() {
         let made = object(vec![int()], Vec::new(), |info| {
-            info.functions[0].blocks.push(Block { ranges: vec![Range { section: 0, offset: 8, length: 8 }], variables: vec![variable("y", 0, Kind::Local, Location::Frame { disp: -4 })], blocks: Vec::new() });
+            info.functions[0]
+                .blocks
+                .push(
+                    Block {
+                        ranges: vec![Range { section: 0, offset: 8, length: 8 }],
+                        variables: vec![variable("y", 0, Kind::Local, Location::Frame { disp: -4 })],
+                        blocks: Vec::new(),
+                    },
+                );
         });
-        let scopes: Vec<(u8, Vec<u8>)> = comments(&made).into_iter().filter(|(class, _)| matches!(*class, BEGIN_SCOPE | LOCALS | END_SCOPE)).collect();
-        assert_eq!(scopes[2..5], [(BEGIN_SCOPE, vec![1, 0x08, 0x00]), (LOCALS, vec![1, b'y', 0x04, 0x02, 0xFC, 0xFF]), (END_SCOPE, vec![0x10, 0x00])]);
+        let scopes: Vec<(u8, Vec<u8>)> = comments(&made)
+            .into_iter()
+            .filter(|(class, _)| matches!(*class, BEGIN_SCOPE | LOCALS | END_SCOPE))
+            .collect();
+        assert_eq!(
+            scopes[2..5],
+            [
+                (BEGIN_SCOPE, vec![1, 0x08, 0x00]),
+                (LOCALS, vec![1, b'y', 0x04, 0x02, 0xFC, 0xFF]),
+                (END_SCOPE, vec![0x10, 0x00])
+            ]
+        );
     }
 
     /// A parameter that arrives in a register is an entry of the body's scope alone (Turbo C++ writes a register
@@ -618,12 +876,29 @@ mod tests {
     #[test]
     fn a_register_parameter_is_the_bodys_entry_and_a_removed_one_is_left_out() {
         let entry = Range { section: 0, offset: 0, length: 7 };
-        let in_register = |name: &str, register: &str| variable(name, 0, Kind::Parameter, Location::List(vec![(entry, Location::Register(register.into()))]));
-        let made = object(vec![int()], vec![in_register("p", "si"), in_register("c", "bl"), variable("g", 0, Kind::Parameter, Location::List(Vec::new())), variable("a", 0, Kind::Parameter, Location::Frame { disp: 6 })], |_| {});
-        let scopes: Vec<(u8, Vec<u8>)> = comments(&made).into_iter().filter(|(class, _)| matches!(*class, BEGIN_SCOPE | LOCALS | END_SCOPE)).collect();
+        let in_register = |name: &str, register: &str| {
+            variable(name, 0, Kind::Parameter, Location::List(vec![(entry, Location::Register(register.into()))]))
+        };
+        let made = object(
+            vec![int()],
+            vec![
+                in_register("p", "si"),
+                in_register("c", "bl"),
+                variable("g", 0, Kind::Parameter, Location::List(Vec::new())),
+                variable("a", 0, Kind::Parameter, Location::Frame { disp: 6 }),
+            ],
+            |_| {},
+        );
+        let scopes: Vec<(u8, Vec<u8>)> = comments(&made)
+            .into_iter()
+            .filter(|(class, _)| matches!(*class, BEGIN_SCOPE | LOCALS | END_SCOPE))
+            .collect();
         // The function's scope holds the parameter a cell holds; the body's, the registers' and that one again.
         assert_eq!(scopes[1], (LOCALS, vec![1, b'a', 0x04, 0x0A, 0x06, 0x00]));
-        assert_eq!(scopes[3], (LOCALS, vec![1, b'p', 0x04, 0x0C, 0x06, 1, b'c', 0x04, 0x0C, 0x03, 1, b'a', 0x04, 0x0A, 0x06, 0x00]));
+        assert_eq!(
+            scopes[3],
+            (LOCALS, vec![1, b'p', 0x04, 0x0C, 0x06, 1, b'c', 0x04, 0x0C, 0x03, 1, b'a', 0x04, 0x0A, 0x06, 0x00])
+        );
         // A register Turbo Debugger has no number for is refused by name.
         let wide = object(vec![int()], vec![in_register("w", "eax")], |_| {});
         assert!(write::write(&wide).unwrap_err().to_string().contains("w is in register eax"));
@@ -638,12 +913,24 @@ mod tests {
         let short = int();
         let call = |wanted: bool| {
             let made = object(
-                vec![short.clone(), Type::Procedure { result: Some(0), parameters: vec![0], convention: None }, Type::Pointer { target: 1, bytes: if wanted { 4 } else { 2 }, reach: if wanted { Far } else { Near } }],
+                vec![
+                    short.clone(),
+                    Type::Procedure { result: Some(0), parameters: vec![0], convention: None },
+                    Type::Pointer {
+                        target: 1,
+                        bytes: if wanted { 4 } else { 2 },
+                        reach: if wanted { Far } else { Near },
+                    },
+                ],
                 vec![variable("p", 2, Kind::Local, Location::Frame { disp: -2 })],
                 |_| {},
             );
             // The function types among the type records: each ends with its call byte and a zero.
-            let types: Vec<Vec<u8>> = comments(&made).into_iter().filter(|(class, data)| *class == TYPE_DEFINITION && data.contains(&TID_FUNCTION) && data.len() > 3).map(|(_, data)| data).collect();
+            let types: Vec<Vec<u8>> = comments(&made)
+                .into_iter()
+                .filter(|(class, data)| *class == TYPE_DEFINITION && data.contains(&TID_FUNCTION) && data.len() > 3)
+                .map(|(_, data)| data)
+                .collect();
             types
         };
         let far: Vec<u8> = call(true).iter().map(|data| data[data.len() - 2]).collect();
@@ -661,7 +948,10 @@ mod tests {
         let pointer = |target| Type::Pointer { target, bytes: 2, reach: llrm_object::debug::Reach::Near };
         let made = object(
             vec![spelled("int"), spelled("short"), pointer(0), pointer(1)],
-            vec![variable("p", 2, Kind::Parameter, Location::Frame { disp: 6 }), variable("q", 3, Kind::Parameter, Location::Frame { disp: 8 })],
+            vec![
+                variable("p", 2, Kind::Parameter, Location::Frame { disp: 6 }),
+                variable("q", 3, Kind::Parameter, Location::Frame { disp: 8 }),
+            ],
             |_| {},
         );
         let definitions = comments(&made).into_iter().filter(|(class, _)| *class == TYPE_DEFINITION).count();
@@ -673,11 +963,20 @@ mod tests {
     /// parameter of the function's own scope, not the body's register parameter.
     #[test]
     fn a_parameter_in_a_register_and_then_its_cell_is_the_functions_parameter_in_the_cell() {
-        let list = Location::List(vec![(Range { section: 0, offset: 0, length: 9 }, Location::Register("ax".into())), (Range { section: 0, offset: 9, length: 0x20 - 9 }, Location::Frame { disp: 6 })]);
+        let list = Location::List(vec![
+            (Range { section: 0, offset: 0, length: 9 }, Location::Register("ax".into())),
+            (Range { section: 0, offset: 9, length: 0x20 - 9 }, Location::Frame { disp: 6 }),
+        ]);
         let made = object(vec![int()], vec![variable("a", 0, Kind::Parameter, list)], |_| {});
-        let scopes: Vec<(u8, Vec<u8>)> = comments(&made).into_iter().filter(|(class, _)| matches!(*class, BEGIN_SCOPE | LOCALS | END_SCOPE)).collect();
+        let scopes: Vec<(u8, Vec<u8>)> = comments(&made)
+            .into_iter()
+            .filter(|(class, _)| matches!(*class, BEGIN_SCOPE | LOCALS | END_SCOPE))
+            .collect();
         // The function's scope holds it, as a frame parameter; the body's holds nothing of it.
         assert_eq!(scopes[1], (LOCALS, vec![1, b'a', 0x04, 0x0A, 0x06, 0x00]));
-        assert!(!scopes.iter().any(|(class, data)| *class == LOCALS && data.windows(2).any(|pair| pair == [0x04, 0x0C])), "{scopes:?}");
+        assert!(
+            !scopes.iter().any(|(class, data)| *class == LOCALS && data.windows(2).any(|pair| pair == [0x04, 0x0C])),
+            "{scopes:?}"
+        );
     }
 }

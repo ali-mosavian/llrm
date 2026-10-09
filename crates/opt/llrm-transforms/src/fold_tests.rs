@@ -17,7 +17,11 @@ fn fold(module: &mut Module) -> bool {
 }
 
 /// `text` folded is `expected`, and computes what it did on `inputs`.
-fn check(text: &str, expected: &str, inputs: &[&[i128]]) {
+fn check(
+    text: &str,
+    expected: &str,
+    inputs: &[&[i128]],
+) {
     let mut module = parsed(text);
     let before = results(&module, inputs);
     assert_eq!(fold(&mut module), text != expected, "{text}");
@@ -422,7 +426,14 @@ b3:
   ret i32 %after
 }
 ";
-    check(text, &text.replace("ret i32 %after", "ret i32 1140047872").replace("store float 0.0", "store float 0.000000e+00").replace("48.75", "4.875000e+01"), &[&[]]);
+    check(
+        text,
+        &text
+            .replace("ret i32 %after", "ret i32 1140047872")
+            .replace("store float 0.0", "store float 0.000000e+00")
+            .replace("48.75", "4.875000e+01"),
+        &[&[]],
+    );
 }
 
 #[test]
@@ -440,7 +451,8 @@ fn test_a_float_cell_is_kept_across_a_call_that_cannot_write_it() {
 #[test]
 fn a_constant_division_expanded_to_shifts_folds() {
     for (dividend, quotient) in [(1073741831, 1048576), (-1073741831, -1048576)] {
-        let mut module = parsed(&format!("define i32 @f(i32 %x) {{\nb0:\n  %q = sdiv i32 {dividend}, 1024\n  ret i32 %q\n}}\n"));
+        let mut module =
+            parsed(&format!("define i32 @f(i32 %x) {{\nb0:\n  %q = sdiv i32 {dividend}, 1024\n  ret i32 %q\n}}\n"));
         let before = results(&module, &[&[0]]);
         managed(&mut module, crate::algebraic::Algebraic::default());
         let expanded = managed(&mut module, Fold);
@@ -464,12 +476,18 @@ fn comparing_constant_pointers_folds() {
     }
 }
 
-/// `fold` asked what is known of the body through memory for its integers and again, in `floatfold`, for the float solve
-/// under it: two derivations of one fact (#560). One serves both where nothing was changed between them.
+/// `fold` asked what is known of the body through memory for its integers and again, in `floatfold`, for the float
+/// solve under it: two derivations of one fact (#560). One serves both where nothing was changed between them.
 #[test]
 fn what_is_known_through_memory_is_derived_once_for_the_integers_and_the_floats() {
-    let mut module = parsed(&format!("{DOS}define float @f() {{\nb0:\n  %p = alloca float\n  store float 1.500000e+00, ptr %p\n  %v = load float, ptr %p\n  %w = fadd float %v, 2.000000e+00\n  ret float %w\n}}\n"));
+    let mut module = parsed(&format!(
+        "{DOS}define float @f() {{\nb0:\n  %p = alloca float\n  store float 1.500000e+00, ptr %p\n  %v = load float, ptr %p\n  %w = fadd float %v, 2.000000e+00\n  ret float %w\n}}\n"
+    ));
     let before = llrm_analysis::consts::memory_derivations();
     assert!(fold(&mut module), "the floats are folded");
-    assert!(llrm_analysis::consts::memory_derivations() - before <= 1, "{} derivations", llrm_analysis::consts::memory_derivations() - before);
+    assert!(
+        llrm_analysis::consts::memory_derivations() - before <= 1,
+        "{} derivations",
+        llrm_analysis::consts::memory_derivations() - before
+    );
 }

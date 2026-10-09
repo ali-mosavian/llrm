@@ -11,7 +11,10 @@ fn fixture(relative: &str) -> PathBuf {
     Path::new(env!("LLRM_ROOT")).join(relative.to_lowercase())
 }
 
-fn bodies(found: &Partition, kind: BodyKind) -> Vec<&Body> {
+fn bodies(
+    found: &Partition,
+    kind: BodyKind,
+) -> Vec<&Body> {
     found.bodies.iter().filter(|body| body.kind == kind).collect()
 }
 
@@ -24,12 +27,16 @@ fn extents(name: &str) -> (Module, Partition) {
 #[test]
 fn test_timer_handler_has_its_own_entry() {
     for (tag, entry) in [("p-evt", 0xFA), ("v-evt", 0xF0)] {
-        let found = loaded(fixture(&format!("{}/tests/inputs/omf/regressions/evtrap-{tag}.obj", env!("LLRM_ROOT")))).unwrap();
+        let found =
+            loaded(fixture(&format!("{}/tests/inputs/omf/regressions/evtrap-{tag}.obj", env!("LLRM_ROOT")))).unwrap();
         let result = partition(&found).unwrap();
         let handler = result.bodies.iter().find(|body| body.seed == entry).unwrap();
         assert_eq!(handler.kind.value(), "event-handler", "{tag}");
         assert!(
-            !bodies(&result, BodyKind::Main).iter().flat_map(|body| &body.ranges).any(|&(lo, hi)| lo <= entry && entry < hi),
+            !bodies(&result, BodyKind::Main)
+                .iter()
+                .flat_map(|body| &body.ranges)
+                .any(|&(lo, hi)| lo <= entry && entry < hi),
             "{tag}"
         );
     }

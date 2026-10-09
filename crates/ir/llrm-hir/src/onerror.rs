@@ -15,9 +15,10 @@
 //! runs.
 
 use llrm_mir::build::Builder;
-use llrm_mir::opcode::{Attribute, CastOp, Flags, BASIC};
-use llrm_mir::{Constant, ConstantId, ConstantKind, GlobalId, GlobalKind, GlobalVariable, Linkage, Module, Operand, Type, TypeId};
-
+use llrm_mir::opcode::{Attribute, BASIC, CastOp, Flags};
+use llrm_mir::{
+    Constant, ConstantId, ConstantKind, GlobalId, GlobalKind, GlobalVariable, Linkage, Module, Operand, Type, TypeId,
+};
 
 pub const PERSONALITY: &str = "llrm.qb.personality";
 pub const ONERROR: &str = "llrm.qb.onerror";
@@ -40,7 +41,13 @@ pub struct Handled {
 /// Gives `function` the personality, declares ON ERROR GOTO -- ON LOCAL
 /// ERROR GOTO where `local` -- and keeps `lines`, each statement's BASIC
 /// line in the order a site numbers them.
-pub fn handled(module: &mut Module, far: u32, function: GlobalId, lines: &[i64], local: bool) -> Result<Handled, String> {
+pub fn handled(
+    module: &mut Module,
+    far: u32,
+    function: GlobalId,
+    lines: &[i64],
+    local: bool,
+) -> Result<Handled, String> {
     let name = module.global(function).name.clone().unwrap_or_default();
     let i16 = module.context.types.int(16);
     let table = module.context.types.intern(Type::Array { element: i16, count: lines.len() as u64 });
@@ -55,8 +62,11 @@ pub fn handled(module: &mut Module, far: u32, function: GlobalId, lines: &[i64],
     let onerror_type = types.intern(Type::Function { returns: void, parameters: vec![flag], variadic: false });
     let pad = types.intern(Type::Struct { fields: vec![ptr, i32], packed: false });
     let personality = declared(module, far, PERSONALITY, personality_type, 0, &[])?;
-    let onerror = declared(module, far, if local { ONLOCALERROR } else { ONERROR }, onerror_type, BASIC, &["nounwind"])?;
-    let GlobalKind::Function(handled) = &mut module.globals[function.0 as usize].kind else { return Err("a handler outside a function".to_owned()) };
+    let onerror =
+        declared(module, far, if local { ONLOCALERROR } else { ONERROR }, onerror_type, BASIC, &["nounwind"])?;
+    let GlobalKind::Function(handled) = &mut module.globals[function.0 as usize].kind else {
+        return Err("a handler outside a function".to_owned());
+    };
     handled.personality = Some(personality);
     Ok(Handled { onerror, onerror_type, pad, lines })
 }
@@ -76,7 +86,11 @@ pub fn active(b: &mut Builder) -> Operand {
 pub fn active_global(module: &mut Module) -> Result<ConstantId, String> {
     let i16 = module.context.types.int(16);
     let none = module.context.int(i16, 0);
-    let global = module.add_variable("$QB$ACTIVE", GlobalVariable { ty: i16, constant: false, initializer: Some(none), align: None }, Linkage::Internal)?;
+    let global = module.add_variable(
+        "$QB$ACTIVE",
+        GlobalVariable { ty: i16, constant: false, initializer: Some(none), align: None },
+        Linkage::Internal,
+    )?;
     Ok(module.reference(global))
 }
 
@@ -86,17 +100,32 @@ pub fn active_global(module: &mut Module) -> Result<ConstantId, String> {
 pub fn last_erl_global(module: &mut Module) -> Result<ConstantId, String> {
     let i16 = module.context.types.int(16);
     let none = module.context.int(i16, 0);
-    let global = module.add_variable("$QB$ERL", GlobalVariable { ty: i16, constant: false, initializer: Some(none), align: None }, Linkage::Internal)?;
+    let global = module.add_variable(
+        "$QB$ERL",
+        GlobalVariable { ty: i16, constant: false, initializer: Some(none), align: None },
+        Linkage::Internal,
+    )?;
     Ok(module.reference(global))
 }
 
 /// ON ERROR GOTO the handler numbered `handler`, 0 for none. Inside the
 /// handler trapping stays off until RESUME turns on what this names.
-pub fn goto(b: &mut Builder, handled: &Handled, active: Operand, handler: u16, inside: bool) -> Result<(), String> {
+pub fn goto(
+    b: &mut Builder,
+    handled: &Handled,
+    active: Operand,
+    handler: u16,
+    inside: bool,
+) -> Result<(), String> {
     let number = b.int(16, i128::from(handler));
     b.store(number, active, false);
     if inside {
-        return if handler == 0 { Err("ON ERROR GOTO 0 in the handler, which ends the program with the error it handles: not selected yet".to_owned()) } else { Ok(()) };
+        return if handler == 0 {
+            Err("ON ERROR GOTO 0 in the handler, which ends the program with the error it handles: not selected yet"
+                .to_owned())
+        } else {
+            Ok(())
+        };
     }
     let on = b.int(1, i128::from(handler != 0));
     b.call_as(BASIC, handled.onerror_type, Operand::Constant(handled.onerror), &[on], "");
@@ -104,21 +133,32 @@ pub fn goto(b: &mut Builder, handled: &Handled, active: Operand, handler: u16, i
 }
 
 /// The pad's first act: trapping off while the handler runs.
-pub fn landed(b: &mut Builder, handled: &Handled) {
+pub fn landed(
+    b: &mut Builder,
+    handled: &Handled,
+) {
     let off = b.int(1, 0);
     b.call_as(BASIC, handled.onerror_type, Operand::Constant(handled.onerror), &[off], "");
 }
 
 /// Before RESUME: trapping on again. A handler is named there: trapping was
 /// on to land, and `goto` refuses ON ERROR GOTO 0 inside the handler.
-pub fn resuming(b: &mut Builder, handled: &Handled) {
+pub fn resuming(
+    b: &mut Builder,
+    handled: &Handled,
+) {
     let on = b.int(1, 1);
     b.call_as(BASIC, handled.onerror_type, Operand::Constant(handled.onerror), &[on], "");
 }
 
 /// ERL in the handler: the line of the statement numbered at `site`, as
 /// `returns`.
-pub fn erl(b: &mut Builder, handled: &Handled, site: Operand, returns: TypeId) -> Operand {
+pub fn erl(
+    b: &mut Builder,
+    handled: &Handled,
+    site: Operand,
+    returns: TypeId,
+) -> Operand {
     let i16 = b.context.types.int(16);
     let number = b.load(i16, site, false, "");
     let zero = b.int(16, 0);
@@ -129,14 +169,24 @@ pub fn erl(b: &mut Builder, handled: &Handled, site: Operand, returns: TypeId) -
 }
 
 /// ERR, `i16 ()`.
-pub fn err(module: &mut Module, far: u32) -> Result<(ConstantId, TypeId), String> {
+pub fn err(
+    module: &mut Module,
+    far: u32,
+) -> Result<(ConstantId, TypeId), String> {
     let types = &mut module.context.types;
     let i16 = types.int(16);
     let ty = types.intern(Type::Function { returns: i16, parameters: Vec::new(), variadic: false });
     Ok((declared(module, far, ERR, ty, BASIC, &["nounwind"])?, ty))
 }
 
-fn declared(module: &mut Module, far: u32, name: &str, ty: TypeId, convention: u32, flags: &[&str]) -> Result<ConstantId, String> {
+fn declared(
+    module: &mut Module,
+    far: u32,
+    name: &str,
+    ty: TypeId,
+    convention: u32,
+    flags: &[&str],
+) -> Result<ConstantId, String> {
     if let Some(one) = module.named(name) {
         return Ok(module.reference(one));
     }

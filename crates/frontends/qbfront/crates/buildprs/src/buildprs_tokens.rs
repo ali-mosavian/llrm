@@ -95,13 +95,13 @@ impl RwSymbolCodec {
     pub const SYMBOL_BASE: u16 = 0x8000;
 
     pub fn new() -> Self {
-        Self {
-            symbols: BTreeMap::new(),
-            next: Self::SYMBOL_BASE,
-        }
+        Self { symbols: BTreeMap::new(), next: Self::SYMBOL_BASE }
     }
 
-    pub fn intern(&mut self, symbol: &str) -> u16 {
+    pub fn intern(
+        &mut self,
+        symbol: &str,
+    ) -> u16 {
         if let Some(value) = self.symbols.get(symbol) {
             return *value;
         }
@@ -111,7 +111,10 @@ impl RwSymbolCodec {
         value
     }
 
-    pub fn lookup(&self, symbol: &str) -> Option<u16> {
+    pub fn lookup(
+        &self,
+        symbol: &str,
+    ) -> Option<u16> {
         self.symbols.get(symbol).copied()
     }
 
@@ -119,10 +122,11 @@ impl RwSymbolCodec {
         value >= Self::SYMBOL_BASE
     }
 
-    pub fn symbol_name(&self, value: u16) -> Option<&str> {
-        self.symbols
-            .iter()
-            .find_map(|(name, &encoded)| (encoded == value).then_some(name.as_str()))
+    pub fn symbol_name(
+        &self,
+        value: u16,
+    ) -> Option<&str> {
+        self.symbols.iter().find_map(|(name, &encoded)| (encoded == value).then_some(name.as_str()))
     }
 }
 
@@ -156,7 +160,10 @@ pub struct TokenParityMismatch {
 }
 
 impl std::fmt::Display for TokenParityMismatch {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         write!(f, "{}: {}", self.artifact, self.detail)
     }
 }
@@ -187,14 +194,9 @@ pub fn generate_token_artifacts(tokens: &[TokenDef]) -> TokenArtifacts {
     }
 
     let prefix_len = usize::from(IRW_ALPHA_FIRST.min(ordered_tokens.len() as u16));
-    let mp_irw_to_char = ordered_tokens[..prefix_len]
-        .iter()
-        .map(|token| spelling_to_byte(&token.spelling))
-        .collect();
-    let mp_irw_to_iop = ordered_tokens[..prefix_len]
-        .iter()
-        .map(|token| iop_for_special_token(token).unwrap_or(0xFF))
-        .collect();
+    let mp_irw_to_char = ordered_tokens[..prefix_len].iter().map(|token| spelling_to_byte(&token.spelling)).collect();
+    let mp_irw_to_iop =
+        ordered_tokens[..prefix_len].iter().map(|token| iop_for_special_token(token).unwrap_or(0xFF)).collect();
 
     TokenArtifacts {
         token_count: ordered_tokens.len(),
@@ -211,14 +213,8 @@ pub fn generate_token_artifacts(tokens: &[TokenDef]) -> TokenArtifacts {
 }
 
 fn buildprs_token_order(tokens: &[TokenDef]) -> Vec<&TokenDef> {
-    let mut ordered = tokens
-        .iter()
-        .filter(|token| !is_alpha_reserved_word(token))
-        .collect::<Vec<_>>();
-    let mut alpha = tokens
-        .iter()
-        .filter(|token| is_alpha_reserved_word(token))
-        .collect::<Vec<_>>();
+    let mut ordered = tokens.iter().filter(|token| !is_alpha_reserved_word(token)).collect::<Vec<_>>();
+    let mut alpha = tokens.iter().filter(|token| is_alpha_reserved_word(token)).collect::<Vec<_>>();
     alpha.sort_by(|left, right| left.spelling.cmp(&right.spelling));
     ordered.extend(alpha);
     ordered
@@ -231,7 +227,10 @@ pub fn irw_name_from_tk(tk_name: &str) -> String {
 }
 
 /// Map a token declaration to the `IRW_*` symbol `buildprs` emits.
-pub fn irw_name_for_token(token: &TokenDef, _tokens: &[TokenDef]) -> String {
+pub fn irw_name_for_token(
+    token: &TokenDef,
+    _tokens: &[TokenDef],
+) -> String {
     let spelling = &token.spelling;
     if is_alpha_keyword_spelling(spelling) {
         let base = spelling.trim_end_matches('$');
@@ -245,13 +244,8 @@ pub fn irw_name_for_token(token: &TokenDef, _tokens: &[TokenDef]) -> String {
 }
 
 fn is_alpha_keyword_spelling(spelling: &str) -> bool {
-    spelling
-        .chars()
-        .all(|ch| ch.is_ascii_alphabetic() || ch == '$')
-        && spelling
-            .chars()
-            .next()
-            .is_some_and(|ch| ch.is_ascii_alphabetic())
+    spelling.chars().all(|ch| ch.is_ascii_alphabetic() || ch == '$')
+        && spelling.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic())
 }
 
 /// Map an `IRW_*` symbol to the lister `ORW_*` symbol.
@@ -265,19 +259,13 @@ pub fn compare_irw_equates(
     artifacts: &TokenArtifacts,
     prsirw_text: &str,
 ) -> Result<(), TokenParityMismatch> {
-    let golden = parse_irw_equates(prsirw_text).map_err(|error| TokenParityMismatch {
-        artifact: "prsirw.inc",
-        detail: format!("parse error: {error}"),
-    })?;
+    let golden = parse_irw_equates(prsirw_text)
+        .map_err(|error| TokenParityMismatch { artifact: "prsirw.inc", detail: format!("parse error: {error}") })?;
 
     if golden.len() != artifacts.token_count {
         return Err(TokenParityMismatch {
             artifact: "prsirw.inc",
-            detail: format!(
-                "token count mismatch: grammar {} vs golden {}",
-                artifacts.token_count,
-                golden.len()
-            ),
+            detail: format!("token count mismatch: grammar {} vs golden {}", artifacts.token_count, golden.len()),
         });
     }
 
@@ -320,10 +308,8 @@ pub fn compare_prstab_constants(
     artifacts: &TokenArtifacts,
     prstab_text: &str,
 ) -> Result<(), TokenParityMismatch> {
-    let golden = parse_equates(prstab_text).map_err(|error| TokenParityMismatch {
-        artifact: "prstab.inc",
-        detail: format!("parse error: {error}"),
-    })?;
+    let golden = parse_equates(prstab_text)
+        .map_err(|error| TokenParityMismatch { artifact: "prstab.inc", detail: format!("parse error: {error}") })?;
 
     let expected = [
         ("NTOKENS", i64::from(artifacts.token_count as u16)),
@@ -363,16 +349,10 @@ pub fn compare_mp_tables(
     artifacts: &TokenArtifacts,
     prsrwt_text: &str,
 ) -> Result<(), TokenParityMismatch> {
-    let golden_char =
-        parse_mp_byte_table(prsrwt_text, "mpIRWtoChar").map_err(|error| TokenParityMismatch {
-            artifact: "prsrwt.asm",
-            detail: format!("mpIRWtoChar: {error}"),
-        })?;
-    let golden_iop =
-        parse_mp_byte_table(prsrwt_text, "mpIRWtoIOP").map_err(|error| TokenParityMismatch {
-            artifact: "prsrwt.asm",
-            detail: format!("mpIRWtoIOP: {error}"),
-        })?;
+    let golden_char = parse_mp_byte_table(prsrwt_text, "mpIRWtoChar")
+        .map_err(|error| TokenParityMismatch { artifact: "prsrwt.asm", detail: format!("mpIRWtoChar: {error}") })?;
+    let golden_iop = parse_mp_byte_table(prsrwt_text, "mpIRWtoIOP")
+        .map_err(|error| TokenParityMismatch { artifact: "prsrwt.asm", detail: format!("mpIRWtoIOP: {error}") })?;
 
     if golden_char != artifacts.mp_irw_to_char {
         return Err(TokenParityMismatch {
@@ -389,10 +369,7 @@ pub fn compare_mp_tables(
     if golden_iop != artifacts.mp_irw_to_iop {
         return Err(TokenParityMismatch {
             artifact: "prsrwt.asm",
-            detail: format!(
-                "mpIRWtoIOP mismatch: expected {:?}, golden {:?}",
-                artifacts.mp_irw_to_iop, golden_iop
-            ),
+            detail: format!("mpIRWtoIOP mismatch: expected {:?}, golden {:?}", artifacts.mp_irw_to_iop, golden_iop),
         });
     }
 
@@ -404,19 +381,13 @@ pub fn compare_orw_inventory(
     artifacts: &TokenArtifacts,
     prsorw_text: &str,
 ) -> Result<(), TokenParityMismatch> {
-    let golden = parse_orw_equates(prsorw_text).map_err(|error| TokenParityMismatch {
-        artifact: "prsorw.inc",
-        detail: format!("parse error: {error}"),
-    })?;
+    let golden = parse_orw_equates(prsorw_text)
+        .map_err(|error| TokenParityMismatch { artifact: "prsorw.inc", detail: format!("parse error: {error}") })?;
 
     if golden.len() != artifacts.orw_names.len() {
         return Err(TokenParityMismatch {
             artifact: "prsorw.inc",
-            detail: format!(
-                "ORW count mismatch: grammar {} vs golden {}",
-                artifacts.orw_names.len(),
-                golden.len()
-            ),
+            detail: format!("ORW count mismatch: grammar {} vs golden {}", artifacts.orw_names.len(), golden.len()),
         });
     }
 
@@ -462,13 +433,7 @@ pub fn generate_reserved_word_tables(
     for letter in RW_BUCKET_LETTERS.chars() {
         let entries = alpha_tokens
             .iter()
-            .filter(|entry| {
-                entry
-                    .spelling
-                    .chars()
-                    .next()
-                    .is_some_and(|ch| ch.eq_ignore_ascii_case(&letter))
-            })
+            .filter(|entry| entry.spelling.chars().next().is_some_and(|ch| ch.eq_ignore_ascii_case(&letter)))
             .collect::<Vec<_>>();
 
         let bucket_offset = u16::try_from(flat_blob.len()).expect("bucket offset fits in u16");
@@ -485,15 +450,11 @@ pub fn generate_reserved_word_tables(
         for entry in &entries {
             let orw_name = orw_name_from_irw(&entry.irw_name);
             let entry_offset = u16::try_from(bucket_bytes.len()).expect("entry offset fits in u16");
-            let bucket_selector = u16::try_from((u32::from(letter) - u32::from('A')) * 4)
-                .expect("bucket selector fits in u16");
+            let bucket_selector =
+                u16::try_from((u32::from(letter) - u32::from('A')) * 4).expect("bucket selector fits in u16");
             orw_offsets.insert(orw_name.clone(), (bucket_selector << 8) | entry_offset);
 
-            let token_flags = artifacts
-                .token_rwf_flags
-                .get(&entry.irw_name)
-                .copied()
-                .unwrap_or(0);
+            let token_flags = artifacts.token_rwf_flags.get(&entry.irw_name).copied().unwrap_or(0);
             let entry_lowering = lowering.entries.get(&orw_name).cloned().unwrap_or_default();
             let iop = artifacts
                 .mp_irw_to_iop
@@ -514,19 +475,10 @@ pub fn generate_reserved_word_tables(
 
         bucket_bytes.push(0);
         flat_blob.extend_from_slice(&bucket_bytes);
-        buckets.push(RwBucket {
-            letter,
-            first_irw,
-            bytes: bucket_bytes,
-        });
+        buckets.push(RwBucket { letter, first_irw, bytes: bucket_bytes });
     }
 
-    ReservedWordTableArtifacts {
-        buckets,
-        trw_pointers,
-        flat_blob,
-        orw_offsets,
-    }
+    ReservedWordTableArtifacts { buckets, trw_pointers, flat_blob, orw_offsets }
 }
 
 /// Collect `DW` symbol names from `prsrwt.asm` in first-appearance order.
@@ -534,10 +486,8 @@ pub fn build_rw_symbol_codec_from_prsrwt(prsrwt_text: &str) -> RwSymbolCodec {
     let mut codec = RwSymbolCodec::new();
     for line in prsrwt_text.lines() {
         let trimmed = strip_asm_comment(line).trim();
-        let Some(rest) = trimmed
-            .get(..2)
-            .filter(|prefix| prefix.eq_ignore_ascii_case("dw"))
-            .and_then(|_| trimmed.get(2..))
+        let Some(rest) =
+            trimmed.get(..2).filter(|prefix| prefix.eq_ignore_ascii_case("dw")).and_then(|_| trimmed.get(2..))
         else {
             continue;
         };
@@ -569,16 +519,8 @@ pub fn parse_golden_rw_buckets(
     for letter in RW_BUCKET_LETTERS.chars() {
         let label = format!("t{:02x}Rw", u32::from(letter));
         let bytes = parse_rw_bucket_bytes(prsrwt_text, &label, codec)?;
-        let first_irw = if bytes.len() >= 2 {
-            u16::from_le_bytes([bytes[0], bytes[1]])
-        } else {
-            IRW_ALPHA_FIRST
-        };
-        buckets.push(RwBucket {
-            letter,
-            first_irw,
-            bytes,
-        });
+        let first_irw = if bytes.len() >= 2 { u16::from_le_bytes([bytes[0], bytes[1]]) } else { IRW_ALPHA_FIRST };
+        buckets.push(RwBucket { letter, first_irw, bytes });
     }
     Ok(buckets)
 }
@@ -618,10 +560,8 @@ pub fn compare_orw_offsets(
     tables: &ReservedWordTableArtifacts,
     prsorw_text: &str,
 ) -> Result<(), TokenParityMismatch> {
-    let golden = parse_orw_equates(prsorw_text).map_err(|error| TokenParityMismatch {
-        artifact: "prsorw.inc",
-        detail: format!("parse error: {error}"),
-    })?;
+    let golden = parse_orw_equates(prsorw_text)
+        .map_err(|error| TokenParityMismatch { artifact: "prsorw.inc", detail: format!("parse error: {error}") })?;
 
     for (name, &expected) in &tables.orw_offsets {
         match golden.get(name) {
@@ -659,20 +599,15 @@ pub fn compare_rw_bucket_bytes(
     prsrwt_text: &str,
     codec: &RwSymbolCodec,
 ) -> Result<(), TokenParityMismatch> {
-    let golden =
-        parse_golden_rw_buckets(prsrwt_text, codec).map_err(|error| TokenParityMismatch {
-            artifact: "prsrwt.asm",
-            detail: format!("bucket parse error: {error}"),
-        })?;
+    let golden = parse_golden_rw_buckets(prsrwt_text, codec).map_err(|error| TokenParityMismatch {
+        artifact: "prsrwt.asm",
+        detail: format!("bucket parse error: {error}"),
+    })?;
 
     if golden.len() != tables.buckets.len() {
         return Err(TokenParityMismatch {
             artifact: "prsrwt.asm",
-            detail: format!(
-                "bucket count mismatch: generated {} vs golden {}",
-                tables.buckets.len(),
-                golden.len()
-            ),
+            detail: format!("bucket count mismatch: generated {} vs golden {}", tables.buckets.len(), golden.len()),
         });
     }
 
@@ -732,11 +667,7 @@ fn first_irw_for_empty_bucket(
 }
 
 fn alpha_reserved_tokens(artifacts: &TokenArtifacts) -> Vec<AlphaReservedToken> {
-    let orw_names = artifacts
-        .orw_names
-        .iter()
-        .map(String::as_str)
-        .collect::<std::collections::BTreeSet<_>>();
+    let orw_names = artifacts.orw_names.iter().map(String::as_str).collect::<std::collections::BTreeSet<_>>();
     artifacts
         .irw_order
         .iter()
@@ -744,10 +675,7 @@ fn alpha_reserved_tokens(artifacts: &TokenArtifacts) -> Vec<AlphaReservedToken> 
             let orw = orw_name_from_irw(irw);
             orw_names
                 .contains(orw.as_str())
-                .then(|| AlphaReservedToken {
-                    spelling: orw_display_spelling(&orw),
-                    irw_name: irw.clone(),
-                })
+                .then(|| AlphaReservedToken { spelling: orw_display_spelling(&orw), irw_name: irw.clone() })
         })
         .collect()
 }
@@ -787,10 +715,7 @@ fn encode_rw_entry(
             flags |= nstmts & rwf.nstmts_mask;
         }
         let stmt_cg = nstmts > 1
-            || lowering
-                .stmt_entries
-                .iter()
-                .any(|entry| entry.cg_fn.as_ref().is_some_and(|name| name != "0"));
+            || lowering.stmt_entries.iter().any(|entry| entry.cg_fn.as_ref().is_some_and(|name| name != "0"));
         if stmt_cg {
             flags |= rwf.stmt_cg;
         }
@@ -815,40 +740,22 @@ fn encode_rw_entry(
             }
             for stmt in &lowering.stmt_entries {
                 attr.extend_from_slice(&stmt.stmt_offset.to_le_bytes());
-                attr.extend_from_slice(&encode_dw_operand(
-                    stmt.cg_fn.as_deref().unwrap_or("0"),
-                    codec,
-                ));
-                attr.extend_from_slice(&encode_dw_operand(
-                    stmt.cg_arg.as_deref().unwrap_or("0"),
-                    codec,
-                ));
+                attr.extend_from_slice(&encode_dw_operand(stmt.cg_fn.as_deref().unwrap_or("0"), codec));
+                attr.extend_from_slice(&encode_dw_operand(stmt.cg_arg.as_deref().unwrap_or("0"), codec));
             }
         } else {
             if let Some(func_offset) = lowering.func_offset {
                 attr.extend_from_slice(&func_offset.to_le_bytes());
                 if func_has_cg {
-                    attr.extend_from_slice(&encode_dw_operand(
-                        lowering.func_cg_fn.as_deref().unwrap_or("0"),
-                        codec,
-                    ));
-                    attr.extend_from_slice(&encode_dw_operand(
-                        lowering.func_cg_arg.as_deref().unwrap_or("0"),
-                        codec,
-                    ));
+                    attr.extend_from_slice(&encode_dw_operand(lowering.func_cg_fn.as_deref().unwrap_or("0"), codec));
+                    attr.extend_from_slice(&encode_dw_operand(lowering.func_cg_arg.as_deref().unwrap_or("0"), codec));
                 }
             }
             if let Some(stmt) = lowering.stmt_entries.first() {
                 attr.extend_from_slice(&stmt.stmt_offset.to_le_bytes());
                 if flags & rwf.stmt_cg != 0 {
-                    attr.extend_from_slice(&encode_dw_operand(
-                        stmt.cg_fn.as_deref().unwrap_or("0"),
-                        codec,
-                    ));
-                    attr.extend_from_slice(&encode_dw_operand(
-                        stmt.cg_arg.as_deref().unwrap_or("0"),
-                        codec,
-                    ));
+                    attr.extend_from_slice(&encode_dw_operand(stmt.cg_fn.as_deref().unwrap_or("0"), codec));
+                    attr.extend_from_slice(&encode_dw_operand(stmt.cg_arg.as_deref().unwrap_or("0"), codec));
                 }
             }
         }
@@ -867,30 +774,30 @@ fn encode_rw_entry(
     out
 }
 
-fn encode_dw_operand(operand: &str, codec: &RwSymbolCodec) -> [u8; 2] {
+fn encode_dw_operand(
+    operand: &str,
+    codec: &RwSymbolCodec,
+) -> [u8; 2] {
     if let Ok(value) = operand.parse::<u16>() {
         return value.to_le_bytes();
     }
     codec
         .lookup(operand)
-        .unwrap_or_else(|| {
-            panic!("symbol {operand} missing from codec; build codec from golden fixture first")
-        })
+        .unwrap_or_else(|| panic!("symbol {operand} missing from codec; build codec from golden fixture first"))
         .to_le_bytes()
 }
 
-fn rw_entry_sizes(bytes: &[u8], start: usize) -> (usize, usize, usize) {
+fn rw_entry_sizes(
+    bytes: &[u8],
+    start: usize,
+) -> (usize, usize, usize) {
     if bytes[start] == 0xFF {
         let attr_len = usize::from(bytes[start + 1]);
         let suffix_len = usize::from(bytes[start + 2]);
         (suffix_len, attr_len, 3)
     } else {
         let size_byte = bytes[start];
-        (
-            usize::from(size_byte >> 4),
-            usize::from(size_byte & 0x0F),
-            1,
-        )
+        (usize::from(size_byte >> 4), usize::from(size_byte & 0x0F), 1)
     }
 }
 
@@ -908,10 +815,7 @@ fn decode_rw_entry(
     let mut spelling = String::new();
     spelling.push(bucket_letter);
     spelling.extend(suffix.iter().map(|byte| *byte as char));
-    if attr
-        .first()
-        .is_some_and(|flags| flags & rwf.str_suffix != 0)
-    {
+    if attr.first().is_some_and(|flags| flags & rwf.str_suffix != 0) {
         spelling.push('$');
     }
 
@@ -930,7 +834,11 @@ fn orw_name_from_spelling(spelling: &str) -> String {
     }
 }
 
-fn decode_rw_attr(attr: &[u8], rwf: RwfConstants, codec: &RwSymbolCodec) -> RwEntryLowering {
+fn decode_rw_attr(
+    attr: &[u8],
+    rwf: RwfConstants,
+    codec: &RwSymbolCodec,
+) -> RwEntryLowering {
     let mut lowering = RwEntryLowering::default();
     if attr.is_empty() {
         return lowering;
@@ -973,11 +881,7 @@ fn decode_rw_attr(attr: &[u8], rwf: RwfConstants, codec: &RwSymbolCodec) -> RwEn
                     index += 2;
                 }
             }
-            lowering.stmt_entries.push(RwStmtLowering {
-                stmt_offset,
-                cg_fn,
-                cg_arg,
-            });
+            lowering.stmt_entries.push(RwStmtLowering { stmt_offset, cg_fn, cg_arg });
         }
         return lowering;
     }
@@ -1014,18 +918,17 @@ fn decode_rw_attr(attr: &[u8], rwf: RwfConstants, codec: &RwSymbolCodec) -> RwEn
                     cg_arg = Some(decode_dw_operand(&attr[index..index + 2], codec));
                 }
             }
-            lowering.stmt_entries.push(RwStmtLowering {
-                stmt_offset,
-                cg_fn,
-                cg_arg,
-            });
+            lowering.stmt_entries.push(RwStmtLowering { stmt_offset, cg_fn, cg_arg });
         }
     }
 
     lowering
 }
 
-fn decode_dw_operand(bytes: &[u8], codec: &RwSymbolCodec) -> String {
+fn decode_dw_operand(
+    bytes: &[u8],
+    codec: &RwSymbolCodec,
+) -> String {
     let value = u16::from_le_bytes([bytes[0], bytes[1]]);
     if let Some(name) = codec.symbol_name(value) {
         return name.to_string();
@@ -1060,10 +963,8 @@ fn parse_rw_bucket_bytes(
             break;
         }
 
-        if let Some(rest) = trimmed
-            .get(..2)
-            .filter(|prefix| prefix.eq_ignore_ascii_case("db"))
-            .and_then(|_| trimmed.get(2..))
+        if let Some(rest) =
+            trimmed.get(..2).filter(|prefix| prefix.eq_ignore_ascii_case("db")).and_then(|_| trimmed.get(2..))
         {
             for item in split_data_items(rest) {
                 bytes.push(parse_mp_operand(item, line_no)? as u8);
@@ -1071,10 +972,8 @@ fn parse_rw_bucket_bytes(
             continue;
         }
 
-        let Some(rest) = trimmed
-            .get(..2)
-            .filter(|prefix| prefix.eq_ignore_ascii_case("dw"))
-            .and_then(|_| trimmed.get(2..))
+        let Some(rest) =
+            trimmed.get(..2).filter(|prefix| prefix.eq_ignore_ascii_case("dw")).and_then(|_| trimmed.get(2..))
         else {
             continue;
         };
@@ -1086,10 +985,7 @@ fn parse_rw_bucket_bytes(
     }
 
     if !in_block {
-        return Err(ParseDataError {
-            line: 0,
-            message: format!("label {label} not found"),
-        });
+        return Err(ParseDataError { line: 0, message: format!("label {label} not found") });
     }
 
     Ok(bytes)
@@ -1102,45 +998,36 @@ fn parse_dw_operand(
 ) -> Result<u16, ParseDataError> {
     let item = item.trim();
     if item.is_empty() {
-        return Err(ParseDataError {
-            line: line_no,
-            message: "empty dw operand".to_string(),
-        });
+        return Err(ParseDataError { line: line_no, message: "empty dw operand".to_string() });
     }
 
     if let Ok(value) = parse_numeric_operand(item, line_no) {
-        return u16::try_from(value).map_err(|_| ParseDataError {
-            line: line_no,
-            message: format!("dw value {value} is out of u16 range"),
-        });
+        return u16::try_from(value)
+            .map_err(|_| ParseDataError { line: line_no, message: format!("dw value {value} is out of u16 range") });
     }
 
     if let Some(value) = parse_iop_symbol(item) {
         return Ok(u16::from(value));
     }
 
-    codec.lookup(item).ok_or_else(|| ParseDataError {
-        line: line_no,
-        message: format!("unknown dw symbol {item}"),
-    })
+    codec.lookup(item).ok_or_else(|| ParseDataError { line: line_no, message: format!("unknown dw symbol {item}") })
 }
 
-fn first_byte_diff(left: &[u8], right: &[u8]) -> usize {
-    left.iter()
-        .zip(right.iter())
-        .position(|(a, b)| a != b)
-        .unwrap_or_else(|| left.len().min(right.len()))
+fn first_byte_diff(
+    left: &[u8],
+    right: &[u8],
+) -> usize {
+    left.iter().zip(right.iter()).position(|(a, b)| a != b).unwrap_or_else(|| left.len().min(right.len()))
 }
 
 fn is_alpha_reserved_word(token: &TokenDef) -> bool {
-    token
-        .spelling
-        .chars()
-        .next()
-        .is_some_and(|ch| ch.is_ascii_alphabetic())
+    token.spelling.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic())
 }
 
-fn rwf_flags_from_token(token: &TokenDef, rwf: RwfConstants) -> u8 {
+fn rwf_flags_from_token(
+    token: &TokenDef,
+    rwf: RwfConstants,
+) -> u8 {
     let mut flags = 0u8;
     for attr in &token.attributes {
         match attr.as_str() {
@@ -1156,10 +1043,7 @@ fn rwf_flags_from_token(token: &TokenDef, rwf: RwfConstants) -> u8 {
 }
 
 fn spelling_to_byte(spelling: &str) -> u8 {
-    let ch = spelling
-        .chars()
-        .next()
-        .expect("token spelling is non-empty");
+    let ch = spelling.chars().next().expect("token spelling is non-empty");
     u8::try_from(u32::from(ch)).expect("QBasic token spellings fit in u8")
 }
 
@@ -1198,18 +1082,16 @@ fn iop_for_reserved_spelling(spelling: &str) -> Option<u8> {
 }
 
 /// Parse `ORW_*` equates from `prsorw.inc` text.
-pub fn parse_orw_equates(
-    text: &str,
-) -> Result<BTreeMap<String, i64>, crate::buildprs_artifacts::ParseEquatesError> {
+pub fn parse_orw_equates(text: &str) -> Result<BTreeMap<String, i64>, crate::buildprs_artifacts::ParseEquatesError> {
     let all = parse_equates(text)?;
-    Ok(all
-        .into_iter()
-        .filter(|(name, _)| name.starts_with("ORW_"))
-        .collect())
+    Ok(all.into_iter().filter(|(name, _)| name.starts_with("ORW_")).collect())
 }
 
 /// Parse a `label byte` table from `prsrwt.asm`, resolving `IOP_*` symbols.
-pub fn parse_mp_byte_table(text: &str, label: &str) -> Result<Vec<u8>, ParseDataError> {
+pub fn parse_mp_byte_table(
+    text: &str,
+    label: &str,
+) -> Result<Vec<u8>, ParseDataError> {
     let values = parse_initializer_values_with_iop(text, label)?;
     values
         .into_iter()
@@ -1217,16 +1099,16 @@ pub fn parse_mp_byte_table(text: &str, label: &str) -> Result<Vec<u8>, ParseData
             if (0..=255).contains(&value) {
                 Ok(value as u8)
             } else {
-                Err(ParseDataError {
-                    line: 0,
-                    message: format!("byte value {value} is out of range"),
-                })
+                Err(ParseDataError { line: 0, message: format!("byte value {value} is out of range") })
             }
         })
         .collect()
 }
 
-fn parse_initializer_values_with_iop(text: &str, label: &str) -> Result<Vec<i64>, ParseDataError> {
+fn parse_initializer_values_with_iop(
+    text: &str,
+    label: &str,
+) -> Result<Vec<i64>, ParseDataError> {
     let mut values = Vec::new();
     let mut in_block = false;
     let mut line_no = 0;
@@ -1249,10 +1131,8 @@ fn parse_initializer_values_with_iop(text: &str, label: &str) -> Result<Vec<i64>
             break;
         }
 
-        let Some(rest) = trimmed
-            .get(..2)
-            .filter(|prefix| prefix.eq_ignore_ascii_case("db"))
-            .and_then(|_| trimmed.get(2..))
+        let Some(rest) =
+            trimmed.get(..2).filter(|prefix| prefix.eq_ignore_ascii_case("db")).and_then(|_| trimmed.get(2..))
         else {
             continue;
         };
@@ -1263,22 +1143,19 @@ fn parse_initializer_values_with_iop(text: &str, label: &str) -> Result<Vec<i64>
     }
 
     if !in_block {
-        return Err(ParseDataError {
-            line: 0,
-            message: format!("label {label} not found"),
-        });
+        return Err(ParseDataError { line: 0, message: format!("label {label} not found") });
     }
 
     Ok(values)
 }
 
-fn parse_mp_operand(item: &str, line_no: usize) -> Result<i64, ParseDataError> {
+fn parse_mp_operand(
+    item: &str,
+    line_no: usize,
+) -> Result<i64, ParseDataError> {
     let item = item.trim();
     if item.is_empty() {
-        return Err(ParseDataError {
-            line: line_no,
-            message: "empty db operand".to_string(),
-        });
+        return Err(ParseDataError { line: line_no, message: "empty db operand".to_string() });
     }
 
     if let Some(value) = parse_iop_symbol(item) {
@@ -1340,25 +1217,22 @@ fn parse_iop_symbol(item: &str) -> Option<u8> {
     }
 }
 
-fn parse_numeric_operand(item: &str, line_no: usize) -> Result<i64, ParseDataError> {
+fn parse_numeric_operand(
+    item: &str,
+    line_no: usize,
+) -> Result<i64, ParseDataError> {
     let lower = item.to_ascii_lowercase();
     if let Some(stem) = lower.strip_suffix('h') {
         let digits = if stem.is_empty() { "0" } else { stem };
-        return i64::from_str_radix(digits, 16).map_err(|_| ParseDataError {
-            line: line_no,
-            message: format!("invalid hex literal {item}"),
-        });
+        return i64::from_str_radix(digits, 16)
+            .map_err(|_| ParseDataError { line: line_no, message: format!("invalid hex literal {item}") });
     }
     if let Some(stem) = lower.strip_suffix('b') {
-        return i64::from_str_radix(stem, 2).map_err(|_| ParseDataError {
-            line: line_no,
-            message: format!("invalid binary literal {item}"),
-        });
+        return i64::from_str_radix(stem, 2)
+            .map_err(|_| ParseDataError { line: line_no, message: format!("invalid binary literal {item}") });
     }
-    item.parse::<i64>().map_err(|_| ParseDataError {
-        line: line_no,
-        message: format!("invalid numeric literal {item}"),
-    })
+    item.parse::<i64>()
+        .map_err(|_| ParseDataError { line: line_no, message: format!("invalid numeric literal {item}") })
 }
 
 fn strip_asm_comment(line: &str) -> &str {
@@ -1436,7 +1310,10 @@ fn split_data_items(rest: &str) -> Vec<&str> {
     items
 }
 
-fn label_declares(line: &str, label: &str) -> bool {
+fn label_declares(
+    line: &str,
+    label: &str,
+) -> bool {
     let mut parts = line.split_whitespace();
     let Some(name) = parts.next() else {
         return false;
@@ -1486,8 +1363,7 @@ mod tests {
     }
 
     fn qbasic_11_tokens() -> Vec<TokenDef> {
-        parse_token_decls_file(Path::new(GRAMMAR_PATH))
-            .expect("vendored qbasbnf.prs tokens should parse")
+        parse_token_decls_file(Path::new(GRAMMAR_PATH)).expect("vendored qbasbnf.prs tokens should parse")
     }
 
     #[test]
@@ -1500,16 +1376,8 @@ mod tests {
     #[test]
     fn irw_name_keeps_environ_pair_in_plain_first_order() {
         let tokens = vec![
-            TokenDef {
-                name: "tkENVIRON".to_string(),
-                spelling: "ENVIRON".to_string(),
-                attributes: Vec::new(),
-            },
-            TokenDef {
-                name: "tkENVIRON_".to_string(),
-                spelling: "ENVIRON$".to_string(),
-                attributes: Vec::new(),
-            },
+            TokenDef { name: "tkENVIRON".to_string(), spelling: "ENVIRON".to_string(), attributes: Vec::new() },
+            TokenDef { name: "tkENVIRON_".to_string(), spelling: "ENVIRON$".to_string(), attributes: Vec::new() },
         ];
 
         assert_eq!(irw_name_for_token(&tokens[0], &tokens), "IRW_ENVIRON");
@@ -1519,16 +1387,8 @@ mod tests {
     #[test]
     fn irw_name_uses_plain_and_dollar_suffix_symbols() {
         let tokens = vec![
-            TokenDef {
-                name: "tkSTRING_".to_string(),
-                spelling: "STRING$".to_string(),
-                attributes: Vec::new(),
-            },
-            TokenDef {
-                name: "tkSTRING".to_string(),
-                spelling: "STRING".to_string(),
-                attributes: Vec::new(),
-            },
+            TokenDef { name: "tkSTRING_".to_string(), spelling: "STRING$".to_string(), attributes: Vec::new() },
+            TokenDef { name: "tkSTRING".to_string(), spelling: "STRING".to_string(), attributes: Vec::new() },
         ];
 
         assert_eq!(irw_name_for_token(&tokens[0], &tokens), "IRW_STRING_");
@@ -1614,8 +1474,7 @@ mod tests {
         let artifacts = generate_token_artifacts(&tokens);
         let prstab = read_fixture("prstab.inc");
 
-        compare_prstab_constants(&artifacts, &prstab)
-            .expect("RWF constants should match golden fixture");
+        compare_prstab_constants(&artifacts, &prstab).expect("RWF constants should match golden fixture");
     }
 
     #[test]
@@ -1642,10 +1501,7 @@ mod tests {
         compare_orw_inventory(&artifacts, &prsorw).expect("ORW inventory should match fixture");
         assert_eq!(artifacts.orw_names.len(), 221);
         assert_eq!(artifacts.orw_names[0], "ORW_ABS");
-        assert_eq!(
-            artifacts.orw_names.last().map(String::as_str),
-            Some("ORW_XOR")
-        );
+        assert_eq!(artifacts.orw_names.last().map(String::as_str), Some("ORW_XOR"));
     }
 
     #[test]
@@ -1683,11 +1539,7 @@ mod tests {
 "#;
         let tokens = parse_token_decls(source).expect("inline tokens");
         let artifacts = generate_token_artifacts(&tokens);
-        let tables = generate_reserved_word_tables(
-            &artifacts,
-            &RwLoweringInput::default(),
-            &RwSymbolCodec::new(),
-        );
+        let tables = generate_reserved_word_tables(&artifacts, &RwLoweringInput::default(), &RwSymbolCodec::new());
 
         let bucket = &tables.buckets[0];
         assert_eq!(bucket.letter, 'A');
@@ -1707,11 +1559,7 @@ mod tests {
 "#;
         let tokens = parse_token_decls(source).expect("inline tokens");
         let artifacts = generate_token_artifacts(&tokens);
-        let tables = generate_reserved_word_tables(
-            &artifacts,
-            &RwLoweringInput::default(),
-            &RwSymbolCodec::new(),
-        );
+        let tables = generate_reserved_word_tables(&artifacts, &RwLoweringInput::default(), &RwSymbolCodec::new());
 
         let bucket = &tables.buckets[0];
         assert_eq!(bucket.bytes[2], 0x51);
@@ -1725,8 +1573,8 @@ mod tests {
         let tokens = qbasic_11_tokens();
         let artifacts = generate_token_artifacts(&tokens);
         let prsrwt = read_fixture("prsrwt.asm");
-        let (lowering, codec) = extract_rw_lowering_from_golden(&prsrwt, &artifacts)
-            .expect("golden lowering should parse");
+        let (lowering, codec) =
+            extract_rw_lowering_from_golden(&prsrwt, &artifacts).expect("golden lowering should parse");
 
         assert!(lowering.entries.contains_key("ORW_PRINT"));
         assert!(lowering.entries["ORW_BLOAD"].stmt_entries[0]
@@ -1735,8 +1583,7 @@ mod tests {
             .is_some_and(|name| name == "Cg1or2Args"));
 
         let regenerated = generate_reserved_word_tables(&artifacts, &lowering, &codec);
-        compare_rw_bucket_bytes(&regenerated, &prsrwt, &codec)
-            .expect("regenerated buckets should match golden bytes");
+        compare_rw_bucket_bytes(&regenerated, &prsrwt, &codec).expect("regenerated buckets should match golden bytes");
     }
 
     #[test]
@@ -1745,8 +1592,8 @@ mod tests {
         let artifacts = generate_token_artifacts(&tokens);
         let prsrwt = read_fixture("prsrwt.asm");
         let prsorw = read_fixture("prsorw.inc");
-        let (lowering, codec) = extract_rw_lowering_from_golden(&prsrwt, &artifacts)
-            .expect("golden lowering should parse");
+        let (lowering, codec) =
+            extract_rw_lowering_from_golden(&prsrwt, &artifacts).expect("golden lowering should parse");
         let tables = generate_reserved_word_tables(&artifacts, &lowering, &codec);
 
         compare_orw_offsets(&tables, &prsorw).expect("ORW offsets should match golden fixture");
@@ -1760,8 +1607,8 @@ mod tests {
         let tokens = qbasic_11_tokens();
         let artifacts = generate_token_artifacts(&tokens);
         let prsrwt = read_fixture("prsrwt.asm");
-        let (lowering, codec) = extract_rw_lowering_from_golden(&prsrwt, &artifacts)
-            .expect("golden lowering should parse");
+        let (lowering, codec) =
+            extract_rw_lowering_from_golden(&prsrwt, &artifacts).expect("golden lowering should parse");
         let tables = generate_reserved_word_tables(&artifacts, &lowering, &codec);
 
         validate_rw_tables_against_golden(&tables, &read_fixture("prsorw.inc"), &prsrwt, &codec)

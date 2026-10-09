@@ -11,16 +11,16 @@ fn test_a_constant_offset_rebased_onto_the_counter_stays_defined() {
 
     let directory = tempfile::TempDir::new().unwrap();
     let basic = directory.path().join("MOD.BAS");
-    let lines = [
-        "DIM SHARED m%(-168 TO 168)",
-        "FOR i% = -168 TO 168",
-        "m%(i%) = ((i% + 512) MOD 256) \\ 2",
-        "NEXT i%",
-    ];
+    let lines = ["DIM SHARED m%(-168 TO 168)", "FOR i% = -168 TO 168", "m%(i%) = ((i% + 512) MOD 256) \\ 2", "NEXT i%"];
     std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
-    let program =
-        qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).unwrap();
-    qb_compile::object_bytes(&program, Path::new("MOD.BAS"), None, &llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())).unwrap();
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).unwrap();
+    qb_compile::object_bytes(
+        &program,
+        Path::new("MOD.BAS"),
+        None,
+        &llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone()),
+    )
+    .unwrap();
 }
 
 mod decided_tests {
@@ -69,9 +69,7 @@ mod decided_tests {
             "END SUB",
         ];
         std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
-        let program =
-            qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None)
-                .unwrap();
+        let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).unwrap();
         // The pipeline verifies its result: every value read is defined.
         let optimized = crate::test_hir::optimized_mir(&program);
         assert!(optimized.contains("define cc1000 void @T("), "{optimized}");
@@ -87,7 +85,12 @@ fn test_a_reference_parameter_is_dereferenceable() {
 
     let directory = tempfile::TempDir::new().unwrap();
     let basic = directory.path().join("REF.BAS");
-    let lines = ["DECLARE SUB s (a() AS INTEGER, x AS LONG, BYVAL y AS INTEGER)", "SUB s (a() AS INTEGER, x AS LONG, BYVAL y AS INTEGER)", "x = a(y)", "END SUB"];
+    let lines = [
+        "DECLARE SUB s (a() AS INTEGER, x AS LONG, BYVAL y AS INTEGER)",
+        "SUB s (a() AS INTEGER, x AS LONG, BYVAL y AS INTEGER)",
+        "x = a(y)",
+        "END SUB",
+    ];
     std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).unwrap();
     let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout());
@@ -111,10 +114,28 @@ fn mir_of(lines: &[&str]) -> String {
 /// default route hoisted the load and the loop spun on a register for ever.
 #[test]
 fn test_a_volatile_variable_a_loop_polls_is_read_each_trip() {
-    let byref = mir_of(&["DECLARE SUB WaitFor (x AS INTEGER)", "DIM k AS INTEGER", "WaitFor k", "SUB WaitFor (x AS VOLATILE INTEGER)", "DO WHILE x = 0", "LOOP", "END SUB"]);
-    let shared = mir_of(&["DIM SHARED k AS VOLATILE INTEGER", "SUB WaitShared", "DO WHILE k = 0", "LOOP", "END SUB", "WaitShared"]);
-    let local = mir_of(&["SUB WaitLocal", "DIM f AS VOLATILE INTEGER", "DO WHILE f = 0", "LOOP", "END SUB", "WaitLocal"]);
-    for (name, text, routine) in [("BYREF", byref, "@WAITFOR("), ("SHARED", shared, "@WAITSHARED("), ("local", local, "@WAITLOCAL(")] {
+    let byref = mir_of(&[
+        "DECLARE SUB WaitFor (x AS INTEGER)",
+        "DIM k AS INTEGER",
+        "WaitFor k",
+        "SUB WaitFor (x AS VOLATILE INTEGER)",
+        "DO WHILE x = 0",
+        "LOOP",
+        "END SUB",
+    ]);
+    let shared = mir_of(&[
+        "DIM SHARED k AS VOLATILE INTEGER",
+        "SUB WaitShared",
+        "DO WHILE k = 0",
+        "LOOP",
+        "END SUB",
+        "WaitShared",
+    ]);
+    let local =
+        mir_of(&["SUB WaitLocal", "DIM f AS VOLATILE INTEGER", "DO WHILE f = 0", "LOOP", "END SUB", "WaitLocal"]);
+    for (name, text, routine) in
+        [("BYREF", byref, "@WAITFOR("), ("SHARED", shared, "@WAITSHARED("), ("local", local, "@WAITLOCAL(")]
+    {
         let at = text.find(routine).unwrap_or_else(|| panic!("{name}: no {routine}\n{text}"));
         assert!(text[at..].contains("load volatile i16"), "{name}\n{text}");
     }
@@ -124,7 +145,15 @@ fn test_a_volatile_variable_a_loop_polls_is_read_each_trip() {
 /// variable, and the same loop on it has an ordinary load.
 #[test]
 fn test_an_unannotated_byref_is_not_assumed_volatile() {
-    let text = mir_of(&["DECLARE SUB Sum (x AS INTEGER)", "DIM k AS INTEGER", "Sum k", "SUB Sum (x AS INTEGER)", "DO WHILE x = 0", "LOOP", "END SUB"]);
+    let text = mir_of(&[
+        "DECLARE SUB Sum (x AS INTEGER)",
+        "DIM k AS INTEGER",
+        "Sum k",
+        "SUB Sum (x AS INTEGER)",
+        "DO WHILE x = 0",
+        "LOOP",
+        "END SUB",
+    ]);
     let at = text.find("@SUM(").expect("the SUB");
     assert!(!text[at..].contains("volatile"), "{text}");
 }
@@ -135,7 +164,18 @@ fn test_an_unannotated_byref_is_not_assumed_volatile() {
 #[test]
 fn test_a_field_of_a_byref_record_follows_the_records_declaration() {
     let sub = |declared: &str| {
-        mir_of(&["TYPE V", "x AS INTEGER", "END TYPE", "DECLARE SUB S (v AS V)", "DIM r AS V", "S r", &format!("SUB S (v {declared} V)"), "DO WHILE v.x = 0", "LOOP", "END SUB"])
+        mir_of(&[
+            "TYPE V",
+            "x AS INTEGER",
+            "END TYPE",
+            "DECLARE SUB S (v AS V)",
+            "DIM r AS V",
+            "S r",
+            &format!("SUB S (v {declared} V)"),
+            "DO WHILE v.x = 0",
+            "LOOP",
+            "END SUB",
+        ])
     };
     let plain = sub("AS");
     let volatile = sub("AS VOLATILE");

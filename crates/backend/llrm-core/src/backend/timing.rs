@@ -13,7 +13,10 @@ pub struct Clocks {
 }
 
 /// The price a CPU states for `key`, or none where its description has none.
-fn stated(profile: &targets::Profile, key: &str) -> Option<i64> {
+fn stated(
+    profile: &targets::Profile,
+    key: &str,
+) -> Option<i64> {
     profile.cost(key).ok()
 }
 
@@ -42,13 +45,23 @@ pub fn signed_multiply<'a>(
 /// (the 486's `10 + max(bits, 3)`, Intel 240440-002 Table 10.1 note 3). A CPU whose two bounds are one has no such
 /// dependence. An unknown multiplier is priced at the middle of the range: the estimate with no information on which
 /// bit length it has, an assumption and not a fact about any program.
-pub fn multiply_clocks<'a>(cpu: impl Into<ProfileOrName<'a>>, width: i64, bits: Option<i64>) -> Result<Option<i64>, String> {
+pub fn multiply_clocks<'a>(
+    cpu: impl Into<ProfileOrName<'a>>,
+    width: i64,
+    bits: Option<i64>,
+) -> Result<Option<i64>, String> {
     multiply_clocks_of(cpu, width, bits, false)
 }
 
-/// `multiply_clocks`, for a multiplier of either sign: where the CPU's description gives a negative one a higher floor of bits
-/// (`smul_negative_bits`: the 486's `n = 5` against `3`), a negative multiplier of fewer bits costs as one of that many.
-pub fn multiply_clocks_of<'a>(cpu: impl Into<ProfileOrName<'a>>, width: i64, bits: Option<i64>, negative: bool) -> Result<Option<i64>, String> {
+/// `multiply_clocks`, for a multiplier of either sign: where the CPU's description gives a negative one a higher floor
+/// of bits (`smul_negative_bits`: the 486's `n = 5` against `3`), a negative multiplier of fewer bits costs as one of
+/// that many.
+pub fn multiply_clocks_of<'a>(
+    cpu: impl Into<ProfileOrName<'a>>,
+    width: i64,
+    bits: Option<i64>,
+    negative: bool,
+) -> Result<Option<i64>, String> {
     let profile = targets::profile(cpu)?;
     let Some(Clocks { minimum, maximum }) = signed_multiply(profile, width, false)? else { return Ok(None) };
     let Some(bits) = bits else { return Ok(Some((minimum + maximum + 1) / 2)) };
@@ -69,7 +82,10 @@ pub fn signed_divide<'a>(
 }
 
 /// The unsigned divide's clocks, where the CPU's description has them.
-pub fn unsigned_divide<'a>(cpu: impl Into<ProfileOrName<'a>>, width: i64) -> Result<Option<Clocks>, String> {
+pub fn unsigned_divide<'a>(
+    cpu: impl Into<ProfileOrName<'a>>,
+    width: i64,
+) -> Result<Option<Clocks>, String> {
     if ![2, 4].contains(&width) {
         return Ok(None);
     }
@@ -93,13 +109,7 @@ mod tests {
             ("P5", 2, 11, 11),
             ("P5", 4, 10, 10),
         ] {
-            assert_eq!(
-                signed_multiply(cpu, width, true),
-                Ok(Some(Clocks {
-                    minimum: low,
-                    maximum: high
-                }))
-            );
+            assert_eq!(signed_multiply(cpu, width, true), Ok(Some(Clocks { minimum: low, maximum: high })));
         }
     }
 
@@ -108,15 +118,9 @@ mod tests {
     fn test_486_reciprocal_does_not_win_using_midpoint_multiply() {
         let mut count = 4..;
         let mut fresh = || count.next().unwrap();
-        let results = [
-            ir::Held { value: 2, width: 4 },
-            ir::Held { value: 3, width: 4 },
-        ];
+        let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
         let held = ir::Held { value: 1, width: 4 };
-        assert_eq!(
-            division::reciprocal(held, 7, &results, &mut fresh, "486", true, None),
-            Ok(None)
-        );
+        assert_eq!(division::reciprocal(held, 7, &results, &mut fresh, "486", true, None), Ok(None));
     }
 
     #[test]
@@ -128,10 +132,7 @@ mod tests {
     /// A quotient-only divide should not multiply back and subtract for a dead remainder.
     #[test]
     fn test_quotient_only_reciprocal_omits_remainder_reconstruction() {
-        let (quotient, remainder) = (
-            ir::Held { value: 2, width: 4 },
-            ir::Held { value: 3, width: 4 },
-        );
+        let (quotient, remainder) = (ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 });
         let mut count = 4..;
         let mut fresh = || count.next().unwrap();
         let held = ir::Held { value: 1, width: 4 };
@@ -139,11 +140,7 @@ mod tests {
             .unwrap()
             .expect("a reciprocal");
         assert_eq!(parts[parts.len() - 1].dests, [ir::Loc::Held(quotient)]);
-        assert!(
-            !parts
-                .iter()
-                .any(|one| one.dests.contains(&ir::Loc::Held(remainder)))
-        );
+        assert!(!parts.iter().any(|one| one.dests.contains(&ir::Loc::Held(remainder))));
         assert!(!parts.iter().any(|one| one.name.as_deref() == Some("sub")));
     }
 }

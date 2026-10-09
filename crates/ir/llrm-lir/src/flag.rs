@@ -20,20 +20,17 @@ impl Flag {
     pub const OF: Flag = Flag(RflagsBits::OF);
 
     /// Members in definition order, which is the order `repr` names them in.
-    const MEMBERS: [(&'static str, Flag); 6] = [
-        ("CF", Flag::CF),
-        ("PF", Flag::PF),
-        ("AF", Flag::AF),
-        ("ZF", Flag::ZF),
-        ("SF", Flag::SF),
-        ("OF", Flag::OF),
-    ];
+    const MEMBERS: [(&'static str, Flag); 6] =
+        [("CF", Flag::CF), ("PF", Flag::PF), ("AF", Flag::AF), ("ZF", Flag::ZF), ("SF", Flag::SF), ("OF", Flag::OF)];
 
     pub const fn bits(self) -> u32 {
         self.0
     }
 
-    pub const fn union(self, other: Flag) -> Flag {
+    pub const fn union(
+        self,
+        other: Flag,
+    ) -> Flag {
         Flag(self.0 | other.0)
     }
 
@@ -46,20 +43,29 @@ pub const ALL: Flag = Flag(Flag::CF.0 | Flag::PF.0 | Flag::AF.0 | Flag::ZF.0 | F
 
 impl BitOr for Flag {
     type Output = Flag;
-    fn bitor(self, other: Flag) -> Flag {
+    fn bitor(
+        self,
+        other: Flag,
+    ) -> Flag {
         Flag(self.0 | other.0)
     }
 }
 
 impl BitOrAssign for Flag {
-    fn bitor_assign(&mut self, other: Flag) {
+    fn bitor_assign(
+        &mut self,
+        other: Flag,
+    ) {
         self.0 |= other.0;
     }
 }
 
 impl BitAnd for Flag {
     type Output = Flag;
-    fn bitand(self, other: Flag) -> Flag {
+    fn bitand(
+        self,
+        other: Flag,
+    ) -> Flag {
         Flag(self.0 & other.0)
     }
 }
@@ -74,7 +80,10 @@ impl Not for Flag {
 
 /// `str(flag)`: an `IntFlag` prints as its integer.
 impl fmt::Display for Flag {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         write!(formatter, "{}", self.0)
     }
 }

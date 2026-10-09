@@ -88,7 +88,8 @@ b6:
 /// Not SSA in either MIR: `%carried` does not reach the use from `%b0`.
 #[test]
 fn test_direct_use_after_a_bypass_is_not_fabricated() {
-    let text = MULTIPLE_EXITS.replace("b0:\n  br label %b1", "b0:\n  %c = icmp eq i16 %n, 0\n  br i1 %c, label %b1, label %b5");
+    let text = MULTIPLE_EXITS
+        .replace("b0:\n  br label %b1", "b0:\n  %c = icmp eq i16 %n, 0\n  br i1 %c, label %b1, label %b5");
     let mut module = parsed(&text);
     let before = llrm_mir::print::module(&module);
     assert!(!closed(f(&mut module)).unwrap());
@@ -102,7 +103,9 @@ fn test_following_cycle_keeps_complete_phi_edges() {
         "  %answer = add i16 %carried, 7\n  ret i16 %answer",
         "  %answer = add i16 %carried, 7\n  %again = icmp ult i16 %answer, %m\n  br i1 %again, label %b5, label %b6\n\nb6:\n  ret i16 %answer",
     );
-    assert!(closed_once(&text).contains("  %carried.lcssa2 = phi i16 [ %carried.lcssa, %b3 ], [ %carried.lcssa1, %b4 ], [ %carried.lcssa2, %b5 ]\n"));
+    assert!(closed_once(&text).contains(
+        "  %carried.lcssa2 = phi i16 [ %carried.lcssa, %b3 ], [ %carried.lcssa1, %b4 ], [ %carried.lcssa2, %b5 ]\n"
+    ));
 }
 
 /// Leaving by either exit, the function returns what it did.
@@ -122,10 +125,7 @@ fn test_an_exit_shared_with_the_loop_entry_is_left_alone() {
     let text = MULTIPLE_EXITS
         .replace("define i16 @f(i16 %seed, i16 %n, i16 %m)", "define i16 @f(i16 %seed, i16 %n, i16 %m, i1 %c)")
         .replace("b0:\n  br label %b1", "b0:\n  br i1 %c, label %b1, label %b4")
-        .replace(
-            "b5:\n  %answer = add i16 %carried, 7",
-            "b5:\n  %answer = phi i16 [ %carried, %b3 ], [ %seed, %b4 ]",
-        );
+        .replace("b5:\n  %answer = add i16 %carried, 7", "b5:\n  %answer = phi i16 [ %carried, %b3 ], [ %seed, %b4 ]");
     let mut module = parsed(&text);
     let before = printed(&module);
     assert!(!closed(f(&mut module)).unwrap());

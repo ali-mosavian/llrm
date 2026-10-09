@@ -7,7 +7,10 @@ use super::TailRecursion;
 use crate::testing::{managed, parsed, results};
 
 /// `text` through the pass: its printed form, run as before on `inputs`.
-fn eliminated(text: &str, inputs: &[&[i128]]) -> String {
+fn eliminated(
+    text: &str,
+    inputs: &[&[i128]],
+) -> String {
     let before = parsed(&format!("{DOS}{text}"));
     let mut module = before.clone();
     let after = managed(&mut module, TailRecursion);
@@ -164,7 +167,10 @@ fn what_cannot_be_a_loop_keeps_its_call() {
     assert_eq!(calls(&eliminated(&subtracted, &[&[0], &[3]])), 1);
     let twice = SUM.replace("ret i16 %s", "%t = add i16 %s, %v\n  ret i16 %t");
     assert_eq!(calls(&eliminated(&twice, &[&[0], &[3]])), 1);
-    let stored = format!("@g = global i16 0\n\n{}", SUM.replace("%s = add i16 %n, %v", "store i16 %n, ptr @g\n  %s = add i16 %n, %v"));
+    let stored = format!(
+        "@g = global i16 0\n\n{}",
+        SUM.replace("%s = add i16 %n, %v", "store i16 %n, ptr @g\n  %s = add i16 %n, %v")
+    );
     assert_eq!(calls(&eliminated(&stored, &[&[0], &[3]])), 1);
 }
 
@@ -298,7 +304,7 @@ b4:
 /// the loop keeps the values in the registers kept across it, with one to spare, or the recursion stays.
 #[test]
 fn a_loop_whose_carried_values_outnumber_the_registers_kept_across_a_call_stays_a_recursion() {
-    use crate::testing::{managed_on, Tuned};
+    use crate::testing::{Tuned, managed_on};
     let text = "define i16 @f(i16 %n, i16 %a, i16 %b, i16 %c) {
 b0:
   %z = icmp eq i16 %n, 0

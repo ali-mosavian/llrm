@@ -1,5 +1,5 @@
 use crate::valuetracking::{alignment, sign_bits};
-use crate::{parse, GlobalKind};
+use crate::{GlobalKind, parse};
 
 /// The sign bits of what `@f` returns.
 fn returned(body: &str) -> u32 {
@@ -17,7 +17,10 @@ fn test_sign_bits_follow_extension_shifts_and_products() {
     assert_eq!(returned("  %x = zext i32 %a to i64\n  ret i64 %x"), 32);
     assert_eq!(returned("  %x = sext i32 %a to i64\n  %y = shl i64 %x, 16\n  ret i64 %y"), 17);
     assert_eq!(returned("  %x = sext i32 %a to i64\n  %y = ashr i64 %x, 4\n  ret i64 %y"), 37);
-    assert_eq!(returned("  %x = sext i32 %a to i64\n  %y = sext i32 %b to i64\n  %z = mul i64 %x, %y\n  ret i64 %z"), 1);
+    assert_eq!(
+        returned("  %x = sext i32 %a to i64\n  %y = sext i32 %b to i64\n  %z = mul i64 %x, %y\n  ret i64 %z"),
+        1
+    );
     assert_eq!(returned("  %x = ashr i64 %w, 48\n  %y = ashr i64 %w, 40\n  %z = mul i64 %x, %y\n  ret i64 %z"), 25);
     assert_eq!(returned("  ret i64 -1"), 64);
     assert_eq!(returned("  ret i64 65535"), 48);
@@ -39,9 +42,19 @@ fn aligned(body: &str) -> u64 {
 #[test]
 fn test_alignment_is_the_object_s_less_what_each_index_may_add() {
     assert_eq!(aligned("  %p = getelementptr inbounds i16, ptr @w, i16 %i\n  ret ptr %p"), 2);
-    assert_eq!(aligned("  %d = mul i16 %i, 2\n  %p = getelementptr i8, ptr @w, i16 %d\n  %q = getelementptr i8, ptr %p, i16 1280\n  ret ptr %q"), 2);
+    assert_eq!(
+        aligned(
+            "  %d = mul i16 %i, 2\n  %p = getelementptr i8, ptr @w, i16 %d\n  %q = getelementptr i8, ptr %p, i16 1280\n  ret ptr %q"
+        ),
+        2
+    );
     assert_eq!(aligned("  %p = getelementptr i8, ptr @w, i16 %i\n  ret ptr %p"), 1);
-    assert_eq!(aligned("  %p = getelementptr inbounds i16, ptr @w, i16 %i\n  %q = getelementptr i8, ptr %p, i16 1\n  ret ptr %q"), 1);
+    assert_eq!(
+        aligned(
+            "  %p = getelementptr inbounds i16, ptr @w, i16 %i\n  %q = getelementptr i8, ptr %p, i16 1\n  ret ptr %q"
+        ),
+        1
+    );
     assert_eq!(aligned("  %p = getelementptr inbounds i32, ptr @b, i16 %i\n  ret ptr %p"), 1);
 }
 
@@ -57,7 +70,10 @@ fn zeros(body: &str) -> u128 {
 fn test_known_zero_bits_follow_masks_extensions_and_shifts() {
     let high = |low: u32| u128::from(u64::MAX) & !((1_u128 << low) - 1);
     assert_eq!(zeros("  %m = and i32 %a, 255\n  %x = zext i32 %m to i64\n  ret i64 %x"), high(8));
-    assert_eq!(zeros("  %m = and i64 %w, 255\n  %t = trunc i64 %m to i8\n  %x = zext i8 %t to i64\n  ret i64 %x"), high(8));
+    assert_eq!(
+        zeros("  %m = and i64 %w, 255\n  %t = trunc i64 %m to i8\n  %x = zext i8 %t to i64\n  ret i64 %x"),
+        high(8)
+    );
     assert_eq!(zeros("  %m = and i64 %w, 255\n  %x = lshr i64 %m, 4\n  ret i64 %x"), high(4));
     assert_eq!(zeros("  %x = shl i64 %w, 3\n  ret i64 %x"), 7);
     assert_eq!(zeros("  %m = and i64 %w, 15\n  %n = and i64 %w, 3\n  %x = or i64 %m, %n\n  ret i64 %x"), high(4));

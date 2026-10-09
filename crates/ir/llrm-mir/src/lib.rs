@@ -6,17 +6,16 @@ pub mod alias;
 pub mod build;
 pub mod callgraph;
 pub mod context;
-pub mod dense;
-pub mod hash;
 pub mod datalayout;
 pub mod debuginfo;
+pub mod dense;
 pub mod dominators;
 pub mod edit;
 pub mod facts;
-pub mod splice;
-mod facts_rewrite;
 #[cfg(test)]
 mod facts_coverage;
+mod facts_rewrite;
+pub mod hash;
 pub mod interpret;
 pub mod intrinsics;
 pub mod lexer;
@@ -31,20 +30,22 @@ pub mod print;
 pub mod program;
 pub mod scalarevolution;
 pub mod spaces;
+pub mod splice;
 pub mod target;
 pub mod tbaa;
 pub mod types;
 pub mod valuetracking;
 pub mod verify;
 
-pub use edit::Position;
 pub use context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
+pub use edit::Position;
 pub use lexer::ParseError;
-pub use module::{DebugRecord, DebugWhat, 
-    Block, BlockId, Change, Function, GlobalKind, GlobalValue, GlobalVariable, InstId, Instruction, Linkage, MetadataId, MetadataNode, MetadataOperand,
-    Module, Operand, UnnamedAddr, Use, ValueData, ValueDef, ValueId,
+pub use module::{
+    Block, BlockId, Change, DebugRecord, DebugWhat, Function, GlobalKind, GlobalValue, GlobalVariable, InstId,
+    Instruction, Linkage, MetadataId, MetadataNode, MetadataOperand, Module, Operand, UnnamedAddr, Use, ValueData,
+    ValueDef, ValueId,
 };
-pub use opcode::{Attribute, BinaryOp, CallInfo, CastOp, Clause, FloatPredicate, Flags, IntPredicate, Opcode, Tail};
+pub use opcode::{Attribute, BinaryOp, CallInfo, CastOp, Clause, Flags, FloatPredicate, IntPredicate, Opcode, Tail};
 pub use types::{FloatKind, Type, TypeId, Types};
 
 #[cfg(test)]
@@ -58,8 +59,8 @@ mod lint_tests;
 #[cfg(test)]
 mod pass_tests;
 #[cfg(test)]
+mod program_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod valuetracking_tests;
-#[cfg(test)]
-mod program_tests;

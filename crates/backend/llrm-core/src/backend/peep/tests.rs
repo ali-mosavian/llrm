@@ -10,7 +10,12 @@ use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
 use crate::model::lir::Insn;
 use crate::support::hash::IndexMap;
 
-fn what(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {
+fn what(
+    op: Operation,
+    name: &str,
+    dests: Vec<Loc>,
+    sources: Vec<Loc>,
+) -> Semantics {
     Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
 }
 
@@ -20,17 +25,41 @@ fn argument() -> Mem {
 
 /// `mov v,[bp+6]`, `between`, `push v`; what memory_arguments makes of it
 /// when the caller counted v read `reads` times.
-fn folded(between: Semantics, reads: i64) -> Vec<Arc<Insn>> {
+fn folded(
+    between: Semantics,
+    reads: i64,
+) -> Vec<Arc<Insn>> {
     let value = Held { value: 1, width: 2 };
-    let load = Insn::new(0, Some((0, 0)), Some(what(Operation::Move, "mov", vec![Loc::Held(value)], vec![Loc::Mem(argument())])), vec![1], vec![]);
+    let load = Insn::new(
+        0,
+        Some((0, 0)),
+        Some(what(Operation::Move, "mov", vec![Loc::Held(value)], vec![Loc::Mem(argument())])),
+        vec![1],
+        vec![],
+    );
     let crossed = Insn::new(1, Some((1, 1)), Some(between), vec![2], vec![]);
-    let push = Insn::new(2, Some((2, 2)), Some(what(Operation::Push, "push", vec![], vec![Loc::Held(value)])), vec![], vec![1]);
+    let push = Insn::new(
+        2,
+        Some((2, 2)),
+        Some(what(Operation::Push, "push", vec![], vec![Loc::Held(value)])),
+        vec![],
+        vec![1],
+    );
     let counts: IndexMap<u32, i64> = IndexMap::from_iter([(1, reads)]);
-    super::rewritten_insns(super::targets::x86_m16::RULES.memory_arguments, &[Arc::new(load), Arc::new(crossed), Arc::new(push)], &Facts::counted(&counts, 16))
+    super::rewritten_insns(
+        super::targets::x86_m16::RULES.memory_arguments,
+        &[Arc::new(load), Arc::new(crossed), Arc::new(push)],
+        &Facts::counted(&counts, 16),
+    )
 }
 
 fn pushes(insns: &[Arc<Insn>]) -> Vec<Loc> {
-    insns.iter().filter_map(|one| one.what.as_ref()).filter(|what| what.op == Operation::Push).map(|what| what.sources[0].clone()).collect()
+    insns
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .filter(|what| what.op == Operation::Push)
+        .map(|what| what.sources[0].clone())
+        .collect()
 }
 
 /// A rule matching a one-instruction window panicked in the window walk
@@ -48,7 +77,10 @@ fn a_load_read_once_is_pushed_from_its_cell_across_unrelated_work() {
 /// the push reading the loaded value.
 #[test]
 fn a_store_between_the_load_and_its_push_keeps_the_load() {
-    let out = folded(what(Operation::Move, "mov", vec![Loc::Mem(argument())], vec![Loc::Held(Held { value: 2, width: 2 })]), 1);
+    let out = folded(
+        what(Operation::Move, "mov", vec![Loc::Mem(argument())], vec![Loc::Held(Held { value: 2, width: 2 })]),
+        1,
+    );
     assert_eq!(pushes(&out), [Loc::Held(Held { value: 1, width: 2 })]);
 }
 
@@ -67,10 +99,28 @@ fn a_load_read_twice_is_not_pushed_from_its_cell() {
 #[should_panic(expected = "held value 1 is defined 2 times")]
 fn a_folded_value_defined_twice_is_refused() {
     let value = Held { value: 1, width: 2 };
-    let load = |at| Arc::new(Insn::new(at, Some((at, at)), Some(what(Operation::Move, "mov", vec![Loc::Held(value)], vec![Loc::Mem(argument())])), vec![1], vec![]));
-    let push = Arc::new(Insn::new(1, Some((1, 1)), Some(what(Operation::Push, "push", vec![], vec![Loc::Held(value)])), vec![], vec![1]));
+    let load = |at| {
+        Arc::new(Insn::new(
+            at,
+            Some((at, at)),
+            Some(what(Operation::Move, "mov", vec![Loc::Held(value)], vec![Loc::Mem(argument())])),
+            vec![1],
+            vec![],
+        ))
+    };
+    let push = Arc::new(Insn::new(
+        1,
+        Some((1, 1)),
+        Some(what(Operation::Push, "push", vec![], vec![Loc::Held(value)])),
+        vec![],
+        vec![1],
+    ));
     let counts: IndexMap<u32, i64> = IndexMap::from_iter([(1, 1)]);
-    super::rewritten_insns(super::targets::x86_m16::RULES.memory_arguments, &[load(0), push, load(2)], &Facts::counted(&counts, 16));
+    super::rewritten_insns(
+        super::targets::x86_m16::RULES.memory_arguments,
+        &[load(0), push, load(2)],
+        &Facts::counted(&counts, 16),
+    );
 }
 
 /// A target with no `peephole.peep` has no rules, not m16's: its code is
@@ -78,8 +128,20 @@ fn a_folded_value_defined_twice_is_refused() {
 #[test]
 fn a_target_without_rules_leaves_the_code_alone() {
     let value = Held { value: 1, width: 2 };
-    let load = Arc::new(Insn::new(0, Some((0, 0)), Some(what(Operation::Move, "mov", vec![Loc::Held(value)], vec![Loc::Mem(argument())])), vec![1], vec![]));
-    let push = Arc::new(Insn::new(1, Some((1, 1)), Some(what(Operation::Push, "push", vec![], vec![Loc::Held(value)])), vec![], vec![1]));
+    let load = Arc::new(Insn::new(
+        0,
+        Some((0, 0)),
+        Some(what(Operation::Move, "mov", vec![Loc::Held(value)], vec![Loc::Mem(argument())])),
+        vec![1],
+        vec![],
+    ));
+    let push = Arc::new(Insn::new(
+        1,
+        Some((1, 1)),
+        Some(what(Operation::Push, "push", vec![], vec![Loc::Held(value)])),
+        vec![],
+        vec![1],
+    ));
     let counts: IndexMap<u32, i64> = IndexMap::from_iter([(1, 1)]);
     let facts = Facts::counted(&counts, 16);
     let insns = [load, push];

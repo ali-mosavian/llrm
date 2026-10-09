@@ -8,14 +8,13 @@
 //! and a routine that runs no program code writes only the named cells
 //! `runtime::writers` lists. GlobalsAA reads both.
 
-use llrm_support::hash::HashMap;
-
 use iced_x86::Register;
-use llrm_qbruntime::{self as runtime, Control};
-use llrm_x86_bcmachine::model::ir::nodes::Node;
-use llrm_x86_bcmachine::objectfile::omf;
 use llrm_hir::model::RuntimePromises;
 use llrm_mir::{ConstantId, ConstantKind, Module, Operand};
+use llrm_qbruntime::{self as runtime, Control};
+use llrm_support::hash::HashMap;
+use llrm_x86_bcmachine::model::ir::nodes::Node;
+use llrm_x86_bcmachine::objectfile::omf;
 
 use crate::emit::{Emit, Emitter};
 use crate::machine::Facts;
@@ -27,7 +26,11 @@ pub const SEGMENT_CELL: &str = "b$seg";
 const DEF_SEG: &str = "B$DSEG";
 
 /// The global of the runtime cell the module names `name`.
-fn external(facts: &Facts, objects: &Objects, name: &str) -> Option<ConstantId> {
+fn external(
+    facts: &Facts,
+    objects: &Objects,
+    name: &str,
+) -> Option<ConstantId> {
     let index = omf::externals(&facts.found.records).iter().position(|one| one == name)?;
     objects.external(index as i64)
 }
@@ -36,7 +39,11 @@ fn external(facts: &Facts, objects: &Objects, name: &str) -> Option<ConstantId> 
 pub struct DefSeg;
 
 impl Recognizer for DefSeg {
-    fn node(&self, emitter: &mut Emitter, node: &Node) -> Option<Emit<()>> {
+    fn node(
+        &self,
+        emitter: &mut Emitter,
+        node: &Node,
+    ) -> Option<Emit<()>> {
         let Node::Call(call) = node else { return None };
         if call.name != DEF_SEG || emitter.unit.procedures.contains_key(DEF_SEG) {
             return None;
@@ -55,7 +62,10 @@ impl Recognizer for DefSeg {
     }
 }
 
-fn def_seg(emitter: &mut Emitter, cell: ConstantId) -> Emit<()> {
+fn def_seg(
+    emitter: &mut Emitter,
+    cell: ConstantId,
+) -> Emit<()> {
     let value = emitter.stack_word(emitter.depth(), 2)?;
     emitter.popped(2)?;
     emitter.b.store(value, Operand::Constant(cell), false);
@@ -64,7 +74,11 @@ fn def_seg(emitter: &mut Emitter, cell: ConstantId) -> Emit<()> {
 
 /// The runtime module: which runtime cells are named and which routines
 /// write them.
-pub fn promise(module: &Module, facts: &Facts, objects: &Objects) -> Result<Module, String> {
+pub fn promise(
+    module: &Module,
+    facts: &Facts,
+    objects: &Objects,
+) -> Result<Module, String> {
     let family = facts.family();
     let family = family.value();
     let externals = omf::externals(&facts.found.records);
@@ -81,8 +95,12 @@ pub fn promise(module: &Module, facts: &Facts, objects: &Objects) -> Result<Modu
     }
     // Where the program handles errors, a routine that raises one runs it.
     let handles = runtime::handles_errors(facts.contracts.values());
-    let declared = module.functions().filter(|(_, _, one)| one.is_declaration()).filter_map(|(_, global, _)| global.name.as_deref()?.strip_prefix(crate::RUNTIME));
-    let (raising, nounwind): (Vec<&str>, Vec<&str>) = declared.partition(|&routine| runtime::contract(Some(routine)).raises_error);
+    let declared = module
+        .functions()
+        .filter(|(_, _, one)| one.is_declaration())
+        .filter_map(|(_, global, _)| global.name.as_deref()?.strip_prefix(crate::RUNTIME));
+    let (raising, nounwind): (Vec<&str>, Vec<&str>) =
+        declared.partition(|&routine| runtime::contract(Some(routine)).raises_error);
     let calling_back = runtime::ENTERS_USER_CODE.iter().copied().chain(raising.into_iter().filter(|_| handles));
     llrm_hir::mir::promised(&[(module, named)], &RuntimePromises::of(calling_back, runtime::writers(family), nounwind))
 }

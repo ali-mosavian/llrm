@@ -11,12 +11,11 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::analysis::facts::Fact;
-use crate::model::lir::{BlockFrequencies, BlockOdds};
-
 use llrm_analysis::branchprob;
 
+use crate::analysis::facts::Fact;
 use crate::analysis::loops;
+use crate::model::lir::{BlockFrequencies, BlockOdds};
 use crate::model::lir::{LirBlock, LirBody};
 use crate::support::hash::IndexMap;
 
@@ -39,7 +38,10 @@ impl Cfg {
         }
     }
 
-    fn is_of(&self, body: &LirBody) -> bool {
+    fn is_of(
+        &self,
+        body: &LirBody,
+    ) -> bool {
         self.entry == body.entry
             && self.shape.len() == body.blocks.len()
             && self.shape.iter().zip(&body.blocks).all(|((at, succ), block)| *at == block.at && *succ == block.succ)
@@ -61,7 +63,10 @@ impl Fact for Worked {
     fn inputs(body: &LirBody) -> Cfg {
         Cfg::of(body)
     }
-    fn held_by(kept: &Cfg, body: &LirBody) -> bool {
+    fn held_by(
+        kept: &Cfg,
+        body: &LirBody,
+    ) -> bool {
         kept.is_of(body)
     }
 }
@@ -79,7 +84,10 @@ impl Fact for Carried {
     fn inputs(body: &LirBody) -> Self::Inputs {
         (Arc::clone(body.frequencies.as_ref().expect("asked of a body with a table")), Cfg::of(body))
     }
-    fn held_by((table, cfg): &Self::Inputs, body: &LirBody) -> bool {
+    fn held_by(
+        (table, cfg): &Self::Inputs,
+        body: &LirBody,
+    ) -> bool {
         body.frequencies.as_ref().is_some_and(|now| Arc::ptr_eq(now, table)) && cfg.is_of(body)
     }
 }
@@ -106,7 +114,10 @@ impl Frequency {
     /// The table kept on the body, with the blocks made since filled in from their predecessors' (a block put on an
     /// edge runs as often as the edge is taken). `None` where one cannot be: a block made since that only a cycle
     /// reaches, or the entry.
-    fn carried(body: &LirBody, table: &IndexMap<i64, f64>) -> Option<Self> {
+    fn carried(
+        body: &LirBody,
+        table: &IndexMap<i64, f64>,
+    ) -> Option<Self> {
         let mut taken = IndexMap::default();
         let mut predecessors: IndexMap<i64, Vec<i64>> = IndexMap::default();
         for block in &body.blocks {
@@ -115,7 +126,8 @@ impl Frequency {
                 predecessors.entry(to).or_default().push(block.at);
             }
         }
-        let mut block: IndexMap<i64, f64> = body.blocks.iter().filter_map(|one| table.get(&one.at).map(|runs| (one.at, *runs))).collect();
+        let mut block: IndexMap<i64, f64> =
+            body.blocks.iter().filter_map(|one| table.get(&one.at).map(|runs| (one.at, *runs))).collect();
         let mut missing: Vec<i64> = body.blocks.iter().map(|one| one.at).filter(|at| !block.contains_key(at)).collect();
         while !missing.is_empty() {
             let before = missing.len();
@@ -147,9 +159,10 @@ impl Frequency {
         Some(Self { block, taken })
     }
 
-    /// What no honest table breaks, whatever shape the blocks have: an entry for every block and none for others, no block
-    /// running more often than the flow into it (each predecessor sends at most its own runs), and a block behind a
-    /// predecessor that goes nowhere else running as often as it. A table left stale by an edge that moved breaks one.
+    /// What no honest table breaks, whatever shape the blocks have: an entry for every block and none for others, no
+    /// block running more often than the flow into it (each predecessor sends at most its own runs), and a block
+    /// behind a predecessor that goes nowhere else running as often as it. A table left stale by an edge that moved
+    /// breaks one.
     pub fn violations(body: &LirBody) -> Vec<String> {
         let Some(kept) = body.frequencies.as_deref() else { return Vec::new() };
         let mut out = Vec::new();
@@ -171,14 +184,17 @@ impl Frequency {
         for one in body.blocks.iter().filter(|one| one.at != body.entry) {
             let Some((sum, count, only)) = inflow.get(&one.at).copied() else { continue };
             let runs = now.block(one.at);
-            // The estimate is not conservative where proven trips are nested: they fix a header's runs and the odds fix the
-            // blocks around it (isel's own table reads 1.5x at most in gcc's memcpy-2, 1.05x in QCport). A stale entry is off
-            // by factors.
+            // The estimate is not conservative where proven trips are nested: they fix a header's runs and the odds fix
+            // the blocks around it (isel's own table reads 1.5x at most in gcc's memcpy-2, 1.05x in
+            // QCport). A stale entry is off by factors.
             let slack = sum + 1e-9;
             if runs > sum + slack {
                 out.push(format!("block {:#x} runs {runs:.3} times, its predecessors {sum:.3}", one.at));
             } else if count == 1 && only.is_some() && (runs - sum).abs() > slack {
-                out.push(format!("block {:#x} runs {runs:.3} times, its only predecessor, which goes nowhere else, {sum:.3}", one.at));
+                out.push(format!(
+                    "block {:#x} runs {runs:.3} times, its only predecessor, which goes nowhere else, {sum:.3}",
+                    one.at
+                ));
             }
         }
         out
@@ -190,7 +206,10 @@ impl Frequency {
     }
 
     /// `blocks`, a later arrangement of `body`'s, on `body`'s odds and trips.
-    pub fn over(body: &LirBody, blocks: &[LirBlock]) -> Self {
+    pub fn over(
+        body: &LirBody,
+        blocks: &[LirBlock],
+    ) -> Self {
         let mut taken = IndexMap::default();
         for block in blocks {
             for to in block.succ.iter().copied().collect::<BTreeSet<_>>() {
@@ -204,7 +223,13 @@ impl Frequency {
         let by_at: IndexMap<i64, &LirBlock> = blocks.iter().map(|block| (block.at, block)).collect();
         let bridge = |at: i64| -> Option<i64> {
             let one = by_at.get(&at)?;
-            let idle = one.insns.iter().all(|one| !crate::backend::masm::prints(one) || one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Jump));
+            let idle = one
+                .insns
+                .iter()
+                .all(
+                    |one| !crate::backend::masm::prints(one)
+                        || one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Jump),
+                );
             (at != entry && idle && one.succ.len() == 1 && one.succ[0] != at).then(|| one.succ[0])
         };
         // Past the bridges, and the share of the edge that reaches there.
@@ -231,7 +256,11 @@ impl Frequency {
                 }
             }
         }
-        let kept: Vec<LirBlock> = blocks.iter().filter(|block| successors.contains_key(&block.at)).map(|block| LirBlock { succ: successors[&block.at].clone(), ..LirBlock::new(block.at, Vec::new()) }).collect();
+        let kept: Vec<LirBlock> = blocks
+            .iter()
+            .filter(|block| successors.contains_key(&block.at))
+            .map(|block| LirBlock { succ: successors[&block.at].clone(), ..LirBlock::new(block.at, Vec::new()) })
+            .collect();
         let mut predecessors: IndexMap<i64, Vec<i64>> = IndexMap::default();
         for (from, list) in &successors {
             for to in list {
@@ -242,9 +271,15 @@ impl Frequency {
         let trips: IndexMap<i64, i64> = body.loop_trip_counts.iter().copied().collect();
         let cycles: Vec<branchprob::Cycle> = natural
             .iter()
-            .map(|one| branchprob::Cycle { header: one.header, latches: &one.latches, body: &one.body, trips: trips.get(&one.header).copied() })
+            .map(|one| branchprob::Cycle {
+                header: one.header,
+                latches: &one.latches,
+                body: &one.body,
+                trips: trips.get(&one.header).copied(),
+            })
             .collect();
-        let order = branchprob::reverse_postorder_of(body.entry, &|at| successors.get(&at).cloned().unwrap_or_default());
+        let order =
+            branchprob::reverse_postorder_of(body.entry, &|at| successors.get(&at).cloned().unwrap_or_default());
         let (mut block, edges) = branchprob::propagated_edges(
             &order,
             &|at| predecessors.get(&at).cloned().unwrap_or_default(),
@@ -264,7 +299,8 @@ impl Frequency {
                         found
                     } else {
                         let past = beyond(*at);
-                        found * edges.get(&(from.at, past)).copied().unwrap_or(0.0) * taken[&(from.at, *at)] / shared[&(from.at, past)].max(f64::MIN_POSITIVE)
+                        found * edges.get(&(from.at, past)).copied().unwrap_or(0.0) * taken[&(from.at, *at)]
+                            / shared[&(from.at, past)].max(f64::MIN_POSITIVE)
                     };
                 }
                 block.insert(*at, runs);
@@ -278,12 +314,19 @@ impl Frequency {
     }
 
     /// Per call; zero for a block the entry does not reach.
-    pub fn block(&self, at: i64) -> f64 {
+    pub fn block(
+        &self,
+        at: i64,
+    ) -> f64 {
         self.block.get(&at).copied().unwrap_or(0.0)
     }
 
     /// How often `from` goes to `to`, per call.
-    pub fn edge(&self, from: i64, to: i64) -> f64 {
+    pub fn edge(
+        &self,
+        from: i64,
+        to: i64,
+    ) -> f64 {
         self.block(from) * self.taken.get(&(from, to)).copied().unwrap_or(0.0)
     }
 }
@@ -297,12 +340,21 @@ mod tests {
     use crate::model::lir::{BlockOdds, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
-    fn insn(at: i64, op: Operation, name: &str) -> Arc<Insn> {
+    fn insn(
+        at: i64,
+        op: Operation,
+        name: &str,
+    ) -> Arc<Insn> {
         let what = Semantics { name: Some(name.to_owned()), ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, 1)), Some(what), Vec::new(), Vec::new()))
     }
 
-    fn block(at: i64, name: &str, op: Operation, succ: Vec<i64>) -> LirBlock {
+    fn block(
+        at: i64,
+        name: &str,
+        op: Operation,
+        succ: Vec<i64>,
+    ) -> LirBlock {
         LirBlock { succ, ..LirBlock::new(at, vec![insn(at, op, name)]) }
     }
 
@@ -316,7 +368,12 @@ mod tests {
         let runs = |body: &LirBody| body.facts.0.runs::<super::Worked>();
         let before = runs(&body);
         let first = Frequency::of(&body);
-        let more = body.with_blocks(body.blocks.iter().map(|one| one.with_insns(vec![insn(one.at, Operation::Move, "mov"), one.insns[0].clone()])).collect());
+        let more = body.with_blocks(
+            body.blocks
+                .iter()
+                .map(|one| one.with_insns(vec![insn(one.at, Operation::Move, "mov"), one.insns[0].clone()]))
+                .collect(),
+        );
         let again = Frequency::of(&more);
         assert_eq!(runs(&body) - before, 1, "a second question of the same blocks was worked out");
         assert_eq!(first.block(2), again.block(2));
@@ -326,8 +383,9 @@ mod tests {
         assert_eq!(runs(&moved) - before, 2, "other odds were answered from the old frequencies");
     }
 
-    /// A body that carries its frequencies is asked for them by every fact of the allocator, with the same table and blocks after each
-    /// spill: the carried answer is worked out once for them (1.5% of compiling d_faces, 1.2 G, was working it out again).
+    /// A body that carries its frequencies is asked for them by every fact of the allocator, with the same table and
+    /// blocks after each spill: the carried answer is worked out once for them (1.5% of compiling d_faces, 1.2 G,
+    /// was working it out again).
     #[test]
     fn test_a_carried_table_is_not_carried_again_for_the_same_blocks() {
         let plain = counted(Some(5), 124.0 / 128.0);
@@ -336,7 +394,12 @@ mod tests {
         let runs = |body: &LirBody| body.facts.0.runs::<super::Carried>();
         let before = runs(&body);
         let first = Frequency::of(&body);
-        let more = body.with_blocks(body.blocks.iter().map(|one| one.with_insns(vec![insn(one.at, Operation::Move, "mov"), one.insns[0].clone()])).collect());
+        let more = body.with_blocks(
+            body.blocks
+                .iter()
+                .map(|one| one.with_insns(vec![insn(one.at, Operation::Move, "mov"), one.insns[0].clone()]))
+                .collect(),
+        );
         let again = Frequency::of(&more);
         assert_eq!(runs(&body) - before, 1, "the same table over the same blocks was carried again");
         assert_eq!(first.block(2), again.block(2));
@@ -346,7 +409,10 @@ mod tests {
         assert_eq!(runs(&moved) - before, 2, "other odds were answered from the old table");
     }
 
-    fn counted(trips: Option<i64>, stay: f64) -> LirBody {
+    fn counted(
+        trips: Option<i64>,
+        stay: f64,
+    ) -> LirBody {
         let blocks = vec![
             block(1, "jmp", Operation::Jump, vec![2]),
             block(2, "jne", Operation::Branch, vec![2, 3]),
@@ -365,9 +431,19 @@ mod tests {
     #[test]
     fn test_a_loop_runs_as_its_odds_and_proven_trips_say_not_ten() {
         let guessed = Frequency::of(&counted(None, 124.0 / 128.0));
-        assert!((guessed.block(2) - 32.0).abs() < 1e-6 && (guessed.block(3) - 1.0).abs() < 1e-6, "{} {}", guessed.block(2), guessed.block(3));
+        assert!(
+            (guessed.block(2) - 32.0).abs() < 1e-6 && (guessed.block(3) - 1.0).abs() < 1e-6,
+            "{} {}",
+            guessed.block(2),
+            guessed.block(3)
+        );
         let proven = Frequency::of(&counted(Some(5), 124.0 / 128.0));
-        assert!((proven.block(2) - 5.0).abs() < 1e-6 && (proven.block(3) - 1.0).abs() < 1e-6, "{} {}", proven.block(2), proven.block(3));
+        assert!(
+            (proven.block(2) - 5.0).abs() < 1e-6 && (proven.block(3) - 1.0).abs() < 1e-6,
+            "{} {}",
+            proven.block(2),
+            proven.block(3)
+        );
     }
 
     /// A block almost never reached weighs almost nothing: a branch to it at 1 in a
@@ -387,9 +463,9 @@ mod tests {
         assert!(busy.block(2) < 1e-5 && busy.block(3) > 0.99, "{} {}", busy.block(2), busy.block(3));
     }
 
-    /// A block put on an edge (phielim's and the spiller's edge code) must leave the frequencies as they were: `d_faces`-sized
-    /// `_part_frame` was estimated 268 on the blocks isel made, 2786 with the bridges, and 268 again once `jumps` removed them,
-    /// and the route choice compared two bodies at different points of that.
+    /// A block put on an edge (phielim's and the spiller's edge code) must leave the frequencies as they were:
+    /// `d_faces`-sized `_part_frame` was estimated 268 on the blocks isel made, 2786 with the bridges, and 268
+    /// again once `jumps` removed them, and the route choice compared two bodies at different points of that.
     #[test]
     fn test_a_block_on_an_edge_leaves_the_frequencies_as_they_were() {
         for trips in [None, Some(5)] {
@@ -408,7 +484,12 @@ mod tests {
                 split.blocks.push(block(bridge, "jmp", Operation::Jump, vec![old]));
                 let after = Frequency::of(&split);
                 for at in [1, 2, 3] {
-                    assert!((before.block(at) - after.block(at)).abs() < 1e-6 * before.block(at).max(1.0), "block {at} trips {trips:?} split {from}->{old}: {} against {}", before.block(at), after.block(at));
+                    assert!(
+                        (before.block(at) - after.block(at)).abs() < 1e-6 * before.block(at).max(1.0),
+                        "block {at} trips {trips:?} split {from}->{old}: {} against {}",
+                        before.block(at),
+                        after.block(at)
+                    );
                 }
             }
         }
@@ -425,7 +506,14 @@ mod tests {
         let mut split = body.clone();
         split.odds.rerouted(2, &[2, 3], 2, &[(9, 1.0)]);
         split.blocks[1].succ = vec![9, 3];
-        split.blocks.push(LirBlock { succ: vec![2], ..LirBlock::new(9, vec![insn(9, Operation::Move, "mov"), insn(9, Operation::Jump, "jmp")]) });
+        split
+            .blocks
+            .push(
+                LirBlock {
+                    succ: vec![2],
+                    ..LirBlock::new(9, vec![insn(9, Operation::Move, "mov"), insn(9, Operation::Jump, "jmp")])
+                },
+            );
         let after = Frequency::of(&split);
         for at in [1, 2, 3] {
             assert_eq!(before.block(at), after.block(at), "block {at}");
@@ -433,8 +521,8 @@ mod tests {
         assert!((after.block(9) - 5.0 * 124.0 / 128.0).abs() < 1e-9, "the copies run {}", after.block(9));
     }
 
-    /// A table left as it was after an edge moved (block 3 reached only through a rare edge now) ran the block as often as
-    /// before: nothing said so. The invariant every honest table keeps catches it under LLRM_VERIFY.
+    /// A table left as it was after an edge moved (block 3 reached only through a rare edge now) ran the block as often
+    /// as before: nothing said so. The invariant every honest table keeps catches it under LLRM_VERIFY.
     #[test]
     fn test_a_table_left_stale_by_a_moved_edge_is_caught() {
         let mut body = counted(Some(5), 124.0 / 128.0);
@@ -469,12 +557,18 @@ mod tests {
         more.blocks.push(LirBlock { succ: vec![9], ..LirBlock::new(8, vec![insn(8, Operation::Jump, "jmp")]) });
         more.blocks.push(LirBlock { succ: vec![9, 3], ..LirBlock::new(9, vec![insn(9, Operation::Branch, "jne")]) });
         more.blocks[2].succ = vec![];
-        for (from, to, probability) in [(2, 8, 1.0 / 32.0), (2, 2, 31.0 / 32.0), (9, 9, 31.0 / 32.0), (9, 3, 1.0 / 32.0)] {
+        for (from, to, probability) in
+            [(2, 8, 1.0 / 32.0), (2, 2, 31.0 / 32.0), (9, 9, 31.0 / 32.0), (9, 3, 1.0 / 32.0)]
+        {
             more.odds.taken.insert((from, to), (probability * BlockOdds::CERTAIN).round() as u32);
         }
         let busy = Frequency::of(&more);
         let entering = busy.block(2) * (1.0 / 32.0);
         assert!((busy.block(8) - entering).abs() < 1e-6, "{} {}", busy.block(8), entering);
-        assert!((busy.block(9) - entering * 32.0).abs() < 1e-3 * entering * 32.0, "the new loop runs {} for {entering} sent in", busy.block(9));
+        assert!(
+            (busy.block(9) - entering * 32.0).abs() < 1e-3 * entering * 32.0,
+            "the new loop runs {} for {entering} sent in",
+            busy.block(9)
+        );
     }
 }

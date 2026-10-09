@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 
 use llrm_analysis::cfg::Shape;
 use llrm_analysis::memoryssa::{self, Accesses};
-use llrm_mir::module::{GlobalKind, InstId, MetadataId, MetadataNode, MetadataOperand, Module};
 use llrm_mir::context::GlobalId;
+use llrm_mir::module::{GlobalKind, InstId, MetadataId, MetadataNode, MetadataOperand, Module};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{ModuleAnalyses, ModulePass};
 
@@ -22,7 +22,11 @@ impl ModulePass for Spares {
         "spares"
     }
 
-    fn run(&mut self, module: &mut Module, analyses: &mut ModuleAnalyses) -> Vec<GlobalId> {
+    fn run(
+        &mut self,
+        module: &mut Module,
+        analyses: &mut ModuleAnalyses,
+    ) -> Vec<GlobalId> {
         let layout = analyses.program().layout.clone();
         let outer = analyses.outer(module);
         let mut found: BTreeMap<GlobalId, Vec<(InstId, Vec<InstId>)>> = BTreeMap::new();
@@ -32,16 +36,28 @@ impl ModulePass for Spares {
                 continue;
             }
             let Ok(accesses) = Accesses::managed(&module.context, &layout, function, manager) else { continue };
-            let writers: Vec<InstId> = function.walk().map(|(_, inst)| inst).filter(|&inst| accesses.writes(inst).is_none_or(|writes| !writes.is_empty())).collect();
+            let writers: Vec<InstId> = function
+                .walk()
+                .map(|(_, inst)| inst)
+                .filter(|&inst| accesses.writes(inst).is_none_or(|writes| !writes.is_empty()))
+                .collect();
             let program = Some(analyses.program().as_ref());
             for (_, inst) in function.walk() {
                 let instruction = function.instruction(inst);
-                let (Opcode::Load { volatile: false, .. }, Some(read)) = (&instruction.opcode, accesses.references.get(&inst)) else { continue };
+                let (Opcode::Load { volatile: false, .. }, Some(read)) =
+                    (&instruction.opcode, accesses.references.get(&inst))
+                else {
+                    continue;
+                };
                 // An object's own bytes at a constant offset: the same cell on every trip.
                 if !read.object || read.base.is_some() {
                     continue;
                 }
-                let spared: Vec<InstId> = writers.iter().copied().filter(|&write| write != inst && memoryssa::spares(&accesses, program, read, write)).collect();
+                let spared: Vec<InstId> = writers
+                    .iter()
+                    .copied()
+                    .filter(|&write| write != inst && memoryssa::spares(&accesses, program, read, write))
+                    .collect();
                 if !spared.is_empty() {
                     found.entry(id).or_default().push((inst, spared));
                 }
@@ -50,7 +66,10 @@ impl ModulePass for Spares {
         let i32 = module.context.types.int(32);
         for (id, loads) in &found {
             for (inst, spared) in loads {
-                let operands = spared.iter().map(|write| MetadataOperand::Constant(module.context.int(i32, i128::from(write.0)))).collect();
+                let operands = spared
+                    .iter()
+                    .map(|write| MetadataOperand::Constant(module.context.int(i32, i128::from(write.0))))
+                    .collect();
                 module.metadata.push(MetadataNode { distinct: false, operands });
                 let node = MetadataId(module.metadata.len() as u32 - 1);
                 if let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind {

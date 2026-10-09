@@ -5,7 +5,6 @@
 //! or rewrites them in place, and where the walk resumes decide the output.
 
 use std::cell::OnceCell;
-use crate::support::hash::HashSet;
 use std::sync::Arc;
 
 use crate::backend::cpu::Profile;
@@ -14,6 +13,7 @@ use crate::backend::peephole::{self, Counter, DeadAfter, id};
 use crate::backend::{liveness, regthrash, upperzero};
 use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Reg, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
+use crate::support::hash::HashSet;
 use crate::support::hash::{HashMap, IndexMap};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,7 +42,10 @@ pub enum Skip {
 }
 
 impl Skip {
-    fn skips(self, one: &Insn) -> bool {
+    fn skips(
+        self,
+        one: &Insn,
+    ) -> bool {
         match self {
             Skip::None => false,
             Skip::Meta => one.is_meta(),
@@ -88,12 +91,19 @@ pub struct Window<'a> {
 }
 
 impl<'a> Window<'a> {
-    fn new(list: &'a [Arc<Insn>], at: Vec<usize>, gap: &'a [Arc<Insn>]) -> Self {
+    fn new(
+        list: &'a [Arc<Insn>],
+        at: Vec<usize>,
+        gap: &'a [Arc<Insn>],
+    ) -> Self {
         Self { insns: at.iter().map(|one| &list[*one]).collect(), at, list, gap }
     }
 
     /// This window and the nearest instruction before it that defines `value`.
-    pub fn defined(&self, value: u32) -> Option<Self> {
+    pub fn defined(
+        &self,
+        value: u32,
+    ) -> Option<Self> {
         let at = self.list[..self.at[0]].iter().rposition(|one| one.defines.contains(&value))?;
         let mut made = self.clone();
         made.insns.push(&self.list[at]);
@@ -105,11 +115,17 @@ impl<'a> Window<'a> {
         self.insns.len()
     }
 
-    pub fn slot(&self, k: usize) -> &'a Arc<Insn> {
+    pub fn slot(
+        &self,
+        k: usize,
+    ) -> &'a Arc<Insn> {
         self.insns[k]
     }
 
-    pub fn insn(&self, k: usize) -> &'a Arc<Insn> {
+    pub fn insn(
+        &self,
+        k: usize,
+    ) -> &'a Arc<Insn> {
         self.insns[k]
     }
 
@@ -118,27 +134,47 @@ impl<'a> Window<'a> {
         self.gap
     }
 
-    pub fn what(&self, k: usize) -> Option<&'a Semantics> {
+    pub fn what(
+        &self,
+        k: usize,
+    ) -> Option<&'a Semantics> {
         self.insns.get(k)?.what.as_ref()
     }
 
-    pub fn op(&self, k: usize) -> Option<Operation> {
+    pub fn op(
+        &self,
+        k: usize,
+    ) -> Option<Operation> {
         self.what(k).map(|what| what.op)
     }
 
-    pub fn name(&self, k: usize) -> Option<&'a str> {
+    pub fn name(
+        &self,
+        k: usize,
+    ) -> Option<&'a str> {
         self.what(k)?.name.as_deref()
     }
 
-    pub fn dests(&self, k: usize) -> usize {
+    pub fn dests(
+        &self,
+        k: usize,
+    ) -> usize {
         self.what(k).map_or(0, |what| what.dests.len())
     }
 
-    pub fn sources(&self, k: usize) -> usize {
+    pub fn sources(
+        &self,
+        k: usize,
+    ) -> usize {
         self.what(k).map_or(0, |what| what.sources.len())
     }
 
-    pub fn loc(&self, k: usize, side: Side, index: usize) -> Option<&'a Loc> {
+    pub fn loc(
+        &self,
+        k: usize,
+        side: Side,
+        index: usize,
+    ) -> Option<&'a Loc> {
         let what = self.what(k)?;
         match side {
             Side::D => what.dests.get(index),
@@ -146,7 +182,12 @@ impl<'a> Window<'a> {
         }
     }
 
-    pub fn kind(&self, k: usize, side: Side, index: usize) -> Kind {
+    pub fn kind(
+        &self,
+        k: usize,
+        side: Side,
+        index: usize,
+    ) -> Kind {
         match self.loc(k, side, index) {
             None => Kind::Absent,
             Some(Loc::Reg(_)) => Kind::Reg,
@@ -157,7 +198,12 @@ impl<'a> Window<'a> {
         }
     }
 
-    pub fn width(&self, k: usize, side: Side, index: usize) -> Option<u32> {
+    pub fn width(
+        &self,
+        k: usize,
+        side: Side,
+        index: usize,
+    ) -> Option<u32> {
         match self.loc(k, side, index)? {
             Loc::Reg(one) => Some(one.width),
             Loc::Mem(one) => Some(one.width),
@@ -168,36 +214,66 @@ impl<'a> Window<'a> {
     }
 
     /// Whether an immediate carries no address.
-    pub fn bare(&self, k: usize, side: Side, index: usize) -> Option<bool> {
+    pub fn bare(
+        &self,
+        k: usize,
+        side: Side,
+        index: usize,
+    ) -> Option<bool> {
         self.imm(k, side, index).map(|one| one.address.is_none())
     }
 
-    pub fn value(&self, k: usize, side: Side, index: usize) -> Option<i64> {
+    pub fn value(
+        &self,
+        k: usize,
+        side: Side,
+        index: usize,
+    ) -> Option<i64> {
         self.imm(k, side, index).map(|one| one.value)
     }
 
-    pub fn reg(&self, k: usize, side: Side, index: usize) -> Option<Reg> {
+    pub fn reg(
+        &self,
+        k: usize,
+        side: Side,
+        index: usize,
+    ) -> Option<Reg> {
         match self.loc(k, side, index)? {
             Loc::Reg(one) => Some(*one),
             _ => None,
         }
     }
 
-    pub fn mem(&self, k: usize, side: Side, index: usize) -> Option<&'a Mem> {
+    pub fn mem(
+        &self,
+        k: usize,
+        side: Side,
+        index: usize,
+    ) -> Option<&'a Mem> {
         match self.loc(k, side, index)? {
             Loc::Mem(one) => Some(one),
             _ => None,
         }
     }
 
-    pub fn imm(&self, k: usize, side: Side, index: usize) -> Option<&'a Imm> {
+    pub fn imm(
+        &self,
+        k: usize,
+        side: Side,
+        index: usize,
+    ) -> Option<&'a Imm> {
         match self.loc(k, side, index)? {
             Loc::Imm(one) => Some(one),
             _ => None,
         }
     }
 
-    pub fn held(&self, k: usize, side: Side, index: usize) -> Option<Held> {
+    pub fn held(
+        &self,
+        k: usize,
+        side: Side,
+        index: usize,
+    ) -> Option<Held> {
         match self.loc(k, side, index)? {
             Loc::Held(one) => Some(*one),
             _ => None,
@@ -220,17 +296,44 @@ pub struct Facts<'a> {
 }
 
 impl<'a> Facts<'a> {
-    pub fn new(body: &'a LirBody, cpu: Option<&'a Profile>) -> Self {
-        Self { body: Some(body), cpu, counts: None, exits: OnceCell::new(), flags_out: OnceCell::new(), users: OnceCell::new(), zero: OnceCell::new(), bits: body.bits }
+    pub fn new(
+        body: &'a LirBody,
+        cpu: Option<&'a Profile>,
+    ) -> Self {
+        Self {
+            body: Some(body),
+            cpu,
+            counts: None,
+            exits: OnceCell::new(),
+            flags_out: OnceCell::new(),
+            users: OnceCell::new(),
+            zero: OnceCell::new(),
+            bits: body.bits,
+        }
     }
 
     /// For instructions outside a body, with the caller's read counts.
-    pub fn counted(counts: &'a Counter, bits: u32) -> Self {
-        Self { body: None, cpu: None, counts: Some(counts), exits: OnceCell::new(), flags_out: OnceCell::new(), users: OnceCell::new(), zero: OnceCell::new(), bits }
+    pub fn counted(
+        counts: &'a Counter,
+        bits: u32,
+    ) -> Self {
+        Self {
+            body: None,
+            cpu: None,
+            counts: Some(counts),
+            exits: OnceCell::new(),
+            flags_out: OnceCell::new(),
+            users: OnceCell::new(),
+            zero: OnceCell::new(),
+            bits,
+        }
     }
 
     /// The same, pricing for `cpu`.
-    pub fn with_cpu(self, cpu: &'a Profile) -> Self {
+    pub fn with_cpu(
+        self,
+        cpu: &'a Profile,
+    ) -> Self {
         Self { cpu: Some(cpu), ..self }
     }
 
@@ -258,7 +361,10 @@ impl<'a> Facts<'a> {
     }
 
     /// How many times the caller counted `value` read.
-    pub fn count(&self, value: u32) -> i64 {
+    pub fn count(
+        &self,
+        value: u32,
+    ) -> i64 {
         self.counts.expect("a group counting reads is given the counts").get(&value).copied().unwrap_or(0)
     }
 }
@@ -274,7 +380,11 @@ pub struct Cx<'a> {
 }
 
 impl<'a> Cx<'a> {
-    fn new(facts: &'a Facts<'a>, block: Option<&'a LirBlock>, insns: &'a [Arc<Insn>]) -> Self {
+    fn new(
+        facts: &'a Facts<'a>,
+        block: Option<&'a LirBlock>,
+        insns: &'a [Arc<Insn>],
+    ) -> Self {
         Self { facts, block, insns, dead: OnceCell::new(), places: OnceCell::new() }
     }
 
@@ -283,11 +393,18 @@ impl<'a> Cx<'a> {
     }
 
     /// The register and flag lanes dead after `one`, an instruction of the block as found.
-    pub fn dead_after(&self, one: &Arc<Insn>) -> Lanes {
-        let dead = self.dead.get_or_init(|| {
-            let exits = self.facts.exits.get_or_init(|| liveness::dead_at_exit(self.facts.body()));
-            regthrash::_dead_after(self.facts.bits, self.block(), exits[&self.block().at])
-        });
+    pub fn dead_after(
+        &self,
+        one: &Arc<Insn>,
+    ) -> Lanes {
+        let dead = self
+            .dead
+            .get_or_init(
+                || {
+                    let exits = self.facts.exits.get_or_init(|| liveness::dead_at_exit(self.facts.body()));
+                    regthrash::_dead_after(self.facts.bits, self.block(), exits[&self.block().at])
+                },
+            );
         dead[&id(one)]
     }
 
@@ -297,7 +414,10 @@ impl<'a> Cx<'a> {
     }
 
     /// The roots whose upper half is zero before `one`.
-    pub fn upper_zero(&self, one: &Arc<Insn>) -> upperzero::Roots {
+    pub fn upper_zero(
+        &self,
+        one: &Arc<Insn>,
+    ) -> upperzero::Roots {
         self.facts.zero.get_or_init(|| upperzero::before(self.facts.body()))[&id(one)]
     }
 
@@ -310,25 +430,41 @@ impl<'a> Cx<'a> {
     }
 
     /// Where `one` stands among the instructions walked.
-    pub fn place(&self, one: &Arc<Insn>) -> usize {
+    pub fn place(
+        &self,
+        one: &Arc<Insn>,
+    ) -> usize {
         self.places.get_or_init(|| self.insns.iter().enumerate().map(|(at, one)| (id(one), at)).collect())[&id(one)]
     }
 }
 
-fn run(cx: &Cx, matcher: &Matcher, window: &Window) -> Option<Rewrite> {
+fn run(
+    cx: &Cx,
+    matcher: &Matcher,
+    window: &Window,
+) -> Option<Rewrite> {
     match (matcher.head)(window) {
         0 => None,
         state => (matcher.tail)(cx, window, state),
     }
 }
 
-fn blocks(body: &LirBody, facts: &Facts, mut each: impl FnMut(&Cx) -> Vec<Arc<Insn>>) -> LirBody {
-    let blocks = body.blocks.iter().map(|block| block.with_insns(each(&Cx::new(facts, Some(block), &block.insns)))).collect();
+fn blocks(
+    body: &LirBody,
+    facts: &Facts,
+    mut each: impl FnMut(&Cx) -> Vec<Arc<Insn>>,
+) -> LirBody {
+    let blocks =
+        body.blocks.iter().map(|block| block.with_insns(each(&Cx::new(facts, Some(block), &block.insns)))).collect();
     body.with_blocks(blocks)
 }
 
 /// Every instruction alone, replaced in place.
-pub fn each(body: &LirBody, facts: &Facts, matcher: &Matcher) -> LirBody {
+pub fn each(
+    body: &LirBody,
+    facts: &Facts,
+    matcher: &Matcher,
+) -> LirBody {
     blocks(body, facts, |cx| {
         (0..cx.insns.len())
             .map(|at| match run(cx, matcher, &Window::new(cx.insns, vec![at], &[])).map(|made| made.out) {
@@ -342,24 +478,45 @@ pub fn each(body: &LirBody, facts: &Facts, matcher: &Matcher) -> LirBody {
     })
 }
 
-fn without(insns: &[Arc<Insn>], dropped: &[Arc<Insn>]) -> Vec<Arc<Insn>> {
-    lir::without(insns, |one| dropped.iter().any(|dropped| Arc::ptr_eq(dropped, one)), None::<fn(&Arc<Insn>) -> Arc<Insn>>)
+fn without(
+    insns: &[Arc<Insn>],
+    dropped: &[Arc<Insn>],
+) -> Vec<Arc<Insn>> {
+    lir::without(
+        insns,
+        |one| dropped.iter().any(|dropped| Arc::ptr_eq(dropped, one)),
+        None::<fn(&Arc<Insn>) -> Arc<Insn>>,
+    )
 }
 
 /// Runs of consecutive instructions, those `skip` names stepped over; a
 /// match consumes what it matched, and skipped instructions inside it
 /// follow the rewrite. A rewrite's drops leave it through `lir::without`;
 /// definitions it retires leave the block that way once the walk is done.
-pub fn window(body: &LirBody, facts: &Facts, matcher: &Matcher, skip: Skip) -> LirBody {
+pub fn window(
+    body: &LirBody,
+    facts: &Facts,
+    matcher: &Matcher,
+    skip: Skip,
+) -> LirBody {
     blocks(body, facts, |cx| windows(cx, matcher, skip))
 }
 
 /// `window` over instructions outside a body.
-pub fn window_insns(insns: &[Arc<Insn>], facts: &Facts, matcher: &Matcher, skip: Skip) -> Vec<Arc<Insn>> {
+pub fn window_insns(
+    insns: &[Arc<Insn>],
+    facts: &Facts,
+    matcher: &Matcher,
+    skip: Skip,
+) -> Vec<Arc<Insn>> {
     windows(&Cx::new(facts, None, insns), matcher, skip)
 }
 
-fn windows(cx: &Cx, matcher: &Matcher, skip: Skip) -> Vec<Arc<Insn>> {
+fn windows(
+    cx: &Cx,
+    matcher: &Matcher,
+    skip: Skip,
+) -> Vec<Arc<Insn>> {
     let insns = cx.insns;
     let code: Vec<usize> = (0..insns.len()).filter(|at| !skip.skips(&insns[*at])).collect();
     let mut out = Vec::with_capacity(insns.len());
@@ -385,7 +542,10 @@ fn windows(cx: &Cx, matcher: &Matcher, skip: Skip) -> Vec<Arc<Insn>> {
                             // dropping it is the whole value only when it is the only one.
                             for value in &one.defines {
                                 let definers = insns.iter().filter(|other| other.defines.contains(value)).count();
-                                assert_eq!(definers, 1, "held value {value} is defined {definers} times; a retired definition must be its only one");
+                                assert_eq!(
+                                    definers, 1,
+                                    "held value {value} is defined {definers} times; a retired definition must be its only one"
+                                );
                             }
                             retired.push(one);
                         }
@@ -410,7 +570,12 @@ fn windows(cx: &Cx, matcher: &Matcher, skip: Skip) -> Vec<Arc<Insn>> {
 /// Windows of `width` rewritten in place, moving on `advance` after a
 /// match; what a rewrite drops leaves the block through `lir::without`
 /// once the walk is done.
-pub fn slide(body: &LirBody, facts: &Facts, matcher: &Matcher, advance: usize) -> LirBody {
+pub fn slide(
+    body: &LirBody,
+    facts: &Facts,
+    matcher: &Matcher,
+    advance: usize,
+) -> LirBody {
     blocks(body, facts, |cx| {
         let mut insns = cx.insns.to_vec();
         let mut removed: HashSet<usize> = HashSet::default();
@@ -443,7 +608,14 @@ pub fn slide(body: &LirBody, facts: &Facts, matcher: &Matcher, advance: usize) -
 /// instruction no rule matched at while `cross` allows. `first_original`
 /// matches the first as the block had it before the walk; `resume_past`
 /// goes on after the last instruction matched rather than after the first.
-pub fn gap(body: &LirBody, facts: &Facts, matcher: &Matcher, skip: Skip, first_original: bool, resume_past: bool) -> LirBody {
+pub fn gap(
+    body: &LirBody,
+    facts: &Facts,
+    matcher: &Matcher,
+    skip: Skip,
+    first_original: bool,
+    resume_past: bool,
+) -> LirBody {
     let cross = matcher.cross.expect("a gap group says what it may cross");
     blocks(body, facts, |cx| {
         let original = cx.insns;
@@ -451,10 +623,10 @@ pub fn gap(body: &LirBody, facts: &Facts, matcher: &Matcher, skip: Skip, first_o
         let work: Vec<usize> = (0..original.len()).filter(|at| !skip.skips(&original[*at])).collect();
         let mut at = 0;
         while at < work.len() {
-            // A slot an earlier match rewrote or consumed starts no match: the original it held is the instruction that match
-            // took away, and writing it back wrote a read of a value the match had made unread (`mov al,[m]; movsx ax,al;
-            // movsx eax,ax`: the load and the first movsx fused, then the two movsx matched on the original first and read the
-            // load's value that no longer had a definition).
+            // A slot an earlier match rewrote or consumed starts no match: the original it held is the instruction that
+            // match took away, and writing it back wrote a read of a value the match had made unread (`mov
+            // al,[m]; movsx ax,al; movsx eax,ax`: the load and the first movsx fused, then the two movsx
+            // matched on the original first and read the load's value that no longer had a definition).
             if first_original && !Arc::ptr_eq(&original[work[at]], &insns[work[at]]) {
                 at += 1;
                 continue;

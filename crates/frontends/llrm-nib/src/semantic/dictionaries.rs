@@ -7,11 +7,12 @@
 //! method. The probe is compiled here, over the slots as that vec.
 
 use llrm_core::abi::nib as rt;
+
+use super::borrows::expression_owner;
+use super::vectors::GENERATED;
 use super::*;
 use crate::lexer::lex;
 use crate::parser::parse;
-use super::borrows::expression_owner;
-use super::vectors::GENERATED;
 use crate::syntax::{Clause, Struct, StructField};
 
 /// Finds `KEY`'s slot in `SLOTS`: its own when `FOUND`, else the free one it
@@ -41,7 +42,12 @@ const PLACEHOLDERS: [&str; 6] = ["SLOTS", "KEY", "HASH", "AT", "FOUND", "MASK"];
 
 impl TypeRegistry {
     /// `dict[key, value]`, registered on first use with its entry struct.
-    pub(super) fn dictionary(&mut self, key: ElementType, value: ElementType, span: Span) -> Result<TypeName, Diagnostic> {
+    pub(super) fn dictionary(
+        &mut self,
+        key: ElementType,
+        value: ElementType,
+        span: Span,
+    ) -> Result<TypeName, Diagnostic> {
         if let Some((&type_id, _)) = self.dictionaries.iter().find(|(_, one)| (one.0, one.1) == (key, value)) {
             return Ok(TypeName::Dictionary { type_id });
         }
@@ -50,9 +56,22 @@ impl TypeRegistry {
         let entry_name = format!("{name}.entry");
         let fields = [("hash", ElementType::Scalar(self.word())), ("key", key), ("value", value)]
             .into_iter()
-            .map(|(field, element)| StructField { name: field.into(), mutable: true, type_spec: self.spec_of(element), dims: Vec::new(), span })
+            .map(|(field, element)| StructField {
+                name: field.into(),
+                mutable: true,
+                type_spec: self.spec_of(element),
+                dims: Vec::new(),
+                span,
+            })
             .collect();
-        self.register_struct(&Struct { name: entry_name.clone(), generics: Vec::new(), bits: None, pack: None, fields, span })?;
+        self.register_struct(&Struct {
+            name: entry_name.clone(),
+            generics: Vec::new(),
+            bits: None,
+            pack: None,
+            fields,
+            span,
+        })?;
         let entry = self.structs[&entry_name].id;
         let type_id = self.types.len() as u32 + 1;
         self.types.push(hir::Type {
@@ -72,7 +91,10 @@ impl TypeRegistry {
     }
 
     /// A dict type's key, value and entry struct.
-    pub(super) fn dictionary_parts(&self, type_name: TypeName) -> Option<(ElementType, ElementType, u32)> {
+    pub(super) fn dictionary_parts(
+        &self,
+        type_name: TypeName,
+    ) -> Option<(ElementType, ElementType, u32)> {
         let TypeName::Dictionary { type_id } = type_name else {
             return None;
         };
@@ -81,15 +103,20 @@ impl TypeRegistry {
 
     /// What a heap buffer of this type holds, one per length unit: a string's
     /// chars, a vec's elements, a dict's slots.
-    pub(super) fn owned_element(&self, type_name: TypeName) -> Option<ElementType> {
+    pub(super) fn owned_element(
+        &self,
+        type_name: TypeName,
+    ) -> Option<ElementType> {
         self.sequence_element(type_name)
             .or_else(|| self.dictionary_parts(type_name).map(|(_, _, entry)| ElementType::Struct(entry)))
     }
 
     /// What `x[i]` of a value of this type reads: an element, or a dict's value.
-    pub(super) fn indexed(&self, type_name: TypeName) -> Option<ElementType> {
-        self.sequence_element(type_name)
-            .or_else(|| self.dictionary_parts(type_name).map(|(_, value, _)| value))
+    pub(super) fn indexed(
+        &self,
+        type_name: TypeName,
+    ) -> Option<ElementType> {
+        self.sequence_element(type_name).or_else(|| self.dictionary_parts(type_name).map(|(_, value, _)| value))
     }
 }
 
@@ -99,12 +126,18 @@ struct Probe {
 }
 
 impl Probe {
-    fn name(&self, placeholder: &str) -> Expr {
+    fn name(
+        &self,
+        placeholder: &str,
+    ) -> Expr {
         Expr::Name(self.names[placeholder].clone(), GENERATED)
     }
 
     /// `SLOTS[AT].field`.
-    fn slot(&self, field: &str) -> Expr {
+    fn slot(
+        &self,
+        field: &str,
+    ) -> Expr {
         let slot = Expr::Index { base: Box::new(self.name("SLOTS")), indices: vec![self.name("AT")], span: GENERATED };
         Expr::Member { base: Box::new(slot), field: field.into(), span: GENERATED }
     }
@@ -113,11 +146,20 @@ impl Probe {
 impl FunctionCompiler<'_> {
     /// `{k: v, ...}` or `{k: v for ...}`: a new dict, filled by assignment,
     /// held by a hidden local until it is moved where it goes.
-    pub(super) fn dictionary_literal(&mut self, expression: &Expr, expected: Option<TypeName>, span: Span) -> Result<TypedOperand, Diagnostic> {
+    pub(super) fn dictionary_literal(
+        &mut self,
+        expression: &Expr,
+        expected: Option<TypeName>,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
         let type_name = match expected {
             Some(one @ TypeName::Dictionary { .. }) => one,
-            Some(other) => return Err(Diagnostic::new(span, format!("a dict literal is a dict, not {}", type_name_text(other)))),
-            None => self.dictionary_type_hint(expression).ok_or_else(|| Diagnostic::new(span, "an empty dict needs a dict type"))?,
+            Some(other) => {
+                return Err(Diagnostic::new(span, format!("a dict literal is a dict, not {}", type_name_text(other))));
+            }
+            None => self
+                .dictionary_type_hint(expression)
+                .ok_or_else(|| Diagnostic::new(span, "an empty dict needs a dict type"))?,
         };
         let name = self.hidden("dict");
         let place = self.place(&name, type_name, true);
@@ -144,7 +186,10 @@ impl FunctionCompiler<'_> {
     }
 
     /// The dict type an unannotated literal builds, from its first entry.
-    pub(super) fn dictionary_type_hint(&mut self, expression: &Expr) -> Option<TypeName> {
+    pub(super) fn dictionary_type_hint(
+        &mut self,
+        expression: &Expr,
+    ) -> Option<TypeName> {
         let (key, value) = match expression {
             Expr::Dict(entries, _) => {
                 let (key, value) = entries.first()?;
@@ -152,7 +197,9 @@ impl FunctionCompiler<'_> {
             }
             Expr::DictComprehension { key, value, clauses, .. } => {
                 let depth = self.scopes.len();
-                let hint = self.clause_scopes(clauses).and_then(|()| Some((self.element_hint(key)?, self.element_hint(value)?)));
+                let hint = self
+                    .clause_scopes(clauses)
+                    .and_then(|()| Some((self.element_hint(key)?, self.element_hint(value)?)));
                 self.scopes.truncate(depth);
                 hint?
             }
@@ -162,8 +209,15 @@ impl FunctionCompiler<'_> {
     }
 
     /// `d[k]` read: `k`'s value, which must be there.
-    pub(super) fn dictionary_value(&mut self, dictionary: &Expr, indices: &[Expr], span: Span) -> Result<Option<Expr>, Diagnostic> {
-        let Some(type_name) = self.expression_type_hint(dictionary).filter(|one| self.types.dictionary_parts(*one).is_some()) else {
+    pub(super) fn dictionary_value(
+        &mut self,
+        dictionary: &Expr,
+        indices: &[Expr],
+        span: Span,
+    ) -> Result<Option<Expr>, Diagnostic> {
+        let Some(type_name) =
+            self.expression_type_hint(dictionary).filter(|one| self.types.dictionary_parts(*one).is_some())
+        else {
             return Ok(None);
         };
         let key = single_key(indices, span)?;
@@ -175,7 +229,12 @@ impl FunctionCompiler<'_> {
     }
 
     /// `d[k]` as a place: `k`'s value, a new entry when `k` was not there.
-    pub(super) fn dictionary_entry(&mut self, dictionary: &str, indices: &[Expr], span: Span) -> Result<Option<Expr>, Diagnostic> {
+    pub(super) fn dictionary_entry(
+        &mut self,
+        dictionary: &str,
+        indices: &[Expr],
+        span: Span,
+    ) -> Result<Option<Expr>, Diagnostic> {
         let Some(type_name) = self.visible(dictionary).and_then(|one| match one.type_ {
             BindingType::Scalar(one @ TypeName::Dictionary { .. }) => Some(one),
             _ => None,
@@ -204,7 +263,12 @@ impl FunctionCompiler<'_> {
         let before = self.value(self.word());
         self.emit("load", vec![before], vec![entries.clone()], None);
         let after = self.value(self.word());
-        self.emit("add", vec![after], vec![hir::Operand::Value(before), hir::Operand::Constant(self.word_id(), 1)], None);
+        self.emit(
+            "add",
+            vec![after],
+            vec![hir::Operand::Value(before), hir::Operand::Constant(self.word_id(), 1)],
+            None,
+        );
         self.emit("store", Vec::new(), vec![entries, hir::Operand::Value(after)], None);
         self.terminate(jump(done));
         self.current = done;
@@ -225,8 +289,17 @@ impl FunctionCompiler<'_> {
         match (name, arguments) {
             ("len", []) => {
                 let count = self.value(self.word());
-                self.emit("load", vec![count], vec![hir::Operand::DescriptorPlace { base: table, field: "capacity", type_id: self.word_id() }], None);
-                self.implicit(TypedOperand { operand: Some(hir::Operand::Value(count)), type_name: self.word() }, expected.unwrap_or(self.word()), span)
+                self.emit(
+                    "load",
+                    vec![count],
+                    vec![hir::Operand::DescriptorPlace { base: table, field: "capacity", type_id: self.word_id() }],
+                    None,
+                );
+                self.implicit(
+                    TypedOperand { operand: Some(hir::Operand::Value(count)), type_name: self.word() },
+                    expected.unwrap_or(self.word()),
+                    span,
+                )
             }
             ("contains", [key]) => {
                 let probe = self.probe(table, type_name, key, true, span)?;
@@ -247,28 +320,45 @@ impl FunctionCompiler<'_> {
     }
 
     /// The table `dictionary` reads, not moved.
-    fn dictionary_table(&mut self, dictionary: &Expr, type_name: TypeName, span: Span) -> Result<u32, Diagnostic> {
+    fn dictionary_table(
+        &mut self,
+        dictionary: &Expr,
+        type_name: TypeName,
+        span: Span,
+    ) -> Result<u32, Diagnostic> {
         let value = self.expression(dictionary, Some(type_name))?;
         Ok(self.materialized(required(value, span)?, type_id(type_name)))
     }
 
     /// Binds a probe of `table` for `key`, and runs it. A lookup lends a key
     /// that is a place; an insert moves its key into the table.
-    fn probe(&mut self, table: u32, type_name: TypeName, key: &Expr, lend: bool, span: Span) -> Result<Probe, Diagnostic> {
+    fn probe(
+        &mut self,
+        table: u32,
+        type_name: TypeName,
+        key: &Expr,
+        lend: bool,
+        span: Span,
+    ) -> Result<Probe, Diagnostic> {
         let (key_type, _, entry) = self.types.dictionary_parts(type_name).expect("a dict");
         let names = PLACEHOLDERS.into_iter().map(|one| (one, self.hidden(&one.to_lowercase()))).collect();
         let probe = Probe { names };
         let slots_type = self.types.vector(ElementType::Struct(entry));
         let slots = self.value(slots_type);
         self.emit("copy", vec![slots], vec![hir::Operand::Value(table)], None);
-        let binding = Binding { type_: BindingType::Scalar(slots_type), mutable: true, storage: Storage::Parameter(slots) };
+        let binding =
+            Binding { type_: BindingType::Scalar(slots_type), mutable: true, storage: Storage::Parameter(slots) };
         self.scopes.last_mut().expect("scope").insert(probe.names["SLOTS"].clone(), binding);
         let lent = lend && expression_owner(key).is_some();
         let bind_key = Statement::Bind {
             mutable: false,
             name: probe.names["KEY"].clone(),
             annotation: (!lent).then(|| TypeAnnotation::Value(self.types.spec_of(key_type))),
-            value: if lent { Expr::Borrow { mutable: false, operand: Box::new(key.clone()), span } } else { key.clone() },
+            value: if lent {
+                Expr::Borrow { mutable: false, operand: Box::new(key.clone()), span }
+            } else {
+                key.clone()
+            },
             span,
         };
         self.generated_statement(&bind_key)?;
@@ -280,9 +370,14 @@ impl FunctionCompiler<'_> {
 
     /// `source`, a statement list in this language, with each placeholder
     /// renamed to what `probe` binds it to.
-    fn generated(&self, source: &str, probe: &Probe) -> Result<Vec<Statement>, Diagnostic> {
+    fn generated(
+        &self,
+        source: &str,
+        probe: &Probe,
+    ) -> Result<Vec<Statement>, Diagnostic> {
         let indented: String = source.lines().map(|line| format!("    {line}\n")).collect();
-        let module = crate::parser::parse_for(lex(&format!("fn generated() -> void:\n{indented}"))?, self.types.sizes.near)?;
+        let module =
+            crate::parser::parse_for(lex(&format!("fn generated() -> void:\n{indented}"))?, self.types.sizes.near)?;
         let mut body = module.functions.into_iter().next().expect("one function").body;
         let rename = |name: &mut String| {
             if let Some(renamed) = probe.names.get(name.as_str()) {
@@ -306,7 +401,10 @@ impl FunctionCompiler<'_> {
     }
 
     /// Compiles a statement the compiler made, readied as a written one is.
-    fn generated_statement(&mut self, statement: &Statement) -> Result<(), Diagnostic> {
+    fn generated_statement(
+        &mut self,
+        statement: &Statement,
+    ) -> Result<(), Diagnostic> {
         match self.prepared(statement)? {
             Some(rewritten) => self.statement(&rewritten),
             None => self.statement(statement),
@@ -315,7 +413,10 @@ impl FunctionCompiler<'_> {
 }
 
 /// A dict takes one key in brackets.
-fn single_key(indices: &[Expr], span: Span) -> Result<&Expr, Diagnostic> {
+fn single_key(
+    indices: &[Expr],
+    span: Span,
+) -> Result<&Expr, Diagnostic> {
     match indices {
         [key] => Ok(key),
         _ => Err(Diagnostic::new(span, "a dict is indexed by one key")),

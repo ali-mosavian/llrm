@@ -4,13 +4,15 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::support::hash::{IndexMap, IndexSet};
-
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{self, Insn};
+use crate::support::hash::{IndexMap, IndexSet};
 
 /// Select private `mov offset,[p]; mov selector,[p+2]` pairs as `les`.
-pub fn selected(insns: &[Arc<Insn>], selectors: &BTreeSet<u32>) -> Vec<Arc<Insn>> {
+pub fn selected(
+    insns: &[Arc<Insn>],
+    selectors: &BTreeSet<u32>,
+) -> Vec<Arc<Insn>> {
     let mut made: IndexMap<usize, Arc<Insn>> = IndexMap::default();
     let mut erased: BTreeSet<usize> = BTreeSet::new();
     for (at, first) in insns[..insns.len().saturating_sub(1)].iter().enumerate() {
@@ -43,7 +45,11 @@ pub fn selected(insns: &[Arc<Insn>], selectors: &BTreeSet<u32>) -> Vec<Arc<Insn>
         .collect()
 }
 
-fn _pair(first: &Insn, second: &Insn, selectors: &BTreeSet<u32>) -> Option<Arc<Insn>> {
+fn _pair(
+    first: &Insn,
+    second: &Insn,
+    selectors: &BTreeSet<u32>,
+) -> Option<Arc<Insn>> {
     if !_plain(first)
         || !_plain(second)
         || first.covers.is_some_and(|covers| covers.0 != covers.1)
@@ -60,9 +66,7 @@ fn _pair(first: &Insn, second: &Insn, selectors: &BTreeSet<u32>) -> Option<Arc<I
                     && matches!(what.dests.as_slice(), [Loc::Held(_)])
                     && matches!(what.sources.as_slice(), [Loc::Mem(_)]) =>
             {
-                let (Loc::Held(dest), Loc::Mem(cell)) = (&what.dests[0], &what.sources[0]) else {
-                    unreachable!()
-                };
+                let (Loc::Held(dest), Loc::Mem(cell)) = (&what.dests[0], &what.sources[0]) else { unreachable!() };
                 // Python's chained `dest.width != cell.width != 2`.
                 if dest.width != cell.width && cell.width != 2 {
                     return None;
@@ -74,7 +78,11 @@ fn _pair(first: &Insn, second: &Insn, selectors: &BTreeSet<u32>) -> Option<Arc<I
     }
     let (first_dest, first_cell) = words[0].clone();
     let (second_dest, second_cell) = words[1].clone();
-    if !_next_word(&first_cell, &second_cell) || !selectors.contains(&second_dest.value) || first.volatile() || second.volatile() {
+    if !_next_word(&first_cell, &second_cell)
+        || !selectors.contains(&second_dest.value)
+        || first.volatile()
+        || second.volatile()
+    {
         return None;
     }
     // A fixed address survives allocation unchanged; only a virtual
@@ -99,22 +107,9 @@ fn _pair(first: &Insn, second: &Insn, selectors: &BTreeSet<u32>) -> Option<Arc<I
     };
     let mut joined = first.clone();
     joined.what = Some(what);
-    joined.defines = first
-        .defines
-        .iter()
-        .chain(&second.defines)
-        .copied()
-        .collect::<IndexSet<u32>>()
-        .into_iter()
-        .collect();
-    joined.uses = first
-        .uses
-        .iter()
-        .chain(&second.uses)
-        .copied()
-        .collect::<IndexSet<u32>>()
-        .into_iter()
-        .collect();
+    joined.defines =
+        first.defines.iter().chain(&second.defines).copied().collect::<IndexSet<u32>>().into_iter().collect();
+    joined.uses = first.uses.iter().chain(&second.uses).copied().collect::<IndexSet<u32>>().into_iter().collect();
     Some(Arc::new(joined))
 }
 
@@ -133,12 +128,11 @@ fn _plain(one: &Insn) -> bool {
 }
 
 /// Whether `high` is the word immediately after `low` by one address.
-fn _next_word(low: &Mem, high: &Mem) -> bool {
-    let same = |cell: &Mem| Mem {
-        addr: cell.addr.map(|addr| ir::Addr { disp: 0, ..addr }),
-        offset: 0,
-        ..cell.clone()
-    };
+fn _next_word(
+    low: &Mem,
+    high: &Mem,
+) -> bool {
+    let same = |cell: &Mem| Mem { addr: cell.addr.map(|addr| ir::Addr { disp: 0, ..addr }), offset: 0, ..cell.clone() };
     if same(low) != same(high) {
         return false;
     }
@@ -152,7 +146,10 @@ fn _next_word(low: &Mem, high: &Mem) -> bool {
 /// Values read only as a cell's selector: what makes a far load the right load.
 ///
 /// `kept` holds values a phi reads, which no instruction here shows.
-pub fn selectors(made: &IndexMap<i64, Vec<Arc<Insn>>>, kept: &BTreeSet<u32>) -> BTreeSet<u32> {
+pub fn selectors(
+    made: &IndexMap<i64, Vec<Arc<Insn>>>,
+    kept: &BTreeSet<u32>,
+) -> BTreeSet<u32> {
     let mut selecting: BTreeSet<u32> = BTreeSet::new();
     let mut numeric: BTreeSet<u32> = kept.clone();
     for block in made.values() {
@@ -189,7 +186,12 @@ mod tests {
     use crate::model::ir::{self, Addr, Loc, Mem, Operation, Semantics, Space};
     use crate::model::lir::Insn;
 
-    fn load(at: i64, value: u32, cell: Mem, uses: Vec<u32>) -> Arc<Insn> {
+    fn load(
+        at: i64,
+        value: u32,
+        cell: Mem,
+        uses: Vec<u32>,
+    ) -> Arc<Insn> {
         let destination = ir::Held { value, width: 2 };
         Arc::new(Insn::new(
             at,
@@ -215,7 +217,10 @@ mod tests {
         };
         let values = |cell: &Mem| ir::values(&Loc::Mem(cell.clone())).iter().map(|one| one.value).collect();
         let (first_cell, second_cell) = (cell(4), cell(6));
-        let original = vec![load(1, 1, first_cell.clone(), values(&first_cell)), load(2, 2, second_cell.clone(), values(&second_cell))];
+        let original = vec![
+            load(1, 1, first_cell.clone(), values(&first_cell)),
+            load(2, 2, second_cell.clone(), values(&second_cell)),
+        ];
 
         let selected = selected(&original, &BTreeSet::from([2]));
 
@@ -231,11 +236,12 @@ mod tests {
     #[test]
     fn test_fixed_far_pointer_load_defers_fusion_until_after_allocation() {
         // indexed.lru_use's fixed parameter pair became an eager LES.
-        let load = |at: i64, value: u32, displacement: i64| load(at, value, Mem::new(Some(Addr::new(Space::Frame, displacement)), 2), Vec::new());
+        let load = |at: i64, value: u32, displacement: i64| {
+            load(at, value, Mem::new(Some(Addr::new(Space::Frame, displacement)), 2), Vec::new())
+        };
 
         let original = vec![load(1, 1, 4), load(2, 2, 6)];
 
         assert_eq!(selected(&original, &BTreeSet::from([2])), original);
     }
-
 }

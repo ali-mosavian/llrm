@@ -7,21 +7,21 @@
 //! incoming edge, which is an availability problem and not something the first
 //! instruction of a block and the last of its predecessor can answer.
 
-use crate::support::hash::HashSet;
 use std::sync::Arc;
 
 use iced_x86::Register;
-use crate::support::hash::IndexMap;
 
 use crate::analysis::dataflow::{self, Direction};
 use crate::backend::peephole::{_frame_cell, _frame_written, _lanes, _overlapping, _register_effects, id};
 use crate::model::ir::{Loc, Mem, Operation, Reg};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
+use crate::support::hash::HashSet;
+use crate::support::hash::IndexMap;
 
 /// Python's `frozenset[tuple[ir.Reg, ir.Mem]]`.  Only membership, overlap and
 /// equality are read; which of two equal cells a meet keeps reaches nothing.
-/// Each fact says whether the register is what a store wrote the slot from: a register a reload filled may be a dead one, which a
-/// read of it would keep.
+/// Each fact says whether the register is what a store wrote the slot from: a register a reload filled may be a dead
+/// one, which a read of it would keep.
 pub type Facts = crate::support::hash::HashMap<(Reg, Mem), bool>;
 
 fn _plain(one: &Insn) -> bool {
@@ -46,7 +46,11 @@ fn _empty(one: &Insn) -> bool {
 /// bytes. Anything whose register effects cannot be read, or which writes
 /// memory the displacement alone does not name, ends every fact: the write
 /// could be to any slot.
-fn _held(bits: u32, one: &Insn, facts: Facts) -> (Facts, bool, Option<(usize, Reg)>) {
+fn _held(
+    bits: u32,
+    one: &Insn,
+    facts: Facts,
+) -> (Facts, bool, Option<(usize, Reg)>) {
     if _empty(one) {
         return (facts, false, None);
     }
@@ -115,7 +119,14 @@ fn _held(bits: u32, one: &Insn, facts: Facts) -> (Facts, bool, Option<(usize, Re
             // Another register of the width holds it: the reload is a copy of that register.
             let held_in = facts
                 .iter()
-                .filter(|((other, held), stored)| **stored && held == cell && other.width == register.width && other.register != register.register && other.register.is_gpr() && register.register.is_gpr())
+                .filter(|((other, held), stored)| {
+                    **stored
+                        && held == cell
+                        && other.width == register.width
+                        && other.register != register.register
+                        && other.register.is_gpr()
+                        && register.register.is_gpr()
+                })
                 .map(|((other, _), _)| *other)
                 .min_by_key(|other| other.register as u32)
                 .filter(|_| _plain(one) && !one.volatile && one.group.is_none() && one.symbol != Some(true));
@@ -128,16 +139,37 @@ fn _held(bits: u32, one: &Insn, facts: Facts) -> (Facts, bool, Option<(usize, Re
     // An ALU or compare operand read from a slot a register holds is that register.
     let held_source = (|| {
         let name = what.name.as_deref()?;
-        if !matches!(name, "add" | "sub" | "and" | "or" | "xor" | "cmp" | "test" | "adc" | "sbb") || !_plain(one) || one.volatile || one.group.is_some() || one.symbol == Some(true) {
+        if !matches!(
+            name,
+            "add" | "sub" | "and" | "or" | "xor" | "cmp" | "test" | "adc" | "sbb"
+        )
+            || !_plain(one)
+            || one.volatile
+            || one.group.is_some()
+            || one.symbol == Some(true)
+        {
             return None;
         }
-        let memories: Vec<usize> = what.sources.iter().enumerate().filter(|(_, place)| matches!(place, Loc::Mem(_))).map(|(at, _)| at).collect();
+        let memories: Vec<usize> = what
+            .sources
+            .iter()
+            .enumerate()
+            .filter(|(_, place)| matches!(place, Loc::Mem(_)))
+            .map(|(at, _)| at)
+            .collect();
         let [at] = memories[..] else { return None };
         let Loc::Mem(cell) = &what.sources[at] else { return None };
         if !_frame_cell(cell) || what.dests.iter().any(|dest| matches!(dest, Loc::Mem(_))) {
             return None;
         }
-        facts.iter().filter(|((other, held), stored)| **stored && held == cell && other.width == cell.width && other.register.is_gpr()).map(|((other, _), _)| *other).min_by_key(|other| other.register as u32).map(|from| (at, from))
+        facts
+            .iter()
+            .filter(|((other, held), stored)| {
+                **stored && held == cell && other.width == cell.width && other.register.is_gpr()
+            })
+            .map(|((other, _), _)| *other)
+            .min_by_key(|other| other.register as u32)
+            .map(|from| (at, from))
     })();
     facts.retain(|pair, _| _lanes(pair.0.register).is_disjoint(&writes));
     if let Some(written) = written {
@@ -184,7 +216,11 @@ fn _available(body: &LirBody) -> IndexMap<i64, Facts> {
                 };
                 met = Some(match met {
                     None => leaving.clone(),
-                    Some(met) => met.iter().filter(|(fact, _)| leaving.contains_key(*fact)).map(|(fact, stored)| (fact.clone(), *stored && leaving[fact])).collect(),
+                    Some(met) => met
+                        .iter()
+                        .filter(|(fact, _)| leaving.contains_key(*fact))
+                        .map(|(fact, stored)| (fact.clone(), *stored && leaving[fact]))
+                        .collect(),
                 });
             }
             met
@@ -195,7 +231,11 @@ fn _available(body: &LirBody) -> IndexMap<i64, Facts> {
 }
 
 /// The reloads `facts` makes redundant in `block`, and the facts after it.
-fn _transfer(bits: u32, block: &LirBlock, facts: Facts) -> (Vec<usize>, IndexMap<usize, (usize, Reg)>, Facts) {
+fn _transfer(
+    bits: u32,
+    block: &LirBlock,
+    facts: Facts,
+) -> (Vec<usize>, IndexMap<usize, (usize, Reg)>, Facts) {
     let mut facts = facts;
     let mut redundant = Vec::new();
     let mut copies = IndexMap::default();

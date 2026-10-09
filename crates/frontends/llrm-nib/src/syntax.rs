@@ -21,17 +21,19 @@ pub struct Span {
 }
 
 impl Span {
-    pub const fn new(line: usize, column: usize, end_column: usize) -> Self {
-        Self {
-            line,
-            column,
-            end_column,
-            module: 0,
-        }
+    pub const fn new(
+        line: usize,
+        column: usize,
+        end_column: usize,
+    ) -> Self {
+        Self { line, column, end_column, module: 0 }
     }
 
     /// From this span's start, in its module, to `end_column`.
-    pub const fn to(self, end_column: usize) -> Self {
+    pub const fn to(
+        self,
+        end_column: usize,
+    ) -> Self {
         Self { end_column, ..self }
     }
 }
@@ -123,9 +125,15 @@ pub enum FixedStorage {
 pub enum TypeAnnotation {
     Value(TypeSpec),
     /// `[T]`, or `[T, rank]` for a ranked view.
-    Slice { element: TypeSpec, rank: u8 },
+    Slice {
+        element: TypeSpec,
+        rank: u8,
+    },
     /// `[T; d0, d1, ...]`, row-major.
-    Array { element: TypeSpec, dims: Vec<u32> },
+    Array {
+        element: TypeSpec,
+        dims: Vec<u32>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -207,7 +215,8 @@ pub struct Module {
 /// A foreign calling convention (section 15).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Abi {
-    /// `"c"`: the convention of an unmarked C function, the target's native one (cdecl16, watcall32): `resolved` says which.
+    /// `"c"`: the convention of an unmarked C function, the target's native one (cdecl16, watcall32): `resolved` says
+    /// which.
     C,
     Cdecl16,
     /// The same convention on the flat target: stack arguments in dwords, EAX results.
@@ -292,7 +301,10 @@ impl Adapter {
 
 impl Abi {
     /// `"c"`, the convention of C's own functions, is the target's native one: what an unmarked C function has.
-    pub fn resolved(self, native: Self) -> Self {
+    pub fn resolved(
+        self,
+        native: Self,
+    ) -> Self {
         if self == Self::C { native } else { self }
     }
 
@@ -329,9 +341,14 @@ impl Abi {
     }
 
     /// The object symbol of `name`: C's `_name`, Pascal's and BASIC's `NAME`.
-    pub fn symbol(self, name: &str) -> String {
+    pub fn symbol(
+        self,
+        name: &str,
+    ) -> String {
         match self {
-            Self::C | Self::Cdecl16 | Self::Cdecl32 | Self::Sysv32 | Self::Ia16 | Self::Interrupt16 => format!("_{name}"),
+            Self::C | Self::Cdecl16 | Self::Cdecl32 | Self::Sysv32 | Self::Ia16 | Self::Interrupt16 => {
+                format!("_{name}")
+            }
             Self::Watcall32 | Self::Watcall16 => format!("{name}_"),
             Self::Regparm3 => format!("_{name}@3"),
             Self::Pascal16 | Self::Basic(_) => name.to_ascii_uppercase(),
@@ -339,7 +356,10 @@ impl Abi {
     }
 
     pub fn callee_cleans(self) -> bool {
-        !matches!(self, Self::C | Self::Cdecl16 | Self::Cdecl32 | Self::Sysv32 | Self::Ia16 | Self::Regparm3)
+        !matches!(
+            self,
+            Self::C | Self::Cdecl16 | Self::Cdecl32 | Self::Sysv32 | Self::Ia16 | Self::Regparm3
+        )
     }
 
     /// The `cc` of the description's convention this is, where it is not the C one: what HIR names it by.
@@ -746,12 +766,7 @@ impl Clause {
         match (loops.next(), loops.next()) {
             (
                 Some(Self::For {
-                    pattern: Pattern::Binding(name, _),
-                    refutable: false,
-                    mode,
-                    iterable,
-                    end: None,
-                    ..
+                    pattern: Pattern::Binding(name, _), refutable: false, mode, iterable, end: None, ..
                 }),
                 None,
             ) => Some((name, *mode, iterable)),
@@ -765,7 +780,10 @@ impl Clause {
     }
 
     /// `clauses` as nested loops and conditions around `body`.
-    pub fn loops(clauses: &[Clause], body: Vec<Statement>) -> Vec<Statement> {
+    pub fn loops(
+        clauses: &[Clause],
+        body: Vec<Statement>,
+    ) -> Vec<Statement> {
         let Some((first, rest)) = clauses.split_first() else {
             return body;
         };
@@ -777,33 +795,22 @@ impl Clause {
                 else_branch: Vec::new(),
                 span: condition.span(),
             }],
-            Self::For {
-                pattern,
-                refutable,
-                mode,
-                iterable,
-                end,
-                span,
-            } => {
-                vec![Statement::for_pattern(
-                    pattern,
-                    *refutable,
-                    *mode,
-                    iterable.clone(),
-                    end.clone(),
-                    inner,
-                    *span,
-                )]
+            Self::For { pattern, refutable, mode, iterable, end, span } => {
+                vec![Statement::for_pattern(pattern, *refutable, *mode, iterable.clone(), end.clone(), inner, *span)]
             }
         }
     }
 
     /// Each clause's condition, or iterable and end, left to right.
     pub fn expressions_mut(clauses: &mut [Clause]) -> impl Iterator<Item = &mut Expr> {
-        clauses.iter_mut().flat_map(|clause| match clause {
-            Self::If(condition) => vec![condition],
-            Self::For { iterable, end, .. } => std::iter::once(iterable).chain(end.iter_mut()).collect(),
-        })
+        clauses
+            .iter_mut()
+            .flat_map(
+                |clause| match clause {
+                    Self::If(condition) => vec![condition],
+                    Self::For { iterable, end, .. } => std::iter::once(iterable).chain(end.iter_mut()).collect(),
+                },
+            )
     }
 }
 
@@ -818,8 +825,14 @@ pub enum IterationMode {
 pub enum AssignTarget {
     Name(String),
     /// `base[indices]`: an element of a named sequence or of an array field.
-    Index { base: Expr, indices: Vec<Expr> },
-    Member { base: Expr, field: String },
+    Index {
+        base: Expr,
+        indices: Vec<Expr>,
+    },
+    Member {
+        base: Expr,
+        field: String,
+    },
     /// `*pointer`.
     Deref(Expr),
 }
@@ -837,10 +850,15 @@ impl AssignTarget {
     }
 
     /// The place, as the expression that names it.
-    pub fn expression(&self, span: Span) -> Expr {
+    pub fn expression(
+        &self,
+        span: Span,
+    ) -> Expr {
         match self {
             Self::Name(name) => Expr::Name(name.clone(), span),
-            Self::Index { base, indices } => Expr::Index { base: Box::new(base.clone()), indices: indices.clone(), span },
+            Self::Index { base, indices } => {
+                Expr::Index { base: Box::new(base.clone()), indices: indices.clone(), span }
+            }
             Self::Member { base, field } => Expr::Member { base: Box::new(base.clone()), field: field.clone(), span },
             Self::Deref(pointer) => Expr::Unary { op: UnaryOp::Deref, operand: Box::new(pointer.clone()), span },
         }
@@ -1063,40 +1081,22 @@ pub struct Format {
 
 impl Default for Format {
     fn default() -> Self {
-        Self {
-            width: 0,
-            radix: 10,
-            zero: false,
-            left: false,
-        }
+        Self { width: 0, radix: 10, zero: false, left: false }
     }
 }
 
 impl Format {
     pub fn parse(code: &str) -> Option<Self> {
-        let (left, code) = code
-            .strip_prefix('-')
-            .map_or((false, code), |rest| (true, rest));
-        let (zero, code) = code
-            .strip_prefix('0')
-            .map_or((false, code), |rest| (true, rest));
+        let (left, code) = code.strip_prefix('-').map_or((false, code), |rest| (true, rest));
+        let (zero, code) = code.strip_prefix('0').map_or((false, code), |rest| (true, rest));
         let (digits, radix) = match code.as_bytes().last() {
             Some(b'x') => (&code[..code.len() - 1], 16),
             Some(b'b') => (&code[..code.len() - 1], 2),
             Some(b'o') => (&code[..code.len() - 1], 8),
             _ => (code, 10),
         };
-        let width = if digits.is_empty() {
-            0
-        } else {
-            digits.parse().ok()?
-        };
-        let format = Self {
-            width,
-            radix,
-            zero,
-            left,
-        };
+        let width = if digits.is_empty() { 0 } else { digits.parse().ok()? };
+        let format = Self { width, radix, zero, left };
         (!(left && zero) && format != Self::default()).then_some(format)
     }
 }
@@ -1141,7 +1141,10 @@ impl Expr {
 
 impl Statement {
     /// Calls `visit` on this statement, then on each in the blocks it holds.
-    pub fn each_mut(&mut self, visit: &mut impl FnMut(&mut Statement)) {
+    pub fn each_mut(
+        &mut self,
+        visit: &mut impl FnMut(&mut Statement),
+    ) {
         visit(self);
         for block in self.blocks_mut() {
             block.iter_mut().for_each(|one| one.each_mut(visit));
@@ -1181,31 +1184,16 @@ impl Statement {
                 let name = format!("$item{}_{}", span.line, span.column);
                 let item = Expr::Name(name.clone(), span);
                 let body = if refutable {
-                    let skip = MatchArm {
-                        pattern: Pattern::Wildcard(span),
-                        body: vec![Statement::Continue(span)],
-                        span,
-                    };
+                    let skip =
+                        MatchArm { pattern: Pattern::Wildcard(span), body: vec![Statement::Continue(span)], span };
                     vec![Statement::Match {
                         subject: item,
-                        arms: vec![
-                            MatchArm {
-                                pattern: pattern.clone(),
-                                body,
-                                span,
-                            },
-                            skip,
-                        ],
+                        arms: vec![MatchArm { pattern: pattern.clone(), body, span }, skip],
                         span,
                     }]
                 } else {
                     [
-                        vec![Statement::Destructure {
-                            pattern: pattern.clone(),
-                            value: item,
-                            otherwise: None,
-                            span,
-                        }],
+                        vec![Statement::Destructure { pattern: pattern.clone(), value: item, otherwise: None, span }],
                         body,
                     ]
                     .concat()
@@ -1214,21 +1202,8 @@ impl Statement {
             }
         };
         match end {
-            Some(end) => Statement::ForRange {
-                name,
-                start: iterable,
-                end,
-                body,
-                span,
-            },
-            None => Statement::For {
-                mode,
-                name,
-                iterable,
-                body,
-                returned: false,
-                span,
-            },
+            Some(end) => Statement::ForRange { name, start: iterable, end, body, span },
+            None => Statement::For { mode, name, iterable, body, returned: false, span },
         }
     }
 
@@ -1286,19 +1261,12 @@ impl Statement {
                 value.walk_mut(visit)
             }
             Self::Return { value, .. } => value.as_mut().map_or(Ok(()), |one| one.walk_mut(visit)),
-            Self::If {
-                condition,
-                then_branch,
-                else_branch,
-                ..
-            } => {
+            Self::If { condition, then_branch, else_branch, .. } => {
                 condition.walk_mut(visit)?;
                 walk_body(then_branch, visit)?;
                 walk_body(else_branch, visit)
             }
-            Self::While {
-                condition, body, ..
-            } => {
+            Self::While { condition, body, .. } => {
                 condition.walk_mut(visit)?;
                 walk_body(body, visit)
             }
@@ -1306,9 +1274,7 @@ impl Statement {
                 iterable.walk_mut(visit)?;
                 walk_body(body, visit)
             }
-            Self::ForRange {
-                start, end, body, ..
-            } => {
+            Self::ForRange { start, end, body, .. } => {
                 start.walk_mut(visit)?;
                 end.walk_mut(visit)?;
                 walk_body(body, visit)
@@ -1320,8 +1286,7 @@ impl Statement {
             Self::Unsafe { body, .. } => walk_body(body, visit),
             Self::Match { subject, arms, .. } => {
                 subject.walk_mut(visit)?;
-                arms.iter_mut()
-                    .try_for_each(|arm| walk_body(&mut arm.body, visit))
+                arms.iter_mut().try_for_each(|arm| walk_body(&mut arm.body, visit))
             }
             Self::Asm(asm) => asm.expressions_mut().into_iter().try_for_each(|one| one.walk_mut(visit)),
             Self::Break(_) | Self::Continue(_) | Self::Const(_) | Self::Function(_) => Ok(()),
@@ -1333,20 +1298,23 @@ fn walk_body<E>(
     body: &mut [Statement],
     visit: &mut impl FnMut(&mut Expr) -> Result<(), E>,
 ) -> Result<(), E> {
-    body.iter_mut()
-        .try_for_each(|statement| statement.walk_mut(visit))
+    body.iter_mut().try_for_each(|statement| statement.walk_mut(visit))
 }
 
 impl Expr {
     /// Every name this expression reads.
     pub fn names(&self) -> Vec<String> {
         let mut named = Vec::new();
-        let Ok(()) = self.clone().walk_mut(&mut |one| -> Result<(), std::convert::Infallible> {
-            if let Expr::Name(name, _) = one {
-                named.push(name.clone());
-            }
-            Ok(())
-        });
+        let Ok(()) = self
+            .clone()
+            .walk_mut(
+                &mut |one| -> Result<(), std::convert::Infallible> {
+                    if let Expr::Name(name, _) = one {
+                        named.push(name.clone());
+                    }
+                    Ok(())
+                },
+            );
         named
     }
 
@@ -1413,7 +1381,9 @@ impl Expr {
             Self::Binary { left, right, .. } => vec![left.as_mut(), right.as_mut()],
             Self::Chain { operands, .. } => operands.iter_mut().collect(),
             Self::Call { arguments, .. } | Self::Variant { arguments, .. } => arguments.iter_mut().collect(),
-            Self::MethodCall { receiver, arguments, .. } => std::iter::once(receiver.as_mut()).chain(arguments).collect(),
+            Self::MethodCall { receiver, arguments, .. } => {
+                std::iter::once(receiver.as_mut()).chain(arguments).collect()
+            }
             Self::Conditional { condition, then, otherwise, .. } => {
                 vec![condition.as_mut(), then.as_mut(), otherwise.as_mut()]
             }

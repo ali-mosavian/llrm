@@ -16,10 +16,10 @@
 use llrm_analysis::cfg;
 use llrm_analysis::consts::{ARITH, masked};
 use llrm_analysis::induction::{self, AffineOperand, ControlReplacement, CountedLoop};
+use llrm_mir::Context;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
-use llrm_mir::Context;
 use num_bigint::BigInt;
 
 /// Where a rewrite's preheader arithmetic goes, and how wide it is.
@@ -37,7 +37,11 @@ pub struct Seeds<'a> {
 
 impl Seeds<'_> {
     /// `kind` of `args`, the constant it is where both are.
-    pub fn computed(&mut self, kind: BinaryOp, args: Vec<AffineOperand>) -> AffineOperand {
+    pub fn computed(
+        &mut self,
+        kind: BinaryOp,
+        args: Vec<AffineOperand>,
+    ) -> AffineOperand {
         let arith = ARITH.iter().find(|(one, _)| *one == kind).map(|(_, arith)| *arith);
         if let (Some(arith), [AffineOperand::Const(left), AffineOperand::Const(right)]) = (arith, args.as_slice()) {
             return AffineOperand::constant(arith(&left.n, &right.n), self.width);
@@ -50,13 +54,25 @@ impl Seeds<'_> {
     }
 
     /// `term`, unsigned, `to` bits wide where it is narrower: a trip count in an index's width.
-    pub fn widened(&mut self, term: &AffineOperand, to: u32) -> AffineOperand {
+    pub fn widened(
+        &mut self,
+        term: &AffineOperand,
+        to: u32,
+    ) -> AffineOperand {
         match term {
             AffineOperand::Const(known) => AffineOperand::constant(known.n.clone(), to),
             AffineOperand::Value(_, from) if *from >= to => term.clone(),
             AffineOperand::Value(value, _) => {
                 let ty = self.context.types.int(to);
-                let inst = self.function.create_instruction(Opcode::Cast(CastOp::ZExt), ty, vec![Operand::Value(*value)], Flags::default(), None);
+                let inst = self
+                    .function
+                    .create_instruction(
+                        Opcode::Cast(CastOp::ZExt),
+                        ty,
+                        vec![Operand::Value(*value)],
+                        Flags::default(),
+                        None,
+                    );
                 self.function.insert(inst, Position::Before(self.at)).expect("`at` is placed");
                 AffineOperand::Value(self.function.instruction(inst).result.expect("an integer result"), to)
             }
@@ -64,7 +80,10 @@ impl Seeds<'_> {
     }
 
     /// `term` as an operand.
-    pub fn operand(&mut self, term: &AffineOperand) -> Operand {
+    pub fn operand(
+        &mut self,
+        term: &AffineOperand,
+    ) -> Operand {
         match term {
             AffineOperand::Value(value, _) => Operand::Value(*value),
             AffineOperand::Const(known) => constant(self.context, &known.n, known.width),
@@ -73,7 +92,11 @@ impl Seeds<'_> {
 }
 
 /// `n` as a constant `width` bits wide.
-pub fn constant(context: &mut Context, n: &BigInt, width: u32) -> Operand {
+pub fn constant(
+    context: &mut Context,
+    n: &BigInt,
+    width: u32,
+) -> Operand {
     let ty = context.types.int(width);
     let bits = u128::try_from(masked(n, width)).expect("a masked number fits its width");
     Operand::Constant(context.int(ty, bits as i128))
@@ -81,7 +104,10 @@ pub fn constant(context: &mut Context, n: &BigInt, width: u32) -> Operand {
 
 /// The preheader compare that is true where a counted loop runs no trips;
 /// a branch on it to `proof.exit` skips the loop.
-pub fn skip_guard(seeds: &mut Seeds, proof: &CountedLoop) -> Option<ValueId> {
+pub fn skip_guard(
+    seeds: &mut Seeds,
+    proof: &CountedLoop,
+) -> Option<ValueId> {
     let ((left, right), test) = induction::skipped(proof)?;
     let operands = vec![seeds.operand(&left), seeds.operand(&right)];
     let ty = seeds.context.types.int(1);
@@ -93,7 +119,11 @@ pub fn skip_guard(seeds: &mut Seeds, proof: &CountedLoop) -> Option<ValueId> {
 /// Exit phis of a replaced counter, reading its exit value after a trip and,
 /// where a guard may skip the loop, its start after none: each phi's new
 /// operands.
-pub fn leaving(seeds: &mut Seeds, replacement: &ControlReplacement<'_>, guarded: bool) -> Vec<(InstId, Vec<Operand>)> {
+pub fn leaving(
+    seeds: &mut Seeds,
+    replacement: &ControlReplacement<'_>,
+    guarded: bool,
+) -> Vec<(InstId, Vec<Operand>)> {
     let proof = replacement.counted;
     if replacement.exits.is_empty() {
         return Vec::new();
@@ -101,12 +131,19 @@ pub fn leaving(seeds: &mut Seeds, replacement: &ControlReplacement<'_>, guarded:
     let exit = induction::exit_value(proof, &mut |kind, args| seeds.computed(kind, args)).expect("a pre-tested proof");
     let value = seeds.operand(&exit);
     let preheader = Operand::Block(cfg::block(proof.preheader.expect("control_replacement proved a preheader")));
-    let start = seeds.function.instruction(proof.phi).operands.chunks(2).find(|pair| pair[1] == preheader).expect("a preheader edge")[0];
+    let start = seeds
+        .function
+        .instruction(proof.phi)
+        .operands
+        .chunks(2)
+        .find(|pair| pair[1] == preheader)
+        .expect("a preheader edge")[0];
     replacement
         .exits
         .iter()
         .map(|&phi| {
-            let arms = seeds.function.instruction(phi).operands.chunks(2).filter(|pair| !guarded || pair[1] != preheader);
+            let arms =
+                seeds.function.instruction(phi).operands.chunks(2).filter(|pair| !guarded || pair[1] != preheader);
             let mut operands = arms.flat_map(|pair| [value, pair[1]]).collect::<Vec<_>>();
             if guarded {
                 operands.extend([start, preheader]);

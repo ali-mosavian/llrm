@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use iced_x86::{Code, Register};
 use llrm_x86_bcmachine::frontends::bc::blocks::Block;
-use llrm_x86_bcmachine::model::ir::lift::{self, Decoded, Kind as Lifted};
 use llrm_x86_bcmachine::model::ir::Loc;
+use llrm_x86_bcmachine::model::ir::lift::{self, Decoded, Kind as Lifted};
 use llrm_x86_bcmachine::model::ir::nodes::{Long, Node, span};
 use llrm_x86_bcmachine::objectfile::module::{Addr, Space};
 use llrm_x86_bcmachine::support::hash::IndexMap;
@@ -71,10 +71,14 @@ impl Pair {
 const WORDS: [(Register, Register); 2] = [(Register::AX, Register::DX), (Register::CX, Register::BX)];
 
 /// Every pair in `blocks`, by its first node's address.
-pub fn found(blocks: &[Block], nodes: &IndexMap<i64, Arc<Node>>) -> BTreeMap<i64, Pair> {
+pub fn found(
+    blocks: &[Block],
+    nodes: &IndexMap<i64, Arc<Node>>,
+) -> BTreeMap<i64, Pair> {
     let mut out = BTreeMap::new();
     for block in blocks {
-        let run: Vec<&Node> = block.insns.iter().filter_map(|insn| nodes.get(&(insn.at as i64))).map(|one| &**one).collect();
+        let run: Vec<&Node> =
+            block.insns.iter().filter_map(|insn| nodes.get(&(insn.at as i64))).map(|one| &**one).collect();
         let mut index = 0;
         while index < run.len() {
             match at(&run[index..]) {
@@ -100,7 +104,13 @@ fn at(run: &[&Node]) -> Option<Pair> {
     let [first, second, ..] = run else { return None };
     let nodes = ats[..2].to_vec();
     if let Some((memory, value)) = constants(first, second) {
-        return Some(Pair { shape: Shape::Constant(value), low: Register::None, high: Register::None, nodes, memory: Some(memory) });
+        return Some(Pair {
+            shape: Shape::Constant(value),
+            low: Register::None,
+            high: Register::None,
+            nodes,
+            memory: Some(memory),
+        });
     }
     if let Some((source, memory)) = pushes(first, second) {
         return Some(Pair { shape: Shape::Push(source), low: Register::None, high: Register::None, nodes, memory });
@@ -147,27 +157,45 @@ fn at(run: &[&Node]) -> Option<Pair> {
 }
 
 /// The low half's address, where the high half's names the two bytes above it.
-fn adjacent(low: &Decoded, high: &Decoded) -> Option<Addr> {
+fn adjacent(
+    low: &Decoded,
+    high: &Decoded,
+) -> Option<Addr> {
     let (low, high) = (low.mem?, high.mem?);
     (low.plus(2) == high).then_some(low)
 }
 
 /// `neg lo / adc hi,0 / neg hi`: its words.
-fn negate(first: &Node, second: &Node, third: &Node) -> Option<(Register, Register)> {
+fn negate(
+    first: &Node,
+    second: &Node,
+    third: &Node,
+) -> Option<(Register, Register)> {
     let negated = |node: &Node| match node {
-        Node::Opaque(one) if one.insn.code() == Code::Neg_rm16 && !one.insn.reads_memory(0) => Some(one.insn.register(0)),
+        Node::Opaque(one) if one.insn.code() == Code::Neg_rm16 && !one.insn.reads_memory(0) => {
+            Some(one.insn.register(0))
+        }
         _ => None,
     };
     let (low, high) = (negated(first)?, negated(third)?);
     let Node::Long(Long { decoded, .. }) = second else { return None };
-    let carried = decoded.kind == Lifted::AluImm && decoded.imm == Some(0) && lift::IMM_HIGH_FAMILY["add"].contains(&decoded.alu?);
+    let carried = decoded.kind == Lifted::AluImm
+        && decoded.imm == Some(0)
+        && lift::IMM_HIGH_FAMILY["add"].contains(&decoded.alu?);
     (carried && WORDS[decoded.pair] == (low, high)).then_some((low, high))
 }
 
 /// Two word constants stored to adjacent bytes, low first: the address and the long.
-fn constants(first: &Node, second: &Node) -> Option<((usize, Addr), u32)> {
+fn constants(
+    first: &Node,
+    second: &Node,
+) -> Option<((usize, Addr), u32)> {
     let stored = |node: &Node| match node {
-        Node::Opaque(one) if one.insn.code() == Code::Mov_rm16_imm16 && one.effects.stores.len() == 1 && one.effects.stores[0].width == 2 => {
+        Node::Opaque(one)
+            if one.insn.code() == Code::Mov_rm16_imm16
+                && one.effects.stores.len() == 1
+                && one.effects.stores[0].width == 2 =>
+        {
             Some((one.effects.stores[0].addr?, one.insn.insn.immediate16() as u32))
         }
         _ => None,
@@ -177,7 +205,10 @@ fn constants(first: &Node, second: &Node) -> Option<((usize, Addr), u32)> {
 }
 
 /// `push hi / push lo` of one long: where it is, and the low word's address.
-fn pushes(first: &Node, second: &Node) -> Option<(Source, Option<(usize, Addr)>)> {
+fn pushes(
+    first: &Node,
+    second: &Node,
+) -> Option<(Source, Option<(usize, Addr)>)> {
     let (Node::Opaque(high), Node::Opaque(low)) = (first, second) else { return None };
     match (high.insn.code(), low.insn.code()) {
         (Code::Push_r16, Code::Push_r16) => {

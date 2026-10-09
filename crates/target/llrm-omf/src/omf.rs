@@ -9,14 +9,13 @@
 //! A Python `list[Record]` holds references, and callers compare them by
 //! identity (`is`, `id()`), so records are carried as `Rc<Record>`.
 
-use llrm_support::hash::HashSet;
 use std::fmt;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::LazyLock;
 
+use llrm_support::hash::HashSet;
 use llrm_support::hash::IndexMap;
-
 use llrm_support::pyrepr::{self, Repr};
 
 pub const THEADR: u8 = 0x80;
@@ -37,7 +36,10 @@ pub const LIDATA: u8 = 0xA2;
 pub struct ValueError(pub String);
 
 impl fmt::Display for ValueError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         f.write_str(&self.0)
     }
 }
@@ -52,7 +54,10 @@ pub enum ReadError {
 }
 
 impl fmt::Display for ReadError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
             ReadError::OSError(error) => write!(f, "{error}"),
             ReadError::ValueError(error) => write!(f, "{error}"),
@@ -76,7 +81,10 @@ pub struct Record {
 
 /// `raw` is `field(compare=False)`.
 impl PartialEq for Record {
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
         self.r#type == other.r#type && self.body == other.body
     }
 }
@@ -84,34 +92,24 @@ impl PartialEq for Record {
 impl Eq for Record {}
 
 impl Record {
-    pub fn new(r#type: u8, body: Vec<u8>) -> Record {
-        Record {
-            r#type,
-            body,
-            raw: None,
-        }
+    pub fn new(
+        r#type: u8,
+        body: Vec<u8>,
+    ) -> Record {
+        Record { r#type, body, raw: None }
     }
 
     pub fn emit(&self) -> Vec<u8> {
         // the checksum byte makes the record's bytes sum to zero mod 256;
         // a zero byte is also accepted and is what many tools write
         let body = &self.body;
-        let head = [self.r#type]
-            .into_iter()
-            .chain(pack(body.len() as i64 + 1))
-            .collect::<Vec<u8>>();
+        let head = [self.r#type].into_iter().chain(pack(body.len() as i64 + 1)).collect::<Vec<u8>>();
         if let Some(raw) = &self.raw {
-            if slice(raw, 0, 3) == head.as_slice()
-                && slice(raw, 3, raw.len().saturating_sub(1)) == body.as_slice()
-            {
+            if slice(raw, 0, 3) == head.as_slice() && slice(raw, 3, raw.len().saturating_sub(1)) == body.as_slice() {
                 return raw.clone();
             }
         }
-        let total = head
-            .iter()
-            .chain(body.iter())
-            .map(|&byte| byte as i64)
-            .sum::<i64>();
+        let total = head.iter().chain(body.iter()).map(|&byte| byte as i64).sum::<i64>();
         let mut out = head;
         out.extend_from_slice(body);
         out.push((-total & 0xFF) as u8);
@@ -126,10 +124,7 @@ impl Repr for Record {
             &[
                 ("type", self.r#type.to_string()),
                 ("body", pyrepr::bytes(&self.body)),
-                (
-                    "raw",
-                    self.raw.as_deref().map_or("None".to_owned(), pyrepr::bytes),
-                ),
+                ("raw", self.raw.as_deref().map_or("None".to_owned(), pyrepr::bytes)),
             ],
         )
     }
@@ -157,16 +152,16 @@ pub fn parse(d: &[u8]) -> Result<Vec<Rc<Record>>, ValueError> {
         i += 3 + n;
     }
     if i != d.len() {
-        return Err(ValueError(format!(
-            "{} trailing bytes",
-            d.len() as i64 - i as i64
-        )));
+        return Err(ValueError(format!("{} trailing bytes", d.len() as i64 - i as i64)));
     }
     Ok(out)
 }
 
 /// An OMF index: one byte under 128, otherwise two with the top bit set.
-pub fn _index(b: &[u8], i: usize) -> (i64, usize) {
+pub fn _index(
+    b: &[u8],
+    i: usize,
+) -> (i64, usize) {
     if b[i] & 0x80 != 0 {
         return ((((b[i] & 0x7F) as i64) << 8) | b[i + 1] as i64, i + 2);
     }
@@ -203,18 +198,18 @@ pub fn segments(recs: &[Rc<Record>]) -> Vec<Option<(String, i64)>> {
         }
         // SEGDEF32 (the odd record type) has a four-byte length: ML's debug segments are written so.
         let width = if r.r#type & 1 == 1 { 4 } else { 2 };
-        let mut ln = if width == 4 { i64::from(u32::from_le_bytes(r.body[i..i + 4].try_into().expect("a SEGDEF32 length"))) } else { unpack_from(&r.body, i) };
+        let mut ln = if width == 4 {
+            i64::from(u32::from_le_bytes(r.body[i..i + 4].try_into().expect("a SEGDEF32 length")))
+        } else {
+            unpack_from(&r.body, i)
+        };
         if (acbp & 0x02) != 0 && ln == 0 {
             // the big bit: a full 64K
             ln = 0x10000;
         }
         i += width;
         let (ni, _) = _index(&r.body, i);
-        let name = if (ni as usize) < nm.len() {
-            nm[ni as usize].clone()
-        } else {
-            "?".to_owned()
-        };
+        let name = if (ni as usize) < nm.len() { nm[ni as usize].clone() } else { "?".to_owned() };
         out.push(Some((name, ln)));
     }
     out
@@ -257,11 +252,7 @@ pub fn groups(recs: &[Rc<Record>]) -> IndexMap<String, Vec<i64>> {
             i = next;
             members.push(si);
         }
-        let name = if (gi as usize) < nm.len() {
-            nm[gi as usize].clone()
-        } else {
-            "?".to_owned()
-        };
+        let name = if (gi as usize) < nm.len() { nm[gi as usize].clone() } else { "?".to_owned() };
         out.insert(name, members);
     }
     out
@@ -288,7 +279,10 @@ pub fn externals(recs: &[Rc<Record>]) -> Vec<String> {
 /// PUBDEF's own name for each offset it declares into segment `seg`.
 ///
 /// Mirrors code_offsets()'s PUBDEF branch, but keeps the name it skips past.
-pub fn pubdef_names(records: &[Rc<Record>], seg: i64) -> Result<IndexMap<i64, String>, ValueError> {
+pub fn pubdef_names(
+    records: &[Rc<Record>],
+    seg: i64,
+) -> Result<IndexMap<i64, String>, ValueError> {
     Ok(public_definitions(records)?
         .into_iter()
         .filter(|(_name, (segment, _offset))| *segment == seg)
@@ -299,9 +293,7 @@ pub fn pubdef_names(records: &[Rc<Record>], seg: i64) -> Result<IndexMap<i64, St
 /// Every externally visible PUBDEF as `name -> (segment, offset)`.
 ///
 /// Local PUBDEFs do not satisfy an EXTDEF and are deliberately absent.
-pub fn public_definitions(
-    records: &[Rc<Record>],
-) -> Result<IndexMap<String, (i64, i64)>, ValueError> {
+pub fn public_definitions(records: &[Rc<Record>]) -> Result<IndexMap<String, (i64, i64)>, ValueError> {
     let mut out: IndexMap<String, (i64, i64)> = IndexMap::default();
     for r in records {
         if r.r#type & 0xFE != PUBDEF {
@@ -323,17 +315,11 @@ pub fn public_definitions(
             if at + width > body.len() {
                 return Err(ValueError("truncated PUBDEF offset".to_owned()));
             }
-            let offset = body[at..at + width]
-                .iter()
-                .rev()
-                .fold(0i64, |sum, &byte| (sum << 8) | byte as i64);
+            let offset = body[at..at + width].iter().rev().fold(0i64, |sum, &byte| (sum << 8) | byte as i64);
             at += width;
             (_, at) = _index(body, at); // the type index, unused here
             if out.contains_key(&name) {
-                return Err(ValueError(format!(
-                    "duplicate PUBDEF {} in one object module",
-                    pyrepr::string(&name)
-                )));
+                return Err(ValueError(format!("duplicate PUBDEF {} in one object module", pyrepr::string(&name))));
             }
             out.insert(name, (base, offset));
         }
@@ -361,11 +347,8 @@ pub fn rename_external(
         while i < r.body.len() {
             let n = r.body[i] as usize;
             seen += 1;
-            let entry_name = if seen == index {
-                encode_latin1(name)?
-            } else {
-                slice(&r.body, i + 1, i + 1 + n).to_vec()
-            };
+            let entry_name =
+                if seen == index { encode_latin1(name)? } else { slice(&r.body, i + 1, i + 1 + n).to_vec() };
             let j = i + 1 + n;
             let (_, k) = _index(&r.body, j);
             body.extend(bytes(&[entry_name.len() as i64])?);
@@ -374,11 +357,7 @@ pub fn rename_external(
             changed = changed || seen == index;
             i = k;
         }
-        out.push(if changed {
-            Rc::new(Record::new(r.r#type, body))
-        } else {
-            r.clone()
-        });
+        out.push(if changed { Rc::new(Record::new(r.r#type, body)) } else { r.clone() });
     }
     if seen < index {
         return Err(ValueError(format!("only {seen} EXTDEFs; no entry {index}")));
@@ -396,13 +375,12 @@ pub fn ledata(recs: &[Rc<Record>]) -> Vec<(Rc<Record>, i64, i64, Vec<u8>)> {
         let (si, i) = _index(&r.body, 0);
         // LEDATA32 (the odd record type) has a four-byte offset.
         let width = if r.r#type & 1 == 1 { 4 } else { 2 };
-        let off = if width == 4 { i64::from(u32::from_le_bytes(r.body[i..i + 4].try_into().expect("a LEDATA32 offset"))) } else { unpack_from(&r.body, i) };
-        out.push((
-            r.clone(),
-            si,
-            off,
-            slice(&r.body, i + width, r.body.len()).to_vec(),
-        ));
+        let off = if width == 4 {
+            i64::from(u32::from_le_bytes(r.body[i..i + 4].try_into().expect("a LEDATA32 offset")))
+        } else {
+            unpack_from(&r.body, i)
+        };
+        out.push((r.clone(), si, off, slice(&r.body, i + width, r.body.len()).to_vec()));
     }
     out
 }
@@ -439,10 +417,7 @@ pub struct Thread {
 
 impl Repr for Thread {
     fn repr(&self) -> String {
-        pyrepr::dataclass(
-            "Thread",
-            &[("method", self.method.repr()), ("index", self.index.repr())],
-        )
+        pyrepr::dataclass("Thread", &[("method", self.method.repr()), ("index", self.index.repr())])
     }
 }
 
@@ -498,20 +473,15 @@ impl Repr for Fixup {
             Some(name) => (*name).to_owned(),
             None => self.loc.to_string(),
         };
-        format!(
-            "<{} {:04X} {} {} {}+{}>",
-            self.seg.repr(),
-            self.offset,
-            loc,
-            self.target,
-            self.index,
-            self.disp
-        )
+        format!("<{} {:04X} {} {} {}+{}>", self.seg.repr(), self.offset, loc, self.target, self.index, self.disp)
     }
 }
 
 /// (is a frame thread, its number, what it names, where the next starts).
-pub fn read_thread(body: &[u8], mut at: usize) -> (bool, i64, Thread, usize) {
+pub fn read_thread(
+    body: &[u8],
+    mut at: usize,
+) -> (bool, i64, Thread, usize) {
     let lead = body[at];
     at += 1;
     let (method, number) = (((lead >> 2) & 7) as i64, (lead & 3) as i64);
@@ -533,19 +503,14 @@ pub fn code_segment(records: &[Rc<Record>]) -> Option<(i64, String, i64)> {
             }
         }
     }
-    let headers: Vec<&Vec<u8>> = records
-        .iter()
-        .filter(|record| record.r#type == THEADR)
-        .map(|record| &record.body)
-        .collect();
+    let headers: Vec<&Vec<u8>> =
+        records.iter().filter(|record| record.r#type == THEADR).map(|record| &record.body).collect();
     if headers.len() != 1 || headers[0].is_empty() {
         return None;
     }
     let header = headers[0];
     let lower = header[1..].to_ascii_lowercase();
-    if header.len() != header[0] as usize + 1
-        || !(lower.ends_with(b".c") || lower.ends_with(b".asm"))
-    {
+    if header.len() != header[0] as usize + 1 || !(lower.ends_with(b".c") || lower.ends_with(b".asm")) {
         return None;
     }
     let candidates: Vec<(i64, String, i64)> = segments(records)
@@ -564,7 +529,11 @@ pub fn code_segment(records: &[Rc<Record>]) -> Option<(i64, String, i64)> {
 ///
 /// BC emits overlapping LEDATA: short backpatch records arrive later in the
 /// file at earlier offsets. The last write to a byte is the one that counts.
-pub fn segment_image(records: &[Rc<Record>], seg: i64, size: i64) -> Vec<u8> {
+pub fn segment_image(
+    records: &[Rc<Record>],
+    seg: i64,
+    size: i64,
+) -> Vec<u8> {
     let mut image = vec![0u8; size as usize];
     for (_record, index, offset, payload) in ledata(records) {
         if index == seg {
@@ -580,15 +549,7 @@ pub fn segment_image(records: &[Rc<Record>], seg: i64, size: i64) -> Vec<u8> {
 // The odd-numbered twin of each record type is its 32-bit form. Every decoder
 // here matches with & 0xFE, so it accepts them, and then reads them with 16-bit
 // struct formats and fixed two-byte skips. BC emits none of them.
-pub const WIDE: [u8; 7] = [
-    MODEND + 1,
-    PUBDEF + 1,
-    LINNUM + 1,
-    SEGDEF + 1,
-    FIXUPP + 1,
-    LEDATA + 1,
-    LIDATA + 1,
-];
+pub const WIDE: [u8; 7] = [MODEND + 1, PUBDEF + 1, LINNUM + 1, SEGDEF + 1, FIXUPP + 1, LEDATA + 1, LIDATA + 1];
 pub const COMDAT: [u8; 2] = [0xC2, 0xC3];
 
 /// Why this module must be left alone, if it must. Empty means it may be read.
@@ -603,18 +564,11 @@ pub fn refusals(records: &[Rc<Record>]) -> Vec<String> {
     if COMDAT.iter().any(|kind| kinds.contains(kind)) {
         reasons.push("COMDAT is not decoded".to_owned());
     }
-    let wide: Vec<u8> = WIDE
-        .iter()
-        .copied()
-        .filter(|kind| kinds.contains(kind))
-        .collect();
+    let wide: Vec<u8> = WIDE.iter().copied().filter(|kind| kinds.contains(kind)).collect();
     if !wide.is_empty() {
         let mut hexes: Vec<String> = wide.iter().map(|kind| format!("{kind:#x}")).collect();
         hexes.sort();
-        reasons.push(format!(
-            "32-bit records are decoded as 16-bit: {}",
-            pyrepr::list(&hexes)
-        ));
+        reasons.push(format!("32-bit records are decoded as 16-bit: {}", pyrepr::list(&hexes)));
     }
     reasons
 }
@@ -697,11 +651,7 @@ pub fn fixups(records: &[Rc<Record>]) -> Vec<Fixup> {
                 offset: base + offset,
                 loc,
                 selfrel,
-                target: TARGET_KIND
-                    .get(&(method & 3))
-                    .copied()
-                    .unwrap_or("frame")
-                    .to_owned(),
+                target: TARGET_KIND.get(&(method & 3)).copied().unwrap_or("frame").to_owned(),
                 index,
                 disp,
                 frame,
@@ -732,7 +682,10 @@ pub fn extdef_record(entries: &[(Vec<u8>, Vec<u8>)]) -> Result<Rc<Record>, Value
 }
 
 /// Add a linker dependency without renumbering any existing external.
-pub fn with_external(records: &[Rc<Record>], name: &str) -> Result<(Vec<Rc<Record>>, i64), ValueError> {
+pub fn with_external(
+    records: &[Rc<Record>],
+    name: &str,
+) -> Result<(Vec<Rc<Record>>, i64), ValueError> {
     let names = externals(records);
     if let Some(at) = names.iter().position(|one| one == name) {
         return Ok((records.to_vec(), at as i64));
@@ -760,11 +713,12 @@ pub const FINALISED: (u8, u8) = (0xC0, 0x9C);
 ///
 /// Only after a rebuild that worked. A refusal leaves BC's own code,
 /// which is still worth another look.
-pub fn finalised(records: &[Rc<Record>], made_by: &str) -> Result<Vec<Rc<Record>>, ValueError> {
+pub fn finalised(
+    records: &[Rc<Record>],
+    made_by: &str,
+) -> Result<Vec<Rc<Record>>, ValueError> {
     if finalised_at(records)?.is_some() {
-        return Err(ValueError(
-            "these records are already marked; one object has one account of itself".to_owned(),
-        ));
+        return Err(ValueError("these records are already marked; one object has one account of itself".to_owned()));
     }
     let (attribute, kind) = FINALISED;
     let text = encode_ascii(made_by)?;
@@ -792,15 +746,10 @@ pub fn finalised_at(records: &[Rc<Record>]) -> Result<Option<String>, ValueError
     let (_attribute, kind) = FINALISED;
     let mut found = None;
     for one in records {
-        if one.r#type & 0xFE == COMENT
-            && one.body.len() >= 8
-            && one.body[1] == kind
-            && &one.body[2..8] == b"qbopt\x00"
+        if one.r#type & 0xFE == COMENT && one.body.len() >= 8 && one.body[1] == kind && &one.body[2..8] == b"qbopt\x00"
         {
             if found.is_some() {
-                return Err(ValueError(
-                    "two markers disagree about what made this object".to_owned(),
-                ));
+                return Err(ValueError("two markers disagree about what made this object".to_owned()));
             }
             found = Some(decode_ascii_replace(&one.body[8..]));
         }
@@ -813,11 +762,7 @@ pub fn as_index(value: i64) -> Result<Vec<u8>, ValueError> {
     if !(0..=0x7FFF).contains(&value) {
         return Err(ValueError(format!("{value} is not an OMF index")));
     }
-    Ok(if value < 128 {
-        vec![value as u8]
-    } else {
-        vec![0x80 | (value >> 8) as u8, (value & 0xFF) as u8]
-    })
+    Ok(if value < 128 { vec![value as u8] } else { vec![0x80 | (value >> 8) as u8, (value & 0xFF) as u8] })
 }
 
 /// A FIXUPP record with every external index put through `mapping`.
@@ -853,11 +798,7 @@ pub fn renumbered(
             (was, after) = index(after);
             // A frame thread names an external only by method 2; a target
             // thread's method is the same three, and 2 is the external one.
-            let now = if method == 2 {
-                *mapping.get(&was).unwrap_or(&was)
-            } else {
-                was
-            };
+            let now = if method == 2 { *mapping.get(&was).unwrap_or(&was) } else { was };
             changed = changed || now != was;
             out.extend_from_slice(slice(body, at, at + 1));
             out.extend(as_index(now)?);
@@ -875,11 +816,7 @@ pub fn renumbered(
         if fixdata & 0x80 == 0 && ((fixdata >> 4) & 7) < 3 {
             let was;
             (was, at) = index(at);
-            let now = if ((fixdata >> 4) & 7) == 2 {
-                *mapping.get(&was).unwrap_or(&was)
-            } else {
-                was
-            };
+            let now = if ((fixdata >> 4) & 7) == 2 { *mapping.get(&was).unwrap_or(&was) } else { was };
             changed = changed || now != was;
             out.extend(as_index(now)?);
         }
@@ -887,11 +824,7 @@ pub fn renumbered(
         if fixdata & 0x08 == 0 {
             let was;
             (was, at) = index(at);
-            let now = if (fixdata & 3) == 2 {
-                *mapping.get(&was).unwrap_or(&was)
-            } else {
-                was
-            };
+            let now = if (fixdata & 3) == 2 { *mapping.get(&was).unwrap_or(&was) } else { was };
             changed = changed || now != was;
             out.extend(as_index(now)?);
         }
@@ -903,11 +836,7 @@ pub fn renumbered(
         let _ = start;
     }
 
-    Ok(if !changed {
-        record.clone()
-    } else {
-        Rc::new(Record::new(record.r#type, out))
-    })
+    Ok(if !changed { record.clone() } else { Rc::new(Record::new(record.r#type, out)) })
 }
 
 /// A new absolute offset16 relocation framed by its own target.
@@ -947,12 +876,13 @@ pub fn target_offset_fixup(
     })
 }
 
-pub fn ledata_record(seg: i64, offset: i64, payload: &[u8]) -> Result<Rc<Record>, ValueError> {
+pub fn ledata_record(
+    seg: i64,
+    offset: i64,
+    payload: &[u8],
+) -> Result<Rc<Record>, ValueError> {
     if payload.len() > 1024 {
-        return Err(ValueError(format!(
-            "LEDATA holds at most 1024 bytes, not {}",
-            payload.len()
-        )));
+        return Err(ValueError(format!("LEDATA holds at most 1024 bytes, not {}", payload.len())));
     }
     let mut body = _emit_index(seg)?;
     body.extend(pack(offset));
@@ -965,7 +895,11 @@ pub fn fixupp_record(subrecords: &[Vec<u8>]) -> Rc<Record> {
 }
 
 /// `ledata_record` with a 32-bit offset: LEDATA's 32-bit twin, for a USE32 segment.
-pub fn ledata_record32(seg: i64, offset: i64, payload: &[u8]) -> Result<Rc<Record>, ValueError> {
+pub fn ledata_record32(
+    seg: i64,
+    offset: i64,
+    payload: &[u8],
+) -> Result<Rc<Record>, ValueError> {
     if payload.len() > 1024 {
         return Err(ValueError(format!("LEDATA holds at most 1024 bytes, not {}", payload.len())));
     }
@@ -981,17 +915,16 @@ pub fn fixupp_record32(subrecords: &[Vec<u8>]) -> Rc<Record> {
 }
 
 pub fn _emit_index(value: i64) -> Result<Vec<u8>, ValueError> {
-    if value < 0x80 {
-        bytes(&[value])
-    } else {
-        bytes(&[0x80 | (value >> 8), value & 0xFF])
-    }
+    if value < 0x80 { bytes(&[value]) } else { bytes(&[0x80 | (value >> 8), value & 0xFF]) }
 }
 
 /// Byte positions in `record.body` of 16-bit offsets into segment `seg`.
 ///
 /// The fixups themselves and the self-relative branches have their own paths.
-pub fn code_offsets(record: &Record, seg: i64) -> Vec<usize> {
+pub fn code_offsets(
+    record: &Record,
+    seg: i64,
+) -> Vec<usize> {
     let body = &record.body;
     match record.r#type & 0xFE {
         t if t == PUBDEF => {
@@ -1045,24 +978,32 @@ fn target_method(target: &str) -> i64 {
 }
 
 /// `b[lo:hi]` for non-negative bounds: clamped, and empty where `hi < lo`.
-fn slice(b: &[u8], lo: usize, hi: usize) -> &[u8] {
+fn slice(
+    b: &[u8],
+    lo: usize,
+    hi: usize,
+) -> &[u8] {
     let hi = hi.min(b.len());
     if lo >= hi { &[] } else { &b[lo..hi] }
 }
 
 /// `records[lo:hi]`.
-fn slice_records(records: &[Rc<Record>], lo: usize, hi: usize) -> &[Rc<Record>] {
+fn slice_records(
+    records: &[Rc<Record>],
+    lo: usize,
+    hi: usize,
+) -> &[Rc<Record>] {
     let hi = hi.min(records.len());
     if lo >= hi { &[] } else { &records[lo..hi] }
 }
 
 /// `struct.unpack_from("<H", b, at)[0]`.
-fn unpack_from(b: &[u8], at: usize) -> i64 {
+fn unpack_from(
+    b: &[u8],
+    at: usize,
+) -> i64 {
     if at + 2 > b.len() {
-        panic!(
-            "struct.error: unpack_from requires a buffer of at least {} bytes",
-            at + 2
-        );
+        panic!("struct.error: unpack_from requires a buffer of at least {} bytes", at + 2);
     }
     u16::from_le_bytes([b[at], b[at + 1]]) as i64
 }
@@ -1091,7 +1032,11 @@ fn decode_latin1(b: &[u8]) -> String {
 /// `str.encode(codec)` for a codec that maps code points below `limit` to
 /// themselves. The error is `UnicodeEncodeError`, a `ValueError`, spelled as
 /// CPython spells it: one error over the first run of unencodable characters.
-fn encode_below(s: &str, codec: &str, limit: u32) -> Result<Vec<u8>, ValueError> {
+fn encode_below(
+    s: &str,
+    codec: &str,
+    limit: u32,
+) -> Result<Vec<u8>, ValueError> {
     let chars: Vec<char> = s.chars().collect();
     let Some(start) = chars.iter().position(|&one| one as u32 >= limit) else {
         return Ok(chars.iter().map(|&one| one as u8).collect());
@@ -1128,15 +1073,7 @@ fn encode_ascii(s: &str) -> Result<Vec<u8>, ValueError> {
 
 /// `bytes.decode("ascii", "replace")`.
 fn decode_ascii_replace(b: &[u8]) -> String {
-    b.iter()
-        .map(|&byte| {
-            if byte < 0x80 {
-                byte as char
-            } else {
-                '\u{FFFD}'
-            }
-        })
-        .collect()
+    b.iter().map(|&byte| if byte < 0x80 { byte as char } else { '\u{FFFD}' }).collect()
 }
 
 /// `id(record)`.
@@ -1172,7 +1109,10 @@ mod tests {
         read(fixtures().join("jumptable.obj")).unwrap()
     }
 
-    fn rec(kind: u8, body: &[u8]) -> Rc<Record> {
+    fn rec(
+        kind: u8,
+        body: &[u8],
+    ) -> Rc<Record> {
         Rc::new(Record::new(kind, body.to_vec()))
     }
 
@@ -1182,11 +1122,7 @@ mod tests {
     fn test_round_trip_is_byte_identical() {
         for obj in objects() {
             let data = std::fs::read(&obj).unwrap();
-            let out: Vec<u8> = parse(&data)
-                .unwrap()
-                .iter()
-                .flat_map(|r| r.emit())
-                .collect();
+            let out: Vec<u8> = parse(&data).unwrap().iter().flat_map(|r| r.emit()).collect();
             assert_eq!(out, data, "{}", obj.display());
         }
     }
@@ -1202,11 +1138,7 @@ mod tests {
     fn test_module_code_segment_is_found() {
         for obj in objects() {
             let segs = segments(&read(&obj).unwrap());
-            let code: Vec<&(String, i64)> = segs[1..]
-                .iter()
-                .flatten()
-                .filter(|s| s.0.ends_with("_CODE"))
-                .collect();
+            let code: Vec<&(String, i64)> = segs[1..].iter().flatten().filter(|s| s.0.ends_with("_CODE")).collect();
             assert!(!code.is_empty(), "no _CODE segment");
             assert!(code[0].1 > 0);
         }
@@ -1220,11 +1152,7 @@ mod tests {
             let named: Vec<String> = fixups(&recs)
                 .iter()
                 .filter(|x| x.target == "external" && exts[x.index as usize] == "B$CPI4")
-                .map(|x| {
-                    LOCNAME
-                        .get(&x.loc)
-                        .map_or(x.loc.to_string(), |n| (*n).to_owned())
-                })
+                .map(|x| LOCNAME.get(&x.loc).map_or(x.loc.to_string(), |n| (*n).to_owned()))
                 .collect();
             assert_eq!(named, ["ptr16:16"]);
         }
@@ -1237,26 +1165,15 @@ mod tests {
             let segs = segments(&records);
             let groups = groups(&records);
             assert_eq!(groups.keys().collect::<Vec<_>>(), ["DGROUP"]);
-            let named: Vec<&Option<(String, i64)>> = groups["DGROUP"]
-                .iter()
-                .map(|&i| &segs[i as usize])
-                .collect();
-            assert!(
-                named.iter().all(|s| s.is_some()),
-                "every DGROUP member is a real segment"
-            );
-            let mut names: Vec<&str> = named
-                .iter()
-                .copied()
-                .flatten()
-                .map(|s| s.0.as_str())
-                .collect();
+            let named: Vec<&Option<(String, i64)>> = groups["DGROUP"].iter().map(|&i| &segs[i as usize]).collect();
+            assert!(named.iter().all(|s| s.is_some()), "every DGROUP member is a real segment");
+            let mut names: Vec<&str> = named.iter().copied().flatten().map(|s| s.0.as_str()).collect();
             names.sort();
             assert_eq!(
                 names,
                 [
-                    "BC_CN", "BC_DATA", "BC_DS", "BC_FT", "BC_SA", "BC_SAB", "BR_DATA", "BR_SKYS",
-                    "COMMON", "ENMALLOC", "NMALLOC",
+                    "BC_CN", "BC_DATA", "BC_DS", "BC_FT", "BC_SA", "BC_SAB", "BR_DATA", "BR_SKYS", "COMMON",
+                    "ENMALLOC", "NMALLOC",
                 ]
             );
         }
@@ -1270,9 +1187,7 @@ mod tests {
     }
 
     fn jt_code(segs: &[Option<(String, i64)>]) -> i64 {
-        segs.iter()
-            .position(|s| s.as_ref().is_some_and(|s| s.0 == "JT_CODE"))
-            .unwrap() as i64
+        segs.iter().position(|s| s.as_ref().is_some_and(|s| s.0 == "JT_CODE")).unwrap() as i64
     }
 
     #[test]
@@ -1309,10 +1224,7 @@ mod tests {
         body.extend_from_slice(&fixup);
         let found = fixups(&[rec(FIXUPP, &body)]);
         assert_eq!(found.len(), 1);
-        assert_eq!(
-            (found[0].offset, found[0].loc, found[0].disp),
-            (0x10, LOC_OFF16, 0x1234)
-        );
+        assert_eq!((found[0].offset, found[0].loc, found[0].disp), (0x10, LOC_OFF16, 0x1234));
     }
 
     #[test]
@@ -1325,11 +1237,7 @@ mod tests {
             }
             for found in by_record.values() {
                 let body = &found[0].record.body;
-                assert_eq!(
-                    found.last().unwrap().hi,
-                    body.len(),
-                    "the last subrecord must end the record"
-                );
+                assert_eq!(found.last().unwrap().hi, body.len(), "the last subrecord must end the record");
                 for pair in found.windows(2) {
                     assert!(pair[0].hi <= pair[1].lo, "subrecords must not overlap");
                 }
@@ -1340,7 +1248,12 @@ mod tests {
         }
     }
 
-    fn _thread(is_frame: bool, number: u8, method: u8, index: Option<i64>) -> Vec<u8> {
+    fn _thread(
+        is_frame: bool,
+        number: u8,
+        method: u8,
+        index: Option<i64>,
+    ) -> Vec<u8> {
         let lead = (if is_frame { 0x40 } else { 0 }) | (method << 2) | number;
         let mut out = vec![lead];
         if let Some(index) = index {
@@ -1350,14 +1263,15 @@ mod tests {
     }
 
     fn _as_index(value: i64) -> Vec<u8> {
-        if value < 128 {
-            vec![value as u8]
-        } else {
-            vec![0x80 | (value >> 8) as u8, (value & 0xFF) as u8]
-        }
+        if value < 128 { vec![value as u8] } else { vec![0x80 | (value >> 8) as u8, (value & 0xFF) as u8] }
     }
 
-    fn _explicit(offset: i64, method: u8, index: i64, disp: Option<i64>) -> Vec<u8> {
+    fn _explicit(
+        offset: i64,
+        method: u8,
+        index: i64,
+        disp: Option<i64>,
+    ) -> Vec<u8> {
         let mut out = vec![0x80 | ((offset >> 8) & 3) as u8, (offset & 0xFF) as u8];
         out.push((1 << 7) | (if disp.is_none() { 0x04 } else { 0 }) | method);
         out.extend(_as_index(index));
@@ -1367,7 +1281,11 @@ mod tests {
         out
     }
 
-    fn _threaded(offset: i64, number: u8, disp: Option<i64>) -> Vec<u8> {
+    fn _threaded(
+        offset: i64,
+        number: u8,
+        disp: Option<i64>,
+    ) -> Vec<u8> {
         let mut out = vec![0x80 | ((offset >> 8) & 3) as u8, (offset & 0xFF) as u8];
         out.push((1 << 7) | 0x08 | (if disp.is_none() { 0x04 } else { 0 }) | number);
         if let Some(disp) = disp {
@@ -1383,17 +1301,7 @@ mod tests {
     fn _walked(records: &[Rc<Record>]) -> Vec<Walked> {
         fixups(records)
             .into_iter()
-            .map(|one| {
-                (
-                    one.seg,
-                    one.offset,
-                    one.loc,
-                    one.selfrel,
-                    one.target,
-                    one.index,
-                    one.disp,
-                )
-            })
+            .map(|one| (one.seg, one.offset, one.loc, one.selfrel, one.target, one.index, one.disp))
             .collect()
     }
 
@@ -1406,10 +1314,11 @@ mod tests {
         pairs.iter().copied().collect()
     }
 
-    fn renumber_all(made: &[Rc<Record>], mapping: &IndexMap<i64, i64>) -> Vec<Rc<Record>> {
-        made.iter()
-            .map(|one| renumbered(one, mapping).unwrap())
-            .collect()
+    fn renumber_all(
+        made: &[Rc<Record>],
+        mapping: &IndexMap<i64, i64>,
+    ) -> Vec<Rc<Record>> {
+        made.iter().map(|one| renumbered(one, mapping).unwrap()).collect()
     }
 
     fn indices(walked: &[Walked]) -> Vec<i64> {
@@ -1418,39 +1327,26 @@ mod tests {
 
     #[test]
     fn test_renumbering_externals_leaves_an_identity_mapping_byte_identical() {
-        let made = _with_fixups(&[
-            _thread(false, 0, 2, Some(7)),
-            _threaded(0x10, 0, None),
-            _explicit(0x20, 2, 9, Some(0)),
-        ]);
+        let made =
+            _with_fixups(&[_thread(false, 0, 2, Some(7)), _threaded(0x10, 0, None), _explicit(0x20, 2, 9, Some(0))]);
         let got = renumber_all(&made, &mapping(&[]));
         assert_eq!(
             got.iter().map(|one| &one.body).collect::<Vec<_>>(),
             made.iter().map(|one| &one.body).collect::<Vec<_>>()
         );
-        assert!(
-            Rc::ptr_eq(&got[1], &made[1]),
-            "an untouched record is not copied"
-        );
+        assert!(Rc::ptr_eq(&got[1], &made[1]), "an untouched record is not copied");
     }
 
     #[test]
     fn test_renumbering_moves_a_target_thread_and_the_fixups_that_use_it() {
-        let made = _with_fixups(&[
-            _thread(false, 0, 2, Some(9)),
-            _threaded(0x10, 0, None),
-            _threaded(0x14, 0, None),
-        ]);
+        let made = _with_fixups(&[_thread(false, 0, 2, Some(9)), _threaded(0x10, 0, None), _threaded(0x14, 0, None)]);
         let before = _walked(&made);
         let got = renumber_all(&made, &mapping(&[(9, 8)]));
         let after = _walked(&got);
         assert_eq!(indices(&before), [9, 9]);
         assert_eq!(indices(&after), [8, 8]);
         let rest = |w: &Walked| (w.0, w.1, w.2, w.3, w.4.clone(), w.6);
-        assert_eq!(
-            before.iter().map(rest).collect::<Vec<_>>(),
-            after.iter().map(rest).collect::<Vec<_>>()
-        );
+        assert_eq!(before.iter().map(rest).collect::<Vec<_>>(), after.iter().map(rest).collect::<Vec<_>>());
     }
 
     #[test]
@@ -1466,17 +1362,10 @@ mod tests {
 
     #[test]
     fn test_renumbering_crosses_the_index_length_boundary() {
-        let made = _with_fixups(&[
-            _explicit(0x10, 2, 128, Some(0)),
-            _explicit(0x20, 2, 127, Some(0)),
-        ]);
+        let made = _with_fixups(&[_explicit(0x10, 2, 128, Some(0)), _explicit(0x20, 2, 127, Some(0))]);
         let got = renumber_all(&made, &mapping(&[(128, 127), (127, 128)]));
         assert_eq!(indices(&_walked(&got)), [127, 128]);
-        assert_eq!(
-            got[1].body.len(),
-            made[1].body.len(),
-            "one grew and one shrank"
-        );
+        assert_eq!(got[1].body.len(), made[1].body.len(), "one grew and one shrank");
     }
 
     #[test]
@@ -1495,45 +1384,24 @@ mod tests {
     fn test_renumbering_the_corpus_moves_the_indices_and_nothing_else() {
         for obj in objects() {
             let records = parse(&std::fs::read(&obj).unwrap()).unwrap();
-            let mut every: Vec<i64> = fixups(&records)
-                .iter()
-                .filter(|one| one.target == "external")
-                .map(|one| one.index)
-                .collect();
+            let mut every: Vec<i64> =
+                fixups(&records).iter().filter(|one| one.target == "external").map(|one| one.index).collect();
             every.sort();
             every.dedup();
             if every.is_empty() {
                 continue; // pytest.skip("no external fixups")
             }
-            let mapping: IndexMap<i64, i64> =
-                every.iter().rev().map(|&one| (one, one + 1)).collect();
+            let mapping: IndexMap<i64, i64> = every.iter().rev().map(|&one| (one, one + 1)).collect();
             let moved = renumber_all(&records, &mapping);
             let (before, after) = (fixups(&records), fixups(&moved));
             assert_eq!(before.len(), after.len());
             for (one, other) in before.iter().zip(&after) {
                 assert_eq!(
-                    (
-                        one.seg,
-                        one.offset,
-                        one.loc,
-                        one.selfrel,
-                        &one.target,
-                        one.disp
-                    ),
-                    (
-                        other.seg,
-                        other.offset,
-                        other.loc,
-                        other.selfrel,
-                        &other.target,
-                        other.disp
-                    )
+                    (one.seg, one.offset, one.loc, one.selfrel, &one.target, one.disp),
+                    (other.seg, other.offset, other.loc, other.selfrel, &other.target, other.disp)
                 );
-                let want = if one.target == "external" {
-                    *mapping.get(&one.index).unwrap_or(&one.index)
-                } else {
-                    one.index
-                };
+                let want =
+                    if one.target == "external" { *mapping.get(&one.index).unwrap_or(&one.index) } else { one.index };
                 assert_eq!(other.index, want);
             }
         }
@@ -1542,31 +1410,13 @@ mod tests {
     #[test]
     fn test_a_thread_outlives_the_record_it_was_declared_in() {
         let ledata = ledata_record(1, 0, &[0; 64]).unwrap();
-        let first = rec(
-            FIXUPP,
-            &[_thread(false, 0, 2, Some(9)), _threaded(0x10, 0, None)].concat(),
-        );
-        let second = rec(
-            FIXUPP,
-            &[_threaded(0x20, 0, None), _threaded(0x24, 0, None)].concat(),
-        );
+        let first = rec(FIXUPP, &[_thread(false, 0, 2, Some(9)), _threaded(0x10, 0, None)].concat());
+        let second = rec(FIXUPP, &[_threaded(0x20, 0, None), _threaded(0x24, 0, None)].concat());
         let made = vec![ledata, first, second.clone()];
-        assert_eq!(
-            fixups(&made)
-                .iter()
-                .map(|one| one.index)
-                .collect::<Vec<_>>(),
-            [9, 9, 9]
-        );
+        assert_eq!(fixups(&made).iter().map(|one| one.index).collect::<Vec<_>>(), [9, 9, 9]);
         let got = renumber_all(&made, &mapping(&[(9, 5)]));
-        assert_eq!(
-            fixups(&got).iter().map(|one| one.index).collect::<Vec<_>>(),
-            [5, 5, 5]
-        );
-        assert_eq!(
-            got[2].body, second.body,
-            "a record that only refers to a thread is untouched"
-        );
+        assert_eq!(fixups(&got).iter().map(|one| one.index).collect::<Vec<_>>(), [5, 5, 5]);
+        assert_eq!(got[2].body, second.body, "a record that only refers to a thread is untouched");
     }
 
     #[test]
@@ -1574,23 +1424,13 @@ mod tests {
         let raw = std::fs::read(fixtures().join("hotlop-p-g2.obj")).unwrap();
         let records = parse(&raw).unwrap();
         let marked = finalised(&records, "1:whole+absorb").unwrap();
-        assert_eq!(
-            finalised_at(&marked).unwrap().as_deref(),
-            Some("1:whole+absorb")
-        );
+        assert_eq!(finalised_at(&marked).unwrap().as_deref(), Some("1:whole+absorb"));
         assert_eq!(finalised_at(&records).unwrap(), None);
         let out: Vec<u8> = marked.iter().flat_map(|one| one.emit()).collect();
-        assert_eq!(
-            finalised_at(&parse(&out).unwrap()).unwrap().as_deref(),
-            Some("1:whole+absorb")
-        );
+        assert_eq!(finalised_at(&parse(&out).unwrap()).unwrap().as_deref(), Some("1:whole+absorb"));
         // And nothing else about the object moved.
         let kinds = |records: &[Rc<Record>]| -> Vec<u8> {
-            records
-                .iter()
-                .filter(|one| one.r#type & 0xFE != COMENT)
-                .map(|one| one.r#type)
-                .collect()
+            records.iter().filter(|one| one.r#type & 0xFE != COMENT).map(|one| one.r#type).collect()
         };
         assert_eq!(kinds(&parse(&out).unwrap()), kinds(&records));
     }
@@ -1598,8 +1438,7 @@ mod tests {
     #[test]
     fn test_a_second_marker_is_refused_rather_than_added() {
         for obj in objects() {
-            let records =
-                finalised(&parse(&std::fs::read(&obj).unwrap()).unwrap(), "1:whole").unwrap();
+            let records = finalised(&parse(&std::fs::read(&obj).unwrap()).unwrap(), "1:whole").unwrap();
             let error = finalised(&records, "1:whole").unwrap_err();
             assert!(error.0.contains("already"));
         }
@@ -1608,10 +1447,7 @@ mod tests {
     #[test]
     fn test_no_fixture_already_carries_the_marker_signature() {
         for obj in objects() {
-            assert_eq!(
-                finalised_at(&parse(&std::fs::read(&obj).unwrap()).unwrap()).unwrap(),
-                None
-            );
+            assert_eq!(finalised_at(&parse(&std::fs::read(&obj).unwrap()).unwrap()).unwrap(), None);
         }
     }
 
@@ -1659,18 +1495,8 @@ mod tests {
             want.push("b$HugeShift".to_owned());
             assert_eq!(externals(&added), want);
             assert_eq!(fixups(&added), fixups(&records));
-            let new: Vec<&Rc<Record>> = added
-                .iter()
-                .filter(|record| !records.contains(record))
-                .collect();
-            assert_eq!(
-                new,
-                [&extdef_record(&[(
-                    b"b$HugeShift".to_vec(),
-                    b"\x00".to_vec()
-                )])
-                .unwrap()]
-            );
+            let new: Vec<&Rc<Record>> = added.iter().filter(|record| !records.contains(record)).collect();
+            assert_eq!(new, [&extdef_record(&[(b"b$HugeShift".to_vec(), b"\x00".to_vec())]).unwrap()]);
             let (repeated, again) = with_external(&added, "b$HugeShift").unwrap();
             assert!(again == index && repeated == added);
             let emitted: Vec<u8> = added.iter().flat_map(|record| record.emit()).collect();
@@ -1701,18 +1527,9 @@ mod tests {
             error(finalised(&records, "a\u{1F600}").map(|_| ())),
             "'ascii' codec can't encode character '\\U0001f600' in position 1: ordinal not in range(128)"
         );
-        assert_eq!(
-            error(rename_external(&records, 1, &"x".repeat(300)).map(|_| ())),
-            "bytes must be in range(0, 256)"
-        );
-        assert_eq!(
-            error(extdef_record(&[(vec![b'x'; 256], vec![0])]).map(|_| ())),
-            "byte must be in range(0, 256)"
-        );
-        assert_eq!(
-            error(with_external(&records, &"z".repeat(256)).map(|_| ())),
-            "byte must be in range(0, 256)"
-        );
+        assert_eq!(error(rename_external(&records, 1, &"x".repeat(300)).map(|_| ())), "bytes must be in range(0, 256)");
+        assert_eq!(error(extdef_record(&[(vec![b'x'; 256], vec![0])]).map(|_| ())), "byte must be in range(0, 256)");
+        assert_eq!(error(with_external(&records, &"z".repeat(256)).map(|_| ())), "byte must be in range(0, 256)");
         assert_eq!(error(_emit_index(-1).map(|_| ())), "bytes must be in range(0, 256)");
         assert_eq!(error(ledata_record(-1, 0, &[]).map(|_| ())), "bytes must be in range(0, 256)");
         assert_eq!(_emit_index(0x8000).unwrap(), vec![0x80, 0x00]);

@@ -5,21 +5,34 @@
 //! instead of calling.
 
 use iced_x86::Register;
+use llrm_mir::{BinaryOp, CastOp};
 use llrm_qbruntime as runtime;
 use llrm_x86_bcmachine::model::ir::nodes::Node;
-use llrm_mir::{BinaryOp, CastOp};
 
 use crate::emit::{Desc, Emit, Emitter, Kind};
 use crate::machine::{FLAGS, from_contract};
 
 /// Owns a node's meaning, or passes (`None`).
 pub trait Recognizer: Sync {
-    fn node(&self, emitter: &mut Emitter, node: &Node) -> Option<Emit<()>>;
+    fn node(
+        &self,
+        emitter: &mut Emitter,
+        node: &Node,
+    ) -> Option<Emit<()>>;
 }
 
 /// In the order they are asked. U3–U5 add theirs here.
-pub static RECOGNIZERS: &[&dyn Recognizer] =
-    &[&crate::floats::Floats, &Absorbed, &crate::longs::Longs, &crate::division::Division, &crate::copies::Copies, &crate::copies::Fills, &crate::cells::DefSeg, &crate::arrays::Dims, &crate::access::Element];
+pub static RECOGNIZERS: &[&dyn Recognizer] = &[
+    &crate::floats::Floats,
+    &Absorbed,
+    &crate::longs::Longs,
+    &crate::division::Division,
+    &crate::copies::Copies,
+    &crate::copies::Fills,
+    &crate::cells::DefSeg,
+    &crate::arrays::Dims,
+    &crate::access::Element,
+];
 
 /// What a runtime long routine computes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,14 +64,23 @@ const CONSUMES: i64 = 8;
 pub struct Absorbed;
 
 impl Recognizer for Absorbed {
-    fn node(&self, emitter: &mut Emitter, node: &Node) -> Option<Emit<()>> {
+    fn node(
+        &self,
+        emitter: &mut Emitter,
+        node: &Node,
+    ) -> Option<Emit<()>> {
         let Node::Call(call) = node else { return None };
         let meaning = meaning(&call.name)?;
         Some(absorb(emitter, &call.name, call.insn.at, meaning))
     }
 }
 
-fn absorb(emitter: &mut Emitter, name: &str, at: usize, meaning: Meaning) -> Emit<()> {
+fn absorb(
+    emitter: &mut Emitter,
+    name: &str,
+    at: usize,
+    meaning: Meaning,
+) -> Emit<()> {
     let depth = emitter.depth();
     let (first, second) = (emitter.stack_word(depth - 4, 4)?, emitter.stack_word(depth, 4)?);
     // Comparison pushes its left operand first; multiply, divide and
@@ -66,7 +88,8 @@ fn absorb(emitter: &mut Emitter, name: &str, at: usize, meaning: Meaning) -> Emi
     let (left, right) = if matches!(meaning, Meaning::Compare) { (first, second) } else { (second, first) };
     emitter.popped(CONSUMES)?;
     let contract = emitter.unit.facts.contract(at).ok_or_else(|| format!("{name} has no contract"))?.clone();
-    let disturbed: Vec<Register> = runtime::disturbs(&contract).into_iter().filter_map(from_contract).filter(|&one| one != FLAGS).collect();
+    let disturbed: Vec<Register> =
+        runtime::disturbs(&contract).into_iter().filter_map(from_contract).filter(|&one| one != FLAGS).collect();
     emitter.clobber(&disturbed, &format!("{name} clobbers it"));
     let op = match meaning {
         Meaning::Compare => {

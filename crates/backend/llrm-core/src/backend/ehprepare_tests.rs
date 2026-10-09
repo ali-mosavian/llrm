@@ -94,7 +94,10 @@ entry:
 /// program, so the call stays one. Was refused as an error the handler raises.
 #[test]
 fn a_call_the_handler_makes_stays_a_call() {
-    let nested = HANDLED.replace("  store i16 %code, ptr @\"CAUGHT%\"", "  store i16 %code, ptr @\"CAUGHT%\"\n  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 2)");
+    let nested = HANDLED.replace(
+        "  store i16 %code, ptr @\"CAUGHT%\"",
+        "  store i16 %code, ptr @\"CAUGHT%\"\n  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 2)",
+    );
     let mut module = parsed(&nested);
     prepared(&mut module).expect("prepared");
 }
@@ -103,7 +106,12 @@ fn a_call_the_handler_makes_stays_a_call() {
 /// pad with no site stored for RESUME.
 #[test]
 fn a_call_that_may_raise_where_trapping_is_on_is_refused() {
-    let trapped = HANDLED.replace("  call cc1000 addrspace(1) void @llrm.qb.onerror(i1 false)\n", "").replace("  store i16 %code, ptr @\"CAUGHT%\"", "  store i16 %code, ptr @\"CAUGHT%\"\n  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 2)");
+    let trapped = HANDLED
+        .replace("  call cc1000 addrspace(1) void @llrm.qb.onerror(i1 false)\n", "")
+        .replace(
+            "  store i16 %code, ptr @\"CAUGHT%\"",
+            "  store i16 %code, ptr @\"CAUGHT%\"\n  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 2)",
+        );
     let mut module = parsed(&trapped);
     let refused = prepared(&mut module).expect_err("refused");
     assert!(refused.contains("where ON ERROR is on"), "{refused}");
@@ -127,8 +135,20 @@ fn the_pad_is_selected_last_and_the_landing_is_its_own_procedure() {
     assert!(early.find("landing:") < early.find("next:"));
     let mut module = parsed(&early);
     prepared(&mut module).expect("prepared");
-    let abi = crate::abi::qb::HirAbi { runtime: crate::hir::model::RuntimeProfile::Qb45, objects: Default::default(), preserved: Default::default(), stack_check: None };
-    let assembled = super::super::assemble::assembled(&module, &abi, "CODE", super::super::cpu::ProfileOrName::Name("486"), &super::super::target::BUILT_IN).expect("assembled");
+    let abi = crate::abi::qb::HirAbi {
+        runtime: crate::hir::model::RuntimeProfile::Qb45,
+        objects: Default::default(),
+        preserved: Default::default(),
+        stack_check: None,
+    };
+    let assembled = super::super::assemble::assembled(
+        &module,
+        &abi,
+        "CODE",
+        super::super::cpu::ProfileOrName::Name("486"),
+        &super::super::target::BUILT_IN,
+    )
+    .expect("assembled");
     let main = assembled.procedures.iter().find(|one| one.name.contains("main")).expect("main");
     let last = main.body.blocks.last().expect("blocks");
     let first = last.insns.iter().find_map(|insn| main.callees.get(&insn.at)).expect("a call");

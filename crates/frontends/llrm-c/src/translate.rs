@@ -6,19 +6,21 @@
 //! arithmetic, `inbounds` on pointer arithmetic. The last two hold for
 //! objects of at most PTRDIFF_MAX bytes, as clang assumes of every object.
 
-use llrm_support::hash::{HashMap, HashSet};
-
 use llrm_core::hir::facts::{Builder as Facts, Subject};
-use llrm_mir::facts::Fact;
 use llrm_core::hir::model::{
-    self as h, AddressKind, CallDistance, DataLinkage, FloatEvaluation, FloatReturn, Number, Op, Operand, StackCleanup, Storage, TerminatorKind, TypeKind,
+    self as h, AddressKind, CallDistance, DataLinkage, FloatEvaluation, FloatReturn, Number, Op, Operand, StackCleanup,
+    Storage, TerminatorKind, TypeKind,
 };
 use llrm_core::support::hash::IndexMap;
+use llrm_mir::facts::Fact;
+use llrm_support::hash::{HashMap, HashSet};
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 use crate::hir::{self, Unsupported};
-use crate::raise_hir::{EMITTED, classes, far_pointers, is_float, library_routine, pointers, signed, widths, classes_for, widths_for};
+use crate::raise_hir::{
+    EMITTED, classes, classes_for, far_pointers, is_float, library_routine, pointers, signed, widths, widths_for,
+};
 
 type R<T> = Result<T, Unsupported>;
 
@@ -27,11 +29,17 @@ fn refuse<T>(what: impl Into<String>) -> R<T> {
 }
 
 /// `data` without the extern objects no place of `functions`, and no data, names.
-fn unreferenced_externs_dropped(data: Vec<h::DataObject>, functions: &[h::Function]) -> Vec<h::DataObject> {
-    let mut used: HashSet<i64> = data.iter().flat_map(|one| one.relocations.iter().map(|relocation| relocation.target)).collect();
+fn unreferenced_externs_dropped(
+    data: Vec<h::DataObject>,
+    functions: &[h::Function],
+) -> Vec<h::DataObject> {
+    let mut used: HashSet<i64> =
+        data.iter().flat_map(|one| one.relocations.iter().map(|relocation| relocation.target)).collect();
     for function in functions {
         let mut places: HashSet<i64> = HashSet::default();
-        for operand in function.blocks.iter().flat_map(|block| &block.instructions).flat_map(|instruction| &instruction.operands) {
+        for operand in
+            function.blocks.iter().flat_map(|block| &block.instructions).flat_map(|instruction| &instruction.operands)
+        {
             match operand {
                 h::Operand::PlaceRef(one) => places.insert(one.place),
                 h::Operand::ArrayElement(one) => places.insert(one.place),
@@ -45,8 +53,15 @@ fn unreferenced_externs_dropped(data: Vec<h::DataObject>, functions: &[h::Functi
 }
 
 /// The unit as a HIR program of one module.
-pub fn program(unit: &hir::Unit, name: &str, calling: &llrm_target::calling::Calling, profile: &crate::compile::Profile) -> R<h::Program> {
-    let convention = calling.named(&profile.convention).ok_or_else(|| Unsupported(format!("calling.toml has no {}", profile.convention)))?;
+pub fn program(
+    unit: &hir::Unit,
+    name: &str,
+    calling: &llrm_target::calling::Calling,
+    profile: &crate::compile::Profile,
+) -> R<h::Program> {
+    let convention = calling
+        .named(&profile.convention)
+        .ok_or_else(|| Unsupported(format!("calling.toml has no {}", profile.convention)))?;
     let mut types = Types::new(unit);
     let objects = objects(unit)?;
     let mut keys: HashMap<Key, i64> = HashMap::default();
@@ -81,23 +96,41 @@ pub fn program(unit: &hir::Unit, name: &str, calling: &llrm_target::calling::Cal
         .procs
         .iter()
         // `main` is the exception: reaching its closing brace returns 0 (C99 5.1.2.2.3), a value the host reads.
-        .filter(|proc| proc.body.iter().filter(|one| one.call == "CGReturn").all(|one| one.args[0] == "n0") && !answered_by_inline_code(unit, proc) && unit.symbols[&proc.symbol].base != "main")
+        .filter(|proc| {
+            proc.body.iter().filter(|one| one.call == "CGReturn").all(|one| one.args[0] == "n0")
+                && !answered_by_inline_code(unit, proc)
+                && unit.symbols[&proc.symbol].base != "main"
+        })
         .map(|proc| proc.symbol)
         .collect();
     let module = Shared { calling, unit, data: &data, keys: &keys, valueless: &valueless };
     let mut described = crate::debug::Described::of(unit);
     let mut functions = Vec::new();
     for (at, proc) in unit.procs.iter().enumerate() {
-        functions.push(Body::function(&module, &mut types, &mut callables, &mut described, &mut facts, (calling, profile), proc, at as i64 + 1)?);
+        functions.push(Body::function(
+            &module,
+            &mut types,
+            &mut callables,
+            &mut described,
+            &mut facts,
+            (calling, profile),
+            proc,
+            at as i64 + 1,
+        )?);
     }
     let debug = described.map(|one| one.finish(|symbol| keys.get(&Key::Symbol(symbol)).copied()));
     let defined: HashSet<&str> = functions.iter().map(|one: &h::Function| one.name.as_str()).collect();
-    let callables: Vec<h::Callable> = callables.into_values().filter(|one| one.defined || !defined.contains(one.name.as_str())).collect();
-    let promises = h::RuntimePromises { reads_arguments: crate::libfunc::reads_arguments(callables.iter().map(|one| one.name.as_str())), ..Default::default() };
+    let callables: Vec<h::Callable> =
+        callables.into_values().filter(|one| one.defined || !defined.contains(one.name.as_str())).collect();
+    let promises = h::RuntimePromises {
+        reads_arguments: crate::libfunc::reads_arguments(callables.iter().map(|one| one.name.as_str())),
+        ..Default::default()
+    };
     let mut callables = callables;
     for symbol in unit.symbols.values().filter(|one| one.proc()) {
         if let Some(callable) = callables.iter_mut().find(|one| one.name == symbol.object_name()) {
-            callable.returns_twice = crate::ow_facts::returns_twice(symbol.call_class) || crate::libfunc::returns_twice(&callable.name);
+            callable.returns_twice =
+                crate::ow_facts::returns_twice(symbol.call_class) || crate::libfunc::returns_twice(&callable.name);
             for fact in crate::ow_facts::of_call_class(symbol.call_class)? {
                 facts.state(Subject::Callable(callable.id), fact);
             }
@@ -106,11 +139,19 @@ pub fn program(unit: &hir::Unit, name: &str, calling: &llrm_target::calling::Cal
             }
         }
     }
-    // An extern the code never names is asked of no linker: the front end lists the ones `-g` describes (every extern a header
-    // declares), and a program built with `-g` would otherwise differ from one built without it by the symbols it asks for.
+    // An extern the code never names is asked of no linker: the front end lists the ones `-g` describes (every extern a
+    // header declares), and a program built with `-g` would otherwise differ from one built without it by the
+    // symbols it asks for.
     let data = unreferenced_externs_dropped(data.clone(), &functions);
     let (types, alias_classes) = types.finished();
-    let module = h::Module { data, callables, alias_classes, debug, facts: facts.finish(), ..h::Module::new(1, name, types, functions) };
+    let module = h::Module {
+        data,
+        callables,
+        alias_classes,
+        debug,
+        facts: facts.finish(),
+        ..h::Module::new(1, name, types, functions)
+    };
     // A call keeps what its target's C convention does not clobber; the compiler's constants go in CONST.
     let contract = crate::raise_hir::contract(convention, String::new(), true, 0);
     let preserved = llrm_core::abi::runtime::preserves(&contract);
@@ -132,7 +173,10 @@ enum Key {
     Literal(i64),
 }
 
-fn back_key(unit: &hir::Unit, back: i64) -> Key {
+fn back_key(
+    unit: &hir::Unit,
+    back: i64,
+) -> Key {
     match unit.backs.get(&back).copied().unwrap_or(0) {
         0 => Key::Literal(back),
         symbol => Key::Symbol(symbol),
@@ -145,7 +189,10 @@ const FAR: u32 = 1;
 const HUGE: u32 = 3;
 
 /// Where a symbol or literal is: far unless in DGROUP.
-fn space(unit: &hir::Unit, key: Key) -> u32 {
+fn space(
+    unit: &hir::Unit,
+    key: Key,
+) -> u32 {
     match key {
         Key::Symbol(symbol) => {
             let symbol = &unit.symbols[&symbol];
@@ -197,7 +244,14 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
         let first = out.len();
         // Data the front end laid under a code segment goes to the first data segment of the unit: a name of code
         // holds nothing the linker may put with the program's code.
-        let placed = if segment.attr & 0x1 == 0 { segment.name.clone() } else { unit.segments.values().find(|one| one.attr & 0x1 == 0).map_or_else(|| segment.name.clone(), |one| one.name.clone()) };
+        let placed = if segment.attr & 0x1 == 0 {
+            segment.name.clone()
+        } else {
+            unit.segments
+                .values()
+                .find(|one| one.attr & 0x1 == 0)
+                .map_or_else(|| segment.name.clone(), |one| one.name.clone())
+        };
         let continues = out.last().is_some_and(|one| one.bytes.len() % HUGE_SEGMENT == 0 && !one.bytes.is_empty());
         let mut align = None;
         for (call, args) in &segment.items {
@@ -208,7 +262,14 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
                     Key::Symbol(symbol) => unit.symbols[&symbol].object_name(),
                     Key::Literal(back) => format!("L_b{back}"),
                 };
-                out.push(Object { key, name, segment: placed.clone(), bytes: Vec::new(), relocations: Vec::new(), align: align.take() });
+                out.push(Object {
+                    key,
+                    name,
+                    segment: placed.clone(),
+                    bytes: Vec::new(),
+                    relocations: Vec::new(),
+                    align: align.take(),
+                });
                 continue;
             }
             if let ("DGAlign", [to]) = (call.as_str(), &args[..]) {
@@ -227,7 +288,9 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
             };
             match (call.as_str(), &args[..]) {
                 ("DGUBytes", [size]) => object.bytes.extend(std::iter::repeat_n(0, number(size)? as usize)),
-                ("DGIBytes", [size, byte]) => object.bytes.extend(std::iter::repeat_n(number(byte)? as u8, number(size)? as usize)),
+                ("DGIBytes", [size, byte]) => {
+                    object.bytes.extend(std::iter::repeat_n(number(byte)? as u8, number(size)? as usize))
+                }
                 ("DGBytes", [_, data]) => object.bytes.extend(crate::compile::hex_bytes(data)),
                 ("DGInteger", [value, type_]) => {
                     let width = widths_for(unit.flat, type_).unwrap_or(2) as usize;
@@ -235,14 +298,19 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
                 }
                 // A 64-bit datum: its eight bytes, whatever the sign the front end spells the value in.
                 ("DGInteger64", [value, _]) => {
-                    let value = value.trim().parse::<i128>().map_err(|_| Unsupported(format!("not a number: {value}")))?;
+                    let value =
+                        value.trim().parse::<i128>().map_err(|_| Unsupported(format!("not a number: {value}")))?;
                     object.bytes.extend(&value.to_le_bytes()[..8]);
                 }
                 ("DGFEPtr", [symbol, type_, offset]) => {
-                    let far = far_pointers(type_) || *type_ == "TY_LONG_CODE_PTR" || (*type_ == "TY_CODE_PTR" && unit.target & hir::BIG_CODE != 0);
+                    let far = far_pointers(type_)
+                        || *type_ == "TY_LONG_CODE_PTR"
+                        || (*type_ == "TY_CODE_PTR" && unit.target & hir::BIG_CODE != 0);
                     pointer(object, Key::Symbol(hir::handle(symbol)), offset, far)?;
                 }
-                ("DGBackPtr", [back, _, offset, type_]) => pointer(object, back_key(unit, hir::handle(back)), offset, far_pointers(type_))?,
+                ("DGBackPtr", [back, _, offset, type_]) => {
+                    pointer(object, back_key(unit, hir::handle(back)), offset, far_pointers(type_))?
+                }
                 _ => return refuse(format!("data item {call} {}", args.join(" "))),
             }
         }
@@ -250,7 +318,13 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
     Ok(out)
 }
 
-fn data_object(unit: &hir::Unit, object: &Object, id: i64, keys: &HashMap<Key, i64>, callables: &mut IndexMap<String, h::Callable>) -> R<h::DataObject> {
+fn data_object(
+    unit: &hir::Unit,
+    object: &Object,
+    id: i64,
+    keys: &HashMap<Key, i64>,
+    callables: &mut IndexMap<String, h::Callable>,
+) -> R<h::DataObject> {
     let mut relocations = Vec::new();
     for relocation in &object.relocations {
         let address = if relocation.far { AddressKind::Far } else { AddressKind::Near };
@@ -263,18 +337,37 @@ fn data_object(unit: &hir::Unit, object: &Object, id: i64, keys: &HashMap<Key, i
             }
             let defined = unit.procs.iter().any(|one| one.symbol == symbol.id);
             let target = callable(callables, &symbol.object_name(), defined);
-            relocations.push(h::DataRelocation { at: relocation.at as i64, target, addend: relocation.offset, address, code: true });
+            relocations.push(h::DataRelocation {
+                at: relocation.at as i64,
+                target,
+                addend: relocation.offset,
+                address,
+                code: true,
+            });
             continue;
         }
         let Some(&target) = keys.get(&relocation.target) else {
-            return refuse(format!("{}: an address of {:?}, which the unit neither defines nor imports", object.name, relocation.target));
+            return refuse(format!(
+                "{}: an address of {:?}, which the unit neither defines nor imports",
+                object.name, relocation.target
+            ));
         };
-        relocations.push(h::DataRelocation { at: relocation.at as i64, target, addend: relocation.offset, address, code: false });
+        relocations.push(h::DataRelocation {
+            at: relocation.at as i64,
+            target,
+            addend: relocation.offset,
+            address,
+            code: false,
+        });
     }
     let (linkage, readonly, addressed) = match object.key {
         Key::Symbol(symbol) => {
             let symbol = &unit.symbols[&symbol];
-            (if symbol.exported() { DataLinkage::Exported } else { DataLinkage::Internal }, symbol.constant(), !symbol.unaddressed(unit.switches))
+            (
+                if symbol.exported() { DataLinkage::Exported } else { DataLinkage::Internal },
+                symbol.constant(),
+                !symbol.unaddressed(unit.switches),
+            )
         }
         Key::Literal(_) => (DataLinkage::Private, true, true),
     };
@@ -325,11 +418,17 @@ impl<'u> Types<'u> {
         Types { unit, flat: unit.flat, list: Vec::new(), made: HashMap::default(), members: HashMap::default() }
     }
 
-    fn get(&self, id: i64) -> &h::Type {
+    fn get(
+        &self,
+        id: i64,
+    ) -> &h::Type {
         &self.list[id as usize - 1]
     }
 
-    fn shape(&self, id: i64) -> Shape {
+    fn shape(
+        &self,
+        id: i64,
+    ) -> Shape {
         let one = self.get(id);
         match one.kind {
             TypeKind::Void => Shape::Void,
@@ -342,7 +441,11 @@ impl<'u> Types<'u> {
         }
     }
 
-    fn of(&mut self, shape: Shape, class: Option<&'static str>) -> i64 {
+    fn of(
+        &mut self,
+        shape: Shape,
+        class: Option<&'static str>,
+    ) -> i64 {
         if let Some(&id) = self.made.get(&(shape, class)) {
             return id;
         }
@@ -356,7 +459,12 @@ impl<'u> Types<'u> {
             Shape::Huge => (TypeKind::Pointer, 4),
             Shape::Bytes(width) => (TypeKind::Opaque, width),
         };
-        let mut made = h::Type::new(id, &format!("{shape:?}{}", class.map_or(String::new(), |one| format!(" {one}"))), kind, width);
+        let mut made = h::Type::new(
+            id,
+            &format!("{shape:?}{}", class.map_or(String::new(), |one| format!(" {one}"))),
+            kind,
+            width,
+        );
         match shape {
             Shape::Int(_, is_signed) => made.signed = Some(is_signed),
             Shape::Bool => made.signed = Some(false),
@@ -374,11 +482,18 @@ impl<'u> Types<'u> {
         id
     }
 
-    fn int(&mut self, bytes: i64, is_signed: bool) -> i64 {
+    fn int(
+        &mut self,
+        bytes: i64,
+        is_signed: bool,
+    ) -> i64 {
         self.of(Shape::Int(bytes, is_signed), None)
     }
 
-    fn pointer(&mut self, space: u32) -> i64 {
+    fn pointer(
+        &mut self,
+        space: u32,
+    ) -> i64 {
         let near = self.word();
         self.of(if space == HUGE { Shape::Huge } else { Shape::Pointer(if space == FAR { 4 } else { near }) }, None)
     }
@@ -389,12 +504,18 @@ impl<'u> Types<'u> {
     }
 
     /// An aggregate's size; none for a scalar.
-    fn aggregate(&self, type_: &str) -> Option<i64> {
+    fn aggregate(
+        &self,
+        type_: &str,
+    ) -> Option<i64> {
         self.unit.types.get(&self.unit.canonical_type(type_)).copied()
     }
 
     /// C type `type_` as a value, its accesses in its aliasing class.
-    fn c(&mut self, type_: &str) -> R<i64> {
+    fn c(
+        &mut self,
+        type_: &str,
+    ) -> R<i64> {
         let type_ = self.unit.canonical_type(type_);
         let big = |flag| if self.unit.target & flag != 0 { 4 } else { 2 };
         // A far code pointer is a far call; a far or huge data pointer is near where the target
@@ -406,7 +527,12 @@ impl<'u> Types<'u> {
             self.unit.warn_near();
         }
         let shape = match type_.as_str() {
-            "TY_POINTER" | "TY_CODE_PTR" | "TY_NEAR_POINTER" | "TY_NEAR_CODE_PTR" | "TY_LONG_POINTER" | "TY_HUGE_POINTER" if self.flat => Shape::Pointer(4),
+            "TY_POINTER" | "TY_CODE_PTR" | "TY_NEAR_POINTER" | "TY_NEAR_CODE_PTR" | "TY_LONG_POINTER"
+            | "TY_HUGE_POINTER"
+                if self.flat =>
+            {
+                Shape::Pointer(4)
+            }
             // An unmarked pointer is the target's near one, whatever model the front end was told.
             "TY_POINTER" => Shape::Pointer(2),
             "TY_CODE_PTR" => Shape::Pointer(big(hir::BIG_CODE)),
@@ -430,7 +556,10 @@ impl<'u> Types<'u> {
     }
 
     /// Raw memory `bytes` wide, as a copy moves it: the character type's class.
-    fn raw(&mut self, bytes: i64) -> i64 {
+    fn raw(
+        &mut self,
+        bytes: i64,
+    ) -> i64 {
         self.of(Shape::Int(bytes, false), Some(CHAR))
     }
 
@@ -526,20 +655,35 @@ fn inline(symbol: &hir::Symbol) -> bool {
 
 /// The inline code a statement runs as its last call, if it is a
 /// `CGDone` of one.
-fn inline_statement(unit: &hir::Unit, one: &hir::Statement) -> bool {
+fn inline_statement(
+    unit: &hir::Unit,
+    one: &hir::Statement,
+) -> bool {
     let (Some(node), "CGDone") = (one.args.first(), one.call.as_str()) else { return false };
     let Some(tree) = unit.nodes.get(&hir::handle(node)) else { return false };
-    let Some(call) = tree.args.first().filter(|_| tree.call == "CGCall").and_then(|call| unit.calls.get(&hir::handle(call))) else { return false };
-    unit.nodes.get(&hir::handle(&call.target)).is_some_and(|target| {
-        target.call == "CGFEName" && target.args.first().and_then(|symbol| unit.symbols.get(&hir::handle(symbol))).is_some_and(inline)
-    })
+    let Some(call) =
+        tree.args.first().filter(|_| tree.call == "CGCall").and_then(|call| unit.calls.get(&hir::handle(call)))
+    else {
+        return false;
+    };
+    unit.nodes
+        .get(&hir::handle(&call.target))
+        .is_some_and(
+            |target| target.call == "CGFEName"
+                && target.args.first().and_then(|symbol| unit.symbols.get(&hir::handle(symbol))).is_some_and(inline),
+        )
 }
 
 /// Whether a value-less return of `proc` follows inline code: Borland's
 /// convention returns what that code left in dx:ax.
-fn answered_by_inline_code(unit: &hir::Unit, proc: &hir::Proc) -> bool {
+fn answered_by_inline_code(
+    unit: &hir::Unit,
+    proc: &hir::Proc,
+) -> bool {
     let statements: Vec<&hir::Statement> = proc.body.iter().filter(|one| one.call != "DBSrcCue").collect();
-    statements.windows(2).any(|two| two[1].call == "CGReturn" && two[1].args[0] == "n0" && inline_statement(unit, two[0]))
+    statements
+        .windows(2)
+        .any(|two| two[1].call == "CGReturn" && two[1].args[0] == "n0" && inline_statement(unit, two[0]))
 }
 
 fn value_ref(value: i64) -> Operand {
@@ -548,7 +692,10 @@ fn value_ref(value: i64) -> Operand {
 
 /// The stack convention of a procedure: cdecl's, or pascal's, which
 /// pushes in order and pops its own.
-fn cleanup(symbol: &hir::Symbol, unit: &hir::Unit) -> R<(StackCleanup, Option<String>)> {
+fn cleanup(
+    symbol: &hir::Symbol,
+    unit: &hir::Unit,
+) -> R<(StackCleanup, Option<String>)> {
     // The entry is called by the runtime's start in the stack convention its description names.
     if symbol.is_entry(&unit.entry) && !symbol.in_order() {
         return Ok((StackCleanup::Caller, None));
@@ -558,7 +705,9 @@ fn cleanup(symbol: &hir::Symbol, unit: &hir::Unit) -> R<(StackCleanup, Option<St
         (false, hir::CALLER_POPS) => Ok((StackCleanup::Caller, unit.cdecl_cc.clone())),
         (false, hir::REVERSE_PARMS) => Ok((StackCleanup::Callee, None)),
         // Open Watcom's own register list, where the target's calling.toml states that convention.
-        (true, 0) if symbol.register_list == unit.default_registers => Ok((StackCleanup::Callee, unit.registers_cc.clone())),
+        (true, 0) if symbol.register_list == unit.default_registers => {
+            Ok((StackCleanup::Callee, unit.registers_cc.clone()))
+        }
         _ => refuse(format!("{} has a register calling convention", symbol.object_name())),
     }
 }
@@ -570,7 +719,13 @@ fn cleanup(symbol: &hir::Symbol, unit: &hir::Unit) -> R<(StackCleanup, Option<St
 /// An interrupt handler's parameters are the registers it saved, named in
 /// Borland's order, each at its slot of the frame (`x86_intr_slot`); what it
 /// writes to them is what it returns to.
-fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64], struct_homes: &[(i64, Vec<i64>)], (calling, profile): (&llrm_target::calling::Calling, &crate::compile::Profile)) -> R<()> {
+fn in_their_slots(
+    function: &mut h::Function,
+    homes: &[(i64, i64)],
+    sizes: &[i64],
+    struct_homes: &[(i64, Vec<i64>)],
+    (calling, profile): (&llrm_target::calling::Calling, &crate::compile::Profile),
+) -> R<()> {
     let Some(abi) = function.abi.as_ref() else { return Ok(()) };
     let (interrupt, variadic) = (abi.distance == CallDistance::Interrupt, abi.variadic);
     if !interrupt && !variadic {
@@ -579,23 +734,35 @@ fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64
     let exposed = llrm_core::hir::escape::exposed_frame(function);
     // STDARG.H's __size: rounded up to an int, the two bytes of Borland's.
     let rounded = |sizes: &[i64]| sizes.iter().map(|size| (size + 1) & !1).sum::<i64>();
-    // A struct parameter whose address is taken lives in its words' slots, which are consecutive and rising (the variadic
-    // functions push right to left), as a scalar's does: the pointer then reaches the arguments around it.
+    // A struct parameter whose address is taken lives in its words' slots, which are consecutive and rising (the
+    // variadic functions push right to left), as a scalar's does: the pointer then reaches the arguments around it.
     for (home, words) in struct_homes.iter().filter(|(home, _)| !interrupt && exposed.contains(home)) {
         let at = function.parameters.iter().position(|&one| one == words[0]).expect("a parameter");
         let place = function.places.iter_mut().find(|one| one.id == *home).expect("a home");
         (place.storage, place.symbol, place.offset) = (Storage::Parameter, words[0], -rounded(&sizes[at..]));
-        let copy = |one: &h::Instruction| one.op == Op::Store && matches!(&one.operands[..], [h::Operand::ProjectedPlace(to), word] if to.place == *home && words.iter().any(|&one| *word == value_ref(one)));
+        let copy = |one: &h::Instruction| {
+            one.op == Op::Store
+                && matches!(
+                    &one.operands[..],
+                    [h::Operand::ProjectedPlace(to), word] if to.place == *home && words.iter().any(|&one| *word == value_ref(one))
+                )
+        };
         for block in &mut function.blocks {
             block.instructions.retain(|one| !copy(one));
         }
     }
     for &(home, parameter) in homes.iter().filter(|(home, _)| interrupt || exposed.contains(home)) {
         let at = function.parameters.iter().position(|&one| one == parameter).expect("a parameter");
-        let offset = if interrupt { interrupt_slot(&function.name, at, sizes[at], calling, profile)? } else { -rounded(&sizes[at..]) };
+        let offset = if interrupt {
+            interrupt_slot(&function.name, at, sizes[at], calling, profile)?
+        } else {
+            -rounded(&sizes[at..])
+        };
         let place = function.places.iter_mut().find(|one| one.id == home).expect("a home");
         (place.storage, place.symbol, place.offset) = (Storage::Parameter, parameter, offset);
-        let copy = |one: &h::Instruction| one.op == Op::Store && one.operands == [Operand::place_ref(home), value_ref(parameter)];
+        let copy = |one: &h::Instruction| {
+            one.op == Op::Store && one.operands == [Operand::place_ref(home), value_ref(parameter)]
+        };
         for block in &mut function.blocks {
             block.instructions.retain(|one| !copy(one));
         }
@@ -605,12 +772,25 @@ fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64
 
 /// Where parameter `at` of handler `name`, `size` bytes, is in its frame: a
 /// register is one word, the low word of its slot.
-fn interrupt_slot(name: &str, at: usize, size: i64, calling: &llrm_target::calling::Calling, profile: &crate::compile::Profile) -> R<i64> {
-    let Some(register) = profile.interrupt_parameters.get(at) else { return refuse(format!("{name}: an interrupt handler's parameter {at}: Borland's has {}", profile.interrupt_parameters.len())) };
+fn interrupt_slot(
+    name: &str,
+    at: usize,
+    size: i64,
+    calling: &llrm_target::calling::Calling,
+    profile: &crate::compile::Profile,
+) -> R<i64> {
+    let Some(register) = profile.interrupt_parameters.get(at) else {
+        return refuse(format!(
+            "{name}: an interrupt handler's parameter {at}: Borland's has {}",
+            profile.interrupt_parameters.len()
+        ));
+    };
     if size != 2 {
         return refuse(format!("{name}: an interrupt handler's parameter {register} is {size} bytes, not a register"));
     }
-    let Some(frame) = calling.interrupt() else { return refuse(format!("{name}: this target has no interrupt handlers")) };
+    let Some(frame) = calling.interrupt() else {
+        return refuse(format!("{name}: this target has no interrupt handlers"));
+    };
     Ok(llrm_x86::calling::interrupt_slot(frame, register).expect("every Borland register is in the frame"))
 }
 
@@ -625,36 +805,62 @@ fn distance(symbol: &hir::Symbol) -> CallDistance {
 /// How Borland C returns a struct of `size` bytes: an integer that wide in
 /// AL, AX or DX:AX, or, where none, through a far pointer to the caller's
 /// memory that it pushes after every argument and gets back in DX:AX.
-/// The address space of the pointer a struct result is written through under `convention`: far where it states a far one
-/// (Borland's), else near.
-fn result_space(calling: &llrm_target::calling::Calling, convention: &Option<String>) -> u32 {
-    let far = calling.by_cc(convention.as_deref().unwrap_or("cdecl")).and_then(|one| one.aggregate.as_ref()).is_some_and(|one| one.pointer_far);
+/// The address space of the pointer a struct result is written through under `convention`: far where it states a far
+/// one (Borland's), else near.
+fn result_space(
+    calling: &llrm_target::calling::Calling,
+    convention: &Option<String>,
+) -> u32 {
+    let far = calling
+        .by_cc(convention.as_deref().unwrap_or("cdecl"))
+        .and_then(|one| one.aggregate.as_ref())
+        .is_some_and(|one| one.pointer_far);
     if far { FAR } else { 0 }
 }
 
-fn returned_as_integer(calling: &llrm_target::calling::Calling, convention: &Option<String>, size: i64) -> Option<i64> {
-    let sizes = calling.by_cc(convention.as_deref().unwrap_or("cdecl")).and_then(|one| one.aggregate.as_ref()).map_or(&[][..], |one| &one.in_register_bytes);
+fn returned_as_integer(
+    calling: &llrm_target::calling::Calling,
+    convention: &Option<String>,
+    size: i64,
+) -> Option<i64> {
+    let sizes = calling
+        .by_cc(convention.as_deref().unwrap_or("cdecl"))
+        .and_then(|one| one.aggregate.as_ref())
+        .map_or(&[][..], |one| &one.in_register_bytes);
     sizes.contains(&size).then_some(size)
 }
 
 /// Whether a struct of `size` bytes passed under `convention` is one scalar of that size: Open Watcom's register
-/// convention takes 1, 2 and 4 byte structs as it takes an integer, and sends every other to memory; a convention that says so
-/// (`aggregate_arguments_in_memory`) sends them all.
-fn passed_as_scalar(calling: &llrm_target::calling::Calling, convention: &Option<String>, size: i64) -> bool {
-    convention.as_deref().and_then(|cc| calling.by_cc(cc)).is_some_and(|one| !one.argument_registers.is_empty() && !one.aggregate_arguments_in_memory) && returned_as_integer(calling, convention, size).is_some()
+/// convention takes 1, 2 and 4 byte structs as it takes an integer, and sends every other to memory; a convention that
+/// says so (`aggregate_arguments_in_memory`) sends them all.
+fn passed_as_scalar(
+    calling: &llrm_target::calling::Calling,
+    convention: &Option<String>,
+    size: i64,
+) -> bool {
+    convention
+        .as_deref()
+        .and_then(|cc| calling.by_cc(cc))
+        .is_some_and(|one| !one.argument_registers.is_empty() && !one.aggregate_arguments_in_memory)
+        && returned_as_integer(calling, convention, size).is_some()
 }
 
-/// An aggregate wider than this is passed by value as one `byval` pointer, the callee's own copy made by the caller; up to it, as
-/// the words it would occupy. clang's X86_32ABIInfo::classifyArgumentType (clang/lib/CodeGen/Targets/X86.cpp) expands
-/// an aggregate of at most 4 * 32 bits when every field is a 32- or 64-bit scalar (`canExpandIndirectArgument`), and passes any
-/// other `byval`. llrm keeps the words for every aggregate up to 128 bits, fields as they are: the stack bytes are the same
-/// either way, the front end here has no field list (its debug types are not always there), and the words are what its
-/// listings and tests have been. docs/targets.md.
+/// An aggregate wider than this is passed by value as one `byval` pointer, the callee's own copy made by the caller; up
+/// to it, as the words it would occupy. clang's X86_32ABIInfo::classifyArgumentType (clang/lib/CodeGen/Targets/X86.cpp)
+/// expands an aggregate of at most 4 * 32 bits when every field is a 32- or 64-bit scalar
+/// (`canExpandIndirectArgument`), and passes any other `byval`. llrm keeps the words for every aggregate up to 128
+/// bits, fields as they are: the stack bytes are the same either way, the front end here has no field list (its debug
+/// types are not always there), and the words are what its listings and tests have been. docs/targets.md.
 const BYVAL_ABOVE: i64 = 16;
 
-/// Whether an aggregate of `size` bytes passed to `callee` under `convention` goes as a `byval` pointer. A variadic callee walks its
-/// arguments as consecutive words and an interrupt handler's are its saved registers: both keep the words.
-fn passes_byval(convention: &Option<String>, size: i64, callee: &hir::Symbol) -> bool {
+/// Whether an aggregate of `size` bytes passed to `callee` under `convention` goes as a `byval` pointer. A variadic
+/// callee walks its arguments as consecutive words and an interrupt handler's are its saved registers: both keep the
+/// words.
+fn passes_byval(
+    convention: &Option<String>,
+    size: i64,
+    callee: &hir::Symbol,
+) -> bool {
     size > BYVAL_ABOVE && convention.is_some() && !callee.variadic() && !callee.interrupt()
 }
 
@@ -666,14 +872,22 @@ fn ones(bits: i64) -> i64 {
     if bits >= 64 { -1 } else { (1i64 << bits) - 1 }
 }
 
-fn struct_words(size: i64, in_order: bool, word: i64) -> Vec<i64> {
+fn struct_words(
+    size: i64,
+    in_order: bool,
+    word: i64,
+) -> Vec<i64> {
     let words = (0..(size + word - 1) / word).map(|at| at * word);
     if in_order { words.rev().collect() } else { words.collect() }
 }
 
 /// `parameters` with the far pointer to a struct result where it goes:
 /// pushed after every argument.
-fn with_destination(parameters: &mut Vec<i64>, destination: i64, in_order: bool) {
+fn with_destination(
+    parameters: &mut Vec<i64>,
+    destination: i64,
+    in_order: bool,
+) {
     if in_order {
         parameters.push(destination);
     } else {
@@ -734,27 +948,63 @@ impl<'a, 't> Body<'a, 't> {
             None => body.ty(&proc.type_)?,
         };
         let (parameters, stated, homes, struct_homes) = body.frame()?;
-        let (body_memory, body_destination, body_byval, byval_homes) = (std::mem::take(&mut body.memory), body.destination, std::mem::take(&mut body.byval), std::mem::take(&mut body.byval_homes));
+        let (body_memory, body_destination, body_byval, byval_homes) = (
+            std::mem::take(&mut body.memory),
+            body.destination,
+            std::mem::take(&mut body.byval),
+            std::mem::take(&mut body.byval_homes),
+        );
         for one in &proc.body {
             body.statement(one)?;
         }
         body.finish()?;
         let mut body_instruction_facts = std::mem::take(&mut body.stated_instructions);
-        let body_widths: HashMap<i64, i64> = parameters.iter().map(|&one| (one, body.types.get(body.values[one as usize - 1].r#type).width)).collect();
+        let body_widths: HashMap<i64, i64> =
+            parameters.iter().map(|&one| (one, body.types.get(body.values[one as usize - 1].r#type).width)).collect();
         let parameter_bytes = body_widths.values().sum();
         let blocks = body
             .blocks
             .into_iter()
             .map(|one| h::Block::new(one.id, one.instructions, one.terminator.expect("finished")))
             .collect();
-        let byval_at: Vec<i64> = body_byval.iter().filter_map(|value| parameters.iter().position(|one| one == value)).map(|at| at as i64).collect();
-        let byval_bytes: Vec<i64> = body_byval.iter().map(|value| byval_homes.iter().find(|(_, parameter)| parameter == value).map_or(0, |(home, _)| body.places[*home as usize - 1].extent.unwrap_or(0))).collect();
-        let memory_at: Vec<i64> = body_memory.iter().filter_map(|value| parameters.iter().position(|one| one == value)).map(|at| at as i64).collect();
-        let result_pointer = body_destination.filter(|_| convention.is_some()).and_then(|value| parameters.iter().position(|one| *one == value)).map(|at| at as i64);
+        let byval_at: Vec<i64> = body_byval
+            .iter()
+            .filter_map(|value| parameters.iter().position(|one| one == value))
+            .map(|at| at as i64)
+            .collect();
+        let byval_bytes: Vec<i64> = body_byval
+            .iter()
+            .map(|value| {
+                byval_homes
+                    .iter()
+                    .find(|(_, parameter)| parameter == value)
+                    .map_or(0, |(home, _)| body.places[*home as usize - 1].extent.unwrap_or(0))
+            })
+            .collect();
+        let memory_at: Vec<i64> = body_memory
+            .iter()
+            .filter_map(|value| parameters.iter().position(|one| one == value))
+            .map(|at| at as i64)
+            .collect();
+        let result_pointer = body_destination
+            .filter(|_| convention.is_some())
+            .and_then(|value| parameters.iter().position(|one| *one == value))
+            .map(|at| at as i64);
         let linkage = if symbol.exported() { h::FunctionLinkage::External } else { h::FunctionLinkage::Internal };
         let mut function = h::Function {
             parameters,
-            abi: Some(h::ProcedureAbi { convention: convention.clone(), memory: memory_at, byval: byval_at, byval_bytes, result_pointer, cleanup, distance: distance(symbol), parameter_bytes, float_return: FloatReturn::Register, variadic: symbol.variadic() }),
+            abi: Some(h::ProcedureAbi {
+                convention: convention.clone(),
+                memory: memory_at,
+                byval: byval_at,
+                byval_bytes,
+                result_pointer,
+                cleanup,
+                distance: distance(symbol),
+                parameter_bytes,
+                float_return: FloatReturn::Register,
+                variadic: symbol.variadic(),
+            }),
             calls: body.calls,
             linkage,
             ..h::Function::new(id, &symbol.object_name(), result_type, body.values, body.places, blocks, 1)
@@ -777,7 +1027,10 @@ impl<'a, 't> Body<'a, 't> {
         for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
             for (index, operand) in instruction.operands.iter().enumerate() {
                 if matches!(operand, h::Operand::IndirectPlace(_)) {
-                    facts.state(Subject::Operand { function: id, instruction: instruction.id, operand: index as i64 }, Fact::InBounds);
+                    facts.state(
+                        Subject::Operand { function: id, instruction: instruction.id, operand: index as i64 },
+                        Fact::InBounds,
+                    );
                 }
             }
         }
@@ -794,7 +1047,9 @@ impl<'a, 't> Body<'a, 't> {
                             None => described.variable(place, name, handle, true),
                         }
                     }
-                    (Some(&place), _) => described.variable(place, name, handle, proc.parms.iter().any(|&(one, _)| one == symbol)),
+                    (Some(&place), _) => {
+                        described.variable(place, name, handle, proc.parms.iter().any(|&(one, _)| one == symbol))
+                    }
                     (None, Some(&object)) => described.local_static(object, name, handle),
                     (None, None) => {}
                 }
@@ -808,33 +1063,51 @@ impl<'a, 't> Body<'a, 't> {
         self.unit.symbols[&self.proc.symbol].object_name()
     }
 
-    fn refuse<T>(&self, what: impl std::fmt::Display) -> R<T> {
+    fn refuse<T>(
+        &self,
+        what: impl std::fmt::Display,
+    ) -> R<T> {
         refuse(format!("{}: {what}", self.name()))
     }
 
-    fn ty(&mut self, type_: &str) -> R<i64> {
+    fn ty(
+        &mut self,
+        type_: &str,
+    ) -> R<i64> {
         let result = self.types.c(type_);
         result.map_err(|error| Unsupported(format!("{}: {}", self.name(), error.0)))
     }
 
     // ---- values ----
 
-    fn value(&mut self, ty: i64) -> i64 {
+    fn value(
+        &mut self,
+        ty: i64,
+    ) -> i64 {
         let id = self.values.len() as i64 + 1;
         self.values.push(h::Value { id, r#type: ty });
         id
     }
 
-    fn type_of(&self, value: i64) -> i64 {
+    fn type_of(
+        &self,
+        value: i64,
+    ) -> i64 {
         self.values[value as usize - 1].r#type
     }
 
-    fn shape(&self, value: i64) -> Shape {
+    fn shape(
+        &self,
+        value: i64,
+    ) -> Shape {
         self.types.shape(self.type_of(value))
     }
 
     /// An integer's bits.
-    fn bits(&self, value: i64) -> Option<i64> {
+    fn bits(
+        &self,
+        value: i64,
+    ) -> Option<i64> {
         match self.shape(value) {
             Shape::Int(width, _) => Some(width * 8),
             Shape::Bool => Some(self.types.word() * 8),
@@ -843,7 +1116,10 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     /// A pointer's address space.
-    fn space(&self, value: i64) -> Option<u32> {
+    fn space(
+        &self,
+        value: i64,
+    ) -> Option<u32> {
         match self.shape(value) {
             Shape::Pointer(4) if !self.types.flat => Some(FAR),
             Shape::Pointer(_) => Some(0),
@@ -853,7 +1129,11 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     /// Whether two types are one MIR type.
-    fn same(&self, a: i64, b: i64) -> bool {
+    fn same(
+        &self,
+        a: i64,
+        b: i64,
+    ) -> bool {
         let mir = |shape| match shape {
             Shape::Int(width, _) => Shape::Int(width, false),
             Shape::Bool => Shape::Int(self.types.word(), false),
@@ -862,7 +1142,12 @@ impl<'a, 't> Body<'a, 't> {
         mir(self.types.shape(a)) == mir(self.types.shape(b))
     }
 
-    fn instruction(&mut self, op: Op, results: Vec<i64>, operands: Vec<Operand>) -> &mut h::Instruction {
+    fn instruction(
+        &mut self,
+        op: Op,
+        results: Vec<i64>,
+        operands: Vec<Operand>,
+    ) -> &mut h::Instruction {
         self.instructions += 1;
         let mut made = h::Instruction::new(self.instructions, op, results, operands);
         if self.described.is_some() && self.line > 0 {
@@ -874,24 +1159,41 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     /// That C promises the result of instruction `id` fits its type.
-    fn state_no_wrap(&mut self, id: i64, promised: bool) {
+    fn state_no_wrap(
+        &mut self,
+        id: i64,
+        promised: bool,
+    ) {
         if promised {
             self.stated_instructions.push((id, Fact::NoSignedWrap));
         }
     }
 
     /// `op` of `operands`, a value of type `ty`.
-    fn op(&mut self, op: Op, ty: i64, operands: Vec<Operand>) -> i64 {
+    fn op(
+        &mut self,
+        op: Op,
+        ty: i64,
+        operands: Vec<Operand>,
+    ) -> i64 {
         let result = self.value(ty);
         self.instruction(op, vec![result], operands);
         result
     }
 
-    fn constant(&mut self, ty: i64, value: Number) -> i64 {
+    fn constant(
+        &mut self,
+        ty: i64,
+        value: Number,
+    ) -> i64 {
         self.op(Op::Copy, ty, vec![Operand::Constant(h::Constant { r#type: ty, value })])
     }
 
-    fn int(&mut self, bytes: i64, value: i64) -> i64 {
+    fn int(
+        &mut self,
+        bytes: i64,
+        value: i64,
+    ) -> i64 {
         let ty = self.types.int(bytes, true);
         self.constant(ty, Number::Int(value))
     }
@@ -899,7 +1201,11 @@ impl<'a, 't> Body<'a, 't> {
     /// `value` retyped as an integer of its width and `signedness`.
     /// `value` as a place of type `ty` holds it: an integer of the same
     /// width but another signedness or class is converted to `ty`.
-    fn fitted(&mut self, value: i64, ty: i64) -> i64 {
+    fn fitted(
+        &mut self,
+        value: i64,
+        ty: i64,
+    ) -> i64 {
         let had = self.type_of(value);
         if had == ty {
             return value;
@@ -912,7 +1218,11 @@ impl<'a, 't> Body<'a, 't> {
         }
     }
 
-    fn as_signed(&mut self, value: i64, is_signed: bool) -> i64 {
+    fn as_signed(
+        &mut self,
+        value: i64,
+        is_signed: bool,
+    ) -> i64 {
         match self.shape(value) {
             Shape::Int(_, now) if now == is_signed => value,
             Shape::Int(width, _) => {
@@ -935,25 +1245,42 @@ impl<'a, 't> Body<'a, 't> {
         self.blocks.len() - 1
     }
 
-    fn terminated(&self, block: usize) -> bool {
+    fn terminated(
+        &self,
+        block: usize,
+    ) -> bool {
         self.blocks[block].terminator.is_some()
     }
 
-    fn terminate(&mut self, kind: TerminatorKind, operands: Vec<Operand>, targets: Vec<usize>) -> &mut h::Terminator {
+    fn terminate(
+        &mut self,
+        kind: TerminatorKind,
+        operands: Vec<Operand>,
+        targets: Vec<usize>,
+    ) -> &mut h::Terminator {
         let targets = targets.into_iter().map(|one| self.blocks[one].id).collect();
         let block = &mut self.blocks[self.current];
         block.terminator.insert(h::Terminator::new(kind, operands, targets))
     }
 
-    fn jump(&mut self, target: usize) {
+    fn jump(
+        &mut self,
+        target: usize,
+    ) {
         self.terminate(TerminatorKind::Jump, Vec::new(), vec![target]);
     }
 
-    fn position(&mut self, block: usize) {
+    fn position(
+        &mut self,
+        block: usize,
+    ) {
         self.current = block;
     }
 
-    fn label(&mut self, name: &str) -> usize {
+    fn label(
+        &mut self,
+        name: &str,
+    ) -> usize {
         if let Some(&block) = self.labels.get(name) {
             return block;
         }
@@ -963,7 +1290,10 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     /// Code from here on goes into `block`, which the code before falls into.
-    fn place(&mut self, block: usize) {
+    fn place(
+        &mut self,
+        block: usize,
+    ) {
         if !self.terminated(self.current) {
             self.jump(block);
         }
@@ -978,9 +1308,15 @@ impl<'a, 't> Body<'a, 't> {
         }
     }
 
-    fn predecessors(&self, block: usize) -> bool {
+    fn predecessors(
+        &self,
+        block: usize,
+    ) -> bool {
         let id = self.blocks[block].id;
-        self.blocks.iter().filter_map(|one| one.terminator.as_ref()).any(|one| one.targets.contains(&id) || one.cases.iter().any(|&(_, target)| target == id))
+        self.blocks
+            .iter()
+            .filter_map(|one| one.terminator.as_ref())
+            .any(|one| one.targets.contains(&id) || one.cases.iter().any(|&(_, target)| target == id))
     }
 
     fn finish(&mut self) -> R<()> {
@@ -999,7 +1335,12 @@ impl<'a, 't> Body<'a, 't> {
     // ---- places ----
 
     /// A local place of type `ty`, `size` bytes, after the frame's others.
-    fn local(&mut self, name: &str, ty: i64, size: i64) -> i64 {
+    fn local(
+        &mut self,
+        name: &str,
+        ty: i64,
+        size: i64,
+    ) -> i64 {
         let id = self.places.len() as i64 + 1;
         let place = h::Place { extent: Some(size), ..h::Place::new(id, name, ty, Storage::Local, self.frame) };
         self.places.push(place);
@@ -1008,14 +1349,20 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     /// A place's address.
-    fn address_of(&mut self, place: i64) -> i64 {
+    fn address_of(
+        &mut self,
+        place: i64,
+    ) -> i64 {
         let space = if self.places[place as usize - 1].address == AddressKind::Far { FAR } else { 0 };
         let ty = self.types.pointer(space);
         self.op(Op::Address, ty, vec![Operand::place_ref(place)])
     }
 
     /// The place over data object `object`, as far as the unit lays it out.
-    fn global(&mut self, object: i64) -> i64 {
+    fn global(
+        &mut self,
+        object: i64,
+    ) -> i64 {
         if let Some(&place) = self.globals.get(&object) {
             return place;
         }
@@ -1024,7 +1371,12 @@ impl<'a, 't> Body<'a, 't> {
         let ty = self.types.of(Shape::Bytes(size), None);
         let storage = if data.linkage == DataLinkage::External { Storage::External } else { Storage::Module };
         let id = self.places.len() as i64 + 1;
-        let place = h::Place { symbol: object, extent: Some(size), address: data.address, ..h::Place::new(id, &data.name, ty, storage, 0) };
+        let place = h::Place {
+            symbol: object,
+            extent: Some(size),
+            address: data.address,
+            ..h::Place::new(id, &data.name, ty, storage, 0)
+        };
         self.places.push(place);
         self.globals.insert(object, id);
         id
@@ -1081,12 +1433,18 @@ impl<'a, 't> Body<'a, 't> {
                     homes.push((place, parameter));
                     self.slots.insert(format!("y{symbol}"), place);
                     // What the language states of a parameter: C99 6.7.3.1 for restrict.
-                    stated.extend(crate::ow_facts::of_param(self.unit, *symbol).into_iter().map(|fact| (parameter, fact)));
+                    stated.extend(
+                        crate::ow_facts::of_param(self.unit, *symbol).into_iter().map(|fact| (parameter, fact)),
+                    );
                 }
             }
         }
         // A struct result goes where a far pointer pushed after every argument says.
-        if self.types.aggregate(&self.proc.type_).is_some_and(|size| returned_as_integer(self.shared.calling, &self.convention, size).is_none()) {
+        if self
+            .types
+            .aggregate(&self.proc.type_)
+            .is_some_and(|size| returned_as_integer(self.shared.calling, &self.convention, size).is_none())
+        {
             let pointer = self.types.pointer(result_space(self.shared.calling, &self.convention));
             let destination = self.value(pointer);
             with_destination(&mut parameters, destination, in_order);
@@ -1109,7 +1467,13 @@ impl<'a, 't> Body<'a, 't> {
                 Operand::place_ref(place)
             } else {
                 let ty = self.type_of(parameter);
-                Operand::ProjectedPlace(h::ProjectedPlace { place, indices: Vec::new(), offset: at, r#type: ty, member: None })
+                Operand::ProjectedPlace(h::ProjectedPlace {
+                    place,
+                    indices: Vec::new(),
+                    offset: at,
+                    r#type: ty,
+                    member: None,
+                })
             };
             self.instruction(Op::Store, Vec::new(), vec![target, value_ref(parameter)]);
         }
@@ -1118,7 +1482,10 @@ impl<'a, 't> Body<'a, 't> {
 
     // ---- statements ----
 
-    fn statement(&mut self, one: &hir::Statement) -> R<()> {
+    fn statement(
+        &mut self,
+        one: &hir::Statement,
+    ) -> R<()> {
         self.line = one.line;
         let args: Vec<&str> = one.args.iter().map(String::as_str).collect();
         if !matches!(one.call.as_str(), "DBSrcCue" | "CGReturn") {
@@ -1149,19 +1516,28 @@ impl<'a, 't> Body<'a, 't> {
                 self.selects.insert((*select).to_owned(), (Vec::new(), None));
             }
             ("CGSelCase", [select, label, value]) => {
-                let Some((cases, _)) = self.selects.get_mut(*select) else { return self.refuse(format!("case of no select {select}")) };
+                let Some((cases, _)) = self.selects.get_mut(*select) else {
+                    return self.refuse(format!("case of no select {select}"));
+                };
                 cases.push((hir::int(value), (*label).to_owned()));
             }
             ("CGSelOther", [select, label]) => {
-                let Some((_, other)) = self.selects.get_mut(*select) else { return self.refuse(format!("default of no select {select}")) };
+                let Some((_, other)) = self.selects.get_mut(*select) else {
+                    return self.refuse(format!("default of no select {select}"));
+                };
                 *other = Some((*label).to_owned());
             }
             ("CGSelect", [select, node]) => {
-                let Some((cases, Some(other))) = self.selects.shift_remove(*select) else { return self.refuse(format!("select {select} with no default")) };
+                let Some((cases, Some(other))) = self.selects.shift_remove(*select) else {
+                    return self.refuse(format!("select {select} with no default"));
+                };
                 let from = self.type_of_node(node);
                 let got = self.eval(node)?;
                 let value = self.scalar(got)?;
-                let bits = self.bits(value).ok_or_else(|| Unsupported(format!("{}: a switch on a non-integer", self.name())))?.max(16);
+                let bits = self
+                    .bits(value)
+                    .ok_or_else(|| Unsupported(format!("{}: a switch on a non-integer", self.name())))?
+                    .max(16);
                 let is_signed = signed(&self.unit.canonical_type(&from));
                 let wide = self.types.int(bits / 8, is_signed);
                 let value = self.resized(value, is_signed, wide);
@@ -1175,7 +1551,11 @@ impl<'a, 't> Body<'a, 't> {
         Ok(())
     }
 
-    fn ret(&mut self, node: &str, type_: &str) -> R<()> {
+    fn ret(
+        &mut self,
+        node: &str,
+        type_: &str,
+    ) -> R<()> {
         if self.shared.valueless.contains(&self.proc.symbol) {
             if node != "n0" {
                 self.eval(node)?;
@@ -1222,7 +1602,12 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     /// Go to `target` when `node` is `when`; fall through otherwise.
-    fn branch(&mut self, node: &str, target: usize, when: bool) -> R<()> {
+    fn branch(
+        &mut self,
+        node: &str,
+        target: usize,
+        when: bool,
+    ) -> R<()> {
         let tree = &self.unit.nodes[&hir::handle(node)];
         let args: Vec<&str> = tree.args.iter().map(String::as_str).collect();
         match (tree.call.as_str(), &args[..]) {
@@ -1256,7 +1641,10 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     /// What C tests of a scalar, as a branch tests an integer against zero.
-    fn nonzero(&mut self, value: i64) -> i64 {
+    fn nonzero(
+        &mut self,
+        value: i64,
+    ) -> i64 {
         match self.shape(value) {
             Shape::Float(_) => {
                 let zero = self.constant(self.type_of(value), Number::Float(0.0));
@@ -1276,7 +1664,10 @@ impl<'a, 't> Body<'a, 't> {
         }
     }
 
-    fn compare(&mut self, args: &[String]) -> R<i64> {
+    fn compare(
+        &mut self,
+        args: &[String],
+    ) -> R<i64> {
         let [cg_op, left, right, type_] = args else { return self.refuse("a compare of no three operands") };
         let a = self.value_as(left, type_)?;
         let b = self.value_as(right, type_)?;
@@ -1325,7 +1716,10 @@ impl<'a, 't> Body<'a, 't> {
 
     // ---- expressions ----
 
-    fn eval(&mut self, node: &str) -> R<Got> {
+    fn eval(
+        &mut self,
+        node: &str,
+    ) -> R<Got> {
         let key = hir::handle(node);
         if let Some(&done) = self.done.get(&key) {
             return Ok(done);
@@ -1335,7 +1729,10 @@ impl<'a, 't> Body<'a, 't> {
         Ok(got)
     }
 
-    fn type_of_node(&self, node: &str) -> String {
+    fn type_of_node(
+        &self,
+        node: &str,
+    ) -> String {
         let tree = &self.unit.nodes[&hir::handle(node)];
         match tree.call.as_str() {
             "CGCall" => self.unit.calls[&hir::handle(&tree.args[0])].type_.clone(),
@@ -1346,12 +1743,33 @@ impl<'a, 't> Body<'a, 't> {
         }
     }
 
-    /// The type `target op= source` computes in where it is not the target's: the integer promotions of the target for a shift, the
-    /// usual arithmetic conversions of both otherwise. None where the target's own type is it (or an operand is no integer).
-    fn compound_type(&self, cg_op: &str, target: &str, source: &str) -> Option<String> {
+    /// The type `target op= source` computes in where it is not the target's: the integer promotions of the target for
+    /// a shift, the usual arithmetic conversions of both otherwise. None where the target's own type is it (or an
+    /// operand is no integer).
+    fn compound_type(
+        &self,
+        cg_op: &str,
+        target: &str,
+        source: &str,
+    ) -> Option<String> {
         let (target, source) = (self.unit.canonical_type(target), self.unit.canonical_type(&self.type_of_node(source)));
         let int = i64::from(widths_for(self.unit.flat, "TY_INTEGER")?);
-        let integer = |name: &str| (matches!(name, "TY_INT_1" | "TY_UINT_1" | "TY_INT_2" | "TY_UINT_2" | "TY_INT_4" | "TY_UINT_4" | "TY_INT_8" | "TY_UINT_8" | "TY_INTEGER" | "TY_UNSIGNED")).then(|| (i64::from(widths_for(self.unit.flat, name).unwrap_or(0)), signed(name)));
+        let integer = |name: &str| {
+            (matches!(
+                name,
+                "TY_INT_1"
+                    | "TY_UINT_1"
+                    | "TY_INT_2"
+                    | "TY_UINT_2"
+                    | "TY_INT_4"
+                    | "TY_UINT_4"
+                    | "TY_INT_8"
+                    | "TY_UINT_8"
+                    | "TY_INTEGER"
+                    | "TY_UNSIGNED"
+            ))
+            .then(|| (i64::from(widths_for(self.unit.flat, name).unwrap_or(0)), signed(name)))
+        };
         let promoted = |(width, signed): (i64, bool)| if width < int { (int, true) } else { (width, signed) };
         let (target_class, source_class) = (integer(&target)?, integer(&source)?);
         let (left, right) = (promoted(target_class), promoted(source_class));
@@ -1366,7 +1784,11 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     /// `node`'s scalar value as `type_`.
-    fn value_as(&mut self, node: &str, type_: &str) -> R<i64> {
+    fn value_as(
+        &mut self,
+        node: &str,
+        type_: &str,
+    ) -> R<i64> {
         let got = self.eval(node)?;
         let value = self.scalar(got)?;
         let from = self.type_of_node(node);
@@ -1375,9 +1797,14 @@ impl<'a, 't> Body<'a, 't> {
 
     /// A node's result used as a value: an address is the pointer, a
     /// function decays to its address, a call's result is itself.
-    fn scalar(&mut self, got: Got) -> R<i64> {
+    fn scalar(
+        &mut self,
+        got: Got,
+    ) -> R<i64> {
         match got {
-            Got::Value(value) | Got::Volatile(value) | Got::Aggregate(value, _) | Got::Returned(Some(value)) => Ok(value),
+            Got::Value(value) | Got::Volatile(value) | Got::Aggregate(value, _) | Got::Returned(Some(value)) => {
+                Ok(value)
+            }
             Got::Function(symbol) => {
                 let symbol = &self.unit.symbols[&symbol];
                 if inline(symbol) {
@@ -1394,7 +1821,10 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     /// An lvalue's address, and whether it is accessed volatile.
-    fn address(&mut self, got: Got) -> R<(i64, bool)> {
+    fn address(
+        &mut self,
+        got: Got,
+    ) -> R<(i64, bool)> {
         let (value, volatile) = match got {
             Got::Volatile(value) => (value, true),
             got => (self.scalar(got)?, false),
@@ -1415,15 +1845,23 @@ impl<'a, 't> Body<'a, 't> {
         }
     }
 
-    fn expression(&mut self, node: &str) -> R<Got> {
+    fn expression(
+        &mut self,
+        node: &str,
+    ) -> R<Got> {
         let tree = &self.unit.nodes[&hir::handle(node)];
         let args: Vec<&str> = tree.args.iter().map(String::as_str).collect();
         let call = tree.call.as_str();
         Ok(match (call, &args[..]) {
             ("CGInteger" | "CGInt64", [value, type_]) => {
-                let value: BigInt = value.trim().parse().map_err(|_| Unsupported(format!("not an integer: {value}")))?;
+                let value: BigInt =
+                    value.trim().parse().map_err(|_| Unsupported(format!("not an integer: {value}")))?;
                 let ty = self.ty(type_)?;
-                let wrapped = |width: i64| (value & ((BigInt::from(1) << (width * 8)) - BigInt::from(1))).to_u64().expect("a wrapped integer fits") as i64;
+                let wrapped = |width: i64| {
+                    (value & ((BigInt::from(1) << (width * 8)) - BigInt::from(1)))
+                        .to_u64()
+                        .expect("a wrapped integer fits") as i64
+                };
                 match self.types.shape(ty) {
                     Shape::Int(width, _) => Got::Value(self.constant(ty, Number::Int(wrapped(width)))),
                     // A pointer constant is an integer as wide: a far one segment:offset.
@@ -1437,7 +1875,8 @@ impl<'a, 't> Body<'a, 't> {
                 }
             }
             ("CGFloat", [text, type_]) if is_float(type_) => {
-                let value: f64 = text.trim().trim_matches('"').parse().map_err(|_| Unsupported(format!("not a float: {text}")))?;
+                let value: f64 =
+                    text.trim().trim_matches('"').parse().map_err(|_| Unsupported(format!("not a float: {text}")))?;
                 let ty = self.ty(type_)?;
                 Got::Value(self.constant(ty, Number::Float(value)))
             }
@@ -1496,7 +1935,9 @@ impl<'a, 't> Body<'a, 't> {
                 Got::Value(value)
             }
             ("CGAssign" | "CGLVAssign", [target, source, _]) => {
-                let Got::Aggregate(from, size) = self.eval(source)? else { return self.refuse("an aggregate assignment from a scalar") };
+                let Got::Aggregate(from, size) = self.eval(source)? else {
+                    return self.refuse("an aggregate assignment from a scalar");
+                };
                 let got = self.eval(target)?;
                 let (into, _) = self.address(got)?;
                 self.copy(into, from, size);
@@ -1522,8 +1963,9 @@ impl<'a, 't> Body<'a, 't> {
                     let by = self.scalar(got)?;
                     self.moved(old, by, &from, *cg_op == "O_MINUS")?
                 } else if let Some(common) = self.compound_type(cg_op, type_, source) {
-                    // `x op= y` is `x = (T)(x op y)` in the usual arithmetic conversions of both, not in T: `unsigned char x /= short y`
-                    // divided in 8 bits, the front end having typed the operation by the target's.
+                    // `x op= y` is `x = (T)(x op y)` in the usual arithmetic conversions of both, not in T: `unsigned
+                    // char x /= short y` divided in 8 bits, the front end having typed the
+                    // operation by the target's.
                     let old = self.converted(old, type_, &common)?;
                     let by = self.value_as(source, &common)?;
                     let made = self.arithmetic(cg_op, old, by, &common)?;
@@ -1538,9 +1980,12 @@ impl<'a, 't> Body<'a, 't> {
             ("CGCall", [call]) => {
                 let call = &self.unit.calls[&hir::handle(call)];
                 match self.call(call)? {
-                    // A function whose body returns no value is a MIR void function; `int f(int i) { }` called as `return f(i)`
-                    // has the value the C standard leaves undefined, and the front end types its call as an int either way.
-                    Got::Returned(None) if self.types.aggregate(&call.type_).is_none() && self.ty(&call.type_).is_ok() => {
+                    // A function whose body returns no value is a MIR void function; `int f(int i) { }` called as
+                    // `return f(i)` has the value the C standard leaves undefined, and the front
+                    // end types its call as an int either way.
+                    Got::Returned(None)
+                        if self.types.aggregate(&call.type_).is_none() && self.ty(&call.type_).is_ok() =>
+                    {
                         let ty = self.ty(&call.type_)?;
                         Got::Returned(Some(self.constant(ty, Number::Int(0))))
                     }
@@ -1585,21 +2030,34 @@ impl<'a, 't> Body<'a, 't> {
             ("CGEval", [inner]) | ("CGAttr", [inner, _]) | ("CGFact", [_, inner, _]) => self.eval(inner)?,
             ("CGVolatile", [inner]) => match self.eval(inner)? {
                 // A bit field of a volatile object is read through its unit, volatile: it has no address of its own.
-                Got::Bits { pointer, start, width, unit, signed, .. } => Got::Bits { pointer, volatile: true, start, width, unit, signed },
+                Got::Bits { pointer, start, width, unit, signed, .. } => {
+                    Got::Bits { pointer, volatile: true, start, width, unit, signed }
+                }
                 got => Got::Volatile(self.address(got)?.0),
             },
             ("CGBitMask", [inner, start, width, type_]) => {
                 let got = self.eval(inner)?;
                 let (pointer, volatile) = self.address(got)?;
-                let number = |text: &str| text.parse::<i64>().map_err(|_| hir::Unsupported(format!("a bit field's {text}")));
-                Got::Bits { pointer, volatile, start: number(start)?, width: number(width)?, unit: self.ty(type_)?, signed: signed(&self.unit.canonical_type(type_)) }
+                let number =
+                    |text: &str| text.parse::<i64>().map_err(|_| hir::Unsupported(format!("a bit field's {text}")));
+                Got::Bits {
+                    pointer,
+                    volatile,
+                    start: number(start)?,
+                    width: number(width)?,
+                    unit: self.ty(type_)?,
+                    signed: signed(&self.unit.canonical_type(type_)),
+                }
             }
             _ => return self.refuse(format!("{} {}", tree.call, tree.args.join(" "))),
         })
     }
 
     /// A symbol's lvalue: its slot's address, its global's, or the function.
-    fn named(&mut self, token: &str) -> R<Got> {
+    fn named(
+        &mut self,
+        token: &str,
+    ) -> R<Got> {
         if let Some(&slot) = self.slots.get(token) {
             return Ok(Got::Value(self.address_of(slot)));
         }
@@ -1620,7 +2078,11 @@ impl<'a, 't> Body<'a, 't> {
     /// far pointer of `offset` in `segment`, which is a segment's symbol (as
     /// `__segname` names one), a far pointer whose selector it takes (a
     /// function's, for `_CODE`), or a selector's value.
-    fn based(&mut self, offset: &str, segment: &str) -> R<i64> {
+    fn based(
+        &mut self,
+        offset: &str,
+        segment: &str,
+    ) -> R<i64> {
         let near = self.value_as(offset, "TY_NEAR_POINTER")?;
         let far = self.types.pointer(FAR);
         let dword = self.types.int(4, false);
@@ -1630,7 +2092,9 @@ impl<'a, 't> Body<'a, 't> {
             // Another segment's selector: its symbol is an empty object placed in it.
             Some(symbol) => {
                 let (name, key) = (symbol.name.clone(), Key::Symbol(symbol.id));
-                let Some(&object) = self.shared.keys.get(&key) else { return self.refuse(format!("segment {name} is no object here")) };
+                let Some(&object) = self.shared.keys.get(&key) else {
+                    return self.refuse(format!("segment {name} is no object here"));
+                };
                 let place = self.global(object);
                 let pointer = self.address_of(place);
                 let whole = self.op(Op::Convert, dword, vec![value_ref(pointer)]);
@@ -1663,16 +2127,24 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     /// The segment a `__segname` names: its `.NAME` symbol.
-    fn segment_symbol(&self, node: &str) -> Option<&hir::Symbol> {
+    fn segment_symbol(
+        &self,
+        node: &str,
+    ) -> Option<&hir::Symbol> {
         let tree = self.unit.nodes.get(&hir::handle(node))?;
         let ("CGFEName", [symbol, _]) = (tree.call.as_str(), tree.args.as_slice()) else { return None };
         self.unit.symbols.get(&hir::handle(symbol)).filter(|one| one.name.starts_with('.') && !one.proc())
     }
 
-    /// Where a bit field's bytes are: its byte offset in the unit, its first bit within them, and how many bytes (a unit of the
-    /// declared type, from its start, where that is a register's width; a long long's is cut to the bytes the field covers, as a
-    /// packed struct's last field leaves nothing after them to read or write).
-    fn container(&self, start: i64, width: i64, unit: i64) -> (i64, i64, i64) {
+    /// Where a bit field's bytes are: its byte offset in the unit, its first bit within them, and how many bytes (a
+    /// unit of the declared type, from its start, where that is a register's width; a long long's is cut to the
+    /// bytes the field covers, as a packed struct's last field leaves nothing after them to read or write).
+    fn container(
+        &self,
+        start: i64,
+        width: i64,
+        unit: i64,
+    ) -> (i64, i64, i64) {
         let unit_bytes = self.types.get(unit).width;
         if unit_bytes <= 4 {
             return (0, start, unit_bytes);
@@ -1681,15 +2153,24 @@ impl<'a, 't> Body<'a, 't> {
         (first, bit, (bit + width + 7) / 8)
     }
 
-    /// The `bytes` at `first` of what `pointer` addresses, as a `unit`, the most significant bytes zero: in pieces of 4, 2 and 1.
-    fn loaded(&mut self, pointer: i64, volatile: bool, first: i64, bytes: i64, unit: i64) -> i64 {
+    /// The `bytes` at `first` of what `pointer` addresses, as a `unit`, the most significant bytes zero: in pieces of
+    /// 4, 2 and 1.
+    fn loaded(
+        &mut self,
+        pointer: i64,
+        volatile: bool,
+        first: i64,
+        bytes: i64,
+        unit: i64,
+    ) -> i64 {
         if bytes == self.types.get(unit).width {
             return self.op(Op::Load, unit, vec![Operand::IndirectPlace(indirect(pointer, first, unit, volatile))]);
         }
         let mut whole: Option<i64> = None;
         for (at, size) in Self::pieces(bytes) {
             let part = self.types.raw(size);
-            let loaded = self.op(Op::Load, part, vec![Operand::IndirectPlace(indirect(pointer, first + at, part, volatile))]);
+            let loaded =
+                self.op(Op::Load, part, vec![Operand::IndirectPlace(indirect(pointer, first + at, part, volatile))]);
             let mut value = self.op(Op::ZeroExtend, unit, vec![value_ref(loaded)]);
             if at > 0 {
                 let up = self.constant(unit, Number::Int((8 * at).into()));
@@ -1704,9 +2185,21 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     /// The low `bytes` of `value` (a `unit`) stored at `first` of what `pointer` addresses.
-    fn stored(&mut self, pointer: i64, volatile: bool, first: i64, bytes: i64, unit: i64, value: i64) {
+    fn stored(
+        &mut self,
+        pointer: i64,
+        volatile: bool,
+        first: i64,
+        bytes: i64,
+        unit: i64,
+        value: i64,
+    ) {
         if bytes == self.types.get(unit).width {
-            self.instruction(Op::Store, Vec::new(), vec![Operand::IndirectPlace(indirect(pointer, first, unit, volatile)), value_ref(value)]);
+            self.instruction(
+                Op::Store,
+                Vec::new(),
+                vec![Operand::IndirectPlace(indirect(pointer, first, unit, volatile)), value_ref(value)],
+            );
             return;
         }
         for (at, size) in Self::pieces(bytes) {
@@ -1717,7 +2210,11 @@ impl<'a, 't> Body<'a, 't> {
                 piece = self.op(Op::Shr, unit, vec![value_ref(value), value_ref(down)]);
             }
             let piece = self.op(Op::Convert, part, vec![value_ref(piece)]);
-            self.instruction(Op::Store, Vec::new(), vec![Operand::IndirectPlace(indirect(pointer, first + at, part, volatile)), value_ref(piece)]);
+            self.instruction(
+                Op::Store,
+                Vec::new(),
+                vec![Operand::IndirectPlace(indirect(pointer, first + at, part, volatile)), value_ref(piece)],
+            );
         }
     }
 
@@ -1734,17 +2231,26 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     /// A bit field's value, in its unit's type.
-    fn read_bits(&mut self, got: Got) -> R<i64> {
-        let Got::Bits { pointer, volatile, start, width, unit, signed } = got else { return self.refuse("a bit field read of a non-field") };
+    fn read_bits(
+        &mut self,
+        got: Got,
+    ) -> R<i64> {
+        let Got::Bits { pointer, volatile, start, width, unit, signed } = got else {
+            return self.refuse("a bit field read of a non-field");
+        };
         let bits = self.types.get(unit).width * 8;
         let (first, start, bytes) = self.container(start, width, unit);
         let whole = self.loaded(pointer, volatile, first, bytes, unit);
         Ok(if signed {
-            let (up, down) = (self.constant(unit, Number::Int((bits - start - width).into())), self.constant(unit, Number::Int((bits - width).into())));
+            let (up, down) = (
+                self.constant(unit, Number::Int((bits - start - width).into())),
+                self.constant(unit, Number::Int((bits - width).into())),
+            );
             let raised = self.op(Op::Shl, unit, vec![value_ref(whole), value_ref(up)]);
             self.op(Op::Sar, unit, vec![value_ref(raised), value_ref(down)])
         } else {
-            let (shift, mask) = (self.constant(unit, Number::Int(start.into())), self.constant(unit, Number::Int(ones(width).into())));
+            let (shift, mask) =
+                (self.constant(unit, Number::Int(start.into())), self.constant(unit, Number::Int(ones(width).into())));
             let lowered = self.op(Op::Shr, unit, vec![value_ref(whole), value_ref(shift)]);
             self.op(Op::And, unit, vec![value_ref(lowered), value_ref(mask)])
         })
@@ -1752,8 +2258,14 @@ impl<'a, 't> Body<'a, 't> {
 
     /// `value` stored in a bit field, the unit's other bits kept: what the
     /// field then reads, in its unit's type.
-    fn write_bits(&mut self, got: Got, value: i64) -> R<i64> {
-        let Got::Bits { pointer, volatile, start, width, unit, signed } = got else { return self.refuse("a bit field write to a non-field") };
+    fn write_bits(
+        &mut self,
+        got: Got,
+        value: i64,
+    ) -> R<i64> {
+        let Got::Bits { pointer, volatile, start, width, unit, signed } = got else {
+            return self.refuse("a bit field write to a non-field");
+        };
         let bits = self.types.get(unit).width * 8;
         let (first, start, bytes) = self.container(start, width, unit);
         let field = ones(width) << start;
@@ -1771,7 +2283,10 @@ impl<'a, 't> Body<'a, 't> {
         let joined = self.op(Op::Or, unit, vec![value_ref(rest), value_ref(part)]);
         self.stored(pointer, volatile, first, bytes, unit, joined);
         Ok(if signed {
-            let (up, down) = (self.constant(unit, Number::Int((bits - start - width).into())), self.constant(unit, Number::Int((bits - width).into())));
+            let (up, down) = (
+                self.constant(unit, Number::Int((bits - start - width).into())),
+                self.constant(unit, Number::Int((bits - width).into())),
+            );
             let raised = self.op(Op::Shl, unit, vec![value_ref(part), value_ref(up)]);
             self.op(Op::Sar, unit, vec![value_ref(raised), value_ref(down)])
         } else {
@@ -1782,7 +2297,11 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     /// O_POINTS: what `got` addresses, read as `type_`.
-    fn points(&mut self, got: Got, type_: &str) -> R<Got> {
+    fn points(
+        &mut self,
+        got: Got,
+        type_: &str,
+    ) -> R<Got> {
         if let Got::Bits { signed, .. } = got {
             let read = self.read_bits(got)?;
             let ty = self.ty(type_)?;
@@ -1805,20 +2324,40 @@ impl<'a, 't> Body<'a, 't> {
         Ok(Got::Value(self.load(pointer, volatile, type_)?))
     }
 
-    fn load(&mut self, pointer: i64, volatile: bool, type_: &str) -> R<i64> {
+    fn load(
+        &mut self,
+        pointer: i64,
+        volatile: bool,
+        type_: &str,
+    ) -> R<i64> {
         let ty = self.ty(type_)?;
         Ok(self.op(Op::Load, ty, vec![Operand::IndirectPlace(indirect(pointer, 0, ty, volatile))]))
     }
 
-    fn store(&mut self, value: i64, pointer: i64, volatile: bool, type_: &str) -> R<()> {
+    fn store(
+        &mut self,
+        value: i64,
+        pointer: i64,
+        volatile: bool,
+        type_: &str,
+    ) -> R<()> {
         let ty = self.ty(type_)?;
         let value = self.fitted(value, ty);
-        self.instruction(Op::Store, Vec::new(), vec![Operand::IndirectPlace(indirect(pointer, 0, ty, volatile)), value_ref(value)]);
+        self.instruction(
+            Op::Store,
+            Vec::new(),
+            vec![Operand::IndirectPlace(indirect(pointer, 0, ty, volatile)), value_ref(value)],
+        );
         Ok(())
     }
 
     /// `size` bytes from `from` to `into`, widest first, as the old raise copies.
-    fn copy(&mut self, into: i64, from: i64, size: i64) {
+    fn copy(
+        &mut self,
+        into: i64,
+        from: i64,
+        size: i64,
+    ) {
         let mut done = 0;
         while done < size {
             let width = [4, 2, 1].into_iter().find(|&one| size - done >= one).expect("a byte left");
@@ -1826,13 +2365,21 @@ impl<'a, 't> Body<'a, 't> {
             let source = self.displaced(from, done);
             let target = self.displaced(into, done);
             let moved = self.op(Op::Load, ty, vec![Operand::IndirectPlace(indirect(source, 0, ty, false))]);
-            self.instruction(Op::Store, Vec::new(), vec![Operand::IndirectPlace(indirect(target, 0, ty, false)), value_ref(moved)]);
+            self.instruction(
+                Op::Store,
+                Vec::new(),
+                vec![Operand::IndirectPlace(indirect(target, 0, ty, false)), value_ref(moved)],
+            );
             done += width;
         }
     }
 
     /// `pointer` moved `by` constant bytes, inside its object.
-    fn displaced(&mut self, pointer: i64, by: i64) -> i64 {
+    fn displaced(
+        &mut self,
+        pointer: i64,
+        by: i64,
+    ) -> i64 {
         if by == 0 {
             return pointer;
         }
@@ -1844,14 +2391,24 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     /// `value`, of C type `from`, as `to`.
-    fn converted(&mut self, value: i64, from: &str, to: &str) -> R<i64> {
+    fn converted(
+        &mut self,
+        value: i64,
+        from: &str,
+        to: &str,
+    ) -> R<i64> {
         let ty = self.ty(to)?;
         let changed = self.changed(value, from, ty)?;
         Ok(self.fitted(changed, ty))
     }
 
     /// `converted`, but for the type it may leave in another class or signedness.
-    fn changed(&mut self, value: i64, from: &str, ty: i64) -> R<i64> {
+    fn changed(
+        &mut self,
+        value: i64,
+        from: &str,
+        ty: i64,
+    ) -> R<i64> {
         if self.same(self.type_of(value), ty) {
             return Ok(value);
         }
@@ -1879,7 +2436,9 @@ impl<'a, 't> Body<'a, 't> {
             (Shape::Float(_), Shape::Float(_)) => self.op(Op::Convert, ty, vec![value_ref(value)]),
             (Shape::Pointer(a), Shape::Pointer(b)) if a == b => value,
             (Shape::Huge, Shape::Huge) => value,
-            (Shape::Pointer(_) | Shape::Huge, Shape::Pointer(_) | Shape::Huge) => self.op(Op::Convert, ty, vec![value_ref(value)]),
+            (Shape::Pointer(_) | Shape::Huge, Shape::Pointer(_) | Shape::Huge) => {
+                self.op(Op::Convert, ty, vec![value_ref(value)])
+            }
             // An integer is the pointer's own bits, extended to its width as
             // Borland does: a far one is segment:offset, 0 the null pointer.
             (Shape::Int(..) | Shape::Bool, Shape::Pointer(_) | Shape::Huge) => {
@@ -1899,7 +2458,12 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     /// An integer at another width: extended as `is_signed` says, or truncated.
-    fn resized(&mut self, value: i64, is_signed: bool, ty: i64) -> i64 {
+    fn resized(
+        &mut self,
+        value: i64,
+        is_signed: bool,
+        ty: i64,
+    ) -> i64 {
         let (from, to) = (self.bits(value).expect("an integer"), self.types.get(ty).width * 8);
         match from.cmp(&to) {
             std::cmp::Ordering::Equal => value,
@@ -1911,14 +2475,21 @@ impl<'a, 't> Body<'a, 't> {
         }
     }
 
-    fn unary(&mut self, cg_op: &str, value: i64, type_: &str) -> R<i64> {
+    fn unary(
+        &mut self,
+        cg_op: &str,
+        value: i64,
+        type_: &str,
+    ) -> R<i64> {
         let floats = is_float(&self.unit.canonical_type(type_));
         let ty = self.type_of(value);
         Ok(match (cg_op, floats) {
             ("O_UMINUS", true) => self.op(Op::Fneg, ty, vec![value_ref(value)]),
             ("O_FABS", true) => self.op(Op::Fabs, ty, vec![value_ref(value)]),
             ("O_UMINUS", false) => {
-                let bits = self.bits(value).ok_or_else(|| Unsupported(format!("{}: negation of a non-integer", self.name())))?;
+                let bits = self
+                    .bits(value)
+                    .ok_or_else(|| Unsupported(format!("{}: negation of a non-integer", self.name())))?;
                 let nowrap = self.wraps(type_, bits);
                 let result = self.value(ty);
                 let id = self.instruction(Op::Neg, vec![result], vec![value_ref(value)]).id;
@@ -1936,7 +2507,11 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     /// Whether C promises a signed result fits: an int or wider, unless `-fwrapv` says it wraps.
-    fn wraps(&self, type_: &str, bits: i64) -> bool {
+    fn wraps(
+        &self,
+        type_: &str,
+        bits: i64,
+    ) -> bool {
         !self.unit.wrapv && signed(&self.unit.canonical_type(type_)) && bits >= 16
     }
 
@@ -1946,7 +2521,10 @@ impl<'a, 't> Body<'a, 't> {
     /// byte offset passes 32767). An unsigned index promises the offset fits the
     /// 64K segment an object lives in: the product does not wrap unsigned.
     /// Stated here, where the scale is made, from the index's C type.
-    fn scaled(&mut self, node: &str) -> R<()> {
+    fn scaled(
+        &mut self,
+        node: &str,
+    ) -> R<()> {
         let tree = self.unit.nodes[&hir::handle(node)].clone();
         let [op, left, right, type_] = &tree.args[..] else { return Ok(()) };
         if tree.call != "CGBinary" || op != "O_TIMES" || is_float(&self.unit.canonical_type(type_)) {
@@ -1972,13 +2550,22 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     /// The value of integer constant `node`, unwrapped to its C type.
-    fn whole_constant(&self, node: &str) -> Option<i64> {
+    fn whole_constant(
+        &self,
+        node: &str,
+    ) -> Option<i64> {
         let tree = self.unit.nodes.get(&hir::handle(node))?;
         let ("CGInteger", [value, _]) = (tree.call.as_str(), &tree.args[..]) else { return None };
         value.trim().parse::<i64>().ok().filter(|bytes| i32::try_from(*bytes).is_ok())
     }
 
-    fn binary(&mut self, cg_op: &str, left: &str, right: &str, type_: &str) -> R<i64> {
+    fn binary(
+        &mut self,
+        cg_op: &str,
+        left: &str,
+        right: &str,
+        type_: &str,
+    ) -> R<i64> {
         if cg_op == "O_CONVERT" {
             return self.based(left, right);
         }
@@ -2024,7 +2611,12 @@ impl<'a, 't> Body<'a, 't> {
                     return self.converted(moved, &self.type_of_node(right), type_);
                 }
                 // Two huge pointers' distance: their bytes, not their packed bits.
-                (true, true) if cg_op == "O_MINUS" && !pointers(&canonical) && self.space(a) == Some(HUGE) && self.space(b) == Some(HUGE) => {
+                (true, true)
+                    if cg_op == "O_MINUS"
+                        && !pointers(&canonical)
+                        && self.space(a) == Some(HUGE)
+                        && self.space(b) == Some(HUGE) =>
+                {
                     let ty = self.ty(type_)?;
                     if self.types.get(ty).width != 4 {
                         return self.refuse(format!("a huge pointer difference as {type_}"));
@@ -2063,7 +2655,13 @@ impl<'a, 't> Body<'a, 't> {
 
     /// `pointer` moved by `by` bytes, of C type `from`: inbounds, as C
     /// keeps pointer arithmetic inside its object.
-    fn moved(&mut self, pointer: i64, by: i64, from: &str, subtract: bool) -> R<i64> {
+    fn moved(
+        &mut self,
+        pointer: i64,
+        by: i64,
+        from: &str,
+        subtract: bool,
+    ) -> R<i64> {
         // A huge pointer's index is a dword; a far one's its offset's word.
         let word = self.types.int(if self.space(pointer) == Some(HUGE) { 4 } else { self.types.word() }, true);
         let by = match self.bits(by) {
@@ -2078,7 +2676,13 @@ impl<'a, 't> Body<'a, 't> {
         Ok(result)
     }
 
-    fn arithmetic(&mut self, cg_op: &str, a: i64, b: i64, type_: &str) -> R<i64> {
+    fn arithmetic(
+        &mut self,
+        cg_op: &str,
+        a: i64,
+        b: i64,
+        type_: &str,
+    ) -> R<i64> {
         let ty = self.ty(type_)?;
         if is_float(&self.unit.canonical_type(type_)) {
             let op = match cg_op {
@@ -2127,42 +2731,94 @@ impl<'a, 't> Body<'a, 't> {
 
     /// A library routine's double result for an operator: Borland's
     /// library, far and cdecl, doubles in and out.
-    fn routine(&mut self, cg_op: &str, arguments: &[i64]) -> R<i64> {
+    fn routine(
+        &mut self,
+        cg_op: &str,
+        arguments: &[i64],
+    ) -> R<i64> {
         let name = format!("_{}", library_routine(cg_op).expect("a routine"));
         self.callable(&name);
         let double = self.ty("TY_DOUBLE")?;
         let result = self.value(double);
         let order = (0..arguments.len() as i64).rev().collect();
-        self.call_site(Some(&name), Some(result), arguments.iter().map(|&one| value_ref(one)).collect(), order, StackCleanup::Caller, CallDistance::Far, None, Vec::new(), Vec::new(), None);
+        self.call_site(
+            Some(&name),
+            Some(result),
+            arguments.iter().map(|&one| value_ref(one)).collect(),
+            order,
+            StackCleanup::Caller,
+            CallDistance::Far,
+            None,
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
         Ok(result)
     }
 
     /// Declares a procedure the unit calls by `name`.
-    fn callable(&mut self, name: &str) {
+    fn callable(
+        &mut self,
+        name: &str,
+    ) {
         callable(self.callables, name, false);
     }
 
     /// A call of `callee`, or of the function `operands[0]` points to.
     #[allow(clippy::too_many_arguments)]
-    fn call_site(&mut self, callee: Option<&str>, result: Option<i64>, operands: Vec<Operand>, order: Vec<i64>, cleanup: StackCleanup, distance: CallDistance, convention: Option<String>, memory: Vec<i64>, byval: Vec<(i64, i64)>, result_pointer: Option<i64>) {
+    fn call_site(
+        &mut self,
+        callee: Option<&str>,
+        result: Option<i64>,
+        operands: Vec<Operand>,
+        order: Vec<i64>,
+        cleanup: StackCleanup,
+        distance: CallDistance,
+        convention: Option<String>,
+        memory: Vec<i64>,
+        byval: Vec<(i64, i64)>,
+        result_pointer: Option<i64>,
+    ) {
         let results = result.into_iter().collect();
         let instruction = self.instruction(Op::Call, results, operands);
         instruction.callee = callee.map(str::to_owned);
         let id = instruction.id;
-        self.calls.push(h::CallAbi { convention, memory, byval: byval.iter().map(|one| one.0).collect(), byval_bytes: byval.iter().map(|one| one.1).collect(), result_pointer, instruction: id, order, cleanup, distance, callee: None, float_return: FloatReturn::Register });
+        self.calls.push(h::CallAbi {
+            convention,
+            memory,
+            byval: byval.iter().map(|one| one.0).collect(),
+            byval_bytes: byval.iter().map(|one| one.1).collect(),
+            result_pointer,
+            instruction: id,
+            order,
+            cleanup,
+            distance,
+            callee: None,
+            float_return: FloatReturn::Register,
+        });
     }
 
     /// Inline code as a call of `llrm.ia16.code`, each frame place it names
     /// an argument; `__emit__`'s are its constant arguments' bytes.
-    fn inline_code(&mut self, call: &hir::Call, symbol: &hir::Symbol) -> R<Got> {
+    fn inline_code(
+        &mut self,
+        call: &hir::Call,
+        symbol: &hir::Symbol,
+    ) -> R<Got> {
         let code = match &symbol.code {
             Some(code) => code.clone(),
             None => {
-                let byte = |node: &String| match self.unit.nodes.get(&hir::handle(node)).map(|tree| (tree.call.as_str(), tree.args.first())) {
+                let byte = |node: &String| match self
+                    .unit
+                    .nodes
+                    .get(&hir::handle(node))
+                    .map(|tree| (tree.call.as_str(), tree.args.first()))
+                {
                     Some(("CGInteger", Some(value))) => u8::try_from(hir::int(value)).ok(),
                     _ => None,
                 };
-                let Some(data) = call.parms.iter().rev().map(|(node, _)| byte(node)).collect::<Option<Vec<u8>>>() else {
+                let Some(data) = call.parms.iter().rev().map(|(node, _)| byte(node)).collect::<Option<Vec<u8>>>()
+                else {
                     return self.refuse(format!("{} of anything but constant bytes", symbol.name));
                 };
                 hir::Code { data, fixups: Vec::new() }
@@ -2173,7 +2829,8 @@ impl<'a, 't> Body<'a, 't> {
         for fixup in &code.fixups {
             let key = format!("y{}", fixup.symbol);
             let (Some(&slot), "offset") = (self.slots.get(&key), fixup.kind.as_str()) else {
-                return self.refuse(format!("inline code's {} of {}", fixup.kind, self.unit.symbols[&fixup.symbol].name));
+                return self
+                    .refuse(format!("inline code's {} of {}", fixup.kind, self.unit.symbols[&fixup.symbol].name));
             };
             places.push((fixup.at as usize, fixup.offset));
             operands.push(value_ref(self.address_of(slot)));
@@ -2183,12 +2840,26 @@ impl<'a, 't> Body<'a, 't> {
         let result = self.types.int(4, false);
         let result = self.value(result);
         let order = (0..operands.len() as i64).rev().collect();
-        self.call_site(Some(&name), Some(result), operands, order, StackCleanup::Caller, CallDistance::Near, None, Vec::new(), Vec::new(), None);
+        self.call_site(
+            Some(&name),
+            Some(result),
+            operands,
+            order,
+            StackCleanup::Caller,
+            CallDistance::Near,
+            None,
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
         self.inlined = Some(result);
         Ok(Got::Returned(Some(result)))
     }
 
-    fn call(&mut self, call: &hir::Call) -> R<Got> {
+    fn call(
+        &mut self,
+        call: &hir::Call,
+    ) -> R<Got> {
         let target = self.eval(&call.target)?;
         let unit = self.unit;
         if let Got::Function(symbol) = target
@@ -2210,7 +2881,8 @@ impl<'a, 't> Body<'a, 't> {
             let value = self.value_as(node, type_)?;
             return Ok(Got::Returned(Some(self.unary("O_FABS", value, type_)?)));
         }
-        let (cleanup, convention) = cleanup(symbol, self.unit).map_err(|error| Unsupported(format!("{}: {}", self.name(), error.0)))?;
+        let (cleanup, convention) =
+            cleanup(symbol, self.unit).map_err(|error| Unsupported(format!("{}: {}", self.name(), error.0)))?;
         let distance = distance(symbol);
         let callee = match target {
             Got::Function(_) => None,
@@ -2228,9 +2900,17 @@ impl<'a, 't> Body<'a, 't> {
                 by_value.push(0);
                 continue;
             };
-            let Got::Aggregate(from, _) = self.eval(node)? else { return self.refuse("a scalar passed as an aggregate") };
-            // The callee's copy is made at the call from this address, which must be a near one: a far aggregate goes as words.
-            if passes_byval(&convention, size, symbol) && matches!(self.shape(from), Shape::Pointer(width) if width == self.types.word()) {
+            let Got::Aggregate(from, _) = self.eval(node)? else {
+                return self.refuse("a scalar passed as an aggregate");
+            };
+            // The callee's copy is made at the call from this address, which must be a near one: a far aggregate goes
+            // as words.
+            if passes_byval(&convention, size, symbol)
+                && matches!(
+                    self.shape(from),
+                    Shape::Pointer(width) if width == self.types.word()
+                )
+            {
                 arguments.push(from);
                 in_memory.push(false);
                 by_value.push(size);
@@ -2245,13 +2925,18 @@ impl<'a, 't> Body<'a, 't> {
                 let value = if left >= unit {
                     self.op(Op::Load, word, vec![Operand::IndirectPlace(indirect(from, at, word, false))])
                 } else {
-                    // The last partial word: its bytes in pieces of 2 and 1, the first at the lowest address and the least significant.
+                    // The last partial word: its bytes in pieces of 2 and 1, the first at the lowest address and the
+                    // least significant.
                     let mut whole: Option<i64> = None;
                     let mut taken = 0;
                     while taken < left {
                         let piece = if left - taken >= 2 { 2 } else { 1 };
                         let part = self.types.raw(piece);
-                        let loaded = self.op(Op::Load, part, vec![Operand::IndirectPlace(indirect(from, at + taken, part, false))]);
+                        let loaded = self.op(
+                            Op::Load,
+                            part,
+                            vec![Operand::IndirectPlace(indirect(from, at + taken, part, false))],
+                        );
                         let mut value = self.op(Op::ZeroExtend, word, vec![value_ref(loaded)]);
                         if taken > 0 {
                             let up = self.constant(word, Number::Int((8 * taken).into()));
@@ -2275,12 +2960,19 @@ impl<'a, 't> Body<'a, 't> {
         by_value.reverse();
         // A struct result: in a temporary, which the callee fills through a
         // far pointer pushed last where it is not returned as an integer.
-        let returned = self.types.aggregate(&call.type_).map(|size| {
-            let ty = self.types.of(Shape::Bytes(size), None);
-            (self.local(&format!("r{}", self.places.len() + 1), ty, size), size)
-        });
+        let returned = self
+            .types
+            .aggregate(&call.type_)
+            .map(
+                |size| {
+                    let ty = self.types.of(Shape::Bytes(size), None);
+                    (self.local(&format!("r{}", self.places.len() + 1), ty, size), size)
+                },
+            );
         let mut result_at = None;
-        if let Some((temporary, _)) = returned.filter(|&(_, size)| returned_as_integer(self.shared.calling, &convention, size).is_none()) {
+        if let Some((temporary, _)) =
+            returned.filter(|&(_, size)| returned_as_integer(self.shared.calling, &convention, size).is_none())
+        {
             let near = self.address_of(temporary);
             let space = result_space(self.shared.calling, &convention);
             let destination = if space == FAR {
@@ -2323,22 +3015,46 @@ impl<'a, 't> Body<'a, 't> {
             _ => None,
         };
         let memory = in_memory.iter().enumerate().filter(|(_, memory)| **memory).map(|(at, _)| at as i64).collect();
-        let byval: Vec<(i64, i64)> = by_value.iter().enumerate().filter(|(_, bytes)| **bytes != 0).map(|(at, bytes)| (at as i64, *bytes)).collect();
+        let byval: Vec<(i64, i64)> = by_value
+            .iter()
+            .enumerate()
+            .filter(|(_, bytes)| **bytes != 0)
+            .map(|(at, bytes)| (at as i64, *bytes))
+            .collect();
         let result_pointer = result_at.filter(|_| convention.is_some());
-        self.call_site(name.as_deref(), result, operands, order, cleanup, distance, convention.clone(), memory, byval, result_pointer);
+        self.call_site(
+            name.as_deref(),
+            result,
+            operands,
+            order,
+            cleanup,
+            distance,
+            convention.clone(),
+            memory,
+            byval,
+            result_pointer,
+        );
         let Some((temporary, size)) = returned else { return Ok(Got::Returned(result)) };
         let address = self.address_of(temporary);
         if let (Some(width), Some(value)) = (returned_as_integer(self.shared.calling, &convention, size), result) {
             let ty = self.types.raw(width);
             let value = self.fitted(value, ty);
-            self.instruction(Op::Store, Vec::new(), vec![Operand::IndirectPlace(indirect(address, 0, ty, false)), value_ref(value)]);
+            self.instruction(
+                Op::Store,
+                Vec::new(),
+                vec![Operand::IndirectPlace(indirect(address, 0, ty, false)), value_ref(value)],
+            );
         }
         Ok(Got::Value(address))
     }
 }
 
 /// `name`'s callable, registered on first sight, and its id.
-fn callable(callables: &mut IndexMap<String, h::Callable>, name: &str, defined: bool) -> i64 {
+fn callable(
+    callables: &mut IndexMap<String, h::Callable>,
+    name: &str,
+    defined: bool,
+) -> i64 {
     let id = callables.len() as i64 + 1;
     callables
         .entry(name.to_owned())
@@ -2358,7 +3074,12 @@ fn callable(callables: &mut IndexMap<String, h::Callable>, name: &str, defined: 
 }
 
 /// An access through `base`, `offset` bytes in, as `ty`.
-fn indirect(base: i64, offset: i64, ty: i64, volatile: bool) -> h::IndirectPlace {
+fn indirect(
+    base: i64,
+    offset: i64,
+    ty: i64,
+    volatile: bool,
+) -> h::IndirectPlace {
     h::IndirectPlace { base, offset, r#type: ty, volatile, origin: None, allocation: None, member: None }
 }
 
@@ -2371,8 +3092,15 @@ mod tests {
     use crate::{hir, stream};
 
     fn raised(fixture: &str) -> Module {
-        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c").join(fixture)).unwrap();
-        let program = super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).unwrap();
+        let text =
+            std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c").join(fixture)).unwrap();
+        let program = super::program(
+            &hir::unit(&stream::parse(&text)).unwrap(),
+            "test",
+            llrm_target::Target::calling(&llrm_x86_m16::M16),
+            &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap(),
+        )
+        .unwrap();
         let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         emitted.module
@@ -2383,12 +3111,20 @@ mod tests {
     #[test]
     fn strcmp_is_stated_a_three_way_compare() {
         let module = raised("threeway.cgs");
-        let callee = module.globals.iter().find(|one| one.name.as_deref() == Some("_strcmp")).and_then(|one| one.function()).expect("strcmp declared");
+        let callee = module
+            .globals
+            .iter()
+            .find(|one| one.name.as_deref() == Some("_strcmp"))
+            .and_then(|one| one.function())
+            .expect("strcmp declared");
         assert!(llrm_mir::facts::Facts::of(&callee.attrs).three_way_compare(), "{}", llrm_mir::print::module(&module));
     }
 
     /// `@name`'s definition as printed.
-    fn defined(module: &Module, name: &str) -> String {
+    fn defined(
+        module: &Module,
+        name: &str,
+    ) -> String {
         let text = llrm_mir::print::module(module);
         let start = text[..text.find(&format!("@{name}(")).unwrap()].rfind("define").unwrap();
         let length = text[start..].find("\n}").unwrap();
@@ -2396,7 +3132,10 @@ mod tests {
     }
 
     /// The `!tbaa` tag node of aliasing class `class`, as printed.
-    fn tag(printed: &str, class: &str) -> String {
+    fn tag(
+        printed: &str,
+        class: &str,
+    ) -> String {
         let node = printed.lines().find(|one| one.contains(&format!("!\"{class}\""))).unwrap();
         let node = &node[..node.find(' ').unwrap()];
         let tag = printed.lines().find(|one| one.contains(&format!("= !{{{node}, {node}, i64 0}}"))).unwrap();
@@ -2404,7 +3143,10 @@ mod tests {
     }
 
     /// The attributes of the function `@name`, declared or defined.
-    fn attributes(module: &Module, name: &str) -> Vec<llrm_mir::Attribute> {
+    fn attributes(
+        module: &Module,
+        name: &str,
+    ) -> Vec<llrm_mir::Attribute> {
         module.global(module.named(name).unwrap()).function().unwrap().attrs.clone()
     }
 
@@ -2441,7 +3183,11 @@ mod tests {
             llrm_mir::print::module(&raised("tests/test_restrict_reaches_mir_as_distinct_noalias_roots.cgs"))
         );
         let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}\n{text}"));
-        assert!(run_checked(&module, "apart", Vec::new(), 10_000).is_ok(), "{:?}", run_checked(&module, "apart", Vec::new(), 10_000));
+        assert!(
+            run_checked(&module, "apart", Vec::new(), 10_000).is_ok(),
+            "{:?}",
+            run_checked(&module, "apart", Vec::new(), 10_000)
+        );
         let trapped = run_checked(&module, "same", Vec::new(), 10_000).unwrap_err();
         assert!(matches!(&trapped, Trap::Undefined(why) if why.contains("noalias parameter")), "{trapped:?}");
     }
@@ -2452,7 +3198,8 @@ mod tests {
     #[test]
     fn test_based_pointers_are_far_pointers_into_their_segment() {
         let module = raised("based.cgs");
-        let read = llrm_mir::interpret::run(&module, "_read_data", Vec::new(), 10_000).unwrap_or_else(|trap| panic!("{trap:?}"));
+        let read = llrm_mir::interpret::run(&module, "_read_data", Vec::new(), 10_000)
+            .unwrap_or_else(|trap| panic!("{trap:?}"));
         assert_eq!(read, llrm_mir::interpret::Val::Int { bits: 42, width: 16 });
     }
 
@@ -2468,8 +3215,15 @@ mod tests {
 
     /// `fixture`'s HIR program.
     fn program_of(fixture: &str) -> llrm_core::hir::model::Program {
-        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c").join(fixture)).unwrap();
-        super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).unwrap()
+        let text =
+            std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c").join(fixture)).unwrap();
+        super::program(
+            &hir::unit(&stream::parse(&text)).unwrap(),
+            "test",
+            llrm_target::Target::calling(&llrm_x86_m16::M16),
+            &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap(),
+        )
+        .unwrap()
     }
 
     /// llrm-c's HIR had never met the verifier, and failed it on 22 of the
@@ -2494,7 +3248,13 @@ mod tests {
             .iter()
             .filter_map(|fixture| {
                 let text = std::fs::read_to_string(root.join(fixture)).unwrap();
-                let program = super::program(&hir::unit(&stream::parse(&text)).ok()?, "test", llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).ok()?;
+                let program = super::program(
+                    &hir::unit(&stream::parse(&text)).ok()?,
+                    "test",
+                    llrm_target::Target::calling(&llrm_x86_m16::M16),
+                    &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap(),
+                )
+                .ok()?;
                 llrm_core::hir::verify::verify(&program).err().map(|why| format!("{fixture}: {why:?}"))
             })
             .collect();
@@ -2510,11 +3270,25 @@ mod tests {
         let options = llrm_driver::m16_options(machine);
         assert!(llrm_core::driver::emitted(&program, &options).is_ok(), "premise: valid as raised");
         let module = &mut program.modules[0];
-        let byte = module.types.iter().find(|one| one.kind == llrm_core::hir::model::TypeKind::Integer && one.width == 1).map(|one| one.id).expect("a byte type");
-        let stored = module.functions.iter_mut().flat_map(|one| &mut one.blocks).flat_map(|one| &mut one.instructions).find(|one| {
-            one.op == llrm_core::hir::model::Op::Store && matches!(&one.operands[0], llrm_core::hir::model::Operand::IndirectPlace(place) if place.r#type != byte)
-        });
-        let Some(llrm_core::hir::model::Operand::IndirectPlace(place)) = stored.map(|one| &mut one.operands[0]) else { panic!("premise: a store through a pointer") };
+        let byte = module
+            .types
+            .iter()
+            .find(|one| one.kind == llrm_core::hir::model::TypeKind::Integer && one.width == 1)
+            .map(|one| one.id)
+            .expect("a byte type");
+        let stored =
+            module.functions.iter_mut().flat_map(|one| &mut one.blocks).flat_map(|one| &mut one.instructions).find(
+                |one| {
+                    one.op == llrm_core::hir::model::Op::Store
+                        && matches!(
+                            &one.operands[0],
+                            llrm_core::hir::model::Operand::IndirectPlace(place) if place.r#type != byte
+                        )
+                },
+            );
+        let Some(llrm_core::hir::model::Operand::IndirectPlace(place)) = stored.map(|one| &mut one.operands[0]) else {
+            panic!("premise: a store through a pointer")
+        };
         place.r#type = byte;
         let why = llrm_core::driver::emitted(&program, &options).err().unwrap_or_default();
         assert!(why.contains("store value type does not match its place"), "{why}");
@@ -2527,13 +3301,31 @@ mod tests {
         let mut program = program_of("bytes.cgs");
         assert!(llrm_core::hir::verify::verify(&program).is_ok(), "premise: valid as raised");
         let module = &mut program.modules[0];
-        let byte = module.types.iter().find(|one| one.kind == llrm_core::hir::model::TypeKind::Integer && one.width == 1).map(|one| one.id).expect("a byte type");
+        let byte = module
+            .types
+            .iter()
+            .find(|one| one.kind == llrm_core::hir::model::TypeKind::Integer && one.width == 1)
+            .map(|one| one.id)
+            .expect("a byte type");
         let wider = |ty: i64| module.types.iter().find(|one| one.id == ty).is_some_and(|one| one.width > 1);
-        let base = module.functions.iter().flat_map(|one| &one.blocks).flat_map(|one| &one.instructions).flat_map(|one| &one.operands).find_map(|operand| match operand {
-            llrm_core::hir::model::Operand::IndirectPlace(place) if wider(place.r#type) => Some(place.base),
-            _ => None,
-        }).expect("premise: a place wider than a byte, read through a pointer");
-        let pointer = module.functions.iter().flat_map(|one| &one.values).find(|one| one.id == base).map(|one| one.r#type).unwrap();
+        let base = module
+            .functions
+            .iter()
+            .flat_map(|one| &one.blocks)
+            .flat_map(|one| &one.instructions)
+            .flat_map(|one| &one.operands)
+            .find_map(|operand| match operand {
+                llrm_core::hir::model::Operand::IndirectPlace(place) if wider(place.r#type) => Some(place.base),
+                _ => None,
+            })
+            .expect("premise: a place wider than a byte, read through a pointer");
+        let pointer = module
+            .functions
+            .iter()
+            .flat_map(|one| &one.values)
+            .find(|one| one.id == base)
+            .map(|one| one.r#type)
+            .unwrap();
         let narrowed = module.types.iter().map(|one| one.id).max().unwrap() + 1;
         let mut typed = module.types.iter().find(|one| one.id == pointer).unwrap().clone();
         (typed.id, typed.element) = (narrowed, Some(byte));
@@ -2553,7 +3345,11 @@ mod tests {
     fn test_an_indirect_calls_order_is_over_its_arguments() {
         let mut program = program_of("codeptrs.cgs");
         assert!(llrm_core::hir::verify::verify(&program).is_ok(), "{:?}", llrm_core::hir::verify::verify(&program));
-        let function = program.modules[0].functions.iter_mut().find(|one| one.calls.iter().any(|site| !site.order.is_empty())).unwrap();
+        let function = program.modules[0]
+            .functions
+            .iter_mut()
+            .find(|one| one.calls.iter().any(|site| !site.order.is_empty()))
+            .unwrap();
         let site = function.calls.iter_mut().find(|site| !site.order.is_empty()).unwrap();
         site.order.iter_mut().for_each(|one| *one += 1);
         let why = llrm_core::hir::verify::verify(&program).unwrap_err();
@@ -2566,7 +3362,8 @@ mod tests {
     #[test]
     fn test_bit_fields_read_and_write_borlands_layout() {
         let module = raised("bitfield.cgs");
-        let failed = llrm_mir::interpret::run(&module, "_check", Vec::new(), 100_000).unwrap_or_else(|trap| panic!("{trap:?}"));
+        let failed =
+            llrm_mir::interpret::run(&module, "_check", Vec::new(), 100_000).unwrap_or_else(|trap| panic!("{trap:?}"));
         assert_eq!(failed, llrm_mir::interpret::Val::Int { bits: 0, width: 16 }, "failed checks: {failed:?}");
     }
 
@@ -2577,7 +3374,9 @@ mod tests {
     fn test_a_far_pointer_orders_by_its_offset() {
         use llrm_mir::interpret::{Val, run};
         let module = raised("farorder.cgs");
-        let call = |function: &str, a: u64, b: u64| run(&module, function, vec![Val::Ptr(a), Val::Ptr(b)], 1_000).unwrap_or_else(|trap| panic!("{trap:?}"));
+        let call = |function: &str, a: u64, b: u64| {
+            run(&module, function, vec![Val::Ptr(a), Val::Ptr(b)], 1_000).unwrap_or_else(|trap| panic!("{trap:?}"))
+        };
         let (yes, no) = (Val::Int { bits: 1, width: 16 }, Val::Int { bits: 0, width: 16 });
         assert_eq!(call("_below", 0x2000_0010, 0x1000_0020), yes);
         assert_eq!(call("_below", 0x1000_0020, 0x2000_0010), no);
@@ -2590,14 +3389,21 @@ mod tests {
     fn test_restrict_parameters_are_noalias() {
         let module = raised("tests/test_restrict_reaches_mir_as_distinct_noalias_roots.cgs");
         let function = module.global(module.named("_add").unwrap()).function().unwrap();
-        assert!((0..function.parameter_attrs.len()).all(|at| llrm_mir::facts::Facts::param(function, at).no_alias()), "{:?}", function.parameter_attrs);
+        assert!(
+            (0..function.parameter_attrs.len()).all(|at| llrm_mir::facts::Facts::param(function, at).no_alias()),
+            "{:?}",
+            function.parameter_attrs
+        );
     }
 
     #[test]
     fn test_static_is_internal_linkage() {
         let module = raised("iparg.cgs");
         let linkage = |module: &Module, name| module.global(module.named(name).unwrap()).linkage;
-        assert_eq!((linkage(&module, "_twice"), linkage(&module, "_answer_from_argument")), (Linkage::Internal, Linkage::External));
+        assert_eq!(
+            (linkage(&module, "_twice"), linkage(&module, "_answer_from_argument")),
+            (Linkage::Internal, Linkage::External)
+        );
         assert_eq!(linkage(&raised("parity/loop.cgs"), "_demo_seed"), Linkage::Internal);
     }
 
@@ -2608,10 +3414,19 @@ mod tests {
         let module = raised("bytes.cgs");
         let text = defined(&module, "_bytes");
         let adds: Vec<&str> = text.lines().filter(|one| one.contains(" = add ")).collect();
-        assert!(adds.iter().any(|one| one.contains("add nsw i16")) && adds.iter().any(|one| one.contains("add i16")), "{adds:#?}");
-        assert!(text.lines().filter(|one| one.contains("getelementptr")).all(|one| one.contains("getelementptr inbounds")), "{text}");
+        assert!(
+            adds.iter().any(|one| one.contains("add nsw i16")) && adds.iter().any(|one| one.contains("add i16")),
+            "{adds:#?}"
+        );
+        assert!(
+            text.lines().filter(|one| one.contains("getelementptr")).all(|one| one.contains("getelementptr inbounds")),
+            "{text}"
+        );
         let char = tag(&llrm_mir::print::module(&module), "omnipotent char");
-        assert!(text.lines().filter(|one| one.contains("load i8")).all(|one| one.ends_with(&format!("!tbaa {char}"))), "{text}");
+        assert!(
+            text.lines().filter(|one| one.contains("load i8")).all(|one| one.ends_with(&format!("!tbaa {char}"))),
+            "{text}"
+        );
     }
 
     /// `a[i]` with an unsigned `i` was scaled by `mul nsw i16 %i, 2`, poison
@@ -2641,7 +3456,11 @@ mod tests {
         };
         assert!(scale("_through_a_char").contains("mul nuw i16"), "{}", scale("_through_a_char"));
         assert!(scale("_through_a_sum").contains("mul nuw i16"), "{}", scale("_through_a_sum"));
-        assert!(!scale("_through_a_signed").contains("nsw") && !scale("_through_a_signed").contains("nuw"), "{}", scale("_through_a_signed"));
+        assert!(
+            !scale("_through_a_signed").contains("nsw") && !scale("_through_a_signed").contains("nuw"),
+            "{}",
+            scale("_through_a_signed")
+        );
     }
 
     /// Every conversion to or from a long double was E1090 in the front end
@@ -2649,7 +3468,8 @@ mod tests {
     /// converts each way, between x86_fp80 and float, double and the integers.
     #[test]
     fn test_long_double_converts_to_and_from_every_arithmetic_type() {
-        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/longdouble.cgs")).unwrap();
+        let text =
+            std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/longdouble.cgs")).unwrap();
         assert!(text.contains("O_CONVERT") && text.contains("TY_LONG_DOUBLE"), "the shape the front end refused");
         let module = raised("longdouble.cgs");
         let printed = llrm_mir::print::module(&module);

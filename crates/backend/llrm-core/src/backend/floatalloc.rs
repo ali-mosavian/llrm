@@ -3,25 +3,25 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, VecDeque};
-use crate::support::hash::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use iced_x86::Register;
-use crate::support::hash::IndexMap;
 
-use crate::backend::cpu::{self as targets, ProfileOrName};
 use crate::backend::allocate::live;
-use crate::backend::floatregions::{Raised, boundary};
-use crate::backend::spillplacement;
 use crate::backend::constpool::Pool;
+use crate::backend::cpu::{self as targets, ProfileOrName};
 use crate::backend::floatassign;
-use crate::backend::frame::Frame;
 use crate::backend::floatregions::Unlowered;
+use crate::backend::floatregions::{Raised, boundary};
+use crate::backend::frame::Frame;
 use crate::backend::select;
+use crate::backend::spillplacement;
 use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Reg, Semantics, St};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
+use crate::support::hash::IndexMap;
+use crate::support::hash::{HashMap, HashSet};
 
 pub(super) fn unlowered(message: &str) -> Raised {
     Raised::Unlowered(Unlowered(message.to_owned()))
@@ -31,16 +31,27 @@ pub(super) fn st(index: usize) -> Loc {
     Loc::St(St { index: index as u32 })
 }
 
-pub(super) fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {
+pub(super) fn semantics(
+    op: Operation,
+    name: &str,
+    dests: Vec<Loc>,
+    sources: Vec<Loc>,
+) -> Semantics {
     Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
 }
 
 /// `lir.Insn(at, (at, at), what, (), ())`.
-pub(super) fn inserted(at: i64, what: Semantics) -> Insn {
+pub(super) fn inserted(
+    at: i64,
+    what: Semantics,
+) -> Insn {
     Insn::new(at, Some((at, at)), Some(what), Vec::new(), Vec::new())
 }
 
-pub(super) fn name_is(what: &Semantics, name: &str) -> bool {
+pub(super) fn name_is(
+    what: &Semantics,
+    name: &str,
+) -> bool {
     what.name.as_deref() == Some(name)
 }
 
@@ -57,7 +68,10 @@ pub(super) fn width_of(arg: &Loc) -> Option<u32> {
     }
 }
 
-fn index_of(values: &[u32], value: u32) -> usize {
+fn index_of(
+    values: &[u32],
+    value: u32,
+) -> usize {
     values.iter().position(|one| *one == value).expect("list.index: value is not in list")
 }
 
@@ -113,7 +127,11 @@ pub(super) fn _two_values(what: Option<&Semantics>) -> Option<(String, Held, Hel
 }
 
 /// The instruction computing `name` with one operand read from `load`'s cell, if x87 has one.
-pub(super) fn _memory_name(name: &str, cell_is_left: bool, load: &Insn) -> Option<String> {
+pub(super) fn _memory_name(
+    name: &str,
+    cell_is_left: bool,
+    load: &Insn,
+) -> Option<String> {
     let mut name = if cell_is_left { _reversed(name) } else { name }.to_owned();
     if name_is(load.what.as_ref().expect("a home load has semantics"), "fild") {
         name = format!("fi{}", &name[1..]);
@@ -152,7 +170,10 @@ struct _Stack {
 }
 
 impl _Stack {
-    fn new(floating: HashSet<u32>, depth: usize) -> Self {
+    fn new(
+        floating: HashSet<u32>,
+        depth: usize,
+    ) -> Self {
         Self {
             floating,
             depth,
@@ -174,7 +195,12 @@ impl _Stack {
     }
 
     /// Enter a block with `arriving` on the stack.
-    fn block(&mut self, block: &LirBlock, live_out: BTreeSet<u32>, arriving: Vec<u32>) {
+    fn block(
+        &mut self,
+        block: &LirBlock,
+        live_out: BTreeSet<u32>,
+        arriving: Vec<u32>,
+    ) {
         self.sequence = block.insns.to_vec();
         (self.reads, self.defs) = (IndexMap::default(), IndexMap::default());
         // A group's copies are simultaneous: all read at its first, all write at its last.
@@ -211,7 +237,10 @@ impl _Stack {
     }
 
     /// Drop slot `slot`: `fstp st(i)` moves the top over it.
-    fn pop(&mut self, slot: usize) {
+    fn pop(
+        &mut self,
+        slot: usize,
+    ) {
         self.insert(semantics(Operation::FloatStore, "fstp", vec![st(slot)], vec![st(0)]));
         self.values[slot] = self.values[0];
         self.values.remove(0);
@@ -237,7 +266,10 @@ impl _Stack {
     ///
     /// A wanted value this block does not have is read by none of its
     /// successors: another exit into the bundle has it, and the slot is filled.
-    fn leave(&mut self, wanted: &[u32]) -> Result<(), Raised> {
+    fn leave(
+        &mut self,
+        wanted: &[u32],
+    ) -> Result<(), Raised> {
         self.here = self.sequence.len() as i64;
         while let Some(slot) = self.values.iter().position(|value| !wanted.contains(value)) {
             if self.live_after(self.values[slot]) {
@@ -272,7 +304,10 @@ impl _Stack {
     }
 
     /// The next definition of the value after here.
-    fn next_def(&mut self, value: u32) -> Option<i64> {
+    fn next_def(
+        &mut self,
+        value: u32,
+    ) -> Option<i64> {
         let here = self.here;
         let defs = self.defs.entry(value).or_default();
         while defs.front().is_some_and(|first| *first <= here) {
@@ -282,12 +317,18 @@ impl _Stack {
     }
 
     /// Whether the value leaves the block as it is now.
-    fn live_after(&mut self, value: u32) -> bool {
+    fn live_after(
+        &mut self,
+        value: u32,
+    ) -> bool {
         self.live_out.contains(&value) && self.next_def(value).is_none()
     }
 
     /// Where the value is read after this instruction, before it is defined again.
-    fn pending(&mut self, value: u32) -> VecDeque<i64> {
+    fn pending(
+        &mut self,
+        value: u32,
+    ) -> VecDeque<i64> {
         let (here, until) = (self.here, self.next_def(value));
         let reads = self.reads.entry(value).or_default();
         while reads.front().is_some_and(|first| *first <= here) {
@@ -297,18 +338,27 @@ impl _Stack {
     }
 
     /// Whether the value is read after this instruction.
-    fn survives(&mut self, value: u32) -> bool {
+    fn survives(
+        &mut self,
+        value: u32,
+    ) -> bool {
         self.live_after(value) || !self.pending(value).is_empty()
     }
 
-    fn insert(&mut self, what: Semantics) {
+    fn insert(
+        &mut self,
+        what: Semantics,
+    ) {
         let at = self.one().at;
         self.out.push(Arc::new(inserted(at, what)));
     }
 
     /// `emit(what, *, uses=(), widths=(), **changes)`: `requires` and
     /// `symbol` are the only changes callers pass.
-    fn emit(&mut self, what: Semantics) {
+    fn emit(
+        &mut self,
+        what: Semantics,
+    ) {
         let one = self.one();
         let mut made = (**one).clone();
         made.what = Some(what);
@@ -332,7 +382,10 @@ impl _Stack {
         }
     }
 
-    fn exchange(&mut self, slot: usize) {
+    fn exchange(
+        &mut self,
+        slot: usize,
+    ) {
         if slot != 0 {
             let operands = vec![st(0), st(slot)];
             self.insert(semantics(Operation::Exchange, "fxch", operands.clone(), operands));
@@ -340,14 +393,20 @@ impl _Stack {
         }
     }
 
-    fn room(&mut self, count: usize) -> Result<(), Raised> {
+    fn room(
+        &mut self,
+        count: usize,
+    ) -> Result<(), Raised> {
         if self.values.len() + count > self.depth {
             return Err(unlowered("floating instruction requires too many stack operands"));
         }
         Ok(())
     }
 
-    fn duplicate(&mut self, value: u32) -> Result<(), Raised> {
+    fn duplicate(
+        &mut self,
+        value: u32,
+    ) -> Result<(), Raised> {
         self.room(1)?;
         let index = index_of(&self.values, value);
         self.insert(semantics(Operation::FloatLoad, "fld", vec![st(0)], vec![st(index)]));
@@ -355,7 +414,10 @@ impl _Stack {
         Ok(())
     }
 
-    fn top(&mut self, value: u32) -> Result<(), Raised> {
+    fn top(
+        &mut self,
+        value: u32,
+    ) -> Result<(), Raised> {
         if !self.values.contains(&value) {
             return Err(unlowered("floating stack input is unavailable"));
         }
@@ -363,7 +425,10 @@ impl _Stack {
         Ok(())
     }
 
-    fn allocate(&mut self, one: &Arc<Insn>) -> Result<(), Raised> {
+    fn allocate(
+        &mut self,
+        one: &Arc<Insn>,
+    ) -> Result<(), Raised> {
         if !Arc::ptr_eq(&self.sequence[self.here as usize], one) {
             return Err(unlowered("floating region positions disagree"));
         }
@@ -379,8 +444,12 @@ impl _Stack {
         };
         let operands = held(&what.sources);
         let results = held(&what.dests);
-        // A result may be an operand's own name (`x = x / m`, the loop's carried value updated in place): that operand dies here.
-        if results.len() > 1 || (_float_copy(one).is_none() && results.iter().any(|result| self.values.contains(result) && !operands.contains(result))) {
+        // A result may be an operand's own name (`x = x / m`, the loop's carried value updated in place): that operand
+        // dies here.
+        if results.len() > 1
+            || (_float_copy(one).is_none()
+                && results.iter().any(|result| self.values.contains(result) && !operands.contains(result)))
+        {
             return Err(unlowered("floating stack result is not a fresh value"));
         }
         let two = _two_values(Some(&what));
@@ -403,13 +472,20 @@ impl _Stack {
             self.vacate();
         } else if what.op == Operation::Compare && operands.len() == 2 && results.is_empty() {
             self.compare(operands[0], operands[1])?;
-        } else if what.op == Operation::Compare && operands.len() == 1 && results.is_empty() && matches!(what.sources.as_slice(), [Loc::Held(_), Loc::Mem(_)]) {
+        } else if what.op == Operation::Compare
+            && operands.len() == 1
+            && results.is_empty()
+            && matches!(what.sources.as_slice(), [Loc::Held(_), Loc::Mem(_)])
+        {
             self.compare_memory(operands[0], what.sources[1].clone())?;
         } else if what.op == Operation::FloatLoad && operands.is_empty() && !results.is_empty() {
             self.room(1)?;
             self.emit(Semantics { dests: vec![st(0)], ..what });
             self.values.insert(0, results[0]);
-        } else if matches!(what.op, Operation::FloatLoad | Operation::Move) && operands.len() == 1 && !results.is_empty() {
+        } else if matches!(what.op, Operation::FloatLoad | Operation::Move)
+            && operands.len() == 1
+            && !results.is_empty()
+        {
             // A phi's copies on one edge are simultaneous: take the whole group here.
             let mut pairs = vec![(results[0], operands[0])];
             if let Some(group) = one.group {
@@ -431,7 +507,11 @@ impl _Stack {
         } else if what.op == Operation::FloatUnary && operands.len() == 1 && !results.is_empty() {
             let what = Semantics { dests: vec![st(0)], sources: vec![st(0)], ..what };
             self.consume(operands[0], what, results[0])?;
-        } else if what.op == Operation::FloatArith && !operands.is_empty() && _floating(&what.sources[0]) && !results.is_empty() {
+        } else if what.op == Operation::FloatArith
+            && !operands.is_empty()
+            && _floating(&what.sources[0])
+            && !results.is_empty()
+        {
             let Loc::Held(kept) = what.sources[0] else { unreachable!("checked above") };
             let sources = std::iter::once(st(0)).chain(what.sources[1..].iter().cloned()).collect();
             self.consume(kept.value, Semantics { dests: vec![st(0)], sources, ..what }, results[0])?;
@@ -452,7 +532,10 @@ impl _Stack {
     /// A source dying here is renamed, not copied, so a phi's copies at a
     /// block's end cost nothing while their sources die. A value one of them
     /// overwrites is popped.
-    fn copies(&mut self, pairs: &[(u32, u32)]) -> Result<(), Raised> {
+    fn copies(
+        &mut self,
+        pairs: &[(u32, u32)],
+    ) -> Result<(), Raised> {
         let results: HashSet<u32> = pairs.iter().map(|(result, _)| *result).collect();
         if let Some((_, missing)) = pairs.iter().find(|(_, source)| !self.values.contains(source)) {
             return Err(unlowered(&format!("floating copy source {missing} is not on the stack")));
@@ -477,7 +560,10 @@ impl _Stack {
         Ok(())
     }
 
-    fn store(&mut self, source: u32) -> Result<(), Raised> {
+    fn store(
+        &mut self,
+        source: u32,
+    ) -> Result<(), Raised> {
         let what = self.one().what.clone().expect("a floating instruction has semantics");
         self.top(source)?;
         let name = if name_is(&what, "fst") { Some("fstp".to_owned()) } else { what.name.clone() };
@@ -496,7 +582,11 @@ impl _Stack {
     }
 
     /// `left` against a cell: `fcomp m`.
-    fn compare_memory(&mut self, left: u32, cell: Loc) -> Result<(), Raised> {
+    fn compare_memory(
+        &mut self,
+        left: u32,
+        cell: Loc,
+    ) -> Result<(), Raised> {
         self.top(left)?;
         if self.survives(left) {
             self.duplicate(left)?;
@@ -510,7 +600,11 @@ impl _Stack {
     }
 
     /// `left` against `right`, the answer moved from the status word into the flags.
-    fn compare(&mut self, left: u32, right: u32) -> Result<(), Raised> {
+    fn compare(
+        &mut self,
+        left: u32,
+        right: u32,
+    ) -> Result<(), Raised> {
         // Left on top and right beneath it, each a copy where it is read again:
         // `fld st(i)` copies from any slot.
         if self.survives(left) {
@@ -541,11 +635,17 @@ impl _Stack {
         let comparison = self.out.last().expect("a comparison was emitted");
         let mut made = (**comparison).clone();
         made.defines = comparison.defines.iter().copied().filter(|value| !produced.contains(value)).collect();
-        made.delivers = comparison.delivers.iter().copied().filter(|(held, _)| !produced.contains(&held.value)).collect();
+        made.delivers =
+            comparison.delivers.iter().copied().filter(|(held, _)| !produced.contains(&held.value)).collect();
         made.widths = comparison.widths.iter().copied().filter(|pair| !produced.contains(&pair.0)).collect();
         *self.out.last_mut().expect("a comparison was emitted") = Arc::new(made);
         let at = one.at;
-        let status = semantics(Operation::Barrier, "fnstsw", vec![Loc::Reg(Reg { register: Register::AX, width: 2 })], Vec::new());
+        let status = semantics(
+            Operation::Barrier,
+            "fnstsw",
+            vec![Loc::Reg(Reg { register: Register::AX, width: 2 })],
+            Vec::new(),
+        );
         let mut word = Insn::new(at, Some((at, at)), Some(status), one.defines.clone(), Vec::new());
         // AX is written whether or not a value is delivered in it:
         // nothing else may live there across the compare.
@@ -573,9 +673,14 @@ impl _Stack {
     }
 
     /// An instruction replacing the top with its result.
-    fn consume(&mut self, source: u32, what: Semantics, result: u32) -> Result<(), Raised> {
-        // A value that stays is copied from where it is: exchanging it up first moved what lay above it. One the result is
-        // the new value of does not: its later reads are the result's.
+    fn consume(
+        &mut self,
+        source: u32,
+        what: Semantics,
+        result: u32,
+    ) -> Result<(), Raised> {
+        // A value that stays is copied from where it is: exchanging it up first moved what lay above it. One the result
+        // is the new value of does not: its later reads are the result's.
         if source != result && self.survives(source) {
             self.duplicate(source)?;
         } else {
@@ -586,7 +691,13 @@ impl _Stack {
         Ok(())
     }
 
-    fn arithmetic(&mut self, name: &str, left: Held, right: Held, result: u32) -> Result<(), Raised> {
+    fn arithmetic(
+        &mut self,
+        name: &str,
+        left: Held,
+        right: Held,
+        result: u32,
+    ) -> Result<(), Raised> {
         let (left, right) = (left.value, right.value);
         for value in [left, right] {
             if !self.values.contains(&value) {
@@ -594,7 +705,8 @@ impl _Stack {
             }
         }
         // An operand the result renames dies here: what reads it later reads the result.
-        let (mut dies_left, dies_right) = (left == result || !self.survives(left), right == result || !self.survives(right));
+        let (mut dies_left, dies_right) =
+            (left == result || !self.survives(left), right == result || !self.survives(right));
         if left == right {
             // A value that stays is copied from where it is, and the product replaces the copy: no exchange.
             let depth = index_of(&self.values, left);
@@ -698,7 +810,9 @@ fn _converted(body: &LirBody) -> Result<LirBody, Raised> {
     }
     let body = &_split_for_the_stack(body, &floating);
     let (live_in, live_out) = live(body);
-    let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> { set.iter().copied().filter(|value| floating.contains(value)).collect() };
+    let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> {
+        set.iter().copied().filter(|value| floating.contains(value)).collect()
+    };
     let bundles = spillplacement::bundles(body);
     let mut held: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
     for block in &body.blocks {
@@ -709,12 +823,26 @@ fn _converted(body: &LirBody) -> Result<LirBody, Raised> {
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut settled: IndexMap<usize, Vec<u32>> = IndexMap::default();
     let mut stack = _Stack::new(floating.clone(), body.float_stack);
-    stack.fresh = body
-        .blocks
-        .iter()
-        .flat_map(|block| block.insns.iter().flat_map(|one| one.defines.iter().chain(&one.uses)).copied().chain(block.phis.iter().flat_map(|phi| std::iter::once(phi.result).chain(phi.incoming.iter().map(|(_, value)| *value)))))
-        .max()
-        .map_or(0, |most| most + 1);
+    stack.fresh =
+        body.blocks
+            .iter()
+            .flat_map(|block| {
+                block
+                    .insns
+                    .iter()
+                    .flat_map(|one| one.defines.iter().chain(&one.uses))
+                    .copied()
+                    .chain(
+                        block
+                            .phis
+                            .iter()
+                            .flat_map(
+                                |phi| std::iter::once(phi.result).chain(phi.incoming.iter().map(|(_, value)| *value)),
+                            ),
+                    )
+            })
+            .max()
+            .map_or(0, |most| most + 1);
     let mut made: IndexMap<i64, LirBlock> = IndexMap::default();
     let (order, _) = _reverse_postorder(body);
     for at in order {
@@ -754,7 +882,8 @@ fn _converted(body: &LirBody) -> Result<LirBody, Raised> {
                 .entry(exit)
                 .or_insert_with(|| {
                     let chosen = &held[&exit];
-                    let mut wanted: Vec<u32> = chosen.iter().copied().filter(|value| !stack.values.contains(value)).collect();
+                    let mut wanted: Vec<u32> =
+                        chosen.iter().copied().filter(|value| !stack.values.contains(value)).collect();
                     wanted.extend(stack.values.iter().copied().filter(|value| chosen.contains(value)));
                     wanted
                 })
@@ -781,9 +910,14 @@ fn _converted(body: &LirBody) -> Result<LirBody, Raised> {
 /// block that reads fewer floating values than its bundle holds: the
 /// values it does not read are popped there, on the one edge that brings
 /// them, and its other entries no longer push fillers to match.
-fn _split_for_the_stack(body: &LirBody, floating: &HashSet<u32>) -> LirBody {
+fn _split_for_the_stack(
+    body: &LirBody,
+    floating: &HashSet<u32>,
+) -> LirBody {
     let (live_in, live_out) = live(body);
-    let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> { set.iter().copied().filter(|value| floating.contains(value)).collect() };
+    let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> {
+        set.iter().copied().filter(|value| floating.contains(value)).collect()
+    };
     let bundles = spillplacement::bundles(body);
     let mut held: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
     let mut entries: IndexMap<i64, usize> = IndexMap::default();
@@ -817,7 +951,10 @@ pub(super) fn _terminators(block: &LirBlock) -> usize {
         && block.insns[cut - 1]
             .what
             .as_ref()
-            .is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch | Operation::Return))
+            .is_some_and(|what| matches!(
+                what.op,
+                Operation::Jump | Operation::Branch | Operation::Return
+            ))
     {
         cut -= 1;
     }
@@ -844,10 +981,12 @@ pub fn allocated<'a>(
 /// The caller's control word and its truncating form are saved once, at
 /// entry: a callee leaves the control word as it found it, and nothing else
 /// in the body writes it.
-fn _truncating(body: &LirBody, frame: Option<&mut Frame>) -> Result<LirBody, Raised> {
-    let fisttp = |one: &Insn| {
-        one.what.as_ref().is_some_and(|what| what.op == Operation::FloatStore && name_is(what, "fisttp"))
-    };
+fn _truncating(
+    body: &LirBody,
+    frame: Option<&mut Frame>,
+) -> Result<LirBody, Raised> {
+    let fisttp =
+        |one: &Insn| one.what.as_ref().is_some_and(|what| what.op == Operation::FloatStore && name_is(what, "fisttp"));
     if !body.insns().iter().any(|one| fisttp(one)) {
         return Ok(body.clone());
     }
@@ -881,7 +1020,8 @@ fn _truncating(body: &LirBody, frame: Option<&mut Frame>) -> Result<LirBody, Rai
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns = Vec::new();
-        let arrivals = if block.at == body.entry { block.insns.iter().take_while(|one| one.arrival()).count() } else { 0 };
+        let arrivals =
+            if block.at == body.entry { block.insns.iter().take_while(|one| one.arrival()).count() } else { 0 };
         if block.at == body.entry {
             let at = block.insns.first().map_or(block.at, |first| first.at);
             insns.extend(block.insns[..arrivals].iter().cloned());
@@ -906,16 +1046,23 @@ fn _truncating(body: &LirBody, frame: Option<&mut Frame>) -> Result<LirBody, Rai
         for one in &block.insns[arrivals..] {
             if fisttp(one) {
                 if !chopping {
-                    insns.push(insn(semantics(Operation::Barrier, "fldcw", Vec::new(), vec![Loc::Mem(chop.clone())]), one.at));
+                    insns.push(insn(
+                        semantics(Operation::Barrier, "fldcw", Vec::new(), vec![Loc::Mem(chop.clone())]),
+                        one.at,
+                    ));
                     chopping = true;
                 }
                 let mut made = (**one).clone();
-                made.what = Some(Semantics { name: Some("fistp".to_owned()), ..one.what.clone().expect("checked above") });
+                made.what =
+                    Some(Semantics { name: Some("fistp".to_owned()), ..one.what.clone().expect("checked above") });
                 insns.push(Arc::new(made));
                 continue;
             }
             if chopping && !_unrounded(one) {
-                insns.push(insn(semantics(Operation::Barrier, "fldcw", Vec::new(), vec![Loc::Mem(saved.clone())]), one.at));
+                insns.push(insn(
+                    semantics(Operation::Barrier, "fldcw", Vec::new(), vec![Loc::Mem(saved.clone())]),
+                    one.at,
+                ));
                 chopping = false;
             }
             insns.push(Arc::clone(one));
@@ -939,11 +1086,21 @@ fn _unrounded(one: &Insn) -> bool {
     let Some(what) = &one.what else { return false };
     let name = what.name.as_deref().unwrap_or_default();
     match what.op {
-        Operation::Jump | Operation::Branch | Operation::Call | Operation::Return | Operation::Escape | Operation::Barrier | Operation::Restore | Operation::Data => false,
+        Operation::Jump
+        | Operation::Branch
+        | Operation::Call
+        | Operation::Return
+        | Operation::Escape
+        | Operation::Barrier
+        | Operation::Restore
+        | Operation::Data => false,
         Operation::FloatLoad => !matches!(name, "fldpi" | "fldl2e" | "fldl2t" | "fldlg2" | "fldln2"),
         Operation::FloatStore => false,
         Operation::FloatArith | Operation::FloatArithPop | Operation::FloatUnary => {
-            matches!(name, "fxch" | "fcom" | "fcomp" | "fcompp" | "fucom" | "fucomp" | "fucompp" | "ftst" | "fabs" | "fchs")
+            matches!(
+                name,
+                "fxch" | "fcom" | "fcomp" | "fcompp" | "fucom" | "fucomp" | "fucompp" | "ftst" | "fabs" | "fchs"
+            )
         }
         _ => true,
     }
@@ -964,9 +1121,14 @@ impl LIRTransform for FloatAlloc {
         "floatalloc"
     }
 
-    fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
         let mut frame = self.frame.as_ref().map(|frame| frame.borrow_mut());
-        _converted(&body).and_then(|converted| _truncating(&converted, frame.as_deref_mut())).map_err(|error| error.to_string())
+        _converted(&body)
+            .and_then(|converted| _truncating(&converted, frame.as_deref_mut()))
+            .map_err(|error| error.to_string())
     }
 }
 

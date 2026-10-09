@@ -4,15 +4,17 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, LazyLock};
 
-use crate::support::hash::{IndexMap, IndexSet};
-
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{self, Insn};
+use crate::support::hash::{IndexMap, IndexSet};
 
 /// Select private load, integer update, and store chains as one RMW.
 ///
 /// `users` is Python's `Counter`: a missing value counts zero.
-pub fn selected(insns: &[Arc<Insn>], users: &IndexMap<u32, i64>) -> Vec<Arc<Insn>> {
+pub fn selected(
+    insns: &[Arc<Insn>],
+    users: &IndexMap<u32, i64>,
+) -> Vec<Arc<Insn>> {
     let byte = _fold_byte(insns, users);
     _fold_integer(&byte, users)
 }
@@ -25,7 +27,10 @@ static _COMMUTATIVE: LazyLock<BTreeSet<&'static str>> =
 type Definitions = IndexMap<u32, (usize, Arc<Insn>)>;
 
 /// Select `load; op; store-same-cell` as a memory-destination operation.
-fn _fold_integer(insns: &[Arc<Insn>], users: &IndexMap<u32, i64>) -> Vec<Arc<Insn>> {
+fn _fold_integer(
+    insns: &[Arc<Insn>],
+    users: &IndexMap<u32, i64>,
+) -> Vec<Arc<Insn>> {
     let mut definitions: Definitions = IndexMap::default();
     for (index, one) in insns.iter().enumerate() {
         for value in &one.defines {
@@ -83,9 +88,7 @@ fn _integer_chain(
                 && matches!(what.dests.as_slice(), [Loc::Mem(_)])
                 && matches!(what.sources.as_slice(), [Loc::Held(_)]) =>
         {
-            let (Loc::Mem(cell), Loc::Held(result)) = (&what.dests[0], &what.sources[0]) else {
-                unreachable!()
-            };
+            let (Loc::Mem(cell), Loc::Held(result)) = (&what.dests[0], &what.sources[0]) else { unreachable!() };
             (cell.clone(), *result)
         }
         _ => return None,
@@ -104,11 +107,12 @@ fn _integer_chain(
             if what.op == Operation::Binary
                 && what.name.is_some()
                 && matches!(what.dests.as_slice(), [Loc::Held(_)])
-                && matches!(what.sources.as_slice(), [Loc::Held(_), Loc::Held(_) | Loc::Imm(_)]) =>
+                && matches!(
+                    what.sources.as_slice(),
+                    [Loc::Held(_), Loc::Held(_) | Loc::Imm(_)]
+                ) =>
         {
-            let (Loc::Held(made), Loc::Held(left)) = (&what.dests[0], &what.sources[0]) else {
-                unreachable!()
-            };
+            let (Loc::Held(made), Loc::Held(left)) = (&what.dests[0], &what.sources[0]) else { unreachable!() };
             (what.name.clone().expect("checked"), *made, *left, what.sources[1].clone())
         }
         _ => return None,
@@ -163,7 +167,10 @@ fn _integer_chain(
     None
 }
 
-fn _fold_byte(insns: &[Arc<Insn>], users: &IndexMap<u32, i64>) -> Vec<Arc<Insn>> {
+fn _fold_byte(
+    insns: &[Arc<Insn>],
+    users: &IndexMap<u32, i64>,
+) -> Vec<Arc<Insn>> {
     let mut definitions: Definitions = IndexMap::default();
     for (index, one) in insns.iter().enumerate() {
         for value in &one.defines {
@@ -187,12 +194,8 @@ fn _fold_byte(insns: &[Arc<Insn>], users: &IndexMap<u32, i64>) -> Vec<Arc<Insn>>
         {
             continue;
         }
-        let Some(what) = &store.what else {
-            panic!("AssertionError")
-        };
-        let Loc::Mem(cell) = &what.dests[0] else {
-            panic!("AssertionError")
-        };
+        let Some(what) = &store.what else { panic!("AssertionError") };
+        let Loc::Mem(cell) = &what.dests[0] else { panic!("AssertionError") };
         let what = Semantics {
             name: Some("or".to_owned()),
             dests: vec![Loc::Mem(cell.clone())],
@@ -202,12 +205,7 @@ fn _fold_byte(insns: &[Arc<Insn>], users: &IndexMap<u32, i64>) -> Vec<Arc<Insn>>
         let values: Vec<u32> = ir::values(&Loc::Mem(cell.clone())).iter().map(|value| value.value).collect();
         let mut made = (**store).clone();
         made.what = Some(what);
-        made.uses = values
-            .into_iter()
-            .chain([mask.value])
-            .collect::<IndexSet<u32>>()
-            .into_iter()
-            .collect();
+        made.uses = values.into_iter().chain([mask.value]).collect::<IndexSet<u32>>().into_iter().collect();
         made.defines = Vec::new();
         made.widths = Vec::new();
         replaced.insert(store_at, Arc::new(made));
@@ -231,9 +229,7 @@ fn _chain(
                 && matches!(what.dests.as_slice(), [Loc::Mem(_)])
                 && matches!(what.sources.as_slice(), [Loc::Held(_)]) =>
         {
-            let (Loc::Mem(cell), Loc::Held(narrowed)) = (&what.dests[0], &what.sources[0]) else {
-                unreachable!()
-            };
+            let (Loc::Mem(cell), Loc::Held(narrowed)) = (&what.dests[0], &what.sources[0]) else { unreachable!() };
             (cell.clone(), *narrowed)
         }
         _ => return None,
@@ -304,10 +300,7 @@ fn _chain(
         }
         _ => return None,
     };
-    let candidates = [
-        (_byte_load(definitions, users, left), right),
-        (_byte_load(definitions, users, right), left),
-    ];
+    let candidates = [(_byte_load(definitions, users, left), right), (_byte_load(definitions, users, right), left)];
     for (loaded, mask_wide) in candidates {
         let Some((load_at, loaded_cell)) = loaded else {
             continue;
@@ -344,7 +337,11 @@ fn _chain(
     None
 }
 
-fn _byte_load(definitions: &Definitions, users: &IndexMap<u32, i64>, value: Held) -> Option<(usize, Mem)> {
+fn _byte_load(
+    definitions: &Definitions,
+    users: &IndexMap<u32, i64>,
+    value: Held,
+) -> Option<(usize, Mem)> {
     let definition = definitions.get(&value.value);
     if definition.is_none() || users.get(&value.value).copied().unwrap_or(0) != 1 {
         return None;
@@ -410,7 +407,11 @@ fn _preparation(one: &Insn) -> bool {
     memory_sources.is_empty() || (what.op == Operation::Move && memory_sources.len() == 1)
 }
 
-fn _rewritten(insns: &[Arc<Insn>], replaced: &IndexMap<usize, Arc<Insn>>, erased: &BTreeSet<usize>) -> Vec<Arc<Insn>> {
+fn _rewritten(
+    insns: &[Arc<Insn>],
+    replaced: &IndexMap<usize, Arc<Insn>>,
+    erased: &BTreeSet<usize>,
+) -> Vec<Arc<Insn>> {
     let mut out = Vec::new();
     for (index, one) in insns.iter().enumerate() {
         if let Some(made) = replaced.get(&index) {
@@ -447,13 +448,18 @@ mod tests {
 
     use std::sync::Arc;
 
-    use crate::support::hash::IndexMap;
-
     use super::selected;
     use crate::model::ir::{Held, Loc, Mem, Operation, Semantics};
     use crate::model::lir::Insn;
+    use crate::support::hash::IndexMap;
 
-    fn _insn(at: i64, what: Semantics, defines: Vec<u32>, uses: Vec<u32>, volatile: bool) -> Arc<Insn> {
+    fn _insn(
+        at: i64,
+        what: Semantics,
+        defines: Vec<u32>,
+        uses: Vec<u32>,
+        volatile: bool,
+    ) -> Arc<Insn> {
         Arc::new(Insn { volatile, ..Insn::new(at, Some((at, at)), Some(what), defines, uses) })
     }
 
@@ -465,11 +471,20 @@ mod tests {
         users
     }
 
-    fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {
+    fn semantics(
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+    ) -> Semantics {
         Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
     }
 
-    fn _chain(name: &str, old_on_left: bool, volatile: bool) -> Vec<Arc<Insn>> {
+    fn _chain(
+        name: &str,
+        old_on_left: bool,
+        volatile: bool,
+    ) -> Vec<Arc<Insn>> {
         let base = Held { value: 1, width: 2 };
         let cell = Loc::Mem(Mem { base: Some(base), ..Mem::new(None, 4) });
         let old = Held { value: 2, width: 4 };
@@ -553,12 +568,22 @@ mod tests {
             insn(0, semantics(Operation::Extend, "movzx", vec![held(2, 2)], vec![cell.clone()]), vec![2], vec![1]),
             insn(
                 1,
-                semantics(Operation::Move, "mov", vec![held(3, 1)], vec![Loc::Imm(Imm { value: 7, width: 1, address: None })]),
+                semantics(
+                    Operation::Move,
+                    "mov",
+                    vec![held(3, 1)],
+                    vec![Loc::Imm(Imm { value: 7, width: 1, address: None })],
+                ),
                 vec![3],
                 vec![],
             ),
             insn(2, semantics(Operation::Extend, "movzx", vec![held(4, 2)], vec![held(3, 1)]), vec![4], vec![3]),
-            insn(3, semantics(Operation::Binary, "or", vec![held(5, 2)], vec![held(2, 2), held(4, 2)]), vec![5], vec![2, 4]),
+            insn(
+                3,
+                semantics(Operation::Binary, "or", vec![held(5, 2)], vec![held(2, 2), held(4, 2)]),
+                vec![5],
+                vec![2, 4],
+            ),
             insn(4, semantics(Operation::Extend, "movzx", vec![held(6, 2)], vec![held(5, 1)]), vec![6], vec![5]),
             insn(5, semantics(Operation::Move, "mov", vec![cell], vec![held(6, 1)]), vec![], vec![6, 1]),
         ];
@@ -596,5 +621,4 @@ mod tests {
 
         assert_eq!(selected(&insns, &_users(&insns)), insns);
     }
-
 }

@@ -5,6 +5,4 @@
 //! `raising_returns`, `stack`. The modules declared here raise into the
 //! old MIR and are to be ported.
 
-pub use llrm_x86_bcmachine::frontends::bc::{
-    blocks, declen, extent, fppatches, raising_control, stack,
-};
+pub use llrm_x86_bcmachine::frontends::bc::{blocks, declen, extent, fppatches, raising_control, stack};

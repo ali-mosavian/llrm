@@ -5,13 +5,13 @@
 
 use std::collections::BTreeSet;
 
+use llrm_core::hir::{self, model};
+use llrm_core::objectfile::omf;
 use llrm_core::support::hash::IndexMap;
 
 use super::cli::parse_args;
 use super::qbstages;
 use super::test_hir::*;
-use llrm_core::hir::{self, model};
-use llrm_core::objectfile::omf;
 
 fn argv(items: &[&str]) -> Vec<String> {
     items.iter().map(|one| (*one).to_owned()).collect()
@@ -79,7 +79,9 @@ fn test_qb_cli_reads_the_machine_it_is_given() {
 /// group, unless -mno-stack-is-data says otherwise.
 #[test]
 fn test_qb_cli_keeps_the_stack_in_the_data_group_unless_told_not_to() {
-    let stack_is_data = |arguments: &[&str]| parse_args(&argv(arguments)).expect("parses").codegen.machine.segments.unwrap().stack_is_data;
+    let stack_is_data = |arguments: &[&str]| {
+        parse_args(&argv(arguments)).expect("parses").codegen.machine.segments.unwrap().stack_is_data
+    };
     assert!(stack_is_data(&["probe.bas"]));
     assert!(!stack_is_data(&["probe.bas", "-mno-stack-is-data"]));
 }
@@ -134,7 +136,10 @@ fn test_inline_module_math_does_not_create_a_native_bp_frame() {
     assert!(code.windows(2).any(|pair| pair == b"\xd9\xf3"));
 }
 
-fn qb45_listing(name: &str, source: &[u8]) -> String {
+fn qb45_listing(
+    name: &str,
+    source: &[u8],
+) -> String {
     let tmp = tempfile::TempDir::new().unwrap();
     let source = written(&tmp, name, source);
     listing(&qb45(&source))
@@ -251,9 +256,14 @@ fn test_hir_lowering_honors_qb_multidimensional_array_order() {
     );
 
     let multiplier = |order: &str| {
-        let frontend = super::driver::Frontend { array_order: order.into(), ..super::driver::Frontend::new("vbdos", "vbdos") };
+        let frontend =
+            super::driver::Frontend { array_order: order.into(), ..super::driver::Frontend::new("vbdos", "vbdos") };
         let mir = emitted_mir(&super::driver::parsed(&basic, &frontend, None).expect("parses"));
-        let found: Vec<&str> = mir.lines().filter(|line| line.contains(" = mul i16 ")).map(|line| line.rsplit(", ").next().unwrap()).collect();
+        let found: Vec<&str> = mir
+            .lines()
+            .filter(|line| line.contains(" = mul i16 "))
+            .map(|line| line.rsplit(", ").next().unwrap())
+            .collect();
         found.join(" ")
     };
 
@@ -324,8 +334,9 @@ fn test_module_exit_rewrite_preserves_conditional_false_edges() {
 
     assert!(main.contains("cmp eax, 42\n    je L"), "{main}");
     assert_eq!(main.matches("call far ptr B$PESD").count(), 2, "{main}");
-    // Each arm ends in its own exit: the jump to the shared `ret` is replaced by a copy of it (gcc's `copy_bb_p`, `jumps::duplicated`),
-    // and `driver::basic::ends_program` then spells every `ret` of the module as a call of B$CENP. Both arms must reach it.
+    // Each arm ends in its own exit: the jump to the shared `ret` is replaced by a copy of it (gcc's `copy_bb_p`,
+    // `jumps::duplicated`), and `driver::basic::ends_program` then spells every `ret` of the module as a call of
+    // B$CENP. Both arms must reach it.
     assert_eq!(main.matches("call far ptr B$CENP").count(), 2, "{main}");
 }
 

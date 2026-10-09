@@ -1,28 +1,47 @@
 //! Runtime checks that invoke the panic handler: an index at or past its
 //! dimension, a slice past its sequence or reversed (section 13), a shift
-//! count at or past its operand's width, and a float outside the integer type it converts to (section 3). A constant index into a known dimension is checked
-//! here instead, and `unsafe` code, which vouches for its indices, is not
-//! checked, nor any index or slice under `--unchecked-bounds`; a check a loop's range already proves is the optimizer's to
-//! fold.
+//! count at or past its operand's width, and a float outside the integer type it converts to (section 3). A constant
+//! index into a known dimension is checked here instead, and `unsafe` code, which vouches for its indices, is not
+//! checked, nor any index or slice under `--unchecked-bounds`; a check a loop's range already proves is the optimizer's
+//! to fold.
 
 use llrm_core::abi::nib as rt;
+
 use super::*;
 
 impl FunctionCompiler<'_> {
     /// Checks each of `indices` against the view `descriptor`'s dimensions.
     /// A view is within one segment, so a dimension of `element_width`-byte
     /// elements is at most the segment's last offset / `element_width`: stated of its load.
-    pub(super) fn check_view_bounds(&mut self, descriptor: u32, indices: &[hir::Operand], element_width: u32, span: Span) -> Result<(), Diagnostic> {
+    pub(super) fn check_view_bounds(
+        &mut self,
+        descriptor: u32,
+        indices: &[hir::Operand],
+        element_width: u32,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         if self.unsafe_depth > 0 || self.unchecked_bounds {
             return Ok(());
         }
         for (axis, index) in indices.iter().enumerate() {
             let dim = self.value(self.word());
-            let place = hir::Operand::IndirectPlace { base: descriptor, offset: descriptor::dim(axis as u8, self.word_bytes()), type_id: self.word_id(), inbounds: false, member: None };
+            let place = hir::Operand::IndirectPlace {
+                base: descriptor,
+                offset: descriptor::dim(axis as u8, self.word_bytes()),
+                type_id: self.word_id(),
+                inbounds: false,
+                member: None,
+            };
             let load = self.emit("load", vec![dim], vec![place], None);
             if element_width > 1 {
                 let most = (self.types.sizes.max_object / u64::from(element_width)) as i64;
-                self.stated.state(llrm_core::hir::facts::Subject::Instruction { function: i64::from(self.signature.id), id: i64::from(load) }, llrm_mir::facts::Fact::Range(llrm_mir::facts::Bounds { lo: 0, hi: most }));
+                self.stated.state(
+                    llrm_core::hir::facts::Subject::Instruction {
+                        function: i64::from(self.signature.id),
+                        id: i64::from(load),
+                    },
+                    llrm_mir::facts::Fact::Range(llrm_mir::facts::Bounds { lo: 0, hi: most }),
+                );
             }
             self.check_bounds(index, hir::Operand::Value(dim), span)?;
         }
@@ -31,25 +50,48 @@ impl FunctionCompiler<'_> {
 
     /// Panics unless `index` is below `dim`, compared unsigned so a negative
     /// index fails too.
-    pub(super) fn check_bounds(&mut self, index: &hir::Operand, dim: hir::Operand, span: Span) -> Result<(), Diagnostic> {
+    pub(super) fn check_bounds(
+        &mut self,
+        index: &hir::Operand,
+        dim: hir::Operand,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         self.check_below(index, dim, rt::ERROR_BOUNDS, span)
     }
 
     /// Panics unless the slice bound `value` is at most `limit`: a range
     /// ends within its sequence and starts at or before its end.
-    pub(super) fn check_slice_bound(&mut self, value: &hir::Operand, limit: hir::Operand, span: Span) -> Result<(), Diagnostic> {
+    pub(super) fn check_slice_bound(
+        &mut self,
+        value: &hir::Operand,
+        limit: hir::Operand,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         self.check_order(value, limit, true, rt::ERROR_BOUNDS, span)
     }
 
     /// Panics through `panic` unless `value` is below `limit`, compared
     /// unsigned at the wider of their widths.
-    pub(super) fn check_below(&mut self, value: &hir::Operand, limit: hir::Operand, panic: &'static str, span: Span) -> Result<(), Diagnostic> {
+    pub(super) fn check_below(
+        &mut self,
+        value: &hir::Operand,
+        limit: hir::Operand,
+        panic: &'static str,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         self.check_order(value, limit, false, panic, span)
     }
 
     /// Panics through `panic` unless `value` is below `limit`, or at most
     /// `limit` when `inclusive`; constants are checked here instead.
-    fn check_order(&mut self, value: &hir::Operand, limit: hir::Operand, inclusive: bool, panic: &'static str, span: Span) -> Result<(), Diagnostic> {
+    fn check_order(
+        &mut self,
+        value: &hir::Operand,
+        limit: hir::Operand,
+        inclusive: bool,
+        panic: &'static str,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         if let (hir::Operand::Constant(_, at), hir::Operand::Constant(_, length)) = (value, &limit) {
             if *at < 0 || at > length || (at == length && !inclusive) {
                 let range = if inclusive { "..=" } else { ".." };
@@ -60,7 +102,14 @@ impl FunctionCompiler<'_> {
         if self.unsafe_depth > 0 || (self.unchecked_bounds && panic == rt::ERROR_BOUNDS) {
             return Ok(());
         }
-        let wide = [value, &limit].iter().any(|one| matches!(one, hir::Operand::Value(id) if self.types.width(self.type_of(*id)) == 4));
+        let wide = [value, &limit]
+            .iter()
+            .any(
+                |one| matches!(
+                    one,
+                    hir::Operand::Value(id) if self.types.width(self.type_of(*id)) == 4
+                ),
+            );
         let unsigned = if wide { TypeName::U32 } else { self.word() };
         let [value, limit] = [value.clone(), limit].map(|one| self.unsigned(one, unsigned));
         let below = self.value(TypeName::Bool);
@@ -71,12 +120,20 @@ impl FunctionCompiler<'_> {
 
     /// Panics unless the float `value` truncates into the integer `target`:
     /// strictly between its minimum less one and its maximum plus one.
-    pub(super) fn check_truncation(&mut self, value: &hir::Operand, source: TypeName, target: TypeName, span: Span) -> Result<(), Diagnostic> {
+    pub(super) fn check_truncation(
+        &mut self,
+        value: &hir::Operand,
+        source: TypeName,
+        target: TypeName,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         let bits = 8 * width(self.types.sizes, target);
         let signed = matches!(target, TypeName::I8 | TypeName::I16 | TypeName::I32);
-        let (minimum, maximum) = if signed { (-(1i64 << (bits - 1)), (1i64 << (bits - 1)) - 1) } else { (0, (1i64 << bits) - 1) };
+        let (minimum, maximum) =
+            if signed { (-(1i64 << (bits - 1)), (1i64 << (bits - 1)) - 1) } else { (0, (1i64 << bits) - 1) };
         // An f32 holds no value strictly between -2^31 - 1 and -2^31.
-        let (lower, strict) = if source == TypeName::F32 && bits == 32 && signed { (minimum, false) } else { (minimum - 1, true) };
+        let (lower, strict) =
+            if source == TypeName::F32 && bits == 32 && signed { (minimum, false) } else { (minimum - 1, true) };
         let lower = self.float(&lower.to_string(), Some(source), span)?;
         let upper = self.float(&(maximum + 1).to_string(), Some(source), span)?;
         let [above, below, inside] = [(); 3].map(|_| self.value(TypeName::Bool));
@@ -88,7 +145,11 @@ impl FunctionCompiler<'_> {
     }
 
     /// Continues where `condition` holds; elsewhere calls `panic`, which never returns.
-    pub(super) fn panic_unless(&mut self, condition: hir::Operand, panic: &'static str) {
+    pub(super) fn panic_unless(
+        &mut self,
+        condition: hir::Operand,
+        panic: &'static str,
+    ) {
         let inside = self.block();
         let outside = self.block();
         self.terminate(hir::Terminator { kind: "branch", operands: vec![condition], targets: vec![inside, outside] });
@@ -99,7 +160,11 @@ impl FunctionCompiler<'_> {
     }
 
     /// `operand` as the unsigned `type_name`.
-    fn unsigned(&mut self, operand: hir::Operand, type_name: TypeName) -> hir::Operand {
+    fn unsigned(
+        &mut self,
+        operand: hir::Operand,
+        type_name: TypeName,
+    ) -> hir::Operand {
         match operand {
             hir::Operand::Constant(_, at) => hir::Operand::Constant(type_id(type_name), at),
             hir::Operand::Value(id) if self.type_of(id) == type_id(type_name) => operand,

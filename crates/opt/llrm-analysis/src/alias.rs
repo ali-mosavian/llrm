@@ -34,7 +34,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::LazyLock;
 
-use crate::graph::loops;
 use llrm_mir::context::{ConstantKind, GlobalId};
 use llrm_mir::facts::Facts;
 use llrm_mir::memory::Effects;
@@ -49,8 +48,12 @@ use crate::cellmap::{Bucket, CellMap};
 use crate::cfg;
 use crate::consts::Known;
 use crate::globalsaa;
+use crate::graph::loops;
 use crate::induction;
-use crate::memory::{self, Addr, Identity, MemRef, MemoryKind, Key, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit, object_of, unmodeled_write, wrapped};
+use crate::memory::{
+    self, Addr, Identity, Key, MemRef, MemoryKind, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit,
+    object_of, unmodeled_write, wrapped,
+};
 use crate::ranges;
 use crate::regions::{self, ByteRange};
 
@@ -76,8 +79,14 @@ pub enum CellKey {
 }
 
 /// Whole objects an unknown callee can reach through pointers it owns.
-fn _whole<'a>(provenances: impl IntoIterator<Item = &'a Provenance>, escaped: &BTreeSet<ObjectRef>) -> BTreeSet<Slice> {
-    let mut objects = provenances.into_iter().flat_map(|provenance| provenance.slices.iter().map(|one| one.object)).collect::<BTreeSet<_>>();
+fn _whole<'a>(
+    provenances: impl IntoIterator<Item = &'a Provenance>,
+    escaped: &BTreeSet<ObjectRef>,
+) -> BTreeSet<Slice> {
+    let mut objects = provenances
+        .into_iter()
+        .flat_map(|provenance| provenance.slices.iter().map(|one| one.object))
+        .collect::<BTreeSet<_>>();
     objects.extend(escaped.iter().cloned());
     objects.into_iter().filter_map(Slice::every_byte).collect()
 }
@@ -100,12 +109,18 @@ pub struct EscapedBefore {
 }
 
 impl EscapedBefore {
-    pub fn get(&self, at: &InstId) -> Option<BTreeSet<ObjectRef>> {
+    pub fn get(
+        &self,
+        at: &InstId,
+    ) -> Option<BTreeSet<ObjectRef>> {
         self.at.get(at).map(|bits| bits.iter().map(|one| self.objects[one].clone()).collect())
     }
 
     /// What escaped before `at`, unnamed: two instructions with equal bits have the same objects.
-    pub fn bits(&self, at: &InstId) -> Option<&Bits> {
+    pub fn bits(
+        &self,
+        at: &InstId,
+    ) -> Option<&Bits> {
         self.at.get(at)
     }
 
@@ -113,19 +128,36 @@ impl EscapedBefore {
     /// follows or one only to what escaped, cannot reach `cell`: every byte
     /// of it is in frame objects not escaped before `at`. LLVM's
     /// `EarliestEscapeInfo`.
-    pub fn apart(&self, at: InstId, reference: &MemRef, cell: &MemRef) -> bool {
+    pub fn apart(
+        &self,
+        at: InstId,
+        reference: &MemRef,
+        cell: &MemRef,
+    ) -> bool {
         let Some(bits) = self.at.get(&at) else { return false };
         // No provenance is a pointer no fact follows: `_lost` publishes what
         // it came from.
-        let escaping = reference.provenance.as_ref().is_none_or(|one| one.slices.iter().all(|slice| matches!(slice.object.kind, MemoryKind::Unknown | MemoryKind::Nonlocal)));
-        let unreached = |object: &ObjectRef| object.kind == MemoryKind::Frame && self.objects.get_index_of(object).is_none_or(|one| !bits.contains(one));
-        escaping && cell.provenance.as_ref().is_some_and(|one| !one.slices.is_empty() && one.slices.iter().all(|slice| unreached(&slice.object)))
+        let escaping = reference.provenance.as_ref().is_none_or(|one| {
+            one.slices.iter().all(|slice| matches!(slice.object.kind, MemoryKind::Unknown | MemoryKind::Nonlocal))
+        });
+        let unreached = |object: &ObjectRef| {
+            object.kind == MemoryKind::Frame && self.objects.get_index_of(object).is_none_or(|one| !bits.contains(one))
+        };
+        escaping
+            && cell
+                .provenance
+                .as_ref()
+                .is_some_and(|one| !one.slices.is_empty() && one.slices.iter().all(|slice| unreached(&slice.object)))
     }
 }
 
 impl PointsTo {
     /// Canonical bytes reached by an access through an analysed pointer.
-    pub fn reference(&self, unit: &Unit, reference: &MemRef) -> Option<Provenance> {
+    pub fn reference(
+        &self,
+        unit: &Unit,
+        reference: &MemRef,
+    ) -> Option<Provenance> {
         _resolved_reference(unit, reference, &self.values)
     }
 
@@ -134,26 +166,44 @@ impl PointsTo {
     /// Incoming pointers remain nullable. A frame object or a global is
     /// non-null by the source language contract even though its eventual
     /// 16-bit offset is not known until link time.
-    pub fn nonnull(&self, value: ValueId) -> bool {
+    pub fn nonnull(
+        &self,
+        value: ValueId,
+    ) -> bool {
         self.values.get(&value).is_some_and(nonnull)
     }
 }
 
 fn nonnull(provenance: &Provenance) -> bool {
     !provenance.slices.is_empty()
-        && provenance.slices.iter().all(|one| matches!(one.object.kind, MemoryKind::Frame | MemoryKind::Global | MemoryKind::External | MemoryKind::Named))
+        && provenance.slices.iter().all(|one| {
+            matches!(
+                one.object.kind,
+                MemoryKind::Frame | MemoryKind::Global | MemoryKind::External | MemoryKind::Named
+            )
+        })
 }
 
 /// `PointsTo::nonnull` of `value` where its definition alone settles it,
 /// as LLVM's `isKnownNonZero` reads a pointer's underlying object instead
 /// of solving every pointer; `None` where only the whole solve can say.
-pub fn nonnull_by_definition(unit: &Unit, value: ValueId) -> Option<bool> {
+pub fn nonnull_by_definition(
+    unit: &Unit,
+    value: ValueId,
+) -> Option<bool> {
     // A parameter the language states non-null, as a reference is; or
     // dereferenceable in a near space, where null holds no object (DGROUP's
     // first bytes are the runtime's); a far one may be 0000:0000.
     if let ValueDef::Argument(at) = unit.function.value(value).def {
         let facts = Facts::param(unit.function, at as usize);
-        let near = unit.operand_type(Operand::Value(value)).is_some_and(|ty| matches!(unit.context.types.get(ty), Type::Pointer(space) if *space == unit.spaces().near));
+        let near = unit
+            .operand_type(Operand::Value(value))
+            .is_some_and(
+                |ty| matches!(
+                    unit.context.types.get(ty),
+                    Type::Pointer(space) if *space == unit.spaces().near
+                ),
+            );
         if facts.non_null() || near && facts.dereferenceable().is_some_and(|bytes| bytes > 0) {
             return Some(true);
         }
@@ -177,7 +227,10 @@ pub fn may_point(unit: &Unit) -> HashSet<ValueId> {
     parameters.chain(results).filter(|&value| is_pointer(unit, Operand::Value(value))).collect()
 }
 
-fn is_pointer(unit: &Unit, operand: Operand) -> bool {
+fn is_pointer(
+    unit: &Unit,
+    operand: Operand,
+) -> bool {
     unit.operand_type(operand).is_some_and(|ty| matches!(unit.context.types.get(ty), Type::Pointer(_)))
 }
 
@@ -192,8 +245,15 @@ pub fn seeds(unit: &Unit) -> IndexMap<ValueId, Provenance> {
         .enumerate()
         .filter(|(_, value)| is_pointer(unit, Operand::Value(**value)))
         .map(|(at, value)| {
-            let object = ObjectInterner::of(unit.context).intern(MemoryObject { identity: Some(Identity::Int(at as i64)), ..MemoryObject::new(MemoryKind::Parameter) });
-            let restrict = if Facts::param(function, at).no_alias() { BTreeSet::from([Identity::Int(at as i64)]) } else { BTreeSet::new() };
+            let object = ObjectInterner::of(unit.context).intern(MemoryObject {
+                identity: Some(Identity::Int(at as i64)),
+                ..MemoryObject::new(MemoryKind::Parameter)
+            });
+            let restrict = if Facts::param(function, at).no_alias() {
+                BTreeSet::from([Identity::Int(at as i64)])
+            } else {
+                BTreeSet::new()
+            };
             (*value, Provenance::one_with_slice(object, 0, 1, 1, 1, restrict).expect("one byte is a slice"))
         })
         .collect()
@@ -201,13 +261,20 @@ pub fn seeds(unit: &Unit) -> IndexMap<ValueId, Provenance> {
 
 /// The provenance of a pointer operand: a value's as solved, a constant's
 /// from the global it addresses.
-fn _operand(unit: &Unit, operand: Operand, values: &IndexMap<ValueId, Provenance>) -> Option<Provenance> {
+fn _operand(
+    unit: &Unit,
+    operand: Operand,
+    values: &IndexMap<ValueId, Provenance>,
+) -> Option<Provenance> {
     match operand {
         Operand::Value(value) => values.get(&value).cloned(),
         Operand::Constant(_) => {
             let access = MemRef::at(unit, operand, 1);
             let root = access.root?;
-            if !matches!(root, Operand::Constant(id) if matches!(unit.context.get(id).kind, ConstantKind::Global(_))) {
+            if !matches!(
+                root,
+                Operand::Constant(id) if matches!(unit.context.get(id).kind, ConstantKind::Global(_))
+            ) {
                 return None;
             }
             let object = object_of(unit, root)?;
@@ -218,7 +285,11 @@ fn _operand(unit: &Unit, operand: Operand, values: &IndexMap<ValueId, Provenance
 }
 
 /// Resolve an access through the current pointer-value facts.
-fn _resolved_reference(unit: &Unit, reference: &MemRef, values: &IndexMap<ValueId, Provenance>) -> Option<Provenance> {
+fn _resolved_reference(
+    unit: &Unit,
+    reference: &MemRef,
+    values: &IndexMap<ValueId, Provenance>,
+) -> Option<Provenance> {
     if let Some(attached) = &reference.provenance {
         return Some(attached.clone());
     }
@@ -228,7 +299,10 @@ fn _resolved_reference(unit: &Unit, reference: &MemRef, values: &IndexMap<ValueI
     let slices = source
         .slices
         .iter()
-        .map(|one| Slice::new(one.object, one.low, one.high, one.stride, i64::from(reference.width.max(1))).expect("a slice keeps its positive shape"))
+        .map(|one| {
+            Slice::new(one.object, one.low, one.high, one.stride, i64::from(reference.width.max(1)))
+                .expect("a slice keeps its positive shape")
+        })
         .collect();
     Some(Provenance { slices, restrict: source.restrict })
 }
@@ -254,7 +328,10 @@ pub struct Summary {
 pub type Access = (std::rc::Rc<str>, std::rc::Rc<[String]>);
 
 /// The types of two writes' unplaced stores together.
-fn merged_types(one: (bool, &Option<BTreeSet<Access>>), other: (bool, &Option<BTreeSet<Access>>)) -> Option<BTreeSet<Access>> {
+fn merged_types(
+    one: (bool, &Option<BTreeSet<Access>>),
+    other: (bool, &Option<BTreeSet<Access>>),
+) -> Option<BTreeSet<Access>> {
     match (one, other) {
         ((false, _), (_, types)) => types.clone(),
         ((_, types), (false, _)) => types.clone(),
@@ -264,7 +341,10 @@ fn merged_types(one: (bool, &Option<BTreeSet<Access>>), other: (bool, &Option<BT
 }
 
 impl Summary {
-    pub fn instantiated(&self, arguments: &[Provenance]) -> Summary {
+    pub fn instantiated(
+        &self,
+        arguments: &[Provenance],
+    ) -> Summary {
         let expand = |items: &BTreeSet<Slice>| {
             let mut out = BTreeSet::new();
             for item in items {
@@ -280,8 +360,14 @@ impl Summary {
                 }
                 for actual in &arguments[index as usize].slices {
                     out.insert(
-                        Slice::new(actual.object.clone(), actual.low + item.low, actual.high + item.high - 1, memory::gcd(actual.stride, item.stride), item.width)
-                            .expect("two valid slices sum to a valid slice"),
+                        Slice::new(
+                            actual.object.clone(),
+                            actual.low + item.low,
+                            actual.high + item.high - 1,
+                            memory::gcd(actual.stride, item.stride),
+                            item.width,
+                        )
+                        .expect("two valid slices sum to a valid slice"),
                     );
                 }
             }
@@ -299,7 +385,8 @@ impl Summary {
     }
 }
 
-/// What a procedure's calls are, of its body and the declarations alone: kept for the next run while neither has changed.
+/// What a procedure's calls are, of its body and the declarations alone: kept for the next run while neither has
+/// changed.
 #[derive(Debug, Default)]
 pub struct CallFacts {
     pub calls: IndexMap<InstId, String>,
@@ -334,7 +421,10 @@ impl<'a> Procedure<'a> {
     }
 
     /// `unit`'s procedure, its calls as `facts` (of this body and these declarations) say.
-    pub fn with(unit: Unit<'a>, facts: Rc<CallFacts>) -> Self {
+    pub fn with(
+        unit: Unit<'a>,
+        facts: Rc<CallFacts>,
+    ) -> Self {
         Self { unit, facts }
     }
 }
@@ -354,7 +444,12 @@ impl CallFacts {
                 && let Some(named) = unit.globals.get(global.0 as usize)
                 && let Some(name) = named.name.clone()
             {
-                if named.function().is_some() && !matches!(named.linkage, Linkage::External | Linkage::Internal | Linkage::Private | Linkage::ExternWeak) {
+                if named.function().is_some()
+                    && !matches!(
+                        named.linkage,
+                        Linkage::External | Linkage::Internal | Linkage::Private | Linkage::ExternWeak
+                    )
+                {
                     replaceable.insert(name.clone());
                 }
                 calls.insert(inst, name);
@@ -368,8 +463,16 @@ impl CallFacts {
                 .map(|&one| match one {
                     Operand::Value(value) if is_pointer(unit, one) => Actual::Pointer(value, 0),
                     // A null pointer points to nothing.
-                    Operand::Constant(id) if matches!(unit.context.get(id).kind, ConstantKind::Null | ConstantKind::Zero | ConstantKind::Poison) => Actual::Absent,
-                    Operand::Constant(_) if is_pointer(unit, one) => _operand(unit, one, &IndexMap::default()).map_or(Actual::Provenance(UNKNOWN.clone()), Actual::Provenance),
+                    Operand::Constant(id)
+                        if matches!(
+                            unit.context.get(id).kind,
+                            ConstantKind::Null | ConstantKind::Zero | ConstantKind::Poison
+                        ) =>
+                    {
+                        Actual::Absent
+                    }
+                    Operand::Constant(_) if is_pointer(unit, one) => _operand(unit, one, &IndexMap::default())
+                        .map_or(Actual::Provenance(UNKNOWN.clone()), Actual::Provenance),
                     _ => Actual::Absent,
                 })
                 .collect();
@@ -383,11 +486,21 @@ impl CallFacts {
 /// The calls of `unit`, in order.
 fn call_sites(unit: &Unit) -> Vec<InstId> {
     let function = unit.function;
-    function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))).collect()
+    function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| matches!(
+            function.instruction(inst).opcode,
+            Opcode::Call(_) | Opcode::Invoke(_)
+        ))
+        .collect()
 }
 
 /// Whole slices of `globals`.
-fn _globals(unit: &Unit, globals: impl IntoIterator<Item = GlobalId>) -> BTreeSet<Slice> {
+fn _globals(
+    unit: &Unit,
+    globals: impl IntoIterator<Item = GlobalId>,
+) -> BTreeSet<Slice> {
     globals.into_iter().filter_map(|one| memory::global_object(unit, one)).map(Slice::whole).collect()
 }
 
@@ -406,12 +519,18 @@ struct Allowed {
     through: Vec<Effects>,
 }
 
-fn _allowed(unit: &Unit, at: InstId) -> Allowed {
+fn _allowed(
+    unit: &Unit,
+    at: InstId,
+) -> Allowed {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else {
         return Allowed { arguments: Effects::ANY, other: Effects::ANY, through: Vec::new() };
     };
-    let declared = llrm_mir::memory::callee(unit.context, unit.function, at).and_then(|one| unit.globals.get(one.0 as usize)).and_then(|one| one.function());
-    let both = |one: Effects, other: Effects| Effects { reads: one.reads && other.reads, writes: one.writes && other.writes };
+    let declared = llrm_mir::memory::callee(unit.context, unit.function, at)
+        .and_then(|one| unit.globals.get(one.0 as usize))
+        .and_then(|one| one.function());
+    let both =
+        |one: Effects, other: Effects| Effects { reads: one.reads && other.reads, writes: one.writes && other.writes };
     let (mut arguments, mut other) = llrm_mir::memory::located(&info.attrs);
     if let Some(declared) = declared {
         let (on_arguments, on_other) = llrm_mir::memory::located(&declared.attrs);
@@ -419,7 +538,9 @@ fn _allowed(unit: &Unit, at: InstId) -> Allowed {
     }
     let through = (0..info.argument_attrs.len())
         .map(|index| {
-            let parameter = declared.and_then(|one| one.parameter_attrs.get(index)).map_or(Effects::ANY, |attrs| llrm_mir::memory::through(attrs));
+            let parameter = declared
+                .and_then(|one| one.parameter_attrs.get(index))
+                .map_or(Effects::ANY, |attrs| llrm_mir::memory::through(attrs));
             both(both(arguments, llrm_mir::memory::through(&info.argument_attrs[index])), parameter)
         })
         .collect();
@@ -428,7 +549,10 @@ fn _allowed(unit: &Unit, at: InstId) -> Allowed {
 
 /// Per argument of the call `at`, its pointer operand, where the callee may
 /// read through it.
-pub fn read_arguments(unit: &Unit, at: InstId) -> Vec<Operand> {
+pub fn read_arguments(
+    unit: &Unit,
+    at: InstId,
+) -> Vec<Operand> {
     let op = unit.function.instruction(at);
     let count = match op.opcode {
         Opcode::Call(_) => op.operands.len() - 1,
@@ -439,18 +563,27 @@ pub fn read_arguments(unit: &Unit, at: InstId) -> Vec<Operand> {
     op.operands[..count]
         .iter()
         .enumerate()
-        .filter(|(index, one)| is_pointer(unit, **one) && allowed.through.get(*index).is_none_or(|effects| effects.reads))
+        .filter(|(index, one)| {
+            is_pointer(unit, **one) && allowed.through.get(*index).is_none_or(|effects| effects.reads)
+        })
         .map(|(_, one)| *one)
         .collect()
 }
 
 /// Whether the call `at` keeps no copy of its argument `index`: `nocapture`
 /// at the site or on the callee's parameter.
-fn _borrowed(unit: &Unit, at: InstId, index: usize) -> bool {
+fn _borrowed(
+    unit: &Unit,
+    at: InstId,
+    index: usize,
+) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
     let nocapture = |attrs: &[Attribute]| llrm_mir::facts::Facts::of(attrs).no_capture();
-    let declared = llrm_mir::memory::callee(unit.context, unit.function, at).and_then(|one| unit.globals.get(one.0 as usize)).and_then(|one| one.function());
-    info.argument_attrs.get(index).is_some_and(|attrs| nocapture(attrs)) || declared.and_then(|one| one.parameter_attrs.get(index)).is_some_and(|attrs| nocapture(attrs))
+    let declared = llrm_mir::memory::callee(unit.context, unit.function, at)
+        .and_then(|one| unit.globals.get(one.0 as usize))
+        .and_then(|one| one.function());
+    info.argument_attrs.get(index).is_some_and(|attrs| nocapture(attrs))
+        || declared.and_then(|one| one.parameter_attrs.get(index)).is_some_and(|attrs| nocapture(attrs))
 }
 
 /// What a callee nobody summarized may read and write at `at`, as far as
@@ -458,7 +591,13 @@ fn _borrowed(unit: &Unit, at: InstId, index: usize) -> bool {
 /// elsewhere, what a nonlocal reaches, what escaped before the call, and
 /// of the tracked globals what GlobalsAA says it names and what
 /// `callbacks` into the module do, all of them where that is unknown.
-fn _unknown_visible(procedure: &Procedure, facts: &PointsTo, at: InstId, actual: &[Provenance], callbacks: Option<&Summary>) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
+fn _unknown_visible(
+    procedure: &Procedure,
+    facts: &PointsTo,
+    at: InstId,
+    actual: &[Provenance],
+    callbacks: Option<&Summary>,
+) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
     let unit = &procedure.unit;
     let allowed = _allowed(unit, at);
     let (mut reads, mut writes) = _through_arguments(&allowed, actual);
@@ -473,7 +612,10 @@ fn _unknown_visible(procedure: &Procedure, facts: &PointsTo, at: InstId, actual:
 }
 
 /// What a callee nobody summarized may read and write through each of `actual`, as `allowed` says.
-fn _through_arguments(allowed: &Allowed, actual: &[Provenance]) -> (BTreeSet<Slice>, BTreeSet<Slice>) {
+fn _through_arguments(
+    allowed: &Allowed,
+    actual: &[Provenance],
+) -> (BTreeSet<Slice>, BTreeSet<Slice>) {
     let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
     for (index, one) in actual.iter().enumerate() {
         let through = allowed.through.get(index).copied().unwrap_or(allowed.arguments);
@@ -490,7 +632,12 @@ fn _through_arguments(allowed: &Allowed, actual: &[Provenance]) -> (BTreeSet<Sli
 
 /// What an unsummarized callee may read and write at `at` other than
 /// through its arguments.
-fn _unknown_other(unit: &Unit, facts: &PointsTo, at: InstId, callbacks: Option<&Summary>) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
+fn _unknown_other(
+    unit: &Unit,
+    facts: &PointsTo,
+    at: InstId,
+    callbacks: Option<&Summary>,
+) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
     let (mut reads, mut writes, back) = _unknown_base(unit, facts, at)?;
     if back {
         _calling_back(unit, callbacks, true, true, &mut reads, &mut writes);
@@ -498,18 +645,34 @@ fn _unknown_other(unit: &Unit, facts: &PointsTo, at: InstId, callbacks: Option<&
     Ok((reads, writes))
 }
 
-/// `_unknown_other` less what a call back into the module adds, which depends on the callbacks and nothing else a revisit changes;
-/// and whether the call may call back.
-fn _unknown_base(unit: &Unit, facts: &PointsTo, at: InstId) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>, bool), String> {
+/// `_unknown_other` less what a call back into the module adds, which depends on the callbacks and nothing else a
+/// revisit changes; and whether the call may call back.
+fn _unknown_base(
+    unit: &Unit,
+    facts: &PointsTo,
+    at: InstId,
+) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>, bool), String> {
     OTHER_RUNS.with(|runs| runs.set(runs.get() + 1));
     let mut reads = NONLOCAL.slices.clone();
     reads.extend(_whole([], &facts.escaped_before.get(&at).unwrap_or_default()));
     // A port `ports` left reaching memory reaches it as its device does, by
     // address: every object, whether the program ever took its address.
-    if matches!(unit.intrinsic(at), Some(llrm_mir::intrinsics::Intrinsic::PortIn | llrm_mir::intrinsics::Intrinsic::PortOut)) {
+    if matches!(
+        unit.intrinsic(at),
+        Some(llrm_mir::intrinsics::Intrinsic::PortIn | llrm_mir::intrinsics::Intrinsic::PortOut)
+    ) {
         reads.extend(_globals(unit, (0..unit.globals.len()).map(|one| GlobalId(one as u32))));
-        let frames = unit.function.walk().filter(|&(_, inst)| matches!(unit.function.instruction(inst).opcode, Opcode::Alloca { .. }));
-        reads.extend(frames.filter_map(|(_, inst)| memory::object_of(unit, Operand::Value(unit.function.instruction(inst).result?))).map(Slice::whole));
+        let frames = unit
+            .function
+            .walk()
+            .filter(|&(_, inst)| matches!(unit.function.instruction(inst).opcode, Opcode::Alloca { .. }));
+        reads.extend(
+            frames
+                .filter_map(|(_, inst)| {
+                    memory::object_of(unit, Operand::Value(unit.function.instruction(inst).result?))
+                })
+                .map(Slice::whole),
+        );
     }
     let mut writes = reads.clone();
     let Some(globals) = unit.globals_aa else { return Ok((reads, writes, false)) };
@@ -521,9 +684,16 @@ fn _unknown_base(unit: &Unit, facts: &PointsTo, at: InstId) -> Result<(BTreeSet<
     Ok((reads, writes, callee.is_none() || globalsaa::calls_back(unit, at)))
 }
 
-/// What a call back into the module adds to what a call reads and writes: the callbacks' effects, and of the tracked globals all
-/// that the callbacks do not state, or where none are known.
-fn _calling_back(unit: &Unit, callbacks: Option<&Summary>, reading: bool, writing: bool, reads: &mut BTreeSet<Slice>, writes: &mut BTreeSet<Slice>) {
+/// What a call back into the module adds to what a call reads and writes: the callbacks' effects, and of the tracked
+/// globals all that the callbacks do not state, or where none are known.
+fn _calling_back(
+    unit: &Unit,
+    callbacks: Option<&Summary>,
+    reading: bool,
+    writing: bool,
+    reads: &mut BTreeSet<Slice>,
+    writes: &mut BTreeSet<Slice>,
+) {
     let Some(callbacks) = callbacks else {
         if reading {
             reads.extend(_tracked(unit));
@@ -550,7 +720,10 @@ fn _calling_back(unit: &Unit, callbacks: Option<&Summary>, reading: bool, writin
 /// What calling back into the module may do: the effects of the unit's
 /// GlobalsAA entries, in no caller's object space; none where `known`
 /// lacks one.
-fn _callbacks(unit: &Unit, known: &IndexMap<String, Summary>) -> Option<Summary> {
+fn _callbacks(
+    unit: &Unit,
+    known: &IndexMap<String, Summary>,
+) -> Option<Summary> {
     let mut out = Summary::default();
     for name in unit.globals_aa?.entries() {
         let one = known.get(name)?.instantiated(&[]);
@@ -562,7 +735,11 @@ fn _callbacks(unit: &Unit, known: &IndexMap<String, Summary>) -> Option<Summary>
     Some(Summary { reads: _coalesced(&out.reads), writes: _coalesced(&out.writes), ..out })
 }
 
-fn _actuals(procedure: &Procedure, facts: &PointsTo, at: InstId) -> Vec<Provenance> {
+fn _actuals(
+    procedure: &Procedure,
+    facts: &PointsTo,
+    at: InstId,
+) -> Vec<Provenance> {
     procedure
         .arguments
         .get(&at)
@@ -570,7 +747,9 @@ fn _actuals(procedure: &Procedure, facts: &PointsTo, at: InstId) -> Vec<Provenan
         .iter()
         .map(|actual| match actual {
             Actual::Provenance(provenance) => provenance.clone(),
-            Actual::Pointer(value, displacement) if facts.values.contains_key(value) => facts.values[value].shifted(*displacement),
+            Actual::Pointer(value, displacement) if facts.values.contains_key(value) => {
+                facts.values[value].shifted(*displacement)
+            }
             Actual::Absent => EMPTY.clone(),
             Actual::Pointer(..) => UNKNOWN.clone(),
         })
@@ -584,14 +763,19 @@ fn outlives(slice: &Slice) -> bool {
 
 /// Whether the address `inst` accesses is an integer made a pointer, moved by
 /// GEPs and casts: LLVM's `inttoptr`, which `_lost` publishes the escape of.
-fn from_integer(unit: &Unit, inst: InstId) -> bool {
+fn from_integer(
+    unit: &Unit,
+    inst: InstId,
+) -> bool {
     let op = unit.function.instruction(inst);
     let address = if matches!(op.opcode, Opcode::Store { .. }) { op.operands.get(1) } else { op.operands.first() };
     let mut at = address.copied();
     while let Some((_, def)) = at.and_then(|one| unit.defining(one)) {
         match &def.opcode {
             Opcode::Cast(CastOp::IntToPtr) => return true,
-            Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) | Opcode::GetElementPtr { .. } => at = def.operands.first().copied(),
+            Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) | Opcode::GetElementPtr { .. } => {
+                at = def.operands.first().copied()
+            }
             _ => return false,
         }
     }
@@ -674,21 +858,33 @@ pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
             }
         }
     }
-    let captures =
-        facts.escaped.iter().filter(|one| one.kind == MemoryKind::Parameter).filter_map(|one| match one.key { Key::Int(number) => Some(Some(Identity::Int(number))), _ => None }).collect();
+    let captures = facts
+        .escaped
+        .iter()
+        .filter(|one| one.kind == MemoryKind::Parameter)
+        .filter_map(|one| match one.key {
+            Key::Int(number) => Some(Some(Identity::Int(number))),
+            _ => None,
+        })
+        .collect();
     Ok(Summary { reads, writes, captures, unknown_read, unknown_write, unknown_write_types: types })
 }
 
 fn _widen_parameters(summary: Summary) -> Summary {
     let widened = |items: &BTreeSet<Slice>| {
-        items.iter().map(|one| if one.object.kind == MemoryKind::Parameter { Slice::whole(one.object) } else { one.clone() }).collect()
+        items
+            .iter()
+            .map(|one| if one.object.kind == MemoryKind::Parameter { Slice::whole(one.object) } else { one.clone() })
+            .collect()
     };
     Summary { reads: widened(&summary.reads), writes: widened(&summary.writes), ..summary }
 }
 
 /// Drop subranges once the same object already has a whole-object effect.
 fn _coalesced(items: &BTreeSet<Slice>) -> BTreeSet<Slice> {
-    let is_whole = |one: &Slice| one.low == memory::WHOLE_LOW && one.high == memory::WHOLE_HIGH && one.stride == 1 && one.width == 1;
+    let is_whole = |one: &Slice| {
+        one.low == memory::WHOLE_LOW && one.high == memory::WHOLE_HIGH && one.stride == 1 && one.width == 1
+    };
     let whole = items.iter().filter(|one| is_whole(one)).map(|one| &one.object).collect::<BTreeSet<_>>();
     items.iter().filter(|one| !whole.contains(&one.object) || is_whole(one)).cloned().collect()
 }
@@ -704,7 +900,11 @@ fn _index(index: &Option<Identity>) -> Result<i64, String> {
 /// The summary `known` holds of `name`, where the body it describes is the
 /// one that runs: LLVM's `hasExactDefinition`. A weak or linkonce body may
 /// be replaced by another.
-fn _summary<'s>(procedure: &Procedure, known: &'s IndexMap<String, Summary>, name: &str) -> Option<&'s Summary> {
+fn _summary<'s>(
+    procedure: &Procedure,
+    known: &'s IndexMap<String, Summary>,
+    name: &str,
+) -> Option<&'s Summary> {
     (!procedure.replaceable.contains(name)).then(|| known.get(name)).flatten()
 }
 
@@ -713,12 +913,15 @@ fn _summary<'s>(procedure: &Procedure, known: &'s IndexMap<String, Summary>, nam
 /// `known` supplies established external semantics, such as C library
 /// functions. A body in this compilation unit always takes precedence; one
 /// that may be replaced describes no call.
-pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexMap<String, Summary>>) -> Result<IndexMap<String, Summary>, String> {
+pub fn summaries(
+    procedures: &IndexMap<String, Procedure>,
+    known: Option<&IndexMap<String, Summary>>,
+) -> Result<IndexMap<String, Summary>, String> {
     summaries_updating(procedures, known, &mut SummaryMemo::default(), None)
 }
 
-/// What a run of `summaries` leaves for the next: the summaries, the bodies' own (`direct`) and their last visits, and what they were
-/// made from.
+/// What a run of `summaries` leaves for the next: the summaries, the bodies' own (`direct`) and their last visits, and
+/// what they were made from.
 #[derive(Default)]
 pub struct SummaryMemo {
     result: IndexMap<String, Summary>,
@@ -727,16 +930,24 @@ pub struct SummaryMemo {
     known: Option<IndexMap<String, Summary>>,
 }
 
-/// `summaries`, where only the bodies in `dirty` differ from the run `memo` holds, and nothing else it was made from does (the
-/// caller's to know: the globals' facts, the declarations, `known`).
+/// `summaries`, where only the bodies in `dirty` differ from the run `memo` holds, and nothing else it was made from
+/// does (the caller's to know: the globals' facts, the declarations, `known`).
 ///
-/// A body's summary reads its own, its callees' and, where it calls something unknown, the entries' (`callbacks`). So what an edit
-/// can change is the dirty bodies and every body that reads them through a chain of calls. That closure starts again from nothing,
-/// as a whole run does, and the rest is as it was: nothing outside the closure reads anything in it. (The callbacks are an
-/// entry's summaries read by every body that calls something unknown, and an entry among those feeds them: a closure with an
-/// entry takes all of them.) `None` for `dirty`, or a memo of other bodies, is a whole run.
-pub fn summaries_updating(procedures: &IndexMap<String, Procedure>, known: Option<&IndexMap<String, Summary>>, memo: &mut SummaryMemo, dirty: Option<&BTreeSet<String>>) -> Result<IndexMap<String, Summary>, String> {
-    let same_bodies = memo.result.len() >= procedures.len() && procedures.keys().all(|name| memo.direct.contains_key(name) && memo.result.contains_key(name)) && memo.direct.len() == procedures.len();
+/// A body's summary reads its own, its callees' and, where it calls something unknown, the entries' (`callbacks`). So
+/// what an edit can change is the dirty bodies and every body that reads them through a chain of calls. That closure
+/// starts again from nothing, as a whole run does, and the rest is as it was: nothing outside the closure reads
+/// anything in it. (The callbacks are an entry's summaries read by every body that calls something unknown, and an
+/// entry among those feeds them: a closure with an entry takes all of them.) `None` for `dirty`, or a memo of other
+/// bodies, is a whole run.
+pub fn summaries_updating(
+    procedures: &IndexMap<String, Procedure>,
+    known: Option<&IndexMap<String, Summary>>,
+    memo: &mut SummaryMemo,
+    dirty: Option<&BTreeSet<String>>,
+) -> Result<IndexMap<String, Summary>, String> {
+    let same_bodies = memo.result.len() >= procedures.len()
+        && procedures.keys().all(|name| memo.direct.contains_key(name) && memo.result.contains_key(name))
+        && memo.direct.len() == procedures.len();
     let whole = dirty.is_none() || !same_bodies || memo.known.as_ref() != known;
     if whole {
         *memo = SummaryMemo::default();
@@ -748,7 +959,8 @@ pub fn summaries_updating(procedures: &IndexMap<String, Procedure>, known: Optio
     // What a body captures grows from nothing: a call captures what its
     // callee's summary says, so a least fixed point, as a recursive one
     // that captures nothing proves.
-    // What a body does on its own does not change from round to round: made once, and again only for a body that was edited.
+    // What a body does on its own does not change from round to round: made once, and again only for a body that was
+    // edited.
     llrm_support::debug::timed("summaries direct", || {
         for (name, one) in procedures {
             if whole || dirty_names.contains(name) {
@@ -760,12 +972,16 @@ pub fn summaries_updating(procedures: &IndexMap<String, Procedure>, known: Optio
     let direct = &memo.direct;
     let mut result = if whole { known.cloned().unwrap_or_default() } else { std::mem::take(&mut memo.result) };
     if whole {
-        result.extend(direct.iter().map(|(name, one)| (name.clone(), Summary { captures: BTreeSet::new(), ..one.clone() })));
+        result.extend(
+            direct.iter().map(|(name, one)| (name.clone(), Summary { captures: BTreeSet::new(), ..one.clone() })),
+        );
     }
     let edges = procedures
         .iter()
         .enumerate()
-        .map(|(at, (_, procedure))| (at, procedure.calls.values().filter_map(|target| procedures.get_index_of(target)).collect::<BTreeSet<_>>()))
+        .map(|(at, (_, procedure))| {
+            (at, procedure.calls.values().filter_map(|target| procedures.get_index_of(target)).collect::<BTreeSet<_>>())
+        })
         .collect();
     let graph = llrm_mir::callgraph::CallGraph::from_edges(edges);
     let order: Vec<usize> = graph
@@ -795,7 +1011,11 @@ pub fn summaries_updating(procedures: &IndexMap<String, Procedure>, known: Optio
             readers[target].insert(at);
         }
         // Asked against the summaries as the bodies' own start from them: whether a callee has one does not change.
-        if procedure.sites.iter().any(|site| procedure.calls.get(site).and_then(|target| _summary(procedure, &result, target)).is_none()) {
+        if procedure
+            .sites
+            .iter()
+            .any(|site| procedure.calls.get(site).and_then(|target| _summary(procedure, &result, target)).is_none())
+        {
             callers_of_unknown.insert(at);
         }
     }
@@ -804,10 +1024,19 @@ pub fn summaries_updating(procedures: &IndexMap<String, Procedure>, known: Optio
     if !whole {
         let mut todo: Vec<usize> = dirty_names.iter().filter_map(|name| procedures.get_index_of(*name)).collect();
         // A callee defined elsewhere whose declaration was restated: its callers read it.
-        todo.extend(procedures.iter().enumerate().filter(|(_, (_, one))| one.calls.values().any(|target| dirty_names.contains(target) && !procedures.contains_key(target))).map(|(at, _)| at));
-        // An entry's summary is what a call back into the module does (`callbacks`), which the bodies that call something unknown
-        // were made against, and an entry among those feeds it: they stand or fall together, so a closure with an entry in it
-        // takes them all (one that kept their old values could keep what only the old callbacks held up).
+        todo.extend(
+            procedures
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, one))| {
+                    one.calls.values().any(|target| dirty_names.contains(target) && !procedures.contains_key(target))
+                })
+                .map(|(at, _)| at),
+        );
+        // An entry's summary is what a call back into the module does (`callbacks`), which the bodies that call
+        // something unknown were made against, and an entry among those feeds it: they stand or fall together,
+        // so a closure with an entry in it takes them all (one that kept their old values could keep what only
+        // the old callbacks held up).
         let mut unknown_added = false;
         while let Some(at) = todo.pop() {
             if closure[at] {
@@ -826,22 +1055,43 @@ pub fn summaries_updating(procedures: &IndexMap<String, Procedure>, known: Optio
             }
         }
     }
-    let called_back = |result: &IndexMap<String, Summary>| procedures.values().next().and_then(|one| _callbacks(&one.unit, result));
+    let called_back =
+        |result: &IndexMap<String, Summary>| procedures.values().next().and_then(|one| _callbacks(&one.unit, result));
     let mut callbacks = called_back(&result);
     // What each body's points-to facts were found from: they change only with the callees' captures,
     // not with the effects a revisit is for. A visit of an earlier run says what its calls to something unknown did
     // for the callbacks it had: that is worked out again.
     // A body that was edited has other facts than its last visit found.
-    let mut found: Vec<Option<Visit>> = procedures.keys().map(|name| memo.found.shift_remove(name).filter(|_| !dirty_names.contains(name)).map(|visit| Visit { version: None, ..visit })).collect();
+    let mut found: Vec<Option<Visit>> = procedures
+        .keys()
+        .map(|name| {
+            memo.found
+                .shift_remove(name)
+                .filter(|_| !dirty_names.contains(name))
+                .map(|visit| Visit { version: None, ..visit })
+        })
+        .collect();
     let mut version = 0;
     let mut queued: Vec<bool> = closure.clone();
-    let mut work: std::collections::BinaryHeap<std::cmp::Reverse<usize>> = (0..procedures.len()).filter(|first| closure[order[*first]]).map(std::cmp::Reverse).collect();
+    let mut work: std::collections::BinaryHeap<std::cmp::Reverse<usize>> =
+        (0..procedures.len()).filter(|first| closure[order[*first]]).map(std::cmp::Reverse).collect();
     while let Some(std::cmp::Reverse(first)) = work.pop() {
         let at = order[first];
         queued[at] = false;
         llrm_support::debug::counted("summaries rounds", true);
         let (name, procedure) = procedures.get_index(at).expect("a member of the graph");
-        let made = llrm_support::debug::timed("summaries visit", || _summarized(at, procedure, &direct[name], &result, (callbacks.as_ref(), version), &mut found[at], &graph, procedures))?;
+        let made = llrm_support::debug::timed("summaries visit", || {
+            _summarized(
+                at,
+                procedure,
+                &direct[name],
+                &result,
+                (callbacks.as_ref(), version),
+                &mut found[at],
+                &graph,
+                procedures,
+            )
+        })?;
         if made != result[name] {
             result.insert(name.clone(), made);
             let mut woken: Vec<usize> = readers[at].iter().copied().collect();
@@ -875,8 +1125,8 @@ struct Visit {
     facts: Rc<PointsTo>,
     version: Option<usize>,
     unknown: (BTreeSet<Slice>, BTreeSet<Slice>),
-    /// What the calls to something unknown may do besides calling back, with whether the reads and the writes of one that does are
-    /// wanted: found once from the facts, where `unknown` is found again for each callbacks.
+    /// What the calls to something unknown may do besides calling back, with whether the reads and the writes of one
+    /// that does are wanted: found once from the facts, where `unknown` is found again for each callbacks.
     base: Option<(BTreeSet<Slice>, BTreeSet<Slice>, bool, bool)>,
 }
 
@@ -893,9 +1143,15 @@ fn _summarized(
     procedures: &IndexMap<String, Procedure>,
 ) -> Result<Summary, String> {
     VISITS.with(|visits| visits.set(visits.get() + 1));
-    let captured_at = procedure.calls.iter().map(|(at, target)| (*at, _summary(procedure, result, target).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
+    let captured_at = procedure
+        .calls
+        .iter()
+        .map(|(at, target)| (*at, _summary(procedure, result, target).map(|one| one.captures.clone())))
+        .collect::<IndexMap<_, _>>();
     if memo.as_ref().is_none_or(|one| one.captured != captured_at) {
-        let facts = Rc::new(llrm_support::debug::timed("summaries points-to", || points_to(&procedure.unit, Some(&procedure.arguments), Some(&captured_at)))?);
+        let facts = Rc::new(llrm_support::debug::timed("summaries points-to", || {
+            points_to(&procedure.unit, Some(&procedure.arguments), Some(&captured_at))
+        })?);
         *memo = Some(Visit { captured: captured_at, facts, version: None, unknown: Default::default(), base: None });
     }
     let visit = memo.as_mut().expect("made above");
@@ -909,7 +1165,13 @@ fn _summarized(
         // before it, and a body calls the same few routines again and again: each pair is worked out
         // once, and added to the whole once.
         #[allow(clippy::type_complexity)]
-        let mut others: Vec<(Option<GlobalId>, Option<&Bits>, bool, bool, (BTreeSet<Slice>, BTreeSet<Slice>, bool))> = Vec::new();
+        let mut others: Vec<(
+            Option<GlobalId>,
+            Option<&Bits>,
+            bool,
+            bool,
+            (BTreeSet<Slice>, BTreeSet<Slice>, bool),
+        )> = Vec::new();
         for at in procedure.sites.iter().copied() {
             if procedure.calls.get(&at).and_then(|target| _summary(procedure, result, target)).is_some() {
                 continue;
@@ -921,13 +1183,20 @@ fn _summarized(
             if !(allowed.other.reads || allowed.other.writes) {
                 continue;
             }
-            let (callee, escaped) = (llrm_mir::memory::callee(unit.context, unit.function, at), facts.escaped_before.bits(&at));
+            let (callee, escaped) =
+                (llrm_mir::memory::callee(unit.context, unit.function, at), facts.escaped_before.bits(&at));
             match others.iter_mut().find(|(one, bits, ..)| *one == callee && *bits == escaped) {
                 Some((_, _, wants_reads, wants_writes, _)) => {
                     *wants_reads |= allowed.other.reads;
                     *wants_writes |= allowed.other.writes;
                 }
-                None => others.push((callee, escaped, allowed.other.reads, allowed.other.writes, _unknown_base(unit, &facts, at)?)),
+                None => others.push((
+                    callee,
+                    escaped,
+                    allowed.other.reads,
+                    allowed.other.writes,
+                    _unknown_base(unit, &facts, at)?,
+                )),
             }
         }
         let (mut back_reads, mut back_writes) = (false, false);
@@ -953,7 +1222,15 @@ fn _summarized(
     let (mut reads, mut writes) = (direct.reads.clone(), direct.writes.clone());
     reads.extend(visit.unknown.0.iter().cloned());
     writes.extend(visit.unknown.1.iter().cloned());
-    let captures = facts.escaped.iter().filter(|one| one.kind == MemoryKind::Parameter).filter_map(|one| match one.key { Key::Int(number) => Some(Some(Identity::Int(number))), _ => None }).collect();
+    let captures = facts
+        .escaped
+        .iter()
+        .filter(|one| one.kind == MemoryKind::Parameter)
+        .filter_map(|one| match one.key {
+            Key::Int(number) => Some(Some(Identity::Int(number))),
+            _ => None,
+        })
+        .collect();
     let (mut unknown_read, mut unknown_write) = (direct.unknown_read, direct.unknown_write);
     let mut types = direct.unknown_write_types.clone();
     for at in procedure.sites.iter().copied() {
@@ -975,7 +1252,14 @@ fn _summarized(
     // A callee's frame is gone when it returns: what its calls touch
     // there, like its own accesses, is no effect of calling it.
     let (reads, writes) = (reads.into_iter().filter(outlives).collect(), writes.into_iter().filter(outlives).collect());
-    Ok(Summary { reads: _coalesced(&reads), writes: _coalesced(&writes), captures, unknown_read, unknown_write, unknown_write_types: types })
+    Ok(Summary {
+        reads: _coalesced(&reads),
+        writes: _coalesced(&writes),
+        captures,
+        unknown_read,
+        unknown_write,
+        unknown_write_types: types,
+    })
 }
 
 /// What one call reads and writes, as the bytes of the objects it reaches.
@@ -990,17 +1274,24 @@ pub struct Effect {
 
 /// Instantiate callee effects through actual pointer provenance: each
 /// call's effect, as old `calls_annotated` wrote it into the call.
-pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>) -> Result<IndexMap<InstId, Effect>, String> {
+pub fn calls_annotated(
+    procedure: &Procedure,
+    known: &IndexMap<String, Summary>,
+) -> Result<IndexMap<InstId, Effect>, String> {
     // Capture is part of escape flow. Unknown callees may retain every
     // pointer actual; known callees retain only the parameters their fixed
     // point summary says they capture.
     let callee = |at: &InstId| procedure.calls.get(at).and_then(|target| _summary(procedure, known, target));
-    let captures = procedure.calls.keys().map(|at| (*at, callee(at).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
+    let captures =
+        procedure.calls.keys().map(|at| (*at, callee(at).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
     let facts = points_to(&procedure.unit, Some(&procedure.arguments), Some(&captures))?;
     let callbacks = _callbacks(&procedure.unit, known);
 
     let reference = |one: &Slice| {
-        MemRef::reach(u32::try_from(one.width).expect("a slice width is a memory width"), Provenance { slices: BTreeSet::from([one.clone()]), restrict: BTreeSet::new() })
+        MemRef::reach(
+            u32::try_from(one.width).expect("a slice width is a memory width"),
+            Provenance { slices: BTreeSet::from([one.clone()]), restrict: BTreeSet::new() },
+        )
     };
 
     let mut out = IndexMap::default();
@@ -1042,7 +1333,11 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
                 // A pointer no fact follows reaches only what escaped, never a tracked global.
                 Some(types) if !types.is_empty() => {
                     for (name, lineage) in types {
-                        typed.extend(reached.iter().map(|one| MemRef { typed: Some(name.clone()), lineage: lineage.clone(), ..reference(one) }));
+                        typed.extend(reached.iter().map(|one| MemRef {
+                            typed: Some(name.clone()),
+                            lineage: lineage.clone(),
+                            ..reference(one)
+                        }));
                     }
                 }
                 _ => {
@@ -1066,13 +1361,21 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
 
 /// The bytes the call `at` writes through an argument before it reads
 /// any: `initializes` at the site or on the callee's parameter.
-fn _fills(unit: &Unit, facts: &PointsTo, at: InstId) -> Vec<MemRef> {
+fn _fills(
+    unit: &Unit,
+    facts: &PointsTo,
+    at: InstId,
+) -> Vec<MemRef> {
     let op = unit.function.instruction(at);
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { return Vec::new() };
-    let declared = llrm_mir::memory::callee(unit.context, unit.function, at).and_then(|one| unit.globals.get(one.0 as usize)).and_then(|one| one.function());
+    let declared = llrm_mir::memory::callee(unit.context, unit.function, at)
+        .and_then(|one| unit.globals.get(one.0 as usize))
+        .and_then(|one| one.function());
     let mut out = Vec::new();
     for (argument, &operand) in op.operands.iter().enumerate().take(info.argument_attrs.len()) {
-        let declared = declared.and_then(|one| one.parameter_attrs.get(argument)).map_or(&[][..], |attrs| llrm_mir::memory::initializes(attrs));
+        let declared = declared
+            .and_then(|one| one.parameter_attrs.get(argument))
+            .map_or(&[][..], |attrs| llrm_mir::memory::initializes(attrs));
         for &(low, high) in llrm_mir::memory::initializes(&info.argument_attrs[argument]).iter().chain(declared) {
             let Ok(width) = u32::try_from(high - low) else { continue };
             let mut one = MemRef::at(unit, operand, width);
@@ -1087,7 +1390,11 @@ fn _fills(unit: &Unit, facts: &PointsTo, at: InstId) -> Vec<MemRef> {
 /// Byte ranges, sorted, apart and not touching.
 type Ranges = Vec<(i64, i64)>;
 
-fn _with(ranges: &Ranges, low: i64, high: i64) -> Ranges {
+fn _with(
+    ranges: &Ranges,
+    low: i64,
+    high: i64,
+) -> Ranges {
     let (mut low, mut high, mut out) = (low, high, Vec::new());
     for &(one, other) in ranges {
         if other < low || high < one {
@@ -1101,7 +1408,11 @@ fn _with(ranges: &Ranges, low: i64, high: i64) -> Ranges {
     out
 }
 
-fn _without(ranges: &Ranges, low: i64, high: i64) -> Ranges {
+fn _without(
+    ranges: &Ranges,
+    low: i64,
+    high: i64,
+) -> Ranges {
     let mut out = Vec::new();
     for &(one, other) in ranges {
         if one < low.min(other) {
@@ -1114,7 +1425,10 @@ fn _without(ranges: &Ranges, low: i64, high: i64) -> Ranges {
     out
 }
 
-fn _common(one: &Ranges, other: &Ranges) -> Ranges {
+fn _common(
+    one: &Ranges,
+    other: &Ranges,
+) -> Ranges {
     let mut out = Vec::new();
     for &(low, high) in one {
         for &(from, to) in other {
@@ -1145,7 +1459,10 @@ fn _bytes(one: &Slice) -> Option<(i64, i64)> {
 /// FunctionAttrs infers it, backwards from each `ret`. A path that
 /// unwinds or cannot go on asks nothing; a call reads what its effect
 /// loads and writes what its `initializes` names.
-pub fn initialized(procedure: &Procedure, known: &IndexMap<String, Summary>) -> Result<Vec<Ranges>, String> {
+pub fn initialized(
+    procedure: &Procedure,
+    known: &IndexMap<String, Summary>,
+) -> Result<Vec<Ranges>, String> {
     let unit = &procedure.unit;
     let function = unit.function;
     let count = function.parameters().len();
@@ -1166,7 +1483,10 @@ pub fn initialized(procedure: &Procedure, known: &IndexMap<String, Summary>) -> 
     // A read of another object that may be the parameter's reads all of it.
     let read = |state: &mut State, one: &Slice| {
         for (index, ranges) in state.iter_mut().enumerate() {
-            let parameter = ObjectInterner::of(unit.context).intern(MemoryObject { identity: Some(Identity::Int(index as i64)), ..MemoryObject::new(MemoryKind::Parameter) });
+            let parameter = ObjectInterner::of(unit.context).intern(MemoryObject {
+                identity: Some(Identity::Int(index as i64)),
+                ..MemoryObject::new(MemoryKind::Parameter)
+            });
             let bytes = if one.object == parameter {
                 _bytes(one)
             } else if memory::objects_may_alias(&one.object, &parameter) {
@@ -1187,14 +1507,22 @@ pub fn initialized(procedure: &Procedure, known: &IndexMap<String, Summary>) -> 
         for &inst in function.block(cfg::block(at)).instructions().iter().rev() {
             let op = function.instruction(inst);
             if let Some(effect) = effects.get(&inst) {
-                for one in effect.loads.iter().filter_map(|one| one.provenance.as_ref()).flat_map(|one| one.slices.iter()) {
+                for one in
+                    effect.loads.iter().filter_map(|one| one.provenance.as_ref()).flat_map(|one| one.slices.iter())
+                {
                     read(&mut state, one);
                 }
                 let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { continue };
-                let declared = llrm_mir::memory::callee(unit.context, function, inst).and_then(|one| unit.globals.get(one.0 as usize)).and_then(|one| one.function());
+                let declared = llrm_mir::memory::callee(unit.context, function, inst)
+                    .and_then(|one| unit.globals.get(one.0 as usize))
+                    .and_then(|one| one.function());
                 for (argument, operand) in op.operands.iter().enumerate().take(info.argument_attrs.len()) {
                     let mut ranges = llrm_mir::memory::initializes(&info.argument_attrs[argument]).to_vec();
-                    ranges.extend(declared.and_then(|one| one.parameter_attrs.get(argument)).map_or(&[][..], |attrs| llrm_mir::memory::initializes(attrs)));
+                    ranges.extend(
+                        declared
+                            .and_then(|one| one.parameter_attrs.get(argument))
+                            .map_or(&[][..], |attrs| llrm_mir::memory::initializes(attrs)),
+                    );
                     let Some(pointer) = _operand(unit, *operand, &actuals.values) else { continue };
                     let [one] = pointer.slices.iter().collect::<Vec<_>>()[..] else { continue };
                     let (Some(index), true) = (_parameter(one), one.high == one.low + 1) else { continue };
@@ -1222,7 +1550,8 @@ pub fn initialized(procedure: &Procedure, known: &IndexMap<String, Summary>) -> 
     };
     let graph = cfg::graph(function);
     let exit = |at: i64| -> State {
-        match function.instruction(*function.block(cfg::block(at)).instructions().last().expect("a block ends")).opcode {
+        match function.instruction(*function.block(cfg::block(at)).instructions().last().expect("a block ends")).opcode
+        {
             Opcode::Ret => vec![Some(Vec::new()); count],
             _ => vec![None; count],
         }
@@ -1284,7 +1613,10 @@ fn _cell_key(reference: &MemRef) -> Option<CellKey> {
 
 /// Whether the call `inst` returns what its callee states `noalias`: a
 /// pointer to an object no other pointer reaches, as a constructor's.
-fn returns_unique(unit: &Unit, inst: InstId) -> bool {
+fn returns_unique(
+    unit: &Unit,
+    inst: InstId,
+) -> bool {
     llrm_mir::memory::callee(unit.context, unit.function, inst)
         .and_then(|callee| unit.globals.get(callee.0 as usize)?.function())
         .is_some_and(|callee| Facts::of(&callee.return_attrs).no_alias())
@@ -1292,7 +1624,11 @@ fn returns_unique(unit: &Unit, inst: InstId) -> bool {
 
 /// What `inst` computes as a pointer from what it is given: an object's
 /// own address, or a known pointer moved, cast or joined.
-fn _direct(unit: &Unit, inst: InstId, values: &IndexMap<ValueId, Provenance>) -> Result<Option<Provenance>, String> {
+fn _direct(
+    unit: &Unit,
+    inst: InstId,
+    values: &IndexMap<ValueId, Provenance>,
+) -> Result<Option<Provenance>, String> {
     let op = unit.function.instruction(inst);
     let Some(result) = op.result.filter(|&result| is_pointer(unit, Operand::Value(result))) else {
         return Ok(None);
@@ -1305,17 +1641,32 @@ fn _direct(unit: &Unit, inst: InstId, values: &IndexMap<ValueId, Provenance>) ->
         // A callee whose result is `noalias` returns a pointer to an object nothing else
         // points to: its own, apart from every other.
         Opcode::Call(_) | Opcode::Invoke(_) if returns_unique(unit, inst) => {
-            let object = ObjectInterner::of(unit.context).intern(MemoryObject { identity: Some(Identity::Value(result.0)), addressed: true, captured: true, ..MemoryObject::new(MemoryKind::Allocation) });
+            let object = ObjectInterner::of(unit.context).intern(MemoryObject {
+                identity: Some(Identity::Value(result.0)),
+                addressed: true,
+                captured: true,
+                ..MemoryObject::new(MemoryKind::Allocation)
+            });
             Provenance::one_with_slice(object, 0, 1, 1, 1, BTreeSet::new()).map(Some).map_err(|error| error.to_string())
         }
         // A segment is no pointer to a program object: `segment:0` is a
         // new root.
-        Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if !unit.spaces().is_segment(unit.space(op.operands[0])) => Ok(_operand(unit, op.operands[0], values)),
+        Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast)
+            if !unit.spaces().is_segment(unit.space(op.operands[0])) =>
+        {
+            Ok(_operand(unit, op.operands[0], values))
+        }
         Opcode::GetElementPtr { source } => {
             let Some(fact) = _operand(unit, op.operands[0], values) else {
                 return Ok(None);
             };
-            let indices = op.operands[1..].iter().map(|&one| unit.int_constant(one).map(|bits| llrm_mir::context::signed(bits, unit.int_bits(one).unwrap_or(128)))).collect::<Vec<_>>();
+            let indices = op.operands[1..]
+                .iter()
+                .map(|&one| {
+                    unit.int_constant(one)
+                        .map(|bits| llrm_mir::context::signed(bits, unit.int_bits(one).unwrap_or(128)))
+                })
+                .collect::<Vec<_>>();
             let (constant, variable) = unit.layout.collect_offset(&unit.context.types, *source, &indices);
             if variable.is_empty() {
                 // A displacement is an index-width integer: -16 is never 65520.
@@ -1336,9 +1687,16 @@ pub fn pointers(unit: &Unit) -> Result<Rc<PointsTo>, String> {
 }
 
 /// The values `inst` reads, its access's index and selector among them.
-fn read_values(unit: &Unit, inst: InstId) -> impl Iterator<Item = ValueId> {
+fn read_values(
+    unit: &Unit,
+    inst: InstId,
+) -> impl Iterator<Item = ValueId> {
     let op = unit.function.instruction(inst);
-    let mut read = op.operands.iter().filter_map(|one| if let Operand::Value(value) = one { Some(*value) } else { None }).collect::<Vec<_>>();
+    let mut read = op
+        .operands
+        .iter()
+        .filter_map(|one| if let Operand::Value(value) = one { Some(*value) } else { None })
+        .collect::<Vec<_>>();
     if let Some(reference) = MemRef::of(unit, inst) {
         read.extend(reference.base);
         read.extend(reference.root.and_then(|root| if let Operand::Value(value) = root { Some(value) } else { None }));
@@ -1377,14 +1735,18 @@ pub fn points_to(
         .flat_map(|block| block.succ.iter().map(move |successor| (block.at, *successor)))
         .filter(|(at, successor)| dominance.dominates(*successor, *at))
         .collect::<BTreeSet<_>>();
-    let mut incoming = graph.iter().map(|block| (block.at, IndexMap::<CellKey, Provenance>::default())).collect::<IndexMap<_, _>>();
+    let mut incoming =
+        graph.iter().map(|block| (block.at, IndexMap::<CellKey, Provenance>::default())).collect::<IndexMap<_, _>>();
     let mut outgoing = incoming.clone();
     let instructions = |at: i64| function.block(cfg::block(at)).instructions();
 
     // A block reads its parents' cells and these values. With neither
     // changed since its last visit it would compute what it already holds,
     // widening included, as widening an object's whole slice gives the same slice.
-    let reads = graph.iter().map(|block| instructions(block.at).iter().flat_map(|&inst| read_values(unit, inst)).collect::<HashSet<_>>()).collect::<Vec<_>>();
+    let reads = graph
+        .iter()
+        .map(|block| instructions(block.at).iter().flat_map(|&inst| read_values(unit, inst)).collect::<HashSet<_>>())
+        .collect::<Vec<_>>();
     let tick = std::cell::Cell::new(0_u64);
     let touched = RefCell::new(HashMap::<ValueId, u64>::default());
     // Every pointer stored anywhere in each object: what a cell of it may
@@ -1408,7 +1770,9 @@ pub fn points_to(
             if let Some(last) = visited[index] {
                 let since = |stamp: Option<&u64>| stamp.is_some_and(|stamp| *stamp >= last);
                 let touched = touched.borrow();
-                if !parents_at.iter().any(|parent| since(sent.get(parent))) && !reads[index].iter().any(|value| since(touched.get(value))) {
+                if !parents_at.iter().any(|parent| since(sent.get(parent)))
+                    && !reads[index].iter().any(|value| since(touched.get(value)))
+                {
                     continue;
                 }
             }
@@ -1425,7 +1789,8 @@ pub fn points_to(
                         // A missing fact on one incoming edge is unknown, not an
                         // invitation to retain the other edge's pointer.
                         if parents.iter().all(|one| one.contains_key(&key)) {
-                            let mut fact = _union(parents.iter().map(|one| one.get(&key))).expect("every parent holds this key");
+                            let mut fact =
+                                _union(parents.iter().map(|one| one.get(&key))).expect("every parent holds this key");
                             if has_back_edge {
                                 if let Some(previous) = previous_incoming.get(&key) {
                                     if fact != *previous {
@@ -1445,10 +1810,19 @@ pub fn points_to(
                 if let (Some(arms), Some(result)) = (joined(op), op.result) {
                     let parts = arms.iter().map(|&one| _operand(unit, one, &values)).collect::<Vec<_>>();
                     if pointer_values.contains(&result) || (!parts.is_empty() && parts.iter().all(Option::is_some)) {
-                        let mut fact = if parts.iter().any(Option::is_none) { Some(UNKNOWN.clone()) } else { _union(parts.iter().map(Option::as_ref)) };
+                        let mut fact = if parts.iter().any(Option::is_none) {
+                            Some(UNKNOWN.clone())
+                        } else {
+                            _union(parts.iter().map(Option::as_ref))
+                        };
                         if let Some(current) = &fact {
                             let carried = op.opcode == Opcode::Phi
-                                && op.operands.iter().skip(1).step_by(2).any(|parent| matches!(parent, Operand::Block(parent) if back_edges.contains(&(cfg::id(*parent), block.at))));
+                                && op.operands.iter().skip(1).step_by(2).any(|parent| {
+                                    matches!(
+                                        parent,
+                                        Operand::Block(parent) if back_edges.contains(&(cfg::id(*parent), block.at))
+                                    )
+                                });
                             if carried {
                                 if let Some(previous) = values.get(&result) {
                                     if current != previous {
@@ -1472,17 +1846,23 @@ pub fn points_to(
                 }
                 let reference = MemRef::of(unit, inst);
                 match (&op.opcode, reference) {
-                    (Opcode::Load { .. }, Some(reference)) if op.result.is_some_and(|result| pointer_values.contains(&result)) => {
-                        let resolved = MemRef { provenance: _resolved_reference(unit, &reference, &values), ..reference.clone() };
+                    (Opcode::Load { .. }, Some(reference))
+                        if op.result.is_some_and(|result| pointer_values.contains(&result)) =>
+                    {
+                        let resolved =
+                            MemRef { provenance: _resolved_reference(unit, &reference, &values), ..reference.clone() };
                         let loaded = _cell_key(&resolved).and_then(|key| state.get(&key).cloned());
                         let loaded = loaded.or_else(|| {
                             let stored = resolved
                                 .provenance
                                 .iter()
                                 .flat_map(|provenance| provenance.slices.iter())
-                                .map(|one| (!unbounded.contains(&one.object)).then(|| fields.get(&one.object)).flatten())
+                                .map(|one| {
+                                    (!unbounded.contains(&one.object)).then(|| fields.get(&one.object)).flatten()
+                                })
                                 .collect::<Option<Vec<_>>>()?;
-                            (!stored.is_empty()).then(|| _union(stored.into_iter().map(Some).chain([Some(&*UNKNOWN)])))?
+                            (!stored.is_empty())
+                                .then(|| _union(stored.into_iter().map(Some).chain([Some(&*UNKNOWN)])))?
                         });
                         if let Some(loaded) = loaded {
                             learn(&mut values, op.result.expect("a load's result"), loaded);
@@ -1503,7 +1883,9 @@ pub fn points_to(
                         if let (Some(source), Some(targets)) = (&source, &keyed.provenance) {
                             for one in &targets.slices {
                                 // Whole objects: stored offsets may shift each trip around a loop.
-                                let grown = _widened(&fields.get(&one.object).map_or_else(|| source.clone(), |held| held.union(source)));
+                                let grown = _widened(
+                                    &fields.get(&one.object).map_or_else(|| source.clone(), |held| held.union(source)),
+                                );
                                 if fields.get(&one.object) != Some(&grown) {
                                     fields.insert(one.object, grown);
                                     changed.set(true);
@@ -1543,7 +1925,10 @@ pub fn points_to(
         let op = function.instruction(inst);
         let (Opcode::Store { .. }, Some(reference)) = (&op.opcode, MemRef::of(unit, inst)) else { continue };
         let Some(source) = _operand(unit, op.operands[0], &values) else { continue };
-        let targets = _resolved_reference(unit, &reference, &values).into_iter().flat_map(|provenance| provenance.slices.into_iter().map(|one| one.object)).collect::<BTreeSet<_>>();
+        let targets = _resolved_reference(unit, &reference, &values)
+            .into_iter()
+            .flat_map(|provenance| provenance.slices.into_iter().map(|one| one.object))
+            .collect::<BTreeSet<_>>();
         for target in targets {
             pointer_fields.entry(target).or_default().extend(source.slices.iter().map(|one| one.object));
         }
@@ -1559,7 +1944,10 @@ pub fn points_to(
             None => objects.insert_full(*object).0,
         }
     };
-    let pointer_fields = pointer_fields.iter().map(|(target, sources)| (number(target), sources.iter().map(number).collect::<Vec<_>>())).collect::<HashMap<_, _>>();
+    let pointer_fields = pointer_fields
+        .iter()
+        .map(|(target, sources)| (number(target), sources.iter().map(number).collect::<Vec<_>>()))
+        .collect::<HashMap<_, _>>();
     // Close publication through pointer-valued fields of known objects.
     let pointees = |objects: BTreeSet<ObjectRef>, cells: &IndexMap<CellKey, Provenance>| {
         let mut reached = objects.iter().map(number).collect::<HashSet<_>>();
@@ -1594,7 +1982,11 @@ pub fn points_to(
             let object = objects.borrow()[reached[at]].clone();
             at += 1;
             let (MemoryKind::Global, Key::Global(global)) = (object.kind, object.key) else { continue };
-            let Some(llrm_mir::module::GlobalKind::Variable(variable)) = unit.globals.get(global as usize).map(|one| &one.kind) else { continue };
+            let Some(llrm_mir::module::GlobalKind::Variable(variable)) =
+                unit.globals.get(global as usize).map(|one| &one.kind)
+            else {
+                continue;
+            };
             let mut held = BTreeSet::new();
             variable.initializer.iter().for_each(|&one| globalsaa::embedded(unit.context, one, &mut held));
             for one in held.into_iter().filter_map(|one| memory::global_object(unit, one)) {
@@ -1612,7 +2004,11 @@ pub fn points_to(
     // gen/kill form of a forward dataflow.
     let calls = call_sites(unit).into_iter().collect::<BTreeSet<_>>();
     let provenances = |operands: &[Operand], values: &IndexMap<ValueId, Provenance>| {
-        operands.iter().filter_map(|&one| _operand(unit, one, values)).flat_map(|one| one.slices.into_iter().map(|slice| slice.object)).collect::<Vec<_>>()
+        operands
+            .iter()
+            .filter_map(|&one| _operand(unit, one, values))
+            .flat_map(|one| one.slices.into_iter().map(|slice| slice.object))
+            .collect::<Vec<_>>()
     };
     let mut publishes: IndexMap<i64, Vec<Vec<usize>>> = IndexMap::default();
     let mut during: IndexMap<InstId, Vec<usize>> = IndexMap::default();
@@ -1633,7 +2029,11 @@ pub fn points_to(
                     let kept = |index: usize| -> Result<bool, String> {
                         match captures.and_then(|captures| captures.get(&inst)).and_then(Option::as_ref) {
                             None => Ok(!_borrowed(unit, inst, index)),
-                            Some(selected) => Ok(selected.iter().map(_index).collect::<Result<Vec<_>, _>>()?.contains(&(index as i64))),
+                            Some(selected) => Ok(selected
+                                .iter()
+                                .map(_index)
+                                .collect::<Result<Vec<_>, _>>()?
+                                .contains(&(index as i64))),
                         }
                     };
                     // Nor can it read a pointer out of what it may only write.
@@ -1654,19 +2054,29 @@ pub fn points_to(
                 } else {
                     // The callee's own address is no argument.
                     let count = op.operands.len() - if matches!(op.opcode, Opcode::Invoke(_)) { 3 } else { 1 };
-                    let kept = (0..count).filter(|&index| !_borrowed(unit, inst, index)).map(|index| op.operands[index]).collect::<Vec<_>>();
+                    let kept = (0..count)
+                        .filter(|&index| !_borrowed(unit, inst, index))
+                        .map(|index| op.operands[index])
+                        .collect::<Vec<_>>();
                     newly.extend(provenances(&kept, &values));
                 }
             }
             newly.extend(_lost(unit, inst, &values));
             // Returned, or turned into an integer something reads: found from outside.
-            if op.opcode == Opcode::Ret || (op.opcode == Opcode::Cast(CastOp::PtrToInt) && op.result.is_none_or(|result| _read(function, result, &mut BTreeSet::new()))) {
+            if op.opcode == Opcode::Ret
+                || (op.opcode == Opcode::Cast(CastOp::PtrToInt)
+                    && op.result.is_none_or(|result| _read(function, result, &mut BTreeSet::new())))
+            {
                 newly.extend(provenances(&op.operands, &values));
             }
             match (&op.opcode, MemRef::of(unit, inst)) {
                 (Opcode::Store { .. }, Some(reference)) => {
                     let destination = _resolved_reference(unit, &reference, &values);
-                    let outside = destination.as_ref().is_none_or(|provenance| provenance.slices.iter().any(|one| one.object.kind != MemoryKind::Frame));
+                    let outside = destination
+                        .as_ref()
+                        .is_none_or(
+                            |provenance| provenance.slices.iter().any(|one| one.object.kind != MemoryKind::Frame),
+                        );
                     if outside {
                         newly.extend(provenances(&op.operands[..1], &values));
                     }
@@ -1725,7 +2135,12 @@ pub fn points_to(
         let mut state = entering(block.at, &out);
         for (&inst, escapes) in instructions(block.at).iter().zip(&publishes[&block.at]) {
             escapes.iter().for_each(|one| state.insert(*one));
-            if calls.contains(&inst) || matches!(function.instruction(inst).opcode, Opcode::Load { .. } | Opcode::Store { .. }) {
+            if calls.contains(&inst)
+                || matches!(
+                    function.instruction(inst).opcode,
+                    Opcode::Load { .. } | Opcode::Store { .. }
+                )
+            {
                 let mut visible = state.clone();
                 if let Some(reached) = during.get(&inst) {
                     reached.iter().for_each(|one| visible.insert(*one));
@@ -1744,14 +2159,24 @@ pub fn points_to(
 /// Whether anything that stays reads `value`: a use that is no pure operation, or a pure
 /// one whose own result is read. The dead-code fact, without the callee summaries a call
 /// would need, so a call reads.
-fn _read(function: &llrm_mir::module::Function, value: ValueId, seen: &mut BTreeSet<ValueId>) -> bool {
+fn _read(
+    function: &llrm_mir::module::Function,
+    value: ValueId,
+    seen: &mut BTreeSet<ValueId>,
+) -> bool {
     if !seen.insert(value) {
         return false;
     }
-    function.users(value).iter().any(|one| {
-        let user = function.instruction(one.user);
-        !llrm_mir::memory::pure_operation(&user.opcode) || user.result.is_some_and(|result| _read(function, result, seen))
-    })
+    function
+        .users(value)
+        .iter()
+        .any(
+            |one| {
+                let user = function.instruction(one.user);
+                !llrm_mir::memory::pure_operation(&user.opcode)
+                    || user.result.is_some_and(|result| _read(function, result, seen))
+            },
+        )
 }
 
 /// Objects whose address `inst` turns into what no pointer fact follows,
@@ -1759,12 +2184,18 @@ fn _read(function: &llrm_mir::module::Function, value: ValueId, seen: &mut BTree
 /// provenance neither the result nor the access carries, and a global in
 /// a constant that is no pointer. A comparison captures nothing; what a
 /// call, a return, a store and a `ptrtoint` publish, their own rules say.
-fn _lost(unit: &Unit, inst: InstId, values: &IndexMap<ValueId, Provenance>) -> Vec<ObjectRef> {
+fn _lost(
+    unit: &Unit,
+    inst: InstId,
+    values: &IndexMap<ValueId, Provenance>,
+) -> Vec<ObjectRef> {
     let op = unit.function.instruction(inst);
     let carried = match &op.opcode {
         Opcode::ICmp(_) => return Vec::new(),
         Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => !unit.spaces().is_segment(unit.space(op.operands[0])),
-        Opcode::Load { .. } | Opcode::Store { .. } | Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select => true,
+        Opcode::Load { .. } | Opcode::Store { .. } | Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select => {
+            true
+        }
         Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Ret | Opcode::Cast(CastOp::PtrToInt) => true,
         _ => false,
     };
@@ -1772,7 +2203,11 @@ fn _lost(unit: &Unit, inst: InstId, values: &IndexMap<ValueId, Provenance>) -> V
     for &operand in &op.operands {
         if is_pointer(unit, operand) {
             if !carried {
-                out.extend(_operand(unit, operand, values).into_iter().flat_map(|one| one.slices.into_iter().map(|slice| slice.object)));
+                out.extend(
+                    _operand(unit, operand, values)
+                        .into_iter()
+                        .flat_map(|one| one.slices.into_iter().map(|slice| slice.object)),
+                );
             }
         } else if let Operand::Constant(id) = operand {
             let mut held = BTreeSet::new();
@@ -1783,7 +2218,10 @@ fn _lost(unit: &Unit, inst: InstId, values: &IndexMap<ValueId, Provenance>) -> V
     out
 }
 
-fn _resolved_actuals(actuals: &[Actual], values: &IndexMap<ValueId, Provenance>) -> Vec<Provenance> {
+fn _resolved_actuals(
+    actuals: &[Actual],
+    values: &IndexMap<ValueId, Provenance>,
+) -> Vec<Provenance> {
     actuals
         .iter()
         .map(|actual| match actual {
@@ -1805,9 +2243,17 @@ impl Bucket for KeyBucket {
     // Nothing looks a key bucket up by a component.
     type Parts = ();
 
-    fn held(&self, _: &mut ()) {}
+    fn held(
+        &self,
+        _: &mut (),
+    ) {
+    }
 
-    fn released(&self, _: &mut ()) {}
+    fn released(
+        &self,
+        _: &mut (),
+    ) {
+    }
 }
 
 pub fn _key_bucket(key: &CellKey) -> KeyBucket {
@@ -1823,7 +2269,10 @@ pub fn _key_place(key: &CellKey) -> (KeyBucket, Option<ByteRange>) {
 }
 
 /// Drop the cells a store to `key` may overwrite, keeping `key` itself.
-pub fn _kill<V>(cells: &mut CellMap<CellKey, V, KeyBucket>, key: Option<&CellKey>) {
+pub fn _kill<V>(
+    cells: &mut CellMap<CellKey, V, KeyBucket>,
+    key: Option<&CellKey>,
+) {
     let reached = key.map(|key| std::iter::once(_key_bucket(key)).collect());
     cells.kill(
         reached,
@@ -1842,7 +2291,10 @@ thread_local! {
     pub static ASKED: RefCell<Vec<CellKey>> = const { RefCell::new(Vec::new()) };
 }
 
-pub fn _keys_overlap(one: Option<&CellKey>, other: Option<&CellKey>) -> bool {
+pub fn _keys_overlap(
+    one: Option<&CellKey>,
+    other: Option<&CellKey>,
+) -> bool {
     let (Some(one), Some(other)) = (one, other) else {
         return true;
     };
@@ -1850,13 +2302,20 @@ pub fn _keys_overlap(one: Option<&CellKey>, other: Option<&CellKey>) -> bool {
         (CellKey::Address(addr, width), CellKey::Address(other_addr, other_width)) if addr.root == other_addr.root => {
             addr.disp < other_addr.disp + other_width && other_addr.disp < addr.disp + width
         }
-        (CellKey::Object(object, low, high), CellKey::Object(other_object, other_low, other_high)) if object == other_object => low < other_high && other_low < high,
+        (CellKey::Object(object, low, high), CellKey::Object(other_object, other_low, other_high))
+            if object == other_object =>
+        {
+            low < other_high && other_low < high
+        }
         _ => one == other,
     }
 }
 
 /// `value` modulo `modulus`, never negative for a positive modulus.
-fn mod_floor(value: &BigInt, modulus: &BigInt) -> BigInt {
+fn mod_floor(
+    value: &BigInt,
+    modulus: &BigInt,
+) -> BigInt {
     ((value % modulus) + modulus) % modulus
 }
 
@@ -1869,14 +2328,20 @@ pub fn congruences(unit: &Unit) -> IndexMap<ValueId, (BigInt, BigInt)> {
 }
 
 /// `congruences`, given what `consts::known` finds without memory.
-pub fn congruences_with(unit: &Unit, constants: &IndexMap<ValueId, Known>) -> IndexMap<ValueId, (BigInt, BigInt)> {
+pub fn congruences_with(
+    unit: &Unit,
+    constants: &IndexMap<ValueId, Known>,
+) -> IndexMap<ValueId, (BigInt, BigInt)> {
     let function = unit.function;
     let mut result = IndexMap::<ValueId, (BigInt, BigInt)>::default();
     let zero = BigInt::from(0);
     for loop_ in &unit.shape().loops {
         for affine in induction::basics(unit, loop_).values() {
             let width = affine.start.width();
-            let (Some(start), Some(step)) = (induction::_signed(&affine.start, &constants, width), induction::_signed(&affine.step, &constants, width)) else {
+            let (Some(start), Some(step)) = (
+                induction::_signed(&affine.start, &constants, width),
+                induction::_signed(&affine.step, &constants, width),
+            ) else {
                 continue;
             };
             if step != zero {
@@ -1889,10 +2354,20 @@ pub fn congruences_with(unit: &Unit, constants: &IndexMap<ValueId, Known>) -> In
         for (_, inst) in function.walk() {
             let op = function.instruction(inst);
             let Some(value) = op.result.filter(|value| !result.contains_key(value)) else { continue };
-            let (Opcode::Binary(kind), [left, right], Some(width)) = (&op.opcode, op.operands.as_slice(), unit.int_bits(Operand::Value(value))) else { continue };
+            let (Opcode::Binary(kind), [left, right], Some(width)) =
+                (&op.opcode, op.operands.as_slice(), unit.int_bits(Operand::Value(value)))
+            else {
+                continue;
+            };
             // A value nothing is known of is a multiple of 1: `x << 1` is a multiple of 2 all the same.
             let fact = |one: Operand| match one {
-                Operand::Value(source) => Some(result.get(&source).cloned().or_else(|| constants.get(&source).map(|known| (BigInt::from(0), known.n.clone()))).unwrap_or_else(|| (BigInt::from(1), BigInt::from(0)))),
+                Operand::Value(source) => Some(
+                    result
+                        .get(&source)
+                        .cloned()
+                        .or_else(|| constants.get(&source).map(|known| (BigInt::from(0), known.n.clone())))
+                        .unwrap_or_else(|| (BigInt::from(1), BigInt::from(0))),
+                ),
                 _ => unit.int_constant(one).map(|n| (BigInt::from(0), BigInt::from(n))),
             };
             let (Some(mut a), Some(mut b)) = (fact(*left), fact(*right)) else { continue };
@@ -1930,10 +2405,18 @@ pub fn congruences_with(unit: &Unit, constants: &IndexMap<ValueId, Known>) -> In
 
 /// `residue (mod modulus)` of a `width`-bit value: the modulus cut to its
 /// greatest divisor of 2**width, 0 where that is the whole width's.
-fn reduced(modulus: BigInt, residue: BigInt, width: u32) -> (BigInt, BigInt) {
+fn reduced(
+    modulus: BigInt,
+    residue: BigInt,
+    width: u32,
+) -> (BigInt, BigInt) {
     let whole = BigInt::from(1) << width;
     let modulus = induction::gcd(if modulus < BigInt::from(0) { -modulus } else { modulus }, whole.clone());
-    if modulus == whole { (BigInt::from(0), mod_floor(&residue, &whole)) } else { (modulus.clone(), mod_floor(&residue, &modulus)) }
+    if modulus == whole {
+        (BigInt::from(0), mod_floor(&residue, &whole))
+    } else {
+        (modulus.clone(), mod_floor(&residue, &modulus))
+    }
 }
 
 /// Attach solved provenance to every access of the function: each load's
@@ -1951,7 +2434,10 @@ enum Bounded<'a> {
 }
 
 impl Bounded<'_> {
-    fn at(&self, at: i64) -> Option<&IndexMap<ValueId, ranges::Interval>> {
+    fn at(
+        &self,
+        at: i64,
+    ) -> Option<&IndexMap<ValueId, ranges::Interval>> {
         match self {
             Bounded::Held(held) => held.at(at),
             Bounded::Worked(worked) => worked.get(&at),
@@ -1959,11 +2445,18 @@ impl Bounded<'_> {
     }
 }
 
-pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, Known>) -> Result<IndexMap<InstId, MemRef>, String> {
+pub fn annotated_with(
+    unit: &Unit,
+    facts: &PointsTo,
+    known: &IndexMap<ValueId, Known>,
+) -> Result<IndexMap<InstId, MemRef>, String> {
     let bounded = match (unit.bounds, unit.registers) {
         (Some(held), Some(registers)) if std::ptr::eq(known, registers) => {
             if llrm_support::env_set("LLRM_CHECK_REPLAY") {
-                assert!(held.facts() == ranges::bounded_with(unit, known)?, "the bounds a unit carries are not those of the body it stands over: stale");
+                assert!(
+                    held.facts() == ranges::bounded_with(unit, known)?,
+                    "the bounds a unit carries are not those of the body it stands over: stale"
+                );
             }
             Bounded::Held(held)
         }
@@ -1974,11 +2467,14 @@ pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, K
 
     let tag = |reference: &MemRef, at: i64| -> Result<MemRef, String> {
         let mut got = facts.reference(unit, reference);
-        let interval = reference.base.and_then(|base| bounded.at(at).and_then(|known| known.get(&base)).or_else(|| constants.get(&base)));
+        let interval = reference
+            .base
+            .and_then(|base| bounded.at(at).and_then(|known| known.get(&base)).or_else(|| constants.get(&base)));
         if let (Some(current), true, Some(base), Some(interval)) = (&got, reference.object, reference.base, interval) {
             if interval.width == reference.base_width && current.slices.len() == 1 && reference.scale > 0 {
                 let source = current.slices.first().expect("one slice");
-                let (modulus, residue) = strides.get(&base).cloned().unwrap_or((BigInt::from(1_u8), BigInt::from(0_u8)));
+                let (modulus, residue) =
+                    strides.get(&base).cloned().unwrap_or((BigInt::from(1_u8), BigInt::from(0_u8)));
                 let modulus = if modulus > BigInt::from(1_u8) { modulus } else { BigInt::from(1_u8) };
                 let first = &interval.low + mod_floor(&(residue - &interval.low), &modulus);
                 let width = i64::from(reference.width.max(1));
@@ -1988,10 +2484,18 @@ pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, K
                 let stride = modulus * reference.scale;
                 let zero = BigInt::from(0_u8);
                 if low < high && source.object.extent.is_none_or(|extent| zero <= low && end <= BigInt::from(extent)) {
-                    let model = |number: &BigInt| i64::try_from(number).map_err(|_| format!("slice bound {number} exceeds the i64 slice model"));
+                    let model = |number: &BigInt| {
+                        i64::try_from(number).map_err(|_| format!("slice bound {number} exceeds the i64 slice model"))
+                    };
                     got = Some(Provenance {
-                        slices: BTreeSet::from([Slice::new(source.object.clone(), model(&low)?, model(&high)?, model(&stride)?, width)
-                            .expect("a nonempty positive-stride slice is valid")]),
+                        slices: BTreeSet::from([Slice::new(
+                            source.object.clone(),
+                            model(&low)?,
+                            model(&high)?,
+                            model(&stride)?,
+                            width,
+                        )
+                        .expect("a nonempty positive-stride slice is valid")]),
                         restrict: current.restrict.clone(),
                     });
                 }
@@ -2000,7 +2504,13 @@ pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, K
         // A far access whose selector's range lands it in foreign memory
         // names those linear bytes, whatever its pointer's provenance.
         if let (None, Some(Operand::Value(segment))) = (reference.selector, reference.segment) {
-            let lookup = |value: ValueId| bounded.at(at).and_then(|known| known.get(&value)).or_else(|| constants.get(&value)).map(|one| (value, one.clone()));
+            let lookup = |value: ValueId| {
+                bounded
+                    .at(at)
+                    .and_then(|known| known.get(&value))
+                    .or_else(|| constants.get(&value))
+                    .map(|one| (value, one.clone()))
+            };
             let known = [Some(segment), reference.base].into_iter().flatten().filter_map(lookup).collect();
             if let Some(foreign) = regions::foreign_provenance(reference, &known, unit.program) {
                 got = Some(foreign);
@@ -2010,7 +2520,10 @@ pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, K
         // memory, whatever its pointer was made from.
         // The frontend states it only where the target says the address is outside
         // the program; where the selector is a constant here, the target is asked again.
-        if unit.spaces().is_fixed(reference.space) && (reference.selector.is_none() || regions::foreign_provenance(reference, &BTreeMap::new(), unit.program).is_some()) {
+        if unit.spaces().is_fixed(reference.space)
+            && (reference.selector.is_none()
+                || regions::foreign_provenance(reference, &BTreeMap::new(), unit.program).is_some())
+        {
             got = Some(regions::fixed_provenance());
         }
         Ok(MemRef { provenance: got, ..reference.clone() })

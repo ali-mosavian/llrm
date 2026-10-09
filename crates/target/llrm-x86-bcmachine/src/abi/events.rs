@@ -4,9 +4,9 @@
 use std::collections::BTreeSet;
 
 use iced_x86::Code;
+use llrm_qbruntime::{self as runtime, Contract};
 
 use crate::abi::handlers::registered;
-use llrm_qbruntime::{self as runtime, Contract};
 use crate::frontends::bc::blocks;
 use crate::objectfile::module::{self, Module};
 use crate::objectfile::omf::{self, Fixup};

@@ -6,10 +6,16 @@ use super::*;
 impl TypeRegistry {
     /// `*far T`, `*near mut T` and the like. A huge pointer is a far one
     /// whose foreign user keeps it normalized.
-    pub(super) fn raw_pointer(&mut self, target: ElementType, distance: &str, mutable: bool) -> TypeName {
+    pub(super) fn raw_pointer(
+        &mut self,
+        target: ElementType,
+        distance: &str,
+        mutable: bool,
+    ) -> TypeName {
         // Where far is near, so is every pointer: one type, spelled near.
         let distance = if self.sizes.segmented { distance } else { "near" };
-        let name = format!("*{distance} {}{}", if mutable { "mut " } else { "" }, self.types[(target.id() - 1) as usize].name);
+        let name =
+            format!("*{distance} {}{}", if mutable { "mut " } else { "" }, self.types[(target.id() - 1) as usize].name);
         let far = distance != "near";
         let type_id = match self.raw_pointers.get(&name) {
             Some(id) => *id,
@@ -24,7 +30,11 @@ impl TypeRegistry {
     }
 
     /// Warns, once for each place, that a `far` or `huge` written where the target has one space is near.
-    pub(super) fn warn_target_width(&mut self, distance: &str, span: Span) {
+    pub(super) fn warn_target_width(
+        &mut self,
+        distance: &str,
+        span: Span,
+    ) {
         if self.sizes.segmented || distance == "near" {
             return;
         }
@@ -32,7 +42,11 @@ impl TypeRegistry {
     }
 
     /// Records `message` at `span`, once, unless the build asked for no warnings.
-    pub(super) fn warn(&mut self, span: Span, message: String) {
+    pub(super) fn warn(
+        &mut self,
+        span: Span,
+        message: String,
+    ) {
         let Some(warnings) = &self.warnings else { return };
         let mut warnings = warnings.borrow_mut();
         if !warnings.iter().any(|one| one.span == span && one.message == message) {
@@ -42,7 +56,10 @@ impl TypeRegistry {
 
     /// `spec` when it is already registered: a primitive, a struct, or a raw
     /// pointer to one; unlike `resolve_element`, it registers nothing.
-    pub(super) fn resolved_element(&self, spec: &TypeSpec) -> Option<ElementType> {
+    pub(super) fn resolved_element(
+        &self,
+        spec: &TypeSpec,
+    ) -> Option<ElementType> {
         match spec {
             TypeSpec::Primitive(type_name) => Some(ElementType::Scalar(*type_name)),
             TypeSpec::Named(name) => self.structs.get(name).map(|one| ElementType::Struct(one.id)),
@@ -54,9 +71,18 @@ impl TypeRegistry {
                 let distance = name[1..].split(' ').next()?;
                 let distance = if self.sizes.segmented { distance } else { "near" };
                 let mutable = name.ends_with(" mut");
-                let spelled = format!("*{distance} {}{}", if mutable { "mut " } else { "" }, self.types[(target.id() - 1) as usize].name);
+                let spelled = format!(
+                    "*{distance} {}{}",
+                    if mutable { "mut " } else { "" },
+                    self.types[(target.id() - 1) as usize].name
+                );
                 let type_id = *self.raw_pointers.get(&spelled)?;
-                Some(ElementType::Scalar(TypeName::Pointer { type_id, far: distance != "near", width: self.pointer_width(distance != "near"), mutable }))
+                Some(ElementType::Scalar(TypeName::Pointer {
+                    type_id,
+                    far: distance != "near",
+                    width: self.pointer_width(distance != "near"),
+                    mutable,
+                }))
             }
             _ => None,
         }
@@ -64,8 +90,16 @@ impl TypeRegistry {
 
     /// Whether `to` is the raw pointer `from` without `mut`, which a
     /// `*mut` one converts to as `&mut` does to `&`.
-    pub(super) fn reads_through(&self, from: TypeName, to: TypeName) -> bool {
-        let (TypeName::Pointer { type_id: from, mutable: true, .. }, TypeName::Pointer { type_id: to, mutable: false, .. }) = (from, to) else {
+    pub(super) fn reads_through(
+        &self,
+        from: TypeName,
+        to: TypeName,
+    ) -> bool {
+        let (
+            TypeName::Pointer { type_id: from, mutable: true, .. },
+            TypeName::Pointer { type_id: to, mutable: false, .. },
+        ) = (from, to)
+        else {
             return false;
         };
         self.raw_targets.contains_key(&from)
@@ -74,7 +108,10 @@ impl TypeRegistry {
     }
 
     /// What a raw pointer type points to; `None` for any other type.
-    pub(super) fn raw_target(&self, type_name: TypeName) -> Option<ElementType> {
+    pub(super) fn raw_target(
+        &self,
+        type_name: TypeName,
+    ) -> Option<ElementType> {
         let TypeName::Pointer { type_id, .. } = type_name else {
             return None;
         };
@@ -85,15 +122,17 @@ impl TypeRegistry {
 impl FunctionCompiler<'_> {
     /// `*pointer`: a hidden name for the place a raw pointer points to,
     /// which reads and writes through it as a reference's name does.
-    pub(super) fn dereferenced(&mut self, pointer: &Expr, span: Span) -> Result<String, Diagnostic> {
+    pub(super) fn dereferenced(
+        &mut self,
+        pointer: &Expr,
+        span: Span,
+    ) -> Result<String, Diagnostic> {
         self.require_unsafe("reading or writing through a raw pointer", span)?;
         let value = self.expression(pointer, None)?;
         let Some(target) = self.types.raw_target(value.type_name) else {
             return Err(Diagnostic::new(span, "only a raw pointer is read with '*'"));
         };
-        let TypeName::Pointer { mutable, .. } = value.type_name else {
-            unreachable!("a raw pointer")
-        };
+        let TypeName::Pointer { mutable, .. } = value.type_name else { unreachable!("a raw pointer") };
         let pointer_type = type_id(value.type_name);
         let address = self.materialized(required(value, span)?, pointer_type);
         let binding = Binding {
@@ -115,9 +154,15 @@ impl FunctionCompiler<'_> {
 
     /// `&place` as the raw pointer `pointer`.
     /// The address of a sequence's first element, from its data pointer.
-    fn data_address(&mut self, data: u32, element: ElementType, pointer_id: u32) -> hir::Operand {
+    fn data_address(
+        &mut self,
+        data: u32,
+        element: ElementType,
+        pointer_id: u32,
+    ) -> hir::Operand {
         let result = self.value_type(pointer_id);
-        let first = hir::Operand::IndirectPlace { base: data, offset: 0, type_id: element.id(), inbounds: false, member: None };
+        let first =
+            hir::Operand::IndirectPlace { base: data, offset: 0, type_id: element.id(), inbounds: false, member: None };
         self.emit("address", vec![result], vec![first], None);
         hir::Operand::Value(result)
     }
@@ -133,13 +178,7 @@ impl FunctionCompiler<'_> {
         // A raw pointer goes where nothing follows it.
         let kept = self.roots(operand);
         self.keep_lent(&kept);
-        let TypeName::Pointer {
-            type_id: pointer_id,
-            far,
-            mutable: writes,
-            ..
-        } = pointer
-        else {
+        let TypeName::Pointer { type_id: pointer_id, far, mutable: writes, .. } = pointer else {
             unreachable!("a raw pointer type")
         };
         if writes && !mutable {
@@ -149,27 +188,12 @@ impl FunctionCompiler<'_> {
             self.place_writable(operand, span)?;
         }
         if !far && self.types.sizes.segmented && !self.in_dgroup(operand) {
-            return Err(Diagnostic::new(
-                span,
-                "a near pointer reaches only static data; take a *far one",
-            ));
+            return Err(Diagnostic::new(span, "a near pointer reaches only static data; take a *far one"));
         }
-        let pointee = self.types.types[(pointer_id - 1) as usize]
-            .element
-            .expect("a pointer has a target");
-        let borrow = Expr::Borrow {
-            mutable,
-            operand: Box::new(operand.clone()),
-            span,
-        };
-        let (target, address) = if let Some(struct_id) =
-            self.struct_expression_type(operand, span)?
-        {
-            (
-                struct_id,
-                self.borrow_argument(&borrow, mutable, BindingType::Struct(struct_id), pointer_id)?
-                    .0,
-            )
+        let pointee = self.types.types[(pointer_id - 1) as usize].element.expect("a pointer has a target");
+        let borrow = Expr::Borrow { mutable, operand: Box::new(operand.clone()), span };
+        let (target, address) = if let Some(struct_id) = self.struct_expression_type(operand, span)? {
+            (struct_id, self.borrow_argument(&borrow, mutable, BindingType::Struct(struct_id), pointer_id)?.0)
         } else if let Some((view, element, _)) = self.array_view(operand, span)? {
             // An array's address is its first element's.
             (element.id(), self.address_as(&view, pointer_id))
@@ -189,13 +213,12 @@ impl FunctionCompiler<'_> {
             }
         } else {
             let Expr::Name(name, name_span) = operand else {
-                return Err(Diagnostic::new(
-                    span,
-                    "only a named place, a field or a struct has a raw address",
-                ));
+                return Err(Diagnostic::new(span, "only a named place, a field or a struct has a raw address"));
             };
             match self.binding(name, *name_span)?.clone() {
-                Binding { type_: BindingType::Slice { element, rank }, storage: Storage::Slice(descriptor), .. } => {
+                Binding {
+                    type_: BindingType::Slice { element, rank }, storage: Storage::Slice(descriptor), ..
+                } => {
                     let data = self.slice_data_pointer(descriptor, element, rank);
                     let result = self.value_type(pointer_id);
                     self.emit("copy", vec![result], vec![hir::Operand::Value(data)], None);
@@ -209,36 +232,28 @@ impl FunctionCompiler<'_> {
                     let data = self.string_pointer(&binding, *name_span)?;
                     (element.id(), self.data_address(data, element, pointer_id))
                 }
-                Binding {
-                    type_: type_ @ BindingType::Scalar(type_name),
-                    ..
-                } => (
-                    type_id(type_name),
-                    self.borrow_argument(&borrow, mutable, type_, pointer_id)?.0,
-                ),
+                Binding { type_: type_ @ BindingType::Scalar(type_name), .. } => {
+                    (type_id(type_name), self.borrow_argument(&borrow, mutable, type_, pointer_id)?.0)
+                }
                 _ => {
-                    return Err(Diagnostic::new(
-                        span,
-                        "only a scalar, struct, or sequence has a raw address",
-                    ));
+                    return Err(Diagnostic::new(span, "only a scalar, struct, or sequence has a raw address"));
                 }
             }
         };
         if target != pointee {
-            return Err(Diagnostic::new(
-                span,
-                "the raw pointer's target type differs from the place's",
-            ));
+            return Err(Diagnostic::new(span, "the raw pointer's target type differs from the place's"));
         }
-        Ok(TypedOperand {
-            operand: Some(address),
-            type_name: pointer,
-        })
+        Ok(TypedOperand { operand: Some(address), type_name: pointer })
     }
 
     /// The type of `receiver.name[type_arguments]()` when `receiver` is a raw
     /// pointer; a cast's target type must be registered, as preparing does.
-    pub(super) fn pointer_method_type(&self, receiver: &Expr, name: &str, type_arguments: &[TypeSpec]) -> Option<TypeName> {
+    pub(super) fn pointer_method_type(
+        &self,
+        receiver: &Expr,
+        name: &str,
+        type_arguments: &[TypeSpec],
+    ) -> Option<TypeName> {
         let type_name = self.expression_type_hint(receiver)?;
         self.types.raw_target(type_name)?;
         match (name, type_arguments) {
@@ -250,9 +265,18 @@ impl FunctionCompiler<'_> {
                 };
                 let target = self.types.raw_target(type_name)?;
                 let name = if self.types.sizes.segmented { name } else { "near" };
-                let name = format!("*{name} {}{}", if mutable { "mut " } else { "" }, self.types.types[(target.id() - 1) as usize].name);
+                let name = format!(
+                    "*{name} {}{}",
+                    if mutable { "mut " } else { "" },
+                    self.types.types[(target.id() - 1) as usize].name
+                );
                 let id = *self.types.raw_pointers.get(&name)?;
-                Some(TypeName::Pointer { type_id: id, far: name.starts_with("*far"), width: self.types.pointer_width(name.starts_with("*far")), mutable })
+                Some(TypeName::Pointer {
+                    type_id: id,
+                    far: name.starts_with("*far"),
+                    width: self.types.pointer_width(name.starts_with("*far")),
+                    mutable,
+                })
             }
             ("cast", [target]) => {
                 let TypeName::Pointer { type_id: pointer_id, mutable, .. } = type_name else {
@@ -260,17 +284,34 @@ impl FunctionCompiler<'_> {
                 };
                 let distance = self.types.types[(pointer_id - 1) as usize].name[1..].split(' ').next()?;
                 let target = self.types.resolved_element(target)?;
-                let name = format!("*{distance} {}{}", if mutable { "mut " } else { "" }, self.types.types[(target.id() - 1) as usize].name);
+                let name = format!(
+                    "*{distance} {}{}",
+                    if mutable { "mut " } else { "" },
+                    self.types.types[(target.id() - 1) as usize].name
+                );
                 let id = *self.types.raw_pointers.get(&name)?;
-                Some(TypeName::Pointer { type_id: id, far: distance != "near", width: self.types.pointer_width(distance != "near"), mutable })
+                Some(TypeName::Pointer {
+                    type_id: id,
+                    far: distance != "near",
+                    width: self.types.pointer_width(distance != "near"),
+                    mutable,
+                })
             }
             _ => None,
         }
     }
 
     /// Registers the type `p.cast[U]()` or `p.far()` gives, so that hints know it.
-    pub(super) fn declare_cast(&mut self, receiver: &Expr, name: &str, type_arguments: &[TypeSpec], span: Span) -> Result<(), Diagnostic> {
-        let Some(type_name @ TypeName::Pointer { type_id: pointer_id, mutable, .. }) = self.expression_type_hint(receiver) else {
+    pub(super) fn declare_cast(
+        &mut self,
+        receiver: &Expr,
+        name: &str,
+        type_arguments: &[TypeSpec],
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let Some(type_name @ TypeName::Pointer { type_id: pointer_id, mutable, .. }) =
+            self.expression_type_hint(receiver)
+        else {
             return Ok(());
         };
         let Some(pointee) = self.types.raw_target(type_name) else {
@@ -278,7 +319,11 @@ impl FunctionCompiler<'_> {
         };
         match (name, type_arguments) {
             ("cast", [target]) => {
-                let distance = self.types.types[(pointer_id - 1) as usize].name[1..].split(' ').next().expect("a distance").to_string();
+                let distance = self.types.types[(pointer_id - 1) as usize].name[1..]
+                    .split(' ')
+                    .next()
+                    .expect("a distance")
+                    .to_string();
                 let target = self.types.resolve_element(target, span)?;
                 self.types.raw_pointer(target, &distance, mutable);
             }
@@ -291,25 +336,42 @@ impl FunctionCompiler<'_> {
     }
 
     /// `p[i]` of a raw pointer `p`: `*(p.offset(i))`.
-    pub(super) fn pointer_index(&self, base: &Expr, indices: &[Expr], span: Span) -> Option<Expr> {
+    pub(super) fn pointer_index(
+        &self,
+        base: &Expr,
+        indices: &[Expr],
+        span: Span,
+    ) -> Option<Expr> {
         self.types.raw_target(self.expression_type_hint(base)?)?;
         let [index] = indices else {
             return None;
         };
-        let offset = Expr::MethodCall { receiver: Box::new(base.clone()), name: "offset".into(), type_arguments: Vec::new(), arguments: vec![index.clone()], span };
+        let offset = Expr::MethodCall {
+            receiver: Box::new(base.clone()),
+            name: "offset".into(),
+            type_arguments: Vec::new(),
+            arguments: vec![index.clone()],
+            span,
+        };
         Some(Expr::Unary { op: UnaryOp::Deref, operand: Box::new(offset), span })
     }
 
     /// Whether `place` is in DGROUP: a module variable, a string's or vec's
     /// data, or anything of a library for BASIC, which runs on BASIC's stack.
-    fn in_dgroup(&self, place: &Expr) -> bool {
+    fn in_dgroup(
+        &self,
+        place: &Expr,
+    ) -> bool {
         self.host().is_some()
             || borrows::expression_owner(place).is_some_and(|owner| self.is_module_variable(owner))
             || self.expression_type_hint(place).is_some_and(|one| self.types.sequence_element(one).is_some())
     }
 
     /// Whether `name` is a module variable, which lives in DGROUP.
-    fn is_module_variable(&self, name: &str) -> bool {
+    fn is_module_variable(
+        &self,
+        name: &str,
+    ) -> bool {
         self.scopes.iter().rposition(|scope| scope.contains_key(name)) == Some(0)
     }
 
@@ -328,9 +390,7 @@ impl FunctionCompiler<'_> {
         let Some(target) = self.types.raw_target(type_name) else {
             return Ok(None);
         };
-        let TypeName::Pointer { type_id: pointer_id, mutable, .. } = type_name else {
-            unreachable!("a raw pointer")
-        };
+        let TypeName::Pointer { type_id: pointer_id, mutable, .. } = type_name else { unreachable!("a raw pointer") };
         let value = self.expression(receiver, None)?;
         let pointer = required(value, span)?;
         let result = match (name, type_arguments, arguments) {
@@ -341,14 +401,23 @@ impl FunctionCompiler<'_> {
                 let count = self.coerced(count, word)?;
                 let step = self.value(word);
                 let width = i64::from(self.types.width(target.id()));
-                self.emit("mul", vec![step], vec![required(count, span)?, hir::Operand::Constant(type_id(word), width)], None);
+                self.emit(
+                    "mul",
+                    vec![step],
+                    vec![required(count, span)?, hir::Operand::Constant(type_id(word), width)],
+                    None,
+                );
                 let moved = self.value(type_name);
                 self.emit("ptr_offset", vec![moved], vec![pointer, hir::Operand::Value(step)], None);
                 TypedOperand { operand: Some(hir::Operand::Value(moved)), type_name }
             }
             ("cast", [target], []) => {
                 let target = self.types.resolve_element(target, span)?;
-                let distance = self.types.types[(pointer_id - 1) as usize].name[1..].split(' ').next().expect("a distance").to_string();
+                let distance = self.types.types[(pointer_id - 1) as usize].name[1..]
+                    .split(' ')
+                    .next()
+                    .expect("a distance")
+                    .to_string();
                 let cast = self.types.raw_pointer(target, &distance, mutable);
                 let moved = self.value(cast);
                 self.emit("copy", vec![moved], vec![pointer], None);
@@ -371,7 +440,13 @@ impl FunctionCompiler<'_> {
                 let whole = self.local_place("$far", pointer_id, 4, true);
                 self.emit("store", Vec::new(), vec![hir::Operand::Place(whole), pointer], None);
                 let offset = self.value(near);
-                let low = hir::Operand::ProjectedPlace { place: whole, indices: Vec::new(), offset: 0, type_id: type_id(near), member: None };
+                let low = hir::Operand::ProjectedPlace {
+                    place: whole,
+                    indices: Vec::new(),
+                    offset: 0,
+                    type_id: type_id(near),
+                    member: None,
+                };
                 self.emit("load", vec![offset], vec![low], None);
                 TypedOperand { operand: Some(hir::Operand::Value(offset)), type_name: near }
             }
@@ -385,7 +460,13 @@ impl FunctionCompiler<'_> {
                 let far = self.types.raw_pointer(target, name, mutable);
                 let base = self.materialized(pointer, pointer_id);
                 let moved = self.value(far);
-                let place = hir::Operand::IndirectPlace { base, offset: 0, type_id: target.id(), inbounds: false, member: None };
+                let place = hir::Operand::IndirectPlace {
+                    base,
+                    offset: 0,
+                    type_id: target.id(),
+                    inbounds: false,
+                    member: None,
+                };
                 self.emit("address", vec![moved], vec![place], None);
                 TypedOperand { operand: Some(hir::Operand::Value(moved)), type_name: far }
             }
@@ -402,7 +483,13 @@ impl FunctionCompiler<'_> {
     /// `p == q` and the like of two raw pointers of one type, a `*mut` one
     /// converted to its read-only kind to meet one; only near ones, offsets in
     /// one segment, are ordered.
-    pub(super) fn pointer_comparison(&mut self, operation: BinaryOp, left: &TypedOperand, right: &TypedOperand, span: Span) -> Option<Result<TypedOperand, Diagnostic>> {
+    pub(super) fn pointer_comparison(
+        &mut self,
+        operation: BinaryOp,
+        left: &TypedOperand,
+        right: &TypedOperand,
+        span: Span,
+    ) -> Option<Result<TypedOperand, Diagnostic>> {
         self.types.raw_target(left.type_name)?;
         let (left, right) = match self.implicit(left.clone(), right.type_name, span) {
             Ok(left) => (left, right.clone()),
@@ -419,7 +506,12 @@ impl FunctionCompiler<'_> {
             BinaryOp::LessEqual if near => "beloweq",
             BinaryOp::Greater if near => "above",
             BinaryOp::GreaterEqual if near => "aboveeq",
-            _ => return Some(Err(Diagnostic::new(span, "raw pointers compare with '==' and '!='; near ones are also ordered"))),
+            _ => {
+                return Some(Err(Diagnostic::new(
+                    span,
+                    "raw pointers compare with '==' and '!='; near ones are also ordered",
+                )));
+            }
         };
         let result = self.value(TypeName::Bool);
         let mut operands = match (required(left.clone(), span), required(right.clone(), span)) {

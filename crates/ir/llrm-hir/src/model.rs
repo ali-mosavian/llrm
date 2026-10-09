@@ -179,7 +179,12 @@ pub struct Type {
 
 impl Type {
     /// Python's four-required-field construction with every default.
-    pub fn new(id: i64, name: &str, kind: TypeKind, width: i64) -> Self {
+    pub fn new(
+        id: i64,
+        name: &str,
+        kind: TypeKind,
+        width: i64,
+    ) -> Self {
         Self {
             id,
             name: name.to_owned(),
@@ -236,7 +241,13 @@ pub struct Place {
 
 impl Place {
     /// Python's five-required-field construction with every default.
-    pub fn new(id: i64, name: &str, r#type: i64, storage: Storage, offset: i64) -> Self {
+    pub fn new(
+        id: i64,
+        name: &str,
+        r#type: i64,
+        storage: Storage,
+        offset: i64,
+    ) -> Self {
         Self {
             id,
             name: name.to_owned(),
@@ -345,7 +356,10 @@ impl DescriptorPlace {
 
     /// `field`'s offset in a heap buffer whose words are `width` bytes: the one place the layout
     /// is stated, for the code generator and the interpreter alike.
-    pub fn heap_offset(field: DescriptorField, width: i64) -> i64 {
+    pub fn heap_offset(
+        field: DescriptorField,
+        width: i64,
+    ) -> i64 {
         Self { base: 0, field, r#type: 0 }.offset(None, width)
     }
 
@@ -353,7 +367,11 @@ impl DescriptorPlace {
     /// `pointee`, the fields `width` bytes wide each (the type of the place): a scoped view
     /// (`$slice[..]`) holds its length then its capacity, and a heap string's header, the same
     /// two, precedes its data.
-    pub fn offset(&self, pointee: Option<&Type>, width: i64) -> i64 {
+    pub fn offset(
+        &self,
+        pointee: Option<&Type>,
+        width: i64,
+    ) -> i64 {
         let view = pointee.is_some_and(|one| one.kind == TypeKind::Opaque && one.name.starts_with("$slice["));
         match (view, self.field) {
             (true, DescriptorField::Length) => 0,
@@ -383,7 +401,10 @@ impl Operand {
     }
 
     /// `Constant(type, value)` with an integer value.
-    pub fn constant(r#type: i64, value: i64) -> Self {
+    pub fn constant(
+        r#type: i64,
+        value: i64,
+    ) -> Self {
         Self::Constant(Constant { r#type, value: Number::Int(value) })
     }
 
@@ -514,7 +535,12 @@ pub struct Instruction {
 impl Instruction {
     /// Python's `Instruction(id, op, results, operands)` with the remaining
     /// defaults.
-    pub fn new(id: i64, op: Op, results: Vec<i64>, operands: Vec<Operand>) -> Self {
+    pub fn new(
+        id: i64,
+        op: Op,
+        results: Vec<i64>,
+        operands: Vec<Operand>,
+    ) -> Self {
         Self { id, op, results, operands, callee: None, pure: false, asm: None, line: None }
     }
 }
@@ -536,7 +562,11 @@ pub struct Terminator {
 }
 
 impl Terminator {
-    pub fn new(kind: TerminatorKind, operands: Vec<Operand>, targets: Vec<i64>) -> Self {
+    pub fn new(
+        kind: TerminatorKind,
+        operands: Vec<Operand>,
+        targets: Vec<i64>,
+    ) -> Self {
         Self { kind, operands, targets, cases: Vec::new() }
     }
 }
@@ -551,7 +581,11 @@ pub struct Block {
 }
 
 impl Block {
-    pub fn new(id: i64, instructions: Vec<Instruction>, terminator: Terminator) -> Self {
+    pub fn new(
+        id: i64,
+        instructions: Vec<Instruction>,
+        terminator: Terminator,
+    ) -> Self {
         Self { id, instructions, terminator, cold: false }
     }
 }
@@ -606,8 +640,8 @@ pub struct ProcedureAbi {
     pub convention: Option<String>,
     /// The parameters, by position, that travel in memory whatever the convention has free: a struct's words.
     pub memory: Vec<i64>,
-    /// The parameters, by position, that are a large aggregate passed by value (`byval`): a pointer to the aggregate, whose bytes
-    /// the caller copies onto the stack where the same number of words would lie.
+    /// The parameters, by position, that are a large aggregate passed by value (`byval`): a pointer to the aggregate,
+    /// whose bytes the caller copies onto the stack where the same number of words would lie.
     pub byval: Vec<i64>,
     /// The bytes of each of `byval`'s aggregates, in the same order.
     pub byval_bytes: Vec<i64>,
@@ -618,7 +652,11 @@ pub struct ProcedureAbi {
 impl ProcedureAbi {
     /// The parameter a floating `result` is stored through: the last, when
     /// it points at the result's type and the ABI returns floats by pointer.
-    pub fn result_destination(&self, result: &Type, parameters: &[&Type]) -> Option<usize> {
+    pub fn result_destination(
+        &self,
+        result: &Type,
+        parameters: &[&Type],
+    ) -> Option<usize> {
         let last = parameters.len().checked_sub(1)?;
         let points = parameters[last].kind == TypeKind::Pointer && parameters[last].element == Some(result.id);
         (points && self.float_return.leaves(FloatReturn::Pointer, result)).then_some(last)
@@ -628,20 +666,30 @@ impl ProcedureAbi {
 impl CallAbi {
     /// Whether the callee returns a floating `result` through the
     /// destination this call passes last, the pointer to it coming back.
-    pub fn returns_through(&self, result: &Type) -> bool {
+    pub fn returns_through(
+        &self,
+        result: &Type,
+    ) -> bool {
         self.float_return.leaves(FloatReturn::Pointer, result)
     }
 
     /// Whether the callee returns a floating `result` as the address of its
     /// own copy.
-    pub fn returns_address(&self, result: &Type) -> bool {
+    pub fn returns_address(
+        &self,
+        result: &Type,
+    ) -> bool {
         self.float_return.leaves(FloatReturn::Address, result)
     }
 }
 
 impl FloatReturn {
     /// Whether a `result` of this ABI leaves as `how` says: only a float's does.
-    fn leaves(self, how: FloatReturn, result: &Type) -> bool {
+    fn leaves(
+        self,
+        how: FloatReturn,
+        result: &Type,
+    ) -> bool {
         self == how && result.kind == TypeKind::Float
     }
 }
@@ -667,7 +715,9 @@ pub struct Function {
 }
 
 /// The debug vocabulary, as MIR's metadata spells it.
-pub use llrm_mir::debuginfo::{Kind as DebugKind, Dialect as DebugDialect, Language as DebugLanguage, Reach as DebugReach, Scalar as DebugScalar};
+pub use llrm_mir::debuginfo::{
+    Dialect as DebugDialect, Kind as DebugKind, Language as DebugLanguage, Reach as DebugReach, Scalar as DebugScalar,
+};
 
 /// A source type, as a debugger shows it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -809,7 +859,11 @@ pub struct DataObject {
 }
 
 impl DataObject {
-    pub fn new(id: i64, name: &str, bytes: Vec<i64>) -> Self {
+    pub fn new(
+        id: i64,
+        name: &str,
+        bytes: Vec<i64>,
+    ) -> Self {
         Self {
             id,
             name: name.to_owned(),
@@ -853,8 +907,24 @@ pub struct Module {
 }
 
 impl Module {
-    pub fn new(id: i64, name: &str, types: Vec<Type>, functions: Vec<Function>) -> Self {
-        Self { id, name: name.to_owned(), types, functions, data: Vec::new(), callables: Vec::new(), alias_classes: Vec::new(), facts: Vec::new(), debug: None, line_numbers: Vec::new() }
+    pub fn new(
+        id: i64,
+        name: &str,
+        types: Vec<Type>,
+        functions: Vec<Function>,
+    ) -> Self {
+        Self {
+            id,
+            name: name.to_owned(),
+            types,
+            functions,
+            data: Vec::new(),
+            callables: Vec::new(),
+            alias_classes: Vec::new(),
+            facts: Vec::new(),
+            debug: None,
+            line_numbers: Vec::new(),
+        }
     }
 
     /// The rows of the statement table, in source order; none without one.
@@ -865,24 +935,46 @@ impl Module {
             [one] => one,
             _ => return Err("more than one statement table".to_owned()),
         };
-        if object.linkage != DataLinkage::Internal || !object.readonly || !object.relocations.is_empty() || object.address != AddressKind::Near || object.bytes.len() % 14 != 0 {
+        if object.linkage != DataLinkage::Internal
+            || !object.readonly
+            || !object.relocations.is_empty()
+            || object.address != AddressKind::Near
+            || object.bytes.len() % 14 != 0
+        {
             return Err("the statement table has an invalid storage contract".to_owned());
         }
         let bytes: Vec<u8> = object.bytes.iter().map(|&one| one as u8).collect();
-        let word = |at: usize, size: usize| bytes[at..at + size].iter().rev().fold(0i64, |sum, &byte| (sum << 8) | i64::from(byte));
-        Ok((0..bytes.len()).step_by(14).map(|at| Statement { function: word(at, 4), block: word(at + 4, 4), instruction: word(at + 8, 4), line: word(at + 12, 2) }).collect())
+        let word = |at: usize, size: usize| {
+            bytes[at..at + size].iter().rev().fold(0i64, |sum, &byte| (sum << 8) | i64::from(byte))
+        };
+        Ok((0..bytes.len())
+            .step_by(14)
+            .map(|at| Statement {
+                function: word(at, 4),
+                block: word(at + 4, 4),
+                instruction: word(at + 8, 4),
+                line: word(at + 12, 2),
+            })
+            .collect())
     }
 
     /// Whether an error `function` raises lands in it: it has a handler of
     /// its own, or the module body's ON ERROR GOTO takes every procedure's
     /// error on that procedure's frame.
-    pub fn lands_errors(&self, function: &Function) -> bool {
-        function.error_handler.is_some() || self.functions.iter().any(|one| one.error_handler.is_some() && !one.error_handler_local)
+    pub fn lands_errors(
+        &self,
+        function: &Function,
+    ) -> bool {
+        function.error_handler.is_some()
+            || self.functions.iter().any(|one| one.error_handler.is_some() && !one.error_handler_local)
     }
 
     /// The local STRING descriptors `function` owns, each of which asks
     /// B$ENRA for a handle. Runtime-produced temporaries are not counted.
-    pub fn local_strings(&self, function: &Function) -> i64 {
+    pub fn local_strings(
+        &self,
+        function: &Function,
+    ) -> i64 {
         let string = |place: &&Place| self.types.iter().any(|one| one.id == place.r#type && one.name == "string");
         function.places.iter().filter(|place| place.storage == Storage::Local).filter(string).count() as i64
     }
@@ -894,8 +986,15 @@ impl Module {
     /// a frame of its own does not.
     // Event handlers (ON TIMER/KEY, not parsed today) will need the runtime frame:
     // B$EXSA polls events on exit.
-    pub fn frames_itself(&self, frames: Frames, function: &Function) -> bool {
-        frames == Frames::Own && !self.lands_errors(function) && function.external_entries.is_empty() && self.local_strings(function) == 0
+    pub fn frames_itself(
+        &self,
+        frames: Frames,
+        function: &Function,
+    ) -> bool {
+        frames == Frames::Own
+            && !self.lands_errors(function)
+            && function.external_entries.is_empty()
+            && self.local_strings(function) == 0
     }
 }
 
@@ -960,7 +1059,13 @@ impl RuntimePromises {
     ) -> Self {
         Self {
             calling_back: Some(calling_back.into_iter().map(str::to_owned).collect()),
-            writers: writers.into_iter().map(|(cell, routines)| CellWriters { cell: cell.to_owned(), routines: routines.into_iter().map(str::to_owned).collect() }).collect(),
+            writers: writers
+                .into_iter()
+                .map(|(cell, routines)| CellWriters {
+                    cell: cell.to_owned(),
+                    routines: routines.into_iter().map(str::to_owned).collect(),
+                })
+                .collect(),
             nounwind: nounwind.into_iter().map(str::to_owned).collect(),
             reads_arguments: Vec::new(),
             no_retain: Vec::new(),
@@ -973,11 +1078,20 @@ impl RuntimePromises {
 
     /// The named cells `routine` writes; none where it may run the
     /// program's code.
-    pub fn writes(&self, routine: &str) -> Option<Vec<String>> {
+    pub fn writes(
+        &self,
+        routine: &str,
+    ) -> Option<Vec<String>> {
         if self.calling_back.as_ref()?.iter().any(|one| one == routine) {
             return None;
         }
-        Some(self.writers.iter().filter(|one| one.routines.iter().any(|writer| writer == routine)).map(|one| one.cell.clone()).collect())
+        Some(
+            self.writers
+                .iter()
+                .filter(|one| one.routines.iter().any(|writer| writer == routine))
+                .map(|one| one.cell.clone())
+                .collect(),
+        )
     }
 }
 
@@ -1006,8 +1120,15 @@ impl StackCheck {
     pub fn from_toml(row: &toml::Value) -> Result<Self, String> {
         let text = |key: &str| row.get(key).and_then(toml::Value::as_str).map(str::to_owned);
         let need = |key: &str| text(key).ok_or_else(|| format!("stack {key} is not a string"));
-        let red_zone = row.get("red_zone").and_then(toml::Value::as_integer).ok_or("stack red_zone is not an integer")?;
-        Ok(Self { limit: need("limit")?, handler: need("handler")?, far: row.get("far").and_then(toml::Value::as_bool).unwrap_or(true), red_zone, entry: text("entry") })
+        let red_zone =
+            row.get("red_zone").and_then(toml::Value::as_integer).ok_or("stack red_zone is not an integer")?;
+        Ok(Self {
+            limit: need("limit")?,
+            handler: need("handler")?,
+            far: row.get("far").and_then(toml::Value::as_bool).unwrap_or(true),
+            red_zone,
+            entry: text("entry"),
+        })
     }
 }
 
@@ -1045,7 +1166,11 @@ pub struct Program {
 }
 
 impl Program {
-    pub fn new(dialect: Dialect, runtime: RuntimeProfile, modules: Vec<Module>) -> Self {
+    pub fn new(
+        dialect: Dialect,
+        runtime: RuntimeProfile,
+        modules: Vec<Module>,
+    ) -> Self {
         Self {
             dialect,
             runtime,

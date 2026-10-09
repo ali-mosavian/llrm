@@ -6,14 +6,21 @@ use super::*;
 
 impl TypeRegistry {
     /// `&T` or `&mut T`.
-    pub(super) fn reference(&mut self, target: ElementType, mutable: bool) -> TypeName {
+    pub(super) fn reference(
+        &mut self,
+        target: ElementType,
+        mutable: bool,
+    ) -> TypeName {
         let type_id = self.pointer(target.id(), 0);
         self.referents.insert(type_id, target);
         TypeName::Pointer { type_id, far: true, width: self.pointer_width(true), mutable }
     }
 
     /// What a reference type refers to; `None` for any other type.
-    pub(super) fn referent(&self, type_name: TypeName) -> Option<ElementType> {
+    pub(super) fn referent(
+        &self,
+        type_name: TypeName,
+    ) -> Option<ElementType> {
         let TypeName::Pointer { type_id, .. } = type_name else {
             return None;
         };
@@ -35,7 +42,11 @@ pub(super) struct ReferenceCell {
 
 impl FunctionCompiler<'_> {
     /// `binding`, a reference bound as `name` with `let mut`, kept in a cell.
-    pub(super) fn reseatable_reference(&mut self, name: &str, binding: Binding) -> Binding {
+    pub(super) fn reseatable_reference(
+        &mut self,
+        name: &str,
+        binding: Binding,
+    ) -> Binding {
         let element = match binding.type_ {
             BindingType::Scalar(type_name) => ElementType::Scalar(type_name),
             BindingType::Struct(id) => ElementType::Struct(id),
@@ -58,7 +69,10 @@ impl FunctionCompiler<'_> {
 
     /// Reloads the cell of each reference `statement` names, but a name it
     /// only reseats.
-    pub(super) fn reload_references(&mut self, statement: &Statement) {
+    pub(super) fn reload_references(
+        &mut self,
+        statement: &Statement,
+    ) {
         if self.reference_cells.is_empty() {
             return;
         }
@@ -76,14 +90,19 @@ impl FunctionCompiler<'_> {
                     names.push(name.clone());
                 }
             }
-            Statement::Assign { target: AssignTarget::Member { base, .. } | AssignTarget::Index { base, .. }, .. } => names.extend(base.names()),
+            Statement::Assign {
+                target: AssignTarget::Member { base, .. } | AssignTarget::Index { base, .. }, ..
+            } => names.extend(base.names()),
             _ => {}
         }
         self.reload_named(&names);
     }
 
     /// Reloads the cell of each reference in `names`.
-    pub(super) fn reload_named(&mut self, names: &[String]) {
+    pub(super) fn reload_named(
+        &mut self,
+        names: &[String],
+    ) {
         for index in 0..self.reference_cells.len() {
             let cell = self.reference_cells[index].clone();
             if !names.contains(&cell.name) {
@@ -92,7 +111,10 @@ impl FunctionCompiler<'_> {
             let Some(binding) = self.scopes.get(cell.depth).and_then(|scope| scope.get(&cell.name)) else {
                 continue;
             };
-            if !matches!(binding.storage, Storage::Reference(latest) if latest == cell.latest) {
+            if !matches!(
+                binding.storage,
+                Storage::Reference(latest) if latest == cell.latest
+            ) {
                 continue;
             }
             let pointer = self.value_type(type_id(cell.reference));
@@ -106,19 +128,42 @@ impl FunctionCompiler<'_> {
     }
 
     /// The cell of the reference `name` names here.
-    fn reference_cell(&self, name: &str) -> Option<ReferenceCell> {
-        let (depth, binding) = self.scopes.iter().enumerate().rev().find_map(|(depth, scope)| Some((depth, scope.get(name)?)))?;
-        self.reference_cells.iter().find(|cell| cell.depth == depth && cell.name == name && matches!(binding.storage, Storage::Reference(latest) if latest == cell.latest)).cloned()
+    fn reference_cell(
+        &self,
+        name: &str,
+    ) -> Option<ReferenceCell> {
+        let (depth, binding) =
+            self.scopes.iter().enumerate().rev().find_map(|(depth, scope)| Some((depth, scope.get(name)?)))?;
+        self.reference_cells
+            .iter()
+            .find(|cell| {
+                cell.depth == depth
+                    && cell.name == name
+                    && matches!(
+                        binding.storage,
+                        Storage::Reference(latest) if latest == cell.latest
+                    )
+            })
+            .cloned()
     }
 
     /// Whether `name = value` seats another borrow in a `let mut` reference.
-    fn reseating(&self, name: &str, value: &Expr) -> bool {
+    fn reseating(
+        &self,
+        name: &str,
+        value: &Expr,
+    ) -> bool {
         self.reference_cell(name).is_some_and(|cell| self.seats(cell.reference, None, value))
     }
 
     /// `name = value` of a reference bound with `let mut`, which borrows
     /// `value` from now on. `false` when `name` is no such reference.
-    pub(super) fn reseat_reference(&mut self, name: &str, value: &Expr, span: Span) -> Result<bool, Diagnostic> {
+    pub(super) fn reseat_reference(
+        &mut self,
+        name: &str,
+        value: &Expr,
+        span: Span,
+    ) -> Result<bool, Diagnostic> {
         let Some(cell) = self.reference_cell(name).filter(|cell| self.seats(cell.reference, None, value)) else {
             return Ok(false);
         };
@@ -134,11 +179,13 @@ impl FunctionCompiler<'_> {
     }
 
     /// A name for the reference `operand`: its referent, read through it.
-    pub(super) fn reference_binding(&mut self, operand: hir::Operand, type_name: TypeName) -> Option<Binding> {
+    pub(super) fn reference_binding(
+        &mut self,
+        operand: hir::Operand,
+        type_name: TypeName,
+    ) -> Option<Binding> {
         let target = self.types.referent(type_name)?;
-        let TypeName::Pointer { mutable, .. } = type_name else {
-            unreachable!("a reference is a pointer")
-        };
+        let TypeName::Pointer { mutable, .. } = type_name else { unreachable!("a reference is a pointer") };
         let pointer = self.materialized(operand, type_id(type_name));
         Some(Binding {
             type_: match target {
@@ -153,7 +200,12 @@ impl FunctionCompiler<'_> {
     /// `pointer`, a binding's, as the reference pointer `pointer_type`: an
     /// element of a vec is reached by a near pointer, so its far address
     /// is taken.
-    pub(super) fn as_reference_pointer(&mut self, pointer: u32, pointer_type: u32, target: ElementType) -> hir::Operand {
+    pub(super) fn as_reference_pointer(
+        &mut self,
+        pointer: u32,
+        pointer_type: u32,
+        target: ElementType,
+    ) -> hir::Operand {
         let found = self.type_of(pointer);
         if found == pointer_type {
             return hir::Operand::Value(pointer);
@@ -162,7 +214,13 @@ impl FunctionCompiler<'_> {
         if self.types.width(found) == self.types.width(pointer_type) {
             self.emit("copy", vec![typed], vec![hir::Operand::Value(pointer)], None);
         } else {
-            let place = hir::Operand::IndirectPlace { base: pointer, offset: 0, type_id: target.id(), inbounds: false, member: None };
+            let place = hir::Operand::IndirectPlace {
+                base: pointer,
+                offset: 0,
+                type_id: target.id(),
+                inbounds: false,
+                member: None,
+            };
             self.emit("address", vec![typed], vec![place], None);
         }
         hir::Operand::Value(typed)
@@ -170,7 +228,12 @@ impl FunctionCompiler<'_> {
 
     /// `expression` as the reference `reference`: a place, borrowed, or a
     /// name already bound to a reference.
-    pub(super) fn reference_to(&mut self, expression: &Expr, reference: TypeName, span: Span) -> Result<TypedOperand, Diagnostic> {
+    pub(super) fn reference_to(
+        &mut self,
+        expression: &Expr,
+        reference: TypeName,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
         let target = self.types.referent(reference).expect("a reference type");
         let TypeName::Pointer { type_id: pointer_type, mutable, .. } = reference else {
             unreachable!("a reference is a pointer")
@@ -199,7 +262,12 @@ impl FunctionCompiler<'_> {
 
     /// `place`, a field holding a reference, as what it refers to, when
     /// `value` is written there rather than another reference seated.
-    pub(super) fn written_through(&mut self, place: AssignmentPlace, operation: Option<BinaryOp>, value: &Expr) -> AssignmentPlace {
+    pub(super) fn written_through(
+        &mut self,
+        place: AssignmentPlace,
+        operation: Option<BinaryOp>,
+        value: &Expr,
+    ) -> AssignmentPlace {
         let AssignmentPlace::Scalar(field, type_name) = &place else {
             return place;
         };
@@ -211,15 +279,31 @@ impl FunctionCompiler<'_> {
         }
         let pointer = self.value(*type_name);
         self.emit("load", vec![pointer], vec![field.clone()], None);
-        AssignmentPlace::Scalar(hir::Operand::IndirectPlace { base: pointer, offset: 0, type_id: type_id(target), inbounds: false, member: None }, target)
+        AssignmentPlace::Scalar(
+            hir::Operand::IndirectPlace {
+                base: pointer,
+                offset: 0,
+                type_id: type_id(target),
+                inbounds: false,
+                member: None,
+            },
+            target,
+        )
     }
 
     /// Whether assigning `value` to a place holding the reference `reference`
     /// seats another reference there, rather than writing what it refers to.
-    pub(super) fn seats(&self, reference: TypeName, operation: Option<BinaryOp>, value: &Expr) -> bool {
+    pub(super) fn seats(
+        &self,
+        reference: TypeName,
+        operation: Option<BinaryOp>,
+        value: &Expr,
+    ) -> bool {
         let is_reference = match value {
             Expr::Borrow { .. } => true,
-            Expr::Name(name, _) => self.visible(name).is_some_and(|one| matches!(one.storage, Storage::Reference(_)) && !self.owns(&one.storage)),
+            Expr::Name(name, _) => self
+                .visible(name)
+                .is_some_and(|one| matches!(one.storage, Storage::Reference(_)) && !self.owns(&one.storage)),
             _ => self.expression_type_hint(value) == Some(reference),
         };
         operation.is_none() && is_reference
@@ -227,9 +311,15 @@ impl FunctionCompiler<'_> {
 
     /// The scalar place `expression` names -- a field or an element -- with
     /// its type and owner; `None` when it names none.
-    pub(super) fn place_of(&mut self, expression: &Expr, span: Span) -> Result<Option<(hir::Operand, TypeName, String)>, Diagnostic> {
+    pub(super) fn place_of(
+        &mut self,
+        expression: &Expr,
+        span: Span,
+    ) -> Result<Option<(hir::Operand, TypeName, String)>, Diagnostic> {
         let (place, type_name, _, owner) = match expression {
-            Expr::Member { base, field, .. } if self.bits_type(base).is_none() => self.member_place(base, field, span)?,
+            Expr::Member { base, field, .. } if self.bits_type(base).is_none() => {
+                self.member_place(base, field, span)?
+            }
             Expr::Index { base, indices, .. } => {
                 let (binding, owner) = self.sequence_of(base)?;
                 let (element, at) = self.element_at(&binding, &owner, indices, span)?;
@@ -245,14 +335,16 @@ impl FunctionCompiler<'_> {
 
     /// `let name = &operand`: a view of a sequence, otherwise a reference.
     /// `&mut` of a whole vec or string is a reference, so it can grow.
-    pub(super) fn borrowed_binding(&mut self, borrow: &Expr) -> Result<Binding, Diagnostic> {
-        let Expr::Borrow { mutable, operand, span } = borrow else {
-            unreachable!("a borrow")
-        };
+    pub(super) fn borrowed_binding(
+        &mut self,
+        borrow: &Expr,
+    ) -> Result<Binding, Diagnostic> {
+        let Expr::Borrow { mutable, operand, span } = borrow else { unreachable!("a borrow") };
         if let Some((element, rank)) = self.borrowed_view_type(operand, *mutable) {
             let pointer_type = self.types.slice_pointer(element, rank);
             let type_ = BindingType::Slice { element, rank };
-            let (hir::Operand::Value(descriptor), _) = self.borrow_argument(borrow, *mutable, type_, pointer_type)? else {
+            let (hir::Operand::Value(descriptor), _) = self.borrow_argument(borrow, *mutable, type_, pointer_type)?
+            else {
                 unreachable!("a view is a descriptor pointer")
             };
             return Ok(Binding { type_, mutable: *mutable, storage: Storage::Slice(descriptor) });
@@ -270,7 +362,11 @@ impl FunctionCompiler<'_> {
     }
 
     /// The view `&operand` makes, when `operand` is a sequence.
-    pub(super) fn borrowed_view_type(&self, operand: &Expr, exclusive: bool) -> Option<(ElementType, u8)> {
+    pub(super) fn borrowed_view_type(
+        &self,
+        operand: &Expr,
+        exclusive: bool,
+    ) -> Option<(ElementType, u8)> {
         if let (Expr::Member { .. }, Some((element, shape))) = (operand, self.fixed_array_hint(operand)) {
             return Some((element, shape.rank));
         }
@@ -279,13 +375,15 @@ impl FunctionCompiler<'_> {
             Expr::Name(name, span) => match self.binding(name, *span).ok()?.type_ {
                 BindingType::Array { element, shape } => Some((element, shape.rank)),
                 BindingType::Slice { element, rank } => Some((element, rank)),
-                BindingType::Scalar(type_name) if !exclusive => self.types.sequence_element(type_name).map(|element| (element, 1)),
+                BindingType::Scalar(type_name) if !exclusive => {
+                    self.types.sequence_element(type_name).map(|element| (element, 1))
+                }
                 _ => None,
             },
             _ if exclusive => None,
-            _ => self
-                .view_type_of(operand)
-                .or_else(|| self.types.sequence_element(self.expression_type_hint(operand)?).map(|element| (element, 1))),
+            _ => self.view_type_of(operand).or_else(|| {
+                self.types.sequence_element(self.expression_type_hint(operand)?).map(|element| (element, 1))
+            }),
         }
     }
 }

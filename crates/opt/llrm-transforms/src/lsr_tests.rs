@@ -16,9 +16,27 @@ use crate::testing::{Tuned, parsed, printed, results};
 
 /// A 486's prices, six registers, two across a call, and its two address forms.
 fn target() -> Tuned {
-    let costs = OperationCosts { add: 1, multiply: 13, divide: 24, shift: 2, address: 1, load: 1, store: 1, memory_update: 3, extend: 3, prefix: 1, ..OperationCosts::default() };
-    let word = AddressForm { partners: Some(2), bases: Some(1), indices: Some(2), ..AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None).expect("a form") };
-    let dword = AddressForm::new(4, BTreeSet::from([1, 2, 4, 8]), 1, costs.prefix, costs.extend, true, None).expect("a form");
+    let costs = OperationCosts {
+        add: 1,
+        multiply: 13,
+        divide: 24,
+        shift: 2,
+        address: 1,
+        load: 1,
+        store: 1,
+        memory_update: 3,
+        extend: 3,
+        prefix: 1,
+        ..OperationCosts::default()
+    };
+    let word = AddressForm {
+        partners: Some(2),
+        bases: Some(1),
+        indices: Some(2),
+        ..AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None).expect("a form")
+    };
+    let dword =
+        AddressForm::new(4, BTreeSet::from([1, 2, 4, 8]), 1, costs.prefix, costs.extend, true, None).expect("a form");
     Tuned { costs, registers: 6, call_registers: 2, address_forms: vec![word, dword], ..Tuned::default() }
 }
 
@@ -28,7 +46,10 @@ fn reduced(text: &str) -> (Module, String) {
 }
 
 /// `reduced` on `machine`.
-fn reduced_for(text: &str, machine: Tuned) -> (Module, String) {
+fn reduced_for(
+    text: &str,
+    machine: Tuned,
+) -> (Module, String) {
     let before = parsed(&format!("{DOS}{text}"));
     let mut after = before.clone();
     let mut manager = PassManager::default();
@@ -40,7 +61,10 @@ fn reduced_for(text: &str, machine: Tuned) -> (Module, String) {
 }
 
 /// `text` reduced, computing what it did for each of `inputs`.
-fn same(text: &str, inputs: &[&[i128]]) -> String {
+fn same(
+    text: &str,
+    inputs: &[&[i128]],
+) -> String {
     let (before, printed) = reduced(text);
     let after = parsed(&printed);
     assert_eq!(results(&after, inputs), results(&before, inputs), "{printed}");
@@ -57,25 +81,45 @@ fn counters(printed: &str) -> usize {
     let mut module = parsed(printed);
     let (layout, outer) = (llrm_analysis::testing::layout(&module), llrm_mir::passes::Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
-    let unit = llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::within(context, &layout, function, &outer));
-    let filling = |loop_: &llrm_analysis::graph::loops::Loop| function.block(llrm_analysis::cfg::block(loop_.header)).name.as_deref().is_some_and(|name| name.starts_with("fill_"));
+    let unit =
+        llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::within(context, &layout, function, &outer));
+    let filling = |loop_: &llrm_analysis::graph::loops::Loop| {
+        function
+            .block(llrm_analysis::cfg::block(loop_.header))
+            .name
+            .as_deref()
+            .is_some_and(|name| name.starts_with("fill_"))
+    };
     unit.shape()
         .loops
         .iter()
         .filter(|loop_| !filling(loop_))
-        .map(|loop_| llrm_analysis::induction::basics(&unit, loop_).len() + llrm_analysis::induction::pointers(&unit, loop_).len())
+        .map(|loop_| {
+            llrm_analysis::induction::basics(&unit, loop_).len()
+                + llrm_analysis::induction::pointers(&unit, loop_).len()
+        })
         .sum()
 }
 
 /// Lines of the blocks in `printed` whose instructions read `name`.
-fn readers<'a>(printed: &'a str, name: &str) -> Vec<&'a str> {
+fn readers<'a>(
+    printed: &'a str,
+    name: &str,
+) -> Vec<&'a str> {
     printed.lines().filter(|line| line.contains(&format!("{name},")) || line.ends_with(name)).collect()
 }
 
 /// `@name[j] = j * 7 - k` for `j` below 40, entered from `from`, leaving
 /// to `next`: the arrays the loops read.
-fn filled(name: &str, element: &str, bytes: u32, from: &str, next: &str) -> String {
-    let narrowed = if element == "i32" { format!("add i32 %{name}.x, 0") } else { format!("trunc i32 %{name}.x to {element}") };
+fn filled(
+    name: &str,
+    element: &str,
+    bytes: u32,
+    from: &str,
+    next: &str,
+) -> String {
+    let narrowed =
+        if element == "i32" { format!("add i32 %{name}.x, 0") } else { format!("trunc i32 %{name}.x to {element}") };
     format!(
         "  br label %fill_{name}_1
 
@@ -102,8 +146,15 @@ fill_{name}_2:
 
 /// A function of `n` and `k` that fills `arrays`, then runs `body` from
 /// its block `start`.
-fn program(arrays: &[(&str, &str, u32)], returns: &str, body: &str) -> String {
-    let mut text = arrays.iter().map(|(name, element, _)| format!("@{name} = global [64 x {element}] zeroinitializer\n")).collect::<String>();
+fn program(
+    arrays: &[(&str, &str, u32)],
+    returns: &str,
+    body: &str,
+) -> String {
+    let mut text = arrays
+        .iter()
+        .map(|(name, element, _)| format!("@{name} = global [64 x {element}] zeroinitializer\n"))
+        .collect::<String>();
     text += &format!("\ndefine {returns} @f(i16 %n, i16 %k) {{\nentry:\n");
     let mut from = "entry".to_owned();
     for (index, (name, element, bytes)) in arrays.iter().enumerate() {
@@ -147,10 +198,19 @@ l3:
 /// counter, counted to zero: no multiply or compare with `n` in the loop.
 #[test]
 fn test_a_dot_product_keeps_one_counter_counted_to_zero() {
-    let text = program(&[("a", "i16", 2), ("b", "i16", 2)], "i32", DOT).replace("br label %l2.back\n\nl2.back:\n  br label %l1", "br label %l1").replace("%l2.back ]", "%l2 ]");
+    let text = program(&[("a", "i16", 2), ("b", "i16", 2)], "i32", DOT)
+        .replace("br label %l2.back\n\nl2.back:\n  br label %l1", "br label %l1")
+        .replace("%l2.back ]", "%l2 ]");
     let printed = same(&text, TRIPS);
     assert_eq!(counters(&printed), 1, "{printed}");
-    assert!(printed.contains(", 0\n") && !printed.lines().any(|line| line.contains("icmp") && line.contains("%n") && !line.contains("sle") && !line.contains("sgt")), "{printed}");
+    assert!(
+        printed.contains(", 0\n")
+            && !printed.lines().any(|line| line.contains("icmp")
+                && line.contains("%n")
+                && !line.contains("sle")
+                && !line.contains("sgt")),
+        "{printed}"
+    );
 }
 
 /// The dot product as the pass finds it after the loop passes: a latch of
@@ -246,7 +306,8 @@ l2:
 l3:
   ret i16 %s
 ";
-    let printed = same(&program(&[("a", "i16", 2)], "i16", down), &[&[-3, 5], &[0, 5], &[1, 5], &[2, -9], &[7, 3], &[33, 11]]);
+    let printed =
+        same(&program(&[("a", "i16", 2)], "i16", down), &[&[-3, 5], &[0, 5], &[1, 5], &[2, -9], &[7, 3], &[33, 11]]);
     assert!(counters(&printed) <= 2, "{printed}");
 }
 
@@ -382,16 +443,25 @@ l3:
 ";
     let printed = same(&program(&[("a", "i16", 2)], "i16", body), TRIPS);
     let loop_ = &printed[printed.find("l2:").unwrap_or(0)..];
-    assert!(!loop_.lines().take_while(|line| !line.starts_with("l3")).any(|line| line.contains("mul i16") && line.contains("%k")), "{printed}");
+    assert!(
+        !loop_
+            .lines()
+            .take_while(|line| !line.starts_with("l3"))
+            .any(|line| line.contains("mul i16") && line.contains("%k")),
+        "{printed}"
+    );
 }
-
 
 // Count-to-zero, the exit test replaced and the counters shared, as the
 // passes `lsr` replaced were tested: each shape now `lsr`'s.
 
 /// Nested loops of six trips, each with a counter and a scaled offset, the
 /// inner body reached only where the counters differ.
-fn nested(outer_stride: i64, inner_stride: i64, test: &str) -> String {
+fn nested(
+    outer_stride: i64,
+    inner_stride: i64,
+    test: &str,
+) -> String {
     format!(
         "@sum = global i16 0
 
@@ -525,7 +595,15 @@ fn test_a_symbolic_loop_counts_to_zero_behind_a_guard() {
         let printed = same(&symbolic(start), COUNTS);
         assert!(counters(&printed) <= 2, "{printed}");
         assert!(printed.lines().any(|line| line.contains("icmp ne i16") && line.ends_with(", 0")), "{printed}");
-        let entry = printed.lines().skip_while(|line| !line.starts_with("b0:")).nth(1).into_iter().chain(printed.lines().skip_while(|line| !line.starts_with("b0:")).skip(1).take_while(|line| !line.is_empty())).collect::<Vec<_>>();
+        let entry = printed
+            .lines()
+            .skip_while(|line| !line.starts_with("b0:"))
+            .nth(1)
+            .into_iter()
+            .chain(
+                printed.lines().skip_while(|line| !line.starts_with("b0:")).skip(1).take_while(|line| !line.is_empty()),
+            )
+            .collect::<Vec<_>>();
         assert!(entry.iter().any(|line| line.contains("br i1")), "a guard:\n{printed}");
     }
 }
@@ -535,7 +613,12 @@ fn test_a_symbolic_loop_counts_to_zero_behind_a_guard() {
 #[test]
 fn test_a_recurrence_read_after_a_guarded_loop_keeps_its_values() {
     same(&symbolic(0).replace("%off = add i16 %c, 100", "%off = add i16 %n, 100"), COUNTS);
-    same(&symbolic(5).replace("  ret i16 %acc", "  %after = add i16 %acc, %c\n  ret i16 %after").replace("%off = add i16 %c, 100", "%off = add i16 %n, 100"), COUNTS);
+    same(
+        &symbolic(5)
+            .replace("  ret i16 %acc", "  %after = add i16 %acc, %c\n  ret i16 %after")
+            .replace("%off = add i16 %c, 100", "%off = add i16 %n, 100"),
+        COUNTS,
+    );
 }
 
 /// A counter indexing memory, stored or not, masked or not, or less an
@@ -569,7 +652,13 @@ b3:
     same(text, &[&[0]]);
     let indexed = text.replace("  store i16 %i, ptr %at\n", "");
     same(&indexed, &[&[0]]);
-    same(&indexed.replace("%at = getelementptr inbounds [16 x i16], ptr @table, i16 0, i16 %i", "%low = and i16 %i, 3\n  %at = getelementptr inbounds [16 x i16], ptr @table, i16 0, i16 %low"), &[&[0]]);
+    same(
+        &indexed.replace(
+            "%at = getelementptr inbounds [16 x i16], ptr @table, i16 0, i16 %i",
+            "%low = and i16 %i, 3\n  %at = getelementptr inbounds [16 x i16], ptr @table, i16 0, i16 %low",
+        ),
+        &[&[0]],
+    );
     let text = "@table = global [16 x i16] zeroinitializer
 
 define i16 @f(i16 %n) {
@@ -676,8 +765,18 @@ fn test_a_pointer_beside_a_stored_counter() {
     let text = pointer_beside_a_stored_counter();
     same(&text, &[&[0]]);
     same(&text.replace("  ret i16 %got", "  %r = add i16 %got, %v\n  ret i16 %r"), &[&[0]]);
-    same(&text.replace("  store i16 %v, ptr %p", "  %w = add i16 %v, 7\n  store i16 %w, ptr %p").replace("  ret i16 %got", "  %r = add i16 %got, %v\n  ret i16 %r"), &[&[0]]);
-    let printed = same(&text.replace("  store i16 %v, ptr %p", "  store i16 7, ptr %p").replace("  ret i16 %got", "  %r = add i16 %got, %v\n  ret i16 %r"), &[&[0]]);
+    same(
+        &text
+            .replace("  store i16 %v, ptr %p", "  %w = add i16 %v, 7\n  store i16 %w, ptr %p")
+            .replace("  ret i16 %got", "  %r = add i16 %got, %v\n  ret i16 %r"),
+        &[&[0]],
+    );
+    let printed = same(
+        &text
+            .replace("  store i16 %v, ptr %p", "  store i16 7, ptr %p")
+            .replace("  ret i16 %got", "  %r = add i16 %got, %v\n  ret i16 %r"),
+        &[&[0]],
+    );
     assert_eq!(counters(&printed), 1, "{printed}");
 }
 
@@ -688,7 +787,11 @@ fn test_a_pointer_beside_a_stored_counter() {
 fn test_the_pipeline_settles_a_pointer_beside_a_stored_counter() {
     let mut module = parsed(&format!("{DOS}{}", pointer_beside_a_stored_counter()));
     let before = results(&module, &[&[0]]);
-    llrm_mir::program::Program::lend(&mut module, Rc::new(llrm_x86_m16::Dos::default()), |program| crate::pipeline::applied(program, &crate::pipeline::Applied::default())).and_then(|done| done).unwrap();
+    llrm_mir::program::Program::lend(&mut module, Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        crate::pipeline::applied(program, &crate::pipeline::Applied::default())
+    })
+    .and_then(|done| done)
+    .unwrap();
     let after = printed(&module);
     assert_eq!(results(&module, &[&[0]]), before, "{after}");
 }
@@ -722,7 +825,11 @@ done:
 
 /// `%acc` tripled `%n` times, the counter read by nothing else, and the
 /// exit reading it through `leave` (`""` or an LCSSA phi).
-fn dead_counter(test: &str, leave: &str, result: &str) -> String {
+fn dead_counter(
+    test: &str,
+    leave: &str,
+    result: &str,
+) -> String {
     format!(
         "define i16 @f(i16 %x, i16 %n) {{
 b0:
@@ -756,10 +863,19 @@ const DEAD: &[&[i128]] = &[&[3, 0], &[3, 1], &[2, 7], &[-4, 300], &[5, 9]];
 fn test_a_dead_counter_of_unknown_trips_counts_to_zero_behind_a_guard() {
     for test in ["slt", "ult", "ne"] {
         let printed = same(&dead_counter(test, "", "%acc"), DEAD);
-        assert!(printed.lines().any(|line| line.contains("icmp ne i16") && line.ends_with(", 0")), "{test}:\n{printed}");
+        assert!(
+            printed.lines().any(|line| line.contains("icmp ne i16") && line.ends_with(", 0")),
+            "{test}:\n{printed}"
+        );
     }
     same(&dead_counter("slt", "  %e = phi i16 [ %i, %b1 ]\n  %r = add i16 %e, %acc\n", "%r"), DEAD);
-    same(&format!("@g = global i16 0\n\n{}", dead_counter("slt", "", "%acc").replace("  %next = add", "  store i16 %i, ptr @g\n  %next = add")), DEAD);
+    same(
+        &format!(
+            "@g = global i16 0\n\n{}",
+            dead_counter("slt", "", "%acc").replace("  %next = add", "  store i16 %i, ptr @g\n  %next = add")
+        ),
+        DEAD,
+    );
 }
 
 /// TEXTFILL's `POKE o, ch + (o AND 15)` over `o` from 0 to 3998 by two:
@@ -826,7 +942,12 @@ l3:
 ";
     let printed = same(&program(&[("a", "i16", 2)], "i16", body), TRIPS);
     assert_eq!(counters(&printed), 1, "{printed}");
-    assert!(printed.contains("add i16 %s1, 20") || printed.contains(", 20\n") || printed.lines().any(|line| line.contains("%r = add") && line.contains("20")), "{printed}");
+    assert!(
+        printed.contains("add i16 %s1, 20")
+            || printed.contains(", 20\n")
+            || printed.lines().any(|line| line.contains("%r = add") && line.contains("20")),
+        "{printed}"
+    );
 }
 
 /// nbody's unrolled `IF other <> body`: an equality of the counter with a
@@ -1214,7 +1335,10 @@ l3:
 fn test_a_count_after_a_loop_of_no_counted_exit_shares_its_address_counter() {
     let printed = same(&program(&[("a", "i16", 2)], "i16", WORDLEN), &[&[0, 0], &[0, 7], &[0, 14], &[0, 21]]);
     assert_eq!(counters(&printed), 1, "{printed}");
-    assert!(!printed.contains(", 0\n") || !printed.contains("sub i16 %lsr"), "a distance from a start of zero is the counter: {printed}");
+    assert!(
+        !printed.contains(", 0\n") || !printed.contains("sub i16 %lsr"),
+        "a distance from a start of zero is the counter: {printed}"
+    );
 }
 
 /// Three word arrays summed to a symbolic `n`: a global is a displacement,
@@ -1247,7 +1371,10 @@ l2:
 l3:
   ret i16 %s
 ";
-    let printed = same(&program(&[("a", "i16", 2), ("b", "i16", 2), ("c", "i16", 2)], "i16", body), &[&[-3, 5], &[0, 5], &[1, 5], &[7, 3], &[30, 11]]);
+    let printed = same(
+        &program(&[("a", "i16", 2), ("b", "i16", 2), ("c", "i16", 2)], "i16", body),
+        &[&[-3, 5], &[0, 5], &[1, 5], &[7, 3], &[30, 11]],
+    );
     assert_eq!(counters(&printed), 1, "{printed}");
 }
 
@@ -1361,7 +1488,10 @@ done:
 /// reloaded from the frame each trip.
 #[test]
 fn test_a_guarded_do_while_keeps_one_counter() {
-    let printed = same(&program(&[("a", "i16", 2), ("b", "i16", 2)], "i16", GUARDED_DO), &[&[-3, 5], &[0, 5], &[1, 5], &[7, 3], &[30, 11]]);
+    let printed = same(
+        &program(&[("a", "i16", 2), ("b", "i16", 2)], "i16", GUARDED_DO),
+        &[&[-3, 5], &[0, 5], &[1, 5], &[7, 3], &[30, 11]],
+    );
     assert_eq!(counters(&printed), 1, "{printed}");
 }
 
@@ -1374,7 +1504,10 @@ fn test_a_guarded_do_while_behind_a_forwarding_latch_keeps_one_counter() {
         .replace("l3:\n  br label %done", "back:\n  br label %l1\n\nl3:\n  br label %done")
         .replace("[ %i.next, %l1 ]", "[ %i.next, %back ]")
         .replace("[ %t, %l1 ]", "[ %t, %back ]");
-    let printed = same(&program(&[("a", "i16", 2), ("b", "i16", 2)], "i16", &text), &[&[-3, 5], &[0, 5], &[1, 5], &[7, 3], &[30, 11]]);
+    let printed = same(
+        &program(&[("a", "i16", 2), ("b", "i16", 2)], "i16", &text),
+        &[&[-3, 5], &[0, 5], &[1, 5], &[7, 3], &[30, 11]],
+    );
     assert_eq!(counters(&printed), 1, "{printed}");
 }
 
@@ -1496,7 +1629,11 @@ fn test_a_far_pointer_is_never_compared_for_the_exit() {
 /// `text` through `Lsr` on a Core: an address-size prefix stalls three clocks.
 fn on_core(text: &str) -> String {
     let costs = llrm_x86_m16::target::costs("Core");
-    let machine = llrm_x86_m16::Dos { address_forms: llrm_x86_m16::target::address_forms(&costs, 3), costs, ..llrm_x86_m16::Dos::default() };
+    let machine = llrm_x86_m16::Dos {
+        address_forms: llrm_x86_m16::target::address_forms(&costs, 3),
+        costs,
+        ..llrm_x86_m16::Dos::default()
+    };
     let mut module = parsed(&format!("{DOS}{text}"));
     let mut manager = PassManager::default();
     manager.verify_each = true;
@@ -1607,7 +1744,11 @@ b6:
 /// `text` through `Lsr` on a P5, as the rich route prices it.
 fn on_p5(text: &str) -> String {
     let costs = llrm_x86_m16::target::costs("P5");
-    let machine = llrm_x86_m16::Dos { address_forms: llrm_x86_m16::target::address_forms(&costs, 0), costs, ..llrm_x86_m16::Dos::default() };
+    let machine = llrm_x86_m16::Dos {
+        address_forms: llrm_x86_m16::target::address_forms(&costs, 0),
+        costs,
+        ..llrm_x86_m16::Dos::default()
+    };
     let mut module = parsed(&format!("{DOS}{text}"));
     let mut manager = PassManager::default();
     manager.verify_each = true;
@@ -1650,7 +1791,8 @@ l3:
 /// value carries.
 #[test]
 fn test_a_product_of_a_counter_stepping_by_three_is_walked_too() {
-    let text = program(&[("a", "i16", 2)], "i16", STRIDE_SYMBOLIC).replace("%i.next = add nsw i16 %i, 1", "%i.next = add nsw i16 %i, 3");
+    let text = program(&[("a", "i16", 2)], "i16", STRIDE_SYMBOLIC)
+        .replace("%i.next = add nsw i16 %i, 1", "%i.next = add nsw i16 %i, 3");
     let printed = same(&text, &[&[0, 2], &[1, 2], &[5, 3], &[9, 2], &[5, -1]]);
     let body = printed.split("\nl2:").nth(1).and_then(|rest| rest.split("\nl3:").next()).unwrap_or_default();
     assert!(!body.contains(" mul ") && !body.contains("%x") && body.contains("i16 16"), "{printed}");
@@ -1711,7 +1853,9 @@ fn test_a_far_view_of_a_segment_takes_no_general_register() {
 fn test_addresses_need_a_base_register_and_an_index_register() {
     use super::Reg;
     let pair = |one: usize, other: usize| (Reg::Iv(one), Reg::Iv(other));
-    let registers = |pairs: &[(Reg, Reg)]| pairs.iter().flat_map(|(one, other)| [one.clone(), other.clone()]).collect::<std::collections::BTreeSet<_>>();
+    let registers = |pairs: &[(Reg, Reg)]| {
+        pairs.iter().flat_map(|(one, other)| [one.clone(), other.clone()]).collect::<std::collections::BTreeSet<_>>()
+    };
     // `[bx+si]` and `[bx+di]`: one base, two indices.
     let shared = [pair(0, 1), pair(0, 2)];
     assert_eq!(super::_misplaced(&registers(&shared), &shared.iter().cloned().collect(), 1, 2), 0);
@@ -1743,7 +1887,9 @@ l3:
 fn test_a_loop_the_pass_cannot_improve_is_left_as_it_is() {
     let text = program(&[("a", "i16", 2)], "i16", ZEROED);
     let (before, printed) = reduced(&text);
-    let loop_of = |text: &str| text.split("\nl1:").nth(1).and_then(|rest| rest.split("\n\n").next()).unwrap_or_default().to_owned();
+    let loop_of = |text: &str| {
+        text.split("\nl1:").nth(1).and_then(|rest| rest.split("\n\n").next()).unwrap_or_default().to_owned()
+    };
     assert_eq!(loop_of(&printed), loop_of(&crate::testing::printed(&before)), "{printed}");
 }
 
@@ -1967,7 +2113,6 @@ b6:
     .to_owned()
 }
 
-
 /// A value made from the counter in one arm, `i + k`, costs an add where an add makes it in place
 /// and `mov; add` on a two-address target whose forms have no `lea` of any register (`[bx+si]`
 /// only): the price omitted the copy (#705), so the arm's use and its half of a trip never paid for
@@ -1997,18 +2142,38 @@ fn test_a_difference_is_one_sub_from_a_copy_of_the_minuend() {
     // Only the word form: `[bx+si]` is no `lea` of any register.
     let mut machine = Tuned { two_address: true, ..target() };
     machine.address_forms.truncate(1);
-    let room = crate::spill::Room { registers: 6, across_call: 2, two_address: true, spaces: llrm_x86_m16::spaces(), ..Default::default() };
-    let target = super::Target { machine: &machine, costs: machine.costs.clone(), room, forms: machine.address_forms.clone(), bounds: super::Bounds::NONE };
+    let room = crate::spill::Room {
+        registers: 6,
+        across_call: 2,
+        two_address: true,
+        spaces: llrm_x86_m16::spaces(),
+        ..Default::default()
+    };
+    let target = super::Target {
+        machine: &machine,
+        costs: machine.costs.clone(),
+        room,
+        forms: machine.address_forms.clone(),
+        bounds: super::Bounds::NONE,
+    };
     let costs = &machine.costs;
     assert_eq!(super::_scaled(&target, &BigInt::from(-1), true), (0, true), "`rest - r`: a sub from a copy of rest");
-    assert_eq!(super::_scaled(&target, &BigInt::from(-1), false), (costs.add + costs.r#move, false), "`-r`: a negation of a copy");
-    assert_eq!(super::_scaled(&target, &BigInt::from(2), true), (costs.shift + costs.r#move, false), "`2r + rest`: a shift of a copy");
+    assert_eq!(
+        super::_scaled(&target, &BigInt::from(-1), false),
+        (costs.add + costs.r#move, false),
+        "`-r`: a negation of a copy"
+    );
+    assert_eq!(
+        super::_scaled(&target, &BigInt::from(2), true),
+        (costs.shift + costs.r#move, false),
+        "`2r + rest`: a shift of a copy"
+    );
     assert_eq!(super::_scaled(&target, &BigInt::from(1), true), (0, false));
 }
 
 /// `d += n; while (n--) *--d = 0;`, every backward clear: the counter's step is made in the header before the test, and
-/// lsr's rotation behind its guard made it read its own result. `after lsr: sub in %b4 uses a value whose definition does not
-/// dominate it` at -O1 and -O2 (gcc.c-torture, #811).
+/// lsr's rotation behind its guard made it read its own result. `after lsr: sub in %b4 uses a value whose definition
+/// does not dominate it` at -O1 and -O2 (gcc.c-torture, #811).
 #[test]
 fn test_a_counter_stepped_in_the_header_is_not_rotated_to_read_itself() {
     let text = "define i32 @f(ptr %d, i32 %n) {
@@ -2037,7 +2202,10 @@ b3:
 }
 
 /// A loop with an early way out that returns: `n` trips, or fewer where the sum meets `k`.
-fn leaving(count: &str, start: i64) -> String {
+fn leaving(
+    count: &str,
+    start: i64,
+) -> String {
     format!(
         "define i16 @f(i16 %n, i16 %k) {{
 b0:
@@ -2073,7 +2241,8 @@ b5:
 }
 
 /// Queens' inner loop went the whole way round with `inc; add; cmp; jle` where gcc's stops at `inc; je`: a loop with
-/// another way out had no counted exit, so its test was never rewritten. A symbolic count with a way out counts to zero.
+/// another way out had no counted exit, so its test was never rewritten. A symbolic count with a way out counts to
+/// zero.
 #[test]
 fn test_a_loop_with_another_way_out_counts_to_zero_at_its_own_exit() {
     let printed = same(&leaving("%n", 5), &[&[0, 9], &[1, 9], &[7, 9], &[7, 0], &[300, 1]]);
@@ -2090,10 +2259,13 @@ fn test_a_constant_count_with_another_way_out_keeps_its_counter() {
 }
 
 /// The search priced a set of counters from nothing every time it met it: from each of its two starts, in each step's
-/// neighbours, and again to rank the two answers. A set is priced once (the dot product asked 423 times and priced 146 sets).
+/// neighbours, and again to rank the two answers. A set is priced once (the dot product asked 423 times and priced 146
+/// sets).
 #[test]
 fn test_a_set_of_counters_is_priced_once_however_often_the_search_meets_it() {
-    let text = program(&[("a", "i16", 2), ("b", "i16", 2)], "i32", DOT).replace("br label %l2.back\n\nl2.back:\n  br label %l1", "br label %l1").replace("%l2.back ]", "%l2 ]");
+    let text = program(&[("a", "i16", 2), ("b", "i16", 2)], "i32", DOT)
+        .replace("br label %l2.back\n\nl2.back:\n  br label %l1", "br label %l1")
+        .replace("%l2.back ]", "%l2 ]");
     super::TOTALS.with(|counts| counts.set((0, 0)));
     same(&text, TRIPS);
     let (asked, priced) = super::TOTALS.with(std::cell::Cell::get);
@@ -2101,7 +2273,10 @@ fn test_a_set_of_counters_is_priced_once_however_often_the_search_meets_it() {
 }
 
 /// `text` through `Lsr` under `bounds`, printed.
-fn bounded(text: &str, bounds: super::Bounds) -> String {
+fn bounded(
+    text: &str,
+    bounds: super::Bounds,
+) -> String {
     let mut module = parsed(&format!("{DOS}{text}"));
     let mut manager = PassManager::default();
     manager.verify_each = true;
@@ -2111,21 +2286,26 @@ fn bounded(text: &str, bounds: super::Bounds) -> String {
 }
 
 fn dot() -> String {
-    program(&[("a", "i16", 2), ("b", "i16", 2)], "i32", DOT).replace("br label %l2.back\n\nl2.back:\n  br label %l1", "br label %l1").replace("%l2.back ]", "%l2 ]")
+    program(&[("a", "i16", 2), ("b", "i16", 2)], "i32", DOT)
+        .replace("br label %l2.back\n\nl2.back:\n  br label %l1", "br label %l1")
+        .replace("%l2.back ]", "%l2 ]")
 }
 
-/// gcc leaves a loop of more groups of uses than `iv-max-considered-uses` as it is (it gives up before choosing). Past the
-/// bound lsr rewrote it all the same: 200 uses took 40 G instructions to choose counters for.
+/// gcc leaves a loop of more groups of uses than `iv-max-considered-uses` as it is (it gives up before choosing). Past
+/// the bound lsr rewrote it all the same: 200 uses took 40 G instructions to choose counters for.
 #[test]
 fn test_a_loop_of_more_groups_than_the_bound_is_left_as_it_is() {
     let text = dot();
     let whole = bounded(&text, super::Bounds::NONE);
     assert_ne!(whole, printed(&parsed(&format!("{DOS}{text}"))), "premise: lsr changes this loop");
-    assert_eq!(bounded(&text, super::Bounds { groups: 1, ..super::Bounds::NONE }), printed(&parsed(&format!("{DOS}{text}"))));
+    assert_eq!(
+        bounded(&text, super::Bounds { groups: 1, ..super::Bounds::NONE }),
+        printed(&parsed(&format!("{DOS}{text}")))
+    );
 }
 
-/// Past the candidate bound the search replaces a candidate once, only where no one added or removed lowers the cost, and
-/// never one serving more uses than `iv-always-prune-cand-set-bound`: it priced every swap of every step before.
+/// Past the candidate bound the search replaces a candidate once, only where no one added or removed lowers the cost,
+/// and never one serving more uses than `iv-always-prune-cand-set-bound`: it priced every swap of every step before.
 #[test]
 fn test_past_the_candidate_bound_the_search_prices_fewer_sets() {
     let text = dot();
@@ -2138,19 +2318,27 @@ fn test_past_the_candidate_bound_the_search_prices_fewer_sets() {
     assert!(within < whole, "{within} sets priced of {whole}");
 }
 
-/// Each state of the function lsr looked at had every loop's trip count worked out again for its frequencies, whichever loops the last
-/// change reached: the proofs are the manager's, renewed for the loops a change reached.
+/// Each state of the function lsr looked at had every loop's trip count worked out again for its frequencies, whichever
+/// loops the last change reached: the proofs are the manager's, renewed for the loops a change reached.
 #[test]
 fn test_the_trips_lsr_prices_with_are_proved_once_for_a_loop_no_change_reached() {
     let depth = 4;
-    let mut text = String::from("@a = global [64 x i32] zeroinitializer\n\ndefine i32 @f(i32 %n) {\nb0:\n  br label %h0\n\n");
+    let mut text =
+        String::from("@a = global [64 x i32] zeroinitializer\n\ndefine i32 @f(i32 %n) {\nb0:\n  br label %h0\n\n");
     for k in 0..depth {
-        let (inner, exit) = (if k + 1 == depth { format!("l{k}") } else { format!("h{}", k + 1) }, if k == 0 { "end".to_owned() } else { format!("l{}", k - 1) });
+        let (inner, exit) = (
+            if k + 1 == depth { format!("l{k}") } else { format!("h{}", k + 1) },
+            if k == 0 { "end".to_owned() } else { format!("l{}", k - 1) },
+        );
         let from = if k == 0 { "b0".to_owned() } else { format!("h{}", k - 1) };
-        text += &format!("h{k}:\n  %i{k} = phi i32 [ 0, %{from} ], [ %n{k}, %l{k} ]\n  %s{k} = phi i32 [ 0, %{from} ], [ %t{k}, %l{k} ]\n  %c{k} = icmp slt i32 %i{k}, 8\n  br i1 %c{k}, label %{inner}, label %{exit}\n\n");
+        text += &format!(
+            "h{k}:\n  %i{k} = phi i32 [ 0, %{from} ], [ %n{k}, %l{k} ]\n  %s{k} = phi i32 [ 0, %{from} ], [ %t{k}, %l{k} ]\n  %c{k} = icmp slt i32 %i{k}, 8\n  br i1 %c{k}, label %{inner}, label %{exit}\n\n"
+        );
     }
     for k in (0..depth).rev() {
-        text += &format!("l{k}:\n  %p{k} = getelementptr [64 x i32], ptr @a, i32 0, i32 %i{k}\n  %v{k} = load i32, ptr %p{k}\n  %t{k} = add i32 %s{k}, %v{k}\n  %n{k} = add nsw i32 %i{k}, 1\n  br label %h{k}\n\n");
+        text += &format!(
+            "l{k}:\n  %p{k} = getelementptr [64 x i32], ptr @a, i32 0, i32 %i{k}\n  %v{k} = load i32, ptr %p{k}\n  %t{k} = add i32 %s{k}, %v{k}\n  %n{k} = add nsw i32 %i{k}, 1\n  br label %h{k}\n\n"
+        );
     }
     text += "end:\n  ret i32 0\n}\n";
     let before = llrm_analysis::induction::proved();
@@ -2160,11 +2348,14 @@ fn test_the_trips_lsr_prices_with_are_proved_once_for_a_loop_no_change_reached()
     assert!(proved <= 2 * depth, "{proved} loop counts proved for {depth} loops");
 }
 
-/// `_live_anyway` solved the function's liveness for every loop it planned, when `Pressure`, which the same call holds, has it: a nest of
-/// d loops solved it d times more (16 loops: 1.6 of lsr's 5.8 points on the nest axis). It asks the one it holds.
+/// `_live_anyway` solved the function's liveness for every loop it planned, when `Pressure`, which the same call holds,
+/// has it: a nest of d loops solved it d times more (16 loops: 1.6 of lsr's 5.8 points on the nest axis). It asks the
+/// one it holds.
 #[test]
 fn test_a_loop_is_planned_with_the_liveness_the_pressure_holds() {
-    let text = program(&[("a", "i16", 2), ("b", "i16", 2)], "i32", DOT).replace("br label %l2.back\n\nl2.back:\n  br label %l1", "br label %l1").replace("%l2.back ]", "%l2 ]");
+    let text = program(&[("a", "i16", 2), ("b", "i16", 2)], "i32", DOT)
+        .replace("br label %l2.back\n\nl2.back:\n  br label %l1", "br label %l1")
+        .replace("%l2.back ]", "%l2 ]");
     let before = llrm_analysis::liveness::solves();
     let _ = reduced(&text);
     let solved = llrm_analysis::liveness::solves() - before;

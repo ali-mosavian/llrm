@@ -30,15 +30,26 @@ const CS: Loc = reg(Register::CS, 2);
 const ST0: Loc = Loc::St(St { index: 0 });
 const ST1: Loc = Loc::St(St { index: 1 });
 
-fn mem(addr: Option<Addr>, width: u32) -> Loc {
+fn mem(
+    addr: Option<Addr>,
+    width: u32,
+) -> Loc {
     Loc::Mem(Mem::new(addr, width))
 }
 
-fn imm(value: i64, width: u32) -> Loc {
+fn imm(
+    value: i64,
+    width: u32,
+) -> Loc {
     Loc::Imm(Imm { value, width, address: None })
 }
 
-fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {
+fn semantics(
+    op: Operation,
+    name: &str,
+    dests: Vec<Loc>,
+    sources: Vec<Loc>,
+) -> Semantics {
     shaped(op, name, dests, sources)
 }
 
@@ -123,7 +134,10 @@ fn test_an_immediate_is_reported_as_the_value_it_means() {
 
 #[test]
 fn test_a_dword_immediate_store_carries_both_the_address_and_the_value() {
-    assert_modelled(_semantics("66 C7 06 34 12 78 56 34 12"), semantics(Operation::Move, "mov", vec![mem(Some(STATIC), 4)], vec![imm(0x12345678, 4)]));
+    assert_modelled(
+        _semantics("66 C7 06 34 12 78 56 34 12"),
+        semantics(Operation::Move, "mov", vec![mem(Some(STATIC), 4)], vec![imm(0x12345678, 4)]),
+    );
 }
 
 #[test]
@@ -215,7 +229,10 @@ fn far_bx() -> Addr {
 
 /// `found` is `expected`: the same instruction, its memory operands the same cells (`Semantics::same_meaning`), however
 /// the decoder spelled them.
-fn assert_modelled(found: Semantics, expected: Semantics) {
+fn assert_modelled(
+    found: Semantics,
+    expected: Semantics,
+) {
     assert!(found.same_meaning(&expected), "{found:?} is not {expected:?}");
 }
 
@@ -238,7 +255,10 @@ fn test_a_descriptor_load_into_a_segment_register_is_modelled() {
 #[test]
 fn test_a_redundant_ds_prefix_is_not_an_override_to_record() {
     let literal = Addr::new(Space::Literal, 0);
-    assert_modelled(_semantics("3E 8E 06 00 00"), semantics(Operation::Move, "mov", vec![ES], vec![mem(Some(literal), 2)]));
+    assert_modelled(
+        _semantics("3E 8E 06 00 00"),
+        semantics(Operation::Move, "mov", vec![ES], vec![mem(Some(literal), 2)]),
+    );
 }
 
 #[test]
@@ -371,31 +391,40 @@ fn test_a_segment_register_is_pushed_and_popped_like_any_other() {
 
 #[test]
 fn test_leave_names_both_registers_it_writes_and_the_one_it_reads() {
-    assert_modelled(_semantics("C9"), semantics(
+    assert_modelled(
+        _semantics("C9"),
+        semantics(
             Operation::Leave,
             "leave",
             vec![reg(Register::SP, 2), reg(Register::BP, 2)],
-            vec![reg(Register::BP, 2)]
-        ));
+            vec![reg(Register::BP, 2)],
+        ),
+    );
     assert_eq!(_defs("C9"), BTreeSet::from([Register::EBP, Register::ESP]));
     assert_eq!(_effects("C9").flags_written, Flag::NONE);
 }
 
 #[test]
 fn test_a_rep_fill_writes_a_cell_it_cannot_name_and_reads_its_count() {
-    assert_modelled(_semantics("F3 AB"), semantics(
+    assert_modelled(
+        _semantics("F3 AB"),
+        semantics(
             Operation::Fill,
             "stosw",
             vec![mem(None, 0)],
-            vec![AX, reg(Register::CX, 2), reg(Register::DI, 2), ES]
-        ));
+            vec![AX, reg(Register::CX, 2), reg(Register::DI, 2), ES],
+        ),
+    );
     assert_eq!(_effects("F3 AB").stores, vec![Mem::new(None, 0)]);
     assert_eq!(_effects("F3 AB").loads, vec![]);
 }
 
 #[test]
 fn test_the_widening_multiply_names_both_halves_of_its_product() {
-    assert_modelled(_semantics("F7 E9"), semantics(Operation::Multiply, "imul", vec![AX, DX], vec![AX, reg(Register::CX, 2)]));
+    assert_modelled(
+        _semantics("F7 E9"),
+        semantics(Operation::Multiply, "imul", vec![AX, DX], vec![AX, reg(Register::CX, 2)]),
+    );
     assert_modelled(_semantics("66 F7 E9"), semantics(Operation::Multiply, "imul", vec![EAX, EDX], vec![EAX, ECX]));
     assert_eq!(_defs("F7 E9"), BTreeSet::from([Register::EAX, Register::EDX]));
 }

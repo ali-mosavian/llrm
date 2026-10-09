@@ -8,7 +8,11 @@ use super::protocol::{Hover, Markup, Position};
 use super::resolve::{Target, resolve};
 use super::text;
 
-pub fn hover(documents: &Documents, path: &Path, position: Position) -> Option<Hover> {
+pub fn hover(
+    documents: &Documents,
+    path: &Path,
+    position: Position,
+) -> Option<Hover> {
     let value = match resolve(documents, path, position)? {
         Target::Declaration { module, declaration } => {
             let text = documents.source(path, &module)?;

@@ -16,9 +16,6 @@ pub struct ParseError {
 
 impl From<LexError> for ParseError {
     fn from(error: LexError) -> Self {
-        Self {
-            span: error.span,
-            message: error.message,
-        }
+        Self { span: error.span, message: error.message }
     }
 }

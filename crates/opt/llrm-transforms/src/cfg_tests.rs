@@ -5,7 +5,10 @@ use super::merged;
 use crate::testing::{f, parsed, printed, results};
 
 /// `text` merged, printed, with `inputs` computing what they did before.
-fn merged_text(text: &str, inputs: &[&[i128]]) -> String {
+fn merged_text(
+    text: &str,
+    inputs: &[&[i128]],
+) -> String {
     let mut module = parsed(text);
     let before = results(&module, inputs);
     assert!(merged(f(&mut module)), "merges");

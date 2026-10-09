@@ -27,7 +27,10 @@ enum Part {
 }
 
 impl Region {
-    fn under(&self, other: &Self) -> bool {
+    fn under(
+        &self,
+        other: &Self,
+    ) -> bool {
         self.0.starts_with(&other.0) || other.0.starts_with(&self.0)
     }
 }
@@ -50,7 +53,10 @@ struct Span {
     high: i64,
 }
 
-fn region(space: Space, index: i64) -> (Region, Origin) {
+fn region(
+    space: Space,
+    index: i64,
+) -> (Region, Origin) {
     match space {
         Space::Stack => (Region(vec![Part::Stack]), Origin::Sp),
         Space::Frame => (Region(vec![Part::Stack]), Origin::Bp),
@@ -63,12 +69,23 @@ fn region(space: Space, index: i64) -> (Region, Origin) {
 }
 
 /// The bytes `address` may reach, `width` long; with no address, anything.
-fn spans(address: Option<Addr>, width: u32) -> Option<BTreeSet<Span>> {
+fn spans(
+    address: Option<Addr>,
+    width: u32,
+) -> Option<BTreeSet<Span>> {
     let Some(address) = address else {
-        return Some(BTreeSet::from([Span { region: Region::default(), origin: Origin::Here, low: WHOLE.0, high: WHOLE.1 }]));
+        return Some(BTreeSet::from([Span {
+            region: Region::default(),
+            origin: Origin::Here,
+            low: WHOLE.0,
+            high: WHOLE.1,
+        }]));
     };
     let (region, origin) = region(address.space, address.index);
-    let (low, high) = if address.base != iced_x86::Register::None || region == Region::default() || region == Region(vec![Part::Named]) {
+    let (low, high) = if address.base != iced_x86::Register::None
+        || region == Region::default()
+        || region == Region(vec![Part::Named])
+    {
         WHOLE
     } else {
         (address.disp, address.disp.checked_add(i64::from(width.max(1)))?)
@@ -79,14 +96,20 @@ fn spans(address: Option<Addr>, width: u32) -> Option<BTreeSet<Span>> {
 /// What an address in the root region cannot be: the stack.
 fn holes(address: Option<Addr>) -> BTreeSet<Span> {
     match address {
-        Some(address) if region(address.space, address.index).0 == Region::default() => {
-            BTreeSet::from([Span { region: Region(vec![Part::Stack]), origin: Origin::Sp, low: WHOLE.0, high: WHOLE.1 }])
-        }
+        Some(address) if region(address.space, address.index).0 == Region::default() => BTreeSet::from([Span {
+            region: Region(vec![Part::Stack]),
+            origin: Origin::Sp,
+            low: WHOLE.0,
+            high: WHOLE.1,
+        }]),
         _ => BTreeSet::new(),
     }
 }
 
-fn meets(one: &Span, other: &Span) -> bool {
+fn meets(
+    one: &Span,
+    other: &Span,
+) -> bool {
     if !one.region.under(&other.region) {
         return false;
     }
@@ -97,18 +120,33 @@ fn meets(one: &Span, other: &Span) -> bool {
 }
 
 /// `spans` less those a single hole covers.
-fn surviving<'s>(spans: &'s BTreeSet<Span>, holes: &BTreeSet<Span>) -> Vec<&'s Span> {
+fn surviving<'s>(
+    spans: &'s BTreeSet<Span>,
+    holes: &BTreeSet<Span>,
+) -> Vec<&'s Span> {
     spans
         .iter()
         .filter(|one| {
-            !holes.iter().any(|hole| one.region.0.starts_with(&hole.region.0) && hole.origin == one.origin && hole.low <= one.low && one.high <= hole.high)
+            !holes
+                .iter()
+                .any(
+                    |hole| one.region.0.starts_with(&hole.region.0)
+                        && hole.origin == one.origin
+                        && hole.low <= one.low
+                        && one.high <= hole.high,
+                )
         })
         .collect()
 }
 
 /// Whether the `one_width` bytes at `one` may overlap the `other_width`
 /// bytes at `other`; an end past 2^63 may.
-pub fn may_overlap(one: Option<Addr>, one_width: u32, other: Option<Addr>, other_width: u32) -> bool {
+pub fn may_overlap(
+    one: Option<Addr>,
+    one_width: u32,
+    other: Option<Addr>,
+    other_width: u32,
+) -> bool {
     if let Some(answer) = frame_bytes(one, one_width, other, other_width) {
         return answer;
     }
@@ -117,7 +155,12 @@ pub fn may_overlap(one: Option<Addr>, one_width: u32, other: Option<Addr>, other
 
 /// Two fixed frame cells meet when their byte ranges do: the general answer for them, without the sets built to give it
 /// (a body that copies a large struct asks it of every cell against every store).
-fn frame_bytes(one: Option<Addr>, one_width: u32, other: Option<Addr>, other_width: u32) -> Option<bool> {
+fn frame_bytes(
+    one: Option<Addr>,
+    one_width: u32,
+    other: Option<Addr>,
+    other_width: u32,
+) -> Option<bool> {
     let (one, other) = (one?, other?);
     let fixed = |address: &Addr| address.space == Space::Frame && address.base == iced_x86::Register::None;
     if !fixed(&one) || !fixed(&other) {
@@ -128,7 +171,12 @@ fn frame_bytes(one: Option<Addr>, one_width: u32, other: Option<Addr>, other_wid
     Some(one.disp < other_end && other.disp < one_end)
 }
 
-fn may_overlap_by_sets(one: Option<Addr>, one_width: u32, other: Option<Addr>, other_width: u32) -> bool {
+fn may_overlap_by_sets(
+    one: Option<Addr>,
+    one_width: u32,
+    other: Option<Addr>,
+    other_width: u32,
+) -> bool {
     let (Some(first), Some(second)) = (spans(one, one_width), spans(other, other_width)) else {
         return true;
     };
@@ -163,11 +211,34 @@ mod tests {
     /// both ends of the range.
     #[test]
     fn frame_cells_meet_as_the_general_answer_says() {
-        let edges = [i64::MIN, i64::MIN + 3, -(1 << 31) - 1, -100, -9, -8, -5, -4, -1, 0, 1, 3, 4, 8, 100, (1 << 31) + 1, i64::MAX - 3, i64::MAX];
+        let edges = [
+            i64::MIN,
+            i64::MIN + 3,
+            -(1 << 31) - 1,
+            -100,
+            -9,
+            -8,
+            -5,
+            -4,
+            -1,
+            0,
+            1,
+            3,
+            4,
+            8,
+            100,
+            (1 << 31) + 1,
+            i64::MAX - 3,
+            i64::MAX,
+        ];
         for a in edges {
             for b in edges {
                 for (wa, wb) in [(0, 0), (1, 4), (4, 4), (8, 2), (u32::MAX, 1)] {
-                    assert_eq!(may_overlap(frame(a), wa, frame(b), wb), super::may_overlap_by_sets(frame(a), wa, frame(b), wb), "{a} {wa} {b} {wb}");
+                    assert_eq!(
+                        may_overlap(frame(a), wa, frame(b), wb),
+                        super::may_overlap_by_sets(frame(a), wa, frame(b), wb),
+                        "{a} {wa} {b} {wb}"
+                    );
                 }
             }
         }

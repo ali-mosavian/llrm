@@ -8,7 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::*;
 use crate::model::lir::LirBlock;
 
-fn block(at: i64, succ: &[i64]) -> LirBlock {
+fn block(
+    at: i64,
+    succ: &[i64],
+) -> LirBlock {
     LirBlock { succ: succ.to_vec(), ..LirBlock::new(at, vec![]) }
 }
 
@@ -133,7 +136,10 @@ fn test_a_block_with_one_predecessor_is_never_a_frontier() {
 }
 
 /// The blocks of `graph` the entry reaches without passing through `removed`.
-fn reached(graph: &[LirBlock], removed: Option<i64>) -> BTreeSet<i64> {
+fn reached(
+    graph: &[LirBlock],
+    removed: Option<i64>,
+) -> BTreeSet<i64> {
     let mut seen = BTreeSet::new();
     let mut pending = vec![0];
     while let Some(at) = pending.pop() {
@@ -155,12 +161,23 @@ fn test_dominators_are_what_the_definition_says_on_random_graphs() {
     };
     for _ in 0..300 {
         let size = 1 + next(12) as i64;
-        let graph: Vec<LirBlock> = (0..size).map(|at| block(at, &(0..next(4)).map(|_| next(size as u64) as i64).collect::<Vec<_>>())).collect();
+        let graph: Vec<LirBlock> = (0..size)
+            .map(|at| block(at, &(0..next(4)).map(|_| next(size as u64) as i64).collect::<Vec<_>>()))
+            .collect();
         let found = dominators(&graph, Some(0));
         let reachable = reached(&graph, None);
         for a in 0..size {
-            let want: BTreeSet<i64> = if reachable.contains(&a) { (0..size).filter(|d| !reached(&graph, Some(*d)).contains(&a) || *d == a).collect() } else { BTreeSet::new() };
-            assert_eq!(found[&a], want, "block {a} of {:?}", graph.iter().map(|one| (one.at, one.succ.clone())).collect::<Vec<_>>());
+            let want: BTreeSet<i64> = if reachable.contains(&a) {
+                (0..size).filter(|d| !reached(&graph, Some(*d)).contains(&a) || *d == a).collect()
+            } else {
+                BTreeSet::new()
+            };
+            assert_eq!(
+                found[&a],
+                want,
+                "block {a} of {:?}",
+                graph.iter().map(|one| (one.at, one.succ.clone())).collect::<Vec<_>>()
+            );
         }
     }
 }

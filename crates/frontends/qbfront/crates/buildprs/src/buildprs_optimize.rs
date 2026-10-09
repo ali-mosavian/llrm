@@ -5,7 +5,10 @@ use std::collections::BTreeSet;
 use crate::buildprs_compare::{can_merge_states, find_state};
 use crate::buildprs_graph::{NodeId, StateFlags, StateGraph, StateKind};
 
-pub fn combine_states(graph: &mut StateGraph, state: Option<NodeId>) -> Option<NodeId> {
+pub fn combine_states(
+    graph: &mut StateGraph,
+    state: Option<NodeId>,
+) -> Option<NodeId> {
     let mut seen = BTreeSet::new();
     combine_states_inner(graph, state, &mut seen)
 }
@@ -22,10 +25,7 @@ fn combine_states_inner(
     if graph.node(state).flags.contains(StateFlags::INTEGRATED) {
         return Some(state);
     }
-    if matches!(
-        graph.node(state).kind,
-        StateKind::Accept | StateKind::Reject
-    ) {
+    if matches!(graph.node(state).kind, StateKind::Accept | StateKind::Reject) {
         return Some(state);
     }
     if graph.node(state).kind == StateKind::Branch && graph.node(state).true_link.is_none() {
@@ -36,8 +36,7 @@ fn combine_states_inner(
         return Some(duplicate);
     }
 
-    if !graph.node(state).flags.contains(StateFlags::SKIP)
-        && !graph.node(state).flags.contains(StateFlags::TRUE_SHARED)
+    if !graph.node(state).flags.contains(StateFlags::SKIP) && !graph.node(state).flags.contains(StateFlags::TRUE_SHARED)
     {
         let next = combine_states_inner(graph, graph.node(state).true_link, seen);
         graph.change_true_link(state, next);
@@ -51,7 +50,10 @@ fn combine_states_inner(
     Some(state)
 }
 
-pub fn share_states(graph: &mut StateGraph, root: Option<NodeId>) {
+pub fn share_states(
+    graph: &mut StateGraph,
+    root: Option<NodeId>,
+) {
     let Some(root) = root else {
         return;
     };
@@ -76,10 +78,7 @@ fn share_states_from(
         let child = graph.node(current).true_link;
         if child.is_some() && can_merge_states(graph, 1, child, Some(search_root)) {
             graph.change_true_link(current, Some(search_root));
-            graph
-                .node_mut(current)
-                .flags
-                .insert(StateFlags::TRUE_SHARED);
+            graph.node_mut(current).flags.insert(StateFlags::TRUE_SHARED);
         } else {
             share_states_from(graph, search_root, child, seen);
         }
@@ -89,10 +88,7 @@ fn share_states_from(
         let child = graph.node(current).false_link;
         if child.is_some() && can_merge_states(graph, 1, child, Some(search_root)) {
             graph.change_false_link(current, Some(search_root));
-            graph
-                .node_mut(current)
-                .flags
-                .insert(StateFlags::FALSE_SHARED);
+            graph.node_mut(current).flags.insert(StateFlags::FALSE_SHARED);
         } else {
             share_states_from(graph, search_root, child, seen);
         }
@@ -111,9 +107,8 @@ fn share_states_from(
 
 #[cfg(test)]
 mod tests {
-    use crate::buildprs_graph::StateNode;
-
     use super::*;
+    use crate::buildprs_graph::StateNode;
 
     #[test]
     fn combine_reuses_equivalent_integrated_root() {

@@ -2,7 +2,8 @@
 //! has too, so it can include this with `#[path]`.
 
 /// Condition codes, in iced's spelling, that `{cc}` expands to.
-pub const CONDITIONS: [&str; 16] = ["o", "no", "b", "ae", "e", "ne", "be", "a", "s", "ns", "p", "np", "l", "ge", "le", "g"];
+pub const CONDITIONS: [&str; 16] =
+    ["o", "no", "b", "ae", "e", "ne", "be", "a", "s", "ns", "p", "np", "l", "ge", "le", "g"];
 
 /// One LIR operand of a form: the kinds it may be, and the dest whose
 /// register a tied source is.
@@ -13,7 +14,10 @@ pub struct Operand {
 }
 
 impl Operand {
-    pub fn allows(&self, kind: char) -> bool {
+    pub fn allows(
+        &self,
+        kind: char,
+    ) -> bool {
         self.kinds.contains(kind)
     }
 }
@@ -35,8 +39,9 @@ pub struct Form {
     pub cost: String,
     /// Operands pinned to a register root when they are a register.
     pub fixed: Vec<(Side, usize, String)>,
-    /// Register roots it reads and writes beyond its operands (`push` uses `sp`). `-root` drops an operand register the
-    /// machine does not touch, `@8` only where the narrowest source is a byte: LIR carries DX through a byte `div`, which leaves it alone.
+    /// Register roots it reads and writes beyond its operands (`push` uses `sp`). `-root` drops an operand register
+    /// the machine does not touch, `@8` only where the narrowest source is a byte: LIR carries DX through a byte
+    /// `div`, which leaves it alone.
     pub reads: Vec<String>,
     pub writes: Vec<String>,
     /// iced's Code name, `{w}` still to substitute.
@@ -46,12 +51,19 @@ pub struct Form {
 
 impl Form {
     /// iced's Code name at `bits`, or at the form's first width.
-    pub fn code_name(&self, bits: Option<u32>) -> Option<String> {
+    pub fn code_name(
+        &self,
+        bits: Option<u32>,
+    ) -> Option<String> {
         let bits = bits.or(self.widths.first().copied()).map(|bits| bits.to_string()).unwrap_or_default();
         self.iced.as_ref().map(|template| template.replace("{w}", &bits))
     }
 
-    pub fn operand(&self, side: Side, index: usize) -> Option<&Operand> {
+    pub fn operand(
+        &self,
+        side: Side,
+        index: usize,
+    ) -> Option<&Operand> {
         match side {
             Side::Dest => self.dests.get(index),
             Side::Source => self.sources.get(index),
@@ -61,7 +73,10 @@ impl Form {
 
 const REGISTERS: [&str; 14] = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "es", "ds", "fs", "gs", "ss", "ah"];
 
-fn operands(text: &str, line: usize) -> Result<Vec<Operand>, String> {
+fn operands(
+    text: &str,
+    line: usize,
+) -> Result<Vec<Operand>, String> {
     if text == "-" {
         return Ok(Vec::new());
     }
@@ -79,7 +94,10 @@ fn operands(text: &str, line: usize) -> Result<Vec<Operand>, String> {
         .collect()
 }
 
-fn fixed(text: &str, line: usize) -> Result<Vec<(Side, usize, String)>, String> {
+fn fixed(
+    text: &str,
+    line: usize,
+) -> Result<Vec<(Side, usize, String)>, String> {
     if text == "-" {
         return Ok(Vec::new());
     }
@@ -101,7 +119,10 @@ fn fixed(text: &str, line: usize) -> Result<Vec<(Side, usize, String)>, String> 
         .collect()
 }
 
-fn implicit(text: &str, line: usize) -> Result<Vec<String>, String> {
+fn implicit(
+    text: &str,
+    line: usize,
+) -> Result<Vec<String>, String> {
     if text == "-" {
         return Ok(Vec::new());
     }
@@ -128,7 +149,10 @@ pub fn pinned(text: &str) -> Result<Vec<Form>, String> {
     parse_rows(text, |pinned| pinned != "-")
 }
 
-fn parse_rows(text: &str, keep: impl Fn(&str) -> bool) -> Result<Vec<Form>, String> {
+fn parse_rows(
+    text: &str,
+    keep: impl Fn(&str) -> bool,
+) -> Result<Vec<Form>, String> {
     let mut forms = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let line = index + 1;
@@ -146,7 +170,8 @@ fn parse_rows(text: &str, keep: impl Fn(&str) -> bool) -> Result<Vec<Form>, Stri
         if llrm_lir::Operation::named(operation).is_none() {
             return Err(format!("x86.instr:{line}: no operation `{operation}`"));
         }
-        let (dests, sources) = shape.split_once('/').ok_or_else(|| format!("x86.instr:{line}: shape `{shape}` has no `/`"))?;
+        let (dests, sources) =
+            shape.split_once('/').ok_or_else(|| format!("x86.instr:{line}: shape `{shape}` has no `/`"))?;
         let (dests, sources) = (operands(dests, line)?, operands(sources, line)?);
         if let Some(bad) = sources.iter().filter_map(|one| one.tied).find(|&dest| dest >= dests.len()) {
             return Err(format!("x86.instr:{line}: a source tied to dest {bad}, which it has not"));
@@ -154,14 +179,38 @@ fn parse_rows(text: &str, keep: impl Fn(&str) -> bool) -> Result<Vec<Form>, Stri
         let widths = if widths == "-" {
             Vec::new()
         } else {
-            widths.split(',').map(|bits| bits.parse().ok().filter(|bits| [8, 16, 32].contains(bits)).ok_or_else(|| format!("x86.instr:{line}: width `{bits}`"))).collect::<Result<_, _>>()?
+            widths
+                .split(',')
+                .map(|bits| {
+                    bits.parse()
+                        .ok()
+                        .filter(|bits| [8, 16, 32].contains(bits))
+                        .ok_or_else(|| format!("x86.instr:{line}: width `{bits}`"))
+                })
+                .collect::<Result<_, _>>()?
         };
         let pinned = fixed(pinned, line)?;
         let iced = (iced != "-").then(|| iced.to_owned());
-        let form = Form { name: name.into(), operation: operation.into(), dests, sources, widths, cost: cost.into(), fixed: pinned, reads: implicit(reads, line)?, writes: implicit(writes, line)?, iced, line };
+        let form = Form {
+            name: name.into(),
+            operation: operation.into(),
+            dests,
+            sources,
+            widths,
+            cost: cost.into(),
+            fixed: pinned,
+            reads: implicit(reads, line)?,
+            writes: implicit(writes, line)?,
+            iced,
+            line,
+        };
         if name.contains("{cc}") {
             for condition in CONDITIONS {
-                forms.push(Form { name: name.replace("{cc}", condition), iced: form.iced.as_ref().map(|one| one.replace("{cc}", condition)), ..form.clone() });
+                forms.push(Form {
+                    name: name.replace("{cc}", condition),
+                    iced: form.iced.as_ref().map(|one| one.replace("{cc}", condition)),
+                    ..form.clone()
+                });
             }
         } else {
             forms.push(form);

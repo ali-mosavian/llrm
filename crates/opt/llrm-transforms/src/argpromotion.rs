@@ -14,11 +14,11 @@ use llrm_analysis::pointerfacts::offsets;
 use llrm_mir::callgraph::{CallGraph, direct_calls, direct_only};
 use llrm_mir::context::GlobalId;
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dominators::DominatorTree;
 use llrm_mir::edit::Position;
 use llrm_mir::facts::Facts;
-use llrm_mir::memory;
-use llrm_mir::dominators::DominatorTree;
 use llrm_mir::loops::LoopInfo;
+use llrm_mir::memory;
 use llrm_mir::module::{GlobalKind, InstId, MetadataId, Module, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::target::OperationCosts;
@@ -45,7 +45,12 @@ struct Plan {
 }
 
 /// The promotions of every function of `module` that has them, callees first; the functions changed.
-pub fn promoted(module: &mut Module, layout: &DataLayout, costs: &OperationCosts, size: bool) -> Vec<GlobalId> {
+pub fn promoted(
+    module: &mut Module,
+    layout: &DataLayout,
+    costs: &OperationCosts,
+    size: bool,
+) -> Vec<GlobalId> {
     let only = direct_only(module);
     let llrm_mir::callgraph::DirectCalls { sites, refused } = direct_calls(module);
     let callees = memory::callees(module);
@@ -65,16 +70,31 @@ pub fn promoted(module: &mut Module, layout: &DataLayout, costs: &OperationCosts
     changed.into_iter().collect()
 }
 
-fn words(layout: &DataLayout, module: &Module, ty: TypeId) -> i64 {
+fn words(
+    layout: &DataLayout,
+    module: &Module,
+    ty: TypeId,
+) -> i64 {
     (layout.alloc_size(&module.context.types, ty).max(2) as i64 + 1) / 2
 }
 
 #[allow(clippy::too_many_arguments)]
-fn planned(module: &Module, layout: &DataLayout, callees: &memory::Callees, id: GlobalId, parameter: usize, calls: &[(GlobalId, InstId)], costs: &OperationCosts, size: bool) -> Option<Plan> {
+fn planned(
+    module: &Module,
+    layout: &DataLayout,
+    callees: &memory::Callees,
+    id: GlobalId,
+    parameter: usize,
+    calls: &[(GlobalId, InstId)],
+    costs: &OperationCosts,
+    size: bool,
+) -> Option<Plan> {
     let function = module.global(id).function()?;
     let context = &module.context;
     let value = *function.parameters().get(parameter)?;
-    if !matches!(context.types.get(function.value(value).ty), Type::Pointer(_)) || function.calling_convention == llrm_mir::opcode::X86_INTR {
+    if !matches!(context.types.get(function.value(value).ty), Type::Pointer(_))
+        || function.calling_convention == llrm_mir::opcode::X86_INTR
+    {
         return None;
     }
     let offsets = offsets(context, layout, function);
@@ -95,7 +115,16 @@ fn planned(module: &Module, layout: &DataLayout, callees: &memory::Callees, id: 
                     if base != value || offset < 0 {
                         return None;
                     }
-                    let field = fields.entry(offset).or_insert_with(|| Field { offset, ty: instruction.ty, bytes: layout.alloc_size(&context.types, instruction.ty), loads: Vec::new() });
+                    let field = fields
+                        .entry(offset)
+                        .or_insert_with(
+                            || Field {
+                                offset,
+                                ty: instruction.ty,
+                                bytes: layout.alloc_size(&context.types, instruction.ty),
+                                loads: Vec::new(),
+                            },
+                        );
                     if field.ty != instruction.ty {
                         return None;
                     }
@@ -110,7 +139,11 @@ fn planned(module: &Module, layout: &DataLayout, callees: &memory::Callees, id: 
                     steps.push(one.user);
                     pending.push(result);
                 }
-                Opcode::Call(_) if held == value && one.index as usize == parameter && memory::callee(context, function, one.user) == Some(id) => {
+                Opcode::Call(_)
+                    if held == value
+                        && one.index as usize == parameter
+                        && memory::callee(context, function, one.user) == Some(id) =>
+                {
                     if instruction.operands.iter().filter(|&&operand| operand == Operand::Value(value)).count() != 1 {
                         return None;
                     }
@@ -121,7 +154,10 @@ fn planned(module: &Module, layout: &DataLayout, callees: &memory::Callees, id: 
         }
     }
     let fields: Vec<Field> = fields.into_values().collect();
-    if fields.is_empty() || fields.len() > MOST_FIELDS || fields.windows(2).any(|pair| pair[0].offset + pair[0].bytes as i64 > pair[1].offset) {
+    if fields.is_empty()
+        || fields.len() > MOST_FIELDS
+        || fields.windows(2).any(|pair| pair[0].offset + pair[0].bytes as i64 > pair[1].offset)
+    {
         return None;
     }
     // The callers load before the call what the function loaded after it: where the function loads it
@@ -133,10 +169,17 @@ fn planned(module: &Module, layout: &DataLayout, callees: &memory::Callees, id: 
         .instructions()
         .iter()
         .copied()
-        .take_while(|&inst| !matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)) && !memory::of(context, callees, function, inst).writes)
+        .take_while(|&inst| {
+            !matches!(
+                function.instruction(inst).opcode,
+                Opcode::Call(_) | Opcode::Invoke(_)
+            )
+                && !memory::of(context, callees, function, inst).writes
+        })
         .collect();
     let covered = Facts::of(function.parameter_attrs.get(parameter).map_or(&[][..], |one| &one[..])).dereferenceable();
-    let unwritten = memory::invariant(context, layout, function, Operand::Value(value)) || function.walk().all(|(_, inst)| !memory::of(context, callees, function, inst).writes);
+    let unwritten = memory::invariant(context, layout, function, Operand::Value(value))
+        || function.walk().all(|(_, inst)| !memory::of(context, callees, function, inst).writes);
     for field in &fields {
         let first = field.loads.iter().all(|load| early.contains(load));
         let promised = covered.is_some_and(|bytes| field.offset as u64 + field.bytes <= bytes) && unwritten;
@@ -144,7 +187,10 @@ fn planned(module: &Module, layout: &DataLayout, callees: &memory::Callees, id: 
             return None;
         }
     }
-    let (before, after) = (words(layout, module, function.value(value).ty), fields.iter().map(|one| words(layout, module, one.ty)).sum::<i64>());
+    let (before, after) = (
+        words(layout, module, function.value(value).ty),
+        fields.iter().map(|one| words(layout, module, one.ty)).sum::<i64>(),
+    );
     let extra = (after - before) * costs.argument;
     let loads = fields.len() as i64 * costs.load;
     // What each call comes to: the loads it makes (none where it passes its own on, or where a loop of
@@ -165,7 +211,12 @@ fn planned(module: &Module, layout: &DataLayout, callees: &memory::Callees, id: 
 }
 
 /// Whether call `inst` of `caller` is in a loop its pointer argument at `parameter` does not change in.
-fn hoistable(module: &Module, caller: GlobalId, inst: InstId, parameter: usize) -> bool {
+fn hoistable(
+    module: &Module,
+    caller: GlobalId,
+    inst: InstId,
+    parameter: usize,
+) -> bool {
     let Some(function) = module.global(caller).function() else { return false };
     let Some(block) = function.parent(inst) else { return false };
     let loops = LoopInfo::new(function, &DominatorTree::new(function));
@@ -180,13 +231,19 @@ fn hoistable(module: &Module, caller: GlobalId, inst: InstId, parameter: usize) 
 }
 
 /// `plan` made: the function's parameter replaced, each call's argument too. The functions changed.
-fn applied(module: &mut Module, id: GlobalId, plan: &Plan, calls: &[(GlobalId, InstId)]) -> BTreeSet<GlobalId> {
+fn applied(
+    module: &mut Module,
+    id: GlobalId,
+    plan: &Plan,
+    calls: &[(GlobalId, InstId)],
+) -> BTreeSet<GlobalId> {
     let mut changed = BTreeSet::new();
     let types: Vec<TypeId> = plan.fields.iter().map(|one| one.ty).collect();
     let (ty, first) = {
         let Module { context, globals, .. } = &mut *module;
         let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else { unreachable!("a function") };
-        let first: Vec<Vec<(String, MetadataId)>> = plan.fields.iter().map(|one| function.instruction(one.loads[0]).metadata.clone()).collect();
+        let first: Vec<Vec<(String, MetadataId)>> =
+            plan.fields.iter().map(|one| function.instruction(one.loads[0]).metadata.clone()).collect();
         let made = function.insert_parameters(context, plan.parameter, &types);
         for (field, &held) in plan.fields.iter().zip(&made) {
             for &load in &field.loads {
@@ -224,11 +281,23 @@ fn applied(module: &mut Module, id: GlobalId, plan: &Plan, calls: &[(GlobalId, I
                 pointer
             } else {
                 let offset = Operand::Constant(context.int(index, i128::from(field.offset)));
-                let step = function.create_instruction(Opcode::GetElementPtr { source: bytes }, pointer_ty, vec![pointer, offset], Flags::default(), None);
+                let step = function.create_instruction(
+                    Opcode::GetElementPtr { source: bytes },
+                    pointer_ty,
+                    vec![pointer, offset],
+                    Flags::default(),
+                    None,
+                );
                 function.insert(step, Position::Before(call)).expect("placed");
                 Operand::Value(function.instruction(step).result.expect("an address"))
             };
-            let load = function.create_instruction(Opcode::Load { align: None, volatile: false }, field.ty, vec![at], Flags::default(), None);
+            let load = function.create_instruction(
+                Opcode::Load { align: None, volatile: false },
+                field.ty,
+                vec![at],
+                Flags::default(),
+                None,
+            );
             function.insert(load, Position::Before(call)).expect("placed");
             for (kind, node) in metadata {
                 function.annotate(load, kind, *node);
@@ -240,4 +309,3 @@ fn applied(module: &mut Module, id: GlobalId, plan: &Plan, calls: &[(GlobalId, I
     }
     changed
 }
-

@@ -5,7 +5,10 @@ use super::sunk;
 use crate::testing::{f, parsed, printed, results};
 
 /// A post-tested loop whose `%last = LAST` the exit reads.
-fn looped(last: &str, more: &str) -> String {
+fn looped(
+    last: &str,
+    more: &str,
+) -> String {
     format!(
         "define i16 @f(i16 %n, i16 %x) {{
 b0:
@@ -41,7 +44,10 @@ fn run(text: &str) -> (String, bool) {
 fn test_final_update_moves_to_the_exit() {
     let (after, changed) = run(&looped("add i16 %i, 40", "%i.next"));
     assert!(changed);
-    assert!(after.ends_with("b2:\n  %i.lcssa = phi i16 [ %i, %b1 ]\n  %0 = add i16 %i.lcssa, 40\n  ret i16 %0\n}\n"), "{after}");
+    assert!(
+        after.ends_with("b2:\n  %i.lcssa = phi i16 [ %i, %b1 ]\n  %0 = add i16 %i.lcssa, 40\n  ret i16 %0\n}\n"),
+        "{after}"
+    );
 }
 
 /// An invariant operand is read where it is; only the loop's own goes

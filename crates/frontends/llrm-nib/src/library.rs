@@ -55,8 +55,12 @@ const OPERATIONS: [Operation; 3] = [
 
 /// `Hashable` for `module`'s own structs and enums, as their fields' methods
 /// combine; a type that defines its own keeps it.
-pub fn derived(module: &Module, near_bytes: u32) -> Result<Vec<Function>, Diagnostic> {
-    let defines = |type_: &str, method: &str| module.functions.iter().any(|one| one.name == format!("{type_}.{method}"));
+pub fn derived(
+    module: &Module,
+    near_bytes: u32,
+) -> Result<Vec<Function>, Diagnostic> {
+    let defines =
+        |type_: &str, method: &str| module.functions.iter().any(|one| one.name == format!("{type_}.{method}"));
     let mut functions = Vec::new();
     for one in module.structs.iter().filter(|one| one.generics.is_empty() && one.bits.is_none()) {
         let mut out = String::new();
@@ -68,7 +72,8 @@ pub fn derived(module: &Module, near_bytes: u32) -> Result<Vec<Function>, Diagno
             out.push_str("    return hash\n\n");
         }
         if !defines(&one.name, "eq") {
-            let fields: Vec<String> = one.fields.iter().map(|field| format!("self.{0}.eq(other.{0})", field.name)).collect();
+            let fields: Vec<String> =
+                one.fields.iter().map(|field| format!("self.{0}.eq(other.{0})", field.name)).collect();
             let all = if fields.is_empty() { "true".to_owned() } else { fields.join(" && ") };
             out.push_str(&format!("fn SELF.eq(self: &SELF, other: &SELF) -> bool:\n    return {all}\n\n"));
         }
@@ -101,7 +106,8 @@ pub fn derived(module: &Module, near_bytes: u32) -> Result<Vec<Function>, Diagno
                 for variant in &one.variants {
                     let (left, lefts) = variant_pattern(variant, "left");
                     let (right, rights) = variant_pattern(variant, "right");
-                    let fields: Vec<String> = lefts.iter().zip(&rights).map(|(left, right)| format!("{left}.eq({right})")).collect();
+                    let fields: Vec<String> =
+                        lefts.iter().zip(&rights).map(|(left, right)| format!("{left}.eq({right})")).collect();
                     let all = if fields.is_empty() { "true".to_owned() } else { fields.join(" && ") };
                     out.push_str(&format!(
                         "        {left}:\n            match other:\n                {right}:\n                    return {all}\n                _:\n                    return false\n"
@@ -116,15 +122,26 @@ pub fn derived(module: &Module, near_bytes: u32) -> Result<Vec<Function>, Diagno
 }
 
 /// `.name(prefix0, prefix1, ...)`, and the names it binds its payload to.
-fn variant_pattern(variant: &Variant, prefix: &str) -> (String, Vec<String>) {
+fn variant_pattern(
+    variant: &Variant,
+    prefix: &str,
+) -> (String, Vec<String>) {
     let names: Vec<String> = (0..variant.fields.len()).map(|index| format!("{prefix}{index}")).collect();
-    let pattern = if names.is_empty() { format!(".{}", variant.name) } else { format!(".{}({})", variant.name, names.join(", ")) };
+    let pattern = if names.is_empty() {
+        format!(".{}", variant.name)
+    } else {
+        format!(".{}({})", variant.name, names.join(", "))
+    };
     (pattern, names)
 }
 
 /// `source`'s methods of `SELF`, made methods of `type_`: a module's type
 /// is named with dots the parser would not take.
-fn for_type(source: &str, type_: &str, near_bytes: u32) -> Result<Vec<Function>, Diagnostic> {
+fn for_type(
+    source: &str,
+    type_: &str,
+    near_bytes: u32,
+) -> Result<Vec<Function>, Diagnostic> {
     let mut module = crate::parser::parse_for(lex(source)?, near_bytes)?;
     desugar(&mut module)?;
     let renamed = |annotation: &mut TypeAnnotation| {
@@ -136,7 +153,9 @@ fn for_type(source: &str, type_: &str, near_bytes: u32) -> Result<Vec<Function>,
         function.name = function.name.replacen("SELF", type_, 1);
         for parameter in &mut function.parameters {
             match &mut parameter.type_ {
-                ParameterType::Owned(annotation) | ParameterType::Borrowed { target: annotation, .. } => renamed(annotation),
+                ParameterType::Owned(annotation) | ParameterType::Borrowed { target: annotation, .. } => {
+                    renamed(annotation)
+                }
             }
         }
     }
@@ -188,7 +207,11 @@ fn source() -> String {
                 kept.push(format!("self >= {min}{}", point(type_)));
             }
             if (max as f64) < high {
-                kept.push(if type_.starts_with('f') { format!("self < {}.0", max + 1) } else { format!("self <= {max}") });
+                kept.push(if type_.starts_with('f') {
+                    format!("self < {}.0", max + 1)
+                } else {
+                    format!("self <= {max}")
+                });
             }
             let kept = if kept.is_empty() { "true".to_owned() } else { kept.join(" && ") };
             out.push_str(&format!(
@@ -225,9 +248,7 @@ fn protocols() -> String {
             let hashed = if wide(type_) { "usize(self ^ (self >> 16))" } else { "usize(self)" };
             out.push_str(&format!("fn {type_}.hash(self: {type_}) -> usize:\n    return {hashed}\n\n"));
         }
-        out.push_str(&format!(
-            "fn {type_}.eq(self: {type_}, other: {type_}) -> bool:\n    return self == other\n\n"
-        ));
+        out.push_str(&format!("fn {type_}.eq(self: {type_}, other: {type_}) -> bool:\n    return self == other\n\n"));
         if type_ != "bool" {
             out.push_str(&format!(
                 "fn {type_}.cmp(self: {type_}, other: {type_}) -> i8:\n    return self < other ? -1 : self > other ? 1 : 0\n\n"
@@ -257,7 +278,10 @@ pub fn entry(module: &mut Module) -> Result<(), Diagnostic> {
     let Some(main) = module.functions.iter_mut().find(|one| one.name == "main") else {
         return Ok(());
     };
-    if !matches!(&main.result, TypeAnnotation::Value(TypeSpec::Applied { name, .. }) if name == "Result") {
+    if !matches!(
+        &main.result,
+        TypeAnnotation::Value(TypeSpec::Applied { name, .. }) if name == "Result"
+    ) {
         return Ok(());
     }
     main.name = "$main".to_owned();

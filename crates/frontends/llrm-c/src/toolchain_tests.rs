@@ -10,7 +10,10 @@ fn root() -> PathBuf {
 }
 
 /// `body` under `sh` with `cached` defined, in `directory`.
-fn sh(directory: &Path, body: &str) -> std::process::Child {
+fn sh(
+    directory: &Path,
+    body: &str,
+) -> std::process::Child {
     let script = format!(". {}/toolchain/cache.sh\n{body}", root().display());
     Command::new("sh").arg("-c").arg(script).current_dir(directory).spawn().expect("sh starts")
 }
@@ -104,8 +107,9 @@ fn test_stamp_names_its_cpu() {
     assert_ne!(i86, flat);
 }
 
-/// The front end's sizes (a near pointer, a far one, `int`) were `LLRM_FLAT ? 4 : 2` in cgshim.c, a copy of the data layout
-/// and the C ABI beside the descriptions: build.rs now passes what each target's description says, and the stamp covers it.
+/// The front end's sizes (a near pointer, a far one, `int`) were `LLRM_FLAT ? 4 : 2` in cgshim.c, a copy of the data
+/// layout and the C ABI beside the descriptions: build.rs now passes what each target's description says, and the stamp
+/// covers it.
 #[test]
 fn test_the_front_ends_sizes_are_the_descriptions_not_cgshims() {
     let shim = std::fs::read_to_string(root().join("toolchain/owshim/cgshim.c")).unwrap();
@@ -113,5 +117,8 @@ fn test_the_front_ends_sizes_are_the_descriptions_not_cgshims() {
         assert!(!shim.contains(width), "cgshim.c states a size of its own: {width}");
     }
     let hash = std::fs::read_to_string(root().join("toolchain/owshim/hash.sh")).unwrap();
-    assert!(hash.contains("runtime/c/*/c.toml") && hash.contains("datalayout.toml"), "the stamp does not cover the descriptions");
+    assert!(
+        hash.contains("runtime/c/*/c.toml") && hash.contains("datalayout.toml"),
+        "the stamp does not cover the descriptions"
+    );
 }
