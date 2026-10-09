@@ -31,26 +31,30 @@ pub struct Reg {
     pub width: u32,
 }
 
+/// The eight x87 registers, top first.
+fn x87_stack() -> &'static [iced_x86::Register; 8] {
+    static STACK: std::sync::OnceLock<[iced_x86::Register; 8]> = std::sync::OnceLock::new();
+    STACK.get_or_init(|| {
+        let mut found = iced_x86::Register::values().filter(|one| one.is_st());
+        std::array::from_fn(|_| found.next().expect("eight x87 registers"))
+    })
+}
+
 impl Reg {
     /// The x87 register `st(index)`, relative to the current top. A float is
-    /// ten bytes there.
-    pub const fn st(index: u32) -> Self {
-        let register = [
-            iced_x86::Register::ST0,
-            iced_x86::Register::ST1,
-            iced_x86::Register::ST2,
-            iced_x86::Register::ST3,
-            iced_x86::Register::ST4,
-            iced_x86::Register::ST5,
-            iced_x86::Register::ST6,
-            iced_x86::Register::ST7,
-        ][index as usize];
+    /// ten bytes there. The stack is eight deep: a deeper position names no
+    /// register, and nothing encodes it.
+    pub fn st(index: u32) -> Self {
+        let register = x87_stack().get(index as usize).copied().unwrap_or_default();
         Self { register, width: 10 }
     }
 
     /// Its position, where it is an x87 register.
     pub fn st_index(&self) -> Option<u32> {
-        self.register.is_st().then(|| self.register as u32 - iced_x86::Register::ST0 as u32)
+        if !self.register.is_st() {
+            return None;
+        }
+        x87_stack().iter().position(|one| *one == self.register).map(|index| index as u32)
     }
 }
 
@@ -231,7 +235,7 @@ pub enum Loc {
 
 impl Loc {
     /// The x87 register `st(index)`.
-    pub const fn st(index: u32) -> Self {
+    pub fn st(index: u32) -> Self {
         Loc::Reg(Reg::st(index))
     }
 

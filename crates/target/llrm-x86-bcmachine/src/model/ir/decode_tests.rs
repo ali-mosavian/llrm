@@ -251,7 +251,11 @@ fn test_semantics_never_claims_a_register_or_cell_the_effects_do_not() {
                     continue;
                 }
                 for where_ in &semantics.dests {
-                    if let (Loc::Reg(one), Some(defs)) = (where_, &effects.defs) {
+                    // The x87 stack is `fp_stack`, not a register the sets
+                    // list.
+                    if let (Loc::Reg(one), Some(defs)) = (where_, &effects.defs)
+                        && one.st_index().is_none()
+                    {
                         assert!(defs.contains(&root(one.register)), "{semantics:?}");
                     }
                     if let Loc::Mem(one) = where_ {
@@ -259,7 +263,9 @@ fn test_semantics_never_claims_a_register_or_cell_the_effects_do_not() {
                     }
                 }
                 for where_ in &semantics.sources {
-                    if let (Loc::Reg(one), Some(uses)) = (where_, &effects.uses) {
+                    if let (Loc::Reg(one), Some(uses)) = (where_, &effects.uses)
+                        && one.st_index().is_none()
+                    {
                         assert!(uses.contains(&root(one.register)), "{semantics:?}");
                     }
                     if let Loc::Mem(one) = where_ {
