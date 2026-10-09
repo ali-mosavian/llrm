@@ -843,7 +843,7 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
             if !Facts::of(attrs).no_capture() {
                 attrs.extend(Fact::NoCapture.attribute());
             }
-            let through = |slices: &BTreeSet<Slice>| slices.iter().any(|one| one.object.kind == MemoryKind::Parameter && one.object.identity == identity);
+            let through = |slices: &BTreeSet<Slice>| slices.iter().any(|one| one.object.kind == MemoryKind::Parameter && one.object.key == llrm_analysis::memory::Key::Int(index as i64));
             let (reads, writes) = (through(&summary.reads) || summary.unknown_read, through(&summary.writes) || summary.unknown_write);
             let access = match (reads, writes) {
                 (false, false) => Some(Fact::ReadNone),

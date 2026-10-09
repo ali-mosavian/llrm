@@ -3817,6 +3817,20 @@ fn test_the_spiller_route_is_run_only_where_the_allocator_left_frame_traffic() {
     assert!(directed < all, "{directed} routes against {all}");
 }
 
+/// Each route through the machine phases selected the function's instructions again, though the selector's output is the same
+/// for all of them: the routes of one function share one selection (4-5% of a file's compile time on the files the probe ran
+/// twice).
+#[test]
+fn test_the_routes_of_a_function_share_one_selection() {
+    let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/matmul.ll")).unwrap();
+    let profile = crate::backend::cpu::tuned("486", true).expect("the 486 profile");
+    let (routes, selections, machinings) = (assemble::routes(), assemble::selections(), assemble::machinings());
+    assemble::assembled(&parsed(&text), &qb(), "T_TEXT", ProfileOrName::Profile(profile), &crate::backend::target::BASIC).expect("assembles");
+    let (routes, selections, machinings) = (assemble::routes() - routes, assemble::selections() - selections, assemble::machinings() - machinings);
+    assert!(routes > machinings, "premise: some function ran more than one route ({routes} routes for {machinings} functions)");
+    assert_eq!(selections, machinings, "{selections} selections for {machinings} functions and {routes} routes");
+}
+
 /// A memcpy past the unrolled moves is `rep movsd` through es:di, the source
 /// read through ss as an override and the tail by `movsw`: a refusal failed
 /// every program with a copy that long.
