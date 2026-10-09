@@ -2,6 +2,9 @@
 //! it adds to `instructions::FAMILY`.
 
 pub mod effects;
+/// `x86.instr`'s reader. Dependency-free but `llrm-lir`, so a build script can
+/// include it with `#[path]`.
+pub mod parse;
 pub mod select;
 
 /// A calling convention's registers as the x86 family names them: the

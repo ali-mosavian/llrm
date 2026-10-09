@@ -5,9 +5,7 @@ use std::sync::LazyLock;
 
 use iced_x86::{Code, Instruction};
 use llrm_support::hash::HashMap;
-
-pub mod parse;
-
+pub use llrm_x86::parse;
 pub use parse::{CONDITIONS, Form, Operand, Side};
 
 /// The forms real mode adds to the family's.
