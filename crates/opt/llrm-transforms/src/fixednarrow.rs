@@ -29,6 +29,10 @@ impl FunctionPass for FixedNarrow {
         "fixednarrow"
     }
 
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
     fn run(
         &mut self,
         unit: &mut passes::Unit,

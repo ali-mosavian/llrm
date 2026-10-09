@@ -65,7 +65,7 @@ impl ControlFlow<'_> {
         &self,
         body: &LirBody,
     ) -> Result<LirBody, masm::Unprintable> {
-        let placed = optimized(body, self.cpu.size)?;
+        let placed = optimized(body, self.cpu)?;
         if crate::support::debug::enabled("blocks") {
             let frequency = crate::analysis::frequency::Frequency::of(&placed);
             for block in &placed.blocks {
@@ -86,8 +86,10 @@ impl ControlFlow<'_> {
 /// Choose the cheapest common-tail fixed point without adding hot work.
 pub fn optimized(
     body: &LirBody,
-    size: bool,
+    cpu: &cpu::Profile,
 ) -> Result<LirBody, masm::Unprintable> {
+    let size = cpu.size;
+    let price = Branches::of(cpu);
     let mut candidate = _placed(&_hoisted(body), size)?;
     let baseline = threaded(&candidate);
     let settled = candidate.clone();
@@ -107,7 +109,7 @@ pub fn optimized(
     // Merging nothing leaves the candidate the baseline was threaded from.
     let again = if candidate == settled { baseline.clone() } else { threaded(&candidate) };
     let placed = preferred(&baseline, &again).clone();
-    Ok(inverted(&if size { placed } else { rotated(&duplicated(&duplicated_tails(&placed), true))? }))
+    Ok(inverted(&if size { placed } else { rotated(&duplicated(&duplicated_tails(&placed), true), &price)? }))
 }
 
 /// A conditional branch taken to the block laid out next, followed by a jump:
@@ -404,15 +406,24 @@ fn _explicit(body: &LirBody) -> Result<Vec<LirBlock>, masm::Unprintable> {
     Ok(explicit)
 }
 
-/// What a rotated loop's jumps must come to, of the loop's own: the estimates
-/// do not conserve flow, and two layouts that take the same jumps differ by a
-/// few percent (a loop without a diamond in it: sieve's marking loop took one
-/// more instruction a pass).
-const ROTATION_GAIN: f64 = 0.7;
+/// What the target charges for the ways a block can leave, in clocks.
+pub struct Branches {
+    /// A `jmp`.
+    jump: f64,
+    /// A `jcc` that is taken.
+    taken: f64,
+    /// A `jcc` that falls through.
+    not_taken: f64,
+}
 
-/// How many times a loop goes round per entry for a turn to pay: the jump into
-/// it is one more instruction a time.
-const ROTATION_TRIPS: f64 = 8.0;
+impl Branches {
+    /// The prices on `cpu`; a CPU that states none leaves its loops as they
+    /// are.
+    fn of(cpu: &cpu::Profile) -> Self {
+        let clocks = |form: &str| cpu.cost(form).map_or(f64::NAN, |one| one as f64);
+        Self { jump: clocks("jmp_short"), taken: clocks("jcc"), not_taken: clocks("jcc_not_taken") }
+    }
+}
 
 /// The longest run of blocks tried at each turn.
 const ROTATION_BLOCKS: usize = 24;
@@ -423,8 +434,11 @@ const ROTATION_BLOCKS: usize = 24;
 /// a loop whose body is a diamond took two jumps, one into an arm or over it
 /// and one back to the header; it takes one. Counted by the edges that are not
 /// to the next block, each as often as the estimate runs it.
-fn rotated(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
-    if body.source_order {
+fn rotated(
+    body: &LirBody,
+    price: &Branches,
+) -> Result<LirBody, masm::Unprintable> {
+    if body.source_order || [price.jump, price.taken, price.not_taken].iter().any(|one| one.is_nan()) {
         return Ok(body.clone());
     }
     let mut order = body.blocks.clone();
@@ -445,7 +459,7 @@ fn rotated(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
     if latest.is_empty() {
         return Ok(body.clone());
     }
-    let mut entered: Option<IndexMap<i64, Vec<usize>>> = None;
+    let mut entered: Option<IndexMap<i64, Vec<i64>>> = None;
     // Of the body as it is laid out: the copies of tails made its entries.
     let mut estimate: Option<Arc<Frequency>> = None;
     let mut changed = false;
@@ -462,17 +476,20 @@ fn rotated(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
             continue;
         }
         let from = entered.get_or_insert_with(|| {
-            let mut from: IndexMap<i64, Vec<usize>> = IndexMap::default();
-            for (index, block) in order.iter().enumerate() {
+            let mut from: IndexMap<i64, Vec<i64>> = IndexMap::default();
+            for block in &order {
                 for to in &block.succ {
-                    from.entry(*to).or_default().push(index);
+                    from.entry(*to).or_default().push(block.at);
                 }
             }
             from
         });
-        if order[start..end].iter().skip(1).any(|block| {
-            from.get(&block.at).is_some_and(|from| from.iter().any(|&index| index < start || index >= end))
-        }) {
+        let outside = |at: &i64| position.get(at).is_none_or(|&index| index < start || index >= end);
+        if order[start..end]
+            .iter()
+            .skip(1)
+            .any(|block| from.get(&block.at).is_some_and(|from| from.iter().any(outside)))
+        {
             continue;
         }
         let frequency = estimate.get_or_insert_with(|| Frequency::of(body));
@@ -490,53 +507,73 @@ fn rotated(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
                     .and_then(|one| one.what.as_ref())
                     .is_some_and(|what| what.op == Operation::Jump && what.target == Some(to))
         };
-        let jumps = |run: &[LirBlock], before: Option<&LirBlock>, after: Option<i64>| -> f64 {
+        let clocks = |run: &[LirBlock], before: Option<&LirBlock>, after: Option<i64>| -> f64 {
             let sequence: Vec<&LirBlock> = before.into_iter().chain(run.iter()).collect();
             let mut total = 0.0;
             for (index, block) in sequence.iter().enumerate() {
                 let next = sequence.get(index + 1).map(|one| one.at).or(after);
-                let away: Vec<f64> = block
-                    .succ
+                let succ: Vec<i64> = block.succ.iter().copied().collect::<BTreeSet<_>>().into_iter().collect();
+                let went = |to: i64| frequency.edge(block.at, to);
+                let simple = _real(block)
                     .iter()
-                    .copied()
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .filter(|to| Some(*to) != next || !falls_into(block, *to))
-                    .map(|to| frequency.edge(block.at, to))
-                    .collect();
-                total += away.iter().sum::<f64>();
-                // Both ways of a branch lead elsewhere: one is a `jcc`, the
-                // other a `jmp` of its own, the colder.
-                if let [one, other] = away[..] {
-                    total += one.min(other);
-                }
+                    .filter(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Branch))
+                    .count()
+                    <= 1;
+                total += match succ[..] {
+                    [] => 0.0,
+                    [only] if Some(only) == next => 0.0,
+                    [only] => went(only) * price.jump,
+                    // One way is the `jcc`; the other falls through when it is
+                    // next, else follows a `jmp` of its own, the colder.
+                    [one, other] if simple => {
+                        let by = |taken: i64, kept: i64| {
+                            went(taken) * price.taken
+                                + went(kept) * (price.not_taken + if Some(kept) == next { 0.0 } else { price.jump })
+                        };
+                        match next {
+                            Some(next) if next == one => by(other, one),
+                            Some(next) if next == other => by(one, other),
+                            _ => by(one, other).min(by(other, one)),
+                        }
+                    }
+                    _ => succ
+                        .iter()
+                        .map(|&to| if Some(to) == next && falls_into(block, to) { 0.0 } else { went(to) * price.taken })
+                        .sum(),
+                };
             }
             total
         };
         let before = start.checked_sub(1).map(|index| &order[index]);
         let after = order.get(end).map(|block| block.at);
         let run = &order[start..end];
-        // Entering costs a jump the loop must pay back: it goes round at least
-        // `ROTATION_TRIPS` times a time.
-        let header = run[0].at;
-        let back: f64 = run.iter().map(|block| frequency.edge(block.at, header)).sum();
-        let entries: f64 = order
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| *index < start || *index >= end)
-            .map(|(_, block)| frequency.edge(block.at, header))
-            .sum();
-        if back < entries * ROTATION_TRIPS {
-            continue;
-        }
-        let current = jumps(run, before, after);
+        let current = clocks(run, before, after);
         let best = (1..run.len())
             .map(|at| {
                 let turned: Vec<LirBlock> = run[at..].iter().chain(&run[..at]).cloned().collect();
-                (jumps(&turned, before, after), at)
+                (clocks(&turned, before, after), at)
             })
             .min_by(|one, other| one.0.total_cmp(&other.0));
-        if let Some((_, at)) = best.filter(|(cost, _)| *cost < current * ROTATION_GAIN) {
+        // The estimate does not conserve flow: what a block is said to receive
+        // is not what it is said to send. A gain smaller than that is the
+        // estimate's own error, not a gain.
+        let noise: f64 = run
+            .iter()
+            .map(|block| {
+                let received: f64 =
+                    from.get(&block.at).map_or(0.0, |from| from.iter().map(|&at| frequency.edge(at, block.at)).sum());
+                let sent: f64 = block
+                    .succ
+                    .iter()
+                    .copied()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .map(|to| frequency.edge(block.at, to))
+                    .sum();
+                (received - sent).abs() * price.taken
+            })
+            .sum();
+        if let Some((_, at)) = best.filter(|(cost, _)| current - *cost > noise) {
             let turned: Vec<LirBlock> = run[at..].iter().chain(&run[..at]).cloned().collect();
             order.splice(start..end, turned);
             for (index, block) in order.iter().enumerate().take(end).skip(start) {

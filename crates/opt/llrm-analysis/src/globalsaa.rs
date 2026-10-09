@@ -50,6 +50,20 @@ pub struct Globals {
 }
 
 impl Globals {
+    /// Whether `self`, held past passes that add no memory operation, claims no
+    /// more than `fresh` does: a global it takes to be reached by name only
+    /// is still so, and the rest of what it states is as it was.
+    pub fn covers(
+        &self,
+        fresh: &Globals,
+    ) -> bool {
+        self.tracked.is_subset(&fresh.tracked)
+            && self.named == fresh.named
+            && self.writes == fresh.writes
+            && self.bodies == fresh.bodies
+            && self.entries == fresh.entries
+    }
+
     pub fn tracked(
         &self,
         global: GlobalId,

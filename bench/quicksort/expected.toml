@@ -1,10 +1,10 @@
-reason = "rotation prices a latch with a second branch as the jump it is: quicksort bas no longer turns a loop for one jmp an entry (-2.0% instructions)"
+reason = "rotation priced in clocks (jmp, jcc taken, not taken from the CPU): x_adler -12.1% clocks, x_bubble -3.0%, quicksort -2.0%; one jmp more per entry: quicksort +3.3% instructions, matmul +0.1%, grep +8 bytes"
 blessed = "2026-10-09"
 
 [bas.O2]
-instructions = 224965
+instructions = 229608
 memory_operands = 113692
-code_bytes = 556
+code_bytes = 560
 data_bytes = 17
 bss_bytes = 0
 
@@ -16,9 +16,9 @@ data_bytes = 17
 bss_bytes = 0
 
 [c.O2]
-instructions = 159353
+instructions = 164677
 memory_operands = 57516
-code_bytes = 296
+code_bytes = 300
 data_bytes = 0
 bss_bytes = 0
 
@@ -30,9 +30,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 159525
+instructions = 164849
 memory_operands = 59388
-code_bytes = 411
+code_bytes = 415
 data_bytes = 0
 bss_bytes = 0
 

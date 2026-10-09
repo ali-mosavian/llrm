@@ -156,6 +156,7 @@ pub fn checked(
     phase: &mut dyn LIRTransform,
     in_ssa: bool,
     classes: &crate::backend::classes::RegisterClasses,
+    segments: &Segments,
 ) -> Result<LirBody, Checked> {
     let stage = if phase.name().is_empty() { phase.class_name().to_owned() } else { phase.name().to_owned() };
     // The invariance instrument, LLVM's `-g` rule: stripped of meta
@@ -189,7 +190,7 @@ pub fn checked(
     {
         let found = crate::backend::regclass::violations(
             &body,
-            &crate::backend::target::BUILT_IN,
+            segments,
             classes,
             &crate::backend::ssaspill::untouchable(&body),
         );
@@ -331,9 +332,13 @@ mod tests {
             ],
         );
         let body = LirBody::new("bytes", 1, vec![block], IndexMap::default(), IndexMap::default());
-        let Err(Checked::Malformed(Malformed(said))) =
-            checked(body, &mut DropsBytes, false, &crate::backend::classes::RegisterClasses::m16())
-        else {
+        let Err(Checked::Malformed(Malformed(said))) = checked(
+            body,
+            &mut DropsBytes,
+            false,
+            &crate::backend::classes::RegisterClasses::m16(),
+            &crate::backend::target::BUILT_IN,
+        ) else {
             panic!("the gate let three source bytes go");
         };
         assert_eq!(said, "DropsBytes: lost source bytes [0x1 0x2 0x3], gained []");
@@ -356,9 +361,13 @@ mod tests {
             IndexMap::default(),
         );
         body.inputs = BTreeSet::from([1]);
-        let Err(Checked::Malformed(Malformed(said))) =
-            checked(body, &mut LosesDefinition, false, &crate::backend::classes::RegisterClasses::m16())
-        else {
+        let Err(Checked::Malformed(Malformed(said))) = checked(
+            body,
+            &mut LosesDefinition,
+            false,
+            &crate::backend::classes::RegisterClasses::m16(),
+            &crate::backend::target::BUILT_IN,
+        ) else {
             panic!("the gate let a lost definition through");
         };
         assert!(said.starts_with("loses-definition: value#99 is read"), "{said}");

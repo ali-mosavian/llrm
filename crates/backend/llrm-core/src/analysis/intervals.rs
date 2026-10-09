@@ -1138,6 +1138,16 @@ pub fn _merged(mut runs: Vec<Segment>) -> Vec<Segment> {
 
 /// How deeply each block is nested in loops.
 pub fn depths(body: &LirBody) -> IndexMap<i64, u32> {
+    (*depths_shared(body)).clone()
+}
+
+/// `depths`, the manager's answer itself: for a caller that only reads it.
+pub fn depths_shared(body: &LirBody) -> Arc<IndexMap<i64, u32>> {
+    body.facts.0.get::<crate::analysis::graph::LoopDepths>(body)
+}
+
+/// `depths`, worked out from the body whatever the manager holds.
+pub fn depths_afresh(body: &LirBody) -> IndexMap<i64, u32> {
     depths_in(body, &loopy::loops(&body.blocks, Some(body.entry)))
 }
 
