@@ -53,22 +53,28 @@ def count(command: list[str]) -> int:
     return got
 
 
-def ratio(axis: str, level: str, work: Path, command=levels_time.command, compiler: str = "llrm") -> float:
-    """(cost at 2N - empty) / (cost at N - empty) for one axis and level."""
+def costs(axis: str, level: str, work: Path, command=levels_time.command, compiler: str = "llrm") -> tuple[int, int]:
+    """(cost at N, cost at 2N), each less the empty file's, for one axis and level."""
     n = SIZES[axis]
     cost = {}
     for label, text in (("empty", ""), (n, scaling.AXES[axis](n)), (2 * n, scaling.AXES[axis](2 * n))):
         source = work / f"{axis}_{level}_{label}.c"
         source.write_text(text)
         cost[label] = count(command(compiler, level, source))
-    return (cost[2 * n] - cost["empty"]) / (cost[n] - cost["empty"])
+    return cost[n] - cost["empty"], cost[2 * n] - cost["empty"]
 
 
-def measure(jobs: int, axes=tuple(SIZES), levels=LEVELS) -> dict[str, float]:
+def ratio(axis: str, level: str, work: Path, command=levels_time.command, compiler: str = "llrm") -> float:
+    """cost at 2N over cost at N, for one axis and level."""
+    small, big = costs(axis, level, work, command, compiler)
+    return big / small
+
+
+def measure(jobs: int, axes=tuple(SIZES), levels=LEVELS) -> dict[str, tuple[int, int]]:
     with tempfile.TemporaryDirectory(dir=scaling.os.environ.get("CARGO_TARGET_DIR")) as tmp:
         todo = [(a, l) for a in axes for l in levels]
         with ThreadPoolExecutor(jobs) as pool:
-            return dict(zip((f"{a} {l}" for a, l in todo), pool.map(lambda t: ratio(*t, Path(tmp)), todo)))
+            return dict(zip((f"{a} {l}" for a, l in todo), pool.map(lambda t: costs(*t, Path(tmp)), todo)))
 
 
 INSTR = re.compile(r"^\[instr\]\s+([\d.]+) (Minstr|Mcpu-ns) own\s+[\d.]+ \S+ total\s+\d+x (.+)$", re.M)
@@ -83,8 +89,8 @@ def own_work(command: list[str]) -> dict[str, float]:
     return {name: float(own) for own, _, name in rows}
 
 
-def pass_ratios(axis: str, level: str, work: Path, command=levels_time.command, compiler: str = "llrm") -> dict[str, tuple[float, float]]:
-    """Per step: ((own Minstr at 2N - at the empty file) / (at N - at the empty file), its share of the work at 2N), for steps with LOW or more."""
+def pass_costs(axis: str, level: str, work: Path, command=levels_time.command, compiler: str = "llrm") -> dict[str, tuple[float, float, float]]:
+    """Per step with LOW or more of the work: (own Minstr at N, at 2N, and all steps' at 2N), each less the empty file's."""
     n = SIZES[axis]
     own = {}
     for label, text in (("empty", ""), (n, scaling.AXES[axis](n)), (2 * n, scaling.AXES[axis](2 * n))):
@@ -97,15 +103,20 @@ def pass_ratios(axis: str, level: str, work: Path, command=levels_time.command, 
     for name, big in net.items():
         small = own[n].get(name, 0.0) - own["empty"].get(name, 0.0)
         if big >= LOW * whole and small > 0:
-            out[f"{axis} {level} {name}"] = (big / small, big / whole)
+            out[f"{axis} {level} {name}"] = (small, big, whole)
     return out
 
 
-def measure_passes(jobs: int, axes=tuple(SIZES), levels=LEVELS) -> dict[str, tuple[float, float]]:
+def pass_ratios(axis: str, level: str, work: Path, command=levels_time.command, compiler: str = "llrm") -> dict[str, tuple[float, float]]:
+    """Per step: (its cost at 2N over its cost at N, its share of the work at 2N)."""
+    return {k: (big / small, big / whole) for k, (small, big, whole) in pass_costs(axis, level, work, command, compiler).items()}
+
+
+def measure_passes(jobs: int, axes=tuple(SIZES), levels=LEVELS) -> dict[str, tuple[float, float, float]]:
     with tempfile.TemporaryDirectory(dir=scaling.os.environ.get("CARGO_TARGET_DIR")) as tmp:
         todo = [(a, l) for a in axes for l in levels]
         with ThreadPoolExecutor(jobs) as pool:
-            return {k: v for got in pool.map(lambda t: pass_ratios(*t, Path(tmp)), todo) for k, v in got.items()}
+            return {k: v for got in pool.map(lambda t: pass_costs(*t, Path(tmp)), todo) for k, v in got.items()}
 
 
 def main() -> int:
@@ -113,8 +124,8 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=4)
     args = parser.parse_args()
     try:
-        axes = {k: round(v, 3) for k, v in measure(args.jobs).items()}
-        passes = {k: (round(v, 3), round(share, 4)) for k, (v, share) in measure_passes(args.jobs).items()}
+        axes = {k: list(v) for k, v in measure(args.jobs).items()}
+        passes = {k: [round(v, 3) for v in got] for k, got in measure_passes(args.jobs).items()}
     except NoCounter as why:
         print(f"SKIPPED: instruction counter unavailable ({why})")
         return 77
