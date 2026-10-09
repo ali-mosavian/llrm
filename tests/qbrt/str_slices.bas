@@ -8,3 +8,4 @@ b$ = "abc": c$ = "abd": d$ = "ab"
 PRINT b$ < c$; b$ > c$; b$ = b$; d$ < b$; b$ <> d$; "" < b$; "" = ""; CHR$(200) > "a"
 PRINT b$ + c$ < c$ + b$; LEFT$(c$, 2) = d$
 FOR i% = 1 TO 5: PRINT MID$("abcdef", i%, i%); : NEXT: PRINT
+PRINT STRING$(5, 65); "|"; STRING$(3, "xyz"); "|"; STRING$(0, 66); "|"

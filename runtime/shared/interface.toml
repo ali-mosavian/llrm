@@ -93,6 +93,57 @@ doc = "Whether `console_read_key` would not wait. What it says at the end of red
 args = []
 returns = "bool"
 
+# A text screen of character cells, rows and columns counted from 0, each cell a character and an
+# attribute (its colours). A target has it where the program may write the screen itself.
+[[op]]
+group = "screen"
+name = "screen_is_console"
+doc = "Whether standard output is the screen and not a file or a pipe."
+args = []
+returns = "bool"
+
+[[op]]
+group = "screen"
+name = "screen_size"
+doc = "The screen's rows in the high byte and columns in the low."
+args = []
+returns = "usize"
+
+[[op]]
+group = "screen"
+name = "screen_cursor"
+doc = "Where the hardware cursor is: the row in the high byte and the column in the low."
+args = []
+returns = "usize"
+
+[[op]]
+group = "screen"
+name = "screen_move"
+doc = "Puts the hardware cursor at `row`, `column`."
+args = [["row", "u8"], ["column", "u8"]]
+returns = "void"
+
+[[op]]
+group = "screen"
+name = "screen_put"
+doc = "Writes `character` with `attribute` into a cell, leaving the cursor."
+args = [["row", "u8"], ["column", "u8"], ["character", "u8"], ["attribute", "u8"]]
+returns = "void"
+
+[[op]]
+group = "screen"
+name = "screen_get"
+doc = "A cell: its attribute in the high byte and its character in the low."
+args = [["row", "u8"], ["column", "u8"]]
+returns = "usize"
+
+[[op]]
+group = "screen"
+name = "screen_scroll"
+doc = "Scrolls the rows `top` to `bottom` up by `lines`, the rows freed filled with blanks of `attribute`; 0 lines clears them."
+args = [["top", "u8"], ["bottom", "u8"], ["lines", "u8"], ["attribute", "u8"]]
+returns = "void"
+
 # Interrupt vectors: a target that has them (real mode).
 [[op]]
 group = "vectors"

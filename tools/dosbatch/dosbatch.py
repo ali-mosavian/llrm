@@ -292,6 +292,7 @@ class Job:
     files: tuple[Path, ...] = ()  # files the program reads, copied beside it under their upper-case names
     map: bool = False  # LINK /MAP: NAME.MAP lists the public symbols too
     runner: str = ""  # a program that runs this one (it must be among `files`), e.g. a timer
+    screen: bool = False  # standard output stays the screen, so the program draws it and no NAME.TXT is written
 
 
 def runtime_library(job: Job, tools: Toolchain, work: Path) -> str:
@@ -424,7 +425,7 @@ def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_0
     script = [f":ms {build_ms}", *head, *building, "."]
     for job in jobs:
         u = job.stem.upper()
-        script += [f":ms {job.budget_ms or budget_ms}", *head, f"if exist {u}.EXE {job.runner} {u}.EXE {job.args} > {u}.TXT", "."]
+        script += [f":ms {job.budget_ms or budget_ms}", *head, f"if exist {u}.EXE {job.runner} {u}.EXE {job.args}{'' if job.screen else f' > {u}.TXT'}", "."]
     (work / "job.conf").write_text(conf)
     (work / "jobs.txt").write_text("\n".join(script) + "\n")
     events = work / "events.txt"

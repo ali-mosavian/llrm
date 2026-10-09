@@ -31,8 +31,8 @@ SD *B_RTRM(SD *sd)
     return trim(sd, TRIM_RIGHT);
 }
 
-/* B$SPAC: SPACE$(n). */
-SD *B_SPAC(int n)
+/* A temporary of `n` copies of a character. */
+static SD *repeated(int n, char c)
 {
     char *data;
     SD *result;
@@ -42,8 +42,32 @@ SD *B_SPAC(int n)
         qb_error(BE_ILLFUN);
     result = str_tmp(n, &data);
     for (i = 0; i < n; i++)
-        data[i] = ' ';
+        data[i] = c;
     return result;
+}
+
+/* B$SPAC: SPACE$(n). */
+SD *B_SPAC(int n)
+{
+    return repeated(n, ' ');
+}
+
+/* B$STRI: STRING$(n, code). */
+SD *B_STRI(int n, int code)
+{
+    return repeated(n, (char)code);
+}
+
+/* B$STRS: STRING$(n, text), the first character of the text. */
+SD *B_STRS(int n, SD *text)
+{
+    char first;
+
+    if (text->len == 0)
+        qb_error(BE_ILLFUN);
+    first = text->ptr[0];
+    str_tmp_free(text);
+    return repeated(n, first);
 }
 
 /* B$SCPY: a copy of a string in a temporary. */
@@ -170,6 +194,8 @@ int B_SCMP(SD *first, SD *second)
 #pragma aux B_LTRM "B$LTRM"
 #pragma aux B_RTRM "B$RTRM"
 #pragma aux B_SPAC "B$SPAC"
+#pragma aux B_STRI "B$STRI"
+#pragma aux B_STRS "B$STRS"
 #pragma aux B_FLEN "B$FLEN"
 #pragma aux B_SCPF "B$SCPF"
 #pragma aux B_UCAS "B$UCAS"

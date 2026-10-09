@@ -79,11 +79,14 @@ def screen_delta(before: tuple[str, ...], after: tuple[str, ...]) -> tuple[str, 
     return tuple(rows)
 
 
-def screen_changes(work: Path, job: int = -1) -> tuple[str, ...] | None:
-    """The DOS screen a job left, relative to the one before it (job 0 follows the build session)."""
+def screen_changes(work: Path, job: int = -1, whole: bool = False) -> tuple[str, ...] | None:
+    """The DOS screen a job left, relative to the one before it (job 0 follows the build session), or all of
+    it for a program that draws the screen itself and starts by clearing it."""
     screens = screen_samples(work)
     after = job + 1 if job >= 0 else len(screens) - 1
-    return screen_delta(screens[after - 1], screens[after]) if 0 < after < len(screens) else None
+    if not 0 < after < len(screens):
+        return None
+    return screens[after] if whole else screen_delta(screens[after - 1], screens[after])
 
 
 def first_screen_difference(want: tuple[str, ...], got: tuple[str, ...]) -> str:
@@ -133,6 +136,12 @@ class Differential:
     sizes: tuple[int, int] = (0, 0)
 
 
+def draws_screen(name: str) -> bool:
+    """Whether a program draws the screen, and so runs with standard output on it: the probes named screen_*
+    and the demos."""
+    return name.startswith("screen_") or name.upper() in ("NIBBLES", "GORILLA")
+
+
 def differential_batch(
     objects: dict[str, tuple[Path, ...]], archive: Path, work: Path
 ) -> dict[str, Differential]:
@@ -149,14 +158,19 @@ def differential_batch(
     def session(pairs: list[tuple[str, dosbatch.Job]]):
         results = dosbatch.run([job for _, job in pairs], run)
         return {
-            name: (results[job.stem], raw_output(run, job.stem), screen_changes(run, at), exe_size(run, job.stem))
+            name: (results[job.stem], raw_output(run, job.stem), screen_changes(run, at, draws_screen(name)), exe_size(run, job.stem))
             for at, (name, job) in enumerate(pairs)
         }
 
-    reference = session([(n, dosbatch.Job(names[n], "obj", pair[0], objects=pair[2:])) for n, pair in objects.items()])
+    reference = session([(n, dosbatch.Job(names[n], "obj", pair[0], objects=pair[2:], screen=draws_screen(n))) for n, pair in objects.items()])
     candidate = session(
         [
-            (n, dosbatch.Job(names[n], "obj", pair[1], runtime="llrmqb", runtime_file=archive, objects=pair[2:]))
+            (
+                n,
+                dosbatch.Job(
+                    names[n], "obj", pair[1], runtime="llrmqb", runtime_file=archive, objects=pair[2:], screen=draws_screen(n)
+                ),
+            )
             for n, pair in objects.items()
         ]
     )

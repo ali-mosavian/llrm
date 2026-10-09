@@ -1,4 +1,10 @@
-/* The console as PRINT sees it (QB rt/iotty.asm B$TTY_*, rt/out.asm). */
+/* The console as PRINT sees it (QB rt/iotty.asm B$TTY_*, rt/out.asm), and the
+   screen statements that move and colour it.
+
+   Where standard output is the screen, the console writes its text cells and
+   keeps the cursor, the colours and the PRINT window itself; where it is a
+   file or a pipe, it writes the bytes and only counts the column, and the
+   screen statements do nothing. */
 #ifndef QB_CONSOLE_H
 #define QB_CONSOLE_H
 
@@ -12,5 +18,18 @@ byte cn_width(void);
 void cn_write(const char *s, unsigned n);
 void cn_putc(char c);
 void cn_crlf(void);
+
+/* COLOR: a foreground 0-31 (16 and up blink) and a background 0-7, either -1
+   to leave it. */
+void cn_color(int foreground, int background);
+/* LOCATE: a 1-based row and column, either -1 to leave it. */
+void cn_locate(int row, int column);
+/* CLS: the PRINT window is cleared and the cursor goes to its top. */
+void cn_cls(void);
+/* VIEW PRINT: the 1-based rows of the PRINT window, or -1 and -1 for every
+   row of the screen.  A program starts with all but the last. */
+void cn_view(int top, int bottom);
+/* WIDTH: only the screen's own size is accepted. */
+void cn_set_size(int columns, int rows);
 
 #endif

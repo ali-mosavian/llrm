@@ -11,6 +11,13 @@ public _llrm_os_close
 public _llrm_os_exit
 public _llrm_os_console_read_key
 public _llrm_os_console_key_ready
+public _llrm_os_screen_is_console
+public _llrm_os_screen_size
+public _llrm_os_screen_cursor
+public _llrm_os_screen_move
+public _llrm_os_screen_put
+public _llrm_os_screen_get
+public _llrm_os_screen_scroll
 public _llrm_os_more
 public _llrm_os_vector
 public _llrm_os_set_vector
@@ -225,6 +232,167 @@ _llrm_os_console_key_ready proc far
     and ax, 1
     retf
 _llrm_os_console_key_ready endp
+
+; The screen: the BIOS's text mode. A cell is read and written in video memory, which is how the
+; cursor stays where it is; the BIOS data area (0040h) says the mode, columns and rows.
+
+BIOS_DATA equ 0040h
+BIOS_COLUMNS equ 004Ah             ; word
+BIOS_MODE equ 0049h                ; byte
+BIOS_ROWS equ 0084h                ; byte, rows - 1; 0 where the BIOS predates it
+MONO_MODE equ 7
+MONO_SEGMENT equ 0B000h
+COLOR_SEGMENT equ 0B800h
+DEFAULT_ROWS equ 25
+DEVICE_BIT equ 80h
+CONSOLE_OUT_BIT equ 02h
+
+; _llrm_os_screen_is_console() -> bool: whether DOS says standard output is the console device.
+_llrm_os_screen_is_console proc far
+    push bx
+    mov ax, DOS_IOCTL * 256
+    mov bx, DOS_STDOUT
+    int DOS_INT
+    pop bx
+    xor ax, ax
+    jc short not_console
+    and dl, DEVICE_BIT or CONSOLE_OUT_BIT
+    cmp dl, DEVICE_BIT or CONSOLE_OUT_BIT
+    jne short not_console
+    inc ax
+not_console:
+    retf
+_llrm_os_screen_is_console endp
+
+; _llrm_os_screen_size() -> u16: rows in the high byte, columns in the low.
+_llrm_os_screen_size proc far
+    push ds
+    mov ax, BIOS_DATA
+    mov ds, ax
+    mov al, ds:[BIOS_COLUMNS]
+    mov ah, ds:[BIOS_ROWS]
+    pop ds
+    test ah, ah
+    jnz short have_rows
+    mov ah, DEFAULT_ROWS - 1
+have_rows:
+    inc ah
+    retf
+_llrm_os_screen_size endp
+
+; _llrm_os_screen_cursor() -> u16: the hardware cursor, row in the high byte.
+_llrm_os_screen_cursor proc far
+    push bx
+    push cx
+    push dx
+    xor bh, bh
+    mov ah, DOS_VIDEO_GET_CURSOR
+    int DOS_VIDEO_INT
+    mov ax, dx
+    pop dx
+    pop cx
+    pop bx
+    retf
+_llrm_os_screen_cursor endp
+
+; _llrm_os_screen_move(row: u8, column: u8): the hardware cursor.
+_llrm_os_screen_move proc far
+    push bp
+    mov bp, sp
+    push bx
+    mov dh, [bp+6]
+    mov dl, [bp+8]
+    xor bh, bh
+    mov ah, DOS_VIDEO_SET_CURSOR
+    int DOS_VIDEO_INT
+    pop bx
+    pop bp
+    retf
+_llrm_os_screen_move endp
+
+; es:di -> the cell at row dh, column dl of the screen; the mode's own video segment.
+cell_address proc near
+    push ax
+    push ds
+    mov ax, BIOS_DATA
+    mov ds, ax
+    mov ax, COLOR_SEGMENT
+    cmp byte ptr ds:[BIOS_MODE], MONO_MODE
+    jne short have_segment
+    mov ax, MONO_SEGMENT
+have_segment:
+    mov es, ax
+    mov al, dh
+    mul byte ptr ds:[BIOS_COLUMNS]
+    xor dh, dh
+    add ax, dx
+    add ax, ax
+    mov di, ax
+    pop ds
+    pop ax
+    ret
+cell_address endp
+
+; _llrm_os_screen_put(row: u8, column: u8, character: u8, attribute: u8)
+_llrm_os_screen_put proc far
+    push bp
+    mov bp, sp
+    push di
+    push es
+    mov dh, [bp+6]
+    mov dl, [bp+8]
+    call cell_address
+    mov al, [bp+10]
+    mov ah, [bp+12]
+    stosw
+    pop es
+    pop di
+    pop bp
+    retf
+_llrm_os_screen_put endp
+
+; _llrm_os_screen_get(row: u8, column: u8) -> u16
+_llrm_os_screen_get proc far
+    push bp
+    mov bp, sp
+    push di
+    push es
+    mov dh, [bp+6]
+    mov dl, [bp+8]
+    call cell_address
+    mov ax, es:[di]
+    pop es
+    pop di
+    pop bp
+    retf
+_llrm_os_screen_get endp
+
+; _llrm_os_screen_scroll(top: u8, bottom: u8, lines: u8, attribute: u8)
+_llrm_os_screen_scroll proc far
+    push bp
+    mov bp, sp
+    push bx
+    push si
+    push di
+    push ds
+    mov ax, BIOS_DATA
+    mov ds, ax
+    mov dl, ds:[BIOS_COLUMNS]
+    pop ds
+    dec dl
+    mov ch, [bp+6]
+    mov dh, [bp+8]
+    mov al, [bp+10]
+    mov bh, [bp+12]
+    xor cl, cl
+    mov ah, DOS_VIDEO_SCROLL_UP
+    int DOS_VIDEO_INT
+    pop di
+    pop si
+    pop bx
+    pop bp
+    retf
+_llrm_os_screen_scroll endp
 
 ; Interrupt vectors, for handlers the program installs. A handler is
 ; entered with interrupts off and leaves by iret.

@@ -14,6 +14,12 @@ exit = 0x4C
 resize = 0x4A
 get_vector = 0x35
 set_vector = 0x25
+ioctl = 0x44
+video_int = 0x10
+video_set_cursor = 0x02
+video_get_cursor = 0x03
+video_scroll_up = 0x06
+video_get_mode = 0x0F
 dpmi_int = 0x31
 dpmi_alloc = 0x0501
 
