@@ -5141,3 +5141,26 @@ fn test_the_callees_of_a_module_are_scanned_once_for_all_its_functions_not_for_e
     let (few, many) = (scans(4), scans(24));
     assert_eq!(few, many, "{few} scans for 4 functions, {many} for 24");
 }
+
+/// i64 add, sub, and, or and xor went through the `wide_binary` hook by hand
+/// (and a hook is where a target's second copy of the rule hides); they are
+/// the family's `chain` patterns now, and only a shift, product or quotient
+/// is the hook's.
+#[test]
+fn test_an_i64_add_sub_and_or_xor_are_chain_patterns_not_the_wide_binary_hook() {
+    use llrm_mir::BinaryOp;
+    let text = "define i64 @f(i64 %a, i64 %b) addrspace(1) {
+  %1 = add i64 %a, %b
+  %2 = sub i64 %1, %b
+  %3 = and i64 %2, %a
+  %4 = or i64 %3, 7
+  %5 = xor i64 %4, %b
+  %6 = shl i64 %5, 3
+  ret i64 %6
+}
+";
+    crate::backend::isel::HOOKED.with(|hooked| hooked.borrow_mut().clear());
+    selected(text, "f").expect("selects");
+    let hooked = crate::backend::isel::HOOKED.with(|hooked| hooked.borrow().clone());
+    assert_eq!(hooked, [BinaryOp::Shl]);
+}

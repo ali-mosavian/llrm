@@ -837,6 +837,8 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(), Unselected> {
         let Opcode::Binary(op) = *self.opcode(m) else { unreachable!("a binary operation") };
+        #[cfg(test)]
+        HOOKED.with(|hooked| hooked.borrow_mut().push(op));
         self.wide_binary(op, m.inst, m.at, out)
     }
 
@@ -1154,4 +1156,11 @@ mod tests {
         assert_eq!(choose::<()>(&[2, 0, 1], &groups, |_| true, |_| Ok(0)).unwrap(), Some(2));
         assert_eq!(choose::<()>(&[0, 1], &groups, |one| one == 1, |_| unreachable!("one holds")).unwrap(), Some(1));
     }
+}
+
+// The operations `hook_wide_binary` was asked for, for the test that none of
+// the chained ones are.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static HOOKED: std::cell::RefCell<Vec<llrm_mir::BinaryOp>> = const { std::cell::RefCell::new(Vec::new()) };
 }
