@@ -2119,7 +2119,7 @@ impl RegAlloc {
                         Ok(trial) => trial,
                         Err(other) => return Err(other),
                     };
-                    llrm_support::debug!("regalloc", "  trial: {} spilled, cost {}, {} forced", trial.spilled.len(), trial.cost, trial.forced);
+                    llrm_support::debug!("regalloc", "  trial {shape:?} (splitting {splitting}): {} spilled, cost {}, {} forced", trial.spilled.len(), trial.cost, trial.forced);
                     if kept.is_disjoint(&trial.spilled) && trial.cost < best.cost {
                         llrm_support::debug!("regalloc", "  kept the trial");
                         best = trial;
@@ -2134,7 +2134,7 @@ impl RegAlloc {
 }
 
 /// The other shapes of a body the allocator may try after the first allocation, by what they change.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Shape {
     /// Address computations of spilled values made apart from their users.
     Addressed,
