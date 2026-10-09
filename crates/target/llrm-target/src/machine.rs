@@ -51,6 +51,10 @@ pub struct Machine {
     pub segments: Option<Segments>,
     /// Linear [low, high) ranges no program data occupies.
     pub foreign: Vec<(i64, i64)>,
+    /// A flat machine: the linear address its flat data selector's base is,
+    /// where the platform states it. Its `foreign` ranges are linear addresses
+    /// only under a base of 0.
+    pub flat_base: Option<i64>,
     /// [low, high) port ranges and what their access does to memory.
     pub ports: Vec<Port>,
     /// The processor whose costs choose between equivalent code.
@@ -138,10 +142,20 @@ impl Machine {
         if table.contains_key("cpu") {
             return Err("a machine states no cpu: the target's timings.times names the default".to_owned());
         }
+        let flat_base =
+            table.get("flat_base").map(|value| value.as_integer().ok_or("flat_base is not an integer")).transpose()?;
+        if flat_base.is_some() && addressing != Addressing::Flat {
+            return Err("only a flat machine has a flat_base".to_owned());
+        }
+        let foreign = ranges("foreign")?;
+        if addressing == Addressing::Flat && !foreign.is_empty() && flat_base != Some(0) {
+            return Err("a flat machine's foreign ranges are linear addresses: they need flat_base = 0".to_owned());
+        }
         Ok(Self {
             addressing,
             segments,
-            foreign: ranges("foreign")?,
+            foreign,
+            flat_base,
             ports: ports(&table)?,
             cpu: cpu.to_owned(),
             segment_end_faults,
@@ -198,21 +212,25 @@ impl Machine {
         offsets: (i64, i64),
         width: i64,
     ) -> Option<(i64, i64)> {
+        if self.addressing == Addressing::Flat {
+            // No selector: the offset is the linear address.
+            let linear = |(low, high): (i64, i64)| 0 <= low && low <= high && high <= 0xFFFF_FFFF;
+            if selectors != (0, 0) || !linear(offsets) || self.flat_base != Some(0) {
+                return None;
+            }
+            return covered(&self.foreign, offsets.0, offsets.1 + width);
+        }
         let word = |(low, high): (i64, i64)| 0 <= low && low <= high && high <= 0xFFFF;
         if self.addressing != Addressing::Real || !word(selectors) || !word(offsets) {
             return None;
         }
-        let (start, end) = (selectors.0 * 16 + offsets.0, selectors.1 * 16 + offsets.1 + width);
-        // Adjacent ranges cover as one.
-        let mut ranges = self.foreign.clone();
-        ranges.sort_unstable();
-        let mut reached = start;
-        for (from, to) in ranges {
-            if from <= reached && reached < to {
-                reached = to;
-            }
-        }
-        (end <= reached).then_some((start, end))
+        covered(&self.foreign, selectors.0 * 16 + offsets.0, selectors.1 * 16 + offsets.1 + width)
+    }
+
+    /// The linear ranges a flat machine states no program data occupies: none
+    /// unless its flat selector is based at 0.
+    pub fn flat_foreign(&self) -> Vec<(i64, i64)> {
+        if self.addressing == Addressing::Flat && self.flat_base == Some(0) { self.foreign.clone() } else { Vec::new() }
     }
 
     /// Whether a `width`-byte access at an offset a multiple of `align` may
@@ -266,6 +284,24 @@ fn ports(table: &toml::Table) -> Result<Vec<Port>, String> {
         .collect()
 }
 
+/// `[start, end)` when the `foreign` ranges (adjacent ones cover as one) hold
+/// it all.
+pub fn covered(
+    foreign: &[(i64, i64)],
+    start: i64,
+    end: i64,
+) -> Option<(i64, i64)> {
+    let mut ranges = foreign.to_vec();
+    ranges.sort_unstable();
+    let mut reached = start;
+    for (from, to) in ranges {
+        if from <= reached && reached < to {
+            reached = to;
+        }
+    }
+    (end <= reached).then_some((start, end))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,6 +318,25 @@ mod tests {
         assert_eq!(flat.huge_shift(), None);
         assert_eq!(flat.foreign_span((0, 0), (0x100, 0x100), 1), None);
         assert!(flat.access_may_trap(1, 1));
+    }
+
+    /// A flat machine's foreign ranges are linear addresses, true only where
+    /// the extender's flat selector is based at 0: a host without that has
+    /// none.
+    #[test]
+    fn test_a_flat_machines_foreign_ranges_need_a_zero_base() {
+        let range = "[[foreign]]\nname = \"video\"\nlow = 0xA0000\nhigh = 0xC0000\n";
+        let without = format!("{FLAT}{range}");
+        assert!(Machine::parse(&without, "486").unwrap_err().contains("flat_base = 0"));
+        let based = format!("{FLAT}flat_base = 4096\n{range}");
+        assert!(Machine::parse(&based, "486").unwrap_err().contains("flat_base = 0"));
+        let zero = Machine::parse(&format!("{FLAT}flat_base = 0\n{range}"), "486").unwrap();
+        assert_eq!(zero.flat_foreign(), vec![(0xA0000, 0xC0000)]);
+        assert_eq!(zero.foreign_span((0, 0), (0xB8000, 0xB8000), 2), Some((0xB8000, 0xB8002)));
+        assert_eq!(zero.foreign_span((0, 0), (0xBFFFF, 0xBFFFF), 2), None, "past the range");
+        assert_eq!(zero.foreign_span((0, 0), (0x500000, 0x500000), 1), None, "extended memory");
+        let real = "addressing = \"real\"\nsegment_end_faults = true\nflat_base = 0\n[segments]\ndata = \"ds\"\nstack = \"ss\"\ncode = \"cs\"\nstack_is_data = true\n";
+        assert_eq!(Machine::parse(real, "486"), Err("only a flat machine has a flat_base".to_owned()));
     }
 
     #[test]

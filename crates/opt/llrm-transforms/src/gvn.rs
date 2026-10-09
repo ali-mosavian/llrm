@@ -49,8 +49,18 @@ use crate::{edges, loadjoins, transform};
 /// The single value-reuse pass: scalar GVN and memory-aware PRE. The
 /// target's registers price it (`profit::registers`); none leaves pricing
 /// out.
-#[derive(Default)]
-pub struct Gvn;
+pub struct Gvn {
+    /// Loads are forwarded from each block's available cells and, for those it
+    /// loses, the MemorySSA walk (`true`), or by the walk alone
+    /// (`-fgvn-dataflow`).
+    pub dataflow: bool,
+}
+
+impl Default for Gvn {
+    fn default() -> Self {
+        Self { dataflow: false }
+    }
+}
 
 impl FunctionPass for Gvn {
     fn name(&self) -> &'static str {
@@ -82,9 +92,9 @@ impl FunctionPass for Gvn {
                 &registers,
             )
         };
-        match accesses
-            .and_then(|accesses| optimized(unit, analyses.outer(), &accesses, pointers?, &trips, &registers, &shape))
-        {
+        match accesses.and_then(|accesses| {
+            optimized(unit, analyses.outer(), &accesses, pointers?, &trips, &registers, &shape, self.dataflow)
+        }) {
             Ok(true) if unit.function.layout().len() != blocks => PreservedAnalyses::none(),
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
             Ok(false) => PreservedAnalyses::all(),
@@ -109,6 +119,7 @@ pub fn optimized(
     trips: &IndexMap<i64, i64>,
     registers: &IndexMap<ValueId, llrm_analysis::consts::Known>,
     shape: &cfg::Shape,
+    dataflow: bool,
 ) -> Result<bool, String> {
     let equal = propagated(unit);
     // What is known of the body the manager saw, unless propagating a branch's
@@ -125,8 +136,17 @@ pub fn optimized(
     } else {
         registers
     };
-    let (numbered, subexpressed) =
-        _numbered(unit, outer, accesses, &profit::costs(outer), profit::registers(outer), trips, registers, shape)?;
+    let (numbered, subexpressed) = _numbered(
+        unit,
+        outer,
+        accesses,
+        &profit::costs(outer),
+        profit::registers(outer),
+        trips,
+        registers,
+        shape,
+        dataflow,
+    )?;
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(unit.function, !subexpressed)?;
@@ -222,10 +242,11 @@ fn _numbered(
     trips: &IndexMap<i64, i64>,
     registers: &IndexMap<ValueId, llrm_analysis::consts::Known>,
     shape: &cfg::Shape,
+    dataflow: bool,
 ) -> Result<(bool, bool), String> {
     // The availability of the function as it comes in: the same for both runs
     // below, each of which changes a copy.
-    let held = std::cell::OnceCell::new();
+    let forwarding = transform::Forwarding::new(dataflow);
     // Whether some load was served across a store: the one thing the second
     // numbering does differently from the first.
     let crossed = std::cell::Cell::new(false);
@@ -241,7 +262,7 @@ fn _numbered(
             registers,
             shape,
             avoid_store_crossing,
-            &held,
+            &forwarding,
             &crossed,
         )?;
         let subexpressed =

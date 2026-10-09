@@ -398,6 +398,7 @@ impl ProgramAnalyses {
         Rc::new(ProgramProxy {
             layout: program.layout.clone(),
             target: Rc::clone(&program.target),
+            spaces: program.target.spaces(),
             segments: program.segments.clone(),
             exports: program.exports.clone(),
             runtime: Rc::clone(&program.runtime),
@@ -424,6 +425,9 @@ pub trait ProgramPass {
 pub struct ProgramProxy {
     pub layout: DataLayout,
     pub target: Rc<dyn Machine>,
+    /// The target's address spaces, asked of it once: a reference's every
+    /// decomposition asks.
+    pub spaces: crate::spaces::Spaces,
     pub segments: SegmentLayout,
     pub exports: Exports,
     pub runtime: Rc<Module>,
@@ -447,6 +451,7 @@ impl ProgramProxy {
         Rc::new(Self {
             segments: SegmentLayout::of(&layout),
             layout,
+            spaces: target.spaces(),
             target,
             exports: Exports::default(),
             runtime: Rc::default(),

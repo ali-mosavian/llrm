@@ -99,9 +99,20 @@ fn foreign(
     program: Option<&ProgramProxy>,
 ) -> Option<Slice> {
     let machine = &*program?.target;
+    let spaces = machine.spaces();
     // A selector or offset is a word of the segment's size: none where the
-    // target has no segments.
-    let segment = i64::try_from(machine.spaces().segment_bytes?).ok()?;
+    // target has no segments, unless it has one address space, where an
+    // offset is the linear address, a 32-bit word, and there is no selector.
+    let flat = spaces.far_is_near();
+    // An address that is not a constant is not in a range the platform states.
+    if flat && !reference.linear {
+        return None;
+    }
+    let segment = match spaces.segment_bytes {
+        Some(bytes) => i64::try_from(bytes).ok()?,
+        None if flat => 1 << 32,
+        None => return None,
+    };
     // A selector or offset is an unsigned word; ranges may carry it signed,
     // and an offset wraps within its segment.
     let words = |low: BigInt, high: BigInt| -> Option<(i64, i64)> {
@@ -110,6 +121,7 @@ fn foreign(
         (high - low < segment && word(low) <= word(high)).then(|| (word(low), word(high)))
     };
     let selectors = match (reference.selector, reference.segment) {
+        _ if flat => (0, 0),
         (Some(selector), _) => words(selector.into(), selector.into())?,
         (None, Some(Operand::Value(segment))) => {
             let selector = known?.get(&segment)?;

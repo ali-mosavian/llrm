@@ -30,6 +30,9 @@ pub struct Profile {
     /// The conventions as the description states them, which decide where a
     /// call's arguments go and what removes them.
     pub calling: Option<llrm_target::calling::Stated>,
+    /// The platform's linear ranges no program data occupies, for a flat
+    /// target.
+    pub foreign: llrm_target::Foreign,
     /// The operand size an instruction has without a prefix, in bytes.
     pub operand_bytes: i64,
     pub call_register_capacity: i64,
@@ -147,6 +150,7 @@ impl Profile {
             spaces: self.spaces,
             private: self.private.clone(),
             calling: self.calling.map(|one| one.0),
+            foreign: self.foreign,
         }
     }
 
@@ -182,6 +186,7 @@ impl Profile {
             spaces: arch.layout().spaces.roles,
             private: private_convention(arch),
             calling: Some(llrm_target::calling::Stated(arch.calling())),
+            foreign: arch.flat_foreign(),
             operand_bytes: arch.operand_bytes(),
             call_register_capacity: arch.callee_saved().len() as i64,
             address_scales: BTreeSet::from([1]),

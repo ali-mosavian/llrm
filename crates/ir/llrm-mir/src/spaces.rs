@@ -42,6 +42,7 @@ impl Spaces {
 
     /// Whether `far` is the `near` space: the target is flat, and a far or huge
     /// pointer is a near one.
+    #[inline]
     pub fn far_is_near(&self) -> bool {
         self.far == self.near
     }

@@ -8,5 +8,35 @@ addressing = "flat"
 segment_end_faults = false
 far_bss = false
 
-# [[foreign]] ranges depend on how the extender maps low memory and video:
-# decided with the extender choice (milestone 3), none until then.
+# The extender the toolchain links with is DOS/32A (`object.toml`'s [link]): its
+# flat data selector is zero-based, so a linear address is the DOS address of
+# low memory, which it maps in. A host with another base (CWSDPMI under DJGPP
+# asks the program for the conventional memory's) would state a different
+# `flat_base`, and then has no [[foreign]] ranges rather than wrong ones.
+flat_base = 0
+
+# Linear [low, high) ranges no program's own data occupies. A write there
+# reaches no variable, array or runtime cell.
+# Sources: Ralf Brown's Interrupt List, MEMORY.LST. The memory above 1 MB is the
+# extender's to give the program, so none of it is listed.
+[[foreign]]
+name = "interrupt vectors, BIOS data area, DOS work areas; IO.SYS loads at 0070:0000"
+low = 0x00000
+high = 0x00700
+
+[[foreign]]
+name = "VGA memory: graphics, monochrome and colour text"
+low = 0xA0000
+high = 0xC0000
+
+[[foreign]]
+name = "VGA BIOS ROM"
+low = 0xC0000
+high = 0xC8000
+
+# C8000-EFFFF stays out: an upper memory block there may hold a program loaded
+# high or the extender's own real-mode buffers.
+[[foreign]]
+name = "system BIOS ROM"
+low = 0xF0000
+high = 0x100000
