@@ -1430,7 +1430,7 @@ fn _allocated(
             let mut made: Vec<u32> = Vec::new();
             let _carving = llrm_support::debug::span("split carving");
             for region in regions {
-                let fresh = splitkit::_next_value(cut.as_ref().unwrap_or(&body)).max(floor);
+                let fresh = splitkit::_next_value_following(cut.as_ref().unwrap_or(&body)).max(floor);
                 floor = fresh + 1;
                 let moved = moves.iter().fold(region, |region, moved| region.moved(moved));
                 if let Some((next, shifted)) =
@@ -1585,7 +1585,7 @@ fn _allocated(
         // The body changed: every fact about it is recomputed, and whatever
         // the change left sharing a register competes again.
         let Some(made) = rewritten else { continue };
-        floor = floor.max(splitkit::_next_value(&body));
+        floor = floor.max(splitkit::_next_value_following(&body));
         facts = Facts::of(
             &body,
             profile,
