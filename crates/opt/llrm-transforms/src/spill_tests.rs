@@ -793,3 +793,29 @@ fn test_the_forecast_handles_cells_in_proportion_to_what_changes() {
     let (small, large) = (handled(100), handled(200));
     assert!(large < 3 * small, "{small} cells handled for 100 values live across a call, {large} for 200");
 }
+
+/// `gepoffset` makes the instructions of a split to price them and erases them
+/// when it does not pay, reporting no change: the pressure the manager held
+/// then differed from a fresh one (`LLRM_CHECK_PRESERVED`, qcport/weapons -Os,
+/// #1226) because it counted the ids of values nothing defines any more.
+#[test]
+fn pressure_is_the_same_after_an_instruction_is_made_and_erased() {
+    use llrm_mir::edit::Position;
+    use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
+    let mut module = module(COUNTED);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let before = Pressure::of(context, function, 0);
+    let ret =
+        function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).opcode == Opcode::Ret).unwrap();
+    let ty = context.types.int(16);
+    let made = function.create_instruction(
+        Opcode::Binary(BinaryOp::Add),
+        ty,
+        vec![function.instruction(ret).operands[0]; 2],
+        Flags::default(),
+        None,
+    );
+    function.insert(made, Position::Before(ret)).expect("a position");
+    function.erase(made).expect("nothing reads it");
+    assert_eq!(Pressure::of(context, function, 0), before, "a value made and erased changed the pressure");
+}
