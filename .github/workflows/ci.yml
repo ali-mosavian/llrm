@@ -1,62 +1,140 @@
-# The lib tests and the program-compile test on every pull request and push to
-# main, so main cannot go red unseen. Only wccq (Open Watcom's front end, built
-# by llrm-c's build.rs) is needed: the jw and dosrun features, which build jwasm,
-# jwlink and DOSBox-X, stay off.
+# The tiered gate (tools/gate/gate.py), on every pull request and on main. Not a required check: merges never wait for it.
+#
+#   plan    gate.py plan --json: the tier from the diff, the job groups it needs, the steps skipped here.
+#   build   cargo build + test binaries once; the target dir is handed to the groups as an artifact.
+#   gate    one job per group (tiers.toml [groups]), in parallel; wall time is the longest group.
+#   ci      one status for the run.
+# A step needing a tool that is not in the repository (Turbo C++, CodeView, QCport's Borland) is SKIPPED by gate.py
+# on a host without it, with the reason; the session gates and the full run on main still run it.
+#
+# Caches (all restored by .github/actions/setup; each key is what invalidates it):
+#   llrm-forks   ~/.cache/llrm: JWasm, JWlink, DOSBox-X, the Open Watcom tree, the gcc torture corpus. Key: hash of the
+#                scripts that pin them. A changed pin falls back to the newest older cache (restore-keys) and
+#                toolchain/cache.sh builds only the tree whose commit is new; trees no pin names are pruned.
+#   target       the workspace build, saved on main pushes. Key: Cargo.lock + rust-toolchain.toml + commit; a run restores
+#                the newest of its lock. tools/ci/restore_mtime.py gives files their commit times (and files changed since
+#                the cached commit "now"), so cargo rebuilds only what changed.
+#   rust-cache   cargo registry (Swatinem, no target). Key: Cargo.lock.
+#   uv           tools/uv.lock.
 name: ci
 
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
-  FEATURES: --no-default-features --features wccq
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target
+  CARGO_INCREMENTAL: "0"
+  # Turbo C++, CodeView and QCport's Borland are not on a hosted runner: their steps are SKIPPED, with the reason.
+  GATE_ALLOW_MISSING: "1"
 
 jobs:
-  lib:
+  plan:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 10
+    outputs:
+      base: ${{ steps.plan.outputs.base }}
+      groups: ${{ steps.plan.outputs.groups }}
+      any: ${{ steps.plan.outputs.any }}
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y build-essential
-      # rust-toolchain.toml names the compiler, here as on every machine.
-      - run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-      # The Open Watcom tree, keyed on its commit: an exact hit or a rebuild,
-      # never an older tree (toolchain/cache.sh).
-      - id: openwatcom
-        run: echo "commit=$(cat toolchain/owshim/ow-commit)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
         with:
-          path: ~/.cache/llrm
-          key: openwatcom-${{ steps.openwatcom.outputs.commit }}
-      # First, so a bad toolchain fails as that, not as unrelated tests.
-      - name: wccq matches the committed streams and its own stamp
-        run: cargo test --release -p llrm-c --features toolchain --lib -- test_wccq_built_here_records_the_committed_stream test_wccq_says_what_it_was_made_from
-      - run: cargo test --release $FEATURES --workspace --lib --no-fail-fast
+          fetch-depth: 0
+      - id: plan
+        run: |
+          # A pull request is checked out as its merge with the base: the first parent is the base's tip.
+          if [ "${{ github.event_name }}" = pull_request ]; then base=HEAD^1; elif [ "${{ github.ref }}" = refs/heads/main ]; then base=${{ github.event.before }}; else base=origin/main; fi
+          json=$(python3 tools/gate/gate.py plan --json --base "$base")
+          echo "$json"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "groups=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(sorted(json.load(sys.stdin)["groups"])))')" >> "$GITHUB_OUTPUT"
+          echo "any=$(echo "$json" | python3 -c 'import json,sys; print(str(bool(json.load(sys.stdin)["steps"])).lower())')" >> "$GITHUB_OUTPUT"
+          python3 tools/gate/gate.py plan --base "$base" | tee -a "$GITHUB_STEP_SUMMARY"
 
-  programs:
+  build:
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y build-essential
-      # rust-toolchain.toml names the compiler, here as on every machine.
-      - run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-      - id: openwatcom
-        run: echo "commit=$(cat toolchain/owshim/ow-commit)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
         with:
-          path: ~/.cache/llrm
-          key: openwatcom-${{ steps.openwatcom.outputs.commit }}
-      - uses: astral-sh/setup-uv@v5
-      - run: cargo build --release $FEATURES --bins
-      - run: uv run --project tools --with pytest python -m pytest tests/test_programs_compile.py
-        env:
-          LLRM_REQUIRE_BINARIES: "1"
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+        with:
+          save: "true"
+      # The workspace's own outputs, from the last main build: cargo rebuilds only what changed since (restore_mtime.py).
+      - id: target
+        uses: actions/cache/restore@v4
+        with:
+          path: target
+          key: target-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
+          restore-keys: target-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-
+      - run: python3 tools/ci/restore_mtime.py . "$(cat target/.built-from 2>/dev/null || true)"
+      - name: Build
+        run: |
+          before=$(find ~/.cache/llrm -name .complete -printf '%p %T@\n' 2>/dev/null | sort || true)
+          JOBS=$(nproc) python3 tools/gate/gate.py run --group build --base "${{ needs.plan.outputs.base }}"
+          after=$(find ~/.cache/llrm -name .complete -printf '%p %T@\n' | sort)
+          # A cache hit builds nothing: every .complete is the one the cache restored.
+          if [ "$before" = "$after" ]; then echo "forks: none built (cache hit)"; else diff <(echo "$before") <(echo "$after") | sed 's/^/forks built: /' || true; fi
+          git rev-parse HEAD > target/.built-from
+      - name: Share the target dir
+        run: tar -C "$GITHUB_WORKSPACE" -cf - target | zstd -T0 -3 -o "$RUNNER_TEMP/target.tar.zst"; ls -l "$RUNNER_TEMP/target.tar.zst"
+      - if: github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: target
+          key: target-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: target
+          path: ${{ runner.temp }}/target.tar.zst
+          compression-level: 0
+          retention-days: 1
+
+  gate:
+    needs: [plan, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJSON(needs.plan.outputs.groups) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@v4
+        with:
+          name: target
+          path: ${{ runner.temp }}
+      - name: Restore the target dir
+        run: |
+          zstd -dc -T0 "$RUNNER_TEMP/target.tar.zst" | tar -C "$GITHUB_WORKSPACE" -xf -
+          # The build job made this target dir from this commit: no file is newer than it.
+          python3 tools/ci/restore_mtime.py . "$(cat target/.built-from)"
+      - run: JOBS=$(nproc) python3 tools/gate/gate.py run --group ${{ matrix.group }} --base "${{ needs.plan.outputs.base }}"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.group }}
+          path: target/gate-logs
+          retention-days: 3
+
+  ci:
+    needs: [plan, build, gate]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          echo "plan=${{ needs.plan.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }}"
+          [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.build.result }}" != failure ] && [ "${{ needs.gate.result }}" != failure ] && [ "${{ needs.gate.result }}" != cancelled ]
