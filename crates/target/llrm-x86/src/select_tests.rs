@@ -413,6 +413,19 @@ fn test_a_comparison_against_zero_stays_a_compare_when_relocated() {
     assert_ne!(made.code[0], 0x85, "a relocated compare became a test: {}", hex(&made.code));
 }
 
+/// A cell's index register was left out of a remap an address's was given: the
+/// same register, renamed in one operand and not the other.
+#[test]
+fn test_a_remap_renames_a_cells_index_register_as_an_addresss() {
+    let r#where: RegisterMap = [(Register::SI, Register::DI)].into_iter().collect();
+    let cell = ir::Mem { through: Register::BX, index_through: Register::SI, ..ir::Mem::new(None, 2) };
+    let address = ir::AddressRef { through: Register::BX, index_through: Register::SI, ..ir::AddressRef::new(None) };
+    for place in [Loc::Mem(cell), Loc::Address(address)] {
+        let moved = _operand(&place, Some(&r#where), None);
+        assert_eq!(moved.address().map(|one| one.index_through), Some(Register::DI), "{moved:?}");
+    }
+}
+
 #[test]
 fn test_a_remap_reaches_inside_a_memory_operand() {
     let r#where: RegisterMap = [(Register::SI, Register::DI), (Register::ESI, Register::EDI)].into_iter().collect();

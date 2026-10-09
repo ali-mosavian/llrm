@@ -285,6 +285,41 @@ and not a flag. A target without it has no rows, so its passes find nothing.
 | Segments, far calls, selector holding | see above | address spaces of pair kind; far forms in the table |
 | Condition flags as an implicit register | `liveness.rs` | forms' flags read/written columns |
 
+### Opcode names outside the target (audit)
+
+`Semantics.name` is a `String`; the 351 compares of it against x86 mnemonics are
+not a cost. A call-graph profile of `combat.c` (m16, -O1) puts
+`<Semantics as Clone>::clone` and its drop glue at 0.01% each, so turning the
+name into an `OpcodeId` buys no compile time and is dropped from row 15
+(`Loc::St`, `Mem`/`AddressRef` and the class property are done; nesting
+`AddressRef` in `Mem` cost +0.28% in `Loc`'s size, #1233).
+
+What does matter is who names an opcode. A pass outside lower, isel, regalloc
+and peephole that compares `name` with `"mov"`, `"fld"` or `"cmp"` breaks rule 5
+whatever the type of the name: it should ask a semantic property of the form
+(reads flags, is a copy, is a stack operation, commutes). The compares of a
+literal that is an x86.instr mnemonic, found by pattern (a floor: a `match` on
+the name or a `starts_with` is not counted), in non-test code:
+
+| File | Compares | Mnemonics |
+|---|---|---|
+| `backend/schedule.rs` | 25 | cdq, cwd, imul, mov, movsx, movzx, rol, ror, .. |
+| `backend/floatalloc.rs` | 8 | fabs, fchs, fcom, fcomp, fcompp, fdivr, fsubr, fxch |
+| `backend/division.rs` | 7 | fadd, fsub, lea, shl |
+| `backend/framefree.rs` | 5 | fldcw, fnstcw, fnstsw, in, out |
+| `backend/comparefold.rs` | 4 | cmp, mov, movsx, movzx |
+| `backend/affine.rs` | 2 | add, inc |
+| `backend/floatassign.rs` | 2 | fld1, fldz |
+| `backend/jumps.rs` | 2 | nop |
+| `backend/addressforms.rs`, `copysink.rs`, `farload.rs`, `postrasink.rs`, `sharedstores.rs`, `storecombine.rs` | 1 each | mov |
+| `backend/stackusage.rs`, `timing.rs` | 1 each | sub |
+| `frontends/llrm-c/src/translate.rs` | 1 | fabs |
+| `frontends/llrm-nib/src/semantic/{hints,vectors}.rs` | 1 each | pop |
+
+Inside the allowed passes and not listed: `isel*`, `allocate`, `spiller`,
+`spillforward`, `ssaspill`, `constrain`, `twoaddr`, `peephole`, `peep/`, `rmw`
+and the target crates (`select.rs`, `masm.rs`, `llrm-x86-bc`). No fix yet.
+
 ### Object format (O)
 
 | Assumption | Anchor | Becomes |
@@ -571,7 +606,7 @@ m16-pinned frontends (production / total; 20 / 65 today), and the metric.
 | 14a | address-space kinds replace the literals 0/1/2/4/5 in MIR and HIR; `foreign_span` linear | HIR, analysis, transforms |
 | 14b | the address-form table per (mode, address size) read by `Pointer`, `indexed`, `select.rs`, `affine.rs` | `isel.rs`, `select.rs` |
 | 14c | `CostModel`'s m16 notions behind space kinds | `llrm-mir` |
-| 15 | operand model, one PR each (own track, with 10 and 11): `name` to `OpcodeId` (351 sites); `Mem` to `AddressRef` + `MemInfo` (487); `Loc::St` to a `Reg` (47); `Loc::Address` reuses `AddressRef` | `llrm-lir`, every `Semantics` consumer |
+| 15 | operand model, one PR each (own track, with 10 and 11): done: `Loc::St` to a `Reg` (#1208), `Loc::Address` is `AddressRef` (#1210), the positional class (#1211, #1227), one function for a cell and an address (#1238); dropped, no measured gain: `name` to `OpcodeId`, nesting `AddressRef` in `Mem` (see Opcode names outside the target) | `llrm-lir`, every `Semantics` consumer |
 | 16 | segment and far passes keyed to pair-kind spaces | `farcall`, `farload`, `nearcode`, `datagroup`, far arms of `isel.rs` |
 | 17 | schema edits (four) and language features (i) to (v), one per PR, each deleting its hooks | `isel.rs`, `patterns.isel` |
 | 18 | `ObjectWriter` and listing syntax read from the object-format description | `compile.rs`, `basic.rs`, `masm.rs` header |
