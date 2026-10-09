@@ -2,38 +2,124 @@
 
 TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart with the source line. `-Omax` is the old `-O3`; `-O0..-O3` are gcc's definitions of the passes this compiler has.
 
+## Passes by level
+
+`x`: the pass does not run. `on`: it runs, with no level-dependent budget. Else its budget at that level. Names are those of `LLRM_DEBUG=time` (`mir`, `lir`) and of `LLRM_DEBUG=runs` (the interprocedural stages). `Level::options` (`driver/flags.rs`) maps -Og to -O1's. Read from `pipeline.rs` and the backend profile (`size`, `search`, `exhaustive`, `routes`), and checked against `LLRM_DEBUG=time` and `runs` over `bench/*.c` at each level, -m32 and -m16.
+
+| pass | -O0 | -O1 | -O2 | -O3 | -Omax | -Og |
+|---|---|---|---|---|---|---|
+| *MIR, whole module, before the body loop* | | | | | | |
+| `mir available-externally` | on | on | on | on | on | on |
+| `mir globalopt` | x | on | on | on | on | on |
+| `mir ports` (module, then in the body loop) | x | on | on | on | on | on |
+| `mir stamp` | x | on | on | on | on | on |
+| *MIR, each body to a fixed point (`mir pipeline`)* | | | | | | |
+| `mir sroa` | x | on | on | on | on | on |
+| `mir fold` | x | on | on | on | on | on |
+| `mir decide` | x | on | on | on | on | on |
+| `mir tailrec` | x | x | on | on | on | x |
+| `mir loopsimplify` | x | on | on | on | on | on |
+| `mir lcssa` | x | on | on | on | on | on |
+| `mir floatloop` | x | on | on | on | on | on |
+| `mir hoist` | x | on | on | on | on | on |
+| `mir loopmotion` | x | on | on | on | on | on |
+| `mir trivialunswitch` | x | on | on | on | on | on |
+| `mir inferspace` | x | on | on | on | on | on |
+| `mir dse` | x | on | on | on | on | on |
+| `mir gvn` | x | x | on | on | on | x |
+| `mir promote` | x | on | on | on | on | on |
+| `mir indvars` | x | on | on | on | on | on |
+| `mir algebraic` | x | on | on | on | on | on |
+| `mir dead` | x | on | on | on | on | on |
+| `mir unroll`: operations, at most 16 iterations | x | 150, no growth | 150, no growth | 150, may grow | 300, may grow | 150, no growth |
+| `mir peel`: operations | x | x | x | 150, may grow | 300, may grow | x |
+| `mir fill` | x | x | on | on | on | x |
+| `mir merge` | x | x | on | on | on | x |
+| `mir unswitch` | x | x | x | on | x | x |
+| *MIR, whole module (`mir interprocedural`; stages as `LLRM_DEBUG=runs` names them)* | | | | | | |
+| `mir interprocedural` | x | on | on | on | on | on |
+| `inline`, `ipa-inline`: threshold | x | 90 | 225 | 250 | 250 | 90 |
+| `inline`: body budget, operations (m32 / m16) | x | 2 / 3 | 6 / 9 | 6 / 10 | 6 / 10 | 2 / 3 |
+| `inline`: hint / hot-call threshold | x | 325 / 525 | 325 / 525 | 325 / 525 | 325 / 525 | 325 / 525 |
+| `inline`: function called once | x | on | on | on | on | on |
+| `inline-trial`: clocks an inline must save per byte it adds | x | 16 | 16 | 16 | 16 | 16 |
+| `promote.` (argpromotion) | x | on | on | on | on | on |
+| `narrow.` (narrowspace) | x | on | on | on | on | on |
+| `ipa<N>.` (constant returns) | x | on | on | on | on | on |
+| `ipa-args` (constant parameters) | x | on | on | on | on | on |
+| `ipa-cp.` (clone for constants, growth allowed) | x | x | x | on | on | x |
+| `ipa-range` | x | x | on | on | on | x |
+| `ipa-deadargs` | x | on | on | on | on | on |
+| `ipa-recursive`: body budget, operations (m32 / m16); depth 8, size 450 | x | 2 / 3 | 6 / 9 | 6 / 10 | 6 / 10 | 2 / 3 |
+| `ipa-pure` | x | on | on | on | on | on |
+| `ipa-noreturn` | x | on | on | on | on | on |
+| *MIR, after the interprocedural step* | | | | | | |
+| `mir globaldce` | x | on | on | on | on | on |
+| `mir calleepop` | x | on | on | on | on | on |
+| `mir fixednarrow` | x | on | on | on | on | on |
+| `mir lsr`: ivopts groups / all-candidates / always-prune bounds | x | 250 / 40 / 10 | 250 / 40 / 10 | 250 / 40 / 10 | none | 250 / 40 / 10 |
+| `mir differences` | x | on | on | on | on | on |
+| `mir window` | x | on | on | on | on | on |
+| `mir rotate` | x | on | on | on | on | on |
+| `mir jumpthread` | x | on | on | on | on | on |
+| `mir gepoffset` | x | on | on | on | on | on |
+| `mir addresssink` | x | on | on | on | on | on |
+| `mir spares` | x | on | on | on | on | on |
+| `mir homes` | x | on | on | on | on | on |
+| *MIR, lowering for selection* | | | | | | |
+| `mir assumptions` | on | on | on | on | on | on |
+| `mir ehprepare` | on | on | on | on | on | on |
+| `mir fp to unsigned` | on | on | on | on | on | on |
+| `mir selects` | on | on | on | on | on | on |
+| `mir near code` | on | on | on | on | on | on |
+| *Backend (LIR), in order* | | | | | | |
+| `isel` | on | on | on | on | on | on |
+| Second selection and machine run without callee facts, cheaper kept | x | x | x | x | on | x |
+| `lir frame` | on | on | on | on | on | on |
+| `lir far-indirect-calls` | on | on | on | on | on | on |
+| `lir ssaspill`: the spiller's route, kept if cheaper (`-fallocation-routes`) | x | spill traffic >= 0.5% | spill traffic >= 0.5% | spill traffic >= 0.5% | on | spill traffic >= 0.5% |
+| `candidate spiller` | x | spill traffic >= 0.5% | spill traffic >= 0.5% | spill traffic >= 0.5% | on | spill traffic >= 0.5% |
+| `candidate cost` | x | spill traffic >= 0.5% | spill traffic >= 0.5% | spill traffic >= 0.5% | on | spill traffic >= 0.5% |
+| `candidate allocator alone` | on | on | on | on | on | on |
+| `lir phielim` | on | on | on | on | on | on |
+| `lir pressuresink` | on | on | on | on | on | on |
+| `lir floatfold` | on | on | on | on | on | on |
+| `lir floatassign` | on | on | on | on | on | on |
+| `lir floatalloc` | on | on | on | on | on | on |
+| `lir twoaddr` | on | on | on | on | on | on |
+| `lir coalesce` | on | on | on | on | on | on |
+| `lir regalloc` | on | on | on | on | on | on |
+| `regalloc candidates`, `regalloc trial`: allocations beyond the first (`-fallocation-search`) | x | <= 2 | <= 2 | <= 2 | <= 12 | <= 2 |
+| `lir parcopy` | on | on | on | on | on | on |
+| `lir peephole` | on | on | on | on | on | on |
+| `lir loopslots` | on | on | on | on | on | on |
+| `lir schedule` | on | on | on | on | on | on |
+| `lir jumps` | on | on | on | on | on | on |
+| `lir duplicated returns` | on | on | on | on | on | on |
+| `masm return overhead` | on | on | on | on | on | on |
+| `masm cleaned returns` | on | on | on | on | on | on |
+| `stack checks` | on | on | on | on | on | on |
+
+Unroll and peel budgets are the target's `unroll_budget` (m32 150, m16 200) times `target_percent` (100, -Omax 200). -Os and -Oz are not in the table: -Os is -O2's passes, `peel` on, no copy grows the code, `inline` hint and hot bonuses off, 0 clocks per byte; -Oz is -Os less `unroll` and `peel`. -Omax does not turn `unswitch` on; gcc's -O3 does, and so does ours now.
+
+Not rows: the frontend and link steps (`mir runtime`, `mir link`, `mir verify frontend`), the wrappers `mir pipeline` and `candidate first frame`, the pass manager's own (`mir declared`, `interface`, `invalidate`, `outer analyses`), the analyses, and the allocator's inner steps (`regalloc *`, `spill *`, `split *`, `ssa *`, `siblings *`, `intervals *`, `facts *`); each runs wherever its pass does.
+
 Sources read:
 
 - gcc: `releases/gcc-13.4.0` of the checkout at `/home/alim/work/personal/gcc` (`git show releases/gcc-13.4.0:gcc/opts.cc`, `gcc/params.opt`; `git describe` of the working tree is `basepoints/gcc-17-4628-g416290b10bb`, not used). The host's `gcc` is 13.4.0, the one measured.
 - LLVM: the checkout at `/home/alim/work/personal/llvm-project`, `llvmorg-24-init-10533-gd1106deb71cc` (the object database lacks the release tags). The host's `clang` is 20.1.8, the one measured; a value read at 24-init may differ there.
 - `gcc -Q --help=optimizers` reports `-funroll-loops [enabled]` at `-O2`, which the source table does not do (no `unroll_loops` row): the table is taken, the listing is not.
 
-## Levels
-
-`driver/flags.rs` `Level::options` -> `llrm-transforms/src/pipeline.rs`:
-
-| level | options | pipeline.rs |
-|---|---|---|
-| `-O0` | `none()`: no pass runs | 96 |
-| `-O1`, `-Og` | `basic()`: the scalar passes and the last call inlined; inline threshold 90; complete copies of a loop must not grow the code; no gcse, sibling calls, fill, peel, unswitch | 101 |
-| `-O2` | `standard()`: `-O1` with inlining (threshold 225), gcse, sibling calls, fill | 123 |
-| `-O3` | `speed()`: `-O2` with peeling, unswitching, complete copies that may grow the code, inline threshold 250 | 128 |
-| `-Omax` | `aggressive()`: every pass on but unswitching, `target_percent` 200, inline threshold 250: the old `-O3` | 133 |
-| `-Os` | `size()`: copies must not grow the code; hint and hot inline bonuses off | 115 |
-| `-Oz` | `min_size()`: `size()` less `unroll`, `peel` | 125 |
-
-`-Omax` does not turn `unswitch` on; gcc's `-O3` does, and so does ours now.
-
 ## Passes: gcc 13.4.0 `default_options_table` (`opts.cc`) against ours
 
 | our option / `-f` name | gcc flag | gcc level (opts.cc line) | ours |
 |---|---|---|---|
 | `dead` / `tree-dce` | `-ftree-dce` | -O1 (590) | every level above -O0 |
-| `promote` / `tree-sra` | `-ftree-sra` | -O1, not -Og (614) | same |
-| `drop_stores` / `tree-dse` | `-ftree-dse` | -O1, not -Og (612) | same |
-| `hoist` / `move-loop-invariants` | `-fmove-loop-invariants` | -O1, not -Og (607) | same |
+| `promote` / `tree-sra` | `-ftree-sra` | -O1, not -Og (614) | every level above -O0, -Og too |
+| `drop_stores` / `tree-dse` | `-ftree-dse` | -O1, not -Og (612) | every level above -O0, -Og too |
+| `hoist` / `move-loop-invariants` | `-fmove-loop-invariants` | -O1, not -Og (607) | every level above -O0, -Og too |
 | `strength` / `strength-reduce` | `-ftree-slsr` | -O1 (594) | same |
-| `inline.last` / `inline-functions-called-once` | `-finline-functions-called-once` | -O1, not -Og (606) | same |
+| `inline.last` / `inline-functions-called-once` | `-finline-functions-called-once` | -O1, not -Og (606) | every level above -O0, -Og too |
 | `inline` / `inline-functions` | `-finline-small-functions`, `-finline-functions` | -O2 (627, 652) | every level above -O0 |
 | `forward`, `drop_loads` / `gcse` | `-fgcse` | -O2 (624) | every level above -O0 |
 | `sibcalls` / `optimize-sibling-calls` | `-foptimize-sibling-calls` | -O2 (636) | same |
@@ -97,7 +183,7 @@ Our own numbers, not read from gcc or LLVM: `COUNTED_TRIPS`, `MOST_TERMS`, `MOST
 
 ## The inline threshold is ours
 
-`Threshold::budget` is `clamp(call_reach / 2, 6, 24) * limit / 225`, compared with the callee's MIR operations (`semantic_count`). So 225 and 250 are ratios (250/225 is LLVM's -O3 over -O2) and the budget is 6 to 24 operations at -O2, 26 at -O3; LLVM's 225 is cost units of about 5 per instruction plus a call penalty of 25. Calibration, `clang -O2 -Rpass=inline` against `LLRM_DEBUG=inline`, on `x*3+1`, a small loop and a loop over an array: ours 2, 8 and 10 operations; LLVM `cost=-25` (threshold 337), `10` and `10` (threshold 225), each after its bonuses, so no per-instruction scale can be read off them. -O1's 90 is 225 x `early-inlining-insns` 6 / `max-inline-insns-auto` 15 (params.opt:129, 545).
+`Threshold::budget` is `clamp(call_reach / 2, 6, 24) * limit / 225`, compared with the callee's MIR operations (`semantic_count`). So 225 and 250 are ratios (250/225 is LLVM's -O3 over -O2) and the budget is 6 to 24 operations at -O2, 26 at -O3 where `call_reach` allows (m32's is 3, m16's 18: 6 and 9 at -O2, 6 and 10 at -O3, 2 and 3 at -O1); LLVM's 225 is cost units of about 5 per instruction plus a call penalty of 25. Calibration, `clang -O2 -Rpass=inline` against `LLRM_DEBUG=inline`, on `x*3+1`, a small loop and a loop over an array: ours 2, 8 and 10 operations; LLVM `cost=-25` (threshold 337), `10` and `10` (threshold 225), each after its bonuses, so no per-instruction scale can be read off them. -O1's 90 is 225 x `early-inlining-insns` 6 / `max-inline-insns-auto` 15 (params.opt:129, 545).
 
 ## Register allocation by level: gcc's IRA against ours
 
