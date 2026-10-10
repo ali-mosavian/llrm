@@ -123,7 +123,8 @@ pub fn section(
     buf.u8(CIE_VERSION);
     buf.u8(0);
     buf.u8(address as u8);
-    buf.u8(0);
+    // A 16-bit program's frame descriptions name the segment their code is in.
+    buf.u8(if address == 2 { 2 } else { 0 });
     buf.uleb(1);
     buf.sleb(DATA_ALIGNMENT);
     buf.uleb(return_column);
@@ -150,6 +151,9 @@ pub fn section(
         // The CIE is the section's first record.
         buf.u32(0);
         let (symbol, base) = crate::anchor(object, range.section)?;
+        if address == 2 {
+            buf.segment(range.section);
+        }
         buf.address(address, symbol, range.offset as i64 - base as i64);
         buf.bytes.extend((range.length as u64).to_le_bytes().iter().take(address));
         let mut state = &initial;
