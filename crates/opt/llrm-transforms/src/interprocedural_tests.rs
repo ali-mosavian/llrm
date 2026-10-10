@@ -113,7 +113,8 @@ fn test_private_leaves_are_inlined_and_each_changed_body_reoptimised() {
     let (proved, stages) = step(&mut module, &["f"], 4);
     let text = printed(&module);
     assert!(!text[text.find("define i16 @f").unwrap()..].contains("call "), "{text}");
-    assert!(staged(&stages, "f", "inline0.") && staged(&stages, "f", "inline2."), "{stages:?}");
+    // Every site of `f` is taken in one scan, and `f` is built once for them.
+    assert_eq!(stages, [("f".to_owned(), "inline0.".to_owned())]);
     // No call reaches the helpers any more.
     assert_eq!(proved.reachable, defined(&module, &["f"]));
     assert_eq!(results(&module, INPUTS), results(&parsed(HELPERS), INPUTS));
@@ -183,7 +184,7 @@ fn test_disagreeing_actuals_or_a_public_callee_are_not_specialized() {
     ] {
         let mut module = parsed(&text);
         step(&mut module, &["f"], 40);
-        assert!(printed(&module).contains("  store i16 %x, ptr @g\n"), "{text}");
+        assert!(!printed(&module).contains("constprop"), "{text}");
     }
 }
 
@@ -353,7 +354,14 @@ fn test_the_step_runs_as_a_program_pass() {
         ranges: true,
     });
     let stages = manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
-    assert_eq!(stages.iter().map(|stage| stage.function).collect::<BTreeSet<_>>(), ids(&module, &["f"]));
+    // The helpers every call of which went lose their bodies: changed, and no
+    // pipeline for them.
+    let changed = stages.iter().map(|stage| stage.function).collect::<BTreeSet<_>>();
+    assert!(changed.contains(&module.named("f").unwrap()));
+    for name in ["scale", "clamp"] {
+        let helper = module.global(module.named(name).unwrap()).function().unwrap();
+        assert_eq!(helper.walk().count(), 1, "@{name} kept its body: {}", printed(&module));
+    }
     assert_eq!(results(&module, INPUTS), results(&parsed(HELPERS), INPUTS));
 }
 
@@ -1588,4 +1596,61 @@ b:
     assert!(text.contains("range(i16 0, ") && text.contains("%x)"), "{text}");
     let sink = text.lines().find(|line| line.contains("@sink(")).unwrap_or_default();
     assert!(!sink.contains("range(i16 -"), "{sink}\n{text}");
+}
+
+/// gcc builds only the bodies that survive: a private function whose last call
+/// was inlined is not inlined into or run through the pipeline again (a chain
+/// of N: every body held the ones below it, N squared).
+#[test]
+fn test_a_private_function_whose_last_call_went_is_not_built() {
+    let mut text = String::from("define internal i16 @h0(i16 %x) {\nb1:\n  %y = mul i16 %x, 3\n  ret i16 %y\n}\n");
+    for at in 1..12 {
+        text.push_str(&format!(
+            "\ndefine internal i16 @h{at}(i16 %x) {{\nb1:\n  %a = add i16 %x, {at}\n  %c = call i16 @h{}(i16 %a)\n  %y = xor i16 %c, %x\n  ret i16 %y\n}}\n",
+            at - 1
+        ));
+    }
+    text.push_str("\ndefine i16 @f(i16 %x) {\nb1:\n  %r = call i16 @h11(i16 %x)\n  ret i16 %r\n}\n");
+    let mut module = parsed(&text);
+    let (proved, stages) = step(&mut module, &["f"], 4);
+    assert_eq!(proved.reachable, defined(&module, &["f"]));
+    let built: BTreeSet<&str> = stages.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(built, BTreeSet::from(["f"]), "{stages:?}");
+    assert_eq!(results(&module, INPUTS), results(&parsed(&text), INPUTS));
+}
+
+/// A function only an invoke or a `!callees` list names is still called.
+#[test]
+fn test_a_function_only_an_invoke_calls_is_not_dead() {
+    let text = "declare i32 @personality(...)
+
+define internal void @handler() {
+b1:
+  call void @sink(i16 1)
+  ret void
+}
+
+declare void @sink(i16)
+
+define void @top() personality ptr @personality {
+b1:
+  invoke void @handler() to label %b2 unwind label %b3
+
+b2:
+  ret void
+
+b3:
+  %pad = landingpad { ptr, i32 } cleanup
+  resume { ptr, i32 } %pad
+}
+";
+    let mut module = parsed(text);
+    step(&mut module, &["top"], 4);
+    let handler = module.named("handler").expect("kept");
+    let body = module.global(handler).function().expect("a function");
+    assert!(
+        body.walk().any(|(_, inst)| matches!(body.instruction(inst).opcode, Opcode::Call(_))),
+        "the body an invoke reaches was emptied: {}",
+        printed(&module)
+    );
 }
