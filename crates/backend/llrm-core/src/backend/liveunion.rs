@@ -115,11 +115,11 @@ impl Index {
         &mut self,
         value: u32,
         at: u64,
-        live: &IndexMap<u32, Interval>,
+        live: &impl crate::backend::live::Ranges,
     ) {
         self.by_taking.insert(at, value);
         self.taken.insert(value, at);
-        if let Some(interval) = live.get(&value) {
+        if let Some(interval) = live.range(value) {
             for segment in &interval.segments {
                 self.keep(segment, value);
             }
@@ -129,11 +129,11 @@ impl Index {
     fn remove(
         &mut self,
         value: u32,
-        live: &IndexMap<u32, Interval>,
+        live: &impl crate::backend::live::Ranges,
     ) {
         if let Some(at) = self.taken.shift_remove(&value) {
             self.by_taking.remove(&at);
-            if let Some(interval) = live.get(&value) {
+            if let Some(interval) = live.range(value) {
                 for segment in &interval.segments {
                     self.drop(segment, value);
                 }
@@ -168,7 +168,7 @@ impl LiveUnion {
     /// `live` has them.
     pub fn of(
         holders: impl IntoIterator<Item = (Register, Vec<u32>)>,
-        live: &IndexMap<u32, Interval>,
+        live: &impl crate::backend::live::Ranges,
     ) -> Self {
         let mut union = Self::new();
         for (register, values) in holders {
@@ -184,7 +184,7 @@ impl LiveUnion {
         &mut self,
         register: Register,
         value: u32,
-        live: &IndexMap<u32, Interval>,
+        live: &impl crate::backend::live::Ranges,
     ) {
         self.taken += 1;
         let at = self.taken;
@@ -201,7 +201,7 @@ impl LiveUnion {
         &mut self,
         register: Register,
         value: u32,
-        live: &IndexMap<u32, Interval>,
+        live: &impl crate::backend::live::Ranges,
     ) {
         let held = self.registers.get_mut(&register).expect("a value is in the register it holds");
         held.holders.retain(|other| *other != value);
@@ -237,7 +237,7 @@ impl LiveUnion {
     fn indexed<'a>(
         &self,
         held: &'a Held,
-        live: &IndexMap<u32, Interval>,
+        live: &impl crate::backend::live::Ranges,
     ) -> Option<std::cell::Ref<'a, Index>> {
         self.asked.set(self.asked.get().saturating_add(1));
         if held.index.borrow().is_none() {
@@ -259,7 +259,7 @@ impl LiveUnion {
         &self,
         register: &Register,
         one: &Interval,
-        live: &IndexMap<u32, Interval>,
+        live: &impl crate::backend::live::Ranges,
     ) -> Vec<u32> {
         let Some(held) = self.registers.get(register) else { return Vec::new() };
         let Some(index) = self.indexed(held, live) else {
@@ -267,7 +267,7 @@ impl LiveUnion {
                 .holders
                 .iter()
                 .copied()
-                .filter(|other| live.get(other).is_some_and(|found| found.overlaps(one)))
+                .filter(|other| live.range(*other).is_some_and(|found| found.overlaps(one)))
                 .collect();
         };
         let mut found = BTreeSet::new();
@@ -282,11 +282,11 @@ impl LiveUnion {
         &self,
         register: &Register,
         one: &Interval,
-        live: &IndexMap<u32, Interval>,
+        live: &impl crate::backend::live::Ranges,
     ) -> bool {
         let Some(held) = self.registers.get(register) else { return false };
         let Some(index) = self.indexed(held, live) else {
-            return held.holders.iter().filter_map(|other| live.get(other)).any(|other| other.overlaps(one));
+            return held.holders.iter().filter_map(|other| live.range(*other)).any(|other| other.overlaps(one));
         };
         one.segments.iter().any(|segment| index.meets(segment.start, segment.end))
     }

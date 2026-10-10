@@ -57,6 +57,7 @@ pub mod lanes;
 pub mod layout;
 pub mod lifetimes;
 pub mod lirtext;
+pub mod live;
 pub mod liveness;
 pub mod liveunion;
 pub mod loopslots;
