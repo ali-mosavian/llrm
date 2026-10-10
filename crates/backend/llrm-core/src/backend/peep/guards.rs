@@ -288,7 +288,7 @@ pub fn stack_or_frame(
     _: &Cx,
     one: Reg,
 ) -> bool {
-    [Register::ESP, Register::EBP].contains(&one.register.full_register32())
+    crate::backend::registerinfo::is_stack(one.register) || crate::backend::registerinfo::is_frame(one.register)
 }
 
 pub fn segment(
@@ -613,7 +613,7 @@ pub fn stack_based(
     _: &Cx,
     cell: &Mem,
 ) -> bool {
-    ir::root(cell.through) == Register::ESP
+    crate::backend::registerinfo::is_stack(cell.through)
 }
 
 /// A frame cell at or above the arguments, reached without the stack pointer.
@@ -622,7 +622,7 @@ pub fn frame_argument(
     cell: &Mem,
 ) -> bool {
     cell.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp >= 4)
-        && ir::root(cell.through) != Register::ESP
-        && ir::root(cell.index_through) != Register::ESP
+        && !crate::backend::registerinfo::is_stack(cell.through)
+        && !crate::backend::registerinfo::is_stack(cell.index_through)
         && !cell.stack_argument
 }

@@ -26,7 +26,7 @@ pub fn converted(body: &LirBody) -> LirBody {
             if addr.is_some_and(|addr| addr.space == Space::Frame) && source.base.is_some() {
                 sources.push(Loc::Address(AddressRef {
                     addr: None,
-                    through: Register::BP,
+                    through: crate::model::ir::FRAME,
                     index_through: source.through,
                     scale: source.scale,
                     offset: addr.expect("checked").disp,

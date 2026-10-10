@@ -90,7 +90,8 @@ pub fn _static_frame(
     size: i64,
 ) -> lir::LirBody {
     let moved = |addr: &Addr| -> Addr {
-        let segment = if addr.segment == Register::SS { Register::None } else { addr.segment };
+        let segment =
+            if crate::backend::registerinfo::is_stack_segment(addr.segment) { Register::None } else { addr.segment };
         Addr { space: Space::Segment, index: MAIN_FRAME_ID, disp: size + addr.disp, segment, ..*addr }
     };
     let variables = body
@@ -106,7 +107,7 @@ pub fn _static_frame(
         .collect();
     // Through BP no longer: the data object's own address.
     let through =
-        |register: Register| if matches!(register, Register::BP | Register::EBP) { Register::None } else { register };
+        |register: Register| if crate::backend::registerinfo::is_frame(register) { Register::None } else { register };
     let operand = |r#where: &Loc| -> Loc {
         if !r#where.in_frame() {
             return r#where.clone();

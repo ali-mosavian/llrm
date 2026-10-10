@@ -92,7 +92,7 @@ fn slot(mem: &Mem) -> Option<i64> {
     let addr = mem.addr?;
     (addr.space == Space::Frame
         && addr.base == Register::None
-        && mem.through == Register::BP
+        && mem.through == ir::FRAME
         && mem.base.is_none()
         && mem.index.is_none()
         && mem.index_through == Register::None)
@@ -100,7 +100,7 @@ fn slot(mem: &Mem) -> Option<i64> {
 }
 
 fn is_bp(register: Register) -> bool {
-    register != Register::None && ir::root(register) == ir::root(Register::BP)
+    register != Register::None && crate::backend::registerinfo::is_frame(register)
 }
 
 /// The word slot `mem` names, when it is exactly one.
@@ -717,8 +717,14 @@ pub fn hoisted(
         if entries.is_empty() || !entries.iter().all(|at| body.blocks[index[at]].succ == [one.header]) {
             continue;
         }
-        let roots =
-            available.iter().chain(target::SEGMENTS.iter().filter(|one| ![Register::CS, Register::SS].contains(one)));
+        let roots = available
+            .iter()
+            .chain(
+                target::SEGMENTS.iter().filter(|one| {
+                    !crate::backend::registerinfo::is_code_segment(**one)
+                        && !crate::backend::registerinfo::is_stack_segment(**one)
+                }),
+            );
         let Some(writes) = writes_of(body, &written, one, &index) else { continue };
         let touches = std::cell::OnceCell::new();
         let moved = roots

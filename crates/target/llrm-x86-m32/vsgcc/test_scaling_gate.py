@@ -1,5 +1,6 @@
 """scaling_gate.py: a pass gone quadratic reads as 2N/N = 4, a linear one as 2, and neither direction of change passes unseen."""
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -394,14 +395,14 @@ def test_lsr_does_not_add_up_the_function_or_rebuild_its_graph_for_each_loop(tmp
     built the graph of the whole function to ask three blocks' neighbours (`rotate::_shape`): 1,391 Minstr; on `nest` at N=128 it also
     gathered each block's live sets again for each loop around it and built them as trees: 9,362. The traffic is added up once and
     each loop's instructions taken out, the neighbours are asked of the blocks, the live sets kept and the cells sorted in vectors:
-    about 600 and 5,900. Both stay quadratic (the loops are, and each changed loop invalidates what the next asks for), so the bounds
-    are on the cost."""
+    about 600 and 5,900; the spill forecast is a sweep of the loop's blocks, not a list of residents at each point of them: 1,340 on
+    `nest`. The bounds are on the cost."""
     costs = {}
     for axis, n in (("branches", 512), ("nest", 128)):
         source = tmp_path / f"{axis}_{n}.c"
         source.write_text(scaling.AXES[axis](n))
         costs[axis] = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir lsr"]
-    assert costs["branches"] <= 900 and costs["nest"] <= 7500, costs
+    assert costs["branches"] <= 900 and costs["nest"] <= 2000, costs
 
 
 def test_lsr_loop_reads_its_own_blocks_and_the_function_facts_once(tmp_path):
@@ -471,3 +472,22 @@ def test_interprocedural_own_work_stays_near_linear_on_the_chain_functions_and_c
         if big > limit * small:
             grown[axis] = f"{small:.0f} -> {big:.0f} Minstr"
     assert not grown, grown
+
+
+def test_a_step_counts_the_same_whatever_the_paths_the_compiler_is_given(tmp_path):
+    """cells(224) at -O2 read 173.7 Minstr in `lir peephole` from one path and 159.0 from another, the whole compile 4521 or 4506:
+    the length of the compiler's own path and of the source's moves the allocator's pages (mimalloc given a block that lives all run,
+    or none, in the page of a size class), and a gate that measured base and head from binaries and temporary directories of
+    different names failed on a step that had not moved. `scaling.sample` runs `./llrm-c` on `src.c` in a directory of its own."""
+    counts = set()
+    for width in range(1, 40, 3):
+        where = tmp_path / ("d" * width)
+        where.mkdir()
+        source = where / "c.c"
+        source.write_text(scaling.cells(224))
+        binary = where / "bin" / "llrm-c"
+        binary.parent.mkdir()
+        shutil.copy(Path(gate.levels_time.command("llrm", "O2", source)[0]).resolve(), binary)
+        command = [str(binary), *gate.levels_time.command("llrm", "O2", source)[1:]]
+        counts.add(round(gate.own_work(command)["lir peephole"], 0))
+    assert max(counts) - min(counts) <= 1, sorted(counts)

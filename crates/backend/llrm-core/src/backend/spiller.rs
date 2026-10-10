@@ -3135,7 +3135,8 @@ fn _address_source(
             && cell.addr.is_some_and(|found| {
                 found.space == Space::Literal
                     && found.index == 0
-                    && matches!(found.segment, Register::None | Register::SS)
+                    && (found.segment == Register::None
+                        || crate::backend::registerinfo::is_stack_segment(found.segment))
             });
         if !fits {
             invalid = true;

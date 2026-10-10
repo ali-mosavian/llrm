@@ -10,8 +10,6 @@
 
 use std::sync::Arc;
 
-use iced_x86::Register;
-
 use crate::backend::liveness;
 use crate::backend::peephole::id;
 use crate::model::ir::{Loc, Operation, Space};
@@ -29,9 +27,6 @@ const _PURE: [Operation; 9] = [
     Operation::Funnel,
     Operation::Extend,
 ];
-const _STATEFUL_REGISTERS: [Register; 6] =
-    [Register::ES, Register::CS, Register::SS, Register::DS, Register::FS, Register::GS];
-
 fn _relocated(where_: &Loc) -> bool {
     match where_ {
         Loc::Imm(one) => one.address.is_some(),
@@ -44,7 +39,7 @@ fn _relocated(where_: &Loc) -> bool {
 fn _stateful_destination(where_: &Loc) -> bool {
     matches!(
         where_,
-        Loc::Reg(one) if one.register.full_register32() == Register::ESP || _STATEFUL_REGISTERS.contains(&one.register)
+        Loc::Reg(one) if crate::backend::registerinfo::is_stack(one.register) || crate::backend::registerinfo::is_segment(one.register)
     )
 }
 

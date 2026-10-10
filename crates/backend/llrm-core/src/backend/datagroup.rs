@@ -190,10 +190,8 @@ fn _prefixed(
     cell: &ir::Mem,
     through: Register,
 ) -> Option<ir::Mem> {
-    let stack_based = |base: Register| matches!(
-        base,
-        Register::BP | Register::EBP | Register::SP | Register::ESP
-    );
+    let stack_based =
+        |base: Register| crate::backend::registerinfo::is_frame(base) || crate::backend::registerinfo::is_stack(base);
     let Some(addr) = cell.addr else {
         if cell.index.is_some() || !matches!(cell.through, Register::SI | Register::DI | Register::BX) {
             return None;

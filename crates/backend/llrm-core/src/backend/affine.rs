@@ -86,7 +86,7 @@ pub fn form(
     scales: &BTreeSet<i64>,
 ) -> Option<AddressRef> {
     let at = |through: Register, index: Register, scale: i64| {
-        (index != Register::ESP && scales.contains(&scale)).then_some(AddressRef {
+        (!crate::backend::registerinfo::is_stack(index) && scales.contains(&scale)).then_some(AddressRef {
             through,
             index_through: index,
             scale,

@@ -5,7 +5,7 @@
 
 use std::sync::OnceLock;
 
-pub use llrm_lir::registers::{Entry, Info, RegId, class};
+pub use llrm_lir::registers::{Entry, FRAME, Info, RegId, STACK, class};
 
 static BOUND: OnceLock<&'static Info> = OnceLock::new();
 
@@ -70,6 +70,101 @@ pub fn view(
     info().view(root, bits)
 }
 
+/// Whether `register` is a view of the frame register's root.
+pub fn is_frame(register: RegId) -> bool {
+    info().is_frame(register)
+}
+
+/// Whether `register` is a view of the stack pointer's root.
+pub fn is_stack(register: RegId) -> bool {
+    info().is_stack(register)
+}
+
+/// The root of the frame register.
+pub fn frame_root() -> RegId {
+    info().frame
+}
+
+/// The root of the stack pointer.
+pub fn stack_root() -> RegId {
+    info().stack
+}
+
+/// The segment register an address space of a pair kind means, `None` where
+/// the target has no segments.
+pub fn data_segment() -> Option<RegId> {
+    info().data_segment
+}
+
+pub fn stack_segment() -> Option<RegId> {
+    info().stack_segment
+}
+
+pub fn code_segment() -> Option<RegId> {
+    info().code_segment
+}
+
+/// The one a far pointer's selector is loaded into.
+pub fn far_segment() -> Option<RegId> {
+    info().far_segment
+}
+
+/// Whether `register` is a segment register.
+pub fn load_form(segment: RegId) -> Option<&'static str> {
+    info().load_form(segment)
+}
+
+pub fn loaded_by(form: &str) -> Option<RegId> {
+    info().loaded_by(form)
+}
+
+/// Whether `form` loads a far pointer into a segment register an address may
+/// be held in: any but the data segment, which is the default.
+pub fn loads_a_selector(form: &str) -> bool {
+    loaded_by(form).is_some_and(|segment| !is_data_segment(segment))
+}
+
+pub fn is_segment(register: RegId) -> bool {
+    in_class(register, class::SEGMENT)
+}
+
+pub fn is_data_segment(register: RegId) -> bool {
+    data_segment() == Some(register)
+}
+
+pub fn is_stack_segment(register: RegId) -> bool {
+    stack_segment() == Some(register)
+}
+
+pub fn is_code_segment(register: RegId) -> bool {
+    code_segment() == Some(register)
+}
+
+/// The segment registers for code that exists only where the target has
+/// address spaces of a pair kind: a target without them never reaches it.
+pub mod segments {
+    use super::RegId;
+
+    fn named(
+        role: Option<RegId>,
+        what: &str,
+    ) -> RegId {
+        role.unwrap_or_else(|| panic!("the target's register file names no {what} segment"))
+    }
+
+    pub fn data() -> RegId {
+        named(super::data_segment(), "data")
+    }
+
+    pub fn stack() -> RegId {
+        named(super::stack_segment(), "stack")
+    }
+
+    pub fn far() -> RegId {
+        named(super::far_segment(), "far")
+    }
+}
+
 /// Every integer register by `bytes` wide, by iced's number.
 pub fn entries() -> impl Iterator<Item = (RegId, &'static Entry)> {
     info().entries()
@@ -101,14 +196,54 @@ mod tests {
         }
     }
 
-    /// A register the description does not list is its own root: the segment
-    /// registers and the extended ones.
+    /// A register the description does not list is its own root: the extended
+    /// ones.
     #[test]
     fn a_register_the_description_omits_is_its_own() {
-        for register in [RegId::DS, RegId::R8, RegId::XMM0] {
+        for register in [RegId::R8, RegId::XMM0] {
             assert!(!known(register));
             assert_eq!(root(register), register);
         }
         assert_eq!((bytes(RegId::ST3), root(RegId::ST3)), (Some(10), RegId::ST3));
+    }
+
+    /// The stack and the frame are the roots the description gives those
+    /// classes, whatever view is asked about; no other register is either.
+    #[test]
+    fn the_stack_and_the_frame_are_the_roots_the_description_names() {
+        assert_eq!((stack_root(), frame_root()), (RegId::ESP, RegId::EBP));
+        assert!([RegId::SP, RegId::ESP].into_iter().all(is_stack));
+        assert!([RegId::BP, RegId::EBP].into_iter().all(is_frame));
+        for other in [RegId::AX, RegId::EAX, RegId::SI, RegId::DS, RegId::ST0] {
+            assert!(!is_stack(other) && !is_frame(other), "{other:?}");
+        }
+        assert_eq!((FRAME, STACK), (RegId::BP, RegId::SP));
+    }
+
+    /// The segment each address space of a pair kind means is the register the
+    /// description gives that class (m16's default); any other segment is none.
+    #[test]
+    fn the_segments_are_the_registers_the_description_names() {
+        assert_eq!(
+            (data_segment(), stack_segment(), code_segment(), far_segment()),
+            (Some(RegId::DS), Some(RegId::SS), Some(RegId::CS), Some(RegId::ES))
+        );
+        assert!([RegId::ES, RegId::CS, RegId::SS, RegId::DS, RegId::FS, RegId::GS].into_iter().all(is_segment));
+        assert!(![RegId::AX, RegId::EBP, RegId::ST0].into_iter().any(is_segment));
+        assert!(!is_stack_segment(RegId::DS) && !is_data_segment(RegId::FS) && !is_code_segment(RegId::None));
+    }
+
+    /// The load that fills each segment register is the description's, and
+    /// agrees with the form table's `d1=<segment>` row of that mnemonic.
+    #[test]
+    fn the_far_loads_are_the_ones_the_description_states() {
+        let forms = include_str!("../../../../target/llrm-x86-m16/src/instructions/x86.instr");
+        for (segment, form) in [(RegId::ES, "les"), (RegId::DS, "lds"), (RegId::FS, "lfs"), (RegId::GS, "lgs")] {
+            assert_eq!((load_form(segment), loaded_by(form)), (Some(form), Some(segment)));
+            let row = forms.lines().find(|line| line.starts_with(&format!("{form} "))).expect("a form row");
+            assert!(row.contains(&format!("d1={}", info().name(segment).unwrap())), "{row}");
+        }
+        assert_eq!((load_form(RegId::CS), loaded_by("mov")), (None, None));
+        assert!(loads_a_selector("les") && !loads_a_selector("lds") && !loads_a_selector("mov"));
     }
 }

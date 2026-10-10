@@ -11,31 +11,62 @@ pub type RegId = Register;
 
 /// The classes a description may give a register, one bit each, in this order.
 /// A name not here is refused where the table is generated.
-pub const CLASSES: [&str; 12] =
-    ["base", "byte", "frame", "gpr", "index", "int", "pc", "positional", "reserved", "stack", "string_segment", "x87"];
+pub const CLASSES: [&str; 17] = [
+    "base",
+    "byte",
+    "code_segment",
+    "data_segment",
+    "far_segment",
+    "frame",
+    "gpr",
+    "index",
+    "int",
+    "pc",
+    "positional",
+    "reserved",
+    "segment",
+    "stack",
+    "stack_segment",
+    "string_segment",
+    "x87",
+];
 
 /// The class bits.
 pub mod class {
     pub const BASE: u32 = 1 << 0;
     pub const BYTE: u32 = 1 << 1;
-    pub const FRAME: u32 = 1 << 2;
-    pub const GPR: u32 = 1 << 3;
-    pub const INDEX: u32 = 1 << 4;
+    pub const CODE_SEGMENT: u32 = 1 << 2;
+    pub const DATA_SEGMENT: u32 = 1 << 3;
+    pub const FAR_SEGMENT: u32 = 1 << 4;
+    pub const FRAME: u32 = 1 << 5;
+    pub const GPR: u32 = 1 << 6;
+    pub const INDEX: u32 = 1 << 7;
     /// An integer register: the 8, 16 and 32-bit views the width tables name.
-    pub const INT: u32 = 1 << 5;
-    pub const PC: u32 = 1 << 6;
+    pub const INT: u32 = 1 << 8;
+    pub const PC: u32 = 1 << 9;
     /// A position in a stack: an exchange of it is an effect and it is no
     /// register a pass renames or removes.
-    pub const POSITIONAL: u32 = 1 << 7;
-    pub const RESERVED: u32 = 1 << 8;
-    pub const STACK: u32 = 1 << 9;
-    pub const STRING_SEGMENT: u32 = 1 << 10;
-    pub const X87: u32 = 1 << 11;
+    pub const POSITIONAL: u32 = 1 << 10;
+    pub const RESERVED: u32 = 1 << 11;
+    /// A segment register: an operand, not allocatable.
+    pub const SEGMENT: u32 = 1 << 12;
+    pub const STACK: u32 = 1 << 13;
+    pub const STACK_SEGMENT: u32 = 1 << 14;
+    pub const STRING_SEGMENT: u32 = 1 << 15;
+    pub const X87: u32 = 1 << 16;
 }
+
+/// What LIR calls the frame register and the stack pointer, whatever the
+/// target: a listing and an object spell them as the target has them
+/// (`FrameRegisters::spelled`).
+pub const FRAME: RegId = Register::BP;
+pub const STACK: RegId = Register::SP;
 
 /// One register of the file.
 #[derive(Clone, Copy, Debug)]
 pub struct Entry {
+    /// The register itself.
+    pub id: RegId,
     pub name: &'static str,
     pub bits: u32,
     pub root: RegId,
@@ -49,8 +80,22 @@ pub struct Entry {
 /// each width by its root.
 pub struct Info {
     pub table: [Option<Entry>; 256],
-    /// (root, bits, register) for every entry.
-    pub views: &'static [(RegId, u32, RegId)],
+    /// The root the description gives the class `frame`, and `stack`.
+    pub frame: RegId,
+    pub stack: RegId,
+    /// The far-pointer load that fills each segment register: `(es, "les")`.
+    pub loads: &'static [(RegId, &'static str)],
+    /// The segment register each address space of a pair kind means, where the
+    /// target has segments: what an access without a prefix reads, the stack's,
+    /// the code's, and the one a far pointer's selector is loaded into.
+    pub data_segment: Option<RegId>,
+    pub stack_segment: Option<RegId>,
+    pub code_segment: Option<RegId>,
+    pub far_segment: Option<RegId>,
+    /// The widths the file states (0 pads), and each root's register at each:
+    /// `views[root as usize][column of the width]`.
+    pub widths: [u32; 8],
+    pub views: [[Option<RegId>; 8]; 256],
 }
 
 impl Info {
@@ -124,15 +169,44 @@ impl Info {
         root: RegId,
         bits: u32,
     ) -> Option<RegId> {
-        self.views
-            .iter()
-            .filter(|(of, width, _)| *of == root && *width == bits)
-            .map(|(_, _, one)| *one)
-            .min_by_key(|one| *one as usize)
+        let column = self.widths.iter().position(|one| *one == bits && bits != 0)?;
+        self.views.get(root as usize)?[column]
+    }
+
+    /// Whether `register` is a view of the frame register's root.
+    pub fn is_frame(
+        &self,
+        register: RegId,
+    ) -> bool {
+        self.root(register) == self.frame
+    }
+
+    /// Whether `register` is a view of the stack pointer's root.
+    pub fn is_stack(
+        &self,
+        register: RegId,
+    ) -> bool {
+        self.root(register) == self.stack
+    }
+
+    /// The mnemonic that loads a far pointer's offset and `segment`.
+    pub fn load_form(
+        &self,
+        segment: RegId,
+    ) -> Option<&'static str> {
+        self.loads.iter().find(|(one, _)| *one == segment).map(|(_, name)| *name)
+    }
+
+    /// The segment register `form` loads, where it is a far-pointer load.
+    pub fn loaded_by(
+        &self,
+        form: &str,
+    ) -> Option<RegId> {
+        self.loads.iter().find(|(_, name)| *name == form).map(|(one, _)| *one)
     }
 
     /// The entries in iced's number order, with their registers.
     pub fn entries(&self) -> impl Iterator<Item = (RegId, &Entry)> {
-        self.views.iter().map(|(_, _, one)| *one).filter_map(|one| self.get(one).map(|entry| (one, entry)))
+        self.table.iter().flatten().map(|entry| (entry.id, entry))
     }
 }
