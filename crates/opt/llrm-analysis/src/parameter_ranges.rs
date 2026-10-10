@@ -58,7 +58,7 @@ impl Seen {
 /// computed from its operands' a level or two down.
 fn actual(
     unit: &Unit,
-    scope: &IndexMap<ValueId, Interval>,
+    scope: &crate::ranges::Intervals,
     facts: &IndexMap<ValueId, Known>,
     operand: Operand,
     depth: u32,
