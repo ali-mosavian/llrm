@@ -718,3 +718,13 @@ def test_homes_walks_the_live_sets_once_for_all_its_candidates_not_once_for_each
     source.write_text(scaling.AXES["joins"](128))
     cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir homes"]
     assert cost <= 800, cost
+
+
+def test_a_branch_is_decided_from_the_walk_not_from_a_cell_map_met_at_every_join(tmp_path):
+    """`mir decide` solved memory with the dense per-block cell map for the facts its branches are read from: on `joins` at N=256 11,636
+    Minstr, 3.8x a doubling, the same quadratic through-memory had. Read from the stores MemorySSA says reach each load it is 1,380.
+    More than 3,000 fails."""
+    source = tmp_path / "joins_256.c"
+    source.write_text(scaling.AXES["joins"](256))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir decide"]
+    assert cost <= 3000, cost
