@@ -306,3 +306,18 @@ def test_loopslots_asks_each_instruction_once_not_once_for_each_loop_around_it(t
     source.write_text(scaling.AXES["nest"](128))
     own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     assert own["lir loopslots"] <= 600, f"{own['lir loopslots']:.1f} Minstr"
+
+
+def test_counted_stays_below_cubic_in_the_loops_of_one_function(tmp_path):
+    """branches(N) at -O2: each loop's proof built the graph of the whole function (a vector of every block and what it names, a
+    map of them) to read the blocks around the loop: `analysis counted` read 2N/N = 3.7, 3.8, 3.9 (46.7 / 170.6 / 648 / 2525 Minstr
+    at N=128..1024). It reads 2.1 to 2.2 (8.8 / 18.8 / 40.4 / 88.5). A step above 2.6 (slope 1.38) fails; a few Minstr of
+    start-up are allowed."""
+    n = 128
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"branches_{label}.c"
+        source.write_text("" if size == 0 else scaling.branches(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("analysis counted", 0.0) - own["empty"].get("analysis counted", 0.0) for label in ("n", "2n"))
+    assert big <= 2.6 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
