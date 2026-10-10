@@ -44,3 +44,19 @@ def test_an_event_from_before_the_step_does_not_count():
     arrive(one, {"event": "other"})
     with pytest.raises(TimeoutError):
         one.wait_event("key_wait", 1, 0.1)
+
+
+def test_a_text_step_waits_for_a_key_read_after_the_text_not_before(monkeypatch):
+    """GORILLA's 'Press any key' is on screen before the program flushes the keyboard and reads it: a key_wait from
+    before the text ended the step, the space was flushed, and 'Name of Player 1' never came (rates below 2000)."""
+    import qb32demos
+
+    one = session_without_a_process()
+    one.screen = lambda: "Press any key to continue"
+    one.send = lambda command, wait=True: None
+    arrive(one, {"event": "key_wait"})
+    monkeypatch.setattr(qb32demos, "LONGEST", 0.2)
+    with pytest.raises(TimeoutError):
+        qb32demos.ready(one, 0, "Press any key")
+    one.send = lambda command, wait=True: threading.Timer(0.05, arrive, (one, {"event": "key_wait"})).start()
+    qb32demos.ready(one, 0, "Press any key")

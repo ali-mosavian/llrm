@@ -63,7 +63,8 @@ def ready(session, since: int, shown: str | None) -> None:
         while shown not in session.screen():
             if time.monotonic() > deadline:
                 raise TimeoutError(f"{shown!r} never appeared")
-        return
+        since = len(session.events)
+        session.send({"cmd": "key_wait_arm"})
     session.wait_event("key_wait", since, LONGEST)
 
 
