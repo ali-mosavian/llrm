@@ -136,10 +136,10 @@ impl Region {
         body: &LirBody,
         blocks: impl IntoIterator<Item = i64>,
     ) -> Self {
-        let length: IndexMap<i64, usize> = body.blocks.iter().map(|block| (block.at, block.insns.len())).collect();
+        let found = Blocks::of(body);
         let mut out = Self::default();
         for at in blocks {
-            out.add(at, 0, length[&at]);
+            out.add(at, 0, found.block(at).insns.len());
         }
         out
     }
@@ -197,10 +197,10 @@ impl Region {
         body: &LirBody,
         index: &Indexes,
     ) -> Vec<Segment> {
-        let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+        let found = Blocks::of(body);
         let mut out = Vec::new();
         for (at, ranges) in &self.spans {
-            let (block, (first, last)) = (at_of[at], index.span[at]);
+            let (block, (first, last)) = (found.block(*at), index.span[at]);
             for (from, to) in ranges {
                 let start = if *from == 0 { first } else { index.slot(block, *from) };
                 let end = if *to == block.insns.len() { last } else { index.slot(block, *to) };
@@ -312,20 +312,60 @@ pub fn crossings(
     region: &Region,
     live: &dyn allocate::LiveAt,
 ) -> Vec<(Crossing, bool)> {
-    let written = body
-        .blocks
+    crossings_in(&Blocks::of(body), value, region, live)
+}
+
+fn crossings_in(
+    blocks: &Blocks,
+    value: u32,
+    region: &Region,
+    live: &dyn allocate::LiveAt,
+) -> Vec<(Crossing, bool)> {
+    let (body, graph) = (blocks.body, &blocks.graph);
+    // A block is in a crossing only if the region has it or has a successor of
+    // it, in the order the blocks come.
+    let mut near: BTreeSet<usize> = BTreeSet::new();
+    for at in region.spans.keys() {
+        let position = graph.position[at];
+        near.insert(position);
+        near.extend(graph.parents[position].iter().copied());
+    }
+    let found = crossings_among(blocks, value, region, live, near.into_iter());
+    if llrm_support::env_set("LLRM_CHECK_SPLIT") {
+        assert_eq!(
+            found,
+            crossings_among(blocks, value, region, live, 0..body.blocks.len()),
+            "{}: the crossings of value#{value} differ from the scan",
+            body.name
+        );
+    }
+    found
+}
+
+fn crossings_among(
+    blocks: &Blocks,
+    value: u32,
+    region: &Region,
+    live: &dyn allocate::LiveAt,
+    among: impl Iterator<Item = usize>,
+) -> Vec<(Crossing, bool)> {
+    let body = blocks.body;
+    let written = region
+        .spans
         .iter()
         .any(
-            |block| region.spans.get(&block.at).is_some_and(|ranges| {
+            |(at, ranges)| {
+                let block = blocks.block(*at);
                 ranges.iter().any(|(from, to)| block.insns[*from..*to].iter().any(|one| one.defines.contains(&value)))
-            }),
+            },
         );
     let mut out = Vec::new();
     // The phis a block's successor arrives with, found by the successor's
     // address: a scan of every block for each edge was the square of the
     // blocks.
-    let graph = crate::analysis::graph::Graph::of(body);
-    for block in &body.blocks {
+    let graph = &blocks.graph;
+    for position in among {
+        let block = &body.blocks[position];
         if let Some(ranges) = region.spans.get(&block.at) {
             let before = _live_before(block, value, live.live_out(block.at, value));
             for (from, to) in ranges {
@@ -431,7 +471,7 @@ pub fn carved_moving(
     let live = crate::analysis::occurrences::live_among(body, &BTreeSet::from([value]));
     let found = crossings(body, value, &region, &*live);
     let graph = crate::analysis::graph::Graph::of(body);
-    let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let at_of = Blocks::of(body);
     // (block, position) -> copies before it; usize::MAX is before the
     // terminator.
     let mut inserted: BTreeMap<(i64, usize), Vec<bool>> = BTreeMap::new();
@@ -449,18 +489,18 @@ pub fn carved_moving(
     }
     for (from, to, entering) in &edges {
         let same = graph.predecessors(body, graph.position[to]).all(|one| edges.contains(&(one, *to, *entering)));
-        let every = at_of[from].succ.iter().all(|next| edges.contains(&(*from, *next, *entering)));
-        if every && !at_of[from].insns.is_empty() {
+        let every = at_of.block(*from).succ.iter().all(|next| edges.contains(&(*from, *next, *entering)));
+        if every && !at_of.block(*from).insns.is_empty() {
             if !inserted.get(&(*from, usize::MAX)).is_some_and(|had| had.contains(entering)) {
                 inserted.entry((*from, usize::MAX)).or_default().push(*entering);
             }
-        } else if at_of[from].succ.len() == 1 && !at_of[from].insns.is_empty() {
+        } else if at_of.block(*from).succ.len() == 1 && !at_of.block(*from).insns.is_empty() {
             inserted.entry((*from, usize::MAX)).or_default().push(*entering);
-        } else if same && *to != body.entry && !at_of[to].arrives().contains(&value) {
+        } else if same && *to != body.entry && !at_of.block(*to).arrives().contains(&value) {
             if !inserted.get(&(*to, 0)).is_some_and(|had| had.contains(entering)) {
                 inserted.entry((*to, 0)).or_default().push(*entering);
             }
-        } else if at_of[from].insns.is_empty() {
+        } else if at_of.block(*from).insns.is_empty() {
             return None;
         } else {
             bridges.push((*from, *to, *entering));
@@ -680,6 +720,7 @@ pub fn _next_value_following(body: &LirBody) -> u32 {
 }
 
 /// One block `value` is referenced in: LLVM's `SplitAnalysis::BlockInfo`.
+#[derive(Debug, PartialEq)]
 struct UseBlock {
     block: i64,
     /// The instructions naming the value: each a memory operand once it spills.
@@ -692,6 +733,7 @@ struct UseBlock {
 }
 
 /// The blocks `value` is referenced in, and those it only passes through.
+#[derive(Debug, PartialEq)]
 struct Analysis {
     uses: Vec<UseBlock>,
     through: Vec<i64>,
@@ -707,7 +749,79 @@ pub fn live_blocks(
     analysis.uses.len() + analysis.through.len()
 }
 
+/// `countLiveBlocks`: the blocks of `value`'s live range, found from where it
+/// is named by the predecessors it is live into, as LLVM's SplitAnalysis reads
+/// them off the live interval, and not by asking every block of the body. A
+/// body with phis, whose results a block arrives with, is read block by block.
 fn analysed(
+    body: &LirBody,
+    value: u32,
+    live: &dyn allocate::LiveAt,
+) -> Analysis {
+    analysed_in(&Blocks::of(body), value, live)
+}
+
+fn analysed_in(
+    blocks: &Blocks,
+    value: u32,
+    live: &dyn allocate::LiveAt,
+) -> Analysis {
+    let body = blocks.body;
+    let found = if blocks.plain { analysed_along(blocks, value, live) } else { analysed_scan(body, value, live) };
+    if llrm_support::env_set("LLRM_CHECK_SPLIT") {
+        assert_eq!(
+            found,
+            analysed_scan(body, value, live),
+            "{}: the live blocks of value#{value} differ from the scan",
+            body.name
+        );
+    }
+    found
+}
+
+fn analysed_along(
+    blocks: &Blocks,
+    value: u32,
+    live: &dyn allocate::LiveAt,
+) -> Analysis {
+    let (body, graph) = (blocks.body, &blocks.graph);
+    let names = named_in(body, value);
+    let mut seen: BTreeSet<usize> = names.keys().copied().collect();
+    let mut stack: Vec<usize> = names.keys().copied().collect();
+    let mut through: BTreeSet<usize> = BTreeSet::new();
+    while let Some(position) = stack.pop() {
+        if !live.live_in(body.blocks[position].at, value) {
+            continue;
+        }
+        for &parent in &graph.parents[position] {
+            if !seen.insert(parent) {
+                continue;
+            }
+            let at = body.blocks[parent].at;
+            if live.live_in(at, value) && live.live_out(at, value) {
+                through.insert(parent);
+                stack.push(parent);
+            }
+        }
+    }
+    let uses = names
+        .iter()
+        .map(|(&position, named)| {
+            let block = &body.blocks[position];
+            UseBlock {
+                block: block.at,
+                references: named.len(),
+                live_in: live.live_in(block.at, value),
+                live_out: live.live_out(block.at, value),
+                first: named.first().copied().unwrap_or(0),
+                last: named.last().copied().unwrap_or(0),
+            }
+        })
+        .collect();
+    Analysis { uses, through: through.into_iter().map(|position| body.blocks[position].at).collect() }
+}
+
+fn analysed_scan(
     body: &LirBody,
     value: u32,
     live: &dyn allocate::LiveAt,
@@ -873,6 +987,33 @@ impl Occupied<'_> {
     }
 }
 
+/// A body's blocks by label, found by the positions its edges are kept with
+/// (`Graph`) and not by a map made for each ask: a split asks for a few blocks
+/// of a body of thousands.
+struct Blocks<'a> {
+    body: &'a LirBody,
+    graph: std::sync::Arc<crate::analysis::graph::Graph>,
+    /// No block has phis.
+    plain: bool,
+}
+
+impl<'a> Blocks<'a> {
+    fn of(body: &'a LirBody) -> Self {
+        Self {
+            body,
+            graph: crate::analysis::graph::Graph::of(body),
+            plain: body.blocks.iter().all(|block| block.phis.is_empty()),
+        }
+    }
+
+    fn block(
+        &self,
+        at: i64,
+    ) -> &'a LirBlock {
+        &self.body.blocks[self.graph.position[&at]]
+    }
+}
+
 /// The interference in a block, as the positions of the first and last
 /// instruction it touches: -1 is the block's entry.
 type Blocked<'a> = &'a dyn Fn(i64) -> Option<(i64, i64)>;
@@ -903,11 +1044,10 @@ pub fn _tail(block: &LirBlock) -> usize {
 /// register.
 fn _use_constraints(
     placement: &mut spillplacement::Placement,
-    body: &LirBody,
+    at_of: &Blocks,
     analysis: &Analysis,
     blocked: Blocked,
 ) -> Option<()> {
-    let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut constraints = Vec::new();
     for one in &analysis.uses {
         let mut entry = if one.live_in { Border::PrefReg } else { Border::DontCare };
@@ -923,7 +1063,7 @@ fn _use_constraints(
                 };
             }
             if one.live_out {
-                let last = _last_split(at_of[&one.block]);
+                let last = _last_split(at_of.block(one.block));
                 exit = if high >= last {
                     Border::MustSpill
                 } else if high >= one.last as i64 {
@@ -948,11 +1088,10 @@ fn _use_constraints(
 /// is None) every through block prefers the stack, strongly.
 fn _grown(
     placement: &mut spillplacement::Placement,
-    body: &LirBody,
+    at_of: &Blocks,
     analysis: &Analysis,
     blocked: Option<Blocked>,
 ) -> Vec<i64> {
-    let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut todo: BTreeSet<i64> = analysis.through.iter().copied().collect();
     let mut active: Vec<i64> = Vec::new();
     loop {
@@ -978,7 +1117,11 @@ fn _grown(
                         Some((low, high)) => constraints.push(Constraint {
                             block: *block,
                             entry: if low < 0 { Border::MustSpill } else { Border::PrefSpill },
-                            exit: if high >= _last_split(at_of[block]) { Border::MustSpill } else { Border::PrefSpill },
+                            exit: if high >= _last_split(at_of.block(*block)) {
+                                Border::MustSpill
+                            } else {
+                                Border::PrefSpill
+                            },
                             weight: 1.0,
                         }),
                     }
@@ -1043,13 +1186,12 @@ fn _ranges_in(
 /// What a candidate's register bundles hold, block by block.
 fn _held(
     placement: &spillplacement::Placement,
-    body: &LirBody,
+    found: &Blocks,
     analysis: &Analysis,
     through: &[i64],
     live: &BTreeSet<usize>,
     blocked: Blocked,
 ) -> Region {
-    let length: IndexMap<i64, usize> = body.blocks.iter().map(|block| (block.at, block.insns.len())).collect();
     let borders = |block: i64, live_in: bool, live_out: bool| {
         let (entry, exit) = placement.bundles.of[&block];
         (live_in && live.contains(&entry), live_out && live.contains(&exit))
@@ -1057,13 +1199,15 @@ fn _held(
     let mut region = Region::default();
     for one in &analysis.uses {
         let (entry, exit) = borders(one.block, one.live_in, one.live_out);
-        for (from, to) in _ranges_in(length[&one.block], entry, exit, Some((one.first, one.last)), blocked(one.block)) {
+        for (from, to) in
+            _ranges_in(found.block(one.block).insns.len(), entry, exit, Some((one.first, one.last)), blocked(one.block))
+        {
             region.add(one.block, from, to);
         }
     }
     for block in through {
         let (entry, exit) = borders(*block, true, true);
-        for (from, to) in _ranges_in(length[block], entry, exit, None, blocked(*block)) {
+        for (from, to) in _ranges_in(found.block(*block).insns.len(), entry, exit, None, blocked(*block)) {
             region.add(*block, from, to);
         }
     }
@@ -1073,24 +1217,25 @@ fn _held(
 /// What holding `region` in a register saves: a memory operand per
 /// reference inside it, less every copy `crossings` says carving it adds.
 fn _benefit(
-    body: &LirBody,
+    blocks: &Blocks,
     value: u32,
     region: &Region,
-    frequency: &IndexMap<i64, f64>,
+    frequency: &dyn Fn(i64) -> f64,
     live: &dyn allocate::LiveAt,
 ) -> f64 {
+    let body = blocks.body;
     let saved: f64 = named_in(body, value)
         .iter()
         .map(|(block, positions)| {
             let at = body.blocks[*block].at;
-            positions.iter().filter(|position| region.covers(at, **position)).count() as f64 * frequency[&at]
+            positions.iter().filter(|position| region.covers(at, **position)).count() as f64 * frequency(at)
         })
         .sum();
-    let copies: f64 = crossings(body, value, region, live)
+    let copies: f64 = crossings_in(blocks, value, region, live)
         .iter()
         .map(|(at, _)| match at {
-            Crossing::Inside { block, .. } => frequency[block],
-            Crossing::Edge { from, to } => frequency[from].min(frequency[to]),
+            Crossing::Inside { block, .. } => frequency(*block),
+            Crossing::Edge { from, to } => frequency(*from).min(frequency(*to)),
         })
         .sum();
     saved - copies
@@ -1104,13 +1249,36 @@ pub fn pays(
     region: &Region,
     live: &dyn allocate::LiveAt,
 ) -> bool {
-    let frequency: IndexMap<i64, f64> =
-        ranges::depths_shared(body).iter().map(|(at, depth)| (*at, ranges::level(*depth))).collect();
-    _benefit(body, value, region, &frequency, live) > 0.0
+    let depths = ranges::depths_shared(body);
+    _benefit(&Blocks::of(body), value, region, &|at| ranges::level(depths[&at]), live) > 0.0
 }
 
-/// Whether `region` holds all of `value`'s range.
+/// Whether `region` holds all of `value`'s range: every block it is named in
+/// or lives through, whole.
 fn _whole_range(
+    blocks: &Blocks,
+    analysis: &Analysis,
+    value: u32,
+    region: &Region,
+    live: &dyn allocate::LiveAt,
+) -> bool {
+    if !blocks.plain {
+        return _whole_range_scan(blocks.body, value, region, live);
+    }
+    let whole = |at: i64| region.spans.get(&at) == Some(&vec![(0, blocks.block(at).insns.len())]);
+    let found = analysis.uses.iter().map(|one| one.block).chain(analysis.through.iter().copied()).all(whole);
+    if llrm_support::env_set("LLRM_CHECK_SPLIT") {
+        assert_eq!(
+            found,
+            _whole_range_scan(blocks.body, value, region, live),
+            "{}: the whole range of value#{value} differs from the scan",
+            blocks.body.name
+        );
+    }
+    found
+}
+
+fn _whole_range_scan(
     body: &LirBody,
     value: u32,
     region: &Region,
@@ -1145,28 +1313,28 @@ pub fn placed(
     occupied: &Occupied,
     width: u32,
 ) -> Vec<Region> {
-    let analysis = analysed(body, value, live);
+    let blocks = Blocks::of(body);
+    let analysis = analysed_in(&blocks, value, live);
     if analysis.uses.is_empty() {
         return Vec::new();
     }
     let mut placement = spillplacement::Placement::new(body, bundles);
     let benefit = |region: &Region, placement: &spillplacement::Placement| {
-        if region.is_empty() || _whole_range(body, value, region, live) {
+        if region.is_empty() || _whole_range(&blocks, &analysis, value, region, live) {
             return 0.0;
         }
-        _benefit(body, value, region, &placement.frequency, live)
+        _benefit(&blocks, value, region, &|at| placement.frequency[&at], live)
     };
     let open = |_: i64| None;
     let mut compact = Region::default();
     if !analysis.through.is_empty() {
         placement.prepare();
-        if _use_constraints(&mut placement, body, &analysis, &open).is_some() {
-            let through = _grown(&mut placement, body, &analysis, None);
+        if _use_constraints(&mut placement, &blocks, &analysis, &open).is_some() {
+            let through = _grown(&mut placement, &blocks, &analysis, None);
             let live = placement.finish();
-            compact = _held(&placement, body, &analysis, &through, &live, &open);
+            compact = _held(&placement, &blocks, &analysis, &through, &live, &open);
         }
     }
-    let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut best: Option<(f64, Region)> = None;
     let mut tried = BTreeSet::new();
     for register in candidates {
@@ -1176,15 +1344,15 @@ pub fn placed(
         let blocked = |block: i64| {
             occupied
                 .interference(*register, width, index.span[&block])
-                .map(|slots| _positions(index, blocks[&block], slots))
+                .map(|slots| _positions(index, blocks.block(block), slots))
         };
         placement.prepare();
-        if _use_constraints(&mut placement, body, &analysis, &blocked).is_none() {
+        if _use_constraints(&mut placement, &blocks, &analysis, &blocked).is_none() {
             continue;
         }
-        let through = _grown(&mut placement, body, &analysis, Some(&blocked));
+        let through = _grown(&mut placement, &blocks, &analysis, Some(&blocked));
         let live = placement.finish();
-        let held = _held(&placement, body, &analysis, &through, &live, &blocked);
+        let held = _held(&placement, &blocks, &analysis, &through, &live, &blocked);
         let saved = benefit(&held, &placement);
         if saved > 0.0 && best.as_ref().is_none_or(|(found, _)| saved > *found) {
             best = Some((saved, held));
