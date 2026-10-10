@@ -177,8 +177,8 @@ fn the_flavor_asked_for_is_the_formats_or_an_error() {
         assert!(!made.status.success(), "{arguments:?} was written");
         String::from_utf8_lossy(&made.stderr).into_owned()
     };
-    assert!(refused(&["-m32", "-gdwarf"]).contains("OMF cannot carry DWARF"));
-    assert!(refused(&["-m32", "-gdwarf-4", "-fobject-format=omf"]).contains("OMF cannot carry DWARF"));
+    // DWARF in OMF is 32-bit code's (the 16-bit forms are segment and offset).
+    assert!(refused(&["-m16", "-gdwarf"]).contains("DWARF in OMF is 32-bit code's"));
     assert!(refused(&["-m32", "-gcodeview", "-fobject-format=elf"]).contains("cannot carry CodeView"));
     assert!(refused(&["-m32", "-gtd", "-fobject-format=elf"]).contains("Turbo Debugger"));
     assert!(refused(&["-m32", "-gdwarf-3", "-fobject-format=elf"]).contains("unrecognized"));
