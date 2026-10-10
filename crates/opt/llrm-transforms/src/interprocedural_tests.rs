@@ -1714,3 +1714,35 @@ b3:
         printed(&module)
     );
 }
+
+/// A body held only to inline from (`available_externally`) is inlined in the
+/// plain round at any size it is a candidate at: it is emitted nowhere, so no
+/// copy adds to what the program had. (The plain round used to leave it to the
+/// trial, which the round without clocks never runs.)
+#[test]
+fn test_a_held_body_is_inlined_in_the_plain_round() {
+    let text = "define available_externally i16 @held(i16 %x) {
+b1:
+  %a = shl i16 %x, 2
+  %b = add i16 %a, 1
+  %c = xor i16 %b, %x
+  %d = add i16 %c, 7
+  %e = mul i16 %d, 3
+  %f = sub i16 %e, %x
+  ret i16 %f
+}
+
+define i16 @f(i16 %p, i16 %q) {
+b1:
+  %r = call i16 @held(i16 %p)
+  %s = call i16 @held(i16 %q)
+  %t = call i16 @held(i16 %r)
+  %u = add i16 %s, %t
+  ret i16 %u
+}
+";
+    let mut module = parsed(text);
+    step(&mut module, &["f"], 4);
+    let printed = printed(&module);
+    assert!(!printed[printed.find("define i16 @f").unwrap()..].contains("call "), "{printed}");
+}

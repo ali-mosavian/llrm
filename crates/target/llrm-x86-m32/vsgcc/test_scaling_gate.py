@@ -549,3 +549,14 @@ def test_copy_forwarding_does_not_clone_the_instruction_for_each_operand_it_trie
     source = tmp_path / "cells224.c"
     source.write_text(scaling.cells(224))
     assert gate.own_work(gate.levels_time.command("llrm", "O2", source))["lir peephole"] <= 145.0
+
+
+def test_a_carve_touches_the_blocks_it_changes_not_every_block(tmp_path):
+    """`split carving` on `branches` at N=1024 (340 carves of 3,073 blocks) found where the value is live by a pass over every
+    instruction, made a table of positions for every block, put every block through a map and back, and trimmed and snapped
+    the region by walking every block: 3,003 Minstr, 3.9x a doubling. The blocks it changes are found from the region and the
+    copies, the postings give where the value is live, and the rest are the blocks they were: 920."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["split carving"]
+    assert cost <= 1800, cost
