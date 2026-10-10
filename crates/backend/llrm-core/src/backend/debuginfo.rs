@@ -630,6 +630,7 @@ pub fn laid_out(
             // the register plus the row's offset.
             let bias = debug.frame.map(|(.., entry)| entry[usize::from(procedure.far)] + entry[0]);
             let rows = frame.as_deref().filter(|_| debug.ranges);
+            let stack = debug.frame.map(|(_, stack, _)| format!("{stack:?}").to_lowercase());
             variables = variables
                 .into_iter()
                 .filter_map(|one| match (&one.location, rows, bias) {
@@ -650,6 +651,28 @@ pub fn laid_out(
                             .filter(|(range, _)| range.length > 0)
                             .collect();
                         Some(Variable { location: Location::List(entries), ..one })
+                    }
+                    // A format with one place for a scope says a cell through
+                    // the stack pointer when the pointer is the same distance
+                    // from the frame address over the whole body.
+                    (Location::Frame { disp }, None, Some(bias)) => {
+                        let rows = frame.as_deref()?;
+                        let inside: Vec<&model::FrameRow> = rows
+                            .iter()
+                            .enumerate()
+                            .filter(|&(at, row)| {
+                                row.offset <= body.1 && rows.get(at + 1).is_none_or(|next| next.offset > body.0)
+                            })
+                            .map(|(_, row)| row)
+                            .collect();
+                        let [row] = inside[..] else { return None };
+                        (Some(&row.cfa_register) == stack.as_ref()).then(|| Variable {
+                            location: Location::Relative {
+                                register: row.cfa_register.clone(),
+                                disp: disp - bias + row.cfa_offset,
+                            },
+                            ..one
+                        })
                     }
                     (location, ..) if framed(location) => None,
                     _ => Some(one),
