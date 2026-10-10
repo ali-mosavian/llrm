@@ -724,6 +724,8 @@ pub fn hoisted(
     found.sort_by_key(|one| one.body.len());
     let mut taken = BTreeSet::<i64>::new();
     let written = may_writes(body);
+    let segment_roots: Vec<RegId> =
+        regs.segments().filter(|one| !regs.is_code_segment(*one) && !regs.is_stack_segment(*one)).collect();
     for one in &found {
         if one.body.iter().any(|at| taken.contains(at)) {
             continue;
@@ -732,8 +734,6 @@ pub fn hoisted(
         if entries.is_empty() || !entries.iter().all(|at| body.blocks[index[at]].succ == [one.header]) {
             continue;
         }
-        let segment_roots: Vec<RegId> =
-            regs.segments().filter(|one| !regs.is_code_segment(*one) && !regs.is_stack_segment(*one)).collect();
         let roots = available.iter().chain(segment_roots.iter());
         let Some(writes) = writes_of(body, &written, one, &index) else { continue };
         let touches = std::cell::OnceCell::new();

@@ -78,6 +78,31 @@ pub struct Entry {
 
 /// A target's register file: an entry by iced's number, and each register at
 /// each width by its root.
+/// What a query works out once from the file: each width's integer registers,
+/// and all of them.
+pub struct Cache {
+    integers: [std::sync::OnceLock<Vec<RegId>>; 4],
+}
+
+impl Cache {
+    pub const fn new() -> Self {
+        Self {
+            integers: [
+                std::sync::OnceLock::new(),
+                std::sync::OnceLock::new(),
+                std::sync::OnceLock::new(),
+                std::sync::OnceLock::new(),
+            ],
+        }
+    }
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct Info {
     pub table: [Option<Entry>; 256],
     /// The root the description gives the class `frame`, and `stack`.
@@ -97,6 +122,8 @@ pub struct Info {
     /// The widths the file states (0 pads), and each root's register at each:
     /// `views[root as usize][column of the width]`.
     pub widths: [u32; 8],
+    /// Worked out on first ask.
+    pub cache: Cache,
     pub views: [[Option<RegId>; 8]; 256],
 }
 
@@ -317,22 +344,35 @@ impl Info {
     pub fn integer_of(
         &self,
         bytes: i64,
-    ) -> Vec<RegId> {
-        let mut found: Vec<RegId> = self
-            .entries()
-            .filter(|(_, one)| one.classes & class::INT != 0 && i64::from(one.bits / 8) == bytes)
-            .map(|(register, _)| register)
-            .collect();
-        found.sort_by_key(|one| *one as usize);
-        found.dedup();
-        found
+    ) -> &[RegId] {
+        let slot = match bytes {
+            1 => 1,
+            2 => 2,
+            4 => 3,
+            _ => return &[],
+        };
+        self.cache
+            .integers[slot]
+            .get_or_init(
+                || {
+                    let mut found: Vec<RegId> = self
+                        .entries()
+                        .filter(|(_, one)| one.classes & class::INT != 0 && i64::from(one.bits / 8) == bytes)
+                        .map(|(register, _)| register)
+                        .collect();
+                    found.sort_by_key(|one| *one as usize);
+                    found.dedup();
+                    found
+                },
+            )
     }
 
     /// Every integer register (the 8, 16 and 32-bit views), wide ones first,
     /// each width by iced's number: the order the allocator's tables have
     /// always been walked in.
-    pub fn integer_registers(&self) -> Vec<RegId> {
-        [4, 2, 1].into_iter().flat_map(|bytes| self.integer_of(bytes)).collect()
+    pub fn integer_registers(&self) -> &[RegId] {
+        self.cache.integers[0]
+            .get_or_init(|| [4, 2, 1].into_iter().flat_map(|bytes| self.integer_of(bytes).to_vec()).collect())
     }
 
     /// The same register named at the width an operand needs.

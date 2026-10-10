@@ -194,7 +194,7 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
     }
     let slot = Slots(places);
     let mut register_for: IndexMap<Vec<Lane>, RegId> = IndexMap::default();
-    for register in regs.integer_registers() {
+    for &register in regs.integer_registers() {
         if !_lanes(regs, register).is_empty() && !regs.is_stack(register) {
             register_for.insert(_lanes(regs, register).into_iter().collect(), register);
         }

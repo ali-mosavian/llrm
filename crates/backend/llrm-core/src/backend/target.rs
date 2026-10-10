@@ -708,11 +708,11 @@ mod tests {
     fn tables_match_python() {
         let regs = crate::backend::registerinfo::test_regs();
         let rows = [37, 38, 39, 40, 41, 42, 43, 44, 21, 22, 23, 24, 25, 26, 27, 28, 1, 2, 3, 4, 5, 6, 7, 8];
-        let walked: Vec<i64> = regs.integer_registers().into_iter().map(|one| one as i64).collect();
+        let walked: Vec<i64> = regs.integer_registers().iter().copied().map(|one| one as i64).collect();
         assert_eq!(walked, rows);
         let masks = [15, 15, 15, 15, 15, 15, 15, 15, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 1, 1, 2, 2, 2, 2];
         let lanes_of: Vec<(i64, i64)> =
-            regs.integer_registers().into_iter().map(|one| (one as i64, regs.lanes(one))).collect();
+            regs.integer_registers().iter().copied().map(|one| (one as i64, regs.lanes(one))).collect();
         assert_eq!(lanes_of, rows.into_iter().zip(masks).collect::<Vec<_>>());
         let by_root: Vec<(i64, Vec<(i64, i64)>)> = rows[..8]
             .iter()

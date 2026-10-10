@@ -43,7 +43,7 @@ pub fn _return_state(regs: Regs) -> Vec<RegId> {
 /// Every lane a body can name. "Dead" here means every lane but the live ones.
 pub fn _universe(regs: Regs) -> Lanes {
     let mut lanes = _flag_lanes(0xFFFF_FFFF);
-    for register in regs.integer_registers().into_iter().chain(regs.segments()) {
+    for register in regs.integer_registers().iter().copied().chain(regs.segments()) {
         lanes.extend(_lanes(regs, register));
     }
     lanes
