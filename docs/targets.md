@@ -357,18 +357,31 @@ llrm-core       backend over LIR: allocator, spiller, frame, peephole runtime,
 llrm-iselgen    shared generators (isel, peephole): run by each target's build.rs
 llrm-x86        family: form schema and parser, condition codes, encoder,
                 x87 and i64 hooks, string-op shapes
-llrm-x86-m16 descriptions, hooks, generated selector, timings
-llrm-x86-m32 descriptions, hooks, generated selector, timings
+llrm-x86-m16 data crate: descriptions, hooks, timings (no llrm-core)
+llrm-x86-m16-select  its generated selector, peephole rules and effect rows
+llrm-x86-m32 data crate, as m16
+llrm-x86-m32-select  its generated selector, rules and rows
 llrm-driver     the one place that names targets: match on -m
 llrm-omf        OMF 16 today; 32-bit records later
 ```
 
-Dependencies point down: target crates depend on `llrm-core`, never the
-reverse; the driver depends on both. That is the end state (PR 19b): generated code
-lives in the target crate and only calls downward, so there is no cycle. Until
-`llrm-core` stops using m16 (PRs 5 to 19), the selectors are generated in
-`llrm-core` from each target's definition directory and bound by `llrm-driver`. Tests in `llrm-core` that need m16
-move to the target crate.
+Dependencies point down. A target is two crates, as LLVM has a target's
+description library and its CodeGen library: the data crate (`llrm-x86-m16`)
+holds the description and does not depend on `llrm-core`; the select crate
+(`llrm-x86-m16-select`, named the same for every target) holds what is
+generated from it (`SELECTOR`, `RULES`, effect `rows`), written against
+`llrm-core`'s public `isel::api` and `peep`; the driver is the only crate that
+depends on the select crates and binds them. An arm64 is one new pair.
+`tests/crate_graph.rs` and `tests/core_depends_on_no_target.rs` hold the graph.
+
+`llrm-core`'s own unit tests (612 of its 999 reach the generated selector) run
+against a selector generated inside the crate behind its `fixtures` feature,
+which only they turn on (`tests/core_fixtures_are_for_core_tests.rs`). They
+are inline modules with private access, and a select crate's selector is
+typed by the other copy of `llrm-core` a dev-dependency cycle builds, so they
+cannot move. This is how LLVM does it: its CodeGen unit tests link the X86
+target into the test binary
+([llvm/unittests/CodeGen](https://github.com/llvm/llvm-project/tree/main/llvm/unittests/CodeGen)).
 
 `Target` gives: `data_layout()`, `address_spaces()`, `registers()`,
 `convention(name)`, `cost_model()` (per CPU: target x CPU, LLVM's subtarget),
@@ -611,7 +624,7 @@ m16-pinned frontends (production / total; 20 / 65 today), and the metric.
 | 17 | schema edits (four) and language features (i) to (v), one per PR, each deleting its hooks | `isel.rs`, `patterns.isel` |
 | 18 | `ObjectWriter` and listing syntax read from the object-format description | `compile.rs`, `basic.rs`, `masm.rs` header |
 | 19 | class routing in `regclass`, `allocate`, `ssaspill`, `constrain` | **after cost-spill lands, agreed with it first** |
-| 19b | the inversion, LLVM's description/CodeGen split: a target is a data crate (`llrm-x86-m16`, no `llrm-core`) and a select crate (`llrm-x86-m16-select`, the same name for every target: an arm64 is a new pair) that holds its generated `SELECTOR`, `RULES` and effect `rows` against `llrm-core`'s public `isel::api`; `llrm-driver` binds them. Done: production code names no target (#1245), the generator is `llrm-iselgen` (#1253), the generated selector uses only the public API (#1259), the select crates. Left: llrm-core's own tests use a generated m16/m32 selector behind its `fixtures` feature (`llrm-core/build.rs` scans `crates/target` for them); the feature and that path are deleted when the ~200 test lines that use a selector move into the select crates' own tests | `llrm-core/Cargo.toml`, `build.rs`, the select crates |
+| 19b | done: the inversion, LLVM's description/CodeGen split. Production code names no target (#1245); the generator is `llrm-iselgen` (#1253); the generated selector uses only the public API (#1259); each target is a data crate and a select crate (#1269); the graph is held by tests. `llrm-core`'s test fixtures stay (see the crate graph section) | `llrm-core/Cargo.toml`, `build.rs`, the select crates |
 | 20 | owned by the m32 session: `llrm-x86-m32` skeleton, the first client of the generic pipeline (generic opcodes, legalizer table, complex patterns, RegBankSelect): descriptions, 32-bit `wccq`, HIR profile, `-m32`, listing test for `int add(int,int)` and a loop over `int*` | new crate; no shared line changed |
 
 PRs 2 to 4 are the structural ones and go first: every later "where does this go"
