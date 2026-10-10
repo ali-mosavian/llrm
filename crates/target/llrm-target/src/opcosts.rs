@@ -75,7 +75,7 @@ fn cost(
     Ok(Cost::Sum(terms))
 }
 
-const OPERATIONS: [&str; 32] = [
+const OPERATIONS: [&str; 33] = [
     "add",
     "multiply",
     "divide",
@@ -102,6 +102,7 @@ const OPERATIONS: [&str; 32] = [
     "float_store",
     "float_release",
     "extend",
+    "set",
     "fill",
     "fill_cell",
     "copy",
@@ -235,6 +236,7 @@ impl Description {
                 "float_store" => out.float_store = value,
                 "float_release" => out.float_release = value,
                 "extend" => out.extend = value,
+                "set" => out.set = value,
                 "fill" => out.fill = value,
                 "fill_cell" => out.fill_cell = value,
                 "copy" => out.copy = value,
@@ -252,7 +254,7 @@ impl Description {
 mod tests {
     use super::*;
 
-    const ALL: &str = "add = a\nmultiply = m\ndivide = d\nshift = s\naddress = l\ncarry = carry(z, a, s, r)\ncarry_step = step(a)\nload = ld\nstore = st\nmemory_update = u\nbranch = j\nprefix = prefix\nmove = r\ncall = c\nreturn = t\nargument = st + ld\npop = p\nadjust = i\nreturn_pops = rp - t\nfloat_add = fa\nfloat_multiply = fm\nfloat_divide = fd\nfloat_load = fl\nfloat_store = fs\nfloat_release = fr\nextend = z\nfill = f + 2*p + 3\nfill_cell = fc\ncopy = cp\ncopy_cell = cc\ndirection = 2*a\nunroll_budget = 7\n";
+    const ALL: &str = "add = a\nmultiply = m\ndivide = d\nshift = s\naddress = l\ncarry = carry(z, a, s, r)\ncarry_step = step(a)\nload = ld\nstore = st\nmemory_update = u\nbranch = j\nprefix = prefix\nmove = r\ncall = c\nreturn = t\nargument = st + ld\npop = p\nadjust = i\nreturn_pops = rp - t\nfloat_add = fa\nfloat_multiply = fm\nfloat_divide = fd\nfloat_load = fl\nfloat_store = fs\nfloat_release = fr\nextend = z\nset = z\nfill = f + 2*p + 3\nfill_cell = fc\ncopy = cp\ncopy_cell = cc\ndirection = 2*a\nunroll_budget = 7\n";
 
     #[test]
     fn a_sum_is_terms_with_counts_and_signs() {
