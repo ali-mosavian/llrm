@@ -180,6 +180,7 @@ fn _rewritten(
         || _decided(context, function, inst)
         || _selected(context, function, inst)
         || _inverted_compare(context, function, inst)
+        || _offset_compared(context, function, inst)
         || _narrow_compare(context, function, inst)
         || _extended_boolean_tested(context, function, inst)
         || _extended_boolean_negated(context, function, inst)
@@ -269,6 +270,37 @@ fn _extended_boolean_negated(
     function.insert(extended, Position::Before(inst)).expect("a placed xor");
     let value = Operand::Value(function.instruction(extended).result.expect("a value"));
     _forward(function, inst, value);
+    true
+}
+
+/// `icmp eq (x + C1), C2` is `icmp eq x, C2 - C1`, and the same of `ne` and of
+/// a `sub`: a wrapping sum is a bijection, so equality needs no flag.
+/// InstCombine's `foldICmpAddConstant` and gcc's `fold_comparison` do it
+/// whoever else reads the sum. A recursion inlined into itself tests `n - 1 ==
+/// 0`, `n - 2 == 0`, ... which are `n == 1`, `n == 2`: the chain of differences
+/// each level held in a register, and spilled, is dead (`rectwo`, `hanoi`).
+fn _offset_compared(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
+    let instruction = function.instruction(inst);
+    let Opcode::ICmp(predicate @ (IntPredicate::Eq | IntPredicate::Ne)) = instruction.opcode else { return false };
+    let [shifted, number] = instruction.operands[..] else { return false };
+    let Some(wanted) = _integer(context, number) else { return false };
+    let Some(made) = _definition(function, shifted) else { return false };
+    let Some((op @ (BinaryOp::Add | BinaryOp::Sub), left, right, width)) = _binary(context, function, made) else {
+        return false;
+    };
+    let Some((source, offset)) = _value_and_constant(context, op, left, right) else { return false };
+    if width > 128 {
+        return false;
+    }
+    let target =
+        if op == BinaryOp::Add { wanted.wrapping_sub(offset) } else { wanted.wrapping_add(offset) } & mask(width);
+    let ty = function.instruction(made).ty;
+    let constant = Operand::Constant(context.int(ty, target as i128));
+    _replace(function, inst, Opcode::ICmp(predicate), vec![source, constant]);
     true
 }
 
