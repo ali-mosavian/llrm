@@ -1284,6 +1284,7 @@ mod tests {
 
     #[test]
     fn test_coalescing_keeps_the_pinned_return_as_representative() {
+        let regs = crate::backend::registerinfo::test_regs();
         let body = body("return", vec![_define(0, 1), _move(3, 2, 1), _use(5, 2)], &[]);
         let done = joined(
             &body,
@@ -1307,7 +1308,7 @@ mod tests {
             let insns = emitted.insns();
             assert_eq!(
                 insns[insns.len() - 1].what.as_ref().expect("semantics").sources,
-                vec![Loc::Reg(Reg { register: target::named(register, 2), width: 2 })]
+                vec![Loc::Reg(Reg { register: regs.named(register, 2), width: 2 })]
             );
         }
     }
