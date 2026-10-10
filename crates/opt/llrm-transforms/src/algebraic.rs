@@ -167,7 +167,6 @@ fn _rewritten(
         || _nonnegative_sext(context, function, inst)
         || _unsigned_power_of_two(context, function, inst)
         || _masked_extension(context, layout, function, inst)
-        || _extended_mask(context, layout, function, inst)
         || _casted_logic(context, function, inst)
         || _phi_of_casts(context, function, inst)
         || _duplicate_phi(function, inst)
@@ -788,54 +787,6 @@ fn _nonnegative_sext(
         return false;
     }
     _replace(function, inst, Opcode::Cast(CastOp::ZExt), vec![source]);
-    true
-}
-
-/// `and (zext x), c` where `c` has no bit above `x`'s width is `zext (and x,
-/// c)`, as InstCombine's `visitAnd` narrows a mask under an extension: the
-/// extension no longer waits for the mask, and `and x, 2^k-1` is the
-/// `trunc` `_masked_extension` takes (one `movzx r32, r8` for the pair).
-fn _extended_mask(
-    context: &mut Context,
-    layout: &DataLayout,
-    function: &mut Function,
-    inst: InstId,
-) -> bool {
-    let Some((BinaryOp::And, left, right, wide)) = _binary(context, function, inst) else { return false };
-    let Some((value, mask)) = _value_and_constant(context, BinaryOp::And, left, right) else { return false };
-    if !_single_use(function, value) {
-        return false;
-    }
-    let Some(extension) = _definition(function, value) else { return false };
-    if function.instruction(extension).opcode != Opcode::Cast(CastOp::ZExt) {
-        return false;
-    }
-    let source = function.instruction(extension).operands[0];
-    let Some(width) = function.operand_type(context, source).and_then(|ty| context.types.int_bits(ty)) else {
-        return false;
-    };
-    if width >= wide || width > 64 || mask >> width != 0 {
-        return false;
-    }
-    // Only a mask that is a native low part (`_masked_extension` takes it on):
-    // any other `and` of the narrow value is a copy of the register and a
-    // masked part of it, three instructions for two.
-    let low = mask.trailing_ones();
-    if !layout.legal_integer(low) || low >= width || mask != (1_u128 << low) - 1 {
-        return false;
-    }
-    let narrow = context.types.int(width);
-    let constant = Operand::Constant(context.int(narrow, mask as i128));
-    let masked = function.create_instruction(
-        Opcode::Binary(BinaryOp::And),
-        narrow,
-        vec![source, constant],
-        Flags::default(),
-        None,
-    );
-    function.insert(masked, Position::Before(inst)).expect("a placed instruction");
-    let masked = Operand::Value(function.instruction(masked).result.expect("a value"));
-    _replace(function, inst, Opcode::Cast(CastOp::ZExt), vec![masked]);
     true
 }
 
