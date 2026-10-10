@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import corpus  # noqa: E402
 import dosbatch  # noqa: E402
 import qbruntime  # noqa: E402
 
@@ -107,6 +108,14 @@ def closure(program: Path, objects: dict[str, Path]) -> list[Path]:
     return [objects[name] for name in chosen]
 
 
+def data_files(source: Path) -> tuple[Path, ...]:
+    """The files a bench program reads (its `' data:` header): beside it, or `@name` for a cached corpus."""
+    for line in source.read_text(encoding="latin-1").splitlines()[:6]:
+        if match := re.match(r"\s*'\s*data:\s*(.*?)\s*$", line):
+            return tuple(corpus.path(one[1:]) if one.startswith("@") else source.parent / one for one in match.group(1).split())
+    return ()
+
+
 def compile_basic(source: Path, obj: Path, flags: tuple[str, ...] = ("-O2",)) -> str | None:
     done = dosbatch.subprocess.run([str(dosbatch.BIN / "llrm-qb"), str(source), "--dialect", "qb45", "-fqb-runtime=llrm", dosbatch.m_flag(TARGET), *flags, "-o", str(obj)], capture_output=True, text=True)
     return None if done.returncode == 0 else (done.stderr or done.stdout).strip()[-400:]
@@ -116,41 +125,46 @@ def link(program: Path, objects: dict[str, Path], exe: Path, work: Path) -> tupl
     return dosbatch.link_target(TARGET, program, exe, work, runtime=(START_FILES, []), objects_after=tuple(closure(program, objects)))
 
 
+def run(names: list[str], work: Path) -> dict[str, tuple[str, bool]]:
+    """Build each bench program and the runtime for the flat target, run them in one session, and say for each how it ended
+    and whether its output is the stated one; a program that did not build says why in place of the status."""
+    work.mkdir(parents=True, exist_ok=True)
+    runtime = build(work / "runtime")
+    found: dict[str, tuple[str, bool]] = {}
+    jobs, wanted = [], {}
+    for at, name in enumerate(names):
+        source = dosbatch.ROOT / "bench" / name / f"{name}.bas"
+        obj = work / f"{name}.obj"
+        if reason := compile_basic(source, obj):
+            found[name] = (f"compile: {reason}", False)
+            continue
+        try:
+            loaders = link(obj, runtime, work / f"{name}.exe", work)
+        except dosbatch.BuildError as error:
+            found[name] = (f"link: {str(error)[-300:]}", False)
+            continue
+        stem = f"P{at:03d}"
+        jobs.append(dosbatch.Job(stem, "exe", work / f"{name}.exe", files=(*loaders, *data_files(source))))
+        wanted[stem] = (name, (source.parent / f"{name}.out").read_bytes())
+    if jobs:
+        results = dosbatch.run(jobs, work / "run")
+        for job in jobs:
+            name, want = wanted[job.stem]
+            got = qbruntime.raw_output(work / "run", job.stem)
+            found[name] = (results[job.stem].status, got.replace(b"\r\n", b"\n") == want.replace(b"\r\n", b"\n"))
+    return found
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work", type=Path, default=None)
     parser.add_argument("names", nargs="*")
     args = parser.parse_args()
     work = args.work or Path(tempfile.mkdtemp(prefix="qb32-"))
-    work.mkdir(parents=True, exist_ok=True)
-    names = args.names or list(qbruntime.MILESTONE_ONE)
-    runtime = build(work / "runtime")
-    jobs, wanted, loaders = [], {}, ()
-    for at, name in enumerate(names):
-        source = dosbatch.ROOT / "bench" / name / f"{name}.bas"
-        obj = work / f"{name}.obj"
-        if reason := compile_basic(source, obj):
-            print(f"{name}: compile: {reason}")
-            continue
-        try:
-            loaders = link(obj, runtime, work / f"{name}.exe", work)
-        except dosbatch.BuildError as error:
-            print(f"{name}: link: {str(error)[-300:]}")
-            continue
-        stem = f"P{at:03d}"
-        jobs.append(dosbatch.Job(stem, "exe", work / f"{name}.exe", files=loaders))
-        wanted[stem] = (name, (source.parent / f"{name}.out").read_bytes())
-    if not jobs:
-        return 1
-    results = dosbatch.run(jobs, work / "run")
-    bad = 0
-    for job in jobs:
-        name, want = wanted[job.stem]
-        got = qbruntime.raw_output(work / "run", job.stem)
-        same = got.replace(b"\r\n", b"\n") == want.replace(b"\r\n", b"\n")
-        bad += not same
-        print(f"{name:<14}{results[job.stem].status:<10}{'same' if same else 'DIFFERENT'}")
-    return 1 if bad else 0
+    found = run(args.names or list(qbruntime.MILESTONE_ONE), work)
+    for name, (status, same) in found.items():
+        print(f"{name:<14}{status:<10}{'same' if same else 'DIFFERENT'}")
+    return 0 if all(same for _, same in found.values()) else 1
 
 
 if __name__ == "__main__":
