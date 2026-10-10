@@ -579,9 +579,9 @@ pub fn candidates_over(
         // the call's callee counted once too many.
         let last =
             threshold.last && copies == 0 && semantic_count(body) <= LAST_CALL_OPERATIONS && !always && !admitted();
-        // A body held only to inline from (`available_externally`) is priced by
-        // the trial of what it leaves, not by its size: any size is a
-        // candidate there, never in the plain round.
+        // A body held only to inline from (`available_externally`) is a
+        // candidate at any size: it is emitted nowhere, so a copy costs
+        // nothing the program had.
         let verdict = always || admitted() || module.global(name).linkage == Linkage::AvailableExternally;
         llrm_support::debug!(
             "inline",
