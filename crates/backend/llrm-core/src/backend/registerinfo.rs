@@ -134,9 +134,12 @@ pub fn default_segment(base: RegId) -> Option<RegId> {
 /// Whether a word register can hold the offset of an address read through a
 /// segment: a base or index of the description that is neither the frame
 /// register nor the stack pointer, which select their own segment.
-pub fn holds_a_segment_offset(register: RegId) -> bool {
+pub fn holds_a_segment_offset(
+    register: RegId,
+    offset_bytes: i64,
+) -> bool {
     let root = root(register);
-    bytes(register) == Some(2)
+    bytes(register) == Some(offset_bytes)
         && (in_class(root, class::BASE) || in_class(root, class::INDEX))
         && !is_frame(register)
         && !is_stack(register)
@@ -282,11 +285,14 @@ mod tests {
     /// the stack segment themselves, and AX is no address register.
     #[test]
     fn only_the_unframed_bases_and_indexes_hold_a_segment_offset() {
-        assert!([RegId::BX, RegId::SI, RegId::DI].into_iter().all(holds_a_segment_offset));
+        assert!([RegId::BX, RegId::SI, RegId::DI].into_iter().all(|one| holds_a_segment_offset(one, 2)));
         assert!(
             ![RegId::BP, RegId::SP, RegId::AX, RegId::EBX, RegId::ESI, RegId::None]
                 .into_iter()
-                .any(holds_a_segment_offset)
+                .any(|one| holds_a_segment_offset(one, 2))
         );
+        // The width is the segmented space's offset, not a word.
+        assert!([RegId::EBX, RegId::ESI].into_iter().all(|one| holds_a_segment_offset(one, 4)));
+        assert!(!holds_a_segment_offset(RegId::BX, 4));
     }
 }
