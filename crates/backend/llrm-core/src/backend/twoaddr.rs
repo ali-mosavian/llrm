@@ -315,7 +315,7 @@ fn _commuted(
     one: &Insn,
     alive: &BTreeSet<u32>,
     copies: Option<&IndexMap<u32, BTreeSet<u32>>>,
-    interference: Option<&IndexMap<u32, BTreeSet<u32>>>,
+    interference: Option<&coalesce::Graph>,
 ) -> Option<Arc<Insn>> {
     let what = one.what.as_ref()?;
     let (into, first, second) = _swappable_held(one)?;
@@ -716,7 +716,10 @@ mod tests {
     fn test_crc32_ties_the_operand_that_can_join_its_loop_phi() {
         let one = addition("xor");
         let copies = graph(&[(3, &[4]), (4, &[3])]);
-        let interference = graph(&[(1, &[4]), (4, &[1])]);
+        let interference: crate::backend::coalesce::Graph = graph(&[(1, &[4]), (4, &[1])])
+            .into_iter()
+            .map(|(value, near)| (value, near.into_iter().collect()))
+            .collect();
 
         let chosen = _commuted(&one, &BTreeSet::from([3]), Some(&copies), Some(&interference)).expect("swapped");
 
