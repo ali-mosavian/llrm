@@ -96,3 +96,71 @@ mod tests {
         assert_eq!(parse("ah 8 eax 8 - x 5").unwrap_err(), "registers.regs:1: dwarf `x`");
     }
 }
+
+/// The Rust source of a target's `REGISTER_INFO`: its register file as an
+/// `llrm_lir::registers::Info`, from the text of its `registers.regs`. `id` is
+/// the type of a register's id (`iced_x86::Register`), whose variants the
+/// descriptions' names are; `classes` the class names
+/// `llrm_lir::registers::class` has a bit for, a class not among them is
+/// refused.
+pub fn source(
+    text: &str,
+    id: &str,
+    classes: &[&str],
+) -> Result<String, String> {
+    let registers = parse(text)?;
+    let mut code = String::from(
+        "pub static REGISTER_INFO: llrm_lir::registers::Info = llrm_lir::registers::Info {\n    table: {\n        let mut table: [Option<llrm_lir::registers::Entry>; 256] = [None; 256];\n",
+    );
+    for one in &registers {
+        let mut mask = Vec::new();
+        for class in &one.classes {
+            if !classes.contains(&class.as_str()) {
+                return Err(format!(
+                    "registers.regs: {} has the class `{class}`, which llrm_lir::registers has no bit for",
+                    one.name
+                ));
+            }
+            mask.push(format!("llrm_lir::registers::class::{}", class.to_uppercase()));
+        }
+        let mask = if mask.is_empty() { "0".to_owned() } else { mask.join(" | ") };
+        code.push_str(&format!(
+            "        table[{id}::{} as usize] = Some(llrm_lir::registers::Entry {{ name: {:?}, bits: {}, root: {id}::{}, lane: {}, classes: {mask} }});\n",
+            one.name.to_uppercase(),
+            one.name,
+            one.bits,
+            one.root.to_uppercase(),
+            one.lane
+        ));
+    }
+    code.push_str("        table\n    },\n    views: &[\n");
+    for one in &registers {
+        code.push_str(&format!(
+            "        ({id}::{}, {}, {id}::{}),\n",
+            one.root.to_uppercase(),
+            one.bits,
+            one.name.to_uppercase()
+        ));
+    }
+    code.push_str("    ],\n};\n");
+    Ok(code)
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::source;
+
+    const CLASSES: [&str; 2] = ["gpr", "int"];
+
+    /// A class the table has no bit for would be dropped without a word: the
+    /// generated mask would miss it and a query for it answer no.
+    #[test]
+    fn a_class_without_a_bit_is_refused_where_the_table_is_made() {
+        let text = "eax 32 eax 0 gpr,int - 1\nal 8 eax 0 int,byte - 2\n";
+        let error = source(text, "Reg", &CLASSES).err().expect("refused");
+        assert!(error.contains("al has the class `byte`"), "{error}");
+        let made = source("eax 32 eax 0 gpr,int - 1\n", "Reg", &CLASSES).expect("made");
+        assert!(made.contains("Reg::EAX as usize"), "{made}");
+        assert!(made.contains("llrm_lir::registers::class::GPR | llrm_lir::registers::class::INT"), "{made}");
+    }
+}
