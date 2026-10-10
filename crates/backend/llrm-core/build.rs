@@ -42,6 +42,7 @@ fn main() {
     }
     std::fs::write(out.join("peep_targets.rs"), peep).unwrap();
     std::fs::write(out.join("positional.rs"), positional(&targets)).unwrap();
+    std::fs::write(out.join("register_info.rs"), register_info(&targets)).unwrap();
     index.push_str(&format!(
         "/// Every target's selector, by its directory's name.\npub static ALL: [&Compiled; {}] = [{}];\n",
         all.len(),
@@ -56,6 +57,55 @@ fn main() {
     }
     effects.push_str("    None\n}\n");
     std::fs::write(out.join("effects.rs"), effects).unwrap();
+}
+
+/// The register file every target's `registers.regs` states, as the table
+/// `backend::registerinfo` queries: one entry per register, by iced's number.
+/// The targets state the same registers (checked here: name, width, root and
+/// lane; the classes and the debug-format numbers are each target's own and are
+/// not here).
+fn register_info(targets: &[std::path::PathBuf]) -> String {
+    let mut seen: Vec<(String, (String, String, String))> = Vec::new();
+    let mut rows: Vec<(String, u32, String, u32)> = Vec::new();
+    for dir in targets {
+        let path = dir.join("src/registers.regs");
+        println!("cargo:rerun-if-changed={}", path.display());
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        for line in text.lines() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            let columns: Vec<&str> = line.split_whitespace().collect();
+            if columns.len() != 7 {
+                continue;
+            }
+            let key = (columns[1].to_owned(), columns[2].to_owned(), columns[3].to_owned());
+            match seen.iter().find(|(name, _)| name == columns[0]) {
+                Some((_, again)) => {
+                    assert_eq!(again, &key, "{}: {} differs between targets", path.display(), columns[0])
+                }
+                None => {
+                    seen.push((columns[0].to_owned(), key));
+                    rows.push((
+                        columns[0].to_owned(),
+                        columns[1].parse().unwrap(),
+                        columns[2].to_owned(),
+                        columns[3].parse().unwrap(),
+                    ));
+                }
+            }
+        }
+    }
+    let mut code = String::from(
+        "pub static TABLE: [Option<Entry>; 256] = {\n    let mut table: [Option<Entry>; 256] = [None; 256];\n",
+    );
+    for (name, bits, root, lane) in &rows {
+        code.push_str(&format!(
+            "    table[iced_x86::Register::{} as usize] = Some(Entry {{ name: {name:?}, bits: {bits}, root: iced_x86::Register::{}, lane: {lane} }});\n",
+            name.to_uppercase(),
+            root.to_uppercase()
+        ));
+    }
+    code.push_str("    table\n};\n");
+    code
 }
 
 /// `positional(register)` for the registers whose class is `positional` in
