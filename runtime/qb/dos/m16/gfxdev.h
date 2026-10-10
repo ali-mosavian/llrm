@@ -11,6 +11,8 @@
 int gd_set_mode(unsigned mode);
 /* Gives palette entry `index` the adapter's colour `color`. */
 void gd_palette(unsigned index, unsigned color);
+/* Gives colour register `index` the mix of `red`, `green` and `blue`, 0 to 63. */
+void gd_palette_mix(unsigned index, unsigned red, unsigned green, unsigned blue);
 
 void gd_plot(unsigned x, unsigned y, unsigned color, unsigned operation);
 void gd_span(unsigned x, unsigned count, unsigned y, unsigned color,

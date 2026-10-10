@@ -4,13 +4,14 @@
 #include "gfxdev.h"
 #include "rtinit.h"
 
-enum { MAX_COLOR = 15, DEFAULT_FOREGROUND = 15, TEXT_MODE = 3 };
+enum { DEFAULT_FOREGROUND = 15, TEXT_MODE = 3 };
 
 static const GfxMode modes[] = {
-    {7, 0x0D, 320, 200, 8, 5.0 / 6.0, 0},
-    {8, 0x0E, 640, 200, 8, 5.0 / 12.0, 0},
-    {9, 0x10, 640, 350, 14, 35.0 / 48.0, 0},
-    {12, 0x12, 640, 480, 16, 1.0, 1}
+    {7, 0x0D, 320, 200, 8, 5.0 / 6.0, 0, 0, 16, 1, 4},
+    {8, 0x0E, 640, 200, 8, 5.0 / 12.0, 0, 0, 16, 1, 4},
+    {9, 0x10, 640, 350, 14, 35.0 / 48.0, 0, 0, 16, 1, 4},
+    {12, 0x12, 640, 480, 16, 1.0, 1, 1, 16, 1, 4},
+    {13, 0x13, 320, 200, 8, 5.0 / 6.0, 1, 1, 256, 8, 1}
 };
 
 const GfxMode *gfx_current;
@@ -67,11 +68,14 @@ void gfx_screen(int mode)
 
 void gfx_set_colors(int foreground, int background)
 {
-    if (foreground > 31 || background > 15
+    /* a 16-colour mode takes 16 to 31 to blink, which shows as the colour */
+    int most = gfx_current->colors > 16 ? (int)gfx_current->colors - 1 : 31;
+
+    if (foreground > most || background > 15
         || (background >= 0 && gfx_current->foreground_only))
         qb_error(BE_ILLFUN);
     if (foreground >= 0)
-        gfx_foreground = foreground & 15;
+        gfx_foreground = gfx_current->colors > 16 ? foreground : foreground & 15;
     if (background >= 0)
         gfx_set_background(background & 15);
 }
@@ -80,7 +84,7 @@ byte gfx_color(int color)
 {
     if (color == -1)
         return gfx_foreground;
-    if (color < 0 || color > MAX_COLOR)
+    if (color < 0 || (unsigned)color >= gfx_current->colors)
         qb_error(BE_ILLFUN);
     return (byte)color;
 }
@@ -213,9 +217,18 @@ int B_PNI2(int x, int y)
 void B_PAL2(int attribute, long color)
 {
     need_graphics();
-    if (attribute < 0 || attribute > MAX_COLOR || color < 0 || color > 63)
+    if (attribute < 0 || (unsigned)attribute >= gfx_current->colors || color < 0)
         qb_error(BE_ILLFUN);
-    gd_palette(attribute, (byte)color);
+    if (gfx_current->dac) {
+        /* red, green and blue, 0 to 63 each, in the three bytes from the low one */
+        if ((color & 0xFF) > 63 || (color >> 8 & 0xFF) > 63 || (color >> 16) > 63)
+            qb_error(BE_ILLFUN);
+        gd_palette_mix(attribute, color & 0xFF, color >> 8 & 0xFF, (unsigned)(color >> 16));
+    } else {
+        if (color > 63)
+            qb_error(BE_ILLFUN);
+        gd_palette(attribute, (byte)color);
+    }
 }
 #pragma aux B_N1I2 "B$N1I2"
 #pragma aux B_N1R4 "B$N1R4"

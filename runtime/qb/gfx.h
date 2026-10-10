@@ -13,6 +13,10 @@ typedef struct GfxMode {
     byte cell_height;      /* of a text character */
     double aspect;         /* height of a pixel over its width, times 1 */
     byte foreground_only;  /* COLOR takes no background (the VGA modes) */
+    byte dac;              /* PALETTE takes a mix of red, green and blue (VGA) */
+    unsigned colors;       /* attributes */
+    byte bits;             /* bits of a pixel in each of its planes (GET and PUT) */
+    byte planes;           /* 4 for the EGA and VGA modes with 16 colours, else 1 */
 } GfxMode;
 
 extern const GfxMode *gfx_current;

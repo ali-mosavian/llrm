@@ -6,7 +6,7 @@
 #include "gfx.h"
 #include "ad.h"
 
-enum { PLANES = 4, HEADER = 4 };
+enum { HEADER = 4 };
 enum { PUT_OR, PUT_AND, PUT_PRESET, PUT_PSET, PUT_XOR };
 
 typedef u8 QB_FAR *Bytes;
@@ -22,9 +22,10 @@ static unsigned long array_bytes(const AD *ad)
     return count * ad->elem;
 }
 
+/* The bytes of a row of `width` pixels in one plane. */
 static unsigned row_bytes(unsigned width)
 {
-    return (width + 7) / 8;
+    return (width * gfx_current->bits + 7) / 8;
 }
 
 /* B$GGET: GET (x1, y1)-(x2, y2), array; the corners were given by B$N1xx and
@@ -36,27 +37,37 @@ void B_GGET(qb_data_ptr data, const AD *ad)
     unsigned width = (gfx_x1 < gfx_x2 ? gfx_x2 - gfx_x1 : gfx_x1 - gfx_x2) + 1;
     unsigned height = (gfx_y1 < gfx_y2 ? gfx_y2 - gfx_y1 : gfx_y1 - gfx_y2) + 1;
     unsigned per_plane = row_bytes(width), x, y, plane;
+    unsigned planes = gfx_current->planes, bits = gfx_current->bits;
     Bytes out = (Bytes)data;
 
-    if (HEADER + (unsigned long)height * PLANES * per_plane > array_bytes(ad))
+    if (HEADER + (unsigned long)height * planes * per_plane > array_bytes(ad))
         qb_error(BE_ILLFUN);
-    ((u16 QB_FAR *)out)[0] = width;
+    ((u16 QB_FAR *)out)[0] = width * bits;
     ((u16 QB_FAR *)out)[1] = height;
     out += HEADER;
     for (y = 0; y < height; y++) {
-        for (plane = 0; plane < PLANES; plane++) {
+        for (plane = 0; plane < planes; plane++) {
             for (x = 0; x < per_plane; x++)
                 out[plane * per_plane + x] = 0;
         }
         for (x = 0; x < width; x++) {
             int color = gfx_pixel(left + (int)x, top + (int)y);
 
-            for (plane = 0; plane < PLANES; plane++) {
-                if (color > 0 && (color >> plane & 1))
-                    out[plane * per_plane + (x >> 3)] |= 0x80 >> (x & 7);
+            if (color <= 0)
+                continue;
+            if (planes > 1) {
+                for (plane = 0; plane < planes; plane++) {
+                    if (color >> plane & 1)
+                        out[plane * per_plane + (x >> 3)] |= 0x80 >> (x & 7);
+                }
+            } else {
+                /* a pixel is `bits` wide in the row, the leftmost in the high bits */
+                unsigned at = x * bits;
+
+                out[at >> 3] |= color << (8 - bits - (at & 7));
             }
         }
-        out += PLANES * per_plane;
+        out += planes * per_plane;
     }
 }
 
@@ -64,11 +75,12 @@ void B_GGET(qb_data_ptr data, const AD *ad)
 void B_GPUT(qb_data_ptr data, const AD *ad, int how)
 {
     Bytes in = (Bytes)data;
-    unsigned width = ((u16 QB_FAR *)in)[0], height = ((u16 QB_FAR *)in)[1];
+    unsigned planes = gfx_current->planes, bits = gfx_current->bits;
+    unsigned width = ((u16 QB_FAR *)in)[0] / bits, height = ((u16 QB_FAR *)in)[1];
     unsigned per_plane = row_bytes(width), x, y, plane;
 
     if (how < PUT_OR || how > PUT_XOR
-        || HEADER + (unsigned long)height * PLANES * per_plane
+        || HEADER + (unsigned long)height * planes * per_plane
                > array_bytes(ad))
         qb_error(BE_ILLFUN);
     in += HEADER;
@@ -77,12 +89,18 @@ void B_GPUT(qb_data_ptr data, const AD *ad, int how)
             unsigned color = 0;
             byte operation = OP_SET;
 
-            for (plane = 0; plane < PLANES; plane++) {
-                if (in[plane * per_plane + (x >> 3)] & (0x80 >> (x & 7)))
-                    color |= 1u << plane;
+            if (planes > 1) {
+                for (plane = 0; plane < planes; plane++) {
+                    if (in[plane * per_plane + (x >> 3)] & (0x80 >> (x & 7)))
+                        color |= 1u << plane;
+                }
+            } else {
+                unsigned at = x * bits;
+
+                color = in[at >> 3] >> (8 - bits - (at & 7)) & ((1u << bits) - 1);
             }
             if (how == PUT_PRESET)
-                color = ~color & 15;
+                color = ~color & (gfx_current->colors - 1);
             else if (how == PUT_OR)
                 operation = OP_OR;
             else if (how == PUT_AND)
@@ -91,7 +109,7 @@ void B_GPUT(qb_data_ptr data, const AD *ad, int how)
                 operation = OP_XOR;
             gfx_plot(gfx_x1 + (int)x, gfx_y1 + (int)y, (byte)color, operation);
         }
-        in += PLANES * per_plane;
+        in += planes * per_plane;
     }
 }
 #pragma aux B_GGET "B$GGET"
