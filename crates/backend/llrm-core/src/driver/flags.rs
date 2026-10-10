@@ -386,7 +386,12 @@ impl Flags {
         arch: std::rc::Rc<dyn llrm_target::Target>,
         selection: &'static crate::backend::isel::Compiled,
     ) -> super::Options {
+        // The object format the target writes: what the debug writer is asked
+        // about (frame cells, ranges) is that writer's, whichever frontend it
+        // is.
+        let object_format = self.format(&*arch).map_or("omf", |format| format.name());
         super::Options {
+            object_format,
             debug_format: self.debug_format,
             pipeline: self.pipeline(),
             stack_usage: self.stack_usage,

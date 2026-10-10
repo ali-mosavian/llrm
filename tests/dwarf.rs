@@ -735,3 +735,33 @@ fn an_extern_nothing_names_is_asked_of_no_linker_with_g_or_without() {
         assert_eq!(plain, assembly(true), "{machine}");
     }
 }
+
+/// `llrm-nib -m32 -fobject-format=elf -g` left out every local that lives in
+/// a frame cell (`sum`, `total` of tests/fixtures/matrix/known.nib): the
+/// driver's options kept the default object format (OMF), whose writer wants
+/// a frame register, so the ELF writer was handed the frameless function's
+/// cells as ones to drop.
+#[test]
+fn nib_in_elf_keeps_the_locals_that_live_in_frame_cells() {
+    let Some(dwarfdump) = dwarfdump() else {
+        skipped("needs llvm-dwarfdump");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("known.o");
+    let nib = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("llrm-nib");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/matrix/known.nib");
+    let made = Command::new(nib)
+        .args(["-m32", "-O0", "-g", "-fobject-format=elf"])
+        .arg(&source)
+        .arg("-o")
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let said = Command::new(dwarfdump).arg("--debug-info").arg(&object).output().unwrap();
+    let text = String::from_utf8_lossy(&said.stdout);
+    for name in ["sum", "total"] {
+        assert!(text.contains(&format!("DW_AT_name\t(\"{name}\")")), "no {name}:\n{text}");
+    }
+}
