@@ -1,50 +1,39 @@
 /* PAINT: fills the area round a point, up to a border colour (QB rt/paint.asm
-   B$PAIN).  Spans a row at a time, each span leaving seeds for the rows above
-   and below it.  The seeds wait where the target keeps a fill's queue (platform.h): in all the free string space,
+   B$PAIN).  Spans a row at a time, each span painted whole and left to look at the row beyond it.  The spans wait where the target keeps a fill's queue (platform.h): in all the free string space,
    as QB's queue does, so a fill runs out of memory only where QB's would; or, where memory is flat, in a block of
    its own, so what the strings and the heap hold does not decide how much of a picture a fill can cover. */
 #include "gfx.h"
 #include "gfxdev.h"
 
-typedef struct Seed {
-    short x, y;
-} Seed;
+/* A span of the fill that has been painted, whose neighbouring row `y + step` is still to be looked at over `left` to `right`. */
+typedef struct Span {
+    short left, right, y, step;
+} Span;
 
-static Seed *seeds;
-static unsigned seed_count, seed_room;
+static Span *spans;
+static unsigned span_count, span_room;
 
-static void push(int x, int y)
+static void push(int left, int right, int y, int step)
 {
-    if (seed_count == seed_room)
+    if (span_count == span_room)
         qb_error(BE_MEMORY);
-    seeds[seed_count].x = x;
-    seeds[seed_count].y = y;
-    seed_count++;
+    spans[span_count].left = left;
+    spans[span_count].right = right;
+    spans[span_count].y = y;
+    spans[span_count].step = step;
+    span_count++;
 }
 
-/* Whether the pixel can be painted: on the screen, not the border. */
-static int open_pixel(int x, int y, int border)
+/* The whole run through `x` of row `y` that is not the border, painted; the span is left to look at the rows beyond it, in
+   the direction away from the one it was found from (the first one, from nowhere, both ways), and over what it reaches past
+   its parent's span, back. */
+static void paint_run(GdFill *painter, int x, int y, int edge, int *left, int *right)
 {
-    int c = gfx_pixel(x, y);
+    int l = gfx_search(x, 0, y, edge, edge, 1), r = gfx_search(x, (int)gfx_current->width - 1, y, edge, edge, 1);
 
-    return c >= 0 && c != border;
-}
-
-/* Seeds the row `y` with a seed for each run of open pixels, not of the fill
-   colour, in `left` to `right`. */
-static void seed_row(int left, int right, int y, int border, int fill)
-{
-    int x = left, open, closed;
-
-    if (y < 0 || y >= (int)gfx_current->height)
-        return;
-    while (x <= right && (open = gfx_search(x, right, y, border, fill, 0)) >= 0) {
-        push(open, y);
-        closed = gfx_search(open, right, y, border, fill, 1);
-        if (closed < 0)
-            break;
-        x = closed + 1;
-    }
+    *left = l < 0 ? 0 : l + 1;
+    *right = r < 0 ? (int)gfx_current->width - 1 : r - 1;
+    painter->box(painter, (unsigned)*left, (unsigned)y, (unsigned)(*right - *left + 1), 1);
 }
 
 /* B$PAIN: the fill colour and the border colour (-1 for the foreground, and for
@@ -55,28 +44,34 @@ void B_PAIN(short fill, short border)
     byte edge = border == -1 ? paint : gfx_color(border);
     unsigned long bytes;
     GdFill painter;
+    int c = gfx_pixel(gfx_x1, gfx_y1), left, right;
 
-    seed_count = 0;
-    if (!open_pixel(gfx_x1, gfx_y1, edge))
+    span_count = 0;
+    if (c < 0 || c == edge || c == paint)
         return;
-    seeds = (Seed *)qb_paint_queue_open(&bytes);
-    seed_room = (unsigned)(bytes / sizeof(Seed));
+    spans = (Span *)qb_paint_queue_open(&bytes);
+    span_room = (unsigned)(bytes / sizeof(Span));
     gd_fill_select(&painter, paint, OP_SET);
-    push(gfx_x1, gfx_y1);
-    while (seed_count) {
-        Seed seed = seeds[--seed_count];
-        int left = seed.x, right = seed.x;
+    paint_run(&painter, gfx_x1, gfx_y1, edge, &left, &right);
+    push(left, right, gfx_y1, -1);
+    push(left, right, gfx_y1, 1);
+    while (span_count) {
+        Span span = spans[--span_count];
+        int y = span.y + span.step, x = span.left, open;
 
-        if (!open_pixel(seed.x, seed.y, edge)
-            || gfx_pixel(seed.x, seed.y) == paint)
+        if (y < 0 || y >= (int)gfx_current->height)
             continue;
-        left = gfx_search(seed.x, 0, seed.y, edge, edge, 1);
-        left = left < 0 ? 0 : left + 1;
-        right = gfx_search(seed.x, (int)gfx_current->width - 1, seed.y, edge, edge, 1);
-        right = right < 0 ? (int)gfx_current->width - 1 : right - 1;
-        painter.box(&painter, (unsigned)left, (unsigned)seed.y, (unsigned)(right - left + 1), 1);
-        seed_row(left, right, seed.y - 1, edge, paint);
-        seed_row(left, right, seed.y + 1, edge, paint);
+        /* each pixel here that is neither border nor fill is in a run the fill has not reached */
+        while (x <= span.right && (open = gfx_search(x, span.right, y, edge, paint, 0)) >= 0) {
+            paint_run(&painter, open, y, edge, &left, &right);
+            push(left, right, y, span.step);
+            /* the run can reach past the span it was found under, and there the row it was found from may hold more of the area */
+            if (left < span.left)
+                push(left, span.left - 1, y, -span.step);
+            if (right > span.right)
+                push(span.right + 1, right, y, -span.step);
+            x = right + 1;
+        }
     }
     qb_paint_queue_close();
 }
