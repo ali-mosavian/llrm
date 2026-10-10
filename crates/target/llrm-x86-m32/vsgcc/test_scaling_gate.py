@@ -452,3 +452,22 @@ def test_summaries_keep_the_call_graph_when_a_body_calls_a_deeper_one(tmp_path):
     source = tmp_path / "chain128.c"
     source.write_text(scaling.chain(128))
     assert gate.own_work(gate.levels_time.command("llrm", "O2", source)).get("summaries topology", 0.0) <= 30.0
+
+
+def test_interprocedural_own_work_stays_near_linear_on_the_chain_functions_and_callers_axes(tmp_path):
+    """The module-wide step did work per body that grew with the module: the declarations were compared global by global after each of
+    N bodies, the noreturn fixed point rounds took N bodies N times, and the no-recurse proof walked everything each function reaches
+    (`mir interprocedural` own, 2N/N on chain: 2.80). A doubling above 2.65, 2.15 and 2.2 fails (chain keeps what `analysis summaries`
+    leaves in it); functions and callers hold what the call graph's dense components gave them (2.01, 2.07)."""
+    limits = {"chain": (128, 2.65), "functions": (512, 2.15), "callers": (1024, 2.2)}
+    grown = {}
+    for axis, (n, limit) in limits.items():
+        own = {}
+        for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+            source = tmp_path / f"{axis}_{label}.c"
+            source.write_text("" if size == 0 else scaling.AXES[axis](size))
+            own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+        small, big = (own[label].get("mir interprocedural", 0.0) - own["empty"].get("mir interprocedural", 0.0) for label in ("n", "2n"))
+        if big > limit * small:
+            grown[axis] = f"{small:.0f} -> {big:.0f} Minstr"
+    assert not grown, grown

@@ -793,7 +793,7 @@ pub fn optimized_with<E: From<String>>(
         for &id in bodies {
             analyses.changed(id);
         }
-        analyses.invalidate(&PreservedAnalyses::none());
+        analyses.invalidate_bodies(&PreservedAnalyses::none());
     };
 
     // Inline only after each independent body has reached its local fixed
@@ -1384,6 +1384,7 @@ pub fn stamped(
     let mut changed = Vec::new();
     let graph = analyses.get::<CallGraphAnalysis>(module);
     let callees = llrm_mir::memory::callees(module);
+    let never_reentered = graph.cannot_reenter(module);
     for id in graph.bottom_up() {
         let global = module.global(id);
         let exact = matches!(
@@ -1423,7 +1424,7 @@ pub fn stamped(
                     Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }
                 ),
             );
-        let norecurse = graph.cannot_reenter(module, id);
+        let norecurse = never_reentered.contains(&id);
         // The language's word that its loops end holds where nothing a loop
         // that never ended could be seen by.
         let unobserved = !volatile
