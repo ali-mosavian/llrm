@@ -150,18 +150,21 @@ pub fn merged(
     size: bool,
 ) -> bool {
     let mut runs: Vec<(Vec<_Cell>, u32, u32)> = Vec::new();
-    let mut wides: Vec<_Wide> = Vec::new();
+    let wides: Vec<_Wide>;
     {
         let unit = Unit::within(context, layout, function, outer);
+        // How many stores of the function write each constant: a value stored
+        // more than once is held in a register, which a store reads without an
+        // immediate.
+        let mut stored: IndexMap<(u128, u32), usize> = IndexMap::default();
+        let mut left: Vec<Vec<_Cell>> = Vec::new();
         let mut take = |open: Vec<_Cell>| {
+            for cell in &open {
+                *stored.entry((cell.value, (cell.high - cell.low) as u32)).or_default() += 1;
+            }
             let (filled, rest) = _adjacent(&unit, open);
             runs.extend(filled);
-            // Under -Os a constant a register holds for several stores is
-            // smaller than a dword immediate for each in 16-bit
-            // code, so no pair is made one.
-            if !size {
-                wides.extend(_wide(&unit, rest));
-            }
+            left.extend(rest);
         };
         for block in function.layout() {
             let mut open: Vec<_Cell> = Vec::new();
@@ -176,6 +179,8 @@ pub fn merged(
             }
             take(open);
         }
+        let costs = outer.target().size_costs();
+        wides = _wide(&unit, left, &stored, &costs, size);
     }
     for wide in &wides {
         let value = counting::constant(context, &BigInt::from(wide.value), wide.bits);
@@ -360,12 +365,43 @@ struct _Wide {
     pointer: Operand,
 }
 
+/// Whether one store of `wide` bytes is no more code bytes than `cells`'
+/// stores: `costs.store` is a store of an immediate of the operand size, so a
+/// register store (the form of a constant stored more than once in the
+/// function, which a register holds) is that less the operand, and a store of
+/// `width` bytes of immediate has them instead, each under the operand-size
+/// prefix where its width is not the operand's.
+fn _smaller(
+    unit: &Unit,
+    costs: &OperationCosts,
+    cells: &[_Cell],
+    wide: i64,
+    stored: &IndexMap<(u128, u32), usize>,
+) -> bool {
+    let Some(space) = unit.space(cells[0].pointer) else { return false };
+    let operand = i64::from(unit.layout.pointer(space).index_bits / 8);
+    let register = |width: i64| costs.sized(costs.store - operand, width, operand);
+    let immediate = |width: i64| register(width) + width;
+    let each: i64 = cells
+        .iter()
+        .map(|one| {
+            let width = one.high - one.low;
+            let held = stored.get(&(one.value, width as u32)).is_some_and(|&count| count > 1);
+            if held { register(width) } else { immediate(width) }
+        })
+        .sum();
+    immediate(wide) <= each
+}
+
 /// The wider stores the constants left in `groups` make: from each address, the
 /// widest power of two of bytes, up to the largest legal integer, that two or
 /// more adjacent stores tile exactly.
 fn _wide(
     unit: &Unit,
     groups: Vec<Vec<_Cell>>,
+    stored: &IndexMap<(u128, u32), usize>,
+    costs: &OperationCosts,
+    bytes_matter: bool,
 ) -> Vec<_Wide> {
     let widest = i64::from(unit.layout.largest_legal_integer() / 8).max(1);
     let mut made = Vec::new();
@@ -411,12 +447,18 @@ fn _wide(
                     value |= (cell.value & mask) << (8 * (cell.low - low) as u32);
                 }
                 let cells: Vec<_Cell> = piece[at..end].to_vec();
-                made.push(_Wide {
-                    cells,
-                    value,
-                    bits: 8 * (piece[end - 1].high - low) as u32,
-                    pointer: piece[at].pointer,
-                });
+                // Tuned for size, only where the one store is no more bytes
+                // than the stores it replaces, a value stored
+                // more than once being held in a register (a
+                // dword immediate with its operand-size prefix in 16-bit
+                // code is more than two register stores: sum_three -Os +3
+                // bytes).
+                let bits = 8 * (piece[end - 1].high - low) as u32;
+                if bytes_matter && !_smaller(unit, costs, &cells, i64::from(bits / 8), stored) {
+                    at += 1;
+                    continue;
+                }
+                made.push(_Wide { cells, value, bits, pointer: piece[at].pointer });
                 at = end;
             }
         }

@@ -753,3 +753,30 @@ fn a_short_loop_of_two_fills_is_kept_where_the_stores_are_no_smaller() {
     let (after, changed) = fill(&two_fills(7, "-1", "-1", "%i"), CELLS);
     assert!(!changed && !after.contains("call void @llvm.memset"), "{after}");
 }
+
+/// Tuned for size, a pair of constants is one store only where that is fewer
+/// code bytes on the target: in 16-bit code two word stores of a value held in
+/// a register are six bytes a pair, the dword immediate with its operand-size
+/// prefix nine (sum_three -Os +3 bytes); two values that are not held are
+/// twelve against nine.
+#[test]
+fn a_pair_of_constants_is_one_store_tuned_for_size_where_the_bytes_are_fewer() {
+    let stores = |text: &str, size: bool| {
+        let before = parsed(&format!("{DOS}{}", local(text)));
+        let mut module = before.clone();
+        let (layout, outer) =
+            (layout(&module), Outer::of(&module, Some(std::rc::Rc::new(llrm_x86_m16::Dos::default()))));
+        let callees = llrm_mir::memory::callees(&module);
+        let mut declared = Declared::of(&module);
+        let (context, function) = module.function_mut("f").expect("@f");
+        super::merged(context, &layout, &callees, function, &outer, &mut declared, size);
+        let after = printed(&module);
+        assert_eq!(results(&module, BYTES), results(&before, BYTES), "{after}");
+        after.matches("store").count()
+    };
+    let held = "  store i16 4, ptr %a\n  store i16 4, ptr %p2\n  store i16 4, ptr %p4\n  store i16 4, ptr %p6\n";
+    let unique = "  store i16 7, ptr %a\n  store i16 9, ptr %p2\n";
+    assert_eq!(stores(held, false), 2, "speed: two dwords");
+    assert_eq!(stores(held, true), 4, "size: a register already holds the 4");
+    assert_eq!(stores(unique, true), 1, "size: nine bytes against twelve");
+}
