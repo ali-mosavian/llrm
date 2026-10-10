@@ -102,6 +102,27 @@ fn may_read(
     what.sources.iter().any(reads) || (!plain_store && what.dests.iter().any(reads))
 }
 
+/// Whether `one` may write a byte of `cell`: a store sunk past it would land
+/// over the newer value.
+fn overwrites(
+    one: &Insn,
+    cell: &Mem,
+) -> bool {
+    one.what
+        .as_ref()
+        .is_some_and(
+            |what| what.dests
+                .iter()
+                .any(
+                    |place| match place {
+                        Loc::Mem(other) => !crate::backend::storedhomes::apart(cell, other),
+                        Loc::Address(_) => true,
+                        _ => false,
+                    },
+                ),
+        )
+}
+
 /// Which spill cells each block, and the blocks reachable from it, may read:
 /// liveness over cells, worked out once for the function. `read_beyond` asked
 /// it per store and successor by a walk of everything reachable, which grew
@@ -276,9 +297,11 @@ pub fn sunk(body: &LirBody) -> LirBody {
                 if target == at
                     || !insns.contains_key(&target)
                     || to.iter().filter(|next| **next == target).count() != 1
-                    || insns[&at][index + 1..]
-                        .iter()
-                        .any(|other| touches(regs, body.bits, other, &read, false) || may_read(other, &cell))
+                    || insns[&at][index + 1..].iter().any(|other| {
+                        touches(regs, body.bits, other, &read, false)
+                            || may_read(other, &cell)
+                            || overwrites(other, &cell)
+                    })
                 {
                     continue;
                 }
@@ -656,5 +679,66 @@ mod tests {
     fn test_the_blocks_read_to_place_spill_stores_grow_with_the_stores() {
         let (small, large) = (scanned(40), scanned(80));
         assert!(large <= 3 * small, "40 stores read {small} blocks, 80 read {large}");
+    }
+
+    /// `mov [slot], ebx` (the planes copy) was sunk into the arm that reads the
+    /// slot, past `mov [slot], esi` (the stride, stored over it): the arm read
+    /// the planes where it wanted the stride, and pack_ref of qb-m32's fill_ops
+    /// packed wrong rows.
+    #[test]
+    fn test_a_spill_store_does_not_move_past_a_later_store_to_its_cell() {
+        use crate::objectfile::module::{Addr, Space};
+        let addr = Addr { space: Space::Frame, disp: -8, index: -1, base: RegId::None, segment: RegId::None };
+        let cell = crate::model::ir::Mem { through: RegId::BP, ..crate::model::ir::Mem::new(Some(addr), 2) };
+        let store = |at, source| {
+            Arc::new(Insn {
+                spill_store: true,
+                ..Arc::unwrap_or_clone(insn(
+                    at,
+                    Operation::Move,
+                    "mov",
+                    vec![Loc::Mem(cell.clone())],
+                    vec![r(source)],
+                    None,
+                ))
+            })
+        };
+        let ret = Arc::new(Insn {
+            reads_complete: true,
+            ..Arc::unwrap_or_clone(insn(9, Operation::Return, "ret", vec![], vec![], None))
+        });
+        let body = LirBody::new(
+            "f",
+            1,
+            vec![
+                block(
+                    1,
+                    vec![
+                        store(1, BX),
+                        store(2, DI),
+                        copy(3, DI, AX),
+                        insn(3, Operation::Compare, "cmp", vec![], vec![r(AX), r(BX)], None),
+                        insn(4, Operation::Branch, "jl", vec![], vec![], Some(5)),
+                    ],
+                    vec![5, 9],
+                ),
+                block(
+                    5,
+                    vec![
+                        insn(5, Operation::Move, "mov", vec![r(DX)], vec![Loc::Mem(cell.clone())], None),
+                        insn(6, Operation::Jump, "jmp", vec![], vec![], Some(9)),
+                    ],
+                    vec![9],
+                ),
+                block(9, vec![ret], vec![]),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let after = sunk(&body);
+        let stores = |at| {
+            after.blocks.iter().find(|block| block.at == at).unwrap().insns.iter().filter(|one| one.spill_store).count()
+        };
+        assert_eq!((stores(1), stores(5)), (2, 0), "the older store ran after the newer one");
     }
 }

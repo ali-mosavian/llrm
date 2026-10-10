@@ -723,7 +723,7 @@ fn test_a_mask_then_trunc_then_zext_reads_the_low_part_once() {
     let after = checked(text, &singles(&edges(16)));
     assert_eq!(
         after,
-        "define i32 @f(i16 %x) {\nb0:\n  %0 = trunc i16 %x to i8\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n}\n"
+        "define i32 @f(i16 %x) {\nb0:\n  %t = trunc i16 %x to i8\n  %r = zext i8 %t to i32\n  ret i32 %r\n}\n"
     );
 }
 
@@ -1137,4 +1137,60 @@ fn a_mask_is_judged_by_the_bounds_the_manager_holds_not_by_new_ones() {
     assert!(super::simplified(context, &layout, function, &mut analyses, false), "premise: the mask went");
     let solved = llrm_analysis::ranges::loops_solved() - before;
     assert_eq!(solved, 0, "{solved} loops worked again for one mask");
+}
+
+/// bench/x_funcptr: `table[(i * 7 + (x & 3)) & 3]` kept the inner mask, which
+/// the outer one made redundant (a sum's low two bits depend on its operands'
+/// low two bits): `mov ecx, eax; and ecx, 3; add ecx, edi; and ecx, 3` where
+/// gcc and clang emit `add; and`.
+#[test]
+fn test_a_mask_inside_a_sum_a_wider_mask_reads_through_is_dropped() {
+    let text = "define i32 @f(i32 %i, i32 %x) {
+b0:
+  %m = mul i32 %i, 7
+  %a = and i32 %x, 3
+  %s = add i32 %m, %a
+  %r = and i32 %s, 3
+  ret i32 %r
+}
+";
+    let inputs: Vec<Vec<i128>> =
+        [0, 1, 5, 6, 7, 100, -3, 12345].iter().flat_map(|&i| [0, 1, 2, 3, 9, -1, 77].map(|x| vec![i, x])).collect();
+    let after = checked(text, &inputs);
+    assert_eq!(after.matches("and i32").count(), 1, "{after}");
+}
+
+/// bench/x_popcount: `rev32(s) & 255` read one byte of five 32-bit stages; the
+/// stages' other halves are never read, and `x << 16` is zero in every bit the
+/// `& 255` reads.
+#[test]
+fn test_the_half_of_a_bit_reversal_a_masked_byte_never_reads_is_dropped() {
+    let text = "define i32 @f(i32 %x) {
+b0:
+  %lo = shl i32 %x, 16
+  %hi = lshr i32 %x, 16
+  %r = or i32 %hi, %lo
+  %b = and i32 %r, 255
+  ret i32 %b
+}
+";
+    let inputs = singles(&edges(32));
+    let after = checked(text, &inputs);
+    assert!(!after.contains("shl"), "{after}");
+}
+
+/// A mask that clears a bit something reads stays.
+#[test]
+fn test_a_mask_over_a_bit_that_is_read_stays() {
+    unchanged(
+        "define i32 @f(i32 %i, i32 %x) {
+b0:
+  %m = mul i32 %i, 7
+  %a = and i32 %x, 3
+  %s = add i32 %m, %a
+  %r = and i32 %s, 7
+  ret i32 %r
+}
+",
+    );
 }
