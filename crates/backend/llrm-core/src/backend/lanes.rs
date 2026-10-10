@@ -36,7 +36,7 @@ static TABLE: LazyLock<Table> = LazyLock::new(|| {
     assert!(lanes.len() <= 128 && (0..32).all(|bit| lanes[bit as usize] == (RegId::None, bit)));
     let (mut first, mut count) = ([0_u8; REGISTERS], [0_u8; REGISTERS]);
     for (bit, (register, _)) in lanes.iter().enumerate() {
-        let slot = *register as usize;
+        let slot = (*register).index();
         if count[slot] == 0 {
             first[slot] = u8::try_from(bit).expect("fits");
         }
@@ -47,7 +47,7 @@ static TABLE: LazyLock<Table> = LazyLock::new(|| {
 
 fn bit(lane: &Lane) -> Option<u32> {
     let table = &*TABLE;
-    let slot = lane.0 as usize;
+    let slot = lane.0.index();
     (slot < REGISTERS && lane.1 < u32::from(table.count[slot])).then(|| u32::from(table.first[slot]) + lane.1)
 }
 

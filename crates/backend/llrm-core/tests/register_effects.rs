@@ -2,11 +2,11 @@
 //! decode to, in the lanes the passes see: every row of each target's
 //! description, at each width.
 
-use iced_x86::Register;
 use iced_x86::{Decoder, DecoderOptions, FlowControl, InstructionInfoFactory, Mnemonic, OpAccess, OpKind};
 use llrm_core::backend::lanes::Lanes;
 use llrm_core::backend::peephole::{_effects_by_table, _flag_lanes, _lanes, _moved_by, _moved_lanes};
 use llrm_core::model::lir::Insn;
+use llrm_lir::registers::RegId;
 use llrm_lir::{Addr, AddressRef, Imm, Loc, Mem, Reg, Semantics, Space};
 use llrm_target::Target;
 use llrm_x86::effects::root;
@@ -61,8 +61,12 @@ fn by_decoding(
             reads.extend(read);
             writes.extend(_flag_lanes(insn.rflags_modified()));
         }
-        let used: Vec<(Register, OpAccess)> =
-            info.info(insn).used_registers().iter().map(|access| (access.register(), access.access())).collect();
+        let used: Vec<(RegId, OpAccess)> = info
+            .info(insn)
+            .used_registers()
+            .iter()
+            .map(|access| (RegId::from(access.register()), access.access()))
+            .collect();
         for (register, access) in &used {
             if READS.contains(access) {
                 let read: Lanes = _lanes(regs, *register).minus(&writes);
@@ -79,7 +83,7 @@ fn by_decoding(
         // `rep` counts its register down to where it stops, which iced calls a
         // conditional write.
         if insn.has_rep_prefix() || insn.has_repe_prefix() || insn.has_repne_prefix() {
-            for (register, _) in used.iter().filter(|(register, _)| register.full_register32() == Register::ECX) {
+            for (register, _) in used.iter().filter(|(register, _)| register.full_register32() == RegId::ECX) {
                 writes.extend(_lanes(regs, *register));
             }
         }
@@ -94,7 +98,7 @@ fn moved_by_decoding(
 ) -> Option<(Vec<(llrm_core::backend::lanes::Lane, llrm_core::backend::lanes::Lane)>, Lanes)> {
     let instructions = decoded(bits, what)?;
     let [insn] = instructions.as_slice() else { return None };
-    let register = |index: u32| (insn.op_kind(index) == OpKind::Register).then(|| insn.op_register(index));
+    let register = |index: u32| (insn.op_kind(index) == OpKind::Register).then(|| RegId::from(insn.op_register(index)));
     let shift = match insn.mnemonic() {
         Mnemonic::Shl | Mnemonic::Shr if insn.op_count() == 2 && insn.op1_kind() == OpKind::Immediate8 => {
             (insn.mnemonic() == Mnemonic::Shl, register(0), None, insn.immediate8())
@@ -115,12 +119,12 @@ fn refused_by_encoder(
     llrm_x86::select::emit_in(bits, what, 0, None, false, false, None).is_none()
 }
 
-fn byte(name: &str) -> Register {
+fn byte(name: &str) -> RegId {
     match name {
-        "ax" => Register::AL,
-        "bx" => Register::BL,
-        "cx" => Register::CL,
-        _ => Register::DL,
+        "ax" => RegId::AL,
+        "bx" => RegId::BL,
+        "cx" => RegId::CL,
+        _ => RegId::DL,
     }
 }
 
@@ -140,7 +144,7 @@ fn operand(
     let order = if pick & 64 != 0 { ["ax", "cx", "dx", "bx"] } else { ["cx", "dx", "ax", "bx"] };
     let free: Vec<&str> = order.into_iter().filter(|name| form.fixed.iter().all(|(_, _, pin)| pin != name)).collect();
     let bytes = width / 8;
-    let (base, wide_index) = if bits == 32 { (Register::EBX, Register::ESI) } else { (Register::BX, Register::SI) };
+    let (base, wide_index) = if bits == 32 { (RegId::EBX, RegId::ESI) } else { (RegId::BX, RegId::SI) };
     match kind {
         'r' => {
             let (name, size) = match pinned {
@@ -170,20 +174,20 @@ fn operand(
                     space: Space::Frame,
                     disp: -4,
                     index: 0,
-                    base: Register::None,
-                    segment: Register::None,
+                    base: (RegId::None).iced(),
+                    segment: (RegId::None).iced(),
                 }),
-                through: Register::None,
+                through: RegId::None,
                 ..Mem::new(None, bytes)
             },
         })),
         'a' => {
             // A word `lea` in flat code takes a 16-bit address, behind a
             // prefix.
-            let (base, index) = if bytes == 2 { (Register::BX, Register::SI) } else { (base, wide_index) };
+            let (base, index) = if bytes == 2 { (RegId::BX, RegId::SI) } else { (base, wide_index) };
             Some(Loc::Address(AddressRef {
                 through: base,
-                index_through: if pick % 2 == 0 { Register::None } else { index },
+                index_through: if pick % 2 == 0 { RegId::None } else { index },
                 scale: 1,
                 ..AddressRef::new(None)
             }))
@@ -318,7 +322,13 @@ fn the_table_follows_the_encoder_into_what_it_lowers_to() {
     let imm = Loc::Imm(Imm {
         value: 0,
         width: 2,
-        address: Some(Addr { space: Space::Group, disp: 0, index: 0, base: Register::None, segment: Register::None }),
+        address: Some(Addr {
+            space: Space::Group,
+            disp: 0,
+            index: 0,
+            base: (RegId::None).iced(),
+            segment: (RegId::None).iced(),
+        }),
     });
     let step = |op, name: &str, dests, sources| Semantics {
         op,
@@ -332,21 +342,21 @@ fn the_table_follows_the_encoder_into_what_it_lowers_to() {
         step(
             llrm_lir::Operation::Restore,
             "restore",
-            vec![reg(Register::AX, 2), reg(Register::DX, 2)],
-            vec![reg(Register::EAX, 4)],
+            vec![reg(RegId::AX, 2), reg(RegId::DX, 2)],
+            vec![reg(RegId::EAX, 4)],
         ),
         step(
             llrm_lir::Operation::Restore,
             "restore",
-            vec![reg(Register::CX, 2), reg(Register::BX, 2)],
-            vec![reg(Register::ECX, 4)],
+            vec![reg(RegId::CX, 2), reg(RegId::BX, 2)],
+            vec![reg(RegId::ECX, 4)],
         ),
-        step(llrm_lir::Operation::Move, "mov", vec![reg(Register::ES, 2)], vec![imm]),
-        step(llrm_lir::Operation::Move, "mov", vec![reg(Register::DS, 2)], vec![reg(Register::ES, 2)]),
-        step(llrm_lir::Operation::Extend, "movzx", vec![reg(Register::AX, 2)], vec![reg(Register::AL, 1)]),
-        step(llrm_lir::Operation::Extend, "movzx", vec![reg(Register::BX, 2)], vec![reg(Register::BL, 1)]),
-        step(llrm_lir::Operation::Extend, "movsx", vec![reg(Register::AX, 2)], vec![reg(Register::AL, 1)]),
-        step(llrm_lir::Operation::Extend, "movsx", vec![reg(Register::EAX, 4)], vec![reg(Register::AX, 2)]),
+        step(llrm_lir::Operation::Move, "mov", vec![reg(RegId::ES, 2)], vec![imm]),
+        step(llrm_lir::Operation::Move, "mov", vec![reg(RegId::DS, 2)], vec![reg(RegId::ES, 2)]),
+        step(llrm_lir::Operation::Extend, "movzx", vec![reg(RegId::AX, 2)], vec![reg(RegId::AL, 1)]),
+        step(llrm_lir::Operation::Extend, "movzx", vec![reg(RegId::BX, 2)], vec![reg(RegId::BL, 1)]),
+        step(llrm_lir::Operation::Extend, "movsx", vec![reg(RegId::AX, 2)], vec![reg(RegId::AL, 1)]),
+        step(llrm_lir::Operation::Extend, "movsx", vec![reg(RegId::EAX, 4)], vec![reg(RegId::AX, 2)]),
     ];
     let mut checked = 0;
     for bits in [16, 32] {

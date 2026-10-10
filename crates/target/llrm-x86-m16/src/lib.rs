@@ -1,6 +1,7 @@
 //! The 16-bit x86 target: what its instructions cost, as `Dos` prices them
 //! for the passes, and the machine description a program is built for.
 
+use llrm_lir::registers::RegId;
 include!(concat!(env!("OUT_DIR"), "/effects.rs"));
 include!(concat!(env!("OUT_DIR"), "/register_info.rs"));
 
@@ -174,7 +175,7 @@ impl llrm_target::Target for M16 {
         CALLING.native().slot_bytes
     }
 
-    fn frame_register(&self) -> iced_x86::Register {
+    fn frame_register(&self) -> RegId {
         llrm_x86::calling::frame(CALLING.native())
     }
 
@@ -198,12 +199,12 @@ impl llrm_target::Target for M16 {
         llrm_x86::calling::return_address_bytes(CALLING.native(), far)
     }
 
-    fn stack_pointer(&self) -> iced_x86::Register {
+    fn stack_pointer(&self) -> RegId {
         llrm_x86::calling::stack(CALLING.native())
     }
 
     /// A Borland caller keeps SI and DI, not their upper halves.
-    fn callee_saved(&self) -> Vec<(iced_x86::Register, iced_x86::Register)> {
+    fn callee_saved(&self) -> Vec<(RegId, RegId)> {
         llrm_x86::calling::callee_saved(CALLING.native())
     }
 
@@ -213,14 +214,15 @@ impl llrm_target::Target for M16 {
     fn results(
         &self,
         width: u32,
-    ) -> Vec<iced_x86::Register> {
+    ) -> Vec<RegId> {
         llrm_x86::calling::results(CALLING.by_cc("cdecl").expect("the stack convention"), width)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use iced_x86::Register::{EAX, EDX};
+    const EAX: RegId = RegId::EAX;
+    const EDX: RegId = RegId::EDX;
     use llrm_target::Target;
 
     use super::*;
@@ -270,14 +272,14 @@ mod tests {
 
     #[test]
     fn test_m16_answers_the_literals_isel_had() {
-        assert_eq!((M16.stack_slot_bytes(), M16.frame_register()), (2, iced_x86::Register::BP));
+        assert_eq!((M16.stack_slot_bytes(), M16.frame_register()), (2, RegId::BP));
         assert_eq!((M16.first_argument_offset(false), M16.first_argument_offset(true)), (4, 6));
         assert_eq!(
             (M16.object().bitness, M16.object().header),
             (16, vec![".model medium".to_owned(), ".386".to_owned()])
         );
         assert_eq!((M16.return_address_bytes(false), M16.return_address_bytes(true)), (2, 4));
-        assert_eq!(M16.stack_pointer(), iced_x86::Register::SP);
+        assert_eq!(M16.stack_pointer(), RegId::SP);
         assert_eq!(M16.callee_saved(), PRESERVED.to_vec());
         assert_eq!(
             [1, 2, 4, 8].map(|width| M16.results(width)),

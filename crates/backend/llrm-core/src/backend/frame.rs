@@ -370,7 +370,13 @@ mod tests {
     #[test]
     fn test_entry_frame_size_comes_from_cx_not_call_arity() {
         // COM_CHECK_ARGS spilled at BP-2, corrupting FindFrame's linked list.
-        use iced_x86::Register::{AX, BX, CX, DI, DX, SI};
+        use llrm_lir::registers::RegId;
+        const AX: RegId = RegId::AX;
+        const BX: RegId = RegId::BX;
+        const CX: RegId = RegId::CX;
+        const DI: RegId = RegId::DI;
+        const DX: RegId = RegId::DX;
+        const SI: RegId = RegId::SI;
         for registers in [vec![CX], vec![BX, CX], vec![AX, BX, CX, DX, SI, DI]] {
             let size = Held { value: 100, width: 2 };
             let init = Insn::new(
@@ -387,7 +393,7 @@ mod tests {
             );
             let operands: Vec<Held> = registers
                 .iter()
-                .map(|&reg| if reg == CX { size } else { Held { value: reg as u32, width: 2 } })
+                .map(|&reg| if reg == CX { size } else { Held { value: reg.index() as u32, width: 2 } })
                 .collect();
             let mut call = Insn::new(
                 3,

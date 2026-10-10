@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use iced_x86::{Code, Register};
+use llrm_lir::registers::RegId;
 use llrm_qbruntime::{self as runtime, Contract, Control, Reg};
 use llrm_target::machine::Machine;
 use llrm_x86_bcmachine::abi::handlers;
@@ -605,6 +606,6 @@ pub fn never_returns(contract: &Contract) -> bool {
 
 /// The root a register is part of, when the raise tracks it.
 pub fn tracked(register: Register) -> Option<usize> {
-    let rooted = root(register);
-    TRACKED.iter().position(|&one| one == rooted)
+    let rooted = root(RegId::from(register));
+    TRACKED.iter().position(|&one| one == rooted.iced())
 }

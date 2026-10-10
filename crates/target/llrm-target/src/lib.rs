@@ -14,6 +14,7 @@ pub mod timings;
 
 use std::rc::Rc;
 
+use llrm_lir::registers::RegId;
 use llrm_mir::target::{AddressForm, OperationCosts};
 use machine::Machine;
 
@@ -244,7 +245,7 @@ pub trait Target {
     fn stack_slot_bytes(&self) -> i64;
 
     /// The register a frame's cells are addressed through.
-    fn frame_register(&self) -> iced_x86::Register;
+    fn frame_register(&self) -> RegId;
 
     /// Where the first argument lies from the frame register: past the saved
     /// frame register and the return address, which a far call makes longer.
@@ -268,14 +269,14 @@ pub trait Target {
     fn results(
         &self,
         width: u32,
-    ) -> Vec<iced_x86::Register>;
+    ) -> Vec<RegId>;
 
     /// The register that holds the stack's top.
-    fn stack_pointer(&self) -> iced_x86::Register;
+    fn stack_pointer(&self) -> RegId;
 
     /// The registers a callee keeps for its caller that an allocator may hold
     /// a value in: each by its full register and by the one a prologue pushes.
-    fn callee_saved(&self) -> Vec<(iced_x86::Register, iced_x86::Register)>;
+    fn callee_saved(&self) -> Vec<(RegId, RegId)>;
 
     /// One CPU's timings (a column of the target's `timings.times`), if the
     /// target prices it.
@@ -391,10 +392,10 @@ pub trait Target {
 /// spell them as the target has them.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct FrameRegisters {
-    pub pointer: iced_x86::Register,
-    pub stack: iced_x86::Register,
+    pub pointer: RegId,
+    pub stack: RegId,
     /// Each callee-saved register by its full register and the one pushed.
-    pub saved: Vec<(iced_x86::Register, iced_x86::Register)>,
+    pub saved: Vec<(RegId, RegId)>,
     /// The bytes the stack is kept a multiple of.
     pub slot: i64,
     /// A function that needs no frame register may leave it out.
@@ -411,13 +412,13 @@ impl FrameRegisters {
     /// pointer LIR calls BP and SP.
     pub fn spelled(
         &self,
-        register: iced_x86::Register,
-    ) -> iced_x86::Register {
+        register: RegId,
+    ) -> RegId {
         match register {
             // Where the frame register holds a value, BP is its word view, not
             // the frame token.
-            iced_x86::Register::BP if !self.free => self.pointer,
-            iced_x86::Register::SP => self.stack,
+            RegId::BP if !self.free => self.pointer,
+            RegId::SP => self.stack,
             other => other,
         }
     }

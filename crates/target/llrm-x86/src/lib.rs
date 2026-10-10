@@ -10,14 +10,14 @@ pub mod select;
 /// A calling convention's registers as the x86 family names them: the
 /// architecture's, the same in every x86 target.
 pub mod calling {
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
     use llrm_target::calling::Convention;
 
     /// `name` (`ebx`, `si`, `st0`), as the family spells it.
-    pub fn register(name: &str) -> Register {
-        static NAMES: std::sync::LazyLock<llrm_support::hash::HashMap<String, Register>> =
+    pub fn register(name: &str) -> RegId {
+        static NAMES: std::sync::LazyLock<llrm_support::hash::HashMap<String, RegId>> =
             std::sync::LazyLock::new(|| {
-                Register::values().map(|one| (format!("{one:?}").to_ascii_lowercase(), one)).collect()
+                RegId::values().map(|one| (format!("{one:?}").to_ascii_lowercase(), one)).collect()
             });
         *NAMES.get(name).unwrap_or_else(|| panic!("calling.toml names no x86 register {name}"))
     }
@@ -27,17 +27,17 @@ pub mod calling {
     pub const RET_POPS_MOST: i64 = 0xFFFF;
 
     /// The register a frame's cells are addressed through.
-    pub fn frame(convention: &Convention) -> Register {
+    pub fn frame(convention: &Convention) -> RegId {
         register(&convention.frame)
     }
 
-    pub fn stack(convention: &Convention) -> Register {
+    pub fn stack(convention: &Convention) -> RegId {
         register(&convention.stack)
     }
 
     /// Each register kept for the caller that a value may be held in: its full
     /// register and the one pushed.
-    pub fn callee_saved(convention: &Convention) -> Vec<(Register, Register)> {
+    pub fn callee_saved(convention: &Convention) -> Vec<(RegId, RegId)> {
         convention.callee_saved().into_iter().map(|kept| (register(&kept.full), register(&kept.pushed))).collect()
     }
 
@@ -45,7 +45,7 @@ pub mod calling {
     pub fn results(
         convention: &Convention,
         width: u32,
-    ) -> Vec<Register> {
+    ) -> Vec<RegId> {
         convention
             .result_registers(i64::from(width))
             .expect("calling.toml states a result for every width")
@@ -100,80 +100,53 @@ pub mod calling {
 /// The x86 general register file's views, in the order iced and the manuals
 /// list them: the architecture's, the same in every x86 target.
 pub mod registers {
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     /// The general registers a value or an address is held in, the frame
     /// pointer's included, the stack pointer's not.
-    pub const ROOTS: [Register; 7] =
-        [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI, Register::EBP];
+    pub const ROOTS: [RegId; 7] = [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX, RegId::ESI, RegId::EDI, RegId::EBP];
     /// The word view of a dword register, where it has one.
-    pub fn word_of(dword: Register) -> Option<Register> {
+    pub fn word_of(dword: RegId) -> Option<RegId> {
         DWORDS.iter().position(|one| *one == dword).map(|at| WORDS[at])
     }
     /// The segment registers.
-    pub const SEGMENTS: [Register; 6] =
-        [Register::ES, Register::CS, Register::SS, Register::DS, Register::FS, Register::GS];
+    pub const SEGMENTS: [RegId; 6] = [RegId::ES, RegId::CS, RegId::SS, RegId::DS, RegId::FS, RegId::GS];
     /// The dword registers.
-    pub const DWORDS: [Register; 8] = [
-        Register::EAX,
-        Register::ECX,
-        Register::EDX,
-        Register::EBX,
-        Register::ESI,
-        Register::EDI,
-        Register::EBP,
-        Register::ESP,
-    ];
+    pub const DWORDS: [RegId; 8] =
+        [RegId::EAX, RegId::ECX, RegId::EDX, RegId::EBX, RegId::ESI, RegId::EDI, RegId::EBP, RegId::ESP];
     /// Their low words.
-    pub const WORDS: [Register; 8] = [
-        Register::AX,
-        Register::CX,
-        Register::DX,
-        Register::BX,
-        Register::SI,
-        Register::DI,
-        Register::BP,
-        Register::SP,
-    ];
+    pub const WORDS: [RegId; 8] =
+        [RegId::AX, RegId::CX, RegId::DX, RegId::BX, RegId::SI, RegId::DI, RegId::BP, RegId::SP];
     /// The byte halves of the first four.
-    pub const BYTES: [Register; 8] = [
-        Register::AL,
-        Register::CL,
-        Register::DL,
-        Register::BL,
-        Register::AH,
-        Register::CH,
-        Register::DH,
-        Register::BH,
-    ];
+    pub const BYTES: [RegId; 8] =
+        [RegId::AL, RegId::CL, RegId::DL, RegId::BL, RegId::AH, RegId::CH, RegId::DH, RegId::BH];
 
     /// A row by register number, as the tables built from it have always been
     /// walked.
-    fn in_order(row: &[Register; 8]) -> Vec<Register> {
+    fn in_order(row: &[RegId; 8]) -> Vec<RegId> {
         let mut sorted = row.to_vec();
-        sorted.sort_by_key(|one| *one as u32);
+        sorted.sort_by_key(|one| (*one).index() as u32);
         sorted
     }
 
     /// The width in bytes each register names.
-    pub static WIDTHS: std::sync::LazyLock<llrm_support::hash::IndexMap<Register, i64>> =
-        std::sync::LazyLock::new(|| {
-            let mut widths = llrm_support::hash::IndexMap::default();
-            for (row, size) in [(&DWORDS, 4), (&WORDS, 2), (&BYTES, 1)] {
-                for one in in_order(row) {
-                    widths.insert(one, size);
-                }
+    pub static WIDTHS: std::sync::LazyLock<llrm_support::hash::IndexMap<RegId, i64>> = std::sync::LazyLock::new(|| {
+        let mut widths = llrm_support::hash::IndexMap::default();
+        for (row, size) in [(&DWORDS, 4), (&WORDS, 2), (&BYTES, 1)] {
+            for one in in_order(row) {
+                widths.insert(one, size);
             }
-            widths
-        });
+        }
+        widths
+    });
 
     /// Each register file entry at each width, by its root: the first view of
     /// that width where several share it (AL and AH both root to EAX: the
     /// later one resolved a width-1 value to AH).
     pub static AT_WIDTH: std::sync::LazyLock<
-        llrm_support::hash::IndexMap<Register, llrm_support::hash::IndexMap<i64, Register>>,
+        llrm_support::hash::IndexMap<RegId, llrm_support::hash::IndexMap<i64, RegId>>,
     > = std::sync::LazyLock::new(|| {
-        let mut at_width: llrm_support::hash::IndexMap<Register, llrm_support::hash::IndexMap<i64, Register>> =
+        let mut at_width: llrm_support::hash::IndexMap<RegId, llrm_support::hash::IndexMap<i64, RegId>> =
             llrm_support::hash::IndexMap::default();
         for (row, size) in [(&DWORDS, 4), (&WORDS, 2), (&BYTES, 1)] {
             for one in in_order(row) {
@@ -194,9 +167,9 @@ pub mod registers {
             for (word, dword) in WORDS.iter().zip(&DWORDS) {
                 assert_eq!(word.full_register32(), *dword);
             }
-            assert_eq!(word_of(Register::EBX), Some(Register::BX));
-            assert_eq!(word_of(Register::AX), None);
-            assert!(ROOTS.iter().all(|one| DWORDS.contains(one) && *one != Register::ESP));
+            assert_eq!(word_of(RegId::EBX), Some(RegId::BX));
+            assert_eq!(word_of(RegId::AX), None);
+            assert!(ROOTS.iter().all(|one| DWORDS.contains(one) && *one != RegId::ESP));
             assert!(SEGMENTS.iter().all(|one| one.is_segment_register()));
             for (at, byte) in BYTES.iter().enumerate() {
                 assert_eq!(byte.full_register32(), DWORDS[at % 4], "{byte:?}");
@@ -212,10 +185,10 @@ pub mod asm;
 pub mod helpers;
 
 pub mod addressing16 {
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
-    pub const BASES: [Register; 2] = [Register::BX, Register::BP];
-    pub const INDEXES: [Register; 2] = [Register::SI, Register::DI];
+    pub const BASES: [RegId; 2] = [RegId::BX, RegId::BP];
+    pub const INDEXES: [RegId; 2] = [RegId::SI, RegId::DI];
 }
 
 /// The bytes of the encodings the selector prices for size, where an operand of

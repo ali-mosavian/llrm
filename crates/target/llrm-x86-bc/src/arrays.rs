@@ -140,7 +140,9 @@ pub fn requests(facts: &Facts) -> Vec<Request> {
                 match (what.op, what.sources.first()) {
                     (Operation::Push, Some(Loc::Imm(imm))) => pushed.push(Some(imm.clone())),
                     (Operation::Push, Some(Loc::Reg(reg))) => pushed.push(
-                        tracked(reg.register).and_then(|root| held.get(&root).cloned()).filter(|_| reg.width == 2),
+                        tracked(reg.register.iced())
+                            .and_then(|root| held.get(&root).cloned())
+                            .filter(|_| reg.width == 2),
                     ),
                     (Operation::Push, _) => pushed.push(None),
                     _ => {}
@@ -148,7 +150,7 @@ pub fn requests(facts: &Facts) -> Vec<Request> {
                 match node.effects().defs.as_ref() {
                     Some(defs) => {
                         for one in defs {
-                            if let Some(root) = tracked(*one) {
+                            if let Some(root) = tracked((*one).iced()) {
                                 held.remove(&root);
                             }
                         }
@@ -158,7 +160,7 @@ pub fn requests(facts: &Facts) -> Vec<Request> {
                 if let (Operation::Move, [Loc::Reg(reg)], [Loc::Imm(imm)]) =
                     (what.op, what.dests.as_slice(), what.sources.as_slice())
                     && reg.width == 2
-                    && let Some(root) = tracked(reg.register)
+                    && let Some(root) = tracked(reg.register.iced())
                 {
                     held.insert(root, imm.clone());
                 }

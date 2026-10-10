@@ -14,8 +14,8 @@ struct Machine {
     stack: Vec<u32>,
 }
 
-fn index(register: Register) -> usize {
-    match register.full_register32() {
+fn index(register: impl Into<Register>) -> usize {
+    match register.into().full_register32() {
         Register::EAX => 0,
         Register::ECX => 1,
         Register::EDX => 2,
@@ -220,16 +220,17 @@ fn divided(
     divisor: u64,
 ) -> ((u64, u64), usize) {
     let mut machine = Machine { registers: [0; 8], carry: false, zero: false, sign: false, stack: Vec::new() };
-    machine.registers[index(routine.dividend[0])] = dividend as u32;
-    machine.registers[index(routine.dividend[1])] = (dividend >> 32) as u32;
-    machine.registers[index(routine.divisor[0])] = divisor as u32;
-    machine.registers[index(routine.divisor[1])] = if routine.wide_divisor { (divisor >> 32) as u32 } else { 0xDEAD };
+    machine.registers[index(routine.dividend[0].iced())] = dividend as u32;
+    machine.registers[index(routine.dividend[1].iced())] = (dividend >> 32) as u32;
+    machine.registers[index(routine.divisor[0].iced())] = divisor as u32;
+    machine.registers[index(routine.divisor[1].iced())] =
+        if routine.wide_divisor { (divisor >> 32) as u32 } else { 0xDEAD };
     let (kept, before) = ([5, 6, 7].map(|at| 0x1000 + at as u32), machine.registers[4]);
     (machine.registers[5], machine.registers[6], machine.registers[7]) = (kept[0], kept[1], kept[2]);
     let steps = machine.run(&routine.code, bits);
     assert_eq!((machine.registers[5], machine.registers[6], machine.registers[7]), (kept[0], kept[1], kept[2]));
     assert!(machine.stack.is_empty() && machine.registers[4] == before, "the stack is balanced");
-    let pair = |low: Register, high: Register| {
+    let pair = |low: RegId, high: RegId| {
         u64::from(machine.registers[index(high)]) << 32 | u64::from(machine.registers[index(low)])
     };
     ((pair(routine.quotient[0], routine.quotient[1]), pair(routine.remainder[0], routine.remainder[1])), steps)
