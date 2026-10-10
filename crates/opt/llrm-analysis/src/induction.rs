@@ -29,7 +29,7 @@ use llrm_mir::types::TypeId;
 use llrm_support::hash::{HashSet, IndexMap};
 use num_bigint::BigInt;
 
-use crate::cfg;
+use crate::cfg::{self, Around};
 use crate::consts::{Known, masked};
 use crate::graph::loops::Loop;
 use crate::memory::{MemRef, Unit};
@@ -379,8 +379,7 @@ fn _control(
     // Only the blocks the loop and what enters it name are read, not the graph
     // of the whole body (found for each loop, that was N^2 in a function of
     // N loops).
-    let block_of =
-        |at: i64| cfg::Block { at, succ: function.successors(cfg::block(at)).into_iter().map(cfg::id).collect() };
+    let block_of = |at: i64| cfg::Block { at, succ: cfg::successors_of(function, at) };
     if loop_.latches.len() != 1 {
         return None;
     }
@@ -451,12 +450,7 @@ fn _control(
     if !leaving && leaves {
         return None;
     }
-    let outside = function
-        .predecessors(cfg::block(header.at))
-        .into_iter()
-        .map(cfg::id)
-        .filter(|at| !inside.contains(at))
-        .collect::<BTreeSet<_>>();
+    let outside = loop_.entering(function);
     let preheader = match outside.first() {
         Some(&one) if outside.len() == 1 && block_of(one).succ.as_slice() == [header.at] => Some(one),
         _ => None,
@@ -954,15 +948,9 @@ pub fn exits(
     };
     let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return Vec::new() };
     let shape = unit.shape();
-    let block_of =
-        |at: i64| cfg::Block { at, succ: function.successors(cfg::block(at)).into_iter().map(cfg::id).collect() };
+    let block_of = |at: i64| cfg::Block { at, succ: cfg::successors_of(function, at) };
     let inside = &loop_.body;
-    let outside = function
-        .predecessors(cfg::block(loop_.header))
-        .into_iter()
-        .map(cfg::id)
-        .filter(|at| !inside.contains(at))
-        .collect::<BTreeSet<_>>();
+    let outside = loop_.entering(function);
     let preheader = match outside.first() {
         Some(&one) if outside.len() == 1 && block_of(one).succ.as_slice() == [loop_.header] => Some(one),
         _ => None,
