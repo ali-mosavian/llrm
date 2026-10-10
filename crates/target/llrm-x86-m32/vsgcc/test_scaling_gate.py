@@ -471,3 +471,18 @@ def test_interprocedural_own_work_stays_near_linear_on_the_chain_functions_and_c
         if big > limit * small:
             grown[axis] = f"{small:.0f} -> {big:.0f} Minstr"
     assert not grown, grown
+
+
+def test_a_step_counts_the_same_whatever_the_path_of_the_source(tmp_path):
+    """cells(224) at -O2 read 173.7 Minstr in `lir peephole` from one path and 159.0 from another, the whole compile 4521 or 4506:
+    the length of the path the compiler is given moves the allocator's pages (mimalloc given a block that lives all run, or none,
+    in the page of a size class), and a gate that measured base and head from temporary directories of different names failed on a
+    step that had not moved. `scaling.sample` compiles from a directory of its own, as `src.c`."""
+    counts = set()
+    for width in range(1, 40, 3):
+        where = tmp_path / ("d" * width)
+        where.mkdir()
+        source = where / "c.c"
+        source.write_text(scaling.cells(224))
+        counts.add(round(gate.own_work(gate.levels_time.command("llrm", "O2", source))["lir peephole"], 1))
+    assert max(counts) - min(counts) <= 0.1, sorted(counts)
