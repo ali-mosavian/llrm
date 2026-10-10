@@ -624,7 +624,8 @@ fn test_initializers_are_bytes_and_relocations() {
 @rec = internal global { i8, i16, ptr, ptr addrspace(1), i16, ptr addrspace(2), ptr addrspace(1) } { i8 7, i16 -2, ptr getelementptr (i8, ptr @rec, i16 3), ptr addrspace(1) @far, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @far, i16 1) to i16), ptr addrspace(2) addrspacecast (ptr addrspace(1) @far to ptr addrspace(2)), ptr addrspace(1) addrspacecast (ptr getelementptr (i8, ptr @rec, i16 1) to ptr addrspace(1)) }
 ";
     let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
-    let names = crate::backend::globals::names(&module, &|name| qb().linked(name)).expect("names");
+    let names =
+        crate::backend::globals::names(&module, &llrm_x86_m16::spaces(), &|name| qb().linked(name)).expect("names");
     let rec = module.named("rec").expect("@rec");
     let pointer = |name: &str, offset, far| {
         Datum::Pointer(Pointer { name: name.to_owned(), offset, far, bytes: if far { 4 } else { 2 } })
