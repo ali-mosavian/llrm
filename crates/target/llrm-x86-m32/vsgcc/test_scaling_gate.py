@@ -647,3 +647,13 @@ def test_two_address_asks_interference_of_the_values_it_compares_not_of_every_pa
     source.write_text(scaling.AXES["live"](1024))
     cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["lir twoaddr"]
     assert cost <= 400, cost
+
+
+def test_a_load_is_served_by_the_stores_that_reach_it_not_by_a_cell_map_met_at_every_join(tmp_path):
+    """`analysis through-memory` kept the cells of memory as one map per block and met the predecessors' maps at each join: on `joins` at
+    N=256 (N cells known, N joins, four functions) 11,285 Minstr, 3.8x a doubling, and 46 G of GORILLA.BAS's 75 G (17 s at -O1). Served
+    by the stores MemorySSA says reach each load it reads 964. More than 2,000 fails."""
+    source = tmp_path / "joins_256.c"
+    source.write_text(scaling.AXES["joins"](256))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["analysis through-memory"]
+    assert cost <= 2000, cost

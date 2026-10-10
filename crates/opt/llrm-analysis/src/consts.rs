@@ -459,9 +459,9 @@ fn _selector(
 
 /// Every value an instruction that writes memory reads: `_kills` asks
 /// `known` of no other.
-fn _memory_reads(unit: &Unit) -> HashSet<ValueId> {
+fn _memory_reads(unit: &Unit) -> llrm_mir::dense::IdSet<ValueId> {
     let function = unit.function;
-    let mut read = HashSet::default();
+    let mut read = llrm_mir::dense::IdSet::new();
     for (_, inst) in function.walk() {
         let op = function.instruction(inst);
         if !matches!(
@@ -1265,7 +1265,7 @@ fn incoming(
 fn _pointer_stores(
     unit: &Unit,
     calls: &Calls,
-) -> IndexMap<ValueId, Operand> {
+) -> llrm_mir::dense::IdMap<ValueId, Operand> {
     let function = unit.function;
     let accesses = Accesses::plain(unit, calls);
     let candidates = function
@@ -1276,7 +1276,7 @@ fn _pointer_stores(
         })
         .collect::<Vec<_>>();
     if candidates.is_empty() {
-        return IndexMap::default();
+        return Default::default();
     }
     let graph = memoryssa::built(unit, &accesses);
     let shape = unit.shape();
@@ -1291,7 +1291,7 @@ fn _pointer_stores(
             None => false,
         }
     };
-    let mut providers = IndexMap::default();
+    let mut providers = llrm_mir::dense::IdMap::default();
     for (block, inst, (reference, result)) in candidates {
         let clobbers = graph.clobbers(inst, &reference);
         let single = if clobbers.len() == 1 { clobbers.first().map(|id| graph.access(*id)) } else { None };
@@ -1308,6 +1308,19 @@ fn _pointer_stores(
         }
     }
     providers
+}
+
+/// The cell a store writes and what it puts there, a volatile store's too: the
+/// cell holds the number a volatile store wrote until something else writes it.
+fn _stored_cell(
+    unit: &Unit,
+    accesses: &Accesses,
+    inst: InstId,
+) -> Option<(MemRef, Operand)> {
+    let instruction = unit.function.instruction(inst);
+    matches!(instruction.opcode, Opcode::Store { .. })
+        .then(|| Some((accesses.references.get(&inst)?.clone(), instruction.operands[0])))
+        .flatten()
 }
 
 /// What serves a load: stores of all its bytes, or stores of each byte.
@@ -1337,9 +1350,9 @@ pub fn known_walked(
     let accesses = Accesses::plain(unit, calls);
     // The loads' providers, with the indices `placed` proves constant taken
     // into every address.
-    let providers_of = |placed: &IndexMap<ValueId, Known>| -> IndexMap<ValueId, Provider> {
+    let providers_of = |placed: &_| -> llrm_mir::dense::IdMap<ValueId, Provider> {
         let graph = memoryssa::built(unit, &accesses).with_known(_intervals(placed));
-        let mut providers: IndexMap<ValueId, Provider> = IndexMap::default();
+        let mut providers: llrm_mir::dense::IdMap<ValueId, Provider> = Default::default();
         for (_, inst) in function.walk() {
             let Some((reference, result)) = avail::loaded_into(unit, &accesses, inst) else { continue };
             if _width(unit, Operand::Value(result)).is_none() {
@@ -1358,7 +1371,7 @@ pub fn known_walked(
                 let stored = access
                     .site
                     .filter(|_| access.kind == memoryssa::Kind::Def)
-                    .and_then(|site| Some((site, avail::stored_from(unit, &accesses, site)?)));
+                    .and_then(|site| Some((site, _stored_cell(unit, &accesses, site)?)));
                 match stored {
                     Some((site, (cell, _)))
                         if memoryssa::same_bytes(unit, &reference, &_addressed(unit, &cell, placed)) =>
@@ -1386,7 +1399,7 @@ pub fn known_walked(
                         let Some((site, (cell, _))) = access
                             .site
                             .filter(|_| access.kind == memoryssa::Kind::Def)
-                            .and_then(|site| Some((site, avail::stored_from(unit, &accesses, site)?)))
+                            .and_then(|site| Some((site, _stored_cell(unit, &accesses, site)?)))
                         else {
                             bytes.clear();
                             break 'bytes;
@@ -1522,7 +1535,7 @@ fn _solved(
     // those, solving them again gives the same answer.
     let read = match calls {
         Some(_) => _memory_reads(unit),
-        None => HashSet::default(),
+        None => Default::default(),
     };
     // Registers go first, as SCCP learns them before memory: cells solved
     // with what registers alone prove need solving again only when a value

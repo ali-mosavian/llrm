@@ -6,7 +6,7 @@ use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;
 
-use super::{_MemoryQueries, _result, Calls, Known, division, initialized, known, masked};
+use super::{_MemoryQueries, _result, Calls, Known, division, initialized, known, known_walked, masked};
 use crate::memory::{Addr, MemRef, MemoryKind, MemoryObject, Provenance, Unit};
 use crate::regions::tests::dos;
 use crate::testing::{DOS, function, layout, parsed, value};
@@ -737,4 +737,97 @@ b0:
     let mut keys: Vec<u64> = queries.overlaps.keys().map(|&(_, id)| id as u64).collect();
     keys.sort_unstable();
     assert_eq!(keys, [0, 1], "answers keyed by an address");
+}
+
+/// What the walk (`known_walked`, through-memory's answer) says of `%name`.
+fn walked(
+    parsed: &Parsed,
+    name: &str,
+) -> Option<Known> {
+    known_walked(&parsed.unit(), &Calls::default()).get(&parsed.value(name)).cloned()
+}
+
+/// Two word stores and a dword load of both: dice.nib's `load i32` of the two
+/// words it wrote, which the walk's whole-cell form could not serve (no one
+/// store wrote the load's bytes).
+#[test]
+fn a_dword_loaded_from_two_word_stores_is_the_dword_they_make() {
+    let parsed = Parsed::new(
+        "@g = global i32 0
+
+define i32 @f() {
+b0:
+  store i16 4660, ptr @g
+  %hi = getelementptr i8, ptr @g, i16 2
+  store i16 22136, ptr %hi
+  %r = load i32, ptr @g
+  ret i32 %r
+}
+",
+    );
+    assert_eq!(walked(&parsed, "r"), Some(Known::new(0x5678_1234, 32)));
+}
+
+/// A word loaded from a dword store reads two of its bytes.
+#[test]
+fn a_word_loaded_from_a_dword_store_is_its_bytes() {
+    let parsed = Parsed::new(
+        "@g = global i32 0
+
+define i16 @f() {
+b0:
+  store i32 305419896, ptr @g
+  %hi = getelementptr i8, ptr @g, i16 2
+  %r = load i16, ptr %hi
+  ret i16 %r
+}
+",
+    );
+    assert_eq!(walked(&parsed, "r"), Some(Known::new(0x1234, 16)));
+}
+
+/// QCport's mdl_bottom_selftest stored `2593.0f` and copied the struct as
+/// dwords: the load of another type than the store reads the float's bits.
+#[test]
+fn a_float_constant_stored_is_read_back_as_its_bits_by_an_integer_load() {
+    let parsed = Parsed::new(
+        "@g = global float 0.0
+
+define i32 @f() {
+b0:
+  store float 2593.0, ptr @g
+  %r = load i32, ptr @g
+  ret i32 %r
+}
+",
+    );
+    assert_eq!(walked(&parsed, "r"), Some(Known::new(0x4522_1000, 32)));
+}
+
+/// A join is known where every store that reaches it puts the same number, and
+/// not where one puts another.
+#[test]
+fn a_load_after_a_join_is_known_where_both_arms_store_the_same_number() {
+    let text = |other: u32| {
+        format!(
+            "@g = global i16 0
+
+define i16 @f(i1 %c) {{
+b0:
+  br i1 %c, label %yes, label %no
+yes:
+  store i16 9, ptr @g
+  br label %join
+no:
+  store i16 {other}, ptr @g
+  br label %join
+join:
+  %r = load i16, ptr @g
+  ret i16 %r
+}}
+"
+        )
+    };
+    assert_eq!(walked(&Parsed::new(&text(9)), "r"), Some(Known::new(9, 16)));
+    assert_eq!(walked(&Parsed::new(&text(10)), "r"), None);
 }
