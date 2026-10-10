@@ -354,6 +354,21 @@ def test_summaries_do_not_work_out_every_caller_of_an_edited_body_again(tmp_path
     assert big <= 2.7 * small + 2.0, f"{small:.1f} -> {big:.1f} Minstr"
 
 
+def test_decide_does_not_work_out_a_loop_for_each_block_in_it(tmp_path):
+    """nest(N) at -O2: `Given::holds` worked out the followers of each counter of every loop around the block (a scan of the loop's
+    values) for each block it was asked of, `mir decide` read 2N/N = 5.5 and 6.6 (160 / 874 / 5799 Minstr at N=32..128, 10% of the
+    compile). A loop's followers are the loop's: the manager holds them (`Followers`), as it holds its counted proofs. It reads
+    3.1, 3.7 (71 / 220 / 814). A step above 4.2 (slope 2.07) fails; a few Minstr of start-up are allowed."""
+    n = 32
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"nest_{label}.c"
+        source.write_text("" if size == 0 else scaling.nest(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("mir decide", 0.0) - own["empty"].get("mir decide", 0.0) for label in ("n", "2n"))
+    assert big <= 4.2 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
 def test_loop_passes_read_a_loop_not_the_body_around_it(tmp_path):
     """branches(N) at -O2: lcssa, rotate and trivialunswitch each built the graph of the whole function for each loop (a vector of
     every block and its successors), lcssa also read every instruction outside the loop for its uses of what the loop defines and

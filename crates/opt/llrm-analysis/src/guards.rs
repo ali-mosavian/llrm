@@ -362,7 +362,7 @@ impl<'a> Given<'a> {
                     // follow their counters.
                     let shape = unit.shape();
                     for loop_ in shape.loops.iter().filter(|one| one.body.contains(&self.at)) {
-                        for (follower, counter, start) in crate::induction::followers(unit, loop_) {
+                        for (follower, counter, start) in crate::induction::followers_of(unit, loop_) {
                             let Some(width) = unit.int_bits(Operand::Value(follower)) else { continue };
                             let (follower, counter) = (Scev::unknown(follower, width), Scev::unknown(counter, width));
                             facts.push(Guard {
