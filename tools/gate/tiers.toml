@@ -65,6 +65,11 @@ why = "compiles every program, and the loop cross-cases: 60 s"
 owners = ["tests/test_programs_compile.py", "tests/test_loops.py", "tests/test_innerloops.py", "tools/sizes*", "tools/loops/**", "tools/innerloops.py", "examples/**", "bench/**", "tests/run/**", "crates/frontends/**", "crates/backend/**", "crates/opt/**"]
 
 [[heavy]]
+step = "dos-slow"
+why = "NIBBLES and GORILLA played on dos32 against BCOM45, and the graphics sweeps: 5 to 8 minutes (tools/dosbatch/conftest.py's slow_dos tier)"
+owners = ["runtime/qb/**", "runtime/shared/dos/**", "crates/frontends/qbfront/**", "crates/frontends/llrm-qb/**", "crates/frontends/llrm-qbruntime/**", "crates/ir/llrm-hir/src/mir*", "crates/backend/llrm-core/src/driver/basic.rs", "tools/dosbatch/**", "toolchain/dosrunbuild.sh"]
+
+[[heavy]]
 step = "qcport"
 why = "builds and runs QCport against the all-Borland build: 100 s"
 owners = ["tools/qcport*", "tools/qcport/**", "tools/linkrecipe.py", "crates/frontends/llrm-c/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-omf/**", "crates/target/llrm-x86/**", "crates/backend/**", "crates/opt/**", "runtime/**"]
@@ -150,6 +155,7 @@ python = ["pytest", "pytest-programs"]
 tools = ["bench", "torture"]
 identity = ["identity"]
 reference = ["turbo", "cv4", "qcport"]
+dos = ["dos-slow"]
 cost = ["measure"]
 
 # Tools that are not in the repository and not free to fetch. A host without one has the capability missing:
@@ -184,6 +190,7 @@ needs = [
 turbo = ["turbo"]
 cv4 = ["codeview"]
 qcport = ["qcport"]
+dos-slow = ["qb45", "qb45demos"]
 measure = ["perf"]
 bench = ["qb45"]
 "lang:qb" = ["qb45"]
@@ -194,6 +201,11 @@ bench = ["qb45"]
 require = []
 needs = [{ env = "QB45_DIR", default = "~/work/42-labs/mini-qb/dosbox/qb45", marker = "LINK.EXE" }]
 
+
+# Microsoft's NIBBLES.BAS and GORILLA.BAS, which the repository does not hold: the dos32 demo tests play them.
+[capability.qb45demos]
+require = []
+needs = [{ env = "QB45_DEMOS_DIR", default = "~/scratch/gor", marker = "NIBBLES.BAS" }]
 
 # Hardware instruction counters (`perf stat`): a VM often has none.
 [capability.perf]
