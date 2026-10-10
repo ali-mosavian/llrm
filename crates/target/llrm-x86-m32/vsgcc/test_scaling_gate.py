@@ -290,3 +290,17 @@ def test_loopslots_asks_each_instruction_once_not_once_for_each_loop_around_it(t
     source.write_text(scaling.AXES["nest"](128))
     own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     assert own["lir loopslots"] <= 600, f"{own['lir loopslots']:.1f} Minstr"
+
+
+def test_the_inliner_splices_the_callers_sites_in_one_scan_and_interprocedural_stays_near_linear_in_the_callers(tmp_path):
+    """Each splice of the caller of N callees counted the body again and the round found the module's recursive and addressed
+    functions twice (`mir interprocedural` own 465 -> 1,232 Minstr from N=256 to 512, 2.65 per doubling). The sites are spliced in one scan, last to first, and the
+    module is scanned once per round: 330 -> 698, 2.12. A step above 2.4 per doubling (slope 1.26) on the `callers` axis fails."""
+    n = 256
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"callers_{label}.c"
+        source.write_text("" if size == 0 else scaling.callers(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("mir interprocedural", 0.0) - own["empty"].get("mir interprocedural", 0.0) for label in ("n", "2n"))
+    assert big <= 2.4 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
