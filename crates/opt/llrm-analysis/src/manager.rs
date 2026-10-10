@@ -61,6 +61,7 @@ impl<'a> Unit<'a> {
             exposed: None,
             point_values: None,
             callbacks: outer.cached_ref::<Callbacks>().and_then(|one| one.as_ref().ok()),
+            loop_intervals: outer.loop_intervals(),
         }
     }
 }
@@ -730,7 +731,7 @@ impl Analysis for Annotated {
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         let counted = analyses.get::<Counted>(context, layout, function);
         let edges = analyses.get::<DominatedEdges>(context, layout, function);
-        let bounds = analyses.get::<Bounded>(context, layout, function);
+        let bounds = loop_bounds(context, layout, function, analyses);
         let mut unit = Unit::within(context, layout, function, analyses.outer())
             .with_shape(&shape)
             .with_assumptions(&assumptions)
@@ -1369,6 +1370,25 @@ impl Bounded {
     }
 }
 
+/// The counted loops' intervals for alias and decisions: `Bounded`, or none at
+/// a level without them (-O1: gcc's has value ranges only from -O2's
+/// `-ftree-vrp`; its -O1 reaches an induction variable's range through SCEV and
+/// the loop's iteration bound, which `indvars`, `loopexit`, `hoist` and
+/// `algebraic` still ask `Bounded` for). Empty, the unit does not solve them
+/// itself.
+fn loop_bounds(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    analyses: &mut Analyses,
+) -> Rc<<Bounded as Analysis>::Result> {
+    if analyses.outer().loop_intervals() {
+        analyses.get::<Bounded>(context, layout, function)
+    } else {
+        Rc::new(Ok(ranges::Bounds::default()))
+    }
+}
+
 /// What the manager holds of a function that a unit over it carries, asked
 /// while the body is as the manager last saw it: dominance and loops, what
 /// is known without memory and, where asked for, what alias finds.
@@ -1416,7 +1436,7 @@ impl Held {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Self {
-        self.bounded = Some(analyses.get::<Bounded>(context, layout, function));
+        self.bounded = Some(loop_bounds(context, layout, function, analyses));
         self
     }
 

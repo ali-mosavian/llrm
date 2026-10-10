@@ -606,6 +606,35 @@ def test_hoist_prices_a_run_by_what_it_moves_not_by_a_clone_of_the_function(tmp_
     assert cost <= 900, cost
 
 
+def test_the_intervals_of_a_block_are_its_dominators_not_a_copy_of_them_on_the_branches_axis(tmp_path):
+    """`analysis dominated-edges` copied the dominator's whole interval map into every block, then added the block's own: on
+    `branches` at N=1024 that was 2,400 Minstr (slope 1.79). With a map that shares what the dominator holds it reads 1,240.
+    More than 1,500 fails."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["analysis dominated-edges"]
+    assert cost <= 1500, cost
+
+
+def test_a_blocks_edges_changed_is_asked_of_what_made_them_not_of_the_maps_on_the_branches_axis(tmp_path):
+    """`analysis dominated-edges` compared each re-solved block's new map with its old one, entry by entry, though the
+    maps share nothing once an ancestor is rebuilt: on `branches` at N=1024 that was 1,240 Minstr (slope 1.75 beyond
+    the copy). Asked of a digest of what made the block it reads 470 (slope 1.1). More than 700 fails."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["analysis dominated-edges"]
+    assert cost <= 700, cost
+
+
+def test_a_loop_takes_the_values_it_reads_and_the_edges_above_it_once_on_the_branches_axis(tmp_path):
+    """`analysis bounded` gave each loop every interval known above it and narrowed them by the edges above it for
+    every block and every round of its boxes: on `branches` at N=1024 that was 3,900 Minstr (slope 1.95). A loop that
+    takes what it reads and narrows by the edges above it once reads 880. More than 1,300 fails."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["analysis bounded"]
+    assert cost <= 1300, cost
+
 def test_interference_of_values_live_together_is_kept_as_bits_on_the_live_axis(tmp_path):
     """On `live` at N=512 a function holds 940,000 interference pairs; the graph kept each as a tree-set node,
     walked once per web for every instruction of the block, with three hash lookups per pair to count it: `lir coalesce` read
@@ -657,3 +686,13 @@ def test_a_load_is_served_by_the_stores_that_reach_it_not_by_a_cell_map_met_at_e
     source.write_text(scaling.AXES["joins"](256))
     cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["analysis through-memory"]
     assert cost <= 2000, cost
+
+
+def test_homes_walks_the_live_sets_once_for_all_its_candidates_not_once_for_each(tmp_path):
+    """`joins(128)` at -O2 (N cells held across N joins): `mir homes` asked `live_points` of every block for each phi in a cell
+    (it copies the live set twice per instruction) and found the paths between a store and a block again for each store: 9,257
+    Minstr, 8x a doubling (72.6 G at N=256). One walk with one live set, the paths found backward from the block: 316, 4x."""
+    source = tmp_path / "joins_128.c"
+    source.write_text(scaling.AXES["joins"](128))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir homes"]
+    assert cost <= 800, cost

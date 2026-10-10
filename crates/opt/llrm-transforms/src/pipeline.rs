@@ -51,6 +51,9 @@ pub struct Options {
     /// Whether the callers' arguments are stated as ranges on a body's
     /// parameters: gcc's `-fipa-vrp`, -O2 and up.
     pub ipa_ranges: bool,
+    /// Alias and branch decisions use the intervals of counted loops (gcc's
+    /// `-ftree-vrp`, -O2; its -O1 has them for induction variables only).
+    pub loop_intervals: bool,
     pub lcssa: bool,
     pub floatloop: bool,
     pub fold: bool,
@@ -98,6 +101,7 @@ impl Default for Options {
             dead: true,
             hoist: true,
             ipa_ranges: true,
+            loop_intervals: true,
             forward: true,
             drop_loads: true,
             drop_stores: true,
@@ -133,6 +137,7 @@ impl Options {
             limits: Limits { grows: false, ..Self::default().limits },
             inline: inline::Threshold::new(Self::default().inline.limit * 6 / 15),
             ipa_ranges: false,
+            loop_intervals: false,
             forward: false,
             drop_loads: false,
             fill: false,
@@ -343,6 +348,7 @@ pub fn recorded(
 ) -> Result<Vec<Stage>, String> {
     timed();
     let mut manager = PassManager::default();
+    manager.without_loop_intervals = !applied.options.loop_intervals;
     manager.verify_each = llrm_support::debug::verifying();
     manager.dump = applied.dump.clone();
     if !applied.options.optimize {
