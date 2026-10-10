@@ -85,12 +85,77 @@ fn expand_once(
     done
 }
 
-/// `expanded_all` is `expanded` called until it says no: a caller of calls to a
-/// callee that calls another, with a branch between them, comes out the same
-/// body, printed.
-#[test]
-fn test_the_one_scan_inliner_leaves_the_body_the_repeated_one_does() {
-    let nested = "define internal i16 @one() {
+/// `expanded_all` decides as `expanded` called until it says no would, and
+/// leaves the same body, printed: a copy's own calls ahead of the calls after
+/// it, the stack and the size as they grow.
+fn assert_the_one_scan_is_the_repeated_one(
+    source: &str,
+    inlined: &[&str],
+    threshold: Threshold,
+) -> String {
+    let layout = DataLayout::default();
+    let (mut one, mut many) = (parsed(source), parsed(source));
+    let available = candidates(
+        &one,
+        &llrm_mir::memory::callees(&one),
+        &layout,
+        &call_counts(&one),
+        &private(&one),
+        &costs(1),
+        1,
+        threshold,
+    );
+    let by = Caller { layout: &layout, recursive: false, base: 0 };
+    while expand_once(&mut many, "main", &by, &available) {}
+    let mut declared = llrm_mir::passes::Declared::of(&one);
+    let (context, function) = one.function_mut("main").unwrap();
+    expanded_all(context, function, &by, &available, None, &mut declared).unwrap();
+    declared.place(&mut one).unwrap();
+    let (got, want) = (printed(&one), printed(&many));
+    // The copies are made from the last site to the first, so names that number
+    // the repeats swap.
+    let canonical =
+        |text: &str| -> String { text.split("\n\ndefine ").map(chunk).collect::<Vec<_>>().join("\n\ndefine ") };
+    fn chunk(text: &str) -> String {
+        let mut names: Vec<String> = Vec::new();
+        let mut out = String::new();
+        let mut rest = text;
+        while let Some(at) = rest.find('%') {
+            out.push_str(&rest[..=at]);
+            let name: String =
+                rest[at + 1..].chars().take_while(|c| c.is_alphanumeric() || matches!(c, '_' | '.')).collect();
+            let place = names
+                .iter()
+                .position(|one| *one == name)
+                .unwrap_or_else(
+                    || {
+                        names.push(name.clone());
+                        names.len() - 1
+                    },
+                );
+            out.push_str(&place.to_string());
+            rest = &rest[at + 1 + name.len()..];
+        }
+        out + rest
+    }
+    let main = |text: &str| text[text.find("define i16 @main").expect("main")..].to_owned();
+    for call in inlined {
+        assert!(!main(&want).contains(call), "the repeated one left {call}: {want}");
+    }
+    let (got, want_text) = (canonical(&got), canonical(&want));
+    if got != want_text {
+        let lines: Vec<String> = got
+            .lines()
+            .zip(want_text.lines())
+            .filter(|(a, b)| a != b)
+            .map(|(a, b)| format!("  one-scan: {a}\n  repeated: {b}"))
+            .collect();
+        panic!("the one scan and the repeated one differ:\n{}\n{got}", lines.join("\n"));
+    }
+    want
+}
+
+const NESTED: &str = "define internal i16 @one() {
 b1:
   ret i16 1
 }
@@ -129,29 +194,134 @@ e:
   ret i16 %w
 }
 ";
-    let flat = nested.replace("  %a = call i16 @one()\n  %b = add i16 %a, %x", "  %b = add i16 %x, 1");
-    for source in [nested, flat.as_str()] {
-        let layout = DataLayout::default();
-        let (mut one, mut many) = (parsed(source), parsed(source));
-        let available = candidates(
-            &one,
-            &llrm_mir::memory::callees(&one),
-            &layout,
-            &call_counts(&one),
-            &private(&one),
-            &costs(1),
-            1,
-            Threshold::default(),
-        );
-        let by = Caller { layout: &layout, recursive: false, base: 0 };
-        while expand_once(&mut many, "main", &by, &available) {}
-        let mut declared = llrm_mir::passes::Declared::of(&one);
-        let (context, function) = one.function_mut("main").unwrap();
-        let spliced = expanded_all(context, function, &by, &available, None, &mut declared).unwrap();
-        declared.place(&mut one).unwrap();
-        assert!(spliced > 0 && printed(&many) != printed(&parsed(source)), "nothing was inlined");
-        assert_eq!(printed(&one), printed(&many));
-    }
+
+#[test]
+fn test_the_one_scan_inliner_leaves_the_body_the_repeated_one_does_with_calls_in_the_copies() {
+    assert_the_one_scan_is_the_repeated_one(NESTED, &["@two(", "@three(", "@one("], Threshold::default());
+    let flat = NESTED.replace("  %a = call i16 @one()\n  %b = add i16 %a, %x", "  %b = add i16 %x, 1");
+    assert_the_one_scan_is_the_repeated_one(&flat, &["@two(", "@three("], Threshold::default());
+}
+
+/// A call through a parameter is a call to the function the call passes once it
+/// is a copy.
+#[test]
+fn test_the_one_scan_inliner_inlines_the_call_a_copy_makes_through_its_parameter() {
+    let source = "define internal i16 @leaf(i16 %x) alwaysinline {
+b1:
+  %y = add i16 %x, 5
+  ret i16 %y
+}
+
+define internal i16 @apply(ptr %f, i16 %x) {
+b1:
+  %r = call i16 %f(i16 %x)
+  ret i16 %r
+}
+
+define i16 @main(i16 %p) {
+b1:
+  %r = call i16 @apply(ptr @leaf, i16 %p)
+  %q = call i16 @leaf(i16 %r)
+  ret i16 %q
+}
+";
+    let want = assert_the_one_scan_is_the_repeated_one(source, &["@apply("], Threshold::default());
+    assert!(!want.contains("call i16 @leaf("), "{want}");
+}
+
+/// Sites that allocate stack are counted against the caller's as they come, in
+/// a copy too.
+#[test]
+fn test_the_one_scan_inliner_counts_the_stack_of_each_copy() {
+    let source = |count: usize| {
+        let callees: String = (0..count)
+            .map(|at| {
+                format!(
+                    "define internal i16 @frame{at}(i16 %x) {{
+b1:
+  %cell = alloca [100 x i8]
+  store i16 %x, ptr %cell
+  %v = load i16, ptr %cell
+  ret i16 %v
+}}
+
+"
+                )
+            })
+            .collect();
+        let calls: String = (0..count).map(|at| format!("  %r{at} = call i16 @frame{at}(i16 %p)\n")).collect();
+        format!("{callees}define i16 @main(i16 %p) {{\nb1:\n{calls}  ret i16 %r0\n}}\n")
+    };
+    // 100 bytes a copy against the limit of 256: the first two fit and the rest
+    // stay calls.
+    assert_the_one_scan_is_the_repeated_one(&source(1), &["@frame0("], Threshold::default());
+    let want = assert_the_one_scan_is_the_repeated_one(&source(6), &[], Threshold::default());
+    let left = want.matches("call i16 @frame").count();
+    assert!(left > 0 && left < 6, "{left} of 6 calls left: the limit did not stop the copies in the middle");
+}
+
+/// The stack of a copy made inside a copy is placed as `expanded` would place
+/// it.
+#[test]
+fn test_the_one_scan_inliner_places_the_stack_of_copies_in_copies() {
+    let source = "define internal i16 @inner(i16 %x) {
+b1:
+  %cell = alloca [40 x i8]
+  store i16 %x, ptr %cell
+  %v = load i16, ptr %cell
+  ret i16 %v
+}
+
+define internal i16 @outer(i16 %x) {
+b1:
+  %cell = alloca [30 x i8]
+  store i16 %x, ptr %cell
+  %a = call i16 @inner(i16 %x)
+  %v = load i16, ptr %cell
+  %b = add i16 %a, %v
+  ret i16 %b
+}
+
+define internal i16 @other(i16 %x) {
+b1:
+  %cell = alloca [20 x i8]
+  store i16 %x, ptr %cell
+  %v = load i16, ptr %cell
+  ret i16 %v
+}
+
+define i16 @main(i16 %p) {
+b1:
+  %r = call i16 @outer(i16 %p)
+  %s = call i16 @other(i16 %r)
+  ret i16 %s
+}
+";
+    assert_the_one_scan_is_the_repeated_one(source, &["@outer(", "@inner(", "@other("], Threshold::default());
+}
+
+/// A byval argument a callee may write is copied for the copy, and the copy is
+/// stack and operations.
+#[test]
+fn test_the_one_scan_inliner_copies_the_byval_arguments_of_each_site() {
+    let source = "define internal i16 @poke(ptr byval([4 x i8]) %p) {
+b1:
+  store i16 9, ptr %p
+  %v = load i16, ptr %p
+  ret i16 %v
+}
+
+define i16 @main() {
+b1:
+  %cell = alloca [4 x i8]
+  store i16 3, ptr %cell
+  %r = call i16 @poke(ptr byval([4 x i8]) %cell)
+  %s = call i16 @poke(ptr byval([4 x i8]) %cell)
+  %t = add i16 %r, %s
+  ret i16 %t
+}
+";
+    assert_the_one_scan_is_the_repeated_one(source, &["@poke("], Threshold::default());
 }
 
 fn run(
