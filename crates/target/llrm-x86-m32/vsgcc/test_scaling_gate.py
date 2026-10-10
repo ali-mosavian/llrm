@@ -528,3 +528,13 @@ def test_lir_jumps_copies_a_tail_without_checking_the_whole_function_for_each_co
     source.write_text(scaling.AXES["branches"](1024))
     cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["lir jumps"]
     assert cost <= 1500, cost
+
+
+def test_copy_forwarding_does_not_clone_the_instruction_for_each_operand_it_tries(tmp_path):
+    """cells(224) at -O2: `copyprop::forward_use` cloned the whole instruction (`Semantics`) before asking of each source and each
+    address register whether an older copy fits, and answered no almost always: `lir peephole` read 157 to 174 Minstr (the clones
+    cost 2.3x as much when mimalloc's page for their size class was recycled at every free, by the length of a path), 135 once the
+    operand is asked of the instruction itself. Above 145 fails (#1293)."""
+    source = tmp_path / "cells224.c"
+    source.write_text(scaling.cells(224))
+    assert gate.own_work(gate.levels_time.command("llrm", "O2", source))["lir peephole"] <= 145.0
