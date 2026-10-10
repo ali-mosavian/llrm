@@ -1458,6 +1458,47 @@ fn test_a_small_recursive_function_is_inlined_into_itself_to_a_depth() {
     assert_eq!(calls(Threshold::default().for_size()), 2, "not for size: the recursive call is cold there");
 }
 
+/// `rectwo`'s `paths` is nine operations, over the six a call admits: the
+/// recursion's admission is gcc's `max-inline-insns-auto` 15 (params.opt:545),
+/// not the six an ordinary call is. Its copies are what the early exits' tests
+/// fold in (`n == 3`), and what the shrink-wrapped prologue is for.
+const OVER_SIX: &str = "define i16 @f(i16 %n) {
+b0:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %done, label %rec
+
+rec:
+  %m = sub i16 %n, 1
+  %a = call i16 @f(i16 %m)
+  %b = call i16 @f(i16 %m)
+  %s = add i16 %a, %b
+  %t = add i16 %s, 3
+  %u = xor i16 %t, 5
+  %v = add i16 %u, %n
+  %x = shl i16 %v, 1
+  %y = mul i16 %x, 3
+  %q = sub i16 %y, %s
+  %w = and i16 %q, 255
+  ret i16 %w
+
+done:
+  ret i16 1
+}
+";
+
+#[test]
+fn test_a_recursive_function_over_an_ordinary_calls_budget_is_inlined_into_itself() {
+    let inputs: &[&[i128]] = &[&[0], &[1], &[3], &[5]];
+    let calls = |threshold: Threshold| {
+        let mut module = parsed(OVER_SIX);
+        stepped(&mut module, &["f"], 20, threshold);
+        assert_eq!(results(&module, inputs), results(&parsed(OVER_SIX), inputs), "{}", printed(&module));
+        printed(&module).matches("call i16 @f").count()
+    };
+    assert!(calls(Threshold::default()) > 2, "the body grew by copies of itself");
+    assert_eq!(calls(Threshold::default().for_size()), 2, "not for size");
+}
+
 /// A trial of several sites splices them all and runs the caller's
 /// pipeline once, the way gcc and LLVM inline: it ran the pipeline after each
 /// site (host.c -6.6%, QCport -2.2%, the code the same).
