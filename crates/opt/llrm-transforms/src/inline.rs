@@ -733,7 +733,7 @@ pub fn expanded_all(
     function: &mut Function,
     caller: &Caller,
     available: &IndexMap<GlobalId, Candidate>,
-    constant: Option<&IndexMap<InstId, Candidate>>,
+    constant: Option<&llrm_support::hash::SparseIdMap<InstId, Candidate>>,
     declared: &mut Declared,
 ) -> Result<usize, String> {
     let empty = IndexMap::default();
