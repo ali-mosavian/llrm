@@ -1,4 +1,4 @@
-"""The llrm runtime's filled rows, lines and circles: LINE BF, long lines, CIRCLE, PAINT and a text scroll on the CGA and 256-colour screens, m16 and m32.
+"""The llrm runtime's filled rows, lines and circles: LINE BF, long lines, CIRCLE, PAINT, GET and PUT and a text scroll on the CGA and 256-colour screens, m16 and m32.
 
 Each ran a pixel at a time (a call, a read and a mask per pixel in the CGA modes): 150 boxes of 32x32 took 6,500 emulated ms
 in SCREEN 1 and 1,300 in SCREEN 13, BCOM45's under 200; a scrolling PRINT took 33,800 in SCREEN 1.  The limits are about three times what a
@@ -17,8 +17,8 @@ sys.path.insert(0, str(Path(__file__).parent / "gfxbench"))
 import qbruntime  # noqa: E402
 
 LIMITS = {
-    1: {"box-filled": 1000, "paint": 3500, "print-scroll": 20000, "line-long": 700, "circle": 950},
-    13: {"box-filled": 600, "line-long": 450},
+    1: {"box-filled": 1000, "paint": 3500, "print-scroll": 20000, "line-long": 700, "circle": 950, "get-put": 8000},
+    13: {"box-filled": 600, "line-long": 450, "get-put": 4000},
 }
 
 

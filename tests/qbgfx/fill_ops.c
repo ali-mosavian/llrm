@@ -1,5 +1,5 @@
 /* The box fills of runtime/qb/dos/gfxdev.c on the screen, every mode and every operation: a random box over random pixels leaves
-   what the operation says of each pixel, and the pixels around it as they were; so does a dot of the same fill, and a line is what Bresenham's loop through the dot draws.  Prints 0, or the first case that differed. */
+   what the operation says of each pixel, and the pixels around it as they were; so does a dot of the same fill, and a line is what Bresenham's loop through the dot draws, and GET and PUT of a box are what the pixel at a time make.  Prints 0, or the first case that differed. */
 #include "gfxdev.h"
 
 extern void report(long value);
@@ -31,6 +31,65 @@ static void put_back(const unsigned *from)
     for (y = 0; y < REGION_H; y++)
         for (x = 0; x < REGION_W; x++)
             gd_plot(x, y, from[y * REGION_W + x], 0);
+}
+
+static unsigned char sprite[1024], expected_sprite[1024];
+
+/* QB's array format by pixel: the bytes of the box as GET's old per-pixel code made them. */
+static unsigned sprite_bytes(unsigned mode, unsigned w, unsigned h)
+{
+    unsigned planes = mode == 0x10 || mode == 0x0D ? 4 : 1, bits = mode == 0x13 ? 8 : mode == 4 ? 2 : 1;
+
+    return h * planes * ((w * bits + 7) / 8);
+}
+
+/* The box under test, in globals: the m32 compiler gets a function of six or more arguments wrong (see m32-lea-workaround). */
+static unsigned t_mode, t_bx, t_by, t_w, t_h, t_colors;
+
+static void pack_ref(unsigned char *out)
+{
+    unsigned mode = t_mode, bx = t_bx, by = t_by, w = t_w, h = t_h;
+    unsigned planes = mode == 0x10 || mode == 0x0D ? 4 : 1, bits = mode == 0x13 ? 8 : mode == 4 ? 2 : 1;
+    unsigned per_plane = (w * bits + 7) / 8, x, y, i;
+
+    for (y = 0; y < h; y++, out += planes * per_plane) {
+        for (i = 0; i < planes * per_plane; i++)
+            out[i] = 0;
+        for (x = 0; x < w; x++) {
+            unsigned color = gd_read(bx + x, by + y), plane, at = x * bits;
+
+            if (planes > 1) {
+                for (plane = 0; plane < planes; plane++)
+                    if (color >> plane & 1)
+                        out[plane * per_plane + (x >> 3)] |= 0x80 >> (x & 7);
+            } else {
+                out[at >> 3] |= (unsigned char)(color << (8 - bits - (at & 7)));
+            }
+        }
+    }
+}
+
+static void put_ref(const unsigned char *in, unsigned operation, unsigned invert)
+{
+    unsigned mode = t_mode, bx = t_bx, by = t_by, w = t_w, h = t_h, colors = t_colors;
+    unsigned planes = mode == 0x10 || mode == 0x0D ? 4 : 1, bits = mode == 0x13 ? 8 : mode == 4 ? 2 : 1;
+    unsigned per_plane = (w * bits + 7) / 8, x, y;
+
+    for (y = 0; y < h; y++, in += planes * per_plane)
+        for (x = 0; x < w; x++) {
+            unsigned color = 0, plane, at = x * bits;
+
+            if (planes > 1) {
+                for (plane = 0; plane < planes; plane++)
+                    if (in[plane * per_plane + (x >> 3)] & (0x80 >> (x & 7)))
+                        color |= 1u << plane;
+            } else {
+                color = in[at >> 3] >> (8 - bits - (at & 7)) & ((1u << bits) - 1);
+            }
+            if (invert)
+                color = ~color & (colors - 1);
+            gd_plot(bx + x, by + y, color, operation);
+        }
 }
 
 int main(void)
@@ -65,6 +124,36 @@ int main(void)
                         return 0;
                     }
                 }
+            /* GET and PUT of a box: whole rows against a pixel at a time */
+            {
+                unsigned sx = next() % REGION_W, sy = next() % REGION_H, sw = 1 + next() % (REGION_W - sx), sh = 1 + next() % (REGION_H - sy);
+                unsigned bytes = sprite_bytes(modes[m], sw, sh), i, invert = next() & 1;
+
+                if (sw > 40)
+                    sw = 40;
+                bytes = sprite_bytes(modes[m], sw, sh);
+                t_mode = modes[m], t_bx = sx, t_by = sy, t_w = sw, t_h = sh, t_colors = colors[m];
+                pack_ref(expected_sprite);
+                gd_get(sx, sy, sw, sh, sprite);
+                for (i = 0; i < bytes; i++)
+                    if (sprite[i] != expected_sprite[i]) {
+                        report((long)modes[m] * 1000000L + (long)operation * 100000L + (long)(sx + sy * 100) + 80000L);
+                        return 0;
+                    }
+                for (i = 0; i < bytes; i++)
+                    sprite[i] = (unsigned char)next();
+                grab(saved);
+                put_ref(sprite, operation, invert);
+                grab(expected);
+                put_back(saved);
+                gd_put(sx, sy, sw, sh, sprite, operation, invert);
+                for (y = 0; y < REGION_H; y++)
+                    for (x = 0; x < REGION_W; x++)
+                        if (gd_read(x, y) != expected[y * REGION_W + x]) {
+                            report((long)modes[m] * 1000000L + (long)operation * 100000L + (long)(sx + sy * 100) + 90000L);
+                            return 0;
+                        }
+            }
             /* and a line: the loop of fill.asm against Bresenham's through the dot */
             {
                 unsigned lx = next() % REGION_W, ly = next() % REGION_H, ldx = next() % (REGION_W - lx);

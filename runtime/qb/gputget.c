@@ -4,6 +4,7 @@
    pixel the high bit: 4 + rows * planes * ((width + 7) / 8) bytes, as QB's
    formula for the array's size has it. */
 #include "gfx.h"
+#include "gfxdev.h"
 #include "ad.h"
 
 enum { HEADER = 4 };
@@ -45,6 +46,10 @@ void B_GGET(qb_data_ptr data, const AD *ad)
     ((u16 QB_FAR *)out)[0] = width * bits;
     ((u16 QB_FAR *)out)[1] = height;
     out += HEADER;
+    if (left >= 0 && top >= 0 && (unsigned)left + width <= gfx_current->width && (unsigned)top + height <= gfx_current->height) {
+        gd_get((unsigned)left, (unsigned)top, width, height, out);
+        return;
+    }
     for (y = 0; y < height; y++) {
         for (plane = 0; plane < planes; plane++) {
             for (x = 0; x < per_plane; x++)
@@ -84,6 +89,13 @@ void B_GPUT(qb_data_ptr data, const AD *ad, short how)
                > array_bytes(ad))
         qb_error(BE_ILLFUN);
     in += HEADER;
+    if (width && height && gfx_x1 >= 0 && gfx_y1 >= 0 && (unsigned)gfx_x1 + width <= gfx_current->width
+        && (unsigned)gfx_y1 + height <= gfx_current->height) {
+        /* on the screen: whole rows */
+        gd_put((unsigned)gfx_x1, (unsigned)gfx_y1, width, height, in,
+               how == PUT_OR ? 2 : how == PUT_AND ? 1 : how == PUT_XOR ? 3 : 0, how == PUT_PRESET);
+        return;
+    }
     for (y = 0; y < height; y++) {
         for (x = 0; x < width; x++) {
             unsigned color = 0;

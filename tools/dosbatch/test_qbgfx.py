@@ -22,7 +22,7 @@ SETTLE_SECONDS = 2
 # Probes that draw for longer than that before they wait.
 SETTLE = {"gfx_paint_sweep": 10, "gfx_paint_rules": 6}
 GRAPHICS_MODE = 0x10   # SCREEN 9: what the probes draw in, unless the name says
-BIOS_MODES = {"gfx_screen7": 0x0D, "gfx_screen8": 0x0E, "gfx_screen12": 0x12, "gfx_screen13": 0x13, "gfx_screen1": 4, "gfx_screen1_default": 4, "gfx_text1": 4, "gfx_text2": 6, "gfx_text13": 0x13, "gfx_text12": 0x12, "gfx_text8": 0x0E, "gfx_screen2": 6}
+BIOS_MODES = {"gfx_getput1": 4, "gfx_getput2": 6, "gfx_getput7": 0x0D, "gfx_getput13": 0x13, "gfx_screen7": 0x0D, "gfx_screen8": 0x0E, "gfx_screen12": 0x12, "gfx_screen13": 0x13, "gfx_screen1": 4, "gfx_screen1_default": 4, "gfx_text1": 4, "gfx_text2": 6, "gfx_text13": 0x13, "gfx_text12": 0x12, "gfx_text8": 0x0E, "gfx_screen2": 6}
 
 
 @pytest.fixture(scope="module")
