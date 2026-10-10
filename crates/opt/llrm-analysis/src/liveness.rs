@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_support::bits::Bits;
-use llrm_support::hash::HashMap;
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::cfg::id;
 
@@ -264,16 +264,101 @@ pub fn solves() -> usize {
     SOLVES.with(std::cell::Cell::get)
 }
 
-// Rounds of the liveness fixed point, for a test that a chain of blocks settles
-// in a few.
+// Facts `live` follows, for a test that its work is the size of the live sets.
 #[cfg(test)]
 thread_local! {
-    pub(crate) static ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Run on bit sets over dense value indices; the sets are Python's.
+/// What is live at each block's entry and exit: the least solution of
+/// `out(B) = U in(S) + arms of S's live phis`, `after(B) = out(B) - defs(B) +
+/// exposed(B)`, `in(B) = after(B) - phis(B)`. Each value is followed from
+/// where it is read back to where it is made, so the work is the size of the
+/// live sets and not the blocks times the values (bit sets over all of them:
+/// 4.3x a doubling on `branches`). gcc's `calculate_live_on_exit` and LLVM's
+/// `LiveVariables` both walk from each use.
 pub fn live(function: &Function) -> Liveness {
     SOLVES.with(|solves| solves.set(solves.get() + 1));
+    let layout = function.layout();
+    let at_index: HashMap<BlockId, usize> =
+        layout.iter().enumerate().map(|(position, &block)| (block, position)).collect();
+    let blocks: Vec<(Vec<&Instruction>, Vec<&Instruction>)> =
+        layout.iter().map(|&block| split(function, block)).collect();
+    let mut op_defines: Vec<HashSet<ValueId>> =
+        blocks.iter().map(|(_, ops)| ops.iter().filter_map(|op| op.result).collect()).collect();
+    let phi_defines: Vec<HashSet<ValueId>> =
+        blocks.iter().map(|(phis, _)| phis.iter().filter_map(|phi| phi.result).collect()).collect();
+    let mut exposed: Vec<BTreeSet<ValueId>> = layout.iter().map(|&block| _exposed(function, block)).collect();
+    if !layout.is_empty() {
+        let arriving = entry_values(function);
+        exposed[0].retain(|value| !arriving.contains(value));
+        op_defines[0].extend(arriving);
+    }
+    let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); layout.len()];
+    for (position, &block) in layout.iter().enumerate() {
+        for successor in function.successors(block) {
+            if let Some(&to) = at_index.get(&successor) {
+                predecessors[to].push(position);
+            }
+        }
+    }
+    let mut live_in = vec![BTreeSet::new(); layout.len()];
+    let mut live_out = vec![BTreeSet::new(); layout.len()];
+    // The phis' results live once the phis have run.
+    let mut phis_live = vec![BTreeSet::new(); layout.len()];
+
+    enum Reach {
+        /// Live once `block`'s phis have run.
+        After(usize, ValueId),
+        /// Live at the end of `block`.
+        Out(usize, ValueId),
+    }
+    let mut pending = Vec::new();
+    for (position, values) in exposed.iter().enumerate() {
+        pending.extend(values.iter().map(|&value| Reach::After(position, value)));
+    }
+    while let Some(reach) = pending.pop() {
+        #[cfg(test)]
+        STEPS.with(|steps| steps.set(steps.get() + 1));
+        match reach {
+            Reach::Out(position, value) => {
+                if live_out[position].insert(value) && !op_defines[position].contains(&value) {
+                    pending.push(Reach::After(position, value));
+                }
+            }
+            Reach::After(position, value) => {
+                if phi_defines[position].contains(&value) {
+                    if !phis_live[position].insert(value) {
+                        continue;
+                    }
+                    // Each edge brings the phi's arm from its own block.
+                    for phi in blocks[position].0.iter().filter(|phi| phi.result == Some(value)) {
+                        for &from in &predecessors[position] {
+                            if let Some(arm) = arm(phi, layout[from]) {
+                                pending.push(Reach::Out(from, arm));
+                            }
+                        }
+                    }
+                } else if live_in[position].insert(value) {
+                    pending.extend(predecessors[position].iter().map(|&from| Reach::Out(from, value)));
+                }
+            }
+        }
+    }
+    let sets = |found: Vec<BTreeSet<ValueId>>| -> BTreeMap<i64, BTreeSet<ValueId>> {
+        layout.iter().zip(found).map(|(&block, set)| (id(block), set)).collect()
+    };
+    let found = Liveness { live_in: sets(live_in), live_out: sets(live_out) };
+    #[cfg(test)]
+    assert_eq!(found, live_dense(function), "liveness from the uses is not the bit-set fixed point");
+    found
+}
+
+/// The fixed point on bit sets over dense value indices, which `live` replaced:
+/// its oracle. `live` is held to it on every function a test of this crate
+/// gives it.
+#[cfg(test)]
+pub(crate) fn live_dense(function: &Function) -> Liveness {
     let layout = function.layout();
     let mut index: HashMap<ValueId, usize> = HashMap::default();
     let mut values: Vec<ValueId> = Vec::new();
@@ -339,8 +424,6 @@ pub fn live(function: &Function) -> Liveness {
     let mut changing = true;
     while changing {
         changing = false;
-        #[cfg(test)]
-        ROUNDS.with(|rounds| rounds.set(rounds.get() + 1));
         // Last block first: what a block makes live comes from the blocks
         // after it, so a chain settles in one round and a check, not in one
         // round per block.
@@ -626,22 +709,25 @@ top:
         assert_eq!(entry_values(f), BTreeSet::from([value(f, "read")]));
     }
 
-    /// A chain of N blocks took N+1 rounds, each visiting every block first to
-    /// last: what is live comes from later blocks, so a fact from the last
-    /// one moved one block a round. `branches` at N=1024 spent 82.7 G in gvn,
-    /// 39% of it in liveness (4.3x, 5.2x, 5.7x per doubling).
+    /// The bit-set fixed point made every block's sets as wide as the
+    /// function's values: `branches` at N=1024 spent 82.7 G in gvn, 39% of
+    /// it in liveness (4.3x, 5.2x, 5.7x per doubling). The work is now the
+    /// live sets': a chain of N blocks that each make a value for the next
+    /// costs steps in N, and doubling the chain doubles them.
     #[test]
-    fn test_a_chain_of_blocks_settles_in_a_few_rounds() {
-        let blocks = 60;
-        let mut text = String::from("define i16 @f(i16 %x) {\nb0:\n  %v = add i16 %x, 1\n  br label %b1\n\n");
-        for at in 1..blocks {
-            text += &format!("b{at}:\n  %y{at} = add i16 {at}, {at}\n  br label %b{}\n\n", at + 1);
-        }
-        text += &format!("b{blocks}:\n  ret i16 %v\n}}\n");
-        let module = parsed(&text);
-        ROUNDS.with(|rounds| rounds.set(0));
-        live(function(&module, "f"));
-        let rounds = ROUNDS.with(|rounds| rounds.get());
-        assert!(rounds <= 3, "{rounds} rounds for {blocks} blocks in a chain");
+    fn test_liveness_work_follows_the_live_sets_not_blocks_times_values() {
+        let steps = |blocks: usize| {
+            let mut text = String::from("define i16 @f(i16 %x) {\nb0:\n  %v0 = add i16 %x, 1\n  br label %b1\n\n");
+            for at in 1..blocks {
+                text += &format!("b{at}:\n  %v{at} = add i16 %v{}, 1\n  br label %b{}\n\n", at - 1, at + 1);
+            }
+            text += &format!("b{blocks}:\n  ret i16 %v{}\n}}\n", blocks - 1);
+            let module = parsed(&text);
+            STEPS.with(|steps| steps.set(0));
+            live(function(&module, "f"));
+            STEPS.with(|steps| steps.get())
+        };
+        let (small, large) = (steps(100), steps(200));
+        assert!(small > 0 && large <= 2 * small + 8, "{small} steps for 100 blocks, {large} for 200");
     }
 }
