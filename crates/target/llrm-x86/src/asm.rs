@@ -90,6 +90,9 @@ const MNEMONICS: &[Mnemonic] = &[
     Mnemonic::Rcr,
     Mnemonic::Clc,
     Mnemonic::Stc,
+    Mnemonic::Mul,
+    Mnemonic::Imul,
+    Mnemonic::Shld,
 ];
 
 /// Other spellings of a mnemonic above.

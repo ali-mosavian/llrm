@@ -2835,7 +2835,10 @@ fn test_an_i64_divided_by_a_variable_is_the_inline_helper() {
 }
 ";
     let got = listing(text, "f");
-    let helper = got.iter().filter(|line| line.starts_with("db 066h,009h,0c9h,075h,02ah")).count();
+    // The routine's own bytes, as the listing spells them.
+    let code = llrm_x86::helpers::divide(false, true, 16).expect("assembles").code;
+    let first = format!("db {}", code[..5].iter().map(|byte| format!("0{byte:02x}h")).collect::<Vec<_>>().join(","));
+    let helper = got.iter().filter(|line| line.starts_with(&first)).count();
     assert_eq!(helper, 1, "{got:?}");
     assert!(got.iter().any(|line| line == "add eax, ebx") && got.iter().any(|line| line == "adc edx, ecx"), "{got:?}");
 }
