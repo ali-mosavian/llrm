@@ -83,6 +83,13 @@ const MNEMONICS: &[Mnemonic] = &[
     Mnemonic::Jp,
     Mnemonic::Jnp,
     Mnemonic::Loop,
+    Mnemonic::Div,
+    Mnemonic::Adc,
+    Mnemonic::Sbb,
+    Mnemonic::Neg,
+    Mnemonic::Rcr,
+    Mnemonic::Clc,
+    Mnemonic::Stc,
 ];
 
 /// Other spellings of a mnemonic above.
@@ -116,6 +123,9 @@ pub struct Mode {
     /// The bytes of an address (the near pointer): 2 takes `[bx|bp + si|di +
     /// n]`, 4 `[reg + reg*s + n]`.
     pub address_bytes: u32,
+    /// Whether real-mode code may use the 32-bit registers and operand forms (a
+    /// 386 or later, with the operand-size prefix): a flat block always may.
+    pub wide: bool,
 }
 
 /// Why line `line` of the block does not assemble.
@@ -166,13 +176,21 @@ static SPELLED: LazyLock<HashMap<String, Mnemonic>> = LazyLock::new(|| {
 });
 
 /// Each allowed mnemonic's forms a block of `bits` bits can encode.
-fn forms(bits: u32) -> &'static HashMap<Mnemonic, Vec<Code>> {
-    static REAL: LazyLock<HashMap<Mnemonic, Vec<Code>>> = LazyLock::new(|| forms_of(16));
-    static FLAT: LazyLock<HashMap<Mnemonic, Vec<Code>>> = LazyLock::new(|| forms_of(32));
-    if bits == 32 { &FLAT } else { &REAL }
+fn forms(mode: Mode) -> &'static HashMap<Mnemonic, Vec<Code>> {
+    static REAL: LazyLock<HashMap<Mnemonic, Vec<Code>>> = LazyLock::new(|| forms_of(16, false));
+    static WIDE: LazyLock<HashMap<Mnemonic, Vec<Code>>> = LazyLock::new(|| forms_of(16, true));
+    static FLAT: LazyLock<HashMap<Mnemonic, Vec<Code>>> = LazyLock::new(|| forms_of(32, true));
+    match (mode.bits, mode.wide) {
+        (32, _) => &FLAT,
+        (_, true) => &WIDE,
+        _ => &REAL,
+    }
 }
 
-fn forms_of(bits: u32) -> HashMap<Mnemonic, Vec<Code>> {
+fn forms_of(
+    bits: u32,
+    wide: bool,
+) -> HashMap<Mnemonic, Vec<Code>> {
     let mut forms: HashMap<Mnemonic, Vec<Code>> = HashMap::default();
     for code in Code::values() {
         let info = code.op_code();
@@ -181,7 +199,10 @@ fn forms_of(bits: u32) -> HashMap<Mnemonic, Vec<Code>> {
         let mode = if bits == 32 {
             info.mode32() && matches!(info.operand_size(), 0 | 16 | 32) && matches!(info.address_size(), 0 | 32)
         } else {
-            info.mode16() && matches!(info.operand_size(), 0 | 16) && matches!(info.address_size(), 0 | 16)
+            // A wide real-mode block takes the 32-bit operand forms too (a 66h
+            // prefix).
+            let sizes = matches!(info.operand_size(), 0 | 16) || (wide && info.operand_size() == 32);
+            info.mode16() && sizes && matches!(info.address_size(), 0 | 16)
         };
         let usable = info.encoding() == EncodingKind::Legacy
             && info.is_instruction()
@@ -216,7 +237,7 @@ fn register(
                 register,
                 Register::ES | Register::CS | Register::SS | Register::DS
             )
-        || (mode.bits == 32 && register.is_gpr32())
+        || ((mode.bits == 32 || mode.wide) && register.is_gpr32())
     {
         return Ok(Some(register));
     }
@@ -386,6 +407,7 @@ fn placed(
     operand: &Operand,
     bytes: usize,
     bits: u32,
+    wide: bool,
 ) -> bool {
     match operand {
         Operand::Register(register) => {
@@ -422,8 +444,8 @@ fn placed(
                 Kind::imm8sex16 => {
                     ((-0x80..=0x7F).contains(&value) || (0xFF80..=0xFFFF).contains(&value), OpKind::Immediate8to16)
                 }
-                Kind::imm32 if bits == 32 => ((-0x8000_0000..=0xFFFF_FFFF).contains(&value), OpKind::Immediate32),
-                Kind::imm8sex32 if bits == 32 => (
+                Kind::imm32 if wide => ((-0x8000_0000..=0xFFFF_FFFF).contains(&value), OpKind::Immediate32),
+                Kind::imm8sex32 if wide => (
                     (-0x80..=0x7F).contains(&value) || (0xFFFF_FF80..=0xFFFF_FFFF).contains(&value),
                     OpKind::Immediate8to32,
                 ),
@@ -497,6 +519,7 @@ fn built(
     code: Code,
     operands: &[Operand],
     bits: u32,
+    wide: bool,
 ) -> Option<Instruction> {
     let info = code.op_code();
     let kinds = info.op_kinds();
@@ -533,7 +556,7 @@ fn built(
         .iter()
         .zip(operands)
         .enumerate()
-        .all(|(at, (kind, operand))| placed(&mut instruction, at as u32, *kind, operand, bytes, bits))
+        .all(|(at, (kind, operand))| placed(&mut instruction, at as u32, *kind, operand, bytes, bits, wide))
         .then_some(instruction)
 }
 
@@ -574,8 +597,12 @@ fn instruction(
     } else {
         rest.split(',').map(|one| operand(one, line, mode)).collect::<Result<Vec<_>, _>>()?
     };
-    let fitting: Vec<Instruction> =
-        forms(bits).get(&mnemonic).into_iter().flatten().filter_map(|code| built(*code, &operands, bits)).collect();
+    let fitting: Vec<Instruction> = forms(mode)
+        .get(&mnemonic)
+        .into_iter()
+        .flatten()
+        .filter_map(|code| built(*code, &operands, bits, bits == 32 || mode.wide))
+        .collect();
     let sizeless = operands.iter().any(|one| matches!(one, Operand::Memory(Memory { size: None, .. })));
     let sizes: std::collections::BTreeSet<usize> =
         fitting.iter().map(|one| one.op_code().memory_size().size()).collect();
@@ -681,8 +708,29 @@ mod tests {
     }
 
     /// The facts of the two targets' descriptions, as the frontend reads them.
-    const REAL: Mode = Mode { bits: 16, segmented: true, address_bytes: 2 };
-    const FLAT: Mode = Mode { bits: 32, segmented: false, address_bytes: 4 };
+    const REAL: Mode = Mode { bits: 16, segmented: true, address_bytes: 2, wide: false };
+    const FLAT: Mode = Mode { bits: 32, segmented: false, address_bytes: 4, wide: false };
+
+    const WIDE: Mode = Mode { bits: 16, segmented: true, address_bytes: 2, wide: true };
+
+    /// A 386's real-mode code names the 32-bit registers, each with the
+    /// operand-size prefix; a block of a target that is not wide refuses them.
+    #[test]
+    fn wide_real_mode_takes_the_32_bit_registers_with_the_prefix() {
+        let wide = |lines: &[&str]| assembled(lines, WIDE).unwrap_or_else(|refusal| panic!("{}", refusal.message));
+        assert_eq!(wide(&["mov eax, 1"]), [0x66, 0xB8, 0x01, 0x00, 0x00, 0x00]);
+        assert_eq!(wide(&["xor ecx, ecx", "div ebx"]), [0x66, 0x31, 0xC9, 0x66, 0xF7, 0xF3]);
+        assert_eq!(wide(&["sbb ecx, 0"]), [0x66, 0x83, 0xD9, 0x00]);
+        assert!(refused(&["xor ecx, ecx"]).contains("register ecx is not available"));
+    }
+
+    /// The carry and wide-arithmetic mnemonics a multiword routine is made of.
+    #[test]
+    fn the_multiword_mnemonics_assemble_flat() {
+        let flat = |lines: &[&str]| assembled(lines, FLAT).unwrap_or_else(|refusal| panic!("{}", refusal.message));
+        assert_eq!(flat(&["neg edx", "neg eax", "sbb edx, 0"]), [0xF7, 0xDA, 0xF7, 0xD8, 0x83, 0xDA, 0x00]);
+        assert_eq!(flat(&["adc esi, esi", "rcr ebx, 1", "stc", "clc"]), [0x11, 0xF6, 0xD1, 0xDB, 0xF9, 0xF8]);
+    }
 
     #[test]
     fn each_form_is_the_shortest_that_takes_its_operands() {
@@ -782,7 +830,7 @@ mod tests {
             "real mode still has no 32-bit registers"
         );
         assert!(
-            assembled(&["nop"], Mode { bits: 64, segmented: false, address_bytes: 8 })
+            assembled(&["nop"], Mode { bits: 64, segmented: false, address_bytes: 8, wide: false })
                 .unwrap_err()
                 .message
                 .contains("16-bit and 32-bit")
