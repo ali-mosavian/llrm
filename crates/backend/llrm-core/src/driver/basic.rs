@@ -747,13 +747,13 @@ pub fn assembled(
     options: &Options,
 ) -> Result<masm::Module, String> {
     let abi = object_abi(object, runtime);
-    let mut names = globals::names(module, &|name| abi.linked(name))?;
+    let mut names = globals::names(module, &options.arch.layout().spaces.roles, &|name| abi.linked(name))?;
     // A symbol the frontend states stands as it is, BASIC's type suffix and
     // all.
     for (at, global) in module.globals.iter().enumerate() {
         let id = GlobalId(at as u32);
         if let Some(symbol) = global.name.as_ref().and_then(|name| object.symbols.get(name)) {
-            names.extend(globals::segment_name(module, id, symbol));
+            names.extend(globals::segment_name(module, id, symbol, &options.arch.layout().spaces.roles));
             names.insert((globals::space(module, id), i64::from(id.0)), symbol.clone());
         }
     }
