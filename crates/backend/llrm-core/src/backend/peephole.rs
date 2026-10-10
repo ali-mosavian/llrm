@@ -2617,6 +2617,7 @@ pub fn constants(body: &LirBody) -> LirBody {
     for block in &body.blocks {
         let mut held: IndexMap<Reg, Known> = IndexMap::default();
         let mut redundant: HashSet<usize> = HashSet::default();
+        let mut folded: HashMap<usize, Arc<Insn>> = HashMap::default();
         for one in &block.insns {
             let what = one.what.as_ref();
             if what.is_some_and(|what| {
@@ -2632,7 +2633,7 @@ pub fn constants(body: &LirBody) -> LirBody {
             let moved = what.is_some_and(|what| what.op == Operation::Move && what.name.as_deref() == Some("mov"));
             let extend = what.is_some_and(|what| {
                 what.op == Operation::Extend
-                    && matches!(what.name.as_deref(), Some("cwd" | "cdq" | "movsx"))
+                    && matches!(what.name.as_deref(), Some("cwd" | "cdq" | "movsx" | "movzx"))
                     && what.dests.len() == 1
                     && what.sources.len() == 1
                     && what.dests.iter().chain(&what.sources).all(|arg| matches!(arg, Loc::Reg(_)))
@@ -2646,6 +2647,23 @@ pub fn constants(body: &LirBody) -> LirBody {
             }
             let what = what.expect("a move or extension has semantics");
             let mut candidate = None;
+            // The extension of a register holding a constant is the extended
+            // constant: a fact asked of `held`, not a pattern of
+            // the bytes before it (gcc's combine does it through known values).
+            if let Some(value) = extended_constant(&held, what, body.bits) {
+                if let (Some(Loc::Reg(dest)), true) = (what.dests.first(), one.clobbers.is_empty()) {
+                    let made = semantics(
+                        Operation::Move,
+                        "mov",
+                        vec![Loc::Reg(*dest)],
+                        vec![Loc::Imm(imm(value, dest.width))],
+                    );
+                    if emit(body.bits, &made).is_some() {
+                        folded.insert(id(one), Arc::new(with_what(one, made)));
+                        candidate = Some((*dest, Known::Value(value & ((1i64 << (dest.width * 8)) - 1))));
+                    }
+                }
+            }
             if moved && what.dests.len() == 1 && what.sources.len() == 1 {
                 let (dest, source) = (&what.dests[0], &what.sources[0]);
                 if let Loc::Reg(dest) = dest {
@@ -2698,11 +2716,57 @@ pub fn constants(body: &LirBody) -> LirBody {
         let insns = block
             .insns
             .iter()
-            .map(|one| if redundant.contains(&id(one)) { lir::anchor(Arc::clone(one)) } else { Arc::clone(one) })
+            .map(|one| {
+                if redundant.contains(&id(one)) {
+                    lir::anchor(Arc::clone(one))
+                } else {
+                    folded.get(&id(one)).map_or_else(|| Arc::clone(one), Arc::clone)
+                }
+            })
             .collect();
         blocks.push(block.with_insns(insns));
     }
     body.with_blocks(blocks)
+}
+
+/// The value `movzx`/`movsx` of a register `held` holds as a constant extends
+/// it to, if it does: the source register read at its own width (or the low
+/// part of a wider one held whole), extended as the instruction does.
+fn extended_constant(
+    held: &IndexMap<Reg, Known>,
+    what: &Semantics,
+    bits: u32,
+) -> Option<i64> {
+    let _ = bits;
+    if what.op != Operation::Extend || !matches!(what.name.as_deref(), Some("movzx" | "movsx")) {
+        return None;
+    }
+    let (Some(Loc::Reg(dest)), [Loc::Reg(source)]) = (what.dests.first(), &what.sources[..]) else { return None };
+    if what.dests.len() != 1
+        || !target::integer(dest.register)
+        || !target::integer(source.register)
+        || source.width >= dest.width
+    {
+        return None;
+    }
+    // A byte of the high half (AH) is not the low lane of its register.
+    if matches!(
+        source.register,
+        iced_x86::Register::AH | iced_x86::Register::BH | iced_x86::Register::CH | iced_x86::Register::DH
+    ) {
+        return None;
+    }
+    let value = held
+        .iter()
+        .find(|(one, _)| full32(one.register) == full32(source.register) && one.width >= source.width)
+        .and_then(|(_, known)| if let Known::Value(value) = known { Some(*value) } else { None })?;
+    let mask = (1i64 << (source.width * 8)) - 1;
+    let low = value & mask;
+    Some(if what.name.as_deref() == Some("movsx") && low >> (source.width * 8 - 1) & 1 == 1 {
+        low | !mask
+    } else {
+        low
+    })
 }
 
 #[cfg(test)]

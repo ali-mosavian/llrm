@@ -2190,6 +2190,58 @@ fn test_copied_value_survives_overwriting_its_original_register() {
     assert_eq!(whats(&result.insns()), expected);
 }
 
+/// `mov ax, 1; movzx eax, ax` is `mov eax, 1`: the extension of a register
+/// holding a constant is the extended constant (dos32 BASIC passed every
+/// INTEGER constant to a runtime call so).
+#[test]
+fn test_the_extension_of_a_register_holding_a_constant_is_the_extended_constant() {
+    let moved = |at: i64, dest: Loc, source: Loc| {
+        Arc::new(insn(
+            at,
+            Some((at, at + 1)),
+            Some(sem(Operation::Move, "mov", vec![dest], vec![source])),
+            vec![],
+            vec![],
+        ))
+    };
+    let extended = |at: i64, name: &str, dest: Loc, source: Loc| {
+        Arc::new(insn(
+            at,
+            Some((at, at + 1)),
+            Some(sem(Operation::Extend, name, vec![dest], vec![source])),
+            vec![],
+            vec![],
+        ))
+    };
+    let after = |input: Vec<Arc<Insn>>| whats(&constants(&body("extension", 0, vec![block(0, input, vec![])])).insns());
+    let mov32 = |register: RegId, value: i64| sem(Operation::Move, "mov", vec![rl(register, 4)], vec![im(value, 4)]);
+    // Zero extension of a word, in place and into another register.
+    let narrow = moved(0, rl(RegId::AX, 2), im(1, 2));
+    assert_eq!(
+        after(vec![narrow.clone(), extended(1, "movzx", rl(RegId::EAX, 4), rl(RegId::AX, 2))])[1],
+        mov32(RegId::EAX, 1)
+    );
+    assert_eq!(
+        after(vec![narrow.clone(), extended(1, "movzx", rl(RegId::ECX, 4), rl(RegId::AX, 2))])[1],
+        mov32(RegId::ECX, 1)
+    );
+    // A byte's sign: -3 is 0xfffffffd, 200 as a byte is 200 whether or not it
+    // is negative to `movsx`.
+    let byte = moved(0, rl(RegId::AL, 1), im(-3, 1));
+    assert_eq!(
+        after(vec![byte.clone(), extended(1, "movsx", rl(RegId::EAX, 4), rl(RegId::AL, 1))])[1],
+        mov32(RegId::EAX, -3)
+    );
+    assert_eq!(after(vec![byte, extended(1, "movzx", rl(RegId::EAX, 4), rl(RegId::AL, 1))])[1], mov32(RegId::EAX, 253));
+    // The low word of a whole register, and nothing once the source is written
+    // between.
+    let whole = moved(0, rl(RegId::EAX, 4), im(0x1_0005, 4));
+    assert_eq!(after(vec![whole, extended(1, "movzx", rl(RegId::ECX, 4), rl(RegId::AX, 2))])[1], mov32(RegId::ECX, 5));
+    let unknown = moved(1, rl(RegId::AX, 2), rl(RegId::DX, 2));
+    let kept = after(vec![narrow, unknown, extended(2, "movzx", rl(RegId::EAX, 4), rl(RegId::AX, 2))]);
+    assert_eq!(kept[2].name.as_deref(), Some("movzx"));
+}
+
 #[test]
 fn test_partial_write_invalidates_constant() {
     let moved = |at: i64, dest: Loc, source: Loc| {
