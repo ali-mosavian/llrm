@@ -417,3 +417,13 @@ def test_an_entry_does_not_hold_up_the_summary_of_what_calls_through_a_pointer(t
         env={**os.environ, "LLRM_CHECK_MODULES": "1"},
     )
     assert done.returncode == 0, done.stderr[-300:]
+
+
+def test_summaries_keep_the_call_graph_when_a_body_calls_a_deeper_one(tmp_path):
+    """chain(N) at -O2: each splice of a callee into its caller gives the caller calls to bodies below the callee, and the
+    graph of all N bodies (components, order, readers) was made again for it: `summaries topology` read 23.8 / 107.5 Minstr at
+    N=64 / 128 (457 at 256). A new call to a body of an earlier component leaves the order valid, and the graph is brought up
+    to date for that body alone: 2.6 / 8.0. Above 30 Minstr at N=128 fails."""
+    source = tmp_path / "chain128.c"
+    source.write_text(scaling.chain(128))
+    assert gate.own_work(gate.levels_time.command("llrm", "O2", source)).get("summaries topology", 0.0) <= 30.0
