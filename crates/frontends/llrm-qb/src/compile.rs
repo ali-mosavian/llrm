@@ -259,15 +259,6 @@ pub(super) fn _positional_data(program: &model::Program) -> Result<model::Progra
     Ok(program)
 }
 
-/// `struct.pack_into("<H", buffer, at, value)`.
-fn pack_into(
-    buffer: &mut [u8],
-    at: usize,
-    value: i64,
-) {
-    buffer[at..at + 2].copy_from_slice(&(value as u16).to_le_bytes());
-}
-
 /// Return the measured BC `U_FLAG` word for this compilation profile.
 ///
 /// `U_FLAG` is consumed by the BASIC runtime, not descriptive metadata.
