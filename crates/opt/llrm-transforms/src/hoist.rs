@@ -106,9 +106,21 @@ pub fn hoisted(
     // The price of the function as it stands, when the last motion priced it.
     let mut held = None;
     let mut changed = false;
+    let mut moved = false;
+    let mut asked_after_moving = false;
     for one in found {
         let Some(into) = _preheader(&graph, one) else { continue };
-        let mut bounds = || analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function);
+        // The intervals of the loops, asked once a loop has been moved out of:
+        // the edges they stand on were found with the instructions
+        // where they were, so what this pass held is let go first
+        // (`LLRM_CHECK_REPLAY`).
+        let mut bounds = || {
+            if moved && !asked_after_moving {
+                analyses.invalidate(unit.function, &PreservedAnalyses::none());
+            }
+            asked_after_moving = moved;
+            analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function)
+        };
         let run = _invariant_run(unit, &outer, one, into, &accesses, &terminal, &registers, &shape, &mut bounds);
         if _crossed_values(unit.function, &run).is_empty() {
             continue;
@@ -125,6 +137,8 @@ pub fn hoisted(
             unit.function.move_to(inst, Position::Before(before)).expect("a placed instruction");
         }
         changed = true;
+        moved = true;
+        asked_after_moving = false;
     }
     changed
 }

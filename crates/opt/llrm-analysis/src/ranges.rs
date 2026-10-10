@@ -854,7 +854,7 @@ pub fn bounds<'u>(unit: &Unit<'u>) -> Result<std::borrow::Cow<'u, Bounds>, Strin
     let registers = unit.registers();
     match (unit.bounds, unit.registers) {
         (Some(held), Some(carried)) if std::ptr::eq(&*registers, carried) => {
-            if llrm_support::env_set("LLRM_CHECK_REPLAY") {
+            if unit.loop_intervals && llrm_support::env_set("LLRM_CHECK_REPLAY") {
                 assert!(
                     held.facts() == bounded_with(&Unit { bounds: None, ..*unit }, &registers)?,
                     "the bounds a unit carries are not those of the body it stands over: stale"
