@@ -750,7 +750,8 @@ fn _function(
                     // offset. A normal scalar supplies a typed near pointer.
                     // Both are the same runtime address form; wider operands
                     // would lose the established real-mode contract.
-                    if operand_types.iter().any(|one| types[one].width != 2) {
+                    // Where there is one space a near address is a pointer, however wide.
+                    if operand_types.iter().any(|one| types[one].width != 2 && types[one].kind != model::TypeKind::Pointer) {
                         invalid!("{prefix}: string comparison operands are not near addresses");
                     }
                 } else if operand_types[0] != operand_types[1] {

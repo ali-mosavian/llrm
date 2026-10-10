@@ -396,9 +396,27 @@ pub fn _basic_listing(
         _ => (Vec::new(), &listing),
     };
     let (enter, leave) = masm::_frame_parts(procedure);
+    // The shell's registers and counts as the target spells them: BP and SP are the frame and the stack pointer,
+    // and a width is the target's slot, which the listing states and these parts leave to the target.
+    let registers = &procedure.registers;
+    let shape = |what: &Semantics| -> Semantics {
+        let place = |loc: &Loc| match loc {
+            Loc::Reg(reg) => Loc::Reg(ir::Reg { register: registers.spelled(reg.register), width: 0 }),
+            Loc::Imm(imm) => Loc::Imm(ir::Imm { width: 0, ..imm.clone() }),
+            other => other.clone(),
+        };
+        Semantics {
+            dests: what.dests.iter().map(place).collect(),
+            sources: what.sources.iter().map(place).collect(),
+            ..what.clone()
+        }
+    };
     let same = |items: &[masm::Item], semantics: &[Semantics]| {
         items.len() == semantics.len()
-            && items.iter().zip(semantics).all(|(item, one)| matches!(item, masm::Item::Semantics(what) if what == one))
+            && items
+                .iter()
+                .zip(semantics)
+                .all(|(item, one)| matches!(item, masm::Item::Semantics(what) if shape(what) == shape(one)))
     };
     if listing.len() < enter.len() || !same(&listing[..enter.len()], &enter) {
         return Err(format!("{}: native frame prefix changed shape", procedure.name).into());

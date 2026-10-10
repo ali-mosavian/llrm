@@ -120,6 +120,12 @@ impl Layout {
                     .ok_or("spaces.segment_bytes is not a positive size")?,
             ),
         };
+        let real_mode_base = match spaces.get("real_mode_base") {
+            None => None,
+            Some(one) => Some(
+                one.as_integer().and_then(|one| u64::try_from(one).ok()).ok_or("spaces.real_mode_base is not an address")?,
+            ),
+        };
         let expand = match value.get("expand") {
             None => Vec::new(),
             Some(list) => list
@@ -141,6 +147,7 @@ impl Layout {
                     huge: number("huge")?,
                     fixed: number("fixed")?,
                     segment_bytes,
+                    real_mode_base,
                 },
                 unmarked,
             },

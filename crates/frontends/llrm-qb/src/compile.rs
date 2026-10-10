@@ -334,7 +334,10 @@ pub(super) fn _inline_frame(
 /// frontend does for a near function: no other module can call it, and every
 /// caller shares its code segment. One on the runtime's frame stays far,
 /// whose chain is only known to hold far returns.
-fn _near_procedures(program: &model::Program) -> model::Program {
+fn _near_procedures(
+    program: &model::Program,
+    flat: bool,
+) -> model::Program {
     let mut program = program.clone();
     for index in 0..program.modules.len() {
         let original = program.modules[index].clone();
@@ -351,13 +354,14 @@ fn _near_procedures(program: &model::Program) -> model::Program {
         let callables: BTreeSet<i64> =
             original.callables.iter().filter(|one| near.contains(one.name.as_str())).map(|one| one.id).collect();
         for function in &mut program.modules[index].functions {
-            if near.contains(function.name.as_str()) {
+            // Where there is one space no code is far: a call is near, and so is every procedure's return.
+            if flat || near.contains(function.name.as_str()) {
                 if let Some(abi) = function.abi.as_mut() {
                     abi.distance = model::CallDistance::Near;
                 }
             }
             for call in &mut function.calls {
-                if call.callee.is_some_and(|callee| callables.contains(&callee)) {
+                if flat || call.callee.is_some_and(|callee| callables.contains(&callee)) {
                     call.distance = model::CallDistance::Near;
                 }
             }
@@ -576,7 +580,7 @@ pub fn assembled(
     let laid_out = llrm_core::support::debug::timed("hir zero fill", || {
         super::zero_fill::laid_out(program, |module, function| !_inline_frame(program, module, function))
     });
-    let program = &llrm_core::support::debug::timed("hir near procedures", || _near_procedures(&laid_out));
+    let program = &llrm_core::support::debug::timed("hir near procedures", || _near_procedures(&laid_out, codegen.arch.layout().spaces.far_is_near()));
     if program.modules.len() != 1 {
         return emission("one OMF object represents exactly one QB module");
     }

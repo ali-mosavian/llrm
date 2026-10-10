@@ -3101,11 +3101,19 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             // A segment's integer form is its selector, a far pointer's
             // segment:offset.
             Op::PointerSegment if self.tables.spaces.segment_space().is_err() => {
-                // One space: the segment of a pointer is the paragraph it is in, so that segment * 16 + offset
-                // (the real-mode form DEF SEG and PEEK use) is the address.
+                // One space: the segment of a pointer is the paragraph it is in, so that base + segment * 16 +
+                // offset (the real-mode form DEF SEG and PEEK use) is the address.
+                let base = self.real_mode_base()?;
                 let pointer = self.value(&instruction.operands[0])?;
                 let ty = self.result_type(instruction.results[0])?;
                 let address = self.address_integer(pointer)?;
+                let address = if base == 0 {
+                    address
+                } else {
+                    let bits = self.b.context.types.int_bits(self.b.type_of(address)).ok_or("an address that is no integer")?;
+                    let base = self.b.int(bits, base as i128);
+                    self.b.binary(BinaryOp::Sub, address, base, Flags::default(), "")
+                };
                 let bits = self.b.context.types.int_bits(self.b.type_of(address)).ok_or("an address that is no integer")?;
                 let four = self.b.int(bits, 4);
                 let paragraph = self.b.binary(BinaryOp::LShr, address, four, Flags::default(), "");
@@ -3122,9 +3130,17 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             }
             Op::PointerOffset if self.tables.spaces.segment_space().is_err() => {
                 // The rest of the address after its paragraph, in 0 to 15.
+                let base = self.real_mode_base()?;
                 let pointer = self.value(&instruction.operands[0])?;
                 let ty = self.result_type(instruction.results[0])?;
                 let address = self.address_integer(pointer)?;
+                let address = if base == 0 {
+                    address
+                } else {
+                    let bits = self.b.context.types.int_bits(self.b.type_of(address)).ok_or("an address that is no integer")?;
+                    let base = self.b.int(bits, base as i128);
+                    self.b.binary(BinaryOp::Sub, address, base, Flags::default(), "")
+                };
                 let bits = self.b.context.types.int_bits(self.b.type_of(address)).ok_or("an address that is no integer")?;
                 let fifteen = self.b.int(bits, 15);
                 let rest = self.b.binary(BinaryOp::And, address, fifteen, Flags::default(), "");
@@ -3172,7 +3188,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let [selector, offset] = self.operands(instruction)?[..] else {
                     return Err("concat without two operands".to_owned());
                 };
-                // One space: segment * 16 + offset, the real-mode address, as a pointer.
+                // One space: base + segment * 16 + offset, the real-mode address, as a pointer.
+                let base = self.real_mode_base()?;
                 let ty = self.result_type(instruction.results[0])?;
                 let Type::Pointer(space) = *self.b.context.types.get(ty) else {
                     return Err("a concat that is no pointer".to_owned());
@@ -3181,6 +3198,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let selector = self.convert(selector, false, wide)?;
                 let four = self.b.int(self.tables.layout.pointer(space).bits, 4);
                 let paragraph = self.b.binary(BinaryOp::Shl, selector, four, Flags::default(), "");
+                let window = self.b.int(self.tables.layout.pointer(space).bits, base as i128);
+                let paragraph = self.b.binary(BinaryOp::Add, paragraph, window, Flags::default(), "");
                 let base = self.b.cast(CastOp::IntToPtr, paragraph, ty, "");
                 let offset = self.convert(offset, false, wide)?;
                 let byte = self.b.context.types.int(8);
@@ -3444,6 +3463,14 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             (Some(_), Some(_)) => Ok(self.b.cast(CastOp::Trunc, value, ty, "")),
             _ => Err(format!("operands of {} and {}", types.display(from), types.display(ty))),
         }
+    }
+
+    /// Where real-mode memory is, in a target with no selectors: or why a segment:offset pair means nothing in it.
+    fn real_mode_base(&self) -> Emit<u64> {
+        self.tables
+            .spaces
+            .real_mode_base
+            .ok_or_else(|| "this target has neither selectors nor a real-mode window to give segment:offset a meaning".to_owned())
     }
 
     /// A pointer's address as an integer as wide as the pointer.
